@@ -3,9 +3,8 @@
 
 Molecules: HMF, BHMF, BHMTHF, 5-MF, MFA, DMF, MTHFA, DMTHF.
 
-Slab: Graphene oxide from Mouhat et al., Nature Commun. 2020 (citable-data).
-GO layer is fully frozen. Data in data/GO.xyz and data/cell_parameters.dat.
-If missing: curl -sL 'https://raw.githubusercontent.com/fxcoudert/citable-data/master/122-Mouhat_NatureCommun_2020/models/GO/random/R1/GO.xyz' -o data/GO.xyz
+Slab: Random GO model R1 from Mouhat et al., Nature Commun. 2020 (citable-data).
+Loaded from https://github.com/fxcoudert/citable-data. GO layer is fully frozen.
 
 Uses BO pipeline: 100 placements in batches of 20 (20 initial random + 4 batches of 20).
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
@@ -15,7 +14,8 @@ Run from project root: pip install -e . && pip install -e ".[mlip]"
 import argparse
 import logging
 import os
-from pathlib import Path
+from io import StringIO
+from urllib.request import urlopen
 
 from ase.io import read
 
@@ -54,23 +54,23 @@ def _configure_logging(debug: bool = False) -> None:
         logging.getLogger("metalsurfer.workflow").setLevel(logging.DEBUG)
 
 
-def _load_go_slab():
+CITABLE_BASE = (
+    "https://raw.githubusercontent.com/fxcoudert/citable-data/master"
+    "/122-Mouhat_NatureCommun_2020/models/GO"
+)
+
+
+def _load_go_slab(subdir: str):
     """Load GO monolayer from Mouhat et al. Nature Commun. 2020 (citable-data)."""
-    root = Path(__file__).resolve().parent.parent
-    go_xyz = root / "data" / "GO.xyz"
-    cell_dat = root / "data" / "cell_parameters.dat"
-    if not go_xyz.exists():
-        raise FileNotFoundError(
-            f"GO.xyz not found at {go_xyz}. "
-            "Download from: https://github.com/fxcoudert/citable-data/tree/master/122-Mouhat_NatureCommun_2020"
-        )
-    atoms = read(go_xyz)
-    if cell_dat.exists():
-        with open(cell_dat) as f:
-            line = f.readline()
-        parts = line.split()
-        a, b, c = float(parts[2]), float(parts[3]), float(parts[4])
-        atoms.set_cell([a, b, c])
+    xyz_url = f"{CITABLE_BASE}/{subdir}/GO.xyz"
+    cell_url = f"{CITABLE_BASE}/{subdir}/cell_parameters.dat"
+    with urlopen(xyz_url) as resp:
+        atoms = read(StringIO(resp.read().decode()), format="xyz")
+    with urlopen(cell_url) as resp:
+        line = resp.read().decode().splitlines()[0]
+    parts = line.split()
+    a, b, c = float(parts[2]), float(parts[3]), float(parts[4])
+    atoms.set_cell([a, b, c])
     atoms.set_pbc([True, True, False])
     return create_slab_from_atoms(atoms)
 
@@ -92,12 +92,12 @@ def main():
     _configure_logging(debug=debug)
     device = args.device if args.device in ("cuda", "cpu") else "cuda"
 
-    results_subdir = "furanics_go"
+    results_subdir = "furanics_go_r1"
     results_dir = f"results_{results_subdir}"
     os.makedirs(results_dir, exist_ok=True)
 
-    slab = _load_go_slab()
-    logging.info("GO slab: %d atoms", len(slab.atoms))
+    slab = _load_go_slab("random/R1")
+    logging.info("GO slab (random R1): %d atoms", len(slab.atoms))
 
     config = AdsorptionConfig(
         model_name="uma-s-1p1",
@@ -161,7 +161,7 @@ def main():
                 name,
                 results,
                 surface_type=results_subdir,
-                system_name="GO",
+                system_name="GO_R1",
                 config=config,
             )
             best = min(results, key=lambda r: r.energy_adsorption)
@@ -180,7 +180,9 @@ def main():
                     classify_adsorbate_orientation(r.atoms, slab_size) for r in results
                 ]
             n_parallel = sum(1 for o in orientations if o == "parallel")
-            print(f"Binding energy of {name} on GO: {best.energy_adsorption:.4f} eV")
+            print(
+                f"Binding energy of {name} on GO (R1): {best.energy_adsorption:.4f} eV"
+            )
             if orientations:
                 print(
                     f"  Orientations: {n_parallel}/{len(results)} parallel, "
@@ -192,7 +194,7 @@ def main():
             summary.append((name, None, 0))
 
     print("\n" + "=" * 60)
-    print("Binding energy summary (graphene oxide)")
+    print("Binding energy summary (graphene oxide, random R1)")
     print("=" * 60)
     print("(E_ads = E(slab+molecule) - E(slab) - E(molecule); negative = favorable)")
     print()
