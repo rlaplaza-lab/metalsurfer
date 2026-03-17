@@ -4,25 +4,25 @@
 Molecules: HMF, BHMF, BHMTHF, 5-MF, MFA, DMF, MTHFA, DMTHF.
 
 Uses metalsurfer deposit_adatoms to create Sn-covered Ru(0001) surface.
+BO pipeline: 100 placements in batches of 20 (20 initial random + 4 batches of 20).
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 """
 
+import argparse
 import logging
+import os
 
 from metalsurfer import (
     AdsorptionConfig,
     calculate_reference_energies,
     create_slab_from_bulk,
     deposit_adatoms,
-    format_failure_summary,
-    process_molecule,
+    process_molecule_bayesian,
     save_single_molecule_results,
     setup_single_model,
 )
 from metalsurfer.placement import classify_adsorbate_orientation
-
-logging.basicConfig(level=logging.DEBUG)
 
 # (SMILES, molecule_name)
 MOLECULES = [
@@ -37,9 +37,38 @@ MOLECULES = [
 ]
 
 
+def _configure_logging(debug: bool = False) -> None:
+    level = logging.DEBUG if debug else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    if debug:
+        logging.getLogger("metalsurfer.filters").setLevel(logging.DEBUG)
+        logging.getLogger("metalsurfer.workflow").setLevel(logging.DEBUG)
+
+
 def main():
+    parser = argparse.ArgumentParser(
+        description="Furanic molecules on Ru(0001)+25% Sn with BO (100 placements, batches of 20)"
+    )
+    parser.add_argument(
+        "--device",
+        default=os.environ.get("METALSURFER_DEVICE", "cuda"),
+        help="Device: cuda or cpu",
+    )
+    parser.add_argument("--debug", action="store_true", help="Enable DEBUG logging")
+    args = parser.parse_args()
+    debug = args.debug or (
+        os.environ.get("METALSURFER_DEBUG", "").lower() in ("1", "true", "yes")
+    )
+    _configure_logging(debug=debug)
+    device = args.device if args.device in ("cuda", "cpu") else "cuda"
+
     results_subdir = "furanics_ru0001_sn25"
     results_dir = f"results_{results_subdir}"
+    os.makedirs(results_dir, exist_ok=True)
 
     # Create Ru(0001) slab from Materials Project mp-33.
     base_slab = create_slab_from_bulk(
@@ -53,16 +82,20 @@ def main():
         model_name="uma-s-1p1",
         seed=42,
         num_conformers=10,
-        num_placements=25,
+        num_placements=100,
         autobatcher_max_memory_padding=0.5,
-        device="cuda",
+        device=device,
         skip_topology_check=False,
         skip_desorption_check=False,
         stage1_steps=50,
         stage2_steps=500,
-        debug_write_initial_placements=True,
+        debug_write_initial_placements=False,
         placement_mode="auto",
         top_layer_tolerance=2.0,  # Include top Ru + Sn in top layer for placement
+        bo_enabled=True,
+        bo_initial_random=20,
+        bo_batch_size=20,
+        bo_total_budget=100,
     )
 
     calculator, ts_model = setup_single_model(config.model_name, config.device)
@@ -99,14 +132,12 @@ def main():
         else:
             print(f"  E_{name} = (failed)")
 
-    # Process each molecule
-    all_failures = {}
+    # Process each molecule (BO pipeline)
     summary = []
 
     for smiles, name in MOLECULES:
         print(f"\n--- Processing {name} ---")
-        failure_summary = {}
-        results = process_molecule(
+        results = process_molecule_bayesian(
             smiles,
             name,
             slab,
@@ -116,11 +147,7 @@ def main():
             config=config,
             surface_type=results_subdir,
             base_slab_for_frozen=base_slab.atoms,
-            failure_summary_out=failure_summary,
         )
-
-        if failure_summary:
-            all_failures[name] = failure_summary
 
         if results:
             save_single_molecule_results(
@@ -173,11 +200,8 @@ def main():
             print(f"  {name:12s}: (no valid placements)")
     print()
     print(f"Results saved to {results_dir}/ (XYZ, POSCAR, CSV)")
-
-    if all_failures:
-        print()
-        print(format_failure_summary(all_failures))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
