@@ -32,7 +32,7 @@ This section documents the BO benchmark used to compare surrogate models and acq
    Run the data collection script to generate `results_co2_graphene/adsorption_energies_detailed.csv`:
 
    ```bash
-   conda run -n pyadsorbml python scripts/co2_substituted_graphene_100placements.py
+   conda run -n metalsurfer python scripts/co2_substituted_graphene_100placements.py
    ```
 
    If the GPU runs out of memory, use CPU (slower):
@@ -47,7 +47,7 @@ This section documents the BO benchmark used to compare surrogate models and acq
    Run the data collection script to generate `results_propane_pt111_ni/adsorption_energies_detailed.csv`:
 
    ```bash
-   conda run -n pyadsorbml python scripts/propane_pt111_ni_100placements.py
+   conda run -n metalsurfer python scripts/propane_pt111_ni_100placements.py
    ```
 
    If the GPU runs out of memory, use CPU (slower):

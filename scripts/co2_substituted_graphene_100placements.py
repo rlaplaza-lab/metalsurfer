@@ -2,7 +2,7 @@
 """Run CO2 adsorption on an oxidized graphene monolayer (N-doped + O adatoms) for many placements.
 
 Produces results_co2_graphene/adsorption_energies_detailed.csv for BO benchmarking.
-Use conda env pyadsorbml: conda run -n pyadsorbml python scripts/co2_substituted_graphene_100placements.py
+Use conda env metalsurfer: conda run -n metalsurfer python scripts/co2_substituted_graphene_100placements.py
 
 Slab: graphite mp-48 (0,0,1) → monolayer → 10% C→N substitution → ~10% O adatoms at hollow sites
 (oxidized / N-doped graphene) so the surface is heterogeneous and placement matters.

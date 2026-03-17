@@ -2,7 +2,7 @@
 """Run propane adsorption on Pt(111) with Ni adatoms for many placements.
 
 Produces results_propane_pt111_ni/adsorption_energies_detailed.csv for BO benchmarking.
-Use conda env pyadsorbml: conda run -n pyadsorbml python scripts/propane_pt111_ni_100placements.py
+Use conda env metalsurfer: conda run -n metalsurfer python scripts/propane_pt111_ni_100placements.py
 
 Slab: fcc Pt mp-126 (1,1,1) → 2×2×1 supercell → ~10% Ni adatoms at hollow sites
 so the surface is heterogeneous and placement matters.

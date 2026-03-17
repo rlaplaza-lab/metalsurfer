@@ -389,7 +389,8 @@ class TestBestEnergyTracking:
     reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
 )
 @pytest.mark.skipif(
-    not cuda_available, reason="CUDA GPU required; run in conda env pyadsorbml with GPU"
+    not cuda_available,
+    reason="CUDA GPU required; run in conda env metalsurfer with GPU",
 )
 @pytest.mark.parametrize("surface_kind", ["adatom_defect", "alloy_doped"])
 def test_bayesian_two_generations_on_defect_surface(surface_kind, tmp_path):
