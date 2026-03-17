@@ -65,6 +65,7 @@ results_*/
 results*/
 scripts/diagnose_vanillin_placement.py
 *.xyz
+!data/GO.xyz
 benchmarks/benchmark_results.json
 benchmark_bo_results_*.csv
 

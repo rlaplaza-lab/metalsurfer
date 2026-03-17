@@ -285,17 +285,18 @@ def deposit_adatoms(
     base = slab.atoms.copy()
     positions = base.get_positions()
     z_max = float(np.max(positions[:, 2]))
+    top_tol = config.top_layer_tolerance
 
-    top_mask = positions[:, 2] >= (z_max - 0.5)
+    top_mask = positions[:, 2] >= (z_max - top_tol)
     top_indices = np.nonzero(top_mask)[0]
     if len(top_indices) < 3:
         raise GeometryValidationError(
             "Cannot identify top surface layer for adatom placement "
-            f"(found {len(top_indices)} atoms within 0.5 A of z_max)"
+            f"(found {len(top_indices)} atoms within {top_tol} A of z_max)"
         )
 
     candidate_sites = get_hollow_sites_for_adatoms(
-        base, top_layer_tolerance=0.5, dedup_tolerance=0.2
+        base, top_layer_tolerance=top_tol, dedup_tolerance=0.2
     )
 
     if not candidate_sites:
