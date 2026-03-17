@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Lint (ruff check + format)
+  # -----------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint
+        run: ruff check . && ruff format --check .
+
+  # -----------------------------------------------------------------------
+  # Unit + integration tests with full optional dependencies
+  # -----------------------------------------------------------------------
+  test-full:
+    runs-on: ubuntu-latest
+    env:
+      # Ensure CPU-only: no GPU in GitHub Actions; avoids false failures if torch/cuda code runs
+      CUDA_VISIBLE_DEVICES: ""
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install core dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest pytest-cov coverage
+          pip install numpy ase pandas rdkit scipy scikit-learn
+
+      - name: Install package (editable)
+        run: pip install -e .
+
+      - name: Run unit tests
+        run: |
+          python -m pytest tests/ \
+            -m "not dependency_behavior and not mlip and not gpu and not slow" \
+            --cov=src/metalsurfer --cov-report=xml --cov-report=term-missing \
+            --tb=short -v
+
+      - name: Enforce coverage gate
+        run: coverage report --fail-under=74
+
+  # -----------------------------------------------------------------------
+  # Dependency-behavior tests (minimal environment)
+  # -----------------------------------------------------------------------
+  test-dependency-behavior:
+    runs-on: ubuntu-latest
+    env:
+      CUDA_VISIBLE_DEVICES: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install minimal dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest numpy ase pandas rdkit scipy scikit-learn
+
+      - name: Install package (editable)
+        run: pip install -e .
+
+      - name: Run dependency behavior tests
+        run: |
+          python -m pytest tests/test_dependency_behavior.py -v --tb=short
+
+  # -----------------------------------------------------------------------
+  # Integration / determinism tests
+  # -----------------------------------------------------------------------
+  test-integration:
+    runs-on: ubuntu-latest
+    env:
+      CUDA_VISIBLE_DEVICES: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest numpy ase pandas rdkit scipy scikit-learn
+
+      - name: Install package (editable)
+        run: pip install -e .
+
+      - name: Run integration tests
+        run: |
+          python -m pytest tests/test_integration_seeded.py -v --tb=short

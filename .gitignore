@@ -1,0 +1,76 @@
+# Byte-compiled / interpreted
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.htmlcov
+.tox
+.nox
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Ruff
+.ruff_cache/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific: run outputs and caches
+results_test_ethene/
+results_*/
+results*/
+scripts/diagnose_vanillin_placement.py
+*.xyz
+benchmarks/benchmark_results.json
+benchmark_bo_results_*.csv
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/

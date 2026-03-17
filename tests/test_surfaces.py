@@ -1,0 +1,472 @@
+"""Tests for surface creation, alloy substitution, and adatom deposition."""
+
+import os
+import tempfile
+
+import numpy as np
+import pytest
+from ase import Atoms
+
+from metalsurfer.config import AdsorptionConfig
+from metalsurfer.exceptions import GeometryValidationError
+from metalsurfer.io_results import _write_clean_xyz
+from metalsurfer.surfaces import (
+    SlabContainer,
+    _molecule_diameter,
+    _perpendicular_heights_2d,
+    auto_resize_slab_for_molecule,
+    compute_minimum_supercell,
+    create_slab_from_atoms,
+    deposit_adatoms,
+    substitute_alloy,
+)
+
+from .conftest import make_slab, make_water
+
+# ---------------------------------------------------------------------------
+# SlabContainer
+# ---------------------------------------------------------------------------
+
+
+class TestSlabContainer:
+    def test_wraps_atoms(self):
+        atoms = make_slab()
+        sc = SlabContainer(atoms)
+        assert sc.atoms is atoms
+
+    def test_create_slab_from_atoms_copies(self):
+        atoms = make_slab()
+        sc = create_slab_from_atoms(atoms)
+        assert isinstance(sc, SlabContainer)
+        # should be a copy, not the same object
+        assert sc.atoms is not atoms
+        assert np.allclose(sc.atoms.get_positions(), atoms.get_positions())
+
+
+# ---------------------------------------------------------------------------
+# substitute_alloy
+# ---------------------------------------------------------------------------
+
+
+class TestSubstituteAlloy:
+    def _ru_slab(self):
+        return SlabContainer(make_slab(symbol="Ru"))
+
+    def test_zero_fraction_returns_base(self):
+        slab = self._ru_slab()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = substitute_alloy(
+                slab, "Ru", "Cu", guest_fraction=0.0, results_dir=tmpdir
+            )
+        syms = result.atoms.get_chemical_symbols()
+        assert all(s == "Ru" for s in syms)
+
+    def test_full_replacement(self):
+        slab = self._ru_slab()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = substitute_alloy(
+                slab, "Ru", "Cu", guest_fraction=1.0, results_dir=tmpdir
+            )
+        syms = result.atoms.get_chemical_symbols()
+        assert all(s == "Cu" for s in syms)
+
+    def test_partial_replacement_count(self):
+        slab = self._ru_slab()
+        n_total = len(slab.atoms)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = substitute_alloy(
+                slab, "Ru", "Cu", guest_fraction=0.25, results_dir=tmpdir
+            )
+        syms = result.atoms.get_chemical_symbols()
+        n_cu = syms.count("Cu")
+        expected = int(round(n_total * 0.25))
+        assert n_cu == expected
+
+    def test_deterministic_with_same_seed(self):
+        slab1 = self._ru_slab()
+        slab2 = self._ru_slab()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r1 = substitute_alloy(
+                slab1, "Ru", "Cu", guest_fraction=0.33, seed=123, results_dir=tmpdir
+            )
+            r2 = substitute_alloy(
+                slab2, "Ru", "Cu", guest_fraction=0.33, seed=123, results_dir=tmpdir
+            )
+        assert r1.atoms.get_chemical_symbols() == r2.atoms.get_chemical_symbols()
+
+    def test_different_seed_differs(self):
+        slab1 = self._ru_slab()
+        slab2 = self._ru_slab()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r1 = substitute_alloy(
+                slab1, "Ru", "Cu", guest_fraction=0.33, seed=1, results_dir=tmpdir
+            )
+            r2 = substitute_alloy(
+                slab2, "Ru", "Cu", guest_fraction=0.33, seed=999, results_dir=tmpdir
+            )
+        assert r1.atoms.get_chemical_symbols() != r2.atoms.get_chemical_symbols()
+
+    def test_uses_config_seed_by_default(self):
+        slab1 = self._ru_slab()
+        slab2 = self._ru_slab()
+        cfg = AdsorptionConfig(seed=77)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r1 = substitute_alloy(
+                slab1, "Ru", "Cu", guest_fraction=0.33, config=cfg, results_dir=tmpdir
+            )
+            r2 = substitute_alloy(
+                slab2, "Ru", "Cu", guest_fraction=0.33, seed=77, results_dir=tmpdir
+            )
+        assert r1.atoms.get_chemical_symbols() == r2.atoms.get_chemical_symbols()
+
+    def test_writes_output_files(self):
+        slab = self._ru_slab()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            substitute_alloy(slab, "Ru", "Cu", guest_fraction=0.5, results_dir=tmpdir)
+            assert os.path.exists(os.path.join(tmpdir, "clean_Ru_Cu_50_slab.xyz"))
+            assert os.path.exists(os.path.join(tmpdir, "clean_Ru_Cu_50_slab_POSCAR"))
+
+    def test_no_host_atoms_raises(self):
+        slab = SlabContainer(make_slab(symbol="Cu"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Trying to replace "Ru" atoms in a pure Cu slab → 0 replacements
+            result = substitute_alloy(
+                slab, "Ru", "Sn", guest_fraction=0.5, results_dir=tmpdir
+            )
+            # guest_fraction of 0 host atoms = 0 replacements → returns base
+            assert all(s == "Cu" for s in result.atoms.get_chemical_symbols())
+
+    @pytest.mark.parametrize("bad_fraction", [-0.1, 1.01, -1.0, 2.0])
+    def test_out_of_range_fraction_raises(self, bad_fraction):
+        slab = self._ru_slab()
+        with pytest.raises(ValueError, match="guest_fraction must be between 0 and 1"):
+            substitute_alloy(slab, "Ru", "Cu", guest_fraction=bad_fraction)
+
+
+# ---------------------------------------------------------------------------
+# deposit_adatoms
+# ---------------------------------------------------------------------------
+
+
+class TestDepositAdatoms:
+    def _flat_slab(self, n: int = 16, symbol: str = "Ru"):
+        """Simple flat slab with atoms only at z=0."""
+        positions = []
+        for i in range(n):
+            x = (i % 4) * 2.5
+            y = (i // 4) * 2.5
+            positions.append([x, y, 0.0])
+        atoms = Atoms(
+            symbols=[symbol] * n,
+            positions=positions,
+            cell=[10.0, 10.0, 20.0],
+            pbc=[True, True, True],
+        )
+        return SlabContainer(atoms)
+
+    def _layered_slab(self):
+        return SlabContainer(make_slab(nx=4, ny=4, n_layers=3))
+
+    def test_adatoms_placed_above_surface(self):
+        slab = self._layered_slab()
+        z_max = float(np.max(slab.atoms.get_positions()[:, 2]))
+        n_before = len(slab.atoms)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = deposit_adatoms(
+                slab, "Sn", coverage_fraction=0.2, results_dir=tmpdir
+            )
+        assert len(result.atoms) > n_before
+        new_positions = result.atoms.get_positions()[n_before:]
+        assert all(z > z_max for z in new_positions[:, 2])
+
+    def test_deterministic_with_same_seed(self):
+        slab1 = self._layered_slab()
+        slab2 = self._layered_slab()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r1 = deposit_adatoms(
+                slab1, "Sn", coverage_fraction=0.3, seed=42, results_dir=tmpdir
+            )
+            r2 = deposit_adatoms(
+                slab2, "Sn", coverage_fraction=0.3, seed=42, results_dir=tmpdir
+            )
+        assert np.allclose(
+            r1.atoms.get_positions(), r2.atoms.get_positions(), atol=1e-10
+        )
+
+    def test_different_seed_differs(self):
+        slab1 = self._layered_slab()
+        slab2 = self._layered_slab()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r1 = deposit_adatoms(
+                slab1, "Sn", coverage_fraction=0.3, seed=1, results_dir=tmpdir
+            )
+            r2 = deposit_adatoms(
+                slab2, "Sn", coverage_fraction=0.3, seed=999, results_dir=tmpdir
+            )
+        # positions should differ (site selection is random)
+        assert not np.allclose(
+            r1.atoms.get_positions(), r2.atoms.get_positions(), atol=1e-6
+        )
+
+    def test_too_few_top_atoms_raises(self):
+        atoms = Atoms("H2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+        atoms.set_cell([5.0, 5.0, 10.0])
+        atoms.set_pbc([True, True, True])
+        slab = SlabContainer(atoms)
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            pytest.raises(
+                GeometryValidationError, match="Cannot identify top surface layer"
+            ),
+        ):
+            deposit_adatoms(slab, "Sn", coverage_fraction=0.5, results_dir=tmpdir)
+
+    def test_writes_output_files(self):
+        slab = self._layered_slab()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            deposit_adatoms(slab, "Sn", coverage_fraction=0.2, results_dir=tmpdir)
+            assert os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20.xyz"))
+            assert os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20_POSCAR"))
+
+    def test_uses_config_seed_by_default(self):
+        slab1 = self._layered_slab()
+        slab2 = self._layered_slab()
+        cfg = AdsorptionConfig(seed=77)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            r1 = deposit_adatoms(
+                slab1, "Sn", coverage_fraction=0.3, config=cfg, results_dir=tmpdir
+            )
+            r2 = deposit_adatoms(
+                slab2, "Sn", coverage_fraction=0.3, seed=77, results_dir=tmpdir
+            )
+        assert np.allclose(
+            r1.atoms.get_positions(), r2.atoms.get_positions(), atol=1e-10
+        )
+
+    @pytest.mark.parametrize("bad_fraction", [-0.1, 1.01, -1.0, 2.0])
+    def test_out_of_range_coverage_raises(self, bad_fraction):
+        slab = self._layered_slab()
+        with pytest.raises(
+            ValueError, match="coverage_fraction must be between 0 and 1"
+        ):
+            deposit_adatoms(slab, "Sn", coverage_fraction=bad_fraction)
+
+    def test_zero_coverage_returns_unmodified(self):
+        slab = self._layered_slab()
+        n_before = len(slab.atoms)
+        syms_before = slab.atoms.get_chemical_symbols()
+        result = deposit_adatoms(slab, "Sn", coverage_fraction=0.0)
+        assert len(result.atoms) == n_before
+        assert result.atoms.get_chemical_symbols() == syms_before
+
+
+# ---------------------------------------------------------------------------
+# Combined modifier smoke test
+# ---------------------------------------------------------------------------
+
+
+class TestCombinedModifiers:
+    """Verify alloy substitution followed by adatom deposition composes correctly."""
+
+    def test_alloy_then_adatom(self):
+        slab = SlabContainer(make_slab(nx=4, ny=4, n_layers=3, symbol="Ru"))
+        n_original = len(slab.atoms)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            alloyed = substitute_alloy(
+                slab, "Ru", "Cu", guest_fraction=0.25, seed=42, results_dir=tmpdir
+            )
+            n_cu = alloyed.atoms.get_chemical_symbols().count("Cu")
+            assert n_cu > 0
+            assert len(alloyed.atoms) == n_original
+
+            decorated = deposit_adatoms(
+                alloyed, "Sn", coverage_fraction=0.2, seed=42, results_dir=tmpdir
+            )
+            assert len(decorated.atoms) > n_original
+            syms = set(decorated.atoms.get_chemical_symbols())
+            assert syms == {"Ru", "Cu", "Sn"}
+
+
+# ---------------------------------------------------------------------------
+# _molecule_diameter
+# ---------------------------------------------------------------------------
+
+
+class TestMoleculeDiameter:
+    def test_single_atom(self):
+        mol = Atoms("C", positions=[[0, 0, 0]])
+        assert _molecule_diameter([mol]) == 0.0
+
+    def test_diatomic(self):
+        mol = Atoms("O2", positions=[[0, 0, 0], [1.21, 0, 0]])
+        assert np.isclose(_molecule_diameter([mol]), 1.21, atol=1e-6)
+
+    def test_takes_max_across_conformers(self):
+        small = Atoms("O2", positions=[[0, 0, 0], [1.0, 0, 0]])
+        large = Atoms("O2", positions=[[0, 0, 0], [3.0, 0, 0]])
+        assert np.isclose(_molecule_diameter([small, large]), 3.0, atol=1e-6)
+
+    def test_empty_conformer_list(self):
+        assert _molecule_diameter([]) == 0.0
+
+    def test_water(self):
+        water = make_water()
+        d = _molecule_diameter([water])
+        assert d > 1.0
+        assert d < 3.0
+
+
+# ---------------------------------------------------------------------------
+# _perpendicular_heights_2d
+# ---------------------------------------------------------------------------
+
+
+class TestPerpendicularHeights2D:
+    def test_orthogonal(self):
+        cell = np.array([[10.0, 0.0, 0.0], [0.0, 8.0, 0.0], [0.0, 0.0, 20.0]])
+        h_a, h_b = _perpendicular_heights_2d(cell)
+        assert np.isclose(h_a, 8.0)
+        assert np.isclose(h_b, 10.0)
+
+    def test_skewed_60_degree(self):
+        cell = np.array([[10.0, 0.0, 0.0], [5.0, 8.66, 0.0], [0.0, 0.0, 20.0]])
+        h_a, h_b = _perpendicular_heights_2d(cell)
+        area = abs(10.0 * 8.66)
+        assert np.isclose(h_a, area / 10.0, atol=0.01)
+        assert np.isclose(h_b, area / np.sqrt(25 + 8.66**2), atol=0.01)
+
+    def test_degenerate_zero_vector_raises(self):
+        cell = np.array([[0.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 20.0]])
+        with pytest.raises(GeometryValidationError, match="degenerate"):
+            _perpendicular_heights_2d(cell)
+
+
+# ---------------------------------------------------------------------------
+# compute_minimum_supercell
+# ---------------------------------------------------------------------------
+
+
+class TestComputeMinimumSupercell:
+    def test_already_sufficient(self):
+        cell = np.array([[20.0, 0.0, 0.0], [0.0, 20.0, 0.0], [0.0, 0.0, 30.0]])
+        nx, ny = compute_minimum_supercell(
+            cell, molecule_diameter=3.0, min_separation=8.0
+        )
+        assert (nx, ny) == (1, 1)
+
+    def test_needs_symmetric_expansion(self):
+        cell = np.array([[5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 20.0]])
+        nx, ny = compute_minimum_supercell(
+            cell, molecule_diameter=3.0, min_separation=8.0
+        )
+        assert nx == 3
+        assert ny == 3
+
+    def test_asymmetric_expansion(self):
+        cell = np.array([[15.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 20.0]])
+        nx, ny = compute_minimum_supercell(
+            cell, molecule_diameter=3.0, min_separation=8.0
+        )
+        assert nx == 1
+        assert ny == 3
+
+    def test_skewed_cell_expansion(self):
+        cell = np.array([[4.0, 0.0, 0.0], [2.0, 3.46, 0.0], [0.0, 0.0, 20.0]])
+        nx, ny = compute_minimum_supercell(
+            cell, molecule_diameter=2.0, min_separation=8.0
+        )
+        assert nx >= 1
+        assert ny >= 1
+        h_a, h_b = _perpendicular_heights_2d(cell)
+        assert ny * h_a >= 10.0
+        assert nx * h_b >= 10.0
+
+    def test_zero_diameter(self):
+        cell = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 20.0]])
+        nx, ny = compute_minimum_supercell(
+            cell, molecule_diameter=0.0, min_separation=8.0
+        )
+        assert nx == 1
+        assert ny == 1
+
+    def test_degenerate_cell_raises(self):
+        cell = np.array([[0.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 20.0]])
+        with pytest.raises(GeometryValidationError, match="degenerate"):
+            compute_minimum_supercell(cell, molecule_diameter=3.0, min_separation=8.0)
+
+
+# ---------------------------------------------------------------------------
+# auto_resize_slab_for_molecule
+# ---------------------------------------------------------------------------
+
+
+class TestAutoResizeSlabForMolecule:
+    def test_no_resize_when_already_sufficient(self):
+        slab = SlabContainer(make_slab())
+        water = make_water()
+        result, was_resized = auto_resize_slab_for_molecule(
+            slab, [water], min_separation=8.0
+        )
+        assert not was_resized
+        assert len(result.atoms) == len(slab.atoms)
+
+    def test_resize_expands_slab(self):
+        atoms = Atoms(
+            "Ru4",
+            positions=[[0, 0, 0], [1.5, 0, 0], [0, 1.5, 0], [1.5, 1.5, 0]],
+            cell=[3, 3, 20],
+            pbc=True,
+        )
+        slab = SlabContainer(atoms)
+        mol = Atoms("C2", positions=[[0, 0, 0], [5, 0, 0]])
+        result, was_resized = auto_resize_slab_for_molecule(
+            slab, [mol], min_separation=8.0
+        )
+        assert was_resized
+        assert len(result.atoms) > len(slab.atoms)
+        new_cell = np.array(result.atoms.get_cell())
+        h_a, h_b = _perpendicular_heights_2d(new_cell)
+        assert min(h_a, h_b) >= 5.0 + 8.0
+
+    def test_does_not_modify_original(self):
+        atoms = Atoms(
+            "Ru4",
+            positions=[[0, 0, 0], [1.5, 0, 0], [0, 1.5, 0], [1.5, 1.5, 0]],
+            cell=[3, 3, 20],
+            pbc=True,
+        )
+        slab = SlabContainer(atoms)
+        original_len = len(slab.atoms)
+        mol = Atoms("C2", positions=[[0, 0, 0], [5, 0, 0]])
+        _, was_resized = auto_resize_slab_for_molecule(slab, [mol], min_separation=8.0)
+        assert was_resized
+        assert len(slab.atoms) == original_len
+
+    def test_preserves_pbc(self):
+        atoms = Atoms(
+            "Ru4",
+            positions=[[0, 0, 0], [1.5, 0, 0], [0, 1.5, 0], [1.5, 1.5, 0]],
+            cell=[3, 3, 20],
+            pbc=[True, True, True],
+        )
+        slab = SlabContainer(atoms)
+        mol = Atoms("C2", positions=[[0, 0, 0], [5, 0, 0]])
+        result, _ = auto_resize_slab_for_molecule(slab, [mol], min_separation=8.0)
+        assert list(result.atoms.get_pbc()) == [True, True, True]
+
+
+# ---------------------------------------------------------------------------
+# _write_clean_xyz
+# ---------------------------------------------------------------------------
+
+
+class TestWriteCleanXyz:
+    def test_roundtrip(self):
+        atoms = make_slab(nx=2, ny=2, n_layers=1)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test.xyz")
+            _write_clean_xyz(atoms, path)
+            assert os.path.exists(path)
+            with open(path) as f:
+                lines = f.readlines()
+            assert int(lines[0].strip()) == len(atoms)

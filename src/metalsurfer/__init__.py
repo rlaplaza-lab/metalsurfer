@@ -1,0 +1,152 @@
+"""Generic adsorption-energy screening on arbitrary surfaces."""
+
+from .config import AdsorptionConfig
+from .exceptions import (
+    DependencyMissingError,
+    GeometryValidationError,
+    OptimizationError,
+)
+from .models import (
+    MoleculeSummary,
+    PlacementDescriptor,
+    PlacementSpec,
+    ReferenceEnergies,
+    SaturationRunResult,
+    SaturationStepResult,
+    ScreeningResult,
+    ScreeningRunResult,
+    TimingInfo,
+)
+
+__all__ = [
+    "AdsorptionConfig",
+    "ReferenceEnergies",
+    "SaturationRunResult",
+    "SaturationStepResult",
+    "ScreeningResult",
+    "MoleculeSummary",
+    "PlacementSpec",
+    "PlacementDescriptor",
+    "ScreeningRunResult",
+    "TimingInfo",
+    "DependencyMissingError",
+    "GeometryValidationError",
+    "OptimizationError",
+    "SlabContainer",
+    "create_slab_from_bulk",
+    "create_slab_from_atoms",
+    "substitute_alloy",
+    "deposit_adatoms",
+    "auto_resize_slab_for_molecule",
+    "compute_minimum_supercell",
+    "create_conformers_from_smiles",
+    "select_conformer_boltzmann",
+    "generate_conformer_placement",
+    "generate_placement_from_spec",
+    "generate_placement_from_descriptor",
+    "enumerate_placement_specs",
+    "calculate_min_distance",
+    "setup_calculator",
+    "setup_torchsim_model",
+    "setup_single_model",
+    "TorchSimCalculator",
+    "optimize_isolated_molecules_batched",
+    "optimize_adsorbate_slab_batched",
+    "batch_static",
+    "precompute_results",
+    "identify_top_layer_indices",
+    "compute_frozen_indices",
+    "filter_results",
+    "check_decomposition",
+    "check_desorption",
+    "process_molecule",
+    "process_molecule_bayesian",
+    "format_failure_summary",
+    "run_screening",
+    "run_screening_bayesian",
+    "run_saturation_screening",
+    "calculate_reference_energies",
+    "load_molecules",
+    "setup_directories",
+    "save_molecule_results",
+    "save_single_molecule_results",
+    "save_summary_results",
+    "save_saturation_results",
+    "write_run_metadata",
+    "write_run_settings",
+    "ml",
+]
+
+_LAZY_MODULES = {
+    "surfaces": {
+        "SlabContainer",
+        "create_slab_from_bulk",
+        "create_slab_from_atoms",
+        "substitute_alloy",
+        "deposit_adatoms",
+        "auto_resize_slab_for_molecule",
+        "compute_minimum_supercell",
+    },
+    "conformers": {"create_conformers_from_smiles", "select_conformer_boltzmann"},
+    "placement": {
+        "generate_conformer_placement",
+        "generate_placement_from_spec",
+        "generate_placement_from_descriptor",
+        "enumerate_placement_specs",
+        "calculate_min_distance",
+    },
+    "optimization": {
+        "setup_calculator",
+        "setup_torchsim_model",
+        "setup_single_model",
+        "TorchSimCalculator",
+        "optimize_isolated_molecules_batched",
+        "optimize_adsorbate_slab_batched",
+        "batch_static",
+        "precompute_results",
+        "identify_top_layer_indices",
+        "compute_frozen_indices",
+    },
+    "filters": {"filter_results", "check_decomposition", "check_desorption"},
+    "workflow": {
+        "process_molecule",
+        "process_molecule_bayesian",
+        "format_failure_summary",
+        "run_screening",
+        "run_screening_bayesian",
+        "run_saturation_screening",
+        "calculate_reference_energies",
+        "load_molecules",
+    },
+    "io_results": {
+        "setup_directories",
+        "save_molecule_results",
+        "save_single_molecule_results",
+        "save_summary_results",
+        "save_saturation_results",
+        "write_run_metadata",
+        "write_run_settings",
+    },
+    "ml": {
+        "BindingEnergyPredictor",
+        "ComputationContext",
+        "DatasetLogger",
+        "PlacementRecord",
+        "evaluate_model",
+        "extract_features",
+        "extract_features_from_dataset",
+        "grouped_cross_validate",
+        "load_dataset",
+        "train_model",
+    },
+}
+
+
+def __getattr__(name: str):
+    # Intentional lazy import: heavy/optional submodules loaded on first access.
+    for mod, names in _LAZY_MODULES.items():
+        if name in names:
+            import importlib
+
+            return getattr(importlib.import_module(f".{mod}", __name__), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

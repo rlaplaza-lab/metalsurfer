@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "metalsurfer"
+version = "0.1.0"
+description = "Generic adsorption-energy screening on arbitrary surfaces"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "metalsurfer contributors" }]
+keywords = ["adsorption", "screening", "catalysis", "ase", "mlip"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+dependencies = [
+    "numpy",
+    "ase",
+    "pandas",
+    "rdkit",
+    "scipy",
+    "scikit-learn",
+]
+
+[project.optional-dependencies]
+mlip = [
+    "torch",
+    "torch-sim-atomistic>=0.5.2",
+    "fairchem-core>=2.7",
+    "fairchem-data-oc",
+]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "coverage",
+    "ruff",
+]
+
+[project.scripts]
+adsorption-screening = "metalsurfer.example_workflow:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+exclude = [".git", ".pytest_cache", "__pycache__", "*.egg-info", "results_*", "results", ".ruff_cache"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort (import sorting)
+    "B",    # bugbear
+    "UP",   # pyupgrade
+    "SIM",  # simplify
+]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.format]
+quote-style = "double"

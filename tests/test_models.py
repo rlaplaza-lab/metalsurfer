@@ -1,0 +1,215 @@
+"""Tests for typed domain models."""
+
+import pytest
+from ase import Atoms
+
+from metalsurfer.models import (
+    MoleculeSummary,
+    ReferenceEnergies,
+    SaturationRunResult,
+    SaturationStepResult,
+    ScreeningResult,
+    ScreeningRunResult,
+    TimingInfo,
+    build_molecule_summary,
+)
+
+from .conftest import (
+    make_placement_descriptor,
+    make_slab,
+    make_water,
+    place_molecule_on_slab,
+)
+
+
+def test_reference_energies():
+    ref = ReferenceEnergies(
+        slab_energy=-100.0,
+        molecule_energies={"water": -10.0, "ethanol": -20.0},
+    )
+    assert ref.slab_energy == -100.0
+    assert ref.get_molecule_energy("water") == -10.0
+    assert ref.get_molecule_energy("missing") is None
+
+
+def test_reference_energies_empty():
+    ref = ReferenceEnergies(slab_energy=-50.0)
+    assert ref.molecule_energies == {}
+    assert ref.get_molecule_energy("any") is None
+
+
+def test_screening_result():
+    atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
+    sr = ScreeningResult(
+        molecule="water",
+        placement_id=5,
+        energy_adslab=-110.0,
+        energy_slab=-100.0,
+        energy_adsorbate=-10.0,
+        energy_adsorption=-0.5,
+        atoms=atoms,
+        distance=2.3,
+        placement_descriptor=make_placement_descriptor(placement_id=5),
+    )
+    assert sr.molecule == "water"
+    assert sr.placement_id == 5
+    assert sr.energy_adsorption == -0.5
+    assert len(sr.atoms) == 2
+
+
+def test_timing_info():
+    t = TimingInfo(
+        molecule="water",
+        conformer_generation_s=1.0,
+        optimization_s=5.0,
+        total_s=8.0,
+        n_placements_attempted=100,
+        n_results_after_filter=3,
+    )
+    assert t.molecule == "water"
+    assert t.total_s == 8.0
+
+
+def test_molecule_summary():
+    s = MoleculeSummary(
+        molecule="water",
+        n_configurations=5,
+        e_ads_min=-2.0,
+        e_ads_max=-0.5,
+        e_ads_mean=-1.2,
+        e_ads_std=0.5,
+        e_ads_median=-1.1,
+        best_placement_id=3,
+        e_ads_best=-2.0,
+    )
+    assert s.molecule == "water"
+    assert s.e_ads_best == -2.0
+
+
+def test_build_molecule_summary_empty_raises():
+    """build_molecule_summary raises ValueError for empty results."""
+    with pytest.raises(
+        ValueError, match="Cannot build molecule summary from empty results"
+    ):
+        build_molecule_summary("water", [])
+
+
+def test_build_molecule_summary():
+    """build_molecule_summary computes aggregate statistics from results."""
+    slab = make_slab()
+    combined = place_molecule_on_slab(slab, make_water())
+    results = [
+        ScreeningResult(
+            molecule="water",
+            placement_id=i,
+            energy_adslab=-190.0 - i * 0.1,
+            energy_slab=-200.0,
+            energy_adsorbate=-10.0,
+            energy_adsorption=-1.5 - i * 0.1,
+            atoms=combined,
+            distance=2.5,
+            placement_descriptor=make_placement_descriptor(placement_id=i),
+        )
+        for i in range(3)
+    ]
+    summary = build_molecule_summary("water", results)
+    assert summary.molecule == "water"
+    assert summary.n_configurations == 3
+    assert summary.e_ads_min == -1.7  # -1.5 - 0.2
+    assert summary.e_ads_max == -1.5
+    assert summary.best_placement_id == 2
+    assert summary.e_ads_best == -1.7
+
+
+def test_screening_run_result():
+    atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
+    sr = ScreeningResult(
+        molecule="water",
+        placement_id=0,
+        energy_adslab=-110.0,
+        energy_slab=-100.0,
+        energy_adsorbate=-10.0,
+        energy_adsorption=-0.5,
+        atoms=atoms,
+        distance=2.3,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    summary = MoleculeSummary(
+        molecule="water",
+        n_configurations=1,
+        e_ads_min=-0.5,
+        e_ads_max=-0.5,
+        e_ads_mean=-0.5,
+        e_ads_std=0.0,
+        e_ads_median=-0.5,
+        best_placement_id=0,
+        e_ads_best=-0.5,
+    )
+    rr = ScreeningRunResult(
+        molecule="water",
+        results=[sr],
+        summary=summary,
+    )
+    assert rr.molecule == "water"
+    assert len(rr.results) == 1
+    assert rr.summary.e_ads_best == -0.5
+
+
+def test_saturation_step_result():
+    """SaturationStepResult holds step metadata and best result."""
+    slab = make_slab()
+    combined = place_molecule_on_slab(slab, make_water())
+    best = ScreeningResult(
+        molecule="water",
+        placement_id=0,
+        energy_adslab=-190.0,
+        energy_slab=-200.0,
+        energy_adsorbate=-10.0,
+        energy_adsorption=-1.0,
+        atoms=combined,
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    step = SaturationStepResult(
+        step=1,
+        molecule="water",
+        n_molecules_on_slab=0,
+        best_result=best,
+        all_results=[best],
+    )
+    assert step.step == 1
+    assert step.n_molecules_on_slab == 0
+    assert step.best_result.energy_adsorption == -1.0
+
+
+def test_saturation_run_result():
+    """SaturationRunResult holds steps and saturation count."""
+    slab = make_slab()
+    combined = place_molecule_on_slab(slab, make_water())
+    best = ScreeningResult(
+        molecule="water",
+        placement_id=0,
+        energy_adslab=-190.0,
+        energy_slab=-200.0,
+        energy_adsorbate=-10.0,
+        energy_adsorption=-1.0,
+        atoms=combined,
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    step = SaturationStepResult(
+        step=1,
+        molecule="water",
+        n_molecules_on_slab=0,
+        best_result=best,
+        all_results=[best],
+    )
+    sr = SaturationRunResult(
+        molecule="water",
+        steps=[step],
+        n_molecules_at_saturation=1,
+        final_slab_atoms=combined.copy(),
+    )
+    assert sr.molecule == "water"
+    assert len(sr.steps) == 1
+    assert sr.n_molecules_at_saturation == 1

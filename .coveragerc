@@ -1,0 +1,18 @@
+[run]
+source = src/metalsurfer
+omit =
+    example_workflow.py
+    optimization.py
+    ml/reproduce.py
+    */__pycache__/*
+
+[report]
+precision = 2
+show_missing = True
+skip_covered = False
+fail_under = 74
+
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    raise NotImplementedError
