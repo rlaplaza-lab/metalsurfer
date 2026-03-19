@@ -241,10 +241,29 @@ def check_decomposition(
     reference_smiles: str | None,
     surface_symbols: list[str] | None,
     connectivity_multipliers: list[float],
+    adsorbate_prefix_atoms: int | None = None,
 ) -> tuple[bool, str]:
     """Return ``(ok, reason)``; ``ok=False`` means the adsorbate decomposed
     or rearranged.
+
+    When *adsorbate_prefix_atoms* is set, only ``atoms[adsorbate_prefix_atoms:]``
+    is checked (sequential saturation: slab already contains prior adsorbates).
+    That slice must match ASE ordering ``slab_passed_to_filter + new_adsorbate``,
+    consistent with :func:`check_desorption`. When unset, all non-surface atoms
+    in *atoms* are checked (legacy behaviour).
     """
+    if adsorbate_prefix_atoms is not None:
+        if adsorbate_prefix_atoms < 0 or adsorbate_prefix_atoms > len(atoms):
+            return (
+                False,
+                f"invalid adsorbate_prefix_atoms ({adsorbate_prefix_atoms} "
+                f"for {len(atoms)} atoms)",
+            )
+        atoms = atoms[adsorbate_prefix_atoms:]
+        if len(atoms) == 0:
+            return False, "no adsorbate atoms after prefix"
+        surface_symbols = None
+
     for mult in connectivity_multipliers:
         if not _is_molecule_connected(
             atoms, surface_symbols=surface_symbols, multiplier=mult
@@ -378,7 +397,9 @@ def filter_results(
     results:
         Typed :class:`ScreeningResult` objects from the compute pipeline.
     slab:
-        Reference slab Atoms (used for desorption distance check).
+        Reference slab Atoms (used for desorption distance check and, when
+        decomposition is enabled, as the atom-count prefix ``len(slab)`` for
+        validating only the newly added adsorbate in each ``entry.atoms``).
     surface_symbols:
         Element symbols of the surface (e.g. ``["Ru"]`` or ``["Ru", "Cu"]``).
     reference_smiles:
@@ -419,12 +440,14 @@ def filter_results(
         kept: list[ScreeningResult] = []
         decomp_count = 0
         decomp_reasons: dict[str, list[int]] = {}  # reason -> [placement_ids]
+        prefix = len(slab)
         for entry in results:
             ok, reason = check_decomposition(
                 entry.atoms,
                 reference_smiles=reference_smiles,
                 surface_symbols=surface_symbols,
                 connectivity_multipliers=config.connectivity_multipliers,
+                adsorbate_prefix_atoms=prefix,
             )
             if ok:
                 kept.append(entry)
