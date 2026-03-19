@@ -4,6 +4,7 @@
 # 'fork' causes "Cannot re-initialize CUDA in forked subprocess" when FairChem
 # or other GPU code runs after a fork (e.g. with pytest-xdist -n).
 import contextlib
+import gc
 import multiprocessing
 
 with contextlib.suppress(RuntimeError):
@@ -14,6 +15,22 @@ import pytest
 from ase import Atoms
 
 from metalsurfer.models import PlacementDescriptor
+
+
+@pytest.fixture(autouse=True)
+def _release_cuda_after_gpu_test(request):
+    """Free GPU memory between @pytest.mark.gpu tests to reduce OOM skips."""
+    yield
+    if request.node.get_closest_marker("gpu"):
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                gc.collect()
+                torch.cuda.empty_cache()
+        except (ImportError, RuntimeError):
+            pass
 
 
 @pytest.hookimpl(tryfirst=True)
