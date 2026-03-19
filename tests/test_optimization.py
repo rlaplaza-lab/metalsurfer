@@ -51,7 +51,7 @@ class TestTorchSimCalculator:
 
         fake_result = [
             {
-                "energy": torch.tensor([[energy_val]], dtype=torch.float32),
+                "potential_energy": torch.tensor([[energy_val]], dtype=torch.float32),
                 "forces": torch.randn(n_atoms, 3, dtype=torch.float32) * 0.1,
             }
         ]

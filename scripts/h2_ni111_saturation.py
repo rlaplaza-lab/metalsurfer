@@ -4,6 +4,9 @@
 Adds H2 molecules one at a time to the slab; stops when best E_ads >= 0 (slab saturated).
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
+
+If CUDA OOM on 16GB GPUs: ensure no other GPU processes (nvidia-smi), or reduce
+num_placements / use autobatcher_max_memory_scaler=400 for ~1 system per batch.
 """
 
 import os

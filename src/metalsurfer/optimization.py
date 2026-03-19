@@ -364,10 +364,21 @@ class TorchSimCalculator:
         properties = properties or ["energy", "forces"]
         result_list = ts.static(system=atoms, model=self._model)
         out = result_list[0]
-        energy = out.get("energy")
+        energy = out.get("potential_energy")
         forces = out.get("forces")
-        if energy is not None:
-            self.results["energy"] = float(energy.detach().cpu().numpy().squeeze())
+        if energy is None:
+            raise RuntimeError(
+                "ML model returned no energy (out['potential_energy'] is None). "
+                "This may indicate GPU memory issues, model output format changes, "
+                "or first-run initialization failure on HPC."
+            )
+        e_val = float(energy.detach().cpu().numpy().squeeze())
+        if not np.isfinite(e_val):
+            raise RuntimeError(
+                f"ML model returned non-finite energy: {e_val}. "
+                "Check GPU stability and model output."
+            )
+        self.results["energy"] = e_val
         if forces is not None:
             self.results["forces"] = forces.detach().cpu().numpy()
         if "stress" in properties and "stress" in out and out["stress"] is not None:
@@ -385,7 +396,13 @@ class TorchSimCalculator:
         """Return energy in eV."""
         if atoms is not None and self._atoms_changed(atoms):
             self.calculate(atoms, ["energy", "forces"])
-        return self.results.get("energy", 0.0)
+        energy = self.results.get("energy")
+        if energy is None or not np.isfinite(energy):
+            raise RuntimeError(
+                f"Calculator has no valid energy (got {energy}). "
+                "The model may have failed to produce energy for this system."
+            )
+        return energy
 
     def get_forces(self, atoms=None):
         """Return forces in eV/Å, shape (n_atoms, 3)."""
@@ -439,9 +456,14 @@ def batch_static(
     result_list = ts.static(system=atoms_list, model=ts_model)
     out: list[tuple[float, np.ndarray]] = []
     for res in result_list:
-        e = res.get("energy")
+        e = res.get("potential_energy")
         f = res.get("forces")
-        energy = float(e.detach().cpu().numpy().squeeze()) if e is not None else 0.0
+        if e is None:
+            raise RuntimeError(
+                "ML model returned no energy (out['potential_energy'] is None). "
+                "Check GPU memory and model output."
+            )
+        energy = float(e.detach().cpu().numpy().squeeze())
         forces = f.detach().cpu().numpy() if f is not None else np.zeros((0, 3))
         out.append((energy, forces))
     return out

@@ -67,6 +67,10 @@ def main():
     e_slab = ref.slab_energy
     e_vanillin = ref.get_molecule_energy("vanillin")
     print(f"E_slab={e_slab:.4f} eV, E_vanillin={e_vanillin:.4f} eV")
+    assert abs(e_slab) > 1e-6, (
+        f"Slab energy is effectively zero ({e_slab}). "
+        "Adsorption energies would be wrong. Check calculator/model output."
+    )
 
     # Run placement, optimization, and validation
     failure_summary = {}

@@ -57,6 +57,17 @@ def calculate_reference_energies(
     slab_copy = slab.atoms.copy()
     slab_copy.calc = calculator
     slab_energy = slab_copy.get_potential_energy()
+    if not np.isfinite(slab_energy):
+        raise OptimizationError(
+            f"Clean slab energy is not finite: {slab_energy}. "
+            "The calculator may have failed; check GPU stability and model output."
+        )
+    if abs(slab_energy) < 1e-6:
+        raise OptimizationError(
+            f"Clean slab energy is effectively zero ({slab_energy:.6e} eV). "
+            "A real slab cannot have zero energy; the calculator likely returned "
+            "a default. Check that the ML model produced valid output."
+        )
     logger.info("Clean slab energy: %.4f eV", slab_energy)
 
     molecule_energies: dict[str, float] = {}
