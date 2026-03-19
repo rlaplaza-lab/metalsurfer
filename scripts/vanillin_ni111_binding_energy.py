@@ -38,14 +38,14 @@ def main():
     config = AdsorptionConfig(
         model_name="uma-s-1p1",
         seed=42,
-        num_conformers=10,
-        num_placements=25,
-        autobatcher_max_memory_padding=0.5,  # 0.9 was too aggressive
+        num_conformers=3,
+        num_placements=8,
+        autobatcher_max_memory_padding=0.1,  # conservative for 16GB GPU
         device="cuda",
         skip_topology_check=False,
         skip_desorption_check=False,
-        stage1_steps=50,
-        stage2_steps=500,
+        stage1_steps=30,
+        stage2_steps=200,
         debug_write_initial_placements=True,
     )
 
