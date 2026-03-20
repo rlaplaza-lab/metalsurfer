@@ -13,6 +13,7 @@ from metalsurfer.io_results import (
     save_molecule_results,
     save_single_molecule_results,
     save_summary_results,
+    screening_run_result,
     setup_directories,
 )
 from metalsurfer.models import (
@@ -643,6 +644,119 @@ class TestSaveSingleMoleculeResults:
                 assert os.path.exists(poscar_path)
                 assert os.path.exists(detailed_csv)
                 assert os.path.exists(summary_csv)
+            finally:
+                os.chdir(old_cwd)
+
+    def test_write_csv_false_writes_structures_not_csv(self):
+        atoms = place_molecule_on_slab(make_slab(), make_water())
+        results = [
+            ScreeningResult(
+                molecule="water",
+                placement_id=0,
+                energy_adslab=-190.0,
+                energy_slab=-200.0,
+                energy_adsorbate=-10.0,
+                energy_adsorption=-1.5,
+                atoms=atoms,
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(placement_id=0),
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                save_single_molecule_results(
+                    "water",
+                    results,
+                    surface_type="no_csv_test",
+                    write_csv=False,
+                )
+                xyz_path = os.path.join(
+                    tmpdir,
+                    "results_no_csv_test",
+                    "xyz_structures",
+                    "water_all",
+                    "conformer_000.xyz",
+                )
+                detailed_csv = os.path.join(
+                    tmpdir,
+                    "results_no_csv_test",
+                    "adsorption_energies_detailed.csv",
+                )
+                assert os.path.exists(xyz_path)
+                assert not os.path.exists(detailed_csv)
+            finally:
+                os.chdir(old_cwd)
+
+    def test_campaign_two_molecules_combined_csv(self):
+        slab = make_slab()
+        water_atoms = place_molecule_on_slab(slab, make_water())
+        other_atoms = place_molecule_on_slab(slab, make_water())
+        water_results = [
+            ScreeningResult(
+                molecule="water",
+                placement_id=0,
+                energy_adslab=-190.0,
+                energy_slab=-200.0,
+                energy_adsorbate=-10.0,
+                energy_adsorption=-1.5,
+                atoms=water_atoms,
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(placement_id=0),
+            ),
+        ]
+        other_results = [
+            ScreeningResult(
+                molecule="other",
+                placement_id=0,
+                energy_adslab=-191.0,
+                energy_slab=-200.0,
+                energy_adsorbate=-10.0,
+                energy_adsorption=-1.0,
+                atoms=other_atoms,
+                distance=2.6,
+                placement_descriptor=make_placement_descriptor(placement_id=0),
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                st = "campaign_test"
+                config = AdsorptionConfig()
+                save_single_molecule_results(
+                    "water",
+                    water_results,
+                    surface_type=st,
+                    write_csv=False,
+                )
+                save_single_molecule_results(
+                    "other",
+                    other_results,
+                    surface_type=st,
+                    write_csv=False,
+                )
+                combined = [
+                    screening_run_result("water", water_results),
+                    screening_run_result("other", other_results),
+                ]
+                save_summary_results(combined, surface_type=st, config=config)
+                detailed_csv = os.path.join(
+                    tmpdir,
+                    f"results_{st}",
+                    "adsorption_energies_detailed.csv",
+                )
+                summary_csv = os.path.join(
+                    tmpdir,
+                    f"results_{st}",
+                    "adsorption_energy_summary.csv",
+                )
+                df = pd.read_csv(detailed_csv)
+                sdf = pd.read_csv(summary_csv)
+                assert set(df["molecule"].unique()) == {"water", "other"}
+                assert len(sdf) == 2
+                assert set(sdf["molecule"]) == {"water", "other"}
             finally:
                 os.chdir(old_cwd)
 

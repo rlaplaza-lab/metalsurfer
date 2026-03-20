@@ -121,17 +121,36 @@ def save_molecule_results(
         )
 
 
+def screening_run_result(
+    molecule_name: str,
+    results: list[ScreeningResult],
+) -> ScreeningRunResult:
+    """Build a :class:`ScreeningRunResult` for :func:`save_summary_results` after a campaign."""
+    summary = build_molecule_summary(molecule_name, results)
+    return ScreeningRunResult(
+        molecule=molecule_name,
+        results=results,
+        summary=summary,
+    )
+
+
 def save_single_molecule_results(
     molecule_name: str,
     results: list[ScreeningResult],
     surface_type: str = "manual",
     system_name: str | None = None,
     config: AdsorptionConfig | None = None,
+    *,
+    write_csv: bool = True,
 ) -> None:
     """Write XYZ, POSCAR, and CSV for a single molecule's screening results.
 
     Convenience helper for single-molecule runs (e.g. process_molecule).
     Saves structures and builds a detailed + summary CSV.
+
+    For multi-molecule campaigns, pass ``write_csv=False`` in the loop (structures only),
+    accumulate :class:`ScreeningRunResult` via :func:`screening_run_result`, then call
+    :func:`save_summary_results` and :func:`write_run_settings` once at the end.
     """
     if not results:
         logger.warning("No results to save for %s", molecule_name)
@@ -143,12 +162,9 @@ def save_single_molecule_results(
         system_name=system_name,
         config=config,
     )
-    summary = build_molecule_summary(molecule_name, results)
-    run_result = ScreeningRunResult(
-        molecule=molecule_name,
-        results=results,
-        summary=summary,
-    )
+    if not write_csv:
+        return
+    run_result = screening_run_result(molecule_name, results)
     save_summary_results([run_result], surface_type=surface_type, config=config)
     if config is not None:
         write_run_settings(

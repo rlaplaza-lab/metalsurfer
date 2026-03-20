@@ -18,7 +18,10 @@ from metalsurfer import (
     create_slab_from_bulk,
     process_molecule_bayesian,
     save_single_molecule_results,
+    save_summary_results,
+    screening_run_result,
     setup_single_model,
+    write_run_settings,
 )
 from metalsurfer.placement import classify_adsorbate_orientation
 
@@ -120,6 +123,7 @@ def main():
 
     # Process each molecule (BO pipeline)
     summary = []
+    all_run_results = []
 
     for smiles, name in MOLECULES:
         print(f"\n--- Processing {name} ---")
@@ -141,7 +145,9 @@ def main():
                 surface_type=results_subdir,
                 system_name="Ru_0001",
                 config=config,
+                write_csv=False,
             )
+            all_run_results.append(screening_run_result(name, results))
             best = min(results, key=lambda r: r.energy_adsorption)
             surface_symbols = set(slab.atoms.get_chemical_symbols())
             slab_size = next(
@@ -170,6 +176,21 @@ def main():
         else:
             print(f"No valid placements found for {name}.")
             summary.append((name, None, 0))
+
+    if all_run_results:
+        save_summary_results(
+            all_run_results,
+            surface_type=results_subdir,
+            config=config,
+        )
+        write_run_settings(
+            results_subdir,
+            config,
+            campaign="multi_molecule_binding",
+            n_molecules=len(all_run_results),
+            molecules=[rr.molecule for rr in all_run_results],
+            n_configurations=sum(len(rr.results) for rr in all_run_results),
+        )
 
     # Final summary
     print("\n" + "=" * 60)
