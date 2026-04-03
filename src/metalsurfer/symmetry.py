@@ -148,13 +148,7 @@ class SymmetryAnalyzer:
                 f"symprec={self.symprec}, angle_tolerance={self._angle_tolerance})"
             ) from exc
         if self._dataset is None:
-            det = float(np.linalg.det(self._lattice))
-            raise SymmetryAnalysisError(
-                "spglib.get_symmetry_dataset returned None "
-                f"(mode={self._mode}, n_atoms={len(self.numbers)}, "
-                f"pbc={np.asarray(self.pbc, dtype=bool).tolist()}, det={det:.6g}, "
-                f"symprec={self.symprec}, angle_tolerance={self._angle_tolerance})"
-            )
+            raise SymmetryAnalysisError("spglib.get_symmetry_dataset returned None")
         return self._dataset
 
     def _frac_ops_from_dataset(self) -> list[tuple[np.ndarray, np.ndarray]]:

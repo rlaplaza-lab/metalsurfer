@@ -4,11 +4,15 @@ import os
 import tempfile
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 import pytest
 from ase import Atoms
+from numpy.testing import assert_allclose
+from scipy import stats
 
 from metalsurfer.config import AdsorptionConfig
+from metalsurfer.ml.bayesian import ei_scores, lcb_scores, pi_scores
 from metalsurfer.ml.dataset import DatasetLogger, load_dataset, merge_datasets
 from metalsurfer.ml.features import (
     extract_features,
@@ -637,3 +641,46 @@ class TestReproduce:
             ValueError, match="missing finite deterministic geometry fields"
         ):
             record_to_placement_descriptor(r)
+
+
+class TestAcquisitionMinimization:
+    """LCB / EI / PI for minimisation (lower binding energy is better)."""
+
+    def test_lcb_scores(self):
+        mu = np.array([0.0, 1.0])
+        sig = np.array([1.0, 2.0])
+        out = lcb_scores(mu, sig, kappa=1.0)
+        assert_allclose(out, mu - sig)
+
+    def test_ei_scores_sigma_zero_no_improvement(self):
+        mu = np.array([-1.0])
+        sig = np.array([0.0])
+        out = ei_scores(mu, sig, f_best=-3.0, xi=1e-6)
+        assert_allclose(out, [0.0], atol=1e-5)
+
+    def test_ei_scores_sigma_zero_improvement(self):
+        mu = np.array([-3.0])
+        sig = np.array([0.0])
+        f_best = -1.0
+        out = ei_scores(mu, sig, f_best=f_best, xi=1e-6)
+        assert_allclose(out, np.array([max(0.0, f_best - float(mu[0]))]), rtol=1e-5)
+
+    def test_pi_scores_sigma_zero(self):
+        mu = np.array([-2.0, 0.0])
+        sig = np.array([0.0, 0.0])
+        f_best = -1.0
+        xi = 1e-6
+        out = pi_scores(mu, sig, f_best=f_best, xi=xi)
+        assert out[0] == 1.0
+        assert out[1] == 0.0
+
+    def test_ei_matches_analytic_normal(self):
+        mu = np.array([0.5])
+        sig = np.array([1.0])
+        f_best = 0.0
+        xi = 0.0
+        imp = f_best - mu - xi
+        z = imp / sig
+        expected = imp * stats.norm.cdf(z) + sig * stats.norm.pdf(z)
+        out = ei_scores(mu, sig, f_best=f_best, xi=xi)
+        assert_allclose(out, expected)

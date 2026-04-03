@@ -515,11 +515,7 @@ def check_initial_placement_distance(
     slab_syms = slab.get_chemical_symbols()
     mol_pos = molecule_atoms.get_positions()
     slab_pos = slab.get_positions()
-    cell = (
-        molecule_atoms.get_cell()
-        if hasattr(molecule_atoms, "get_cell")
-        else slab.get_cell()
-    )
+    cell = molecule_atoms.get_cell()
     pbc = material_aware_pbc(slab)
 
     actual_min, mol_idx, slab_idx = calculate_min_distance_pair(
@@ -532,7 +528,7 @@ def check_initial_placement_distance(
         min_allowed = (r1 + r2) * min_contact_ratio
     else:
         min_allowed = max(min_distance, 2.0)
-        logger.warning(
+        logger.debug(
             "Unknown covalent radius for %s or %s; using conservative min distance %.2f A",
             mol_syms[mol_idx],
             slab_syms[slab_idx],

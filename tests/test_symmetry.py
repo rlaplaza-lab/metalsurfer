@@ -145,7 +145,7 @@ def test_get_symmetry_aware_sites_multiplicity_partition():
     raw = get_unified_sites(slab)
     assert raw is not None and len(raw) >= 1
     sym = get_symmetry_aware_sites(slab)
-    assert sym is not None
+    assert len(sym) >= 1
     assert sum(s["symmetry_multiplicity"] for s in sym) == len(raw)
     assert len(sym) <= len(raw)
 
@@ -204,7 +204,6 @@ def test_get_symmetry_aware_sites_nanoparticle_envelope():
     sites = get_symmetry_aware_sites(
         atoms, top_layer_tolerance=2.0, symmetry_tolerance=0.3
     )
-    assert sites is not None
     assert len(sites) >= 1
     assert sum(s["symmetry_multiplicity"] for s in sites) >= len(sites)
 
@@ -220,7 +219,6 @@ def test_cube_nanoparticle_symmetry_reduces_redundant_sites_deterministically():
         atoms, top_layer_tolerance=2.0, symmetry_tolerance=0.1
     )
 
-    assert sites1 is not None and sites2 is not None
     assert len(sites1) == len(sites2)
     assert len(sites1) >= 1
     assert sum(s["symmetry_multiplicity"] for s in sites1) >= len(sites1)
@@ -334,7 +332,7 @@ def test_fcc111_pt_slab_symmetry_reduces_sites_and_verifies_orbits():
     raw = get_unified_sites(slab)
     assert raw is not None and len(raw) >= 1
     sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15)
-    assert sym is not None
+    assert len(sym) >= 1
     assert len(sym) <= len(raw)
     assert sum(s["symmetry_multiplicity"] for s in sym) == len(raw)
 

@@ -20,6 +20,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import (
+    ExtraTreesRegressor,
     HistGradientBoostingRegressor,
     RandomForestRegressor,
 )
@@ -33,6 +34,27 @@ from sklearn.preprocessing import StandardScaler
 logger = logging.getLogger(__name__)
 
 ModelType = Literal["ridge", "random_forest", "gradient_boost"]
+TreeSurrogateKind = Literal["random_forest", "extra_trees"]
+
+
+def tree_regressor_for_bayesian_surrogate(
+    kind: TreeSurrogateKind,
+    *,
+    n_estimators: int,
+    random_state: int,
+    **kwargs: Any,
+) -> RandomForestRegressor | ExtraTreesRegressor:
+    """Unscaled tree ensemble for BO surrogates (no ``StandardScaler`` in the pipeline)."""
+    params: dict[str, Any] = {
+        "n_estimators": n_estimators,
+        "min_samples_leaf": kwargs.get("min_samples_leaf", 2),
+        "max_depth": kwargs.get("max_depth"),
+        "random_state": random_state,
+        "n_jobs": -1,
+    }
+    if kind == "random_forest":
+        return RandomForestRegressor(**params)
+    return ExtraTreesRegressor(**params)
 
 
 def _build_estimator(

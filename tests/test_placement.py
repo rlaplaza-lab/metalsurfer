@@ -802,8 +802,7 @@ def test_symmetry_aware_sites_are_consistent_with_core_sites_on_slab():
         symmetry_tolerance=config.symmetry_tolerance,
         material_type="slab",
     )
-    if reduced is not None:
-        assert 0 < len(reduced) <= len(core_sites)
+    assert 0 < len(reduced) <= len(core_sites)
 
 
 # ---------------------------------------------------------------------------

@@ -259,7 +259,7 @@ Site classes include atop, bridge, hollow, and pore-like positions depending on 
 
 `symmetry.py` uses `spglib` to group equivalent sites and detect symmetry breaking. Failed symmetry dataset construction raises `SymmetryAnalysisError` (including wrapped `spglib` failures) instead of returning placeholder symmetry data.
 
-The broader placement stack may still choose a non-symmetry-reduced sampling path when symmetry-aware site generation is unavailable or no longer appropriate, especially during saturation after the slab has evolved away from the reference state. Site resolution in `workflow/shared.py` attempts symmetry reduction at DEBUG verbosity and falls back to the unified Voronoi site list when reduction fails or yields no sites.
+`get_symmetry_aware_sites()` returns an empty list when Voronoi yields no sites; otherwise it propagates `SymmetryAnalysisError` if spglib or orbit verification fails (no warning-and-`None` at the placement layer). `workflow/shared._resolve_site_context_for_sampling` catches that exception once, logs a single INFO line, and falls back to the core unified (cluster-deduplicated) Voronoi sites—appropriate when symmetry is broken or spglib cannot treat the structure.
 
 ## Configuration Model
 

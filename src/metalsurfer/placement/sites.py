@@ -15,7 +15,7 @@ import numpy as np
 from ase import Atoms
 from scipy.spatial import KDTree, QhullError, Voronoi
 
-from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
+from ..symmetry import SymmetryAnalyzer
 from ._constants import (
     _ATOP_RATIO,
     _BRIDGE_EQ_TOL,
@@ -93,7 +93,7 @@ def _voronoi_sites(
     try:
         vor = Voronoi(extended)
     except (QhullError, ValueError, RuntimeError) as exc:
-        logger.warning("Voronoi computation failed: %s", exc)
+        logger.debug("Voronoi computation failed: %s", exc)
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
 
     raw_vertices = vor.vertices
@@ -661,11 +661,14 @@ def get_symmetry_aware_sites(
     probe_radius: float = 1.2,
     max_site_distance: float = 4.0,
     enrich: bool = True,
-) -> list[dict[str, object]] | None:
+) -> list[dict[str, object]]:
     """Symmetry-reduced adsorption sites using spglib.
 
-    Returns None on failure. Nanoparticles use cluster-in-a-box symmetry.
-    Material type must be explicitly specified.
+    Returns an empty list when no raw sites are found. On spglib or orbit
+    verification failure, raises :exc:`~metalsurfer.symmetry.SymmetryAnalysisError`.
+    Callers that need a soft fallback (e.g. workflow) should catch that exception.
+
+    Nanoparticles use cluster-in-a-box symmetry. *material_type* must be explicit.
     """
     if material_type not in ("slab", "nanoparticle", "porous"):
         raise ValueError(
@@ -681,28 +684,22 @@ def get_symmetry_aware_sites(
         enrich=enrich,
     )
     if not raw_sites:
-        return None
+        return []
 
     sym_mode = "cluster" if material_type == "nanoparticle" else "auto"
     planar_for_symmetry = (material_type == "slab") and _is_top_layer_planar(
         slab, top_layer_tolerance
     )
 
-    try:
-        symmetry_analyzer = SymmetryAnalyzer(
-            slab,
-            symmetry_tolerance=symmetry_tolerance,
-            mode=sym_mode,
-        )
-        return symmetry_analyzer.analyze_site_symmetry(
-            raw_sites,
-            planar=planar_for_symmetry,
-        )
-    except SymmetryAnalysisError as exc:
-        logger.warning(
-            "Symmetry analysis failed, skipping symmetry-aware sites: %s", exc
-        )
-        return None
+    symmetry_analyzer = SymmetryAnalyzer(
+        slab,
+        symmetry_tolerance=symmetry_tolerance,
+        mode=sym_mode,
+    )
+    return symmetry_analyzer.analyze_site_symmetry(
+        raw_sites,
+        planar=planar_for_symmetry,
+    )
 
 
 # ---------------------------------------------------------------------------

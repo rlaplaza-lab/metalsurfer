@@ -15,14 +15,13 @@ import numpy as np
 import pandas as pd
 from ase import Atoms
 from scipy import stats
-from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
 from sklearn.pipeline import Pipeline
 
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
 from ..placement import generators as placement_generators
 from .features import extract_features
-from .regression import train_model
+from .regression import train_model, tree_regressor_for_bayesian_surrogate
 from .schema import PlacementRecord
 
 AcquisitionType = Literal["lcb", "ei", "pi"]
@@ -49,21 +48,12 @@ def train_surrogate(
 
     Returns a scikit-learn Pipeline (scaler + regressor).
     """
-    if surrogate == "random_forest":
-        reg = RandomForestRegressor(
+    if surrogate in ("random_forest", "extra_trees"):
+        reg = tree_regressor_for_bayesian_surrogate(
+            surrogate,
             n_estimators=n_estimators,
-            min_samples_leaf=kwargs.get("min_samples_leaf", 2),
-            max_depth=kwargs.get("max_depth"),
             random_state=random_state,
-            n_jobs=-1,
-        )
-    elif surrogate == "extra_trees":
-        reg = ExtraTreesRegressor(
-            n_estimators=n_estimators,
-            min_samples_leaf=kwargs.get("min_samples_leaf", 2),
-            max_depth=kwargs.get("max_depth"),
-            random_state=random_state,
-            n_jobs=-1,
+            **kwargs,
         )
     elif surrogate in ("gradient_boost", "ridge"):
         if sample_weight is not None:
@@ -112,9 +102,10 @@ def predict_with_uncertainty(
     the point prediction ``mean`` should be used for BO scoring.
     """
     regressor = model.named_steps["regressor"]
-    X_eval = (
-        model.named_steps["scaler"].transform(X) if "scaler" in model.named_steps else X
-    )
+    if "scaler" in model.named_steps:
+        X_eval = model.named_steps["scaler"].transform(X)
+    else:
+        X_eval = X
 
     if hasattr(regressor, "estimators_"):
         # Tree estimators are trained on array-like internals; predict with ndarray
@@ -124,7 +115,7 @@ def predict_with_uncertainty(
         mu = tree_preds.mean(axis=0)
         sigma = tree_preds.std(axis=0)
     else:
-        mu = np.asarray(model.predict(X)).ravel()
+        mu = np.asarray(regressor.predict(X_eval)).ravel()
         sigma = np.zeros_like(mu)
 
     return mu, sigma
@@ -161,7 +152,7 @@ def ei_scores(
     mu = np.asarray(mu, dtype=float).ravel()
     sigma = np.asarray(sigma, dtype=float).ravel()
     imp = f_best - mu - xi
-    z = np.where(sigma > 1e-9, imp / sigma, 0.0)
+    z = np.divide(imp, sigma, out=np.zeros_like(imp, dtype=float), where=sigma > 1e-9)
     ei = np.where(
         sigma > 1e-9,
         imp * stats.norm.cdf(z) + sigma * stats.norm.pdf(z),
@@ -182,7 +173,12 @@ def pi_scores(
     """
     mu = np.asarray(mu, dtype=float).ravel()
     sigma = np.asarray(sigma, dtype=float).ravel()
-    z = np.where(sigma > 1e-9, (f_best - xi - mu) / sigma, 0.0)
+    z = np.divide(
+        f_best - xi - mu,
+        sigma,
+        out=np.zeros_like(mu, dtype=float),
+        where=sigma > 1e-9,
+    )
     pi = np.where(sigma > 1e-9, stats.norm.cdf(z), (mu < f_best - xi).astype(float))
     return pi
 
@@ -255,8 +251,8 @@ def build_spec_features_geometry_aware(
 
     Returns ``(features_df, valid_indices)`` where *valid_indices* maps each
     row in the DataFrame back to the position of the corresponding spec in
-    *specs*.  Specs that cannot produce a valid placement are silently
-    skipped (logged at DEBUG level).
+    *specs*.  Specs that cannot produce a valid placement are skipped; a single
+    INFO line summarizes how many were skipped when that count is positive.
     """
     rows: list[dict[str, float]] = []
     valid_indices: list[int] = []
@@ -290,6 +286,14 @@ def build_spec_features_geometry_aware(
         )
         rows.append(extract_features(record))
         valid_indices.append(i)
+
+    n_skip = len(specs) - len(rows)
+    if n_skip > 0:
+        logger.info(
+            "build_spec_features_geometry_aware: skipped %d/%d specs (no valid placement)",
+            n_skip,
+            len(specs),
+        )
     return pd.DataFrame(rows), valid_indices
 
 

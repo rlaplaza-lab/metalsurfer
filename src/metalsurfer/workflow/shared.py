@@ -22,11 +22,13 @@ from ..placement import (
     material_aware_pbc,
 )
 from ..placement import generators as placement_generators
+from ..symmetry import SymmetryAnalysisError
 
 logger = logging.getLogger(__name__)
 MIN_CALCULATOR_CELL_C_ANG = 18.0
 
 # Cache mapping substrate geometry hash -> SiteContext, reused across saturation steps.
+_SITE_CONTEXT_CACHE_MAX_ENTRIES = 16
 _SITE_CONTEXT_CACHE: dict[int, placement_generators.SiteContext] = {}
 _SITE_CONTEXT_CACHE_LOCK = threading.Lock()
 
@@ -389,13 +391,20 @@ def _resolve_site_context_for_sampling(
         )
     else:
         logger.debug("Attempting symmetry-aware site reduction")
-        symmetry_aware_sites = get_symmetry_aware_sites(
-            slab_atoms,
-            top_layer_tolerance=config.top_layer_tolerance,
-            symmetry_tolerance=config.symmetry_tolerance,
-            material_type=config.material_type,
-            enrich=config.voronoi_site_enrichment,
-        )
+        try:
+            symmetry_aware_sites = get_symmetry_aware_sites(
+                slab_atoms,
+                top_layer_tolerance=config.top_layer_tolerance,
+                symmetry_tolerance=config.symmetry_tolerance,
+                material_type=config.material_type,
+                enrich=config.voronoi_site_enrichment,
+            )
+        except SymmetryAnalysisError as exc:
+            logger.info(
+                "Symmetry site reduction failed; using core unified sites (%s)", exc
+            )
+            symmetry_aware_sites = []
+
         if symmetry_aware_sites:
             logger.info(
                 "Using symmetry-reduced sites (%d sites)", len(symmetry_aware_sites)
@@ -404,13 +413,13 @@ def _resolve_site_context_for_sampling(
                 sites=symmetry_aware_sites, use_sites=True, source="symmetry_aware"
             )
         else:
-            logger.info("Symmetry reduction unavailable; using core unified sites")
+            logger.info("Using core unified sites (no symmetry-reduced set)")
             result = placement_generators.SiteContext(
                 sites=core_sites, use_sites=True, source="voronoi"
             )
 
     with _SITE_CONTEXT_CACHE_LOCK:
-        if len(_SITE_CONTEXT_CACHE) >= 16:
+        if len(_SITE_CONTEXT_CACHE) >= _SITE_CONTEXT_CACHE_MAX_ENTRIES:
             _SITE_CONTEXT_CACHE.pop(next(iter(_SITE_CONTEXT_CACHE)))
         _SITE_CONTEXT_CACHE[cache_key] = result
     return result

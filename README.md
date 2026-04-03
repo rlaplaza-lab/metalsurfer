@@ -7,7 +7,7 @@ Generic adsorption-energy screening on arbitrary surfaces.
 - The workflow layer is now modularized under `src/metalsurfer/workflow/` (`core`, `screening`, `bayesian`, `saturation`, `reference`, `shared`) rather than a single monolithic module.
 - Public API run modes are stable and available from `metalsurfer` top-level imports.
 - Slab preparation helpers have a dedicated import path: `metalsurfer.surface_prep`.
-- Placement generation uses unified Voronoi-based site generation across slabs, nanoparticles, and porous materials.
+- Placement generation uses unified Voronoi-based site generation across slabs, nanoparticles, and porous materials, with optional spglib symmetry reduction in the workflow (`get_symmetry_aware_sites` raises `SymmetryAnalysisError` on failure; the workflow falls back to core sites and logs once at INFO).
 
 ## Install
 
