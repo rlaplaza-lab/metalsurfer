@@ -1,26 +1,57 @@
 #!/usr/bin/env python3
-"""Example: screen molecules on surfaces. Usage: python -m metalsurfer.example_workflow --smiles-file smiles.csv"""
+"""Example: screen molecules on surfaces using the canonical metalsurfer API.
+
+Usage:
+    python -m metalsurfer.example_workflow run --smiles-file smiles.csv
+    python -m metalsurfer.example_workflow run-bo --smiles-file smiles.csv
+    python -m metalsurfer.example_workflow saturate --smiles-file smiles.csv
+
+Demonstrates key features:
+- Deterministic placement generation via Voronoi tessellation for slabs, nanoparticles, and porous materials.
+- Explicit material-type specification: "slab" (default), "nanoparticle" (isolated clusters), or "porous" (3D-periodic).
+- Surface engineering: alloy substitution and adatom deposition before screening via prepare_slab().
+- Bayesian optimization–guided candidate selection for efficient exploration.
+- Sequential saturation simulations to estimate surface loading limits.
+"""
 
 import argparse
-import logging
 
 from metalsurfer import (
     AdsorptionConfig,
-    create_slab_from_bulk,
-    deposit_adatoms,
-    run_saturation_screening,
-    run_screening,
-    run_screening_bayesian,
-    setup_single_model,
-    substitute_alloy,
-)
-from metalsurfer.io_results import (
-    save_molecule_results,
+    run_adsorption,
+    run_adsorption_bo,
+    run_saturation,
+    run_saturation_bo,
     save_saturation_results,
-    save_summary_results,
-    setup_directories,
     write_run_metadata,
 )
+from metalsurfer._logging import configure_logging
+from metalsurfer.cli.cli_output import (
+    format_saturation_complete,
+    format_screening_complete,
+)
+from metalsurfer.surface_prep import prepare_slab
+
+
+def _write_metadata_if_available(
+    *,
+    run_metadata: dict[str, float],
+    surface_type: str,
+    config: AdsorptionConfig,
+    smiles_file: str,
+) -> None:
+    """Persist run metadata only when timing/counts were populated."""
+    if not run_metadata:
+        return
+    write_run_metadata(
+        surface_type=surface_type,
+        config=config,
+        smiles_file=smiles_file,
+        n_molecules=int(run_metadata["n_molecules"]),
+        total_configs=int(run_metadata["total_configs"]),
+        t_ref_s=float(run_metadata["t_ref_s"]),
+        t_total_s=float(run_metadata["t_total_s"]),
+    )
 
 
 def main():
@@ -90,128 +121,71 @@ def main():
     )
     parser.add_argument("--skip-existing", action="store_true", default=True)
     parser.add_argument("--force-rerun", action="store_true")
-    parser.add_argument(
-        "--saturation",
-        action="store_true",
-        help="Sequential saturation: add molecules until best E_ads >= 0",
+    parser.add_argument("--seed", type=int, default=42, help="Global random seed")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("run", help="Run non-Bayesian screening")
+    run_bo_parser = subparsers.add_parser("run-bo", help="Run Bayesian screening")
+    run_bo_parser.add_argument("--bo-initial-random", type=int, default=20)
+    run_bo_parser.add_argument("--bo-batch-size", type=int, default=10)
+    run_bo_parser.add_argument("--bo-total-budget", type=int, default=100)
+    run_bo_parser.add_argument(
+        "--bo-acquisition", choices=["lcb", "ei", "pi"], default="lcb"
     )
-    parser.add_argument(
-        "--bayesian",
-        action="store_true",
-        help="Use Bayesian optimisation (RF surrogate + UCB) for placement selection",
-    )
-    parser.add_argument(
-        "--bo-initial-random",
-        type=int,
-        default=20,
-        help="BO: initial random placements (default 20)",
-    )
-    parser.add_argument(
-        "--bo-batch-size",
-        type=int,
-        default=10,
-        help="BO: batch size per acquisition step (default 10)",
-    )
-    parser.add_argument(
-        "--bo-total-budget",
-        type=int,
-        default=100,
-        help="BO: total placement evaluations per molecule (default 100)",
-    )
-    parser.add_argument(
-        "--bo-acquisition",
-        type=str,
-        choices=["lcb", "ei", "pi"],
-        default="lcb",
-        help="BO: acquisition function (default lcb)",
-    )
-    parser.add_argument(
-        "--bo-ucb-kappa",
-        type=float,
-        default=1.96,
-        help="BO: LCB kappa (default 1.96)",
-    )
-    parser.add_argument(
+    run_bo_parser.add_argument("--bo-ucb-kappa", type=float, default=1.96)
+    run_bo_parser.add_argument(
         "--bo-surrogate",
-        type=str,
         choices=["random_forest", "extra_trees", "gradient_boost", "ridge"],
         default="random_forest",
-        help="BO: surrogate model architecture (default random_forest)",
     )
-
-    parser.add_argument("--seed", type=int, default=42, help="Global random seed")
+    saturate_parser = subparsers.add_parser("saturate", help="Run saturation screening")
+    saturate_parser.add_argument(
+        "--bo-enabled", action="store_true", help="Enable Bayesian optimization"
+    )
 
     args = parser.parse_args()
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(ctx_prefix)s%(message)s",
-        datefmt="%H:%M:%S",
-    )
-    from metalsurfer._logging import ContextFilter
-
-    logging.getLogger().addFilter(ContextFilter())
+    configure_logging(default_level="INFO")
 
     config = AdsorptionConfig(
+        material_type="slab",  # Explicit material type: "slab", "nanoparticle", or "porous"
         model_name=args.model,
         num_conformers=args.num_conformers,
         num_placements=args.num_placements,
         device=args.device,
         seed=args.seed,
-        saturation=args.saturation,
-        bo_enabled=args.bayesian,
-        bo_initial_random=args.bo_initial_random,
-        bo_batch_size=args.bo_batch_size,
-        bo_total_budget=args.bo_total_budget,
-        bo_acquisition=args.bo_acquisition,
-        bo_ucb_kappa=args.bo_ucb_kappa,
-        bo_surrogate=args.bo_surrogate,
+        saturation=args.command == "saturate",
+        bo_enabled=args.command == "run-bo"
+        or (args.command == "saturate" and getattr(args, "bo_enabled", False)),
+        bo_initial_random=getattr(args, "bo_initial_random", 10),
+        bo_batch_size=getattr(args, "bo_batch_size", 10),
+        bo_total_budget=getattr(args, "bo_total_budget", 100),
+        bo_acquisition=getattr(args, "bo_acquisition", "lcb"),
+        bo_ucb_kappa=getattr(args, "bo_ucb_kappa", 1.96),
+        bo_surrogate=getattr(args, "bo_surrogate", "random_forest"),
     )
 
-    # build surface
-    slab = create_slab_from_bulk(
+    slab = prepare_slab(
         bulk_id=args.bulk_id,
         miller_indices=tuple(args.miller),
         supercell=tuple(args.supercell),
         results_dir=f"results_{args.surface_type}",
+        alloy_host=args.alloy_host,
+        alloy_guest=args.alloy_guest,
+        alloy_fraction=args.alloy_fraction,
+        adatom_symbol=args.adatom_symbol,
+        adatom_coverage=args.adatom_coverage,
+        model_name=args.model,
+        device=args.device,
+        config=config,
     )
 
-    # optional alloy substitution
-    if args.alloy_guest and args.alloy_fraction > 0:
-        host = args.alloy_host
-        if host is None:
-            host = sorted(set(slab.atoms.get_chemical_symbols()))[0]
-        calc, _ = setup_single_model(config.model_name, config.device)
-        slab = substitute_alloy(
-            slab,
-            host_symbol=host,
-            guest_symbol=args.alloy_guest,
-            guest_fraction=args.alloy_fraction,
-            calculator=calc,
-            config=config,
-            results_dir=f"results_{args.surface_type}",
-        )
-
-    # optional adatom deposition
-    if args.adatom_symbol and args.adatom_coverage > 0:
-        calc, _ = setup_single_model(config.model_name, config.device)
-        slab = deposit_adatoms(
-            slab,
-            adatom_symbol=args.adatom_symbol,
-            coverage_fraction=args.adatom_coverage,
-            calculator=calc,
-            config=config,
-            results_dir=f"results_{args.surface_type}",
-        )
-
-    # compute (pure)
     skip = args.skip_existing and not args.force_rerun
-    setup_directories([args.surface_type])
-
-    if config.saturation:
-        run_metadata = {}
-        saturation_results = run_saturation_screening(
-            slab,
-            smiles_file=args.smiles_file,
+    if args.command == "saturate":
+        bo_enabled = getattr(args, "bo_enabled", False)
+        run_sat_fn = run_saturation_bo if bo_enabled else run_saturation
+        run_metadata: dict[str, float] = {}
+        saturation_results = run_sat_fn(
+            slab=slab,
+            molecules=args.smiles_file,
             config=config,
             surface_type=args.surface_type,
             skip_existing=skip,
@@ -222,58 +196,42 @@ def main():
             surface_type=args.surface_type,
             config=config,
         )
-        if run_metadata:
-            write_run_metadata(
-                surface_type=args.surface_type,
-                config=config,
-                smiles_file=args.smiles_file,
-                n_molecules=run_metadata["n_molecules"],
-                total_configs=run_metadata["total_configs"],
-                t_ref_s=run_metadata["t_ref_s"],
-                t_total_s=run_metadata["t_total_s"],
-            )
+        _write_metadata_if_available(
+            run_metadata=run_metadata,
+            surface_type=args.surface_type,
+            config=config,
+            smiles_file=args.smiles_file,
+        )
         total_steps = sum(len(sr.steps) for sr in saturation_results)
         total_mols = sum(sr.n_molecules_at_saturation for sr in saturation_results)
+        print("")
         print(
-            f"\nSaturation complete: {len(saturation_results)} molecules, "
-            f"{total_steps} steps, {total_mols} molecules at saturation"
+            format_saturation_complete(
+                label=f"Saturation ({len(saturation_results)} molecules)",
+                n_molecules_at_saturation=total_mols,
+                total_steps=total_steps,
+                results_dir=f"results_{args.surface_type}",
+            )
         )
     else:
+        run_fn = run_adsorption_bo if args.command == "run-bo" else run_adsorption
         run_metadata = {}
-        run_fn = run_screening_bayesian if config.bo_enabled else run_screening
-        all_run_results = run_fn(
-            slab,
-            smiles_file=args.smiles_file,
+        campaign = run_fn(
+            slab=slab,
+            molecules=args.smiles_file,
             config=config,
             surface_type=args.surface_type,
             skip_existing=skip,
             run_metadata_out=run_metadata,
         )
-        if run_metadata:
-            write_run_metadata(
-                surface_type=args.surface_type,
-                config=config,
-                smiles_file=args.smiles_file,
-                n_molecules=run_metadata["n_molecules"],
-                total_configs=run_metadata["total_configs"],
-                t_ref_s=run_metadata["t_ref_s"],
-                t_total_s=run_metadata["t_total_s"],
-            )
-        for rr in all_run_results:
-            save_molecule_results(
-                rr.molecule,
-                rr.results,
-                surface_type=args.surface_type,
-                config=config,
-            )
-        save_summary_results(
-            all_run_results,
+        _write_metadata_if_available(
+            run_metadata=run_metadata,
             surface_type=args.surface_type,
             config=config,
+            smiles_file=args.smiles_file,
         )
-
-        total = sum(len(rr.results) for rr in all_run_results)
-        print(f"\nScreening complete: {total} total configurations")
+        print("")
+        print(format_screening_complete(campaign.total_configurations))
 
 
 if __name__ == "__main__":

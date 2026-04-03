@@ -13,10 +13,12 @@ Top-layer detection uses a z-coordinate tolerance
 import contextlib
 import gc
 import logging
+import math
 
 import numpy as np
 from ase import Atoms
 
+from ._logging import torchsim_output_capture
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
 
@@ -37,12 +39,8 @@ try:
     import torch_sim.state as _ts_state  # type: ignore
     from torch_sim.autobatching import InFlightAutoBatcher  # type: ignore
 
-    # Patch torch_sim.state._split_state: torch.arange() without device= defaults to
-    # CPU even when given CUDA tensor bounds, causing device mismatch in
-    # constraint.select_sub_constraint(atom_idx, ...). Fix by passing device=state.device.
-    # This patch can likely be removed once the next torch-sim release is out.
-    _orig_split_state = _ts_state._split_state
-
+    # Upstream _split_state uses torch.arange(...) without device=, so bounds
+    # live on CPU while constraint tensors are on CUDA. Patch to use state.device.
     def _patched_split_state(state):
         from torch_sim.state import get_attrs_for_scope  # noqa: PLC0415
 
@@ -80,7 +78,6 @@ try:
                 **per_system_dict,
                 **global_attrs,
             }
-            # Fix: pass device=state.device so atom_idx matches constraint tensors
             atom_idx = torch.arange(
                 cumsum_atoms[sys_idx].item(),
                 cumsum_atoms[sys_idx + 1].item(),
@@ -105,7 +102,27 @@ except ImportError:
     ts_constraints = None
     InFlightAutoBatcher = None
 
+# NOTE: single-thread access assumed; no lock needed for current workflows.
 _AUTOBATCHER_CACHE: dict[tuple, "InFlightAutoBatcher"] = {}
+_DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER = 2.0
+_DYNAMIC_AUTOBATCHER_CAP_MIN = 5_000
+_DYNAMIC_AUTOBATCHER_CAP_MAX = 200_000
+_DYNAMIC_AUTOBATCHER_CAP_BUCKET = 5_000
+
+
+def _validate_model_pbc(atoms: Atoms, *, context: str) -> None:
+    """Reject mixed-PBC systems before passing them to UMA/FairChem."""
+    pbc = np.array(atoms.get_pbc(), dtype=bool)
+    if pbc.shape != (3,):
+        raise ValueError(
+            f"{context}: invalid PBC shape {pbc.shape}; expected 3 components."
+        )
+    if bool(pbc.all()) or bool((~pbc).all()):
+        return
+    raise ValueError(
+        f"{context}: mixed PBC {pbc.tolist()} is not supported by the UMA model. "
+        "Use either [True, True, True] with sufficient vacuum or [False, False, False]."
+    )
 
 
 def _positions_cell_hash(atoms: Atoms) -> int:
@@ -139,9 +156,13 @@ def clear_autobatcher_cache(
     only evicts entries with max_n_atoms below it (keeps slab+adsorbate
     batchers when processing multiple molecules). If None, clears all.
     """
-    global _AUTOBATCHER_CACHE
     if max_n_atoms_threshold is None:
+        # Drop strong refs explicitly: TorchSim InFlightAutoBatcher can retain GPU
+        # tensors until batchers are GC'd; dict.clear() alone is easy to leave
+        # garbage uncollected between pytest tests.
+        _holders = list(_AUTOBATCHER_CACHE.values())
         _AUTOBATCHER_CACHE.clear()
+        del _holders
         logger.debug("Cleared entire autobatcher cache")
     else:
         to_remove = [k for k in _AUTOBATCHER_CACHE if k[4] < max_n_atoms_threshold]
@@ -156,10 +177,15 @@ def clear_autobatcher_cache(
     if torch is not None and torch.cuda.is_available():
         with contextlib.suppress(RuntimeError):
             torch.cuda.synchronize()
-    gc.collect()
+    for _ in range(3):
+        gc.collect()
     if torch is not None and torch.cuda.is_available():
         with contextlib.suppress(RuntimeError):
             torch.cuda.empty_cache()
+        ipc = getattr(torch.cuda, "ipc_collect", None)
+        if callable(ipc):
+            with contextlib.suppress(RuntimeError):
+                ipc()
 
 
 def _maybe_clear_cuda_cache(ts_model) -> None:
@@ -183,6 +209,7 @@ def _get_inflight_autobatcher(
     max_memory_scaler: float | None = None,
     max_atoms_to_try: int = 100_000,
     config: AdsorptionConfig | None = None,
+    saturation_reuse: bool = False,
 ):
     """Create or return cached InFlightAutoBatcher for batched relaxations."""
     if InFlightAutoBatcher is None or ts is None or ts_model is None:
@@ -190,7 +217,6 @@ def _get_inflight_autobatcher(
     if config is not None:
         max_memory_padding = config.autobatcher_max_memory_padding
         max_memory_scaler = config.autobatcher_max_memory_scaler
-        max_atoms_to_try = config.autobatcher_max_atoms_to_try
     try:
         dev = getattr(ts_model, "device", None)
         key = (
@@ -204,7 +230,44 @@ def _get_inflight_autobatcher(
         )
         cached = _AUTOBATCHER_CACHE.get(key)
         if cached is not None:
-            return cached
+            return cached, key, False
+        if saturation_reuse:
+            matching_candidates: list[tuple[tuple, object]] = []
+            for cache_key, cache_ab in _AUTOBATCHER_CACHE.items():
+                if (
+                    cache_key[0] == key[0]
+                    and cache_key[1] == key[1]
+                    and cache_key[2] == key[2]
+                    and cache_key[3] == key[3]
+                    and cache_key[5] == key[5]
+                    and cache_key[6] == key[6]
+                ):
+                    matching_candidates.append((cache_key, cache_ab))
+            matching_candidates.sort(key=lambda item: int(item[0][4]), reverse=True)
+            growth_atoms = 32
+            growth_fraction = 0.1
+            if config is not None:
+                growth_atoms = config.saturation_autobatcher_reuse_growth_atoms
+                growth_fraction = config.saturation_autobatcher_reuse_growth_fraction
+            for cache_key, cache_ab in matching_candidates:
+                cached_max_atoms = int(cache_key[4])
+                allowed_growth = max(
+                    growth_atoms,
+                    int(round(cached_max_atoms * growth_fraction)),
+                )
+                if (
+                    cached_max_atoms
+                    < max_n_atoms
+                    <= (cached_max_atoms + allowed_growth)
+                ):
+                    logger.info(
+                        "Reusing saturation autobatcher from max_n_atoms=%d for %d "
+                        "(allowed_growth=%d) to skip memory re-estimation",
+                        cached_max_atoms,
+                        max_n_atoms,
+                        allowed_growth,
+                    )
+                    return cache_ab, cache_key, True
         kwargs: dict = {
             "memory_scales_with": memory_scales_with,
             "max_memory_padding": max_memory_padding,
@@ -214,10 +277,41 @@ def _get_inflight_autobatcher(
             kwargs["max_memory_scaler"] = max_memory_scaler
         ab = InFlightAutoBatcher(ts_model, **kwargs)
         _AUTOBATCHER_CACHE[key] = ab
-        return ab
+        return ab, key, False
     except (RuntimeError, TypeError, ValueError) as exc:
         logger.debug("Failed to create InFlightAutoBatcher: %s", exc)
-        return None
+        return None, None, False
+
+
+def _is_cuda_oom_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return (
+        "out of memory" in message
+        or "cuda oom" in message
+        or "cuda out of memory" in message
+    )
+
+
+def _resolve_autobatcher_max_atoms_to_try(
+    *,
+    max_n_atoms: int,
+    n_systems: int,
+    config: AdsorptionConfig,
+) -> tuple[int, str]:
+    """Resolve probe cap for TorchSim memory estimation.
+
+    Returns ``(cap, source)`` where source is ``"config_override"`` or ``"dynamic"``.
+    """
+    override = config.autobatcher_max_atoms_to_try
+    if override is not None:
+        return int(override), "config_override"
+    estimated = _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER * max_n_atoms * n_systems
+    bucketed = int(
+        math.ceil(estimated / _DYNAMIC_AUTOBATCHER_CAP_BUCKET)
+        * _DYNAMIC_AUTOBATCHER_CAP_BUCKET
+    )
+    cap = max(_DYNAMIC_AUTOBATCHER_CAP_MIN, min(_DYNAMIC_AUTOBATCHER_CAP_MAX, bucketed))
+    return cap, "dynamic"
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +388,18 @@ def _resolve_device(device: str | None) -> str | None:
     return device
 
 
+def _ensure_torch_checkpoint_safe_globals() -> None:
+    """Allow PyTorch 2.6+ to unpickle FairChem checkpoints that reference ``slice``."""
+    if torch is None:
+        return
+    try:
+        add_sg = torch.serialization.add_safe_globals
+    except AttributeError:
+        return
+    with contextlib.suppress(TypeError, ValueError):
+        add_sg([slice])
+
+
 def setup_calculator(model_name: str = "uma-s-1p1", device: str = "cuda"):
     """Create a FAIRChem ASE calculator for the given model."""
     try:
@@ -306,6 +412,7 @@ def setup_calculator(model_name: str = "uma-s-1p1", device: str = "cuda"):
         ) from exc
 
     device = _resolve_device(device)
+    _ensure_torch_checkpoint_safe_globals()
     logger.info("Initializing FAIRChem calculator (%s) on %s...", model_name, device)
     predictor = pretrained_mlip.get_predict_unit(model_name, device=device)
     calc = FAIRChemCalculator(predictor, task_name="oc20")
@@ -328,9 +435,11 @@ def setup_torchsim_model(model_name: str = "uma-s-1p1", device: str = "cuda"):
         ) from exc
 
     device = _resolve_device(device)
+    _ensure_torch_checkpoint_safe_globals()
     logger.info("Initializing TorchSim FairChemModel (%s) on %s...", model_name, device)
     dev = torch.device(device) if torch is not None and device else None
-    model = FairChemModel(model=model_name, device=dev, task_name="oc20")
+    with torchsim_output_capture():
+        model = FairChemModel(model=model_name, device=dev, task_name="oc20")
     logger.info("TorchSim model created successfully")
     return model
 
@@ -361,13 +470,26 @@ class TorchSimCalculator:
         """Run single-point calculation via ``ts.static()``."""
         if ts is None or atoms is None:
             return
+        _validate_model_pbc(atoms, context="TorchSimCalculator.calculate")
         properties = properties or ["energy", "forces"]
-        result_list = ts.static(system=atoms, model=self._model)
+        with torchsim_output_capture():
+            result_list = ts.static(system=atoms, model=self._model)
         out = result_list[0]
-        energy = out.get("energy")
+        energy = out.get("potential_energy")
         forces = out.get("forces")
-        if energy is not None:
-            self.results["energy"] = float(energy.detach().cpu().numpy().squeeze())
+        if energy is None:
+            raise RuntimeError(
+                "ML model returned no energy (out['potential_energy'] is None). "
+                "This may indicate GPU memory issues, model output format changes, "
+                "or first-run initialization failure on HPC."
+            )
+        e_val = float(energy.detach().cpu().numpy().squeeze())
+        if not np.isfinite(e_val):
+            raise RuntimeError(
+                f"ML model returned non-finite energy: {e_val}. "
+                "Check GPU stability and model output."
+            )
+        self.results["energy"] = e_val
         if forces is not None:
             self.results["forces"] = forces.detach().cpu().numpy()
         if "stress" in properties and "stress" in out and out["stress"] is not None:
@@ -385,7 +507,13 @@ class TorchSimCalculator:
         """Return energy in eV."""
         if atoms is not None and self._atoms_changed(atoms):
             self.calculate(atoms, ["energy", "forces"])
-        return self.results.get("energy", 0.0)
+        energy = self.results.get("energy")
+        if energy is None or not np.isfinite(energy):
+            raise RuntimeError(
+                f"Calculator has no valid energy (got {energy}). "
+                "The model may have failed to produce energy for this system."
+            )
+        return energy
 
     def get_forces(self, atoms=None):
         """Return forces in eV/Å, shape (n_atoms, 3)."""
@@ -436,13 +564,28 @@ def batch_static(
         )
     if not atoms_list:
         return []
-    result_list = ts.static(system=atoms_list, model=ts_model)
+    for i, atoms in enumerate(atoms_list):
+        _validate_model_pbc(atoms, context=f"batch_static system[{i}]")
+    with torchsim_output_capture():
+        result_list = ts.static(system=atoms_list, model=ts_model)
+    if len(result_list) != len(atoms_list):
+        raise RuntimeError(
+            "ML model returned mismatched batch size in ts.static: "
+            f"expected {len(atoms_list)}, got {len(result_list)}."
+        )
     out: list[tuple[float, np.ndarray]] = []
-    for res in result_list:
-        e = res.get("energy")
+    for atoms, res in zip(atoms_list, result_list, strict=True):
+        e = res.get("potential_energy")
         f = res.get("forces")
-        energy = float(e.detach().cpu().numpy().squeeze()) if e is not None else 0.0
-        forces = f.detach().cpu().numpy() if f is not None else np.zeros((0, 3))
+        if e is None:
+            raise RuntimeError(
+                "ML model returned no energy (out['potential_energy'] is None). "
+                "Check GPU memory and model output."
+            )
+        energy = float(e.detach().cpu().numpy().squeeze())
+        forces = (
+            f.detach().cpu().numpy() if f is not None else np.zeros((len(atoms), 3))
+        )
         out.append((energy, forces))
     return out
 
@@ -460,7 +603,7 @@ def precompute_results(
     if not atoms_list:
         return
     results = batch_static(atoms_list, ts_model)
-    for atoms, (energy, forces) in zip(atoms_list, results, strict=False):
+    for atoms, (energy, forces) in zip(atoms_list, results, strict=True):
         calc = TorchSimCalculator(calculator._model)
         calc.results["energy"] = energy
         calc.results["forces"] = forces
@@ -479,7 +622,7 @@ def optimize_isolated_molecules_batched(
     fmax: float = 0.05,
     steps: int = 100,
     config: AdsorptionConfig | None = None,
-) -> list[tuple[Atoms, float] | None]:
+) -> list[tuple[Atoms, float]]:
     """Batch-optimise isolated molecule conformers (no constraints)."""
     if not conformers:
         return []
@@ -496,29 +639,56 @@ def optimize_isolated_molecules_batched(
     optimizer = _resolve_ts_optimizer(config.ts_optimizer if config else "fire")
     swaps = config.steps_between_swaps if config else 5
     logger.info("Batched optimisation of %d isolated conformers...", len(conformers))
-    conv = ts.generate_force_convergence_fn(force_tol=fmax, include_cell_forces=False)
+    with torchsim_output_capture():
+        conv = ts.generate_force_convergence_fn(
+            force_tol=fmax, include_cell_forces=False
+        )
     _maybe_clear_cuda_cache(ts_model)
     try:
-        ab = (
-            _get_inflight_autobatcher(
-                ts_model, max(len(a) for a in conformers), config=config
+        ab = None
+        if use_autobatcher and config is not None:
+            max_n_atoms = max(len(a) for a in conformers)
+            resolved_max_atoms_to_try, cap_source = (
+                _resolve_autobatcher_max_atoms_to_try(
+                    max_n_atoms=max_n_atoms,
+                    n_systems=len(conformers),
+                    config=config,
+                )
             )
-            if use_autobatcher
-            else None
-        )
-        state = ts.optimize(
-            system=conformers,
-            model=ts_model,
-            optimizer=optimizer,
-            convergence_fn=conv,
-            max_steps=steps,
-            steps_between_swaps=swaps,
-            autobatcher=ab if ab is not None else False,
-        )
+            logger.info(
+                "Isolated autobatcher probe cap=%d (source=%s, max_n_atoms=%d, n_systems=%d, multiplier=%.2f, bucket=%d)",
+                resolved_max_atoms_to_try,
+                cap_source,
+                max_n_atoms,
+                len(conformers),
+                _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
+                _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
+            )
+            ab = _get_inflight_autobatcher(
+                ts_model,
+                max_n_atoms,
+                config=config,
+                max_atoms_to_try=resolved_max_atoms_to_try,
+            )[0]
+        with torchsim_output_capture():
+            state = ts.optimize(
+                system=conformers,
+                model=ts_model,
+                optimizer=optimizer,
+                convergence_fn=conv,
+                max_steps=steps,
+                steps_between_swaps=swaps,
+                autobatcher=ab if ab is not None else False,
+            )
         atoms_list = state.to_atoms()
         energies = state.energy
+        if len(atoms_list) != len(energies):
+            raise RuntimeError(
+                "TorchSim optimize returned mismatched lengths for atoms/energies: "
+                f"{len(atoms_list)} vs {len(energies)}."
+            )
         results = []
-        for a, e in zip(atoms_list, energies, strict=False):
+        for a, e in zip(atoms_list, energies, strict=True):
             results.append((a, e.item()))
         logger.info("Isolated optimisation complete: %d conformers", len(results))
         return results
@@ -551,6 +721,7 @@ def optimize_adsorbate_slab_batched(
     ts_model,
     config: AdsorptionConfig | None = None,
     base_slab_for_frozen: Atoms | None = None,
+    saturation_reuse: bool = False,
 ) -> list[Atoms | None]:
     """Batch-optimise slab+adsorbate systems, selectively freezing sub-surface.
 
@@ -575,12 +746,17 @@ def optimize_adsorbate_slab_batched(
         )
     if ts_model is None:
         raise ValueError("ts_model must not be None")
+    for i, atoms in enumerate(combined_atoms_list):
+        _validate_model_pbc(
+            atoms, context=f"optimize_adsorbate_slab_batched system[{i}]"
+        )
 
     slab_for_frozen = base_slab_for_frozen if base_slab_for_frozen is not None else slab
     frozen_indices = compute_frozen_indices(slab_for_frozen, config)
     slab_size = len(slab)
 
-    clear_autobatcher_cache(max_n_atoms_threshold=slab_size)
+    if not saturation_reuse:
+        clear_autobatcher_cache(max_n_atoms_threshold=slab_size)
 
     logger.info(
         "Batched optimisation of %d systems (slab=%d atoms, frozen=%d)...",
@@ -589,39 +765,100 @@ def optimize_adsorbate_slab_batched(
         len(frozen_indices),
     )
 
-    conv = ts.generate_force_convergence_fn(
-        force_tol=config.fmax, include_cell_forces=False
-    )
     max_steps = config.stage1_steps + config.stage2_steps
     optimizer = _resolve_ts_optimizer(config.ts_optimizer)
     swaps = config.steps_between_swaps
 
-    model_device = getattr(ts_model, "device", None) or (
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )
-    sim_states = [
-        _make_state_with_frozen_constraint(
-            atoms, frozen_indices, ts_model, model_device
+    model_device = getattr(ts_model, "device", None)
+    if model_device is None:
+        model_device = _resolve_device(config.device)
+    if model_device is None:
+        model_device = "cpu"
+    with torchsim_output_capture():
+        conv = ts.generate_force_convergence_fn(
+            force_tol=config.fmax, include_cell_forces=False
         )
-        for atoms in combined_atoms_list
-    ]
+        sim_states = [
+            _make_state_with_frozen_constraint(
+                atoms, frozen_indices, ts_model, model_device
+            )
+            for atoms in combined_atoms_list
+        ]
 
     try:
         max_n_atoms = max(len(a) for a in combined_atoms_list)
+        resolved_max_atoms_to_try, cap_source = _resolve_autobatcher_max_atoms_to_try(
+            max_n_atoms=max_n_atoms,
+            n_systems=len(combined_atoms_list),
+            config=config,
+        )
+        logger.info(
+            "Autobatcher probe cap=%d (source=%s, max_n_atoms=%d, n_systems=%d, multiplier=%.2f, bucket=%d)",
+            resolved_max_atoms_to_try,
+            cap_source,
+            max_n_atoms,
+            len(combined_atoms_list),
+            _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
+            _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
+        )
         _maybe_clear_cuda_cache(ts_model)
-        ab = _get_inflight_autobatcher(ts_model, max_n_atoms, config=config)
+        use_saturation_reuse = saturation_reuse and config.saturation_autobatcher_reuse
+        ab, cache_key, reused_prior_estimate = _get_inflight_autobatcher(
+            ts_model,
+            max_n_atoms,
+            config=config,
+            saturation_reuse=use_saturation_reuse,
+            max_atoms_to_try=resolved_max_atoms_to_try,
+        )
         if ab is None:
             raise RuntimeError("Could not create autobatcher")
 
-        batch = ts.optimize(
-            system=sim_states,
-            model=ts_model,
-            optimizer=optimizer,
-            convergence_fn=conv,
-            max_steps=max_steps,
-            steps_between_swaps=swaps,
-            autobatcher=ab,
-        )
+        try:
+            with torchsim_output_capture():
+                batch = ts.optimize(
+                    system=sim_states,
+                    model=ts_model,
+                    optimizer=optimizer,
+                    convergence_fn=conv,
+                    max_steps=max_steps,
+                    steps_between_swaps=swaps,
+                    autobatcher=ab,
+                )
+        except RuntimeError as exc:
+            if (
+                use_saturation_reuse
+                and reused_prior_estimate
+                and _is_cuda_oom_error(exc)
+                and cache_key is not None
+            ):
+                logger.warning(
+                    "OOM after reusing saturation autobatcher estimate for max_n_atoms=%d; "
+                    "dropping reused cache entry and retrying with fresh estimate",
+                    max_n_atoms,
+                )
+                _AUTOBATCHER_CACHE.pop(cache_key, None)
+                _maybe_clear_cuda_cache(ts_model)
+                ab, _, _ = _get_inflight_autobatcher(
+                    ts_model,
+                    max_n_atoms,
+                    config=config,
+                    saturation_reuse=False,
+                    max_atoms_to_try=resolved_max_atoms_to_try,
+                )
+                if ab is None:
+                    raise RuntimeError("Could not create autobatcher") from exc
+                with torchsim_output_capture():
+                    batch = ts.optimize(
+                        system=sim_states,
+                        model=ts_model,
+                        optimizer=optimizer,
+                        convergence_fn=conv,
+                        max_steps=max_steps,
+                        steps_between_swaps=swaps,
+                        autobatcher=ab,
+                    )
+            else:
+                raise
         result = batch.to_atoms()
         energies = batch.energy
         forces_list = batch.forces
@@ -638,4 +875,7 @@ def optimize_adsorbate_slab_batched(
         logger.info("Autobatcher optimisation succeeded: %d systems", len(result))
         return result
     finally:
-        clear_autobatcher_cache()
+        if saturation_reuse and config.saturation_autobatcher_reuse:
+            clear_autobatcher_cache(max_n_atoms_threshold=max_n_atoms)
+        else:
+            clear_autobatcher_cache()

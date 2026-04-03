@@ -32,6 +32,48 @@ from .io_results import _write_clean_xyz
 logger = logging.getLogger(__name__)
 
 
+def _import_chain(exc: BaseException | None) -> list[BaseException]:
+    """Flatten exception.__cause__ into a list (root first)."""
+    chain: list[BaseException] = []
+    cur: BaseException | None = exc
+    while cur is not None:
+        chain.append(cur)
+        cur = cur.__cause__
+    return chain
+
+
+def _is_pkg_resources_missing(exc: ImportError) -> bool:
+    """True if *exc* or its :attr:`__cause__` chain indicates missing ``pkg_resources``."""
+    for err in _import_chain(exc):
+        if isinstance(err, ModuleNotFoundError) and err.name == "pkg_resources":
+            return True
+        if "pkg_resources" in str(err):
+            return True
+    return False
+
+
+def _dependency_error_for_slab_import(exc: ImportError) -> DependencyMissingError:
+    """Map a failed ``fairchem.data.oc`` import to an actionable :class:`DependencyMissingError`."""
+    if _is_pkg_resources_missing(exc):
+        return DependencyMissingError(
+            "setuptools",
+            "create_slab_from_bulk",
+            "Install with: pip install 'setuptools<82' (setuptools 82+ removed pkg_resources)",
+        )
+    msg_l = str(exc).lower()
+    if "fairchem" in msg_l:
+        return DependencyMissingError(
+            "fairchem-data-oc",
+            "create_slab_from_bulk",
+            "Install with: pip install fairchem-data-oc",
+        )
+    return DependencyMissingError(
+        "fairchem-data-oc",
+        "create_slab_from_bulk",
+        f"Install with: pip install fairchem-data-oc. Underlying error: {exc!s}",
+    )
+
+
 class SlabContainer:
     """Minimal wrapper that mimics the FAIRChem ``Slab`` interface.
 
@@ -42,6 +84,22 @@ class SlabContainer:
 
     def __init__(self, atoms: Atoms):
         self.atoms = atoms
+
+
+def coerce_slab_container(slab: SlabContainer | Atoms) -> SlabContainer:
+    """Normalize slab-like input to :class:`SlabContainer`.
+
+    Accepts either a pre-wrapped ``SlabContainer`` or a plain ASE ``Atoms``
+    object. ``Atoms`` inputs are defensively copied to avoid mutating caller
+    state across workflow steps.
+    """
+    if isinstance(slab, SlabContainer):
+        return slab
+    if isinstance(slab, Atoms):
+        return SlabContainer(slab.copy())
+    raise TypeError(
+        f"slab must be a SlabContainer or ase.Atoms, got {type(slab).__name__}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -71,11 +129,7 @@ def create_slab_from_bulk(
     try:
         from fairchem.data.oc.core import Bulk, Slab
     except ImportError as exc:
-        raise DependencyMissingError(
-            "fairchem-data-oc",
-            "create_slab_from_bulk",
-            "Install with: pip install fairchem-data-oc",
-        ) from exc
+        raise _dependency_error_for_slab_import(exc) from exc
 
     logger.info(
         "Creating slab from %s, Miller %s, supercell %s...",
@@ -88,6 +142,12 @@ def create_slab_from_bulk(
     slabs = Slab.from_bulk_get_specific_millers(
         bulk=bulk, specific_millers=miller_indices
     )
+    if not slabs:
+        raise GeometryValidationError(
+            "No slabs were generated for bulk_id="
+            f"{bulk_id!r}, miller_indices={miller_indices!r}. "
+            "Try a different Miller index, bulk source, or supercell."
+        )
     slab = slabs[0]
 
     logger.info(
@@ -137,7 +197,7 @@ def _evaluate_variant_energy(variant: Atoms, calculator, context: str = "") -> f
 
 
 def substitute_alloy(
-    slab: SlabContainer,
+    slab: SlabContainer | Atoms,
     host_symbol: str,
     guest_symbol: str,
     guest_fraction: float,
@@ -156,6 +216,8 @@ def substitute_alloy(
     """
     if config is None:
         config = AdsorptionConfig()
+
+    slab = coerce_slab_container(slab)
 
     if not 0.0 <= guest_fraction <= 1.0:
         raise ValueError(
@@ -249,7 +311,7 @@ def substitute_alloy(
 
 
 def deposit_adatoms(
-    slab: SlabContainer,
+    slab: SlabContainer | Atoms,
     adatom_symbol: str,
     coverage_fraction: float,
     calculator=None,
@@ -268,6 +330,8 @@ def deposit_adatoms(
     if config is None:
         config = AdsorptionConfig()
 
+    slab = coerce_slab_container(slab)
+
     if not 0.0 <= coverage_fraction <= 1.0:
         raise ValueError(
             f"coverage_fraction must be between 0 and 1, got {coverage_fraction}"
@@ -285,17 +349,20 @@ def deposit_adatoms(
     base = slab.atoms.copy()
     positions = base.get_positions()
     z_max = float(np.max(positions[:, 2]))
+    top_tol = config.top_layer_tolerance
 
-    top_mask = positions[:, 2] >= (z_max - 0.5)
+    top_mask = positions[:, 2] >= (z_max - top_tol)
     top_indices = np.nonzero(top_mask)[0]
     if len(top_indices) < 3:
         raise GeometryValidationError(
             "Cannot identify top surface layer for adatom placement "
-            f"(found {len(top_indices)} atoms within 0.5 A of z_max)"
+            f"(found {len(top_indices)} atoms within {top_tol} A of z_max)"
         )
 
     candidate_sites = get_hollow_sites_for_adatoms(
-        base, top_layer_tolerance=0.5, dedup_tolerance=0.2
+        base,
+        top_layer_tolerance=top_tol,
+        dedup_tolerance=config.hollow_site_dedup_tolerance,
     )
 
     if not candidate_sites:
@@ -425,7 +492,7 @@ def compute_minimum_supercell(
 
 
 def auto_resize_slab_for_molecule(
-    slab: SlabContainer,
+    slab: SlabContainer | Atoms,
     conformers: list[Atoms],
     min_separation: float = 8.0,
 ) -> tuple[SlabContainer, bool]:
@@ -434,6 +501,8 @@ def auto_resize_slab_for_molecule(
     Returns ``(slab, was_resized)`` where *was_resized* is ``True``
     when the cell was expanded.
     """
+    slab = coerce_slab_container(slab)
+
     diameter = _molecule_diameter(conformers)
     cell = np.array(slab.atoms.get_cell())
     nx, ny = compute_minimum_supercell(cell, diameter, min_separation)

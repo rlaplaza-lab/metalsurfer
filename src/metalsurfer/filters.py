@@ -31,6 +31,7 @@ from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
 from .models import ScreeningResult
 from .placement import calculate_min_distance
+from .placement.geometry import material_aware_pbc
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,7 @@ def _bond_counts_from_atoms(
     pairs_i, pairs_j = np.nonzero(bonded)
 
     bonds: Counter = Counter()
-    for i, j in zip(pairs_i, pairs_j, strict=False):
+    for i, j in zip(pairs_i, pairs_j, strict=True):
         bonds[frozenset({syms[i], syms[j]})] += 1
     return bonds
 
@@ -241,10 +242,29 @@ def check_decomposition(
     reference_smiles: str | None,
     surface_symbols: list[str] | None,
     connectivity_multipliers: list[float],
+    adsorbate_prefix_atoms: int | None = None,
 ) -> tuple[bool, str]:
     """Return ``(ok, reason)``; ``ok=False`` means the adsorbate decomposed
     or rearranged.
+
+    When *adsorbate_prefix_atoms* is set, only ``atoms[adsorbate_prefix_atoms:]``
+    is checked (sequential saturation: slab already contains prior adsorbates).
+    That slice must match ASE ordering ``slab_passed_to_filter + new_adsorbate``,
+    consistent with :func:`check_desorption`. When unset, all non-surface atoms
+    in *atoms* are checked (legacy behaviour).
     """
+    if adsorbate_prefix_atoms is not None:
+        if adsorbate_prefix_atoms < 0 or adsorbate_prefix_atoms > len(atoms):
+            return (
+                False,
+                f"invalid adsorbate_prefix_atoms ({adsorbate_prefix_atoms} "
+                f"for {len(atoms)} atoms)",
+            )
+        atoms = atoms[adsorbate_prefix_atoms:]
+        if len(atoms) == 0:
+            return False, "no adsorbate atoms after prefix"
+        surface_symbols = None
+
     for mult in connectivity_multipliers:
         if not _is_molecule_connected(
             atoms, surface_symbols=surface_symbols, multiplier=mult
@@ -308,6 +328,7 @@ def check_desorption(
     atoms: Atoms,
     slab: Atoms,
     binding_threshold: float = 4.0,
+    surface_symbols: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Return ``(ok, reason)``; ``ok=False`` means the adsorbate desorbed.
 
@@ -321,11 +342,20 @@ def check_desorption(
         return False, "no adsorbate atoms found"
 
     cell = atoms.get_cell()
+    slab_positions = slab.get_positions()
+    if surface_symbols:
+        slab_syms = np.array(slab.get_chemical_symbols())
+        mask = np.isin(slab_syms, surface_symbols)
+        if np.any(mask):
+            slab_positions = slab_positions[mask]
+
+    _pbc_for_dist = material_aware_pbc(slab)
     min_d = calculate_min_distance(
         adsorbate.get_positions(),
-        slab.get_positions(),
+        slab_positions,
         cell,
         use_pbc=True,
+        pbc=_pbc_for_dist,
     )
     if min_d > binding_threshold:
         return False, f"adsorbate too far from surface ({min_d:.2f} A)"
@@ -370,6 +400,7 @@ def filter_results(
     reference_smiles: str | None = None,
     config: AdsorptionConfig | None = None,
     keep_best: bool = False,
+    duplicate_results_out: list[ScreeningResult] | None = None,
 ) -> list[ScreeningResult]:
     """Apply decomposition, desorption and duplicate filters in sequence.
 
@@ -378,7 +409,9 @@ def filter_results(
     results:
         Typed :class:`ScreeningResult` objects from the compute pipeline.
     slab:
-        Reference slab Atoms (used for desorption distance check).
+        Reference slab Atoms (used for desorption distance check and, when
+        decomposition is enabled, as the atom-count prefix ``len(slab)`` for
+        validating only the newly added adsorbate in each ``entry.atoms``).
     surface_symbols:
         Element symbols of the surface (e.g. ``["Ru"]`` or ``["Ru", "Cu"]``).
     reference_smiles:
@@ -391,6 +424,8 @@ def filter_results(
         is True, desorption distance checks are skipped.
     keep_best:
         If ``True``, collapse to the single most-stable entry (minimum E_ads).
+    duplicate_results_out:
+        Optional sink for entries removed by duplicate filtering.
     """
     if config is None:
         config = AdsorptionConfig()
@@ -419,12 +454,14 @@ def filter_results(
         kept: list[ScreeningResult] = []
         decomp_count = 0
         decomp_reasons: dict[str, list[int]] = {}  # reason -> [placement_ids]
+        prefix = len(slab)
         for entry in results:
             ok, reason = check_decomposition(
                 entry.atoms,
                 reference_smiles=reference_smiles,
                 surface_symbols=surface_symbols,
                 connectivity_multipliers=config.connectivity_multipliers,
+                adsorbate_prefix_atoms=prefix,
             )
             if ok:
                 kept.append(entry)
@@ -464,7 +501,10 @@ def filter_results(
         desorb_count = 0
         for entry in results:
             ok, reason = check_desorption(
-                entry.atoms, slab, binding_threshold=config.binding_distance_threshold
+                entry.atoms,
+                slab,
+                binding_threshold=config.binding_distance_threshold,
+                surface_symbols=surface_symbols,
             )
             if ok:
                 kept.append(entry)
@@ -491,21 +531,28 @@ def filter_results(
     t0 = time.perf_counter()
     sorted_results = sorted(results, key=lambda r: r.energy_adsorption)
     unique: list[ScreeningResult] = []
+    deduplicated: list[ScreeningResult] = []
     for entry in sorted_results:
         e = entry.energy_adsorption
         is_dup = False
-        for u in unique:
-            if abs(e - u.energy_adsorption) < config.energy_dedup_threshold:
-                if len(entry.atoms) != len(u.atoms):
-                    continue
-                rmsd = _adsorbate_rmsd(
-                    entry.atoms, u.atoms, surface_symbols=surface_symbols
-                )
-                if rmsd < config.rmsd_dedup_threshold:
-                    is_dup = True
-                    break
+        # unique is in ascending energy order; scan in reverse to check
+        # nearby energies first and break once past the energy window.
+        for u in reversed(unique):
+            energy_gap = abs(e - u.energy_adsorption)
+            if energy_gap >= config.energy_dedup_threshold:
+                break
+            if len(entry.atoms) != len(u.atoms):
+                continue
+            rmsd = _adsorbate_rmsd(
+                entry.atoms, u.atoms, surface_symbols=surface_symbols
+            )
+            if rmsd < config.rmsd_dedup_threshold:
+                is_dup = True
+                break
         if not is_dup:
             unique.append(entry)
+        else:
+            deduplicated.append(entry)
     t_dedup = time.perf_counter() - t0
 
     dup_count = len(results) - len(unique)
@@ -517,6 +564,8 @@ def filter_results(
             len(results),
             t_dedup,
         )
+    if duplicate_results_out is not None and deduplicated:
+        duplicate_results_out.extend(deduplicated)
     results = unique
 
     if keep_best and results:

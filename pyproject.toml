@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metalsurfer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Generic adsorption-energy screening on arbitrary surfaces"
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -20,8 +20,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 dependencies = [
-    "numpy",
+    "numpy>=1.26,<2.3",
     "ase",
+    "spglib",
     "pandas",
     "rdkit",
     "scipy",
@@ -34,6 +35,7 @@ mlip = [
     "torch-sim-atomistic>=0.5.2",
     "fairchem-core>=2.7",
     "fairchem-data-oc",
+    "setuptools>=65,<82",
 ]
 dev = [
     "pytest",
@@ -43,7 +45,7 @@ dev = [
 ]
 
 [project.scripts]
-adsorption-screening = "metalsurfer.example_workflow:main"
+metalsurfer = "metalsurfer.cli.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,5 +1,8 @@
 """Generic adsorption-energy screening on arbitrary surfaces."""
 
+import importlib
+
+from ._logging import ensure_log_record_defaults
 from .config import AdsorptionConfig
 from .exceptions import (
     DependencyMissingError,
@@ -7,7 +10,11 @@ from .exceptions import (
     OptimizationError,
 )
 from .models import (
+    BindingCampaignResult,
+    MoleculeCampaignSummary,
     MoleculeSummary,
+    MultiMolSaturationRunResult,
+    MultiMolSaturationStepResult,
     PlacementDescriptor,
     PlacementSpec,
     ReferenceEnergies,
@@ -20,11 +27,15 @@ from .models import (
 
 __all__ = [
     "AdsorptionConfig",
+    "BindingCampaignResult",
+    "MultiMolSaturationRunResult",
+    "MultiMolSaturationStepResult",
     "ReferenceEnergies",
     "SaturationRunResult",
     "SaturationStepResult",
     "ScreeningResult",
     "MoleculeSummary",
+    "MoleculeCampaignSummary",
     "PlacementSpec",
     "PlacementDescriptor",
     "ScreeningRunResult",
@@ -41,7 +52,6 @@ __all__ = [
     "compute_minimum_supercell",
     "create_conformers_from_smiles",
     "select_conformer_boltzmann",
-    "generate_conformer_placement",
     "generate_placement_from_spec",
     "generate_placement_from_descriptor",
     "enumerate_placement_specs",
@@ -59,22 +69,30 @@ __all__ = [
     "filter_results",
     "check_decomposition",
     "check_desorption",
+    "run_adsorption",
+    "run_adsorption_bo",
+    "run_saturation",
+    "run_saturation_bo",
     "process_molecule",
     "process_molecule_bayesian",
     "format_failure_summary",
-    "run_screening",
-    "run_screening_bayesian",
-    "run_saturation_screening",
+    "prepare_slab",
     "calculate_reference_energies",
     "load_molecules",
     "setup_directories",
     "save_molecule_results",
     "save_single_molecule_results",
+    "screening_run_result",
     "save_summary_results",
     "save_saturation_results",
+    "save_multi_mol_saturation_results",
     "write_run_metadata",
     "write_run_settings",
     "ml",
+    "SymmetryAnalyzer",
+    "SymmetryAnalysisError",
+    "get_symmetry_aware_sites",
+    "get_symmetry_info",
 ]
 
 _LAZY_MODULES = {
@@ -87,13 +105,17 @@ _LAZY_MODULES = {
         "auto_resize_slab_for_molecule",
         "compute_minimum_supercell",
     },
+    "surface_prep": {
+        "prepare_slab",
+    },
     "conformers": {"create_conformers_from_smiles", "select_conformer_boltzmann"},
     "placement": {
-        "generate_conformer_placement",
         "generate_placement_from_spec",
         "generate_placement_from_descriptor",
         "enumerate_placement_specs",
         "calculate_min_distance",
+        "get_symmetry_aware_sites",
+        "get_symmetry_info",
     },
     "optimization": {
         "setup_calculator",
@@ -112,18 +134,24 @@ _LAZY_MODULES = {
         "process_molecule",
         "process_molecule_bayesian",
         "format_failure_summary",
-        "run_screening",
-        "run_screening_bayesian",
         "run_saturation_screening",
         "calculate_reference_energies",
         "load_molecules",
+    },
+    "campaigns": {
+        "run_adsorption",
+        "run_adsorption_bo",
+        "run_saturation",
+        "run_saturation_bo",
     },
     "io_results": {
         "setup_directories",
         "save_molecule_results",
         "save_single_molecule_results",
+        "screening_run_result",
         "save_summary_results",
         "save_saturation_results",
+        "save_multi_mol_saturation_results",
         "write_run_metadata",
         "write_run_settings",
     },
@@ -139,14 +167,15 @@ _LAZY_MODULES = {
         "load_dataset",
         "train_model",
     },
+    "symmetry": {"SymmetryAnalyzer", "SymmetryAnalysisError"},
 }
+
+ensure_log_record_defaults()
 
 
 def __getattr__(name: str):
     # Intentional lazy import: heavy/optional submodules loaded on first access.
     for mod, names in _LAZY_MODULES.items():
         if name in names:
-            import importlib
-
             return getattr(importlib.import_module(f".{mod}", __name__), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -12,8 +12,9 @@ import pandas as pd
 from ase import Atoms
 
 from .config import AdsorptionConfig
-from .ml.schema import config_to_context_row
+from .ml.schema import SCHEMA_VERSION, config_to_context_row
 from .models import (
+    MultiMolSaturationRunResult,
     PlacementDescriptor,
     SaturationRunResult,
     ScreeningResult,
@@ -24,9 +25,46 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
+def _results_dir(surface_type: str) -> Path:
+    return Path(f"results_{surface_type}")
+
+
+def _build_run_metadata(
+    *,
+    surface_type: str,
+    config: AdsorptionConfig,
+    extra_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the canonical run metadata payload."""
+    config_dict = {k: v for k, v in asdict(config).items() if not callable(v)}
+    metadata: dict[str, Any] = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "surface_type": surface_type,
+        "config": config_dict,
+    }
+    if extra_fields:
+        metadata.update(extra_fields)
+    return metadata
+
+
+def _write_run_metadata_file(results_dir: Path, metadata: dict[str, Any]) -> Path:
+    """Write run metadata JSON under *results_dir*."""
+    results_dir.mkdir(parents=True, exist_ok=True)
+    path = results_dir / "run_metadata.json"
+    with path.open("w") as f:
+        json.dump(metadata, f, indent=2, default=str)
+    return path
+
+
 def _placement_descriptor_to_row(d: PlacementDescriptor) -> dict[str, Any]:
     """Convert PlacementDescriptor fields to a dict for CSV row."""
+    x_abs = d.x_abs if d.x_abs is not None else d.x
+    y_abs = d.y_abs if d.y_abs is not None else d.y
+    z_offset = d.z_offset
+    surface_ref_z_abs = d.surface_ref_z_abs if d.surface_ref_z_abs is not None else 0.0
+    z_abs = d.z_abs if d.z_abs is not None else surface_ref_z_abs + z_offset
     row: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
         "conformer_index": d.conformer_index,
         "orientation_type": d.orientation_type,
         "face_flip": d.face_flip,
@@ -36,10 +74,17 @@ def _placement_descriptor_to_row(d: PlacementDescriptor) -> dict[str, Any]:
         "tilt_deg": d.tilt_deg,
         "azimuth_deg": d.azimuth_deg,
         "azimuth_in_plane_deg": d.azimuth_in_plane_deg,
-        "x": d.x,
-        "y": d.y,
-        "z": d.z,
+        "x_abs": x_abs,
+        "y_abs": y_abs,
+        "z_offset": z_offset,
+        "surface_ref_z_abs": surface_ref_z_abs,
+        "z_abs": z_abs,
         "shape": d.shape,
+        "placement_mode_resolved": d.placement_mode_resolved,
+        "site_source": d.site_source,
+        "site_reference_frame": d.site_reference_frame,
+        "site_xy_frac_a": d.site_xy_frac_a,
+        "site_xy_frac_b": d.site_xy_frac_b,
     }
     if d.slab_indices is not None:
         row["slab_indices"] = ",".join(str(i) for i in d.slab_indices)
@@ -57,18 +102,13 @@ def write_run_settings(
     has the AdsorptionConfig (and optional molecule/count/timing) needed to
     reproduce the computation. Batch runs typically use write_run_metadata instead.
     """
-    results_dir = f"results_{surface_type}"
-    os.makedirs(results_dir, exist_ok=True)
-    config_dict = {k: v for k, v in asdict(config).items() if not callable(v)}
-    metadata: dict[str, Any] = {
-        "timestamp": datetime.now(UTC).isoformat(),
-        "surface_type": surface_type,
-        "config": config_dict,
-        **run_info,
-    }
-    path = f"{results_dir}/run_metadata.json"
-    with open(path, "w") as f:
-        json.dump(metadata, f, indent=2, default=str)
+    results_dir = _results_dir(surface_type)
+    metadata = _build_run_metadata(
+        surface_type=surface_type,
+        config=config,
+        extra_fields=run_info,
+    )
+    path = _write_run_metadata_file(results_dir, metadata)
     logger.info("Run settings written to %s", path)
 
 
@@ -92,33 +132,52 @@ def save_molecule_results(
     if config is None:
         config = AdsorptionConfig()
 
-    results_dir = f"results_{surface_type}"
-    vasp_dir = f"{results_dir}/vasp_inputs/{molecule_name}_all"
-    xyz_dir = f"{results_dir}/xyz_structures/{molecule_name}_all"
+    results_dir = _results_dir(surface_type)
+    vasp_dir = results_dir / "vasp_inputs" / f"{molecule_name}_all"
+    xyz_dir = results_dir / "xyz_structures" / f"{molecule_name}_all"
+    mol_xyz_dir = results_dir / "xyz_structures" / f"{molecule_name}_adsorbate_only"
     os.makedirs(vasp_dir, exist_ok=True)
     os.makedirs(xyz_dir, exist_ok=True)
+    os.makedirs(mol_xyz_dir, exist_ok=True)
 
     for entry in results:
         pid = entry.placement_id
 
-        xyz_file = f"{xyz_dir}/conformer_{pid:03d}.xyz"
-        _write_clean_xyz(entry.atoms, xyz_file)
+        xyz_file = xyz_dir / f"conformer_{pid:03d}.xyz"
+        _write_clean_xyz(entry.atoms, str(xyz_file))
+        adsorbate_xyz_file = mol_xyz_dir / f"conformer_{pid:03d}_adsorbate.xyz"
+        adsorbate_atoms = entry.atoms[entry.slab_size :].copy()
+        _write_clean_xyz(adsorbate_atoms, str(adsorbate_xyz_file))
 
-        vasp_subdir = f"{vasp_dir}/conformer_{pid:03d}"
+        vasp_subdir = vasp_dir / f"conformer_{pid:03d}"
         _write_vasp_inputs(
             entry.atoms,
-            vasp_subdir,
+            str(vasp_subdir),
             molecule_name,
             system_name=system_name,
             config=config,
         )
 
         logger.info(
-            "  Saved placement %d: E_ads = %.4f eV -> %s",
+            "  Saved placement %d: E_ads = %.4f eV -> %s (adsorbate: %s)",
             pid,
             entry.energy_adsorption,
             xyz_file,
+            adsorbate_xyz_file,
         )
+
+
+def screening_run_result(
+    molecule_name: str,
+    results: list[ScreeningResult],
+) -> ScreeningRunResult:
+    """Build a :class:`ScreeningRunResult` for :func:`save_summary_results` after a campaign."""
+    summary = build_molecule_summary(molecule_name, results)
+    return ScreeningRunResult(
+        molecule=molecule_name,
+        results=results,
+        summary=summary,
+    )
 
 
 def save_single_molecule_results(
@@ -127,11 +186,17 @@ def save_single_molecule_results(
     surface_type: str = "manual",
     system_name: str | None = None,
     config: AdsorptionConfig | None = None,
+    *,
+    write_csv: bool = True,
 ) -> None:
     """Write XYZ, POSCAR, and CSV for a single molecule's screening results.
 
     Convenience helper for single-molecule runs (e.g. process_molecule).
     Saves structures and builds a detailed + summary CSV.
+
+    For multi-molecule campaigns, pass ``write_csv=False`` in the loop (structures only),
+    accumulate :class:`ScreeningRunResult` via :func:`screening_run_result`, then call
+    :func:`save_summary_results` and :func:`write_run_settings` once at the end.
     """
     if not results:
         logger.warning("No results to save for %s", molecule_name)
@@ -143,12 +208,9 @@ def save_single_molecule_results(
         system_name=system_name,
         config=config,
     )
-    summary = build_molecule_summary(molecule_name, results)
-    run_result = ScreeningRunResult(
-        molecule=molecule_name,
-        results=results,
-        summary=summary,
-    )
+    if not write_csv:
+        return
+    run_result = screening_run_result(molecule_name, results)
     save_summary_results([run_result], surface_type=surface_type, config=config)
     if config is not None:
         write_run_settings(
@@ -167,15 +229,15 @@ def save_summary_results(
     """Write detailed and summary CSV files from typed run results.
 
     When config is provided, each detailed row is extended with computation
-    context (model_name, placement_mode, fmax, stage1_steps, stage2_steps,
+    context (model_name, fmax, stage1_steps, stage2_steps,
     seed, context_hash, etc.) so the run is exactly reproducible.
     """
-    results_dir = f"results_{surface_type}"
+    results_dir = _results_dir(surface_type)
     context_row = config_to_context_row(config) if config else {}
     all_rows: list[dict[str, Any]] = []
     for rr in run_results:
-        xyz_dir = f"{results_dir}/xyz_structures/{rr.molecule}_all"
-        vasp_dir = f"{results_dir}/vasp_inputs/{rr.molecule}_all"
+        xyz_dir = results_dir / "xyz_structures" / f"{rr.molecule}_all"
+        vasp_dir = results_dir / "vasp_inputs" / f"{rr.molecule}_all"
         for sr in rr.results:
             pid = sr.placement_id
             row: dict[str, Any] = {
@@ -186,8 +248,8 @@ def save_summary_results(
                 "energy_adsorbate": sr.energy_adsorbate,
                 "energy_adsorption": sr.energy_adsorption,
                 "distance": sr.distance,
-                "xyz_path": f"{xyz_dir}/conformer_{pid:03d}.xyz",
-                "poscar_path": f"{vasp_dir}/conformer_{pid:03d}/POSCAR",
+                "xyz_path": str(xyz_dir / f"conformer_{pid:03d}.xyz"),
+                "poscar_path": str(vasp_dir / f"conformer_{pid:03d}" / "POSCAR"),
             }
             row.update(_placement_descriptor_to_row(sr.placement_descriptor))
             if context_row:
@@ -200,7 +262,7 @@ def save_summary_results(
     os.makedirs(results_dir, exist_ok=True)
 
     df = pd.DataFrame(all_rows)
-    df.to_csv(f"{results_dir}/adsorption_energies_detailed.csv", index=False)
+    df.to_csv(results_dir / "adsorption_energies_detailed.csv", index=False)
 
     summary_rows: list[dict[str, Any]] = []
     for rr in run_results:
@@ -222,7 +284,7 @@ def save_summary_results(
 
     if summary_rows:
         sdf = pd.DataFrame(summary_rows)
-        sdf.to_csv(f"{results_dir}/adsorption_energy_summary.csv", index=False)
+        sdf.to_csv(results_dir / "adsorption_energy_summary.csv", index=False)
 
     logger.info("Saved summary results to %s", results_dir)
 
@@ -249,18 +311,34 @@ def save_saturation_results(
     context_row = config_to_context_row(config)
     detail_rows: list[dict[str, Any]] = []
     for sr in saturation_results:
+        mol_dir = f"{xyz_dir}/{sr.molecule}_saturation"
         for step_result in sr.steps:
             best = step_result.best_result
+            step = step_result.step
+            step_structure_path = f"{mol_dir}/step_{step:03d}_best_slab.xyz"
+            step_energy_path = (
+                f"{mol_dir}/step_{step:03d}_Eads_{best.energy_adsorption:.4f}.xyz"
+            )
+            step_adsorbate_path = f"{mol_dir}/step_{step:03d}_adsorbate.xyz"
             detail_row: dict[str, Any] = {
                 "molecule": sr.molecule,
-                "step": step_result.step,
+                "step": step,
                 "n_molecules_on_slab": step_result.n_molecules_on_slab,
+                "bo_transfer_enabled": step_result.bo_transfer_enabled,
+                "bo_transfer_used": step_result.bo_transfer_used,
+                "bo_transfer_disabled_reason": step_result.bo_transfer_disabled_reason,
+                "bo_transfer_weight_share": step_result.bo_transfer_weight_share,
+                "bo_transfer_bad_rounds": step_result.bo_transfer_bad_rounds,
+                "bo_transfer_last_mae_delta": step_result.bo_transfer_last_mae_delta,
                 "placement_id": best.placement_id,
                 "energy_adslab": best.energy_adslab,
                 "energy_slab": best.energy_slab,
                 "energy_adsorbate": best.energy_adsorbate,
                 "energy_adsorption": best.energy_adsorption,
                 "distance": best.distance,
+                "step_structure_path": step_structure_path,
+                "step_structure_energy_path": step_energy_path,
+                "step_adsorbate_path": step_adsorbate_path,
             }
             detail_row.update(_placement_descriptor_to_row(best.placement_descriptor))
             detail_row.update(context_row)
@@ -273,11 +351,17 @@ def save_saturation_results(
     # Summary CSV: one row per molecule
     summary_rows: list[dict[str, Any]] = []
     for sr in saturation_results:
+        final_slab_path = (
+            f"{xyz_dir}/{sr.molecule}_saturation/final_saturated_slab.xyz"
+            if sr.final_slab_atoms is not None
+            else ""
+        )
         summary_rows.append(
             {
                 "molecule": sr.molecule,
                 "n_molecules_at_saturation": sr.n_molecules_at_saturation,
                 "n_steps": len(sr.steps),
+                "final_slab_path": final_slab_path,
             }
         )
 
@@ -293,10 +377,15 @@ def save_saturation_results(
         for step_result in sr.steps:
             step = step_result.step
             best = step_result.best_result
-            xyz_path = (
+            step_structure_path = f"{mol_dir}/step_{step:03d}_best_slab.xyz"
+            step_energy_path = (
                 f"{mol_dir}/step_{step:03d}_Eads_{best.energy_adsorption:.4f}.xyz"
             )
-            _write_clean_xyz(best.atoms, xyz_path)
+            step_adsorbate_path = f"{mol_dir}/step_{step:03d}_adsorbate.xyz"
+            best.atoms.write(step_structure_path, format="extxyz")
+            best.atoms.write(step_energy_path, format="extxyz")
+            adsorbate = best.atoms[best.slab_size :].copy()
+            _write_clean_xyz(adsorbate, step_adsorbate_path)
             vasp_subdir = f"{vasp_mol_dir}/step_{step:03d}"
             _write_vasp_inputs(
                 best.atoms,
@@ -306,9 +395,8 @@ def save_saturation_results(
                 config=config,
             )
         if sr.final_slab_atoms is not None:
-            _write_clean_xyz(
-                sr.final_slab_atoms,
-                f"{mol_dir}/final_saturated_slab.xyz",
+            sr.final_slab_atoms.write(
+                f"{mol_dir}/final_saturated_slab.xyz", format="extxyz"
             )
 
     write_run_settings(
@@ -323,6 +411,119 @@ def save_saturation_results(
     logger.info("Saved saturation results to %s", results_dir)
 
 
+def save_multi_mol_saturation_results(
+    result: MultiMolSaturationRunResult,
+    surface_type: str = "manual",
+    config: AdsorptionConfig | None = None,
+) -> None:
+    """Write CSV summaries and per-step structures for a multi-molecule saturation run.
+
+    Output layout mirrors :func:`save_saturation_results` but uses a joined
+    molecule name (``mol1_mol2``) for directory names and adds
+    ``winning_molecule`` / ``per_molecule_budgets`` columns to the detail CSV.
+    """
+    if config is None:
+        config = AdsorptionConfig()
+
+    results_dir = f"results_{surface_type}"
+    os.makedirs(results_dir, exist_ok=True)
+    xyz_dir = f"{results_dir}/xyz_structures"
+    os.makedirs(xyz_dir, exist_ok=True)
+
+    mol_label = "_".join(result.molecules)
+    mol_dir = f"{xyz_dir}/{mol_label}_saturation"
+    vasp_mol_dir = f"{results_dir}/vasp_inputs/{mol_label}_saturation"
+    os.makedirs(mol_dir, exist_ok=True)
+    os.makedirs(vasp_mol_dir, exist_ok=True)
+
+    context_row = config_to_context_row(config)
+    detail_rows: list[dict[str, Any]] = []
+    for step_result in result.steps:
+        best = step_result.best_result
+        step = step_result.step
+        step_structure_path = f"{mol_dir}/step_{step:03d}_best_slab.xyz"
+        step_energy_path = (
+            f"{mol_dir}/step_{step:03d}_Eads_{best.energy_adsorption:.4f}.xyz"
+        )
+        step_adsorbate_path = f"{mol_dir}/step_{step:03d}_adsorbate.xyz"
+        detail_row: dict[str, Any] = {
+            "molecules": mol_label,
+            "winning_molecule": step_result.winning_molecule,
+            "step": step,
+            "n_molecules_on_slab": step_result.n_molecules_on_slab,
+            "per_molecule_budgets": str(step_result.per_molecule_budgets),
+            "bo_transfer_enabled": step_result.bo_transfer_enabled,
+            "placement_id": best.placement_id,
+            "energy_adslab": best.energy_adslab,
+            "energy_slab": best.energy_slab,
+            "energy_adsorbate": best.energy_adsorbate,
+            "energy_adsorption": best.energy_adsorption,
+            "distance": best.distance,
+            "step_structure_path": step_structure_path,
+            "step_structure_energy_path": step_energy_path,
+            "step_adsorbate_path": step_adsorbate_path,
+        }
+        detail_row.update(_placement_descriptor_to_row(best.placement_descriptor))
+        detail_row.update(context_row)
+        detail_rows.append(detail_row)
+
+    if detail_rows:
+        df = pd.DataFrame(detail_rows)
+        df.to_csv(f"{results_dir}/saturation_details.csv", index=False)
+
+    # Summary CSV: one row for the whole multi-mol run
+    summary_row: dict[str, Any] = {
+        "molecules": mol_label,
+        "n_molecules_at_saturation": result.n_molecules_at_saturation,
+        "n_steps": len(result.steps),
+        "molecule_counts": str(result.molecule_counts),
+        "final_slab_path": (
+            f"{mol_dir}/final_saturated_slab.xyz"
+            if result.final_slab_atoms is not None
+            else ""
+        ),
+    }
+    pd.DataFrame([summary_row]).to_csv(
+        f"{results_dir}/saturation_summary.csv", index=False
+    )
+
+    # Write XYZ and VASP inputs for each step
+    for step_result in result.steps:
+        step = step_result.step
+        best = step_result.best_result
+        step_structure_path = f"{mol_dir}/step_{step:03d}_best_slab.xyz"
+        step_energy_path = (
+            f"{mol_dir}/step_{step:03d}_Eads_{best.energy_adsorption:.4f}.xyz"
+        )
+        step_adsorbate_path = f"{mol_dir}/step_{step:03d}_adsorbate.xyz"
+        best.atoms.write(step_structure_path, format="extxyz")
+        best.atoms.write(step_energy_path, format="extxyz")
+        adsorbate = best.atoms[best.slab_size :].copy()
+        _write_clean_xyz(adsorbate, step_adsorbate_path)
+        vasp_subdir = f"{vasp_mol_dir}/step_{step:03d}"
+        _write_vasp_inputs(
+            best.atoms,
+            vasp_subdir,
+            step_result.winning_molecule,
+            system_name=None,
+            config=config,
+        )
+
+    if result.final_slab_atoms is not None:
+        result.final_slab_atoms.write(
+            f"{mol_dir}/final_saturated_slab.xyz", format="extxyz"
+        )
+
+    write_run_settings(
+        surface_type,
+        config,
+        n_molecules=len(result.molecules),
+        total_steps=len(result.steps),
+        n_molecules_at_saturation=result.n_molecules_at_saturation,
+    )
+    logger.info("Saved multi-mol saturation results to %s", results_dir)
+
+
 def write_run_metadata(
     surface_type: str,
     config: AdsorptionConfig,
@@ -333,36 +534,32 @@ def write_run_metadata(
     t_total_s: float,
 ) -> None:
     """Persist reproducible run metadata as JSON."""
-    results_dir = f"results_{surface_type}"
-    os.makedirs(results_dir, exist_ok=True)
+    results_dir = Path(f"results_{surface_type}")
 
     mol_per_s = n_molecules / t_total_s if t_total_s > 0 else 0.0
     cfg_per_s = total_configs / t_total_s if t_total_s > 0 else 0.0
 
-    config_dict = {k: v for k, v in asdict(config).items() if not callable(v)}
-    metadata: dict[str, Any] = {
-        "timestamp": datetime.now(UTC).isoformat(),
-        "surface_type": surface_type,
-        "config": config_dict,
-        "input": {
-            "smiles_file": smiles_file,
-            "n_molecules": n_molecules,
+    metadata = _build_run_metadata(
+        surface_type=surface_type,
+        config=config,
+        extra_fields={
+            "input": {
+                "smiles_file": smiles_file,
+                "n_molecules": n_molecules,
+            },
+            "timing": {
+                "reference_energies_s": round(t_ref_s, 3),
+                "total_wall_clock_s": round(t_total_s, 3),
+                "molecules_per_second": round(mol_per_s, 4),
+                "configs_per_second": round(cfg_per_s, 4),
+            },
+            "results": {
+                "total_molecules": n_molecules,
+                "total_configurations": total_configs,
+            },
         },
-        "timing": {
-            "reference_energies_s": round(t_ref_s, 3),
-            "total_wall_clock_s": round(t_total_s, 3),
-            "molecules_per_second": round(mol_per_s, 4),
-            "configs_per_second": round(cfg_per_s, 4),
-        },
-        "results": {
-            "total_molecules": n_molecules,
-            "total_configurations": total_configs,
-        },
-    }
-
-    path = f"{results_dir}/run_metadata.json"
-    with open(path, "w") as f:
-        json.dump(metadata, f, indent=2, default=str)
+    )
+    path = _write_run_metadata_file(results_dir, metadata)
     logger.info("Run metadata written to %s", path)
 
 
@@ -401,6 +598,6 @@ def _write_clean_xyz(atoms: Atoms, filename: str) -> None:
         f.write(f"{len(atoms)}\n")
         f.write("Generated by metalsurfer\n")
         for sym, pos in zip(
-            atoms.get_chemical_symbols(), atoms.get_positions(), strict=False
+            atoms.get_chemical_symbols(), atoms.get_positions(), strict=True
         ):
             f.write(f"{sym:2s} {pos[0]:12.6f} {pos[1]:12.6f} {pos[2]:12.6f}\n")

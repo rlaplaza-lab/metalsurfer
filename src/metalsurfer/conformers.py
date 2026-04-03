@@ -56,10 +56,23 @@ def create_conformers_from_smiles(
             smiles,
         )
         AllChem.EmbedMolecule(mol, randomSeed=config.seed)
+        if mol.GetNumConformers() == 0:
+            logger.error("Failed to generate any conformer for %s", smiles)
+            return None
         conf_ids = [0]
 
     for conf_id in conf_ids:
-        AllChem.MMFFOptimizeMolecule(mol, confId=conf_id)
+        mmff_result = AllChem.MMFFOptimizeMolecule(mol, confId=conf_id)
+        if mmff_result == -1:
+            logger.warning(
+                "MMFF optimization failed for conformer %d of %s (unsupported atom types)",
+                conf_id,
+                smiles,
+            )
+        elif mmff_result == 1:
+            logger.debug(
+                "MMFF did not converge for conformer %d of %s", conf_id, smiles
+            )
 
     conformers: list[Atoms] = []
 
@@ -121,9 +134,9 @@ def remove_duplicate_conformers(
     unique_conformers: list[Atoms] = []
     unique_energies: list[float] = []
 
-    for conformer, energy in zip(sorted_conformers, sorted_energies, strict=False):
+    for conformer, energy in zip(sorted_conformers, sorted_energies, strict=True):
         is_duplicate = False
-        for uc, ue in zip(unique_conformers, unique_energies, strict=False):
+        for uc, ue in zip(unique_conformers, unique_energies, strict=True):
             if abs(energy - ue) < energy_threshold:
                 pos1 = conformer.get_positions()
                 pos2 = uc.get_positions()
@@ -193,7 +206,8 @@ def select_conformer_boltzmann(
         if rand_val <= cumulative:
             return conformers[valid_indices[i]].copy()
 
-    return conformers[valid_indices[0]].copy()
+    # Fallback for floating-point rounding: use last valid conformer
+    return conformers[valid_indices[-1]].copy()
 
 
 def select_conformer_for_placement(
