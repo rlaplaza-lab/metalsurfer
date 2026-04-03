@@ -4,7 +4,6 @@ Example: predictor = BindingEnergyPredictor.load(\"model_dir/\");
 pred = predictor.predict_record(record); use pred.energy as a screening pre-filter.
 """
 
-import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,9 +15,7 @@ from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor
 from .features import extract_features
 from .regression import load_model
-from .schema import ComputationContext, PlacementRecord
-
-logger = logging.getLogger(__name__)
+from .schema import PlacementRecord
 
 
 @dataclass
@@ -47,7 +44,6 @@ class BindingEnergyPredictor:
         self._model = model
         self._metadata = metadata or {}
         self._ensemble = ensemble
-        self._feature_names: list[str] = self._metadata.get("feature_names", [])
 
     @classmethod
     def load(cls, model_dir: str) -> "BindingEnergyPredictor":
@@ -61,21 +57,7 @@ class BindingEnergyPredictor:
 
     def predict_record(self, record: PlacementRecord) -> PredictionResult:
         """Predict binding energy for a single PlacementRecord."""
-        features = extract_features(record)
-        X = pd.DataFrame([features])
-        y_pred = float(self._model.predict(X)[0])
-
-        uncertainty = None
-        if self._ensemble is not None:
-            preds = [float(m.predict(X)[0]) for m in self._ensemble]
-            uncertainty = float(np.std(preds))
-
-        return PredictionResult(
-            energy=y_pred,
-            uncertainty=uncertainty,
-            record_hash=record.record_hash(),
-            model_type=self.model_type,
-        )
+        return self.predict_batch([record])[0]
 
     def predict_batch(
         self,
@@ -95,17 +77,15 @@ class BindingEnergyPredictor:
             std_preds = np.std(all_preds, axis=0)
             uncertainties = [float(s) for s in std_preds]
 
-        results = []
-        for i, record in enumerate(records):
-            results.append(
-                PredictionResult(
-                    energy=float(y_pred[i]),
-                    uncertainty=uncertainties[i],
-                    record_hash=record.record_hash(),
-                    model_type=self.model_type,
-                )
+        return [
+            PredictionResult(
+                energy=float(y_pred[i]),
+                uncertainty=uncertainties[i],
+                record_hash=record.record_hash(),
+                model_type=self.model_type,
             )
-        return results
+            for i, record in enumerate(records)
+        ]
 
     def predict_descriptor(
         self,
@@ -120,32 +100,12 @@ class BindingEnergyPredictor:
         Builds a temporary PlacementRecord with zero energies, extracts
         features, and returns the prediction.
         """
-        ctx = (
-            ComputationContext.from_config(config)
-            if config is not None
-            else ComputationContext()
-        )
-        record = PlacementRecord(
+        record = PlacementRecord.from_descriptor(
+            descriptor,
             molecule=molecule,
             smiles=smiles,
             surface_id=surface_id,
-            placement_id=descriptor.placement_index,
-            conformer_index=descriptor.conformer_index,
-            orientation_type=descriptor.orientation_type,
-            face_flip=descriptor.face_flip,
-            en_atom_index=descriptor.en_atom_index,
-            site_index=descriptor.site_index,
-            site_type=descriptor.site_type,
-            tilt_deg=descriptor.tilt_deg,
-            azimuth_deg=descriptor.azimuth_deg,
-            azimuth_in_plane_deg=descriptor.azimuth_in_plane_deg,
-            z_fraction=descriptor.z_fraction,
-            x=descriptor.x,
-            y=descriptor.y,
-            z=descriptor.z,
-            shape=descriptor.shape,
-            slab_indices=descriptor.slab_indices,
-            context=ctx,
+            config=config,
         )
         return self.predict_record(record)
 

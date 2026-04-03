@@ -26,7 +26,7 @@ from sklearn.ensemble import (
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import GroupKFold, KFold
+from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -40,9 +40,10 @@ def _build_estimator(
     random_state: int = 42,
     **kwargs: Any,
 ) -> Pipeline:
-    """Build a scikit-learn pipeline with scaler + regressor."""
+    """Build a scikit-learn pipeline for the selected regressor."""
     if model_type == "ridge":
         estimator = Ridge(alpha=kwargs.get("alpha", 1.0), random_state=random_state)
+        return Pipeline([("scaler", StandardScaler()), ("regressor", estimator)])
     elif model_type == "random_forest":
         estimator = RandomForestRegressor(
             n_estimators=kwargs.get("n_estimators", 200),
@@ -62,12 +63,7 @@ def _build_estimator(
     else:
         raise ValueError(f"Unknown model_type: {model_type!r}")
 
-    return Pipeline(
-        [
-            ("scaler", StandardScaler()),
-            ("regressor", estimator),
-        ]
-    )
+    return Pipeline([("regressor", estimator)])
 
 
 def train_model(
@@ -129,21 +125,18 @@ def grouped_cross_validate(
     X_arr = np.asarray(X)
     y_arr = np.asarray(y)
     groups_arr = np.asarray(groups)
+    if len(y_arr) < 2:
+        raise ValueError("Need at least 2 samples for cross-validation")
 
     n_unique_groups = len(np.unique(groups_arr))
+    if n_unique_groups < 2:
+        raise ValueError(
+            "Grouped cross-validation requires at least 2 unique groups; "
+            f"got {n_unique_groups}"
+        )
     actual_splits = min(n_splits, n_unique_groups)
-
-    if actual_splits < 2:
-        logger.warning(
-            "Only %d unique group(s); falling back to simple KFold", n_unique_groups
-        )
-        cv = KFold(
-            n_splits=min(n_splits, len(y_arr)), shuffle=True, random_state=random_state
-        )
-        split_iter = cv.split(X_arr, y_arr)
-    else:
-        cv = GroupKFold(n_splits=actual_splits)
-        split_iter = cv.split(X_arr, y_arr, groups_arr)
+    cv = GroupKFold(n_splits=actual_splits)
+    split_iter = cv.split(X_arr, y_arr, groups_arr)
 
     fold_metrics: list[dict[str, float]] = []
     for fold_idx, (train_idx, test_idx) in enumerate(split_iter):

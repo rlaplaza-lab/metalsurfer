@@ -13,93 +13,22 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from ase import Atoms
 from scipy import stats
 from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
+from ..placement import generators as placement_generators
 from .features import extract_features
-from .schema import ComputationContext, PlacementRecord
+from .regression import train_model
+from .schema import PlacementRecord
 
 AcquisitionType = Literal["lcb", "ei", "pi"]
 SurrogateType = Literal["random_forest", "extra_trees", "gradient_boost", "ridge"]
 
 logger = logging.getLogger(__name__)
-
-
-def _record_from_descriptor(
-    descriptor: PlacementDescriptor,
-    molecule: str = "",
-    smiles: str = "",
-    surface_id: str = "",
-    config: AdsorptionConfig | None = None,
-) -> PlacementRecord:
-    """Build a lightweight PlacementRecord from a descriptor (zero energies)."""
-    ctx = (
-        ComputationContext.from_config(config)
-        if config is not None
-        else ComputationContext()
-    )
-    return PlacementRecord(
-        molecule=molecule,
-        smiles=smiles,
-        surface_id=surface_id,
-        placement_id=descriptor.placement_index,
-        conformer_index=descriptor.conformer_index,
-        orientation_type=descriptor.orientation_type,
-        face_flip=descriptor.face_flip,
-        en_atom_index=descriptor.en_atom_index,
-        site_index=descriptor.site_index,
-        site_type=descriptor.site_type,
-        tilt_deg=descriptor.tilt_deg,
-        azimuth_deg=descriptor.azimuth_deg,
-        azimuth_in_plane_deg=descriptor.azimuth_in_plane_deg,
-        z_fraction=descriptor.z_fraction,
-        x=descriptor.x,
-        y=descriptor.y,
-        z=descriptor.z,
-        shape=descriptor.shape,
-        slab_indices=descriptor.slab_indices,
-        context=ctx,
-    )
-
-
-def _record_from_spec(
-    spec: PlacementSpec,
-    molecule: str = "",
-    smiles: str = "",
-    surface_id: str = "",
-    config: AdsorptionConfig | None = None,
-) -> PlacementRecord:
-    """Build a PlacementRecord from a spec with placeholder spatial values."""
-    ctx = (
-        ComputationContext.from_config(config)
-        if config is not None
-        else ComputationContext()
-    )
-    return PlacementRecord(
-        molecule=molecule,
-        smiles=smiles,
-        surface_id=surface_id,
-        placement_id=spec.placement_index,
-        conformer_index=spec.conformer_index,
-        orientation_type=spec.orientation_type,
-        face_flip=spec.face_flip,
-        en_atom_index=spec.en_atom_index,
-        site_index=spec.site_index,
-        site_type=spec.site_type,
-        tilt_deg=spec.tilt_deg,
-        azimuth_deg=spec.azimuth_deg,
-        azimuth_in_plane_deg=spec.azimuth_in_plane_deg,
-        z_fraction=spec.z_fraction,
-        x=0.0,
-        y=0.0,
-        z=0.0,
-        shape="round",
-        context=ctx,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +42,7 @@ def train_surrogate(
     surrogate: SurrogateType = "random_forest",
     n_estimators: int = 100,
     random_state: int = 42,
+    sample_weight: np.ndarray | None = None,
     **kwargs: Any,
 ) -> Pipeline:
     """Fit a surrogate on observed placement data.
@@ -136,23 +66,26 @@ def train_surrogate(
             n_jobs=-1,
         )
     elif surrogate in ("gradient_boost", "ridge"):
-        # Reuse regression module pipelines for non-ensemble uncertainty models.
-        from .regression import train_model
-
-        model = train_model(
+        if sample_weight is not None:
+            logger.debug(
+                "sample_weight ignored for surrogate=%s (tree models only)",
+                surrogate,
+            )
+        return train_model(
             X,
             y,
             model_type="gradient_boost" if surrogate == "gradient_boost" else "ridge",
             random_state=random_state,
             **kwargs,
         )
-        logger.info("Trained %s surrogate on %d samples", surrogate, len(np.asarray(y)))
-        return model
     else:
         raise ValueError(f"Unknown surrogate: {surrogate!r}")
 
-    pipeline = Pipeline([("scaler", StandardScaler()), ("regressor", reg)])
-    pipeline.fit(X, y)
+    pipeline = Pipeline([("regressor", reg)])
+    fit_kwargs: dict[str, Any] = {}
+    if sample_weight is not None:
+        fit_kwargs["regressor__sample_weight"] = np.asarray(sample_weight, dtype=float)
+    pipeline.fit(X, y, **fit_kwargs)
     logger.info(
         "Trained %s surrogate on %d samples (%d trees)",
         surrogate,
@@ -171,17 +104,23 @@ def predict_with_uncertainty(
     model: Pipeline,
     X: pd.DataFrame | np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return (mean, std) predictions from per-tree outputs.
+    """Return ``(mean, sigma)`` where ``sigma`` is epistemic spread when available.
 
-    Works with any Pipeline whose final step has ``estimators_``
-    (RandomForest). Falls back to (predict, zeros) for other models.
+    For tree ensembles (``estimators_`` on the regressor), ``sigma`` is the
+    standard deviation across trees. For other models (ridge, gradient boosting),
+    epistemic uncertainty is not defined here: ``sigma`` is all zeros and only
+    the point prediction ``mean`` should be used for BO scoring.
     """
     regressor = model.named_steps["regressor"]
-    scaler = model.named_steps["scaler"]
-    X_scaled = scaler.transform(X)
+    X_eval = (
+        model.named_steps["scaler"].transform(X) if "scaler" in model.named_steps else X
+    )
 
     if hasattr(regressor, "estimators_"):
-        tree_preds = np.array([t.predict(X_scaled) for t in regressor.estimators_])
+        # Tree estimators are trained on array-like internals; predict with ndarray
+        # to avoid sklearn feature-name mismatch warnings.
+        X_tree = np.asarray(X_eval)
+        tree_preds = np.array([t.predict(X_tree) for t in regressor.estimators_])
         mu = tree_preds.mean(axis=0)
         sigma = tree_preds.std(axis=0)
     else:
@@ -196,12 +135,12 @@ def predict_with_uncertainty(
 # ---------------------------------------------------------------------------
 
 
-def ucb_scores(
+def lcb_scores(
     mu: np.ndarray,
     sigma: np.ndarray,
     kappa: float = 1.96,
 ) -> np.ndarray:
-    """Lower-confidence-bound score for minimisation: mu - kappa * sigma.
+    """Lower confidence bound for minimisation: mu - kappa * sigma.
 
     Lower scores are better (more promising candidates).
     """
@@ -252,12 +191,17 @@ def select_candidates(
     scores: np.ndarray,
     batch_size: int,
     evaluated_indices: set[int] | None = None,
+    *,
+    higher_is_better: bool = False,
 ) -> list[int]:
-    """Return the *batch_size* indices with the lowest acquisition score.
+    """Return up to *batch_size* best candidate indices by rank order.
 
-    Indices listed in *evaluated_indices* are excluded.
+    For minimisation objectives (default), ranks by ascending *scores*.
+    For *higher_is_better* (e.g. EI, PI), ranks by descending *scores*.
+    Indices in *evaluated_indices* are excluded.
     """
-    order = np.argsort(scores)
+    s = np.asarray(scores, dtype=float).ravel()
+    order = np.argsort(-s) if higher_is_better else np.argsort(s)
     selected: list[int] = []
     for idx in order:
         if evaluated_indices is not None and int(idx) in evaluated_indices:
@@ -281,30 +225,72 @@ def build_candidate_features(
     config: AdsorptionConfig | None = None,
 ) -> pd.DataFrame:
     """Extract feature matrix for a list of PlacementDescriptors."""
-    rows = []
-    for d in descriptors:
-        record = _record_from_descriptor(
-            d, molecule=molecule, smiles=smiles, surface_id=surface_id, config=config
+    rows = [
+        extract_features(
+            PlacementRecord.from_descriptor(
+                d,
+                molecule=molecule,
+                smiles=smiles,
+                surface_id=surface_id,
+                config=config,
+            )
         )
-        rows.append(extract_features(record))
+        for d in descriptors
+    ]
     return pd.DataFrame(rows)
 
 
-def build_spec_features(
+def build_spec_features_geometry_aware(
     specs: list[PlacementSpec],
+    conformers: list[Atoms],
+    slab: Atoms,
+    config: AdsorptionConfig,
+    *,
+    smiles: str | None = None,
     molecule: str = "",
-    smiles: str = "",
     surface_id: str = "",
-    config: AdsorptionConfig | None = None,
-) -> pd.DataFrame:
-    """Extract feature matrix for a list of PlacementSpecs (placeholder xy/z)."""
-    rows = []
-    for s in specs:
-        record = _record_from_spec(
-            s, molecule=molecule, smiles=smiles, surface_id=surface_id, config=config
+    site_context: placement_generators.SiteContext | None = None,
+) -> tuple[pd.DataFrame, list[int]]:
+    """Extract geometry-aware features from specs via resolved deterministic poses.
+
+    Returns ``(features_df, valid_indices)`` where *valid_indices* maps each
+    row in the DataFrame back to the position of the corresponding spec in
+    *specs*.  Specs that cannot produce a valid placement are silently
+    skipped (logged at DEBUG level).
+    """
+    rows: list[dict[str, float]] = []
+    valid_indices: list[int] = []
+    if not conformers:
+        raise ValueError(
+            "build_spec_features_geometry_aware requires at least one conformer"
+        )
+
+    for i, spec in enumerate(specs):
+        generated = placement_generators.generate_placement_from_spec(
+            spec,
+            conformers,
+            slab,
+            config,
+            smiles=smiles,
+            site_context=site_context,
+        )
+        if generated is None:
+            logger.debug(
+                "Skipping spec placement_index=%d: no valid placement",
+                spec.placement_index,
+            )
+            continue
+        _adsorbate, descriptor = generated
+        record = PlacementRecord.from_descriptor(
+            descriptor,
+            molecule=molecule,
+            smiles=smiles or "",
+            surface_id=surface_id,
+            config=config,
         )
         rows.append(extract_features(record))
-    return pd.DataFrame(rows)
+        valid_indices.append(i)
+    return pd.DataFrame(rows), valid_indices
 
 
 def score_and_select(
@@ -326,7 +312,7 @@ def score_and_select(
     """
     mu, sigma = predict_with_uncertainty(model, candidate_features)
     if acquisition == "lcb":
-        scores = ucb_scores(mu, sigma, kappa=kappa)
+        scores = lcb_scores(mu, sigma, kappa=kappa)
         return select_candidates(
             scores, batch_size, evaluated_indices=evaluated_indices
         )
@@ -337,8 +323,10 @@ def score_and_select(
             scores = ei_scores(mu, sigma, f_best=f_best)
         else:
             scores = pi_scores(mu, sigma, f_best=f_best)
-        # For EI/PI higher is better: select_candidates expects lower-is-better, so negate
         return select_candidates(
-            -scores, batch_size, evaluated_indices=evaluated_indices
+            scores,
+            batch_size,
+            evaluated_indices=evaluated_indices,
+            higher_is_better=True,
         )
     raise ValueError(f"Unknown acquisition: {acquisition!r}")

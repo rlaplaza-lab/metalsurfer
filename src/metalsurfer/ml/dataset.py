@@ -17,7 +17,7 @@ import pandas as pd
 
 from ..config import AdsorptionConfig
 from ..models import ScreeningResult
-from .schema import ComputationContext, PlacementRecord
+from .schema import SCHEMA_VERSION, ComputationContext, PlacementRecord
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +89,9 @@ class DatasetLogger:
         surface_id: str | None = None,
     ) -> int:
         """Batch-add multiple ScreeningResults. Returns count of records added."""
-        count = 0
         for r in results:
             self.add_result(r, smiles=smiles, surface_id=surface_id)
-            count += 1
-        return count
+        return len(results)
 
     def add_record(self, record: PlacementRecord) -> None:
         """Directly add a pre-built PlacementRecord."""
@@ -113,32 +111,37 @@ class DatasetLogger:
         rows = [r.to_flat_dict() for r in self._records]
         new_df = pd.DataFrame(rows)
 
+        new_df = new_df.drop_duplicates(subset=["record_hash"], keep="first")
+
         if os.path.exists(self.csv_path):
-            existing_df = pd.read_csv(self.csv_path)
-            existing_hashes = set(existing_df["record_hash"].values)
+            existing_hashes = set(
+                pd.read_csv(self.csv_path, usecols=["record_hash"])["record_hash"]
+            )
             new_df = new_df[~new_df["record_hash"].isin(existing_hashes)]
             if new_df.empty:
                 logger.info("All %d records already in dataset", len(self._records))
                 self._records.clear()
                 return self.csv_path
-            combined = pd.concat([existing_df, new_df], ignore_index=True)
+            new_df.to_csv(self.csv_path, mode="a", header=False, index=False)
+            total_count = len(existing_hashes) + len(new_df)
         else:
-            combined = new_df
+            new_df.to_csv(self.csv_path, index=False)
+            total_count = len(new_df)
 
-        combined.to_csv(self.csv_path, index=False)
         logger.info(
             "Flushed %d new records to %s (total: %d)",
             len(new_df),
             self.csv_path,
-            len(combined),
+            total_count,
         )
 
-        self._write_metadata(len(combined))
+        self._write_metadata(total_count)
         self._records.clear()
         return self.csv_path
 
     def _write_metadata(self, total_records: int) -> None:
         metadata: dict[str, Any] = {
+            "schema_version": SCHEMA_VERSION,
             "timestamp": datetime.now(UTC).isoformat(),
             "total_records": total_records,
             "context": self.context.to_dict(),
@@ -197,16 +200,9 @@ def merge_datasets(*paths: str, output_path: str | None = None) -> pd.DataFrame:
     DataFrame
         The merged, deduplicated dataset.
     """
-    frames = []
-    for p in paths:
-        try:
-            df = load_dataset(p, as_records=False)
-            frames.append(df)
-        except FileNotFoundError:
-            logger.warning("Skipping missing dataset: %s", p)
-
-    if not frames:
-        raise ValueError("No datasets found to merge")
+    if not paths:
+        raise ValueError("merge_datasets requires at least one path")
+    frames = [load_dataset(p, as_records=False) for p in paths]
 
     merged = pd.concat(frames, ignore_index=True)
     merged = merged.drop_duplicates(subset=["record_hash"], keep="first")

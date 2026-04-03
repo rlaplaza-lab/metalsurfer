@@ -3,13 +3,13 @@
 from .bayesian import (
     AcquisitionType,
     build_candidate_features,
-    build_spec_features,
+    build_spec_features_geometry_aware,
     ei_scores,
+    lcb_scores,
     pi_scores,
     predict_with_uncertainty,
     score_and_select,
     train_surrogate,
-    ucb_scores,
 )
 from .dataset import DatasetLogger, load_dataset
 from .features import extract_features, extract_features_from_dataset
@@ -28,7 +28,7 @@ __all__ = [
     "DatasetLogger",
     "PlacementRecord",
     "build_candidate_features",
-    "build_spec_features",
+    "build_spec_features_geometry_aware",
     "ei_scores",
     "evaluate_model",
     "extract_features",
@@ -40,5 +40,5 @@ __all__ = [
     "score_and_select",
     "train_model",
     "train_surrogate",
-    "ucb_scores",
+    "lcb_scores",
 ]
