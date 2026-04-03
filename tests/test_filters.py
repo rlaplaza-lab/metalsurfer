@@ -32,7 +32,11 @@ from metalsurfer.filters import (
 )
 from metalsurfer.models import ScreeningResult
 
-from .conftest import make_placement_descriptor, make_water, place_molecule_on_slab
+from .conftest import (
+    make_placement_descriptor,
+    make_water,
+    place_molecule_on_slab,
+)
 
 
 def _sr(atoms, energy_adsorption, placement_id, molecule="test"):
@@ -45,6 +49,7 @@ def _sr(atoms, energy_adsorption, placement_id, molecule="test"):
         energy_adsorbate=0.0,
         energy_adsorption=energy_adsorption,
         atoms=atoms,
+        slab_size=16,
         distance=2.5,
         placement_descriptor=make_placement_descriptor(placement_id=placement_id),
     )
@@ -487,6 +492,86 @@ def test_decomposition_fragmented_water():
     assert "not connected" in reason
 
 
+def _combined_slab_two_waters_far_apart():
+    """slab + H2O + H2O (two disconnected intact waters) for saturation-style checks."""
+    slab = _make_slab()
+    first = place_molecule_on_slab(
+        slab, make_water(), z_offset=3.0, x_shift=2.0, y_shift=2.0
+    )
+    w2 = make_water().copy()
+    slab_z = float(np.max(slab.get_positions()[:, 2]))
+    z_offset = 3.0
+    pos2 = w2.get_positions().copy()
+    pos2 -= np.mean(pos2, axis=0)
+    pos2[:, 0] += 7.0
+    pos2[:, 1] += 2.0
+    pos2[:, 2] += slab_z + z_offset
+    w2.set_positions(pos2)
+    combined = first + w2
+    combined.set_cell(slab.get_cell())
+    combined.set_pbc(slab.get_pbc())
+    return slab, first, combined
+
+
+def test_check_decomposition_prefix_ignores_prior_adsorbate():
+    """Only the trailing adsorbate is validated (sequential saturation)."""
+    slab, slab_plus_first, combined = _combined_slab_two_waters_far_apart()
+    prefix = len(slab_plus_first)
+    ok, reason = check_decomposition(
+        combined,
+        reference_smiles="O",
+        surface_symbols=["Ru"],
+        connectivity_multipliers=[1.3],
+        adsorbate_prefix_atoms=prefix,
+    )
+    assert ok, reason
+
+    ok_legacy, reason_legacy = check_decomposition(
+        combined,
+        reference_smiles="O",
+        surface_symbols=["Ru"],
+        connectivity_multipliers=[1.3],
+    )
+    assert not ok_legacy
+    assert "not connected" in reason_legacy
+
+
+def test_check_decomposition_prefix_invalid():
+    ok, reason = check_decomposition(
+        _make_slab(),
+        reference_smiles="O",
+        surface_symbols=["Ru"],
+        connectivity_multipliers=[1.3],
+        adsorbate_prefix_atoms=999,
+    )
+    assert not ok
+    assert "invalid adsorbate_prefix_atoms" in reason
+
+
+def test_filter_results_uses_slab_prefix_for_decomposition():
+    """filter_results passes len(slab) so the second molecule is checked alone."""
+    slab, slab_plus_first, combined = _combined_slab_two_waters_far_apart()
+    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+    results = [_sr(combined, -1.0, 0)]
+    filtered = filter_results(
+        results,
+        slab=slab_plus_first,
+        surface_symbols=["Ru"],
+        reference_smiles="O",
+        config=config,
+    )
+    assert len(filtered) == 1
+
+    filtered_wrong = filter_results(
+        results,
+        slab=slab,
+        surface_symbols=["Ru"],
+        reference_smiles="O",
+        config=config,
+    )
+    assert len(filtered_wrong) == 0
+
+
 def test_decomposition_fragmented_ethanol_two_pieces():
     """Ethanol splits into CH3 + CH2OH.
 
@@ -695,6 +780,82 @@ def test_desorption_no_adsorbate():
     assert "no adsorbate" in reason
 
 
+def test_desorption_ignores_pre_adsorbed_atoms_when_surface_symbols_provided():
+    """Regression: in saturation, slab may include previously adsorbed atoms.
+
+    Distance-to-surface checks must ignore those and consider only the true
+    substrate atoms (identified by surface_symbols).
+    """
+    slab_metal = _make_slab(symbol="Ru")
+    x_shift = 5.0
+    y_shift = 5.0
+    z_offset = 10.0
+
+    # Build the placement we want first, then pin a fake "pre-adsorbed" atom
+    # directly under the new molecule so it can incorrectly mask desorption.
+    slab_metal_z = float(np.max(slab_metal.get_positions()[:, 2]))
+    water = make_water().copy()
+    pos = water.get_positions().copy()
+    pos -= np.mean(pos, axis=0)
+    pos[:, 0] += x_shift
+    pos[:, 1] += y_shift
+    pos[:, 2] += slab_metal_z + z_offset
+    water.set_positions(pos)
+
+    # Place the pre-adsorbed atom at the oxygen position (very close contact).
+    o_pos = water.get_positions()[0].copy()
+    pre_adsorbed = Atoms("C", positions=[o_pos])
+    slab_with_pre_adsorbate = slab_metal + pre_adsorbed
+    slab_with_pre_adsorbate.set_cell(slab_metal.get_cell())
+    slab_with_pre_adsorbate.set_pbc(slab_metal.get_pbc())
+
+    combined = slab_with_pre_adsorbate + water
+    combined.set_cell(slab_with_pre_adsorbate.get_cell())
+    combined.set_pbc(slab_with_pre_adsorbate.get_pbc())
+
+    ok, _ = check_desorption(combined, slab_with_pre_adsorbate, binding_threshold=4.0)
+    assert ok, "Without surface_symbols, pre-adsorbed atoms can mask desorption"
+
+    ok, reason = check_desorption(
+        combined,
+        slab_with_pre_adsorbate,
+        binding_threshold=4.0,
+        surface_symbols=["Ru"],
+    )
+    assert not ok
+    assert "too far" in reason
+
+
+def test_filter_results_desorption_uses_surface_symbols_masking():
+    """filter_results should pass surface_symbols into desorption filtering."""
+    slab_metal = _make_slab(symbol="Ru")
+    slab_z = float(np.max(slab_metal.get_positions()[:, 2]))
+
+    pre_adsorbed = Atoms("C", positions=[[5.0, 5.0, slab_z + 9.8]])
+    slab_with_pre_adsorbate = slab_metal + pre_adsorbed
+    slab_with_pre_adsorbate.set_cell(slab_metal.get_cell())
+    slab_with_pre_adsorbate.set_pbc(slab_metal.get_pbc())
+
+    combined = place_molecule_on_slab(
+        slab_with_pre_adsorbate,
+        make_water(),
+        z_offset=10.0,
+        x_shift=5.0,
+        y_shift=5.0,
+    )
+    results = [_sr(combined, -1.0, 0)]
+
+    config = AdsorptionConfig(skip_topology_check=True, connectivity_multipliers=[1.3])
+    filtered = filter_results(
+        results,
+        slab=slab_with_pre_adsorbate,
+        surface_symbols=["Ru"],
+        reference_smiles=None,
+        config=config,
+    )
+    assert filtered == []
+
+
 # ---------------------------------------------------------------------------
 # duplicate detection
 # ---------------------------------------------------------------------------
@@ -716,6 +877,34 @@ def test_duplicate_removal():
     )
     filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
     assert len(filtered) == 1
+
+
+def test_duplicate_removal_tracks_removed_duplicates():
+    slab = _make_slab()
+    combined1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    combined2 = combined1.copy()
+
+    results = [
+        _sr(combined1, -1.0, 0),
+        _sr(combined2, -1.01, 1),
+    ]
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multipliers=[1.3],
+    )
+    removed: list[ScreeningResult] = []
+    filtered = filter_results(
+        results,
+        slab=slab,
+        surface_symbols=["Ru"],
+        config=config,
+        duplicate_results_out=removed,
+    )
+
+    assert len(filtered) == 1
+    assert len(removed) == 1
+    assert removed[0].placement_id != filtered[0].placement_id
 
 
 def test_distinct_kept():

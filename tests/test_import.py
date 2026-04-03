@@ -1,8 +1,27 @@
 """Tests that core imports work without optional heavy dependencies."""
 
 import sys
+from contextlib import contextmanager
 
 import pytest
+
+
+@contextmanager
+def _isolated_metalsurfer_modules():
+    saved = {
+        mod_name: module
+        for mod_name, module in sys.modules.items()
+        if mod_name.startswith("metalsurfer")
+    }
+    for mod_name in list(saved):
+        del sys.modules[mod_name]
+    try:
+        yield
+    finally:
+        for mod_name in list(sys.modules):
+            if mod_name.startswith("metalsurfer"):
+                del sys.modules[mod_name]
+        sys.modules.update(saved)
 
 
 def test_core_import_without_heavy_deps(monkeypatch):
@@ -37,13 +56,8 @@ def test_core_import_without_heavy_deps(monkeypatch):
             raise ImportError(f"Blocked for test: {name}")
         return original_import(name, *args, **kwargs)
 
-    for mod_name in list(sys.modules):
-        if mod_name.startswith("metalsurfer"):
-            del sys.modules[mod_name]
-
-    monkeypatch.setattr("builtins.__import__", _blocking_import)
-
-    try:
+    with _isolated_metalsurfer_modules(), monkeypatch.context() as m:
+        m.setattr("builtins.__import__", _blocking_import)
         import metalsurfer
 
         assert hasattr(metalsurfer, "AdsorptionConfig")
@@ -53,16 +67,14 @@ def test_core_import_without_heavy_deps(monkeypatch):
 
         cfg = metalsurfer.AdsorptionConfig(num_conformers=3)
         assert cfg.num_conformers == 3
-    finally:
-        monkeypatch.undo()
-        for mod_name in list(sys.modules):
-            if mod_name.startswith("metalsurfer"):
-                del sys.modules[mod_name]
 
 
 def test_typed_models_importable():
     """Typed models can be imported directly from the package."""
+    import metalsurfer
     from metalsurfer import (
+        BindingCampaignResult,
+        MoleculeCampaignSummary,
         MoleculeSummary,
         ReferenceEnergies,
         ScreeningResult,
@@ -70,11 +82,17 @@ def test_typed_models_importable():
         TimingInfo,
     )
 
-    assert ReferenceEnergies is not None
-    assert ScreeningResult is not None
-    assert MoleculeSummary is not None
-    assert ScreeningRunResult is not None
-    assert TimingInfo is not None
+    exported_models = {
+        "ReferenceEnergies": ReferenceEnergies,
+        "BindingCampaignResult": BindingCampaignResult,
+        "MoleculeCampaignSummary": MoleculeCampaignSummary,
+        "ScreeningResult": ScreeningResult,
+        "MoleculeSummary": MoleculeSummary,
+        "ScreeningRunResult": ScreeningRunResult,
+        "TimingInfo": TimingInfo,
+    }
+    assert set(exported_models).issubset(set(metalsurfer.__all__))
+    assert all(isinstance(symbol, type) for symbol in exported_models.values())
 
 
 def test_exceptions_importable():
@@ -95,8 +113,25 @@ def test_lazy_getattr_loads_module():
     import metalsurfer
 
     # SlabContainer is in _LAZY_MODULES["surfaces"]
-    SlabContainer = metalsurfer.SlabContainer
-    assert SlabContainer is not None
+    slab_container = metalsurfer.SlabContainer
+    assert slab_container.__name__ == "SlabContainer"
+
+
+def test_surface_prep_import_path():
+    """Surface-prep helpers are available under a dedicated import path."""
+    from metalsurfer.surface_prep import (
+        SlabContainer,
+        create_slab_from_atoms,
+        create_slab_from_bulk,
+        deposit_adatoms,
+        substitute_alloy,
+    )
+
+    assert SlabContainer.__name__ == "SlabContainer"
+    assert callable(create_slab_from_bulk)
+    assert callable(create_slab_from_atoms)
+    assert callable(substitute_alloy)
+    assert callable(deposit_adatoms)
 
 
 def test_lazy_getattr_raises_for_unknown():

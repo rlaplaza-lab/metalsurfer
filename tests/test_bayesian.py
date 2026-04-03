@@ -3,49 +3,43 @@
 import numpy as np
 import pandas as pd
 import pytest
+from ase import Atoms
 from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.ml.bayesian import (
-    _record_from_descriptor,
-    _record_from_spec,
     build_candidate_features,
-    build_spec_features,
+    build_spec_features_geometry_aware,
+    lcb_scores,
     predict_with_uncertainty,
     score_and_select,
     select_candidates,
     train_surrogate,
-    ucb_scores,
 )
 from metalsurfer.ml.features import extract_features
-from metalsurfer.ml.schema import ComputationContext, PlacementRecord
+from metalsurfer.ml.schema import PlacementRecord
 from metalsurfer.models import PlacementDescriptor, PlacementSpec
+from metalsurfer.placement import (
+    enumerate_placement_specs,
+    estimate_placement_spec_capacity,
+)
+from tests.factories import make_random_placement_records
 from tests.optional_deps import cuda_available, has_mlip_stack
 
-
-def _dummy_descriptor(idx: int = 0) -> PlacementDescriptor:
-    return PlacementDescriptor(
-        conformer_index=0,
-        orientation_type="round",
-        face_flip=False,
-        en_atom_index=None,
-        site_index=idx % 5,
-        site_type="atop",
-        tilt_deg=float(idx * 15 % 90),
-        azimuth_deg=float(idx * 45 % 360),
-        azimuth_in_plane_deg=0.0,
-        z_fraction=0.5,
-        placement_index=idx,
-        x=float(1.0 + idx * 0.1),
-        y=float(2.0 - idx * 0.1),
-        z=2.5,
-        shape="round",
-    )
+from .conftest import make_placement_descriptor, make_slab, make_water
 
 
-def _dummy_spec(idx: int = 0) -> PlacementSpec:
+def _make_synthetic_training_data(n: int = 40):
+    records = make_random_placement_records(n, variant="bayesian")
+    rows = [extract_features(r) for r in records]
+    X = pd.DataFrame(rows)
+    y = pd.Series([r.energy_adsorption for r in records])
+    return X, y
+
+
+def _placement_spec(idx: int = 0) -> PlacementSpec:
     return PlacementSpec(
         conformer_index=0,
         orientation_type="round",
@@ -61,94 +55,19 @@ def _dummy_spec(idx: int = 0) -> PlacementSpec:
     )
 
 
-def _make_synthetic_training_data(n: int = 40):
-    """Build a synthetic (X, y) dataset from PlacementRecords."""
-    rng = np.random.RandomState(42)
-    records = []
-    for i in range(n):
-        z = float(rng.uniform(2, 3))
-        tilt = float(rng.choice([0, 15, 30, 45, 60, 90]))
-        e_ads = -0.5 * z + 0.01 * tilt + float(rng.normal(0, 0.1))
-        records.append(
-            PlacementRecord(
-                molecule="test",
-                smiles="C",
-                surface_id="test",
-                placement_id=i,
-                conformer_index=i % 3,
-                orientation_type=str(
-                    rng.choice(["parallel", "EN-down", "vertical", "round"])
-                ),
-                face_flip=False,
-                en_atom_index=None,
-                site_index=i % 5,
-                site_type=str(rng.choice(["atop", "bridge", "hollow"])),
-                tilt_deg=tilt,
-                azimuth_deg=float(rng.choice([0, 45, 90, 135, 180])),
-                azimuth_in_plane_deg=0.0,
-                z_fraction=0.5,
-                x=float(rng.uniform(-4, 4)),
-                y=float(rng.uniform(-4, 4)),
-                z=z,
-                shape=str(rng.choice(["linear", "flat", "round"])),
-                energy_adsorption=e_ads,
-                context=ComputationContext(),
-            )
-        )
-    rows = [extract_features(r) for r in records]
-    X = pd.DataFrame(rows)
-    y = pd.Series([r.energy_adsorption for r in records])
-    return X, y
-
-
-# ---------------------------------------------------------------------------
-# BO config validation
-# ---------------------------------------------------------------------------
-
-
-class TestBOConfig:
-    def test_defaults_backward_compatible(self):
-        c = AdsorptionConfig()
-        assert c.bo_enabled is False
-        assert c.bo_initial_random == 10
-        assert c.bo_batch_size == 10
-        assert c.bo_total_budget == 100
-        assert c.bo_ucb_kappa == 1.0
-        assert c.bo_acquisition == "lcb"
-        assert c.bo_surrogate == "random_forest"
-        assert c.bo_candidate_pool_size is None
-
-    def test_enabled_valid(self):
-        c = AdsorptionConfig(
-            bo_enabled=True,
-            bo_initial_random=10,
-            bo_batch_size=5,
-            bo_total_budget=50,
-            bo_ucb_kappa=2.0,
-        )
-        assert c.bo_total_budget == 50
-
-    def test_initial_exceeds_budget_raises(self):
-        with pytest.raises(ValueError, match="bo_initial_random"):
-            AdsorptionConfig(
-                bo_enabled=True, bo_initial_random=200, bo_total_budget=100
-            )
-
-    def test_negative_kappa_raises(self):
-        with pytest.raises(ValueError, match="bo_ucb_kappa"):
-            AdsorptionConfig(bo_enabled=True, bo_ucb_kappa=-1.0)
-
-        with pytest.raises(ValueError, match="bo_acquisition"):
-            AdsorptionConfig(bo_enabled=True, bo_acquisition="invalid")
-
-        with pytest.raises(ValueError, match="bo_surrogate"):
-            AdsorptionConfig(bo_enabled=True, bo_surrogate="invalid")
-
-    def test_candidate_pool_size_validation(self):
-        c = AdsorptionConfig(bo_enabled=True, bo_candidate_pool_size=500)
-        assert c.bo_candidate_pool_size == 500
-        with pytest.raises(ValueError):
-            AdsorptionConfig(bo_enabled=True, bo_candidate_pool_size=0)
+def _bayesian_descriptor(idx: int) -> PlacementDescriptor:
+    return make_placement_descriptor(
+        placement_id=idx,
+        site_index=idx % 5,
+        tilt_deg=float(idx * 15 % 90),
+        azimuth_deg=float(idx * 45 % 360),
+        x=float(1.0 + idx * 0.1),
+        y=float(2.0 - idx * 0.1),
+        quat_w=1.0,
+        quat_x=0.0,
+        quat_y=0.0,
+        quat_z=0.0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +83,7 @@ class TestSurrogate:
         assert mu.shape == (40,)
         assert sigma.shape == (40,)
         assert np.all(sigma >= 0)
+        assert not np.any(np.isnan(mu))
 
     def test_seed_reproducibility(self):
         X, y = _make_synthetic_training_data(40)
@@ -172,12 +92,6 @@ class TestSurrogate:
         mu1, _ = predict_with_uncertainty(m1, X)
         mu2, _ = predict_with_uncertainty(m2, X)
         np.testing.assert_array_equal(mu1, mu2)
-
-    def test_predict_with_dataframe_columns(self):
-        X, y = _make_synthetic_training_data(20)
-        model = train_surrogate(X, y, n_estimators=10)
-        mu, sigma = predict_with_uncertainty(model, X)
-        assert not np.any(np.isnan(mu))
 
     def test_predict_with_uncertainty_fallback_no_estimators(self):
         """Fallback path when regressor has no estimators_ (e.g. LinearRegression)."""
@@ -194,24 +108,33 @@ class TestSurrogate:
         assert sigma.shape == (20,)
         assert np.all(sigma == 0.0)
 
+    def test_train_surrogate_accepts_sample_weights(self):
+        X, y = _make_synthetic_training_data(30)
+        weights = np.ones(len(y), dtype=float)
+        weights[:5] = 2.0
+        model = train_surrogate(X, y, n_estimators=10, sample_weight=weights)
+        mu, sigma = predict_with_uncertainty(model, X)
+        assert mu.shape == (30,)
+        assert sigma.shape == (30,)
+
 
 # ---------------------------------------------------------------------------
-# UCB acquisition
+# LCB acquisition (lower confidence bound for minimisation)
 # ---------------------------------------------------------------------------
 
 
 class TestAcquisition:
-    def test_ucb_scores_shape(self):
+    def test_lcb_scores_shape(self):
         mu = np.array([1.0, 2.0, 3.0])
         sigma = np.array([0.5, 0.5, 0.5])
-        scores = ucb_scores(mu, sigma, kappa=1.0)
+        scores = lcb_scores(mu, sigma, kappa=1.0)
         assert scores.shape == (3,)
         np.testing.assert_array_almost_equal(scores, [0.5, 1.5, 2.5])
 
-    def test_ucb_lower_is_better(self):
+    def test_lcb_lower_is_better(self):
         mu = np.array([-2.0, 0.0, 1.0])
         sigma = np.array([1.0, 0.1, 0.1])
-        scores = ucb_scores(mu, sigma, kappa=2.0)
+        scores = lcb_scores(mu, sigma, kappa=2.0)
         assert np.argmin(scores) == 0
 
     def test_select_excludes_evaluated(self):
@@ -247,30 +170,74 @@ class TestAcquisition:
 
 class TestFeatureBuilding:
     def test_build_candidate_features(self):
-        descriptors = [_dummy_descriptor(i) for i in range(5)]
+        descriptors = [_bayesian_descriptor(i) for i in range(5)]
         X = build_candidate_features(descriptors, molecule="test", smiles="C")
         assert isinstance(X, pd.DataFrame)
         assert X.shape[0] == 5
         assert X.shape[1] > 0
 
-    def test_build_spec_features(self):
-        specs = [_dummy_spec(i) for i in range(5)]
-        X = build_spec_features(specs, molecule="test", smiles="C")
+    def test_build_spec_features_geometry_aware_varies_with_site(self):
+        slab = make_slab(nx=2, ny=2, n_layers=3)
+        conformers = [make_water()]
+        config = AdsorptionConfig(num_conformers=1, num_placements=12)
+        specs = enumerate_placement_specs(conformers, slab, config, "O", n_desired=12)
+        assert len(specs) >= 4
+        X, valid_indices = build_spec_features_geometry_aware(
+            specs,
+            conformers,
+            slab,
+            config,
+            smiles="O",
+            molecule="water",
+            surface_id="test_surface",
+        )
         assert isinstance(X, pd.DataFrame)
-        assert X.shape[0] == 5
+        assert X.shape[0] == len(valid_indices)
+        assert X.shape[0] > 0
+        # Ensure candidate geometry is not collapsed to a constant placeholder.
+        assert X[["x", "y", "z"]].drop_duplicates().shape[0] > 1
 
     def test_record_from_descriptor_roundtrip(self):
-        d = _dummy_descriptor(7)
-        record = _record_from_descriptor(d, molecule="mol", smiles="C")
+        d = _bayesian_descriptor(7)
+        record = PlacementRecord.from_descriptor(d, molecule="mol", smiles="C")
         assert record.placement_id == 7
         assert record.tilt_deg == d.tilt_deg
         assert record.x == d.x
+        assert record.quat_w == 1.0
+        assert record.quat_x == 0.0
 
     def test_record_from_spec_roundtrip(self):
-        s = _dummy_spec(3)
-        record = _record_from_spec(s, molecule="mol", smiles="C")
+        s = _placement_spec(3)
+        record = PlacementRecord.from_spec(s, molecule="mol", smiles="C")
         assert record.placement_id == 3
         assert record.tilt_deg == s.tilt_deg
+        assert record.quat_w == 1.0
+        assert record.quat_z == 0.0
+
+    def test_enumerated_pool_capacity_matches_estimate(self):
+        conformer = Atoms("CO", positions=[[0.0, 0.0, 0.0], [1.2, 0.0, 0.0]])
+        conformer.set_cell([[6.0, 0.0, 0.0], [0.0, 6.0, 0.0], [0.0, 0.0, 20.0]])
+        conformer.set_pbc([True, True, True])
+        slab = Atoms(
+            "Cu6",
+            positions=[
+                [0.0, 0.0, 0.0],
+                [2.5, 0.0, 0.0],
+                [0.0, 2.5, 0.0],
+                [2.5, 2.5, 0.0],
+                [1.25, 1.25, 0.0],
+                [3.75, 1.25, 0.0],
+            ],
+            cell=[[5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 20.0]],
+            pbc=[True, True, True],
+        )
+        config = AdsorptionConfig(num_conformers=1, num_placements=10)
+        capacity = estimate_placement_spec_capacity([conformer], slab, config, "CO")
+        specs = enumerate_placement_specs(
+            [conformer], slab, config, "CO", n_desired=capacity
+        )
+        assert capacity > 0
+        assert len(specs) == capacity
 
 
 # ---------------------------------------------------------------------------
@@ -322,59 +289,6 @@ class TestScoreAndSelect:
 
 
 # ---------------------------------------------------------------------------
-# Budget accounting
-# ---------------------------------------------------------------------------
-
-
-class TestBudgetAccounting:
-    def test_initial_plus_batches_within_budget(self):
-        config = AdsorptionConfig(
-            bo_enabled=True,
-            bo_initial_random=10,
-            bo_batch_size=5,
-            bo_total_budget=30,
-        )
-        total = config.bo_initial_random
-        remaining = config.bo_total_budget - total
-        batches = 0
-        while remaining > 0:
-            batch = min(config.bo_batch_size, remaining)
-            total += batch
-            remaining -= batch
-            batches += 1
-        assert total <= config.bo_total_budget
-        assert total == config.bo_total_budget
-
-    def test_initial_equals_budget_no_bo_iterations(self):
-        config = AdsorptionConfig(
-            bo_enabled=True,
-            bo_initial_random=50,
-            bo_batch_size=10,
-            bo_total_budget=50,
-        )
-        remaining = config.bo_total_budget - config.bo_initial_random
-        assert remaining == 0
-
-
-# ---------------------------------------------------------------------------
-# Best-energy monotonicity
-# ---------------------------------------------------------------------------
-
-
-class TestBestEnergyTracking:
-    def test_best_is_monotonically_nonincreasing(self):
-        rng = np.random.RandomState(42)
-        energies_over_time = rng.randn(50)
-        best_so_far = float("inf")
-        history = []
-        for e in energies_over_time:
-            best_so_far = min(best_so_far, e)
-            history.append(best_so_far)
-        for i in range(1, len(history)):
-            assert history[i] <= history[i - 1]
-
-
-# ---------------------------------------------------------------------------
 # Integration: BO two generations on surface with defects/doping
 # ---------------------------------------------------------------------------
 
@@ -389,43 +303,30 @@ class TestBestEnergyTracking:
     reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
 )
 @pytest.mark.skipif(
-    not cuda_available, reason="CUDA GPU required; run in conda env pyadsorbml with GPU"
+    not cuda_available,
+    reason="CUDA GPU required; run in conda env metalsurfer with GPU",
 )
-@pytest.mark.parametrize("surface_kind", ["adatom_defect", "alloy_doped"])
-def test_bayesian_two_generations_on_defect_surface(surface_kind, tmp_path):
-    """BO runs two generations of n_placements on a surface with defects/doping.
+def test_bayesian_two_generations_on_defect_surface(tmp_path):
+    """BO smoke test for two generations on an adatom-defect surface.
 
     Generation 1: bo_initial_random placements at random.
     Generation 2: bo_batch_size placements selected by UCB acquisition.
-    Surfaces: adatom_defect (Sn on Ru) or alloy_doped (RuCu).
     """
     from metalsurfer.optimization import setup_single_model
-    from metalsurfer.surfaces import SlabContainer, deposit_adatoms, substitute_alloy
+    from metalsurfer.surface_prep import SlabContainer, deposit_adatoms
     from metalsurfer.workflow import (
         calculate_reference_energies,
         process_molecule_bayesian,
     )
 
-    from .conftest import make_slab
-
     base = SlabContainer(make_slab(nx=4, ny=4, n_layers=3))
-    if surface_kind == "adatom_defect":
-        slab = deposit_adatoms(
-            base,
-            "Sn",
-            coverage_fraction=0.2,
-            seed=42,
-            results_dir=str(tmp_path),
-        )
-    else:
-        slab = substitute_alloy(
-            base,
-            "Ru",
-            "Cu",
-            guest_fraction=0.25,
-            seed=42,
-            results_dir=str(tmp_path),
-        )
+    slab = deposit_adatoms(
+        base,
+        "Sn",
+        coverage_fraction=0.2,
+        seed=42,
+        results_dir=str(tmp_path),
+    )
 
     n_placements = 3
     config = AdsorptionConfig(

@@ -43,40 +43,33 @@ def _cc_bond_length(atoms, slab_size: int) -> float:
 
 
 def _run_ethene_on_ru():
-    """Create Ru(0001) slab, run ethene screening, return results or None if deps missing."""
-    try:
-        slab = create_slab_from_bulk(
-            bulk_id="mp-33",
-            miller_indices=(0, 0, 1),
-            supercell=(2, 2, 1),
-            results_dir="results_test_ethene",
-        )
-        # Use GPU; test is skipped when CUDA unavailable (e.g. CI)
-        config = AdsorptionConfig(
-            seed=42,
-            num_conformers=3,
-            num_placements=25,
-            device="cuda",
-        )
-        calculator, ts_model = setup_single_model(config.model_name, config.device)
-        ref = calculate_reference_energies(
-            slab, calculator, ["ethene"], ["C=C"], ts_model=ts_model, config=config
-        )
-        return process_molecule(
-            "C=C",
-            "ethene",
-            slab,
-            calculator,
-            ref,
-            ts_model=ts_model,
-            config=config,
-            surface_type="Ru_001",
-        )
-    except Exception as exc:
-        pytest.skip(
-            f"MLIP workflow failed (deps or runtime): {exc!r}",
-            allow_module_level=False,
-        )
+    """Create Ru(0001) slab and run a single ethene screening flow."""
+    slab = create_slab_from_bulk(
+        bulk_id="mp-33",
+        miller_indices=(0, 0, 1),
+        supercell=(2, 2, 1),
+        results_dir="results_test_ethene",
+    )
+    config = AdsorptionConfig(
+        seed=42,
+        num_conformers=3,
+        num_placements=25,
+        device="cuda",
+    )
+    calculator, ts_model = setup_single_model(config.model_name, config.device)
+    ref = calculate_reference_energies(
+        slab, calculator, ["ethene"], ["C=C"], ts_model=ts_model, config=config
+    )
+    return process_molecule(
+        "C=C",
+        "ethene",
+        slab,
+        calculator,
+        ref,
+        ts_model=ts_model,
+        config=config,
+        surface_type="Ru_001",
+    )
 
 
 class TestEtheneOnRu0001:

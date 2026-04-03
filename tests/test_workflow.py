@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
+import pytest
+from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.io_results import (
@@ -13,27 +15,33 @@ from metalsurfer.io_results import (
     save_molecule_results,
     save_single_molecule_results,
     save_summary_results,
+    screening_run_result,
     setup_directories,
 )
 from metalsurfer.models import (
     MoleculeSummary,
+    PlacementSpec,
     ReferenceEnergies,
-    ScreeningResult,
     ScreeningRunResult,
     build_molecule_summary,
 )
 from metalsurfer.surfaces import SlabContainer
 from metalsurfer.workflow import (
+    PlacementFailureEvent,
+    _build_surface_reference_slab,
     _infer_surface_symbols,
     _validate_adsorption,
     _validate_geometry,
     format_failure_summary,
     load_molecules,
     process_molecule,
+    process_molecule_bayesian,
 )
 
 from .conftest import (
+    assert_lines_contain,
     make_placement_descriptor,
+    make_screening_result,
     make_slab,
     make_water,
     place_molecule_on_slab,
@@ -68,15 +76,9 @@ class TestValidateGeometry:
         assert ok
         assert "valid" in reason
 
-    def test_non_finite_energy_fails(self):
-        combined, slab = self._combined(energy=float("nan"))
-        config = AdsorptionConfig()
-        ok, reason = _validate_geometry(combined, slab, config)
-        assert not ok
-        assert "non-finite" in reason
-
-    def test_inf_energy_fails(self):
-        combined, slab = self._combined(energy=float("inf"))
+    @pytest.mark.parametrize("bad_energy", [float("nan"), float("inf")])
+    def test_non_finite_energy_fails(self, bad_energy):
+        combined, slab = self._combined(energy=bad_energy)
         config = AdsorptionConfig()
         ok, reason = _validate_geometry(combined, slab, config)
         assert not ok
@@ -155,6 +157,50 @@ class TestValidateAdsorption:
         assert ok
         assert "skipped" in reason
 
+    def test_validate_adsorption_ignores_pre_adsorbed_atoms_with_surface_symbols(self):
+        """Regression: saturation slabs may include previously adsorbed atoms.
+
+        Validation must check adsorption distance to substrate atoms only
+        (selected by surface_symbols), not to pre-adsorbed atoms.
+        """
+        slab_metal = make_slab(symbol="Ru")
+        x_shift = 5.0
+        y_shift = 5.0
+        z_offset = 10.0
+        slab_metal_z = float(np.max(slab_metal.get_positions()[:, 2]))
+
+        water = make_water().copy()
+        pos = water.get_positions().copy()
+        pos -= np.mean(pos, axis=0)
+        pos[:, 0] += x_shift
+        pos[:, 1] += y_shift
+        pos[:, 2] += slab_metal_z + z_offset
+        water.set_positions(pos)
+
+        # Place fake pre-adsorbate at oxygen position (close contact).
+        o_pos = water.get_positions()[0].copy()
+        pre_adsorbed = Atoms("C", positions=[o_pos])
+        slab_with_pre_adsorbate = slab_metal + pre_adsorbed
+        slab_with_pre_adsorbate.set_cell(slab_metal.get_cell())
+        slab_with_pre_adsorbate.set_pbc(slab_metal.get_pbc())
+
+        combined = slab_with_pre_adsorbate + water
+        combined.set_cell(slab_with_pre_adsorbate.get_cell())
+        combined.set_pbc(slab_with_pre_adsorbate.get_pbc())
+        config = AdsorptionConfig(binding_distance_threshold=4.0)
+
+        ok, _ = _validate_adsorption(combined, slab_with_pre_adsorbate, config)
+        assert ok, "Without surface_symbols, pre-adsorbed atoms can mask desorption"
+
+        ok, reason = _validate_adsorption(
+            combined,
+            slab_with_pre_adsorbate,
+            config,
+            surface_symbols=["Ru"],
+        )
+        assert not ok
+        assert "desorbed" in reason
+
 
 # ---------------------------------------------------------------------------
 # _infer_surface_symbols
@@ -177,6 +223,29 @@ class TestInferSurfaceSymbols:
 
 
 # ---------------------------------------------------------------------------
+# _build_surface_reference_slab
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSurfaceReferenceSlab:
+    def test_returns_substrate_only_and_preserves_cell_pbc(self):
+        slab_metal = make_slab(symbol="Ru")
+        slab_z = float(np.max(slab_metal.get_positions()[:, 2]))
+        pre_adsorbed = Atoms("C", positions=[[1.0, 2.0, slab_z + 3.0]])
+        slab_with_pre_adsorbate = slab_metal + pre_adsorbed
+        slab_with_pre_adsorbate.set_cell(slab_metal.get_cell())
+        slab_with_pre_adsorbate.set_pbc(slab_metal.get_pbc())
+
+        ref = _build_surface_reference_slab(
+            slab_with_pre_adsorbate, base_slab_for_frozen=slab_metal
+        )
+        assert len(ref) == len(slab_metal)
+        assert set(ref.get_chemical_symbols()) == {"Ru"}
+        assert np.allclose(ref.get_cell(), slab_with_pre_adsorbate.get_cell())
+        assert np.all(ref.get_pbc() == slab_with_pre_adsorbate.get_pbc())
+
+
+# ---------------------------------------------------------------------------
 # process_molecule — branch coverage
 # ---------------------------------------------------------------------------
 
@@ -188,70 +257,51 @@ class TestProcessMolecule:
             molecule_energies={mol_name: -10.0},
         )
 
-    def test_missing_ref_energy_returns_none(self):
+    @pytest.mark.parametrize(
+        ("smiles", "name", "refs", "expected_stage"),
+        [
+            (
+                "O",
+                "water",
+                ReferenceEnergies(slab_energy=-200.0),
+                "reference",
+            ),
+            (
+                "not_valid!!!",
+                "bad",
+                ReferenceEnergies(
+                    slab_energy=-200.0,
+                    molecule_energies={"bad": -10.0},
+                ),
+                "conformers",
+            ),
+        ],
+    )
+    def test_early_failure_paths(self, smiles, name, refs, expected_stage):
         slab = SlabContainer(make_slab())
-        refs = ReferenceEnergies(slab_energy=-200.0)
         result = process_molecule(
-            "O", "water", slab, MagicMock(), reference_energies=refs
+            smiles, name, slab, MagicMock(), reference_energies=refs
         )
         assert result is None
-
-    def test_missing_ref_energy_populates_failure_summary(self):
-        slab = SlabContainer(make_slab())
-        refs = ReferenceEnergies(slab_energy=-200.0)
         failure_summary = {}
         result = process_molecule(
-            "O",
-            "water",
+            smiles,
+            name,
             slab,
             MagicMock(),
             reference_energies=refs,
             failure_summary_out=failure_summary,
         )
         assert result is None
-        assert failure_summary["stage"] == "reference"
-        assert "water" in str(failure_summary["reason"])
-
-    def test_invalid_smiles_returns_none(self):
-        slab = SlabContainer(make_slab())
-        refs = ReferenceEnergies(
-            slab_energy=-200.0,
-            molecule_energies={"bad": -10.0},
-        )
-        result = process_molecule(
-            "not_valid!!!", "bad", slab, MagicMock(), reference_energies=refs
-        )
-        assert result is None
-
-    def test_invalid_smiles_populates_failure_summary(self):
-        slab = SlabContainer(make_slab())
-        refs = ReferenceEnergies(
-            slab_energy=-200.0,
-            molecule_energies={"bad": -10.0},
-        )
-        failure_summary = {}
-        result = process_molecule(
-            "not_valid!!!",
-            "bad",
-            slab,
-            MagicMock(),
-            reference_energies=refs,
-            failure_summary_out=failure_summary,
-        )
-        assert result is None
-        assert failure_summary["stage"] == "conformers"
-        assert "bad" in str(failure_summary["reason"])
+        assert failure_summary["stage"] == expected_stage
+        assert name in str(failure_summary["reason"])
 
     def test_no_valid_placements_returns_none(self):
         slab = SlabContainer(make_slab())
         refs = self._make_refs()
         config = AdsorptionConfig(num_placements=1, num_conformers=1, seed=42)
-        # Patch in process_molecule's namespace (robust when sys.modules is altered by other tests)
         mock_cfs = MagicMock(return_value=None)
-        with patch.dict(
-            process_molecule.__globals__,
-            {"create_conformers_from_smiles": mock_cfs},
-        ):
+        with patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs):
             result = process_molecule(
                 "O",
                 "water",
@@ -268,10 +318,7 @@ class TestProcessMolecule:
         config = AdsorptionConfig(num_placements=1, num_conformers=1, seed=42)
         failure_summary = {}
         mock_cfs = MagicMock(return_value=None)
-        with patch.dict(
-            process_molecule.__globals__,
-            {"create_conformers_from_smiles": mock_cfs},
-        ):
+        with patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs):
             result = process_molecule(
                 "O",
                 "water",
@@ -284,12 +331,8 @@ class TestProcessMolecule:
         assert result is None
         assert failure_summary["stage"] == "conformers"
 
-    def test_simple_binding_energy_skips_auto_resize(self):
-        """Simple binding energy (base_slab_for_frozen=None) does not resize slab.
-
-        Resizing is ineffective due to translational symmetry; only saturation
-        and pre-adsorbed runs should resize.
-        """
+    def test_simple_binding_energy_runs_auto_resize(self):
+        """Simple binding energy evaluates auto-resize when enabled."""
         slab = SlabContainer(make_slab())
         refs = self._make_refs()
         config = AdsorptionConfig(
@@ -299,26 +342,55 @@ class TestProcessMolecule:
             auto_resize_slab=True,
         )
         mock_resize = MagicMock(return_value=(slab, False))
-        with patch(
-            "metalsurfer.workflow.auto_resize_slab_for_molecule",
-            mock_resize,
+        mock_cfs = MagicMock(return_value=([Atoms("H2")], [0.0]))
+        mock_specs = MagicMock(return_value=[])
+        with (
+            patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs),
+            patch("metalsurfer.workflow.core.enumerate_placement_specs", mock_specs),
+            patch(
+                "metalsurfer.workflow.core.auto_resize_slab_for_molecule", mock_resize
+            ),
         ):
-            # No conformers -> early return; we never reach resize. Still valid:
-            # the resize block is gated by base_slab_for_frozen is not None.
-            mock_cfs = MagicMock(return_value=None)
-            with patch.dict(
-                process_molecule.__globals__,
-                {"create_conformers_from_smiles": mock_cfs},
-            ):
-                process_molecule(
-                    "O",
-                    "water",
-                    slab,
-                    MagicMock(),
-                    refs,
-                    config=config,
-                    base_slab_for_frozen=None,
-                )
+            process_molecule(
+                "O",
+                "water",
+                slab,
+                MagicMock(),
+                refs,
+                config=config,
+                base_slab_for_frozen=None,
+            )
+        mock_resize.assert_called_once()
+
+    def test_process_molecule_skips_auto_resize_when_disabled(self):
+        slab = SlabContainer(make_slab())
+        refs = self._make_refs()
+        config = AdsorptionConfig(
+            num_placements=2,
+            num_conformers=1,
+            seed=42,
+            auto_resize_slab=True,
+        )
+        mock_resize = MagicMock(return_value=(slab, False))
+        mock_cfs = MagicMock(return_value=([Atoms("H2")], [0.0]))
+        mock_specs = MagicMock(return_value=[])
+        with (
+            patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs),
+            patch("metalsurfer.workflow.core.enumerate_placement_specs", mock_specs),
+            patch(
+                "metalsurfer.workflow.core.auto_resize_slab_for_molecule", mock_resize
+            ),
+        ):
+            process_molecule(
+                "O",
+                "water",
+                slab,
+                MagicMock(),
+                refs,
+                config=config,
+                base_slab_for_frozen=None,
+                allow_auto_resize=False,
+            )
         mock_resize.assert_not_called()
 
     # Note: Full process_molecule integration on pre-adsorbed slab is covered by
@@ -326,6 +398,204 @@ class TestProcessMolecule:
     # test_placement.test_placement_mode_envelope. The process_molecule flow with
     # base_slab_for_frozen is used in saturation and works; mocking optimize_adsorbate
     # is unreliable when run in full test suite due to import order.
+
+    def test_bo_failure_events_emit_negative_records(self):
+        slab = SlabContainer(make_slab())
+        refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
+        config = AdsorptionConfig(
+            bo_enabled=True,
+            bo_initial_random=1,
+            bo_batch_size=1,
+            bo_total_budget=1,
+            num_placements=2,
+            num_conformers=1,
+            seed=7,
+        )
+        specs = [
+            PlacementSpec(
+                conformer_index=0,
+                orientation_type="round",
+                face_flip=False,
+                en_atom_index=None,
+                site_index=-1,
+                site_type=None,
+                tilt_deg=0.0,
+                azimuth_deg=0.0,
+                azimuth_in_plane_deg=0.0,
+                z_fraction=0.5,
+                placement_index=0,
+            )
+        ]
+        success = make_screening_result(
+            molecule="water",
+            placement_id=0,
+            energy_slab=-200.0,
+            energy_adsorbate=-10.0,
+            energy_adsorption=-1.0,
+            atoms=place_molecule_on_slab(make_slab(), make_water()),
+            slab_size=len(make_slab()),
+            distance=2.0,
+            placement_descriptor=make_placement_descriptor(placement_id=0),
+        )
+        mock_conformers = MagicMock(return_value=([Atoms("H")], [0.0]))
+        mock_capacity = MagicMock(return_value=1)
+        mock_specs = MagicMock(return_value=specs)
+        mock_eval = MagicMock(
+            return_value=(
+                [success],
+                [
+                    PlacementFailureEvent(
+                        placement_id=0,
+                        stage="validation",
+                        reason="desorbed (6.20 A)",
+                        descriptor=make_placement_descriptor(placement_id=0),
+                    )
+                ],
+            )
+        )
+        extra_records = []
+        with (
+            patch(
+                "metalsurfer.workflow.bayesian.create_conformers_from_smiles",
+                mock_conformers,
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian.estimate_placement_spec_capacity",
+                mock_capacity,
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian.enumerate_placement_specs", mock_specs
+            ),
+            patch("metalsurfer.workflow.bayesian._evaluate_placement_batch", mock_eval),
+            patch(
+                "metalsurfer.workflow.bayesian.filter_results",
+                side_effect=lambda results, **_: results,
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian.build_spec_features_geometry_aware",
+                return_value=(
+                    pd.DataFrame([{"x": 0.0, "y": 0.0, "z": 7.0}]),
+                    [0],
+                ),
+            ),
+        ):
+            results = process_molecule_bayesian(
+                "O",
+                "water",
+                slab,
+                MagicMock(),
+                refs,
+                ts_model=MagicMock(),
+                config=config,
+                extra_ml_records_out=extra_records,
+            )
+        assert results is not None
+        assert len(results) == 1
+        assert len(extra_records) == 1
+        assert extra_records[0].is_penalty_label is True
+        assert extra_records[0].failure_stage == "validation"
+
+    def test_bo_deduplicated_results_are_tracked_for_ml(self):
+        slab = SlabContainer(make_slab())
+        refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
+        config = AdsorptionConfig(
+            bo_enabled=True,
+            bo_initial_random=1,
+            bo_batch_size=1,
+            bo_total_budget=1,
+            num_placements=2,
+            num_conformers=1,
+            seed=7,
+        )
+        specs = [
+            PlacementSpec(
+                conformer_index=0,
+                orientation_type="round",
+                face_flip=False,
+                en_atom_index=None,
+                site_index=-1,
+                site_type=None,
+                tilt_deg=0.0,
+                azimuth_deg=0.0,
+                azimuth_in_plane_deg=0.0,
+                z_fraction=0.5,
+                placement_index=0,
+            )
+        ]
+        unique = make_screening_result(
+            molecule="water",
+            placement_id=0,
+            energy_slab=-200.0,
+            energy_adsorbate=-10.0,
+            energy_adsorption=-1.0,
+            atoms=place_molecule_on_slab(make_slab(), make_water()),
+            slab_size=len(make_slab()),
+            distance=2.0,
+            placement_descriptor=make_placement_descriptor(placement_id=0),
+        )
+        duplicate = make_screening_result(
+            molecule="water",
+            placement_id=1,
+            energy_slab=-200.0,
+            energy_adsorbate=-10.0,
+            energy_adsorption=-1.01,
+            atoms=place_molecule_on_slab(make_slab(), make_water()),
+            slab_size=len(make_slab()),
+            distance=2.0,
+            placement_descriptor=make_placement_descriptor(placement_id=1),
+        )
+
+        mock_conformers = MagicMock(return_value=([Atoms("H")], [0.0]))
+        mock_capacity = MagicMock(return_value=1)
+        mock_specs = MagicMock(return_value=specs)
+        mock_eval = MagicMock(return_value=([unique, duplicate], []))
+
+        def _mock_filter(results, **kwargs):
+            kwargs["duplicate_results_out"].append(results[1])
+            return [results[0]]
+
+        extra_records = []
+        with (
+            patch(
+                "metalsurfer.workflow.bayesian.create_conformers_from_smiles",
+                mock_conformers,
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian.estimate_placement_spec_capacity",
+                mock_capacity,
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian.enumerate_placement_specs", mock_specs
+            ),
+            patch("metalsurfer.workflow.bayesian._evaluate_placement_batch", mock_eval),
+            patch(
+                "metalsurfer.workflow.bayesian.filter_results", side_effect=_mock_filter
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian.build_spec_features_geometry_aware",
+                return_value=(
+                    pd.DataFrame([{"x": 0.0, "y": 0.0, "z": 7.0}]),
+                    [0],
+                ),
+            ),
+        ):
+            results = process_molecule_bayesian(
+                "O",
+                "water",
+                slab,
+                MagicMock(),
+                refs,
+                ts_model=MagicMock(),
+                config=config,
+                extra_ml_records_out=extra_records,
+            )
+
+        assert results is not None
+        assert len(results) == 1
+        assert len(extra_records) == 1
+        assert extra_records[0].placement_id == 1
+        assert extra_records[0].label_source == "deduplicated_duplicate"
+        assert extra_records[0].is_penalty_label is False
 
 
 # ---------------------------------------------------------------------------
@@ -337,8 +607,13 @@ class TestFormatFailureSummary:
     def test_reference_stage(self):
         summary = {"stage": "reference", "reason": "missing reference energy for H2"}
         out = format_failure_summary(summary)
-        assert "Stage: reference" in out
-        assert "H2" in out
+        assert_lines_contain(
+            out,
+            [
+                "  Stage: reference",
+                "  Reason: missing reference energy for H2",
+            ],
+        )
 
     def test_placement_stage(self):
         summary = {
@@ -347,9 +622,14 @@ class TestFormatFailureSummary:
             "n_initial_placements": 0,
         }
         out = format_failure_summary(summary)
-        assert "Stage: placement" in out
-        assert "50" in out
-        assert "0" in out
+        assert_lines_contain(
+            out,
+            [
+                "  Stage: placement",
+                "  Placements attempted: 50",
+                "  Initial placements: 0",
+            ],
+        )
 
     def test_validation_stage(self):
         summary = {
@@ -364,11 +644,16 @@ class TestFormatFailureSummary:
             },
         }
         out = format_failure_summary(summary)
-        assert "Stage: validation" in out
-        assert "Initial placements: 50" in out
-        assert "Optimized: 48 (2 failed)" in out
-        assert "Passed validation: 0" in out
-        assert "desorbed (5.23 A): 35" in out
+        assert_lines_contain(
+            out,
+            [
+                "  Stage: validation",
+                "  Initial placements: 50",
+                "  Optimized: 48 (2 failed)",
+                "  Passed validation: 0",
+                "    desorbed (5.23 A): 35",
+            ],
+        )
         assert "E_ads too high" in out
 
     def test_filter_stage(self):
@@ -378,9 +663,14 @@ class TestFormatFailureSummary:
             "n_after_filter": 0,
         }
         out = format_failure_summary(summary)
-        assert "Stage: filter" in out
-        assert "Before filter: 5" in out
-        assert "After filter: 0" in out
+        assert_lines_contain(
+            out,
+            [
+                "  Stage: filter",
+                "  Before filter: 5",
+                "  After filter: 0",
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -389,65 +679,47 @@ class TestFormatFailureSummary:
 
 
 class TestLoadMolecules:
-    def test_loads_csv(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            csv_path = os.path.join(tmpdir, "smiles.csv")
-            with open(csv_path, "w") as f:
-                f.write("O,water\nCCO,ethanol\n")
-            molecules, smiles, status = load_molecules(csv_path, skip_existing=False)
-            assert molecules == ["water", "ethanol"]
-            assert smiles == ["O", "CCO"]
-            assert status == "ok"
+    def test_loads_csv(self, workdir):
+        csv_path = workdir / "smiles.csv"
+        csv_path.write_text("O,water\nCCO,ethanol\n")
+        molecules, smiles, status = load_molecules(str(csv_path), skip_existing=False)
+        assert molecules == ["water", "ethanol"]
+        assert smiles == ["O", "CCO"]
+        assert status == "ok"
 
-    def test_skip_existing(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                csv_path = os.path.join(tmpdir, "smiles.csv")
-                with open(csv_path, "w") as f:
-                    f.write("O,water\nCCO,ethanol\n")
-                results_dir = os.path.join(tmpdir, "results_manual")
-                os.makedirs(results_dir, exist_ok=True)
-                summary = pd.DataFrame(
-                    {"molecule": ["water"], "energy_adsorption": [-1.0]}
-                )
-                summary.to_csv(
-                    os.path.join(results_dir, "adsorption_energies_detailed.csv"),
-                    index=False,
-                )
-                molecules, smiles, status = load_molecules(
-                    csv_path, skip_existing=True, surface_type="manual"
-                )
-                assert "water" not in molecules
-                assert status == "ok"
-                assert "ethanol" in molecules
-            finally:
-                os.chdir(old_cwd)
+    def test_skip_existing(self, workdir):
+        csv_path = workdir / "smiles.csv"
+        csv_path.write_text("O,water\nCCO,ethanol\n")
+        results_dir = workdir / "results_manual"
+        results_dir.mkdir(exist_ok=True)
+        summary = pd.DataFrame({"molecule": ["water"], "energy_adsorption": [-1.0]})
+        summary.to_csv(results_dir / "adsorption_energies_detailed.csv", index=False)
+        molecules, smiles, status = load_molecules(
+            str(csv_path), skip_existing=True, surface_type="manual"
+        )
+        assert "water" not in molecules
+        assert status == "ok"
+        assert "ethanol" in molecules
 
-    def test_single_row_csv_returns_one_molecule(self):
+    def test_single_row_csv_returns_one_molecule(self, workdir):
         """Single-row CSV returns one molecule and one SMILES."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            csv_path = os.path.join(tmpdir, "smiles.csv")
-            with open(csv_path, "w") as f:
-                f.write("O,water\n")
-            molecules, smiles, status = load_molecules(csv_path, skip_existing=False)
-            assert len(molecules) == 1
-            assert molecules[0] == "water"
-            assert len(smiles) == 1
-            assert status == "ok"
-            assert smiles[0] == "O"
+        csv_path = workdir / "smiles.csv"
+        csv_path.write_text("O,water\n")
+        molecules, smiles, status = load_molecules(str(csv_path), skip_existing=False)
+        assert len(molecules) == 1
+        assert molecules[0] == "water"
+        assert len(smiles) == 1
+        assert status == "ok"
+        assert smiles[0] == "O"
 
-    def test_empty_csv_returns_empty(self):
+    def test_empty_csv_returns_empty(self, workdir):
         """Empty or header-only CSV returns empty lists."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            csv_path = os.path.join(tmpdir, "smiles.csv")
-            with open(csv_path, "w") as f:
-                f.write("")
-            molecules, smiles, status = load_molecules(csv_path, skip_existing=False)
-            assert molecules == []
-            assert smiles == []
-            assert status == "empty_file"
+        csv_path = workdir / "smiles.csv"
+        csv_path.write_text("")
+        molecules, smiles, status = load_molecules(str(csv_path), skip_existing=False)
+        assert molecules == []
+        assert smiles == []
+        assert status == "empty_file"
 
 
 # ---------------------------------------------------------------------------
@@ -458,132 +730,88 @@ class TestLoadMolecules:
 class TestSaveSummaryResults:
     def _make_result(self, mol_name, e_ads, pid=0):
         atoms = place_molecule_on_slab(make_slab(), make_water())
-        return ScreeningResult(
+        return make_screening_result(
             molecule=mol_name,
             placement_id=pid,
-            energy_adslab=-190.0,
-            energy_slab=-200.0,
-            energy_adsorbate=-10.0,
             energy_adsorption=e_ads,
             atoms=atoms,
+            slab_size=len(make_slab()),
             distance=2.5,
-            placement_descriptor=make_placement_descriptor(placement_id=pid),
         )
 
-    def test_writes_detailed_and_summary_csv(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                results = [
-                    self._make_result("water", -1.5, pid=0),
-                    self._make_result("water", -2.0, pid=1),
-                ]
-                summary = MoleculeSummary(
-                    molecule="water",
-                    n_configurations=2,
-                    e_ads_min=-2.0,
-                    e_ads_max=-1.5,
-                    e_ads_mean=-1.75,
-                    e_ads_std=0.25,
-                    e_ads_median=-1.75,
-                    best_placement_id=1,
-                    e_ads_best=-2.0,
-                )
-                rr = ScreeningRunResult(
-                    molecule="water",
-                    results=results,
-                    summary=summary,
-                )
-                save_summary_results([rr], surface_type="test")
-                detailed = os.path.join(
-                    tmpdir, "results_test", "adsorption_energies_detailed.csv"
-                )
-                summary_path = os.path.join(
-                    tmpdir, "results_test", "adsorption_energy_summary.csv"
-                )
-                assert os.path.exists(detailed)
-                assert os.path.exists(summary_path)
-                df = pd.read_csv(summary_path)
-                assert "molecule" in df.columns
-                assert len(df) == 1
-                assert df.iloc[0]["molecule"] == "water"
-                # Detailed CSV includes structure paths
-                detail_df = pd.read_csv(detailed)
-                assert "xyz_path" in detail_df.columns
-                assert "poscar_path" in detail_df.columns
-                assert "conformer_000.xyz" in detail_df.iloc[0]["xyz_path"]
-                assert "POSCAR" in detail_df.iloc[0]["poscar_path"]
-            finally:
-                os.chdir(old_cwd)
+    def test_writes_detailed_and_summary_csv(self, workdir):
+        results = [
+            self._make_result("water", -1.5, pid=0),
+            self._make_result("water", -2.0, pid=1),
+        ]
+        summary = MoleculeSummary(
+            molecule="water",
+            n_configurations=2,
+            e_ads_min=-2.0,
+            e_ads_max=-1.5,
+            e_ads_mean=-1.75,
+            e_ads_std=0.25,
+            e_ads_median=-1.75,
+            best_placement_id=1,
+            e_ads_best=-2.0,
+        )
+        rr = ScreeningRunResult(molecule="water", results=results, summary=summary)
+        save_summary_results([rr], surface_type="test")
+        detailed = workdir / "results_test" / "adsorption_energies_detailed.csv"
+        summary_path = workdir / "results_test" / "adsorption_energy_summary.csv"
+        assert detailed.exists()
+        assert summary_path.exists()
+        df = pd.read_csv(summary_path)
+        assert "molecule" in df.columns
+        assert len(df) == 1
+        assert df.iloc[0]["molecule"] == "water"
+        detail_df = pd.read_csv(detailed)
+        assert "xyz_path" in detail_df.columns
+        assert "poscar_path" in detail_df.columns
+        assert "conformer_000.xyz" in detail_df.iloc[0]["xyz_path"]
+        assert "POSCAR" in detail_df.iloc[0]["poscar_path"]
 
-    def test_empty_results_no_crash(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                save_summary_results([], surface_type="empty")
-            finally:
-                os.chdir(old_cwd)
+    def test_empty_results_no_crash(self, workdir):
+        save_summary_results([], surface_type="empty")
 
-    def test_detailed_csv_includes_placement_descriptor_columns(self):
+    def test_detailed_csv_includes_placement_descriptor_columns(self, workdir):
         """When placement_descriptor is present, detailed CSV has descriptor columns."""
-        from metalsurfer.models import PlacementDescriptor
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                atoms = place_molecule_on_slab(make_slab(), make_water())
-                descriptor = PlacementDescriptor(
-                    conformer_index=0,
-                    orientation_type="vertical",
-                    face_flip=False,
-                    en_atom_index=None,
-                    site_index=0,
-                    site_type="atop",
-                    tilt_deg=0.0,
-                    azimuth_deg=0.0,
-                    azimuth_in_plane_deg=0.0,
-                    z_fraction=0.5,
-                    placement_index=0,
-                    x=1.0,
-                    y=2.0,
-                    z=2.5,
-                    shape="linear",
-                )
-                results = [
-                    ScreeningResult(
-                        molecule="water",
-                        placement_id=0,
-                        energy_adslab=-190.0,
-                        energy_slab=-200.0,
-                        energy_adsorbate=-10.0,
-                        energy_adsorption=-1.5,
-                        atoms=atoms,
-                        distance=2.5,
-                        placement_descriptor=descriptor,
-                    ),
-                ]
-                rr = ScreeningRunResult(
-                    molecule="water",
-                    results=results,
-                    summary=build_molecule_summary("water", results),
-                )
-                save_summary_results([rr], surface_type="test")
-                detail_df = pd.read_csv(
-                    os.path.join(
-                        tmpdir, "results_test", "adsorption_energies_detailed.csv"
-                    )
-                )
-                assert "conformer_index" in detail_df.columns
-                assert "orientation_type" in detail_df.columns
-                assert "site_type" in detail_df.columns
-                assert "shape" in detail_df.columns
-                assert detail_df.iloc[0]["orientation_type"] == "vertical"
-                assert detail_df.iloc[0]["shape"] == "linear"
-            finally:
-                os.chdir(old_cwd)
+        atoms = place_molecule_on_slab(make_slab(), make_water())
+        descriptor = make_placement_descriptor(
+            placement_id=0,
+            orientation_type="vertical",
+            site_type="atop",
+            x=1.0,
+            y=2.0,
+            z_offset=2.5,
+            shape="linear",
+        )
+        results = [
+            make_screening_result(
+                molecule="water",
+                placement_id=0,
+                energy_adsorption=-1.5,
+                atoms=atoms,
+                slab_size=len(make_slab()),
+                distance=2.5,
+                placement_descriptor=descriptor,
+            ),
+        ]
+        rr = ScreeningRunResult(
+            molecule="water",
+            results=results,
+            summary=build_molecule_summary("water", results),
+        )
+        save_summary_results([rr], surface_type="test")
+        detail_df = pd.read_csv(
+            workdir / "results_test" / "adsorption_energies_detailed.csv"
+        )
+        assert "conformer_index" in detail_df.columns
+        assert "orientation_type" in detail_df.columns
+        assert "site_type" in detail_df.columns
+        assert "shape" in detail_df.columns
+        assert detail_df.iloc[0]["orientation_type"] == "vertical"
+        assert detail_df.iloc[0]["shape"] == "linear"
 
 
 # ---------------------------------------------------------------------------
@@ -592,74 +820,109 @@ class TestSaveSummaryResults:
 
 
 class TestSaveSingleMoleculeResults:
-    def test_writes_xyz_poscar_and_csv(self):
+    def test_writes_xyz_poscar_and_csv(self, workdir):
         atoms = place_molecule_on_slab(make_slab(), make_water())
         results = [
-            ScreeningResult(
+            make_screening_result(
                 molecule="water",
                 placement_id=0,
-                energy_adslab=-190.0,
-                energy_slab=-200.0,
-                energy_adsorbate=-10.0,
                 energy_adsorption=-1.5,
                 atoms=atoms,
+                slab_size=len(make_slab()),
                 distance=2.5,
                 placement_descriptor=make_placement_descriptor(placement_id=0),
             ),
         ]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                save_single_molecule_results(
-                    "water", results, surface_type="single_test"
-                )
-                xyz_path = os.path.join(
-                    tmpdir,
-                    "results_single_test",
-                    "xyz_structures",
-                    "water_all",
-                    "conformer_000.xyz",
-                )
-                poscar_path = os.path.join(
-                    tmpdir,
-                    "results_single_test",
-                    "vasp_inputs",
-                    "water_all",
-                    "conformer_000",
-                    "POSCAR",
-                )
-                detailed_csv = os.path.join(
-                    tmpdir,
-                    "results_single_test",
-                    "adsorption_energies_detailed.csv",
-                )
-                summary_csv = os.path.join(
-                    tmpdir,
-                    "results_single_test",
-                    "adsorption_energy_summary.csv",
-                )
-                assert os.path.exists(xyz_path)
-                assert os.path.exists(poscar_path)
-                assert os.path.exists(detailed_csv)
-                assert os.path.exists(summary_csv)
-            finally:
-                os.chdir(old_cwd)
+        save_single_molecule_results("water", results, surface_type="single_test")
+        xyz_path = (
+            workdir / "results_single_test/xyz_structures/water_all/conformer_000.xyz"
+        )
+        poscar_path = (
+            workdir / "results_single_test/vasp_inputs/water_all/conformer_000/POSCAR"
+        )
+        detailed_csv = workdir / "results_single_test/adsorption_energies_detailed.csv"
+        summary_csv = workdir / "results_single_test/adsorption_energy_summary.csv"
+        assert xyz_path.exists()
+        assert poscar_path.exists()
+        assert detailed_csv.exists()
+        assert summary_csv.exists()
 
-    def test_empty_results_no_crash(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                save_single_molecule_results("water", [], surface_type="empty")
-                # No files created
-                assert not os.path.exists(
-                    os.path.join(
-                        tmpdir, "results_empty/adsorption_energies_detailed.csv"
-                    )
-                )
-            finally:
-                os.chdir(old_cwd)
+    def test_write_csv_false_writes_structures_not_csv(self, workdir):
+        atoms = place_molecule_on_slab(make_slab(), make_water())
+        results = [
+            make_screening_result(
+                molecule="water",
+                placement_id=0,
+                energy_adsorption=-1.5,
+                atoms=atoms,
+                slab_size=len(make_slab()),
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(placement_id=0),
+            ),
+        ]
+        save_single_molecule_results(
+            "water",
+            results,
+            surface_type="no_csv_test",
+            write_csv=False,
+        )
+        xyz_path = (
+            workdir / "results_no_csv_test/xyz_structures/water_all/conformer_000.xyz"
+        )
+        detailed_csv = workdir / "results_no_csv_test/adsorption_energies_detailed.csv"
+        assert xyz_path.exists()
+        assert not detailed_csv.exists()
+
+    def test_campaign_two_molecules_combined_csv(self, workdir):
+        slab = make_slab()
+        water_atoms = place_molecule_on_slab(slab, make_water())
+        other_atoms = place_molecule_on_slab(slab, make_water())
+        water_results = [
+            make_screening_result(
+                molecule="water",
+                placement_id=0,
+                energy_adsorption=-1.5,
+                atoms=water_atoms,
+                slab_size=len(slab),
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(placement_id=0),
+            ),
+        ]
+        other_results = [
+            make_screening_result(
+                molecule="other",
+                placement_id=0,
+                energy_adsorption=-1.0,
+                atoms=other_atoms,
+                slab_size=len(slab),
+                distance=2.6,
+                placement_descriptor=make_placement_descriptor(placement_id=0),
+            ),
+        ]
+        st = "campaign_test"
+        config = AdsorptionConfig()
+        save_single_molecule_results(
+            "water", water_results, surface_type=st, write_csv=False
+        )
+        save_single_molecule_results(
+            "other", other_results, surface_type=st, write_csv=False
+        )
+        combined = [
+            screening_run_result("water", water_results),
+            screening_run_result("other", other_results),
+        ]
+        save_summary_results(combined, surface_type=st, config=config)
+        detailed_csv = workdir / f"results_{st}" / "adsorption_energies_detailed.csv"
+        summary_csv = workdir / f"results_{st}" / "adsorption_energy_summary.csv"
+        df = pd.read_csv(detailed_csv)
+        sdf = pd.read_csv(summary_csv)
+        assert set(df["molecule"].unique()) == {"water", "other"}
+        assert len(sdf) == 2
+        assert set(sdf["molecule"]) == {"water", "other"}
+
+    def test_empty_results_no_crash(self, workdir):
+        save_single_molecule_results("water", [], surface_type="empty")
+        assert not (workdir / "results_empty/adsorption_energies_detailed.csv").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -668,38 +931,22 @@ class TestSaveSingleMoleculeResults:
 
 
 class TestSaveMoleculeResults:
-    def test_writes_xyz_and_vasp(self):
+    def test_writes_xyz_and_vasp(self, workdir):
         atoms = place_molecule_on_slab(make_slab(), make_water())
-        entry = ScreeningResult(
+        entry = make_screening_result(
             molecule="water",
             placement_id=0,
-            energy_adslab=-190.0,
-            energy_slab=-200.0,
-            energy_adsorbate=-10.0,
             energy_adsorption=-1.5,
             atoms=atoms,
+            slab_size=len(make_slab()),
             distance=2.5,
             placement_descriptor=make_placement_descriptor(placement_id=0),
         )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                save_molecule_results("water", [entry], surface_type="test")
-                xyz_path = os.path.join(
-                    tmpdir,
-                    "results_test",
-                    "xyz_structures",
-                    "water_all",
-                    "conformer_000.xyz",
-                )
-                vasp_path = os.path.join(
-                    tmpdir, "results_test", "vasp_inputs", "water_all", "conformer_000"
-                )
-                assert os.path.exists(xyz_path)
-                assert os.path.exists(vasp_path)
-            finally:
-                os.chdir(old_cwd)
+        save_molecule_results("water", [entry], surface_type="test")
+        xyz_path = workdir / "results_test/xyz_structures/water_all/conformer_000.xyz"
+        vasp_path = workdir / "results_test/vasp_inputs/water_all/conformer_000"
+        assert xyz_path.exists()
+        assert vasp_path.exists()
 
     def test_write_vasp_inputs_accepts_none_config(self):
         """_write_vasp_inputs creates default config when config=None."""
@@ -718,27 +965,15 @@ class TestSaveMoleculeResults:
 
 
 class TestSetupDirectories:
-    def test_creates_directories(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                setup_directories(["test_surface"])
-                assert os.path.isdir("results_test_surface")
-                assert os.path.isdir("results_test_surface/vasp_inputs")
-                assert os.path.isdir("results_test_surface/xyz_structures")
-            finally:
-                os.chdir(old_cwd)
+    def test_creates_directories(self, workdir):
+        setup_directories(["test_surface"])
+        assert os.path.isdir("results_test_surface")
+        assert os.path.isdir("results_test_surface/vasp_inputs")
+        assert os.path.isdir("results_test_surface/xyz_structures")
 
-    def test_default_surface_types_when_none(self):
+    def test_default_surface_types_when_none(self, workdir):
         """setup_directories(surface_types=None) uses default ['manual']."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                setup_directories(surface_types=None)
-                assert os.path.isdir("results_manual")
-                assert os.path.isdir("results_manual/vasp_inputs")
-                assert os.path.isdir("results_manual/xyz_structures")
-            finally:
-                os.chdir(old_cwd)
+        setup_directories(surface_types=None)
+        assert os.path.isdir("results_manual")
+        assert os.path.isdir("results_manual/vasp_inputs")
+        assert os.path.isdir("results_manual/xyz_structures")

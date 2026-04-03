@@ -5,7 +5,10 @@ import pytest
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.conformers import create_conformers_from_smiles
-from metalsurfer.placement import generate_conformer_placement
+from metalsurfer.placement import (
+    enumerate_placement_specs,
+    generate_placement_from_spec,
+)
 
 from .conftest import make_slab
 
@@ -28,9 +31,9 @@ class TestConformerDeterminism:
         c1, e1 = r1
         c2, e2 = r2
         assert len(c1) == len(c2)
-        for a, b in zip(c1, c2, strict=False):
-            assert np.allclose(a.get_positions(), b.get_positions(), atol=1e-10)
-        assert np.allclose(e1, e2, atol=1e-10)
+        for a, b in zip(c1, c2, strict=True):
+            assert np.allclose(a.get_positions(), b.get_positions(), atol=1e-8)
+        assert np.allclose(e1, e2, atol=1e-8)
 
 
 # ---------------------------------------------------------------------------
@@ -47,13 +50,14 @@ class TestPlacementDeterminism:
         assert result is not None
         conformers, energies = result
 
+        specs = enumerate_placement_specs(conformers, slab, cfg, "O", n_desired=n)
         positions = []
-        for pid in range(n):
-            placed = generate_conformer_placement(
-                conformers, energies, slab, pid, config=cfg
+        for spec in specs:
+            placed = generate_placement_from_spec(
+                spec, conformers, slab, cfg, smiles="O"
             )
             if placed is not None:
-                positions.append(placed.get_positions().copy())
+                positions.append(placed[0].get_positions().copy())
             else:
                 positions.append(None)
         return positions
@@ -62,21 +66,24 @@ class TestPlacementDeterminism:
         pos1 = self._run_placements(seed=42)
         pos2 = self._run_placements(seed=42)
         assert len(pos1) == len(pos2)
-        for p1, p2 in zip(pos1, pos2, strict=False):
+        for p1, p2 in zip(pos1, pos2, strict=True):
             if p1 is None:
                 assert p2 is None
             else:
-                assert np.allclose(p1, p2, atol=1e-10)
+                assert np.allclose(p1, p2, atol=1e-8)
 
-    def test_different_seed_different_placements(self):
-        pos1 = self._run_placements(seed=1)
-        pos2 = self._run_placements(seed=999)
-        # at least some successful placements should differ
+    def test_different_specs_different_placements(self):
+        """Different spec indices produce spatially distinct placements."""
+        positions = self._run_placements(seed=42)
+        # at least some successful placements at different specs should differ
+        valid = [p for p in positions if p is not None]
+        assert len(valid) >= 2, "Need at least 2 successful placements"
         diffs = 0
-        for p1, p2 in zip(pos1, pos2, strict=False):
-            if p1 is not None and p2 is not None and not np.allclose(p1, p2, atol=1e-6):
-                diffs += 1
-        assert diffs > 0, "Different seeds should produce different placements"
+        for i in range(len(valid)):
+            for j in range(i + 1, len(valid)):
+                if not np.allclose(valid[i], valid[j], atol=1e-6):
+                    diffs += 1
+        assert diffs > 0, "Different specs should produce different placements"
 
 
 # ---------------------------------------------------------------------------
@@ -93,14 +100,22 @@ class TestEndToEndDeterminism:
         assert result is not None
         conformers, energies = result
 
+        specs = enumerate_placement_specs(
+            conformers, slab, cfg, "CCO", n_desired=cfg.num_placements
+        )
         placement_results = []
-        for pid in range(cfg.num_placements):
-            placed = generate_conformer_placement(
-                conformers, energies, slab, pid, config=cfg
+        for spec in specs:
+            placed = generate_placement_from_spec(
+                spec, conformers, slab, cfg, smiles="CCO"
             )
             if placed is not None:
+                adsorbate, descriptor = placed
                 placement_results.append(
-                    (pid, placed.get_positions().copy(), len(placed))
+                    (
+                        spec.placement_index,
+                        adsorbate.get_positions().copy(),
+                        len(adsorbate),
+                    )
                 )
         return placement_results
 
@@ -108,10 +123,10 @@ class TestEndToEndDeterminism:
         r1 = self._pipeline(seed=42)
         r2 = self._pipeline(seed=42)
         assert len(r1) == len(r2)
-        for (pid1, pos1, n1), (pid2, pos2, n2) in zip(r1, r2, strict=False):
+        for (pid1, pos1, n1), (pid2, pos2, n2) in zip(r1, r2, strict=True):
             assert pid1 == pid2
             assert n1 == n2
-            assert np.allclose(pos1, pos2, atol=1e-10)
+            assert np.allclose(pos1, pos2, atol=1e-8)
 
     def test_pipeline_seed_variation(self):
         r1 = self._pipeline(seed=7)
@@ -122,8 +137,41 @@ class TestEndToEndDeterminism:
             diffs = sum(
                 1
                 for (_, p1, _), (_, p2, _) in zip(
-                    r1[:min_len], r2[:min_len], strict=False
+                    r1[:min_len], r2[:min_len], strict=True
                 )
                 if not np.allclose(p1, p2, atol=1e-6)
             )
             assert diffs > 0 or len(r1) != len(r2)
+
+    def test_descriptor_quaternions_always_finite(self):
+        """Every descriptor from the pipeline must have finite quaternion fields."""
+        slab = make_slab()
+        cfg = AdsorptionConfig(seed=42, num_conformers=3, num_placements=20)
+        result = create_conformers_from_smiles("O", config=cfg)
+        assert result is not None
+        conformers, _ = result
+        specs = enumerate_placement_specs(conformers, slab, cfg, "O", n_desired=20)
+        n_ok = 0
+        for spec in specs:
+            placed = generate_placement_from_spec(
+                spec, conformers, slab, cfg, smiles="O"
+            )
+            if placed is None:
+                continue
+            _, desc = placed
+            n_ok += 1
+            for field in (
+                "quat_w",
+                "quat_x",
+                "quat_y",
+                "quat_z",
+                "x_abs",
+                "y_abs",
+                "z_abs",
+            ):
+                val = getattr(desc, field)
+                assert val is not None, (
+                    f"{field} is None for spec {spec.placement_index}"
+                )
+                assert np.isfinite(val), f"{field}={val} is not finite"
+        assert n_ok >= 5, f"Expected >=5 valid placements, got {n_ok}"

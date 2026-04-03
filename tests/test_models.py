@@ -48,6 +48,7 @@ def test_screening_result():
         energy_adsorbate=-10.0,
         energy_adsorption=-0.5,
         atoms=atoms,
+        slab_size=0,
         distance=2.3,
         placement_descriptor=make_placement_descriptor(placement_id=5),
     )
@@ -107,6 +108,7 @@ def test_build_molecule_summary():
             energy_adsorbate=-10.0,
             energy_adsorption=-1.5 - i * 0.1,
             atoms=combined,
+            slab_size=len(slab),
             distance=2.5,
             placement_descriptor=make_placement_descriptor(placement_id=i),
         )
@@ -131,6 +133,7 @@ def test_screening_run_result():
         energy_adsorbate=-10.0,
         energy_adsorption=-0.5,
         atoms=atoms,
+        slab_size=0,
         distance=2.3,
         placement_descriptor=make_placement_descriptor(placement_id=0),
     )
@@ -167,6 +170,7 @@ def test_saturation_step_result():
         energy_adsorbate=-10.0,
         energy_adsorption=-1.0,
         atoms=combined,
+        slab_size=len(slab),
         distance=2.5,
         placement_descriptor=make_placement_descriptor(placement_id=0),
     )
@@ -194,6 +198,7 @@ def test_saturation_run_result():
         energy_adsorbate=-10.0,
         energy_adsorption=-1.0,
         atoms=combined,
+        slab_size=len(slab),
         distance=2.5,
         placement_descriptor=make_placement_descriptor(placement_id=0),
     )

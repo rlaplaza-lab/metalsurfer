@@ -5,6 +5,7 @@
 # or other GPU code runs after a fork (e.g. with pytest-xdist -n).
 import contextlib
 import multiprocessing
+from pathlib import Path
 
 with contextlib.suppress(RuntimeError):
     multiprocessing.set_start_method("spawn", force=True)
@@ -13,7 +14,27 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from metalsurfer.models import PlacementDescriptor
+from metalsurfer.models import PlacementDescriptor, ScreeningResult
+
+
+def _clear_cuda_for_gpu_test() -> None:
+    """Evict TorchSim autobatchers and release CUDA allocations between GPU tests."""
+    try:
+        from metalsurfer.optimization import clear_autobatcher_cache
+
+        clear_autobatcher_cache()
+    except (ImportError, RuntimeError):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _release_cuda_after_gpu_test(request):
+    """Free GPU memory before and after @pytest.mark.gpu tests to reduce OOM skips."""
+    if request.node.get_closest_marker("gpu"):
+        _clear_cuda_for_gpu_test()
+    yield
+    if request.node.get_closest_marker("gpu"):
+        _clear_cuda_for_gpu_test()
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -30,6 +51,13 @@ def pytest_runtest_protocol(item):
 
         return runtestprotocol(item)
     return None
+
+
+@pytest.fixture
+def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Run a test in an isolated temporary working directory."""
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +136,7 @@ def make_placement_descriptor(
     site_type: str | None = "atop",
     x: float = 0.0,
     y: float = 0.0,
-    z: float = 2.5,
+    z_offset: float = 2.5,
     shape: str = "round",
     **kwargs: object,
 ) -> PlacementDescriptor:
@@ -127,12 +155,55 @@ def make_placement_descriptor(
         "placement_index": placement_id,
         "x": x,
         "y": y,
-        "z": z,
+        "z_offset": z_offset,
         "shape": shape,
         "slab_indices": None,
+        "quat_w": None,
+        "quat_x": None,
+        "quat_y": None,
+        "quat_z": None,
     }
     defaults.update(kwargs)
     return PlacementDescriptor(**defaults)
+
+
+def make_screening_result(
+    molecule: str = "water",
+    placement_id: int = 0,
+    energy_adsorption: float = -1.0,
+    energy_slab: float = -200.0,
+    energy_adsorbate: float = -10.0,
+    atoms: Atoms | None = None,
+    slab_size: int | None = None,
+    distance: float = 2.5,
+    placement_descriptor: PlacementDescriptor | None = None,
+    **kwargs: object,
+) -> ScreeningResult:
+    """Build a compact ScreeningResult with sensible test defaults."""
+    slab = make_slab() if (atoms is None or slab_size is None) else None
+    result_atoms = (
+        atoms if atoms is not None else place_molecule_on_slab(slab, make_water())
+    )
+    result_slab_size = slab_size if slab_size is not None else len(slab)
+    descriptor = (
+        placement_descriptor
+        if placement_descriptor is not None
+        else make_placement_descriptor(placement_id=placement_id)
+    )
+    defaults: dict[str, object] = {
+        "molecule": molecule,
+        "placement_id": placement_id,
+        "energy_adslab": energy_slab + energy_adsorbate + energy_adsorption,
+        "energy_slab": energy_slab,
+        "energy_adsorbate": energy_adsorbate,
+        "energy_adsorption": energy_adsorption,
+        "atoms": result_atoms,
+        "slab_size": result_slab_size,
+        "distance": distance,
+        "placement_descriptor": descriptor,
+    }
+    defaults.update(kwargs)
+    return ScreeningResult(**defaults)
 
 
 # ---------------------------------------------------------------------------
@@ -160,3 +231,46 @@ def place_molecule_on_slab(
     combined.set_cell(slab.get_cell())
     combined.set_pbc(slab.get_pbc())
     return combined
+
+
+def assert_lines_contain(text: str, expected_lines: list[str]) -> None:
+    """Assert that every expected line appears in *text*.
+
+    Keeps output-format tests focused on semantic lines and avoids brittle
+    punctuation/order coupling for unrelated lines.
+    """
+    lines = set(text.splitlines())
+    missing = [line for line in expected_lines if line not in lines]
+    assert not missing, f"Missing lines: {missing}\n---\n{text}"
+
+
+# ---------------------------------------------------------------------------
+# nanoparticle / porous material builders
+# ---------------------------------------------------------------------------
+
+
+def make_nanoparticle() -> Atoms:
+    """Au₁₃ icosahedral cluster (no PBC)."""
+    # Central atom + 12 vertices of an icosahedron at bond length ~2.88 Å
+    phi = (1 + np.sqrt(5)) / 2  # golden ratio
+    d = 2.88 / np.sqrt(1 + phi**2)  # scale so nn distance ≈ 2.88 Å
+    verts = []
+    for s1 in (-1, 1):
+        for s2 in (-1, 1):
+            verts.append([0, s1 * d, s2 * phi * d])
+            verts.append([s1 * d, s2 * phi * d, 0])
+            verts.append([s2 * phi * d, 0, s1 * d])
+    positions = [[0.0, 0.0, 0.0]] + verts
+    atoms = Atoms("Au13", positions=positions)
+    atoms.set_cell([25, 25, 25])
+    atoms.set_pbc([False, False, False])
+    return atoms
+
+
+def make_porous_framework() -> Atoms:
+    """Load SiO₂ porous framework from bundled CIF (mp-1195265, Pnma)."""
+    from ase.io import read
+
+    cif_path = Path(__file__).parent / "test_files" / "SiO2.cif"
+    atoms = read(str(cif_path))
+    return atoms

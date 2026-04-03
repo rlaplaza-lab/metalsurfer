@@ -42,19 +42,6 @@ class TestCreateConformers:
         result = create_conformers_from_smiles("not_valid!!!", config=config)
         assert result is None
 
-    def test_deterministic_with_same_seed(self):
-        cfg1 = AdsorptionConfig(num_conformers=5, seed=42)
-        cfg2 = AdsorptionConfig(num_conformers=5, seed=42)
-        r1 = create_conformers_from_smiles("CCO", config=cfg1)
-        r2 = create_conformers_from_smiles("CCO", config=cfg2)
-        assert r1 is not None and r2 is not None
-        c1, e1 = r1
-        c2, e2 = r2
-        assert len(c1) == len(c2)
-        for a, b in zip(c1, c2, strict=False):
-            assert np.allclose(a.get_positions(), b.get_positions(), atol=1e-10)
-        assert np.allclose(e1, e2, atol=1e-10)
-
     def test_different_seed_may_differ(self):
         """Different seeds can produce different conformers for flexible molecules."""
         cfg1 = AdsorptionConfig(num_conformers=10, seed=1)

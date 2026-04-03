@@ -2,183 +2,321 @@
 
 Generic adsorption-energy screening on arbitrary surfaces.
 
+## Project Status (April 2026)
+
+- The workflow layer is now modularized under `src/metalsurfer/workflow/` (`core`, `screening`, `bayesian`, `saturation`, `reference`, `shared`) rather than a single monolithic module.
+- Public API run modes are stable and available from `metalsurfer` top-level imports.
+- Slab preparation helpers have a dedicated import path: `metalsurfer.surface_prep`.
+- Placement generation uses unified Voronoi-based site generation across slabs, nanoparticles, and porous materials.
+
 ## Install
+
+Requires **Python 3.12 or newer**.
+
+Core dependencies only:
 
 ```bash
 pip install -e .
 ```
 
-## Usage
-
-### CLI: base slab
-
-Screen molecules on a clean surface (e.g. Ru(001)):
+For TorchSim/FairChem-backed relaxation and the developer toolchain:
 
 ```bash
-adsorption-screening --smiles-file molecules.csv --bulk-id mp-33
+pip install -e ".[mlip,dev]"
 ```
 
-### CLI: alloyed slab
+## Python API
 
-Replace 25 % of the Ru atoms with Cu before screening:
+`metalsurfer` exposes three high-level run modes through the library API:
 
-```bash
-adsorption-screening \
-    --smiles-file molecules.csv \
-    --bulk-id mp-33 \
-    --alloy-host Ru --alloy-guest Cu --alloy-fraction 0.25
+- `run_adsorption(...)`: standard multi-molecule screening from an in-memory list of `(smiles, molecule_name)` tuples.
+- `run_adsorption_bo(...)`: Bayesian optimization-guided screening over the same campaign interface.
+- `run_saturation(...)`: sequential saturation from a SMILES CSV, including optional multi-molecule competitive saturation.
+
+All three run modes also accept a CSV path as the `molecules` argument (e.g. `molecules="smiles.csv"`), and can be supplied a `list[tuple[str, str]]` of `(smiles, name)` pairs for in-memory use.
+
+### ASE Atoms Input (Important)
+
+All run entry points accept a plain ASE `Atoms` object directly. This is the recommended path for user scripts.
+
+Example:
+
+```python
+from ase.build import fcc111
+
+from metalsurfer import AdsorptionConfig, run_adsorption
+
+slab_atoms = fcc111("Ru", size=(3, 3, 3), vacuum=12.0)
+
+config = AdsorptionConfig(material_type="slab", seed=42)
+result = run_adsorption(
+    slab=slab_atoms,
+    molecules=[("O", "water")],
+    config=config,
+    surface_type="ru111_from_ase_atoms",
+)
 ```
 
-### CLI: adatom-decorated slab
+`create_slab_from_atoms(...)` remains available for compatibility, but most users do not need explicit wrapping.
 
-Deposit Sn adatoms at 20 % of the hollow sites:
+### 1. Standard Screening
 
-```bash
-adsorption-screening \
-    --smiles-file molecules.csv \
-    --bulk-id mp-33 \
-    --adatom-symbol Sn --adatom-coverage 0.2
+Use the campaign API when your driving script already has the molecule list in memory and you want a typed `BindingCampaignResult` back.
+
+```python
+from metalsurfer import AdsorptionConfig, create_slab_from_bulk, run_adsorption
+
+config = AdsorptionConfig(
+    material_type="slab",
+    seed=42,
+    num_conformers=8,
+    num_placements=80,
+)
+
+slab = create_slab_from_bulk(
+    bulk_id="mp-33",
+    miller_indices=(0, 0, 1),
+)
+
+molecules = [
+    ("CC", "ethane"),
+    ("C=C", "ethene"),
+    ("C#C", "acetylene"),
+]
+
+result = run_adsorption(
+    slab=slab,
+    molecules=molecules,
+    config=config,
+    surface_type="Ru001",
+)
+
+print(result.mode)
+print(result.total_configurations)
+for summary in result.molecule_summaries:
+    print(summary.molecule, summary.best_adsorption_energy)
 ```
 
-### CLI: combined (alloy + adatom)
+Pass a CSV path to `run_adsorption` for file-driven batch screening:
 
-Both modifications can be combined in one run. Alloying is applied first,
-then adatom deposition:
+```python
+from metalsurfer import AdsorptionConfig, create_slab_from_bulk, run_adsorption
 
-```bash
-adsorption-screening \
-    --smiles-file molecules.csv \
-    --bulk-id mp-33 \
-    --alloy-host Ru --alloy-guest Cu --alloy-fraction 0.25 \
-    --adatom-symbol Sn --adatom-coverage 0.2
+config = AdsorptionConfig(material_type="slab", seed=42)
+slab = create_slab_from_bulk(bulk_id="mp-33", miller_indices=(0, 0, 1))
+
+result = run_adsorption(
+    slab=slab,
+    molecules="molecules.csv",
+    config=config,
+    surface_type="Ru001",
+)
 ```
 
-### CLI: sequential saturation
+### 2. Bayesian Screening
 
-Add molecules one at a time until the slab is saturated (no negative
-adsorption energy found). For each molecule in the SMILES file, runs an
-independent saturation loop starting from the clean slab:
-
-```bash
-adsorption-screening \
-    --smiles-file molecules.csv \
-    --bulk-id mp-33 \
-    --saturation
-```
-
-Outputs include `saturation_summary.csv`, `saturation_details.csv`, and
-per-step XYZ structures in `xyz_structures/{molecule}_saturation/`.
-
-### CLI: Bayesian screening
-
-Use surrogate-guided placement selection (Random Forest + UCB) to explore
-fewer placements while targeting low adsorption energies:
-
-```bash
-adsorption-screening \
-    --smiles-file molecules.csv \
-    --bulk-id mp-33 \
-    --bayesian
-```
-
-Optional BO knobs: `--bo-initial-random`, `--bo-batch-size`, `--bo-total-budget`.
-
-### Python API
-
-The same workflow is available as a library. Below is a minimal example
-that builds a slab, optionally modifies it, and runs the screening:
+Bayesian mode keeps the same physical pipeline and output types, but replaces exhaustive placement evaluation with surrogate-guided candidate selection.
 
 ```python
 from metalsurfer import (
     AdsorptionConfig,
     create_slab_from_bulk,
-    substitute_alloy,
+    run_adsorption_bo,
+)
+
+config = AdsorptionConfig(
+    material_type="slab",
+    seed=42,
+    bo_enabled=True,
+    bo_initial_random=20,
+    bo_batch_size=10,
+    bo_total_budget=60,
+    bo_acquisition="lcb",
+    bo_surrogate="random_forest",
+)
+
+slab = create_slab_from_bulk(bulk_id="mp-33", miller_indices=(0, 0, 1))
+
+result = run_adsorption_bo(
+    slab=slab,
+    molecules=[("O=C=O", "co2"), ("O", "water")],
+    config=config,
+    surface_type="Ru001_bo",
+)
+
+print(result.mode)
+print(result.failure_summaries)
+```
+
+Relevant BO configuration fields live on `AdsorptionConfig`:
+
+- `bo_initial_random`, `bo_batch_size`, `bo_total_budget`
+- `bo_acquisition` with `"lcb"`, `"ei"`, or `"pi"`
+- `bo_surrogate` with `"random_forest"`, `"extra_trees"`, `"gradient_boost"`, or `"ridge"`
+- `bo_include_failure_negatives` and `bo_failure_penalty_*` for learning from failed placements
+- `bo_transfer_*` for transfer-enabled saturation runs
+
+### 3. Sequential Saturation
+
+Saturation mode repeatedly adsorbs the current best configuration onto the evolving slab until adsorption is no longer favorable or no valid placements remain.
+
+```python
+from metalsurfer import AdsorptionConfig, create_slab_from_bulk, run_saturation
+from metalsurfer.io_results import save_saturation_results
+
+config = AdsorptionConfig(
+    material_type="slab",
+    seed=42,
+    num_conformers=6,
+    num_placements=60,
+)
+
+slab = create_slab_from_bulk(bulk_id="mp-33", miller_indices=(0, 0, 1))
+
+saturation_results = run_saturation(
+    slab=slab,
+    molecules="molecules.csv",
+    config=config,
+    surface_type="Ru001_sat",
+)
+
+save_saturation_results(saturation_results, surface_type="Ru001_sat", config=config)
+
+for result in saturation_results:
+    print(result.molecule, result.n_molecules_at_saturation)
+```
+
+Important saturation behaviors:
+
+- Auto-resize is only allowed on the first adsorption step so later steps keep the evolved slab footprint.
+- When `bo_enabled=True`, the saturation loop can reuse prior-step BO observations through the `bo_transfer_*` settings.
+- When `multi_molecule_saturation=True` and the CSV contains multiple molecules, the workflow switches to competitive saturation, where molecules compete for each step and the best overall adsorption wins.
+- Competitive saturation also supports `bo_enabled=True`. In that mode, each adsorbate trains and carries forward its own BO state independently; BO observations are not shared across adsorbates.
+- Recommended validation split: keep local validation focused on mocked or lightweight saturation tests, and reserve full-stack BO competitive saturation checks for a dedicated `gpu` + `slow` integration test in a GPU-capable environment.
+
+### Surface Setup And Modifiers
+
+The surface can be prepared programmatically before any run mode. Alloy substitution is applied first, then adatom deposition if both are used.
+
+`calculator` is **optional** for both `substitute_alloy(...)` and `deposit_adatoms(...)`:
+
+- Without a calculator: a valid modified slab is still created (fast structural modification).
+- With a calculator: random variants are energy-scored and the lowest-energy variant is selected.
+- For `substitute_alloy(...)`, optional post-selection relaxation only runs when both `relax=True` and `calculator` is provided.
+
+Fast structural modification (no energy ranking):
+
+```python
+from metalsurfer.surface_prep import (
+    create_slab_from_bulk,
     deposit_adatoms,
-    run_screening,
-    setup_calculator,
+    substitute_alloy,
 )
 
-config = AdsorptionConfig(seed=42, num_conformers=5, num_placements=50)
-
-# 1. Build the base slab
 slab = create_slab_from_bulk(bulk_id="mp-33", miller_indices=(0, 0, 1))
 
-# 2. (optional) Alloy substitution — replace 25 % Ru with Cu
-calc = setup_calculator(config.model_name, config.device)
 slab = substitute_alloy(
-    slab, host_symbol="Ru", guest_symbol="Cu",
-    guest_fraction=0.25, calculator=calc, config=config,
+    slab,
+    host_symbol="Ru",
+    guest_symbol="Cu",
+    guest_fraction=0.25,
 )
 
-# 3. (optional) Adatom deposition — place Sn at 20 % of hollow sites
 slab = deposit_adatoms(
-    slab, adatom_symbol="Sn", coverage_fraction=0.2,
-    calculator=calc, config=config,
+    slab,
+    adatom_symbol="Sn",
+    coverage_fraction=0.20,
 )
-
-# 4. Run adsorption screening
-results = run_screening(slab, smiles_file="molecules.csv", config=config)
 ```
 
-Sequential saturation (add molecules until E_ads >= 0):
+Energy-ranked variant selection (recommended when preparing a realistic modified surface):
 
 ```python
-from metalsurfer import (
-    AdsorptionConfig,
+from metalsurfer import AdsorptionConfig, setup_single_model
+from metalsurfer.surface_prep import (
     create_slab_from_bulk,
-    run_saturation_screening,
-    setup_calculator,
+    deposit_adatoms,
+    substitute_alloy,
 )
-from metalsurfer.io_results import save_saturation_results, setup_directories
 
-config = AdsorptionConfig(seed=42, num_conformers=5, num_placements=50, saturation=True)
+config = AdsorptionConfig(material_type="slab")
 slab = create_slab_from_bulk(bulk_id="mp-33", miller_indices=(0, 0, 1))
+calculator, _ = setup_single_model(config.model_name, config.device)
 
-saturation_results = run_saturation_screening(
-    slab, smiles_file="molecules.csv", config=config, surface_type="Ru001"
+slab = substitute_alloy(
+    slab,
+    host_symbol="Ru",
+    guest_symbol="Cu",
+    guest_fraction=0.25,
+    calculator=calculator,
+    config=config,
 )
-setup_directories(["Ru001"])
-save_saturation_results(saturation_results, surface_type="Ru001")
 
-for sr in saturation_results:
-    print(f"{sr.molecule}: {sr.n_molecules_at_saturation} molecules at saturation")
+slab = deposit_adatoms(
+    slab,
+    adatom_symbol="Sn",
+    coverage_fraction=0.20,
+    calculator=calculator,
+    config=config,
+)
 ```
 
-Bayesian screening (surrogate-guided placement selection): use
-`run_screening_bayesian` with `AdsorptionConfig(bo_enabled=True, ...)`.
-Key options: `bo_initial_random`, `bo_batch_size`, `bo_total_budget`,
-`bo_ucb_kappa` (defaults in `AdsorptionConfig`).
+`AdsorptionConfig.material_type` must be chosen explicitly:
 
-Both `guest_fraction` and `coverage_fraction` must be in `[0, 1]`;
-a value of `0` is treated as a no-op (the unmodified slab is returned).
+- `"slab"`: in-plane periodic surfaces.
+- `"nanoparticle"`: non-periodic clusters.
+- `"porous"`: fully periodic porous frameworks.
 
-See `tests/` for examples.
+This choice affects site generation, adsorption validation, and distance handling throughout the workflow.
+
+## What The Core Pipeline Does
+
+Across all run modes, Metalsurfer follows the same structure:
+
+1. Build or accept a surface structure.
+2. Generate and deduplicate molecular conformers.
+3. Enumerate deterministic `PlacementSpec` candidates over conformer, site, orientation, tilt, azimuth, and height.
+4. Materialize placements into full adsorbate-slab structures.
+5. Relax structures with the configured MLIP backend.
+6. Validate adsorption geometry and filter decomposed, desorbed, or duplicate structures.
+7. Rank surviving structures and persist structures, CSV summaries, and metadata.
+
+Placement generation is Voronoi-based and works across slabs, nanoparticles, and porous materials. Bayesian mode changes candidate selection, not the downstream physics or filtering stack.
+
+## Results And Persistence
+
+The output directory is `results_{surface_type}`. Depending on run mode, Metalsurfer writes:
+
+- `adsorption_energies_detailed.csv`
+- `adsorption_energy_summary.csv`
+- `saturation_details.csv`
+- `saturation_summary.csv`
+- `run_metadata.json`
+- `xyz_structures/...`
+- `vasp_inputs/...`
+
+Campaign APIs save structures and summary tables by default. Workflow APIs return typed results and can be paired with `save_summary_results(...)`, `save_saturation_results(...)`, `save_multi_mol_saturation_results(...)`, `write_run_metadata(...)`, and `write_run_settings(...)` for explicit persistence control.
 
 ## Development
 
-- Tests: `pytest tests/`
-- Lint/format: `ruff check . && ruff format .`
-
-### Quick verification for slab modifiers
-
-Run just the surface-modifier and filter tests (fast, no GPU required):
+Run the local checks with:
 
 ```bash
-pytest tests/test_surfaces.py tests/test_filters.py -v
+ruff check .
+ruff format --check .
+pytest tests/ -m "not dependency_behavior and not mlip and not gpu and not slow"
 ```
 
-### Quick verification for saturation
-
-Run the saturation unit tests (no MLIP/GPU required):
+For GPU and MLIP-heavy validation, prefer the helper script (uses `$CONDA_PREFIX/bin/python` when your conda env is active):
 
 ```bash
-pytest tests/test_saturation.py -v
+./scripts/run_gpu_tests.sh
 ```
 
-To run the full saturation integration test (real MLIP on GPU):
+To pin a specific interpreter:
 
 ```bash
-pytest tests/test_saturation.py -m "mlip and gpu" -v
+bash scripts/run_gpu_tests.sh "$(command -v python)"
 ```
 
-Use `CUDA_VISIBLE_DEVICES=""` if you see CUDA OOM errors when running with GPU visible.
+Design details and module-level architecture are documented in [CORE_SYSTEM_EXPLANATION.md](CORE_SYSTEM_EXPLANATION.md).

@@ -48,21 +48,26 @@ def test_ts_optimizer_custom():
     assert config.steps_between_swaps == 10
 
 
-def test_ts_optimizer_invalid_rejected():
-    with pytest.raises(ValueError, match="ts_optimizer"):
-        AdsorptionConfig(ts_optimizer="adam")
-
-
-def test_steps_between_swaps_invalid_rejected():
-    with pytest.raises(ValueError, match="steps_between_swaps"):
-        AdsorptionConfig(steps_between_swaps=-1)
+@pytest.mark.parametrize(
+    ("kwargs", "error_match"),
+    [
+        ({"ts_optimizer": "adam"}, "ts_optimizer"),
+        ({"steps_between_swaps": -1}, "steps_between_swaps"),
+    ],
+)
+def test_optimizer_config_invalid_rejected(kwargs, error_match):
+    with pytest.raises(ValueError, match=error_match):
+        AdsorptionConfig(**kwargs)
 
 
 def test_autobatcher_config_defaults():
     config = AdsorptionConfig()
     assert config.autobatcher_max_memory_padding == 0.5
     assert config.autobatcher_max_memory_scaler is None
-    assert config.autobatcher_max_atoms_to_try == 100_000
+    assert config.autobatcher_max_atoms_to_try is None
+    assert config.saturation_autobatcher_reuse is True
+    assert config.saturation_autobatcher_reuse_growth_atoms == 32
+    assert config.saturation_autobatcher_reuse_growth_fraction == 0.1
 
 
 def test_autobatcher_config_custom():
@@ -70,10 +75,21 @@ def test_autobatcher_config_custom():
         autobatcher_max_memory_padding=0.7,
         autobatcher_max_memory_scaler=500.0,
         autobatcher_max_atoms_to_try=50_000,
+        saturation_autobatcher_reuse=False,
+        saturation_autobatcher_reuse_growth_atoms=16,
+        saturation_autobatcher_reuse_growth_fraction=0.25,
     )
     assert config.autobatcher_max_memory_padding == 0.7
     assert config.autobatcher_max_memory_scaler == 500.0
     assert config.autobatcher_max_atoms_to_try == 50_000
+    assert config.saturation_autobatcher_reuse is False
+    assert config.saturation_autobatcher_reuse_growth_atoms == 16
+    assert config.saturation_autobatcher_reuse_growth_fraction == 0.25
+
+
+def test_autobatcher_config_custom_none_probe_cap():
+    config = AdsorptionConfig(autobatcher_max_atoms_to_try=None)
+    assert config.autobatcher_max_atoms_to_try is None
 
 
 def test_autobatcher_max_memory_padding_out_of_range_rejected():
@@ -83,14 +99,28 @@ def test_autobatcher_max_memory_padding_out_of_range_rejected():
         AdsorptionConfig(autobatcher_max_memory_padding=1.5)
 
 
-def test_autobatcher_max_memory_scaler_negative_rejected():
-    with pytest.raises(ValueError, match="autobatcher_max_memory_scaler"):
-        AdsorptionConfig(autobatcher_max_memory_scaler=-1.0)
-
-
-def test_autobatcher_max_atoms_to_try_zero_rejected():
-    with pytest.raises(ValueError, match="autobatcher_max_atoms_to_try.*positive"):
-        AdsorptionConfig(autobatcher_max_atoms_to_try=0)
+@pytest.mark.parametrize(
+    ("kwargs", "error_match"),
+    [
+        ({"autobatcher_max_memory_scaler": -1.0}, "autobatcher_max_memory_scaler"),
+        ({"autobatcher_max_atoms_to_try": 0}, "autobatcher_max_atoms_to_try.*positive"),
+        (
+            {"saturation_autobatcher_reuse_growth_atoms": 0},
+            "saturation_autobatcher_reuse_growth_atoms.*positive",
+        ),
+        (
+            {"saturation_autobatcher_reuse_growth_fraction": -0.01},
+            "saturation_autobatcher_reuse_growth_fraction",
+        ),
+        (
+            {"saturation_autobatcher_reuse_growth_fraction": 1.1},
+            "saturation_autobatcher_reuse_growth_fraction",
+        ),
+    ],
+)
+def test_autobatcher_invalid_rejected(kwargs, error_match):
+    with pytest.raises(ValueError, match=error_match):
+        AdsorptionConfig(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -241,9 +271,10 @@ def test_invalid_kpoints_length():
         AdsorptionConfig(vasp_kpoints=(4, 4))
 
 
-def test_zero_kpoint_rejected():
+@pytest.mark.parametrize("kpoints", [(4, 0, 1), (0, 4, 1), (4, 4, 0)])
+def test_zero_kpoint_rejected(kpoints):
     with pytest.raises(ValueError, match="vasp_kpoints.*positive integer"):
-        AdsorptionConfig(vasp_kpoints=(4, 0, 1))
+        AdsorptionConfig(vasp_kpoints=kpoints)
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +288,7 @@ def test_empty_model_name_rejected():
 
 
 # ---------------------------------------------------------------------------
-# placement_mode, min_contact_ratio, max_initial_distance
+# min_contact_ratio, max_initial_distance
 # ---------------------------------------------------------------------------
 
 
@@ -285,18 +316,6 @@ def test_conformer_sampling_invalid_rejected():
         AdsorptionConfig(conformer_sampling="invalid")
 
 
-@pytest.mark.parametrize("mode", ["random", "sites", "auto", "envelope"])
-def test_placement_mode_valid_values(mode):
-    """placement_mode accepts random, sites, auto, envelope."""
-    config = AdsorptionConfig(placement_mode=mode)
-    assert config.placement_mode == mode
-
-
-def test_placement_mode_invalid_rejected():
-    with pytest.raises(ValueError, match="placement_mode"):
-        AdsorptionConfig(placement_mode="invalid")
-
-
 def test_flat_aromatic_parallel_fraction_valid():
     """flat_aromatic_parallel_fraction accepts values in [0, 1]."""
     config = AdsorptionConfig(flat_aromatic_parallel_fraction=0.5)
@@ -307,11 +326,22 @@ def test_flat_aromatic_parallel_fraction_valid():
     assert config.flat_aromatic_parallel_fraction == 1.0
 
 
-def test_flat_aromatic_parallel_fraction_out_of_range_rejected():
+@pytest.mark.parametrize("fraction", [-0.1, 1.5])
+def test_flat_aromatic_parallel_fraction_out_of_range_rejected(fraction):
     with pytest.raises(ValueError, match="flat_aromatic_parallel_fraction"):
-        AdsorptionConfig(flat_aromatic_parallel_fraction=-0.1)
-    with pytest.raises(ValueError, match="flat_aromatic_parallel_fraction"):
-        AdsorptionConfig(flat_aromatic_parallel_fraction=1.5)
+        AdsorptionConfig(flat_aromatic_parallel_fraction=fraction)
+
+
+def test_voronoi_site_enrichment_default_and_override():
+    config = AdsorptionConfig()
+    assert config.voronoi_site_enrichment is True
+    config = AdsorptionConfig(voronoi_site_enrichment=False)
+    assert config.voronoi_site_enrichment is False
+
+
+def test_voronoi_site_enrichment_requires_bool():
+    with pytest.raises(ValueError, match="voronoi_site_enrichment"):
+        AdsorptionConfig(voronoi_site_enrichment="yes")
 
 
 def test_min_contact_ratio_valid():
@@ -319,11 +349,10 @@ def test_min_contact_ratio_valid():
     assert config.min_contact_ratio == 0.9
 
 
-def test_min_contact_ratio_out_of_range_rejected():
+@pytest.mark.parametrize("ratio", [0.3, 1.5])
+def test_min_contact_ratio_out_of_range_rejected(ratio):
     with pytest.raises(ValueError, match="min_contact_ratio"):
-        AdsorptionConfig(min_contact_ratio=0.3)
-    with pytest.raises(ValueError, match="min_contact_ratio"):
-        AdsorptionConfig(min_contact_ratio=1.5)
+        AdsorptionConfig(min_contact_ratio=ratio)
 
 
 def test_max_initial_distance_optional():
@@ -356,14 +385,10 @@ def test_default_min_pbc_image_separation():
     assert config.min_pbc_image_separation == 8.0
 
 
-def test_zero_min_pbc_image_separation_rejected():
+@pytest.mark.parametrize("separation", [0.0, -1.0])
+def test_non_positive_min_pbc_image_separation_rejected(separation):
     with pytest.raises(ValueError, match="min_pbc_image_separation.*positive"):
-        AdsorptionConfig(min_pbc_image_separation=0.0)
-
-
-def test_negative_min_pbc_image_separation_rejected():
-    with pytest.raises(ValueError, match="min_pbc_image_separation.*positive"):
-        AdsorptionConfig(min_pbc_image_separation=-1.0)
+        AdsorptionConfig(min_pbc_image_separation=separation)
 
 
 def test_auto_resize_disabled_skips_separation_check():
@@ -383,3 +408,82 @@ def test_error_message_includes_field_and_value():
         msg = str(e)
         assert "fmax" in msg
         assert "-0.5" in msg
+
+
+# ---------------------------------------------------------------------------
+# Bayesian optimisation (BO) config
+# ---------------------------------------------------------------------------
+
+
+def test_bo_defaults():
+    c = AdsorptionConfig()
+    assert c.bo_enabled is False
+    assert c.bo_initial_random == 10
+    assert c.bo_batch_size == 10
+    assert c.bo_total_budget == 100
+    assert c.bo_ucb_kappa == 1.0
+    assert c.bo_acquisition == "lcb"
+    assert c.bo_surrogate == "random_forest"
+    assert c.bo_candidate_pool_size is None
+    assert c.bo_include_failure_negatives is True
+    assert c.bo_failure_penalty_default == 10.0
+    assert c.bo_failure_penalty_overrides["generation"] > 0.0
+    assert c.bo_transfer_enabled is False
+    assert c.bo_transfer_weight_cap == 0.35
+    assert c.bo_transfer_trust_patience == 2
+
+
+def test_bo_initial_exceeds_budget_raises():
+    with pytest.raises(ValueError, match="bo_initial_random"):
+        AdsorptionConfig(bo_enabled=True, bo_initial_random=200, bo_total_budget=100)
+
+
+def test_bo_invalid_acquisition_surrogate_kappa():
+    with pytest.raises(ValueError, match="bo_ucb_kappa"):
+        AdsorptionConfig(bo_enabled=True, bo_ucb_kappa=-1.0)
+    with pytest.raises(ValueError, match="bo_acquisition"):
+        AdsorptionConfig(bo_enabled=True, bo_acquisition="invalid")
+    with pytest.raises(ValueError, match="bo_surrogate"):
+        AdsorptionConfig(bo_enabled=True, bo_surrogate="invalid")
+
+
+def test_bo_candidate_pool_size_validation():
+    c = AdsorptionConfig(bo_enabled=True, bo_candidate_pool_size=500)
+    assert c.bo_candidate_pool_size == 500
+    with pytest.raises(ValueError):
+        AdsorptionConfig(bo_enabled=True, bo_candidate_pool_size=0)
+
+
+def test_bo_failure_penalty_validation():
+    c = AdsorptionConfig(
+        bo_enabled=True,
+        bo_failure_penalty_default=22.5,
+        bo_failure_penalty_overrides={"validation": 17.0},
+    )
+    assert c.bo_failure_penalty_default == 22.5
+    assert c.bo_failure_penalty_overrides["validation"] == 17.0
+    with pytest.raises(ValueError, match="bo_failure_penalty_default"):
+        AdsorptionConfig(bo_enabled=True, bo_failure_penalty_default=-1.0)
+    with pytest.raises(ValueError, match="bo_failure_penalty_overrides values"):
+        AdsorptionConfig(
+            bo_enabled=True,
+            bo_failure_penalty_overrides={"validation": -0.1},
+        )
+
+
+def test_bo_transfer_config_validation():
+    c = AdsorptionConfig(
+        bo_enabled=True,
+        bo_transfer_enabled=True,
+        bo_transfer_weight_cap=0.25,
+        bo_transfer_min_step_observations=3,
+        bo_transfer_similarity_lengthscale=0.5,
+        bo_transfer_min_similarity=0.1,
+        bo_transfer_trust_patience=3,
+        bo_transfer_mae_tolerance=0.02,
+        bo_transfer_exploration_fraction=0.15,
+    )
+    assert c.bo_transfer_enabled is True
+    assert c.bo_transfer_weight_cap == 0.25
+    with pytest.raises(ValueError, match="bo_transfer_weight_cap"):
+        AdsorptionConfig(bo_enabled=True, bo_transfer_weight_cap=1.0)

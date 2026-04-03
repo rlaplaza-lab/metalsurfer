@@ -9,13 +9,22 @@ Covers:
 
 import json
 import logging
+import sys
+from contextlib import contextmanager
+from io import StringIO
 
 import numpy as np
 import pandas as pd
 import pytest
 from ase import Atoms
 
-from metalsurfer._logging import ContextFilter, get_log_context, log_context
+from metalsurfer._logging import (
+    ContextFilter,
+    configure_logging,
+    get_log_context,
+    log_context,
+    torchsim_output_capture,
+)
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.filters import (
     _adjacency_mask,
@@ -28,6 +37,40 @@ from metalsurfer.io_results import write_run_metadata
 from metalsurfer.workflow import load_molecules
 
 from .conftest import make_slab, make_water, place_molecule_on_slab
+
+
+@contextmanager
+def _configured_logger(
+    logger: logging.Logger,
+    *,
+    level: int = logging.INFO,
+    propagate: bool = False,
+    handler: logging.Handler | None = None,
+):
+    old_handlers = list(logger.handlers)
+    old_level = logger.level
+    old_propagate = logger.propagate
+    logger.handlers.clear()
+    if handler is not None:
+        logger.addHandler(handler)
+    logger.setLevel(level)
+    logger.propagate = propagate
+    try:
+        yield
+    finally:
+        logger.handlers = old_handlers
+        logger.setLevel(old_level)
+        logger.propagate = old_propagate
+
+
+class _CaptureHandler(logging.Handler):
+    def __init__(self, sink: list[logging.LogRecord]):
+        super().__init__()
+        self._sink = sink
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self._sink.append(record)
+
 
 # ---------------------------------------------------------------------------
 # load_molecules — single CSV read
@@ -176,6 +219,22 @@ class TestRunMetadata:
 
 
 class TestLogContext:
+    def test_preconfigure_formatter_with_ctx_prefix_does_not_fail(self):
+        """Formatter with ctx_prefix is safe before configure_logging."""
+        stream = StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(logging.Formatter("%(ctx_prefix)s%(message)s"))
+        logger = logging.getLogger("metalsurfer.preconfig_test")
+
+        try:
+            with _configured_logger(logger, handler=handler):
+                logger.info("preconfig message")
+                output = stream.getvalue()
+                assert output.strip() == "preconfig message"
+        finally:
+            logger.removeHandler(handler)
+            handler.close()
+
     def test_nested_context(self):
         with log_context(molecule="water"):
             ctx = get_log_context()
@@ -238,6 +297,121 @@ class TestLogContext:
             filt.filter(record)
             assert "molecule=water" in record.ctx_prefix
             assert "custom_key=extra_value" in record.ctx_prefix
+
+    def test_configured_logging_has_ctx_prefix_on_child_logger(self):
+        """Ensure child loggers emit records with injected ctx_prefix."""
+        logger = logging.getLogger("metalsurfer.io_results")
+
+        captured: list[logging.LogRecord] = []
+        handler = _CaptureHandler(captured)
+        with _configured_logger(logger, handler=handler):
+            with log_context(molecule="ethanol"):
+                logger.info("hello")
+
+            assert len(captured) == 1
+            assert hasattr(captured[0], "ctx_prefix")
+            assert "molecule=ethanol" in captured[0].ctx_prefix
+
+    def test_configure_logging_routes_info_to_stdout(self, monkeypatch):
+        """Regression test: INFO logs should go to stdout (HPC `.out`)."""
+        stdout = StringIO()
+        monkeypatch.setattr(sys, "stdout", stdout)
+        monkeypatch.setenv("METALSURFER_FORCE_STDOUT_LOGS", "1")
+
+        root = logging.getLogger()
+        old_root_handlers = list(root.handlers)
+        old_root_filters = list(root.filters)
+        old_root_level = root.level
+
+        # Ensure we don't depend on test-runner prior logging configuration.
+        try:
+            for handler in list(root.handlers):
+                root.removeHandler(handler)
+            for filt in list(root.filters):
+                root.removeFilter(filt)
+            root.setLevel(logging.WARNING)
+
+            configure_logging(default_level="INFO")
+
+            logger = logging.getLogger("metalsurfer.stdout_route_test")
+            old_logger_handlers = list(logger.handlers)
+            old_logger_level = logger.level
+            old_logger_propagate = logger.propagate
+            try:
+                logger.handlers.clear()
+                logger.setLevel(logging.INFO)
+                logger.propagate = True
+
+                with log_context(molecule="water"):
+                    logger.info("hello stdout routing")
+
+                out = stdout.getvalue()
+                assert "hello stdout routing" in out
+                assert "metalsurfer.stdout_route_test" in out
+                assert "[molecule=water]" in out
+
+                stream_handlers = [
+                    h for h in root.handlers if isinstance(h, logging.StreamHandler)
+                ]
+                assert any(
+                    getattr(h, "stream", None) is stdout for h in stream_handlers
+                )
+            finally:
+                logger.handlers = old_logger_handlers
+                logger.setLevel(old_logger_level)
+                logger.propagate = old_logger_propagate
+        finally:
+            for handler in list(root.handlers):
+                root.removeHandler(handler)
+            for handler in old_root_handlers:
+                root.addHandler(handler)
+            for filt in list(root.filters):
+                root.removeFilter(filt)
+            for filt in old_root_filters:
+                root.addFilter(filt)
+            root.setLevel(old_root_level)
+
+    @pytest.mark.parametrize(
+        ("to_stderr", "expected_level", "message"),
+        [
+            (False, logging.INFO, "hello torchsim"),
+            (True, logging.WARNING, "problem torchsim"),
+        ],
+    )
+    def test_torchsim_output_capture_stream_levels(
+        self, to_stderr, expected_level, message
+    ):
+        torchsim_logger = logging.getLogger("metalsurfer.torchsim")
+
+        captured: list[logging.LogRecord] = []
+        handler = _CaptureHandler(captured)
+        with _configured_logger(torchsim_logger, handler=handler):
+            with torchsim_output_capture(carriage_return_rate_limit_s=0.0):
+                if to_stderr:
+                    print(message, file=sys.stderr)
+                else:
+                    print(message)
+
+            assert len(captured) == 1
+            record = captured[0]
+            assert record.levelno == expected_level
+            assert record.name == "metalsurfer.torchsim"
+            assert record.getMessage() == message
+
+    def test_torchsim_output_capture_coalesces_carriage_returns(self):
+        torchsim_logger = logging.getLogger("metalsurfer.torchsim")
+
+        captured: list[logging.LogRecord] = []
+        handler = _CaptureHandler(captured)
+        with _configured_logger(torchsim_logger, handler=handler):
+            # Very large rate limit: only the final newline-terminated line
+            # should be emitted.
+            with torchsim_output_capture(carriage_return_rate_limit_s=9999.0):
+                sys.stdout.write("p1\rp2\rp3\n")
+
+            assert len(captured) == 1
+            assert captured[0].levelno == logging.INFO
+            assert captured[0].getMessage() == "p3"
 
 
 # ---------------------------------------------------------------------------

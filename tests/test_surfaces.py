@@ -1,7 +1,9 @@
 """Tests for surface creation, alloy substitution, and adatom deposition."""
 
 import os
+import sys
 import tempfile
+import types
 
 import numpy as np
 import pytest
@@ -17,6 +19,7 @@ from metalsurfer.surfaces import (
     auto_resize_slab_for_molecule,
     compute_minimum_supercell,
     create_slab_from_atoms,
+    create_slab_from_bulk,
     deposit_adatoms,
     substitute_alloy,
 )
@@ -41,6 +44,40 @@ class TestSlabContainer:
         # should be a copy, not the same object
         assert sc.atoms is not atoms
         assert np.allclose(sc.atoms.get_positions(), atoms.get_positions())
+
+    def test_create_slab_from_bulk_empty_candidates_raises(self, monkeypatch):
+        core = types.ModuleType("fairchem.data.oc.core")
+
+        class _FakeBulk:
+            def __init__(self, bulk_src_id_from_db):
+                self.bulk_src_id_from_db = bulk_src_id_from_db
+
+        class _FakeSlab:
+            @staticmethod
+            def from_bulk_get_specific_millers(bulk, specific_millers):
+                return []
+
+        core.Bulk = _FakeBulk
+        core.Slab = _FakeSlab
+        monkeypatch.setitem(sys.modules, "fairchem", types.ModuleType("fairchem"))
+        monkeypatch.setitem(
+            sys.modules, "fairchem.data", types.ModuleType("fairchem.data")
+        )
+        monkeypatch.setitem(
+            sys.modules, "fairchem.data.oc", types.ModuleType("fairchem.data.oc")
+        )
+        monkeypatch.setitem(sys.modules, "fairchem.data.oc.core", core)
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            pytest.raises(GeometryValidationError, match="No slabs were generated"),
+        ):
+            create_slab_from_bulk(
+                bulk_id="mp-23",
+                miller_indices=(1, 1, 1),
+                supercell=(1, 1, 1),
+                results_dir=tmpdir,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +178,20 @@ class TestSubstituteAlloy:
         slab = self._ru_slab()
         with pytest.raises(ValueError, match="guest_fraction must be between 0 and 1"):
             substitute_alloy(slab, "Ru", "Cu", guest_fraction=bad_fraction)
+
+    def test_accepts_plain_atoms_input(self):
+        atoms = make_slab(symbol="Ru")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = substitute_alloy(
+                atoms,
+                "Ru",
+                "Cu",
+                guest_fraction=0.25,
+                seed=42,
+                results_dir=tmpdir,
+            )
+        assert isinstance(result, SlabContainer)
+        assert result.atoms.get_chemical_symbols().count("Cu") > 0
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +309,20 @@ class TestDepositAdatoms:
         result = deposit_adatoms(slab, "Sn", coverage_fraction=0.0)
         assert len(result.atoms) == n_before
         assert result.atoms.get_chemical_symbols() == syms_before
+
+    def test_accepts_plain_atoms_input(self):
+        slab = self._layered_slab()
+        n_before = len(slab.atoms)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = deposit_adatoms(
+                slab.atoms,
+                "Sn",
+                coverage_fraction=0.2,
+                seed=42,
+                results_dir=tmpdir,
+            )
+        assert isinstance(result, SlabContainer)
+        assert len(result.atoms) > n_before
 
 
 # ---------------------------------------------------------------------------

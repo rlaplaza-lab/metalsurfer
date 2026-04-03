@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+import metalsurfer.optimization as optimization_mod
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.optimization import (
     TorchSimCalculator,
@@ -22,6 +23,19 @@ def _make_atoms_with_cell() -> Atoms:
     slab = make_slab(nx=2, ny=2, n_layers=2)
     slab.set_pbc([True, True, True])
     return slab
+
+
+@pytest.fixture
+def stub_autobatcher(monkeypatch: pytest.MonkeyPatch):
+    optimization_mod._AUTOBATCHER_CACHE.clear()
+    monkeypatch.setattr(optimization_mod, "ts", object())
+    monkeypatch.setattr(
+        optimization_mod,
+        "InFlightAutoBatcher",
+        lambda *args, **kwargs: object(),
+    )
+    yield
+    optimization_mod._AUTOBATCHER_CACHE.clear()
 
 
 @pytest.mark.mlip
@@ -51,7 +65,7 @@ class TestTorchSimCalculator:
 
         fake_result = [
             {
-                "energy": torch.tensor([[energy_val]], dtype=torch.float32),
+                "potential_energy": torch.tensor([[energy_val]], dtype=torch.float32),
                 "forces": torch.randn(n_atoms, 3, dtype=torch.float32) * 0.1,
             }
         ]
@@ -117,59 +131,145 @@ class TestSetupSingleModel:
             )
             mock_get_ab.assert_not_called()
         assert len(results) == 1
-        assert results[0] is not None
         atoms, energy = results[0]
         assert np.isfinite(energy)
 
 
-@pytest.mark.mlip
-@pytest.mark.skipif(
-    not has_mlip_stack,
-    reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
-)
-def test_optimize_isolated_sequentially_skips_autobatcher_unit():
-    """Unit test: with optimize_isolated_sequentially=True, _get_inflight_autobatcher is not called.
+def test_get_inflight_autobatcher_saturation_reuses_small_growth(stub_autobatcher):
+    """Saturation mode reuses prior key for small max_n_atoms increase."""
+    model = type("MockModel", (), {"device": "cpu"})()
+    config = AdsorptionConfig(
+        device="cpu",
+        saturation_autobatcher_reuse_growth_atoms=8,
+        saturation_autobatcher_reuse_growth_fraction=0.0,
+    )
+    ab1, key1, reused1 = optimization_mod._get_inflight_autobatcher(
+        model,
+        100,
+        config=config,
+        saturation_reuse=True,
+    )
+    ab2, key2, reused2 = optimization_mod._get_inflight_autobatcher(
+        model,
+        105,
+        config=config,
+        saturation_reuse=True,
+    )
+    assert ab1 is not None
+    assert ab2 is ab1
+    assert key2 == key1
+    assert reused1 is False
+    assert reused2 is True
 
-    Uses mocks so it runs without GPU; requires torch/torch_sim for the optimizer.
-    """
-    from unittest.mock import MagicMock
 
-    import torch
+def test_get_inflight_autobatcher_non_saturation_uses_exact_size_key(stub_autobatcher):
+    """Non-saturation mode should not reuse different max_n_atoms keys."""
+    model = type("MockModel", (), {"device": "cpu"})()
+    config = AdsorptionConfig(device="cpu")
+    ab1, key1, reused1 = optimization_mod._get_inflight_autobatcher(
+        model,
+        100,
+        config=config,
+        saturation_reuse=False,
+    )
+    ab2, key2, reused2 = optimization_mod._get_inflight_autobatcher(
+        model,
+        105,
+        config=config,
+        saturation_reuse=False,
+    )
+    assert ab1 is not None
+    assert ab2 is not None
+    assert ab2 is not ab1
+    assert key2 != key1
+    assert reused1 is False
+    assert reused2 is False
 
-    # Minimal mock ts_model
-    mock_ts_model = MagicMock()
-    mock_ts_model.device = torch.device("cpu")
-    mock_ts_model.dtype = torch.float32
 
-    conformers = [_make_atoms_with_cell()[:6]]
-    for c in conformers:
-        c.set_cell([10.0, 10.0, 15.0])
-        c.set_pbc([True, True, True])
+def test_get_inflight_autobatcher_uses_explicit_probe_cap(stub_autobatcher):
+    model = type("MockModel", (), {"device": "cpu"})()
+    config = AdsorptionConfig(device="cpu", autobatcher_max_atoms_to_try=123_456)
+    _, key, _ = optimization_mod._get_inflight_autobatcher(
+        model,
+        100,
+        config=config,
+        max_atoms_to_try=7_000,
+    )
+    assert key is not None
+    assert int(key[6]) == 7_000
 
-    config = AdsorptionConfig(optimize_isolated_sequentially=True, device="cpu")
 
-    mock_state = MagicMock()
-    mock_state.to_atoms.return_value = [c.copy() for c in conformers]
-    mock_state.energy = [torch.tensor(-1.0)]
+def test_resolve_autobatcher_max_atoms_to_try_uses_config_override():
+    config = AdsorptionConfig(autobatcher_max_atoms_to_try=12_345)
+    cap, source = optimization_mod._resolve_autobatcher_max_atoms_to_try(
+        max_n_atoms=400,
+        n_systems=40,
+        config=config,
+    )
+    assert cap == 12_345
+    assert source == "config_override"
 
-    with (
-        patch("metalsurfer.optimization._get_inflight_autobatcher") as mock_get_ab,
-        patch("torch_sim.optimize", return_value=mock_state),
-        patch(
-            "torch_sim.generate_force_convergence_fn",
-            return_value=MagicMock(),
-        ),
-    ):
-        results = optimize_isolated_molecules_batched(
-            conformers,
-            mock_ts_model,
-            fmax=0.1,
-            steps=5,
+
+def test_resolve_autobatcher_max_atoms_to_try_uses_dynamic_policy():
+    config = AdsorptionConfig(autobatcher_max_atoms_to_try=None)
+    cap, source = optimization_mod._resolve_autobatcher_max_atoms_to_try(
+        max_n_atoms=400,
+        n_systems=10,
+        config=config,
+    )
+    assert cap == 10_000
+    assert source == "dynamic"
+
+
+def test_resolve_autobatcher_max_atoms_to_try_applies_floor_and_ceiling():
+    config = AdsorptionConfig(autobatcher_max_atoms_to_try=None)
+    floor_cap, floor_source = optimization_mod._resolve_autobatcher_max_atoms_to_try(
+        max_n_atoms=20,
+        n_systems=2,
+        config=config,
+    )
+    ceiling_cap, ceiling_source = (
+        optimization_mod._resolve_autobatcher_max_atoms_to_try(
+            max_n_atoms=2_000,
+            n_systems=100,
             config=config,
         )
+    )
+    assert floor_cap == 5_000
+    assert ceiling_cap == 200_000
+    assert floor_source == "dynamic"
+    assert ceiling_source == "dynamic"
 
-        mock_get_ab.assert_not_called()
-    assert len(results) == 1
-    assert results[0] is not None
-    atoms, energy = results[0]
-    assert energy == -1.0
+
+def test_resolve_autobatcher_max_atoms_to_try_buckets_nearby_workloads():
+    config = AdsorptionConfig(autobatcher_max_atoms_to_try=None)
+    cap_a, source_a = optimization_mod._resolve_autobatcher_max_atoms_to_try(
+        max_n_atoms=400,
+        n_systems=10,
+        config=config,
+    )
+    cap_b, source_b = optimization_mod._resolve_autobatcher_max_atoms_to_try(
+        max_n_atoms=400,
+        n_systems=11,
+        config=config,
+    )
+    assert cap_a == 10_000
+    assert cap_b == 10_000
+    assert source_a == "dynamic"
+    assert source_b == "dynamic"
+
+
+def test_resolve_autobatcher_max_atoms_to_try_is_conservative_vs_estimate():
+    config = AdsorptionConfig(autobatcher_max_atoms_to_try=None)
+    max_n_atoms = 333
+    n_systems = 9
+    cap, source = optimization_mod._resolve_autobatcher_max_atoms_to_try(
+        max_n_atoms=max_n_atoms,
+        n_systems=n_systems,
+        config=config,
+    )
+    estimated = (
+        optimization_mod._DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER * max_n_atoms * n_systems
+    )
+    assert cap >= estimated
+    assert source == "dynamic"
