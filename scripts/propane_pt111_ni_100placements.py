@@ -2,7 +2,7 @@
 """Run propane adsorption on Pt(111) with Ni adatoms for many placements.
 
 Produces results_propane_pt111_ni/adsorption_energies_detailed.csv for BO benchmarking.
-Use conda env pyadsorbml: conda run -n pyadsorbml python scripts/propane_pt111_ni_100placements.py
+Use conda env metalsurfer: conda run -n metalsurfer python scripts/propane_pt111_ni_100placements.py
 
 Slab: fcc Pt mp-126 (1,1,1) → 2×2×1 supercell → ~10% Ni adatoms at hollow sites
 so the surface is heterogeneous and placement matters.
@@ -16,23 +16,16 @@ import os
 
 from metalsurfer import (
     AdsorptionConfig,
-    calculate_reference_energies,
     create_slab_from_bulk,
     deposit_adatoms,
-    format_failure_summary,
-    process_molecule,
-    save_single_molecule_results,
-    setup_single_model,
+    run_adsorption,
 )
+from metalsurfer._logging import configure_logging
 
 
 def _configure_logging(debug: bool = False) -> None:
-    level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    level_name = "DEBUG" if debug else "INFO"
+    configure_logging(default_level=level_name)
     if debug:
         logging.getLogger("metalsurfer.filters").setLevel(logging.DEBUG)
         logging.getLogger("metalsurfer.workflow").setLevel(logging.DEBUG)
@@ -47,7 +40,7 @@ MILLER = (1, 1, 1)
 SUPERCELL = (2, 2, 1)
 NI_ADATOM_COVERAGE = 0.10  # fraction of hollow sites with Ni adatoms
 PROPANE_SMILES = "CCC"
-NUM_PLACEMENTS = 120
+NUM_PLACEMENTS = 250
 
 
 def main():
@@ -92,6 +85,7 @@ def main():
     )
 
     config = AdsorptionConfig(
+        material_type="slab",
         model_name="uma-s-1p1",
         seed=42,
         num_conformers=20,  # propane is floppier than CO2
@@ -109,8 +103,6 @@ def main():
         autobatcher_max_memory_scaler=500,
     )
 
-    calculator, ts_model = setup_single_model(config.model_name, config.device)
-
     # 2) Deposit Ni adatoms at hollow sites (~10% coverage)
     slab = deposit_adatoms(
         slab,
@@ -126,56 +118,25 @@ def main():
         len(slab.atoms),
     )
 
-    # 3) Reference energies
-    ref = calculate_reference_energies(
-        slab,
-        calculator,
-        molecules=["propane"],
-        smiles_list=[PROPANE_SMILES],
-        ts_model=ts_model,
-        config=config,
-    )
-    e_slab = ref.slab_energy
-    e_propane = ref.get_molecule_energy("propane")
-    if e_propane is None:
-        raise RuntimeError("Missing propane reference energy")
-    logging.info("E_slab=%.4f eV, E_propane=%.4f eV", e_slab, e_propane)
-
-    # 4) Run placements (non-Bayesian)
-    failure_summary: dict[str, object] = {}
-    results = process_molecule(
-        PROPANE_SMILES,
-        "propane",
-        slab,
-        calculator,
-        ref,
-        ts_model=ts_model,
+    campaign = run_adsorption(
+        slab=slab,
+        molecules=[(PROPANE_SMILES, "propane")],
         config=config,
         surface_type=SURFACE_TYPE,
-        failure_summary_out=failure_summary,
+        system_name="pt111_ni_adatoms",
     )
-
-    if results:
-        save_single_molecule_results(
-            "propane",
-            results,
-            surface_type=SURFACE_TYPE,
-            system_name="pt111_ni_adatoms",
-            config=config,
-        )
-        best = min(results, key=lambda r: r.energy_adsorption)
+    summary = campaign.molecule_summaries[0]
+    if summary.best_adsorption_energy is not None:
         logging.info(
             "Best E_ads = %.4f eV; %d results -> %s",
-            best.energy_adsorption,
-            len(results),
+            summary.best_adsorption_energy,
+            summary.n_valid_placements,
             RESULTS_DIR,
         )
     else:
         logging.warning("No valid placements.")
-        if failure_summary:
-            logging.info(format_failure_summary(failure_summary))
 
-    return 0 if results else 1
+    return 0 if summary.best_adsorption_energy is not None else 1
 
 
 if __name__ == "__main__":

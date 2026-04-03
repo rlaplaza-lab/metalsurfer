@@ -5,23 +5,17 @@ Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, to
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 """
 
-import logging
-
 from metalsurfer import (
     AdsorptionConfig,
-    calculate_reference_energies,
     create_slab_from_bulk,
-    format_failure_summary,
-    process_molecule,
-    save_single_molecule_results,
-    setup_single_model,
+    run_adsorption,
 )
-from metalsurfer.placement import classify_adsorbate_orientation
-
-logging.basicConfig(level=logging.DEBUG)
+from metalsurfer._logging import configure_logging
+from metalsurfer.cli.cli_output import format_results_saved_line
 
 
 def main():
+    configure_logging(default_level="INFO")
     # Single subdir for slab, placements, and results (avoids path drift)
     results_subdir = "vanillin_ni111"
     results_dir = f"results_{results_subdir}"
@@ -36,11 +30,12 @@ def main():
     )
 
     config = AdsorptionConfig(
-        model_name="uma-s-1p1",
+        material_type="slab",
+        model_name="uma-m-1p1",
         seed=42,
         num_conformers=10,
-        num_placements=25,
-        autobatcher_max_memory_padding=0.5,  # 0.9 was too aggressive
+        num_placements=250,
+        autobatcher_max_memory_padding=0.8,
         device="cuda",
         skip_topology_check=False,
         skip_desorption_check=False,
@@ -49,81 +44,29 @@ def main():
         debug_write_initial_placements=True,
     )
 
-    calculator, ts_model = setup_single_model(config.model_name, config.device)
-
     smiles = "c1(C=O)cc(OC)c(O)cc1"
-
-    # Reference energies: clean slab + isolated vanillin
-    ref = calculate_reference_energies(
-        slab,
-        calculator,
-        molecules=["vanillin"],
-        smiles_list=[smiles],
-        ts_model=ts_model,
-        config=config,
-    )
-
-    # Diagnostic: verify reference energies
-    e_slab = ref.slab_energy
-    e_vanillin = ref.get_molecule_energy("vanillin")
-    print(f"E_slab={e_slab:.4f} eV, E_vanillin={e_vanillin:.4f} eV")
-
-    # Run placement, optimization, and validation
-    failure_summary = {}
-    results = process_molecule(
-        smiles,
-        "vanillin",
-        slab,
-        calculator,
-        ref,
-        ts_model=ts_model,
+    campaign = run_adsorption(
+        slab=slab,
+        molecules=[(smiles, "vanillin")],
         config=config,
         surface_type=results_subdir,
-        failure_summary_out=failure_summary,
+        system_name="Ni_111",
     )
-
-    if results:
-        save_single_molecule_results(
-            "vanillin",
-            results,
-            surface_type=results_subdir,
-            system_name="Ni_111",
-            config=config,
-        )
-        best = min(results, key=lambda r: r.energy_adsorption)
-        # Infer slab_size from result: process_molecule may resize the slab internally,
-        # so len(slab.atoms) can be wrong. Use first non-surface atom in result.
-        surface_symbols = set(slab.atoms.get_chemical_symbols())
-        slab_size = next(
-            (
-                i
-                for i, s in enumerate(results[0].atoms.get_chemical_symbols())
-                if s not in surface_symbols
-            ),
-            None,
-        )
-        if slab_size is None:
-            raise ValueError("Could not find adsorbate atoms in result structure")
-        orientations = [
-            classify_adsorbate_orientation(r.atoms, slab_size) for r in results
-        ]
-        n_parallel = sum(1 for o in orientations if o == "parallel")
+    summary = campaign.molecule_summaries[0]
+    if summary.best_adsorption_energy is not None:
         print(
-            f"\nBinding energy of vanillin on Ni(111): {best.energy_adsorption:.4f} eV"
+            f"\nBinding energy of vanillin on Ni(111): {summary.best_adsorption_energy:.4f} eV"
         )
         print(
             "  (E_ads = E(slab+vanillin) - E(slab) - E(vanillin); negative = favorable)"
         )
         print(
-            f"  Orientations: {n_parallel}/{len(results)} parallel, "
-            f"{len(results) - n_parallel} EN-down"
+            f"  Orientations: {summary.n_parallel}/{summary.n_valid_placements} parallel, "
+            f"{summary.n_endown} EN-down"
         )
-        print(f"  Results saved to {results_dir}/ (XYZ, POSCAR, CSV)")
+        print(f"  {format_results_saved_line(results_dir)}")
     else:
         print("No valid placements found.")
-        if failure_summary:
-            print()
-            print(format_failure_summary(failure_summary))
 
     if config.debug_write_initial_placements:
         print(

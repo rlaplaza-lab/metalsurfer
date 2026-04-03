@@ -11,16 +11,15 @@ or reduce num_placements (e.g. 25).
 
 from metalsurfer import (
     AdsorptionConfig,
-    calculate_reference_energies,
     create_slab_from_bulk,
-    format_failure_summary,
-    process_molecule,
-    save_single_molecule_results,
-    setup_single_model,
+    run_adsorption,
 )
+from metalsurfer._logging import configure_logging
+from metalsurfer.cli.cli_output import format_results_saved_line
 
 
 def main():
+    configure_logging(default_level="INFO")
     # Create Ni(111) slab from Materials Project mp-23.
     # Use minimal (1,1,1) supercell; auto_resize_slab will expand if needed for PBC separation.
     slab = create_slab_from_bulk(
@@ -31,10 +30,11 @@ def main():
     )
 
     config = AdsorptionConfig(
-        model_name="uma-s-1p1",
+        material_type="slab",
+        model_name="uma-m-1p1",
         seed=42,
         num_conformers=1,  # H2 has only one geometry
-        num_placements=50,
+        num_placements=250,
         # Conservative autobatcher settings to avoid CUDA OOM on 15GB GPUs:
         autobatcher_max_memory_padding=0.8,  # 0.9 was too aggressive
         autobatcher_max_memory_scaler=500,  # Skip memory estimation (slab+H2 ~386 atoms)
@@ -46,53 +46,26 @@ def main():
         stage2_steps=500,
     )
 
-    calculator, ts_model = setup_single_model(config.model_name, config.device)
-
-    # Reference energies: clean slab + isolated H2
-    ref = calculate_reference_energies(
-        slab,
-        calculator,
-        molecules=["H2"],
-        smiles_list=["[H][H]"],
-        ts_model=ts_model,
-        config=config,
-    )
-
-    # Run placement, optimization, and validation
-    failure_summary = {}
-    results = process_molecule(
-        "[H][H]",
-        "H2",
-        slab,
-        calculator,
-        ref,
-        ts_model=ts_model,
+    campaign = run_adsorption(
+        slab=slab,
+        molecules=[("[H][H]", "H2")],
         config=config,
         surface_type="h2_ni111",
-        failure_summary_out=failure_summary,
+        system_name="Ni_111",
     )
-
-    if results:
-        save_single_molecule_results(
-            "H2",
-            results,
-            surface_type="h2_ni111",
-            system_name="Ni_111",
-            config=config,
-        )
-        best = min(results, key=lambda r: r.energy_adsorption)
+    summary = campaign.molecule_summaries[0]
+    if summary.best_adsorption_energy is not None:
         total_steps = config.stage1_steps + config.stage2_steps
-        print(f"\nBinding energy of H2 on Ni(111): {best.energy_adsorption:.4f} eV")
+        print(
+            f"\nBinding energy of H2 on Ni(111): {summary.best_adsorption_energy:.4f} eV"
+        )
         print("  (E_ads = E(slab+H2) - E(slab) - E(H2); negative = favorable)")
         print(
             f"  Relaxation: {total_steps} steps (stage1: {config.stage1_steps}, stage2: {config.stage2_steps})"
         )
-        print("  Results saved to results_h2_ni111/ (XYZ, POSCAR, CSV)")
+        print(f"  {format_results_saved_line('results_h2_ni111')}")
     else:
         print("No valid placements found.")
-        if failure_summary:
-            print()
-            print(format_failure_summary(failure_summary))
 
 
 if __name__ == "__main__":

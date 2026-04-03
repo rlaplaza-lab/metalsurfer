@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """Offline BO benchmark: compare surrogate models and acquisition functions.
 
-Loads CO2 graphene placement data (from results_co2_graphene/adsorption_energies_detailed.csv),
-builds X/y, and simulates the BO loop with fixed batch size 10. Compares RF+LCB (several kappa),
-RF+EI, RF+PI, and optionally gradient_boost + greedy. Outputs metrics CSV and optionally
-best-so-far curves.
+Loads real placement data from ``results_*/adsorption_energies_detailed.csv``
+written by metalsurfer (via ``save_summary_results`` / campaign workflows),
+builds X/y, and simulates the BO loop with fixed batch size 10.
+
+Expected CSV input (required columns for reproducible feature extraction):
+  molecule, placement_id, conformer_index, face_flip,
+  z_fraction, x_abs, y_abs, z_offset,
+  quat_w, quat_x, quat_y, quat_z,
+  energy_adsorption
+
+The modern saved dataset also includes rich placement/context columns
+(``x_abs``, ``y_abs``, ``z_offset``, ``shape``, ``model_name``, etc.), and this
+benchmark uses them automatically when present.
 
 Usage:
-  python scripts/benchmark_bo_models.py [--data-dir results_co2_graphene] [--out benchmark_bo_results.csv] [--seeds 5]
+  python scripts/benchmark_bo_models.py --data-dir results_co2_graphene --out benchmark_bo_results.csv --seeds 5
   python scripts/benchmark_bo_models.py --data-dir results_propane_pt111_ni --surface-type propane_pt111_ni --smiles CCC --out benchmark_bo_results_propane.csv
 """
 
@@ -18,18 +27,15 @@ import os
 import numpy as np
 import pandas as pd
 
+from metalsurfer._logging import configure_logging
 from metalsurfer.ml.bayesian import (
     score_and_select,
     train_surrogate,
 )
 from metalsurfer.ml.features import extract_features_from_dataset
-from metalsurfer.ml.regression import train_model
+from metalsurfer.ml.schema import SCHEMA_VERSION
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%H:%M:%S",
-)
+configure_logging(default_level="INFO")
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 10
@@ -37,6 +43,132 @@ TOTAL_BUDGET = 100
 INITIAL_RANDOM = 10  # so 10 batches of 10 = 100
 DEFAULT_SURFACE_TYPE = "co2_graphene"
 DEFAULT_SMILES = "O=C=O"
+REQUIRED_INPUT_COLUMNS = (
+    "molecule",
+    "placement_id",
+    "conformer_index",
+    "face_flip",
+    "z_fraction",
+    "x_abs",
+    "y_abs",
+    "z_offset",
+    "quat_w",
+    "quat_x",
+    "quat_y",
+    "quat_z",
+    "energy_adsorption",
+)
+SETUP_IDENTITY_COLUMNS = ("molecule", "smiles", "surface_id")
+CONTEXT_IDENTITY_COLUMNS = (
+    "context_hash",
+    "model_name",
+    "fmax",
+    "stage1_steps",
+    "stage2_steps",
+    "seed",
+    "device",
+    "placement_z_range",
+    "placement_z_scale_by_covalent_radius",
+    "min_initial_distance",
+    "min_contact_ratio",
+    "top_layer_tolerance",
+    "relax_top_layer",
+)
+
+
+def _validate_input_dataframe(df: pd.DataFrame, csv_path: str) -> None:
+    """Validate expected metalsurfer benchmark input schema."""
+    missing = [c for c in REQUIRED_INPUT_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(
+            "Input dataset is not compatible with metalsurfer BO benchmark.\n"
+            f"Missing required columns: {missing}\n"
+            f"File: {csv_path}\n"
+            "Expected source: results_*/adsorption_energies_detailed.csv "
+            "written by metalsurfer save_summary_results/campaign APIs."
+        )
+    if "schema_version" in df.columns:
+        versions = sorted(
+            {str(v) for v in df["schema_version"].dropna().astype(str).unique()}
+        )
+        if versions and any(v != SCHEMA_VERSION for v in versions):
+            logger.warning(
+                "Dataset schema_version=%s differs from current=%s; "
+                "benchmark will attempt best-effort compatibility.",
+                ",".join(versions),
+                SCHEMA_VERSION,
+            )
+
+
+def _validate_setup_specific_dataset(df: pd.DataFrame, csv_path: str) -> None:
+    """Ensure BO benchmark data corresponds to exactly one setup."""
+    mixed_cols: list[tuple[str, list[str]]] = []
+
+    for col in SETUP_IDENTITY_COLUMNS:
+        if col not in df.columns:
+            continue
+        values = [str(v) for v in df[col].dropna().astype(str).unique().tolist()]
+        if len(values) > 1:
+            mixed_cols.append((col, sorted(values)[:5]))
+
+    present_context_cols = [c for c in CONTEXT_IDENTITY_COLUMNS if c in df.columns]
+    for col in present_context_cols:
+        values = [str(v) for v in df[col].dropna().astype(str).unique().tolist()]
+        if len(values) > 1:
+            mixed_cols.append((col, sorted(values)[:5]))
+
+    if mixed_cols:
+        details = ", ".join(
+            f"{col}={vals}" + ("..." if len(vals) == 5 else "")
+            for col, vals in mixed_cols
+        )
+        raise ValueError(
+            "Input dataset mixes multiple setups but this BO benchmark is setup-specific. "
+            "Split data so each run has a single adsorbate, surface, and relaxation context. "
+            f"Mixed columns in {csv_path}: {details}"
+        )
+
+    if not present_context_cols:
+        logger.warning(
+            "Dataset has no context identity columns (%s). Setup-specific validation "
+            "will only enforce molecule/smiles/surface_id.",
+            ", ".join(CONTEXT_IDENTITY_COLUMNS),
+        )
+
+
+def _assert_feature_energy_injective(X: pd.DataFrame, y: pd.Series) -> None:
+    """Ensure feature vectors map to a single adsorption energy."""
+    if X.empty:
+        raise ValueError("Input dataset has zero rows after feature extraction.")
+
+    feature_cols = list(X.columns)
+    check_df = X.copy()
+    check_df["_energy_adsorption"] = pd.Series(y).to_numpy()
+    grouped = check_df.groupby(feature_cols, dropna=False)["_energy_adsorption"]
+    conflicts = grouped.nunique(dropna=False)
+    n_conflicts = int((conflicts > 1).sum())
+    if n_conflicts > 0:
+        conflict_examples = []
+        conflict_keys = list(conflicts[conflicts > 1].index[:3])
+        for key in conflict_keys:
+            if not isinstance(key, tuple):
+                key = (key,)
+            mask = (pd.Series(key, index=feature_cols) == X).all(axis=1)
+            energies = sorted(
+                {float(v) for v in check_df.loc[mask, "_energy_adsorption"]}
+            )
+            pairs = [
+                f"{feature_cols[i]}={key[i]}" for i in range(min(3, len(feature_cols)))
+            ]
+            conflict_examples.append(f"[{', '.join(pairs)}] -> energies={energies}")
+        detail_msg = "; ".join(conflict_examples)
+        raise ValueError(
+            "Input dataset violates injectivity for BO benchmark: "
+            f"{n_conflicts} feature vector(s) map to multiple "
+            "energy_adsorption values. Regenerate or deduplicate "
+            "adsorption_energies_detailed.csv to ensure deterministic "
+            f"feature->target mapping. Example conflicts: {detail_msg}"
+        )
 
 
 def load_and_prepare_data(
@@ -44,39 +176,29 @@ def load_and_prepare_data(
     surface_type: str = DEFAULT_SURFACE_TYPE,
     smiles: str = DEFAULT_SMILES,
 ) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
-    """Load detailed CSV, ensure molecule/smiles/surface_id, return (X, y, df)."""
+    """Load metalsurfer detailed CSV, validate columns, return (X, y, df)."""
     csv_path = os.path.join(data_dir, "adsorption_energies_detailed.csv")
     if not os.path.isfile(csv_path):
         raise FileNotFoundError(
             f"Run a placement-generation script first to create {csv_path}"
         )
     df = pd.read_csv(csv_path)
+    _validate_input_dataframe(df, csv_path)
     if "smiles" not in df.columns:
+        logger.info(
+            "Input has no 'smiles' column; using --smiles=%s for all rows.", smiles
+        )
         df["smiles"] = smiles
     if "surface_id" not in df.columns:
+        logger.info(
+            "Input has no 'surface_id' column; using --surface-type=%s for all rows.",
+            surface_type,
+        )
         df["surface_id"] = surface_type
+    _validate_setup_specific_dataset(df, csv_path)
     X, y = extract_features_from_dataset(df, target_column="energy_adsorption")
+    _assert_feature_energy_injective(X, y)
     return X, y, df
-
-
-def make_synthetic_data(
-    n: int = 100, n_features: int = 30, seed: int = 42
-) -> tuple[pd.DataFrame, pd.Series]:
-    """Synthetic (X, y) for testing the benchmark when real data is not ready."""
-    from metalsurfer.ml.features import get_feature_names
-
-    rng = np.random.RandomState(seed)
-    names = get_feature_names()
-    if n_features > len(names):
-        names = names + [f"extra_{i}" for i in range(n_features - len(names))]
-    else:
-        names = names[:n_features]
-    X = pd.DataFrame(rng.randn(n, len(names)), columns=names)
-    # y: one clear minimum + noise so BO can show improvement
-    x0 = rng.randn(len(names))
-    dist = np.linalg.norm(X.values - x0, axis=1)
-    y = pd.Series(-2.0 * np.exp(-(dist**2) / 10) + 0.3 * rng.randn(n))
-    return X, y
 
 
 def run_offline_bo(
@@ -86,7 +208,7 @@ def run_offline_bo(
     batch_size: int,
     total_budget: int,
     seed: int,
-    surrogate: str = "rf",
+    surrogate: str = "random_forest",
     acquisition: str = "lcb",
     kappa: float = 1.96,
 ) -> tuple[list[float], float]:
@@ -124,17 +246,13 @@ def run_offline_bo(
             take = min(batch, len(uneval))
             chosen = rng.choice(uneval, size=take, replace=False).tolist()
         else:
-            if surrogate == "rf":
-                model = train_surrogate(
-                    X_train, y_train, n_estimators=100, random_state=seed
-                )
-            else:
-                model = train_model(
-                    X_train,
-                    y_train,
-                    model_type="gradient_boost" if surrogate == "gb" else "ridge",
-                    random_state=seed,
-                )
+            model = train_surrogate(
+                X_train,
+                y_train,
+                surrogate=surrogate,
+                n_estimators=100,
+                random_state=seed,
+            )
             chosen = score_and_select(
                 model,
                 X,
@@ -160,7 +278,7 @@ def main():
     )
     ap.add_argument(
         "--data-dir",
-        default=f"results_{DEFAULT_SURFACE_TYPE}",
+        required=True,
         help="Results dir with adsorption_energies_detailed.csv",
     )
     ap.add_argument(
@@ -177,21 +295,12 @@ def main():
         "--out", default="benchmark_bo_results.csv", help="Output metrics CSV"
     )
     ap.add_argument("--seeds", type=int, default=5, help="Number of random seeds")
-    ap.add_argument(
-        "--synthetic",
-        action="store_true",
-        help="Use synthetic data (for testing without real run)",
-    )
     ap.add_argument("--no-plot", action="store_true", help="Skip writing plot")
     args = ap.parse_args()
 
-    if args.synthetic:
-        X, y = make_synthetic_data(n=TOTAL_BUDGET, seed=42)
-        logger.info("Using synthetic data: %d samples, %d features", len(X), X.shape[1])
-    else:
-        X, y, df = load_and_prepare_data(
-            args.data_dir, surface_type=args.surface_type, smiles=args.smiles
-        )
+    X, y, _ = load_and_prepare_data(
+        args.data_dir, surface_type=args.surface_type, smiles=args.smiles
+    )
     n = len(X)
     logger.info("Loaded %d placements, %d features", n, X.shape[1])
 

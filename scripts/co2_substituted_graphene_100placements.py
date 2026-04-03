@@ -2,7 +2,7 @@
 """Run CO2 adsorption on an oxidized graphene monolayer (N-doped + O adatoms) for many placements.
 
 Produces results_co2_graphene/adsorption_energies_detailed.csv for BO benchmarking.
-Use conda env pyadsorbml: conda run -n pyadsorbml python scripts/co2_substituted_graphene_100placements.py
+Use conda env metalsurfer: conda run -n metalsurfer python scripts/co2_substituted_graphene_100placements.py
 
 Slab: graphite mp-48 (0,0,1) → monolayer → 10% C→N substitution → ~10% O adatoms at hollow sites
 (oxidized / N-doped graphene) so the surface is heterogeneous and placement matters.
@@ -16,27 +16,18 @@ import os
 
 from ase import Atoms
 
-from metalsurfer import (
-    AdsorptionConfig,
-    calculate_reference_energies,
-    create_slab_from_atoms,
+from metalsurfer import AdsorptionConfig, run_adsorption
+from metalsurfer._logging import configure_logging
+from metalsurfer.surface_prep import (
     create_slab_from_bulk,
     deposit_adatoms,
-    format_failure_summary,
-    process_molecule,
-    save_single_molecule_results,
-    setup_single_model,
     substitute_alloy,
 )
 
 
 def _configure_logging(debug: bool = False) -> None:
-    level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    level_name = "DEBUG" if debug else "INFO"
+    configure_logging(default_level=level_name)
     if debug:
         logging.getLogger("metalsurfer.filters").setLevel(logging.DEBUG)
         logging.getLogger("metalsurfer.workflow").setLevel(logging.DEBUG)
@@ -52,7 +43,7 @@ TOP_LAYER_TOLERANCE = 0.5  # Angstrom; atoms within this of z_max form the top l
 N_SUBSTITUTE_FRACTION = 0.10  # 10% C -> N for N-doped graphene
 O_ADATOM_COVERAGE = 0.12  # fraction of hollow sites with O (oxidized graphene)
 CO2_SMILES = "O=C=O"
-NUM_PLACEMENTS = 120
+NUM_PLACEMENTS = 250
 
 
 def slab_to_monolayer(atoms: Atoms, z_tolerance: float = 0.5) -> Atoms:
@@ -95,7 +86,7 @@ def main():
         results_dir=RESULTS_DIR,
     )
     monolayer = slab_to_monolayer(slab.atoms, z_tolerance=TOP_LAYER_TOLERANCE)
-    slab = create_slab_from_atoms(monolayer)
+    slab = monolayer
     logging.info(
         "Graphene monolayer: %d atoms (from %s %s supercell %s)",
         len(slab.atoms),
@@ -105,6 +96,7 @@ def main():
     )
 
     config = AdsorptionConfig(
+        material_type="slab",
         model_name="uma-s-1p1",
         seed=42,
         num_conformers=10,
@@ -120,12 +112,10 @@ def main():
         skip_topology_check=True,
         # Graphene monolayer has no sub-surface: without this, frozen=0 (all atoms are "top layer")
         relax_top_layer=False,
-        # All placements (e.g. 50) fit in one GPU pass; skip memory estimation and use more VRAM
+        # All placements (e.g. 250) fit in one GPU pass; skip memory estimation and use more VRAM
         autobatcher_max_memory_padding=0.8,
         autobatcher_max_memory_scaler=500,
     )
-
-    calculator, ts_model = setup_single_model(config.model_name, config.device)
 
     # 2) Substitute 10% C -> N (N-doped graphene).
     slab = substitute_alloy(
@@ -156,56 +146,25 @@ def main():
         len(slab.atoms),
     )
 
-    # 4) Reference energies
-    ref = calculate_reference_energies(
-        slab,
-        calculator,
-        molecules=["CO2"],
-        smiles_list=[CO2_SMILES],
-        ts_model=ts_model,
-        config=config,
-    )
-    e_slab = ref.slab_energy
-    e_co2 = ref.get_molecule_energy("CO2")
-    if e_co2 is None:
-        raise RuntimeError("Missing CO2 reference energy")
-    logging.info("E_slab=%.4f eV, E_CO2=%.4f eV", e_slab, e_co2)
-
-    # 5) Run placements (non-Bayesian)
-    failure_summary = {}
-    results = process_molecule(
-        CO2_SMILES,
-        "CO2",
-        slab,
-        calculator,
-        ref,
-        ts_model=ts_model,
+    campaign = run_adsorption(
+        slab=slab,
+        molecules=[(CO2_SMILES, "CO2")],
         config=config,
         surface_type=SURFACE_TYPE,
-        failure_summary_out=failure_summary,
+        system_name="graphene_N10_O12",
     )
-
-    if results:
-        save_single_molecule_results(
-            "CO2",
-            results,
-            surface_type=SURFACE_TYPE,
-            system_name="graphene_N10_O12",
-            config=config,
-        )
-        best = min(results, key=lambda r: r.energy_adsorption)
+    summary = campaign.molecule_summaries[0]
+    if summary.best_adsorption_energy is not None:
         logging.info(
             "Best E_ads = %.4f eV; %d results -> %s",
-            best.energy_adsorption,
-            len(results),
+            summary.best_adsorption_energy,
+            summary.n_valid_placements,
             RESULTS_DIR,
         )
     else:
         logging.warning("No valid placements.")
-        if failure_summary:
-            logging.info(format_failure_summary(failure_summary))
 
-    return 0 if results else 1
+    return 0 if summary.best_adsorption_energy is not None else 1
 
 
 if __name__ == "__main__":

@@ -4,6 +4,9 @@
 Adds H2 molecules one at a time to the slab; stops when best E_ads >= 0 (slab saturated).
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
+
+If CUDA OOM on 16GB GPUs: ensure no other GPU processes (nvidia-smi), or reduce
+num_placements / use autobatcher_max_memory_scaler=400 for ~1 system per batch.
 """
 
 import os
@@ -13,12 +16,15 @@ from metalsurfer import (
     AdsorptionConfig,
     create_slab_from_bulk,
     format_failure_summary,
-    run_saturation_screening,
+    run_saturation,
 )
+from metalsurfer._logging import configure_logging
+from metalsurfer.cli.cli_output import format_saturation_complete
 from metalsurfer.io_results import save_saturation_results, setup_directories
 
 
 def main():
+    configure_logging(default_level="INFO")
     # Create Ni(111) slab from Materials Project mp-23.
     surface_type = "h2_ni111_saturation"
     slab = create_slab_from_bulk(
@@ -29,10 +35,11 @@ def main():
     )
 
     config = AdsorptionConfig(
-        model_name="uma-s-1p1",
+        material_type="slab",
+        model_name="uma-m-1p1",
         seed=42,
         num_conformers=1,  # H2 has only one geometry
-        num_placements=50,
+        num_placements=250,
         autobatcher_max_memory_padding=0.8,
         autobatcher_max_memory_scaler=500,  # Skip memory estimation (slab+H2 ~386 atoms)
         autobatcher_max_atoms_to_try=5000,  # Cap estimation probes if scaler unused
@@ -51,9 +58,9 @@ def main():
     try:
         setup_directories([surface_type])
         failure_summary = {}
-        saturation_results = run_saturation_screening(
+        saturation_results = run_saturation(
             slab,
-            smiles_file=smiles_path,
+            molecules=smiles_path,
             config=config,
             surface_type=surface_type,
             skip_existing=False,
@@ -69,10 +76,15 @@ def main():
             sr = saturation_results[0]
             total_steps = len(sr.steps)
             n_at_sat = sr.n_molecules_at_saturation
-            print("\nH2 saturation on Ni(111) complete:")
-            print(f"  Molecules at saturation: {n_at_sat}")
-            print(f"  Total steps: {total_steps}")
-            print(f"  Results saved to results_{surface_type}/ (XYZ, POSCAR, CSV)")
+            print("")
+            print(
+                format_saturation_complete(
+                    label="H2 saturation on Ni(111)",
+                    n_molecules_at_saturation=n_at_sat,
+                    total_steps=total_steps,
+                    results_dir=f"results_{surface_type}",
+                )
+            )
         else:
             print("No saturation results (no valid placements found).")
             if failure_summary:

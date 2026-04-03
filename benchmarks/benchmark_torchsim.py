@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""Benchmark TorchSim optimizer/batching settings for metalsurfer.
+"""Benchmark TorchSim optimization throughput for metalsurfer.
 
-Two workloads are tested:
+Goal
+----
+Provide a reproducible micro-benchmark that helps choose sensible defaults for
+TorchSim optimization settings in ``AdsorptionConfig`` by comparing throughput
+and convergence under realistic workload shapes.
 
-1. **Isolated-molecule optimisation** – small systems, many conformers.
-2. **Slab+adsorbate optimisation** – larger systems (ragged sizes), with
+Workloads
+---------
+1. **Isolated-molecule optimization** - small systems, many conformers.
+2. **Slab+adsorbate optimization** - larger systems (ragged sizes), with
    frozen sub-surface constraints.  Closer to real screening workloads.
 
-Each workload is run with combinations of:
-  - FIRE vs L-BFGS optimiser
+Each workload runs combinations of:
+  - FIRE vs L-BFGS optimizer
   - Sequential vs autobatched
-  - Different autobatcher_max_memory_padding values
+  - Different ``autobatcher_max_memory_padding`` values
 
-Produces a CSV with timing, convergence, and GPU memory columns so defaults
-can be data-driven.
+Outputs
+-------
+Writes a CSV with timing, convergence, and GPU memory columns so default
+settings can be data-driven.
 
 Usage (GPU):
   python benchmarks/benchmark_torchsim.py
@@ -28,15 +36,21 @@ import argparse
 import csv
 import logging
 import os
-import sys
 import time
 
 import numpy as np
+from ase.build import fcc111, molecule
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
+from metalsurfer._logging import configure_logging
+from metalsurfer.config import AdsorptionConfig
+from metalsurfer.optimization import (
+    clear_autobatcher_cache,
+    optimize_adsorbate_slab_batched,
+    optimize_isolated_molecules_batched,
+    setup_single_model,
 )
+
+configure_logging(default_level="INFO")
 logger = logging.getLogger(__name__)
 
 
@@ -75,8 +89,6 @@ def _reset_peak():
 
 def _make_conformers(n: int):
     """Build n small molecule Atoms objects suitable for optimisation."""
-    from ase.build import molecule
-
     templates = ["H2O", "CH4", "NH3", "H2"]
     conformers = []
     for i in range(n):
@@ -89,17 +101,22 @@ def _make_conformers(n: int):
 
 def _make_slab_adsorbate_systems(n: int):
     """Build n slab+adsorbate Atoms objects with ragged adsorbate sizes."""
-    from ase.build import fcc111, molecule
-
     slab = fcc111("Cu", size=(3, 3, 3), vacuum=10.0)
     slab.set_pbc([True, True, True])
 
+    # Mix rigid/simple adsorbates with flexible small organics to better mimic
+    # real optimization difficulty (different atom counts + internal torsions).
     adsorbate_templates = [
+        molecule("H2"),
+        molecule("CO"),
+        molecule("CO2"),
         molecule("H2O"),
         molecule("CH4"),
         molecule("NH3"),
-        molecule("H2"),
-        molecule("CO"),
+        molecule("CH3OH"),  # methanol (small organic)
+        molecule("CH3CHO"),  # acetaldehyde (small organic)
+        molecule("CH3OCH3"),  # dimethyl ether (more flexible)
+        molecule("CH3CH2OH"),  # ethanol (flexible)
     ]
     rng = np.random.default_rng(42)
     systems = []
@@ -136,9 +153,6 @@ def run_isolated_benchmark(
     device: str,
 ) -> dict:
     """Run one isolated-molecule benchmark configuration and return metrics."""
-    from metalsurfer.config import AdsorptionConfig
-    from metalsurfer.optimization import optimize_isolated_molecules_batched
-
     config = AdsorptionConfig(
         optimize_isolated_sequentially=sequential,
         ts_optimizer=optimizer,
@@ -190,9 +204,6 @@ def run_slab_adsorbate_benchmark(
     device: str,
 ) -> dict:
     """Run one slab+adsorbate benchmark configuration and return metrics."""
-    from metalsurfer.config import AdsorptionConfig
-    from metalsurfer.optimization import optimize_adsorbate_slab_batched
-
     config = AdsorptionConfig(
         ts_optimizer=optimizer,
         autobatcher_max_memory_padding=padding,
@@ -240,18 +251,16 @@ def main():
     parser.add_argument("--n-placements", type=int, default=10)
     parser.add_argument("--n-steps", type=int, default=50)
     parser.add_argument(
+        "--model",
+        default="uma-s-1p1",
+        help="Model name used by setup_single_model (default: %(default)s)",
+    )
+    parser.add_argument(
         "--out", default="benchmarks/torchsim_benchmark.csv", help="output CSV"
     )
     args = parser.parse_args()
-
-    try:
-        from metalsurfer.optimization import setup_torchsim_model
-    except ImportError:
-        logger.error("metalsurfer not installed; run: pip install -e .")
-        sys.exit(1)
-
-    logger.info("Setting up TorchSim model on %s...", args.device)
-    ts_model = setup_torchsim_model("uma-s-1p1", args.device)
+    logger.info("Setting up shared model on %s...", args.device)
+    _, ts_model = setup_single_model(args.model, args.device)
     conformers = _make_conformers(args.n_conformers)
     slab_systems, slab = _make_slab_adsorbate_systems(args.n_placements)
 
@@ -306,6 +315,8 @@ def main():
                     "error": str(exc),
                 }
             )
+        finally:
+            clear_autobatcher_cache()
 
     # --- Slab+adsorbate configurations ---
     slab_configs = []
@@ -346,6 +357,8 @@ def main():
                     "error": str(exc),
                 }
             )
+        finally:
+            clear_autobatcher_cache()
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     all_keys: set[str] = set()
