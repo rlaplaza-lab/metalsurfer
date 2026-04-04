@@ -146,7 +146,7 @@ def main() -> int:
     try:
         failure_summary: dict[str, object] = {}
         saturation_results = run_saturation(
-            defect_slab,
+            slab=defect_slab,
             molecules=smiles_path,
             config=config,
             surface_type=SURFACE_TYPE,

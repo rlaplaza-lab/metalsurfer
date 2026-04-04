@@ -72,7 +72,7 @@ def main():
         setup_directories([surface_type])
         failure_summary = {}
         saturation_results = run_saturation(
-            slab,
+            slab=slab,
             molecules=smiles_path,
             config=config,
             surface_type=surface_type,
