@@ -39,9 +39,9 @@ _PORE_THRESHOLD_ANGSTROM: float = 2.5
 
 # Ridge-based geodesic enrichment
 # Subdivide Voronoi edges longer than _ENRICHMENT_SPACING_BETA × median(nn_distance).
-_ENRICHMENT_SPACING_BETA: float = 1.5
+_ENRICHMENT_SPACING_BETA: float = 1.2
 # Hard cap on subdivisions per edge to prevent runaway on very long ridges.
-_ENRICHMENT_MAX_SUBDIVISIONS: int = 4
+_ENRICHMENT_MAX_SUBDIVISIONS: int = 6
 
 # ---------------------------------------------------------------------------
 # Placement geometry (z-offsets and parallel placement)
@@ -86,3 +86,12 @@ _LINEAR_VERTICAL_CYCLE: int = 4
 # Site pairs closer than _min or farther than _max are rejected.
 _DISSOCIATIVE_MIN_FRAGMENT_SEP: float = 1.0
 _DISSOCIATIVE_MAX_ADJACENT_SEP: float = 2.8
+
+# ---------------------------------------------------------------------------
+# Atop site injection
+# ---------------------------------------------------------------------------
+
+# Height factor for injected atop sites: site_z = atom_z + factor × median(nn_distance).
+# 0.8 places the site slightly below the median Voronoi vertex height, closer to
+# the binding geometry expected for atop adsorbates (CO, H₂O, NH₃).
+_ATOP_INJECTION_HEIGHT_FACTOR: float = 0.8

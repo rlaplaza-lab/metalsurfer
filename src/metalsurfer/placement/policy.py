@@ -1,6 +1,7 @@
 """Sampler policy for batch-based BO placement spec proposals."""
 
 import itertools
+import random
 from collections.abc import Callable
 
 from ..models import PlacementSpec
@@ -61,8 +62,20 @@ def build_batch_placement_specs(
     filter_spec: Callable[[PlacementSpec], bool] | None = None,
     dissociative: bool = False,
     n_hollow_pairs: int = 0,
+    seed: int | None = None,
 ) -> list[PlacementSpec]:
-    """Build stratified BO candidate specs from policy priors."""
+    """Build stratified BO candidate specs from policy priors.
+
+    When *seed* is not None and the full combinatorial grid exceeds
+    *n_desired*, specs are sampled uniformly at random (seeded) instead
+    of being truncated lexicographically.  This ensures coverage across
+    all dimensions (conformers, tilts, azimuths, sites, z-fractions)
+    even with small budgets.
+
+    Dissociative specs are always generated sequentially (grid is small).
+    When *seed* is None the legacy sequential truncation is used, which
+    preserves backward compatibility for :func:`max_batch_placement_specs`.
+    """
     normalized_sites = _normalized_site_indices(site_indices)
 
     def make_spec(
@@ -102,13 +115,14 @@ def build_batch_placement_specs(
     ) -> None:
         nonlocal pid
         for item in items:
-            if len(specs) >= n_desired or len(specs) >= target_size:
+            if len(specs) >= target_size:
                 break
             spec = build_spec(pid, *item)
             pid += 1
             if filter_spec is None or filter_spec(spec):
                 specs.append(spec)
 
+    # --- Dissociative: small grid, always fully enumerated, early return ---
     if dissociative:
         pair_indices = list(range(max(n_hollow_pairs, 1)))
         items = itertools.product(pair_indices, Z_FRACTIONS)
@@ -130,7 +144,17 @@ def build_batch_placement_specs(
         )
         return specs[:n_desired]
 
+    # For non-dissociative paths: when seed is set, generate the full grid
+    # then subsample; when seed is None, use sequential truncation (legacy).
+    use_subsampling = seed is not None
+    effective_cap = 10**9 if use_subsampling else n_desired
+
     if flat_aromatic:
+        n_par = max(1, int(n_desired * parallel_fraction))
+        n_en = max(1, n_desired - n_par)
+        par_cap = 10**9 if use_subsampling else n_par
+        en_cap = 10**9 if use_subsampling else (n_par + n_en)
+
         parallel_items = itertools.product(
             range(n_conformers),
             [False, True],
@@ -140,17 +164,24 @@ def build_batch_placement_specs(
             AZIMUTH_IN_PLANE,
             normalized_sites,
         )
-        en_down_items = itertools.product(
-            range(n_conformers),
-            range(max(n_binders, 1)),
-            TILT_FULL,
-            AZIMUTH,
-            Z_FRACTIONS,
-            normalized_sites,
-        )
-        n_par = max(1, int(n_desired * parallel_fraction))
-        n_en = max(1, n_desired - n_par)
-        append_from_iter(
+        # Collect parallel specs into their own list for separate subsampling
+        par_specs: list[PlacementSpec] = []
+
+        def _append_par(
+            items_iter,
+            build_fn: Callable[..., PlacementSpec],
+            cap: int,
+        ) -> None:
+            nonlocal pid
+            for item in items_iter:
+                if len(par_specs) >= cap:
+                    break
+                spec = build_fn(pid, *item)
+                pid += 1
+                if filter_spec is None or filter_spec(spec):
+                    par_specs.append(spec)
+
+        _append_par(
             parallel_items,
             lambda placement_index, ci, ff, tl, azv, zfv, aip, si: make_spec(
                 placement_index,
@@ -164,9 +195,34 @@ def build_batch_placement_specs(
                 aip,
                 zfv,
             ),
-            target_size=n_par,
+            par_cap,
         )
-        append_from_iter(
+
+        en_down_items = itertools.product(
+            range(n_conformers),
+            range(max(n_binders, 1)),
+            TILT_FULL,
+            AZIMUTH,
+            Z_FRACTIONS,
+            normalized_sites,
+        )
+        en_specs: list[PlacementSpec] = []
+
+        def _append_en(
+            items_iter,
+            build_fn: Callable[..., PlacementSpec],
+            cap: int,
+        ) -> None:
+            nonlocal pid
+            for item in items_iter:
+                if len(en_specs) >= cap:
+                    break
+                spec = build_fn(pid, *item)
+                pid += 1
+                if filter_spec is None or filter_spec(spec):
+                    en_specs.append(spec)
+
+        _append_en(
             en_down_items,
             lambda placement_index, ci, ei, tl, azv, zfv, si: make_spec(
                 placement_index,
@@ -180,8 +236,20 @@ def build_batch_placement_specs(
                 0.0,
                 zfv,
             ),
-            target_size=n_par + n_en,
+            en_cap,
         )
+
+        if use_subsampling:
+            rng = random.Random(seed)
+            if len(par_specs) > n_par:
+                par_specs = rng.sample(par_specs, n_par)
+            if len(en_specs) > n_en:
+                en_specs = rng.sample(en_specs, n_en)
+        else:
+            par_specs = par_specs[:n_par]
+            en_specs = en_specs[:n_en]
+
+        specs = par_specs + en_specs
     else:
         orient = "vertical" if shape == "linear" else "round"
         items = itertools.product(
@@ -205,7 +273,14 @@ def build_batch_placement_specs(
                 0.0,
                 zfv,
             ),
-            target_size=n_desired,
+            target_size=effective_cap,
         )
+
+        if use_subsampling and len(specs) > n_desired:
+            specs = random.Random(seed).sample(specs, n_desired)
+
+    # Re-index placement_index after subsampling for monotonic ordering
+    for i, spec in enumerate(specs):
+        spec.placement_index = i
 
     return specs[:n_desired]

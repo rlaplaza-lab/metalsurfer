@@ -114,6 +114,7 @@ def process_molecule_bayesian(
         pool_size,
         filter_spec=config.placement_filter,
         site_context=site_context,
+        seed=config.seed,
     )
     if not all_specs:
         logger.warning("No candidate specs generated for BO")

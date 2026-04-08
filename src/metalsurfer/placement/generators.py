@@ -68,7 +68,7 @@ def _is_flat_aromatic_with_en(smiles: str) -> bool:
     """True if molecule has aromatic rings and electronegative (binding) atoms."""
     try:
         from rdkit import Chem
-    except ImportError as exc:
+    except (ImportError, AttributeError) as exc:
         raise DependencyMissingError(
             "rdkit",
             "flat aromatic detection for placement",
@@ -115,12 +115,22 @@ def _get_unique_sites_for_specs(
     Returns ``SiteContext(sites=[], use_sites=False, source="no_sites")`` when
     site detection yields nothing.
     """
+    if not hasattr(config, "material_type") or config.material_type not in (
+        "slab",
+        "nanoparticle",
+        "porous",
+    ):
+        raise ValueError(
+            "config.material_type must be explicitly set to 'slab', 'nanoparticle', or 'porous'; "
+            "auto-detection is not supported"
+        )
+
     mat_type = config.material_type
-    probe_radius = config.voronoi_probe_radius
-    max_site_dist = config.voronoi_max_site_distance
+    probe_radius = getattr(config, "voronoi_probe_radius", 1.2)
+    max_site_dist = getattr(config, "voronoi_max_site_distance", 4.0)
 
     if len(slab) < 4:
-        logger.info(
+        logger.warning(
             "Slab has fewer than 4 atoms (%d); cannot detect adsorption sites",
             len(slab),
         )
@@ -132,10 +142,10 @@ def _get_unique_sites_for_specs(
         max_site_distance=max_site_dist,
         top_layer_tolerance=config.top_layer_tolerance,
         material_type=mat_type,
-        enrich=config.voronoi_site_enrichment,
+        enrich=getattr(config, "voronoi_site_enrichment", True),
     )
     if not raw_sites:
-        logger.info(
+        logger.warning(
             "Unified Voronoi site detection found no sites for %d-atom structure "
             "(probe_radius=%.2f, max_distance=%.2f, material_type=%r)",
             len(slab),
@@ -152,7 +162,7 @@ def _get_unique_sites_for_specs(
         tolerance=config.site_equivalence_tolerance,
     )
     if not unique_sites:
-        logger.info(
+        logger.warning(
             "Site clustering eliminated all %d raw sites for %d-atom structure "
             "(tolerance=%.3f, material_type=%r)",
             len(raw_sites),
@@ -292,12 +302,16 @@ def _pose_from_spec(
             symbols,
             en_atom_index=spec.en_atom_index,
         )
+        if base_pos is None:
+            base_pos = canonical_pos.copy()
     rotated_pos = geom._rotation_with_tilt(
         base_pos, normal, spec.tilt_deg, spec.azimuth_deg
     )
     rot_mat = geom.best_fit_rotation(canonical_pos, rotated_pos)
     quat = geom.rotation_matrix_to_quaternion(rot_mat)
-    if mat_type != "slab" and site is not None and "xyz" in site:
+    if mat_type == "slab":
+        placement_center = np.array([float(x), float(y), float(surface_ref + z_offset)])
+    elif site is not None and "xyz" in site:
         placement_center = (
             np.asarray(site["xyz"], dtype=float) + float(z_offset) * normal
         )
@@ -356,7 +370,7 @@ def _apply_pose(
     """
     raw_q = np.array([pose.quat_w, pose.quat_x, pose.quat_y, pose.quat_z], dtype=float)
     if float(np.linalg.norm(raw_q)) < 1e-10:
-        logger.debug(
+        logger.warning(
             "Degenerate quaternion (norm < 1e-10) for placement_index=%d; skipping",
             pose.placement_index,
         )
@@ -367,11 +381,13 @@ def _apply_pose(
     test[:, 1] += pose.y_abs
 
     if pose.z_abs is None:
-        logger.debug("Pose replay requires z_abs for deterministic reconstruction")
+        logger.warning("Pose replay requires z_abs for deterministic reconstruction")
         return None
     z_abs = float(pose.z_abs)
 
-    if mat_type != "slab" and site is not None and "xyz" in site and "normal" in site:
+    if mat_type == "slab":
+        z_offset = float(z_abs - surface_ref)
+    elif site is not None and "xyz" in site and "normal" in site:
         site_xyz = np.asarray(site["xyz"], dtype=float)
         site_normal = np.asarray(site["normal"], dtype=float)
         nrm = float(np.linalg.norm(site_normal))
@@ -450,17 +466,17 @@ def generate_placement_from_pose(
     if not conformers:
         return None
     if pose.conformer_index < 0 or pose.conformer_index >= len(conformers):
-        logger.debug(
+        logger.warning(
             "Invalid conformer_index=%d for %d conformers",
             pose.conformer_index,
             len(conformers),
         )
         return None
     if not _is_finite_number(pose.x_abs) or not _is_finite_number(pose.y_abs):
-        logger.debug("Pose must provide finite x_abs and y_abs")
+        logger.warning("Pose must provide finite x_abs and y_abs")
         return None
     if pose.z_abs is not None and not _is_finite_number(pose.z_abs):
-        logger.debug("Pose z_abs must be finite when provided")
+        logger.warning("Pose z_abs must be finite when provided")
         return None
 
     adsorbate = conformers[pose.conformer_index].copy()
@@ -554,6 +570,7 @@ def enumerate_placement_specs(
     n_desired: int,
     filter_spec: Callable[[PlacementSpec], bool] | None = None,
     site_context: SiteContext | None = None,
+    seed: int | None = None,
 ) -> list[PlacementSpec]:
     """Enumerate placement specs for diverse sampling.
 
@@ -561,6 +578,9 @@ def enumerate_placement_specs(
     face flip, electronegative atoms, sites, tilt, and azimuth.
     When ``config.skip_topology_check`` is True and the molecule is a
     dissociable diatomic, dissociative specs are generated instead.
+
+    When *seed* is not None, specs exceeding *n_desired* are subsampled
+    uniformly at random for better coverage across all dimensions.
     """
     if not conformers:
         return []
@@ -588,6 +608,7 @@ def enumerate_placement_specs(
         filter_spec=filter_spec,
         dissociative=info["is_dissociative"],
         n_hollow_pairs=info["n_hollow_pairs"],
+        seed=seed,
     )
 
 
@@ -780,14 +801,14 @@ def generate_placement_from_descriptor(
     if not conformers:
         return None
     if descriptor.conformer_index < 0 or descriptor.conformer_index >= len(conformers):
-        logger.debug(
+        logger.warning(
             "Descriptor conformer_index=%d out of range for %d conformers",
             descriptor.conformer_index,
             len(conformers),
         )
         return None
     if descriptor.x_abs is None or descriptor.y_abs is None or descriptor.z_abs is None:
-        logger.debug(
+        logger.warning(
             "Descriptor replay requires x_abs, y_abs, and z_abs; got x_abs=%s y_abs=%s z_abs=%s",
             descriptor.x_abs,
             descriptor.y_abs,
@@ -800,7 +821,7 @@ def generate_placement_from_descriptor(
         descriptor.quat_y,
         descriptor.quat_z,
     ):
-        logger.debug("Descriptor replay requires quaternion components")
+        logger.warning("Descriptor replay requires quaternion components")
         return None
     x_abs = float(descriptor.x_abs)
     y_abs = float(descriptor.y_abs)

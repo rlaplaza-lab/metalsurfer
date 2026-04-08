@@ -179,6 +179,7 @@ def _process_molecule_body(
         config.num_placements,
         filter_spec=config.placement_filter,
         site_context=site_context,
+        seed=config.seed,
     )
     (
         all_combined,

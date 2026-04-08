@@ -1,22 +1,34 @@
 """Site detection and clustering for adsorbate placement.
 
-Unified Voronoi-based sites for slabs, nanoparticles, and 3D-periodic porous
-materials. ``get_unified_sites()`` is the main entry; optional
-``get_symmetry_aware_sites()`` applies spglib reduction on top.
+Provides a unified Voronoi-based site generator that works for slabs,
+nanoparticles, and 3D-periodic porous materials (zeolites, MOFs).
+
+Key differences from the legacy Delaunay/ConvexHull approach:
+- Single ``get_unified_sites()`` entry point for all material types.
+- ``detect_material_type()`` auto-detects geometry; user can override via
+  ``config.material_type``.
+- Voronoi vertices of the extended periodic structure give candidate
+  adsorption sites; KDTree distance filtering removes buried/vacuum vertices.
+- Each site carries a local surface normal computed from nearby framework
+  atoms so the placement pipeline can orient molecules correctly inside pores.
+- ``_cluster_equivalent_sites()`` uses 3D fractional coordinates for porous
+  structures, 2D for slabs, and Cartesian 3D for nanoparticles.
+- ``get_symmetry_aware_sites()`` now calls ``get_unified_sites()`` internally.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 from ase import Atoms
-from scipy.spatial import KDTree, QhullError, Voronoi
+from scipy.spatial import KDTree, Voronoi
 
-from ..symmetry import SymmetryAnalyzer
+from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from ._constants import (
+    _ATOP_INJECTION_HEIGHT_FACTOR,
     _ATOP_RATIO,
     _BRIDGE_EQ_TOL,
     _BRIDGE_FAR_RATIO,
@@ -29,6 +41,9 @@ from ._constants import (
 )
 from ._material import _SLAB_VACUUM_FRACTION, detect_material_type  # noqa: F401
 from .geometry import _get_covalent_radius
+
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +107,8 @@ def _voronoi_sites(
     extended = _build_periodic_images(positions, cell, pbc)
     try:
         vor = Voronoi(extended)
-    except (QhullError, ValueError, RuntimeError) as exc:
-        logger.debug("Voronoi computation failed: %s", exc)
+    except Exception as exc:
+        logger.warning("Voronoi computation failed: %s", exc)
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
 
     raw_vertices = vor.vertices
@@ -474,6 +489,77 @@ def get_unified_sites(
         vertices = vertices[outward]
         nn_dists = nn_dists[outward]
 
+    # --- Atop site injection ---
+    # Voronoi vertices sit between atoms (bridge/hollow) by construction.
+    # Inject explicit atop candidates above top-layer / surface atoms so
+    # that atop binding (preferred for CO, H₂O, NH₃, etc.) is represented.
+    if material_type in ("slab", "nanoparticle") and len(vertices) > 0:
+        median_nn = float(np.median(nn_dists)) if len(nn_dists) > 0 else 1.5
+        atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
+
+        if material_type == "slab":
+            z_surface = float(np.max(positions[:, 2]))
+            top_mask = positions[:, 2] >= z_surface - top_layer_tolerance
+            top_atom_indices = np.nonzero(top_mask)[0]
+        else:
+            # Nanoparticle: use atoms whose outward normal component is positive
+            com = np.mean(positions, axis=0)
+            top_atom_indices = np.array(
+                [
+                    i
+                    for i in range(len(positions))
+                    if float(
+                        np.dot(
+                            _compute_local_normal(
+                                positions[i], positions, tree=local_tree
+                            ),
+                            positions[i] - com,
+                        )
+                    )
+                    > 0
+                ],
+                dtype=int,
+            )
+
+        # Build KDTree on existing vertices for fast dedup checks
+        existing_tree = KDTree(vertices) if len(vertices) > 0 else None
+
+        new_verts: list[np.ndarray] = []
+        new_dists: list[float] = []
+        for ai in top_atom_indices:
+            atom_pos = positions[ai]
+            if material_type == "slab":
+                candidate = atom_pos.copy()
+                candidate[2] += atop_height
+            else:
+                normal = _compute_local_normal(atom_pos, positions, tree=local_tree)
+                candidate = atom_pos + atop_height * normal
+
+            # Accessibility check
+            d_nn = float(local_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0])
+            if d_nn < probe_radius or d_nn > max_site_distance:
+                continue
+
+            # Dedup: skip if too close to an existing Voronoi vertex
+            if existing_tree is not None:
+                d_existing = float(
+                    existing_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0]
+                )
+                if d_existing < _VORONOI_DEDUP_TOLERANCE:
+                    continue
+
+            new_verts.append(candidate)
+            new_dists.append(d_nn)
+
+        if new_verts:
+            vertices = np.vstack([vertices, np.array(new_verts)])
+            nn_dists = np.concatenate([nn_dists, np.array(new_dists)])
+            logger.debug(
+                "Injected %d atop candidate sites (%d total sites)",
+                len(new_verts),
+                len(vertices),
+            )
+
     if len(vertices) == 0:
         return []
 
@@ -661,14 +747,11 @@ def get_symmetry_aware_sites(
     probe_radius: float = 1.2,
     max_site_distance: float = 4.0,
     enrich: bool = True,
-) -> list[dict[str, object]]:
+) -> list[dict[str, object]] | None:
     """Symmetry-reduced adsorption sites using spglib.
 
-    Returns an empty list when no raw sites are found. On spglib or orbit
-    verification failure, raises :exc:`~metalsurfer.symmetry.SymmetryAnalysisError`.
-    Callers that need a soft fallback (e.g. workflow) should catch that exception.
-
-    Nanoparticles use cluster-in-a-box symmetry. *material_type* must be explicit.
+    Returns None on failure. Nanoparticles use cluster-in-a-box symmetry.
+    Material type must be explicitly specified.
     """
     if material_type not in ("slab", "nanoparticle", "porous"):
         raise ValueError(
@@ -684,22 +767,28 @@ def get_symmetry_aware_sites(
         enrich=enrich,
     )
     if not raw_sites:
-        return []
+        return None
 
     sym_mode = "cluster" if material_type == "nanoparticle" else "auto"
     planar_for_symmetry = (material_type == "slab") and _is_top_layer_planar(
         slab, top_layer_tolerance
     )
 
-    symmetry_analyzer = SymmetryAnalyzer(
-        slab,
-        symmetry_tolerance=symmetry_tolerance,
-        mode=sym_mode,
-    )
-    return symmetry_analyzer.analyze_site_symmetry(
-        raw_sites,
-        planar=planar_for_symmetry,
-    )
+    try:
+        symmetry_analyzer = SymmetryAnalyzer(
+            slab,
+            symmetry_tolerance=symmetry_tolerance,
+            mode=sym_mode,
+        )
+        return symmetry_analyzer.analyze_site_symmetry(
+            raw_sites,
+            planar=planar_for_symmetry,
+        )
+    except SymmetryAnalysisError as exc:
+        logger.warning(
+            "Symmetry analysis failed, skipping symmetry-aware sites: %s", exc
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -752,8 +841,9 @@ def _get_site_surface_radii(
     z_max = float(np.max(positions[:, 2]))
 
     if site is not None and "slab_indices" in site:
-        raw = site["slab_indices"]
-        indices = raw if raw else None
+        indices = site["slab_indices"]
+        if not indices:
+            indices = None
     else:
         indices = None
 
