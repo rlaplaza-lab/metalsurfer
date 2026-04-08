@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SYMMETRY_TOLERANCE = 0.1
 DEFAULT_SITE_EQUIVALENCE_TOLERANCE = 0.05
-DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE = 0.2
+DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE = 0.1
 
 
 # ---------------------------------------------------------------------------

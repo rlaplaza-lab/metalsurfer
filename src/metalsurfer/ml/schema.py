@@ -151,7 +151,7 @@ class ComputationContext:
     top_layer_tolerance: float = 0.5
     symmetry_tolerance: float = 0.1
     site_equivalence_tolerance: float = 0.05
-    hollow_site_dedup_tolerance: float = 0.2
+    hollow_site_dedup_tolerance: float = 0.1
     planar_z_variance_threshold: float = 0.01
     relax_top_layer: bool = True
 
@@ -506,7 +506,7 @@ class PlacementRecord:
                 _ctx_value("site_equivalence_tolerance", 0.05)
             ),
             hollow_site_dedup_tolerance=float(
-                _ctx_value("hollow_site_dedup_tolerance", 0.2)
+                _ctx_value("hollow_site_dedup_tolerance", 0.1)
             ),
             planar_z_variance_threshold=float(
                 _ctx_value("planar_z_variance_threshold", 0.01)

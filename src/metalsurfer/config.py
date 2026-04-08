@@ -99,7 +99,7 @@ class AdsorptionConfig:
     top_layer_tolerance: float = 0.5
     symmetry_tolerance: float = 0.1
     site_equivalence_tolerance: float = 0.05
-    hollow_site_dedup_tolerance: float = 0.2
+    hollow_site_dedup_tolerance: float = 0.1
     planar_z_variance_threshold: float = (
         0.01  # Max z variance (Å²) for planar classification
     )
