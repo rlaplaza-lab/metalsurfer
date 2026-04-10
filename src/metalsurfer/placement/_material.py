@@ -56,3 +56,16 @@ def material_aware_pbc(slab: Atoms) -> list[bool]:
     if mat_type == "nanoparticle":
         return [False, False, False]
     return [True, True, False]
+
+
+def _resolve_material_type(
+    site: dict[str, object] | None,
+    fallback: str = "slab",
+) -> str:
+    """Resolve material type from a site dictionary with a deterministic fallback."""
+    if site is None:
+        return fallback
+    material_type = site.get("material_type")
+    if material_type is None:
+        return fallback
+    return str(material_type)

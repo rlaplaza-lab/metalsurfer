@@ -44,6 +44,7 @@ def _check_choice(name: str, value: str, *, allowed: tuple[str, ...]) -> None:
 
 CONFORMER_SAMPLING_OPTIONS: tuple[str, ...] = ("boltzmann", "cycle", "mixed")
 MATERIAL_TYPE_OPTIONS: tuple[str, ...] = ("slab", "nanoparticle", "porous")
+SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("distance_ratio", "delaunay")
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
 BO_SURROGATE_OPTIONS: tuple[str, ...] = (
     "random_forest",
@@ -81,6 +82,8 @@ class AdsorptionConfig:
     voronoi_probe_radius: float = 1.2  # min distance from framework atom to site (Å)
     voronoi_max_site_distance: float = 4.0  # max distance for accessible sites (Å)
     voronoi_site_enrichment: bool = True  # geodesic ridge subdivision for denser sites
+    # Site classification: "distance_ratio" (default) or "delaunay" (slab only).
+    site_classification_method: Literal["distance_ratio", "delaunay"] = "distance_ratio"
     conformer_sampling: Literal["boltzmann", "cycle", "mixed"] = "cycle"
     placement_filter: Callable[[PlacementSpec], bool] | None = field(
         default=None, repr=False
@@ -89,6 +92,9 @@ class AdsorptionConfig:
         0.5  # Fraction of flat-aromatic placements in horizontal (π-stacking) vs EN-down.
         # Default 0.5 ensures both orientations are explored.
     )
+    # When True, override flat_aromatic_parallel_fraction with a molecule-aware
+    # estimate (high for pure aromatics, low for strong EN-down binders).
+    adaptive_parallel_fraction: bool = False
     min_initial_distance: float = 1.5
     min_contact_ratio: float = (
         0.8  # Lower bound: (r_mol+r_surf)*ratio avoids covalent binding
@@ -103,6 +109,9 @@ class AdsorptionConfig:
     planar_z_variance_threshold: float = (
         0.01  # Max z variance (Å²) for planar classification
     )
+    # When True, use per-site local z as surface reference on rough (non-planar)
+    # slabs instead of the global np.max(z).
+    rough_slab_local_z: bool = True
     relax_top_layer: bool = True
     freeze_symbols: list[str] | None = None
     min_interatomic_distance: float = 0.5
@@ -281,6 +290,11 @@ class AdsorptionConfig:
                 "voronoi_site_enrichment must be a bool, "
                 f"got {type(self.voronoi_site_enrichment).__name__}"
             )
+        _check_choice(
+            "site_classification_method",
+            self.site_classification_method,
+            allowed=SITE_CLASSIFICATION_OPTIONS,
+        )
         if not self.connectivity_multipliers:
             raise ValueError("connectivity_multipliers must be a non-empty list")
         for i, m in enumerate(self.connectivity_multipliers):

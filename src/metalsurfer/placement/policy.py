@@ -12,11 +12,11 @@ AZIMUTH = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
 AZIMUTH_IN_PLANE = [0.0, 90.0, 180.0, 270.0]
 Z_FRACTIONS = [0.1, 0.3, 0.5, 0.7, 0.9]
 
-# With n_desired >> combinatorial grid size, subsampling is a no-op; keeps
-# max_batch_placement_specs aligned with uncapped builds.
-_COUNT_CAPACITY_SEED = 0
-# Public alias for tests and callers that need the same seed as max_batch_placement_specs.
-COUNT_CAPACITY_SEED = _COUNT_CAPACITY_SEED
+# Fixed seed for :func:`max_batch_placement_specs` so grid cardinality matches
+# a full build with ``n_desired`` large enough to hold the entire combinatorial grid.
+PLACEMENT_GRID_COUNT_SEED = 0
+
+_GRID_BUILD_CAP = 10**9
 
 
 def _normalized_site_indices(site_indices: list[int]) -> list[int]:
@@ -33,11 +33,11 @@ def max_batch_placement_specs(
     dissociative: bool = False,
     n_hollow_pairs: int = 0,
 ) -> int:
-    """Return total number of specs in the policy search grid.
+    """Return the number of specs in the policy grid (capped at ``_GRID_BUILD_CAP``).
 
-    Delegates to :func:`build_batch_placement_specs` with an uncapped budget so
-    that the count is always consistent with what the builder actually produces,
-    without duplicating the combinatorial arithmetic.
+    Uses :func:`build_batch_placement_specs` with ``PLACEMENT_GRID_COUNT_SEED`` and
+    a large ``n_desired`` so the length matches the combinatorial size without
+    duplicating counting logic.
     """
     return len(
         build_batch_placement_specs(
@@ -48,10 +48,10 @@ def max_batch_placement_specs(
             n_binders=n_binders,
             flat_aromatic=flat_aromatic,
             parallel_fraction=0.5,
-            n_desired=10**9,
-            seed=_COUNT_CAPACITY_SEED,
+            n_desired=_GRID_BUILD_CAP,
             dissociative=dissociative,
             n_hollow_pairs=n_hollow_pairs,
+            seed=PLACEMENT_GRID_COUNT_SEED,
         )
     )
 
@@ -66,18 +66,16 @@ def build_batch_placement_specs(
     flat_aromatic: bool,
     parallel_fraction: float,
     n_desired: int,
-    seed: int,
     filter_spec: Callable[[PlacementSpec], bool] | None = None,
     dissociative: bool = False,
     n_hollow_pairs: int = 0,
+    seed: int = PLACEMENT_GRID_COUNT_SEED,
 ) -> list[PlacementSpec]:
     """Build stratified BO candidate specs from policy priors.
 
-    When the combinatorial grid exceeds *n_desired*, specs are sampled
-    uniformly at random (reproducible via *seed*) so small budgets still
-    cover conformers, tilts, azimuths, sites, and z-fractions.
-
-    Dissociative specs are fully enumerated (grid is small).
+    Builds up to ``_GRID_BUILD_CAP`` candidates from the Cartesian grid, then
+    subsamples uniformly to *n_desired* when the grid is larger (reproducible
+    via *seed*). Dissociative mode enumerates a small grid fully.
     """
     normalized_sites = _normalized_site_indices(site_indices)
 
@@ -95,7 +93,7 @@ def build_batch_placement_specs(
     ) -> PlacementSpec:
         return PlacementSpec(
             conformer_index=conf_idx,
-            orientation_type=orient,  # sampler metadata, not geometry semantics
+            orientation_type=orient,
             face_flip=face_flip,
             en_atom_index=en_idx,
             site_index=site_idx,
@@ -125,7 +123,6 @@ def build_batch_placement_specs(
             if filter_spec is None or filter_spec(spec):
                 specs.append(spec)
 
-    # --- Dissociative: small grid, always fully enumerated, early return ---
     if dissociative:
         pair_indices = list(range(max(n_hollow_pairs, 1)))
         items = itertools.product(pair_indices, Z_FRACTIONS)
@@ -147,14 +144,9 @@ def build_batch_placement_specs(
         )
         return specs[:n_desired]
 
-    grid_cap = 10**9
-    rng = random.Random(seed)
-
     if flat_aromatic:
         n_par = max(1, int(n_desired * parallel_fraction))
         n_en = max(1, n_desired - n_par)
-        par_cap = grid_cap
-        en_cap = grid_cap
 
         parallel_items = itertools.product(
             range(n_conformers),
@@ -165,7 +157,6 @@ def build_batch_placement_specs(
             AZIMUTH_IN_PLANE,
             normalized_sites,
         )
-        # Collect parallel specs into their own list for separate subsampling
         par_specs: list[PlacementSpec] = []
 
         def _append_par(
@@ -196,7 +187,7 @@ def build_batch_placement_specs(
                 aip,
                 zfv,
             ),
-            par_cap,
+            _GRID_BUILD_CAP,
         )
 
         en_down_items = itertools.product(
@@ -237,9 +228,10 @@ def build_batch_placement_specs(
                 0.0,
                 zfv,
             ),
-            en_cap,
+            _GRID_BUILD_CAP,
         )
 
+        rng = random.Random(seed)
         if len(par_specs) > n_par:
             par_specs = rng.sample(par_specs, n_par)
         if len(en_specs) > n_en:
@@ -269,13 +261,12 @@ def build_batch_placement_specs(
                 0.0,
                 zfv,
             ),
-            target_size=grid_cap,
+            target_size=_GRID_BUILD_CAP,
         )
 
         if len(specs) > n_desired:
-            specs = rng.sample(specs, n_desired)
+            specs = random.Random(seed).sample(specs, n_desired)
 
-    # Re-index placement_index after subsampling for monotonic ordering
     for i, spec in enumerate(specs):
         spec.placement_index = i
 

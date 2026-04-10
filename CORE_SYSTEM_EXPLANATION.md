@@ -190,6 +190,8 @@ Benefits of this design:
 - easy logging for downstream ML,
 - clean separation between candidate enumeration and expensive optimization.
 
+**Batch placement policy:** `metalsurfer.placement.policy.build_batch_placement_specs` walks the combinatorial grid of conformers, sites, orientations, tilts, azimuths, and z-fractions (with an internal cap), then uniformly subsamples to `n_desired` when the grid is larger, using integer `seed` for reproducibility. The default seed is `PLACEMENT_GRID_COUNT_SEED` (0); `max_batch_placement_specs` relies on that default so reported capacity matches the length of an uncapped build. `enumerate_placement_specs` passes `AdsorptionConfig.seed` (or an explicit `seed` override).
+
 ### 5. Optimization
 
 Candidate adsorbate-slab systems are relaxed with the configured backend, typically TorchSim/FairChem through `setup_single_model(...)` and the batched optimization helpers.
@@ -259,7 +261,7 @@ Site classes include atop, bridge, hollow, and pore-like positions depending on 
 
 `symmetry.py` uses `spglib` to group equivalent sites and detect symmetry breaking. Failed symmetry dataset construction raises `SymmetryAnalysisError` (including wrapped `spglib` failures) instead of returning placeholder symmetry data.
 
-`get_symmetry_aware_sites()` returns an empty list when Voronoi yields no sites; otherwise it propagates `SymmetryAnalysisError` if spglib or orbit verification fails (no warning-and-`None` at the placement layer). `workflow/shared._resolve_site_context_for_sampling` catches that exception once, logs a single INFO line, and falls back to the core unified (cluster-deduplicated) Voronoi sites—appropriate when symmetry is broken or spglib cannot treat the structure.
+`get_symmetry_aware_sites()` returns `None` when Voronoi yields no sites. When `SymmetryAnalyzer` raises `SymmetryAnalysisError`, the placement layer logs a warning and returns `None`. `workflow/shared._resolve_site_context_for_sampling` then falls back to the core unified (cluster-deduplicated) Voronoi sites when symmetry reduction is unavailable or unreliable.
 
 ## Configuration Model
 

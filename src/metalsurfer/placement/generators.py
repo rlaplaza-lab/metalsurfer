@@ -12,12 +12,6 @@ from .._utils import is_finite_number as _is_finite_number
 from ..config import AdsorptionConfig
 from ..exceptions import DependencyMissingError
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
-
-try:
-    from rdkit import Chem
-except ImportError:
-    Chem = None  # type: ignore[misc, assignment]
-
 from . import geometry as geom
 from . import policy
 from . import sites as sts
@@ -30,6 +24,7 @@ from ._constants import (
     _PARALLEL_Z_MIN_HI_MARGIN,
     _SITE_Z_OFFSETS,
 )
+from ._material import _resolve_material_type
 
 logger = logging.getLogger(__name__)
 
@@ -72,12 +67,14 @@ def _is_flat_aromatic(
 
 def _is_flat_aromatic_with_en(smiles: str) -> bool:
     """True if molecule has aromatic rings and electronegative (binding) atoms."""
-    if Chem is None:
+    try:
+        from rdkit import Chem
+    except (ImportError, AttributeError) as exc:
         raise DependencyMissingError(
             "rdkit",
             "flat aromatic detection for placement",
             "pip install rdkit",
-        )
+        ) from exc
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return False
@@ -109,6 +106,45 @@ def classify_adsorbate_orientation(
     return "parallel" if dot > threshold else "EN-down"
 
 
+def _estimate_parallel_fraction(
+    symbols: list[str],
+    smiles: str | None,
+) -> float:
+    """Estimate the fraction of placements that should be parallel (π-stacking).
+
+    Returns a value in [0.3, 0.8] based on the ratio of binding atoms
+    (electronegative) to ring atoms.  Pure aromatics without binding atoms
+    (e.g. benzene) get 0.8; molecules with strong EN-down binders (e.g.
+    pyridine, phenol) get 0.3; mixed cases get 0.5.
+    """
+    binders = geom._binding_atom_candidates(symbols)
+    n_binders = len(binders)
+    n_ring = 0
+    if smiles is not None:
+        try:
+            from rdkit import Chem
+
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is not None:
+                n_ring = sum(1 for a in mol.GetAtoms() if a.GetIsAromatic())
+        except (ImportError, AttributeError):
+            pass
+    if n_ring == 0:
+        # Fallback: count C atoms as approximate ring proxy
+        n_ring = sum(1 for s in symbols if s == "C")
+
+    if n_binders == 0:
+        return 0.8  # pure aromatic: mostly parallel
+    if n_ring == 0:
+        return 0.5  # no ring info: default
+    ratio = n_binders / n_ring
+    if ratio >= 0.5:
+        return 0.3  # strong EN-down preference
+    if ratio >= 0.2:
+        return 0.5  # mixed
+    return 0.8  # predominantly aromatic
+
+
 def _get_unique_sites_for_specs(
     slab: Atoms,
     config: AdsorptionConfig,
@@ -121,7 +157,7 @@ def _get_unique_sites_for_specs(
     """
     if config.material_type not in ("slab", "nanoparticle", "porous"):
         raise ValueError(
-            "config.material_type must be 'slab', 'nanoparticle', or 'porous'; "
+            "config.material_type must be 'slab', 'nanoparticle', or 'porous', "
             f"got {config.material_type!r}"
         )
 
@@ -143,6 +179,7 @@ def _get_unique_sites_for_specs(
         top_layer_tolerance=config.top_layer_tolerance,
         material_type=mat_type,
         enrich=config.voronoi_site_enrichment,
+        site_classification_method=config.site_classification_method,
     )
     if not raw_sites:
         logger.warning(
@@ -190,14 +227,27 @@ def _resolve_surface_ref(
     site: dict[str, object] | None,
     slab: Atoms,
     mat_type: str,
+    *,
+    rough_slab_local_z: bool = False,
 ) -> tuple[float, bool]:
     """Return *(surface_ref_z, is_local_ref)* for z-offset calculations.
 
     For slabs the reference is the topmost atomic z so that z_offset is the
     gap above the surface layer.  For nanoparticles and porous materials the
     Voronoi vertex z IS the surface reference (local).
+
+    When *rough_slab_local_z* is True and the slab is non-planar, use the
+    site's own z as the surface reference instead of the global max z.  This
+    prevents step-edge sites from getting excessive z offsets.
     """
     if mat_type == "slab":
+        if (
+            rough_slab_local_z
+            and site is not None
+            and "z" in site
+            and not sts._is_top_layer_planar(slab)
+        ):
+            return float(site["z"]), True
         return float(np.max(slab.get_positions()[:, 2])), False
     if site is not None and "xyz" in site:
         return float(site["xyz"][2]), True
@@ -244,9 +294,7 @@ def _pose_from_spec(
         if np.linalg.norm(site_normal) > 1e-8:
             normal = site_normal / np.linalg.norm(site_normal)
 
-    mat_type = (
-        str(site["material_type"]) if site and "material_type" in site else "slab"
-    )
+    mat_type = _resolve_material_type(site, fallback="slab")
 
     if xy_override is not None:
         x, y = xy_override[0], xy_override[1]
@@ -285,7 +333,12 @@ def _pose_from_spec(
     # vertices sit *between* layers, so using their z would place the
     # adsorbate inside the slab.  For nanoparticles and porous materials
     # the vertex z IS on the surface / inside the pore.
-    surface_ref, is_local_ref = _resolve_surface_ref(site, slab, mat_type)
+    surface_ref, is_local_ref = _resolve_surface_ref(
+        site,
+        slab,
+        mat_type,
+        rough_slab_local_z=config.rough_slab_local_z,
+    )
 
     if spec.orientation_type == "parallel":
         base_pos = geom._flat_orientation_from_principal_axis(
@@ -494,10 +547,13 @@ def generate_placement_from_pose(
         if use_sites and 0 <= pose.site_index < len(unique_sites)
         else None
     )
-    mat_type = (
-        str(site["material_type"]) if site and "material_type" in site else "slab"
+    mat_type = _resolve_material_type(site, fallback="slab")
+    surface_ref, is_local_ref = _resolve_surface_ref(
+        site,
+        slab,
+        mat_type,
+        rough_slab_local_z=config.rough_slab_local_z,
     )
-    surface_ref, is_local_ref = _resolve_surface_ref(site, slab, mat_type)
     return _apply_pose(
         pose,
         adsorbate,
@@ -527,8 +583,10 @@ def _spec_grid_info(
     full_slab: Atoms | None = None,
 ) -> dict:
     """Compute the spec-enumeration inputs once for both enumerate and estimate."""
-    is_dissociative = config.skip_topology_check and _is_dissociable_diatomic(
-        conformers[0]
+    is_dissociative = (
+        config.skip_topology_check
+        and config.material_type == "slab"
+        and _is_dissociable_diatomic(conformers[0])
     )
     _ctx = _resolve_site_context(slab, config, site_context)
     unique_sites = _ctx.sites
@@ -590,8 +648,8 @@ def enumerate_placement_specs(
     When ``config.skip_topology_check`` is True and the molecule is a
     dissociable diatomic, dissociative specs are generated instead.
 
-    Uses ``config.seed`` when *seed* is omitted. When the grid exceeds
-    *n_desired*, specs are subsampled uniformly at random (reproducible).
+    Uses ``config.seed`` when *seed* is omitted. When the combinatorial grid
+    exceeds *n_desired*, specs are subsampled uniformly (reproducible via seed).
     """
     if not conformers:
         return []
@@ -610,6 +668,10 @@ def enumerate_placement_specs(
             return None
         return str(unique_sites[site_idx]["site_type"])
 
+    parallel_fraction = config.flat_aromatic_parallel_fraction
+    if config.adaptive_parallel_fraction and info["flat_aromatic"]:
+        parallel_fraction = _estimate_parallel_fraction(info["symbols"], smiles)
+
     return policy.build_batch_placement_specs(
         n_conformers=len(conformers),
         site_indices=info["site_indices"],
@@ -617,12 +679,12 @@ def enumerate_placement_specs(
         shape=info["shape"],
         n_binders=info["n_binders"],
         flat_aromatic=info["flat_aromatic"],
-        parallel_fraction=config.flat_aromatic_parallel_fraction,
+        parallel_fraction=parallel_fraction,
         n_desired=n_desired,
-        seed=eff_seed,
         filter_spec=filter_spec,
         dissociative=info["is_dissociative"],
         n_hollow_pairs=info["n_hollow_pairs"],
+        seed=eff_seed,
     )
 
 
@@ -798,9 +860,7 @@ def generate_placement_from_spec_with_reason(
     source = pose_result.source
     is_local_ref = pose_result.site_reference_frame == "local_site"
     use_sites = resolved_ctx.use_sites
-    mat_type = (
-        str(site["material_type"]) if site and "material_type" in site else "slab"
-    )
+    mat_type = _resolve_material_type(site, fallback="slab")
 
     result = _apply_pose(
         pose,
@@ -944,15 +1004,28 @@ def _get_hollow_site_pairs(
     min_fragment_sep = _DISSOCIATIVE_MIN_FRAGMENT_SEP
     max_adjacent_sep = _DISSOCIATIVE_MAX_ADJACENT_SEP
     surface_z = float(np.max(sites_slab.get_positions()[:, 2]))
+
+    # Build 3D positions for MIC distance computation.
+    site_3d = np.array([np.append(h, surface_z) for h in hollow_sites])
+
+    # KDTree pre-filter: only pairs within max_adjacent_sep in Cartesian
+    # distance are candidates.  This is an upper bound on MIC distance so
+    # all valid pairs are retained, but most distant pairs are pruned.
+    from scipy.spatial import KDTree as _KDTree
+
+    tree = _KDTree(site_3d)
+    candidate_pairs = tree.query_pairs(r=max_adjacent_sep)
+
     pairs: list[tuple[np.ndarray, np.ndarray]] = []
-    for i in range(len(hollow_sites)):
-        for j in range(i + 1, len(hollow_sites)):
-            xy_i = np.append(hollow_sites[i], surface_z)
-            xy_j = np.append(hollow_sites[j], surface_z)
-            _, dists = find_mic((xy_i - xy_j).reshape(1, 3), cell, pbc=pbc)
-            d = float(dists[0])
-            if min_fragment_sep <= d <= max_adjacent_sep:
-                pairs.append((hollow_sites[i], hollow_sites[j]))
+    for i, j in candidate_pairs:
+        _, dists = find_mic(
+            (site_3d[i] - site_3d[j]).reshape(1, 3),
+            cell,
+            pbc=pbc,
+        )
+        d = float(dists[0])
+        if min_fragment_sep <= d <= max_adjacent_sep:
+            pairs.append((hollow_sites[i], hollow_sites[j]))
     return pairs
 
 
@@ -964,6 +1037,9 @@ def _generate_dissociative_placement_from_spec(
     slab_for_sites: Atoms | None = None,
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
     """Place fragments at different hollow sites based on spec pair index."""
+    if config.material_type != "slab":
+        return None, f"dissociative_not_supported_for_{config.material_type}"
+
     if not _is_dissociable_diatomic(adsorbate):
         return None, "not_dissociable_diatomic"
 

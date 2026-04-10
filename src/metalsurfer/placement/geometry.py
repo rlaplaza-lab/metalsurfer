@@ -355,6 +355,8 @@ def _surface_aligned_rotation(
                 pos = (R @ pos.T).T
     else:
         pos, _ = _principal_axis_rotation(pos, normal, placement_id)
+        if pos is None:
+            pos = np.asarray(ads_pos, dtype=float).copy() - com
     return pos
 
 
@@ -375,11 +377,11 @@ def _principal_axis_rotation(
     adsorbate_positions: np.ndarray,
     normal_vector: np.ndarray,
     placement_id: int,
-) -> tuple[np.ndarray, float]:
+) -> tuple[np.ndarray | None, float]:
     """Rotate the adsorbate around its principal axes to maximise clearance.
 
     Returns centred-at-origin positions (no surface_z offset) and the best
-    min-z score. Always returns a valid position array.
+    min-z score.
     """
     pos = np.asarray(adsorbate_positions, dtype=float).copy()
     com = np.mean(pos, axis=0)
@@ -423,9 +425,8 @@ def _principal_axis_rotation(
                 best_positions = test.copy()
 
     # re-centre at origin so caller controls the final offset
-    if best_positions is None:
-        best_positions = np.asarray(adsorbate_positions, dtype=float).copy()
-    best_positions -= np.mean(best_positions, axis=0)
+    if best_positions is not None:
+        best_positions -= np.mean(best_positions, axis=0)
 
     return best_positions, best_score
 
@@ -440,15 +441,19 @@ def calculate_min_distance(
     """Minimum interatomic distance between two position arrays.
 
     Uses ASE's :func:`~ase.geometry.find_mic` for robust minimum-image
-    convention handling, supporting non-orthogonal cells.  When *pbc* is
-    not supplied, it is inferred from the cell determinant (full 3D PBC
-    when det > 0, no PBC otherwise).  Callers should pass the actual
-    structure PBC for correctness across slabs, nanoparticles, and porous
-    materials.
+    convention handling, supporting non-orthogonal cells.
+
+    When *cell* is periodic (det > 0), *pbc* must be provided explicitly so
+    slab ([True, True, False]), nanoparticle ([False, False, False]), and
+    porous ([True, True, True]) calculations cannot accidentally fall back to
+    incorrect full-3D periodicity.
     """
     if use_pbc and cell is not None and np.linalg.det(cell) > 0:
         if pbc is None:
-            pbc = [True, True, True]
+            raise ValueError(
+                "pbc must be provided when cell is periodic; "
+                "pass slab/cluster/porous flags explicitly"
+            )
         p1 = np.asarray(positions1)
         p2 = np.asarray(positions2)
         diffs = p1[:, None, :] - p2[None, :, :]
@@ -472,11 +477,14 @@ def calculate_min_distance_pair(
     Returns ``(min_distance, idx1, idx2)`` where *idx1* indexes into
     *positions1* and *idx2* indexes into *positions2*.
     """
-    if pbc is None:
-        pbc = [True, True, True]
     p1 = np.asarray(positions1)
     p2 = np.asarray(positions2)
     if cell is not None and np.linalg.det(cell) > 0:
+        if pbc is None:
+            raise ValueError(
+                "pbc must be provided when cell is periodic; "
+                "pass slab/cluster/porous flags explicitly"
+            )
         diffs = p1[:, None, :] - p2[None, :, :]
         diffs_flat = diffs.reshape(-1, 3)
         _, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
@@ -515,7 +523,11 @@ def check_initial_placement_distance(
     slab_syms = slab.get_chemical_symbols()
     mol_pos = molecule_atoms.get_positions()
     slab_pos = slab.get_positions()
-    cell = molecule_atoms.get_cell()
+    cell = (
+        molecule_atoms.get_cell()
+        if hasattr(molecule_atoms, "get_cell")
+        else slab.get_cell()
+    )
     pbc = material_aware_pbc(slab)
 
     actual_min, mol_idx, slab_idx = calculate_min_distance_pair(

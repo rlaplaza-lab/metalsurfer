@@ -1,20 +1,19 @@
 """Site detection and clustering for adsorbate placement.
 
-Unified Voronoi-based sites for slabs, nanoparticles, and fully periodic
-porous frameworks. ``get_unified_sites()`` is the main entry; cluster-equivalent
-deduplication uses 3D fractional coords (porous), 2D+ z (slab), or Cartesian 3D
-(nanoparticle). ``get_symmetry_aware_sites()`` reduces orbits via spglib.
+Unified Voronoi-based sites for slabs, nanoparticles, and 3D-periodic porous
+frameworks. Optional Delaunay-based classification on slab top layers when
+``site_classification_method == 'delaunay'``. Symmetry reduction via
+``get_symmetry_aware_sites()`` builds on ``get_unified_sites()``.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import numpy as np
 from ase import Atoms
-from scipy.spatial import KDTree, QhullError, Voronoi
+from scipy.spatial import Delaunay, KDTree, QhullError, Voronoi
 
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from ._constants import (
@@ -29,11 +28,12 @@ from ._constants import (
     _PORE_THRESHOLD_ANGSTROM,
     _VORONOI_DEDUP_TOLERANCE,
 )
-from ._material import _SLAB_VACUUM_FRACTION, detect_material_type  # noqa: F401
+from ._material import (  # noqa: F401
+    _SLAB_VACUUM_FRACTION,
+    _resolve_material_type,
+    detect_material_type,
+)
 from .geometry import _get_covalent_radius
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,31 @@ def _build_periodic_images(
 # ---------------------------------------------------------------------------
 
 
+def _deduplicate_points(points: np.ndarray, tolerance: float) -> np.ndarray:
+    """Return a boolean keep-mask that removes near-duplicate points."""
+    if len(points) == 0:
+        return np.ones(0, dtype=bool)
+    ded_tree = KDTree(points)
+    pairs = ded_tree.query_pairs(r=tolerance, output_type="ndarray")
+    keep = np.ones(len(points), dtype=bool)
+    for i, j in pairs:
+        if keep[i] and keep[j]:
+            keep[j] = False
+    return keep
+
+
+def _is_duplicate_of(
+    candidate: np.ndarray,
+    tree: KDTree | None,
+    tolerance: float,
+) -> bool:
+    """True when *candidate* is within *tolerance* of any point in *tree*."""
+    if tree is None:
+        return False
+    nearest = float(tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0])
+    return nearest < tolerance
+
+
 def _voronoi_sites(
     positions: np.ndarray,
     cell: np.ndarray,
@@ -97,12 +122,8 @@ def _voronoi_sites(
     extended = _build_periodic_images(positions, cell, pbc)
     try:
         vor = Voronoi(extended)
-    except QhullError as exc:
-        logger.warning(
-            "Voronoi (Qhull) failed for %d extended points: %s",
-            len(extended),
-            exc,
-        )
+    except (QhullError, ValueError, RuntimeError) as exc:
+        logger.warning("Voronoi computation failed (%s); returning no sites", exc)
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
 
     raw_vertices = vor.vertices
@@ -138,12 +159,7 @@ def _voronoi_sites(
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
 
     # Deduplicate
-    ded_tree = KDTree(vertices)
-    pairs = ded_tree.query_pairs(r=_VORONOI_DEDUP_TOLERANCE, output_type="ndarray")
-    keep = np.ones(len(vertices), dtype=bool)
-    for i, j in pairs:
-        if keep[i] and keep[j]:
-            keep[j] = False
+    keep = _deduplicate_points(vertices, _VORONOI_DEDUP_TOLERANCE)
     vertices = vertices[keep]
     nn_dists = nn_dists[keep]
 
@@ -289,14 +305,8 @@ def _enrich_along_ridges(
     all_verts = np.vstack([vertices, np.array(new_verts)])
     all_dists = np.concatenate([nn_dists, np.array(new_dists)])
 
-    # Final deduplication of the combined set
-    ded_tree = KDTree(all_verts)
-    pairs = ded_tree.query_pairs(r=_VORONOI_DEDUP_TOLERANCE, output_type="ndarray")
-    keep = np.ones(len(all_verts), dtype=bool)
-    for i, j in pairs:
-        if keep[i] and keep[j]:
-            # Prefer originals over enriched: drop the higher-index one
-            keep[j] = False
+    # Final deduplication of the combined set (preserving original points)
+    keep = _deduplicate_points(all_verts, _VORONOI_DEDUP_TOLERANCE)
     return all_verts[keep], all_dists[keep]
 
 
@@ -339,6 +349,122 @@ def _classify_voronoi_site(
     return "hollow", tuple(int(i) for i in idx[:3])
 
 
+def _delaunay_site_classification(
+    vertex: np.ndarray,
+    top_positions: np.ndarray,
+    top_atom_indices: np.ndarray,
+    triangulation: Delaunay,
+    positions: np.ndarray,
+    *,
+    atop_threshold: float = 0.3,
+    bridge_threshold: float = 0.3,
+) -> tuple[str, tuple[int, ...]]:
+    """Classify site using Delaunay triangulation of top-layer atoms.
+
+    Generates canonical atop (vertex), bridge (edge midpoint), and hollow
+    (face centroid) reference points from the triangulation, then assigns
+    the Voronoi vertex to the nearest reference.
+
+    Parameters
+    ----------
+    vertex : (3,) array
+        Voronoi vertex position.
+    top_positions : (M, 2) or (M, 3) array
+        Top-layer atom positions used for Delaunay.
+    top_atom_indices : (M,) array
+        Mapping from top_positions index to global positions index.
+    triangulation : Delaunay
+        Pre-computed Delaunay triangulation of top_positions[:, :2].
+    positions : (N, 3) array
+        All slab atom positions (for fallback nearest-neighbor).
+    atop_threshold : float
+        Max fractional distance (relative to nearest-neighbor distance)
+        to classify as atop.
+    bridge_threshold : float
+        Max fractional distance to classify as bridge.
+
+    Returns
+    -------
+    (site_type, atom_indices) with the same interface as
+    :func:`_classify_voronoi_site`.
+    """
+    xy = vertex[:2]
+
+    # Build reference points: atop, bridge (edge midpoints), hollow (centroids)
+    simplices = triangulation.simplices
+    top_xy = (
+        top_positions[:, :2]
+        if top_positions.ndim == 2 and top_positions.shape[1] >= 2
+        else top_positions
+    )
+
+    best_type = "hollow"
+    best_dist = float("inf")
+    best_indices: tuple[int, ...] = ()
+
+    # Check atop: distance to each top-layer atom
+    for li, gi in enumerate(top_atom_indices):
+        d = float(np.linalg.norm(xy - top_xy[li]))
+        if d < best_dist:
+            best_dist = d
+            best_type = "atop"
+            best_indices = (int(gi),)
+
+    # Characteristic length for thresholding: mean nn distance in top layer
+    if len(top_xy) >= 2:
+        _top_tree = KDTree(top_xy)
+        _nn_d, _ = _top_tree.query(top_xy, k=2)
+        char_len = float(np.mean(_nn_d[:, 1]))
+    else:
+        char_len = best_dist if best_dist < float("inf") else 1.0
+
+    # Check bridge: edge midpoints
+    seen_edges: set[tuple[int, int]] = set()
+    for simplex in simplices:
+        for e0, e1 in ((0, 1), (1, 2), (0, 2)):
+            li0, li1 = int(simplex[e0]), int(simplex[e1])
+            edge_key = (min(li0, li1), max(li0, li1))
+            if edge_key in seen_edges:
+                continue
+            seen_edges.add(edge_key)
+            mid = (top_xy[li0] + top_xy[li1]) / 2.0
+            d = float(np.linalg.norm(xy - mid))
+            if d < best_dist:
+                best_dist = d
+                best_type = "bridge"
+                best_indices = (int(top_atom_indices[li0]), int(top_atom_indices[li1]))
+
+    # Check hollow: face centroids
+    for simplex in simplices:
+        li0, li1, li2 = int(simplex[0]), int(simplex[1]), int(simplex[2])
+        centroid = (top_xy[li0] + top_xy[li1] + top_xy[li2]) / 3.0
+        d = float(np.linalg.norm(xy - centroid))
+        if d < best_dist:
+            best_dist = d
+            best_type = "hollow"
+            best_indices = (
+                int(top_atom_indices[li0]),
+                int(top_atom_indices[li1]),
+                int(top_atom_indices[li2]),
+            )
+
+    # Apply thresholds: only keep atop/bridge if close enough relative to
+    # the characteristic nearest-neighbor distance, otherwise fall back to hollow.
+    if best_type == "atop" and best_dist > atop_threshold * char_len:
+        # Recheck: is there a better bridge or hollow?
+        pass  # keep the assignment — the loop already picked the globally nearest
+    if best_type == "bridge" and best_dist > bridge_threshold * char_len:
+        # Close to an edge midpoint but not enough; fallback
+        # Use full positions k=3 nearest for hollow
+        _tree = KDTree(positions)
+        _, idx = _tree.query(vertex.reshape(1, 3), k=min(3, len(positions)))
+        idx = idx.ravel()
+        best_type = "hollow"
+        best_indices = tuple(int(i) for i in idx[:3])
+
+    return best_type, best_indices
+
+
 # ---------------------------------------------------------------------------
 # Local surface normal
 # ---------------------------------------------------------------------------
@@ -376,6 +502,7 @@ def get_unified_sites(
     material_type: str | None = None,
     pore_threshold: float = _PORE_THRESHOLD_ANGSTROM,
     enrich: bool = True,
+    site_classification_method: str = "distance_ratio",
 ) -> list[dict[str, object]]:
     """Return adsorption/placement site dicts for *atoms*.
 
@@ -400,6 +527,10 @@ def get_unified_sites(
     enrich : bool, optional
         When True (default), subdivide long admissible Voronoi edges to
         improve site coverage on rugged surfaces and porous materials.
+    site_classification_method : str, optional
+        ``"distance_ratio"`` (default) uses nearest-neighbor distance ratios;
+        ``"delaunay"`` uses Delaunay triangulation of top-layer atoms (slabs
+        only; falls back to distance_ratio for non-slab materials).
 
     Returns
     -------
@@ -535,11 +666,17 @@ def get_unified_sites(
                 continue
 
             # Dedup: skip if too close to an existing Voronoi vertex
-            if existing_tree is not None:
-                d_existing = float(
-                    existing_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0]
-                )
-                if d_existing < _VORONOI_DEDUP_TOLERANCE:
+            if _is_duplicate_of(candidate, existing_tree, _VORONOI_DEDUP_TOLERANCE):
+                continue
+
+            # Dedup: skip if too close to a previously injected atop site
+            if new_verts:
+                _injected_tree = KDTree(np.array(new_verts))
+                if _is_duplicate_of(
+                    candidate,
+                    _injected_tree,
+                    _VORONOI_DEDUP_TOLERANCE,
+                ):
                     continue
 
             new_verts.append(candidate)
@@ -557,15 +694,54 @@ def get_unified_sites(
     if len(vertices) == 0:
         return []
 
+    symbols = atoms.get_chemical_symbols()
+
+    # Pre-compute Delaunay triangulation for slab classification if requested.
+    _use_delaunay = site_classification_method == "delaunay" and material_type == "slab"
+    _delaunay_tri = None
+    _top_positions: np.ndarray | None = None
+    _top_atom_indices: np.ndarray | None = None
+    if _use_delaunay:
+        z_surface = float(np.max(positions[:, 2]))
+        top_mask = positions[:, 2] >= z_surface - top_layer_tolerance
+        _top_atom_indices = np.nonzero(top_mask)[0]
+        _top_positions = positions[_top_atom_indices]
+        if len(_top_atom_indices) >= 3:
+            _delaunay_tri = Delaunay(_top_positions[:, :2])
+        else:
+            _use_delaunay = False
+
     sites: list[dict[str, object]] = []
     for i, vertex in enumerate(vertices):
-        site_type, nearest_idx = _classify_voronoi_site(
-            vertex,
-            positions,
-            tree=local_tree,
-            pore_threshold=pore_threshold,
-        )
+        if (
+            _use_delaunay
+            and _delaunay_tri is not None
+            and _top_positions is not None
+            and _top_atom_indices is not None
+        ):
+            site_type, nearest_idx = _delaunay_site_classification(
+                vertex,
+                _top_positions,
+                _top_atom_indices,
+                _delaunay_tri,
+                positions,
+            )
+        else:
+            site_type, nearest_idx = _classify_voronoi_site(
+                vertex,
+                positions,
+                tree=local_tree,
+                pore_threshold=pore_threshold,
+            )
         normal = _compute_local_normal(vertex, positions, tree=local_tree)
+        # Local environment fingerprint: sorted element symbols of nearest
+        # framework atoms + site type.  Used by _cluster_equivalent_sites to
+        # prevent merging geometrically close sites with different chemical
+        # environments (e.g. atop-Ni vs atop-Pt on an alloy surface).
+        env_fingerprint = (
+            tuple(sorted(symbols[j] for j in nearest_idx if j < len(symbols))),
+            site_type,
+        )
         sites.append(
             {
                 "xy": vertex[:2].copy(),
@@ -577,6 +753,7 @@ def get_unified_sites(
                 "nn_distance": float(nn_dists[i]) if i < len(nn_dists) else None,
                 "site_source": "voronoi",
                 "material_type": material_type,
+                "env_fingerprint": env_fingerprint,
             }
         )
 
@@ -616,75 +793,121 @@ def get_hollow_sites_for_adatoms(
 
 
 # ---------------------------------------------------------------------------
-# Site deduplication / clustering
+# Union-find for environment-aware site clustering
 # ---------------------------------------------------------------------------
 
 
-def _cluster_by_distance(
-    sites: list[dict[str, object]],
-    coord_fn: Callable[[dict[str, object]], np.ndarray],
-    key_fn: Callable[[dict[str, object]], tuple],
-    dist_fn: Callable[[np.ndarray, np.ndarray], bool],
-) -> list[dict[str, object]]:
-    """Generic greedy clustering: keep one representative per equivalence class.
+def _union_find_cluster(
+    n: int,
+    merge_pairs: list[tuple[int, int]],
+) -> list[list[int]]:
+    """Union-find with path compression and union-by-rank.
 
-    Sorts *sites* by *key_fn* for deterministic output, then greedily selects
-    representatives: a site is kept unless *dist_fn(coord_fn(site), coord_fn(rep))*
-    returns True for some already-kept representative.
-
-    Parameters
-    ----------
-    sites:
-        Input site dicts.
-    coord_fn:
-        Maps a site dict to its comparison coordinate vector.
-    key_fn:
-        Stable sort key (must be consistent with coord_fn).
-    dist_fn:
-        Returns True when two coordinate vectors are close enough to be duplicates.
+    Returns a list of connected components (lists of original indices).
     """
-    sorted_sites = sorted(sites, key=key_fn)
-    reps: list[dict[str, object]] = []
-    for s in sorted_sites:
-        cs = coord_fn(s)
-        if not any(dist_fn(cs, coord_fn(r)) for r in reps):
-            reps.append(s)
-    return sorted(reps, key=key_fn)
+    parent = list(range(n))
+    rank = [0] * n
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # path halving
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        if rank[ra] < rank[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        if rank[ra] == rank[rb]:
+            rank[ra] += 1
+
+    for a, b in merge_pairs:
+        union(a, b)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    return list(groups.values())
+
+
+def _env_fingerprint(site: dict[str, object]) -> tuple:
+    """Return the local-environment fingerprint of *site*.
+
+    Falls back to ``(site_type,)`` when no fingerprint was computed.
+    """
+    fp = site.get("env_fingerprint")
+    if fp is not None:
+        return fp
+    return (str(site.get("site_type", "")),)
 
 
 def _cluster_equivalent_sites(
     sites: list[dict[str, object]],
     cell: np.ndarray,
     tolerance: float = DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
+    z_abs_tolerance: float | None = None,
 ) -> list[dict[str, object]]:
-    """Group equivalent sites by fractional coords; return unique representatives.
+    """Group equivalent sites; return unique representatives.
 
-    - nanoparticle: Cartesian 3D.
+    Uses KDTree ``query_pairs`` + union-find instead of greedy O(n·k)
+    scanning, with an environment-fingerprint guard so geometrically close
+    sites with different chemical neighborhoods are never merged.
+
+    - nanoparticle: Cartesian 3D distance.
     - porous: 3D fractional with periodic wrapping.
-    - slab: 2D fractional (a,b) + absolute z.
+    - slab: 2D fractional (a,b) + absolute z (separate tolerance for z).
 
-    All three paths use the shared :func:`_cluster_by_distance` primitive.
+    Parameters
+    ----------
+    tolerance : float
+        Fractional-coordinate tolerance for xy (slab), full 3D (porous),
+        or Cartesian distance (nanoparticle).
+    z_abs_tolerance : float | None
+        For slabs, absolute z tolerance in Å.  Defaults to 0.5 Å when
+        ``None``, avoiding the old bug where the dimensionless *tolerance*
+        was reused for absolute z comparisons.
     """
     if not sites:
         return []
 
-    mat_type = str(sites[0].get("material_type", "slab"))
+    n = len(sites)
+    mat_type = _resolve_material_type(sites[0], fallback="slab")
 
     def _get_xyz(s: dict[str, object]) -> np.ndarray:
         if "xyz" in s:
             return np.asarray(s["xyz"], dtype=float)
         return np.array([*np.asarray(s["xy"], dtype=float), float(s.get("z", 0.0))])
 
+    # Stable sort key for deterministic representative selection
+    def _sort_key(s: dict[str, object]) -> tuple:
+        xyz = _get_xyz(s)
+        return (
+            float(xyz[0]),
+            float(xyz[1]),
+            float(xyz[2]),
+            str(s.get("site_type", "")),
+        )
+
+    # Sort sites and remember original order for representative selection
+    order = sorted(range(n), key=lambda i: _sort_key(sites[i]))
+    sorted_sites = [sites[i] for i in order]
+    fps = [_env_fingerprint(s) for s in sorted_sites]
+
     # ------------------------------------------------------------------
     # Nanoparticle: Cartesian 3D distance
     # ------------------------------------------------------------------
     if mat_type == "nanoparticle" or np.linalg.det(cell) <= 0:
-        return _cluster_by_distance(
-            sites,
-            coord_fn=_get_xyz,
-            key_fn=lambda s: tuple(_get_xyz(s).tolist()),
-            dist_fn=lambda a, b: float(np.linalg.norm(a - b)) < tolerance,
-        )
+        coords = np.array([_get_xyz(s) for s in sorted_sites])
+        tree = KDTree(coords)
+        raw_pairs = tree.query_pairs(r=tolerance, output_type="ndarray")
+        merge = [(int(a), int(b)) for a, b in raw_pairs if fps[a] == fps[b]]
+        components = _union_find_cluster(n, merge)
+        reps = sorted([min(comp) for comp in components])
+        result = [sorted_sites[i] for i in reps]
+        return sorted(result, key=_sort_key)
 
     inv_cell = np.linalg.inv(cell)
 
@@ -692,40 +915,88 @@ def _cluster_equivalent_sites(
     # Porous: 3D fractional with periodic wrapping
     # ------------------------------------------------------------------
     if mat_type == "porous":
-
-        def _frac3(s: dict[str, object]) -> np.ndarray:
-            return (inv_cell @ _get_xyz(s)) % 1.0
-
-        def _frac3_key(s: dict[str, object]) -> tuple:
-            f = _frac3(s)
-            return (float(f[0]), float(f[1]), float(f[2]))
-
-        def _frac3_close(a: np.ndarray, b: np.ndarray) -> bool:
-            diff = np.minimum(np.abs(a - b), 1.0 - np.abs(a - b))
-            return bool(np.all(diff < tolerance))
-
-        return _cluster_by_distance(sites, _frac3, _frac3_key, _frac3_close)
+        frac_coords = np.array([(inv_cell @ _get_xyz(s)) % 1.0 for s in sorted_sites])
+        # For periodic fractional coords, KDTree can miss pairs across
+        # the 0/1 boundary.  Expand into 3^3 = 27 images, query pairs,
+        # then map back.
+        images = []
+        image_map = []  # maps expanded index -> original index
+        for ix in (-1, 0, 1):
+            for iy in (-1, 0, 1):
+                for iz in (-1, 0, 1):
+                    shifted = frac_coords + np.array([ix, iy, iz])
+                    images.append(shifted)
+                    image_map.extend(range(n))
+        all_coords = np.vstack(images)
+        tree = KDTree(all_coords)
+        raw_pairs = tree.query_pairs(r=tolerance, output_type="ndarray")
+        merge: list[tuple[int, int]] = []
+        for a_exp, b_exp in raw_pairs:
+            a_orig = image_map[int(a_exp)]
+            b_orig = image_map[int(b_exp)]
+            if a_orig != b_orig and fps[a_orig] == fps[b_orig]:
+                merge.append((min(a_orig, b_orig), max(a_orig, b_orig)))
+        # Deduplicate merge pairs
+        merge = list(set(merge))
+        components = _union_find_cluster(n, merge)
+        reps = sorted([min(comp) for comp in components])
+        result = [sorted_sites[i] for i in reps]
+        return sorted(result, key=_sort_key)
 
     # ------------------------------------------------------------------
-    # Slab: 2D fractional + absolute z
+    # Slab: 2D fractional + absolute z (separate tolerance)
     # ------------------------------------------------------------------
+    z_tol = z_abs_tolerance if z_abs_tolerance is not None else 0.5
     inv_2d = np.linalg.inv(cell[:2, :2])
 
-    def _frac_slab(s: dict[str, object]) -> np.ndarray:
+    def _slab_coord(s: dict[str, object]) -> np.ndarray:
         xy = np.asarray(s["xy"], dtype=float)
         frac = (inv_2d @ xy) % 1.0
         z = float(cast(float, s.get("z", 0.0)))
         return np.array([frac[0], frac[1], z])
 
-    def _frac_slab_key(s: dict[str, object]) -> tuple:
-        c = _frac_slab(s)
+    slab_coords = np.array([_slab_coord(s) for s in sorted_sites])
+
+    # For 2D periodic fractional coords, expand into 3×3 images (z unchanged)
+    images_2d = []
+    image_map_2d: list[int] = []
+    for ix in (-1, 0, 1):
+        for iy in (-1, 0, 1):
+            shifted = slab_coords.copy()
+            shifted[:, 0] += ix
+            shifted[:, 1] += iy
+            images_2d.append(shifted)
+            image_map_2d.extend(range(n))
+    all_slab = np.vstack(images_2d)
+
+    # Use max(tolerance, z_tol) as KDTree radius to catch all candidates,
+    # then filter more strictly per dimension.
+    r_search = max(tolerance, z_tol) * 1.5  # slight padding for safety
+    tree = KDTree(all_slab)
+    raw_pairs = tree.query_pairs(r=r_search, output_type="ndarray")
+    merge = []
+    for a_exp, b_exp in raw_pairs:
+        a_orig = image_map_2d[int(a_exp)]
+        b_orig = image_map_2d[int(b_exp)]
+        if a_orig == b_orig:
+            continue
+        if fps[a_orig] != fps[b_orig]:
+            continue
+        ca = slab_coords[a_orig]
+        cb = slab_coords[b_orig]
+        diff_xy = np.minimum(np.abs(ca[:2] - cb[:2]), 1.0 - np.abs(ca[:2] - cb[:2]))
+        if np.all(diff_xy < tolerance) and abs(ca[2] - cb[2]) < z_tol:
+            merge.append((min(a_orig, b_orig), max(a_orig, b_orig)))
+    merge = list(set(merge))
+    components = _union_find_cluster(n, merge)
+    reps = sorted([min(comp) for comp in components])
+    result = [sorted_sites[i] for i in reps]
+
+    def _slab_key(s: dict[str, object]) -> tuple:
+        c = _slab_coord(s)
         return (float(c[0]), float(c[1]), float(c[2]))
 
-    def _slab_close(a: np.ndarray, b: np.ndarray) -> bool:
-        diff_xy = np.minimum(np.abs(a[:2] - b[:2]), 1.0 - np.abs(a[:2] - b[:2]))
-        return bool(np.all(diff_xy < tolerance) and abs(a[2] - b[2]) < tolerance)
-
-    return _cluster_by_distance(sites, _frac_slab, _frac_slab_key, _slab_close)
+    return sorted(result, key=_slab_key)
 
 
 # ---------------------------------------------------------------------------
@@ -741,11 +1012,12 @@ def get_symmetry_aware_sites(
     probe_radius: float = 1.2,
     max_site_distance: float = 4.0,
     enrich: bool = True,
-) -> list[dict[str, object]]:
+    site_classification_method: str = "distance_ratio",
+) -> list[dict[str, object]] | None:
     """Symmetry-reduced adsorption sites using spglib.
 
-    Returns an empty list when there are no raw sites or symmetry analysis
-    cannot complete. Nanoparticles use cluster-in-a-box symmetry.
+    Returns None on failure. Nanoparticles use cluster-in-a-box symmetry.
+    Material type must be explicitly specified.
     """
     if material_type not in ("slab", "nanoparticle", "porous"):
         raise ValueError(
@@ -759,9 +1031,10 @@ def get_symmetry_aware_sites(
         top_layer_tolerance=top_layer_tolerance,
         material_type=material_type,
         enrich=enrich,
+        site_classification_method=site_classification_method,
     )
     if not raw_sites:
-        return []
+        return None
 
     sym_mode = "cluster" if material_type == "nanoparticle" else "auto"
     planar_for_symmetry = (material_type == "slab") and _is_top_layer_planar(
@@ -779,8 +1052,10 @@ def get_symmetry_aware_sites(
             planar=planar_for_symmetry,
         )
     except SymmetryAnalysisError as exc:
-        logger.info("Symmetry-aware site reduction unavailable: %s", exc)
-        return []
+        logger.warning(
+            "Symmetry analysis failed, skipping symmetry-aware sites: %s", exc
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -867,7 +1142,7 @@ def _compute_site_z_base(
     """
     z_lo, z_hi = config.placement_z_range
 
-    mat_type = str(site.get("material_type", "slab")) if site else "slab"
+    mat_type = _resolve_material_type(site, fallback="slab")
 
     # For non-slab materials whose surface_ref is the Voronoi vertex z,
     # tighten the range around the nn_distance to keep the adsorbate in

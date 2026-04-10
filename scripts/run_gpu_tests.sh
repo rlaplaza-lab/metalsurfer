@@ -6,10 +6,10 @@
 # splitting into separate subprocesses matches CI-style isolation. Conftest still clears
 # autobatchers around individual @gpu tests within a phase.
 #
-# Usage (from repo root, conda env "metalsurfer"):
+# Usage (from repo root, with your scientific Python env activated):
 #   ./scripts/run_gpu_tests.sh
-# Or:
-#   bash scripts/run_gpu_tests.sh /path/to/conda/envs/metalsurfer/bin/python
+# Or pass an explicit interpreter:
+#   bash scripts/run_gpu_tests.sh /path/to/python
 # Extra args are forwarded to every pytest invocation (e.g. -q).
 #
 # Opt out of killing stray GPU Pythons before each phase:
@@ -27,7 +27,7 @@ if [[ ! -x "${PYTHON:-}" ]]; then
   PYTHON="$(command -v python3 || true)"
 fi
 if [[ ! -x "${PYTHON:-}" ]]; then
-  echo "No Python interpreter found. Activate conda env metalsurfer or pass path to python." >&2
+  echo "No Python interpreter found. Activate your environment or pass the path to python." >&2
   exit 1
 fi
 # Do not set CUDA_VISIBLE_DEVICES unless you intend to hide the GPU.

@@ -1,6 +1,6 @@
 """Binding energy prediction from placement descriptors via a trained regression model.
 
-Example: predictor = BindingEnergyPredictor.load(\"model_dir/\");
+Example: ``predictor = BindingEnergyPredictor.load("model_dir/")``;
 pred = predictor.predict_record(record); use pred.energy as a screening pre-filter.
 """
 

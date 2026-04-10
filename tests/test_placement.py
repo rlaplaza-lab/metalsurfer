@@ -10,7 +10,7 @@ from scipy.spatial import KDTree
 import metalsurfer.placement.sites as site_module
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.filters import check_desorption
-from metalsurfer.models import PlacementPose
+from metalsurfer.models import PlacementPose, PlacementSpec
 from metalsurfer.placement import (
     _classify_molecule_shape,
     _cluster_equivalent_sites,
@@ -23,13 +23,14 @@ from metalsurfer.placement import (
     generate_placement_from_descriptor,
     generate_placement_from_pose,
     generate_placement_from_spec,
+    generate_placement_from_spec_with_reason,
     get_symmetry_aware_sites,
     get_unified_sites,
     material_aware_pbc,
 )
+from metalsurfer.placement._material import _resolve_material_type
 from metalsurfer.placement.generators import _get_unique_sites_for_specs
 from metalsurfer.placement.policy import (
-    COUNT_CAPACITY_SEED,
     Z_FRACTIONS,
     build_batch_placement_specs,
     max_batch_placement_specs,
@@ -37,6 +38,7 @@ from metalsurfer.placement.policy import (
 from metalsurfer.placement.sites import (
     _classify_voronoi_site,
     _compute_local_normal,
+    _deduplicate_points,
     _voronoi_sites,
 )
 from metalsurfer.workflow import shared as workflow_shared
@@ -49,6 +51,8 @@ from .conftest import (
     make_water,
     place_molecule_on_slab,
 )
+
+TEST_SEED = 0
 
 
 def _first_successful_placement(conformers, slab, config, smiles, n_desired=20):
@@ -147,8 +151,39 @@ def test_calculate_min_distance_mic_wraps_periodic_boundary():
     cell = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 20.0]])
     p1 = np.array([[0.5, 0.5, 5.0]])
     p2 = np.array([[9.5, 9.5, 5.0]])
-    d = calculate_min_distance(p1, p2, cell=cell, use_pbc=True)
+    d = calculate_min_distance(p1, p2, cell=cell, use_pbc=True, pbc=[True, True, False])
     assert d < 2.0
+
+
+def test_calculate_min_distance_requires_explicit_pbc_for_periodic_cell():
+    cell = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 20.0]])
+    p1 = np.array([[0.5, 0.5, 5.0]])
+    p2 = np.array([[9.5, 9.5, 5.0]])
+    with pytest.raises(ValueError, match="pbc must be provided"):
+        calculate_min_distance(p1, p2, cell=cell, use_pbc=True)
+
+
+def test_resolve_material_type_helper_uses_site_then_fallback():
+    assert _resolve_material_type(None, fallback="slab") == "slab"
+    assert _resolve_material_type({"site_type": "atop"}, fallback="porous") == "porous"
+    assert _resolve_material_type({"material_type": "nanoparticle"}) == "nanoparticle"
+
+
+def test_deduplicate_points_returns_expected_keep_mask():
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.01, 0.01, 0.0],
+            [1.0, 1.0, 1.0],
+            [1.01, 1.0, 1.0],
+        ]
+    )
+    keep = _deduplicate_points(points, tolerance=0.03)
+    assert keep.dtype == bool
+    assert keep.shape == (4,)
+    assert int(np.sum(keep)) == 2
+    kept_points = points[keep]
+    assert len(kept_points) == 2
 
 
 def test_initial_placement_distance_accepts_and_rejects_expected_heights():
@@ -864,7 +899,7 @@ def test_max_batch_specs_matches_build_batch_uncapped_round():
         flat_aromatic=False,
         parallel_fraction=0.5,
         n_desired=10**7,
-        seed=COUNT_CAPACITY_SEED,
+        seed=TEST_SEED,
     )
     assert len(actual) == expected
 
@@ -887,7 +922,7 @@ def test_max_batch_specs_matches_build_batch_uncapped_flat_aromatic():
         flat_aromatic=True,
         parallel_fraction=0.5,
         n_desired=10**7,
-        seed=COUNT_CAPACITY_SEED,
+        seed=TEST_SEED,
     )
     assert len(actual) == expected
 
@@ -903,7 +938,7 @@ def test_build_batch_specs_respects_n_desired():
         flat_aromatic=False,
         parallel_fraction=0.5,
         n_desired=n_desired,
-        seed=COUNT_CAPACITY_SEED,
+        seed=TEST_SEED,
     )
     assert len(specs) <= n_desired
 
@@ -919,7 +954,7 @@ def test_build_batch_specs_dissociative_branch():
         flat_aromatic=False,
         parallel_fraction=0.0,
         n_desired=100,
-        seed=COUNT_CAPACITY_SEED,
+        seed=TEST_SEED,
         dissociative=True,
         n_hollow_pairs=n_hollow_pairs,
     )
@@ -952,7 +987,7 @@ def test_build_batch_specs_flat_aromatic_generates_both_orientation_types():
         flat_aromatic=True,
         parallel_fraction=0.5,
         n_desired=10**7,
-        seed=COUNT_CAPACITY_SEED,
+        seed=TEST_SEED,
     )
     orientation_types = {s.orientation_type for s in specs}
     assert "parallel" in orientation_types
@@ -969,7 +1004,7 @@ def test_build_batch_specs_filter_spec_reduces_count():
         flat_aromatic=False,
         parallel_fraction=0.5,
         n_desired=10**7,
-        seed=COUNT_CAPACITY_SEED,
+        seed=TEST_SEED,
     )
     filtered_specs = build_batch_placement_specs(
         n_conformers=2,
@@ -980,7 +1015,7 @@ def test_build_batch_specs_filter_spec_reduces_count():
         flat_aromatic=False,
         parallel_fraction=0.5,
         n_desired=10**7,
-        seed=COUNT_CAPACITY_SEED,
+        seed=TEST_SEED,
         filter_spec=lambda s: s.tilt_deg == 0.0,
     )
     assert len(filtered_specs) < len(all_specs)
@@ -997,7 +1032,254 @@ def test_build_batch_specs_placement_indices_are_unique():
         flat_aromatic=False,
         parallel_fraction=0.5,
         n_desired=50,
-        seed=COUNT_CAPACITY_SEED,
+        seed=TEST_SEED,
     )
     ids = [s.placement_index for s in specs]
     assert len(set(ids)) == len(ids), "placement_index values must be unique"
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Environment-aware KDTree clustering
+# ---------------------------------------------------------------------------
+
+
+def test_env_fingerprint_present_in_unified_sites():
+    """Sites should carry an env_fingerprint key after Phase 1."""
+    sites = get_unified_sites(make_slab(), material_type="slab")
+    assert len(sites) > 0
+    for s in sites:
+        assert "env_fingerprint" in s
+        fp = s["env_fingerprint"]
+        assert isinstance(fp, tuple) and len(fp) == 2
+        # First element is a tuple of element symbols, second is site_type
+        assert isinstance(fp[0], tuple)
+        assert isinstance(fp[1], str)
+
+
+def test_cluster_preserves_chemically_distinct_sites():
+    """Sites at same (x,y) but different env fingerprints must survive clustering."""
+    cell = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 20.0]])
+    sites = [
+        {
+            "xy": np.array([1.0, 1.0]),
+            "z": 5.0,
+            "xyz": np.array([1.0, 1.0, 5.0]),
+            "site_type": "atop",
+            "material_type": "slab",
+            "env_fingerprint": (("Ni",), "atop"),
+        },
+        {
+            "xy": np.array([1.0, 1.0]),
+            "z": 5.0,
+            "xyz": np.array([1.0, 1.0, 5.0]),
+            "site_type": "atop",
+            "material_type": "slab",
+            "env_fingerprint": (("Pt",), "atop"),
+        },
+    ]
+    unique = _cluster_equivalent_sites(sites, cell, tolerance=0.05)
+    assert len(unique) == 2, "Chemically distinct sites must not be merged"
+
+
+def test_cluster_merges_truly_equivalent_sites():
+    """Sites at same coordinates with same fingerprint should be merged."""
+    cell = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 20.0]])
+    fp = (("Ru",), "atop")
+    sites = [
+        {
+            "xy": np.array([1.0, 1.0]),
+            "z": 5.0,
+            "xyz": np.array([1.0, 1.0, 5.0]),
+            "site_type": "atop",
+            "material_type": "slab",
+            "env_fingerprint": fp,
+        },
+        {
+            "xy": np.array([1.001, 1.001]),
+            "z": 5.0,
+            "xyz": np.array([1.001, 1.001, 5.0]),
+            "site_type": "atop",
+            "material_type": "slab",
+            "env_fingerprint": fp,
+        },
+    ]
+    unique = _cluster_equivalent_sites(sites, cell, tolerance=0.05)
+    assert len(unique) == 1, "Equivalent sites should be merged"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Delaunay site classification
+# ---------------------------------------------------------------------------
+
+
+def test_delaunay_classification_on_slab():
+    """Delaunay method should produce valid site types for a simple slab."""
+    slab = make_slab()
+    sites = get_unified_sites(
+        slab, material_type="slab", site_classification_method="delaunay"
+    )
+    assert len(sites) > 0
+    valid_types = {"atop", "bridge", "hollow"}
+    for s in sites:
+        assert s["site_type"] in valid_types, f"Bad type: {s['site_type']}"
+
+
+def test_delaunay_fallback_for_nanoparticle():
+    """Delaunay classification should fall back to distance_ratio for NPs."""
+    np_sites_dr = get_unified_sites(
+        make_nanoparticle(),
+        material_type="nanoparticle",
+        site_classification_method="distance_ratio",
+    )
+    np_sites_del = get_unified_sites(
+        make_nanoparticle(),
+        material_type="nanoparticle",
+        site_classification_method="delaunay",
+    )
+    # Both should produce the same result (fallback to distance_ratio)
+    assert len(np_sites_del) == len(np_sites_dr)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Rough slab local z
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_surface_ref_rough_slab():
+    """On a rough slab, local z should be used when rough_slab_local_z=True."""
+    from metalsurfer.placement.generators import _resolve_surface_ref
+
+    # Build a stepped slab: two terraces at different z
+    positions = []
+    for ix in range(3):
+        for iy in range(3):
+            positions.append([ix * 2.7, iy * 2.7, 0.0])
+            positions.append([ix * 2.7, iy * 2.7, 2.7])  # terrace 1
+    # Add a step: higher terrace
+    for ix in range(3):
+        positions.append([ix * 2.7, 0.0, 5.4])
+    slab = Atoms(
+        symbols=["Ru"] * len(positions),
+        positions=positions,
+        cell=[8.1, 8.1, 20.0],
+        pbc=[True, True, True],
+    )
+
+    site_low = {"z": 2.7, "xyz": np.array([0.0, 0.0, 2.7])}
+
+    # With rough_slab_local_z=True and non-planar slab: use site z
+    ref_low, is_local = _resolve_surface_ref(
+        site_low,
+        slab,
+        "slab",
+        rough_slab_local_z=True,
+    )
+    # The slab is non-planar so this should return the site's own z
+    # (or global max if planar check says it's still planar)
+    assert isinstance(ref_low, float)
+
+    # Without rough_slab_local_z: always global max
+    ref_global, is_local_g = _resolve_surface_ref(
+        site_low,
+        slab,
+        "slab",
+        rough_slab_local_z=False,
+    )
+    assert ref_global == float(np.max(slab.get_positions()[:, 2]))
+    assert not is_local_g
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Adaptive parallel fraction
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_parallel_fraction_pure_aromatic():
+    """Pure aromatic (no EN atoms) should get high parallel fraction."""
+    from metalsurfer.placement.generators import _estimate_parallel_fraction
+
+    # Benzene-like: 6 C, 6 H, no EN atoms
+    symbols = ["C"] * 6 + ["H"] * 6
+    frac = _estimate_parallel_fraction(symbols, smiles=None)
+    assert frac == 0.8
+
+
+def test_estimate_parallel_fraction_strong_binder():
+    """Molecule with many EN atoms relative to ring should get low fraction."""
+    from metalsurfer.placement.generators import _estimate_parallel_fraction
+
+    # Pyridine-like: 5 C, 1 N (binder), 5 H
+    symbols = ["C"] * 5 + ["N"] + ["H"] * 5
+    frac = _estimate_parallel_fraction(symbols, smiles=None)
+    # 1 binder / 5 C atoms = 0.2, so we expect 0.5 (mixed)
+    assert 0.3 <= frac <= 0.8
+
+
+def test_adaptive_parallel_fraction_config():
+    """Config with adaptive_parallel_fraction should validate."""
+    cfg = AdsorptionConfig(adaptive_parallel_fraction=True)
+    assert cfg.adaptive_parallel_fraction is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: KDTree hollow-site pairs
+# ---------------------------------------------------------------------------
+
+
+def test_hollow_site_pairs_found_for_slab():
+    """_get_hollow_site_pairs should find pairs on a simple slab."""
+    from metalsurfer.placement.generators import _get_hollow_site_pairs
+
+    slab = make_slab()
+    config = AdsorptionConfig()
+    pairs = _get_hollow_site_pairs(slab, config)
+    # On a 4x4 FCC slab there should be at least some hollow site pairs
+    # (may be 0 if no hollow sites exceed min separation — that's okay)
+    assert isinstance(pairs, list)
+    for p in pairs:
+        assert len(p) == 2
+        assert len(p[0]) == 2  # xy arrays
+        assert len(p[1]) == 2
+
+
+def test_dissociative_placement_rejected_for_non_slab_material_type():
+    nanoparticle = make_nanoparticle()
+    config = AdsorptionConfig(
+        material_type="nanoparticle",
+        skip_topology_check=True,
+        num_placements=1,
+    )
+    h2 = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
+    spec = PlacementSpec(
+        conformer_index=0,
+        orientation_type="dissociative",
+        face_flip=False,
+        en_atom_index=None,
+        site_index=0,
+        site_type="hollow",
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+
+    result, reason = generate_placement_from_spec_with_reason(
+        spec,
+        [h2],
+        nanoparticle,
+        config,
+    )
+    assert result is None
+    assert reason == "dissociative_not_supported_for_nanoparticle"
+
+
+# ---------------------------------------------------------------------------
+# Config validation for new fields
+# ---------------------------------------------------------------------------
+
+
+def test_config_site_classification_method_validation():
+    """Invalid site_classification_method should raise ValueError."""
+    with pytest.raises(ValueError, match="site_classification_method"):
+        AdsorptionConfig(site_classification_method="invalid")

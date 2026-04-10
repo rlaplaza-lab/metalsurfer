@@ -7,7 +7,7 @@ Generic adsorption-energy screening on arbitrary surfaces.
 - The workflow layer is now modularized under `src/metalsurfer/workflow/` (`core`, `screening`, `bayesian`, `saturation`, `reference`, `shared`) rather than a single monolithic module.
 - Public API run modes are stable and available from `metalsurfer` top-level imports.
 - Slab preparation helpers have a dedicated import path: `metalsurfer.surface_prep`.
-- Placement generation uses unified Voronoi-based site generation across slabs, nanoparticles, and porous materials, with optional spglib symmetry reduction in the workflow (`get_symmetry_aware_sites` returns an empty list when symmetry reduction is unavailable; the workflow then uses core unified sites).
+- Placement generation uses unified Voronoi-based site generation across slabs, nanoparticles, and porous materials, with optional spglib symmetry reduction in the workflow (`get_symmetry_aware_sites` returns `None` when symmetry reduction is unavailable or Voronoi finds no sites; the workflow then uses core unified sites).
 
 ## Install
 
@@ -311,9 +311,9 @@ pytest tests/test_dependency_behavior.py
 pytest tests/test_integration_seeded.py
 ```
 
-Placement spec enumeration uses `AdsorptionConfig.seed` when `enumerate_placement_specs(..., seed=None)`; subsampling beyond `n_desired` is reproducible from that seed. Direct calls to `build_batch_placement_specs` require an explicit integer `seed` (use `metalsurfer.placement.policy.COUNT_CAPACITY_SEED` to match `max_batch_placement_specs` counting).
+Placement spec enumeration uses `AdsorptionConfig.seed` when `enumerate_placement_specs(..., seed=None)` is called; subsampling when the combinatorial grid exceeds `n_desired` is reproducible from that seed. `build_batch_placement_specs` takes an integer `seed` (default `metalsurfer.placement.policy.PLACEMENT_GRID_COUNT_SEED`, currently `0`); `max_batch_placement_specs` uses that same default so grid cardinality matches an uncapped build.
 
-For GPU and MLIP-heavy validation, prefer the helper script (uses `$CONDA_PREFIX/bin/python` when your conda env is active):
+For GPU and MLIP-heavy validation, use the helper script (it picks the active environment’s `python` when `CONDA_PREFIX` is set, or falls back to `python3`):
 
 ```bash
 ./scripts/run_gpu_tests.sh
