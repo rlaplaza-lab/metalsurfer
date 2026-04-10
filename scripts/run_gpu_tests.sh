@@ -2,7 +2,7 @@
 # Run every test marked @pytest.mark.gpu, each *phase* in a new Python process.
 #
 # TorchSim / FairChem keep large CUDA allocations for the lifetime of the interpreter.
-# Running bayesian + ethene + placement + saturation in one pytest session often OOMs;
+# Running bayesian + ethene + saturation GPU tests in one pytest session often OOMs;
 # splitting into separate subprocesses matches CI-style isolation. Conftest still clears
 # autobatchers around individual @gpu tests within a phase.
 #
@@ -53,8 +53,8 @@ _run_phase() {
 # One subprocess per module / test so VRAM is released when the interpreter exits.
 _run_phase tests/test_bayesian.py -m gpu
 _run_phase tests/test_integration_ethene_ru.py
-_run_phase tests/test_placement.py -m gpu
 _run_phase tests/test_saturation.py::test_run_saturation_screening_h2_ni111_real_gpu
+_run_phase tests/test_saturation.py::test_run_saturation_screening_multi_mol_bo_real_gpu
 
 _clear_if_enabled
 echo "All GPU test phases finished."

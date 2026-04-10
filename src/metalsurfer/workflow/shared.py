@@ -22,7 +22,6 @@ from ..placement import (
     material_aware_pbc,
 )
 from ..placement import generators as placement_generators
-from ..symmetry import SymmetryAnalysisError
 
 logger = logging.getLogger(__name__)
 MIN_CALCULATOR_CELL_C_ANG = 18.0
@@ -129,6 +128,7 @@ def _materialize_spec_placements(
     config: AdsorptionConfig,
     smiles: str,
     site_context: placement_generators.SiteContext | None,
+    slab_for_sites: Atoms | None = None,
 ) -> tuple[
     list[Atoms], list[int], list[PlacementDescriptor], list[PlacementFailureEvent]
 ]:
@@ -146,6 +146,7 @@ def _materialize_spec_placements(
             config,
             smiles=smiles,
             site_context=site_context,
+            slab_for_sites=slab_for_sites,
         )
         if result is None:
             failures.append(
@@ -391,19 +392,13 @@ def _resolve_site_context_for_sampling(
         )
     else:
         logger.debug("Attempting symmetry-aware site reduction")
-        try:
-            symmetry_aware_sites = get_symmetry_aware_sites(
-                slab_atoms,
-                top_layer_tolerance=config.top_layer_tolerance,
-                symmetry_tolerance=config.symmetry_tolerance,
-                material_type=config.material_type,
-                enrich=config.voronoi_site_enrichment,
-            )
-        except SymmetryAnalysisError as exc:
-            logger.info(
-                "Symmetry site reduction failed; using core unified sites (%s)", exc
-            )
-            symmetry_aware_sites = []
+        symmetry_aware_sites = get_symmetry_aware_sites(
+            slab_atoms,
+            top_layer_tolerance=config.top_layer_tolerance,
+            symmetry_tolerance=config.symmetry_tolerance,
+            material_type=config.material_type,
+            enrich=config.voronoi_site_enrichment,
+        )
 
         if symmetry_aware_sites:
             logger.info(

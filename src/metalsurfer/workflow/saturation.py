@@ -33,6 +33,31 @@ from .shared import _compute_slab_energy
 logger = logging.getLogger(__name__)
 
 
+def _saturation_symmetry_broken_vs_reference(
+    current_atoms: Atoms,
+    reference_atoms: Atoms,
+    *,
+    symmetry_tolerance: float,
+    log_context: str,
+) -> bool:
+    """True if symmetry vs *reference_atoms* is broken or analysis fails (treat as C1)."""
+    analyzer = SymmetryAnalyzer(current_atoms, symmetry_tolerance=symmetry_tolerance)
+    try:
+        broken = analyzer.detect_symmetry_breaking(reference_atoms)
+    except SymmetryAnalysisError as exc:
+        logger.warning(
+            "%s: symmetry analysis unavailable (%s); assuming C1",
+            log_context,
+            exc,
+        )
+        return True
+    if broken:
+        logger.info(
+            "%s: symmetry broken; using comprehensive site sampling", log_context
+        )
+    return broken
+
+
 def _as_float(value: object, default: float = 0.0) -> float:
     if isinstance(value, (int, float)):
         return float(value)
@@ -186,26 +211,12 @@ def _run_multi_molecule_saturation(
         )
 
         if step > 1 and not symmetry_broken:
-            symmetry_analyzer = SymmetryAnalyzer(
+            symmetry_broken = _saturation_symmetry_broken_vs_reference(
                 current_slab.atoms,
+                reference_slab_for_symmetry,
                 symmetry_tolerance=config.symmetry_tolerance,
+                log_context=f"Multi-mol saturation step {step}",
             )
-            try:
-                symmetry_broken = symmetry_analyzer.detect_symmetry_breaking(
-                    reference_slab_for_symmetry
-                )
-            except SymmetryAnalysisError as exc:
-                logger.warning(
-                    "Multi-mol saturation step %d: symmetry analysis unavailable (%s); assuming C1",
-                    step,
-                    exc,
-                )
-                symmetry_broken = True
-            if symmetry_broken:
-                logger.info(
-                    "Multi-mol saturation step %d: symmetry broken, switching to comprehensive site sampling",
-                    step,
-                )
 
         E_slab = _compute_slab_energy(
             current_slab.atoms,
@@ -510,27 +521,12 @@ def run_saturation_screening(
                 )
 
                 if step > 1 and not symmetry_broken:
-                    symmetry_analyzer = SymmetryAnalyzer(
+                    symmetry_broken = _saturation_symmetry_broken_vs_reference(
                         current_slab.atoms,
+                        reference_slab_for_symmetry,
                         symmetry_tolerance=config.symmetry_tolerance,
+                        log_context=f"Saturation step {step} for {mol}",
                     )
-                    try:
-                        symmetry_broken = symmetry_analyzer.detect_symmetry_breaking(
-                            reference_slab_for_symmetry
-                        )
-                    except SymmetryAnalysisError as exc:
-                        logger.warning(
-                            "Saturation step %d for %s: symmetry analysis unavailable (%s); assuming C1 and switching to comprehensive site sampling",
-                            step,
-                            mol,
-                            exc,
-                        )
-                        symmetry_broken = True
-                    if symmetry_broken:
-                        logger.info(
-                            "Saturation step %d: Detected symmetry breaking, switching to comprehensive site sampling",
-                            step,
-                        )
 
                 E_slab = _compute_slab_energy(
                     current_slab.atoms,

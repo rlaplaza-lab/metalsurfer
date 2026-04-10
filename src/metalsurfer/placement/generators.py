@@ -12,6 +12,12 @@ from .._utils import is_finite_number as _is_finite_number
 from ..config import AdsorptionConfig
 from ..exceptions import DependencyMissingError
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
+
+try:
+    from rdkit import Chem
+except ImportError:
+    Chem = None  # type: ignore[misc, assignment]
+
 from . import geometry as geom
 from . import policy
 from . import sites as sts
@@ -66,14 +72,12 @@ def _is_flat_aromatic(
 
 def _is_flat_aromatic_with_en(smiles: str) -> bool:
     """True if molecule has aromatic rings and electronegative (binding) atoms."""
-    try:
-        from rdkit import Chem
-    except (ImportError, AttributeError) as exc:
+    if Chem is None:
         raise DependencyMissingError(
             "rdkit",
             "flat aromatic detection for placement",
             "pip install rdkit",
-        ) from exc
+        )
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return False
@@ -115,19 +119,15 @@ def _get_unique_sites_for_specs(
     Returns ``SiteContext(sites=[], use_sites=False, source="no_sites")`` when
     site detection yields nothing.
     """
-    if not hasattr(config, "material_type") or config.material_type not in (
-        "slab",
-        "nanoparticle",
-        "porous",
-    ):
+    if config.material_type not in ("slab", "nanoparticle", "porous"):
         raise ValueError(
-            "config.material_type must be explicitly set to 'slab', 'nanoparticle', or 'porous'; "
-            "auto-detection is not supported"
+            "config.material_type must be 'slab', 'nanoparticle', or 'porous'; "
+            f"got {config.material_type!r}"
         )
 
     mat_type = config.material_type
-    probe_radius = getattr(config, "voronoi_probe_radius", 1.2)
-    max_site_dist = getattr(config, "voronoi_max_site_distance", 4.0)
+    probe_radius = config.voronoi_probe_radius
+    max_site_dist = config.voronoi_max_site_distance
 
     if len(slab) < 4:
         logger.warning(
@@ -142,7 +142,7 @@ def _get_unique_sites_for_specs(
         max_site_distance=max_site_dist,
         top_layer_tolerance=config.top_layer_tolerance,
         material_type=mat_type,
-        enrich=getattr(config, "voronoi_site_enrichment", True),
+        enrich=config.voronoi_site_enrichment,
     )
     if not raw_sites:
         logger.warning(
@@ -524,6 +524,7 @@ def _spec_grid_info(
     config: AdsorptionConfig,
     smiles: str | None,
     site_context: SiteContext | None,
+    full_slab: Atoms | None = None,
 ) -> dict:
     """Compute the spec-enumeration inputs once for both enumerate and estimate."""
     is_dissociative = config.skip_topology_check and _is_dissociable_diatomic(
@@ -546,7 +547,16 @@ def _spec_grid_info(
 
     hollow_pairs: list = []
     if is_dissociative:
-        hollow_pairs = _get_hollow_site_pairs(slab, config)
+        existing_ads_pos = None
+        working_slab = full_slab if full_slab is not None else slab
+        if full_slab is not None and len(full_slab) > len(slab):
+            existing_ads_pos = full_slab.get_positions()[len(slab) :]
+        hollow_pairs = _get_hollow_site_pairs(
+            working_slab,
+            config,
+            slab_for_sites=slab,
+            existing_adsorbate_positions=existing_ads_pos,
+        )
 
     return {
         "is_dissociative": is_dissociative,
@@ -571,6 +581,7 @@ def enumerate_placement_specs(
     filter_spec: Callable[[PlacementSpec], bool] | None = None,
     site_context: SiteContext | None = None,
     seed: int | None = None,
+    full_slab: Atoms | None = None,
 ) -> list[PlacementSpec]:
     """Enumerate placement specs for diverse sampling.
 
@@ -579,13 +590,16 @@ def enumerate_placement_specs(
     When ``config.skip_topology_check`` is True and the molecule is a
     dissociable diatomic, dissociative specs are generated instead.
 
-    When *seed* is not None, specs exceeding *n_desired* are subsampled
-    uniformly at random for better coverage across all dimensions.
+    Uses ``config.seed`` when *seed* is omitted. When the grid exceeds
+    *n_desired*, specs are subsampled uniformly at random (reproducible).
     """
     if not conformers:
         return []
 
-    info = _spec_grid_info(conformers, slab, config, smiles, site_context)
+    eff_seed = config.seed if seed is None else seed
+    info = _spec_grid_info(
+        conformers, slab, config, smiles, site_context, full_slab=full_slab
+    )
     unique_sites = info["unique_sites"]
     use_sites = info["use_sites"]
 
@@ -605,10 +619,10 @@ def enumerate_placement_specs(
         flat_aromatic=info["flat_aromatic"],
         parallel_fraction=config.flat_aromatic_parallel_fraction,
         n_desired=n_desired,
+        seed=eff_seed,
         filter_spec=filter_spec,
         dissociative=info["is_dissociative"],
         n_hollow_pairs=info["n_hollow_pairs"],
-        seed=seed,
     )
 
 
@@ -618,11 +632,14 @@ def estimate_placement_spec_capacity(
     config: AdsorptionConfig,
     smiles: str | None,
     site_context: SiteContext | None = None,
+    full_slab: Atoms | None = None,
 ) -> int:
     """Estimate total enumerated specs for current conformers/site grid."""
     if not conformers:
         return 0
-    info = _spec_grid_info(conformers, slab, config, smiles, site_context)
+    info = _spec_grid_info(
+        conformers, slab, config, smiles, site_context, full_slab=full_slab
+    )
     return policy.max_batch_placement_specs(
         n_conformers=len(conformers),
         site_indices=info["site_indices"],
@@ -722,10 +739,17 @@ def generate_placement_from_spec(
     config: AdsorptionConfig,
     smiles: str | None = None,
     site_context: SiteContext | None = None,
+    slab_for_sites: Atoms | None = None,
 ) -> tuple[Atoms, PlacementDescriptor] | None:
     """Generate adsorbate placement from spec. Returns (adsorbate, descriptor) or None."""
     result, _ = generate_placement_from_spec_with_reason(
-        spec, conformers, slab, config, smiles=smiles, site_context=site_context
+        spec,
+        conformers,
+        slab,
+        config,
+        smiles=smiles,
+        site_context=site_context,
+        slab_for_sites=slab_for_sites,
     )
     return result
 
@@ -737,6 +761,7 @@ def generate_placement_from_spec_with_reason(
     config: AdsorptionConfig,
     smiles: str | None = None,
     site_context: SiteContext | None = None,
+    slab_for_sites: Atoms | None = None,
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
     """Generate placement from spec and provide a failure reason when unavailable."""
     if not conformers:
@@ -744,7 +769,13 @@ def generate_placement_from_spec_with_reason(
 
     if spec.orientation_type == "dissociative":
         adsorbate = conformers[spec.conformer_index % len(conformers)].copy()
-        return _generate_dissociative_placement_from_spec(adsorbate, spec, slab, config)
+        return _generate_dissociative_placement_from_spec(
+            adsorbate,
+            spec,
+            slab,
+            config,
+            slab_for_sites=slab_for_sites,
+        )
 
     # Resolve site context once to avoid redundant Voronoi computation.
     resolved_ctx = _resolve_site_context(slab, config, site_context)

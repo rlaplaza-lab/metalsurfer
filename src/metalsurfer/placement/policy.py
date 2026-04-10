@@ -12,6 +12,12 @@ AZIMUTH = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
 AZIMUTH_IN_PLANE = [0.0, 90.0, 180.0, 270.0]
 Z_FRACTIONS = [0.1, 0.3, 0.5, 0.7, 0.9]
 
+# With n_desired >> combinatorial grid size, subsampling is a no-op; keeps
+# max_batch_placement_specs aligned with uncapped builds.
+_COUNT_CAPACITY_SEED = 0
+# Public alias for tests and callers that need the same seed as max_batch_placement_specs.
+COUNT_CAPACITY_SEED = _COUNT_CAPACITY_SEED
+
 
 def _normalized_site_indices(site_indices: list[int]) -> list[int]:
     return site_indices if site_indices else [-1]
@@ -43,6 +49,7 @@ def max_batch_placement_specs(
             flat_aromatic=flat_aromatic,
             parallel_fraction=0.5,
             n_desired=10**9,
+            seed=_COUNT_CAPACITY_SEED,
             dissociative=dissociative,
             n_hollow_pairs=n_hollow_pairs,
         )
@@ -59,22 +66,18 @@ def build_batch_placement_specs(
     flat_aromatic: bool,
     parallel_fraction: float,
     n_desired: int,
+    seed: int,
     filter_spec: Callable[[PlacementSpec], bool] | None = None,
     dissociative: bool = False,
     n_hollow_pairs: int = 0,
-    seed: int | None = None,
 ) -> list[PlacementSpec]:
     """Build stratified BO candidate specs from policy priors.
 
-    When *seed* is not None and the full combinatorial grid exceeds
-    *n_desired*, specs are sampled uniformly at random (seeded) instead
-    of being truncated lexicographically.  This ensures coverage across
-    all dimensions (conformers, tilts, azimuths, sites, z-fractions)
-    even with small budgets.
+    When the combinatorial grid exceeds *n_desired*, specs are sampled
+    uniformly at random (reproducible via *seed*) so small budgets still
+    cover conformers, tilts, azimuths, sites, and z-fractions.
 
-    Dissociative specs are always generated sequentially (grid is small).
-    When *seed* is None the legacy sequential truncation is used, which
-    preserves backward compatibility for :func:`max_batch_placement_specs`.
+    Dissociative specs are fully enumerated (grid is small).
     """
     normalized_sites = _normalized_site_indices(site_indices)
 
@@ -144,16 +147,14 @@ def build_batch_placement_specs(
         )
         return specs[:n_desired]
 
-    # For non-dissociative paths: when seed is set, generate the full grid
-    # then subsample; when seed is None, use sequential truncation (legacy).
-    use_subsampling = seed is not None
-    effective_cap = 10**9 if use_subsampling else n_desired
+    grid_cap = 10**9
+    rng = random.Random(seed)
 
     if flat_aromatic:
         n_par = max(1, int(n_desired * parallel_fraction))
         n_en = max(1, n_desired - n_par)
-        par_cap = 10**9 if use_subsampling else n_par
-        en_cap = 10**9 if use_subsampling else (n_par + n_en)
+        par_cap = grid_cap
+        en_cap = grid_cap
 
         parallel_items = itertools.product(
             range(n_conformers),
@@ -239,15 +240,10 @@ def build_batch_placement_specs(
             en_cap,
         )
 
-        if use_subsampling:
-            rng = random.Random(seed)
-            if len(par_specs) > n_par:
-                par_specs = rng.sample(par_specs, n_par)
-            if len(en_specs) > n_en:
-                en_specs = rng.sample(en_specs, n_en)
-        else:
-            par_specs = par_specs[:n_par]
-            en_specs = en_specs[:n_en]
+        if len(par_specs) > n_par:
+            par_specs = rng.sample(par_specs, n_par)
+        if len(en_specs) > n_en:
+            en_specs = rng.sample(en_specs, n_en)
 
         specs = par_specs + en_specs
     else:
@@ -273,11 +269,11 @@ def build_batch_placement_specs(
                 0.0,
                 zfv,
             ),
-            target_size=effective_cap,
+            target_size=grid_cap,
         )
 
-        if use_subsampling and len(specs) > n_desired:
-            specs = random.Random(seed).sample(specs, n_desired)
+        if len(specs) > n_desired:
+            specs = rng.sample(specs, n_desired)
 
     # Re-index placement_index after subsampling for monotonic ordering
     for i, spec in enumerate(specs):

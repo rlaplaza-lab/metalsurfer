@@ -29,6 +29,7 @@ from metalsurfer.placement import (
 )
 from metalsurfer.placement.generators import _get_unique_sites_for_specs
 from metalsurfer.placement.policy import (
+    COUNT_CAPACITY_SEED,
     Z_FRACTIONS,
     build_batch_placement_specs,
     max_batch_placement_specs,
@@ -863,6 +864,7 @@ def test_max_batch_specs_matches_build_batch_uncapped_round():
         flat_aromatic=False,
         parallel_fraction=0.5,
         n_desired=10**7,
+        seed=COUNT_CAPACITY_SEED,
     )
     assert len(actual) == expected
 
@@ -885,6 +887,7 @@ def test_max_batch_specs_matches_build_batch_uncapped_flat_aromatic():
         flat_aromatic=True,
         parallel_fraction=0.5,
         n_desired=10**7,
+        seed=COUNT_CAPACITY_SEED,
     )
     assert len(actual) == expected
 
@@ -900,6 +903,7 @@ def test_build_batch_specs_respects_n_desired():
         flat_aromatic=False,
         parallel_fraction=0.5,
         n_desired=n_desired,
+        seed=COUNT_CAPACITY_SEED,
     )
     assert len(specs) <= n_desired
 
@@ -915,6 +919,7 @@ def test_build_batch_specs_dissociative_branch():
         flat_aromatic=False,
         parallel_fraction=0.0,
         n_desired=100,
+        seed=COUNT_CAPACITY_SEED,
         dissociative=True,
         n_hollow_pairs=n_hollow_pairs,
     )
@@ -947,6 +952,7 @@ def test_build_batch_specs_flat_aromatic_generates_both_orientation_types():
         flat_aromatic=True,
         parallel_fraction=0.5,
         n_desired=10**7,
+        seed=COUNT_CAPACITY_SEED,
     )
     orientation_types = {s.orientation_type for s in specs}
     assert "parallel" in orientation_types
@@ -963,6 +969,7 @@ def test_build_batch_specs_filter_spec_reduces_count():
         flat_aromatic=False,
         parallel_fraction=0.5,
         n_desired=10**7,
+        seed=COUNT_CAPACITY_SEED,
     )
     filtered_specs = build_batch_placement_specs(
         n_conformers=2,
@@ -973,6 +980,7 @@ def test_build_batch_specs_filter_spec_reduces_count():
         flat_aromatic=False,
         parallel_fraction=0.5,
         n_desired=10**7,
+        seed=COUNT_CAPACITY_SEED,
         filter_spec=lambda s: s.tilt_deg == 0.0,
     )
     assert len(filtered_specs) < len(all_specs)
@@ -989,6 +997,7 @@ def test_build_batch_specs_placement_indices_are_unique():
         flat_aromatic=False,
         parallel_fraction=0.5,
         n_desired=50,
+        seed=COUNT_CAPACITY_SEED,
     )
     ids = [s.placement_index for s in specs]
     assert len(set(ids)) == len(ids), "placement_index values must be unique"

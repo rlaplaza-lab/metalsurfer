@@ -304,8 +304,14 @@ Run the local checks with:
 ```bash
 ruff check .
 ruff format --check .
-pytest tests/ -m "not dependency_behavior and not mlip and not gpu and not slow"
+pytest tests/ -m "not dependency_behavior and not mlip and not gpu and not slow" \
+  --cov=src/metalsurfer --cov-report=term-missing
+coverage report --fail-under=74
+pytest tests/test_dependency_behavior.py
+pytest tests/test_integration_seeded.py
 ```
+
+Placement spec enumeration uses `AdsorptionConfig.seed` when `enumerate_placement_specs(..., seed=None)`; subsampling beyond `n_desired` is reproducible from that seed. Direct calls to `build_batch_placement_specs` require an explicit integer `seed` (use `metalsurfer.placement.policy.COUNT_CAPACITY_SEED` to match `max_batch_placement_specs` counting).
 
 For GPU and MLIP-heavy validation, prefer the helper script (uses `$CONDA_PREFIX/bin/python` when your conda env is active):
 
@@ -317,6 +323,12 @@ To pin a specific interpreter:
 
 ```bash
 bash scripts/run_gpu_tests.sh "$(command -v python)"
+```
+
+To collect every test marked `slow` (mostly MLIP+CUDA integration cases; they are skipped when the stack or GPU is unavailable):
+
+```bash
+pytest tests/ -m slow
 ```
 
 Design details and module-level architecture are documented in [CORE_SYSTEM_EXPLANATION.md](CORE_SYSTEM_EXPLANATION.md).

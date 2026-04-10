@@ -1,19 +1,9 @@
 """Site detection and clustering for adsorbate placement.
 
-Provides a unified Voronoi-based site generator that works for slabs,
-nanoparticles, and 3D-periodic porous materials (zeolites, MOFs).
-
-Key differences from the legacy Delaunay/ConvexHull approach:
-- Single ``get_unified_sites()`` entry point for all material types.
-- ``detect_material_type()`` auto-detects geometry; user can override via
-  ``config.material_type``.
-- Voronoi vertices of the extended periodic structure give candidate
-  adsorption sites; KDTree distance filtering removes buried/vacuum vertices.
-- Each site carries a local surface normal computed from nearby framework
-  atoms so the placement pipeline can orient molecules correctly inside pores.
-- ``_cluster_equivalent_sites()`` uses 3D fractional coordinates for porous
-  structures, 2D for slabs, and Cartesian 3D for nanoparticles.
-- ``get_symmetry_aware_sites()`` now calls ``get_unified_sites()`` internally.
+Unified Voronoi-based sites for slabs, nanoparticles, and fully periodic
+porous frameworks. ``get_unified_sites()`` is the main entry; cluster-equivalent
+deduplication uses 3D fractional coords (porous), 2D+ z (slab), or Cartesian 3D
+(nanoparticle). ``get_symmetry_aware_sites()`` reduces orbits via spglib.
 """
 
 from __future__ import annotations
@@ -24,7 +14,7 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 from ase import Atoms
-from scipy.spatial import KDTree, Voronoi
+from scipy.spatial import KDTree, QhullError, Voronoi
 
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from ._constants import (
@@ -107,8 +97,12 @@ def _voronoi_sites(
     extended = _build_periodic_images(positions, cell, pbc)
     try:
         vor = Voronoi(extended)
-    except Exception as exc:
-        logger.warning("Voronoi computation failed: %s", exc)
+    except QhullError as exc:
+        logger.warning(
+            "Voronoi (Qhull) failed for %d extended points: %s",
+            len(extended),
+            exc,
+        )
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
 
     raw_vertices = vor.vertices
@@ -747,11 +741,11 @@ def get_symmetry_aware_sites(
     probe_radius: float = 1.2,
     max_site_distance: float = 4.0,
     enrich: bool = True,
-) -> list[dict[str, object]] | None:
+) -> list[dict[str, object]]:
     """Symmetry-reduced adsorption sites using spglib.
 
-    Returns None on failure. Nanoparticles use cluster-in-a-box symmetry.
-    Material type must be explicitly specified.
+    Returns an empty list when there are no raw sites or symmetry analysis
+    cannot complete. Nanoparticles use cluster-in-a-box symmetry.
     """
     if material_type not in ("slab", "nanoparticle", "porous"):
         raise ValueError(
@@ -767,7 +761,7 @@ def get_symmetry_aware_sites(
         enrich=enrich,
     )
     if not raw_sites:
-        return None
+        return []
 
     sym_mode = "cluster" if material_type == "nanoparticle" else "auto"
     planar_for_symmetry = (material_type == "slab") and _is_top_layer_planar(
@@ -785,10 +779,8 @@ def get_symmetry_aware_sites(
             planar=planar_for_symmetry,
         )
     except SymmetryAnalysisError as exc:
-        logger.warning(
-            "Symmetry analysis failed, skipping symmetry-aware sites: %s", exc
-        )
-        return None
+        logger.info("Symmetry-aware site reduction unavailable: %s", exc)
+        return []
 
 
 # ---------------------------------------------------------------------------

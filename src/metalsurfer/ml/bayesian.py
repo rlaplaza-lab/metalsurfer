@@ -97,9 +97,9 @@ def predict_with_uncertainty(
     """Return ``(mean, sigma)`` where ``sigma`` is epistemic spread when available.
 
     For tree ensembles (``estimators_`` on the regressor), ``sigma`` is the
-    standard deviation across trees. For other models (ridge, gradient boosting),
-    epistemic uncertainty is not defined here: ``sigma`` is all zeros and only
-    the point prediction ``mean`` should be used for BO scoring.
+    standard deviation across trees. For ridge / histogram gradient boosting,
+    epistemic uncertainty is not modeled: ``sigma`` is all zeros, so EI/PI
+    degenerate to improvement vs. the point prediction ``mean`` only.
     """
     regressor = model.named_steps["regressor"]
     if "scaler" in model.named_steps:
@@ -144,10 +144,10 @@ def ei_scores(
     f_best: float,
     xi: float = 1e-6,
 ) -> np.ndarray:
-    """Expected Improvement for minimisation.
+    """Expected Improvement for minimisation (minimize E_ads).
 
-    EI = E[max(0, f_best - Y)]. Higher EI is better.
-    When sigma is zero or very small, returns max(0, f_best - mu).
+    EI = E[max(0, f_best - Y)] under Gaussian Y ~ N(mu, sigma^2). Higher EI is better.
+    When sigma is zero, uses max(0, f_best - mu) (deterministic improvement).
     """
     mu = np.asarray(mu, dtype=float).ravel()
     sigma = np.asarray(sigma, dtype=float).ravel()
@@ -246,6 +246,7 @@ def build_spec_features_geometry_aware(
     molecule: str = "",
     surface_id: str = "",
     site_context: placement_generators.SiteContext | None = None,
+    slab_for_sites: Atoms | None = None,
 ) -> tuple[pd.DataFrame, list[int]]:
     """Extract geometry-aware features from specs via resolved deterministic poses.
 
@@ -269,6 +270,7 @@ def build_spec_features_geometry_aware(
             config,
             smiles=smiles,
             site_context=site_context,
+            slab_for_sites=slab_for_sites,
         )
         if generated is None:
             logger.debug(
@@ -311,6 +313,8 @@ def score_and_select(
     For ``acquisition="lcb"`` uses LCB (mu - kappa * sigma); lower is better.
     For ``acquisition="ei"`` and ``acquisition="pi"`` uses EI or PI; higher is better.
     ``f_best`` is required for EI and PI (current best observed value for minimisation).
+    If the surrogate has no per-prediction uncertainty (``sigma`` all zero, e.g. ridge
+    or HGBT), EI/PI reduce to ranking by the noiseless improvement heuristic.
 
     Returns indices into *candidate_features* (row positions).
     """

@@ -180,6 +180,7 @@ def _process_molecule_body(
         filter_spec=config.placement_filter,
         site_context=site_context,
         seed=config.seed,
+        full_slab=slab.atoms,
     )
     (
         all_combined,
@@ -194,6 +195,7 @@ def _process_molecule_body(
         config=config,
         smiles=smiles,
         site_context=site_context,
+        slab_for_sites=slab_for_sites,
     )
     placement_descriptors.extend(generated_descriptors)
     placement_failure_events.extend(generated_failures)
@@ -370,6 +372,7 @@ def _evaluate_placement_batch(
     surface_symbols: list[str] | None,
     site_context: placement_generators.SiteContext | None = None,
     base_slab_for_frozen: Atoms | None = None,
+    slab_for_sites: Atoms | None = None,
 ) -> tuple[list[ScreeningResult], list[PlacementFailureEvent]]:
     """Run placement-generation + optimization + validation for a batch of specs."""
     (
@@ -385,6 +388,7 @@ def _evaluate_placement_batch(
         config=config,
         smiles=smiles,
         site_context=site_context,
+        slab_for_sites=slab_for_sites,
     )
 
     if not all_combined:

@@ -25,6 +25,7 @@ from ..surfaces import SlabContainer
 from .core import _evaluate_placement_batch
 from .shared import (
     PlacementFailureEvent,
+    _build_surface_reference_slab,
     _infer_surface_symbols,
     _resolve_site_context_for_sampling,
     _summarize_failure_events,
@@ -87,18 +88,21 @@ def process_molecule_bayesian(
         return None
     conformers, _ = result
 
+    slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab_for_frozen)
+
     site_context = _resolve_site_context_for_sampling(
-        slab.atoms,
+        slab_for_sites,
         config,
         symmetry_broken=symmetry_broken,
     )
 
     max_enumerated_specs = estimate_placement_spec_capacity(
         conformers,
-        slab.atoms,
+        slab_for_sites,
         config,
         smiles,
         site_context=site_context,
+        full_slab=slab.atoms,
     )
     if config.bo_candidate_pool_size is not None:
         pool_size = config.bo_candidate_pool_size
@@ -108,13 +112,14 @@ def process_molecule_bayesian(
             pool_size = max(config.bo_total_budget * 5, config.num_placements)
     all_specs = enumerate_placement_specs(
         conformers,
-        slab.atoms,
+        slab_for_sites,
         config,
         smiles,
         pool_size,
         filter_spec=config.placement_filter,
         site_context=site_context,
         seed=config.seed,
+        full_slab=slab.atoms,
     )
     if not all_specs:
         logger.warning("No candidate specs generated for BO")
@@ -134,7 +139,7 @@ def process_molecule_bayesian(
         config.bo_ucb_kappa,
     )
 
-    surface_symbols = _infer_surface_symbols(slab.atoms)
+    surface_symbols = _infer_surface_symbols(slab_for_sites)
     candidate_features, valid_spec_indices = build_spec_features_geometry_aware(
         all_specs,
         conformers,
@@ -144,6 +149,7 @@ def process_molecule_bayesian(
         smiles=smiles,
         surface_id=surface_type,
         site_context=site_context,
+        slab_for_sites=slab_for_sites,
     )
     if candidate_features.empty:
         logger.warning("BO: no specs produced valid placements; aborting")
@@ -224,6 +230,7 @@ def process_molecule_bayesian(
             surface_symbols,
             site_context=site_context,
             base_slab_for_frozen=base_slab_for_frozen,
+            slab_for_sites=slab_for_sites,
         )
 
         total_evaluated += len(pool_positions)
