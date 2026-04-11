@@ -74,3 +74,6 @@ benchmark_bo_results_*.csv
 env/
 venv/
 ENV/
+
+# Sphinx documentation build
+docs/_build/

@@ -1,13 +1,6 @@
-# metalsurfer
+# Metalsurfer
 
-Generic adsorption-energy screening on arbitrary surfaces.
-
-## Project Status (April 2026)
-
-- The workflow layer is now modularized under `src/metalsurfer/workflow/` (`core`, `screening`, `bayesian`, `saturation`, `reference`, `shared`) rather than a single monolithic module.
-- Public API run modes are stable and available from `metalsurfer` top-level imports.
-- Slab preparation helpers have a dedicated import path: `metalsurfer.surface_prep`.
-- Placement generation uses unified Voronoi-based site generation across slabs, nanoparticles, and porous materials, with optional spglib symmetry reduction in the workflow (`get_symmetry_aware_sites` returns `None` when symmetry reduction is unavailable or Voronoi finds no sites; the workflow then uses core unified sites).
+Library for adsorption-energy screening on arbitrary surfaces (slabs, nanoparticles, and periodic porous frameworks).
 
 ## Install
 
@@ -27,13 +20,16 @@ pip install -e ".[mlip,dev]"
 
 ## Python API
 
-`metalsurfer` exposes three high-level run modes through the library API:
+The library exposes four high-level entry points:
 
-- `run_adsorption(...)`: standard multi-molecule screening from an in-memory list of `(smiles, molecule_name)` tuples.
-- `run_adsorption_bo(...)`: Bayesian optimization-guided screening over the same campaign interface.
-- `run_saturation(...)`: sequential saturation from a SMILES CSV, including optional multi-molecule competitive saturation.
+| Function | Role |
+| -------- | ---- |
+| `run_adsorption` | Standard screening: enumerate placements, relax, filter, rank. |
+| `run_adsorption_bo` | Same pipeline with Bayesian optimization over placement candidates. |
+| `run_saturation` | Sequential saturation: repeated adsorption onto an evolving slab. |
+| `run_saturation_bo` | Saturation with BO-guided placement selection. |
 
-All three run modes also accept a CSV path as the `molecules` argument (e.g. `molecules="smiles.csv"`), and can be supplied a `list[tuple[str, str]]` of `(smiles, name)` pairs for in-memory use.
+Each accepts either an in-memory `list[tuple[str, str]]` of `(smiles, name)` pairs or a path to a SMILES CSV as `molecules`.
 
 ### ASE Atoms Input (Important)
 
@@ -194,7 +190,7 @@ Important saturation behaviors:
 - Competitive saturation also supports `bo_enabled=True`. In that mode, each adsorbate trains and carries forward its own BO state independently; BO observations are not shared across adsorbates.
 - Recommended validation split: keep local validation focused on mocked or lightweight saturation tests, and reserve full-stack BO competitive saturation checks for a dedicated `gpu` + `slow` integration test in a GPU-capable environment.
 
-### Surface Setup And Modifiers
+### Surface setup and modifiers
 
 The surface can be prepared programmatically before any run mode. Alloy substitution is applied first, then adatom deposition if both are used.
 
@@ -269,9 +265,9 @@ slab = deposit_adatoms(
 
 This choice affects site generation, adsorption validation, and distance handling throughout the workflow.
 
-## What The Core Pipeline Does
+## What the core pipeline does
 
-Across all run modes, Metalsurfer follows the same structure:
+Across all run modes, the library follows the same structure:
 
 1. Build or accept a surface structure.
 2. Generate and deduplicate molecular conformers.
@@ -283,9 +279,9 @@ Across all run modes, Metalsurfer follows the same structure:
 
 Placement generation is Voronoi-based and works across slabs, nanoparticles, and porous materials. Bayesian mode changes candidate selection, not the downstream physics or filtering stack.
 
-## Results And Persistence
+## Results and persistence
 
-The output directory is `results_{surface_type}`. Depending on run mode, Metalsurfer writes:
+The output directory is `results_{surface_type}`. Depending on run mode, the library may write:
 
 - `adsorption_energies_detailed.csv`
 - `adsorption_energy_summary.csv`
@@ -299,36 +295,36 @@ Campaign APIs save structures and summary tables by default. Workflow APIs retur
 
 ## Development
 
-Run the local checks with:
+Commands below mirror the [GitHub Actions](.github/workflows/ci.yml) workflow: lint, fast tests with coverage, then optional extra test modules.
 
 ```bash
 ruff check .
 ruff format --check .
-pytest tests/ -m "not dependency_behavior and not mlip and not gpu and not slow" \
-  --cov=src/metalsurfer --cov-report=term-missing
+python -m pytest tests/ -m "not dependency_behavior and not mlip and not gpu and not slow" \
+  --cov=src/metalsurfer --cov-report=term-missing --tb=short -v
 coverage report --fail-under=74
-pytest tests/test_dependency_behavior.py
-pytest tests/test_integration_seeded.py
+python -m pytest tests/test_dependency_behavior.py -v --tb=short
+python -m pytest tests/test_integration_seeded.py -v --tb=short
 ```
 
-Placement spec enumeration uses `AdsorptionConfig.seed` when `enumerate_placement_specs(..., seed=None)` is called; subsampling when the combinatorial grid exceeds `n_desired` is reproducible from that seed. `build_batch_placement_specs` takes an integer `seed` (default `metalsurfer.placement.policy.PLACEMENT_GRID_COUNT_SEED`, currently `0`); `max_batch_placement_specs` uses that same default so grid cardinality matches an uncapped build.
+**Placement reproducibility:** `enumerate_placement_specs` uses `AdsorptionConfig.seed` when no explicit `seed` is passed. When the combinatorial placement grid is larger than `n_desired`, candidates are subsampled with that seed. For low-level experiments, `metalsurfer.placement.policy.build_batch_placement_specs` accepts an integer `seed`; the default `PLACEMENT_GRID_COUNT_SEED` keeps `max_batch_placement_specs` consistent with a full uncapped enumeration count.
 
-For GPU and MLIP-heavy validation, use the helper script (it picks the active environment’s `python` when `CONDA_PREFIX` is set, or falls back to `python3`):
+**GPU and MLIP integration tests** (heavy TorchSim/FairChem workloads) are easiest to run in separate processes:
 
 ```bash
 ./scripts/run_gpu_tests.sh
 ```
 
-To pin a specific interpreter:
+Optional interpreter:
 
 ```bash
 bash scripts/run_gpu_tests.sh "$(command -v python)"
 ```
 
-To collect every test marked `slow` (mostly MLIP+CUDA integration cases; they are skipped when the stack or GPU is unavailable):
+All tests marked `slow` (often CUDA-dependent; skipped if the stack or device is missing):
 
 ```bash
-pytest tests/ -m slow
+python -m pytest tests/ -m slow --tb=short -v
 ```
 
-Design details and module-level architecture are documented in [CORE_SYSTEM_EXPLANATION.md](CORE_SYSTEM_EXPLANATION.md).
+Architecture and design rationale: [CORE_SYSTEM_EXPLANATION.md](CORE_SYSTEM_EXPLANATION.md).
