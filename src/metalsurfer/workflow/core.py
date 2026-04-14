@@ -287,11 +287,6 @@ def _process_molecule_body(
         )
     t_validation = time.perf_counter() - t0
 
-    if validation_failures:
-        logger.info(
-            "Validation failures: %s",
-            ", ".join(f"{reason}: {n}" for reason, n in validation_failures.items()),
-        )
     _summarize_failure_events(
         validation_failure_events,
         label=f"{molecule_name} optimisation/validation",
