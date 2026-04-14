@@ -112,7 +112,7 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
 
     slab = _load_go_slab("random/R1")
-    logging.info("GO slab (random R1): %d atoms", len(slab.atoms))
+    logging.info("GO slab (random R1): %d atoms", len(slab))
 
     config = AdsorptionConfig(
         material_type="slab",

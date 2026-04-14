@@ -112,7 +112,7 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
 
     slab = _load_go_slab("semi_ordered/SO1")
-    logging.info("GO slab (semi-ordered SO1): %d atoms", len(slab.atoms))
+    logging.info("GO slab (semi-ordered SO1): %d atoms", len(slab))
 
     config = AdsorptionConfig(
         material_type="slab",
