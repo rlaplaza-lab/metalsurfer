@@ -17,7 +17,6 @@ benchmark uses them automatically when present.
 
 Usage:
   python scripts/benchmark_bo_models.py --data-dir results_co2_graphene --out benchmark_bo_results.csv --seeds 5
-  python scripts/benchmark_bo_models.py --data-dir results_propane_pt111_ni --surface-type propane_pt111_ni --smiles CCC --out benchmark_bo_results_propane.csv
 """
 
 import argparse
@@ -33,7 +32,6 @@ from metalsurfer.ml.bayesian import (
     train_surrogate,
 )
 from metalsurfer.ml.features import extract_features_from_dataset
-from metalsurfer.ml.schema import SCHEMA_VERSION
 
 configure_logging(default_level="INFO")
 logger = logging.getLogger(__name__)
@@ -58,116 +56,15 @@ REQUIRED_INPUT_COLUMNS = (
     "quat_z",
     "energy_adsorption",
 )
-SETUP_IDENTITY_COLUMNS = ("molecule", "smiles", "surface_id")
-CONTEXT_IDENTITY_COLUMNS = (
-    "context_hash",
-    "model_name",
-    "fmax",
-    "stage1_steps",
-    "stage2_steps",
-    "seed",
-    "device",
-    "placement_z_range",
-    "placement_z_scale_by_covalent_radius",
-    "min_initial_distance",
-    "min_contact_ratio",
-    "top_layer_tolerance",
-    "relax_top_layer",
-)
 
 
-def _validate_input_dataframe(df: pd.DataFrame, csv_path: str) -> None:
-    """Validate expected metalsurfer benchmark input schema."""
+def _validate_columns(df: pd.DataFrame, csv_path: str) -> None:
+    """Validate required columns are present."""
     missing = [c for c in REQUIRED_INPUT_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(
-            "Input dataset is not compatible with metalsurfer BO benchmark.\n"
-            f"Missing required columns: {missing}\n"
-            f"File: {csv_path}\n"
-            "Expected source: results_*/adsorption_energies_detailed.csv "
-            "written by metalsurfer save_summary_results/campaign APIs."
-        )
-    if "schema_version" in df.columns:
-        versions = sorted(
-            {str(v) for v in df["schema_version"].dropna().astype(str).unique()}
-        )
-        if versions and any(v != SCHEMA_VERSION for v in versions):
-            logger.warning(
-                "Dataset schema_version=%s differs from current=%s; "
-                "benchmark will attempt best-effort compatibility.",
-                ",".join(versions),
-                SCHEMA_VERSION,
-            )
-
-
-def _validate_setup_specific_dataset(df: pd.DataFrame, csv_path: str) -> None:
-    """Ensure BO benchmark data corresponds to exactly one setup."""
-    mixed_cols: list[tuple[str, list[str]]] = []
-
-    for col in SETUP_IDENTITY_COLUMNS:
-        if col not in df.columns:
-            continue
-        values = [str(v) for v in df[col].dropna().astype(str).unique().tolist()]
-        if len(values) > 1:
-            mixed_cols.append((col, sorted(values)[:5]))
-
-    present_context_cols = [c for c in CONTEXT_IDENTITY_COLUMNS if c in df.columns]
-    for col in present_context_cols:
-        values = [str(v) for v in df[col].dropna().astype(str).unique().tolist()]
-        if len(values) > 1:
-            mixed_cols.append((col, sorted(values)[:5]))
-
-    if mixed_cols:
-        details = ", ".join(
-            f"{col}={vals}" + ("..." if len(vals) == 5 else "")
-            for col, vals in mixed_cols
-        )
-        raise ValueError(
-            "Input dataset mixes multiple setups but this BO benchmark is setup-specific. "
-            "Split data so each run has a single adsorbate, surface, and relaxation context. "
-            f"Mixed columns in {csv_path}: {details}"
-        )
-
-    if not present_context_cols:
-        logger.warning(
-            "Dataset has no context identity columns (%s). Setup-specific validation "
-            "will only enforce molecule/smiles/surface_id.",
-            ", ".join(CONTEXT_IDENTITY_COLUMNS),
-        )
-
-
-def _assert_feature_energy_injective(X: pd.DataFrame, y: pd.Series) -> None:
-    """Ensure feature vectors map to a single adsorption energy."""
-    if X.empty:
-        raise ValueError("Input dataset has zero rows after feature extraction.")
-
-    feature_cols = list(X.columns)
-    check_df = X.copy()
-    check_df["_energy_adsorption"] = pd.Series(y).to_numpy()
-    grouped = check_df.groupby(feature_cols, dropna=False)["_energy_adsorption"]
-    conflicts = grouped.nunique(dropna=False)
-    n_conflicts = int((conflicts > 1).sum())
-    if n_conflicts > 0:
-        conflict_examples = []
-        conflict_keys = list(conflicts[conflicts > 1].index[:3])
-        for key in conflict_keys:
-            if not isinstance(key, tuple):
-                key = (key,)
-            mask = (pd.Series(key, index=feature_cols) == X).all(axis=1)
-            energies = sorted(
-                {float(v) for v in check_df.loc[mask, "_energy_adsorption"]}
-            )
-            pairs = [
-                f"{feature_cols[i]}={key[i]}" for i in range(min(3, len(feature_cols)))
-            ]
-            conflict_examples.append(f"[{', '.join(pairs)}] -> energies={energies}")
-        detail_msg = "; ".join(conflict_examples)
-        raise ValueError(
-            "Input dataset violates injectivity for BO benchmark: "
-            f"{n_conflicts} feature vector(s) map to multiple "
-            "energy_adsorption values. Regenerate or deduplicate "
-            "adsorption_energies_detailed.csv to ensure deterministic "
-            f"feature->target mapping. Example conflicts: {detail_msg}"
+            f"Missing required columns: {missing}.\n"
+            f"File: {csv_path}"
         )
 
 
@@ -179,25 +76,14 @@ def load_and_prepare_data(
     """Load metalsurfer detailed CSV, validate columns, return (X, y, df)."""
     csv_path = os.path.join(data_dir, "adsorption_energies_detailed.csv")
     if not os.path.isfile(csv_path):
-        raise FileNotFoundError(
-            f"Run a placement-generation script first to create {csv_path}"
-        )
+        raise FileNotFoundError(f"Missing {csv_path}")
     df = pd.read_csv(csv_path)
-    _validate_input_dataframe(df, csv_path)
+    _validate_columns(df, csv_path)
     if "smiles" not in df.columns:
-        logger.info(
-            "Input has no 'smiles' column; using --smiles=%s for all rows.", smiles
-        )
         df["smiles"] = smiles
     if "surface_id" not in df.columns:
-        logger.info(
-            "Input has no 'surface_id' column; using --surface-type=%s for all rows.",
-            surface_type,
-        )
         df["surface_id"] = surface_type
-    _validate_setup_specific_dataset(df, csv_path)
     X, y = extract_features_from_dataset(df, target_column="energy_adsorption")
-    _assert_feature_energy_injective(X, y)
     return X, y, df
 
 
