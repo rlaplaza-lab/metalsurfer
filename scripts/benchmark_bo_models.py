@@ -62,10 +62,7 @@ def _validate_columns(df: pd.DataFrame, csv_path: str) -> None:
     """Validate required columns are present."""
     missing = [c for c in REQUIRED_INPUT_COLUMNS if c not in df.columns]
     if missing:
-        raise ValueError(
-            f"Missing required columns: {missing}.\n"
-            f"File: {csv_path}"
-        )
+        raise ValueError(f"Missing required columns: {missing}.\nFile: {csv_path}")
 
 
 def load_and_prepare_data(
