@@ -9,7 +9,6 @@ Purpose:
 
 import logging
 import os
-import tempfile
 
 from metalsurfer import (
     AdsorptionConfig,
@@ -83,16 +82,10 @@ def main():
     logger.info("Defected Au(111) slab atoms: %d", len(defect_slab.atoms))
 
     # Run saturation
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-        f.write(f"{BIPYRIDINE_SMILES},bipyridine\n")
-        smiles_path = f.name
-
-    os.unlink(smiles_path)  # Clean up temp file after reading
-
     failure_summary = {}
     saturation_results = run_saturation(
         slab=defect_slab,
-        molecules=smiles_path,
+        molecules=[(BIPYRIDINE_SMILES, "bipyridine")],
         config=config,
         surface_type=SURFACE_TYPE,
         skip_existing=False,

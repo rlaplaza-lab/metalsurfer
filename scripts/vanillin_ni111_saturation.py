@@ -6,9 +6,6 @@ Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, to
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 """
 
-import os
-import tempfile
-
 from metalsurfer import (
     AdsorptionConfig,
     create_slab_from_bulk,
@@ -44,49 +41,41 @@ def main():
         stage2_steps=500,
     )
 
-    # Create temporary SMILES file with vanillin only
     smiles = "c1(C=O)cc(OC)c(O)cc1"
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-        f.write(f"{smiles},vanillin\n")
-        smiles_path = f.name
+    setup_directories([surface_type])
+    failure_summary = {}
+    saturation_results = run_saturation(
+        slab=slab,
+        molecules=[(smiles, "vanillin")],
+        config=config,
+        surface_type=surface_type,
+        skip_existing=False,
+        failure_summary_out=failure_summary,
+    )
 
-    try:
-        setup_directories([surface_type])
-        failure_summary = {}
-        saturation_results = run_saturation(
-            slab=slab,
-            molecules=smiles_path,
-            config=config,
+    if saturation_results:
+        save_saturation_results(
+            saturation_results,
             surface_type=surface_type,
-            skip_existing=False,
-            failure_summary_out=failure_summary,
+            config=config,
         )
-
-        if saturation_results:
-            save_saturation_results(
-                saturation_results,
-                surface_type=surface_type,
-                config=config,
+        sr = saturation_results[0]
+        total_steps = len(sr.steps)
+        n_at_sat = sr.n_molecules_at_saturation
+        print("")
+        print(
+            format_saturation_complete(
+                label="Vanillin saturation on Ni(111)",
+                n_molecules_at_saturation=n_at_sat,
+                total_steps=total_steps,
+                results_dir=f"results_{surface_type}",
             )
-            sr = saturation_results[0]
-            total_steps = len(sr.steps)
-            n_at_sat = sr.n_molecules_at_saturation
-            print("")
-            print(
-                format_saturation_complete(
-                    label="Vanillin saturation on Ni(111)",
-                    n_molecules_at_saturation=n_at_sat,
-                    total_steps=total_steps,
-                    results_dir=f"results_{surface_type}",
-                )
-            )
-        else:
-            print("No saturation results (no valid placements found).")
-            if failure_summary:
-                print()
-                print(format_failure_summary(failure_summary))
-    finally:
-        os.unlink(smiles_path)
+        )
+    else:
+        print("No saturation results (no valid placements found).")
+        if failure_summary:
+            print()
+            print(format_failure_summary(failure_summary))
 
 
 if __name__ == "__main__":
