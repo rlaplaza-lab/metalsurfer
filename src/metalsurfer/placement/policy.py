@@ -2,7 +2,8 @@
 
 import itertools
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from ..models import PlacementSpec
 
@@ -19,8 +20,8 @@ PLACEMENT_GRID_COUNT_SEED = 0
 _GRID_BUILD_CAP = 10**9
 
 
-def _normalized_site_indices(site_indices: list[int]) -> list[int]:
-    return site_indices if site_indices else [-1]
+def _clamp(n: int, cap: int = _GRID_BUILD_CAP) -> int:
+    return min(n, cap)
 
 
 def max_batch_placement_specs(
@@ -33,26 +34,44 @@ def max_batch_placement_specs(
     dissociative: bool = False,
     n_hollow_pairs: int = 0,
 ) -> int:
-    """Return the number of specs in the policy grid (capped at ``_GRID_BUILD_CAP``).
+    """Return the total number of specs in the policy grid.
 
-    Uses :func:`build_batch_placement_specs` with ``PLACEMENT_GRID_COUNT_SEED`` and
-    a large ``n_desired`` so the length matches the combinatorial size without
-    duplicating counting logic.
+    Computed by closed-form arithmetic per branch; individual branches are
+    clamped at ``_GRID_BUILD_CAP`` so the total stays bounded.
     """
-    return len(
-        build_batch_placement_specs(
-            n_conformers=n_conformers,
-            site_indices=site_indices,
-            site_type_for_index=lambda _: None,
-            shape=shape,
-            n_binders=n_binders,
-            flat_aromatic=flat_aromatic,
-            parallel_fraction=0.5,
-            n_desired=_GRID_BUILD_CAP,
-            dissociative=dissociative,
-            n_hollow_pairs=n_hollow_pairs,
-            seed=PLACEMENT_GRID_COUNT_SEED,
+    # ``_normalized_site_indices`` in :func:`build_batch_placement_specs` falls
+    # back to ``[-1]`` when ``site_indices`` is empty, so the grid always has
+    # at least one site slot.
+    n_sites = max(len(site_indices), 1)
+
+    if dissociative:
+        return _clamp(max(n_hollow_pairs, 1) * len(Z_FRACTIONS))
+
+    if flat_aromatic:
+        parallel = (
+            n_conformers
+            * 2
+            * len(TILT_PARALLEL)
+            * len(AZIMUTH)
+            * len(Z_FRACTIONS)
+            * len(AZIMUTH_IN_PLANE)
+            * n_sites
         )
+        en_down = (
+            n_conformers
+            * max(n_binders, 1)
+            * len(TILT_FULL)
+            * len(AZIMUTH)
+            * len(Z_FRACTIONS)
+            * n_sites
+        )
+        return _clamp(parallel) + _clamp(en_down)
+
+    # Shape only selects orientation label ("vertical" vs "round"); grid is
+    # the same size for both.
+    _ = shape
+    return _clamp(
+        n_conformers * len(TILT_FULL) * len(AZIMUTH) * len(Z_FRACTIONS) * n_sites
     )
 
 
@@ -77,193 +96,123 @@ def build_batch_placement_specs(
     subsamples uniformly to *n_desired* when the grid is larger (reproducible
     via *seed*). Dissociative mode enumerates a small grid fully.
     """
-    normalized_sites = _normalized_site_indices(site_indices)
+    normalized_sites = site_indices if site_indices else [-1]
 
-    def make_spec(
-        placement_index: int,
-        conf_idx: int,
-        orient: str,
-        face_flip: bool,
-        en_idx: int | None,
-        site_idx: int,
-        tilt: float,
-        az: float,
-        az_ip_val: float,
-        zf_val: float,
-    ) -> PlacementSpec:
-        return PlacementSpec(
-            conformer_index=conf_idx,
-            orientation_type=orient,
-            face_flip=face_flip,
-            en_atom_index=en_idx,
-            site_index=site_idx,
-            site_type=site_type_for_index(site_idx),
-            tilt_deg=tilt,
-            azimuth_deg=az,
-            azimuth_in_plane_deg=az_ip_val,
-            z_fraction=zf_val,
-            placement_index=placement_index,
-        )
-
-    specs: list[PlacementSpec] = []
-    pid = 0
-
-    def append_from_iter(
-        items,
-        build_spec: Callable[..., PlacementSpec],
-        *,
-        target_size: int,
-    ) -> None:
-        nonlocal pid
-        for item in items:
-            if len(specs) >= target_size:
+    def _collect(
+        items: Iterable[dict[str, Any]],
+        cap: int,
+    ) -> list[PlacementSpec]:
+        """Collect specs from *items* until *cap*, applying ``filter_spec`` when set."""
+        out: list[PlacementSpec] = []
+        for fields in items:
+            if len(out) >= cap:
                 break
-            spec = build_spec(pid, *item)
-            pid += 1
+            spec = PlacementSpec(
+                **fields,
+                site_type=site_type_for_index(int(fields["site_index"])),
+                placement_index=0,
+            )
             if filter_spec is None or filter_spec(spec):
-                specs.append(spec)
+                out.append(spec)
+        return out
 
     if dissociative:
-        pair_indices = list(range(max(n_hollow_pairs, 1)))
-        items = itertools.product(pair_indices, Z_FRACTIONS)
-        append_from_iter(
-            items,
-            lambda placement_index, pair_idx, zfv: make_spec(
-                placement_index,
-                0,
-                "dissociative",
-                False,
-                None,
-                pair_idx,
-                0.0,
-                0.0,
-                0.0,
-                zfv,
-            ),
-            target_size=n_desired,
+        pair_indices = range(max(n_hollow_pairs, 1))
+        items = (
+            dict(
+                conformer_index=0,
+                orientation_type="dissociative",
+                face_flip=False,
+                en_atom_index=None,
+                site_index=pair_idx,
+                tilt_deg=0.0,
+                azimuth_deg=0.0,
+                azimuth_in_plane_deg=0.0,
+                z_fraction=zfv,
+            )
+            for pair_idx, zfv in itertools.product(pair_indices, Z_FRACTIONS)
         )
-        return specs[:n_desired]
-
-    if flat_aromatic:
+        specs = _collect(items, cap=n_desired)
+    elif flat_aromatic:
         n_par = max(1, int(n_desired * parallel_fraction))
         n_en = max(1, n_desired - n_par)
 
-        parallel_items = itertools.product(
-            range(n_conformers),
-            [False, True],
-            TILT_PARALLEL,
-            AZIMUTH,
-            Z_FRACTIONS,
-            AZIMUTH_IN_PLANE,
-            normalized_sites,
+        parallel_items = (
+            dict(
+                conformer_index=ci,
+                orientation_type="parallel",
+                face_flip=ff,
+                en_atom_index=None,
+                site_index=si,
+                tilt_deg=tl,
+                azimuth_deg=azv,
+                azimuth_in_plane_deg=aip,
+                z_fraction=zfv,
+            )
+            for ci, ff, tl, azv, zfv, aip, si in itertools.product(
+                range(n_conformers),
+                [False, True],
+                TILT_PARALLEL,
+                AZIMUTH,
+                Z_FRACTIONS,
+                AZIMUTH_IN_PLANE,
+                normalized_sites,
+            )
         )
-        par_specs: list[PlacementSpec] = []
+        par_specs = _collect(parallel_items, cap=_GRID_BUILD_CAP)
 
-        def _append_par(
-            items_iter,
-            build_fn: Callable[..., PlacementSpec],
-            cap: int,
-        ) -> None:
-            nonlocal pid
-            for item in items_iter:
-                if len(par_specs) >= cap:
-                    break
-                spec = build_fn(pid, *item)
-                pid += 1
-                if filter_spec is None or filter_spec(spec):
-                    par_specs.append(spec)
-
-        _append_par(
-            parallel_items,
-            lambda placement_index, ci, ff, tl, azv, zfv, aip, si: make_spec(
-                placement_index,
-                ci,
-                "parallel",
-                ff,
-                None,
-                si,
-                tl,
-                azv,
-                aip,
-                zfv,
-            ),
-            _GRID_BUILD_CAP,
+        en_down_items = (
+            dict(
+                conformer_index=ci,
+                orientation_type="EN-down",
+                face_flip=False,
+                en_atom_index=ei if n_binders > 1 else None,
+                site_index=si,
+                tilt_deg=tl,
+                azimuth_deg=azv,
+                azimuth_in_plane_deg=0.0,
+                z_fraction=zfv,
+            )
+            for ci, ei, tl, azv, zfv, si in itertools.product(
+                range(n_conformers),
+                range(max(n_binders, 1)),
+                TILT_FULL,
+                AZIMUTH,
+                Z_FRACTIONS,
+                normalized_sites,
+            )
         )
-
-        en_down_items = itertools.product(
-            range(n_conformers),
-            range(max(n_binders, 1)),
-            TILT_FULL,
-            AZIMUTH,
-            Z_FRACTIONS,
-            normalized_sites,
-        )
-        en_specs: list[PlacementSpec] = []
-
-        def _append_en(
-            items_iter,
-            build_fn: Callable[..., PlacementSpec],
-            cap: int,
-        ) -> None:
-            nonlocal pid
-            for item in items_iter:
-                if len(en_specs) >= cap:
-                    break
-                spec = build_fn(pid, *item)
-                pid += 1
-                if filter_spec is None or filter_spec(spec):
-                    en_specs.append(spec)
-
-        _append_en(
-            en_down_items,
-            lambda placement_index, ci, ei, tl, azv, zfv, si: make_spec(
-                placement_index,
-                ci,
-                "EN-down",
-                False,
-                ei if n_binders > 1 else None,
-                si,
-                tl,
-                azv,
-                0.0,
-                zfv,
-            ),
-            _GRID_BUILD_CAP,
-        )
+        en_specs = _collect(en_down_items, cap=_GRID_BUILD_CAP)
 
         rng = random.Random(seed)
         if len(par_specs) > n_par:
             par_specs = rng.sample(par_specs, n_par)
         if len(en_specs) > n_en:
             en_specs = rng.sample(en_specs, n_en)
-
         specs = par_specs + en_specs
     else:
         orient = "vertical" if shape == "linear" else "round"
-        items = itertools.product(
-            range(n_conformers),
-            TILT_FULL,
-            AZIMUTH,
-            Z_FRACTIONS,
-            normalized_sites,
+        items = (
+            dict(
+                conformer_index=ci,
+                orientation_type=orient,
+                face_flip=False,
+                en_atom_index=None,
+                site_index=si,
+                tilt_deg=tl,
+                azimuth_deg=azv,
+                azimuth_in_plane_deg=0.0,
+                z_fraction=zfv,
+            )
+            for ci, tl, azv, zfv, si in itertools.product(
+                range(n_conformers),
+                TILT_FULL,
+                AZIMUTH,
+                Z_FRACTIONS,
+                normalized_sites,
+            )
         )
-        append_from_iter(
-            items,
-            lambda placement_index, ci, tl, azv, zfv, si: make_spec(
-                placement_index,
-                ci,
-                orient,
-                False,
-                None,
-                si,
-                tl,
-                azv,
-                0.0,
-                zfv,
-            ),
-            target_size=_GRID_BUILD_CAP,
-        )
-
+        specs = _collect(items, cap=_GRID_BUILD_CAP)
         if len(specs) > n_desired:
             specs = random.Random(seed).sample(specs, n_desired)
 

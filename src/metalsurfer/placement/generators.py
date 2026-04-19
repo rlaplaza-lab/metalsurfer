@@ -1,5 +1,6 @@
 """Placement generation logic for adsorbate placement on slab surfaces."""
 
+import dataclasses
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -39,16 +40,18 @@ class SiteContext:
 
 
 @dataclass
-class _PoseResult:
-    """Internal return type of _pose_from_spec(); named fields replace raw 7-tuple."""
+class _PlacementContext:
+    """Inputs for ``_finalize_placement``: pose, site/material refs, canonical and rotated positions."""
 
     pose: PlacementPose
-    surface_ref: float
-    z_offset: float
-    z_fraction: float
     site: dict[str, object] | None
+    mat_type: str
+    surface_ref: float
+    is_local_ref: bool
     source: str
-    site_reference_frame: str
+    canonical_pos: np.ndarray
+    use_sites: bool
+    rotated_pos: np.ndarray
 
 
 def _is_flat_aromatic(
@@ -256,6 +259,18 @@ def _resolve_surface_ref(
     return float(np.max(slab.get_positions()[:, 2])), False
 
 
+def _select_site(
+    ctx: SiteContext,
+    site_index: int,
+) -> dict[str, object] | None:
+    """Return the unique site at *site_index* or ``None`` when unavailable."""
+    if not ctx.use_sites:
+        return None
+    if site_index < 0 or site_index >= len(ctx.sites):
+        return None
+    return ctx.sites[site_index]
+
+
 def _pose_from_spec(
     adsorbate: Atoms,
     spec: PlacementSpec,
@@ -265,8 +280,8 @@ def _pose_from_spec(
     z_fraction: float | None = None,
     xy_override: tuple[float, float] | None = None,
     site_context: SiteContext | None = None,
-) -> _PoseResult | None:
-    """Build a universal PlacementPose from a PlacementSpec.
+) -> _PlacementContext | None:
+    """Build a placement context (pose + resolved geometry) from a spec.
 
     Returns ``None`` when no adsorption site is available and no
     ``xy_override`` was given (the caller should treat this as a placement
@@ -278,15 +293,8 @@ def _pose_from_spec(
     normal = np.array([0.0, 0.0, 1.0])  # default; may be overridden for pore sites
     shape, _, _ = geom._classify_molecule_shape(canonical_pos)
 
-    _ctx = _resolve_site_context(slab, config, site_context)
-    unique_sites = _ctx.sites
-    use_sites = _ctx.use_sites
-    resolved_source = _ctx.source
-    site = (
-        unique_sites[spec.site_index]
-        if use_sites and 0 <= spec.site_index < len(unique_sites)
-        else None
-    )
+    ctx = _resolve_site_context(slab, config, site_context)
+    site = _select_site(ctx, spec.site_index)
 
     # Determine placement normal (local surface normal for pore/NP sites)
     if site is not None and "normal" in site:
@@ -298,15 +306,15 @@ def _pose_from_spec(
 
     if xy_override is not None:
         x, y = xy_override[0], xy_override[1]
-    elif use_sites and spec.site_index >= 0 and spec.site_index < len(unique_sites):
-        site_xy = np.asarray(unique_sites[spec.site_index]["xy"])
+    elif site is not None:
+        site_xy = np.asarray(site["xy"])
         x, y = float(site_xy[0]), float(site_xy[1])
     else:
         # No sites and no override: cannot place at a physically motivated
-        # position.  Return a degenerate pose so the caller can report a
-        # clean failure instead of placing at a random location.
+        # position.  Return ``None`` so the caller can report a clean failure
+        # instead of placing at a random location.
         logger.debug(
-            "No sites available for spec placement_index=%d; returning degenerate pose",
+            "No sites available for spec placement_index=%d; returning None",
             spec.placement_index,
         )
         return None
@@ -362,6 +370,7 @@ def _pose_from_spec(
     )
     rot_mat = geom.best_fit_rotation(canonical_pos, rotated_pos)
     quat = geom.rotation_matrix_to_quaternion(rot_mat)
+
     if mat_type == "slab":
         placement_center = np.array([float(x), float(y), float(surface_ref + z_offset)])
     elif site is not None and "xyz" in site:
@@ -391,36 +400,27 @@ def _pose_from_spec(
         azimuth_deg=spec.azimuth_deg,
         azimuth_in_plane_deg=spec.azimuth_in_plane_deg,
     )
-    return _PoseResult(
+    return _PlacementContext(
         pose=pose,
-        surface_ref=float(surface_ref),
-        z_offset=float(z_offset),
-        z_fraction=float(zf),
         site=site,
-        source=resolved_source if use_sites else "no_sites",
-        site_reference_frame="local_site" if is_local_ref else "global_top_layer",
+        mat_type=mat_type,
+        surface_ref=float(surface_ref),
+        is_local_ref=is_local_ref,
+        source=ctx.source if ctx.use_sites else "no_sites",
+        canonical_pos=canonical_pos,
+        use_sites=ctx.use_sites,
+        rotated_pos=rotated_pos,
     )
 
 
-def _apply_pose(
+def _context_from_pose(
     pose: PlacementPose,
-    adsorbate: Atoms,
     canonical_pos: np.ndarray,
     slab: Atoms,
     config: AdsorptionConfig,
-    *,
-    site: dict[str, object] | None,
-    mat_type: str,
-    surface_ref: float,
-    is_local_ref: bool,
-    resolved_source: str,
-    use_sites: bool,
-) -> tuple[Atoms, PlacementDescriptor] | None:
-    """Core pose application: rotate, translate, validate, build descriptor.
-
-    Accepts pre-resolved geometry values so the caller avoids redundant
-    Voronoi look-ups and canonical-frame recomputations.
-    """
+    site_context: SiteContext | None,
+) -> _PlacementContext | None:
+    """Replay path: normalize quaternion, rotate *canonical_pos*, resolve site for ``_finalize_placement``."""
     raw_q = np.array([pose.quat_w, pose.quat_x, pose.quat_y, pose.quat_z], dtype=float)
     if float(np.linalg.norm(raw_q)) < 1e-10:
         logger.warning(
@@ -429,18 +429,53 @@ def _apply_pose(
         )
         return None
     quat = geom.normalize_quaternion(raw_q)
-    test = (geom.quaternion_to_rotation_matrix(quat) @ canonical_pos.T).T
-    test[:, 0] += pose.x_abs
-    test[:, 1] += pose.y_abs
+    rotated_pos = (geom.quaternion_to_rotation_matrix(quat) @ canonical_pos.T).T
 
-    if pose.z_abs is None:
-        logger.warning("Pose replay requires z_abs for deterministic reconstruction")
-        return None
-    z_abs = float(pose.z_abs)
+    ctx = _resolve_site_context(slab, config, site_context)
+    site = _select_site(ctx, pose.site_index)
+    mat_type = _resolve_material_type(site, fallback="slab")
+    surface_ref, is_local_ref = _resolve_surface_ref(
+        site,
+        slab,
+        mat_type,
+        rough_slab_local_z=config.rough_slab_local_z,
+    )
 
-    if mat_type == "slab":
-        z_offset = float(z_abs - surface_ref)
-    elif site is not None and "xyz" in site and "normal" in site:
+    # Store the normalized quaternion on the pose so the descriptor carries
+    # the canonical form regardless of what the caller supplied.
+    pose_normalized = dataclasses.replace(
+        pose,
+        quat_w=float(quat[0]),
+        quat_x=float(quat[1]),
+        quat_y=float(quat[2]),
+        quat_z=float(quat[3]),
+    )
+
+    return _PlacementContext(
+        pose=pose_normalized,
+        site=site,
+        mat_type=mat_type,
+        surface_ref=float(surface_ref),
+        is_local_ref=is_local_ref,
+        source=ctx.source if ctx.use_sites else "no_sites",
+        canonical_pos=canonical_pos,
+        use_sites=ctx.use_sites,
+        rotated_pos=rotated_pos,
+    )
+
+
+def _recover_z_offset(ctx: _PlacementContext, z_abs: float) -> float:
+    """Recover the gap above the surface reference from absolute z.
+
+    For slabs this is just ``z_abs - surface_ref``.  For nanoparticle / pore
+    sites with an oriented normal we project the displacement onto the
+    normal so the offset is measured along the local surface.
+    """
+    pose = ctx.pose
+    site = ctx.site
+    if ctx.mat_type == "slab":
+        return float(z_abs - ctx.surface_ref)
+    if site is not None and "xyz" in site and "normal" in site:
         site_xyz = np.asarray(site["xyz"], dtype=float)
         site_normal = np.asarray(site["normal"], dtype=float)
         nrm = float(np.linalg.norm(site_normal))
@@ -449,14 +484,29 @@ def _apply_pose(
             displacement = (
                 np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float) - site_xyz
             )
-            z_offset = float(np.dot(displacement, site_normal))
-        else:
-            z_offset = float(z_abs - surface_ref)
-    else:
-        z_offset = float(z_abs - surface_ref)
+            return float(np.dot(displacement, site_normal))
+    return float(z_abs - ctx.surface_ref)
 
+
+def _finalize_placement(
+    ctx: _PlacementContext,
+    adsorbate: Atoms,
+    slab: Atoms,
+    config: AdsorptionConfig,
+) -> tuple[Atoms, PlacementDescriptor] | None:
+    """Translate the pre-rotated positions, validate, and build a descriptor."""
+    pose = ctx.pose
+    if pose.z_abs is None:
+        logger.warning("Pose replay requires z_abs for deterministic reconstruction")
+        return None
+    z_abs = float(pose.z_abs)
+
+    test = ctx.rotated_pos.copy()
+    test[:, 0] += pose.x_abs
+    test[:, 1] += pose.y_abs
     test[:, 2] += z_abs
     adsorbate.set_positions(test)
+
     ok, _ = geom.check_initial_placement_distance(
         adsorbate,
         slab,
@@ -467,13 +517,15 @@ def _apply_pose(
     if not ok:
         return None
 
+    z_offset = _recover_z_offset(ctx, z_abs)
     slab_indices = (
-        tuple(site["slab_indices"])
-        if site is not None and "slab_indices" in site
+        tuple(ctx.site["slab_indices"])
+        if ctx.site is not None and "slab_indices" in ctx.site
         else None
     )
     inv_2d = np.linalg.inv(np.array(slab.get_cell())[:2, :2])
     xy_frac = (inv_2d @ np.array([pose.x_abs, pose.y_abs])) % 1.0
+
     descriptor = PlacementDescriptor(
         conformer_index=pose.conformer_index,
         orientation_type=pose.orientation_type or "round",
@@ -488,22 +540,22 @@ def _apply_pose(
         placement_index=pose.placement_index,
         x=float(pose.x_abs),
         y=float(pose.y_abs),
-        z_offset=float(z_offset),
+        z_offset=z_offset,
         x_abs=float(pose.x_abs),
         y_abs=float(pose.y_abs),
-        surface_ref_z_abs=surface_ref,
-        z_abs=float(z_abs),
-        shape=geom._classify_molecule_shape(canonical_pos)[0],
+        surface_ref_z_abs=ctx.surface_ref,
+        z_abs=z_abs,
+        shape=geom._classify_molecule_shape(ctx.canonical_pos)[0],
         slab_indices=slab_indices,
         placement_mode_resolved="sites",
-        site_source=resolved_source if use_sites else "no_sites",
-        site_reference_frame="local_site" if is_local_ref else "global_top_layer",
+        site_source=ctx.source if ctx.use_sites else "no_sites",
+        site_reference_frame="local_site" if ctx.is_local_ref else "global_top_layer",
         site_xy_frac_a=float(xy_frac[0]),
         site_xy_frac_b=float(xy_frac[1]),
-        quat_w=float(quat[0]),
-        quat_x=float(quat[1]),
-        quat_y=float(quat[2]),
-        quat_z=float(quat[3]),
+        quat_w=float(pose.quat_w),
+        quat_x=float(pose.quat_x),
+        quat_y=float(pose.quat_y),
+        quat_z=float(pose.quat_z),
     )
     return adsorbate, descriptor
 
@@ -538,35 +590,10 @@ def generate_placement_from_pose(
         adsorbate.get_positions(), symbols=symbols
     )
 
-    _ctx = _resolve_site_context(slab, config, site_context)
-    unique_sites = _ctx.sites
-    use_sites = _ctx.use_sites
-    resolved_source = _ctx.source
-    site = (
-        unique_sites[pose.site_index]
-        if use_sites and 0 <= pose.site_index < len(unique_sites)
-        else None
-    )
-    mat_type = _resolve_material_type(site, fallback="slab")
-    surface_ref, is_local_ref = _resolve_surface_ref(
-        site,
-        slab,
-        mat_type,
-        rough_slab_local_z=config.rough_slab_local_z,
-    )
-    return _apply_pose(
-        pose,
-        adsorbate,
-        canonical_pos,
-        slab,
-        config,
-        site=site,
-        mat_type=mat_type,
-        surface_ref=surface_ref,
-        is_local_ref=is_local_ref,
-        resolved_source=resolved_source,
-        use_sites=use_sites,
-    )
+    ctx = _context_from_pose(pose, canonical_pos, slab, config, site_context)
+    if ctx is None:
+        return None
+    return _finalize_placement(ctx, adsorbate, slab, config)
 
 
 # ---------------------------------------------------------------------------
@@ -843,38 +870,14 @@ def generate_placement_from_spec_with_reason(
     resolved_ctx = _resolve_site_context(slab, config, site_context)
 
     adsorbate = conformers[spec.conformer_index % len(conformers)].copy()
-    symbols = adsorbate.get_chemical_symbols()
-    canonical_pos = geom.compute_canonical_molecular_frame(
-        adsorbate.get_positions(), symbols=symbols
-    )
 
-    pose_result = _pose_from_spec(
+    placement_ctx = _pose_from_spec(
         adsorbate, spec, slab, config, smiles, site_context=resolved_ctx
     )
-    if pose_result is None:
+    if placement_ctx is None:
         return None, "no_sites_found"
 
-    pose = pose_result.pose
-    surface_ref = pose_result.surface_ref
-    site = pose_result.site
-    source = pose_result.source
-    is_local_ref = pose_result.site_reference_frame == "local_site"
-    use_sites = resolved_ctx.use_sites
-    mat_type = _resolve_material_type(site, fallback="slab")
-
-    result = _apply_pose(
-        pose,
-        adsorbate,
-        canonical_pos,
-        slab,
-        config,
-        site=site,
-        mat_type=mat_type,
-        surface_ref=surface_ref,
-        is_local_ref=is_local_ref,
-        resolved_source=source,
-        use_sites=use_sites,
-    )
+    result = _finalize_placement(placement_ctx, adsorbate, slab, config)
     if result is not None:
         return result, None
     return None, "initial_distance_or_site_constraints"

@@ -52,9 +52,7 @@ def _saturation_symmetry_broken_vs_reference(
         )
         return True
     if broken:
-        logger.info(
-            "%s: symmetry broken; using comprehensive site sampling", log_context
-        )
+        logger.info("%s: symmetry broken; using full site sampling", log_context)
     return broken
 
 

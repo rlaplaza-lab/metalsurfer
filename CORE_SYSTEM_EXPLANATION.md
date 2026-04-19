@@ -2,11 +2,9 @@
 
 ## Purpose and scope
 
-**Metalsurfer** (`metalsurfer` on PyPI) is a Python library for adsorption-energy screening on arbitrary surfaces. It combines structure preparation, conformer generation, placement enumeration, MLIP-backed relaxation, and chemistry-aware post-filtering in one reproducible stack.
+Developer-oriented architecture companion to [`README.md`](README.md): module layout, how runs execute end to end, and typed outputs. The README is the canonical overview of install, the four run-mode entry points, and quickstarts.
 
-The core system supports four high-level entry points: standard adsorption screening, Bayesian screening, sequential saturation, and saturation with BO (`run_saturation_bo`), including optional multi-molecule competitive saturation.
-
-This document summarizes architecture, public API layers, computational flow, and outputs. Ad hoc scripts under `scripts/` and benchmarks under `benchmarks/` are out of scope.
+`scripts/` are not documented here.
 
 ## Public API layers
 

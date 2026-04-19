@@ -440,8 +440,8 @@ def calculate_min_distance(
 ) -> float:
     """Minimum interatomic distance between two position arrays.
 
-    Uses ASE's :func:`~ase.geometry.find_mic` for robust minimum-image
-    convention handling, supporting non-orthogonal cells.
+    Uses ASE's :func:`~ase.geometry.find_mic` for minimum-image distances
+    with non-orthogonal cells.
 
     When *cell* is periodic (det > 0), *pbc* must be provided explicitly so
     slab ([True, True, False]), nanoparticle ([False, False, False]), and

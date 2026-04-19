@@ -277,7 +277,7 @@ def test_run_saturation_screening_h2_ni111_real_gpu():
 
 
 def test_run_saturation_screening_symmetry_none_falls_back_to_c1(monkeypatch, caplog):
-    """Saturation continues with comprehensive sampling when symmetry fails."""
+    """Saturation continues with full site sampling when symmetry fails."""
     slab = SlabContainer(make_slab())
     config = AdsorptionConfig()
 

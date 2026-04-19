@@ -31,7 +31,7 @@ The library exposes four high-level entry points:
 
 Each accepts either an in-memory `list[tuple[str, str]]` of `(smiles, name)` pairs or a path to a SMILES CSV as `molecules`.
 
-### ASE Atoms Input (Important)
+### ASE Atoms input
 
 All run entry points accept a plain ASE `Atoms` object directly. This is the recommended path for user scripts.
 

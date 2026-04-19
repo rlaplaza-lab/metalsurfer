@@ -9,6 +9,7 @@ frameworks. Optional Delaunay-based classification on slab top layers when
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import cast
 
 import numpy as np
@@ -356,7 +357,6 @@ def _delaunay_site_classification(
     triangulation: Delaunay,
     positions: np.ndarray,
     *,
-    atop_threshold: float = 0.3,
     bridge_threshold: float = 0.3,
 ) -> tuple[str, tuple[int, ...]]:
     """Classify site using Delaunay triangulation of top-layer atoms.
@@ -377,11 +377,10 @@ def _delaunay_site_classification(
         Pre-computed Delaunay triangulation of top_positions[:, :2].
     positions : (N, 3) array
         All slab atom positions (for fallback nearest-neighbor).
-    atop_threshold : float
-        Max fractional distance (relative to nearest-neighbor distance)
-        to classify as atop.
     bridge_threshold : float
-        Max fractional distance to classify as bridge.
+        Max fractional distance (relative to mean nearest-neighbour
+        distance) for a bridge assignment; beyond this a bridge site is
+        reclassified as hollow.
 
     Returns
     -------
@@ -448,14 +447,11 @@ def _delaunay_site_classification(
                 int(top_atom_indices[li2]),
             )
 
-    # Apply thresholds: only keep atop/bridge if close enough relative to
-    # the characteristic nearest-neighbor distance, otherwise fall back to hollow.
-    if best_type == "atop" and best_dist > atop_threshold * char_len:
-        # Recheck: is there a better bridge or hollow?
-        pass  # keep the assignment — the loop already picked the globally nearest
+    # Bridge threshold: when close to an edge midpoint but still too far,
+    # fall back to hollow using the three nearest framework atoms.  An
+    # atop threshold used to live here too but was a no-op ("pass" block)
+    # because the main loop already picks the globally nearest reference.
     if best_type == "bridge" and best_dist > bridge_threshold * char_len:
-        # Close to an edge midpoint but not enough; fallback
-        # Use full positions k=3 nearest for hollow
         _tree = KDTree(positions)
         _, idx = _tree.query(vertex.reshape(1, 3), k=min(3, len(positions)))
         idx = idx.ravel()
@@ -580,11 +576,9 @@ def get_unified_sites(
         )
         return []
 
-    # Slab: discard vertices below the top surface layer.
-    # Voronoi vertices sit *between* atoms, so legitimate top-layer sites
-    # can be up to ~1 nearest-neighbour distance below the topmost atom z.
-    # Use the median nn_distance of all current vertices as a robust lower
-    # bound, floored by top_layer_tolerance.
+    # Slab: discard vertices below the top surface layer. Voronoi vertices sit
+    # between atoms, so keep sites down to z_surface minus median nn_distance
+    # among vertices (at least top_layer_tolerance).
     if material_type == "slab":
         z_surface = float(np.max(positions[:, 2]))
         if len(nn_dists) > 0:
@@ -646,11 +640,14 @@ def get_unified_sites(
                 dtype=int,
             )
 
-        # Build KDTree on existing vertices for fast dedup checks
+        # Build KDTree on existing vertices for fast dedup checks against
+        # the Voronoi set; duplicates *between* injected atop candidates are
+        # handled by one final ``_deduplicate_points`` pass instead of a
+        # per-iteration KDTree rebuild (old O(n²) behaviour).
         existing_tree = KDTree(vertices) if len(vertices) > 0 else None
 
-        new_verts: list[np.ndarray] = []
-        new_dists: list[float] = []
+        candidate_verts: list[np.ndarray] = []
+        candidate_dists: list[float] = []
         for ai in top_atom_indices:
             atom_pos = positions[ai]
             if material_type == "slab":
@@ -660,34 +657,33 @@ def get_unified_sites(
                 normal = _compute_local_normal(atom_pos, positions, tree=local_tree)
                 candidate = atom_pos + atop_height * normal
 
-            # Accessibility check
             d_nn = float(local_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0])
             if d_nn < probe_radius or d_nn > max_site_distance:
                 continue
 
-            # Dedup: skip if too close to an existing Voronoi vertex
             if _is_duplicate_of(candidate, existing_tree, _VORONOI_DEDUP_TOLERANCE):
                 continue
 
-            # Dedup: skip if too close to a previously injected atop site
-            if new_verts:
-                _injected_tree = KDTree(np.array(new_verts))
-                if _is_duplicate_of(
-                    candidate,
-                    _injected_tree,
-                    _VORONOI_DEDUP_TOLERANCE,
-                ):
-                    continue
+            candidate_verts.append(candidate)
+            candidate_dists.append(d_nn)
 
-            new_verts.append(candidate)
-            new_dists.append(d_nn)
-
-        if new_verts:
-            vertices = np.vstack([vertices, np.array(new_verts)])
-            nn_dists = np.concatenate([nn_dists, np.array(new_dists)])
+        if candidate_verts:
+            candidate_arr = np.array(candidate_verts)
+            candidate_dist_arr = np.array(candidate_dists)
+            # Final dedup pass over (existing ∪ candidate) to collapse any
+            # injected atop sites that ended up within tolerance of each
+            # other.  Existing Voronoi vertices are already pairwise
+            # deduplicated, so only inter-candidate merges can trigger here.
+            combined = np.vstack([vertices, candidate_arr])
+            combined_dists = np.concatenate([nn_dists, candidate_dist_arr])
+            keep = _deduplicate_points(combined, _VORONOI_DEDUP_TOLERANCE)
+            n_existing = len(vertices)
+            n_injected = int(np.count_nonzero(keep[n_existing:]))
+            vertices = combined[keep]
+            nn_dists = combined_dists[keep]
             logger.debug(
                 "Injected %d atop candidate sites (%d total sites)",
-                len(new_verts),
+                n_injected,
                 len(vertices),
             )
 
@@ -844,6 +840,44 @@ def _env_fingerprint(site: dict[str, object]) -> tuple:
     return (str(site.get("site_type", "")),)
 
 
+def _cluster_with_metric(
+    n: int,
+    coords: np.ndarray,
+    fps: list[tuple],
+    *,
+    image_offsets: list[np.ndarray] | None,
+    kdtree_radius: float,
+    pair_filter: Callable[[int, int, np.ndarray], bool] | None = None,
+) -> list[int]:
+    """KDTree ``query_pairs`` + union-find; one representative index per cluster.
+
+    *coords* may be tiled by *image_offsets* (expanded index mod *n* maps back).
+    *pair_filter* runs after the fingerprint match (e.g. slab xy/z checks).
+    """
+    if image_offsets:
+        all_coords = np.vstack([coords + off for off in image_offsets])
+    else:
+        all_coords = coords
+
+    tree = KDTree(all_coords)
+    raw_pairs = tree.query_pairs(r=kdtree_radius, output_type="ndarray")
+
+    merge_set: set[tuple[int, int]] = set()
+    for a_exp, b_exp in raw_pairs:
+        a = int(a_exp) % n
+        b = int(b_exp) % n
+        if a == b:
+            continue
+        if fps[a] != fps[b]:
+            continue
+        if pair_filter is not None and not pair_filter(a, b, coords):
+            continue
+        merge_set.add((min(a, b), max(a, b)))
+
+    components = _union_find_cluster(n, list(merge_set))
+    return sorted(min(comp) for comp in components)
+
+
 def _cluster_equivalent_sites(
     sites: list[dict[str, object]],
     cell: np.ndarray,
@@ -897,54 +931,45 @@ def _cluster_equivalent_sites(
     fps = [_env_fingerprint(s) for s in sorted_sites]
 
     # ------------------------------------------------------------------
-    # Nanoparticle: Cartesian 3D distance
+    # Nanoparticle: Cartesian 3D distance, no periodic images
     # ------------------------------------------------------------------
     if mat_type == "nanoparticle" or np.linalg.det(cell) <= 0:
         coords = np.array([_get_xyz(s) for s in sorted_sites])
-        tree = KDTree(coords)
-        raw_pairs = tree.query_pairs(r=tolerance, output_type="ndarray")
-        merge = [(int(a), int(b)) for a, b in raw_pairs if fps[a] == fps[b]]
-        components = _union_find_cluster(n, merge)
-        reps = sorted([min(comp) for comp in components])
+        reps = _cluster_with_metric(
+            n,
+            coords,
+            fps,
+            image_offsets=None,
+            kdtree_radius=tolerance,
+        )
         result = [sorted_sites[i] for i in reps]
         return sorted(result, key=_sort_key)
 
     inv_cell = np.linalg.inv(cell)
 
     # ------------------------------------------------------------------
-    # Porous: 3D fractional with periodic wrapping
+    # Porous: 3D fractional with 3×3×3 periodic tiling
     # ------------------------------------------------------------------
     if mat_type == "porous":
-        frac_coords = np.array([(inv_cell @ _get_xyz(s)) % 1.0 for s in sorted_sites])
-        # For periodic fractional coords, KDTree can miss pairs across
-        # the 0/1 boundary.  Expand into 3^3 = 27 images, query pairs,
-        # then map back.
-        images = []
-        image_map = []  # maps expanded index -> original index
-        for ix in (-1, 0, 1):
-            for iy in (-1, 0, 1):
-                for iz in (-1, 0, 1):
-                    shifted = frac_coords + np.array([ix, iy, iz])
-                    images.append(shifted)
-                    image_map.extend(range(n))
-        all_coords = np.vstack(images)
-        tree = KDTree(all_coords)
-        raw_pairs = tree.query_pairs(r=tolerance, output_type="ndarray")
-        merge: list[tuple[int, int]] = []
-        for a_exp, b_exp in raw_pairs:
-            a_orig = image_map[int(a_exp)]
-            b_orig = image_map[int(b_exp)]
-            if a_orig != b_orig and fps[a_orig] == fps[b_orig]:
-                merge.append((min(a_orig, b_orig), max(a_orig, b_orig)))
-        # Deduplicate merge pairs
-        merge = list(set(merge))
-        components = _union_find_cluster(n, merge)
-        reps = sorted([min(comp) for comp in components])
+        coords = np.array([(inv_cell @ _get_xyz(s)) % 1.0 for s in sorted_sites])
+        image_offsets = [
+            np.array([ix, iy, iz], dtype=float)
+            for ix in (-1, 0, 1)
+            for iy in (-1, 0, 1)
+            for iz in (-1, 0, 1)
+        ]
+        reps = _cluster_with_metric(
+            n,
+            coords,
+            fps,
+            image_offsets=image_offsets,
+            kdtree_radius=tolerance,
+        )
         result = [sorted_sites[i] for i in reps]
         return sorted(result, key=_sort_key)
 
     # ------------------------------------------------------------------
-    # Slab: 2D fractional + absolute z (separate tolerance)
+    # Slab: 2D fractional (a,b) + absolute z with 3×3 periodic tiling in xy
     # ------------------------------------------------------------------
     z_tol = z_abs_tolerance if z_abs_tolerance is not None else 0.5
     inv_2d = np.linalg.inv(cell[:2, :2])
@@ -956,40 +981,28 @@ def _cluster_equivalent_sites(
         return np.array([frac[0], frac[1], z])
 
     slab_coords = np.array([_slab_coord(s) for s in sorted_sites])
+    image_offsets_xy = [
+        np.array([ix, iy, 0.0], dtype=float) for ix in (-1, 0, 1) for iy in (-1, 0, 1)
+    ]
 
-    # For 2D periodic fractional coords, expand into 3×3 images (z unchanged)
-    images_2d = []
-    image_map_2d: list[int] = []
-    for ix in (-1, 0, 1):
-        for iy in (-1, 0, 1):
-            shifted = slab_coords.copy()
-            shifted[:, 0] += ix
-            shifted[:, 1] += iy
-            images_2d.append(shifted)
-            image_map_2d.extend(range(n))
-    all_slab = np.vstack(images_2d)
-
-    # Use max(tolerance, z_tol) as KDTree radius to catch all candidates,
-    # then filter more strictly per dimension.
-    r_search = max(tolerance, z_tol) * 1.5  # slight padding for safety
-    tree = KDTree(all_slab)
-    raw_pairs = tree.query_pairs(r=r_search, output_type="ndarray")
-    merge = []
-    for a_exp, b_exp in raw_pairs:
-        a_orig = image_map_2d[int(a_exp)]
-        b_orig = image_map_2d[int(b_exp)]
-        if a_orig == b_orig:
-            continue
-        if fps[a_orig] != fps[b_orig]:
-            continue
-        ca = slab_coords[a_orig]
-        cb = slab_coords[b_orig]
+    def _slab_pair_filter(a: int, b: int, coords_arr: np.ndarray) -> bool:
+        ca = coords_arr[a]
+        cb = coords_arr[b]
         diff_xy = np.minimum(np.abs(ca[:2] - cb[:2]), 1.0 - np.abs(ca[:2] - cb[:2]))
-        if np.all(diff_xy < tolerance) and abs(ca[2] - cb[2]) < z_tol:
-            merge.append((min(a_orig, b_orig), max(a_orig, b_orig)))
-    merge = list(set(merge))
-    components = _union_find_cluster(n, merge)
-    reps = sorted([min(comp) for comp in components])
+        return bool(np.all(diff_xy < tolerance) and abs(ca[2] - cb[2]) < z_tol)
+
+    # Slight padding on the KDTree radius so it catches all candidates under
+    # either the fractional-xy or absolute-z tolerance; the pair_filter then
+    # applies the per-dimension thresholds strictly.
+    r_search = max(tolerance, z_tol) * 1.5
+    reps = _cluster_with_metric(
+        n,
+        slab_coords,
+        fps,
+        image_offsets=image_offsets_xy,
+        kdtree_radius=r_search,
+        pair_filter=_slab_pair_filter,
+    )
     result = [sorted_sites[i] for i in reps]
 
     def _slab_key(s: dict[str, object]) -> tuple:
