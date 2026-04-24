@@ -36,6 +36,98 @@ from .shared import (
 logger = logging.getLogger(__name__)
 
 
+def _generate_placements_with_retry(
+    conformers: list[Atoms],
+    slab_for_sites: Atoms,
+    config: AdsorptionConfig,
+    smiles: str,
+    site_context: placement_generators.SiteContext | None,
+    slab_atoms: Atoms,
+    calculator,
+    base_slab_for_frozen: Atoms | None,
+) -> tuple[
+    list[Atoms], list[int], list[PlacementDescriptor], list[PlacementFailureEvent], int
+]:
+    """Generate placements with retry loop to meet requested count.
+
+    Returns:
+        Tuple of (all_combined, placement_ids, placement_descriptors, failures, n_attempts)
+    """
+    all_combined: list[Atoms] = []
+    placement_ids: list[int] = []
+    placement_descriptors: list[PlacementDescriptor] = []
+    failures: list[PlacementFailureEvent] = []
+
+    max_attempts = (
+        config.placement_retry_max_attempts
+        if config.placement_retry_enabled
+        else 1
+    )
+    seed_increment = config.placement_retry_diversity_seed_increment
+
+    for attempt in range(max_attempts):
+        # Check if we've already met the target
+        if len(all_combined) >= config.num_placements:
+            break
+
+        # Calculate seed for this attempt
+        attempt_seed = config.seed + (seed_increment * attempt)
+
+        # Generate specs for remaining placements needed
+        remaining = config.num_placements - len(all_combined)
+        if remaining <= 0:
+            break
+
+        # Generate placement specs
+        specs = enumerate_placement_specs(
+            conformers,
+            slab_for_sites,
+            config,
+            smiles,
+            remaining,
+            filter_spec=config.placement_filter,
+            site_context=site_context,
+            seed=attempt_seed,
+            full_slab=slab_atoms,
+        )
+
+        # Materialize placements
+        (
+            new_combined,
+            new_ids,
+            new_descriptors,
+            new_failures,
+        ) = _materialize_spec_placements(
+            specs=specs,
+            conformers=conformers,
+            slab_atoms=slab_atoms,
+            calculator=calculator,
+            config=config,
+            smiles=smiles,
+            site_context=site_context,
+            slab_for_sites=slab_for_sites,
+        )
+
+        # Track results
+        all_combined.extend(new_combined)
+        placement_ids.extend(new_ids)
+        placement_descriptors.extend(new_descriptors)
+        failures.extend(new_failures)
+
+        # Log retry attempt if needed
+        if attempt > 0 and new_combined:
+            logger.debug(
+                "Retry attempt %d/%d: generated %d new placements (total: %d/%d)",
+                attempt + 1,
+                max_attempts,
+                len(new_combined),
+                len(all_combined),
+                config.num_placements,
+            )
+
+    return all_combined, placement_ids, placement_descriptors, failures, max_attempts
+
+
 def process_molecule(
     smiles: str,
     molecule_name: str,
@@ -171,42 +263,41 @@ def _process_molecule_body(
         symmetry_broken=symmetry_broken,
     )
 
-    specs = enumerate_placement_specs(
+    # Generate placements with optional retry loop
+    (
+        all_combined,
+        placement_ids,
+        placement_descriptors,
+        placement_failure_events,
+        n_placement_attempts,
+    ) = _generate_placements_with_retry(
         conformers,
         slab_for_sites,
         config,
         smiles,
-        config.num_placements,
-        filter_spec=config.placement_filter,
-        site_context=site_context,
-        seed=config.seed,
-        full_slab=slab.atoms,
+        site_context,
+        slab.atoms,
+        calculator,
+        base_slab_for_frozen,
     )
-    (
-        all_combined,
-        placement_ids,
-        generated_descriptors,
-        generated_failures,
-    ) = _materialize_spec_placements(
-        specs=specs,
-        conformers=conformers,
-        slab_atoms=slab.atoms,
-        calculator=calculator,
-        config=config,
-        smiles=smiles,
-        site_context=site_context,
-        slab_for_sites=slab_for_sites,
-    )
-    placement_descriptors.extend(generated_descriptors)
-    placement_failure_events.extend(generated_failures)
     t_placement = time.perf_counter() - t0
 
-    logger.info(
-        "Generated %d/%d valid initial placements (%.2fs)",
-        len(all_combined),
-        config.num_placements,
-        t_placement,
-    )
+    # Log retry info if applicable
+    if config.placement_retry_enabled and n_placement_attempts > 1:
+        logger.info(
+            "Placement generation: %d attempts, %d/%d valid placements (%.2fs)",
+            n_placement_attempts,
+            len(all_combined),
+            config.num_placements,
+            t_placement,
+        )
+    else:
+        logger.info(
+            "Generated %d/%d valid initial placements (%.2fs)",
+            len(all_combined),
+            config.num_placements,
+            t_placement,
+        )
     _summarize_failure_events(
         placement_failure_events,
         label=f"{molecule_name} placement generation",
@@ -228,6 +319,8 @@ def _process_molecule_body(
             failure_summary_out["stage"] = "placement"
             failure_summary_out["n_placements_attempted"] = config.num_placements
             failure_summary_out["n_initial_placements"] = 0
+            if config.placement_retry_enabled:
+                failure_summary_out["n_retry_attempts"] = n_placement_attempts
         return None
 
     clear_autobatcher_cache()

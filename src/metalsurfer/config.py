@@ -171,6 +171,12 @@ class AdsorptionConfig:
     # xyz_structures/{molecule}_all/ dir as final conformer XYZs (as initial_*.xyz)
     debug_write_initial_placements: bool = False
 
+    # Placement retry configuration: attempt to generate requested number of valid
+    # placements by retrying failed specs with different random seeds.
+    placement_retry_enabled: bool = False
+    placement_retry_max_attempts: int = 3
+    placement_retry_diversity_seed_increment: int = 1000
+
     # TorchSim optimisation tuning
     optimize_isolated_sequentially: bool = False
     ts_optimizer: Literal["fire", "lbfgs", "bfgs"] = "fire"
@@ -240,6 +246,16 @@ class AdsorptionConfig:
         )
         for field_name, field_value in positive_int_fields:
             _check_positive_int(field_name, field_value)
+
+        # Placement retry validation
+        if self.placement_retry_enabled:
+            _check_positive_int(
+                "placement_retry_max_attempts", self.placement_retry_max_attempts
+            )
+            _check_positive_int(
+                "placement_retry_diversity_seed_increment",
+                self.placement_retry_diversity_seed_increment,
+            )
 
         positive_fields = (
             ("fmax", self.fmax),
