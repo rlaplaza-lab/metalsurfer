@@ -434,17 +434,24 @@ def _resolve_site_context_for_sampling(
     _core_ctx = placement_generators._get_unique_sites_for_specs(slab_atoms, config)
     core_sites = _core_ctx.sites
     use_sites = _core_ctx.use_sites
+    raw_unclustered = _core_ctx.raw_unclustered
+
+    def _site_context(
+        sites: list[dict[str, object]],
+        source: str,
+    ) -> placement_generators.SiteContext:
+        return placement_generators.SiteContext(
+            sites=sites,
+            use_sites=True,
+            source=source,
+            raw_unclustered=raw_unclustered,
+        )
 
     if not use_sites or not core_sites:
         result = _core_ctx
     elif symmetry_broken:
         logger.debug("Site context: symmetry broken, using clustered Voronoi set")
-        result = placement_generators.SiteContext(
-            sites=core_sites,
-            use_sites=True,
-            source="voronoi",
-            raw_unclustered=_core_ctx.raw_unclustered,
-        )
+        result = _site_context(core_sites, "voronoi")
     else:
         # Reuse unclustered Voronoi sites from _get_unique_sites_for_specs (no second run).
         try:
@@ -457,7 +464,7 @@ def _resolve_site_context_for_sampling(
                 max_site_distance=config.voronoi_max_site_distance,
                 enrich=config.voronoi_site_enrichment,
                 site_classification_method=config.site_classification_method,
-                raw_sites=_core_ctx.raw_unclustered,
+                raw_sites=raw_unclustered,
             )
         except SymmetryAnalysisError as exc:
             logger.info(
@@ -470,20 +477,10 @@ def _resolve_site_context_for_sampling(
             logger.info(
                 "Using symmetry-reduced sites (%d sites)", len(symmetry_aware_sites)
             )
-            result = placement_generators.SiteContext(
-                sites=symmetry_aware_sites,
-                use_sites=True,
-                source="symmetry_aware",
-                raw_unclustered=_core_ctx.raw_unclustered,
-            )
+            result = _site_context(symmetry_aware_sites, "symmetry_aware")
         else:
             logger.debug("Using clustered Voronoi sites (no symmetry-reduced set)")
-            result = placement_generators.SiteContext(
-                sites=core_sites,
-                use_sites=True,
-                source="voronoi",
-                raw_unclustered=_core_ctx.raw_unclustered,
-            )
+            result = _site_context(core_sites, "voronoi")
 
     with _SITE_CONTEXT_CACHE_LOCK:
         if len(_SITE_CONTEXT_CACHE) >= _SITE_CONTEXT_CACHE_MAX_ENTRIES:
