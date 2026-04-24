@@ -65,6 +65,40 @@ def _validate_columns(df: pd.DataFrame, csv_path: str) -> None:
         raise ValueError(f"Missing required columns: {missing}.\nFile: {csv_path}")
 
 
+def _assert_single_setup(df: pd.DataFrame, csv_path: str) -> None:
+    """Offline BO benchmark assumes one adsorption setup per CSV (single surface / SMILES)."""
+    if "surface_id" in df.columns and df["surface_id"].nunique(dropna=False) > 1:
+        vals = sorted({str(v) for v in df["surface_id"].unique()})
+        raise ValueError(
+            "setup-specific: benchmark expects one surface_id per CSV; "
+            f"found {len(vals)}: {vals}. File: {csv_path}"
+        )
+    if "smiles" in df.columns and df["smiles"].nunique(dropna=False) > 1:
+        vals = sorted({str(v) for v in df["smiles"].unique()})
+        raise ValueError(
+            "setup-specific: benchmark expects one smiles string per CSV; "
+            f"found {len(vals)}: {vals}. File: {csv_path}"
+        )
+
+
+def _assert_feature_energy_injective(X: pd.DataFrame, y: pd.Series) -> None:
+    """Require identical feature rows to share the same label energy."""
+    cols = list(X.columns)
+    keys = X[cols].apply(tuple, axis=1)
+    groups: dict[tuple, list[float]] = {}
+    for k, val in zip(keys, y.astype(float).values, strict=True):
+        groups.setdefault(k, []).append(float(val))
+    conflicts: list[str] = []
+    for k, energies in groups.items():
+        if len({round(e, 8) for e in energies}) > 1:
+            conflicts.append(f"{k}: {energies}")
+    if conflicts:
+        raise ValueError(
+            "Example conflicts: duplicate feature rows with different energies — "
+            + "; ".join(conflicts[:5])
+        )
+
+
 def load_and_prepare_data(
     data_dir: str,
     surface_type: str = DEFAULT_SURFACE_TYPE,
@@ -80,6 +114,7 @@ def load_and_prepare_data(
         df["smiles"] = smiles
     if "surface_id" not in df.columns:
         df["surface_id"] = surface_type
+    _assert_single_setup(df, csv_path)
     X, y = extract_features_from_dataset(df, target_column="energy_adsorption")
     return X, y, df
 

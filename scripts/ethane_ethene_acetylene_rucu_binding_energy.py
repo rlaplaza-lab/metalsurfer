@@ -62,6 +62,7 @@ def main():
         guest_symbol="Cu",
         guest_fraction=0.5,
         calculator=calculator,
+        enforce_top_layer_fraction=True,
         config=config,
         results_dir=results_dir,
     )
