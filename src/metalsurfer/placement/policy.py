@@ -39,10 +39,9 @@ def max_batch_placement_specs(
     Computed by closed-form arithmetic per branch; individual branches are
     clamped at ``_GRID_BUILD_CAP`` so the total stays bounded.
     """
-    # ``_normalized_site_indices`` in :func:`build_batch_placement_specs` falls
-    # back to ``[-1]`` when ``site_indices`` is empty, so the grid always has
-    # at least one site slot.
-    n_sites = max(len(site_indices), 1)
+    n_sites = max(
+        len(site_indices), 1
+    )  # build_batch_placement_specs uses [-1] if empty
 
     if dissociative:
         return _clamp(max(n_hollow_pairs, 1) * len(Z_FRACTIONS))
@@ -97,6 +96,14 @@ def build_batch_placement_specs(
     via *seed*). Dissociative mode enumerates a small grid fully.
     """
     normalized_sites = site_indices if site_indices else [-1]
+    base_fields = {
+        "face_flip": False,
+        "en_atom_index": None,
+        "azimuth_in_plane_deg": 0.0,
+    }
+
+    def _fields(**overrides: Any) -> dict[str, Any]:
+        return {**base_fields, **overrides}
 
     def _collect(
         items: Iterable[dict[str, Any]],
@@ -119,15 +126,12 @@ def build_batch_placement_specs(
     if dissociative:
         pair_indices = range(max(n_hollow_pairs, 1))
         items = (
-            dict(
+            _fields(
                 conformer_index=0,
                 orientation_type="dissociative",
-                face_flip=False,
-                en_atom_index=None,
                 site_index=pair_idx,
                 tilt_deg=0.0,
                 azimuth_deg=0.0,
-                azimuth_in_plane_deg=0.0,
                 z_fraction=zfv,
             )
             for pair_idx, zfv in itertools.product(pair_indices, Z_FRACTIONS)
@@ -138,11 +142,10 @@ def build_batch_placement_specs(
         n_en = max(1, n_desired - n_par)
 
         parallel_items = (
-            dict(
+            _fields(
                 conformer_index=ci,
                 orientation_type="parallel",
                 face_flip=ff,
-                en_atom_index=None,
                 site_index=si,
                 tilt_deg=tl,
                 azimuth_deg=azv,
@@ -162,15 +165,13 @@ def build_batch_placement_specs(
         par_specs = _collect(parallel_items, cap=_GRID_BUILD_CAP)
 
         en_down_items = (
-            dict(
+            _fields(
                 conformer_index=ci,
                 orientation_type="EN-down",
-                face_flip=False,
                 en_atom_index=ei if n_binders > 1 else None,
                 site_index=si,
                 tilt_deg=tl,
                 azimuth_deg=azv,
-                azimuth_in_plane_deg=0.0,
                 z_fraction=zfv,
             )
             for ci, ei, tl, azv, zfv, si in itertools.product(
@@ -193,15 +194,12 @@ def build_batch_placement_specs(
     else:
         orient = "vertical" if shape == "linear" else "round"
         items = (
-            dict(
+            _fields(
                 conformer_index=ci,
                 orientation_type=orient,
-                face_flip=False,
-                en_atom_index=None,
                 site_index=si,
                 tilt_deg=tl,
                 azimuth_deg=azv,
-                azimuth_in_plane_deg=0.0,
                 z_fraction=zfv,
             )
             for ci, tl, azv, zfv, si in itertools.product(

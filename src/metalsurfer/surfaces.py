@@ -205,6 +205,8 @@ def substitute_alloy(
     n_variants: int = 5,
     seed: int | None = None,
     relax: bool = True,
+    enforce_top_layer_fraction: bool = False,
+    top_layer_tolerance: float | None = None,
     config: AdsorptionConfig | None = None,
     results_dir: str = "results",
 ) -> SlabContainer:
@@ -213,6 +215,11 @@ def substitute_alloy(
     Multiple random variants are generated and scored; the lowest-energy
     variant is kept.  If *relax* is ``True`` the chosen slab is relaxed
     with ``calculator`` before returning.
+
+    When *enforce_top_layer_fraction* is ``True``, each random variant uses a
+    constrained substitution pattern so the top surface layer composition
+    follows *guest_fraction* as closely as possible (subject to integer site
+    counts).
     """
     if config is None:
         config = AdsorptionConfig()
@@ -253,8 +260,74 @@ def substitute_alloy(
     best_energy = float("inf")
     best_atoms = None
 
+    top_host_indices: list[int] = []
+    subsurface_host_indices: list[int] = []
+    n_top_replace = 0
+    n_sub_replace = 0
+    if enforce_top_layer_fraction:
+        tol = (
+            top_layer_tolerance
+            if top_layer_tolerance is not None
+            else config.top_layer_tolerance
+        )
+        if tol <= 0:
+            raise ValueError(
+                "top_layer_tolerance must be positive when enforcing top-layer "
+                f"composition, got {tol}"
+            )
+
+        positions = base.get_positions()
+        z_max = float(np.max(positions[:, 2]))
+        top_set = set(np.nonzero(positions[:, 2] >= (z_max - tol))[0].tolist())
+        top_host_indices = [idx for idx in host_indices if idx in top_set]
+        subsurface_host_indices = [idx for idx in host_indices if idx not in top_set]
+
+        n_top_replace = int(round(len(top_host_indices) * guest_fraction))
+        n_top_replace = max(0, min(n_top_replace, len(top_host_indices)))
+        n_sub_replace = n_replace - n_top_replace
+
+        if n_sub_replace > len(subsurface_host_indices):
+            deficit = n_sub_replace - len(subsurface_host_indices)
+            n_sub_replace = len(subsurface_host_indices)
+            n_top_replace = min(len(top_host_indices), n_top_replace + deficit)
+        elif n_sub_replace < 0:
+            n_top_replace = max(0, n_top_replace + n_sub_replace)
+            n_sub_replace = 0
+
+        assigned = n_top_replace + n_sub_replace
+        if assigned != n_replace:
+            remaining = n_replace - assigned
+            n_top_extra = min(remaining, len(top_host_indices) - n_top_replace)
+            n_top_replace += n_top_extra
+            remaining -= n_top_extra
+            n_sub_extra = min(remaining, len(subsurface_host_indices) - n_sub_replace)
+            n_sub_replace += n_sub_extra
+            remaining -= n_sub_extra
+            if remaining != 0:
+                raise GeometryValidationError(
+                    "Could not allocate alloy substitutions while enforcing "
+                    "top-layer composition constraints"
+                )
+
     for v in range(n_variants):
-        replace_idx = rng.choice(host_indices, size=n_replace, replace=False)
+        if enforce_top_layer_fraction:
+            top_choice = (
+                rng.choice(top_host_indices, size=n_top_replace, replace=False)
+                if n_top_replace > 0
+                else np.array([], dtype=int)
+            )
+            sub_choice = (
+                rng.choice(
+                    subsurface_host_indices,
+                    size=n_sub_replace,
+                    replace=False,
+                )
+                if n_sub_replace > 0
+                else np.array([], dtype=int)
+            )
+            replace_idx = np.concatenate([top_choice, sub_choice]).astype(int)
+        else:
+            replace_idx = rng.choice(host_indices, size=n_replace, replace=False)
         variant = base.copy()
         syms = variant.get_chemical_symbols()
         for i in replace_idx:

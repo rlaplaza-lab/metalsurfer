@@ -9,13 +9,10 @@ from scipy.spatial import KDTree
 
 import metalsurfer.placement.sites as site_module
 from metalsurfer.config import AdsorptionConfig
+from metalsurfer.conformers import create_conformers_from_smiles
 from metalsurfer.filters import check_desorption
-from metalsurfer.models import PlacementPose, PlacementSpec
+from metalsurfer.models import PlacementDescriptor, PlacementPose, PlacementSpec
 from metalsurfer.placement import (
-    _classify_molecule_shape,
-    _cluster_equivalent_sites,
-    _is_flat_aromatic_with_en,
-    _random_rotation_matrix,
     calculate_min_distance,
     check_initial_placement_distance,
     detect_material_type,
@@ -28,8 +25,18 @@ from metalsurfer.placement import (
     get_unified_sites,
     material_aware_pbc,
 )
-from metalsurfer.placement._material import _resolve_material_type
-from metalsurfer.placement.generators import _get_unique_sites_for_specs
+from metalsurfer.placement._material import material_type_for_placement
+from metalsurfer.placement.generators import (
+    _estimate_parallel_fraction,
+    _get_hollow_site_pairs,
+    _get_unique_sites_for_specs,
+    _is_flat_aromatic_with_en,
+    _resolve_surface_ref,
+)
+from metalsurfer.placement.geometry import (
+    _classify_molecule_shape,
+    _random_rotation_matrix,
+)
 from metalsurfer.placement.policy import (
     Z_FRACTIONS,
     build_batch_placement_specs,
@@ -37,6 +44,7 @@ from metalsurfer.placement.policy import (
 )
 from metalsurfer.placement.sites import (
     _classify_voronoi_site,
+    _cluster_equivalent_sites,
     _compute_local_normal,
     _deduplicate_points,
     _voronoi_sites,
@@ -44,15 +52,22 @@ from metalsurfer.placement.sites import (
 from metalsurfer.workflow import shared as workflow_shared
 
 from .conftest import (
+    adsorption_config_factory,
     make_ethanol,
     make_nanoparticle,
     make_porous_framework,
     make_slab,
     make_water,
     place_molecule_on_slab,
+    water_conformers,
 )
 
 TEST_SEED = 0
+
+_LOCAL_SITE_MATERIAL_PARAMS = [
+    ("nanoparticle", make_nanoparticle, 20, (1.5, 2.5), 20),
+    ("porous", make_porous_framework, 12, (1.5, 3.0), 12),
+]
 
 
 def _first_successful_placement(conformers, slab, config, smiles, n_desired=20):
@@ -90,6 +105,59 @@ def _generate_placements(conformers, slab, config, smiles=None, n_desired=30):
         if result is not None:
             results.append((spec, result[0], result[1]))
     return results
+
+
+def _pose_from_descriptor(descriptor: PlacementDescriptor) -> PlacementPose:
+    return PlacementPose(
+        conformer_index=descriptor.conformer_index,
+        site_index=descriptor.site_index,
+        site_type=descriptor.site_type,
+        placement_index=descriptor.placement_index,
+        quat_w=float(descriptor.quat_w),
+        quat_x=float(descriptor.quat_x),
+        quat_y=float(descriptor.quat_y),
+        quat_z=float(descriptor.quat_z),
+        x_abs=float(descriptor.x_abs),
+        y_abs=float(descriptor.y_abs),
+        z_fraction=float(descriptor.z_fraction),
+        z_abs=float(descriptor.z_abs),
+        orientation_type=descriptor.orientation_type,
+        face_flip=descriptor.face_flip,
+        en_atom_index=descriptor.en_atom_index,
+        tilt_deg=descriptor.tilt_deg,
+        azimuth_deg=descriptor.azimuth_deg,
+        azimuth_in_plane_deg=descriptor.azimuth_in_plane_deg,
+    )
+
+
+def _assert_replay_matches(
+    mode: str,
+    adsorbate: Atoms,
+    descriptor: PlacementDescriptor,
+    spec: PlacementSpec,
+    conformers: list[Atoms],
+    slab: Atoms,
+    config: AdsorptionConfig,
+) -> None:
+    if mode == "spec":
+        replay = generate_placement_from_spec(
+            spec, conformers, slab, config, smiles="O"
+        )
+        assert replay is not None
+        replayed = replay[0]
+    elif mode == "descriptor":
+        replayed = generate_placement_from_descriptor(
+            descriptor, conformers, slab, config, smiles="O"
+        )
+        assert replayed is not None
+    else:
+        pose = _pose_from_descriptor(descriptor)
+        replay = generate_placement_from_pose(pose, conformers, slab, config)
+        assert replay is not None
+        replayed = replay[0]
+    np.testing.assert_allclose(
+        adsorbate.get_positions(), replayed.get_positions(), atol=1e-10
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -163,10 +231,25 @@ def test_calculate_min_distance_requires_explicit_pbc_for_periodic_cell():
         calculate_min_distance(p1, p2, cell=cell, use_pbc=True)
 
 
-def test_resolve_material_type_helper_uses_site_then_fallback():
-    assert _resolve_material_type(None, fallback="slab") == "slab"
-    assert _resolve_material_type({"site_type": "atop"}, fallback="porous") == "porous"
-    assert _resolve_material_type({"material_type": "nanoparticle"}) == "nanoparticle"
+def test_material_type_for_placement():
+    assert material_type_for_placement(None, when_no_site="slab") == "slab"
+    assert material_type_for_placement(None, when_no_site="porous") == "porous"
+    with pytest.raises(ValueError, match="material_type"):
+        material_type_for_placement({"site_type": "atop"}, when_no_site="porous")
+    assert (
+        material_type_for_placement(
+            {"site_type": "atop", "material_type": "porous"},
+            when_no_site="slab",
+        )
+        == "porous"
+    )
+    assert (
+        material_type_for_placement(
+            {"material_type": "nanoparticle"},
+            when_no_site="slab",
+        )
+        == "nanoparticle"
+    )
 
 
 def test_deduplicate_points_returns_expected_keep_mask():
@@ -277,26 +360,76 @@ def test_cluster_equivalent_sites_reduces_or_keeps_sites_per_material():
     assert 0 < len(porous_unique) <= len(porous_raw)
 
 
-def test_cluster_equivalent_sites_preserves_step_sites_with_same_xy():
+@pytest.mark.parametrize(
+    "sites,expected_count",
+    [
+        (
+            [
+                {
+                    "xy": np.array([1.0, 1.0]),
+                    "z": 5.0,
+                    "xyz": np.array([1.0, 1.0, 5.0]),
+                    "site_type": "atop",
+                    "material_type": "slab",
+                },
+                {
+                    "xy": np.array([1.0, 1.0]),
+                    "z": 6.0,
+                    "xyz": np.array([1.0, 1.0, 6.0]),
+                    "site_type": "atop",
+                    "material_type": "slab",
+                },
+            ],
+            2,
+        ),
+        (
+            [
+                {
+                    "xy": np.array([1.0, 1.0]),
+                    "z": 5.0,
+                    "xyz": np.array([1.0, 1.0, 5.0]),
+                    "site_type": "atop",
+                    "material_type": "slab",
+                    "env_fingerprint": (("Ni",), "atop"),
+                },
+                {
+                    "xy": np.array([1.0, 1.0]),
+                    "z": 5.0,
+                    "xyz": np.array([1.0, 1.0, 5.0]),
+                    "site_type": "atop",
+                    "material_type": "slab",
+                    "env_fingerprint": (("Pt",), "atop"),
+                },
+            ],
+            2,
+        ),
+        (
+            [
+                {
+                    "xy": np.array([1.0, 1.0]),
+                    "z": 5.0,
+                    "xyz": np.array([1.0, 1.0, 5.0]),
+                    "site_type": "atop",
+                    "material_type": "slab",
+                    "env_fingerprint": (("Ru",), "atop"),
+                },
+                {
+                    "xy": np.array([1.001, 1.001]),
+                    "z": 5.0,
+                    "xyz": np.array([1.001, 1.001, 5.0]),
+                    "site_type": "atop",
+                    "material_type": "slab",
+                    "env_fingerprint": (("Ru",), "atop"),
+                },
+            ],
+            1,
+        ),
+    ],
+)
+def test_cluster_equivalent_sites_case_matrix(sites, expected_count):
     cell = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 20.0]])
-    sites = [
-        {
-            "xy": np.array([1.0, 1.0]),
-            "z": 5.0,
-            "xyz": np.array([1.0, 1.0, 5.0]),
-            "site_type": "atop",
-            "material_type": "slab",
-        },
-        {
-            "xy": np.array([1.0, 1.0]),
-            "z": 6.0,
-            "xyz": np.array([1.0, 1.0, 6.0]),
-            "site_type": "atop",
-            "material_type": "slab",
-        },
-    ]
     unique = _cluster_equivalent_sites(sites, cell, tolerance=0.05)
-    assert len(unique) == 2
+    assert len(unique) == expected_count
 
 
 def test_classify_voronoi_site_types_for_simple_geometries():
@@ -494,13 +627,11 @@ def test_site_context_cache_clear_resets_cached_entries():
 
 def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
     slab = make_slab()
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=50,
-        placement_z_range=(2.0, 3.0),
+    config = adsorption_config_factory(
+        material_type="slab", num_placements=50, placement_z_range=(2.0, 3.0)
     )
     results = _generate_placements(
-        [make_water()], slab, config, smiles="O", n_desired=50
+        water_conformers(), slab, config, smiles="O", n_desired=50
     )
 
     assert len(results) >= 45
@@ -508,123 +639,88 @@ def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
     assert len(visited_sites) >= 2
 
 
-def test_slab_reproducible_same_spec_same_positions_and_descriptor_replay():
+@pytest.mark.parametrize("mode", ["spec", "descriptor", "pose"])
+def test_slab_replay_reproduces_positions(mode):
     slab = make_slab()
-    config = AdsorptionConfig(
+    config = adsorption_config_factory(
         material_type="slab", num_placements=10, placement_z_range=(2.0, 3.0)
     )
+    conformers = water_conformers()
     spec, result = _first_successful_placement(
-        [make_water()], slab, config, "O", n_desired=10
-    )
-    assert spec is not None and result is not None
-
-    ads1, desc1 = result
-    again = generate_placement_from_spec(spec, [make_water()], slab, config, smiles="O")
-    assert again is not None
-    ads2, _ = again
-    np.testing.assert_allclose(ads1.get_positions(), ads2.get_positions(), atol=1e-10)
-
-    replayed = generate_placement_from_descriptor(
-        desc1, [make_water()], slab, config, smiles="O"
-    )
-    assert replayed is not None
-    np.testing.assert_allclose(
-        ads1.get_positions(), replayed.get_positions(), atol=1e-10
-    )
-
-
-def test_slab_pose_roundtrip_reproduces_geometry():
-    slab = make_slab()
-    config = AdsorptionConfig(
-        material_type="slab", num_placements=8, placement_z_range=(2.0, 3.0)
-    )
-    spec, result = _first_successful_placement(
-        [make_water()], slab, config, "O", n_desired=8
+        conformers, slab, config, "O", n_desired=10
     )
     assert spec is not None and result is not None
 
     adsorbate, descriptor = result
-    pose = PlacementPose(
-        conformer_index=descriptor.conformer_index,
-        site_index=descriptor.site_index,
-        site_type=descriptor.site_type,
-        placement_index=descriptor.placement_index,
-        quat_w=float(descriptor.quat_w),
-        quat_x=float(descriptor.quat_x),
-        quat_y=float(descriptor.quat_y),
-        quat_z=float(descriptor.quat_z),
-        x_abs=float(descriptor.x_abs),
-        y_abs=float(descriptor.y_abs),
-        z_fraction=float(descriptor.z_fraction),
-        z_abs=float(descriptor.z_abs),
-        orientation_type=descriptor.orientation_type,
-        face_flip=descriptor.face_flip,
-        en_atom_index=descriptor.en_atom_index,
-        tilt_deg=descriptor.tilt_deg,
-        azimuth_deg=descriptor.azimuth_deg,
-        azimuth_in_plane_deg=descriptor.azimuth_in_plane_deg,
-    )
-    rebuilt = generate_placement_from_pose(pose, [make_water()], slab, config)
-    assert rebuilt is not None
-    rebuilt_ads, _ = rebuilt
-    np.testing.assert_allclose(
-        adsorbate.get_positions(), rebuilt_ads.get_positions(), atol=1e-10
+    _assert_replay_matches(
+        mode,
+        adsorbate,
+        descriptor,
+        spec,
+        conformers,
+        slab,
+        config,
     )
 
 
 # ---------------------------------------------------------------------------
-# Nanoparticle pathway: universal center along local normal
+# Nanoparticle and porous: local-site enumeration and geometry
 # ---------------------------------------------------------------------------
 
 
-def test_nanoparticle_enumeration_generation_and_reproducibility():
-    nanoparticle = make_nanoparticle()
-    config = AdsorptionConfig(
-        material_type="nanoparticle",
-        num_placements=20,
-        placement_z_range=(1.5, 2.5),
+@pytest.mark.parametrize(
+    "material_type,factory,num_placements,z_range,n_desired",
+    _LOCAL_SITE_MATERIAL_PARAMS,
+)
+def test_local_site_material_enumeration_generation_and_reproducibility(
+    material_type, factory, num_placements, z_range, n_desired
+):
+    structure = factory()
+    config = adsorption_config_factory(
+        material_type=material_type,
+        num_placements=num_placements,
+        placement_z_range=z_range,
     )
+    conformers = water_conformers()
     results = _generate_placements(
-        [make_water()], nanoparticle, config, smiles="O", n_desired=20
+        conformers, structure, config, smiles="O", n_desired=n_desired
     )
     assert len(results) >= 1
 
     spec, adsorbate, descriptor = results[0]
-    same = generate_placement_from_spec(
-        spec, [make_water()], nanoparticle, config, smiles="O"
+    _assert_replay_matches(
+        "spec", adsorbate, descriptor, spec, conformers, structure, config
     )
-    assert same is not None
-    np.testing.assert_allclose(
-        adsorbate.get_positions(), same[0].get_positions(), atol=1e-10
-    )
-
-    replayed = generate_placement_from_descriptor(
-        descriptor, [make_water()], nanoparticle, config, smiles="O"
-    )
-    assert replayed is not None
-    np.testing.assert_allclose(
-        adsorbate.get_positions(), replayed.get_positions(), atol=1e-10
+    _assert_replay_matches(
+        "descriptor", adsorbate, descriptor, spec, conformers, structure, config
     )
 
 
-def test_nanoparticle_placement_center_is_site_plus_normal_scaled_offset():
-    nanoparticle = make_nanoparticle()
-    config = AdsorptionConfig(
-        material_type="nanoparticle",
-        num_placements=20,
-        placement_z_range=(1.5, 2.5),
+@pytest.mark.parametrize(
+    "material_type,factory,num_placements,z_range,n_desired",
+    _LOCAL_SITE_MATERIAL_PARAMS,
+)
+def test_local_site_material_placement_center_matches_site_geometry(
+    material_type, factory, num_placements, z_range, n_desired
+):
+    structure = factory()
+    config = adsorption_config_factory(
+        material_type=material_type,
+        num_placements=num_placements,
+        placement_z_range=z_range,
     )
-    _site_ctx = _get_unique_sites_for_specs(nanoparticle, config)
-    unique_sites, use_sites = _site_ctx.sites, _site_ctx.use_sites
+    conformers = water_conformers()
+    site_ctx = _get_unique_sites_for_specs(structure, config)
+    unique_sites, use_sites = site_ctx.sites, site_ctx.use_sites
     assert use_sites and len(unique_sites) > 0
 
     specs = enumerate_placement_specs(
-        [make_water()], nanoparticle, config, "O", n_desired=20
+        conformers, structure, config, "O", n_desired=n_desired
     )
     matched = False
     for spec in specs:
         result = generate_placement_from_spec(
-            spec, [make_water()], nanoparticle, config, smiles="O"
+            spec, conformers, structure, config, smiles="O"
         )
         if result is None or spec.site_index < 0:
             continue
@@ -640,76 +736,9 @@ def test_nanoparticle_placement_center_is_site_plus_normal_scaled_offset():
         matched = True
         break
 
-    assert matched, "Expected at least one successful nanoparticle site-based placement"
-
-
-# ---------------------------------------------------------------------------
-# Porous pathway: universal center along local normal
-# ---------------------------------------------------------------------------
-
-
-def test_porous_enumeration_generation_and_reproducibility():
-    porous = make_porous_framework()
-    config = AdsorptionConfig(
-        material_type="porous",
-        num_placements=12,
-        placement_z_range=(1.5, 3.0),
+    assert matched, (
+        f"Expected at least one successful {material_type} site-based placement"
     )
-    results = _generate_placements(
-        [make_water()], porous, config, smiles="O", n_desired=12
-    )
-    assert len(results) >= 1
-
-    spec, adsorbate, descriptor = results[0]
-    same = generate_placement_from_spec(
-        spec, [make_water()], porous, config, smiles="O"
-    )
-    assert same is not None
-    np.testing.assert_allclose(
-        adsorbate.get_positions(), same[0].get_positions(), atol=1e-10
-    )
-
-    replayed = generate_placement_from_descriptor(
-        descriptor, [make_water()], porous, config, smiles="O"
-    )
-    assert replayed is not None
-    np.testing.assert_allclose(
-        adsorbate.get_positions(), replayed.get_positions(), atol=1e-10
-    )
-
-
-def test_porous_placement_center_is_site_plus_normal_scaled_offset():
-    porous = make_porous_framework()
-    config = AdsorptionConfig(
-        material_type="porous",
-        num_placements=12,
-        placement_z_range=(1.5, 3.0),
-    )
-    _site_ctx = _get_unique_sites_for_specs(porous, config)
-    unique_sites, use_sites = _site_ctx.sites, _site_ctx.use_sites
-    assert use_sites and len(unique_sites) > 0
-
-    specs = enumerate_placement_specs([make_water()], porous, config, "O", n_desired=12)
-    matched = False
-    for spec in specs:
-        result = generate_placement_from_spec(
-            spec, [make_water()], porous, config, smiles="O"
-        )
-        if result is None or spec.site_index < 0:
-            continue
-        _, descriptor = result
-        site = unique_sites[spec.site_index]
-        expected = np.asarray(site["xyz"], dtype=float) + float(
-            descriptor.z_offset
-        ) * np.asarray(site["normal"], dtype=float)
-        got = np.array(
-            [descriptor.x_abs, descriptor.y_abs, descriptor.z_abs], dtype=float
-        )
-        np.testing.assert_allclose(got, expected, atol=1e-6)
-        matched = True
-        break
-
-    assert matched, "Expected at least one successful porous site-based placement"
 
 
 # ---------------------------------------------------------------------------
@@ -725,8 +754,6 @@ def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
         placement_z_range=(2.0, 3.0),
         flat_aromatic_parallel_fraction=0.5,
     )
-    from metalsurfer.conformers import create_conformers_from_smiles
-
     result = create_conformers_from_smiles(
         "c1(C=O)cc(OC)c(O)cc1",
         config=AdsorptionConfig(num_conformers=3),
@@ -878,48 +905,30 @@ def _site_type_atop(idx: int) -> str:
     return "atop"
 
 
-def test_max_batch_specs_matches_build_batch_uncapped_round():
-    """max_batch_placement_specs == len(build_batch_placement_specs) when uncapped."""
-    n_conformers = 2
-    site_indices = [0, 1, 2]
-
+@pytest.mark.parametrize(
+    "n_conformers,site_indices,shape,n_binders,flat_aromatic",
+    [
+        (2, [0, 1, 2], "round", 1, False),
+        (1, [0, 1], "flat", 2, True),
+    ],
+)
+def test_max_batch_specs_matches_build_batch_uncapped(
+    n_conformers, site_indices, shape, n_binders, flat_aromatic
+):
     expected = max_batch_placement_specs(
         n_conformers=n_conformers,
         site_indices=site_indices,
-        shape="round",
-        n_binders=1,
-        flat_aromatic=False,
+        shape=shape,
+        n_binders=n_binders,
+        flat_aromatic=flat_aromatic,
     )
     actual = build_batch_placement_specs(
         n_conformers=n_conformers,
         site_indices=site_indices,
         site_type_for_index=_site_type_atop,
-        shape="round",
-        n_binders=1,
-        flat_aromatic=False,
-        parallel_fraction=0.5,
-        n_desired=10**7,
-        seed=TEST_SEED,
-    )
-    assert len(actual) == expected
-
-
-def test_max_batch_specs_matches_build_batch_uncapped_flat_aromatic():
-    """Flat-aromatic parallel + EN-down counts are consistent between the two functions."""
-    expected = max_batch_placement_specs(
-        n_conformers=1,
-        site_indices=[0, 1],
-        shape="flat",
-        n_binders=2,
-        flat_aromatic=True,
-    )
-    actual = build_batch_placement_specs(
-        n_conformers=1,
-        site_indices=[0, 1],
-        site_type_for_index=_site_type_atop,
-        shape="flat",
-        n_binders=2,
-        flat_aromatic=True,
+        shape=shape,
+        n_binders=n_binders,
+        flat_aromatic=flat_aromatic,
         parallel_fraction=0.5,
         n_desired=10**7,
         seed=TEST_SEED,
@@ -1056,59 +1065,8 @@ def test_env_fingerprint_present_in_unified_sites():
         assert isinstance(fp[1], str)
 
 
-def test_cluster_preserves_chemically_distinct_sites():
-    """Sites at same (x,y) but different env fingerprints must survive clustering."""
-    cell = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 20.0]])
-    sites = [
-        {
-            "xy": np.array([1.0, 1.0]),
-            "z": 5.0,
-            "xyz": np.array([1.0, 1.0, 5.0]),
-            "site_type": "atop",
-            "material_type": "slab",
-            "env_fingerprint": (("Ni",), "atop"),
-        },
-        {
-            "xy": np.array([1.0, 1.0]),
-            "z": 5.0,
-            "xyz": np.array([1.0, 1.0, 5.0]),
-            "site_type": "atop",
-            "material_type": "slab",
-            "env_fingerprint": (("Pt",), "atop"),
-        },
-    ]
-    unique = _cluster_equivalent_sites(sites, cell, tolerance=0.05)
-    assert len(unique) == 2, "Chemically distinct sites must not be merged"
-
-
-def test_cluster_merges_truly_equivalent_sites():
-    """Sites at same coordinates with same fingerprint should be merged."""
-    cell = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 20.0]])
-    fp = (("Ru",), "atop")
-    sites = [
-        {
-            "xy": np.array([1.0, 1.0]),
-            "z": 5.0,
-            "xyz": np.array([1.0, 1.0, 5.0]),
-            "site_type": "atop",
-            "material_type": "slab",
-            "env_fingerprint": fp,
-        },
-        {
-            "xy": np.array([1.001, 1.001]),
-            "z": 5.0,
-            "xyz": np.array([1.001, 1.001, 5.0]),
-            "site_type": "atop",
-            "material_type": "slab",
-            "env_fingerprint": fp,
-        },
-    ]
-    unique = _cluster_equivalent_sites(sites, cell, tolerance=0.05)
-    assert len(unique) == 1, "Equivalent sites should be merged"
-
-
 # ---------------------------------------------------------------------------
-# Phase 2: Delaunay site classification
+# Site classification (Delaunay)
 # ---------------------------------------------------------------------------
 
 
@@ -1141,14 +1099,12 @@ def test_delaunay_fallback_for_nanoparticle():
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Rough slab local z
+# Rough slab surface reference
 # ---------------------------------------------------------------------------
 
 
 def test_resolve_surface_ref_rough_slab():
     """On a rough slab, local z should be used when rough_slab_local_z=True."""
-    from metalsurfer.placement.generators import _resolve_surface_ref
-
     # Build a stepped slab: two terraces at different z
     positions = []
     for ix in range(3):
@@ -1190,14 +1146,12 @@ def test_resolve_surface_ref_rough_slab():
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: Adaptive parallel fraction
+# Adaptive parallel fraction
 # ---------------------------------------------------------------------------
 
 
 def test_estimate_parallel_fraction_pure_aromatic():
     """Pure aromatic (no EN atoms) should get high parallel fraction."""
-    from metalsurfer.placement.generators import _estimate_parallel_fraction
-
     # Benzene-like: 6 C, 6 H, no EN atoms
     symbols = ["C"] * 6 + ["H"] * 6
     frac = _estimate_parallel_fraction(symbols, smiles=None)
@@ -1206,8 +1160,6 @@ def test_estimate_parallel_fraction_pure_aromatic():
 
 def test_estimate_parallel_fraction_strong_binder():
     """Molecule with many EN atoms relative to ring should get low fraction."""
-    from metalsurfer.placement.generators import _estimate_parallel_fraction
-
     # Pyridine-like: 5 C, 1 N (binder), 5 H
     symbols = ["C"] * 5 + ["N"] + ["H"] * 5
     frac = _estimate_parallel_fraction(symbols, smiles=None)
@@ -1222,14 +1174,12 @@ def test_adaptive_parallel_fraction_config():
 
 
 # ---------------------------------------------------------------------------
-# Phase 5: KDTree hollow-site pairs
+# Dissociative hollow-site pairs
 # ---------------------------------------------------------------------------
 
 
 def test_hollow_site_pairs_found_for_slab():
     """_get_hollow_site_pairs should find pairs on a simple slab."""
-    from metalsurfer.placement.generators import _get_hollow_site_pairs
-
     slab = make_slab()
     config = AdsorptionConfig()
     pairs = _get_hollow_site_pairs(slab, config)
@@ -1275,7 +1225,7 @@ def test_dissociative_placement_rejected_for_non_slab_material_type():
 
 
 # ---------------------------------------------------------------------------
-# Config validation for new fields
+# Config validation
 # ---------------------------------------------------------------------------
 
 
@@ -1283,3 +1233,203 @@ def test_config_site_classification_method_validation():
     """Invalid site_classification_method should raise ValueError."""
     with pytest.raises(ValueError, match="site_classification_method"):
         AdsorptionConfig(site_classification_method="invalid")
+
+
+# ---------------------------------------------------------------------------
+# Phase 1-2 Enhanced Placement Validation Tests
+# ---------------------------------------------------------------------------
+
+
+def test_vdw_overlap_detection_rejects_close_atoms():
+    """VDW overlap detection should identify when atoms are too close."""
+    from metalsurfer.placement.geometry import detect_vdw_overlaps
+
+    slab = make_slab()
+    water = make_water().copy()
+
+    # Place water very close to surface (will have VDW overlaps)
+    pos = water.get_positions()
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 0.5
+    water.set_positions(pos)
+    water.set_cell(slab.get_cell())
+    water.set_pbc(slab.get_pbc())
+
+    overlaps, min_dist = detect_vdw_overlaps(water, slab)
+    assert len(overlaps) > 0, "Should detect overlaps for very close water"
+    assert min_dist < 1.5  # Very close approach
+
+
+def test_vdw_overlap_detection_accepts_good_contact():
+    """VDW overlap detection should accept placements with adequate separation."""
+    from metalsurfer.placement.geometry import detect_vdw_overlaps
+
+    slab = make_slab()
+    water = make_water().copy()
+
+    # Place water at a clearly physisorbed height (H atoms need clearance too).
+    pos = water.get_positions()
+    pos -= np.mean(pos, axis=0)
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 3.5
+    pos[:, 0] += 2.0
+    pos[:, 1] += 2.0
+    water.set_positions(pos)
+    water.set_cell(slab.get_cell())
+    water.set_pbc(slab.get_pbc())
+
+    overlaps, min_dist = detect_vdw_overlaps(water, slab)
+    assert len(overlaps) == 0, "Should not detect overlaps for well-separated water"
+    assert min_dist > 2.0
+
+
+def test_check_initial_placement_distance_with_vdw_rejection():
+    """check_initial_placement_distance should reject VDW overlaps when enabled."""
+    slab = make_slab()
+    water = make_water().copy()
+
+    # Place water very close
+    pos = water.get_positions()
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 0.5
+    water.set_positions(pos)
+    water.set_cell(slab.get_cell())
+    water.set_pbc(slab.get_pbc())
+
+    # Should reject with VDW check enabled
+    ok, dist = check_initial_placement_distance(
+        water, slab, reject_vdw_overlaps=True, vdw_overlap_scale=1.0
+    )
+    assert not ok, "Should reject overlapping placement"
+
+
+def test_calculate_contact_quality_detects_good_contact():
+    """calculate_contact_quality should correctly identify contact atoms."""
+    from metalsurfer.placement.geometry import calculate_contact_quality
+
+    slab = make_slab()
+    water = make_water().copy()
+
+    # Place water at reasonable distance
+    pos = water.get_positions()
+    pos -= np.mean(pos, axis=0)
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 2.0
+    pos[:, 0] += 2.0
+    pos[:, 1] += 2.0
+    water.set_positions(pos)
+    water.set_cell(slab.get_cell())
+    water.set_pbc(slab.get_pbc())
+
+    metrics = calculate_contact_quality(water, slab, contact_distance_threshold=2.5)
+
+    assert metrics["num_contacting_atoms"] > 0, "Should have contacting atoms"
+    assert metrics["contact_distance"] < 3.0, "Should have reasonable contact distance"
+    assert metrics["contact_ratio"] > 0.0, "Should have contact ratio"
+
+
+def test_adsorbate_separation_accepts_well_separated():
+    """check_adsorbate_separation should accept well-separated adsorbates."""
+    from metalsurfer.placement.geometry import check_adsorbate_separation
+
+    slab = make_slab()
+    water = make_water().copy()
+
+    # Place water
+    pos = water.get_positions()
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 2.0
+    pos[:, 0] += 5.0
+    pos[:, 1] += 5.0
+    water.set_positions(pos)
+    water.set_cell(slab.get_cell())
+    water.set_pbc(slab.get_pbc())
+
+    # Pre-adsorbed positions far away
+    pre_ads = np.array([[0.0, 0.0, 5.0]])
+
+    ok, dist = check_adsorbate_separation(
+        water,
+        pre_ads,
+        min_separation=2.0,
+        cell=slab.get_cell(),
+        pbc=material_aware_pbc(slab),
+    )
+    assert ok, "Should accept well-separated adsorbates"
+    assert dist > 2.0
+
+
+def test_adsorbate_separation_rejects_close_atoms():
+    """check_adsorbate_separation should reject too-close adsorbates."""
+    from metalsurfer.placement.geometry import check_adsorbate_separation
+
+    slab = make_slab()
+    water = make_water().copy()
+
+    # Place water
+    pos = water.get_positions()
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 2.0
+    water.set_positions(pos)
+    water.set_cell(slab.get_cell())
+    water.set_pbc(slab.get_pbc())
+
+    # Pre-adsorbed positions very close
+    pre_ads = np.array([[0.0, 0.0, 5.0]])
+
+    ok, dist = check_adsorbate_separation(
+        water,
+        pre_ads,
+        min_separation=5.0,
+        cell=slab.get_cell(),
+        pbc=material_aware_pbc(slab),
+    )
+    assert not ok, "Should reject too-close adsorbates"
+
+
+def test_validate_initial_placement_geometry_with_strict_config():
+    """_validate_initial_placement_geometry should check contact quality with strict config."""
+    slab = make_slab()
+    water = make_water().copy()
+
+    # Place water at reasonable distance
+    pos = water.get_positions()
+    pos -= np.mean(pos, axis=0)
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 2.2
+    pos[:, 0] += 2.0
+    pos[:, 1] += 2.0
+    water.set_positions(pos)
+    water.set_cell(slab.get_cell())
+    water.set_pbc(slab.get_pbc())
+
+    # Create strict config (min_contact_distance: max allowed closest-approach distance)
+    config = AdsorptionConfig(
+        strict_initial_placement=True,
+        min_contact_atoms=1,
+        min_contact_distance=3.0,
+        contact_distance_threshold=2.5,
+    )
+
+    ok, reason = workflow_shared._validate_initial_placement_geometry(
+        water, slab, config
+    )
+    assert ok, f"Should pass strict validation with good contact: {reason}"
+
+
+def test_validate_initial_placement_geometry_rejects_poor_contact():
+    """_validate_initial_placement_geometry should reject poor contact placements."""
+    slab = make_slab()
+    water = make_water().copy()
+
+    # Place water far away
+    pos = water.get_positions()
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 5.0
+    water.set_positions(pos)
+    water.set_cell(slab.get_cell())
+    water.set_pbc(slab.get_pbc())
+
+    # Create strict config with tight requirements
+    config = AdsorptionConfig(
+        strict_initial_placement=True,
+        min_contact_distance=1.5,
+        min_contact_atoms=3,  # Require 3 contacting atoms
+    )
+
+    ok, reason = workflow_shared._validate_initial_placement_geometry(
+        water, slab, config
+    )
+    assert not ok, "Should reject placement with poor contact"

@@ -25,9 +25,22 @@ from ._constants import (
     _PARALLEL_Z_MIN_HI_MARGIN,
     _SITE_Z_OFFSETS,
 )
-from ._material import _resolve_material_type
+from ._material import material_type_for_placement
 
 logger = logging.getLogger(__name__)
+
+
+def _rdkit_chem():
+    """RDKit Chem module; import is lazy so tests can mock missing rdkit."""
+    try:
+        from rdkit import Chem
+    except ImportError as exc:
+        raise DependencyMissingError(
+            "rdkit",
+            "placement aromatic and ring heuristics",
+            "pip install rdkit",
+        ) from exc
+    return Chem
 
 
 @dataclass
@@ -37,6 +50,8 @@ class SiteContext:
     sites: list[dict[str, object]]
     use_sites: bool
     source: str
+    # Pre-clustering output of :func:`sites.get_unified_sites` (same as used for clustering).
+    raw_unclustered: list[dict[str, object]] | None = None
 
 
 @dataclass
@@ -52,6 +67,42 @@ class _PlacementContext:
     canonical_pos: np.ndarray
     use_sites: bool
     rotated_pos: np.ndarray
+
+
+@dataclass
+class _SpecGridInfo:
+    is_dissociative: bool
+    unique_sites: list[dict[str, object]]
+    use_sites: bool
+    site_indices: list[int]
+    shape: str
+    symbols: list[str]
+    n_binders: int
+    flat_aromatic: bool
+    n_hollow_pairs: int
+
+
+def _pose_from_descriptor(descriptor: PlacementDescriptor) -> PlacementPose:
+    return PlacementPose(
+        conformer_index=descriptor.conformer_index,
+        site_index=descriptor.site_index,
+        site_type=descriptor.site_type,
+        placement_index=descriptor.placement_index,
+        quat_w=float(descriptor.quat_w),
+        quat_x=float(descriptor.quat_x),
+        quat_y=float(descriptor.quat_y),
+        quat_z=float(descriptor.quat_z),
+        x_abs=float(descriptor.x_abs),
+        y_abs=float(descriptor.y_abs),
+        z_fraction=float(descriptor.z_fraction),
+        z_abs=float(descriptor.z_abs),
+        orientation_type=descriptor.orientation_type,
+        face_flip=descriptor.face_flip,
+        en_atom_index=descriptor.en_atom_index,
+        tilt_deg=descriptor.tilt_deg,
+        azimuth_deg=descriptor.azimuth_deg,
+        azimuth_in_plane_deg=descriptor.azimuth_in_plane_deg,
+    )
 
 
 def _is_flat_aromatic(
@@ -70,14 +121,7 @@ def _is_flat_aromatic(
 
 def _is_flat_aromatic_with_en(smiles: str) -> bool:
     """True if molecule has aromatic rings and electronegative (binding) atoms."""
-    try:
-        from rdkit import Chem
-    except (ImportError, AttributeError) as exc:
-        raise DependencyMissingError(
-            "rdkit",
-            "flat aromatic detection for placement",
-            "pip install rdkit",
-        ) from exc
+    Chem = _rdkit_chem()
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return False
@@ -124,28 +168,23 @@ def _estimate_parallel_fraction(
     n_binders = len(binders)
     n_ring = 0
     if smiles is not None:
-        try:
-            from rdkit import Chem
-
-            mol = Chem.MolFromSmiles(smiles)
-            if mol is not None:
-                n_ring = sum(1 for a in mol.GetAtoms() if a.GetIsAromatic())
-        except (ImportError, AttributeError):
-            pass
+        Chem = _rdkit_chem()
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is not None:
+            n_ring = sum(1 for a in mol.GetAtoms() if a.GetIsAromatic())
     if n_ring == 0:
-        # Fallback: count C atoms as approximate ring proxy
         n_ring = sum(1 for s in symbols if s == "C")
 
     if n_binders == 0:
-        return 0.8  # pure aromatic: mostly parallel
+        return 0.8
     if n_ring == 0:
-        return 0.5  # no ring info: default
+        return 0.5
     ratio = n_binders / n_ring
     if ratio >= 0.5:
-        return 0.3  # strong EN-down preference
+        return 0.3
     if ratio >= 0.2:
-        return 0.5  # mixed
-    return 0.8  # predominantly aromatic
+        return 0.5
+    return 0.8
 
 
 def _get_unique_sites_for_specs(
@@ -173,7 +212,9 @@ def _get_unique_sites_for_specs(
             "Slab has fewer than 4 atoms (%d); cannot detect adsorption sites",
             len(slab),
         )
-        return SiteContext(sites=[], use_sites=False, source="no_sites")
+        return SiteContext(
+            sites=[], use_sites=False, source="no_sites", raw_unclustered=None
+        )
 
     raw_sites = sts.get_unified_sites(
         slab,
@@ -193,7 +234,9 @@ def _get_unique_sites_for_specs(
             max_site_dist,
             mat_type,
         )
-        return SiteContext(sites=[], use_sites=False, source="no_sites")
+        return SiteContext(
+            sites=[], use_sites=False, source="no_sites", raw_unclustered=None
+        )
 
     cell = np.array(slab.get_cell())
     unique_sites = sts._cluster_equivalent_sites(
@@ -210,20 +253,20 @@ def _get_unique_sites_for_specs(
             config.site_equivalence_tolerance,
             mat_type,
         )
-        return SiteContext(sites=[], use_sites=False, source="no_sites")
+        return SiteContext(
+            sites=[],
+            use_sites=False,
+            source="no_sites",
+            raw_unclustered=raw_sites,
+        )
 
     source = str(unique_sites[0].get("site_source", "voronoi"))
-    return SiteContext(sites=unique_sites, use_sites=True, source=source)
-
-
-def _resolve_site_context(
-    slab: Atoms,
-    config: AdsorptionConfig,
-    site_context: SiteContext | None = None,
-) -> SiteContext:
-    if site_context is not None:
-        return site_context
-    return _get_unique_sites_for_specs(slab, config)
+    return SiteContext(
+        sites=unique_sites,
+        use_sites=True,
+        source=source,
+        raw_unclustered=raw_sites,
+    )
 
 
 def _resolve_surface_ref(
@@ -259,18 +302,6 @@ def _resolve_surface_ref(
     return float(np.max(slab.get_positions()[:, 2])), False
 
 
-def _select_site(
-    ctx: SiteContext,
-    site_index: int,
-) -> dict[str, object] | None:
-    """Return the unique site at *site_index* or ``None`` when unavailable."""
-    if not ctx.use_sites:
-        return None
-    if site_index < 0 or site_index >= len(ctx.sites):
-        return None
-    return ctx.sites[site_index]
-
-
 def _pose_from_spec(
     adsorbate: Atoms,
     spec: PlacementSpec,
@@ -290,19 +321,24 @@ def _pose_from_spec(
     ads_pos = adsorbate.get_positions().copy()
     symbols = adsorbate.get_chemical_symbols()
     canonical_pos = geom.compute_canonical_molecular_frame(ads_pos, symbols=symbols)
-    normal = np.array([0.0, 0.0, 1.0])  # default; may be overridden for pore sites
+    normal = np.array([0.0, 0.0, 1.0])
     shape, _, _ = geom._classify_molecule_shape(canonical_pos)
 
-    ctx = _resolve_site_context(slab, config, site_context)
-    site = _select_site(ctx, spec.site_index)
+    ctx = (
+        site_context
+        if site_context is not None
+        else _get_unique_sites_for_specs(slab, config)
+    )
+    site = None
+    if ctx.use_sites and 0 <= spec.site_index < len(ctx.sites):
+        site = ctx.sites[spec.site_index]
 
-    # Determine placement normal (local surface normal for pore/NP sites)
     if site is not None and "normal" in site:
         site_normal = np.asarray(site["normal"], dtype=float)
         if np.linalg.norm(site_normal) > 1e-8:
             normal = site_normal / np.linalg.norm(site_normal)
 
-    mat_type = _resolve_material_type(site, fallback="slab")
+    mat_type = material_type_for_placement(site, when_no_site=config.material_type)
 
     if xy_override is not None:
         x, y = xy_override[0], xy_override[1]
@@ -310,9 +346,6 @@ def _pose_from_spec(
         site_xy = np.asarray(site["xy"])
         x, y = float(site_xy[0]), float(site_xy[1])
     else:
-        # No sites and no override: cannot place at a physically motivated
-        # position.  Return ``None`` so the caller can report a clean failure
-        # instead of placing at a random location.
         logger.debug(
             "No sites available for spec placement_index=%d; returning None",
             spec.placement_index,
@@ -326,7 +359,6 @@ def _pose_from_spec(
         z_base_hi += offset
 
     flat_aromatic = _is_flat_aromatic(shape, smiles, symbols)
-    # Only apply parallel z-floor for slab/NP; pore geometry already constrains placement
     if flat_aromatic and spec.orientation_type == "parallel" and mat_type != "porous":
         z_base_lo = max(_PARALLEL_Z_FLOOR_ANGSTROM, z_base_lo - _PARALLEL_Z_LO_SHRINK)
         z_base_hi = max(
@@ -336,11 +368,7 @@ def _pose_from_spec(
     zf = spec.z_fraction if z_fraction is None else z_fraction
     z_offset = z_base_lo + zf * (z_base_hi - z_base_lo)
 
-    # Surface reference: the datum z from which z_offset is measured.
-    # For slabs the reference is the top of the surface layer – Voronoi
-    # vertices sit *between* layers, so using their z would place the
-    # adsorbate inside the slab.  For nanoparticles and porous materials
-    # the vertex z IS on the surface / inside the pore.
+    # Slab: top-layer z (Voronoi vertex z can sit between layers). NP/pore: local vertex.
     surface_ref, is_local_ref = _resolve_surface_ref(
         site,
         slab,
@@ -359,7 +387,6 @@ def _pose_from_spec(
         base_pos = geom._surface_aligned_rotation(
             canonical_pos,
             normal,
-            0,
             symbols,
             en_atom_index=spec.en_atom_index,
         )
@@ -431,9 +458,15 @@ def _context_from_pose(
     quat = geom.normalize_quaternion(raw_q)
     rotated_pos = (geom.quaternion_to_rotation_matrix(quat) @ canonical_pos.T).T
 
-    ctx = _resolve_site_context(slab, config, site_context)
-    site = _select_site(ctx, pose.site_index)
-    mat_type = _resolve_material_type(site, fallback="slab")
+    ctx = (
+        site_context
+        if site_context is not None
+        else _get_unique_sites_for_specs(slab, config)
+    )
+    site = None
+    if ctx.use_sites and 0 <= pose.site_index < len(ctx.sites):
+        site = ctx.sites[pose.site_index]
+    mat_type = material_type_for_placement(site, when_no_site=config.material_type)
     surface_ref, is_local_ref = _resolve_surface_ref(
         site,
         slab,
@@ -441,8 +474,6 @@ def _context_from_pose(
         rough_slab_local_z=config.rough_slab_local_z,
     )
 
-    # Store the normalized quaternion on the pose so the descriptor carries
-    # the canonical form regardless of what the caller supplied.
     pose_normalized = dataclasses.replace(
         pose,
         quat_w=float(quat[0]),
@@ -513,6 +544,8 @@ def _finalize_placement(
         min_distance=config.min_initial_distance,
         min_contact_ratio=config.min_contact_ratio,
         max_initial_distance=config.max_initial_distance,
+        reject_vdw_overlaps=config.reject_vdw_overlaps,
+        vdw_overlap_scale=config.vdw_overlap_scale,
     )
     if not ok:
         return None
@@ -596,11 +629,6 @@ def generate_placement_from_pose(
     return _finalize_placement(ctx, adsorbate, slab, config)
 
 
-# ---------------------------------------------------------------------------
-# Shared adsorbate/site grid computation used by enumerate / estimate
-# ---------------------------------------------------------------------------
-
-
 def _spec_grid_info(
     conformers: list[Atoms],
     slab: Atoms,
@@ -608,14 +636,18 @@ def _spec_grid_info(
     smiles: str | None,
     site_context: SiteContext | None,
     full_slab: Atoms | None = None,
-) -> dict:
+) -> _SpecGridInfo:
     """Compute the spec-enumeration inputs once for both enumerate and estimate."""
     is_dissociative = (
         config.skip_topology_check
         and config.material_type == "slab"
         and _is_dissociable_diatomic(conformers[0])
     )
-    _ctx = _resolve_site_context(slab, config, site_context)
+    _ctx = (
+        site_context
+        if site_context is not None
+        else _get_unique_sites_for_specs(slab, config)
+    )
     unique_sites = _ctx.sites
     use_sites = _ctx.use_sites
     site_indices = (
@@ -630,31 +662,32 @@ def _spec_grid_info(
     binders = geom._binding_atom_candidates(symbols)
     flat_aromatic = _is_flat_aromatic(shape, smiles, symbols)
 
-    hollow_pairs: list = []
+    n_hollow_pairs = 0
     if is_dissociative:
         existing_ads_pos = None
         working_slab = full_slab if full_slab is not None else slab
         if full_slab is not None and len(full_slab) > len(slab):
             existing_ads_pos = full_slab.get_positions()[len(slab) :]
-        hollow_pairs = _get_hollow_site_pairs(
-            working_slab,
-            config,
-            slab_for_sites=slab,
-            existing_adsorbate_positions=existing_ads_pos,
+        n_hollow_pairs = len(
+            _get_hollow_site_pairs(
+                working_slab,
+                config,
+                slab_for_sites=slab,
+                existing_adsorbate_positions=existing_ads_pos,
+            )
         )
 
-    return {
-        "is_dissociative": is_dissociative,
-        "unique_sites": unique_sites,
-        "use_sites": use_sites,
-        "site_indices": site_indices,
-        "shape": shape,
-        "symbols": symbols,
-        "n_binders": len(binders),
-        "flat_aromatic": flat_aromatic,
-        "hollow_pairs": hollow_pairs,
-        "n_hollow_pairs": len(hollow_pairs),
-    }
+    return _SpecGridInfo(
+        is_dissociative=is_dissociative,
+        unique_sites=unique_sites,
+        use_sites=use_sites,
+        site_indices=site_indices,
+        shape=shape,
+        symbols=symbols,
+        n_binders=len(binders),
+        flat_aromatic=flat_aromatic,
+        n_hollow_pairs=n_hollow_pairs,
+    )
 
 
 def enumerate_placement_specs(
@@ -685,32 +718,32 @@ def enumerate_placement_specs(
     info = _spec_grid_info(
         conformers, slab, config, smiles, site_context, full_slab=full_slab
     )
-    unique_sites = info["unique_sites"]
-    use_sites = info["use_sites"]
+    unique_sites = info.unique_sites
+    use_sites = info.use_sites
 
     def site_type_for(site_idx: int) -> str | None:
-        if info["is_dissociative"]:
+        if info.is_dissociative:
             return "hollow"
         if not use_sites or site_idx < 0 or site_idx >= len(unique_sites):
             return None
         return str(unique_sites[site_idx]["site_type"])
 
     parallel_fraction = config.flat_aromatic_parallel_fraction
-    if config.adaptive_parallel_fraction and info["flat_aromatic"]:
-        parallel_fraction = _estimate_parallel_fraction(info["symbols"], smiles)
+    if config.adaptive_parallel_fraction and info.flat_aromatic:
+        parallel_fraction = _estimate_parallel_fraction(info.symbols, smiles)
 
     return policy.build_batch_placement_specs(
         n_conformers=len(conformers),
-        site_indices=info["site_indices"],
+        site_indices=info.site_indices,
         site_type_for_index=site_type_for,
-        shape=info["shape"],
-        n_binders=info["n_binders"],
-        flat_aromatic=info["flat_aromatic"],
+        shape=info.shape,
+        n_binders=info.n_binders,
+        flat_aromatic=info.flat_aromatic,
         parallel_fraction=parallel_fraction,
         n_desired=n_desired,
         filter_spec=filter_spec,
-        dissociative=info["is_dissociative"],
-        n_hollow_pairs=info["n_hollow_pairs"],
+        dissociative=info.is_dissociative,
+        n_hollow_pairs=info.n_hollow_pairs,
         seed=eff_seed,
     )
 
@@ -731,12 +764,12 @@ def estimate_placement_spec_capacity(
     )
     return policy.max_batch_placement_specs(
         n_conformers=len(conformers),
-        site_indices=info["site_indices"],
-        shape=info["shape"],
-        n_binders=info["n_binders"],
-        flat_aromatic=info["flat_aromatic"],
-        dissociative=info["is_dissociative"],
-        n_hollow_pairs=info["n_hollow_pairs"],
+        site_indices=info.site_indices,
+        shape=info.shape,
+        n_binders=info.n_binders,
+        flat_aromatic=info.flat_aromatic,
+        dissociative=info.is_dissociative,
+        n_hollow_pairs=info.n_hollow_pairs,
     )
 
 
@@ -765,25 +798,11 @@ def distribute_placement_budget(
     complexities: dict[str, float],
     total_budget: int,
 ) -> dict[str, int]:
-    """Distribute *total_budget* placements across molecules proportionally.
+    """Split *total_budget* across molecules in proportion to complexity scores.
 
-    Molecules with larger complexity scores (more orientations / binding atoms /
-    conformers) receive more placements because their search space is wider.
-    Every molecule is guaranteed at least one placement.  The allocations sum
-    to exactly *total_budget* after largest-remainder rounding.
-
-    Parameters
-    ----------
-    complexities:
-        Mapping of ``{molecule_name: complexity_score}`` where each score is a
-        positive float (e.g. from :func:`estimate_molecule_complexity`).
-    total_budget:
-        Total number of placements to distribute.
-
-    Returns
-    -------
-    dict[str, int]
-        Placement counts per molecule summing to *total_budget*.
+    Each molecule gets at least one placement; counts sum to *total_budget*
+    (largest-remainder rounding). Scores are typically from
+    :func:`estimate_molecule_complexity`.
     """
     if not complexities:
         return {}
@@ -797,24 +816,21 @@ def distribute_placement_budget(
             f"({len(names)}); cannot guarantee every molecule at least 1 placement"
         )
 
-    scores = [max(1.0, float(complexities[n])) for n in names]
+    scores = [max(1.0, float(complexities[name])) for name in names]
     total_score = sum(scores)
 
-    # Initial allocation: floor of proportional share, minimum 1
-    raw = [max(1, int(s / total_score * total_budget)) for s in scores]
+    def _share(score: float) -> float:
+        return score / total_score * total_budget
+
+    raw = [max(1, int(_share(score))) for score in scores]
     remainder = total_budget - sum(raw)
 
     if remainder != 0:
-        # Largest-remainder method: sort by fractional excess descending
-        fractions = [
-            s / total_score * total_budget - max(1, int(s / total_score * total_budget))
-            for s in scores
-        ]
+        fractions = [_share(score) - max(1, int(_share(score))) for score in scores]
         order = sorted(range(len(names)), key=lambda i: fractions[i], reverse=True)
         for i in range(abs(remainder)):
             idx = order[i % len(order)]
             raw[idx] += 1 if remainder > 0 else -1
-            # Never drop below 1
             if raw[idx] < 1:
                 raw[idx] = 1
 
@@ -866,8 +882,11 @@ def generate_placement_from_spec_with_reason(
             slab_for_sites=slab_for_sites,
         )
 
-    # Resolve site context once to avoid redundant Voronoi computation.
-    resolved_ctx = _resolve_site_context(slab, config, site_context)
+    resolved_ctx = (
+        site_context
+        if site_context is not None
+        else _get_unique_sites_for_specs(slab, config)
+    )
 
     adsorbate = conformers[spec.conformer_index % len(conformers)].copy()
 
@@ -917,38 +936,7 @@ def generate_placement_from_descriptor(
     ):
         logger.warning("Descriptor replay requires quaternion components")
         return None
-    x_abs = float(descriptor.x_abs)
-    y_abs = float(descriptor.y_abs)
-    zf = float(descriptor.z_fraction)
-    quat = np.array(
-        [
-            float(descriptor.quat_w),
-            float(descriptor.quat_x),
-            float(descriptor.quat_y),
-            float(descriptor.quat_z),
-        ],
-        dtype=float,
-    )
-    pose = PlacementPose(
-        conformer_index=descriptor.conformer_index,
-        site_index=descriptor.site_index,
-        site_type=descriptor.site_type,
-        placement_index=descriptor.placement_index,
-        quat_w=float(quat[0]),
-        quat_x=float(quat[1]),
-        quat_y=float(quat[2]),
-        quat_z=float(quat[3]),
-        x_abs=x_abs,
-        y_abs=y_abs,
-        z_fraction=zf,
-        z_abs=float(descriptor.z_abs),
-        orientation_type=descriptor.orientation_type,
-        face_flip=descriptor.face_flip,
-        en_atom_index=descriptor.en_atom_index,
-        tilt_deg=descriptor.tilt_deg,
-        azimuth_deg=descriptor.azimuth_deg,
-        azimuth_in_plane_deg=descriptor.azimuth_in_plane_deg,
-    )
+    pose = _pose_from_descriptor(descriptor)
     result = generate_placement_from_pose(
         pose, conformers, slab, config, site_context=site_context
     )
@@ -983,7 +971,6 @@ def _get_hollow_site_pairs(
     if len(hollow_sites) < 2:
         return []
 
-    # Filter out occupied sites
     if (
         existing_adsorbate_positions is not None
         and len(existing_adsorbate_positions) > 0
@@ -1008,12 +995,9 @@ def _get_hollow_site_pairs(
     max_adjacent_sep = _DISSOCIATIVE_MAX_ADJACENT_SEP
     surface_z = float(np.max(sites_slab.get_positions()[:, 2]))
 
-    # Build 3D positions for MIC distance computation.
     site_3d = np.array([np.append(h, surface_z) for h in hollow_sites])
 
-    # KDTree pre-filter: only pairs within max_adjacent_sep in Cartesian
-    # distance are candidates.  This is an upper bound on MIC distance so
-    # all valid pairs are retained, but most distant pairs are pruned.
+    # Lazy import: optional dependency, avoid import-time cost.
     from scipy.spatial import KDTree as _KDTree
 
     tree = _KDTree(site_3d)
@@ -1048,7 +1032,6 @@ def _generate_dissociative_placement_from_spec(
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
 
-    # Compute existing adsorbate positions for occupied site filtering
     existing_ads_pos = None
     if slab_for_sites is not None and len(slab) > len(slab_for_sites):
         existing_ads_pos = slab.get_positions()[len(slab_for_sites) :]
@@ -1083,6 +1066,8 @@ def _generate_dissociative_placement_from_spec(
         min_distance=config.min_initial_distance,
         min_contact_ratio=config.min_contact_ratio,
         max_initial_distance=config.max_initial_distance,
+        reject_vdw_overlaps=config.reject_vdw_overlaps,
+        vdw_overlap_scale=config.vdw_overlap_scale,
     )
     if not ok:
         return None, "initial_distance_or_site_constraints"

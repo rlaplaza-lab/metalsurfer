@@ -12,6 +12,7 @@ from metalsurfer.config import AdsorptionConfig
 from metalsurfer.ml.bayesian import (
     build_candidate_features,
     build_spec_features_geometry_aware,
+    ei_scores,
     lcb_scores,
     predict_with_uncertainty,
     score_and_select,
@@ -117,6 +118,13 @@ class TestSurrogate:
         assert mu.shape == (30,)
         assert sigma.shape == (30,)
 
+    def test_train_surrogate_rejects_sample_weight_for_non_tree(self):
+        X, y = _make_synthetic_training_data(20)
+        w = np.ones(20, dtype=float)
+        for sur in ("ridge", "gradient_boost"):
+            with pytest.raises(ValueError, match="sample_weight"):
+                train_surrogate(X, y, surrogate=sur, sample_weight=w)
+
 
 # ---------------------------------------------------------------------------
 # LCB acquisition (lower confidence bound for minimisation)
@@ -124,6 +132,15 @@ class TestSurrogate:
 
 
 class TestAcquisition:
+    def test_ei_scores_zero_sigma_is_deterministic_improvement(self):
+        """When sigma=0, EI reduces to max(0, f_best - mu) (see ei_scores)."""
+        mu = np.array([1.0, 2.0, -0.5])
+        sigma = np.array([0.0, 0.0, 0.0])
+        f_best = 0.0
+        ei = ei_scores(mu, sigma, f_best=f_best, xi=1e-6)
+        expected = np.maximum(0.0, f_best - mu)
+        np.testing.assert_allclose(ei, expected, rtol=0, atol=1e-5)
+
     def test_lcb_scores_shape(self):
         mu = np.array([1.0, 2.0, 3.0])
         sigma = np.array([0.5, 0.5, 0.5])

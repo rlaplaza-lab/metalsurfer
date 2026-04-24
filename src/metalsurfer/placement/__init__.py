@@ -6,6 +6,7 @@ placement of adsorbates on surface sites.
 """
 
 from . import generators, geometry, sites
+from ._material import material_aware_pbc
 
 # Public API
 __all__ = [
@@ -14,6 +15,7 @@ __all__ = [
     "classify_adsorbate_orientation",
     "detect_material_type",
     "distribute_placement_budget",
+    "material_aware_pbc",
     "enumerate_placement_specs",
     "estimate_molecule_complexity",
     "estimate_placement_spec_capacity",
@@ -46,15 +48,3 @@ get_hollow_sites_for_adatoms = sites.get_hollow_sites_for_adatoms
 get_symmetry_aware_sites = sites.get_symmetry_aware_sites
 get_symmetry_info = sites.get_symmetry_info
 get_unified_sites = sites.get_unified_sites
-
-# Internal symbols used by tests
-_classify_molecule_shape = geometry._classify_molecule_shape
-_cluster_equivalent_sites = sites._cluster_equivalent_sites
-_compute_site_z_base = sites._compute_site_z_base
-_get_site_surface_radii = sites._get_site_surface_radii
-_is_flat_aromatic = generators._is_flat_aromatic
-_is_flat_aromatic_with_en = generators._is_flat_aromatic_with_en
-_is_dissociable_diatomic = generators._is_dissociable_diatomic
-_get_hollow_site_pairs = generators._get_hollow_site_pairs
-_random_rotation_matrix = geometry._random_rotation_matrix
-material_aware_pbc = geometry.material_aware_pbc

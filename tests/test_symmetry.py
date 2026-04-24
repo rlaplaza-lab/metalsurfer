@@ -358,3 +358,18 @@ def test_angle_tolerance_passes_to_spglib():
         angle_tolerance=5.0,
     )
     assert an.get_symmetry_info()["spacegroup_number"] == 225
+
+
+def test_get_symmetry_aware_sites_precomputed_raw_matches_internal_fetch():
+    """Passing *raw_sites* should match calling :func:`get_unified_sites` internally."""
+    slab = make_slab()
+    raw = get_unified_sites(slab, material_type="slab")
+    assert len(raw) >= 1
+    with_pre = get_symmetry_aware_sites(
+        slab, material_type="slab", raw_sites=raw, symmetry_tolerance=0.1
+    )
+    without = get_symmetry_aware_sites(
+        slab, material_type="slab", symmetry_tolerance=0.1
+    )
+    assert with_pre is not None and without is not None
+    assert len(with_pre) == len(without)

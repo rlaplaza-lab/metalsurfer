@@ -222,9 +222,10 @@ def feature_importance(
     """Extract feature importance from a trained model.
 
     For RandomForest uses built-in ``feature_importances_``; for linear
-    models uses coefficient magnitudes; for HistGradientBoosting (or any
-    other model lacking direct importances), falls back to
-    ``permutation_importance`` when ``X`` and ``y`` are provided.
+    models uses coefficient magnitudes; for HistGradientBoosting, pass
+    ``X`` and ``y`` so ``permutation_importance`` can be used. Otherwise
+    importances are unavailable and an empty DataFrame is returned (with
+    a warning).
 
     Returns a DataFrame sorted by importance (descending).
     """

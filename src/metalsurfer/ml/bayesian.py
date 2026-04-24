@@ -46,7 +46,10 @@ def train_surrogate(
 ) -> Pipeline:
     """Fit a surrogate on observed placement data.
 
-    Returns a scikit-learn Pipeline (scaler + regressor).
+    Tree ensembles (``random_forest``, ``extra_trees``) return a single-step
+    ``Pipeline`` with a regressor only. ``gradient_boost`` and ``ridge`` return
+    a ``scaler`` + ``regressor`` pipeline from :func:`regression.train_model`.
+    Per-sample ``sample_weight`` is supported only for the tree ensembles.
     """
     if surrogate in ("random_forest", "extra_trees"):
         reg = tree_regressor_for_bayesian_surrogate(
@@ -57,9 +60,9 @@ def train_surrogate(
         )
     elif surrogate in ("gradient_boost", "ridge"):
         if sample_weight is not None:
-            logger.debug(
-                "sample_weight ignored for surrogate=%s (tree models only)",
-                surrogate,
+            raise ValueError(
+                "sample_weight is only supported for tree surrogates "
+                f"(random_forest, extra_trees), not {surrogate!r}"
             )
         return train_model(
             X,

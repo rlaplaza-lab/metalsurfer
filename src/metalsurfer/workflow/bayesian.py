@@ -34,6 +34,27 @@ from .shared import (
 logger = logging.getLogger(__name__)
 
 
+def _train_surrogate_for_bo(
+    X: pd.DataFrame | np.ndarray,
+    y: np.ndarray,
+    *,
+    config: AdsorptionConfig,
+    sample_weight: np.ndarray | None,
+):
+    """Fit BO surrogate; per-sample weights apply only to tree ensemble surrogates."""
+    sw = sample_weight
+    if sw is not None and config.bo_surrogate in ("gradient_boost", "ridge"):
+        sw = None
+    return train_surrogate(
+        X,
+        y,
+        surrogate=config.bo_surrogate,
+        n_estimators=100,
+        random_state=config.seed,
+        sample_weight=sw,
+    )
+
+
 def process_molecule_bayesian(
     smiles: str,
     molecule_name: str,
@@ -368,12 +389,11 @@ def process_molecule_bayesian(
                         / (np.sum(transfer_weights) + float(n_current))
                     )
 
-                    base_model = train_surrogate(
+                    base_model = _train_surrogate_for_bo(
                         X_current,
                         y_current,
-                        surrogate=config.bo_surrogate,
-                        n_estimators=100,
-                        random_state=config.seed,
+                        config=config,
+                        sample_weight=None,
                     )
                     base_mae = float(
                         np.mean(np.abs(base_model.predict(X_current) - y_current))
@@ -384,12 +404,10 @@ def process_molecule_bayesian(
                     sample_weight = np.concatenate(
                         [np.ones(n_current, dtype=float), transfer_weights], axis=0
                     )
-                    transfer_model = train_surrogate(
+                    transfer_model = _train_surrogate_for_bo(
                         X_train,
                         y_train,
-                        surrogate=config.bo_surrogate,
-                        n_estimators=100,
-                        random_state=config.seed,
+                        config=config,
                         sample_weight=sample_weight,
                     )
                     transfer_mae = float(
@@ -414,12 +432,10 @@ def process_molecule_bayesian(
                         surrogate = transfer_model
 
             if surrogate is None or transfer_disabled:
-                surrogate = train_surrogate(
+                surrogate = _train_surrogate_for_bo(
                     X_train,
                     y_train,
-                    surrogate=config.bo_surrogate,
-                    n_estimators=100,
-                    random_state=config.seed,
+                    config=config,
                     sample_weight=sample_weight,
                 )
 

@@ -9,8 +9,7 @@ without creating a circular dependency.
 import numpy as np
 from ase import Atoms
 
-# Slab vacuum detection: atom z-extent / cell-c-length < this → classify as slab
-_SLAB_VACUUM_FRACTION = 0.70
+from ._constants import _SLAB_VACUUM_FRACTION
 
 
 def detect_material_type(atoms: Atoms) -> str:
@@ -58,14 +57,21 @@ def material_aware_pbc(slab: Atoms) -> list[bool]:
     return [True, True, False]
 
 
-def _resolve_material_type(
+def material_type_for_placement(
     site: dict[str, object] | None,
-    fallback: str = "slab",
+    *,
+    when_no_site: str,
 ) -> str:
-    """Resolve material type from a site dictionary with a deterministic fallback."""
+    """Return ``site['material_type']`` or *when_no_site* when *site* is None.
+
+    When *site* is provided, it must be a site dict from
+    :func:`sites.get_unified_sites` (or equivalent) including ``material_type``.
+    """
     if site is None:
-        return fallback
+        return when_no_site
     material_type = site.get("material_type")
     if material_type is None:
-        return fallback
+        raise ValueError(
+            "placement site dict must include 'material_type' (use get_unified_sites)"
+        )
     return str(material_type)

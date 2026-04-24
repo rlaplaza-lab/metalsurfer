@@ -29,11 +29,7 @@ from ._constants import (
     _PORE_THRESHOLD_ANGSTROM,
     _VORONOI_DEDUP_TOLERANCE,
 )
-from ._material import (  # noqa: F401
-    _SLAB_VACUUM_FRACTION,
-    _resolve_material_type,
-    detect_material_type,
-)
+from ._material import detect_material_type, material_type_for_placement
 from .geometry import _get_covalent_radius
 
 logger = logging.getLogger(__name__)
@@ -124,7 +120,7 @@ def _voronoi_sites(
     try:
         vor = Voronoi(extended)
     except (QhullError, ValueError, RuntimeError) as exc:
-        logger.warning("Voronoi computation failed (%s); returning no sites", exc)
+        logger.debug("Voronoi computation failed (%s); returning no vertices", exc)
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
 
     raw_vertices = vor.vertices
@@ -485,6 +481,56 @@ def _compute_local_normal(
     return vec / norm
 
 
+def _build_site_records(
+    vertices: np.ndarray,
+    nn_dists: np.ndarray,
+    positions: np.ndarray,
+    symbols: list[str],
+    local_tree: KDTree,
+    material_type: str,
+    pore_threshold: float,
+    *,
+    use_delaunay: bool,
+    delaunay_tri: Delaunay | None,
+    top_positions: np.ndarray | None,
+    top_atom_indices: np.ndarray | None,
+) -> list[dict[str, object]]:
+    sites: list[dict[str, object]] = []
+    for i, vertex in enumerate(vertices):
+        if (
+            use_delaunay
+            and delaunay_tri is not None
+            and top_positions is not None
+            and top_atom_indices is not None
+        ):
+            site_type, nearest_idx = _delaunay_site_classification(
+                vertex, top_positions, top_atom_indices, delaunay_tri, positions
+            )
+        else:
+            site_type, nearest_idx = _classify_voronoi_site(
+                vertex, positions, tree=local_tree, pore_threshold=pore_threshold
+            )
+        env_fingerprint = (
+            tuple(sorted(symbols[j] for j in nearest_idx if j < len(symbols))),
+            site_type,
+        )
+        sites.append(
+            {
+                "xy": vertex[:2].copy(),
+                "z": float(vertex[2]),
+                "xyz": vertex.copy(),
+                "site_type": site_type,
+                "slab_indices": nearest_idx,
+                "normal": _compute_local_normal(vertex, positions, tree=local_tree),
+                "nn_distance": float(nn_dists[i]) if i < len(nn_dists) else None,
+                "site_source": "voronoi",
+                "material_type": material_type,
+                "env_fingerprint": env_fingerprint,
+            }
+        )
+    return sites
+
+
 # ---------------------------------------------------------------------------
 # Unified site dict builder
 # ---------------------------------------------------------------------------
@@ -569,10 +615,12 @@ def get_unified_sites(
 
     if len(vertices) == 0:
         logger.warning(
-            "No Voronoi sites found for %d atoms (probe_radius=%.2f, max_distance=%.2f)",
+            "No accessible Voronoi sites for %d-atom structure "
+            "(probe_radius=%.2f, max_distance=%.2f, material_type=%r)",
             len(atoms),
             probe_radius,
             max_site_distance,
+            material_type,
         )
         return []
 
@@ -707,51 +755,19 @@ def get_unified_sites(
         else:
             _use_delaunay = False
 
-    sites: list[dict[str, object]] = []
-    for i, vertex in enumerate(vertices):
-        if (
-            _use_delaunay
-            and _delaunay_tri is not None
-            and _top_positions is not None
-            and _top_atom_indices is not None
-        ):
-            site_type, nearest_idx = _delaunay_site_classification(
-                vertex,
-                _top_positions,
-                _top_atom_indices,
-                _delaunay_tri,
-                positions,
-            )
-        else:
-            site_type, nearest_idx = _classify_voronoi_site(
-                vertex,
-                positions,
-                tree=local_tree,
-                pore_threshold=pore_threshold,
-            )
-        normal = _compute_local_normal(vertex, positions, tree=local_tree)
-        # Local environment fingerprint: sorted element symbols of nearest
-        # framework atoms + site type.  Used by _cluster_equivalent_sites to
-        # prevent merging geometrically close sites with different chemical
-        # environments (e.g. atop-Ni vs atop-Pt on an alloy surface).
-        env_fingerprint = (
-            tuple(sorted(symbols[j] for j in nearest_idx if j < len(symbols))),
-            site_type,
-        )
-        sites.append(
-            {
-                "xy": vertex[:2].copy(),
-                "z": float(vertex[2]),
-                "xyz": vertex.copy(),
-                "site_type": site_type,
-                "slab_indices": nearest_idx,
-                "normal": normal,
-                "nn_distance": float(nn_dists[i]) if i < len(nn_dists) else None,
-                "site_source": "voronoi",
-                "material_type": material_type,
-                "env_fingerprint": env_fingerprint,
-            }
-        )
+    sites = _build_site_records(
+        vertices,
+        nn_dists,
+        positions,
+        symbols,
+        local_tree,
+        material_type,
+        pore_threshold,
+        use_delaunay=_use_delaunay,
+        delaunay_tri=_delaunay_tri,
+        top_positions=_top_positions,
+        top_atom_indices=_top_atom_indices,
+    )
 
     # Deterministic ordering: fractional coordinates then site_type
     if np.linalg.det(cell) > 0:
@@ -778,14 +794,13 @@ def get_hollow_sites_for_adatoms(
 ) -> list[np.ndarray]:
     """Hollow/pore site xy positions for adatom placement, deduplicated."""
     raw = get_unified_sites(slab, top_layer_tolerance=top_layer_tolerance)
-    hollow_xy = [
-        np.asarray(s["xy"]) for s in raw if s.get("site_type") in ("hollow", "pore")
-    ]
-    unique: list[np.ndarray] = []
-    for c in hollow_xy:
-        if not any(float(np.linalg.norm(c - u)) < dedup_tolerance for u in unique):
-            unique.append(c)
-    return unique
+    hollow_xy = np.array(
+        [np.asarray(s["xy"]) for s in raw if s.get("site_type") in ("hollow", "pore")]
+    )
+    if len(hollow_xy) == 0:
+        return []
+    keep = _deduplicate_points(hollow_xy, dedup_tolerance)
+    return [np.asarray(xy) for xy in hollow_xy[keep]]
 
 
 # ---------------------------------------------------------------------------
@@ -908,7 +923,7 @@ def _cluster_equivalent_sites(
         return []
 
     n = len(sites)
-    mat_type = _resolve_material_type(sites[0], fallback="slab")
+    mat_type = material_type_for_placement(sites[0], when_no_site="slab")
 
     def _get_xyz(s: dict[str, object]) -> np.ndarray:
         if "xyz" in s:
@@ -1026,28 +1041,37 @@ def get_symmetry_aware_sites(
     max_site_distance: float = 4.0,
     enrich: bool = True,
     site_classification_method: str = "distance_ratio",
-) -> list[dict[str, object]] | None:
+    raw_sites: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
     """Symmetry-reduced adsorption sites using spglib.
 
-    Returns None on failure. Nanoparticles use cluster-in-a-box symmetry.
-    Material type must be explicitly specified.
+    Returns a possibly empty list. On empty input or ``SymmetryAnalysisError``,
+    returns ``[]`` so callers use clustered Voronoi sites from
+    :func:`get_unified_sites` without a separate None branch.
+
+    When *raw_sites* is set, it must be the unclustered output of
+    :func:`get_unified_sites` for this slab and the same parameters as used
+    to build that list; Voronoi is not run again.
     """
     if material_type not in ("slab", "nanoparticle", "porous"):
         raise ValueError(
             f"material_type must be 'slab', 'nanoparticle', or 'porous', got {material_type!r}"
         )
 
-    raw_sites = get_unified_sites(
-        slab,
-        probe_radius=probe_radius,
-        max_site_distance=max_site_distance,
-        top_layer_tolerance=top_layer_tolerance,
-        material_type=material_type,
-        enrich=enrich,
-        site_classification_method=site_classification_method,
-    )
-    if not raw_sites:
-        return None
+    if raw_sites is not None:
+        site_list = raw_sites
+    else:
+        site_list = get_unified_sites(
+            slab,
+            probe_radius=probe_radius,
+            max_site_distance=max_site_distance,
+            top_layer_tolerance=top_layer_tolerance,
+            material_type=material_type,
+            enrich=enrich,
+            site_classification_method=site_classification_method,
+        )
+    if not site_list:
+        return []
 
     sym_mode = "cluster" if material_type == "nanoparticle" else "auto"
     planar_for_symmetry = (material_type == "slab") and _is_top_layer_planar(
@@ -1061,14 +1085,12 @@ def get_symmetry_aware_sites(
             mode=sym_mode,
         )
         return symmetry_analyzer.analyze_site_symmetry(
-            raw_sites,
+            site_list,
             planar=planar_for_symmetry,
         )
     except SymmetryAnalysisError as exc:
-        logger.warning(
-            "Symmetry analysis failed, skipping symmetry-aware sites: %s", exc
-        )
-        return None
+        logger.debug("Symmetry-aware site reduction skipped: %s", exc)
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -1155,7 +1177,7 @@ def _compute_site_z_base(
     """
     z_lo, z_hi = config.placement_z_range
 
-    mat_type = _resolve_material_type(site, fallback="slab")
+    mat_type = material_type_for_placement(site, when_no_site=config.material_type)
 
     # For non-slab materials whose surface_ref is the Voronoi vertex z,
     # tighten the range around the nn_distance to keep the adsorbate in

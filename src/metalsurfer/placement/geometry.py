@@ -8,9 +8,10 @@ import numpy as np
 from ase import Atoms
 from ase.data import atomic_numbers
 from ase.data import covalent_radii as ase_covalent_radii
+from ase.data import vdw_radii as ase_vdw_radii
 from ase.geometry import find_mic
 
-from ._material import material_aware_pbc  # noqa: F401 – re-exported
+from ._material import material_aware_pbc
 
 logger = logging.getLogger(__name__)
 
@@ -131,16 +132,50 @@ def compute_surface_site_frame(normal: np.ndarray) -> np.ndarray:
 
 
 def _get_covalent_radius(symbol: str) -> float | None:
-    try:
-        z = atomic_numbers[symbol]
-        if z < len(ase_covalent_radii):
-            r = float(ase_covalent_radii[z])
-            if r > 0.0:
-                return r
-    except (KeyError, IndexError):
-        pass
-    logger.debug("No covalent radius for symbol %s", symbol)
-    return None
+    z = atomic_numbers.get(symbol)
+    if z is None or z >= len(ase_covalent_radii):
+        return None
+    r = float(ase_covalent_radii[z])
+    return r if r > 0.0 else None
+
+
+def _get_vdw_radius(symbol: str) -> float | None:
+    """Van der Waals radius (Å) for overlap heuristics.
+
+    ASE's tabulated VdW set is sparse for some metals (NaN); in that case we
+    fall back to a covalent-based scale so surface contacts are not ignored.
+    """
+    z = atomic_numbers.get(symbol)
+    if z is None or z >= len(ase_vdw_radii):
+        return None
+    r = float(ase_vdw_radii[z])
+    if r > 0.0 and not np.isnan(r):
+        return r
+    cov = _get_covalent_radius(symbol)
+    if cov is None:
+        return None
+    # Tabulated VdW may be NaN (e.g. some transition metals in ASE). Use a mild
+    # covalent scale so "touching" physisorptive distances (~3+ Å) are not
+    # misclassified as overlaps while still flagging sub-Å spurious approaches.
+    return float(cov * 1.2)
+
+
+def _mol_slab_pairwise_distances(
+    mol_pos: np.ndarray,
+    slab_pos: np.ndarray,
+    cell: np.ndarray,
+    pbc: list[bool],
+) -> np.ndarray:
+    """Minimum-image distances between each mol atom and each slab atom, shape (n_m, n_s)."""
+    m, s = len(mol_pos), len(slab_pos)
+    if m == 0 or s == 0:
+        return np.zeros((m, s))
+    diffs = mol_pos[:, None, :] - slab_pos[None, :, :]
+    if np.linalg.det(cell) > 0 and np.any(pbc):
+        diffs_flat = diffs.reshape(-1, 3)
+        _, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
+        return mic_dists.reshape(m, s)
+    return np.linalg.norm(diffs, axis=2)
 
 
 def _random_rotation_matrix(rng: random.Random) -> np.ndarray:
@@ -313,7 +348,6 @@ def _flat_orientation_from_principal_axis(
 def _surface_aligned_rotation(
     ads_pos: np.ndarray,
     normal: np.ndarray,
-    placement_id: int,
     symbols: list[str] | None = None,
     en_atom_index: int | None = None,
 ) -> np.ndarray:
@@ -354,7 +388,7 @@ def _surface_aligned_rotation(
                 R = _rotation_to_align_vector_to_target(-best_vec, normal)
                 pos = (R @ pos.T).T
     else:
-        pos, _ = _principal_axis_rotation(pos, normal, placement_id)
+        pos, _ = _principal_axis_rotation(pos, normal)
         if pos is None:
             pos = np.asarray(ads_pos, dtype=float).copy() - com
     return pos
@@ -376,7 +410,6 @@ def _rotation_with_tilt(
 def _principal_axis_rotation(
     adsorbate_positions: np.ndarray,
     normal_vector: np.ndarray,
-    placement_id: int,
 ) -> tuple[np.ndarray | None, float]:
     """Rotate the adsorbate around its principal axes to maximise clearance.
 
@@ -429,6 +462,102 @@ def _principal_axis_rotation(
         best_positions -= np.mean(best_positions, axis=0)
 
     return best_positions, best_score
+
+
+def detect_vdw_overlaps(
+    molecule_atoms: Atoms,
+    slab: Atoms,
+    vdw_scale: float = 1.0,
+    exclude_slab_atoms: int | None = None,
+) -> tuple[list[tuple[int, int, float, float]], float]:
+    """Detect VDW overlaps between molecule and slab atoms.
+
+    Returns (overlaps, min_distance) where overlaps entries are
+    (mol_idx, slab_idx, distance, overlap_amount).
+    """
+    mol_syms = molecule_atoms.get_chemical_symbols()
+    slab_syms = slab.get_chemical_symbols()
+    mol_pos = molecule_atoms.get_positions()
+    if exclude_slab_atoms is not None:
+        slab_pos = slab.get_positions()[:exclude_slab_atoms]
+        slab_syms = slab_syms[:exclude_slab_atoms]
+    else:
+        slab_pos = slab.get_positions()
+
+    # Use the slab's cell and PBC for all MIC distances (adsorbate shares that frame).
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = material_aware_pbc(slab)
+    dists = _mol_slab_pairwise_distances(mol_pos, slab_pos, cell, pbc)
+    min_distance = float(np.min(dists)) if dists.size else float("inf")
+
+    overlaps: list[tuple[int, int, float, float]] = []
+    mol_size, slab_size = dists.shape
+    for i in range(mol_size):
+        for j in range(slab_size):
+            dist = float(dists[i, j])
+            r1 = _get_vdw_radius(mol_syms[i])
+            r2 = _get_vdw_radius(slab_syms[j])
+            if r1 is not None and r2 is not None:
+                vdw_sum = vdw_scale * (r1 + r2)
+                if dist < vdw_sum:
+                    overlaps.append((i, j, dist, vdw_sum - dist))
+    return overlaps, min_distance
+
+
+def calculate_contact_quality(
+    molecule_atoms: Atoms,
+    slab: Atoms,
+    contact_distance_threshold: float = 2.5,
+    exclude_slab_atoms: int | None = None,
+) -> dict[str, float | int]:
+    """Contact metrics: min distance, covalent ratio at closest pair, and pair counts."""
+    mol_syms = molecule_atoms.get_chemical_symbols()
+    slab_syms = slab.get_chemical_symbols()
+    mol_pos = molecule_atoms.get_positions()
+    if exclude_slab_atoms is not None:
+        slab_pos = slab.get_positions()[:exclude_slab_atoms]
+        slab_syms = slab_syms[:exclude_slab_atoms]
+    else:
+        slab_pos = slab.get_positions()
+
+    # Use the slab's cell and PBC for all MIC distances (adsorbate shares that frame).
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = material_aware_pbc(slab)
+    dists = _mol_slab_pairwise_distances(mol_pos, slab_pos, cell, pbc)
+    mol_size, slab_size = dists.shape
+    if mol_size == 0 or slab_size == 0:
+        return {
+            "contact_distance": float("inf"),
+            "contact_ratio": 1.0,
+            "num_contacting_atoms": 0,
+            "num_contact_pairs": 0,
+            "contact_atom_variance": 0.0,
+        }
+
+    flat_idx = int(np.argmin(dists.ravel()))
+    i_closest, j_closest = divmod(flat_idx, slab_size)
+    contact_distance = float(dists[i_closest, j_closest])
+    r1 = _get_covalent_radius(mol_syms[i_closest])
+    r2 = _get_covalent_radius(slab_syms[j_closest])
+    contact_ratio = (
+        contact_distance / (r1 + r2) if (r1 is not None and r2 is not None) else 1.0
+    )
+
+    mask = dists <= contact_distance_threshold
+    contact_pairs = int(np.count_nonzero(mask))
+    contacting_atoms = {int(i) for i in np.where(np.any(mask, axis=1))[0]}
+    contact_distances = dists[mask].ravel().tolist() if contact_pairs else []
+    contact_atom_variance = (
+        float(np.var(contact_distances)) if contact_distances else 0.0
+    )
+
+    return {
+        "contact_distance": contact_distance,
+        "contact_ratio": contact_ratio,
+        "num_contacting_atoms": len(contacting_atoms),
+        "num_contact_pairs": contact_pairs,
+        "contact_atom_variance": contact_atom_variance,
+    }
 
 
 def calculate_min_distance(
@@ -504,6 +633,9 @@ def check_initial_placement_distance(
     min_distance: float = 1.5,
     min_contact_ratio: float = 0.8,
     max_initial_distance: float | None = None,
+    reject_vdw_overlaps: bool = False,
+    vdw_overlap_scale: float = 1.0,
+    exclude_slab_atoms: int | None = None,
 ) -> tuple[bool, float]:
     """Check if the initial placement satisfies distance constraints.
 
@@ -514,20 +646,30 @@ def check_initial_placement_distance(
     (desorption-prone starts). Post-optimization, check_desorption uses
     binding_distance_threshold to reject structures that drifted too far.
 
+    When reject_vdw_overlaps=True, also checks for van der Waals overlaps
+    (harder contact), which catches cases where atoms are too close even if
+    covalent scaling is satisfied. Useful for stricter initial validation.
+
+    exclude_slab_atoms: if set, only consider first N atoms of slab for
+    distance checking (for saturation mode where slab may contain pre-adsorbed
+    atoms). Use len(bare_slab) to exclude previously placed adsorbates.
+
     PBC flags are derived from the slab material type via
     :func:`material_aware_pbc` so that slabs, nanoparticles, and porous
     materials all receive correct periodic-image handling — consistent with
     the post-optimisation desorption check in :mod:`~metalsurfer.filters`.
     """
     mol_syms = molecule_atoms.get_chemical_symbols()
-    slab_syms = slab.get_chemical_symbols()
     mol_pos = molecule_atoms.get_positions()
-    slab_pos = slab.get_positions()
-    cell = (
-        molecule_atoms.get_cell()
-        if hasattr(molecule_atoms, "get_cell")
-        else slab.get_cell()
-    )
+
+    if exclude_slab_atoms is not None:
+        slab_pos = slab.get_positions()[:exclude_slab_atoms]
+        slab_syms = np.array(slab.get_chemical_symbols())[:exclude_slab_atoms]
+    else:
+        slab_pos = slab.get_positions()
+        slab_syms = slab.get_chemical_symbols()
+
+    cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = material_aware_pbc(slab)
 
     actual_min, mol_idx, slab_idx = calculate_min_distance_pair(
@@ -551,4 +693,63 @@ def check_initial_placement_distance(
         return False, actual_min
     if max_initial_distance is not None and actual_min > max_initial_distance:
         return False, actual_min
+
+    # Optional VDW overlap check: stricter contact validation
+    if reject_vdw_overlaps:
+        overlaps, _ = detect_vdw_overlaps(
+            molecule_atoms,
+            slab,
+            vdw_scale=vdw_overlap_scale,
+            exclude_slab_atoms=exclude_slab_atoms,
+        )
+        if overlaps:
+            logger.debug(
+                "VDW overlap detected: %d overlapping atom pairs, max overlap %.3f A",
+                len(overlaps),
+                max(o[3] for o in overlaps),
+            )
+            return False, actual_min
+
     return True, actual_min
+
+
+def check_adsorbate_separation(
+    new_adsorbate: Atoms,
+    pre_adsorbed_positions: np.ndarray,
+    min_separation: float = 2.0,
+    cell: np.ndarray | None = None,
+    pbc: list[bool] | None = None,
+) -> tuple[bool, float]:
+    """Check separation between new adsorbate and pre-adsorbed atoms.
+
+    Used in saturation mode where slab already contains previously placed
+    adsorbates. Ensures new placements don't collide with existing ones.
+
+    Args:
+        new_adsorbate: Atoms object representing new molecule to place
+        pre_adsorbed_positions: (N, 3) array of pre-adsorbed atom positions
+        min_separation: minimum allowed distance (Å) between atoms
+        cell: unit cell (required if pbc is used)
+        pbc: periodic boundary conditions [x, y, z]
+
+    Returns:
+        (ok, min_distance) where ok=True if separation is adequate
+    """
+    if len(pre_adsorbed_positions) == 0:
+        return True, float("inf")
+
+    new_pos = new_adsorbate.get_positions()
+
+    cell_arr = np.asarray(cell, dtype=float) if cell is not None else np.eye(3)
+    pbc_list = pbc if pbc is not None else [False, False, False]
+    if pbc is not None and cell is not None and np.linalg.det(cell_arr) > 0:
+        dmat = _mol_slab_pairwise_distances(
+            new_pos, pre_adsorbed_positions, cell_arr, list(pbc_list)
+        )
+        min_dist = float(np.min(dmat)) if dmat.size else float("inf")
+    else:
+        diffs = new_pos[:, None, :] - pre_adsorbed_positions[None, :, :]
+        min_dist = float(np.min(np.linalg.norm(diffs, axis=2)))
+
+    ok = min_dist >= min_separation
+    return ok, min_dist

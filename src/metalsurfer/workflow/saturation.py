@@ -1,10 +1,10 @@
 """Sequential and multi-molecule saturation workflow entry points."""
 
 import copy
-import dataclasses as _dc
 import logging
 import time
-from typing import Any
+from dataclasses import replace
+from typing import Any, NamedTuple
 
 from ase import Atoms
 
@@ -22,7 +22,7 @@ from ..models import (
     ScreeningResult,
 )
 from ..optimization import clear_autobatcher_cache
-from ..placement import distribute_placement_budget
+from ..placement import distribute_placement_budget, estimate_molecule_complexity
 from ..surfaces import SlabContainer, coerce_slab_container
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian
@@ -52,7 +52,7 @@ def _saturation_symmetry_broken_vs_reference(
         )
         return True
     if broken:
-        logger.info("%s: symmetry broken; using full site sampling", log_context)
+        logger.debug("%s: symmetry broken; using full site sampling", log_context)
     return broken
 
 
@@ -90,6 +90,39 @@ def _as_int(value: object, default: int = 0) -> int:
         return default
 
 
+class _BoTransferStepFields(NamedTuple):
+    bo_transfer_used: bool
+    bo_transfer_disabled_reason: str | None
+    bo_transfer_weight_share: float
+    bo_transfer_bad_rounds: int
+    bo_transfer_last_mae_delta: float | None
+
+
+def _bo_transfer_fields_from_info(
+    transfer_info: dict[str, object],
+) -> _BoTransferStepFields:
+    """Map BO transfer_info dict to step result fields (single- and multi-molecule paths)."""
+    return _BoTransferStepFields(
+        bo_transfer_used=bool(transfer_info.get("transfer_used", False)),
+        bo_transfer_disabled_reason=(
+            str(transfer_info["transfer_disabled_reason"])
+            if transfer_info.get("transfer_disabled_reason") is not None
+            else None
+        ),
+        bo_transfer_weight_share=float(
+            _as_float(transfer_info.get("transfer_weight_share", 0.0))
+        ),
+        bo_transfer_bad_rounds=int(
+            _as_int(transfer_info.get("transfer_bad_rounds", 0))
+        ),
+        bo_transfer_last_mae_delta=(
+            _as_float(transfer_info["transfer_last_mae_delta"])
+            if transfer_info.get("transfer_last_mae_delta") is not None
+            else None
+        ),
+    )
+
+
 def _validate_distinct_bo_memories(
     bo_memories: dict[str, BOStepMemory | None],
     *,
@@ -108,6 +141,15 @@ def _validate_distinct_bo_memories(
                 "received the same BOStepMemory object"
             )
         seen_by_id[id(memory)] = molecule
+
+
+def _n_at_saturation_from_steps(steps: list[Any]) -> int:
+    if not steps:
+        return 0
+    last_step = steps[-1]
+    return last_step.n_molecules_on_slab + (
+        1 if last_step.best_result.energy_adsorption < 0 else 0
+    )
 
 
 def _run_multi_molecule_saturation(
@@ -142,9 +184,7 @@ def _run_multi_molecule_saturation(
         conformers, conformer_energies = result
         conformer_cache[mol] = (conformers, conformer_energies)
 
-        from ..placement import generators as _gen
-
-        complexities[mol] = _gen.estimate_molecule_complexity(
+        complexities[mol] = estimate_molecule_complexity(
             conformers, base_slab, config, smi
         )
 
@@ -239,7 +279,7 @@ def _run_multi_molecule_saturation(
         for mol in active_molecules:
             smi = active_smiles[mol]
             mol_budget = budgets[mol]
-            mol_config = _dc.replace(config, num_placements=mol_budget)
+            mol_config = replace(config, num_placements=mol_budget)
 
             transfer_info: dict[str, object] = {}
             if config.bo_enabled:
@@ -323,38 +363,18 @@ def _run_multi_molecule_saturation(
         best_overall = min(all_results_flat, key=lambda r: r.energy_adsorption)
         winning_molecule = best_overall.molecule
 
-        bo_transfer_used = {
-            mol: bool(per_molecule_bo_transfer[mol].get("transfer_used", False))
-            for mol in active_molecules
-        }
-        bo_transfer_disabled_reason: dict[str, str | None] = {
-            mol: (
-                str(per_molecule_bo_transfer[mol]["transfer_disabled_reason"])
-                if per_molecule_bo_transfer[mol].get("transfer_disabled_reason")
-                is not None
-                else None
-            )
-            for mol in active_molecules
-        }
-        bo_transfer_weight_share = {
-            mol: _as_float(
-                per_molecule_bo_transfer[mol].get("transfer_weight_share", 0.0)
-            )
-            for mol in active_molecules
-        }
-        bo_transfer_bad_rounds = {
-            mol: _as_int(per_molecule_bo_transfer[mol].get("transfer_bad_rounds", 0))
-            for mol in active_molecules
-        }
-        bo_transfer_last_mae_delta: dict[str, float | None] = {
-            mol: (
-                _as_float(per_molecule_bo_transfer[mol]["transfer_last_mae_delta"])
-                if per_molecule_bo_transfer[mol].get("transfer_last_mae_delta")
-                is not None
-                else None
-            )
-            for mol in active_molecules
-        }
+        bo_transfer_used: dict[str, bool] = {}
+        bo_transfer_disabled_reason: dict[str, str | None] = {}
+        bo_transfer_weight_share: dict[str, float] = {}
+        bo_transfer_bad_rounds: dict[str, int] = {}
+        bo_transfer_last_mae_delta: dict[str, float | None] = {}
+        for mol in active_molecules:
+            f = _bo_transfer_fields_from_info(per_molecule_bo_transfer[mol])
+            bo_transfer_used[mol] = f.bo_transfer_used
+            bo_transfer_disabled_reason[mol] = f.bo_transfer_disabled_reason
+            bo_transfer_weight_share[mol] = f.bo_transfer_weight_share
+            bo_transfer_bad_rounds[mol] = f.bo_transfer_bad_rounds
+            bo_transfer_last_mae_delta[mol] = f.bo_transfer_last_mae_delta
 
         steps.append(
             MultiMolSaturationStepResult(
@@ -390,18 +410,10 @@ def _run_multi_molecule_saturation(
 
         current_slab = SlabContainer(best_overall.atoms.copy())
 
-    if steps:
-        last_step = steps[-1]
-        n_at_saturation = last_step.n_molecules_on_slab + (
-            1 if last_step.best_result.energy_adsorption < 0 else 0
-        )
-    else:
-        n_at_saturation = 0
-
     return MultiMolSaturationRunResult(
         molecules=molecules,
         steps=steps,
-        n_molecules_at_saturation=n_at_saturation,
+        n_molecules_at_saturation=_n_at_saturation_from_steps(steps),
         final_slab_atoms=current_slab.atoms.copy(),
         molecule_counts=molecule_counts,
     )
@@ -587,6 +599,7 @@ def run_saturation_screening(
                     break
 
                 best = min(mol_results, key=lambda r: r.energy_adsorption)
+                bt = _bo_transfer_fields_from_info(transfer_info)
                 steps.append(
                     SaturationStepResult(
                         step=step,
@@ -595,25 +608,11 @@ def run_saturation_screening(
                         best_result=best,
                         all_results=mol_results,
                         bo_transfer_enabled=bool(config.bo_transfer_enabled),
-                        bo_transfer_used=bool(
-                            transfer_info.get("transfer_used", False)
-                        ),
-                        bo_transfer_disabled_reason=(
-                            str(transfer_info["transfer_disabled_reason"])
-                            if transfer_info.get("transfer_disabled_reason") is not None
-                            else None
-                        ),
-                        bo_transfer_weight_share=float(
-                            _as_float(transfer_info.get("transfer_weight_share", 0.0))
-                        ),
-                        bo_transfer_bad_rounds=int(
-                            _as_int(transfer_info.get("transfer_bad_rounds", 0))
-                        ),
-                        bo_transfer_last_mae_delta=(
-                            _as_float(transfer_info["transfer_last_mae_delta"])
-                            if transfer_info.get("transfer_last_mae_delta") is not None
-                            else None
-                        ),
+                        bo_transfer_used=bt.bo_transfer_used,
+                        bo_transfer_disabled_reason=bt.bo_transfer_disabled_reason,
+                        bo_transfer_weight_share=bt.bo_transfer_weight_share,
+                        bo_transfer_bad_rounds=bt.bo_transfer_bad_rounds,
+                        bo_transfer_last_mae_delta=bt.bo_transfer_last_mae_delta,
                     )
                 )
                 ds_logger.add_results(mol_results, smiles=smi, surface_id=surface_type)
@@ -636,17 +635,12 @@ def run_saturation_screening(
                 current_slab = SlabContainer(best.atoms.copy())
 
             if steps:
-                last_step = steps[-1]
-                n_at_saturation = last_step.n_molecules_on_slab + (
-                    1 if last_step.best_result.energy_adsorption < 0 else 0
-                )
-                final_atoms = current_slab.atoms.copy()
                 all_saturation_results.append(
                     SaturationRunResult(
                         molecule=mol,
                         steps=steps,
-                        n_molecules_at_saturation=n_at_saturation,
-                        final_slab_atoms=final_atoms,
+                        n_molecules_at_saturation=_n_at_saturation_from_steps(steps),
+                        final_slab_atoms=current_slab.atoms.copy(),
                     )
                 )
 

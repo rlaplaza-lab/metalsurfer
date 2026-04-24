@@ -14,7 +14,9 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from metalsurfer.config import AdsorptionConfig
 from metalsurfer.models import PlacementDescriptor, ScreeningResult
+from metalsurfer.surface_prep import SlabContainer
 
 
 def _clear_cuda_for_gpu_test() -> None:
@@ -58,6 +60,95 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Run a test in an isolated temporary working directory."""
     monkeypatch.chdir(tmp_path)
     return tmp_path
+
+
+@pytest.fixture
+def slab_container() -> SlabContainer:
+    """Default slab container for saturation tests."""
+    return SlabContainer(make_slab())
+
+
+@pytest.fixture
+def default_adsorption_config() -> AdsorptionConfig:
+    """Default config for workflow tests; override fields per test."""
+    return AdsorptionConfig()
+
+
+def adsorption_config_factory(**overrides: object) -> AdsorptionConfig:
+    """Build AdsorptionConfig with compact test overrides."""
+    return AdsorptionConfig(**overrides)
+
+
+def water_conformers() -> list[Atoms]:
+    """Return canonical single-water conformer list used in placement tests."""
+    return [make_water()]
+
+
+def assert_paths_exist(base: Path, relpaths: list[str]) -> None:
+    """Assert all relative paths exist under *base*."""
+    missing = [p for p in relpaths if not (base / p).exists()]
+    assert not missing, f"Missing paths: {missing}"
+
+
+@pytest.fixture
+def screening_result_factory():
+    """Factory wrapper around make_screening_result with compact defaults."""
+
+    def _build(
+        *,
+        molecule: str,
+        energy_adsorption: float,
+        atoms: Atoms,
+        placement_id: int = 0,
+        slab_size: int | None = None,
+    ) -> ScreeningResult:
+        return make_screening_result(
+            molecule=molecule,
+            placement_id=placement_id,
+            energy_adsorption=energy_adsorption,
+            atoms=atoms,
+            slab_size=slab_size if slab_size is not None else len(atoms),
+            distance=2.5,
+            placement_descriptor=make_placement_descriptor(placement_id=placement_id),
+        )
+
+    return _build
+
+
+# ---------------------------------------------------------------------------
+# saturation / screening test doubles
+# ---------------------------------------------------------------------------
+
+
+class NoopDatasetLogger:
+    """Patches DatasetLogger in screening/saturation tests."""
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        pass
+
+    def add_results(self, *_args, **_kwargs) -> None:
+        pass
+
+    def flush(self) -> None:
+        pass
+
+
+class DummyReferenceEnergies:
+    """Minimal reference energies object for screening/saturation mocks."""
+
+    def __init__(
+        self,
+        molecule_energies: dict[str, float] | None = None,
+        *,
+        constant_energy: float | None = None,
+    ) -> None:
+        self.molecule_energies = dict(molecule_energies or {})
+        self._constant_energy = constant_energy
+
+    def get_molecule_energy(self, mol: str) -> float:
+        if self._constant_energy is not None:
+            return float(self._constant_energy)
+        return self.molecule_energies[mol]
 
 
 # ---------------------------------------------------------------------------

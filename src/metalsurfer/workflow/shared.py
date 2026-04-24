@@ -247,6 +247,70 @@ def _surface_positions_for_distance(
     return slab_positions
 
 
+def _validate_initial_placement_geometry(
+    adsorbate: Atoms,
+    slab: Atoms,
+    config: AdsorptionConfig,
+    surface_symbols: list[str] | None = None,
+) -> tuple[bool, str]:
+    """Validate initial placement geometry quality before optimization.
+
+    Checks that the placement has reasonable contact with the surface,
+    enabling early rejection of obviously poor geometries that would waste
+    optimization resources.
+
+    Returns (ok, reason) where ok=True if placement passes all checks.
+    """
+    if not config.strict_initial_placement and not config.require_multiple_contact:
+        return True, "strict placement checks disabled"
+
+    # Avoid circular import
+    from ..placement.geometry import calculate_contact_quality
+
+    slab_size = len(slab)
+    if len(adsorbate) < 1:
+        return False, "empty adsorbate"
+
+    # First argument is the adsorbate (molecule) only; *slab* is the substrate.
+    metrics = calculate_contact_quality(
+        adsorbate,
+        slab,
+        contact_distance_threshold=config.contact_distance_threshold,
+        exclude_slab_atoms=slab_size if surface_symbols is None else None,
+    )
+
+    contact_dist = metrics["contact_distance"]
+    num_contacting = metrics["num_contacting_atoms"]
+
+    # Check minimum contact distance
+    if contact_dist > config.min_contact_distance:
+        return (
+            False,
+            f"contact distance too large: {contact_dist:.3f} A (max {config.min_contact_distance:.3f})",
+        )
+
+    # Check minimum number of contacting atoms
+    if num_contacting < config.min_contact_atoms:
+        return (
+            False,
+            f"insufficient contacting atoms: {num_contacting} < {config.min_contact_atoms}",
+        )
+
+    # If multiple contact required, check for clustering
+    if config.require_multiple_contact and num_contacting > 1:
+        contact_atom_var = metrics["contact_atom_variance"]
+        if contact_atom_var > 0.5:  # High variance indicates spread-out contacts
+            return (
+                False,
+                f"poor contact clustering: variance {contact_atom_var:.3f} too high",
+            )
+
+    return (
+        True,
+        f"placement geometry valid (contacts={num_contacting}, distance={contact_dist:.3f}A)",
+    )
+
+
 def _evaluate_optimized_candidate(
     *,
     opt_atoms: Atoms | None,
@@ -382,22 +446,27 @@ def _resolve_site_context_for_sampling(
     use_sites = _core_ctx.use_sites
 
     if not use_sites or not core_sites:
-        result = placement_generators.SiteContext(
-            sites=[], use_sites=False, source="no_sites"
-        )
+        result = _core_ctx
     elif symmetry_broken:
-        logger.info("Using core sites; symmetry breaking detected")
+        logger.debug("Site context: symmetry broken, using clustered Voronoi set")
         result = placement_generators.SiteContext(
-            sites=core_sites, use_sites=True, source="voronoi"
+            sites=core_sites,
+            use_sites=True,
+            source="voronoi",
+            raw_unclustered=_core_ctx.raw_unclustered,
         )
     else:
-        logger.debug("Attempting symmetry-aware site reduction")
+        # Reuse unclustered Voronoi sites from _get_unique_sites_for_specs (no second run).
         symmetry_aware_sites = get_symmetry_aware_sites(
             slab_atoms,
             top_layer_tolerance=config.top_layer_tolerance,
             symmetry_tolerance=config.symmetry_tolerance,
             material_type=config.material_type,
+            probe_radius=config.voronoi_probe_radius,
+            max_site_distance=config.voronoi_max_site_distance,
             enrich=config.voronoi_site_enrichment,
+            site_classification_method=config.site_classification_method,
+            raw_sites=_core_ctx.raw_unclustered,
         )
 
         if symmetry_aware_sites:
@@ -405,12 +474,20 @@ def _resolve_site_context_for_sampling(
                 "Using symmetry-reduced sites (%d sites)", len(symmetry_aware_sites)
             )
             result = placement_generators.SiteContext(
-                sites=symmetry_aware_sites, use_sites=True, source="symmetry_aware"
+                sites=symmetry_aware_sites,
+                use_sites=True,
+                source="symmetry_aware",
+                raw_unclustered=_core_ctx.raw_unclustered,
             )
         else:
-            logger.info("Using core unified sites (no symmetry-reduced set)")
+            logger.debug(
+                "Using clustered Voronoi sites (symmetry reduction unavailable)"
+            )
             result = placement_generators.SiteContext(
-                sites=core_sites, use_sites=True, source="voronoi"
+                sites=core_sites,
+                use_sites=True,
+                source="voronoi",
+                raw_unclustered=_core_ctx.raw_unclustered,
             )
 
     with _SITE_CONTEXT_CACHE_LOCK:

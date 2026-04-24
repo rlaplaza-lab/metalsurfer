@@ -4,7 +4,7 @@ All physics thresholds, geometry offsets, and sampling parameters used
 across generators.py, sites.py, and _material.py are centralised here.
 
 Values are chosen from empirical benchmarks on a range of slabs,
-nanoparticles, and porous materials; see CORE_SYSTEM_EXPLANATION.md §Placement.
+nanoparticles, and porous materials; see CORE_SYSTEM_EXPLANATION.md (Placement).
 """
 
 # ---------------------------------------------------------------------------
@@ -65,18 +65,6 @@ _PARALLEL_Z_FLOOR_ANGSTROM: float = 2.4
 _PARALLEL_Z_LO_SHRINK: float = 0.4  # lower z_base_lo by this amount (Å)
 _PARALLEL_Z_HI_SHRINK: float = 0.6  # lower z_base_hi by this amount (Å)
 _PARALLEL_Z_MIN_HI_MARGIN: float = 0.3  # ensure z_base_hi >= z_base_lo + this (Å)
-
-# Interleaving ratio for parallel vs EN-down placements within the spec cycle.
-# Reserved for future use in multi-stage placement sampling.
-_PARALLEL_EN_CYCLE_SIZE: int = 10
-
-# Linear molecules: intended fraction of specs using vertical (binding-atom-down)
-# orientation. Reserved for future use.
-_LINEAR_VERTICAL_FRACTION: float = 0.75
-
-# Rotation cycle divisor for linear molecules.
-# (cycle % N) == 0 → flat; (cycle % N) != 0 → vertical.  Reserved for future use.
-_LINEAR_VERTICAL_CYCLE: int = 4
 
 # ---------------------------------------------------------------------------
 # Dissociative placement (e.g. H₂ → 2 H on hollow sites)

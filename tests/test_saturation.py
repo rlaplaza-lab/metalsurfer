@@ -3,19 +3,31 @@
 import logging
 import os
 import tempfile
+from collections.abc import Callable
 
 import pandas as pd
 import pytest
+from ase import Atoms
 from ase.io import read
 
 from metalsurfer.config import AdsorptionConfig
-from metalsurfer.io_results import save_saturation_results, setup_directories
+from metalsurfer.io_results import (
+    save_multi_mol_saturation_results,
+    save_saturation_results,
+    setup_directories,
+)
 from metalsurfer.models import (
     BOStepMemory,
+    MultiMolSaturationRunResult,
+    MultiMolSaturationStepResult,
     SaturationRunResult,
     SaturationStepResult,
 )
-from metalsurfer.placement import get_hollow_sites_for_adatoms
+from metalsurfer.placement import (
+    distribute_placement_budget,
+    get_hollow_sites_for_adatoms,
+)
+from metalsurfer.placement.generators import estimate_molecule_complexity
 from metalsurfer.surface_prep import (
     SlabContainer,
     auto_resize_slab_for_molecule,
@@ -25,6 +37,9 @@ from metalsurfer.symmetry import SymmetryAnalysisError
 from metalsurfer.workflow import load_molecules, run_saturation_screening
 
 from .conftest import (
+    DummyReferenceEnergies,
+    NoopDatasetLogger,
+    assert_paths_exist,
     make_placement_descriptor,
     make_screening_result,
     make_slab,
@@ -32,6 +47,118 @@ from .conftest import (
     place_molecule_on_slab,
 )
 from .optional_deps import cuda_available, has_mlip_stack
+
+
+def _uniform_placement_budget(
+    complexities: dict[str, float], total: int
+) -> dict[str, int]:
+    n = len(complexities)
+    return {mol: total // n for mol in complexities}
+
+
+def _result_for_step(
+    molecule: str, current_slab: SlabContainer, e_ads: float, placement_id: int = 0
+):
+    return [
+        make_screening_result(
+            molecule=molecule,
+            placement_id=placement_id,
+            energy_adsorption=e_ads,
+            atoms=current_slab.atoms.copy(),
+            slab_size=len(current_slab.atoms),
+            distance=2.5,
+            placement_descriptor=make_placement_descriptor(placement_id=placement_id),
+        )
+    ]
+
+
+def _make_schedule_process(
+    schedules: dict[str, list[float]],
+) -> Callable[..., list]:
+    counts = {m: 0 for m in schedules}
+
+    def _fake_process_molecule(_smi, mol, current_slab, *_args, **_kwargs):
+        counts[mol] += 1
+        vals = schedules[mol]
+        idx = min(counts[mol] - 1, len(vals) - 1)
+        return _result_for_step(mol, current_slab, vals[idx])
+
+    return _fake_process_molecule
+
+
+def _patch_single_mol_saturation_mocks(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    molecule: str,
+    smiles: str,
+    ref: DummyReferenceEnergies,
+    process_molecule: Callable[..., list],
+    slab_energy: float = -10.0,
+) -> None:
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation._setup_screening_run",
+        lambda *_a, **_kw: (object(), None, [molecule], [smiles], ref, 0.0),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation._compute_slab_energy",
+        lambda *_a, **_kw: slab_energy,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.DatasetLogger", NoopDatasetLogger
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.process_molecule", process_molecule
+    )
+
+
+def _patch_multi_mol_saturation_mocks(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    molecules: list[str],
+    smiles_list: list[str],
+    ref: DummyReferenceEnergies,
+    process_molecule: Callable[..., list] | None = None,
+    process_molecule_bayesian: Callable[..., list] | None = None,
+    slab_energy: float = -100.0,
+    budget_fn: Callable[[dict[str, float], int], dict[str, int]] | None = None,
+) -> None:
+    """Shared monkeypatches for competitive multi-molecule saturation tests."""
+    if (process_molecule is None) == (process_molecule_bayesian is None):
+        raise ValueError(
+            "pass exactly one of process_molecule or process_molecule_bayesian"
+        )
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation._setup_screening_run",
+        lambda *_a, **_kw: (object(), None, molecules, smiles_list, ref, 0.0),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation._compute_slab_energy",
+        lambda *_a, **_kw: slab_energy,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.DatasetLogger",
+        NoopDatasetLogger,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.create_conformers_from_smiles",
+        lambda *_a, **_kw: ([make_water()], [0.0]),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.distribute_placement_budget",
+        budget_fn or _uniform_placement_budget,
+    )
+    if process_molecule is not None:
+        monkeypatch.setattr(
+            "metalsurfer.workflow.saturation.process_molecule",
+            process_molecule,
+        )
+    else:
+        monkeypatch.setattr(
+            "metalsurfer.workflow.saturation.process_molecule_bayesian",
+            process_molecule_bayesian,
+        )
+
 
 # ---------------------------------------------------------------------------
 # load_molecules skip_saturation_file
@@ -102,29 +229,23 @@ def test_save_saturation_results_writes_csv_and_xyz(workdir):
     )
     setup_directories(["saturation_test"])
     save_saturation_results([sr], surface_type="saturation_test")
-    summary_path = workdir / "results_saturation_test" / "saturation_summary.csv"
-    details_path = workdir / "results_saturation_test" / "saturation_details.csv"
-    xyz_path = (
-        workdir
-        / "results_saturation_test/xyz_structures/water_saturation/step_001_Eads_-1.0000.xyz"
-    )
+    output_dir = workdir / "results_saturation_test"
+    summary_path = output_dir / "saturation_summary.csv"
+    details_path = output_dir / "saturation_details.csv"
     stable_xyz_path = (
-        workdir
-        / "results_saturation_test/xyz_structures/water_saturation/step_001_best_slab.xyz"
+        output_dir / "xyz_structures/water_saturation/step_001_best_slab.xyz"
     )
-    final_xyz_path = (
-        workdir
-        / "results_saturation_test/xyz_structures/water_saturation/final_saturated_slab.xyz"
+    assert_paths_exist(
+        output_dir,
+        [
+            "saturation_summary.csv",
+            "saturation_details.csv",
+            "xyz_structures/water_saturation/step_001_Eads_-1.0000.xyz",
+            "xyz_structures/water_saturation/step_001_best_slab.xyz",
+            "xyz_structures/water_saturation/final_saturated_slab.xyz",
+            "vasp_inputs/water_saturation/step_001/POSCAR",
+        ],
     )
-    poscar_path = (
-        workdir / "results_saturation_test/vasp_inputs/water_saturation/step_001/POSCAR"
-    )
-    assert summary_path.exists()
-    assert details_path.exists()
-    assert xyz_path.exists()
-    assert stable_xyz_path.exists()
-    assert final_xyz_path.exists()
-    assert poscar_path.exists()
     summary_df = pd.read_csv(summary_path)
     assert len(summary_df) == 1
     assert summary_df.iloc[0]["molecule"] == "water"
@@ -170,8 +291,6 @@ def test_saturation_slab_for_sites_uses_resized_slab():
     Uses a deliberately small slab (2x2x2, cell ~5.4 A) and min_separation=8.0
     so that resize is required (5.4 < 0.74 + 8 = 8.74).
     """
-    from ase import Atoms
-
     slab = SlabContainer(make_slab(nx=2, ny=2, n_layers=2))
     cell_diag = min(
         slab.atoms.get_cell()[0, 0],
@@ -281,32 +400,6 @@ def test_run_saturation_screening_symmetry_none_falls_back_to_c1(monkeypatch, ca
     slab = SlabContainer(make_slab())
     config = AdsorptionConfig()
 
-    class _DummyRef:
-        molecule_energies: dict[str, float] = {}
-
-        def get_molecule_energy(self, _mol: str) -> float:
-            return -1.0
-
-    class _DummyDatasetLogger:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def add_results(self, *_args, **_kwargs):
-            pass
-
-        def flush(self):
-            pass
-
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (object(), None, ["water"], ["O"], _DummyRef(), 0.0),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._compute_slab_energy", lambda *_a, **_kw: -10.0
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", _DummyDatasetLogger
-    )
     monkeypatch.setattr(
         "metalsurfer.symmetry.SymmetryAnalyzer.detect_symmetry_breaking",
         lambda *_a, **_kw: (_ for _ in ()).throw(
@@ -327,20 +420,14 @@ def test_run_saturation_screening_symmetry_none_falls_back_to_c1(monkeypatch, ca
         symmetry_flags.append(bool(symmetry_broken))
         step_idx = len(symmetry_flags)
         e_ads = -0.3 if step_idx == 1 else 0.2
-        return [
-            make_screening_result(
-                molecule=mol,
-                placement_id=0,
-                energy_adsorption=e_ads,
-                atoms=current_slab.atoms.copy(),
-                slab_size=len(current_slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=0),
-            )
-        ]
+        return _result_for_step(mol, current_slab, e_ads)
 
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.process_molecule", _fake_process_molecule
+    _patch_single_mol_saturation_mocks(
+        monkeypatch,
+        molecule="water",
+        smiles="O",
+        ref=DummyReferenceEnergies(constant_energy=-1.0),
+        process_molecule=_fake_process_molecule,
     )
 
     with caplog.at_level(logging.WARNING):
@@ -363,33 +450,6 @@ def test_run_saturation_screening_auto_resize_only_step1(monkeypatch):
     slab = SlabContainer(make_slab())
     config = AdsorptionConfig()
 
-    class _DummyRef:
-        molecule_energies: dict[str, float] = {}
-
-        def get_molecule_energy(self, _mol: str) -> float:
-            return -1.0
-
-    class _DummyDatasetLogger:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def add_results(self, *_args, **_kwargs):
-            pass
-
-        def flush(self):
-            pass
-
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (object(), None, ["water"], ["O"], _DummyRef(), 0.0),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._compute_slab_energy", lambda *_a, **_kw: -10.0
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", _DummyDatasetLogger
-    )
-
     allow_auto_resize_flags: list[bool] = []
 
     def _fake_process_molecule(
@@ -402,20 +462,14 @@ def test_run_saturation_screening_auto_resize_only_step1(monkeypatch):
         allow_auto_resize_flags.append(bool(kwargs.get("allow_auto_resize", True)))
         step_idx = len(allow_auto_resize_flags)
         e_ads = -0.3 if step_idx == 1 else 0.2
-        return [
-            make_screening_result(
-                molecule=mol,
-                placement_id=0,
-                energy_adsorption=e_ads,
-                atoms=current_slab.atoms.copy(),
-                slab_size=len(current_slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=0),
-            )
-        ]
+        return _result_for_step(mol, current_slab, e_ads)
 
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.process_molecule", _fake_process_molecule
+    _patch_single_mol_saturation_mocks(
+        monkeypatch,
+        molecule="water",
+        smiles="O",
+        ref=DummyReferenceEnergies(constant_energy=-1.0),
+        process_molecule=_fake_process_molecule,
     )
 
     out = run_saturation_screening(
@@ -438,8 +492,6 @@ def test_run_saturation_screening_auto_resize_only_step1(monkeypatch):
 
 def test_distribute_placement_budget_proportional():
     """Budget is split proportionally to complexity scores."""
-    from metalsurfer.placement import distribute_placement_budget
-
     budgets = distribute_placement_budget({"A": 100.0, "B": 400.0}, 250)
     assert budgets["A"] + budgets["B"] == 250
     # B has 4× complexity → should receive roughly 4× the placements
@@ -448,8 +500,6 @@ def test_distribute_placement_budget_proportional():
 
 def test_distribute_placement_budget_sums_to_total():
     """Allocations always sum to exactly total_budget regardless of rounding."""
-    from metalsurfer.placement import distribute_placement_budget
-
     for total in (10, 11, 13, 100, 250):
         budgets = distribute_placement_budget({"X": 1.0, "Y": 3.0, "Z": 2.0}, total)
         assert sum(budgets.values()) == total, (
@@ -459,8 +509,6 @@ def test_distribute_placement_budget_sums_to_total():
 
 def test_distribute_placement_budget_min_one():
     """Every molecule gets at least 1 placement even with tiny complexity."""
-    from metalsurfer.placement import distribute_placement_budget
-
     budgets = distribute_placement_budget(
         {"tiny": 1.0, "huge": 10000.0}, total_budget=5
     )
@@ -469,21 +517,20 @@ def test_distribute_placement_budget_min_one():
     assert sum(budgets.values()) == 5
 
 
-def test_distribute_placement_budget_single_molecule():
-    """Single molecule gets the entire budget."""
-    from metalsurfer.placement import distribute_placement_budget
-
-    budgets = distribute_placement_budget({"H2": 50.0}, total_budget=100)
-    assert budgets["H2"] == 100
-
-
-def test_distribute_placement_budget_equal_complexity():
-    """Equal complexities → roughly equal split (may differ by 1 due to rounding)."""
-    from metalsurfer.placement import distribute_placement_budget
-
-    budgets = distribute_placement_budget({"A": 100.0, "B": 100.0}, total_budget=10)
-    assert sum(budgets.values()) == 10
-    assert abs(budgets["A"] - budgets["B"]) <= 1
+@pytest.mark.parametrize(
+    "complexities,total,expected",
+    [
+        ({"H2": 50.0}, 100, lambda b: b["H2"] == 100),
+        (
+            {"A": 100.0, "B": 100.0},
+            10,
+            lambda b: sum(b.values()) == 10 and abs(b["A"] - b["B"]) <= 1,
+        ),
+    ],
+)
+def test_distribute_placement_budget_edge_cases(complexities, total, expected):
+    budgets = distribute_placement_budget(complexities, total_budget=total)
+    assert expected(budgets)
 
 
 # ---------------------------------------------------------------------------
@@ -493,10 +540,6 @@ def test_distribute_placement_budget_equal_complexity():
 
 def test_estimate_molecule_complexity_positive():
     """Complexity score must be >= 1.0 for any valid molecule."""
-    from ase import Atoms
-
-    from metalsurfer.placement.generators import estimate_molecule_complexity
-
     slab = make_slab()
     # minimal linear molecule (CO-like)
     linear = Atoms("CO", positions=[[0.0, 0.0, 0.0], [1.13, 0.0, 0.0]])
@@ -507,10 +550,6 @@ def test_estimate_molecule_complexity_positive():
 
 def test_estimate_molecule_complexity_more_conformers_higher_score():
     """More conformers always give a higher complexity score (n_conformers is a direct multiplier)."""
-    from ase import Atoms
-
-    from metalsurfer.placement.generators import estimate_molecule_complexity
-
     slab = make_slab()
     config = AdsorptionConfig(num_conformers=3, num_placements=50)
 
@@ -536,76 +575,16 @@ def test_multi_mol_saturation_picks_best_across_molecules(monkeypatch):
     slab = SlabContainer(make_slab())
     config = AdsorptionConfig(multi_molecule_saturation=True)
 
-    class _DummyRef:
-        molecule_energies: dict[str, float] = {"water": -5.0, "CO2": -10.0}
+    ref = DummyReferenceEnergies({"water": -5.0, "CO2": -10.0})
 
-        def get_molecule_energy(self, mol: str) -> float:
-            return self.molecule_energies[mol]
+    fake_process = _make_schedule_process({"water": [-0.5, 0.1], "CO2": [-1.2, 0.1]})
 
-    class _DummyDatasetLogger:
-        def __init__(self, *_a, **_kw):
-            pass
-
-        def add_results(self, *_a, **_kw):
-            pass
-
-        def flush(self):
-            pass
-
-    # Step 1: water E_ads=-0.5, CO2 E_ads=-1.2 → CO2 wins
-    # Step 2: water E_ads=+0.1 → saturated
-    call_counts: dict[str, int] = {"water": 0, "CO2": 0}
-
-    def _fake_process_molecule(smi, mol, current_slab, *_args, **kwargs):
-        call_counts[mol] += 1
-        call_idx = call_counts[mol]
-        energies = {"water": [-0.5, 0.1], "CO2": [-1.2, 0.1]}
-        e_ads = energies[mol][min(call_idx - 1, len(energies[mol]) - 1)]
-        return [
-            make_screening_result(
-                molecule=mol,
-                placement_id=0,
-                energy_adsorption=e_ads,
-                atoms=current_slab.atoms.copy(),
-                slab_size=len(current_slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=0),
-            )
-        ]
-
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (
-            object(),
-            None,
-            ["water", "CO2"],
-            ["O", "O=C=O"],
-            _DummyRef(),
-            0.0,
-        ),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._compute_slab_energy",
-        lambda *_a, **_kw: -100.0,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", _DummyDatasetLogger
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.create_conformers_from_smiles",
-        lambda smi, *_a, **_kw: (
-            [make_water()],
-            [0.0],
-        ),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.process_molecule", _fake_process_molecule
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.distribute_placement_budget",
-        lambda complexities, total: {
-            mol: total // len(complexities) for mol in complexities
-        },
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["water", "CO2"],
+        smiles_list=["O", "O=C=O"],
+        ref=ref,
+        process_molecule=fake_process,
     )
 
     out = run_saturation_screening(
@@ -618,8 +597,6 @@ def test_multi_mol_saturation_picks_best_across_molecules(monkeypatch):
 
     assert len(out) == 1
     result = out[0]
-    from metalsurfer.models import MultiMolSaturationRunResult
-
     assert isinstance(result, MultiMolSaturationRunResult)
     assert len(result.steps) >= 1
     assert result.steps[0].winning_molecule == "CO2"
@@ -630,70 +607,16 @@ def test_multi_mol_saturation_terminates_on_positive_eads(monkeypatch):
     slab = SlabContainer(make_slab())
     config = AdsorptionConfig(multi_molecule_saturation=True)
 
-    class _DummyRef:
-        molecule_energies: dict[str, float] = {"A": -5.0, "B": -5.0}
+    ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
 
-        def get_molecule_energy(self, mol: str) -> float:
-            return self.molecule_energies[mol]
+    fake_process = _make_schedule_process({"A": [0.5], "B": [0.5]})
 
-    class _DummyDatasetLogger:
-        def __init__(self, *_a, **_kw):
-            pass
-
-        def add_results(self, *_a, **_kw):
-            pass
-
-        def flush(self):
-            pass
-
-    call_count = [0]
-
-    def _fake_process_molecule(smi, mol, current_slab, *_args, **kwargs):
-        call_count[0] += 1
-        # Both molecules return positive E_ads immediately → saturated after step 1
-        e_ads = 0.5
-        return [
-            make_screening_result(
-                molecule=mol,
-                placement_id=0,
-                energy_adsorption=e_ads,
-                atoms=current_slab.atoms.copy(),
-                slab_size=len(current_slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=0),
-            )
-        ]
-
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (
-            object(),
-            None,
-            ["A", "B"],
-            ["smiles_a", "smiles_b"],
-            _DummyRef(),
-            0.0,
-        ),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._compute_slab_energy",
-        lambda *_a, **_kw: -100.0,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", _DummyDatasetLogger
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.create_conformers_from_smiles",
-        lambda smi, *_a, **_kw: ([make_water()], [0.0]),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.process_molecule", _fake_process_molecule
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.distribute_placement_budget",
-        lambda complexities, total: {
-            mol: total // len(complexities) for mol in complexities
-        },
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["A", "B"],
+        smiles_list=["smiles_a", "smiles_b"],
+        ref=ref,
+        process_molecule=fake_process,
     )
 
     out = run_saturation_screening(
@@ -717,21 +640,7 @@ def test_multi_mol_saturation_step_result_structure(monkeypatch):
     slab = SlabContainer(make_slab())
     config = AdsorptionConfig(multi_molecule_saturation=True)
 
-    class _DummyRef:
-        molecule_energies: dict[str, float] = {"mol1": -5.0, "mol2": -5.0}
-
-        def get_molecule_energy(self, mol: str) -> float:
-            return self.molecule_energies[mol]
-
-    class _DummyDatasetLogger:
-        def __init__(self, *_a, **_kw):
-            pass
-
-        def add_results(self, *_a, **_kw):
-            pass
-
-        def flush(self):
-            pass
+    ref = DummyReferenceEnergies({"mol1": -5.0, "mol2": -5.0})
 
     call_count = [0]
 
@@ -750,36 +659,12 @@ def test_multi_mol_saturation_step_result_structure(monkeypatch):
             )
         ]
 
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (
-            object(),
-            None,
-            ["mol1", "mol2"],
-            ["s1", "s2"],
-            _DummyRef(),
-            0.0,
-        ),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._compute_slab_energy",
-        lambda *_a, **_kw: -100.0,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", _DummyDatasetLogger
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.create_conformers_from_smiles",
-        lambda smi, *_a, **_kw: ([make_water()], [0.0]),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.process_molecule", _fake_process_molecule
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.distribute_placement_budget",
-        lambda complexities, total: {
-            mol: total // len(complexities) for mol in complexities
-        },
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["mol1", "mol2"],
+        smiles_list=["s1", "s2"],
+        ref=ref,
+        process_molecule=_fake_process_molecule,
     )
 
     out = run_saturation_screening(
@@ -788,11 +673,6 @@ def test_multi_mol_saturation_step_result_structure(monkeypatch):
         config=config,
         surface_type="step_result_structure",
         skip_existing=False,
-    )
-
-    from metalsurfer.models import (
-        MultiMolSaturationRunResult,
-        MultiMolSaturationStepResult,
     )
 
     assert len(out) == 1
@@ -812,51 +692,21 @@ def test_multi_mol_saturation_single_molecule_fallback(monkeypatch, caplog):
     slab = SlabContainer(make_slab())
     config = AdsorptionConfig(multi_molecule_saturation=True)
 
-    class _DummyRef:
-        molecule_energies: dict[str, float] = {"water": -5.0}
-
-        def get_molecule_energy(self, mol: str) -> float:
-            return self.molecule_energies[mol]
-
-    class _DummyDatasetLogger:
-        def __init__(self, *_a, **_kw):
-            pass
-
-        def add_results(self, *_a, **_kw):
-            pass
-
-        def flush(self):
-            pass
+    ref = DummyReferenceEnergies({"water": -5.0})
 
     call_count = [0]
 
     def _fake_process_molecule(smi, mol, current_slab, *_args, **kwargs):
         call_count[0] += 1
         e_ads = -0.5 if call_count[0] == 1 else 0.1
-        return [
-            make_screening_result(
-                molecule=mol,
-                placement_id=0,
-                energy_adsorption=e_ads,
-                atoms=current_slab.atoms.copy(),
-                slab_size=len(current_slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=0),
-            )
-        ]
+        return _result_for_step(mol, current_slab, e_ads)
 
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (object(), None, ["water"], ["O"], _DummyRef(), 0.0),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._compute_slab_energy", lambda *_a, **_kw: -10.0
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", _DummyDatasetLogger
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.process_molecule", _fake_process_molecule
+    _patch_single_mol_saturation_mocks(
+        monkeypatch,
+        molecule="water",
+        smiles="O",
+        ref=ref,
+        process_molecule=_fake_process_molecule,
     )
 
     with caplog.at_level(logging.WARNING):
@@ -868,10 +718,7 @@ def test_multi_mol_saturation_single_molecule_fallback(monkeypatch, caplog):
             skip_existing=False,
         )
 
-    # Should fall back to standard single-molecule SaturationRunResult
     assert len(out) == 1
-    from metalsurfer.models import SaturationRunResult
-
     assert isinstance(out[0], SaturationRunResult)
     assert any("falling back" in rec.getMessage().lower() for rec in caplog.records)
 
@@ -881,21 +728,7 @@ def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
     slab = SlabContainer(make_slab())
     config = AdsorptionConfig(multi_molecule_saturation=True)
 
-    class _DummyRef:
-        molecule_energies: dict[str, float] = {"A": -5.0, "B": -5.0}
-
-        def get_molecule_energy(self, mol: str) -> float:
-            return self.molecule_energies[mol]
-
-    class _DummyDatasetLogger:
-        def __init__(self, *_a, **_kw):
-            pass
-
-        def add_results(self, *_a, **_kw):
-            pass
-
-        def flush(self):
-            pass
+    ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
 
     step_count = [0]
 
@@ -925,36 +758,12 @@ def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
             )
         ]
 
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (
-            object(),
-            None,
-            ["A", "B"],
-            ["sa", "sb"],
-            _DummyRef(),
-            0.0,
-        ),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._compute_slab_energy",
-        lambda *_a, **_kw: -100.0,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", _DummyDatasetLogger
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.create_conformers_from_smiles",
-        lambda smi, *_a, **_kw: ([make_water()], [0.0]),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.process_molecule", _fake_process_molecule
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.distribute_placement_budget",
-        lambda complexities, total: {
-            mol: total // len(complexities) for mol in complexities
-        },
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["A", "B"],
+        smiles_list=["sa", "sb"],
+        ref=ref,
+        process_molecule=_fake_process_molecule,
     )
 
     out = run_saturation_screening(
@@ -977,21 +786,7 @@ def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypat
     slab = SlabContainer(make_slab())
     config = AdsorptionConfig(multi_molecule_saturation=True, bo_enabled=True)
 
-    class _DummyRef:
-        molecule_energies: dict[str, float] = {"water": -5.0, "CO2": -10.0}
-
-        def get_molecule_energy(self, mol: str) -> float:
-            return self.molecule_energies[mol]
-
-    class _DummyDatasetLogger:
-        def __init__(self, *_a, **_kw):
-            pass
-
-        def add_results(self, *_a, **_kw):
-            pass
-
-        def flush(self):
-            pass
+    ref = DummyReferenceEnergies({"water": -5.0, "CO2": -10.0})
 
     call_counts: dict[str, int] = {"water": 0, "CO2": 0}
     prior_memory_seen: dict[str, list[BOStepMemory | None]] = {"water": [], "CO2": []}
@@ -1043,37 +838,12 @@ def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypat
             )
         ]
 
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (
-            object(),
-            None,
-            ["water", "CO2"],
-            ["O", "O=C=O"],
-            _DummyRef(),
-            0.0,
-        ),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._compute_slab_energy",
-        lambda *_a, **_kw: -100.0,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", _DummyDatasetLogger
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.create_conformers_from_smiles",
-        lambda _smi, *_a, **_kw: ([make_water()], [0.0]),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.process_molecule_bayesian",
-        _fake_process_molecule_bayesian,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.distribute_placement_budget",
-        lambda complexities, total: {
-            mol: total // len(complexities) for mol in complexities
-        },
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["water", "CO2"],
+        smiles_list=["O", "O=C=O"],
+        ref=ref,
+        process_molecule_bayesian=_fake_process_molecule_bayesian,
     )
 
     out = run_saturation_screening(
@@ -1099,21 +869,7 @@ def test_multi_mol_saturation_bo_rejects_shared_memory_objects(monkeypatch):
     slab = SlabContainer(make_slab())
     config = AdsorptionConfig(multi_molecule_saturation=True, bo_enabled=True)
 
-    class _DummyRef:
-        molecule_energies: dict[str, float] = {"A": -5.0, "B": -5.0}
-
-        def get_molecule_energy(self, mol: str) -> float:
-            return self.molecule_energies[mol]
-
-    class _DummyDatasetLogger:
-        def __init__(self, *_a, **_kw):
-            pass
-
-        def add_results(self, *_a, **_kw):
-            pass
-
-        def flush(self):
-            pass
+    ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
 
     shared_memory = BOStepMemory(
         observed_X_rows=[{"step": 1.0}],
@@ -1143,37 +899,12 @@ def test_multi_mol_saturation_bo_rejects_shared_memory_objects(monkeypatch):
             )
         ]
 
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (
-            object(),
-            None,
-            ["A", "B"],
-            ["sa", "sb"],
-            _DummyRef(),
-            0.0,
-        ),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._compute_slab_energy",
-        lambda *_a, **_kw: -100.0,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", _DummyDatasetLogger
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.create_conformers_from_smiles",
-        lambda _smi, *_a, **_kw: ([make_water()], [0.0]),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.process_molecule_bayesian",
-        _fake_process_molecule_bayesian,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.distribute_placement_budget",
-        lambda complexities, total: {
-            mol: total // len(complexities) for mol in complexities
-        },
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["A", "B"],
+        smiles_list=["sa", "sb"],
+        ref=ref,
+        process_molecule_bayesian=_fake_process_molecule_bayesian,
     )
 
     with pytest.raises(RuntimeError, match="independent per adsorbate"):
@@ -1242,8 +973,6 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
     assert len(results) == 1
     result = results[0]
 
-    from metalsurfer.models import MultiMolSaturationRunResult
-
     assert isinstance(result, MultiMolSaturationRunResult)
     assert len(result.steps) >= 1
     step0 = result.steps[0]
@@ -1259,12 +988,6 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
 
 def test_save_multi_mol_saturation_results_writes_csv(workdir):
     """save_multi_mol_saturation_results writes summary, details, and XYZ."""
-    from metalsurfer.io_results import save_multi_mol_saturation_results
-    from metalsurfer.models import (
-        MultiMolSaturationRunResult,
-        MultiMolSaturationStepResult,
-    )
-
     slab = make_slab()
     mol_a_atoms = place_molecule_on_slab(slab, make_water())
     best_a = make_screening_result(
@@ -1296,18 +1019,17 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
     setup_directories(["multi_mol_io_test"])
     save_multi_mol_saturation_results(result, surface_type="multi_mol_io_test")
 
-    summary_path = workdir / "results_multi_mol_io_test" / "saturation_summary.csv"
-    details_path = workdir / "results_multi_mol_io_test" / "saturation_details.csv"
-    xyz_dir = (
-        workdir
-        / "results_multi_mol_io_test"
-        / "xyz_structures"
-        / "water_CO2_saturation"
+    output_dir = workdir / "results_multi_mol_io_test"
+    summary_path = output_dir / "saturation_summary.csv"
+    details_path = output_dir / "saturation_details.csv"
+    assert_paths_exist(
+        output_dir,
+        [
+            "saturation_summary.csv",
+            "saturation_details.csv",
+            "xyz_structures/water_CO2_saturation",
+        ],
     )
-
-    assert summary_path.exists()
-    assert details_path.exists()
-    assert xyz_dir.exists()
 
     summary_df = pd.read_csv(summary_path)
     assert len(summary_df) == 1

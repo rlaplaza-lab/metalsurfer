@@ -53,7 +53,7 @@ result = run_adsorption(
 )
 ```
 
-`create_slab_from_atoms(...)` remains available for compatibility, but most users do not need explicit wrapping.
+`create_slab_from_atoms(...)` wraps a bare `Atoms` in a `SlabContainer` with default metadata; passing `Atoms` directly to run entry points is preferred when you do not need the container.
 
 ### 1. Standard Screening
 
@@ -149,8 +149,8 @@ Relevant BO configuration fields live on `AdsorptionConfig`:
 - `bo_initial_random`, `bo_batch_size`, `bo_total_budget`
 - `bo_acquisition` with `"lcb"`, `"ei"`, or `"pi"`
 - `bo_surrogate` with `"random_forest"`, `"extra_trees"`, `"gradient_boost"`, or `"ridge"`
+- `bo_transfer_*` for transfer-enabled saturation runs (per-sample weights are used only for tree surrogates; `gradient_boost` and `ridge` fits drop transfer weights)
 - `bo_include_failure_negatives` and `bo_failure_penalty_*` for learning from failed placements
-- `bo_transfer_*` for transfer-enabled saturation runs
 
 ### 3. Sequential Saturation
 

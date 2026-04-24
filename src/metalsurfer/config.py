@@ -119,8 +119,31 @@ class AdsorptionConfig:
     binding_distance_threshold: float = (
         4.0  # Post-opt: reject if adsorbate-surface > this (desorbed)
     )
+    # Enhanced placement validation (Phase 1-3 improvements)
+    strict_initial_placement: bool = False  # Enable all stricter placement checks
+    reject_vdw_overlaps: bool = (
+        False  # Reject placements with VDW overlaps (stricter than covalent)
+    )
+    vdw_overlap_scale: float = (
+        1.0  # Scale factor for VDW radius sum (>1 more strict, <1 more lenient)
+    )
+    min_contact_distance: float = 0.8  # Minimum contact distance (Å) for binding atom
+    min_contact_atoms: int = (
+        1  # Require N molecule atoms within contact_distance_threshold
+    )
+    contact_distance_threshold: float = (
+        2.5  # Distance threshold (Å) for counting "contacting" atoms
+    )
+    min_adsorbate_separation: float = (
+        2.0  # In saturation: minimum distance between adsorbates
+    )
+    require_multiple_contact: bool = (
+        False  # Require multiple atoms in contact region (contact quality)
+    )
+    max_initial_placement_quality: str = (
+        "any"  # "any" (default) or "good" (multiple contacts)
+    )
     max_adsorption_energy: float = 5.0
-    vacuum_box_size: float = 20.0
     energy_dedup_threshold: float = 0.05
     rmsd_dedup_threshold: float = 0.1
     connectivity_multipliers: list[float] = field(default_factory=lambda: [1.2, 1.3])
@@ -128,6 +151,8 @@ class AdsorptionConfig:
     boltzmann_temperature: float = 300.0
     auto_resize_slab: bool = True
     min_pbc_image_separation: float = 8.0
+    # Isolated conformer / gas-phase box edge length (Å) for conformers module
+    vacuum_box_size: float = 20.0
     vasp_encut: int = 400
     vasp_ediff: float = 1e-6
     vasp_ediffg: float = -0.02

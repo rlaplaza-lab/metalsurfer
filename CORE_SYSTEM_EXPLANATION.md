@@ -115,7 +115,7 @@ This section describes what the code actually does inside the modules named abov
 1. **Cache:** Results are memoized from a hash of slab positions, cell, PBC flags, and the boolean `symmetry_broken` (bounded cache, lock-protected).
 2. **Core path:** It always builds the clustered Voronoi set via `_get_unique_sites_for_specs` first.
 3. **Symmetry breaking:** If `symmetry_broken` is true (e.g. after prior saturation steps), symmetry reduction is skipped and the core sites are used.
-4. **Symmetry reduction:** Otherwise it calls `get_symmetry_aware_sites`, which internally runs `get_unified_sites` again and then `SymmetryAnalyzer.analyze_site_symmetry`. The workflow currently passes `top_layer_tolerance`, `symmetry_tolerance`, `material_type`, and `enrich`; other Voronoi arguments use the defaults of `get_symmetry_aware_sites` unless the call site is extended. If that function returns a non-empty list, those sites replace the core list; if it returns `None` or an empty list, the workflow falls back to the core clustered sites.
+4. **Symmetry reduction:** Otherwise it calls `get_symmetry_aware_sites` with the same Voronoi parameters as site discovery and with `raw_sites` set to the unclustered list from step 2, so Voronoi is not run twice. `SymmetryAnalyzer.analyze_site_symmetry` then reduces to symmetry-unique orbits. If the result is non-empty, those sites replace the core clustered list; if it is empty (including when `SymmetryAnalysisError` is caught), the workflow keeps the core clustered sites.
 
 ### Placement enumeration and materialization
 
@@ -164,7 +164,7 @@ The BO loop is:
 5. Score unevaluated candidates with an acquisition function.
 6. Evaluate the next batch and repeat until the budget is exhausted.
 
-Supported acquisition modes are `lcb`, `ei`, and `pi`. Supported surrogate families are `random_forest`, `extra_trees`, `gradient_boost`, and `ridge`. For `gradient_boost` and `ridge`, optional `sample_weight` arguments are ignored (tree ensembles use weights when provided; transfer-learning weights in the workflow apply only where the fitted estimator supports them).
+Supported acquisition modes are `lcb`, `ei`, and `pi`. Supported surrogate families are `random_forest`, `extra_trees`, `gradient_boost`, and `ridge`. Per-sample `sample_weight` is supported only for tree-ensemble surrogates (`random_forest`, `extra_trees`). The Bayesian workflow strips transfer-learning weights when the surrogate is `gradient_boost` or `ridge` (fit is unweighted in that case).
 
 Failed placements can optionally be fed back as penalized negatives through `bo_include_failure_negatives` and `bo_failure_penalty_*`, which helps the surrogate learn which regions of placement space are unproductive.
 
@@ -308,7 +308,7 @@ Site classes include atop, bridge, hollow, and pore-like positions depending on 
 
 `symmetry.py` uses `spglib` to group equivalent sites. Failed dataset construction raises `SymmetryAnalysisError` (including wrapped `spglib` failures). Orbit construction and Cartesian operation mapping are described under **Implementation mechanics**.
 
-`get_symmetry_aware_sites()` returns `None` if Voronoi yields no sites. If `SymmetryAnalyzer` raises `SymmetryAnalysisError`, the placement module logs a warning and returns `None`. The workflow then uses clustered Voronoi sites from `get_unified_sites` via `workflow.shared._resolve_site_context_for_sampling` (see **How the workflow chooses sites** in **Implementation mechanics**).
+`get_symmetry_aware_sites()` returns an empty list if there are no input sites or if symmetry analysis fails. On `SymmetryAnalysisError`, the placement module logs at debug and returns `[]`. The workflow then keeps the clustered Voronoi sites from `_get_unique_sites_for_specs` (see **How the workflow chooses sites** in **Implementation mechanics**).
 
 ## Configuration model
 
