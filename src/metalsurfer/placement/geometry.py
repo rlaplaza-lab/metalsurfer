@@ -140,11 +140,7 @@ def _get_covalent_radius(symbol: str) -> float | None:
 
 
 def _get_vdw_radius(symbol: str) -> float | None:
-    """Van der Waals radius (Å) for overlap heuristics.
-
-    ASE's tabulated VdW set is sparse for some metals (NaN); in that case we
-    fall back to a covalent-based scale so surface contacts are not ignored.
-    """
+    """VdW radius (Å) for overlap checks; NaN tabulated values fall back to ~1.2× covalent."""
     z = atomic_numbers.get(symbol)
     if z is None or z >= len(ase_vdw_radii):
         return None

@@ -253,14 +253,7 @@ def _validate_initial_placement_geometry(
     config: AdsorptionConfig,
     surface_symbols: list[str] | None = None,
 ) -> tuple[bool, str]:
-    """Validate initial placement geometry quality before optimization.
-
-    Checks that the placement has reasonable contact with the surface,
-    enabling early rejection of obviously poor geometries that would waste
-    optimization resources.
-
-    Returns (ok, reason) where ok=True if placement passes all checks.
-    """
+    """Pre-optimization check for surface contact; returns (ok, reason)."""
     if not config.strict_initial_placement and not config.require_multiple_contact:
         return True, "strict placement checks disabled"
 
@@ -425,11 +418,7 @@ def _resolve_site_context_for_sampling(
     *,
     symmetry_broken: bool,
 ) -> placement_generators.SiteContext:
-    """Resolve placement site context using the universal scheme.
-
-    Always uses core unified site detection. Optionally applies symmetry
-    reduction on top if available and not broken.
-    """
+    """Clustered Voronoi sites, then optional spglib orbit reduction unless *symmetry_broken*."""
     pos_bytes = slab_atoms.get_positions().tobytes()
     cell_bytes = np.asarray(slab_atoms.get_cell()).tobytes()
     pbc_bytes = str(list(slab_atoms.get_pbc())).encode()

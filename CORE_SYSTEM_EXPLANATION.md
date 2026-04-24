@@ -141,7 +141,7 @@ RDKit parses SMILES, adds hydrogens, and embeds up to `num_conformers` conformer
 
 ### Bayesian screening (`workflow/bayesian.py` + `ml/bayesian.py`)
 
-The workflow enumerates a finite candidate pool of `PlacementSpec` objects, evaluates an initial random subset, converts each evaluated structure’s `PlacementDescriptor` into feature rows (`ml/features.py`), and fits a surrogate (`train_surrogate`: tree ensembles or ridge/HGB). Unevaluated candidates are scored with LCB, EI, or PI (`lcb_scores`, `ei_scores`, `pi_scores`). Tree models expose epistemic spread as across-tree standard deviation; ridge/HGB use zero uncertainty so EI/PI degrade to deterministic ranking. Batches are selected until `bo_total_budget` is exhausted; optional failure penalties add synthetic negative labels when `bo_include_failure_negatives` is enabled.
+Enumerate a finite `PlacementSpec` pool, evaluate a random initial subset, build features from each `PlacementDescriptor`, and fit a surrogate with `train_surrogate` (tree ensembles, `HistGradientBoostingRegressor`, or ridge). Score remaining candidates with LCB, EI, or PI; tree models use forest variance for uncertainty, while ridge and HGB report no uncertainty (EI/PI reduce to ordering by mean). Iterate in batches until `bo_total_budget`. When `bo_include_failure_negatives` is set, failed placements are labeled with configurable penalties. Sample weights (including `bo_transfer_*`) apply to tree fits only; `gradient_boost` and `ridge` do not.
 
 ## Run modes
 
@@ -151,7 +151,7 @@ Enumerates a placement pool per molecule, relaxes the sampled candidates, filter
 
 ### Bayesian screening
 
-Same pipeline as standard screening, but candidates are chosen from a finite pool using a trained surrogate and `lcb` / `ei` / `pi`. Surrogates: `random_forest`, `extra_trees`, `gradient_boost`, `ridge`. Per-sample weights (including `bo_transfer_*`) apply only to tree ensembles; `gradient_boost` and `ridge` fits are unweighted when transfer weights would be used. Optional failure negatives: `bo_include_failure_negatives`, `bo_failure_penalty_*`. Full BO flow is under **Bayesian screening** in **Implementation mechanics** above.
+Same physical pipeline as standard screening; candidate selection, surrogates, and acquisition are described under **Bayesian screening** in **Implementation mechanics** (configuration keys for failure penalties and transfer weights are listed in **Configuration model**).
 
 ### Sequential saturation
 

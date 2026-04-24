@@ -26,15 +26,7 @@ class SymmetryAnalysisError(RuntimeError):
 
 
 class SymmetryAnalyzer:
-    """Analyze symmetry of atomic systems to identify equivalent sites.
-
-    ``mode="periodic"`` uses the ASE cell as a 3D lattice. ``mode="cluster"``
-    centers the structure in an orthorhombic box with padding so periodic
-    images do not interact (molecular / cluster symmetry in a supercell).
-
-    spglib failures propagate from the underlying library; internal
-    consistency checks raise :exc:`SymmetryAnalysisError` (no silent fallback).
-    """
+    """Equivalent adsorption sites: periodic ASE cell, or cluster-in-box (see module doc)."""
 
     def __init__(
         self,

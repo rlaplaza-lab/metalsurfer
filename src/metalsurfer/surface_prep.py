@@ -1,8 +1,4 @@
-"""Public surface-preparation helpers for slab construction and modification.
-
-This module provides a focused import path for utilities that build or modify
-surface slabs before screening workflows are run.
-"""
+"""Slab construction and modification; re-exports helpers and ``prepare_slab``."""
 
 from __future__ import annotations
 
@@ -44,11 +40,9 @@ def prepare_slab(
     device: str = "cuda",
     config=None,
 ) -> SlabContainer:
-    """Build and optionally modify a surface slab ready for adsorption screening.
+    """Build or load a slab, then optionally alloy-substitute and/or deposit adatoms.
 
-    Combines slab construction, alloy substitution, and adatom deposition into
-    a single convenience call.  Exactly one of *bulk_id* or *slab_file* must
-    be supplied.
+    Exactly one of *bulk_id* or *slab_file* is required.
 
     Parameters
     ----------

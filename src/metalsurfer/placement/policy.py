@@ -34,11 +34,7 @@ def max_batch_placement_specs(
     dissociative: bool = False,
     n_hollow_pairs: int = 0,
 ) -> int:
-    """Return the total number of specs in the policy grid.
-
-    Computed by closed-form arithmetic per branch; individual branches are
-    clamped at ``_GRID_BUILD_CAP`` so the total stays bounded.
-    """
+    """Closed-form count of policy-grid specs (per-branch clamp at ``_GRID_BUILD_CAP``)."""
     n_sites = max(
         len(site_indices), 1
     )  # build_batch_placement_specs uses [-1] if empty
@@ -89,12 +85,7 @@ def build_batch_placement_specs(
     n_hollow_pairs: int = 0,
     seed: int = PLACEMENT_GRID_COUNT_SEED,
 ) -> list[PlacementSpec]:
-    """Build stratified BO candidate specs from policy priors.
-
-    Builds up to ``_GRID_BUILD_CAP`` candidates from the Cartesian grid, then
-    subsamples uniformly to *n_desired* when the grid is larger (reproducible
-    via *seed*). Dissociative mode enumerates a small grid fully.
-    """
+    """BO candidate ``PlacementSpec`` list: full Cartesian grid (capped), then uniform subsample to *n_desired* (*seed*); dissociative branch is small and fully enumerated."""
     normalized_sites = site_indices if site_indices else [-1]
     base_fields = {
         "face_flip": False,

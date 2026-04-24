@@ -18,7 +18,13 @@ from .io_results import (
     write_run_metadata,
     write_run_settings,
 )
-from .models import BindingCampaignResult, MoleculeCampaignSummary, ScreeningResult
+from .models import (
+    BindingCampaignResult,
+    MoleculeCampaignSummary,
+    MultiMolSaturationRunResult,
+    SaturationRunResult,
+    ScreeningResult,
+)
 from .optimization import setup_single_model
 from .placement import classify_adsorbate_orientation
 from .surfaces import SlabContainer, coerce_slab_container
@@ -226,17 +232,14 @@ def run_adsorption(
     run_metadata_out: dict[str, Any] | None = None,
     process_kwargs: dict[str, Any] | None = None,
 ) -> BindingCampaignResult:
-    """Run non-BO adsorption screening.
+    """Multi-molecule adsorption screening (non-BO; uses :func:`~metalsurfer.workflow.core.process_molecule`).
 
     Parameters
     ----------
     slab:
-        Surface slab as a :class:`~metalsurfer.surfaces.SlabContainer` or
-        raw :class:`ase.Atoms`.
+        :class:`~metalsurfer.surfaces.SlabContainer` or plain :class:`ase.Atoms`.
     molecules:
-        Either a ``list[tuple[str, str]]`` of ``(smiles, name)`` pairs for
-        in-memory molecule specifications, or a ``str`` path to a CSV file
-        containing ``smiles`` and ``name`` columns.
+        In-memory ``(smiles, name)`` list or path to a CSV with ``smiles`` and ``name`` columns.
     config:
         Screening configuration.
     surface_type:
@@ -289,16 +292,14 @@ def run_adsorption_bo(
     run_metadata_out: dict[str, Any] | None = None,
     process_kwargs: dict[str, Any] | None = None,
 ) -> BindingCampaignResult:
-    """Run Bayesian-optimisation-guided adsorption screening.
+    """Multi-molecule adsorption screening with BO (``bo_enabled`` forced on).
 
     Parameters
     ----------
     slab:
-        Surface slab as a :class:`~metalsurfer.surfaces.SlabContainer` or
-        raw :class:`ase.Atoms`.
+        :class:`~metalsurfer.surfaces.SlabContainer` or plain :class:`ase.Atoms`.
     molecules:
-        Either a ``list[tuple[str, str]]`` of ``(smiles, name)`` pairs or a
-        ``str`` path to a CSV file with ``smiles`` and ``name`` columns.
+        In-memory list or CSV path (``smiles``, ``name``).
     config:
         Screening configuration.  ``bo_enabled`` is forced to ``True``.
     surface_type:
@@ -346,20 +347,15 @@ def run_saturation(
     skip_existing: bool = True,
     failure_summary_out: dict[str, object] | None = None,
     run_metadata_out: dict[str, Any] | None = None,
-) -> list:
-    """Run sequential saturation screening (non-BO).
-
-    Molecules are added to the slab one by one until the best adsorption
-    energy is no longer favourable (E_ads ≥ 0).
+) -> list[SaturationRunResult] | list[MultiMolSaturationRunResult]:
+    """Sequential saturation (non-BO) until best E_ads ≥ 0 or no valid placements.
 
     Parameters
     ----------
     slab:
-        Surface slab as a :class:`~metalsurfer.surfaces.SlabContainer` or
-        raw :class:`ase.Atoms`.
+        :class:`~metalsurfer.surfaces.SlabContainer` or plain :class:`ase.Atoms`.
     molecules:
-        Either a ``list[tuple[str, str]]`` of ``(smiles, name)`` pairs or a
-        ``str`` CSV file path (default: ``"smiles.csv"``).
+        In-memory list or CSV path (default ``"smiles.csv"``).
     config:
         Screening configuration.
     surface_type:
@@ -396,19 +392,17 @@ def run_saturation_bo(
     skip_existing: bool = True,
     failure_summary_out: dict[str, object] | None = None,
     run_metadata_out: dict[str, Any] | None = None,
-) -> list:
-    """Run Bayesian-optimisation-guided saturation screening.
+) -> list[SaturationRunResult] | list[MultiMolSaturationRunResult]:
+    """Saturation with BO-guided placement selection.
 
     Parameters
     ----------
     slab:
-        Surface slab as a :class:`~metalsurfer.surfaces.SlabContainer` or
-        raw :class:`ase.Atoms`.
+        :class:`~metalsurfer.surfaces.SlabContainer` or plain :class:`ase.Atoms`.
     molecules:
-        Either a ``list[tuple[str, str]]`` of ``(smiles, name)`` pairs or a
-        ``str`` CSV file path (default: ``"smiles.csv"``).
+        In-memory list or CSV path (default ``"smiles.csv"``).
     config:
-        Screening configuration.  ``bo_enabled`` is forced to ``True``.
+        Screening configuration; ``bo_enabled`` is set to ``True``.
     surface_type:
         Label for the ``results_{surface_type}/`` output directory.
     skip_existing:
