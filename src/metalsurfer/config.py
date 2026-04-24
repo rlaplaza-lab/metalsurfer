@@ -173,7 +173,7 @@ class AdsorptionConfig:
 
     # Placement retry configuration: attempt to generate requested number of valid
     # placements by retrying failed specs with different random seeds.
-    placement_retry_enabled: bool = False
+    placement_retry_enabled: bool = True
     placement_retry_max_attempts: int = 3
     placement_retry_diversity_seed_increment: int = 1000
 
