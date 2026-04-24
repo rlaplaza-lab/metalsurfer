@@ -1,18 +1,4 @@
-"""Generic surface creation and modification helpers.
-
-This module provides three capabilities:
-
-1. **Base slab creation** from a Materials-Project bulk ID + Miller indices.
-2. **Alloy substitution** – randomly replace a fraction of host atoms with a
-   different element, evaluate several random variants and keep the
-   lowest-energy one.
-3. **Adatom deposition** – place adatoms at hollow sites above the top layer
-   (identified via Delaunay triangulation), again selecting the best variant.
-
-All functions work with plain ASE ``Atoms`` objects, wrapped inside a
-minimal ``SlabContainer`` so callers can reference ``slab.atoms`` the same
-way existing workflows do.
-"""
+"""Slab construction (bulk + Miller), alloy substitution, adatoms, and ``SlabContainer``."""
 
 import logging
 import math

@@ -1,12 +1,4 @@
-"""Random Forest surrogate and acquisition functions for Bayesian placement selection.
-
-Provides helpers to:
-1. Train a lightweight RF surrogate on observed (features, energy) pairs.
-2. Extract per-tree mean and standard deviation for uncertainty.
-3. Score unevaluated candidates via LCB, EI, or PI acquisition for *minimisation*
-   of binding energy.
-4. Select the top-k candidates while excluding already-evaluated specs.
-"""
+"""Surrogate training, uncertainty-aware prediction, and acquisition scoring for BO."""
 
 import logging
 from typing import Any, Literal

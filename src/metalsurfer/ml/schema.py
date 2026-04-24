@@ -1,15 +1,6 @@
-"""Canonical descriptor schema for reproducible binding energy records.
+"""`PlacementRecord` and `ComputationContext` for binding-energy rows.
 
-Every field needed to reproduce a binding energy computation from scratch
-is captured in :class:`PlacementRecord`.  The :class:`ComputationContext`
-stores method/calculator settings so that identical descriptors can be
-distinguished when computed with different levels of theory.
-
-Units convention:
-    - Coordinates: Angstrom
-    - Angles: degrees
-    - Energies: eV
-    - Forces: eV/Angstrom
+Units: Å, degrees, eV, eV/Å (forces).
 """
 
 import hashlib

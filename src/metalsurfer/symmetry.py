@@ -1,20 +1,7 @@
-"""Symmetry analysis for identifying equivalent adsorbate sites.
+"""Equivalent adsorption sites via `spglib` (periodic cell or padded cluster-in-box).
 
-Uses `spglib` for space-group symmetry (periodic slabs) and cluster-in-a-box
-symmetry (finite nanoparticles). Site grouping uses union-find for transitive
-closure; planar vs envelope sites control 2D vs 3D distance checks.
-
-**Periodic slabs:** Symmetry is that of the **3D periodic ASE cell** (including
-vacuum along :math:`c` when present). This is the usual supercell approximation;
-it does **not** implement crystallographic **layer groups** or strict 2D plane
-groups. Interpret ``get_symmetry_info`` / site orbits accordingly.
-
-**Clusters:** Atoms are centered in an orthorhombic cell with a margin of at
-least ``max(8 * symprec, 5)`` Å beyond the bounding box of atomic positions so
-spglib’s periodic treatment does not couple images.
-
-**``symmetry_tolerance``:** Used both as spglib ``symprec`` (lower-bounded) and
-as the Cartesian distance threshold when matching symmetry-related sites.
+Slab symmetry follows the 3D ASE supercell (not layer groups). `symmetry_tolerance`
+is `symprec` for spglib and the Cartesian threshold for site matching.
 """
 
 from __future__ import annotations

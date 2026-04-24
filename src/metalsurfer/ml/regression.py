@@ -1,13 +1,6 @@
-"""Baseline regression models for binding energy prediction.
+"""Sklearn-based regressors: ``train_model``, ``evaluate_model``, ``grouped_cross_validate``.
 
-Provides :func:`train_model` (single fit), :func:`evaluate_model`
-(metrics on held-out data), and :func:`grouped_cross_validate` (grouped
-K-fold with proper stratification to avoid data leakage).
-
-Supported model types:
-    - ``"ridge"``          -- L2-regularised linear regression
-    - ``"random_forest"``  -- ensemble of decision trees
-    - ``"gradient_boost"`` -- histogram-based gradient boosting (sklearn)
+Model types: ``ridge``, ``random_forest``, ``gradient_boost`` (HistGradientBoosting).
 """
 
 import json

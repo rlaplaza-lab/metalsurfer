@@ -1,9 +1,4 @@
-"""Adsorbate placement generation on slab surfaces.
-
-The spec-based workflow (:func:`enumerate_placement_specs` →
-:func:`generate_placement_from_spec`) provides deterministic, reproducible
-placement of adsorbates on surface sites.
-"""
+"""Surface sites, placement specs, and materialized adsorbate geometry."""
 
 from . import generators, geometry, sites
 from ._material import material_aware_pbc

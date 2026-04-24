@@ -1,14 +1,4 @@
-"""Batched geometry optimisation with selective atom freezing.
-
-The default policy is:
-
-* adsorbate atoms: always relax
-* slab top-layer atoms: relax (can be frozen via config)
-* slab sub-surface atoms: frozen
-
-Top-layer detection uses a z-coordinate tolerance
-(``config.top_layer_tolerance``).
-"""
+"""TorchSim/ASE batched relaxations with slab freeze masks (`top_layer_tolerance`, etc.)."""
 
 import contextlib
 import gc

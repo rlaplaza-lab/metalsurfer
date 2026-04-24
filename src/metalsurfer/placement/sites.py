@@ -1,10 +1,4 @@
-"""Site detection and clustering for adsorbate placement.
-
-Unified Voronoi-based sites for slabs, nanoparticles, and 3D-periodic porous
-frameworks. Optional Delaunay-based classification on slab top layers when
-``site_classification_method == 'delaunay'``. Symmetry reduction via
-``get_symmetry_aware_sites()`` builds on ``get_unified_sites()``.
-"""
+"""Voronoi sites, clustering, and optional spglib-based symmetry reduction."""
 
 from __future__ import annotations
 

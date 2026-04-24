@@ -91,7 +91,9 @@ surrogate-guided loop:
 
 Supported acquisition functions: ``lcb``, ``ei``, ``pi``.
 Supported surrogates: ``random_forest``, ``extra_trees``,
-``gradient_boost``, ``ridge``.
+``gradient_boost``, ``ridge``.  Per-sample transfer weights (``bo_transfer_*``)
+apply only to tree surrogates; ``gradient_boost`` and ``ridge`` use
+unweighted fits when those weights would otherwise be passed.
 
 **Sequential Saturation** evolves the slab state step by step — run
 screening, select the best result, update the slab, and repeat until

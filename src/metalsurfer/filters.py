@@ -1,20 +1,7 @@
-"""Post-optimisation filters: decomposition, desorption, and duplicate removal.
+"""Post-relaxation filtering: decomposition, desorption, energy cap, deduplication.
 
-All three filters are applied in a single :func:`filter_results` call so
-that callers get a clean list of unique, intact, adsorbed configurations.
-
-Decomposition detection uses three complementary checks:
-
-1. **Fragment connectivity** -- non-surface atoms must form a single
-   connected component (tested at every multiplier in
-   ``connectivity_multipliers``).
-2. **Molecular-formula match** -- the elemental composition of non-surface
-   atoms must equal the composition derived from the reference SMILES.
-3. **Bond-pair-count match** -- the number of bonds between each
-   element-pair must agree with the reference SMILES.
-4. **Coordination-number fingerprint** -- for each element type the sorted
-   list of bond counts per atom must match, catching rearrangements that
-   preserve total bond-pair counts but change per-atom environments.
+:func:`filter_results` runs one pipeline. Decomposition can check connectivity
+(at multiple radii), formula, bond-pair counts, and coordination vs reference SMILES.
 """
 
 import logging

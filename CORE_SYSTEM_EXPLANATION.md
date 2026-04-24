@@ -147,26 +147,11 @@ The workflow enumerates a finite candidate pool of `PlacementSpec` objects, eval
 
 ### Standard screening
 
-Standard screening enumerates a deterministic placement pool for each molecule, relaxes every sampled candidate, filters the optimized structures, and returns the surviving low-energy adsorption configurations.
-
-This is the baseline mode when broad coverage is preferred over aggressive sample efficiency.
+Enumerates a placement pool per molecule, relaxes the sampled candidates, filters, and returns low-energy configurations (favors coverage over BO sample efficiency).
 
 ### Bayesian screening
 
-Bayesian screening keeps the same conformer generation, placement descriptors, optimization backend, and filters, but changes how candidates are chosen for evaluation.
-
-The BO loop is:
-
-1. Enumerate the candidate pool.
-2. Evaluate an initial random subset.
-3. Build features from placement descriptors.
-4. Fit a surrogate model.
-5. Score unevaluated candidates with an acquisition function.
-6. Evaluate the next batch and repeat until the budget is exhausted.
-
-Supported acquisition modes are `lcb`, `ei`, and `pi`. Supported surrogate families are `random_forest`, `extra_trees`, `gradient_boost`, and `ridge`. Per-sample `sample_weight` is supported only for tree-ensemble surrogates (`random_forest`, `extra_trees`). The Bayesian workflow strips transfer-learning weights when the surrogate is `gradient_boost` or `ridge` (fit is unweighted in that case).
-
-Failed placements can optionally be fed back as penalized negatives through `bo_include_failure_negatives` and `bo_failure_penalty_*`, which helps the surrogate learn which regions of placement space are unproductive.
+Same pipeline as standard screening, but candidates are chosen from a finite pool using a trained surrogate and `lcb` / `ei` / `pi`. Surrogates: `random_forest`, `extra_trees`, `gradient_boost`, `ridge`. Per-sample weights (including `bo_transfer_*`) apply only to tree ensembles; `gradient_boost` and `ridge` fits are unweighted when transfer weights would be used. Optional failure negatives: `bo_include_failure_negatives`, `bo_failure_penalty_*`. Full BO flow is under **Bayesian screening** in **Implementation mechanics** above.
 
 ### Sequential saturation
 
@@ -227,17 +212,7 @@ The conformer stage is controlled by fields such as:
 
 Placement is driven by deterministic `PlacementSpec` objects. A spec records the abstract choice of conformer, site, orientation, tilt, azimuth, and height, while `PlacementDescriptor` records the resolved geometry used for replay and analysis.
 
-The main placement path is:
-
-`enumerate_placement_specs(...) -> generate_placement_from_spec(...) -> PlacementDescriptor`
-
-Benefits of this design:
-
-- reproducibility from seeds and descriptors,
-- easy logging for downstream ML,
-- clean separation between candidate enumeration and expensive optimization.
-
-**Batch placement policy:** `build_batch_placement_specs` (in `metalsurfer.placement.policy`) enumerates the combinatorial grid of conformers, sites, orientations, tilts, azimuths, and z-fractions (subject to an internal size cap), then uniformly subsamples to `n_desired` when the grid is larger. The integer `seed` controls subsampling; the default `PLACEMENT_GRID_COUNT_SEED` aligns `max_batch_placement_specs` with the cardinality of an uncapped enumeration. `enumerate_placement_specs` forwards `AdsorptionConfig.seed`, or an explicit override. For step-by-step site detection, workflow resolution, and materialization, see **Implementation mechanics** above.
+Main path: `enumerate_placement_specs` → `generate_placement_from_spec` → `PlacementDescriptor` (reproducible seeds, separate enumeration from relaxation). Combinatorial grid and subsampling: `build_batch_placement_specs` / `max_batch_placement_specs` in `placement/policy.py` (see **Placement enumeration and materialization** above).
 
 ### 5. Optimization
 
@@ -278,11 +253,7 @@ Persistence is handled separately from compute logic through `io_results.py`.
 
 ## Material types and site generation
 
-`AdsorptionConfig.material_type` is an explicit public contract with three valid values:
-
-- `"slab"`
-- `"nanoparticle"`
-- `"porous"`
+`AdsorptionConfig.material_type` is one of `"slab"`, `"nanoparticle"`, or `"porous"`. Site dicts from `get_unified_sites` always include `material_type`; placement code requires that key when a site is provided (use `config.material_type` when there is no site).
 
 This choice affects:
 
@@ -397,8 +368,6 @@ The `ml` package is not limited to BO. It also supports:
 - model training and evaluation,
 - prediction and ranking utilities.
 
-This makes the core workflow useful both as a simulator and as a data-generation engine for future surrogate models.
-
 ## Dependencies and runtime
 
 Core dependencies include `numpy`, `ase`, `pandas`, `rdkit`, `scipy`, `scikit-learn`, and `spglib`.
@@ -409,12 +378,4 @@ The codebase is built for modern Python, currently Python 3.12+.
 
 ## Design summary
 
-The library is best understood as a layered adsorption-screening engine:
-
-- deterministic candidate generation at the placement level,
-- shared physical validation across all run modes,
-- optional BO for sample efficiency,
-- optional saturation for evolving-surface studies,
-- structured outputs for reproducibility and downstream ML.
-
-The central architectural choice is separation of concerns: surface preparation, candidate enumeration, optimization, filtering, orchestration, and persistence are implemented as distinct layers with typed interfaces between them.
+Layers: surface prep → candidate enumeration → optimization → filtering → orchestration → I/O, with typed dataclasses between stages. BO and saturation are optional paths on the same core.

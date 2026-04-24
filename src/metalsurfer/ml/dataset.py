@@ -1,10 +1,4 @@
-"""Dataset logging: collect PlacementRecords into structured CSV files.
-
-The :class:`DatasetLogger` accumulates records during a screening run
-and flushes them to a CSV that serves as the ML training dataset.
-:func:`load_dataset` reads them back into DataFrames or PlacementRecord
-lists for downstream feature extraction and model training.
-"""
+"""`DatasetLogger` / `load_dataset` for CSV training sets from screening runs."""
 
 import json
 import logging

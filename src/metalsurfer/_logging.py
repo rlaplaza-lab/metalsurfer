@@ -1,4 +1,4 @@
-"""Contextual logging: log_context() and ContextFilter inject molecule/surface_type/etc. into log records."""
+"""Context vars and formatters for structured logging (e.g. ``ctx_prefix``)."""
 
 import contextvars
 import io

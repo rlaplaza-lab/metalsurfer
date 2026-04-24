@@ -1,4 +1,4 @@
-"""Placement generation logic for adsorbate placement on slab surfaces."""
+"""Build placements from specs: sites, orientations, and validation."""
 
 import dataclasses
 import logging

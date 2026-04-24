@@ -3,9 +3,8 @@ metalsurfer
 
 Generic adsorption-energy screening on arbitrary surfaces.
 
-**metalsurfer** combines structure preparation, conformer generation,
-deterministic placement enumeration, MLIP-backed relaxation, and
-chemistry-aware post-filtering into one reproducible workflow stack.
+Workflow: slab preparation, conformers, placement enumeration, relaxation,
+filtering, and optional Bayesian or saturation modes.
 
 .. toctree::
    :maxdepth: 2

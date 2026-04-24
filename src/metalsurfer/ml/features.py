@@ -1,13 +1,4 @@
-"""Feature extraction from PlacementRecords for regression models.
-
-Transforms raw placement descriptors into a numeric feature matrix
-suitable for scikit-learn estimators.
-
-BO mode uses an orientation/site-type independent schema:
-1. **Geometric** -- absolute placement coordinates (x_abs/y_abs/z_abs)
-2. **Rotation** -- quaternion components only (quat_w/x/y/z)
-3. **Identity** -- conformer index (the only categorical concept)
-"""
+"""Numeric features from :class:`PlacementRecord` (xyz, quaternion, conformer index) for sklearn."""
 
 import logging
 

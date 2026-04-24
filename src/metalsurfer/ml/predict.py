@@ -1,8 +1,4 @@
-"""Binding energy prediction from placement descriptors via a trained regression model.
-
-Example: ``predictor = BindingEnergyPredictor.load("model_dir/")``, then
-``pred = predictor.predict_record(record)`` and use ``pred.energy`` as a screening pre-filter.
-"""
+"""`BindingEnergyPredictor`: load a fitted pipeline and score `PlacementRecord` rows."""
 
 from dataclasses import dataclass
 from typing import Any
