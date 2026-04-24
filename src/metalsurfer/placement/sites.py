@@ -10,7 +10,7 @@ import numpy as np
 from ase import Atoms
 from scipy.spatial import Delaunay, KDTree, QhullError, Voronoi
 
-from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
+from ..symmetry import SymmetryAnalyzer
 from ._constants import (
     _ATOP_INJECTION_HEIGHT_FACTOR,
     _ATOP_RATIO,
@@ -366,7 +366,7 @@ def _delaunay_site_classification(
     triangulation : Delaunay
         Pre-computed Delaunay triangulation of top_positions[:, :2].
     positions : (N, 3) array
-        All slab atom positions (for fallback nearest-neighbor).
+        All slab atom positions (nearest-neighbor checks).
     bridge_threshold : float
         Max fractional distance (relative to mean nearest-neighbour
         distance) for a bridge assignment; beyond this a bridge site is
@@ -1039,9 +1039,10 @@ def get_symmetry_aware_sites(
 ) -> list[dict[str, object]]:
     """Symmetry-reduced adsorption sites using spglib.
 
-    Returns a possibly empty list. On empty input or ``SymmetryAnalysisError``,
-    returns ``[]`` so callers use clustered Voronoi sites from
-    :func:`get_unified_sites` without a separate None branch.
+    Returns ``[]`` if there are no input sites. Otherwise runs
+    :class:`~metalsurfer.symmetry.SymmetryAnalyzer` and may raise
+    :class:`~metalsurfer.symmetry.SymmetryAnalysisError` (callers that need
+    Voronoi-only sampling should catch it, e.g. workflow site resolution).
 
     When *raw_sites* is set, it must be the unclustered output of
     :func:`get_unified_sites` for this slab and the same parameters as used
@@ -1072,19 +1073,15 @@ def get_symmetry_aware_sites(
         slab, top_layer_tolerance
     )
 
-    try:
-        symmetry_analyzer = SymmetryAnalyzer(
-            slab,
-            symmetry_tolerance=symmetry_tolerance,
-            mode=sym_mode,
-        )
-        return symmetry_analyzer.analyze_site_symmetry(
-            site_list,
-            planar=planar_for_symmetry,
-        )
-    except SymmetryAnalysisError as exc:
-        logger.debug("Symmetry-aware site reduction skipped: %s", exc)
-        return []
+    symmetry_analyzer = SymmetryAnalyzer(
+        slab,
+        symmetry_tolerance=symmetry_tolerance,
+        mode=sym_mode,
+    )
+    return symmetry_analyzer.analyze_site_symmetry(
+        site_list,
+        planar=planar_for_symmetry,
+    )
 
 
 # ---------------------------------------------------------------------------

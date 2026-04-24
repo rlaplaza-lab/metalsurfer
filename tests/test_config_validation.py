@@ -487,3 +487,24 @@ def test_bo_transfer_config_validation():
     assert c.bo_transfer_weight_cap == 0.25
     with pytest.raises(ValueError, match="bo_transfer_weight_cap"):
         AdsorptionConfig(bo_enabled=True, bo_transfer_weight_cap=1.0)
+
+
+def test_bo_transfer_requires_tree_surrogate():
+    with pytest.raises(ValueError, match="bo_transfer_enabled requires"):
+        AdsorptionConfig(
+            bo_enabled=True,
+            bo_transfer_enabled=True,
+            bo_surrogate="ridge",
+        )
+    with pytest.raises(ValueError, match="bo_transfer_enabled requires"):
+        AdsorptionConfig(
+            bo_enabled=True,
+            bo_transfer_enabled=True,
+            bo_surrogate="gradient_boost",
+        )
+    c = AdsorptionConfig(
+        bo_enabled=True,
+        bo_transfer_enabled=True,
+        bo_surrogate="random_forest",
+    )
+    assert c.bo_surrogate == "random_forest"

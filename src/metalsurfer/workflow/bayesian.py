@@ -41,17 +41,22 @@ def _train_surrogate_for_bo(
     config: AdsorptionConfig,
     sample_weight: np.ndarray | None,
 ):
-    """Fit BO surrogate; per-sample weights apply only to tree ensemble surrogates."""
-    sw = sample_weight
-    if sw is not None and config.bo_surrogate in ("gradient_boost", "ridge"):
-        sw = None
+    """Fit BO surrogate. Per-sample weights are supported only for tree ensembles."""
+    if sample_weight is not None and config.bo_surrogate in (
+        "gradient_boost",
+        "ridge",
+    ):
+        raise ValueError(
+            "sample_weight is only supported for tree BO surrogates "
+            f"(random_forest, extra_trees), not {config.bo_surrogate!r}"
+        )
     return train_surrogate(
         X,
         y,
         surrogate=config.bo_surrogate,
         n_estimators=100,
         random_state=config.seed,
-        sample_weight=sw,
+        sample_weight=sample_weight,
     )
 
 

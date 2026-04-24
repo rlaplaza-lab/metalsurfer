@@ -115,7 +115,7 @@ This section describes what the code actually does inside the modules named abov
 1. **Cache:** Results are memoized from a hash of slab positions, cell, PBC flags, and the boolean `symmetry_broken` (bounded cache, lock-protected).
 2. **Core path:** It always builds the clustered Voronoi set via `_get_unique_sites_for_specs` first.
 3. **Symmetry breaking:** If `symmetry_broken` is true (e.g. after prior saturation steps), symmetry reduction is skipped and the core sites are used.
-4. **Symmetry reduction:** Otherwise it calls `get_symmetry_aware_sites` with the same Voronoi parameters as site discovery and with `raw_sites` set to the unclustered list from step 2, so Voronoi is not run twice. `SymmetryAnalyzer.analyze_site_symmetry` then reduces to symmetry-unique orbits. If the result is non-empty, those sites replace the core clustered list; if it is empty (including when `SymmetryAnalysisError` is caught), the workflow keeps the core clustered sites.
+4. **Symmetry reduction:** Otherwise it calls `get_symmetry_aware_sites` with the same Voronoi parameters as site discovery and with `raw_sites` set to the unclustered list from step 2, so Voronoi is not run twice. `SymmetryAnalyzer.analyze_site_symmetry` then reduces to symmetry-unique orbits. If that succeeds and the result is non-empty, those sites replace the core clustered list. On `SymmetryAnalysisError`, or if there are no symmetry-reduced sites, the workflow keeps the clustered Voronoi sites from step 2 (errors are logged at INFO in `_resolve_site_context_for_sampling`).
 
 ### Placement enumeration and materialization
 
@@ -141,7 +141,7 @@ RDKit parses SMILES, adds hydrogens, and embeds up to `num_conformers` conformer
 
 ### Bayesian screening (`workflow/bayesian.py` + `ml/bayesian.py`)
 
-Enumerate a finite `PlacementSpec` pool, evaluate a random initial subset, build features from each `PlacementDescriptor`, and fit a surrogate with `train_surrogate` (tree ensembles, `HistGradientBoostingRegressor`, or ridge). Score remaining candidates with LCB, EI, or PI; tree models use forest variance for uncertainty, while ridge and HGB report no uncertainty (EI/PI reduce to ordering by mean). Iterate in batches until `bo_total_budget`. When `bo_include_failure_negatives` is set, failed placements are labeled with configurable penalties. Sample weights (including `bo_transfer_*`) apply to tree fits only; `gradient_boost` and `ridge` do not.
+Enumerate a finite `PlacementSpec` pool, evaluate a random initial subset, build features from each `PlacementDescriptor`, and fit a surrogate with `train_surrogate` (tree ensembles, `HistGradientBoostingRegressor`, or ridge). Score remaining candidates with LCB, EI, or PI; tree models use forest variance for uncertainty, while ridge and HGB report no uncertainty (EI/PI use the deterministic limits in the acquisition helpers). Iterate in batches until `bo_total_budget`. When `bo_include_failure_negatives` is set, failed placements are labeled with configurable penalties. Transfer learning (`bo_transfer_enabled`) uses per-sample weights and requires `random_forest` or `extra_trees` (validated in `AdsorptionConfig`).
 
 ## Run modes
 
@@ -279,7 +279,7 @@ Site classes include atop, bridge, hollow, and pore-like positions depending on 
 
 `symmetry.py` uses `spglib` to group equivalent sites. Failed dataset construction raises `SymmetryAnalysisError` (including wrapped `spglib` failures). Orbit construction and Cartesian operation mapping are described under **Implementation mechanics**.
 
-`get_symmetry_aware_sites()` returns an empty list if there are no input sites or if symmetry analysis fails. On `SymmetryAnalysisError`, the placement module logs at debug and returns `[]`. The workflow then keeps the clustered Voronoi sites from `_get_unique_sites_for_specs` (see **How the workflow chooses sites** in **Implementation mechanics**).
+`get_symmetry_aware_sites()` returns an empty list only when there are no input sites. Otherwise it may raise `SymmetryAnalysisError` (e.g. spglib failure). The workflow catches that in `_resolve_site_context_for_sampling`, logs at INFO, and keeps the clustered Voronoi sites from `_get_unique_sites_for_specs` (see **How the workflow chooses sites** in **Implementation mechanics**).
 
 ## Configuration model
 

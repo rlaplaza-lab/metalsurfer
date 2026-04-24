@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 def _rdkit_chem():
-    """RDKit Chem module; import is lazy so tests can mock missing rdkit."""
+    """Return ``rdkit.Chem`` (lazy import for dependency_behavior tests)."""
     try:
         from rdkit import Chem
     except ImportError as exc:

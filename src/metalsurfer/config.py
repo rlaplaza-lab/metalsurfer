@@ -364,6 +364,15 @@ class AdsorptionConfig:
                 self.bo_surrogate,
                 allowed=BO_SURROGATE_OPTIONS,
             )
+            if self.bo_transfer_enabled and self.bo_surrogate in (
+                "gradient_boost",
+                "ridge",
+            ):
+                raise ValueError(
+                    "bo_transfer_enabled requires a tree ensemble surrogate "
+                    "(random_forest or extra_trees); per-sample weights are not supported "
+                    f"for bo_surrogate={self.bo_surrogate!r}"
+                )
             if self.bo_candidate_pool_size is not None:
                 _check_positive_int(
                     "bo_candidate_pool_size", self.bo_candidate_pool_size

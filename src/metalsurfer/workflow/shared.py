@@ -22,6 +22,7 @@ from ..placement import (
     material_aware_pbc,
 )
 from ..placement import generators as placement_generators
+from ..symmetry import SymmetryAnalysisError
 
 logger = logging.getLogger(__name__)
 MIN_CALCULATOR_CELL_C_ANG = 18.0
@@ -446,17 +447,24 @@ def _resolve_site_context_for_sampling(
         )
     else:
         # Reuse unclustered Voronoi sites from _get_unique_sites_for_specs (no second run).
-        symmetry_aware_sites = get_symmetry_aware_sites(
-            slab_atoms,
-            top_layer_tolerance=config.top_layer_tolerance,
-            symmetry_tolerance=config.symmetry_tolerance,
-            material_type=config.material_type,
-            probe_radius=config.voronoi_probe_radius,
-            max_site_distance=config.voronoi_max_site_distance,
-            enrich=config.voronoi_site_enrichment,
-            site_classification_method=config.site_classification_method,
-            raw_sites=_core_ctx.raw_unclustered,
-        )
+        try:
+            symmetry_aware_sites = get_symmetry_aware_sites(
+                slab_atoms,
+                top_layer_tolerance=config.top_layer_tolerance,
+                symmetry_tolerance=config.symmetry_tolerance,
+                material_type=config.material_type,
+                probe_radius=config.voronoi_probe_radius,
+                max_site_distance=config.voronoi_max_site_distance,
+                enrich=config.voronoi_site_enrichment,
+                site_classification_method=config.site_classification_method,
+                raw_sites=_core_ctx.raw_unclustered,
+            )
+        except SymmetryAnalysisError as exc:
+            logger.info(
+                "Symmetry site reduction failed; using clustered Voronoi sites (%s)",
+                exc,
+            )
+            symmetry_aware_sites = []
 
         if symmetry_aware_sites:
             logger.info(
@@ -469,9 +477,7 @@ def _resolve_site_context_for_sampling(
                 raw_unclustered=_core_ctx.raw_unclustered,
             )
         else:
-            logger.debug(
-                "Using clustered Voronoi sites (symmetry reduction unavailable)"
-            )
+            logger.debug("Using clustered Voronoi sites (no symmetry-reduced set)")
             result = placement_generators.SiteContext(
                 sites=core_sites,
                 use_sites=True,

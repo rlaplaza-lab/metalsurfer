@@ -89,12 +89,11 @@ def predict_with_uncertainty(
     model: Pipeline,
     X: pd.DataFrame | np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return ``(mean, sigma)`` where ``sigma`` is epistemic spread when available.
+    """Return ``(mean, sigma)`` for minimisation.
 
-    For tree ensembles (``estimators_`` on the regressor), ``sigma`` is the
-    standard deviation across trees. For ridge / histogram gradient boosting,
-    epistemic uncertainty is not modeled: ``sigma`` is all zeros, so EI/PI
-    degenerate to improvement vs. the point prediction ``mean`` only.
+    Tree ensembles: ``sigma`` is std dev across ``estimators_``. Ridge / HGB:
+    epistemic uncertainty is not defined; ``sigma`` is all zeros (EI/PI then
+    use the deterministic limits in :func:`ei_scores` / :func:`pi_scores`).
     """
     regressor = model.named_steps["regressor"]
     if "scaler" in model.named_steps:
@@ -103,8 +102,6 @@ def predict_with_uncertainty(
         X_eval = X
 
     if hasattr(regressor, "estimators_"):
-        # Tree estimators are trained on array-like internals; predict with ndarray
-        # to avoid sklearn feature-name mismatch warnings.
         X_tree = np.asarray(X_eval)
         tree_preds = np.array([t.predict(X_tree) for t in regressor.estimators_])
         mu = tree_preds.mean(axis=0)
@@ -142,7 +139,7 @@ def ei_scores(
     """Expected Improvement for minimisation (minimize E_ads).
 
     EI = E[max(0, f_best - Y)] under Gaussian Y ~ N(mu, sigma^2). Higher EI is better.
-    When sigma is zero, uses max(0, f_best - mu) (deterministic improvement).
+    When ``sigma`` is (near) zero, uses ``max(0, f_best - mu)``.
     """
     mu = np.asarray(mu, dtype=float).ravel()
     sigma = np.asarray(sigma, dtype=float).ravel()
@@ -308,10 +305,8 @@ def score_and_select(
     For ``acquisition="lcb"`` uses LCB (mu - kappa * sigma); lower is better.
     For ``acquisition="ei"`` and ``acquisition="pi"`` uses EI or PI; higher is better.
     ``f_best`` is required for EI and PI (current best observed value for minimisation).
-    If the surrogate has no per-prediction uncertainty (``sigma`` all zero, e.g. ridge
-    or HGBT), EI/PI reduce to ranking by the noiseless improvement heuristic.
-
-    Returns indices into *candidate_features* (row positions).
+    With zero ``sigma`` (ridge / HGB), EI/PI use the deterministic branch in
+    :func:`ei_scores` / :func:`pi_scores`. Returns row indices into *candidate_features*.
     """
     mu, sigma = predict_with_uncertainty(model, candidate_features)
     if acquisition == "lcb":
