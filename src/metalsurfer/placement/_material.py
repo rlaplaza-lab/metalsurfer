@@ -9,7 +9,7 @@ without creating a circular dependency.
 import numpy as np
 from ase import Atoms
 
-from ._constants import _SLAB_VACUUM_FRACTION
+from ._constants import _SLAB_MAX_OCCUPIED_FRACTION
 
 
 def detect_material_type(atoms: Atoms) -> str:
@@ -30,7 +30,8 @@ def detect_material_type(atoms: Atoms) -> str:
         c_length = float(np.linalg.norm(cell[2]))
         if c_length > 0:
             z_span = float(np.max(positions[:, 2]) - np.min(positions[:, 2]))
-            if z_span / c_length < _SLAB_VACUUM_FRACTION:
+            occupied_fraction = z_span / c_length
+            if occupied_fraction < _SLAB_MAX_OCCUPIED_FRACTION:
                 return "slab"
 
     if bool(pbc[0]) and bool(pbc[1]) and not bool(pbc[2]):

@@ -11,6 +11,32 @@ from ase.data import covalent_radii as ase_covalent_radii
 from ase.data import vdw_radii as ase_vdw_radii
 from ase.geometry import find_mic
 
+from ._constants import (
+    _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE,
+    _BINDER_ALIGNMENT_TARGET_DOT,
+    _BINDER_VECTOR_MIN_NORM,
+    _CONTACT_QUALITY_COVALENT_SUM_SCALE,
+    _FLAT_SHAPE_I1_I3_MAX,
+    _FLAT_SHAPE_I2_I3_MIN,
+    _FRAME_PROJECTION_TIE_EPS,
+    _FRAME_REF_ALIGNMENT_DOT_THRESHOLD,
+    _INERTIA_EPS,
+    _LINEAR_SHAPE_RATIO_MAX,
+    _MIN_DISTANCE_COVALENT_FALLBACK_SCALE,
+    _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM,
+    _MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
+    _PRINCIPAL_AXIS_LONG_ALIGN_MIN_DOT,
+    _PRINCIPAL_AXIS_ROTATION_STEP_DEG,
+    _PRINCIPAL_AXIS_ROTATION_STEPS,
+    _PRINCIPAL_AXIS_ROT_AXIS_MIN_NORM,
+    _PRINCIPAL_AXIS_SHORT_ALIGN_MAX_DOT,
+    _QUATERNION_NORM_EPS,
+    _ROTATION_ALIGN_AXIS_SWITCH_DOT,
+    _ROTATION_ALIGN_DOT_ANTIPARALLEL,
+    _ROTATION_ALIGN_DOT_PARALLEL,
+    _VDW_RADIUS_FROM_COVALENT_SCALE,
+    _VECTOR_NORM_EPS,
+)
 from ._material import material_aware_pbc
 
 logger = logging.getLogger(__name__)
@@ -20,7 +46,7 @@ def normalize_quaternion(quat: np.ndarray) -> np.ndarray:
     """Return normalized quaternion [w, x, y, z] with canonical sign."""
     q = np.asarray(quat, dtype=float).reshape(4)
     nrm = float(np.linalg.norm(q))
-    q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float) if nrm < 1e-12 else q / nrm
+    q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float) if nrm < _QUATERNION_NORM_EPS else q / nrm
     if q[0] < 0.0:
         q = -q
     return q
@@ -102,7 +128,7 @@ def compute_canonical_molecular_frame(
         projections = pos @ frame[:, axis]
         idx = int(np.argmax(np.abs(projections)))
         if projections[idx] < 0 or (
-            abs(projections[idx]) < 1e-10
+            abs(projections[idx]) < _FRAME_PROJECTION_TIE_EPS
             and syms[idx]
             and syms[idx] < syms[int(np.argmin(np.abs(projections)))]
         ):
@@ -115,7 +141,7 @@ def compute_canonical_molecular_frame(
 def _safe_normalize(v: np.ndarray) -> np.ndarray:
     """Normalize a vector, returning the zero vector if norm is near-zero."""
     nrm = float(np.linalg.norm(v))
-    return v / nrm if nrm > 1e-12 else np.zeros_like(v)
+    return v / nrm if nrm > _VECTOR_NORM_EPS else np.zeros_like(v)
 
 
 def compute_surface_site_frame(normal: np.ndarray) -> np.ndarray:
@@ -124,7 +150,7 @@ def compute_surface_site_frame(normal: np.ndarray) -> np.ndarray:
     if z_axis[2] < 0:
         z_axis = -z_axis
     ref = np.array([1.0, 0.0, 0.0], dtype=float)
-    if abs(np.dot(ref, z_axis)) > 0.95:
+    if abs(np.dot(ref, z_axis)) > _FRAME_REF_ALIGNMENT_DOT_THRESHOLD:
         ref = np.array([0.0, 1.0, 0.0], dtype=float)
     x_axis = _safe_normalize(ref - np.dot(ref, z_axis) * z_axis)
     y_axis = np.cross(z_axis, x_axis)
@@ -153,7 +179,7 @@ def _get_vdw_radius(symbol: str) -> float | None:
     # Tabulated VdW may be NaN (e.g. some transition metals in ASE). Use a mild
     # covalent scale so "touching" physisorptive distances (~3+ Å) are not
     # misclassified as overlaps while still flagging sub-Å spurious approaches.
-    return float(cov * 1.2)
+    return float(cov * _VDW_RADIUS_FROM_COVALENT_SCALE)
 
 
 def _mol_slab_pairwise_distances(
@@ -212,7 +238,7 @@ def _rodrigues(axis: np.ndarray, c: float, s: float) -> np.ndarray:
 def _rotation_around_axis(axis: np.ndarray, angle_deg: float) -> np.ndarray:
     """Rotation matrix for rotation by angle_deg around axis (unit vector)."""
     a = np.radians(angle_deg)
-    ax = np.asarray(axis, dtype=float) / (np.linalg.norm(axis) + 1e-12)
+    ax = np.asarray(axis, dtype=float) / (np.linalg.norm(axis) + _VECTOR_NORM_EPS)
     return _rodrigues(ax, np.cos(a), np.sin(a))
 
 
@@ -220,14 +246,18 @@ def _rotation_to_align_vector_to_target(
     vec: np.ndarray, target: np.ndarray
 ) -> np.ndarray:
     """Rotation matrix that aligns vec (unit) to target (unit)."""
-    vec = np.asarray(vec, dtype=float) / (np.linalg.norm(vec) + 1e-12)
-    target = np.asarray(target, dtype=float) / (np.linalg.norm(target) + 1e-12)
+    vec = np.asarray(vec, dtype=float) / (np.linalg.norm(vec) + _VECTOR_NORM_EPS)
+    target = np.asarray(target, dtype=float) / (np.linalg.norm(target) + _VECTOR_NORM_EPS)
     dot = np.clip(np.dot(vec, target), -1.0, 1.0)
-    if dot > 0.9999:
+    if dot > _ROTATION_ALIGN_DOT_PARALLEL:
         return np.eye(3)
-    if dot < -0.9999:
+    if dot < _ROTATION_ALIGN_DOT_ANTIPARALLEL:
         # Anti-parallel: 180° rotation around any perpendicular axis.
-        axis = np.array([1, 0, 0]) if abs(vec[0]) < 0.9 else np.array([0, 1, 0])
+        axis = (
+            np.array([1, 0, 0])
+            if abs(vec[0]) < _ROTATION_ALIGN_AXIS_SWITCH_DOT
+            else np.array([0, 1, 0])
+        )
         axis = np.cross(vec, axis)
         axis /= np.linalg.norm(axis)
         return _rodrigues(axis, -1.0, 0.0)
@@ -291,14 +321,14 @@ def _classify_molecule_shape(
     """
     eigenvals, eigenvecs = _compute_inertia_tensor(positions)
     I1, I2, I3 = eigenvals[0], eigenvals[1], eigenvals[2]
-    eps = 1e-8
+    eps = _INERTIA_EPS
     I3_safe = max(I3, eps)
     I2_safe = max(I2, eps)
 
-    if I1 / I3_safe < 0.02:
+    if I1 / I3_safe < _LINEAR_SHAPE_RATIO_MAX:
         return "linear", eigenvals, eigenvecs
     # Flat (oblate): I1 ≈ I2 << I3 (perpendicular axis theorem)
-    if I1 / I3_safe < 0.55 and I2_safe / I3_safe > 0.45:
+    if I1 / I3_safe < _FLAT_SHAPE_I1_I3_MAX and I2_safe / I3_safe > _FLAT_SHAPE_I2_I3_MIN:
         return "flat", eigenvals, eigenvecs
     return "round", eigenvals, eigenvecs
 
@@ -321,7 +351,7 @@ def _flat_orientation_from_principal_axis(
     pos = np.asarray(ads_pos, dtype=float).copy()
     com = np.mean(pos, axis=0)
     pos -= com
-    normal = np.asarray(normal, dtype=float) / (np.linalg.norm(normal) + 1e-12)
+    normal = np.asarray(normal, dtype=float) / (np.linalg.norm(normal) + _VECTOR_NORM_EPS)
     if normal[2] < 0:
         normal = -normal
 
@@ -355,7 +385,7 @@ def _surface_aligned_rotation(
     pos = np.asarray(ads_pos, dtype=float).copy()
     com = np.mean(pos, axis=0)
     pos -= com
-    normal = np.asarray(normal, dtype=float) / (np.linalg.norm(normal) + 1e-12)
+    normal = np.asarray(normal, dtype=float) / (np.linalg.norm(normal) + _VECTOR_NORM_EPS)
     if normal[2] < 0:
         normal = -normal
 
@@ -370,17 +400,17 @@ def _surface_aligned_rotation(
                 # pos is already centered above; avoid subtracting COM again.
                 v = pos[idx]
                 nv = np.linalg.norm(v)
-                if nv > 0.1:
+                if nv > _BINDER_VECTOR_MIN_NORM:
                     dot = np.dot(v / nv, normal)
                     if dot > best_dot:
                         best_dot = dot
                         i = idx
         v = pos[i]
         nv = np.linalg.norm(v)
-        if nv > 0.1:
+        if nv > _BINDER_VECTOR_MIN_NORM:
             best_vec = v / nv
             dot = np.dot(best_vec, normal)
-            if dot < 0.95:
+            if dot < _BINDER_ALIGNMENT_TARGET_DOT:
                 R = _rotation_to_align_vector_to_target(-best_vec, normal)
                 pos = (R @ pos.T).T
     else:
@@ -394,7 +424,7 @@ def _rotation_with_tilt(
     pos: np.ndarray, normal: np.ndarray, tilt_deg: float, azimuth_deg: float
 ) -> np.ndarray:
     """Apply tilt and azimuth to positions (centred at origin)."""
-    normal = np.asarray(normal, dtype=float) / (np.linalg.norm(normal) + 1e-12)
+    normal = np.asarray(normal, dtype=float) / (np.linalg.norm(normal) + _VECTOR_NORM_EPS)
     up = np.array([0, 0, 1.0])
     R_align = _rotation_to_align_vector_to_target(up, normal)
     pos = (R_align @ pos.T).T
@@ -422,14 +452,14 @@ def _principal_axis_rotation(
     shortest_axis = principal_axes[:, 0]
     longest_axis = principal_axes[:, -1]
     if (
-        abs(np.dot(shortest_axis, normal_vector)) < 0.7
-        and abs(np.dot(longest_axis, normal_vector)) > 0.3
+        abs(np.dot(shortest_axis, normal_vector)) < _PRINCIPAL_AXIS_SHORT_ALIGN_MAX_DOT
+        and abs(np.dot(longest_axis, normal_vector)) > _PRINCIPAL_AXIS_LONG_ALIGN_MIN_DOT
     ):
         if np.dot(shortest_axis, normal_vector) < 0:
             shortest_axis = -shortest_axis
         rot_ax = np.cross(shortest_axis, normal_vector)
         norm = np.linalg.norm(rot_ax)
-        if norm > 1e-6:
+        if norm > _PRINCIPAL_AXIS_ROT_AXIS_MIN_NORM:
             rot_ax /= norm
             angle_deg = 0.5 * np.degrees(
                 np.arccos(np.clip(np.dot(shortest_axis, normal_vector), -1, 1))
@@ -444,8 +474,8 @@ def _principal_axis_rotation(
         axis = principal_axes[:, ax_idx].copy()
         if np.dot(axis, normal_vector) < 0:
             axis = -axis
-        for step in range(36):
-            R = _rotation_around_axis(axis, step * 10.0)
+        for step in range(_PRINCIPAL_AXIS_ROTATION_STEPS):
+            R = _rotation_around_axis(axis, step * _PRINCIPAL_AXIS_ROTATION_STEP_DEG)
             test = (R @ (pos - com).T).T + com
             # score by min-z (higher = more clearance)
             min_z = float(np.min(test[:, 2]))
@@ -503,7 +533,7 @@ def detect_vdw_overlaps(
 def calculate_contact_quality(
     molecule_atoms: Atoms,
     slab: Atoms,
-    contact_distance_threshold: float = 2.5,
+    contact_distance_threshold: float | None = None,
     exclude_slab_atoms: int | None = None,
 ) -> dict[str, float | int]:
     """Contact metrics: min distance, covalent ratio at closest pair, and pair counts."""
@@ -539,6 +569,13 @@ def calculate_contact_quality(
         contact_distance / (r1 + r2) if (r1 is not None and r2 is not None) else 1.0
     )
 
+    if contact_distance_threshold is None:
+        r1c = _get_covalent_radius(mol_syms[i_closest])
+        r2c = _get_covalent_radius(slab_syms[j_closest])
+        if r1c is not None and r2c is not None:
+            contact_distance_threshold = _CONTACT_QUALITY_COVALENT_SUM_SCALE * (r1c + r2c)
+        else:
+            contact_distance_threshold = _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM
     mask = dists <= contact_distance_threshold
     contact_pairs = int(np.count_nonzero(mask))
     contacting_atoms = {int(i) for i in np.where(np.any(mask, axis=1))[0]}
@@ -626,7 +663,7 @@ def calculate_min_distance_pair(
 def check_initial_placement_distance(
     molecule_atoms: Atoms,
     slab: Atoms,
-    min_distance: float = 1.5,
+    min_distance: float = _MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
     min_contact_ratio: float = 0.8,
     max_initial_distance: float | None = None,
     reject_vdw_overlaps: bool = False,
@@ -677,7 +714,10 @@ def check_initial_placement_distance(
     if r1 is not None and r2 is not None:
         min_allowed = (r1 + r2) * min_contact_ratio
     else:
-        min_allowed = max(min_distance, 2.0)
+        min_allowed = max(
+            min_distance,
+            _MIN_DISTANCE_COVALENT_FALLBACK_SCALE * _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM,
+        )
         logger.debug(
             "Unknown covalent radius for %s or %s; using conservative min distance %.2f A",
             mol_syms[mol_idx],
@@ -712,7 +752,7 @@ def check_initial_placement_distance(
 def check_adsorbate_separation(
     new_adsorbate: Atoms,
     pre_adsorbed_positions: np.ndarray,
-    min_separation: float = 2.0,
+    min_separation: float | None = None,
     cell: np.ndarray | None = None,
     pbc: list[bool] | None = None,
 ) -> tuple[bool, float]:
@@ -747,5 +787,15 @@ def check_adsorbate_separation(
         diffs = new_pos[:, None, :] - pre_adsorbed_positions[None, :, :]
         min_dist = float(np.min(np.linalg.norm(diffs, axis=2)))
 
+    if min_separation is None:
+        new_syms = new_adsorbate.get_chemical_symbols()
+        new_r = [_get_covalent_radius(s) for s in new_syms]
+        valid_new = [r for r in new_r if r is not None]
+        ref_radius = (
+            float(np.mean(valid_new))
+            if valid_new
+            else _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM / 2.0
+        )
+        min_separation = _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE * (2.0 * ref_radius)
     ok = min_dist >= min_separation
     return ok, min_dist

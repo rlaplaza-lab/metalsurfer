@@ -6,18 +6,23 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from ..models import PlacementSpec
+from ._constants import (
+    _AZIMUTH,
+    _AZIMUTH_IN_PLANE,
+    _GRID_BUILD_CAP,
+    _PLACEMENT_GRID_COUNT_SEED,
+    _TILT_FULL,
+    _TILT_PARALLEL,
+    _Z_FRACTIONS,
+)
 
-TILT_FULL = [0.0, 15.0, 30.0, 45.0, 60.0, 90.0]
-TILT_PARALLEL = [0.0, 15.0, 30.0]
-AZIMUTH = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
-AZIMUTH_IN_PLANE = [0.0, 90.0, 180.0, 270.0]
-Z_FRACTIONS = [0.1, 0.3, 0.5, 0.7, 0.9]
-
-# Fixed seed for :func:`max_batch_placement_specs` so grid cardinality matches
-# a full build with ``n_desired`` large enough to hold the entire combinatorial grid.
-PLACEMENT_GRID_COUNT_SEED = 0
-
-_GRID_BUILD_CAP = 10**9
+# Backward-compatible policy grid exports.
+TILT_FULL = list(_TILT_FULL)
+TILT_PARALLEL = list(_TILT_PARALLEL)
+AZIMUTH = list(_AZIMUTH)
+AZIMUTH_IN_PLANE = list(_AZIMUTH_IN_PLANE)
+Z_FRACTIONS = list(_Z_FRACTIONS)
+PLACEMENT_GRID_COUNT_SEED = _PLACEMENT_GRID_COUNT_SEED
 
 
 def _clamp(n: int, cap: int = _GRID_BUILD_CAP) -> int:
@@ -40,24 +45,24 @@ def max_batch_placement_specs(
     )  # build_batch_placement_specs uses [-1] if empty
 
     if dissociative:
-        return _clamp(max(n_hollow_pairs, 1) * len(Z_FRACTIONS))
+        return _clamp(max(n_hollow_pairs, 1) * len(_Z_FRACTIONS))
 
     if flat_aromatic:
         parallel = (
             n_conformers
             * 2
-            * len(TILT_PARALLEL)
-            * len(AZIMUTH)
-            * len(Z_FRACTIONS)
-            * len(AZIMUTH_IN_PLANE)
+            * len(_TILT_PARALLEL)
+            * len(_AZIMUTH)
+            * len(_Z_FRACTIONS)
+            * len(_AZIMUTH_IN_PLANE)
             * n_sites
         )
         en_down = (
             n_conformers
             * max(n_binders, 1)
-            * len(TILT_FULL)
-            * len(AZIMUTH)
-            * len(Z_FRACTIONS)
+            * len(_TILT_FULL)
+            * len(_AZIMUTH)
+            * len(_Z_FRACTIONS)
             * n_sites
         )
         return _clamp(parallel) + _clamp(en_down)
@@ -66,7 +71,7 @@ def max_batch_placement_specs(
     # the same size for both.
     _ = shape
     return _clamp(
-        n_conformers * len(TILT_FULL) * len(AZIMUTH) * len(Z_FRACTIONS) * n_sites
+        n_conformers * len(_TILT_FULL) * len(_AZIMUTH) * len(_Z_FRACTIONS) * n_sites
     )
 
 
@@ -83,7 +88,7 @@ def build_batch_placement_specs(
     filter_spec: Callable[[PlacementSpec], bool] | None = None,
     dissociative: bool = False,
     n_hollow_pairs: int = 0,
-    seed: int = PLACEMENT_GRID_COUNT_SEED,
+    seed: int = _PLACEMENT_GRID_COUNT_SEED,
 ) -> list[PlacementSpec]:
     """BO candidate ``PlacementSpec`` list: full Cartesian grid (capped), then uniform subsample to *n_desired* (*seed*); dissociative branch is small and fully enumerated."""
     normalized_sites = site_indices if site_indices else [-1]
@@ -125,7 +130,7 @@ def build_batch_placement_specs(
                 azimuth_deg=0.0,
                 z_fraction=zfv,
             )
-            for pair_idx, zfv in itertools.product(pair_indices, Z_FRACTIONS)
+            for pair_idx, zfv in itertools.product(pair_indices, _Z_FRACTIONS)
         )
         specs = _collect(items, cap=n_desired)
     elif flat_aromatic:
@@ -146,10 +151,10 @@ def build_batch_placement_specs(
             for ci, ff, tl, azv, zfv, aip, si in itertools.product(
                 range(n_conformers),
                 [False, True],
-                TILT_PARALLEL,
-                AZIMUTH,
-                Z_FRACTIONS,
-                AZIMUTH_IN_PLANE,
+                _TILT_PARALLEL,
+                _AZIMUTH,
+                _Z_FRACTIONS,
+                _AZIMUTH_IN_PLANE,
                 normalized_sites,
             )
         )
@@ -168,9 +173,9 @@ def build_batch_placement_specs(
             for ci, ei, tl, azv, zfv, si in itertools.product(
                 range(n_conformers),
                 range(max(n_binders, 1)),
-                TILT_FULL,
-                AZIMUTH,
-                Z_FRACTIONS,
+                _TILT_FULL,
+                _AZIMUTH,
+                _Z_FRACTIONS,
                 normalized_sites,
             )
         )
@@ -195,9 +200,9 @@ def build_batch_placement_specs(
             )
             for ci, tl, azv, zfv, si in itertools.product(
                 range(n_conformers),
-                TILT_FULL,
-                AZIMUTH,
-                Z_FRACTIONS,
+                _TILT_FULL,
+                _AZIMUTH,
+                _Z_FRACTIONS,
                 normalized_sites,
             )
         )

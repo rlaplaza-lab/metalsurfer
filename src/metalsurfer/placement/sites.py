@@ -14,23 +14,48 @@ from ..symmetry import SymmetryAnalyzer
 from ._constants import (
     _ATOP_INJECTION_HEIGHT_FACTOR,
     _ATOP_RATIO,
+    _BOUNDING_BOX_CELL_PAD_ANGSTROM,
     _BRIDGE_EQ_TOL,
     _BRIDGE_FAR_RATIO,
+    _DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
+    _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
+    _DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
+    _DEFAULT_SYMMETRY_TOLERANCE,
+    _DELAUNAY_BRIDGE_THRESHOLD_FRACTION,
+    _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM,
+    _DISTANCE_RATIO_FLOOR_EPS,
+    _DISTANCE_ZERO_EPS,
     _ENRICHMENT_MAX_SUBDIVISIONS,
     _ENRICHMENT_SPACING_BETA,
     _HOLLOW_EQ_TOL,
+    _KD_RADIUS_SEARCH_PADDING,
+    _MOL_COVALENT_RADIUS_FALLBACK,
     _NORMAL_K_NEIGHBOURS,
-    _PORE_THRESHOLD_ANGSTROM,
+    _NON_SLAB_Z_HI_FROM_NN_SCALE,
+    _NON_SLAB_Z_LO_FROM_NN_SCALE,
+    _PORE_THRESHOLD_COVALENT_SCALE,
+    _PORE_THRESHOLD_MIN_ANGSTROM,
+    _SITE_CLASSIFICATION_NEIGHBOURS,
+    _SITE_Z_RADIUS_REFERENCE_ANGSTROM,
+    _SITE_Z_RADIUS_SHIFT_SCALE,
+    _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM,
+    _SURFACE_NORMAL_FALLBACK_NORM_EPS,
+    _TOP_LAYER_DEPTH_COVALENT_SCALE,
+    _TOP_LAYER_DEPTH_MIN_ANGSTROM,
+    _VORONOI_FRACTIONAL_CELL_MARGIN,
     _VORONOI_DEDUP_TOLERANCE,
+    _VORONOI_MAX_DISTANCE_COVALENT_SCALE,
+    _VORONOI_PROBE_RADIUS_COVALENT_SCALE,
+    _VORONOI_RADIUS_FALLBACK_ANGSTROM,
 )
 from ._material import detect_material_type, material_type_for_placement
 from .geometry import _get_covalent_radius
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SYMMETRY_TOLERANCE = 0.1
-DEFAULT_SITE_EQUIVALENCE_TOLERANCE = 0.05
-DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE = 0.1
+DEFAULT_SYMMETRY_TOLERANCE = _DEFAULT_SYMMETRY_TOLERANCE
+DEFAULT_SITE_EQUIVALENCE_TOLERANCE = _DEFAULT_SITE_EQUIVALENCE_TOLERANCE
+DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE = _DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
 
 
 # ---------------------------------------------------------------------------
@@ -89,13 +114,58 @@ def _is_duplicate_of(
     return nearest < tolerance
 
 
+def _mean_covalent_radius(symbols: list[str]) -> float:
+    radii = [_get_covalent_radius(s) for s in symbols]
+    valid = [r for r in radii if r is not None]
+    if not valid:
+        return _VORONOI_RADIUS_FALLBACK_ANGSTROM
+    return float(np.mean(valid))
+
+
+def _derive_voronoi_distance_window(
+    positions: np.ndarray,
+    symbols: list[str],
+    pbc: np.ndarray,
+) -> tuple[float, float]:
+    if len(positions) == 0:
+        base_radius = _VORONOI_RADIUS_FALLBACK_ANGSTROM
+    elif bool(pbc[2]):
+        z_max = float(np.max(positions[:, 2]))
+        top_depth = _TOP_LAYER_DEPTH_MIN_ANGSTROM
+        top_mask = positions[:, 2] >= (z_max - top_depth)
+        top_idx = np.nonzero(top_mask)[0]
+        top_symbols = [symbols[int(i)] for i in top_idx] if len(top_idx) else symbols
+        base_radius = _mean_covalent_radius(top_symbols)
+    else:
+        base_radius = _mean_covalent_radius(symbols)
+
+    probe_radius = _VORONOI_PROBE_RADIUS_COVALENT_SCALE * base_radius
+    max_distance = _VORONOI_MAX_DISTANCE_COVALENT_SCALE * base_radius
+    return float(probe_radius), float(max(max_distance, probe_radius))
+
+
+def _derive_top_layer_tolerance(
+    positions: np.ndarray,
+    symbols: list[str],
+) -> float:
+    mean_radius = _mean_covalent_radius(symbols)
+    return max(_TOP_LAYER_DEPTH_MIN_ANGSTROM, _TOP_LAYER_DEPTH_COVALENT_SCALE * mean_radius)
+
+
+def _derive_pore_threshold(symbols: list[str]) -> float:
+    """Return pore classification threshold from mean covalent radius."""
+    mean_radius = _mean_covalent_radius(symbols)
+    return max(_PORE_THRESHOLD_MIN_ANGSTROM, _PORE_THRESHOLD_COVALENT_SCALE * mean_radius)
+
+
 def _voronoi_sites(
     positions: np.ndarray,
     cell: np.ndarray,
     pbc: np.ndarray,
-    probe_radius: float = 1.2,
-    max_distance: float = 4.0,
+    probe_radius: float | None = None,
+    max_distance: float | None = None,
     enrich: bool = True,
+    symbols: list[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Voronoi vertices accessible for adsorption, optionally enriched.
 
@@ -109,6 +179,12 @@ def _voronoi_sites(
     """
     if len(positions) < 4:
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
+    if symbols is None:
+        symbols = ["C"] * len(positions)
+    if probe_radius is None or max_distance is None:
+        derived_probe, derived_max = _derive_voronoi_distance_window(positions, symbols, pbc)
+        probe_radius = derived_probe if probe_radius is None else probe_radius
+        max_distance = derived_max if max_distance is None else max_distance
 
     extended = _build_periodic_images(positions, cell, pbc)
     try:
@@ -127,7 +203,9 @@ def _voronoi_sites(
         inside = np.ones(len(frac), dtype=bool)
         for dim in range(3):
             if pbc[dim]:
-                inside &= (frac[:, dim] >= -0.01) & (frac[:, dim] < 1.01)
+                inside &= (
+                    frac[:, dim] >= -_VORONOI_FRACTIONAL_CELL_MARGIN
+                ) & (frac[:, dim] < 1.0 + _VORONOI_FRACTIONAL_CELL_MARGIN)
         inside_indices = np.nonzero(inside)[0]
         raw_vertices = raw_vertices[inside_indices]
     else:
@@ -234,7 +312,7 @@ def _enrich_along_ridges(
         return vertices, nn_dists
 
     # Compute support atom sets for each kept vertex (k=4 nearest framework atoms)
-    k_support = min(4, len(extended_positions))
+    k_support = min(_SITE_CLASSIFICATION_NEIGHBOURS, len(extended_positions))
     _, support_indices = framework_tree.query(vertices, k=k_support)
     if support_indices.ndim == 1:
         support_indices = support_indices.reshape(-1, 1)
@@ -310,8 +388,8 @@ def _classify_voronoi_site(
     vertex: np.ndarray,
     positions: np.ndarray,
     tree: KDTree | None = None,
-    pore_threshold: float = _PORE_THRESHOLD_ANGSTROM,
-    k: int = 4,
+    pore_threshold: float = _PORE_THRESHOLD_MIN_ANGSTROM,
+    k: int = _SITE_CLASSIFICATION_NEIGHBOURS,
 ) -> tuple[str, tuple[int, ...]]:
     """Classify vertex as atop/bridge/hollow/pore."""
     k = min(k, len(positions))
@@ -323,17 +401,20 @@ def _classify_voronoi_site(
     if len(dists) == 0:
         return "atop", ()
     d1 = dists[0]
-    if d1 < 1e-12:
+    if d1 < _DISTANCE_ZERO_EPS:
         return "atop", (int(idx[0]),)
     if d1 > pore_threshold:
         return "pore", tuple(int(i) for i in idx)
     if len(dists) >= 2 and dists[1] / d1 > _ATOP_RATIO:
         return "atop", (int(idx[0]),)
     if len(dists) >= 3 and all(
-        abs(dists[i] - d1) / max(d1, 1e-8) < _HOLLOW_EQ_TOL for i in range(1, 3)
+        abs(dists[i] - d1) / max(d1, _DISTANCE_RATIO_FLOOR_EPS) < _HOLLOW_EQ_TOL
+        for i in range(1, 3)
     ):
         return "hollow", tuple(int(i) for i in idx[:3])
-    if len(dists) >= 2 and abs(dists[1] - d1) / max(d1, 1e-8) < _BRIDGE_EQ_TOL:
+    if len(dists) >= 2 and abs(dists[1] - d1) / max(
+        d1, _DISTANCE_RATIO_FLOOR_EPS
+    ) < _BRIDGE_EQ_TOL:
         far3 = len(dists) < 3 or dists[2] / d1 > _BRIDGE_FAR_RATIO
         if far3:
             return "bridge", tuple(int(i) for i in idx[:2])
@@ -347,7 +428,7 @@ def _delaunay_site_classification(
     triangulation: Delaunay,
     positions: np.ndarray,
     *,
-    bridge_threshold: float = 0.3,
+    bridge_threshold: float = _DELAUNAY_BRIDGE_THRESHOLD_FRACTION,
 ) -> tuple[str, tuple[int, ...]]:
     """Classify site using Delaunay triangulation of top-layer atoms.
 
@@ -405,7 +486,11 @@ def _delaunay_site_classification(
         _nn_d, _ = _top_tree.query(top_xy, k=2)
         char_len = float(np.mean(_nn_d[:, 1]))
     else:
-        char_len = best_dist if best_dist < float("inf") else 1.0
+        char_len = (
+            best_dist
+            if best_dist < float("inf")
+            else _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM
+        )
 
     # Check bridge: edge midpoints
     seen_edges: set[tuple[int, int]] = set()
@@ -470,7 +555,7 @@ def _compute_local_normal(
     centroid = np.mean(positions[idx.ravel()], axis=0)
     vec = vertex - centroid
     norm = float(np.linalg.norm(vec))
-    if norm < 1e-8:
+    if norm < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
         return np.array([0.0, 0.0, 1.0])
     return vec / norm
 
@@ -532,11 +617,11 @@ def _build_site_records(
 
 def get_unified_sites(
     atoms: Atoms,
-    probe_radius: float = 1.2,
-    max_site_distance: float = 4.0,
-    top_layer_tolerance: float = 0.5,
+    probe_radius: float | None = None,
+    max_site_distance: float | None = None,
+    top_layer_tolerance: float | None = None,
     material_type: str | None = None,
-    pore_threshold: float = _PORE_THRESHOLD_ANGSTROM,
+    pore_threshold: float | None = None,
     enrich: bool = True,
     site_classification_method: str = "distance_ratio",
 ) -> list[dict[str, object]]:
@@ -549,17 +634,21 @@ def get_unified_sites(
     ----------
     atoms : Atoms
         ASE Atoms object.
-    probe_radius : float, optional
-        Minimum distance from Voronoi vertex to any atom (default 1.2 Å).
-    max_site_distance : float, optional
-        Maximum distance from Voronoi vertex to nearest atom (default 4.0 Å).
-    top_layer_tolerance : float, optional
-        For slabs, filter z below top surface by this amount (default 0.5 Å).
+    probe_radius : float | None, optional
+        Minimum distance from Voronoi vertex to any atom. When None, derived
+        from top-surface mean covalent radius.
+    max_site_distance : float | None, optional
+        Maximum distance from Voronoi vertex to nearest atom. When None,
+        derived from top-surface mean covalent radius.
+    top_layer_tolerance : float | None, optional
+        For slabs, filter z below top surface by this amount. When None,
+        derived from top-surface mean covalent radius.
     material_type : str | None, optional
         One of "slab", "nanoparticle", "porous". If None, auto-detect from structure.
         Config layer requires explicit selection; None here is for internal flexibility.
-    pore_threshold : float, optional
-        Distance threshold for pore site classification (default ~3.0 Å).
+    pore_threshold : float | None, optional
+        Distance threshold for pore site classification. When None, derived
+        from mean top-layer covalent radius.
     enrich : bool, optional
         When True (default), subdivide long admissible Voronoi edges to
         improve site coverage on rugged surfaces and porous materials.
@@ -594,6 +683,12 @@ def get_unified_sites(
     if material_type == "nanoparticle":
         pbc_for_voronoi[:] = False
 
+    symbols = atoms.get_chemical_symbols()
+    if top_layer_tolerance is None:
+        top_layer_tolerance = _derive_top_layer_tolerance(positions, symbols)
+    if pore_threshold is None:
+        pore_threshold = _derive_pore_threshold(symbols)
+
     if np.linalg.det(cell) <= 0:
         cell = _bounding_box_cell(positions)
 
@@ -605,6 +700,7 @@ def get_unified_sites(
         probe_radius=probe_radius,
         max_distance=max_site_distance,
         enrich=enrich,
+        symbols=symbols,
     )
 
     if len(vertices) == 0:
@@ -655,7 +751,19 @@ def get_unified_sites(
     # Inject explicit atop candidates above top-layer / surface atoms so
     # that atop binding (preferred for CO, H₂O, NH₃, etc.) is represented.
     if material_type in ("slab", "nanoparticle") and len(vertices) > 0:
-        median_nn = float(np.median(nn_dists)) if len(nn_dists) > 0 else 1.5
+        if probe_radius is None or max_site_distance is None:
+            derived_probe, derived_max = _derive_voronoi_distance_window(
+                positions, symbols, pbc_for_voronoi
+            )
+            probe_radius = derived_probe if probe_radius is None else probe_radius
+            max_site_distance = (
+                derived_max if max_site_distance is None else max_site_distance
+            )
+        median_nn = (
+            float(np.median(nn_dists))
+            if len(nn_dists) > 0
+            else _VORONOI_MAX_DISTANCE_COVALENT_SCALE * _VORONOI_RADIUS_FALLBACK_ANGSTROM
+        )
         atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
 
         if material_type == "slab":
@@ -732,8 +840,6 @@ def get_unified_sites(
     if len(vertices) == 0:
         return []
 
-    symbols = atoms.get_chemical_symbols()
-
     # Pre-compute Delaunay triangulation for slab classification if requested.
     _use_delaunay = site_classification_method == "delaunay" and material_type == "slab"
     _delaunay_tri = None
@@ -783,7 +889,7 @@ def get_unified_sites(
 
 def get_hollow_sites_for_adatoms(
     slab: Atoms,
-    top_layer_tolerance: float = 0.5,
+    top_layer_tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
     dedup_tolerance: float = DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
 ) -> list[np.ndarray]:
     """Hollow/pore site xy positions for adatom placement, deduplicated."""
@@ -980,7 +1086,11 @@ def _cluster_equivalent_sites(
     # ------------------------------------------------------------------
     # Slab: 2D fractional (a,b) + absolute z with 3×3 periodic tiling in xy
     # ------------------------------------------------------------------
-    z_tol = z_abs_tolerance if z_abs_tolerance is not None else 0.5
+    z_tol = (
+        z_abs_tolerance
+        if z_abs_tolerance is not None
+        else _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM
+    )
     inv_2d = np.linalg.inv(cell[:2, :2])
 
     def _slab_coord(s: dict[str, object]) -> np.ndarray:
@@ -1003,7 +1113,7 @@ def _cluster_equivalent_sites(
     # Slight padding on the KDTree radius so it catches all candidates under
     # either the fractional-xy or absolute-z tolerance; the pair_filter then
     # applies the per-dimension thresholds strictly.
-    r_search = max(tolerance, z_tol) * 1.5
+    r_search = max(tolerance, z_tol) * _KD_RADIUS_SEARCH_PADDING
     reps = _cluster_with_metric(
         n,
         slab_coords,
@@ -1028,11 +1138,11 @@ def _cluster_equivalent_sites(
 
 def get_symmetry_aware_sites(
     slab: Atoms,
-    top_layer_tolerance: float = 0.5,
+    top_layer_tolerance: float | None = None,
     symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE,
     material_type: str = "slab",
-    probe_radius: float = 1.2,
-    max_site_distance: float = 4.0,
+    probe_radius: float | None = None,
+    max_site_distance: float | None = None,
     enrich: bool = True,
     site_classification_method: str = "distance_ratio",
     raw_sites: list[dict[str, object]] | None = None,
@@ -1051,6 +1161,12 @@ def get_symmetry_aware_sites(
     if material_type not in ("slab", "nanoparticle", "porous"):
         raise ValueError(
             f"material_type must be 'slab', 'nanoparticle', or 'porous', got {material_type!r}"
+        )
+
+    if top_layer_tolerance is None:
+        top_layer_tolerance = _derive_top_layer_tolerance(
+            slab.get_positions(),
+            slab.get_chemical_symbols(),
         )
 
     if raw_sites is not None:
@@ -1091,8 +1207,8 @@ def get_symmetry_aware_sites(
 
 def _is_top_layer_planar(
     slab: Atoms,
-    top_layer_tolerance: float = 0.5,
-    z_variance_threshold: float = 0.01,
+    top_layer_tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
+    z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
 ) -> bool:
     """True if the topmost atomic layer is approximately flat."""
     positions = slab.get_positions()
@@ -1111,7 +1227,10 @@ def _is_top_layer_planar(
     return float(np.var(z - z_pred)) < z_variance_threshold
 
 
-def _bounding_box_cell(positions: np.ndarray, pad: float = 5.0) -> np.ndarray:
+def _bounding_box_cell(
+    positions: np.ndarray,
+    pad: float = _BOUNDING_BOX_CELL_PAD_ANGSTROM,
+) -> np.ndarray:
     """Orthorhombic cell spanning atomic positions plus padding."""
     lo = positions.min(axis=0)
     hi = positions.max(axis=0)
@@ -1141,7 +1260,8 @@ def _get_site_surface_radii(
         indices = None
 
     if indices is None:
-        top_mask = positions[:, 2] >= (z_max - 0.5)
+        top_depth = _derive_top_layer_tolerance(positions, symbols)
+        top_mask = positions[:, 2] >= (z_max - top_depth)
         indices = tuple(int(i) for i in np.nonzero(top_mask)[0])
 
     radii = [_get_covalent_radius(symbols[i]) for i in indices]
@@ -1180,8 +1300,8 @@ def _compute_site_z_base(
         and str(site.get("site_type", "")) != "pore"
     ):
         nn = float(site["nn_distance"])
-        nn_lo = nn * 0.7
-        nn_hi = nn * 1.2
+        nn_lo = nn * _NON_SLAB_Z_LO_FROM_NN_SCALE
+        nn_hi = nn * _NON_SLAB_Z_HI_FROM_NN_SCALE
         if nn_hi - nn_lo < z_hi - z_lo:
             z_lo, z_hi = nn_lo, nn_hi
 
@@ -1193,14 +1313,14 @@ def _compute_site_z_base(
     r_surface = _get_site_surface_radii(slab, site)
     mol_radii = [_get_covalent_radius(s) for s in mol_symbols]
     mol_radii = [r for r in mol_radii if r is not None]
-    r_mol = float(np.mean(mol_radii)) if mol_radii else 0.77
+    r_mol = float(np.mean(mol_radii)) if mol_radii else _MOL_COVALENT_RADIUS_FALLBACK
 
     if r_surface is None:
         return z_lo, z_hi
 
-    r_ref = 2.0
-    scale = 0.5
-    delta = scale * (r_mol + r_surface - r_ref)
+    delta = _SITE_Z_RADIUS_SHIFT_SCALE * (
+        r_mol + r_surface - _SITE_Z_RADIUS_REFERENCE_ANGSTROM
+    )
     return z_lo + delta, z_hi + delta
 
 

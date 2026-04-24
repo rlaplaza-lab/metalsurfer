@@ -17,13 +17,25 @@ from . import geometry as geom
 from . import policy
 from . import sites as sts
 from ._constants import (
-    _DISSOCIATIVE_MAX_ADJACENT_SEP,
-    _DISSOCIATIVE_MIN_FRAGMENT_SEP,
-    _PARALLEL_Z_FLOOR_ANGSTROM,
-    _PARALLEL_Z_HI_SHRINK,
-    _PARALLEL_Z_LO_SHRINK,
+    _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM,
+    _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM,
+    _DISSOCIATIVE_MAX_ADJACENT_SEP_NN_SCALE,
+    _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM,
+    _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE,
+    _ORIENTATION_CLASSIFICATION_PARALLEL_DOT_THRESHOLD,
+    _PARALLEL_FRACTION_HIGH_BINDER_RATIO,
+    _PARALLEL_FRACTION_HIGH_RATIO_CUTOFF,
+    _PARALLEL_FRACTION_MEDIUM_BINDER_RATIO,
+    _PARALLEL_FRACTION_MEDIUM_RATIO_CUTOFF,
+    _PARALLEL_FRACTION_NO_BINDERS,
+    _PARALLEL_FRACTION_NO_RING,
+    _PARALLEL_Z_FLOOR_MIN_ANGSTROM,
+    _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE,
+    _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE,
+    _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE,
     _PARALLEL_Z_MIN_HI_MARGIN,
-    _SITE_Z_OFFSETS,
+    _SITE_Z_OFFSET_FROM_SURFACE_RADIUS,
+    _VECTOR_NORM_EPS,
 )
 from ._material import material_type_for_placement
 
@@ -127,13 +139,68 @@ def _is_flat_aromatic_with_en(smiles: str) -> bool:
         return False
     mol = Chem.AddHs(mol)
     aromatic = any(a.GetIsAromatic() for a in mol.GetAtoms())
-    binders = {"O", "N", "S", "F", "Cl", "Br", "I"}
-    has_en = any(a.GetSymbol() in binders for a in mol.GetAtoms())
+    symbols = [a.GetSymbol() for a in mol.GetAtoms()]
+    binder_indices = geom._binding_atom_candidates(symbols)
+    binder_set = {symbols[i] for i in binder_indices}
+    has_en = any(a.GetSymbol() in binder_set for a in mol.GetAtoms())
     return bool(aromatic and has_en)
 
 
+def _mean_molecule_covalent_radius(symbols: list[str]) -> float:
+    radii = [geom._get_covalent_radius(s) for s in symbols]
+    valid = [r for r in radii if r is not None]
+    if not valid:
+        return sts._MOL_COVALENT_RADIUS_FALLBACK
+    return float(np.mean(valid))
+
+
+def _radius_sum_for_site(
+    slab: Atoms,
+    site: dict[str, object] | None,
+    mol_symbols: list[str],
+) -> float | None:
+    r_surface = sts._get_site_surface_radii(slab, site)
+    if r_surface is None:
+        return None
+    return r_surface + _mean_molecule_covalent_radius(mol_symbols)
+
+
+def _site_type_z_offset(
+    slab: Atoms,
+    site: dict[str, object] | None,
+    site_type: str | None,
+) -> float:
+    if not site_type or site_type not in _SITE_Z_OFFSET_FROM_SURFACE_RADIUS:
+        return 0.0
+    r_surface = sts._get_site_surface_radii(slab, site)
+    if r_surface is None:
+        return 0.0
+    return _SITE_Z_OFFSET_FROM_SURFACE_RADIUS[site_type] * r_surface
+
+
+def _parallel_z_adjustments(
+    slab: Atoms,
+    site: dict[str, object] | None,
+    mol_symbols: list[str],
+) -> tuple[float, float, float]:
+    radius_sum = _radius_sum_for_site(slab, site, mol_symbols)
+    if radius_sum is None:
+        return (
+            _PARALLEL_Z_FLOOR_MIN_ANGSTROM,
+            0.4,
+            0.6,
+        )
+    return (
+        max(_PARALLEL_Z_FLOOR_MIN_ANGSTROM, _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE * radius_sum),
+        _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE * radius_sum,
+        _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE * radius_sum,
+    )
+
+
 def classify_adsorbate_orientation(
-    atoms: Atoms, slab_size: int, threshold: float = 0.7
+    atoms: Atoms,
+    slab_size: int,
+    threshold: float = _ORIENTATION_CLASSIFICATION_PARALLEL_DOT_THRESHOLD,
 ) -> str:
     """Classify adsorbate as 'parallel' or 'EN-down' from inertia (plane normal vs surface).
 
@@ -176,15 +243,15 @@ def _estimate_parallel_fraction(
         n_ring = sum(1 for s in symbols if s == "C")
 
     if n_binders == 0:
-        return 0.8
+        return _PARALLEL_FRACTION_NO_BINDERS
     if n_ring == 0:
-        return 0.5
+        return _PARALLEL_FRACTION_NO_RING
     ratio = n_binders / n_ring
-    if ratio >= 0.5:
-        return 0.3
-    if ratio >= 0.2:
-        return 0.5
-    return 0.8
+    if ratio >= _PARALLEL_FRACTION_HIGH_RATIO_CUTOFF:
+        return _PARALLEL_FRACTION_HIGH_BINDER_RATIO
+    if ratio >= _PARALLEL_FRACTION_MEDIUM_RATIO_CUTOFF:
+        return _PARALLEL_FRACTION_MEDIUM_BINDER_RATIO
+    return _PARALLEL_FRACTION_NO_BINDERS
 
 
 def _get_unique_sites_for_specs(
@@ -335,7 +402,7 @@ def _pose_from_spec(
 
     if site is not None and "normal" in site:
         site_normal = np.asarray(site["normal"], dtype=float)
-        if np.linalg.norm(site_normal) > 1e-8:
+        if np.linalg.norm(site_normal) > _VECTOR_NORM_EPS:
             normal = site_normal / np.linalg.norm(site_normal)
 
     mat_type = material_type_for_placement(site, when_no_site=config.material_type)
@@ -353,16 +420,18 @@ def _pose_from_spec(
         return None
 
     z_base_lo, z_base_hi = sts._compute_site_z_base(config, slab, site, symbols)
-    if site and spec.site_type and spec.site_type in _SITE_Z_OFFSETS:
-        offset = _SITE_Z_OFFSETS[spec.site_type]
+    if site and spec.site_type:
+        offset = _site_type_z_offset(slab, site, spec.site_type)
         z_base_lo += offset
         z_base_hi += offset
 
     flat_aromatic = _is_flat_aromatic(shape, smiles, symbols)
     if flat_aromatic and spec.orientation_type == "parallel" and mat_type != "porous":
-        z_base_lo = max(_PARALLEL_Z_FLOOR_ANGSTROM, z_base_lo - _PARALLEL_Z_LO_SHRINK)
+        z_floor, z_lo_shrink, z_hi_shrink = _parallel_z_adjustments(slab, site, symbols)
+        z_base_lo = max(z_floor, z_base_lo - z_lo_shrink)
         z_base_hi = max(
-            z_base_lo + _PARALLEL_Z_MIN_HI_MARGIN, z_base_hi - _PARALLEL_Z_HI_SHRINK
+            z_base_lo + _PARALLEL_Z_MIN_HI_MARGIN,
+            z_base_hi - z_hi_shrink,
         )
 
     zf = spec.z_fraction if z_fraction is None else z_fraction
@@ -449,9 +518,10 @@ def _context_from_pose(
 ) -> _PlacementContext | None:
     """Replay path: normalize quaternion, rotate *canonical_pos*, resolve site for ``_finalize_placement``."""
     raw_q = np.array([pose.quat_w, pose.quat_x, pose.quat_y, pose.quat_z], dtype=float)
-    if float(np.linalg.norm(raw_q)) < 1e-10:
+    if float(np.linalg.norm(raw_q)) < _VECTOR_NORM_EPS:
         logger.warning(
-            "Degenerate quaternion (norm < 1e-10) for placement_index=%d; skipping",
+            "Degenerate quaternion (norm < %.1e) for placement_index=%d; skipping",
+            _VECTOR_NORM_EPS,
             pose.placement_index,
         )
         return None
@@ -510,7 +580,7 @@ def _recover_z_offset(ctx: _PlacementContext, z_abs: float) -> float:
         site_xyz = np.asarray(site["xyz"], dtype=float)
         site_normal = np.asarray(site["normal"], dtype=float)
         nrm = float(np.linalg.norm(site_normal))
-        if nrm > 1e-8:
+        if nrm > _VECTOR_NORM_EPS:
             site_normal = site_normal / nrm
             displacement = (
                 np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float) - site_xyz
@@ -991,14 +1061,35 @@ def _get_hollow_site_pairs(
         if len(hollow_sites) < 2:
             return []
 
-    min_fragment_sep = _DISSOCIATIVE_MIN_FRAGMENT_SEP
-    max_adjacent_sep = _DISSOCIATIVE_MAX_ADJACENT_SEP
-    surface_z = float(np.max(sites_slab.get_positions()[:, 2]))
+    symbols = sites_slab.get_chemical_symbols()
+    top_positions = sites_slab.get_positions()
+    z_surface = float(np.max(top_positions[:, 2]))
+    top_mask = top_positions[:, 2] >= (z_surface - config.top_layer_tolerance)
+    top_idx = np.nonzero(top_mask)[0]
+    top_radii = [geom._get_covalent_radius(symbols[int(i)]) for i in top_idx]
+    top_radii = [r for r in top_radii if r is not None]
+    mean_top_radius = float(np.mean(top_radii)) if top_radii else 1.0
+    min_fragment_sep = max(
+        _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM,
+        _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE * (2.0 * mean_top_radius),
+    )
 
-    site_3d = np.array([np.append(h, surface_z) for h in hollow_sites])
-
-    # Lazy import: optional dependency, avoid import-time cost.
     from scipy.spatial import KDTree as _KDTree
+
+    site_3d = np.array([np.append(h, z_surface) for h in hollow_sites])
+    if len(site_3d) >= 2:
+        _nn_tree = _KDTree(site_3d)
+        nn_d, _ = _nn_tree.query(site_3d, k=2)
+        mean_nn_sep = float(np.mean(nn_d[:, 1]))
+    else:
+        mean_nn_sep = _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM
+    max_adjacent_sep = float(
+        np.clip(
+            _DISSOCIATIVE_MAX_ADJACENT_SEP_NN_SCALE * mean_nn_sep,
+            _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM,
+            _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM,
+        )
+    )
 
     tree = _KDTree(site_3d)
     candidate_pairs = tree.query_pairs(r=max_adjacent_sep)
