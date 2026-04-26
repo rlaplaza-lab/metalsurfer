@@ -435,7 +435,7 @@ def _molecules_to_smiles_file(
     surface_type: str,
     skip_existing: bool,
 ) -> str:
-    """Return a CSV file path, writing a temporary file when *molecules* is a list."""
+    """Return a CSV file path, writing a temp file (without header) when *molecules* is a list."""
     if isinstance(molecules, str):
         return molecules
     import csv
@@ -443,6 +443,7 @@ def _molecules_to_smiles_file(
     import tempfile
 
     # Write to a temp file in the results directory so skip_existing can work.
+    # Note: No header row — load_molecules expects headerless CSV with (smiles, name) columns.
     results_dir = f"results_{surface_type}"
     os.makedirs(results_dir, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -453,7 +454,6 @@ def _molecules_to_smiles_file(
         newline="",
     ) as tmp:
         writer = csv.writer(tmp)
-        writer.writerow(["smiles", "name"])
         for smiles, name in molecules:
             writer.writerow([smiles, name])
     return tmp.name
