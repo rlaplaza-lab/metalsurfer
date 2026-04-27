@@ -57,9 +57,7 @@ def _generate_placements_with_retry(
     failures: list[PlacementFailureEvent] = []
 
     max_attempts = (
-        config.placement_retry_max_attempts
-        if config.placement_retry_enabled
-        else 1
+        config.placement_retry_max_attempts if config.placement_retry_enabled else 1
     )
     seed_increment = config.placement_retry_diversity_seed_increment
 

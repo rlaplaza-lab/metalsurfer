@@ -1,5 +1,6 @@
 """Internal constants for placement numerics and physical heuristics."""
 
+
 # Compute mean covalent radius of common adsorbate elements from ASE data.
 # This replaces hardcoded fallback values with dynamically computed values.
 def _compute_mean_adsorbate_covalent_radius() -> float:

@@ -46,7 +46,11 @@ def normalize_quaternion(quat: np.ndarray) -> np.ndarray:
     """Return normalized quaternion [w, x, y, z] with canonical sign."""
     q = np.asarray(quat, dtype=float).reshape(4)
     nrm = float(np.linalg.norm(q))
-    q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float) if nrm < _QUATERNION_NORM_EPS else q / nrm
+    q = (
+        np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+        if nrm < _QUATERNION_NORM_EPS
+        else q / nrm
+    )
     if q[0] < 0.0:
         q = -q
     return q
@@ -269,7 +273,9 @@ def _rotation_to_align_vector_to_target(
 ) -> np.ndarray:
     """Rotation matrix that aligns vec (unit) to target (unit)."""
     vec = np.asarray(vec, dtype=float) / (np.linalg.norm(vec) + _VECTOR_NORM_EPS)
-    target = np.asarray(target, dtype=float) / (np.linalg.norm(target) + _VECTOR_NORM_EPS)
+    target = np.asarray(target, dtype=float) / (
+        np.linalg.norm(target) + _VECTOR_NORM_EPS
+    )
     dot = np.clip(np.dot(vec, target), -1.0, 1.0)
     if dot > _ROTATION_ALIGN_DOT_PARALLEL:
         return np.eye(3)
@@ -350,7 +356,10 @@ def _classify_molecule_shape(
     if I1 / I3_safe < _LINEAR_SHAPE_RATIO_MAX:
         return "linear", eigenvals, eigenvecs
     # Flat (oblate): I1 ≈ I2 << I3 (perpendicular axis theorem)
-    if I1 / I3_safe < _FLAT_SHAPE_I1_I3_MAX and I2_safe / I3_safe > _FLAT_SHAPE_I2_I3_MIN:
+    if (
+        I1 / I3_safe < _FLAT_SHAPE_I1_I3_MAX
+        and I2_safe / I3_safe > _FLAT_SHAPE_I2_I3_MIN
+    ):
         return "flat", eigenvals, eigenvecs
     return "round", eigenvals, eigenvecs
 
@@ -373,7 +382,9 @@ def _flat_orientation_from_principal_axis(
     pos = np.asarray(ads_pos, dtype=float).copy()
     com = np.mean(pos, axis=0)
     pos -= com
-    normal = np.asarray(normal, dtype=float) / (np.linalg.norm(normal) + _VECTOR_NORM_EPS)
+    normal = np.asarray(normal, dtype=float) / (
+        np.linalg.norm(normal) + _VECTOR_NORM_EPS
+    )
     if normal[2] < 0:
         normal = -normal
 
@@ -407,7 +418,9 @@ def _surface_aligned_rotation(
     pos = np.asarray(ads_pos, dtype=float).copy()
     com = np.mean(pos, axis=0)
     pos -= com
-    normal = np.asarray(normal, dtype=float) / (np.linalg.norm(normal) + _VECTOR_NORM_EPS)
+    normal = np.asarray(normal, dtype=float) / (
+        np.linalg.norm(normal) + _VECTOR_NORM_EPS
+    )
     if normal[2] < 0:
         normal = -normal
 
@@ -446,7 +459,9 @@ def _rotation_with_tilt(
     pos: np.ndarray, normal: np.ndarray, tilt_deg: float, azimuth_deg: float
 ) -> np.ndarray:
     """Apply tilt and azimuth to positions (centred at origin)."""
-    normal = np.asarray(normal, dtype=float) / (np.linalg.norm(normal) + _VECTOR_NORM_EPS)
+    normal = np.asarray(normal, dtype=float) / (
+        np.linalg.norm(normal) + _VECTOR_NORM_EPS
+    )
     up = np.array([0, 0, 1.0])
     R_align = _rotation_to_align_vector_to_target(up, normal)
     pos = (R_align @ pos.T).T
@@ -475,7 +490,8 @@ def _principal_axis_rotation(
     longest_axis = principal_axes[:, -1]
     if (
         abs(np.dot(shortest_axis, normal_vector)) < _PRINCIPAL_AXIS_SHORT_ALIGN_MAX_DOT
-        and abs(np.dot(longest_axis, normal_vector)) > _PRINCIPAL_AXIS_LONG_ALIGN_MIN_DOT
+        and abs(np.dot(longest_axis, normal_vector))
+        > _PRINCIPAL_AXIS_LONG_ALIGN_MIN_DOT
     ):
         if np.dot(shortest_axis, normal_vector) < 0:
             shortest_axis = -shortest_axis
@@ -595,7 +611,9 @@ def calculate_contact_quality(
         r1c = _get_covalent_radius(mol_syms[i_closest])
         r2c = _get_covalent_radius(slab_syms[j_closest])
         if r1c is not None and r2c is not None:
-            contact_distance_threshold = _CONTACT_QUALITY_COVALENT_SUM_SCALE * (r1c + r2c)
+            contact_distance_threshold = _CONTACT_QUALITY_COVALENT_SUM_SCALE * (
+                r1c + r2c
+            )
         else:
             contact_distance_threshold = _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM
     mask = dists <= contact_distance_threshold
@@ -738,7 +756,8 @@ def check_initial_placement_distance(
     else:
         min_allowed = max(
             min_distance,
-            _MIN_DISTANCE_COVALENT_FALLBACK_SCALE * _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM,
+            _MIN_DISTANCE_COVALENT_FALLBACK_SCALE
+            * _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM,
         )
         logger.debug(
             "Unknown covalent radius for %s or %s; using conservative min distance %.2f A",

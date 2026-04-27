@@ -191,7 +191,10 @@ def _parallel_z_adjustments(
             0.6,
         )
     return (
-        max(_PARALLEL_Z_FLOOR_MIN_ANGSTROM, _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE * radius_sum),
+        max(
+            _PARALLEL_Z_FLOOR_MIN_ANGSTROM,
+            _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE * radius_sum,
+        ),
         _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE * radius_sum,
         _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE * radius_sum,
     )

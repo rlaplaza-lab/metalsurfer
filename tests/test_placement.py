@@ -233,8 +233,13 @@ def test_calculate_min_distance_requires_explicit_pbc_for_periodic_cell():
 def test_material_type_for_placement():
     with pytest.raises(ValueError, match="material_type"):
         material_type_for_placement({"site_type": "atop"})
-    assert material_type_for_placement({"site_type": "atop", "material_type": "porous"}) == "porous"
-    assert material_type_for_placement({"material_type": "nanoparticle"}) == "nanoparticle"
+    assert (
+        material_type_for_placement({"site_type": "atop", "material_type": "porous"})
+        == "porous"
+    )
+    assert (
+        material_type_for_placement({"material_type": "nanoparticle"}) == "nanoparticle"
+    )
 
 
 def test_deduplicate_points_returns_expected_keep_mask():
@@ -308,7 +313,13 @@ def test_get_unified_sites_slab_nanoparticle_porous_have_expected_metadata():
         for site in sites:
             assert site["material_type"] == mat
             # Updated to accept both old "voronoi" and new topology-based sources
-            assert site["site_source"] in ("voronoi", "topology_atop", "topology_bridge", "topology_hollow", "atop_injected")
+            assert site["site_source"] in (
+                "voronoi",
+                "topology_atop",
+                "topology_bridge",
+                "topology_hollow",
+                "atop_injected",
+            )
             assert "nn_distance" in site and site["nn_distance"] is not None
             assert np.asarray(site["xyz"]).shape == (3,)
             assert np.linalg.norm(np.asarray(site["normal"])) > 0.5

@@ -348,7 +348,9 @@ class TestProcessMolecule:
         mock_specs = MagicMock(return_value=[])
         with (
             patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs),
-            patch("metalsurfer.placement.generators.enumerate_placement_specs", mock_specs),
+            patch(
+                "metalsurfer.placement.generators.enumerate_placement_specs", mock_specs
+            ),
             patch(
                 "metalsurfer.workflow.core.auto_resize_slab_for_molecule", mock_resize
             ),
@@ -378,7 +380,9 @@ class TestProcessMolecule:
         mock_specs = MagicMock(return_value=[])
         with (
             patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs),
-            patch("metalsurfer.placement.generators.enumerate_placement_specs", mock_specs),
+            patch(
+                "metalsurfer.placement.generators.enumerate_placement_specs", mock_specs
+            ),
             patch(
                 "metalsurfer.workflow.core.auto_resize_slab_for_molecule", mock_resize
             ),

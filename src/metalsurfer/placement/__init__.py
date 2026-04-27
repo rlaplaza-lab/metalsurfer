@@ -38,7 +38,7 @@ def _get_site_surface_radii(
 ) -> float | None:
     """Mean covalent radius of framework atoms nearest to the placement site."""
     from .sites import _derive_top_layer_tolerance, _get_covalent_radius
-    
+
     positions = slab.get_positions()
     symbols = slab.get_chemical_symbols()
     cell = np.asarray(slab.get_cell(), dtype=float)
@@ -53,6 +53,7 @@ def _get_site_surface_radii(
     if indices is None:
         top_depth = _derive_top_layer_tolerance(positions, symbols)
         from .sites import _top_layer_mask_by_normal
+
         top_mask = _top_layer_mask_by_normal(positions, cell, float(top_depth))
         indices = tuple(int(i) for i in np.nonzero(top_mask)[0])
 
@@ -61,7 +62,6 @@ def _get_site_surface_radii(
     if not radii:
         return None
     return float(np.mean(radii))
-
 
 
 def _compute_site_z_base(

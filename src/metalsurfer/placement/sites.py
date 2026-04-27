@@ -1,4 +1,3 @@
-
 """Hybrid topology/Voronoi site generation, clustering, and optional spglib-based symmetry reduction.
 
 Key improvements over the original implementation
@@ -91,11 +90,9 @@ def _cart_to_frac(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
     return arr @ inv_cell
 
 
-
 def _frac_to_cart(points_frac: np.ndarray, cell: np.ndarray) -> np.ndarray:
     """Convert fractional row-vectors to Cartesian coordinates."""
     return np.asarray(points_frac, dtype=float) @ cell
-
 
 
 def _wrap_fractional(frac: np.ndarray, pbc: np.ndarray) -> np.ndarray:
@@ -107,8 +104,9 @@ def _wrap_fractional(frac: np.ndarray, pbc: np.ndarray) -> np.ndarray:
     return wrapped
 
 
-
-def _wrap_cartesian(points: np.ndarray, cell: np.ndarray, pbc: np.ndarray) -> np.ndarray:
+def _wrap_cartesian(
+    points: np.ndarray, cell: np.ndarray, pbc: np.ndarray
+) -> np.ndarray:
     """Wrap Cartesian points into the reference cell along periodic axes."""
     if not np.any(pbc):
         return np.asarray(points, dtype=float).copy()
@@ -116,15 +114,15 @@ def _wrap_cartesian(points: np.ndarray, cell: np.ndarray, pbc: np.ndarray) -> np
     return _frac_to_cart(_wrap_fractional(frac, pbc), cell)
 
 
-
-def _minimum_image_fractional_delta(delta_frac: np.ndarray, pbc: np.ndarray) -> np.ndarray:
+def _minimum_image_fractional_delta(
+    delta_frac: np.ndarray, pbc: np.ndarray
+) -> np.ndarray:
     """Apply the minimum-image convention to fractional coordinate differences."""
     delta = np.asarray(delta_frac, dtype=float).copy()
     for dim in range(3):
         if bool(pbc[dim]):
             delta[..., dim] -= np.round(delta[..., dim])
     return delta
-
 
 
 def _reciprocal_plane_spacings(cell: np.ndarray) -> np.ndarray:
@@ -136,7 +134,6 @@ def _reciprocal_plane_spacings(cell: np.ndarray) -> np.ndarray:
         norm_g = float(np.linalg.norm(g))
         spacings[dim] = 1.0 / norm_g if norm_g > 0.0 else np.inf
     return spacings
-
 
 
 def _slab_plane_projectors(cell: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -177,7 +174,6 @@ def _slab_plane_projectors(cell: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return pinv_ab_T, ortho_basis
 
 
-
 def _slab_normal(cell: np.ndarray) -> np.ndarray:
     """Unit normal to the slab plane spanned by cell a and b."""
     a = np.asarray(cell[0], dtype=float)
@@ -189,7 +185,6 @@ def _slab_normal(cell: np.ndarray) -> np.ndarray:
     return n / norm_n
 
 
-
 def _height_along_slab_normal(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
     """Signed coordinate of points along the slab normal."""
     n = _slab_normal(cell)
@@ -197,13 +192,13 @@ def _height_along_slab_normal(points: np.ndarray, cell: np.ndarray) -> np.ndarra
     return arr @ n
 
 
-
-def _shift_along_slab_normal(points: np.ndarray, cell: np.ndarray, distance: float) -> np.ndarray:
+def _shift_along_slab_normal(
+    points: np.ndarray, cell: np.ndarray, distance: float
+) -> np.ndarray:
     """Translate points by *distance* along the slab normal."""
     n = _slab_normal(cell)
     arr = np.asarray(points, dtype=float)
     return arr + float(distance) * n
-
 
 
 def _project_to_slab_plane(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
@@ -211,7 +206,6 @@ def _project_to_slab_plane(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
     _, ortho_basis = _slab_plane_projectors(cell)
     arr = np.asarray(points, dtype=float)
     return arr @ ortho_basis.T
-
 
 
 def _top_layer_mask_by_normal(
@@ -247,7 +241,9 @@ def _periodic_image_offsets(
             if not np.isfinite(spacing) or spacing <= 0.0:
                 n_img = 1
             else:
-                n_img = max(1, int(np.ceil((margin + _VORONOI_DEDUP_TOLERANCE) / spacing)))
+                n_img = max(
+                    1, int(np.ceil((margin + _VORONOI_DEDUP_TOLERANCE) / spacing))
+                )
             ranges.append(list(range(-n_img, n_img + 1)))
         else:
             ranges.append([0])
@@ -258,7 +254,6 @@ def _periodic_image_offsets(
             for k in ranges[2]:
                 offsets.append(i * cell[0] + j * cell[1] + k * cell[2])
     return offsets
-
 
 
 def _build_periodic_images(
@@ -310,7 +305,6 @@ def _union_find_cluster(
     return list(groups.values())
 
 
-
 def _deduplicate_points(
     points: np.ndarray,
     tolerance: float,
@@ -337,7 +331,9 @@ def _deduplicate_points(
                 keep[j] = False
         return keep
 
-    offsets = _periodic_image_offsets(np.asarray(cell, dtype=float), np.asarray(pbc, dtype=bool), tolerance)
+    offsets = _periodic_image_offsets(
+        np.asarray(cell, dtype=float), np.asarray(pbc, dtype=bool), tolerance
+    )
     expanded = np.vstack([pts + off for off in offsets])
     tree = KDTree(expanded)
     raw_pairs = tree.query_pairs(r=tolerance, output_type="ndarray")
@@ -355,7 +351,6 @@ def _deduplicate_points(
     return keep
 
 
-
 def _is_duplicate_of(
     candidate: np.ndarray,
     tree: KDTree | None,
@@ -364,7 +359,9 @@ def _is_duplicate_of(
     """True when *candidate* is within *tolerance* of any point in *tree*."""
     if tree is None:
         return False
-    nearest = float(tree.query(np.asarray(candidate, dtype=float).reshape(1, 3), k=1)[0].ravel()[0])
+    nearest = float(
+        tree.query(np.asarray(candidate, dtype=float).reshape(1, 3), k=1)[0].ravel()[0]
+    )
     return nearest < tolerance
 
 
@@ -379,7 +376,6 @@ def _mean_covalent_radius(symbols: list[str]) -> float:
     if not valid:
         return _VORONOI_RADIUS_FALLBACK_ANGSTROM
     return float(np.mean(valid))
-
 
 
 def _derive_voronoi_distance_window(
@@ -404,20 +400,22 @@ def _derive_voronoi_distance_window(
     return float(probe_radius), float(max(max_distance, probe_radius))
 
 
-
 def _derive_top_layer_tolerance(
     positions: np.ndarray,
     symbols: list[str],
 ) -> float:
     mean_radius = _mean_covalent_radius(symbols)
-    return max(_TOP_LAYER_DEPTH_MIN_ANGSTROM, _TOP_LAYER_DEPTH_COVALENT_SCALE * mean_radius)
-
+    return max(
+        _TOP_LAYER_DEPTH_MIN_ANGSTROM, _TOP_LAYER_DEPTH_COVALENT_SCALE * mean_radius
+    )
 
 
 def _derive_pore_threshold(symbols: list[str]) -> float:
     """Return pore classification threshold from mean covalent radius."""
     mean_radius = _mean_covalent_radius(symbols)
-    return max(_PORE_THRESHOLD_MIN_ANGSTROM, _PORE_THRESHOLD_COVALENT_SCALE * mean_radius)
+    return max(
+        _PORE_THRESHOLD_MIN_ANGSTROM, _PORE_THRESHOLD_COVALENT_SCALE * mean_radius
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -442,12 +440,16 @@ def _voronoi_sites(
         symbols = ["C"] * len(positions)
 
     if probe_radius is None or max_distance is None:
-        derived_probe, derived_max = _derive_voronoi_distance_window(positions, symbols, pbc)
+        derived_probe, derived_max = _derive_voronoi_distance_window(
+            positions, symbols, pbc
+        )
         probe_radius = derived_probe if probe_radius is None else probe_radius
         max_distance = derived_max if max_distance is None else max_distance
 
     if np.linalg.det(cell) <= 0.0:
-        logger.debug("Degenerate cell for Voronoi generation; falling back to no-PBC enumeration")
+        logger.debug(
+            "Degenerate cell for Voronoi generation; falling back to no-PBC enumeration"
+        )
         pbc = np.zeros(3, dtype=bool)
 
     extension_margin = float(max_distance) + _VORONOI_DEDUP_TOLERANCE
@@ -482,9 +484,7 @@ def _voronoi_sites(
         inside = np.ones(len(frac), dtype=bool)
         for dim in range(3):
             if bool(pbc[dim]):
-                inside &= (
-                    frac[:, dim] >= -_VORONOI_FRACTIONAL_CELL_MARGIN
-                ) & (
+                inside &= (frac[:, dim] >= -_VORONOI_FRACTIONAL_CELL_MARGIN) & (
                     frac[:, dim] < 1.0 + _VORONOI_FRACTIONAL_CELL_MARGIN
                 )
         wrapped_vertices = wrapped_vertices[inside]
@@ -494,7 +494,9 @@ def _voronoi_sites(
     if len(wrapped_vertices) == 0:
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
 
-    keep = _deduplicate_points(wrapped_vertices, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc)
+    keep = _deduplicate_points(
+        wrapped_vertices, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
+    )
     vertices = wrapped_vertices[keep]
     nn_dists = nn_dists[keep]
 
@@ -508,7 +510,9 @@ def _voronoi_sites(
     raw_to_kept: dict[int, int] = {}
     accessible_wrapped = wrapped_vertices
     dist_to_kept, idx_to_kept = kept_tree.query(accessible_wrapped, k=1)
-    for raw_idx, d, kept_idx in zip(raw_accessible_indices, dist_to_kept, idx_to_kept, strict=False):
+    for raw_idx, d, kept_idx in zip(
+        raw_accessible_indices, dist_to_kept, idx_to_kept, strict=False
+    ):
         if float(d) <= _VORONOI_DEDUP_TOLERANCE:
             raw_to_kept[int(raw_idx)] = int(kept_idx)
 
@@ -577,8 +581,14 @@ def _generate_slab_topology_sites(
         if not candidates:
             return np.empty((0, 3), dtype=float), np.empty(0, dtype=float), []
         cand_arr = np.asarray(candidates, dtype=float)
-        keep = _deduplicate_points(cand_arr, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc)
-        return cand_arr[keep], np.asarray(candidate_dists, dtype=float)[keep], [candidate_sources[i] for i in np.nonzero(keep)[0]]
+        keep = _deduplicate_points(
+            cand_arr, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
+        )
+        return (
+            cand_arr[keep],
+            np.asarray(candidate_dists, dtype=float)[keep],
+            [candidate_sources[i] for i in np.nonzero(keep)[0]],
+        )
 
     ranges_a = (-1, 0, 1) if bool(pbc[0]) else (0,)
     ranges_b = (-1, 0, 1) if bool(pbc[1]) else (0,)
@@ -591,7 +601,9 @@ def _generate_slab_topology_sites(
         for ib in ranges_b:
             offset = ia * cell[0] + ib * cell[1]
             pts3d = top_positions + offset
-            pts2d = top_positions_2d + _project_to_slab_plane(offset.reshape(1, 3), cell)[0]
+            pts2d = (
+                top_positions_2d + _project_to_slab_plane(offset.reshape(1, 3), cell)[0]
+            )
             for li in range(len(top_positions)):
                 expanded_points_2d.append(pts2d[li])
                 expanded_points_3d.append(pts3d[li])
@@ -613,7 +625,10 @@ def _generate_slab_topology_sites(
         else:
             char_len = _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM
 
-        raw_pairs = edge_tree.query_pairs(r=1.35 * max(char_len, _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM), output_type="ndarray")
+        raw_pairs = edge_tree.query_pairs(
+            r=1.35 * max(char_len, _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM),
+            output_type="ndarray",
+        )
         seen_edges: set[tuple[int, int]] = set()
         for i_exp, j_exp in raw_pairs:
             li = expanded_origin_local_index[int(i_exp)]
@@ -624,7 +639,10 @@ def _generate_slab_topology_sites(
             if edge_key in seen_edges:
                 continue
             seen_edges.add(edge_key)
-            midpoint = 0.5 * (exp3d[int(i_exp)] + exp3d[int(j_exp)]) + float(site_height) * n_hat
+            midpoint = (
+                0.5 * (exp3d[int(i_exp)] + exp3d[int(j_exp)])
+                + float(site_height) * n_hat
+            )
             _add_candidate(midpoint, "topology_bridge")
 
     if len(exp2d) >= 3:
@@ -635,7 +653,9 @@ def _generate_slab_topology_sites(
         if tri is not None:
             seen_tris: set[tuple[int, int, int]] = set()
             for simplex in np.asarray(tri.simplices, dtype=int):
-                local_ids = tuple(sorted({expanded_origin_local_index[int(k)] for k in simplex}))
+                local_ids = tuple(
+                    sorted({expanded_origin_local_index[int(k)] for k in simplex})
+                )
                 if len(local_ids) != 3:
                     continue
                 if local_ids in seen_tris:
@@ -721,7 +741,9 @@ def _enrich_along_ridges(
         if edge_len <= target_spacing:
             continue
 
-        n_subdivisions = min(int(edge_len / target_spacing), _ENRICHMENT_MAX_SUBDIVISIONS)
+        n_subdivisions = min(
+            int(edge_len / target_spacing), _ENRICHMENT_MAX_SUBDIVISIONS
+        )
         if n_subdivisions < 1:
             continue
 
@@ -730,7 +752,9 @@ def _enrich_along_ridges(
             candidate = v0 + t * edge_vec
             if np.any(pbc):
                 candidate = _wrap_cartesian(candidate.reshape(1, 3), cell, pbc)[0]
-            d_nn = float(framework_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0])
+            d_nn = float(
+                framework_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0]
+            )
             if probe_radius <= d_nn <= max_distance:
                 new_verts.append(candidate)
                 new_dists.append(d_nn)
@@ -777,12 +801,15 @@ def _classify_voronoi_site(
         for i in range(1, 3)
     ):
         return "hollow", tuple(int(i) for i in idx[:3])
-    if len(dists) >= 2 and abs(float(dists[1]) - d1) / max(d1, _DISTANCE_RATIO_FLOOR_EPS) < _BRIDGE_EQ_TOL:
+    if (
+        len(dists) >= 2
+        and abs(float(dists[1]) - d1) / max(d1, _DISTANCE_RATIO_FLOOR_EPS)
+        < _BRIDGE_EQ_TOL
+    ):
         far3 = len(dists) < 3 or float(dists[2]) / d1 > _BRIDGE_FAR_RATIO
         if far3:
             return "bridge", tuple(int(i) for i in idx[:2])
     return "hollow", tuple(int(i) for i in idx[:3])
-
 
 
 def _delaunay_site_classification(
@@ -816,7 +843,11 @@ def _delaunay_site_classification(
         _nn_d, _ = _top_tree.query(top_xy, k=2)
         char_len = float(np.mean(np.asarray(_nn_d, dtype=float)[:, 1]))
     else:
-        char_len = best_dist if best_dist < float("inf") else _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM
+        char_len = (
+            best_dist
+            if best_dist < float("inf")
+            else _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM
+        )
 
     seen_edges: set[tuple[int, int]] = set()
     for simplex in simplices:
@@ -880,7 +911,6 @@ def _compute_local_normal(
     return vec / norm
 
 
-
 def _build_site_records(
     vertices: np.ndarray,
     nn_dists: np.ndarray,
@@ -898,7 +928,9 @@ def _build_site_records(
     source_hints: list[str] | None = None,
 ) -> list[dict[str, object]]:
     sites: list[dict[str, object]] = []
-    vertex_2d = _project_to_slab_plane(vertices, cell) if len(vertices) else np.empty((0, 2))
+    vertex_2d = (
+        _project_to_slab_plane(vertices, cell) if len(vertices) else np.empty((0, 2))
+    )
 
     for i, vertex in enumerate(vertices):
         if (
@@ -936,7 +968,11 @@ def _build_site_records(
                 "slab_indices": nearest_idx,
                 "normal": _compute_local_normal(vertex, positions, tree=local_tree),
                 "nn_distance": float(nn_dists[i]) if i < len(nn_dists) else None,
-                "site_source": (source_hints[i] if source_hints is not None and i < len(source_hints) else "voronoi"),
+                "site_source": (
+                    source_hints[i]
+                    if source_hints is not None and i < len(source_hints)
+                    else "voronoi"
+                ),
                 "material_type": material_type,
                 "env_fingerprint": env_fingerprint,
             }
@@ -998,9 +1034,13 @@ def get_unified_sites(
             )
 
     if probe_radius is None or max_site_distance is None:
-        derived_probe, derived_max = _derive_voronoi_distance_window(positions, symbols, pbc_for_voronoi)
+        derived_probe, derived_max = _derive_voronoi_distance_window(
+            positions, symbols, pbc_for_voronoi
+        )
         probe_radius = derived_probe if probe_radius is None else probe_radius
-        max_site_distance = derived_max if max_site_distance is None else max_site_distance
+        max_site_distance = (
+            derived_max if max_site_distance is None else max_site_distance
+        )
 
     vertices, nn_dists = _voronoi_sites(
         positions,
@@ -1017,12 +1057,15 @@ def get_unified_sites(
 
     # Slab-specific topology enrichment becomes part of the default generator.
     if material_type == "slab":
-        top_mask = _top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
+        top_mask = _top_layer_mask_by_normal(
+            positions, cell, float(top_layer_tolerance)
+        )
         top_atom_indices = np.nonzero(top_mask)[0]
         median_nn = (
             float(np.median(nn_dists))
             if len(nn_dists) > 0
-            else _VORONOI_MAX_DISTANCE_COVALENT_SCALE * _VORONOI_RADIUS_FALLBACK_ANGSTROM
+            else _VORONOI_MAX_DISTANCE_COVALENT_SCALE
+            * _VORONOI_RADIUS_FALLBACK_ANGSTROM
         )
         site_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
         topo_vertices, topo_dists, topo_sources = _generate_slab_topology_sites(
@@ -1044,7 +1087,9 @@ def get_unified_sites(
                 vertices = np.vstack([vertices, topo_vertices])
                 nn_dists = np.concatenate([nn_dists, topo_dists])
                 source_hints = source_hints + topo_sources
-                keep = _deduplicate_points(vertices, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc_for_voronoi)
+                keep = _deduplicate_points(
+                    vertices, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc_for_voronoi
+                )
                 kept_idx = np.nonzero(keep)[0]
                 vertices = vertices[keep]
                 nn_dists = nn_dists[keep]
@@ -1063,7 +1108,11 @@ def get_unified_sites(
     if material_type == "slab":
         heights = _height_along_slab_normal(positions, cell)
         h_surface = float(np.max(heights))
-        nn_margin = float(np.median(nn_dists)) if len(nn_dists) > 0 else float(top_layer_tolerance)
+        nn_margin = (
+            float(np.median(nn_dists))
+            if len(nn_dists) > 0
+            else float(top_layer_tolerance)
+        )
         h_min = h_surface - max(float(top_layer_tolerance), nn_margin)
         keep_mask = _height_along_slab_normal(vertices, cell) >= h_min
         vertices = vertices[keep_mask]
@@ -1072,9 +1121,14 @@ def get_unified_sites(
 
     if material_type == "nanoparticle" and len(vertices) > 0:
         com = np.mean(positions, axis=0)
-        normals = np.array([_compute_local_normal(v, positions, tree=local_tree) for v in vertices])
+        normals = np.array(
+            [_compute_local_normal(v, positions, tree=local_tree) for v in vertices]
+        )
         outward = np.array(
-            [float(np.dot(normals[i], vertices[i] - com)) > 0.0 for i in range(len(vertices))],
+            [
+                float(np.dot(normals[i], vertices[i] - com)) > 0.0
+                for i in range(len(vertices))
+            ],
             dtype=bool,
         )
         vertices = vertices[outward]
@@ -1086,12 +1140,15 @@ def get_unified_sites(
         median_nn = (
             float(np.median(nn_dists))
             if len(nn_dists) > 0
-            else _VORONOI_MAX_DISTANCE_COVALENT_SCALE * _VORONOI_RADIUS_FALLBACK_ANGSTROM
+            else _VORONOI_MAX_DISTANCE_COVALENT_SCALE
+            * _VORONOI_RADIUS_FALLBACK_ANGSTROM
         )
         atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
 
         if material_type == "slab":
-            top_mask = _top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
+            top_mask = _top_layer_mask_by_normal(
+                positions, cell, float(top_layer_tolerance)
+            )
             top_atom_indices = np.nonzero(top_mask)[0]
         else:
             com = np.mean(positions, axis=0)
@@ -1101,10 +1158,13 @@ def get_unified_sites(
                     for i in range(len(positions))
                     if float(
                         np.dot(
-                            _compute_local_normal(positions[i], positions, tree=local_tree),
+                            _compute_local_normal(
+                                positions[i], positions, tree=local_tree
+                            ),
                             positions[i] - com,
                         )
-                    ) > 0.0
+                    )
+                    > 0.0
                 ],
                 dtype=int,
             )
@@ -1116,9 +1176,13 @@ def get_unified_sites(
         for ai in top_atom_indices:
             atom_pos = positions[int(ai)]
             if material_type == "slab":
-                candidate = _shift_along_slab_normal(atom_pos.reshape(1, 3), cell, atop_height)[0]
+                candidate = _shift_along_slab_normal(
+                    atom_pos.reshape(1, 3), cell, atop_height
+                )[0]
                 if np.any(pbc_for_voronoi):
-                    candidate = _wrap_cartesian(candidate.reshape(1, 3), cell, pbc_for_voronoi)[0]
+                    candidate = _wrap_cartesian(
+                        candidate.reshape(1, 3), cell, pbc_for_voronoi
+                    )[0]
             else:
                 normal = _compute_local_normal(atom_pos, positions, tree=local_tree)
                 candidate = atom_pos + atop_height * normal
@@ -1138,26 +1202,38 @@ def get_unified_sites(
             combined = np.vstack([vertices, candidate_arr])
             combined_dists = np.concatenate([nn_dists, candidate_dist_arr])
             combined_sources = source_hints + candidate_sources
-            keep = _deduplicate_points(combined, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc_for_voronoi)
+            keep = _deduplicate_points(
+                combined, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc_for_voronoi
+            )
             kept_idx = np.nonzero(keep)[0]
             n_existing = len(vertices)
             n_injected = int(np.count_nonzero(keep[n_existing:]))
             vertices = combined[keep]
             nn_dists = combined_dists[keep]
             source_hints = [combined_sources[i] for i in kept_idx]
-            logger.debug("Injected %d atop candidate sites (%d total sites)", n_injected, len(vertices))
+            logger.debug(
+                "Injected %d atop candidate sites (%d total sites)",
+                n_injected,
+                len(vertices),
+            )
 
     if len(vertices) == 0:
         return []
 
     # Use Delaunay automatically for slabs when possible, even if the legacy
     # default argument is still 'distance_ratio'. This improves default labeling.
-    _use_delaunay = material_type == "slab" and site_classification_method in ("delaunay", "distance_ratio", "auto")
+    _use_delaunay = material_type == "slab" and site_classification_method in (
+        "delaunay",
+        "distance_ratio",
+        "auto",
+    )
     _delaunay_tri = None
     _top_positions_2d: np.ndarray | None = None
     _top_atom_indices: np.ndarray | None = None
     if _use_delaunay:
-        top_mask = _top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
+        top_mask = _top_layer_mask_by_normal(
+            positions, cell, float(top_layer_tolerance)
+        )
         _top_atom_indices = np.nonzero(top_mask)[0]
         if len(_top_atom_indices) >= 3:
             top_positions = positions[_top_atom_indices]
@@ -1187,9 +1263,19 @@ def get_unified_sites(
     )
 
     if np.linalg.det(cell) > 0:
+
         def _site_frac_key(site: dict[str, object]) -> tuple:
-            frac = _wrap_fractional(_cart_to_frac(np.asarray(site["xyz"], dtype=float).reshape(1, 3), cell), pbc_for_voronoi)[0]
-            return (float(frac[0]), float(frac[1]), float(frac[2]), str(site["site_type"]))
+            frac = _wrap_fractional(
+                _cart_to_frac(np.asarray(site["xyz"], dtype=float).reshape(1, 3), cell),
+                pbc_for_voronoi,
+            )[0]
+            return (
+                float(frac[0]),
+                float(frac[1]),
+                float(frac[2]),
+                str(site["site_type"]),
+            )
+
         sites.sort(key=_site_frac_key)
 
     return sites
@@ -1233,7 +1319,6 @@ def _env_fingerprint(site: dict[str, object]) -> tuple:
     return (str(site.get("site_type", "")),)
 
 
-
 def _cluster_with_metric(
     n: int,
     coords: np.ndarray,
@@ -1268,7 +1353,6 @@ def _cluster_with_metric(
     return sorted(min(comp) for comp in components)
 
 
-
 def _cluster_equivalent_sites(
     sites: list[dict[str, object]],
     cell: np.ndarray,
@@ -1289,7 +1373,12 @@ def _cluster_equivalent_sites(
 
     def _sort_key(s: dict[str, object]) -> tuple:
         xyz = _get_xyz(s)
-        return (float(xyz[0]), float(xyz[1]), float(xyz[2]), str(s.get("site_type", "")))
+        return (
+            float(xyz[0]),
+            float(xyz[1]),
+            float(xyz[2]),
+            str(s.get("site_type", "")),
+        )
 
     order = sorted(range(n), key=lambda i: _sort_key(sites[i]))
     sorted_sites = [sites[i] for i in order]
@@ -1308,7 +1397,10 @@ def _cluster_equivalent_sites(
         return sorted(result, key=_sort_key)
 
     if mat_type == "porous":
-        frac = _wrap_fractional(_cart_to_frac(np.array([_get_xyz(s) for s in sorted_sites]), cell), np.array([True, True, True]))
+        frac = _wrap_fractional(
+            _cart_to_frac(np.array([_get_xyz(s) for s in sorted_sites]), cell),
+            np.array([True, True, True]),
+        )
         image_offsets = [
             np.array([ix, iy, iz], dtype=float)
             for ix in (-1, 0, 1)
@@ -1325,7 +1417,11 @@ def _cluster_equivalent_sites(
         result = [sorted_sites[i] for i in reps]
         return sorted(result, key=_sort_key)
 
-    z_tol = z_abs_tolerance if z_abs_tolerance is not None else _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM
+    z_tol = (
+        z_abs_tolerance
+        if z_abs_tolerance is not None
+        else _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM
+    )
     pinv_ab_T, _ = _slab_plane_projectors(cell)
 
     def _slab_coord(s: dict[str, object]) -> np.ndarray:
@@ -1345,7 +1441,9 @@ def _cluster_equivalent_sites(
         cb = coords_arr[b]
         dxy = np.abs(ca[:2] - cb[:2])
         dxy = np.minimum(dxy, 1.0 - dxy)
-        return bool(np.all(dxy < tolerance) and abs(float(ca[2]) - float(cb[2])) < z_tol)
+        return bool(
+            np.all(dxy < tolerance) and abs(float(ca[2]) - float(cb[2])) < z_tol
+        )
 
     r_search = max(tolerance, z_tol) * _KD_RADIUS_SEARCH_PADDING
     reps = _cluster_with_metric(
@@ -1456,7 +1554,6 @@ def _is_top_layer_planar(
     return float(np.var(h - h_pred)) < z_variance_threshold
 
 
-
 def _bounding_box_cell(
     positions: np.ndarray,
     pad: float = _BOUNDING_BOX_CELL_PAD_ANGSTROM,
@@ -1499,7 +1596,6 @@ def _get_site_surface_radii(
     if not radii:
         return None
     return float(np.mean(radii))
-
 
 
 def _compute_site_z_base(
