@@ -25,7 +25,6 @@ def main():
     configure_logging(default_level="INFO")
     # Create a simple MOF-like structure with periodic boundary conditions
     from ase import Atoms
-    from ase.data import atomic_numbers
     
     # Create a simple MOF structure: Zn4O(BDC)3-like structure
     # This is a simplified representation with periodic boundary conditions

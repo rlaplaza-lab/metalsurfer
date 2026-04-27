@@ -22,11 +22,9 @@ def main():
     configure_logging(default_level="INFO")
     # Create a small Pt nanocluster with 12 atoms using ASE
     from ase import Atoms
-    from ase.data import atomic_numbers
     
     # Create a simple but realistic Pt cluster for H2 adsorption
     # Use a small (111) facet-like structure which provides good adsorption sites
-    from ase import Atoms
     
     # Create a 3-layer Pt(111)-like nanocluster (12 atoms total)
     # Layer 1 (bottom): 4 atoms
