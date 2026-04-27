@@ -404,7 +404,50 @@ def setup_calculator(model_name: str = "uma-s-1p1", device: str = "cuda"):
     device = _resolve_device(device)
     _ensure_torch_checkpoint_safe_globals()
     logger.info("Initializing FAIRChem calculator (%s) on %s...", model_name, device)
-    predictor = pretrained_mlip.get_predict_unit(model_name, device=device)
+    try:
+        predictor = pretrained_mlip.get_predict_unit(model_name, device=device)
+    except Exception as exc:
+        error_msg = str(exc)
+        if "UnpicklingError" in error_msg and ("weights_only" in error_msg or "weights only" in error_msg) and "slice" in error_msg:
+            raise RuntimeError(
+                "FairChem model loading failed due to PyTorch 2.6+ security changes.\n"
+                "This is a known issue with FairChem checkpoints and PyTorch 2.6+.\n"
+                "\n"
+                "To fix this issue, you have two options:\n"
+                "1. Add 'slice' to PyTorch's safe globals before loading the model:\n"
+                "   import torch\n"
+                "   torch.serialization.add_safe_globals([slice])\n"
+                "   # Then proceed with your code\n"
+                "\n"
+                "2. Set weights_only=False when loading the checkpoint (not recommended for security):\n"
+                "   # Only do this if you trust the source of the checkpoint\n"
+                "\n"
+                "For more details, see:\n"
+                "- PyTorch documentation: https://pytorch.org/docs/stable/generated/torch.load.html\n"
+                "- FairChem GitHub: https://github.com/facebookresearch/fairchem\n"
+                "\n"
+                "The metalsurfer package attempts to handle this automatically, but if you're seeing this error,"
+                "please report it at: https://github.com/rlaplaza/metalsurfer/issues"
+            ) from exc
+        else:
+            raise RuntimeError(
+                f"FairChem model loading failed: {error_msg}\n"
+                "This may be due to missing API keys, network issues, or model availability problems.\n"
+                "\n"
+                "Common solutions:\n"
+                "1. Ensure you have a HuggingFace API key if required by the model\n"
+                "2. Check your internet connection\n"
+                "3. Verify the model name is correct: '{model_name}'\n"
+                "4. Try a different device (CPU vs GPU)\n"
+                "\n"
+                "For HuggingFace API key setup:\n"
+                "1. Create an account at https://huggingface.co/\n"
+                "2. Generate an API key at https://huggingface.co/settings/tokens\n"
+                "3. Set it as environment variable: export HF_TOKEN=your_token_here\n"
+                "4. Or configure it in Python: from huggingface_hub import login; login()\n"
+                "\n"
+                "For more information, see: https://github.com/facebookresearch/fairchem"
+            ) from exc
     calc = FAIRChemCalculator(predictor, task_name="oc20")
     logger.info("Calculator initialized successfully")
     return calc
@@ -428,8 +471,51 @@ def setup_torchsim_model(model_name: str = "uma-s-1p1", device: str = "cuda"):
     _ensure_torch_checkpoint_safe_globals()
     logger.info("Initializing TorchSim FairChemModel (%s) on %s...", model_name, device)
     dev = torch.device(device) if torch is not None and device else None
-    with torchsim_output_capture():
-        model = FairChemModel(model=model_name, device=dev, task_name="oc20")
+    try:
+        with torchsim_output_capture():
+            model = FairChemModel(model=model_name, device=dev, task_name="oc20")
+    except Exception as exc:
+        error_msg = str(exc)
+        if "UnpicklingError" in error_msg and ("weights_only" in error_msg or "weights only" in error_msg) and "slice" in error_msg:
+            raise RuntimeError(
+                "FairChem model loading failed due to PyTorch 2.6+ security changes.\n"
+                "This is a known issue with FairChem checkpoints and PyTorch 2.6+.\n"
+                "\n"
+                "To fix this issue, you have two options:\n"
+                "1. Add 'slice' to PyTorch's safe globals before loading the model:\n"
+                "   import torch\n"
+                "   torch.serialization.add_safe_globals([slice])\n"
+                "   # Then proceed with your code\n"
+                "\n"
+                "2. Set weights_only=False when loading the checkpoint (not recommended for security):\n"
+                "   # Only do this if you trust the source of the checkpoint\n"
+                "\n"
+                "For more details, see:\n"
+                "- PyTorch documentation: https://pytorch.org/docs/stable/generated/torch.load.html\n"
+                "- FairChem GitHub: https://github.com/facebookresearch/fairchem\n"
+                "\n"
+                "The metalsurfer package attempts to handle this automatically, but if you're seeing this error,"
+                "please report it at: https://github.com/rlaplaza/metalsurfer/issues"
+            ) from exc
+        else:
+            raise RuntimeError(
+                f"FairChem model loading failed: {error_msg}\n"
+                "This may be due to missing API keys, network issues, or model availability problems.\n"
+                "\n"
+                "Common solutions:\n"
+                "1. Ensure you have a HuggingFace API key if required by the model\n"
+                "2. Check your internet connection\n"
+                "3. Verify the model name is correct: '{model_name}'\n"
+                "4. Try a different device (CPU vs GPU)\n"
+                "\n"
+                "For HuggingFace API key setup:\n"
+                "1. Create an account at https://huggingface.co/\n"
+                "2. Generate an API key at https://huggingface.co/settings/tokens\n"
+                "3. Set it as environment variable: export HF_TOKEN=your_token_here\n"
+                "4. Or configure it in Python: from huggingface_hub import login; login()\n"
+                "\n"
+                "For more information, see: https://github.com/facebookresearch/fairchem"
+            ) from exc
     logger.info("TorchSim model created successfully")
     return model
 

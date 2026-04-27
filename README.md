@@ -18,6 +18,28 @@ For TorchSim/FairChem-backed relaxation and the developer toolchain:
 pip install -e ".[mlip,dev]"
 ```
 
+## Quick Examples
+
+Two simple examples are provided in `scripts/` to demonstrate basic usage:
+
+### H2 Adsorption on Pt Nanocluster
+```bash
+# 12-atom Pt cluster with H2 adsorption
+python scripts/h2_pt12_binding_energy.py
+```
+
+### CO2 Adsorption in MOF
+```bash
+# Simple MOF structure with CO2 adsorption
+python scripts/co2_mof_binding_energy.py
+```
+
+Both examples:
+- Use pure ASE for receptor preparation
+- Limit to 5 placements for quick testing
+- Demonstrate different material types (`nanoparticle` vs `porous`)
+- Produce XYZ structures, POSCAR files, and CSV results
+
 ## Python API
 
 The library exposes four high-level entry points:
@@ -44,7 +66,10 @@ from metalsurfer import AdsorptionConfig, run_adsorption
 
 slab_atoms = fcc111("Ru", size=(3, 3, 3), vacuum=12.0)
 
-config = AdsorptionConfig(material_type="slab", seed=42)
+config = AdsorptionConfig(
+    material_type="slab",  # "slab", "nanoparticle", or "porous"
+    seed=42
+)
 result = run_adsorption(
     slab=slab_atoms,
     molecules=[("O", "water")],
@@ -63,7 +88,7 @@ Use the campaign API when your driving script already has the molecule list in m
 from metalsurfer import AdsorptionConfig, create_slab_from_bulk, run_adsorption
 
 config = AdsorptionConfig(
-    material_type="slab",
+    material_type="slab",  # "slab", "nanoparticle", or "porous"
     seed=42,
     num_conformers=8,
     num_placements=80,
@@ -98,7 +123,10 @@ Pass a CSV path to `run_adsorption` for file-driven batch screening:
 ```python
 from metalsurfer import AdsorptionConfig, create_slab_from_bulk, run_adsorption
 
-config = AdsorptionConfig(material_type="slab", seed=42)
+config = AdsorptionConfig(
+    material_type="slab",  # "slab", "nanoparticle", or "porous"
+    seed=42
+)
 slab = create_slab_from_bulk(bulk_id="mp-33", miller_indices=(0, 0, 1))
 
 result = run_adsorption(
@@ -121,7 +149,7 @@ from metalsurfer import (
 )
 
 config = AdsorptionConfig(
-    material_type="slab",
+    material_type="slab",  # "slab", "nanoparticle", or "porous"
     seed=42,
     bo_enabled=True,
     bo_initial_random=20,
@@ -161,7 +189,7 @@ from metalsurfer import AdsorptionConfig, create_slab_from_bulk, run_saturation
 from metalsurfer.io_results import save_saturation_results
 
 config = AdsorptionConfig(
-    material_type="slab",
+    material_type="slab",  # "slab", "nanoparticle", or "porous"
     seed=42,
     num_conformers=6,
     num_placements=60,
@@ -235,7 +263,9 @@ from metalsurfer.surface_prep import (
     substitute_alloy,
 )
 
-config = AdsorptionConfig(material_type="slab")
+config = AdsorptionConfig(
+    material_type="slab"  # "slab", "nanoparticle", or "porous"
+)
 slab = create_slab_from_bulk(bulk_id="mp-33", miller_indices=(0, 0, 1))
 calculator, _ = setup_single_model(config.model_name, config.device)
 
