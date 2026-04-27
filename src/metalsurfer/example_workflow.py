@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""Example: screen molecules on surfaces using the canonical metalsurfer API.
-
-Usage:
-    python -m metalsurfer.example_workflow run --smiles-file smiles.csv
-    python -m metalsurfer.example_workflow run-bo --smiles-file smiles.csv
-    python -m metalsurfer.example_workflow saturate --smiles-file smiles.csv
-
-Demonstrates key features:
-- Deterministic placement generation via Voronoi tessellation for slabs, nanoparticles, and porous materials.
-- Explicit material-type specification: "slab" (default), "nanoparticle" (isolated clusters), or "porous" (3D-periodic).
-- Surface engineering: alloy substitution and adatom deposition before screening via prepare_slab().
-- Bayesian optimization–guided candidate selection for efficient exploration.
-- Sequential saturation simulations to estimate surface loading limits.
-"""
+"""Example workflow for screening molecules on surfaces."""
 
 import argparse
 
@@ -59,7 +46,6 @@ def main():
         description="Adsorption screening on arbitrary surfaces"
     )
 
-    # surface
     parser.add_argument(
         "--bulk-id", type=str, default="mp-33", help="Materials Project bulk ID"
     )
@@ -70,7 +56,6 @@ def main():
         "--supercell", type=int, nargs=3, default=[2, 2, 1], help="Supercell repeat"
     )
 
-    # alloy
     parser.add_argument(
         "--alloy-host",
         type=str,
@@ -86,8 +71,6 @@ def main():
     parser.add_argument(
         "--alloy-fraction", type=float, default=0.0, help="Guest fraction (0-1)"
     )
-
-    # adatom
     parser.add_argument(
         "--adatom-symbol", type=str, default=None, help="Adatom element symbol"
     )
@@ -98,7 +81,6 @@ def main():
         help="Adatom coverage fraction (0-1)",
     )
 
-    # primary knobs
     parser.add_argument(
         "--model", type=str, default="uma-s-1p1", help="MLIP model name"
     )
@@ -112,7 +94,6 @@ def main():
         "--device", type=str, default="cuda", help="Device (cuda or cpu)"
     )
 
-    # I/O
     parser.add_argument(
         "--smiles-file", type=str, default="smiles.csv", help="SMILES CSV file"
     )

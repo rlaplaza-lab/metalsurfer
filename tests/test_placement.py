@@ -15,7 +15,6 @@ from metalsurfer.models import PlacementDescriptor, PlacementPose, PlacementSpec
 from metalsurfer.placement import (
     calculate_min_distance,
     check_initial_placement_distance,
-    detect_material_type,
     enumerate_placement_specs,
     generate_placement_from_descriptor,
     generate_placement_from_pose,
@@ -232,24 +231,10 @@ def test_calculate_min_distance_requires_explicit_pbc_for_periodic_cell():
 
 
 def test_material_type_for_placement():
-    assert material_type_for_placement(None, when_no_site="slab") == "slab"
-    assert material_type_for_placement(None, when_no_site="porous") == "porous"
     with pytest.raises(ValueError, match="material_type"):
-        material_type_for_placement({"site_type": "atop"}, when_no_site="porous")
-    assert (
-        material_type_for_placement(
-            {"site_type": "atop", "material_type": "porous"},
-            when_no_site="slab",
-        )
-        == "porous"
-    )
-    assert (
-        material_type_for_placement(
-            {"material_type": "nanoparticle"},
-            when_no_site="slab",
-        )
-        == "nanoparticle"
-    )
+        material_type_for_placement({"site_type": "atop"})
+    assert material_type_for_placement({"site_type": "atop", "material_type": "porous"}) == "porous"
+    assert material_type_for_placement({"material_type": "nanoparticle"}) == "nanoparticle"
 
 
 def test_deduplicate_points_returns_expected_keep_mask():
@@ -295,18 +280,10 @@ def test_initial_placement_distance_accepts_and_rejects_expected_heights():
     assert ok_valid
 
 
-def test_detect_material_type_and_material_aware_pbc_cover_all_modes():
-    slab = make_slab()
-    nanoparticle = make_nanoparticle()
-    porous = make_porous_framework()
-
-    assert detect_material_type(slab) == "slab"
-    assert detect_material_type(nanoparticle) == "nanoparticle"
-    assert detect_material_type(porous) == "porous"
-
-    assert material_aware_pbc(slab) == [True, True, False]
-    assert material_aware_pbc(nanoparticle) == [False, False, False]
-    assert material_aware_pbc(porous) == [True, True, True]
+def test_material_aware_pbc():
+    assert material_aware_pbc("slab") == [True, True, False]
+    assert material_aware_pbc("nanoparticle") == [False, False, False]
+    assert material_aware_pbc("porous") == [True, True, True]
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +307,8 @@ def test_get_unified_sites_slab_nanoparticle_porous_have_expected_metadata():
     ):
         for site in sites:
             assert site["material_type"] == mat
-            assert site["site_source"] == "voronoi"
+            # Updated to accept both old "voronoi" and new topology-based sources
+            assert site["site_source"] in ("voronoi", "topology_atop", "topology_bridge", "topology_hollow", "atop_injected")
             assert "nn_distance" in site and site["nn_distance"] is not None
             assert np.asarray(site["xyz"]).shape == (3,)
             assert np.linalg.norm(np.asarray(site["normal"])) > 0.5

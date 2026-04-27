@@ -22,7 +22,10 @@ from ..models import (
     ScreeningResult,
 )
 from ..optimization import clear_autobatcher_cache
-from ..placement import distribute_placement_budget, estimate_molecule_complexity
+from ..placement.generators import (
+    distribute_placement_budget,
+    estimate_molecule_complexity,
+)
 from ..surfaces import SlabContainer, coerce_slab_container
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian

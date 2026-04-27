@@ -17,10 +17,8 @@ from ..optimization import (
     clear_autobatcher_cache,
     optimize_adsorbate_slab_batched,
 )
-from ..placement import (
-    enumerate_placement_specs,
-)
 from ..placement import generators as placement_generators
+from ..placement.generators import enumerate_placement_specs
 from ..surfaces import SlabContainer, auto_resize_slab_for_molecule
 from .shared import (
     PlacementFailureEvent,

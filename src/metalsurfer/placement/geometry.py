@@ -182,6 +182,28 @@ def _get_vdw_radius(symbol: str) -> float | None:
     return float(cov * _VDW_RADIUS_FROM_COVALENT_SCALE)
 
 
+def _compute_mean_adsorbate_covalent_radius() -> float:
+    """Mean covalent radius of common adsorbate elements (C, H, O, N, S, P).
+
+    This replaces hardcoded fallback values in _constants.py with a dynamically
+    computed value derived from tabulated ASE covalent radii. Used when no
+    specific element radii are available for computing distance thresholds.
+    """
+    # Common adsorbate elements ordered by electronegativity/occurrence
+    common_elements = ["C", "H", "O", "N", "S", "P"]
+    radii = []
+    for elem in common_elements:
+        z = atomic_numbers.get(elem)
+        if z is not None and z < len(ase_covalent_radii):
+            r = float(ase_covalent_radii[z])
+            if r > 0.0:
+                radii.append(r)
+    if radii:
+        return float(np.mean(radii))
+    # Ultimate fallback if ASE data is unavailable (should never happen)
+    return 0.77
+
+
 def _mol_slab_pairwise_distances(
     mol_pos: np.ndarray,
     slab_pos: np.ndarray,

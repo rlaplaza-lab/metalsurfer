@@ -16,18 +16,6 @@ from ._constants import (
     _Z_FRACTIONS,
 )
 
-# Backward-compatible policy grid exports.
-TILT_FULL = list(_TILT_FULL)
-TILT_PARALLEL = list(_TILT_PARALLEL)
-AZIMUTH = list(_AZIMUTH)
-AZIMUTH_IN_PLANE = list(_AZIMUTH_IN_PLANE)
-Z_FRACTIONS = list(_Z_FRACTIONS)
-PLACEMENT_GRID_COUNT_SEED = _PLACEMENT_GRID_COUNT_SEED
-
-
-def _clamp(n: int, cap: int = _GRID_BUILD_CAP) -> int:
-    return min(n, cap)
-
 
 def max_batch_placement_specs(
     *,
@@ -40,12 +28,10 @@ def max_batch_placement_specs(
     n_hollow_pairs: int = 0,
 ) -> int:
     """Closed-form count of policy-grid specs (per-branch clamp at ``_GRID_BUILD_CAP``)."""
-    n_sites = max(
-        len(site_indices), 1
-    )  # build_batch_placement_specs uses [-1] if empty
+    n_sites = max(len(site_indices), 1)
 
     if dissociative:
-        return _clamp(max(n_hollow_pairs, 1) * len(_Z_FRACTIONS))
+        return min(max(n_hollow_pairs, 1) * len(_Z_FRACTIONS), _GRID_BUILD_CAP)
 
     if flat_aromatic:
         parallel = (
@@ -65,13 +51,13 @@ def max_batch_placement_specs(
             * len(_Z_FRACTIONS)
             * n_sites
         )
-        return _clamp(parallel) + _clamp(en_down)
+        return min(parallel, _GRID_BUILD_CAP) + min(en_down, _GRID_BUILD_CAP)
 
-    # Shape only selects orientation label ("vertical" vs "round"); grid is
-    # the same size for both.
+    # Shape only selects orientation label ("vertical" vs "round"); grid is the same size for both.
     _ = shape
-    return _clamp(
-        n_conformers * len(_TILT_FULL) * len(_AZIMUTH) * len(_Z_FRACTIONS) * n_sites
+    return min(
+        n_conformers * len(_TILT_FULL) * len(_AZIMUTH) * len(_Z_FRACTIONS) * n_sites,
+        _GRID_BUILD_CAP,
     )
 
 
@@ -214,3 +200,6 @@ def build_batch_placement_specs(
         spec.placement_index = i
 
     return specs[:n_desired]
+
+# Public alias for backward compatibility
+Z_FRACTIONS = _Z_FRACTIONS

@@ -17,7 +17,7 @@ from ..ml.bayesian import (
 from ..ml.features import extract_features
 from ..ml.schema import PlacementRecord
 from ..models import BOStepMemory, ReferenceEnergies, ScreeningResult
-from ..placement import (
+from ..placement.generators import (
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
 )

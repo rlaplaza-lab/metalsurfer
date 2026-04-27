@@ -1,5 +1,26 @@
 """Internal constants for placement numerics and physical heuristics."""
 
+# Compute mean covalent radius of common adsorbate elements from ASE data.
+# This replaces hardcoded fallback values with dynamically computed values.
+def _compute_mean_adsorbate_covalent_radius() -> float:
+    """Mean covalent radius of common adsorbate elements (C, H, O, N, S, P)."""
+    from ase.data import atomic_numbers
+    from ase.data import covalent_radii as ase_covalent_radii
+
+    common_elements = ["C", "H", "O", "N", "S", "P"]
+    radii = []
+    for elem in common_elements:
+        z = atomic_numbers.get(elem)
+        if z is not None and z < len(ase_covalent_radii):
+            r = float(ase_covalent_radii[z])
+            if r > 0.0:
+                radii.append(r)
+    if radii:
+        return float(sum(radii) / len(radii))
+    # Ultimate fallback if ASE data is unavailable (should never happen)
+    return 0.77
+
+
 # ---------------------------------------------------------------------------
 # Material detection
 # ---------------------------------------------------------------------------
@@ -40,7 +61,11 @@ _PORE_THRESHOLD_MIN_ANGSTROM: float = 2.0
 # max_distance = beta * mean(top-layer covalent radius)
 _VORONOI_PROBE_RADIUS_COVALENT_SCALE: float = 1.25
 _VORONOI_MAX_DISTANCE_COVALENT_SCALE: float = 4.25
-_VORONOI_RADIUS_FALLBACK_ANGSTROM: float = 1.0
+# Unified fallback: mean covalent radius of common adsorbate elements (C,H,O,N,S,P)
+# Computed dynamically from ASE data to avoid magic numbers.
+_MEAN_COVALENT_RADIUS_FALLBACK: float = _compute_mean_adsorbate_covalent_radius()
+# Backwards compatibility alias
+_VORONOI_RADIUS_FALLBACK_ANGSTROM: float = _MEAN_COVALENT_RADIUS_FALLBACK
 
 # Ridge-based geodesic enrichment
 # Subdivide Voronoi edges longer than _ENRICHMENT_SPACING_BETA × median(nn_distance).
@@ -54,7 +79,8 @@ _TOP_LAYER_DEPTH_MIN_ANGSTROM: float = 0.5
 
 # Delaunay reference classification.
 _DELAUNAY_BRIDGE_THRESHOLD_FRACTION: float = 0.3
-_DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM: float = 1.0
+# Use unified fallback for Delaunay characteristic length
+_DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM: float = _MEAN_COVALENT_RADIUS_FALLBACK
 
 # ---------------------------------------------------------------------------
 # Placement geometry (z-offsets and parallel placement)
@@ -117,7 +143,8 @@ _KD_RADIUS_SEARCH_PADDING: float = 1.5
 # Site z-base scaling constants.
 _NON_SLAB_Z_LO_FROM_NN_SCALE: float = 0.7
 _NON_SLAB_Z_HI_FROM_NN_SCALE: float = 1.2
-_MOL_COVALENT_RADIUS_FALLBACK: float = 0.77
+# Use unified fallback for molecular covalent radius
+_MOL_COVALENT_RADIUS_FALLBACK: float = _MEAN_COVALENT_RADIUS_FALLBACK
 _SITE_Z_RADIUS_REFERENCE_ANGSTROM: float = 2.0
 _SITE_Z_RADIUS_SHIFT_SCALE: float = 0.5
 

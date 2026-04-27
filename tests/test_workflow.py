@@ -28,14 +28,16 @@ from metalsurfer.models import (
 from metalsurfer.surfaces import SlabContainer
 from metalsurfer.workflow import (
     PlacementFailureEvent,
-    _build_surface_reference_slab,
-    _infer_surface_symbols,
-    _validate_adsorption,
-    _validate_geometry,
     format_failure_summary,
     load_molecules,
     process_molecule,
     process_molecule_bayesian,
+)
+from metalsurfer.workflow.shared import (
+    _build_surface_reference_slab,
+    _infer_surface_symbols,
+    _validate_adsorption,
+    _validate_geometry,
 )
 
 from .conftest import (
@@ -346,7 +348,7 @@ class TestProcessMolecule:
         mock_specs = MagicMock(return_value=[])
         with (
             patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs),
-            patch("metalsurfer.workflow.core.enumerate_placement_specs", mock_specs),
+            patch("metalsurfer.placement.generators.enumerate_placement_specs", mock_specs),
             patch(
                 "metalsurfer.workflow.core.auto_resize_slab_for_molecule", mock_resize
             ),
@@ -376,7 +378,7 @@ class TestProcessMolecule:
         mock_specs = MagicMock(return_value=[])
         with (
             patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs),
-            patch("metalsurfer.workflow.core.enumerate_placement_specs", mock_specs),
+            patch("metalsurfer.placement.generators.enumerate_placement_specs", mock_specs),
             patch(
                 "metalsurfer.workflow.core.auto_resize_slab_for_molecule", mock_resize
             ),

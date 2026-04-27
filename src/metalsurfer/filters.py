@@ -17,7 +17,8 @@ from ._logging import warn_once
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
 from .models import ScreeningResult
-from .placement import calculate_min_distance, material_aware_pbc
+from .placement._material import material_aware_pbc
+from .placement.geometry import calculate_min_distance
 
 logger = logging.getLogger(__name__)
 

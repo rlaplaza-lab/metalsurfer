@@ -15,13 +15,11 @@ from .._logging import warn_once
 from ..config import AdsorptionConfig
 from ..exceptions import OptimizationError
 from ..models import PlacementDescriptor, ScreeningResult
-from ..placement import (
-    calculate_min_distance,
-    generate_placement_from_spec_with_reason,
-    get_symmetry_aware_sites,
-    material_aware_pbc,
-)
 from ..placement import generators as placement_generators
+from ..placement import get_symmetry_aware_sites
+from ..placement._material import material_aware_pbc
+from ..placement.generators import generate_placement_from_spec_with_reason
+from ..placement.geometry import calculate_min_distance
 from ..symmetry import SymmetryAnalysisError
 
 logger = logging.getLogger(__name__)
@@ -374,7 +372,7 @@ def _evaluate_optimized_candidate(
         _surface_positions_for_distance(slab_opt, surface_symbols),
         np.asarray(opt_atoms.get_cell()),
         use_pbc=True,
-        pbc=material_aware_pbc(slab_atoms),
+        pbc=material_aware_pbc(slab_opt),
     )
     result = ScreeningResult(
         molecule=molecule_name,

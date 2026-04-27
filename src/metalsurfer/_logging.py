@@ -86,7 +86,6 @@ def _install_log_record_factory() -> None:
 
     def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
         record = old_factory(*args, **kwargs)
-        # Keep explicit adapter-provided value if present.
         if not hasattr(record, "ctx_prefix"):
             record.ctx_prefix = _ctx_prefix_from_context()
         return record
@@ -121,9 +120,6 @@ class _LogStreamToLogger(io.TextIOBase):
 
         self._pending: str = ""
         self._last_cr_text: str = ""
-
-        # Initialize from "now" so the *first* carriage-return update is also
-        # subject to rate limiting (important for progress bars).
         self._last_emit_t: float = time.monotonic()
         self._last_emit_msg: str = ""
 
@@ -175,16 +171,12 @@ class _LogStreamToLogger(io.TextIOBase):
                 if self._pending:
                     self._emit_final_line()
                 else:
-                    # Handles cases like "...\r\n" where no chars follow
-                    # the carriage return before the newline.
                     if self._last_cr_text.strip():
                         self._logger.log(self._level, self._last_cr_text.strip())
                         self._last_cr_text = ""
                 continue
 
             if ch == "\r":
-                # Carriage return is commonly used by progress bars to rewrite
-                # the current line without emitting a newline.
                 snapshot = self._pending
                 self._pending = ""
                 if snapshot.strip():
@@ -247,7 +239,6 @@ def configure_logging(
         else:
             root.setLevel(_parse_level(level_name, root.level))
 
-        # Ensure root StreamHandler(s) point at the selected stream.
         stream_handler_found = False
         for handler in root.handlers:
             if isinstance(handler, logging.StreamHandler):
