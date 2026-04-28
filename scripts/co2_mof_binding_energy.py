@@ -25,11 +25,28 @@ def main():
     configure_logging(default_level="INFO")
     # Create a simple MOF-like structure with periodic boundary conditions
     from ase import Atoms
-    
+
     # Create a simple MOF structure: Zn4O(BDC)3-like structure
     # This is a simplified representation with periodic boundary conditions
     mof_atoms = Atoms(
-        symbols=['Zn', 'Zn', 'Zn', 'Zn', 'O', 'O', 'O', 'O', 'C', 'C', 'C', 'C', 'O', 'O', 'O', 'O'],
+        symbols=[
+            "Zn",
+            "Zn",
+            "Zn",
+            "Zn",
+            "O",
+            "O",
+            "O",
+            "O",
+            "C",
+            "C",
+            "C",
+            "C",
+            "O",
+            "O",
+            "O",
+            "O",
+        ],
         positions=[
             [0.0, 0.0, 0.0],
             [4.0, 0.0, 0.0],
@@ -49,9 +66,9 @@ def main():
             [5.0, 5.0, 6.0],
         ],
         cell=[8.0, 8.0, 20.0],  # Periodic cell with sufficient vacuum in z-direction
-        pbc=True  # Periodic boundary conditions for MOF
+        pbc=True,  # Periodic boundary conditions for MOF
     )
-    
+
     mof_slab = create_slab_from_atoms(mof_atoms)
 
     config = AdsorptionConfig(

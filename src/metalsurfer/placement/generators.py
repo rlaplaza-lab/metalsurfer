@@ -1072,11 +1072,9 @@ def _get_hollow_site_pairs(
     top_radii = [geom._get_covalent_radius(symbols[int(i)]) for i in top_idx]
     top_radii = [r for r in top_radii if r is not None]
     mean_top_radius = float(np.mean(top_radii)) if top_radii else 1.0
-    min_fragment_sep = max(
-        _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM,
-        _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE * (2.0 * mean_top_radius),
-    )
 
+    # Adaptive minimum fragment separation that considers both atomic properties and surface geometry
+    # Use a combination of covalent radius and hollow site density to determine reasonable constraints
     from scipy.spatial import KDTree as _KDTree
 
     site_3d = np.array([np.append(h, z_surface) for h in hollow_sites])
@@ -1084,8 +1082,28 @@ def _get_hollow_site_pairs(
         _nn_tree = _KDTree(site_3d)
         nn_d, _ = _nn_tree.query(site_3d, k=2)
         mean_nn_sep = float(np.mean(nn_d[:, 1]))
+
+        # Adaptive approach: use the actual hollow site geometry as a guide
+        # For close-packed surfaces, hollow sites are closer together, so we need
+        # to be more permissive. For open surfaces, we can be more strict.
+        #
+        # Use a geometric mean of the atomic-scale constraint and the surface-scale constraint
+        atomic_constraint = _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE * (
+            2.0 * mean_top_radius
+        )
+        surface_constraint = 0.8 * mean_nn_sep  # Allow 80% of NN distance as minimum
+
+        # Use the more permissive of the two constraints, but not below the absolute floor
+        adaptive_min = min(atomic_constraint, surface_constraint)
+        min_fragment_sep = max(
+            _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM, adaptive_min
+        )
     else:
         mean_nn_sep = _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM
+        min_fragment_sep = max(
+            _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM,
+            _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE * (2.0 * mean_top_radius),
+        )
     max_adjacent_sep = float(
         np.clip(
             _DISSOCIATIVE_MAX_ADJACENT_SEP_NN_SCALE * mean_nn_sep,

@@ -956,7 +956,7 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
     )
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-        f.write("[H][H],H2\nC#O,CO\n")
+        f.write("[H][H],H2\n[C-]#[O+],CO\n")
         smiles_path = f.name
 
     try:

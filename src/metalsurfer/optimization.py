@@ -408,7 +408,11 @@ def setup_calculator(model_name: str = "uma-s-1p1", device: str = "cuda"):
         predictor = pretrained_mlip.get_predict_unit(model_name, device=device)
     except Exception as exc:
         error_msg = str(exc)
-        if "UnpicklingError" in error_msg and ("weights_only" in error_msg or "weights only" in error_msg) and "slice" in error_msg:
+        if (
+            "UnpicklingError" in error_msg
+            and ("weights_only" in error_msg or "weights only" in error_msg)
+            and "slice" in error_msg
+        ):
             raise RuntimeError(
                 "FairChem model loading failed due to PyTorch 2.6+ security changes.\n"
                 "This is a known issue with FairChem checkpoints and PyTorch 2.6+.\n"
@@ -476,7 +480,11 @@ def setup_torchsim_model(model_name: str = "uma-s-1p1", device: str = "cuda"):
             model = FairChemModel(model=model_name, device=dev, task_name="oc20")
     except Exception as exc:
         error_msg = str(exc)
-        if "UnpicklingError" in error_msg and ("weights_only" in error_msg or "weights only" in error_msg) and "slice" in error_msg:
+        if (
+            "UnpicklingError" in error_msg
+            and ("weights_only" in error_msg or "weights only" in error_msg)
+            and "slice" in error_msg
+        ):
             raise RuntimeError(
                 "FairChem model loading failed due to PyTorch 2.6+ security changes.\n"
                 "This is a known issue with FairChem checkpoints and PyTorch 2.6+.\n"

@@ -142,7 +142,7 @@ def test_equivalent_atoms_bulk_cu():
 def test_get_symmetry_aware_sites_multiplicity_partition():
     """Every raw site lies in exactly one orbit; multiplicities sum to raw count."""
     slab = make_slab(nx=2, ny=2)
-    raw = get_unified_sites(slab)
+    raw = get_unified_sites(slab, material_type="slab")
     assert raw is not None and len(raw) >= 1
     sym = get_symmetry_aware_sites(slab)
     assert len(sym) >= 1
@@ -329,7 +329,7 @@ def test_cluster_op_count_matches_spglib_reference():
 def test_fcc111_pt_slab_symmetry_reduces_sites_and_verifies_orbits():
     """High-symmetry periodic slab: fewer unique sites; orbit pairwise check."""
     slab = fcc111("Pt", size=(2, 2, 3), vacuum=7.0, orthogonal=True)
-    raw = get_unified_sites(slab)
+    raw = get_unified_sites(slab, material_type="slab")
     assert raw is not None and len(raw) >= 1
     sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15)
     assert len(sym) >= 1
@@ -343,7 +343,7 @@ def test_fcc111_pt_slab_symmetry_reduces_sites_and_verifies_orbits():
 def test_make_slab_orbit_soundness():
     """Synthetic FCC-like slab: pairwise orbit property."""
     slab = make_slab(nx=2, ny=2)
-    raw = get_unified_sites(slab)
+    raw = get_unified_sites(slab, material_type="slab")
     assert raw is not None and len(raw) >= 1
     an = SymmetryAnalyzer(slab, symmetry_tolerance=0.1)
     _assert_orbit_pairwise_symops(an, raw, planar=True)

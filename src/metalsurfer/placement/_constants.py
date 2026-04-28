@@ -113,13 +113,31 @@ _PARALLEL_Z_MIN_HI_MARGIN: float = 0.3  # ensure z_base_hi >= z_base_lo + this (
 # ---------------------------------------------------------------------------
 
 # Minimum and maximum separation between fragment landing sites.
-# min_sep = max(min_floor, alpha * (2 * mean_top_layer_covalent_radius))
+# min_sep = max(min_floor, min(atomic_constraint, surface_constraint))
 # max_sep = clamp(beta * mean_top_layer_nn_distance, min=max_floor)
-_DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE: float = 1.0
-_DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM: float = 0.8
-_DISSOCIATIVE_MAX_ADJACENT_SEP_NN_SCALE: float = 1.1
-_DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM: float = 2.2
-_DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM: float = 3.2
+#
+# Note: The algorithm now uses an adaptive approach that considers both atomic
+# properties (covalent radii) and surface geometry (hollow site distances).
+# This makes it automatically compatible with both close-packed and open surfaces.
+#
+# The adaptive approach uses:
+# - atomic_constraint = scale * (2 * mean_surface_atom_covalent_radius)
+# - surface_constraint = 0.8 * mean_hollow_site_NN_distance
+# - min_sep = max(floor, min(atomic_constraint, surface_constraint))
+#
+# This ensures that:
+# 1. For close-packed surfaces: surface_constraint is smaller, so it dominates
+# 2. For open surfaces: atomic_constraint is smaller, so it dominates
+# 3. Always respects the absolute minimum floor for physical reasonableness
+_DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE: float = (
+    0.7  # More conservative atomic constraint
+)
+_DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM: float = 1.0  # Absolute minimum: 1.0 Å
+_DISSOCIATIVE_MAX_ADJACENT_SEP_NN_SCALE: float = 1.2  # Conservative surface scaling
+_DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM: float = (
+    1.5  # Minimum max separation: 1.5 Å
+)
+_DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM: float = 3.2  # Maximum reasonable: 3.2 Å
 
 # ---------------------------------------------------------------------------
 # Atop site injection

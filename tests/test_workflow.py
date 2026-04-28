@@ -27,13 +27,13 @@ from metalsurfer.models import (
 )
 from metalsurfer.surfaces import SlabContainer
 from metalsurfer.workflow import (
-    PlacementFailureEvent,
     format_failure_summary,
     load_molecules,
     process_molecule,
     process_molecule_bayesian,
 )
 from metalsurfer.workflow.shared import (
+    PlacementFailureEvent,
     _build_surface_reference_slab,
     _infer_surface_symbols,
     _validate_adsorption,
@@ -346,6 +346,7 @@ class TestProcessMolecule:
         mock_resize = MagicMock(return_value=(slab, False))
         mock_cfs = MagicMock(return_value=([Atoms("H2")], [0.0]))
         mock_specs = MagicMock(return_value=[])
+        mock_optimize = MagicMock(return_value=[])
         with (
             patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs),
             patch(
@@ -353,6 +354,10 @@ class TestProcessMolecule:
             ),
             patch(
                 "metalsurfer.workflow.core.auto_resize_slab_for_molecule", mock_resize
+            ),
+            patch(
+                "metalsurfer.workflow.core.optimize_adsorbate_slab_batched",
+                mock_optimize,
             ),
         ):
             process_molecule(
@@ -378,6 +383,7 @@ class TestProcessMolecule:
         mock_resize = MagicMock(return_value=(slab, False))
         mock_cfs = MagicMock(return_value=([Atoms("H2")], [0.0]))
         mock_specs = MagicMock(return_value=[])
+        mock_optimize = MagicMock(return_value=[])
         with (
             patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs),
             patch(
@@ -385,6 +391,10 @@ class TestProcessMolecule:
             ),
             patch(
                 "metalsurfer.workflow.core.auto_resize_slab_for_molecule", mock_resize
+            ),
+            patch(
+                "metalsurfer.workflow.core.optimize_adsorbate_slab_batched",
+                mock_optimize,
             ),
         ):
             process_molecule(

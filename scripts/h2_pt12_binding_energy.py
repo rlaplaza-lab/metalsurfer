@@ -22,16 +22,16 @@ def main():
     configure_logging(default_level="INFO")
     # Create a small Pt nanocluster with 12 atoms using ASE
     from ase import Atoms
-    
+
     # Create a simple but realistic Pt cluster for H2 adsorption
     # Use a small (111) facet-like structure which provides good adsorption sites
-    
+
     # Create a 3-layer Pt(111)-like nanocluster (12 atoms total)
     # Layer 1 (bottom): 4 atoms
-    # Layer 2 (middle): 4 atoms  
+    # Layer 2 (middle): 4 atoms
     # Layer 3 (top): 4 atoms
     pt_atoms = Atoms(
-        symbols=['Pt'] * 12,
+        symbols=["Pt"] * 12,
         positions=[
             # Bottom layer (z=0)
             [0.0, 0.0, 0.0],
@@ -50,9 +50,9 @@ def main():
             [2.8, 0.808, 4.0],
         ],
         cell=[20, 20, 20],  # Large cell to isolate cluster
-        pbc=False  # No periodic boundary conditions for nanocluster
+        pbc=False,  # No periodic boundary conditions for nanocluster
     )
-    
+
     nanocluster = create_slab_from_atoms(pt_atoms)
 
     config = AdsorptionConfig(
@@ -88,7 +88,9 @@ def main():
         print(
             f"\nBinding energy of H2 on Pt12 nanocluster: {summary.best_adsorption_energy:.4f} eV"
         )
-        print("  (E_ads = E(nanocluster+H2) - E(nanocluster) - E(H2); negative = favorable)")
+        print(
+            "  (E_ads = E(nanocluster+H2) - E(nanocluster) - E(H2); negative = favorable)"
+        )
         print(
             f"  Relaxation: {total_steps} steps (stage1: {config.stage1_steps}, stage2: {config.stage2_steps})"
         )

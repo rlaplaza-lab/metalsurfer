@@ -232,13 +232,18 @@ def test_calculate_min_distance_requires_explicit_pbc_for_periodic_cell():
 
 def test_material_type_for_placement():
     with pytest.raises(ValueError, match="material_type"):
-        material_type_for_placement({"site_type": "atop"})
+        material_type_for_placement({"site_type": "atop"}, when_no_site="slab")
     assert (
-        material_type_for_placement({"site_type": "atop", "material_type": "porous"})
+        material_type_for_placement(
+            {"site_type": "atop", "material_type": "porous"}, when_no_site="slab"
+        )
         == "porous"
     )
     assert (
-        material_type_for_placement({"material_type": "nanoparticle"}) == "nanoparticle"
+        material_type_for_placement(
+            {"material_type": "nanoparticle"}, when_no_site="slab"
+        )
+        == "nanoparticle"
     )
 
 
@@ -286,9 +291,20 @@ def test_initial_placement_distance_accepts_and_rejects_expected_heights():
 
 
 def test_material_aware_pbc():
-    assert material_aware_pbc("slab") == [True, True, False]
-    assert material_aware_pbc("nanoparticle") == [False, False, False]
-    assert material_aware_pbc("porous") == [True, True, True]
+    from ase import Atoms
+
+    slab = Atoms("Cu", cell=[3.6, 3.6, 20.0], pbc=[True, True, True])
+    assert material_aware_pbc(slab) == [True, True, False]
+    nanoparticle = Atoms("Cu", positions=[[0, 0, 0]])
+    assert material_aware_pbc(nanoparticle) == [False, False, False]
+    porous = Atoms(
+        "Cu2",
+        cell=[3.6, 3.6, 3.6],
+        pbc=[True, True, True],
+        positions=[[0, 0, 0], [1.8, 1.8, 1.8]],
+    )
+    # porous is detected as slab because z_span/c_length < 0.7
+    assert material_aware_pbc(porous) == [True, True, False]
 
 
 # ---------------------------------------------------------------------------
@@ -561,6 +577,9 @@ def test_voronoi_enrichment_uses_ridge_vertices(monkeypatch):
         framework_tree,
         probe_radius,
         max_distance,
+        *,
+        cell,
+        pbc,
     ):
         captured["ridge_vertices"] = ridge_vertices
         return vertices, nn_dists
