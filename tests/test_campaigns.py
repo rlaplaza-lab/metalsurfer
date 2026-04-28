@@ -45,7 +45,16 @@ def test_run_saturation_bo_forces_bo_and_preserves_multi_molecule(monkeypatch):
     def _fake_run_saturation_screening(*, config, **kwargs):
         captured["config"] = config
         captured["kwargs"] = kwargs
-        return ["ok"]
+        # Return a minimal mock saturation result
+        from metalsurfer.models import MultiMolSaturationRunResult
+
+        return [
+            MultiMolSaturationRunResult(
+                molecules=["demo"],
+                steps=[],
+                n_molecules_at_saturation=0,
+            )
+        ]
 
     monkeypatch.setattr(
         "metalsurfer.campaigns.run_saturation_screening",
@@ -61,9 +70,11 @@ def test_run_saturation_bo_forces_bo_and_preserves_multi_molecule(monkeypatch):
         ),
         surface_type="demo",
         skip_existing=False,
+        save_results=False,
+        write_settings=False,
     )
 
-    assert out == ["ok"]
+    assert len(out) == 1
     config = captured["config"]
     assert isinstance(config, AdsorptionConfig)
     assert config.bo_enabled is True
