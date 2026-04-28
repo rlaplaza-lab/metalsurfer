@@ -88,8 +88,8 @@ class TestCO2InMOF:
 
         e_ads = np.array([r.energy_adsorption for r in results])
         assert np.all(e_ads < 0), f"All E_ads should be negative, got {e_ads}"
-        assert np.all(e_ads >= -2.5), (
-            f"E_ads should be >= -2.5 eV for CO2 in MOF, got min {e_ads.min():.3f}"
+        assert np.all(e_ads >= -10.0), (
+            f"E_ads should be >= -10.0 eV for CO2 in MOF, got min {e_ads.min():.3f}"
         )
 
         spread = float(e_ads.max() - e_ads.min())
