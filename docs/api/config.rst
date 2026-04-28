@@ -1,9 +1,3 @@
-
-.. autoclass:: metalsurfer.AdsorptionConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
-=======
 Configuration
 =============
 
@@ -25,9 +19,16 @@ Key Attributes
    "num_placements", "int", "100", "Number of placement attempts per conformer"
    "device", "str", "'cuda'", "Device to use for MLIP calculations ('cuda' or 'cpu')"
    "fmax", "float", "0.05", "Maximum force threshold for optimization convergence (eV/Å)"
-=============
-
-.. autoclass:: metalsurfer.AdsorptionConfig
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   "stage1_steps", "int", "50", "Number of optimization steps in stage 1 (coarse optimization)"
+   "stage2_steps", "int", "150", "Number of optimization steps in stage 2 (fine optimization)"
+   "reference_optimization_steps", "int", "100", "Number of optimization steps for reference calculations"
+   "placement_x_range", "tuple[float, float]", "(-4.0, 4.0)", "Range for x-coordinate placement (Å)"
+   "placement_y_range", "tuple[float, float]", "(-4.0, 4.0)", "Range for y-coordinate placement (Å)"
+   "placement_z_range", "tuple[float, float]", "(2.0, 3.0)", "Range for z-coordinate placement (Å)"
+   "placement_z_scale_by_covalent_radius", "bool", "True", "Scale z-placement by adsorbate covalent radius"
+   "material_type", "Literal['slab', 'nanoparticle', 'porous']", "'slab'", "Type of material ('slab', 'nanoparticle', or 'porous')"
+   "voronoi_probe_radius", "float", "1.2", "Minimum distance from framework atoms to Voronoi sites (Å)"
+   "voronoi_max_site_distance", "float", "4.0", "Maximum distance for accessible Voronoi sites (Å)"
+   "voronoi_site_enrichment", "bool", "True", "Enable geodesic ridge subdivision for denser sites"
+   "site_classification_method", "Literal['distance_ratio', 'delaunay']", "'distance_ratio'", "Method for classifying adsorption sites ('distance_ratio' or 'delaunay')"
+   "conformer_sampling", "Literal['boltzmann', 'cycle', 'mixed']", "'cycle'", "Method for conformer sampling ('boltzmann', 'cycle', or 'mixed')"

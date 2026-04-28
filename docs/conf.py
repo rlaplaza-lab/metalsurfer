@@ -32,6 +32,9 @@ autodoc_default_options = {
     "show-inheritance": True,
 }
 
+# Better dataclass field documentation
+autodoc_docstring_signature = True
+
 # Improve dataclass documentation
 autodoc_class_signature = "separated"
 autodoc_typehints = "description"
