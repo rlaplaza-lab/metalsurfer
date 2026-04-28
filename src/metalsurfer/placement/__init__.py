@@ -11,6 +11,9 @@ import numpy as np
 from ase import Atoms
 
 from ..symmetry import SymmetryAnalyzer
+from ._material import (
+    material_aware_pbc as material_aware_pbc,
+)
 from ._material import material_type_for_placement
 from .generators import (
     classify_adsorbate_orientation as classify_adsorbate_orientation,
