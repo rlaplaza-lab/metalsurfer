@@ -11,6 +11,7 @@ from ase import Atoms
 
 from .config import AdsorptionConfig
 from .io_results import (
+    save_saturation_results,
     save_single_molecule_results,
     save_summary_results,
     screening_run_result,
@@ -344,6 +345,9 @@ def run_saturation(
     molecules: list[tuple[str, str]] | str = "smiles.csv",
     config: AdsorptionConfig | None = None,
     surface_type: str = "manual",
+    save_results: bool = True,
+    write_settings: bool = True,
+    write_metadata: bool = False,
     skip_existing: bool = True,
     failure_summary_out: dict[str, object] | None = None,
     run_metadata_out: dict[str, Any] | None = None,
@@ -360,6 +364,12 @@ def run_saturation(
         Screening configuration.
     surface_type:
         Label for the ``results_{surface_type}/`` output directory.
+    save_results:
+        Whether to write CSV/XYZ/POSCAR output files.
+    write_settings:
+        Whether to write a ``run_settings.json`` file.
+    write_metadata:
+        Whether to write a ``run_metadata.json`` file.
     skip_existing:
         Skip molecules already in the saturation summary (CSV input only).
     failure_summary_out:
@@ -372,7 +382,7 @@ def run_saturation(
     smiles_file = _molecules_to_smiles_file(
         molecules, config, surface_type, skip_existing
     )
-    return run_saturation_screening(
+    results = run_saturation_screening(
         slab=slab,
         smiles_file=smiles_file,
         config=config,
@@ -381,6 +391,15 @@ def run_saturation(
         failure_summary_out=failure_summary_out,
         run_metadata_out=run_metadata_out,
     )
+    
+    if save_results:
+        save_saturation_results(results, surface_type=surface_type)
+    if write_settings:
+        write_run_settings(config, surface_type=surface_type)
+    if write_metadata and run_metadata_out:
+        write_run_metadata(run_metadata_out, surface_type=surface_type)
+    
+    return results
 
 
 def run_saturation_bo(
@@ -389,6 +408,9 @@ def run_saturation_bo(
     molecules: list[tuple[str, str]] | str = "smiles.csv",
     config: AdsorptionConfig | None = None,
     surface_type: str = "manual",
+    save_results: bool = True,
+    write_settings: bool = True,
+    write_metadata: bool = False,
     skip_existing: bool = True,
     failure_summary_out: dict[str, object] | None = None,
     run_metadata_out: dict[str, Any] | None = None,
@@ -405,6 +427,12 @@ def run_saturation_bo(
         Screening configuration; ``bo_enabled`` is set to ``True``.
     surface_type:
         Label for the ``results_{surface_type}/`` output directory.
+    save_results:
+        Whether to write CSV/XYZ/POSCAR output files.
+    write_settings:
+        Whether to write a ``run_settings.json`` file.
+    write_metadata:
+        Whether to write a ``run_metadata.json`` file.
     skip_existing:
         Skip molecules already in the saturation summary (CSV input only).
     failure_summary_out:
@@ -418,7 +446,7 @@ def run_saturation_bo(
     smiles_file = _molecules_to_smiles_file(
         molecules, config, surface_type, skip_existing
     )
-    return run_saturation_screening(
+    results = run_saturation_screening(
         slab=slab,
         smiles_file=smiles_file,
         config=config,
@@ -427,6 +455,15 @@ def run_saturation_bo(
         failure_summary_out=failure_summary_out,
         run_metadata_out=run_metadata_out,
     )
+    
+    if save_results:
+        save_saturation_results(results, surface_type=surface_type)
+    if write_settings:
+        write_run_settings(config, surface_type=surface_type)
+    if write_metadata and run_metadata_out:
+        write_run_metadata(run_metadata_out, surface_type=surface_type)
+    
+    return results
 
 
 def _molecules_to_smiles_file(
