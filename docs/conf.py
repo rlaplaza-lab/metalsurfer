@@ -24,12 +24,12 @@ autodoc_docstring_signature = True
 
 # Enable extraction of inline comments for dataclass fields
 autodoc_default_options = {
-    'members': True,
-    'undoc-members': True,
-    'private-members': False,
-    'special-members': False,
-    'inherited-members': True,
-    'show-inheritance': True,
+    "members": True,
+    "undoc-members": True,
+    "private-members": False,
+    "special-members": False,
+    "inherited-members": True,
+    "show-inheritance": True,
 }
 
 # Mock heavy optional dependencies so docs build without torch/fairchem/GPU.

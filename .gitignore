@@ -63,6 +63,7 @@ Thumbs.db
 results_test_ethene/
 results_*/
 results*/
+examples/*/
 scripts/diagnose_vanillin_placement.py
 *.xyz
 benchmark_bo_results_*.csv
