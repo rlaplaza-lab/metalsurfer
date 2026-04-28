@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Compute the binding (adsorption) energy of CO2 in a MOF periodic cell.
 
-This example creates a simple MOF-like structure with periodic boundary conditions
-and computes CO2 adsorption energy using metalsurfer.
+This example loads a real MOF structure from a CIF file and computes CO2 adsorption
+energy using metalsurfer.
 
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 
 If you hit CUDA OOM on a 15GB GPU, try:
-  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python scripts/co2_mof_binding_energy.py
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/co2_mof_binding_energy.py
 or reduce num_placements (e.g. 25).
+
+Uses RUBTAK01 MOF structure from:
+https://github.com/bafgreat/mofstructure/blob/main/tests/test_data/RUBTAK01.cif
 """
 
 from metalsurfer import (
@@ -23,51 +26,28 @@ from metalsurfer.cli.cli_output import format_results_saved_line
 
 def main():
     configure_logging(default_level="INFO")
-    # Create a simple MOF-like structure with periodic boundary conditions
-    from ase import Atoms
 
-    # Create a simple MOF structure: Zn4O(BDC)3-like structure
-    # This is a simplified representation with periodic boundary conditions
-    mof_atoms = Atoms(
-        symbols=[
-            "Zn",
-            "Zn",
-            "Zn",
-            "Zn",
-            "O",
-            "O",
-            "O",
-            "O",
-            "C",
-            "C",
-            "C",
-            "C",
-            "O",
-            "O",
-            "O",
-            "O",
-        ],
-        positions=[
-            [0.0, 0.0, 0.0],
-            [4.0, 0.0, 0.0],
-            [0.0, 4.0, 0.0],
-            [4.0, 4.0, 0.0],
-            [2.0, 2.0, 2.0],
-            [6.0, 2.0, 2.0],
-            [2.0, 6.0, 2.0],
-            [6.0, 6.0, 2.0],
-            [1.0, 1.0, 4.0],
-            [5.0, 1.0, 4.0],
-            [1.0, 5.0, 4.0],
-            [5.0, 5.0, 4.0],
-            [1.0, 1.0, 6.0],
-            [5.0, 1.0, 6.0],
-            [1.0, 5.0, 6.0],
-            [5.0, 5.0, 6.0],
-        ],
-        cell=[8.0, 8.0, 20.0],  # Periodic cell with sufficient vacuum in z-direction
-        pbc=True,  # Periodic boundary conditions for MOF
-    )
+    # Load MOF structure from CIF file
+    import os
+
+    from ase.io import read
+
+    # Path to the CIF file in the examples directory
+    cif_path = os.path.join(os.path.dirname(__file__), "mof_structures", "RUBTAK01.cif")
+
+    if not os.path.exists(cif_path):
+        raise FileNotFoundError(
+            f"MOF CIF file not found at {cif_path}. "
+            "Please ensure the RUBTAK01.cif file is present in examples/mof_structures/"
+        )
+
+    # Read the MOF structure using ASE
+    mof_atoms = read(cif_path)
+
+    print(f"Successfully loaded MOF structure from {cif_path}")
+    print(f"MOF formula: {mof_atoms.get_chemical_formula()}")
+    print(f"MOF has {len(mof_atoms)} atoms")
+    print(f"MOF cell: {mof_atoms.cell}")
 
     mof_slab = create_slab_from_atoms(mof_atoms)
 

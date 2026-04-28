@@ -24,24 +24,30 @@ pip install -e ".[mlip,dev]"
 
 ## Quick Examples
 
-Two simple examples are provided in `scripts/` to demonstrate basic usage:
+Three simple examples are provided in `examples/` to demonstrate basic usage:
 
 ### H2 Adsorption on Pt Nanocluster
 ```bash
 # 12-atom Pt cluster with H2 adsorption
-python scripts/h2_pt12_binding_energy.py
+python examples/h2_pt12_binding_energy.py
 ```
 
 ### CO2 Adsorption in MOF
 ```bash
-# Simple MOF structure with CO2 adsorption
-python scripts/co2_mof_binding_energy.py
+# Real MOF structure (RUBTAK01) with CO2 adsorption
+python examples/co2_mof_binding_energy.py
 ```
 
-Both examples:
+### Ethene Adsorption on Ru(0001) Slab
+```bash
+# Ru(0001) slab with ethene adsorption
+python examples/ethene_ru_slab_binding_energy.py
+```
+
+These examples:
 - Use pure ASE for receptor preparation
-- Limit to 5 placements for quick testing
-- Demonstrate different material types (`nanoparticle` vs `porous`)
+- Limit to modest placements for quick testing (5-25)
+- Demonstrate different material types (`nanoparticle`, `porous`, and `slab`)
 - Produce XYZ structures, POSCAR files, and CSV results
 
 ## Python API
