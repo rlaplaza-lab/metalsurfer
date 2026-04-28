@@ -32,6 +32,10 @@ autodoc_default_options = {
     "show-inheritance": True,
 }
 
+# Improve dataclass documentation
+autodoc_class_signature = "separated"
+autodoc_typehints = "description"
+
 # Mock heavy optional dependencies so docs build without torch/fairchem/GPU.
 autodoc_mock_imports = [
     "torch",
@@ -49,6 +53,7 @@ napoleon_google_docstring = False
 napoleon_numpy_docstring = True
 napoleon_use_param = True
 napoleon_use_rtype = True
+napoleon_use_ivar = True
 
 # -- Intersphinx --------------------------------------------------------------
 
