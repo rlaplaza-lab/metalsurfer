@@ -62,6 +62,15 @@ intersphinx_mapping = {
 
 html_theme = "furo"
 html_title = "metalsurfer"
+html_logo = "_static/logo_metalsurfer.svg"
+html_favicon = "_static/logo_metalsurfer.svg"
+
+# Furo theme specific settings
+html_theme_options = {
+    "sidebar_hide_name": True,
+    "light_logo": "logo_metalsurfer.svg",
+    "dark_logo": "logo_metalsurfer.svg",
+}
 
 # -- General -------------------------------------------------------------------
 
