@@ -10,6 +10,7 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.intersphinx",
     "sphinx.ext.viewcode",
+    "sphinx.ext.autosummary",
     "sphinx_autodoc_typehints",
     "sphinx_copybutton",
 ]
@@ -19,6 +20,17 @@ extensions = [
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
 autodoc_class_signature = "separated"
+autodoc_docstring_signature = True
+
+# Enable extraction of inline comments for dataclass fields
+autodoc_default_options = {
+    'members': True,
+    'undoc-members': True,
+    'private-members': False,
+    'special-members': False,
+    'inherited-members': True,
+    'show-inheritance': True,
+}
 
 # Mock heavy optional dependencies so docs build without torch/fairchem/GPU.
 autodoc_mock_imports = [

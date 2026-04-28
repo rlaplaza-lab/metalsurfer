@@ -63,7 +63,7 @@ class AdsorptionConfig:
     set skip_topology_check=True to disable molecular decomposition checks.
     Set skip_desorption_check=True to disable post-optimization distance validation.
 
-    Parameters:
+    Attributes:
         model_name: Name of the MLIP model to use for energy calculations
         num_conformers: Number of conformers to generate for each molecule
         num_placements: Number of placement attempts per conformer
@@ -162,18 +162,18 @@ class AdsorptionConfig:
         bo_transfer_exploration_fraction: Exploration fraction for transfer learning
     """
 
-    model_name: str = "uma-s-1p1"
-    num_conformers: int = 10
-    num_placements: int = 100
-    device: str = "cuda"
-    fmax: float = 0.05
-    stage1_steps: int = 50
-    stage2_steps: int = 150
-    reference_optimization_steps: int = 100
-    placement_x_range: tuple[float, float] = (-4.0, 4.0)
-    placement_y_range: tuple[float, float] = (-4.0, 4.0)
-    placement_z_range: tuple[float, float] = (2.0, 3.0)
-    placement_z_scale_by_covalent_radius: bool = True
+    model_name: str = "uma-s-1p1"  # Name of the MLIP model to use for energy calculations
+    num_conformers: int = 10  # Number of conformers to generate for each molecule
+    num_placements: int = 100  # Number of placement attempts per conformer
+    device: str = "cuda"  # Device to use for MLIP calculations ('cuda' or 'cpu')
+    fmax: float = 0.05  # Maximum force threshold for optimization convergence (eV/Å)
+    stage1_steps: int = 50  # Number of optimization steps in stage 1 (coarse optimization)
+    stage2_steps: int = 150  # Number of optimization steps in stage 2 (fine optimization)
+    reference_optimization_steps: int = 100  # Number of optimization steps for reference calculations
+    placement_x_range: tuple[float, float] = (-4.0, 4.0)  # Range for x-coordinate placement (Å)
+    placement_y_range: tuple[float, float] = (-4.0, 4.0)  # Range for y-coordinate placement (Å)
+    placement_z_range: tuple[float, float] = (2.0, 3.0)  # Range for z-coordinate placement (Å)
+    placement_z_scale_by_covalent_radius: bool = True  # Scale z-placement by adsorbate covalent radius
     # Explicit material type: "slab" (2D periodic), "nanoparticle" (0D), or "porous" (3D periodic)
     material_type: Literal["slab", "nanoparticle", "porous"] = "slab"
     # Voronoi site generation parameters
@@ -182,10 +182,10 @@ class AdsorptionConfig:
     voronoi_site_enrichment: bool = True  # geodesic ridge subdivision for denser sites
     # Site classification: "distance_ratio" (default) or "delaunay" (slab only).
     site_classification_method: Literal["distance_ratio", "delaunay"] = "distance_ratio"
-    conformer_sampling: Literal["boltzmann", "cycle", "mixed"] = "cycle"
+    conformer_sampling: Literal["boltzmann", "cycle", "mixed"] = "cycle"  # Method for conformer sampling
     placement_filter: Callable[[PlacementSpec], bool] | None = field(
         default=None, repr=False
-    )
+    )  # Optional function to filter placement specifications
     flat_aromatic_parallel_fraction: float = (
         0.5  # Fraction of flat-aromatic placements in horizontal (π-stacking) vs EN-down.
         # Default 0.5 ensures both orientations are explored.
@@ -193,27 +193,27 @@ class AdsorptionConfig:
     # When True, override flat_aromatic_parallel_fraction with a molecule-aware
     # estimate (high for pure aromatics, low for strong EN-down binders).
     adaptive_parallel_fraction: bool = False
-    min_initial_distance: float = 1.5
+    min_initial_distance: float = 1.5  # Minimum initial distance between adsorbate and surface (Å)
     min_contact_ratio: float = (
         0.8  # Lower bound: (r_mol+r_surf)*ratio avoids covalent binding
     )
     max_initial_distance: float | None = (
-        None  # Upper bound for initial placement (optional)
+        None  # Upper bound for initial placement distance (Å, optional)
     )
-    top_layer_tolerance: float = 0.5
-    symmetry_tolerance: float = 0.1
-    site_equivalence_tolerance: float = 0.05
-    hollow_site_dedup_tolerance: float = 0.1
+    top_layer_tolerance: float = 0.5  # Tolerance for identifying top layer atoms (Å)
+    symmetry_tolerance: float = 0.1  # Tolerance for symmetry detection (Å)
+    site_equivalence_tolerance: float = 0.05  # Tolerance for site equivalence detection (Å)
+    hollow_site_dedup_tolerance: float = 0.1  # Tolerance for hollow site deduplication (Å)
     planar_z_variance_threshold: float = (
         0.01  # Max z variance (Å²) for planar classification
     )
     # When True, use per-site local z as surface reference on rough (non-planar)
     # slabs instead of the global np.max(z).
     rough_slab_local_z: bool = True
-    relax_top_layer: bool = True
-    freeze_symbols: list[str] | None = None
-    min_interatomic_distance: float = 0.5
-    max_force_convergence: float = 0.05
+    relax_top_layer: bool = True  # Allow relaxation of top layer atoms
+    freeze_symbols: list[str] | None = None  # List of element symbols to freeze during optimization
+    min_interatomic_distance: float = 0.5  # Minimum allowed interatomic distance (Å)
+    max_force_convergence: float = 0.05  # Maximum force for convergence (eV/Å)
     binding_distance_threshold: float = (
         4.0  # Post-opt: reject if adsorbate-surface > this (desorbed)
     )
@@ -241,29 +241,29 @@ class AdsorptionConfig:
     max_initial_placement_quality: str = (
         "any"  # "any" (default) or "good" (multiple contacts)
     )
-    max_adsorption_energy: float = 5.0
-    energy_dedup_threshold: float = 0.05
-    rmsd_dedup_threshold: float = 0.1
-    connectivity_multipliers: list[float] = field(default_factory=lambda: [1.2, 1.3])
-    seed: int = 42
-    boltzmann_temperature: float = 300.0
-    auto_resize_slab: bool = True
-    min_pbc_image_separation: float = 8.0
+    max_adsorption_energy: float = 5.0  # Maximum allowed adsorption energy (eV)
+    energy_dedup_threshold: float = 0.05  # Energy threshold for deduplication (eV)
+    rmsd_dedup_threshold: float = 0.1  # RMSD threshold for deduplication (Å)
+    connectivity_multipliers: list[float] = field(default_factory=lambda: [1.2, 1.3])  # Multipliers for connectivity analysis
+    seed: int = 42  # Random seed for reproducibility
+    boltzmann_temperature: float = 300.0  # Temperature for Boltzmann sampling (K)
+    auto_resize_slab: bool = True  # Automatically resize slab to accommodate adsorbates
+    min_pbc_image_separation: float = 8.0  # Minimum separation between periodic images (Å)
     # Isolated conformer / gas-phase box edge length (Å) for conformers module
     vacuum_box_size: float = 20.0
-    vasp_encut: int = 400
-    vasp_ediff: float = 1e-6
-    vasp_ediffg: float = -0.02
-    vasp_nsw: int = 100
-    vasp_kpoints: tuple[int, int, int] = (4, 4, 1)
-    saturation: bool = False
-    multi_molecule_saturation: bool = False
-    skip_topology_check: bool = False
-    skip_desorption_check: bool = False
+    vasp_encut: int = 400  # VASP ENcut parameter (eV)
+    vasp_ediff: float = 1e-6  # VASP EDIFF parameter (eV)
+    vasp_ediffg: float = -0.02  # VASP EDIFFG parameter (eV/Å)
+    vasp_nsw: int = 100  # VASP NSW parameter (number of steps)
+    vasp_kpoints: tuple[int, int, int] = (4, 4, 1)  # VASP k-points grid (tuple of 3 integers)
+    saturation: bool = False  # Enable saturation coverage calculations
+    multi_molecule_saturation: bool = False  # Enable multi-molecule saturation calculations
+    skip_topology_check: bool = False  # Skip molecular topology validation checks
+    skip_desorption_check: bool = False  # Skip post-optimization desorption validation
 
     # Strict workflow: fail instead of skipping molecules
-    fail_on_missing_reference: bool = False
-    fail_on_conformer_failure: bool = False
+    fail_on_missing_reference: bool = False  # Fail if reference calculation is missing
+    fail_on_conformer_failure: bool = False  # Fail if conformer generation fails
 
     # Debug: write XYZ files of initial placements (before optimization) to the same
     # xyz_structures/{molecule}_all/ dir as final conformer XYZs (as initial_*.xyz)
@@ -271,44 +271,44 @@ class AdsorptionConfig:
 
     # Placement retry configuration: attempt to generate requested number of valid
     # placements by retrying failed specs with different random seeds.
-    placement_retry_enabled: bool = True
-    placement_retry_max_attempts: int = 3
-    placement_retry_diversity_seed_increment: int = 1000
+    placement_retry_enabled: bool = True  # Enable placement retry mechanism
+    placement_retry_max_attempts: int = 3  # Maximum number of placement retry attempts
+    placement_retry_diversity_seed_increment: int = 1000  # Seed increment for retry diversity
 
     # TorchSim optimisation tuning
-    optimize_isolated_sequentially: bool = False
-    ts_optimizer: Literal["fire", "lbfgs", "bfgs"] = "fire"
-    steps_between_swaps: int = 5
+    optimize_isolated_sequentially: bool = False  # Optimize isolated molecules sequentially
+    ts_optimizer: Literal["fire", "lbfgs", "bfgs"] = "fire"  # TorchSim optimizer
+    steps_between_swaps: int = 5  # Number of steps between optimizer swaps
 
     # TorchSim autobatcher tuning (helps avoid CUDA OOM)
-    autobatcher_max_memory_padding: float = 0.5
-    autobatcher_max_memory_scaler: float | None = None
+    autobatcher_max_memory_padding: float = 0.5  # Memory padding for autobatcher (fraction)
+    autobatcher_max_memory_scaler: float | None = None  # Memory scaler for autobatcher (optional)
     # When set, forces TorchSim memory-estimation probe cap. When None, Metalsurfer
     # computes a conservative per-call cap from current workload.
-    autobatcher_max_atoms_to_try: int | None = None
+    autobatcher_max_atoms_to_try: int | None = None  # Maximum atoms to try in autobatcher (optional)
     # Saturation-only: allow reusing prior autobatcher estimate for small size growth
-    saturation_autobatcher_reuse: bool = True
-    saturation_autobatcher_reuse_growth_atoms: int = 32
-    saturation_autobatcher_reuse_growth_fraction: float = 0.1
+    saturation_autobatcher_reuse: bool = True  # Reuse autobatcher estimates in saturation
+    saturation_autobatcher_reuse_growth_atoms: int = 32  # Growth threshold for autobatcher reuse (atoms)
+    saturation_autobatcher_reuse_growth_fraction: float = 0.1  # Growth threshold for autobatcher reuse (fraction)
 
     # Bayesian optimisation (surrogate-guided placement selection)
-    bo_enabled: bool = False
-    bo_initial_random: int = 10
-    bo_batch_size: int = 10
-    bo_total_budget: int = 100
+    bo_enabled: bool = False  # Enable Bayesian optimization for placement selection
+    bo_initial_random: int = 10  # Number of initial random samples for BO
+    bo_batch_size: int = 10  # Batch size for BO iterations
+    bo_total_budget: int = 100  # Total budget for BO iterations
     # Lower kappa biases toward exploitation; empirically improves early-best
     # discovery on heterogeneous graphene test runs.
-    bo_ucb_kappa: float = 1.0
-    bo_acquisition: Literal["lcb", "ei", "pi"] = "lcb"
+    bo_ucb_kappa: float = 1.0  # Kappa parameter for UCB acquisition function
+    bo_acquisition: Literal["lcb", "ei", "pi"] = "lcb"  # BO acquisition function
     bo_surrogate: Literal[
         "random_forest",
         "extra_trees",
         "gradient_boost",
         "ridge",
-    ] = "random_forest"
-    bo_candidate_pool_size: int | None = None
-    bo_include_failure_negatives: bool = True
-    bo_failure_penalty_default: float = 10.0
+    ] = "random_forest"  # BO surrogate model
+    bo_candidate_pool_size: int | None = None  # Size of candidate pool for BO (optional)
+    bo_include_failure_negatives: bool = True  # Include failure penalties in BO
+    bo_failure_penalty_default: float = 10.0  # Default failure penalty for BO
     bo_failure_penalty_overrides: dict[str, float] = field(
         default_factory=lambda: {
             "generation": 18.0,
@@ -317,15 +317,15 @@ class AdsorptionConfig:
             "energy_cap": 12.0,
             "filter": 11.0,
         }
-    )
-    bo_transfer_enabled: bool = False
-    bo_transfer_min_step_observations: int = 5
-    bo_transfer_weight_cap: float = 0.35
-    bo_transfer_similarity_lengthscale: float = 1.0
-    bo_transfer_min_similarity: float = 0.05
-    bo_transfer_trust_patience: int = 2
-    bo_transfer_mae_tolerance: float = 0.0
-    bo_transfer_exploration_fraction: float = 0.2
+    )  # Override failure penalties for specific failure types
+    bo_transfer_enabled: bool = False  # Enable transfer learning in BO
+    bo_transfer_min_step_observations: int = 5  # Minimum observations for transfer learning
+    bo_transfer_weight_cap: float = 0.35  # Maximum weight for transfer learning
+    bo_transfer_similarity_lengthscale: float = 1.0  # Length scale for transfer similarity
+    bo_transfer_min_similarity: float = 0.05  # Minimum similarity for transfer learning
+    bo_transfer_trust_patience: int = 2  # Patience for transfer trust evaluation
+    bo_transfer_mae_tolerance: float = 0.0  # MAE tolerance for transfer learning
+    bo_transfer_exploration_fraction: float = 0.2  # Exploration fraction for transfer learning
 
     def __post_init__(self) -> None:
         positive_int_fields = (
