@@ -1,0 +1,339 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="235"
+   height="77.099861"
+   viewBox="0 0 235 77.09986"
+   version="1.1"
+   id="svg104"
+   sodipodi:docname="logo_metalsurfer.svg"
+   inkscape:version="1.2.2 (b0a8486541, 2022-12-01)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs108">
+    <linearGradient
+       inkscape:collect="always"
+       id="linearGradient3250">
+      <stop
+         style="stop-color:#226be9;stop-opacity:1;"
+         offset="0"
+         id="stop3246" />
+      <stop
+         style="stop-color:#35acb8;stop-opacity:0.28805298;"
+         offset="1"
+         id="stop3248" />
+    </linearGradient>
+    <linearGradient
+       inkscape:collect="always"
+       id="linearGradient972">
+      <stop
+         style="stop-color:#94a3b8;stop-opacity:1;"
+         offset="0"
+         id="stop968" />
+      <stop
+         style="stop-color:#475569;stop-opacity:1;"
+         offset="1"
+         id="stop970" />
+    </linearGradient>
+    <radialGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient972"
+       id="radialGradient2015"
+       cx="43.101028"
+       cy="306.4151"
+       fx="43.101028"
+       fy="306.4151"
+       r="234.81908"
+       gradientTransform="matrix(1,0,0,0.13558305,0,264.8704)"
+       gradientUnits="userSpaceOnUse" />
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient3250"
+       id="linearGradient3252"
+       x1="47.257931"
+       y1="190.73816"
+       x2="282.13159"
+       y2="190.73816"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="matrix(0.99549945,0,0,0.34447834,1.7638389,155.38417)" />
+  </defs>
+  <sodipodi:namedview
+     id="namedview106"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     showgrid="false"
+     inkscape:zoom="2.6"
+     inkscape:cx="61.538462"
+     inkscape:cy="25.576923"
+     inkscape:window-width="1872"
+     inkscape:window-height="1011"
+     inkscape:window-x="48"
+     inkscape:window-y="32"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg104" />
+  <!-- Background -->
+  <!-- =========================
+       ICON: surface + wave + molecule
+       ========================= -->
+  <g
+     transform="translate(-47.5,-170.40014)"
+     id="g96">
+    <!-- Surface made of spheres -->
+    <!-- Row 1 -->
+    <circle
+       cx="60"
+       cy="215"
+       r="12"
+       fill="#94a3b8"
+       id="circle4"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="95"
+       cy="215"
+       r="12"
+       fill="#94a3b8"
+       id="circle6"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="130"
+       cy="215"
+       r="12"
+       fill="#94a3b8"
+       id="circle8"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="165"
+       cy="215"
+       r="12"
+       fill="#94a3b8"
+       id="circle10"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="200"
+       cy="215"
+       r="12"
+       fill="#94a3b8"
+       id="circle12"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="235"
+       cy="215"
+       r="12"
+       fill="#94a3b8"
+       id="circle14"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="270"
+       cy="215"
+       r="12"
+       fill="#94a3b8"
+       id="circle16"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <!-- Row 2 -->
+    <circle
+       cx="77.5"
+       cy="225"
+       r="12"
+       fill="#64748b"
+       id="circle18"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="112.5"
+       cy="225"
+       r="12"
+       fill="#64748b"
+       id="circle20"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="147.5"
+       cy="225"
+       r="12"
+       fill="#64748b"
+       id="circle22"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="182.5"
+       cy="225"
+       r="12"
+       fill="#64748b"
+       id="circle24"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="217.5"
+       cy="225"
+       r="12"
+       fill="#64748b"
+       id="circle26"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="252.5"
+       cy="225"
+       r="12"
+       fill="#64748b"
+       id="circle28"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <!-- Row 3 -->
+    <circle
+       cx="60"
+       cy="235"
+       r="12"
+       fill="#475569"
+       id="circle30"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="95"
+       cy="235"
+       r="12"
+       fill="#475569"
+       id="circle32"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="130"
+       cy="235"
+       r="12"
+       fill="#475569"
+       id="circle34"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="165"
+       cy="235"
+       r="12"
+       fill="#475569"
+       id="circle36"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="200"
+       cy="235"
+       r="12"
+       fill="#475569"
+       id="circle38"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="235"
+       cy="235"
+       r="12"
+       fill="#475569"
+       id="circle40"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <circle
+       cx="270"
+       cy="235"
+       r="12"
+       fill="#475569"
+       id="circle42"
+       style="stroke:#000000;stroke-opacity:0.499405" />
+    <!-- Subtle lattice connectors -->
+    <!-- Surf / docking trajectory -->
+    <path
+       d="m 55.161609,236.85425 c 37.36527,-23.84661 73.095931,-27.17449 88.971951,-14.05848 19.37307,16.01796 41.71274,15.59578 64.96044,-2.42443 19.37308,-15.01684 40.05686,-22.11466 67.17916,-5.59613"
+       fill="none"
+       stroke="#06b6d4"
+       stroke-width="7.4737"
+       stroke-linecap="round"
+       stroke-linejoin="round"
+       id="path68"
+       sodipodi:nodetypes="ccsc"
+       style="stroke:url(#linearGradient3252);stroke-opacity:1" />
+    <!-- Secondary highlight for depth -->
+    <!-- ML / energy nodes -->
+    <!-- Docked molecule -->
+    <g
+       transform="matrix(0.63757088,0,0,0.63757088,360.77497,185.91861)"
+       id="g92"
+       style="fill:#226be9;fill-opacity:1;stroke:#000000;stroke-width:1;stroke-dasharray:none;stroke-opacity:1">
+      <!-- Bonds -->
+      <line
+         x1="-476.28818"
+         y1="78.414474"
+         x2="-452.28818"
+         y2="62.414474"
+         stroke="#0f172a"
+         stroke-width="3"
+         id="line78"
+         style="fill:#226be9;fill-opacity:1;stroke:#000000;stroke-width:1;stroke-dasharray:none;stroke-opacity:1" />
+      <line
+         x1="-452.28818"
+         y1="62.414474"
+         x2="-428.28818"
+         y2="74.414474"
+         stroke="#0f172a"
+         stroke-width="3"
+         id="line80"
+         style="fill:#226be9;fill-opacity:1;stroke:#000000;stroke-width:1;stroke-dasharray:none;stroke-opacity:1" />
+      <line
+         x1="-452.28818"
+         y1="62.414474"
+         x2="-448.28818"
+         y2="34.414474"
+         stroke="#0f172a"
+         stroke-width="3"
+         id="line82"
+         style="fill:#226be9;fill-opacity:1;stroke:#000000;stroke-width:1;stroke-dasharray:none;stroke-opacity:1" />
+      <!-- Atoms -->
+      <circle
+         cx="-476.28818"
+         cy="78.414474"
+         r="8"
+         fill="#e2e8f0"
+         stroke="#0f172a"
+         stroke-width="2.5"
+         id="circle84"
+         style="fill:#226be9;fill-opacity:1;stroke:#000000;stroke-width:1;stroke-dasharray:none;stroke-opacity:1" />
+      <circle
+         cx="-452.28818"
+         cy="62.414474"
+         r="9"
+         fill="#14b8a6"
+         stroke="#0f172a"
+         stroke-width="2.5"
+         id="circle86"
+         style="fill:#226be9;fill-opacity:1;stroke:#000000;stroke-width:1;stroke-dasharray:none;stroke-opacity:1" />
+      <circle
+         cx="-428.28818"
+         cy="74.414474"
+         r="8"
+         fill="#e2e8f0"
+         stroke="#0f172a"
+         stroke-width="2.5"
+         id="circle88"
+         style="fill:#226be9;fill-opacity:1;stroke:#000000;stroke-width:1;stroke-dasharray:none;stroke-opacity:1" />
+      <circle
+         cx="-448.28818"
+         cy="34.414474"
+         r="7"
+         fill="#2563eb"
+         stroke="#0f172a"
+         stroke-width="2.5"
+         id="circle90"
+         style="fill:#226be9;fill-opacity:1;stroke:#000000;stroke-width:1;stroke-dasharray:none;stroke-opacity:1" />
+    </g>
+    <!-- A faint adsorption "target" glow under docking point -->
+  </g>
+  <!-- =========================
+       WORDMARK
+       ========================= -->
+  <g
+     transform="matrix(0.4872038,0,0,0.4872038,95.40824,-132.83108)"
+     id="g102"
+     style="stroke:#000000;stroke-opacity:0.242063">
+    <text
+       x="-197.01379"
+       y="337.24387"
+       fill="#0f172a"
+       font-family="Arial, Helvetica, sans-serif"
+       font-size="86.0768px"
+       font-weight="700"
+       letter-spacing="0.5"
+       id="text98"
+       style="fill:url(#radialGradient2015);fill-opacity:1;fill-rule:nonzero;stroke:#000000;stroke-width:1.38751;stroke-dasharray:none;stroke-opacity:0.242063"
+       transform="scale(1.0045519,0.99546873)">metalsurfer</text>
+  </g>
+</svg>

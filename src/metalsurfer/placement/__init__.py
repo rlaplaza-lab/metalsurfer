@@ -12,8 +12,38 @@ from ase import Atoms
 
 from ..symmetry import SymmetryAnalyzer
 from ._material import material_type_for_placement
+from .generators import (
+    classify_adsorbate_orientation as classify_adsorbate_orientation,
+)
+from .generators import (
+    distribute_placement_budget as distribute_placement_budget,
+)
+from .generators import (
+    enumerate_placement_specs as enumerate_placement_specs,
+)
+from .generators import (
+    estimate_placement_spec_capacity as estimate_placement_spec_capacity,
+)
+from .generators import (
+    generate_placement_from_descriptor as generate_placement_from_descriptor,
+)
+from .generators import (
+    generate_placement_from_pose as generate_placement_from_pose,
+)
+from .generators import (
+    generate_placement_from_spec as generate_placement_from_spec,
+)
+from .generators import (
+    generate_placement_from_spec_with_reason as generate_placement_from_spec_with_reason,
+)
 from .geometry import (
     _get_covalent_radius,
+)
+from .geometry import (
+    calculate_min_distance as calculate_min_distance,
+)
+from .geometry import (
+    check_initial_placement_distance as check_initial_placement_distance,
 )
 from .sites import (
     _MOL_COVALENT_RADIUS_FALLBACK,
@@ -22,6 +52,15 @@ from .sites import (
     _SITE_Z_RADIUS_REFERENCE_ANGSTROM,
     _SITE_Z_RADIUS_SHIFT_SCALE,
     DEFAULT_SYMMETRY_TOLERANCE,
+)
+from .sites import (
+    get_hollow_sites_for_adatoms as get_hollow_sites_for_adatoms,
+)
+from .sites import (
+    get_symmetry_aware_sites as get_symmetry_aware_sites,
+)
+from .sites import (
+    get_unified_sites as get_unified_sites,
 )
 
 logger = logging.getLogger(__name__)

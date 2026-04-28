@@ -1,5 +1,7 @@
 # Metalsurfer
 
+![Metalsurfer Logo](docs/_static/logo_metalsurfer.svg)
+
 Library for adsorption-energy screening on arbitrary surfaces (slabs, nanoparticles, and periodic porous frameworks).
 
 ## Install
