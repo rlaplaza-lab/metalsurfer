@@ -145,7 +145,6 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
 .. code-block:: python
 
    from metalsurfer import AdsorptionConfig, create_slab_from_bulk, run_saturation
-   from metalsurfer.io_results import save_saturation_results
 
    config = AdsorptionConfig(
        material_type="slab",
@@ -162,8 +161,6 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
        config=config,
        surface_type="Ru001_sat",
    )
-
-   save_saturation_results(saturation_results, surface_type="Ru001_sat", config=config)
 
    for result in saturation_results:
        print(result.molecule, result.n_molecules_at_saturation)

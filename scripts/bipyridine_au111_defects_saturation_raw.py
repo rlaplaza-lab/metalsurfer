@@ -19,7 +19,6 @@ from metalsurfer import (
 from metalsurfer._logging import configure_logging
 from metalsurfer.cli.cli_output import format_saturation_complete
 from metalsurfer.io_results import (
-    save_saturation_results,
     save_summary_results,
     setup_directories,
 )
@@ -97,10 +96,6 @@ def main():
         if failure_summary:
             logger.error(format_failure_summary(failure_summary))
         return 1
-
-    save_saturation_results(
-        saturation_results, surface_type=SURFACE_TYPE, config=config
-    )
 
     # Flatten per-step results into benchmark CSV format
     flattened_runs = []

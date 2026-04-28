@@ -10,7 +10,7 @@ Run from project root: pip install -e . && pip install -e ".[mlip]"
 from metalsurfer import AdsorptionConfig, format_failure_summary, run_saturation
 from metalsurfer._logging import configure_logging
 from metalsurfer.cli.cli_output import format_saturation_complete
-from metalsurfer.io_results import save_saturation_results, setup_directories
+from metalsurfer.io_results import setup_directories
 from metalsurfer.surface_prep import create_slab_from_bulk
 
 
@@ -55,11 +55,6 @@ def main():
     )
 
     if saturation_results:
-        save_saturation_results(
-            saturation_results,
-            surface_type=surface_type,
-            config=config,
-        )
         sr = saturation_results[0]
         total_steps = len(sr.steps)
         n_at_sat = sr.n_molecules_at_saturation
