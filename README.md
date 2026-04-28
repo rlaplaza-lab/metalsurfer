@@ -4,6 +4,8 @@
 
 Library for adsorption-energy screening on arbitrary surfaces (slabs, nanoparticles, and periodic porous frameworks).
 
+**Documentation**: https://metalsurfer.readthedocs.io
+
 ## Install
 
 Requires **Python 3.12 or newer**.
