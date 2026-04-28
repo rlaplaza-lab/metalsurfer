@@ -6,6 +6,7 @@ Configuration
    :undoc-members:
    :show-inheritance:
    :member-order: bysource
+   :exclude-members: __post_init__
 
 Key Attributes
 --------------

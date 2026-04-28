@@ -22,16 +22,6 @@ autodoc_typehints = "description"
 autodoc_class_signature = "separated"
 autodoc_docstring_signature = True
 
-# Enable extraction of inline comments for dataclass fields
-autodoc_default_options = {
-    "members": True,
-    "undoc-members": True,
-    "private-members": False,
-    "special-members": False,
-    "inherited-members": True,
-    "show-inheritance": True,
-}
-
 # Better dataclass field documentation
 autodoc_docstring_signature = True
 
@@ -56,6 +46,18 @@ napoleon_numpy_docstring = True
 napoleon_use_param = True
 napoleon_use_rtype = True
 napoleon_use_ivar = False  # Hide dataclass field docstrings since we have the CSV table
+
+# Hide dataclass field annotations to prevent redundant Attributes section
+autodoc_default_options = {
+    "members": True,
+    "undoc-members": True,
+    "private-members": False,
+    "special-members": False,
+    "inherited-members": True,
+    "show-inheritance": True,
+    "member-order": "bysource",
+    "exclude-members": "__post_init__",
+}
 
 # -- Intersphinx --------------------------------------------------------------
 
