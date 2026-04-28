@@ -332,6 +332,15 @@ def _process_molecule_body(
     )
     t_optimization = time.perf_counter() - t0
 
+    # Early exit if optimization failed for all placements
+    if not optimized:
+        logger.warning("Optimization failed for all placements")
+        if failure_summary_out is not None:
+            failure_summary_out["stage"] = "optimization"
+            failure_summary_out["n_placements_attempted"] = len(placement_ids)
+            failure_summary_out["n_initial_placements"] = len(all_combined)
+        return None
+
     t0 = time.perf_counter()
     surface_symbols = _infer_surface_symbols(slab_for_sites)
     if base_slab_for_frozen is not None:
@@ -486,6 +495,11 @@ def _evaluate_placement_batch(
         config=config,
         base_slab_for_frozen=base_slab_for_frozen,
     )
+
+    # Early exit if optimization failed for all placements
+    if not optimized:
+        logger.warning("Optimization failed for all placements in saturation")
+        return [], []
 
     results: list[ScreeningResult] = []
     for opt_atoms, pid, descriptor in zip(
