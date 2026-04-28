@@ -1,4 +1,4 @@
-"""Generic adsorption-energy screening on arbitrary surfaces."""
+"""Adsorption on arbitrary materials."""
 
 import importlib
 

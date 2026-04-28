@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "metalsurfer"
 version = "0.2.0"
-description = "Generic adsorption-energy screening on arbitrary surfaces"
+description = "Adsorption on arbitrary materials"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "metalsurfer contributors" }]
