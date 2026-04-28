@@ -1,6 +1,6 @@
 .. raw:: html
 
-    <div style="text-align: center; margin-bottom: 20px;">
+    <div style="text-align: center; margin: 30px 0 20px 0;">
         <img src="_static/logo_metalsurfer.svg" alt="Metalsurfer" style="width: 200px;">
     </div>
 
