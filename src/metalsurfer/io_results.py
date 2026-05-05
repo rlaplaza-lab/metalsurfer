@@ -520,9 +520,7 @@ def save_multi_mol_saturation_results(
     if result.final_slab_atoms is not None:
         final_slab_copy = result.final_slab_atoms.copy()
         final_slab_copy.calc = None
-        final_slab_copy.write(
-            f"{mol_dir}/final_saturated_slab.xyz", format="extxyz"
-        )
+        final_slab_copy.write(f"{mol_dir}/final_saturated_slab.xyz", format="extxyz")
 
     write_run_settings(
         surface_type,
