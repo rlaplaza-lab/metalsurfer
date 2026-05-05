@@ -2,7 +2,8 @@ Result Models
 =============
 
 These dataclasses represent the typed outputs returned by the run-mode
-functions and workflow helpers.
+functions and workflow helpers. Only the public API types exported from
+the top-level ``metalsurfer`` module are documented here.
 
 Campaign Results
 ----------------
@@ -30,40 +31,10 @@ Screening Results
    :members:
    :undoc-members:
 
-Saturation Results
-------------------
-
-.. autoclass:: metalsurfer.SaturationRunResult
-   :members:
-   :undoc-members:
-
-.. autoclass:: metalsurfer.SaturationStepResult
-   :members:
-   :undoc-members:
-
-.. autoclass:: metalsurfer.MultiMolSaturationRunResult
-   :members:
-   :undoc-members:
-
-.. autoclass:: metalsurfer.MultiMolSaturationStepResult
-   :members:
-   :undoc-members:
-
 Reference Energies
 ------------------
 
 .. autoclass:: metalsurfer.ReferenceEnergies
-   :members:
-   :undoc-members:
-
-Placement Types
----------------
-
-.. autoclass:: metalsurfer.PlacementSpec
-   :members:
-   :undoc-members:
-
-.. autoclass:: metalsurfer.PlacementDescriptor
    :members:
    :undoc-members:
 
