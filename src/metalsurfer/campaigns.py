@@ -395,7 +395,7 @@ def run_saturation(
     if save_results:
         save_saturation_results(results, surface_type=surface_type)
     if write_settings:
-        write_run_settings(config, surface_type=surface_type)
+        write_run_settings(surface_type, config)
     if write_metadata and run_metadata_out:
         write_run_metadata(run_metadata_out, surface_type=surface_type)
 
@@ -459,7 +459,7 @@ def run_saturation_bo(
     if save_results:
         save_saturation_results(results, surface_type=surface_type)
     if write_settings:
-        write_run_settings(config, surface_type=surface_type)
+        write_run_settings(surface_type, config)
     if write_metadata and run_metadata_out:
         write_run_metadata(run_metadata_out, surface_type=surface_type)
 
