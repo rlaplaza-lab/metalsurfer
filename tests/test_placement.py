@@ -26,6 +26,7 @@ from metalsurfer.placement import (
 )
 from metalsurfer.placement._material import material_type_for_placement
 from metalsurfer.placement.generators import (
+    SiteContext,
     _estimate_parallel_fraction,
     _get_hollow_site_pairs,
     _get_unique_sites_for_specs,
@@ -905,7 +906,7 @@ def test_enumerate_specs_is_deterministic_for_same_inputs():
 
 
 # ---------------------------------------------------------------------------
-# Policy: build_batch_placement_specs / max_batch_placement_specs
+# Policy tests for batch placement spec builders
 # ---------------------------------------------------------------------------
 
 
@@ -1151,6 +1152,86 @@ def test_resolve_surface_ref_rough_slab():
     )
     assert ref_global == float(np.max(slab.get_positions()[:, 2]))
     assert not is_local_g
+
+
+def test_saturation_placement_height_uses_reference_slab():
+    """Saturation placement should not anchor new molecules above old adsorbates."""
+    slab = make_slab()
+    slab_top = float(np.max(slab.get_positions()[:, 2]))
+    top_index = int(np.argmax(slab.get_positions()[:, 2]))
+    site_xy = slab.get_positions()[top_index, :2]
+    site_context = SiteContext(
+        sites=[
+            {
+                "xy": site_xy,
+                "xyz": np.array([site_xy[0], site_xy[1], slab_top]),
+                "z": slab_top,
+                "site_type": "atop",
+                "material_type": "slab",
+                "slab_indices": (top_index,),
+            }
+        ],
+        use_sites=True,
+        source="test",
+    )
+    existing_adsorbate_top = slab_top + 10.0
+    existing_adsorbate = Atoms(
+        "C",
+        positions=[
+            [slab.cell[0, 0] / 2.0, slab.cell[1, 1] / 2.0, existing_adsorbate_top]
+        ],
+    )
+    full_slab = slab + existing_adsorbate
+    full_slab.set_cell(slab.get_cell())
+    full_slab.set_pbc(slab.get_pbc())
+
+    config = AdsorptionConfig(
+        device="cpu",
+        rough_slab_local_z=False,
+        placement_z_scale_by_covalent_radius=False,
+    )
+    adsorbate = Atoms("H", positions=[[0.0, 0.0, 0.0]])
+    spec = PlacementSpec(
+        conformer_index=0,
+        orientation_type="round",
+        face_flip=False,
+        en_atom_index=None,
+        site_index=0,
+        site_type="atop",
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+
+    reference_result = generate_placement_from_spec(
+        spec,
+        [adsorbate],
+        full_slab,
+        config,
+        site_context=site_context,
+        slab_for_sites=slab,
+    )
+    assert reference_result is not None
+    _, reference_descriptor = reference_result
+    assert reference_descriptor.surface_ref_z_abs == pytest.approx(slab_top)
+    assert reference_descriptor.z_abs == pytest.approx(
+        slab_top + reference_descriptor.z_offset
+    )
+
+    full_slab_result = generate_placement_from_spec(
+        spec,
+        [adsorbate],
+        full_slab,
+        config,
+        site_context=site_context,
+    )
+    assert full_slab_result is not None
+    _, full_slab_descriptor = full_slab_result
+    assert full_slab_descriptor.surface_ref_z_abs == pytest.approx(
+        existing_adsorbate_top
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 
@@ -212,7 +212,9 @@ class PlacementRecord:
 
     # --- Placement geometry (from PlacementDescriptor) ---
     conformer_index: int
-    orientation_type: Literal["parallel", "EN-down", "vertical", "round"]
+    orientation_type: Literal[
+        "parallel", "EN-down", "vertical", "round", "dissociative"
+    ]
     face_flip: bool
     en_atom_index: int | None
     site_index: int
@@ -289,12 +291,13 @@ class PlacementRecord:
     ) -> "PlacementRecord":
         """Build a record from a validated ScreeningResult."""
         d = result.placement_descriptor
+        geometry = cast(Any, _descriptor_geometry_values(d))
         return cls(
             molecule=result.molecule,
             smiles=smiles,
             surface_id=surface_id,
             placement_id=result.placement_id,
-            **_descriptor_geometry_values(d),
+            **geometry,
             energy_adsorption=result.energy_adsorption,
             energy_adslab=result.energy_adslab,
             energy_slab=result.energy_slab,
@@ -326,7 +329,7 @@ class PlacementRecord:
             placement_id=descriptor.placement_index
             if placement_id is None
             else placement_id,
-            **_descriptor_geometry_values(descriptor),
+            **cast(Any, _descriptor_geometry_values(descriptor)),
             context=_context_from_config(config),
         )
 

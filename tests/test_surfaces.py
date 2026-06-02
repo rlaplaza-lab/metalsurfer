@@ -79,6 +79,45 @@ class TestSlabContainer:
                 results_dir=tmpdir,
             )
 
+    def test_create_slab_from_bulk_relaxation_requires_calculator(self, monkeypatch):
+        core = types.ModuleType("fairchem.data.oc.core")
+
+        class _FakeBulk:
+            def __init__(self, bulk_src_id_from_db):
+                self.bulk_src_id_from_db = bulk_src_id_from_db
+
+        class _FakeSlabObj:
+            def __init__(self):
+                self.atoms = make_slab(symbol="Ru")
+
+        class _FakeSlab:
+            @staticmethod
+            def from_bulk_get_specific_millers(bulk, specific_millers):
+                return [_FakeSlabObj()]
+
+        core.Bulk = _FakeBulk
+        core.Slab = _FakeSlab
+        monkeypatch.setitem(sys.modules, "fairchem", types.ModuleType("fairchem"))
+        monkeypatch.setitem(
+            sys.modules, "fairchem.data", types.ModuleType("fairchem.data")
+        )
+        monkeypatch.setitem(
+            sys.modules, "fairchem.data.oc", types.ModuleType("fairchem.data.oc")
+        )
+        monkeypatch.setitem(sys.modules, "fairchem.data.oc.core", core)
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            pytest.raises(ValueError, match="requires a calculator"),
+        ):
+            create_slab_from_bulk(
+                bulk_id="mp-23",
+                miller_indices=(1, 1, 1),
+                supercell=(1, 1, 1),
+                results_dir=tmpdir,
+                relaxation_mode="full",
+            )
+
 
 # ---------------------------------------------------------------------------
 # substitute_alloy
@@ -323,6 +362,52 @@ class TestDepositAdatoms:
             )
         assert isinstance(result, SlabContainer)
         assert len(result.atoms) > n_before
+
+    def test_relaxation_mode_requires_calculator(self):
+        slab = self._layered_slab()
+        with pytest.raises(ValueError, match="requires a calculator"):
+            deposit_adatoms(slab, "Sn", coverage_fraction=0.2, relaxation_mode="full")
+
+    def test_relaxation_invoked_for_variants(self, monkeypatch):
+        slab = self._layered_slab()
+
+        calls: list[tuple[str, int, int]] = []
+
+        def _fake_relax(
+            atoms,
+            calculator,
+            *,
+            mode,
+            optimizer_name,
+            fmax,
+            steps,
+            context,
+        ):
+            calls.append((mode, int(steps), len(atoms)))
+            return atoms
+
+        class _FakeCalculator:
+            def __init__(self):
+                self.results = {}
+
+            def get_potential_energy(self, atoms=None, force_consistent=False):
+                return float(len(atoms) if atoms is not None else 0.0)
+
+        monkeypatch.setattr("metalsurfer.surfaces._relax_slab_structure", _fake_relax)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            deposit_adatoms(
+                slab,
+                "Sn",
+                coverage_fraction=0.2,
+                calculator=_FakeCalculator(),
+                results_dir=tmpdir,
+                n_variants=3,
+                relaxation_mode="full",
+                relaxation_steps=12,
+            )
+        assert len(calls) == 3
+        assert all(mode == "full" for mode, _, _ in calls)
+        assert all(steps == 12 for _, steps, _ in calls)
 
 
 # ---------------------------------------------------------------------------

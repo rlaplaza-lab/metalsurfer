@@ -7,14 +7,16 @@
 Adsorption on arbitrary materials
 ==================================
 
-Workflow: slab preparation, conformers, placement enumeration, relaxation,
-filtering, and optional Bayesian or saturation modes.
+Workflow: slab preparation (ASE relax), conformers, placement enumeration,
+TorchSim relaxation with optional substrate freeze, filtering, and optional
+Bayesian or saturation modes.
 
 .. toctree::
    :maxdepth: 2
    :caption: Guides
 
    guides/quickstart
+   guides/development
    guides/architecture
    guides/surface_engineering
 

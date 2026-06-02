@@ -173,13 +173,12 @@ def make_slab(
                 y = iy * a + (lz % 2) * a / 2
                 z = lz * spacing
                 positions.append([x, y, z])
-    atoms = Atoms(
+    return Atoms(
         symbols=[symbol] * len(positions),
         positions=positions,
         cell=[nx * a, ny * a, n_layers * spacing + 15.0],
         pbc=[True, True, True],
     )
-    return atoms
 
 
 # ---------------------------------------------------------------------------
@@ -363,5 +362,4 @@ def make_porous_framework() -> Atoms:
     from ase.io import read
 
     cif_path = Path(__file__).parent / "test_files" / "SiO2.cif"
-    atoms = read(str(cif_path))
-    return atoms
+    return read(str(cif_path))

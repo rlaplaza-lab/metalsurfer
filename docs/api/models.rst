@@ -31,6 +31,29 @@ Screening Results
    :members:
    :undoc-members:
 
+Saturation Results
+------------------
+
+.. autoclass:: metalsurfer.SaturationStepResult
+   :members:
+   :undoc-members:
+
+.. autoclass:: metalsurfer.SaturationCampaignResult
+   :members:
+   :undoc-members:
+
+.. autoclass:: metalsurfer.SaturationRunResult
+   :members:
+   :undoc-members:
+
+.. autoclass:: metalsurfer.MultiMolSaturationStepResult
+   :members:
+   :undoc-members:
+
+.. autoclass:: metalsurfer.MultiMolSaturationRunResult
+   :members:
+   :undoc-members:
+
 Reference Energies
 ------------------
 

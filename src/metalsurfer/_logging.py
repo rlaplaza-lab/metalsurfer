@@ -160,7 +160,7 @@ class _LogStreamToLogger(io.TextIOBase):
             self._logger.log(self._level, self._last_cr_text.strip())
             self._last_cr_text = ""
 
-    def write(self, s: str) -> int:  # type: ignore[override]
+    def write(self, s: str) -> int:
         if not s:
             return 0
         if not isinstance(s, str):
@@ -318,5 +318,5 @@ def torchsim_output_capture(
 
 
 # Install record defaults at import time so early log emissions are safe
-# even before configure_logging() is called by CLI/library entrypoints.
+# even before configure_logging() is called by library entrypoints.
 ensure_log_record_defaults()

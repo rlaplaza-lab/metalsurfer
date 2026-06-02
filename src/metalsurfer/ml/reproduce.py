@@ -7,6 +7,7 @@ that the binding energy can be recomputed identically.
 
 import logging
 
+import numpy as np
 from ase import Atoms
 
 from .._utils import is_finite_number as _is_finite_number
@@ -40,12 +41,15 @@ def record_to_placement_descriptor(record: PlacementRecord) -> PlacementDescript
             f"{missing_csv}"
         )
     quat = normalize_quaternion(
-        [
-            float(record.quat_w),
-            float(record.quat_x),
-            float(record.quat_y),
-            float(record.quat_z),
-        ]
+        np.array(
+            [
+                float(record.quat_w),
+                float(record.quat_x),
+                float(record.quat_y),
+                float(record.quat_z),
+            ],
+            dtype=float,
+        )
     )
     return PlacementDescriptor(
         conformer_index=record.conformer_index,
@@ -174,7 +178,7 @@ def verify_record_reproducibility(
     """
     from ..optimization import optimize_adsorbate_slab_batched
 
-    result = {
+    result: dict[str, object] = {
         "reproducible": False,
         "stored_energy": record.energy_adsorption,
         "recomputed_energy": None,

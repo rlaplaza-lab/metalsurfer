@@ -2,6 +2,7 @@
 
 import logging
 import random
+from typing import Any
 
 import numpy as np
 from ase import Atoms
@@ -10,9 +11,11 @@ from .config import AdsorptionConfig
 
 logger = logging.getLogger(__name__)
 
+Chem: Any
+AllChem: Any
 try:
-    from rdkit import Chem
-    from rdkit.Chem import AllChem
+    from rdkit import Chem as Chem
+    from rdkit.Chem import AllChem as AllChem
 except (ImportError, AttributeError):
     Chem = None
     AllChem = None

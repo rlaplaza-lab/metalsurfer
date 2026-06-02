@@ -14,13 +14,12 @@ import os
 
 from metalsurfer import (
     AdsorptionConfig,
-    create_slab_from_bulk,
+    configure_logging,
+    prepare_slab,
     run_adsorption_bo,
 )
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_binding_summary
 
-# (SMILES, molecule_name)
+# List of smiles and molecule name pairs
 MOLECULES = [
     ("C(=O)C1OC(CO[H])=CC=1", "HMF"),
     ("C(O[H])C1OC(CO[H])=CC=1", "BHMF"),
@@ -62,14 +61,6 @@ def main():
     results_dir = f"results_{results_subdir}"
     os.makedirs(results_dir, exist_ok=True)
 
-    # Create Ru(0001) slab from Materials Project mp-33.
-    slab = create_slab_from_bulk(
-        bulk_id="mp-33",
-        miller_indices=(0, 0, 1),
-        supercell=(1, 1, 1),
-        results_dir=results_dir,
-    )
-
     config = AdsorptionConfig(
         material_type="slab",
         model_name="uma-s-1p1",
@@ -89,6 +80,15 @@ def main():
         bo_total_budget=300,
     )
 
+    # Create Ru(0001) slab from Materials Project mp-33.
+    slab = prepare_slab(
+        bulk_id="mp-33",
+        miller_indices=(0, 0, 1),
+        supercell=(1, 1, 1),
+        config=config,
+        results_dir=results_dir,
+    )
+
     campaign = run_adsorption_bo(
         slab=slab,
         molecules=MOLECULES,
@@ -97,11 +97,10 @@ def main():
         system_name="Ru_0001",
     )
 
-    print("")
+    print()
     print(
-        format_binding_summary(
+        campaign.format_summary(
             title="Binding energy summary (Ru(0001))",
-            molecule_summaries=campaign.molecule_summaries,
             results_dir=results_dir,
         )
     )

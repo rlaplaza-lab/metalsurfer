@@ -44,13 +44,12 @@ logger = logging.getLogger(__name__)
 
 def normalize_quaternion(quat: np.ndarray) -> np.ndarray:
     """Return normalized quaternion [w, x, y, z] with canonical sign."""
-    q = np.asarray(quat, dtype=float).reshape(4)
+    q: np.ndarray = np.asarray(quat, dtype=float).reshape(4)
     nrm = float(np.linalg.norm(q))
-    q = (
-        np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
-        if nrm < _QUATERNION_NORM_EPS
-        else q / nrm
-    )
+    if nrm < _QUATERNION_NORM_EPS:
+        q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+    else:
+        q = np.asarray(q / nrm, dtype=float)
     if q[0] < 0.0:
         q = -q
     return q
@@ -399,9 +398,7 @@ def _flat_orientation_from_principal_axis(
     pos = (R @ pos.T).T
 
     R_az = _rotation_around_axis(normal, azimuth_in_plane_deg)
-    pos = (R_az @ pos.T).T
-
-    return pos
+    return (R_az @ pos.T).T
 
 
 def _surface_aligned_rotation(
@@ -449,8 +446,10 @@ def _surface_aligned_rotation(
                 R = _rotation_to_align_vector_to_target(-best_vec, normal)
                 pos = (R @ pos.T).T
     else:
-        pos, _ = _principal_axis_rotation(pos, normal)
-        if pos is None:
+        rotated, _ = _principal_axis_rotation(pos, normal)
+        if rotated is not None:
+            pos = rotated
+        else:
             pos = np.asarray(ads_pos, dtype=float).copy() - com
     return pos
 
@@ -662,10 +661,9 @@ def calculate_min_distance(
         diffs_flat = diffs.reshape(-1, 3)
         mic_diffs, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
         return float(np.min(mic_dists))
-    else:
-        p1 = positions1.reshape(-1, 1, 3)
-        p2 = positions2.reshape(1, -1, 3)
-        return float(np.min(np.linalg.norm(p1 - p2, axis=2)))
+    p1 = positions1.reshape(-1, 1, 3)
+    p2 = positions2.reshape(1, -1, 3)
+    return float(np.min(np.linalg.norm(p1 - p2, axis=2)))
 
 
 def calculate_min_distance_pair(

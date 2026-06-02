@@ -19,16 +19,17 @@ from ..optimization import (
 )
 from ..placement import generators as placement_generators
 from ..placement.generators import enumerate_placement_specs
-from ..surfaces import SlabContainer, auto_resize_slab_for_molecule
+from ..surfaces import SlabContainer
 from .shared import (
     PlacementFailureEvent,
-    _build_surface_reference_slab,
     _compute_slab_energy,
     _evaluate_optimized_candidate,
     _infer_surface_symbols,
     _materialize_spec_placements,
     _resolve_site_context_for_sampling,
     _summarize_failure_events,
+    prepare_substrate_for_screening,
+    write_substrate_step_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -141,6 +142,7 @@ def process_molecule(
     saturation_reuse: bool = False,
     symmetry_broken: bool = False,
     allow_auto_resize: bool = True,
+    step_metadata_out: dict[str, object] | None = None,
 ) -> list[ScreeningResult] | None:
     """Run the full placement-optimise-validate pipeline for one molecule."""
     if config is None:
@@ -171,6 +173,7 @@ def process_molecule(
             saturation_reuse=saturation_reuse,
             symmetry_broken=symmetry_broken,
             allow_auto_resize=allow_auto_resize,
+            step_metadata_out=step_metadata_out,
         )
 
 
@@ -191,6 +194,7 @@ def _process_molecule_body(
     saturation_reuse: bool = False,
     symmetry_broken: bool = False,
     allow_auto_resize: bool = True,
+    step_metadata_out: dict[str, object] | None = None,
 ) -> list[ScreeningResult] | None:
     t_mol_start = time.perf_counter()
     logger.info(
@@ -217,11 +221,11 @@ def _process_molecule_body(
         return None
 
     t0 = time.perf_counter()
-    result = create_conformers_from_smiles(
+    conformer_pack = create_conformers_from_smiles(
         smiles, calculator=calculator, config=config, ts_model=ts_model
     )
     t_conformers = time.perf_counter() - t0
-    if result is None:
+    if conformer_pack is None:
         logger.error("Could not generate conformers for %s", molecule_name)
         if failure_summary_out is not None:
             failure_summary_out["stage"] = "conformers"
@@ -229,23 +233,31 @@ def _process_molecule_body(
                 f"could not generate conformers for {molecule_name}"
             )
         return None
-    conformers, conformer_energies = result
+    conformers, conformer_energies = conformer_pack
 
-    slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab_for_frozen)
+    substrate_ref = prepare_substrate_for_screening(
+        slab,
+        conformers,
+        base_slab_for_frozen,
+        config,
+        allow_auto_resize=allow_auto_resize,
+    )
+    slab = substrate_ref.slab
+    slab_for_sites = substrate_ref.slab_for_sites
+    effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
 
-    if config.auto_resize_slab and allow_auto_resize:
-        slab, was_resized = auto_resize_slab_for_molecule(
-            slab, conformers, config.min_pbc_image_separation
+    if substrate_ref.slab_was_resized:
+        clear_autobatcher_cache()
+        E_slab = _compute_slab_energy(
+            slab.atoms, calculator, label="resized slab reference"
         )
-        if was_resized:
-            clear_autobatcher_cache()
-            E_slab = _compute_slab_energy(
-                slab.atoms, calculator, label="resized slab reference"
-            )
-            logger.info("Resized slab energy: %.4f eV", E_slab)
-            slab_for_sites = _build_surface_reference_slab(
-                slab.atoms, base_slab_for_frozen
-            )
+        logger.info("Resized slab energy: %.4f eV", E_slab)
+
+    write_substrate_step_metadata(
+        step_metadata_out,
+        slab_was_resized=substrate_ref.slab_was_resized,
+        substrate_atoms_after_resize=substrate_ref.substrate_atoms_after_resize,
+    )
 
     t0 = time.perf_counter()
     all_combined: list[Atoms] = []
@@ -327,7 +339,7 @@ def _process_molecule_body(
         slab.atoms,
         ts_model,
         config=config,
-        base_slab_for_frozen=base_slab_for_frozen,
+        base_slab_for_frozen=effective_base_slab_for_frozen,
         saturation_reuse=saturation_reuse,
     )
     t_optimization = time.perf_counter() - t0
@@ -345,9 +357,13 @@ def _process_molecule_body(
     surface_symbols = _infer_surface_symbols(slab_for_sites)
     if base_slab_for_frozen is not None:
         logger.info(
-            "Saturation surface reference: full_slab_atoms=%d, surface_ref_atoms=%d, surface_symbols=%s",
+            "Saturation surface reference: full_slab_atoms=%d, "
+            "surface_ref_atoms=%d, freeze_ref_atoms=%d, frozen_policy=%s, "
+            "surface_symbols=%s",
             len(slab.atoms),
             len(slab_for_sites),
+            len(effective_base_slab_for_frozen or slab.atoms),
+            "top_layer" if config.relax_top_layer else "full_substrate",
             surface_symbols,
         )
     results: list[ScreeningResult] = []

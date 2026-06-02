@@ -9,20 +9,19 @@ If you hit CUDA OOM on a 15GB GPU, try:
 or reduce num_placements (e.g. 25).
 """
 
+from ase import Atoms
+
 from metalsurfer import (
     AdsorptionConfig,
+    configure_logging,
     create_slab_from_atoms,
     run_adsorption,
 )
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_results_saved_line
 
 
 def main():
     configure_logging(default_level="INFO")
     # Create a small Pt nanocluster with 12 atoms using ASE
-    from ase import Atoms
-
     # Create a simple but realistic Pt cluster for H2 adsorption
     # Use a small (111) facet-like structure which provides good adsorption sites
 
@@ -94,7 +93,7 @@ def main():
         print(
             f"  Relaxation: {total_steps} steps (stage1: {config.stage1_steps}, stage2: {config.stage2_steps})"
         )
-        print(f"  {format_results_saved_line('results_h2_pt12')}")
+        print(f"  {campaign.format_results_saved_line(results_dir='results_h2_pt12')}")
     else:
         print("No valid placements found.")
 

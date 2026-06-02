@@ -13,7 +13,12 @@ from .models import (
     BindingCampaignResult,
     MoleculeCampaignSummary,
     MoleculeSummary,
+    MultiMolSaturationRunResult,
+    MultiMolSaturationStepResult,
     ReferenceEnergies,
+    SaturationCampaignResult,
+    SaturationRunResult,
+    SaturationStepResult,
     ScreeningResult,
     ScreeningRunResult,
     TimingInfo,
@@ -25,15 +30,22 @@ __all__ = [
     "MoleculeCampaignSummary",
     "MoleculeSummary",
     "ReferenceEnergies",
+    "SaturationCampaignResult",
+    "SaturationRunResult",
+    "SaturationStepResult",
+    "MultiMolSaturationRunResult",
+    "MultiMolSaturationStepResult",
     "ScreeningResult",
     "ScreeningRunResult",
     "TimingInfo",
     "DependencyMissingError",
     "GeometryValidationError",
     "OptimizationError",
+    "configure_logging",
 ]
 
 _LAZY_MODULES = {
+    "_logging": {"configure_logging"},
     "surfaces": {
         "SlabContainer",
         "create_slab_from_bulk",
@@ -71,7 +83,6 @@ _LAZY_MODULES = {
     "workflow": {
         "process_molecule",
         "process_molecule_bayesian",
-        "format_failure_summary",
         "run_saturation_screening",
         "calculate_reference_energies",
         "load_molecules",

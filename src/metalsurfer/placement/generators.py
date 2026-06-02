@@ -94,20 +94,24 @@ class _SpecGridInfo:
     n_hollow_pairs: int
 
 
+def _require_float(value: float | None, *, default: float = 0.0) -> float:
+    return float(value) if value is not None else default
+
+
 def _pose_from_descriptor(descriptor: PlacementDescriptor) -> PlacementPose:
     return PlacementPose(
         conformer_index=descriptor.conformer_index,
         site_index=descriptor.site_index,
         site_type=descriptor.site_type,
         placement_index=descriptor.placement_index,
-        quat_w=float(descriptor.quat_w),
-        quat_x=float(descriptor.quat_x),
-        quat_y=float(descriptor.quat_y),
-        quat_z=float(descriptor.quat_z),
-        x_abs=float(descriptor.x_abs),
-        y_abs=float(descriptor.y_abs),
-        z_fraction=float(descriptor.z_fraction),
-        z_abs=float(descriptor.z_abs),
+        quat_w=_require_float(descriptor.quat_w),
+        quat_x=_require_float(descriptor.quat_x),
+        quat_y=_require_float(descriptor.quat_y),
+        quat_z=_require_float(descriptor.quat_z),
+        x_abs=_require_float(descriptor.x_abs),
+        y_abs=_require_float(descriptor.y_abs),
+        z_fraction=descriptor.z_fraction,
+        z_abs=descriptor.z_abs,
         orientation_type=descriptor.orientation_type,
         face_flip=descriptor.face_flip,
         en_atom_index=descriptor.en_atom_index,
@@ -363,12 +367,18 @@ def _resolve_surface_ref(
             and "z" in site
             and not sts._is_top_layer_planar(slab)
         ):
-            return float(site["z"]), True
+            z_val = site["z"]
+            if isinstance(z_val, (int, float, np.floating)):
+                return float(z_val), True
         return float(np.max(slab.get_positions()[:, 2])), False
     if site is not None and "xyz" in site:
-        return float(site["xyz"][2]), True
+        xyz = site["xyz"]
+        if isinstance(xyz, (list, tuple, np.ndarray)) and len(xyz) >= 3:
+            return float(xyz[2]), True
     if site is not None and "z" in site:
-        return float(site["z"]), True
+        z_val = site["z"]
+        if isinstance(z_val, (int, float, np.floating)):
+            return float(z_val), True
     return float(np.max(slab.get_positions()[:, 2])), False
 
 
@@ -381,6 +391,7 @@ def _pose_from_spec(
     z_fraction: float | None = None,
     xy_override: tuple[float, float] | None = None,
     site_context: SiteContext | None = None,
+    slab_for_sites: Atoms | None = None,
 ) -> _PlacementContext | None:
     """Build a placement context (pose + resolved geometry) from a spec.
 
@@ -422,15 +433,21 @@ def _pose_from_spec(
         )
         return None
 
-    z_base_lo, z_base_hi = sts._compute_site_z_base(config, slab, site, symbols)
+    placement_reference_slab = slab_for_sites if slab_for_sites is not None else slab
+
+    z_base_lo, z_base_hi = sts._compute_site_z_base(
+        config, placement_reference_slab, site, symbols
+    )
     if site and spec.site_type:
-        offset = _site_type_z_offset(slab, site, spec.site_type)
+        offset = _site_type_z_offset(placement_reference_slab, site, spec.site_type)
         z_base_lo += offset
         z_base_hi += offset
 
     flat_aromatic = _is_flat_aromatic(shape, smiles, symbols)
     if flat_aromatic and spec.orientation_type == "parallel" and mat_type != "porous":
-        z_floor, z_lo_shrink, z_hi_shrink = _parallel_z_adjustments(slab, site, symbols)
+        z_floor, z_lo_shrink, z_hi_shrink = _parallel_z_adjustments(
+            placement_reference_slab, site, symbols
+        )
         z_base_lo = max(z_floor, z_base_lo - z_lo_shrink)
         z_base_hi = max(
             z_base_lo + _PARALLEL_Z_MIN_HI_MARGIN,
@@ -443,7 +460,7 @@ def _pose_from_spec(
     # Slab: top-layer z (Voronoi vertex z can sit between layers). NP/pore: local vertex.
     surface_ref, is_local_ref = _resolve_surface_ref(
         site,
-        slab,
+        placement_reference_slab,
         mat_type,
         rough_slab_local_z=config.rough_slab_local_z,
     )
@@ -624,11 +641,11 @@ def _finalize_placement(
         return None
 
     z_offset = _recover_z_offset(ctx, z_abs)
-    slab_indices = (
-        tuple(ctx.site["slab_indices"])
-        if ctx.site is not None and "slab_indices" in ctx.site
-        else None
-    )
+    slab_indices: tuple[int, ...] | None = None
+    if ctx.site is not None and "slab_indices" in ctx.site:
+        raw_indices = ctx.site["slab_indices"]
+        if isinstance(raw_indices, (list, tuple)):
+            slab_indices = tuple(int(i) for i in raw_indices)
     inv_2d = np.linalg.inv(np.array(slab.get_cell())[:2, :2])
     xy_frac = (inv_2d @ np.array([pose.x_abs, pose.y_abs])) % 1.0
 
@@ -964,7 +981,13 @@ def generate_placement_from_spec_with_reason(
     adsorbate = conformers[spec.conformer_index % len(conformers)].copy()
 
     placement_ctx = _pose_from_spec(
-        adsorbate, spec, slab, config, smiles, site_context=resolved_ctx
+        adsorbate,
+        spec,
+        slab,
+        config,
+        smiles,
+        site_context=resolved_ctx,
+        slab_for_sites=slab_for_sites,
     )
     if placement_ctx is None:
         return None, "no_sites_found"
@@ -1069,8 +1092,11 @@ def _get_hollow_site_pairs(
     z_surface = float(np.max(top_positions[:, 2]))
     top_mask = top_positions[:, 2] >= (z_surface - config.top_layer_tolerance)
     top_idx = np.nonzero(top_mask)[0]
-    top_radii = [geom._get_covalent_radius(symbols[int(i)]) for i in top_idx]
-    top_radii = [r for r in top_radii if r is not None]
+    top_radii = [
+        r
+        for i in top_idx
+        if (r := geom._get_covalent_radius(symbols[int(i)])) is not None
+    ]
     mean_top_radius = float(np.mean(top_radii)) if top_radii else 1.0
 
     # Adaptive minimum fragment separation that considers both atomic properties and surface geometry
@@ -1081,7 +1107,11 @@ def _get_hollow_site_pairs(
     if len(site_3d) >= 2:
         _nn_tree = _KDTree(site_3d)
         nn_d, _ = _nn_tree.query(site_3d, k=2)
-        mean_nn_sep = float(np.mean(nn_d[:, 1]))
+        nn_d_arr = np.asarray(nn_d, dtype=float)
+        if nn_d_arr.ndim == 2:
+            mean_nn_sep = float(np.mean(nn_d_arr[:, 1]))
+        else:
+            mean_nn_sep = float(np.mean(nn_d_arr))
 
         # Adaptive approach: use the actual hollow site geometry as a guide
         # For close-packed surfaces, hollow sites are closer together, so we need

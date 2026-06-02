@@ -1,7 +1,6 @@
 [run]
 source = src/metalsurfer
 omit =
-    cli/cli.py
     optimization.py
     ml/reproduce.py
     */__pycache__/*

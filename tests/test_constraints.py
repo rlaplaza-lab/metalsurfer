@@ -7,6 +7,7 @@ from metalsurfer.optimization import (
     compute_frozen_indices,
     identify_top_layer_indices,
 )
+from metalsurfer.workflow.shared import _resolve_base_slab_for_frozen
 
 
 def _make_slab(n_layers: int = 4, atoms_per_layer: int = 4, spacing: float = 2.0):
@@ -52,6 +53,39 @@ def test_frozen_indices_all_frozen():
     config = AdsorptionConfig(relax_top_layer=False)
     frozen = compute_frozen_indices(slab, config)
     assert len(frozen) == len(slab)
+
+
+def test_resolve_base_slab_for_frozen_after_auto_resize():
+    """In-plane repeat must freeze the full resized substrate, not one tile."""
+    slab = _make_slab(n_layers=2, atoms_per_layer=4, spacing=2.0)
+    base = slab.copy()
+    resized = slab.repeat((2, 2, 1))
+    config = AdsorptionConfig(relax_top_layer=False)
+
+    effective = _resolve_base_slab_for_frozen(resized, base, slab_was_resized=True)
+    assert effective is not None
+    assert len(effective) == len(resized)
+    frozen = compute_frozen_indices(effective, config)
+    assert len(frozen) == len(resized)
+
+    unchanged = _resolve_base_slab_for_frozen(slab, base, slab_was_resized=False)
+    assert unchanged is base
+    assert len(compute_frozen_indices(unchanged, config)) == len(base)
+
+
+def test_resolve_base_slab_for_frozen_relax_top_layer_after_resize():
+    """Top-layer freeze must span every repeated tile after in-plane resize."""
+    slab = _make_slab(n_layers=4, atoms_per_layer=4, spacing=2.0)
+    base = slab.copy()
+    resized = slab.repeat((2, 2, 1))
+    config = AdsorptionConfig(relax_top_layer=True, top_layer_tolerance=0.5)
+
+    effective = _resolve_base_slab_for_frozen(resized, base, slab_was_resized=True)
+    assert effective is not None
+    assert len(effective) == len(resized)
+    frozen = compute_frozen_indices(effective, config)
+    # 4 tiles x 12 frozen atoms per tile (3 of 4 layers)
+    assert len(frozen) == 48
 
 
 def test_frozen_indices_by_symbol():

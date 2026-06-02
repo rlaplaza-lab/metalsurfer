@@ -17,6 +17,7 @@ from ..ml.bayesian import (
 from ..ml.features import extract_features
 from ..ml.schema import PlacementRecord
 from ..models import BOStepMemory, ReferenceEnergies, ScreeningResult
+from ..optimization import clear_autobatcher_cache
 from ..placement.generators import (
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
@@ -25,10 +26,12 @@ from ..surfaces import SlabContainer
 from .core import _evaluate_placement_batch
 from .shared import (
     PlacementFailureEvent,
-    _build_surface_reference_slab,
+    _compute_slab_energy,
     _infer_surface_symbols,
     _resolve_site_context_for_sampling,
     _summarize_failure_events,
+    prepare_substrate_for_screening,
+    write_substrate_step_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +81,8 @@ def process_molecule_bayesian(
     bo_step_memory_in: BOStepMemory | None = None,
     bo_step_memory_out: dict[str, BOStepMemory] | None = None,
     bo_transfer_info_out: dict[str, object] | None = None,
+    allow_auto_resize: bool = True,
+    step_metadata_out: dict[str, object] | None = None,
 ) -> list[ScreeningResult] | None:
     """Bayesian-optimisation-guided placement screening for one molecule."""
     if config is None:
@@ -114,7 +119,29 @@ def process_molecule_bayesian(
         return None
     conformers, _ = result
 
-    slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab_for_frozen)
+    substrate_ref = prepare_substrate_for_screening(
+        slab,
+        conformers,
+        base_slab_for_frozen,
+        config,
+        allow_auto_resize=allow_auto_resize,
+    )
+    slab = substrate_ref.slab
+    slab_for_sites = substrate_ref.slab_for_sites
+    effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
+
+    if substrate_ref.slab_was_resized:
+        clear_autobatcher_cache()
+        E_slab = _compute_slab_energy(
+            slab.atoms, calculator, label="resized slab reference"
+        )
+        logger.info("Resized slab energy: %.4f eV", E_slab)
+
+    write_substrate_step_metadata(
+        step_metadata_out,
+        slab_was_resized=substrate_ref.slab_was_resized,
+        substrate_atoms_after_resize=substrate_ref.substrate_atoms_after_resize,
+    )
 
     site_context = _resolve_site_context_for_sampling(
         slab_for_sites,
@@ -255,7 +282,7 @@ def process_molecule_bayesian(
             molecule_name,
             surface_symbols,
             site_context=site_context,
-            base_slab_for_frozen=base_slab_for_frozen,
+            base_slab_for_frozen=effective_base_slab_for_frozen,
             slab_for_sites=slab_for_sites,
         )
 
@@ -356,20 +383,21 @@ def process_molecule_bayesian(
             sample_weight: np.ndarray | None = None
             surrogate = None
 
+            transfer_memory = bo_step_memory_in
             can_try_transfer = (
                 config.bo_transfer_enabled
-                and bo_step_memory_in is not None
+                and transfer_memory is not None
                 and not transfer_disabled
                 and len(X_current) >= config.bo_transfer_min_step_observations
-                and len(bo_step_memory_in.observed_X_rows) > 0
-                and len(bo_step_memory_in.observed_y) > 0
+                and len(transfer_memory.observed_X_rows) > 0
+                and len(transfer_memory.observed_y) > 0
             )
             if can_try_transfer:
-                prev_memory = bo_step_memory_in
-                X_prev = pd.DataFrame(prev_memory.observed_X_rows).reindex(
+                assert transfer_memory is not None
+                X_prev = pd.DataFrame(transfer_memory.observed_X_rows).reindex(
                     columns=X_current.columns, fill_value=0.0
                 )
-                y_prev = np.array(prev_memory.observed_y, dtype=float)
+                y_prev = np.array(transfer_memory.observed_y, dtype=float)
                 center = X_current.mean(axis=0).to_numpy(dtype=float)
                 prev_values = X_prev.to_numpy(dtype=float)
                 dist = np.linalg.norm(prev_values - center, axis=1)

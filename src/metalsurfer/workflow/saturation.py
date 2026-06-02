@@ -11,6 +11,7 @@ from ase import Atoms
 from .._logging import log_context
 from ..config import AdsorptionConfig
 from ..conformers import create_conformers_from_smiles
+from ..filters import adsorbate_connected_components
 from ..ml.dataset import DatasetLogger
 from ..models import (
     BOStepMemory,
@@ -26,7 +27,11 @@ from ..placement.generators import (
     distribute_placement_budget,
     estimate_molecule_complexity,
 )
-from ..surfaces import SlabContainer, coerce_slab_container
+from ..surfaces import (
+    SlabContainer,
+    auto_resize_slab_for_molecule,
+    coerce_slab_container,
+)
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian
 from .core import process_molecule
@@ -146,6 +151,53 @@ def _validate_distinct_bo_memories(
         seen_by_id[id(memory)] = molecule
 
 
+def _apply_substrate_resize_from_step_metadata(
+    base_slab: Atoms,
+    step_metadata: dict[str, object],
+) -> Atoms:
+    """Expand saturation ``base_slab`` when step 1 auto-resized the substrate in-plane."""
+    if not step_metadata.get("slab_was_resized"):
+        return base_slab
+    substrate = step_metadata.get("substrate_atoms_after_resize")
+    if not isinstance(substrate, Atoms):
+        return base_slab
+    updated = substrate.copy()
+    updated.set_pbc([True, True, True])
+    logger.info(
+        "Updated saturation base_slab after auto-resize: %d -> %d atoms",
+        len(base_slab),
+        len(updated),
+    )
+    return updated
+
+
+def _presize_saturation_substrate_if_needed(
+    current_slab: SlabContainer,
+    base_slab: Atoms,
+    reference_slab_for_symmetry: Atoms,
+    conformers: list[Atoms],
+    config: AdsorptionConfig,
+) -> tuple[SlabContainer, Atoms, Atoms, bool]:
+    """Pre-resize substrate once before multi-molecule saturation step 1."""
+    if not config.auto_resize_slab:
+        return current_slab, base_slab, reference_slab_for_symmetry, False
+
+    resized_slab, was_resized = auto_resize_slab_for_molecule(
+        current_slab, conformers, config.min_pbc_image_separation
+    )
+    if not was_resized:
+        return current_slab, base_slab, reference_slab_for_symmetry, False
+
+    updated = resized_slab.atoms.copy()
+    updated.set_pbc([True, True, True])
+    logger.info(
+        "Pre-resized multi-mol saturation substrate: %d -> %d atoms",
+        len(base_slab),
+        len(updated),
+    )
+    return resized_slab, updated, updated.copy(), True
+
+
 def _n_at_saturation_from_steps(steps: list[Any]) -> int:
     if not steps:
         return 0
@@ -153,6 +205,100 @@ def _n_at_saturation_from_steps(steps: list[Any]) -> int:
     return last_step.n_molecules_on_slab + (
         1 if last_step.best_result.energy_adsorption < 0 else 0
     )
+
+
+def _reference_smiles_units_single_molecule(
+    reference_smiles: str, step: int
+) -> list[str]:
+    """One SMILES per adsorbate unit expected on the slab after this step."""
+    return [reference_smiles] * step
+
+
+def _reference_smiles_units_multi_molecule(
+    active_molecules: list[str],
+    active_smiles: dict[str, str],
+    molecule_counts: dict[str, int],
+    placing_molecule: str,
+) -> list[str]:
+    """SMILES list for all adsorbate units after placing *placing_molecule* this step."""
+    units: list[str] = []
+    for mol in active_molecules:
+        n = molecule_counts.get(mol, 0) + (1 if mol == placing_molecule else 0)
+        units.extend([active_smiles[mol]] * n)
+    return units
+
+
+def _saturation_adsorbate_topology_ok(
+    atoms: Atoms,
+    *,
+    base_slab_len: int,
+    reference_unit_smiles: list[str],
+    config: AdsorptionConfig,
+) -> tuple[bool, str]:
+    """Return whether the full adsorbate pool has the expected unit count.
+
+    This guard is intentionally connectivity-only: it blocks adsorbate coupling
+    (merged fragments) or unexpected splits while allowing strong
+    adsorbate-material interactions that do not change adsorbate connectivity.
+    """
+    if config.skip_topology_check:
+        return True, "topology checks disabled"
+
+    components = adsorbate_connected_components(
+        atoms,
+        base_slab_len,
+        config.connectivity_multipliers,
+    )
+    if len(components) != len(reference_unit_smiles):
+        return (
+            False,
+            f"expected {len(reference_unit_smiles)} adsorbate units, "
+            f"found {len(components)} connected fragments",
+        )
+
+    return True, "adsorbate connectivity intact"
+
+
+def _filter_saturation_topology_results(
+    results: list[ScreeningResult],
+    *,
+    base_slab_len: int,
+    reference_unit_smiles: list[str],
+    config: AdsorptionConfig,
+) -> list[ScreeningResult]:
+    """Drop candidates with adsorbate rearrangement before best-slab selection."""
+    if not config.saturation_discard_topology_rearrangements:
+        return results
+    if not results:
+        return results
+
+    kept: list[ScreeningResult] = []
+    discarded = 0
+    for entry in results:
+        ok, reason = _saturation_adsorbate_topology_ok(
+            entry.atoms,
+            base_slab_len=base_slab_len,
+            reference_unit_smiles=reference_unit_smiles,
+            config=config,
+        )
+        if ok:
+            kept.append(entry)
+        else:
+            discarded += 1
+            logger.debug(
+                "Saturation topology guard (pid=%s): %s",
+                entry.placement_id,
+                reason,
+            )
+
+    if discarded:
+        logger.info(
+            "Saturation topology guard: kept %d/%d candidates (%d rearranged)",
+            len(kept),
+            len(results),
+            discarded,
+        )
+    return kept
 
 
 def _run_multi_molecule_saturation(
@@ -259,6 +405,23 @@ def _run_multi_molecule_saturation(
                 log_context=f"Multi-mol saturation step {step}",
             )
 
+        if step == 1 and config.auto_resize_slab:
+            largest_conformers = conformer_cache[largest_mol][0]
+            (
+                current_slab,
+                base_slab,
+                reference_slab_for_symmetry,
+                was_presized,
+            ) = _presize_saturation_substrate_if_needed(
+                current_slab,
+                base_slab,
+                reference_slab_for_symmetry,
+                largest_conformers,
+                config,
+            )
+            if was_presized:
+                clear_autobatcher_cache()
+
         E_slab = _compute_slab_energy(
             current_slab.atoms,
             calculator,
@@ -304,6 +467,7 @@ def _run_multi_molecule_saturation(
                     bo_step_memory_in=bo_memory_per_mol[mol],
                     bo_step_memory_out=bo_out,
                     bo_transfer_info_out=transfer_info,
+                    allow_auto_resize=False,
                 )
                 new_bo_memory_raw[mol] = bo_out.get("memory")
             else:
@@ -322,13 +486,24 @@ def _run_multi_molecule_saturation(
                     failure_summary_out=failure_summary_out,
                     saturation_reuse=True,
                     symmetry_broken=symmetry_broken,
-                    allow_auto_resize=(step == 1 and mol == largest_mol),
+                    allow_auto_resize=False,
                 )
                 new_bo_memory_raw[mol] = None
 
             per_molecule_bo_transfer[mol] = transfer_info
 
             resolved = list(mol_results) if mol_results else []
+            resolved = _filter_saturation_topology_results(
+                resolved,
+                base_slab_len=len(base_slab),
+                reference_unit_smiles=_reference_smiles_units_multi_molecule(
+                    active_molecules,
+                    active_smiles,
+                    molecule_counts,
+                    mol,
+                ),
+                config=config,
+            )
             per_molecule_results[mol] = resolved
             if resolved:
                 ds_logger.add_results(resolved, smiles=smi, surface_id=surface_type)
@@ -355,7 +530,8 @@ def _run_multi_molecule_saturation(
 
         if not any(per_molecule_results.values()):
             logger.warning(
-                "Multi-mol saturation step %d: no valid placements for any molecule; stopping",
+                "Multi-mol saturation step %d: no valid placements for any molecule "
+                "(including after topology rearrangement guard); stopping",
                 step,
             )
             break
@@ -424,7 +600,8 @@ def _run_multi_molecule_saturation(
 
 def run_saturation_screening(
     slab: SlabContainer | Atoms,
-    smiles_file: str = "smiles.csv",
+    molecules: list[tuple[str, str]] | tuple[str, str] | str = "smiles.csv",
+    smiles_file: str | None = None,
     config: AdsorptionConfig | None = None,
     surface_type: str = "manual",
     skip_existing: bool = True,
@@ -436,13 +613,14 @@ def run_saturation_screening(
         config = AdsorptionConfig()
 
     slab = coerce_slab_container(slab)
+    molecules_input = smiles_file if smiles_file is not None else molecules
 
     t_run_start = time.perf_counter()
 
     with log_context(surface_type=surface_type, seed=config.seed):
         setup = _setup_screening_run(
             slab,
-            smiles_file,
+            molecules_input,
             config,
             surface_type,
             skip_existing,
@@ -451,20 +629,20 @@ def run_saturation_screening(
         if setup is None:
             return []
 
-        calculator, ts_model, molecules, smiles_list, ref, t_ref_s = setup
+        calculator, ts_model, molecule_names, smiles_list, ref, t_ref_s = setup
         base_slab = slab.atoms.copy()
         base_slab.set_pbc([True, True, True])
         results_dir = f"results_{surface_type}"
         ds_logger = DatasetLogger(results_dir, config=config, surface_id=surface_type)
 
-        if config.multi_molecule_saturation and len(molecules) > 1:
+        if config.multi_molecule_saturation and len(molecule_names) > 1:
             logger.info(
                 "Multi-molecule saturation enabled: %d molecules competing per step",
-                len(molecules),
+                len(molecule_names),
             )
             multi_result = _run_multi_molecule_saturation(
                 smiles_list=smiles_list,
-                molecules=molecules,
+                molecules=molecule_names,
                 base_slab=base_slab,
                 calculator=calculator,
                 ts_model=ts_model,
@@ -484,26 +662,26 @@ def run_saturation_screening(
             )
             logger.info(
                 "Multi-mol saturation complete: %d molecules, %d steps, %.1fs",
-                len(molecules),
+                len(molecule_names),
                 total_steps,
                 t_run_total,
             )
             if run_metadata_out is not None:
                 run_metadata_out.update(
-                    n_molecules=len(molecules),
+                    n_molecules=len(molecule_names),
                     total_configs=total_configs,
                     t_ref_s=t_ref_s,
                     t_total_s=t_run_total,
                 )
             return [multi_result]
 
-        elif config.multi_molecule_saturation and len(molecules) == 1:
+        if config.multi_molecule_saturation and len(molecule_names) == 1:
             logger.warning(
                 "multi_molecule_saturation=True but only one molecule provided; falling back to standard single-molecule saturation"
             )
 
         all_saturation_results: list[SaturationRunResult] = []
-        for smi, mol in zip(smiles_list, molecules, strict=True):
+        for smi, mol in zip(smiles_list, molecule_names, strict=True):
             E_mol = ref.get_molecule_energy(mol)
             if E_mol is None:
                 if config.fail_on_missing_reference:
@@ -553,6 +731,7 @@ def run_saturation_screening(
                 )
 
                 transfer_info: dict[str, object] = {}
+                step_metadata: dict[str, object] = {}
                 if config.bo_enabled:
                     bo_memory_out: dict[str, BOStepMemory] = {}
                     mol_results = process_molecule_bayesian(
@@ -572,8 +751,14 @@ def run_saturation_screening(
                         bo_step_memory_in=prior_step_memory,
                         bo_step_memory_out=bo_memory_out,
                         bo_transfer_info_out=transfer_info,
+                        allow_auto_resize=(step == 1),
+                        step_metadata_out=step_metadata,
                     )
                     prior_step_memory = copy.deepcopy(bo_memory_out.get("memory"))
+                    if step == 1:
+                        base_slab = _apply_substrate_resize_from_step_metadata(
+                            base_slab, step_metadata
+                        )
                 else:
                     mol_results = process_molecule(
                         smi,
@@ -591,11 +776,26 @@ def run_saturation_screening(
                         saturation_reuse=True,
                         symmetry_broken=symmetry_broken,
                         allow_auto_resize=(step == 1),
+                        step_metadata_out=step_metadata,
                     )
+                    if step == 1:
+                        base_slab = _apply_substrate_resize_from_step_metadata(
+                            base_slab, step_metadata
+                        )
+
+                mol_results = _filter_saturation_topology_results(
+                    list(mol_results) if mol_results else [],
+                    base_slab_len=len(base_slab),
+                    reference_unit_smiles=_reference_smiles_units_single_molecule(
+                        smi, step
+                    ),
+                    config=config,
+                )
 
                 if not mol_results:
                     logger.warning(
-                        "Step %d: no valid placements for %s; stopping saturation",
+                        "Step %d: no valid placements for %s "
+                        "(including after topology rearrangement guard); stopping saturation",
                         step,
                         mol,
                     )
@@ -656,13 +856,13 @@ def run_saturation_screening(
     )
     logger.info(
         "Saturation screening complete: %d molecules, %d total steps, %.1fs",
-        len(molecules),
+        len(molecule_names),
         total_steps,
         t_run_total,
     )
     if run_metadata_out is not None:
         run_metadata_out.update(
-            n_molecules=len(molecules),
+            n_molecules=len(molecule_names),
             total_configs=total_configs,
             t_ref_s=t_ref_s,
             t_total_s=t_run_total,

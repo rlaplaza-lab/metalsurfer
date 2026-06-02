@@ -96,8 +96,8 @@ _SITE_Z_OFFSET_FROM_SURFACE_RADIUS: dict[str, float] = {
     "envelope": -0.135,
 }
 
-# Hard floor for flat-aromatic parallel placement above the surface.
-# floor = max(min_floor, scale * (r_surface + r_mol))
+# Hard floor for flat-aromatic parallel placement above the surface (max of
+# min_floor and scale times the sum of surface and molecule radii).
 _PARALLEL_Z_FLOOR_MIN_ANGSTROM: float = 2.2
 _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE: float = 1.2
 
@@ -112,9 +112,8 @@ _PARALLEL_Z_MIN_HI_MARGIN: float = 0.3  # ensure z_base_hi >= z_base_lo + this (
 # Dissociative placement (e.g. H₂ → 2 H on hollow sites)
 # ---------------------------------------------------------------------------
 
-# Minimum and maximum separation between fragment landing sites.
-# min_sep = max(min_floor, min(atomic_constraint, surface_constraint))
-# max_sep = clamp(beta * mean_top_layer_nn_distance, min=max_floor)
+# Minimum and maximum separation between fragment landing sites (adaptive
+# min/max from atomic radii and surface geometry; see implementation).
 #
 # Note: The algorithm now uses an adaptive approach that considers both atomic
 # properties (covalent radii) and surface geometry (hollow site distances).

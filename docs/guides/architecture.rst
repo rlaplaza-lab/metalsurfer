@@ -3,7 +3,7 @@ Architecture
 
 This page describes the library architecture, public API layers, and
 computational data flow.  For the full technical reference see the
-`CORE_SYSTEM_EXPLANATION.md <https://github.com/rlaplaza-lab/metalsurfer/blob/main/CORE_SYSTEM_EXPLANATION.md>`_
+`CORE_SYSTEM_EXPLANATION.md <https://github.com/rlaplaza/metalsurfer/blob/main/CORE_SYSTEM_EXPLANATION.md>`_
 file in the repository root.
 
 
@@ -16,10 +16,10 @@ accessed.
 
 **1. Run-Mode APIs** — canonical high-level entry points:
 
-- :func:`~metalsurfer.run_adsorption` — standard multi-molecule screening.
-- :func:`~metalsurfer.run_adsorption_bo` — Bayesian optimization-guided screening.
-- :func:`~metalsurfer.run_saturation` — sequential saturation.
-- :func:`~metalsurfer.run_saturation_bo` — saturation with BO-guided placement selection.
+- :func:`~metalsurfer.run_adsorption` — standard multi-molecule screening; returns :class:`~metalsurfer.BindingCampaignResult`.
+- :func:`~metalsurfer.run_adsorption_bo` — Bayesian optimization-guided screening; returns :class:`~metalsurfer.BindingCampaignResult`.
+- :func:`~metalsurfer.run_saturation` — sequential saturation; returns :class:`~metalsurfer.SaturationCampaignResult` (per-molecule runs via ``.runs``).
+- :func:`~metalsurfer.run_saturation_bo` — saturation with BO-guided placement selection; returns :class:`~metalsurfer.SaturationCampaignResult`.
 
 **2. Surface Preparation** — :func:`~metalsurfer.prepare_slab` provides a
 single call for bulk→slab construction, alloy substitution, and adatom
@@ -96,10 +96,26 @@ apply only to tree surrogates; ``gradient_boost`` and ``ridge`` use
 unweighted fits when those weights would otherwise be passed.
 
 **Sequential Saturation** evolves the slab state step by step — run
-screening, select the best result, update the slab, and repeat until
+screening, optionally filter step candidates with the topology rearrangement
+guard (``saturation_discard_topology_rearrangements``, default ``True``),
+select the best surviving result, update the slab, and repeat until
 adsorption is no longer favorable (``E_ads ≥ 0``) or no valid placements
-remain.  When ``multi_molecule_saturation=True``, all molecules compete at
-each step.
+remain.  The guard is connectivity-only: it checks that the adsorbate pool
+has the expected number of connected fragments, so coupled adsorbates or
+unexpected splits are not carried forward while strong adsorbate-material
+interactions that preserve connectivity remain allowed.  When
+``multi_molecule_saturation=True``, all molecules compete at each step.
+
+Saturation captures ``base_slab`` once after surface prep.  Placement
+relaxation freezes that substrate block (``relax_top_layer=False`` freezes
+every atom in the reference; default ``True`` freezes all but the top layer).
+Prep equilibration uses ``slab_relaxation_mode`` separately — see
+:doc:`surface_engineering`.  Step-1 ``auto_resize_slab`` may repeat the
+substrate in-plane; standard, Bayesian, and saturation workflows expand the
+freeze reference to the full repeated substrate (for both
+``relax_top_layer=True`` and ``False``).  Competitive multi-molecule
+saturation pre-resizes once before the step-1 molecule loop so every adsorbate
+competes on the same footprint.
 
 
 Module Layout
@@ -119,7 +135,6 @@ Module Layout
    ├── surfaces.py           # slab construction, alloy, adatom
    ├── symmetry.py           # spglib-based symmetry analysis
    │
-   ├── cli/                  # CLI entry point (metalsurfer command)
    ├── ml/                   # BO surrogates, dataset, features
    ├── placement/            # Voronoi sites, orientation, placement generation
    └── workflow/             # orchestration by run mode
@@ -144,3 +159,23 @@ The default output root is ``results_{surface_type}/``.  Common artifacts:
 - ``run_metadata.json`` — timing, counts, and config snapshot.
 - ``xyz_structures/`` — optimized structures in XYZ format.
 - ``vasp_inputs/`` — POSCAR files for DFT follow-up.
+
+Result-Object Export and Formatting
+-----------------------------------
+
+Formatting and tabular export are now first-class methods on result objects,
+so user scripts can stay on top-level imports without pulling helpers from
+internal modules.
+
+- :class:`~metalsurfer.ScreeningResult` provides ``to_row(...)``.
+- :class:`~metalsurfer.ScreeningRunResult` provides ``to_rows(...)`` and
+  ``to_dataframe(...)`` for detailed tables plus ``to_summary_row()``.
+- :class:`~metalsurfer.SaturationStepResult` provides ``to_detail_row(...)``
+  and ``to_rows(...)`` for step-level exports.
+- :class:`~metalsurfer.SaturationRunResult` provides
+  ``to_flattened_runs()`` and ``format_completion(...)``.
+- :class:`~metalsurfer.SaturationCampaignResult` provides
+  ``format_completion(...)`` and ``format_failure_summary()`` for campaign runs.
+- :class:`~metalsurfer.BindingCampaignResult` provides
+  ``format_summary(...)``, ``format_screening_complete()``, and
+  ``format_results_saved_line(...)``.

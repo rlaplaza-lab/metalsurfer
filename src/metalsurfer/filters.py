@@ -2,6 +2,10 @@
 
 :func:`filter_results` runs one pipeline. Decomposition can check connectivity
 (at multiple radii), formula, bond-pair counts, and coordination vs reference SMILES.
+
+:func:`adsorbate_connected_components` splits the adsorbate region into bonded
+fragments; saturation uses it with :func:`check_decomposition` before best-slab
+selection when ``saturation_discard_topology_rearrangements`` is enabled.
 """
 
 import logging
@@ -190,14 +194,55 @@ def _coordination_fingerprint_from_smiles(
     return fingerprint
 
 
+def _connected_components_from_coords(
+    coords: np.ndarray,
+    syms: np.ndarray,
+    atoms: Atoms,
+    multiplier: float,
+) -> list[np.ndarray]:
+    """Return boolean masks (one per fragment) for bonded clusters in *coords*."""
+    from scipy.sparse.csgraph import connected_components
+
+    if len(coords) <= 1:
+        return [np.ones(len(coords), dtype=bool)] if len(coords) == 1 else []
+
+    dist_matrix = _mic_pairwise_distances(coords, atoms)
+    threshold = _covalent_threshold_matrix(syms, multiplier)
+    bonded = dist_matrix <= threshold
+    np.fill_diagonal(bonded, False)
+
+    n_components, labels = connected_components(bonded, directed=False)
+    masks: list[np.ndarray] = []
+    for label in range(n_components):
+        mask = labels == label
+        if np.any(mask):
+            masks.append(mask)
+    return masks
+
+
+def adsorbate_connected_components(
+    atoms: Atoms,
+    base_slab_len: int,
+    connectivity_multipliers: list[float],
+) -> list[Atoms]:
+    """Split ``atoms[base_slab_len:]`` into connected adsorbate fragments."""
+    ads = atoms[base_slab_len:]
+    if len(ads) == 0:
+        return []
+
+    syms = np.array(ads.get_chemical_symbols())
+    coords = ads.get_positions()
+    multiplier = max(connectivity_multipliers) if connectivity_multipliers else 1.3
+    masks = _connected_components_from_coords(coords, syms, ads, multiplier)
+    return [ads[mask] for mask in masks]
+
+
 def _is_molecule_connected(
     atoms: Atoms,
     surface_symbols: list[str] | None = None,
     multiplier: float = 1.3,
 ) -> bool:
     """Return ``True`` if non-surface atoms form a single connected fragment."""
-    from scipy.sparse.csgraph import connected_components
-
     syms = np.array(atoms.get_chemical_symbols())
     mask = (
         ~np.isin(syms, surface_symbols)
@@ -210,13 +255,7 @@ def _is_molecule_connected(
     coords = atoms.get_positions()[mask]
     syms = syms[mask]
 
-    dist_matrix = _mic_pairwise_distances(coords, atoms)
-    threshold = _covalent_threshold_matrix(syms, multiplier)
-    bonded = dist_matrix <= threshold
-    np.fill_diagonal(bonded, False)
-
-    n_components, _ = connected_components(bonded, directed=False)
-    return n_components == 1
+    return len(_connected_components_from_coords(coords, syms, atoms, multiplier)) == 1
 
 
 # ---------------------------------------------------------------------------

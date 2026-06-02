@@ -4,6 +4,7 @@ import contextlib
 import gc
 import logging
 import math
+from typing import NoReturn
 
 import numpy as np
 from ase import Atoms
@@ -19,20 +20,20 @@ logger = logging.getLogger(__name__)
 # stack -- keeps ``from metalsurfer import AdsorptionConfig`` working in CI)
 # ---------------------------------------------------------------------------
 try:
-    import torch  # type: ignore
+    import torch
 except ImportError:
     torch = None
 
 try:
-    import torch_sim as ts  # type: ignore
-    import torch_sim.constraints as ts_constraints  # type: ignore
-    import torch_sim.state as _ts_state  # type: ignore
-    from torch_sim.autobatching import InFlightAutoBatcher  # type: ignore
+    import torch_sim as ts
+    import torch_sim.constraints as ts_constraints
+    import torch_sim.state as _ts_state
+    from torch_sim.autobatching import InFlightAutoBatcher
 
     # Upstream _split_state uses torch.arange(...) without device=, so bounds
     # live on CPU while constraint tensors are on CUDA. Patch to use state.device.
     def _patched_split_state(state):
-        from torch_sim.state import get_attrs_for_scope  # noqa: PLC0415
+        from torch_sim.state import get_attrs_for_scope
 
         system_sizes = state.n_atoms_per_system.tolist()
         split_per_atom = {}
@@ -83,7 +84,7 @@ try:
                 )
             ]
             system_attrs["_constraints"] = new_constraints
-            states.append(type(state)(**system_attrs))  # type: ignore[arg-type]
+            states.append(type(state)(**system_attrs))
         return states
 
     _ts_state._split_state = _patched_split_state
@@ -390,6 +391,61 @@ def _ensure_torch_checkpoint_safe_globals() -> None:
         add_sg([slice])
 
 
+def _fairchem_pytorch26_unpickling_message() -> str:
+    return (
+        "FairChem model loading failed due to PyTorch 2.6+ security changes.\n"
+        "This is a known issue with FairChem checkpoints and PyTorch 2.6+.\n"
+        "\n"
+        "To fix this issue, you have two options:\n"
+        "1. Add 'slice' to PyTorch's safe globals before loading the model:\n"
+        "   import torch\n"
+        "   torch.serialization.add_safe_globals([slice])\n"
+        "   # Then proceed with your code\n"
+        "\n"
+        "2. Set weights_only=False when loading the checkpoint (not recommended for security):\n"
+        "   # Only do this if you trust the source of the checkpoint\n"
+        "\n"
+        "For more details, see:\n"
+        "- PyTorch documentation: https://pytorch.org/docs/stable/generated/torch.load.html\n"
+        "- FairChem GitHub: https://github.com/facebookresearch/fairchem\n"
+        "\n"
+        "The metalsurfer package attempts to handle this automatically, but if you're seeing this error, "
+        "please report it at: https://github.com/rlaplaza/metalsurfer/issues"
+    )
+
+
+def _fairchem_load_failure_message(error_msg: str, model_name: str) -> str:
+    return (
+        f"FairChem model loading failed: {error_msg}\n"
+        "This may be due to missing API keys, network issues, or model availability problems.\n"
+        "\n"
+        "Common solutions:\n"
+        "1. Ensure you have a HuggingFace API key if required by the model\n"
+        "2. Check your internet connection\n"
+        f"3. Verify the model name is correct: '{model_name}'\n"
+        "4. Try a different device (CPU vs GPU)\n"
+        "\n"
+        "For HuggingFace API key setup:\n"
+        "1. Create an account at https://huggingface.co/\n"
+        "2. Generate an API key at https://huggingface.co/settings/tokens\n"
+        "3. Set it as environment variable: export HF_TOKEN=your_token_here\n"
+        "4. Or configure it in Python: from huggingface_hub import login; login()\n"
+        "\n"
+        "For more information, see: https://github.com/facebookresearch/fairchem"
+    )
+
+
+def _raise_fairchem_load_error(exc: Exception, model_name: str) -> NoReturn:
+    error_msg = str(exc)
+    if (
+        "UnpicklingError" in error_msg
+        and ("weights_only" in error_msg or "weights only" in error_msg)
+        and "slice" in error_msg
+    ):
+        raise RuntimeError(_fairchem_pytorch26_unpickling_message()) from exc
+    raise RuntimeError(_fairchem_load_failure_message(error_msg, model_name)) from exc
+
+
 def setup_calculator(model_name: str = "uma-s-1p1", device: str = "cuda"):
     """Create a FAIRChem ASE calculator for the given model."""
     try:
@@ -401,57 +457,16 @@ def setup_calculator(model_name: str = "uma-s-1p1", device: str = "cuda"):
             "Install with: pip install fairchem-core",
         ) from exc
 
-    device = _resolve_device(device)
+    resolved_device = _resolve_device(device)
+    if resolved_device is None:
+        raise ValueError("device must be set for calculator initialization")
+    device = resolved_device
     _ensure_torch_checkpoint_safe_globals()
     logger.info("Initializing FAIRChem calculator (%s) on %s...", model_name, device)
     try:
         predictor = pretrained_mlip.get_predict_unit(model_name, device=device)
     except Exception as exc:
-        error_msg = str(exc)
-        if (
-            "UnpicklingError" in error_msg
-            and ("weights_only" in error_msg or "weights only" in error_msg)
-            and "slice" in error_msg
-        ):
-            raise RuntimeError(
-                "FairChem model loading failed due to PyTorch 2.6+ security changes.\n"
-                "This is a known issue with FairChem checkpoints and PyTorch 2.6+.\n"
-                "\n"
-                "To fix this issue, you have two options:\n"
-                "1. Add 'slice' to PyTorch's safe globals before loading the model:\n"
-                "   import torch\n"
-                "   torch.serialization.add_safe_globals([slice])\n"
-                "   # Then proceed with your code\n"
-                "\n"
-                "2. Set weights_only=False when loading the checkpoint (not recommended for security):\n"
-                "   # Only do this if you trust the source of the checkpoint\n"
-                "\n"
-                "For more details, see:\n"
-                "- PyTorch documentation: https://pytorch.org/docs/stable/generated/torch.load.html\n"
-                "- FairChem GitHub: https://github.com/facebookresearch/fairchem\n"
-                "\n"
-                "The metalsurfer package attempts to handle this automatically, but if you're seeing this error,"
-                "please report it at: https://github.com/rlaplaza/metalsurfer/issues"
-            ) from exc
-        else:
-            raise RuntimeError(
-                f"FairChem model loading failed: {error_msg}\n"
-                "This may be due to missing API keys, network issues, or model availability problems.\n"
-                "\n"
-                "Common solutions:\n"
-                "1. Ensure you have a HuggingFace API key if required by the model\n"
-                "2. Check your internet connection\n"
-                "3. Verify the model name is correct: '{model_name}'\n"
-                "4. Try a different device (CPU vs GPU)\n"
-                "\n"
-                "For HuggingFace API key setup:\n"
-                "1. Create an account at https://huggingface.co/\n"
-                "2. Generate an API key at https://huggingface.co/settings/tokens\n"
-                "3. Set it as environment variable: export HF_TOKEN=your_token_here\n"
-                "4. Or configure it in Python: from huggingface_hub import login; login()\n"
-                "\n"
-                "For more information, see: https://github.com/facebookresearch/fairchem"
-            ) from exc
+        _raise_fairchem_load_error(exc, model_name)
     calc = FAIRChemCalculator(predictor, task_name="oc20")
     logger.info("Calculator initialized successfully")
     return calc
@@ -471,7 +486,10 @@ def setup_torchsim_model(model_name: str = "uma-s-1p1", device: str = "cuda"):
             "Install with: pip install torch-sim-atomistic",
         ) from exc
 
-    device = _resolve_device(device)
+    resolved_device = _resolve_device(device)
+    if resolved_device is None:
+        raise ValueError("device must be set for TorchSim model initialization")
+    device = resolved_device
     _ensure_torch_checkpoint_safe_globals()
     logger.info("Initializing TorchSim FairChemModel (%s) on %s...", model_name, device)
     dev = torch.device(device) if torch is not None and device else None
@@ -479,51 +497,7 @@ def setup_torchsim_model(model_name: str = "uma-s-1p1", device: str = "cuda"):
         with torchsim_output_capture():
             model = FairChemModel(model=model_name, device=dev, task_name="oc20")
     except Exception as exc:
-        error_msg = str(exc)
-        if (
-            "UnpicklingError" in error_msg
-            and ("weights_only" in error_msg or "weights only" in error_msg)
-            and "slice" in error_msg
-        ):
-            raise RuntimeError(
-                "FairChem model loading failed due to PyTorch 2.6+ security changes.\n"
-                "This is a known issue with FairChem checkpoints and PyTorch 2.6+.\n"
-                "\n"
-                "To fix this issue, you have two options:\n"
-                "1. Add 'slice' to PyTorch's safe globals before loading the model:\n"
-                "   import torch\n"
-                "   torch.serialization.add_safe_globals([slice])\n"
-                "   # Then proceed with your code\n"
-                "\n"
-                "2. Set weights_only=False when loading the checkpoint (not recommended for security):\n"
-                "   # Only do this if you trust the source of the checkpoint\n"
-                "\n"
-                "For more details, see:\n"
-                "- PyTorch documentation: https://pytorch.org/docs/stable/generated/torch.load.html\n"
-                "- FairChem GitHub: https://github.com/facebookresearch/fairchem\n"
-                "\n"
-                "The metalsurfer package attempts to handle this automatically, but if you're seeing this error,"
-                "please report it at: https://github.com/rlaplaza/metalsurfer/issues"
-            ) from exc
-        else:
-            raise RuntimeError(
-                f"FairChem model loading failed: {error_msg}\n"
-                "This may be due to missing API keys, network issues, or model availability problems.\n"
-                "\n"
-                "Common solutions:\n"
-                "1. Ensure you have a HuggingFace API key if required by the model\n"
-                "2. Check your internet connection\n"
-                "3. Verify the model name is correct: '{model_name}'\n"
-                "4. Try a different device (CPU vs GPU)\n"
-                "\n"
-                "For HuggingFace API key setup:\n"
-                "1. Create an account at https://huggingface.co/\n"
-                "2. Generate an API key at https://huggingface.co/settings/tokens\n"
-                "3. Set it as environment variable: export HF_TOKEN=your_token_here\n"
-                "4. Or configure it in Python: from huggingface_hub import login; login()\n"
-                "\n"
-                "For more information, see: https://github.com/facebookresearch/fairchem"
-            ) from exc
+        _raise_fairchem_load_error(exc, model_name)
     logger.info("TorchSim model created successfully")
     return model
 
@@ -836,16 +810,31 @@ def optimize_adsorbate_slab_batched(
         )
 
     slab_for_frozen = base_slab_for_frozen if base_slab_for_frozen is not None else slab
-    frozen_indices = compute_frozen_indices(slab_for_frozen, config)
     slab_size = len(slab)
+    ref_len = len(slab_for_frozen)
+    if base_slab_for_frozen is not None and ref_len > slab_size:
+        logger.warning(
+            "base_slab_for_frozen has %d atoms but slab reference has %d; "
+            "frozen indices may not align with the substrate prefix",
+            ref_len,
+            slab_size,
+        )
+    frozen_indices = compute_frozen_indices(slab_for_frozen, config)
+    if frozen_indices and max(frozen_indices) >= ref_len:
+        logger.warning(
+            "Frozen index %d exceeds freeze reference length %d",
+            max(frozen_indices),
+            ref_len,
+        )
 
     if not saturation_reuse:
         clear_autobatcher_cache(max_n_atoms_threshold=slab_size)
 
     logger.info(
-        "Batched optimisation of %d systems (slab=%d atoms, frozen=%d)...",
+        "Batched optimisation of %d systems (slab=%d atoms, freeze_ref=%d, frozen=%d)...",
         len(combined_atoms_list),
         slab_size,
+        ref_len,
         len(frozen_indices),
     )
 

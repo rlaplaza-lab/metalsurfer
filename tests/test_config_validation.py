@@ -48,11 +48,45 @@ def test_ts_optimizer_custom():
     assert config.steps_between_swaps == 10
 
 
+def test_slab_relaxation_defaults():
+    config = AdsorptionConfig()
+    assert config.slab_relaxation_mode == "none"
+    assert config.slab_relaxation_optimizer == "lbfgs"
+    assert config.slab_relaxation_fmax is None
+    assert config.slab_relaxation_steps == 200
+
+
+@pytest.mark.parametrize("mode", ["none", "ionic_only", "cell_only", "full"])
+def test_slab_relaxation_mode_values(mode):
+    config = AdsorptionConfig(slab_relaxation_mode=mode)
+    assert config.slab_relaxation_mode == mode
+
+
+def test_slab_relaxation_custom_values():
+    config = AdsorptionConfig(
+        slab_relaxation_mode="full",
+        slab_relaxation_optimizer="bfgs",
+        slab_relaxation_fmax=0.02,
+        slab_relaxation_steps=123,
+    )
+    assert config.slab_relaxation_mode == "full"
+    assert config.slab_relaxation_optimizer == "bfgs"
+    assert config.slab_relaxation_fmax == 0.02
+    assert config.slab_relaxation_steps == 123
+
+
 @pytest.mark.parametrize(
     ("kwargs", "error_match"),
     [
         ({"ts_optimizer": "adam"}, "ts_optimizer"),
         ({"steps_between_swaps": -1}, "steps_between_swaps"),
+        ({"slab_relaxation_mode": "invalid"}, "slab_relaxation_mode"),
+        (
+            {"slab_relaxation_optimizer": "invalid"},
+            "slab_relaxation_optimizer",
+        ),
+        ({"slab_relaxation_fmax": 0.0}, "slab_relaxation_fmax"),
+        ({"slab_relaxation_steps": 0}, "slab_relaxation_steps"),
     ],
 )
 def test_optimizer_config_invalid_rejected(kwargs, error_match):

@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""Generate high-placement, non-BO saturation data for bipyridine on defected Au(111).
+"""Saturation screening for bipyridine on a defected Au(111) surface.
 
-Same workflow as ``examples/bipyridine_au111_defects_saturation_raw.py`` (for HPC batch jobs).
+Demonstrates:
+- ``prepare_slab`` with adatom defects and separate prep relax presets
+  (full clean-slab equilibration, ionic-only adatom deposition).
+- ``relax_top_layer=False`` so the post-prep substrate stays fixed during
+  TorchSim placement relaxation (compare trajectories to ``clean_slab_Au20_*``,
+  not ``clean_slab_*`` written before adatoms).
+- High-placement, non-BO saturation for benchmark datasets.
 
-Purpose:
-- Create an irregular Au(111) surface by depositing extra Au adatoms (defects).
-- Run saturation screening with BO disabled so each step is sampled without BO bias.
-- Write ``results_<surface>/`` per ``AdsorptionConfig`` (README, saturation) and flattened
-  ``adsorption_energies_detailed.csv`` for BO benchmarking.
+Requires: ``pip install -e ".[mlip]"`` and a CUDA-capable GPU for practical runtimes.
+
+Run from the project root::
+
+    python examples/bipyridine_au111_defects_saturation_raw.py
+
+The same workflow lives under ``scripts/`` for HPC batch submission.
 """
 
 import logging
@@ -39,7 +47,6 @@ def main():
         fmax=0.05,
         stage1_steps=80,
         stage2_steps=500,
-        # 3x3 Au(111) already satisfies min_pbc_image_separation; disable until needed.
         auto_resize_slab=False,
         min_pbc_image_separation=10.0,
         slab_relaxation_mode="full",
@@ -52,7 +59,6 @@ def main():
         save_benchmark_dataset=True,
     )
 
-    # Saturation freezes post-prep substrate (clean_slab_Au20_*), not clean_slab_* pre-adatoms.
     slab = prepare_slab(
         bulk_id="mp-81",
         miller_indices=(1, 1, 1),

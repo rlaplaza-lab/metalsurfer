@@ -201,10 +201,7 @@ def test_coordination_fingerprint_from_smiles_water():
 
 def test_coordination_fingerprint_from_smiles_ethanol():
     fp = _coordination_fingerprint_from_smiles("CCO")
-    # C1 has 4 neighbours (3H + C2), C2 has 3 (2H + C1 + ... wait)
-    # Actually CCO = C-C-O: C1(3H,C2)=4, C2(2H,C1,O)=4, O(C2,H)=2
-    # Wait, CCO = ethanol = CH3-CH2-OH
-    # C1 has degree 4 (3H + C2), C2 has degree 4 (2H + C1 + O), O has degree 2 (C2 + H)
+    # Ethanol (CCO): two carbons with degree 4, oxygen with degree 2.
     assert sorted(fp["C"]) == [4, 4]
     assert fp["O"] == [2]
     assert sorted(fp["H"]) == [1, 1, 1, 1, 1, 1]

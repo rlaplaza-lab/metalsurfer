@@ -11,22 +11,18 @@ Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, to
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 """
 
-from metalsurfer import AdsorptionConfig, create_slab_from_bulk, run_adsorption
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_results_saved_line
+from metalsurfer import (
+    AdsorptionConfig,
+    configure_logging,
+    prepare_slab,
+    run_adsorption,
+)
 
 
 def main():
     configure_logging(default_level="INFO")
     results_subdir = "tributylsilyl_pt111"
     results_dir = f"results_{results_subdir}"
-
-    slab = create_slab_from_bulk(
-        bulk_id="mp-126",
-        miller_indices=(1, 1, 1),
-        supercell=(1, 1, 1),
-        results_dir=results_dir,
-    )
 
     config = AdsorptionConfig(
         material_type="slab",
@@ -43,6 +39,14 @@ def main():
         skip_desorption_check=False,
         stage1_steps=50,
         stage2_steps=500,
+    )
+
+    slab = prepare_slab(
+        bulk_id="mp-126",
+        miller_indices=(1, 1, 1),
+        supercell=(1, 1, 1),
+        config=config,
+        results_dir=results_dir,
     )
 
     smiles = "[Si-](CCCC)(CCCC)CCCC"
@@ -66,7 +70,7 @@ def main():
             f"  Orientations: {summary.n_parallel}/{summary.n_valid_placements} parallel, "
             f"{summary.n_endown} EN-down"
         )
-        print(f"  {format_results_saved_line(results_dir)}")
+        print(f"  {campaign.format_results_saved_line(results_dir=results_dir)}")
     else:
         print("No valid placements found.")
 

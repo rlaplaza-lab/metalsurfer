@@ -115,7 +115,7 @@ class SymmetryAnalyzer:
         )
         try:
             self._dataset = spglib.get_symmetry_dataset(
-                cell_tuple,
+                cell_tuple,  # type: ignore[arg-type]
                 **self._spglib_kwargs(),
             )
         except spglib.SpglibError as exc:

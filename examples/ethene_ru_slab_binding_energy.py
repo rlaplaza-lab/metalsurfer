@@ -11,11 +11,10 @@ Uses modest settings for quick demonstration (similar to test suite).
 
 from metalsurfer import (
     AdsorptionConfig,
+    configure_logging,
     create_slab_from_bulk,
     run_adsorption,
 )
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_results_saved_line
 
 
 def main():
@@ -62,7 +61,9 @@ def main():
         print(
             f"  Relaxation: {total_steps} steps (stage1: {config.stage1_steps}, stage2: {config.stage2_steps})"
         )
-        print(f"  {format_results_saved_line('results_ethene_ru_slab')}")
+        print(
+            f"  {campaign.format_results_saved_line(results_dir='results_ethene_ru_slab')}"
+        )
     else:
         print("No valid placements found.")
 

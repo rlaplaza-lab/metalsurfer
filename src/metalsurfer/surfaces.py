@@ -3,9 +3,13 @@
 import logging
 import math
 import os
+from typing import Literal
 
 import numpy as np
 from ase import Atoms
+from ase.constraints import FixAtoms
+from ase.filters import UnitCellFilter
+from ase.optimize import BFGS, FIRE, LBFGS
 
 from .config import AdsorptionConfig
 from .exceptions import (
@@ -16,6 +20,8 @@ from .exceptions import (
 from .io_results import _write_clean_xyz
 
 logger = logging.getLogger(__name__)
+SLAB_RELAXATION_MODE = Literal["none", "ionic_only", "cell_only", "full"]
+SLAB_RELAXATION_OPTIMIZER = Literal["lbfgs", "bfgs", "fire"]
 
 
 def _import_chain(exc: BaseException | None) -> list[BaseException]:
@@ -98,6 +104,12 @@ def create_slab_from_bulk(
     miller_indices: tuple = (0, 0, 1),
     supercell: tuple = (2, 2, 1),
     results_dir: str = "results",
+    calculator=None,
+    config: AdsorptionConfig | None = None,
+    relaxation_mode: SLAB_RELAXATION_MODE | None = None,
+    relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER | None = None,
+    relaxation_fmax: float | None = None,
+    relaxation_steps: int | None = None,
 ) -> SlabContainer:
     """Create a surface slab from a Materials Project bulk entry.
 
@@ -111,6 +123,18 @@ def create_slab_from_bulk(
         Repeat factors applied after slab generation.
     results_dir:
         Directory where reference POSCAR / XYZ files are saved.
+    calculator:
+        Optional calculator used when slab relaxation is requested.
+    config:
+        Optional adsorption config. Used for relaxation defaults.
+    relaxation_mode:
+        One of ``"none"``, ``"ionic_only"``, ``"cell_only"``, or ``"full"``.
+    relaxation_optimizer:
+        One of ``"lbfgs"``, ``"bfgs"``, or ``"fire"``.
+    relaxation_fmax:
+        Force convergence threshold for slab relaxation.
+    relaxation_steps:
+        Maximum optimisation steps for slab relaxation.
     """
     try:
         from fairchem.data.oc.core import Bulk, Slab
@@ -147,6 +171,30 @@ def create_slab_from_bulk(
         len(slab.atoms),
         slab.atoms.cell.lengths(),
     )
+    mode, opt_name, fmax, steps = _resolve_slab_relaxation_settings(
+        config,
+        relaxation_mode=relaxation_mode,
+        relaxation_optimizer=relaxation_optimizer,
+        relaxation_fmax=relaxation_fmax,
+        relaxation_steps=relaxation_steps,
+    )
+    if mode != "none":
+        logger.info(
+            "Relaxing clean slab with mode=%s, optimizer=%s, fmax=%.4f, steps=%d",
+            mode,
+            opt_name,
+            fmax,
+            steps,
+        )
+        slab.atoms = _relax_slab_structure(
+            slab.atoms,
+            calculator,
+            mode=mode,
+            optimizer_name=opt_name,
+            fmax=fmax,
+            steps=steps,
+            context="create_slab_from_bulk",
+        )
 
     os.makedirs(results_dir, exist_ok=True)
     _write_clean_xyz(slab.atoms, f"{results_dir}/clean_slab.xyz")
@@ -180,6 +228,85 @@ def _evaluate_variant_energy(variant: Atoms, calculator, context: str = "") -> f
         if context:
             logger.warning("%s failed: %s", context, exc)
         return float("inf")
+
+
+def _resolve_slab_relaxation_settings(
+    config: AdsorptionConfig | None,
+    *,
+    relaxation_mode: SLAB_RELAXATION_MODE | None = None,
+    relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER | None = None,
+    relaxation_fmax: float | None = None,
+    relaxation_steps: int | None = None,
+) -> tuple[SLAB_RELAXATION_MODE, SLAB_RELAXATION_OPTIMIZER, float, int]:
+    """Resolve per-call slab relaxation settings with config fallbacks."""
+    resolved_config = config if config is not None else AdsorptionConfig()
+    mode = (
+        relaxation_mode
+        if relaxation_mode is not None
+        else resolved_config.slab_relaxation_mode
+    )
+    optimizer = (
+        relaxation_optimizer
+        if relaxation_optimizer is not None
+        else resolved_config.slab_relaxation_optimizer
+    )
+    fmax = (
+        relaxation_fmax
+        if relaxation_fmax is not None
+        else resolved_config.slab_relaxation_fmax
+    )
+    if fmax is None:
+        fmax = resolved_config.fmax
+    steps = (
+        relaxation_steps
+        if relaxation_steps is not None
+        else resolved_config.slab_relaxation_steps
+    )
+    return mode, optimizer, fmax, steps
+
+
+def _relax_slab_structure(
+    atoms: Atoms,
+    calculator,
+    *,
+    mode: SLAB_RELAXATION_MODE,
+    optimizer_name: SLAB_RELAXATION_OPTIMIZER,
+    fmax: float,
+    steps: int,
+    context: str = "slab",
+) -> Atoms:
+    """Relax a slab using the selected mode and optimizer preset."""
+    if mode == "none":
+        return atoms
+    if calculator is None:
+        raise ValueError(
+            f"{context} relaxation mode={mode!r} requires a calculator, got None"
+        )
+
+    optimizer_map = {"lbfgs": LBFGS, "bfgs": BFGS, "fire": FIRE}
+    opt_cls = optimizer_map[optimizer_name]
+    relaxed = atoms.copy()
+    relaxed.calc = calculator
+
+    if mode == "ionic_only":
+        dyn = opt_cls(relaxed, logfile=None)
+    elif mode == "cell_only":
+        relaxed.set_constraint(FixAtoms(indices=list(range(len(relaxed)))))
+        dyn = opt_cls(UnitCellFilter(relaxed), logfile=None)
+    else:  # mode == "full"
+        dyn = opt_cls(UnitCellFilter(relaxed), logfile=None)
+
+    try:
+        dyn.run(fmax=fmax, steps=steps)
+    except (RuntimeError, ValueError) as exc:
+        raise OptimizationError(
+            f"{context} relaxation failed in mode={mode!r}: {exc}"
+        ) from exc
+    finally:
+        # Keep downstream workflow behaviour unchanged by stripping prep constraints.
+        relaxed.set_constraint()
+
+    return relaxed
 
 
 def substitute_alloy(
@@ -337,11 +464,9 @@ def substitute_alloy(
 
     if relax and calculator is not None:
         try:
-            from ase.optimize import LBFGS
-
             logger.info("Relaxing alloy slab geometry...")
             best_atoms.calc = calculator
-            dyn = LBFGS(best_atoms, logfile=None)
+            dyn = LBFGS(best_atoms, logfile="-")
             dyn.run(fmax=config.fmax)
             logger.info(
                 "Post-relax slab energy: %.4f eV",
@@ -379,15 +504,28 @@ def deposit_adatoms(
     seed: int | None = None,
     results_dir: str = "results",
     config: AdsorptionConfig | None = None,
+    relaxation_mode: SLAB_RELAXATION_MODE | None = None,
+    relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER | None = None,
+    relaxation_fmax: float | None = None,
+    relaxation_steps: int | None = None,
 ) -> SlabContainer:
     """Place *adatom_symbol* atoms at hollow sites above the top layer.
 
     Uses Delaunay triangulation of the top-layer xy coordinates to
     identify candidate hollow sites.  *coverage_fraction* of the
     available sites are filled.  The lowest-energy variant is kept.
+    Optional relaxation presets can be applied to each generated
+    adatom variant before energy ranking.
     """
     if config is None:
         config = AdsorptionConfig()
+    mode, opt_name, fmax, steps = _resolve_slab_relaxation_settings(
+        config,
+        relaxation_mode=relaxation_mode,
+        relaxation_optimizer=relaxation_optimizer,
+        relaxation_fmax=relaxation_fmax,
+        relaxation_steps=relaxation_steps,
+    )
 
     slab = coerce_slab_container(slab)
 
@@ -399,6 +537,10 @@ def deposit_adatoms(
     if coverage_fraction == 0.0:
         logger.info("coverage_fraction=0; returning unmodified slab")
         return SlabContainer(slab.atoms.copy())
+    if mode != "none" and calculator is None:
+        raise ValueError(
+            f"deposit_adatoms relaxation mode={mode!r} requires a calculator"
+        )
 
     if seed is None:
         seed = config.seed
@@ -453,12 +595,23 @@ def deposit_adatoms(
         variant += adatoms
 
         if calculator is not None:
+            candidate = variant
+            if mode != "none":
+                candidate = _relax_slab_structure(
+                    variant,
+                    calculator,
+                    mode=mode,
+                    optimizer_name=opt_name,
+                    fmax=fmax,
+                    steps=steps,
+                    context=f"deposit_adatoms variant {v}",
+                )
             energy = _evaluate_variant_energy(
-                variant, calculator, context=f"Adatom variant {v}"
+                candidate, calculator, context=f"Adatom variant {v}"
             )
             if energy < best_energy:
                 best_energy = energy
-                best_atoms = variant.copy()
+                best_atoms = candidate.copy()
         elif best_atoms is None:
             best_atoms = variant.copy()
 

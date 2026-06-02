@@ -42,6 +42,9 @@ dev = [
     "pytest-cov",
     "coverage",
     "ruff",
+    "mypy",
+    "pandas-stubs",
+    "scipy-stubs",
 ]
 docs = [
     "sphinx>=7.0",
@@ -50,11 +53,25 @@ docs = [
     "sphinx-copybutton",
 ]
 
-[project.scripts]
-metalsurfer = "metalsurfer.cli.cli:main"
-
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+metalsurfer = ["py.typed"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["fairchem.*", "torch_sim.*", "torch.*", "sklearn.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["metalsurfer.placement.sites"]
+disable_error_code = ["misc", "has-type", "union-attr", "arg-type", "attr-defined"]
 
 [tool.ruff]
 target-version = "py312"
@@ -69,8 +86,18 @@ select = [
     "B",    # bugbear
     "UP",   # pyupgrade
     "SIM",  # simplify
+    "ERA",  # commented-out code
+    "RET",  # unnecessary return / else
+    "RUF100",  # stale noqa
+    "FURB105",  # print("") -> print()
+    "PGH003",  # blanket type: ignore
 ]
 ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**/*.py" = ["T201", "EXE001"]
+"examples/**/*.py" = ["T201", "EXE001"]
+"tests/**/*.py" = ["S101"]
 
 [tool.ruff.format]
 quote-style = "double"

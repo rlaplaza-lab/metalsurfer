@@ -53,6 +53,13 @@ BO_SURROGATE_OPTIONS: tuple[str, ...] = (
     "ridge",
 )
 TS_OPTIMIZER_OPTIONS: tuple[str, ...] = ("fire", "lbfgs", "bfgs")
+SLAB_RELAXATION_MODE_OPTIONS: tuple[str, ...] = (
+    "none",
+    "ionic_only",
+    "cell_only",
+    "full",
+)
+SLAB_RELAXATION_OPTIMIZER_OPTIONS: tuple[str, ...] = ("lbfgs", "bfgs", "fire")
 
 
 @dataclass
@@ -201,6 +208,16 @@ class AdsorptionConfig:
     multi_molecule_saturation: bool = (
         False  # Enable multi-molecule saturation calculations
     )
+    # When True, saturation I/O writes every validated placement per step under
+    # step_{NNN}_placements/ (plus saturation_placements_detailed.csv). Disable
+    # on very large placement counts to save disk.
+    saturation_save_all_placements: bool = True
+    # When True, also write adsorption_energies_detailed.csv by flattening all
+    # saturation-step placements into screening-style rows (for BO benchmarking).
+    save_benchmark_dataset: bool = False
+    # Before advancing to the next saturation step, discard candidates whose full
+    # adsorbate pool shows rearrangement (e.g. adsorbate-adsorbate coupling).
+    saturation_discard_topology_rearrangements: bool = True
     skip_topology_check: bool = False  # Skip molecular topology validation checks
     skip_desorption_check: bool = False  # Skip post-optimization desorption validation
 
@@ -226,6 +243,11 @@ class AdsorptionConfig:
     )
     ts_optimizer: Literal["fire", "lbfgs", "bfgs"] = "fire"  # TorchSim optimizer
     steps_between_swaps: int = 5  # Number of steps between optimizer swaps
+    # Slab-preparation relaxation (used by create_slab_from_bulk/deposit_adatoms)
+    slab_relaxation_mode: Literal["none", "ionic_only", "cell_only", "full"] = "none"
+    slab_relaxation_optimizer: Literal["lbfgs", "bfgs", "fire"] = "lbfgs"
+    slab_relaxation_fmax: float | None = None  # defaults to fmax when unset
+    slab_relaxation_steps: int = 200
 
     # TorchSim autobatcher tuning (helps avoid CUDA OOM)
     autobatcher_max_memory_padding: float = (
@@ -309,8 +331,8 @@ class AdsorptionConfig:
                 self.saturation_autobatcher_reuse_growth_atoms,
             ),
         )
-        for field_name, field_value in positive_int_fields:
-            _check_positive_int(field_name, field_value)
+        for int_name, int_value in positive_int_fields:
+            _check_positive_int(int_name, int_value)
 
         # Placement retry validation
         if self.placement_retry_enabled:
@@ -322,7 +344,7 @@ class AdsorptionConfig:
                 self.placement_retry_diversity_seed_increment,
             )
 
-        positive_fields = (
+        positive_fields: list[tuple[str, float]] = [
             ("fmax", self.fmax),
             ("min_initial_distance", self.min_initial_distance),
             ("top_layer_tolerance", self.top_layer_tolerance),
@@ -336,28 +358,28 @@ class AdsorptionConfig:
             ("max_adsorption_energy", self.max_adsorption_energy),
             ("vacuum_box_size", self.vacuum_box_size),
             ("boltzmann_temperature", self.boltzmann_temperature),
-        )
+        ]
         if self.auto_resize_slab:
-            positive_fields += (
-                ("min_pbc_image_separation", self.min_pbc_image_separation),
+            positive_fields.append(
+                ("min_pbc_image_separation", self.min_pbc_image_separation)
             )
-        for field_name, field_value in positive_fields:
-            _check_positive(field_name, field_value)
+        for pos_name, pos_value in positive_fields:
+            _check_positive(pos_name, pos_value)
 
-        non_negative_fields = (
+        non_negative_fields: list[tuple[str, float]] = [
             ("energy_dedup_threshold", self.energy_dedup_threshold),
             ("rmsd_dedup_threshold", self.rmsd_dedup_threshold),
-        )
-        for field_name, field_value in non_negative_fields:
-            _check_non_negative(field_name, field_value)
+        ]
+        for nn_name, nn_value in non_negative_fields:
+            _check_non_negative(nn_name, nn_value)
 
-        range_fields = (
+        range_fields: list[tuple[str, tuple[float, float]]] = [
             ("placement_x_range", self.placement_x_range),
             ("placement_y_range", self.placement_y_range),
             ("placement_z_range", self.placement_z_range),
-        )
-        for field_name, field_value in range_fields:
-            _check_range_tuple(field_name, field_value)
+        ]
+        for range_name, range_value in range_fields:
+            _check_range_tuple(range_name, range_value)
 
         if not 0.5 <= self.min_contact_ratio <= 1.2:
             raise ValueError(
@@ -471,16 +493,16 @@ class AdsorptionConfig:
                     "bo_failure_penalty_overrides must be a dict[str, float], "
                     f"got {type(self.bo_failure_penalty_overrides).__name__}"
                 )
-            for key, value in self.bo_failure_penalty_overrides.items():
-                if not isinstance(key, str) or not key:
+            for penalty_key, penalty_value in self.bo_failure_penalty_overrides.items():
+                if not isinstance(penalty_key, str) or not penalty_key:
                     raise ValueError(
                         "bo_failure_penalty_overrides keys must be non-empty strings, "
-                        f"got {key!r}"
+                        f"got {penalty_key!r}"
                     )
-                if not isfinite(value) or value < 0:
+                if not isfinite(penalty_value) or penalty_value < 0:
                     raise ValueError(
                         "bo_failure_penalty_overrides values must be finite non-negative, "
-                        f"got {value!r} for key {key!r}"
+                        f"got {penalty_value!r} for key {penalty_key!r}"
                     )
             _check_positive_int(
                 "bo_transfer_min_step_observations",
@@ -526,6 +548,19 @@ class AdsorptionConfig:
                     f"got {self.bo_transfer_exploration_fraction!r}"
                 )
         _check_choice("ts_optimizer", self.ts_optimizer, allowed=TS_OPTIMIZER_OPTIONS)
+        _check_choice(
+            "slab_relaxation_mode",
+            self.slab_relaxation_mode,
+            allowed=SLAB_RELAXATION_MODE_OPTIONS,
+        )
+        _check_choice(
+            "slab_relaxation_optimizer",
+            self.slab_relaxation_optimizer,
+            allowed=SLAB_RELAXATION_OPTIMIZER_OPTIONS,
+        )
+        _check_positive_int("slab_relaxation_steps", self.slab_relaxation_steps)
+        if self.slab_relaxation_fmax is not None:
+            _check_positive("slab_relaxation_fmax", self.slab_relaxation_fmax)
         if not 0.1 <= self.autobatcher_max_memory_padding <= 1.0:
             raise ValueError(
                 f"autobatcher_max_memory_padding must be in [0.1, 1.0], got {self.autobatcher_max_memory_padding}"

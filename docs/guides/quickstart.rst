@@ -18,6 +18,8 @@ For TorchSim/FairChem-backed relaxation and the developer toolchain:
 
    pip install -e ".[mlip,dev]"
 
+See :doc:`development` for linting, type checking, and CI parity.
+
 To also install the documentation build dependencies:
 
 .. code-block:: bash
@@ -34,7 +36,7 @@ molecule list in memory and you want a typed
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, create_slab_from_bulk, run_adsorption
+   from metalsurfer import AdsorptionConfig, prepare_slab, run_adsorption
 
    config = AdsorptionConfig(
        material_type="slab",
@@ -43,9 +45,11 @@ molecule list in memory and you want a typed
        num_placements=80,
    )
 
-   slab = create_slab_from_bulk(
+   slab = prepare_slab(
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
+       config=config,
+       results_dir="results_Ru001",
    )
 
    molecules = [
@@ -104,7 +108,7 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, create_slab_from_bulk, run_adsorption_bo
+   from metalsurfer import AdsorptionConfig, prepare_slab, run_adsorption_bo
 
    config = AdsorptionConfig(
        material_type="slab",
@@ -117,7 +121,12 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
        bo_surrogate="random_forest",
    )
 
-   slab = create_slab_from_bulk(bulk_id="mp-33", miller_indices=(0, 0, 1))
+   slab = prepare_slab(
+       bulk_id="mp-33",
+       miller_indices=(0, 0, 1),
+       config=config,
+       results_dir="results_Ru001_bo",
+   )
 
    result = run_adsorption_bo(
        slab=slab,
@@ -144,7 +153,7 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, create_slab_from_bulk, run_saturation
+   from metalsurfer import AdsorptionConfig, prepare_slab, run_saturation
 
    config = AdsorptionConfig(
        material_type="slab",
@@ -153,22 +162,47 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
        num_placements=60,
    )
 
-   slab = create_slab_from_bulk(bulk_id="mp-33", miller_indices=(0, 0, 1))
+   slab = prepare_slab(
+       bulk_id="mp-33",
+       miller_indices=(0, 0, 1),
+       config=config,
+       results_dir="results_Ru001_sat",
+   )
 
-   saturation_results = run_saturation(
+   campaign = run_saturation(
        slab=slab,
        molecules="molecules.csv",
        config=config,
        surface_type="Ru001_sat",
    )
 
-   for result in saturation_results:
+   for result in campaign.runs:
        print(result.molecule, result.n_molecules_at_saturation)
+
+``molecules`` accepts either an in-memory ``(smiles, name)`` list or a CSV path.
 
 Important saturation behaviors:
 
-- Auto-resize is only allowed on the first adsorption step.
+- **Prep vs adsorption relaxation:** ``slab_relaxation_mode`` applies during
+  :func:`~metalsurfer.prepare_slab`` (ASE). Placement relaxation uses
+  ``relax_top_layer`` and ``base_slab_for_frozen`` (TorchSim ``FixAtoms``).
+  With ``relax_top_layer=False``, indices ``0 .. len(base_slab)-1`` stay fixed;
+  earlier adsorbate units on the evolving slab may still relax in later steps.
+  When adatoms are deposited, compare structures to the post-adatom reference
+  (e.g. ``clean_slab_Au20``), not ``clean_slab`` from before deposition.
+- Auto-resize is only allowed on the first adsorption step; if the substrate
+  is repeated in-plane, the freeze reference is updated to the full resized slab.
 - When ``bo_enabled=True``, the saturation loop can reuse prior-step BO
   observations through the ``bo_transfer_*`` settings.
-- When ``multi_molecule_saturation=True`` and the CSV contains multiple
-  molecules, the workflow switches to competitive saturation.
+- When ``multi_molecule_saturation=True`` and multiple molecules are provided
+  (in-memory list or CSV), the workflow switches to competitive saturation.
+- By default, ``saturation_discard_topology_rearrangements=True`` validates the
+  full adsorbate pool on each step candidate using a connectivity-only
+  fragment-count check before choosing the best slab for the next step, so
+  inter-adsorbate coupling or unexpected splitting is not propagated. Set
+  ``False`` to rank by ``E_ads`` only; the guard is skipped when
+  ``skip_topology_check=True``.
+
+A full defected-surface saturation example (fixed substrate, adatom prep) lives
+under ``examples/bipyridine_au111_defects_saturation_raw.py``; see also
+:doc:`surface_engineering`.

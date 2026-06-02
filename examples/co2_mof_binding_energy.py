@@ -15,23 +15,22 @@ Uses RUBTAK01 MOF structure from:
 https://github.com/bafgreat/mofstructure/blob/main/tests/test_data/RUBTAK01.cif
 """
 
+import os
+
+from ase.io import read
+
 from metalsurfer import (
     AdsorptionConfig,
+    configure_logging,
     create_slab_from_atoms,
     run_adsorption,
 )
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_results_saved_line
 
 
 def main():
     configure_logging(default_level="INFO")
 
     # Load MOF structure from CIF file
-    import os
-
-    from ase.io import read
-
     # Path to the CIF file in the examples directory
     cif_path = os.path.join(os.path.dirname(__file__), "mof_structures", "RUBTAK01.cif")
 
@@ -88,7 +87,7 @@ def main():
         print(
             f"  Relaxation: {total_steps} steps (stage1: {config.stage1_steps}, stage2: {config.stage2_steps})"
         )
-        print(f"  {format_results_saved_line('results_co2_mof')}")
+        print(f"  {campaign.format_results_saved_line(results_dir='results_co2_mof')}")
     else:
         print("No valid placements found.")
 

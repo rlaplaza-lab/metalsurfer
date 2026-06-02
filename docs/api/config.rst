@@ -33,3 +33,8 @@ Key Attributes
    "voronoi_site_enrichment", "bool", "True", "Enable geodesic ridge subdivision for denser sites"
    "site_classification_method", "Literal['distance_ratio', 'delaunay']", "'distance_ratio'", "Method for classifying adsorption sites ('distance_ratio' or 'delaunay')"
    "conformer_sampling", "Literal['boltzmann', 'cycle', 'mixed']", "'cycle'", "Method for conformer sampling ('boltzmann', 'cycle', or 'mixed')"
+   "relax_top_layer", "bool", "True", "If True, only non-top-layer slab atoms are frozen during placement relaxation; if False, the entire freeze reference is fixed"
+   "slab_relaxation_mode", "Literal['none', 'ionic_only', 'cell_only', 'full']", "'none'", "ASE relaxation during slab prep (``create_slab_from_bulk``, ``deposit_adatoms``); not used during TorchSim placement relaxation"
+   "slab_relaxation_optimizer", "Literal['lbfgs', 'bfgs', 'fire']", "'lbfgs'", "Optimizer for prep-time slab relaxation"
+   "slab_relaxation_steps", "int", "250", "Maximum ASE steps for prep-time slab relaxation"
+   "auto_resize_slab", "bool", "True", "Repeat substrate in-plane on saturation step 1 when needed for PBC image separation"

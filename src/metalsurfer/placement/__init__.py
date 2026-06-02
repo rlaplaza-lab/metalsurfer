@@ -87,12 +87,11 @@ def _get_site_surface_radii(
     symbols = slab.get_chemical_symbols()
     cell = np.asarray(slab.get_cell(), dtype=float)
 
+    indices: tuple[int, ...] | None = None
     if site is not None and "slab_indices" in site:
-        indices = site["slab_indices"]
-        if not indices:
-            indices = None
-    else:
-        indices = None
+        raw_indices = site["slab_indices"]
+        if isinstance(raw_indices, (list, tuple)) and raw_indices:
+            indices = tuple(int(i) for i in raw_indices)
 
     if indices is None:
         top_depth = _derive_top_layer_tolerance(positions, symbols)
@@ -101,8 +100,9 @@ def _get_site_surface_radii(
         top_mask = _top_layer_mask_by_normal(positions, cell, float(top_depth))
         indices = tuple(int(i) for i in np.nonzero(top_mask)[0])
 
-    radii = [_get_covalent_radius(symbols[int(i)]) for i in indices]
-    radii = [r for r in radii if r is not None]
+    radii = [
+        r for i in indices if (r := _get_covalent_radius(symbols[int(i)])) is not None
+    ]
     if not radii:
         return None
     return float(np.mean(radii))
@@ -125,7 +125,10 @@ def _compute_site_z_base(
         and site.get("nn_distance") is not None
         and str(site.get("site_type", "")) != "pore"
     ):
-        nn = float(site["nn_distance"])
+        nn_val = site["nn_distance"]
+        if not isinstance(nn_val, (int, float)):
+            return z_lo, z_hi
+        nn = float(nn_val)
         nn_lo = nn * _NON_SLAB_Z_LO_FROM_NN_SCALE
         nn_hi = nn * _NON_SLAB_Z_HI_FROM_NN_SCALE
         if nn_hi - nn_lo < z_hi - z_lo:
@@ -137,8 +140,7 @@ def _compute_site_z_base(
         return z_lo, z_hi
 
     r_surface = _get_site_surface_radii(slab, site)
-    mol_radii = [_get_covalent_radius(s) for s in mol_symbols]
-    mol_radii = [r for r in mol_radii if r is not None]
+    mol_radii = [r for s in mol_symbols if (r := _get_covalent_radius(s)) is not None]
     r_mol = float(np.mean(mol_radii)) if mol_radii else _MOL_COVALENT_RADIUS_FALLBACK
 
     if r_surface is None:

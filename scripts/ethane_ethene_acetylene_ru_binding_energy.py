@@ -7,12 +7,14 @@ Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, to
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 """
 
-from metalsurfer import AdsorptionConfig, run_adsorption
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_screening_complete
-from metalsurfer.surface_prep import create_slab_from_bulk
+from metalsurfer import (
+    AdsorptionConfig,
+    configure_logging,
+    prepare_slab,
+    run_adsorption,
+)
 
-# (SMILES, molecule_name)
+# List of smiles and molecule name pairs
 MOLECULES = [
     ("CC", "ethane"),
     ("C=C", "ethene"),
@@ -24,14 +26,6 @@ def main():
     configure_logging(default_level="INFO")
     results_subdir = "ethane_ethene_acetylene_ru"
     results_dir = f"results_{results_subdir}"
-
-    # Create Ru(0001) slab from Materials Project mp-33.
-    slab = create_slab_from_bulk(
-        bulk_id="mp-33",
-        miller_indices=(0, 0, 1),
-        supercell=(1, 1, 1),
-        results_dir=results_dir,
-    )
 
     config = AdsorptionConfig(
         material_type="slab",
@@ -48,6 +42,15 @@ def main():
         debug_write_initial_placements=True,
     )
 
+    # Create Ru(0001) slab from Materials Project mp-33.
+    slab = prepare_slab(
+        bulk_id="mp-33",
+        miller_indices=(0, 0, 1),
+        supercell=(1, 1, 1),
+        config=config,
+        results_dir=results_dir,
+    )
+
     campaign = run_adsorption(
         slab=slab,
         molecules=MOLECULES,
@@ -55,7 +58,7 @@ def main():
         surface_type=results_subdir,
         system_name="Ru_0001",
     )
-    print(format_screening_complete(campaign.total_configurations))
+    print(campaign.format_screening_complete())
 
 
 if __name__ == "__main__":

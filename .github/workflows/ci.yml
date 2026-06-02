@@ -7,7 +7,7 @@ on:
 
 jobs:
   # -----------------------------------------------------------------------
-  # Lint (ruff check + format)
+  # Quality: ruff (lint + format) and mypy (src/metalsurfer)
   # -----------------------------------------------------------------------
   lint:
     runs-on: ubuntu-latest
@@ -17,11 +17,20 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install ruff
-        run: pip install ruff
+      - name: Install package and dev tools
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
 
-      - name: Lint
+      - name: Ruff lint and format
         run: ruff check . && ruff format --check .
+
+      - name: Mypy typecheck
+        run: mypy src/metalsurfer
+
+  # -----------------------------------------------------------------------
+  # Unit tests (coverage gate) + dependency-behavior + integration
+  # -----------------------------------------------------------------------
 
   # -----------------------------------------------------------------------
   # Unit + integration tests with full optional dependencies

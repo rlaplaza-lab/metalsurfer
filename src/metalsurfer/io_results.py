@@ -3,10 +3,11 @@
 import json
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 from ase import Atoms
@@ -15,7 +16,6 @@ from .config import AdsorptionConfig
 from .ml.schema import SCHEMA_VERSION, config_to_context_row
 from .models import (
     MultiMolSaturationRunResult,
-    PlacementDescriptor,
     SaturationRunResult,
     ScreeningResult,
     ScreeningRunResult,
@@ -56,41 +56,6 @@ def _write_run_metadata_file(results_dir: Path, metadata: dict[str, Any]) -> Pat
     return path
 
 
-def _placement_descriptor_to_row(d: PlacementDescriptor) -> dict[str, Any]:
-    """Convert PlacementDescriptor fields to a dict for CSV row."""
-    x_abs = d.x_abs if d.x_abs is not None else d.x
-    y_abs = d.y_abs if d.y_abs is not None else d.y
-    z_offset = d.z_offset
-    surface_ref_z_abs = d.surface_ref_z_abs if d.surface_ref_z_abs is not None else 0.0
-    z_abs = d.z_abs if d.z_abs is not None else surface_ref_z_abs + z_offset
-    row: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
-        "conformer_index": d.conformer_index,
-        "orientation_type": d.orientation_type,
-        "face_flip": d.face_flip,
-        "en_atom_index": d.en_atom_index,
-        "site_index": d.site_index,
-        "site_type": d.site_type,
-        "tilt_deg": d.tilt_deg,
-        "azimuth_deg": d.azimuth_deg,
-        "azimuth_in_plane_deg": d.azimuth_in_plane_deg,
-        "x_abs": x_abs,
-        "y_abs": y_abs,
-        "z_offset": z_offset,
-        "surface_ref_z_abs": surface_ref_z_abs,
-        "z_abs": z_abs,
-        "shape": d.shape,
-        "placement_mode_resolved": d.placement_mode_resolved,
-        "site_source": d.site_source,
-        "site_reference_frame": d.site_reference_frame,
-        "site_xy_frac_a": d.site_xy_frac_a,
-        "site_xy_frac_b": d.site_xy_frac_b,
-    }
-    if d.slab_indices is not None:
-        row["slab_indices"] = ",".join(str(i) for i in d.slab_indices)
-    return row
-
-
 def write_run_settings(
     surface_type: str,
     config: AdsorptionConfig,
@@ -121,6 +86,45 @@ def setup_directories(surface_types: list[str] | None = None) -> None:
             os.makedirs(f"results_{st}{sub}", exist_ok=True)
 
 
+def _write_placement_artifacts(
+    entry: ScreeningResult,
+    *,
+    xyz_dir: Path | str,
+    adsorbate_xyz_dir: Path | str,
+    vasp_parent: Path | str,
+    molecule_name: str,
+    system_name: str | None,
+    config: AdsorptionConfig,
+    log_save: bool = True,
+) -> None:
+    """Write full-slab XYZ, adsorbate-only XYZ, and VASP inputs for one placement."""
+    pid = entry.placement_id
+    xyz_base = Path(xyz_dir)
+    ads_base = Path(adsorbate_xyz_dir)
+    vasp_base = Path(vasp_parent)
+    xyz_file = xyz_base / f"conformer_{pid:03d}.xyz"
+    adsorbate_xyz_file = ads_base / f"conformer_{pid:03d}_adsorbate.xyz"
+    vasp_subdir = vasp_base / f"conformer_{pid:03d}"
+    _write_clean_xyz(entry.atoms, str(xyz_file))
+    adsorbate_atoms = entry.atoms[entry.slab_size :].copy()
+    _write_clean_xyz(adsorbate_atoms, str(adsorbate_xyz_file))
+    _write_vasp_inputs(
+        entry.atoms,
+        str(vasp_subdir),
+        molecule_name,
+        system_name=system_name,
+        config=config,
+    )
+    if log_save:
+        logger.info(
+            "  Saved placement %d: E_ads = %.4f eV -> %s (adsorbate: %s)",
+            pid,
+            entry.energy_adsorption,
+            xyz_file,
+            adsorbate_xyz_file,
+        )
+
+
 def save_molecule_results(
     molecule_name: str,
     results: list[ScreeningResult],
@@ -141,29 +145,15 @@ def save_molecule_results(
     os.makedirs(mol_xyz_dir, exist_ok=True)
 
     for entry in results:
-        pid = entry.placement_id
-
-        xyz_file = xyz_dir / f"conformer_{pid:03d}.xyz"
-        _write_clean_xyz(entry.atoms, str(xyz_file))
-        adsorbate_xyz_file = mol_xyz_dir / f"conformer_{pid:03d}_adsorbate.xyz"
-        adsorbate_atoms = entry.atoms[entry.slab_size :].copy()
-        _write_clean_xyz(adsorbate_atoms, str(adsorbate_xyz_file))
-
-        vasp_subdir = vasp_dir / f"conformer_{pid:03d}"
-        _write_vasp_inputs(
-            entry.atoms,
-            str(vasp_subdir),
-            molecule_name,
+        _write_placement_artifacts(
+            entry,
+            xyz_dir=xyz_dir,
+            adsorbate_xyz_dir=mol_xyz_dir,
+            vasp_parent=vasp_dir,
+            molecule_name=molecule_name,
             system_name=system_name,
             config=config,
-        )
-
-        logger.info(
-            "  Saved placement %d: E_ads = %.4f eV -> %s (adsorbate: %s)",
-            pid,
-            entry.energy_adsorption,
-            xyz_file,
-            adsorbate_xyz_file,
+            log_save=True,
         )
 
 
@@ -236,24 +226,8 @@ def save_summary_results(
     context_row = config_to_context_row(config) if config else {}
     all_rows: list[dict[str, Any]] = []
     for rr in run_results:
-        xyz_dir = results_dir / "xyz_structures" / f"{rr.molecule}_all"
-        vasp_dir = results_dir / "vasp_inputs" / f"{rr.molecule}_all"
-        for sr in rr.results:
-            pid = sr.placement_id
-            row: dict[str, Any] = {
-                "molecule": sr.molecule,
-                "placement_id": pid,
-                "energy_adslab": sr.energy_adslab,
-                "energy_slab": sr.energy_slab,
-                "energy_adsorbate": sr.energy_adsorbate,
-                "energy_adsorption": sr.energy_adsorption,
-                "distance": sr.distance,
-                "xyz_path": str(xyz_dir / f"conformer_{pid:03d}.xyz"),
-                "poscar_path": str(vasp_dir / f"conformer_{pid:03d}" / "POSCAR"),
-            }
-            row.update(_placement_descriptor_to_row(sr.placement_descriptor))
-            if context_row:
-                row.update(context_row)
+        for row in rr.to_rows(results_dir=results_dir, context_row=context_row):
+            row["schema_version"] = SCHEMA_VERSION
             all_rows.append(row)
     if not all_rows:
         logger.warning("No results to save")
@@ -266,21 +240,9 @@ def save_summary_results(
 
     summary_rows: list[dict[str, Any]] = []
     for rr in run_results:
-        if rr.summary is not None:
-            s = rr.summary
-            summary_rows.append(
-                {
-                    "molecule": s.molecule,
-                    "n_configurations": s.n_configurations,
-                    "E_ads_min": s.e_ads_min,
-                    "E_ads_max": s.e_ads_max,
-                    "E_ads_mean": s.e_ads_mean,
-                    "E_ads_std": s.e_ads_std,
-                    "E_ads_median": s.e_ads_median,
-                    "best_placement_id": s.best_placement_id,
-                    "E_ads_best": s.e_ads_best,
-                }
-            )
+        summary_row = rr.to_summary_row()
+        if summary_row is not None:
+            summary_rows.append(summary_row)
 
     if summary_rows:
         sdf = pd.DataFrame(summary_rows)
@@ -290,11 +252,20 @@ def save_summary_results(
 
 
 def save_saturation_results(
-    saturation_results: list[SaturationRunResult],
+    saturation_results: Sequence[SaturationRunResult | MultiMolSaturationRunResult],
     surface_type: str = "manual",
     config: AdsorptionConfig | None = None,
 ) -> None:
-    """Write saturation CSV summaries and per-step structures."""
+    """Write saturation CSV summaries and per-step structures.
+
+    When the first entry is a :class:`MultiMolSaturationRunResult`, delegates to
+    :func:`save_multi_mol_saturation_results` (only the first element is saved).
+
+    If ``config.saturation_save_all_placements`` is true (default), also writes
+    ``saturation_placements_detailed.csv`` and, for each step, every structure in
+    ``all_results`` under ``step_{NNN}_placements/`` (mirroring screening
+    ``conformer_*`` layout). The per-step best-slab files are always written.
+    """
     if config is None:
         config = AdsorptionConfig()
 
@@ -302,55 +273,68 @@ def save_saturation_results(
         logger.warning("No saturation results to save")
         return
 
+    if isinstance(saturation_results[0], MultiMolSaturationRunResult):
+        if len(saturation_results) > 1:
+            logger.warning(
+                "save_saturation_results received %d multi-molecule results; "
+                "only the first will be saved",
+                len(saturation_results),
+            )
+        save_multi_mol_saturation_results(
+            saturation_results[0],
+            surface_type=surface_type,
+            config=config,
+        )
+        return
+
+    single_results = cast(list[SaturationRunResult], list(saturation_results))
+
     results_dir = f"results_{surface_type}"
     os.makedirs(results_dir, exist_ok=True)
     xyz_dir = f"{results_dir}/xyz_structures"
     os.makedirs(xyz_dir, exist_ok=True)
+    vasp_base = f"{results_dir}/vasp_inputs"
 
     # Detailed CSV: one row per step per molecule (with context for reproducibility)
     context_row = config_to_context_row(config)
     detail_rows: list[dict[str, Any]] = []
-    for sr in saturation_results:
+    placement_rows: list[dict[str, Any]] = []
+    save_all = config.saturation_save_all_placements
+
+    for sr in single_results:
         mol_dir = f"{xyz_dir}/{sr.molecule}_saturation"
+        vasp_mol_dir = f"{vasp_base}/{sr.molecule}_saturation"
         for step_result in sr.steps:
-            best = step_result.best_result
-            step = step_result.step
-            step_structure_path = f"{mol_dir}/step_{step:03d}_best_slab.xyz"
-            step_energy_path = (
-                f"{mol_dir}/step_{step:03d}_Eads_{best.energy_adsorption:.4f}.xyz"
+            detail_row = step_result.to_detail_row(
+                results_dir=results_dir,
+                saturation_molecule=sr.molecule,
+                context_row=context_row,
             )
-            step_adsorbate_path = f"{mol_dir}/step_{step:03d}_adsorbate.xyz"
-            detail_row: dict[str, Any] = {
-                "molecule": sr.molecule,
-                "step": step,
-                "n_molecules_on_slab": step_result.n_molecules_on_slab,
-                "bo_transfer_enabled": step_result.bo_transfer_enabled,
-                "bo_transfer_used": step_result.bo_transfer_used,
-                "bo_transfer_disabled_reason": step_result.bo_transfer_disabled_reason,
-                "bo_transfer_weight_share": step_result.bo_transfer_weight_share,
-                "bo_transfer_bad_rounds": step_result.bo_transfer_bad_rounds,
-                "bo_transfer_last_mae_delta": step_result.bo_transfer_last_mae_delta,
-                "placement_id": best.placement_id,
-                "energy_adslab": best.energy_adslab,
-                "energy_slab": best.energy_slab,
-                "energy_adsorbate": best.energy_adsorbate,
-                "energy_adsorption": best.energy_adsorption,
-                "distance": best.distance,
-                "step_structure_path": step_structure_path,
-                "step_structure_energy_path": step_energy_path,
-                "step_adsorbate_path": step_adsorbate_path,
-            }
-            detail_row.update(_placement_descriptor_to_row(best.placement_descriptor))
-            detail_row.update(context_row)
+            detail_row["schema_version"] = SCHEMA_VERSION
             detail_rows.append(detail_row)
+
+            if save_all:
+                step = step_result.step
+                for prow in step_result.to_rows(
+                    results_dir=results_dir,
+                    saturation_molecule=sr.molecule,
+                    context_row=context_row,
+                    step_prefix=True,
+                ):
+                    prow["schema_version"] = SCHEMA_VERSION
+                    placement_rows.append(prow)
 
     if detail_rows:
         df = pd.DataFrame(detail_rows)
         df.to_csv(f"{results_dir}/saturation_details.csv", index=False)
 
+    if save_all and placement_rows:
+        pdf = pd.DataFrame(placement_rows)
+        pdf.to_csv(f"{results_dir}/saturation_placements_detailed.csv", index=False)
+
     # Summary CSV: one row per molecule
     summary_rows: list[dict[str, Any]] = []
-    for sr in saturation_results:
+    for sr in single_results:
         final_slab_path = (
             f"{xyz_dir}/{sr.molecule}_saturation/final_saturated_slab.xyz"
             if sr.final_slab_atoms is not None
@@ -368,8 +352,7 @@ def save_saturation_results(
     sdf = pd.DataFrame(summary_rows)
     sdf.to_csv(f"{results_dir}/saturation_summary.csv", index=False)
 
-    vasp_base = f"{results_dir}/vasp_inputs"
-    for sr in saturation_results:
+    for sr in single_results:
         mol_dir = f"{xyz_dir}/{sr.molecule}_saturation"
         vasp_mol_dir = f"{vasp_base}/{sr.molecule}_saturation"
         os.makedirs(mol_dir, exist_ok=True)
@@ -397,6 +380,23 @@ def save_saturation_results(
                 system_name=None,
                 config=config,
             )
+            if save_all:
+                step_placements_rel = f"step_{step:03d}_placements"
+                step_xyz = Path(mol_dir) / step_placements_rel
+                step_vasp = Path(vasp_mol_dir) / step_placements_rel
+                os.makedirs(step_xyz, exist_ok=True)
+                os.makedirs(step_vasp, exist_ok=True)
+                for r in step_result.all_results:
+                    _write_placement_artifacts(
+                        r,
+                        xyz_dir=step_xyz,
+                        adsorbate_xyz_dir=step_xyz,
+                        vasp_parent=step_vasp,
+                        molecule_name=sr.molecule,
+                        system_name=None,
+                        config=config,
+                        log_save=False,
+                    )
         if sr.final_slab_atoms is not None:
             final_slab_copy = sr.final_slab_atoms.copy()
             final_slab_copy.calc = None
@@ -407,10 +407,10 @@ def save_saturation_results(
     write_run_settings(
         surface_type,
         config,
-        n_molecules=len(saturation_results),
-        total_steps=sum(len(sr.steps) for sr in saturation_results),
+        n_molecules=len(single_results),
+        total_steps=sum(len(sr.steps) for sr in single_results),
         n_molecules_at_saturation=sum(
-            sr.n_molecules_at_saturation for sr in saturation_results
+            sr.n_molecules_at_saturation for sr in single_results
         ),
     )
     logger.info("Saved saturation results to %s", results_dir)
@@ -426,6 +426,10 @@ def save_multi_mol_saturation_results(
     Output layout mirrors :func:`save_saturation_results` but uses a joined
     molecule name (``mol1_mol2``) for directory names and adds
     ``winning_molecule`` / ``per_molecule_budgets`` columns to the detail CSV.
+
+    When ``config.saturation_save_all_placements`` is true, writes
+    ``saturation_placements_detailed.csv`` and per-step placement trees under
+    ``step_{NNN}_placements/{molecule}/`` for each molecule's result list.
     """
     if config is None:
         config = AdsorptionConfig()
@@ -443,6 +447,8 @@ def save_multi_mol_saturation_results(
 
     context_row = config_to_context_row(config)
     detail_rows: list[dict[str, Any]] = []
+    placement_rows: list[dict[str, Any]] = []
+    save_all = config.saturation_save_all_placements
     for step_result in result.steps:
         best = step_result.best_result
         step = step_result.step
@@ -451,30 +457,51 @@ def save_multi_mol_saturation_results(
             f"{mol_dir}/step_{step:03d}_Eads_{best.energy_adsorption:.4f}.xyz"
         )
         step_adsorbate_path = f"{mol_dir}/step_{step:03d}_adsorbate.xyz"
-        detail_row: dict[str, Any] = {
+        detail_row = best.to_row(
+            context_row=context_row,
+        ) | {
             "molecules": mol_label,
             "winning_molecule": step_result.winning_molecule,
             "step": step,
             "n_molecules_on_slab": step_result.n_molecules_on_slab,
             "per_molecule_budgets": str(step_result.per_molecule_budgets),
             "bo_transfer_enabled": step_result.bo_transfer_enabled,
-            "placement_id": best.placement_id,
-            "energy_adslab": best.energy_adslab,
-            "energy_slab": best.energy_slab,
-            "energy_adsorbate": best.energy_adsorbate,
-            "energy_adsorption": best.energy_adsorption,
-            "distance": best.distance,
             "step_structure_path": step_structure_path,
             "step_structure_energy_path": step_energy_path,
             "step_adsorbate_path": step_adsorbate_path,
         }
-        detail_row.update(_placement_descriptor_to_row(best.placement_descriptor))
-        detail_row.update(context_row)
+        detail_row["schema_version"] = SCHEMA_VERSION
         detail_rows.append(detail_row)
+
+        if save_all:
+            step_placements_rel = f"step_{step:03d}_placements"
+            for pmol, res_list in step_result.per_molecule_results.items():
+                step_mol_xyz = Path(mol_dir) / step_placements_rel / pmol
+                step_mol_vasp = Path(vasp_mol_dir) / step_placements_rel / pmol
+                for r in res_list:
+                    pid = r.placement_id
+                    prow = r.to_row(
+                        xyz_path=str(step_mol_xyz / f"conformer_{pid:03d}.xyz"),
+                        poscar_path=str(
+                            step_mol_vasp / f"conformer_{pid:03d}" / "POSCAR"
+                        ),
+                        context_row=context_row,
+                    ) | {
+                        "molecules": mol_label,
+                        "winning_molecule": step_result.winning_molecule,
+                        "step": step,
+                        "molecule": r.molecule,
+                    }
+                    prow["schema_version"] = SCHEMA_VERSION
+                    placement_rows.append(prow)
 
     if detail_rows:
         df = pd.DataFrame(detail_rows)
         df.to_csv(f"{results_dir}/saturation_details.csv", index=False)
+
+    if save_all and placement_rows:
+        pdf = pd.DataFrame(placement_rows)
+        pdf.to_csv(f"{results_dir}/saturation_placements_detailed.csv", index=False)
 
     # Summary CSV: one row for the whole multi-mol run
     summary_row: dict[str, Any] = {
@@ -516,6 +543,26 @@ def save_multi_mol_saturation_results(
             system_name=None,
             config=config,
         )
+        if save_all:
+            step_placements_rel = f"step_{step:03d}_placements"
+            for pmol, res_list in step_result.per_molecule_results.items():
+                if not res_list:
+                    continue
+                step_mol_xyz = Path(mol_dir) / step_placements_rel / pmol
+                step_mol_vasp = Path(vasp_mol_dir) / step_placements_rel / pmol
+                os.makedirs(step_mol_xyz, exist_ok=True)
+                os.makedirs(step_mol_vasp, exist_ok=True)
+                for r in res_list:
+                    _write_placement_artifacts(
+                        r,
+                        xyz_dir=step_mol_xyz,
+                        adsorbate_xyz_dir=step_mol_xyz,
+                        vasp_parent=step_mol_vasp,
+                        molecule_name=pmol,
+                        system_name=None,
+                        config=config,
+                        log_save=False,
+                    )
 
     if result.final_slab_atoms is not None:
         final_slab_copy = result.final_slab_atoms.copy()
@@ -530,6 +577,28 @@ def save_multi_mol_saturation_results(
         n_molecules_at_saturation=result.n_molecules_at_saturation,
     )
     logger.info("Saved multi-mol saturation results to %s", results_dir)
+
+
+def write_run_metadata_from_out(
+    run_metadata_out: dict[str, Any],
+    *,
+    surface_type: str,
+    config: AdsorptionConfig,
+    molecules: list[tuple[str, str]] | str,
+) -> None:
+    """Persist run metadata from a populated ``run_metadata_out`` dict."""
+    if not run_metadata_out:
+        return
+    smiles_file = molecules if isinstance(molecules, str) else "<inline-molecules>"
+    write_run_metadata(
+        surface_type=surface_type,
+        config=config,
+        smiles_file=smiles_file,
+        n_molecules=int(run_metadata_out["n_molecules"]),
+        total_configs=int(run_metadata_out["total_configs"]),
+        t_ref_s=float(run_metadata_out["t_ref_s"]),
+        t_total_s=float(run_metadata_out["t_total_s"]),
+    )
 
 
 def write_run_metadata(

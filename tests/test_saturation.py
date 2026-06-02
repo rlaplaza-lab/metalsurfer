@@ -5,6 +5,7 @@ import os
 import tempfile
 from collections.abc import Callable
 
+import numpy as np
 import pandas as pd
 import pytest
 from ase import Atoms
@@ -35,6 +36,10 @@ from metalsurfer.surface_prep import (
 )
 from metalsurfer.symmetry import SymmetryAnalysisError
 from metalsurfer.workflow import load_molecules, run_saturation_screening
+from metalsurfer.workflow.saturation import (
+    _filter_saturation_topology_results,
+    _saturation_adsorbate_topology_ok,
+)
 
 from .conftest import (
     DummyReferenceEnergies,
@@ -47,6 +52,14 @@ from .conftest import (
     place_molecule_on_slab,
 )
 from .optional_deps import cuda_available, has_mlip_stack
+
+
+def _mock_saturation_config(**kwargs) -> AdsorptionConfig:
+    """AdsorptionConfig for mocked saturation loops without real adsorbate geometries."""
+    return AdsorptionConfig(
+        saturation_discard_topology_rearrangements=False,
+        **kwargs,
+    )
 
 
 def _uniform_placement_budget(
@@ -208,12 +221,21 @@ def test_save_saturation_results_writes_csv_and_xyz(workdir):
         distance=2.5,
         placement_descriptor=make_placement_descriptor(placement_id=0),
     )
+    other = make_screening_result(
+        molecule="water",
+        placement_id=1,
+        energy_adsorption=-0.5,
+        atoms=combined.copy(),
+        slab_size=len(slab),
+        distance=2.6,
+        placement_descriptor=make_placement_descriptor(placement_id=1),
+    )
     step = SaturationStepResult(
         step=1,
         molecule="water",
         n_molecules_on_slab=0,
         best_result=best,
-        all_results=[best],
+        all_results=[best, other],
         bo_transfer_enabled=True,
         bo_transfer_used=True,
         bo_transfer_disabled_reason=None,
@@ -240,10 +262,17 @@ def test_save_saturation_results_writes_csv_and_xyz(workdir):
         [
             "saturation_summary.csv",
             "saturation_details.csv",
+            "saturation_placements_detailed.csv",
             "xyz_structures/water_saturation/step_001_Eads_-1.0000.xyz",
             "xyz_structures/water_saturation/step_001_best_slab.xyz",
+            "xyz_structures/water_saturation/step_001_placements/conformer_000.xyz",
+            "xyz_structures/water_saturation/step_001_placements/conformer_001.xyz",
+            "xyz_structures/water_saturation/step_001_placements/conformer_000_adsorbate.xyz",
+            "xyz_structures/water_saturation/step_001_placements/conformer_001_adsorbate.xyz",
             "xyz_structures/water_saturation/final_saturated_slab.xyz",
             "vasp_inputs/water_saturation/step_001/POSCAR",
+            "vasp_inputs/water_saturation/step_001_placements/conformer_000/POSCAR",
+            "vasp_inputs/water_saturation/step_001_placements/conformer_001/POSCAR",
         ],
     )
     summary_df = pd.read_csv(summary_path)
@@ -274,6 +303,52 @@ def test_save_saturation_results_writes_csv_and_xyz(workdir):
     assert cell.lengths()[1] > 0.0
     assert bool(loaded_step.get_pbc()[0])
     assert bool(loaded_step.get_pbc()[1])
+
+    placements_df = pd.read_csv(output_dir / "saturation_placements_detailed.csv")
+    assert len(placements_df) == 2
+    assert set(placements_df["placement_id"]) == {0, 1}
+
+
+def test_save_saturation_results_skips_all_placements_when_disabled(workdir):
+    """When saturation_save_all_placements is False, omit step_*_placements tree."""
+    slab = make_slab()
+    combined = place_molecule_on_slab(slab, make_water())
+    best = make_screening_result(
+        molecule="water",
+        placement_id=0,
+        energy_adsorption=-1.0,
+        atoms=combined,
+        slab_size=len(slab),
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    step = SaturationStepResult(
+        step=1,
+        molecule="water",
+        n_molecules_on_slab=0,
+        best_result=best,
+        all_results=[best],
+        bo_transfer_enabled=False,
+        bo_transfer_used=False,
+        bo_transfer_disabled_reason=None,
+        bo_transfer_weight_share=0.0,
+        bo_transfer_bad_rounds=0,
+        bo_transfer_last_mae_delta=None,
+    )
+    sr = SaturationRunResult(
+        molecule="water",
+        steps=[step],
+        n_molecules_at_saturation=1,
+        final_slab_atoms=combined.copy(),
+    )
+    setup_directories(["saturation_no_placements"])
+    cfg = AdsorptionConfig(saturation_save_all_placements=False)
+    save_saturation_results([sr], surface_type="saturation_no_placements", config=cfg)
+    output_dir = workdir / "results_saturation_no_placements"
+    assert not (output_dir / "saturation_placements_detailed.csv").exists()
+    assert not (
+        output_dir / "xyz_structures/water_saturation/step_001_placements"
+    ).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +473,7 @@ def test_run_saturation_screening_h2_ni111_real_gpu():
 def test_run_saturation_screening_symmetry_none_falls_back_to_c1(monkeypatch, caplog):
     """Saturation continues with full site sampling when symmetry fails."""
     slab = SlabContainer(make_slab())
-    config = AdsorptionConfig()
+    config = _mock_saturation_config()
 
     monkeypatch.setattr(
         "metalsurfer.symmetry.SymmetryAnalyzer.detect_symmetry_breaking",
@@ -448,7 +523,7 @@ def test_run_saturation_screening_symmetry_none_falls_back_to_c1(monkeypatch, ca
 def test_run_saturation_screening_auto_resize_only_step1(monkeypatch):
     """Saturation passes allow_auto_resize=True only on first step."""
     slab = SlabContainer(make_slab())
-    config = AdsorptionConfig()
+    config = _mock_saturation_config()
 
     allow_auto_resize_flags: list[bool] = []
 
@@ -483,6 +558,123 @@ def test_run_saturation_screening_auto_resize_only_step1(monkeypatch):
     assert len(out) == 1
     assert len(out[0].steps) == 2
     assert allow_auto_resize_flags == [True, False]
+
+
+def test_apply_substrate_resize_from_step_metadata():
+    from metalsurfer.workflow.saturation import (
+        _apply_substrate_resize_from_step_metadata,
+    )
+
+    base = make_slab()
+    resized = base.repeat((2, 2, 1))
+    updated = _apply_substrate_resize_from_step_metadata(
+        base,
+        {
+            "slab_was_resized": True,
+            "substrate_atoms_after_resize": resized,
+        },
+    )
+    assert len(updated) == len(resized)
+    assert _apply_substrate_resize_from_step_metadata(base, {}) is base
+
+
+def test_multi_mol_step1_presize_expands_substrate_for_all_molecules(monkeypatch):
+    """Every competitor on step 1 sees the same pre-resized substrate footprint."""
+    slab = SlabContainer(make_slab())
+    original_n = len(slab.atoms)
+    config = _mock_saturation_config(
+        multi_molecule_saturation=True,
+        auto_resize_slab=True,
+    )
+    ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
+
+    def mock_resize(slab_in, _conformers, _min_sep):
+        return SlabContainer(slab_in.atoms.repeat((2, 2, 1))), True
+
+    slab_sizes_seen: list[tuple[str, int]] = []
+
+    def fake_process(_smi, mol, current_slab, *_args, **_kwargs):
+        slab_sizes_seen.append((mol, len(current_slab.atoms)))
+        return _result_for_step(mol, current_slab, 0.5)
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.auto_resize_slab_for_molecule",
+        mock_resize,
+    )
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["B", "A"],
+        smiles_list=["smiles_b", "smiles_a"],
+        ref=ref,
+        process_molecule=fake_process,
+    )
+
+    out = run_saturation_screening(
+        slab,
+        smiles_file="unused.csv",
+        config=config,
+        surface_type="multi_mol_presize",
+        skip_existing=False,
+    )
+
+    assert len(out) == 1
+    expected_n = original_n * 4
+    assert len(slab_sizes_seen) == 2
+    assert all(size == expected_n for _, size in slab_sizes_seen)
+
+
+def test_single_mol_saturation_bo_updates_base_slab_after_resize(monkeypatch):
+    """Single-molecule BO saturation expands base_slab after step-1 auto-resize."""
+    slab = SlabContainer(make_slab())
+    original_n = len(slab.atoms)
+    config = _mock_saturation_config(bo_enabled=True, auto_resize_slab=True)
+    ref = DummyReferenceEnergies({"water": -5.0})
+
+    base_slab_lens: list[int] = []
+    call_count = 0
+
+    def fake_bayesian(_smi, _mol, current_slab, *_args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        base = kwargs.get("base_slab_for_frozen")
+        if base is not None:
+            base_slab_lens.append(len(base))
+        step_metadata = kwargs.get("step_metadata_out")
+        if step_metadata is not None:
+            resized = current_slab.atoms.repeat((2, 2, 1))
+            step_metadata["slab_was_resized"] = True
+            step_metadata["substrate_atoms_after_resize"] = resized
+        e_ads = -0.4 if call_count == 1 else 0.5
+        return _result_for_step("water", current_slab, e_ads)
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation._setup_screening_run",
+        lambda *_a, **_kw: (object(), None, ["water"], ["O"], ref, 0.0),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation._compute_slab_energy",
+        lambda *_a, **_kw: -10.0,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.DatasetLogger", NoopDatasetLogger
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.process_molecule_bayesian",
+        fake_bayesian,
+    )
+
+    out = run_saturation_screening(
+        slab,
+        smiles_file="unused.csv",
+        config=config,
+        surface_type="bo_resize_base_slab",
+        skip_existing=False,
+    )
+
+    assert len(out) == 1
+    assert len(out[0].steps) == 2
+    assert base_slab_lens[0] == original_n
+    assert base_slab_lens[1] == original_n * 4
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +765,7 @@ def test_estimate_molecule_complexity_more_conformers_higher_score():
 def test_multi_mol_saturation_picks_best_across_molecules(monkeypatch):
     """The step winner is the molecule with the overall lowest E_ads."""
     slab = SlabContainer(make_slab())
-    config = AdsorptionConfig(multi_molecule_saturation=True)
+    config = _mock_saturation_config(multi_molecule_saturation=True)
 
     ref = DummyReferenceEnergies({"water": -5.0, "CO2": -10.0})
 
@@ -605,7 +797,7 @@ def test_multi_mol_saturation_picks_best_across_molecules(monkeypatch):
 def test_multi_mol_saturation_terminates_on_positive_eads(monkeypatch):
     """Multi-mol saturation stops when best E_ads >= 0."""
     slab = SlabContainer(make_slab())
-    config = AdsorptionConfig(multi_molecule_saturation=True)
+    config = _mock_saturation_config(multi_molecule_saturation=True)
 
     ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
 
@@ -638,7 +830,7 @@ def test_multi_mol_saturation_terminates_on_positive_eads(monkeypatch):
 def test_multi_mol_saturation_step_result_structure(monkeypatch):
     """MultiMolSaturationStepResult contains expected per-molecule fields."""
     slab = SlabContainer(make_slab())
-    config = AdsorptionConfig(multi_molecule_saturation=True)
+    config = _mock_saturation_config(multi_molecule_saturation=True)
 
     ref = DummyReferenceEnergies({"mol1": -5.0, "mol2": -5.0})
 
@@ -690,7 +882,7 @@ def test_multi_mol_saturation_step_result_structure(monkeypatch):
 def test_multi_mol_saturation_single_molecule_fallback(monkeypatch, caplog):
     """When multi_molecule_saturation=True but only 1 molecule, falls back gracefully."""
     slab = SlabContainer(make_slab())
-    config = AdsorptionConfig(multi_molecule_saturation=True)
+    config = _mock_saturation_config(multi_molecule_saturation=True)
 
     ref = DummyReferenceEnergies({"water": -5.0})
 
@@ -726,7 +918,7 @@ def test_multi_mol_saturation_single_molecule_fallback(monkeypatch, caplog):
 def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
     """molecule_counts tracks how many steps each molecule won."""
     slab = SlabContainer(make_slab())
-    config = AdsorptionConfig(multi_molecule_saturation=True)
+    config = _mock_saturation_config(multi_molecule_saturation=True)
 
     ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
 
@@ -784,7 +976,7 @@ def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
 def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypatch):
     """Competing BO saturation carries BO state forward independently per molecule."""
     slab = SlabContainer(make_slab())
-    config = AdsorptionConfig(multi_molecule_saturation=True, bo_enabled=True)
+    config = _mock_saturation_config(multi_molecule_saturation=True, bo_enabled=True)
 
     ref = DummyReferenceEnergies({"water": -5.0, "CO2": -10.0})
 
@@ -867,7 +1059,7 @@ def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypat
 def test_multi_mol_saturation_bo_rejects_shared_memory_objects(monkeypatch):
     """Competing BO saturation rejects shared BOStepMemory objects across adsorbates."""
     slab = SlabContainer(make_slab())
-    config = AdsorptionConfig(multi_molecule_saturation=True, bo_enabled=True)
+    config = _mock_saturation_config(multi_molecule_saturation=True, bo_enabled=True)
 
     ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
 
@@ -999,12 +1191,31 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
         distance=2.5,
         placement_descriptor=make_placement_descriptor(placement_id=0),
     )
+    second_water = make_screening_result(
+        molecule="water",
+        placement_id=1,
+        energy_adsorption=-0.4,
+        atoms=mol_a_atoms.copy(),
+        slab_size=len(slab),
+        distance=2.6,
+        placement_descriptor=make_placement_descriptor(placement_id=1),
+    )
+    mol_b_atoms = place_molecule_on_slab(slab, make_water())
+    best_co2 = make_screening_result(
+        molecule="CO2",
+        placement_id=0,
+        energy_adsorption=-0.3,
+        atoms=mol_b_atoms,
+        slab_size=len(slab),
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
     step = MultiMolSaturationStepResult(
         step=1,
         winning_molecule="water",
         n_molecules_on_slab=0,
         best_result=best_a,
-        per_molecule_results={"water": [best_a]},
+        per_molecule_results={"water": [best_a, second_water], "CO2": [best_co2]},
         per_molecule_budgets={"water": 75, "CO2": 25},
         bo_transfer_enabled=False,
     )
@@ -1027,7 +1238,13 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
         [
             "saturation_summary.csv",
             "saturation_details.csv",
+            "saturation_placements_detailed.csv",
             "xyz_structures/water_CO2_saturation",
+            "xyz_structures/water_CO2_saturation/step_001_placements/water/conformer_000.xyz",
+            "xyz_structures/water_CO2_saturation/step_001_placements/water/conformer_001.xyz",
+            "xyz_structures/water_CO2_saturation/step_001_placements/CO2/conformer_000.xyz",
+            "vasp_inputs/water_CO2_saturation/step_001_placements/water/conformer_000/POSCAR",
+            "vasp_inputs/water_CO2_saturation/step_001_placements/CO2/conformer_000/POSCAR",
         ],
     )
 
@@ -1040,3 +1257,391 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
     assert len(details_df) == 1
     assert details_df.iloc[0]["winning_molecule"] == "water"
     assert "water" in str(details_df.iloc[0]["per_molecule_budgets"])
+
+    placements_df = pd.read_csv(output_dir / "saturation_placements_detailed.csv")
+    assert len(placements_df) == 3
+    assert set(placements_df["molecule"]) == {"water", "CO2"}
+
+
+def test_save_saturation_results_dispatches_multi_mol(workdir):
+    """save_saturation_results([MultiMolSaturationRunResult]) delegates to multi-mol I/O."""
+    slab = make_slab()
+    mol_a_atoms = place_molecule_on_slab(slab, make_water())
+    best_a = make_screening_result(
+        molecule="water",
+        placement_id=0,
+        energy_adsorption=-0.8,
+        atoms=mol_a_atoms,
+        slab_size=len(slab),
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    step = MultiMolSaturationStepResult(
+        step=1,
+        winning_molecule="water",
+        n_molecules_on_slab=0,
+        best_result=best_a,
+        per_molecule_results={"water": [best_a]},
+        per_molecule_budgets={"water": 100},
+        bo_transfer_enabled=False,
+    )
+    result = MultiMolSaturationRunResult(
+        molecules=["water"],
+        steps=[step],
+        n_molecules_at_saturation=1,
+        final_slab_atoms=mol_a_atoms.copy(),
+        molecule_counts={"water": 1},
+    )
+    setup_directories(["saturation_dispatch_mm"])
+    save_saturation_results([result], surface_type="saturation_dispatch_mm")
+    out = workdir / "results_saturation_dispatch_mm"
+    assert (out / "saturation_summary.csv").exists()
+    assert (
+        out
+        / "xyz_structures/water_saturation/step_001_placements/water/conformer_000.xyz"
+    ).exists()
+
+
+# ---------------------------------------------------------------------------
+# Saturation topology rearrangement guard
+# ---------------------------------------------------------------------------
+
+
+def _slab_with_two_waters(*, separated: bool) -> tuple[Atoms, Atoms, Atoms]:
+    """Return (bare_slab, slab_plus_one_water, two_water_structure)."""
+    slab = make_slab()
+    first = place_molecule_on_slab(
+        slab, make_water(), z_offset=3.0, x_shift=2.0, y_shift=2.0
+    )
+    w2 = make_water().copy()
+    slab_z = float(np.max(slab.get_positions()[:, 2]))
+    pos2 = w2.get_positions().copy()
+    pos2 -= np.mean(pos2, axis=0)
+    ads_pos = first.get_positions()[len(slab) :]
+    anchor = np.mean(ads_pos, axis=0)
+    if separated:
+        pos2[:, 0] += 7.0
+        pos2[:, 1] += 2.0
+    else:
+        pos2[:, 0] = anchor[0] + 1.2
+        pos2[:, 1] = anchor[1]
+    pos2[:, 2] += slab_z + 3.0
+    w2.set_positions(pos2)
+    combined = first + w2
+    combined.set_cell(slab.get_cell())
+    combined.set_pbc(slab.get_pbc())
+    return slab, first, combined
+
+
+def test_saturation_topology_guard_validates_separated_waters():
+    slab, _first, combined = _slab_with_two_waters(separated=True)
+    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+    ok, reason = _saturation_adsorbate_topology_ok(
+        combined,
+        base_slab_len=len(slab),
+        reference_unit_smiles=["O", "O"],
+        config=config,
+    )
+    assert ok, reason
+
+
+def test_saturation_topology_guard_is_connectivity_only():
+    slab, _first, separated = _slab_with_two_waters(separated=True)
+    # Remove one H from the second adsorbate unit: still two fragments, but
+    # per-fragment SMILES checks would reject this against ["O", "O"].
+    mismatched_units = separated[:-1]
+    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+    ok, reason = _saturation_adsorbate_topology_ok(
+        mismatched_units,
+        base_slab_len=len(slab),
+        reference_unit_smiles=["O", "O"],
+        config=config,
+    )
+    assert ok, reason
+    assert reason == "adsorbate connectivity intact"
+
+
+def test_saturation_topology_guard_rejects_coupled_waters():
+    slab, _first, combined = _slab_with_two_waters(separated=False)
+    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+    ok, reason = _saturation_adsorbate_topology_ok(
+        combined,
+        base_slab_len=len(slab),
+        reference_unit_smiles=["O", "O"],
+        config=config,
+    )
+    assert not ok
+    assert "expected 2 adsorbate units" in reason
+
+
+def test_filter_saturation_topology_results_keeps_lower_energy_intact():
+    slab, slab_plus_one, separated = _slab_with_two_waters(separated=True)
+    _, _, coupled = _slab_with_two_waters(separated=False)
+    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+    bad = make_screening_result(
+        molecule="water",
+        placement_id=0,
+        energy_adsorption=-2.0,
+        atoms=coupled,
+        slab_size=len(slab),
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    good = make_screening_result(
+        molecule="water",
+        placement_id=1,
+        energy_adsorption=-1.0,
+        atoms=separated,
+        slab_size=len(slab),
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=1),
+    )
+    filtered = _filter_saturation_topology_results(
+        [bad, good],
+        base_slab_len=len(slab),
+        reference_unit_smiles=["O", "O"],
+        config=config,
+    )
+    assert len(filtered) == 1
+    assert filtered[0].placement_id == 1
+
+
+def test_saturation_topology_guard_disabled_preserves_ranking():
+    slab, _, coupled = _slab_with_two_waters(separated=False)
+    _, _, separated = _slab_with_two_waters(separated=True)
+    config = AdsorptionConfig(
+        connectivity_multipliers=[1.3],
+        saturation_discard_topology_rearrangements=False,
+    )
+    bad = make_screening_result(
+        molecule="water",
+        placement_id=0,
+        energy_adsorption=-2.0,
+        atoms=coupled,
+        slab_size=len(slab),
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    good = make_screening_result(
+        molecule="water",
+        placement_id=1,
+        energy_adsorption=-1.0,
+        atoms=separated,
+        slab_size=len(slab),
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=1),
+    )
+    filtered = _filter_saturation_topology_results(
+        [bad, good],
+        base_slab_len=len(slab),
+        reference_unit_smiles=["O", "O"],
+        config=config,
+    )
+    assert len(filtered) == 2
+    assert min(filtered, key=lambda r: r.energy_adsorption).placement_id == 0
+
+
+def test_saturation_step2_selects_intact_not_rearranged(monkeypatch):
+    """Step-2 best-slab selection skips rearranged low-energy candidates."""
+    slab = SlabContainer(make_slab())
+    bare, slab_plus_one, _ = _slab_with_two_waters(separated=True)
+    _, _, coupled = _slab_with_two_waters(separated=False)
+    _, _, separated = _slab_with_two_waters(separated=True)
+    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+
+    call_count = [0]
+
+    def _fake_process_molecule(_smi, mol, current_slab, *_args, **_kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return [
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=0,
+                    energy_adsorption=-0.5,
+                    atoms=slab_plus_one.copy(),
+                    slab_size=len(bare),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=0),
+                )
+            ]
+        return [
+            make_screening_result(
+                molecule=mol,
+                placement_id=0,
+                energy_adsorption=-2.0,
+                atoms=coupled.copy(),
+                slab_size=len(slab.atoms),
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(placement_id=0),
+            ),
+            make_screening_result(
+                molecule=mol,
+                placement_id=1,
+                energy_adsorption=-1.0,
+                atoms=separated.copy(),
+                slab_size=len(slab.atoms),
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(placement_id=1),
+            ),
+        ]
+
+    _patch_single_mol_saturation_mocks(
+        monkeypatch,
+        molecule="water",
+        smiles="O",
+        ref=DummyReferenceEnergies(constant_energy=-1.0),
+        process_molecule=_fake_process_molecule,
+    )
+
+    out = run_saturation_screening(
+        slab,
+        smiles_file="unused.csv",
+        config=config,
+        surface_type="topology_guard_single",
+        skip_existing=False,
+    )
+
+    assert len(out) == 1
+    assert len(out[0].steps) == 2
+    assert out[0].steps[1].best_result.placement_id == 1
+    assert np.allclose(
+        out[0].steps[1].best_result.atoms.get_positions(),
+        separated.get_positions(),
+    )
+
+
+def test_multi_mol_saturation_topology_guard_step2(monkeypatch):
+    """Multi-molecule step-2 ranking uses topology-valid candidates only."""
+    slab = SlabContainer(make_slab())
+    _, _, coupled = _slab_with_two_waters(separated=False)
+    _, _, separated = _slab_with_two_waters(separated=True)
+    config = AdsorptionConfig(
+        multi_molecule_saturation=True,
+        connectivity_multipliers=[1.3],
+    )
+
+    step_idx = [0]
+
+    bare, slab_plus_one, _ = _slab_with_two_waters(separated=True)
+
+    def _fake_process_molecule(_smi, mol, current_slab, *_args, **_kwargs):
+        step_idx[0] += 1
+        if step_idx[0] <= 2:
+            if step_idx[0] == 1 and mol == "water":
+                return [
+                    make_screening_result(
+                        molecule=mol,
+                        placement_id=0,
+                        energy_adsorption=-0.4,
+                        atoms=slab_plus_one.copy(),
+                        slab_size=len(bare),
+                        distance=2.5,
+                        placement_descriptor=make_placement_descriptor(placement_id=0),
+                    )
+                ]
+            return _result_for_step(mol, current_slab, -0.4)
+        if mol == "water":
+            return [
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=0,
+                    energy_adsorption=-2.0,
+                    atoms=coupled.copy(),
+                    slab_size=len(slab.atoms),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=0),
+                ),
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=1,
+                    energy_adsorption=-1.0,
+                    atoms=separated.copy(),
+                    slab_size=len(slab.atoms),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=1),
+                ),
+            ]
+        return _result_for_step(mol, current_slab, -0.2)
+
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["water", "CO2"],
+        smiles_list=["O", "O=C=O"],
+        ref=DummyReferenceEnergies({"water": -5.0, "CO2": -10.0}),
+        process_molecule=_fake_process_molecule,
+    )
+
+    out = run_saturation_screening(
+        slab,
+        smiles_file="unused.csv",
+        config=config,
+        surface_type="topology_guard_multi",
+        skip_existing=False,
+    )
+
+    assert len(out) == 1
+    result = out[0]
+    assert len(result.steps) >= 2
+    step2 = result.steps[1]
+    assert step2.winning_molecule == "water"
+    assert step2.best_result.placement_id == 1
+
+
+def test_saturation_topology_guard_all_filtered_stops(monkeypatch, caplog):
+    """If every candidate rearranges, saturation stops without advancing."""
+    slab = SlabContainer(make_slab())
+    bare, slab_plus_one, _ = _slab_with_two_waters(separated=True)
+    _, _, coupled = _slab_with_two_waters(separated=False)
+    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+
+    call_count = [0]
+
+    def _fake_process_molecule(_smi, mol, current_slab, *_args, **_kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return [
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=0,
+                    energy_adsorption=-0.5,
+                    atoms=slab_plus_one.copy(),
+                    slab_size=len(bare),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=0),
+                )
+            ]
+        return [
+            make_screening_result(
+                molecule=mol,
+                placement_id=0,
+                energy_adsorption=-2.0,
+                atoms=coupled.copy(),
+                slab_size=len(slab.atoms),
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(placement_id=0),
+            ),
+        ]
+
+    _patch_single_mol_saturation_mocks(
+        monkeypatch,
+        molecule="water",
+        smiles="O",
+        ref=DummyReferenceEnergies(constant_energy=-1.0),
+        process_molecule=_fake_process_molecule,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        out = run_saturation_screening(
+            slab,
+            smiles_file="unused.csv",
+            config=config,
+            surface_type="topology_guard_stop",
+            skip_existing=False,
+        )
+
+    assert len(out) == 1
+    assert len(out[0].steps) == 1
+    assert any(
+        "topology rearrangement guard" in rec.getMessage() for rec in caplog.records
+    )

@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from ase import Atoms
+from ase.calculators.calculator import Calculator
 
 from .._logging import log_context
 from ..config import AdsorptionConfig
@@ -14,27 +15,35 @@ from ..models import ReferenceEnergies, ScreeningRunResult, build_molecule_summa
 from ..optimization import setup_single_model
 from ..surfaces import SlabContainer, coerce_slab_container
 from .reference import calculate_reference_energies
-from .shared import load_molecules
+from .shared import load_molecules, load_molecules_from_pairs
 
 logger = logging.getLogger(__name__)
 
 
 def _setup_screening_run(
     slab: SlabContainer | Atoms,
-    smiles_file: str,
+    molecules_input: list[tuple[str, str]] | tuple[str, str] | str,
     config: AdsorptionConfig,
     surface_type: str,
     skip_existing: bool,
     skip_saturation_file: bool = False,
-) -> tuple[object, object, list[str], list[str], ReferenceEnergies, float] | None:
+) -> tuple[Calculator, Any, list[str], list[str], ReferenceEnergies, float] | None:
     """Setup model, load molecules, and compute reference energies."""
     calculator, ts_model = setup_single_model(config.model_name, config.device)
-    molecules, smiles_list, load_status = load_molecules(
-        smiles_file,
-        skip_existing=skip_existing,
-        surface_type=surface_type,
-        skip_saturation_file=skip_saturation_file,
-    )
+    if isinstance(molecules_input, str):
+        molecules, smiles_list, load_status = load_molecules(
+            molecules_input,
+            skip_existing=skip_existing,
+            surface_type=surface_type,
+            skip_saturation_file=skip_saturation_file,
+        )
+    else:
+        molecules, smiles_list, load_status = load_molecules_from_pairs(
+            molecules_input,
+            skip_existing=skip_existing,
+            surface_type=surface_type,
+            skip_saturation_file=skip_saturation_file,
+        )
     if not molecules:
         if load_status == "all_skipped":
             logger.info("No molecules to process (all already in existing summary)")
@@ -43,9 +52,15 @@ def _setup_screening_run(
         else:
             logger.info("No molecules to process")
         return None
+    slab_container = coerce_slab_container(slab)
     t_ref_start = time.perf_counter()
     ref = calculate_reference_energies(
-        slab, calculator, molecules, smiles_list, ts_model, config=config
+        slab_container,
+        calculator,
+        molecules,
+        smiles_list,
+        ts_model,
+        config=config,
     )
     t_ref_s = time.perf_counter() - t_ref_start
     return (calculator, ts_model, molecules, smiles_list, ref, t_ref_s)

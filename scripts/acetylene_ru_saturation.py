@@ -5,13 +5,15 @@ Adds acetylene molecules one at a time until best E_ads >= 0 (slab saturated).
 Uses same surface creation pipeline as ethane_ethene_acetylene_ru_binding_energy.py (seed=42).
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
+On-disk output follows ``AdsorptionConfig`` (README, saturation section).
 """
 
-from metalsurfer import AdsorptionConfig, format_failure_summary, run_saturation
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_saturation_complete
-from metalsurfer.io_results import setup_directories
-from metalsurfer.surface_prep import create_slab_from_bulk
+from metalsurfer import (
+    AdsorptionConfig,
+    configure_logging,
+    prepare_slab,
+    run_saturation,
+)
 
 
 def main():
@@ -20,13 +22,6 @@ def main():
     results_dir = f"results_{surface_type}"
 
     # Same surface creation as ethane_ethene_acetylene_ru_binding_energy.py (seed=42)
-    slab = create_slab_from_bulk(
-        bulk_id="mp-33",
-        miller_indices=(0, 0, 1),
-        supercell=(1, 1, 1),
-        results_dir=results_dir,
-    )
-
     config = AdsorptionConfig(
         material_type="slab",
         model_name="uma-s-1p1",
@@ -43,35 +38,35 @@ def main():
         stage2_steps=500,
     )
 
-    setup_directories([surface_type])
-    failure_summary = {}
-    saturation_results = run_saturation(
+    slab = prepare_slab(
+        bulk_id="mp-33",
+        miller_indices=(0, 0, 1),
+        supercell=(1, 1, 1),
+        config=config,
+        results_dir=results_dir,
+    )
+
+    campaign = run_saturation(
         slab=slab,
         molecules=[("C#C", "acetylene")],
         config=config,
         surface_type=surface_type,
         skip_existing=False,
-        failure_summary_out=failure_summary,
     )
 
-    if saturation_results:
-        sr = saturation_results[0]
-        total_steps = len(sr.steps)
-        n_at_sat = sr.n_molecules_at_saturation
-        print("")
+    print()
+    if campaign.runs:
         print(
-            format_saturation_complete(
+            campaign.format_completion(
                 label="Acetylene saturation on Ru(0001)",
-                n_molecules_at_saturation=n_at_sat,
-                total_steps=total_steps,
-                results_dir=f"results_{surface_type}",
+                results_dir=results_dir,
             )
         )
     else:
         print("No saturation results (no valid placements found).")
-        if failure_summary:
+        if campaign.failure_summary:
             print()
-            print(format_failure_summary(failure_summary))
+            print(campaign.format_failure_summary())
 
 
 if __name__ == "__main__":

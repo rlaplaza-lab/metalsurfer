@@ -4,6 +4,8 @@ import pytest
 from ase import Atoms
 
 from metalsurfer.models import (
+    BindingCampaignResult,
+    MoleculeCampaignSummary,
     MoleculeSummary,
     ReferenceEnergies,
     SaturationRunResult,
@@ -56,6 +58,12 @@ def test_screening_result():
     assert sr.placement_id == 5
     assert sr.energy_adsorption == -0.5
     assert len(sr.atoms) == 2
+    row = sr.to_row(xyz_path="results/x.xyz", poscar_path="results/POSCAR")
+    assert row["molecule"] == "water"
+    assert row["placement_id"] == 5
+    assert row["xyz_path"] == "results/x.xyz"
+    assert row["poscar_path"] == "results/POSCAR"
+    assert row["orientation_type"] == sr.placement_descriptor.orientation_type
 
 
 def test_timing_info():
@@ -156,6 +164,16 @@ def test_screening_run_result():
     assert rr.molecule == "water"
     assert len(rr.results) == 1
     assert rr.summary.e_ads_best == -0.5
+    rows = rr.to_rows(results_dir="results_test")
+    assert len(rows) == 1
+    assert rows[0]["xyz_path"].endswith("water_all/conformer_000.xyz")
+    assert rows[0]["poscar_path"].endswith("water_all/conformer_000/POSCAR")
+    df = rr.to_dataframe(results_dir="results_test")
+    assert len(df.index) == 1
+    assert set(df.columns) >= {"molecule", "energy_adsorption", "xyz_path"}
+    summary_row = rr.to_summary_row()
+    assert summary_row is not None
+    assert summary_row["best_placement_id"] == 0
 
 
 def test_saturation_step_result():
@@ -184,6 +202,23 @@ def test_saturation_step_result():
     assert step.step == 1
     assert step.n_molecules_on_slab == 0
     assert step.best_result.energy_adsorption == -1.0
+    detail_row = step.to_detail_row(
+        results_dir="results_test",
+        saturation_molecule="water",
+    )
+    assert detail_row["step"] == 1
+    assert detail_row["molecule"] == "water"
+    assert detail_row["step_structure_path"].endswith(
+        "water_saturation/step_001_best_slab.xyz"
+    )
+    placement_rows = step.to_rows(
+        results_dir="results_test", saturation_molecule="water"
+    )
+    assert len(placement_rows) == 1
+    assert placement_rows[0]["step"] == 1
+    assert placement_rows[0]["xyz_path"].endswith(
+        "water_saturation/step_001_placements/conformer_000.xyz"
+    )
 
 
 def test_saturation_run_result():
@@ -218,3 +253,41 @@ def test_saturation_run_result():
     assert sr.molecule == "water"
     assert len(sr.steps) == 1
     assert sr.n_molecules_at_saturation == 1
+    flattened = sr.to_flattened_runs()
+    assert len(flattened) == 1
+    assert flattened[0].molecule == "water_step_001"
+    text = sr.format_completion(label="Water saturation", results_dir="results_water")
+    assert "Water saturation complete:" in text
+    assert "Molecules at saturation: 1" in text
+    assert "Results saved to results_water/" in text
+
+
+def test_binding_campaign_result_formatters():
+    campaign = BindingCampaignResult(
+        mode="non_bo",
+        surface_type="manual",
+        run_results=[],
+        molecule_summaries=[
+            MoleculeCampaignSummary(
+                molecule="water",
+                n_valid_placements=3,
+                best_adsorption_energy=-1.23,
+            )
+        ],
+        total_configurations=42,
+        n_molecules=1,
+        t_ref_s=0.1,
+        t_total_s=0.2,
+    )
+    assert campaign.format_results_saved_line(results_dir="results_manual").startswith(
+        "Results saved to results_manual/"
+    )
+    assert campaign.format_screening_complete() == (
+        "Screening complete: 42 total configurations"
+    )
+    summary = campaign.format_summary(
+        title="Binding summary",
+        results_dir="results_manual",
+    )
+    assert "Binding summary" in summary
+    assert "water" in summary

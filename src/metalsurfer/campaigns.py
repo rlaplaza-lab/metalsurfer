@@ -1,11 +1,11 @@
-"""High-level campaign APIs for adsorption screening scripts and CLI."""
+"""High-level campaign APIs for adsorption screening library scripts and workflows."""
 
 from __future__ import annotations
 
 import dataclasses as _dc
 import logging
 import time
-from typing import Any
+from typing import Any, Literal, cast
 
 from ase import Atoms
 
@@ -17,12 +17,14 @@ from .io_results import (
     screening_run_result,
     setup_directories,
     write_run_metadata,
+    write_run_metadata_from_out,
     write_run_settings,
 )
 from .models import (
     BindingCampaignResult,
     MoleculeCampaignSummary,
     MultiMolSaturationRunResult,
+    SaturationCampaignResult,
     SaturationRunResult,
     ScreeningResult,
 )
@@ -110,6 +112,13 @@ def _run_binding_campaign(
             else "Screening complete",
         )
         total_configurations = sum(len(rr.results) for rr in run_results)
+        if write_metadata and run_metadata_out:
+            write_run_metadata_from_out(
+                run_metadata_out,
+                surface_type=surface_type,
+                config=config,
+                molecules=molecules,
+            )
         return BindingCampaignResult(
             mode="bo" if mode == "bo" else "non_bo",
             surface_type=surface_type,
@@ -339,6 +348,82 @@ def run_adsorption_bo(
     )
 
 
+def _save_benchmark_dataset_if_requested(
+    results: list[SaturationRunResult | MultiMolSaturationRunResult],
+    *,
+    surface_type: str,
+    config: AdsorptionConfig,
+) -> None:
+    if not config.save_benchmark_dataset:
+        return
+    flattened = [
+        run
+        for sr in results
+        if isinstance(sr, SaturationRunResult)
+        for run in sr.to_flattened_runs()
+    ]
+    if flattened:
+        save_summary_results(flattened, surface_type=surface_type, config=config)
+
+
+def _run_saturation_campaign(
+    *,
+    slab: SlabContainer | Atoms,
+    molecules: list[tuple[str, str]] | str,
+    config: AdsorptionConfig,
+    surface_type: str,
+    mode: Literal["non_bo", "bo"],
+    save_results: bool,
+    write_settings: bool,
+    write_metadata: bool,
+    skip_existing: bool,
+    run_metadata_out: dict[str, Any] | None,
+) -> SaturationCampaignResult:
+    setup_directories([surface_type])
+    failure_summary: dict[str, object] = {}
+    run_metadata: dict[str, Any] = (
+        run_metadata_out if run_metadata_out is not None else {}
+    )
+
+    results = run_saturation_screening(
+        slab=slab,
+        molecules=molecules,
+        config=config,
+        surface_type=surface_type,
+        skip_existing=skip_existing,
+        failure_summary_out=failure_summary,
+        run_metadata_out=run_metadata,
+    )
+    runs = cast(
+        list[SaturationRunResult | MultiMolSaturationRunResult],
+        list(results),
+    )
+
+    if save_results:
+        save_saturation_results(runs, surface_type=surface_type, config=config)
+        _save_benchmark_dataset_if_requested(
+            runs, surface_type=surface_type, config=config
+        )
+    if write_settings:
+        write_run_settings(surface_type, config)
+    if write_metadata and run_metadata:
+        write_run_metadata_from_out(
+            run_metadata,
+            surface_type=surface_type,
+            config=config,
+            molecules=molecules,
+        )
+
+    return SaturationCampaignResult(
+        mode=mode,
+        surface_type=surface_type,
+        runs=runs,
+        failure_summary=failure_summary,
+        t_ref_s=float(run_metadata.get("t_ref_s", 0.0)),
+        t_total_s=float(run_metadata.get("t_total_s", 0.0)),
+    )
+
+
 def run_saturation(
     *,
     slab: SlabContainer | Atoms,
@@ -349,9 +434,8 @@ def run_saturation(
     write_settings: bool = True,
     write_metadata: bool = False,
     skip_existing: bool = True,
-    failure_summary_out: dict[str, object] | None = None,
     run_metadata_out: dict[str, Any] | None = None,
-) -> list[SaturationRunResult] | list[MultiMolSaturationRunResult]:
+) -> SaturationCampaignResult:
     """Sequential saturation (non-BO) until best E_ads ≥ 0 or no valid placements.
 
     Parameters
@@ -372,34 +456,27 @@ def run_saturation(
         Whether to write a ``run_metadata.json`` file.
     skip_existing:
         Skip molecules already in the saturation summary (CSV input only).
-    failure_summary_out:
-        Optional dict populated with per-molecule failure details.
     run_metadata_out:
         Optional dict populated with timing and count metadata.
+
+    With ``save_results`` true, calls :func:`save_saturation_results` with the same ``config``.
+    When ``config.save_benchmark_dataset`` is true, also writes
+    ``adsorption_energies_detailed.csv`` from flattened step placements.
     """
     if config is None:
         config = AdsorptionConfig()
-    smiles_file = _molecules_to_smiles_file(
-        molecules, config, surface_type, skip_existing
-    )
-    results = run_saturation_screening(
+    return _run_saturation_campaign(
         slab=slab,
-        smiles_file=smiles_file,
+        molecules=molecules,
         config=config,
         surface_type=surface_type,
+        mode="non_bo",
+        save_results=save_results,
+        write_settings=write_settings,
+        write_metadata=write_metadata,
         skip_existing=skip_existing,
-        failure_summary_out=failure_summary_out,
         run_metadata_out=run_metadata_out,
     )
-
-    if save_results:
-        save_saturation_results(results, surface_type=surface_type)
-    if write_settings:
-        write_run_settings(surface_type, config)
-    if write_metadata and run_metadata_out:
-        write_run_metadata(run_metadata_out, surface_type=surface_type)
-
-    return results
 
 
 def run_saturation_bo(
@@ -412,9 +489,8 @@ def run_saturation_bo(
     write_settings: bool = True,
     write_metadata: bool = False,
     skip_existing: bool = True,
-    failure_summary_out: dict[str, object] | None = None,
     run_metadata_out: dict[str, Any] | None = None,
-) -> list[SaturationRunResult] | list[MultiMolSaturationRunResult]:
+) -> SaturationCampaignResult:
     """Saturation with BO-guided placement selection.
 
     Parameters
@@ -435,62 +511,24 @@ def run_saturation_bo(
         Whether to write a ``run_metadata.json`` file.
     skip_existing:
         Skip molecules already in the saturation summary (CSV input only).
-    failure_summary_out:
-        Optional dict populated with per-molecule failure details.
     run_metadata_out:
         Optional dict populated with timing and count metadata.
+
+    With ``save_results`` true, calls :func:`save_saturation_results` with the same ``config``
+    (after ``bo_enabled`` is set true).
     """
     if config is None:
         config = AdsorptionConfig()
     config = _dc.replace(config, bo_enabled=True)
-    smiles_file = _molecules_to_smiles_file(
-        molecules, config, surface_type, skip_existing
-    )
-    results = run_saturation_screening(
+    return _run_saturation_campaign(
         slab=slab,
-        smiles_file=smiles_file,
+        molecules=molecules,
         config=config,
         surface_type=surface_type,
+        mode="bo",
+        save_results=save_results,
+        write_settings=write_settings,
+        write_metadata=write_metadata,
         skip_existing=skip_existing,
-        failure_summary_out=failure_summary_out,
         run_metadata_out=run_metadata_out,
     )
-
-    if save_results:
-        save_saturation_results(results, surface_type=surface_type)
-    if write_settings:
-        write_run_settings(surface_type, config)
-    if write_metadata and run_metadata_out:
-        write_run_metadata(run_metadata_out, surface_type=surface_type)
-
-    return results
-
-
-def _molecules_to_smiles_file(
-    molecules: list[tuple[str, str]] | str,
-    config: AdsorptionConfig,
-    surface_type: str,
-    skip_existing: bool,
-) -> str:
-    """Return a CSV file path, writing a temp file (without header) when *molecules* is a list."""
-    if isinstance(molecules, str):
-        return molecules
-    import csv
-    import os
-    import tempfile
-
-    # Write to a temp file in the results directory so skip_existing can work.
-    # Note: No header row — load_molecules expects headerless CSV with (smiles, name) columns.
-    results_dir = f"results_{surface_type}"
-    os.makedirs(results_dir, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".csv",
-        dir=results_dir,
-        delete=False,
-        newline="",
-    ) as tmp:
-        writer = csv.writer(tmp)
-        for smiles, name in molecules:
-            writer.writerow([smiles, name])
-    return tmp.name

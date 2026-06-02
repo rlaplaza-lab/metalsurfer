@@ -14,7 +14,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from metalsurfer._logging import configure_logging
+from metalsurfer import configure_logging
 from metalsurfer.ml.bayesian import score_and_select, train_surrogate
 from metalsurfer.ml.features import extract_features_from_dataset
 

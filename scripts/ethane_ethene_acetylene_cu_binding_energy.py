@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Compute binding energies of ethane/ethene/acetylene on Cu(111)."""
 
-from metalsurfer import AdsorptionConfig, run_adsorption
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_screening_complete
-from metalsurfer.surface_prep import create_slab_from_bulk
+from metalsurfer import (
+    AdsorptionConfig,
+    configure_logging,
+    prepare_slab,
+    run_adsorption,
+)
 
 MOLECULES = [("CC", "ethane"), ("C=C", "ethene"), ("C#C", "acetylene")]
 
@@ -12,12 +14,8 @@ MOLECULES = [("CC", "ethane"), ("C=C", "ethene"), ("C#C", "acetylene")]
 def main() -> None:
     configure_logging(default_level="INFO")
     surface_type = "ethane_ethene_acetylene_cu"
-    slab = create_slab_from_bulk(
-        bulk_id="mp-30",
-        miller_indices=(1, 1, 1),
-        supercell=(1, 1, 1),
-        results_dir=f"results_{surface_type}",
-    )
+    results_dir = f"results_{surface_type}"
+
     config = AdsorptionConfig(
         material_type="slab",
         model_name="uma-s-1p1",
@@ -32,6 +30,15 @@ def main() -> None:
         stage2_steps=500,
         debug_write_initial_placements=True,
     )
+
+    slab = prepare_slab(
+        bulk_id="mp-30",
+        miller_indices=(1, 1, 1),
+        supercell=(1, 1, 1),
+        config=config,
+        results_dir=results_dir,
+    )
+
     campaign = run_adsorption(
         slab=slab,
         molecules=MOLECULES,
@@ -39,7 +46,7 @@ def main() -> None:
         surface_type=surface_type,
         system_name="Cu_111",
     )
-    print(format_screening_complete(campaign.total_configurations))
+    print(campaign.format_screening_complete())
 
 
 if __name__ == "__main__":

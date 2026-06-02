@@ -174,7 +174,7 @@ def load_dataset(
     logger.info("Loaded dataset with %d records from %s", len(df), path)
 
     if as_records:
-        return [PlacementRecord.from_flat_dict(row) for _, row in df.iterrows()]
+        return [PlacementRecord.from_flat_dict(dict(row)) for _, row in df.iterrows()]
 
     return df
 
@@ -196,9 +196,14 @@ def merge_datasets(*paths: str, output_path: str | None = None) -> pd.DataFrame:
     """
     if not paths:
         raise ValueError("merge_datasets requires at least one path")
-    frames = [load_dataset(p, as_records=False) for p in paths]
+    frames: list[pd.DataFrame] = []
+    for path in paths:
+        loaded = load_dataset(path, as_records=False)
+        if not isinstance(loaded, pd.DataFrame):
+            raise TypeError("merge_datasets expects CSV inputs, not record lists")
+        frames.append(loaded)
 
-    merged = pd.concat(frames, ignore_index=True)
+    merged: pd.DataFrame = pd.concat(frames, ignore_index=True)
     merged = merged.drop_duplicates(subset=["record_hash"], keep="first")
     merged = merged.sort_values("record_hash").reset_index(drop=True)
 

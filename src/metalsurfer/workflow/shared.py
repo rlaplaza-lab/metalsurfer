@@ -4,7 +4,6 @@ import logging
 import os
 import threading
 from dataclasses import dataclass
-from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -20,6 +19,7 @@ from ..placement import get_symmetry_aware_sites
 from ..placement._material import material_aware_pbc
 from ..placement.generators import generate_placement_from_spec_with_reason
 from ..placement.geometry import calculate_min_distance
+from ..surfaces import SlabContainer, auto_resize_slab_for_molecule
 from ..symmetry import SymmetryAnalysisError
 
 logger = logging.getLogger(__name__)
@@ -389,6 +389,94 @@ def _evaluate_optimized_candidate(
     return result, None
 
 
+@dataclass
+class SubstrateRefState:
+    """Substrate geometry and freeze reference after optional auto-resize."""
+
+    slab: SlabContainer
+    slab_for_sites: Atoms
+    effective_base_slab_for_frozen: Atoms | None
+    slab_was_resized: bool
+    substrate_atoms_after_resize: Atoms | None
+
+
+def _resolve_base_slab_for_frozen(
+    slab_atoms: Atoms,
+    base_slab_for_frozen: Atoms | None,
+    *,
+    slab_was_resized: bool = False,
+    substrate_atoms_after_resize: Atoms | None = None,
+) -> Atoms | None:
+    """Choose the substrate reference passed to ``optimize_adsorbate_slab_batched``.
+
+    When the substrate was auto-resized in-plane, use the full current substrate
+    so every repeated tile is included in top-layer detection or full freeze.
+    Otherwise keep ``base_slab_for_frozen`` so saturation can freeze only the
+    original substrate block while prior adsorbates relax.
+    """
+    if base_slab_for_frozen is None:
+        return None
+    if slab_was_resized:
+        if substrate_atoms_after_resize is not None:
+            return substrate_atoms_after_resize
+        return slab_atoms.copy()
+    return base_slab_for_frozen
+
+
+def write_substrate_step_metadata(
+    step_metadata_out: dict[str, object] | None,
+    *,
+    slab_was_resized: bool,
+    substrate_atoms_after_resize: Atoms | None,
+) -> None:
+    """Record auto-resize outcome for saturation ``base_slab`` persistence."""
+    if step_metadata_out is None:
+        return
+    step_metadata_out["slab_was_resized"] = slab_was_resized
+    if substrate_atoms_after_resize is not None:
+        step_metadata_out["substrate_atoms_after_resize"] = substrate_atoms_after_resize
+
+
+def prepare_substrate_for_screening(
+    slab: SlabContainer,
+    conformers: list[Atoms],
+    base_slab_for_frozen: Atoms | None,
+    config: AdsorptionConfig,
+    *,
+    allow_auto_resize: bool,
+) -> SubstrateRefState:
+    """Optionally auto-resize the slab and resolve placement/freeze references."""
+    slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab_for_frozen)
+
+    slab_was_resized = False
+    substrate_atoms_after_resize: Atoms | None = None
+    if config.auto_resize_slab and allow_auto_resize:
+        slab, was_resized = auto_resize_slab_for_molecule(
+            slab, conformers, config.min_pbc_image_separation
+        )
+        if was_resized:
+            slab_was_resized = True
+            substrate_atoms_after_resize = slab.atoms.copy()
+            slab_for_sites = _build_surface_reference_slab(
+                slab.atoms, base_slab_for_frozen
+            )
+
+    effective_base_slab_for_frozen = _resolve_base_slab_for_frozen(
+        slab.atoms,
+        base_slab_for_frozen,
+        slab_was_resized=slab_was_resized,
+        substrate_atoms_after_resize=substrate_atoms_after_resize,
+    )
+
+    return SubstrateRefState(
+        slab=slab,
+        slab_for_sites=slab_for_sites,
+        effective_base_slab_for_frozen=effective_base_slab_for_frozen,
+        slab_was_resized=slab_was_resized,
+        substrate_atoms_after_resize=substrate_atoms_after_resize,
+    )
+
+
 def _build_surface_reference_slab(
     slab_atoms: Atoms,
     base_slab_for_frozen: Atoms | None,
@@ -492,54 +580,6 @@ def _infer_surface_symbols(slab: Atoms) -> list[str]:
     return sorted(set(slab.get_chemical_symbols()))
 
 
-def format_failure_summary(failure_summary: dict[str, object]) -> str:
-    """Produce a human-readable multi-line summary from a failure_summary dict."""
-    lines = ["Failure summary:"]
-    stage = failure_summary.get("stage", "unknown")
-    lines.append(f"  Stage: {stage}")
-
-    if stage == "reference" or stage == "conformers":
-        reason = failure_summary.get("reason", "")
-        if reason:
-            lines.append(f"  Reason: {reason}")
-    elif stage == "placement":
-        n_attempted = failure_summary.get("n_placements_attempted", "?")
-        n_initial = failure_summary.get("n_initial_placements", 0)
-        lines.append(f"  Placements attempted: {n_attempted}")
-        lines.append(f"  Initial placements: {n_initial}")
-        if "n_candidate_specs" in failure_summary:
-            lines.append(
-                f"  Candidate specs: {failure_summary.get('n_candidate_specs', '?')}"
-            )
-        if "n_valid_pool" in failure_summary:
-            lines.append(f"  Valid pool: {failure_summary.get('n_valid_pool', '?')}")
-    elif stage == "validation":
-        n_initial = failure_summary.get("n_initial_placements", "?")
-        n_opt = failure_summary.get("n_optimized", "?")
-        n_opt_fail = failure_summary.get("n_optimization_failed", 0)
-        lines.append(f"  Initial placements: {n_initial}")
-        lines.append(f"  Optimized: {n_opt} ({n_opt_fail} failed)")
-        lines.append("  Passed validation: 0")
-        if "n_evaluated" in failure_summary:
-            lines.append(f"  BO evaluated: {failure_summary.get('n_evaluated', '?')}")
-        if "n_valid_results" in failure_summary:
-            lines.append(
-                f"  BO valid results: {failure_summary.get('n_valid_results', '?')}"
-            )
-        vf = cast(dict[str, int], failure_summary.get("validation_failures", {}))
-        if vf:
-            lines.append("  Validation failures:")
-            for reason, count in sorted(vf.items(), key=lambda x: -x[1]):
-                lines.append(f"    {reason}: {count}")
-    elif stage == "filter":
-        n_before = failure_summary.get("n_before_filter", "?")
-        n_after = failure_summary.get("n_after_filter", 0)
-        lines.append(f"  Before filter: {n_before}")
-        lines.append(f"  After filter: {n_after}")
-
-    return "\n".join(lines)
-
-
 def load_molecules(
     csv_file: str = "smiles.csv",
     skip_existing: bool = True,
@@ -552,6 +592,78 @@ def load_molecules(
     df = df.dropna()
     all_molecules = df["molecule"].tolist()
     all_smiles = df["smiles"].tolist()
+
+    return _select_molecules_for_processing(
+        all_molecules=all_molecules,
+        all_smiles=all_smiles,
+        skip_existing=skip_existing,
+        skip_saturation_file=skip_saturation_file,
+        results_dir=results_dir,
+    )
+
+
+def load_molecules_from_pairs(
+    molecule_pairs: list[tuple[str, str]] | tuple[str, str],
+    *,
+    skip_existing: bool = True,
+    surface_type: str | None = None,
+    skip_saturation_file: bool = False,
+) -> tuple[list[str], list[str], str]:
+    """Load molecules from in-memory ``(smiles, name)`` tuples."""
+    results_dir = f"results_{surface_type}" if surface_type else "results_manual"
+    pairs = _normalize_molecule_pairs(molecule_pairs)
+    all_smiles = [smiles for smiles, _ in pairs]
+    all_molecules = [name for _, name in pairs]
+
+    return _select_molecules_for_processing(
+        all_molecules=all_molecules,
+        all_smiles=all_smiles,
+        skip_existing=skip_existing,
+        skip_saturation_file=skip_saturation_file,
+        results_dir=results_dir,
+    )
+
+
+def _normalize_molecule_pairs(
+    molecule_pairs: list[tuple[str, str]] | tuple[str, str],
+) -> list[tuple[str, str]]:
+    if isinstance(molecule_pairs, tuple):
+        if len(molecule_pairs) != 2:
+            raise ValueError(
+                "molecule tuple input must be a (smiles, molecule_name) pair"
+            )
+        smiles, molecule_name = molecule_pairs
+        if not isinstance(smiles, str) or not isinstance(molecule_name, str):
+            raise TypeError(
+                "molecule tuple input must be a (smiles: str, molecule_name: str) pair"
+            )
+        return [(smiles, molecule_name)]
+
+    normalized: list[tuple[str, str]] = []
+    for pair in molecule_pairs:
+        if not isinstance(pair, tuple) or len(pair) != 2:
+            raise ValueError(
+                "molecule list input must contain only (smiles, molecule_name) tuples"
+            )
+        smiles, molecule_name = pair
+        if not isinstance(smiles, str) or not isinstance(molecule_name, str):
+            raise TypeError(
+                "molecule list input must contain only (smiles: str, molecule_name: str) tuples"
+            )
+        normalized.append((smiles, molecule_name))
+    return normalized
+
+
+def _select_molecules_for_processing(
+    *,
+    all_molecules: list[str],
+    all_smiles: list[str],
+    skip_existing: bool,
+    skip_saturation_file: bool,
+    results_dir: str,
+) -> tuple[list[str], list[str], str]:
+    if len(all_molecules) != len(all_smiles):
+        raise ValueError("molecule names and smiles must have matching lengths")
 
     if not all_molecules:
         return [], [], "empty_file"

@@ -145,12 +145,11 @@ def ei_scores(
     sigma = np.asarray(sigma, dtype=float).ravel()
     imp = f_best - mu - xi
     z = np.divide(imp, sigma, out=np.zeros_like(imp, dtype=float), where=sigma > 1e-9)
-    ei = np.where(
+    return np.where(
         sigma > 1e-9,
         imp * stats.norm.cdf(z) + sigma * stats.norm.pdf(z),
         np.maximum(0.0, imp + xi),
     )
-    return ei
 
 
 def pi_scores(
@@ -171,8 +170,7 @@ def pi_scores(
         out=np.zeros_like(mu, dtype=float),
         where=sigma > 1e-9,
     )
-    pi = np.where(sigma > 1e-9, stats.norm.cdf(z), (mu < f_best - xi).astype(float))
-    return pi
+    return np.where(sigma > 1e-9, stats.norm.cdf(z), (mu < f_best - xi).astype(float))
 
 
 def select_candidates(

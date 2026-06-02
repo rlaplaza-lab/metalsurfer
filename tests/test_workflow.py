@@ -19,6 +19,7 @@ from metalsurfer.io_results import (
     setup_directories,
 )
 from metalsurfer.models import (
+    BindingCampaignResult,
     MoleculeSummary,
     PlacementSpec,
     ReferenceEnergies,
@@ -27,7 +28,6 @@ from metalsurfer.models import (
 )
 from metalsurfer.surfaces import SlabContainer
 from metalsurfer.workflow import (
-    format_failure_summary,
     load_molecules,
     process_molecule,
     process_molecule_bayesian,
@@ -353,7 +353,7 @@ class TestProcessMolecule:
                 "metalsurfer.placement.generators.enumerate_placement_specs", mock_specs
             ),
             patch(
-                "metalsurfer.workflow.core.auto_resize_slab_for_molecule", mock_resize
+                "metalsurfer.workflow.shared.auto_resize_slab_for_molecule", mock_resize
             ),
             patch(
                 "metalsurfer.workflow.core.optimize_adsorbate_slab_batched",
@@ -390,7 +390,7 @@ class TestProcessMolecule:
                 "metalsurfer.placement.generators.enumerate_placement_specs", mock_specs
             ),
             patch(
-                "metalsurfer.workflow.core.auto_resize_slab_for_molecule", mock_resize
+                "metalsurfer.workflow.shared.auto_resize_slab_for_molecule", mock_resize
             ),
             patch(
                 "metalsurfer.workflow.core.optimize_adsorbate_slab_batched",
@@ -408,6 +408,50 @@ class TestProcessMolecule:
                 allow_auto_resize=False,
             )
         mock_resize.assert_not_called()
+
+    def test_bayesian_runs_auto_resize_when_enabled(self):
+        """BO screening evaluates auto-resize when enabled."""
+        slab = SlabContainer(make_slab())
+        refs = self._make_refs()
+        config = AdsorptionConfig(
+            bo_enabled=True,
+            num_conformers=1,
+            seed=42,
+            auto_resize_slab=True,
+            bo_initial_random=1,
+            bo_total_budget=1,
+        )
+        mock_resize = MagicMock(return_value=(slab, False))
+        mock_cfs = MagicMock(return_value=([Atoms("H2")], [0.0]))
+        mock_capacity = MagicMock(return_value=0)
+        mock_specs = MagicMock(return_value=[])
+        with (
+            patch(
+                "metalsurfer.workflow.bayesian.create_conformers_from_smiles",
+                mock_cfs,
+            ),
+            patch(
+                "metalsurfer.workflow.shared.auto_resize_slab_for_molecule",
+                mock_resize,
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian.estimate_placement_spec_capacity",
+                mock_capacity,
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian.enumerate_placement_specs", mock_specs
+            ),
+        ):
+            process_molecule_bayesian(
+                "O",
+                "water",
+                slab,
+                MagicMock(),
+                refs,
+                config=config,
+                base_slab_for_frozen=None,
+            )
+        mock_resize.assert_called_once()
 
     # Note: Full process_molecule integration on pre-adsorbed slab is covered by
     # test_placement.test_placement_auto_uses_envelope_for_non_planar and
@@ -622,7 +666,7 @@ class TestProcessMolecule:
 class TestFormatFailureSummary:
     def test_reference_stage(self):
         summary = {"stage": "reference", "reason": "missing reference energy for H2"}
-        out = format_failure_summary(summary)
+        out = BindingCampaignResult.format_failure_summary(summary)
         assert_lines_contain(
             out,
             [
@@ -637,7 +681,7 @@ class TestFormatFailureSummary:
             "n_placements_attempted": 50,
             "n_initial_placements": 0,
         }
-        out = format_failure_summary(summary)
+        out = BindingCampaignResult.format_failure_summary(summary)
         assert_lines_contain(
             out,
             [
@@ -659,7 +703,7 @@ class TestFormatFailureSummary:
                 "E_ads too high: 1.50 eV": 5,
             },
         }
-        out = format_failure_summary(summary)
+        out = BindingCampaignResult.format_failure_summary(summary)
         assert_lines_contain(
             out,
             [
@@ -678,7 +722,7 @@ class TestFormatFailureSummary:
             "n_before_filter": 5,
             "n_after_filter": 0,
         }
-        out = format_failure_summary(summary)
+        out = BindingCampaignResult.format_failure_summary(summary)
         assert_lines_contain(
             out,
             [

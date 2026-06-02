@@ -10,14 +10,12 @@ Run from project root: pip install -e . && pip install -e ".[mlip]"
 
 from metalsurfer import (
     AdsorptionConfig,
-    create_slab_from_bulk,
+    configure_logging,
+    prepare_slab,
     run_adsorption,
-    substitute_alloy,
 )
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_screening_complete
 
-# (SMILES, molecule_name)
+# List of smiles and molecule name pairs
 MOLECULES = [
     ("CC", "ethane"),
     ("C=C", "ethene"),
@@ -29,14 +27,6 @@ def main():
     configure_logging(default_level="INFO")
     results_subdir = "ethane_ethene_acetylene_rucu2"
     results_dir = f"results_{results_subdir}"
-
-    # Create Ru(0001) slab from Materials Project mp-33.
-    base_slab = create_slab_from_bulk(
-        bulk_id="mp-33",
-        miller_indices=(0, 0, 1),
-        supercell=(1, 1, 1),
-        results_dir=results_dir,
-    )
 
     config = AdsorptionConfig(
         material_type="slab",
@@ -53,17 +43,18 @@ def main():
         debug_write_initial_placements=True,
     )
 
-    # Substitute 2/3 of Ru with Cu to form RuCu2 alloy
-    slab = substitute_alloy(
-        base_slab,
-        host_symbol="Ru",
-        guest_symbol="Cu",
-        guest_fraction=2.0 / 3.0,
-        calculator=None,
+    slab = prepare_slab(
+        bulk_id="mp-33",
+        miller_indices=(0, 0, 1),
+        supercell=(1, 1, 1),
+        alloy_host="Ru",
+        alloy_guest="Cu",
+        alloy_fraction=2.0 / 3.0,
         enforce_top_layer_fraction=True,
         config=config,
         results_dir=results_dir,
     )
+
     campaign = run_adsorption(
         slab=slab,
         molecules=MOLECULES,
@@ -71,7 +62,7 @@ def main():
         surface_type=results_subdir,
         system_name="RuCu2_0001",
     )
-    print(format_screening_complete(campaign.total_configurations))
+    print(campaign.format_screening_complete())
 
 
 if __name__ == "__main__":

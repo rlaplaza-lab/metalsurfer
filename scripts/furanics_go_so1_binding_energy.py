@@ -22,12 +22,11 @@ from ase.io import read
 
 from metalsurfer import (
     AdsorptionConfig,
+    configure_logging,
     run_adsorption_bo,
 )
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_binding_summary
 
-# (SMILES, molecule_name)
+# List of smiles and molecule name pairs
 MOLECULES = [
     ("C(=O)C1OC(CO[H])=CC=1", "HMF"),
     ("C(O[H])C1OC(CO[H])=CC=1", "BHMF"),
@@ -142,11 +141,10 @@ def main():
         system_name="GO_SO1",
     )
 
-    print("")
+    print()
     print(
-        format_binding_summary(
+        campaign.format_summary(
             title="Binding energy summary (graphene oxide, semi-ordered SO1)",
-            molecule_summaries=campaign.molecule_summaries,
             results_dir=results_dir,
         )
     )

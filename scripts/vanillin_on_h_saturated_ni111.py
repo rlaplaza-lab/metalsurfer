@@ -20,11 +20,10 @@ from ase.io import read
 
 from metalsurfer import (
     AdsorptionConfig,
-    create_slab_from_bulk,
+    configure_logging,
+    prepare_slab,
     run_adsorption,
 )
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_results_saved_line
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,14 +107,6 @@ def main():
     saturated_atoms = read(saturated_xyz)
     slab = saturated_atoms
 
-    # Clean metal slab for frozen indices (subsurface metal only)
-    base_slab = create_slab_from_bulk(
-        bulk_id="mp-23",
-        miller_indices=(1, 1, 1),
-        supercell=(1, 1, 1),
-        results_dir=results_dir,
-    )
-
     config = AdsorptionConfig(
         material_type="slab",
         model_name="uma-m-1p1",
@@ -130,6 +121,15 @@ def main():
         stage2_steps=500,
         top_layer_tolerance=2.0,  # Include top metal + H in top layer for envelope
         relax_top_layer=True,  # Explicitly allow top-layer relaxation for H-saturated slab
+    )
+
+    # Clean metal slab for frozen indices (subsurface metal only)
+    base_slab = prepare_slab(
+        bulk_id="mp-23",
+        miller_indices=(1, 1, 1),
+        supercell=(1, 1, 1),
+        config=config,
+        results_dir=results_dir,
     )
 
     smiles = "c1(C=O)cc(OC)c(O)cc1"
@@ -152,7 +152,7 @@ def main():
             f"  Orientations: {summary.n_parallel}/{summary.n_valid_placements} parallel, "
             f"{summary.n_endown} EN-down"
         )
-        print(f"  {format_results_saved_line(results_dir)}")
+        print(f"  {campaign.format_results_saved_line(results_dir=results_dir)}")
     else:
         print("No valid placements found.")
         return 1

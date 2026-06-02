@@ -7,11 +7,10 @@ Run from project root: pip install -e . && pip install -e ".[mlip]"
 
 from metalsurfer import (
     AdsorptionConfig,
-    create_slab_from_bulk,
+    configure_logging,
+    prepare_slab,
     run_adsorption,
 )
-from metalsurfer._logging import configure_logging
-from metalsurfer.cli.cli_output import format_results_saved_line
 
 
 def main():
@@ -19,15 +18,6 @@ def main():
     # Single subdir for slab, placements, and results (avoids path drift)
     results_subdir = "vanillin_ni111"
     results_dir = f"results_{results_subdir}"
-
-    # Create Ni(111) slab from Materials Project mp-23.
-    # Use minimal (1,1,1) supercell; auto_resize_slab will expand if needed for PBC separation.
-    slab = create_slab_from_bulk(
-        bulk_id="mp-23",
-        miller_indices=(1, 1, 1),
-        supercell=(1, 1, 1),
-        results_dir=results_dir,
-    )
 
     config = AdsorptionConfig(
         material_type="slab",
@@ -42,6 +32,16 @@ def main():
         stage1_steps=50,
         stage2_steps=500,
         debug_write_initial_placements=True,
+    )
+
+    # Create Ni(111) slab from Materials Project mp-23.
+    # Use minimal (1,1,1) supercell; auto_resize_slab will expand if needed for PBC separation.
+    slab = prepare_slab(
+        bulk_id="mp-23",
+        miller_indices=(1, 1, 1),
+        supercell=(1, 1, 1),
+        config=config,
+        results_dir=results_dir,
     )
 
     smiles = "c1(C=O)cc(OC)c(O)cc1"
@@ -64,7 +64,7 @@ def main():
             f"  Orientations: {summary.n_parallel}/{summary.n_valid_placements} parallel, "
             f"{summary.n_endown} EN-down"
         )
-        print(f"  {format_results_saved_line(results_dir)}")
+        print(f"  {campaign.format_results_saved_line(results_dir=results_dir)}")
     else:
         print("No valid placements found.")
 

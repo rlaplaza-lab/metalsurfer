@@ -59,7 +59,7 @@ def _build_estimator(
     if model_type == "ridge":
         estimator = Ridge(alpha=kwargs.get("alpha", 1.0), random_state=random_state)
         return Pipeline([("scaler", StandardScaler()), ("regressor", estimator)])
-    elif model_type == "random_forest":
+    if model_type == "random_forest":
         estimator = RandomForestRegressor(
             n_estimators=kwargs.get("n_estimators", 200),
             max_depth=kwargs.get("max_depth"),
@@ -294,7 +294,7 @@ def load_model(model_dir: str) -> tuple[Pipeline, dict[str, Any]]:
     meta_path = os.path.join(model_dir, "binding_energy_model_metadata.json")
 
     with open(model_path, "rb") as f:
-        model = pickle.load(f)  # noqa: S301
+        model = pickle.load(f)
 
     metadata: dict[str, Any] = {}
     if os.path.exists(meta_path):
