@@ -51,6 +51,22 @@ Mypy is configured in ``pyproject.toml`` and run on the library only:
 The package ships a ``py.typed`` marker. Tests, scripts, and examples are not
 gated in CI; focus is on ``src/metalsurfer``.
 
+Logging
+-------
+
+Call ``configure_logging()`` at the start of driver scripts. The library uses
+structured context (``molecule``, ``surface_type``, ``placement_id``, ``seed``)
+via ``log_context`` in screening and saturation workflows.
+
+Environment overrides:
+
+- ``METALSURFER_LOG_LEVEL`` (default: ``INFO``)
+- ``TORCHSIM_LOG_LEVEL`` (default: ``WARNING``)
+
+By default, INFO logs go to **stdout** so HPC schedulers capture progress in
+``.out`` files. TorchSim stdout/stderr during relaxation is routed through
+``torchsim_output_capture``. See also the **Logging** section in ``README.md``.
+
 Tests
 -----
 

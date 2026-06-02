@@ -5,7 +5,7 @@ Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, to
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 
 If you hit CUDA OOM on a 15GB GPU, try:
-  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python scripts/h2_pt12_binding_energy.py
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/h2_pt12_binding_energy.py
 or reduce num_placements (e.g. 25).
 """
 

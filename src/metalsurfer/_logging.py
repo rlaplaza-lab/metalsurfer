@@ -196,6 +196,12 @@ def _parse_level(level_name: str, default: int) -> int:
     return level if isinstance(level, int) else default
 
 
+def _ensure_context_filter(handler: logging.Handler) -> None:
+    """Attach ContextFilter once so ctx_prefix is set at format time."""
+    if not any(isinstance(f, ContextFilter) for f in handler.filters):
+        handler.addFilter(ContextFilter())
+
+
 def configure_logging(
     *,
     default_level: str = "INFO",
@@ -244,11 +250,13 @@ def configure_logging(
             if isinstance(handler, logging.StreamHandler):
                 handler.setStream(target_stream)
                 handler.setFormatter(formatter)
+                _ensure_context_filter(handler)
                 stream_handler_found = True
 
         if not stream_handler_found:
             sh = logging.StreamHandler(target_stream)
             sh.setFormatter(formatter)
+            _ensure_context_filter(sh)
             root.addHandler(sh)
 
     torchsim_level = _parse_level(

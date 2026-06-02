@@ -54,9 +54,10 @@ python examples/bipyridine_au111_defects_saturation_raw.py
 
 The HPC-oriented copy of this workflow is `scripts/bipyridine_au111_defects_saturation_raw.py`.
 
-These examples:
-- Use pure ASE for receptor preparation
-- Limit to modest placements for quick testing (5-25)
+These examples span Pt, Ru, MOF, and Au(111); the same API accepts any ASE `Atoms` or prepared slab.
+
+- Use pure ASE for receptor preparation (or `prepare_slab` from a bulk id)
+- Quick demos use modest placement counts; the bipyridine HPC script uses many more (see `scripts/`)
 - Demonstrate different material types (`nanoparticle`, `porous`, and `slab`)
 - Produce XYZ structures, POSCAR files, and CSV results
 
@@ -73,9 +74,13 @@ The library exposes four high-level entry points:
 
 Each accepts either an in-memory `list[tuple[str, str]]` of `(smiles, name)` pairs or a path to a SMILES CSV as `molecules`.
 
-### ASE Atoms input
+### Surfaces: ASE Atoms, bulk prep, or containers
 
-All run entry points accept a plain ASE `Atoms` object directly. This is the recommended path for user scripts.
+Surfaces are **not** tied to a specific element. Pass any `ase.Atoms` you already have (clusters, slabs, MOFs from CIF, saturated intermediates from XYZ), or build one with `prepare_slab(bulk_id=...)` / `create_slab_from_bulk`. Use `SlabContainer` only when you need its metadata helpers.
+
+`AdsorptionConfig.material_type` (`slab`, `nanoparticle`, or `porous`) controls placement and validation geometry, not the chemical symbols in the structure.
+
+All four `run_*` entry points accept plain `Atoms` directly (recommended for custom scripts):
 
 Example:
 
@@ -99,6 +104,14 @@ result = run_adsorption(
 ```
 
 `create_slab_from_atoms(...)` wraps a bare `Atoms` in a `SlabContainer` with default metadata; passing `Atoms` directly to run entry points is preferred when you do not need the container.
+
+### Slab sizing and PBC
+
+For periodic slabs, sizing is flexible and material-agnostic:
+
+- `auto_resize_slab` (default `True` for screening): repeats the substrate in-plane when `min_pbc_image_separation` requires it.
+- Saturation: auto-resize runs only on **step 1**; if the substrate is tiled in-plane, the freeze reference expands to every repeated substrate tile.
+- Tune per system with `supercell`, `min_pbc_image_separation`, or `auto_resize_slab=False` (as in the bipyridine example when the initial supercell is already large enough).
 
 ### 1. Standard Screening
 
@@ -252,19 +265,19 @@ for entry in campaign.runs:
 
 Important saturation behaviors:
 
-- **Prep vs adsorption relaxation:** `slab_relaxation_mode` controls ASE equilibration during `prepare_slab` only. During placements, `relax_top_layer=False` freezes the post-prep substrate (`base_slab_for_frozen`, typically the `clean_slab_*` file written after adatom deposition). Compare optimized structures to that reference, not to pre-adatom `clean_slab` files.
-- Auto-resize is only allowed on the first adsorption step; if the substrate is repeated in-plane, the freeze reference is expanded to cover every Au tile.
+- **Prep vs adsorption relaxation:** `slab_relaxation_mode` controls ASE equilibration during `prepare_slab` only. During placements, `relax_top_layer=False` freezes the post-prep substrate (`base_slab_for_frozen`, e.g. `clean_slab_Au20_*` after adatom deposition on the Au defect workflow). Compare optimized structures to that reference, not to pre-adatom `clean_slab` files.
+- Auto-resize is only allowed on the first adsorption step; if the substrate is repeated in-plane, the freeze reference is expanded to cover every repeated in-plane substrate tile.
 - When `bo_enabled=True`, the saturation loop can reuse prior-step BO observations through the `bo_transfer_*` settings.
 - When `multi_molecule_saturation=True` and multiple molecules are provided (in-memory list or CSV), the workflow switches to competitive saturation, where molecules compete for each step and the best overall adsorption wins.
 - Competitive saturation also supports `bo_enabled=True`. In that mode, each adsorbate trains and carries forward its own BO state independently; BO observations are not shared across adsorbates.
 - By default, `saturation_save_all_placements=True` writes every validated placement per step under `xyz_structures/.../step_{NNN}_placements/` (and matching `vasp_inputs/...`), plus `saturation_placements_detailed.csv`. Set `saturation_save_all_placements=False` to persist only the per-step best structures (smaller disk use).
 - Set `save_benchmark_dataset=True` on `AdsorptionConfig` to also write `adsorption_energies_detailed.csv` (flattened step placements for BO benchmarking).
 - By default, `saturation_discard_topology_rearrangements=True` re-checks the full adsorbate pool on each candidate **before** choosing the step winner: adsorbates must form the expected number of connected fragments (connectivity-only guard). This catches inter-adsorbate coupling or unexpected splitting that per-placement filtering can miss while allowing strong adsorbate-material interactions that preserve adsorbate connectivity. Set `False` to rank only by `E_ads`; the guard is also skipped when `skip_topology_check=True`.
-- Recommended validation split: keep local validation focused on mocked or lightweight saturation tests, and reserve full-stack BO competitive saturation checks for a dedicated `gpu` + `slow` integration test in a GPU-capable environment.
+- Contributor test markers (`gpu`, `slow`): see the [development guide](https://metalsurfer.readthedocs.io/en/latest/guides/development.html).
 
 ### Surface setup and modifiers
 
-Use :func:`~metalsurfer.prepare_slab` to build or load a slab and optionally apply alloy substitution and adatom deposition in one call:
+Use [`prepare_slab`](https://metalsurfer.readthedocs.io/en/latest/api/surface_prep.html) to build or load a slab and optionally apply alloy substitution and adatom deposition in one call:
 
 ```python
 from metalsurfer import AdsorptionConfig, prepare_slab
@@ -338,6 +351,17 @@ The output directory is `results_{surface_type}`. Depending on run mode, the lib
 - `vasp_inputs/...`
 
 Campaign APIs save structures and summary tables by default (`run_saturation` / `run_saturation_bo` call `save_saturation_results(..., config=config)` so placement-tree output follows `saturation_save_all_placements` and the rest of `AdsorptionConfig`). Workflow APIs return typed results and can be paired with `save_summary_results(...)`, `save_saturation_results(...)`, `save_multi_mol_saturation_results(...)`, `write_run_metadata(...)`, and `write_run_settings(...)` for explicit persistence control (for example after `save_results=False` or custom paths).
+
+## Logging
+
+Call `configure_logging()` at the start of scripts (all `examples/` and `scripts/` already do). Workflows emit structured logs with optional context (`molecule`, `surface_type`, `placement_id`, `seed`) via `log_context`.
+
+Environment overrides:
+
+- `METALSURFER_LOG_LEVEL` (default: `INFO`)
+- `TORCHSIM_LOG_LEVEL` (default: `WARNING`)
+
+Logs go to **stdout** by default so HPC job `.out` files capture progress. TorchSim stdout/stderr is captured during relaxation (`torchsim_output_capture` in `src/metalsurfer/_logging.py`).
 
 ## Development
 
