@@ -11,14 +11,16 @@ from .config import AdsorptionConfig
 
 logger = logging.getLogger(__name__)
 
-Chem: Any
-AllChem: Any
+Chem: Any = None
+AllChem: Any = None
 try:
-    from rdkit import Chem as Chem
-    from rdkit.Chem import AllChem as AllChem
+    from rdkit import Chem as _rdkit_chem
+    from rdkit.Chem import AllChem as _rdkit_allchem
+
+    Chem = _rdkit_chem
+    AllChem = _rdkit_allchem
 except (ImportError, AttributeError):
-    Chem = None
-    AllChem = None
+    pass
 
 
 def create_conformers_from_smiles(

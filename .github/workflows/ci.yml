@@ -27,8 +27,17 @@ jobs:
 
       - name: Mypy typecheck
         run: |
-          # rdkit 2026.3.3 ships broken PEP 561 stubs that abort mypy before our code runs.
-          pip uninstall -y rdkit-stubs 2>/dev/null || true
+          # rdkit wheels bundle a broken rdkit-stubs/ tree (not a separate pip package).
+          python - <<'PY'
+          import pathlib
+          import shutil
+          import site
+
+          for root in site.getsitepackages():
+              stubs = pathlib.Path(root) / "rdkit-stubs"
+              if stubs.is_dir():
+                  shutil.rmtree(stubs)
+          PY
           mypy src/metalsurfer
 
   # -----------------------------------------------------------------------

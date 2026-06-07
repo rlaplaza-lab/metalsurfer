@@ -4,7 +4,7 @@ import contextlib
 import gc
 import logging
 import math
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import numpy as np
 from ase import Atoms
@@ -503,7 +503,9 @@ def setup_torchsim_model(model_name: str = "uma-s-1p1", device: str = "cuda"):
     dev = torch.device(device) if torch is not None and device else None
     try:
         with torchsim_output_capture():
-            model = FairChemModel(model=model_name, device=dev, task_name="oc20")  # type: ignore[abstract]
+            model = cast(Any, FairChemModel)(
+                model=model_name, device=dev, task_name="oc20"
+            )
     except Exception as exc:
         _raise_fairchem_load_error(exc, model_name)
     logger.info("TorchSim model created successfully")
