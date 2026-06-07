@@ -4,7 +4,7 @@ import contextlib
 import gc
 import logging
 import math
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import numpy as np
 from ase import Atoms
@@ -20,15 +20,25 @@ logger = logging.getLogger(__name__)
 # stack -- keeps ``from metalsurfer import AdsorptionConfig`` working in CI)
 # ---------------------------------------------------------------------------
 try:
-    import torch
+    import torch as _torch_mod
 except ImportError:
-    torch = None
+    torch: Any = None
+else:
+    torch = _torch_mod
+
+ts: Any = None
+ts_constraints: Any = None
+InFlightAutoBatcher: Any = None
 
 try:
-    import torch_sim as ts
-    import torch_sim.constraints as ts_constraints
+    import torch_sim as _ts_mod
+    import torch_sim.constraints as _ts_constraints_mod
     import torch_sim.state as _ts_state
-    from torch_sim.autobatching import InFlightAutoBatcher
+    from torch_sim.autobatching import InFlightAutoBatcher as _InFlightAutoBatcher
+
+    ts = _ts_mod
+    ts_constraints = _ts_constraints_mod
+    InFlightAutoBatcher = _InFlightAutoBatcher
 
     # Upstream _split_state uses torch.arange(...) without device=, so bounds
     # live on CPU while constraint tensors are on CUDA. Patch to use state.device.
@@ -89,12 +99,10 @@ try:
 
     _ts_state._split_state = _patched_split_state
 except ImportError:
-    ts = None
-    ts_constraints = None
-    InFlightAutoBatcher = None
+    pass
 
 # NOTE: single-thread access assumed; no lock needed for current workflows.
-_AUTOBATCHER_CACHE: dict[tuple, "InFlightAutoBatcher"] = {}
+_AUTOBATCHER_CACHE: dict[tuple, Any] = {}
 _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER = 2.0
 _DYNAMIC_AUTOBATCHER_CAP_MIN = 5_000
 _DYNAMIC_AUTOBATCHER_CAP_MAX = 200_000
@@ -223,7 +231,7 @@ def _get_inflight_autobatcher(
         if cached is not None:
             return cached, key, False
         if saturation_reuse:
-            matching_candidates: list[tuple[tuple, object]] = []
+            matching_candidates: list[tuple[tuple, Any]] = []
             for cache_key, cache_ab in _AUTOBATCHER_CACHE.items():
                 if (
                     cache_key[0] == key[0]
@@ -266,7 +274,7 @@ def _get_inflight_autobatcher(
         }
         if max_memory_scaler is not None:
             kwargs["max_memory_scaler"] = max_memory_scaler
-        ab = InFlightAutoBatcher(ts_model, **kwargs)
+        ab: Any = InFlightAutoBatcher(ts_model, **kwargs)
         _AUTOBATCHER_CACHE[key] = ab
         return ab, key, False
     except (RuntimeError, TypeError, ValueError) as exc:
@@ -495,7 +503,7 @@ def setup_torchsim_model(model_name: str = "uma-s-1p1", device: str = "cuda"):
     dev = torch.device(device) if torch is not None and device else None
     try:
         with torchsim_output_capture():
-            model = FairChemModel(model=model_name, device=dev, task_name="oc20")
+            model = FairChemModel(model=model_name, device=dev, task_name="oc20")  # type: ignore[abstract]
     except Exception as exc:
         _raise_fairchem_load_error(exc, model_name)
     logger.info("TorchSim model created successfully")

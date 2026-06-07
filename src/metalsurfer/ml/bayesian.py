@@ -13,7 +13,11 @@ from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
 from ..placement import generators as placement_generators
 from .features import extract_features
-from .regression import train_model, tree_regressor_for_bayesian_surrogate
+from .regression import (
+    TreeSurrogateKind,
+    train_model,
+    tree_regressor_for_bayesian_surrogate,
+)
 from .schema import PlacementRecord
 
 AcquisitionType = Literal["lcb", "ei", "pi"]
@@ -44,8 +48,11 @@ def train_surrogate(
     Per-sample ``sample_weight`` is supported only for the tree ensembles.
     """
     if surrogate in ("random_forest", "extra_trees"):
+        tree_kind: TreeSurrogateKind = (
+            "random_forest" if surrogate == "random_forest" else "extra_trees"
+        )
         reg = tree_regressor_for_bayesian_surrogate(
-            surrogate,
+            tree_kind,
             n_estimators=n_estimators,
             random_state=random_state,
             **kwargs,

@@ -70,13 +70,18 @@ module = ["fairchem.*", "torch_sim.*", "torch.*", "sklearn.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = ["rdkit.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = ["metalsurfer.placement.sites"]
 disable_error_code = ["misc", "has-type", "union-attr", "arg-type", "attr-defined"]
 
 [tool.ruff]
 target-version = "py312"
 line-length = 88
-exclude = [".git", ".pytest_cache", "__pycache__", "*.egg-info", "results_*", "results", ".ruff_cache"]
+exclude = [".git", ".pytest_cache", "__pycache__", "*.egg-info", "results_*", "results", ".ruff_cache", "do_not_stage_tests"]
 
 [tool.ruff.lint]
 select = [
