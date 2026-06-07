@@ -26,7 +26,10 @@ jobs:
         run: ruff check . && ruff format --check .
 
       - name: Mypy typecheck
-        run: mypy src/metalsurfer
+        run: |
+          # rdkit 2026.3.3 ships broken PEP 561 stubs that abort mypy before our code runs.
+          pip uninstall -y rdkit-stubs 2>/dev/null || true
+          mypy src/metalsurfer
 
   # -----------------------------------------------------------------------
   # Unit tests (coverage gate) + dependency-behavior + integration

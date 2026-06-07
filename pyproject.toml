@@ -24,7 +24,7 @@ dependencies = [
     "ase",
     "spglib",
     "pandas",
-    "rdkit",
+    "rdkit>=2024.9,<2026.3.3",
     "scipy",
     "scikit-learn",
 ]
@@ -70,7 +70,7 @@ module = ["fairchem.*", "torch_sim.*", "torch.*", "sklearn.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["rdkit.*"]
+module = ["rdkit", "rdkit.*"]
 follow_imports = "skip"
 ignore_missing_imports = true
 
