@@ -5,15 +5,13 @@ Loads real placement data from ``results_*/adsorption_energies_detailed.csv``
 written by metalsurfer (via ``save_summary_results`` / campaign workflows),
 builds X/y, and simulates the BO loop with fixed batch size 10.
 
-Expected CSV input (required columns for reproducible feature extraction):
-  molecule, placement_id, conformer_index, face_flip,
-  z_fraction, x_abs, y_abs, z_offset,
-  quat_w, quat_x, quat_y, quat_z,
+Expected CSV input (required columns for feature extraction):
+  molecule, placement_id, conformer_index, x_abs, y_abs, z_abs,
   energy_adsorption
 
-The modern saved dataset also includes rich placement/context columns
-(``x_abs``, ``y_abs``, ``z_offset``, ``shape``, ``model_name``, etc.), and this
-benchmark uses them automatically when present.
+Optional columns (``quat_*``, ``z_fraction``, ``face_flip``, ``smiles``,
+``surface_id``, etc.) are used when present; missing quaternions default to
+identity in :func:`extract_features_from_dataset`.
 
 Usage:
   python scripts/benchmark_bo_models.py --data-dir results_co2_graphene --out benchmark_bo_results.csv --seeds 5
@@ -31,6 +29,7 @@ from metalsurfer.ml.bayesian import (
     score_and_select,
     train_surrogate,
 )
+from metalsurfer.ml.dataset import enrich_detailed_dataset_geometry
 from metalsurfer.ml.features import extract_features_from_dataset
 
 configure_logging(default_level="INFO")
@@ -45,17 +44,14 @@ REQUIRED_INPUT_COLUMNS = (
     "molecule",
     "placement_id",
     "conformer_index",
-    "face_flip",
-    "z_fraction",
     "x_abs",
     "y_abs",
-    "z_offset",
-    "quat_w",
-    "quat_x",
-    "quat_y",
-    "quat_z",
+    "z_abs",
     "energy_adsorption",
 )
+DEFAULT_BO_SURROGATE = "random_forest"
+DEFAULT_BO_ACQUISITION = "lcb"
+DEFAULT_BO_KAPPA = 1.0
 
 
 def _validate_columns(df: pd.DataFrame, csv_path: str) -> None:
@@ -99,6 +95,27 @@ def _assert_feature_energy_injective(X: pd.DataFrame, y: pd.Series) -> None:
         )
 
 
+def _dedupe_features_by_best_energy(
+    X: pd.DataFrame, y: pd.Series
+) -> tuple[pd.DataFrame, pd.Series, int]:
+    """Collapse duplicate feature rows, keeping the lowest energy per key."""
+    keys = X.apply(tuple, axis=1)
+    best_idx: list[int] = []
+    n_dropped = 0
+    for _key, idx in keys.groupby(keys).groups.items():
+        indices = list(idx)
+        if len(indices) > 1:
+            n_dropped += len(indices) - 1
+        best_idx.append(
+            int(indices[int(np.argmin(y.iloc[indices].astype(float).values))])
+        )
+    return (
+        X.iloc[best_idx].reset_index(drop=True),
+        y.iloc[best_idx].reset_index(drop=True),
+        n_dropped,
+    )
+
+
 def load_and_prepare_data(
     data_dir: str,
     surface_type: str = DEFAULT_SURFACE_TYPE,
@@ -110,12 +127,26 @@ def load_and_prepare_data(
         raise FileNotFoundError(f"Missing {csv_path}")
     df = pd.read_csv(csv_path)
     _validate_columns(df, csv_path)
+    df = enrich_detailed_dataset_geometry(df, data_dir=data_dir)
     if "smiles" not in df.columns:
         df["smiles"] = smiles
     if "surface_id" not in df.columns:
         df["surface_id"] = surface_type
     _assert_single_setup(df, csv_path)
     X, y = extract_features_from_dataset(df, target_column="energy_adsorption")
+    try:
+        _assert_feature_energy_injective(X, y)
+    except ValueError:
+        X, y, n_dropped = _dedupe_features_by_best_energy(X, y)
+        logger.warning(
+            "Duplicate feature rows with conflicting energies: deduped %d rows "
+            "(kept best energy per key); pool size %d. This can happen when a "
+            "saturation benchmark pool mixes identical placement specs evaluated "
+            "on different slab loadings.",
+            n_dropped,
+            len(X),
+        )
+        _assert_feature_energy_injective(X, y)
     return X, y, df
 
 
@@ -220,17 +251,24 @@ def main():
         args.data_dir, surface_type=args.surface_type, smiles=args.smiles
     )
     n = len(X)
+    oracle_best = float(np.min(y))
     logger.info("Loaded %d placements, %d features", n, X.shape[1])
+    logger.info("Oracle best E_ads in pool: %.4f eV", oracle_best)
 
     configs: list[tuple[str, str, float]] = [
-        ("rf", "lcb", 0.0),
-        ("rf", "lcb", 1.0),
-        ("rf", "lcb", 1.96),
-        ("rf", "lcb", 2.5),
-        ("rf", "ei", 1.96),
-        ("rf", "pi", 1.96),
+        ("random_forest", "lcb", 0.0),
+        ("random_forest", "lcb", 1.0),
+        ("random_forest", "lcb", 1.96),
+        ("random_forest", "lcb", 2.5),
+        ("random_forest", "ei", 1.96),
+        ("random_forest", "pi", 1.96),
         ("extra_trees", "lcb", 1.0),
         ("extra_trees", "pi", 1.96),
+        ("gaussian_process", "lcb", 1.0),
+        ("gaussian_process", "lcb", 1.96),
+        ("ensemble", "lcb", 1.0),
+        ("ensemble", "lcb", 1.96),
+        ("ensemble", "ei", 1.96),
         # mean-only surrogates (sigma=0 => EI/PI reduce to greedy)
         ("gradient_boost", "lcb", 0.0),
         ("ridge", "lcb", 0.0),
@@ -239,6 +277,11 @@ def main():
     for surrogate, acquisition, kappa in configs:
         key = f"{surrogate}_{acquisition}" + (
             f"_k{kappa}" if acquisition == "lcb" else ""
+        )
+        is_default = (
+            surrogate == DEFAULT_BO_SURROGATE
+            and acquisition == DEFAULT_BO_ACQUISITION
+            and kappa == DEFAULT_BO_KAPPA
         )
         finals = []
         best20 = []
@@ -265,11 +308,14 @@ def main():
                 best100.append(float(best_curve[99]))
         mean_best = float(np.mean(finals))
         std_best = float(np.std(finals))
+        regret_at_100 = mean_best - oracle_best
         rows.append(
             {
                 "surrogate": surrogate,
                 "acquisition": acquisition,
                 "kappa": kappa,
+                "is_default": is_default,
+                "oracle_best": oracle_best,
                 "mean_best_at_20": float(np.mean(best20)) if best20 else float("nan"),
                 "mean_best_at_50": float(np.mean(best50)) if best50 else float("nan"),
                 "mean_best_at_100": float(np.mean(best100))
@@ -277,12 +323,36 @@ def main():
                 else float("nan"),
                 "mean_final_best": mean_best,
                 "std_final_best": std_best,
+                "regret_at_100": regret_at_100,
                 "n_seeds": args.seeds,
             }
         )
-        logger.info("%s: mean best E_ads = %.4f ± %.4f", key, mean_best, std_best)
+        default_tag = " [DEFAULT]" if is_default else ""
+        logger.info(
+            "%s%s: mean best E_ads = %.4f ± %.4f (regret@100 = %.4f)",
+            key,
+            default_tag,
+            mean_best,
+            std_best,
+            regret_at_100,
+        )
 
     out_df = pd.DataFrame(rows)
+    out_df = out_df.sort_values(
+        by=["is_default", "mean_final_best"],
+        ascending=[False, True],
+    ).reset_index(drop=True)
+    default_row = out_df[out_df["is_default"]]
+    if not default_row.empty:
+        dr = default_row.iloc[0]
+        logger.info(
+            "Default BO (%s/%s/kappa=%.1f): mean_final_best=%.4f, regret@100=%.4f",
+            dr["surrogate"],
+            dr["acquisition"],
+            dr["kappa"],
+            dr["mean_final_best"],
+            dr["regret_at_100"],
+        )
     out_df.to_csv(args.out, index=False)
     logger.info("Wrote %s", args.out)
     return 0

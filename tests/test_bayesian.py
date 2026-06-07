@@ -10,10 +10,12 @@ from sklearn.preprocessing import StandardScaler
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.ml.bayesian import (
+    EnsembleRegressor,
     build_candidate_features,
     build_spec_features_geometry_aware,
     ei_scores,
     lcb_scores,
+    matern_length_scale_for_n_features,
     predict_with_uncertainty,
     score_and_select,
     select_candidates,
@@ -121,9 +123,58 @@ class TestSurrogate:
     def test_train_surrogate_rejects_sample_weight_for_non_tree(self):
         X, y = _make_synthetic_training_data(20)
         w = np.ones(20, dtype=float)
-        for sur in ("ridge", "gradient_boost"):
+        for sur in ("ridge", "gradient_boost", "gaussian_process"):
             with pytest.raises(ValueError, match="sample_weight"):
                 train_surrogate(X, y, surrogate=sur, sample_weight=w)
+
+    def test_ensemble_accepts_sample_weight_for_tree_members(self):
+        X, y = _make_synthetic_training_data(20)
+        w = np.ones(20, dtype=float)
+        model = train_surrogate(
+            X, y, surrogate="ensemble", n_estimators=5, sample_weight=w
+        )
+        mu, sigma = predict_with_uncertainty(model, X)
+        assert mu.shape == (20,)
+        assert sigma.shape == (20,)
+
+    def test_gaussian_process_matern_length_scale(self):
+        X, y = _make_synthetic_training_data(25)
+        n_features = X.shape[1]
+        expected = matern_length_scale_for_n_features(n_features)
+        assert expected == pytest.approx(np.sqrt(n_features))
+        model = train_surrogate(X, y, surrogate="gaussian_process", random_state=7)
+        reg = model.named_steps["regressor"]
+        kernel = reg.kernel_
+        assert float(kernel.k2.length_scale) == pytest.approx(expected)
+
+    def test_gaussian_process_predict_with_uncertainty(self):
+        X, y = _make_synthetic_training_data(25)
+        model = train_surrogate(X, y, surrogate="gaussian_process", random_state=7)
+        mu, sigma = predict_with_uncertainty(model, X)
+        assert mu.shape == (25,)
+        assert sigma.shape == (25,)
+        assert np.all(sigma >= 0)
+        assert np.any(sigma > 0)
+
+    def test_ensemble_trains_multiple_members(self):
+        X, y = _make_synthetic_training_data(30)
+        model = train_surrogate(
+            X, y, surrogate="ensemble", n_estimators=10, random_state=3
+        )
+        reg = model.named_steps["regressor"]
+        assert isinstance(reg, EnsembleRegressor)
+        assert len(reg.members_) == len(reg.member_surrogates)
+
+    def test_ensemble_predict_with_uncertainty(self):
+        X, y = _make_synthetic_training_data(30)
+        model = train_surrogate(
+            X, y, surrogate="ensemble", n_estimators=10, random_state=3
+        )
+        mu, sigma = predict_with_uncertainty(model, X)
+        assert mu.shape == (30,)
+        assert sigma.shape == (30,)
+        assert np.all(sigma >= 0)
+        assert np.any(sigma > 0)
 
 
 # ---------------------------------------------------------------------------

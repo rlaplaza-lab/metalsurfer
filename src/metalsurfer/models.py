@@ -122,6 +122,7 @@ class PlacementDescriptor:
             "tilt_deg": self.tilt_deg,
             "azimuth_deg": self.azimuth_deg,
             "azimuth_in_plane_deg": self.azimuth_in_plane_deg,
+            "z_fraction": self.z_fraction,
             "x_abs": x_abs,
             "y_abs": y_abs,
             "z_offset": self.z_offset,
@@ -133,6 +134,10 @@ class PlacementDescriptor:
             "site_reference_frame": self.site_reference_frame,
             "site_xy_frac_a": self.site_xy_frac_a,
             "site_xy_frac_b": self.site_xy_frac_b,
+            "quat_w": float(self.quat_w) if self.quat_w is not None else 1.0,
+            "quat_x": float(self.quat_x) if self.quat_x is not None else 0.0,
+            "quat_y": float(self.quat_y) if self.quat_y is not None else 0.0,
+            "quat_z": float(self.quat_z) if self.quat_z is not None else 0.0,
         }
         if self.slab_indices is not None:
             row["slab_indices"] = ",".join(str(i) for i in self.slab_indices)

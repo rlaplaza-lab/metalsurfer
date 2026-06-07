@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 from ase import Atoms
 from scipy import stats
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import ConstantKernel, Matern
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
@@ -21,9 +25,118 @@ from .regression import (
 from .schema import PlacementRecord
 
 AcquisitionType = Literal["lcb", "ei", "pi"]
-SurrogateType = Literal["random_forest", "extra_trees", "gradient_boost", "ridge"]
+SurrogateType = Literal[
+    "random_forest",
+    "extra_trees",
+    "gradient_boost",
+    "ridge",
+    "gaussian_process",
+    "ensemble",
+]
+TreeSurrogateType = Literal["random_forest", "extra_trees"]
+DEFAULT_ENSEMBLE_MEMBERS: tuple[
+    TreeSurrogateType | Literal["ridge", "gaussian_process"], ...
+] = (
+    "random_forest",
+    "extra_trees",
+    "ridge",
+    "gaussian_process",
+)
 
 logger = logging.getLogger(__name__)
+
+
+def matern_length_scale_for_n_features(n_features: int) -> float:
+    """Characteristic length scale for BO GP: sqrt(number of features)."""
+    if n_features < 1:
+        raise ValueError(f"n_features must be >= 1, got {n_features}")
+    return float(np.sqrt(n_features))
+
+
+def _gaussian_process_regressor(
+    n_features: int,
+    random_state: int,
+) -> GaussianProcessRegressor:
+    """Matern GP with fixed length scale sqrt(n_features)."""
+    length_scale = matern_length_scale_for_n_features(n_features)
+    kernel = ConstantKernel(1.0, constant_value_bounds=(1e-2, 1e2)) * Matern(
+        length_scale=length_scale,
+        length_scale_bounds="fixed",
+        nu=2.5,
+    )
+    return GaussianProcessRegressor(
+        kernel=kernel,
+        alpha=1e-5,
+        normalize_y=True,
+        random_state=random_state,
+        n_restarts_optimizer=0,
+    )
+
+
+class EnsembleRegressor(BaseEstimator, RegressorMixin):
+    """Average several BO surrogates; combine mean and disagreement as uncertainty."""
+
+    def __init__(
+        self,
+        member_surrogates: tuple[str, ...] = DEFAULT_ENSEMBLE_MEMBERS,
+        n_estimators: int = 100,
+        random_state: int = 42,
+    ) -> None:
+        self.member_surrogates = member_surrogates
+        self.n_estimators = n_estimators
+        self.random_state = random_state
+        self.members_: list[Pipeline] = []
+
+    def fit(
+        self,
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray,
+        sample_weight: np.ndarray | None = None,
+    ) -> "EnsembleRegressor":
+        self.members_ = []
+        for spec in self.member_surrogates:
+            if spec == "ensemble":
+                raise ValueError("EnsembleRegressor cannot nest another ensemble")
+            weight = (
+                sample_weight
+                if spec in ("random_forest", "extra_trees")
+                and sample_weight is not None
+                else None
+            )
+            self.members_.append(
+                train_surrogate(
+                    X,
+                    y,
+                    surrogate=spec,  # type: ignore[arg-type]
+                    n_estimators=self.n_estimators,
+                    random_state=self.random_state,
+                    sample_weight=weight,
+                )
+            )
+        return self
+
+    def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray:
+        mu, _ = self.predict_with_uncertainty(X)
+        return mu
+
+    def predict_with_uncertainty(
+        self, X: pd.DataFrame | np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if not self.members_:
+            raise RuntimeError("EnsembleRegressor is not fitted")
+        mus: list[np.ndarray] = []
+        sigmas: list[np.ndarray] = []
+        for member in self.members_:
+            mu_i, sigma_i = predict_with_uncertainty(member, X)
+            mus.append(np.asarray(mu_i, dtype=float).ravel())
+            sigmas.append(np.asarray(sigma_i, dtype=float).ravel())
+        mus_arr = np.vstack(mus)
+        mu_ens = mus_arr.mean(axis=0)
+        sigmas_arr = np.vstack(sigmas)
+        aleatoric = np.mean(np.square(sigmas_arr), axis=0)
+        epistemic = np.var(mus_arr, axis=0)
+        sigma_ens = np.sqrt(np.maximum(aleatoric + epistemic, 0.0))
+        return mu_ens, sigma_ens
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +183,43 @@ def train_surrogate(
             random_state=random_state,
             **kwargs,
         )
+    elif surrogate == "gaussian_process":
+        if sample_weight is not None:
+            raise ValueError(
+                "sample_weight is only supported for tree surrogates "
+                f"(random_forest, extra_trees), not {surrogate!r}"
+            )
+        n_features = int(X.shape[1]) if hasattr(X, "shape") else len(X[0])
+        reg = _gaussian_process_regressor(n_features, random_state)
+        pipeline = Pipeline([("scaler", StandardScaler()), ("regressor", reg)])
+        pipeline.fit(X, y)
+        logger.info(
+            "Trained gaussian_process surrogate on %d samples "
+            "(Matern length_scale=%.4f = sqrt(%d))",
+            len(np.asarray(y)),
+            matern_length_scale_for_n_features(n_features),
+            n_features,
+        )
+        return pipeline
+    elif surrogate == "ensemble":
+        reg = EnsembleRegressor(
+            n_estimators=n_estimators,
+            random_state=random_state,
+        )
+        pipeline = Pipeline([("regressor", reg)])
+        fit_kwargs: dict[str, Any] = {}
+        if sample_weight is not None:
+            fit_kwargs["regressor__sample_weight"] = np.asarray(
+                sample_weight, dtype=float
+            )
+        pipeline.fit(X, y, **fit_kwargs)
+        logger.info(
+            "Trained ensemble surrogate on %d samples (%d members: %s)",
+            len(np.asarray(y)),
+            len(reg.member_surrogates),
+            ", ".join(reg.member_surrogates),
+        )
+        return pipeline
     else:
         raise ValueError(f"Unknown surrogate: {surrogate!r}")
 
@@ -107,6 +257,14 @@ def predict_with_uncertainty(
         X_eval = model.named_steps["scaler"].transform(X)
     else:
         X_eval = X
+
+    if isinstance(regressor, EnsembleRegressor):
+        return regressor.predict_with_uncertainty(X)
+    if isinstance(regressor, GaussianProcessRegressor):
+        mu, sigma = regressor.predict(X_eval, return_std=True)
+        return np.asarray(mu, dtype=float).ravel(), np.asarray(
+            sigma, dtype=float
+        ).ravel()
 
     if hasattr(regressor, "estimators_"):
         X_tree = np.asarray(X_eval)

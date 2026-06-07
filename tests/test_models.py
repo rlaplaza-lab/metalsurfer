@@ -64,6 +64,9 @@ def test_screening_result():
     assert row["xyz_path"] == "results/x.xyz"
     assert row["poscar_path"] == "results/POSCAR"
     assert row["orientation_type"] == sr.placement_descriptor.orientation_type
+    assert row["z_fraction"] == sr.placement_descriptor.z_fraction
+    for field in ("quat_w", "quat_x", "quat_y", "quat_z"):
+        assert field in row
 
 
 def test_timing_info():
