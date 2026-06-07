@@ -8,19 +8,23 @@ import types
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.build import fcc111
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.exceptions import GeometryValidationError
 from metalsurfer.io_results import _write_clean_xyz
 from metalsurfer.surfaces import (
+    DEFAULT_SLAB_TOP_VACUUM_ANG,
     SlabContainer,
     _molecule_diameter,
     _perpendicular_heights_2d,
     auto_resize_slab_for_molecule,
+    coerce_slab_container,
     compute_minimum_supercell,
     create_slab_from_atoms,
     create_slab_from_bulk,
     deposit_adatoms,
+    ensure_slab_z_alignment,
     substitute_alloy,
 )
 
@@ -44,6 +48,82 @@ class TestSlabContainer:
         # should be a copy, not the same object
         assert sc.atoms is not atoms
         assert np.allclose(sc.atoms.get_positions(), atoms.get_positions())
+        assert float(np.min(sc.atoms.get_positions()[:, 2])) == pytest.approx(0.0)
+
+
+class TestSlabZAlignment:
+    def test_ensure_slab_z_alignment_bottom_anchors_fcc111(self):
+        centered = fcc111("Al", size=(2, 2, 2), vacuum=7.0)
+        aligned = ensure_slab_z_alignment(centered)
+        z_min = float(np.min(aligned.get_positions()[:, 2]))
+        z_max = float(np.max(aligned.get_positions()[:, 2]))
+        c_len = float(np.linalg.norm(aligned.get_cell()[2]))
+        assert z_min == pytest.approx(0.0)
+        assert c_len >= max(18.0, z_max + DEFAULT_SLAB_TOP_VACUUM_ANG)
+
+    def test_coerce_slab_container_aligns_when_material_type_slab(self):
+        centered = fcc111("Al", size=(2, 2, 2), vacuum=7.0)
+        container = coerce_slab_container(centered, material_type="slab")
+        assert float(np.min(container.atoms.get_positions()[:, 2])) == pytest.approx(
+            0.0
+        )
+
+    def test_coerce_slab_container_skips_alignment_for_nanoparticle(self):
+        centered = fcc111("Al", size=(2, 2, 2), vacuum=7.0)
+        z_min_before = float(np.min(centered.get_positions()[:, 2]))
+        container = coerce_slab_container(centered, material_type="nanoparticle")
+        assert float(np.min(container.atoms.get_positions()[:, 2])) == pytest.approx(
+            z_min_before
+        )
+
+    def test_ensure_slab_z_alignment_with_fixatoms_constraint(self):
+        from ase.constraints import FixAtoms
+
+        atoms = make_slab(n_layers=2)
+        z_min_before = float(np.min(atoms.get_positions()[:, 2]))
+        assert z_min_before == pytest.approx(0.0)
+        atoms.set_positions(
+            atoms.get_positions() + np.array([0.0, 0.0, 5.0]), apply_constraint=False
+        )
+        atoms.set_constraint(FixAtoms(indices=list(range(len(atoms)))))
+        aligned = ensure_slab_z_alignment(atoms)
+        assert float(np.min(aligned.get_positions()[:, 2])) == pytest.approx(0.0)
+
+    def test_create_slab_from_bulk_applies_alignment(self, monkeypatch, tmp_path):
+        core = types.ModuleType("fairchem.data.oc.core")
+
+        class _FakeBulk:
+            def __init__(self, bulk_src_id_from_db):
+                self.bulk_src_id_from_db = bulk_src_id_from_db
+
+        class _FakeSlab:
+            atoms: Atoms
+
+            @staticmethod
+            def from_bulk_get_specific_millers(bulk, specific_millers):
+                atoms = fcc111("Al", size=(2, 2, 2), vacuum=8.0)
+                slab = types.SimpleNamespace()
+                slab.atoms = atoms
+                return [slab]
+
+        core.Bulk = _FakeBulk
+        core.Slab = _FakeSlab
+        monkeypatch.setitem(sys.modules, "fairchem", types.ModuleType("fairchem"))
+        monkeypatch.setitem(
+            sys.modules, "fairchem.data", types.ModuleType("fairchem.data")
+        )
+        monkeypatch.setitem(
+            sys.modules, "fairchem.data.oc", types.ModuleType("fairchem.data.oc")
+        )
+        monkeypatch.setitem(sys.modules, "fairchem.data.oc.core", core)
+
+        slab = create_slab_from_bulk(
+            bulk_id="mp-33",
+            miller_indices=(0, 0, 1),
+            supercell=(1, 1, 1),
+            results_dir=str(tmp_path),
+        )
+        assert float(np.min(slab.atoms.get_positions()[:, 2])) == pytest.approx(0.0)
 
     def test_create_slab_from_bulk_empty_candidates_raises(self, monkeypatch):
         core = types.ModuleType("fairchem.data.oc.core")
@@ -240,19 +320,8 @@ class TestSubstituteAlloy:
 
 class TestDepositAdatoms:
     def _flat_slab(self, n: int = 16, symbol: str = "Ru"):
-        """Simple flat slab with atoms only at z=0."""
-        positions = []
-        for i in range(n):
-            x = (i % 4) * 2.5
-            y = (i // 4) * 2.5
-            positions.append([x, y, 0.0])
-        atoms = Atoms(
-            symbols=[symbol] * n,
-            positions=positions,
-            cell=[10.0, 10.0, 20.0],
-            pbc=[True, True, True],
-        )
-        return SlabContainer(atoms)
+        """Single-layer test slab."""
+        return SlabContainer(make_slab(nx=4, ny=4, n_layers=1, symbol=symbol))
 
     def _layered_slab(self):
         return SlabContainer(make_slab(nx=4, ny=4, n_layers=3))

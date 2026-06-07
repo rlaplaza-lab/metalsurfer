@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 SLAB_RELAXATION_MODE = Literal["none", "ionic_only", "cell_only", "full"]
 SLAB_RELAXATION_OPTIMIZER = Literal["lbfgs", "bfgs", "fire"]
 
+DEFAULT_SLAB_TOP_VACUUM_ANG = 15.0
+_INVERTED_SLAB_VACUUM_MARGIN_ANG = 1.0
+# Keep in sync with workflow.shared.MIN_CALCULATOR_CELL_C_ANG
+_MIN_CALCULATOR_CELL_C_ANG = 18.0
+
 
 def _import_chain(exc: BaseException | None) -> list[BaseException]:
     """Flatten exception.__cause__ into a list (root first)."""
@@ -78,20 +83,81 @@ class SlabContainer:
         self.atoms = atoms
 
 
-def coerce_slab_container(slab: SlabContainer | Atoms) -> SlabContainer:
+def ensure_slab_z_alignment(
+    atoms: Atoms,
+    *,
+    min_top_vacuum: float = DEFAULT_SLAB_TOP_VACUUM_ANG,
+    min_cell_c: float = _MIN_CALCULATOR_CELL_C_ANG,
+) -> Atoms:
+    """Bottom-anchor a slab and ensure vacuum above the top surface layer.
+
+    Returns a copy of *atoms* shifted so ``min(z) == 0`` and with the c-vector
+    extended to at least ``max(z_max + min_top_vacuum, min_cell_c)``.
+    """
+    aligned = atoms.copy()
+    pos = aligned.get_positions()
+    z_min = float(np.min(pos[:, 2]))
+    z_max = float(np.max(pos[:, 2]))
+
+    cell = np.array(aligned.get_cell(), dtype=float)
+    c_len = float(np.linalg.norm(cell[2]))
+    if c_len > 0.0:
+        vacuum_below = z_min
+        vacuum_above = c_len - z_max
+        if vacuum_below > vacuum_above + _INVERTED_SLAB_VACUUM_MARGIN_ANG:
+            logger.warning(
+                "Slab has more vacuum below the substrate (%.1f A) than above "
+                "(%.1f A); re-aligning to bottom-anchored layout with vacuum "
+                "above max(z).",
+                vacuum_below,
+                vacuum_above,
+            )
+
+    if z_min != 0.0:
+        pos = pos.copy()
+        pos[:, 2] -= z_min
+        # FairChem slabs may carry FixAtoms; bypass so the whole slab shifts.
+        aligned.set_positions(pos, apply_constraint=False)
+        z_max = float(np.max(aligned.get_positions()[:, 2]))
+
+    target_c = max(min_cell_c, z_max + min_top_vacuum)
+    if c_len < target_c:
+        if abs(cell[2, 0]) < 1e-6 and abs(cell[2, 1]) < 1e-6:
+            cell[2, 2] = target_c
+        elif c_len > 0.0:
+            cell[2] = cell[2] * (target_c / c_len)
+        else:
+            cell[2, 2] = target_c
+        aligned.set_cell(cell)
+
+    return aligned
+
+
+def coerce_slab_container(
+    slab: SlabContainer | Atoms,
+    *,
+    material_type: str | None = None,
+) -> SlabContainer:
     """Normalize slab-like input to :class:`SlabContainer`.
 
     Accepts either a pre-wrapped ``SlabContainer`` or a plain ASE ``Atoms``
     object. ``Atoms`` inputs are defensively copied to avoid mutating caller
     state across workflow steps.
+
+    When *material_type* is ``"slab"``, applies :func:`ensure_slab_z_alignment`.
     """
     if isinstance(slab, SlabContainer):
-        return slab
-    if isinstance(slab, Atoms):
-        return SlabContainer(slab.copy())
-    raise TypeError(
-        f"slab must be a SlabContainer or ase.Atoms, got {type(slab).__name__}"
-    )
+        container = slab
+    elif isinstance(slab, Atoms):
+        container = SlabContainer(slab.copy())
+    else:
+        raise TypeError(
+            f"slab must be a SlabContainer or ase.Atoms, got {type(slab).__name__}"
+        )
+
+    if material_type == "slab":
+        container.atoms = ensure_slab_z_alignment(container.atoms)
+    return container
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +178,8 @@ def create_slab_from_bulk(
     relaxation_steps: int | None = None,
 ) -> SlabContainer:
     """Create a surface slab from a Materials Project bulk entry.
+
+    Applies :func:`ensure_slab_z_alignment`.
 
     Parameters
     ----------
@@ -196,6 +264,8 @@ def create_slab_from_bulk(
             context="create_slab_from_bulk",
         )
 
+    slab.atoms = ensure_slab_z_alignment(slab.atoms)
+
     os.makedirs(results_dir, exist_ok=True)
     _write_clean_xyz(slab.atoms, f"{results_dir}/clean_slab.xyz")
     slab.atoms.write(
@@ -210,8 +280,11 @@ def create_slab_from_bulk(
 
 
 def create_slab_from_atoms(atoms: Atoms) -> SlabContainer:
-    """Wrap an existing ASE ``Atoms`` object into a :class:`SlabContainer`."""
-    return SlabContainer(atoms.copy())
+    """Wrap an existing ASE ``Atoms`` object into a :class:`SlabContainer`.
+
+    Applies :func:`ensure_slab_z_alignment`.
+    """
+    return SlabContainer(ensure_slab_z_alignment(atoms.copy()))
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,21 @@ Alloy substitution is applied first, then adatom deposition if both are
 used.
 
 
+Slab Geometry
+-------------
+
+For ``material_type="slab"``, metalsurfer uses a bottom-anchored layout:
+
+- substrate atoms start at ``min(z) ≈ 0``
+- the adsorption surface is at ``max(z)``
+- empty space (vacuum) lies only in +z above the surface
+
+:func:`~metalsurfer.create_slab_from_bulk`, :func:`~metalsurfer.create_slab_from_atoms`,
+and :func:`~metalsurfer.prepare_slab` apply this alignment automatically.
+Bare ASE ``Atoms`` passed to a run entry point are normalized when
+``AdsorptionConfig(material_type="slab")`` is set.
+
+
 One-Call Preparation
 --------------------
 

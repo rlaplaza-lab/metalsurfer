@@ -20,11 +20,10 @@ from metalsurfer import (
 def main():
     configure_logging(default_level="INFO")
 
-    # Create Ru(0001) slab using mp-33 (Ru) bulk structure
     slab = create_slab_from_bulk(
         bulk_id="mp-33",
         miller_indices=(0, 0, 1),
-        supercell=(2, 2, 1),  # Small supercell for quick demo
+        supercell=(2, 2, 1),
         results_dir="results_ethene_ru_slab",
     )
 
@@ -32,13 +31,13 @@ def main():
         material_type="slab",
         model_name="uma-s-1p2",
         seed=42,
-        num_conformers=3,  # Ethene has planar geometry with some flexibility
-        num_placements=5,  # Modest number for quick demonstration
+        num_conformers=3,
+        num_placements=5,
         autobatcher_max_memory_padding=0.8,
         autobatcher_max_memory_scaler=500,
         autobatcher_max_atoms_to_try=5000,
-        device="cuda",  # use "cpu" if no GPU
-        skip_topology_check=False,  # Keep topology check for ethene
+        device="cuda",
+        skip_topology_check=False,
         skip_desorption_check=False,
         stage1_steps=50,
         stage2_steps=500,

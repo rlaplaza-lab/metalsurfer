@@ -7,6 +7,7 @@ from ase import Atoms
 from ase.build import bulk, fcc111, graphene
 
 from metalsurfer.placement import get_symmetry_aware_sites, get_unified_sites
+from metalsurfer.surfaces import create_slab_from_atoms
 from metalsurfer.symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 
 from .conftest import make_nanoparticle, make_slab
@@ -328,7 +329,9 @@ def test_cluster_op_count_matches_spglib_reference():
 
 def test_fcc111_pt_slab_symmetry_reduces_sites_and_verifies_orbits():
     """High-symmetry periodic slab: fewer unique sites; orbit pairwise check."""
-    slab = fcc111("Pt", size=(2, 2, 3), vacuum=7.0, orthogonal=True)
+    slab = create_slab_from_atoms(
+        fcc111("Pt", size=(2, 2, 3), vacuum=7.0, orthogonal=True)
+    ).atoms
     raw = get_unified_sites(slab, material_type="slab")
     assert raw is not None and len(raw) >= 1
     sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15)

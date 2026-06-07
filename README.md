@@ -82,28 +82,30 @@ Surfaces are **not** tied to a specific element. Pass any `ase.Atoms` you alread
 
 All four `run_*` entry points accept plain `Atoms` directly (recommended for custom scripts):
 
+**Slab geometry:** For `material_type="slab"`, set the adsorption surface at `max(z)` with vacuum above; `create_slab_from_atoms`, `create_slab_from_bulk`, and bare `Atoms` with `material_type="slab"` are normalized automatically. See the [surface engineering guide](docs/guides/surface_engineering.rst) for details.
+
 Example:
 
 ```python
 from ase.build import fcc111
 
-from metalsurfer import AdsorptionConfig, run_adsorption
+from metalsurfer import AdsorptionConfig, create_slab_from_atoms, run_adsorption
 
-slab_atoms = fcc111("Ru", size=(3, 3, 3), vacuum=12.0)
+slab = create_slab_from_atoms(fcc111("Ru", size=(3, 3, 3), vacuum=12.0))
 
 config = AdsorptionConfig(
     material_type="slab",  # "slab", "nanoparticle", or "porous"
     seed=42
 )
 result = run_adsorption(
-    slab=slab_atoms,
+    slab=slab,
     molecules=[("O", "water")],
     config=config,
     surface_type="ru111_from_ase_atoms",
 )
 ```
 
-`create_slab_from_atoms(...)` wraps a bare `Atoms` in a `SlabContainer` with default metadata; passing `Atoms` directly to run entry points is preferred when you do not need the container.
+`create_slab_from_atoms(...)` wraps bare `Atoms` in a `SlabContainer`; you may also pass `Atoms` directly when `material_type="slab"` is set.
 
 ### Slab sizing and PBC
 

@@ -19,19 +19,12 @@ import os
 
 from ase.io import read
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    create_slab_from_atoms,
-    run_adsorption,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
 
 
 def main():
     configure_logging(default_level="INFO")
 
-    # Load MOF structure from CIF file
-    # Path to the CIF file in the examples directory
     cif_path = os.path.join(os.path.dirname(__file__), "mof_structures", "RUBTAK01.cif")
 
     if not os.path.exists(cif_path):
@@ -40,7 +33,6 @@ def main():
             "Please ensure the RUBTAK01.cif file is present in examples/mof_structures/"
         )
 
-    # Read the MOF structure using ASE
     mof_atoms = read(cif_path)
 
     print(f"Successfully loaded MOF structure from {cif_path}")
@@ -48,30 +40,26 @@ def main():
     print(f"MOF has {len(mof_atoms)} atoms")
     print(f"MOF cell: {mof_atoms.cell}")
 
-    mof_slab = create_slab_from_atoms(mof_atoms)
-
     config = AdsorptionConfig(
         material_type="porous",
         model_name="uma-s-1p2",
         seed=42,
-        num_conformers=1,  # CO2 has linear geometry
-        num_placements=5,  # Quick example - limit to 5 placements
-        # Conservative autobatcher settings to avoid CUDA OOM on 15GB GPUs:
-        autobatcher_max_memory_padding=0.8,  # 0.9 was too aggressive
-        autobatcher_max_memory_scaler=500,  # Skip memory estimation (MOF+CO2 ~20 atoms)
-        autobatcher_max_atoms_to_try=5000,  # Cap estimation probes if scaler unused
-        device="cuda",  # use "cpu" if no GPU (torch-sim-atomistic requires GPU for batching)
-        skip_topology_check=False,  # Keep topology check for CO2
-        skip_desorption_check=False,  # Keep distance check
+        num_conformers=1,
+        num_placements=5,
+        autobatcher_max_memory_padding=0.8,
+        autobatcher_max_memory_scaler=500,
+        autobatcher_max_atoms_to_try=5000,
+        device="cuda",
+        skip_topology_check=False,
+        skip_desorption_check=False,
         stage1_steps=50,
         stage2_steps=500,
-        # For MOFs, adjust placement parameters for pore adsorption
-        placement_z_range=(2.0, 6.0),  # Wider range for MOF pores
-        min_initial_distance=1.8,  # Minimum distance from MOF atoms
+        placement_z_range=(2.0, 6.0),
+        min_initial_distance=1.8,
     )
 
     campaign = run_adsorption(
-        slab=mof_slab,
+        slab=mof_atoms,
         molecules=[("O=C=O", "CO2")],
         config=config,
         surface_type="co2_mof",

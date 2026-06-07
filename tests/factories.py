@@ -7,6 +7,9 @@ from typing import Literal
 import numpy as np
 
 from metalsurfer.ml.schema import ComputationContext, PlacementRecord
+from tests.conftest import make_slab
+
+DEFAULT_TEST_SLAB_SURFACE_Z = float(np.max(make_slab().get_positions()[:, 2]))
 
 Variant = Literal["bayesian", "ml"]
 
@@ -55,7 +58,7 @@ def make_random_placement_records(
         e_ads = -0.5 * z_off + 0.01 * tilt + float(rng.normal(0, 0.1))
         x_ = float(rng.uniform(-4, 4))
         y_ = float(rng.uniform(-4, 4))
-        surf_z = 7.0
+        surf_z = DEFAULT_TEST_SLAB_SURFACE_Z
 
         kwargs: dict = {
             "molecule": molecule,

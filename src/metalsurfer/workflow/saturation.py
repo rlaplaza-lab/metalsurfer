@@ -612,7 +612,7 @@ def run_saturation_screening(
     if config is None:
         config = AdsorptionConfig()
 
-    slab = coerce_slab_container(slab)
+    slab = coerce_slab_container(slab, material_type=config.material_type)
     molecules_input = smiles_file if smiles_file is not None else molecules
 
     t_run_start = time.perf_counter()

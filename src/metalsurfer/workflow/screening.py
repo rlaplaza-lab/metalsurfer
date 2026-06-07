@@ -80,7 +80,7 @@ def _run_screening_common(
     if config is None:
         config = AdsorptionConfig()
 
-    slab = coerce_slab_container(slab)
+    slab = coerce_slab_container(slab, material_type=config.material_type)
 
     t_run_start = time.perf_counter()
     with log_context(surface_type=surface_type, seed=config.seed):

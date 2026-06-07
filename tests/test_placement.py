@@ -648,6 +648,21 @@ def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
     assert len(visited_sites) >= 2
 
 
+def test_slab_placements_are_above_surface_reference():
+    slab = make_slab()
+    config = adsorption_config_factory(
+        material_type="slab", num_placements=50, placement_z_range=(2.0, 3.0)
+    )
+    results = _generate_placements(
+        water_conformers(), slab, config, smiles="O", n_desired=50
+    )
+    assert len(results) >= 1
+    for _, _, descriptor in results:
+        assert descriptor.surface_ref_z_abs is not None
+        assert descriptor.z_abs is not None
+        assert descriptor.z_abs >= descriptor.surface_ref_z_abs
+
+
 @pytest.mark.parametrize("mode", ["spec", "descriptor", "pose"])
 def test_slab_replay_reproduces_positions(mode):
     slab = make_slab()

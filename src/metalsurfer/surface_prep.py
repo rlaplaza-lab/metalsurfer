@@ -61,6 +61,8 @@ def prepare_slab(
 ) -> SlabContainer:
     """Build or load a slab, then optionally alloy-substitute and/or deposit adatoms.
 
+    Applies :func:`~metalsurfer.surfaces.ensure_slab_z_alignment`.
+
     Provide exactly one of *bulk_id*, *slab_file*, or *slab* to supply the
     starting structure.  When *slab* is given, bulk/file loading is skipped and
     only alloy/adatom modification steps are applied.

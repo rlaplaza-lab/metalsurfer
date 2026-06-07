@@ -96,7 +96,7 @@ This section describes what the code actually does inside the modules named abov
 
 ### Surfaces and slab containers
 
-`surfaces.SlabContainer` wraps ASE `Atoms` with metadata used through screening. `create_slab_from_bulk` pulls a conventional cell from the Materials Project ecosystem, builds a slab with the requested Miller indices and vacuum, and returns a container. Alloy substitution and adatom deposition optionally draw random structural variants and rank them with a supplied calculator. `auto_resize_slab_for_molecule` expands in-plane supercells when PBC image separation would be too tight for the adsorbate footprint.
+`surfaces.SlabContainer` wraps ASE `Atoms` with metadata used through screening. `create_slab_from_bulk` pulls a conventional cell from the Materials Project ecosystem, builds a slab with the requested Miller indices and vacuum, and returns a container normalized via `ensure_slab_z_alignment`. `create_slab_from_atoms` does the same for user-supplied structures. Alloy substitution and adatom deposition optionally draw random structural variants and rank them with a supplied calculator. `auto_resize_slab_for_molecule` expands in-plane supercells when PBC image separation would be too tight for the adsorbate footprint.
 
 ### Site detection (`placement/sites.py`)
 

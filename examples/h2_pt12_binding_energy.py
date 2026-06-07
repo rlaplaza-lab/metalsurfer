@@ -11,71 +11,52 @@ or reduce num_placements (e.g. 25).
 
 from ase import Atoms
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    create_slab_from_atoms,
-    run_adsorption,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
 
 
 def main():
     configure_logging(default_level="INFO")
-    # Create a small Pt nanocluster with 12 atoms using ASE
-    # Create a simple but realistic Pt cluster for H2 adsorption
-    # Use a small (111) facet-like structure which provides good adsorption sites
 
-    # Create a 3-layer Pt(111)-like nanocluster (12 atoms total)
-    # Layer 1 (bottom): 4 atoms
-    # Layer 2 (middle): 4 atoms
-    # Layer 3 (top): 4 atoms
     pt_atoms = Atoms(
         symbols=["Pt"] * 12,
         positions=[
-            # Bottom layer (z=0)
             [0.0, 0.0, 0.0],
             [2.8, 0.0, 0.0],
             [1.4, 2.425, 0.0],
             [4.2, 2.425, 0.0],
-            # Middle layer (z=2.0)
             [1.4, 0.808, 2.0],
             [4.2, 0.808, 2.0],
             [0.0, 2.425, 2.0],
             [2.8, 2.425, 2.0],
-            # Top layer (z=4.0)
             [1.4, 1.617, 4.0],
             [4.2, 1.617, 4.0],
             [0.0, 0.808, 4.0],
             [2.8, 0.808, 4.0],
         ],
-        cell=[20, 20, 20],  # Large cell to isolate cluster
-        pbc=False,  # No periodic boundary conditions for nanocluster
+        cell=[20, 20, 20],
+        pbc=False,
     )
-
-    nanocluster = create_slab_from_atoms(pt_atoms)
 
     config = AdsorptionConfig(
         material_type="nanoparticle",
         model_name="uma-s-1p2",
         seed=42,
-        num_conformers=1,  # H2 has only one geometry
-        num_placements=5,  # Quick example - limit to 5 placements
-        # Conservative autobatcher settings to avoid CUDA OOM on 15GB GPUs:
-        autobatcher_max_memory_padding=0.8,  # 0.9 was too aggressive
-        autobatcher_max_memory_scaler=500,  # Skip memory estimation (nanocluster+H2 ~14 atoms)
-        autobatcher_max_atoms_to_try=5000,  # Cap estimation probes if scaler unused
-        device="cuda",  # use "cpu" if no GPU (torch-sim-atomistic requires GPU for batching)
-        skip_topology_check=True,  # Allow H2 → 2H (bond breaking for Pt clusters)
-        skip_desorption_check=False,  # Keep distance check
+        num_conformers=1,
+        num_placements=5,
+        autobatcher_max_memory_padding=0.8,
+        autobatcher_max_memory_scaler=500,
+        autobatcher_max_atoms_to_try=5000,
+        device="cuda",
+        skip_topology_check=True,
+        skip_desorption_check=False,
         stage1_steps=50,
         stage2_steps=500,
-        # For nanoclusters, we need to adjust placement parameters
-        placement_z_range=(1.5, 4.0),  # Wider range for cluster adsorption
-        min_initial_distance=1.5,  # Minimum distance from cluster atoms
+        placement_z_range=(1.5, 4.0),
+        min_initial_distance=1.5,
     )
 
     campaign = run_adsorption(
-        slab=nanocluster,
+        slab=pt_atoms,
         molecules=[("[H][H]", "H2")],
         config=config,
         surface_type="h2_pt12",
@@ -89,6 +70,9 @@ def main():
         )
         print(
             "  (E_ads = E(nanocluster+H2) - E(nanocluster) - E(H2); negative = favorable)"
+        )
+        print(
+            "  Note: UMA may dissociate H2 on Pt; inspect results_h2_pt12/xyz_structures/H2_adsorbate_only/ for H–H distances."
         )
         print(
             f"  Relaxation: {total_steps} steps (stage1: {config.stage1_steps}, stage2: {config.stage2_steps})"

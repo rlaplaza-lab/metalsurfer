@@ -1,6 +1,8 @@
 Surface Preparation
 ===================
 
+Slab layout conventions: :doc:`../guides/surface_engineering`.
+
 .. autofunction:: metalsurfer.prepare_slab
 
 Prep writes reference structures under ``results_dir`` (for example

@@ -27,6 +27,18 @@ To also install the documentation build dependencies:
    pip install -e ".[docs]"
 
 
+Runnable Examples
+-----------------
+
+Three scripts under ``examples/`` cover nanoparticle, porous, and slab workflows:
+
+.. code-block:: bash
+
+   python examples/h2_pt12_binding_energy.py
+   python examples/co2_mof_binding_energy.py
+   python examples/ethene_ru_slab_binding_energy.py
+
+
 Standard Screening
 ------------------
 
@@ -81,18 +93,19 @@ You can also pass a CSV path instead of an in-memory list:
        surface_type="Ru001",
    )
 
-ASE Atoms objects are accepted directly — no manual wrapping needed:
+ASE ``Atoms`` objects are accepted directly — no manual wrapping needed.
+Slab layout conventions are described in :doc:`surface_engineering`.
 
 .. code-block:: python
 
    from ase.build import fcc111
-   from metalsurfer import AdsorptionConfig, run_adsorption
+   from metalsurfer import AdsorptionConfig, create_slab_from_atoms, run_adsorption
 
-   slab_atoms = fcc111("Ru", size=(3, 3, 3), vacuum=12.0)
+   slab = create_slab_from_atoms(fcc111("Ru", size=(3, 3, 3), vacuum=12.0))
    config = AdsorptionConfig(material_type="slab", seed=42)
 
    result = run_adsorption(
-       slab=slab_atoms,
+       slab=slab,
        molecules=[("O", "water")],
        config=config,
        surface_type="ru111_from_ase_atoms",

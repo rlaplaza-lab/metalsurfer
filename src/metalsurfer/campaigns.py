@@ -138,7 +138,7 @@ def _run_binding_campaign(
     if not molecules:
         raise ValueError("molecules must be a non-empty list")
     process_kwargs = process_kwargs or {}
-    slab = coerce_slab_container(slab)
+    slab = coerce_slab_container(slab, material_type=config.material_type)
     t_start = time.perf_counter()
 
     setup_directories([surface_type])
