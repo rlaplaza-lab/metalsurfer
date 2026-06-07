@@ -144,6 +144,14 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
 # ---------------------------------------------------------------------------
 
 
+def _tree_pipeline_fit_kwargs(
+    sample_weight: np.ndarray | None,
+) -> dict[str, Any]:
+    if sample_weight is None:
+        return {}
+    return {"regressor__sample_weight": np.asarray(sample_weight, dtype=float)}
+
+
 def train_surrogate(
     X: pd.DataFrame | np.ndarray,
     y: pd.Series | np.ndarray,
@@ -170,7 +178,16 @@ def train_surrogate(
             random_state=random_state,
             **kwargs,
         )
-    elif surrogate in ("gradient_boost", "ridge"):
+        pipeline = Pipeline([("regressor", reg)])
+        pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
+        logger.info(
+            "Trained %s surrogate on %d samples (%d trees)",
+            surrogate,
+            len(np.asarray(y)),
+            n_estimators,
+        )
+        return pipeline
+    if surrogate in ("gradient_boost", "ridge"):
         if sample_weight is not None:
             raise ValueError(
                 "sample_weight is only supported for tree surrogates "
@@ -183,7 +200,7 @@ def train_surrogate(
             random_state=random_state,
             **kwargs,
         )
-    elif surrogate == "gaussian_process":
+    if surrogate == "gaussian_process":
         if sample_weight is not None:
             raise ValueError(
                 "sample_weight is only supported for tree surrogates "
@@ -201,18 +218,13 @@ def train_surrogate(
             n_features,
         )
         return pipeline
-    elif surrogate == "ensemble":
+    if surrogate == "ensemble":
         reg = EnsembleRegressor(
             n_estimators=n_estimators,
             random_state=random_state,
         )
         pipeline = Pipeline([("regressor", reg)])
-        fit_kwargs: dict[str, Any] = {}
-        if sample_weight is not None:
-            fit_kwargs["regressor__sample_weight"] = np.asarray(
-                sample_weight, dtype=float
-            )
-        pipeline.fit(X, y, **fit_kwargs)
+        pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
         logger.info(
             "Trained ensemble surrogate on %d samples (%d members: %s)",
             len(np.asarray(y)),
@@ -220,21 +232,7 @@ def train_surrogate(
             ", ".join(reg.member_surrogates),
         )
         return pipeline
-    else:
-        raise ValueError(f"Unknown surrogate: {surrogate!r}")
-
-    pipeline = Pipeline([("regressor", reg)])
-    fit_kwargs: dict[str, Any] = {}
-    if sample_weight is not None:
-        fit_kwargs["regressor__sample_weight"] = np.asarray(sample_weight, dtype=float)
-    pipeline.fit(X, y, **fit_kwargs)
-    logger.info(
-        "Trained %s surrogate on %d samples (%d trees)",
-        surrogate,
-        len(np.asarray(y)),
-        n_estimators,
-    )
-    return pipeline
+    raise ValueError(f"Unknown surrogate: {surrogate!r}")
 
 
 # ---------------------------------------------------------------------------
