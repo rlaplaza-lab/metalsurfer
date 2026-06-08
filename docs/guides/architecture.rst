@@ -68,8 +68,9 @@ Across all run modes, the physical pipeline follows seven stages:
    detection, desorption check, duplicate removal, energy-cap filtering.
 
 7. **Aggregation and Persistence** — rank surviving structures by
-   adsorption energy and write CSV summaries, XYZ files, POSCAR files,
-   and metadata JSON.
+   adsorption energy and write CSV summaries, XYZ files, and metadata JSON.
+   VASP-format files (POSCAR/INCAR/KPOINTS and reference-slab POSCARs) are
+   opt-in via ``write_vasp_inputs=True`` on :class:`~metalsurfer.AdsorptionConfig`.
 
 
 Run Modes
@@ -128,7 +129,7 @@ Module Layout
    ├── config.py             # AdsorptionConfig + validation
    ├── conformers.py         # SMILES → conformers
    ├── filters.py            # decomposition / desorption / duplicate filtering
-   ├── io_results.py         # CSV, XYZ, POSCAR, metadata persistence
+   ├── io_results.py         # CSV, XYZ, optional VASP I/O, metadata persistence
    ├── models.py             # typed result dataclasses
    ├── optimization.py       # MLIP setup, batched relaxation
    ├── surface_prep.py       # prepare_slab convenience wrapper
@@ -158,7 +159,11 @@ The default output root is ``results_{surface_type}/``.  Common artifacts:
   step results.
 - ``run_metadata.json`` — timing, counts, and config snapshot.
 - ``xyz_structures/`` — optimized structures in XYZ format.
-- ``vasp_inputs/`` — POSCAR files for DFT follow-up.
+- ``vasp_inputs/`` — optional POSCAR/INCAR/KPOINTS bundles for DFT follow-up
+  (written only when ``write_vasp_inputs=True``).
+
+Campaign ``save_results`` controls CSV/XYZ persistence; VASP bundles require
+``config.write_vasp_inputs=True`` in addition.
 
 Result-Object Export and Formatting
 -----------------------------------

@@ -78,7 +78,7 @@ The package is intentionally split into modules with narrow responsibilities.
 - `filters.py`: decomposition, desorption, and duplicate filtering.
 - `workflow/`: orchestration split by run mode and shared helpers.
 - `campaigns.py`: in-memory multi-molecule campaign wrappers.
-- `io_results.py`: CSV, XYZ, VASP, and metadata persistence.
+- `io_results.py`: CSV, XYZ, optional VASP I/O (`write_vasp_inputs`), and metadata persistence.
 - `ml/`: dataset logging, schema/context rows, feature extraction, surrogate training, evaluation, and acquisition utilities.
 
 The workflow subpackage is further divided into:
@@ -242,7 +242,7 @@ The `saturation` and `multi_molecule_saturation` fields are metadata and workflo
 
 ## Output model
 
-Default root: `results_{surface_type}/` with detailed/summary CSVs, `run_metadata.json`, `xyz_structures/`, `vasp_inputs/`. Saturation runs optionally write `step_{NNN}_placements/` and `saturation_placements_detailed.csv` when `saturation_save_all_placements` is true. `write_run_metadata` and `write_run_settings` share the same metadata builder (later writes replace earlier content).
+Default root: `results_{surface_type}/` with detailed/summary CSVs, `run_metadata.json`, and `xyz_structures/`. `vasp_inputs/` and reference-slab POSCAR files are written only when `write_vasp_inputs=True` (default `False`). Saturation runs optionally write `step_{NNN}_placements/` and `saturation_placements_detailed.csv` when `saturation_save_all_placements` is true. `write_run_metadata` and `write_run_settings` share the same metadata builder (later writes replace earlier content).
 
 ## Dataset logging and ML support
 

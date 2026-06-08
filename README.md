@@ -380,9 +380,9 @@ The output directory is `results_{surface_type}`. Depending on run mode, the lib
 - `saturation_summary.csv`
 - `run_metadata.json`
 - `xyz_structures/...`
-- `vasp_inputs/...`
+- `vasp_inputs/...` (only when `write_vasp_inputs=True`)
 
-Campaign APIs save structures and summary tables by default (`run_saturation` / `run_saturation_bo` call `save_saturation_results(..., config=config)` so placement-tree output follows `saturation_save_all_placements` and the rest of `AdsorptionConfig`). Workflow APIs return typed results and can be paired with `save_summary_results(...)`, `save_saturation_results(...)`, `save_multi_mol_saturation_results(...)`, `write_run_metadata(...)`, and `write_run_settings(...)` for explicit persistence control (for example after `save_results=False` or custom paths).
+Campaign APIs save XYZ structures and summary tables by default (`run_saturation` / `run_saturation_bo` call `save_saturation_results(..., config=config)` so placement-tree output follows `saturation_save_all_placements` and the rest of `AdsorptionConfig`). VASP bundles require `write_vasp_inputs=True` on `AdsorptionConfig`. Workflow APIs return typed results and can be paired with `save_summary_results(...)`, `save_saturation_results(...)`, `save_multi_mol_saturation_results(...)`, `write_run_metadata(...)`, and `write_run_settings(...)` for explicit persistence control (for example after `save_results=False` or custom paths).
 
 ## Logging
 

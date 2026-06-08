@@ -215,6 +215,9 @@ Important saturation behaviors:
   inter-adsorbate coupling or unexpected splitting is not propagated. Set
   ``False`` to rank by ``E_ads`` only; the guard is skipped when
   ``skip_topology_check=True``.
+- By default, runs persist XYZ structures and CSV tables only. Set
+  ``write_vasp_inputs=True`` to also write ``vasp_inputs/`` placement bundles
+  and reference-slab POSCAR files during surface prep.
 
 A full defected-surface saturation example (fixed substrate, adatom prep) lives
 under ``examples/bipyridine_au111_defects_saturation_raw.py``; see also
