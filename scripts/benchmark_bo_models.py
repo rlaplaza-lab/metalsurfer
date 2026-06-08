@@ -1,227 +1,306 @@
 #!/usr/bin/env python3
 """Offline BO benchmark: compare surrogate models and acquisition functions.
 
-Loads real placement data from ``results_*/adsorption_energies_detailed.csv``
-written by metalsurfer (via ``save_summary_results`` / campaign workflows),
-builds X/y, and simulates the BO loop with fixed batch size 10.
-
-Expected CSV input (required columns for feature extraction):
-  molecule, placement_id, conformer_index, x_abs, y_abs, z_abs,
-  energy_adsorption
-
-Optional columns (``quat_*``, ``z_fraction``, ``face_flip``, ``smiles``,
-``surface_id``, etc.) are used when present; missing quaternions default to
-identity in :func:`extract_features_from_dataset`.
+Loads real placement data from metalsurfer results directories, builds X/y,
+and simulates the BO loop with fixed batch size 10.
 
 Usage:
-  python scripts/benchmark_bo_models.py --data-dir results_co2_graphene --out benchmark_bo_results.csv --seeds 5
+  python scripts/benchmark_bo_models.py \\
+    --data-dir examples/results_bipyridine_au111_defects_saturation_raw \\
+    --step 3 --seeds 30 --plot
 """
+
+from __future__ import annotations
 
 import argparse
 import logging
 import os
+import sys
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from benchmark_bo_common import (
+    BATCH_SIZE,
+    DEFAULT_BO_ACQUISITION,
+    DEFAULT_BO_KAPPA,
+    DEFAULT_BO_SURROGATE,
+    DEFAULT_SMILES,
+    DEFAULT_SURFACE_TYPE,
+    INITIAL_RANDOM,
+    TOTAL_BUDGET,
+    aggregate_curves,
+    list_available_steps,
+    load_placement_pool,
+    paired_stats,
+    run_offline_bo,
+    run_random_search,
+)
 
 from metalsurfer import configure_logging
-from metalsurfer.ml.bayesian import (
-    score_and_select,
-    train_surrogate,
-)
-from metalsurfer.ml.dataset import enrich_detailed_dataset_geometry
-from metalsurfer.ml.features import extract_features_from_dataset
 
 configure_logging(default_level="INFO")
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 10
-TOTAL_BUDGET = 100
-INITIAL_RANDOM = 10  # so 10 batches of 10 = 100
-DEFAULT_SURFACE_TYPE = "co2_graphene"
-DEFAULT_SMILES = "O=C=O"
-REQUIRED_INPUT_COLUMNS = (
-    "molecule",
-    "placement_id",
-    "conformer_index",
-    "x_abs",
-    "y_abs",
-    "z_abs",
-    "energy_adsorption",
-)
-DEFAULT_BO_SURROGATE = "random_forest"
-DEFAULT_BO_ACQUISITION = "lcb"
-DEFAULT_BO_KAPPA = 1.0
+MODEL_CONFIGS: list[tuple[str, str, float]] = [
+    ("random_forest", "lcb", 0.0),
+    ("random_forest", "lcb", 1.0),
+    ("random_forest", "lcb", 1.96),
+    ("random_forest", "lcb", 2.5),
+    ("random_forest", "ei", 1.96),
+    ("random_forest", "pi", 1.96),
+    ("extra_trees", "lcb", 1.0),
+    ("extra_trees", "pi", 1.96),
+    ("gaussian_process", "lcb", 1.0),
+    ("gaussian_process", "lcb", 1.96),
+    ("ensemble", "lcb", 1.0),
+    ("ensemble", "lcb", 1.96),
+    ("ensemble", "ei", 1.96),
+    ("gradient_boost", "lcb", 0.0),
+    ("ridge", "lcb", 0.0),
+]
 
 
-def _validate_columns(df: pd.DataFrame, csv_path: str) -> None:
-    """Validate required columns are present."""
-    missing = [c for c in REQUIRED_INPUT_COLUMNS if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}.\nFile: {csv_path}")
+def _config_key(surrogate: str, acquisition: str, kappa: float) -> str:
+    suffix = f"_k{kappa}" if acquisition == "lcb" else ""
+    return f"{surrogate}_{acquisition}{suffix}"
 
 
-def _assert_single_setup(df: pd.DataFrame, csv_path: str) -> None:
-    """Offline BO benchmark assumes one adsorption setup per CSV (single surface / SMILES)."""
-    if "surface_id" in df.columns and df["surface_id"].nunique(dropna=False) > 1:
-        vals = sorted({str(v) for v in df["surface_id"].unique()})
-        raise ValueError(
-            "setup-specific: benchmark expects one surface_id per CSV; "
-            f"found {len(vals)}: {vals}. File: {csv_path}"
-        )
-    if "smiles" in df.columns and df["smiles"].nunique(dropna=False) > 1:
-        vals = sorted({str(v) for v in df["smiles"].unique()})
-        raise ValueError(
-            "setup-specific: benchmark expects one smiles string per CSV; "
-            f"found {len(vals)}: {vals}. File: {csv_path}"
-        )
-
-
-def _assert_feature_energy_injective(X: pd.DataFrame, y: pd.Series) -> None:
-    """Require identical feature rows to share the same label energy."""
-    cols = list(X.columns)
-    keys = X[cols].apply(tuple, axis=1)
-    groups: dict[tuple, list[float]] = {}
-    for k, val in zip(keys, y.astype(float).values, strict=True):
-        groups.setdefault(k, []).append(float(val))
-    conflicts: list[str] = []
-    for k, energies in groups.items():
-        if len({round(e, 8) for e in energies}) > 1:
-            conflicts.append(f"{k}: {energies}")
-    if conflicts:
-        raise ValueError(
-            "Example conflicts: duplicate feature rows with different energies — "
-            + "; ".join(conflicts[:5])
-        )
-
-
-def _dedupe_features_by_best_energy(
-    X: pd.DataFrame, y: pd.Series
-) -> tuple[pd.DataFrame, pd.Series, int]:
-    """Collapse duplicate feature rows, keeping the lowest energy per key."""
-    keys = X.apply(tuple, axis=1)
-    best_idx: list[int] = []
-    n_dropped = 0
-    for _key, idx in keys.groupby(keys).groups.items():
-        indices = list(idx)
-        if len(indices) > 1:
-            n_dropped += len(indices) - 1
-        best_idx.append(
-            int(indices[int(np.argmin(y.iloc[indices].astype(float).values))])
-        )
+def _is_default_config(surrogate: str, acquisition: str, kappa: float) -> bool:
     return (
-        X.iloc[best_idx].reset_index(drop=True),
-        y.iloc[best_idx].reset_index(drop=True),
-        n_dropped,
+        surrogate == DEFAULT_BO_SURROGATE
+        and acquisition == DEFAULT_BO_ACQUISITION
+        and kappa == DEFAULT_BO_KAPPA
     )
 
 
-def load_and_prepare_data(
-    data_dir: str,
-    surface_type: str = DEFAULT_SURFACE_TYPE,
-    smiles: str = DEFAULT_SMILES,
-) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
-    """Load metalsurfer detailed CSV, validate columns, return (X, y, df)."""
-    csv_path = os.path.join(data_dir, "adsorption_energies_detailed.csv")
-    if not os.path.isfile(csv_path):
-        raise FileNotFoundError(f"Missing {csv_path}")
-    df = pd.read_csv(csv_path)
-    _validate_columns(df, csv_path)
-    df = enrich_detailed_dataset_geometry(df, data_dir=data_dir)
-    if "smiles" not in df.columns:
-        df["smiles"] = smiles
-    if "surface_id" not in df.columns:
-        df["surface_id"] = surface_type
-    _assert_single_setup(df, csv_path)
-    X, y = extract_features_from_dataset(df, target_column="energy_adsorption")
-    try:
-        _assert_feature_energy_injective(X, y)
-    except ValueError:
-        X, y, n_dropped = _dedupe_features_by_best_energy(X, y)
-        logger.warning(
-            "Duplicate feature rows with conflicting energies: deduped %d rows "
-            "(kept best energy per key); pool size %d. This can happen when a "
-            "saturation benchmark pool mixes identical placement specs evaluated "
-            "on different slab loadings.",
-            n_dropped,
-            len(X),
-        )
-        _assert_feature_energy_injective(X, y)
-    return X, y, df
-
-
-def run_offline_bo(
+def _run_config(
+    config: tuple[str, str, float],
     X: pd.DataFrame,
     y: pd.Series,
+    *,
+    seeds: int,
     initial_random: int,
     batch_size: int,
     total_budget: int,
-    seed: int,
-    surrogate: str = "random_forest",
-    acquisition: str = "lcb",
-    kappa: float = 1.96,
-) -> tuple[list[float], float]:
-    """One BO run with fixed batch size. Uses score_and_select for acquisition.
+) -> tuple[list[float], list[list[float]]]:
+    surrogate, acquisition, kappa = config
+    if surrogate == "random_search":
+        runner = lambda seed: run_random_search(  # noqa: E731
+            X, y, initial_random, batch_size, total_budget, seed
+        )
+    else:
+        runner = lambda seed: run_offline_bo(  # noqa: E731
+            X,
+            y,
+            initial_random,
+            batch_size,
+            total_budget,
+            seed,
+            surrogate=surrogate,
+            acquisition=acquisition,
+            kappa=kappa,
+        )
+    finals: list[float] = []
+    curves: list[list[float]] = []
+    for seed in range(seeds):
+        curve, final_best = runner(seed)
+        finals.append(final_best)
+        curves.append(curve)
+    return finals, curves
 
-    Returns (best_after_each_eval, final_best).
-    """
-    rng = np.random.RandomState(seed)
-    n = len(y)
-    y_arr = np.asarray(y).ravel()
 
-    evaluated: set[int] = set()
-    best_after_eval: list[float] = []
-    current_best = np.inf
+def _metrics_row(
+    *,
+    surrogate: str,
+    acquisition: str,
+    kappa: float,
+    oracle_best: float,
+    finals: list[float],
+    curves: list[list[float]],
+    seeds: int,
+    random_finals: list[float] | None,
+    step: int | None,
+) -> dict[str, object]:
+    best20 = [float(c[19]) for c in curves if len(c) >= 20]
+    best50 = [float(c[49]) for c in curves if len(c) >= 50]
+    best100 = [float(c[99]) for c in curves if len(c) >= 100]
+    mean_best = float(np.mean(finals))
+    std_best = float(np.std(finals))
+    row: dict[str, object] = {
+        "step": step,
+        "surrogate": surrogate,
+        "acquisition": acquisition,
+        "kappa": kappa,
+        "is_default": _is_default_config(surrogate, acquisition, kappa),
+        "oracle_best": oracle_best,
+        "mean_best_at_20": float(np.mean(best20)) if best20 else float("nan"),
+        "mean_best_at_50": float(np.mean(best50)) if best50 else float("nan"),
+        "mean_best_at_100": float(np.mean(best100)) if best100 else float("nan"),
+        "mean_final_best": mean_best,
+        "std_final_best": std_best,
+        "regret_at_100": mean_best - oracle_best,
+        "n_seeds": seeds,
+    }
+    if random_finals is not None:
+        stats = paired_stats(random_finals, finals)
+        row["vs_random_mean_improvement"] = stats["mean_improvement"]
+        row["vs_random_win_rate"] = stats["win_rate"]
+        row["vs_random_p_value"] = stats["p_value"]
+    return row
 
-    n_init = min(initial_random, total_budget, n)
-    for i in rng.choice(n, size=n_init, replace=False).tolist():
-        evaluated.add(i)
-        current_best = min(current_best, float(y_arr[i]))
-    total_eval = n_init
-    best_after_eval.extend([current_best] * total_eval)
 
-    while total_eval < total_budget:
-        remaining = total_budget - total_eval
-        batch = min(batch_size, remaining)
-        if batch <= 0:
-            break
+def _write_plot(
+    curve_by_config: dict[str, list[list[float]]],
+    out_path: str,
+    *,
+    title: str,
+) -> None:
+    fig, ax = plt.subplots(figsize=(8, 5))
+    eval_points = list(range(10, 101, 10))
+    for key, curves in curve_by_config.items():
+        agg = aggregate_curves(curves, eval_points=eval_points)
+        if agg.empty:
+            continue
+        label = key
+        if key == _config_key(
+            DEFAULT_BO_SURROGATE, DEFAULT_BO_ACQUISITION, DEFAULT_BO_KAPPA
+        ):
+            label += " [DEFAULT]"
+        ax.plot(
+            agg["eval_count"],
+            agg["mean_best"],
+            marker="o",
+            label=label,
+        )
+        ax.fill_between(
+            agg["eval_count"],
+            agg["mean_best"] - agg["std_best"],
+            agg["mean_best"] + agg["std_best"],
+            alpha=0.15,
+        )
+    ax.set_xlabel("Evaluations")
+    ax.set_ylabel("Mean best E_ads (eV)")
+    ax.set_title(title)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    logger.info("Wrote plot %s", out_path)
 
-        obs_idx = sorted(evaluated)
-        X_train = X.iloc[obs_idx]
-        y_train = y_arr[obs_idx]
 
-        if len(obs_idx) < 3:
-            uneval = [i for i in range(n) if i not in evaluated]
-            take = min(batch, len(uneval))
-            chosen = rng.choice(uneval, size=take, replace=False).tolist()
-        else:
-            model = train_surrogate(
-                X_train,
-                y_train,
+def _benchmark_pool(
+    X: pd.DataFrame,
+    y: pd.Series,
+    *,
+    seeds: int,
+    step: int | None,
+    configs: list[tuple[str, str, float]],
+    include_random: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, list[list[float]]]]:
+    oracle_best = float(np.min(y))
+    random_finals: list[float] | None = None
+    curve_by_config: dict[str, list[list[float]]] = {}
+    if include_random:
+        random_finals, random_curves = _run_config(
+            ("random_search", "lcb", 0.0),
+            X,
+            y,
+            seeds=seeds,
+            initial_random=INITIAL_RANDOM,
+            batch_size=BATCH_SIZE,
+            total_budget=TOTAL_BUDGET,
+        )
+        curve_by_config["random_search"] = random_curves
+
+    rows: list[dict[str, object]] = []
+    curve_rows: list[dict[str, object]] = []
+    for surrogate, acquisition, kappa in configs:
+        key = _config_key(surrogate, acquisition, kappa)
+        finals, curves = _run_config(
+            (surrogate, acquisition, kappa),
+            X,
+            y,
+            seeds=seeds,
+            initial_random=INITIAL_RANDOM,
+            batch_size=BATCH_SIZE,
+            total_budget=TOTAL_BUDGET,
+        )
+        curve_by_config[key] = curves
+        rows.append(
+            _metrics_row(
                 surrogate=surrogate,
-                n_estimators=100,
-                random_state=seed,
-            )
-            chosen = score_and_select(
-                model,
-                X,
-                batch_size=batch,
-                kappa=kappa,
-                evaluated_indices=evaluated,
                 acquisition=acquisition,
-                f_best=current_best if np.isfinite(current_best) else None,
+                kappa=kappa,
+                oracle_best=oracle_best,
+                finals=finals,
+                curves=curves,
+                seeds=seeds,
+                random_finals=random_finals,
+                step=step,
             )
-        for i in chosen:
-            evaluated.add(i)
-            current_best = min(current_best, float(y_arr[i]))
-        total_eval += len(chosen)
-        best_after_eval.extend([current_best] * len(chosen))
+        )
+        agg = aggregate_curves(curves)
+        for _, agg_row in agg.iterrows():
+            curve_rows.append(
+                {
+                    "step": step,
+                    "config": key,
+                    "eval_count": int(agg_row["eval_count"]),
+                    "mean_best": float(agg_row["mean_best"]),
+                    "std_best": float(agg_row["std_best"]),
+                }
+            )
+        default_tag = (
+            " [DEFAULT]" if _is_default_config(surrogate, acquisition, kappa) else ""
+        )
+        logger.info(
+            "%s%s: mean best E_ads = %.4f ± %.4f (regret@100 = %.4f)",
+            key,
+            default_tag,
+            float(np.mean(finals)),
+            float(np.std(finals)),
+            float(np.mean(finals)) - oracle_best,
+        )
 
-    # Should have exactly total_budget entries unless pool exhausted early
-    return best_after_eval, current_best
+    if include_random and random_finals is not None:
+        random_mean = float(np.mean(random_finals))
+        rows.insert(
+            0,
+            _metrics_row(
+                surrogate="random_search",
+                acquisition="none",
+                kappa=float("nan"),
+                oracle_best=oracle_best,
+                finals=random_finals,
+                curves=curve_by_config["random_search"],
+                seeds=seeds,
+                random_finals=None,
+                step=step,
+            ),
+        )
+        logger.info(
+            "random_search: mean best E_ads = %.4f ± %.4f (regret@100 = %.4f)",
+            random_mean,
+            float(np.std(random_finals)),
+            random_mean - oracle_best,
+        )
+
+    out_df = pd.DataFrame(rows)
+    out_df = out_df.sort_values(
+        by=["is_default", "mean_final_best"],
+        ascending=[False, True],
+        na_position="last",
+    ).reset_index(drop=True)
+    return out_df, pd.DataFrame(curve_rows), curve_by_config
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description="Offline BO benchmark (fixed batch size 10)"
     )
@@ -240,111 +319,90 @@ def main():
         default=DEFAULT_SMILES,
         help="SMILES string for the adsorbate (default: %(default)s)",
     )
+    ap.add_argument("--step", type=int, default=None, help="Saturation step pool")
+    ap.add_argument(
+        "--all-steps",
+        action="store_true",
+        help="Run benchmark on each saturation step and aggregate",
+    )
     ap.add_argument(
         "--out", default="benchmark_bo_results.csv", help="Output metrics CSV"
     )
+    ap.add_argument(
+        "--curves-out",
+        default=None,
+        help="Output convergence curves CSV (default: <out>_curves.csv)",
+    )
     ap.add_argument("--seeds", type=int, default=5, help="Number of random seeds")
+    ap.add_argument(
+        "--plot",
+        action="store_true",
+        help="Write convergence plot PNG next to --out",
+    )
     ap.add_argument("--no-plot", action="store_true", help="Skip writing plot")
+    ap.add_argument(
+        "--default-only",
+        action="store_true",
+        help="Compare default BO vs random only (faster)",
+    )
     args = ap.parse_args()
 
-    X, y, _ = load_and_prepare_data(
-        args.data_dir, surface_type=args.surface_type, smiles=args.smiles
+    if args.step is not None and args.all_steps:
+        raise SystemExit("Use either --step or --all-steps, not both")
+
+    configs = (
+        [(DEFAULT_BO_SURROGATE, DEFAULT_BO_ACQUISITION, DEFAULT_BO_KAPPA)]
+        if args.default_only
+        else MODEL_CONFIGS
     )
-    n = len(X)
-    oracle_best = float(np.min(y))
-    logger.info("Loaded %d placements, %d features", n, X.shape[1])
-    logger.info("Oracle best E_ads in pool: %.4f eV", oracle_best)
 
-    configs: list[tuple[str, str, float]] = [
-        ("random_forest", "lcb", 0.0),
-        ("random_forest", "lcb", 1.0),
-        ("random_forest", "lcb", 1.96),
-        ("random_forest", "lcb", 2.5),
-        ("random_forest", "ei", 1.96),
-        ("random_forest", "pi", 1.96),
-        ("extra_trees", "lcb", 1.0),
-        ("extra_trees", "pi", 1.96),
-        ("gaussian_process", "lcb", 1.0),
-        ("gaussian_process", "lcb", 1.96),
-        ("ensemble", "lcb", 1.0),
-        ("ensemble", "lcb", 1.96),
-        ("ensemble", "ei", 1.96),
-        # mean-only surrogates (sigma=0 => EI/PI reduce to greedy)
-        ("gradient_boost", "lcb", 0.0),
-        ("ridge", "lcb", 0.0),
-    ]
-    rows = []
-    for surrogate, acquisition, kappa in configs:
-        key = f"{surrogate}_{acquisition}" + (
-            f"_k{kappa}" if acquisition == "lcb" else ""
+    steps: list[int | None]
+    if args.all_steps:
+        steps = list_available_steps(args.data_dir)
+    elif args.step is not None:
+        steps = [args.step]
+    else:
+        steps = [None]
+
+    all_metrics: list[pd.DataFrame] = []
+    all_curves: list[pd.DataFrame] = []
+    plot_curves: dict[str, list[list[float]]] = {}
+
+    for step in steps:
+        X, y, _ = load_placement_pool(
+            args.data_dir,
+            step=step,
+            surface_type=args.surface_type,
+            smiles=args.smiles,
         )
-        is_default = (
-            surrogate == DEFAULT_BO_SURROGATE
-            and acquisition == DEFAULT_BO_ACQUISITION
-            and kappa == DEFAULT_BO_KAPPA
-        )
-        finals = []
-        best20 = []
-        best50 = []
-        best100 = []
-        for seed in range(args.seeds):
-            best_curve, final_best = run_offline_bo(
-                X,
-                y,
-                initial_random=INITIAL_RANDOM,
-                batch_size=BATCH_SIZE,
-                total_budget=TOTAL_BUDGET,
-                seed=seed,
-                surrogate=surrogate,
-                acquisition=acquisition,
-                kappa=kappa,
-            )
-            finals.append(final_best)
-            if len(best_curve) >= 20:
-                best20.append(float(best_curve[19]))
-            if len(best_curve) >= 50:
-                best50.append(float(best_curve[49]))
-            if len(best_curve) >= 100:
-                best100.append(float(best_curve[99]))
-        mean_best = float(np.mean(finals))
-        std_best = float(np.std(finals))
-        regret_at_100 = mean_best - oracle_best
-        rows.append(
-            {
-                "surrogate": surrogate,
-                "acquisition": acquisition,
-                "kappa": kappa,
-                "is_default": is_default,
-                "oracle_best": oracle_best,
-                "mean_best_at_20": float(np.mean(best20)) if best20 else float("nan"),
-                "mean_best_at_50": float(np.mean(best50)) if best50 else float("nan"),
-                "mean_best_at_100": float(np.mean(best100))
-                if best100
-                else float("nan"),
-                "mean_final_best": mean_best,
-                "std_final_best": std_best,
-                "regret_at_100": regret_at_100,
-                "n_seeds": args.seeds,
-            }
-        )
-        default_tag = " [DEFAULT]" if is_default else ""
+        step_label = f"step {step}" if step is not None else "full pool"
         logger.info(
-            "%s%s: mean best E_ads = %.4f ± %.4f (regret@100 = %.4f)",
-            key,
-            default_tag,
-            mean_best,
-            std_best,
-            regret_at_100,
+            "Loaded %s: %d placements, %d features, oracle %.4f eV",
+            step_label,
+            len(X),
+            X.shape[1],
+            float(np.min(y)),
         )
+        metrics_df, curves_df, curve_by_config = _benchmark_pool(
+            X,
+            y,
+            seeds=args.seeds,
+            step=step,
+            configs=configs,
+            include_random=True,
+        )
+        all_metrics.append(metrics_df)
+        all_curves.append(curves_df)
+        if len(steps) == 1:
+            plot_curves = curve_by_config
 
-    out_df = pd.DataFrame(rows)
-    out_df = out_df.sort_values(
-        by=["is_default", "mean_final_best"],
-        ascending=[False, True],
-    ).reset_index(drop=True)
-    default_row = out_df[out_df["is_default"]]
-    if not default_row.empty:
-        dr = default_row.iloc[0]
+    out_df = pd.concat(all_metrics, ignore_index=True)
+    curves_out = args.curves_out or args.out.replace(".csv", "_curves.csv")
+    curves_df = pd.concat(all_curves, ignore_index=True)
+
+    default_rows = out_df[out_df["is_default"] == True]  # noqa: E712
+    if not default_rows.empty:
+        dr = default_rows.iloc[0]
         logger.info(
             "Default BO (%s/%s/kappa=%.1f): mean_final_best=%.4f, regret@100=%.4f",
             dr["surrogate"],
@@ -353,8 +411,28 @@ def main():
             dr["mean_final_best"],
             dr["regret_at_100"],
         )
+        if "vs_random_mean_improvement" in dr and pd.notna(
+            dr["vs_random_mean_improvement"]
+        ):
+            logger.info(
+                "Default vs random: improvement=%.4f eV, win_rate=%.2f, p=%.4g",
+                dr["vs_random_mean_improvement"],
+                dr["vs_random_win_rate"],
+                dr["vs_random_p_value"],
+            )
+
     out_df.to_csv(args.out, index=False)
+    curves_df.to_csv(curves_out, index=False)
     logger.info("Wrote %s", args.out)
+    logger.info("Wrote %s", curves_out)
+
+    if args.plot and not args.no_plot and plot_curves:
+        plot_path = args.out.replace(".csv", ".png")
+        title = f"BO convergence ({args.data_dir})"
+        if args.step is not None:
+            title += f" step {args.step}"
+        _write_plot(plot_curves, plot_path, title=title)
+
     return 0
 
 

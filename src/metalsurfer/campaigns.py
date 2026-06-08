@@ -141,7 +141,7 @@ def _run_binding_campaign(
     slab = coerce_slab_container(slab, material_type=config.material_type)
     t_start = time.perf_counter()
 
-    setup_directories([surface_type])
+    setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
     calculator, ts_model = setup_single_model(config.model_name, config.device)
     smiles_list = [s for s, _ in molecules]
     molecule_names = [n for _, n in molecules]
@@ -257,7 +257,8 @@ def run_adsorption(
     system_name:
         Optional system identifier written into per-molecule XYZ files.
     save_results:
-        Whether to write CSV/XYZ/POSCAR output files.
+        Whether to write CSV/XYZ output files. VASP bundles require
+        ``config.write_vasp_inputs=True``.
     write_settings:
         Whether to write a ``run_settings.json`` file.
     write_metadata:
@@ -317,7 +318,8 @@ def run_adsorption_bo(
     system_name:
         Optional system identifier for per-molecule XYZ files.
     save_results:
-        Whether to write CSV/XYZ/POSCAR output files.
+        Whether to write CSV/XYZ output files. VASP bundles require
+        ``config.write_vasp_inputs=True``.
     write_settings:
         Whether to write a ``run_settings.json`` file.
     write_metadata:
@@ -379,7 +381,7 @@ def _run_saturation_campaign(
     skip_existing: bool,
     run_metadata_out: dict[str, Any] | None,
 ) -> SaturationCampaignResult:
-    setup_directories([surface_type])
+    setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
     failure_summary: dict[str, object] = {}
     run_metadata: dict[str, Any] = (
         run_metadata_out if run_metadata_out is not None else {}
@@ -449,7 +451,8 @@ def run_saturation(
     surface_type:
         Label for the ``results_{surface_type}/`` output directory.
     save_results:
-        Whether to write CSV/XYZ/POSCAR output files.
+        Whether to write CSV/XYZ output files. VASP bundles require
+        ``config.write_vasp_inputs=True``.
     write_settings:
         Whether to write a ``run_settings.json`` file.
     write_metadata:
@@ -504,7 +507,8 @@ def run_saturation_bo(
     surface_type:
         Label for the ``results_{surface_type}/`` output directory.
     save_results:
-        Whether to write CSV/XYZ/POSCAR output files.
+        Whether to write CSV/XYZ output files. VASP bundles require
+        ``config.write_vasp_inputs=True``.
     write_settings:
         Whether to write a ``run_settings.json`` file.
     write_metadata:

@@ -204,6 +204,9 @@ class AdsorptionConfig:
         4,
         1,
     )  # VASP k-points grid (tuple of 3 integers)
+    write_vasp_inputs: bool = (
+        False  # Write POSCAR/INCAR/KPOINTS and reference-slab POSCAR files
+    )
     saturation: bool = False  # Enable saturation coverage calculations
     multi_molecule_saturation: bool = (
         False  # Enable multi-molecule saturation calculations

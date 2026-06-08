@@ -308,6 +308,7 @@ class ScreeningRunResult:
         *,
         results_dir: str | Path | None = None,
         context_row: Mapping[str, Any] | None = None,
+        write_vasp_inputs: bool = False,
     ) -> list[dict[str, Any]]:
         """Flatten all placements for this molecule into detailed rows."""
         rows: list[dict[str, Any]] = []
@@ -316,21 +317,24 @@ class ScreeningRunResult:
         if results_dir is not None:
             base = Path(results_dir)
             xyz_dir = base / "xyz_structures" / f"{self.molecule}_all"
-            vasp_dir = base / "vasp_inputs" / f"{self.molecule}_all"
+            if write_vasp_inputs:
+                vasp_dir = base / "vasp_inputs" / f"{self.molecule}_all"
 
         for sr in self.results:
             pid = sr.placement_id
             xyz_path = str(xyz_dir / f"conformer_{pid:03d}.xyz") if xyz_dir else None
             poscar_path = (
-                str(vasp_dir / f"conformer_{pid:03d}" / "POSCAR") if vasp_dir else None
+                str(vasp_dir / f"conformer_{pid:03d}" / "POSCAR")
+                if vasp_dir is not None
+                else None
             )
-            rows.append(
-                sr.to_row(
-                    xyz_path=xyz_path,
-                    poscar_path=poscar_path,
-                    context_row=context_row,
-                )
+            row = sr.to_row(
+                xyz_path=xyz_path,
+                poscar_path=poscar_path,
+                context_row=context_row,
             )
+            row["molecule"] = self.molecule
+            rows.append(row)
         return rows
 
     def to_dataframe(
@@ -338,10 +342,15 @@ class ScreeningRunResult:
         *,
         results_dir: str | Path | None = None,
         context_row: Mapping[str, Any] | None = None,
+        write_vasp_inputs: bool = False,
     ) -> pd.DataFrame:
         """Return a detailed pandas DataFrame for this screening run."""
         return pd.DataFrame(
-            self.to_rows(results_dir=results_dir, context_row=context_row)
+            self.to_rows(
+                results_dir=results_dir,
+                context_row=context_row,
+                write_vasp_inputs=write_vasp_inputs,
+            )
         )
 
     def to_summary_row(self) -> dict[str, Any] | None:
@@ -424,6 +433,7 @@ class SaturationStepResult:
         saturation_molecule: str,
         context_row: Mapping[str, Any] | None = None,
         step_prefix: bool = True,
+        write_vasp_inputs: bool = False,
     ) -> list[dict[str, Any]]:
         """Return detailed rows for every placement evaluated in this step."""
         step_placements_rel = (
@@ -435,19 +445,26 @@ class SaturationStepResult:
             / f"{saturation_molecule}_saturation"
             / step_placements_rel
         )
-        step_vasp = (
-            Path(results_dir)
-            / "vasp_inputs"
-            / f"{saturation_molecule}_saturation"
-            / step_placements_rel
-        )
+        step_vasp: Path | None = None
+        if write_vasp_inputs:
+            step_vasp = (
+                Path(results_dir)
+                / "vasp_inputs"
+                / f"{saturation_molecule}_saturation"
+                / step_placements_rel
+            )
         rows: list[dict[str, Any]] = []
         for r in self.all_results:
             pid = r.placement_id
+            poscar_path = (
+                str(step_vasp / f"conformer_{pid:03d}" / "POSCAR")
+                if step_vasp is not None
+                else None
+            )
             rows.append(
                 r.to_row(
                     xyz_path=str(step_xyz / f"conformer_{pid:03d}.xyz"),
-                    poscar_path=str(step_vasp / f"conformer_{pid:03d}" / "POSCAR"),
+                    poscar_path=poscar_path,
                     context_row=context_row,
                 )
                 | {

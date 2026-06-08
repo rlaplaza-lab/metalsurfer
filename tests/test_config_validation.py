@@ -13,6 +13,7 @@ def test_default_config():
     config = AdsorptionConfig()
     assert config.num_conformers == 10
     assert config.fmax == 0.05
+    assert config.write_vasp_inputs is False
 
 
 def test_valid_custom_config():

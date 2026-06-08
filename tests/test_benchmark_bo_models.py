@@ -1,21 +1,30 @@
 """Tests for BO benchmark setup-specific validation and injectivity checks."""
 
+import sys
 from importlib import util
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
 
-def _load_benchmark_module():
-    script_path = (
-        Path(__file__).resolve().parents[1] / "scripts" / "benchmark_bo_models.py"
-    )
-    spec = util.spec_from_file_location("benchmark_bo_models", script_path)
+def _load_script_module(name: str, script_name: str):
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / script_name
+    spec = util.spec_from_file_location(name, script_path)
     assert spec is not None and spec.loader is not None
     module = util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _load_benchmark_module():
+    return _load_script_module("benchmark_bo_models", "benchmark_bo_models.py")
+
+
+def _load_common_module():
+    return _load_script_module("benchmark_bo_common", "benchmark_bo_common.py")
 
 
 def _base_row() -> dict[str, object]:
@@ -48,7 +57,7 @@ def _base_row() -> dict[str, object]:
 
 
 def test_load_and_prepare_data_rejects_mixed_setup(tmp_path):
-    mod = _load_benchmark_module()
+    mod = _load_common_module()
     row1 = _base_row()
     row2 = _base_row()
     row2["placement_id"] = 1
@@ -63,7 +72,7 @@ def test_load_and_prepare_data_rejects_mixed_setup(tmp_path):
 
 
 def test_load_and_prepare_data_accepts_single_setup(tmp_path):
-    mod = _load_benchmark_module()
+    mod = _load_common_module()
     row1 = _base_row()
     row2 = _base_row()
     row2["placement_id"] = 1
@@ -80,7 +89,7 @@ def test_load_and_prepare_data_accepts_single_setup(tmp_path):
 
 
 def test_feature_energy_injective_allows_duplicates_with_same_energy():
-    mod = _load_benchmark_module()
+    mod = _load_common_module()
     X = pd.DataFrame({"x": [0.0, 0.0], "y": [1.0, 1.0]})
     y = pd.Series([-1.0, -1.0])
 
@@ -88,7 +97,7 @@ def test_feature_energy_injective_allows_duplicates_with_same_energy():
 
 
 def test_feature_energy_injective_reports_conflicts():
-    mod = _load_benchmark_module()
+    mod = _load_common_module()
     X = pd.DataFrame({"x": [0.0, 0.0], "y": [1.0, 1.0]})
     y = pd.Series([-1.0, -0.9])
 
@@ -120,7 +129,7 @@ def _hpc_schema_row(**overrides: object) -> dict[str, object]:
 
 
 def test_load_and_prepare_data_accepts_hpc_schema_without_quats(tmp_path):
-    mod = _load_benchmark_module()
+    mod = _load_common_module()
     df = pd.DataFrame(
         [
             _hpc_schema_row(),
@@ -185,3 +194,49 @@ def test_enrich_detailed_dataset_geometry_from_ml_dataset(tmp_path):
     assert enriched.loc[0, "quat_w"] == pytest.approx(0.8)
     assert enriched.loc[0, "z_fraction"] == pytest.approx(0.25)
     assert enriched.loc[1, "quat_w"] == pytest.approx(1.0)
+
+
+def test_load_placement_pool_filters_by_step_column(tmp_path):
+    mod = _load_common_module()
+    rows = []
+    for step in (1, 2):
+        for pid in range(3):
+            row = _base_row()
+            row.update(
+                {
+                    "step": step,
+                    "placement_id": pid,
+                    "x_abs": float(pid + step),
+                    "energy_adsorption": -0.5 - 0.1 * pid - 0.01 * step,
+                }
+            )
+            rows.append(row)
+    pd.DataFrame(rows).to_csv(
+        tmp_path / "saturation_placements_detailed.csv", index=False
+    )
+    X, y, df = mod.load_placement_pool(str(tmp_path), step=2)
+    assert len(df) == 3
+    assert len(X) == 3
+
+
+def test_run_random_search_and_bo_smoke(tmp_path):
+    mod = _load_common_module()
+    rows = []
+    for pid in range(15):
+        row = _base_row()
+        row.update(
+            {
+                "placement_id": pid,
+                "x_abs": float(pid),
+                "energy_adsorption": -0.2 - 0.05 * pid,
+            }
+        )
+        rows.append(row)
+    pd.DataFrame(rows).to_csv(
+        tmp_path / "adsorption_energies_detailed.csv", index=False
+    )
+    X, y, _ = mod.load_placement_pool(str(tmp_path))
+    _, random_best = mod.run_random_search(X, y, 5, 5, 10, seed=0)
+    _, bo_best = mod.run_offline_bo(X, y, 5, 5, 10, seed=0)
+    assert np.isfinite(random_best)
+    assert np.isfinite(bo_best)

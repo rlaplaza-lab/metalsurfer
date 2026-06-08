@@ -69,7 +69,7 @@ def test_run_saturation_bo_forces_bo_and_preserves_multi_molecule(monkeypatch):
     )
     monkeypatch.setattr(
         "metalsurfer.campaigns.setup_directories",
-        lambda surface_types: None,
+        lambda surface_types, **kwargs: None,
     )
     monkeypatch.setattr(
         "metalsurfer.campaigns.save_saturation_results",
@@ -126,7 +126,7 @@ def test_run_saturation_passes_config_to_save_saturation_results(monkeypatch):
     )
     monkeypatch.setattr(
         "metalsurfer.campaigns.setup_directories",
-        lambda surface_types: None,
+        lambda surface_types, **kwargs: None,
     )
 
     cfg = AdsorptionConfig(seed=999, saturation_save_all_placements=False)
@@ -184,7 +184,7 @@ def test_run_saturation_save_benchmark_dataset(monkeypatch):
     )
     monkeypatch.setattr(
         "metalsurfer.campaigns.setup_directories",
-        lambda surface_types: None,
+        lambda surface_types, **kwargs: None,
     )
 
     cfg = AdsorptionConfig(save_benchmark_dataset=True)
@@ -198,6 +198,11 @@ def test_run_saturation_save_benchmark_dataset(monkeypatch):
     )
     assert "summary_runs" in captured
     assert captured["surface_type"] == "st_bench"
+    flattened = captured["summary_runs"]
+    assert len(flattened) == 1
+    assert flattened[0].molecule == "demo_step_001"
+    rows = flattened[0].to_rows()
+    assert rows[0]["molecule"] == "demo_step_001"
 
 
 def test_run_saturation_write_metadata_persists_json(tmp_path, monkeypatch):
@@ -233,7 +238,7 @@ def test_run_saturation_write_metadata_persists_json(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "metalsurfer.campaigns.setup_directories",
-        lambda surface_types: None,
+        lambda surface_types, **kwargs: None,
     )
 
     campaign = run_saturation(

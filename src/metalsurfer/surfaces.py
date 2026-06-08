@@ -266,14 +266,16 @@ def create_slab_from_bulk(
 
     slab.atoms = ensure_slab_z_alignment(slab.atoms)
 
+    cfg = config if config is not None else AdsorptionConfig()
     os.makedirs(results_dir, exist_ok=True)
     _write_clean_xyz(slab.atoms, f"{results_dir}/clean_slab.xyz")
-    slab.atoms.write(
-        f"{results_dir}/clean_slab_POSCAR",
-        format="vasp",
-        vasp5=True,
-        direct=True,
-    )
+    if cfg.write_vasp_inputs:
+        slab.atoms.write(
+            f"{results_dir}/clean_slab_POSCAR",
+            format="vasp",
+            vasp5=True,
+            direct=True,
+        )
     logger.info("Saved clean slab reference files to %s", results_dir)
 
     return SlabContainer(slab.atoms)
@@ -548,15 +550,17 @@ def substitute_alloy(
         except (RuntimeError, ValueError) as exc:
             raise OptimizationError(f"Alloy slab relaxation failed: {exc}") from exc
 
+    cfg = config if config is not None else AdsorptionConfig()
     os.makedirs(results_dir, exist_ok=True)
     label = f"{host_symbol}_{guest_symbol}_{int(guest_fraction * 100)}"
     _write_clean_xyz(best_atoms, f"{results_dir}/clean_{label}_slab.xyz")
-    best_atoms.write(
-        f"{results_dir}/clean_{label}_slab_POSCAR",
-        format="vasp",
-        vasp5=True,
-        direct=True,
-    )
+    if cfg.write_vasp_inputs:
+        best_atoms.write(
+            f"{results_dir}/clean_{label}_slab_POSCAR",
+            format="vasp",
+            vasp5=True,
+            direct=True,
+        )
     logger.info("Saved alloy slab (%s) to %s", label, results_dir)
 
     return SlabContainer(best_atoms)
@@ -693,16 +697,18 @@ def deposit_adatoms(
             "Failed to generate any valid adatom-deposited slab"
         )
 
+    cfg = config if config is not None else AdsorptionConfig()
     os.makedirs(results_dir, exist_ok=True)
     pct = int(round(coverage_fraction * 100))
     label = f"{adatom_symbol}{pct}"
     _write_clean_xyz(best_atoms, f"{results_dir}/clean_slab_{label}.xyz")
-    best_atoms.write(
-        f"{results_dir}/clean_slab_{label}_POSCAR",
-        format="vasp",
-        vasp5=True,
-        direct=True,
-    )
+    if cfg.write_vasp_inputs:
+        best_atoms.write(
+            f"{results_dir}/clean_slab_{label}_POSCAR",
+            format="vasp",
+            vasp5=True,
+            direct=True,
+        )
     logger.info(
         "Created adatom-deposited slab (%s, %.0f%%): E=%.4f eV",
         adatom_symbol,

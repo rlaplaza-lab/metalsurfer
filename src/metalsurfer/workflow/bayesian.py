@@ -11,6 +11,7 @@ from ..conformers import create_conformers_from_smiles
 from ..filters import filter_results
 from ..ml.bayesian import (
     build_spec_features_geometry_aware,
+    build_transfer_surrogate,
     score_and_select,
     train_surrogate,
 )
@@ -394,75 +395,30 @@ def process_molecule_bayesian(
             )
             if can_try_transfer:
                 assert transfer_memory is not None
-                X_prev = pd.DataFrame(transfer_memory.observed_X_rows).reindex(
-                    columns=X_current.columns, fill_value=0.0
+                transfer_result = build_transfer_surrogate(
+                    X_current,
+                    y_current,
+                    transfer_memory.observed_X_rows,
+                    transfer_memory.observed_y,
+                    surrogate=config.bo_surrogate,  # type: ignore[arg-type]
+                    n_estimators=100,
+                    random_state=config.seed,
+                    weight_cap=config.bo_transfer_weight_cap,
+                    similarity_lengthscale=config.bo_transfer_similarity_lengthscale,
+                    min_similarity=config.bo_transfer_min_similarity,
+                    mae_tolerance=config.bo_transfer_mae_tolerance,
+                    transfer_bad_rounds=transfer_bad_rounds,
+                    trust_patience=config.bo_transfer_trust_patience,
                 )
-                y_prev = np.array(transfer_memory.observed_y, dtype=float)
-                center = X_current.mean(axis=0).to_numpy(dtype=float)
-                prev_values = X_prev.to_numpy(dtype=float)
-                dist = np.linalg.norm(prev_values - center, axis=1)
-                similarity = np.exp(
-                    -dist / float(config.bo_transfer_similarity_lengthscale)
-                )
-                mask = similarity >= config.bo_transfer_min_similarity
-                X_prev = X_prev.loc[mask]
-                y_prev = y_prev[mask]
-                similarity = similarity[mask]
-                if len(X_prev) > 0:
-                    n_current = len(X_current)
-                    max_transfer_weight = (
-                        n_current
-                        * config.bo_transfer_weight_cap
-                        / max(1.0 - config.bo_transfer_weight_cap, 1e-8)
-                    )
-                    transfer_weights = similarity / max(float(np.sum(similarity)), 1e-8)
-                    transfer_weights = transfer_weights * max_transfer_weight
-                    transfer_weight_share = float(
-                        np.sum(transfer_weights)
-                        / (np.sum(transfer_weights) + float(n_current))
-                    )
-
-                    base_model = _train_surrogate_for_bo(
-                        X_current,
-                        y_current,
-                        config=config,
-                        sample_weight=None,
-                    )
-                    base_mae = float(
-                        np.mean(np.abs(base_model.predict(X_current) - y_current))
-                    )
-
-                    X_train = pd.concat([X_current, X_prev], ignore_index=True)
-                    y_train = np.concatenate([y_current, y_prev], axis=0)
-                    sample_weight = np.concatenate(
-                        [np.ones(n_current, dtype=float), transfer_weights], axis=0
-                    )
-                    transfer_model = _train_surrogate_for_bo(
-                        X_train,
-                        y_train,
-                        config=config,
-                        sample_weight=sample_weight,
-                    )
-                    transfer_mae = float(
-                        np.mean(np.abs(transfer_model.predict(X_current) - y_current))
-                    )
-                    transfer_last_mae_delta = transfer_mae - base_mae
-                    if transfer_last_mae_delta > config.bo_transfer_mae_tolerance:
-                        transfer_bad_rounds += 1
-                    else:
-                        transfer_bad_rounds = 0
-                        transfer_used_rounds += 1
-
-                    if transfer_bad_rounds >= config.bo_transfer_trust_patience:
-                        transfer_disabled = True
-                        transfer_disabled_reason = (
-                            "trust_degraded_on_current_step_residuals"
-                        )
-                        X_train = X_current
-                        y_train = y_current
-                        sample_weight = None
-                    else:
-                        surrogate = transfer_model
+                transfer_weight_share = transfer_result.transfer_weight_share
+                transfer_last_mae_delta = transfer_result.transfer_mae_delta
+                transfer_bad_rounds = transfer_result.transfer_bad_rounds
+                if transfer_result.transfer_used_this_round:
+                    transfer_used_rounds += 1
+                if transfer_result.transfer_disabled:
+                    transfer_disabled = True
+                    transfer_disabled_reason = transfer_result.transfer_disabled_reason
+                surrogate = transfer_result.surrogate
 
             if surrogate is None or transfer_disabled:
                 surrogate = _train_surrogate_for_bo(

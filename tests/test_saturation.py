@@ -270,9 +270,6 @@ def test_save_saturation_results_writes_csv_and_xyz(workdir):
             "xyz_structures/water_saturation/step_001_placements/conformer_000_adsorbate.xyz",
             "xyz_structures/water_saturation/step_001_placements/conformer_001_adsorbate.xyz",
             "xyz_structures/water_saturation/final_saturated_slab.xyz",
-            "vasp_inputs/water_saturation/step_001/POSCAR",
-            "vasp_inputs/water_saturation/step_001_placements/conformer_000/POSCAR",
-            "vasp_inputs/water_saturation/step_001_placements/conformer_001/POSCAR",
         ],
     )
     summary_df = pd.read_csv(summary_path)
@@ -307,6 +304,45 @@ def test_save_saturation_results_writes_csv_and_xyz(workdir):
     placements_df = pd.read_csv(output_dir / "saturation_placements_detailed.csv")
     assert len(placements_df) == 2
     assert set(placements_df["placement_id"]) == {0, 1}
+    assert "poscar_path" not in placements_df.columns
+
+
+def test_save_saturation_results_writes_vasp_when_enabled(workdir):
+    """VASP bundles are written only when write_vasp_inputs=True."""
+    slab = make_slab()
+    combined = place_molecule_on_slab(slab, make_water())
+    best = make_screening_result(
+        molecule="water",
+        placement_id=0,
+        energy_adsorption=-1.0,
+        atoms=combined,
+        slab_size=len(slab),
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    step = SaturationStepResult(
+        step=1,
+        molecule="water",
+        n_molecules_on_slab=0,
+        best_result=best,
+        all_results=[best],
+    )
+    sr = SaturationRunResult(
+        molecule="water",
+        steps=[step],
+        n_molecules_at_saturation=1,
+        final_slab_atoms=combined.copy(),
+    )
+    cfg = AdsorptionConfig(write_vasp_inputs=True)
+    save_saturation_results([sr], surface_type="saturation_vasp_test", config=cfg)
+    output_dir = workdir / "results_saturation_vasp_test"
+    assert_paths_exist(
+        output_dir,
+        [
+            "vasp_inputs/water_saturation/step_001/POSCAR",
+            "vasp_inputs/water_saturation/step_001_placements/conformer_000/POSCAR",
+        ],
+    )
 
 
 def test_save_saturation_results_skips_all_placements_when_disabled(workdir):
@@ -1243,8 +1279,6 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
             "xyz_structures/water_CO2_saturation/step_001_placements/water/conformer_000.xyz",
             "xyz_structures/water_CO2_saturation/step_001_placements/water/conformer_001.xyz",
             "xyz_structures/water_CO2_saturation/step_001_placements/CO2/conformer_000.xyz",
-            "vasp_inputs/water_CO2_saturation/step_001_placements/water/conformer_000/POSCAR",
-            "vasp_inputs/water_CO2_saturation/step_001_placements/CO2/conformer_000/POSCAR",
         ],
     )
 

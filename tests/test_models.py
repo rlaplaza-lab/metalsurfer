@@ -170,13 +170,33 @@ def test_screening_run_result():
     rows = rr.to_rows(results_dir="results_test")
     assert len(rows) == 1
     assert rows[0]["xyz_path"].endswith("water_all/conformer_000.xyz")
-    assert rows[0]["poscar_path"].endswith("water_all/conformer_000/POSCAR")
+    assert "poscar_path" not in rows[0]
+    rows_vasp = rr.to_rows(results_dir="results_test", write_vasp_inputs=True)
+    assert rows_vasp[0]["poscar_path"].endswith("water_all/conformer_000/POSCAR")
     df = rr.to_dataframe(results_dir="results_test")
     assert len(df.index) == 1
     assert set(df.columns) >= {"molecule", "energy_adsorption", "xyz_path"}
     summary_row = rr.to_summary_row()
     assert summary_row is not None
     assert summary_row["best_placement_id"] == 0
+
+
+def test_screening_run_result_uses_run_level_molecule_in_to_rows():
+    """Flattened exports must use ScreeningRunResult.molecule, not inner placement names."""
+    from tests.conftest import make_screening_result
+
+    inner = make_screening_result(
+        molecule="demo", placement_id=0, energy_adsorption=-1.0
+    )
+    run = ScreeningRunResult(
+        molecule="demo_step_002",
+        results=[inner],
+        summary=build_molecule_summary("demo_step_002", [inner]),
+    )
+    rows = run.to_rows()
+    assert len(rows) == 1
+    assert rows[0]["molecule"] == "demo_step_002"
+    assert inner.molecule == "demo"
 
 
 def test_saturation_step_result():

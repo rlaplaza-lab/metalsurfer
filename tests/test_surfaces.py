@@ -280,6 +280,22 @@ class TestSubstituteAlloy:
         with tempfile.TemporaryDirectory() as tmpdir:
             substitute_alloy(slab, "Ru", "Cu", guest_fraction=0.5, results_dir=tmpdir)
             assert os.path.exists(os.path.join(tmpdir, "clean_Ru_Cu_50_slab.xyz"))
+            assert not os.path.exists(
+                os.path.join(tmpdir, "clean_Ru_Cu_50_slab_POSCAR")
+            )
+
+    def test_writes_poscar_when_enabled(self):
+        slab = self._ru_slab()
+        cfg = AdsorptionConfig(write_vasp_inputs=True)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            substitute_alloy(
+                slab,
+                "Ru",
+                "Cu",
+                guest_fraction=0.5,
+                config=cfg,
+                results_dir=tmpdir,
+            )
             assert os.path.exists(os.path.join(tmpdir, "clean_Ru_Cu_50_slab_POSCAR"))
 
     def test_no_host_atoms_raises(self):
@@ -385,6 +401,19 @@ class TestDepositAdatoms:
         with tempfile.TemporaryDirectory() as tmpdir:
             deposit_adatoms(slab, "Sn", coverage_fraction=0.2, results_dir=tmpdir)
             assert os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20.xyz"))
+            assert not os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20_POSCAR"))
+
+    def test_writes_poscar_when_enabled(self):
+        slab = self._layered_slab()
+        cfg = AdsorptionConfig(write_vasp_inputs=True)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            deposit_adatoms(
+                slab,
+                "Sn",
+                coverage_fraction=0.2,
+                config=cfg,
+                results_dir=tmpdir,
+            )
             assert os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20_POSCAR"))
 
     def test_uses_config_seed_by_default(self):

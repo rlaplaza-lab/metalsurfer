@@ -1,6 +1,7 @@
 """Surrogate training, uncertainty-aware prediction, and acquisition scoring for BO."""
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
@@ -233,6 +234,138 @@ def train_surrogate(
         )
         return pipeline
     raise ValueError(f"Unknown surrogate: {surrogate!r}")
+
+
+@dataclass
+class TransferSurrogateResult:
+    """Outcome of one BO round's transfer-augmented surrogate training."""
+
+    surrogate: Pipeline
+    transfer_used_this_round: bool
+    transfer_weight_share: float
+    transfer_mae_delta: float | None
+    transfer_bad_rounds: int
+    transfer_disabled: bool
+    transfer_disabled_reason: str | None
+
+
+def build_transfer_surrogate(
+    X_current: pd.DataFrame,
+    y_current: np.ndarray,
+    observed_X_prev: pd.DataFrame | list[dict[str, float]],
+    observed_y_prev: np.ndarray | list[float],
+    *,
+    surrogate: TreeSurrogateType = "random_forest",
+    n_estimators: int = 100,
+    random_state: int = 42,
+    weight_cap: float = 0.35,
+    similarity_lengthscale: float = 1.0,
+    min_similarity: float = 0.05,
+    mae_tolerance: float = 0.0,
+    transfer_bad_rounds: int = 0,
+    trust_patience: int = 2,
+) -> TransferSurrogateResult:
+    """Train baseline or transfer-weighted surrogate with production trust gating.
+
+    Mirrors the transfer block in :func:`workflow.bayesian.process_molecule_bayesian`.
+    """
+    y_current = np.asarray(y_current, dtype=float)
+    baseline = train_surrogate(
+        X_current,
+        y_current,
+        surrogate=surrogate,
+        n_estimators=n_estimators,
+        random_state=random_state,
+    )
+    if len(observed_X_prev) == 0 or len(observed_y_prev) == 0:
+        return TransferSurrogateResult(
+            surrogate=baseline,
+            transfer_used_this_round=False,
+            transfer_weight_share=0.0,
+            transfer_mae_delta=None,
+            transfer_bad_rounds=transfer_bad_rounds,
+            transfer_disabled=False,
+            transfer_disabled_reason=None,
+        )
+
+    X_prev = (
+        pd.DataFrame(observed_X_prev)
+        if not isinstance(observed_X_prev, pd.DataFrame)
+        else observed_X_prev.copy()
+    )
+    y_prev = np.asarray(observed_y_prev, dtype=float)
+    X_prev = X_prev.reindex(columns=X_current.columns, fill_value=0.0)
+    center = X_current.mean(axis=0).to_numpy(dtype=float)
+    prev_values = X_prev.to_numpy(dtype=float)
+    dist = np.linalg.norm(prev_values - center, axis=1)
+    similarity = np.exp(-dist / float(similarity_lengthscale))
+    mask = similarity >= min_similarity
+    X_prev = X_prev.loc[mask]
+    y_prev = y_prev[mask]
+    similarity = similarity[mask]
+
+    if len(X_prev) == 0:
+        return TransferSurrogateResult(
+            surrogate=baseline,
+            transfer_used_this_round=False,
+            transfer_weight_share=0.0,
+            transfer_mae_delta=None,
+            transfer_bad_rounds=transfer_bad_rounds,
+            transfer_disabled=False,
+            transfer_disabled_reason=None,
+        )
+
+    n_current = len(X_current)
+    max_transfer_weight = n_current * weight_cap / max(1.0 - weight_cap, 1e-8)
+    transfer_weights = similarity / max(float(np.sum(similarity)), 1e-8)
+    transfer_weights = transfer_weights * max_transfer_weight
+    transfer_weight_share = float(
+        np.sum(transfer_weights) / (np.sum(transfer_weights) + float(n_current))
+    )
+
+    base_mae = float(np.mean(np.abs(baseline.predict(X_current) - y_current)))
+
+    X_train = pd.concat([X_current, X_prev], ignore_index=True)
+    y_train = np.concatenate([y_current, y_prev], axis=0)
+    sample_weight = np.concatenate(
+        [np.ones(n_current, dtype=float), transfer_weights], axis=0
+    )
+    transfer_model = train_surrogate(
+        X_train,
+        y_train,
+        surrogate=surrogate,
+        n_estimators=n_estimators,
+        random_state=random_state,
+        sample_weight=sample_weight,
+    )
+    transfer_mae = float(np.mean(np.abs(transfer_model.predict(X_current) - y_current)))
+    transfer_mae_delta = transfer_mae - base_mae
+    bad_rounds = transfer_bad_rounds
+    if transfer_mae_delta > mae_tolerance:
+        bad_rounds += 1
+    else:
+        bad_rounds = 0
+
+    if bad_rounds >= trust_patience:
+        return TransferSurrogateResult(
+            surrogate=baseline,
+            transfer_used_this_round=False,
+            transfer_weight_share=transfer_weight_share,
+            transfer_mae_delta=transfer_mae_delta,
+            transfer_bad_rounds=bad_rounds,
+            transfer_disabled=True,
+            transfer_disabled_reason="trust_degraded_on_current_step_residuals",
+        )
+
+    return TransferSurrogateResult(
+        surrogate=transfer_model,
+        transfer_used_this_round=True,
+        transfer_weight_share=transfer_weight_share,
+        transfer_mae_delta=transfer_mae_delta,
+        transfer_bad_rounds=bad_rounds,
+        transfer_disabled=False,
+        transfer_disabled_reason=None,
+    )
 
 
 # ---------------------------------------------------------------------------

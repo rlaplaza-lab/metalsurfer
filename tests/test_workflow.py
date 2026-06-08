@@ -827,9 +827,8 @@ class TestSaveSummaryResults:
         assert df.iloc[0]["molecule"] == "water"
         detail_df = pd.read_csv(detailed)
         assert "xyz_path" in detail_df.columns
-        assert "poscar_path" in detail_df.columns
+        assert "poscar_path" not in detail_df.columns
         assert "conformer_000.xyz" in detail_df.iloc[0]["xyz_path"]
-        assert "POSCAR" in detail_df.iloc[0]["poscar_path"]
 
     def test_empty_results_no_crash(self, workdir):
         save_summary_results([], surface_type="empty")
@@ -880,7 +879,7 @@ class TestSaveSummaryResults:
 
 
 class TestSaveSingleMoleculeResults:
-    def test_writes_xyz_poscar_and_csv(self, workdir):
+    def test_writes_xyz_and_csv_by_default(self, workdir):
         atoms = place_molecule_on_slab(make_slab(), make_water())
         results = [
             make_screening_result(
@@ -903,9 +902,31 @@ class TestSaveSingleMoleculeResults:
         detailed_csv = workdir / "results_single_test/adsorption_energies_detailed.csv"
         summary_csv = workdir / "results_single_test/adsorption_energy_summary.csv"
         assert xyz_path.exists()
-        assert poscar_path.exists()
+        assert not poscar_path.exists()
         assert detailed_csv.exists()
         assert summary_csv.exists()
+
+    def test_writes_vasp_when_enabled(self, workdir):
+        atoms = place_molecule_on_slab(make_slab(), make_water())
+        results = [
+            make_screening_result(
+                molecule="water",
+                placement_id=0,
+                energy_adsorption=-1.5,
+                atoms=atoms,
+                slab_size=len(make_slab()),
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(placement_id=0),
+            ),
+        ]
+        config = AdsorptionConfig(write_vasp_inputs=True)
+        save_single_molecule_results(
+            "water", results, surface_type="vasp_test", config=config
+        )
+        poscar_path = (
+            workdir / "results_vasp_test/vasp_inputs/water_all/conformer_000/POSCAR"
+        )
+        assert poscar_path.exists()
 
     def test_write_csv_false_writes_structures_not_csv(self, workdir):
         atoms = place_molecule_on_slab(make_slab(), make_water())
@@ -991,7 +1012,7 @@ class TestSaveSingleMoleculeResults:
 
 
 class TestSaveMoleculeResults:
-    def test_writes_xyz_and_vasp(self, workdir):
+    def test_writes_xyz_by_default(self, workdir):
         atoms = place_molecule_on_slab(make_slab(), make_water())
         entry = make_screening_result(
             molecule="water",
@@ -1006,6 +1027,24 @@ class TestSaveMoleculeResults:
         xyz_path = workdir / "results_test/xyz_structures/water_all/conformer_000.xyz"
         vasp_path = workdir / "results_test/vasp_inputs/water_all/conformer_000"
         assert xyz_path.exists()
+        assert not vasp_path.exists()
+
+    def test_writes_vasp_when_enabled(self, workdir):
+        atoms = place_molecule_on_slab(make_slab(), make_water())
+        entry = make_screening_result(
+            molecule="water",
+            placement_id=0,
+            energy_adsorption=-1.5,
+            atoms=atoms,
+            slab_size=len(make_slab()),
+            distance=2.5,
+            placement_descriptor=make_placement_descriptor(placement_id=0),
+        )
+        config = AdsorptionConfig(write_vasp_inputs=True)
+        save_molecule_results("water", [entry], surface_type="vasp_test", config=config)
+        vasp_path = (
+            workdir / "results_vasp_test/vasp_inputs/water_all/conformer_000/POSCAR"
+        )
         assert vasp_path.exists()
 
     def test_write_vasp_inputs_accepts_none_config(self):
@@ -1028,12 +1067,16 @@ class TestSetupDirectories:
     def test_creates_directories(self, workdir):
         setup_directories(["test_surface"])
         assert os.path.isdir("results_test_surface")
-        assert os.path.isdir("results_test_surface/vasp_inputs")
+        assert not os.path.isdir("results_test_surface/vasp_inputs")
         assert os.path.isdir("results_test_surface/xyz_structures")
+
+    def test_creates_vasp_directories_when_enabled(self, workdir):
+        setup_directories(["test_surface"], write_vasp_inputs=True)
+        assert os.path.isdir("results_test_surface/vasp_inputs")
 
     def test_default_surface_types_when_none(self, workdir):
         """setup_directories(surface_types=None) uses default ['manual']."""
         setup_directories(surface_types=None)
         assert os.path.isdir("results_manual")
-        assert os.path.isdir("results_manual/vasp_inputs")
+        assert not os.path.isdir("results_manual/vasp_inputs")
         assert os.path.isdir("results_manual/xyz_structures")
