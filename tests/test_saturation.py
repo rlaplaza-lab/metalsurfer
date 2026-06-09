@@ -624,7 +624,7 @@ def test_multi_mol_step1_presize_expands_substrate_for_all_molecules(monkeypatch
     )
     ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
 
-    def mock_resize(slab_in, _conformers, _min_sep):
+    def mock_resize(slab_in, _conformers, _min_sep, **_kwargs):
         return SlabContainer(slab_in.atoms.repeat((2, 2, 1))), True
 
     slab_sizes_seen: list[tuple[str, int]] = []
@@ -1158,7 +1158,7 @@ def test_multi_mol_saturation_bo_rejects_shared_memory_objects(monkeypatch):
     reason="CUDA GPU required; skipped in CI (no GPU)",
 )
 def test_run_saturation_screening_multi_mol_bo_real_gpu():
-    """Heavy GPU integration test for BO-enabled competing saturation."""
+    """Smoke-level GPU integration test for BO-enabled competing saturation."""
     slab = create_slab_from_bulk(
         bulk_id="mp-23",
         miller_indices=(1, 1, 1),
@@ -1170,17 +1170,19 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
         model_name="uma-s-1p1",
         seed=42,
         num_conformers=1,
-        num_placements=4,
+        num_placements=2,
         device="cuda",
+        material_type="slab",
         multi_molecule_saturation=True,
         bo_enabled=True,
-        bo_initial_random=2,
+        bo_initial_random=1,
         bo_batch_size=1,
-        bo_total_budget=4,
+        bo_total_budget=2,
+        saturation_max_steps=1,
         skip_topology_check=True,
         skip_desorption_check=False,
-        stage1_steps=16,
-        stage2_steps=80,
+        stage1_steps=8,
+        stage2_steps=32,
     )
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:

@@ -355,6 +355,8 @@ def check_desorption(
     slab: Atoms,
     binding_threshold: float = 4.0,
     surface_symbols: list[str] | None = None,
+    *,
+    material_type: str = "slab",
 ) -> tuple[bool, str]:
     """Return ``(ok, reason)``; ``ok=False`` means the adsorbate desorbed.
 
@@ -375,7 +377,7 @@ def check_desorption(
         if np.any(mask):
             slab_positions = slab_positions[mask]
 
-    _pbc_for_dist = material_aware_pbc(slab)
+    _pbc_for_dist = material_aware_pbc(material_type)
     min_d = calculate_min_distance(
         adsorbate.get_positions(),
         slab_positions,
@@ -531,6 +533,7 @@ def filter_results(
                 slab,
                 binding_threshold=config.binding_distance_threshold,
                 surface_symbols=surface_symbols,
+                material_type=config.material_type,
             )
             if ok:
                 kept.append(entry)

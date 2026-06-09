@@ -530,6 +530,8 @@ def _principal_axis_rotation(
 def detect_vdw_overlaps(
     molecule_atoms: Atoms,
     slab: Atoms,
+    *,
+    material_type: str = "slab",
     vdw_scale: float = 1.0,
     exclude_slab_atoms: int | None = None,
 ) -> tuple[list[tuple[int, int, float, float]], float]:
@@ -549,7 +551,7 @@ def detect_vdw_overlaps(
 
     # Use the slab's cell and PBC for all MIC distances (adsorbate shares that frame).
     cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(slab)
+    pbc = material_aware_pbc(material_type)
     dists = _mol_slab_pairwise_distances(mol_pos, slab_pos, cell, pbc)
     min_distance = float(np.min(dists)) if dists.size else float("inf")
 
@@ -572,6 +574,8 @@ def calculate_contact_quality(
     slab: Atoms,
     contact_distance_threshold: float | None = None,
     exclude_slab_atoms: int | None = None,
+    *,
+    material_type: str = "slab",
 ) -> dict[str, float | int]:
     """Contact metrics: min distance, covalent ratio at closest pair, and pair counts."""
     mol_syms = molecule_atoms.get_chemical_symbols()
@@ -585,7 +589,7 @@ def calculate_contact_quality(
 
     # Use the slab's cell and PBC for all MIC distances (adsorbate shares that frame).
     cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(slab)
+    pbc = material_aware_pbc(material_type)
     dists = _mol_slab_pairwise_distances(mol_pos, slab_pos, cell, pbc)
     mol_size, slab_size = dists.shape
     if mol_size == 0 or slab_size == 0:
@@ -707,6 +711,8 @@ def check_initial_placement_distance(
     reject_vdw_overlaps: bool = False,
     vdw_overlap_scale: float = 1.0,
     exclude_slab_atoms: int | None = None,
+    *,
+    material_type: str = "slab",
 ) -> tuple[bool, float]:
     """Check if the initial placement satisfies distance constraints.
 
@@ -725,10 +731,9 @@ def check_initial_placement_distance(
     distance checking (for saturation mode where slab may contain pre-adsorbed
     atoms). Use len(bare_slab) to exclude previously placed adsorbates.
 
-    PBC flags are derived from the slab material type via
-    :func:`material_aware_pbc` so that slabs, nanoparticles, and porous
-    materials all receive correct periodic-image handling — consistent with
-    the post-optimisation desorption check in :mod:`~metalsurfer.filters`.
+    PBC flags come from explicit *material_type* via :func:`material_aware_pbc`,
+    consistent with the post-optimisation desorption check in
+    :mod:`~metalsurfer.filters`.
     """
     mol_syms = molecule_atoms.get_chemical_symbols()
     mol_pos = molecule_atoms.get_positions()
@@ -741,7 +746,7 @@ def check_initial_placement_distance(
         slab_syms = slab.get_chemical_symbols()
 
     cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(slab)
+    pbc = material_aware_pbc(material_type)
 
     actual_min, mol_idx, slab_idx = calculate_min_distance_pair(
         mol_pos, slab_pos, cell=cell, pbc=pbc
@@ -774,6 +779,7 @@ def check_initial_placement_distance(
         overlaps, _ = detect_vdw_overlaps(
             molecule_atoms,
             slab,
+            material_type=material_type,
             vdw_scale=vdw_overlap_scale,
             exclude_slab_atoms=exclude_slab_atoms,
         )

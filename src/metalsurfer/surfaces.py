@@ -281,12 +281,16 @@ def create_slab_from_bulk(
     return SlabContainer(slab.atoms)
 
 
-def create_slab_from_atoms(atoms: Atoms) -> SlabContainer:
+def create_slab_from_atoms(
+    atoms: Atoms,
+    *,
+    material_type: str = "slab",
+) -> SlabContainer:
     """Wrap an existing ASE ``Atoms`` object into a :class:`SlabContainer`.
 
-    Applies :func:`ensure_slab_z_alignment`.
+    When *material_type* is ``"slab"``, applies :func:`ensure_slab_z_alignment`.
     """
-    return SlabContainer(ensure_slab_z_alignment(atoms.copy()))
+    return coerce_slab_container(atoms, material_type=material_type)
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +416,7 @@ def substitute_alloy(
     if config is None:
         config = AdsorptionConfig()
 
-    slab = coerce_slab_container(slab)
+    slab = coerce_slab_container(slab, material_type=config.material_type)
 
     if not 0.0 <= guest_fraction <= 1.0:
         raise ValueError(
@@ -604,7 +608,7 @@ def deposit_adatoms(
         relaxation_steps=relaxation_steps,
     )
 
-    slab = coerce_slab_container(slab)
+    slab = coerce_slab_container(slab, material_type=config.material_type)
 
     if not 0.0 <= coverage_fraction <= 1.0:
         raise ValueError(
@@ -786,13 +790,15 @@ def auto_resize_slab_for_molecule(
     slab: SlabContainer | Atoms,
     conformers: list[Atoms],
     min_separation: float = 8.0,
+    *,
+    material_type: str = "slab",
 ) -> tuple[SlabContainer, bool]:
     """Resize *slab* in-plane so periodic images are well separated.
 
     Returns ``(slab, was_resized)`` where *was_resized* is ``True``
     when the cell was expanded.
     """
-    slab = coerce_slab_container(slab)
+    slab = coerce_slab_container(slab, material_type=material_type)
 
     diameter = _molecule_diameter(conformers)
     cell = np.array(slab.atoms.get_cell())

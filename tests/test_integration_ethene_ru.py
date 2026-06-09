@@ -51,6 +51,7 @@ def _run_ethene_on_ru():
         results_dir="results_test_ethene",
     )
     config = AdsorptionConfig(
+        material_type="slab",
         seed=42,
         num_conformers=3,
         num_placements=25,

@@ -14,7 +14,7 @@ from tests.optional_deps import cuda_available, has_mlip_stack
 
 pytestmark = [
     pytest.mark.slow,
-    pytest.mark.mlp,
+    pytest.mark.mlip,
     pytest.mark.gpu,
     pytest.mark.no_fork,  # CUDA incompatible with pytest-forked
     pytest.mark.skipif(
@@ -53,15 +53,18 @@ def _run_co2_in_mof():
 
     cif_path = os.path.join("examples", "mof_structures", "RUBTAK01.cif")
     mof_atoms = read(cif_path)
-    mof_slab = create_slab_from_atoms(mof_atoms)
+    mof_slab = create_slab_from_atoms(mof_atoms, material_type="porous")
 
     config = AdsorptionConfig(
+        material_type="porous",
         seed=42,
         num_conformers=1,
         num_placements=5,
         device="cuda",
         skip_topology_check=False,
         skip_desorption_check=False,
+        stage1_steps=16,
+        stage2_steps=80,
         placement_z_range=(2.0, 6.0),
         min_initial_distance=1.8,
     )

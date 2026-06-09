@@ -221,6 +221,7 @@ class AdsorptionConfig:
     # Before advancing to the next saturation step, discard candidates whose full
     # adsorbate pool shows rearrangement (e.g. adsorbate-adsorbate coupling).
     saturation_discard_topology_rearrangements: bool = True
+    saturation_max_steps: int | None = None  # Optional cap on saturation loop depth
     skip_topology_check: bool = False  # Skip molecular topology validation checks
     skip_desorption_check: bool = False  # Skip post-optimization desorption validation
 
@@ -584,3 +585,5 @@ class AdsorptionConfig:
                 "saturation_autobatcher_reuse_growth_fraction must be in [0.0, 1.0], "
                 f"got {self.saturation_autobatcher_reuse_growth_fraction}"
             )
+        if self.saturation_max_steps is not None:
+            _check_positive_int("saturation_max_steps", self.saturation_max_steps)

@@ -636,6 +636,7 @@ def _finalize_placement(
         max_initial_distance=config.max_initial_distance,
         reject_vdw_overlaps=config.reject_vdw_overlaps,
         vdw_overlap_scale=config.vdw_overlap_scale,
+        material_type=config.material_type,
     )
     if not ok:
         return None
@@ -1210,6 +1211,7 @@ def _generate_dissociative_placement_from_spec(
         max_initial_distance=config.max_initial_distance,
         reject_vdw_overlaps=config.reject_vdw_overlaps,
         vdw_overlap_scale=config.vdw_overlap_scale,
+        material_type=config.material_type,
     )
     if not ok:
         return None, "initial_distance_or_site_constraints"

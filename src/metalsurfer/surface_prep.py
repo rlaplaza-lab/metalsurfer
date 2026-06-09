@@ -125,6 +125,10 @@ def prepare_slab(
             "Exactly one of 'bulk_id', 'slab_file', or 'slab' must be provided"
         )
 
+    material_type = (
+        config.material_type if config is not None else AdsorptionConfig().material_type
+    )
+
     requested_create_relax_mode = create_relaxation_mode
     if requested_create_relax_mode is None and config is not None:
         requested_create_relax_mode = config.slab_relaxation_mode
@@ -145,7 +149,7 @@ def prepare_slab(
         calculator, _ = setup_single_model(model_name, device)
 
     if slab is not None:
-        slab_container = coerce_slab_container(slab)
+        slab_container = coerce_slab_container(slab, material_type=material_type)
     elif slab_file is not None:
         loaded = ase.io.read(slab_file)
         if isinstance(loaded, list):
@@ -158,7 +162,7 @@ def prepare_slab(
             atoms = loaded
         if not isinstance(atoms, Atoms):
             raise TypeError(f"slab_file did not yield ASE Atoms, got {type(atoms)!r}")
-        slab_container = create_slab_from_atoms(atoms)
+        slab_container = create_slab_from_atoms(atoms, material_type=material_type)
     else:
         if bulk_id is None:
             raise ValueError(

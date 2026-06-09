@@ -52,7 +52,7 @@ def _setup_screening_run(
         else:
             logger.info("No molecules to process")
         return None
-    slab_container = coerce_slab_container(slab)
+    slab_container = coerce_slab_container(slab, material_type=config.material_type)
     t_ref_start = time.perf_counter()
     ref = calculate_reference_energies(
         slab_container,

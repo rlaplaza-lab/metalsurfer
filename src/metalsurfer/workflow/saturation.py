@@ -183,7 +183,10 @@ def _presize_saturation_substrate_if_needed(
         return current_slab, base_slab, reference_slab_for_symmetry, False
 
     resized_slab, was_resized = auto_resize_slab_for_molecule(
-        current_slab, conformers, config.min_pbc_image_separation
+        current_slab,
+        conformers,
+        config.min_pbc_image_separation,
+        material_type=config.material_type,
     )
     if not was_resized:
         return current_slab, base_slab, reference_slab_for_symmetry, False
@@ -587,6 +590,16 @@ def _run_multi_molecule_saturation(
             )
             break
 
+        if (
+            config.saturation_max_steps is not None
+            and step >= config.saturation_max_steps
+        ):
+            logger.info(
+                "Multi-mol saturation: reached max steps (%d)",
+                config.saturation_max_steps,
+            )
+            break
+
         current_slab = SlabContainer(best_overall.atoms.copy())
 
     return MultiMolSaturationRunResult(
@@ -832,6 +845,17 @@ def run_saturation_screening(
                         "Slab saturated for %s at step %d (E_ads >= 0)",
                         mol,
                         step,
+                    )
+                    break
+
+                if (
+                    config.saturation_max_steps is not None
+                    and step >= config.saturation_max_steps
+                ):
+                    logger.info(
+                        "Saturation for %s: reached max steps (%d)",
+                        mol,
+                        config.saturation_max_steps,
                     )
                     break
 

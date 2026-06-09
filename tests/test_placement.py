@@ -276,7 +276,7 @@ def test_initial_placement_distance_accepts_and_rejects_expected_heights():
     near.set_positions(p_near)
     near.set_cell(slab.get_cell())
     near.set_pbc(slab.get_pbc())
-    ok_near, _ = check_initial_placement_distance(near, slab)
+    ok_near, _ = check_initial_placement_distance(near, slab, material_type="slab")
     assert not ok_near
 
     valid = water.copy()
@@ -287,25 +287,14 @@ def test_initial_placement_distance_accepts_and_rejects_expected_heights():
     valid.set_positions(p_valid)
     valid.set_cell(slab.get_cell())
     valid.set_pbc(slab.get_pbc())
-    ok_valid, _ = check_initial_placement_distance(valid, slab)
+    ok_valid, _ = check_initial_placement_distance(valid, slab, material_type="slab")
     assert ok_valid
 
 
 def test_material_aware_pbc():
-    from ase import Atoms
-
-    slab = Atoms("Cu", cell=[3.6, 3.6, 20.0], pbc=[True, True, True])
-    assert material_aware_pbc(slab) == [True, True, False]
-    nanoparticle = Atoms("Cu", positions=[[0, 0, 0]])
-    assert material_aware_pbc(nanoparticle) == [False, False, False]
-    porous = Atoms(
-        "Cu2",
-        cell=[3.6, 3.6, 3.6],
-        pbc=[True, True, True],
-        positions=[[0, 0, 0], [1.8, 1.8, 1.8]],
-    )
-    # porous is detected as slab because z_span/c_length < 0.7
-    assert material_aware_pbc(porous) == [True, True, False]
+    assert material_aware_pbc("slab") == [True, True, False]
+    assert material_aware_pbc("nanoparticle") == [False, False, False]
+    assert material_aware_pbc("porous") == [True, True, True]
 
 
 # ---------------------------------------------------------------------------
@@ -825,7 +814,9 @@ def test_check_desorption_slab_adsorbed_and_desorbed_cases():
     slab = make_slab()
 
     adsorbed = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
-    ok_ads, _ = check_desorption(adsorbed, slab, binding_threshold=4.0)
+    ok_ads, _ = check_desorption(
+        adsorbed, slab, binding_threshold=4.0, material_type="slab"
+    )
     assert ok_ads
 
     desorbed = slab + make_water()
@@ -834,7 +825,9 @@ def test_check_desorption_slab_adsorbed_and_desorbed_cases():
     desorbed.set_positions(pos)
     desorbed.set_cell(slab.get_cell())
     desorbed.set_pbc(slab.get_pbc())
-    ok_des, reason = check_desorption(desorbed, slab, binding_threshold=4.0)
+    ok_des, reason = check_desorption(
+        desorbed, slab, binding_threshold=4.0, material_type="slab"
+    )
     assert not ok_des
     assert "too far" in reason
 
@@ -848,7 +841,9 @@ def test_check_desorption_nanoparticle_and_porous():
     np_combined = nanoparticle + water_far
     np_combined.set_cell(nanoparticle.get_cell())
     np_combined.set_pbc(nanoparticle.get_pbc())
-    ok_np, _ = check_desorption(np_combined, nanoparticle, binding_threshold=4.0)
+    ok_np, _ = check_desorption(
+        np_combined, nanoparticle, binding_threshold=4.0, material_type="nanoparticle"
+    )
     assert not ok_np
 
     water_near = make_water()
@@ -864,7 +859,9 @@ def test_check_desorption_nanoparticle_and_porous():
     porous_combined = porous + water_near
     porous_combined.set_cell(porous.get_cell())
     porous_combined.set_pbc(porous.get_pbc())
-    ok_porous, _ = check_desorption(porous_combined, porous, binding_threshold=4.0)
+    ok_porous, _ = check_desorption(
+        porous_combined, porous, binding_threshold=4.0, material_type="porous"
+    )
     assert ok_porous
 
 
@@ -1358,7 +1355,7 @@ def test_vdw_overlap_detection_rejects_close_atoms():
     water.set_cell(slab.get_cell())
     water.set_pbc(slab.get_pbc())
 
-    overlaps, min_dist = detect_vdw_overlaps(water, slab)
+    overlaps, min_dist = detect_vdw_overlaps(water, slab, material_type="slab")
     assert len(overlaps) > 0, "Should detect overlaps for very close water"
     assert min_dist < 1.5  # Very close approach
 
@@ -1380,7 +1377,7 @@ def test_vdw_overlap_detection_accepts_good_contact():
     water.set_cell(slab.get_cell())
     water.set_pbc(slab.get_pbc())
 
-    overlaps, min_dist = detect_vdw_overlaps(water, slab)
+    overlaps, min_dist = detect_vdw_overlaps(water, slab, material_type="slab")
     assert len(overlaps) == 0, "Should not detect overlaps for well-separated water"
     assert min_dist > 2.0
 
@@ -1399,7 +1396,11 @@ def test_check_initial_placement_distance_with_vdw_rejection():
 
     # Should reject with VDW check enabled
     ok, dist = check_initial_placement_distance(
-        water, slab, reject_vdw_overlaps=True, vdw_overlap_scale=1.0
+        water,
+        slab,
+        reject_vdw_overlaps=True,
+        vdw_overlap_scale=1.0,
+        material_type="slab",
     )
     assert not ok, "Should reject overlapping placement"
 
@@ -1421,7 +1422,9 @@ def test_calculate_contact_quality_detects_good_contact():
     water.set_cell(slab.get_cell())
     water.set_pbc(slab.get_pbc())
 
-    metrics = calculate_contact_quality(water, slab, contact_distance_threshold=2.5)
+    metrics = calculate_contact_quality(
+        water, slab, contact_distance_threshold=2.5, material_type="slab"
+    )
 
     assert metrics["num_contacting_atoms"] > 0, "Should have contacting atoms"
     assert metrics["contact_distance"] < 3.0, "Should have reasonable contact distance"
@@ -1452,7 +1455,7 @@ def test_adsorbate_separation_accepts_well_separated():
         pre_ads,
         min_separation=2.0,
         cell=slab.get_cell(),
-        pbc=material_aware_pbc(slab),
+        pbc=material_aware_pbc("slab"),
     )
     assert ok, "Should accept well-separated adsorbates"
     assert dist > 2.0
@@ -1480,7 +1483,7 @@ def test_adsorbate_separation_rejects_close_atoms():
         pre_ads,
         min_separation=5.0,
         cell=slab.get_cell(),
-        pbc=material_aware_pbc(slab),
+        pbc=material_aware_pbc("slab"),
     )
     assert not ok, "Should reject too-close adsorbates"
 

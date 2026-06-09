@@ -734,14 +734,18 @@ def test_decomposition_h_shift_caught_by_coordination():
 def test_desorption_adsorbed():
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
-    ok, reason = check_desorption(combined, slab, binding_threshold=4.0)
+    ok, reason = check_desorption(
+        combined, slab, binding_threshold=4.0, material_type="slab"
+    )
     assert ok, reason
 
 
 def test_desorption_too_far():
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, make_water(), z_offset=10.0)
-    ok, reason = check_desorption(combined, slab, binding_threshold=4.0)
+    ok, reason = check_desorption(
+        combined, slab, binding_threshold=4.0, material_type="slab"
+    )
     assert not ok
     assert "too far" in reason
 
@@ -750,13 +754,17 @@ def test_desorption_borderline():
     """Molecule right at the threshold should be marked desorbed (> not >=)."""
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, make_water(), z_offset=4.5)
-    ok, _ = check_desorption(combined, slab, binding_threshold=4.0)
+    ok, _ = check_desorption(
+        combined, slab, binding_threshold=4.0, material_type="slab"
+    )
     assert not ok
 
 
 def test_desorption_no_adsorbate():
     slab = make_slab(n_layers=1)
-    ok, reason = check_desorption(slab, slab, binding_threshold=4.0)
+    ok, reason = check_desorption(
+        slab, slab, binding_threshold=4.0, material_type="slab"
+    )
     assert not ok
     assert "no adsorbate" in reason
 
@@ -794,7 +802,12 @@ def test_desorption_ignores_pre_adsorbed_atoms_when_surface_symbols_provided():
     combined.set_cell(slab_with_pre_adsorbate.get_cell())
     combined.set_pbc(slab_with_pre_adsorbate.get_pbc())
 
-    ok, _ = check_desorption(combined, slab_with_pre_adsorbate, binding_threshold=4.0)
+    ok, _ = check_desorption(
+        combined,
+        slab_with_pre_adsorbate,
+        binding_threshold=4.0,
+        material_type="slab",
+    )
     assert ok, "Without surface_symbols, pre-adsorbed atoms can mask desorption"
 
     ok, reason = check_desorption(
@@ -802,6 +815,7 @@ def test_desorption_ignores_pre_adsorbed_atoms_when_surface_symbols_provided():
         slab_with_pre_adsorbate,
         binding_threshold=4.0,
         surface_symbols=["Ru"],
+        material_type="slab",
     )
     assert not ok
     assert "too far" in reason

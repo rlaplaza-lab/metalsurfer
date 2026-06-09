@@ -543,3 +543,10 @@ def test_bo_transfer_requires_tree_surrogate():
         bo_surrogate="random_forest",
     )
     assert c.bo_surrogate == "random_forest"
+
+
+def test_saturation_max_steps_must_be_positive_when_set():
+    with pytest.raises(ValueError, match="saturation_max_steps"):
+        AdsorptionConfig(saturation_max_steps=0)
+    c = AdsorptionConfig(saturation_max_steps=1)
+    assert c.saturation_max_steps == 1

@@ -225,7 +225,7 @@ def _validate_adsorption(
         slab_positions,
         cell,
         use_pbc=True,
-        pbc=material_aware_pbc(slab),
+        pbc=material_aware_pbc(config.material_type),
     )
     if min_d > config.binding_distance_threshold:
         return False, f"desorbed ({min_d:.2f} A)"
@@ -269,6 +269,7 @@ def _validate_initial_placement_geometry(
         slab,
         contact_distance_threshold=config.contact_distance_threshold,
         exclude_slab_atoms=slab_size if surface_symbols is None else None,
+        material_type=config.material_type,
     )
 
     contact_dist = metrics["contact_distance"]
@@ -372,7 +373,7 @@ def _evaluate_optimized_candidate(
         _surface_positions_for_distance(slab_opt, surface_symbols),
         np.asarray(opt_atoms.get_cell()),
         use_pbc=True,
-        pbc=material_aware_pbc(slab_opt),
+        pbc=material_aware_pbc(config.material_type),
     )
     result = ScreeningResult(
         molecule=molecule_name,
@@ -452,7 +453,10 @@ def prepare_substrate_for_screening(
     substrate_atoms_after_resize: Atoms | None = None
     if config.auto_resize_slab and allow_auto_resize:
         slab, was_resized = auto_resize_slab_for_molecule(
-            slab, conformers, config.min_pbc_image_separation
+            slab,
+            conformers,
+            config.min_pbc_image_separation,
+            material_type=config.material_type,
         )
         if was_resized:
             slab_was_resized = True
