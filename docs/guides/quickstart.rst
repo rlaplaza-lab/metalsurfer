@@ -54,7 +54,7 @@ molecule list in memory and you want a typed
        material_type="slab",
        seed=42,
        num_conformers=8,
-       num_placements=80,  # omit for None → autotune to GPU parallel capacity
+       num_placements=80,  # or omit to autotune to GPU parallel capacity
    )
 
    slab = prepare_slab(
@@ -127,7 +127,7 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
        material_type="slab",
        seed=42,
        bo_enabled=True,
-       # Defaults: ridge/ei, autotune batch sizes, 18 acquisition batches
+       # Defaults: ridge surrogate, EI acquisition, autotuned batch sizes
    )
 
    slab = prepare_slab(

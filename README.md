@@ -127,7 +127,7 @@ config = AdsorptionConfig(
     material_type="slab",  # "slab", "nanoparticle", or "porous"
     seed=42,
     num_conformers=8,
-    num_placements=80,  # omit for None → autotune to GPU parallel capacity
+    num_placements=80,  # or omit to autotune to GPU parallel capacity
 )
 
 slab = prepare_slab(
@@ -194,7 +194,7 @@ from metalsurfer import (
 config = AdsorptionConfig(
     material_type="slab",  # "slab", "nanoparticle", or "porous"
     seed=42,
-    bo_enabled=True,  # defaults: ridge/ei, autotune batch sizes, 18 acquisition batches
+    bo_enabled=True,  # defaults: ridge surrogate, EI acquisition, autotuned batch sizes
 )
 
 slab = prepare_slab(
@@ -218,7 +218,9 @@ print(result.failure_summaries)
 Relevant BO configuration fields live on `AdsorptionConfig`:
 
 - `num_placements` (default `None`: autotune to GPU parallel capacity at runtime)
-- `bo_initial_random`, `bo_batch_size` (default `None`: autotune to GPU parallel capacity), `bo_total_budget` (default `18`: number of acquisition batches after the initial random batch; total evaluations = `bo_initial_random + bo_total_budget * bo_batch_size` once auto fields resolve)
+- `bo_initial_random`, `bo_batch_size` (default `None`: autotune to GPU parallel capacity)
+- `bo_total_budget` (default `18`: acquisition batches after the initial random batch)
+- Total evaluations once auto fields resolve: `bo_initial_random + bo_total_budget * bo_batch_size`
 - `bo_acquisition` with `"lcb"`, `"ei"`, or `"pi"`
 - `bo_surrogate` with `"random_forest"`, `"extra_trees"`, `"gradient_boost"`, `"ridge"`, or `"ensemble"` (default: `"ridge"`)
 - `bo_transfer_*` for saturation transfer BO (default: weighted mode with 2-step memory window, recency and occupancy decay; `gradient_boost` does not support transfer sample weights)

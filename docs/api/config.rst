@@ -48,7 +48,7 @@ Key Attributes
    "bo_batch_size", "int | None", "None", "Surrogate-guided BO batch size; None autotunes to GPU parallel capacity"
    "bo_total_budget", "int", "18", "Number of acquisition batches after the initial random batch (not total evaluations)"
    "bo_acquisition", "Literal['lcb', 'ei', 'pi']", "'ei'", "BO acquisition function"
-   "bo_surrogate", "Literal[...]", "'ridge'", "BO surrogate model (random_forest, extra_trees, gradient_boost, ridge, ensemble)"
+   "bo_surrogate", "Literal['random_forest', 'extra_trees', 'gradient_boost', 'ridge', 'ensemble']", "'ridge'", "BO surrogate model"
    "write_vasp_inputs", "bool", "False", "Write POSCAR/INCAR/KPOINTS placement bundles and reference-slab POSCAR files (XYZ/CSV remain default)"
    "vasp_encut", "int", "400", "VASP ENCUT parameter (eV) when write_vasp_inputs is enabled"
    "vasp_ediff", "float", "1e-6", "VASP EDIFF parameter (eV) when write_vasp_inputs is enabled"

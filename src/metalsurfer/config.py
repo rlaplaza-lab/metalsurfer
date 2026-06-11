@@ -364,7 +364,9 @@ class AdsorptionConfig:
         5  # Minimum observations for transfer learning
     )
     bo_transfer_weight_cap: float = 0.35  # Maximum weight for transfer learning
-    bo_transfer_similarity_lengthscale: float = 4.0  # Similarity gate vs current-step candidates (gentler = retain more prior rows)
+    bo_transfer_similarity_lengthscale: float = (
+        4.0  # Similarity gate vs current-step candidates
+    )
     bo_transfer_min_similarity: float = 0.05  # Minimum similarity for transfer learning
     bo_transfer_trust_patience: int = 2  # Patience for transfer trust evaluation
     bo_transfer_mae_tolerance: float = 0.0  # MAE tolerance for transfer learning

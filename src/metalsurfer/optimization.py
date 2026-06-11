@@ -361,12 +361,13 @@ def estimate_parallel_relaxation_capacity(
         return _PARALLEL_CAPACITY_CACHE[cache_key]
 
     fallback = 1
+    uses_explicit_scaler = config.autobatcher_max_memory_scaler is not None
     if (
         ts is None
         or ts_constraints is None
-        or determine_max_batch_size is None
         or calculate_memory_scalers is None
         or ts_model is None
+        or (not uses_explicit_scaler and determine_max_batch_size is None)
     ):
         logger.warning(
             "TorchSim unavailable; using parallel relaxation capacity=%d",
