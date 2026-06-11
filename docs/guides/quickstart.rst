@@ -54,7 +54,7 @@ molecule list in memory and you want a typed
        material_type="slab",
        seed=42,
        num_conformers=8,
-       num_placements=80,
+       num_placements=80,  # omit for None → autotune to GPU parallel capacity
    )
 
    slab = prepare_slab(
@@ -127,11 +127,7 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
        material_type="slab",
        seed=42,
        bo_enabled=True,
-       bo_initial_random=20,
-       bo_batch_size=10,
-       bo_total_budget=60,
-       bo_acquisition="lcb",
-       bo_surrogate="random_forest",
+       # Defaults: ridge/ei, autotune batch sizes, 18 acquisition batches
    )
 
    slab = prepare_slab(
@@ -150,12 +146,13 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
 
 Relevant BO configuration fields on :class:`~metalsurfer.AdsorptionConfig`:
 
-- ``bo_initial_random``, ``bo_batch_size``, ``bo_total_budget``
-- ``bo_acquisition``: ``"lcb"``, ``"ei"``, or ``"pi"``
-- ``bo_surrogate``: ``"random_forest"``, ``"extra_trees"``, ``"gradient_boost"``, or ``"ridge"``
+- ``num_placements`` (default ``None``: autotune to GPU parallel capacity at runtime)
+- ``bo_initial_random``, ``bo_batch_size`` (default ``None``: autotune to GPU parallel capacity), ``bo_total_budget`` (default ``18``: acquisition batches after the initial random batch)
+- Total BO evaluations once auto fields resolve: ``bo_initial_random + bo_total_budget * bo_batch_size``
+- ``bo_acquisition``: ``"ei"`` (default), ``"lcb"``, or ``"pi"``
+- ``bo_surrogate``: ``"ridge"`` (default), ``"random_forest"``, ``"extra_trees"``, ``"gradient_boost"``, or ``"ensemble"``
 - ``bo_include_failure_negatives`` and ``bo_failure_penalty_*`` for learning from failed placements
-- ``bo_transfer_*`` for transfer-enabled saturation runs
-
+- ``bo_transfer_*`` for saturation transfer (default weighted mode with 2-step window, recency/occupancy decay)
 
 Sequential Saturation
 ---------------------

@@ -259,6 +259,53 @@ def test_resolve_autobatcher_max_atoms_to_try_buckets_nearby_workloads():
     assert source_b == "dynamic"
 
 
+def test_estimate_parallel_relaxation_capacity_fallback_without_torchsim(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    optimization_mod._PARALLEL_CAPACITY_CACHE.clear()
+    monkeypatch.setattr(optimization_mod, "ts", None)
+    monkeypatch.setattr(optimization_mod, "determine_max_batch_size", None)
+    config = AdsorptionConfig()
+    atoms = _make_atoms_with_cell()
+    capacity = optimization_mod.estimate_parallel_relaxation_capacity(
+        ts_model=object(),
+        representative_atoms=atoms,
+        config=config,
+        frozen_indices=[],
+    )
+    assert capacity == 1
+
+
+def test_estimate_parallel_relaxation_capacity_uses_memory_scaler(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    optimization_mod._PARALLEL_CAPACITY_CACHE.clear()
+    monkeypatch.setattr(optimization_mod, "ts", object())
+    monkeypatch.setattr(optimization_mod, "ts_constraints", object())
+    monkeypatch.setattr(
+        optimization_mod,
+        "_make_state_with_frozen_constraint",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        optimization_mod,
+        "calculate_memory_scalers",
+        lambda state, memory_scales_with: [100.0],
+    )
+    config = AdsorptionConfig(
+        autobatcher_max_memory_scaler=1200.0,
+        autobatcher_max_memory_padding=0.5,
+    )
+    atoms = _make_atoms_with_cell()
+    capacity = optimization_mod.estimate_parallel_relaxation_capacity(
+        ts_model=object(),
+        representative_atoms=atoms,
+        config=config,
+        frozen_indices=[],
+    )
+    assert capacity == 6
+
+
 def test_resolve_autobatcher_max_atoms_to_try_is_conservative_vs_estimate():
     config = AdsorptionConfig(autobatcher_max_atoms_to_try=None)
     max_n_atoms = 333

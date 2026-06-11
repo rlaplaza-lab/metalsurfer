@@ -57,7 +57,8 @@ The HPC-oriented copy of this workflow is `scripts/bipyridine_au111_defects_satu
 These examples span Pt, Ru, MOF, and Au(111); the same API accepts any ASE `Atoms` or prepared slab.
 
 - Use pure ASE for receptor preparation (or `prepare_slab` from a bulk id)
-- Quick demos use modest placement counts; the bipyridine HPC script uses many more (see `scripts/`)
+- Quick demos use modest explicit placement counts; omit `num_placements` to autotune to GPU parallel capacity (see `AdsorptionConfig`)
+- The bipyridine HPC script uses many more placements (see `scripts/`)
 - Demonstrate different material types (`nanoparticle`, `porous`, and `slab`)
 - Produce XYZ structures and CSV results (VASP inputs are opt-in via `write_vasp_inputs=True`)
 
@@ -126,7 +127,7 @@ config = AdsorptionConfig(
     material_type="slab",  # "slab", "nanoparticle", or "porous"
     seed=42,
     num_conformers=8,
-    num_placements=80,
+    num_placements=80,  # omit for None → autotune to GPU parallel capacity
 )
 
 slab = prepare_slab(
@@ -193,12 +194,7 @@ from metalsurfer import (
 config = AdsorptionConfig(
     material_type="slab",  # "slab", "nanoparticle", or "porous"
     seed=42,
-    bo_enabled=True,
-    bo_initial_random=20,
-    bo_batch_size=10,
-    bo_total_budget=60,
-    bo_acquisition="lcb",
-    bo_surrogate="random_forest",
+    bo_enabled=True,  # defaults: ridge/ei, autotune batch sizes, 18 acquisition batches
 )
 
 slab = prepare_slab(
@@ -221,10 +217,11 @@ print(result.failure_summaries)
 
 Relevant BO configuration fields live on `AdsorptionConfig`:
 
-- `bo_initial_random`, `bo_batch_size`, `bo_total_budget`
+- `num_placements` (default `None`: autotune to GPU parallel capacity at runtime)
+- `bo_initial_random`, `bo_batch_size` (default `None`: autotune to GPU parallel capacity), `bo_total_budget` (default `18`: number of acquisition batches after the initial random batch; total evaluations = `bo_initial_random + bo_total_budget * bo_batch_size` once auto fields resolve)
 - `bo_acquisition` with `"lcb"`, `"ei"`, or `"pi"`
-- `bo_surrogate` with `"random_forest"`, `"extra_trees"`, `"gradient_boost"`, or `"ridge"`
-- `bo_transfer_*` for transfer-enabled saturation runs (per-sample weights are used only for tree surrogates; `gradient_boost` and `ridge` fits drop transfer weights)
+- `bo_surrogate` with `"random_forest"`, `"extra_trees"`, `"gradient_boost"`, `"ridge"`, or `"ensemble"` (default: `"ridge"`)
+- `bo_transfer_*` for saturation transfer BO (default: weighted mode with 2-step memory window, recency and occupancy decay; `gradient_boost` does not support transfer sample weights)
 - `bo_include_failure_negatives` and `bo_failure_penalty_*` for learning from failed placements
 
 ### 3. Sequential Saturation
@@ -273,39 +270,8 @@ Important saturation behaviors:
 - When `multi_molecule_saturation=True` and multiple molecules are provided (in-memory list or CSV), the workflow switches to competitive saturation, where molecules compete for each step and the best overall adsorption wins.
 - Competitive saturation also supports `bo_enabled=True`. In that mode, each adsorbate trains and carries forward its own BO state independently; BO observations are not shared across adsorbates.
 - By default, `saturation_save_all_placements=True` writes every validated placement per step under `xyz_structures/.../step_{NNN}_placements/`, plus `saturation_placements_detailed.csv`. Matching `vasp_inputs/...` trees are written only when `write_vasp_inputs=True`. Set `saturation_save_all_placements=False` to persist only the per-step best structures (smaller disk use).
-- Set `save_benchmark_dataset=True` on `AdsorptionConfig` to also write `adsorption_energies_detailed.csv` (flattened step placements for BO benchmarking).
 - By default, `saturation_discard_topology_rearrangements=True` re-checks the full adsorbate pool on each candidate **before** choosing the step winner: adsorbates must form the expected number of connected fragments (connectivity-only guard). This catches inter-adsorbate coupling or unexpected splitting that per-placement filtering can miss while allowing strong adsorbate-material interactions that preserve adsorbate connectivity. Set `False` to rank only by `E_ads`; the guard is also skipped when `skip_topology_check=True`.
 - Contributor test markers (`gpu`, `slow`): see the [development guide](https://metalsurfer.readthedocs.io/en/latest/guides/development.html).
-
-### BO offline benchmarks
-
-Generate unbiased placement pools by running saturation with `bo_enabled=False` and `save_benchmark_dataset=True` (see `scripts/bipyridine_au111_defects_saturation_raw.py`). Flattened rows use per-step molecule names such as `bipyridine_step_003`.
-
-Replay the default BO loop offline (10 initial random + 9×10 batch evaluations = 100 total) and compare surrogates, acquisition functions, random search, and cross-step transfer:
-
-```bash
-# Model/acquisition grid vs random on one saturation step
-python scripts/benchmark_bo_models.py \
-  --data-dir examples/results_bipyridine_au111_defects_saturation_raw \
-  --step 3 --seeds 30 --plot
-
-# Default BO vs random on every step
-python scripts/benchmark_bo_models.py \
-  --data-dir examples/results_bipyridine_au111_defects_saturation_raw \
-  --all-steps --default-only --seeds 30
-
-# Baseline vs transfer-weighted BO on real step pools (steps 2–9)
-python scripts/benchmark_bo_transfer.py \
-  --data-dir examples/results_bipyridine_au111_defects_saturation_raw \
-  --steps 2-9 --seeds 10
-
-# Run all three and print a summary report
-python scripts/run_bo_benchmark_suite.py \
-  --data-dir examples/results_bipyridine_au111_defects_saturation_raw \
-  --seeds 10
-```
-
-Metrics include mean best E_ads at 20/50/100 evaluations, regret@100 relative to the pool oracle, paired comparisons vs random search, and per-step transfer improvement. Default production settings are `random_forest` + LCB with κ=1.0; transfer uses the same similarity-weighted trust gate as live saturation BO (`bo_transfer_*` in `AdsorptionConfig`).
 
 ### Surface setup and modifiers
 

@@ -6,8 +6,9 @@ Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, to
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 On-disk output follows ``AdsorptionConfig`` (README, saturation section).
 
-If CUDA OOM on 16GB GPUs: ensure no other GPU processes (nvidia-smi), or reduce
-num_placements / use autobatcher_max_memory_scaler=400 for ~1 system per batch.
+If CUDA OOM on 16GB GPUs: ensure no other GPU processes (nvidia-smi), reduce
+explicit `num_placements`, or use `autobatcher_max_memory_scaler=400` for ~1 system per batch.
+Omit `num_placements` to autotune to GPU parallel capacity instead.
 """
 
 from metalsurfer import (

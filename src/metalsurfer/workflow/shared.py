@@ -3,7 +3,7 @@
 import logging
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -11,13 +11,17 @@ from ase import Atoms
 from scipy.spatial.distance import pdist
 
 from .._logging import warn_once
-from ..config import AdsorptionConfig
+from ..config import AdsorptionConfig, resolved_bo_eval_budget
 from ..exceptions import OptimizationError
 from ..models import PlacementDescriptor, ScreeningResult
+from ..optimization import compute_frozen_indices, estimate_parallel_relaxation_capacity
 from ..placement import generators as placement_generators
 from ..placement import get_symmetry_aware_sites
 from ..placement._material import material_aware_pbc
-from ..placement.generators import generate_placement_from_spec_with_reason
+from ..placement.generators import (
+    enumerate_placement_specs,
+    generate_placement_from_spec_with_reason,
+)
 from ..placement.geometry import calculate_min_distance
 from ..surfaces import SlabContainer, auto_resize_slab_for_molecule
 from ..symmetry import SymmetryAnalysisError
@@ -478,6 +482,164 @@ def prepare_substrate_for_screening(
         effective_base_slab_for_frozen=effective_base_slab_for_frozen,
         slab_was_resized=slab_was_resized,
         substrate_atoms_after_resize=substrate_atoms_after_resize,
+    )
+
+
+def build_representative_relaxation_atoms(
+    conformers: list[Atoms],
+    slab_atoms: Atoms,
+    slab_for_sites: Atoms,
+    config: AdsorptionConfig,
+    smiles: str,
+    *,
+    site_context: placement_generators.SiteContext | None,
+) -> Atoms:
+    """Build one slab+adsorbate geometry for GPU parallel-capacity probing."""
+    if not conformers:
+        raise ValueError("conformers must not be empty")
+
+    specs = enumerate_placement_specs(
+        conformers,
+        slab_for_sites,
+        config,
+        smiles,
+        1,
+        site_context=site_context,
+        full_slab=slab_atoms,
+    )
+    if specs:
+        result, _ = generate_placement_from_spec_with_reason(
+            specs[0],
+            conformers,
+            slab_atoms,
+            config,
+            smiles=smiles,
+            site_context=site_context,
+            slab_for_sites=slab_for_sites,
+        )
+        if result is not None:
+            adsorbate, _ = result
+            combined = slab_atoms + adsorbate
+            combined.set_pbc([True, True, True])
+            return combined
+
+    largest = max(conformers, key=len)
+    positions = largest.get_positions().copy()
+    z_min = float(np.min(positions[:, 2]))
+    slab_z_max = float(np.max(slab_atoms.get_positions()[:, 2]))
+    z_offset = slab_z_max + config.placement_z_range[0] - z_min
+    positions[:, 2] += z_offset
+    ads = largest.copy()
+    ads.set_positions(positions)
+    combined = slab_atoms + ads
+    combined.set_pbc([True, True, True])
+    return combined
+
+
+def resolve_workload_config(
+    config: AdsorptionConfig,
+    *,
+    ts_model,
+    representative_atoms: Atoms,
+    frozen_indices: list[int],
+    bo_enabled: bool,
+) -> AdsorptionConfig:
+    """Fill auto placement/BO batch fields from probed GPU parallel capacity."""
+    needs_autotune = config.num_placements is None or (
+        bo_enabled
+        and (config.bo_initial_random is None or config.bo_batch_size is None)
+    )
+    if not needs_autotune:
+        return config
+
+    capacity = estimate_parallel_relaxation_capacity(
+        ts_model,
+        representative_atoms,
+        config,
+        frozen_indices=frozen_indices,
+    )
+
+    updates: dict[str, int] = {}
+    if config.num_placements is None:
+        updates["num_placements"] = capacity
+    if bo_enabled:
+        if config.bo_initial_random is None:
+            updates["bo_initial_random"] = capacity
+        if config.bo_batch_size is None:
+            updates["bo_batch_size"] = capacity
+
+    resolved = config
+    if "num_placements" in updates:
+        resolved = replace(resolved, num_placements=updates["num_placements"])
+    if "bo_initial_random" in updates:
+        resolved = replace(resolved, bo_initial_random=updates["bo_initial_random"])
+    if "bo_batch_size" in updates:
+        resolved = replace(resolved, bo_batch_size=updates["bo_batch_size"])
+
+    if bo_enabled:
+        eval_budget = resolved_bo_eval_budget(resolved)
+        logger.info(
+            "Autotuned workload: parallel=%d, num_placements=%d, "
+            "bo_initial=%d, bo_batch=%d, bo_batches=%d (eval_budget=%d)",
+            capacity,
+            resolved.num_placements,
+            resolved.bo_initial_random,
+            resolved.bo_batch_size,
+            resolved.bo_total_budget,
+            eval_budget,
+        )
+    else:
+        logger.info(
+            "Autotuned workload: parallel=%d, num_placements=%d",
+            capacity,
+            resolved.num_placements,
+        )
+    return resolved
+
+
+def resolve_saturation_step_workload_config(
+    config: AdsorptionConfig,
+    *,
+    ts_model,
+    conformers: list[Atoms],
+    slab_atoms: Atoms,
+    slab_for_sites: Atoms,
+    smiles: str,
+    base_slab_for_frozen: Atoms | None,
+    symmetry_broken: bool,
+    bo_enabled: bool,
+) -> AdsorptionConfig:
+    """Resolve placement budget before multi-molecule budget splitting."""
+    needs_autotune = config.num_placements is None or (
+        bo_enabled
+        and (config.bo_initial_random is None or config.bo_batch_size is None)
+    )
+    if not needs_autotune:
+        return config
+
+    site_context = _resolve_site_context_for_sampling(
+        slab_for_sites,
+        config,
+        symmetry_broken=symmetry_broken,
+    )
+    freeze_ref = (
+        base_slab_for_frozen if base_slab_for_frozen is not None else slab_atoms
+    )
+    frozen_indices = compute_frozen_indices(freeze_ref, config)
+    representative_atoms = build_representative_relaxation_atoms(
+        conformers,
+        slab_atoms,
+        slab_for_sites,
+        config,
+        smiles,
+        site_context=site_context,
+    )
+    return resolve_workload_config(
+        config,
+        ts_model=ts_model,
+        representative_atoms=representative_atoms,
+        frozen_indices=frozen_indices,
+        bo_enabled=bo_enabled,
     )
 
 

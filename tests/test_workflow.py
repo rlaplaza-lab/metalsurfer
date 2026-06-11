@@ -419,6 +419,8 @@ class TestProcessMolecule:
             seed=42,
             auto_resize_slab=True,
             bo_initial_random=1,
+            bo_batch_size=1,
+            num_placements=1,
             bo_total_budget=1,
         )
         mock_resize = MagicMock(return_value=(slab, False))

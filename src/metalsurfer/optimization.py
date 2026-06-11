@@ -29,16 +29,28 @@ else:
 ts: Any = None
 ts_constraints: Any = None
 InFlightAutoBatcher: Any = None
+determine_max_batch_size: Any = None
+calculate_memory_scalers: Any = None
 
 try:
     import torch_sim as _ts_mod
     import torch_sim.constraints as _ts_constraints_mod
     import torch_sim.state as _ts_state
-    from torch_sim.autobatching import InFlightAutoBatcher as _InFlightAutoBatcher
+    from torch_sim.autobatching import (
+        InFlightAutoBatcher as _InFlightAutoBatcher,
+    )
+    from torch_sim.autobatching import (
+        calculate_memory_scalers as _calculate_memory_scalers,
+    )
+    from torch_sim.autobatching import (
+        determine_max_batch_size as _determine_max_batch_size,
+    )
 
     ts = _ts_mod
     ts_constraints = _ts_constraints_mod
     InFlightAutoBatcher = _InFlightAutoBatcher
+    determine_max_batch_size = _determine_max_batch_size
+    calculate_memory_scalers = _calculate_memory_scalers
 
     # Upstream _split_state uses torch.arange(...) without device=, so bounds
     # live on CPU while constraint tensors are on CUDA. Patch to use state.device.
@@ -103,6 +115,7 @@ except ImportError:
 
 # NOTE: single-thread access assumed; no lock needed for current workflows.
 _AUTOBATCHER_CACHE: dict[tuple, Any] = {}
+_PARALLEL_CAPACITY_CACHE: dict[tuple, int] = {}
 _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER = 2.0
 _DYNAMIC_AUTOBATCHER_CAP_MIN = 5_000
 _DYNAMIC_AUTOBATCHER_CAP_MAX = 200_000
@@ -161,6 +174,7 @@ def clear_autobatcher_cache(
         # garbage uncollected between pytest tests.
         _holders = list(_AUTOBATCHER_CACHE.values())
         _AUTOBATCHER_CACHE.clear()
+        _PARALLEL_CAPACITY_CACHE.clear()
         del _holders
         logger.debug("Cleared entire autobatcher cache")
     else:
@@ -311,6 +325,111 @@ def _resolve_autobatcher_max_atoms_to_try(
     )
     cap = max(_DYNAMIC_AUTOBATCHER_CAP_MIN, min(_DYNAMIC_AUTOBATCHER_CAP_MAX, bucketed))
     return cap, "dynamic"
+
+
+def _parallel_capacity_cache_key(
+    ts_model,
+    max_n_atoms: int,
+    config: AdsorptionConfig,
+) -> tuple:
+    dev = getattr(ts_model, "device", None)
+    dev_key = str(dev) if dev is not None else "unknown"
+    return (
+        id(ts_model),
+        dev_key,
+        max_n_atoms,
+        config.autobatcher_max_memory_padding,
+        config.autobatcher_max_memory_scaler,
+        config.autobatcher_max_atoms_to_try,
+    )
+
+
+def estimate_parallel_relaxation_capacity(
+    ts_model,
+    representative_atoms: Atoms,
+    config: AdsorptionConfig,
+    *,
+    frozen_indices: list[int],
+) -> int:
+    """Estimate how many slab+adsorbate relaxations can run in parallel on GPU.
+
+    Mirrors TorchSim ``InFlightAutoBatcher`` memory probing. Returns at least 1.
+    """
+    max_n_atoms = len(representative_atoms)
+    cache_key = _parallel_capacity_cache_key(ts_model, max_n_atoms, config)
+    if cache_key in _PARALLEL_CAPACITY_CACHE:
+        return _PARALLEL_CAPACITY_CACHE[cache_key]
+
+    fallback = 1
+    if (
+        ts is None
+        or ts_constraints is None
+        or determine_max_batch_size is None
+        or calculate_memory_scalers is None
+        or ts_model is None
+    ):
+        logger.warning(
+            "TorchSim unavailable; using parallel relaxation capacity=%d",
+            fallback,
+        )
+        _PARALLEL_CAPACITY_CACHE[cache_key] = fallback
+        return fallback
+
+    try:
+        _validate_model_pbc(
+            representative_atoms,
+            context="estimate_parallel_relaxation_capacity",
+        )
+        model_device = getattr(ts_model, "device", None)
+        if model_device is None:
+            model_device = _resolve_device(config.device)
+        if model_device is None:
+            model_device = "cpu"
+
+        with torchsim_output_capture():
+            state = _make_state_with_frozen_constraint(
+                representative_atoms,
+                frozen_indices,
+                ts_model,
+                model_device,
+            )
+
+        memory_scales_with = "n_atoms"
+        first_metric = calculate_memory_scalers(state, memory_scales_with)[0]
+        padding = config.autobatcher_max_memory_padding
+
+        if config.autobatcher_max_memory_scaler is not None:
+            effective_scaler = config.autobatcher_max_memory_scaler * padding
+            n_systems = max(1, int(effective_scaler // first_metric))
+        else:
+            resolved_max_atoms_to_try, _ = _resolve_autobatcher_max_atoms_to_try(
+                max_n_atoms=max_n_atoms,
+                n_systems=1,
+                config=config,
+            )
+            probed = determine_max_batch_size(
+                state,
+                ts_model,
+                max_atoms=resolved_max_atoms_to_try,
+            )
+            n_systems = max(1, int(probed * 0.8 * padding))
+
+        _PARALLEL_CAPACITY_CACHE[cache_key] = n_systems
+        logger.info(
+            "Probed parallel relaxation capacity=%d (max_n_atoms=%d, padding=%.2f)",
+            n_systems,
+            max_n_atoms,
+            padding,
+        )
+        return n_systems
+    except Exception as exc:
+        logger.warning(
+            "Parallel capacity probe failed (%s); using capacity=%d",
+            exc,
+            fallback,
+        )
+        _PARALLEL_CAPACITY_CACHE[cache_key] = fallback
+        return fallback
 
 
 # ---------------------------------------------------------------------------

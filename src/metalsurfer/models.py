@@ -1,6 +1,6 @@
 """Typed domain models for adsorption screening results."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -525,6 +525,53 @@ class BOStepMemory:
     observed_X_rows: list[dict[str, float]] = field(default_factory=list)
     observed_y: list[float] = field(default_factory=list)
     best_energy: float | None = None
+    best_X_row: dict[str, float] | None = None
+    step_ages: list[int] | None = None
+
+
+def windowed_bo_step_memories(
+    memories: Sequence[BOStepMemory | None],
+    *,
+    window: int | None,
+) -> BOStepMemory | None:
+    """Select the most recent *window* step memories and merge them."""
+    if window is None:
+        return merge_bo_step_memories(memories)
+    if window <= 0:
+        return None
+    recent = [mem for mem in memories[-window:] if mem is not None]
+    return merge_bo_step_memories(recent)
+
+
+def merge_bo_step_memories(
+    memories: Sequence[BOStepMemory | None],
+) -> BOStepMemory | None:
+    """Concatenate observations from multiple prior saturation steps."""
+    rows: list[dict[str, float]] = []
+    ys: list[float] = []
+    ages: list[int] = []
+    best: float | None = None
+    eligible = [mem for mem in memories if mem is not None and mem.observed_X_rows]
+    n_eligible = len(eligible)
+    for index, mem in enumerate(eligible):
+        step_age = n_eligible - 1 - index
+        rows.extend(mem.observed_X_rows)
+        ys.extend(float(v) for v in mem.observed_y)
+        ages.extend([step_age] * len(mem.observed_X_rows))
+        if mem.best_energy is not None:
+            best = (
+                float(mem.best_energy)
+                if best is None
+                else min(best, float(mem.best_energy))
+            )
+    if not rows:
+        return None
+    return BOStepMemory(
+        observed_X_rows=rows,
+        observed_y=ys,
+        best_energy=best,
+        step_ages=ages,
+    )
 
 
 @dataclass

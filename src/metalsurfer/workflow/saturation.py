@@ -21,6 +21,8 @@ from ..models import (
     SaturationRunResult,
     SaturationStepResult,
     ScreeningResult,
+    merge_bo_step_memories,
+    windowed_bo_step_memories,
 )
 from ..optimization import clear_autobatcher_cache
 from ..placement.generators import (
@@ -36,7 +38,11 @@ from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian
 from .core import process_molecule
 from .screening import _setup_screening_run
-from .shared import _compute_slab_energy
+from .shared import (
+    _build_surface_reference_slab,
+    _compute_slab_energy,
+    resolve_saturation_step_workload_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +134,23 @@ def _bo_transfer_fields_from_info(
             if transfer_info.get("transfer_last_mae_delta") is not None
             else None
         ),
+    )
+
+
+def _bo_transfer_memory_in(
+    config: AdsorptionConfig,
+    *,
+    prior_step_memories: list[BOStepMemory],
+    prior_cumulative_memory: BOStepMemory | None,
+) -> BOStepMemory | None:
+    if not config.bo_transfer_enabled:
+        return None
+    if config.bo_transfer_mode == "cumulative_refit":
+        return prior_cumulative_memory
+    # Weighted transfer: windowed prior memory with recency and placement decay.
+    return windowed_bo_step_memories(
+        prior_step_memories,
+        window=config.bo_transfer_prior_step_window,
     )
 
 
@@ -380,6 +403,12 @@ def _run_multi_molecule_saturation(
     bo_memory_per_mol: dict[str, BOStepMemory | None] = {
         mol: None for mol in active_molecules
     }
+    bo_step_memories_per_mol: dict[str, list[BOStepMemory]] = {
+        mol: [] for mol in active_molecules
+    }
+    bo_cumulative_per_mol: dict[str, BOStepMemory | None] = {
+        mol: None for mol in active_molecules
+    }
 
     while True:
         step += 1
@@ -435,9 +464,33 @@ def _run_multi_molecule_saturation(
             molecule_energies=ref.molecule_energies,
         )
 
+        needs_workload_autotune = config.num_placements is None or (
+            config.bo_enabled
+            and (config.bo_initial_random is None or config.bo_batch_size is None)
+        )
+        if needs_workload_autotune:
+            largest_conformers, _ = conformer_cache[largest_mol]
+            slab_for_sites = _build_surface_reference_slab(
+                current_slab.atoms, base_slab
+            )
+            step_config = resolve_saturation_step_workload_config(
+                config,
+                ts_model=ts_model,
+                conformers=largest_conformers,
+                slab_atoms=current_slab.atoms,
+                slab_for_sites=slab_for_sites,
+                smiles=active_smiles[largest_mol],
+                base_slab_for_frozen=base_slab,
+                symmetry_broken=symmetry_broken,
+                bo_enabled=config.bo_enabled,
+            )
+        else:
+            step_config = config
+
+        assert step_config.num_placements is not None
         budgets = distribute_placement_budget(
             {m: complexities[m] for m in active_molecules},
-            config.num_placements,
+            step_config.num_placements,
         )
         logger.info("Step %d placement budgets: %s", step, budgets)
 
@@ -448,7 +501,7 @@ def _run_multi_molecule_saturation(
         for mol in active_molecules:
             smi = active_smiles[mol]
             mol_budget = budgets[mol]
-            mol_config = replace(config, num_placements=mol_budget)
+            mol_config = replace(step_config, num_placements=mol_budget)
 
             transfer_info: dict[str, object] = {}
             if config.bo_enabled:
@@ -467,7 +520,12 @@ def _run_multi_molecule_saturation(
                     slab_energy_override=E_slab,
                     failure_summary_out=failure_summary_out,
                     symmetry_broken=symmetry_broken,
-                    bo_step_memory_in=bo_memory_per_mol[mol],
+                    bo_step_memory_in=_bo_transfer_memory_in(
+                        config,
+                        prior_step_memories=bo_step_memories_per_mol[mol],
+                        prior_cumulative_memory=bo_cumulative_per_mol[mol],
+                    ),
+                    bo_prior_step_memory=bo_memory_per_mol[mol],
                     bo_step_memory_out=bo_out,
                     bo_transfer_info_out=transfer_info,
                     allow_auto_resize=False,
@@ -530,6 +588,17 @@ def _run_multi_molecule_saturation(
         bo_memory_per_mol = {
             mol: copy.deepcopy(memory) for mol, memory in new_bo_memory_raw.items()
         }
+        for mol in active_molecules:
+            step_memory = bo_memory_per_mol.get(mol)
+            if step_memory is not None:
+                bo_step_memories_per_mol[mol].append(copy.deepcopy(step_memory))
+        if config.bo_transfer_enabled:
+            bo_cumulative_per_mol = {
+                mol: merge_bo_step_memories(
+                    [bo_cumulative_per_mol[mol], bo_memory_per_mol[mol]]
+                )
+                for mol in active_molecules
+            }
 
         if not any(per_molecule_results.values()):
             logger.warning(
@@ -708,6 +777,8 @@ def run_saturation_screening(
             steps: list[SaturationStepResult] = []
             step = 0
             prior_step_memory: BOStepMemory | None = None
+            prior_step_memories: list[BOStepMemory] = []
+            prior_cumulative_memory: BOStepMemory | None = None
 
             reference_slab_for_symmetry = base_slab.copy()
             symmetry_broken = False
@@ -761,13 +832,24 @@ def run_saturation_screening(
                         slab_energy_override=E_slab,
                         failure_summary_out=failure_summary_out,
                         symmetry_broken=symmetry_broken,
-                        bo_step_memory_in=prior_step_memory,
+                        bo_step_memory_in=_bo_transfer_memory_in(
+                            config,
+                            prior_step_memories=prior_step_memories,
+                            prior_cumulative_memory=prior_cumulative_memory,
+                        ),
+                        bo_prior_step_memory=prior_step_memory,
                         bo_step_memory_out=bo_memory_out,
                         bo_transfer_info_out=transfer_info,
                         allow_auto_resize=(step == 1),
                         step_metadata_out=step_metadata,
                     )
                     prior_step_memory = copy.deepcopy(bo_memory_out.get("memory"))
+                    if prior_step_memory is not None:
+                        prior_step_memories.append(copy.deepcopy(prior_step_memory))
+                    if config.bo_transfer_enabled:
+                        prior_cumulative_memory = merge_bo_step_memories(
+                            [prior_cumulative_memory, prior_step_memory]
+                        )
                     if step == 1:
                         base_slab = _apply_substrate_resize_from_step_metadata(
                             base_slab, step_metadata

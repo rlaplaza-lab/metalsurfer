@@ -6,7 +6,7 @@ Configuration
    :undoc-members:
    :show-inheritance:
    :member-order: bysource
-   :exclude-members: __post_init__
+   :exclude-members: __post_init__, save_benchmark_dataset
 
 Key Attributes
 --------------
@@ -17,7 +17,7 @@ Key Attributes
 
    "model_name", "str", "'uma-s-1p1'", "Name of the MLIP model to use for energy calculations"
    "num_conformers", "int", "10", "Number of conformers to generate for each molecule"
-   "num_placements", "int", "100", "Number of placement attempts per conformer"
+   "num_placements", "int | None", "None", "Total placement attempts; None autotunes to GPU parallel capacity at runtime"
    "device", "str", "'cuda'", "Device to use for MLIP calculations ('cuda' or 'cpu')"
    "fmax", "float", "0.05", "Maximum force threshold for optimization convergence (eV/Å)"
    "stage1_steps", "int", "50", "Number of optimization steps in stage 1 (coarse optimization)"
@@ -41,7 +41,14 @@ Key Attributes
    "saturation_save_all_placements", "bool", "True", "Write every validated placement per saturation step under step_*_placements/ and saturation_placements_detailed.csv"
    "saturation_discard_topology_rearrangements", "bool", "True", "Connectivity-only guard before per-step best-slab selection in saturation"
    "multi_molecule_saturation", "bool", "False", "Competitive multi-molecule saturation when multiple adsorbates are loaded"
-   "save_benchmark_dataset", "bool", "False", "Flatten saturation-step placements into adsorption_energies_detailed.csv for BO benchmarking"
+   "autobatcher_max_memory_padding", "float", "0.5", "TorchSim autobatcher headroom fraction; used during GPU capacity probing when autotuning placements"
+   "autobatcher_max_memory_scaler", "float | None", "None", "Optional TorchSim memory scaler override; when set, also drives autotuned placement counts"
+   "bo_enabled", "bool", "False", "Enable Bayesian optimization for placement selection"
+   "bo_initial_random", "int | None", "None", "Initial random BO batch size; None autotunes to GPU parallel capacity"
+   "bo_batch_size", "int | None", "None", "Surrogate-guided BO batch size; None autotunes to GPU parallel capacity"
+   "bo_total_budget", "int", "18", "Number of acquisition batches after the initial random batch (not total evaluations)"
+   "bo_acquisition", "Literal['lcb', 'ei', 'pi']", "'ei'", "BO acquisition function"
+   "bo_surrogate", "Literal[...]", "'ridge'", "BO surrogate model (random_forest, extra_trees, gradient_boost, ridge, ensemble)"
    "write_vasp_inputs", "bool", "False", "Write POSCAR/INCAR/KPOINTS placement bundles and reference-slab POSCAR files (XYZ/CSV remain default)"
    "vasp_encut", "int", "400", "VASP ENCUT parameter (eV) when write_vasp_inputs is enabled"
    "vasp_ediff", "float", "1e-6", "VASP EDIFF parameter (eV) when write_vasp_inputs is enabled"

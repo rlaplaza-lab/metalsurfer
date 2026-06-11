@@ -2,7 +2,11 @@
 
 import pytest
 
-from metalsurfer.config import AdsorptionConfig
+from metalsurfer.config import (
+    AdsorptionConfig,
+    bo_eval_schedule,
+    resolved_bo_eval_budget,
+)
 
 # ---------------------------------------------------------------------------
 # valid construction
@@ -453,24 +457,78 @@ def test_error_message_includes_field_and_value():
 def test_bo_defaults():
     c = AdsorptionConfig()
     assert c.bo_enabled is False
-    assert c.bo_initial_random == 10
-    assert c.bo_batch_size == 10
-    assert c.bo_total_budget == 100
-    assert c.bo_ucb_kappa == 1.0
-    assert c.bo_acquisition == "lcb"
-    assert c.bo_surrogate == "random_forest"
+    assert c.num_placements is None
+    assert c.bo_initial_random is None
+    assert c.bo_initial_sampling == "spread_xyz"
+    assert c.bo_batch_size is None
+    assert c.bo_total_budget == 18
+    assert c.bo_ucb_kappa == 1.96
+    assert c.bo_acquisition == "ei"
+    assert c.bo_surrogate == "ridge"
     assert c.bo_candidate_pool_size is None
     assert c.bo_include_failure_negatives is True
     assert c.bo_failure_penalty_default == 10.0
     assert c.bo_failure_penalty_overrides["generation"] > 0.0
-    assert c.bo_transfer_enabled is False
+    assert c.bo_transfer_enabled is True
+    assert c.bo_transfer_mode == "weighted"
+    assert c.bo_transfer_min_step_observations == 5
     assert c.bo_transfer_weight_cap == 0.35
+    assert c.bo_transfer_similarity_lengthscale == 4.0
+    assert c.bo_transfer_min_similarity == 0.05
     assert c.bo_transfer_trust_patience == 2
+    assert c.bo_transfer_mae_tolerance == 0.0
+    assert c.bo_transfer_exploration_fraction == 0.2
+    assert c.bo_transfer_proximity_lengthscale == 1.0
+    assert c.bo_transfer_proximity_floor == 0.0
+    assert c.bo_transfer_prior_step_window == 2
+    assert c.bo_transfer_recency_lengthscale == 4.0
+    assert c.bo_transfer_occupancy_lengthscale == 1.0
+    assert c.bo_transfer_occupancy_floor == 0.0
 
 
-def test_bo_initial_exceeds_budget_raises():
-    with pytest.raises(ValueError, match="bo_initial_random"):
-        AdsorptionConfig(bo_enabled=True, bo_initial_random=200, bo_total_budget=100)
+def test_resolved_bo_eval_budget():
+    config = AdsorptionConfig(
+        bo_enabled=True,
+        bo_initial_random=10,
+        bo_batch_size=5,
+        bo_total_budget=18,
+    )
+    assert resolved_bo_eval_budget(config) == 10 + 18 * 5
+
+
+def test_bo_eval_schedule():
+    config = AdsorptionConfig(
+        bo_enabled=True,
+        bo_initial_random=10,
+        bo_batch_size=5,
+        bo_total_budget=18,
+    )
+    assert bo_eval_schedule(config) == [
+        10,
+        15,
+        20,
+        25,
+        30,
+        35,
+        40,
+        45,
+        50,
+        55,
+        60,
+        65,
+        70,
+        75,
+        80,
+        85,
+        90,
+        95,
+        100,
+    ]
+
+
+def test_bo_invalid_initial_sampling():
+    with pytest.raises(ValueError, match="bo_initial_sampling"):
+        AdsorptionConfig(bo_enabled=True, bo_initial_sampling="latin_hypercube")  # type: ignore[arg-type]
 
 
 def test_bo_invalid_acquisition_surrogate_kappa():
@@ -524,13 +582,21 @@ def test_bo_transfer_config_validation():
         AdsorptionConfig(bo_enabled=True, bo_transfer_weight_cap=1.0)
 
 
-def test_bo_transfer_requires_tree_surrogate():
-    with pytest.raises(ValueError, match="bo_transfer_enabled requires"):
-        AdsorptionConfig(
-            bo_enabled=True,
-            bo_transfer_enabled=True,
-            bo_surrogate="ridge",
-        )
+def test_bo_transfer_proximity_validation():
+    c = AdsorptionConfig(
+        bo_enabled=True,
+        bo_transfer_proximity_lengthscale=0.5,
+        bo_transfer_proximity_floor=0.1,
+    )
+    assert c.bo_transfer_proximity_lengthscale == 0.5
+    assert c.bo_transfer_proximity_floor == 0.1
+    with pytest.raises(ValueError, match="bo_transfer_proximity_lengthscale"):
+        AdsorptionConfig(bo_enabled=True, bo_transfer_proximity_lengthscale=0.0)
+    with pytest.raises(ValueError, match="bo_transfer_proximity_floor"):
+        AdsorptionConfig(bo_enabled=True, bo_transfer_proximity_floor=1.5)
+
+
+def test_bo_transfer_requires_weighted_surrogate():
     with pytest.raises(ValueError, match="bo_transfer_enabled requires"):
         AdsorptionConfig(
             bo_enabled=True,
@@ -540,9 +606,9 @@ def test_bo_transfer_requires_tree_surrogate():
     c = AdsorptionConfig(
         bo_enabled=True,
         bo_transfer_enabled=True,
-        bo_surrogate="random_forest",
+        bo_surrogate="ridge",
     )
-    assert c.bo_surrogate == "random_forest"
+    assert c.bo_surrogate == "ridge"
 
 
 def test_saturation_max_steps_must_be_positive_when_set():

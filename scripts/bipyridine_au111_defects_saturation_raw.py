@@ -6,8 +6,7 @@ Same workflow as ``examples/bipyridine_au111_defects_saturation_raw.py`` (for HP
 Purpose:
 - Create an irregular Au(111) surface by depositing extra Au adatoms (defects).
 - Run saturation screening with BO disabled so each step is sampled without BO bias.
-- Write ``results_<surface>/`` per ``AdsorptionConfig`` (README, saturation) and flattened
-  ``adsorption_energies_detailed.csv`` for BO benchmarking.
+- Write ``results_<surface>/`` per ``AdsorptionConfig`` (README, saturation).
 """
 
 import logging

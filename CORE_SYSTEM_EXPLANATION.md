@@ -135,6 +135,8 @@ There are **two relaxation phases** with different freeze policies:
 
 2. **Adsorption / saturation** uses TorchSim `FixAtoms` via `optimize_adsorbate_slab_batched`. `compute_frozen_indices` identifies which slab atoms are frozen: when `relax_top_layer` is true, only atoms below the top layer (within `top_layer_tolerance`) stay fixed; when `relax_top_layer` is false, every atom in the freeze reference is fixed. Adsorbate atoms in the combined system are never frozen. For saturation, `base_slab_for_frozen` is captured at the start of `run_saturation_screening` (post-`prepare_slab`) so indices `0 .. len(base_slab)-1` stay fixed while later adsorbate units (indices `>= len(base_slab)` on the evolving slab) may still relax. If `auto_resize_slab` repeats the substrate in-plane on step 1, every workflow path (standard, Bayesian, saturation) expands that freeze reference to the full resized substrate—regardless of `relax_top_layer`—so repeated tiles are not left free to move. Competitive multi-molecule saturation pre-resizes once before the step-1 candidate loop.
 
+Before placement enumeration, `resolve_workload_config` (in `workflow/shared.py`) probes how many slab+adsorbate systems fit in GPU memory via `estimate_parallel_relaxation_capacity` and fills unset `num_placements`, `bo_initial_random`, and `bo_batch_size`. Explicit integer overrides skip autotune for that field. The probe re-runs each saturation step as the slab grows.
+
 ### Post-relaxation filtering (`filters.py`)
 
 `filter_results` runs one pipeline over `ScreeningResult` objects: **decomposition** checks (graph connectivity of the adsorbate at several multiples of covalent radii, elemental formula match to reference SMILES, bond-pair counts, and coordination-number fingerprints), **desorption** via minimum adsorbate–surface distance against `binding_distance_threshold`, **energy** cap via `max_adsorption_energy`, and **duplicate** removal among surviving structures. During saturation placement, decomposition uses `adsorbate_prefix_atoms=len(slab)` so only the newly added adsorbate is checked; `adsorbate_connected_components` supports the separate saturation-step guard that re-validates every adsorbate unit on the slab before best-slab selection.
@@ -145,7 +147,7 @@ There are **two relaxation phases** with different freeze policies:
 
 ### Bayesian screening (`workflow/bayesian.py` + `ml/bayesian.py`)
 
-Enumerate a finite `PlacementSpec` pool, evaluate a random initial subset, build features from each `PlacementDescriptor`, and fit a surrogate with `train_surrogate` (tree ensembles, `HistGradientBoostingRegressor`, or ridge). Score remaining candidates with LCB, EI, or PI; tree models use forest variance for uncertainty, while ridge and HGB report no uncertainty (EI/PI use the deterministic limits in the acquisition helpers). Iterate in batches until `bo_total_budget`. When `bo_include_failure_negatives` is set, failed placements are labeled with configurable penalties. Transfer learning (`bo_transfer_enabled`) uses per-sample weights and requires `random_forest` or `extra_trees` (validated in `AdsorptionConfig`).
+Enumerate a finite `PlacementSpec` pool, evaluate a random initial subset, build features from each `PlacementDescriptor`, and fit a surrogate with `train_surrogate` (tree ensembles, `HistGradientBoostingRegressor`, or ridge). Score remaining candidates with LCB, EI, or PI; tree models use forest variance for uncertainty, while ridge and HGB report no uncertainty (EI/PI use the deterministic limits in the acquisition helpers). Iterate in acquisition batches until `bo_total_budget` batches complete (after the initial random batch). Total evaluations are `bo_initial_random + bo_total_budget * bo_batch_size` once auto fields are resolved. When `bo_include_failure_negatives` is set, failed placements are labeled with configurable penalties. Transfer learning (`bo_transfer_enabled`, default weighted mode) augments the surrogate with weighted prior-step BO observations (2-step window by default, recency and occupancy decay). Per-sample weights are supported for `random_forest`, `extra_trees`, `ensemble`, and `ridge`; `gradient_boost` is rejected when transfer is enabled (`AdsorptionConfig` validation).
 
 ## Run modes and pipeline
 
@@ -189,7 +191,7 @@ Representative groups of fields are:
 
 ### Sampling and placement
 
-- `num_conformers`, `num_placements`
+- `num_conformers`, `num_placements` (default `None`: autotune to GPU parallel capacity via TorchSim memory probe at workflow start)
 - `placement_x_range`, `placement_y_range`, `placement_z_range`
 - `placement_z_scale_by_covalent_radius`
 - `min_initial_distance`, `max_initial_distance`, `min_contact_ratio`
@@ -223,12 +225,12 @@ Representative groups of fields are:
 ### Bayesian optimization
 
 - `bo_enabled`
-- `bo_initial_random`, `bo_batch_size`, `bo_total_budget`
-- `bo_ucb_kappa`, `bo_acquisition`, `bo_surrogate`
+- `bo_initial_random`, `bo_batch_size` (default `None`: autotune), `bo_total_budget` (default `18` acquisition batches after the initial random batch)
+- `bo_ucb_kappa`, `bo_acquisition` (default `ei`), `bo_surrogate` (default `ridge`)
 - `bo_candidate_pool_size`
 - `bo_include_failure_negatives`
 - `bo_failure_penalty_default`, `bo_failure_penalty_overrides`
-- `bo_transfer_enabled` and the `bo_transfer_*` trust, similarity, and weighting controls
+- `bo_transfer_enabled` (default on) and `bo_transfer_*` (default weighted mode: 2-step window, similarity/recency lengthscales 4.0, occupancy decay)
 
 ### Saturation behavior
 

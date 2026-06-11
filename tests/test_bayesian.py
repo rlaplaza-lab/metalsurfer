@@ -13,17 +13,28 @@ from metalsurfer.ml.bayesian import (
     EnsembleRegressor,
     build_candidate_features,
     build_spec_features_geometry_aware,
+    build_transfer_surrogate,
     ei_scores,
     lcb_scores,
     matern_length_scale_for_n_features,
     predict_with_uncertainty,
+    prior_placement_downweight,
+    prior_proximity_weights,
+    prior_recency_weights,
+    prior_similarity_to_current,
     score_and_select,
     select_candidates,
+    select_initial_bo_indices,
     train_surrogate,
 )
 from metalsurfer.ml.features import extract_features
 from metalsurfer.ml.schema import PlacementRecord
-from metalsurfer.models import PlacementDescriptor, PlacementSpec
+from metalsurfer.models import (
+    BOStepMemory,
+    PlacementDescriptor,
+    PlacementSpec,
+    windowed_bo_step_memories,
+)
 from metalsurfer.placement import (
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
@@ -120,10 +131,19 @@ class TestSurrogate:
         assert mu.shape == (30,)
         assert sigma.shape == (30,)
 
-    def test_train_surrogate_rejects_sample_weight_for_non_tree(self):
+    def test_train_surrogate_ridge_accepts_sample_weights(self):
         X, y = _make_synthetic_training_data(20)
         w = np.ones(20, dtype=float)
-        for sur in ("ridge", "gradient_boost", "gaussian_process"):
+        w[:5] = 2.0
+        model = train_surrogate(X, y, surrogate="ridge", sample_weight=w)
+        mu, sigma = predict_with_uncertainty(model, X)
+        assert mu.shape == (20,)
+        assert sigma.shape == (20,)
+
+    def test_train_surrogate_rejects_sample_weight_for_non_weighted(self):
+        X, y = _make_synthetic_training_data(20)
+        w = np.ones(20, dtype=float)
+        for sur in ("gradient_boost", "gaussian_process"):
             with pytest.raises(ValueError, match="sample_weight"):
                 train_surrogate(X, y, surrogate=sur, sample_weight=w)
 
@@ -229,6 +249,83 @@ class TestAcquisition:
         scores = rng.randn(50)
         selected = select_candidates(scores, batch_size=10, evaluated_indices=set())
         assert len(selected) == len(set(selected))
+
+
+class TestInitialSampling:
+    def test_spread_returns_unique_indices(self):
+        X = pd.DataFrame(
+            {
+                "x": np.linspace(0.0, 10.0, 20),
+                "y": np.zeros(20),
+                "z": np.zeros(20),
+                "conformer_index": np.arange(20),
+                "quat_w": np.ones(20),
+                "quat_x": np.zeros(20),
+                "quat_y": np.zeros(20),
+                "quat_z": np.zeros(20),
+            }
+        )
+        picked = select_initial_bo_indices(X, 5, sampling="spread", random_state=7)
+        assert len(picked) == 5
+        assert len(set(picked)) == 5
+
+    def test_spread_covers_endpoints_in_1d(self):
+        X = pd.DataFrame(
+            {
+                "x": np.linspace(0.0, 1.0, 11),
+                "y": np.zeros(11),
+                "z": np.zeros(11),
+                "conformer_index": np.zeros(11),
+                "quat_w": np.ones(11),
+                "quat_x": np.zeros(11),
+                "quat_y": np.zeros(11),
+                "quat_z": np.zeros(11),
+            }
+        )
+        picked = select_initial_bo_indices(X, 3, sampling="spread", random_state=0)
+        assert 0 in picked
+        assert 10 in picked
+
+    def test_random_matches_numpy_choice(self):
+        X, _ = _make_synthetic_training_data(30)
+        expected = np.random.RandomState(11).choice(len(X), size=4, replace=False)
+        picked = select_initial_bo_indices(X, 4, sampling="random", random_state=11)
+        np.testing.assert_array_equal(picked, expected)
+
+    def test_spread_xyz_uses_position_only(self):
+        X = pd.DataFrame(
+            {
+                "x": np.linspace(0.0, 1.0, 8),
+                "y": np.zeros(8),
+                "z": np.zeros(8),
+                "conformer_index": np.arange(8),
+                "quat_w": np.ones(8),
+                "quat_x": np.zeros(8),
+                "quat_y": np.zeros(8),
+                "quat_z": np.zeros(8),
+            }
+        )
+        picked = select_initial_bo_indices(X, 3, sampling="spread_xyz", random_state=0)
+        assert len(picked) == 3
+        assert 0 in picked
+        assert 7 in picked
+
+    def test_stratified_covers_conformers(self):
+        X = pd.DataFrame(
+            {
+                "x": np.zeros(12),
+                "y": np.zeros(12),
+                "z": np.zeros(12),
+                "conformer_index": [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+                "quat_w": np.ones(12),
+                "quat_x": np.zeros(12),
+                "quat_y": np.zeros(12),
+                "quat_z": np.zeros(12),
+            }
+        )
+        picked = select_initial_bo_indices(X, 4, sampling="stratified", random_state=3)
+        conformers = X.iloc[picked]["conformer_index"].astype(int).tolist()
+        assert len(set(conformers)) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +454,75 @@ class TestScoreAndSelect:
 
 
 # ---------------------------------------------------------------------------
+# Transfer learning smoke (production ml.bayesian path)
+# ---------------------------------------------------------------------------
+
+
+class TestTransferSmoke:
+    def test_build_transfer_surrogate_smoke(self):
+        X, y = _make_synthetic_training_data(20)
+        X_prev = X.iloc[:10].copy()
+        y_prev = (y.iloc[:10] - 0.5).to_numpy()
+        result = build_transfer_surrogate(
+            X.iloc[:8],
+            y.iloc[:8].to_numpy(),
+            X_prev,
+            y_prev,
+            weight_cap=0.35,
+            similarity_lengthscale=1.0,
+            min_similarity=0.0,
+            mae_tolerance=1.0,
+        )
+        assert result.surrogate is not None
+        assert result.transfer_weight_share > 0.0
+
+    def test_windowed_bo_step_memories_keeps_recent_steps(self):
+        memories = [
+            BOStepMemory(observed_X_rows=[{"x": float(i)}], observed_y=[float(i)])
+            for i in range(4)
+        ]
+        windowed = windowed_bo_step_memories(memories, window=2)
+        assert windowed is not None
+        assert len(windowed.observed_X_rows) == 2
+        assert windowed.observed_X_rows[0]["x"] == 2.0
+        assert windowed.observed_X_rows[1]["x"] == 3.0
+        assert windowed.step_ages == [1, 0]
+
+    def test_prior_recency_weights_decay_with_age(self):
+        weights = prior_recency_weights([0, 1, 2], lengthscale=1.0)
+        assert weights[0] > weights[1] > weights[2]
+
+    def test_prior_placement_downweight_prefers_far_sites(self):
+        placement = pd.DataFrame([{"x": 0.0, "y": 0.0, "z": 0.0}])
+        near = pd.DataFrame([{"x": 0.05, "y": 0.0, "z": 0.0}])
+        far = pd.DataFrame([{"x": 5.0, "y": 0.0, "z": 0.0}])
+        near_w = prior_placement_downweight(near, placement, lengthscale=0.1, floor=0.0)
+        far_w = prior_placement_downweight(far, placement, lengthscale=1.0, floor=0.0)
+        assert near_w[0] < far_w[0]
+
+    def test_prior_similarity_to_current_prefers_nearby(self):
+        X, _ = _make_synthetic_training_data(5)
+        current = X.iloc[[0, 1]].copy()
+        near = X.iloc[[0]].copy()
+        near.iloc[0, 0] = float(X.iloc[0, 0]) + 0.05
+        far = X.iloc[[4]].copy()
+        far.iloc[0, 0] = float(X.iloc[0, 0]) + 5.0
+        near_s = prior_similarity_to_current(near, current, lengthscale=0.5)
+        far_s = prior_similarity_to_current(far, current, lengthscale=0.5)
+        assert near_s[0] > far_s[0]
+
+    def test_prior_proximity_weights_smoke(self):
+        X, _ = _make_synthetic_training_data(5)
+        near = X.iloc[[0]].copy()
+        near.iloc[0, 0] = float(X.iloc[0, 0]) + 0.05
+        far = X.iloc[[4]].copy()
+        far.iloc[0, 0] = float(X.iloc[0, 0]) + 5.0
+        near_w = prior_proximity_weights(near, X.iloc[[0]], lengthscale=0.02, floor=0.0)
+        far_w = prior_proximity_weights(far, X.iloc[:1], lengthscale=10.0, floor=0.0)
+        assert near_w[0] < far_w[0]
+
+
+# ---------------------------------------------------------------------------
 # Integration: BO two generations on surface with defects/doping
 # ---------------------------------------------------------------------------
 
@@ -401,7 +567,7 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         bo_enabled=True,
         bo_initial_random=n_placements,
         bo_batch_size=n_placements,
-        bo_total_budget=2 * n_placements,
+        bo_total_budget=1,
         seed=42,
         num_conformers=2,
         num_placements=2 * n_placements,

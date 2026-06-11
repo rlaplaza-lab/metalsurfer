@@ -67,6 +67,7 @@ examples/*/
 scripts/diagnose_vanillin_placement.py
 *.xyz
 benchmark_bo_results_*.csv
+bo_benchmark_report/
 
 # Virtual environments
 .env

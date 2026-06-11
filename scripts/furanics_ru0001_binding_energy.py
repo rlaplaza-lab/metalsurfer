@@ -77,7 +77,8 @@ def main():
         bo_enabled=True,
         bo_initial_random=100,
         bo_batch_size=100,
-        bo_total_budget=300,
+        # bo_total_budget = acquisition batches after initial (not total evals).
+        bo_total_budget=2,  # 100 initial + 2×100 ≈ 300 evaluations
     )
 
     # Create Ru(0001) slab from Materials Project mp-33.

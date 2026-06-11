@@ -57,6 +57,7 @@ from .optional_deps import cuda_available, has_mlip_stack
 def _mock_saturation_config(**kwargs) -> AdsorptionConfig:
     """AdsorptionConfig for mocked saturation loops without real adsorbate geometries."""
     return AdsorptionConfig(
+        num_placements=100,
         saturation_discard_topology_rearrangements=False,
         **kwargs,
     )
@@ -1555,6 +1556,7 @@ def test_multi_mol_saturation_topology_guard_step2(monkeypatch):
     config = AdsorptionConfig(
         multi_molecule_saturation=True,
         connectivity_multipliers=[1.3],
+        num_placements=100,
     )
 
     step_idx = [0]

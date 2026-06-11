@@ -14,18 +14,20 @@ from sklearn.gaussian_process.kernels import ConstantKernel, Matern
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from ..config import AdsorptionConfig
+from ..config import BO_INITIAL_SAMPLING_OPTIONS, AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
 from ..placement import generators as placement_generators
 from .features import extract_features
 from .regression import (
     TreeSurrogateKind,
+    _build_estimator,
     train_model,
     tree_regressor_for_bayesian_surrogate,
 )
 from .schema import PlacementRecord
 
 AcquisitionType = Literal["lcb", "ei", "pi"]
+InitialSamplingType = Literal["random", "spread", "spread_xyz", "stratified"]
 SurrogateType = Literal[
     "random_forest",
     "extra_trees",
@@ -167,7 +169,7 @@ def train_surrogate(
     Tree ensembles (``random_forest``, ``extra_trees``) return a single-step
     ``Pipeline`` with a regressor only. ``gradient_boost`` and ``ridge`` return
     a ``scaler`` + ``regressor`` pipeline from :func:`regression.train_model`.
-    Per-sample ``sample_weight`` is supported only for the tree ensembles.
+    Per-sample ``sample_weight`` is supported for tree ensembles and ``ridge``.
     """
     if surrogate in ("random_forest", "extra_trees"):
         tree_kind: TreeSurrogateKind = (
@@ -188,24 +190,32 @@ def train_surrogate(
             n_estimators,
         )
         return pipeline
-    if surrogate in ("gradient_boost", "ridge"):
+    if surrogate == "ridge":
+        pipeline = _build_estimator("ridge", random_state=random_state, **kwargs)
+        pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
+        logger.info(
+            "Trained ridge surrogate on %d samples",
+            len(np.asarray(y)),
+        )
+        return pipeline
+    if surrogate == "gradient_boost":
         if sample_weight is not None:
             raise ValueError(
-                "sample_weight is only supported for tree surrogates "
-                f"(random_forest, extra_trees), not {surrogate!r}"
+                "sample_weight is only supported for tree surrogates and ridge, "
+                f"not {surrogate!r}"
             )
         return train_model(
             X,
             y,
-            model_type="gradient_boost" if surrogate == "gradient_boost" else "ridge",
+            model_type="gradient_boost",
             random_state=random_state,
             **kwargs,
         )
     if surrogate == "gaussian_process":
         if sample_weight is not None:
             raise ValueError(
-                "sample_weight is only supported for tree surrogates "
-                f"(random_forest, extra_trees), not {surrogate!r}"
+                "sample_weight is only supported for tree surrogates and ridge, "
+                f"not {surrogate!r}"
             )
         n_features = int(X.shape[1]) if hasattr(X, "shape") else len(X[0])
         reg = _gaussian_process_regressor(n_features, random_state)
@@ -249,6 +259,123 @@ class TransferSurrogateResult:
     transfer_disabled_reason: str | None
 
 
+def prior_similarity_to_current(
+    X_prior: pd.DataFrame,
+    X_current: pd.DataFrame,
+    *,
+    lengthscale: float,
+) -> np.ndarray:
+    """Similarity of each prior row to the nearest current-step placement (feature space)."""
+    if len(X_prior) == 0 or len(X_current) == 0:
+        return np.array([], dtype=float)
+    columns = list(X_current.columns)
+    prior_vals = X_prior.reindex(columns=columns, fill_value=0.0).to_numpy(dtype=float)
+    current_vals = X_current.reindex(columns=columns, fill_value=0.0).to_numpy(
+        dtype=float
+    )
+    dists = np.linalg.norm(
+        prior_vals[:, None, :] - current_vals[None, :, :],
+        axis=2,
+    )
+    min_dist = np.min(dists, axis=1)
+    return np.exp(-min_dist / float(lengthscale))
+
+
+def prior_recency_weights(
+    step_ages: np.ndarray | list[int],
+    *,
+    lengthscale: float,
+) -> np.ndarray:
+    """Exponential decay for older saturation-step observations (age 0 = most recent)."""
+    ages = np.asarray(step_ages, dtype=float)
+    if ages.size == 0:
+        return np.array([], dtype=float)
+    return np.exp(-ages / float(lengthscale))
+
+
+def prior_placement_downweight(
+    X_prior: pd.DataFrame,
+    placement_X: pd.DataFrame,
+    *,
+    lengthscale: float,
+    floor: float = 0.0,
+) -> np.ndarray:
+    """Reduce transfer weight for prior rows near an executed placement site."""
+    if len(X_prior) == 0:
+        return np.array([], dtype=float)
+    if len(placement_X) == 0:
+        return np.ones(len(X_prior), dtype=float)
+    columns = list(X_prior.columns)
+    prior_vals = X_prior.reindex(columns=columns, fill_value=0.0).to_numpy(dtype=float)
+    place_vals = placement_X.reindex(columns=columns, fill_value=0.0).to_numpy(
+        dtype=float
+    )
+    anchor = place_vals[0]
+    dists = np.linalg.norm(prior_vals - anchor[None, :], axis=1)
+    near = np.exp(-dists / float(lengthscale))
+    return np.maximum(floor, 1.0 - near)
+
+
+def prior_proximity_weights(
+    X_prior: pd.DataFrame,
+    X_anchor: pd.DataFrame,
+    *,
+    lengthscale: float,
+    floor: float = 0.0,
+) -> np.ndarray:
+    """Downweight prior observations near executed placement sites in feature space."""
+    if len(X_prior) == 0 or len(X_anchor) == 0:
+        return np.array([], dtype=float)
+    columns = list(X_anchor.columns)
+    prior_vals = X_prior.reindex(columns=columns, fill_value=0.0).to_numpy(dtype=float)
+    anchor_vals = X_anchor.reindex(columns=columns, fill_value=0.0).to_numpy(
+        dtype=float
+    )
+    dists = np.linalg.norm(
+        prior_vals[:, None, :] - anchor_vals[None, :, :],
+        axis=2,
+    )
+    min_dist = np.empty(len(prior_vals), dtype=float)
+    for j in range(len(prior_vals)):
+        row_dists = dists[j]
+        other_dists = row_dists[row_dists > 1e-12]
+        min_dist[j] = float(np.min(other_dists)) if other_dists.size else np.inf
+    proximity = np.exp(-min_dist / float(lengthscale))
+    # No other anchors: treat as fully transferable.
+    proximity = np.where(np.isfinite(min_dist), proximity, 1.0)
+    return np.maximum(floor, proximity)
+
+
+def cumulative_refit_sample_weights(
+    n_current: int,
+    X_prior: pd.DataFrame,
+    X_anchor: pd.DataFrame,
+    *,
+    weight_cap: float,
+    proximity_lengthscale: float,
+    proximity_floor: float = 0.0,
+) -> np.ndarray:
+    """Sample weights for cumulative refit: current rows at 1.0, prior rows proximity-decayed."""
+    n_prior = len(X_prior)
+    if n_prior == 0:
+        return np.ones(n_current, dtype=float)
+    prox = prior_proximity_weights(
+        X_prior,
+        X_anchor,
+        lengthscale=proximity_lengthscale,
+        floor=proximity_floor,
+    )
+    if float(np.sum(prox)) <= 0.0:
+        return np.concatenate(
+            [np.ones(n_current, dtype=float), np.zeros(n_prior, dtype=float)]
+        )
+    max_transfer_weight = n_current * weight_cap / max(1.0 - weight_cap, 1e-8)
+    prior_weights = prox / max(float(np.sum(prox)), 1e-8) * max_transfer_weight
+    return np.concatenate(
+        [np.ones(n_current, dtype=float), prior_weights.astype(float)]
+    )
+
+
 def build_transfer_surrogate(
     X_current: pd.DataFrame,
     y_current: np.ndarray,
@@ -264,6 +391,16 @@ def build_transfer_surrogate(
     mae_tolerance: float = 0.0,
     transfer_bad_rounds: int = 0,
     trust_patience: int = 2,
+    proximity_lengthscale: float | None = None,
+    proximity_floor: float = 0.0,
+    prior_step_ages: list[int] | None = None,
+    recency_lengthscale: float | None = None,
+    prior_placement_X: pd.DataFrame
+    | list[dict[str, float]]
+    | dict[str, float]
+    | None = None,
+    occupancy_lengthscale: float | None = None,
+    occupancy_floor: float = 0.0,
 ) -> TransferSurrogateResult:
     """Train baseline or transfer-weighted surrogate with production trust gating.
 
@@ -295,11 +432,32 @@ def build_transfer_surrogate(
     )
     y_prev = np.asarray(observed_y_prev, dtype=float)
     X_prev = X_prev.reindex(columns=X_current.columns, fill_value=0.0)
-    center = X_current.mean(axis=0).to_numpy(dtype=float)
-    prev_values = X_prev.to_numpy(dtype=float)
-    dist = np.linalg.norm(prev_values - center, axis=1)
-    similarity = np.exp(-dist / float(similarity_lengthscale))
+    prox_lengthscale = (
+        float(similarity_lengthscale)
+        if proximity_lengthscale is None
+        else float(proximity_lengthscale)
+    )
+    occ_lengthscale = (
+        prox_lengthscale
+        if occupancy_lengthscale is None
+        else float(occupancy_lengthscale)
+    )
+    recency_ls = (
+        float(similarity_lengthscale)
+        if recency_lengthscale is None
+        else float(recency_lengthscale)
+    )
+    step_ages_arr: np.ndarray | None = (
+        None if prior_step_ages is None else np.asarray(prior_step_ages, dtype=int)
+    )
+    similarity = prior_similarity_to_current(
+        X_prev,
+        X_current,
+        lengthscale=float(similarity_lengthscale),
+    )
     mask = similarity >= min_similarity
+    if step_ages_arr is not None and len(step_ages_arr) == len(mask):
+        step_ages_arr = step_ages_arr[mask]
     X_prev = X_prev.loc[mask]
     y_prev = y_prev[mask]
     similarity = similarity[mask]
@@ -315,9 +473,49 @@ def build_transfer_surrogate(
             transfer_disabled_reason=None,
         )
 
+    recency = (
+        prior_recency_weights(step_ages_arr, lengthscale=recency_ls)
+        if step_ages_arr is not None and len(step_ages_arr) == len(X_prev)
+        else np.ones(len(X_prev), dtype=float)
+    )
+    if prior_placement_X is not None:
+        if isinstance(prior_placement_X, pd.DataFrame):
+            placement_df = prior_placement_X.copy()
+        elif isinstance(prior_placement_X, dict):
+            placement_df = pd.DataFrame([prior_placement_X])
+        else:
+            placement_df = pd.DataFrame(prior_placement_X)
+        placement_df = placement_df.reindex(columns=X_current.columns, fill_value=0.0)
+    if prior_placement_X is not None and len(placement_df) > 0:
+        occupancy = prior_placement_downweight(
+            X_prev,
+            placement_df,
+            lengthscale=occ_lengthscale,
+            floor=occupancy_floor,
+        )
+    else:
+        occupancy = prior_proximity_weights(
+            X_prev,
+            X_prev,
+            lengthscale=prox_lengthscale,
+            floor=proximity_floor,
+        )
+    modifiers = recency * occupancy
+    if float(np.sum(modifiers)) <= 0.0:
+        return TransferSurrogateResult(
+            surrogate=baseline,
+            transfer_used_this_round=False,
+            transfer_weight_share=0.0,
+            transfer_mae_delta=None,
+            transfer_bad_rounds=transfer_bad_rounds,
+            transfer_disabled=False,
+            transfer_disabled_reason=None,
+        )
+
     n_current = len(X_current)
     max_transfer_weight = n_current * weight_cap / max(1.0 - weight_cap, 1e-8)
-    transfer_weights = similarity / max(float(np.sum(similarity)), 1e-8)
+    transfer_weights = similarity * modifiers
+    transfer_weights = transfer_weights / max(float(np.sum(transfer_weights)), 1e-8)
     transfer_weights = transfer_weights * max_transfer_weight
     transfer_weight_share = float(
         np.sum(transfer_weights) / (np.sum(transfer_weights) + float(n_current))
@@ -467,6 +665,111 @@ def pi_scores(
         where=sigma > 1e-9,
     )
     return np.where(sigma > 1e-9, stats.norm.cdf(z), (mu < f_best - xi).astype(float))
+
+
+def _farthest_point_indices(
+    features: pd.DataFrame | np.ndarray,
+    n_pick: int,
+    rng: np.random.RandomState,
+) -> list[int]:
+    """Greedy farthest-point sampling in standardized feature space."""
+    matrix = (
+        features.to_numpy(dtype=float)
+        if isinstance(features, pd.DataFrame)
+        else np.asarray(features, dtype=float)
+    )
+    n_pool = matrix.shape[0]
+    if n_pick >= n_pool:
+        return list(range(n_pool))
+    scaled = StandardScaler().fit_transform(matrix)
+    first = int(rng.randint(n_pool))
+    chosen = [first]
+    min_dists = np.linalg.norm(scaled - scaled[first], axis=1)
+    for _ in range(n_pick - 1):
+        min_dists[chosen] = -1.0
+        nxt = int(np.argmax(min_dists))
+        chosen.append(nxt)
+        min_dists = np.minimum(min_dists, np.linalg.norm(scaled - scaled[nxt], axis=1))
+    return chosen
+
+
+def _stratified_conformer_indices(
+    features: pd.DataFrame,
+    n_pick: int,
+    rng: np.random.RandomState,
+) -> list[int]:
+    """Round-robin across conformer_index groups, then spread-fill remainder."""
+    if "conformer_index" not in features.columns:
+        return _farthest_point_indices(features, n_pick, rng)
+
+    groups: dict[int, list[int]] = {}
+    for i, value in enumerate(features["conformer_index"].astype(int)):
+        groups.setdefault(int(value), []).append(i)
+    for members in groups.values():
+        rng.shuffle(members)
+    keys = list(groups.keys())
+    rng.shuffle(keys)
+
+    chosen: list[int] = []
+    while len(chosen) < n_pick:
+        progressed = False
+        for key in keys:
+            if groups[key]:
+                chosen.append(groups[key].pop())
+                progressed = True
+                if len(chosen) >= n_pick:
+                    break
+        if not progressed:
+            break
+
+    if len(chosen) < n_pick:
+        remaining = [i for i in range(len(features)) if i not in chosen]
+        if remaining:
+            local = _farthest_point_indices(
+                features.iloc[remaining],
+                min(n_pick - len(chosen), len(remaining)),
+                rng,
+            )
+            chosen.extend(remaining[i] for i in local)
+    return chosen
+
+
+def select_initial_bo_indices(
+    candidate_features: pd.DataFrame,
+    n_initial: int,
+    *,
+    sampling: InitialSamplingType = "spread_xyz",
+    random_state: int = 0,
+) -> list[int]:
+    """Pick initial BO pool positions before any energy evaluations.
+
+    Strategies:
+    - ``random``: uniform without replacement
+    - ``spread``: farthest-point on all geometry-aware features
+    - ``spread_xyz``: farthest-point on absolute position (x, y, z) only
+    - ``stratified``: round-robin across conformer_index, then spread-fill
+    """
+    if sampling not in BO_INITIAL_SAMPLING_OPTIONS:
+        allowed = ", ".join(repr(item) for item in BO_INITIAL_SAMPLING_OPTIONS)
+        raise ValueError(f"sampling must be one of {allowed}, got {sampling!r}")
+    n_pool = len(candidate_features)
+    n_pick = min(int(n_initial), n_pool)
+    if n_pick <= 0:
+        return []
+    if n_pick >= n_pool:
+        return list(range(n_pool))
+    rng = np.random.RandomState(random_state)
+    if sampling == "random":
+        return rng.choice(n_pool, size=n_pick, replace=False).tolist()
+    if sampling == "spread":
+        return _farthest_point_indices(candidate_features, n_pick, rng)
+    if sampling == "spread_xyz":
+        position_cols = [c for c in ("x", "y", "z") if c in candidate_features.columns]
+        subset = (
+            candidate_features[position_cols] if position_cols else candidate_features
+        )
+        return _farthest_point_indices(subset, n_pick, rng)
+    return _stratified_conformer_indices(candidate_features, n_pick, rng)
 
 
 def select_candidates(

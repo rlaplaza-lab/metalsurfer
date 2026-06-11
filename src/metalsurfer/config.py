@@ -46,11 +46,18 @@ CONFORMER_SAMPLING_OPTIONS: tuple[str, ...] = ("boltzmann", "cycle", "mixed")
 MATERIAL_TYPE_OPTIONS: tuple[str, ...] = ("slab", "nanoparticle", "porous")
 SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("distance_ratio", "delaunay")
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
+BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = (
+    "random",
+    "spread",
+    "spread_xyz",
+    "stratified",
+)
 BO_SURROGATE_OPTIONS: tuple[str, ...] = (
     "random_forest",
     "extra_trees",
     "gradient_boost",
     "ridge",
+    "ensemble",
 )
 TS_OPTIMIZER_OPTIONS: tuple[str, ...] = ("fire", "lbfgs", "bfgs")
 SLAB_RELAXATION_MODE_OPTIONS: tuple[str, ...] = (
@@ -60,6 +67,38 @@ SLAB_RELAXATION_MODE_OPTIONS: tuple[str, ...] = (
     "full",
 )
 SLAB_RELAXATION_OPTIMIZER_OPTIONS: tuple[str, ...] = ("lbfgs", "bfgs", "fire")
+
+
+def resolved_bo_eval_budget(config: "AdsorptionConfig") -> int:
+    """Total BO placement evaluations after auto-resolution of batch sizes."""
+    if config.bo_initial_random is None or config.bo_batch_size is None:
+        raise ValueError(
+            "resolved_bo_eval_budget requires bo_initial_random and bo_batch_size "
+            "to be resolved (not None)"
+        )
+    return config.bo_initial_random + config.bo_total_budget * config.bo_batch_size
+
+
+def bo_eval_schedule(config: "AdsorptionConfig") -> list[int]:
+    """Cumulative placement-evaluation counts for BO replay curves.
+
+    Matches the live workflow: one initial-random batch plus
+    ``bo_total_budget`` acquisition batches of ``bo_batch_size`` placements.
+    """
+    if config.bo_initial_random is None or config.bo_batch_size is None:
+        raise ValueError(
+            "bo_eval_schedule requires bo_initial_random and bo_batch_size "
+            "to be resolved (not None)"
+        )
+    initial = int(config.bo_initial_random)
+    batch = int(config.bo_batch_size)
+    budget = resolved_bo_eval_budget(config)
+    schedule = [initial]
+    current = initial
+    while current < budget:
+        current = min(current + batch, budget)
+        schedule.append(current)
+    return schedule
 
 
 @dataclass
@@ -77,7 +116,9 @@ class AdsorptionConfig:
         "uma-s-1p1"  # Name of the MLIP model to use for energy calculations
     )
     num_conformers: int = 10  # Number of conformers to generate for each molecule
-    num_placements: int = 100  # Number of placement attempts per conformer
+    num_placements: int | None = (
+        None  # Total placement attempts; None autotunes to GPU parallel capacity
+    )
     device: str = "cuda"  # Device to use for MLIP calculations ('cuda' or 'cpu')
     fmax: float = 0.05  # Maximum force threshold for optimization convergence (eV/Å)
     stage1_steps: int = (
@@ -216,7 +257,7 @@ class AdsorptionConfig:
     # on very large placement counts to save disk.
     saturation_save_all_placements: bool = True
     # When True, also write adsorption_energies_detailed.csv by flattening all
-    # saturation-step placements into screening-style rows (for BO benchmarking).
+    # saturation-step placements into screening-style rows.
     save_benchmark_dataset: bool = False
     # Before advancing to the next saturation step, discard candidates whose full
     # adsorbate pool shows rearrangement (e.g. adsorbate-adsorbate coupling).
@@ -278,19 +319,29 @@ class AdsorptionConfig:
 
     # Bayesian optimisation (surrogate-guided placement selection)
     bo_enabled: bool = False  # Enable Bayesian optimization for placement selection
-    bo_initial_random: int = 10  # Number of initial random samples for BO
-    bo_batch_size: int = 10  # Batch size for BO iterations
-    bo_total_budget: int = 100  # Total budget for BO iterations
-    # Lower kappa biases toward exploitation; empirically improves early-best
-    # discovery on heterogeneous graphene test runs.
-    bo_ucb_kappa: float = 1.0  # Kappa parameter for UCB acquisition function
-    bo_acquisition: Literal["lcb", "ei", "pi"] = "lcb"  # BO acquisition function
+    bo_initial_random: int | None = (
+        None  # Initial random BO batch; None autotunes to GPU parallel capacity
+    )
+    bo_initial_sampling: Literal["random", "spread", "spread_xyz", "stratified"] = (
+        "spread_xyz"  # Farthest-point on x/y/z
+    )
+    bo_batch_size: int | None = (
+        None  # Surrogate-guided BO batch size; None autotunes to GPU parallel capacity
+    )
+    bo_total_budget: int = (
+        18  # Number of acquisition batches after the initial random batch
+    )
+    bo_ucb_kappa: float = (
+        1.96  # Default LCB kappa; also passed to EI/PI where applicable
+    )
+    bo_acquisition: Literal["lcb", "ei", "pi"] = "ei"  # BO acquisition function
     bo_surrogate: Literal[
         "random_forest",
         "extra_trees",
         "gradient_boost",
         "ridge",
-    ] = "random_forest"  # BO surrogate model
+        "ensemble",
+    ] = "ridge"  # Ridge surrogate
     bo_candidate_pool_size: int | None = (
         None  # Size of candidate pool for BO (optional)
     )
@@ -305,25 +356,41 @@ class AdsorptionConfig:
             "filter": 11.0,
         }
     )  # Override failure penalties for specific failure types
-    bo_transfer_enabled: bool = False  # Enable transfer learning in BO
+    bo_transfer_enabled: bool = True  # Enable transfer learning in BO
+    bo_transfer_mode: Literal["weighted", "cumulative_refit"] = (
+        "weighted"  # Weighted prior BO observations (not full placement pools)
+    )
     bo_transfer_min_step_observations: int = (
         5  # Minimum observations for transfer learning
     )
     bo_transfer_weight_cap: float = 0.35  # Maximum weight for transfer learning
-    bo_transfer_similarity_lengthscale: float = (
-        1.0  # Length scale for transfer similarity
-    )
+    bo_transfer_similarity_lengthscale: float = 4.0  # Similarity gate vs current-step candidates (gentler = retain more prior rows)
     bo_transfer_min_similarity: float = 0.05  # Minimum similarity for transfer learning
     bo_transfer_trust_patience: int = 2  # Patience for transfer trust evaluation
     bo_transfer_mae_tolerance: float = 0.0  # MAE tolerance for transfer learning
     bo_transfer_exploration_fraction: float = (
         0.2  # Exploration fraction for transfer learning
     )
+    bo_transfer_proximity_lengthscale: float = (
+        1.0  # Feature-space decay for prior rows near executed placements
+    )
+    bo_transfer_proximity_floor: float = (
+        0.0  # Minimum sample weight for prior rows after proximity decay
+    )
+    bo_transfer_prior_step_window: int | None = (
+        2  # Prior BO memories from the last N saturation steps (None = all prior steps)
+    )
+    bo_transfer_recency_lengthscale: float = 4.0  # Exponential decay vs step age within the window (0 = most recent prior step)
+    bo_transfer_occupancy_lengthscale: float = (
+        1.0  # Downweight prior rows near the previous step's winning placement
+    )
+    bo_transfer_occupancy_floor: float = (
+        0.0  # Minimum transfer modifier at the executed placement site
+    )
 
     def __post_init__(self) -> None:
-        positive_int_fields = (
+        positive_int_fields: list[tuple[str, int]] = [
             ("num_conformers", self.num_conformers),
-            ("num_placements", self.num_placements),
             ("stage1_steps", self.stage1_steps),
             ("stage2_steps", self.stage2_steps),
             ("reference_optimization_steps", self.reference_optimization_steps),
@@ -334,7 +401,9 @@ class AdsorptionConfig:
                 "saturation_autobatcher_reuse_growth_atoms",
                 self.saturation_autobatcher_reuse_growth_atoms,
             ),
-        )
+        ]
+        if self.num_placements is not None:
+            positive_int_fields.append(("num_placements", self.num_placements))
         for int_name, int_value in positive_int_fields:
             _check_positive_int(int_name, int_value)
 
@@ -449,18 +518,20 @@ class AdsorptionConfig:
 
         # Bayesian optimisation knobs
         if self.bo_enabled:
-            _check_positive_int("bo_initial_random", self.bo_initial_random)
-            _check_positive_int("bo_batch_size", self.bo_batch_size)
+            if self.bo_initial_random is not None:
+                _check_positive_int("bo_initial_random", self.bo_initial_random)
+            if self.bo_batch_size is not None:
+                _check_positive_int("bo_batch_size", self.bo_batch_size)
             _check_positive_int("bo_total_budget", self.bo_total_budget)
-            if self.bo_initial_random > self.bo_total_budget:
-                raise ValueError(
-                    f"bo_initial_random ({self.bo_initial_random}) must not exceed "
-                    f"bo_total_budget ({self.bo_total_budget})"
-                )
             if self.bo_ucb_kappa < 0:
                 raise ValueError(
                     f"bo_ucb_kappa must be non-negative, got {self.bo_ucb_kappa}"
                 )
+            _check_choice(
+                "bo_initial_sampling",
+                self.bo_initial_sampling,
+                allowed=BO_INITIAL_SAMPLING_OPTIONS,
+            )
             _check_choice(
                 "bo_acquisition",
                 self.bo_acquisition,
@@ -471,14 +542,17 @@ class AdsorptionConfig:
                 self.bo_surrogate,
                 allowed=BO_SURROGATE_OPTIONS,
             )
-            if self.bo_transfer_enabled and self.bo_surrogate in (
-                "gradient_boost",
-                "ridge",
-            ):
+            _check_choice(
+                "bo_transfer_mode",
+                self.bo_transfer_mode,
+                allowed=("weighted", "cumulative_refit"),
+            )
+            if self.bo_transfer_enabled and self.bo_surrogate == "gradient_boost":
                 raise ValueError(
-                    "bo_transfer_enabled requires a tree ensemble surrogate "
-                    "(random_forest or extra_trees); per-sample weights are not supported "
-                    f"for bo_surrogate={self.bo_surrogate!r}"
+                    "bo_transfer_enabled requires a surrogate that supports "
+                    "per-sample weights (random_forest, extra_trees, ensemble, or "
+                    f"ridge); sample_weight is not supported for "
+                    f"bo_surrogate={self.bo_surrogate!r}"
                 )
             if self.bo_candidate_pool_size is not None:
                 _check_positive_int(
@@ -515,6 +589,27 @@ class AdsorptionConfig:
             _check_positive_int(
                 "bo_transfer_trust_patience", self.bo_transfer_trust_patience
             )
+            if self.bo_transfer_prior_step_window is not None:
+                _check_positive_int(
+                    "bo_transfer_prior_step_window",
+                    self.bo_transfer_prior_step_window,
+                )
+            _check_positive(
+                "bo_transfer_recency_lengthscale",
+                self.bo_transfer_recency_lengthscale,
+            )
+            _check_positive(
+                "bo_transfer_occupancy_lengthscale",
+                self.bo_transfer_occupancy_lengthscale,
+            )
+            if (
+                not isfinite(self.bo_transfer_occupancy_floor)
+                or not 0.0 <= self.bo_transfer_occupancy_floor <= 1.0
+            ):
+                raise ValueError(
+                    "bo_transfer_occupancy_floor must be finite in [0.0, 1.0], "
+                    f"got {self.bo_transfer_occupancy_floor!r}"
+                )
             if (
                 not isfinite(self.bo_transfer_weight_cap)
                 or not 0.0 <= self.bo_transfer_weight_cap < 1.0
@@ -550,6 +645,18 @@ class AdsorptionConfig:
                 raise ValueError(
                     "bo_transfer_exploration_fraction must be finite in [0.0, 1.0], "
                     f"got {self.bo_transfer_exploration_fraction!r}"
+                )
+            _check_positive(
+                "bo_transfer_proximity_lengthscale",
+                self.bo_transfer_proximity_lengthscale,
+            )
+            if (
+                not isfinite(self.bo_transfer_proximity_floor)
+                or not 0.0 <= self.bo_transfer_proximity_floor <= 1.0
+            ):
+                raise ValueError(
+                    "bo_transfer_proximity_floor must be finite in [0.0, 1.0], "
+                    f"got {self.bo_transfer_proximity_floor!r}"
                 )
         _check_choice("ts_optimizer", self.ts_optimizer, allowed=TS_OPTIMIZER_OPTIONS)
         _check_choice(

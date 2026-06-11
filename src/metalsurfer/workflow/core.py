@@ -15,6 +15,7 @@ from ..ml.schema import PlacementRecord
 from ..models import PlacementDescriptor, ReferenceEnergies, ScreeningResult
 from ..optimization import (
     clear_autobatcher_cache,
+    compute_frozen_indices,
     optimize_adsorbate_slab_batched,
 )
 from ..placement import generators as placement_generators
@@ -28,7 +29,9 @@ from .shared import (
     _materialize_spec_placements,
     _resolve_site_context_for_sampling,
     _summarize_failure_events,
+    build_representative_relaxation_atoms,
     prepare_substrate_for_screening,
+    resolve_workload_config,
     write_substrate_step_metadata,
 )
 
@@ -52,6 +55,8 @@ def _generate_placements_with_retry(
     Returns:
         Tuple of (all_combined, placement_ids, placement_descriptors, failures, n_attempts)
     """
+    assert config.num_placements is not None
+    num_placements = config.num_placements
     all_combined: list[Atoms] = []
     placement_ids: list[int] = []
     placement_descriptors: list[PlacementDescriptor] = []
@@ -64,14 +69,14 @@ def _generate_placements_with_retry(
 
     for attempt in range(max_attempts):
         # Check if we've already met the target
-        if len(all_combined) >= config.num_placements:
+        if len(all_combined) >= num_placements:
             break
 
         # Calculate seed for this attempt
         attempt_seed = config.seed + (seed_increment * attempt)
 
         # Generate specs for remaining placements needed
-        remaining = config.num_placements - len(all_combined)
+        remaining = num_placements - len(all_combined)
         if remaining <= 0:
             break
 
@@ -119,7 +124,7 @@ def _generate_placements_with_retry(
                 max_attempts,
                 len(new_combined),
                 len(all_combined),
-                config.num_placements,
+                num_placements,
             )
 
     return all_combined, placement_ids, placement_descriptors, failures, max_attempts
@@ -270,6 +275,29 @@ def _process_molecule_body(
         config,
         symmetry_broken=symmetry_broken,
     )
+
+    freeze_ref = (
+        effective_base_slab_for_frozen
+        if effective_base_slab_for_frozen is not None
+        else slab.atoms
+    )
+    frozen_indices = compute_frozen_indices(freeze_ref, config)
+    representative_atoms = build_representative_relaxation_atoms(
+        conformers,
+        slab.atoms,
+        slab_for_sites,
+        config,
+        smiles,
+        site_context=site_context,
+    )
+    config = resolve_workload_config(
+        config,
+        ts_model=ts_model,
+        representative_atoms=representative_atoms,
+        frozen_indices=frozen_indices,
+        bo_enabled=config.bo_enabled,
+    )
+    assert config.num_placements is not None
 
     # Generate placements with optional retry loop
     (
