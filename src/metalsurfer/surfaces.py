@@ -137,6 +137,7 @@ def coerce_slab_container(
     slab: SlabContainer | Atoms,
     *,
     material_type: str | None = None,
+    preserve_slab_frame: bool = False,
 ) -> SlabContainer:
     """Normalize slab-like input to :class:`SlabContainer`.
 
@@ -144,7 +145,8 @@ def coerce_slab_container(
     object. ``Atoms`` inputs are defensively copied to avoid mutating caller
     state across workflow steps.
 
-    When *material_type* is ``"slab"``, applies :func:`ensure_slab_z_alignment`.
+    When *material_type* is ``"slab"`` and *preserve_slab_frame* is false,
+    applies :func:`ensure_slab_z_alignment`.
     """
     if isinstance(slab, SlabContainer):
         container = slab
@@ -155,7 +157,7 @@ def coerce_slab_container(
             f"slab must be a SlabContainer or ase.Atoms, got {type(slab).__name__}"
         )
 
-    if material_type == "slab":
+    if material_type == "slab" and not preserve_slab_frame:
         container.atoms = ensure_slab_z_alignment(container.atoms)
     return container
 
@@ -285,12 +287,18 @@ def create_slab_from_atoms(
     atoms: Atoms,
     *,
     material_type: str = "slab",
+    preserve_slab_frame: bool = False,
 ) -> SlabContainer:
     """Wrap an existing ASE ``Atoms`` object into a :class:`SlabContainer`.
 
-    When *material_type* is ``"slab"``, applies :func:`ensure_slab_z_alignment`.
+    When *material_type* is ``"slab"`` and *preserve_slab_frame* is false,
+    applies :func:`ensure_slab_z_alignment`.
     """
-    return coerce_slab_container(atoms, material_type=material_type)
+    return coerce_slab_container(
+        atoms,
+        material_type=material_type,
+        preserve_slab_frame=preserve_slab_frame,
+    )
 
 
 # ---------------------------------------------------------------------------

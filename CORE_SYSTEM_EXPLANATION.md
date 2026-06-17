@@ -4,267 +4,512 @@
 
 Developer-oriented companion to [`README.md`](README.md) and the Sphinx [architecture guide](docs/guides/architecture.rst): module layout, implementation mechanics, and typed outputs. Install, run modes, and quickstarts stay in the README. Contributor workflow: [development guide](docs/guides/development.rst).
 
-`scripts/` call `run_saturation` / `run_saturation_bo`; on-disk layout follows the campaign API (`step_*_placements/`, `saturation_placements_detailed.csv` when `saturation_save_all_placements` is true).
+`scripts/` and `examples/` call the campaign APIs (`run_adsorption`, `run_saturation`, `run_*_bo`). On-disk layout follows the campaign layer (`results_{surface_type}/`, `step_*_placements/`, `saturation_placements_detailed.csv` when `saturation_save_all_placements` is true).
 
 ## Public API layers
 
-Lazy re-exports in `metalsurfer.__init__` organize the public API into five layers:
+Lazy re-exports in `metalsurfer.__init__` organize the public API into five layers. Heavy modules load on first access.
 
 ### 1. Run-mode APIs
 
-These are the canonical high-level entry points, all importable directly from `metalsurfer`:
+Canonical high-level entry points:
 
-- `run_adsorption(...)` — standard multi-molecule screening from an in-memory list of `(smiles, name)` tuples **or** a CSV path.
-- `run_adsorption_bo(...)` — Bayesian optimization-guided screening over the same interface; forces `bo_enabled=True`.
-- `run_saturation(...)` — sequential saturation; `molecules` accepts a list of tuples or a CSV path.
-- `run_saturation_bo(...)` — saturation with BO-guided placement selection.
+- `run_adsorption(...)` — standard multi-molecule screening from an in-memory `(smiles, name)` list **or** a CSV path.
+- `run_adsorption_bo(...)` — BO-guided screening; forces `bo_enabled=True`.
+- `run_saturation(...)` — sequential saturation until coverage heuristic is met.
+- `run_saturation_bo(...)` — saturation with BO-guided placement selection and step-to-step transfer learning.
 
-All four accept:
+All four accept a `SlabContainer` (or plain ASE `Atoms`), `molecules` (list or CSV path), `AdsorptionConfig`, and `surface_type`.
 
-- a prepared `SlabContainer` (or plain ASE `Atoms`),
-- `molecules`: either `list[tuple[str, str]]` of `(smiles, name)` pairs or a `str` path to a SMILES CSV,
-- an `AdsorptionConfig`,
-- a `surface_type` label.
+`run_adsorption` / `run_adsorption_bo` return `BindingCampaignResult`.
+`run_saturation` / `run_saturation_bo` return `SaturationCampaignResult` (per-molecule or multi-molecule runs via `.runs`).
 
-`run_adsorption` and `run_adsorption_bo` return a typed `BindingCampaignResult`.
-`run_saturation` and `run_saturation_bo` return `SaturationCampaignResult` (access per-molecule runs via `.runs`).
+With `save_results=True` (default):
 
-With `save_results=True` (default), both call `save_saturation_results(..., config=config)` so files under `results_{surface_type}/` reflect the same `AdsorptionConfig` (including `saturation_save_all_placements` for per-step `step_*_placements/` trees and `saturation_placements_detailed.csv`).
+- **Binding** campaigns call `save_single_molecule_results` per molecule and `save_summary_results` for campaign CSVs (`adsorption_energies_detailed.csv`, `adsorption_energy_summary.csv`).
+- **Saturation** campaigns call `save_saturation_results` (and optionally flatten step placements to `adsorption_energies_detailed.csv` when `save_benchmark_dataset=True`).
 
 ### 2. Surface preparation API
 
-`prepare_slab(...)` in `metalsurfer.surface_prep` provides a single call for bulk→slab construction, alloy substitution, and adatom deposition in one step.
+`prepare_slab(...)` in `metalsurfer.surface_prep` builds or loads a slab, then optionally applies alloy substitution and adatom deposition. Separate ASE relaxation knobs exist for initial slab creation (`create_relaxation_*`) vs post-adatom equilibration (`adatom_relaxation_*`). Writes `clean_slab*` artifacts under `results_dir`.
+
+Also exported: `create_slab_from_bulk`, `create_slab_from_atoms`, `substitute_alloy`, `deposit_adatoms`, `auto_resize_slab_for_molecule`, `compute_minimum_supercell`.
 
 ### 3. Workflow APIs (internal)
 
-These are orchestration helpers used internally by the run-mode APIs:
+Orchestration helpers used by campaigns:
 
-- `_run_screening_common(...)`
-- `run_saturation_screening(...)`
+- `_run_screening_common(...)` — CSV-driven **binding** loops only (`workflow/screening.py`).
+- `_setup_screening_run(...)` — shared model setup, molecule loading, reference energies (binding CSV + all saturation paths).
+- `run_saturation_screening(...)` — saturation loops (`workflow/saturation.py`).
 
-They normalize molecule input (in-memory `(smiles, name)` pairs or SMILES CSV path), compute references, execute the requested workflow, and return typed result collections.
+`load_molecules` / `load_molecules_from_pairs` live in `workflow/shared.py`.
 
 ### 4. Mid-level per-molecule APIs
 
-These power workflow entry points and are useful when embedding the library in custom loops:
-
-- `process_molecule(...)`
-- `process_molecule_bayesian(...)`
+- `process_molecule(...)` — standard placement screen.
+- `process_molecule_bayesian(...)` — BO-guided screen.
 - `calculate_reference_energies(...)`
 - `load_molecules(...)`
 
-They expose screening mechanics without requiring a full batch run.
-
 ### 5. Infrastructure APIs
 
-Supporting helpers include:
+**Surfaces and placement:** `enumerate_placement_specs`, `generate_placement_from_spec`, `generate_placement_from_descriptor`, `calculate_min_distance`, `get_symmetry_aware_sites`, `get_symmetry_info`.
 
-- surface construction and editing: `create_slab_from_bulk`, `create_slab_from_atoms`, `substitute_alloy`, `deposit_adatoms`, `auto_resize_slab_for_molecule`
-- placement generation: `enumerate_placement_specs`, `generate_placement_from_spec`, `generate_placement_from_descriptor`
-- optimization and calculators: `setup_calculator`, `setup_single_model`, `setup_torchsim_model`, `optimize_isolated_molecules_batched`, `optimize_adsorbate_slab_batched`
-- result persistence: `save_single_molecule_results`, `save_summary_results`, `save_saturation_results`, `save_multi_mol_saturation_results`, `write_run_metadata`, `write_run_settings`
+**Optimization:** `setup_calculator`, `setup_single_model`, `setup_torchsim_model`, `TorchSimCalculator`, `optimize_isolated_molecules_batched`, `optimize_adsorbate_slab_batched`, `batch_static`, `precompute_results`, `identify_top_layer_indices`, `compute_frozen_indices`.
+
+**Filtering:** `filter_results`, `check_decomposition`, `check_desorption`.
+
+**I/O:** `setup_directories`, `save_molecule_results`, `save_single_molecule_results`, `screening_run_result`, `save_summary_results`, `save_saturation_results`, `save_multi_mol_saturation_results`, `write_run_metadata`, `write_run_metadata_from_out`, `write_run_settings`.
+
+**ML:** `DatasetLogger`, `PlacementRecord`, `ComputationContext`, `BindingEnergyPredictor`, `extract_features`, `extract_features_from_dataset`, `train_model`, `evaluate_model`, `grouped_cross_validate`, `load_dataset`.
+
+**Symmetry:** `SymmetryAnalyzer`, `SymmetryAnalysisError`.
+
+**Logging and errors:** `configure_logging`; `DependencyMissingError`, `GeometryValidationError`, `OptimizationError`.
+
+## Computational pipeline
+
+Across run modes the physical stages are: surface prep → reference energies → conformers → placement → TorchSim relaxation → validation/filtering → persistence.
+
+### Standard screening (`process_molecule`)
+
+```mermaid
+flowchart TD
+    prep[prepare_slab / SlabContainer] --> ref[calculate_reference_energies]
+    ref --> conf[create_conformers_from_smiles]
+    conf --> sub[prepare_substrate_for_screening]
+    sub --> sites[_resolve_site_context_for_sampling]
+    sites --> tune[resolve_workload_config]
+    tune --> place[_generate_placements_with_retry]
+    place --> opt[optimize_adsorbate_slab_batched]
+    opt --> val[_evaluate_optimized_candidate]
+    val --> filt[filter_results]
+    filt --> out[ScreeningResult list]
+```
+
+### Sequential saturation (`run_saturation_screening`)
+
+```mermaid
+flowchart TD
+    loop[per step] --> Eslab["_compute_slab_energy"]
+    Eslab --> screen[process_molecule or process_molecule_bayesian]
+    screen --> topo[_filter_saturation_topology_results]
+    topo --> pick[min E_ads]
+    pick --> stop{E_ads ge 0 or no results or max_steps?}
+    stop -->|no| commit[current_slab = best.atoms]
+    commit --> loop
+```
+
+### Binding energy and references
+
+Adsorption energy is always:
+
+`E_ads = E_adslab - E_slab - E_molecule`
+
+computed in `workflow/shared._evaluate_optimized_candidate`.
+
+- **Saturation** recomputes `E_slab` every step from the current (partially covered) slab via `slab_energy_override`. Isolated `E_molecule` stays from the initial `calculate_reference_energies` call.
+- Reference `E_molecule` is the **lowest energy among MLIP-optimized conformers** per molecule (`workflow/reference.py`).
+- Clean-slab reference energy must be finite and not ~0; otherwise `OptimizationError` is raised.
+- If auto-resize expands the substrate on step 1, slab energy is recomputed before placements (`workflow/core.py`).
+
+## Campaign routing and entry points
+
+| API | `molecules` input | Code path | Persistence / extras |
+|-----|-------------------|-----------|----------------------|
+| `run_adsorption` / `run_adsorption_bo` | **CSV path** | `workflow/screening._run_screening_common` | `DatasetLogger`, `skip_existing`, `ScreeningRunResult` list |
+| `run_adsorption` / `run_adsorption_bo` | **in-memory list** | `campaigns._run_binding_campaign` | `MoleculeCampaignSummary` (parallel/EN-down via `classify_adsorbate_orientation`), `failure_summaries` |
+| `run_saturation` / `run_saturation_bo` | **CSV or list** | `run_saturation_screening` → `_setup_screening_run` | `save_saturation_results`; optional `save_benchmark_dataset` |
+
+Both binding paths share `process_fn` = `process_molecule` or `process_molecule_bayesian`. Saturation uses a **single** entry path for CSV and in-memory input (unlike binding).
 
 ## Module architecture
 
-The package is intentionally split into modules with narrow responsibilities.
+- `config.py`: `AdsorptionConfig` and validation.
+- `models.py`: typed contracts for references, placements, screening, saturation, timing, campaigns.
+- `surfaces.py`: slab construction, alloys, adatoms, supercell resizing, `SlabContainer`.
+- `surface_prep.py`: `prepare_slab` orchestration.
+- `conformers.py`: SMILES → conformers, isolated optimization, conformer selection.
+- `placement/`: sites (`sites.py`), geometry (`geometry.py`), material-aware PBC (`_material.py`), policy (`policy.py`), generators (`generators.py`).
+- `symmetry.py`: `spglib`-based symmetry and site orbits.
+- `optimization.py`: TorchSim batched relaxation, freeze masks, autobatching.
+- `filters.py`: decomposition, desorption, deduplication.
+- `workflow/`: orchestration by run mode + `shared.py` validation/autotune helpers.
+- `campaigns.py`: high-level campaign wrappers and persistence hooks.
+- `io_results.py`: CSV, XYZ, optional VASP I/O, metadata.
+- `ml/`: dataset logging, features, surrogates, acquisition, reproduction utilities.
+- `exceptions.py`, `_logging.py`, `_timing.py`: errors, structured logging, timing helpers.
 
-- `config.py`: `AdsorptionConfig` plus validation of physical and workflow hyperparameters.
-- `models.py`: typed data contracts for references, placements, screening, saturation, timing, and campaign summaries.
-- `surfaces.py`: slab construction, alloy substitution, adatom deposition, supercell resizing, and slab wrappers.
-- `conformers.py`: SMILES-to-conformer generation, isolated-molecule optimization, and conformer selection.
-- `placement/`: site discovery, orientation logic, deterministic placement specifications, and placement materialization.
-- `symmetry.py`: symmetry analysis and site equivalence logic built on `spglib`.
-- `optimization.py`: model setup, constrained relaxation, top-layer identification, frozen-atom policies, and autobatching.
-- `filters.py`: decomposition, desorption, and duplicate filtering.
-- `workflow/`: orchestration split by run mode and shared helpers.
-- `campaigns.py`: in-memory multi-molecule campaign wrappers.
-- `io_results.py`: CSV, XYZ, optional VASP I/O (`write_vasp_inputs`), and metadata persistence.
-- `ml/`: dataset logging, schema/context rows, feature extraction, surrogate training, evaluation, and acquisition utilities.
+Workflow subpackage:
 
-The workflow subpackage is further divided into:
-
-- `workflow/core.py`: standard per-molecule placement screening.
-- `workflow/bayesian.py`: BO-guided per-molecule screening.
-- `workflow/screening.py`: file-driven multi-molecule screening loops.
-- `workflow/saturation.py`: sequential and multi-molecule saturation loops.
-- `workflow/reference.py`: reference-energy preparation.
-- `workflow/shared.py`: validation helpers, failure formatting, and shared screening setup logic.
+- `core.py` — standard per-molecule screening + `_evaluate_placement_batch`.
+- `bayesian.py` — BO-guided per-molecule screening.
+- `screening.py` — CSV binding loops + `_setup_screening_run`.
+- `saturation.py` — single- and multi-molecule saturation.
+- `reference.py` — reference-energy preparation.
+- `shared.py` — site context, validation, workload autotune, molecule loading.
 
 ## Implementation mechanics
 
-This section describes what the code actually does inside the modules named above. It is the right place to look when debugging geometry, symmetry, or batching behavior.
-
 ### Surfaces and slab containers
 
-`surfaces.SlabContainer` wraps ASE `Atoms` with metadata used through screening. `create_slab_from_bulk` pulls a conventional cell from the Materials Project ecosystem, builds a slab with the requested Miller indices and vacuum, and returns a container normalized via `ensure_slab_z_alignment`. `create_slab_from_atoms` does the same for user-supplied structures. Alloy substitution and adatom deposition optionally draw random structural variants and rank them with a supplied calculator. `auto_resize_slab_for_molecule` expands in-plane supercells when PBC image separation would be too tight for the adsorbate footprint.
+`SlabContainer` wraps ASE `Atoms` with metadata. `create_slab_from_bulk` builds from Materials Project bulk IDs; `create_slab_from_atoms` accepts user structures. Both normalize via `ensure_slab_z_alignment` unless `preserve_slab_frame=True` (skip z-alignment for pre-built/DFT slabs). `auto_resize_slab_for_molecule` expands in-plane supercells when PBC image separation is below `min_pbc_image_separation`.
 
 ### Site detection (`placement/sites.py`)
 
-1. **Framework geometry:** Atomic positions are replicated to periodic images (3×3×1 for typical slabs, 3×3×3 for fully periodic porous cells, none for clusters) before Voronoi construction.
-2. **Voronoi vertices:** `scipy.spatial.Voronoi` runs on the extended point cloud. Vertices are filtered to the primary cell (where the cell matrix is invertible), then tested with a KDTree over framework atoms: each vertex must lie between `voronoi_probe_radius` and `voronoi_max_site_distance` from the nearest atom to count as an accessible adsorption site.
-3. **Enrichment:** When `voronoi_site_enrichment` is true, ridges of the Voronoi graph are subdivided so sparse or stepped surfaces gain extra candidate points that pass the same accessibility tests.
-4. **Typing:** Each vertex is classified as atop, bridge, hollow, or pore-like using distance ratios to nearby atoms, or—on slabs only—using a 2D Delaunay triangulation of top-layer atoms when `site_classification_method == "delaunay"`. Local surface normals and a small **environment fingerprint** (neighbor element multiset + site type) are stored on each site dict.
-5. **Deduplication:** `_cluster_equivalent_sites` merges geometrically close sites using `scipy.spatial.KDTree.query_pairs` under a metric that depends on `material_type` (in-plane fractional + z for slabs, 3D fractional with MIC for porous, Cartesian for nanoparticles). Pairs are only merged when fingerprints match, so chemically distinct neighbors are not collapsed.
+1. **Framework geometry:** Periodic images (3×3×1 slabs, 3×3×3 porous, none for clusters) before Voronoi.
+2. **Voronoi vertices:** Filtered to the primary cell; each vertex must lie between `voronoi_probe_radius` and `voronoi_max_site_distance` from the nearest framework atom.
+3. **Enrichment:** Ridge subdivision when `voronoi_site_enrichment` is true.
+4. **Typing:** atop / bridge / hollow / pore via distance ratios or Delaunay triangulation (`site_classification_method == "delaunay"`, slabs only). Environment fingerprints stored on each site dict.
+5. **Deduplication:** `_cluster_equivalent_sites` with material-type-aware metrics; merge only when fingerprints match.
 
-`placement.generators._get_unique_sites_for_specs` calls `get_unified_sites` with the user’s `AdsorptionConfig` Voronoi and classification fields, then runs `_cluster_equivalent_sites` with `site_equivalence_tolerance`. It returns a `SiteContext` (`sites`, `use_sites`, `source`).
+`placement.generators._get_unique_sites_for_specs` returns a `SiteContext` (`sites`, `use_sites`, `source`, `raw_unclustered`).
 
 ### How the workflow chooses sites (`workflow/shared.py`)
 
-`_resolve_site_context_for_sampling` is the single place that decides which site list feeds placement enumeration:
+`_resolve_site_context_for_sampling`:
 
-1. **Cache:** Results are memoized from a hash of slab positions, cell, PBC flags, and the boolean `symmetry_broken` (bounded cache, lock-protected).
-2. **Core path:** It always builds the clustered Voronoi set via `_get_unique_sites_for_specs` first.
-3. **Symmetry breaking:** If `symmetry_broken` is true (e.g. after prior saturation steps), symmetry reduction is skipped and the core sites are used.
-4. **Symmetry reduction:** Otherwise it calls `get_symmetry_aware_sites` with the same Voronoi parameters as site discovery and with `raw_sites` set to the unclustered list from step 2, so Voronoi is not run twice. `SymmetryAnalyzer.analyze_site_symmetry` then reduces to symmetry-unique orbits. If that succeeds and the result is non-empty, those sites replace the core clustered list. On `SymmetryAnalysisError`, or if there are no symmetry-reduced sites, the workflow keeps the clustered Voronoi sites from step 2 (errors are logged at INFO in `_resolve_site_context_for_sampling`).
+1. **Cache:** Memoized from geometry hash + `symmetry_broken` (max 16 entries, lock-protected).
+2. **Core:** Clustered Voronoi set via `_get_unique_sites_for_specs`.
+3. **Symmetry broken:** Use clustered Voronoi only (saturation after coverage).
+4. **Otherwise:** `get_symmetry_aware_sites` with reused `raw_unclustered` sites. On `SymmetryAnalysisError` or empty result, fall back to clustered Voronoi.
+
+### Surface reference slab for site discovery
+
+`_build_surface_reference_slab` strips atoms whose elements are not in the original freeze-reference substrate. Site enumeration and desorption distance checks use this **substrate-only** view while the full slab+adsorbates structure is relaxed. Critical for saturation steps after prior adsorbates are committed.
 
 ### Placement enumeration and materialization
 
-- **`placement/policy.py`:** `build_batch_placement_specs` expands a Cartesian product over conformers, site indices, orientation mode (including flat-aromatic parallel vs EN-down branches and a dissociative branch), discretized tilts, azimuths, and z-fractions. The raw grid is capped internally; if it is larger than `n_desired`, a uniform random subsample is taken with the given integer `seed`. `max_batch_placement_specs` uses the default `PLACEMENT_GRID_COUNT_SEED` so capacity counts stay consistent with that enumeration logic.
-- **`placement/generators.py`:** `enumerate_placement_specs` supplies molecule- and slab-derived metadata (shape, binders, dissociative flag, site indices) and forwards `AdsorptionConfig.seed` into the policy layer. Optional `adaptive_parallel_fraction` adjusts the parallel vs EN-down split for flat aromatics from SMILES/symbol heuristics.
-- **`workflow/shared._materialize_spec_placements`:** For each `PlacementSpec`, calls `generate_placement_from_spec_with_reason`. Successes yield combined slab+adsorbate `Atoms`, `PlacementDescriptor` rows, and integer placement ids; failures append `PlacementFailureEvent` records (used for BO negative feedback when enabled).
+- **`placement/policy.py`:** Cartesian product over conformers, sites, orientation (flat-aromatic parallel vs EN-down, dissociative branch), tilts, azimuths, z-fractions. Subsampled to budget with seeded random draw when grid exceeds `n_desired`.
+- **`placement/generators.py`:** Molecule metadata (shape, binders, dissociative flag). Optional `placement_filter` callback and `adaptive_parallel_fraction`.
+- **Dissociative branch:** Diatomics like H₂ on slabs can generate hollow-pair dissociative specs when topology checks are enabled (`skip_topology_check=False`).
+- **`workflow/shared._materialize_spec_placements`:** Materializes each `PlacementSpec`; failures become `PlacementFailureEvent` records (BO negative labels when enabled).
+
+### Placement retry (`workflow/core.py`)
+
+`_generate_placements_with_retry`: when `placement_retry_enabled` (default on), up to `placement_retry_max_attempts=3` rounds with `placement_retry_diversity_seed_increment=1000` offset seeds fill only the **remaining** placement deficit.
 
 ### Conformer generation (`conformers.py`)
 
-RDKit parses SMILES, adds hydrogens, and embeds up to `num_conformers` conformers with `EmbedMultipleConfs(..., randomSeed=config.seed)`. Each conformer is MMFF-relaxed. If a TorchSim model or ASE calculator is provided, conformers are energy-scored (batched `batch_static` when a model is available); otherwise energies are placeholders. `remove_duplicate_conformers` collapses near-duplicate geometries using RMSD and energy thresholds from `AdsorptionConfig`.
+RDKit embed + MMFF relax; MLIP energy scoring via `batch_static` when available. `remove_duplicate_conformers` collapses near-duplicates.
 
-### Relaxation (`optimization.py`)
+`conformer_sampling` (default `cycle`): round-robin by `placement_id`; `boltzmann` at `boltzmann_temperature` (300 K); `mixed` alternates cycle/Boltzmann by placement id parity. `select_conformer_boltzmann` is also exported.
 
-There are **two relaxation phases** with different freeze policies:
+### Surface preparation relaxation vs adsorption relaxation
 
-1. **Surface preparation** (`create_slab_from_bulk`, `deposit_adatoms`, `prepare_slab`) uses ASE optimizers and `AdsorptionConfig.slab_relaxation_mode` (`none`, `ionic_only`, `cell_only`, `full`). This is where the clean slab and any adatoms are equilibrated once before screening. Output files such as `clean_slab.xyz` (pre-adatom) and `clean_slab_Au20.xyz` (after adatom deposition) record that prep geometry; they are **not** the TorchSim freeze reference unless you pass that structure into the workflow yourself.
+**Prep (ASE):** `slab_relaxation_mode` (`none`, `ionic_only`, `cell_only`, `full`) during `prepare_slab` / `create_slab_from_bulk` / `deposit_adatoms`. Outputs `clean_slab.xyz` (pre-adatom) and e.g. `clean_slab_Au20.xyz` (post-adatom)—compare optimized adsorption structures to the **post-adatom** reference, not pre-adatom files.
 
-2. **Adsorption / saturation** uses TorchSim `FixAtoms` via `optimize_adsorbate_slab_batched`. `compute_frozen_indices` identifies which slab atoms are frozen: when `relax_top_layer` is true, only atoms below the top layer (within `top_layer_tolerance`) stay fixed; when `relax_top_layer` is false, every atom in the freeze reference is fixed. Adsorbate atoms in the combined system are never frozen. For saturation, `base_slab_for_frozen` is captured at the start of `run_saturation_screening` (post-`prepare_slab`) so indices `0 .. len(base_slab)-1` stay fixed while later adsorbate units (indices `>= len(base_slab)` on the evolving slab) may still relax. If `auto_resize_slab` repeats the substrate in-plane on step 1, every workflow path (standard, Bayesian, saturation) expands that freeze reference to the full resized substrate—regardless of `relax_top_layer`—so repeated tiles are not left free to move. Competitive multi-molecule saturation pre-resizes once before the step-1 candidate loop.
+**Adsorption (TorchSim):** See **TorchSim batched relaxation** below. `compute_frozen_indices` + `FixAtoms`: when `relax_top_layer` is true, only sub-surface atoms freeze; adsorbate atoms never freeze. Saturation pins `base_slab_for_frozen` at campaign start; prior adsorbate units (indices ≥ original substrate length) may relax. Auto-resize on step 1 expands the freeze reference to all repeated in-plane tiles.
 
-Before placement enumeration, `resolve_workload_config` (in `workflow/shared.py`) probes how many slab+adsorbate systems fit in GPU memory via `estimate_parallel_relaxation_capacity` and fills unset `num_placements`, `bo_initial_random`, and `bo_batch_size`. Explicit integer overrides skip autotune for that field. The probe re-runs each saturation step as the slab grows.
+### TorchSim batched relaxation (`optimization.py`)
+
+Core differentiator vs sequential DFT workflows (AdsorbML, BOSS): many slab+adsorbate relaxations run **in parallel** on GPU.
+
+| Mechanism | Role |
+|-----------|------|
+| `optimize_adsorbate_slab_batched` + `InFlightAutoBatcher` | Pack N independent relaxations per GPU wave |
+| `estimate_parallel_relaxation_capacity` | Probe `determine_max_batch_size` / memory scalers (0.8 × `autobatcher_max_memory_padding`) |
+| `resolve_workload_config` | Autotune `num_placements`, `bo_initial_random`, `bo_batch_size` when `None` |
+| `resolve_saturation_step_workload_config` | Re-probe as slab grows each saturation step |
+| `stage1_steps` + `stage2_steps` (50 + 150) | Two-stage `ts.optimize`; default `ts_optimizer` = FIRE |
+| `optimize_isolated_molecules_batched`, `batch_static` | Reference conformer energies |
+| `_AUTOBATCHER_CACHE`, `clear_autobatcher_cache` | Cache keyed by model/device/padding/`max_n_atoms`; CUDA GC on eviction |
+| `saturation_reuse` + `saturation_autobatcher_reuse` | Reuse prior autobatcher if slab growth ≤ 32 atoms or 10%; OOM → drop cache, re-probe, retry once |
+
+```mermaid
+flowchart LR
+    probe[estimate_parallel_relaxation_capacity] --> tune[num_placements / bo_batch]
+    tune --> gen[N placements]
+    gen --> ab[InFlightAutoBatcher]
+    ab --> tsopt[ts.optimize]
+    tsopt --> valid[validation]
+```
+
+Omitting `num_placements` (and BO batch fields) is intentional: the library sizes parallel work to available GPU memory.
+
+### Calculator and PBC constraints
+
+- `_prepare_atoms_for_calculator` (`workflow/shared.py`): mixed PBC normalized to full periodic; periodic c-vector must be ≥ 18 Å (`MIN_CALCULATOR_CELL_C_ANG`) to avoid image self-interaction with UMA.
+- `_validate_model_pbc` (`optimization.py`): rejects mixed PBC for TorchSim/UMA paths.
+
+### Reference energies (`workflow/reference.py`)
+
+Per molecule: embed conformers → `optimize_isolated_molecules_batched` → lowest energy wins. Clean slab: single-point with finite/non-zero guards. Failures respect `fail_on_conformer_failure` / `fail_on_missing_reference`.
+
+### Validation layers
+
+Three intentional layers:
+
+1. **Per-candidate** (`_evaluate_optimized_candidate`): finite energy, `min_interatomic_distance`, adsorbate force cap (`max_force_convergence`), desorption distance (`binding_distance_threshold`, skippable via `skip_desorption_check`), `max_adsorption_energy` cap.
+2. **Batch** (`filter_results`): decomposition vs reference SMILES (`skip_topology_check` disables), desorption re-check, energy/RMSD dedup (`energy_dedup_threshold`, `rmsd_dedup_threshold`).
+3. **Saturation step** (`_filter_saturation_topology_results`): full adsorbate pool must have expected connected-fragment count (`adsorbate_connected_components`); connectivity-only guard allowing strong chemisorption. Disabled when `saturation_discard_topology_rearrangements=False` or `skip_topology_check=True`.
+
+During saturation placement filtering, decomposition uses `adsorbate_prefix_atoms=len(slab)` so only the newly added adsorbate is checked at the batch layer.
 
 ### Post-relaxation filtering (`filters.py`)
 
-`filter_results` runs one pipeline over `ScreeningResult` objects: **decomposition** checks (graph connectivity of the adsorbate at several multiples of covalent radii, elemental formula match to reference SMILES, bond-pair counts, and coordination-number fingerprints), **desorption** via minimum adsorbate–surface distance against `binding_distance_threshold`, **energy** cap via `max_adsorption_energy`, and **duplicate** removal among surviving structures. During saturation placement, decomposition uses `adsorbate_prefix_atoms=len(slab)` so only the newly added adsorbate is checked; `adsorbate_connected_components` supports the separate saturation-step guard that re-validates every adsorbate unit on the slab before best-slab selection.
+`filter_results` orchestrates decomposition, desorption, energy cap, and duplicate removal. Exported helpers: `check_decomposition`, `check_desorption`.
+
+### Shared batch evaluation (`workflow/core.py`)
+
+`_evaluate_placement_batch`: materialize specs → `optimize_adsorbate_slab_batched` → per-candidate validation. Used by BO acquisition loops and saturation internals.
+
+### Failure tracking (`workflow/shared.py`)
+
+`PlacementFailureEvent` records `placement_id`, `stage` (`generation`, `optimization`, `validation`, `energy_cap`, `filter`), and `reason`. Aggregated in logs; fed to BO as penalty labels when `bo_include_failure_negatives=True`. Campaign APIs accept `failure_summary_out` dicts for per-molecule diagnostics.
 
 ### Symmetry analysis (`symmetry.py`)
 
-`SymmetryAnalyzer` prepares either the ASE cell as a 3D periodic lattice or, for clusters, an orthorhombic box with padding so periodic images do not interact. It calls `spglib.get_symmetry_dataset` (errors wrapped as `SymmetryAnalysisError`). Symmetry operations are converted to 4×4 Cartesian matrices; equivalent sites are grouped by applying fractional-space operations with minimum-image-aware distance tests, optionally restricted to planar (xy) distances for flat top layers. Internal orbit checks verify that grouped sites are actually related by at least one operation within `symmetry_tolerance`.
+`SymmetryAnalyzer` + `spglib`; orbit grouping with `symmetry_tolerance`. Saturation detects symmetry breaking vs the initial reference slab (`_saturation_symmetry_broken_vs_reference`) and disables symmetry reduction for later steps.
 
 ### Bayesian screening (`workflow/bayesian.py` + `ml/bayesian.py`)
 
-Enumerate a finite `PlacementSpec` pool, evaluate a random initial subset, build features from each `PlacementDescriptor`, and fit a surrogate with `train_surrogate` (tree ensembles, `HistGradientBoostingRegressor`, or ridge). Score remaining candidates with LCB, EI, or PI; tree models use forest variance for uncertainty, while ridge and HGB report no uncertainty (EI/PI use the deterministic limits in the acquisition helpers). Iterate in acquisition batches until `bo_total_budget` batches complete (after the initial random batch). Total evaluations are `bo_initial_random + bo_total_budget * bo_batch_size` once auto fields are resolved. When `bo_include_failure_negatives` is set, failed placements are labeled with configurable penalties. Transfer learning (`bo_transfer_enabled`, default weighted mode) augments the surrogate with weighted prior-step BO observations (2-step window by default, recency and occupancy decay). Per-sample weights are supported for `random_forest`, `extra_trees`, `ensemble`, and `ridge`; `gradient_boost` is rejected when transfer is enabled (`AdsorptionConfig` validation).
+Finite `PlacementSpec` pool → initial batch (`bo_initial_sampling`, default **`spread_xyz`**: farthest-point on x/y/z) → descriptor features → surrogate → acquisition batches (LCB, EI, PI; default EI) until `bo_total_budget` (18) acquisition rounds after the initial batch.
+
+**Surrogates** (`bo_surrogate`): `random_forest`, `extra_trees`, `gradient_boost` (HistGradientBoostingRegressor internally), `ridge` (default), `ensemble` (trees + ridge + optional Gaussian-process member). Tree models and `ensemble` provide uncertainty; ridge/HGB use deterministic acquisition limits. `gradient_boost` cannot be used with `bo_transfer_enabled` (config validation).
+
+Eval budget once autotuned: `bo_initial_random + bo_total_budget * bo_batch_size` (`resolved_bo_eval_budget`).
+
+Failed placements: `bo_include_failure_negatives=True` (default) with `bo_failure_penalty_default=10.0` eV and stage overrides in `bo_failure_penalty_overrides`.
+
+### BO and transfer learning for deep saturation
+
+`run_saturation_bo` forces `bo_enabled=True`. Each saturation step runs `process_molecule_bayesian`, which emits a `BOStepMemory` (observed feature rows + energies). The next step receives prior memory via `_bo_transfer_memory_in`:
+
+| Mode | Behavior |
+|------|----------|
+| `weighted` (default) | `windowed_bo_step_memories` over last `bo_transfer_prior_step_window=2` steps; recency (`bo_transfer_recency_lengthscale=4.0`), occupancy, and similarity weighting; `bo_transfer_weight_cap=0.35` |
+| `cumulative_refit` | `merge_bo_step_memories` of all prior steps |
+
+`build_transfer_surrogate` combines current and prior observations; trust logic (`bo_transfer_trust_patience`, `bo_transfer_mae_tolerance`) auto-disables transfer when it hurts fit. Step results expose `bo_transfer_used`, `bo_transfer_weight_share`, `bo_transfer_bad_rounds`, etc. on `SaturationStepResult` / `MultiMolSaturationStepResult` (written to saturation CSV/metadata).
+
+Multi-molecule saturation keeps **per-adsorbate** `BOStepMemory` chains (`_validate_distinct_bo_memories` prevents cross-species sharing). Pair with `saturation_autobatcher_reuse` to amortize GPU memory probes over many coverage steps.
+
+```mermaid
+flowchart TD
+    stepN[Saturation step N] --> bo[process_molecule_bayesian]
+    prior[BOStepMemory] -->|bo_transfer| bo
+    bo --> batched[InFlightAutoBatcher]
+    batched --> mem[BOStepMemory out]
+    mem --> stepNplus1[Step N+1]
+```
+
+### Multi-molecule saturation (`workflow/saturation.py`)
+
+When `multi_molecule_saturation=True` and multiple molecules are loaded:
+
+- Pre-resize once using the largest conformer.
+- Per-step placement budget via `distribute_placement_budget` proportional to `estimate_molecule_complexity`.
+- Each molecule screened independently; **lowest `E_ads` across all molecules wins the step**.
+- Returns a single `MultiMolSaturationRunResult` with `molecule_counts` and per-step `winning_molecule`.
+
+Single-molecule saturation returns a list of `SaturationRunResult` with `n_molecules_at_saturation` derived from committed steps.
+
+**Stop conditions:** best `E_ads ≥ 0`; no valid placements after topology guard; `saturation_max_steps` reached (default unlimited).
 
 ## Run modes and pipeline
 
-High-level flow (surface prep → references → conformers → placement → relaxation → filtering → persistence) is summarized in [docs/guides/architecture.rst](docs/guides/architecture.rst). This file focuses on code-level behavior.
+High-level narrative also appears in [docs/guides/architecture.rst](docs/guides/architecture.rst).
 
-**Standard screening** — enumerate placements, relax all sampled candidates, filter, rank.
+| Mode | Entry | Summary |
+|------|-------|---------|
+| Standard screening | `run_adsorption` / `process_molecule` | Sample N placements, parallel TorchSim relax, filter, return valid `ScreeningResult` list |
+| Bayesian screening | `run_adsorption_bo` / `process_molecule_bayesian` | BO over finite spec pool + batched MLIP relax |
+| Saturation | `run_saturation` | Sequential coverage until next adsorption is endothermic |
+| Saturation + BO | `run_saturation_bo` | Saturation with transfer-learning BO per step |
 
-**Bayesian screening** — same pipeline; surrogate-guided candidate selection (see **Bayesian screening** under **Implementation mechanics**).
+**Saturation notes:**
 
-**Sequential saturation** — repeat screening on an evolving slab until `E_ads ≥ 0` or no valid placements. Notable flags:
-
-- compare optimized structures to the post-prep substrate file (e.g. `clean_slab_Au20_POSCAR` when adatoms were deposited), not `clean_slab.xyz` from before adatoms;
-- auto-resize only on the first step (freeze reference is updated if the substrate is repeated in-plane);
-- `multi_molecule_saturation=True` with multiple molecules → competitive per-step selection;
-- `saturation_discard_topology_rearrangements=True` (default): connectivity-only guard on the full adsorbate pool before ranking (`adsorbate_connected_components`); set `False` for energy-only ranking; skipped when `skip_topology_check=True`.
-
-Adsorption energy: `E_ads = E_adsorbate+slab - E_slab - E_molecule`. Typed outputs (`ScreeningResult`, `SaturationRunResult`, `BindingCampaignResult`, …) are persisted via `io_results.py`.
+- `E_slab` refreshed each step; compare structures to post-adatom substrate files when adatoms were deposited.
+- Auto-resize only on first adsorption step per molecule/campaign path.
+- `saturation_discard_topology_rearrangements=True` (default): step-level connectivity guard before ranking.
 
 ## Material types and site generation
 
-`AdsorptionConfig.material_type` is one of `"slab"`, `"nanoparticle"`, or `"porous"`. Site dicts from `get_unified_sites` always include `material_type`; placement code requires that key when a site is provided (use `config.material_type` when there is no site).
+`material_type`: `"slab"`, `"nanoparticle"`, or `"porous"`. Affects PBC handling, Voronoi image replication, surface-normal construction, and adsorption distance validation (`placement/_material.material_aware_pbc`).
 
-This choice affects:
+Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `top_layer_tolerance`, `symmetry_tolerance`, `site_equivalence_tolerance` (default 0.05 Å).
 
-- periodic boundary handling,
-- adsorption-site discovery,
-- local surface-normal construction,
-- adsorption validation distances.
+## Typed data model (`models.py`)
 
-### Voronoi and symmetry
-
-Site discovery uses Voronoi over framework atoms (pipeline under **Site detection** in **Implementation mechanics**). Key hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `top_layer_tolerance`, `symmetry_tolerance`, `site_equivalence_tolerance`.
-
-`get_symmetry_aware_sites()` may raise `SymmetryAnalysisError`; the workflow then falls back to clustered Voronoi sites from `_get_unique_sites_for_specs` (see **How the workflow chooses sites**).
+| Type | Role |
+|------|------|
+| `ReferenceEnergies` | `slab_energy` + per-molecule energy dict |
+| `PlacementSpec` / `PlacementDescriptor` | Enumeration template vs realized placement metadata (site, orientation, tilt, quaternion, …) |
+| `ScreeningResult` | One validated placement: energies, `atoms`, `slab_size`, `distance`, descriptor |
+| `ScreeningRunResult` | Per-molecule results + `to_rows()` / `to_summary_row()` for CSV |
+| `SaturationStepResult` | Step index, best result, `all_results`, BO transfer diagnostics |
+| `SaturationRunResult` | Full step history for one molecule + `n_molecules_at_saturation` |
+| `MultiMolSaturationStepResult` | Competitive step: `winning_molecule`, per-molecule results, budgets |
+| `MultiMolSaturationRunResult` | Full competitive run + `molecule_counts`, `final_slab_atoms` |
+| `BindingCampaignResult` / `SaturationCampaignResult` | Campaign wrappers: mode, timing, failure summaries |
+| `BOStepMemory` | Transfer payload; helpers `windowed_bo_step_memories`, `merge_bo_step_memories` |
+| `MoleculeCampaignSummary` | Best E_ads, valid count, parallel/EN-down orientation counts |
+| `TimingInfo` | Per-stage wall times logged in `process_molecule` |
 
 ## Configuration model
 
-`AdsorptionConfig` centralizes both physical and workflow configuration.
+`AdsorptionConfig` centralizes physical and workflow knobs. Representative defaults (verify in `config.py` when debugging):
 
-Representative groups of fields are:
+| Field | Default |
+|-------|---------|
+| `model_name` | `"uma-s-1p1"` |
+| `num_placements` | `None` (GPU autotune) |
+| `conformer_sampling` | `"cycle"` |
+| `bo_surrogate` | `"ridge"` |
+| `bo_initial_sampling` | `"spread_xyz"` |
+| `bo_total_budget` | `18` acquisition batches |
+| `bo_transfer_enabled` | `True` |
+| `bo_transfer_mode` | `"weighted"` |
+| `bo_transfer_prior_step_window` | `2` |
+| `bo_transfer_weight_cap` | `0.35` |
+| `saturation_autobatcher_reuse` | `True` |
+| `autobatcher_max_memory_padding` | `0.5` |
+| `min_pbc_image_separation` | `8.0` Å |
 
 ### Sampling and placement
 
-- `num_conformers`, `num_placements` (default `None`: autotune to GPU parallel capacity via TorchSim memory probe at workflow start)
-- `placement_x_range`, `placement_y_range`, `placement_z_range`
-- `placement_z_scale_by_covalent_radius`
+- `num_conformers`, `num_placements`, `placement_x/y/z_range`, `placement_z_scale_by_covalent_radius`
+- `conformer_sampling`, `boltzmann_temperature`, `placement_filter` (optional callback)
+- `placement_retry_enabled`, `placement_retry_max_attempts`, `placement_retry_diversity_seed_increment`
 - `min_initial_distance`, `max_initial_distance`, `min_contact_ratio`
 - `flat_aromatic_parallel_fraction`, `adaptive_parallel_fraction`
-- `voronoi_probe_radius`, `voronoi_max_site_distance`, `voronoi_site_enrichment`
-- `site_classification_method` (`distance_ratio` or `delaunay` for slabs)
-- `rough_slab_local_z` (per-site surface reference on non-planar slabs)
+- Voronoi/classification: `voronoi_*`, `site_classification_method`, `rough_slab_local_z`, `hollow_site_dedup_tolerance`, `planar_z_variance_threshold`
+
+### Placement validation (initial geometry)
+
+- `strict_initial_placement`, `reject_vdw_overlaps`, `vdw_overlap_scale`
+- `min_contact_distance`, `min_contact_atoms`, `contact_distance_threshold`, `require_multiple_contact`
 
 ### Relaxation and validation
 
-- `model_name`, `device`
-- `fmax`, `stage1_steps`, `stage2_steps`, `reference_optimization_steps`
-- `relax_top_layer`, `freeze_symbols`
-- `min_interatomic_distance`, `max_force_convergence`
-- `binding_distance_threshold`, `max_adsorption_energy`
+- `model_name`, `device`, `fmax`, `stage1_steps`, `stage2_steps`, `reference_optimization_steps`
+- `relax_top_layer`, `preserve_slab_frame`, `freeze_symbols`, `optimize_isolated_sequentially`
+- `min_interatomic_distance`, `max_force_convergence`, `binding_distance_threshold`, `max_adsorption_energy`
+- `skip_desorption_check`, `skip_topology_check`
+- `connectivity_multipliers`, `energy_dedup_threshold`, `rmsd_dedup_threshold`
+- `min_adsorbate_separation` (saturation inter-adsorbate distance)
 
-### Reproducibility and strictness
+### Surface prep and TorchSim autobatching
 
-- `seed`
-- `fail_on_missing_reference`
-- `fail_on_conformer_failure`
-- `debug_write_initial_placements`
-
-### Surface sizing and runtime control
-
-- `auto_resize_slab`, `min_pbc_image_separation`
+- `slab_relaxation_mode`, `slab_relaxation_optimizer`, `slab_relaxation_fmax`, `slab_relaxation_steps`
+- `auto_resize_slab`, `min_pbc_image_separation`, `vacuum_box_size`
 - `ts_optimizer`, `steps_between_swaps`
 - `autobatcher_max_memory_padding`, `autobatcher_max_memory_scaler`, `autobatcher_max_atoms_to_try`
 - `saturation_autobatcher_reuse`, `saturation_autobatcher_reuse_growth_atoms`, `saturation_autobatcher_reuse_growth_fraction`
 
 ### Bayesian optimization
 
-- `bo_enabled`
-- `bo_initial_random`, `bo_batch_size` (default `None`: autotune), `bo_total_budget` (default `18` acquisition batches after the initial random batch)
-- `bo_ucb_kappa`, `bo_acquisition` (default `ei`), `bo_surrogate` (default `ridge`)
-- `bo_candidate_pool_size`
-- `bo_include_failure_negatives`
-- `bo_failure_penalty_default`, `bo_failure_penalty_overrides`
-- `bo_transfer_enabled` (default on) and `bo_transfer_*` (default weighted mode: 2-step window, similarity/recency lengthscales 4.0, occupancy decay)
+- `bo_enabled`, `bo_initial_random`, `bo_batch_size`, `bo_total_budget`
+- `bo_initial_sampling`, `bo_ucb_kappa`, `bo_acquisition`, `bo_surrogate`, `bo_candidate_pool_size`
+- `bo_include_failure_negatives`, `bo_failure_penalty_default`, `bo_failure_penalty_overrides`
+- `bo_transfer_enabled`, `bo_transfer_mode`, `bo_transfer_min_step_observations`, `bo_transfer_weight_cap`
+- `bo_transfer_similarity_lengthscale`, `bo_transfer_min_similarity`, `bo_transfer_trust_patience`, `bo_transfer_mae_tolerance`
+- `bo_transfer_exploration_fraction`, `bo_transfer_proximity_*`, `bo_transfer_prior_step_window`
+- `bo_transfer_recency_lengthscale`, `bo_transfer_occupancy_lengthscale`, `bo_transfer_occupancy_floor`
 
 ### Saturation behavior
 
-- `saturation`
-- `multi_molecule_saturation`
-- `saturation_save_all_placements`
-- `saturation_discard_topology_rearrangements` (default `True`: discard rearranged/coupled candidates before per-step best-slab selection)
-- `saturation_autobatcher_reuse`, `saturation_autobatcher_reuse_growth_atoms`, `saturation_autobatcher_reuse_growth_fraction`
+- `saturation`, `multi_molecule_saturation`, `saturation_save_all_placements`, `save_benchmark_dataset`
+- `saturation_discard_topology_rearrangements`, `saturation_max_steps`
 
-The `saturation` and `multi_molecule_saturation` fields are metadata and workflow-selection hints; the actual behavior is determined by which API is called and, for multi-molecule saturation, by the number of molecules loaded.
+### Reproducibility, I/O, strictness
 
-## Output model
+- `seed`, `fail_on_missing_reference`, `fail_on_conformer_failure`, `debug_write_initial_placements`
+- `write_vasp_inputs`, `vasp_*` parameters
 
-Default root: `results_{surface_type}/` with detailed/summary CSVs, `run_metadata.json`, and `xyz_structures/`. `vasp_inputs/` and reference-slab POSCAR files are written only when `write_vasp_inputs=True` (default `False`). Saturation runs optionally write `step_{NNN}_placements/` and `saturation_placements_detailed.csv` when `saturation_save_all_placements` is true. `write_run_metadata` and `write_run_settings` share the same metadata builder (later writes replace earlier content).
+The `saturation` and `multi_molecule_saturation` flags are metadata hints; actual behavior is determined by which API is called and how many molecules are loaded.
+
+## Output model and persistence
+
+Root directory: `results_{surface_type}/`.
+
+| File / directory | When written |
+|------------------|--------------|
+| `adsorption_energies_detailed.csv`, `adsorption_energy_summary.csv` | Binding campaigns |
+| `saturation_summary.csv`, `saturation_details.csv` | Saturation campaigns |
+| `saturation_placements_detailed.csv`, `xyz_structures/.../step_{NNN}_placements/` | `saturation_save_all_placements=True` (default) |
+| `adsorption_energies_detailed.csv` (flattened from saturation steps) | `save_benchmark_dataset=True` |
+| `ml_dataset.csv`, `ml_dataset_metadata.json` | `DatasetLogger` during CSV screening and saturation |
+| `xyz_structures/`, optional `vasp_inputs/` | Always / when `write_vasp_inputs=True` |
+| `run_settings.json`, `run_metadata.json` | Campaign `write_settings` / `write_metadata` flags |
+
+Rows include `schema_version` and computation context (`model_name`, `fmax`, `stage1_steps`, `stage2_steps`, `seed`, context hash) when config is passed to save helpers.
 
 ## Dataset logging and ML support
 
-The `ml` package is not limited to BO. It also supports:
+`DatasetLogger` (`ml/dataset.py`) appends `PlacementRecord` rows during CSV binding loops and saturation; flushed to `ml_dataset.csv`. `PlacementRecord.from_screening_result` captures placement descriptors and energies; deduplicated duplicates can be tagged `label_source="deduplicated_duplicate"` for ML training.
 
-- placement-level dataset logging,
-- schema-versioned context rows,
-- feature extraction from descriptors and saved datasets,
-- grouped cross-validation,
-- model training and evaluation,
-- prediction and ranking utilities.
+Public ML utilities beyond BO:
+
+- `extract_features` / `extract_features_from_dataset`
+- `train_model`, `evaluate_model`, `grouped_cross_validate`, `BindingEnergyPredictor`
+- `load_dataset`; `ml/reproduce.py` can rebuild `AdsorptionConfig` from saved context rows
+
+Schema versioning lives in `ml/schema.py` (`SCHEMA_VERSION`, `ComputationContext`).
+
+## Comparison with AdsorbML and BOSS
+
+Shared goal: find low-energy adsorbate–surface configurations and report \(E_\mathrm{ads} = E_\mathrm{adslab} - E_\mathrm{slab} - E_\mathrm{molecule}\).
+
+**References:** AdsorbML — Ulyssi et al., [npj Comput. Mater. 9, 172 (2023)](https://doi.org/10.1038/s41524-023-01121-5). BOSS — Todorović & Rinke, [npj Comput. Mater. 5, 103 (2019)](https://doi.org/10.1038/s41524-019-0175-2); [BOSS software](https://sites.utu.fi/boss/). Camphor benchmark — Järvi et al., [Beilstein J. Nanotechnol. 11, 140 (2020)](https://doi.org/10.3762/bjnano.11.140). Metalsurfer revisits BOSS landscapes in [`examples/camphor_cu111_binding_energy.py`](examples/camphor_cu111_binding_energy.py) (Zenodo [10.5281/zenodo.4680467](https://doi.org/10.5281/zenodo.4680467)) and C60/TiO₂(101) (Zenodo [10.5281/zenodo.2565933](https://doi.org/10.5281/zenodo.2565933)) with **qualitative MLIP** comparison to published DFT minima.
+
+### AdsorbML (catalysis screening, hybrid ML+DFT)
+
+| Aspect | AdsorbML | Metalsurfer |
+|--------|----------|-------------|
+| Energy oracle | ML ranks; **final energy from DFT** (SP or re-relax top-*k*) | **MLIP end-to-end** (UMA default); no built-in DFT tier |
+| Initial sampling | Heuristic sites + random surface points with z-rotation | Voronoi/Delaunay sites + discrete orientation/tilt/azimuth grid |
+| Parallelism | Relax all initial configs on GPU; rank | TorchSim **`InFlightAutoBatcher`**; GPU-autotuned `num_placements` |
+| Multi-step coverage | Not in scope | `run_saturation` / `run_saturation_bo` + per-step `E_slab` refresh; BO transfer |
+| Materials | OC20/OC22 catalysts; binding atoms in SMILES (*) | Slabs, nanoparticles, porous cells; general SMILES |
+| Validation | Desorption, dissociation, surface mismatch | Layered geometry/force/desorption/decomposition/saturation topology guards |
+| Benchmarks | OC20-Dense success vs DFT within 0.1 eV | Example scripts vs BOSS/Järvi DFT landscapes (qualitative MLIP) |
+
+AdsorbML treats ML as a **cheap ranker** and DFT as authoritative; Metalsurfer uses a generalizable MLIP as the sole relaxation engine for library throughput.
+
+### BOSS (global structure search, continuous BO)
+
+| Aspect | BOSS | Metalsurfer |
+|--------|------|-------------|
+| Search space | **Continuous** low-D phase space (building blocks + 6–20 DoF) | **Discrete** `PlacementSpec` grid, subsampled to budget |
+| Surrogate | **GP** on physical coordinates; eLCB acquisition | Descriptor-feature BO (ridge/trees/`ensemble`); optional GP inside `ensemble` only |
+| Geometry | Rigid blocks; relative translation/rotation | Full **atomistic MLIP** relaxation of adsorbate + partial slab |
+| Oracle cost | Expensive DFT/QC; minimal evaluations | Cheap **batched MLIP** via `InFlightAutoBatcher` |
+| Multi-step learning | Independent BO runs | Saturation **transfer learning** (`bo_transfer_*`) across steps |
+| Coverage | Not primary focus | Sequential saturation until \(E_\mathrm{ads} \ge 0\) |
+
+BOSS learns a **continuous PES** in a hand-crafted parameterization; Metalsurfer **enumerates discrete placements** and relaxes atomistically—closer to AdsorbML's "generate many, relax in parallel" spirit, with optional feature-space BO instead of coordinate-space GP-BO.
+
+### When to prefer which
+
+- **DFT-grade publication energies** on catalyst descriptors → AdsorbML-style hybrid (export Metalsurfer structures for external DFT).
+- **Bulky adsorbate, few effective DoF, DFT budget** → BOSS building-block + GP-BO.
+- **High-throughput screening, MOFs, nanoparticles, saturation** on MLIP → Metalsurfer.
+- **Many-step coverage with sample-efficient placement search** → `run_saturation_bo` (TorchSim batching + step-to-step BO transfer).
+- Metalsurfer BO is **BOSS-inspired in spirit** but operates on a finite enumerated pool with batched TorchSim relaxation—not a drop-in BOSS replacement.
+
+## Design heuristics and trade-offs
+
+- **Many placements, not one pose:** binding energy is the best of a sampled distribution after aggressive filtering—not a single user-specified geometry.
+- **Saturation proxy:** stop when the next adsorption is endothermic (`E_ads ≥ 0`), not at an explicit coverage fraction or chemical potential.
+- **Partial slab relaxation:** top layer free by default during adsorption; substrate prep uses separate ASE `slab_relaxation_mode`.
+- **Symmetry as accelerator:** symmetry-reduced sites until the covered slab breaks symmetry vs the reference structure.
+- **GPU-first TorchSim:** autotune parallel batch size; `InFlightAutoBatcher` packs relaxations; `saturation_autobatcher_reuse` amortizes probes on deep coverage runs.
+- **BO + transfer for coverage:** `run_saturation_bo` carries `BOStepMemory` across steps so later layers warm-start from an informed surrogate.
+- **Layered topology guards:** per-placement decomposition, saturation-step connectivity guard; `skip_topology_check` for expected bond breaking (e.g. H₂ dissociation).
+- **Substrate-only site view** on partially covered slabs so new placements target bare surface, not prior adsorbates.
+- **Compare to post-adatom substrate files** when adatoms were deposited during `prepare_slab`.
 
 ## Dependencies and runtime
 
-Core dependencies include `numpy`, `ase`, `pandas`, `rdkit`, `scipy`, `scikit-learn`, and `spglib`.
+Core: `numpy`, `ase`, `pandas`, `rdkit`, `scipy`, `scikit-learn`, `spglib`.
 
-Optional acceleration and model execution depend on packages such as `torch`, `torch-sim-atomistic`, and FairChem-related components. The package keeps these dependencies explicit and raises actionable errors when optional stacks are unavailable.
+Optional MLIP stack: `torch`, `torch-sim-atomistic`, FairChem/UMA components. Missing optional deps raise `DependencyMissingError` with install hints.
 
-The codebase is built for modern Python, currently Python 3.12+.
+Python **3.12+** (`requires-python` in `pyproject.toml`).
 
 ## Design summary
 
-Layers: surface prep → candidate enumeration → optimization → filtering → orchestration → I/O, with typed dataclasses between stages. BO and saturation are optional paths on the same core.
+Metalsurfer layers surface prep → discrete placement enumeration → **TorchSim parallel MLIP relaxation** → layered validation → campaign orchestration → typed I/O. Standard screening samples many placements per GPU wave; optional **feature-space BO** and **saturation with transfer learning** target deep coverage campaigns efficiently. The design prioritizes throughput on generalizable MLIPs across slabs, nanoparticles, and porous frameworks rather than DFT verification (AdsorbML) or continuous GP-BO in hand-built coordinates (BOSS). See **Design heuristics and trade-offs** and **Comparison with AdsorbML and BOSS** for rationale and positioning.

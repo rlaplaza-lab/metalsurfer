@@ -190,6 +190,9 @@ class AdsorptionConfig:
     # slabs instead of the global np.max(z).
     rough_slab_local_z: bool = True
     relax_top_layer: bool = True  # Allow relaxation of top layer atoms
+    preserve_slab_frame: bool = (
+        False  # Skip ensure_slab_z_alignment when loading a pre-built slab
+    )
     freeze_symbols: list[str] | None = (
         None  # List of element symbols to freeze during optimization
     )

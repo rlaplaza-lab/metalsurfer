@@ -4,7 +4,8 @@ Architecture
 This page describes the library architecture, public API layers, and
 computational data flow.  For the full technical reference see the
 `CORE_SYSTEM_EXPLANATION.md <https://github.com/rlaplaza/metalsurfer/blob/main/CORE_SYSTEM_EXPLANATION.md>`_
-file in the repository root.
+file in the repository root (including TorchSim GPU batching, saturation BO
+transfer learning, design heuristics, and comparisons with AdsorbML and BOSS).
 
 
 Public API Layers
@@ -23,7 +24,9 @@ accessed.
 
 **2. Surface Preparation** — :func:`~metalsurfer.prepare_slab` provides a
 single call for bulk→slab construction, alloy substitution, and adatom
-deposition.
+deposition.  Set ``preserve_slab_frame=True`` on :class:`~metalsurfer.AdsorptionConfig`
+when loading a pre-built or DFT slab so the frame is kept intact (skips
+``ensure_slab_z_alignment``).
 
 **3. Mid-Level Per-Molecule APIs** — useful for embedding metalsurfer
 inside custom research loops:
@@ -92,9 +95,10 @@ surrogate-guided loop:
 
 Supported acquisition functions: ``lcb``, ``ei``, ``pi``.
 Supported surrogates: ``random_forest``, ``extra_trees``,
-``gradient_boost``, ``ridge``.  Per-sample transfer weights (``bo_transfer_*``)
-apply only to tree surrogates; ``gradient_boost`` and ``ridge`` use
-unweighted fits when those weights would otherwise be passed.
+``gradient_boost``, ``ridge``, ``ensemble``.  Per-sample transfer weights
+(``bo_transfer_*``) apply to tree surrogates, ``ridge``, and ``ensemble``;
+``gradient_boost`` rejects sample weights and cannot be used with
+``bo_transfer_enabled``.
 
 **Sequential Saturation** evolves the slab state step by step — run
 screening, optionally filter step candidates with the topology rearrangement
