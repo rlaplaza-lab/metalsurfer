@@ -99,7 +99,7 @@ def main():
         print(str(exc))
         return 1
 
-    # Load H-saturated slab and finalize for campaign APIs (PBC, constraints).
+    # Load H-saturated slab and prepare for campaign APIs (PBC, constraints).
     saturated_atoms = read(saturated_xyz)
 
     config = AdsorptionConfig(

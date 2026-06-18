@@ -60,6 +60,7 @@ dmypy.json
 Thumbs.db
 
 # Project-specific: run outputs and caches
+logs/
 results_test_ethene/
 results_*/
 results*/

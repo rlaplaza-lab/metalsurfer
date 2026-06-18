@@ -107,9 +107,6 @@ def main():
     results_dir = f"results_{results_subdir}"
     os.makedirs(results_dir, exist_ok=True)
 
-    slab = _load_go_slab("random/R1")
-    logging.info("GO slab (random R1): %d atoms", len(slab))
-
     config = AdsorptionConfig(
         material_type="slab",
         slab_relaxation_mode="none",  # keep published GO geometry
@@ -130,6 +127,9 @@ def main():
         # bo_total_budget = acquisition batches after initial (not total evals).
         bo_total_budget=2,  # 100 initial + 2×100 ≈ 300 evaluations
     )
+
+    slab = _load_go_slab("random/R1")
+    logging.info("GO slab (random R1): %d atoms", len(slab))
 
     slab = prepare_substrate(
         slab=slab,
