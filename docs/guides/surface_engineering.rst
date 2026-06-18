@@ -26,7 +26,7 @@ Campaign-ready substrates
 -------------------------
 
 Import all prep helpers from :mod:`metalsurfer.surface_prep` (see
-:doc:`../api/surface_prep`). Before ``run_adsorption``, ``run_saturation``, or
+:doc:`Substrate preparation <../api/surface_prep>`). Before ``run_adsorption``, ``run_saturation``, or
 related APIs, the substrate must have:
 
 - **Equilibrated ionic positions** — :func:`~metalsurfer.surface_prep.prepare_substrate`
@@ -112,6 +112,12 @@ For more control, use the individual helpers from :mod:`metalsurfer.surface_prep
    )
 
    slab = finalize_substrate(slab, config)
+
+This fast path calls :func:`~metalsurfer.surface_prep.finalize_substrate` without
+:func:`~metalsurfer.surface_prep.relax_substrate`, so it does **not** equilibrate
+ionic positions. Use the energy-ranked variant below (or
+:func:`~metalsurfer.surface_prep.prepare_substrate`) when you need the default
+``ionic_only`` reference geometry.
 
 **Energy-ranked variant selection** (recommended for realistic modified
 surfaces):
@@ -212,12 +218,12 @@ relaxation after adding adatoms:
 For structures loaded from file or ASE ``Atoms``, choose ``slab_relaxation_mode``
 explicitly:
 
-- **``"none"``** — keep published or campaign-produced coordinates (MOF CIF,
+- ``"none"`` — keep published or campaign-produced coordinates (MOF CIF,
   paper DFT slabs, graphene-oxide models, saturation intermediate XYZ). Used by
   ``examples/co2_mof_binding_energy.py``, ``examples/camphor_cu111_binding_energy.py``,
   ``scripts/furanics_go*_binding_energy.py``, and
   ``scripts/vanillin_on_h_saturated_ni111.py`` for the loaded slab.
-- **``"ionic_only"``** (default) — equilibrate hand-built clusters or
+- ``"ionic_only"`` (default) — equilibrate hand-built clusters or
   unequilibrated ``Atoms`` before campaigns (e.g. ``examples/h2_pt12_binding_energy.py``).
 
 ``relax_top_layer=True`` on ``prepare_substrate`` controls which substrate atoms
@@ -229,7 +235,7 @@ Slab freeze during adsorption and saturation
 
 Prep equilibration and adsorption freeze are **separate stages**:
 
-1. **Prep (``prepare_substrate``):** ``slab_relaxation_mode`` (default
+1. **Prep** (:func:`~metalsurfer.surface_prep.prepare_substrate`): ``slab_relaxation_mode`` (default
    ``"ionic_only"``) equilibrates substrate **ionic positions** with ASE/MLIP.
    The returned structure is the optimized reference for ``E(slab)``.
 2. **Prep (finalize):** ``relax_top_layer``, ``freeze_symbols``, and
@@ -239,10 +245,10 @@ Prep equilibration and adsorption freeze are **separate stages**:
    substrate reference (``frozen_indices_from_constraints``). Campaign APIs
    log which substrate atoms are frozen vs free at workflow start.
 
-**Default (``relax_top_layer=False``):** every substrate atom is frozen during
+**Default** (``relax_top_layer=False``): every substrate atom is frozen during
 placement relaxation — the standard choice for rigid-surface binding energies.
 
-**Surface relaxation shortcut (``relax_top_layer=True``):** interior atoms stay
+**Surface relaxation shortcut** (``relax_top_layer=True``): interior atoms stay
 fixed; which atoms remain free depends on
 :attr:`~metalsurfer.AdsorptionConfig.material_type` and
 ``top_layer_tolerance``:
@@ -264,7 +270,7 @@ catalyst descriptors and rigid binding energies, keep the default.
 to the substrate before calling campaign APIs, or call lower-level helpers and
 finalize with custom constraints instead of ``relax_top_layer``.
 
-**Symbol-specific freeze (``freeze_symbols=[...]``):** only listed elements are
+**Symbol-specific freeze** (``freeze_symbols=[...]``): only listed elements are
 frozen; layer policy is ignored.
 
 Saturation stores ``base_slab`` once after ``prepare_substrate``; indices on that

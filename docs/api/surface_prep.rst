@@ -1,5 +1,5 @@
-Substrate preparation (``metalsurfer.surface_prep``)
-=====================================================
+Substrate preparation
+=====================
 
 All substrate and material preparation lives in :mod:`metalsurfer.surface_prep`.
 Import from this module — campaign APIs validate substrates but never align,
@@ -10,7 +10,7 @@ Layout conventions and worked examples: :doc:`../guides/surface_engineering`.
 Two stages: prep equilibration vs adsorption freeze
 ---------------------------------------------------
 
-**Prep equilibration (``prepare_substrate``)**
+**Prep equilibration** (:func:`~metalsurfer.surface_prep.prepare_substrate`)
 
 By default, :func:`~metalsurfer.surface_prep.prepare_substrate` **relaxes substrate
 ionic positions** with ASE/MLIP (``AdsorptionConfig.slab_relaxation_mode="ionic_only"``).

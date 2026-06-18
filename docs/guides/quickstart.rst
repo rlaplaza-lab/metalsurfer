@@ -1,6 +1,20 @@
 Quick Start
 ===========
 
+Core idea
+---------
+
+Metalsurfer is substrate-agnostic: pass any ASE ``Atoms`` object—periodic slab,
+fully periodic porous framework, or non-periodic cluster—after optional prep
+with :func:`~metalsurfer.surface_prep.prepare_substrate` (equilibration, PBC,
+ASE ``FixAtoms``). Supply adsorbates as SMILES; the library builds conformers,
+finds adsorption sites (Voronoi-based, material-aware via
+:class:`~metalsurfer.AdsorptionConfig.material_type`), deposits candidates with
+orientation/height sampling, relaxes with an MLIP, validates geometry, and
+ranks by adsorption energy. The four ``run_*`` campaign APIs orchestrate
+screening, Bayesian placement search, or sequential saturation on that pipeline.
+
+
 Installation
 ------------
 
@@ -97,20 +111,32 @@ You can also pass a CSV path instead of an in-memory list:
        surface_type="Ru001",
    )
 
-ASE ``Atoms`` objects are accepted directly — no manual wrapping needed.
-Slab layout conventions are described in :doc:`surface_engineering`.
+Campaign APIs accept plain ASE ``Atoms`` or :class:`~metalsurfer.surface_prep.SlabContainer`,
+but the structure must be **campaign-ready** before the call: PBC matching
+``AdsorptionConfig.material_type``, adequate cell/vacuum, and (typically) ASE
+``FixAtoms`` from prep. Define :class:`~metalsurfer.AdsorptionConfig` first,
+build the substrate with ASE, then pass it to
+:func:`~metalsurfer.surface_prep.prepare_substrate` via ``slab=``. Layout
+conventions are described in :doc:`surface_engineering`.
+
+**Slab** — :func:`~metalsurfer.surface_prep.prepare_substrate` equilibrates ions
+by default (``slab_relaxation_mode="ionic_only"``), applies bottom-anchored
+z-layout, PBC, freeze constraints, and validation:
 
 .. code-block:: python
 
    from ase.build import fcc111
    from metalsurfer import AdsorptionConfig, run_adsorption
-   from metalsurfer.surface_prep import create_slab_from_atoms, finalize_substrate
+   from metalsurfer.surface_prep import prepare_substrate
 
-   slab = finalize_substrate(
-       create_slab_from_atoms(fcc111("Ru", size=(3, 3, 3), vacuum=12.0)),
-       AdsorptionConfig(material_type="slab", seed=42),
-   )
    config = AdsorptionConfig(material_type="slab", seed=42)
+
+   slab_atoms = fcc111("Ru", size=(3, 3, 3), vacuum=12.0)
+   slab = prepare_substrate(
+       slab=slab_atoms,
+       config=config,
+       results_dir="results_ru111_from_ase",
+   )
 
    result = run_adsorption(
        slab=slab,
@@ -118,6 +144,54 @@ Slab layout conventions are described in :doc:`surface_engineering`.
        config=config,
        surface_type="ru111_from_ase_atoms",
    )
+
+**Nanoparticle** — no slab z-alignment; set ``material_type="nanoparticle"`` and
+use a vacuum box large enough for placement (see
+``examples/h2_pt12_binding_energy.py``):
+
+.. code-block:: python
+
+   from ase import Atoms
+   from metalsurfer import AdsorptionConfig, run_adsorption
+   from metalsurfer.surface_prep import prepare_substrate
+
+   config = AdsorptionConfig(material_type="nanoparticle", seed=42)
+
+   cluster_atoms = Atoms(
+       "Pt4",
+       positions=[[0, 0, 0], [2.5, 0, 0], [1.25, 2.2, 0], [3.75, 2.2, 0]],
+       cell=[20, 20, 20],
+       pbc=False,
+   )
+   slab = prepare_substrate(
+       slab=cluster_atoms,
+       config=config,
+       results_dir="results_pt4_nanoparticle",
+   )
+
+   result = run_adsorption(
+       slab=slab,
+       molecules=[("[H][H]", "H2")],
+       config=config,
+       surface_type="pt4_nanoparticle",
+   )
+
+**Already equilibrated?** When ionic positions must not change, set
+``slab_relaxation_mode="none"`` on *config* and use
+:func:`~metalsurfer.surface_prep.finalize_substrate` instead of the full
+:func:`~metalsurfer.surface_prep.prepare_substrate` call. For
+``material_type="slab"``, this applies bottom-anchored z-layout, PBC,
+``FixAtoms``, and validation only (no MLIP relaxation). For nanoparticles and
+porous frameworks, z-alignment is skipped; PBC and constraints still apply:
+
+.. code-block:: python
+
+   from metalsurfer.surface_prep import finalize_substrate
+
+   config = AdsorptionConfig(material_type="slab", slab_relaxation_mode="none", seed=42)
+   slab = finalize_substrate(slab_atoms, config)
+
+For step-by-step bulk, alloy, and adatom workflows see :doc:`surface_engineering`.
 
 
 Bayesian Screening
@@ -172,7 +246,11 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, run_saturation
+   from metalsurfer import (
+       AdsorptionConfig,
+       MultiMolSaturationRunResult,
+       run_saturation,
+   )
    from metalsurfer.surface_prep import prepare_substrate
 
    config = AdsorptionConfig(
@@ -196,8 +274,11 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
        surface_type="Ru001_sat",
    )
 
-   for result in campaign.runs:
-       print(result.molecule, result.n_molecules_at_saturation)
+   for entry in campaign.runs:
+       if isinstance(entry, MultiMolSaturationRunResult):
+           print(entry.molecules, entry.n_molecules_at_saturation)
+       else:
+           print(entry.molecule, entry.n_molecules_at_saturation)
 
 ``molecules`` accepts either an in-memory ``(smiles, name)`` list or a CSV path.
 

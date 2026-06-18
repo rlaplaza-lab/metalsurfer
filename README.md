@@ -4,6 +4,8 @@
 
 Library for adsorption on arbitrary materials (slabs, nanoparticles, and periodic porous frameworks).
 
+Metalsurfer is substrate-agnostic: pass any ASE `Atoms` object—periodic slab, fully periodic porous framework, or non-periodic cluster—after optional prep with `prepare_substrate` (equilibration, PBC, ASE `FixAtoms`). Supply adsorbates as SMILES; the library builds conformers, finds adsorption sites (Voronoi-based, material-aware via `AdsorptionConfig.material_type`), deposits candidates with orientation/height sampling, relaxes with an MLIP, validates geometry, and ranks by adsorption energy. The four `run_*` campaign APIs orchestrate screening, Bayesian placement search, or sequential saturation on that pipeline.
+
 **Documentation**: https://metalsurfer.readthedocs.io
 
 ## Install
@@ -52,9 +54,15 @@ python examples/ethene_ru_slab_binding_energy.py
 python examples/bipyridine_au111_defects_saturation_raw.py
 ```
 
-The HPC-oriented copy of this workflow is `scripts/bipyridine_au111_defects_saturation_raw.py`.
+### Camphor on Cu(111) (Bayesian, GPU-heavy)
+```bash
+# BO placement search on a literature DFT slab (slab_relaxation_mode="none")
+python examples/camphor_cu111_binding_energy.py
+```
 
-These examples span Pt, Ru, MOF, and Au(111); the same API accepts any ASE `Atoms` or prepared slab.
+The HPC-oriented copy of the bipyridine workflow is `scripts/bipyridine_au111_defects_saturation_raw.py`.
+
+These examples span Pt, Ru, MOF, Au(111), and Cu(111); the same API accepts any ASE `Atoms` or prepared slab.
 
 - Use pure ASE for receptor preparation (or `prepare_substrate` from a bulk id)
 - Quick demos use modest explicit placement counts; omit `num_placements` to autotune to GPU parallel capacity (see `AdsorptionConfig`)
@@ -335,7 +343,7 @@ This choice affects site generation, adsorption validation, and distance handlin
 
 ## What the core pipeline does
 
-Across all run modes, the library follows the same structure:
+See the introduction above for the high-level mental model. Across all run modes, the library follows the same structure:
 
 1. Build or accept a surface structure.
 2. Generate and deduplicate molecular conformers.

@@ -31,7 +31,7 @@ adsorption). For pre-built or DFT slabs pass
 ``align=False`` and/or ``slab_relaxation_mode="none"`` when the geometry must
 not move. Size in-plane with
 :func:`~metalsurfer.surface_prep.resize_substrate_for_molecule` **before**
-calling campaign APIs. See :doc:`../api/surface_prep`.
+calling campaign APIs. See :doc:`Substrate preparation <../api/surface_prep>`.
 
 **3. Mid-Level Per-Molecule APIs** — useful for embedding metalsurfer
 inside custom research loops:
@@ -44,7 +44,7 @@ inside custom research loops:
 **4. Infrastructure APIs** — placement generation, optimization, filtering,
 and result persistence helpers importable from the top-level ``metalsurfer``
 namespace. Substrate construction and prep orchestration live in
-:mod:`metalsurfer.surface_prep` (see :doc:`../api/surface_prep`).
+:mod:`metalsurfer.surface_prep` (see :doc:`Substrate preparation <../api/surface_prep>`).
 
 
 End-to-End Computational Flow

@@ -1,6 +1,8 @@
 # Examples
 
-Runnable demos from the project root (after `pip install -e ".[mlip]"`).
+Runnable demos from the project root (after `pip install -e ".[mlip]"`). Each script
+defines `AdsorptionConfig` first, then calls `prepare_substrate` from
+`metalsurfer.surface_prep` before the campaign API.
 
 | Script | Description |
 |--------|-------------|
