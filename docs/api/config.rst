@@ -41,6 +41,7 @@ Key Attributes
    "saturation_save_all_placements", "bool", "True", "Write every validated placement per saturation step under step_*_placements/ and saturation_placements_detailed.csv"
    "saturation_discard_topology_rearrangements", "bool", "True", "Connectivity-only guard before per-step best-slab selection in saturation"
    "multi_molecule_saturation", "bool", "False", "Competitive multi-molecule saturation when multiple adsorbates are loaded"
+   "save_benchmark_dataset", "bool", "False", "Flatten saturation step placements to adsorption_energies_detailed.csv for benchmarking"
    "autobatcher_max_memory_padding", "float", "0.5", "TorchSim autobatcher headroom fraction; used during GPU capacity probing when autotuning placements"
    "autobatcher_max_memory_scaler", "float | None", "None", "Optional TorchSim memory scaler override; when set, also drives autotuned placement counts"
    "bo_enabled", "bool", "False", "Enable Bayesian optimization for placement selection"

@@ -164,7 +164,10 @@ The default output root is ``results_{surface_type}/``.  Common artifacts:
 - ``adsorption_energy_summary.csv`` — aggregate statistics per molecule.
 - ``saturation_details.csv`` / ``saturation_summary.csv`` — saturation
   step results.
-- ``run_metadata.json`` — timing, counts, and config snapshot.
+- ``saturation_placements_detailed.csv`` and ``step_{NNN}_placements/`` when
+  ``saturation_save_all_placements=True`` (default).
+- ``run_settings.json`` — config snapshot (default when ``write_settings=True``).
+- ``run_metadata.json`` — timing and run counts (when ``write_metadata=True``).
 - ``xyz_structures/`` — optimized structures in XYZ format.
 - ``vasp_inputs/`` — optional POSCAR/INCAR/KPOINTS bundles for DFT follow-up
   (written only when ``write_vasp_inputs=True``).

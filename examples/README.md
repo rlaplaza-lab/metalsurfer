@@ -14,7 +14,8 @@ defines `AdsorptionConfig` first, then calls `prepare_substrate` from
 
 Demos set explicit small `num_placements` for quick runs. For production screening, omit
 `num_placements` (and BO batch fields) to autotune to GPU parallel capacity via TorchSim
-memory probing at workflow start.
+memory probing at workflow start. For saturation with Bayesian placement search, use
+`run_saturation_bo` (or `bo_enabled=True` on `AdsorptionConfig`).
 
 `prepare_substrate` equilibrates substrate ionic positions by default (`slab_relaxation_mode="ionic_only"`) and freezes the entire substrate during adsorption by default. `relax_top_layer=True` leaves the exposed surface free; which atoms depend on `material_type` (slab top layer, nanoparticle outer shell, porous pore boundary). See the [surface engineering guide](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html). Loaded experimental or saturation slabs use `slab_relaxation_mode="none"` (e.g. `co2_mof`, `camphor_cu111`, `scripts/furanics_go*_binding_energy.py`, `scripts/vanillin_on_h_saturated_ni111.py` for the loaded slab).
 

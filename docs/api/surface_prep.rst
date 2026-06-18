@@ -227,6 +227,14 @@ Building-block reference
 
 .. autofunction:: metalsurfer.surface_prep.create_slab_from_atoms
 
+.. autofunction:: metalsurfer.surface_prep.substitute_alloy
+
+.. autofunction:: metalsurfer.surface_prep.deposit_adatoms
+
+.. autofunction:: metalsurfer.surface_prep.coerce_slab_container
+
+.. autofunction:: metalsurfer.surface_prep.compute_minimum_supercell
+
 .. autofunction:: metalsurfer.surface_prep.auto_resize_substrate_for_molecule
 
 .. autoclass:: metalsurfer.surface_prep.SlabContainer

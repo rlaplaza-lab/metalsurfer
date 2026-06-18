@@ -128,7 +128,7 @@ Prepare substrates **outside** campaign APIs:
 
 - Use a large enough `supercell` in `prepare_substrate`, or call `auto_resize_substrate_for_molecule` / `resize_substrate_for_molecule` (from `metalsurfer.surface_prep`) after conformer generation.
 - `min_pbc_image_separation` (default 8 Å) controls the resize helper.
-- Campaign APIs validate image separation and raise if the slab is undersized.
+- Campaign entry validates PBC, slab anchoring, vacuum, and freeze constraints. Adsorbate-size / in-plane image-separation checks run after conformer generation (use the resize helpers during prep when needed).
 
 ### 1. Standard Screening
 
@@ -149,7 +149,7 @@ slab = prepare_substrate(
     bulk_id="mp-33",
     miller_indices=(0, 0, 1),
     config=config,
-    results_dir="results_Ru001",
+    results_dir="results_Ru0001",
 )
 
 molecules = [
@@ -162,7 +162,7 @@ result = run_adsorption(
     slab=slab,
     molecules=molecules,
     config=config,
-    surface_type="Ru001",
+    surface_type="Ru0001",
 )
 
 print(result.mode)
@@ -185,14 +185,14 @@ slab = prepare_substrate(
     bulk_id="mp-33",
     miller_indices=(0, 0, 1),
     config=config,
-    results_dir="results_Ru001",
+    results_dir="results_Ru0001",
 )
 
 result = run_adsorption(
     slab=slab,
     molecules="molecules.csv",
     config=config,
-    surface_type="Ru001",
+    surface_type="Ru0001",
 )
 ```
 
@@ -217,14 +217,14 @@ slab = prepare_substrate(
     bulk_id="mp-33",
     miller_indices=(0, 0, 1),
     config=config,
-    results_dir="results_Ru001_bo",
+    results_dir="results_Ru0001_bo",
 )
 
 result = run_adsorption_bo(
     slab=slab,
     molecules=[("O=C=O", "co2"), ("O", "water")],
     config=config,
-    surface_type="Ru001_bo",
+    surface_type="Ru0001_bo",
 )
 
 print(result.mode)
@@ -247,8 +247,7 @@ Relevant BO configuration fields live on `AdsorptionConfig`:
 Saturation mode repeatedly adsorbs the current best configuration onto the evolving slab until adsorption is no longer favorable or no valid placements remain.
 
 ```python
-from metalsurfer import AdsorptionConfig, run_saturation
-from metalsurfer.models import MultiMolSaturationRunResult
+from metalsurfer import AdsorptionConfig, MultiMolSaturationRunResult, run_saturation
 from metalsurfer.surface_prep import prepare_substrate
 
 config = AdsorptionConfig(
@@ -262,16 +261,16 @@ slab = prepare_substrate(
     bulk_id="mp-33",
     miller_indices=(0, 0, 1),
     config=config,
-    results_dir="results_Ru001_sat",
+    results_dir="results_Ru0001_sat",
 )
 
-# Persists to results_Ru001_sat/ when save_results=True (default), using the same
+# Persists to results_Ru0001_sat/ when save_results=True (default), using the same
 # config (per-step best slabs plus step_*_placements/ when saturation_save_all_placements is true).
 campaign = run_saturation(
     slab=slab,
     molecules="molecules.csv",
     config=config,
-    surface_type="Ru001_sat",
+    surface_type="Ru0001_sat",
 )
 
 for entry in campaign.runs:
@@ -311,7 +310,7 @@ slab = prepare_substrate(
     adatom_symbol="Sn",
     adatom_coverage=0.20,
     config=config,
-    results_dir="results_Ru001",
+    results_dir="results_Ru0001",
     adatom_relaxation_mode="ionic_only",  # optional: full clean slab once, ionic-only after adatoms
 )
 ```
@@ -364,7 +363,8 @@ The output directory is `results_{surface_type}`. Depending on run mode, the lib
 - `saturation_details.csv`
 - `saturation_placements_detailed.csv` (saturation runs when `saturation_save_all_placements` is true: one row per step × placement with paths and descriptor context)
 - `saturation_summary.csv`
-- `run_metadata.json`
+- `run_settings.json` (default when `write_settings=True` on campaign APIs)
+- `run_metadata.json` (when `write_metadata=True` on campaign APIs)
 - `xyz_structures/...`
 - `vasp_inputs/...` (only when `write_vasp_inputs=True`)
 
@@ -388,6 +388,7 @@ pip install -e ".[dev]"    # GPU stack: ".[mlip,dev]"
 ruff check . && ruff format --check . && mypy src/metalsurfer
 python -m pytest tests/ -m "not dependency_behavior and not mlip and not gpu and not slow" \
   --cov=src/metalsurfer --cov-report=term-missing --tb=short -v
+coverage report --fail-under=74
 ```
 
 CI parity, coverage gates, GPU/slow test jobs: [development guide](https://metalsurfer.readthedocs.io/en/latest/guides/development.html). Architecture: [CORE_SYSTEM_EXPLANATION.md](CORE_SYSTEM_EXPLANATION.md).

@@ -60,7 +60,7 @@ Orchestration helpers used by campaigns:
 
 **Filtering:** `filter_results`, `check_decomposition`, `check_desorption`.
 
-**I/O:** `setup_directories`, `save_molecule_results`, `save_single_molecule_results`, `screening_run_result`, `save_summary_results`, `save_saturation_results`, `save_multi_mol_saturation_results`, `write_run_metadata`, `write_run_metadata_from_out`, `write_run_settings`.
+**I/O:** `setup_directories`, `save_molecule_results`, `save_single_molecule_results`, `screening_run_result`, `save_summary_results`, `save_saturation_results`, `save_multi_mol_saturation_results`, `write_run_metadata`, `write_run_settings` (`write_run_metadata_from_out` is internal to campaigns).
 
 **ML:** `DatasetLogger`, `PlacementRecord`, `ComputationContext`, `BindingEnergyPredictor`, `extract_features`, `extract_features_from_dataset`, `train_model`, `evaluate_model`, `grouped_cross_validate`, `load_dataset`.
 

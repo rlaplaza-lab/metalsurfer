@@ -230,6 +230,62 @@ explicitly:
 move **during adsorption**, not prep equilibration (e.g. top GO layer or
 H-covered Ni surface).
 
+
+.. _large-adsorbates-in-plane-sizing:
+
+Large adsorbates and in-plane sizing
+------------------------------------
+
+Campaign entry points validate the substrate geometry only — they do **not** know
+adsorbate size yet. Once conformers are generated for a molecule,
+:func:`~metalsurfer.workflow.shared.prepare_substrate_for_screening` re-validates
+the slab using the maximum pairwise distance across conformers (the **molecule
+diameter**) plus :attr:`~metalsurfer.AdsorptionConfig.min_pbc_image_separation`
+(default 8 Å). If the in-plane cell is too small, screening raises
+:class:`~metalsurfer.exceptions.GeometryValidationError` with the minimum
+``(nx, ny)`` repeat factors needed.
+
+For periodic slabs and porous frameworks, expand the substrate **during prep**
+(after conformer generation, before ``run_*``) with
+:func:`~metalsurfer.surface_prep.resize_substrate_for_molecule`:
+
+.. code-block:: python
+
+   from metalsurfer import AdsorptionConfig, create_conformers_from_smiles
+   from metalsurfer.surface_prep import prepare_substrate, resize_substrate_for_molecule
+
+   config = AdsorptionConfig(material_type="slab", seed=42)
+   slab = prepare_substrate(
+       bulk_id="mp-33",
+       miller_indices=(0, 0, 1),
+       supercell=(2, 2, 1),
+       config=config,
+       results_dir="results_demo",
+   )
+
+   smiles = "c1ccc2ccccc2c1"  # naphthalene — example of a wider adsorbate
+   conformer_pack = create_conformers_from_smiles(smiles, config=config)
+   if conformer_pack is None:
+       raise RuntimeError("conformer generation failed")
+   conformers, _ = conformer_pack
+
+   slab = resize_substrate_for_molecule(slab, conformers, config)
+
+   # slab is ready for run_adsorption / run_saturation
+
+When a campaign screens several molecules, resize against the **largest**
+conformer set (widest diameter) so every adsorbate passes validation.
+
+For ``material_type="nanoparticle"``, periodic images do not interact
+(``pbc=False``); use a vacuum box large enough for the cluster plus the
+adsorbate extent instead of in-plane supercell repeats.
+
+Lower-level helper :func:`~metalsurfer.surface_prep.auto_resize_substrate_for_molecule`
+returns ``(slab, was_resized)`` without re-applying PBC and constraints;
+prefer :func:`~metalsurfer.surface_prep.resize_substrate_for_molecule` unless you
+are chaining custom prep steps yourself.
+
+
 Slab freeze during adsorption and saturation
 --------------------------------------------
 
@@ -278,9 +334,8 @@ reference stay fixed as adsorbates accumulate. Earlier adsorbate units may relax
 in later steps. After adatom deposition, compare structures to the post-adatom
 reference (e.g. ``clean_slab_Au20``), not ``clean_slab`` from before deposition.
 
-In-plane supercell expansion must be done during prep
-(``auto_resize_substrate_for_molecule`` / ``resize_substrate_for_molecule``) before
-calling campaign APIs.
+See :ref:`large-adsorbates-in-plane-sizing` for when and how to expand the
+in-plane cell for wide adsorbates.
 
 
 Material Type

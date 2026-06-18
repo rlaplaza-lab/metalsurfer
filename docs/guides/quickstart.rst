@@ -9,7 +9,7 @@ fully periodic porous framework, or non-periodic cluster—after optional prep
 with :func:`~metalsurfer.surface_prep.prepare_substrate` (equilibration, PBC,
 ASE ``FixAtoms``). Supply adsorbates as SMILES; the library builds conformers,
 finds adsorption sites (Voronoi-based, material-aware via
-:class:`~metalsurfer.AdsorptionConfig.material_type`), deposits candidates with
+:attr:`~metalsurfer.AdsorptionConfig.material_type`), deposits candidates with
 orientation/height sampling, relaxes with an MLIP, validates geometry, and
 ranks by adsorption energy. The four ``run_*`` campaign APIs orchestrate
 screening, Bayesian placement search, or sequential saturation on that pipeline.
@@ -79,7 +79,7 @@ molecule list in memory and you want a typed
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
        config=config,
-       results_dir="results_Ru001",
+       results_dir="results_Ru0001",
    )
 
    molecules = [
@@ -92,7 +92,7 @@ molecule list in memory and you want a typed
        slab=slab,
        molecules=molecules,
        config=config,
-       surface_type="Ru001",
+       surface_type="Ru0001",
    )
 
    print(result.mode)                # "non_bo"
@@ -108,11 +108,12 @@ You can also pass a CSV path instead of an in-memory list:
        slab=slab,
        molecules="molecules.csv",
        config=config,
-       surface_type="Ru001",
+       surface_type="Ru0001",
    )
 
 Campaign APIs accept plain ASE ``Atoms`` or :class:`~metalsurfer.surface_prep.SlabContainer`,
-but the structure must be **campaign-ready** before the call: PBC matching
+but the structure must be **campaign-ready** before the call: **equilibrated ionic
+positions** (from prep unless ``slab_relaxation_mode="none"``), PBC matching
 ``AdsorptionConfig.material_type``, adequate cell/vacuum, and (typically) ASE
 ``FixAtoms`` from prep. Define :class:`~metalsurfer.AdsorptionConfig` first,
 build the substrate with ASE, then pass it to
@@ -145,9 +146,9 @@ z-layout, PBC, freeze constraints, and validation:
        surface_type="ru111_from_ase_atoms",
    )
 
-**Nanoparticle** — no slab z-alignment; set ``material_type="nanoparticle"`` and
-use a vacuum box large enough for placement (see
-``examples/h2_pt12_binding_energy.py``):
+**Nanoparticle** — minimal Pt₄ snippet below; the runnable
+``examples/h2_pt12_binding_energy.py`` uses the same workflow with a 12-atom Pt
+cluster:
 
 .. code-block:: python
 
@@ -217,14 +218,14 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
        config=config,
-       results_dir="results_Ru001_bo",
+       results_dir="results_Ru0001_bo",
    )
 
    result = run_adsorption_bo(
        slab=slab,
        molecules=[("O=C=O", "co2"), ("O", "water")],
        config=config,
-       surface_type="Ru001_bo",
+       surface_type="Ru0001_bo",
    )
 
 Relevant BO configuration fields on :class:`~metalsurfer.AdsorptionConfig`:
@@ -264,14 +265,14 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
        config=config,
-       results_dir="results_Ru001_sat",
+       results_dir="results_Ru0001_sat",
    )
 
    campaign = run_saturation(
        slab=slab,
        molecules="molecules.csv",
        config=config,
-       surface_type="Ru001_sat",
+       surface_type="Ru0001_sat",
    )
 
    for entry in campaign.runs:
@@ -298,7 +299,8 @@ Important saturation behaviors:
   (``auto_resize_substrate_for_molecule`` / ``resize_substrate_for_molecule``) before
   calling campaign APIs.
 - When ``bo_enabled=True``, the saturation loop can reuse prior-step BO
-  observations through the ``bo_transfer_*`` settings.
+  observations through the ``bo_transfer_*`` settings (or call
+  :func:`~metalsurfer.run_saturation_bo`, which forces BO on).
 - When ``multi_molecule_saturation=True`` and multiple molecules are provided
   (in-memory list or CSV), the workflow switches to competitive saturation.
 - By default, ``saturation_discard_topology_rearrangements=True`` validates the
@@ -307,7 +309,11 @@ Important saturation behaviors:
   inter-adsorbate coupling or unexpected splitting is not propagated. Set
   ``False`` to rank by ``E_ads`` only; the guard is skipped when
   ``skip_topology_check=True``.
-- By default, runs persist XYZ structures and CSV tables only. Set
+- By default, ``saturation_save_all_placements=True`` writes every validated
+  placement per step under ``step_{NNN}_placements/`` plus
+  ``saturation_placements_detailed.csv``. Set ``saturation_save_all_placements=False``
+  to persist only per-step best structures.
+- By default, runs persist XYZ structures and CSV tables. Set
   ``write_vasp_inputs=True`` to also write ``vasp_inputs/`` placement bundles
   and reference-slab POSCAR files during surface prep.
 
