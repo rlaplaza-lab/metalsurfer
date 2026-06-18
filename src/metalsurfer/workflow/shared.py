@@ -408,6 +408,7 @@ def prepare_substrate_for_screening(
         material_type=config.material_type,
         config=config,
         conformers=conformers,
+        require_bottom_anchor=False,
     )
     slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab_for_frozen)
     effective_base_slab_for_frozen = (

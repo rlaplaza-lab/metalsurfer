@@ -110,6 +110,7 @@ def finalize_substrate(
     *,
     conformers: list[Atoms] | None = None,
     align: bool | None = None,
+    require_bottom_anchor: bool | None = None,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
     top_layer_tolerance: float = 0.5,
@@ -134,6 +135,9 @@ def finalize_substrate(
     container = coerce_slab_container(slab)
     material_type = cfg.material_type
     should_align = align if align is not None else material_type == "slab"
+    check_bottom_anchor = (
+        should_align if require_bottom_anchor is None else require_bottom_anchor
+    )
     if material_type == "slab" and should_align:
         container.atoms = ensure_slab_z_alignment(container.atoms)
     apply_material_pbc(container.atoms, material_type)
@@ -149,6 +153,7 @@ def finalize_substrate(
         material_type=material_type,
         config=cfg,
         conformers=conformers,
+        require_bottom_anchor=check_bottom_anchor,
     )
     return container
 
@@ -324,10 +329,16 @@ def prepare_substrate(
         elif material_type == "nanoparticle":
             slab_container.atoms = _anchor_atoms_bottom(slab_container.atoms)
 
+    if material_type == "slab" and should_align:
+        slab_container.atoms = ensure_slab_z_alignment(slab_container.atoms)
+    elif material_type == "nanoparticle":
+        slab_container.atoms = _anchor_atoms_bottom(slab_container.atoms)
+
     return finalize_substrate(
         slab_container,
         cfg,
         align=False,
+        require_bottom_anchor=should_align,
         relax_top_layer=relax_top_layer,
         freeze_symbols=freeze_symbols,
         top_layer_tolerance=top_layer_tolerance,

@@ -208,6 +208,7 @@ def validate_substrate(
     material_type: str,
     config: AdsorptionConfig | None = None,
     conformers: list[Atoms] | None = None,
+    require_bottom_anchor: bool = True,
 ) -> None:
     """Validate that *slab* is ready for campaign API entry points.
 
@@ -221,7 +222,7 @@ def validate_substrate(
 
     z_min = float(np.min(pos[:, 2]))
     z_max = float(np.max(pos[:, 2]))
-    if material_type == "slab" and abs(z_min) > 0.05:
+    if material_type == "slab" and require_bottom_anchor and abs(z_min) > 0.05:
         raise GeometryValidationError(
             f"Substrate is not bottom-anchored (min(z)={z_min:.3f} A; expected ~0). "
             "Call ensure_slab_z_alignment during substrate preparation."
@@ -333,6 +334,7 @@ def accept_substrate_for_api(
         material_type=config.material_type,
         config=config,
         conformers=conformers,
+        require_bottom_anchor=False,
     )
     return container
 
