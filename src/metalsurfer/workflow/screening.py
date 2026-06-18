@@ -13,7 +13,7 @@ from ..ml.dataset import DatasetLogger
 from ..ml.schema import PlacementRecord
 from ..models import ReferenceEnergies, ScreeningRunResult, build_molecule_summary
 from ..optimization import setup_single_model
-from ..surfaces import SlabContainer, coerce_slab_container
+from ..surfaces import SlabContainer, accept_substrate_for_api
 from .reference import calculate_reference_energies
 from .shared import load_molecules, load_molecules_from_pairs
 
@@ -52,7 +52,7 @@ def _setup_screening_run(
         else:
             logger.info("No molecules to process")
         return None
-    slab_container = coerce_slab_container(slab, material_type=config.material_type)
+    slab_container = accept_substrate_for_api(slab, config=config)
     t_ref_start = time.perf_counter()
     ref = calculate_reference_energies(
         slab_container,
@@ -80,7 +80,7 @@ def _run_screening_common(
     if config is None:
         config = AdsorptionConfig()
 
-    slab = coerce_slab_container(slab, material_type=config.material_type)
+    slab = accept_substrate_for_api(slab, config=config)
 
     t_run_start = time.perf_counter()
     with log_context(surface_type=surface_type, seed=config.seed):

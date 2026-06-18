@@ -30,7 +30,7 @@ from .models import (
 )
 from .optimization import setup_single_model
 from .placement import classify_adsorbate_orientation
-from .surfaces import SlabContainer, coerce_slab_container
+from .surfaces import SlabContainer, accept_substrate_for_api
 from .workflow import (
     calculate_reference_energies,
     process_molecule,
@@ -138,7 +138,7 @@ def _run_binding_campaign(
     if not molecules:
         raise ValueError("molecules must be a non-empty list")
     process_kwargs = process_kwargs or {}
-    slab = coerce_slab_container(slab, material_type=config.material_type)
+    slab = accept_substrate_for_api(slab, config=config)
     t_start = time.perf_counter()
 
     setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
@@ -247,7 +247,7 @@ def run_adsorption(
     Parameters
     ----------
     slab:
-        :class:`~metalsurfer.surfaces.SlabContainer` or plain :class:`ase.Atoms`.
+        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
     molecules:
         In-memory ``(smiles, name)`` list or path to a CSV with ``smiles`` and ``name`` columns.
     config:
@@ -308,7 +308,7 @@ def run_adsorption_bo(
     Parameters
     ----------
     slab:
-        :class:`~metalsurfer.surfaces.SlabContainer` or plain :class:`ase.Atoms`.
+        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
     molecules:
         In-memory list or CSV path (``smiles``, ``name``).
     config:
@@ -443,7 +443,7 @@ def run_saturation(
     Parameters
     ----------
     slab:
-        :class:`~metalsurfer.surfaces.SlabContainer` or plain :class:`ase.Atoms`.
+        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
     molecules:
         In-memory list or CSV path (default ``"smiles.csv"``).
     config:
@@ -499,7 +499,7 @@ def run_saturation_bo(
     Parameters
     ----------
     slab:
-        :class:`~metalsurfer.surfaces.SlabContainer` or plain :class:`ase.Atoms`.
+        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
     molecules:
         In-memory list or CSV path (default ``"smiles.csv"``).
     config:

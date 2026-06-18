@@ -144,7 +144,6 @@ class ComputationContext:
     site_equivalence_tolerance: float = 0.05
     hollow_site_dedup_tolerance: float = 0.1
     planar_z_variance_threshold: float = 0.01
-    relax_top_layer: bool = True
 
     @classmethod
     def from_config(cls, config: AdsorptionConfig) -> "ComputationContext":
@@ -164,7 +163,6 @@ class ComputationContext:
             site_equivalence_tolerance=config.site_equivalence_tolerance,
             hollow_site_dedup_tolerance=config.hollow_site_dedup_tolerance,
             planar_z_variance_threshold=config.planar_z_variance_threshold,
-            relax_top_layer=config.relax_top_layer,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -504,9 +502,6 @@ class PlacementRecord:
             ),
             planar_z_variance_threshold=float(
                 _ctx_value("planar_z_variance_threshold", 0.01)
-            ),
-            relax_top_layer=_parse_bool(
-                _ctx_value("relax_top_layer", True), default=True
             ),
         )
 

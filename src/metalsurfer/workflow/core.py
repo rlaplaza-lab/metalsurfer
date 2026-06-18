@@ -15,7 +15,7 @@ from ..ml.schema import PlacementRecord
 from ..models import PlacementDescriptor, ReferenceEnergies, ScreeningResult
 from ..optimization import (
     clear_autobatcher_cache,
-    compute_frozen_indices,
+    frozen_indices_from_constraints,
     optimize_adsorbate_slab_batched,
 )
 from ..placement import generators as placement_generators
@@ -23,7 +23,6 @@ from ..placement.generators import enumerate_placement_specs
 from ..surfaces import SlabContainer
 from .shared import (
     PlacementFailureEvent,
-    _compute_slab_energy,
     _evaluate_optimized_candidate,
     _infer_surface_symbols,
     _materialize_spec_placements,
@@ -32,7 +31,6 @@ from .shared import (
     build_representative_relaxation_atoms,
     prepare_substrate_for_screening,
     resolve_workload_config,
-    write_substrate_step_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -146,8 +144,6 @@ def process_molecule(
     extra_ml_records_out: list[PlacementRecord] | None = None,
     saturation_reuse: bool = False,
     symmetry_broken: bool = False,
-    allow_auto_resize: bool = True,
-    step_metadata_out: dict[str, object] | None = None,
 ) -> list[ScreeningResult] | None:
     """Run the full placement-optimise-validate pipeline for one molecule."""
     if config is None:
@@ -177,8 +173,6 @@ def process_molecule(
             extra_ml_records_out=extra_ml_records_out,
             saturation_reuse=saturation_reuse,
             symmetry_broken=symmetry_broken,
-            allow_auto_resize=allow_auto_resize,
-            step_metadata_out=step_metadata_out,
         )
 
 
@@ -198,8 +192,6 @@ def _process_molecule_body(
     extra_ml_records_out: list[PlacementRecord] | None = None,
     saturation_reuse: bool = False,
     symmetry_broken: bool = False,
-    allow_auto_resize: bool = True,
-    step_metadata_out: dict[str, object] | None = None,
 ) -> list[ScreeningResult] | None:
     t_mol_start = time.perf_counter()
     logger.info(
@@ -245,24 +237,10 @@ def _process_molecule_body(
         conformers,
         base_slab_for_frozen,
         config,
-        allow_auto_resize=allow_auto_resize,
     )
     slab = substrate_ref.slab
     slab_for_sites = substrate_ref.slab_for_sites
     effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
-
-    if substrate_ref.slab_was_resized:
-        clear_autobatcher_cache()
-        E_slab = _compute_slab_energy(
-            slab.atoms, calculator, label="resized slab reference"
-        )
-        logger.info("Resized slab energy: %.4f eV", E_slab)
-
-    write_substrate_step_metadata(
-        step_metadata_out,
-        slab_was_resized=substrate_ref.slab_was_resized,
-        substrate_atoms_after_resize=substrate_ref.substrate_atoms_after_resize,
-    )
 
     t0 = time.perf_counter()
     all_combined: list[Atoms] = []
@@ -281,7 +259,7 @@ def _process_molecule_body(
         if effective_base_slab_for_frozen is not None
         else slab.atoms
     )
-    frozen_indices = compute_frozen_indices(freeze_ref, config)
+    frozen_indices = frozen_indices_from_constraints(freeze_ref)
     representative_atoms = build_representative_relaxation_atoms(
         conformers,
         slab.atoms,
@@ -386,12 +364,10 @@ def _process_molecule_body(
     if base_slab_for_frozen is not None:
         logger.info(
             "Saturation surface reference: full_slab_atoms=%d, "
-            "surface_ref_atoms=%d, freeze_ref_atoms=%d, frozen_policy=%s, "
-            "surface_symbols=%s",
+            "surface_ref_atoms=%d, freeze_ref_atoms=%d, surface_symbols=%s",
             len(slab.atoms),
             len(slab_for_sites),
             len(effective_base_slab_for_frozen or slab.atoms),
-            "top_layer" if config.relax_top_layer else "full_substrate",
             surface_symbols,
         )
     results: list[ScreeningResult] = []

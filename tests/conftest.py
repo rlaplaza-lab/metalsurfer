@@ -163,7 +163,9 @@ def make_slab(
     spacing: float = 2.7,
     symbol: str = "Ru",
 ) -> Atoms:
-    """Build a simple FCC(111)-like slab."""
+    """Build a campaign-ready FCC(111)-like slab with constraints attached."""
+    from metalsurfer.surface_prep import apply_surface_constraints
+
     a = 2.7
     positions = []
     for lz in range(n_layers):
@@ -173,12 +175,13 @@ def make_slab(
                 y = iy * a + (lz % 2) * a / 2
                 z = lz * spacing
                 positions.append([x, y, z])
-    return Atoms(
+    atoms = Atoms(
         symbols=[symbol] * len(positions),
         positions=positions,
-        cell=[nx * a, ny * a, n_layers * spacing + 15.0],
-        pbc=[True, True, True],
+        cell=[nx * a, ny * a, max(18.0, n_layers * spacing + 15.0)],
+        pbc=[True, True, False],
     )
+    return apply_surface_constraints(atoms)
 
 
 # ---------------------------------------------------------------------------

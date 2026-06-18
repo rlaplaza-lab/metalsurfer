@@ -18,6 +18,7 @@ from .exceptions import (
     OptimizationError,
 )
 from .io_results import _write_clean_xyz
+from .optimization import compute_frozen_indices, frozen_indices_from_constraints
 
 logger = logging.getLogger(__name__)
 SLAB_RELAXATION_MODE = Literal["none", "ionic_only", "cell_only", "full"]
@@ -27,6 +28,25 @@ DEFAULT_SLAB_TOP_VACUUM_ANG = 15.0
 _INVERTED_SLAB_VACUUM_MARGIN_ANG = 1.0
 # Keep in sync with workflow.shared.MIN_CALCULATOR_CELL_C_ANG
 _MIN_CALCULATOR_CELL_C_ANG = 18.0
+_CELL_DET_EPS = 1e-8
+
+
+def _cell_determinant(cell: np.ndarray) -> float:
+    return float(np.linalg.det(cell))
+
+
+def _fractional_spans(atoms: Atoms) -> np.ndarray:
+    """Return fractional coordinate span along each lattice vector."""
+    frac = atoms.get_scaled_positions(wrap=False)
+    return np.max(frac, axis=0) - np.min(frac, axis=0)
+
+
+def _vacuum_margins_ang(atoms: Atoms) -> np.ndarray:
+    """Vacuum margin (Å) along each lattice direction from fractional spans."""
+    cell = np.array(atoms.get_cell(), dtype=float)
+    frac_span = _fractional_spans(atoms)
+    lengths = np.array([float(np.linalg.norm(cell[i])) for i in range(3)])
+    return lengths * (1.0 - frac_span)
 
 
 def _import_chain(exc: BaseException | None) -> list[BaseException]:
@@ -133,32 +153,182 @@ def ensure_slab_z_alignment(
     return aligned
 
 
-def coerce_slab_container(
-    slab: SlabContainer | Atoms,
+def apply_surface_constraints(
+    atoms: Atoms,
     *,
-    material_type: str | None = None,
-    preserve_slab_frame: bool = False,
-) -> SlabContainer:
-    """Normalize slab-like input to :class:`SlabContainer`.
+    relax_top_layer: bool = False,
+    freeze_symbols: list[str] | None = None,
+    top_layer_tolerance: float = 0.5,
+) -> Atoms:
+    """Attach ASE ``FixAtoms`` to *atoms* according to the surface freeze policy.
+
+    Call during substrate preparation **before** passing the structure to
+    campaign API entry points. Placement relaxation reads these constraints via
+    ``frozen_indices_from_constraints`` only.
+
+    Default ``relax_top_layer=False`` freezes every substrate atom. Set
+    ``relax_top_layer=True`` to freeze only subsurface atoms (top layer free).
+    """
+    result = atoms.copy()
+    frozen = compute_frozen_indices(
+        result,
+        relax_top_layer=relax_top_layer,
+        freeze_symbols=freeze_symbols,
+        top_layer_tolerance=top_layer_tolerance,
+    )
+    result.set_constraint(FixAtoms(indices=frozen))
+    return result
+
+
+def coerce_slab_container(slab: SlabContainer | Atoms) -> SlabContainer:
+    """Normalize slab-like input to :class:`SlabContainer` without modification.
 
     Accepts either a pre-wrapped ``SlabContainer`` or a plain ASE ``Atoms``
     object. ``Atoms`` inputs are defensively copied to avoid mutating caller
-    state across workflow steps.
-
-    When *material_type* is ``"slab"`` and *preserve_slab_frame* is false,
-    applies :func:`ensure_slab_z_alignment`.
+    state across workflow steps. Geometry alignment, sizing, and constraints
+    must be applied via the prep helpers before calling campaign APIs.
     """
     if isinstance(slab, SlabContainer):
-        container = slab
-    elif isinstance(slab, Atoms):
-        container = SlabContainer(slab.copy())
-    else:
-        raise TypeError(
-            f"slab must be a SlabContainer or ase.Atoms, got {type(slab).__name__}"
+        return SlabContainer(slab.atoms.copy())
+    if isinstance(slab, Atoms):
+        return SlabContainer(slab.copy())
+    raise TypeError(
+        f"slab must be a SlabContainer or ase.Atoms, got {type(slab).__name__}"
+    )
+
+
+def validate_substrate(
+    slab: Atoms,
+    *,
+    material_type: str,
+    config: AdsorptionConfig | None = None,
+    conformers: list[Atoms] | None = None,
+) -> None:
+    """Validate that *slab* is ready for campaign API entry points.
+
+    Raises :class:`~metalsurfer.exceptions.GeometryValidationError` when the
+    substrate is misaligned, undersized, or incompatible with *material_type*.
+    """
+    cfg = config if config is not None else AdsorptionConfig()
+    pos = slab.get_positions()
+    if len(pos) == 0:
+        raise GeometryValidationError("Substrate has no atoms")
+
+    z_min = float(np.min(pos[:, 2]))
+    z_max = float(np.max(pos[:, 2]))
+    if material_type == "slab" and abs(z_min) > 0.05:
+        raise GeometryValidationError(
+            f"Substrate is not bottom-anchored (min(z)={z_min:.3f} A; expected ~0). "
+            "Call ensure_slab_z_alignment during substrate preparation."
         )
 
-    if material_type == "slab" and not preserve_slab_frame:
-        container.atoms = ensure_slab_z_alignment(container.atoms)
+    cell = np.array(slab.get_cell(), dtype=float)
+    c_len = float(np.linalg.norm(cell[2]))
+    pbc = np.array(slab.get_pbc(), dtype=bool)
+    expected_pbc = {
+        "slab": [True, True, False],
+        "porous": [True, True, True],
+        "nanoparticle": [False, False, False],
+    }.get(material_type)
+    if expected_pbc is None:
+        raise GeometryValidationError(
+            f"Unknown material_type={material_type!r}; "
+            "expected 'slab', 'porous', or 'nanoparticle'"
+        )
+    if not np.array_equal(pbc, expected_pbc):
+        raise GeometryValidationError(
+            f"Substrate PBC {pbc.tolist()} is inconsistent with "
+            f"material_type={material_type!r} (expected {expected_pbc}). "
+            "Set PBC on the ASE Atoms object during preparation."
+        )
+
+    cell_det = _cell_determinant(cell)
+    if material_type in ("slab", "porous") and abs(cell_det) <= _CELL_DET_EPS:
+        raise GeometryValidationError(
+            f"Substrate cell is degenerate (det={cell_det:.2e}). "
+            "Provide a non-zero periodic cell during preparation."
+        )
+
+    if material_type == "slab":
+        a_len = float(np.linalg.norm(cell[0]))
+        b_len = float(np.linalg.norm(cell[1]))
+        if a_len <= _CELL_DET_EPS or b_len <= _CELL_DET_EPS:
+            raise GeometryValidationError(
+                f"Slab in-plane lattice vectors must be positive (a={a_len:.3f} A, "
+                f"b={b_len:.3f} A)."
+            )
+        if c_len <= 0.0:
+            raise GeometryValidationError("Slab cell c-vector length must be positive")
+        vacuum_above = c_len - z_max
+        if vacuum_above < DEFAULT_SLAB_TOP_VACUUM_ANG * 0.5:
+            raise GeometryValidationError(
+                f"Insufficient vacuum above the top surface layer "
+                f"({vacuum_above:.1f} A above z_max). "
+                f"Call ensure_slab_z_alignment with at least "
+                f"{DEFAULT_SLAB_TOP_VACUUM_ANG:.0f} A top vacuum."
+            )
+        if c_len < _MIN_CALCULATOR_CELL_C_ANG:
+            raise GeometryValidationError(
+                f"Slab c-vector ({c_len:.1f} A) is below the minimum "
+                f"{_MIN_CALCULATOR_CELL_C_ANG:.0f} A required by the calculator. "
+                "Extend vacuum via ensure_slab_z_alignment during preparation."
+            )
+
+    if material_type == "porous" and c_len < _MIN_CALCULATOR_CELL_C_ANG:
+        raise GeometryValidationError(
+            f"Porous cell c-vector ({c_len:.1f} A) is below the minimum "
+            f"{_MIN_CALCULATOR_CELL_C_ANG:.0f} A required by the calculator."
+        )
+
+    if material_type == "nanoparticle" and abs(cell_det) > _CELL_DET_EPS:
+        margins = _vacuum_margins_ang(slab)
+        min_margin = float(np.min(margins))
+        if min_margin < cfg.min_pbc_image_separation:
+            raise GeometryValidationError(
+                f"Nanoparticle simulation cell is too tight "
+                f"(minimum vacuum margin {min_margin:.1f} A along a lattice "
+                f"direction; need at least {cfg.min_pbc_image_separation:.1f} A). "
+                "Build a larger orthorhombic cell around the cluster before "
+                "calling campaign APIs."
+            )
+
+    if not frozen_indices_from_constraints(slab):
+        logger.warning(
+            "Substrate has no FixAtoms constraints; all %d substrate atoms will "
+            "relax during adsorption. Call apply_surface_constraints during "
+            "substrate preparation to freeze atoms.",
+            len(slab),
+        )
+
+    if conformers:
+        diameter = _molecule_diameter(conformers)
+        nx, ny = compute_minimum_supercell(
+            cell,
+            diameter,
+            cfg.min_pbc_image_separation,
+        )
+        if nx > 1 or ny > 1:
+            raise GeometryValidationError(
+                f"In-plane periodic image separation is too small for adsorbate "
+                f"diameter {diameter:.1f} A (needs repeat at least ({nx}, {ny}, 1)). "
+                "Call auto_resize_substrate_for_molecule during substrate preparation."
+            )
+
+
+def accept_substrate_for_api(
+    slab: SlabContainer | Atoms,
+    *,
+    config: AdsorptionConfig,
+    conformers: list[Atoms] | None = None,
+) -> SlabContainer:
+    """Wrap, validate, and return a substrate ready for campaign APIs."""
+    container = coerce_slab_container(slab)
+    validate_substrate(
+        container.atoms,
+        material_type=config.material_type,
+        config=config,
+        conformers=conformers,
+    )
     return container
 
 
@@ -287,18 +457,18 @@ def create_slab_from_atoms(
     atoms: Atoms,
     *,
     material_type: str = "slab",
-    preserve_slab_frame: bool = False,
+    align: bool = True,
 ) -> SlabContainer:
     """Wrap an existing ASE ``Atoms`` object into a :class:`SlabContainer`.
 
-    When *material_type* is ``"slab"`` and *preserve_slab_frame* is false,
-    applies :func:`ensure_slab_z_alignment`.
+    When *material_type* is ``"slab"`` and *align* is true, applies
+    :func:`ensure_slab_z_alignment`. Pass ``align=False`` for pre-aligned
+    DFT or experimental structures.
     """
-    return coerce_slab_container(
-        atoms,
-        material_type=material_type,
-        preserve_slab_frame=preserve_slab_frame,
-    )
+    container = coerce_slab_container(atoms)
+    if material_type == "slab" and align:
+        container.atoms = ensure_slab_z_alignment(container.atoms)
+    return container
 
 
 # ---------------------------------------------------------------------------
@@ -424,7 +594,7 @@ def substitute_alloy(
     if config is None:
         config = AdsorptionConfig()
 
-    slab = coerce_slab_container(slab, material_type=config.material_type)
+    slab = coerce_slab_container(slab)
 
     if not 0.0 <= guest_fraction <= 1.0:
         raise ValueError(
@@ -616,7 +786,7 @@ def deposit_adatoms(
         relaxation_steps=relaxation_steps,
     )
 
-    slab = coerce_slab_container(slab, material_type=config.material_type)
+    slab = coerce_slab_container(slab)
 
     if not 0.0 <= coverage_fraction <= 1.0:
         raise ValueError(
@@ -794,19 +964,17 @@ def compute_minimum_supercell(
     return (nx, ny)
 
 
-def auto_resize_slab_for_molecule(
+def auto_resize_substrate_for_molecule(
     slab: SlabContainer | Atoms,
     conformers: list[Atoms],
     min_separation: float = 8.0,
-    *,
-    material_type: str = "slab",
 ) -> tuple[SlabContainer, bool]:
     """Resize *slab* in-plane so periodic images are well separated.
 
     Returns ``(slab, was_resized)`` where *was_resized* is ``True``
     when the cell was expanded.
     """
-    slab = coerce_slab_container(slab, material_type=material_type)
+    slab = coerce_slab_container(slab)
 
     diameter = _molecule_diameter(conformers)
     cell = np.array(slab.atoms.get_cell())

@@ -31,9 +31,9 @@ With `save_results=True` (default):
 
 ### 2. Surface preparation API
 
-`prepare_slab(...)` in `metalsurfer.surface_prep` builds or loads a slab, then optionally applies alloy substitution and adatom deposition. Separate ASE relaxation knobs exist for initial slab creation (`create_relaxation_*`) vs post-adatom equilibration (`adatom_relaxation_*`). Writes `clean_slab*` artifacts under `results_dir`.
+`prepare_substrate(...)` in `metalsurfer.surface_prep` builds or loads a slab, **equilibrates ionic positions by default** (`slab_relaxation_mode="ionic_only"`), optionally applies alloy substitution and adatom deposition, and attaches ASE `FixAtoms` via prep kwargs (`relax_top_layer`, `freeze_symbols`; default: entire substrate frozen). Prep-time relaxation knobs mirror `AdsorptionConfig.slab_relaxation_*`. Writes `clean_slab*` artifacts under `results_dir`.
 
-Also exported: `create_slab_from_bulk`, `create_slab_from_atoms`, `substitute_alloy`, `deposit_adatoms`, `auto_resize_slab_for_molecule`, `compute_minimum_supercell`.
+Also exported from `metalsurfer.surface_prep`: `finalize_substrate`, `relax_substrate`, `resize_substrate_for_molecule`, `create_slab_from_bulk`, `create_slab_from_atoms`, `substitute_alloy`, `deposit_adatoms`, `auto_resize_substrate_for_molecule`, `compute_minimum_supercell`.
 
 ### 3. Workflow APIs (internal)
 
@@ -56,7 +56,7 @@ Orchestration helpers used by campaigns:
 
 **Surfaces and placement:** `enumerate_placement_specs`, `generate_placement_from_spec`, `generate_placement_from_descriptor`, `calculate_min_distance`, `get_symmetry_aware_sites`, `get_symmetry_info`.
 
-**Optimization:** `setup_calculator`, `setup_single_model`, `setup_torchsim_model`, `TorchSimCalculator`, `optimize_isolated_molecules_batched`, `optimize_adsorbate_slab_batched`, `batch_static`, `precompute_results`, `identify_top_layer_indices`, `compute_frozen_indices`.
+**Optimization:** `setup_calculator`, `setup_single_model`, `setup_torchsim_model`, `TorchSimCalculator`, `optimize_isolated_molecules_batched`, `optimize_adsorbate_slab_batched`, `batch_static`, `precompute_results`, `identify_top_layer_indices`, `compute_frozen_indices`, `frozen_indices_from_constraints`.
 
 **Filtering:** `filter_results`, `check_decomposition`, `check_desorption`.
 
@@ -76,7 +76,7 @@ Across run modes the physical stages are: surface prep → reference energies �
 
 ```mermaid
 flowchart TD
-    prep[prepare_slab / SlabContainer] --> ref[calculate_reference_energies]
+    prep[prepare_substrate / SlabContainer] --> ref[calculate_reference_energies]
     ref --> conf[create_conformers_from_smiles]
     conf --> sub[prepare_substrate_for_screening]
     sub --> sites[_resolve_site_context_for_sampling]
@@ -112,7 +112,7 @@ computed in `workflow/shared._evaluate_optimized_candidate`.
 - **Saturation** recomputes `E_slab` every step from the current (partially covered) slab via `slab_energy_override`. Isolated `E_molecule` stays from the initial `calculate_reference_energies` call.
 - Reference `E_molecule` is the **lowest energy among MLIP-optimized conformers** per molecule (`workflow/reference.py`).
 - Clean-slab reference energy must be finite and not ~0; otherwise `OptimizationError` is raised.
-- If auto-resize expands the substrate on step 1, slab energy is recomputed before placements (`workflow/core.py`).
+- Undersized in-plane cells are rejected at campaign entry; expand during prep with `resize_substrate_for_molecule` / `auto_resize_substrate_for_molecule` from `metalsurfer.surface_prep`.
 
 ## Campaign routing and entry points
 
@@ -128,8 +128,8 @@ Both binding paths share `process_fn` = `process_molecule` or `process_molecule_
 
 - `config.py`: `AdsorptionConfig` and validation.
 - `models.py`: typed contracts for references, placements, screening, saturation, timing, campaigns.
-- `surfaces.py`: slab construction, alloys, adatoms, supercell resizing, `SlabContainer`.
-- `surface_prep.py`: `prepare_slab` orchestration.
+- `surfaces.py`: slab construction, alloys, adatoms, supercell resizing, validation, `SlabContainer`.
+- `surface_prep/`: canonical substrate prep API (`prepare_substrate`, `finalize_substrate`, re-exports).
 - `conformers.py`: SMILES → conformers, isolated optimization, conformer selection.
 - `placement/`: sites (`sites.py`), geometry (`geometry.py`), material-aware PBC (`_material.py`), policy (`policy.py`), generators (`generators.py`).
 - `symmetry.py`: `spglib`-based symmetry and site orbits.
@@ -154,7 +154,18 @@ Workflow subpackage:
 
 ### Surfaces and slab containers
 
-`SlabContainer` wraps ASE `Atoms` with metadata. `create_slab_from_bulk` builds from Materials Project bulk IDs; `create_slab_from_atoms` accepts user structures. Both normalize via `ensure_slab_z_alignment` unless `preserve_slab_frame=True` (skip z-alignment for pre-built/DFT slabs). `auto_resize_slab_for_molecule` expands in-plane supercells when PBC image separation is below `min_pbc_image_separation`.
+:mod:`metalsurfer.surface_prep` is the canonical import path for all substrate
+and material preparation. See [surface_prep API](docs/api/surface_prep.rst) for the full API.
+
+**Prep (before campaign APIs):** `prepare_substrate`
+(recommended), or lower-level helpers finalized with
+`finalize_substrate`. Optional in-plane sizing via
+`resize_substrate_for_molecule` after conformer
+generation. `relax_substrate` equilibrates loaded or pre-built slabs when
+`slab_relaxation_mode` is set. `create_slab_from_bulk` and `create_slab_from_atoms` align geometry
+but are not campaign-ready until PBC and constraints are applied.
+
+**Campaign entry points:** `run_adsorption`, `run_saturation`, and related APIs call `accept_substrate_for_api` / `validate_substrate` only—they do not align, resize, or rewrite constraints. Freeze policy during adsorbate relaxation is read from ASE `FixAtoms` on the substrate reference via `frozen_indices_from_constraints`.
 
 ### Site detection (`placement/sites.py`)
 
@@ -198,9 +209,9 @@ RDKit embed + MMFF relax; MLIP energy scoring via `batch_static` when available.
 
 ### Surface preparation relaxation vs adsorption relaxation
 
-**Prep (ASE):** `slab_relaxation_mode` (`none`, `ionic_only`, `cell_only`, `full`) during `prepare_slab` / `create_slab_from_bulk` / `deposit_adatoms`. Outputs `clean_slab.xyz` (pre-adatom) and e.g. `clean_slab_Au20.xyz` (post-adatom)—compare optimized adsorption structures to the **post-adatom** reference, not pre-adatom files.
+**Prep (ASE):** `slab_relaxation_mode` (`none`, `ionic_only`, `cell_only`, `full`; default `ionic_only`) during `prepare_substrate` / `relax_substrate` / `create_slab_from_bulk` / `deposit_adatoms`. Loaded nanoparticles are re-anchored to `min(z)=0` after relaxation. Outputs `clean_slab.xyz` (pre-adatom) and e.g. `clean_slab_Au20.xyz` (post-adatom)—compare optimized adsorption structures to the **post-adatom** reference, not pre-adatom files.
 
-**Adsorption (TorchSim):** See **TorchSim batched relaxation** below. `compute_frozen_indices` + `FixAtoms`: when `relax_top_layer` is true, only sub-surface atoms freeze; adsorbate atoms never freeze. Saturation pins `base_slab_for_frozen` at campaign start; prior adsorbate units (indices ≥ original substrate length) may relax. Auto-resize on step 1 expands the freeze reference to all repeated in-plane tiles.
+**Adsorption (TorchSim):** See **TorchSim batched relaxation** below. `frozen_indices_from_constraints` reads ASE `FixAtoms` on the substrate reference (attached at prep). `log_substrate_freeze_policy` logs frozen vs moving substrate atoms at campaign start. Saturation pins `base_slab_for_frozen` at campaign start; prior adsorbate units (indices ≥ original substrate length) may relax. In-plane sizing must be done during prep via `auto_resize_substrate_for_molecule` / `resize_substrate_for_molecule`.
 
 ### TorchSim batched relaxation (`optimization.py`)
 
@@ -322,7 +333,7 @@ High-level narrative also appears in [docs/guides/architecture.rst](docs/guides/
 **Saturation notes:**
 
 - `E_slab` refreshed each step; compare structures to post-adatom substrate files when adatoms were deposited.
-- Auto-resize only on first adsorption step per molecule/campaign path.
+- In-plane supercell sizing must be completed during prep before calling campaign APIs.
 - `saturation_discard_topology_rearrangements=True` (default): step-level connectivity guard before ranking.
 
 ## Material types and site generation
@@ -385,7 +396,7 @@ Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `
 ### Relaxation and validation
 
 - `model_name`, `device`, `fmax`, `stage1_steps`, `stage2_steps`, `reference_optimization_steps`
-- `relax_top_layer`, `preserve_slab_frame`, `freeze_symbols`, `optimize_isolated_sequentially`
+- `optimize_isolated_sequentially`
 - `min_interatomic_distance`, `max_force_convergence`, `binding_distance_threshold`, `max_adsorption_energy`
 - `skip_desorption_check`, `skip_topology_check`
 - `connectivity_multipliers`, `energy_dedup_threshold`, `rmsd_dedup_threshold`
@@ -394,7 +405,7 @@ Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `
 ### Surface prep and TorchSim autobatching
 
 - `slab_relaxation_mode`, `slab_relaxation_optimizer`, `slab_relaxation_fmax`, `slab_relaxation_steps`
-- `auto_resize_slab`, `min_pbc_image_separation`, `vacuum_box_size`
+- `min_pbc_image_separation`, `vacuum_box_size`
 - `ts_optimizer`, `steps_between_swaps`
 - `autobatcher_max_memory_padding`, `autobatcher_max_memory_scaler`, `autobatcher_max_atoms_to_try`
 - `saturation_autobatcher_reuse`, `saturation_autobatcher_reuse_growth_atoms`, `saturation_autobatcher_reuse_growth_fraction`
@@ -453,7 +464,7 @@ Schema versioning lives in `ml/schema.py` (`SCHEMA_VERSION`, `ComputationContext
 
 Shared goal: find low-energy adsorbate–surface configurations and report \(E_\mathrm{ads} = E_\mathrm{adslab} - E_\mathrm{slab} - E_\mathrm{molecule}\).
 
-**References:** AdsorbML — Ulyssi et al., [npj Comput. Mater. 9, 172 (2023)](https://doi.org/10.1038/s41524-023-01121-5). BOSS — Todorović & Rinke, [npj Comput. Mater. 5, 103 (2019)](https://doi.org/10.1038/s41524-019-0175-2); [BOSS software](https://sites.utu.fi/boss/). Camphor benchmark — Järvi et al., [Beilstein J. Nanotechnol. 11, 140 (2020)](https://doi.org/10.3762/bjnano.11.140). Metalsurfer revisits BOSS landscapes in [`examples/camphor_cu111_binding_energy.py`](examples/camphor_cu111_binding_energy.py) (Zenodo [10.5281/zenodo.4680467](https://doi.org/10.5281/zenodo.4680467)) and C60/TiO₂(101) (Zenodo [10.5281/zenodo.2565933](https://doi.org/10.5281/zenodo.2565933)) with **qualitative MLIP** comparison to published DFT minima.
+**References:** AdsorbML — Ulyssi et al., [npj Comput. Mater. 9, 172 (2023)](https://doi.org/10.1038/s41524-023-01121-5). BOSS — Todorović & Rinke, [npj Comput. Mater. 5, 103 (2019)](https://doi.org/10.1038/s41524-019-0175-2); [BOSS software](https://sites.utu.fi/boss/). Camphor benchmark — Järvi et al., [Beilstein J. Nanotechnol. 11, 140 (2020)](https://doi.org/10.3762/bjnano.11.140). Metalsurfer revisits the camphor BOSS landscape in [`examples/camphor_cu111_binding_energy.py`](examples/camphor_cu111_binding_energy.py) (Zenodo [10.5281/zenodo.4680467](https://doi.org/10.5281/zenodo.4680467)) with **qualitative MLIP** comparison to published DFT minima.
 
 ### AdsorbML (catalysis screening, hybrid ML+DFT)
 
@@ -494,13 +505,13 @@ BOSS learns a **continuous PES** in a hand-crafted parameterization; Metalsurfer
 
 - **Many placements, not one pose:** binding energy is the best of a sampled distribution after aggressive filtering—not a single user-specified geometry.
 - **Saturation proxy:** stop when the next adsorption is endothermic (`E_ads ≥ 0`), not at an explicit coverage fraction or chemical potential.
-- **Partial slab relaxation:** top layer free by default during adsorption; substrate prep uses separate ASE `slab_relaxation_mode`.
+- **Rigid substrate by default during adsorption:** entire substrate frozen via prep-time `FixAtoms` (`relax_top_layer=False` on `prepare_substrate`); set `relax_top_layer=True` to free the top layer. Prep equilibration uses separate ASE `slab_relaxation_mode` (default `ionic_only`). Campaign start logs frozen vs moving atoms.
 - **Symmetry as accelerator:** symmetry-reduced sites until the covered slab breaks symmetry vs the reference structure.
 - **GPU-first TorchSim:** autotune parallel batch size; `InFlightAutoBatcher` packs relaxations; `saturation_autobatcher_reuse` amortizes probes on deep coverage runs.
 - **BO + transfer for coverage:** `run_saturation_bo` carries `BOStepMemory` across steps so later layers warm-start from an informed surrogate.
 - **Layered topology guards:** per-placement decomposition, saturation-step connectivity guard; `skip_topology_check` for expected bond breaking (e.g. H₂ dissociation).
 - **Substrate-only site view** on partially covered slabs so new placements target bare surface, not prior adsorbates.
-- **Compare to post-adatom substrate files** when adatoms were deposited during `prepare_slab`.
+- **Compare to post-adatom substrate files** when adatoms were deposited during `prepare_substrate`.
 
 ## Dependencies and runtime
 

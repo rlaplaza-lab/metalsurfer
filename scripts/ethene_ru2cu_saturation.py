@@ -8,12 +8,8 @@ Run from project root: pip install -e . && pip install -e ".[mlip]"
 On-disk output follows ``AdsorptionConfig`` (README, saturation section).
 """
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    prepare_slab,
-    run_saturation,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_saturation
+from metalsurfer.surface_prep import prepare_substrate
 
 
 def main():
@@ -38,7 +34,7 @@ def main():
         stage2_steps=500,
     )
 
-    slab = prepare_slab(
+    slab = prepare_substrate(
         bulk_id="mp-33",
         miller_indices=(0, 0, 1),
         supercell=(1, 1, 1),

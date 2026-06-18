@@ -13,6 +13,7 @@ from ase import Atoms
 from .._utils import is_finite_number as _is_finite_number
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor
+from ..placement._material import calculator_pbc_for_atoms
 from ..placement.generators import generate_placement_from_descriptor
 from ..placement.geometry import normalize_quaternion
 from .schema import PlacementRecord
@@ -103,7 +104,6 @@ def record_to_config(record: PlacementRecord) -> AdsorptionConfig:
     cfg.site_equivalence_tolerance = ctx.site_equivalence_tolerance
     cfg.hollow_site_dedup_tolerance = ctx.hollow_site_dedup_tolerance
     cfg.planar_z_variance_threshold = ctx.planar_z_variance_threshold
-    cfg.relax_top_layer = ctx.relax_top_layer
     return cfg
 
 
@@ -192,7 +192,7 @@ def verify_record_reproducibility(
         return result
 
     combined = slab + adsorbate
-    combined.set_pbc([True, True, True])
+    combined.set_pbc(calculator_pbc_for_atoms(combined))
     combined.calc = calculator
 
     config = record_to_config(record)

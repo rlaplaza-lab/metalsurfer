@@ -187,13 +187,11 @@ class TestPlacementRecord:
             min_initial_distance=1.2,
             min_contact_ratio=0.7,
             top_layer_tolerance=0.4,
-            relax_top_layer=False,
         )
         r2 = PlacementRecord.from_flat_dict(r.to_flat_dict())
         assert r2.context.device == "cpu"
         assert r2.context.placement_z_range == (1.8, 2.9)
         assert r2.context.placement_z_scale_by_covalent_radius is False
-        assert r2.context.relax_top_layer is False
 
     def test_quaternion_is_canonicalized(self):
         base = _make_record(0)

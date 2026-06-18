@@ -1,11 +1,15 @@
 """Tests for top-layer identification and frozen-index computation."""
 
-from metalsurfer.config import AdsorptionConfig
+from ase.constraints import FixAtoms
+
 from metalsurfer.optimization import (
     compute_frozen_indices,
+    format_atom_index_ranges,
+    frozen_indices_from_constraints,
     identify_top_layer_indices,
+    log_substrate_freeze_policy,
 )
-from metalsurfer.workflow.shared import _resolve_base_slab_for_frozen
+from metalsurfer.surface_prep import apply_surface_constraints
 
 from .conftest import make_slab
 
@@ -13,7 +17,6 @@ from .conftest import make_slab
 def test_identify_top_layer():
     slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
     top = identify_top_layer_indices(slab, tolerance=0.5)
-    # only the 4 atoms in the topmost layer (z=6.0) should be returned
     expected_z = 6.0
     for idx in top:
         assert abs(slab.get_positions()[idx, 2] - expected_z) <= 0.5
@@ -22,9 +25,7 @@ def test_identify_top_layer():
 
 def test_frozen_indices_default_relax_top():
     slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
-    config = AdsorptionConfig(relax_top_layer=True, top_layer_tolerance=0.5)
-    frozen = compute_frozen_indices(slab, config)
-    # bottom 3 layers should be frozen (12 atoms), top layer free (4 atoms)
+    frozen = compute_frozen_indices(slab, relax_top_layer=True, top_layer_tolerance=0.5)
     assert len(frozen) == 12
     top_z = max(slab.get_positions()[:, 2])
     for idx in frozen:
@@ -33,56 +34,62 @@ def test_frozen_indices_default_relax_top():
 
 def test_frozen_indices_all_frozen():
     slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
-    config = AdsorptionConfig(relax_top_layer=False)
-    frozen = compute_frozen_indices(slab, config)
+    frozen = compute_frozen_indices(slab, relax_top_layer=False)
     assert len(frozen) == len(slab)
-
-
-def test_resolve_base_slab_for_frozen_after_auto_resize():
-    """In-plane repeat must freeze the full resized substrate, not one tile."""
-    slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
-    base = slab.copy()
-    resized = slab.repeat((2, 2, 1))
-    config = AdsorptionConfig(relax_top_layer=False)
-
-    effective = _resolve_base_slab_for_frozen(resized, base, slab_was_resized=True)
-    assert effective is not None
-    assert len(effective) == len(resized)
-    frozen = compute_frozen_indices(effective, config)
-    assert len(frozen) == len(resized)
-
-    unchanged = _resolve_base_slab_for_frozen(slab, base, slab_was_resized=False)
-    assert unchanged is base
-    assert len(compute_frozen_indices(unchanged, config)) == len(base)
-
-
-def test_resolve_base_slab_for_frozen_relax_top_layer_after_resize():
-    """Top-layer freeze must span every repeated tile after in-plane resize."""
-    slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
-    base = slab.copy()
-    resized = slab.repeat((2, 2, 1))
-    config = AdsorptionConfig(relax_top_layer=True, top_layer_tolerance=0.5)
-
-    effective = _resolve_base_slab_for_frozen(resized, base, slab_was_resized=True)
-    assert effective is not None
-    assert len(effective) == len(resized)
-    frozen = compute_frozen_indices(effective, config)
-    # 4 tiles x 12 frozen atoms per tile (3 of 4 layers)
-    assert len(frozen) == 48
 
 
 def test_frozen_indices_by_symbol():
     slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
     syms = slab.get_chemical_symbols()
-    # mark half the atoms as Cu
     for i in range(0, len(syms), 2):
         syms[i] = "Cu"
     slab.set_chemical_symbols(syms)
 
-    config = AdsorptionConfig(freeze_symbols=["Ru"])
-    frozen = compute_frozen_indices(slab, config)
+    frozen = compute_frozen_indices(slab, freeze_symbols=["Ru"])
     for idx in frozen:
         assert slab.get_chemical_symbols()[idx] == "Ru"
-    # Cu atoms should not be frozen
     cu_indices = [i for i, s in enumerate(slab.get_chemical_symbols()) if s == "Cu"]
     assert all(ci not in frozen for ci in cu_indices)
+
+
+def test_apply_surface_constraints_round_trip():
+    slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
+    slab.set_constraint()
+    constrained = apply_surface_constraints(
+        slab, relax_top_layer=True, top_layer_tolerance=0.5
+    )
+    assert frozen_indices_from_constraints(constrained) == compute_frozen_indices(
+        slab, relax_top_layer=True, top_layer_tolerance=0.5
+    )
+
+
+def test_frozen_indices_from_constraints_reads_fixatoms():
+    slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
+    slab.set_constraint(FixAtoms(indices=[0, 1, 2]))
+    assert frozen_indices_from_constraints(slab) == [0, 1, 2]
+
+
+def test_format_atom_index_ranges():
+    assert format_atom_index_ranges([]) == "(none)"
+    assert format_atom_index_ranges([0, 1, 2, 5, 7, 8]) == "0-2, 5, 7-8"
+
+
+def test_log_substrate_freeze_policy_all_frozen(caplog):
+    slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
+    with caplog.at_level("INFO"):
+        log_substrate_freeze_policy(slab, context="Test slab")
+    assert "all 8 substrate atoms frozen" in caplog.text
+    assert "Ru×8" in caplog.text
+
+
+def test_log_substrate_freeze_policy_partial_freeze(caplog):
+    slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
+    slab.set_constraint()
+    slab = apply_surface_constraints(
+        slab, relax_top_layer=True, top_layer_tolerance=0.5
+    )
+    with caplog.at_level("INFO"):
+        log_substrate_freeze_policy(slab, context="Test slab")
+    assert "12/16 substrate atoms frozen" in caplog.text
+    assert "4 free to move" in caplog.text
+    assert "moving" in caplog.text

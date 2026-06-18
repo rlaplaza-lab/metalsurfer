@@ -3,7 +3,7 @@
 
 Molecules: HMF, BHMF, BHMTHF, 5-MF, MFA, DMF, MTHFA, DMTHF.
 
-Uses metalsurfer prepare_slab to create Sn-covered Ru(0001) surface.
+Uses metalsurfer prepare_substrate to create Sn-covered Ru(0001) surface.
 BO pipeline: 300 placements max in passes of 100 (100 initial random + up to 2 BO passes of 100).
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
@@ -13,12 +13,8 @@ import argparse
 import logging
 import os
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    prepare_slab,
-    run_adsorption_bo,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption_bo
+from metalsurfer.surface_prep import prepare_substrate
 
 # List of smiles and molecule name pairs
 MOLECULES = [
@@ -84,7 +80,7 @@ def main():
     )
 
     # Create Ru(0001) slab from Materials Project mp-33.
-    base_slab = prepare_slab(
+    base_slab = prepare_substrate(
         bulk_id="mp-33",
         miller_indices=(0, 0, 1),
         supercell=(1, 1, 1),
@@ -93,7 +89,7 @@ def main():
     )
 
     # Deposit Sn atoms at 10% of hollow sites
-    slab = prepare_slab(
+    slab = prepare_substrate(
         slab=base_slab,
         adatom_symbol="Sn",
         adatom_coverage=0.1,

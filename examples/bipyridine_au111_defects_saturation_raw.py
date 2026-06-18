@@ -2,11 +2,11 @@
 """Saturation screening for bipyridine on a defected Au(111) surface.
 
 Demonstrates:
-- ``prepare_slab`` with adatom defects and separate prep relax presets
+- ``prepare_substrate`` with adatom defects and separate prep relax presets
   (full clean-slab equilibration, ionic-only adatom deposition).
-- ``relax_top_layer=False`` so the post-prep substrate stays fixed during
-  TorchSim placement relaxation (compare trajectories to ``clean_slab_Au20_*``,
-  not ``clean_slab_*`` written before adatoms).
+- Default rigid substrate (entire post-prep slab frozen via ASE ``FixAtoms``;
+  compare trajectories to ``clean_slab_Au20_*``, not ``clean_slab_*`` written
+  before adatoms).
 - High-placement, non-BO saturation for benchmark datasets.
 
 Requires: ``pip install -e ".[mlip]"`` and a CUDA-capable GPU for practical runtimes.
@@ -23,9 +23,9 @@ import logging
 from metalsurfer import (
     AdsorptionConfig,
     configure_logging,
-    prepare_slab,
     run_saturation,
 )
+from metalsurfer.surface_prep import prepare_substrate
 
 SURFACE_TYPE = "bipyridine_au111_defects_saturation_raw"
 RESULTS_DIR = f"results_{SURFACE_TYPE}"
@@ -47,19 +47,17 @@ def main():
         fmax=0.05,
         stage1_steps=80,
         stage2_steps=500,
-        auto_resize_slab=False,
         min_pbc_image_separation=10.0,
         slab_relaxation_mode="full",
         slab_relaxation_optimizer="lbfgs",
         slab_relaxation_steps=250,
         autobatcher_max_memory_padding=0.8,
         autobatcher_max_memory_scaler=650,
-        relax_top_layer=False,
         debug_write_initial_placements=True,
         save_benchmark_dataset=True,
     )
 
-    slab = prepare_slab(
+    slab = prepare_substrate(
         bulk_id="mp-81",
         miller_indices=(1, 1, 1),
         supercell=(3, 3, 1),

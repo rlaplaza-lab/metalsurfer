@@ -11,12 +11,8 @@ Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, to
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 """
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    prepare_slab,
-    run_adsorption,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
+from metalsurfer.surface_prep import prepare_substrate
 
 
 def main():
@@ -41,7 +37,7 @@ def main():
         stage2_steps=500,
     )
 
-    slab = prepare_slab(
+    slab = prepare_substrate(
         bulk_id="mp-126",
         miller_indices=(1, 1, 1),
         supercell=(1, 1, 1),

@@ -14,16 +14,20 @@ from .._logging import warn_once
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
 from ..exceptions import OptimizationError
 from ..models import PlacementDescriptor, ScreeningResult
-from ..optimization import compute_frozen_indices, estimate_parallel_relaxation_capacity
+from ..optimization import (
+    estimate_parallel_relaxation_capacity,
+    frozen_indices_from_constraints,
+    log_substrate_freeze_policy,
+)
 from ..placement import generators as placement_generators
 from ..placement import get_symmetry_aware_sites
-from ..placement._material import material_aware_pbc
+from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
 from ..placement.generators import (
     enumerate_placement_specs,
     generate_placement_from_spec_with_reason,
 )
 from ..placement.geometry import calculate_min_distance
-from ..surfaces import SlabContainer, auto_resize_slab_for_molecule
+from ..surfaces import SlabContainer, validate_substrate
 from ..symmetry import SymmetryAnalysisError
 
 logger = logging.getLogger(__name__)
@@ -86,19 +90,8 @@ def _prepare_atoms_for_calculator(
     min_cell_c: float = MIN_CALCULATOR_CELL_C_ANG,
 ) -> None:
     """Normalize PBC for UMA and enforce minimum c-vector size."""
+    atoms.set_pbc(calculator_pbc_for_atoms(atoms))
     pbc = np.array(atoms.get_pbc(), dtype=bool)
-    if pbc.shape != (3,):
-        raise OptimizationError(
-            f"{label}: invalid PBC shape {pbc.shape}; expected 3 components."
-        )
-    if not (bool(pbc.all()) or bool((~pbc).all())):
-        logger.warning(
-            "%s: mixed PBC %s normalized to [True, True, True] for calculator",
-            label,
-            pbc.tolist(),
-        )
-        atoms.set_pbc([True, True, True])
-        pbc = np.array(atoms.get_pbc(), dtype=bool)
     if bool(pbc.all()):
         c_len = float(np.linalg.norm(np.asarray(atoms.get_cell())[2]))
         if c_len < min_cell_c:
@@ -163,7 +156,7 @@ def _materialize_spec_placements(
             continue
         adsorbate, descriptor = result
         combined = slab_atoms + adsorbate
-        combined.set_pbc([True, True, True])
+        combined.set_pbc(calculator_pbc_for_atoms(combined))
         combined.calc = calculator
         all_combined.append(combined)
         placement_ids.append(descriptor.placement_index)
@@ -396,50 +389,11 @@ def _evaluate_optimized_candidate(
 
 @dataclass
 class SubstrateRefState:
-    """Substrate geometry and freeze reference after optional auto-resize."""
+    """Resolved substrate references for placement and freeze policy."""
 
     slab: SlabContainer
     slab_for_sites: Atoms
     effective_base_slab_for_frozen: Atoms | None
-    slab_was_resized: bool
-    substrate_atoms_after_resize: Atoms | None
-
-
-def _resolve_base_slab_for_frozen(
-    slab_atoms: Atoms,
-    base_slab_for_frozen: Atoms | None,
-    *,
-    slab_was_resized: bool = False,
-    substrate_atoms_after_resize: Atoms | None = None,
-) -> Atoms | None:
-    """Choose the substrate reference passed to ``optimize_adsorbate_slab_batched``.
-
-    When the substrate was auto-resized in-plane, use the full current substrate
-    so every repeated tile is included in top-layer detection or full freeze.
-    Otherwise keep ``base_slab_for_frozen`` so saturation can freeze only the
-    original substrate block while prior adsorbates relax.
-    """
-    if base_slab_for_frozen is None:
-        return None
-    if slab_was_resized:
-        if substrate_atoms_after_resize is not None:
-            return substrate_atoms_after_resize
-        return slab_atoms.copy()
-    return base_slab_for_frozen
-
-
-def write_substrate_step_metadata(
-    step_metadata_out: dict[str, object] | None,
-    *,
-    slab_was_resized: bool,
-    substrate_atoms_after_resize: Atoms | None,
-) -> None:
-    """Record auto-resize outcome for saturation ``base_slab`` persistence."""
-    if step_metadata_out is None:
-        return
-    step_metadata_out["slab_was_resized"] = slab_was_resized
-    if substrate_atoms_after_resize is not None:
-        step_metadata_out["substrate_atoms_after_resize"] = substrate_atoms_after_resize
 
 
 def prepare_substrate_for_screening(
@@ -447,41 +401,28 @@ def prepare_substrate_for_screening(
     conformers: list[Atoms],
     base_slab_for_frozen: Atoms | None,
     config: AdsorptionConfig,
-    *,
-    allow_auto_resize: bool,
 ) -> SubstrateRefState:
-    """Optionally auto-resize the slab and resolve placement/freeze references."""
-    slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab_for_frozen)
-
-    slab_was_resized = False
-    substrate_atoms_after_resize: Atoms | None = None
-    if config.auto_resize_slab and allow_auto_resize:
-        slab, was_resized = auto_resize_slab_for_molecule(
-            slab,
-            conformers,
-            config.min_pbc_image_separation,
-            material_type=config.material_type,
-        )
-        if was_resized:
-            slab_was_resized = True
-            substrate_atoms_after_resize = slab.atoms.copy()
-            slab_for_sites = _build_surface_reference_slab(
-                slab.atoms, base_slab_for_frozen
-            )
-
-    effective_base_slab_for_frozen = _resolve_base_slab_for_frozen(
+    """Resolve placement and freeze references without modifying the substrate."""
+    validate_substrate(
         slab.atoms,
-        base_slab_for_frozen,
-        slab_was_resized=slab_was_resized,
-        substrate_atoms_after_resize=substrate_atoms_after_resize,
+        material_type=config.material_type,
+        config=config,
+        conformers=conformers,
     )
-
+    slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab_for_frozen)
+    effective_base_slab_for_frozen = (
+        base_slab_for_frozen.copy() if base_slab_for_frozen is not None else None
+    )
+    freeze_ref = (
+        effective_base_slab_for_frozen
+        if effective_base_slab_for_frozen is not None
+        else slab.atoms
+    )
+    log_substrate_freeze_policy(freeze_ref)
     return SubstrateRefState(
         slab=slab,
         slab_for_sites=slab_for_sites,
         effective_base_slab_for_frozen=effective_base_slab_for_frozen,
-        slab_was_resized=slab_was_resized,
-        substrate_atoms_after_resize=substrate_atoms_after_resize,
     )
 
 
@@ -520,7 +461,7 @@ def build_representative_relaxation_atoms(
         if result is not None:
             adsorbate, _ = result
             combined = slab_atoms + adsorbate
-            combined.set_pbc([True, True, True])
+            combined.set_pbc(calculator_pbc_for_atoms(combined))
             return combined
 
     largest = max(conformers, key=len)
@@ -532,7 +473,7 @@ def build_representative_relaxation_atoms(
     ads = largest.copy()
     ads.set_positions(positions)
     combined = slab_atoms + ads
-    combined.set_pbc([True, True, True])
+    combined.set_pbc(calculator_pbc_for_atoms(combined))
     return combined
 
 
@@ -625,7 +566,7 @@ def resolve_saturation_step_workload_config(
     freeze_ref = (
         base_slab_for_frozen if base_slab_for_frozen is not None else slab_atoms
     )
-    frozen_indices = compute_frozen_indices(freeze_ref, config)
+    frozen_indices = frozen_indices_from_constraints(freeze_ref)
     representative_atoms = build_representative_relaxation_atoms(
         conformers,
         slab_atoms,

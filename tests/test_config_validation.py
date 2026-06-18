@@ -8,6 +8,8 @@ from metalsurfer.config import (
     resolved_bo_eval_budget,
 )
 
+from .conftest import make_slab
+
 # ---------------------------------------------------------------------------
 # valid construction
 # ---------------------------------------------------------------------------
@@ -55,10 +57,21 @@ def test_ts_optimizer_custom():
 
 def test_slab_relaxation_defaults():
     config = AdsorptionConfig()
-    assert config.slab_relaxation_mode == "none"
+    assert config.slab_relaxation_mode == "ionic_only"
     assert config.slab_relaxation_optimizer == "lbfgs"
     assert config.slab_relaxation_fmax is None
     assert config.slab_relaxation_steps == 200
+
+
+def test_finalize_substrate_default_freezes_entire_substrate():
+    from metalsurfer.surface_prep import finalize_substrate
+
+    slab = make_slab(nx=2, ny=2, n_layers=2)
+    config = AdsorptionConfig(material_type="slab")
+    constrained = finalize_substrate(slab, config, align=False)
+    assert len(constrained.atoms.constraints) == 1
+    frozen = constrained.atoms.constraints[0].get_indices()
+    assert len(frozen) == len(slab)
 
 
 @pytest.mark.parametrize("mode", ["none", "ionic_only", "cell_only", "full"])
@@ -410,13 +423,8 @@ def test_max_initial_distance_zero_rejected():
 
 
 # ---------------------------------------------------------------------------
-# auto-resize slab defaults
+# min_pbc_image_separation defaults
 # ---------------------------------------------------------------------------
-
-
-def test_default_auto_resize_slab_enabled():
-    config = AdsorptionConfig()
-    assert config.auto_resize_slab is True
 
 
 def test_default_min_pbc_image_separation():
@@ -428,11 +436,6 @@ def test_default_min_pbc_image_separation():
 def test_non_positive_min_pbc_image_separation_rejected(separation):
     with pytest.raises(ValueError, match="min_pbc_image_separation.*positive"):
         AdsorptionConfig(min_pbc_image_separation=separation)
-
-
-def test_auto_resize_disabled_skips_separation_check():
-    config = AdsorptionConfig(auto_resize_slab=False, min_pbc_image_separation=-1.0)
-    assert config.auto_resize_slab is False
 
 
 # ---------------------------------------------------------------------------

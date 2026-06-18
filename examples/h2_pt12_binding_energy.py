@@ -4,6 +4,9 @@
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 
+The hand-built Pt₁₂ cluster is MLIP-relaxed during ``prepare_substrate`` (default
+``slab_relaxation_mode="ionic_only"``) before adsorption screening.
+
 If you hit CUDA OOM on a 15GB GPU, try:
   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/h2_pt12_binding_energy.py
 or reduce num_placements (e.g. 25).
@@ -11,7 +14,12 @@ or reduce num_placements (e.g. 25).
 
 from ase import Atoms
 
-from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
+from metalsurfer import (
+    AdsorptionConfig,
+    configure_logging,
+    run_adsorption,
+)
+from metalsurfer.surface_prep import prepare_substrate
 
 
 def main():
@@ -55,8 +63,14 @@ def main():
         min_initial_distance=1.5,
     )
 
-    campaign = run_adsorption(
+    nanocluster = prepare_substrate(
         slab=pt_atoms,
+        config=config,
+        results_dir="results_h2_pt12",
+    )
+
+    campaign = run_adsorption(
+        slab=nanocluster,
         molecules=[("[H][H]", "H2")],
         config=config,
         surface_type="h2_pt12",

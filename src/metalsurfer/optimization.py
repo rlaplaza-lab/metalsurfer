@@ -4,10 +4,12 @@ import contextlib
 import gc
 import logging
 import math
+from collections import Counter
 from typing import Any, NoReturn, cast
 
 import numpy as np
 from ase import Atoms
+from ase.constraints import FixAtoms
 
 from ._logging import torchsim_output_capture
 from .config import AdsorptionConfig
@@ -454,31 +456,117 @@ def identify_top_layer_indices(
 
 def compute_frozen_indices(
     slab: Atoms,
-    config: AdsorptionConfig | None = None,
+    *,
+    relax_top_layer: bool = False,
+    freeze_symbols: list[str] | None = None,
+    top_layer_tolerance: float = 0.5,
 ) -> list[int]:
     """Determine which slab atom indices should be frozen during optimisation.
 
-    Default policy: freeze everything *except* the top layer.
-    If ``config.relax_top_layer`` is ``False``, the entire slab is frozen.
-    If ``config.freeze_symbols`` is set, only atoms whose symbol is in that
-    list are frozen (regardless of layer).
+    Prep-time policy helper used by :func:`~metalsurfer.surface_prep.apply_surface_constraints`.
+    Default policy: freeze the entire slab (``relax_top_layer=False``).
+    If ``relax_top_layer`` is ``True``, only subsurface atoms are frozen.
+    If ``freeze_symbols`` is set, only atoms whose symbol is in that list are
+    frozen (regardless of layer).
     """
-    if config is None:
-        config = AdsorptionConfig()
-
     n_slab = len(slab)
 
-    if config.freeze_symbols is not None:
+    if freeze_symbols is not None:
         syms = slab.get_chemical_symbols()
-        return [i for i, s in enumerate(syms) if s in config.freeze_symbols]
+        return [i for i, s in enumerate(syms) if s in freeze_symbols]
 
-    if not config.relax_top_layer:
+    if not relax_top_layer:
         return list(range(n_slab))
 
-    top_indices = set(
-        identify_top_layer_indices(slab, tolerance=config.top_layer_tolerance)
-    )
+    top_indices = set(identify_top_layer_indices(slab, tolerance=top_layer_tolerance))
     return [i for i in range(n_slab) if i not in top_indices]
+
+
+def frozen_indices_from_constraints(atoms: Atoms) -> list[int]:
+    """Return frozen atom indices from ASE ``FixAtoms`` constraints on *atoms*."""
+    indices: list[int] = []
+    for constraint in atoms.constraints:
+        if isinstance(constraint, FixAtoms):
+            idx = constraint.index
+            if isinstance(idx, (int, np.integer)):
+                indices.append(int(idx))
+            else:
+                indices.extend(int(i) for i in idx)
+    return sorted(set(indices))
+
+
+def format_atom_index_ranges(indices: list[int]) -> str:
+    """Format sorted atom indices as compact ranges (e.g. ``0-31, 40-47``)."""
+    if not indices:
+        return "(none)"
+    sorted_idx = sorted(set(indices))
+    parts: list[str] = []
+    start = prev = sorted_idx[0]
+    for idx in sorted_idx[1:]:
+        if idx == prev + 1:
+            prev = idx
+            continue
+        parts.append(f"{start}-{prev}" if start != prev else str(start))
+        start = prev = idx
+    parts.append(f"{start}-{prev}" if start != prev else str(start))
+    return ", ".join(parts)
+
+
+def _symbol_count_label(indices: list[int], symbols: list[str]) -> str:
+    counts = Counter(symbols[i] for i in indices)
+    return ", ".join(f"{sym}×{n}" for sym, n in sorted(counts.items()))
+
+
+def log_substrate_freeze_policy(
+    substrate: Atoms,
+    *,
+    context: str = "Substrate",
+) -> None:
+    """Log which substrate atoms are frozen vs free during placement relaxation."""
+    n_substrate = len(substrate)
+    symbols = substrate.get_chemical_symbols()
+    frozen = frozen_indices_from_constraints(substrate)
+    frozen_set = set(frozen)
+    moving = [i for i in range(n_substrate) if i not in frozen_set]
+
+    if not frozen:
+        logger.info(
+            "%s freeze policy: no FixAtoms on %d substrate atoms — all substrate "
+            "atoms free to move during placement relaxation",
+            context,
+            n_substrate,
+        )
+        return
+
+    if not moving:
+        logger.info(
+            "%s freeze policy: all %d substrate atoms frozen during placement "
+            "relaxation (%s; indices %s)",
+            context,
+            n_substrate,
+            _symbol_count_label(frozen, symbols),
+            format_atom_index_ranges(frozen),
+        )
+        return
+
+    logger.info(
+        "%s freeze policy: %d/%d substrate atoms frozen, %d free to move during "
+        "placement relaxation",
+        context,
+        len(frozen),
+        n_substrate,
+        len(moving),
+    )
+    logger.info(
+        "  frozen (%s): indices %s",
+        _symbol_count_label(frozen, symbols),
+        format_atom_index_ranges(frozen),
+    )
+    logger.info(
+        "  moving (%s): indices %s",
+        _symbol_count_label(moving, symbols),
+        format_atom_index_ranges(moving),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -915,10 +1003,10 @@ def optimize_adsorbate_slab_batched(
 
     Uses TorchSim's ``InFlightAutoBatcher`` for GPU-efficient batching.
 
-    The frozen indices are computed via :func:`compute_frozen_indices` using
-    the supplied *slab* reference and *config*. When *base_slab_for_frozen*
-    is provided (e.g. for sequential saturation), it is used for frozen indices
-    instead of *slab*, so only the original surface atoms are frozen.
+    Frozen indices are read from ASE ``FixAtoms`` on the freeze reference
+    (:func:`frozen_indices_from_constraints`). When *base_slab_for_frozen* is
+    provided (e.g. for sequential saturation or adatom workflows), it supplies
+    the constraint-bearing substrate reference instead of *slab*.
     """
     if config is None:
         config = AdsorptionConfig()
@@ -949,7 +1037,7 @@ def optimize_adsorbate_slab_batched(
             ref_len,
             slab_size,
         )
-    frozen_indices = compute_frozen_indices(slab_for_frozen, config)
+    frozen_indices = frozen_indices_from_constraints(slab_for_frozen)
     if frozen_indices and max(frozen_indices) >= ref_len:
         logger.warning(
             "Frozen index %d exceeds freeze reference length %d",

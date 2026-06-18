@@ -112,19 +112,27 @@ def test_lazy_getattr_loads_module():
     """Lazy __getattr__ loads submodules on first access of deferred symbols."""
     import metalsurfer
 
-    # SlabContainer is in _LAZY_MODULES["surfaces"]
+    # SlabContainer is lazy-exported from surface_prep
     slab_container = metalsurfer.SlabContainer
     assert slab_container.__name__ == "SlabContainer"
 
 
 def test_surface_prep_import_path():
-    """Surface-prep helpers are available under a dedicated import path."""
+    """Surface-prep helpers are available under the unified surface_prep module."""
     from metalsurfer.surface_prep import (
         SlabContainer,
+        accept_substrate_for_api,
+        apply_material_pbc,
+        auto_resize_substrate_for_molecule,
         create_slab_from_atoms,
         create_slab_from_bulk,
         deposit_adatoms,
+        finalize_substrate,
+        prepare_substrate,
+        relax_substrate,
+        resize_substrate_for_molecule,
         substitute_alloy,
+        validate_substrate,
     )
 
     assert SlabContainer.__name__ == "SlabContainer"
@@ -132,6 +140,31 @@ def test_surface_prep_import_path():
     assert callable(create_slab_from_atoms)
     assert callable(substitute_alloy)
     assert callable(deposit_adatoms)
+    assert callable(prepare_substrate)
+    assert callable(finalize_substrate)
+    assert callable(relax_substrate)
+    assert callable(apply_material_pbc)
+    assert callable(validate_substrate)
+    assert callable(accept_substrate_for_api)
+    assert callable(auto_resize_substrate_for_molecule)
+    assert callable(resize_substrate_for_molecule)
+
+
+def test_removed_surface_prep_aliases_are_not_exported():
+    import metalsurfer
+    import metalsurfer.surface_prep as surface_prep
+
+    removed = (
+        "prepare_slab",
+        "resize_slab_for_molecule",
+        "auto_resize_slab_for_molecule",
+    )
+    for name in removed:
+        assert name not in surface_prep.__all__
+        with pytest.raises(AttributeError):
+            _ = getattr(surface_prep, name)
+        with pytest.raises(AttributeError):
+            _ = getattr(metalsurfer, name)
 
 
 def test_lazy_getattr_raises_for_unknown():

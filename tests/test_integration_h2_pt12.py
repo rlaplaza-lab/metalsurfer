@@ -5,7 +5,7 @@ import pytest
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.optimization import setup_single_model
-from metalsurfer.surfaces import create_slab_from_atoms
+from metalsurfer.surface_prep import prepare_substrate
 from metalsurfer.workflow import (
     calculate_reference_energies,
     process_molecule,
@@ -70,7 +70,6 @@ def _run_h2_on_pt12():
         pbc=False,
     )
 
-    nanocluster = create_slab_from_atoms(pt_atoms, material_type="nanoparticle")
     config = AdsorptionConfig(
         material_type="nanoparticle",
         seed=42,
@@ -81,6 +80,12 @@ def _run_h2_on_pt12():
         skip_desorption_check=False,
         placement_z_range=(1.5, 4.0),
         min_initial_distance=1.5,
+    )
+
+    nanocluster = prepare_substrate(
+        slab=pt_atoms,
+        config=config,
+        results_dir="results_test_h2_pt12",
     )
     calculator, ts_model = setup_single_model(config.model_name, config.device)
     ref = calculate_reference_energies(
@@ -105,8 +110,8 @@ class TestH2OnPt12:
 
         e_ads = np.array([r.energy_adsorption for r in results])
         assert np.all(e_ads < 0), f"All E_ads should be negative, got {e_ads}"
-        assert np.all(e_ads >= -100.0), (
-            f"E_ads should be >= -100.0 eV for H2 on Pt, got min {e_ads.min():.3f}"
+        assert np.all(e_ads >= -5.0), (
+            f"E_ads should be >= -5.0 eV for H2 on relaxed Pt12, got min {e_ads.min():.3f}"
         )
 
         spread = float(e_ads.max() - e_ads.min())

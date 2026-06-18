@@ -6,6 +6,8 @@ but imports covalent radii from :mod:`geometry`) can import these utilities
 without creating a circular dependency.
 """
 
+from ase import Atoms
+
 
 def material_aware_pbc(material_type: str) -> list[bool]:
     """Return PBC flags for distance calculations given explicit *material_type*.
@@ -23,6 +25,18 @@ def material_aware_pbc(material_type: str) -> list[bool]:
     raise ValueError(
         f"material_type must be 'slab', 'nanoparticle', or 'porous', got {material_type!r}"
     )
+
+
+def calculator_pbc_for_atoms(atoms: Atoms) -> list[bool]:
+    """Return PBC flags legal for the UMA/FairChem calculator.
+
+    Slab-style ``[True, True, False]`` and fully periodic substrates map to
+    ``[True, True, True]``; non-periodic clusters stay ``[False, False, False]``.
+    Call at the calculator boundary on copies so stored substrate PBC is unchanged.
+    """
+    if any(atoms.get_pbc()):
+        return [True, True, True]
+    return [False, False, False]
 
 
 def material_type_for_placement(

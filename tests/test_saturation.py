@@ -31,14 +31,15 @@ from metalsurfer.placement import (
 from metalsurfer.placement.generators import estimate_molecule_complexity
 from metalsurfer.surface_prep import (
     SlabContainer,
-    auto_resize_slab_for_molecule,
-    create_slab_from_bulk,
+    auto_resize_substrate_for_molecule,
+    prepare_substrate,
 )
 from metalsurfer.symmetry import SymmetryAnalysisError
 from metalsurfer.workflow import load_molecules, run_saturation_screening
 from metalsurfer.workflow.saturation import (
     _filter_saturation_topology_results,
     _saturation_adsorbate_topology_ok,
+    _slab_after_saturation_step,
 )
 
 from .conftest import (
@@ -294,7 +295,7 @@ def test_save_saturation_results_writes_csv_and_xyz(workdir):
     assert "water_saturation/step_001_Eads_" in step_energy_path
     assert step_energy_path.endswith(".xyz")
 
-    # extxyz writes preserve full lattice/PBC so slabs can be auto-resized later.
+    # extxyz writes preserve full lattice/PBC metadata for downstream reload.
     loaded_step = read(stable_xyz_path)
     cell = loaded_step.get_cell()
     assert cell.lengths()[0] > 0.0
@@ -415,11 +416,11 @@ def test_saturation_slab_for_sites_uses_resized_slab():
         f"Test setup: slab cell {cell_diag:.1f} A must be < {required:.1f} A "
         "to trigger resize"
     )
-    resized, was_resized = auto_resize_slab_for_molecule(
+    resized, was_resized = auto_resize_substrate_for_molecule(
         slab, [h2], min_separation=min_sep
     )
     assert was_resized, (
-        "Slab must be resized for this test; check auto_resize_slab_for_molecule logic"
+        "Slab must be resized for this test; check auto_resize_substrate_for_molecule logic"
     )
     sites_original = get_hollow_sites_for_adatoms(slab.atoms)
     sites_resized = get_hollow_sites_for_adatoms(resized.atoms)
@@ -431,6 +432,18 @@ def test_saturation_slab_for_sites_uses_resized_slab():
 # ---------------------------------------------------------------------------
 # run_saturation_screening (real GPU integration test)
 # ---------------------------------------------------------------------------
+
+
+def test_slab_after_saturation_step_restores_material_pbc():
+    """Calculator-time [T,T,T] PBC must not leak into the next saturation step."""
+    slab = make_slab()
+    combined = slab.copy()
+    combined.set_pbc([True, True, True])
+    config = AdsorptionConfig(material_type="slab")
+
+    restored = _slab_after_saturation_step(combined, config)
+
+    assert list(restored.atoms.get_pbc()) == [True, True, False]
 
 
 @pytest.mark.slow
@@ -453,25 +466,27 @@ def test_run_saturation_screening_h2_ni111_real_gpu():
     - Steps and n_molecules_at_saturation are consistent
     - All E_ads in steps are physically reasonable
     """
-    slab = create_slab_from_bulk(
-        bulk_id="mp-23",
-        miller_indices=(1, 1, 1),
-        supercell=(1, 1, 1),
-        results_dir="results_test_saturation",
-    )
-
-    # Keep this as a smoke-level integration test for runtime and CI stability.
     config = AdsorptionConfig(
         model_name="uma-s-1p1",
         seed=42,
         num_conformers=1,
         num_placements=6,
         device="cuda",
+        material_type="slab",
         skip_topology_check=True,
         skip_desorption_check=False,
         stage1_steps=16,
         stage2_steps=80,
     )
+    slab = prepare_substrate(
+        bulk_id="mp-23",
+        miller_indices=(1, 1, 1),
+        supercell=(3, 3, 1),
+        config=config,
+        results_dir="results_test_saturation",
+    )
+
+    # Keep this as a smoke-level integration test for runtime and CI stability.
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
         f.write("[H][H],H2\n")
@@ -555,163 +570,6 @@ def test_run_saturation_screening_symmetry_none_falls_back_to_c1(monkeypatch, ca
     assert len(out[0].steps) == 2
     assert symmetry_flags == [False, True]
     assert any("assuming C1" in rec.getMessage() for rec in caplog.records)
-
-
-def test_run_saturation_screening_auto_resize_only_step1(monkeypatch):
-    """Saturation passes allow_auto_resize=True only on first step."""
-    slab = SlabContainer(make_slab())
-    config = _mock_saturation_config()
-
-    allow_auto_resize_flags: list[bool] = []
-
-    def _fake_process_molecule(
-        _smi,
-        mol,
-        current_slab,
-        *_args,
-        **kwargs,
-    ):
-        allow_auto_resize_flags.append(bool(kwargs.get("allow_auto_resize", True)))
-        step_idx = len(allow_auto_resize_flags)
-        e_ads = -0.3 if step_idx == 1 else 0.2
-        return _result_for_step(mol, current_slab, e_ads)
-
-    _patch_single_mol_saturation_mocks(
-        monkeypatch,
-        molecule="water",
-        smiles="O",
-        ref=DummyReferenceEnergies(constant_energy=-1.0),
-        process_molecule=_fake_process_molecule,
-    )
-
-    out = run_saturation_screening(
-        slab,
-        smiles_file="unused.csv",
-        config=config,
-        surface_type="resize_step1_only",
-        skip_existing=False,
-    )
-
-    assert len(out) == 1
-    assert len(out[0].steps) == 2
-    assert allow_auto_resize_flags == [True, False]
-
-
-def test_apply_substrate_resize_from_step_metadata():
-    from metalsurfer.workflow.saturation import (
-        _apply_substrate_resize_from_step_metadata,
-    )
-
-    base = make_slab()
-    resized = base.repeat((2, 2, 1))
-    updated = _apply_substrate_resize_from_step_metadata(
-        base,
-        {
-            "slab_was_resized": True,
-            "substrate_atoms_after_resize": resized,
-        },
-    )
-    assert len(updated) == len(resized)
-    assert _apply_substrate_resize_from_step_metadata(base, {}) is base
-
-
-def test_multi_mol_step1_presize_expands_substrate_for_all_molecules(monkeypatch):
-    """Every competitor on step 1 sees the same pre-resized substrate footprint."""
-    slab = SlabContainer(make_slab())
-    original_n = len(slab.atoms)
-    config = _mock_saturation_config(
-        multi_molecule_saturation=True,
-        auto_resize_slab=True,
-    )
-    ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
-
-    def mock_resize(slab_in, _conformers, _min_sep, **_kwargs):
-        return SlabContainer(slab_in.atoms.repeat((2, 2, 1))), True
-
-    slab_sizes_seen: list[tuple[str, int]] = []
-
-    def fake_process(_smi, mol, current_slab, *_args, **_kwargs):
-        slab_sizes_seen.append((mol, len(current_slab.atoms)))
-        return _result_for_step(mol, current_slab, 0.5)
-
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.auto_resize_slab_for_molecule",
-        mock_resize,
-    )
-    _patch_multi_mol_saturation_mocks(
-        monkeypatch,
-        molecules=["B", "A"],
-        smiles_list=["smiles_b", "smiles_a"],
-        ref=ref,
-        process_molecule=fake_process,
-    )
-
-    out = run_saturation_screening(
-        slab,
-        smiles_file="unused.csv",
-        config=config,
-        surface_type="multi_mol_presize",
-        skip_existing=False,
-    )
-
-    assert len(out) == 1
-    expected_n = original_n * 4
-    assert len(slab_sizes_seen) == 2
-    assert all(size == expected_n for _, size in slab_sizes_seen)
-
-
-def test_single_mol_saturation_bo_updates_base_slab_after_resize(monkeypatch):
-    """Single-molecule BO saturation expands base_slab after step-1 auto-resize."""
-    slab = SlabContainer(make_slab())
-    original_n = len(slab.atoms)
-    config = _mock_saturation_config(bo_enabled=True, auto_resize_slab=True)
-    ref = DummyReferenceEnergies({"water": -5.0})
-
-    base_slab_lens: list[int] = []
-    call_count = 0
-
-    def fake_bayesian(_smi, _mol, current_slab, *_args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        base = kwargs.get("base_slab_for_frozen")
-        if base is not None:
-            base_slab_lens.append(len(base))
-        step_metadata = kwargs.get("step_metadata_out")
-        if step_metadata is not None:
-            resized = current_slab.atoms.repeat((2, 2, 1))
-            step_metadata["slab_was_resized"] = True
-            step_metadata["substrate_atoms_after_resize"] = resized
-        e_ads = -0.4 if call_count == 1 else 0.5
-        return _result_for_step("water", current_slab, e_ads)
-
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (object(), None, ["water"], ["O"], ref, 0.0),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._compute_slab_energy",
-        lambda *_a, **_kw: -10.0,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", NoopDatasetLogger
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.process_molecule_bayesian",
-        fake_bayesian,
-    )
-
-    out = run_saturation_screening(
-        slab,
-        smiles_file="unused.csv",
-        config=config,
-        surface_type="bo_resize_base_slab",
-        skip_existing=False,
-    )
-
-    assert len(out) == 1
-    assert len(out[0].steps) == 2
-    assert base_slab_lens[0] == original_n
-    assert base_slab_lens[1] == original_n * 4
 
 
 # ---------------------------------------------------------------------------
@@ -1160,13 +1018,6 @@ def test_multi_mol_saturation_bo_rejects_shared_memory_objects(monkeypatch):
 )
 def test_run_saturation_screening_multi_mol_bo_real_gpu():
     """Smoke-level GPU integration test for BO-enabled competing saturation."""
-    slab = create_slab_from_bulk(
-        bulk_id="mp-23",
-        miller_indices=(1, 1, 1),
-        supercell=(1, 1, 1),
-        results_dir="results_test_multi_mol_bo_gpu",
-    )
-
     config = AdsorptionConfig(
         model_name="uma-s-1p1",
         seed=42,
@@ -1184,6 +1035,13 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
         skip_desorption_check=False,
         stage1_steps=8,
         stage2_steps=32,
+    )
+    slab = prepare_substrate(
+        bulk_id="mp-23",
+        miller_indices=(1, 1, 1),
+        supercell=(3, 3, 1),
+        config=config,
+        results_dir="results_test_multi_mol_bo_gpu",
     )
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:

@@ -48,7 +48,8 @@ molecule list in memory and you want a typed
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, prepare_slab, run_adsorption
+   from metalsurfer import AdsorptionConfig, run_adsorption
+   from metalsurfer.surface_prep import prepare_substrate
 
    config = AdsorptionConfig(
        material_type="slab",
@@ -57,7 +58,7 @@ molecule list in memory and you want a typed
        num_placements=80,  # or omit to autotune to GPU parallel capacity
    )
 
-   slab = prepare_slab(
+   slab = prepare_substrate(
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
        config=config,
@@ -99,9 +100,13 @@ Slab layout conventions are described in :doc:`surface_engineering`.
 .. code-block:: python
 
    from ase.build import fcc111
-   from metalsurfer import AdsorptionConfig, create_slab_from_atoms, run_adsorption
+   from metalsurfer import AdsorptionConfig, run_adsorption
+   from metalsurfer.surface_prep import create_slab_from_atoms, finalize_substrate
 
-   slab = create_slab_from_atoms(fcc111("Ru", size=(3, 3, 3), vacuum=12.0))
+   slab = finalize_substrate(
+       create_slab_from_atoms(fcc111("Ru", size=(3, 3, 3), vacuum=12.0)),
+       AdsorptionConfig(material_type="slab", seed=42),
+   )
    config = AdsorptionConfig(material_type="slab", seed=42)
 
    result = run_adsorption(
@@ -121,7 +126,8 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, prepare_slab, run_adsorption_bo
+   from metalsurfer import AdsorptionConfig, run_adsorption_bo
+   from metalsurfer.surface_prep import prepare_substrate
 
    config = AdsorptionConfig(
        material_type="slab",
@@ -130,7 +136,7 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
        # Defaults: ridge surrogate, EI acquisition, autotuned batch sizes
    )
 
-   slab = prepare_slab(
+   slab = prepare_substrate(
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
        config=config,
@@ -163,7 +169,8 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, prepare_slab, run_saturation
+   from metalsurfer import AdsorptionConfig, run_saturation
+   from metalsurfer.surface_prep import prepare_substrate
 
    config = AdsorptionConfig(
        material_type="slab",
@@ -172,7 +179,7 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
        num_placements=60,
    )
 
-   slab = prepare_slab(
+   slab = prepare_substrate(
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
        config=config,
@@ -193,15 +200,20 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
 
 Important saturation behaviors:
 
-- **Prep vs adsorption relaxation:** ``slab_relaxation_mode`` applies during
-  :func:`~metalsurfer.prepare_slab`` (ASE). Placement relaxation uses
-  ``relax_top_layer`` and ``base_slab_for_frozen`` (TorchSim ``FixAtoms``).
-  With ``relax_top_layer=False``, indices ``0 .. len(base_slab)-1`` stay fixed;
-  earlier adsorbate units on the evolving slab may still relax in later steps.
-  When adatoms are deposited, compare structures to the post-adatom reference
-  (e.g. ``clean_slab_Au20``), not ``clean_slab`` from before deposition.
-- Auto-resize is only allowed on the first adsorption step; if the substrate
-  is repeated in-plane, the freeze reference is updated to the full resized slab.
+- **Prep equilibration:** ``slab_relaxation_mode`` (default ``ionic_only``) relaxes
+  substrate ionic positions during
+  :func:`~metalsurfer.surface_prep.prepare_substrate`. The returned substrate is
+  the optimized reference for ``E(slab)``.
+- **Adsorption freeze:** ``relax_top_layer`` and ``freeze_symbols`` prep kwargs
+  write ASE ``FixAtoms`` during :func:`~metalsurfer.surface_prep.prepare_substrate`
+  (default: entire substrate frozen). Placement relaxation reads those constraints
+  only. Set ``relax_top_layer=True`` on ``prepare_substrate`` to allow the top
+  surface layer to relax with the adsorbate. Campaign start logs frozen vs moving
+  substrate atoms. Saturation pins ``base_slab`` at campaign start. Compare
+  structures to the matching prep snapshot (e.g. ``clean_slab_Au20`` after adatoms).
+- In-plane supercell expansion must be done during prep
+  (``auto_resize_substrate_for_molecule`` / ``resize_substrate_for_molecule``) before
+  calling campaign APIs.
 - When ``bo_enabled=True``, the saturation loop can reuse prior-step BO
   observations through the ``bo_transfer_*`` settings.
 - When ``multi_molecule_saturation=True`` and multiple molecules are provided

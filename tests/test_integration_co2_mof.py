@@ -5,7 +5,7 @@ import pytest
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.optimization import setup_single_model
-from metalsurfer.surfaces import create_slab_from_atoms
+from metalsurfer.surface_prep import prepare_substrate
 from metalsurfer.workflow import (
     calculate_reference_energies,
     process_molecule,
@@ -53,10 +53,9 @@ def _run_co2_in_mof():
 
     cif_path = os.path.join("examples", "mof_structures", "RUBTAK01.cif")
     mof_atoms = read(cif_path)
-    mof_slab = create_slab_from_atoms(mof_atoms, material_type="porous")
-
     config = AdsorptionConfig(
         material_type="porous",
+        slab_relaxation_mode="none",
         seed=42,
         num_conformers=1,
         num_placements=5,
@@ -67,6 +66,12 @@ def _run_co2_in_mof():
         stage2_steps=80,
         placement_z_range=(2.0, 6.0),
         min_initial_distance=1.8,
+    )
+    mof_slab = prepare_substrate(
+        slab=mof_atoms,
+        config=config,
+        results_dir="results_test_co2_mof",
+        align=False,
     )
     calculator, ts_model = setup_single_model(config.model_name, config.device)
     ref = calculate_reference_energies(

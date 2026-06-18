@@ -22,11 +22,16 @@ accessed.
 - :func:`~metalsurfer.run_saturation` — sequential saturation; returns :class:`~metalsurfer.SaturationCampaignResult` (per-molecule runs via ``.runs``).
 - :func:`~metalsurfer.run_saturation_bo` — saturation with BO-guided placement selection; returns :class:`~metalsurfer.SaturationCampaignResult`.
 
-**2. Surface Preparation** — :func:`~metalsurfer.prepare_slab` provides a
-single call for bulk→slab construction, alloy substitution, and adatom
-deposition.  Set ``preserve_slab_frame=True`` on :class:`~metalsurfer.AdsorptionConfig`
-when loading a pre-built or DFT slab so the frame is kept intact (skips
-``ensure_slab_z_alignment``).
+**2. Surface Preparation** — :mod:`metalsurfer.surface_prep` builds a
+campaign-ready substrate (optional bulk→slab, alloy, adatoms). By default
+:func:`~metalsurfer.surface_prep.prepare_substrate` **equilibrates ionic
+positions** (``slab_relaxation_mode="ionic_only"``) and attaches ASE
+``FixAtoms`` via prep kwargs (default: freeze the entire substrate during
+adsorption). For pre-built or DFT slabs pass
+``align=False`` and/or ``slab_relaxation_mode="none"`` when the geometry must
+not move. Size in-plane with
+:func:`~metalsurfer.surface_prep.resize_substrate_for_molecule` **before**
+calling campaign APIs. See :doc:`../api/surface_prep`.
 
 **3. Mid-Level Per-Molecule APIs** — useful for embedding metalsurfer
 inside custom research loops:
@@ -36,9 +41,10 @@ inside custom research loops:
 - ``calculate_reference_energies(...)``
 - ``load_molecules(...)``
 
-**4. Infrastructure APIs** — surface construction, placement generation,
-optimization, filtering, and result persistence helpers, all importable
-from the top-level ``metalsurfer`` namespace.
+**4. Infrastructure APIs** — placement generation, optimization, filtering,
+and result persistence helpers importable from the top-level ``metalsurfer``
+namespace. Substrate construction and prep orchestration live in
+:mod:`metalsurfer.surface_prep` (see :doc:`../api/surface_prep`).
 
 
 End-to-End Computational Flow
@@ -48,7 +54,9 @@ Across all run modes, the physical pipeline follows seven stages:
 
 1. **Surface Preparation** — build from a Materials Project bulk ID and
    Miller indices, or accept existing ASE Atoms.  Optional: alloy
-   substitution, adatom deposition, supercell expansion.
+   substitution, adatom deposition, supercell expansion.  Finalize with
+   :func:`~metalsurfer.surface_prep.prepare_substrate` (PBC, ``FixAtoms``, validation) before
+   calling campaign APIs.
 
 2. **Reference Energy Construction** — compute the clean-slab energy and
    isolated-molecule energies.  Adsorption energy is defined as:
@@ -112,15 +120,10 @@ interactions that preserve connectivity remain allowed.  When
 ``multi_molecule_saturation=True``, all molecules compete at each step.
 
 Saturation captures ``base_slab`` once after surface prep.  Placement
-relaxation freezes that substrate block (``relax_top_layer=False`` freezes
-every atom in the reference; default ``True`` freezes all but the top layer).
-Prep equilibration uses ``slab_relaxation_mode`` separately — see
-:doc:`surface_engineering`.  Step-1 ``auto_resize_slab`` may repeat the
-substrate in-plane; standard, Bayesian, and saturation workflows expand the
-freeze reference to the full repeated substrate (for both
-``relax_top_layer=True`` and ``False``).  Competitive multi-molecule
-saturation pre-resizes once before the step-1 molecule loop so every adsorbate
-competes on the same footprint.
+relaxation honors ASE ``FixAtoms`` on that reference (set during prep via
+:func:`~metalsurfer.surface_prep.apply_surface_constraints`).  Prep equilibration uses ``slab_relaxation_mode``
+separately — see :doc:`surface_engineering`.  In-plane supercell sizing must
+be completed during prep before calling campaign APIs.
 
 
 Module Layout
@@ -136,8 +139,8 @@ Module Layout
    ├── io_results.py         # CSV, XYZ, optional VASP I/O, metadata persistence
    ├── models.py             # typed result dataclasses
    ├── optimization.py       # MLIP setup, batched relaxation
-   ├── surface_prep.py       # prepare_slab convenience wrapper
-   ├── surfaces.py           # slab construction, alloy, adatom
+   ├── surface_prep/         # canonical substrate prep API (prepare_substrate, …)
+   ├── surfaces.py           # slab construction, alloy, adatom (implementation)
    ├── symmetry.py           # spglib-based symmetry analysis
    │
    ├── ml/                   # BO surrogates, dataset, features

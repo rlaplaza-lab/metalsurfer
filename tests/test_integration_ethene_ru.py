@@ -5,7 +5,7 @@ import pytest
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.optimization import setup_single_model
-from metalsurfer.surfaces import create_slab_from_bulk
+from metalsurfer.surface_prep import prepare_substrate
 from metalsurfer.workflow import (
     calculate_reference_energies,
     process_molecule,
@@ -44,18 +44,19 @@ def _cc_bond_length(atoms, slab_size: int) -> float:
 
 def _run_ethene_on_ru():
     """Create Ru(0001) slab and run a single ethene screening flow."""
-    slab = create_slab_from_bulk(
-        bulk_id="mp-33",
-        miller_indices=(0, 0, 1),
-        supercell=(2, 2, 1),
-        results_dir="results_test_ethene",
-    )
     config = AdsorptionConfig(
         material_type="slab",
         seed=42,
         num_conformers=3,
         num_placements=25,
         device="cuda",
+    )
+    slab = prepare_substrate(
+        bulk_id="mp-33",
+        miller_indices=(0, 0, 1),
+        supercell=(2, 2, 1),
+        config=config,
+        results_dir="results_test_ethene",
     )
     calculator, ts_model = setup_single_model(config.model_name, config.device)
     ref = calculate_reference_energies(

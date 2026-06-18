@@ -20,7 +20,7 @@ from ..ml.bayesian import (
 from ..ml.features import extract_features
 from ..ml.schema import PlacementRecord
 from ..models import BOStepMemory, ReferenceEnergies, ScreeningResult
-from ..optimization import clear_autobatcher_cache, compute_frozen_indices
+from ..optimization import frozen_indices_from_constraints
 from ..placement.generators import (
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
@@ -29,14 +29,12 @@ from ..surfaces import SlabContainer
 from .core import _evaluate_placement_batch
 from .shared import (
     PlacementFailureEvent,
-    _compute_slab_energy,
     _infer_surface_symbols,
     _resolve_site_context_for_sampling,
     _summarize_failure_events,
     build_representative_relaxation_atoms,
     prepare_substrate_for_screening,
     resolve_workload_config,
-    write_substrate_step_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,8 +82,6 @@ def process_molecule_bayesian(
     bo_prior_step_memory: BOStepMemory | None = None,
     bo_step_memory_out: dict[str, BOStepMemory] | None = None,
     bo_transfer_info_out: dict[str, object] | None = None,
-    allow_auto_resize: bool = True,
-    step_metadata_out: dict[str, object] | None = None,
 ) -> list[ScreeningResult] | None:
     """Bayesian-optimisation-guided placement screening for one molecule."""
     if config is None:
@@ -127,24 +123,10 @@ def process_molecule_bayesian(
         conformers,
         base_slab_for_frozen,
         config,
-        allow_auto_resize=allow_auto_resize,
     )
     slab = substrate_ref.slab
     slab_for_sites = substrate_ref.slab_for_sites
     effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
-
-    if substrate_ref.slab_was_resized:
-        clear_autobatcher_cache()
-        E_slab = _compute_slab_energy(
-            slab.atoms, calculator, label="resized slab reference"
-        )
-        logger.info("Resized slab energy: %.4f eV", E_slab)
-
-    write_substrate_step_metadata(
-        step_metadata_out,
-        slab_was_resized=substrate_ref.slab_was_resized,
-        substrate_atoms_after_resize=substrate_ref.substrate_atoms_after_resize,
-    )
 
     site_context = _resolve_site_context_for_sampling(
         slab_for_sites,
@@ -157,7 +139,7 @@ def process_molecule_bayesian(
         if effective_base_slab_for_frozen is not None
         else slab.atoms
     )
-    frozen_indices = compute_frozen_indices(freeze_ref, config)
+    frozen_indices = frozen_indices_from_constraints(freeze_ref)
     representative_atoms = build_representative_relaxation_atoms(
         conformers,
         slab.atoms,

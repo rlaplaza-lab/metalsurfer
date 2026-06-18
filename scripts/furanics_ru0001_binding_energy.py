@@ -12,12 +12,8 @@ import argparse
 import logging
 import os
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    prepare_slab,
-    run_adsorption_bo,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption_bo
+from metalsurfer.surface_prep import prepare_substrate
 
 # List of smiles and molecule name pairs
 MOLECULES = [
@@ -82,7 +78,7 @@ def main():
     )
 
     # Create Ru(0001) slab from Materials Project mp-33.
-    slab = prepare_slab(
+    slab = prepare_substrate(
         bulk_id="mp-33",
         miller_indices=(0, 0, 1),
         supercell=(1, 1, 1),

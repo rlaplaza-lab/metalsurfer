@@ -24,7 +24,10 @@ from metalsurfer.placement import (
     get_unified_sites,
     material_aware_pbc,
 )
-from metalsurfer.placement._material import material_type_for_placement
+from metalsurfer.placement._material import (
+    calculator_pbc_for_atoms,
+    material_type_for_placement,
+)
 from metalsurfer.placement.generators import (
     SiteContext,
     _estimate_parallel_fraction,
@@ -295,6 +298,25 @@ def test_material_aware_pbc():
     assert material_aware_pbc("slab") == [True, True, False]
     assert material_aware_pbc("nanoparticle") == [False, False, False]
     assert material_aware_pbc("porous") == [True, True, True]
+
+
+def test_calculator_pbc_for_atoms():
+    slab = Atoms("Cu", positions=[[0, 0, 0]], cell=[5, 5, 20], pbc=[True, True, False])
+    assert calculator_pbc_for_atoms(slab) == [True, True, True]
+
+    porous = Atoms("Cu", positions=[[0, 0, 0]], cell=[5, 5, 20], pbc=True)
+    assert calculator_pbc_for_atoms(porous) == [True, True, True]
+
+    cluster = Atoms("Pt", positions=[[0, 0, 0]], cell=[20, 20, 20], pbc=False)
+    assert calculator_pbc_for_atoms(cluster) == [False, False, False]
+
+
+def test_prepare_atoms_for_calculator_maps_slab_pbc():
+    from metalsurfer.workflow.shared import _prepare_atoms_for_calculator
+
+    atoms = Atoms("Cu", positions=[[0, 0, 0]], cell=[5, 5, 20], pbc=[True, True, False])
+    _prepare_atoms_for_calculator(atoms, label="test slab")
+    assert list(atoms.get_pbc()) == [True, True, True]
 
 
 # ---------------------------------------------------------------------------

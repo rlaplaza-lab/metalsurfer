@@ -3,17 +3,13 @@
 
 Molecules: ethane (CC), ethene (C=C), acetylene (C#C).
 
-Uses metalsurfer prepare_slab to create RuCu alloy from Ru(0001) base slab.
+Uses metalsurfer prepare_substrate to create RuCu alloy from Ru(0001) base slab.
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 """
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    prepare_slab,
-    run_adsorption,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
+from metalsurfer.surface_prep import prepare_substrate
 
 MOLECULES = [
     ("CC", "ethane"),
@@ -42,7 +38,7 @@ def main():
         debug_write_initial_placements=True,
     )
 
-    slab = prepare_slab(
+    slab = prepare_substrate(
         bulk_id="mp-33",
         miller_indices=(0, 0, 1),
         supercell=(1, 1, 1),

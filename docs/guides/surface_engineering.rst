@@ -15,23 +15,51 @@ For ``material_type="slab"``, metalsurfer uses a bottom-anchored layout:
 - the adsorption surface is at ``max(z)``
 - empty space (vacuum) lies only in +z above the surface
 
-:func:`~metalsurfer.create_slab_from_bulk`, :func:`~metalsurfer.create_slab_from_atoms`,
-and :func:`~metalsurfer.prepare_slab` apply this alignment automatically.
-Bare ASE ``Atoms`` passed to a run entry point are normalized when
-``AdsorptionConfig(material_type="slab")`` is set.
+:func:`~metalsurfer.surface_prep.create_slab_from_bulk`,
+:func:`~metalsurfer.surface_prep.create_slab_from_atoms`, and
+:func:`~metalsurfer.surface_prep.prepare_substrate` apply z alignment during
+**prep** (not inside campaign APIs). Campaign entry points validate geometry
+and PBC but do not rewrite constraints or resize the cell.
+
+
+Campaign-ready substrates
+-------------------------
+
+Import all prep helpers from :mod:`metalsurfer.surface_prep` (see
+:doc:`../api/surface_prep`). Before ``run_adsorption``, ``run_saturation``, or
+related APIs, the substrate must have:
+
+- **Equilibrated ionic positions** — :func:`~metalsurfer.surface_prep.prepare_substrate`
+  relaxes the substrate by default (``slab_relaxation_mode="ionic_only"``).
+  Campaign APIs assume this optimized reference for ``E(slab)`` and ``E_ads``.
+- PBC matching ``AdsorptionConfig.material_type`` (``[T,T,F]`` for slabs,
+  ``[T,T,T]`` for porous frameworks, ``[F,F,F]`` for nanoparticles)
+- Bottom-anchored slab layout (``min(z) ≈ 0``) when ``material_type="slab"``
+- ASE ``FixAtoms`` from :func:`~metalsurfer.surface_prep.apply_surface_constraints`
+  (attached by :func:`~metalsurfer.surface_prep.prepare_substrate` via prep kwargs
+  ``relax_top_layer`` / ``freeze_symbols``; default freezes the entire substrate)
+- Sufficient in-plane image separation for your adsorbates (use
+  :func:`~metalsurfer.surface_prep.resize_substrate_for_molecule` after
+  conformer generation when needed)
+
+:func:`~metalsurfer.surface_prep.prepare_substrate` is the recommended
+one-call path: equilibrate ions, apply PBC, attach constraints, validate.
 
 
 One-Call Preparation
 --------------------
 
-:func:`~metalsurfer.prepare_slab` combines slab construction, alloy
-substitution, and adatom deposition into a single convenience call:
+:func:`~metalsurfer.surface_prep.prepare_substrate` combines slab construction,
+alloy substitution, and adatom deposition into a single convenience call:
 
 .. code-block:: python
 
-   from metalsurfer import prepare_slab
+   from metalsurfer import AdsorptionConfig
+   from metalsurfer.surface_prep import prepare_substrate
 
-   slab = prepare_slab(
+   config = AdsorptionConfig(material_type="slab", seed=42)
+
+   slab = prepare_substrate(
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
        supercell=(2, 2, 1),
@@ -49,15 +77,26 @@ substitution, and adatom deposition into a single convenience call:
 Step-by-Step Preparation
 ------------------------
 
-For more control, use the individual helpers.
+For more control, use the individual helpers from :mod:`metalsurfer.surface_prep`.
 
 **Fast structural modification** (no energy ranking):
 
 .. code-block:: python
 
-   from metalsurfer import create_slab_from_bulk, substitute_alloy, deposit_adatoms
+   from metalsurfer import AdsorptionConfig
+   from metalsurfer.surface_prep import (
+       create_slab_from_bulk,
+       deposit_adatoms,
+       finalize_substrate,
+       substitute_alloy,
+   )
 
-   slab = create_slab_from_bulk(bulk_id="mp-33", miller_indices=(0, 0, 1))
+   config = AdsorptionConfig(material_type="slab")
+   slab = create_slab_from_bulk(
+       bulk_id="mp-33",
+       miller_indices=(0, 0, 1),
+       results_dir="results_demo",
+   )
 
    slab = substitute_alloy(
        slab,
@@ -72,21 +111,28 @@ For more control, use the individual helpers.
        coverage_fraction=0.20,
    )
 
+   slab = finalize_substrate(slab, config)
+
 **Energy-ranked variant selection** (recommended for realistic modified
 surfaces):
 
 .. code-block:: python
 
-   from metalsurfer import (
-       AdsorptionConfig,
+   from metalsurfer import AdsorptionConfig, setup_single_model
+   from metalsurfer.surface_prep import (
        create_slab_from_bulk,
        deposit_adatoms,
-       setup_single_model,
+       finalize_substrate,
+       relax_substrate,
        substitute_alloy,
    )
 
    config = AdsorptionConfig(material_type="slab")
-   slab = create_slab_from_bulk(bulk_id="mp-33", miller_indices=(0, 0, 1))
+   slab = create_slab_from_bulk(
+       bulk_id="mp-33",
+       miller_indices=(0, 0, 1),
+       results_dir="results_demo",
+   )
    calculator, _ = setup_single_model(config.model_name, config.device)
 
    slab = substitute_alloy(
@@ -107,18 +153,25 @@ surfaces):
        relaxation_mode="full",  # full, ionic_only, cell_only, none
    )
 
+   slab = relax_substrate(slab, calculator, config, relaxation_mode="ionic_only")
+   slab = finalize_substrate(slab, config)
+
 Relaxation presets for slab preparation
 ---------------------------------------
 
-``create_slab_from_bulk(...)`` and ``deposit_adatoms(...)`` support shared
-relaxation presets:
+:func:`~metalsurfer.surface_prep.prepare_substrate`,
+:func:`~metalsurfer.surface_prep.create_slab_from_bulk`,
+:func:`~metalsurfer.surface_prep.deposit_adatoms`, and
+:func:`~metalsurfer.surface_prep.relax_substrate` share relaxation presets:
 
-- ``"none"``: no slab relaxation (default).
-- ``"ionic_only"``: relax atomic positions with fixed cell.
+- ``"none"``: no slab relaxation.
+- ``"ionic_only"``: relax atomic positions with fixed cell (default).
 - ``"cell_only"``: relax cell with ionic coordinates constrained.
 - ``"full"``: relax both ionic coordinates and cell.
 
-You can set defaults once on :class:`~metalsurfer.AdsorptionConfig`:
+Set defaults once on :class:`~metalsurfer.AdsorptionConfig` or pass explicit
+``slab_relaxation_*`` / ``adatom_relaxation_*`` kwargs to
+:func:`~metalsurfer.surface_prep.prepare_substrate`:
 
 .. code-block:: python
 
@@ -130,12 +183,16 @@ You can set defaults once on :class:`~metalsurfer.AdsorptionConfig`:
    )
 
 The ``calculator`` argument is **optional** for both
-``substitute_alloy(...)`` and ``deposit_adatoms(...)``:
+:func:`~metalsurfer.surface_prep.substitute_alloy` and
+:func:`~metalsurfer.surface_prep.deposit_adatoms`:
 
 - Without a calculator: a valid modified slab is created (fast structural
   modification).
 - With a calculator: random variants are energy-scored and the
   lowest-energy variant is selected.
+
+:func:`~metalsurfer.surface_prep.prepare_substrate` loads a calculator
+automatically when any relaxation stage needs it.
 
 Use separate relaxation presets for bulk slab creation vs adatom deposition
 when you want a single full equilibration of the clean surface but only ionic
@@ -143,7 +200,7 @@ relaxation after adding adatoms:
 
 .. code-block:: python
 
-   slab = prepare_slab(
+   slab = prepare_substrate(
        bulk_id="mp-81",
        miller_indices=(1, 1, 1),
        adatom_symbol="Au",
@@ -152,25 +209,44 @@ relaxation after adding adatoms:
        adatom_relaxation_mode="ionic_only",
    )
 
+For structures loaded from file or ASE ``Atoms``, set ``slab_relaxation_mode``
+on *config* (or as kwargs) so :func:`~metalsurfer.surface_prep.prepare_substrate`
+equilibrates the reference before finalization.
+
 Slab freeze during adsorption and saturation
 --------------------------------------------
 
-``AdsorptionConfig.slab_relaxation_mode`` controls **prep** only (ASE).
-During placement relaxation, ``relax_top_layer`` and ``base_slab_for_frozen``
-control TorchSim ``FixAtoms``:
+Prep equilibration and adsorption freeze are **separate stages**:
 
-- ``relax_top_layer=False``: freeze every atom in the substrate reference
-  (typical for a fixed slab during adsorption).
-- Saturation stores ``base_slab`` once after ``prepare_slab``; only those
-  indices stay fixed as adsorbates accumulate. Earlier adsorbate units may
-  still relax in later steps.
-- When adatoms are deposited, the freeze reference is the post-adatom slab
-  (e.g. ``clean_slab_Au20``), not ``clean_slab`` written before deposition.
-- If ``auto_resize_slab`` expands the substrate on saturation step 1, the
-  freeze reference is updated to the full repeated substrate so periodic
-  image tiles are not left unfrozen (standard, BO, and saturation paths;
-  both ``relax_top_layer`` settings).  Multi-molecule competitive saturation
-  pre-resizes once before evaluating candidates on step 1.
+1. **Prep (``prepare_substrate``):** ``slab_relaxation_mode`` (default
+   ``"ionic_only"``) equilibrates substrate **ionic positions** with ASE/MLIP.
+   The returned structure is the optimized reference for ``E(slab)``.
+2. **Prep (finalize):** ``relax_top_layer``, ``freeze_symbols``, and
+   ``top_layer_tolerance`` prep kwargs are written to ASE ``FixAtoms`` via
+   :func:`~metalsurfer.surface_prep.apply_surface_constraints`.
+3. **Adsorption / saturation:** TorchSim reads those frozen indices from the
+   substrate reference (``frozen_indices_from_constraints``). Campaign APIs
+   log which substrate atoms are frozen vs free at workflow start.
+
+**Default (``relax_top_layer=False``):** every substrate atom is frozen during
+placement relaxation — the standard choice for rigid-surface binding energies.
+
+**Allow top-layer relaxation (``relax_top_layer=True``):** subsurface atoms stay
+fixed; surface atoms within ``top_layer_tolerance`` of ``max(z)`` can move with
+the adsorbate. Use for workflows where the surface should restructure (e.g.
+graphene oxide, H-saturated slabs).
+
+**Symbol-specific freeze (``freeze_symbols=[...]``):** only listed elements are
+frozen; layer policy is ignored.
+
+Saturation stores ``base_slab`` once after ``prepare_substrate``; indices on that
+reference stay fixed as adsorbates accumulate. Earlier adsorbate units may relax
+in later steps. After adatom deposition, compare structures to the post-adatom
+reference (e.g. ``clean_slab_Au20``), not ``clean_slab`` from before deposition.
+
+In-plane supercell expansion must be done during prep
+(``auto_resize_substrate_for_molecule`` / ``resize_substrate_for_molecule``) before
+calling campaign APIs.
 
 
 Material Type

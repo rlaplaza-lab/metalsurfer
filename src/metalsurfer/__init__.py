@@ -46,17 +46,24 @@ __all__ = [
 
 _LAZY_MODULES = {
     "_logging": {"configure_logging"},
-    "surfaces": {
+    "surface_prep": {
+        "prepare_substrate",
+        "finalize_substrate",
+        "relax_substrate",
+        "resize_substrate_for_molecule",
+        "apply_material_pbc",
         "SlabContainer",
         "create_slab_from_bulk",
         "create_slab_from_atoms",
         "substitute_alloy",
         "deposit_adatoms",
-        "auto_resize_slab_for_molecule",
+        "auto_resize_substrate_for_molecule",
         "compute_minimum_supercell",
-    },
-    "surface_prep": {
-        "prepare_slab",
+        "ensure_slab_z_alignment",
+        "apply_surface_constraints",
+        "validate_substrate",
+        "accept_substrate_for_api",
+        "coerce_slab_container",
     },
     "conformers": {"create_conformers_from_smiles", "select_conformer_boltzmann"},
     "placement": {
@@ -78,6 +85,7 @@ _LAZY_MODULES = {
         "precompute_results",
         "identify_top_layer_indices",
         "compute_frozen_indices",
+        "frozen_indices_from_constraints",
     },
     "filters": {"filter_results", "check_decomposition", "check_desorption"},
     "workflow": {

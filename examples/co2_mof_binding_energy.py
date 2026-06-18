@@ -19,7 +19,12 @@ import os
 
 from ase.io import read
 
-from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
+from metalsurfer import (
+    AdsorptionConfig,
+    configure_logging,
+    run_adsorption,
+)
+from metalsurfer.surface_prep import prepare_substrate
 
 
 def main():
@@ -42,6 +47,7 @@ def main():
 
     config = AdsorptionConfig(
         material_type="porous",
+        slab_relaxation_mode="none",  # keep experimental CIF framework geometry
         model_name="uma-s-1p2",
         seed=42,
         num_conformers=1,
@@ -58,8 +64,15 @@ def main():
         min_initial_distance=1.8,
     )
 
-    campaign = run_adsorption(
+    mof_slab = prepare_substrate(
         slab=mof_atoms,
+        config=config,
+        results_dir="results_co2_mof",
+        align=False,
+    )
+
+    campaign = run_adsorption(
+        slab=mof_slab,
         molecules=[("O=C=O", "CO2")],
         config=config,
         surface_type="co2_mof",

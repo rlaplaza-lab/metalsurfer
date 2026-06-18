@@ -1,12 +1,12 @@
-"""Tests for prepare_slab relaxation option forwarding."""
+"""Tests for prepare_substrate relaxation option forwarding."""
 
 from metalsurfer.config import AdsorptionConfig
-from metalsurfer.surface_prep import SlabContainer, prepare_slab
+from metalsurfer.surface_prep import SlabContainer, prepare_substrate
 
 from .conftest import make_slab
 
 
-def test_prepare_slab_passes_create_relaxation_options(monkeypatch):
+def test_prepare_substrate_passes_slab_relaxation_options(monkeypatch):
     captured: dict = {}
     fake_calc = object()
 
@@ -23,19 +23,19 @@ def test_prepare_slab_passes_create_relaxation_options(monkeypatch):
         _fake_setup_single_model,
     )
     monkeypatch.setattr(
-        "metalsurfer.surface_prep.create_slab_from_bulk",
+        "metalsurfer.surface_prep.prep.create_slab_from_bulk",
         _fake_create_slab_from_bulk,
     )
 
-    prepare_slab(
+    prepare_substrate(
         bulk_id="mp-33",
         model_name="uma-s-1p1",
         device="cpu",
         config=AdsorptionConfig(),
-        create_relaxation_mode="full",
-        create_relaxation_optimizer="bfgs",
-        create_relaxation_fmax=0.03,
-        create_relaxation_steps=111,
+        slab_relaxation_mode="full",
+        slab_relaxation_optimizer="bfgs",
+        slab_relaxation_fmax=0.03,
+        slab_relaxation_steps=111,
     )
 
     assert captured["setup"] == ("uma-s-1p1", "cpu")
@@ -46,7 +46,7 @@ def test_prepare_slab_passes_create_relaxation_options(monkeypatch):
     assert captured["create_kwargs"]["relaxation_steps"] == 111
 
 
-def test_prepare_slab_passes_adatom_relaxation_options(monkeypatch):
+def test_prepare_substrate_passes_adatom_relaxation_options(monkeypatch):
     captured: dict = {}
     fake_calc = object()
 
@@ -85,15 +85,15 @@ def test_prepare_slab_passes_adatom_relaxation_options(monkeypatch):
         _fake_setup_single_model,
     )
     monkeypatch.setattr(
-        "metalsurfer.surface_prep.create_slab_from_bulk",
+        "metalsurfer.surface_prep.prep.create_slab_from_bulk",
         _fake_create_slab_from_bulk,
     )
     monkeypatch.setattr(
-        "metalsurfer.surface_prep.deposit_adatoms",
+        "metalsurfer.surface_prep.prep.deposit_adatoms",
         _fake_deposit_adatoms,
     )
 
-    prepare_slab(
+    prepare_substrate(
         bulk_id="mp-33",
         adatom_symbol="Au",
         adatom_coverage=0.2,
@@ -111,7 +111,52 @@ def test_prepare_slab_passes_adatom_relaxation_options(monkeypatch):
     assert captured["kwargs"]["relaxation_steps"] == 77
 
 
-def test_prepare_slab_passes_enforce_top_layer_fraction(monkeypatch):
+def test_prepare_substrate_relaxes_loaded_slab_before_finalize(monkeypatch):
+    captured: dict = {}
+    fake_calc = object()
+    base = SlabContainer(make_slab(symbol="Ru"))
+
+    def _fake_setup_single_model(model_name, device):
+        captured["setup"] = (model_name, device)
+        return fake_calc, None
+
+    def _fake_relax_substrate(slab, calculator, config=None, **kwargs):
+        captured["relax_kwargs"] = {
+            "calculator": calculator,
+            "config": config,
+            **kwargs,
+        }
+        return slab
+
+    monkeypatch.setattr(
+        "metalsurfer.optimization.setup_single_model",
+        _fake_setup_single_model,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.surface_prep.prep.relax_substrate",
+        _fake_relax_substrate,
+    )
+
+    prepare_substrate(
+        slab=base,
+        model_name="uma-s-1p1",
+        device="cpu",
+        config=AdsorptionConfig(),
+        slab_relaxation_mode="ionic_only",
+        slab_relaxation_optimizer="bfgs",
+        slab_relaxation_fmax=0.03,
+        slab_relaxation_steps=99,
+    )
+
+    assert captured["setup"] == ("uma-s-1p1", "cpu")
+    assert captured["relax_kwargs"]["calculator"] is fake_calc
+    assert captured["relax_kwargs"]["relaxation_mode"] == "ionic_only"
+    assert captured["relax_kwargs"]["relaxation_optimizer"] == "bfgs"
+    assert captured["relax_kwargs"]["relaxation_fmax"] == 0.03
+    assert captured["relax_kwargs"]["relaxation_steps"] == 99
+
+
+def test_prepare_substrate_passes_enforce_top_layer_fraction(monkeypatch):
     captured: dict = {}
     fake_calc = object()
 
@@ -143,15 +188,15 @@ def test_prepare_slab_passes_enforce_top_layer_fraction(monkeypatch):
         _fake_setup_single_model,
     )
     monkeypatch.setattr(
-        "metalsurfer.surface_prep.create_slab_from_bulk",
+        "metalsurfer.surface_prep.prep.create_slab_from_bulk",
         _fake_create_slab_from_bulk,
     )
     monkeypatch.setattr(
-        "metalsurfer.surface_prep.substitute_alloy",
+        "metalsurfer.surface_prep.prep.substitute_alloy",
         _fake_substitute_alloy,
     )
 
-    prepare_slab(
+    prepare_substrate(
         bulk_id="mp-33",
         alloy_host="Ru",
         alloy_guest="Cu",
@@ -163,7 +208,7 @@ def test_prepare_slab_passes_enforce_top_layer_fraction(monkeypatch):
     assert captured["enforce_top_layer_fraction"] is True
 
 
-def test_prepare_slab_slab_input_skips_bulk_load(monkeypatch):
+def test_prepare_substrate_slab_input_skips_bulk_load(monkeypatch):
     captured: dict = {}
     base = SlabContainer(make_slab(symbol="Ru"))
 
@@ -176,7 +221,7 @@ def test_prepare_slab_slab_input_skips_bulk_load(monkeypatch):
         return slab
 
     monkeypatch.setattr(
-        "metalsurfer.surface_prep.create_slab_from_bulk",
+        "metalsurfer.surface_prep.prep.create_slab_from_bulk",
         _fake_create_slab_from_bulk,
     )
     monkeypatch.setattr(
@@ -184,16 +229,36 @@ def test_prepare_slab_slab_input_skips_bulk_load(monkeypatch):
         lambda *a, **k: (object(), None),
     )
     monkeypatch.setattr(
-        "metalsurfer.surface_prep.deposit_adatoms",
+        "metalsurfer.surface_prep.prep.deposit_adatoms",
         _fake_deposit_adatoms,
     )
 
-    prepare_slab(
+    prepare_substrate(
         slab=base,
         adatom_symbol="Sn",
         adatom_coverage=0.1,
-        config=AdsorptionConfig(),
+        config=AdsorptionConfig(slab_relaxation_mode="none"),
     )
 
     assert "create_called" not in captured
     assert captured["deposit_called"] is True
+
+
+def test_finalize_substrate_applies_pbc_and_constraints():
+    from metalsurfer.surface_prep import apply_material_pbc, finalize_substrate
+
+    base = make_slab()
+    base.set_pbc([True, True, True])
+    config = AdsorptionConfig(material_type="slab")
+
+    finalized = finalize_substrate(
+        base,
+        config,
+        align=False,
+        relax_top_layer=True,
+    )
+
+    assert list(finalized.atoms.get_pbc()) == [True, True, False]
+    assert finalized.atoms.constraints
+    apply_material_pbc(base, "porous")
+    assert list(base.get_pbc()) == [True, True, True]

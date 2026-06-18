@@ -9,12 +9,8 @@ If you hit CUDA OOM on a 15GB GPU, try:
 or reduce num_placements (e.g. 25).
 """
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    prepare_slab,
-    run_adsorption,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
+from metalsurfer.surface_prep import prepare_substrate
 
 
 def main():
@@ -38,10 +34,10 @@ def main():
         stage2_steps=500,
     )
 
-    slab = prepare_slab(
+    slab = prepare_substrate(
         bulk_id="mp-23",
         miller_indices=(1, 1, 1),
-        supercell=(1, 1, 1),
+        supercell=(3, 3, 1),
         config=config,
         results_dir=results_dir,
     )

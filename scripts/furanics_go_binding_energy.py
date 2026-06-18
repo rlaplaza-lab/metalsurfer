@@ -20,11 +20,8 @@ from urllib.request import urlopen
 import numpy as np
 from ase.io import read
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    run_adsorption_bo,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption_bo
+from metalsurfer.surface_prep import prepare_substrate
 
 # List of smiles and molecule name pairs
 MOLECULES = [
@@ -55,8 +52,8 @@ MIN_CALCULATOR_CELL_C_ANG = 18.0
 
 
 def _ensure_calculator_safe_pbc_and_vacuum(atoms) -> None:
-    """Use calculator-safe PBC and ensure enough z separation."""
-    atoms.set_pbc([True, True, True])
+    """Use slab PBC and ensure enough z separation for the MLIP calculator."""
+    atoms.set_pbc([True, True, False])
     cell = atoms.get_cell().copy()
     c_vec = np.array(cell[2], dtype=float)
     c_len = float(np.linalg.norm(c_vec))
@@ -126,12 +123,18 @@ def main():
         stage1_steps=50,
         stage2_steps=500,
         debug_write_initial_placements=False,
-        relax_top_layer=True,  # Explicitly allow top GO-layer relaxation
         bo_enabled=True,
         bo_initial_random=100,
         bo_batch_size=100,
         # bo_total_budget = acquisition batches after initial (not total evals).
         bo_total_budget=2,  # 100 initial + 2×100 ≈ 300 evaluations
+    )
+
+    slab = prepare_substrate(
+        slab=slab,
+        config=config,
+        results_dir=results_dir,
+        relax_top_layer=True,  # Allow top GO layer to relax with adsorbate
     )
 
     campaign = run_adsorption_bo(

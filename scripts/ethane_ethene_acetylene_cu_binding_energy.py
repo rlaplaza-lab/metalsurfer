@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """Compute binding energies of ethane/ethene/acetylene on Cu(111)."""
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    prepare_slab,
-    run_adsorption,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
+from metalsurfer.surface_prep import prepare_substrate
 
 MOLECULES = [("CC", "ethane"), ("C=C", "ethene"), ("C#C", "acetylene")]
 
@@ -31,7 +27,7 @@ def main() -> None:
         debug_write_initial_placements=True,
     )
 
-    slab = prepare_slab(
+    slab = prepare_substrate(
         bulk_id="mp-30",
         miller_indices=(1, 1, 1),
         supercell=(1, 1, 1),

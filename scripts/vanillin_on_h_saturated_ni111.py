@@ -18,12 +18,8 @@ import os
 import pandas as pd
 from ase.io import read
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    prepare_slab,
-    run_adsorption,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
+from metalsurfer.surface_prep import prepare_substrate
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,9 +99,8 @@ def main():
         print(str(exc))
         return 1
 
-    # Load H-saturated slab
+    # Load H-saturated slab and finalize for campaign APIs (PBC, constraints).
     saturated_atoms = read(saturated_xyz)
-    slab = saturated_atoms
 
     config = AdsorptionConfig(
         material_type="slab",
@@ -120,16 +115,24 @@ def main():
         stage1_steps=50,
         stage2_steps=500,
         top_layer_tolerance=2.0,  # Include top metal + H in top layer for envelope
-        relax_top_layer=True,  # Explicitly allow top-layer relaxation for H-saturated slab
+    )
+
+    slab = prepare_substrate(
+        slab=saturated_atoms,
+        config=config,
+        results_dir=results_dir,
+        align=False,
+        relax_top_layer=True,  # Allow top layer to relax with adsorbate
     )
 
     # Clean metal slab for frozen indices (subsurface metal only)
-    base_slab = prepare_slab(
+    base_slab = prepare_substrate(
         bulk_id="mp-23",
         miller_indices=(1, 1, 1),
-        supercell=(1, 1, 1),
+        supercell=(3, 3, 1),
         config=config,
         results_dir=results_dir,
+        relax_top_layer=True,
     )
 
     smiles = "c1(C=O)cc(OC)c(O)cc1"

@@ -4,16 +4,18 @@
 Paper: https://doi.org/10.3762/bjnano.11.140
 Zenodo BOSS dataset: https://doi.org/10.5281/zenodo.4680467
 
-Uses metalsurfer BO-guided placement search to find local adsorption minima on a
-Cu(111) slab (mp-30) with in-plane auto-resize for camphor. MLIP energies are
+Uses metalsurfer BO-guided placement search to find local adsorption minima on the
+paper's Cu(111) slab (192 Cu from NOMAD; bottom 2 layers frozen). MLIP energies are
 compared qualitatively to the paper's eight DFT minima (not absolute eV).
 
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 
+Uses the paper's 192-atom Cu(111) slab from NOMAD and a 25-batch BO budget to search
+for placements comparable to the eight published DFT minima.
+
 If you hit CUDA OOM on a 15GB GPU, try:
   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/camphor_cu111_binding_energy.py
-or use --quick for a smaller BO budget.
 """
 
 from __future__ import annotations
@@ -38,29 +40,20 @@ from metalsurfer import (
     AdsorptionConfig,
     BindingCampaignResult,
     configure_logging,
-    prepare_slab,
     run_adsorption_bo,
 )
 from metalsurfer.config import resolved_bo_eval_budget
 from metalsurfer.models import ScreeningResult
-from metalsurfer.surfaces import SlabContainer
-from metalsurfer.optimization import compute_frozen_indices
+from metalsurfer.surface_prep import SlabContainer, prepare_substrate
 
 # (1S)-(-)-camphor (PubChem InChIKey DSSYKIVIOFKYAU-OIBJUYFYSA-N).
 # Do not use CC1(C)[C@@H]2CC[C@@]1(C)C(=O)C2 — that is the (1R)-(+)-enantiomer.
-CAMPHOR_SMILES = "[H][C@]12CC[C@](C)(C(=O)C1)C2(C)C" 
+CAMPHOR_SMILES = "[H][C@]12CC[C@](C)(C(=O)C1)C2(C)C"
 MOLECULE_NAME = "camphor"
 SURFACE_TYPE = "camphor_cu111"
 RESULTS_DIR = f"results_{SURFACE_TYPE}"
-
-
-def results_dir(*, production: bool, dft_slab: bool = False) -> str:
-    if dft_slab:
-        suffix = "_dft_slab_production" if production else "_dft_slab"
-        return f"results_{SURFACE_TYPE}{suffix}"
-    if production:
-        return f"results_{SURFACE_TYPE}_production"
-    return RESULTS_DIR
+# Acquisition batches after the initial random batch (~300+ MLIP evals on a 15GB GPU).
+BO_TOTAL_BUDGET = 25
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 DATA_DIR = EXAMPLE_DIR / "camphor_cu111"
@@ -70,7 +63,9 @@ PAPER_SLAB_ATOMS = 192
 PAPER_SLAB_CELL_ANG = (15.41, 17.79, 56.29)
 PAPER_RELAXED_CU_LAYERS = 2
 PAPER_TOP_LAYER_TOLERANCE = 2.1  # Å; spans 2 Cu layers (~2.08 Å interlayer spacing)
-ZENODO_RECORD_URL = "https://zenodo.org/records/4680467/files/Camphor_Cu111_BOSS_dataset.dat"
+ZENODO_RECORD_URL = (
+    "https://zenodo.org/records/4680467/files/Camphor_Cu111_BOSS_dataset.dat"
+)
 ZENODO_DAT_FILENAME = "Camphor_Cu111_BOSS_dataset.dat"
 
 NOMAD_API = "https://nomad-lab.eu/prod/v1/api/v1"
@@ -169,11 +164,6 @@ def ensure_zenodo_reference_data() -> Path:
     return dest
 
 
-def slab_supercell(*, production: bool) -> tuple[int, int, int]:
-    """Return supercell repeat; production uses (1,1,1) before optional auto-resize."""
-    return (1, 1, 1) if production else (2, 2, 1)
-
-
 def extract_clean_slab_from_nomad(atoms: Atoms) -> Atoms:
     """Extract the Cu slab from a NOMAD adslab, preserving atom order and cell."""
     symbols = atoms.get_chemical_symbols()
@@ -219,35 +209,20 @@ def ensure_dft_reference_slab() -> Path:
 def prepare_campaign_slab(
     config: AdsorptionConfig,
     *,
-    dft_slab: bool,
-    production: bool,
     results_directory: str,
 ) -> SlabContainer:
-    if dft_slab:
-        slab_path = ensure_dft_reference_slab()
-        return prepare_slab(
-            slab_file=str(slab_path),
-            config=config,
-            results_dir=results_directory,
-        )
-    return prepare_slab(
-        bulk_id="mp-30",
-        miller_indices=(1, 1, 1),
-        supercell=slab_supercell(production=production),
+    slab_path = ensure_dft_reference_slab()
+    return prepare_substrate(
+        slab_file=str(slab_path),
         config=config,
         results_dir=results_directory,
+        align=False,
+        relax_top_layer=True,
+        top_layer_tolerance=PAPER_TOP_LAYER_TOLERANCE,
     )
 
 
-def build_config(
-    *, device: str, quick: bool, production: bool = False, dft_slab: bool = False
-) -> AdsorptionConfig:
-    if quick:
-        bo_batches = 2
-    elif production:
-        bo_batches = 25
-    else:
-        bo_batches = 18
+def build_config(*, device: str) -> AdsorptionConfig:
     return AdsorptionConfig(
         material_type="slab",
         model_name="uma-s-1p2",
@@ -265,14 +240,12 @@ def build_config(
         placement_z_range=(4.0, 7.0),
         placement_z_scale_by_covalent_radius=False,
         adaptive_parallel_fraction=True,
-        relax_top_layer=True,
-        auto_resize_slab=not production and not dft_slab,
-        preserve_slab_frame=dft_slab,
-        top_layer_tolerance=PAPER_TOP_LAYER_TOLERANCE if dft_slab else 0.5,
+        slab_relaxation_mode="none",
+        top_layer_tolerance=PAPER_TOP_LAYER_TOLERANCE,
         bo_enabled=True,
         bo_initial_random=None,
         bo_batch_size=None,
-        bo_total_budget=bo_batches,
+        bo_total_budget=BO_TOTAL_BUDGET,
         bo_acquisition="ei",
     )
 
@@ -341,9 +314,7 @@ def fetch_nomad_index() -> list[NomadCalculation]:
             break
 
     calculations.sort(key=lambda row: row.calc_id)
-    index_path.write_text(
-        json.dumps([row.__dict__ for row in calculations], indent=2)
-    )
+    index_path.write_text(json.dumps([row.__dict__ for row in calculations], indent=2))
     return calculations
 
 
@@ -502,7 +473,11 @@ def binding_geometry(atoms: Atoms) -> BindingGeometry:
     o_idx = [i for i, sym in enumerate(ads_syms) if sym == "O"]
     h_idx = [i for i, sym in enumerate(ads_syms) if sym == "H"]
     o_dist = float(tree.query(ads_pos[o_idx[0]], k=1)[0]) if o_idx else float("inf")
-    h_dist = float(min(tree.query(ads_pos[i], k=1)[0] for i in h_idx)) if h_idx else float("inf")
+    h_dist = (
+        float(min(tree.query(ads_pos[i], k=1)[0] for i in h_idx))
+        if h_idx
+        else float("inf")
+    )
     mode = "Ox" if o_dist <= h_dist else "Hy"
     return BindingGeometry(
         com_height=com_height,
@@ -512,7 +487,9 @@ def binding_geometry(atoms: Atoms) -> BindingGeometry:
     )
 
 
-def load_results_from_disk(results_directory: str | None = None) -> list[ScreeningResult]:
+def load_results_from_disk(
+    results_directory: str | None = None,
+) -> list[ScreeningResult]:
     """Load relaxed placements from a previous results directory."""
     base = results_directory or RESULTS_DIR
     detailed_csv = Path(base) / "adsorption_energies_detailed.csv"
@@ -642,11 +619,7 @@ def build_overlay_structure(
             dft_ads_aligned,
         )
     )
-    tags = (
-        [TAG_SLAB] * n_slab
-        + [TAG_MLIP_ADS] * n_ads
-        + [TAG_DFT_ADS] * n_ads
-    )
+    tags = [TAG_SLAB] * n_slab + [TAG_MLIP_ADS] * n_ads + [TAG_DFT_ADS] * n_ads
 
     overlay = Atoms(
         symbols=symbols,
@@ -741,7 +714,9 @@ def export_figure_overlays(
             "adsorbate_rmsd_A": round(best_rmsd, 4),
             "rmsd_method": "adsorbate_only_kabsch",
             "native_frame": native_frame,
-            "shared_slab": "metalsurfer" if not native_frame else "paper_cell_both_native",
+            "shared_slab": "metalsurfer"
+            if not native_frame
+            else "paper_cell_both_native",
             "mlip_E_ads_eV": round(result.energy_adsorption, 4),
             "dft_E_ads_eV": next(e for lbl, _, e in PAPER_DFT_MINIMA if lbl == label),
             "nomad_calc_id": ref.calculation.calc_id,
@@ -789,8 +764,7 @@ def export_figure_overlays(
                 "",
                 "Subdirectories:",
                 "  vmd_pairs/       — two files per pose for VMD (load both together)",
-                "     native_frame:  *_mlip.xyz + *_dft.xyz (full adslabs, paper cell)",
-                "     mp-30 slab:    *_mlip.xyz + *_dft_ads_on_mlip_slab.xyz",
+                "     *_mlip.xyz + *_dft.xyz (full adslabs, paper cell)",
                 "  full/            — single-file overlay (tags 0/1/2) for OVITO",
                 "  slab_patch/      — local Cu patch + both adsorbates (tags 0/1/2)",
                 "",
@@ -810,14 +784,16 @@ def export_figure_overlays(
     return exports
 
 
-def print_overlay_export_summary(exports: list[OverlayExport], out_dir: str | Path) -> None:
+def print_overlay_export_summary(
+    exports: list[OverlayExport], out_dir: str | Path
+) -> None:
     base = Path(out_dir) / "figure_overlays"
     print()
     print("=" * 72)
     print("Figure overlay XYZ export")
     print("=" * 72)
     print(f"Output directory: {base}")
-    print("VMD pairs: vmd_pairs/ (native full adslabs when using --dft-slab)")
+    print("VMD pairs: vmd_pairs/ (native full adslabs, paper cell)")
     print("OVITO overlays: full/ and slab_patch/ (tags 0/1/2)")
     print("RMSD: adsorbate-only Kabsch (slabs not superposed)")
     print()
@@ -994,46 +970,10 @@ def print_found_minima(
     e_min = sorted_results[0].energy_adsorption
     e_max = sorted_results[-1].energy_adsorption
     print()
-    print(f"Found {len(sorted_results)} unique minima; MLIP range [{e_min:.4f}, {e_max:.4f}] eV")
+    print(
+        f"Found {len(sorted_results)} unique minima; MLIP range [{e_min:.4f}, {e_max:.4f}] eV"
+    )
     print(f"Paper reports {len(PAPER_DFT_MINIMA)} unique stable adsorbates.")
-
-
-def run_setup_only(
-    *, device: str, quick: bool, production: bool, dft_slab: bool
-) -> int:
-    ref_path = ensure_zenodo_reference_data()
-    references = ensure_nomad_reference_structures()
-    config = build_config(
-        device=device, quick=quick, production=production, dft_slab=dft_slab
-    )
-    out_dir = results_dir(production=production, dft_slab=dft_slab)
-    os.makedirs(out_dir, exist_ok=True)
-
-    slab = prepare_campaign_slab(
-        config,
-        dft_slab=dft_slab,
-        production=production,
-        results_directory=out_dir,
-    )
-    atoms = slab.atoms
-    frozen = compute_frozen_indices(atoms, config)
-
-    print()
-    print("Setup complete.")
-    print(f"  Zenodo PES data: {ref_path} ({ref_path.stat().st_size} bytes)")
-    print(f"  NOMAD DFT geometries: {len(references)} files in {DATA_DIR / NOMAD_REF_DIRNAME}")
-    print(f"  Slab source: {'paper DFT (NOMAD)' if dft_slab else 'mp-30 FAIRChem'}")
-    print(f"  Slab formula: {atoms.get_chemical_formula()}")
-    print(f"  Slab atoms: {len(atoms)}")
-    print(f"  Slab cell (Å): {atoms.cell.lengths()}")
-    if dft_slab:
-        print(
-            f"  Frozen Cu atoms: {len(frozen)} / {len(atoms)} "
-            f"(paper: bottom {PAPER_SLAB_ATOMS // 2} frozen, "
-            f"top {PAPER_RELAXED_CU_LAYERS} layers relaxed)"
-        )
-    print_paper_reference_table()
-    return 0
 
 
 def run_geometry_comparison(
@@ -1062,37 +1002,18 @@ def run_geometry_comparison(
     return 0
 
 
-def run_campaign(
-    config: AdsorptionConfig,
-    *,
-    production: bool,
-    dft_slab: bool,
-) -> BindingCampaignResult:
+def run_campaign(config: AdsorptionConfig) -> BindingCampaignResult:
     ensure_zenodo_reference_data()
-    out_dir = results_dir(production=production, dft_slab=dft_slab)
-    if dft_slab:
-        surface_type = (
-            f"{SURFACE_TYPE}_dft_slab_production"
-            if production
-            else f"{SURFACE_TYPE}_dft_slab"
-        )
-    else:
-        surface_type = f"{SURFACE_TYPE}_production" if production else SURFACE_TYPE
-    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    slab = prepare_campaign_slab(
-        config,
-        dft_slab=dft_slab,
-        production=production,
-        results_directory=out_dir,
-    )
-    write(f"{out_dir}/clean_slab.xyz", slab.atoms, format="extxyz")
+    slab = prepare_campaign_slab(config, results_directory=RESULTS_DIR)
+    write(f"{RESULTS_DIR}/clean_slab.xyz", slab.atoms, format="extxyz")
 
     return run_adsorption_bo(
         slab=slab,
         molecules=[(CAMPHOR_SMILES, MOLECULE_NAME)],
         config=config,
-        surface_type=surface_type,
+        surface_type=SURFACE_TYPE,
         system_name="Cu_111",
     )
 
@@ -1109,32 +1030,10 @@ def main() -> int:
         default=os.environ.get("METALSURFER_DEVICE", "cuda"),
         help="Device: cuda or cpu",
     )
-    parser.add_argument("--quick", action="store_true", help="Small BO budget (2 acquisition batches)")
-    parser.add_argument(
-        "--production",
-        action="store_true",
-        help=(
-            "Larger BO budget (25 batches). With --dft-slab uses the paper 192-atom "
-            "cell; otherwise uses a 96-atom mp-30 cell for GPU throughput."
-        ),
-    )
-    parser.add_argument(
-        "--dft-slab",
-        action="store_true",
-        help=(
-            "Use the paper DFT Cu(111) slab from NOMAD (192 Cu, cell 15.41×17.79×56.29 Å, "
-            "bottom 2 layers frozen / top 2 relaxed) instead of mp-30."
-        ),
-    )
-    parser.add_argument(
-        "--setup-only",
-        action="store_true",
-        help="Download reference data and build slab only (no MLIP run)",
-    )
     parser.add_argument(
         "--compare-geometries",
         action="store_true",
-        help="Compare existing results_camphor_cu111 placements to NOMAD DFT geometries",
+        help="Compare existing results to NOMAD DFT geometries (skip MLIP run)",
     )
     parser.add_argument(
         "--export-overlays",
@@ -1153,37 +1052,20 @@ def main() -> int:
     _configure_logging(debug=debug)
     device = args.device if args.device in ("cuda", "cpu") else "cuda"
 
-    if args.setup_only:
-        return run_setup_only(
-            device=device,
-            quick=args.quick,
-            production=args.production,
-            dft_slab=args.dft_slab,
-        )
-
-    out_dir = results_dir(production=args.production, dft_slab=args.dft_slab)
-
     if args.compare_geometries or args.export_overlays:
         return run_geometry_comparison(
-            results_directory=out_dir,
+            results_directory=RESULTS_DIR,
             export_overlays=args.export_overlays,
         )
 
-    config = build_config(
-        device=device,
-        quick=args.quick,
-        production=args.production,
-        dft_slab=args.dft_slab,
-    )
-    campaign = run_campaign(
-        config, production=args.production, dft_slab=args.dft_slab
-    )
+    config = build_config(device=device)
+    campaign = run_campaign(config)
 
     print()
     print(
         campaign.format_summary(
             title="Binding energy summary (camphor / Cu(111))",
-            results_dir=out_dir,
+            results_dir=RESULTS_DIR,
         )
     )
 
@@ -1194,7 +1076,7 @@ def main() -> int:
     if results:
         run_geometry_comparison(
             results,
-            results_directory=out_dir,
+            results_directory=RESULTS_DIR,
             export_overlays=args.export_overlays,
         )
     return 0

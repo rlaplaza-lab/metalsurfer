@@ -12,20 +12,13 @@ Uses modest settings for quick demonstration (similar to test suite).
 from metalsurfer import (
     AdsorptionConfig,
     configure_logging,
-    create_slab_from_bulk,
     run_adsorption,
 )
+from metalsurfer.surface_prep import prepare_substrate
 
 
 def main():
     configure_logging(default_level="INFO")
-
-    slab = create_slab_from_bulk(
-        bulk_id="mp-33",
-        miller_indices=(0, 0, 1),
-        supercell=(2, 2, 1),
-        results_dir="results_ethene_ru_slab",
-    )
 
     config = AdsorptionConfig(
         material_type="slab",
@@ -41,6 +34,14 @@ def main():
         skip_desorption_check=False,
         stage1_steps=50,
         stage2_steps=500,
+    )
+
+    slab = prepare_substrate(
+        bulk_id="mp-33",
+        miller_indices=(0, 0, 1),
+        supercell=(2, 2, 1),
+        config=config,
+        results_dir="results_ethene_ru_slab",
     )
 
     campaign = run_adsorption(

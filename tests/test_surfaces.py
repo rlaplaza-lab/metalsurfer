@@ -18,7 +18,8 @@ from metalsurfer.surfaces import (
     SlabContainer,
     _molecule_diameter,
     _perpendicular_heights_2d,
-    auto_resize_slab_for_molecule,
+    apply_surface_constraints,
+    auto_resize_substrate_for_molecule,
     coerce_slab_container,
     compute_minimum_supercell,
     create_slab_from_atoms,
@@ -26,6 +27,7 @@ from metalsurfer.surfaces import (
     deposit_adatoms,
     ensure_slab_z_alignment,
     substitute_alloy,
+    validate_substrate,
 )
 
 from .conftest import make_slab, make_water
@@ -61,17 +63,28 @@ class TestSlabZAlignment:
         assert z_min == pytest.approx(0.0)
         assert c_len >= max(18.0, z_max + DEFAULT_SLAB_TOP_VACUUM_ANG)
 
-    def test_coerce_slab_container_aligns_when_material_type_slab(self):
+    def test_coerce_slab_container_is_pure_wrap(self):
         centered = fcc111("Al", size=(2, 2, 2), vacuum=7.0)
-        container = coerce_slab_container(centered, material_type="slab")
+        z_min_before = float(np.min(centered.get_positions()[:, 2]))
+        container = coerce_slab_container(centered)
+        assert float(np.min(container.atoms.get_positions()[:, 2])) == pytest.approx(
+            z_min_before
+        )
+        assert container.atoms is not centered
+
+    def test_create_slab_from_atoms_aligns_when_requested(self):
+        centered = fcc111("Al", size=(2, 2, 2), vacuum=7.0)
+        container = create_slab_from_atoms(centered, material_type="slab", align=True)
         assert float(np.min(container.atoms.get_positions()[:, 2])) == pytest.approx(
             0.0
         )
 
-    def test_coerce_slab_container_skips_alignment_for_nanoparticle(self):
+    def test_create_slab_from_atoms_skips_alignment_when_disabled(self):
         centered = fcc111("Al", size=(2, 2, 2), vacuum=7.0)
         z_min_before = float(np.min(centered.get_positions()[:, 2]))
-        container = coerce_slab_container(centered, material_type="nanoparticle")
+        container = create_slab_from_atoms(
+            centered, material_type="nanoparticle", align=False
+        )
         assert float(np.min(container.atoms.get_positions()[:, 2])) == pytest.approx(
             z_min_before
         )
@@ -644,15 +657,92 @@ class TestComputeMinimumSupercell:
 
 
 # ---------------------------------------------------------------------------
-# auto_resize_slab_for_molecule
+# validate_substrate
 # ---------------------------------------------------------------------------
+
+
+class TestValidateSubstrate:
+    def test_accepts_prepared_slab(self):
+        atoms = make_slab()
+        validate_substrate(atoms, material_type="slab")
+
+    def test_rejects_misaligned_slab(self):
+        atoms = make_slab()
+        pos = atoms.get_positions().copy()
+        pos[:, 2] += 2.0
+        atoms.set_positions(pos, apply_constraint=False)
+        with pytest.raises(GeometryValidationError, match="bottom-anchored"):
+            validate_substrate(atoms, material_type="slab")
+
+    def test_rejects_wrong_pbc(self):
+        atoms = make_slab()
+        atoms.set_pbc([True, True, True])
+        with pytest.raises(GeometryValidationError, match="PBC"):
+            validate_substrate(atoms, material_type="slab")
+
+    def test_rejects_small_image_separation(self):
+        atoms = Atoms(
+            "Ru4",
+            positions=[[0, 0, 0], [1.5, 0, 0], [0, 1.5, 0], [1.5, 1.5, 0]],
+            cell=[3, 3, 20],
+            pbc=[True, True, False],
+        )
+        atoms = apply_surface_constraints(atoms)
+        mol = Atoms("C2", positions=[[0, 0, 0], [5, 0, 0]])
+        with pytest.raises(
+            GeometryValidationError, match="auto_resize_substrate_for_molecule"
+        ):
+            validate_substrate(
+                atoms,
+                material_type="slab",
+                conformers=[mol],
+            )
+
+    def test_rejects_degenerate_slab_in_plane(self):
+        atoms = Atoms(
+            "Ru4",
+            positions=[[0, 0, 0], [0, 1.5, 0], [0, 3.0, 0], [0, 4.5, 0]],
+            cell=[[0.0, 0.0, 0.0], [0, 3, 0], [0, 0, 20]],
+            pbc=[True, True, False],
+        )
+        atoms = apply_surface_constraints(atoms)
+        with pytest.raises(GeometryValidationError, match="degenerate"):
+            validate_substrate(atoms, material_type="slab")
+
+    def test_accepts_nanoparticle_with_vacuum_box(self):
+        atoms = Atoms(
+            "Pt4",
+            positions=[[0, 0, 0], [2, 0, 0], [0, 2, 0], [2, 2, 0]],
+            cell=[20, 20, 20],
+            pbc=[False, False, False],
+        )
+        validate_substrate(atoms, material_type="nanoparticle")
+
+    def test_accepts_nanoparticle_not_bottom_anchored(self):
+        atoms = Atoms(
+            "Pt4",
+            positions=[[0, 0, 5], [2, 0, 5], [0, 2, 5], [2, 2, 5]],
+            cell=[20, 20, 20],
+            pbc=[False, False, False],
+        )
+        validate_substrate(atoms, material_type="nanoparticle")
+
+    def test_rejects_nanoparticle_with_tight_box(self):
+        atoms = Atoms(
+            "Pt4",
+            positions=[[0, 0, 0], [2, 0, 0], [0, 2, 0], [2, 2, 0]],
+            cell=[3, 3, 3],
+            pbc=[False, False, False],
+        )
+        with pytest.raises(GeometryValidationError, match="too tight"):
+            validate_substrate(atoms, material_type="nanoparticle")
 
 
 class TestAutoResizeSlabForMolecule:
     def test_no_resize_when_already_sufficient(self):
         slab = SlabContainer(make_slab())
         water = make_water()
-        result, was_resized = auto_resize_slab_for_molecule(
+        result, was_resized = auto_resize_substrate_for_molecule(
             slab, [water], min_separation=8.0
         )
         assert not was_resized
@@ -667,7 +757,7 @@ class TestAutoResizeSlabForMolecule:
         )
         slab = SlabContainer(atoms)
         mol = Atoms("C2", positions=[[0, 0, 0], [5, 0, 0]])
-        result, was_resized = auto_resize_slab_for_molecule(
+        result, was_resized = auto_resize_substrate_for_molecule(
             slab, [mol], min_separation=8.0
         )
         assert was_resized
@@ -686,7 +776,9 @@ class TestAutoResizeSlabForMolecule:
         slab = SlabContainer(atoms)
         original_len = len(slab.atoms)
         mol = Atoms("C2", positions=[[0, 0, 0], [5, 0, 0]])
-        _, was_resized = auto_resize_slab_for_molecule(slab, [mol], min_separation=8.0)
+        _, was_resized = auto_resize_substrate_for_molecule(
+            slab, [mol], min_separation=8.0
+        )
         assert was_resized
         assert len(slab.atoms) == original_len
 
@@ -699,7 +791,7 @@ class TestAutoResizeSlabForMolecule:
         )
         slab = SlabContainer(atoms)
         mol = Atoms("C2", positions=[[0, 0, 0], [5, 0, 0]])
-        result, _ = auto_resize_slab_for_molecule(slab, [mol], min_separation=8.0)
+        result, _ = auto_resize_substrate_for_molecule(slab, [mol], min_separation=8.0)
         assert list(result.atoms.get_pbc()) == [True, True, True]
 
 

@@ -26,7 +26,7 @@ from metalsurfer.models import (
     ScreeningRunResult,
     build_molecule_summary,
 )
-from metalsurfer.surfaces import SlabContainer
+from metalsurfer.surface_prep import SlabContainer, apply_surface_constraints
 from metalsurfer.workflow import (
     load_molecules,
     process_molecule,
@@ -333,127 +333,28 @@ class TestProcessMolecule:
         assert result is None
         assert failure_summary["stage"] == "conformers"
 
-    def test_simple_binding_energy_runs_auto_resize(self):
-        """Simple binding energy evaluates auto-resize when enabled."""
-        slab = SlabContainer(make_slab())
-        refs = self._make_refs()
-        config = AdsorptionConfig(
-            num_placements=2,
-            num_conformers=1,
-            seed=42,
-            auto_resize_slab=True,
-        )
-        mock_resize = MagicMock(return_value=(slab, False))
-        mock_cfs = MagicMock(return_value=([Atoms("H2")], [0.0]))
-        mock_specs = MagicMock(return_value=[])
-        mock_optimize = MagicMock(return_value=[])
-        with (
-            patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs),
-            patch(
-                "metalsurfer.placement.generators.enumerate_placement_specs", mock_specs
-            ),
-            patch(
-                "metalsurfer.workflow.shared.auto_resize_slab_for_molecule", mock_resize
-            ),
-            patch(
-                "metalsurfer.workflow.core.optimize_adsorbate_slab_batched",
-                mock_optimize,
-            ),
-        ):
-            process_molecule(
-                "O",
-                "water",
-                slab,
-                MagicMock(),
-                refs,
-                config=config,
-                base_slab_for_frozen=None,
-            )
-        mock_resize.assert_called_once()
+    def test_prepare_substrate_validates_image_separation(self):
+        from metalsurfer.exceptions import GeometryValidationError
+        from metalsurfer.workflow.shared import prepare_substrate_for_screening
 
-    def test_process_molecule_skips_auto_resize_when_disabled(self):
-        slab = SlabContainer(make_slab())
-        refs = self._make_refs()
-        config = AdsorptionConfig(
-            num_placements=2,
-            num_conformers=1,
-            seed=42,
-            auto_resize_slab=True,
+        tiny = Atoms(
+            "Ru4",
+            positions=[[0, 0, 0], [1.5, 0, 0], [0, 1.5, 0], [1.5, 1.5, 0]],
+            cell=[3, 3, 20],
+            pbc=[True, True, False],
         )
-        mock_resize = MagicMock(return_value=(slab, False))
-        mock_cfs = MagicMock(return_value=([Atoms("H2")], [0.0]))
-        mock_specs = MagicMock(return_value=[])
-        mock_optimize = MagicMock(return_value=[])
-        with (
-            patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs),
-            patch(
-                "metalsurfer.placement.generators.enumerate_placement_specs", mock_specs
-            ),
-            patch(
-                "metalsurfer.workflow.shared.auto_resize_slab_for_molecule", mock_resize
-            ),
-            patch(
-                "metalsurfer.workflow.core.optimize_adsorbate_slab_batched",
-                mock_optimize,
-            ),
+        slab = SlabContainer(apply_surface_constraints(tiny))
+        config = AdsorptionConfig(num_placements=2, num_conformers=1, seed=42)
+        big_mol = Atoms("C2", positions=[[0, 0, 0], [5, 0, 0]])
+        with pytest.raises(
+            GeometryValidationError, match="auto_resize_substrate_for_molecule"
         ):
-            process_molecule(
-                "O",
-                "water",
+            prepare_substrate_for_screening(
                 slab,
-                MagicMock(),
-                refs,
-                config=config,
-                base_slab_for_frozen=None,
-                allow_auto_resize=False,
+                [big_mol],
+                None,
+                config,
             )
-        mock_resize.assert_not_called()
-
-    def test_bayesian_runs_auto_resize_when_enabled(self):
-        """BO screening evaluates auto-resize when enabled."""
-        slab = SlabContainer(make_slab())
-        refs = self._make_refs()
-        config = AdsorptionConfig(
-            bo_enabled=True,
-            num_conformers=1,
-            seed=42,
-            auto_resize_slab=True,
-            bo_initial_random=1,
-            bo_batch_size=1,
-            num_placements=1,
-            bo_total_budget=1,
-        )
-        mock_resize = MagicMock(return_value=(slab, False))
-        mock_cfs = MagicMock(return_value=([Atoms("H2")], [0.0]))
-        mock_capacity = MagicMock(return_value=0)
-        mock_specs = MagicMock(return_value=[])
-        with (
-            patch(
-                "metalsurfer.workflow.bayesian.create_conformers_from_smiles",
-                mock_cfs,
-            ),
-            patch(
-                "metalsurfer.workflow.shared.auto_resize_slab_for_molecule",
-                mock_resize,
-            ),
-            patch(
-                "metalsurfer.workflow.bayesian.estimate_placement_spec_capacity",
-                mock_capacity,
-            ),
-            patch(
-                "metalsurfer.workflow.bayesian.enumerate_placement_specs", mock_specs
-            ),
-        ):
-            process_molecule_bayesian(
-                "O",
-                "water",
-                slab,
-                MagicMock(),
-                refs,
-                config=config,
-                base_slab_for_frozen=None,
-            )
-        mock_resize.assert_called_once()
 
     # Note: Full process_molecule integration on pre-adsorbed slab is covered by
     # test_placement.test_placement_auto_uses_envelope_for_non_planar and

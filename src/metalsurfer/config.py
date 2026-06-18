@@ -189,13 +189,6 @@ class AdsorptionConfig:
     # When True, use per-site local z as surface reference on rough (non-planar)
     # slabs instead of the global np.max(z).
     rough_slab_local_z: bool = True
-    relax_top_layer: bool = True  # Allow relaxation of top layer atoms
-    preserve_slab_frame: bool = (
-        False  # Skip ensure_slab_z_alignment when loading a pre-built slab
-    )
-    freeze_symbols: list[str] | None = (
-        None  # List of element symbols to freeze during optimization
-    )
     min_interatomic_distance: float = 0.5  # Minimum allowed interatomic distance (Å)
     max_force_convergence: float = 0.05  # Maximum force for convergence (eV/Å)
     binding_distance_threshold: float = (
@@ -233,10 +226,7 @@ class AdsorptionConfig:
     )  # Multipliers for connectivity analysis
     seed: int = 42  # Random seed for reproducibility
     boltzmann_temperature: float = 300.0  # Temperature for Boltzmann sampling (K)
-    auto_resize_slab: bool = True  # Automatically resize slab to accommodate adsorbates
-    min_pbc_image_separation: float = (
-        8.0  # Minimum separation between periodic images (Å)
-    )
+    min_pbc_image_separation: float = 8.0  # Minimum in-plane separation between periodic images (Å); used by auto_resize_substrate_for_molecule during prep
     # Isolated conformer / gas-phase box edge length (Å) for conformers module
     vacuum_box_size: float = 20.0
     vasp_encut: int = 400  # VASP ENcut parameter (eV)
@@ -291,8 +281,11 @@ class AdsorptionConfig:
     )
     ts_optimizer: Literal["fire", "lbfgs", "bfgs"] = "fire"  # TorchSim optimizer
     steps_between_swaps: int = 5  # Number of steps between optimizer swaps
-    # Slab-preparation relaxation (used by create_slab_from_bulk/deposit_adatoms)
-    slab_relaxation_mode: Literal["none", "ionic_only", "cell_only", "full"] = "none"
+    # Slab-preparation relaxation (used by prepare_substrate / create_slab_from_bulk).
+    # Default ionic_only: equilibrate substrate ionic positions before campaigns.
+    slab_relaxation_mode: Literal["none", "ionic_only", "cell_only", "full"] = (
+        "ionic_only"
+    )
     slab_relaxation_optimizer: Literal["lbfgs", "bfgs", "fire"] = "lbfgs"
     slab_relaxation_fmax: float | None = None  # defaults to fmax when unset
     slab_relaxation_steps: int = 200
@@ -436,11 +429,8 @@ class AdsorptionConfig:
             ("max_adsorption_energy", self.max_adsorption_energy),
             ("vacuum_box_size", self.vacuum_box_size),
             ("boltzmann_temperature", self.boltzmann_temperature),
+            ("min_pbc_image_separation", self.min_pbc_image_separation),
         ]
-        if self.auto_resize_slab:
-            positive_fields.append(
-                ("min_pbc_image_separation", self.min_pbc_image_separation)
-            )
         for pos_name, pos_value in positive_fields:
             _check_positive(pos_name, pos_value)
 

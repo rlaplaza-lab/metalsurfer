@@ -11,12 +11,8 @@ explicit `num_placements`, or use `autobatcher_max_memory_scaler=400` for ~1 sys
 Omit `num_placements` to autotune to GPU parallel capacity instead.
 """
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    prepare_slab,
-    run_saturation,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_saturation
+from metalsurfer.surface_prep import prepare_substrate
 
 
 def main():
@@ -40,10 +36,10 @@ def main():
         stage2_steps=500,
     )
 
-    slab = prepare_slab(
+    slab = prepare_substrate(
         bulk_id="mp-23",
         miller_indices=(1, 1, 1),
-        supercell=(1, 1, 1),
+        supercell=(3, 3, 1),
         config=config,
         results_dir=results_dir,
     )

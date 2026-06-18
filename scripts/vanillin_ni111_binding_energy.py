@@ -5,12 +5,8 @@ Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, to
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 """
 
-from metalsurfer import (
-    AdsorptionConfig,
-    configure_logging,
-    prepare_slab,
-    run_adsorption,
-)
+from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
+from metalsurfer.surface_prep import prepare_substrate
 
 
 def main():
@@ -34,12 +30,11 @@ def main():
         debug_write_initial_placements=True,
     )
 
-    # Create Ni(111) slab from Materials Project mp-23.
-    # Use minimal (1,1,1) supercell; auto_resize_slab will expand if needed for PBC separation.
-    slab = prepare_slab(
+    # Create Ni(111) slab from Materials Project mp-23 (3×3 in-plane for PBC separation).
+    slab = prepare_substrate(
         bulk_id="mp-23",
         miller_indices=(1, 1, 1),
-        supercell=(1, 1, 1),
+        supercell=(3, 3, 1),
         config=config,
         results_dir=results_dir,
     )

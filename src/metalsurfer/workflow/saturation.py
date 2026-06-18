@@ -29,11 +29,8 @@ from ..placement.generators import (
     distribute_placement_budget,
     estimate_molecule_complexity,
 )
-from ..surfaces import (
-    SlabContainer,
-    auto_resize_slab_for_molecule,
-    coerce_slab_container,
-)
+from ..surface_prep import apply_material_pbc
+from ..surfaces import SlabContainer, accept_substrate_for_api
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian
 from .core import process_molecule
@@ -45,6 +42,15 @@ from .shared import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _slab_after_saturation_step(
+    atoms: Atoms, config: AdsorptionConfig
+) -> SlabContainer:
+    """Build the next-step slab from a relaxed placement, restoring prep-time PBC."""
+    slab_atoms = atoms.copy()
+    apply_material_pbc(slab_atoms, config.material_type)
+    return SlabContainer(slab_atoms)
 
 
 def _saturation_symmetry_broken_vs_reference(
@@ -172,56 +178,6 @@ def _validate_distinct_bo_memories(
                 "received the same BOStepMemory object"
             )
         seen_by_id[id(memory)] = molecule
-
-
-def _apply_substrate_resize_from_step_metadata(
-    base_slab: Atoms,
-    step_metadata: dict[str, object],
-) -> Atoms:
-    """Expand saturation ``base_slab`` when step 1 auto-resized the substrate in-plane."""
-    if not step_metadata.get("slab_was_resized"):
-        return base_slab
-    substrate = step_metadata.get("substrate_atoms_after_resize")
-    if not isinstance(substrate, Atoms):
-        return base_slab
-    updated = substrate.copy()
-    updated.set_pbc([True, True, True])
-    logger.info(
-        "Updated saturation base_slab after auto-resize: %d -> %d atoms",
-        len(base_slab),
-        len(updated),
-    )
-    return updated
-
-
-def _presize_saturation_substrate_if_needed(
-    current_slab: SlabContainer,
-    base_slab: Atoms,
-    reference_slab_for_symmetry: Atoms,
-    conformers: list[Atoms],
-    config: AdsorptionConfig,
-) -> tuple[SlabContainer, Atoms, Atoms, bool]:
-    """Pre-resize substrate once before multi-molecule saturation step 1."""
-    if not config.auto_resize_slab:
-        return current_slab, base_slab, reference_slab_for_symmetry, False
-
-    resized_slab, was_resized = auto_resize_slab_for_molecule(
-        current_slab,
-        conformers,
-        config.min_pbc_image_separation,
-        material_type=config.material_type,
-    )
-    if not was_resized:
-        return current_slab, base_slab, reference_slab_for_symmetry, False
-
-    updated = resized_slab.atoms.copy()
-    updated.set_pbc([True, True, True])
-    logger.info(
-        "Pre-resized multi-mol saturation substrate: %d -> %d atoms",
-        len(base_slab),
-        len(updated),
-    )
-    return resized_slab, updated, updated.copy(), True
 
 
 def _n_at_saturation_from_steps(steps: list[Any]) -> int:
@@ -437,23 +393,6 @@ def _run_multi_molecule_saturation(
                 log_context=f"Multi-mol saturation step {step}",
             )
 
-        if step == 1 and config.auto_resize_slab:
-            largest_conformers = conformer_cache[largest_mol][0]
-            (
-                current_slab,
-                base_slab,
-                reference_slab_for_symmetry,
-                was_presized,
-            ) = _presize_saturation_substrate_if_needed(
-                current_slab,
-                base_slab,
-                reference_slab_for_symmetry,
-                largest_conformers,
-                config,
-            )
-            if was_presized:
-                clear_autobatcher_cache()
-
         E_slab = _compute_slab_energy(
             current_slab.atoms,
             calculator,
@@ -528,7 +467,6 @@ def _run_multi_molecule_saturation(
                     bo_prior_step_memory=bo_memory_per_mol[mol],
                     bo_step_memory_out=bo_out,
                     bo_transfer_info_out=transfer_info,
-                    allow_auto_resize=False,
                 )
                 new_bo_memory_raw[mol] = bo_out.get("memory")
             else:
@@ -547,7 +485,6 @@ def _run_multi_molecule_saturation(
                     failure_summary_out=failure_summary_out,
                     saturation_reuse=True,
                     symmetry_broken=symmetry_broken,
-                    allow_auto_resize=False,
                 )
                 new_bo_memory_raw[mol] = None
 
@@ -669,7 +606,7 @@ def _run_multi_molecule_saturation(
             )
             break
 
-        current_slab = SlabContainer(best_overall.atoms.copy())
+        current_slab = _slab_after_saturation_step(best_overall.atoms, config)
 
     return MultiMolSaturationRunResult(
         molecules=molecules,
@@ -694,7 +631,7 @@ def run_saturation_screening(
     if config is None:
         config = AdsorptionConfig()
 
-    slab = coerce_slab_container(slab, material_type=config.material_type)
+    slab = accept_substrate_for_api(slab, config=config)
     molecules_input = smiles_file if smiles_file is not None else molecules
 
     t_run_start = time.perf_counter()
@@ -713,7 +650,6 @@ def run_saturation_screening(
 
         calculator, ts_model, molecule_names, smiles_list, ref, t_ref_s = setup
         base_slab = slab.atoms.copy()
-        base_slab.set_pbc([True, True, True])
         results_dir = f"results_{surface_type}"
         ds_logger = DatasetLogger(results_dir, config=config, surface_id=surface_type)
 
@@ -815,7 +751,6 @@ def run_saturation_screening(
                 )
 
                 transfer_info: dict[str, object] = {}
-                step_metadata: dict[str, object] = {}
                 if config.bo_enabled:
                     bo_memory_out: dict[str, BOStepMemory] = {}
                     mol_results = process_molecule_bayesian(
@@ -840,8 +775,6 @@ def run_saturation_screening(
                         bo_prior_step_memory=prior_step_memory,
                         bo_step_memory_out=bo_memory_out,
                         bo_transfer_info_out=transfer_info,
-                        allow_auto_resize=(step == 1),
-                        step_metadata_out=step_metadata,
                     )
                     prior_step_memory = copy.deepcopy(bo_memory_out.get("memory"))
                     if prior_step_memory is not None:
@@ -849,10 +782,6 @@ def run_saturation_screening(
                     if config.bo_transfer_enabled:
                         prior_cumulative_memory = merge_bo_step_memories(
                             [prior_cumulative_memory, prior_step_memory]
-                        )
-                    if step == 1:
-                        base_slab = _apply_substrate_resize_from_step_metadata(
-                            base_slab, step_metadata
                         )
                 else:
                     mol_results = process_molecule(
@@ -870,13 +799,7 @@ def run_saturation_screening(
                         failure_summary_out=failure_summary_out,
                         saturation_reuse=True,
                         symmetry_broken=symmetry_broken,
-                        allow_auto_resize=(step == 1),
-                        step_metadata_out=step_metadata,
                     )
-                    if step == 1:
-                        base_slab = _apply_substrate_resize_from_step_metadata(
-                            base_slab, step_metadata
-                        )
 
                 mol_results = _filter_saturation_topology_results(
                     list(mol_results) if mol_results else [],
@@ -941,7 +864,7 @@ def run_saturation_screening(
                     )
                     break
 
-                current_slab = SlabContainer(best.atoms.copy())
+                current_slab = _slab_after_saturation_step(best.atoms, config)
 
             if steps:
                 all_saturation_results.append(
