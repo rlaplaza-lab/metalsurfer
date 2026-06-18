@@ -17,8 +17,8 @@ ionic positions** with ASE/MLIP (``AdsorptionConfig.slab_relaxation_mode="ionic_
 The substrate passed to ``run_adsorption`` / ``run_saturation`` should be this
 **equilibrated reference** — ``E(slab)`` and ``E_ads`` are defined relative to it.
 Hand-built clusters, slabs from bulk, and loaded ``Atoms`` are all relaxed unless
-you set ``slab_relaxation_mode="none"`` (use only for experimental geometries
-that must not move, e.g. a CIF framework or a DFT reference slab).
+you set ``slab_relaxation_mode="none"`` (experimental geometries that must not move:
+MOF CIF, paper DFT slabs, published graphene-oxide models, saturation snapshot XYZ).
 
 **Adsorption / saturation (campaign APIs)**
 
@@ -33,16 +33,33 @@ listed in ASE ``FixAtoms`` can move**. Campaign entry points read
 keyword arguments ``relax_top_layer``, ``freeze_symbols``, and
 ``top_layer_tolerance``.
 
-+---------------------------+-----------------------------------------------+
-| ``relax_top_layer``       | Substrate atoms during placement relaxation   |
-+===========================+===============================================+
-| ``False`` (default)       | **All substrate atoms frozen** (rigid       |
-|                           | reference surface)                            |
-| ``True``                  | Subsurface frozen; **top layer can relax**    |
-|                           | with the adsorbate (``top_layer_tolerance``)  |
-| ``freeze_symbols`` set    | Only listed elements frozen (ignores layer    |
-|                           | policy)                                       |
-+---------------------------+-----------------------------------------------+
++--------------------------------+-----------------------------------------------+
+| Kwarg / value                  | Effect during placement relaxation            |
++================================+===============================================+
+| ``relax_top_layer=False``      | All substrate atoms frozen (default, rigid    |
+| (default)                      | reference surface)                            |
+| ``relax_top_layer=True``       | Material-aware shortcut: interior frozen;     |
+|                                | exposed surface free (see table below)        |
+| ``freeze_symbols`` set         | Only listed elements frozen (ignores layer    |
+|                                | policy)                                       |
++--------------------------------+-----------------------------------------------+
+
+When ``relax_top_layer=True``, which atoms stay free depends on
+:attr:`~metalsurfer.AdsorptionConfig.material_type` on the *config* passed to
+``prepare_substrate`` / ``finalize_substrate``. There is no separate prep
+``material_type`` argument — set it on ``AdsorptionConfig`` before prep and reuse
+the same config in ``run_*`` (omitting *config* defaults to ``"slab"``).
+
++--------------------+---------------------------------------------------------+
+| ``material_type``  | Free atoms (within ``top_layer_tolerance``)             |
++====================+=========================================================+
+| ``"slab"``         | Exposed layer along the slab normal                     |
+| ``"nanoparticle"`` | Outermost shell (max distance from centre of mass)      |
+| ``"porous"``       | Pore-wall atoms (closest neighbour per pore void site)  |
++--------------------+---------------------------------------------------------+
+
+For custom freeze patterns, attach ASE ``FixAtoms`` yourself or call
+``apply_surface_constraints`` / ``finalize_substrate`` with ``freeze_symbols``.
 
 Example — rigid substrate (default) vs top-layer relaxation::
 
@@ -129,18 +146,17 @@ campaign APIs run. It is separate from TorchSim placement relaxation
 ``AdsorptionConfig.slab_relaxation_*``. Explicit keyword arguments override
 *config* for each stage:
 
-+---------------------------+-----------------------------------------------+
-| ``prepare_substrate`` kw  | ``AdsorptionConfig`` field                    |
-+===========================+===============================================+
-| ``slab_relaxation_mode``  | ``slab_relaxation_mode``                      |
-| ``slab_relaxation_       | ``slab_relaxation_optimizer``                 |
-| optimizer``               |                                               |
-| ``slab_relaxation_fmax``  | ``slab_relaxation_fmax`` (falls back to       |
-|                           | ``fmax`` when unset)                          |
-| ``slab_relaxation_steps`` | ``slab_relaxation_steps``                     |
-| ``adatom_relaxation_*``   | defaults to ``slab_relaxation_*`` on *config* |
-|                           | when unset                                    |
-+---------------------------+-----------------------------------------------+
++--------------------------------+-----------------------------------------------+
+| ``prepare_substrate`` kw       | ``AdsorptionConfig`` field                    |
++================================+===============================================+
+| ``slab_relaxation_mode``       | ``slab_relaxation_mode``                      |
+| ``slab_relaxation_optimizer``  | ``slab_relaxation_optimizer``                 |
+| ``slab_relaxation_fmax``       | ``slab_relaxation_fmax`` (falls back to       |
+|                                | ``fmax`` when unset)                          |
+| ``slab_relaxation_steps``      | ``slab_relaxation_steps``                     |
+| ``adatom_relaxation_*``        | defaults to ``slab_relaxation_*`` on *config* |
+|                                | when unset                                    |
++--------------------------------+-----------------------------------------------+
 
 **When each stage runs**
 

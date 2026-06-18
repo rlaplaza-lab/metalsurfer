@@ -84,6 +84,7 @@ _LAZY_MODULES = {
         "batch_static",
         "precompute_results",
         "identify_top_layer_indices",
+        "identify_relaxable_surface_indices",
         "compute_frozen_indices",
         "frozen_indices_from_constraints",
     },

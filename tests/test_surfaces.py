@@ -135,6 +135,7 @@ class TestSlabZAlignment:
             miller_indices=(0, 0, 1),
             supercell=(1, 1, 1),
             results_dir=str(tmp_path),
+            relaxation_mode="none",
         )
         assert float(np.min(slab.atoms.get_positions()[:, 2])) == pytest.approx(0.0)
 
@@ -348,6 +349,8 @@ class TestSubstituteAlloy:
 
 
 class TestDepositAdatoms:
+    _NO_RELAX_CFG = AdsorptionConfig(slab_relaxation_mode="none")
+
     def _flat_slab(self, n: int = 16, symbol: str = "Ru"):
         """Single-layer test slab."""
         return SlabContainer(make_slab(nx=4, ny=4, n_layers=1, symbol=symbol))
@@ -361,7 +364,11 @@ class TestDepositAdatoms:
         n_before = len(slab.atoms)
         with tempfile.TemporaryDirectory() as tmpdir:
             result = deposit_adatoms(
-                slab, "Sn", coverage_fraction=0.2, results_dir=tmpdir
+                slab,
+                "Sn",
+                coverage_fraction=0.2,
+                config=self._NO_RELAX_CFG,
+                results_dir=tmpdir,
             )
         assert len(result.atoms) > n_before
         new_positions = result.atoms.get_positions()[n_before:]
@@ -372,10 +379,20 @@ class TestDepositAdatoms:
         slab2 = self._layered_slab()
         with tempfile.TemporaryDirectory() as tmpdir:
             r1 = deposit_adatoms(
-                slab1, "Sn", coverage_fraction=0.3, seed=42, results_dir=tmpdir
+                slab1,
+                "Sn",
+                coverage_fraction=0.3,
+                seed=42,
+                config=self._NO_RELAX_CFG,
+                results_dir=tmpdir,
             )
             r2 = deposit_adatoms(
-                slab2, "Sn", coverage_fraction=0.3, seed=42, results_dir=tmpdir
+                slab2,
+                "Sn",
+                coverage_fraction=0.3,
+                seed=42,
+                config=self._NO_RELAX_CFG,
+                results_dir=tmpdir,
             )
         assert np.allclose(
             r1.atoms.get_positions(), r2.atoms.get_positions(), atol=1e-10
@@ -386,10 +403,20 @@ class TestDepositAdatoms:
         slab2 = self._layered_slab()
         with tempfile.TemporaryDirectory() as tmpdir:
             r1 = deposit_adatoms(
-                slab1, "Sn", coverage_fraction=0.3, seed=1, results_dir=tmpdir
+                slab1,
+                "Sn",
+                coverage_fraction=0.3,
+                seed=1,
+                config=self._NO_RELAX_CFG,
+                results_dir=tmpdir,
             )
             r2 = deposit_adatoms(
-                slab2, "Sn", coverage_fraction=0.3, seed=999, results_dir=tmpdir
+                slab2,
+                "Sn",
+                coverage_fraction=0.3,
+                seed=999,
+                config=self._NO_RELAX_CFG,
+                results_dir=tmpdir,
             )
         # positions should differ (site selection is random)
         assert not np.allclose(
@@ -407,18 +434,30 @@ class TestDepositAdatoms:
                 GeometryValidationError, match="Cannot identify top surface layer"
             ),
         ):
-            deposit_adatoms(slab, "Sn", coverage_fraction=0.5, results_dir=tmpdir)
+            deposit_adatoms(
+                slab,
+                "Sn",
+                coverage_fraction=0.5,
+                config=self._NO_RELAX_CFG,
+                results_dir=tmpdir,
+            )
 
     def test_writes_output_files(self):
         slab = self._layered_slab()
         with tempfile.TemporaryDirectory() as tmpdir:
-            deposit_adatoms(slab, "Sn", coverage_fraction=0.2, results_dir=tmpdir)
+            deposit_adatoms(
+                slab,
+                "Sn",
+                coverage_fraction=0.2,
+                config=self._NO_RELAX_CFG,
+                results_dir=tmpdir,
+            )
             assert os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20.xyz"))
             assert not os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20_POSCAR"))
 
     def test_writes_poscar_when_enabled(self):
         slab = self._layered_slab()
-        cfg = AdsorptionConfig(write_vasp_inputs=True)
+        cfg = AdsorptionConfig(write_vasp_inputs=True, slab_relaxation_mode="none")
         with tempfile.TemporaryDirectory() as tmpdir:
             deposit_adatoms(
                 slab,
@@ -432,13 +471,18 @@ class TestDepositAdatoms:
     def test_uses_config_seed_by_default(self):
         slab1 = self._layered_slab()
         slab2 = self._layered_slab()
-        cfg = AdsorptionConfig(seed=77)
+        cfg = AdsorptionConfig(seed=77, slab_relaxation_mode="none")
         with tempfile.TemporaryDirectory() as tmpdir:
             r1 = deposit_adatoms(
                 slab1, "Sn", coverage_fraction=0.3, config=cfg, results_dir=tmpdir
             )
             r2 = deposit_adatoms(
-                slab2, "Sn", coverage_fraction=0.3, seed=77, results_dir=tmpdir
+                slab2,
+                "Sn",
+                coverage_fraction=0.3,
+                seed=77,
+                config=self._NO_RELAX_CFG,
+                results_dir=tmpdir,
             )
         assert np.allclose(
             r1.atoms.get_positions(), r2.atoms.get_positions(), atol=1e-10
@@ -469,6 +513,7 @@ class TestDepositAdatoms:
                 "Sn",
                 coverage_fraction=0.2,
                 seed=42,
+                config=self._NO_RELAX_CFG,
                 results_dir=tmpdir,
             )
         assert isinstance(result, SlabContainer)
@@ -541,7 +586,12 @@ class TestCombinedModifiers:
             assert len(alloyed.atoms) == n_original
 
             decorated = deposit_adatoms(
-                alloyed, "Sn", coverage_fraction=0.2, seed=42, results_dir=tmpdir
+                alloyed,
+                "Sn",
+                coverage_fraction=0.2,
+                seed=42,
+                relaxation_mode="none",
+                results_dir=tmpdir,
             )
             assert len(decorated.atoms) > n_original
             syms = set(decorated.atoms.get_chemical_symbols())

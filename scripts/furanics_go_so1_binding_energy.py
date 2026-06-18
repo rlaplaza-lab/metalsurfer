@@ -112,6 +112,7 @@ def main():
 
     config = AdsorptionConfig(
         material_type="slab",
+        slab_relaxation_mode="none",  # keep published GO geometry
         model_name="uma-s-1p1",
         seed=42,
         num_conformers=10,

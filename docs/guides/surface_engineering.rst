@@ -36,8 +36,8 @@ related APIs, the substrate must have:
   ``[T,T,T]`` for porous frameworks, ``[F,F,F]`` for nanoparticles)
 - Bottom-anchored slab layout (``min(z) ≈ 0``) when ``material_type="slab"``
 - ASE ``FixAtoms`` from :func:`~metalsurfer.surface_prep.apply_surface_constraints`
-  (attached by :func:`~metalsurfer.surface_prep.prepare_substrate` via prep kwargs
-  ``relax_top_layer`` / ``freeze_symbols``; default freezes the entire substrate)
+  (attached by :func:`~metalsurfer.surface_prep.prepare_substrate`; default freezes
+  the entire substrate; ``relax_top_layer=True`` is a material-aware shortcut)
 - Sufficient in-plane image separation for your adsorbates (use
   :func:`~metalsurfer.surface_prep.resize_substrate_for_molecule` after
   conformer generation when needed)
@@ -209,9 +209,20 @@ relaxation after adding adatoms:
        adatom_relaxation_mode="ionic_only",
    )
 
-For structures loaded from file or ASE ``Atoms``, set ``slab_relaxation_mode``
-on *config* (or as kwargs) so :func:`~metalsurfer.surface_prep.prepare_substrate`
-equilibrates the reference before finalization.
+For structures loaded from file or ASE ``Atoms``, choose ``slab_relaxation_mode``
+explicitly:
+
+- **``"none"``** — keep published or campaign-produced coordinates (MOF CIF,
+  paper DFT slabs, graphene-oxide models, saturation intermediate XYZ). Used by
+  ``examples/co2_mof_binding_energy.py``, ``examples/camphor_cu111_binding_energy.py``,
+  ``scripts/furanics_go*_binding_energy.py``, and
+  ``scripts/vanillin_on_h_saturated_ni111.py`` for the loaded slab.
+- **``"ionic_only"``** (default) — equilibrate hand-built clusters or
+  unequilibrated ``Atoms`` before campaigns (e.g. ``examples/h2_pt12_binding_energy.py``).
+
+``relax_top_layer=True`` on ``prepare_substrate`` controls which substrate atoms
+move **during adsorption**, not prep equilibration (e.g. top GO layer or
+H-covered Ni surface).
 
 Slab freeze during adsorption and saturation
 --------------------------------------------
@@ -231,10 +242,27 @@ Prep equilibration and adsorption freeze are **separate stages**:
 **Default (``relax_top_layer=False``):** every substrate atom is frozen during
 placement relaxation — the standard choice for rigid-surface binding energies.
 
-**Allow top-layer relaxation (``relax_top_layer=True``):** subsurface atoms stay
-fixed; surface atoms within ``top_layer_tolerance`` of ``max(z)`` can move with
-the adsorbate. Use for workflows where the surface should restructure (e.g.
-graphene oxide, H-saturated slabs).
+**Surface relaxation shortcut (``relax_top_layer=True``):** interior atoms stay
+fixed; which atoms remain free depends on
+:attr:`~metalsurfer.AdsorptionConfig.material_type` and
+``top_layer_tolerance``:
+
++--------------------+---------------------------------------------------------+
+| ``material_type``  | Atoms left free during placement relaxation             |
++====================+=========================================================+
+| ``"slab"``         | Exposed layer along the slab normal (within tolerance   |
+|                    | of maximum height)                                      |
+| ``"nanoparticle"`` | Outermost shell (within tolerance of max COM distance)  |
+| ``"porous"``       | Pore-wall atoms (closest neighbour per pore void site)  |
++--------------------+---------------------------------------------------------+
+
+Use for workflows where the surface should restructure with the adsorbate
+(e.g. graphene oxide slabs, H-saturated surfaces, flexible pore mouths). For
+catalyst descriptors and rigid binding energies, keep the default.
+
+**Manual constraints:** attach your own ASE ``FixAtoms`` (or other constraints)
+to the substrate before calling campaign APIs, or call lower-level helpers and
+finalize with custom constraints instead of ``relax_top_layer``.
 
 **Symbol-specific freeze (``freeze_symbols=[...]``):** only listed elements are
 frozen; layer policy is ignored.

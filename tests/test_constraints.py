@@ -1,17 +1,19 @@
 """Tests for top-layer identification and frozen-index computation."""
 
+import numpy as np
 from ase.constraints import FixAtoms
 
 from metalsurfer.optimization import (
     compute_frozen_indices,
     format_atom_index_ranges,
     frozen_indices_from_constraints,
+    identify_relaxable_surface_indices,
     identify_top_layer_indices,
     log_substrate_freeze_policy,
 )
 from metalsurfer.surface_prep import apply_surface_constraints
 
-from .conftest import make_slab
+from .conftest import make_nanoparticle, make_porous_framework, make_slab
 
 
 def test_identify_top_layer():
@@ -93,3 +95,51 @@ def test_log_substrate_freeze_policy_partial_freeze(caplog):
     assert "12/16 substrate atoms frozen" in caplog.text
     assert "4 free to move" in caplog.text
     assert "moving" in caplog.text
+
+
+def test_relaxable_surface_nanoparticle_outer_shell():
+    nanoparticle = make_nanoparticle()
+    free = identify_relaxable_surface_indices(
+        nanoparticle,
+        material_type="nanoparticle",
+        tolerance=0.5,
+    )
+    positions = nanoparticle.get_positions()
+    com = positions.mean(axis=0)
+    dists = np.linalg.norm(positions - com, axis=1)
+    r_max = float(np.max(dists))
+    assert free
+    for idx in free:
+        assert dists[idx] >= r_max - 0.5 - 1e-6
+    frozen = compute_frozen_indices(
+        nanoparticle,
+        relax_top_layer=True,
+        material_type="nanoparticle",
+        top_layer_tolerance=0.5,
+    )
+    assert 0 in frozen  # central atom stays frozen on Au13
+
+
+def test_relaxable_surface_porous_pore_boundary():
+    porous = make_porous_framework()
+    free = identify_relaxable_surface_indices(
+        porous,
+        material_type="porous",
+        tolerance=0.5,
+    )
+    assert free
+    assert len(free) < len(porous)
+    frozen = compute_frozen_indices(
+        porous,
+        relax_top_layer=True,
+        material_type="porous",
+        top_layer_tolerance=0.5,
+    )
+    assert len(frozen) + len(free) == len(porous)
+    constrained = apply_surface_constraints(
+        porous,
+        relax_top_layer=True,
+        material_type="porous",
+        top_layer_tolerance=0.5,
+    )
+    assert frozen_indices_from_constraints(constrained) == frozen

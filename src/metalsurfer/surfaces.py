@@ -159,6 +159,7 @@ def apply_surface_constraints(
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
     top_layer_tolerance: float = 0.5,
+    material_type: str = "slab",
 ) -> Atoms:
     """Attach ASE ``FixAtoms`` to *atoms* according to the surface freeze policy.
 
@@ -167,7 +168,10 @@ def apply_surface_constraints(
     ``frozen_indices_from_constraints`` only.
 
     Default ``relax_top_layer=False`` freezes every substrate atom. Set
-    ``relax_top_layer=True`` to freeze only subsurface atoms (top layer free).
+    ``relax_top_layer=True`` for a material-aware shortcut that leaves the
+    exposed surface free (see :func:`~metalsurfer.identify_relaxable_surface_indices`;
+    requires the correct *material_type*, default ``"slab"``). For full control,
+    attach custom ASE constraints to *atoms* yourself and skip this helper.
     """
     result = atoms.copy()
     frozen = compute_frozen_indices(
@@ -175,6 +179,7 @@ def apply_surface_constraints(
         relax_top_layer=relax_top_layer,
         freeze_symbols=freeze_symbols,
         top_layer_tolerance=top_layer_tolerance,
+        material_type=material_type,
     )
     result.set_constraint(FixAtoms(indices=frozen))
     return result

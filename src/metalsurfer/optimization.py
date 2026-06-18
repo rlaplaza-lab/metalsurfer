@@ -14,6 +14,11 @@ from ase.constraints import FixAtoms
 from ._logging import torchsim_output_capture
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
+from .placement.sites import (
+    _derive_pore_threshold,
+    _top_layer_mask_by_normal,
+    get_unified_sites,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -436,22 +441,93 @@ def estimate_parallel_relaxation_capacity(
 
 
 # ---------------------------------------------------------------------------
-# top-layer identification
+# Surface-layer identification (prep freeze shortcut)
 # ---------------------------------------------------------------------------
+
+
+def identify_relaxable_surface_indices(
+    slab: Atoms,
+    *,
+    material_type: str = "slab",
+    tolerance: float = 0.5,
+    pore_threshold: float | None = None,
+) -> list[int]:
+    """Return substrate atom indices left free when ``relax_top_layer=True``.
+
+    - **slab:** exposed layer along the slab normal (within *tolerance* of the
+      maximum height).
+    - **nanoparticle:** outermost shell (within *tolerance* of the maximum
+      distance from the centre of mass).
+    - **porous:** framework atoms on pore walls — closest neighbour of each
+      pore-classified Voronoi void site.
+    """
+    if material_type not in ("slab", "nanoparticle", "porous"):
+        raise ValueError(
+            "material_type must be 'slab', 'nanoparticle', or 'porous', "
+            f"got {material_type!r}"
+        )
+
+    positions = slab.get_positions()
+    n_atoms = len(positions)
+    if n_atoms == 0:
+        return []
+
+    if material_type == "slab":
+        cell = np.asarray(slab.get_cell(), dtype=float)
+        mask = _top_layer_mask_by_normal(positions, cell, float(tolerance))
+        return [int(i) for i in np.nonzero(mask)[0]]
+
+    if material_type == "nanoparticle":
+        com = np.mean(positions, axis=0)
+        dists = np.linalg.norm(positions - com, axis=1)
+        r_max = float(np.max(dists))
+        return [int(i) for i, d in enumerate(dists) if d >= r_max - float(tolerance)]
+
+    symbols = slab.get_chemical_symbols()
+    if pore_threshold is None:
+        pore_threshold = _derive_pore_threshold(symbols)
+
+    sites = get_unified_sites(
+        slab,
+        material_type="porous",
+        top_layer_tolerance=float(tolerance),
+        pore_threshold=float(pore_threshold),
+        enrich=False,
+    )
+    boundary: set[int] = set()
+    for site in sites:
+        if site.get("site_type") != "pore":
+            continue
+        raw_indices = site.get("slab_indices")
+        if not isinstance(raw_indices, tuple) or not raw_indices:
+            continue
+        idx = int(raw_indices[0])
+        if 0 <= idx < n_atoms:
+            boundary.add(idx)
+
+    if not boundary:
+        logger.warning(
+            "relax_top_layer=True on porous substrate identified no pore-boundary "
+            "atoms; freezing entire substrate during placement relaxation"
+        )
+    return sorted(boundary)
 
 
 def identify_top_layer_indices(
     slab: Atoms,
     tolerance: float = 0.5,
 ) -> list[int]:
-    """Return atom indices belonging to the topmost surface layer.
+    """Return atom indices in the exposed slab surface layer.
 
-    Atoms whose z-coordinate is within *tolerance* angstrom of the maximum
-    z-position are considered "top layer".
+    Slab-only convenience wrapper around :func:`identify_relaxable_surface_indices`.
+    Atoms within *tolerance* of the maximum height along the slab normal are
+    considered part of the top layer.
     """
-    positions = slab.get_positions()
-    z_max = float(np.max(positions[:, 2]))
-    return [i for i, p in enumerate(positions) if p[2] >= z_max - tolerance]
+    return identify_relaxable_surface_indices(
+        slab,
+        material_type="slab",
+        tolerance=tolerance,
+    )
 
 
 def compute_frozen_indices(
@@ -460,12 +536,16 @@ def compute_frozen_indices(
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
     top_layer_tolerance: float = 0.5,
+    material_type: str = "slab",
+    pore_threshold: float | None = None,
 ) -> list[int]:
     """Determine which slab atom indices should be frozen during optimisation.
 
     Prep-time policy helper used by :func:`~metalsurfer.surface_prep.apply_surface_constraints`.
-    Default policy: freeze the entire slab (``relax_top_layer=False``).
-    If ``relax_top_layer`` is ``True``, only subsurface atoms are frozen.
+    Default policy: freeze the entire substrate (``relax_top_layer=False``).
+    If ``relax_top_layer`` is ``True``, only the interior is frozen; which atoms
+    remain free depends on *material_type* (see
+    :func:`identify_relaxable_surface_indices`).
     If ``freeze_symbols`` is set, only atoms whose symbol is in that list are
     frozen (regardless of layer).
     """
@@ -478,8 +558,15 @@ def compute_frozen_indices(
     if not relax_top_layer:
         return list(range(n_slab))
 
-    top_indices = set(identify_top_layer_indices(slab, tolerance=top_layer_tolerance))
-    return [i for i in range(n_slab) if i not in top_indices]
+    free_indices = set(
+        identify_relaxable_surface_indices(
+            slab,
+            material_type=material_type,
+            tolerance=top_layer_tolerance,
+            pore_threshold=pore_threshold,
+        )
+    )
+    return [i for i in range(n_slab) if i not in free_indices]
 
 
 def frozen_indices_from_constraints(atoms: Atoms) -> list[int]:

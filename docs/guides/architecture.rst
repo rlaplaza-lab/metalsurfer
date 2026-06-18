@@ -3,7 +3,7 @@ Architecture
 
 This page describes the library architecture, public API layers, and
 computational data flow.  For the full technical reference see the
-`CORE_SYSTEM_EXPLANATION.md <https://github.com/rlaplaza/metalsurfer/blob/main/CORE_SYSTEM_EXPLANATION.md>`_
+`CORE_SYSTEM_EXPLANATION.md <https://github.com/rlaplaza-lab/metalsurfer/blob/main/CORE_SYSTEM_EXPLANATION.md>`_
 file in the repository root (including TorchSim GPU batching, saturation BO
 transfer learning, design heuristics, and comparisons with AdsorbML and BOSS).
 
@@ -69,7 +69,7 @@ Across all run modes, the physical pipeline follows seven stages:
    optimize, and deduplicate with RMSD and energy thresholds.
 
 4. **Placement Specification** — enumerate deterministic
-   :class:`~metalsurfer.PlacementSpec` candidates over conformer, site,
+   ``PlacementSpec`` candidates over conformer, site,
    orientation, tilt, azimuth, and height.
 
 5. **Optimization** — relax candidate adsorbate-slab systems using the

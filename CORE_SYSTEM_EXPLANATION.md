@@ -2,7 +2,7 @@
 
 ## Purpose and scope
 
-Developer-oriented companion to [`README.md`](README.md) and the Sphinx [architecture guide](docs/guides/architecture.rst): module layout, implementation mechanics, and typed outputs. Install, run modes, and quickstarts stay in the README. Contributor workflow: [development guide](docs/guides/development.rst).
+Developer-oriented companion to [`README.md`](README.md) and the Sphinx [architecture guide](https://metalsurfer.readthedocs.io/en/latest/guides/architecture.html): module layout, implementation mechanics, and typed outputs. Install, run modes, and quickstarts stay in the README. Contributor workflow: [development guide](https://metalsurfer.readthedocs.io/en/latest/guides/development.html).
 
 `scripts/` and `examples/` call the campaign APIs (`run_adsorption`, `run_saturation`, `run_*_bo`). On-disk layout follows the campaign layer (`results_{surface_type}/`, `step_*_placements/`, `saturation_placements_detailed.csv` when `saturation_save_all_placements` is true).
 
@@ -56,7 +56,7 @@ Orchestration helpers used by campaigns:
 
 **Surfaces and placement:** `enumerate_placement_specs`, `generate_placement_from_spec`, `generate_placement_from_descriptor`, `calculate_min_distance`, `get_symmetry_aware_sites`, `get_symmetry_info`.
 
-**Optimization:** `setup_calculator`, `setup_single_model`, `setup_torchsim_model`, `TorchSimCalculator`, `optimize_isolated_molecules_batched`, `optimize_adsorbate_slab_batched`, `batch_static`, `precompute_results`, `identify_top_layer_indices`, `compute_frozen_indices`, `frozen_indices_from_constraints`.
+**Optimization:** `setup_calculator`, `setup_single_model`, `setup_torchsim_model`, `TorchSimCalculator`, `optimize_isolated_molecules_batched`, `optimize_adsorbate_slab_batched`, `batch_static`, `precompute_results`, `identify_relaxable_surface_indices`, `identify_top_layer_indices`, `compute_frozen_indices`, `frozen_indices_from_constraints`.
 
 **Filtering:** `filter_results`, `check_decomposition`, `check_desorption`.
 
@@ -154,8 +154,8 @@ Workflow subpackage:
 
 ### Surfaces and slab containers
 
-:mod:`metalsurfer.surface_prep` is the canonical import path for all substrate
-and material preparation. See [surface_prep API](docs/api/surface_prep.rst) for the full API.
+`metalsurfer.surface_prep` is the canonical import path for all substrate
+and material preparation. See [surface_prep API](https://metalsurfer.readthedocs.io/en/latest/api/surface_prep.html) for the full API.
 
 **Prep (before campaign APIs):** `prepare_substrate`
 (recommended), or lower-level helpers finalized with
@@ -321,7 +321,7 @@ Single-molecule saturation returns a list of `SaturationRunResult` with `n_molec
 
 ## Run modes and pipeline
 
-High-level narrative also appears in [docs/guides/architecture.rst](docs/guides/architecture.rst).
+High-level narrative also appears in the [architecture guide](https://metalsurfer.readthedocs.io/en/latest/guides/architecture.html).
 
 | Mode | Entry | Summary |
 |------|-------|---------|
@@ -505,7 +505,7 @@ BOSS learns a **continuous PES** in a hand-crafted parameterization; Metalsurfer
 
 - **Many placements, not one pose:** binding energy is the best of a sampled distribution after aggressive filtering—not a single user-specified geometry.
 - **Saturation proxy:** stop when the next adsorption is endothermic (`E_ads ≥ 0`), not at an explicit coverage fraction or chemical potential.
-- **Rigid substrate by default during adsorption:** entire substrate frozen via prep-time `FixAtoms` (`relax_top_layer=False` on `prepare_substrate`); set `relax_top_layer=True` to free the top layer. Prep equilibration uses separate ASE `slab_relaxation_mode` (default `ionic_only`). Campaign start logs frozen vs moving atoms.
+- **Rigid substrate by default during adsorption:** entire substrate frozen via prep-time `FixAtoms` (`relax_top_layer=False`). `relax_top_layer=True` is a material-aware shortcut (`identify_relaxable_surface_indices`: slab top layer, nanoparticle outer shell, porous pore boundary). Custom ASE constraints override the shortcut. Prep equilibration uses separate ASE `slab_relaxation_mode` (default `ionic_only`).
 - **Symmetry as accelerator:** symmetry-reduced sites until the covered slab breaks symmetry vs the reference structure.
 - **GPU-first TorchSim:** autotune parallel batch size; `InFlightAutoBatcher` packs relaxations; `saturation_autobatcher_reuse` amortizes probes on deep coverage runs.
 - **BO + transfer for coverage:** `run_saturation_bo` carries `BOStepMemory` across steps so later layers warm-start from an informed surrogate.

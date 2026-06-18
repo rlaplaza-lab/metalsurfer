@@ -122,10 +122,11 @@ def main():
         config=config,
         results_dir=results_dir,
         align=False,
-        relax_top_layer=True,  # Allow top layer to relax with adsorbate
+        slab_relaxation_mode="none",  # Use saturation geometry as the reference
     )
 
-    # Clean metal slab for frozen indices (subsurface metal only)
+    # Freeze policy for placement relaxation comes from base_slab_for_frozen below.
+    # relax_top_layer=True freezes subsurface metal only on the clean reference.
     base_slab = prepare_substrate(
         bulk_id="mp-23",
         miller_indices=(1, 1, 1),

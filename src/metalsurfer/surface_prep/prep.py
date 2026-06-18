@@ -120,6 +120,11 @@ def finalize_substrate(
     :func:`~metalsurfer.surface_prep.apply_surface_constraints`. Campaign APIs
     read those constraints only.
 
+    When ``relax_top_layer=True``, pass *config* with the correct
+    ``material_type`` — freeze geometry is chosen from
+    :attr:`~metalsurfer.AdsorptionConfig.material_type` (defaults to ``"slab"``
+    when *config* is omitted). Use the same *config* in campaign APIs.
+
     This is the last step of substrate preparation. It does **not** build slabs
     from bulk, resize in-plane cells, or deposit adatoms — use
     :func:`prepare_substrate` or the lower-level helpers first, then call this
@@ -137,6 +142,7 @@ def finalize_substrate(
         relax_top_layer=relax_top_layer,
         freeze_symbols=freeze_symbols,
         top_layer_tolerance=top_layer_tolerance,
+        material_type=material_type,
     )
     validate_substrate(
         container.atoms,
@@ -202,8 +208,11 @@ def prepare_substrate(
     only alloy/adatom modification steps are applied before finalization.
 
     Set ``slab_relaxation_mode="none"`` to skip prep equilibration (experimental
-    geometries only). Set ``relax_top_layer=True`` to allow the top surface layer
-    to relax with the adsorbate during placement optimization.
+    geometries only). Set ``relax_top_layer=True`` to leave the exposed surface
+    free during placement optimization (behaviour depends on
+    ``AdsorptionConfig.material_type``; see
+    :func:`~metalsurfer.identify_relaxable_surface_indices`). Attach custom ASE
+    constraints yourself when you need finer control than this shortcut.
 
     Prep-time relaxation knobs mirror :class:`~metalsurfer.AdsorptionConfig`
     ``slab_relaxation_*`` fields. Explicit ``slab_relaxation_*`` and

@@ -30,13 +30,16 @@ To also install the documentation build dependencies:
 Runnable Examples
 -----------------
 
-Three scripts under ``examples/`` cover nanoparticle, porous, and slab workflows:
+Five scripts under ``examples/`` cover nanoparticle, porous, slab, saturation,
+and Bayesian workflows:
 
 .. code-block:: bash
 
    python examples/h2_pt12_binding_energy.py
    python examples/co2_mof_binding_energy.py
    python examples/ethene_ru_slab_binding_energy.py
+   python examples/bipyridine_au111_defects_saturation_raw.py
+   python examples/camphor_cu111_binding_energy.py
 
 
 Standard Screening
@@ -204,13 +207,12 @@ Important saturation behaviors:
   substrate ionic positions during
   :func:`~metalsurfer.surface_prep.prepare_substrate`. The returned substrate is
   the optimized reference for ``E(slab)``.
-- **Adsorption freeze:** ``relax_top_layer`` and ``freeze_symbols`` prep kwargs
-  write ASE ``FixAtoms`` during :func:`~metalsurfer.surface_prep.prepare_substrate`
-  (default: entire substrate frozen). Placement relaxation reads those constraints
-  only. Set ``relax_top_layer=True`` on ``prepare_substrate`` to allow the top
-  surface layer to relax with the adsorbate. Campaign start logs frozen vs moving
-  substrate atoms. Saturation pins ``base_slab`` at campaign start. Compare
-  structures to the matching prep snapshot (e.g. ``clean_slab_Au20`` after adatoms).
+- **Adsorption freeze:** prep kwargs write ASE ``FixAtoms`` during
+  :func:`~metalsurfer.surface_prep.prepare_substrate` (default: entire substrate
+  frozen). Placement relaxation reads those constraints only. See
+  :doc:`surface_engineering` for ``relax_top_layer`` / ``freeze_symbols``.
+  Saturation pins ``base_slab`` at campaign start. Compare structures to the
+  matching prep snapshot (e.g. ``clean_slab_Au20`` after adatoms).
 - In-plane supercell expansion must be done during prep
   (``auto_resize_substrate_for_molecule`` / ``resize_substrate_for_molecule``) before
   calling campaign APIs.
