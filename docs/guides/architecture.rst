@@ -173,10 +173,9 @@ Module Layout
    └── workflow/             # orchestration by run mode
        ├── core.py           # standard per-molecule screening
        ├── bayesian.py       # BO-guided per-molecule screening
-       ├── screening.py      # shared setup helpers for saturation campaigns
        ├── saturation.py     # sequential / multi-mol saturation
        ├── reference.py      # reference energy preparation
-       └── shared.py         # validation helpers, common setup
+       └── shared.py         # bootstrap, molecule preamble, validation, autotune
 
 
 Output Structure

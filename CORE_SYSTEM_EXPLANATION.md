@@ -41,16 +41,16 @@ Also exported from `metalsurfer.surface_prep`: `finalize_substrate`, `relax_subs
 
 Orchestration helpers used by campaigns:
 
-- `_normalize_molecules_input(...)` — unify CSV path and in-memory `(smiles, name)` lists for binding campaigns.
-- `_setup_screening_run(...)` — validate substrate, load molecules, setup MLIP, reference energies (saturation and legacy helpers).
+- `_normalize_molecules_input(...)` — unify CSV path and in-memory `(smiles, name)` lists for binding and saturation campaigns.
+- `_bootstrap_screening_run(...)` — validate substrate, setup MLIP, and compute reference energies (shared by binding and saturation).
 - `run_saturation_screening(...)` — saturation loops (`workflow/saturation.py`).
 
 `load_molecules` / `load_molecules_from_pairs` live in `workflow/shared.py`. CSV files may include an optional header row (`smiles,molecule`).
 
 ### 4. Mid-level per-molecule APIs
 
-- `process_molecule(...)` — standard placement screen.
-- `process_molecule_bayesian(...)` — BO-guided screen.
+- `process_molecule(...)` — standard placement screen (preamble via `_prepare_molecule_screening`).
+- `process_molecule_bayesian(...)` — BO-guided screen (same shared preamble).
 - `calculate_reference_energies(...)`
 - `load_molecules(...)`
 
@@ -79,11 +79,8 @@ Across run modes the physical stages are: surface prep → reference energies �
 ```mermaid
 flowchart TD
     prep[prepare_substrate / SlabContainer] --> ref[calculate_reference_energies]
-    ref --> conf[create_conformers_from_smiles]
-    conf --> sub[prepare_substrate_for_screening]
-    sub --> sites[_resolve_site_context_for_sampling]
-    sites --> tune[resolve_workload_config]
-    tune --> place[_generate_placements_with_retry]
+    ref --> preamble[_prepare_molecule_screening]
+    preamble --> place[_generate_placements_with_retry]
     place --> opt[optimize_adsorbate_slab_batched]
     opt --> val[_evaluate_optimized_candidate]
     val --> filt[filter_results]
@@ -120,8 +117,8 @@ computed in `workflow/shared._evaluate_optimized_candidate`.
 
 | API | `molecules` input | Code path | Persistence / extras |
 |-----|-------------------|-----------|----------------------|
-| `run_adsorption` / `run_adsorption_bo` | **CSV path or in-memory list** | `campaigns._run_binding_campaign` via `_normalize_molecules_input` | XYZ/CSV summaries, `DatasetLogger`, `MoleculeCampaignSummary`, `failure_summaries`, `skip_existing` |
-| `run_saturation` / `run_saturation_bo` | **CSV or list** | `run_saturation_screening` → `_setup_screening_run` | `save_saturation_results`; optional `save_benchmark_dataset` |
+| `run_adsorption` / `run_adsorption_bo` | **CSV path or in-memory list** | `campaigns._run_binding_campaign` → `_normalize_molecules_input` + `_bootstrap_screening_run` | XYZ/CSV summaries, `DatasetLogger`, `MoleculeCampaignSummary`, `failure_summaries`, `skip_existing` |
+| `run_saturation` / `run_saturation_bo` | **CSV or list** | `run_saturation_screening` → `_normalize_molecules_input` + `_bootstrap_screening_run` | `save_saturation_results`; optional `save_benchmark_dataset` |
 
 Both binding and saturation paths share `process_fn` = `process_molecule` or `process_molecule_bayesian` where applicable.
 
@@ -146,10 +143,9 @@ Workflow subpackage:
 
 - `core.py` — standard per-molecule screening + `_evaluate_placement_batch` (`process_molecule` always returns `list[ScreeningResult]`, possibly empty).
 - `bayesian.py` — BO-guided per-molecule screening.
-- `screening.py` — `_setup_screening_run` helper for saturation campaigns.
 - `saturation.py` — single- and multi-molecule saturation.
 - `reference.py` — reference-energy preparation.
-- `shared.py` — site context, validation, workload autotune, molecule loading.
+- `shared.py` — molecule loading, `_bootstrap_screening_run`, `_prepare_molecule_screening`, site context, validation, workload autotune.
 
 ## Implementation mechanics
 
