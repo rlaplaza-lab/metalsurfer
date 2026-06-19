@@ -1,13 +1,16 @@
 """Build placements from specs: sites, orientations, and validation."""
 
 import dataclasses
+import hashlib
 import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
 from ase import Atoms
 from ase.geometry import find_mic
+from scipy.spatial import KDTree
 
 from .._utils import is_finite_number as _is_finite_number
 from ..config import AdsorptionConfig
@@ -25,6 +28,7 @@ from ._constants import (
     _ORIENTATION_CLASSIFICATION_PARALLEL_DOT_THRESHOLD,
     _PARALLEL_FRACTION_HIGH_BINDER_RATIO,
     _PARALLEL_FRACTION_HIGH_RATIO_CUTOFF,
+    _PARALLEL_FRACTION_LOW_BINDER_RATIO,
     _PARALLEL_FRACTION_MEDIUM_BINDER_RATIO,
     _PARALLEL_FRACTION_MEDIUM_RATIO_CUTOFF,
     _PARALLEL_FRACTION_NO_BINDERS,
@@ -64,6 +68,41 @@ class SiteContext:
     source: str
     # Pre-clustering output of :func:`sites.get_unified_sites` (same as used for clustering).
     raw_unclustered: list[dict[str, object]] | None = None
+
+
+_UNIQUE_SITES_CACHE_MAX_ENTRIES = 16
+_UNIQUE_SITES_CACHE: dict[str, SiteContext] = {}
+_UNIQUE_SITES_CACHE_LOCK = threading.Lock()
+
+
+def clear_unique_sites_cache() -> None:
+    """Clear cached unique-site contexts (mainly for tests)."""
+    with _UNIQUE_SITES_CACHE_LOCK:
+        _UNIQUE_SITES_CACHE.clear()
+
+
+def _unique_sites_cache_key(slab: Atoms, config: AdsorptionConfig) -> str:
+    pos_bytes = slab.get_positions().tobytes()
+    cell_bytes = np.asarray(slab.get_cell()).tobytes()
+    pbc_bytes = str(list(slab.get_pbc())).encode()
+    cfg_bytes = (
+        str(config.voronoi_probe_radius).encode()
+        + str(config.voronoi_max_site_distance).encode()
+        + str(config.top_layer_tolerance).encode()
+        + str(config.site_equivalence_tolerance).encode()
+        + str(config.voronoi_site_enrichment).encode()
+        + str(config.site_classification_method).encode()
+        + config.material_type.encode()
+    )
+    return hashlib.sha256(pos_bytes + cell_bytes + pbc_bytes + cfg_bytes).hexdigest()
+
+
+def _store_unique_sites_cache(cache_key: str, ctx: SiteContext) -> SiteContext:
+    with _UNIQUE_SITES_CACHE_LOCK:
+        if len(_UNIQUE_SITES_CACHE) >= _UNIQUE_SITES_CACHE_MAX_ENTRIES:
+            _UNIQUE_SITES_CACHE.pop(next(iter(_UNIQUE_SITES_CACHE)))
+        _UNIQUE_SITES_CACHE[cache_key] = ctx
+    return ctx
 
 
 @dataclass
@@ -258,7 +297,7 @@ def _estimate_parallel_fraction(
         return _PARALLEL_FRACTION_HIGH_BINDER_RATIO
     if ratio >= _PARALLEL_FRACTION_MEDIUM_RATIO_CUTOFF:
         return _PARALLEL_FRACTION_MEDIUM_BINDER_RATIO
-    return _PARALLEL_FRACTION_NO_BINDERS
+    return _PARALLEL_FRACTION_LOW_BINDER_RATIO
 
 
 def _get_unique_sites_for_specs(
@@ -271,6 +310,12 @@ def _get_unique_sites_for_specs(
     Returns ``SiteContext(sites=[], use_sites=False, source="no_sites")`` when
     site detection yields nothing.
     """
+    cache_key = _unique_sites_cache_key(slab, config)
+    with _UNIQUE_SITES_CACHE_LOCK:
+        cached = _UNIQUE_SITES_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     if config.material_type not in ("slab", "nanoparticle", "porous"):
         raise ValueError(
             "config.material_type must be 'slab', 'nanoparticle', or 'porous', "
@@ -286,8 +331,11 @@ def _get_unique_sites_for_specs(
             "Slab has fewer than 4 atoms (%d); cannot detect adsorption sites",
             len(slab),
         )
-        return SiteContext(
-            sites=[], use_sites=False, source="no_sites", raw_unclustered=None
+        return _store_unique_sites_cache(
+            cache_key,
+            SiteContext(
+                sites=[], use_sites=False, source="no_sites", raw_unclustered=None
+            ),
         )
 
     raw_sites = sts.get_unified_sites(
@@ -302,14 +350,17 @@ def _get_unique_sites_for_specs(
     if not raw_sites:
         logger.warning(
             "Unified Voronoi site detection found no sites for %d-atom structure "
-            "(probe_radius=%.2f, max_distance=%.2f, material_type=%r)",
+            "(probe_radius=%s, max_distance=%s, material_type=%r)",
             len(slab),
-            probe_radius,
-            max_site_dist,
+            f"{probe_radius:.2f}" if probe_radius is not None else "auto",
+            f"{max_site_dist:.2f}" if max_site_dist is not None else "auto",
             mat_type,
         )
-        return SiteContext(
-            sites=[], use_sites=False, source="no_sites", raw_unclustered=None
+        return _store_unique_sites_cache(
+            cache_key,
+            SiteContext(
+                sites=[], use_sites=False, source="no_sites", raw_unclustered=None
+            ),
         )
 
     cell = np.array(slab.get_cell())
@@ -327,19 +378,25 @@ def _get_unique_sites_for_specs(
             config.site_equivalence_tolerance,
             mat_type,
         )
-        return SiteContext(
-            sites=[],
-            use_sites=False,
-            source="no_sites",
-            raw_unclustered=raw_sites,
+        return _store_unique_sites_cache(
+            cache_key,
+            SiteContext(
+                sites=[],
+                use_sites=False,
+                source="no_sites",
+                raw_unclustered=raw_sites,
+            ),
         )
 
     source = str(unique_sites[0].get("site_source", "voronoi"))
-    return SiteContext(
-        sites=unique_sites,
-        use_sites=True,
-        source=source,
-        raw_unclustered=raw_sites,
+    return _store_unique_sites_cache(
+        cache_key,
+        SiteContext(
+            sites=unique_sites,
+            use_sites=True,
+            source=source,
+            raw_unclustered=raw_sites,
+        ),
     )
 
 
@@ -352,29 +409,35 @@ def _resolve_surface_ref(
 ) -> tuple[float, bool]:
     """Return *(surface_ref_z, is_local_ref)* for z-offset calculations.
 
-    For slabs the reference is the topmost atomic z so that z_offset is the
-    gap above the surface layer.  For nanoparticles and porous materials the
-    Voronoi vertex z IS the surface reference (local).
+    For slabs the reference is the topmost height along the slab normal so that
+    z_offset is the gap above the surface layer.  For nanoparticles and porous
+    materials the Voronoi vertex z IS the surface reference (local).
 
     When *rough_slab_local_z* is True and the slab is non-planar, use the
-    site's own z as the surface reference instead of the global max z.  This
+    site's own height along the normal instead of the global maximum.  This
     prevents step-edge sites from getting excessive z offsets.
     """
     if mat_type == "slab":
+        cell = np.asarray(slab.get_cell(), dtype=float)
+        positions = slab.get_positions()
         if (
             rough_slab_local_z
             and site is not None
-            and "z" in site
             and not sts._is_top_layer_planar(slab)
         ):
-            z_val = site["z"]
-            if isinstance(z_val, (int, float, np.floating)):
-                return float(z_val), True
-        return float(np.max(slab.get_positions()[:, 2])), False
+            if "xyz" in site:
+                xyz = np.asarray(site["xyz"], dtype=float)
+                if xyz.shape == (3,):
+                    return float(sts._height_along_slab_normal(xyz, cell)), True
+            if "z" in site:
+                z_val = site["z"]
+                if isinstance(z_val, (int, float, np.floating)):
+                    return float(z_val), True
+        return float(np.max(sts._height_along_slab_normal(positions, cell))), False
     if site is not None and "xyz" in site:
-        xyz = site["xyz"]
-        if isinstance(xyz, (list, tuple, np.ndarray)) and len(xyz) >= 3:
-            return float(xyz[2]), True
+        xyz_raw = site["xyz"]
+        if isinstance(xyz_raw, (list, tuple, np.ndarray)) and len(xyz_raw) >= 3:
+            return float(np.asarray(xyz_raw, dtype=float)[2]), True
     if site is not None and "z" in site:
         z_val = site["z"]
         if isinstance(z_val, (int, float, np.floating)):
@@ -488,7 +551,15 @@ def _pose_from_spec(
     quat = geom.rotation_matrix_to_quaternion(rot_mat)
 
     if mat_type == "slab":
-        placement_center = np.array([float(x), float(y), float(surface_ref + z_offset)])
+        cell = np.asarray(placement_reference_slab.get_cell(), dtype=float)
+        n_hat = sts._slab_normal(cell)
+        if site is not None and "xyz" in site:
+            base = np.asarray(site["xyz"], dtype=float)
+        else:
+            base = np.array([float(x), float(y), float(surface_ref)], dtype=float)
+        base_h = float(np.dot(base, n_hat))
+        target_h = float(surface_ref + z_offset)
+        placement_center = base + (target_h - base_h) * n_hat
     elif site is not None and "xyz" in site:
         placement_center = (
             np.asarray(site["xyz"], dtype=float) + float(z_offset) * normal
@@ -585,17 +656,23 @@ def _context_from_pose(
     )
 
 
-def _recover_z_offset(ctx: _PlacementContext, z_abs: float) -> float:
+def _recover_z_offset(
+    ctx: _PlacementContext, z_abs: float, slab: Atoms | None = None
+) -> float:
     """Recover the gap above the surface reference from absolute z.
 
-    For slabs this is just ``z_abs - surface_ref``.  For nanoparticle / pore
-    sites with an oriented normal we project the displacement onto the
-    normal so the offset is measured along the local surface.
+    For slabs this is the displacement along the slab normal above
+    *surface_ref* (height along normal).  For axis-aligned slabs this equals
+    ``z_abs - surface_ref``.  For nanoparticle / pore sites with an oriented
+    normal we project the displacement onto the local normal.
     """
     pose = ctx.pose
     site = ctx.site
-    if ctx.mat_type == "slab":
-        return float(z_abs - ctx.surface_ref)
+    if ctx.mat_type == "slab" and slab is not None:
+        cell = np.asarray(slab.get_cell(), dtype=float)
+        n_hat = sts._slab_normal(cell)
+        placement = np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float)
+        return float(np.dot(placement, n_hat) - ctx.surface_ref)
     if site is not None and "xyz" in site and "normal" in site:
         site_xyz = np.asarray(site["xyz"], dtype=float)
         site_normal = np.asarray(site["normal"], dtype=float)
@@ -641,14 +718,17 @@ def _finalize_placement(
     if not ok:
         return None
 
-    z_offset = _recover_z_offset(ctx, z_abs)
+    z_offset = _recover_z_offset(ctx, z_abs, slab)
     slab_indices: tuple[int, ...] | None = None
     if ctx.site is not None and "slab_indices" in ctx.site:
         raw_indices = ctx.site["slab_indices"]
         if isinstance(raw_indices, (list, tuple)):
             slab_indices = tuple(int(i) for i in raw_indices)
-    inv_2d = np.linalg.inv(np.array(slab.get_cell())[:2, :2])
-    xy_frac = (inv_2d @ np.array([pose.x_abs, pose.y_abs])) % 1.0
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pinv_ab_T, _ = sts._slab_plane_projectors(cell)
+    placement_xy = np.array([pose.x_abs, pose.y_abs, 0.0], dtype=float)
+    frac2 = placement_xy @ pinv_ab_T
+    xy_frac = np.mod(frac2, 1.0)
 
     descriptor = PlacementDescriptor(
         conformer_index=pose.conformer_index,
@@ -1055,43 +1135,59 @@ def _get_hollow_site_pairs(
     slab_for_sites: Atoms | None = None,
     existing_adsorbate_positions: np.ndarray | None = None,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Return list of (xy1, xy2) hollow-site pairs suitable for dissociative placement."""
+    """Return list of (xyz1, xyz2) hollow-site pairs suitable for dissociative placement."""
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
-    cell = slab.get_cell()
+    cell_arr = np.asarray(slab.get_cell(), dtype=float)
     pbc = list(slab.get_pbc())
+    pbc_slab = np.array([bool(pbc[0]), bool(pbc[1]), False])
 
-    hollow_sites = sts.get_hollow_sites_for_adatoms(
+    raw = sts.get_unified_sites(
         sites_slab,
         top_layer_tolerance=config.top_layer_tolerance,
-        dedup_tolerance=config.hollow_site_dedup_tolerance,
+        material_type="slab",
     )
-    if len(hollow_sites) < 2:
+    hollow_entries = [s for s in raw if s.get("site_type") in ("hollow", "pore")]
+    if len(hollow_entries) < 2:
+        return []
+
+    hollow_xyz = np.array(
+        [np.asarray(s["xyz"], dtype=float) for s in hollow_entries], dtype=float
+    )
+    keep = sts._deduplicate_points(
+        hollow_xyz,
+        config.hollow_site_dedup_tolerance,
+        cell=cell_arr,
+        pbc=pbc_slab,
+    )
+    hollow_xyz = hollow_xyz[keep]
+    if len(hollow_xyz) < 2:
         return []
 
     if (
         existing_adsorbate_positions is not None
         and len(existing_adsorbate_positions) > 0
     ):
-        surface_z = float(np.max(sites_slab.get_positions()[:, 2]))
         available: list[np.ndarray] = []
-        for h_xy in hollow_sites:
-            site_pos = np.append(h_xy, surface_z)
+        for site_pos in hollow_xyz:
             d = geom.calculate_min_distance(
                 site_pos.reshape(1, 3),
                 existing_adsorbate_positions,
-                cell=cell,
+                cell=cell_arr,
                 pbc=pbc,
             )
             if d >= config.min_initial_distance:
-                available.append(h_xy)
-        hollow_sites = available
-        if len(hollow_sites) < 2:
+                available.append(site_pos)
+        hollow_xyz = np.asarray(available, dtype=float)
+        if len(hollow_xyz) < 2:
             return []
 
     symbols = sites_slab.get_chemical_symbols()
     top_positions = sites_slab.get_positions()
-    z_surface = float(np.max(top_positions[:, 2]))
-    top_mask = top_positions[:, 2] >= (z_surface - config.top_layer_tolerance)
+    top_mask = sts._top_layer_mask_by_normal(
+        top_positions,
+        cell_arr,
+        float(config.top_layer_tolerance),
+    )
     top_idx = np.nonzero(top_mask)[0]
     top_radii = [
         r
@@ -1100,13 +1196,9 @@ def _get_hollow_site_pairs(
     ]
     mean_top_radius = float(np.mean(top_radii)) if top_radii else 1.0
 
-    # Adaptive minimum fragment separation that considers both atomic properties and surface geometry
-    # Use a combination of covalent radius and hollow site density to determine reasonable constraints
-    from scipy.spatial import KDTree as _KDTree
-
-    site_3d = np.array([np.append(h, z_surface) for h in hollow_sites])
+    site_3d = hollow_xyz
     if len(site_3d) >= 2:
-        _nn_tree = _KDTree(site_3d)
+        _nn_tree = KDTree(site_3d)
         nn_d, _ = _nn_tree.query(site_3d, k=2)
         nn_d_arr = np.asarray(nn_d, dtype=float)
         if nn_d_arr.ndim == 2:
@@ -1143,19 +1235,19 @@ def _get_hollow_site_pairs(
         )
     )
 
-    tree = _KDTree(site_3d)
+    tree = KDTree(site_3d)
     candidate_pairs = tree.query_pairs(r=max_adjacent_sep)
 
     pairs: list[tuple[np.ndarray, np.ndarray]] = []
     for i, j in candidate_pairs:
         _, dists = find_mic(
             (site_3d[i] - site_3d[j]).reshape(1, 3),
-            cell,
+            cell_arr,
             pbc=pbc,
         )
         d = float(dists[0])
         if min_fragment_sep <= d <= max_adjacent_sep:
-            pairs.append((hollow_sites[i], hollow_sites[j]))
+            pairs.append((site_3d[i].copy(), site_3d[j].copy()))
     return pairs
 
 
@@ -1189,15 +1281,18 @@ def _generate_dissociative_placement_from_spec(
         return None, "no_hollow_site_pairs"
 
     pair_idx = spec.site_index % len(pairs)
-    xy1, xy2 = pairs[pair_idx]
+    xyz1, xyz2 = pairs[pair_idx]
 
-    surface_z = float(np.max(sites_slab.get_positions()[:, 2]))
+    cell_arr = np.asarray(slab.get_cell(), dtype=float)
+    n_hat = sts._slab_normal(cell_arr)
+    heights = sts._height_along_slab_normal(sites_slab.get_positions(), cell_arr)
+    h_surface = float(np.max(heights))
     z_lo, z_hi = config.placement_z_range
     z_offset = z_lo + spec.z_fraction * (z_hi - z_lo)
 
     syms = adsorbate.get_chemical_symbols()
-    pos1 = np.append(xy1, surface_z + z_offset)
-    pos2 = np.append(xy2, surface_z + z_offset)
+    pos1 = np.asarray(xyz1, dtype=float) + float(z_offset) * n_hat
+    pos2 = np.asarray(xyz2, dtype=float) + float(z_offset) * n_hat
 
     result = Atoms(symbols=syms, positions=[pos1, pos2])
     result.set_cell(slab.get_cell())
@@ -1217,8 +1312,9 @@ def _generate_dissociative_placement_from_spec(
         return None, "initial_distance_or_site_constraints"
 
     centroid = (pos1 + pos2) / 2.0
-    inv_2d = np.linalg.inv(np.array(slab.get_cell())[:2, :2])
-    xy_frac = (inv_2d @ np.array([centroid[0], centroid[1]])) % 1.0
+    pinv_ab_T, _ = sts._slab_plane_projectors(np.asarray(slab.get_cell(), dtype=float))
+    placement_xy = np.array([centroid[0], centroid[1], 0.0], dtype=float)
+    xy_frac = np.mod(placement_xy @ pinv_ab_T, 1.0)
     descriptor = PlacementDescriptor(
         conformer_index=0,
         orientation_type="dissociative",
@@ -1236,7 +1332,7 @@ def _generate_dissociative_placement_from_spec(
         z_offset=float(z_offset),
         x_abs=float(centroid[0]),
         y_abs=float(centroid[1]),
-        surface_ref_z_abs=surface_z,
+        surface_ref_z_abs=h_surface,
         z_abs=float(centroid[2]),
         shape="linear",
         slab_indices=None,

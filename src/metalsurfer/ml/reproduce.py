@@ -1,8 +1,8 @@
 """Deterministic reconstruction of simulation inputs from PlacementRecord.
 
 Given a :class:`PlacementRecord` (or its serialized form), this module
-rebuilds the full slab+adsorbate structure and calculator settings so
-that the binding energy can be recomputed identically.
+rebuilds the slab+adsorbate geometry and an :class:`~metalsurfer.AdsorptionConfig`
+matching the stored computation context for placement replay.
 """
 
 import logging
@@ -13,7 +13,6 @@ from ase import Atoms
 from .._utils import is_finite_number as _is_finite_number
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor
-from ..placement._material import calculator_pbc_for_atoms
 from ..placement.generators import generate_placement_from_descriptor
 from ..placement.geometry import normalize_quaternion
 from .schema import PlacementRecord
@@ -157,78 +156,3 @@ def reconstruct_placement(
             record.placement_id,
         )
     return adsorbate
-
-
-def verify_record_reproducibility(
-    record: PlacementRecord,
-    conformers: list[Atoms],
-    slab: Atoms,
-    calculator,
-    ts_model=None,
-    energy_tolerance: float = 0.01,
-) -> dict[str, object]:
-    """Re-run a single placement and compare to stored energy.
-
-    Returns a dict with keys:
-        - ``"reproducible"``: bool
-        - ``"stored_energy"``: float (eV)
-        - ``"recomputed_energy"``: float or None (eV)
-        - ``"energy_diff"``: float or None (eV)
-        - ``"record_hash"``: str
-    """
-    from ..optimization import optimize_adsorbate_slab_batched
-
-    result: dict[str, object] = {
-        "reproducible": False,
-        "stored_energy": record.energy_adsorption,
-        "recomputed_energy": None,
-        "energy_diff": None,
-        "record_hash": record.record_hash(),
-    }
-
-    adsorbate = reconstruct_placement(record, conformers, slab)
-    if adsorbate is None:
-        logger.error("Cannot reconstruct placement; verification failed")
-        return result
-
-    combined = slab + adsorbate
-    combined.set_pbc(calculator_pbc_for_atoms(combined))
-    combined.calc = calculator
-
-    config = record_to_config(record)
-    optimized_list = optimize_adsorbate_slab_batched(
-        [combined], slab, ts_model, config=config
-    )
-
-    if not optimized_list or optimized_list[0] is None:
-        logger.error("Optimization failed during verification")
-        return result
-
-    opt_atoms = optimized_list[0]
-    if opt_atoms.calc is None:
-        opt_atoms.calc = calculator
-    e_adslab = opt_atoms.get_potential_energy()
-    e_ads = e_adslab - record.energy_slab - record.energy_adsorbate
-
-    diff = abs(e_ads - record.energy_adsorption)
-    result["recomputed_energy"] = e_ads
-    result["energy_diff"] = diff
-    result["reproducible"] = diff <= energy_tolerance
-
-    if result["reproducible"]:
-        logger.info(
-            "Record %s verified: E_ads=%.4f eV (diff=%.4f eV)",
-            record.record_hash(),
-            e_ads,
-            diff,
-        )
-    else:
-        logger.warning(
-            "Record %s NOT reproducible: stored=%.4f, recomputed=%.4f (diff=%.4f eV)",
-            record.record_hash(),
-            record.energy_adsorption,
-            e_ads,
-            diff,
-        )
-
-    return result

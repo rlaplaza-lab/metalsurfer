@@ -27,9 +27,11 @@ from metalsurfer import (
 from metalsurfer.surface_prep import prepare_substrate
 
 
-def main():
+def main() -> int:
     configure_logging(default_level="INFO")
 
+    surface_type = "co2_mof"
+    results_dir = f"results_{surface_type}"
     cif_path = os.path.join(os.path.dirname(__file__), "mof_structures", "RUBTAK01.cif")
 
     if not os.path.exists(cif_path):
@@ -67,7 +69,7 @@ def main():
     mof_slab = prepare_substrate(
         slab=mof_atoms,
         config=config,
-        results_dir="results_co2_mof",
+        results_dir=results_dir,
         align=False,
     )
 
@@ -75,23 +77,19 @@ def main():
         slab=mof_slab,
         molecules=[("O=C=O", "CO2")],
         config=config,
-        surface_type="co2_mof",
+        surface_type=surface_type,
         system_name="MOF_cell",
     )
-    summary = campaign.molecule_summaries[0]
-    if summary.best_adsorption_energy is not None:
-        total_steps = config.stage1_steps + config.stage2_steps
-        print(
-            f"\nBinding energy of CO2 in MOF: {summary.best_adsorption_energy:.4f} eV"
+
+    print()
+    print(
+        campaign.format_summary(
+            title="Binding energy summary (CO2 / MOF)",
+            results_dir=results_dir,
         )
-        print("  (E_ads = E(MOF+CO2) - E(MOF) - E(CO2); negative = favorable)")
-        print(
-            f"  Relaxation: {total_steps} steps (stage1: {config.stage1_steps}, stage2: {config.stage2_steps})"
-        )
-        print(f"  {campaign.format_results_saved_line(results_dir='results_co2_mof')}")
-    else:
-        print("No valid placements found.")
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

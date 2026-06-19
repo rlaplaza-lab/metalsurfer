@@ -1,5 +1,7 @@
 """Unit tests for campaign facade symbols and result contracts."""
 
+import pytest
+
 from metalsurfer import (
     BindingCampaignResult,
     MoleculeCampaignSummary,
@@ -18,6 +20,25 @@ from metalsurfer.models import (
     SaturationStepResult,
 )
 from tests.conftest import make_screening_result
+
+
+def _patch_binding_bootstrap(monkeypatch, slab_container, ref=None):
+    from metalsurfer.workflow.shared import ScreeningRunBootstrap
+
+    if ref is None:
+        ref = object()
+
+    monkeypatch.setattr(
+        "metalsurfer.campaigns._bootstrap_screening_run",
+        lambda _slab, pairs, _config: ScreeningRunBootstrap(
+            calculator=object(),
+            ts_model=object(),
+            molecule_pairs=pairs,
+            ref=ref,
+            t_ref_s=0.0,
+            slab=slab_container,
+        ),
+    )
 
 
 def test_campaign_exports_are_callable():
@@ -261,3 +282,203 @@ def test_run_saturation_write_metadata_persists_json(tmp_path, monkeypatch):
     assert meta["results"]["total_configurations"] == 7
     assert meta["timing"]["reference_energies_s"] == 1.0
     assert meta["timing"]["total_wall_clock_s"] == 3.5
+
+
+def test_run_adsorption_csv_path_unified_with_inline(tmp_path, monkeypatch):
+    """CSV input uses the same binding path as in-memory lists."""
+    from metalsurfer.surfaces import SlabContainer
+    from tests.conftest import make_slab
+
+    monkeypatch.chdir(tmp_path)
+    csv_path = tmp_path / "demo.csv"
+    csv_path.write_text("C,demo\n")
+
+    placement = make_screening_result(molecule="demo", energy_adsorption=-1.0)
+    saved_summary: dict[str, object] = {}
+    slab_container = SlabContainer(make_slab())
+
+    def fake_process(_smi, mol, *_args, **_kwargs):
+        return [placement]
+
+    def fake_save_summary(run_results, surface_type="manual", config=None):
+        saved_summary["run_results"] = run_results
+        saved_summary["surface_type"] = surface_type
+
+    _patch_binding_bootstrap(monkeypatch, slab_container)
+    monkeypatch.setattr("metalsurfer.campaigns.process_molecule", fake_process)
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.save_single_molecule_results",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.save_summary_results",
+        fake_save_summary,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.setup_directories",
+        lambda surface_types, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.DatasetLogger.flush",
+        lambda self: None,
+    )
+
+    campaign = run_adsorption(
+        slab=slab_container,
+        molecules=str(csv_path),
+        config=AdsorptionConfig(seed=1),
+        surface_type="csv_demo",
+        skip_existing=False,
+        write_settings=False,
+    )
+
+    assert isinstance(campaign, BindingCampaignResult)
+    assert len(campaign.molecule_summaries) == 1
+    assert campaign.molecule_summaries[0].molecule == "demo"
+    assert campaign.molecule_summaries[0].best_adsorption_energy == -1.0
+    assert campaign.n_molecules == 1
+    assert saved_summary["surface_type"] == "csv_demo"
+    assert len(saved_summary["run_results"]) == 1
+
+
+def test_run_adsorption_skip_existing_inline_list(tmp_path, monkeypatch):
+    """In-memory molecule lists honor skip_existing via summary CSV."""
+    import pandas as pd
+
+    from metalsurfer.surfaces import SlabContainer
+    from tests.conftest import make_slab
+
+    monkeypatch.chdir(tmp_path)
+    results_dir = tmp_path / "results_skip_inline"
+    results_dir.mkdir(parents=True)
+    pd.DataFrame({"molecule": ["water"]}).to_csv(
+        results_dir / "adsorption_energies_detailed.csv",
+        index=False,
+    )
+
+    captured: dict[str, int] = {"count": 0}
+    slab_container = SlabContainer(make_slab())
+
+    def fake_process(_smi, mol, *_args, **_kwargs):
+        captured["count"] += 1
+        return []
+
+    _patch_binding_bootstrap(monkeypatch, slab_container)
+    monkeypatch.setattr("metalsurfer.campaigns.process_molecule", fake_process)
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.setup_directories",
+        lambda surface_types, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.DatasetLogger.flush",
+        lambda self: None,
+    )
+
+    campaign = run_adsorption(
+        slab=slab_container,
+        molecules=[("O", "water"), ("CCO", "ethanol")],
+        config=AdsorptionConfig(seed=1),
+        surface_type="skip_inline",
+        skip_existing=True,
+        save_results=False,
+        write_settings=False,
+    )
+
+    assert campaign.n_molecules == 1
+    assert captured["count"] == 1
+
+
+def test_run_adsorption_warns_when_bo_enabled_on_non_bo_api(monkeypatch):
+    monkeypatch.setattr(
+        "metalsurfer.campaigns._normalize_molecules_input",
+        lambda *args, **kwargs: ([], "empty_file", "<inline-molecules>"),
+    )
+    with pytest.warns(UserWarning, match="run_adsorption_bo"):
+        run_adsorption(
+            slab=object(),
+            molecules=[("C", "demo")],
+            config=AdsorptionConfig(bo_enabled=True),
+            surface_type="warn_demo",
+            save_results=False,
+            write_settings=False,
+        )
+
+
+def test_run_adsorption_save_results_false_skips_disk_writes(tmp_path, monkeypatch):
+    """save_results=False skips structure and summary writes for CSV input."""
+    from metalsurfer.surfaces import SlabContainer
+    from tests.conftest import make_slab
+
+    monkeypatch.chdir(tmp_path)
+    csv_path = tmp_path / "demo.csv"
+    csv_path.write_text("C,demo\n")
+
+    placement = make_screening_result(molecule="demo", energy_adsorption=-1.0)
+    saved: dict[str, bool] = {"single": False, "summary": False}
+    slab_container = SlabContainer(make_slab())
+
+    def fake_process(_smi, mol, *_args, **_kwargs):
+        return [placement]
+
+    _patch_binding_bootstrap(monkeypatch, slab_container)
+    monkeypatch.setattr("metalsurfer.campaigns.process_molecule", fake_process)
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.save_single_molecule_results",
+        lambda *args, **kwargs: saved.__setitem__("single", True),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.save_summary_results",
+        lambda *args, **kwargs: saved.__setitem__("summary", True),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.setup_directories",
+        lambda surface_types, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.DatasetLogger.flush",
+        lambda self: None,
+    )
+
+    campaign = run_adsorption(
+        slab=slab_container,
+        molecules=str(csv_path),
+        config=AdsorptionConfig(seed=1),
+        surface_type="no_save_csv",
+        skip_existing=False,
+        save_results=False,
+        write_settings=False,
+    )
+
+    assert isinstance(campaign, BindingCampaignResult)
+    assert campaign.n_molecules == 1
+    assert saved == {"single": False, "summary": False}
+
+
+def test_bootstrap_screening_run_validates_substrate_before_model(monkeypatch):
+    from metalsurfer.workflow.shared import _bootstrap_screening_run
+
+    model_called = {"value": False}
+
+    def fake_accept(*_args, **_kwargs):
+        raise ValueError("bad substrate")
+
+    def fake_setup(*_args, **_kwargs):
+        model_called["value"] = True
+        return object(), object()
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.shared.accept_substrate_for_api",
+        fake_accept,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.shared.setup_single_model",
+        fake_setup,
+    )
+
+    with pytest.raises(ValueError, match="bad substrate"):
+        _bootstrap_screening_run(
+            object(),
+            [("C", "demo")],
+            AdsorptionConfig(),
+        )
+    assert model_called["value"] is False

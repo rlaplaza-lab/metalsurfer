@@ -9,11 +9,11 @@ from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
 from metalsurfer.surface_prep import prepare_substrate
 
 
-def main():
+def main() -> int:
     configure_logging(default_level="INFO")
     # Single subdir for slab, placements, and results (avoids path drift)
-    results_subdir = "vanillin_ni111"
-    results_dir = f"results_{results_subdir}"
+    surface_type = "vanillin_ni111"
+    results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
         material_type="slab",
@@ -44,24 +44,16 @@ def main():
         slab=slab,
         molecules=[(smiles, "vanillin")],
         config=config,
-        surface_type=results_subdir,
+        surface_type=surface_type,
         system_name="Ni_111",
     )
-    summary = campaign.molecule_summaries[0]
-    if summary.best_adsorption_energy is not None:
-        print(
-            f"\nBinding energy of vanillin on Ni(111): {summary.best_adsorption_energy:.4f} eV"
+    print()
+    print(
+        campaign.format_summary(
+            title="Binding energy summary (vanillin / Ni(111))",
+            results_dir=results_dir,
         )
-        print(
-            "  (E_ads = E(slab+vanillin) - E(slab) - E(vanillin); negative = favorable)"
-        )
-        print(
-            f"  Orientations: {summary.n_parallel}/{summary.n_valid_placements} parallel, "
-            f"{summary.n_endown} EN-down"
-        )
-        print(f"  {campaign.format_results_saved_line(results_dir=results_dir)}")
-    else:
-        print("No valid placements found.")
+    )
 
     if config.debug_write_initial_placements:
         print(
@@ -69,6 +61,8 @@ def main():
             f"{results_dir}/xyz_structures/vanillin_all/initial_*.xyz"
         )
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

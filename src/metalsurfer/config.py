@@ -147,9 +147,13 @@ class AdsorptionConfig:
     )
     # Explicit material type: "slab" (2D periodic), "nanoparticle" (0D), or "porous" (3D periodic)
     material_type: Literal["slab", "nanoparticle", "porous"] = "slab"
-    # Voronoi site generation parameters
-    voronoi_probe_radius: float = 1.2  # min distance from framework atom to site (Å)
-    voronoi_max_site_distance: float = 4.0  # max distance for accessible sites (Å)
+    # Voronoi site generation parameters (None = derive from covalent radii)
+    voronoi_probe_radius: float | None = (
+        None  # min distance from framework atom to site (Å)
+    )
+    voronoi_max_site_distance: float | None = (
+        None  # max distance for accessible sites (Å)
+    )
     voronoi_site_enrichment: bool = True  # geodesic ridge subdivision for denser sites
     # Site classification: "distance_ratio" (default) or "delaunay" (slab only).
     site_classification_method: Literal["distance_ratio", "delaunay"] = "distance_ratio"
@@ -177,9 +181,7 @@ class AdsorptionConfig:
     )
     top_layer_tolerance: float = 0.5  # Tolerance for identifying top layer atoms (Å)
     symmetry_tolerance: float = 0.1  # Tolerance for symmetry detection (Å)
-    site_equivalence_tolerance: float = (
-        0.05  # Tolerance for site equivalence detection (Å)
-    )
+    site_equivalence_tolerance: float = 0.05  # Site equivalence clustering tolerance in Cartesian Å (all material types)
     hollow_site_dedup_tolerance: float = (
         0.1  # Tolerance for hollow site deduplication (Å)
     )
@@ -209,14 +211,8 @@ class AdsorptionConfig:
     contact_distance_threshold: float = (
         2.5  # Distance threshold (Å) for counting "contacting" atoms
     )
-    min_adsorbate_separation: float = (
-        2.0  # In saturation: minimum distance between adsorbates
-    )
     require_multiple_contact: bool = (
         False  # Require multiple atoms in contact region (contact quality)
-    )
-    max_initial_placement_quality: str = (
-        "any"  # "any" (default) or "good" (multiple contacts)
     )
     max_adsorption_energy: float = 5.0  # Maximum allowed adsorption energy (eV)
     energy_dedup_threshold: float = 0.05  # Energy threshold for deduplication (eV)
@@ -241,7 +237,6 @@ class AdsorptionConfig:
     write_vasp_inputs: bool = (
         False  # Write POSCAR/INCAR/KPOINTS and reference-slab POSCAR files
     )
-    saturation: bool = False  # Enable saturation coverage calculations
     multi_molecule_saturation: bool = (
         False  # Enable multi-molecule saturation calculations
     )
@@ -472,11 +467,15 @@ class AdsorptionConfig:
             self.material_type,
             allowed=MATERIAL_TYPE_OPTIONS,
         )
-        if self.voronoi_probe_radius <= 0:
+        if self.voronoi_probe_radius is not None and self.voronoi_probe_radius <= 0:
             raise ValueError(
                 f"voronoi_probe_radius must be positive, got {self.voronoi_probe_radius}"
             )
-        if self.voronoi_max_site_distance <= self.voronoi_probe_radius:
+        if (
+            self.voronoi_probe_radius is not None
+            and self.voronoi_max_site_distance is not None
+            and self.voronoi_max_site_distance <= self.voronoi_probe_radius
+        ):
             raise ValueError(
                 f"voronoi_max_site_distance ({self.voronoi_max_site_distance}) must be "
                 f"greater than voronoi_probe_radius ({self.voronoi_probe_radius})"
@@ -510,6 +509,8 @@ class AdsorptionConfig:
 
         if not self.model_name:
             raise ValueError("model_name must be a non-empty string")
+
+        _check_choice("device", self.device, allowed=("cuda", "cpu"))
 
         # Bayesian optimisation knobs
         if self.bo_enabled:

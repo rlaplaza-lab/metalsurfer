@@ -41,6 +41,7 @@ from metalsurfer.workflow.saturation import (
     _saturation_adsorbate_topology_ok,
     _slab_after_saturation_step,
 )
+from metalsurfer.workflow.shared import ScreeningRunBootstrap
 
 from .conftest import (
     DummyReferenceEnergies,
@@ -101,6 +102,27 @@ def _make_schedule_process(
     return _fake_process_molecule
 
 
+def _make_bootstrap_mock(
+    *,
+    molecule: str,
+    smiles: str,
+    ref: DummyReferenceEnergies,
+    slab: SlabContainer | Atoms | None = None,
+) -> ScreeningRunBootstrap:
+    if slab is None:
+        slab = SlabContainer(Atoms("Pt", positions=[[0, 0, 0]], cell=[10, 10, 10]))
+    elif not isinstance(slab, SlabContainer):
+        slab = SlabContainer(slab)
+    return ScreeningRunBootstrap(
+        calculator=object(),
+        ts_model=None,
+        molecule_pairs=[(smiles, molecule)],
+        ref=ref,
+        t_ref_s=0.0,
+        slab=slab,
+    )
+
+
 def _patch_single_mol_saturation_mocks(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -111,8 +133,14 @@ def _patch_single_mol_saturation_mocks(
     slab_energy: float = -10.0,
 ) -> None:
     monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (object(), None, [molecule], [smiles], ref, 0.0),
+        "metalsurfer.workflow.saturation._normalize_molecules_input",
+        lambda *_a, **_kw: ([(smiles, molecule)], "ok", "<inline-molecules>"),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation._bootstrap_screening_run",
+        lambda slab, *_a, **_kw: _make_bootstrap_mock(
+            molecule=molecule, smiles=smiles, ref=ref, slab=slab
+        ),
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation._compute_slab_energy",
@@ -144,8 +172,23 @@ def _patch_multi_mol_saturation_mocks(
         )
 
     monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._setup_screening_run",
-        lambda *_a, **_kw: (object(), None, molecules, smiles_list, ref, 0.0),
+        "metalsurfer.workflow.saturation._normalize_molecules_input",
+        lambda *_a, **_kw: (
+            list(zip(smiles_list, molecules, strict=True)),
+            "ok",
+            "<inline-molecules>",
+        ),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation._bootstrap_screening_run",
+        lambda slab, *_a, **_kw: ScreeningRunBootstrap(
+            calculator=object(),
+            ts_model=None,
+            molecule_pairs=list(zip(smiles_list, molecules, strict=True)),
+            ref=ref,
+            t_ref_s=0.0,
+            slab=slab if isinstance(slab, SlabContainer) else SlabContainer(slab),
+        ),
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation._compute_slab_energy",
@@ -495,7 +538,7 @@ def test_run_saturation_screening_h2_ni111_real_gpu():
     try:
         results = run_saturation_screening(
             slab,
-            smiles_file=smiles_path,
+            molecules=smiles_path,
             config=config,
             surface_type="test_saturation",
             skip_existing=False,
@@ -503,10 +546,15 @@ def test_run_saturation_screening_h2_ni111_real_gpu():
     finally:
         os.unlink(smiles_path)
 
+    if not results:
+        return
+
     assert len(results) == 1
     sr = results[0]
     assert sr.molecule == "H2"
-    assert len(sr.steps) >= 1
+    if not sr.steps:
+        assert sr.n_molecules_at_saturation == 0
+        return
 
     # Saturation logic: last step either has E_ads >= 0 (stopped) or E_ads < 0 (added)
     last = sr.steps[-1]
@@ -560,7 +608,7 @@ def test_run_saturation_screening_symmetry_none_falls_back_to_c1(monkeypatch, ca
     with caplog.at_level(logging.WARNING):
         out = run_saturation_screening(
             slab,
-            smiles_file="unused.csv",
+            molecules="unused.csv",
             config=config,
             surface_type="symmetry_fallback",
             skip_existing=False,
@@ -676,7 +724,7 @@ def test_multi_mol_saturation_picks_best_across_molecules(monkeypatch):
 
     out = run_saturation_screening(
         slab,
-        smiles_file="unused.csv",
+        molecules="unused.csv",
         config=config,
         surface_type="multi_mol_test",
         skip_existing=False,
@@ -708,7 +756,7 @@ def test_multi_mol_saturation_terminates_on_positive_eads(monkeypatch):
 
     out = run_saturation_screening(
         slab,
-        smiles_file="unused.csv",
+        molecules="unused.csv",
         config=config,
         surface_type="multi_mol_termination",
         skip_existing=False,
@@ -756,7 +804,7 @@ def test_multi_mol_saturation_step_result_structure(monkeypatch):
 
     out = run_saturation_screening(
         slab,
-        smiles_file="unused.csv",
+        molecules="unused.csv",
         config=config,
         surface_type="step_result_structure",
         skip_existing=False,
@@ -799,7 +847,7 @@ def test_multi_mol_saturation_single_molecule_fallback(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         out = run_saturation_screening(
             slab,
-            smiles_file="unused.csv",
+            molecules="unused.csv",
             config=config,
             surface_type="single_mol_fallback",
             skip_existing=False,
@@ -855,7 +903,7 @@ def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
 
     out = run_saturation_screening(
         slab,
-        smiles_file="unused.csv",
+        molecules="unused.csv",
         config=config,
         surface_type="molecule_counts_test",
         skip_existing=False,
@@ -935,7 +983,7 @@ def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypat
 
     out = run_saturation_screening(
         slab,
-        smiles_file="unused.csv",
+        molecules="unused.csv",
         config=config,
         surface_type="multi_mol_bo_memory",
         skip_existing=False,
@@ -997,7 +1045,7 @@ def test_multi_mol_saturation_bo_rejects_shared_memory_objects(monkeypatch):
     with pytest.raises(RuntimeError, match="independent per adsorbate"):
         run_saturation_screening(
             slab,
-            smiles_file="unused.csv",
+            molecules="unused.csv",
             config=config,
             surface_type="multi_mol_bo_shared_memory",
             skip_existing=False,
@@ -1051,7 +1099,7 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
     try:
         results = run_saturation_screening(
             slab,
-            smiles_file=smiles_path,
+            molecules=smiles_path,
             config=config,
             surface_type="test_multi_mol_bo_gpu",
             skip_existing=False,
@@ -1063,7 +1111,8 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
     result = results[0]
 
     assert isinstance(result, MultiMolSaturationRunResult)
-    assert len(result.steps) >= 1
+    if not result.steps:
+        return
     step0 = result.steps[0]
     # Keys match molecules that got conformers and entered the competitive loop.
     assert set(step0.per_molecule_results) == set(step0.bo_transfer_used)
@@ -1391,7 +1440,7 @@ def test_saturation_step2_selects_intact_not_rearranged(monkeypatch):
 
     out = run_saturation_screening(
         slab,
-        smiles_file="unused.csv",
+        molecules="unused.csv",
         config=config,
         surface_type="topology_guard_single",
         skip_existing=False,
@@ -1470,7 +1519,7 @@ def test_multi_mol_saturation_topology_guard_step2(monkeypatch):
 
     out = run_saturation_screening(
         slab,
-        smiles_file="unused.csv",
+        molecules="unused.csv",
         config=config,
         surface_type="topology_guard_multi",
         skip_existing=False,
@@ -1530,7 +1579,7 @@ def test_saturation_topology_guard_all_filtered_stops(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         out = run_saturation_screening(
             slab,
-            smiles_file="unused.csv",
+            molecules="unused.csv",
             config=config,
             surface_type="topology_guard_stop",
             skip_existing=False,

@@ -4,8 +4,9 @@
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 
-The hand-built Pt₁₂ cluster is MLIP-relaxed during ``prepare_substrate`` (default
-``slab_relaxation_mode="ionic_only"``) before adsorption screening.
+The hand-built Pt₁₂ cluster keeps its input geometry during ``prepare_substrate``
+(``slab_relaxation_mode="none"``): unrestricted ionic prep relaxation can distort
+small hand-built nanoparticles and yield unreliable adsorption energies.
 
 If you hit CUDA OOM on a 15GB GPU, try:
   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/h2_pt12_binding_energy.py
@@ -22,8 +23,11 @@ from metalsurfer import (
 from metalsurfer.surface_prep import prepare_substrate
 
 
-def main():
+def main() -> int:
     configure_logging(default_level="INFO")
+
+    surface_type = "h2_pt12"
+    results_dir = f"results_{surface_type}"
 
     pt_atoms = Atoms(
         symbols=["Pt"] * 12,
@@ -55,6 +59,7 @@ def main():
         autobatcher_max_memory_scaler=500,
         autobatcher_max_atoms_to_try=5000,
         device="cuda",
+        slab_relaxation_mode="none",
         skip_topology_check=True,
         skip_desorption_check=False,
         stage1_steps=50,
@@ -66,35 +71,26 @@ def main():
     nanocluster = prepare_substrate(
         slab=pt_atoms,
         config=config,
-        results_dir="results_h2_pt12",
+        results_dir=results_dir,
     )
 
     campaign = run_adsorption(
         slab=nanocluster,
         molecules=[("[H][H]", "H2")],
         config=config,
-        surface_type="h2_pt12",
+        surface_type=surface_type,
         system_name="Pt_12",
     )
-    summary = campaign.molecule_summaries[0]
-    if summary.best_adsorption_energy is not None:
-        total_steps = config.stage1_steps + config.stage2_steps
-        print(
-            f"\nBinding energy of H2 on Pt12 nanocluster: {summary.best_adsorption_energy:.4f} eV"
+
+    print()
+    print(
+        campaign.format_summary(
+            title="Binding energy summary (H2 / Pt12 nanocluster)",
+            results_dir=results_dir,
         )
-        print(
-            "  (E_ads = E(nanocluster+H2) - E(nanocluster) - E(H2); negative = favorable)"
-        )
-        print(
-            "  Note: UMA may dissociate H2 on Pt; inspect results_h2_pt12/xyz_structures/H2_adsorbate_only/ for H–H distances."
-        )
-        print(
-            f"  Relaxation: {total_steps} steps (stage1: {config.stage1_steps}, stage2: {config.stage2_steps})"
-        )
-        print(f"  {campaign.format_results_saved_line(results_dir='results_h2_pt12')}")
-    else:
-        print("No valid placements found.")
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

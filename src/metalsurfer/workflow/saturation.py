@@ -30,14 +30,15 @@ from ..placement.generators import (
     estimate_molecule_complexity,
 )
 from ..surface_prep import apply_material_pbc
-from ..surfaces import SlabContainer, accept_substrate_for_api
+from ..surfaces import SlabContainer
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian
 from .core import process_molecule
-from .screening import _setup_screening_run
 from .shared import (
+    _bootstrap_screening_run,
     _build_surface_reference_slab,
     _compute_slab_energy,
+    _normalize_molecules_input,
     resolve_saturation_step_workload_config,
 )
 
@@ -619,36 +620,49 @@ def _run_multi_molecule_saturation(
 
 def run_saturation_screening(
     slab: SlabContainer | Atoms,
-    molecules: list[tuple[str, str]] | tuple[str, str] | str = "smiles.csv",
-    smiles_file: str | None = None,
+    molecules: list[tuple[str, str]] | tuple[str, str] | str,
     config: AdsorptionConfig | None = None,
     surface_type: str = "manual",
     skip_existing: bool = True,
     failure_summary_out: dict[str, object] | None = None,
     run_metadata_out: dict[str, Any] | None = None,
 ) -> list[SaturationRunResult] | list[MultiMolSaturationRunResult]:
-    """Sequential saturation: add molecules until best E_ads >= 0."""
+    """Sequential saturation: add molecules until best E_ads >= 0.
+
+    Parameters
+    ----------
+    molecules:
+        In-memory ``(smiles, name)`` list/tuple or path to a two-column CSV.
+    """
     if config is None:
         config = AdsorptionConfig()
-
-    slab = accept_substrate_for_api(slab, config=config)
-    molecules_input = smiles_file if smiles_file is not None else molecules
 
     t_run_start = time.perf_counter()
 
     with log_context(surface_type=surface_type, seed=config.seed):
-        setup = _setup_screening_run(
-            slab,
-            molecules_input,
-            config,
-            surface_type,
-            skip_existing,
+        molecule_pairs, load_status, _molecules_source = _normalize_molecules_input(
+            molecules,
+            skip_existing=skip_existing,
+            surface_type=surface_type,
             skip_saturation_file=skip_existing,
         )
-        if setup is None:
+        if not molecule_pairs:
+            if load_status == "all_skipped":
+                logger.info("No molecules to process (all already in existing summary)")
+            elif load_status == "empty_file":
+                logger.info("No molecules to process (file empty or no valid rows)")
+            else:
+                logger.info("No molecules to process")
             return []
 
-        calculator, ts_model, molecule_names, smiles_list, ref, t_ref_s = setup
+        bootstrap = _bootstrap_screening_run(slab, molecule_pairs, config)
+        calculator = bootstrap.calculator
+        ts_model = bootstrap.ts_model
+        ref = bootstrap.ref
+        t_ref_s = bootstrap.t_ref_s
+        slab = bootstrap.slab
+        smiles_list = [smiles for smiles, _ in molecule_pairs]
+        molecule_names = [name for _, name in molecule_pairs]
         base_slab = slab.atoms.copy()
         results_dir = f"results_{surface_type}"
         ds_logger = DatasetLogger(results_dir, config=config, surface_id=surface_type)

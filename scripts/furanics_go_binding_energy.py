@@ -11,9 +11,7 @@ Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, to
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 """
 
-import argparse
 import logging
-import os
 from io import StringIO
 from urllib.request import urlopen
 
@@ -34,15 +32,6 @@ MOLECULES = [
     ("C(O[H])C1OC(C)CC1", "MTHFA"),
     ("CC1OC(C)CC1", "DMTHF"),
 ]
-
-
-def _configure_logging(debug: bool = False) -> None:
-    level_name = "DEBUG" if debug else "INFO"
-    configure_logging(default_level=level_name)
-    if debug:
-        logging.getLogger("metalsurfer.filters").setLevel(logging.DEBUG)
-        logging.getLogger("metalsurfer.workflow").setLevel(logging.DEBUG)
-
 
 CITABLE_BASE = (
     "https://raw.githubusercontent.com/fxcoudert/citable-data/master"
@@ -86,26 +75,11 @@ def _load_go_slab(subdir: str):
     return atoms
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Furanic molecules on graphene oxide with BO (up to 300 placements, passes of 100)"
-    )
-    parser.add_argument(
-        "--device",
-        default=os.environ.get("METALSURFER_DEVICE", "cuda"),
-        help="Device: cuda or cpu",
-    )
-    parser.add_argument("--debug", action="store_true", help="Enable DEBUG logging")
-    args = parser.parse_args()
-    debug = args.debug or (
-        os.environ.get("METALSURFER_DEBUG", "").lower() in ("1", "true", "yes")
-    )
-    _configure_logging(debug=debug)
-    device = args.device if args.device in ("cuda", "cpu") else "cuda"
+def main() -> int:
+    configure_logging(default_level="INFO")
 
     results_subdir = "furanics_go_r1"
     results_dir = f"results_{results_subdir}"
-    os.makedirs(results_dir, exist_ok=True)
 
     config = AdsorptionConfig(
         material_type="slab",
@@ -115,13 +89,12 @@ def main():
         num_conformers=10,
         num_placements=250,
         autobatcher_max_memory_padding=0.8,
-        device=device,
+        device="cuda",
         skip_topology_check=False,
         skip_desorption_check=False,
         stage1_steps=50,
         stage2_steps=500,
         debug_write_initial_placements=False,
-        bo_enabled=True,
         bo_initial_random=100,
         bo_batch_size=100,
         # bo_total_budget = acquisition batches after initial (not total evals).

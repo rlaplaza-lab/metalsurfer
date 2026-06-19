@@ -686,7 +686,12 @@ class BindingCampaignResult:
         """Return a canonical screening completion line."""
         return f"Screening complete: {self.total_configurations} total configurations"
 
-    def format_summary(self, *, title: str, results_dir: str) -> str:
+    def format_summary(
+        self,
+        *,
+        results_dir: str,
+        title: str = "Binding energy summary",
+    ) -> str:
         """Return a canonical multi-line binding summary block."""
         lines = [
             "=" * 60,
@@ -695,7 +700,22 @@ class BindingCampaignResult:
             "(E_ads = E(slab+molecule) - E(slab) - E(molecule); negative = favorable)",
             "",
         ]
-        for item in self.molecule_summaries:
+        summaries = list(self.molecule_summaries)
+        if not summaries and self.run_results:
+            for run_result in self.run_results:
+                best = (
+                    min(r.energy_adsorption for r in run_result.results)
+                    if run_result.results
+                    else None
+                )
+                summaries.append(
+                    MoleculeCampaignSummary(
+                        molecule=run_result.molecule,
+                        n_valid_placements=len(run_result.results),
+                        best_adsorption_energy=best,
+                    )
+                )
+        for item in summaries:
             if item.best_adsorption_energy is None:
                 lines.append(f"  {item.molecule:12s}: (no valid placements)")
                 continue
@@ -703,6 +723,11 @@ class BindingCampaignResult:
                 f"  {item.molecule:12s}: {item.best_adsorption_energy:+.4f} eV  "
                 f"({item.n_valid_placements} valid placements)"
             )
+        if self.failure_summaries:
+            lines.append("")
+            for molecule_name, failure_summary in self.failure_summaries.items():
+                lines.append(f"Failures for {molecule_name}:")
+                lines.append(self.format_failure_summary(failure_summary))
         lines.append("")
         lines.append(self.format_results_saved_line(results_dir=results_dir))
         return "\n".join(lines)

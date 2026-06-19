@@ -18,7 +18,7 @@ MOLECULES = [
 ]
 
 
-def main():
+def main() -> int:
     configure_logging(default_level="INFO")
     surface_type = "ethane_ethene_acetylene_rucu"
     results_dir = f"results_{surface_type}"
@@ -57,8 +57,15 @@ def main():
         surface_type=surface_type,
         system_name="RuCu_0001",
     )
-    print(campaign.format_screening_complete())
+    print()
+    print(
+        campaign.format_summary(
+            title="Binding energy summary (ethane / ethene / acetylene on RuCu)",
+            results_dir=results_dir,
+        )
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

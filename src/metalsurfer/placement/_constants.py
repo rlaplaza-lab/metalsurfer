@@ -43,7 +43,7 @@ _DISTANCE_RATIO_FLOOR_EPS: float = 1e-8
 
 # Number of nearest framework atoms used to estimate local geometry.
 _NORMAL_K_NEIGHBOURS: int = 4
-_SITE_CLASSIFICATION_NEIGHBOURS: int = 4
+_SITE_CLASSIFICATION_NEIGHBOURS: int = 6
 
 # Site-type classification based on d_i / d_1 distance ratios, where d_1 is
 # the distance to the nearest framework atom and d_i is the i-th closest.
@@ -201,6 +201,7 @@ _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE: float = 1.0
 # ---------------------------------------------------------------------------
 _ORIENTATION_CLASSIFICATION_PARALLEL_DOT_THRESHOLD: float = 0.7
 _PARALLEL_FRACTION_NO_BINDERS: float = 0.8
+_PARALLEL_FRACTION_LOW_BINDER_RATIO: float = 0.8
 _PARALLEL_FRACTION_NO_RING: float = 0.5
 _PARALLEL_FRACTION_HIGH_BINDER_RATIO: float = 0.3
 _PARALLEL_FRACTION_MEDIUM_BINDER_RATIO: float = 0.5

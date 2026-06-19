@@ -7,7 +7,6 @@ import pandas as pd
 from ase import Atoms
 
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
-from ..conformers import create_conformers_from_smiles
 from ..filters import filter_results
 from ..ml.bayesian import (
     build_spec_features_geometry_aware,
@@ -20,7 +19,6 @@ from ..ml.bayesian import (
 from ..ml.features import extract_features
 from ..ml.schema import PlacementRecord
 from ..models import BOStepMemory, ReferenceEnergies, ScreeningResult
-from ..optimization import frozen_indices_from_constraints
 from ..placement.generators import (
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
@@ -30,11 +28,8 @@ from .core import _evaluate_placement_batch
 from .shared import (
     PlacementFailureEvent,
     _infer_surface_symbols,
-    _resolve_site_context_for_sampling,
+    _prepare_molecule_screening,
     _summarize_failure_events,
-    build_representative_relaxation_atoms,
-    prepare_substrate_for_screening,
-    resolve_workload_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,7 +77,7 @@ def process_molecule_bayesian(
     bo_prior_step_memory: BOStepMemory | None = None,
     bo_step_memory_out: dict[str, BOStepMemory] | None = None,
     bo_transfer_info_out: dict[str, object] | None = None,
-) -> list[ScreeningResult] | None:
+) -> list[ScreeningResult]:
     """Bayesian-optimisation-guided placement screening for one molecule."""
     if config is None:
         config = AdsorptionConfig(bo_enabled=True)
@@ -90,74 +85,36 @@ def process_molecule_bayesian(
     if reference_smiles is None:
         reference_smiles = smiles
 
-    E_slab = (
-        slab_energy_override
-        if slab_energy_override is not None
-        else reference_energies.slab_energy
-    )
-    E_mol = reference_energies.get_molecule_energy(molecule_name)
-    if E_mol is None:
-        logger.error("Missing reference energy for %s", molecule_name)
-        if failure_summary_out is not None:
-            failure_summary_out["stage"] = "reference"
-            failure_summary_out["reason"] = (
-                f"missing reference energy for {molecule_name}"
-            )
-        return None
-
-    result = create_conformers_from_smiles(
-        smiles, calculator=calculator, config=config, ts_model=ts_model
-    )
-    if result is None:
-        logger.error("Could not generate conformers for %s", molecule_name)
-        if failure_summary_out is not None:
-            failure_summary_out["stage"] = "conformers"
-            failure_summary_out["reason"] = (
-                f"could not generate conformers for {molecule_name}"
-            )
-        return None
-    conformers, _ = result
-
-    substrate_ref = prepare_substrate_for_screening(
-        slab,
-        conformers,
-        base_slab_for_frozen,
-        config,
-    )
-    slab = substrate_ref.slab
-    slab_for_sites = substrate_ref.slab_for_sites
-    effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
-
-    site_context = _resolve_site_context_for_sampling(
-        slab_for_sites,
-        config,
-        symmetry_broken=symmetry_broken,
-    )
-
-    freeze_ref = (
-        effective_base_slab_for_frozen
-        if effective_base_slab_for_frozen is not None
-        else slab.atoms
-    )
-    frozen_indices = frozen_indices_from_constraints(freeze_ref)
-    representative_atoms = build_representative_relaxation_atoms(
-        conformers,
-        slab.atoms,
-        slab_for_sites,
-        config,
-        smiles,
-        site_context=site_context,
-    )
-    config = resolve_workload_config(
-        config,
+    ctx = _prepare_molecule_screening(
+        smiles=smiles,
+        molecule_name=molecule_name,
+        slab=slab,
+        calculator=calculator,
+        reference_energies=reference_energies,
         ts_model=ts_model,
-        representative_atoms=representative_atoms,
-        frozen_indices=frozen_indices,
+        config=config,
+        base_slab_for_frozen=base_slab_for_frozen,
+        slab_energy_override=slab_energy_override,
+        symmetry_broken=symmetry_broken,
+        failure_summary_out=failure_summary_out,
         bo_enabled=True,
     )
-    assert config.num_placements is not None
+    if ctx is None:
+        return []
+
+    slab = ctx.slab
+    slab_for_sites = ctx.slab_for_sites
+    effective_base_slab_for_frozen = ctx.effective_base_slab_for_frozen
+    conformers = ctx.conformers
+    site_context = ctx.site_context
+    config = ctx.config
+    E_slab = ctx.E_slab
+    E_mol = ctx.E_mol
+
     assert config.bo_initial_random is not None
     assert config.bo_batch_size is not None
+    num_placements = config.num_placements
+    assert num_placements is not None
     bo_eval_budget = resolved_bo_eval_budget(config)
 
     max_enumerated_specs = estimate_placement_spec_capacity(
@@ -173,7 +130,7 @@ def process_molecule_bayesian(
     else:
         pool_size = max_enumerated_specs
         if pool_size <= 0:
-            pool_size = max(bo_eval_budget * 5, config.num_placements)
+            pool_size = max(bo_eval_budget * 5, num_placements)
     all_specs = enumerate_placement_specs(
         conformers,
         slab_for_sites,
@@ -191,7 +148,7 @@ def process_molecule_bayesian(
             failure_summary_out["stage"] = "placement"
             failure_summary_out["n_candidate_specs"] = 0
             failure_summary_out["n_valid_pool"] = 0
-        return None
+        return []
 
     logger.info(
         "BO: %d/%d candidate specs, batches=%d (initial=%d, batch=%d, eval_budget=%d, kappa=%.2f)",
@@ -222,7 +179,7 @@ def process_molecule_bayesian(
             failure_summary_out["stage"] = "placement"
             failure_summary_out["n_candidate_specs"] = len(all_specs)
             failure_summary_out["n_valid_pool"] = 0
-        return None
+        return []
     # Map feature-row indices back to the original all_specs list
     valid_pool_indices = valid_spec_indices
 
@@ -554,7 +511,7 @@ def process_molecule_bayesian(
             failure_summary_out["n_valid_pool"] = len(valid_pool_indices)
             failure_summary_out["n_evaluated"] = total_evaluated
             failure_summary_out["n_valid_results"] = 0
-        return None
+        return []
 
     bo_duplicate_results: list[ScreeningResult] = []
     filtered = filter_results(
@@ -628,7 +585,7 @@ def process_molecule_bayesian(
             failure_summary_out["n_evaluated"] = total_evaluated
             failure_summary_out["n_before_filter"] = len(all_results)
             failure_summary_out["n_after_filter"] = 0
-        return None
+        return []
 
     logger.info(
         "BO filtered: %d -> %d results, E_ads range [%.4f, %.4f]",

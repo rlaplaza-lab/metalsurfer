@@ -14,10 +14,10 @@ from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
 from metalsurfer.surface_prep import prepare_substrate
 
 
-def main():
+def main() -> int:
     configure_logging(default_level="INFO")
-    results_subdir = "tributylgermyl_pt111"
-    results_dir = f"results_{results_subdir}"
+    surface_type = "tributylgermyl_pt111"
+    results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
         material_type="slab",
@@ -49,26 +49,18 @@ def main():
         slab=slab,
         molecules=[(smiles, "tributylgermyl")],
         config=config,
-        surface_type=results_subdir,
+        surface_type=surface_type,
         system_name="Pt_111",
     )
-    summary = campaign.molecule_summaries[0]
-    if summary.best_adsorption_energy is not None:
-        print(
-            f"\nBinding energy of tri-n-butylgermyl anion on Pt(111): "
-            f"{summary.best_adsorption_energy:.4f} eV"
+    print()
+    print(
+        campaign.format_summary(
+            title="Binding energy summary (tri-n-butylgermyl anion / Pt(111))",
+            results_dir=results_dir,
         )
-        print(
-            "  (E_ads = E(slab+adsorbate) - E(slab) - E(adsorbate); negative = favorable)"
-        )
-        print(
-            f"  Orientations: {summary.n_parallel}/{summary.n_valid_placements} parallel, "
-            f"{summary.n_endown} EN-down"
-        )
-        print(f"  {campaign.format_results_saved_line(results_dir=results_dir)}")
-    else:
-        print("No valid placements found.")
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -29,6 +29,16 @@ def _results_dir(surface_type: str) -> Path:
     return Path(f"results_{surface_type}")
 
 
+def results_dir(surface_type: str) -> Path:
+    """Return the canonical results directory for a *surface_type* label."""
+    return _results_dir(surface_type)
+
+
+def results_dir_for(surface_type: str) -> Path:
+    """Return ``results_{surface_type}/`` (alias for :func:`results_dir`)."""
+    return results_dir(surface_type)
+
+
 def _build_run_metadata(
     *,
     surface_type: str,
@@ -47,12 +57,36 @@ def _build_run_metadata(
     return metadata
 
 
+def _merge_run_metadata(
+    existing: dict[str, Any] | None,
+    updates: dict[str, Any],
+) -> dict[str, Any]:
+    """Deep-merge *updates* into *existing* run metadata."""
+    if existing is None:
+        return dict(updates)
+    merged = dict(existing)
+    for key, value in updates.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _merge_run_metadata(
+                cast(dict[str, Any], merged[key]),
+                cast(dict[str, Any], value),
+            )
+        else:
+            merged[key] = value
+    return merged
+
+
 def _write_run_metadata_file(results_dir: Path, metadata: dict[str, Any]) -> Path:
-    """Write run metadata JSON under *results_dir*."""
+    """Write run metadata JSON under *results_dir*, merging with any existing file."""
     results_dir.mkdir(parents=True, exist_ok=True)
     path = results_dir / "run_metadata.json"
+    existing: dict[str, Any] | None = None
+    if path.is_file():
+        with path.open() as f:
+            existing = json.load(f)
+    merged = _merge_run_metadata(existing, metadata)
     with path.open("w") as f:
-        json.dump(metadata, f, indent=2, default=str)
+        json.dump(merged, f, indent=2, default=str)
     return path
 
 
@@ -61,11 +95,10 @@ def write_run_settings(
     config: AdsorptionConfig,
     **run_info: Any,
 ) -> None:
-    """Persist run config and optional run info to run_metadata.json for reproducibility.
+    """Persist run config and optional run info to ``run_metadata.json``.
 
-    Call this for single-molecule and saturation runs so every results directory
-    has the AdsorptionConfig (and optional molecule/count/timing) needed to
-    reproduce the computation. Batch runs typically use write_run_metadata instead.
+    Merges with any existing metadata in the results directory (for example
+    timing blocks written by :func:`write_run_metadata`).
     """
     results_dir = _results_dir(surface_type)
     metadata = _build_run_metadata(
@@ -647,7 +680,11 @@ def write_run_metadata(
     t_ref_s: float,
     t_total_s: float,
 ) -> None:
-    """Persist reproducible run metadata as JSON."""
+    """Persist reproducible run metadata as JSON in ``run_metadata.json``.
+
+    Merges with any existing metadata in the results directory (for example
+    campaign fields written by :func:`write_run_settings`).
+    """
     results_dir = Path(f"results_{surface_type}")
 
     mol_per_s = n_molecules / t_total_s if t_total_s > 0 else 0.0

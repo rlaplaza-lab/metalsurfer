@@ -58,6 +58,7 @@ from .conftest import (
     adsorption_config_factory,
     make_ethanol,
     make_nanoparticle,
+    make_placement_descriptor,
     make_porous_framework,
     make_slab,
     make_water,
@@ -1311,8 +1312,8 @@ def test_hollow_site_pairs_found_for_slab():
     assert isinstance(pairs, list)
     for p in pairs:
         assert len(p) == 2
-        assert len(p[0]) == 2  # xy arrays
-        assert len(p[1]) == 2
+        assert len(p[0]) == 3  # xyz arrays on surface
+        assert len(p[1]) == 3
 
 
 def test_dissociative_placement_rejected_for_non_slab_material_type():
@@ -1562,3 +1563,229 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
         water, slab, config
     )
     assert not ok, "Should reject placement with poor contact"
+
+
+# ---------------------------------------------------------------------------
+# Plan guardrails: injectivity, ordering, rotated slabs, clustering units
+# ---------------------------------------------------------------------------
+
+
+def _site_ordering_key(site: dict) -> tuple:
+    xyz = np.asarray(site["xyz"], dtype=float)
+    return (
+        float(xyz[0]),
+        float(xyz[1]),
+        float(xyz[2]),
+        str(site.get("site_type", "")),
+        str(site.get("site_source", "")),
+    )
+
+
+def test_get_unified_sites_ordering_is_deterministic():
+    slab = make_slab()
+    first = get_unified_sites(slab, material_type="slab")
+    second = get_unified_sites(slab, material_type="slab")
+    assert [_site_ordering_key(s) for s in first] == [
+        _site_ordering_key(s) for s in second
+    ]
+
+
+def test_unique_sites_cache_hit_and_miss():
+    from metalsurfer.placement.generators import clear_unique_sites_cache
+
+    clear_unique_sites_cache()
+    workflow_shared.clear_site_context_cache()
+    slab_a = make_slab(nx=4)
+    slab_b = make_slab(nx=5)
+    config = AdsorptionConfig(material_type="slab")
+    ctx_a1 = _get_unique_sites_for_specs(slab_a, config)
+    ctx_a2 = _get_unique_sites_for_specs(slab_a, config)
+    ctx_b = _get_unique_sites_for_specs(slab_b, config)
+    assert ctx_a1 is ctx_a2
+    assert ctx_a1 is not ctx_b
+
+
+def test_cluster_equivalent_sites_cartesian_tolerance_scales_with_cell():
+    """0.05 Å tolerance merges sub-0.05 Cartesian duplicates regardless of cell size."""
+    site_a = {
+        "xy": np.array([1.0, 1.0]),
+        "z": 5.0,
+        "xyz": np.array([1.0, 1.0, 5.0]),
+        "site_type": "atop",
+        "material_type": "slab",
+        "env_fingerprint": (("Ru",), "atop"),
+    }
+    site_b = {
+        "xy": np.array([1.04, 1.0]),
+        "z": 5.0,
+        "xyz": np.array([1.04, 1.0, 5.0]),
+        "site_type": "atop",
+        "material_type": "slab",
+        "env_fingerprint": (("Ru",), "atop"),
+    }
+    for a_len in (8.1, 16.2):
+        cell = np.array([[a_len, 0.0, 0.0], [0.0, a_len, 0.0], [0.0, 0.0, 20.0]])
+        unique = _cluster_equivalent_sites([site_a, site_b], cell, tolerance=0.05)
+        assert len(unique) == 1
+
+
+def test_top_layer_mask_unchanged_for_bulk_slab():
+    from metalsurfer.placement.sites import (
+        _height_along_slab_normal,
+        _top_layer_mask_by_normal,
+    )
+
+    slab = make_slab()
+    positions = slab.get_positions()
+    cell = np.array(slab.get_cell())
+    tol = 0.5
+    heights = _height_along_slab_normal(positions, cell)
+    legacy = heights >= (float(np.max(heights)) - tol)
+    layered = _top_layer_mask_by_normal(positions, cell, tol)
+    assert np.array_equal(legacy, layered)
+
+
+def test_top_layer_mask_includes_step_terrace_for_reconstructed_surface():
+    from metalsurfer.placement.sites import _top_layer_mask_by_normal
+
+    positions = []
+    for ix in range(3):
+        for iy in range(3):
+            positions.append([ix * 2.7, iy * 2.7, 5.4])
+    for ix in range(3):
+        positions.append([ix * 2.7, 0.0, 5.0])
+    for ix in range(3):
+        positions.append([ix * 2.7, 0.0, 2.7])
+    positions = np.asarray(positions, dtype=float)
+    cell = np.array([[8.1, 0.0, 0.0], [0.0, 8.1, 0.0], [0.0, 0.0, 20.0]])
+    mask = _top_layer_mask_by_normal(positions, cell, 0.5)
+    assert mask.sum() > 9
+    assert np.any(positions[mask, 2] < 5.2)
+
+
+def test_rotated_slab_descriptor_round_trip():
+    slab = make_slab()
+    cell = np.array(slab.get_cell(), dtype=float)
+    rot = np.array(
+        [[0.866, -0.5, 0.0], [0.5, 0.866, 0.0], [0.0, 0.0, 1.0]],
+        dtype=float,
+    )
+    cell[:3] = rot @ cell[:3]
+    slab.set_cell(cell)
+    config = adsorption_config_factory(
+        material_type="slab", num_placements=20, placement_z_range=(2.0, 3.0)
+    )
+    spec, result = _first_successful_placement(
+        water_conformers(), slab, config, "O", n_desired=20
+    )
+    assert spec is not None and result is not None
+    adsorbate, descriptor = result
+    _assert_replay_matches(
+        "descriptor", adsorbate, descriptor, spec, water_conformers(), slab, config
+    )
+
+
+def test_tilted_slab_descriptor_round_trip():
+    """Slab tilted so the surface normal is not Cartesian +z."""
+    slab = make_slab()
+    cell = np.array(slab.get_cell(), dtype=float)
+    tilt = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 0.866, -0.5],
+            [0.0, 0.5, 0.866],
+        ],
+        dtype=float,
+    )
+    cell[:3] = tilt @ cell[:3]
+    slab.set_cell(cell)
+    pos = slab.get_positions()
+    pos[:] = (tilt @ pos.T).T
+    slab.set_positions(pos)
+    config = adsorption_config_factory(
+        material_type="slab", num_placements=20, placement_z_range=(2.0, 3.0)
+    )
+    spec, result = _first_successful_placement(
+        water_conformers(), slab, config, "O", n_desired=20
+    )
+    assert spec is not None and result is not None
+    adsorbate, descriptor = result
+    _assert_replay_matches(
+        "descriptor", adsorbate, descriptor, spec, water_conformers(), slab, config
+    )
+
+
+def test_deduplicate_points_is_order_independent():
+    """Union-find dedup should pick the same representative regardless of input order."""
+    points_a = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.02, 0.0, 0.0],
+        ]
+    )
+    points_b = points_a[[0, 2, 1]]
+    keep_a = _deduplicate_points(points_a, tolerance=0.05)
+    keep_b = _deduplicate_points(points_b, tolerance=0.05)
+    assert int(np.sum(keep_a)) == 2
+    assert int(np.sum(keep_b)) == 2
+    kept_a = np.sort(points_a[keep_a], axis=0)
+    kept_b = np.sort(points_b[keep_b], axis=0)
+    np.testing.assert_allclose(kept_a, kept_b, atol=1e-10)
+
+
+def test_hollow_order_metadata_on_slab():
+    """Slab hollow sites should carry hollow_order metadata when classified as hollow."""
+    sites = get_unified_sites(make_slab(), material_type="slab")
+    hollow_sites = [s for s in sites if s.get("site_type") == "hollow"]
+    assert len(hollow_sites) > 0
+    for site in hollow_sites:
+        assert "hollow_order" in site
+        order = site["hollow_order"]
+        assert order is None or order in (3, 4)
+
+
+def test_estimate_parallel_fraction_low_binder_ratio_constant():
+    from metalsurfer.placement._constants import _PARALLEL_FRACTION_LOW_BINDER_RATIO
+
+    symbols = ["C"] * 8 + ["N"] + ["H"] * 8
+    frac = _estimate_parallel_fraction(symbols, smiles=None)
+    assert frac == _PARALLEL_FRACTION_LOW_BINDER_RATIO
+
+
+def test_extract_features_depends_only_on_absolute_geometry():
+    from metalsurfer.ml.features import extract_features
+    from metalsurfer.ml.schema import PlacementRecord
+
+    record = PlacementRecord.from_descriptor(
+        make_placement_descriptor(
+            placement_id=1,
+            x_abs=1.25,
+            y_abs=2.5,
+            z_abs=7.75,
+            quat_w=0.9,
+            quat_x=0.1,
+            quat_y=0.2,
+            quat_z=0.3,
+        ),
+        molecule="water",
+        smiles="O",
+        surface_id="test",
+    )
+    record.site_index = 99
+    record.surface_ref_z_abs = 0.0
+    record.z_offset = 99.0
+    features = extract_features(record)
+    assert set(features.keys()) == {
+        "x",
+        "y",
+        "z",
+        "conformer_index",
+        "quat_w",
+        "quat_x",
+        "quat_y",
+        "quat_z",
+    }
+    assert features["x"] == pytest.approx(1.25)
+    assert features["y"] == pytest.approx(2.5)
+    assert features["z"] == pytest.approx(7.75)

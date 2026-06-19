@@ -243,7 +243,7 @@ def prepare_substrate(
 
     calculator = None
     if needs_calculator:
-        calculator, _ = optimization.setup_single_model(model_name, device)
+        calculator, _ = optimization.setup_single_model(cfg.model_name, cfg.device)
 
     if slab is not None:
         slab_container = coerce_slab_container(slab)

@@ -1,5 +1,7 @@
 """Adsorption on arbitrary materials."""
 
+__version__ = "0.3.0"
+
 import importlib
 
 from ._logging import ensure_log_record_defaults
@@ -25,6 +27,7 @@ from .models import (
 )
 
 __all__ = [
+    "__version__",
     "AdsorptionConfig",
     "BindingCampaignResult",
     "MoleculeCampaignSummary",
@@ -82,7 +85,6 @@ _LAZY_MODULES = {
         "optimize_isolated_molecules_batched",
         "optimize_adsorbate_slab_batched",
         "batch_static",
-        "precompute_results",
         "identify_top_layer_indices",
         "identify_relaxable_surface_indices",
         "compute_frozen_indices",
@@ -112,6 +114,8 @@ _LAZY_MODULES = {
         "save_multi_mol_saturation_results",
         "write_run_metadata",
         "write_run_settings",
+        "results_dir",
+        "results_dir_for",
     },
     "ml": {
         "BindingEnergyPredictor",

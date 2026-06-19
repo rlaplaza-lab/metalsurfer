@@ -171,6 +171,39 @@ class TestRunMetadata:
         assert meta["timing"]["total_wall_clock_s"] == 5.0
         assert "timestamp" in meta
 
+    def test_write_settings_and_metadata_merge(self, tmp_path, monkeypatch):
+        """write_run_settings and write_run_metadata merge into one file."""
+        from metalsurfer.io_results import write_run_settings
+
+        monkeypatch.chdir(tmp_path)
+        config = AdsorptionConfig(seed=7)
+
+        write_run_settings(
+            surface_type="merge_test",
+            config=config,
+            campaign="multi_molecule_binding",
+            mode="non_bo",
+            n_molecules=2,
+        )
+        write_run_metadata(
+            surface_type="merge_test",
+            config=config,
+            smiles_file="demo.csv",
+            n_molecules=2,
+            total_configs=8,
+            t_ref_s=1.0,
+            t_total_s=4.0,
+        )
+
+        with open(tmp_path / "results_merge_test" / "run_metadata.json") as f:
+            meta = json.load(f)
+
+        assert meta["campaign"] == "multi_molecule_binding"
+        assert meta["mode"] == "non_bo"
+        assert meta["input"]["smiles_file"] == "demo.csv"
+        assert meta["timing"]["total_wall_clock_s"] == 4.0
+        assert meta["config"]["seed"] == 7
+
     def test_metadata_contains_throughput(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         config = AdsorptionConfig()
@@ -211,6 +244,12 @@ class TestRunMetadata:
         config_json = json.dumps(meta["config"])
         assert "<function" not in config_json
         assert meta["config"]["seed"] == 42
+
+    def test_results_dir_helper(self):
+        from metalsurfer.io_results import results_dir, results_dir_for
+
+        assert results_dir("demo").as_posix() == "results_demo"
+        assert results_dir_for("demo").as_posix() == "results_demo"
 
 
 # ---------------------------------------------------------------------------

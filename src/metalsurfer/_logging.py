@@ -43,11 +43,6 @@ def warn_once(logger: logging.Logger, key: str, message: str) -> None:
         logger.warning(message)
 
 
-def reset_warn_once() -> None:
-    """Clear warn_once memory, primarily for deterministic tests."""
-    _warned_once.clear()
-
-
 def _format_ctx_prefix(ctx: dict[str, Any]) -> str:
     if not ctx:
         return ""

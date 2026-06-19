@@ -31,7 +31,9 @@ Key Attributes
    "voronoi_probe_radius", "float", "1.2", "Minimum distance from framework atoms to Voronoi sites (Å)"
    "voronoi_max_site_distance", "float", "4.0", "Maximum distance for accessible Voronoi sites (Å)"
    "voronoi_site_enrichment", "bool", "True", "Enable geodesic ridge subdivision for denser sites"
-   "site_classification_method", "Literal['distance_ratio', 'delaunay']", "'distance_ratio'", "Method for classifying adsorption sites ('distance_ratio' or 'delaunay')"
+   "top_layer_tolerance", "float", "0.5", "Slab top-layer thickness along the slab normal (Å); used for Voronoi input and topology sites"
+   "site_equivalence_tolerance", "float", "0.05", "Cartesian tolerance (Å) for merging equivalent adsorption sites after clustering"
+   "site_classification_method", "Literal['distance_ratio', 'delaunay']", "'distance_ratio'", "Site typing: six-neighbour distance ratios, or Delaunay triangulation of the slab top layer (slabs only; topology bridges use Delaunay edges by default)"
    "conformer_sampling", "Literal['boltzmann', 'cycle', 'mixed']", "'cycle'", "Method for conformer sampling ('boltzmann', 'cycle', or 'mixed')"
    "slab_relaxation_mode", "Literal['none', 'ionic_only', 'cell_only', 'full']", "'ionic_only'", "ASE relaxation during slab prep; see :doc:`surface_prep`"
    "slab_relaxation_optimizer", "Literal['lbfgs', 'bfgs', 'fire']", "'lbfgs'", "Optimizer for prep-time slab relaxation"
@@ -56,3 +58,7 @@ Key Attributes
    "vasp_ediffg", "float", "-0.02", "VASP EDIFFG parameter (eV/Å) when write_vasp_inputs is enabled"
    "vasp_nsw", "int", "100", "VASP NSW parameter when write_vasp_inputs is enabled"
    "vasp_kpoints", "tuple[int, int, int]", "(4, 4, 1)", "VASP k-points grid when write_vasp_inputs is enabled"
+
+Saturation coverage is started with :func:`~metalsurfer.run_saturation` or
+:func:`~metalsurfer.run_saturation_bo`. Fields prefixed with ``saturation_`` tune
+loop behavior and I/O; they do not enable saturation on their own.

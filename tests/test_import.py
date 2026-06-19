@@ -167,6 +167,23 @@ def test_removed_surface_prep_aliases_are_not_exported():
             _ = getattr(metalsurfer, name)
 
 
+def test_removed_lazy_exports_are_not_available():
+    """Removed public symbols must not reappear in lazy exports."""
+    import metalsurfer
+
+    removed = ("precompute_results",)
+    for name in removed:
+        with pytest.raises(AttributeError, match=f"has no attribute {name!r}"):
+            _ = getattr(metalsurfer, name)
+
+
+def test_removed_internal_modules_are_gone():
+    """Deleted helper modules must not remain importable."""
+    import importlib.util
+
+    assert importlib.util.find_spec("metalsurfer._timing") is None
+
+
 def test_lazy_getattr_raises_for_unknown():
     """Lazy __getattr__ raises AttributeError for unknown attributes."""
     import metalsurfer

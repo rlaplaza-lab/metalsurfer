@@ -539,6 +539,7 @@ class TestDepositAdatoms:
             steps,
             context,
         ):
+            _ = optimizer_name
             calls.append((mode, int(steps), len(atoms)))
             return atoms
 
@@ -547,6 +548,7 @@ class TestDepositAdatoms:
                 self.results = {}
 
             def get_potential_energy(self, atoms=None, force_consistent=False):
+                _ = force_consistent
                 return float(len(atoms) if atoms is not None else 0.0)
 
         monkeypatch.setattr("metalsurfer.surfaces._relax_slab_structure", _fake_relax)

@@ -8,14 +8,12 @@ from ase import Atoms
 
 from .._logging import log_context
 from ..config import AdsorptionConfig
-from ..conformers import create_conformers_from_smiles
 from ..filters import filter_results
 from ..io_results import _write_clean_xyz
 from ..ml.schema import PlacementRecord
 from ..models import PlacementDescriptor, ReferenceEnergies, ScreeningResult
 from ..optimization import (
     clear_autobatcher_cache,
-    frozen_indices_from_constraints,
     optimize_adsorbate_slab_batched,
 )
 from ..placement import generators as placement_generators
@@ -26,11 +24,8 @@ from .shared import (
     _evaluate_optimized_candidate,
     _infer_surface_symbols,
     _materialize_spec_placements,
-    _resolve_site_context_for_sampling,
+    _prepare_molecule_screening,
     _summarize_failure_events,
-    build_representative_relaxation_atoms,
-    prepare_substrate_for_screening,
-    resolve_workload_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,7 +139,7 @@ def process_molecule(
     extra_ml_records_out: list[PlacementRecord] | None = None,
     saturation_reuse: bool = False,
     symmetry_broken: bool = False,
-) -> list[ScreeningResult] | None:
+) -> list[ScreeningResult]:
     """Run the full placement-optimise-validate pipeline for one molecule."""
     if config is None:
         config = AdsorptionConfig()
@@ -192,7 +187,7 @@ def _process_molecule_body(
     extra_ml_records_out: list[PlacementRecord] | None = None,
     saturation_reuse: bool = False,
     symmetry_broken: bool = False,
-) -> list[ScreeningResult] | None:
+) -> list[ScreeningResult]:
     t_mol_start = time.perf_counter()
     logger.info(
         "Processing %s on %s surface (SMILES: %s, seed: %d)",
@@ -202,82 +197,38 @@ def _process_molecule_body(
         config.seed,
     )
 
-    E_slab = (
-        slab_energy_override
-        if slab_energy_override is not None
-        else reference_energies.slab_energy
+    ctx = _prepare_molecule_screening(
+        smiles=smiles,
+        molecule_name=molecule_name,
+        slab=slab,
+        calculator=calculator,
+        reference_energies=reference_energies,
+        ts_model=ts_model,
+        config=config,
+        base_slab_for_frozen=base_slab_for_frozen,
+        slab_energy_override=slab_energy_override,
+        symmetry_broken=symmetry_broken,
+        failure_summary_out=failure_summary_out,
+        bo_enabled=config.bo_enabled,
     )
-    E_mol = reference_energies.get_molecule_energy(molecule_name)
-    if E_mol is None:
-        logger.error("Missing reference energy for %s", molecule_name)
-        if failure_summary_out is not None:
-            failure_summary_out["stage"] = "reference"
-            failure_summary_out["reason"] = (
-                f"missing reference energy for {molecule_name}"
-            )
-        return None
+    if ctx is None:
+        return []
 
-    t0 = time.perf_counter()
-    conformer_pack = create_conformers_from_smiles(
-        smiles, calculator=calculator, config=config, ts_model=ts_model
-    )
-    t_conformers = time.perf_counter() - t0
-    if conformer_pack is None:
-        logger.error("Could not generate conformers for %s", molecule_name)
-        if failure_summary_out is not None:
-            failure_summary_out["stage"] = "conformers"
-            failure_summary_out["reason"] = (
-                f"could not generate conformers for {molecule_name}"
-            )
-        return None
-    conformers, conformer_energies = conformer_pack
-
-    substrate_ref = prepare_substrate_for_screening(
-        slab,
-        conformers,
-        base_slab_for_frozen,
-        config,
-    )
-    slab = substrate_ref.slab
-    slab_for_sites = substrate_ref.slab_for_sites
-    effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
+    slab = ctx.slab
+    slab_for_sites = ctx.slab_for_sites
+    effective_base_slab_for_frozen = ctx.effective_base_slab_for_frozen
+    conformers = ctx.conformers
+    site_context = ctx.site_context
+    config = ctx.config
+    E_mol = ctx.E_mol
+    t_conformers = ctx.t_conformers
+    E_slab = ctx.E_slab
 
     t0 = time.perf_counter()
     all_combined: list[Atoms] = []
     placement_ids: list[int] = []
     placement_descriptors: list[PlacementDescriptor] = []
     placement_failure_events: list[PlacementFailureEvent] = []
-
-    site_context = _resolve_site_context_for_sampling(
-        slab_for_sites,
-        config,
-        symmetry_broken=symmetry_broken,
-    )
-
-    freeze_ref = (
-        effective_base_slab_for_frozen
-        if effective_base_slab_for_frozen is not None
-        else slab.atoms
-    )
-    frozen_indices = frozen_indices_from_constraints(freeze_ref)
-    representative_atoms = build_representative_relaxation_atoms(
-        conformers,
-        slab.atoms,
-        slab_for_sites,
-        config,
-        smiles,
-        site_context=site_context,
-    )
-    config = resolve_workload_config(
-        config,
-        ts_model=ts_model,
-        representative_atoms=representative_atoms,
-        frozen_indices=frozen_indices,
-        bo_enabled=config.bo_enabled,
-    )
-    assert config.num_placements is not None
-
-    # Generate placements with optional retry loop
     (
         all_combined,
         placement_ids,
@@ -335,7 +286,7 @@ def _process_molecule_body(
             failure_summary_out["n_initial_placements"] = 0
             if config.placement_retry_enabled:
                 failure_summary_out["n_retry_attempts"] = n_placement_attempts
-        return None
+        return []
 
     clear_autobatcher_cache()
 
@@ -357,7 +308,7 @@ def _process_molecule_body(
             failure_summary_out["stage"] = "optimization"
             failure_summary_out["n_placements_attempted"] = len(placement_ids)
             failure_summary_out["n_initial_placements"] = len(all_combined)
-        return None
+        return []
 
     t0 = time.perf_counter()
     surface_symbols = _infer_surface_symbols(slab_for_sites)
@@ -420,7 +371,7 @@ def _process_molecule_body(
             )
             failure_summary_out["n_optimization_failed"] = n_optimization_failed
             failure_summary_out["validation_failures"] = validation_failures
-        return None
+        return []
 
     t0 = time.perf_counter()
     n_before_filter = len(results)

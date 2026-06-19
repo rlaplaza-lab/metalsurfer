@@ -8,7 +8,7 @@ Metalsurfer is substrate-agnostic: pass any ASE ``Atoms`` object—periodic slab
 fully periodic porous framework, or non-periodic cluster—after optional prep
 with :func:`~metalsurfer.surface_prep.prepare_substrate` (equilibration, PBC,
 ASE ``FixAtoms``). Supply adsorbates as SMILES; the library builds conformers,
-finds adsorption sites (Voronoi-based, material-aware via
+finds adsorption sites (orientation-aware Voronoi/topology hybrid, material-aware via
 :attr:`~metalsurfer.AdsorptionConfig.material_type`), deposits candidates with
 orientation/height sampling, relaxes with an MLIP, validates geometry, and
 ranks by adsorption energy. The four ``run_*`` campaign APIs orchestrate
@@ -100,7 +100,7 @@ molecule list in memory and you want a typed
    for summary in result.molecule_summaries:
        print(summary.molecule, summary.best_adsorption_energy)
 
-You can also pass a CSV path instead of an in-memory list:
+You can also pass a CSV path instead of an in-memory list (same outputs; optional ``smiles,molecule`` header row supported):
 
 .. code-block:: python
 
@@ -110,6 +110,18 @@ You can also pass a CSV path instead of an in-memory list:
        config=config,
        surface_type="Ru0001",
    )
+
+   print(result.format_summary(
+       title="Binding summary",
+       results_dir="results_Ru0001",
+   ))
+
+By default, ``skip_existing=True`` skips molecules already listed in
+``adsorption_energies_detailed.csv`` (in-memory lists and CSV paths).
+
+Use :func:`~metalsurfer.run_adsorption_bo` for Bayesian placement search; setting
+``bo_enabled=True`` on :class:`~metalsurfer.AdsorptionConfig` with
+:func:`~metalsurfer.run_adsorption` emits a warning and has no effect.
 
 Campaign APIs accept plain ASE ``Atoms`` or :class:`~metalsurfer.surface_prep.SlabContainer`,
 but the structure must be **campaign-ready** before the call: **equilibrated ionic
@@ -281,7 +293,9 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
        else:
            print(entry.molecule, entry.n_molecules_at_saturation)
 
-``molecules`` accepts either an in-memory ``(smiles, name)`` list or a CSV path.
+``molecules`` accepts either an in-memory ``(smiles, name)`` list or a CSV path
+(there is no default file). With ``skip_existing=True`` (default), molecules
+already listed in ``saturation_summary.csv`` are skipped.
 
 Important saturation behaviors:
 

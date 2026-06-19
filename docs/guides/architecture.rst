@@ -70,7 +70,13 @@ Across all run modes, the physical pipeline follows seven stages:
 
 4. **Placement Specification** — enumerate deterministic
    ``PlacementSpec`` candidates over conformer, site,
-   orientation, tilt, azimuth, and height.
+   orientation, tilt, azimuth, and height.  Site detection is
+   Voronoi-based and **orientation-aware** (slab normal, not Cartesian
+   ``z``): hybrid topology + Voronoi for slabs, full-framework Voronoi for
+   nanoparticles, periodic images for porous cells.  See
+   ``placement/sites.py`` and the `Site detection` section in
+   `CORE_SYSTEM_EXPLANATION.md
+   <https://github.com/rlaplaza-lab/metalsurfer/blob/main/CORE_SYSTEM_EXPLANATION.md>`_.
 
 5. **Optimization** — relax candidate adsorbate-slab systems using the
    configured MLIP backend (TorchSim / FairChem).
@@ -82,6 +88,23 @@ Across all run modes, the physical pipeline follows seven stages:
    adsorption energy and write CSV summaries, XYZ files, and metadata JSON.
    VASP-format files (POSCAR/INCAR/KPOINTS and reference-slab POSCARs) are
    opt-in via ``write_vasp_inputs=True`` on :class:`~metalsurfer.AdsorptionConfig`.
+
+
+Placement materialization and ML injectivity
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Each ``PlacementSpec`` is materialized deterministically by
+``generate_placement_from_spec`` into absolute coordinates and a unit
+quaternion (``PlacementDescriptor`` / ``PlacementPose``).  Bayesian
+screening builds surrogate inputs with ``build_spec_features_geometry_aware``:
+specs are resolved to poses first; ``extract_features`` then reads **only**
+``x_abs``, ``y_abs``, ``z_abs``, ``conformer_index``, and the quaternion.
+``site_index``, ``site_type``, orientation labels, and ``z_fraction`` are
+logged in CSV/dataset rows but are **not** model features—so the BO loop
+learns a geometry-only map and replay via spec, descriptor, or pose stays
+consistent.  Details: `ML/BO injectivity` in
+`CORE_SYSTEM_EXPLANATION.md
+<https://github.com/rlaplaza-lab/metalsurfer/blob/main/CORE_SYSTEM_EXPLANATION.md>`_.
 
 
 Run Modes
@@ -96,7 +119,9 @@ surrogate-guided loop:
 
 1. Enumerate the candidate pool.
 2. Evaluate an initial random subset.
-3. Build features from placement descriptors.
+3. Build **geometry-aware** features (materialize each spec, extract absolute
+   pose coordinates and quaternion—not raw ``site_index`` or orientation
+   labels).
 4. Fit a surrogate model.
 5. Score unevaluated candidates with an acquisition function.
 6. Evaluate the next batch and repeat until the budget is exhausted.
@@ -144,11 +169,11 @@ Module Layout
    ├── symmetry.py           # spglib-based symmetry analysis
    │
    ├── ml/                   # BO surrogates, dataset, features
-   ├── placement/            # Voronoi sites, orientation, placement generation
+   ├── placement/            # orientation-aware Voronoi/topology sites, geometry, generators
    └── workflow/             # orchestration by run mode
        ├── core.py           # standard per-molecule screening
        ├── bayesian.py       # BO-guided per-molecule screening
-       ├── screening.py      # file-driven multi-molecule loops
+       ├── screening.py      # shared setup helpers for saturation campaigns
        ├── saturation.py     # sequential / multi-mol saturation
        ├── reference.py      # reference energy preparation
        └── shared.py         # validation helpers, common setup
@@ -166,8 +191,9 @@ The default output root is ``results_{surface_type}/``.  Common artifacts:
   step results.
 - ``saturation_placements_detailed.csv`` and ``step_{NNN}_placements/`` when
   ``saturation_save_all_placements=True`` (default).
-- ``run_settings.json`` — config snapshot (default when ``write_settings=True``).
-- ``run_metadata.json`` — timing and run counts (when ``write_metadata=True``).
+- ``run_metadata.json`` — config snapshot plus optional timing/count metadata (``write_settings`` and/or ``write_metadata`` on campaign APIs; merged incrementally into one file).
+- ``ml_dataset.csv``, ``ml_dataset_metadata.json`` — ML placement records from
+  :class:`~metalsurfer.DatasetLogger` during binding campaigns and saturation.
 - ``xyz_structures/`` — optimized structures in XYZ format.
 - ``vasp_inputs/`` — optional POSCAR/INCAR/KPOINTS bundles for DFT follow-up
   (written only when ``write_vasp_inputs=True``).

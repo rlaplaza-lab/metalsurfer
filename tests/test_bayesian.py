@@ -560,6 +560,7 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         coverage_fraction=0.2,
         seed=42,
         results_dir=str(tmp_path),
+        relaxation_mode="none",
     )
 
     n_placements = 3

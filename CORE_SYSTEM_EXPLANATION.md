@@ -14,9 +14,9 @@ Lazy re-exports in `metalsurfer.__init__` organize the public API into five laye
 
 Canonical high-level entry points:
 
-- `run_adsorption(...)` — standard multi-molecule screening from an in-memory `(smiles, name)` list **or** a CSV path.
+- `run_adsorption(...)` — standard multi-molecule screening from an in-memory `(smiles, name)` list **or** a CSV path (same code path and outputs for both).
 - `run_adsorption_bo(...)` — BO-guided screening; forces `bo_enabled=True`.
-- `run_saturation(...)` — sequential saturation until coverage heuristic is met.
+- `run_saturation(...)` — sequential saturation until coverage heuristic is met (**requires explicit** `molecules`).
 - `run_saturation_bo(...)` — saturation with BO-guided placement selection and step-to-step transfer learning.
 
 All four accept a `SlabContainer` (or plain ASE `Atoms`), `molecules` (list or CSV path), `AdsorptionConfig`, and `surface_type`.
@@ -26,8 +26,10 @@ All four accept a `SlabContainer` (or plain ASE `Atoms`), `molecules` (list or C
 
 With `save_results=True` (default):
 
-- **Binding** campaigns call `save_single_molecule_results` per molecule and `save_summary_results` for campaign CSVs (`adsorption_energies_detailed.csv`, `adsorption_energy_summary.csv`).
+- **Binding** campaigns call `save_single_molecule_results` per molecule and `save_summary_results` for campaign CSVs (`adsorption_energies_detailed.csv`, `adsorption_energy_summary.csv`), and append ML rows via `DatasetLogger`.
 - **Saturation** campaigns call `save_saturation_results` (and optionally flatten step placements to `adsorption_energies_detailed.csv` when `save_benchmark_dataset=True`).
+
+`skip_existing=True` (default) skips molecules already listed in `adsorption_energies_detailed.csv` (binding) or `saturation_summary.csv` (saturation), for **both** in-memory lists and CSV paths.
 
 ### 2. Surface preparation API
 
@@ -39,11 +41,11 @@ Also exported from `metalsurfer.surface_prep`: `finalize_substrate`, `relax_subs
 
 Orchestration helpers used by campaigns:
 
-- `_run_screening_common(...)` — CSV-driven **binding** loops only (`workflow/screening.py`).
-- `_setup_screening_run(...)` — shared model setup, molecule loading, reference energies (binding CSV + all saturation paths).
+- `_normalize_molecules_input(...)` — unify CSV path and in-memory `(smiles, name)` lists for binding campaigns.
+- `_setup_screening_run(...)` — validate substrate, load molecules, setup MLIP, reference energies (saturation and legacy helpers).
 - `run_saturation_screening(...)` — saturation loops (`workflow/saturation.py`).
 
-`load_molecules` / `load_molecules_from_pairs` live in `workflow/shared.py`.
+`load_molecules` / `load_molecules_from_pairs` live in `workflow/shared.py`. CSV files may include an optional header row (`smiles,molecule`).
 
 ### 4. Mid-level per-molecule APIs
 
@@ -56,11 +58,11 @@ Orchestration helpers used by campaigns:
 
 **Surfaces and placement:** `enumerate_placement_specs`, `generate_placement_from_spec`, `generate_placement_from_descriptor`, `calculate_min_distance`, `get_symmetry_aware_sites`, `get_symmetry_info`.
 
-**Optimization:** `setup_calculator`, `setup_single_model`, `setup_torchsim_model`, `TorchSimCalculator`, `optimize_isolated_molecules_batched`, `optimize_adsorbate_slab_batched`, `batch_static`, `precompute_results`, `identify_relaxable_surface_indices`, `identify_top_layer_indices`, `compute_frozen_indices`, `frozen_indices_from_constraints`.
+**Optimization:** `setup_calculator`, `setup_single_model`, `setup_torchsim_model`, `TorchSimCalculator`, `optimize_isolated_molecules_batched`, `optimize_adsorbate_slab_batched`, `batch_static`, `identify_relaxable_surface_indices`, `identify_top_layer_indices`, `compute_frozen_indices`, `frozen_indices_from_constraints`.
 
 **Filtering:** `filter_results`, `check_decomposition`, `check_desorption`.
 
-**I/O:** `setup_directories`, `save_molecule_results`, `save_single_molecule_results`, `screening_run_result`, `save_summary_results`, `save_saturation_results`, `save_multi_mol_saturation_results`, `write_run_metadata`, `write_run_settings` (`write_run_metadata_from_out` is internal to campaigns).
+**I/O:** `setup_directories`, `results_dir`, `save_molecule_results`, `save_single_molecule_results`, `screening_run_result`, `save_summary_results`, `save_saturation_results`, `save_multi_mol_saturation_results`, `write_run_metadata`, `write_run_settings` (both merge into `run_metadata.json`; `write_run_metadata_from_out` is internal to campaigns).
 
 **ML:** `DatasetLogger`, `PlacementRecord`, `ComputationContext`, `BindingEnergyPredictor`, `extract_features`, `extract_features_from_dataset`, `train_model`, `evaluate_model`, `grouped_cross_validate`, `load_dataset`.
 
@@ -118,11 +120,10 @@ computed in `workflow/shared._evaluate_optimized_candidate`.
 
 | API | `molecules` input | Code path | Persistence / extras |
 |-----|-------------------|-----------|----------------------|
-| `run_adsorption` / `run_adsorption_bo` | **CSV path** | `workflow/screening._run_screening_common` | `DatasetLogger`, `skip_existing`, `ScreeningRunResult` list |
-| `run_adsorption` / `run_adsorption_bo` | **in-memory list** | `campaigns._run_binding_campaign` | `MoleculeCampaignSummary` (parallel/EN-down via `classify_adsorbate_orientation`), `failure_summaries` |
+| `run_adsorption` / `run_adsorption_bo` | **CSV path or in-memory list** | `campaigns._run_binding_campaign` via `_normalize_molecules_input` | XYZ/CSV summaries, `DatasetLogger`, `MoleculeCampaignSummary`, `failure_summaries`, `skip_existing` |
 | `run_saturation` / `run_saturation_bo` | **CSV or list** | `run_saturation_screening` → `_setup_screening_run` | `save_saturation_results`; optional `save_benchmark_dataset` |
 
-Both binding paths share `process_fn` = `process_molecule` or `process_molecule_bayesian`. Saturation uses a **single** entry path for CSV and in-memory input (unlike binding).
+Both binding and saturation paths share `process_fn` = `process_molecule` or `process_molecule_bayesian` where applicable.
 
 ## Module architecture
 
@@ -131,7 +132,7 @@ Both binding paths share `process_fn` = `process_molecule` or `process_molecule_
 - `surfaces.py`: slab construction, alloys, adatoms, supercell resizing, validation, `SlabContainer`.
 - `surface_prep/`: canonical substrate prep API (`prepare_substrate`, `finalize_substrate`, re-exports).
 - `conformers.py`: SMILES → conformers, isolated optimization, conformer selection.
-- `placement/`: sites (`sites.py`), geometry (`geometry.py`), material-aware PBC (`_material.py`), policy (`policy.py`), generators (`generators.py`).
+- `placement/`: orientation-aware sites (`sites.py`: hybrid topology + Voronoi), local-frame geometry (`geometry.py`), material-aware PBC (`_material.py`), enumeration policy (`policy.py`), spec materialization and replay (`generators.py`).
 - `symmetry.py`: `spglib`-based symmetry and site orbits.
 - `optimization.py`: TorchSim batched relaxation, freeze masks, autobatching.
 - `filters.py`: decomposition, desorption, deduplication.
@@ -139,13 +140,13 @@ Both binding paths share `process_fn` = `process_molecule` or `process_molecule_
 - `campaigns.py`: high-level campaign wrappers and persistence hooks.
 - `io_results.py`: CSV, XYZ, optional VASP I/O, metadata.
 - `ml/`: dataset logging, features, surrogates, acquisition, reproduction utilities.
-- `exceptions.py`, `_logging.py`, `_timing.py`: errors, structured logging, timing helpers.
+- `exceptions.py`, `_logging.py`: errors and structured logging.
 
 Workflow subpackage:
 
-- `core.py` — standard per-molecule screening + `_evaluate_placement_batch`.
+- `core.py` — standard per-molecule screening + `_evaluate_placement_batch` (`process_molecule` always returns `list[ScreeningResult]`, possibly empty).
 - `bayesian.py` — BO-guided per-molecule screening.
-- `screening.py` — CSV binding loops + `_setup_screening_run`.
+- `screening.py` — `_setup_screening_run` helper for saturation campaigns.
 - `saturation.py` — single- and multi-molecule saturation.
 - `reference.py` — reference-energy preparation.
 - `shared.py` — site context, validation, workload autotune, molecule loading.
@@ -169,13 +170,23 @@ but are not campaign-ready until PBC and constraints are applied.
 
 ### Site detection (`placement/sites.py`)
 
-1. **Framework geometry:** Periodic images (3×3×1 slabs, 3×3×3 porous, none for clusters) before Voronoi.
-2. **Voronoi vertices:** Filtered to the primary cell; each vertex must lie between `voronoi_probe_radius` and `voronoi_max_site_distance` from the nearest framework atom.
-3. **Enrichment:** Ridge subdivision when `voronoi_site_enrichment` is true.
-4. **Typing:** atop / bridge / hollow / pore via distance ratios or Delaunay triangulation (`site_classification_method == "delaunay"`, slabs only). Environment fingerprints stored on each site dict.
-5. **Deduplication:** `_cluster_equivalent_sites` with material-type-aware metrics; merge only when fingerprints match.
+Site generation is **orientation-aware**: slab top-layer detection, Voronoi filtering, topology candidates, and local normals use the slab normal (`a × b`) and slab-plane projectors—not Cartesian `z`.
 
-`placement.generators._get_unique_sites_for_specs` returns a `SiteContext` (`sites`, `use_sites`, `source`, `raw_unclustered`).
+1. **Framework geometry:** Periodic images (3×3×1 slabs, 3×3×3 porous, none for clusters) before Voronoi.
+2. **Voronoi distance window:** `_derive_voronoi_distance_window` sets default probe/max distances from framework covalent radii. Slabs use **top-layer** atoms along the slab normal; nanoparticles and porous frameworks use mean radii over all atoms (no z-slice heuristic).
+3. **Voronoi input (slabs):** Voronoi tessellation runs on **near-surface atoms only** (top layer, ≥4 atoms). NN distances for vertex filtering still reference the full framework via `nn_reference_positions`.
+4. **Hybrid slab generator (default):** Topology-derived atop / bridge / hollow candidates from a Delaunay triangulation of the top layer in the slab plane, merged with Voronoi enrichment. Bridge midpoints come from triangulation edges; hollows from triangle centroids (with distance-ratio fallback when Delaunay is unavailable).
+5. **Voronoi vertices:** Filtered to the primary cell; each vertex must lie between `voronoi_probe_radius` and `voronoi_max_site_distance` from the nearest framework atom.
+6. **Enrichment:** Ridge subdivision when `voronoi_site_enrichment` is true.
+7. **Typing:** atop / bridge / hollow / pore via:
+   - **distance ratios** on the six nearest framework neighbours (`_SITE_CLASSIFICATION_NEIGHBOURS=6`), or
+   - **Delaunay** classification in the top-layer plane when `site_classification_method == "delaunay"` (slabs).
+   Bridge candidates from topology use Delaunay edges rather than KDTree radius pairs. Hollow sites carry optional `hollow_order` metadata (3- or 4-fold); labels remain `hollow`.
+8. **Site dict fields:** Each site exposes `xyz`, local `normal`, `site_type`, `slab_indices`, `env_fingerprint`, `site_source` (`voronoi`, `topology_atop`, …), and `material_type`. Legacy `xy`/`z` keys remain for logging but slab placement uses `xyz` + normal offset.
+9. **Deduplication:** Voronoi/topology merge uses periodic-aware `_deduplicate_points` (union-find, order-independent). `_cluster_equivalent_sites` merges symmetry-equivalent sites with material-type-aware metrics and matching fingerprints.
+10. **Ordering:** Final site list is sorted by fractional coordinates in the cell for deterministic `site_index` assignment.
+
+`placement.generators._get_unique_sites_for_specs` returns a `SiteContext` (`sites`, `use_sites`, `source`, `raw_unclustered`). A SHA-256 cache keyed by positions, cell, pbc, and Voronoi/cluster config bytes avoids recomputing identical site sets within a run.
 
 ### How the workflow chooses sites (`workflow/shared.py`)
 
@@ -194,8 +205,32 @@ but are not campaign-ready until PBC and constraints are applied.
 
 - **`placement/policy.py`:** Cartesian product over conformers, sites, orientation (flat-aromatic parallel vs EN-down, dissociative branch), tilts, azimuths, z-fractions. Subsampled to budget with seeded random draw when grid exceeds `n_desired`.
 - **`placement/generators.py`:** Molecule metadata (shape, binders, dissociative flag). Optional `placement_filter` callback and `adaptive_parallel_fraction`.
-- **Dissociative branch:** Diatomics like H₂ on slabs can generate hollow-pair dissociative specs when topology checks are enabled (`skip_topology_check=False`).
+- **Slab placement center:** For `material_type=="slab"`, the adsorbate anchor is `site["xyz"]` offset along the slab normal to `surface_ref + z_offset` (from `placement_z_range` and `spec.z_fraction`). Nanoparticle/porous paths offset along the site local normal. Rotations/tilts use `compute_surface_site_frame(normal)` in `geometry.py` (no forced “z-up” flip).
+- **Dissociative branch:** Diatomics like H₂ on slabs can generate hollow-pair dissociative specs when topology checks are enabled (`skip_topology_check=False`). Hollow pairs are full 3D `xyz` coordinates; fragment positions offset along the slab normal. Centroid absolute coordinates populate the descriptor.
 - **`workflow/shared._materialize_spec_placements`:** Materializes each `PlacementSpec`; failures become `PlacementFailureEvent` records (BO negative labels when enabled).
+
+#### ML/BO injectivity (spec → geometry → features)
+
+The surrogate sees **resolved absolute geometry**, not discrete site IDs or orientation labels.
+
+| Stage | Role |
+|-------|------|
+| `PlacementSpec` | Enumeration template: conformer, `site_index`, orientation knobs, `z_fraction`, … |
+| `generate_placement_from_spec` | Deterministic materialization → `PlacementDescriptor` + adsorbate `Atoms` |
+| `PlacementDescriptor` / `PlacementPose` | Stores `x_abs`, `y_abs`, `z_abs`, unit quaternion, conformer index (plus metadata for CSV/logging) |
+| `extract_features` | **8 features only:** `x`, `y`, `z`, `conformer_index`, `quat_w/x/y/z` from absolute fields |
+
+**Not in the feature vector:** `site_index`, `site_type`, `hollow_order`, `orientation_type`, `tilt_deg`, `azimuth_*`, `z_fraction`, `face_flip`. Two specs that land at the same absolute pose are intentionally indistinguishable to the model.
+
+**Replay paths (all tested):**
+
+1. `generate_placement_from_spec` — spec → pose → adsorbate
+2. `generate_placement_from_descriptor` — stored descriptor quat + absolute coords → adsorbate
+3. `generate_placement_from_pose` — pose round-trip
+
+BO candidate features are built via `build_spec_features_geometry_aware` (`ml/bayesian.py`): each unevaluated spec is materialized, converted to `PlacementRecord`, then `extract_features`. Failed specs are skipped; `valid_indices` maps feature rows back to the spec pool.
+
+**Determinism guardrails:** fractional site ordering, order-independent dedup/clustering, geometry-keyed site cache, seeded spec subsampling. Site-detection improvements (orientation-aware slabs, hybrid topology, k=6 classification) may change which sites exist vs older code versions, but within a fixed code version + fixed slab the mapping `site_index → xyz` is stable.
 
 ### Placement retry (`workflow/core.py`)
 
@@ -276,7 +311,7 @@ During saturation placement filtering, decomposition uses `adsorbate_prefix_atom
 
 ### Bayesian screening (`workflow/bayesian.py` + `ml/bayesian.py`)
 
-Finite `PlacementSpec` pool → initial batch (`bo_initial_sampling`, default **`spread_xyz`**: farthest-point on x/y/z) → descriptor features → surrogate → acquisition batches (LCB, EI, PI; default EI) until `bo_total_budget` (18) acquisition rounds after the initial batch.
+Finite `PlacementSpec` pool → initial batch (`bo_initial_sampling`, default **`spread_xyz`**: farthest-point on resolved x/y/z) → **geometry-aware features** (`build_spec_features_geometry_aware`: materialize each spec, extract absolute pose features) → surrogate → acquisition batches (LCB, EI, PI; default EI) until `bo_total_budget` (18) acquisition rounds after the initial batch.
 
 **Surrogates** (`bo_surrogate`): `random_forest`, `extra_trees`, `gradient_boost` (HistGradientBoostingRegressor internally), `ridge` (default), `ensemble` (trees + ridge + optional Gaussian-process member). Tree models and `ensemble` provide uncertainty; ridge/HGB use deterministic acquisition limits. `gradient_boost` cannot be used with `bo_transfer_enabled` (config validation).
 
@@ -338,9 +373,15 @@ High-level narrative also appears in the [architecture guide](https://metalsurfe
 
 ## Material types and site generation
 
-`material_type`: `"slab"`, `"nanoparticle"`, or `"porous"`. Affects PBC handling, Voronoi image replication, surface-normal construction, and adsorption distance validation (`placement/_material.material_aware_pbc`).
+`material_type`: `"slab"`, `"nanoparticle"`, or `"porous"`. Affects PBC handling, Voronoi image replication, surface-normal construction, top-layer masking, hybrid topology enrichment (slabs), and adsorption distance validation (`placement/_material.material_aware_pbc`).
 
-Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `top_layer_tolerance`, `symmetry_tolerance`, `site_equivalence_tolerance` (default 0.05 Å).
+| Type | Site strategy (high level) |
+|------|----------------------------|
+| `slab` | Top layer along slab normal → hybrid topology (atop/bridge/hollow) + Voronoi enrichment; Voronoi tessellation on top-layer atoms only |
+| `nanoparticle` | Full-framework Voronoi; outward normals; no PBC images |
+| `porous` | 3×3×3 periodic images; pore sites when framework spans much of the cell z-extent |
+
+Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `top_layer_tolerance`, `symmetry_tolerance`, `site_equivalence_tolerance` (default 0.05 Å), `site_classification_method` (`distance_ratio` or `delaunay`).
 
 ## Typed data model (`models.py`)
 
@@ -400,7 +441,6 @@ Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `
 - `min_interatomic_distance`, `max_force_convergence`, `binding_distance_threshold`, `max_adsorption_energy`
 - `skip_desorption_check`, `skip_topology_check`
 - `connectivity_multipliers`, `energy_dedup_threshold`, `rmsd_dedup_threshold`
-- `min_adsorbate_separation` (saturation inter-adsorbate distance)
 
 ### Surface prep and TorchSim autobatching
 
@@ -422,7 +462,7 @@ Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `
 
 ### Saturation behavior
 
-- `saturation`, `multi_molecule_saturation`, `saturation_save_all_placements`, `save_benchmark_dataset`
+- `multi_molecule_saturation`, `saturation_save_all_placements`, `save_benchmark_dataset`
 - `saturation_discard_topology_rearrangements`, `saturation_max_steps`
 
 ### Reproducibility, I/O, strictness
@@ -430,7 +470,7 @@ Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `
 - `seed`, `fail_on_missing_reference`, `fail_on_conformer_failure`, `debug_write_initial_placements`
 - `write_vasp_inputs`, `vasp_*` parameters
 
-The `saturation` and `multi_molecule_saturation` flags are metadata hints; actual behavior is determined by which API is called and how many molecules are loaded.
+The `multi_molecule_saturation` flag is a metadata hint; actual behavior is determined by which API is called and how many molecules are loaded.
 
 ## Output model and persistence
 
@@ -442,15 +482,17 @@ Root directory: `results_{surface_type}/`.
 | `saturation_summary.csv`, `saturation_details.csv` | Saturation campaigns |
 | `saturation_placements_detailed.csv`, `xyz_structures/.../step_{NNN}_placements/` | `saturation_save_all_placements=True` (default) |
 | `adsorption_energies_detailed.csv` (flattened from saturation steps) | `save_benchmark_dataset=True` |
-| `ml_dataset.csv`, `ml_dataset_metadata.json` | `DatasetLogger` during CSV screening and saturation |
+| `ml_dataset.csv`, `ml_dataset_metadata.json` | `DatasetLogger` during binding campaigns and saturation |
 | `xyz_structures/`, optional `vasp_inputs/` | Always / when `write_vasp_inputs=True` |
-| `run_settings.json`, `run_metadata.json` | Campaign `write_settings` / `write_metadata` flags |
+| `run_metadata.json` | Campaign `write_settings` / `write_metadata` flags (merged incrementally) |
 
 Rows include `schema_version` and computation context (`model_name`, `fmax`, `stage1_steps`, `stage2_steps`, `seed`, context hash) when config is passed to save helpers.
 
 ## Dataset logging and ML support
 
-`DatasetLogger` (`ml/dataset.py`) appends `PlacementRecord` rows during CSV binding loops and saturation; flushed to `ml_dataset.csv`. `PlacementRecord.from_screening_result` captures placement descriptors and energies; deduplicated duplicates can be tagged `label_source="deduplicated_duplicate"` for ML training.
+`DatasetLogger` (`ml/dataset.py`) appends `PlacementRecord` rows during binding campaigns and saturation; flushed to `ml_dataset.csv`. `PlacementRecord.from_screening_result` captures placement descriptors and energies; deduplicated duplicates can be tagged `label_source="deduplicated_duplicate"` for ML training.
+
+**Feature schema (`ml/features.py`):** eight numeric columns—absolute adsorbate anchor `(x, y, z)` from `x_abs`/`y_abs`/`z_abs`, `conformer_index`, and a sign-normalized unit quaternion. Categorical placement metadata (site type, orientation label, `z_fraction`, `face_flip`) is persisted in CSV/dataset rows for analysis but **excluded from training features** so the surrogate learns a geometry-only map consistent with BO candidate encoding.
 
 Public ML utilities beyond BO:
 
@@ -471,7 +513,7 @@ Shared goal: find low-energy adsorbate–surface configurations and report \(E_\
 | Aspect | AdsorbML | Metalsurfer |
 |--------|----------|-------------|
 | Energy oracle | ML ranks; **final energy from DFT** (SP or re-relax top-*k*) | **MLIP end-to-end** (UMA default); no built-in DFT tier |
-| Initial sampling | Heuristic sites + random surface points with z-rotation | Voronoi/Delaunay sites + discrete orientation/tilt/azimuth grid |
+| Initial sampling | Heuristic sites + random surface points with z-rotation | Orientation-aware hybrid topology + Voronoi sites + discrete orientation/tilt/azimuth grid |
 | Parallelism | Relax all initial configs on GPU; rank | TorchSim **`InFlightAutoBatcher`**; GPU-autotuned `num_placements` |
 | Multi-step coverage | Not in scope | `run_saturation` / `run_saturation_bo` + per-step `E_slab` refresh; BO transfer |
 | Materials | OC20/OC22 catalysts; binding atoms in SMILES (*) | Slabs, nanoparticles, porous cells; general SMILES |
@@ -485,7 +527,7 @@ AdsorbML treats ML as a **cheap ranker** and DFT as authoritative; Metalsurfer u
 | Aspect | BOSS | Metalsurfer |
 |--------|------|-------------|
 | Search space | **Continuous** low-D phase space (building blocks + 6–20 DoF) | **Discrete** `PlacementSpec` grid, subsampled to budget |
-| Surrogate | **GP** on physical coordinates; eLCB acquisition | Descriptor-feature BO (ridge/trees/`ensemble`); optional GP inside `ensemble` only |
+| Surrogate | **GP** on physical coordinates; eLCB acquisition | **Geometry-aware** feature BO (absolute xyz + quaternion via `build_spec_features_geometry_aware`; ridge/trees/`ensemble`); optional GP inside `ensemble` only |
 | Geometry | Rigid blocks; relative translation/rotation | Full **atomistic MLIP** relaxation of adsorbate + partial slab |
 | Oracle cost | Expensive DFT/QC; minimal evaluations | Cheap **batched MLIP** via `InFlightAutoBatcher` |
 | Multi-step learning | Independent BO runs | Saturation **transfer learning** (`bo_transfer_*`) across steps |
@@ -512,6 +554,7 @@ BOSS learns a **continuous PES** in a hand-crafted parameterization; Metalsurfer
 - **Layered topology guards:** per-placement decomposition, saturation-step connectivity guard; `skip_topology_check` for expected bond breaking (e.g. H₂ dissociation).
 - **Substrate-only site view** on partially covered slabs so new placements target bare surface, not prior adsorbates.
 - **Compare to post-adatom substrate files** when adatoms were deposited during `prepare_substrate`.
+- **Orientation-aware placement + geometry-only ML features:** site indices label enumeration slots; BO/training features come from materialized absolute poses so tilted slabs and local surface normals do not leak categorical site IDs into the surrogate.
 
 ## Dependencies and runtime
 

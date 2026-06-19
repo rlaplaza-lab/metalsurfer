@@ -1,9 +1,12 @@
 """Shared workflow helpers used across screening modes."""
 
+import csv
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass, replace
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -12,12 +15,15 @@ from scipy.spatial.distance import pdist
 
 from .._logging import warn_once
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
+from ..conformers import create_conformers_from_smiles
 from ..exceptions import OptimizationError
-from ..models import PlacementDescriptor, ScreeningResult
+from ..io_results import results_dir_for
+from ..models import PlacementDescriptor, ReferenceEnergies, ScreeningResult
 from ..optimization import (
     estimate_parallel_relaxation_capacity,
     frozen_indices_from_constraints,
     log_substrate_freeze_policy,
+    setup_single_model,
 )
 from ..placement import generators as placement_generators
 from ..placement import get_symmetry_aware_sites
@@ -27,7 +33,7 @@ from ..placement.generators import (
     generate_placement_from_spec_with_reason,
 )
 from ..placement.geometry import calculate_min_distance
-from ..surfaces import SlabContainer, validate_substrate
+from ..surfaces import SlabContainer, accept_substrate_for_api, validate_substrate
 from ..symmetry import SymmetryAnalysisError
 
 logger = logging.getLogger(__name__)
@@ -43,6 +49,7 @@ def clear_site_context_cache() -> None:
     """Clear cached site contexts (mainly for tests and long-running sessions)."""
     with _SITE_CONTEXT_CACHE_LOCK:
         _SITE_CONTEXT_CACHE.clear()
+    placement_generators.clear_unique_sites_cache()
 
 
 @dataclass
@@ -688,6 +695,238 @@ def _infer_surface_symbols(slab: Atoms) -> list[str]:
     return sorted(set(slab.get_chemical_symbols()))
 
 
+@dataclass
+class ScreeningRunBootstrap:
+    """Shared setup state for binding and saturation campaigns."""
+
+    calculator: Any
+    ts_model: Any
+    molecule_pairs: list[tuple[str, str]]
+    ref: ReferenceEnergies
+    t_ref_s: float
+    slab: SlabContainer
+
+
+def _bootstrap_screening_run(
+    slab: SlabContainer | Atoms,
+    molecule_pairs: list[tuple[str, str]],
+    config: AdsorptionConfig,
+) -> ScreeningRunBootstrap:
+    """Validate substrate, load MLIP, and compute reference energies."""
+    from .reference import calculate_reference_energies
+
+    slab_container = accept_substrate_for_api(slab, config=config)
+    calculator, ts_model = setup_single_model(config.model_name, config.device)
+    molecule_names = [name for _, name in molecule_pairs]
+    smiles_list = [smiles for smiles, _ in molecule_pairs]
+    t_ref_start = time.perf_counter()
+    ref = calculate_reference_energies(
+        slab_container,
+        calculator,
+        molecules=molecule_names,
+        smiles_list=smiles_list,
+        ts_model=ts_model,
+        config=config,
+    )
+    t_ref_s = time.perf_counter() - t_ref_start
+    return ScreeningRunBootstrap(
+        calculator=calculator,
+        ts_model=ts_model,
+        molecule_pairs=molecule_pairs,
+        ref=ref,
+        t_ref_s=t_ref_s,
+        slab=slab_container,
+    )
+
+
+@dataclass
+class MoleculeScreeningContext:
+    """Prepared substrate and workload state for one molecule screening pass."""
+
+    slab: SlabContainer
+    slab_for_sites: Atoms
+    effective_base_slab_for_frozen: Atoms | None
+    conformers: list[Atoms]
+    site_context: placement_generators.SiteContext | None
+    frozen_indices: list[int]
+    representative_atoms: Atoms
+    config: AdsorptionConfig
+    E_slab: float
+    E_mol: float
+    t_conformers: float
+
+
+def _prepare_molecule_screening(
+    *,
+    smiles: str,
+    molecule_name: str,
+    slab: SlabContainer,
+    calculator,
+    reference_energies: ReferenceEnergies,
+    ts_model,
+    config: AdsorptionConfig,
+    base_slab_for_frozen: Atoms | None = None,
+    slab_energy_override: float | None = None,
+    symmetry_broken: bool = False,
+    failure_summary_out: dict[str, object] | None = None,
+    bo_enabled: bool = False,
+) -> MoleculeScreeningContext | None:
+    """Shared preamble for standard and BO molecule screening."""
+    E_slab = (
+        slab_energy_override
+        if slab_energy_override is not None
+        else reference_energies.slab_energy
+    )
+    E_mol = reference_energies.get_molecule_energy(molecule_name)
+    if E_mol is None:
+        logger.error("Missing reference energy for %s", molecule_name)
+        if failure_summary_out is not None:
+            failure_summary_out["stage"] = "reference"
+            failure_summary_out["reason"] = (
+                f"missing reference energy for {molecule_name}"
+            )
+        return None
+
+    t0 = time.perf_counter()
+    conformer_pack = create_conformers_from_smiles(
+        smiles, calculator=calculator, config=config, ts_model=ts_model
+    )
+    t_conformers = time.perf_counter() - t0
+    if conformer_pack is None:
+        logger.error("Could not generate conformers for %s", molecule_name)
+        if failure_summary_out is not None:
+            failure_summary_out["stage"] = "conformers"
+            failure_summary_out["reason"] = (
+                f"could not generate conformers for {molecule_name}"
+            )
+        return None
+    conformers, _conformer_energies = conformer_pack
+
+    substrate_ref = prepare_substrate_for_screening(
+        slab,
+        conformers,
+        base_slab_for_frozen,
+        config,
+    )
+    slab = substrate_ref.slab
+    slab_for_sites = substrate_ref.slab_for_sites
+    effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
+
+    site_context = _resolve_site_context_for_sampling(
+        slab_for_sites,
+        config,
+        symmetry_broken=symmetry_broken,
+    )
+
+    freeze_ref = (
+        effective_base_slab_for_frozen
+        if effective_base_slab_for_frozen is not None
+        else slab.atoms
+    )
+    frozen_indices = frozen_indices_from_constraints(freeze_ref)
+    representative_atoms = build_representative_relaxation_atoms(
+        conformers,
+        slab.atoms,
+        slab_for_sites,
+        config,
+        smiles,
+        site_context=site_context,
+    )
+    config = resolve_workload_config(
+        config,
+        ts_model=ts_model,
+        representative_atoms=representative_atoms,
+        frozen_indices=frozen_indices,
+        bo_enabled=bo_enabled,
+    )
+    assert config.num_placements is not None
+
+    return MoleculeScreeningContext(
+        slab=slab,
+        slab_for_sites=slab_for_sites,
+        effective_base_slab_for_frozen=effective_base_slab_for_frozen,
+        conformers=conformers,
+        site_context=site_context,
+        frozen_indices=frozen_indices,
+        representative_atoms=representative_atoms,
+        config=config,
+        E_slab=E_slab,
+        E_mol=E_mol,
+        t_conformers=t_conformers,
+    )
+
+
+def _normalize_molecules_input(
+    molecules: list[tuple[str, str]] | tuple[str, str] | str,
+    *,
+    skip_existing: bool,
+    surface_type: str,
+    skip_saturation_file: bool = False,
+) -> tuple[list[tuple[str, str]], str, str]:
+    """Normalize campaign *molecules* input to ``(smiles, name)`` pairs.
+
+    Returns ``(pairs, load_status, molecules_source)`` where *molecules_source*
+    is the CSV path or ``"<inline-molecules>"`` for run metadata.
+    """
+    if isinstance(molecules, str):
+        molecule_names, smiles_list, load_status = load_molecules(
+            molecules,
+            skip_existing=skip_existing,
+            surface_type=surface_type,
+            skip_saturation_file=skip_saturation_file,
+        )
+        pairs = list(zip(smiles_list, molecule_names, strict=True))
+        return pairs, load_status, molecules
+
+    if not molecules:
+        raise ValueError("molecules must be a non-empty list")
+
+    pairs = _normalize_molecule_pairs(molecules)
+    if skip_existing:
+        molecule_names, smiles_list, load_status = load_molecules_from_pairs(
+            pairs,
+            skip_existing=skip_existing,
+            surface_type=surface_type,
+            skip_saturation_file=skip_saturation_file,
+        )
+        pairs = list(zip(smiles_list, molecule_names, strict=True))
+    else:
+        load_status = "ok"
+    return pairs, load_status, "<inline-molecules>"
+
+
+def _read_molecules_csv(csv_file: str) -> tuple[list[str], list[str]]:
+    """Read a two-column (smiles, name) CSV, skipping a recognized header row."""
+    smiles_aliases = {"smiles", "smile", "smi"}
+    name_aliases = {"name", "molecule", "mol", "molecules"}
+
+    with open(csv_file, newline="") as handle:
+        rows = list(csv.reader(handle))
+
+    if not rows:
+        return [], []
+
+    start = 0
+    if len(rows[0]) >= 2:
+        col0 = rows[0][0].strip().lower()
+        col1 = rows[0][1].strip().lower()
+        if col0 in smiles_aliases and col1 in name_aliases:
+            start = 1
+
+    all_smiles: list[str] = []
+    all_molecules: list[str] = []
+    for row in rows[start:]:
+        if len(row) < 2:
+            continue
+        smiles = row[0].strip()
+        name = row[1].strip()
+        if not smiles or not name or smiles.lower() == "nan" or name.lower() == "nan":
+            continue
+        all_smiles.append(smiles)
+        all_molecules.append(name)
+    return all_smiles, all_molecules
+
+
 def load_molecules(
     csv_file: str = "smiles.csv",
     skip_existing: bool = True,
@@ -695,11 +934,10 @@ def load_molecules(
     skip_saturation_file: bool = False,
 ) -> tuple[list[str], list[str], str]:
     """Load molecules from a two-column (smiles, name) CSV."""
-    results_dir = f"results_{surface_type}" if surface_type else "results_manual"
-    df = pd.read_csv(csv_file, header=None, names=["smiles", "molecule"])
-    df = df.dropna()
-    all_molecules = df["molecule"].tolist()
-    all_smiles = df["smiles"].tolist()
+    results_dir = (
+        str(results_dir_for(surface_type)) if surface_type else "results_manual"
+    )
+    all_smiles, all_molecules = _read_molecules_csv(csv_file)
 
     return _select_molecules_for_processing(
         all_molecules=all_molecules,
@@ -718,7 +956,9 @@ def load_molecules_from_pairs(
     skip_saturation_file: bool = False,
 ) -> tuple[list[str], list[str], str]:
     """Load molecules from in-memory ``(smiles, name)`` tuples."""
-    results_dir = f"results_{surface_type}" if surface_type else "results_manual"
+    results_dir = (
+        str(results_dir_for(surface_type)) if surface_type else "results_manual"
+    )
     pairs = _normalize_molecule_pairs(molecule_pairs)
     all_smiles = [smiles for smiles, _ in pairs]
     all_molecules = [name for _, name in pairs]

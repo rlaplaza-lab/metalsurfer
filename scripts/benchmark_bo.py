@@ -14,12 +14,11 @@ batches (default 18), not total evaluations. Offline replay uses
 number of pool lookups.
 
 Usage:
-  python scripts/benchmark_bo.py --report-dir bo_benchmark_report/
+  python scripts/benchmark_bo.py
 """
 
 from __future__ import annotations
 
-import argparse
 import logging
 import os
 from pathlib import Path
@@ -1409,30 +1408,7 @@ def run_benchmark(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Offline BO benchmark on bipyridine/Au(111) placement pools"
-    )
-    parser.add_argument(
-        "--data-dir",
-        default=DEFAULT_DATA_DIR,
-        help=f"Directory with saturation_placements_detailed.csv (default: {DEFAULT_DATA_DIR})",
-    )
-    parser.add_argument(
-        "--seeds",
-        type=int,
-        default=DEFAULT_SEEDS,
-        help=f"Number of random seeds (default: {DEFAULT_SEEDS})",
-    )
-    parser.add_argument(
-        "--report-dir",
-        default=DEFAULT_REPORT_DIR,
-        help=f"Output directory for CSVs, figures, report (default: {DEFAULT_REPORT_DIR})",
-    )
-    args = parser.parse_args()
-    if args.seeds < 1:
-        logger.error("--seeds must be >= 1")
-        return 1
-    run_benchmark(args.data_dir, seeds=args.seeds, report_dir=args.report_dir)
+    run_benchmark(DEFAULT_DATA_DIR, seeds=DEFAULT_SEEDS, report_dir=DEFAULT_REPORT_DIR)
     return 0
 
 

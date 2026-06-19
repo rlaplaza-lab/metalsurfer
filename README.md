@@ -4,7 +4,7 @@
 
 Library for adsorption on arbitrary materials (slabs, nanoparticles, and periodic porous frameworks).
 
-Metalsurfer is substrate-agnostic: pass any ASE `Atoms` object—periodic slab, fully periodic porous framework, or non-periodic cluster—after optional prep with `prepare_substrate` (equilibration, PBC, ASE `FixAtoms`). Supply adsorbates as SMILES; the library builds conformers, finds adsorption sites (Voronoi-based, material-aware via `AdsorptionConfig.material_type`), deposits candidates with orientation/height sampling, relaxes with an MLIP, validates geometry, and ranks by adsorption energy. The four `run_*` campaign APIs orchestrate screening, Bayesian placement search, or sequential saturation on that pipeline.
+Metalsurfer is substrate-agnostic: pass any ASE `Atoms` object—periodic slab, fully periodic porous framework, or non-periodic cluster—after optional prep with `prepare_substrate` (equilibration, PBC, ASE `FixAtoms`). Supply adsorbates as SMILES; the library builds conformers, finds adsorption sites (orientation-aware Voronoi/topology hybrid, material-aware via `AdsorptionConfig.material_type`), deposits candidates with orientation/height sampling, relaxes with an MLIP, validates geometry, and ranks by adsorption energy. The four `run_*` campaign APIs orchestrate screening, Bayesian placement search, or sequential saturation on that pipeline.
 
 **Documentation**: https://metalsurfer.readthedocs.io
 
@@ -81,7 +81,7 @@ The library exposes four high-level entry points:
 | `run_saturation` | Sequential saturation: repeated adsorption onto an evolving slab. Returns `SaturationCampaignResult`. |
 | `run_saturation_bo` | Saturation with BO-guided placement selection. Returns `SaturationCampaignResult`. |
 
-Each accepts either an in-memory `list[tuple[str, str]]` of `(smiles, name)` pairs or a path to a SMILES CSV as `molecules`.
+Each accepts either an in-memory `list[tuple[str, str]]` of `(smiles, name)` pairs or a path to a SMILES CSV as `molecules`. `run_saturation` and `run_saturation_bo` require an explicit `molecules` argument (there is no default file). With `skip_existing=True` (default), binding campaigns skip molecules already in `adsorption_energies_detailed.csv`; saturation campaigns skip molecules already in `saturation_summary.csv` (both input forms).
 
 ### Surfaces: ASE Atoms, bulk prep, or containers
 
@@ -171,7 +171,7 @@ for summary in result.molecule_summaries:
     print(summary.molecule, summary.best_adsorption_energy)
 ```
 
-Pass a CSV path to `run_adsorption` for file-driven batch screening:
+Pass a CSV path to `run_adsorption` for file-driven batch screening (same XYZ/CSV outputs and `BindingCampaignResult` fields as an in-memory list). CSV files use two columns `(smiles, name)` and may include an optional header row (`smiles,molecule`):
 
 ```python
 from metalsurfer import AdsorptionConfig, run_adsorption
@@ -193,8 +193,11 @@ result = run_adsorption(
     molecules="molecules.csv",
     config=config,
     surface_type="Ru0001",
+    skip_existing=True,  # default: skip molecules already in adsorption_energies_detailed.csv
 )
 ```
+
+Use `run_adsorption_bo` (not `bo_enabled=True` on `run_adsorption`) for Bayesian placement search; the non-BO entry point emits a warning if `bo_enabled=True` is set on the config.
 
 ### 2. Bayesian Screening
 
@@ -284,9 +287,9 @@ Important saturation behaviors:
 
 - **Prep vs adsorption relaxation:** `slab_relaxation_mode` (default `ionic_only`) equilibrates substrate ionic positions during `prepare_substrate`. Freeze policy is written to ASE `FixAtoms` via prep kwargs (default: entire substrate frozen). `relax_top_layer=True` is a material-aware shortcut (see [surface engineering guide](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html)). Saturation pins `base_slab` at campaign start. Compare optimized structures to the matching prep snapshot (e.g. `clean_slab_Au20_*` after adatoms), not pre-adatom `clean_slab` files.
 - In-plane supercell expansion must be done during prep (`auto_resize_substrate_for_molecule` / `resize_substrate_for_molecule` from `metalsurfer.surface_prep`) before calling campaign APIs.
-- When `bo_enabled=True`, the saturation loop can reuse prior-step BO observations through the `bo_transfer_*` settings.
+- Call `run_saturation_bo` for Bayesian saturation; it forces BO on. The `bo_transfer_*` settings control cross-step observation reuse.
 - When `multi_molecule_saturation=True` and multiple molecules are provided (in-memory list or CSV), the workflow switches to competitive saturation, where molecules compete for each step and the best overall adsorption wins.
-- Competitive saturation also supports `bo_enabled=True`. In that mode, each adsorbate trains and carries forward its own BO state independently; BO observations are not shared across adsorbates.
+- Competitive saturation with BO: call `run_saturation_bo`; each adsorbate trains and carries forward its own BO state independently (observations are not shared across adsorbates).
 - By default, `saturation_save_all_placements=True` writes every validated placement per step under `xyz_structures/.../step_{NNN}_placements/`, plus `saturation_placements_detailed.csv`. Matching `vasp_inputs/...` trees are written only when `write_vasp_inputs=True`. Set `saturation_save_all_placements=False` to persist only the per-step best structures (smaller disk use).
 - By default, `saturation_discard_topology_rearrangements=True` re-checks the full adsorbate pool on each candidate **before** choosing the step winner: adsorbates must form the expected number of connected fragments (connectivity-only guard). This catches inter-adsorbate coupling or unexpected splitting that per-placement filtering can miss while allowing strong adsorbate-material interactions that preserve adsorbate connectivity. Set `False` to rank only by `E_ads`; the guard is also skipped when `skip_topology_check=True`.
 - Contributor test markers (`gpu`, `slow`): see the [development guide](https://metalsurfer.readthedocs.io/en/latest/guides/development.html).
@@ -346,13 +349,13 @@ See the introduction above for the high-level mental model. Across all run modes
 
 1. Build or accept a surface structure.
 2. Generate and deduplicate molecular conformers.
-3. Enumerate deterministic `PlacementSpec` candidates over conformer, site, orientation, tilt, azimuth, and height.
+3. Enumerate deterministic `PlacementSpec` candidates over conformer, site, orientation, tilt, azimuth, and height. Site detection is orientation-aware (slab normal, hybrid topology + Voronoi); BO features use materialized absolute geometry only (`x_abs`, `y_abs`, `z_abs`, quaternion)—not `site_index` or orientation labels.
 4. Materialize placements into full adsorbate-slab structures.
 5. Relax structures with the configured MLIP backend.
 6. Validate adsorption geometry and filter decomposed, desorbed, or duplicate structures.
 7. Rank surviving structures and persist structures, CSV summaries, and metadata.
 
-Placement generation is Voronoi-based and works across slabs, nanoparticles, and porous materials. Bayesian mode changes candidate selection, not the downstream physics or filtering stack.
+Placement generation is **orientation-aware** (slab normal, hybrid topology + Voronoi) and works across slabs, nanoparticles, and porous materials. Bayesian mode changes candidate selection, not the downstream physics or filtering stack; surrogate inputs are resolved absolute poses, not discrete site IDs.
 
 ## Results and persistence
 
@@ -363,12 +366,14 @@ The output directory is `results_{surface_type}`. Depending on run mode, the lib
 - `saturation_details.csv`
 - `saturation_placements_detailed.csv` (saturation runs when `saturation_save_all_placements` is true: one row per step × placement with paths and descriptor context)
 - `saturation_summary.csv`
-- `run_settings.json` (default when `write_settings=True` on campaign APIs)
-- `run_metadata.json` (when `write_metadata=True` on campaign APIs)
+- `run_metadata.json` (when `write_settings=True` and/or `write_metadata=True` on campaign APIs; merged incrementally)
+- `ml_dataset.csv`, `ml_dataset_metadata.json` (from `DatasetLogger` during binding campaigns and saturation)
 - `xyz_structures/...`
 - `vasp_inputs/...` (only when `write_vasp_inputs=True`)
 
-Campaign APIs save XYZ structures and summary tables by default (`run_saturation` / `run_saturation_bo` call `save_saturation_results(..., config=config)` so placement-tree output follows `saturation_save_all_placements` and the rest of `AdsorptionConfig`). VASP bundles require `write_vasp_inputs=True` on `AdsorptionConfig`. Workflow APIs return typed results and can be paired with `save_summary_results(...)`, `save_saturation_results(...)`, `save_multi_mol_saturation_results(...)`, `write_run_metadata(...)`, and `write_run_settings(...)` for explicit persistence control (for example after `save_results=False` or custom paths).
+Campaign APIs save XYZ structures and summary tables by default (`run_saturation` / `run_saturation_bo` call `save_saturation_results(..., config=config)` so placement-tree output follows `saturation_save_all_placements` and the rest of `AdsorptionConfig`). VASP bundles require `write_vasp_inputs=True` on `AdsorptionConfig`. Workflow APIs return typed results and can be paired with `save_summary_results(...)`, `save_saturation_results(...)`, `save_multi_mol_saturation_results(...)`, and `write_run_metadata(...)` / `write_run_settings(...)` (both merge into `run_metadata.json`) for explicit persistence control (for example after `save_results=False` or custom paths).
+
+Use `results_dir(surface_type)` from `metalsurfer.io_results` (or `metalsurfer.results_dir` via lazy import) for the canonical `results_{surface_type}/` path.
 
 ## Logging
 

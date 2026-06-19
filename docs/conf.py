@@ -3,7 +3,7 @@
 project = "metalsurfer"
 copyright = "2026, metalsurfer contributors"
 author = "metalsurfer contributors"
-release = "0.2.0"
+release = "0.3.0"
 
 extensions = [
     "sphinx.ext.autodoc",

@@ -92,6 +92,13 @@ GPU / MLIP integration tests (optional, often run in separate processes):
 
    ./scripts/run_gpu_tests.sh
 
+Overnight / local parity helpers (optional):
+
+.. code-block:: bash
+
+   ./scripts/run_all_tests.sh      # full CI test phases (fast, dependency, integration, MLIP, GPU)
+   ./scripts/run_all_examples.sh   # all official examples except bipyridine
+
 CI parity
 ---------
 

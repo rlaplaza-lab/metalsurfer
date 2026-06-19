@@ -13,7 +13,7 @@ from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
 from metalsurfer.surface_prep import prepare_substrate
 
 
-def main():
+def main() -> int:
     configure_logging(default_level="INFO")
     surface_type = "h2_ni111"
     results_dir = f"results_{surface_type}"
@@ -49,20 +49,15 @@ def main():
         surface_type=surface_type,
         system_name="Ni_111",
     )
-    summary = campaign.molecule_summaries[0]
-    if summary.best_adsorption_energy is not None:
-        total_steps = config.stage1_steps + config.stage2_steps
-        print(
-            f"\nBinding energy of H2 on Ni(111): {summary.best_adsorption_energy:.4f} eV"
+    print()
+    print(
+        campaign.format_summary(
+            title="Binding energy summary (H2 / Ni(111))",
+            results_dir=results_dir,
         )
-        print("  (E_ads = E(slab+H2) - E(slab) - E(H2); negative = favorable)")
-        print(
-            f"  Relaxation: {total_steps} steps (stage1: {config.stage1_steps}, stage2: {config.stage2_steps})"
-        )
-        print(f"  {campaign.format_results_saved_line(results_dir=results_dir)}")
-    else:
-        print("No valid placements found.")
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

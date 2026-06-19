@@ -19,10 +19,10 @@ MOLECULES = [
 ]
 
 
-def main():
+def main() -> int:
     configure_logging(default_level="INFO")
-    results_subdir = "ethane_ethene_acetylene_ru2cu"
-    results_dir = f"results_{results_subdir}"
+    surface_type = "ethane_ethene_acetylene_ru2cu"
+    results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
         material_type="slab",
@@ -55,11 +55,18 @@ def main():
         slab=slab,
         molecules=MOLECULES,
         config=config,
-        surface_type=results_subdir,
+        surface_type=surface_type,
         system_name="Ru2Cu_0001",
     )
-    print(campaign.format_screening_complete())
+    print()
+    print(
+        campaign.format_summary(
+            title="Binding energy summary (ethane / ethene / acetylene on Ru2Cu)",
+            results_dir=results_dir,
+        )
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

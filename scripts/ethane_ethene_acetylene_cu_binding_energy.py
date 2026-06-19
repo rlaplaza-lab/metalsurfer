@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""Compute binding energies of ethane/ethene/acetylene on Cu(111)."""
+"""Compute binding energies of ethane, ethene, and acetylene on Cu(111) from mp-30 using metalsurfer.
+
+Molecules: ethane (CC), ethene (C=C), acetylene (C#C).
+
+Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
+Run from project root: pip install -e . && pip install -e ".[mlip]"
+"""
 
 from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
 from metalsurfer.surface_prep import prepare_substrate
 
-MOLECULES = [("CC", "ethane"), ("C=C", "ethene"), ("C#C", "acetylene")]
+MOLECULES = [
+    ("CC", "ethane"),
+    ("C=C", "ethene"),
+    ("C#C", "acetylene"),
+]
 
 
-def main() -> None:
+def main() -> int:
     configure_logging(default_level="INFO")
     surface_type = "ethane_ethene_acetylene_cu"
     results_dir = f"results_{surface_type}"
@@ -42,8 +52,15 @@ def main() -> None:
         surface_type=surface_type,
         system_name="Cu_111",
     )
-    print(campaign.format_screening_complete())
+    print()
+    print(
+        campaign.format_summary(
+            title="Binding energy summary (ethane / ethene / acetylene on Cu(111))",
+            results_dir=results_dir,
+        )
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

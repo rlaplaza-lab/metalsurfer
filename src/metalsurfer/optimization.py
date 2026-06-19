@@ -9,6 +9,7 @@ from typing import Any, NoReturn, cast
 
 import numpy as np
 from ase import Atoms
+from ase.calculators.calculator import all_changes
 from ase.constraints import FixAtoms
 
 from ._logging import torchsim_output_capture
@@ -828,9 +829,14 @@ class TorchSimCalculator:
         self,
         atoms=None,
         properties=None,
-        system_changes=None,
+        system_changes=all_changes,
     ):
-        """Run single-point calculation via ``ts.static()``."""
+        """Run single-point calculation via ``ts.static()``.
+
+        ``system_changes`` is accepted for ASE calculator compatibility but
+        ignored; each call recomputes from the current ``Atoms`` geometry.
+        """
+        _ = system_changes
         if ts is None or atoms is None:
             return
         _validate_model_pbc(atoms, context="TorchSimCalculator.calculate")
@@ -867,7 +873,11 @@ class TorchSimCalculator:
         return _positions_cell_hash(atoms) != self._last_positions_hash
 
     def get_potential_energy(self, atoms=None, force_consistent=False):
-        """Return energy in eV."""
+        """Return energy in eV.
+
+        ``force_consistent`` is accepted for ASE compatibility but ignored.
+        """
+        _ = force_consistent
         if atoms is not None and self._atoms_changed(atoms):
             self.calculate(atoms, ["energy", "forces"])
         energy = self.results.get("energy")
@@ -951,27 +961,6 @@ def batch_static(
         )
         out.append((energy, forces))
     return out
-
-
-def precompute_results(
-    atoms_list: list[Atoms],
-    ts_model,
-    calculator: "TorchSimCalculator",
-) -> None:
-    """Run batched ``ts.static()`` and pre-populate each Atoms' calculator cache.
-
-    After this call, ``atoms.get_potential_energy()`` and ``atoms.get_forces()``
-    return instantly from the cache without triggering another model forward pass.
-    """
-    if not atoms_list:
-        return
-    results = batch_static(atoms_list, ts_model)
-    for atoms, (energy, forces) in zip(atoms_list, results, strict=True):
-        calc = TorchSimCalculator(calculator._model)
-        calc.results["energy"] = energy
-        calc.results["forces"] = forces
-        calc._last_positions_hash = _positions_cell_hash(atoms)
-        atoms.calc = calc
 
 
 # ---------------------------------------------------------------------------

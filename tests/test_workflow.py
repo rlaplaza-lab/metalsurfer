@@ -284,7 +284,7 @@ class TestProcessMolecule:
         result = process_molecule(
             smiles, name, slab, MagicMock(), reference_energies=refs
         )
-        assert result is None
+        assert result == []
         failure_summary = {}
         result = process_molecule(
             smiles,
@@ -294,7 +294,7 @@ class TestProcessMolecule:
             reference_energies=refs,
             failure_summary_out=failure_summary,
         )
-        assert result is None
+        assert result == []
         assert failure_summary["stage"] == expected_stage
         assert name in str(failure_summary["reason"])
 
@@ -303,7 +303,9 @@ class TestProcessMolecule:
         refs = self._make_refs()
         config = AdsorptionConfig(num_placements=1, num_conformers=1, seed=42)
         mock_cfs = MagicMock(return_value=None)
-        with patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs):
+        with patch(
+            "metalsurfer.workflow.shared.create_conformers_from_smiles", mock_cfs
+        ):
             result = process_molecule(
                 "O",
                 "water",
@@ -312,7 +314,7 @@ class TestProcessMolecule:
                 reference_energies=refs,
                 config=config,
             )
-        assert result is None
+        assert result == []
 
     def test_no_conformers_populates_failure_summary(self):
         slab = SlabContainer(make_slab())
@@ -320,7 +322,9 @@ class TestProcessMolecule:
         config = AdsorptionConfig(num_placements=1, num_conformers=1, seed=42)
         failure_summary = {}
         mock_cfs = MagicMock(return_value=None)
-        with patch("metalsurfer.workflow.core.create_conformers_from_smiles", mock_cfs):
+        with patch(
+            "metalsurfer.workflow.shared.create_conformers_from_smiles", mock_cfs
+        ):
             result = process_molecule(
                 "O",
                 "water",
@@ -330,7 +334,7 @@ class TestProcessMolecule:
                 config=config,
                 failure_summary_out=failure_summary,
             )
-        assert result is None
+        assert result == []
         assert failure_summary["stage"] == "conformers"
 
     def test_prepare_substrate_validates_image_separation(self):
@@ -419,7 +423,7 @@ class TestProcessMolecule:
         extra_records = []
         with (
             patch(
-                "metalsurfer.workflow.bayesian.create_conformers_from_smiles",
+                "metalsurfer.workflow.shared.create_conformers_from_smiles",
                 mock_conformers,
             ),
             patch(
@@ -520,7 +524,7 @@ class TestProcessMolecule:
         extra_records = []
         with (
             patch(
-                "metalsurfer.workflow.bayesian.create_conformers_from_smiles",
+                "metalsurfer.workflow.shared.create_conformers_from_smiles",
                 mock_conformers,
             ),
             patch(
@@ -674,6 +678,14 @@ class TestLoadMolecules:
         assert len(smiles) == 1
         assert status == "ok"
         assert smiles[0] == "O"
+
+    def test_loads_csv_with_header(self, workdir):
+        csv_path = workdir / "smiles.csv"
+        csv_path.write_text("smiles,molecule\nO,water\n")
+        molecules, smiles, status = load_molecules(str(csv_path), skip_existing=False)
+        assert molecules == ["water"]
+        assert smiles == ["O"]
+        assert status == "ok"
 
     def test_empty_csv_returns_empty(self, workdir):
         """Empty or header-only CSV returns empty lists."""

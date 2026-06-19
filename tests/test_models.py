@@ -314,3 +314,54 @@ def test_binding_campaign_result_formatters():
     )
     assert "Binding summary" in summary
     assert "water" in summary
+
+
+def test_binding_campaign_format_summary_default_title():
+    campaign = BindingCampaignResult(
+        mode="non_bo",
+        surface_type="manual",
+        run_results=[],
+        molecule_summaries=[
+            MoleculeCampaignSummary(
+                molecule="H2",
+                n_valid_placements=1,
+                best_adsorption_energy=-0.5,
+            )
+        ],
+        total_configurations=1,
+        n_molecules=1,
+        t_ref_s=0.0,
+        t_total_s=0.0,
+    )
+    summary = campaign.format_summary(results_dir="results_manual")
+    assert "Binding energy summary" in summary
+    assert "H2" in summary
+
+
+def test_binding_campaign_format_summary_includes_failures():
+    campaign = BindingCampaignResult(
+        mode="non_bo",
+        surface_type="manual",
+        run_results=[],
+        molecule_summaries=[
+            MoleculeCampaignSummary(
+                molecule="bad",
+                n_valid_placements=0,
+                best_adsorption_energy=None,
+            )
+        ],
+        total_configurations=0,
+        n_molecules=1,
+        t_ref_s=0.0,
+        t_total_s=0.0,
+        failure_summaries={
+            "bad": {"stage": "conformers", "reason": "could not generate conformers"}
+        },
+    )
+    summary = campaign.format_summary(
+        title="Binding summary",
+        results_dir="results_manual",
+    )
+    assert "(no valid placements)" in summary
+    assert "Failures for bad" in summary
+    assert "conformers" in summary

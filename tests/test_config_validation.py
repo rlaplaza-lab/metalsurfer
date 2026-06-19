@@ -15,6 +15,17 @@ from .conftest import make_slab
 # ---------------------------------------------------------------------------
 
 
+def test_valid_device_values():
+    AdsorptionConfig(device="cuda")
+    AdsorptionConfig(device="cpu")
+
+
+@pytest.mark.parametrize("device", ["gpu", "", "CUDA"])
+def test_invalid_device_raises(device):
+    with pytest.raises(ValueError, match="device"):
+        AdsorptionConfig(device=device)
+
+
 def test_default_config():
     config = AdsorptionConfig()
     assert config.num_conformers == 10

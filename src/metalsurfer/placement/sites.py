@@ -213,10 +213,56 @@ def _top_layer_mask_by_normal(
     cell: np.ndarray,
     tolerance: float,
 ) -> np.ndarray:
-    """Return mask of atoms belonging to the exposed top layer of a slab."""
+    """Return mask of atoms belonging to exposed surface layers of a slab.
+
+    For flat top layers (including standard multi-layer bulk slabs) this reduces
+    to the topmost layer (``h_max - tolerance``).  When multiple height levels
+    fall within the top tolerance band (stepped/reconstructed surfaces), the
+    mask also includes the terrace one step below the top band.
+    """
     heights = _height_along_slab_normal(positions, cell)
     h_max = float(np.max(heights))
-    return heights >= (h_max - float(tolerance))
+    tol = float(tolerance)
+    primary = heights >= (h_max - tol)
+
+    top_heights = heights[primary]
+    if len(top_heights) == 0:
+        return primary
+
+    unique_top = np.sort(np.unique(top_heights))
+    if len(unique_top) < 2:
+        return primary
+
+    gaps = np.diff(unique_top)
+    if not np.any(gaps > tol * 0.5):
+        return primary
+
+    # Multiple height levels within the top band: include the full top band.
+    top_floor = float(unique_top[0]) - tol
+    mask = heights >= top_floor
+
+    # Step-edge terrace immediately below the top band.
+    below = heights < top_floor
+    if np.any(below):
+        terrace_top = float(np.max(heights[below]))
+        if h_max - terrace_top > tol:
+            mask |= (heights >= terrace_top - tol) & (heights <= terrace_top + tol)
+    return mask
+
+
+def _filter_non_duplicate_candidates(
+    candidates: np.ndarray,
+    existing: np.ndarray,
+    tolerance: float,
+) -> np.ndarray:
+    """Boolean mask: True where *candidates* are not within *tolerance* of *existing*."""
+    if len(existing) == 0:
+        return np.ones(len(candidates), dtype=bool)
+    if len(candidates) == 0:
+        return np.ones(0, dtype=bool)
+    tree = KDTree(existing)
+    dists, _ = tree.query(np.asarray(candidates, dtype=float), k=1)
+    return np.asarray(dists, dtype=float).ravel() >= tolerance
 
 
 # ---------------------------------------------------------------------------
@@ -325,10 +371,16 @@ def _deduplicate_points(
     if cell is None or pbc is None or not np.any(pbc):
         ded_tree = KDTree(pts)
         pairs = ded_tree.query_pairs(r=tolerance, output_type="ndarray")
-        keep = np.ones(n, dtype=bool)
+        merge_set: set[tuple[int, int]] = set()
         for i, j in pairs:
-            if keep[i] and keep[j]:
-                keep[j] = False
+            a, b = int(i), int(j)
+            if a == b:
+                continue
+            merge_set.add((min(a, b), max(a, b)))
+        components = _union_find_cluster(n, sorted(merge_set))
+        keep = np.zeros(n, dtype=bool)
+        for comp in components:
+            keep[min(comp)] = True
         return keep
 
     offsets = _periodic_image_offsets(
@@ -337,32 +389,18 @@ def _deduplicate_points(
     expanded = np.vstack([pts + off for off in offsets])
     tree = KDTree(expanded)
     raw_pairs = tree.query_pairs(r=tolerance, output_type="ndarray")
-    merge_set: set[tuple[int, int]] = set()
+    periodic_merge: set[tuple[int, int]] = set()
     for a_exp, b_exp in raw_pairs:
         a = int(a_exp) % n
         b = int(b_exp) % n
         if a == b:
             continue
-        merge_set.add((min(a, b), max(a, b)))
-    components = _union_find_cluster(n, sorted(merge_set))
+        periodic_merge.add((min(a, b), max(a, b)))
+    components = _union_find_cluster(n, sorted(periodic_merge))
     keep = np.zeros(n, dtype=bool)
     for comp in components:
         keep[min(comp)] = True
     return keep
-
-
-def _is_duplicate_of(
-    candidate: np.ndarray,
-    tree: KDTree | None,
-    tolerance: float,
-) -> bool:
-    """True when *candidate* is within *tolerance* of any point in *tree*."""
-    if tree is None:
-        return False
-    nearest = float(
-        tree.query(np.asarray(candidate, dtype=float).reshape(1, 3), k=1)[0].ravel()[0]
-    )
-    return nearest < tolerance
 
 
 # ---------------------------------------------------------------------------
@@ -382,17 +420,21 @@ def _derive_voronoi_distance_window(
     positions: np.ndarray,
     symbols: list[str],
     pbc: np.ndarray,
+    cell: np.ndarray | None = None,
 ) -> tuple[float, float]:
     if len(positions) == 0:
         base_radius = _VORONOI_RADIUS_FALLBACK_ANGSTROM
-    elif bool(pbc[2]):
-        z_max = float(np.max(positions[:, 2]))
-        top_depth = _TOP_LAYER_DEPTH_MIN_ANGSTROM
-        top_mask = positions[:, 2] >= (z_max - top_depth)
+    elif bool(pbc[0]) and bool(pbc[1]) and not bool(pbc[2]) and cell is not None:
+        # Slab: characterise the exposed top layer along the slab normal
+        # (orientation-aware), not a Cartesian-z slice or the bulk average.
+        heights = _height_along_slab_normal(positions, cell)
+        h_max = float(np.max(heights))
+        top_mask = heights >= (h_max - _TOP_LAYER_DEPTH_MIN_ANGSTROM)
         top_idx = np.nonzero(top_mask)[0]
         top_symbols = [symbols[int(i)] for i in top_idx] if len(top_idx) else symbols
         base_radius = _mean_covalent_radius(top_symbols)
     else:
+        # Nanoparticle, porous, and non-periodic: mean over all framework atoms.
         base_radius = _mean_covalent_radius(symbols)
 
     probe_radius = _VORONOI_PROBE_RADIUS_COVALENT_SCALE * base_radius
@@ -431,6 +473,7 @@ def _voronoi_sites(
     max_distance: float | None = None,
     enrich: bool = True,
     symbols: list[str] | None = None,
+    nn_reference_positions: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Voronoi vertices accessible for adsorption, optionally enriched."""
     if len(positions) < 4:
@@ -441,7 +484,7 @@ def _voronoi_sites(
 
     if probe_radius is None or max_distance is None:
         derived_probe, derived_max = _derive_voronoi_distance_window(
-            positions, symbols, pbc
+            positions, symbols, pbc, cell
         )
         probe_radius = derived_probe if probe_radius is None else probe_radius
         max_distance = derived_max if max_distance is None else max_distance
@@ -455,6 +498,14 @@ def _voronoi_sites(
     extension_margin = float(max_distance) + _VORONOI_DEDUP_TOLERANCE
     extended = _build_periodic_images(positions, cell, pbc, margin=extension_margin)
 
+    nn_positions = (
+        nn_reference_positions if nn_reference_positions is not None else positions
+    )
+    nn_extension_margin = extension_margin
+    nn_extended = _build_periodic_images(
+        nn_positions, cell, pbc, margin=nn_extension_margin
+    )
+
     try:
         vor = Voronoi(extended)
     except (QhullError, ValueError, RuntimeError) as exc:
@@ -467,7 +518,7 @@ def _voronoi_sites(
 
     wrapped_vertices = _wrap_cartesian(raw_vertices, cell, pbc)
 
-    tree = KDTree(extended)
+    tree = KDTree(nn_extended)
     nn_dists, _ = tree.query(raw_vertices, k=1)
     nn_dists = np.asarray(nn_dists, dtype=float).ravel()
 
@@ -521,7 +572,7 @@ def _voronoi_sites(
         nn_dists,
         vor.ridge_vertices,
         raw_to_kept,
-        extended,
+        nn_extended,
         tree,
         probe_radius,
         max_distance,
@@ -611,58 +662,43 @@ def _generate_slab_topology_sites(
 
     exp2d = np.asarray(expanded_points_2d, dtype=float)
     exp3d = np.asarray(expanded_points_3d, dtype=float)
-    if len(exp2d) >= 2:
-        edge_tree = KDTree(exp2d)
-        # local characteristic length from top-layer nearest neighbours in plane
-        if len(top_positions_2d) >= 2:
-            base_tree = KDTree(top_positions_2d)
-            nn, _ = base_tree.query(top_positions_2d, k=min(2, len(top_positions_2d)))
-            nn = np.asarray(nn, dtype=float)
-            if nn.ndim == 1 or nn.shape[1] < 2:
-                char_len = _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM
-            else:
-                char_len = float(np.mean(nn[:, 1]))
-        else:
-            char_len = _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM
-
-        raw_pairs = edge_tree.query_pairs(
-            r=1.35 * max(char_len, _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM),
-            output_type="ndarray",
-        )
-        seen_edges: set[tuple[int, int]] = set()
-        for i_exp, j_exp in raw_pairs:
-            li = expanded_origin_local_index[int(i_exp)]
-            lj = expanded_origin_local_index[int(j_exp)]
-            if li == lj:
-                continue
-            edge_key = (min(li, lj), max(li, lj))
-            if edge_key in seen_edges:
-                continue
-            seen_edges.add(edge_key)
-            midpoint = (
-                0.5 * (exp3d[int(i_exp)] + exp3d[int(j_exp)])
-                + float(site_height) * n_hat
-            )
-            _add_candidate(midpoint, "topology_bridge")
-
+    tri: Delaunay | None = None
     if len(exp2d) >= 3:
         try:
             tri = Delaunay(exp2d)
         except (QhullError, ValueError, RuntimeError):
             tri = None
-        if tri is not None:
-            seen_tris: set[tuple[int, int, int]] = set()
-            for simplex in np.asarray(tri.simplices, dtype=int):
-                local_ids = tuple(
-                    sorted({expanded_origin_local_index[int(k)] for k in simplex})
+
+    if tri is not None:
+        seen_edges: set[tuple[int, int]] = set()
+        for simplex in np.asarray(tri.simplices, dtype=int):
+            for e0, e1 in ((0, 1), (1, 2), (0, 2)):
+                i_exp, j_exp = int(simplex[e0]), int(simplex[e1])
+                li = expanded_origin_local_index[i_exp]
+                lj = expanded_origin_local_index[j_exp]
+                if li == lj:
+                    continue
+                edge_key = (min(li, lj), max(li, lj))
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+                midpoint = (
+                    0.5 * (exp3d[i_exp] + exp3d[j_exp]) + float(site_height) * n_hat
                 )
-                if len(local_ids) != 3:
-                    continue
-                if local_ids in seen_tris:
-                    continue
-                seen_tris.add(local_ids)
-                centroid = np.mean(exp3d[simplex], axis=0) + float(site_height) * n_hat
-                _add_candidate(centroid, "topology_hollow")
+                _add_candidate(midpoint, "topology_bridge")
+
+        seen_tris: set[tuple[int, int, int]] = set()
+        for simplex in np.asarray(tri.simplices, dtype=int):
+            local_ids = tuple(
+                sorted({expanded_origin_local_index[int(k)] for k in simplex})
+            )
+            if len(local_ids) != 3:
+                continue
+            if local_ids in seen_tris:
+                continue
+            seen_tris.add(local_ids)
+            centroid = np.mean(exp3d[simplex], axis=0) + float(site_height) * n_hat
+            _add_candidate(centroid, "topology_hollow")
 
     if not candidates:
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float), []
@@ -773,18 +809,12 @@ def _enrich_along_ridges(
 # ---------------------------------------------------------------------------
 
 
-def _classify_voronoi_site(
-    vertex: np.ndarray,
-    positions: np.ndarray,
-    tree: KDTree | None = None,
+def _classify_voronoi_site_from_neighbors(
+    dists: np.ndarray,
+    idx: np.ndarray,
     pore_threshold: float = _PORE_THRESHOLD_MIN_ANGSTROM,
-    k: int = _SITE_CLASSIFICATION_NEIGHBOURS,
 ) -> tuple[str, tuple[int, ...]]:
-    """Classify vertex as atop/bridge/hollow/pore."""
-    k = min(k, len(positions))
-    if tree is None:
-        tree = KDTree(positions)
-    dists, idx = tree.query(vertex.reshape(1, 3), k=k)
+    """Classify a site from precomputed nearest-neighbour distances and indices."""
     dists = np.asarray(dists, dtype=float).ravel()
     idx = np.asarray(idx, dtype=int).ravel()
     if len(dists) == 0:
@@ -812,6 +842,43 @@ def _classify_voronoi_site(
     return "hollow", tuple(int(i) for i in idx[:3])
 
 
+def _hollow_coordination_order(dists: np.ndarray) -> int | None:
+    """Return 3 or 4 when *dists* indicate equidistant hollow coordination."""
+    dists_arr = np.asarray(dists, dtype=float).ravel()
+    if len(dists_arr) < 3:
+        return None
+    d1 = float(dists_arr[0])
+    if d1 < _DISTANCE_ZERO_EPS:
+        return None
+    floor = max(d1, _DISTANCE_RATIO_FLOOR_EPS)
+    count = 1
+    for i in range(1, len(dists_arr)):
+        if abs(float(dists_arr[i]) - d1) / floor < _HOLLOW_EQ_TOL:
+            count += 1
+        else:
+            break
+    return count if count >= 3 else None
+
+
+def _classify_voronoi_site(
+    vertex: np.ndarray,
+    positions: np.ndarray,
+    tree: KDTree | None = None,
+    pore_threshold: float = _PORE_THRESHOLD_MIN_ANGSTROM,
+    k: int = _SITE_CLASSIFICATION_NEIGHBOURS,
+) -> tuple[str, tuple[int, ...]]:
+    """Classify vertex as atop/bridge/hollow/pore."""
+    k = min(k, len(positions))
+    if tree is None:
+        tree = KDTree(positions)
+    dists, idx = tree.query(vertex.reshape(1, 3), k=k)
+    return _classify_voronoi_site_from_neighbors(
+        np.asarray(dists, dtype=float).ravel(),
+        np.asarray(idx, dtype=int).ravel(),
+        pore_threshold=pore_threshold,
+    )
+
+
 def _delaunay_site_classification(
     vertex: np.ndarray,
     top_positions_2d: np.ndarray,
@@ -821,6 +888,8 @@ def _delaunay_site_classification(
     *,
     vertex_2d: np.ndarray,
     bridge_threshold: float = _DELAUNAY_BRIDGE_THRESHOLD_FRACTION,
+    char_len: float | None = None,
+    positions_tree: KDTree | None = None,
 ) -> tuple[str, tuple[int, ...]]:
     """Classify a slab site using Delaunay triangulation in the slab plane."""
     xy = np.asarray(vertex_2d, dtype=float)
@@ -838,16 +907,17 @@ def _delaunay_site_classification(
             best_type = "atop"
             best_indices = (int(gi),)
 
-    if len(top_xy) >= 2:
-        _top_tree = KDTree(top_xy)
-        _nn_d, _ = _top_tree.query(top_xy, k=2)
-        char_len = float(np.mean(np.asarray(_nn_d, dtype=float)[:, 1]))
-    else:
-        char_len = (
-            best_dist
-            if best_dist < float("inf")
-            else _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM
-        )
+    if char_len is None:
+        if len(top_xy) >= 2:
+            _top_tree = KDTree(top_xy)
+            _nn_d, _ = _top_tree.query(top_xy, k=2)
+            char_len = float(np.mean(np.asarray(_nn_d, dtype=float)[:, 1]))
+        else:
+            char_len = (
+                best_dist
+                if best_dist < float("inf")
+                else _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM
+            )
 
     seen_edges: set[tuple[int, int]] = set()
     for simplex in simplices:
@@ -878,7 +948,7 @@ def _delaunay_site_classification(
             )
 
     if best_type == "bridge" and best_dist > bridge_threshold * char_len:
-        _tree = KDTree(positions)
+        _tree = positions_tree if positions_tree is not None else KDTree(positions)
         _, idx = _tree.query(vertex.reshape(1, 3), k=min(3, len(positions)))
         idx = np.asarray(idx, dtype=int).ravel()
         best_type = "hollow"
@@ -911,6 +981,31 @@ def _compute_local_normal(
     return vec / norm
 
 
+def _compute_local_normals_batch(
+    vertices: np.ndarray,
+    positions: np.ndarray,
+    support_indices: np.ndarray,
+) -> np.ndarray:
+    """Outward unit normals for each vertex from batched neighbour centroids."""
+    n = len(vertices)
+    if n == 0:
+        return np.empty((0, 3), dtype=float)
+    idx = np.asarray(support_indices, dtype=int)
+    if idx.ndim == 1:
+        idx = idx.reshape(-1, 1)
+    centroids = np.mean(positions[idx], axis=1)
+    vecs = np.asarray(vertices, dtype=float) - centroids
+    norms = np.linalg.norm(vecs, axis=1)
+    fallback = np.array([0.0, 0.0, 1.0], dtype=float)
+    out = np.empty((n, 3), dtype=float)
+    for i in range(n):
+        if norms[i] < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+            out[i] = fallback
+        else:
+            out[i] = vecs[i] / norms[i]
+    return out
+
+
 def _build_site_records(
     vertices: np.ndarray,
     nn_dists: np.ndarray,
@@ -928,9 +1023,41 @@ def _build_site_records(
     source_hints: list[str] | None = None,
 ) -> list[dict[str, object]]:
     sites: list[dict[str, object]] = []
-    vertex_2d = (
-        _project_to_slab_plane(vertices, cell) if len(vertices) else np.empty((0, 2))
-    )
+    n_verts = len(vertices)
+    vertex_2d = _project_to_slab_plane(vertices, cell) if n_verts else np.empty((0, 2))
+
+    k_class = min(_SITE_CLASSIFICATION_NEIGHBOURS, len(positions))
+    k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
+    class_dists: np.ndarray | None = None
+    class_idx: np.ndarray | None = None
+    normals: np.ndarray | None = None
+    delaunay_char_len: float | None = None
+
+    if n_verts > 0 and not (
+        use_delaunay
+        and delaunay_tri is not None
+        and top_positions_2d is not None
+        and top_atom_indices is not None
+    ):
+        dists_raw, idx_raw = local_tree.query(vertices, k=k_class)
+        class_dists = np.asarray(dists_raw, dtype=float)
+        class_idx = np.asarray(idx_raw, dtype=int)
+        if class_dists.ndim == 1:
+            class_dists = class_dists.reshape(-1, 1)
+            class_idx = class_idx.reshape(-1, 1)
+        _, norm_idx = local_tree.query(vertices, k=k_norm)
+        if np.ndim(norm_idx) == 1:
+            norm_idx = np.asarray(norm_idx, dtype=int).reshape(-1, 1)
+        normals = _compute_local_normals_batch(vertices, positions, norm_idx)
+    elif n_verts > 0:
+        _, norm_idx = local_tree.query(vertices, k=k_norm)
+        if np.ndim(norm_idx) == 1:
+            norm_idx = np.asarray(norm_idx, dtype=int).reshape(-1, 1)
+        normals = _compute_local_normals_batch(vertices, positions, norm_idx)
+        if top_positions_2d is not None and len(top_positions_2d) >= 2:
+            _top_tree = KDTree(top_positions_2d)
+            _nn_d, _ = _top_tree.query(top_positions_2d, k=2)
+            delaunay_char_len = float(np.mean(np.asarray(_nn_d, dtype=float)[:, 1]))
 
     for i, vertex in enumerate(vertices):
         if (
@@ -946,18 +1073,42 @@ def _build_site_records(
                 delaunay_tri,
                 positions,
                 vertex_2d=vertex_2d[i],
+                char_len=delaunay_char_len,
+                positions_tree=local_tree,
+            )
+        elif class_dists is not None and class_idx is not None:
+            site_type, nearest_idx = _classify_voronoi_site_from_neighbors(
+                class_dists[i],
+                class_idx[i],
+                pore_threshold=pore_threshold,
             )
         else:
-            site_type, nearest_idx = _classify_voronoi_site(
-                vertex,
-                positions,
-                tree=local_tree,
-                pore_threshold=pore_threshold,
+            raise ValueError(
+                "Voronoi neighbour arrays required when Delaunay classification "
+                "is not used"
             )
 
         env_fingerprint = (
             tuple(sorted(symbols[j] for j in nearest_idx if j < len(symbols))),
             site_type,
+        )
+        hollow_order: int | None = None
+        if site_type == "hollow":
+            if (
+                use_delaunay
+                and delaunay_tri is not None
+                and top_positions_2d is not None
+                and top_atom_indices is not None
+            ):
+                hollow_order = 3
+            elif class_dists is not None:
+                hollow_order = _hollow_coordination_order(class_dists[i])
+            if hollow_order is None and nearest_idx:
+                hollow_order = len(nearest_idx)
+        normal = (
+            normals[i]
+            if normals is not None
+            else _compute_local_normal(vertex, positions, tree=local_tree)
         )
         sites.append(
             {
@@ -966,7 +1117,7 @@ def _build_site_records(
                 "xyz": vertex.copy(),
                 "site_type": site_type,
                 "slab_indices": nearest_idx,
-                "normal": _compute_local_normal(vertex, positions, tree=local_tree),
+                "normal": normal,
                 "nn_distance": float(nn_dists[i]) if i < len(nn_dists) else None,
                 "site_source": (
                     source_hints[i]
@@ -975,6 +1126,7 @@ def _build_site_records(
                 ),
                 "material_type": material_type,
                 "env_fingerprint": env_fingerprint,
+                "hollow_order": hollow_order,
             }
         )
     return sites
@@ -1035,32 +1187,46 @@ def get_unified_sites(
 
     if probe_radius is None or max_site_distance is None:
         derived_probe, derived_max = _derive_voronoi_distance_window(
-            positions, symbols, pbc_for_voronoi
+            positions, symbols, pbc_for_voronoi, cell
         )
         probe_radius = derived_probe if probe_radius is None else probe_radius
         max_site_distance = (
             derived_max if max_site_distance is None else max_site_distance
         )
 
+    voronoi_positions = positions
+    if material_type == "slab":
+        top_only_mask = _top_layer_mask_by_normal(
+            positions, cell, float(top_layer_tolerance)
+        )
+        top_only = positions[top_only_mask]
+        if len(top_only) >= 4:
+            voronoi_positions = top_only
+
     vertices, nn_dists = _voronoi_sites(
-        positions,
+        voronoi_positions,
         cell,
         pbc_for_voronoi,
         probe_radius=probe_radius,
         max_distance=max_site_distance,
         enrich=enrich,
         symbols=symbols,
+        nn_reference_positions=positions,
     )
     source_hints = ["voronoi"] * len(vertices)
 
     local_tree = KDTree(positions)
 
+    slab_top_mask: np.ndarray | None = None
+    slab_top_atom_indices: np.ndarray | None = None
+    slab_has_topology_atop = False
+
     # Slab-specific topology enrichment becomes part of the default generator.
     if material_type == "slab":
-        top_mask = _top_layer_mask_by_normal(
+        slab_top_mask = _top_layer_mask_by_normal(
             positions, cell, float(top_layer_tolerance)
         )
-        top_atom_indices = np.nonzero(top_mask)[0]
+        slab_top_atom_indices = np.nonzero(slab_top_mask)[0]
         median_nn = (
             float(np.median(nn_dists))
             if len(nn_dists) > 0
@@ -1072,12 +1238,13 @@ def get_unified_sites(
             positions,
             cell,
             pbc_for_voronoi,
-            top_atom_indices,
+            slab_top_atom_indices,
             local_tree,
             site_height,
             float(probe_radius),
             float(max_site_distance),
         )
+        slab_has_topology_atop = any(s == "topology_atop" for s in topo_sources)
         if len(topo_vertices) > 0:
             if len(vertices) == 0:
                 vertices = topo_vertices
@@ -1121,101 +1288,108 @@ def get_unified_sites(
 
     if material_type == "nanoparticle" and len(vertices) > 0:
         com = np.mean(positions, axis=0)
-        normals = np.array(
-            [_compute_local_normal(v, positions, tree=local_tree) for v in vertices]
-        )
-        outward = np.array(
-            [
-                float(np.dot(normals[i], vertices[i] - com)) > 0.0
-                for i in range(len(vertices))
-            ],
-            dtype=bool,
-        )
+        k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
+        _, norm_idx = local_tree.query(vertices, k=k_norm)
+        if np.ndim(norm_idx) == 1:
+            norm_idx = np.asarray(norm_idx, dtype=int).reshape(-1, 1)
+        normals = _compute_local_normals_batch(vertices, positions, norm_idx)
+        outward = np.einsum("ij,ij->i", normals, vertices - com) > 0.0
         vertices = vertices[outward]
         nn_dists = nn_dists[outward]
         source_hints = [source_hints[i] for i in np.nonzero(outward)[0]]
 
-    # Preserve original atop injection for slabs/nanoparticles as a cheap safety net.
+    # Atop injection safety net for nanoparticles; for slabs only when topology
+    # did not already produce atop candidates.
+    skip_slab_atop_injection = material_type == "slab" and slab_has_topology_atop
     if material_type in ("slab", "nanoparticle") and len(vertices) > 0:
-        median_nn = (
-            float(np.median(nn_dists))
-            if len(nn_dists) > 0
-            else _VORONOI_MAX_DISTANCE_COVALENT_SCALE
-            * _VORONOI_RADIUS_FALLBACK_ANGSTROM
-        )
-        atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
-
-        if material_type == "slab":
-            top_mask = _top_layer_mask_by_normal(
-                positions, cell, float(top_layer_tolerance)
-            )
-            top_atom_indices = np.nonzero(top_mask)[0]
+        if material_type == "slab" and skip_slab_atop_injection:
+            pass
         else:
-            com = np.mean(positions, axis=0)
-            top_atom_indices = np.array(
-                [
-                    i
-                    for i in range(len(positions))
-                    if float(
-                        np.dot(
-                            _compute_local_normal(
-                                positions[i], positions, tree=local_tree
-                            ),
-                            positions[i] - com,
-                        )
-                    )
-                    > 0.0
-                ],
-                dtype=int,
+            median_nn = (
+                float(np.median(nn_dists))
+                if len(nn_dists) > 0
+                else _VORONOI_MAX_DISTANCE_COVALENT_SCALE
+                * _VORONOI_RADIUS_FALLBACK_ANGSTROM
             )
+            atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
 
-        existing_tree = KDTree(vertices) if len(vertices) > 0 else None
-        candidate_verts: list[np.ndarray] = []
-        candidate_dists: list[float] = []
-        candidate_sources: list[str] = []
-        for ai in top_atom_indices:
-            atom_pos = positions[int(ai)]
             if material_type == "slab":
-                candidate = _shift_along_slab_normal(
-                    atom_pos.reshape(1, 3), cell, atop_height
-                )[0]
-                if np.any(pbc_for_voronoi):
-                    candidate = _wrap_cartesian(
-                        candidate.reshape(1, 3), cell, pbc_for_voronoi
-                    )[0]
+                if slab_top_atom_indices is None:
+                    slab_top_mask = _top_layer_mask_by_normal(
+                        positions, cell, float(top_layer_tolerance)
+                    )
+                    slab_top_atom_indices = np.nonzero(slab_top_mask)[0]
+                top_atom_indices = slab_top_atom_indices
+                atom_normals: np.ndarray | None = None
             else:
-                normal = _compute_local_normal(atom_pos, positions, tree=local_tree)
-                candidate = atom_pos + atop_height * normal
+                com = np.mean(positions, axis=0)
+                k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
+                _, norm_idx_all = local_tree.query(positions, k=k_norm)
+                if np.ndim(norm_idx_all) == 1:
+                    norm_idx_all = np.asarray(norm_idx_all, dtype=int).reshape(-1, 1)
+                atom_normals = _compute_local_normals_batch(
+                    positions, positions, norm_idx_all
+                )
+                outward_dots = np.einsum("ij,ij->i", atom_normals, positions - com)
+                top_atom_indices = np.nonzero(outward_dots > 0.0)[0].astype(int)
 
-            d_nn = float(local_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0])
-            if d_nn < float(probe_radius) or d_nn > float(max_site_distance):
-                continue
-            if _is_duplicate_of(candidate, existing_tree, _VORONOI_DEDUP_TOLERANCE):
-                continue
-            candidate_verts.append(candidate)
-            candidate_dists.append(d_nn)
-            candidate_sources.append("atop_injected")
+            candidate_verts: list[np.ndarray] = []
+            candidate_dists: list[float] = []
+            candidate_sources: list[str] = []
+            for ai in top_atom_indices:
+                atom_pos = positions[int(ai)]
+                if material_type == "slab":
+                    candidate = _shift_along_slab_normal(
+                        atom_pos.reshape(1, 3), cell, atop_height
+                    )[0]
+                    if np.any(pbc_for_voronoi):
+                        candidate = _wrap_cartesian(
+                            candidate.reshape(1, 3), cell, pbc_for_voronoi
+                        )[0]
+                else:
+                    assert atom_normals is not None
+                    candidate = atom_pos + atop_height * atom_normals[int(ai)]
 
-        if candidate_verts:
-            candidate_arr = np.asarray(candidate_verts, dtype=float)
-            candidate_dist_arr = np.asarray(candidate_dists, dtype=float)
-            combined = np.vstack([vertices, candidate_arr])
-            combined_dists = np.concatenate([nn_dists, candidate_dist_arr])
-            combined_sources = source_hints + candidate_sources
-            keep = _deduplicate_points(
-                combined, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc_for_voronoi
-            )
-            kept_idx = np.nonzero(keep)[0]
-            n_existing = len(vertices)
-            n_injected = int(np.count_nonzero(keep[n_existing:]))
-            vertices = combined[keep]
-            nn_dists = combined_dists[keep]
-            source_hints = [combined_sources[i] for i in kept_idx]
-            logger.debug(
-                "Injected %d atop candidate sites (%d total sites)",
-                n_injected,
-                len(vertices),
-            )
+                d_nn = float(
+                    local_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0]
+                )
+                if d_nn < float(probe_radius) or d_nn > float(max_site_distance):
+                    continue
+                candidate_verts.append(candidate)
+                candidate_dists.append(d_nn)
+                candidate_sources.append("atop_injected")
+
+            if candidate_verts:
+                candidate_arr = np.asarray(candidate_verts, dtype=float)
+                keep_new = _filter_non_duplicate_candidates(
+                    candidate_arr, vertices, _VORONOI_DEDUP_TOLERANCE
+                )
+                candidate_arr = candidate_arr[keep_new]
+                candidate_dist_arr = np.asarray(candidate_dists, dtype=float)[keep_new]
+                candidate_sources = [
+                    candidate_sources[i] for i in np.nonzero(keep_new)[0]
+                ]
+                if len(candidate_arr) > 0:
+                    combined = np.vstack([vertices, candidate_arr])
+                    combined_dists = np.concatenate([nn_dists, candidate_dist_arr])
+                    combined_sources = source_hints + candidate_sources
+                    keep = _deduplicate_points(
+                        combined,
+                        _VORONOI_DEDUP_TOLERANCE,
+                        cell=cell,
+                        pbc=pbc_for_voronoi,
+                    )
+                    kept_idx = np.nonzero(keep)[0]
+                    n_existing = len(vertices)
+                    n_injected = int(np.count_nonzero(keep[n_existing:]))
+                    vertices = combined[keep]
+                    nn_dists = combined_dists[keep]
+                    source_hints = [combined_sources[i] for i in kept_idx]
+                    logger.debug(
+                        "Injected %d atop candidate sites (%d total sites)",
+                        n_injected,
+                        len(vertices),
+                    )
 
     if len(vertices) == 0:
         return []
@@ -1231,10 +1405,13 @@ def get_unified_sites(
     _top_positions_2d: np.ndarray | None = None
     _top_atom_indices: np.ndarray | None = None
     if _use_delaunay:
-        top_mask = _top_layer_mask_by_normal(
-            positions, cell, float(top_layer_tolerance)
-        )
-        _top_atom_indices = np.nonzero(top_mask)[0]
+        if material_type == "slab" and slab_top_atom_indices is not None:
+            _top_atom_indices = slab_top_atom_indices
+        else:
+            top_mask = _top_layer_mask_by_normal(
+                positions, cell, float(top_layer_tolerance)
+            )
+            _top_atom_indices = np.nonzero(top_mask)[0]
         if len(_top_atom_indices) >= 3:
             top_positions = positions[_top_atom_indices]
             _top_positions_2d = _project_to_slab_plane(top_positions, cell)
@@ -1297,13 +1474,16 @@ def get_hollow_sites_for_adatoms(
         top_layer_tolerance=top_layer_tolerance,
         material_type="slab",
     )
-    hollow_xy = np.array(
-        [np.asarray(s["xy"]) for s in raw if s.get("site_type") in ("hollow", "pore")]
-    )
-    if len(hollow_xy) == 0:
+    hollow_sites = [s for s in raw if s.get("site_type") in ("hollow", "pore")]
+    if not hollow_sites:
         return []
-    keep = _deduplicate_points(hollow_xy, dedup_tolerance)
-    return [np.asarray(xy) for xy in hollow_xy[keep]]
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = np.array([bool(slab.get_pbc()[0]), bool(slab.get_pbc()[1]), False])
+    hollow_xyz = np.array(
+        [np.asarray(s["xyz"], dtype=float) for s in hollow_sites], dtype=float
+    )
+    keep = _deduplicate_points(hollow_xyz, dedup_tolerance, cell=cell, pbc=pbc)
+    return [np.asarray(hollow_sites[i]["xy"]) for i in np.nonzero(keep)[0]]
 
 
 # ---------------------------------------------------------------------------
@@ -1397,19 +1577,12 @@ def _cluster_equivalent_sites(
         return sorted(result, key=_sort_key)
 
     if mat_type == "porous":
-        frac = _wrap_fractional(
-            _cart_to_frac(np.array([_get_xyz(s) for s in sorted_sites]), cell),
-            np.array([True, True, True]),
-        )
-        image_offsets = [
-            np.array([ix, iy, iz], dtype=float)
-            for ix in (-1, 0, 1)
-            for iy in (-1, 0, 1)
-            for iz in (-1, 0, 1)
-        ]
+        coords = np.array([_get_xyz(s) for s in sorted_sites])
+        pbc_full = np.array([True, True, True])
+        image_offsets = _periodic_image_offsets(cell, pbc_full, tolerance)
         reps = _cluster_with_metric(
             n,
-            frac,
+            coords,
             fps,
             image_offsets=image_offsets,
             kdtree_radius=tolerance,
@@ -1423,6 +1596,33 @@ def _cluster_equivalent_sites(
         else _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM
     )
     pinv_ab_T, _ = _slab_plane_projectors(cell)
+    coords = np.array([_get_xyz(s) for s in sorted_sites])
+    heights = _height_along_slab_normal(coords, cell)
+    pbc_slab = np.array([True, True, False])
+    image_offsets = _periodic_image_offsets(cell, pbc_slab, tolerance)
+
+    def _slab_pair_filter(a: int, b: int, _coords_arr: np.ndarray) -> bool:
+        xyz_a = coords[a]
+        xyz_b = coords[b]
+        delta_frac = _minimum_image_fractional_delta(
+            _cart_to_frac((xyz_b - xyz_a).reshape(1, 3), cell),
+            pbc_slab,
+        )[0]
+        delta_cart = _frac_to_cart(delta_frac.reshape(1, 3), cell)[0]
+        dxy = float(np.linalg.norm(delta_cart[:2]))
+        dz = abs(float(heights[a]) - float(heights[b]))
+        return dxy < tolerance and dz < z_tol
+
+    r_search = tolerance * _KD_RADIUS_SEARCH_PADDING
+    reps = _cluster_with_metric(
+        n,
+        coords,
+        fps,
+        image_offsets=image_offsets,
+        kdtree_radius=r_search,
+        pair_filter=_slab_pair_filter,
+    )
+    result = [sorted_sites[i] for i in reps]
 
     def _slab_coord(s: dict[str, object]) -> np.ndarray:
         xyz = _get_xyz(s)
@@ -1430,31 +1630,6 @@ def _cluster_equivalent_sites(
         frac2 = frac2 - np.floor(frac2)
         z = float(cast(float, s.get("z", xyz[2])))
         return np.array([float(frac2[0]), float(frac2[1]), z])
-
-    slab_coords = np.array([_slab_coord(s) for s in sorted_sites])
-    image_offsets_xy = [
-        np.array([ix, iy, 0.0], dtype=float) for ix in (-1, 0, 1) for iy in (-1, 0, 1)
-    ]
-
-    def _slab_pair_filter(a: int, b: int, coords_arr: np.ndarray) -> bool:
-        ca = coords_arr[a]
-        cb = coords_arr[b]
-        dxy = np.abs(ca[:2] - cb[:2])
-        dxy = np.minimum(dxy, 1.0 - dxy)
-        return bool(
-            np.all(dxy < tolerance) and abs(float(ca[2]) - float(cb[2])) < z_tol
-        )
-
-    r_search = max(tolerance, z_tol) * _KD_RADIUS_SEARCH_PADDING
-    reps = _cluster_with_metric(
-        n,
-        slab_coords,
-        fps,
-        image_offsets=image_offsets_xy,
-        kdtree_radius=r_search,
-        pair_filter=_slab_pair_filter,
-    )
-    result = [sorted_sites[i] for i in reps]
 
     def _slab_key(s: dict[str, object]) -> tuple:
         c = _slab_coord(s)

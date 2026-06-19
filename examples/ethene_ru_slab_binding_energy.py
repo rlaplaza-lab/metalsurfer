@@ -17,8 +17,11 @@ from metalsurfer import (
 from metalsurfer.surface_prep import prepare_substrate
 
 
-def main():
+def main() -> int:
     configure_logging(default_level="INFO")
+
+    surface_type = "ethene_ru_slab"
+    results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
         material_type="slab",
@@ -41,32 +44,26 @@ def main():
         miller_indices=(0, 0, 1),
         supercell=(2, 2, 1),
         config=config,
-        results_dir="results_ethene_ru_slab",
+        results_dir=results_dir,
     )
 
     campaign = run_adsorption(
         slab=slab,
         molecules=[("C=C", "ethene")],
         config=config,
-        surface_type="ethene_ru_slab",
+        surface_type=surface_type,
         system_name="Ru_0001",
     )
-    summary = campaign.molecule_summaries[0]
-    if summary.best_adsorption_energy is not None:
-        total_steps = config.stage1_steps + config.stage2_steps
-        print(
-            f"\nBinding energy of ethene on Ru(0001): {summary.best_adsorption_energy:.4f} eV"
+
+    print()
+    print(
+        campaign.format_summary(
+            title="Binding energy summary (ethene / Ru(0001))",
+            results_dir=results_dir,
         )
-        print("  (E_ads = E(Ru+ethene) - E(Ru) - E(ethene); negative = favorable)")
-        print(
-            f"  Relaxation: {total_steps} steps (stage1: {config.stage1_steps}, stage2: {config.stage2_steps})"
-        )
-        print(
-            f"  {campaign.format_results_saved_line(results_dir='results_ethene_ru_slab')}"
-        )
-    else:
-        print("No valid placements found.")
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

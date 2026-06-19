@@ -5,12 +5,14 @@ from __future__ import annotations
 import dataclasses as _dc
 import logging
 import time
+import warnings
 from typing import Any, Literal, cast
 
 from ase import Atoms
 
 from .config import AdsorptionConfig
 from .io_results import (
+    results_dir_for,
     save_saturation_results,
     save_single_molecule_results,
     save_summary_results,
@@ -20,6 +22,8 @@ from .io_results import (
     write_run_metadata_from_out,
     write_run_settings,
 )
+from .ml.dataset import DatasetLogger
+from .ml.schema import PlacementRecord
 from .models import (
     BindingCampaignResult,
     MoleculeCampaignSummary,
@@ -28,15 +32,14 @@ from .models import (
     SaturationRunResult,
     ScreeningResult,
 )
-from .optimization import setup_single_model
 from .placement import classify_adsorbate_orientation
-from .surfaces import SlabContainer, accept_substrate_for_api
+from .surfaces import SlabContainer
 from .workflow import (
-    calculate_reference_energies,
     process_molecule,
     process_molecule_bayesian,
     run_saturation_screening,
 )
+from .workflow.shared import _bootstrap_screening_run, _normalize_molecules_input
 
 logger = logging.getLogger(__name__)
 
@@ -94,75 +97,60 @@ def _run_binding_campaign(
     run_metadata_out: dict[str, Any] | None = None,
     process_kwargs: dict[str, Any] | None = None,
 ) -> BindingCampaignResult:
-    # When molecules is a CSV path, delegate entirely to the workflow
-    # screening loop which supports dataset logging and skip-existing semantics.
-    if isinstance(molecules, str):
-        from .workflow.screening import _run_screening_common as _wf_run
-
-        run_results = _wf_run(
-            slab=slab,
-            smiles_file=molecules,
-            config=config,
-            surface_type=surface_type,
-            skip_existing=skip_existing,
-            run_metadata_out=run_metadata_out,
-            process_fn=process_fn,
-            completion_label="BO screening complete"
-            if mode == "bo"
-            else "Screening complete",
+    if mode == "non_bo" and config.bo_enabled:
+        warnings.warn(
+            "bo_enabled=True on AdsorptionConfig has no effect with run_adsorption; "
+            "use run_adsorption_bo instead.",
+            stacklevel=2,
         )
-        total_configurations = sum(len(rr.results) for rr in run_results)
-        if write_metadata and run_metadata_out:
-            write_run_metadata_from_out(
-                run_metadata_out,
-                surface_type=surface_type,
-                config=config,
-                molecules=molecules,
-            )
+
+    molecule_pairs, load_status, molecules_source = _normalize_molecules_input(
+        molecules,
+        skip_existing=skip_existing,
+        surface_type=surface_type,
+    )
+    if not molecule_pairs:
+        if load_status == "all_skipped":
+            logger.info("No molecules to process (all already in existing summary)")
+        elif load_status == "empty_file":
+            logger.info("No molecules to process (file empty or no valid rows)")
         return BindingCampaignResult(
             mode="bo" if mode == "bo" else "non_bo",
             surface_type=surface_type,
-            run_results=run_results,
+            run_results=[],
             molecule_summaries=[],
-            total_configurations=total_configurations,
-            n_molecules=len(run_results),
-            t_ref_s=float(run_metadata_out.get("t_ref_s", 0.0))
-            if run_metadata_out
-            else 0.0,
-            t_total_s=float(run_metadata_out.get("t_total_s", 0.0))
-            if run_metadata_out
-            else 0.0,
+            total_configurations=0,
+            n_molecules=0,
+            t_ref_s=0.0,
+            t_total_s=0.0,
             failure_summaries={},
         )
 
-    if not molecules:
-        raise ValueError("molecules must be a non-empty list")
     process_kwargs = process_kwargs or {}
-    slab = accept_substrate_for_api(slab, config=config)
     t_start = time.perf_counter()
 
     setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
-    calculator, ts_model = setup_single_model(config.model_name, config.device)
-    smiles_list = [s for s, _ in molecules]
-    molecule_names = [n for _, n in molecules]
-    t_ref_start = time.perf_counter()
-    ref = calculate_reference_energies(
-        slab,
-        calculator,
-        molecules=molecule_names,
-        smiles_list=smiles_list,
-        ts_model=ts_model,
-        config=config,
-    )
-    t_ref_s = time.perf_counter() - t_ref_start
+    bootstrap = _bootstrap_screening_run(slab, molecule_pairs, config)
+    calculator = bootstrap.calculator
+    ts_model = bootstrap.ts_model
+    slab = bootstrap.slab
+    ref = bootstrap.ref
+    t_ref_s = bootstrap.t_ref_s
+    molecule_names = [name for _, name in molecule_pairs]
 
     run_results = []
     summaries = []
     failure_summaries: dict[str, dict[str, object]] = {}
     surface_symbols = set(slab.atoms.get_chemical_symbols())
+    ds_logger = DatasetLogger(
+        str(results_dir_for(surface_type)),
+        config=config,
+        surface_id=surface_type,
+    )
 
-    for smiles, molecule_name in molecules:
+    for smiles, molecule_name in molecule_pairs:
         failure_summary: dict[str, object] = {}
+        extra_ml_records: list[PlacementRecord] = []
         results = process_fn(
             smiles,
             molecule_name,
@@ -172,13 +160,23 @@ def _run_binding_campaign(
             ts_model=ts_model,
             config=config,
             surface_type=surface_type,
+            reference_smiles=smiles,
             failure_summary_out=failure_summary,
+            extra_ml_records_out=extra_ml_records,
             **process_kwargs,
         )
         if failure_summary:
             failure_summaries[molecule_name] = failure_summary
-        summaries.append(_summarize_molecule(molecule_name, results, surface_symbols))
+        summaries.append(
+            _summarize_molecule(
+                molecule_name,
+                results if results else [],
+                surface_symbols,
+            )
+        )
         if not results:
+            for record in extra_ml_records:
+                ds_logger.add_record(record)
             continue
         if save_results:
             save_single_molecule_results(
@@ -190,6 +188,11 @@ def _run_binding_campaign(
                 write_csv=False,
             )
         run_results.append(screening_run_result(molecule_name, results))
+        ds_logger.add_results(results, smiles=smiles, surface_id=surface_type)
+        for record in extra_ml_records:
+            ds_logger.add_record(record)
+
+    ds_logger.flush()
 
     if save_results and run_results:
         save_summary_results(run_results, surface_type=surface_type, config=config)
@@ -209,7 +212,14 @@ def _run_binding_campaign(
         write_run_metadata(
             surface_type=surface_type,
             config=config,
-            smiles_file="<inline-molecules>",
+            smiles_file=molecules_source,
+            n_molecules=len(molecule_names),
+            total_configs=total_configurations,
+            t_ref_s=t_ref_s,
+            t_total_s=t_total_s,
+        )
+    if run_metadata_out is not None:
+        run_metadata_out.update(
             n_molecules=len(molecule_names),
             total_configs=total_configurations,
             t_ref_s=t_ref_s,
@@ -260,12 +270,12 @@ def run_adsorption(
         Whether to write CSV/XYZ output files. VASP bundles require
         ``config.write_vasp_inputs=True``.
     write_settings:
-        Whether to write a ``run_settings.json`` file.
+        Whether to write config and run info into ``run_metadata.json``.
     write_metadata:
-        Whether to write a ``run_metadata.json`` file.
+        Whether to write timing and count metadata into ``run_metadata.json``.
     skip_existing:
-        When *molecules* is a CSV path, skip molecules already present in
-        the existing summary CSV (has no effect for in-memory lists).
+        Skip molecules already listed in ``adsorption_energies_detailed.csv``
+        (in-memory lists and CSV paths).
     run_metadata_out:
         Optional dict to populate with timing and count metadata.
     process_kwargs:
@@ -321,11 +331,12 @@ def run_adsorption_bo(
         Whether to write CSV/XYZ output files. VASP bundles require
         ``config.write_vasp_inputs=True``.
     write_settings:
-        Whether to write a ``run_settings.json`` file.
+        Whether to write config and run info into ``run_metadata.json``.
     write_metadata:
-        Whether to write a ``run_metadata.json`` file.
+        Whether to write timing and count metadata into ``run_metadata.json``.
     skip_existing:
-        Skip molecules already in the summary (CSV input only).
+        Skip molecules already listed in ``adsorption_energies_detailed.csv``
+        (in-memory lists and CSV paths).
     run_metadata_out:
         Optional dict to populate with timing and count metadata.
     process_kwargs:
@@ -381,6 +392,13 @@ def _run_saturation_campaign(
     skip_existing: bool,
     run_metadata_out: dict[str, Any] | None,
 ) -> SaturationCampaignResult:
+    if mode == "non_bo" and config.bo_enabled:
+        warnings.warn(
+            "bo_enabled=True on AdsorptionConfig has no effect with run_saturation; "
+            "use run_saturation_bo instead.",
+            stacklevel=2,
+        )
+
     setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
     failure_summary: dict[str, object] = {}
     run_metadata: dict[str, Any] = (
@@ -429,7 +447,7 @@ def _run_saturation_campaign(
 def run_saturation(
     *,
     slab: SlabContainer | Atoms,
-    molecules: list[tuple[str, str]] | str = "smiles.csv",
+    molecules: list[tuple[str, str]] | str,
     config: AdsorptionConfig | None = None,
     surface_type: str = "manual",
     save_results: bool = True,
@@ -445,7 +463,7 @@ def run_saturation(
     slab:
         :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
     molecules:
-        In-memory list or CSV path (default ``"smiles.csv"``).
+        In-memory list or CSV path (``smiles``, ``name`` columns).
     config:
         Screening configuration.
     surface_type:
@@ -454,11 +472,11 @@ def run_saturation(
         Whether to write CSV/XYZ output files. VASP bundles require
         ``config.write_vasp_inputs=True``.
     write_settings:
-        Whether to write a ``run_settings.json`` file.
+        Whether to write config and run info into ``run_metadata.json``.
     write_metadata:
-        Whether to write a ``run_metadata.json`` file.
+        Whether to write timing and count metadata into ``run_metadata.json``.
     skip_existing:
-        Skip molecules already in the saturation summary (CSV input only).
+        Skip molecules already listed in ``saturation_summary.csv``.
     run_metadata_out:
         Optional dict populated with timing and count metadata.
 
@@ -485,7 +503,7 @@ def run_saturation(
 def run_saturation_bo(
     *,
     slab: SlabContainer | Atoms,
-    molecules: list[tuple[str, str]] | str = "smiles.csv",
+    molecules: list[tuple[str, str]] | str,
     config: AdsorptionConfig | None = None,
     surface_type: str = "manual",
     save_results: bool = True,
@@ -501,7 +519,7 @@ def run_saturation_bo(
     slab:
         :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
     molecules:
-        In-memory list or CSV path (default ``"smiles.csv"``).
+        In-memory list or CSV path (``smiles``, ``name`` columns).
     config:
         Screening configuration; ``bo_enabled`` is set to ``True``.
     surface_type:
@@ -510,11 +528,11 @@ def run_saturation_bo(
         Whether to write CSV/XYZ output files. VASP bundles require
         ``config.write_vasp_inputs=True``.
     write_settings:
-        Whether to write a ``run_settings.json`` file.
+        Whether to write config and run info into ``run_metadata.json``.
     write_metadata:
-        Whether to write a ``run_metadata.json`` file.
+        Whether to write timing and count metadata into ``run_metadata.json``.
     skip_existing:
-        Skip molecules already in the saturation summary (CSV input only).
+        Skip molecules already listed in ``saturation_summary.csv``.
     run_metadata_out:
         Optional dict populated with timing and count metadata.
 

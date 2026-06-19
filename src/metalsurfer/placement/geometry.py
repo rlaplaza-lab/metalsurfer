@@ -1,5 +1,6 @@
 """Rotation, inertia, and distance helpers for adsorbate placement."""
 
+import functools
 import logging
 import random
 from typing import Literal
@@ -150,8 +151,6 @@ def _safe_normalize(v: np.ndarray) -> np.ndarray:
 def compute_surface_site_frame(normal: np.ndarray) -> np.ndarray:
     """Return deterministic orthonormal frame whose z-axis is surface normal."""
     z_axis = _safe_normalize(np.asarray(normal, dtype=float))
-    if z_axis[2] < 0:
-        z_axis = -z_axis
     ref = np.array([1.0, 0.0, 0.0], dtype=float)
     if abs(np.dot(ref, z_axis)) > _FRAME_REF_ALIGNMENT_DOT_THRESHOLD:
         ref = np.array([0.0, 1.0, 0.0], dtype=float)
@@ -160,6 +159,7 @@ def compute_surface_site_frame(normal: np.ndarray) -> np.ndarray:
     return np.column_stack((x_axis, y_axis, z_axis))
 
 
+@functools.cache
 def _get_covalent_radius(symbol: str) -> float | None:
     z = atomic_numbers.get(symbol)
     if z is None or z >= len(ase_covalent_radii):
@@ -168,6 +168,7 @@ def _get_covalent_radius(symbol: str) -> float | None:
     return r if r > 0.0 else None
 
 
+@functools.cache
 def _get_vdw_radius(symbol: str) -> float | None:
     """VdW radius (Å) for overlap checks; NaN tabulated values fall back to ~1.2× covalent."""
     z = atomic_numbers.get(symbol)
@@ -384,8 +385,6 @@ def _flat_orientation_from_principal_axis(
     normal = np.asarray(normal, dtype=float) / (
         np.linalg.norm(normal) + _VECTOR_NORM_EPS
     )
-    if normal[2] < 0:
-        normal = -normal
 
     _, eigenvecs = _compute_inertia_tensor(pos)
     plane_normal = eigenvecs[:, 2]
@@ -405,26 +404,29 @@ def _surface_aligned_rotation(
     ads_pos: np.ndarray,
     normal: np.ndarray,
     symbols: list[str] | None = None,
+    en_binder_index: int | None = None,
+    *,
     en_atom_index: int | None = None,
 ) -> np.ndarray:
     """Rotate adsorbate so a binding vector points toward surface. Returns centred positions.
 
-    When en_atom_index is provided and valid, use that specific electronegative atom.
-    Otherwise select the one with highest dot product toward the surface normal.
+    When *en_binder_index* (or legacy alias *en_atom_index*) is provided and valid,
+    use that index into the filtered electronegative-atom list from
+    :func:`_binding_atom_candidates`, not a raw atom index.  Otherwise select
+    the binder with highest dot product toward the surface normal.
     """
+    binder_idx = en_binder_index if en_binder_index is not None else en_atom_index
     pos = np.asarray(ads_pos, dtype=float).copy()
     com = np.mean(pos, axis=0)
     pos -= com
     normal = np.asarray(normal, dtype=float) / (
         np.linalg.norm(normal) + _VECTOR_NORM_EPS
     )
-    if normal[2] < 0:
-        normal = -normal
 
     binders = _binding_atom_candidates(symbols) if symbols else []
     if binders:
-        if en_atom_index is not None and en_atom_index in range(len(binders)):
-            i = binders[en_atom_index]
+        if binder_idx is not None and binder_idx in range(len(binders)):
+            i = binders[binder_idx]
         else:
             best_dot = -1.0
             i = binders[0]
@@ -458,15 +460,12 @@ def _rotation_with_tilt(
     pos: np.ndarray, normal: np.ndarray, tilt_deg: float, azimuth_deg: float
 ) -> np.ndarray:
     """Apply tilt and azimuth to positions (centred at origin)."""
-    normal = np.asarray(normal, dtype=float) / (
-        np.linalg.norm(normal) + _VECTOR_NORM_EPS
-    )
-    up = np.array([0, 0, 1.0])
-    R_align = _rotation_to_align_vector_to_target(up, normal)
-    pos = (R_align @ pos.T).T
-    R_tilt = _rotation_around_axis(np.array([1, 0, 0]), tilt_deg)
-    R_az = _rotation_around_axis(up, azimuth_deg)
-    return (R_align.T @ R_az @ R_tilt @ R_align @ pos.T).T
+    frame = compute_surface_site_frame(normal)
+    pos_local = (frame.T @ np.asarray(pos, dtype=float).T).T
+    R_tilt = _rotation_around_axis(np.array([1.0, 0.0, 0.0]), tilt_deg)
+    R_az = _rotation_around_axis(np.array([0.0, 0.0, 1.0]), azimuth_deg)
+    pos_local = (R_az @ R_tilt @ pos_local.T).T
+    return (frame @ pos_local.T).T
 
 
 def _principal_axis_rotation(
@@ -514,10 +513,10 @@ def _principal_axis_rotation(
         for step in range(_PRINCIPAL_AXIS_ROTATION_STEPS):
             R = _rotation_around_axis(axis, step * _PRINCIPAL_AXIS_ROTATION_STEP_DEG)
             test = (R @ (pos - com).T).T + com
-            # score by min-z (higher = more clearance)
-            min_z = float(np.min(test[:, 2]))
-            if min_z > best_score:
-                best_score = min_z
+            # score by clearance along the surface normal (higher = more clearance)
+            clearance = float(np.min(test @ normal_vector))
+            if clearance > best_score:
+                best_score = clearance
                 best_positions = test.copy()
 
     # re-centre at origin so caller controls the final offset
@@ -555,17 +554,28 @@ def detect_vdw_overlaps(
     dists = _mol_slab_pairwise_distances(mol_pos, slab_pos, cell, pbc)
     min_distance = float(np.min(dists)) if dists.size else float("inf")
 
-    overlaps: list[tuple[int, int, float, float]] = []
-    mol_size, slab_size = dists.shape
-    for i in range(mol_size):
-        for j in range(slab_size):
-            dist = float(dists[i, j])
-            r1 = _get_vdw_radius(mol_syms[i])
-            r2 = _get_vdw_radius(slab_syms[j])
-            if r1 is not None and r2 is not None:
-                vdw_sum = vdw_scale * (r1 + r2)
-                if dist < vdw_sum:
-                    overlaps.append((i, j, dist, vdw_sum - dist))
+    if dists.size == 0:
+        return [], min_distance
+
+    # Unknown radii become NaN so they propagate to a NaN vdw_sum; the
+    # subsequent ``> 0`` comparison is False for NaN, excluding those pairs.
+    mol_radii = np.array(
+        [r if (r := _get_vdw_radius(s)) is not None else np.nan for s in mol_syms],
+        dtype=float,
+    )
+    slab_radii = np.array(
+        [r if (r := _get_vdw_radius(s)) is not None else np.nan for s in slab_syms],
+        dtype=float,
+    )
+    vdw_sum = vdw_scale * (mol_radii[:, None] + slab_radii[None, :])
+    overlap_amount = vdw_sum - dists
+    with np.errstate(invalid="ignore"):
+        mask = overlap_amount > 0.0
+    rows, cols = np.nonzero(mask)
+    overlaps: list[tuple[int, int, float, float]] = [
+        (int(i), int(j), float(dists[i, j]), float(overlap_amount[i, j]))
+        for i, j in zip(rows, cols, strict=False)
+    ]
     return overlaps, min_distance
 
 
