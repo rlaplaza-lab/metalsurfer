@@ -4,7 +4,8 @@
 Molecules: HMF, BHMF, BHMTHF, 5-MF, MFA, DMF, MTHFA, DMTHF.
 
 Uses metalsurfer prepare_substrate to create Sn-covered Ru(0001) surface.
-BO pipeline: 300 placements max in passes of 100 (100 initial random + up to 2 BO passes of 100).
+BO pipeline: ~300 MLIP evaluations (100 initial random + 2 acquisition batches
+of 100); ``num_placements=250`` caps the placement pool per batch.
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 """

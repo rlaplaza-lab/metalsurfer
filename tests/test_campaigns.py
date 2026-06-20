@@ -404,6 +404,111 @@ def test_run_adsorption_warns_when_bo_enabled_on_non_bo_api(monkeypatch):
         )
 
 
+def test_run_adsorption_warns_when_all_skipped(monkeypatch):
+    monkeypatch.setattr(
+        "metalsurfer.campaigns._normalize_molecules_input",
+        lambda *args, **kwargs: ([], "all_skipped", "demo.csv"),
+    )
+    with pytest.warns(UserWarning, match="adsorption_energies_detailed"):
+        campaign = run_adsorption(
+            slab=object(),
+            molecules="demo.csv",
+            config=AdsorptionConfig(seed=1),
+            surface_type="skip_all",
+            save_results=False,
+            write_settings=False,
+        )
+    assert campaign.n_molecules == 0
+    assert "No molecules processed" in campaign.format_summary(
+        results_dir="results_skip_all"
+    )
+
+
+def test_run_adsorption_warns_when_input_empty(monkeypatch):
+    monkeypatch.setattr(
+        "metalsurfer.campaigns._normalize_molecules_input",
+        lambda *args, **kwargs: ([], "empty_file", "empty.csv"),
+    )
+    with pytest.warns(UserWarning, match="no valid rows"):
+        campaign = run_adsorption(
+            slab=object(),
+            molecules="empty.csv",
+            config=AdsorptionConfig(seed=1),
+            surface_type="empty_input",
+            save_results=False,
+            write_settings=False,
+        )
+    assert campaign.n_molecules == 0
+
+
+def test_run_saturation_warns_when_bo_enabled_on_non_bo_api(monkeypatch):
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.run_saturation_screening",
+        lambda **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.setup_directories",
+        lambda surface_types, **kwargs: None,
+    )
+    with pytest.warns(UserWarning, match="run_saturation_bo"):
+        run_saturation(
+            slab=object(),
+            molecules=[("C", "demo")],
+            config=AdsorptionConfig(bo_enabled=True),
+            surface_type="warn_sat",
+            save_results=False,
+            write_settings=False,
+        )
+
+
+def test_run_saturation_write_settings_includes_campaign_metadata(
+    monkeypatch, tmp_path
+):
+    captured: dict[str, object] = {}
+
+    def fake_write_settings(surface_type, config, **run_info):
+        captured["surface_type"] = surface_type
+        captured["run_info"] = run_info
+
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.write_run_settings",
+        fake_write_settings,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.run_saturation_screening",
+        lambda **kwargs: [
+            SaturationRunResult(
+                molecule="demo",
+                steps=[],
+                n_molecules_at_saturation=0,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.setup_directories",
+        lambda surface_types, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.save_saturation_results",
+        lambda *args, **kwargs: None,
+    )
+
+    run_saturation(
+        slab=object(),
+        molecules=[("C", "demo")],
+        config=AdsorptionConfig(seed=1),
+        surface_type="st_meta_settings",
+        skip_existing=False,
+        write_metadata=False,
+    )
+
+    run_info = captured["run_info"]
+    assert run_info["campaign"] == "saturation"
+    assert run_info["mode"] == "non_bo"
+    assert run_info["n_molecules"] == 1
+    assert run_info["molecules"] == ["demo"]
+
+
 def test_run_adsorption_save_results_false_skips_disk_writes(tmp_path, monkeypatch):
     """save_results=False skips structure and summary writes for CSV input."""
     from metalsurfer.surfaces import SlabContainer

@@ -6,7 +6,8 @@ Molecules: HMF, BHMF, BHMTHF, 5-MF, MFA, DMF, MTHFA, DMTHF.
 Slab: Random GO model R1 from Mouhat et al., Nature Commun. 2020 (citable-data).
 Loaded from https://github.com/fxcoudert/citable-data. Top GO layer is relaxed.
 
-Uses BO pipeline: 300 placements max in passes of 100 (100 initial random + up to 2 BO passes of 100).
+Uses BO pipeline: ~300 MLIP evaluations (100 initial random + 2 acquisition batches
+of 100); ``num_placements=250`` caps the placement pool per batch.
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 """

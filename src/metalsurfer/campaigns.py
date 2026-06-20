@@ -111,9 +111,20 @@ def _run_binding_campaign(
     )
     if not molecule_pairs:
         if load_status == "all_skipped":
-            logger.info("No molecules to process (all already in existing summary)")
+            msg = (
+                "No molecules to process: all inputs already listed in "
+                "adsorption_energies_detailed.csv. Set skip_existing=False "
+                "or remove the detailed CSV to rerun."
+            )
+            logger.warning(msg)
+            warnings.warn(msg, stacklevel=2)
         elif load_status == "empty_file":
-            logger.info("No molecules to process (file empty or no valid rows)")
+            msg = (
+                "No molecules to process: input file empty or no valid rows. "
+                "Expected CSV columns smiles and name."
+            )
+            logger.warning(msg)
+            warnings.warn(msg, stacklevel=2)
         return BindingCampaignResult(
             mode="bo" if mode == "bo" else "non_bo",
             surface_type=surface_type,
@@ -425,7 +436,19 @@ def _run_saturation_campaign(
             runs, surface_type=surface_type, config=config
         )
     if write_settings:
-        write_run_settings(surface_type, config)
+        write_run_settings(
+            surface_type,
+            config,
+            campaign="saturation",
+            mode=mode,
+            n_molecules=len(runs),
+            molecules=[
+                run.molecules[0]
+                if isinstance(run, MultiMolSaturationRunResult)
+                else run.molecule
+                for run in runs
+            ],
+        )
     if write_metadata and run_metadata:
         write_run_metadata_from_out(
             run_metadata,

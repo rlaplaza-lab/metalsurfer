@@ -4,6 +4,10 @@
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 
+Rerun note: ``skip_existing=True`` by default skips molecules already in
+``adsorption_energies_detailed.csv``; delete ``results_h2_ni111/`` or pass
+``skip_existing=False`` to force a fresh run.
+
 If you hit CUDA OOM on a 15GB GPU, try:
   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python scripts/h2_ni111_binding_energy.py
 or reduce num_placements (e.g. 25).

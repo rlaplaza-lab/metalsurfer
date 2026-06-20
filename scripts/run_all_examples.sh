@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Run all official examples except bipyridine (heavy HPC saturation demo).
+# Run all official examples except bipyridine (HPC-scale saturation demo).
+#
+# Deletes each example's results_* directory before running so campaigns do not
+# skip via skip_existing=True. Camphor is GPU-heavy (~15 GB) and may download
+# Zenodo/NOMAD assets on first run.
 #
 # Usage (from repo root, with metalsurfer conda env and GPU):
 #   ./scripts/run_all_examples.sh

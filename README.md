@@ -12,13 +12,19 @@ Metalsurfer is substrate-agnostic: pass any ASE `Atoms` object—periodic slab, 
 
 Requires **Python 3.12 or newer**.
 
-Core dependencies only:
+Core dependencies only (library import and CPU-only workflow tests):
 
 ```bash
 pip install -e .
 ```
 
-For TorchSim/FairChem-backed relaxation and the developer toolchain:
+**Running examples, scripts, or any `run_*` campaign requires the MLIP stack:**
+
+```bash
+pip install -e ".[mlip]"
+```
+
+For TorchSim/FairChem-backed relaxation plus the developer toolchain:
 
 ```bash
 pip install -e ".[mlip,dev]"
@@ -66,7 +72,7 @@ These examples span Pt, Ru, MOF, Au(111), and Cu(111); the same API accepts any 
 
 - Use pure ASE for receptor preparation (or `prepare_substrate` from a bulk id)
 - Quick demos use modest explicit placement counts; omit `num_placements` to autotune to GPU parallel capacity (see `AdsorptionConfig`)
-- The bipyridine HPC script uses many more placements (see `scripts/`)
+- Bipyridine is an HPC-scale saturation demo (1000 placements); use `scripts/bipyridine_au111_defects_saturation_raw.py` for batch jobs
 - Demonstrate different material types (`nanoparticle`, `porous`, and `slab`)
 - Produce XYZ structures and CSV results (VASP inputs are opt-in via `write_vasp_inputs=True`)
 
@@ -366,7 +372,7 @@ The output directory is `results_{surface_type}`. Depending on run mode, the lib
 - `saturation_details.csv`
 - `saturation_placements_detailed.csv` (saturation runs when `saturation_save_all_placements` is true: one row per step × placement with paths and descriptor context)
 - `saturation_summary.csv`
-- `run_metadata.json` (when `write_settings=True` and/or `write_metadata=True` on campaign APIs; merged incrementally)
+- `run_metadata.json` (when `write_settings=True` writes config snapshot; `write_metadata=True` adds timing/counts; both merge into the same file)
 - `ml_dataset.csv`, `ml_dataset_metadata.json` (from `DatasetLogger` during binding campaigns and saturation)
 - `xyz_structures/...`
 - `vasp_inputs/...` (only when `write_vasp_inputs=True`)
@@ -387,6 +393,21 @@ Environment overrides:
 Logs go to **stdout** by default so HPC job `.out` files capture progress. TorchSim stdout/stderr is captured during relaxation (`torchsim_output_capture` in `src/metalsurfer/_logging.py`).
 
 ## Development
+
+Pre-release GPU smoke (fresh runs, excludes bipyridine):
+
+```bash
+pip install -e ".[mlip,dev]"
+./scripts/run_all_examples.sh
+```
+
+Full local test parity (includes MLIP and GPU phases):
+
+```bash
+./scripts/run_all_tests.sh
+```
+
+CI-parity lint and fast tests:
 
 ```bash
 pip install -e ".[dev]"    # GPU stack: ".[mlip,dev]"

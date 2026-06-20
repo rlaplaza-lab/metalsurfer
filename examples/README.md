@@ -11,13 +11,13 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 | `h2_pt12_binding_energy.py` | H₂ on a Pt₁₂ nanoparticle (`prepare_substrate`) |
 | `co2_mof_binding_energy.py` | CO₂ in a MOF (porous; `prepare_substrate`) |
 | `ethene_ru_slab_binding_energy.py` | Ethene on Ru(0001) (`prepare_substrate`) |
-| `bipyridine_au111_defects_saturation_raw.py` | Saturation on defected Au(111) with rigid substrate (default prep freeze) |
+| `bipyridine_au111_defects_saturation_raw.py` | HPC-scale saturation on defected Au(111) (1000 placements; not a quick demo) |
 | `camphor_cu111_binding_energy.py` | (1S)-camphor on Cu(111) vs Järvi et al. BOSS benchmark (BO, 15GB GPU) |
 
 Demos set explicit small `num_placements` for quick runs. For production screening, omit
 `num_placements` (and BO batch fields) to autotune to GPU parallel capacity via TorchSim
 memory probing at workflow start. For saturation with Bayesian placement search, use
-`run_saturation_bo` for saturation with Bayesian placement search.
+`run_saturation_bo`.
 
 Quick examples print a `campaign.format_summary(...)` block on completion; inspect
 `campaign.failure_summaries` when a molecule reports no valid placements.

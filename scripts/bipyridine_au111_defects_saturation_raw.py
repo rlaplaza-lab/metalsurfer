@@ -34,7 +34,7 @@ def main():
         fmax=0.05,
         stage1_steps=80,
         stage2_steps=500,
-        # 3x3 Au(111) already satisfies min_pbc_image_separation; disable until needed.
+        # Enforce min in-plane separation for auto-resize (default 8 Å).
         min_pbc_image_separation=10.0,
         slab_relaxation_mode="full",
         slab_relaxation_optimizer="lbfgs",

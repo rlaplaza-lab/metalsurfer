@@ -678,9 +678,15 @@ class BindingCampaignResult:
     t_total_s: float
     failure_summaries: dict[str, dict[str, object]] = field(default_factory=dict)
 
-    def format_results_saved_line(self, *, results_dir: str) -> str:
+    def format_results_saved_line(
+        self,
+        *,
+        results_dir: str,
+        write_vasp_inputs: bool = False,
+    ) -> str:
         """Return a canonical results output line."""
-        return f"Results saved to {Path(results_dir).as_posix()}/ (XYZ, POSCAR, CSV)"
+        suffix = "(XYZ, POSCAR, CSV)" if write_vasp_inputs else "(XYZ, CSV)"
+        return f"Results saved to {Path(results_dir).as_posix()}/ {suffix}"
 
     def format_screening_complete(self) -> str:
         """Return a canonical screening completion line."""
@@ -691,6 +697,7 @@ class BindingCampaignResult:
         *,
         results_dir: str,
         title: str = "Binding energy summary",
+        write_vasp_inputs: bool = False,
     ) -> str:
         """Return a canonical multi-line binding summary block."""
         lines = [
@@ -700,6 +707,11 @@ class BindingCampaignResult:
             "(E_ads = E(slab+molecule) - E(slab) - E(molecule); negative = favorable)",
             "",
         ]
+        if self.n_molecules == 0 and self.total_configurations == 0:
+            lines.append(
+                "No molecules processed (all skipped, empty input, or no valid rows)."
+            )
+            lines.append("")
         summaries = list(self.molecule_summaries)
         if not summaries and self.run_results:
             for run_result in self.run_results:
@@ -729,7 +741,12 @@ class BindingCampaignResult:
                 lines.append(f"Failures for {molecule_name}:")
                 lines.append(self.format_failure_summary(failure_summary))
         lines.append("")
-        lines.append(self.format_results_saved_line(results_dir=results_dir))
+        lines.append(
+            self.format_results_saved_line(
+                results_dir=results_dir,
+                write_vasp_inputs=write_vasp_inputs,
+            )
+        )
         return "\n".join(lines)
 
     @staticmethod

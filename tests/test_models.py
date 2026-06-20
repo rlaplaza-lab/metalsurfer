@@ -305,6 +305,16 @@ def test_binding_campaign_result_formatters():
     assert campaign.format_results_saved_line(results_dir="results_manual").startswith(
         "Results saved to results_manual/"
     )
+    assert "(XYZ, CSV)" in campaign.format_results_saved_line(
+        results_dir="results_manual"
+    )
+    assert "POSCAR" not in campaign.format_results_saved_line(
+        results_dir="results_manual"
+    )
+    assert "POSCAR" in campaign.format_results_saved_line(
+        results_dir="results_manual",
+        write_vasp_inputs=True,
+    )
     assert campaign.format_screening_complete() == (
         "Screening complete: 42 total configurations"
     )
@@ -365,3 +375,19 @@ def test_binding_campaign_format_summary_includes_failures():
     assert "(no valid placements)" in summary
     assert "Failures for bad" in summary
     assert "conformers" in summary
+
+
+def test_binding_campaign_format_summary_empty_run():
+    campaign = BindingCampaignResult(
+        mode="non_bo",
+        surface_type="manual",
+        run_results=[],
+        molecule_summaries=[],
+        total_configurations=0,
+        n_molecules=0,
+        t_ref_s=0.0,
+        t_total_s=0.0,
+    )
+    summary = campaign.format_summary(results_dir="results_manual")
+    assert "No molecules processed" in summary
+    assert "(XYZ, CSV)" in summary

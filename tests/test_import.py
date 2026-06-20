@@ -95,6 +95,19 @@ def test_typed_models_importable():
     assert all(isinstance(symbol, type) for symbol in exported_models.values())
 
 
+def test_campaign_entry_points_in_all():
+    """Primary run_* APIs are listed in __all__ for discoverability."""
+    import metalsurfer
+
+    for name in (
+        "run_adsorption",
+        "run_adsorption_bo",
+        "run_saturation",
+        "run_saturation_bo",
+    ):
+        assert name in metalsurfer.__all__
+
+
 def test_exceptions_importable():
     """Exception classes can be imported directly from the package."""
     from metalsurfer import (

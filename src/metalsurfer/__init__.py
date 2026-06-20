@@ -29,6 +29,10 @@ from .models import (
 __all__ = [
     "__version__",
     "AdsorptionConfig",
+    "run_adsorption",
+    "run_adsorption_bo",
+    "run_saturation",
+    "run_saturation_bo",
     "BindingCampaignResult",
     "MoleculeCampaignSummary",
     "MoleculeSummary",
