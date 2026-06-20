@@ -35,17 +35,36 @@ EXAMPLES=(
   examples/camphor_cu111_binding_energy.py
 )
 
+# Must match each example's surface_type / results_dir (not the script basename).
+declare -A EXAMPLE_RESULTS=(
+  [examples/h2_pt12_binding_energy.py]=results_h2_pt12
+  [examples/ethene_ru_slab_binding_energy.py]=results_ethene_ru_slab
+  [examples/co2_mof_binding_energy.py]=results_co2_mof
+  [examples/camphor_cu111_binding_energy.py]=results_camphor_cu111
+)
+
 declare -a EXAMPLE_NAMES=()
 declare -a EXAMPLE_STATUS=()
 
 for example in "${EXAMPLES[@]}"; do
   name="$(basename "$example" .py)"
+  results_dir="${EXAMPLE_RESULTS[$example]:-results_${name}}"
   log_file="${LOG_DIR}/v0.3_${name}_${STAMP}.log"
-  echo "===== START ${example} =====" | tee -a "$log_file"
+  echo "===== START ${example} (fresh run; removing ${results_dir}) =====" | tee -a "$log_file"
+  rm -rf "$results_dir"
   set +e
   "$PYTHON" "$example" 2>&1 | tee -a "$log_file"
   status=${PIPESTATUS[0]}
   set -e
+  if [[ "$status" -eq 0 ]]; then
+    if grep -q 'already-processed' "$log_file"; then
+      echo "FAILED: ${example} skipped existing results (see ${log_file})" >&2
+      status=1
+    elif ! grep -qE 'Initializing TorchSim|Placement generation|Batched optimisation' "$log_file"; then
+      echo "FAILED: ${example} shows no MLIP activity (see ${log_file})" >&2
+      status=1
+    fi
+  fi
   EXAMPLE_NAMES+=("$name")
   EXAMPLE_STATUS+=("$status")
   if [[ "$status" -eq 0 ]]; then

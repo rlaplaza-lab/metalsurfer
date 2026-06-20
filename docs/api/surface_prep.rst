@@ -144,7 +144,14 @@ campaign APIs run. It is separate from TorchSim placement relaxation
 
 :func:`~metalsurfer.surface_prep.prepare_substrate` accepts knobs named like
 ``AdsorptionConfig.slab_relaxation_*``. Explicit keyword arguments override
-*config* for each stage:
+*config* for each stage.
+
+Prep-time MLIP relaxation uses ``model_name`` and ``device`` from the
+:class:`~metalsurfer.AdsorptionConfig` passed as *config* (or from a default
+config built when *config* is omitted). Pass ``AdsorptionConfig(model_name=...,
+device=...)`` rather than relying on undocumented kwargs.
+
+Relaxation knob mapping:
 
 +--------------------------------+-----------------------------------------------+
 | ``prepare_substrate`` kw       | ``AdsorptionConfig`` field                    |

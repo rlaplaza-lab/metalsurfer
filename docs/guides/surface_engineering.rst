@@ -238,10 +238,11 @@ Large adsorbates and in-plane sizing
 
 Campaign entry points validate the substrate geometry only — they do **not** know
 adsorbate size yet. Once conformers are generated for a molecule,
-:func:`~metalsurfer.workflow.shared.prepare_substrate_for_screening` re-validates
-the slab using the maximum pairwise distance across conformers (the **molecule
-diameter**) plus :attr:`~metalsurfer.AdsorptionConfig.min_pbc_image_separation`
-(default 8 Å). If the in-plane cell is too small, screening raises
+:func:`~metalsurfer.surface_prep.validate_substrate` (via the shared molecule
+preamble in ``workflow/shared.py``) re-validates the slab using the maximum
+pairwise distance across conformers (the **molecule diameter**) plus
+:attr:`~metalsurfer.AdsorptionConfig.min_pbc_image_separation` (default 8 Å).
+If the in-plane cell is too small, screening raises
 :class:`~metalsurfer.exceptions.GeometryValidationError` with the minimum
 ``(nx, ny)`` repeat factors needed.
 

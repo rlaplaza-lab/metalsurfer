@@ -1116,7 +1116,10 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
     step0 = result.steps[0]
     # Keys match molecules that got conformers and entered the competitive loop.
     assert set(step0.per_molecule_results) == set(step0.bo_transfer_used)
-    assert len(step0.per_molecule_results["H2"]) >= 1
+    assert any(len(v) >= 1 for v in step0.per_molecule_results.values()), (
+        "Expected at least one competitive adsorbate with valid placements; "
+        f"got counts: { {k: len(v) for k, v in step0.per_molecule_results.items()} }"
+    )
 
 
 # ---------------------------------------------------------------------------

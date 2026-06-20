@@ -13,7 +13,10 @@ Public API Layers
 
 The package re-exports a curated set of symbols through lazy imports in
 ``metalsurfer.__init__`` so heavy modules are loaded only when first
-accessed.
+accessed.  The four layers below are the **public** surface; see
+``CORE_SYSTEM_EXPLANATION.md`` for an additional internal workflow layer
+(``_bootstrap_screening_run``, ``run_saturation_screening``, etc.) used by
+campaigns but not re-exported from the top-level package.
 
 **1. Run-Mode APIs** — canonical high-level entry points:
 

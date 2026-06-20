@@ -181,8 +181,6 @@ def prepare_substrate(
     enforce_top_layer_fraction: bool = False,
     adatom_symbol: str | None = None,
     adatom_coverage: float = 0.0,
-    model_name: str = "uma-s-1p1",
-    device: str = "cuda",
     config: AdsorptionConfig | None = None,
     align: bool | None = None,
     slab_relaxation_mode: SLAB_RELAXATION_MODE | None = None,
@@ -222,6 +220,8 @@ def prepare_substrate(
     Prep-time relaxation knobs mirror :class:`~metalsurfer.AdsorptionConfig`
     ``slab_relaxation_*`` fields. Explicit ``slab_relaxation_*`` and
     ``adatom_relaxation_*`` arguments override *config* for each stage.
+
+    MLIP model and device come from *config* (``model_name``, ``device``).
     """
     sources = [bulk_id is not None, slab_file is not None, slab is not None]
     if sum(sources) != 1:
@@ -247,8 +247,6 @@ def prepare_substrate(
 
     if slab is not None:
         slab_container = coerce_slab_container(slab)
-        if material_type == "slab" and should_align:
-            slab_container.atoms = ensure_slab_z_alignment(slab_container.atoms)
     elif slab_file is not None:
         loaded = ase.io.read(slab_file)
         if isinstance(loaded, list):
@@ -324,10 +322,6 @@ def prepare_substrate(
             relaxation_steps=slab_relaxation_steps,
             context="prepare_substrate",
         )
-        if material_type == "slab":
-            slab_container.atoms = ensure_slab_z_alignment(slab_container.atoms)
-        elif material_type == "nanoparticle":
-            slab_container.atoms = _anchor_atoms_bottom(slab_container.atoms)
 
     if material_type == "slab" and should_align:
         slab_container.atoms = ensure_slab_z_alignment(slab_container.atoms)

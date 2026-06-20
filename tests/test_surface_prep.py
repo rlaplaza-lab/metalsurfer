@@ -29,9 +29,7 @@ def test_prepare_substrate_passes_slab_relaxation_options(monkeypatch):
 
     prepare_substrate(
         bulk_id="mp-33",
-        model_name="uma-s-1p1",
-        device="cpu",
-        config=AdsorptionConfig(device="cpu"),
+        config=AdsorptionConfig(model_name="uma-s-1p1", device="cpu"),
         slab_relaxation_mode="full",
         slab_relaxation_optimizer="bfgs",
         slab_relaxation_fmax=0.03,
@@ -139,9 +137,7 @@ def test_prepare_substrate_relaxes_loaded_slab_before_finalize(monkeypatch):
 
     prepare_substrate(
         slab=base,
-        model_name="uma-s-1p1",
-        device="cpu",
-        config=AdsorptionConfig(device="cpu"),
+        config=AdsorptionConfig(model_name="uma-s-1p1", device="cpu"),
         slab_relaxation_mode="ionic_only",
         slab_relaxation_optimizer="bfgs",
         slab_relaxation_fmax=0.03,
