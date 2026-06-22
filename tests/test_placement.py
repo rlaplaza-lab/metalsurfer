@@ -1316,7 +1316,7 @@ def test_hollow_site_pairs_found_for_slab():
         assert len(p[1]) == 3
 
 
-def test_dissociative_placement_rejected_for_non_slab_material_type():
+def test_dissociative_placement_supported_for_nanoparticle():
     nanoparticle = make_nanoparticle()
     config = AdsorptionConfig(
         material_type="nanoparticle",
@@ -1344,8 +1344,49 @@ def test_dissociative_placement_rejected_for_non_slab_material_type():
         nanoparticle,
         config,
     )
+    if reason == "no_hollow_site_pairs":
+        pytest.skip("No dissociative site pairs on test nanoparticle")
+    assert result is not None, reason
+    placed, descriptor = result
+    assert descriptor.orientation_type == "dissociative"
+    hh = float(
+        np.linalg.norm(
+            placed.get_positions()[1] - placed.get_positions()[0],
+        )
+    )
+    assert hh > 1.0, "Dissociative placement should separate H atoms"
+
+
+def test_dissociative_placement_rejected_for_porous_material_type():
+    porous = make_porous_framework()
+    config = AdsorptionConfig(
+        material_type="porous",
+        skip_topology_check=True,
+        num_placements=1,
+    )
+    h2 = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
+    spec = PlacementSpec(
+        conformer_index=0,
+        orientation_type="dissociative",
+        face_flip=False,
+        en_atom_index=None,
+        site_index=0,
+        site_type="hollow",
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+
+    result, reason = generate_placement_from_spec_with_reason(
+        spec,
+        [h2],
+        porous,
+        config,
+    )
     assert result is None
-    assert reason == "dissociative_not_supported_for_nanoparticle"
+    assert reason == "dissociative_not_supported_for_porous"
 
 
 # ---------------------------------------------------------------------------

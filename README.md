@@ -38,7 +38,7 @@ Examples in `examples/` demonstrate basic usage and an advanced saturation workf
 
 ### H2 Adsorption on Pt Nanocluster
 ```bash
-# 12-atom Pt cluster with H2 adsorption
+# 12-atom Pt cluster; skip_topology_check=True for dissociative H2 placement
 python examples/h2_pt12_binding_energy.py
 ```
 
@@ -54,25 +54,25 @@ python examples/co2_mof_binding_energy.py
 python examples/ethene_ru_slab_binding_energy.py
 ```
 
-### Bipyridine Saturation on Defected Au(111)
-```bash
-# Au(111) with 20% Au adatoms; fixed substrate during placement relaxations
-python examples/bipyridine_au111_defects_saturation_raw.py
-```
-
 ### Camphor on Cu(111) (Bayesian, GPU-heavy)
 ```bash
 # BO placement search on a literature DFT slab (slab_relaxation_mode="none")
 python examples/camphor_cu111_binding_energy.py
 ```
 
-The HPC-oriented copy of the bipyridine workflow is `scripts/bipyridine_au111_defects_saturation_raw.py`.
+### HPC / advanced
+
+**Bipyridine saturation on defected Au(111)** — HPC-scale demo (1000 placements per step). Use the copy under `scripts/` for batch jobs:
+
+```bash
+python examples/bipyridine_au111_defects_saturation_raw.py
+# or: python scripts/bipyridine_au111_defects_saturation_raw.py
+```
 
 These examples span Pt, Ru, MOF, Au(111), and Cu(111); the same API accepts any ASE `Atoms` or prepared slab.
 
 - Use pure ASE for receptor preparation (or `prepare_substrate` from a bulk id)
 - Quick demos use modest explicit placement counts; omit `num_placements` to autotune to GPU parallel capacity (see `AdsorptionConfig`)
-- Bipyridine is an HPC-scale saturation demo (1000 placements); use `scripts/bipyridine_au111_defects_saturation_raw.py` for batch jobs
 - Demonstrate different material types (`nanoparticle`, `porous`, and `slab`)
 - Produce XYZ structures and CSV results (VASP inputs are opt-in via `write_vasp_inputs=True`)
 
@@ -219,7 +219,7 @@ from metalsurfer.surface_prep import prepare_substrate
 config = AdsorptionConfig(
     material_type="slab",  # "slab", "nanoparticle", or "porous"
     seed=42,
-    bo_enabled=True,  # defaults: ridge surrogate, EI acquisition, autotuned batch sizes
+    # Defaults: ridge surrogate, EI acquisition, autotuned batch sizes
 )
 
 slab = prepare_substrate(
@@ -298,6 +298,7 @@ Important saturation behaviors:
 - Competitive saturation with BO: call `run_saturation_bo`; each adsorbate trains and carries forward its own BO state independently (observations are not shared across adsorbates).
 - By default, `saturation_save_all_placements=True` writes every validated placement per step under `xyz_structures/.../step_{NNN}_placements/`, plus `saturation_placements_detailed.csv`. Matching `vasp_inputs/...` trees are written only when `write_vasp_inputs=True`. Set `saturation_save_all_placements=False` to persist only the per-step best structures (smaller disk use).
 - By default, `saturation_discard_topology_rearrangements=True` re-checks the full adsorbate pool on each candidate **before** choosing the step winner: adsorbates must form the expected number of connected fragments (connectivity-only guard). This catches inter-adsorbate coupling or unexpected splitting that per-placement filtering can miss while allowing strong adsorbate-material interactions that preserve adsorbate connectivity. Set `False` to rank only by `E_ads`; the guard is also skipped when `skip_topology_check=True`.
+- When printing saturation completion summaries, pass `write_vasp_inputs=config.write_vasp_inputs` to `campaign.format_completion(...)` so the saved-files line matches actual output.
 - Contributor test markers (`gpu`, `slow`): see the [development guide](https://metalsurfer.readthedocs.io/en/latest/guides/development.html).
 
 ### Surface setup and modifiers

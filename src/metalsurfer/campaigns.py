@@ -503,6 +503,8 @@ def run_saturation(
     run_metadata_out:
         Optional dict populated with timing and count metadata.
 
+    Notes
+    -----
     With ``save_results`` true, calls :func:`save_saturation_results` with the same ``config``.
     When ``config.save_benchmark_dataset`` is true, also writes
     ``adsorption_energies_detailed.csv`` from flattened step placements.
@@ -559,6 +561,8 @@ def run_saturation_bo(
     run_metadata_out:
         Optional dict populated with timing and count metadata.
 
+    Notes
+    -----
     With ``save_results`` true, calls :func:`save_saturation_results` with the same ``config``
     (after ``bo_enabled`` is set true).
     """

@@ -20,6 +20,7 @@ from ..exceptions import OptimizationError
 from ..io_results import results_dir_for
 from ..models import PlacementDescriptor, ReferenceEnergies, ScreeningResult
 from ..optimization import (
+    check_frozen_substrate_displacement,
     estimate_parallel_relaxation_capacity,
     frozen_indices_from_constraints,
     log_substrate_freeze_policy,
@@ -331,6 +332,20 @@ def _evaluate_optimized_candidate(
         )
     if opt_atoms.calc is None:
         opt_atoms.calc = calculator
+
+    ok, reason = check_frozen_substrate_displacement(
+        opt_atoms,
+        slab_atoms,
+        slab_size=len(slab_atoms),
+    )
+    if not ok:
+        logger.warning("%sfrozen substrate drift: %s", log_prefix, reason)
+        return None, PlacementFailureEvent(
+            placement_id=placement_id,
+            stage="validation",
+            reason=reason,
+            descriptor=descriptor,
+        )
 
     ok, reason = _validate_geometry(opt_atoms, slab_atoms, config)
     if not ok:

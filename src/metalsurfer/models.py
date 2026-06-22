@@ -506,14 +506,21 @@ class SaturationRunResult:
             )
         return flattened_runs
 
-    def format_completion(self, *, label: str, results_dir: str) -> str:
+    def format_completion(
+        self,
+        *,
+        label: str,
+        results_dir: str,
+        write_vasp_inputs: bool = False,
+    ) -> str:
         """Return a canonical multi-line saturation completion summary."""
+        suffix = "(XYZ, POSCAR, CSV)" if write_vasp_inputs else "(XYZ, CSV)"
         return "\n".join(
             [
                 f"{label} complete:",
                 f"  Molecules at saturation: {self.n_molecules_at_saturation}",
                 f"  Total steps: {len(self.steps)}",
-                f"  Results saved to {Path(results_dir).as_posix()}/ (XYZ, POSCAR, CSV)",
+                f"  Results saved to {Path(results_dir).as_posix()}/ {suffix}",
             ]
         )
 
@@ -629,7 +636,13 @@ class SaturationCampaignResult:
         """Return a canonical human-readable failure summary."""
         return _format_failure_summary_text(self.failure_summary)
 
-    def format_completion(self, *, label: str, results_dir: str) -> str:
+    def format_completion(
+        self,
+        *,
+        label: str,
+        results_dir: str,
+        write_vasp_inputs: bool = False,
+    ) -> str:
         """Return a canonical multi-line saturation completion summary."""
         if not self.runs:
             lines = [f"{label}: no saturation results produced."]
@@ -639,8 +652,13 @@ class SaturationCampaignResult:
             return "\n".join(lines)
 
         if len(self.runs) == 1 and isinstance(self.runs[0], SaturationRunResult):
-            return self.runs[0].format_completion(label=label, results_dir=results_dir)
+            return self.runs[0].format_completion(
+                label=label,
+                results_dir=results_dir,
+                write_vasp_inputs=write_vasp_inputs,
+            )
 
+        suffix = "(XYZ, POSCAR, CSV)" if write_vasp_inputs else "(XYZ, CSV)"
         total_steps = sum(len(run.steps) for run in self.runs)
         total_mols = sum(run.n_molecules_at_saturation for run in self.runs)
         return "\n".join(
@@ -648,7 +666,7 @@ class SaturationCampaignResult:
                 f"{label} complete:",
                 f"  Molecules at saturation: {total_mols}",
                 f"  Total steps: {total_steps}",
-                f"  Results saved to {Path(results_dir).as_posix()}/ (XYZ, POSCAR, CSV)",
+                f"  Results saved to {Path(results_dir).as_posix()}/ {suffix}",
             ]
         )
 

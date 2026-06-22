@@ -2,11 +2,13 @@
 """Compute the binding (adsorption) energy of H2 on a small Pt nanocluster (12 atoms).
 
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
+Run from project root: pip install -e ".[mlip]"
 
-The hand-built Pt₁₂ cluster keeps its input geometry during ``prepare_substrate``
-(``slab_relaxation_mode="none"``): unrestricted ionic prep relaxation can distort
-small hand-built nanoparticles and yield unreliable adsorption energies.
+Hand-built Pt₁₂ keeps its input geometry during ``prepare_substrate``
+(``slab_relaxation_mode="none"``). All Pt atoms receive ASE ``FixAtoms`` constraints
+and stay fixed during placement relaxation. With ``skip_topology_check=True``, H₂ is
+placed dissociatively on two cluster sites and may relax to separated H atoms; E_ads
+still uses molecular E(H₂) as reference (dissociated minima may show positive E_ads).
 
 If you hit CUDA OOM on a 15GB GPU, try:
   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/h2_pt12_binding_energy.py

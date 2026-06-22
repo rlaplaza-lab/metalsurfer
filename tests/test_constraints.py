@@ -1,15 +1,18 @@
 """Tests for top-layer identification and frozen-index computation."""
 
 import numpy as np
+from ase import Atoms
 from ase.constraints import FixAtoms
 
 from metalsurfer.optimization import (
+    check_frozen_substrate_displacement,
     compute_frozen_indices,
     format_atom_index_ranges,
     frozen_indices_from_constraints,
     identify_relaxable_surface_indices,
     identify_top_layer_indices,
     log_substrate_freeze_policy,
+    max_frozen_substrate_displacement,
 )
 from metalsurfer.surface_prep import apply_surface_constraints
 
@@ -143,3 +146,28 @@ def test_relaxable_surface_porous_pore_boundary():
         top_layer_tolerance=0.5,
     )
     assert frozen_indices_from_constraints(constrained) == frozen
+
+
+def test_check_frozen_substrate_displacement_detects_drift():
+    slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
+    slab = apply_surface_constraints(slab, relax_top_layer=False)
+    combined = slab.copy()
+    combined += Atoms("H", positions=[[0.0, 0.0, 8.0]])
+    drifted = combined.copy()
+    drifted.set_constraint()
+    pos = drifted.get_positions()
+    pos[0, 0] += 0.05
+    drifted.set_positions(pos)
+    ok, reason = check_frozen_substrate_displacement(drifted, slab, slab_size=len(slab))
+    assert not ok
+    assert "displaced" in reason
+    assert max_frozen_substrate_displacement(drifted, slab, slab_size=len(slab)) > 0.04
+
+
+def test_check_frozen_substrate_displacement_passes_when_fixed():
+    slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
+    slab = apply_surface_constraints(slab, relax_top_layer=False)
+    combined = slab.copy()
+    combined += Atoms("H", positions=[[0.0, 0.0, 8.0]])
+    ok, _ = check_frozen_substrate_displacement(combined, slab, slab_size=len(slab))
+    assert ok

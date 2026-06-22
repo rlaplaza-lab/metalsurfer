@@ -76,7 +76,10 @@ Across all run modes, the physical pipeline follows seven stages:
    orientation, tilt, azimuth, and height.  Site detection is
    Voronoi-based and **orientation-aware** (slab normal, not Cartesian
    ``z``): hybrid topology + Voronoi for slabs, full-framework Voronoi for
-   nanoparticles, periodic images for porous cells.  See
+   nanoparticles, periodic images for porous cells.  Homonuclear diatomics
+   on slabs or nanoparticles can use a **dissociative** branch when
+   ``skip_topology_check=True`` (two surface sites, site-specific outward
+   normals).  See
    ``placement/sites.py`` and the `Site detection` section in
    `CORE_SYSTEM_EXPLANATION.md
    <https://github.com/rlaplaza-lab/metalsurfer/blob/main/CORE_SYSTEM_EXPLANATION.md>`_.
@@ -219,6 +222,9 @@ internal modules.
   ``to_flattened_runs()`` and ``format_completion(...)``.
 - :class:`~metalsurfer.SaturationCampaignResult` provides
   ``format_completion(...)`` and ``format_failure_summary()`` for campaign runs.
+  Pass ``write_vasp_inputs=config.write_vasp_inputs`` to ``format_completion``
+  so the saved-files suffix matches actual output (``(XYZ, CSV)`` vs
+  ``(XYZ, POSCAR, CSV)``).
 - :class:`~metalsurfer.BindingCampaignResult` provides
   ``format_summary(...)``, ``format_screening_complete()``, and
   ``format_results_saved_line(...)``.

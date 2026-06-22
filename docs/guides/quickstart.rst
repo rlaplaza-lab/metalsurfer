@@ -20,13 +20,19 @@ Installation
 
 Requires **Python 3.12 or newer**.
 
-Core dependencies only:
+Core dependencies only (library import and CPU-only workflow tests):
 
 .. code-block:: bash
 
    pip install -e .
 
-For TorchSim/FairChem-backed relaxation and the developer toolchain:
+**Running examples, scripts, or any ``run_*`` campaign requires the MLIP stack:**
+
+.. code-block:: bash
+
+   pip install -e ".[mlip]"
+
+For TorchSim/FairChem-backed relaxation plus the developer toolchain:
 
 .. code-block:: bash
 
@@ -160,7 +166,8 @@ z-layout, PBC, freeze constraints, and validation:
 
 **Nanoparticle** — minimal Pt₄ snippet below; the runnable
 ``examples/h2_pt12_binding_energy.py`` uses the same workflow with a 12-atom Pt
-cluster:
+cluster and ``skip_topology_check=True`` so H₂ is placed dissociatively on two
+surface sites (molecular H₂ connectivity is not enforced after relaxation):
 
 .. code-block:: python
 
@@ -168,7 +175,12 @@ cluster:
    from metalsurfer import AdsorptionConfig, run_adsorption
    from metalsurfer.surface_prep import prepare_substrate
 
-   config = AdsorptionConfig(material_type="nanoparticle", seed=42)
+   config = AdsorptionConfig(
+       material_type="nanoparticle",
+       seed=42,
+       slab_relaxation_mode="none",  # hand-built clusters: keep input geometry
+       skip_topology_check=True,  # dissociative H2 on two cluster sites
+   )
 
    cluster_atoms = Atoms(
        "Pt4",
@@ -222,7 +234,6 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
    config = AdsorptionConfig(
        material_type="slab",
        seed=42,
-       bo_enabled=True,
        # Defaults: ridge surrogate, EI acquisition, autotuned batch sizes
    )
 
@@ -312,9 +323,9 @@ Important saturation behaviors:
 - In-plane supercell expansion must be done during prep
   (``auto_resize_substrate_for_molecule`` / ``resize_substrate_for_molecule``) before
   calling campaign APIs.
-- When ``bo_enabled=True``, the saturation loop can reuse prior-step BO
-  observations through the ``bo_transfer_*`` settings (or call
-  :func:`~metalsurfer.run_saturation_bo`, which forces BO on).
+- Use :func:`~metalsurfer.run_saturation_bo` for BO-guided saturation; it
+  forces BO on and can reuse prior-step observations through the
+  ``bo_transfer_*`` settings.
 - When ``multi_molecule_saturation=True`` and multiple molecules are provided
   (in-memory list or CSV), the workflow switches to competitive saturation.
 - By default, ``saturation_discard_topology_rearrangements=True`` validates the
@@ -330,6 +341,10 @@ Important saturation behaviors:
 - By default, runs persist XYZ structures and CSV tables. Set
   ``write_vasp_inputs=True`` to also write ``vasp_inputs/`` placement bundles
   and reference-slab POSCAR files during surface prep.
+- When printing completion summaries, pass
+  ``write_vasp_inputs=config.write_vasp_inputs`` to
+  :meth:`~metalsurfer.SaturationCampaignResult.format_completion` so the
+  saved-files line matches what was written.
 
 A full defected-surface saturation example (fixed substrate, adatom prep) lives
 under ``examples/bipyridine_au111_defects_saturation_raw.py``; see also

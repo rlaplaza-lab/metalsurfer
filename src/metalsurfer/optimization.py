@@ -583,6 +583,58 @@ def frozen_indices_from_constraints(atoms: Atoms) -> list[int]:
     return sorted(set(indices))
 
 
+_DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG = 0.01
+
+
+def max_frozen_substrate_displacement(
+    optimized: Atoms,
+    reference_slab: Atoms,
+    *,
+    slab_size: int | None = None,
+    frozen_indices: list[int] | None = None,
+) -> float:
+    """Maximum Cartesian displacement (Å) among constrained substrate atoms."""
+    if slab_size is None:
+        slab_size = len(reference_slab)
+    if frozen_indices is None:
+        frozen_indices = frozen_indices_from_constraints(reference_slab)
+    if not frozen_indices:
+        return 0.0
+    ref_pos = reference_slab.get_positions()
+    opt_pos = optimized.get_positions()
+    max_disp = 0.0
+    for idx in frozen_indices:
+        if idx >= slab_size:
+            continue
+        max_disp = max(max_disp, float(np.linalg.norm(opt_pos[idx] - ref_pos[idx])))
+    return max_disp
+
+
+def check_frozen_substrate_displacement(
+    optimized: Atoms,
+    reference_slab: Atoms,
+    *,
+    slab_size: int | None = None,
+    tolerance_ang: float = _DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG,
+) -> tuple[bool, str]:
+    """Return whether *optimized* kept FixAtoms substrate indices fixed."""
+    max_disp = max_frozen_substrate_displacement(
+        optimized,
+        reference_slab,
+        slab_size=slab_size,
+    )
+    frozen = frozen_indices_from_constraints(reference_slab)
+    if not frozen:
+        return True, "no FixAtoms constraints on reference slab"
+    if max_disp > tolerance_ang:
+        return (
+            False,
+            f"frozen substrate atoms displaced up to {max_disp:.4f} A "
+            f"(tolerance {tolerance_ang:.4f} A)",
+        )
+    return True, f"frozen substrate displacement {max_disp:.6f} A"
+
+
 def format_atom_index_ranges(indices: list[int]) -> str:
     """Format sorted atom indices as compact ranges (e.g. ``0-31, 40-47``)."""
     if not indices:

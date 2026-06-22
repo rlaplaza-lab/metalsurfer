@@ -8,7 +8,7 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 
 | Script | Description |
 |--------|-------------|
-| `h2_pt12_binding_energy.py` | H₂ on a Pt₁₂ nanoparticle (`prepare_substrate`) |
+| `h2_pt12_binding_energy.py` | H₂ on a Pt₁₂ nanoparticle (`skip_topology_check=True` for dissociative adsorption) |
 | `co2_mof_binding_energy.py` | CO₂ in a MOF (porous; `prepare_substrate`) |
 | `ethene_ru_slab_binding_energy.py` | Ethene on Ru(0001) (`prepare_substrate`) |
 | `bipyridine_au111_defects_saturation_raw.py` | HPC-scale saturation on defected Au(111) (1000 placements; not a quick demo) |

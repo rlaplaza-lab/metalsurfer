@@ -8,6 +8,7 @@ from metalsurfer.models import (
     MoleculeCampaignSummary,
     MoleculeSummary,
     ReferenceEnergies,
+    SaturationCampaignResult,
     SaturationRunResult,
     SaturationStepResult,
     ScreeningResult,
@@ -283,6 +284,54 @@ def test_saturation_run_result():
     assert "Water saturation complete:" in text
     assert "Molecules at saturation: 1" in text
     assert "Results saved to results_water/" in text
+    assert "(XYZ, CSV)" in text
+    assert "POSCAR" not in text
+    assert "POSCAR" in sr.format_completion(
+        label="Water saturation",
+        results_dir="results_water",
+        write_vasp_inputs=True,
+    )
+
+
+def test_saturation_campaign_result_format_completion():
+    step = SaturationStepResult(
+        step=1,
+        molecule="water",
+        n_molecules_on_slab=0,
+        best_result=None,
+        all_results=[],
+    )
+    run = SaturationRunResult(
+        molecule="water",
+        steps=[step],
+        n_molecules_at_saturation=1,
+        final_slab_atoms=make_slab(),
+    )
+    campaign = SaturationCampaignResult(
+        mode="non_bo",
+        surface_type="water",
+        runs=[run],
+    )
+    text = campaign.format_completion(
+        label="Water saturation",
+        results_dir="results_water",
+    )
+    assert "(XYZ, CSV)" in text
+    assert "POSCAR" not in text
+
+    multi = SaturationCampaignResult(
+        mode="non_bo",
+        surface_type="multi",
+        runs=[run, run],
+    )
+    multi_text = multi.format_completion(
+        label="Multi saturation",
+        results_dir="results_multi",
+        write_vasp_inputs=True,
+    )
+    assert "Multi saturation complete:" in multi_text
+    assert "Molecules at saturation: 2" in multi_text
+    assert "(XYZ, POSCAR, CSV)" in multi_text
 
 
 def test_binding_campaign_result_formatters():

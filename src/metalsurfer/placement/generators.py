@@ -120,6 +120,14 @@ class _PlacementContext:
     rotated_pos: np.ndarray
 
 
+@dataclass(frozen=True)
+class _DissociativeSitePair:
+    xyz1: np.ndarray
+    normal1: np.ndarray
+    xyz2: np.ndarray
+    normal2: np.ndarray
+
+
 @dataclass
 class _SpecGridInfo:
     is_dissociative: bool
@@ -811,7 +819,7 @@ def _spec_grid_info(
     """Compute the spec-enumeration inputs once for both enumerate and estimate."""
     is_dissociative = (
         config.skip_topology_check
-        and config.material_type == "slab"
+        and config.material_type in ("slab", "nanoparticle")
         and _is_dissociable_diatomic(conformers[0])
     )
     _ctx = (
@@ -840,7 +848,7 @@ def _spec_grid_info(
         if full_slab is not None and len(full_slab) > len(slab):
             existing_ads_pos = full_slab.get_positions()[len(slab) :]
         n_hollow_pairs = len(
-            _get_hollow_site_pairs(
+            _get_dissociative_site_pairs(
                 working_slab,
                 config,
                 slab_for_sites=slab,
@@ -1129,46 +1137,83 @@ def _is_dissociable_diatomic(adsorbate: Atoms) -> bool:
     return len(syms) == 2 and syms[0] == syms[1]
 
 
-def _get_hollow_site_pairs(
+def _site_outward_normal(
+    site_xyz: np.ndarray,
+    site_entry: dict[str, object],
+    *,
+    material_type: str,
+    reference_positions: np.ndarray,
+    slab_normal: np.ndarray,
+) -> np.ndarray:
+    """Unit outward normal for dissociative fragment placement."""
+    if "normal" in site_entry:
+        normal = np.asarray(site_entry["normal"], dtype=float)
+        norm = float(np.linalg.norm(normal))
+        if norm > _VECTOR_NORM_EPS:
+            return normal / norm
+    if material_type == "nanoparticle":
+        com = np.mean(reference_positions, axis=0)
+        outward = np.asarray(site_xyz, dtype=float) - com
+        norm = float(np.linalg.norm(outward))
+        if norm > _VECTOR_NORM_EPS:
+            return outward / norm
+    return np.asarray(slab_normal, dtype=float)
+
+
+def _get_dissociative_site_pairs(
     slab: Atoms,
     config: AdsorptionConfig,
     slab_for_sites: Atoms | None = None,
     existing_adsorbate_positions: np.ndarray | None = None,
-) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Return list of (xyz1, xyz2) hollow-site pairs suitable for dissociative placement."""
+) -> list[_DissociativeSitePair]:
+    """Return outward-oriented site pairs for dissociative diatomic placement."""
+    if config.material_type not in ("slab", "nanoparticle"):
+        return []
+
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
     pbc = list(slab.get_pbc())
     pbc_slab = np.array([bool(pbc[0]), bool(pbc[1]), False])
+    slab_normal = sts._slab_normal(cell_arr)
 
     raw = sts.get_unified_sites(
         sites_slab,
         top_layer_tolerance=config.top_layer_tolerance,
-        material_type="slab",
+        material_type=config.material_type,
+        probe_radius=config.voronoi_probe_radius,
+        max_site_distance=config.voronoi_max_site_distance,
+        enrich=config.voronoi_site_enrichment,
+        site_classification_method=config.site_classification_method,
     )
-    hollow_entries = [s for s in raw if s.get("site_type") in ("hollow", "pore")]
-    if len(hollow_entries) < 2:
+    if config.material_type == "slab":
+        site_entries = [s for s in raw if s.get("site_type") in ("hollow", "pore")]
+    else:
+        site_entries = list(raw)
+    if len(site_entries) < 2:
         return []
 
-    hollow_xyz = np.array(
-        [np.asarray(s["xyz"], dtype=float) for s in hollow_entries], dtype=float
+    site_xyz = np.array(
+        [np.asarray(s["xyz"], dtype=float) for s in site_entries], dtype=float
     )
-    keep = sts._deduplicate_points(
-        hollow_xyz,
-        config.hollow_site_dedup_tolerance,
-        cell=cell_arr,
-        pbc=pbc_slab,
-    )
-    hollow_xyz = hollow_xyz[keep]
-    if len(hollow_xyz) < 2:
+    if config.material_type == "slab":
+        keep = sts._deduplicate_points(
+            site_xyz,
+            config.hollow_site_dedup_tolerance,
+            cell=cell_arr,
+            pbc=pbc_slab,
+        )
+        site_xyz = site_xyz[keep]
+        site_entries = [site_entries[i] for i in np.nonzero(keep)[0]]
+    if len(site_xyz) < 2:
         return []
 
     if (
         existing_adsorbate_positions is not None
         and len(existing_adsorbate_positions) > 0
     ):
-        available: list[np.ndarray] = []
-        for site_pos in hollow_xyz:
+        available_xyz: list[np.ndarray] = []
+        available_entries: list[dict[str, object]] = []
+        for entry, site_pos in zip(site_entries, site_xyz, strict=True):
             d = geom.calculate_min_distance(
                 site_pos.reshape(1, 3),
                 existing_adsorbate_positions,
@@ -1176,10 +1221,12 @@ def _get_hollow_site_pairs(
                 pbc=pbc,
             )
             if d >= config.min_initial_distance:
-                available.append(site_pos)
-        hollow_xyz = np.asarray(available, dtype=float)
-        if len(hollow_xyz) < 2:
+                available_xyz.append(site_pos)
+                available_entries.append(entry)
+        if len(available_xyz) < 2:
             return []
+        site_xyz = np.asarray(available_xyz, dtype=float)
+        site_entries = available_entries
 
     symbols = sites_slab.get_chemical_symbols()
     top_positions = sites_slab.get_positions()
@@ -1196,7 +1243,7 @@ def _get_hollow_site_pairs(
     ]
     mean_top_radius = float(np.mean(top_radii)) if top_radii else 1.0
 
-    site_3d = hollow_xyz
+    site_3d = site_xyz
     if len(site_3d) >= 2:
         _nn_tree = KDTree(site_3d)
         nn_d, _ = _nn_tree.query(site_3d, k=2)
@@ -1206,17 +1253,10 @@ def _get_hollow_site_pairs(
         else:
             mean_nn_sep = float(np.mean(nn_d_arr))
 
-        # Adaptive approach: use the actual hollow site geometry as a guide
-        # For close-packed surfaces, hollow sites are closer together, so we need
-        # to be more permissive. For open surfaces, we can be more strict.
-        #
-        # Use a geometric mean of the atomic-scale constraint and the surface-scale constraint
         atomic_constraint = _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE * (
             2.0 * mean_top_radius
         )
-        surface_constraint = 0.8 * mean_nn_sep  # Allow 80% of NN distance as minimum
-
-        # Use the more permissive of the two constraints, but not below the absolute floor
+        surface_constraint = 0.8 * mean_nn_sep
         adaptive_min = min(atomic_constraint, surface_constraint)
         min_fragment_sep = max(
             _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM, adaptive_min
@@ -1238,17 +1278,59 @@ def _get_hollow_site_pairs(
     tree = KDTree(site_3d)
     candidate_pairs = tree.query_pairs(r=max_adjacent_sep)
 
-    pairs: list[tuple[np.ndarray, np.ndarray]] = []
+    pairs: list[_DissociativeSitePair] = []
     for i, j in candidate_pairs:
-        _, dists = find_mic(
-            (site_3d[i] - site_3d[j]).reshape(1, 3),
-            cell_arr,
-            pbc=pbc,
-        )
-        d = float(dists[0])
+        if config.material_type == "slab":
+            _, dists = find_mic(
+                (site_3d[i] - site_3d[j]).reshape(1, 3),
+                cell_arr,
+                pbc=pbc,
+            )
+            d = float(dists[0])
+        else:
+            d = float(np.linalg.norm(site_3d[i] - site_3d[j]))
         if min_fragment_sep <= d <= max_adjacent_sep:
-            pairs.append((site_3d[i].copy(), site_3d[j].copy()))
+            normal_i = _site_outward_normal(
+                site_3d[i],
+                site_entries[i],
+                material_type=config.material_type,
+                reference_positions=top_positions,
+                slab_normal=slab_normal,
+            )
+            normal_j = _site_outward_normal(
+                site_3d[j],
+                site_entries[j],
+                material_type=config.material_type,
+                reference_positions=top_positions,
+                slab_normal=slab_normal,
+            )
+            pairs.append(
+                _DissociativeSitePair(
+                    xyz1=site_3d[i].copy(),
+                    normal1=normal_i,
+                    xyz2=site_3d[j].copy(),
+                    normal2=normal_j,
+                )
+            )
     return pairs
+
+
+def _get_hollow_site_pairs(
+    slab: Atoms,
+    config: AdsorptionConfig,
+    slab_for_sites: Atoms | None = None,
+    existing_adsorbate_positions: np.ndarray | None = None,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Return hollow-site xyz pairs (slab dissociative placements; legacy API)."""
+    return [
+        (pair.xyz1, pair.xyz2)
+        for pair in _get_dissociative_site_pairs(
+            slab,
+            config,
+            slab_for_sites=slab_for_sites,
+            existing_adsorbate_positions=existing_adsorbate_positions,
+        )
+    ]
 
 
 def _generate_dissociative_placement_from_spec(
@@ -1258,8 +1340,8 @@ def _generate_dissociative_placement_from_spec(
     config: AdsorptionConfig,
     slab_for_sites: Atoms | None = None,
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
-    """Place fragments at different hollow sites based on spec pair index."""
-    if config.material_type != "slab":
+    """Place homonuclear-diatomic fragments at two surface sites."""
+    if config.material_type not in ("slab", "nanoparticle"):
         return None, f"dissociative_not_supported_for_{config.material_type}"
 
     if not _is_dissociable_diatomic(adsorbate):
@@ -1271,7 +1353,7 @@ def _generate_dissociative_placement_from_spec(
     if slab_for_sites is not None and len(slab) > len(slab_for_sites):
         existing_ads_pos = slab.get_positions()[len(slab_for_sites) :]
 
-    pairs = _get_hollow_site_pairs(
+    pairs = _get_dissociative_site_pairs(
         slab,
         config,
         slab_for_sites=slab_for_sites,
@@ -1281,18 +1363,17 @@ def _generate_dissociative_placement_from_spec(
         return None, "no_hollow_site_pairs"
 
     pair_idx = spec.site_index % len(pairs)
-    xyz1, xyz2 = pairs[pair_idx]
+    site_pair = pairs[pair_idx]
 
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
-    n_hat = sts._slab_normal(cell_arr)
     heights = sts._height_along_slab_normal(sites_slab.get_positions(), cell_arr)
     h_surface = float(np.max(heights))
     z_lo, z_hi = config.placement_z_range
     z_offset = z_lo + spec.z_fraction * (z_hi - z_lo)
 
     syms = adsorbate.get_chemical_symbols()
-    pos1 = np.asarray(xyz1, dtype=float) + float(z_offset) * n_hat
-    pos2 = np.asarray(xyz2, dtype=float) + float(z_offset) * n_hat
+    pos1 = np.asarray(site_pair.xyz1, dtype=float) + float(z_offset) * site_pair.normal1
+    pos2 = np.asarray(site_pair.xyz2, dtype=float) + float(z_offset) * site_pair.normal2
 
     result = Atoms(symbols=syms, positions=[pos1, pos2])
     result.set_cell(slab.get_cell())

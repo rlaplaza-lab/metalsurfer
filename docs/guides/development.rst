@@ -6,11 +6,18 @@ Setup
 
 Requires **Python 3.12 or newer**.
 
-Core install:
+Core install (library import and CPU-only workflow tests):
 
 .. code-block:: bash
 
    pip install -e .
+
+Running ``examples/``, ``scripts/``, or any ``run_*`` campaign requires the MLIP
+stack:
+
+.. code-block:: bash
+
+   pip install -e ".[mlip]"
 
 Developer tooling (ruff, mypy, pytest, coverage):
 

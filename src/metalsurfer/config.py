@@ -106,8 +106,11 @@ class AdsorptionConfig:
     """Configuration for an adsorption screening run. Primary knobs: model_name, num_conformers, num_placements.
 
     For dissociative adsorption (e.g. H2 → 2H) or other processes involving bond breaking,
-    set skip_topology_check=True to disable molecular decomposition checks.
-    Set skip_desorption_check=True to disable post-optimization distance validation.
+    set skip_topology_check=True to disable molecular decomposition checks and enable
+    dissociative initial placements on slabs and nanoparticles for homonuclear diatomics.
+    Reference energies remain E(isolated molecule); positive E_ads can result when the
+    relaxed adsorbate is dissociated. Set skip_desorption_check=True to disable
+    post-optimization distance validation.
 
     See the Key Attributes table below for detailed descriptions of all configuration options.
     """
