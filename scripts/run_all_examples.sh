@@ -33,7 +33,7 @@ mkdir -p "$LOG_DIR"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 
 EXAMPLES=(
-  examples/h2_pt12_binding_energy.py
+  examples/ethene_pt12_binding_energy.py
   examples/ethene_ru_slab_binding_energy.py
   examples/co2_mof_binding_energy.py
   examples/camphor_cu111_binding_energy.py
@@ -41,7 +41,7 @@ EXAMPLES=(
 
 # Must match each example's surface_type / results_dir (not the script basename).
 declare -A EXAMPLE_RESULTS=(
-  [examples/h2_pt12_binding_energy.py]=results_h2_pt12
+  [examples/ethene_pt12_binding_energy.py]=results_ethene_pt12
   [examples/ethene_ru_slab_binding_energy.py]=results_ethene_ru_slab
   [examples/co2_mof_binding_energy.py]=results_co2_mof
   [examples/camphor_cu111_binding_energy.py]=results_camphor_cu111

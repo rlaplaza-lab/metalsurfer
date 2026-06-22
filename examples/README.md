@@ -8,7 +8,7 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 
 | Script | Description |
 |--------|-------------|
-| `h2_pt12_binding_energy.py` | H₂ on a Pt₁₂ nanoparticle (`skip_topology_check=True` for dissociative adsorption) |
+| `ethene_pt12_binding_energy.py` | Ethene on a Pt₁₂ nanoparticle (`material_type="nanoparticle"`) |
 | `co2_mof_binding_energy.py` | CO₂ in a MOF (porous; `prepare_substrate`) |
 | `ethene_ru_slab_binding_energy.py` | Ethene on Ru(0001) (`prepare_substrate`) |
 | `bipyridine_au111_defects_saturation_raw.py` | HPC-scale saturation on defected Au(111) (1000 placements; not a quick demo) |
@@ -20,7 +20,9 @@ memory probing at workflow start. For saturation with Bayesian placement search,
 `run_saturation_bo`.
 
 Quick examples print a `campaign.format_summary(...)` block on completion; inspect
-`campaign.failure_summaries` when a molecule reports no valid placements.
+`campaign.failure_summaries` when a molecule reports no valid placements. Each binding
+demo exits with code 1 when it finds too few valid placements or when the best
+adsorption energy falls outside a physically plausible window for that system.
 
 `prepare_substrate` equilibrates substrate ionic positions by default (`slab_relaxation_mode="ionic_only"`) and freezes the entire substrate during adsorption by default. `relax_top_layer=True` leaves the exposed surface free; which atoms depend on `material_type` (slab top layer, nanoparticle outer shell, porous pore boundary). See the [surface engineering guide](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html). Loaded experimental or saturation slabs use `slab_relaxation_mode="none"` (e.g. `co2_mof`, `camphor_cu111`, `scripts/furanics_go*_binding_energy.py`, `scripts/vanillin_on_h_saturated_ni111.py` for the loaded slab).
 

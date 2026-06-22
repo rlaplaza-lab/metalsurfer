@@ -4,17 +4,46 @@
 This example creates a Ru(0001) slab and computes ethene adsorption energy using metalsurfer.
 
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
+Run from project root: pip install -e ".[mlip]"
 
 Uses modest settings for quick demonstration (similar to test suite).
 """
 
+from __future__ import annotations
+
+import sys
+
 from metalsurfer import (
     AdsorptionConfig,
+    BindingCampaignResult,
     configure_logging,
     run_adsorption,
 )
 from metalsurfer.surface_prep import prepare_substrate
+
+
+def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> None:
+    if not campaign.molecule_summaries:
+        print("No molecule summaries produced.", file=sys.stderr)
+        raise SystemExit(1)
+
+    summary = campaign.molecule_summaries[0]
+    if summary.n_valid_placements < 3:
+        print(
+            f"Expected >= 3 valid placements, got {summary.n_valid_placements}.",
+            file=sys.stderr,
+        )
+        print(campaign.format_summary(results_dir=results_dir), file=sys.stderr)
+        raise SystemExit(1)
+
+    best = summary.best_adsorption_energy
+    if best is None or best >= 0.0:
+        print(
+            f"Expected favorable ethene binding (best E_ads < 0 eV), got {best}.",
+            file=sys.stderr,
+        )
+        print(campaign.format_summary(results_dir=results_dir), file=sys.stderr)
+        raise SystemExit(1)
 
 
 def main() -> int:
@@ -62,6 +91,7 @@ def main() -> int:
             results_dir=results_dir,
         )
     )
+    _validate_campaign(campaign, results_dir=results_dir)
     return 0
 
 

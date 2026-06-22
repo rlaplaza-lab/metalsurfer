@@ -224,7 +224,7 @@ explicitly:
   ``scripts/furanics_go*_binding_energy.py``, and
   ``scripts/vanillin_on_h_saturated_ni111.py`` for the loaded slab.
 - ``"ionic_only"`` (default) — equilibrate hand-built clusters or
-  unequilibrated ``Atoms`` before campaigns (e.g. ``examples/h2_pt12_binding_energy.py``).
+  unequilibrated ``Atoms`` before campaigns (e.g. ``examples/ethene_pt12_binding_energy.py``).
 
 ``relax_top_layer=True`` on ``prepare_substrate`` controls which substrate atoms
 move **during adsorption**, not prep equilibration (e.g. top GO layer or

@@ -5,7 +5,7 @@ This example loads a real MOF structure from a CIF file and computes CO2 adsorpt
 energy using metalsurfer.
 
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
+Run from project root: pip install -e ".[mlip]"
 
 If you hit CUDA OOM on a 15GB GPU, try:
   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/co2_mof_binding_energy.py
@@ -15,16 +15,51 @@ Uses RUBTAK01 MOF structure from:
 https://github.com/bafgreat/mofstructure/blob/main/tests/test_data/RUBTAK01.cif
 """
 
+from __future__ import annotations
+
 import os
+import sys
 
 from ase.io import read
 
 from metalsurfer import (
     AdsorptionConfig,
+    BindingCampaignResult,
     configure_logging,
     run_adsorption,
 )
 from metalsurfer.surface_prep import prepare_substrate
+
+
+def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> None:
+    if not campaign.molecule_summaries:
+        print("No molecule summaries produced.", file=sys.stderr)
+        raise SystemExit(1)
+
+    summary = campaign.molecule_summaries[0]
+    if summary.n_valid_placements < 3:
+        print(
+            f"Expected >= 3 valid placements, got {summary.n_valid_placements}.",
+            file=sys.stderr,
+        )
+        print(campaign.format_summary(results_dir=results_dir), file=sys.stderr)
+        raise SystemExit(1)
+
+    best = summary.best_adsorption_energy
+    if best is None or best >= 0.5:
+        print(
+            f"Expected weak physisorption (best E_ads < 0.5 eV), got {best}.",
+            file=sys.stderr,
+        )
+        print(campaign.format_summary(results_dir=results_dir), file=sys.stderr)
+        raise SystemExit(1)
+
+    if best < -2.0:
+        print(
+            f"Best E_ads {best:.4f} eV is unexpectedly strong for CO₂ in this MOF.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
 
 def main() -> int:
@@ -88,6 +123,7 @@ def main() -> int:
             results_dir=results_dir,
         )
     )
+    _validate_campaign(campaign, results_dir=results_dir)
     return 0
 
 

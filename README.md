@@ -36,10 +36,10 @@ The `[dev]` extra includes **ruff**, **mypy**, type stubs, and pytest tooling.
 
 Examples in `examples/` demonstrate basic usage and an advanced saturation workflow:
 
-### H2 Adsorption on Pt Nanocluster
+### Ethene Adsorption on Pt Nanocluster
 ```bash
-# 12-atom Pt cluster; skip_topology_check=True for dissociative H2 placement
-python examples/h2_pt12_binding_energy.py
+# 12-atom Pt cluster with ethene adsorption
+python examples/ethene_pt12_binding_energy.py
 ```
 
 ### CO2 Adsorption in MOF

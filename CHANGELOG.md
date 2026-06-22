@@ -17,6 +17,7 @@ All notable user-facing changes to Metalsurfer are documented here.
 - `skip_existing=True` (default) skips molecules already in `adsorption_energies_detailed.csv` (binding) or `saturation_summary.csv` (saturation).
 - `bo_total_budget` counts acquisition batches after the initial random batch, not total MLIP evaluations.
 - HPC scripts under `scripts/` are standalone copy-paste workflows aligned with `prepare_substrate`.
+- Quick binding examples validate favorable adsorption energies before exit; the Pt₁₂ demo uses ethene instead of H₂ (dissociative H₂ gives unphysical positive E_ads with a molecular reference).
 
 ### Documentation
 

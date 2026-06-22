@@ -55,7 +55,7 @@ and Bayesian workflows:
 
 .. code-block:: bash
 
-   python examples/h2_pt12_binding_energy.py
+   python examples/ethene_pt12_binding_energy.py
    python examples/co2_mof_binding_energy.py
    python examples/ethene_ru_slab_binding_energy.py
    python examples/bipyridine_au111_defects_saturation_raw.py
@@ -165,7 +165,7 @@ z-layout, PBC, freeze constraints, and validation:
    )
 
 **Nanoparticle** — minimal Pt₄ snippet below; the runnable
-``examples/h2_pt12_binding_energy.py`` uses the same workflow with a 12-atom Pt
+``examples/ethene_pt12_binding_energy.py`` uses the same workflow with a 12-atom Pt
 cluster and ``skip_topology_check=True`` so H₂ is placed dissociatively on two
 surface sites (molecular H₂ connectivity is not enforced after relaxation):
 

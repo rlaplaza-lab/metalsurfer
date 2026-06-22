@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import sys
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -1002,6 +1003,28 @@ def run_geometry_comparison(
     return 0
 
 
+def _validate_campaign(campaign: BindingCampaignResult) -> None:
+    if not campaign.molecule_summaries:
+        print("No molecule summaries produced.", file=sys.stderr)
+        raise SystemExit(1)
+
+    summary = campaign.molecule_summaries[0]
+    if summary.n_valid_placements < 5:
+        print(
+            f"Expected >= 5 valid BO minima, got {summary.n_valid_placements}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    best = summary.best_adsorption_energy
+    if best is None or best >= 0.0:
+        print(
+            f"Expected favorable camphor binding (best E_ads < 0 eV), got {best}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+
 def run_campaign(config: AdsorptionConfig) -> BindingCampaignResult:
     ensure_zenodo_reference_data()
     os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -1060,6 +1083,7 @@ def main() -> int:
 
     config = build_config(device=device)
     campaign = run_campaign(config)
+    _validate_campaign(campaign)
 
     print()
     print(
