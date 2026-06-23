@@ -158,13 +158,8 @@ _BOUNDING_BOX_CELL_PAD_ANGSTROM: float = 5.0
 _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM: float = 0.5
 _KD_RADIUS_SEARCH_PADDING: float = 1.5
 
-# Site z-base scaling constants.
-_NON_SLAB_Z_LO_FROM_NN_SCALE: float = 0.7
-_NON_SLAB_Z_HI_FROM_NN_SCALE: float = 1.2
 # Use unified fallback for molecular covalent radius
 _MOL_COVALENT_RADIUS_FALLBACK: float = _MEAN_COVALENT_RADIUS_FALLBACK
-_SITE_Z_RADIUS_REFERENCE_ANGSTROM: float = 2.0
-_SITE_Z_RADIUS_SHIFT_SCALE: float = 0.5
 
 # ---------------------------------------------------------------------------
 # Geometry numerics and shape/orientation heuristics

@@ -1368,10 +1368,15 @@ def _generate_dissociative_placement_from_spec(
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
     heights = sts._height_along_slab_normal(sites_slab.get_positions(), cell_arr)
     h_surface = float(np.max(heights))
-    z_lo, z_hi = config.placement_z_range
-    z_offset = z_lo + spec.z_fraction * (z_hi - z_lo)
 
     syms = adsorbate.get_chemical_symbols()
+    hollow_site: dict[str, object] = {"site_type": "hollow"}
+    z_lo, z_hi = sts._compute_site_z_base(config, sites_slab, hollow_site, syms)
+    site_offset = _site_type_z_offset(sites_slab, hollow_site, "hollow")
+    z_lo += site_offset
+    z_hi += site_offset
+    z_offset = z_lo + spec.z_fraction * (z_hi - z_lo)
+
     pos1 = np.asarray(site_pair.xyz1, dtype=float) + float(z_offset) * site_pair.normal1
     pos2 = np.asarray(site_pair.xyz2, dtype=float) + float(z_offset) * site_pair.normal2
 

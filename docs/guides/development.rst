@@ -104,7 +104,7 @@ Overnight / local parity helpers (optional):
 .. code-block:: bash
 
    ./scripts/run_all_tests.sh      # full CI test phases (fast, dependency, integration, MLIP, GPU)
-   ./scripts/run_all_examples.sh   # four official examples (excludes bipyridine); deletes cached results first
+   ./scripts/run_all_examples.sh   # five official examples (excludes bipyridine); deletes cached results first
 
 The example runner requires a GPU and ``pip install -e ".[mlip]"``. Camphor downloads
 reference assets on first run (~15 GB GPU, outbound HTTPS).

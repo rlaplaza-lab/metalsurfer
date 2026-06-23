@@ -11,6 +11,7 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 | `ethene_pt12_binding_energy.py` | Ethene on a Pt₁₂ nanoparticle (`material_type="nanoparticle"`) |
 | `co2_mof_binding_energy.py` | CO₂ in a MOF (porous; `prepare_substrate`) |
 | `ethene_ru_slab_binding_energy.py` | Ethene on Ru(0001) (`prepare_substrate`) |
+| `h2_ru_slab_binding_energy.py` | H₂ dissociative adsorption on Ru(0001) (`skip_topology_check=True`) |
 | `bipyridine_au111_defects_saturation_raw.py` | HPC-scale saturation on defected Au(111) (1000 placements; not a quick demo) |
 | `camphor_cu111_binding_energy.py` | (1S)-camphor on Cu(111) vs Järvi et al. BOSS benchmark (BO, 15GB GPU) |
 
@@ -19,10 +20,10 @@ Demos set explicit small `num_placements` for quick runs. For production screeni
 memory probing at workflow start. For saturation with Bayesian placement search, use
 `run_saturation_bo`.
 
-Quick examples print a `campaign.format_summary(...)` block on completion; inspect
-`campaign.failure_summaries` when a molecule reports no valid placements. Each binding
-demo exits with code 1 when it finds too few valid placements or when the best
-adsorption energy falls outside a physically plausible window for that system.
+Most binding demos validate favorable molecular E_ads before exit. The H₂/Ru(0001) demo
+uses ``skip_topology_check=True`` for dissociative hollow-site placements; it checks that
+the dissociative workflow completes with adsorbed geometries (molecular or dissociated
+H₂ after relaxation).
 
 `prepare_substrate` equilibrates substrate ionic positions by default (`slab_relaxation_mode="ionic_only"`) and freezes the entire substrate during adsorption by default. `relax_top_layer=True` leaves the exposed surface free; which atoms depend on `material_type` (slab top layer, nanoparticle outer shell, porous pore boundary). See the [surface engineering guide](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html). Loaded experimental or saturation slabs use `slab_relaxation_mode="none"` (e.g. `co2_mof`, `camphor_cu111`, `scripts/furanics_go*_binding_energy.py`, `scripts/vanillin_on_h_saturated_ni111.py` for the loaded slab).
 

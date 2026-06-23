@@ -92,8 +92,6 @@ def _run_h2_on_pt12():
         skip_desorption_check=False,
         stage1_steps=50,
         stage2_steps=500,
-        placement_z_range=(1.5, 4.0),
-        min_initial_distance=1.5,
     )
 
     nanocluster = prepare_substrate(

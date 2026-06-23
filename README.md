@@ -54,6 +54,12 @@ python examples/co2_mof_binding_energy.py
 python examples/ethene_ru_slab_binding_energy.py
 ```
 
+### H₂ Dissociative Adsorption on Ru(0001)
+```bash
+# Ru(0001) slab; skip_topology_check=True for H2 → 2H placements
+python examples/h2_ru_slab_binding_energy.py
+```
+
 ### Camphor on Cu(111) (Bayesian, GPU-heavy)
 ```bash
 # BO placement search on a literature DFT slab (slab_relaxation_mode="none")

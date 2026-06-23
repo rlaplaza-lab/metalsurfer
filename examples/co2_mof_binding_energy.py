@@ -97,8 +97,6 @@ def main() -> int:
         skip_desorption_check=False,
         stage1_steps=50,
         stage2_steps=500,
-        placement_z_range=(2.0, 6.0),
-        min_initial_distance=1.8,
     )
 
     mof_slab = prepare_substrate(

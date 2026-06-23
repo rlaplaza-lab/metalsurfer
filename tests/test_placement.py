@@ -1189,6 +1189,88 @@ def test_resolve_surface_ref_rough_slab():
     assert not is_local_g
 
 
+def test_compute_site_z_base_multiplicative_from_covalent_radii():
+    """z_lo/hi scale with placement_z_range × (r_mol + r_surface)."""
+    from ase.data import atomic_numbers, covalent_radii
+
+    slab = make_slab()
+    top_index = int(np.argmax(slab.get_positions()[:, 2]))
+    site = {
+        "site_type": "atop",
+        "slab_indices": (top_index,),
+    }
+    config = AdsorptionConfig(placement_z_range=(1.0, 1.5))
+    z_lo, z_hi = site_module._compute_site_z_base(config, slab, site, ["H"])
+    r_h = float(covalent_radii[atomic_numbers["H"]])
+    r_surface = site_module._get_site_surface_radii(slab, site)
+    assert r_surface is not None
+    r_sum = r_h + r_surface
+    assert z_lo == pytest.approx(1.0 * r_sum)
+    assert z_hi == pytest.approx(1.5 * r_sum)
+
+
+def test_compute_site_z_base_literal_when_scaling_disabled():
+    slab = make_slab()
+    config = AdsorptionConfig(
+        placement_z_range=(2.1, 3.4),
+        placement_z_scale_by_covalent_radius=False,
+    )
+    z_lo, z_hi = site_module._compute_site_z_base(config, slab, None, ["H"])
+    assert (z_lo, z_hi) == (2.1, 3.4)
+
+
+def test_compute_site_z_base_same_formula_for_pore_site():
+    slab = make_porous_framework()
+    sites = get_unified_sites(slab, material_type="porous")
+    pore_sites = [s for s in sites if s.get("site_type") == "pore"]
+    if not pore_sites:
+        pytest.skip("No pore sites in test framework")
+    site = pore_sites[0]
+    config = AdsorptionConfig(placement_z_range=(1.0, 1.5))
+    z_lo, z_hi = site_module._compute_site_z_base(config, slab, site, ["O"])
+    assert z_lo > 0.0
+    assert z_hi > z_lo
+
+
+def test_dissociative_z_offset_uses_radius_derived_range():
+    slab = make_slab()
+    config = AdsorptionConfig(
+        material_type="slab",
+        skip_topology_check=True,
+        placement_z_range=(1.0, 1.5),
+    )
+    h2 = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
+    spec = PlacementSpec(
+        conformer_index=0,
+        orientation_type="dissociative",
+        face_flip=False,
+        en_atom_index=None,
+        site_index=0,
+        site_type="hollow",
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+    result, reason = generate_placement_from_spec_with_reason(
+        spec, [h2], slab, config, smiles="[H][H]"
+    )
+    if result is None:
+        pytest.skip(f"No dissociative placement on test slab: {reason}")
+    _, descriptor = result
+    hollow_site: dict[str, object] = {"site_type": "hollow"}
+    z_lo, z_hi = site_module._compute_site_z_base(
+        config, slab, hollow_site, h2.get_chemical_symbols()
+    )
+    from metalsurfer.placement.generators import _site_type_z_offset
+
+    z_lo += _site_type_z_offset(slab, hollow_site, "hollow")
+    z_hi += _site_type_z_offset(slab, hollow_site, "hollow")
+    expected = z_lo + 0.5 * (z_hi - z_lo)
+    assert descriptor.z_offset == pytest.approx(expected)
+
+
 def test_saturation_placement_height_uses_reference_slab():
     """Saturation placement should not anchor new molecules above old adsorbates."""
     slab = make_slab()
@@ -1223,6 +1305,7 @@ def test_saturation_placement_height_uses_reference_slab():
     config = AdsorptionConfig(
         device="cpu",
         rough_slab_local_z=False,
+        placement_z_range=(2.0, 3.0),
         placement_z_scale_by_covalent_radius=False,
     )
     adsorbate = Atoms("H", positions=[[0.0, 0.0, 0.0]])

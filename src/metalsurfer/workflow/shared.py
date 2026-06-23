@@ -28,6 +28,7 @@ from ..optimization import (
 )
 from ..placement import generators as placement_generators
 from ..placement import get_symmetry_aware_sites
+from ..placement import sites as placement_sites
 from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
 from ..placement.generators import (
     enumerate_placement_specs,
@@ -491,7 +492,13 @@ def build_representative_relaxation_atoms(
     positions = largest.get_positions().copy()
     z_min = float(np.min(positions[:, 2]))
     slab_z_max = float(np.max(slab_atoms.get_positions()[:, 2]))
-    z_offset = slab_z_max + config.placement_z_range[0] - z_min
+    z_lo, _ = placement_sites._compute_site_z_base(
+        config,
+        slab_atoms,
+        None,
+        largest.get_chemical_symbols(),
+    )
+    z_offset = slab_z_max + z_lo - z_min
     positions[:, 2] += z_offset
     ads = largest.copy()
     ads.set_positions(positions)

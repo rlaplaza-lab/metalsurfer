@@ -50,14 +50,11 @@ from ._constants import (
     _HOLLOW_EQ_TOL,
     _KD_RADIUS_SEARCH_PADDING,
     _MOL_COVALENT_RADIUS_FALLBACK,
-    _NON_SLAB_Z_HI_FROM_NN_SCALE,
-    _NON_SLAB_Z_LO_FROM_NN_SCALE,
     _NORMAL_K_NEIGHBOURS,
+    _PARALLEL_Z_MIN_HI_MARGIN,
     _PORE_THRESHOLD_COVALENT_SCALE,
     _PORE_THRESHOLD_MIN_ANGSTROM,
     _SITE_CLASSIFICATION_NEIGHBOURS,
-    _SITE_Z_RADIUS_REFERENCE_ANGSTROM,
-    _SITE_Z_RADIUS_SHIFT_SCALE,
     _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
     _TOP_LAYER_DEPTH_COVALENT_SCALE,
@@ -1779,40 +1776,29 @@ def _compute_site_z_base(
     site: dict[str, object] | None,
     mol_symbols: list[str],
 ) -> tuple[float, float]:
-    """Compute z-offset range for placement above *site*."""
+    """Compute z-offset range for placement above *site*.
+
+    When ``placement_z_scale_by_covalent_radius`` is True (default), each bound
+    is ``placement_z_range[i] * (r_mol + r_surface)``. Otherwise the config
+    tuple is returned as literal Å offsets.
+    """
     z_lo, z_hi = config.placement_z_range
 
-    mat_type = material_type_for_placement(site, when_no_site=config.material_type)
-
-    if (
-        mat_type != "slab"
-        and site is not None
-        and site.get("nn_distance") is not None
-        and str(site.get("site_type", "")) != "pore"
-    ):
-        nn = float(site["nn_distance"])
-        nn_lo = nn * _NON_SLAB_Z_LO_FROM_NN_SCALE
-        nn_hi = nn * _NON_SLAB_Z_HI_FROM_NN_SCALE
-        if nn_hi - nn_lo < z_hi - z_lo:
-            z_lo, z_hi = nn_lo, nn_hi
-
     if not config.placement_z_scale_by_covalent_radius:
-        return z_lo, z_hi
-    if site is not None and str(site.get("site_type", "")) == "pore":
         return z_lo, z_hi
 
     r_surface = _get_site_surface_radii(slab, site)
     mol_radii = [_get_covalent_radius(s) for s in mol_symbols]
     mol_radii = [r for r in mol_radii if r is not None]
     r_mol = float(np.mean(mol_radii)) if mol_radii else _MOL_COVALENT_RADIUS_FALLBACK
+    r_surface_val = r_surface if r_surface is not None else r_mol
+    r_sum = r_mol + r_surface_val
 
-    if r_surface is None:
-        return z_lo, z_hi
-
-    delta = _SITE_Z_RADIUS_SHIFT_SCALE * (
-        r_mol + r_surface - _SITE_Z_RADIUS_REFERENCE_ANGSTROM
-    )
-    return z_lo + delta, z_hi + delta
+    z_lo = float(z_lo) * r_sum
+    z_hi = float(z_hi) * r_sum
+    if z_hi < z_lo + _PARALLEL_Z_MIN_HI_MARGIN:
+        z_hi = z_lo + _PARALLEL_Z_MIN_HI_MARGIN
+    return z_lo, z_hi
 
 
 # ---------------------------------------------------------------------------

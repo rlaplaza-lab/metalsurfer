@@ -362,7 +362,7 @@ def test_placement_z_scale_by_covalent_radius_default():
 
 
 def test_placement_z_scale_by_covalent_radius_disabled():
-    """placement_z_scale_by_covalent_radius=False disables site-aware z."""
+    """placement_z_scale_by_covalent_radius=False uses placement_z_range as literal Å."""
     config = AdsorptionConfig(placement_z_scale_by_covalent_radius=False)
     assert config.placement_z_scale_by_covalent_radius is False
 

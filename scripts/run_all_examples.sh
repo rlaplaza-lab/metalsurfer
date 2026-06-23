@@ -28,6 +28,10 @@ fi
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
+if [[ "${METALSURFER_CLEAR_GPU_PYTHON:-1}" != "0" ]]; then
+  bash "$ROOT/scripts/clear_gpu_python_processes.sh" --yes
+fi
+
 LOG_DIR="${ROOT}/logs/example_runs"
 mkdir -p "$LOG_DIR"
 STAMP="$(date +%Y%m%d_%H%M%S)"
@@ -35,6 +39,7 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 EXAMPLES=(
   examples/ethene_pt12_binding_energy.py
   examples/ethene_ru_slab_binding_energy.py
+  examples/h2_ru_slab_binding_energy.py
   examples/co2_mof_binding_energy.py
   examples/camphor_cu111_binding_energy.py
 )
@@ -43,6 +48,7 @@ EXAMPLES=(
 declare -A EXAMPLE_RESULTS=(
   [examples/ethene_pt12_binding_energy.py]=results_ethene_pt12
   [examples/ethene_ru_slab_binding_energy.py]=results_ethene_ru_slab
+  [examples/h2_ru_slab_binding_energy.py]=results_h2_ru_slab
   [examples/co2_mof_binding_energy.py]=results_co2_mof
   [examples/camphor_cu111_binding_energy.py]=results_camphor_cu111
 )

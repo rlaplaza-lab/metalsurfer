@@ -142,11 +142,11 @@ class AdsorptionConfig:
         4.0,
     )  # Range for y-coordinate placement (Å)
     placement_z_range: tuple[float, float] = (
-        2.0,
-        3.0,
-    )  # Range for z-coordinate placement (Å)
+        0.7,
+        1.25,
+    )  # Scale factors on (r_adsorbate + r_surface) when placement_z_scale_by_covalent_radius is True; literal Å when False
     placement_z_scale_by_covalent_radius: bool = (
-        True  # Scale z-placement by adsorbate covalent radius
+        True  # Derive z-placement from adsorbate + surface covalent radii
     )
     # Explicit material type: "slab" (2D periodic), "nanoparticle" (0D), or "porous" (3D periodic)
     material_type: Literal["slab", "nanoparticle", "porous"] = "slab"

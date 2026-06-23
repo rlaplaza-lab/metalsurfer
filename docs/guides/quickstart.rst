@@ -50,15 +50,15 @@ To also install the documentation build dependencies:
 Runnable Examples
 -----------------
 
-Five scripts under ``examples/`` cover nanoparticle, porous, slab, saturation,
-and Bayesian workflows:
+Five scripts under ``examples/`` cover nanoparticle, porous, slab, dissociative
+H₂, and Bayesian workflows (HPC-scale saturation under ``scripts/``):
 
 .. code-block:: bash
 
    python examples/ethene_pt12_binding_energy.py
    python examples/co2_mof_binding_energy.py
    python examples/ethene_ru_slab_binding_energy.py
-   python examples/bipyridine_au111_defects_saturation_raw.py
+   python examples/h2_ru_slab_binding_energy.py
    python examples/camphor_cu111_binding_energy.py
 
 
@@ -164,10 +164,10 @@ z-layout, PBC, freeze constraints, and validation:
        surface_type="ru111_from_ase_atoms",
    )
 
-**Nanoparticle** — minimal Pt₄ snippet below; the runnable
-``examples/ethene_pt12_binding_energy.py`` uses the same workflow with a 12-atom Pt
-cluster and ``skip_topology_check=True`` so H₂ is placed dissociatively on two
-surface sites (molecular H₂ connectivity is not enforced after relaxation):
+**Nanoparticle** — minimal Pt₄ snippet below; for dissociative H₂ on a periodic slab see
+``examples/h2_ru_slab_binding_energy.py`` (Ru(0001), ``skip_topology_check=True``).
+The runnable ``examples/ethene_pt12_binding_energy.py`` uses the same workflow with a
+12-atom Pt cluster and molecular ethene adsorption:
 
 .. code-block:: python
 
@@ -179,7 +179,6 @@ surface sites (molecular H₂ connectivity is not enforced after relaxation):
        material_type="nanoparticle",
        seed=42,
        slab_relaxation_mode="none",  # hand-built clusters: keep input geometry
-       skip_topology_check=True,  # dissociative H2 on two cluster sites
    )
 
    cluster_atoms = Atoms(
@@ -196,9 +195,36 @@ surface sites (molecular H₂ connectivity is not enforced after relaxation):
 
    result = run_adsorption(
        slab=slab,
-       molecules=[("[H][H]", "H2")],
+       molecules=[("C=C", "ethene")],
        config=config,
        surface_type="pt4_nanoparticle",
+   )
+
+**Dissociative H₂ on a slab** — ``skip_topology_check=True`` enables hollow-site pair
+placements and allows bond breaking after relaxation; E_ads still uses molecular E(H₂):
+
+.. code-block:: python
+
+   from metalsurfer import AdsorptionConfig, run_adsorption
+   from metalsurfer.surface_prep import prepare_substrate
+
+   config = AdsorptionConfig(
+       material_type="slab",
+       seed=42,
+       skip_topology_check=True,
+   )
+   slab = prepare_substrate(
+       bulk_id="mp-33",
+       miller_indices=(0, 0, 1),
+       supercell=(2, 2, 1),
+       config=config,
+       results_dir="results_h2_ru_slab",
+   )
+   result = run_adsorption(
+       slab=slab,
+       molecules=[("[H][H]", "H2")],
+       config=config,
+       surface_type="h2_ru_slab",
    )
 
 **Already equilibrated?** When ionic positions must not change, set

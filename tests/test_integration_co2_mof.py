@@ -69,7 +69,6 @@ def _run_co2_in_mof():
         skip_desorption_check=False,
         stage1_steps=16,
         stage2_steps=80,
-        placement_z_range=(2.0, 6.0),
         min_initial_distance=1.8,
     )
     mof_slab = prepare_substrate(

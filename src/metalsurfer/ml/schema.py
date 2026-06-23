@@ -135,7 +135,7 @@ class ComputationContext:
     stage2_steps: int = 150
     device: str = "cuda"
     seed: int = 42
-    placement_z_range: tuple[float, float] = (2.0, 3.0)
+    placement_z_range: tuple[float, float] = (0.7, 1.25)
     placement_z_scale_by_covalent_radius: bool = True
     min_initial_distance: float = 1.5
     min_contact_ratio: float = 0.8
@@ -483,8 +483,8 @@ class PlacementRecord:
             device=str(_ctx_value("device", "cuda")),
             seed=int(_ctx_value("seed", 42)),
             placement_z_range=_parse_float_pair(
-                _ctx_value("placement_z_range", [2.0, 3.0]),
-                default=(2.0, 3.0),
+                _ctx_value("placement_z_range", [0.7, 1.25]),
+                default=(0.7, 1.25),
             ),
             placement_z_scale_by_covalent_radius=_parse_bool(
                 _ctx_value("placement_z_scale_by_covalent_radius", True),
