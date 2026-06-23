@@ -133,3 +133,22 @@ Fixing failures
   targeted ignore only when third-party stubs are missing.
 - **Coverage:** the gate is ``--fail-under=74`` on ``src/metalsurfer``; add tests for
   new branches rather than lowering the threshold.
+
+Publishing
+----------
+
+Release builds are uploaded manually via the **Publish to PyPI** GitHub Actions
+workflow (``workflow_dispatch``).
+
+1. Bump ``version`` in ``pyproject.toml`` and ``src/metalsurfer/__init__.py`` (and
+   ``docs/conf.py`` if you version docs).
+2. Merge to ``main`` and wait for CI to pass.
+3. On PyPI (and TestPyPI if used), configure a **trusted publisher** for this repo:
+   owner ``rlaplaza-lab``, repository ``metalsurfer``, workflow
+   ``publish-pypi.yml``, environment ``pypi`` or ``testpypi``.
+4. In GitHub, create matching **environments** (``pypi``, ``testpypi``) if you want
+   release approvals.
+5. Actions → **Publish to PyPI** → Run workflow → choose target → type ``publish``.
+
+The workflow builds with ``python -m build``, runs ``twine check``, and uploads via
+OIDC trusted publishing (no long-lived API token required when configured).
