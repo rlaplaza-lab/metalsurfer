@@ -277,15 +277,9 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
        surface_type="Ru0001_bo",
    )
 
-Relevant BO configuration fields on :class:`~metalsurfer.AdsorptionConfig`:
-
-- ``num_placements`` (default ``None``: autotune to GPU parallel capacity at runtime)
-- ``bo_initial_random``, ``bo_batch_size`` (default ``None``: autotune to GPU parallel capacity), ``bo_total_budget`` (default ``18``: acquisition batches after the initial random batch)
-- Total BO evaluations once auto fields resolve: ``bo_initial_random + bo_total_budget * bo_batch_size``
-- ``bo_acquisition``: ``"ei"`` (default), ``"lcb"``, or ``"pi"``
-- ``bo_surrogate``: ``"ridge"`` (default), ``"random_forest"``, ``"extra_trees"``, ``"gradient_boost"``, or ``"ensemble"``
-- ``bo_include_failure_negatives`` and ``bo_failure_penalty_*`` for learning from failed placements
-- ``bo_transfer_*`` for saturation transfer (default weighted mode with 2-step window, recency/occupancy decay)
+BO knobs live on :class:`~metalsurfer.AdsorptionConfig`; see
+:doc:`../guides/configuration` (budget math and recipes) and
+:doc:`../api/config` (full field reference — Bayesian optimization).
 
 Sequential Saturation
 ---------------------
@@ -336,41 +330,17 @@ already listed in ``saturation_summary.csv`` are skipped.
 
 Important saturation behaviors:
 
-- **Prep equilibration:** ``slab_relaxation_mode`` (default ``ionic_only``) relaxes
-  substrate ionic positions during
-  :func:`~metalsurfer.surface_prep.prepare_substrate`. The returned substrate is
-  the optimized reference for ``E(slab)``.
-- **Adsorption freeze:** prep kwargs write ASE ``FixAtoms`` during
-  :func:`~metalsurfer.surface_prep.prepare_substrate` (default: entire substrate
-  frozen). Placement relaxation reads those constraints only. See
-  :doc:`surface_engineering` for ``relax_top_layer`` / ``freeze_symbols``.
-  Saturation pins ``base_slab`` at campaign start. Compare structures to the
-  matching prep snapshot (e.g. ``clean_slab_Au20`` after adatoms).
-- In-plane supercell expansion must be done during prep
-  (``auto_resize_substrate_for_molecule`` / ``resize_substrate_for_molecule``) before
-  calling campaign APIs.
-- Use :func:`~metalsurfer.run_saturation_bo` for BO-guided saturation; it
-  forces BO on and can reuse prior-step observations through the
-  ``bo_transfer_*`` settings.
-- When ``multi_molecule_saturation=True`` and multiple molecules are provided
-  (in-memory list or CSV), the workflow switches to competitive saturation.
-- By default, ``saturation_discard_topology_rearrangements=True`` validates the
-  full adsorbate pool on each step candidate using a connectivity-only
-  fragment-count check before choosing the best slab for the next step, so
-  inter-adsorbate coupling or unexpected splitting is not propagated. Set
-  ``False`` to rank by ``E_ads`` only; the guard is skipped when
-  ``skip_topology_check=True``.
-- By default, ``saturation_save_all_placements=True`` writes every validated
-  placement per step under ``step_{NNN}_placements/`` plus
-  ``saturation_placements_detailed.csv``. Set ``saturation_save_all_placements=False``
-  to persist only per-step best structures.
-- By default, runs persist XYZ structures and CSV tables. Set
-  ``write_vasp_inputs=True`` to also write ``vasp_inputs/`` placement bundles
-  and reference-slab POSCAR files during surface prep.
+- Prep equilibrates the substrate before campaigns; adsorption respects ASE
+  ``FixAtoms`` from prep. See :doc:`surface_engineering` and
+  :doc:`configuration`.
+- Resize in-plane supercells during prep
+  (``auto_resize_substrate_for_molecule``) before calling campaign APIs.
+- Use :func:`~metalsurfer.run_saturation_bo` for BO-guided saturation.
+- Saturation-specific config fields (``saturation_*``, ``multi_molecule_saturation``,
+  ``bo_transfer_*``): :doc:`configuration` and :doc:`../api/config`.
 - When printing completion summaries, pass
   ``write_vasp_inputs=config.write_vasp_inputs`` to
-  :meth:`~metalsurfer.SaturationCampaignResult.format_completion` so the
-  saved-files line matches what was written.
+  :meth:`~metalsurfer.SaturationCampaignResult.format_completion`.
 
 A full defected-surface saturation example (fixed substrate, adatom prep) lives
 under ``examples/bipyridine_au111_defects_saturation_raw.py``; see also

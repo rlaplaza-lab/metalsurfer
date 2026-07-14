@@ -22,13 +22,6 @@ autodoc_typehints = "description"
 autodoc_class_signature = "separated"
 autodoc_docstring_signature = True
 
-# Better dataclass field documentation
-autodoc_docstring_signature = True
-
-# Improve dataclass documentation - hide the inline comments to avoid duplication with CSV table
-autodoc_class_signature = "separated"
-autodoc_typehints = "description"
-# Mock heavy optional dependencies so docs build without torch/fairchem/GPU.
 autodoc_mock_imports = [
     "torch",
     "torch_sim",
@@ -45,9 +38,8 @@ napoleon_google_docstring = False
 napoleon_numpy_docstring = True
 napoleon_use_param = True
 napoleon_use_rtype = True
-napoleon_use_ivar = False  # Hide dataclass field docstrings since we have the CSV table
+napoleon_use_ivar = False
 
-# Hide dataclass field annotations to prevent redundant Attributes section
 autodoc_default_options = {
     "members": True,
     "undoc-members": True,

@@ -398,7 +398,7 @@ Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `
 
 ## Configuration model
 
-`AdsorptionConfig` centralizes physical and workflow knobs. Representative defaults (verify in `config.py` when debugging):
+`AdsorptionConfig` centralizes physical and workflow knobs. User-facing field documentation: [docs/api/config.rst](docs/api/config.rst) and [docs/guides/configuration.rst](docs/guides/configuration.rst). Representative defaults (verify in `config.py` when debugging):
 
 | Field | Default |
 |-------|---------|

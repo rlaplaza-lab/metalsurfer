@@ -72,7 +72,7 @@ Environment overrides:
 
 By default, INFO logs go to **stdout** so HPC schedulers capture progress in
 ``.out`` files. TorchSim stdout/stderr during relaxation is routed through
-``torchsim_output_capture``. See also the **Logging** section in ``README.md``.
+``torchsim_output_capture``.
 
 Tests
 -----
