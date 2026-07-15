@@ -1,5 +1,7 @@
 # Metalsurfer
 
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/) [![PyPI](https://img.shields.io/pypi/v/metalsurfer.svg)](https://pypi.org/project/metalsurfer/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 ![Metalsurfer Logo](docs/_static/logo_metalsurfer.svg)
 
 Library for adsorption on arbitrary materials (slabs, nanoparticles, and periodic porous frameworks).

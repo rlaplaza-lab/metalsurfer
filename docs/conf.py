@@ -3,7 +3,15 @@
 project = "metalsurfer"
 copyright = "2026, metalsurfer contributors"
 author = "metalsurfer contributors"
-release = "0.3.0"
+
+try:
+    from importlib.metadata import version as _pkg_version
+
+    release = _pkg_version("metalsurfer")
+except Exception:
+    from metalsurfer import __version__
+
+    release = __version__
 
 extensions = [
     "sphinx.ext.autodoc",
