@@ -16,6 +16,9 @@ from ._constants import (
     _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE,
     _BINDER_ALIGNMENT_TARGET_DOT,
     _BINDER_VECTOR_MIN_NORM,
+    _CONTACT_ATOM_VARIANCE_MAX,
+    _CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
+    _CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     _CONTACT_QUALITY_COVALENT_SUM_SCALE,
     _FLAT_SHAPE_I1_I3_MAX,
     _FLAT_SHAPE_I2_I3_MIN,
@@ -184,28 +187,6 @@ def _get_vdw_radius(symbol: str) -> float | None:
     # covalent scale so "touching" physisorptive distances (~3+ Å) are not
     # misclassified as overlaps while still flagging sub-Å spurious approaches.
     return float(cov * _VDW_RADIUS_FROM_COVALENT_SCALE)
-
-
-def _compute_mean_adsorbate_covalent_radius() -> float:
-    """Mean covalent radius of common adsorbate elements (C, H, O, N, S, P).
-
-    This replaces hardcoded fallback values in _constants.py with a dynamically
-    computed value derived from tabulated ASE covalent radii. Used when no
-    specific element radii are available for computing distance thresholds.
-    """
-    # Common adsorbate elements ordered by electronegativity/occurrence
-    common_elements = ["C", "H", "O", "N", "S", "P"]
-    radii = []
-    for elem in common_elements:
-        z = atomic_numbers.get(elem)
-        if z is not None and z < len(ase_covalent_radii):
-            r = float(ase_covalent_radii[z])
-            if r > 0.0:
-                radii.append(r)
-    if radii:
-        return float(np.mean(radii))
-    # Ultimate fallback if ASE data is unavailable (should never happen)
-    return 0.77
 
 
 def _mol_slab_pairwise_distances(
@@ -866,9 +847,9 @@ def check_initial_contact_quality(
     *,
     strict_initial_placement: bool = False,
     require_multiple_contact: bool = False,
-    max_closest_approach: float = 0.8,
+    max_closest_approach: float = _CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     min_contact_atoms: int = 1,
-    contact_distance_threshold: float = 2.5,
+    contact_distance_threshold: float = _CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
     exclude_slab_atoms: int | None = None,
     material_type: str = "slab",
 ) -> tuple[bool, str]:
@@ -902,7 +883,7 @@ def check_initial_contact_quality(
 
     if require_multiple_contact and num_contacting > 1:
         contact_atom_var = float(metrics["contact_atom_variance"])
-        if contact_atom_var > 0.5:
+        if contact_atom_var > _CONTACT_ATOM_VARIANCE_MAX:
             return False, "contact_distance_variance_too_high"
 
     return True, "placement_geometry_valid"

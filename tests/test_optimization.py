@@ -276,6 +276,60 @@ def test_estimate_parallel_relaxation_capacity_fallback_without_torchsim(
     assert capacity == 1
 
 
+def test_estimate_parallel_relaxation_capacity_runtime_error_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    optimization_mod._PARALLEL_CAPACITY_CACHE.clear()
+    monkeypatch.setattr(optimization_mod, "ts", object())
+    monkeypatch.setattr(optimization_mod, "ts_constraints", object())
+    monkeypatch.setattr(
+        optimization_mod,
+        "_make_state_with_frozen_constraint",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("probe failed")),
+    )
+    monkeypatch.setattr(
+        optimization_mod,
+        "calculate_memory_scalers",
+        lambda *args, **kwargs: [100.0],
+    )
+    config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
+    atoms = _make_atoms_with_cell()
+    capacity = optimization_mod.estimate_parallel_relaxation_capacity(
+        ts_model=object(),
+        representative_atoms=atoms,
+        config=config,
+        frozen_indices=[],
+    )
+    assert capacity == 1
+
+
+def test_estimate_parallel_relaxation_capacity_value_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    optimization_mod._PARALLEL_CAPACITY_CACHE.clear()
+    monkeypatch.setattr(optimization_mod, "ts", object())
+    monkeypatch.setattr(optimization_mod, "ts_constraints", object())
+    monkeypatch.setattr(
+        optimization_mod,
+        "_make_state_with_frozen_constraint",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad config")),
+    )
+    monkeypatch.setattr(
+        optimization_mod,
+        "calculate_memory_scalers",
+        lambda *args, **kwargs: [100.0],
+    )
+    config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
+    atoms = _make_atoms_with_cell()
+    with pytest.raises(ValueError, match="bad config"):
+        optimization_mod.estimate_parallel_relaxation_capacity(
+            ts_model=object(),
+            representative_atoms=atoms,
+            config=config,
+            frozen_indices=[],
+        )
+
+
 def test_estimate_parallel_relaxation_capacity_uses_memory_scaler(
     monkeypatch: pytest.MonkeyPatch,
 ):

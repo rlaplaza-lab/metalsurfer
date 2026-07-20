@@ -647,21 +647,40 @@ def test_voronoi_enrichment_uses_ridge_vertices(monkeypatch):
 
 
 def test_site_context_cache_clear_resets_cached_entries():
+    from metalsurfer.placement import generators as gens
+
     slab = make_slab(nx=2, ny=2)
     config = AdsorptionConfig(material_type="slab")
 
     workflow_shared.clear_site_context_cache()
-    assert len(workflow_shared._SITE_CONTEXT_CACHE) == 0
+    assert len(gens._SITE_CONTEXT_CACHE) == 0
 
     workflow_shared._resolve_site_context_for_sampling(
         slab,
         config,
         symmetry_broken=True,
     )
-    assert len(workflow_shared._SITE_CONTEXT_CACHE) == 1
+    assert len(gens._SITE_CONTEXT_CACHE) == 1
 
     workflow_shared.clear_site_context_cache()
-    assert len(workflow_shared._SITE_CONTEXT_CACHE) == 0
+    assert len(gens._SITE_CONTEXT_CACHE) == 0
+
+
+def test_site_context_cache_keys_differ_by_symmetry_broken():
+    from metalsurfer.placement import generators as gens
+
+    slab = make_slab(nx=2, ny=2)
+    config = AdsorptionConfig(material_type="slab")
+    gens.clear_site_caches()
+
+    ctx_broken = workflow_shared._resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=True
+    )
+    ctx_intact = workflow_shared._resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=False
+    )
+    assert len(gens._SITE_CONTEXT_CACHE) == 2
+    assert ctx_broken is not ctx_intact
 
 
 # ---------------------------------------------------------------------------
@@ -1895,7 +1914,7 @@ def test_cluster_equivalent_sites_cartesian_tolerance_scales_with_cell():
 def test_top_layer_mask_unchanged_for_bulk_slab():
     from metalsurfer.placement.sites import (
         _height_along_slab_normal,
-        _top_layer_mask_by_normal,
+        top_layer_mask_by_normal,
     )
 
     slab = make_slab()
@@ -1904,12 +1923,12 @@ def test_top_layer_mask_unchanged_for_bulk_slab():
     tol = 0.5
     heights = _height_along_slab_normal(positions, cell)
     legacy = heights >= (float(np.max(heights)) - tol)
-    layered = _top_layer_mask_by_normal(positions, cell, tol)
+    layered = top_layer_mask_by_normal(positions, cell, tol)
     assert np.array_equal(legacy, layered)
 
 
 def test_top_layer_mask_includes_step_terrace_for_reconstructed_surface():
-    from metalsurfer.placement.sites import _top_layer_mask_by_normal
+    from metalsurfer.placement.sites import top_layer_mask_by_normal
 
     positions = []
     for ix in range(3):
@@ -1921,7 +1940,7 @@ def test_top_layer_mask_includes_step_terrace_for_reconstructed_surface():
         positions.append([ix * 2.7, 0.0, 2.7])
     positions = np.asarray(positions, dtype=float)
     cell = np.array([[8.1, 0.0, 0.0], [0.0, 8.1, 0.0], [0.0, 0.0, 20.0]])
-    mask = _top_layer_mask_by_normal(positions, cell, 0.5)
+    mask = top_layer_mask_by_normal(positions, cell, 0.5)
     assert mask.sum() > 9
     assert np.any(positions[mask, 2] < 5.2)
 

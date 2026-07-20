@@ -37,7 +37,19 @@ from .shared import (
 logger = logging.getLogger(__name__)
 
 
-def _placement_spec_key(spec) -> tuple:
+def _placement_spec_key(
+    spec: PlacementSpec,
+) -> tuple[
+    int,
+    str,
+    int,
+    float,
+    float,
+    float,
+    float,
+    bool,
+    int | None,
+]:
     """Hashable identity for retry diversity (exclude known-bad specs)."""
     return (
         spec.conformer_index,
@@ -46,7 +58,7 @@ def _placement_spec_key(spec) -> tuple:
         float(spec.z_fraction),
         float(spec.tilt_deg),
         float(spec.azimuth_deg),
-        float(getattr(spec, "azimuth_in_plane_deg", 0.0) or 0.0),
+        float(spec.azimuth_in_plane_deg),
         bool(spec.face_flip),
         spec.en_atom_index,
     )
@@ -85,14 +97,10 @@ def _generate_placements_with_retry(
     seed_increment = config.placement_retry_diversity_seed_increment
 
     for attempt in range(max_attempts):
-        # Check if we've already met the target
         if len(all_combined) >= num_placements:
             break
 
-        # Calculate seed for this attempt
         attempt_seed = config.seed + (seed_increment * attempt)
-
-        # Generate specs for remaining placements needed
         remaining = num_placements - len(all_combined)
         if remaining <= 0:
             break
@@ -104,7 +112,6 @@ def _generate_placements_with_retry(
                 return bool(config.placement_filter(spec))
             return True
 
-        # Generate placement specs
         specs = enumerate_placement_specs(
             conformers,
             slab_for_sites,
@@ -140,7 +147,6 @@ def _generate_placements_with_retry(
             spec.placement_index = int(spec.placement_index) + id_offset
             last_spec_by_index[spec.placement_index] = spec
 
-        # Materialize placements
         (
             new_combined,
             new_ids,
@@ -162,13 +168,11 @@ def _generate_placements_with_retry(
             if failed_spec is not None:
                 failed_keys.add(_placement_spec_key(failed_spec))
 
-        # Track results
         all_combined.extend(new_combined)
         placement_ids.extend(new_ids)
         placement_descriptors.extend(new_descriptors)
         failures.extend(new_failures)
 
-        # Log retry attempt if needed
         if attempt > 0 and new_combined:
             logger.debug(
                 "Retry attempt %d/%d: generated %d new placements (total: %d/%d)",

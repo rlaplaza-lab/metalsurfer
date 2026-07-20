@@ -1,6 +1,7 @@
 """Bayesian optimisation workflow orchestration."""
 
 import logging
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -8,11 +9,13 @@ from ase import Atoms
 
 from ..config import (
     BO_LEGACY_GENERATION_REASON_ALIASES,
+    BO_TRANSFER_CAPABLE_SURROGATES,
     AdsorptionConfig,
     resolved_bo_eval_budget,
 )
 from ..filters import filter_results
 from ..ml.bayesian import (
+    TransferCapableSurrogateType,
     build_spec_features_geometry_aware,
     build_transfer_surrogate,
     cumulative_refit_sample_weights,
@@ -46,11 +49,14 @@ def _train_surrogate_for_bo(
     config: AdsorptionConfig,
     sample_weight: np.ndarray | None,
 ):
-    """Fit BO surrogate. Per-sample weights support tree ensembles and ridge."""
-    if sample_weight is not None and config.bo_surrogate == "gradient_boost":
+    """Fit BO surrogate. Per-sample weights for transfer-capable surrogates."""
+    if (
+        sample_weight is not None
+        and config.bo_surrogate not in BO_TRANSFER_CAPABLE_SURROGATES
+    ):
         raise ValueError(
-            "sample_weight is only supported for tree BO surrogates and ridge, "
-            f"not {config.bo_surrogate!r}"
+            "sample_weight is only supported for transfer-capable BO surrogates "
+            f"{BO_TRANSFER_CAPABLE_SURROGATES}, not {config.bo_surrogate!r}"
         )
     return train_surrogate(
         X,
@@ -421,7 +427,7 @@ def process_molecule_bayesian(
                     y_current,
                     transfer_memory.observed_X_rows,
                     transfer_memory.observed_y,
-                    surrogate=config.bo_surrogate,  # type: ignore[arg-type]
+                    surrogate=cast(TransferCapableSurrogateType, config.bo_surrogate),
                     n_estimators=100,
                     random_state=config.seed,
                     weight_cap=config.bo_transfer_weight_cap,

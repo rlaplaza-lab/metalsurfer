@@ -15,10 +15,11 @@ from ase.constraints import FixAtoms
 from ._logging import torchsim_output_capture
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
+from .placement._constants import _TOP_LAYER_DEPTH_MIN_ANGSTROM
 from .placement.sites import (
-    _derive_pore_threshold,
-    _top_layer_mask_by_normal,
+    derive_pore_threshold,
     get_unified_sites,
+    top_layer_mask_by_normal,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,17 @@ except ImportError:
     torch: Any = None
 else:
     torch = _torch_mod
+
+_CAPACITY_PROBE_ERRORS: tuple[type[BaseException], ...] = (
+    RuntimeError,
+    MemoryError,
+    OSError,
+)
+if torch is not None:
+    _cuda = getattr(torch, "cuda", None)
+    _oom = getattr(_cuda, "OutOfMemoryError", None) if _cuda is not None else None
+    if isinstance(_oom, type) and issubclass(_oom, BaseException):
+        _CAPACITY_PROBE_ERRORS = (*_CAPACITY_PROBE_ERRORS, _oom)
 
 ts: Any = None
 ts_constraints: Any = None
@@ -431,7 +443,7 @@ def estimate_parallel_relaxation_capacity(
             padding,
         )
         return n_systems
-    except Exception as exc:
+    except _CAPACITY_PROBE_ERRORS as exc:
         logger.warning(
             "Parallel capacity probe failed (%s); using capacity=%d",
             exc,
@@ -450,7 +462,7 @@ def identify_relaxable_surface_indices(
     slab: Atoms,
     *,
     material_type: str = "slab",
-    tolerance: float = 0.5,
+    tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
     pore_threshold: float | None = None,
 ) -> list[int]:
     """Return substrate atom indices left free when ``relax_top_layer=True``.
@@ -475,7 +487,7 @@ def identify_relaxable_surface_indices(
 
     if material_type == "slab":
         cell = np.asarray(slab.get_cell(), dtype=float)
-        mask = _top_layer_mask_by_normal(positions, cell, float(tolerance))
+        mask = top_layer_mask_by_normal(positions, cell, float(tolerance))
         return [int(i) for i in np.nonzero(mask)[0]]
 
     if material_type == "nanoparticle":
@@ -486,7 +498,7 @@ def identify_relaxable_surface_indices(
 
     symbols = slab.get_chemical_symbols()
     if pore_threshold is None:
-        pore_threshold = _derive_pore_threshold(symbols)
+        pore_threshold = derive_pore_threshold(symbols)
 
     sites = get_unified_sites(
         slab,
@@ -516,7 +528,7 @@ def identify_relaxable_surface_indices(
 
 def identify_top_layer_indices(
     slab: Atoms,
-    tolerance: float = 0.5,
+    tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
 ) -> list[int]:
     """Return atom indices in the exposed slab surface layer.
 
@@ -536,7 +548,7 @@ def compute_frozen_indices(
     *,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
-    top_layer_tolerance: float = 0.5,
+    top_layer_tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
     material_type: str = "slab",
     pore_threshold: float | None = None,
 ) -> list[int]:

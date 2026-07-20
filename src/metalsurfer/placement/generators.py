@@ -16,6 +16,7 @@ from .._utils import is_finite_number as _is_finite_number
 from ..config import AdsorptionConfig
 from ..exceptions import DependencyMissingError
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
+from ..symmetry import SymmetryAnalysisError
 from . import geometry as geom
 from . import policy
 from . import sites as sts
@@ -74,11 +75,28 @@ _UNIQUE_SITES_CACHE_MAX_ENTRIES = 16
 _UNIQUE_SITES_CACHE: dict[str, SiteContext] = {}
 _UNIQUE_SITES_CACHE_LOCK = threading.Lock()
 
+# Post-symmetry SiteContext cache (geometry + symmetry_broken); owned here with unique-sites.
+_SITE_CONTEXT_CACHE_MAX_ENTRIES = 16
+_SITE_CONTEXT_CACHE: dict[int, SiteContext] = {}
+_SITE_CONTEXT_CACHE_LOCK = threading.Lock()
 
-def clear_unique_sites_cache() -> None:
-    """Clear cached unique-site contexts (mainly for tests)."""
+
+def clear_site_caches() -> None:
+    """Clear unique-sites and resolved site-context caches."""
     with _UNIQUE_SITES_CACHE_LOCK:
         _UNIQUE_SITES_CACHE.clear()
+    with _SITE_CONTEXT_CACHE_LOCK:
+        _SITE_CONTEXT_CACHE.clear()
+
+
+def clear_unique_sites_cache() -> None:
+    """Clear cached unique-site and resolved site-context caches (tests / long runs)."""
+    clear_site_caches()
+
+
+def clear_site_context_cache() -> None:
+    """Alias for :func:`clear_site_caches` (workflow / test compatibility)."""
+    clear_site_caches()
 
 
 def _unique_sites_cache_key(slab: Atoms, config: AdsorptionConfig) -> str:
@@ -103,6 +121,80 @@ def _store_unique_sites_cache(cache_key: str, ctx: SiteContext) -> SiteContext:
             _UNIQUE_SITES_CACHE.pop(next(iter(_UNIQUE_SITES_CACHE)))
         _UNIQUE_SITES_CACHE[cache_key] = ctx
     return ctx
+
+
+def resolve_site_context_for_sampling(
+    slab_atoms: Atoms,
+    config: AdsorptionConfig,
+    *,
+    symmetry_broken: bool,
+) -> SiteContext:
+    """Clustered Voronoi sites, then optional spglib orbit reduction unless *symmetry_broken*."""
+    pos_bytes = slab_atoms.get_positions().tobytes()
+    cell_bytes = np.asarray(slab_atoms.get_cell()).tobytes()
+    pbc_bytes = str(list(slab_atoms.get_pbc())).encode()
+    cache_key = hash(pos_bytes + cell_bytes + pbc_bytes + str(symmetry_broken).encode())
+
+    with _SITE_CONTEXT_CACHE_LOCK:
+        cached = _SITE_CONTEXT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    _core_ctx = _get_unique_sites_for_specs(slab_atoms, config)
+    core_sites = _core_ctx.sites
+    use_sites = _core_ctx.use_sites
+    raw_unclustered = _core_ctx.raw_unclustered
+
+    def _site_context(
+        sites: list[dict[str, object]],
+        source: str,
+    ) -> SiteContext:
+        return SiteContext(
+            sites=sites,
+            use_sites=True,
+            source=source,
+            raw_unclustered=raw_unclustered,
+        )
+
+    if not use_sites or not core_sites:
+        result = _core_ctx
+    elif symmetry_broken:
+        logger.debug("Site context: symmetry broken, using clustered Voronoi set")
+        result = _site_context(core_sites, "voronoi")
+    else:
+        try:
+            symmetry_aware_sites = sts.get_symmetry_aware_sites(
+                slab_atoms,
+                top_layer_tolerance=config.top_layer_tolerance,
+                symmetry_tolerance=config.symmetry_tolerance,
+                material_type=config.material_type,
+                probe_radius=config.voronoi_probe_radius,
+                max_site_distance=config.voronoi_max_site_distance,
+                enrich=config.voronoi_site_enrichment,
+                site_classification_method=config.site_classification_method,
+                raw_sites=raw_unclustered,
+            )
+        except SymmetryAnalysisError as exc:
+            logger.info(
+                "Symmetry site reduction failed; using clustered Voronoi sites (%s)",
+                exc,
+            )
+            symmetry_aware_sites = []
+
+        if symmetry_aware_sites:
+            logger.info(
+                "Using symmetry-reduced sites (%d sites)", len(symmetry_aware_sites)
+            )
+            result = _site_context(symmetry_aware_sites, "symmetry_aware")
+        else:
+            logger.debug("Using clustered Voronoi sites (no symmetry-reduced set)")
+            result = _site_context(core_sites, "voronoi")
+
+    with _SITE_CONTEXT_CACHE_LOCK:
+        if len(_SITE_CONTEXT_CACHE) >= _SITE_CONTEXT_CACHE_MAX_ENTRIES:
+            _SITE_CONTEXT_CACHE.pop(next(iter(_SITE_CONTEXT_CACHE)))
+        _SITE_CONTEXT_CACHE[cache_key] = result
+    return result
 
 
 @dataclass
@@ -1319,7 +1411,7 @@ def _get_dissociative_site_pairs(
     if config.material_type == "nanoparticle":
         radius_indices = list(range(len(top_positions)))
     else:
-        top_mask = sts._top_layer_mask_by_normal(
+        top_mask = sts.top_layer_mask_by_normal(
             top_positions,
             cell_arr,
             float(config.top_layer_tolerance),

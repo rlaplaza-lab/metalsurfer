@@ -15,14 +15,17 @@ from sklearn.gaussian_process.kernels import ConstantKernel, Matern
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from ..config import BO_INITIAL_SAMPLING_OPTIONS, AdsorptionConfig
+from ..config import (
+    BO_INITIAL_SAMPLING_OPTIONS,
+    BO_TRANSFER_CAPABLE_SURROGATES,
+    AdsorptionConfig,
+)
 from ..models import PlacementDescriptor, PlacementSpec
 from ..placement import generators as placement_generators
 from .features import extract_features
 from .regression import (
     TreeSurrogateKind,
     _build_estimator,
-    train_model,
     tree_regressor_for_bayesian_surrogate,
 )
 from .schema import PlacementRecord
@@ -38,6 +41,13 @@ SurrogateType = Literal[
     "ensemble",
 ]
 TreeSurrogateType = Literal["random_forest", "extra_trees"]
+TransferCapableSurrogateType = Literal[
+    "random_forest",
+    "extra_trees",
+    "gradient_boost",
+    "ridge",
+    "ensemble",
+]
 DEFAULT_ENSEMBLE_MEMBERS: tuple[
     TreeSurrogateType | Literal["ridge", "gaussian_process"], ...
 ] = (
@@ -103,7 +113,7 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
                 raise ValueError("EnsembleRegressor cannot nest another ensemble")
             weight = (
                 sample_weight
-                if spec in ("random_forest", "extra_trees", "ridge")
+                if spec in ("random_forest", "extra_trees", "ridge", "gradient_boost")
                 and sample_weight is not None
                 else None
             )
@@ -230,8 +240,9 @@ def train_surrogate(
 
     Tree ensembles (``random_forest``, ``extra_trees``) return a single-step
     ``Pipeline`` with a regressor only. ``gradient_boost`` and ``ridge`` return
-    a ``scaler`` + ``regressor`` pipeline from :func:`regression.train_model`.
-    Per-sample ``sample_weight`` is supported for tree ensembles and ``ridge``.
+    a ``scaler`` + ``regressor`` pipeline from :func:`regression.train_model`
+    / :func:`regression._build_estimator`. Per-sample ``sample_weight`` is
+    supported for tree ensembles, ``ridge``, and ``gradient_boost``.
     """
     if surrogate in ("random_forest", "extra_trees"):
         tree_kind: TreeSurrogateKind = (
@@ -263,25 +274,23 @@ def train_surrogate(
         )
         return pipeline
     if surrogate == "gradient_boost":
-        if sample_weight is not None:
-            raise ValueError(
-                "sample_weight is only supported for tree surrogates and ridge, "
-                f"not {surrogate!r}"
-            )
-        pipeline = train_model(
-            X,
-            y,
-            model_type="gradient_boost",
-            random_state=random_state,
-            **kwargs,
+        # HistGradientBoostingRegressor supports sample_weight (incl. transfer).
+        pipeline = _build_estimator(
+            "gradient_boost", random_state=random_state, **kwargs
         )
+        pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
         _attach_residual_uncertainty(pipeline, X, y)
+        logger.info(
+            "Trained gradient_boost surrogate on %d samples (residual_std=%.4f)",
+            len(np.asarray(y)),
+            float(pipeline.named_steps["regressor"].bo_residual_std_),
+        )
         return pipeline
     if surrogate == "gaussian_process":
         if sample_weight is not None:
             raise ValueError(
-                "sample_weight is only supported for tree surrogates and ridge, "
-                f"not {surrogate!r}"
+                "sample_weight is only supported for tree surrogates, ridge, and "
+                f"gradient_boost, not {surrogate!r}"
             )
         n_features = int(X.shape[1]) if hasattr(X, "shape") else len(X[0])
         reg = _gaussian_process_regressor(n_features, random_state)
@@ -448,7 +457,7 @@ def build_transfer_surrogate(
     observed_X_prev: pd.DataFrame | list[dict[str, float]],
     observed_y_prev: np.ndarray | list[float],
     *,
-    surrogate: TreeSurrogateType = "random_forest",
+    surrogate: TransferCapableSurrogateType = "random_forest",
     n_estimators: int = 100,
     random_state: int = 42,
     weight_cap: float = 0.35,
@@ -471,7 +480,13 @@ def build_transfer_surrogate(
     """Train baseline or transfer-weighted surrogate with production trust gating.
 
     Mirrors the transfer block in :func:`workflow.bayesian.process_molecule_bayesian`.
+    Only surrogates in ``BO_TRANSFER_CAPABLE_SURROGATES`` are accepted.
     """
+    if surrogate not in BO_TRANSFER_CAPABLE_SURROGATES:
+        raise ValueError(
+            "build_transfer_surrogate requires a transfer-capable surrogate "
+            f"(one of {BO_TRANSFER_CAPABLE_SURROGATES}); got {surrogate!r}"
+        )
     y_current = np.asarray(y_current, dtype=float)
     baseline = train_surrogate(
         X_current,

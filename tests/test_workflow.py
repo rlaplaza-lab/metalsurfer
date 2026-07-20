@@ -32,6 +32,7 @@ from metalsurfer.workflow import (
     process_molecule,
     process_molecule_bayesian,
 )
+from metalsurfer.workflow.core import _placement_spec_key
 from metalsurfer.workflow.shared import (
     PlacementFailureEvent,
     _build_surface_reference_slab,
@@ -48,6 +49,32 @@ from .conftest import (
     make_water,
     place_molecule_on_slab,
 )
+
+# ---------------------------------------------------------------------------
+# Placement retry diversity key
+# ---------------------------------------------------------------------------
+
+
+def test_placement_spec_key_distinguishes_azimuth_in_plane():
+    base = dict(
+        conformer_index=0,
+        orientation_type="round",
+        face_flip=False,
+        en_atom_index=None,
+        site_index=0,
+        site_type="atop",
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+    a = PlacementSpec(**base, azimuth_in_plane_deg=0.0)
+    b = PlacementSpec(**base, azimuth_in_plane_deg=90.0)
+    assert _placement_spec_key(a) != _placement_spec_key(b)
+    assert _placement_spec_key(a) == _placement_spec_key(
+        PlacementSpec(**base, azimuth_in_plane_deg=0.0)
+    )
+
 
 # ---------------------------------------------------------------------------
 # _validate_geometry

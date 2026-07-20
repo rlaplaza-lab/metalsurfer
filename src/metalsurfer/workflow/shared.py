@@ -3,7 +3,6 @@
 import csv
 import logging
 import os
-import threading
 import time
 from dataclasses import dataclass, replace
 from typing import Any
@@ -27,7 +26,6 @@ from ..optimization import (
     setup_single_model,
 )
 from ..placement import generators as placement_generators
-from ..placement import get_symmetry_aware_sites
 from ..placement import sites as placement_sites
 from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
 from ..placement.generators import (
@@ -36,22 +34,14 @@ from ..placement.generators import (
 )
 from ..placement.geometry import calculate_min_distance, check_initial_contact_quality
 from ..surfaces import SlabContainer, accept_substrate_for_api, validate_substrate
-from ..symmetry import SymmetryAnalysisError
 
 logger = logging.getLogger(__name__)
 MIN_CALCULATOR_CELL_C_ANG = 18.0
 
-# Cache mapping substrate geometry hash -> SiteContext, reused across saturation steps.
-_SITE_CONTEXT_CACHE_MAX_ENTRIES = 16
-_SITE_CONTEXT_CACHE: dict[int, placement_generators.SiteContext] = {}
-_SITE_CONTEXT_CACHE_LOCK = threading.Lock()
-
 
 def clear_site_context_cache() -> None:
     """Clear cached site contexts (mainly for tests and long-running sessions)."""
-    with _SITE_CONTEXT_CACHE_LOCK:
-        _SITE_CONTEXT_CACHE.clear()
-    placement_generators.clear_unique_sites_cache()
+    placement_generators.clear_site_caches()
 
 
 @dataclass
@@ -632,73 +622,11 @@ def _resolve_site_context_for_sampling(
     symmetry_broken: bool,
 ) -> placement_generators.SiteContext:
     """Clustered Voronoi sites, then optional spglib orbit reduction unless *symmetry_broken*."""
-    pos_bytes = slab_atoms.get_positions().tobytes()
-    cell_bytes = np.asarray(slab_atoms.get_cell()).tobytes()
-    pbc_bytes = str(list(slab_atoms.get_pbc())).encode()
-    cache_key = hash(pos_bytes + cell_bytes + pbc_bytes + str(symmetry_broken).encode())
-
-    with _SITE_CONTEXT_CACHE_LOCK:
-        cached = _SITE_CONTEXT_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    # Core unified site detection; always performed
-    _core_ctx = placement_generators._get_unique_sites_for_specs(slab_atoms, config)
-    core_sites = _core_ctx.sites
-    use_sites = _core_ctx.use_sites
-    raw_unclustered = _core_ctx.raw_unclustered
-
-    def _site_context(
-        sites: list[dict[str, object]],
-        source: str,
-    ) -> placement_generators.SiteContext:
-        return placement_generators.SiteContext(
-            sites=sites,
-            use_sites=True,
-            source=source,
-            raw_unclustered=raw_unclustered,
-        )
-
-    if not use_sites or not core_sites:
-        result = _core_ctx
-    elif symmetry_broken:
-        logger.debug("Site context: symmetry broken, using clustered Voronoi set")
-        result = _site_context(core_sites, "voronoi")
-    else:
-        # Reuse unclustered Voronoi sites from _get_unique_sites_for_specs (no second run).
-        try:
-            symmetry_aware_sites = get_symmetry_aware_sites(
-                slab_atoms,
-                top_layer_tolerance=config.top_layer_tolerance,
-                symmetry_tolerance=config.symmetry_tolerance,
-                material_type=config.material_type,
-                probe_radius=config.voronoi_probe_radius,
-                max_site_distance=config.voronoi_max_site_distance,
-                enrich=config.voronoi_site_enrichment,
-                site_classification_method=config.site_classification_method,
-                raw_sites=raw_unclustered,
-            )
-        except SymmetryAnalysisError as exc:
-            logger.info(
-                "Symmetry site reduction failed; using clustered Voronoi sites (%s)",
-                exc,
-            )
-            symmetry_aware_sites = []
-
-        if symmetry_aware_sites:
-            logger.info(
-                "Using symmetry-reduced sites (%d sites)", len(symmetry_aware_sites)
-            )
-            result = _site_context(symmetry_aware_sites, "symmetry_aware")
-        else:
-            logger.debug("Using clustered Voronoi sites (no symmetry-reduced set)")
-            result = _site_context(core_sites, "voronoi")
-
-    with _SITE_CONTEXT_CACHE_LOCK:
-        if len(_SITE_CONTEXT_CACHE) >= _SITE_CONTEXT_CACHE_MAX_ENTRIES:
-            _SITE_CONTEXT_CACHE.pop(next(iter(_SITE_CONTEXT_CACHE)))
-        _SITE_CONTEXT_CACHE[cache_key] = result
-    return result
+    return placement_generators.resolve_site_context_for_sampling(
+        slab_atoms,
+        config,
+        symmetry_broken=symmetry_broken,
+    )
 
 
 def _infer_surface_symbols(slab: Atoms) -> list[str]:

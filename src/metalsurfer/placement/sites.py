@@ -1,23 +1,9 @@
-"""Hybrid topology/Voronoi site generation, clustering, and optional spglib-based symmetry reduction.
+"""Hybrid topology/Voronoi site generation, clustering, and optional spglib symmetry reduction.
 
-Key improvements over the original implementation
------------------------------------------------
-1. Slab handling is now orientation-aware:
-   - top-layer detection is based on the slab normal (from a x b), not on the
-     Cartesian z axis
-   - slab filtering and atop injection also use the slab normal, so rotated
-     slabs behave correctly
-2. Slabs now use a hybrid default site generator:
-   - explicit topology-derived atop/bridge/hollow candidates from the top layer
-   - Voronoi-derived candidates are still used for enrichment and porous/rugged
-     features
-3. Point deduplication is periodic-aware for skewed cells and boundary-adjacent
-   duplicates, reducing overcounting near cell edges.
-4. Existing public API and external behaviour are preserved as closely as
-   possible, including symmetry reduction helpers and z-base utilities.
-
-The module keeps relative imports unchanged so it can directly replace the
-existing package file.
+Orientation-aware slab handling (normal from a×b), hybrid atop/bridge/hollow
+candidates with Voronoi enrichment, and periodic-aware point deduplication.
+Public helpers include unified site enumeration, symmetry-aware reduction, and
+z-base utilities.
 """
 
 from __future__ import annotations
@@ -205,7 +191,7 @@ def _project_to_slab_plane(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
     return arr @ ortho_basis.T
 
 
-def _top_layer_mask_by_normal(
+def top_layer_mask_by_normal(
     positions: np.ndarray,
     cell: np.ndarray,
     tolerance: float,
@@ -449,7 +435,7 @@ def _derive_top_layer_tolerance(
     )
 
 
-def _derive_pore_threshold(symbols: list[str]) -> float:
+def derive_pore_threshold(symbols: list[str]) -> float:
     """Return pore classification threshold from mean covalent radius."""
     mean_radius = _mean_covalent_radius(symbols)
     return max(
@@ -1173,7 +1159,7 @@ def get_unified_sites(
     if top_layer_tolerance is None:
         top_layer_tolerance = _derive_top_layer_tolerance(positions, symbols)
     if pore_threshold is None:
-        pore_threshold = _derive_pore_threshold(symbols)
+        pore_threshold = derive_pore_threshold(symbols)
 
     if np.linalg.det(cell) <= 0:
         cell = _bounding_box_cell(positions)
@@ -1193,7 +1179,7 @@ def get_unified_sites(
 
     voronoi_positions = positions
     if material_type == "slab":
-        top_only_mask = _top_layer_mask_by_normal(
+        top_only_mask = top_layer_mask_by_normal(
             positions, cell, float(top_layer_tolerance)
         )
         top_only = positions[top_only_mask]
@@ -1220,7 +1206,7 @@ def get_unified_sites(
 
     # Slab-specific topology enrichment becomes part of the default generator.
     if material_type == "slab":
-        slab_top_mask = _top_layer_mask_by_normal(
+        slab_top_mask = top_layer_mask_by_normal(
             positions, cell, float(top_layer_tolerance)
         )
         slab_top_atom_indices = np.nonzero(slab_top_mask)[0]
@@ -1298,95 +1284,92 @@ def get_unified_sites(
     # Atop injection safety net for nanoparticles; for slabs only when topology
     # did not already produce atop candidates.
     skip_slab_atop_injection = material_type == "slab" and slab_has_topology_atop
-    if material_type in ("slab", "nanoparticle") and len(vertices) > 0:
-        if material_type == "slab" and skip_slab_atop_injection:
-            pass
+    if (
+        material_type in ("slab", "nanoparticle")
+        and len(vertices) > 0
+        and not skip_slab_atop_injection
+    ):
+        median_nn = (
+            float(np.median(nn_dists))
+            if len(nn_dists) > 0
+            else _VORONOI_MAX_DISTANCE_COVALENT_SCALE
+            * _VORONOI_RADIUS_FALLBACK_ANGSTROM
+        )
+        atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
+
+        if material_type == "slab":
+            if slab_top_atom_indices is None:
+                slab_top_mask = top_layer_mask_by_normal(
+                    positions, cell, float(top_layer_tolerance)
+                )
+                slab_top_atom_indices = np.nonzero(slab_top_mask)[0]
+            top_atom_indices = slab_top_atom_indices
+            atom_normals: np.ndarray | None = None
         else:
-            median_nn = (
-                float(np.median(nn_dists))
-                if len(nn_dists) > 0
-                else _VORONOI_MAX_DISTANCE_COVALENT_SCALE
-                * _VORONOI_RADIUS_FALLBACK_ANGSTROM
+            com = np.mean(positions, axis=0)
+            k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
+            _, norm_idx_all = local_tree.query(positions, k=k_norm)
+            if np.ndim(norm_idx_all) == 1:
+                norm_idx_all = np.asarray(norm_idx_all, dtype=int).reshape(-1, 1)
+            atom_normals = _compute_local_normals_batch(
+                positions, positions, norm_idx_all
             )
-            atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
+            outward_dots = np.einsum("ij,ij->i", atom_normals, positions - com)
+            top_atom_indices = np.nonzero(outward_dots > 0.0)[0].astype(int)
 
+        candidate_verts: list[np.ndarray] = []
+        candidate_dists: list[float] = []
+        candidate_sources: list[str] = []
+        for ai in top_atom_indices:
+            atom_pos = positions[int(ai)]
             if material_type == "slab":
-                if slab_top_atom_indices is None:
-                    slab_top_mask = _top_layer_mask_by_normal(
-                        positions, cell, float(top_layer_tolerance)
-                    )
-                    slab_top_atom_indices = np.nonzero(slab_top_mask)[0]
-                top_atom_indices = slab_top_atom_indices
-                atom_normals: np.ndarray | None = None
-            else:
-                com = np.mean(positions, axis=0)
-                k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
-                _, norm_idx_all = local_tree.query(positions, k=k_norm)
-                if np.ndim(norm_idx_all) == 1:
-                    norm_idx_all = np.asarray(norm_idx_all, dtype=int).reshape(-1, 1)
-                atom_normals = _compute_local_normals_batch(
-                    positions, positions, norm_idx_all
-                )
-                outward_dots = np.einsum("ij,ij->i", atom_normals, positions - com)
-                top_atom_indices = np.nonzero(outward_dots > 0.0)[0].astype(int)
-
-            candidate_verts: list[np.ndarray] = []
-            candidate_dists: list[float] = []
-            candidate_sources: list[str] = []
-            for ai in top_atom_indices:
-                atom_pos = positions[int(ai)]
-                if material_type == "slab":
-                    candidate = _shift_along_slab_normal(
-                        atom_pos.reshape(1, 3), cell, atop_height
+                candidate = _shift_along_slab_normal(
+                    atom_pos.reshape(1, 3), cell, atop_height
+                )[0]
+                if np.any(pbc_for_voronoi):
+                    candidate = _wrap_cartesian(
+                        candidate.reshape(1, 3), cell, pbc_for_voronoi
                     )[0]
-                    if np.any(pbc_for_voronoi):
-                        candidate = _wrap_cartesian(
-                            candidate.reshape(1, 3), cell, pbc_for_voronoi
-                        )[0]
-                else:
-                    assert atom_normals is not None
-                    candidate = atom_pos + atop_height * atom_normals[int(ai)]
+            else:
+                assert atom_normals is not None
+                candidate = atom_pos + atop_height * atom_normals[int(ai)]
 
-                d_nn = float(
-                    local_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0]
-                )
-                if d_nn < float(probe_radius) or d_nn > float(max_site_distance):
-                    continue
-                candidate_verts.append(candidate)
-                candidate_dists.append(d_nn)
-                candidate_sources.append("atop_injected")
+            d_nn = float(local_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0])
+            if d_nn < float(probe_radius) or d_nn > float(max_site_distance):
+                continue
+            candidate_verts.append(candidate)
+            candidate_dists.append(d_nn)
+            candidate_sources.append("atop_injected")
 
-            if candidate_verts:
-                candidate_arr = np.asarray(candidate_verts, dtype=float)
-                keep_new = _filter_non_duplicate_candidates(
-                    candidate_arr, vertices, _VORONOI_DEDUP_TOLERANCE
+        if candidate_verts:
+            candidate_arr = np.asarray(candidate_verts, dtype=float)
+            keep_new = _filter_non_duplicate_candidates(
+                candidate_arr, vertices, _VORONOI_DEDUP_TOLERANCE
+            )
+            candidate_arr = candidate_arr[keep_new]
+            candidate_dist_arr = np.asarray(candidate_dists, dtype=float)[keep_new]
+            candidate_sources = [candidate_sources[i] for i in np.nonzero(keep_new)[0]]
+            if len(candidate_arr) > 0:
+                combined = np.vstack([vertices, candidate_arr])
+                combined_dists = np.concatenate([nn_dists, candidate_dist_arr])
+                combined_sources = source_hints + candidate_sources
+                keep = _deduplicate_points(
+                    combined,
+                    _VORONOI_DEDUP_TOLERANCE,
+                    cell=cell,
+                    pbc=pbc_for_voronoi,
                 )
-                candidate_arr = candidate_arr[keep_new]
-                candidate_dist_arr = np.asarray(candidate_dists, dtype=float)[keep_new]
-                candidate_sources = [
-                    candidate_sources[i] for i in np.nonzero(keep_new)[0]
-                ]
-                if len(candidate_arr) > 0:
-                    combined = np.vstack([vertices, candidate_arr])
-                    combined_dists = np.concatenate([nn_dists, candidate_dist_arr])
-                    combined_sources = source_hints + candidate_sources
-                    keep = _deduplicate_points(
-                        combined,
-                        _VORONOI_DEDUP_TOLERANCE,
-                        cell=cell,
-                        pbc=pbc_for_voronoi,
-                    )
-                    kept_idx = np.nonzero(keep)[0]
-                    n_existing = len(vertices)
-                    n_injected = int(np.count_nonzero(keep[n_existing:]))
-                    vertices = combined[keep]
-                    nn_dists = combined_dists[keep]
-                    source_hints = [combined_sources[i] for i in kept_idx]
-                    logger.debug(
-                        "Injected %d atop candidate sites (%d total sites)",
-                        n_injected,
-                        len(vertices),
-                    )
+                kept_idx = np.nonzero(keep)[0]
+                n_existing = len(vertices)
+                n_injected = int(np.count_nonzero(keep[n_existing:]))
+                vertices = combined[keep]
+                nn_dists = combined_dists[keep]
+                source_hints = [combined_sources[i] for i in kept_idx]
+                logger.debug(
+                    "Injected %d atop candidate sites (%d total sites)",
+                    n_injected,
+                    len(vertices),
+                )
 
     if len(vertices) == 0:
         return []
@@ -1404,7 +1387,7 @@ def get_unified_sites(
         if material_type == "slab" and slab_top_atom_indices is not None:
             _top_atom_indices = slab_top_atom_indices
         else:
-            top_mask = _top_layer_mask_by_normal(
+            top_mask = top_layer_mask_by_normal(
                 positions, cell, float(top_layer_tolerance)
             )
             _top_atom_indices = np.nonzero(top_mask)[0]
@@ -1710,7 +1693,7 @@ def _is_top_layer_planar(
     """
     positions = slab.get_positions()
     cell = np.asarray(slab.get_cell(), dtype=float)
-    top_mask = _top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
+    top_mask = top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
     top_indices = np.nonzero(top_mask)[0]
     if len(top_indices) < 3:
         return False
@@ -1759,7 +1742,7 @@ def _get_site_surface_radii(
 
     if indices is None:
         top_depth = _derive_top_layer_tolerance(positions, symbols)
-        top_mask = _top_layer_mask_by_normal(positions, cell, float(top_depth))
+        top_mask = top_layer_mask_by_normal(positions, cell, float(top_depth))
         indices = tuple(int(i) for i in np.nonzero(top_mask)[0])
 
     radii = [_get_covalent_radius(symbols[int(i)]) for i in indices]

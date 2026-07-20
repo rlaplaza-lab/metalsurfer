@@ -478,7 +478,7 @@ def test_bo_defaults():
     assert c.bo_total_budget == 18
     assert c.bo_ucb_kappa == 1.96
     assert c.bo_acquisition == "ei"
-    assert c.bo_surrogate == "ridge"
+    assert c.bo_surrogate == "gradient_boost"
     assert c.bo_candidate_pool_size is None
     assert c.bo_include_failure_negatives is True
     assert c.bo_failure_penalty_default == 10.0
@@ -615,14 +615,21 @@ def test_bo_transfer_requires_weighted_surrogate():
         AdsorptionConfig(
             bo_enabled=True,
             bo_transfer_enabled=True,
-            bo_surrogate="gradient_boost",
+            bo_surrogate="gaussian_process",
         )
-    c = AdsorptionConfig(
+    for sur in ("ridge", "gradient_boost", "random_forest", "extra_trees", "ensemble"):
+        c = AdsorptionConfig(
+            bo_enabled=True,
+            bo_transfer_enabled=True,
+            bo_surrogate=sur,  # type: ignore[arg-type]
+        )
+        assert c.bo_surrogate == sur
+    gp = AdsorptionConfig(
         bo_enabled=True,
-        bo_transfer_enabled=True,
-        bo_surrogate="ridge",
+        bo_transfer_enabled=False,
+        bo_surrogate="gaussian_process",
     )
-    assert c.bo_surrogate == "ridge"
+    assert gp.bo_surrogate == "gaussian_process"
 
 
 def test_saturation_max_steps_must_be_positive_when_set():

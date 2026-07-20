@@ -501,11 +501,13 @@ has no effect.
    of improvement.
 
 ``bo_surrogate``
-   **Type:** ``Literal["random_forest", "extra_trees", "gradient_boost", "ridge", "ensemble"]`` · **Default:** ``"ridge"``
+   **Type:** ``Literal["random_forest", "extra_trees", "gradient_boost", "ridge", "gaussian_process", "ensemble"]`` · **Default:** ``"gradient_boost"``
 
    Surrogate regressor mapping placement geometry features to adsorption energy.
-   ``"gradient_boost"`` does not support sample weights and is incompatible with
-   ``bo_transfer_enabled=True``.
+   ``"gaussian_process"`` does not support sample weights and is incompatible
+   with ``bo_transfer_enabled=True``. Transfer-capable surrogates are
+   ``random_forest``, ``extra_trees``, ``gradient_boost``, ``ridge``, and
+   ``ensemble``.
 
 ``bo_candidate_pool_size``
    **Type:** ``int | None`` · **Default:** ``None``

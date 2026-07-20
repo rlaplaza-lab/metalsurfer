@@ -68,6 +68,14 @@ BO_SURROGATE_OPTIONS: tuple[str, ...] = (
     "extra_trees",
     "gradient_boost",
     "ridge",
+    "gaussian_process",
+    "ensemble",
+)
+BO_TRANSFER_CAPABLE_SURROGATES: tuple[str, ...] = (
+    "random_forest",
+    "extra_trees",
+    "gradient_boost",
+    "ridge",
     "ensemble",
 )
 TS_OPTIMIZER_OPTIONS: tuple[str, ...] = ("fire", "lbfgs", "bfgs")
@@ -225,8 +233,9 @@ class AdsorptionConfig:
         "extra_trees",
         "gradient_boost",
         "ridge",
+        "gaussian_process",
         "ensemble",
-    ] = "ridge"
+    ] = "gradient_boost"
     bo_candidate_pool_size: int | None = None
     bo_include_failure_negatives: bool = True
     bo_failure_penalty_default: float = 10.0
@@ -431,11 +440,15 @@ class AdsorptionConfig:
                 self.bo_transfer_mode,
                 allowed=("weighted", "cumulative_refit"),
             )
-            if self.bo_transfer_enabled and self.bo_surrogate == "gradient_boost":
+            if (
+                self.bo_transfer_enabled
+                and self.bo_surrogate not in BO_TRANSFER_CAPABLE_SURROGATES
+            ):
                 raise ValueError(
                     "bo_transfer_enabled requires a surrogate that supports "
-                    "per-sample weights (random_forest, extra_trees, ensemble, or "
-                    f"ridge); sample_weight is not supported for "
+                    "per-sample weights "
+                    f"({', '.join(BO_TRANSFER_CAPABLE_SURROGATES)}); "
+                    "sample_weight is not supported for "
                     f"bo_surrogate={self.bo_surrogate!r}"
                 )
             if self.bo_candidate_pool_size is not None:

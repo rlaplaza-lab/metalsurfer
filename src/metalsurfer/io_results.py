@@ -413,18 +413,7 @@ def save_saturation_results(
         for step_result in sr.steps:
             step = step_result.step
             best = step_result.best_result
-            step_structure_path = f"{mol_dir}/step_{step:03d}_best_slab.xyz"
-            step_energy_path = (
-                f"{mol_dir}/step_{step:03d}_Eads_{best.energy_adsorption:.4f}.xyz"
-            )
-            step_adsorbate_path = f"{mol_dir}/step_{step:03d}_adsorbate.xyz"
-            # Create copies without calculator to avoid shape mismatches in results arrays
-            best_atoms_copy = best.atoms.copy()
-            best_atoms_copy.calc = None
-            best_atoms_copy.write(step_structure_path, format="extxyz")
-            best_atoms_copy.write(step_energy_path, format="extxyz")
-            adsorbate = best.atoms[best.slab_size :].copy()
-            _write_clean_xyz(adsorbate, step_adsorbate_path)
+            _write_saturation_step_xyz(best, mol_dir, step)
             if vasp_mol_dir is not None:
                 vasp_subdir = f"{vasp_mol_dir}/step_{step:03d}"
                 _write_vasp_inputs(
@@ -590,18 +579,7 @@ def save_multi_mol_saturation_results(
     for step_result in result.steps:
         step = step_result.step
         best = step_result.best_result
-        step_structure_path = f"{mol_dir}/step_{step:03d}_best_slab.xyz"
-        step_energy_path = (
-            f"{mol_dir}/step_{step:03d}_Eads_{best.energy_adsorption:.4f}.xyz"
-        )
-        step_adsorbate_path = f"{mol_dir}/step_{step:03d}_adsorbate.xyz"
-        # Create copies without calculator to avoid shape mismatches in results arrays
-        best_atoms_copy = best.atoms.copy()
-        best_atoms_copy.calc = None
-        best_atoms_copy.write(step_structure_path, format="extxyz")
-        best_atoms_copy.write(step_energy_path, format="extxyz")
-        adsorbate = best.atoms[best.slab_size :].copy()
-        _write_clean_xyz(adsorbate, step_adsorbate_path)
+        _write_saturation_step_xyz(best, mol_dir, step)
         if vasp_mol_dir is not None:
             vasp_subdir = f"{vasp_mol_dir}/step_{step:03d}"
             _write_vasp_inputs(
@@ -749,3 +727,18 @@ def _write_clean_xyz(atoms: Atoms, filename: str) -> None:
     atoms_copy = atoms.copy()
     atoms_copy.calc = None
     atoms_copy.write(filename, format="extxyz")
+
+
+def _write_saturation_step_xyz(best: ScreeningResult, mol_dir: str, step: int) -> None:
+    """Write best-slab, energy-tagged, and adsorbate-only XYZ for one saturation step."""
+    step_structure_path = f"{mol_dir}/step_{step:03d}_best_slab.xyz"
+    step_energy_path = (
+        f"{mol_dir}/step_{step:03d}_Eads_{best.energy_adsorption:.4f}.xyz"
+    )
+    step_adsorbate_path = f"{mol_dir}/step_{step:03d}_adsorbate.xyz"
+    best_atoms_copy = best.atoms.copy()
+    best_atoms_copy.calc = None
+    best_atoms_copy.write(step_structure_path, format="extxyz")
+    best_atoms_copy.write(step_energy_path, format="extxyz")
+    adsorbate = best.atoms[best.slab_size :].copy()
+    _write_clean_xyz(adsorbate, step_adsorbate_path)

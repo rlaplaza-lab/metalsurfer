@@ -184,14 +184,16 @@ Site generation is **orientation-aware**: slab top-layer detection, Voronoi filt
 
 `placement.generators._get_unique_sites_for_specs` returns a `SiteContext` (`sites`, `use_sites`, `source`, `raw_unclustered`). A SHA-256 cache keyed by positions, cell, pbc, and Voronoi/cluster config bytes avoids recomputing identical site sets within a run.
 
-### How the workflow chooses sites (`workflow/shared.py`)
+### How the workflow chooses sites (`placement/generators.py`)
 
-`_resolve_site_context_for_sampling`:
+`resolve_site_context_for_sampling` (thin wrapper: `workflow.shared._resolve_site_context_for_sampling`):
 
-1. **Cache:** Memoized from geometry hash + `symmetry_broken` (max 16 entries, lock-protected).
+1. **Cache:** Memoized from geometry hash + `symmetry_broken` (max 16 entries, lock-protected; owned in `generators` alongside the unique-sites cache).
 2. **Core:** Clustered Voronoi set via `_get_unique_sites_for_specs`.
 3. **Symmetry broken:** Use clustered Voronoi only (saturation after coverage).
 4. **Otherwise:** `get_symmetry_aware_sites` with reused `raw_unclustered` sites. On `SymmetryAnalysisError` or empty result, fall back to clustered Voronoi.
+
+`clear_site_caches` / `clear_unique_sites_cache` / `clear_site_context_cache` clear both layers.
 
 ### Surface reference slab for site discovery
 
@@ -309,7 +311,7 @@ During saturation placement filtering, decomposition uses `adsorbate_prefix_atom
 
 Finite `PlacementSpec` pool → initial batch (`bo_initial_sampling`, default **`spread_xyz`**: farthest-point on resolved x/y/z) → **geometry-aware features** (`build_spec_features_geometry_aware`: materialize each spec, extract absolute pose features) → surrogate → acquisition batches (LCB, EI, PI; default EI) until `bo_total_budget` (18) acquisition rounds after the initial batch.
 
-**Surrogates** (`bo_surrogate`): `random_forest`, `extra_trees`, `gradient_boost` (HistGradientBoostingRegressor internally), `ridge` (default), `ensemble` (trees + ridge + optional Gaussian-process member). Tree models and `ensemble` provide uncertainty; ridge/HGB use deterministic acquisition limits. `gradient_boost` cannot be used with `bo_transfer_enabled` (config validation).
+**Surrogates** (`bo_surrogate`): `random_forest`, `extra_trees`, `gradient_boost` (HistGradientBoostingRegressor internally; **default**), `ridge`, `gaussian_process`, `ensemble` (trees + ridge + Gaussian-process member). Tree models and `ensemble` provide uncertainty; ridge/HGB attach residual-based σ for EI/PI. Transfer-capable surrogates (`random_forest`, `extra_trees`, `gradient_boost`, `ridge`, `ensemble`) accept per-sample weights; `gaussian_process` does not.
 
 Eval budget once autotuned: `bo_initial_random + bo_total_budget * bo_batch_size` (`resolved_bo_eval_budget`).
 
@@ -415,7 +417,7 @@ Equal footing means consistent validation, PBC, and honest config — not identi
 | `model_name` | `"uma-s-1p1"` |
 | `num_placements` | `None` (GPU autotune) |
 | `conformer_sampling` | `"cycle"` |
-| `bo_surrogate` | `"ridge"` |
+| `bo_surrogate` | `"gradient_boost"` |
 | `bo_initial_sampling` | `"spread_xyz"` |
 | `bo_total_budget` | `18` acquisition batches |
 | `bo_transfer_enabled` | `True` |

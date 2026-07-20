@@ -186,6 +186,12 @@ _PRINCIPAL_AXIS_ROTATION_STEP_DEG: float = 10.0
 # Radius-derived fallback and contact-quality thresholds.
 _VDW_RADIUS_FROM_COVALENT_SCALE: float = 1.2
 _CONTACT_QUALITY_COVALENT_SUM_SCALE: float = 1.35
+# Soft upper bound on closest mol–slab approach for "strict" initial contact (Å).
+_CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM: float = 0.8
+# Distance cutoff counting an adsorbate atom as contacting the surface (Å).
+_CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM: float = 2.5
+# Max variance of contact distances when requiring multi-atom contact (Å²).
+_CONTACT_ATOM_VARIANCE_MAX: float = 0.5
 _MIN_DISTANCE_COVALENT_FALLBACK_SCALE: float = 1.0
 _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM: float = 2.0
 _MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM: float = 1.5

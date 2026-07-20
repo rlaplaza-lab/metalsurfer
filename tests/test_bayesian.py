@@ -141,12 +141,21 @@ class TestSurrogate:
         assert mu.shape == (20,)
         assert sigma.shape == (20,)
 
+    def test_train_surrogate_gradient_boost_accepts_sample_weights(self):
+        X, y = _make_synthetic_training_data(20)
+        w = np.ones(20, dtype=float)
+        w[:5] = 2.0
+        model = train_surrogate(X, y, surrogate="gradient_boost", sample_weight=w)
+        mu, sigma = predict_with_uncertainty(model, X)
+        assert mu.shape == (20,)
+        assert sigma.shape == (20,)
+        assert np.all(sigma > 0)
+
     def test_train_surrogate_rejects_sample_weight_for_non_weighted(self):
         X, y = _make_synthetic_training_data(20)
         w = np.ones(20, dtype=float)
-        for sur in ("gradient_boost", "gaussian_process"):
-            with pytest.raises(ValueError, match="sample_weight"):
-                train_surrogate(X, y, surrogate=sur, sample_weight=w)
+        with pytest.raises(ValueError, match="sample_weight"):
+            train_surrogate(X, y, surrogate="gaussian_process", sample_weight=w)
 
     def test_ensemble_accepts_sample_weight_for_tree_members(self):
         X, y = _make_synthetic_training_data(20)
@@ -524,6 +533,53 @@ class TestTransferSmoke:
         )
         assert result.surrogate is not None
         assert result.transfer_weight_share > 0.0
+
+    def test_build_transfer_surrogate_ridge(self):
+        X, y = _make_synthetic_training_data(20)
+        X_prev = X.iloc[:10].copy()
+        y_prev = (y.iloc[:10] - 0.5).to_numpy()
+        result = build_transfer_surrogate(
+            X.iloc[:8],
+            y.iloc[:8].to_numpy(),
+            X_prev,
+            y_prev,
+            surrogate="ridge",
+            weight_cap=0.35,
+            similarity_lengthscale=1.0,
+            min_similarity=0.0,
+            mae_tolerance=1.0,
+        )
+        assert result.surrogate is not None
+        assert result.transfer_weight_share > 0.0
+
+    def test_build_transfer_surrogate_gradient_boost(self):
+        X, y = _make_synthetic_training_data(20)
+        X_prev = X.iloc[:10].copy()
+        y_prev = (y.iloc[:10] - 0.5).to_numpy()
+        result = build_transfer_surrogate(
+            X.iloc[:8],
+            y.iloc[:8].to_numpy(),
+            X_prev,
+            y_prev,
+            surrogate="gradient_boost",
+            weight_cap=0.35,
+            similarity_lengthscale=1.0,
+            min_similarity=0.0,
+            mae_tolerance=1.0,
+        )
+        assert result.surrogate is not None
+        assert result.transfer_weight_share > 0.0
+
+    def test_build_transfer_surrogate_rejects_gaussian_process(self):
+        X, y = _make_synthetic_training_data(20)
+        with pytest.raises(ValueError, match="transfer-capable"):
+            build_transfer_surrogate(
+                X.iloc[:8],
+                y.iloc[:8].to_numpy(),
+                X.iloc[:10],
+                y.iloc[:10].to_numpy(),
+                surrogate="gaussian_process",  # type: ignore[arg-type]
+            )
 
     def test_windowed_bo_step_memories_keeps_recent_steps(self):
         memories = [
