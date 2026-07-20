@@ -26,7 +26,7 @@ uses ``skip_topology_check=True`` for dissociative hollow-site placements; it ch
 the dissociative workflow completes with adsorbed geometries (molecular or dissociated
 H₂ after relaxation).
 
-`prepare_substrate` equilibrates substrate ionic positions by default (`slab_relaxation_mode="ionic_only"`) and freezes the entire substrate during adsorption by default. `relax_top_layer=True` leaves the exposed surface free; which atoms depend on `material_type` (slab top layer, nanoparticle outer shell, porous pore boundary). See the [surface engineering guide](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html). Loaded experimental or saturation slabs use `slab_relaxation_mode="none"` (e.g. `co2_mof`, `camphor_cu111`, `scripts/furanics_go*_binding_energy.py`, `scripts/vanillin_on_h_saturated_ni111.py` for the loaded slab).
+`prepare_substrate` equilibrates substrate ionic positions by default (`slab_relaxation_mode="ionic_only"`) and freezes the entire substrate during adsorption by default. `relax_top_layer=True` leaves a material-aware surface band free (slab: simple height band within `top_layer_tolerance`; nanoparticle outer shell; porous pore boundary). See the [surface engineering guide](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html). Loaded experimental or saturation slabs use `slab_relaxation_mode="none"` (e.g. `co2_mof`, `camphor_cu111`, `scripts/furanics_go*_binding_energy.py`, `scripts/vanillin_on_h_saturated_ni111.py` for the loaded slab).
 
 The bipyridine workflow uses `prepare_substrate` with `adatom_relaxation_mode="ionic_only"`.
 During saturation, compare relaxed structures to `clean_slab_Au20_*` in the results
@@ -40,7 +40,7 @@ eight DFT local minima from BOSS. Downloads the reference PES dataset from
 gitignored `examples/camphor_cu111/`, uses the paper's 192-atom Cu(111) slab from
 NOMAD, and runs a 25-batch BO placement search (~300+ MLIP evals on a 15GB GPU).
 MLIP energies are compared qualitatively to the paper's DFT landscape (not absolute eV).
-Uses `slab_relaxation_mode="none"` so the NOMAD reference slab is not re-equilibrated at prep.
+Uses `slab_relaxation_mode="none"` so the NOMAD reference slab is not re-equilibrated at prep, and `relax_top_layer=True` with `top_layer_tolerance≈2.1` Å so the top two Cu layers can move while the bottom half stays `FixAtoms`-frozen.
 
 ```bash
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/camphor_cu111_binding_energy.py

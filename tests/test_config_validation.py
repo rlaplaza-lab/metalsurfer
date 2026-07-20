@@ -28,6 +28,7 @@ def test_invalid_device_raises(device):
 
 def test_default_config():
     config = AdsorptionConfig()
+    assert config.model_name == "uma-s-1p2"
     assert config.num_conformers == 10
     assert config.fmax == 0.05
     assert config.write_vasp_inputs is False

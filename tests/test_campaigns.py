@@ -587,3 +587,55 @@ def test_bootstrap_screening_run_validates_substrate_before_model(monkeypatch):
             AdsorptionConfig(),
         )
     assert model_called["value"] is False
+
+
+def test_write_settings_alone_writes_timing_metadata(tmp_path, monkeypatch):
+    """write_settings=True (default) also persists timing into run_metadata.json."""
+    import json
+
+    from metalsurfer.surfaces import SlabContainer
+    from tests.conftest import make_slab
+
+    monkeypatch.chdir(tmp_path)
+    placement = make_screening_result(molecule="demo", energy_adsorption=-1.0)
+    slab_container = SlabContainer(make_slab())
+
+    def fake_process(_smi, mol, *_args, **_kwargs):
+        return [placement]
+
+    _patch_binding_bootstrap(monkeypatch, slab_container)
+    monkeypatch.setattr("metalsurfer.campaigns.process_molecule", fake_process)
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.save_single_molecule_results",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.save_summary_results",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.setup_directories",
+        lambda surface_types, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.DatasetLogger.flush",
+        lambda self: None,
+    )
+
+    run_adsorption(
+        slab=slab_container,
+        molecules=[("C", "demo")],
+        config=AdsorptionConfig(seed=1),
+        surface_type="meta_or",
+        skip_existing=False,
+        write_settings=True,
+        write_metadata=False,
+    )
+
+    path = tmp_path / "results_meta_or" / "run_metadata.json"
+    assert path.exists()
+    with open(path) as f:
+        meta = json.load(f)
+    assert meta["campaign"] == "multi_molecule_binding"
+    assert "timing" in meta
+    assert "config" in meta

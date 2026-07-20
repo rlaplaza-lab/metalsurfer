@@ -8,8 +8,9 @@ resize, rewrite constraints, or re-equilibrate ionic positions.
 :func:`prepare_substrate` **equilibrates substrate ionic positions by default**
 (``slab_relaxation_mode="ionic_only"``) and attaches ASE ``FixAtoms`` for
 adsorption via ``relax_top_layer`` / ``freeze_symbols`` prep kwargs (default:
-entire substrate frozen). ``relax_top_layer=True`` is a material-aware shortcut;
-see :func:`~metalsurfer.identify_relaxable_surface_indices`. Campaign APIs read
+entire substrate frozen). ``relax_top_layer=True`` is a material-aware shortcut
+(simple height band on slabs; see
+:func:`~metalsurfer.identify_relaxable_surface_indices`). Campaign APIs read
 those ``FixAtoms`` only.
 
 Typical flow: :func:`prepare_substrate` → optional

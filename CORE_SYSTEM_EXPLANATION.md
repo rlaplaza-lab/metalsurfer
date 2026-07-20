@@ -29,11 +29,11 @@ With `save_results=True` (default):
 - **Binding** campaigns call `save_single_molecule_results` per molecule and `save_summary_results` for campaign CSVs (`adsorption_energies_detailed.csv`, `adsorption_energy_summary.csv`), and append ML rows via `DatasetLogger`.
 - **Saturation** campaigns call `save_saturation_results` (and optionally flatten step placements to `adsorption_energies_detailed.csv` when `save_benchmark_dataset=True`).
 
-`skip_existing=True` (default) skips molecules already listed in `adsorption_energies_detailed.csv` (binding) or `saturation_summary.csv` (saturation), for **both** in-memory lists and CSV paths.
+`skip_existing=True` (default) skips molecules already listed in `adsorption_energies_detailed.csv` (binding) or `saturation_summary.csv` (saturation), for **both** in-memory lists and CSV paths. Official demos pass `skip_existing=False` so re-runs always compute; skipped campaigns log a WARNING naming the CSV.
 
 ### 2. Surface preparation API
 
-`prepare_substrate(...)` in `metalsurfer.surface_prep` builds or loads a slab, **equilibrates ionic positions by default** (`slab_relaxation_mode="ionic_only"`), optionally applies alloy substitution and adatom deposition, and attaches ASE `FixAtoms` via prep kwargs (`relax_top_layer`, `freeze_symbols`; default: entire substrate frozen). Prep-time relaxation knobs mirror `AdsorptionConfig.slab_relaxation_*`. Writes `clean_slab*` artifacts under `results_dir`.
+`prepare_substrate(...)` in `metalsurfer.surface_prep` builds or loads a slab, **equilibrates ionic positions by default** (`slab_relaxation_mode="ionic_only"`), optionally applies alloy substitution and adatom deposition, and attaches ASE `FixAtoms` via prep kwargs (`relax_top_layer`, `freeze_symbols`, `top_layer_tolerance`; default: entire substrate frozen). For slabs, `relax_top_layer=True` frees a **simple height band** within `top_layer_tolerance` of the exposed surface (not the stepped site-discovery mask). If that policy would freeze nobody, prep falls back to freezing the whole substrate. Prep-time relaxation knobs mirror `AdsorptionConfig.slab_relaxation_*`. Writes `clean_slab*` artifacts under `results_dir`.
 
 Also exported from `metalsurfer.surface_prep`: `finalize_substrate`, `relax_substrate`, `resize_substrate_for_molecule`, `create_slab_from_bulk`, `create_slab_from_atoms`, `substitute_alloy`, `deposit_adatoms`, `auto_resize_substrate_for_molecule`, `compute_minimum_supercell`.
 
@@ -416,8 +416,12 @@ Equal footing means consistent validation, PBC, and honest config — not identi
 
 | Field | Default |
 |-------|---------|
-| `model_name` | `"uma-s-1p1"` |
+| `model_name` | `"uma-s-1p2"` |
 | `num_placements` | `None` (GPU autotune) |
+| `placement_x_range` / `placement_y_range` | `(-0.5, 0.5)` Å (distance-recovery radii) |
+| `placement_distance_recovery` | `True` |
+| `voronoi_auto_widen` | `True` |
+| `adaptive_parallel_fraction` | `True` |
 | `conformer_sampling` | `"cycle"` |
 | `bo_surrogate` | `"gradient_boost"` |
 | `bo_initial_sampling` | `"spread_xyz"` |
@@ -563,7 +567,7 @@ BOSS learns a **continuous PES** in a hand-crafted parameterization; Metalsurfer
 
 - **Many placements, not one pose:** binding energy is the best of a sampled distribution after aggressive filtering—not a single user-specified geometry.
 - **Saturation proxy:** stop when the next adsorption is endothermic (`E_ads ≥ 0`), not at an explicit coverage fraction or chemical potential.
-- **Rigid substrate by default during adsorption:** entire substrate frozen via prep-time `FixAtoms` (`relax_top_layer=False`). `relax_top_layer=True` is a material-aware shortcut (`identify_relaxable_surface_indices`: slab top layer, nanoparticle outer shell, porous pore boundary). Custom ASE constraints override the shortcut. Prep equilibration uses separate ASE `slab_relaxation_mode` (default `ionic_only`).
+- **Rigid substrate by default during adsorption:** entire substrate frozen via prep-time `FixAtoms` (`relax_top_layer=False`). `relax_top_layer=True` is a material-aware shortcut via `identify_relaxable_surface_indices`: **slab** — simple height band within `top_layer_tolerance` of max height along the slab normal (distinct from `top_layer_mask_by_normal`, which expands for stepped **site** enumeration); **nanoparticle** — outer shell; **porous** — pore boundary. Empty freeze sets fall back to freezing the whole substrate. Custom ASE constraints override the shortcut. Prep equilibration uses separate ASE `slab_relaxation_mode` (default `ionic_only`).
 - **Symmetry as accelerator:** symmetry-reduced sites until the covered slab breaks symmetry vs the reference structure.
 - **GPU-first TorchSim:** autotune parallel batch size; `InFlightAutoBatcher` packs relaxations; `saturation_autobatcher_reuse` amortizes probes on deep coverage runs.
 - **BO + transfer for coverage:** `run_saturation_bo` carries `BOStepMemory` across steps so later layers warm-start from an informed surrogate.

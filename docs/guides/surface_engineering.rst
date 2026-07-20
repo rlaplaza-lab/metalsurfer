@@ -313,15 +313,19 @@ fixed; which atoms remain free depends on
 +--------------------+---------------------------------------------------------+
 | ``material_type``  | Atoms left free during placement relaxation             |
 +====================+=========================================================+
-| ``"slab"``         | Exposed layer along the slab normal (within tolerance   |
-|                    | of maximum height)                                      |
+| ``"slab"``         | Simple height band along the slab normal (within        |
+|                    | tolerance of maximum height). Distinct from the stepped |
+|                    | site-discovery mask; e.g. ``top_layer_tolerance≈2.1`` Å |
+|                    | frees ~2 Cu(111) layers on a 4-layer slab.              |
 | ``"nanoparticle"`` | Outermost shell (within tolerance of max COM distance)  |
 | ``"porous"``       | Pore-wall atoms (closest neighbour per pore void site)  |
 +--------------------+---------------------------------------------------------+
 
-Use for workflows where the surface should restructure with the adsorbate
-(e.g. graphene oxide slabs, H-saturated surfaces, flexible pore mouths). For
-catalyst descriptors and rigid binding energies, keep the default.
+If the policy would freeze no atoms, prep warns and freezes the entire substrate
+instead. Use for workflows where the surface should restructure with the
+adsorbate (e.g. graphene oxide slabs, H-saturated surfaces, flexible pore
+mouths, camphor/Cu(111) with two free Cu layers). For catalyst descriptors and
+rigid binding energies, keep the default.
 
 **Manual constraints:** attach your own ASE ``FixAtoms`` (or other constraints)
 to the substrate before calling campaign APIs, or call lower-level helpers and

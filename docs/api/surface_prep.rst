@@ -53,10 +53,16 @@ the same config in ``run_*`` (omitting *config* defaults to ``"slab"``).
 +--------------------+---------------------------------------------------------+
 | ``material_type``  | Free atoms (within ``top_layer_tolerance``)             |
 +====================+=========================================================+
-| ``"slab"``         | Exposed layer along the slab normal                     |
+| ``"slab"``         | Simple height band along the slab normal (within        |
+|                    | tolerance of max height). Not the stepped               |
+|                    | ``top_layer_mask_by_normal`` used for site discovery.   |
 | ``"nanoparticle"`` | Outermost shell (max distance from centre of mass)      |
 | ``"porous"``       | Pore-wall atoms (closest neighbour per pore void site)  |
 +--------------------+---------------------------------------------------------+
+
+A ``top_layer_tolerance`` large enough to free every atom (e.g. thicker than the
+slab) triggers a warning and freezes the entire substrate instead of attaching
+empty ``FixAtoms``.
 
 For custom freeze patterns, attach ASE ``FixAtoms`` yourself or call
 ``apply_surface_constraints`` / ``finalize_substrate`` with ``freeze_symbols``.

@@ -467,8 +467,10 @@ def identify_relaxable_surface_indices(
 ) -> list[int]:
     """Return substrate atom indices left free when ``relax_top_layer=True``.
 
-    - **slab:** exposed layer along the slab normal (within *tolerance* of the
-      maximum height).
+    - **slab:** simple height band along the slab normal (within *tolerance* of
+      the maximum height). This is **not**
+      :func:`~metalsurfer.placement.sites.top_layer_mask_by_normal`, which
+      expands for stepped site enumeration and can free an entire thin slab.
     - **nanoparticle:** outermost shell (within *tolerance* of the maximum
       distance from the centre of mass).
     - **porous:** framework atoms on pore walls — closest neighbour of each

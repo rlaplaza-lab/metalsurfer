@@ -145,8 +145,9 @@ Prep vs campaign relaxation
 ``slab_relaxation_*`` equilibrates the substrate **before** campaigns during prep.
 During adsorption relaxation, only adsorbate atoms and substrate atoms **not** in ASE
 ``FixAtoms`` move. Default prep freezes the entire substrate; ``relax_top_layer=True``
-(on ``prepare_substrate``) leaves a material-aware surface layer free. Details:
-:doc:`surface_engineering`.
+(on ``prepare_substrate``) leaves a material-aware surface band free (for slabs: atoms
+within ``top_layer_tolerance`` of max height — a simple band, not the stepped site
+mask). Details: :doc:`surface_engineering`.
 
 Literature or pre-relaxed slabs
 -------------------------------

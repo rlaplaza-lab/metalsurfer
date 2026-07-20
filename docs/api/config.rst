@@ -39,8 +39,11 @@ Material and substrate
 ``top_layer_tolerance``
    **Type:** ``float`` · **Default:** ``0.5`` (Å)
 
-   Thickness along the surface normal used to identify top-layer atoms for Voronoi
-   input and topology-based site generation on slabs.
+   Thickness along the surface normal used to (1) identify top-layer atoms for
+   Voronoi / site generation on slabs and (2), when ``relax_top_layer=True`` on
+   prep, define the **simple height band** of substrate atoms left free during
+   adsorption (distinct from the stepped site-discovery mask). Larger values
+   (e.g. ``≈2.1`` Å) free multiple Cu(111) layers on thin multi-layer slabs.
 
 ``rough_slab_local_z``
    **Type:** ``bool`` · **Default:** ``True``

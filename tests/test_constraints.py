@@ -1,5 +1,7 @@
 """Tests for top-layer identification and frozen-index computation."""
 
+import logging
+
 import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
@@ -196,3 +198,19 @@ def test_relax_top_layer_two_layer_tolerance_freezes_bottom_half():
         material_type="slab",
     )
     assert frozen_indices_from_constraints(constrained) == frozen
+
+
+def test_relax_top_layer_empty_freeze_falls_back_to_full_substrate(caplog):
+    """If every atom would be free, apply_surface_constraints freezes all atoms."""
+    slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
+    # Tolerance larger than slab thickness → simple band frees everyone.
+    with caplog.at_level(logging.WARNING, logger="metalsurfer.surfaces"):
+        constrained = apply_surface_constraints(
+            slab,
+            relax_top_layer=True,
+            top_layer_tolerance=100.0,
+            material_type="slab",
+        )
+    frozen = frozen_indices_from_constraints(constrained)
+    assert frozen == list(range(len(slab)))
+    assert any("no atoms frozen" in r.message for r in caplog.records)
