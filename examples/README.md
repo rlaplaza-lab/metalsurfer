@@ -15,7 +15,8 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 | `bipyridine_au111_defects_saturation_raw.py` | HPC-scale saturation on defected Au(111) (1000 placements; not a quick demo) |
 | `camphor_cu111_binding_energy.py` | (1S)-camphor on Cu(111) vs Järvi et al. BOSS benchmark (BO, 15GB GPU) |
 
-Demos set explicit small `num_placements` for quick runs. For production screening, omit
+Demos set explicit small `num_placements` for quick runs and pass
+`skip_existing=False` so re-runs always compute. For production screening, omit
 `num_placements` (and BO batch fields) to autotune to GPU parallel capacity via TorchSim
 memory probing at workflow start. For saturation with Bayesian placement search, use
 `run_saturation_bo`.

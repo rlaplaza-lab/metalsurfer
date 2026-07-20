@@ -171,3 +171,28 @@ def test_check_frozen_substrate_displacement_passes_when_fixed():
     combined += Atoms("H", positions=[[0.0, 0.0, 8.0]])
     ok, _ = check_frozen_substrate_displacement(combined, slab, slab_size=len(slab))
     assert ok
+
+
+def test_relax_top_layer_two_layer_tolerance_freezes_bottom_half():
+    """Large top_layer_tolerance must free only the top band, not the whole slab.
+
+    Multi-layer Cu(111)-like slabs use ~2 Å interlayer spacing; a 2.1 Å tolerance
+    should leave two layers free and freeze the rest (camphor demo policy).
+    """
+    slab = make_slab(nx=4, ny=4, n_layers=4, spacing=2.08)
+    free = identify_relaxable_surface_indices(slab, material_type="slab", tolerance=2.1)
+    frozen = compute_frozen_indices(
+        slab,
+        relax_top_layer=True,
+        top_layer_tolerance=2.1,
+        material_type="slab",
+    )
+    assert len(free) == 32  # two layers × 4×4
+    assert len(frozen) == 32
+    constrained = apply_surface_constraints(
+        slab,
+        relax_top_layer=True,
+        top_layer_tolerance=2.1,
+        material_type="slab",
+    )
+    assert frozen_indices_from_constraints(constrained) == frozen

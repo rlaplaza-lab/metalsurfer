@@ -44,6 +44,21 @@ from .workflow.shared import _bootstrap_screening_run, _normalize_molecules_inpu
 logger = logging.getLogger(__name__)
 
 
+def _write_run_metadata_json(
+    *,
+    write_settings: bool,
+    write_metadata: bool,
+) -> bool:
+    """Return True when campaign APIs should persist ``run_metadata.json``.
+
+    ``write_settings`` and ``write_metadata`` both control the same file; either
+    flag being True writes the full snapshot (config plus timing/counts when
+    available). Prefer leaving the defaults so one coherent metadata file is
+    written; set both to False to suppress it.
+    """
+    return write_settings or write_metadata
+
+
 def _summarize_molecule(
     molecule_name: str,
     results: list[ScreeningResult],
@@ -100,8 +115,8 @@ def _run_binding_campaign(
     if mode == "non_bo" and config.bo_enabled:
         warnings.warn(
             "bo_enabled=True on AdsorptionConfig has no effect with run_adsorption; "
-            "use run_adsorption_bo instead.",
-            stacklevel=2,
+            "use run_adsorption_bo instead (preferred) rather than setting bo_enabled.",
+            stacklevel=3,
         )
 
     molecule_pairs, load_status, molecules_source = _normalize_molecules_input(
@@ -111,20 +126,22 @@ def _run_binding_campaign(
     )
     if not molecule_pairs:
         if load_status == "all_skipped":
+            detailed_csv = (
+                results_dir_for(surface_type) / "adsorption_energies_detailed.csv"
+            )
             msg = (
-                "No molecules to process: all inputs already listed in "
-                "adsorption_energies_detailed.csv. Set skip_existing=False "
-                "or remove the detailed CSV to rerun."
+                f"No molecules to process: all inputs already listed in {detailed_csv}. "
+                "Set skip_existing=False or remove that CSV to rerun."
             )
             logger.warning(msg)
-            warnings.warn(msg, stacklevel=2)
+            warnings.warn(msg, stacklevel=3)
         elif load_status == "empty_file":
             msg = (
                 "No molecules to process: input file empty or no valid rows. "
                 "Expected CSV columns smiles and name."
             )
             logger.warning(msg)
-            warnings.warn(msg, stacklevel=2)
+            warnings.warn(msg, stacklevel=3)
         return BindingCampaignResult(
             mode="bo" if mode == "bo" else "non_bo",
             surface_type=surface_type,
@@ -209,7 +226,9 @@ def _run_binding_campaign(
         save_summary_results(run_results, surface_type=surface_type, config=config)
     total_configurations = sum(len(rr.results) for rr in run_results)
     t_total_s = time.perf_counter() - t_start
-    if write_settings:
+    if _write_run_metadata_json(
+        write_settings=write_settings, write_metadata=write_metadata
+    ):
         write_run_settings(
             surface_type,
             config,
@@ -219,7 +238,6 @@ def _run_binding_campaign(
             n_configurations=total_configurations,
             mode=mode,
         )
-    if write_metadata:
         write_run_metadata(
             surface_type=surface_type,
             config=config,
@@ -281,9 +299,11 @@ def run_adsorption(
         Whether to write CSV/XYZ output files. VASP bundles require
         ``config.write_vasp_inputs=True``.
     write_settings:
-        Whether to write config and run info into ``run_metadata.json``.
+        When True (default), write the full ``run_metadata.json`` (config, campaign
+        fields, and timing/counts). ``write_metadata`` is an alias for the same file.
     write_metadata:
-        Whether to write timing and count metadata into ``run_metadata.json``.
+        Alias for enabling the same ``run_metadata.json`` write. Either flag True
+        writes the full file; set both False to suppress it.
     skip_existing:
         Skip molecules already listed in ``adsorption_energies_detailed.csv``
         (in-memory lists and CSV paths).
@@ -342,9 +362,11 @@ def run_adsorption_bo(
         Whether to write CSV/XYZ output files. VASP bundles require
         ``config.write_vasp_inputs=True``.
     write_settings:
-        Whether to write config and run info into ``run_metadata.json``.
+        When True (default), write the full ``run_metadata.json`` (config, campaign
+        fields, and timing/counts). ``write_metadata`` is an alias for the same file.
     write_metadata:
-        Whether to write timing and count metadata into ``run_metadata.json``.
+        Alias for enabling the same ``run_metadata.json`` write. Either flag True
+        writes the full file; set both False to suppress it.
     skip_existing:
         Skip molecules already listed in ``adsorption_energies_detailed.csv``
         (in-memory lists and CSV paths).
@@ -406,8 +428,8 @@ def _run_saturation_campaign(
     if mode == "non_bo" and config.bo_enabled:
         warnings.warn(
             "bo_enabled=True on AdsorptionConfig has no effect with run_saturation; "
-            "use run_saturation_bo instead.",
-            stacklevel=2,
+            "use run_saturation_bo instead (preferred) rather than setting bo_enabled.",
+            stacklevel=3,
         )
 
     setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
@@ -435,7 +457,9 @@ def _run_saturation_campaign(
         _save_benchmark_dataset_if_requested(
             runs, surface_type=surface_type, config=config
         )
-    if write_settings:
+    if _write_run_metadata_json(
+        write_settings=write_settings, write_metadata=write_metadata
+    ):
         write_run_settings(
             surface_type,
             config,
@@ -449,13 +473,13 @@ def _run_saturation_campaign(
                 for run in runs
             ],
         )
-    if write_metadata and run_metadata:
-        write_run_metadata_from_out(
-            run_metadata,
-            surface_type=surface_type,
-            config=config,
-            molecules=molecules,
-        )
+        if run_metadata:
+            write_run_metadata_from_out(
+                run_metadata,
+                surface_type=surface_type,
+                config=config,
+                molecules=molecules,
+            )
 
     return SaturationCampaignResult(
         mode=mode,
@@ -495,9 +519,11 @@ def run_saturation(
         Whether to write CSV/XYZ output files. VASP bundles require
         ``config.write_vasp_inputs=True``.
     write_settings:
-        Whether to write config and run info into ``run_metadata.json``.
+        When True (default), write the full ``run_metadata.json`` (config, campaign
+        fields, and timing/counts when available). ``write_metadata`` is an alias.
     write_metadata:
-        Whether to write timing and count metadata into ``run_metadata.json``.
+        Alias for enabling the same ``run_metadata.json`` write. Either flag True
+        writes the full file; set both False to suppress it.
     skip_existing:
         Skip molecules already listed in ``saturation_summary.csv``.
     run_metadata_out:
@@ -553,9 +579,11 @@ def run_saturation_bo(
         Whether to write CSV/XYZ output files. VASP bundles require
         ``config.write_vasp_inputs=True``.
     write_settings:
-        Whether to write config and run info into ``run_metadata.json``.
+        When True (default), write the full ``run_metadata.json`` (config, campaign
+        fields, and timing/counts when available). ``write_metadata`` is an alias.
     write_metadata:
-        Whether to write timing and count metadata into ``run_metadata.json``.
+        Alias for enabling the same ``run_metadata.json`` write. Either flag True
+        writes the full file; set both False to suppress it.
     skip_existing:
         Skip molecules already listed in ``saturation_summary.csv``.
     run_metadata_out:

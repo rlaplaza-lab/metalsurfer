@@ -82,6 +82,7 @@ def main() -> int:
         config=config,
         surface_type=surface_type,
         system_name="Ru_0001",
+        skip_existing=False,
     )
 
     print()

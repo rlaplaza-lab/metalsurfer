@@ -129,7 +129,7 @@ class ComputationContext:
     different models or convergence criteria are distinguishable.
     """
 
-    model_name: str = "uma-s-1p1"
+    model_name: str = "uma-s-1p2"
     fmax: float = 0.05
     stage1_steps: int = 50
     stage2_steps: int = 150
@@ -476,7 +476,7 @@ class PlacementRecord:
             slab_indices = tuple(int(x) for x in str(slab_indices_raw).split(","))
 
         ctx = ComputationContext(
-            model_name=str(_ctx_value("model_name", "uma-s-1p1")),
+            model_name=str(_ctx_value("model_name", "uma-s-1p2")),
             fmax=float(_ctx_value("fmax", 0.05)),
             stage1_steps=int(_ctx_value("stage1_steps", 50)),
             stage2_steps=int(_ctx_value("stage2_steps", 150)),

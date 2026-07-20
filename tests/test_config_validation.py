@@ -31,6 +31,11 @@ def test_default_config():
     assert config.num_conformers == 10
     assert config.fmax == 0.05
     assert config.write_vasp_inputs is False
+    assert config.adaptive_parallel_fraction is True
+    assert config.placement_distance_recovery is True
+    assert config.voronoi_auto_widen is True
+    assert config.placement_x_range == (-0.5, 0.5)
+    assert config.placement_y_range == (-0.5, 0.5)
 
 
 def test_valid_custom_config():
@@ -302,6 +307,16 @@ def test_equal_z_range_rejected():
 def test_inverted_x_range_rejected():
     with pytest.raises(ValueError, match="placement_x_range.*lower bound"):
         AdsorptionConfig(placement_x_range=(4.0, -4.0))
+
+
+def test_equal_xy_range_allowed_disables_lateral_recovery():
+    """Equal XY bounds are valid and mean no in-plane distance recovery."""
+    cfg = AdsorptionConfig(
+        placement_x_range=(0.0, 0.0),
+        placement_y_range=(0.0, 0.0),
+    )
+    assert cfg.placement_x_range == (0.0, 0.0)
+    assert cfg.placement_y_range == (0.0, 0.0)
 
 
 # ---------------------------------------------------------------------------

@@ -648,11 +648,16 @@ def run_saturation_screening(
         )
         if not molecule_pairs:
             if load_status == "all_skipped":
-                logger.info("No molecules to process (all already in existing summary)")
+                summary_csv = f"results_{surface_type}/saturation_summary.csv"
+                logger.warning(
+                    "No molecules to process: all already listed in %s. "
+                    "Set skip_existing=False or remove that CSV to rerun.",
+                    summary_csv,
+                )
             elif load_status == "empty_file":
-                logger.info("No molecules to process (file empty or no valid rows)")
+                logger.warning("No molecules to process: file empty or no valid rows")
             else:
-                logger.info("No molecules to process")
+                logger.warning("No molecules to process")
             return []
 
         bootstrap = _bootstrap_screening_run(slab, molecule_pairs, config)

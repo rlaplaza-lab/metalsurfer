@@ -976,9 +976,12 @@ def _select_molecules_for_processing(
                 molecules.append(m)
                 smiles.append(s)
         if existing_molecules:
-            logger.info(
-                "Skipped %d already-processed molecules",
-                len(all_molecules) - len(molecules),
+            skipped = len(all_molecules) - len(molecules)
+            logger.warning(
+                "Skipped %d already-processed molecule(s) listed in %s. "
+                "Set skip_existing=False or remove that CSV to force a fresh run.",
+                skipped,
+                summary,
             )
         if not molecules:
             return [], [], "all_skipped"

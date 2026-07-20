@@ -79,6 +79,27 @@ adsorbates are checked with adsorbate–adsorbate separation. Generation failure
 emit typed reasons (``too_close``, ``vdw_overlap``, ``adsorbate_overlap``, …) into
 ``PlacementFailureEvent`` / placement ``failure_summary``.
 
+Placement success levers
+------------------------
+
+Defaults aim for high accept rates with low overhead (work runs mainly on failures):
+
+- **Orientation mix** — ``adaptive_parallel_fraction=True`` picks parallel vs EN-down
+  from binder/ring chemistry; set ``False`` and tune
+  ``flat_aromatic_parallel_fraction`` for a fixed mix.
+- **Distance recovery** — ``placement_distance_recovery=True`` nudges height then
+  small in-plane offsets (``placement_x_range`` / ``placement_y_range``, default
+  ±0.5 Å) after ``too_close`` / ``too_far``. Use ``(0.0, 0.0)`` XY ranges for
+  height-only recovery, or disable recovery entirely with
+  ``placement_distance_recovery=False``.
+- **Site window** — ``voronoi_auto_widen=True`` retries once with a wider Voronoi
+  accessibility window when the first pass finds no sites; pair with explicit
+  ``voronoi_probe_radius`` / ``voronoi_max_site_distance`` when comparing windows.
+- **Retries** — ``placement_retry_*`` re-enumerates remaining slots with new seeds
+  after generation failures.
+- **Gates** — keep ``reject_vdw_overlaps`` and ``strict_initial_placement`` off
+  unless you need stricter starts (they reduce yield).
+
 Site classification defaults to ``site_classification_method="auto"``: Delaunay
 for slabs (catalysis-style atop/bridge/hollow catalogs) and distance-ratio for
 nanoparticles and porous materials. Explicit ``"distance_ratio"`` on slabs is

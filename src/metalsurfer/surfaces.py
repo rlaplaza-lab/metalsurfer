@@ -181,6 +181,14 @@ def apply_surface_constraints(
         top_layer_tolerance=top_layer_tolerance,
         material_type=material_type,
     )
+    if relax_top_layer and not frozen and len(result) > 0:
+        logger.warning(
+            "relax_top_layer=True left no atoms frozen (tolerance=%.3f A, "
+            "material_type=%s); freezing entire substrate instead.",
+            top_layer_tolerance,
+            material_type,
+        )
+        frozen = list(range(len(result)))
     result.set_constraint(FixAtoms(indices=frozen))
     return result
 

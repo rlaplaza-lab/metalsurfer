@@ -50,8 +50,10 @@ To also install the documentation build dependencies:
 Runnable Examples
 -----------------
 
-Five scripts under ``examples/`` cover nanoparticle, porous, slab, dissociative
-H₂, and Bayesian workflows (HPC-scale saturation under ``scripts/``):
+Five quick demos under ``examples/`` cover nanoparticle, porous, slab, dissociative
+H₂, and Bayesian workflows. An additional HPC-scale saturation script
+(``bipyridine_au111_defects_saturation_raw.py``) lives under ``examples/`` and
+``scripts/`` but is not a quick demo:
 
 .. code-block:: bash
 
@@ -123,7 +125,8 @@ You can also pass a CSV path instead of an in-memory list (same outputs; optiona
    ))
 
 By default, ``skip_existing=True`` skips molecules already listed in
-``adsorption_energies_detailed.csv`` (in-memory lists and CSV paths).
+``adsorption_energies_detailed.csv`` (in-memory lists and CSV paths). Official
+demos pass ``skip_existing=False`` so re-runs always compute.
 
 Use :func:`~metalsurfer.run_adsorption_bo` for Bayesian placement search; setting
 ``bo_enabled=True`` on :class:`~metalsurfer.AdsorptionConfig` with

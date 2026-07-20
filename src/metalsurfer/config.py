@@ -24,12 +24,20 @@ def _check_positive_int(name: str, value: int) -> None:
         raise ValueError(f"{name} must be a positive integer, got {value!r}")
 
 
-def _check_range_tuple(name: str, value: tuple[float, float]) -> None:
+def _check_range_tuple(
+    name: str, value: tuple[float, float], *, allow_equal: bool = False
+) -> None:
     if len(value) != 2:
         raise ValueError(
             f"{name} must be a 2-tuple (low, high), got length {len(value)}"
         )
-    if value[0] >= value[1]:
+    if allow_equal:
+        if value[0] > value[1]:
+            raise ValueError(
+                f"{name} lower bound ({value[0]}) must be less than or equal to "
+                f"upper bound ({value[1]})"
+            )
+    elif value[0] >= value[1]:
         raise ValueError(
             f"{name} lower bound ({value[0]}) must be less than "
             f"upper bound ({value[1]})"
@@ -133,7 +141,7 @@ class AdsorptionConfig:
     https://metalsurfer.readthedocs.io/en/latest/api/config.html
     """
 
-    model_name: str = "uma-s-1p1"
+    model_name: str = "uma-s-1p2"
     num_conformers: int = 10
     num_placements: int | None = None
     device: str = "cuda"
@@ -141,21 +149,23 @@ class AdsorptionConfig:
     stage1_steps: int = 50
     stage2_steps: int = 150
     reference_optimization_steps: int = 100
-    placement_x_range: tuple[float, float] = (-4.0, 4.0)
-    placement_y_range: tuple[float, float] = (-4.0, 4.0)
+    placement_x_range: tuple[float, float] = (-0.5, 0.5)
+    placement_y_range: tuple[float, float] = (-0.5, 0.5)
     placement_z_range: tuple[float, float] = (0.7, 1.25)
     placement_z_scale_by_covalent_radius: bool = True
+    placement_distance_recovery: bool = True
     material_type: Literal["slab", "nanoparticle", "porous"] = "slab"
     voronoi_probe_radius: float | None = None
     voronoi_max_site_distance: float | None = None
     voronoi_site_enrichment: bool = True
+    voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
     conformer_sampling: Literal["boltzmann", "cycle", "mixed"] = "cycle"
     placement_filter: Callable[[PlacementSpec], bool] | None = field(
         default=None, repr=False
     )
     flat_aromatic_parallel_fraction: float = 0.5
-    adaptive_parallel_fraction: bool = False
+    adaptive_parallel_fraction: bool = True
     min_initial_distance: float = 1.5
     min_contact_ratio: float = 0.8
     max_initial_distance: float | None = None
@@ -268,7 +278,8 @@ class AdsorptionConfig:
         if min_contact_distance is not None:
             warn(
                 "AdsorptionConfig.min_contact_distance is deprecated; "
-                "use max_closest_approach (max allowed closest-approach distance).",
+                "use max_closest_approach (max allowed closest-approach distance). "
+                "For covalent-radius contact fraction filtering, use min_contact_ratio.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -334,12 +345,16 @@ class AdsorptionConfig:
             _check_non_negative(nn_name, nn_value)
 
         range_fields: list[tuple[str, tuple[float, float]]] = [
-            ("placement_x_range", self.placement_x_range),
-            ("placement_y_range", self.placement_y_range),
             ("placement_z_range", self.placement_z_range),
         ]
         for range_name, range_value in range_fields:
             _check_range_tuple(range_name, range_value)
+        for xy_name, xy_value in (
+            ("placement_x_range", self.placement_x_range),
+            ("placement_y_range", self.placement_y_range),
+        ):
+            # Equal bounds disable in-plane distance recovery.
+            _check_range_tuple(xy_name, xy_value, allow_equal=True)
 
         if not 0.5 <= self.min_contact_ratio <= 1.2:
             raise ValueError(

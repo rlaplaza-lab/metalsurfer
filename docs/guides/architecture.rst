@@ -202,7 +202,9 @@ The default output root is ``results_{surface_type}/``.  Common artifacts:
   step results.
 - ``saturation_placements_detailed.csv`` and ``step_{NNN}_placements/`` when
   ``saturation_save_all_placements=True`` (default).
-- ``run_metadata.json`` — config snapshot plus optional timing/count metadata (``write_settings`` and/or ``write_metadata`` on campaign APIs; merged incrementally into one file).
+- ``run_metadata.json`` — config snapshot plus timing/count metadata. Campaign
+  flags ``write_settings`` and ``write_metadata`` both control this same file;
+  either True writes the full snapshot (set both False to suppress).
 - ``ml_dataset.csv``, ``ml_dataset_metadata.json`` — ML placement records from
   :class:`~metalsurfer.DatasetLogger` during binding campaigns and saturation.
 - ``xyz_structures/`` — optimized structures in XYZ format.

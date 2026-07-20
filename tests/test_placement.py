@@ -1417,9 +1417,177 @@ def test_estimate_parallel_fraction_strong_binder():
 
 
 def test_adaptive_parallel_fraction_config():
-    """Config with adaptive_parallel_fraction should validate."""
-    cfg = AdsorptionConfig(adaptive_parallel_fraction=True)
-    assert cfg.adaptive_parallel_fraction is True
+    """adaptive_parallel_fraction defaults on; can be disabled explicitly."""
+    assert AdsorptionConfig().adaptive_parallel_fraction is True
+    cfg = AdsorptionConfig(adaptive_parallel_fraction=False)
+    assert cfg.adaptive_parallel_fraction is False
+
+
+def test_distance_recovery_rescues_too_close_placement():
+    """Height recovery should accept a placement that starts too close."""
+    from metalsurfer.placement.generators import (
+        _finalize_placement,
+        _PlacementContext,
+    )
+
+    slab = make_slab()
+    water = make_water()
+    pos = water.get_positions().copy()
+    pos -= pos.mean(axis=0)
+    surface_z = float(np.max(slab.get_positions()[:, 2]))
+    pose = PlacementPose(
+        conformer_index=0,
+        site_index=0,
+        site_type="atop",
+        placement_index=0,
+        quat_w=1.0,
+        quat_x=0.0,
+        quat_y=0.0,
+        quat_z=0.0,
+        x_abs=5.0,
+        y_abs=5.0,
+        z_fraction=0.0,
+        z_abs=surface_z + 0.35,
+        orientation_type="round",
+    )
+    ctx = _PlacementContext(
+        pose=pose,
+        site=None,
+        mat_type="slab",
+        surface_ref=surface_z,
+        is_local_ref=False,
+        source="test",
+        canonical_pos=pos,
+        use_sites=False,
+        rotated_pos=pos,
+        z_base_lo=0.5,
+        z_base_hi=3.5,
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_xy=(5.0, 5.0),
+    )
+
+    fail, reason = _finalize_placement(
+        ctx,
+        water.copy(),
+        slab,
+        AdsorptionConfig(placement_distance_recovery=False),
+        allow_distance_recovery=True,
+    )
+    assert fail is None
+    assert reason == "too_close"
+
+    ok, ok_reason = _finalize_placement(
+        ctx,
+        water.copy(),
+        slab,
+        AdsorptionConfig(placement_distance_recovery=True),
+        allow_distance_recovery=True,
+    )
+    assert ok is not None, ok_reason
+    _, descriptor = ok
+    assert descriptor.z_fraction > 0.0
+    assert descriptor.z_abs is not None
+    assert float(descriptor.z_abs) > surface_z + 0.35
+
+
+def test_distance_recovery_height_only_when_xy_disabled():
+    """Zero XY ranges still allow height recovery."""
+    from metalsurfer.placement.generators import (
+        _finalize_placement,
+        _PlacementContext,
+    )
+
+    slab = make_slab()
+    water = make_water()
+    pos = water.get_positions().copy()
+    pos -= pos.mean(axis=0)
+    surface_z = float(np.max(slab.get_positions()[:, 2]))
+    pose = PlacementPose(
+        conformer_index=0,
+        site_index=0,
+        site_type="atop",
+        placement_index=0,
+        quat_w=1.0,
+        quat_x=0.0,
+        quat_y=0.0,
+        quat_z=0.0,
+        x_abs=5.0,
+        y_abs=5.0,
+        z_fraction=0.0,
+        z_abs=surface_z + 0.35,
+        orientation_type="round",
+    )
+    ctx = _PlacementContext(
+        pose=pose,
+        site=None,
+        mat_type="slab",
+        surface_ref=surface_z,
+        is_local_ref=False,
+        source="test",
+        canonical_pos=pos,
+        use_sites=False,
+        rotated_pos=pos,
+        z_base_lo=0.5,
+        z_base_hi=3.5,
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_xy=(5.0, 5.0),
+    )
+    config = AdsorptionConfig(
+        placement_distance_recovery=True,
+        placement_x_range=(0.0, 0.0),
+        placement_y_range=(0.0, 0.0),
+    )
+    result, reason = _finalize_placement(
+        ctx, water.copy(), slab, config, allow_distance_recovery=True
+    )
+    assert result is not None, reason
+
+
+def test_voronoi_auto_widen_retries_when_first_window_empty(monkeypatch):
+    """Empty first Voronoi window triggers one widened retry when enabled."""
+    from metalsurfer.placement import generators as gens
+    from metalsurfer.placement.generators import (
+        _get_unique_sites_for_specs,
+        clear_site_caches,
+    )
+
+    clear_site_caches()
+    slab = make_slab()
+    calls = {"n": 0}
+    real = gens.sts.get_unified_sites
+
+    def fake_get_unified_sites(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return []
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(gens.sts, "get_unified_sites", fake_get_unified_sites)
+    ctx = _get_unique_sites_for_specs(slab, AdsorptionConfig(voronoi_auto_widen=True))
+    assert calls["n"] == 2
+    assert ctx.use_sites
+    assert len(ctx.sites) > 0
+
+
+def test_voronoi_auto_widen_disabled_skips_retry(monkeypatch):
+    from metalsurfer.placement import generators as gens
+    from metalsurfer.placement.generators import (
+        _get_unique_sites_for_specs,
+        clear_site_caches,
+    )
+
+    clear_site_caches()
+    slab = make_slab()
+    calls = {"n": 0}
+
+    def fake_get_unified_sites(*args, **kwargs):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(gens.sts, "get_unified_sites", fake_get_unified_sites)
+    ctx = _get_unique_sites_for_specs(slab, AdsorptionConfig(voronoi_auto_widen=False))
+    assert calls["n"] == 1
+    assert not ctx.use_sites
 
 
 # ---------------------------------------------------------------------------

@@ -115,6 +115,7 @@ def main() -> int:
         config=config,
         surface_type=surface_type,
         system_name="Pt_12",
+        skip_existing=False,
     )
 
     print()

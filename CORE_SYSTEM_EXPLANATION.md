@@ -202,8 +202,10 @@ Site generation is **orientation-aware**: slab top-layer detection, Voronoi filt
 ### Placement enumeration and materialization
 
 - **`placement/policy.py`:** Cartesian product over conformers, sites, orientation (flat-aromatic parallel vs EN-down, dissociative branch), tilts, azimuths, z-fractions. Subsampled to budget with seeded random draw when grid exceeds `n_desired`.
-- **`placement/generators.py`:** Molecule metadata (shape, binders, dissociative flag). Optional `placement_filter` callback and `adaptive_parallel_fraction`.
+- **`placement/generators.py`:** Molecule metadata (shape, binders, dissociative flag). Optional `placement_filter` callback; `adaptive_parallel_fraction` (default **on**) chooses the parallel/EN-down mix from chemistry.
 - **Slab placement center:** For `material_type=="slab"`, the adsorbate anchor is `site["xyz"]` offset along the slab normal to `surface_ref + z_offset` (from `placement_z_range` and `spec.z_fraction`). Nanoparticle/porous paths offset along the site local normal. Rotations/tilts use `compute_surface_site_frame(normal)` in `geometry.py` (no forced “z-up” flip).
+- **Distance recovery (default on):** After a `too_close` / `too_far` covalent check, `_finalize_placement` nudges height within the z window, then tries a few deterministic in-plane offsets within `placement_x/y_range` (±0.5 Å by default; `(0,0)` disables XY). Successful recoveries update absolute pose fields on the descriptor. VDW / contact-quality / adsorbate-overlap failures are not recovered.
+- **Voronoi auto-widen (default on):** If the first accessibility window yields no sites, `_get_unique_sites_for_specs` retries once with a wider probe/max window (`voronoi_auto_widen`).
 - **Dissociative branch:** Homonuclear diatomics (e.g. H₂) on **slabs** or **nanoparticles** generate dissociative specs when `skip_topology_check=True` (topology/decomposition checks disabled). Slabs use hollow/pore site pairs; nanoparticles use Voronoi site pairs with outward normals from the cluster center or site metadata. Each fragment is offset along its site normal (not necessarily the slab normal). Porous frameworks reject dissociative placement. Centroid absolute coordinates populate the descriptor.
 - **`workflow/shared._materialize_spec_placements`:** Materializes each `PlacementSpec`; failures become `PlacementFailureEvent` records (BO negative labels when enabled).
 
@@ -431,11 +433,12 @@ Equal footing means consistent validation, PBC, and honest config — not identi
 ### Sampling and placement
 
 - `num_conformers`, `num_placements`, `placement_x/y/z_range`, `placement_z_scale_by_covalent_radius`
+- `placement_distance_recovery` (default on); `placement_x/y_range` are recovery radii (±0.5 Å), not per-pose sampling jitter
 - `conformer_sampling`, `boltzmann_temperature`, `placement_filter` (optional callback)
 - `placement_retry_enabled`, `placement_retry_max_attempts`, `placement_retry_diversity_seed_increment`
 - `min_initial_distance`, `max_initial_distance`, `min_contact_ratio`
-- `flat_aromatic_parallel_fraction`, `adaptive_parallel_fraction`
-- Voronoi/classification: `voronoi_*`, `site_classification_method`, `rough_slab_local_z`, `hollow_site_dedup_tolerance`, `planar_z_variance_threshold`
+- `flat_aromatic_parallel_fraction`, `adaptive_parallel_fraction` (default **True**)
+- Voronoi/classification: `voronoi_*` (including `voronoi_auto_widen`), `site_classification_method`, `rough_slab_local_z`, `hollow_site_dedup_tolerance`, `planar_z_variance_threshold`
 
 ### Placement validation (initial geometry)
 
@@ -497,7 +500,7 @@ Root directory: `results_{surface_type}/`.
 | `adsorption_energies_detailed.csv` (flattened from saturation steps) | `save_benchmark_dataset=True` |
 | `ml_dataset.csv`, `ml_dataset_metadata.json` | `DatasetLogger` during binding campaigns and saturation |
 | `xyz_structures/`, optional `vasp_inputs/` | Always / when `write_vasp_inputs=True` |
-| `run_metadata.json` | Campaign `write_settings` / `write_metadata` flags (merged incrementally) |
+| `run_metadata.json` | Campaign `write_settings` / `write_metadata` (either True writes the full file) |
 
 Rows include `schema_version` and computation context (`model_name`, `fmax`, `stage1_steps`, `stage2_steps`, `seed`, context hash) when config is passed to save helpers.
 

@@ -17,9 +17,9 @@ from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
 from .placement._constants import _TOP_LAYER_DEPTH_MIN_ANGSTROM
 from .placement.sites import (
+    _height_along_slab_normal,
     derive_pore_threshold,
     get_unified_sites,
-    top_layer_mask_by_normal,
 )
 
 logger = logging.getLogger(__name__)
@@ -486,8 +486,14 @@ def identify_relaxable_surface_indices(
         return []
 
     if material_type == "slab":
+        # Simple top-band cutoff: atoms within *tolerance* of the exposed surface.
+        # Do not use top_layer_mask_by_normal here — that helper expands for stepped
+        # site enumeration and can free an entire thin multi-layer slab when
+        # tolerance spans ~2 interlayer spacings (e.g. camphor Cu(111)).
         cell = np.asarray(slab.get_cell(), dtype=float)
-        mask = top_layer_mask_by_normal(positions, cell, float(tolerance))
+        heights = _height_along_slab_normal(positions, cell)
+        h_max = float(np.max(heights))
+        mask = heights >= (h_max - float(tolerance))
         return [int(i) for i in np.nonzero(mask)[0]]
 
     if material_type == "nanoparticle":
@@ -814,7 +820,7 @@ def _raise_fairchem_load_error(exc: Exception, model_name: str) -> NoReturn:
     raise RuntimeError(_fairchem_load_failure_message(error_msg, model_name)) from exc
 
 
-def setup_calculator(model_name: str = "uma-s-1p1", device: str = "cuda"):
+def setup_calculator(model_name: str = "uma-s-1p2", device: str = "cuda"):
     """Create a FAIRChem ASE calculator for the given model."""
     try:
         from fairchem.core import FAIRChemCalculator, pretrained_mlip
@@ -840,7 +846,7 @@ def setup_calculator(model_name: str = "uma-s-1p1", device: str = "cuda"):
     return calc
 
 
-def setup_torchsim_model(model_name: str = "uma-s-1p1", device: str = "cuda"):
+def setup_torchsim_model(model_name: str = "uma-s-1p2", device: str = "cuda"):
     """Create a TorchSim FairChemModel wrapper.
 
     Uses torch-sim-atomistic FairChemModel API: model, device, task_name.
@@ -972,7 +978,7 @@ def _voigt_6(stress_3x3) -> np.ndarray:
     return np.array([s[0, 0], s[1, 1], s[2, 2], s[1, 2], s[0, 2], s[0, 1]])
 
 
-def setup_single_model(model_name: str = "uma-s-1p1", device: str = "cuda"):
+def setup_single_model(model_name: str = "uma-s-1p2", device: str = "cuda"):
     """Create a single FairChemModel shared by calculator and TorchSim.
 
     Returns (calculator, ts_model) where calculator wraps ts_model.

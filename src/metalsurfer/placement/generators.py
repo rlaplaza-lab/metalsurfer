@@ -3,6 +3,7 @@
 import dataclasses
 import hashlib
 import logging
+import random
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -26,6 +27,8 @@ from ._constants import (
     _DISSOCIATIVE_MAX_ADJACENT_SEP_NN_SCALE,
     _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM,
     _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE,
+    _DISTANCE_RECOVERY_HEIGHT_STEPS,
+    _DISTANCE_RECOVERY_XY_ATTEMPTS,
     _ORIENTATION_CLASSIFICATION_PARALLEL_DOT_THRESHOLD,
     _PARALLEL_FRACTION_HIGH_BINDER_RATIO,
     _PARALLEL_FRACTION_HIGH_RATIO_CUTOFF,
@@ -41,6 +44,8 @@ from ._constants import (
     _PARALLEL_Z_MIN_HI_MARGIN,
     _SITE_Z_OFFSET_FROM_SURFACE_RADIUS,
     _VECTOR_NORM_EPS,
+    _VORONOI_AUTO_WIDEN_MAX_SCALE,
+    _VORONOI_AUTO_WIDEN_PROBE_SCALE,
 )
 from ._material import material_aware_pbc, material_type_for_placement
 
@@ -109,6 +114,7 @@ def _unique_sites_cache_key(slab: Atoms, config: AdsorptionConfig) -> str:
         + str(config.top_layer_tolerance).encode()
         + str(config.site_equivalence_tolerance).encode()
         + str(config.voronoi_site_enrichment).encode()
+        + str(config.voronoi_auto_widen).encode()
         + str(config.site_classification_method).encode()
         + config.material_type.encode()
     )
@@ -210,6 +216,10 @@ class _PlacementContext:
     canonical_pos: np.ndarray
     use_sites: bool
     rotated_pos: np.ndarray
+    z_base_lo: float = 0.0
+    z_base_hi: float = 0.0
+    normal: np.ndarray | None = None
+    site_xy: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -447,6 +457,35 @@ def _get_unique_sites_for_specs(
         enrich=config.voronoi_site_enrichment,
         site_classification_method=config.site_classification_method,
     )
+    if not raw_sites and config.voronoi_auto_widen:
+        positions = slab.get_positions()
+        symbols = list(slab.get_chemical_symbols())
+        cell = np.asarray(slab.get_cell(), dtype=float)
+        pbc = material_aware_pbc(mat_type)
+        derived_probe, derived_max = sts._derive_voronoi_distance_window(
+            positions, symbols, np.asarray(pbc, dtype=bool), cell
+        )
+        eff_probe = float(probe_radius) if probe_radius is not None else derived_probe
+        eff_max = float(max_site_dist) if max_site_dist is not None else derived_max
+        wide_probe = float(eff_probe * _VORONOI_AUTO_WIDEN_PROBE_SCALE)
+        wide_max = float(max(eff_max * _VORONOI_AUTO_WIDEN_MAX_SCALE, wide_probe))
+        logger.info(
+            "Voronoi auto-widen: retrying site detection with probe=%.3f max=%.3f "
+            "(was probe=%.3f max=%.3f)",
+            wide_probe,
+            wide_max,
+            eff_probe,
+            eff_max,
+        )
+        raw_sites = sts.get_unified_sites(
+            slab,
+            probe_radius=wide_probe,
+            max_site_distance=wide_max,
+            top_layer_tolerance=config.top_layer_tolerance,
+            material_type=mat_type,
+            enrich=config.voronoi_site_enrichment,
+            site_classification_method=config.site_classification_method,
+        )
     if not raw_sites:
         logger.warning(
             "Unified Voronoi site detection found no sites for %d-atom structure "
@@ -697,6 +736,10 @@ def _pose_from_spec(
         canonical_pos=canonical_pos,
         use_sites=ctx.use_sites,
         rotated_pos=rotated_pos,
+        z_base_lo=float(z_base_lo),
+        z_base_hi=float(z_base_hi),
+        normal=np.asarray(normal, dtype=float),
+        site_xy=(float(x), float(y)),
     )
 
 
@@ -799,6 +842,200 @@ def _saturation_exclude_count(
     return None
 
 
+def _placement_normal(ctx: _PlacementContext, slab: Atoms) -> np.ndarray:
+    """Unit normal used for height/lateral recovery."""
+    if ctx.mat_type == "slab":
+        return sts._slab_normal(np.asarray(slab.get_cell(), dtype=float))
+    normal = ctx.normal
+    if normal is None:
+        return np.array([0.0, 0.0, 1.0], dtype=float)
+    normal = np.asarray(normal, dtype=float)
+    nrm = float(np.linalg.norm(normal))
+    if nrm > _VECTOR_NORM_EPS:
+        return normal / nrm
+    return np.array([0.0, 0.0, 1.0], dtype=float)
+
+
+def _center_with_height_delta(
+    center: np.ndarray,
+    *,
+    old_z_fraction: float,
+    new_z_fraction: float,
+    ctx: _PlacementContext,
+    slab: Atoms,
+) -> np.ndarray:
+    """Shift *center* along the placement normal by the height-window delta."""
+    z_span = float(ctx.z_base_hi - ctx.z_base_lo)
+    delta_h = (new_z_fraction - old_z_fraction) * z_span
+    if abs(delta_h) < 1e-12:
+        return np.asarray(center, dtype=float).copy()
+    n_hat = _placement_normal(ctx, slab)
+    return np.asarray(center, dtype=float) + float(delta_h) * n_hat
+
+
+def _xy_recovery_offsets(
+    config: AdsorptionConfig,
+    *,
+    placement_index: int,
+    site_index: int,
+) -> list[tuple[float, float]]:
+    """Deterministic in-plane recovery offsets within configured XY ranges."""
+    x_lo, x_hi = config.placement_x_range
+    y_lo, y_hi = config.placement_y_range
+    if abs(x_hi - x_lo) < 1e-12 and abs(y_hi - y_lo) < 1e-12:
+        return []
+    rng = random.Random(
+        (int(config.seed) * 1_000_003)
+        ^ (int(placement_index) * 97)
+        ^ (int(site_index) * 1_009)
+    )
+    return [
+        (rng.uniform(x_lo, x_hi), rng.uniform(y_lo, y_hi))
+        for _ in range(_DISTANCE_RECOVERY_XY_ATTEMPTS)
+    ]
+
+
+def _apply_lateral_offset(
+    center: np.ndarray,
+    *,
+    dx: float,
+    dy: float,
+    ctx: _PlacementContext,
+    slab: Atoms,
+) -> np.ndarray:
+    """Apply a lateral recovery offset in the plane perpendicular to the site/slab normal."""
+    n_hat = _placement_normal(ctx, slab)
+    # Build an orthonormal in-plane basis from Cartesian dx/dy.
+    ref = np.array([1.0, 0.0, 0.0], dtype=float)
+    if abs(float(np.dot(ref, n_hat))) > 0.9:
+        ref = np.array([0.0, 1.0, 0.0], dtype=float)
+    u = np.cross(n_hat, ref)
+    u = u / float(np.linalg.norm(u))
+    v = np.cross(n_hat, u)
+    shifted = np.asarray(center, dtype=float) + float(dx) * u + float(dy) * v
+    if ctx.mat_type == "slab":
+        cell = np.asarray(slab.get_cell(), dtype=float)
+        # MIC-wrap the in-plane a–b components; keep height along normal.
+        pinv_ab_T, _ = sts._slab_plane_projectors(cell)
+        frac2 = shifted @ pinv_ab_T
+        frac2 = np.mod(frac2, 1.0)
+        # Reconstruct Cartesian from fractional a,b plus original height along normal.
+        planar = frac2[0] * cell[0] + frac2[1] * cell[1]
+        h = float(np.dot(shifted, n_hat))
+        base_h = float(np.dot(planar, n_hat))
+        return planar + (h - base_h) * n_hat
+    return shifted
+
+
+def _set_adsorbate_at_center(
+    adsorbate: Atoms,
+    rotated_pos: np.ndarray,
+    center: np.ndarray,
+) -> None:
+    test = rotated_pos.copy()
+    test[:, 0] += float(center[0])
+    test[:, 1] += float(center[1])
+    test[:, 2] += float(center[2])
+    adsorbate.set_positions(test)
+
+
+def _recover_distance_failure(
+    ctx: _PlacementContext,
+    adsorbate: Atoms,
+    slab: Atoms,
+    config: AdsorptionConfig,
+    fail_reason: str,
+    *,
+    slab_for_sites: Atoms | None = None,
+) -> tuple[_PlacementContext, str | None]:
+    """Nudge height then XY after ``too_close`` / ``too_far``; return updated ctx or last reason."""
+    if fail_reason not in ("too_close", "too_far"):
+        return ctx, fail_reason
+
+    pose = ctx.pose
+    if pose.z_abs is None:
+        return ctx, fail_reason
+
+    zf = float(pose.z_fraction)
+    origin = np.array([pose.x_abs, pose.y_abs, float(pose.z_abs)], dtype=float)
+    z_span = float(ctx.z_base_hi - ctx.z_base_lo)
+
+    height_candidates: list[float] = []
+    if z_span > 1e-9:
+        for step in range(1, _DISTANCE_RECOVERY_HEIGHT_STEPS + 1):
+            frac = step / float(_DISTANCE_RECOVERY_HEIGHT_STEPS + 1)
+            if fail_reason == "too_close":
+                cand = zf + (1.0 - zf) * frac
+            else:
+                cand = zf * (1.0 - frac)
+            cand = float(min(1.0, max(0.0, cand)))
+            if abs(cand - zf) > 1e-9:
+                height_candidates.append(cand)
+
+    last_reason: str | None = fail_reason
+    for cand_zf in height_candidates:
+        center = _center_with_height_delta(
+            origin,
+            old_z_fraction=zf,
+            new_z_fraction=cand_zf,
+            ctx=ctx,
+            slab=slab,
+        )
+        _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, center)
+        last_reason = _validate_posed_adsorbate(
+            adsorbate, slab, config, slab_for_sites=slab_for_sites
+        )
+        if last_reason is None:
+            new_pose = dataclasses.replace(
+                pose,
+                x_abs=float(center[0]),
+                y_abs=float(center[1]),
+                z_abs=float(center[2]),
+                z_fraction=float(cand_zf),
+            )
+            return dataclasses.replace(ctx, pose=new_pose), None
+        if last_reason not in ("too_close", "too_far"):
+            return ctx, last_reason
+
+    work_zf = zf
+    if fail_reason == "too_close" and height_candidates:
+        work_zf = max(height_candidates)
+    elif fail_reason == "too_far" and height_candidates:
+        work_zf = min(height_candidates)
+
+    work_center = _center_with_height_delta(
+        origin,
+        old_z_fraction=zf,
+        new_z_fraction=work_zf,
+        ctx=ctx,
+        slab=slab,
+    )
+
+    for dx, dy in _xy_recovery_offsets(
+        config,
+        placement_index=pose.placement_index,
+        site_index=pose.site_index,
+    ):
+        center = _apply_lateral_offset(work_center, dx=dx, dy=dy, ctx=ctx, slab=slab)
+        _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, center)
+        last_reason = _validate_posed_adsorbate(
+            adsorbate, slab, config, slab_for_sites=slab_for_sites
+        )
+        if last_reason is None:
+            new_pose = dataclasses.replace(
+                pose,
+                x_abs=float(center[0]),
+                y_abs=float(center[1]),
+                z_abs=float(center[2]),
+                z_fraction=float(work_zf),
+            )
+            return dataclasses.replace(ctx, pose=new_pose), None
+        if last_reason not in ("too_close", "too_far"):
+            return ctx, last_reason
+
+    return ctx, last_reason or fail_reason
+
+
 def _validate_posed_adsorbate(
     adsorbate: Atoms,
     slab: Atoms,
@@ -861,6 +1098,7 @@ def _finalize_placement(
     config: AdsorptionConfig,
     *,
     slab_for_sites: Atoms | None = None,
+    allow_distance_recovery: bool = False,
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
     """Translate the pre-rotated positions, validate, and build a descriptor."""
     pose = ctx.pose
@@ -879,7 +1117,27 @@ def _finalize_placement(
         adsorbate, slab, config, slab_for_sites=slab_for_sites
     )
     if fail_reason is not None:
-        return None, fail_reason
+        if (
+            allow_distance_recovery
+            and config.placement_distance_recovery
+            and fail_reason in ("too_close", "too_far")
+        ):
+            ctx, fail_reason = _recover_distance_failure(
+                ctx,
+                adsorbate,
+                slab,
+                config,
+                fail_reason,
+                slab_for_sites=slab_for_sites,
+            )
+            pose = ctx.pose
+            if fail_reason is not None:
+                return None, fail_reason
+            if pose.z_abs is None:
+                return None, "missing_z_abs"
+            z_abs = float(pose.z_abs)
+        else:
+            return None, fail_reason
 
     z_offset = _recover_z_offset(ctx, z_abs, slab)
     slab_indices: tuple[int, ...] | None = None
@@ -1248,6 +1506,7 @@ def generate_placement_from_spec_with_reason(
         slab,
         config,
         slab_for_sites=slab_for_sites,
+        allow_distance_recovery=True,
     )
     if result is not None:
         return result, None

@@ -146,6 +146,14 @@ Site detection
    Enable geodesic ridge subdivision to add denser candidate sites on irregular
    surfaces (especially porous materials and rough slabs).
 
+``voronoi_auto_widen``
+   **Type:** ``bool`` · **Default:** ``True``
+
+   When the first Voronoi accessibility window finds no sites, retry detection
+   **once** with a wider window (probe × 0.8, max × 1.25). Set ``False`` for strict
+   A/B comparisons of explicit ``voronoi_probe_radius`` /
+   ``voronoi_max_site_distance`` values.
+
 ``site_classification_method``
    **Type:** ``Literal["auto", "distance_ratio", "delaunay"]`` · **Default:** ``"auto"``
 
@@ -180,10 +188,12 @@ Placement generation
    small demos or fixed budgets on CPU.
 
 ``placement_x_range``, ``placement_y_range``
-   **Type:** ``tuple[float, float]`` · **Default:** ``(-4.0, 4.0)`` (Å)
+   **Type:** ``tuple[float, float]`` · **Default:** ``(-0.5, 0.5)`` (Å)
 
-   In-plane jitter applied around detected sites when sampling placement offsets.
-   Widen for large supercells or narrow for tightly constrained pockets.
+   In-plane search radius used only by **distance recovery** after a
+   ``too_close`` / ``too_far`` failure (not applied to every successful site-centered
+   pose). Equal bounds such as ``(0.0, 0.0)`` disable lateral recovery while leaving
+   height recovery on. Widen for bulky adsorbates; keep small for reproducibility.
 
 ``placement_z_range``
    **Type:** ``tuple[float, float]`` · **Default:** ``(0.7, 1.25)``
@@ -199,16 +209,26 @@ Placement generation
    Derive initial *z* offsets from adsorbate and surface covalent radii (all
    placement paths). Set ``False`` to interpret ``placement_z_range`` as absolute Å.
 
+``placement_distance_recovery``
+   **Type:** ``bool`` · **Default:** ``True``
+
+   After a covalent distance failure (``too_close`` / ``too_far``), nudge height
+   within the placement *z* window, then try a few deterministic in-plane offsets
+   within ``placement_x_range`` / ``placement_y_range``, and revalidate. Does not
+   apply to VDW, contact-quality, or adsorbate–adsorbate failures. Set ``False`` to
+   keep binary accept/reject only.
+
 ``flat_aromatic_parallel_fraction``
    **Type:** ``float`` · **Default:** ``0.5``
 
    Fraction of flat-aromatic placements oriented parallel (π-stacking) versus
-   electronegative-atom-down. ``0.5`` explores both equally.
+   electronegative-atom-down when ``adaptive_parallel_fraction`` is ``False``.
+   ``0.5`` explores both equally.
 
 ``adaptive_parallel_fraction``
-   **Type:** ``bool`` · **Default:** ``False``
+   **Type:** ``bool`` · **Default:** ``True``
 
-   When ``True``, overrides ``flat_aromatic_parallel_fraction`` with a
+   When ``True`` (default), overrides ``flat_aromatic_parallel_fraction`` with a
    molecule-aware estimate (high for pure aromatics, low for strong EN-down binders).
 
 ``placement_filter``
@@ -308,7 +328,7 @@ Relaxation and MLIP
 ~~~~~~~~~~~~~~~~~~~
 
 ``model_name``
-   **Type:** ``str`` · **Default:** ``"uma-s-1p1"``
+   **Type:** ``str`` · **Default:** ``"uma-s-1p2"``
 
    FairChem/UMA model identifier passed to TorchSim for energy and force
    evaluations during relaxation and reference calculations.

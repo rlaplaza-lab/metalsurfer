@@ -1038,6 +1038,7 @@ def run_campaign(config: AdsorptionConfig) -> BindingCampaignResult:
         config=config,
         surface_type=SURFACE_TYPE,
         system_name="Cu_111",
+        skip_existing=False,
     )
 
 

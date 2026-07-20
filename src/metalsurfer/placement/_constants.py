@@ -217,3 +217,10 @@ _TILT_PARALLEL: tuple[float, ...] = (0.0, 15.0, 30.0)
 _AZIMUTH: tuple[float, ...] = (0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0)
 _AZIMUTH_IN_PLANE: tuple[float, ...] = (0.0, 90.0, 180.0, 270.0)
 _Z_FRACTIONS: tuple[float, ...] = (0.1, 0.3, 0.5, 0.7, 0.9)
+
+# Bounded recovery after too_close / too_far distance failures.
+_DISTANCE_RECOVERY_HEIGHT_STEPS: int = 3
+_DISTANCE_RECOVERY_XY_ATTEMPTS: int = 4
+# One-shot Voronoi accessibility widen when the first window finds no sites.
+_VORONOI_AUTO_WIDEN_PROBE_SCALE: float = 0.8
+_VORONOI_AUTO_WIDEN_MAX_SCALE: float = 1.25
