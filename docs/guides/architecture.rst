@@ -76,11 +76,16 @@ Across all run modes, the physical pipeline follows seven stages:
    orientation, tilt, azimuth, and height.  Site detection is
    Voronoi-based and **orientation-aware** (slab normal, not Cartesian
    ``z``): hybrid topology + Voronoi for slabs, full-framework Voronoi for
-   nanoparticles, periodic images for porous cells.  Homonuclear diatomics
-   on slabs or nanoparticles can use a **dissociative** branch when
-   ``skip_topology_check=True`` (two surface sites, site-specific outward
-   normals).  See
-   ``placement/sites.py`` and the `Site detection` section in
+   nanoparticles, periodic images for porous cells.  These asymmetries are
+   intentional for sampling effectiveness (Delaunay atop/bridge/hollow on
+   slabs; parallel-z π-stacking floors for open surfaces only; no porous
+   dissociative).  Homonuclear diatomics on slabs or nanoparticles can use a
+   **dissociative** branch when ``skip_topology_check=True`` (two surface
+   sites, site-specific outward normals).  Initial placement validation has
+   three layers: covalent distance, optional VDW overlap rejection, and
+   optional contact-quality checks (``strict_initial_placement``).  See
+   ``placement/sites.py`` and the `Site detection` / material-aware placement
+   sections in
    `CORE_SYSTEM_EXPLANATION.md
    <https://github.com/rlaplaza-lab/metalsurfer/blob/main/CORE_SYSTEM_EXPLANATION.md>`_.
 

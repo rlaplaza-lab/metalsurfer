@@ -377,7 +377,17 @@ High-level narrative also appears in the [architecture guide](https://metalsurfe
 | `nanoparticle` | Full-framework Voronoi; outward normals; no PBC images |
 | `porous` | 3×3×3 periodic images; pore sites when framework spans much of the cell z-extent |
 
-Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `top_layer_tolerance`, `symmetry_tolerance`, `site_equivalence_tolerance` (default 0.05 Å), `site_classification_method` (`distance_ratio` or `delaunay`).
+Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `top_layer_tolerance`, `symmetry_tolerance`, `site_equivalence_tolerance` (default 0.05 Å), `site_classification_method` (`auto`, `distance_ratio`, or `delaunay`). Default `"auto"` uses Delaunay for slabs (catalysis-style atop/bridge/hollow catalogs) and distance-ratio for NP/porous.
+
+### Material-aware placement (intentional asymmetries)
+
+Equal footing means consistent validation, PBC, and honest config — not identical generators. Slab-first choices exist so planar catalysis campaigns sample chemically meaningful sites efficiently:
+
+- **Hybrid topology + Delaunay on slabs** catalogs atop/bridge/hollow; pure Voronoi alone floods the GPU budget with chemically weak candidates.
+- **Global `surface_ref` along the slab normal** because Voronoi vertices can sit between layers; `z_offset` is the gap above the exposed plane. NP/porous use local site anchors (along site normals for placement; molecular Cartesian-`z` surface_ref consistency is a known follow-up).
+- **Dissociative hollow/pore pairs on slabs** (classical H₂→2H); rejected for porous. Nanoparticles use all Voronoi sites with outward normals.
+- **Parallel-z floors for slab + NP aromatics** (π-stacking height heuristic); **skipped for porous** because pore-local normals fight a flat-plane floor.
+- **No atop injection / no dissociative for porous** — intentional, not unfinished slab ports.
 
 ## Typed data model (`models.py`)
 
@@ -427,8 +437,13 @@ Key site hyperparameters: `voronoi_probe_radius`, `voronoi_max_site_distance`, `
 
 ### Placement validation (initial geometry)
 
-- `strict_initial_placement`, `reject_vdw_overlaps`, `vdw_overlap_scale`
-- `min_contact_distance`, `min_contact_atoms`, `contact_distance_threshold`, `require_multiple_contact`
+Three independent layers (do not conflate):
+
+1. **Distance** — `min_initial_distance`, `max_initial_distance`, `min_contact_ratio` (covalent-scaled approach).
+2. **VDW** — `reject_vdw_overlaps`, `vdw_overlap_scale` (harder contact than covalent alone).
+3. **Contact quality** — `strict_initial_placement`, `max_closest_approach` (deprecated alias `min_contact_distance`), `min_contact_atoms`, `contact_distance_threshold`, `require_multiple_contact` (≥2 contacts when enabled, plus clustering variance).
+
+Under saturation, substrate contact uses `exclude_slab_atoms` while prior adsorbates are checked via adsorbate–adsorbate separation.
 
 ### Relaxation and validation
 

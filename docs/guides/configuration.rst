@@ -64,6 +64,30 @@ Effects:
 
 See ``examples/h2_ru_slab_binding_energy.py``.
 
+Initial placement validation
+----------------------------
+
+Three independent layers (do not conflate):
+
+1. **Distance** — ``min_initial_distance``, ``max_initial_distance``, ``min_contact_ratio``
+2. **VDW** — ``reject_vdw_overlaps``, ``vdw_overlap_scale``
+3. **Contact quality** — ``strict_initial_placement``, ``max_closest_approach``,
+   ``min_contact_atoms``, ``contact_distance_threshold``, ``require_multiple_contact``
+
+Under saturation, substrate contact uses the bare-slab atom prefix while prior
+adsorbates are checked with adsorbate–adsorbate separation. Generation failures
+emit typed reasons (``too_close``, ``vdw_overlap``, ``adsorbate_overlap``, …) into
+``PlacementFailureEvent`` / placement ``failure_summary``.
+
+Site classification defaults to ``site_classification_method="auto"``: Delaunay
+for slabs (catalysis-style atop/bridge/hollow catalogs) and distance-ratio for
+nanoparticles and porous materials. Explicit ``"distance_ratio"`` on slabs is
+honored for A/B comparisons.
+
+Material-aware placement asymmetries (hybrid topology on slabs, parallel-z floors
+for open surfaces only, no porous dissociative) are intentional for sampling
+effectiveness — see :doc:`architecture` and ``CORE_SYSTEM_EXPLANATION.md``.
+
 Bayesian optimization budget
 ----------------------------
 

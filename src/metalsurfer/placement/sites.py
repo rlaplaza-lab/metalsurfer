@@ -1142,7 +1142,7 @@ def get_unified_sites(
     material_type: str | None = None,
     pore_threshold: float | None = None,
     enrich: bool = True,
-    site_classification_method: str = "distance_ratio",
+    site_classification_method: str = "auto",
 ) -> list[dict[str, object]]:
     """Return adsorption/placement site dicts for *atoms*.
 
@@ -1391,11 +1391,10 @@ def get_unified_sites(
     if len(vertices) == 0:
         return []
 
-    # Use Delaunay automatically for slabs when possible, even if the legacy
-    # default argument is still 'distance_ratio'. This improves default labeling.
+    # ``auto`` / ``delaunay`` use Delaunay on slabs; ``distance_ratio`` is honored
+    # literally (opt-in A/B). Default config ``auto`` preserves catalysis sampling.
     _use_delaunay = material_type == "slab" and site_classification_method in (
         "delaunay",
-        "distance_ratio",
         "auto",
     )
     _delaunay_tri = None
@@ -1648,7 +1647,7 @@ def get_symmetry_aware_sites(
     probe_radius: float | None = None,
     max_site_distance: float | None = None,
     enrich: bool = True,
-    site_classification_method: str = "distance_ratio",
+    site_classification_method: str = "auto",
     raw_sites: list[dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     """Symmetry-reduced adsorption sites using spglib."""

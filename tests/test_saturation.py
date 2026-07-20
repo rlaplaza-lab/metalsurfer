@@ -472,6 +472,28 @@ def test_saturation_slab_for_sites_uses_resized_slab():
     )
 
 
+def test_saturation_validate_posed_adsorbate_overlap_reason():
+    """Under coverage, clash with prior adsorbate yields adsorbate_overlap."""
+    from metalsurfer.placement.generators import _validate_posed_adsorbate
+
+    slab = make_slab(nx=2, ny=2, n_layers=3)
+    water = Atoms(
+        "OH2",
+        positions=[[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]],
+    )
+    pos = water.get_positions()
+    pos -= np.mean(pos, axis=0)
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 2.2
+    pos[:, 0] += 2.0
+    pos[:, 1] += 2.0
+    water.set_positions(pos)
+    covered = slab + water
+    reason = _validate_posed_adsorbate(
+        water.copy(), covered, AdsorptionConfig(), slab_for_sites=slab
+    )
+    assert reason == "adsorbate_overlap"
+
+
 # ---------------------------------------------------------------------------
 # run_saturation_screening (real GPU integration test)
 # ---------------------------------------------------------------------------

@@ -654,14 +654,15 @@ class TestAcquisitionMinimization:
         mu = np.array([-1.0])
         sig = np.array([0.0])
         out = ei_scores(mu, sig, f_best=-3.0, xi=1e-6)
-        assert_allclose(out, [0.0], atol=1e-5)
+        # Near-zero sigma ranks by -mu (avoid pool collapse).
+        assert_allclose(out, [1.0], atol=1e-5)
 
     def test_ei_scores_sigma_zero_improvement(self):
         mu = np.array([-3.0])
         sig = np.array([0.0])
         f_best = -1.0
         out = ei_scores(mu, sig, f_best=f_best, xi=1e-6)
-        assert_allclose(out, np.array([max(0.0, f_best - float(mu[0]))]), rtol=1e-5)
+        assert_allclose(out, np.array([-float(mu[0])]), rtol=1e-5)
 
     def test_pi_scores_sigma_zero(self):
         mu = np.array([-2.0, 0.0])
@@ -669,8 +670,8 @@ class TestAcquisitionMinimization:
         f_best = -1.0
         xi = 1e-6
         out = pi_scores(mu, sig, f_best=f_best, xi=xi)
-        assert out[0] == 1.0
-        assert out[1] == 0.0
+        assert_allclose(out, -mu)
+        assert out[0] > out[1]
 
     def test_ei_matches_analytic_normal(self):
         mu = np.array([0.5])

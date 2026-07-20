@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from ase import Atoms
 from scipy import stats
+from scipy.spatial.distance import cdist
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern
@@ -102,7 +103,7 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
                 raise ValueError("EnsembleRegressor cannot nest another ensemble")
             weight = (
                 sample_weight
-                if spec in ("random_forest", "extra_trees")
+                if spec in ("random_forest", "extra_trees", "ridge")
                 and sample_weight is not None
                 else None
             )
@@ -155,6 +156,67 @@ def _tree_pipeline_fit_kwargs(
     return {"regressor__sample_weight": np.asarray(sample_weight, dtype=float)}
 
 
+_RESIDUAL_STD_FLOOR = 1e-3
+
+
+def _attach_residual_uncertainty(
+    pipeline: Pipeline,
+    X: pd.DataFrame | np.ndarray,
+    y: pd.Series | np.ndarray,
+) -> None:
+    """Store residual RMSE and scaled training features for distance-aware σ.
+
+    Deterministic surrogates (ridge / HGB) have no epistemic σ from the
+    estimator itself. Using residual RMSE plus nearest-neighbour distance in
+    scaled feature space restores usable EI/PI/LCB without changing the mean
+    predictor.
+    """
+    regressor = pipeline.named_steps["regressor"]
+    scaler = pipeline.named_steps.get("scaler")
+    X_scaled = scaler.transform(X) if scaler is not None else np.asarray(X, dtype=float)
+    y_arr = np.asarray(y, dtype=float).ravel()
+    resid = y_arr - np.asarray(pipeline.predict(X), dtype=float).ravel()
+    n = int(resid.size)
+    p = int(np.asarray(X_scaled).shape[1]) if np.ndim(X_scaled) == 2 else 1
+    dof = max(n - p - 1, 1)
+    residual_std = float(np.sqrt(np.sum(np.square(resid)) / dof))
+    regressor.bo_residual_std_ = max(residual_std, _RESIDUAL_STD_FLOOR)
+    regressor.bo_X_train_scaled_ = np.asarray(X_scaled, dtype=float)
+
+
+def _sigma_from_residual(
+    regressor: Any,
+    X_eval: np.ndarray,
+    mu: np.ndarray,
+) -> np.ndarray:
+    """Build per-candidate σ from attached residual stats, else zeros.
+
+    Uses residual RMSE with mild nearest-neighbour inflation, capped at
+    ``2 * residual_std`` so EI/PI do not chase arbitrarily far pool points.
+    """
+    residual_std = getattr(regressor, "bo_residual_std_", None)
+    if residual_std is None or not np.isfinite(residual_std) or residual_std <= 0:
+        return np.zeros_like(mu)
+    base = float(residual_std)
+    X_train = getattr(regressor, "bo_X_train_scaled_", None)
+    if X_train is None or len(X_train) == 0:
+        return np.full_like(mu, base)
+    X_e = np.asarray(X_eval, dtype=float)
+    d = cdist(X_e, np.asarray(X_train, dtype=float)).min(axis=1)
+    if len(X_train) >= 2:
+        d_train = cdist(
+            np.asarray(X_train, dtype=float), np.asarray(X_train, dtype=float)
+        )
+        np.fill_diagonal(d_train, np.inf)
+        lengthscale = float(np.median(d_train.min(axis=1)))
+        lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
+    else:
+        lengthscale = 1.0
+    # Mild distance tempering; cap prevents EI from ignoring the mean.
+    sigma = base * (1.0 + 0.25 * (d / lengthscale))
+    return np.minimum(sigma, 2.0 * base)
+
+
 def train_surrogate(
     X: pd.DataFrame | np.ndarray,
     y: pd.Series | np.ndarray,
@@ -193,9 +255,11 @@ def train_surrogate(
     if surrogate == "ridge":
         pipeline = _build_estimator("ridge", random_state=random_state, **kwargs)
         pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
+        _attach_residual_uncertainty(pipeline, X, y)
         logger.info(
-            "Trained ridge surrogate on %d samples",
+            "Trained ridge surrogate on %d samples (residual_std=%.4f)",
             len(np.asarray(y)),
+            float(pipeline.named_steps["regressor"].bo_residual_std_),
         )
         return pipeline
     if surrogate == "gradient_boost":
@@ -204,13 +268,15 @@ def train_surrogate(
                 "sample_weight is only supported for tree surrogates and ridge, "
                 f"not {surrogate!r}"
             )
-        return train_model(
+        pipeline = train_model(
             X,
             y,
             model_type="gradient_boost",
             random_state=random_state,
             **kwargs,
         )
+        _attach_residual_uncertainty(pipeline, X, y)
+        return pipeline
     if surrogate == "gaussian_process":
         if sample_weight is not None:
             raise ValueError(
@@ -578,8 +644,10 @@ def predict_with_uncertainty(
     """Return ``(mean, sigma)`` for minimisation.
 
     Tree ensembles: ``sigma`` is std dev across ``estimators_``. Ridge / HGB:
-    epistemic uncertainty is not defined; ``sigma`` is all zeros (EI/PI then
-    use the deterministic limits in :func:`ei_scores` / :func:`pi_scores`).
+    ``sigma`` is residual RMSE with mild nearest-neighbour inflation in the
+    pipeline's scaled feature space (see :func:`_attach_residual_uncertainty`).
+    Plain linear models without attached residual stats still return σ=0; EI/PI
+    then rank by ``-mu``.
     """
     regressor = model.named_steps["regressor"]
     if "scaler" in model.named_steps:
@@ -602,7 +670,7 @@ def predict_with_uncertainty(
         sigma = tree_preds.std(axis=0)
     else:
         mu = np.asarray(regressor.predict(X_eval)).ravel()
-        sigma = np.zeros_like(mu)
+        sigma = _sigma_from_residual(regressor, np.asarray(X_eval, dtype=float), mu)
 
     return mu, sigma
 
@@ -633,7 +701,8 @@ def ei_scores(
     """Expected Improvement for minimisation (minimize E_ads).
 
     EI = E[max(0, f_best - Y)] under Gaussian Y ~ N(mu, sigma^2). Higher EI is better.
-    When ``sigma`` is (near) zero, uses ``max(0, f_best - mu)``.
+    When ``sigma`` is (near) zero, ranks by ``-mu`` so the pool does not collapse
+    to an arbitrary tied ordering of zeros.
     """
     mu = np.asarray(mu, dtype=float).ravel()
     sigma = np.asarray(sigma, dtype=float).ravel()
@@ -642,7 +711,7 @@ def ei_scores(
     return np.where(
         sigma > 1e-9,
         imp * stats.norm.cdf(z) + sigma * stats.norm.pdf(z),
-        np.maximum(0.0, imp + xi),
+        -mu,
     )
 
 
@@ -654,7 +723,7 @@ def pi_scores(
 ) -> np.ndarray:
     """Probability of Improvement for minimisation: P(Y < f_best - xi).
 
-    Higher PI is better. When sigma is zero, returns 1 if mu < f_best - xi else 0.
+    Higher PI is better. When sigma is zero, ranks by ``-mu`` (same rationale as EI).
     """
     mu = np.asarray(mu, dtype=float).ravel()
     sigma = np.asarray(sigma, dtype=float).ravel()
@@ -664,7 +733,7 @@ def pi_scores(
         out=np.zeros_like(mu, dtype=float),
         where=sigma > 1e-9,
     )
-    return np.where(sigma > 1e-9, stats.norm.cdf(z), (mu < f_best - xi).astype(float))
+    return np.where(sigma > 1e-9, stats.norm.cdf(z), -mu)
 
 
 def _farthest_point_indices(
@@ -797,6 +866,81 @@ def select_candidates(
     return selected
 
 
+def select_candidates_batch_diverse(
+    scores: np.ndarray,
+    features: pd.DataFrame | np.ndarray,
+    batch_size: int,
+    evaluated_indices: set[int] | None = None,
+    *,
+    higher_is_better: bool = False,
+) -> list[int]:
+    """Greedy batch selection with soft local penalization in feature space.
+
+    Picks the best remaining score, then down-weights (or up-penalizes for
+    minimisation) candidates near the chosen point so a single batch does not
+    collapse onto a tight cluster of near-duplicates.
+    """
+    s = np.asarray(scores, dtype=float).copy().ravel()
+    matrix = (
+        features.to_numpy(dtype=float)
+        if isinstance(features, pd.DataFrame)
+        else np.asarray(features, dtype=float)
+    )
+    n = len(s)
+    if matrix.shape[0] != n:
+        raise ValueError(
+            f"features rows ({matrix.shape[0]}) must match scores length ({n})"
+        )
+    blocked: set[int] = set(evaluated_indices or ())
+    available = [i for i in range(n) if i not in blocked]
+    if not available or batch_size <= 0:
+        return []
+    if batch_size == 1 or len(available) == 1:
+        return select_candidates(
+            s,
+            batch_size,
+            evaluated_indices=blocked,
+            higher_is_better=higher_is_better,
+        )
+
+    scaled = StandardScaler().fit_transform(matrix)
+    # Lengthscale: median NN distance among available points.
+    if len(available) >= 2:
+        sub = scaled[available]
+        d_nn = cdist(sub, sub)
+        np.fill_diagonal(d_nn, np.inf)
+        lengthscale = float(np.median(d_nn.min(axis=1)))
+        lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
+    else:
+        lengthscale = 1.0
+    finite = s[np.isfinite(s)]
+    strength = float(np.std(finite)) if finite.size > 1 else 1.0
+    strength = max(strength, 1e-3)
+
+    chosen: list[int] = []
+    remaining = set(available)
+    working = s.copy()
+    for _ in range(min(batch_size, len(available))):
+        if not remaining:
+            break
+        cand = np.array(sorted(remaining), dtype=int)
+        vals = working[cand]
+        pick_local = int(np.argmax(vals) if higher_is_better else np.argmin(vals))
+        pick = int(cand[pick_local])
+        chosen.append(pick)
+        remaining.remove(pick)
+        if not remaining:
+            break
+        rem = np.array(sorted(remaining), dtype=int)
+        dists = np.linalg.norm(scaled[rem] - scaled[pick], axis=1)
+        near = np.exp(-0.5 * np.square(dists / lengthscale))
+        if higher_is_better:
+            working[rem] = working[rem] - strength * near
+        else:
+            working[rem] = working[rem] + strength * near
+    return chosen
+
+
 # ---------------------------------------------------------------------------
 # High-level helpers
 # ---------------------------------------------------------------------------
@@ -836,6 +980,7 @@ def build_spec_features_geometry_aware(
     surface_id: str = "",
     site_context: placement_generators.SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
+    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
 ) -> tuple[pd.DataFrame, list[int]]:
     """Extract geometry-aware features from specs via resolved deterministic poses.
 
@@ -843,6 +988,10 @@ def build_spec_features_geometry_aware(
     row in the DataFrame back to the position of the corresponding spec in
     *specs*.  Specs that cannot produce a valid placement are skipped; a single
     INFO line summarizes how many were skipped when that count is positive.
+
+    When *materialization_cache* is provided, successful
+    ``(adsorbate, descriptor)`` pairs are stored under ``placement_index`` for
+    reuse by evaluate paths.
     """
     rows: list[dict[str, float]] = []
     valid_indices: list[int] = []
@@ -867,7 +1016,12 @@ def build_spec_features_geometry_aware(
                 spec.placement_index,
             )
             continue
-        _adsorbate, descriptor = generated
+        adsorbate, descriptor = generated
+        if materialization_cache is not None:
+            materialization_cache[int(descriptor.placement_index)] = (
+                adsorbate.copy(),
+                descriptor,
+            )
         record = PlacementRecord.from_descriptor(
             descriptor,
             molecule=molecule,
@@ -902,14 +1056,19 @@ def score_and_select(
     For ``acquisition="lcb"`` uses LCB (mu - kappa * sigma); lower is better.
     For ``acquisition="ei"`` and ``acquisition="pi"`` uses EI or PI; higher is better.
     ``f_best`` is required for EI and PI (current best observed value for minimisation).
-    With zero ``sigma`` (ridge / HGB), EI/PI use the deterministic branch in
-    :func:`ei_scores` / :func:`pi_scores`. Returns row indices into *candidate_features*.
+    With near-zero ``sigma`` (unfitted linear models), EI/PI fall back to
+    ranking by ``-mu`` so the pool does not collapse to an arbitrary tie.
+    Batches use soft local penalization in feature space so picks are diverse.
     """
     mu, sigma = predict_with_uncertainty(model, candidate_features)
     if acquisition == "lcb":
         scores = lcb_scores(mu, sigma, kappa=kappa)
-        return select_candidates(
-            scores, batch_size, evaluated_indices=evaluated_indices
+        return select_candidates_batch_diverse(
+            scores,
+            candidate_features,
+            batch_size,
+            evaluated_indices=evaluated_indices,
+            higher_is_better=False,
         )
     if acquisition in ("ei", "pi"):
         if f_best is None:
@@ -918,8 +1077,9 @@ def score_and_select(
             scores = ei_scores(mu, sigma, f_best=f_best)
         else:
             scores = pi_scores(mu, sigma, f_best=f_best)
-        return select_candidates(
+        return select_candidates_batch_diverse(
             scores,
+            candidate_features,
             batch_size,
             evaluated_indices=evaluated_indices,
             higher_is_better=True,

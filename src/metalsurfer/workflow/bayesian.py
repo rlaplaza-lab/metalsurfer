@@ -6,7 +6,11 @@ import numpy as np
 import pandas as pd
 from ase import Atoms
 
-from ..config import AdsorptionConfig, resolved_bo_eval_budget
+from ..config import (
+    BO_LEGACY_GENERATION_REASON_ALIASES,
+    AdsorptionConfig,
+    resolved_bo_eval_budget,
+)
 from ..filters import filter_results
 from ..ml.bayesian import (
     build_spec_features_geometry_aware,
@@ -162,6 +166,7 @@ def process_molecule_bayesian(
     )
 
     surface_symbols = _infer_surface_symbols(slab_for_sites)
+    materialization_cache: dict[int, tuple] = {}
     candidate_features, valid_spec_indices = build_spec_features_geometry_aware(
         all_specs,
         conformers,
@@ -172,6 +177,7 @@ def process_molecule_bayesian(
         surface_id=surface_type,
         site_context=site_context,
         slab_for_sites=slab_for_sites,
+        materialization_cache=materialization_cache,
     )
     if candidate_features.empty:
         logger.warning("BO: no specs produced valid placements; aborting")
@@ -224,6 +230,9 @@ def process_molecule_bayesian(
         overrides = config.bo_failure_penalty_overrides
         if reason in overrides:
             return float(overrides[reason])
+        for legacy_key, aliases in BO_LEGACY_GENERATION_REASON_ALIASES.items():
+            if legacy_key in overrides and reason in aliases:
+                return float(overrides[legacy_key])
         if stage in overrides:
             return float(overrides[stage])
         return float(config.bo_failure_penalty_default)
@@ -256,6 +265,7 @@ def process_molecule_bayesian(
             site_context=site_context,
             base_slab_for_frozen=effective_base_slab_for_frozen,
             slab_for_sites=slab_for_sites,
+            materialization_cache=materialization_cache,
         )
 
         total_evaluated += len(pool_positions)
@@ -463,9 +473,13 @@ def process_molecule_bayesian(
                 acquisition=config.bo_acquisition,
                 f_best=best_energy if np.isfinite(best_energy) else None,
             )
-            explore_n = int(
-                np.ceil(batch_size * config.bo_transfer_exploration_fraction)
-            )
+            # Random exploration only while transfer learning is active.
+            # Pure BO screening keeps the full acquisition batch.
+            explore_n = 0
+            if can_try_transfer and not transfer_disabled:
+                explore_n = int(
+                    np.ceil(batch_size * config.bo_transfer_exploration_fraction)
+                )
             if explore_n > 0:
                 unevaluated = [
                     p

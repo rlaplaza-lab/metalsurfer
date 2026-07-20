@@ -261,6 +261,16 @@ def _format_failure_summary_text(failure_summary: dict[str, object]) -> str:
             )
         if "n_valid_pool" in failure_summary:
             lines.append(f"  Valid pool: {failure_summary.get('n_valid_pool', '?')}")
+        generation_failures = failure_summary.get("generation_failures")
+        if isinstance(generation_failures, dict) and generation_failures:
+            lines.append("  Generation failures:")
+            items = [
+                (str(reason), int(count))
+                for reason, count in generation_failures.items()
+                if isinstance(count, int)
+            ]
+            for reason, count in sorted(items, key=lambda x: -x[1]):
+                lines.append(f"    {reason}: {count}")
     elif stage == "validation":
         n_initial = failure_summary.get("n_initial_placements", "?")
         n_opt = failure_summary.get("n_optimized", "?")

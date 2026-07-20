@@ -41,7 +41,7 @@ from ._constants import (
     _SITE_Z_OFFSET_FROM_SURFACE_RADIUS,
     _VECTOR_NORM_EPS,
 )
-from ._material import material_type_for_placement
+from ._material import material_aware_pbc, material_type_for_placement
 
 logger = logging.getLogger(__name__)
 
@@ -694,17 +694,87 @@ def _recover_z_offset(
     return float(z_abs - ctx.surface_ref)
 
 
+def _saturation_exclude_count(
+    slab: Atoms,
+    slab_for_sites: Atoms | None,
+) -> int | None:
+    """Return substrate atom count for saturation exclude, else None."""
+    if slab_for_sites is None:
+        return None
+    n_sub = len(slab_for_sites)
+    if n_sub < len(slab):
+        return n_sub
+    return None
+
+
+def _validate_posed_adsorbate(
+    adsorbate: Atoms,
+    slab: Atoms,
+    config: AdsorptionConfig,
+    *,
+    slab_for_sites: Atoms | None = None,
+) -> str | None:
+    """Run distance, adsorbate-separation, and optional contact-quality checks.
+
+    Returns a failure reason token, or ``None`` when the placement is accepted.
+    """
+    exclude_n = _saturation_exclude_count(slab, slab_for_sites)
+    ok, _, dist_reason = geom.check_initial_placement_distance(
+        adsorbate,
+        slab,
+        min_distance=config.min_initial_distance,
+        min_contact_ratio=config.min_contact_ratio,
+        max_initial_distance=config.max_initial_distance,
+        reject_vdw_overlaps=config.reject_vdw_overlaps,
+        vdw_overlap_scale=config.vdw_overlap_scale,
+        exclude_slab_atoms=exclude_n,
+        material_type=config.material_type,
+    )
+    if not ok:
+        return dist_reason or "initial_distance_or_site_constraints"
+
+    if exclude_n is not None:
+        pre_ads = np.asarray(slab.get_positions()[exclude_n:], dtype=float)
+        sep_ok, _ = geom.check_adsorbate_separation(
+            adsorbate,
+            pre_ads,
+            cell=np.asarray(slab.get_cell(), dtype=float),
+            pbc=material_aware_pbc(config.material_type),
+        )
+        if not sep_ok:
+            return "adsorbate_overlap"
+
+    if config.strict_initial_placement or config.require_multiple_contact:
+        contact_ok, contact_reason = geom.check_initial_contact_quality(
+            adsorbate,
+            slab,
+            strict_initial_placement=config.strict_initial_placement,
+            require_multiple_contact=config.require_multiple_contact,
+            max_closest_approach=float(config.max_closest_approach),
+            min_contact_atoms=int(config.min_contact_atoms),
+            contact_distance_threshold=config.contact_distance_threshold,
+            exclude_slab_atoms=exclude_n,
+            material_type=config.material_type,
+        )
+        if not contact_ok:
+            return contact_reason
+
+    return None
+
+
 def _finalize_placement(
     ctx: _PlacementContext,
     adsorbate: Atoms,
     slab: Atoms,
     config: AdsorptionConfig,
-) -> tuple[Atoms, PlacementDescriptor] | None:
+    *,
+    slab_for_sites: Atoms | None = None,
+) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
     """Translate the pre-rotated positions, validate, and build a descriptor."""
     pose = ctx.pose
     if pose.z_abs is None:
         logger.warning("Pose replay requires z_abs for deterministic reconstruction")
-        return None
+        return None, "missing_z_abs"
     z_abs = float(pose.z_abs)
 
     test = ctx.rotated_pos.copy()
@@ -713,18 +783,11 @@ def _finalize_placement(
     test[:, 2] += z_abs
     adsorbate.set_positions(test)
 
-    ok, _ = geom.check_initial_placement_distance(
-        adsorbate,
-        slab,
-        min_distance=config.min_initial_distance,
-        min_contact_ratio=config.min_contact_ratio,
-        max_initial_distance=config.max_initial_distance,
-        reject_vdw_overlaps=config.reject_vdw_overlaps,
-        vdw_overlap_scale=config.vdw_overlap_scale,
-        material_type=config.material_type,
+    fail_reason = _validate_posed_adsorbate(
+        adsorbate, slab, config, slab_for_sites=slab_for_sites
     )
-    if not ok:
-        return None
+    if fail_reason is not None:
+        return None, fail_reason
 
     z_offset = _recover_z_offset(ctx, z_abs, slab)
     slab_indices: tuple[int, ...] | None = None
@@ -769,7 +832,7 @@ def _finalize_placement(
         quat_y=float(pose.quat_y),
         quat_z=float(pose.quat_z),
     )
-    return adsorbate, descriptor
+    return (adsorbate, descriptor), None
 
 
 def generate_placement_from_pose(
@@ -805,7 +868,11 @@ def generate_placement_from_pose(
     ctx = _context_from_pose(pose, canonical_pos, slab, config, site_context)
     if ctx is None:
         return None
-    return _finalize_placement(ctx, adsorbate, slab, config)
+    result, fail_reason = _finalize_placement(ctx, adsorbate, slab, config)
+    if result is None:
+        logger.debug("Pose placement rejected: %s", fail_reason)
+        return None
+    return result
 
 
 def _spec_grid_info(
@@ -853,6 +920,7 @@ def _spec_grid_info(
                 config,
                 slab_for_sites=slab,
                 existing_adsorbate_positions=existing_ads_pos,
+                site_context=_ctx,
             )
         )
 
@@ -1059,6 +1127,7 @@ def generate_placement_from_spec_with_reason(
             slab,
             config,
             slab_for_sites=slab_for_sites,
+            site_context=site_context,
         )
 
     resolved_ctx = (
@@ -1081,10 +1150,16 @@ def generate_placement_from_spec_with_reason(
     if placement_ctx is None:
         return None, "no_sites_found"
 
-    result = _finalize_placement(placement_ctx, adsorbate, slab, config)
+    result, fail_reason = _finalize_placement(
+        placement_ctx,
+        adsorbate,
+        slab,
+        config,
+        slab_for_sites=slab_for_sites,
+    )
     if result is not None:
         return result, None
-    return None, "initial_distance_or_site_constraints"
+    return None, fail_reason or "initial_distance_or_site_constraints"
 
 
 def generate_placement_from_descriptor(
@@ -1165,6 +1240,9 @@ def _get_dissociative_site_pairs(
     config: AdsorptionConfig,
     slab_for_sites: Atoms | None = None,
     existing_adsorbate_positions: np.ndarray | None = None,
+    *,
+    raw_sites: list[dict[str, object]] | None = None,
+    site_context: SiteContext | None = None,
 ) -> list[_DissociativeSitePair]:
     """Return outward-oriented site pairs for dissociative diatomic placement."""
     if config.material_type not in ("slab", "nanoparticle"):
@@ -1172,19 +1250,27 @@ def _get_dissociative_site_pairs(
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
-    pbc = list(slab.get_pbc())
-    pbc_slab = np.array([bool(pbc[0]), bool(pbc[1]), False])
+    pbc = material_aware_pbc(config.material_type)
+    # Pair uniqueness on slabs uses xy-only MIC (intentional for planar catalogs).
+    pbc_xy = [bool(pbc[0]), bool(pbc[1]), False]
     slab_normal = sts._slab_normal(cell_arr)
 
-    raw = sts.get_unified_sites(
-        sites_slab,
-        top_layer_tolerance=config.top_layer_tolerance,
-        material_type=config.material_type,
-        probe_radius=config.voronoi_probe_radius,
-        max_site_distance=config.voronoi_max_site_distance,
-        enrich=config.voronoi_site_enrichment,
-        site_classification_method=config.site_classification_method,
-    )
+    if raw_sites is not None:
+        raw = list(raw_sites)
+    elif site_context is not None and site_context.raw_unclustered is not None:
+        raw = list(site_context.raw_unclustered)
+    elif site_context is not None and site_context.sites:
+        raw = list(site_context.sites)
+    else:
+        raw = sts.get_unified_sites(
+            sites_slab,
+            top_layer_tolerance=config.top_layer_tolerance,
+            material_type=config.material_type,
+            probe_radius=config.voronoi_probe_radius,
+            max_site_distance=config.voronoi_max_site_distance,
+            enrich=config.voronoi_site_enrichment,
+            site_classification_method=config.site_classification_method,
+        )
     if config.material_type == "slab":
         site_entries = [s for s in raw if s.get("site_type") in ("hollow", "pore")]
     else:
@@ -1200,7 +1286,7 @@ def _get_dissociative_site_pairs(
             site_xyz,
             config.hollow_site_dedup_tolerance,
             cell=cell_arr,
-            pbc=pbc_slab,
+            pbc=np.asarray(pbc_xy, dtype=bool),
         )
         site_xyz = site_xyz[keep]
         site_entries = [site_entries[i] for i in np.nonzero(keep)[0]]
@@ -1230,15 +1316,18 @@ def _get_dissociative_site_pairs(
 
     symbols = sites_slab.get_chemical_symbols()
     top_positions = sites_slab.get_positions()
-    top_mask = sts._top_layer_mask_by_normal(
-        top_positions,
-        cell_arr,
-        float(config.top_layer_tolerance),
-    )
-    top_idx = np.nonzero(top_mask)[0]
+    if config.material_type == "nanoparticle":
+        radius_indices = list(range(len(top_positions)))
+    else:
+        top_mask = sts._top_layer_mask_by_normal(
+            top_positions,
+            cell_arr,
+            float(config.top_layer_tolerance),
+        )
+        radius_indices = list(np.nonzero(top_mask)[0])
     top_radii = [
         r
-        for i in top_idx
+        for i in radius_indices
         if (r := geom._get_covalent_radius(symbols[int(i)])) is not None
     ]
     mean_top_radius = float(np.mean(top_radii)) if top_radii else 1.0
@@ -1284,7 +1373,7 @@ def _get_dissociative_site_pairs(
             _, dists = find_mic(
                 (site_3d[i] - site_3d[j]).reshape(1, 3),
                 cell_arr,
-                pbc=pbc,
+                pbc=pbc_xy,
             )
             d = float(dists[0])
         else:
@@ -1339,6 +1428,7 @@ def _generate_dissociative_placement_from_spec(
     slab: Atoms,
     config: AdsorptionConfig,
     slab_for_sites: Atoms | None = None,
+    site_context: SiteContext | None = None,
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
     """Place homonuclear-diatomic fragments at two surface sites."""
     if config.material_type not in ("slab", "nanoparticle"):
@@ -1358,6 +1448,7 @@ def _generate_dissociative_placement_from_spec(
         config,
         slab_for_sites=slab_for_sites,
         existing_adsorbate_positions=existing_ads_pos,
+        site_context=site_context,
     )
     if not pairs:
         return None, "no_hollow_site_pairs"
@@ -1366,8 +1457,16 @@ def _generate_dissociative_placement_from_spec(
     site_pair = pairs[pair_idx]
 
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
-    heights = sts._height_along_slab_normal(sites_slab.get_positions(), cell_arr)
-    h_surface = float(np.max(heights))
+    if config.material_type == "nanoparticle":
+        h_surface = 0.5 * (
+            float(np.dot(np.asarray(site_pair.xyz1, dtype=float), site_pair.normal1))
+            + float(np.dot(np.asarray(site_pair.xyz2, dtype=float), site_pair.normal2))
+        )
+        site_reference_frame = "local_site"
+    else:
+        heights = sts._height_along_slab_normal(sites_slab.get_positions(), cell_arr)
+        h_surface = float(np.max(heights))
+        site_reference_frame = "global_top_layer"
 
     syms = adsorbate.get_chemical_symbols()
     hollow_site: dict[str, object] = {"site_type": "hollow"}
@@ -1384,18 +1483,11 @@ def _generate_dissociative_placement_from_spec(
     result.set_cell(slab.get_cell())
     result.set_pbc(slab.get_pbc())
 
-    ok, _ = geom.check_initial_placement_distance(
-        result,
-        slab,
-        min_distance=config.min_initial_distance,
-        min_contact_ratio=config.min_contact_ratio,
-        max_initial_distance=config.max_initial_distance,
-        reject_vdw_overlaps=config.reject_vdw_overlaps,
-        vdw_overlap_scale=config.vdw_overlap_scale,
-        material_type=config.material_type,
+    fail_reason = _validate_posed_adsorbate(
+        result, slab, config, slab_for_sites=slab_for_sites
     )
-    if not ok:
-        return None, "initial_distance_or_site_constraints"
+    if fail_reason is not None:
+        return None, fail_reason
 
     centroid = (pos1 + pos2) / 2.0
     pinv_ab_T, _ = sts._slab_plane_projectors(np.asarray(slab.get_cell(), dtype=float))
@@ -1424,7 +1516,7 @@ def _generate_dissociative_placement_from_spec(
         slab_indices=None,
         placement_mode_resolved="sites",
         site_source="dissociative_hollow_pair",
-        site_reference_frame="global_top_layer",
+        site_reference_frame=site_reference_frame,
         site_xy_frac_a=float(xy_frac[0]),
         site_xy_frac_b=float(xy_frac[1]),
         quat_w=1.0,

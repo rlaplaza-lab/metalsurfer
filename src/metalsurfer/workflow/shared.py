@@ -34,7 +34,7 @@ from ..placement.generators import (
     enumerate_placement_specs,
     generate_placement_from_spec_with_reason,
 )
-from ..placement.geometry import calculate_min_distance
+from ..placement.geometry import calculate_min_distance, check_initial_contact_quality
 from ..surfaces import SlabContainer, accept_substrate_for_api, validate_substrate
 from ..symmetry import SymmetryAnalysisError
 
@@ -68,11 +68,11 @@ def _summarize_failure_events(
     events: list[PlacementFailureEvent],
     *,
     label: str,
-) -> None:
-    """Log compact failure summaries and leave details to debug."""
-    if not events:
-        return
+) -> dict[str, int]:
+    """Log compact failure summaries; return stage:reason → count."""
     stage_reason_counts: dict[str, int] = {}
+    if not events:
+        return stage_reason_counts
     for event in events:
         key = f"{event.stage}:{event.reason}"
         stage_reason_counts[key] = stage_reason_counts.get(key, 0) + 1
@@ -90,6 +90,19 @@ def _summarize_failure_events(
         )
     )
     logger.warning("%s failures (%d): %s", label, len(events), summary)
+    return stage_reason_counts
+
+
+def _generation_failure_histogram(
+    events: list[PlacementFailureEvent],
+) -> dict[str, int]:
+    """Count generation-stage failures by reason token."""
+    counts: dict[str, int] = {}
+    for event in events:
+        if event.stage != "generation":
+            continue
+        counts[event.reason] = counts.get(event.reason, 0) + 1
+    return counts
 
 
 def _prepare_atoms_for_calculator(
@@ -134,6 +147,7 @@ def _materialize_spec_placements(
     smiles: str,
     site_context: placement_generators.SiteContext | None,
     slab_for_sites: Atoms | None = None,
+    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
 ) -> tuple[
     list[Atoms], list[int], list[PlacementDescriptor], list[PlacementFailureEvent]
 ]:
@@ -144,15 +158,27 @@ def _materialize_spec_placements(
     failures: list[PlacementFailureEvent] = []
 
     for spec in specs:
-        result, fail_reason = generate_placement_from_spec_with_reason(
-            spec,
-            conformers,
-            slab_atoms,
-            config,
-            smiles=smiles,
-            site_context=site_context,
-            slab_for_sites=slab_for_sites,
+        cached = (
+            materialization_cache.get(int(spec.placement_index))
+            if materialization_cache is not None
+            else None
         )
+        result: tuple[Atoms, PlacementDescriptor] | None
+        fail_reason: str | None
+        if cached is not None:
+            adsorbate, descriptor = cached
+            result = (adsorbate.copy(), descriptor)
+            fail_reason = None
+        else:
+            result, fail_reason = generate_placement_from_spec_with_reason(
+                spec,
+                conformers,
+                slab_atoms,
+                config,
+                smiles=smiles,
+                site_context=site_context,
+                slab_for_sites=slab_for_sites,
+            )
         if result is None:
             failures.append(
                 PlacementFailureEvent(
@@ -256,57 +282,20 @@ def _validate_initial_placement_geometry(
     adsorbate: Atoms,
     slab: Atoms,
     config: AdsorptionConfig,
-    surface_symbols: list[str] | None = None,
+    *,
+    exclude_slab_atoms: int | None = None,
 ) -> tuple[bool, str]:
-    """Pre-optimization check for surface contact; returns (ok, reason)."""
-    if not config.strict_initial_placement and not config.require_multiple_contact:
-        return True, "strict placement checks disabled"
-
-    # Avoid circular import
-    from ..placement.geometry import calculate_contact_quality
-
-    slab_size = len(slab)
-    if len(adsorbate) < 1:
-        return False, "empty adsorbate"
-
-    # First argument is the adsorbate (molecule) only; *slab* is the substrate.
-    metrics = calculate_contact_quality(
+    """Pre-optimization check for surface contact; returns (ok, reason_token)."""
+    return check_initial_contact_quality(
         adsorbate,
         slab,
+        strict_initial_placement=config.strict_initial_placement,
+        require_multiple_contact=config.require_multiple_contact,
+        max_closest_approach=float(config.max_closest_approach),
+        min_contact_atoms=int(config.min_contact_atoms),
         contact_distance_threshold=config.contact_distance_threshold,
-        exclude_slab_atoms=slab_size if surface_symbols is None else None,
+        exclude_slab_atoms=exclude_slab_atoms,
         material_type=config.material_type,
-    )
-
-    contact_dist = metrics["contact_distance"]
-    num_contacting = metrics["num_contacting_atoms"]
-
-    # Check minimum contact distance
-    if contact_dist > config.min_contact_distance:
-        return (
-            False,
-            f"contact distance too large: {contact_dist:.3f} A (max {config.min_contact_distance:.3f})",
-        )
-
-    # Check minimum number of contacting atoms
-    if num_contacting < config.min_contact_atoms:
-        return (
-            False,
-            f"insufficient contacting atoms: {num_contacting} < {config.min_contact_atoms}",
-        )
-
-    # If multiple contact required, check for clustering
-    if config.require_multiple_contact and num_contacting > 1:
-        contact_atom_var = metrics["contact_atom_variance"]
-        if contact_atom_var > 0.5:  # High variance indicates spread-out contacts
-            return (
-                False,
-                f"poor contact clustering: variance {contact_atom_var:.3f} too high",
-            )
-
-    return (
-        True,
-        f"placement geometry valid (contacts={num_contacting}, distance={contact_dist:.3f}A)",
     )
 
 

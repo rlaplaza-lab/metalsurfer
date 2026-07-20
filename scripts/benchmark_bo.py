@@ -154,6 +154,14 @@ STALE_ARTIFACT_GLOBS = (
     "ablation_*.csv",
 )
 
+# Anytime horizons for paper-honest metrics (regret@100 is often ceilinged).
+ANYTIME_HORIZONS = (20, 30, 50)
+AURC_HORIZON = 50
+EVALS_TO_EPS = 0.05  # eV; first time best ≤ oracle + eps
+REGRET_TIE_TOL = 1e-6
+# Late saturation steps: budget covers most of the filtered pool.
+SECONDARY_TRANSFER_STEPS = frozenset({9, 10})
+
 
 def _cfg() -> AdsorptionConfig:
     return AdsorptionConfig()
@@ -182,13 +190,19 @@ def _replay_cfg_for_init(sampling: str) -> AdsorptionConfig:
 
 
 def _replay_cfg_for_batch(batch_size: int) -> AdsorptionConfig:
-    """Match default replay eval count while varying acquisition batch size."""
+    """Match default replay eval count while varying acquisition batch size.
+
+    Uses ceil(remaining / batch_size) acquisition rounds; ``_run_replay`` caps
+    total lookups at the default replay budget so batch 5/10/20 share a horizon.
+    """
     init = int(_REPLAY.bo_initial_random)
-    remaining = max(0, resolved_bo_eval_budget(_REPLAY) - init)
+    target = resolved_bo_eval_budget(_REPLAY)
+    remaining = max(0, target - init)
+    n_batches = max(1, (remaining + batch_size - 1) // batch_size)
     return AdsorptionConfig(
         bo_initial_random=init,
         bo_batch_size=batch_size,
-        bo_total_budget=remaining // batch_size,
+        bo_total_budget=n_batches,
     )
 
 
@@ -455,10 +469,75 @@ def _aggregate(
                 {
                     "eval_count": ep,
                     "mean_best": float(np.mean(vals)),
-                    "std_best": float(np.std(vals)),
+                    "std_best": float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0,
                 }
             )
     return pd.DataFrame(rows)
+
+
+def _curve_at(curve: list[float], ep: int) -> float:
+    if not curve:
+        return float("nan")
+    idx = min(ep, len(curve)) - 1
+    return float(curve[idx])
+
+
+def _aurc(curve: list[float], oracle: float, *, horizon: int = AURC_HORIZON) -> float:
+    """Mean simple regret over evals 1..horizon (pad with final best if shorter)."""
+    if not curve or horizon <= 0:
+        return float("nan")
+    regrets = []
+    for t in range(1, horizon + 1):
+        best = _curve_at(curve, t)
+        regrets.append(best - oracle)
+    return float(np.mean(regrets))
+
+
+def _evals_to_eps(
+    curve: list[float], oracle: float, *, eps: float = EVALS_TO_EPS
+) -> float:
+    """First eval count where best ≤ oracle + eps; nan if never reached."""
+    if not curve:
+        return float("nan")
+    threshold = oracle + eps
+    for i, best in enumerate(curve, start=1):
+        if best <= threshold:
+            return float(i)
+    return float("nan")
+
+
+def _mean_curve_metric(curves: list[list[float]], oracle: float, *, ep: int) -> float:
+    vals = [_curve_at(c, ep) - oracle for c in curves if c]
+    return float(np.mean(vals)) if vals else float("nan")
+
+
+def _mean_aurc(curves: list[list[float]], oracle: float) -> float:
+    vals = [_aurc(c, oracle) for c in curves if c]
+    return float(np.mean(vals)) if vals else float("nan")
+
+
+def _fmt_pvalue(p: float) -> str:
+    if not np.isfinite(p):
+        return "n/a (ties)"
+    return f"{p:.4g}"
+
+
+def _best_keys_by_metric(
+    regrets: dict[str, float], *, tol: float = REGRET_TIE_TOL
+) -> list[str]:
+    finite = {k: v for k, v in regrets.items() if np.isfinite(v)}
+    if not finite:
+        return []
+    best_val = min(finite.values())
+    return sorted(k for k, v in finite.items() if abs(v - best_val) <= tol)
+
+
+def _sweep_default_key(label: str) -> str:
+    if label == "batch":
+        return f"batch_{int(_REPLAY.bo_batch_size)}"
+    if label == "initial sampling":
+        return f"init_{_CFG.bo_initial_sampling}"
+    return _default_key()
 
 
 def _record_batch(
@@ -494,12 +573,14 @@ def _run_replay(
     transfer: bool = False,
     use_exploration: bool = False,
     transfer_kwargs: dict[str, float | int] | None = None,
+    max_evals: int | None = None,
 ) -> SearchRunResult:
     """Replay pool lookups with production batch-count semantics.
 
     Random and BO paths share the same initial-random batch and the same
     number of acquisition batches (``bo_total_budget``), each requesting up
-    to ``bo_batch_size`` unevaluated placements.
+    to ``bo_batch_size`` unevaluated placements. When ``max_evals`` is set,
+    total lookups are capped (used to equalize batch-size sweeps).
     """
     _require_resolved_replay(config)
     xfer_kw = (
@@ -520,8 +601,9 @@ def _run_replay(
     transfer_disabled = False
     transfer_bad_rounds = 0
     weight_shares: list[float] = []
+    eval_cap = max_evals if max_evals is not None else resolved_bo_eval_budget(config)
 
-    n_init = min(int(config.bo_initial_random), n)
+    n_init = min(int(config.bo_initial_random), n, eval_cap)
     init_idx = select_initial_bo_indices(
         X,
         n_init,
@@ -547,10 +629,13 @@ def _run_replay(
 
     batches_run = 0
     while batches_run < int(config.bo_total_budget):
+        remaining = eval_cap - len(selected)
+        if remaining <= 0:
+            break
         uneval = [i for i in range(n) if i not in evaluated]
         if not uneval:
             break
-        batch = min(int(config.bo_batch_size), len(uneval))
+        batch = min(int(config.bo_batch_size), len(uneval), remaining)
 
         if mode == "random" or len(evaluated) < 3:
             chosen = rng.choice(uneval, size=batch, replace=False).tolist()
@@ -674,12 +759,25 @@ def _run_replay(
 
 def _paired_stats(baseline: list[float], treatment: list[float]) -> dict[str, float]:
     if len(baseline) != len(treatment) or not baseline:
-        return {"mean_improvement": np.nan, "win_rate": np.nan, "p_value": np.nan}
-    diffs = np.asarray(baseline) - np.asarray(treatment)
+        return {
+            "mean_improvement": np.nan,
+            "win_rate": np.nan,
+            "tie_rate": np.nan,
+            "p_value": np.nan,
+        }
+    diffs = np.asarray(baseline, dtype=float) - np.asarray(treatment, dtype=float)
+    if np.allclose(diffs, 0.0, atol=REGRET_TIE_TOL, rtol=0.0):
+        return {
+            "mean_improvement": 0.0,
+            "win_rate": 0.0,
+            "tie_rate": 1.0,
+            "p_value": np.nan,
+        }
     t = stats.ttest_rel(baseline, treatment)
     return {
         "mean_improvement": float(np.mean(diffs)),
-        "win_rate": float(np.mean(diffs > 0)),
+        "win_rate": float(np.mean(diffs > REGRET_TIE_TOL)),
+        "tie_rate": float(np.mean(np.abs(diffs) <= REGRET_TIE_TOL)),
         "p_value": float(t.pvalue),
     }
 
@@ -690,8 +788,9 @@ def _run_random(
     seed: int,
     *,
     config: AdsorptionConfig = _REPLAY,
+    max_evals: int | None = None,
 ) -> SearchRunResult:
-    return _run_replay(X, y, seed, config, mode="random")
+    return _run_replay(X, y, seed, config, mode="random", max_evals=max_evals)
 
 
 def _run_bo(
@@ -703,7 +802,9 @@ def _run_bo(
     surrogate: str = SURROGATE,
     acquisition: str = ACQUISITION,
     kappa: float = KAPPA,
+    max_evals: int | None = None,
 ) -> SearchRunResult:
+    # Match live screening: no forced random exploration without transfer.
     return _run_replay(
         X,
         y,
@@ -713,6 +814,8 @@ def _run_bo(
         surrogate=surrogate,
         acquisition=acquisition,
         kappa=kappa,
+        use_exploration=False,
+        max_evals=max_evals,
     )
 
 
@@ -783,6 +886,7 @@ def _run_bo_transfer(
         acquisition=acquisition,
         kappa=kappa,
         transfer_kwargs=_transfer_kwargs_from_config(config),
+        max_evals=EVAL_BUDGET,
     )
     assert result.memory is not None
     return result, result.memory, result.transfer_weight_share_mean
@@ -854,8 +958,8 @@ def run_screening(data_dir: str, *, seeds: int) -> tuple[pd.DataFrame, pd.DataFr
         rand_finals, rand_curves = [], []
         bo_finals, bo_curves = [], []
         for seed in range(seeds):
-            r = _run_random(X, y, seed)
-            b = _run_bo(X, y, seed)
+            r = _run_random(X, y, seed, max_evals=EVAL_BUDGET)
+            b = _run_bo(X, y, seed, max_evals=EVAL_BUDGET)
             if len(r.selected_energies) != len(b.selected_energies):
                 raise RuntimeError(
                     f"step {step} seed {seed}: random looked up "
@@ -868,22 +972,38 @@ def run_screening(data_dir: str, *, seeds: int) -> tuple[pd.DataFrame, pd.DataFr
             bo_curves.append(b.curve)
 
         stats = _paired_stats(rand_finals, bo_finals)
-        bo50 = [c[49] for c in bo_curves if len(c) >= 50]
-        rand50 = [c[49] for c in rand_curves if len(c) >= 50]
-        stats50 = _paired_stats(rand50, bo50) if len(bo50) == len(rand50) else stats
+        metrics: dict[str, object] = {
+            "step": step,
+            "n_pool": len(X),
+            "oracle_best": oracle,
+            "regret_at_100": float(np.mean(bo_finals)) - oracle,
+            "random_regret_at_100": float(np.mean(rand_finals)) - oracle,
+            "vs_random_mean_improvement": stats["mean_improvement"],
+            "vs_random_p_value": stats["p_value"],
+            "vs_random_win_rate": stats["win_rate"],
+            "vs_random_tie_rate": stats["tie_rate"],
+            "random_mean_final_best": float(np.mean(rand_finals)),
+            "bo_aurc_50": _mean_aurc(bo_curves, oracle),
+            "random_aurc_50": _mean_aurc(rand_curves, oracle),
+            "bo_evals_to_eps": float(
+                np.nanmean([_evals_to_eps(c, oracle) for c in bo_curves])
+            ),
+            "random_evals_to_eps": float(
+                np.nanmean([_evals_to_eps(c, oracle) for c in rand_curves])
+            ),
+        }
+        for ep in ANYTIME_HORIZONS:
+            bo_r = [_curve_at(c, ep) for c in bo_curves]
+            rand_r = [_curve_at(c, ep) for c in rand_curves]
+            st_ep = _paired_stats(rand_r, bo_r)
+            metrics[f"bo_regret_at_{ep}"] = float(np.mean(bo_r)) - oracle
+            metrics[f"random_regret_at_{ep}"] = float(np.mean(rand_r)) - oracle
+            metrics[f"vs_random_improvement_at_{ep}"] = st_ep["mean_improvement"]
+            metrics[f"vs_random_p_value_at_{ep}"] = st_ep["p_value"]
+            metrics[f"vs_random_win_rate_at_{ep}"] = st_ep["win_rate"]
+            metrics[f"vs_random_tie_rate_at_{ep}"] = st_ep["tie_rate"]
 
-        metrics_rows.append(
-            {
-                "step": step,
-                "oracle_best": oracle,
-                "regret_at_100": float(np.mean(bo_finals)) - oracle,
-                "vs_random_mean_improvement": stats["mean_improvement"],
-                "vs_random_p_value": stats["p_value"],
-                "vs_random_improvement_at_50": stats50["mean_improvement"],
-                "vs_random_p_value_at_50": stats50["p_value"],
-                "random_mean_final_best": float(np.mean(rand_finals)),
-            }
-        )
+        metrics_rows.append(metrics)
 
         for config, curves in (
             ("random_search", rand_curves),
@@ -917,10 +1037,15 @@ def run_step1_sweeps(data_dir: str, *, seeds: int) -> dict[str, pd.DataFrame]:
     oracle = float(y.min())
     for batch_size in BATCH_SIZES:
         batch_cfg = _replay_cfg_for_batch(batch_size)
-        budget = resolved_bo_eval_budget(batch_cfg)
-        curves = [_run_bo(X, y, seed, config=batch_cfg).curve for seed in range(seeds)]
+        budget = EVAL_BUDGET
+        curves = [
+            _run_bo(X, y, seed, config=batch_cfg, max_evals=EVAL_BUDGET).curve
+            for seed in range(seeds)
+        ]
         key = f"batch_{batch_size}"
-        for _, row in _aggregate(curves, batch_cfg).iterrows():
+        for _, row in _aggregate(
+            curves, batch_cfg, eval_points=bo_eval_schedule(_REPLAY)
+        ).iterrows():
             batch_rows.append(
                 {
                     "step": 1,
@@ -933,7 +1058,7 @@ def run_step1_sweeps(data_dir: str, *, seeds: int) -> dict[str, pd.DataFrame]:
                     "total_budget": budget,
                 }
             )
-        logger.info("Batch sweep %s: budget=%d", key, budget)
+        logger.info("Batch sweep %s: capped budget=%d", key, budget)
 
     init_rows: list[dict[str, float | int | str]] = []
     for sampling in INIT_STRATEGIES:
@@ -971,12 +1096,14 @@ def run_transfer(
     detail_rows: list[dict[str, float | int]] = []
     baseline_curves: dict[int, list[list[float]]] = {s: [] for s in transfer_steps}
     transfer_curves: dict[int, list[list[float]]] = {s: [] for s in transfer_steps}
+    pool_sizes: dict[int, int] = {}
 
     for seed in range(seeds):
         memories: list[BOStepMemory] = []
         prior_anchor: BOStepMemory | None = None
         for step in steps:
             X, y = load_pool(data_dir, step=step)
+            pool_sizes[step] = len(X)
             oracle = float(y.min())
             rs = seed + step * 101
             prior = (
@@ -1015,20 +1142,37 @@ def run_transfer(
     summary_rows = []
     curve_rows = []
     for step in transfer_steps:
-        bl = detail_df.loc[detail_df["step"] == step, "baseline_best"].tolist()
-        tr = detail_df.loc[detail_df["step"] == step, "transfer_best"].tolist()
+        step_df = detail_df.loc[detail_df["step"] == step]
+        bl = step_df["baseline_best"].tolist()
+        tr = step_df["transfer_best"].tolist()
         st = _paired_stats(bl, tr)
-        oracle = float(detail_df.loc[detail_df["step"] == step, "oracle_best"].iloc[0])
-        summary_rows.append(
-            {
-                "step": step,
-                "mean_improvement": st["mean_improvement"],
-                "win_rate": st["win_rate"],
-                "p_value": st["p_value"],
-                "baseline_regret_at_100": float(np.mean(bl)) - oracle,
-                "transfer_regret_at_100": float(np.mean(tr)) - oracle,
-            }
-        )
+        oracle = float(step_df["oracle_best"].iloc[0])
+        bl_curves = baseline_curves[step]
+        tr_curves = transfer_curves[step]
+        summary: dict[str, float | int] = {
+            "step": step,
+            "n_pool": pool_sizes.get(step, 0),
+            "mean_improvement": st["mean_improvement"],
+            "win_rate": st["win_rate"],
+            "tie_rate": st["tie_rate"],
+            "p_value": st["p_value"],
+            "baseline_regret_at_100": float(np.mean(bl)) - oracle,
+            "transfer_regret_at_100": float(np.mean(tr)) - oracle,
+            "baseline_aurc_50": _mean_aurc(bl_curves, oracle),
+            "transfer_aurc_50": _mean_aurc(tr_curves, oracle),
+            "secondary_small_pool": int(step in SECONDARY_TRANSFER_STEPS),
+        }
+        for ep in ANYTIME_HORIZONS:
+            bl_ep = [_curve_at(c, ep) for c in bl_curves]
+            tr_ep = [_curve_at(c, ep) for c in tr_curves]
+            st_ep = _paired_stats(bl_ep, tr_ep)
+            summary[f"baseline_regret_at_{ep}"] = float(np.mean(bl_ep)) - oracle
+            summary[f"transfer_regret_at_{ep}"] = float(np.mean(tr_ep)) - oracle
+            summary[f"improvement_at_{ep}"] = st_ep["mean_improvement"]
+            summary[f"p_value_at_{ep}"] = st_ep["p_value"]
+            summary[f"win_rate_at_{ep}"] = st_ep["win_rate"]
+            summary[f"tie_rate_at_{ep}"] = st_ep["tie_rate"]
+        summary_rows.append(summary)
         for variant, curves in (
             ("baseline", baseline_curves[step]),
             ("transfer", transfer_curves[step]),
@@ -1206,6 +1350,32 @@ def _regret_final(curves: pd.DataFrame, oracle: float, key: str, *, col: str) ->
     return float(grp["mean_best"].iloc[-1] - oracle) if not grp.empty else float("nan")
 
 
+def _aurc_from_curve_df(
+    curves: pd.DataFrame,
+    oracle: float,
+    key: str,
+    *,
+    col: str,
+    horizon: int = AURC_HORIZON,
+) -> float:
+    """Approximate AURC from aggregated mean_best schedule (trapezoid over points)."""
+    grp = curves[curves[col] == key].sort_values("eval_count")
+    if grp.empty:
+        return float("nan")
+    # Reconstruct a dense curve by forward-filling mean_best up to horizon.
+    best_by_ep = {
+        int(r.eval_count): float(r.mean_best) for r in grp.itertuples(index=False)
+    }
+    eps = sorted(best_by_ep)
+    regrets = []
+    last = best_by_ep[eps[0]]
+    for t in range(1, horizon + 1):
+        if t in best_by_ep:
+            last = best_by_ep[t]
+        regrets.append(last - oracle)
+    return float(np.mean(regrets))
+
+
 def write_report(
     out_dir: str,
     *,
@@ -1231,6 +1401,20 @@ def write_report(
         f"Transfer: `{cfg.bo_transfer_mode}`, window={cfg.bo_transfer_prior_step_window}, "
         f"recency_ls={cfg.bo_transfer_recency_lengthscale}, "
         f"occupancy_ls={cfg.bo_transfer_occupancy_lengthscale}",
+        f"Replay budget: {EVAL_BUDGET} lookups "
+        f"({_REPLAY.bo_initial_random} init + {_REPLAY.bo_total_budget}×"
+        f"{_REPLAY.bo_batch_size}); exploration only when transfer is active "
+        f"(fraction={cfg.bo_transfer_exploration_fraction})",
+        "",
+        "## Methods caveats",
+        "",
+        "- Offline **filtered-pool** discrete BO (successful placements only); "
+        "no MLIP cost; no failure-penalty labels.",
+        "- Fixed 100-eval proxy schedule; live GPU runs autotune "
+        "`bo_initial_random` / `bo_batch_size` to parallel capacity.",
+        "- Primary decision metrics are **anytime** (regret@20/30/50, AURC@50); "
+        "regret@100 is a ceiling/sanity check only.",
+        "- Steps 9–10 have small pools relative to budget (secondary).",
         "",
     ]
 
@@ -1238,75 +1422,109 @@ def write_report(
     if not s1.empty:
         r = s1.iloc[0]
         lines += [
-            "## Step 1: default BO vs random",
+            "## Step 1: default BO vs random (anytime)",
             "",
-            f"- Oracle E_ads: **{r['oracle_best']:.4f} eV**",
-            f"- Default BO regret@100: **{r['regret_at_100']:.4f} eV**",
-            f"- Random regret@100: **{r['random_mean_final_best'] - r['oracle_best']:.4f} eV**",
-            f"- Improvement@50: **{r['vs_random_improvement_at_50']:.4f} eV** "
-            f"(p={r['vs_random_p_value_at_50']:.4g})",
-            f"- Final improvement: **{r['vs_random_mean_improvement']:.4f} eV** "
-            f"(p={r['vs_random_p_value']:.4g})",
+            f"- Pool size: **{int(r['n_pool'])}**; oracle E_ads: **{r['oracle_best']:.4f} eV**",
+            f"- AURC@50: BO **{r['bo_aurc_50']:.4f}** vs random **{r['random_aurc_50']:.4f}**",
+            f"- Evals to ε={EVALS_TO_EPS} eV: BO **{r['bo_evals_to_eps']:.1f}** vs "
+            f"random **{r['random_evals_to_eps']:.1f}**",
+        ]
+        for ep in ANYTIME_HORIZONS:
+            lines.append(
+                f"- Regret@{ep}: BO **{r[f'bo_regret_at_{ep}']:.4f}** vs random "
+                f"**{r[f'random_regret_at_{ep}']:.4f}** "
+                f"(Δ={r[f'vs_random_improvement_at_{ep}']:.4f} eV, "
+                f"p={_fmt_pvalue(float(r[f'vs_random_p_value_at_{ep}']))}, "
+                f"win/tie="
+                f"{r[f'vs_random_win_rate_at_{ep}']:.2f}/"
+                f"{r[f'vs_random_tie_rate_at_{ep}']:.2f})"
+            )
+        lines += [
+            f"- Regret@100 (ceiling check): BO **{r['regret_at_100']:.4f}** vs "
+            f"random **{r['random_regret_at_100']:.4f}** "
+            f"(p={_fmt_pvalue(float(r['vs_random_p_value']))})",
             "",
         ]
 
     oracle1 = float(s1.iloc[0]["oracle_best"]) if not s1.empty else float("nan")
     if np.isfinite(oracle1):
-        lines.append("## Step 1 sweeps (regret@100)")
+        lines.append("## Step 1 sweeps (primary: AURC@50; also regret@30)")
         lines.append("")
-        dk = _default_key()
         for label, df in (
             ("architecture", arch_curves),
             ("batch", batch_curves),
             ("acquisition", acq_curves),
             ("initial sampling", init_curves),
         ):
-            regrets = {
-                k: _regret_final(df, oracle1, k, col="config")
+            dkey = _sweep_default_key(label)
+            aurcs = {
+                k: _aurc_from_curve_df(df, oracle1, k, col="config")
                 for k in df["config"].unique()
             }
-            best = min(regrets, key=regrets.get)  # type: ignore[arg-type]
+            r30 = {
+                k: _regret_at(df, oracle1, k, 30, col="config")
+                for k in df["config"].unique()
+            }
+            best_aurc = _best_keys_by_metric(aurcs)
+            best_r30 = _best_keys_by_metric(r30)
+            best_label = ", ".join(best_aurc) if best_aurc else "n/a"
             lines.append(
-                f"- Best {label}: **{best}** ({regrets[best]:.4f} eV); "
-                f"default ({dk}): {regrets.get(dk, float('nan')):.4f} eV"
+                f"- Best {label} by AURC@50: **{best_label}** "
+                f"({aurcs.get(best_aurc[0], float('nan')):.4f} eV); "
+                f"default (`{dkey}`): AURC={aurcs.get(dkey, float('nan')):.4f}, "
+                f"regret@30={r30.get(dkey, float('nan')):.4f}"
             )
+            if best_r30 and set(best_r30) != set(best_aurc):
+                lines.append(f"  - Tied/alternate by regret@30: {', '.join(best_r30)}")
         lines.append("")
 
-    lines.append("## Transfer saturation (steps 2–end)")
+    lines.append("## Transfer saturation (steps 2–end; anytime)")
     lines.append("")
     for step in sorted(transfer_summary["step"].unique()):
         step = int(step)
         trow = transfer_summary[transfer_summary["step"] == step].iloc[0]
+        secondary = bool(trow.get("secondary_small_pool", 0))
+        tag = " *(secondary: small pool)*" if secondary else ""
+        lines += [
+            f"### Step {step}{tag}",
+            "",
+            f"- Pool size: **{int(trow['n_pool'])}**",
+            f"- AURC@50: baseline **{trow['baseline_aurc_50']:.4f}**, "
+            f"transfer **{trow['transfer_aurc_50']:.4f}** "
+            f"(Δ={trow['baseline_aurc_50'] - trow['transfer_aurc_50']:+.4f})",
+        ]
+        for ep in ANYTIME_HORIZONS:
+            b = float(trow[f"baseline_regret_at_{ep}"])
+            t = float(trow[f"transfer_regret_at_{ep}"])
+            lines.append(
+                f"- Regret@{ep}: baseline **{b:.4f}**, transfer **{t:.4f}** "
+                f"(Δ={b - t:+.4f}; p={_fmt_pvalue(float(trow[f'p_value_at_{ep}']))}; "
+                f"win/tie={trow[f'win_rate_at_{ep}']:.2f}/"
+                f"{trow[f'tie_rate_at_{ep}']:.2f})"
+            )
+        lines += [
+            f"- Final regret@100 (ceiling): baseline "
+            f"**{trow['baseline_regret_at_100']:.4f}**, transfer "
+            f"**{trow['transfer_regret_at_100']:.4f}** "
+            f"(p={_fmt_pvalue(float(trow['p_value']))})",
+        ]
         oracle = float(
             screening_report.loc[screening_report["step"] == step, "oracle_best"].iloc[
                 0
             ]
         )
-        lines += [
-            f"### Step {step}",
-            "",
-            f"- Baseline regret@100: **{trow['baseline_regret_at_100']:.4f} eV**",
-            f"- Transfer regret@100: **{trow['transfer_regret_at_100']:.4f} eV**",
-            f"- Transfer vs baseline: **{trow['mean_improvement']:.4f} eV** "
-            f"(p={trow['p_value']:.4g})",
-        ]
-        xfer = transfer_curves[transfer_curves["step"] == step]
-        for ep in (20, 30, 50):
-            b = _regret_at(xfer, oracle, "baseline", ep, col="variant")
-            t = _regret_at(xfer, oracle, "transfer", ep, col="variant")
-            if np.isfinite(b) and np.isfinite(t):
-                lines.append(
-                    f"- E_rel @{ep}: baseline **{b:.4f}**, transfer **{t:.4f}** (Δ={b - t:+.4f})"
-                )
         rand = _regret_final(
             screening_curves[screening_curves["step"] == step],
             oracle,
             "random_search",
             col="config",
         )
-        lines += [f"- Random regret@100: **{rand:.4f} eV**", ""]
-        lines.append(f"- Figure: `transfer_step{step}_saturation.png`")
-        lines.append("")
+        lines += [
+            f"- Random regret@100: **{rand:.4f} eV**",
+            "",
+            f"- Figure: `transfer_step{step}_saturation.png`",
+            "",
+        ]
 
     lines += [
         "## Figures",
@@ -1322,7 +1540,8 @@ def write_report(
     lines.append("")
 
     path = os.path.join(out_dir, "report.md")
-    Path(path).write_text("\n".join(lines), encoding="utf-8")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
     logger.info("Wrote %s", path)
 
 

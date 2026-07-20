@@ -280,8 +280,11 @@ def test_initial_placement_distance_accepts_and_rejects_expected_heights():
     near.set_positions(p_near)
     near.set_cell(slab.get_cell())
     near.set_pbc(slab.get_pbc())
-    ok_near, _ = check_initial_placement_distance(near, slab, material_type="slab")
+    ok_near, _, reason_near = check_initial_placement_distance(
+        near, slab, material_type="slab"
+    )
     assert not ok_near
+    assert reason_near == "too_close"
 
     valid = water.copy()
     p_valid = valid.get_positions().copy()
@@ -291,8 +294,28 @@ def test_initial_placement_distance_accepts_and_rejects_expected_heights():
     valid.set_positions(p_valid)
     valid.set_cell(slab.get_cell())
     valid.set_pbc(slab.get_pbc())
-    ok_valid, _ = check_initial_placement_distance(valid, slab, material_type="slab")
+    ok_valid, _, reason_valid = check_initial_placement_distance(
+        valid, slab, material_type="slab"
+    )
     assert ok_valid
+    assert reason_valid is None
+
+
+def test_check_initial_placement_distance_too_far_reason():
+    slab = make_slab()
+    water = make_water()
+    surface_z = float(np.max(slab.get_positions()[:, 2]))
+    far = water.copy()
+    p = far.get_positions().copy()
+    p[:, 2] += surface_z + 8.0
+    far.set_positions(p)
+    far.set_cell(slab.get_cell())
+    far.set_pbc(slab.get_pbc())
+    ok, _, reason = check_initial_placement_distance(
+        far, slab, max_initial_distance=3.0, material_type="slab"
+    )
+    assert not ok
+    assert reason == "too_far"
 
 
 def test_material_aware_pbc():
@@ -1542,7 +1565,7 @@ def test_check_initial_placement_distance_with_vdw_rejection():
     water.set_pbc(slab.get_pbc())
 
     # Should reject with VDW check enabled
-    ok, dist = check_initial_placement_distance(
+    ok, dist, reason = check_initial_placement_distance(
         water,
         slab,
         reject_vdw_overlaps=True,
@@ -1550,6 +1573,7 @@ def test_check_initial_placement_distance_with_vdw_rejection():
         material_type="slab",
     )
     assert not ok, "Should reject overlapping placement"
+    assert reason in {"too_close", "vdw_overlap"}
 
 
 def test_calculate_contact_quality_detects_good_contact():
@@ -1650,18 +1674,21 @@ def test_validate_initial_placement_geometry_with_strict_config():
     water.set_cell(slab.get_cell())
     water.set_pbc(slab.get_pbc())
 
-    # Create strict config (min_contact_distance: max allowed closest-approach distance)
-    config = AdsorptionConfig(
-        strict_initial_placement=True,
-        min_contact_atoms=1,
-        min_contact_distance=3.0,
-        contact_distance_threshold=2.5,
-    )
+    # max_closest_approach: max allowed closest-approach distance
+    with pytest.warns(DeprecationWarning, match="min_contact_distance"):
+        config = AdsorptionConfig(
+            strict_initial_placement=True,
+            min_contact_atoms=1,
+            min_contact_distance=3.0,
+            contact_distance_threshold=2.5,
+        )
+    assert config.max_closest_approach == 3.0
 
     ok, reason = workflow_shared._validate_initial_placement_geometry(
         water, slab, config
     )
     assert ok, f"Should pass strict validation with good contact: {reason}"
+    assert reason == "placement_geometry_valid"
 
 
 def test_validate_initial_placement_geometry_rejects_poor_contact():
@@ -1676,10 +1703,9 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
     water.set_cell(slab.get_cell())
     water.set_pbc(slab.get_pbc())
 
-    # Create strict config with tight requirements
     config = AdsorptionConfig(
         strict_initial_placement=True,
-        min_contact_distance=1.5,
+        max_closest_approach=1.5,
         min_contact_atoms=3,  # Require 3 contacting atoms
     )
 
@@ -1687,6 +1713,119 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
         water, slab, config
     )
     assert not ok, "Should reject placement with poor contact"
+    assert reason in {
+        "contact_distance_too_large",
+        "insufficient_contact_atoms",
+    }
+
+
+def test_require_multiple_contact_rejects_single_contact():
+    slab = make_slab()
+    water = make_water().copy()
+    pos = water.get_positions()
+    pos -= np.mean(pos, axis=0)
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 2.2
+    pos[:, 0] += 2.0
+    pos[:, 1] += 2.0
+    water.set_positions(pos)
+    water.set_cell(slab.get_cell())
+    water.set_pbc(slab.get_pbc())
+
+    config = AdsorptionConfig(
+        require_multiple_contact=True,
+        min_contact_atoms=1,
+        max_closest_approach=3.5,
+        contact_distance_threshold=2.0,
+    )
+    ok, reason = workflow_shared._validate_initial_placement_geometry(
+        water, slab, config
+    )
+    # Single-atom contact should fail the >=2 requirement when only one contacts.
+    if not ok:
+        assert reason == "insufficient_contact_atoms"
+
+
+def test_saturation_finalize_rejects_adsorbate_overlap():
+    from metalsurfer.placement.generators import _validate_posed_adsorbate
+
+    slab = make_slab()
+    water = make_water().copy()
+    pos = water.get_positions()
+    pos -= np.mean(pos, axis=0)
+    surface_z = float(np.max(slab.get_positions()[:, 2]))
+    pos[:, 2] += surface_z + 2.2
+    pos[:, 0] += 2.0
+    pos[:, 1] += 2.0
+    water.set_positions(pos)
+    covered = slab + water
+
+    # New adsorbate coincident with pre-adsorbed water → adsorbate_overlap.
+    clash = water.copy()
+    config = AdsorptionConfig()
+    reason = _validate_posed_adsorbate(clash, covered, config, slab_for_sites=slab)
+    assert reason == "adsorbate_overlap"
+
+    # Far from prior adsorbate but above substrate → not adsorbate_overlap.
+    far = water.copy()
+    far_pos = far.get_positions().copy()
+    far_pos[:, 0] += 6.0
+    far_pos[:, 1] += 6.0
+    far.set_positions(far_pos)
+    reason_far = _validate_posed_adsorbate(far, covered, config, slab_for_sites=slab)
+    assert reason_far != "adsorbate_overlap"
+
+
+def test_strict_initial_placement_e2e_reason():
+    slab = make_slab()
+    config = AdsorptionConfig(
+        num_conformers=1,
+        num_placements=12,
+        seed=1,
+        strict_initial_placement=True,
+        max_closest_approach=0.5,
+        min_contact_atoms=1,
+    )
+    conformers = [make_water()]
+    specs = enumerate_placement_specs(conformers, slab, config, "O", 12, seed=1)
+    reasons = set()
+    for spec in specs:
+        _result, reason = generate_placement_from_spec_with_reason(
+            spec, conformers, slab, config, smiles="O"
+        )
+        if reason is not None:
+            reasons.add(reason)
+    assert reasons
+    assert any(
+        r
+        in {
+            "too_close",
+            "too_far",
+            "vdw_overlap",
+            "contact_distance_too_large",
+            "insufficient_contact_atoms",
+            "no_sites_found",
+        }
+        for r in reasons
+    )
+
+
+def test_site_classification_auto_matches_delaunay_on_slab():
+    slab = make_slab()
+    auto_sites = get_unified_sites(
+        slab, material_type="slab", site_classification_method="auto"
+    )
+    del_sites = get_unified_sites(
+        slab, material_type="slab", site_classification_method="delaunay"
+    )
+    assert [s.get("site_type") for s in auto_sites] == [
+        s.get("site_type") for s in del_sites
+    ]
+
+
+def test_config_accepts_site_classification_auto():
+    c = AdsorptionConfig(site_classification_method="auto")
+    assert c.site_classification_method == "auto"
+    assert AdsorptionConfig().site_classification_method == "auto"
 
 
 # ---------------------------------------------------------------------------

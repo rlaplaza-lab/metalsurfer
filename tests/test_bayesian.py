@@ -24,6 +24,7 @@ from metalsurfer.ml.bayesian import (
     prior_similarity_to_current,
     score_and_select,
     select_candidates,
+    select_candidates_batch_diverse,
     select_initial_bo_indices,
     train_surrogate,
 )
@@ -203,14 +204,27 @@ class TestSurrogate:
 
 
 class TestAcquisition:
-    def test_ei_scores_zero_sigma_is_deterministic_improvement(self):
-        """When sigma=0, EI reduces to max(0, f_best - mu) (see ei_scores)."""
+    def test_ei_scores_zero_sigma_ranks_by_negative_mu(self):
+        """When sigma=0, EI ranks by -mu so the pool does not collapse to zeros."""
         mu = np.array([1.0, 2.0, -0.5])
         sigma = np.array([0.0, 0.0, 0.0])
         f_best = 0.0
         ei = ei_scores(mu, sigma, f_best=f_best, xi=1e-6)
-        expected = np.maximum(0.0, f_best - mu)
-        np.testing.assert_allclose(ei, expected, rtol=0, atol=1e-5)
+        np.testing.assert_allclose(ei, -mu, rtol=0, atol=1e-5)
+        assert int(np.argmax(ei)) == 2
+
+    def test_ridge_predict_with_uncertainty_is_positive(self):
+        X, y = _make_synthetic_training_data(40)
+        model = train_surrogate(X, y, surrogate="ridge", random_state=0)
+        mu, sigma = predict_with_uncertainty(model, X)
+        assert mu.shape == (40,)
+        assert sigma.shape == (40,)
+        assert np.all(sigma > 0)
+        # Far-from-train points should not be less uncertain than in-sample.
+        X_far = X.copy()
+        X_far.iloc[:, :] = X_far.to_numpy() + 50.0
+        _, sigma_far = predict_with_uncertainty(model, X_far)
+        assert float(np.mean(sigma_far)) >= float(np.mean(sigma))
 
     def test_lcb_scores_shape(self):
         mu = np.array([1.0, 2.0, 3.0])
@@ -362,6 +376,26 @@ class TestFeatureBuilding:
         # Ensure candidate geometry is not collapsed to a constant placeholder.
         assert X[["x", "y", "z"]].drop_duplicates().shape[0] > 1
 
+    def test_build_spec_features_fills_materialization_cache(self):
+        slab = make_slab(nx=2, ny=2, n_layers=3)
+        conformers = [make_water()]
+        config = AdsorptionConfig(num_conformers=1, num_placements=8)
+        specs = enumerate_placement_specs(conformers, slab, config, "O", n_desired=8)
+        cache: dict = {}
+        X, valid_indices = build_spec_features_geometry_aware(
+            specs,
+            conformers,
+            slab,
+            config,
+            smiles="O",
+            materialization_cache=cache,
+        )
+        assert X.shape[0] == len(valid_indices)
+        assert len(cache) == X.shape[0]
+        for pid, (ads, desc) in cache.items():
+            assert pid == desc.placement_index
+            assert len(ads) > 0
+
     def test_record_from_descriptor_roundtrip(self):
         d = _bayesian_descriptor(7)
         record = PlacementRecord.from_descriptor(d, molecule="mol", smiles="C")
@@ -428,8 +462,23 @@ class TestScoreAndSelect:
         model = train_surrogate(X, y, n_estimators=20)
         greedy = score_and_select(model, X, batch_size=5, kappa=0.0)
         mu, _ = predict_with_uncertainty(model, X)
-        expected_order = np.argsort(mu)[:5].tolist()
-        assert greedy == expected_order
+        # First pick is pure greedy; later picks use local penalization for diversity.
+        assert greedy[0] == int(np.argmin(mu))
+        assert len(greedy) == 5
+        assert len(set(greedy)) == 5
+
+    def test_batch_diverse_differs_from_pure_topk(self):
+        X, y = _make_synthetic_training_data(40)
+        model = train_surrogate(X, y, n_estimators=20, random_state=0)
+        mu, sigma = predict_with_uncertainty(model, X)
+        scores = lcb_scores(mu, sigma, kappa=1.0)
+        topk = select_candidates(scores, batch_size=5)
+        diverse = select_candidates_batch_diverse(
+            scores, X, batch_size=5, higher_is_better=False
+        )
+        assert diverse[0] == topk[0]
+        assert len(diverse) == 5
+        assert len(set(diverse)) == 5
 
     def test_high_kappa_favours_uncertain(self):
         X, y = _make_synthetic_training_data(40)

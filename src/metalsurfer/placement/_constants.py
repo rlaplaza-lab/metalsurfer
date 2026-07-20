@@ -204,6 +204,8 @@ _PARALLEL_FRACTION_HIGH_RATIO_CUTOFF: float = 0.5
 _PARALLEL_FRACTION_MEDIUM_RATIO_CUTOFF: float = 0.2
 _PLACEMENT_GRID_COUNT_SEED: int = 0
 _GRID_BUILD_CAP: int = 10**9
+# Working-set multiplier for early-cap policy paths (dissociative / heavy filters).
+_EARLY_CAP_WORKING_SET_MULTIPLIER: int = 8
 _TILT_FULL: tuple[float, ...] = (0.0, 15.0, 30.0, 45.0, 60.0, 90.0)
 _TILT_PARALLEL: tuple[float, ...] = (0.0, 15.0, 30.0)
 _AZIMUTH: tuple[float, ...] = (0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0)

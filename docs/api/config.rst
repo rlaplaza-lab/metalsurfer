@@ -147,11 +147,14 @@ Site detection
    surfaces (especially porous materials and rough slabs).
 
 ``site_classification_method``
-   **Type:** ``Literal["distance_ratio", "delaunay"]`` · **Default:** ``"distance_ratio"``
+   **Type:** ``Literal["auto", "distance_ratio", "delaunay"]`` · **Default:** ``"auto"``
 
    Algorithm for labeling sites as atop, bridge, or hollow.
-   ``"distance_ratio"`` uses six-neighbour distance ratios (all material types).
-   ``"delaunay"`` triangulates the slab top layer (slabs only).
+   ``"auto"`` uses Delaunay triangulation of the slab top layer (recommended for
+   catalysis-style sampling) and distance-ratio labeling for nanoparticles and
+   porous materials. ``"distance_ratio"`` always uses six-neighbour distance
+   ratios. ``"delaunay"`` triangulates the slab top layer (slabs only; falls back
+   for other material types).
 
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)
@@ -256,14 +259,15 @@ Initial placement validation
 ``strict_initial_placement``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Enable the full set of stricter pre-relaxation geometry checks (contact quality,
-   VDW overlap, etc.).
+   Enable contact-quality pre-relaxation checks (closest approach, contacting-atom
+   count). This is independent of van der Waals overlap rejection; use
+   ``reject_vdw_overlaps`` for VDW.
 
 ``reject_vdw_overlaps``
    **Type:** ``bool`` · **Default:** ``False``
 
    Reject placements with van der Waals overlaps (stricter than covalent-radius
-   checks). Often paired with ``strict_initial_placement=True``.
+   checks). Independent of ``strict_initial_placement``.
 
 ``vdw_overlap_scale``
    **Type:** ``float`` · **Default:** ``1.0``
@@ -271,17 +275,21 @@ Initial placement validation
    Scale factor applied to summed VDW radii when testing overlaps. Values ``> 1``
    are stricter; ``< 1`` more lenient.
 
-``min_contact_distance``
+``max_closest_approach``
    **Type:** ``float`` · **Default:** ``0.8`` (Å)
 
-   Minimum distance for a molecule atom to count as contacting the surface during
-   initial placement validation.
+   Maximum allowed closest-approach distance (Å) between the adsorbate and the
+   substrate when ``strict_initial_placement`` or ``require_multiple_contact`` is
+   enabled. Rejects placements whose nearest contact is farther than this
+   threshold. Distinct from ``contact_distance_threshold``, which only counts
+   contacting atoms. Deprecated constructor alias: ``min_contact_distance=...``
+   (prefer this field; ``dataclasses.replace`` ignores the alias).
 
 ``min_contact_atoms``
    **Type:** ``int`` · **Default:** ``1``
 
    Minimum number of molecule atoms within ``contact_distance_threshold`` of the
-   surface required to accept an initial placement.
+   surface required to accept an initial placement under strict contact checks.
 
 ``contact_distance_threshold``
    **Type:** ``float`` · **Default:** ``2.5`` (Å)
@@ -292,8 +300,9 @@ Initial placement validation
 ``require_multiple_contact``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Require multiple contacting atoms (via ``min_contact_atoms``) for placement
-   acceptance. Useful for bidentate or flat adsorbates.
+   Require at least ``max(2, min_contact_atoms)`` contacting atoms and reject
+   high contact-distance variance among those contacts. Useful for bidentate or
+   flat adsorbates.
 
 Relaxation and MLIP
 ~~~~~~~~~~~~~~~~~~~
@@ -520,7 +529,11 @@ has no effect.
    **Type:** ``dict[str, float]`` · **Default:** per failure-type map
 
    Override penalty energies by failure stage (``"generation"``, ``"optimization"``,
-   ``"validation"``, ``"energy_cap"``, ``"filter"``).
+   ``"validation"``, ``"energy_cap"``, ``"filter"``) or by generation reason token
+   (e.g. ``"too_close"``, ``"vdw_overlap"``). For one release, the legacy key
+   ``"initial_distance_or_site_constraints"`` also applies to the split generation
+   reasons ``too_close``, ``too_far``, ``vdw_overlap``, ``adsorbate_overlap``, and
+   ``missing_z_abs``.
 
 ``bo_transfer_enabled``
    **Type:** ``bool`` · **Default:** ``True``

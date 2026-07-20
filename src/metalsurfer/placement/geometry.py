@@ -723,7 +723,7 @@ def check_initial_placement_distance(
     exclude_slab_atoms: int | None = None,
     *,
     material_type: str = "slab",
-) -> tuple[bool, float]:
+) -> tuple[bool, float, str | None]:
     """Check if the initial placement satisfies distance constraints.
 
     Lower bound: no atom may be within covalent binding distance. Uses
@@ -744,6 +744,10 @@ def check_initial_placement_distance(
     PBC flags come from explicit *material_type* via :func:`material_aware_pbc`,
     consistent with the post-optimisation desorption check in
     :mod:`~metalsurfer.filters`.
+
+    Returns:
+        ``(ok, actual_min_distance, reason)`` where ``reason`` is ``None`` on
+        success or one of ``\"too_close\"``, ``\"too_far\"``, ``\"vdw_overlap\"``.
     """
     mol_syms = molecule_atoms.get_chemical_symbols()
     mol_pos = molecule_atoms.get_positions()
@@ -780,9 +784,9 @@ def check_initial_placement_distance(
         )
 
     if actual_min < min_allowed:
-        return False, actual_min
+        return False, actual_min, "too_close"
     if max_initial_distance is not None and actual_min > max_initial_distance:
-        return False, actual_min
+        return False, actual_min, "too_far"
 
     # Optional VDW overlap check: stricter contact validation
     if reject_vdw_overlaps:
@@ -799,9 +803,9 @@ def check_initial_placement_distance(
                 len(overlaps),
                 max(o[3] for o in overlaps),
             )
-            return False, actual_min
+            return False, actual_min, "vdw_overlap"
 
-    return True, actual_min
+    return True, actual_min, None
 
 
 def check_adsorbate_separation(
@@ -854,3 +858,51 @@ def check_adsorbate_separation(
         min_separation = _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE * (2.0 * ref_radius)
     ok = min_dist >= min_separation
     return ok, min_dist
+
+
+def check_initial_contact_quality(
+    molecule_atoms: Atoms,
+    slab: Atoms,
+    *,
+    strict_initial_placement: bool = False,
+    require_multiple_contact: bool = False,
+    max_closest_approach: float = 0.8,
+    min_contact_atoms: int = 1,
+    contact_distance_threshold: float = 2.5,
+    exclude_slab_atoms: int | None = None,
+    material_type: str = "slab",
+) -> tuple[bool, str]:
+    """Contact-quality gate for initial placements; returns (ok, reason_token)."""
+    if not strict_initial_placement and not require_multiple_contact:
+        return True, "strict_placement_checks_disabled"
+
+    if len(molecule_atoms) < 1:
+        return False, "empty_adsorbate"
+
+    metrics = calculate_contact_quality(
+        molecule_atoms,
+        slab,
+        contact_distance_threshold=contact_distance_threshold,
+        exclude_slab_atoms=exclude_slab_atoms,
+        material_type=material_type,
+    )
+
+    contact_dist = float(metrics["contact_distance"])
+    num_contacting = int(metrics["num_contacting_atoms"])
+
+    if contact_dist > max_closest_approach:
+        return False, "contact_distance_too_large"
+
+    min_contacts = int(min_contact_atoms)
+    if require_multiple_contact:
+        min_contacts = max(2, min_contacts)
+
+    if num_contacting < min_contacts:
+        return False, "insufficient_contact_atoms"
+
+    if require_multiple_contact and num_contacting > 1:
+        contact_atom_var = float(metrics["contact_atom_variance"])
+        if contact_atom_var > 0.5:
+            return False, "contact_distance_variance_too_high"
+
+    return True, "placement_geometry_valid"

@@ -1,9 +1,10 @@
 """Configuration for adsorption screening workflows."""
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from math import isfinite
 from typing import Literal
+from warnings import warn
 
 from .models import PlacementSpec
 
@@ -44,8 +45,18 @@ def _check_choice(name: str, value: str, *, allowed: tuple[str, ...]) -> None:
 
 CONFORMER_SAMPLING_OPTIONS: tuple[str, ...] = ("boltzmann", "cycle", "mixed")
 MATERIAL_TYPE_OPTIONS: tuple[str, ...] = ("slab", "nanoparticle", "porous")
-SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("distance_ratio", "delaunay")
+SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("auto", "distance_ratio", "delaunay")
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
+# Legacy coarse generation reason → split tokens (one-release BO override alias).
+BO_LEGACY_GENERATION_REASON_ALIASES: dict[str, tuple[str, ...]] = {
+    "initial_distance_or_site_constraints": (
+        "too_close",
+        "too_far",
+        "vdw_overlap",
+        "adsorbate_overlap",
+        "missing_z_abs",
+    ),
+}
 BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = (
     "random",
     "spread",
@@ -130,7 +141,7 @@ class AdsorptionConfig:
     voronoi_probe_radius: float | None = None
     voronoi_max_site_distance: float | None = None
     voronoi_site_enrichment: bool = True
-    site_classification_method: Literal["distance_ratio", "delaunay"] = "distance_ratio"
+    site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
     conformer_sampling: Literal["boltzmann", "cycle", "mixed"] = "cycle"
     placement_filter: Callable[[PlacementSpec], bool] | None = field(
         default=None, repr=False
@@ -152,7 +163,9 @@ class AdsorptionConfig:
     strict_initial_placement: bool = False
     reject_vdw_overlaps: bool = False
     vdw_overlap_scale: float = 1.0
-    min_contact_distance: float = 0.8
+    max_closest_approach: float = 0.8
+    # Deprecated ctor-only alias for max_closest_approach.
+    min_contact_distance: InitVar[float | None] = None
     min_contact_atoms: int = 1
     contact_distance_threshold: float = 2.5
     require_multiple_contact: bool = False
@@ -242,7 +255,21 @@ class AdsorptionConfig:
     bo_transfer_occupancy_lengthscale: float = 1.0
     bo_transfer_occupancy_floor: float = 0.0
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, min_contact_distance: float | None = None) -> None:
+        if min_contact_distance is not None:
+            warn(
+                "AdsorptionConfig.min_contact_distance is deprecated; "
+                "use max_closest_approach (max allowed closest-approach distance).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            object.__setattr__(
+                self, "max_closest_approach", float(min_contact_distance)
+            )
+        _check_positive("max_closest_approach", self.max_closest_approach)
+        _check_positive_int("min_contact_atoms", self.min_contact_atoms)
+        _check_positive("contact_distance_threshold", self.contact_distance_threshold)
+
         positive_int_fields: list[tuple[str, int]] = [
             ("num_conformers", self.num_conformers),
             ("stage1_steps", self.stage1_steps),
@@ -551,3 +578,17 @@ class AdsorptionConfig:
             )
         if self.saturation_max_steps is not None:
             _check_positive_int("saturation_max_steps", self.saturation_max_steps)
+
+
+# InitVar leaves a class attribute equal to its default; remove it so
+# dataclasses.replace does not pick up a stale class default via getattr.
+# ``__getattr__`` returns None so replace passes the InitVar through as unset.
+def _adsorption_config_getattr(self: "AdsorptionConfig", name: str) -> float | None:
+    if name == "min_contact_distance":
+        return None
+    raise AttributeError(f"{type(self).__name__!s} object has no attribute {name!r}")
+
+
+AdsorptionConfig.__getattr__ = _adsorption_config_getattr  # type: ignore[attr-defined]
+if hasattr(AdsorptionConfig, "min_contact_distance"):
+    delattr(AdsorptionConfig, "min_contact_distance")

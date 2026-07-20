@@ -9,6 +9,7 @@ from ..models import PlacementSpec
 from ._constants import (
     _AZIMUTH,
     _AZIMUTH_IN_PLANE,
+    _EARLY_CAP_WORKING_SET_MULTIPLIER,
     _GRID_BUILD_CAP,
     _PLACEMENT_GRID_COUNT_SEED,
     _TILT_FULL,
@@ -106,6 +107,8 @@ def build_batch_placement_specs(
         return out
 
     if dissociative:
+        # Bounded working set then sample (avoids prefix-of-product bias).
+        # Same seed may differ from the old early-stop prefix behavior.
         pair_indices = range(max(n_hollow_pairs, 1))
         items = (
             _fields(
@@ -118,7 +121,13 @@ def build_batch_placement_specs(
             )
             for pair_idx, zfv in itertools.product(pair_indices, _Z_FRACTIONS)
         )
-        specs = _collect(items, cap=n_desired)
+        working_cap = min(
+            _GRID_BUILD_CAP,
+            max(n_desired * _EARLY_CAP_WORKING_SET_MULTIPLIER, n_desired),
+        )
+        specs = _collect(items, cap=working_cap)
+        if len(specs) > n_desired:
+            specs = random.Random(seed).sample(specs, n_desired)
     elif flat_aromatic:
         n_par = max(1, int(n_desired * parallel_fraction))
         n_en = max(1, n_desired - n_par)
