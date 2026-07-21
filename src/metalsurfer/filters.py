@@ -4,8 +4,9 @@
 (at multiple radii), formula, bond-pair counts, and coordination vs reference SMILES.
 
 :func:`adsorbate_connected_components` splits the adsorbate region into bonded
-fragments; saturation uses it with :func:`check_decomposition` before best-slab
-selection when ``saturation_discard_topology_rearrangements`` is enabled.
+fragments; saturation uses it for topology checks before best-slab selection
+when ``saturation_discard_topology_rearrangements`` is enabled.
+:func:`check_decomposition` is used by :func:`filter_results`.
 """
 
 import logging

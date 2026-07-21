@@ -39,6 +39,7 @@ from metalsurfer.placement.generators import (
 from metalsurfer.placement.geometry import (
     _classify_molecule_shape,
     _random_rotation_matrix,
+    check_initial_contact_quality,
 )
 from metalsurfer.placement.policy import (
     Z_FRACTIONS,
@@ -224,7 +225,8 @@ def test_calculate_min_distance_mic_wraps_periodic_boundary():
     p1 = np.array([[0.5, 0.5, 5.0]])
     p2 = np.array([[9.5, 9.5, 5.0]])
     d = calculate_min_distance(p1, p2, cell=cell, use_pbc=True, pbc=[True, True, False])
-    assert d < 2.0
+    # Minimum image of (0.5,0.5)↔(9.5,9.5) in a 10×10 cell is √(1²+1²)=√2
+    assert d == pytest.approx(np.sqrt(2.0), abs=1e-6)
 
 
 def test_calculate_min_distance_requires_explicit_pbc_for_periodic_cell():
@@ -316,6 +318,52 @@ def test_check_initial_placement_distance_too_far_reason():
     )
     assert not ok
     assert reason == "too_far"
+
+
+def test_min_contact_ratio_default_is_covalent_binding_boundary():
+    """Default min_contact_ratio rejects covalent overlap and accepts physisorption."""
+    from ase.data import atomic_numbers, covalent_radii
+
+    from metalsurfer._numeric_defaults import MIN_CONTACT_RATIO_DEFAULT
+
+    slab = make_slab(n_layers=1, symbol="Ru")
+    # Place a single O atom directly above a Ru atom and scan the contact ratio.
+    ru_pos = slab.get_positions()[0]
+    r_o = float(covalent_radii[atomic_numbers["O"]])
+    r_ru = float(covalent_radii[atomic_numbers["Ru"]])
+    covalent_sum = r_o + r_ru
+    surface_xy = ru_pos.copy()
+
+    too_close = Atoms("O", positions=[surface_xy + np.array([0.0, 0.0, 0.0])])
+    p = too_close.get_positions().copy()
+    p[0, 2] = ru_pos[2] + covalent_sum * (MIN_CONTACT_RATIO_DEFAULT - 0.05)
+    too_close.set_positions(p)
+    too_close.set_cell(slab.get_cell())
+    too_close.set_pbc(slab.get_pbc())
+    ok_close, min_close, reason_close = check_initial_placement_distance(
+        too_close,
+        slab,
+        min_contact_ratio=MIN_CONTACT_RATIO_DEFAULT,
+        material_type="slab",
+    )
+    assert not ok_close
+    assert reason_close == "too_close"
+    assert min_close < covalent_sum * MIN_CONTACT_RATIO_DEFAULT
+
+    ok_far_side = Atoms("O", positions=[surface_xy + np.array([0.0, 0.0, 0.0])])
+    p_ok = ok_far_side.get_positions().copy()
+    p_ok[0, 2] = ru_pos[2] + covalent_sum * (MIN_CONTACT_RATIO_DEFAULT + 0.05)
+    ok_far_side.set_positions(p_ok)
+    ok_far_side.set_cell(slab.get_cell())
+    ok_far_side.set_pbc(slab.get_pbc())
+    ok_pass, min_pass, reason_pass = check_initial_placement_distance(
+        ok_far_side,
+        slab,
+        min_contact_ratio=MIN_CONTACT_RATIO_DEFAULT,
+        material_type="slab",
+    )
+    assert ok_pass, (min_pass, reason_pass)
+    assert min_pass >= covalent_sum * MIN_CONTACT_RATIO_DEFAULT
 
 
 def test_material_aware_pbc():
@@ -689,9 +737,14 @@ def test_site_context_cache_keys_differ_by_symmetry_broken():
 
 
 def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
+    from metalsurfer.placement.geometry import detect_vdw_overlaps
+
     slab = make_slab()
     config = adsorption_config_factory(
-        material_type="slab", num_placements=50, placement_z_range=(2.0, 3.0)
+        material_type="slab",
+        num_placements=50,
+        placement_z_range=(2.0, 3.0),
+        reject_vdw_overlaps=True,
     )
     results = _generate_placements(
         water_conformers(), slab, config, smiles="O", n_desired=50
@@ -700,6 +753,19 @@ def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
     assert len(results) >= 45
     visited_sites = {spec.site_index for spec, _, _ in results}
     assert len(visited_sites) >= 2
+    for _spec, adsorbate, _descriptor in results:
+        ok, dist, reason = check_initial_placement_distance(
+            adsorbate,
+            slab,
+            reject_vdw_overlaps=True,
+            material_type="slab",
+        )
+        assert ok, f"Successful placement must pass contact gates: {reason}"
+        assert 1.2 <= dist <= 5.5, (
+            f"Adsorbate–surface distance should be physical (1.2–5.5 Å), got {dist:.3f}"
+        )
+        overlaps, _ = detect_vdw_overlaps(adsorbate, slab, material_type="slab")
+        assert len(overlaps) == 0, "Successful placement must not have VDW clashes"
 
 
 def test_slab_placements_are_above_surface_reference():
@@ -711,10 +777,15 @@ def test_slab_placements_are_above_surface_reference():
         water_conformers(), slab, config, smiles="O", n_desired=50
     )
     assert len(results) >= 1
-    for _, _, descriptor in results:
+    for _, adsorbate, descriptor in results:
         assert descriptor.surface_ref_z_abs is not None
         assert descriptor.z_abs is not None
         assert descriptor.z_abs >= descriptor.surface_ref_z_abs
+        ok, dist, reason = check_initial_placement_distance(
+            adsorbate, slab, material_type="slab"
+        )
+        assert ok, reason
+        assert 1.2 <= dist <= 5.5
 
 
 @pytest.mark.parametrize("mode", ["spec", "descriptor", "pose"])
@@ -764,6 +835,14 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
         conformers, structure, config, smiles="O", n_desired=n_desired
     )
     assert len(results) >= 1
+    for _spec, adsorbate_i, _desc in results:
+        ok, dist, reason = check_initial_placement_distance(
+            adsorbate_i, structure, material_type=material_type
+        )
+        assert ok, f"{material_type} placement failed contact gate: {reason}"
+        assert 0.8 <= dist <= 6.0, (
+            f"{material_type} adsorbate–surface distance out of band: {dist:.3f}"
+        )
 
     spec, adsorbate, descriptor = results[0]
     _assert_replay_matches(
@@ -1596,17 +1675,31 @@ def test_voronoi_auto_widen_disabled_skips_retry(monkeypatch):
 
 
 def test_hollow_site_pairs_found_for_slab():
-    """_get_hollow_site_pairs should find pairs on a simple slab."""
+    """_get_hollow_site_pairs must find adjacent hollow pairs within adaptive bounds."""
+    from ase.geometry import find_mic
+
+    from metalsurfer.placement._constants import (
+        _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM,
+        _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM,
+    )
+
     slab = make_slab()
     config = AdsorptionConfig()
     pairs = _get_hollow_site_pairs(slab, config)
-    # On a 4x4 FCC slab there should be at least some hollow site pairs
-    # (may be 0 if no hollow sites exceed min separation — that's okay)
     assert isinstance(pairs, list)
+    assert len(pairs) >= 1, "4×4 FCC-like slab should yield hollow-site pairs"
+    cell = np.asarray(slab.get_cell(), dtype=float)
     for p in pairs:
         assert len(p) == 2
         assert len(p[0]) == 3  # xyz arrays on surface
         assert len(p[1]) == 3
+        _, dists = find_mic((np.asarray(p[0]) - np.asarray(p[1])).reshape(1, 3), cell)
+        sep = float(dists[0])
+        assert (
+            _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM
+            <= sep
+            <= _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM
+        ), f"hollow-pair MIC separation {sep:.3f} Å outside adaptive window"
 
 
 def test_dissociative_placement_supported_for_nanoparticle():
@@ -1648,6 +1741,68 @@ def test_dissociative_placement_supported_for_nanoparticle():
         )
     )
     assert hh > 1.0, "Dissociative placement should separate H atoms"
+    ok, min_d, dist_reason = check_initial_placement_distance(
+        placed, nanoparticle, material_type="nanoparticle"
+    )
+    assert ok, (min_d, dist_reason)
+    assert 1.0 <= min_d <= 3.5
+
+
+def test_dissociative_placement_on_slab_separates_and_clears_surface():
+    """Dissociative H2 on a slab must land on a hollow pair with physical clearance."""
+    from ase.geometry import find_mic
+
+    slab = make_slab()
+    config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
+    pairs = _get_hollow_site_pairs(slab, config)
+    assert pairs, "fixture slab must expose hollow pairs for dissociative placement"
+    h2 = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
+    spec = PlacementSpec(
+        conformer_index=0,
+        orientation_type="dissociative",
+        face_flip=False,
+        en_atom_index=None,
+        site_index=0,
+        site_type="hollow",
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+    result, reason = generate_placement_from_spec_with_reason(spec, [h2], slab, config)
+    assert result is not None, reason
+    placed, descriptor = result
+    assert descriptor.orientation_type == "dissociative"
+    assert descriptor.site_type == "hollow"
+
+    pos = placed.get_positions()
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    _, hh_dists = find_mic((pos[1] - pos[0]).reshape(1, 3), cell)
+    hh = float(hh_dists[0])
+    pair = pairs[descriptor.site_index % len(pairs)]
+    _, pair_dists = find_mic(
+        (np.asarray(pair[0]) - np.asarray(pair[1])).reshape(1, 3), cell
+    )
+    pair_sep = float(pair_dists[0])
+    assert hh == pytest.approx(pair_sep, abs=0.35), (
+        f"H–H separation {hh:.3f} should track hollow-pair spacing {pair_sep:.3f}"
+    )
+    assert hh > 1.0
+
+    ok, min_d, dist_reason = check_initial_placement_distance(
+        placed, slab, material_type="slab"
+    )
+    assert ok, (min_d, dist_reason)
+    # Each H should be nearest its own landing site (not both collapsed on one).
+    site_a = np.asarray(pair[0], dtype=float)
+    site_b = np.asarray(pair[1], dtype=float)
+    d0a = float(np.linalg.norm(pos[0][:2] - site_a[:2]))
+    d0b = float(np.linalg.norm(pos[0][:2] - site_b[:2]))
+    d1a = float(np.linalg.norm(pos[1][:2] - site_a[:2]))
+    d1b = float(np.linalg.norm(pos[1][:2] - site_b[:2]))
+    assigned_distinct = (d0a < d0b and d1b < d1a) or (d0b < d0a and d1a < d1b)
+    assert assigned_distinct, "each H must map to a distinct hollow of the pair"
 
 
 def test_dissociative_placement_rejected_for_porous_material_type():
@@ -1847,7 +2002,7 @@ def test_adsorbate_separation_rejects_close_atoms():
 
 
 def test_validate_initial_placement_geometry_with_strict_config():
-    """_validate_initial_placement_geometry should check contact quality with strict config."""
+    """check_initial_contact_quality should accept good contact under strict config."""
     slab = make_slab()
     water = make_water().copy()
 
@@ -1871,15 +2026,22 @@ def test_validate_initial_placement_geometry_with_strict_config():
         )
     assert config.max_closest_approach == 3.0
 
-    ok, reason = workflow_shared._validate_initial_placement_geometry(
-        water, slab, config
+    ok, reason = check_initial_contact_quality(
+        water,
+        slab,
+        strict_initial_placement=config.strict_initial_placement,
+        require_multiple_contact=config.require_multiple_contact,
+        max_closest_approach=float(config.max_closest_approach),
+        min_contact_atoms=int(config.min_contact_atoms),
+        contact_distance_threshold=config.contact_distance_threshold,
+        material_type=config.material_type,
     )
     assert ok, f"Should pass strict validation with good contact: {reason}"
     assert reason == "placement_geometry_valid"
 
 
 def test_validate_initial_placement_geometry_rejects_poor_contact():
-    """_validate_initial_placement_geometry should reject poor contact placements."""
+    """check_initial_contact_quality should reject poor contact placements."""
     slab = make_slab()
     water = make_water().copy()
 
@@ -1896,8 +2058,15 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
         min_contact_atoms=3,  # Require 3 contacting atoms
     )
 
-    ok, reason = workflow_shared._validate_initial_placement_geometry(
-        water, slab, config
+    ok, reason = check_initial_contact_quality(
+        water,
+        slab,
+        strict_initial_placement=config.strict_initial_placement,
+        require_multiple_contact=config.require_multiple_contact,
+        max_closest_approach=float(config.max_closest_approach),
+        min_contact_atoms=int(config.min_contact_atoms),
+        contact_distance_threshold=config.contact_distance_threshold,
+        material_type=config.material_type,
     )
     assert not ok, "Should reject placement with poor contact"
     assert reason in {
@@ -1907,29 +2076,61 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
 
 
 def test_require_multiple_contact_rejects_single_contact():
+    """A monoatomic adsorbate can have at most one contacting atom → reject."""
+    slab = make_slab()
+    mono = Atoms("He", positions=[[2.0, 2.0, 0.0]])
+    pos = mono.get_positions().copy()
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 2.0
+    mono.set_positions(pos)
+    mono.set_cell(slab.get_cell())
+    mono.set_pbc(slab.get_pbc())
+
+    ok, reason = check_initial_contact_quality(
+        mono,
+        slab,
+        strict_initial_placement=False,
+        require_multiple_contact=True,
+        max_closest_approach=3.5,
+        min_contact_atoms=1,
+        contact_distance_threshold=2.5,
+        material_type="slab",
+    )
+    assert not ok
+    assert reason == "insufficient_contact_atoms"
+
+
+def test_require_multiple_contact_accepts_multi_atom_contact():
+    """Water placed for multi-atom contact should pass require_multiple_contact."""
+    from metalsurfer.placement.geometry import calculate_contact_quality
+
     slab = make_slab()
     water = make_water().copy()
     pos = water.get_positions()
     pos -= np.mean(pos, axis=0)
-    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 2.2
+    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 2.0
     pos[:, 0] += 2.0
     pos[:, 1] += 2.0
     water.set_positions(pos)
     water.set_cell(slab.get_cell())
     water.set_pbc(slab.get_pbc())
 
-    config = AdsorptionConfig(
+    metrics = calculate_contact_quality(
+        water, slab, contact_distance_threshold=2.5, material_type="slab"
+    )
+    assert int(metrics["num_contacting_atoms"]) >= 2, metrics
+
+    ok, reason = check_initial_contact_quality(
+        water,
+        slab,
+        strict_initial_placement=False,
         require_multiple_contact=True,
-        min_contact_atoms=1,
         max_closest_approach=3.5,
-        contact_distance_threshold=2.0,
+        min_contact_atoms=1,
+        contact_distance_threshold=2.5,
+        material_type="slab",
     )
-    ok, reason = workflow_shared._validate_initial_placement_geometry(
-        water, slab, config
-    )
-    # Single-atom contact should fail the >=2 requirement when only one contacts.
-    if not ok:
-        assert reason == "insufficient_contact_atoms"
+    assert ok, reason
+    assert reason == "placement_geometry_valid"
 
 
 def test_saturation_finalize_rejects_adsorbate_overlap():
@@ -1988,12 +2189,14 @@ def test_strict_initial_placement_e2e_reason():
             "too_close",
             "too_far",
             "vdw_overlap",
+            "distance_check_failed",
             "contact_distance_too_large",
             "insufficient_contact_atoms",
             "no_sites_found",
         }
         for r in reasons
     )
+    assert "initial_distance_or_site_constraints" not in reasons
 
 
 def test_site_classification_auto_matches_delaunay_on_slab():

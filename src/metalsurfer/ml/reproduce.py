@@ -1,23 +1,17 @@
 """Deterministic reconstruction of simulation inputs from PlacementRecord.
 
 Given a :class:`PlacementRecord` (or its serialized form), this module
-rebuilds the slab+adsorbate geometry and an :class:`~metalsurfer.AdsorptionConfig`
+rebuilds placement descriptors and an :class:`~metalsurfer.AdsorptionConfig`
 matching the stored computation context for placement replay.
 """
 
-import logging
-
 import numpy as np
-from ase import Atoms
 
 from .._utils import is_finite_number as _is_finite_number
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor
-from ..placement.generators import generate_placement_from_descriptor
 from ..placement.geometry import normalize_quaternion
 from .schema import PlacementRecord
-
-logger = logging.getLogger(__name__)
 
 
 def record_to_placement_descriptor(record: PlacementRecord) -> PlacementDescriptor:
@@ -104,55 +98,3 @@ def record_to_config(record: PlacementRecord) -> AdsorptionConfig:
     cfg.hollow_site_dedup_tolerance = ctx.hollow_site_dedup_tolerance
     cfg.planar_z_variance_threshold = ctx.planar_z_variance_threshold
     return cfg
-
-
-def reconstruct_placement(
-    record: PlacementRecord,
-    conformers: list[Atoms],
-    slab: Atoms,
-    smiles: str | None = None,
-) -> Atoms | None:
-    """Rebuild the pre-optimization adsorbate structure from a record.
-
-    Uses :func:`generate_placement_from_descriptor` which deterministically
-    applies the stored orientation, tilt, azimuth, and position to reproduce
-    the initial slab+adsorbate geometry.
-
-    Parameters
-    ----------
-    record : PlacementRecord
-        The stored record to reproduce.
-    conformers : list[Atoms]
-        Conformer library (same as used in the original run).
-    slab : Atoms
-        The clean slab (same as used in the original run).
-    smiles : str, optional
-        SMILES string for aromatic detection. Falls back to record.smiles.
-
-    Returns
-    -------
-    Atoms or None
-        The adsorbate structure with positions matching the original
-        placement, or None if reconstruction fails.
-    """
-    try:
-        descriptor = record_to_placement_descriptor(record)
-    except ValueError as exc:
-        logger.warning(
-            "Record cannot be converted to deterministic descriptor: %s", exc
-        )
-        return None
-    config = record_to_config(record)
-    if smiles is None:
-        smiles = record.smiles
-
-    adsorbate = generate_placement_from_descriptor(
-        descriptor, conformers, slab, config, smiles=smiles
-    )
-    if adsorbate is None:
-        logger.warning(
-            "Failed to reconstruct placement for record %s (placement_id=%d)",
-            record.record_hash(),
-            record.placement_id,
-        )
-    return adsorbate

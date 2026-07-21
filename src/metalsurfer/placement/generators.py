@@ -29,6 +29,7 @@ from ._constants import (
     _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE,
     _DISTANCE_RECOVERY_HEIGHT_STEPS,
     _DISTANCE_RECOVERY_XY_ATTEMPTS,
+    _MOL_COVALENT_RADIUS_FALLBACK,
     _ORIENTATION_CLASSIFICATION_PARALLEL_DOT_THRESHOLD,
     _PARALLEL_FRACTION_HIGH_BINDER_RATIO,
     _PARALLEL_FRACTION_HIGH_RATIO_CUTOFF,
@@ -39,7 +40,9 @@ from ._constants import (
     _PARALLEL_FRACTION_NO_RING,
     _PARALLEL_Z_FLOOR_MIN_ANGSTROM,
     _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE,
+    _PARALLEL_Z_HI_SHRINK_FALLBACK_ANGSTROM,
     _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE,
+    _PARALLEL_Z_LO_SHRINK_FALLBACK_ANGSTROM,
     _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE,
     _PARALLEL_Z_MIN_HI_MARGIN,
     _SITE_Z_OFFSET_FROM_SURFACE_RADIUS,
@@ -303,7 +306,7 @@ def _mean_molecule_covalent_radius(symbols: list[str]) -> float:
     radii = [geom._get_covalent_radius(s) for s in symbols]
     valid = [r for r in radii if r is not None]
     if not valid:
-        return sts._MOL_COVALENT_RADIUS_FALLBACK
+        return _MOL_COVALENT_RADIUS_FALLBACK
     return float(np.mean(valid))
 
 
@@ -340,8 +343,8 @@ def _parallel_z_adjustments(
     if radius_sum is None:
         return (
             _PARALLEL_Z_FLOOR_MIN_ANGSTROM,
-            0.4,
-            0.6,
+            _PARALLEL_Z_LO_SHRINK_FALLBACK_ANGSTROM,
+            _PARALLEL_Z_HI_SHRINK_FALLBACK_ANGSTROM,
         )
     return (
         max(
@@ -681,8 +684,6 @@ def _pose_from_spec(
             symbols,
             en_atom_index=spec.en_atom_index,
         )
-        if base_pos is None:
-            base_pos = canonical_pos.copy()
     rotated_pos = geom._rotation_with_tilt(
         base_pos, normal, spec.tilt_deg, spec.azimuth_deg
     )
@@ -1060,7 +1061,7 @@ def _validate_posed_adsorbate(
         material_type=config.material_type,
     )
     if not ok:
-        return dist_reason or "initial_distance_or_site_constraints"
+        return dist_reason or "distance_check_failed"
 
     if exclude_n is not None:
         pre_ads = np.asarray(slab.get_positions()[exclude_n:], dtype=float)
@@ -1510,7 +1511,7 @@ def generate_placement_from_spec_with_reason(
     )
     if result is not None:
         return result, None
-    return None, fail_reason or "initial_distance_or_site_constraints"
+    return None, fail_reason or "distance_check_failed"
 
 
 def generate_placement_from_descriptor(

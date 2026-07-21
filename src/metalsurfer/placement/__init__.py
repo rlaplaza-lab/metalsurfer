@@ -1,7 +1,4 @@
-"""Voronoi sites, clustering, and optional spglib-based symmetry reduction.
-
-Simplified and consolidated placement module with improved slab handling.
-"""
+"""Placement package: site detection, generators, geometry, and policy."""
 
 from __future__ import annotations
 

@@ -6,6 +6,16 @@ from math import isfinite
 from typing import Literal
 from warnings import warn
 
+from ._numeric_defaults import (
+    CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
+    CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
+    DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
+    DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
+    DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
+    DEFAULT_SYMMETRY_TOLERANCE,
+    MIN_CONTACT_RATIO_DEFAULT,
+    MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
+)
 from .models import PlacementSpec
 
 
@@ -134,8 +144,10 @@ class AdsorptionConfig:
 
     Primary knobs: ``model_name``, ``num_conformers``, ``num_placements``,
     and ``material_type``. For dissociative adsorption (e.g. H₂ → 2H), set
-    ``skip_topology_check=True``. Reference energies remain isolated-molecule
-    energies; positive E_ads can result when the relaxed adsorbate dissociates.
+    ``skip_topology_check=True`` (enables dissociative H₂ placements and skips
+    connectivity checks). Prefer ``run_*_bo`` entry points over toggling
+    ``bo_enabled``. Reference energies remain isolated-molecule energies;
+    positive E_ads can result when the relaxed adsorbate dissociates.
 
     Full field documentation:
     https://metalsurfer.readthedocs.io/en/latest/api/config.html
@@ -166,14 +178,14 @@ class AdsorptionConfig:
     )
     flat_aromatic_parallel_fraction: float = 0.5
     adaptive_parallel_fraction: bool = True
-    min_initial_distance: float = 1.5
-    min_contact_ratio: float = 0.8
+    min_initial_distance: float = MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
+    min_contact_ratio: float = MIN_CONTACT_RATIO_DEFAULT
     max_initial_distance: float | None = None
     top_layer_tolerance: float = 0.5
-    symmetry_tolerance: float = 0.1
-    site_equivalence_tolerance: float = 0.05
-    hollow_site_dedup_tolerance: float = 0.1
-    planar_z_variance_threshold: float = 0.01
+    symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
+    site_equivalence_tolerance: float = DEFAULT_SITE_EQUIVALENCE_TOLERANCE
+    hollow_site_dedup_tolerance: float = DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
+    planar_z_variance_threshold: float = DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
     rough_slab_local_z: bool = True
     min_interatomic_distance: float = 0.5
     max_force_convergence: float = 0.05
@@ -181,11 +193,11 @@ class AdsorptionConfig:
     strict_initial_placement: bool = False
     reject_vdw_overlaps: bool = False
     vdw_overlap_scale: float = 1.0
-    max_closest_approach: float = 0.8
+    max_closest_approach: float = CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
     # Deprecated ctor-only alias for max_closest_approach.
     min_contact_distance: InitVar[float | None] = None
     min_contact_atoms: int = 1
-    contact_distance_threshold: float = 2.5
+    contact_distance_threshold: float = CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
     require_multiple_contact: bool = False
     max_adsorption_energy: float = 5.0
     energy_dedup_threshold: float = 0.05

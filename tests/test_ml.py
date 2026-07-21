@@ -11,7 +11,32 @@ from ase import Atoms
 from numpy.testing import assert_allclose
 from scipy import stats
 
+from metalsurfer import _numeric_defaults as numeric_defaults
 from metalsurfer.config import AdsorptionConfig
+from metalsurfer.ml import (
+    ComputationContext as PublicComputationContext,
+)
+from metalsurfer.ml import (
+    DatasetLogger as PublicDatasetLogger,
+)
+from metalsurfer.ml import (
+    PlacementRecord as PublicPlacementRecord,
+)
+from metalsurfer.ml import (
+    evaluate_model as public_evaluate_model,
+)
+from metalsurfer.ml import (
+    extract_features as public_extract_features,
+)
+from metalsurfer.ml import (
+    grouped_cross_validate as public_grouped_cross_validate,
+)
+from metalsurfer.ml import (
+    load_dataset as public_load_dataset,
+)
+from metalsurfer.ml import (
+    train_model as public_train_model,
+)
 from metalsurfer.ml.bayesian import ei_scores, lcb_scores, pi_scores
 from metalsurfer.ml.dataset import DatasetLogger, load_dataset, merge_datasets
 from metalsurfer.ml.features import (
@@ -32,6 +57,40 @@ from metalsurfer.ml.reproduce import record_to_config, record_to_placement_descr
 from metalsurfer.ml.schema import ComputationContext, PlacementRecord
 from metalsurfer.models import PlacementDescriptor, ScreeningResult
 from tests.factories import make_random_placement_records
+
+
+def test_ml_package_exports_expanded_surface():
+    """Public ml package re-exports dataset/schema/features/regression helpers."""
+    assert PublicComputationContext is ComputationContext
+    assert PublicPlacementRecord is PlacementRecord
+    assert PublicDatasetLogger is DatasetLogger
+    assert public_load_dataset is load_dataset
+    assert public_extract_features is extract_features
+    assert public_evaluate_model is evaluate_model
+    assert public_grouped_cross_validate is grouped_cross_validate
+    assert public_train_model is train_model
+
+
+def test_computation_context_defaults_match_numeric_defaults():
+    ctx = ComputationContext()
+    assert (
+        ctx.min_initial_distance
+        == numeric_defaults.MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
+    )
+    assert ctx.min_contact_ratio == numeric_defaults.MIN_CONTACT_RATIO_DEFAULT
+    assert ctx.symmetry_tolerance == numeric_defaults.DEFAULT_SYMMETRY_TOLERANCE
+    assert (
+        ctx.site_equivalence_tolerance
+        == numeric_defaults.DEFAULT_SITE_EQUIVALENCE_TOLERANCE
+    )
+    assert (
+        ctx.hollow_site_dedup_tolerance
+        == numeric_defaults.DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
+    )
+    assert (
+        ctx.planar_z_variance_threshold
+        == numeric_defaults.DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
+    )
 
 
 def _make_record(

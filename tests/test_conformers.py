@@ -18,6 +18,12 @@ from metalsurfer.conformers import (
 # ---------------------------------------------------------------------------
 
 
+def _pairwise_distances(atoms: Atoms) -> np.ndarray:
+    pos = atoms.get_positions()
+    diffs = pos[:, None, :] - pos[None, :, :]
+    return np.linalg.norm(diffs, axis=2)
+
+
 class TestCreateConformers:
     def test_valid_smiles_returns_conformers_and_energies(self):
         config = AdsorptionConfig(num_conformers=3, seed=42)
@@ -26,9 +32,23 @@ class TestCreateConformers:
         conformers, energies = result
         assert len(conformers) >= 1
         assert len(energies) == len(conformers)
+        assert all(np.isfinite(e) for e in energies)
         for c in conformers:
             assert isinstance(c, Atoms)
             assert len(c) == 3  # H2O
+            assert sorted(c.get_chemical_symbols()) == ["H", "H", "O"]
+            assert np.all(np.isfinite(c.get_positions()))
+            # Physical water geometry: O–H ~0.96 Å, H–H ~1.5 Å.
+            syms = c.get_chemical_symbols()
+            o_idx = syms.index("O")
+            h_idxs = [i for i, s in enumerate(syms) if s == "H"]
+            pos = c.get_positions()
+            oh1 = float(np.linalg.norm(pos[h_idxs[0]] - pos[o_idx]))
+            oh2 = float(np.linalg.norm(pos[h_idxs[1]] - pos[o_idx]))
+            hh = float(np.linalg.norm(pos[h_idxs[1]] - pos[h_idxs[0]]))
+            assert 0.85 <= oh1 <= 1.15, f"O–H1={oh1:.3f}"
+            assert 0.85 <= oh2 <= 1.15, f"O–H2={oh2:.3f}"
+            assert 1.20 <= hh <= 1.80, f"H–H={hh:.3f}"
 
     def test_ethanol_produces_multiple_conformers(self):
         config = AdsorptionConfig(num_conformers=5, seed=42)
@@ -36,6 +56,32 @@ class TestCreateConformers:
         assert result is not None
         conformers, energies = result
         assert len(conformers) >= 1
+        assert all(np.isfinite(e) for e in energies)
+        for c in conformers:
+            assert len(c) == 9
+            assert sorted(c.get_chemical_symbols()) == sorted(
+                ["C", "C", "O", "H", "H", "H", "H", "H", "H"]
+            )
+            dmat = _pairwise_distances(c)
+            # No unphysical atomic overlap; C–C / C–O should appear in bond window.
+            triu = dmat[np.triu_indices(len(c), k=1)]
+            assert float(np.min(triu)) > 0.7, f"atoms too close: {np.min(triu):.3f}"
+            # At least one C–C (~1.54 Å) and one C–O (~1.43 Å) contact.
+            syms = c.get_chemical_symbols()
+            cc = [
+                dmat[i, j]
+                for i in range(len(c))
+                for j in range(i + 1, len(c))
+                if syms[i] == "C" and syms[j] == "C"
+            ]
+            co = [
+                dmat[i, j]
+                for i in range(len(c))
+                for j in range(i + 1, len(c))
+                if {syms[i], syms[j]} == {"C", "O"}
+            ]
+            assert any(1.4 <= d <= 1.7 for d in cc), cc
+            assert any(1.2 <= d <= 1.6 for d in co), co
 
     def test_invalid_smiles_returns_none(self):
         config = AdsorptionConfig(num_conformers=3, seed=42)

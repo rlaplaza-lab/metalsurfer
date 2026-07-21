@@ -26,6 +26,7 @@ from ._constants import (
     _FRAME_REF_ALIGNMENT_DOT_THRESHOLD,
     _INERTIA_EPS,
     _LINEAR_SHAPE_RATIO_MAX,
+    _MIN_CONTACT_RATIO_DEFAULT,
     _MIN_DISTANCE_COVALENT_FALLBACK_SCALE,
     _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM,
     _MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
@@ -654,7 +655,7 @@ def calculate_min_distance(
         p2 = np.asarray(positions2)
         diffs = p1[:, None, :] - p2[None, :, :]
         diffs_flat = diffs.reshape(-1, 3)
-        mic_diffs, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
+        _, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
         return float(np.min(mic_dists))
     p1 = positions1.reshape(-1, 1, 3)
     p2 = positions2.reshape(1, -1, 3)
@@ -697,7 +698,7 @@ def check_initial_placement_distance(
     molecule_atoms: Atoms,
     slab: Atoms,
     min_distance: float = _MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
-    min_contact_ratio: float = 0.8,
+    min_contact_ratio: float = _MIN_CONTACT_RATIO_DEFAULT,
     max_initial_distance: float | None = None,
     reject_vdw_overlaps: bool = False,
     vdw_overlap_scale: float = 1.0,

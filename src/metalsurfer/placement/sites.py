@@ -1781,17 +1781,3 @@ def _compute_site_z_base(
     if z_hi < z_lo + _PARALLEL_Z_MIN_HI_MARGIN:
         z_hi = z_lo + _PARALLEL_Z_MIN_HI_MARGIN
     return z_lo, z_hi
-
-
-# ---------------------------------------------------------------------------
-# Public API (for external imports)
-# ---------------------------------------------------------------------------
-
-
-def get_symmetry_info(
-    slab: Atoms,
-    symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE,
-) -> dict[str, object]:
-    """Symmetry metadata including spglib space group."""
-    symmetry_analyzer = SymmetryAnalyzer(slab, symmetry_tolerance=symmetry_tolerance)
-    return symmetry_analyzer.get_symmetry_info()

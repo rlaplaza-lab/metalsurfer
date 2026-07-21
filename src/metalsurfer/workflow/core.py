@@ -72,7 +72,6 @@ def _generate_placements_with_retry(
     site_context: placement_generators.SiteContext | None,
     slab_atoms: Atoms,
     calculator,
-    base_slab_for_frozen: Atoms | None,
 ) -> tuple[
     list[Atoms], list[int], list[PlacementDescriptor], list[PlacementFailureEvent], int
 ]:
@@ -306,7 +305,6 @@ def _process_molecule_body(
         site_context,
         slab.atoms,
         calculator,
-        base_slab_for_frozen,
     )
     t_placement = time.perf_counter() - t0
 

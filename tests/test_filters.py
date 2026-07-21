@@ -14,6 +14,7 @@ The filter must NOT reject:
 """
 
 import numpy as np
+import pytest
 from ase import Atoms
 from ase.data import atomic_numbers, covalent_radii
 
@@ -754,10 +755,52 @@ def test_desorption_borderline():
     """Molecule right at the threshold should be marked desorbed (> not >=)."""
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, make_water(), z_offset=4.5)
-    ok, _ = check_desorption(
+    ok, reason = check_desorption(
         combined, slab, binding_threshold=4.0, material_type="slab"
     )
     assert not ok
+    assert "too far" in reason
+
+
+def test_desorption_threshold_is_strict_greater_than():
+    """Exactly at binding_threshold remains adsorbed; epsilon beyond is desorbed."""
+    from metalsurfer.placement import calculate_min_distance
+
+    slab = make_slab(n_layers=1)
+    threshold = 3.0
+    # Monoatomic adsorbate directly above a surface atom → MIC min == Δz.
+    surface_atom = slab.get_positions()[0]
+    ads = Atoms(
+        "He",
+        positions=[[surface_atom[0], surface_atom[1], surface_atom[2] + threshold]],
+    )
+    combined = slab + ads
+    combined.set_cell(slab.get_cell())
+    combined.set_pbc(slab.get_pbc())
+    cell = combined.get_cell()
+    min_at = calculate_min_distance(
+        combined[len(slab) :].get_positions(),
+        slab.get_positions(),
+        cell,
+        use_pbc=True,
+        pbc=[True, True, False],
+    )
+    assert min_at == pytest.approx(threshold, abs=1e-6)
+
+    ok_eq, reason_eq = check_desorption(
+        combined, slab, binding_threshold=threshold, material_type="slab"
+    )
+    assert ok_eq, reason_eq
+    assert "adsorbed" in reason_eq
+
+    pos = combined.get_positions().copy()
+    pos[len(slab) :, 2] += 1e-3
+    combined.set_positions(pos)
+    ok_gt, reason_gt = check_desorption(
+        combined, slab, binding_threshold=threshold, material_type="slab"
+    )
+    assert not ok_gt
+    assert "too far" in reason_gt
 
 
 def test_desorption_no_adsorbate():

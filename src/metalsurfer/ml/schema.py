@@ -5,16 +5,23 @@ Units: Å, degrees, eV, eV/Å (forces).
 
 import hashlib
 import json
-import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, cast
 
 import numpy as np
 
+from .._numeric_defaults import (
+    DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
+    DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
+    DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
+    DEFAULT_SYMMETRY_TOLERANCE,
+    MIN_CONTACT_RATIO_DEFAULT,
+    MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
+)
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec, ScreeningResult
+from ..placement.geometry import normalize_quaternion
 
-logger = logging.getLogger(__name__)
 SCHEMA_VERSION = "2.2"
 
 
@@ -137,13 +144,13 @@ class ComputationContext:
     seed: int = 42
     placement_z_range: tuple[float, float] = (0.7, 1.25)
     placement_z_scale_by_covalent_radius: bool = True
-    min_initial_distance: float = 1.5
-    min_contact_ratio: float = 0.8
+    min_initial_distance: float = MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
+    min_contact_ratio: float = MIN_CONTACT_RATIO_DEFAULT
     top_layer_tolerance: float = 0.5
-    symmetry_tolerance: float = 0.1
-    site_equivalence_tolerance: float = 0.05
-    hollow_site_dedup_tolerance: float = 0.1
-    planar_z_variance_threshold: float = 0.01
+    symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
+    site_equivalence_tolerance: float = DEFAULT_SITE_EQUIVALENCE_TOLERANCE
+    hollow_site_dedup_tolerance: float = DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
+    planar_z_variance_threshold: float = DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
 
     @classmethod
     def from_config(cls, config: AdsorptionConfig) -> "ComputationContext":
@@ -259,8 +266,6 @@ class PlacementRecord:
 
     def __post_init__(self) -> None:
         """Canonicalize quaternion representation for deterministic records."""
-        from ..placement.geometry import normalize_quaternion
-
         q = normalize_quaternion(
             np.array(
                 [
@@ -490,18 +495,32 @@ class PlacementRecord:
                 _ctx_value("placement_z_scale_by_covalent_radius", True),
                 default=True,
             ),
-            min_initial_distance=float(_ctx_value("min_initial_distance", 1.5)),
-            min_contact_ratio=float(_ctx_value("min_contact_ratio", 0.8)),
+            min_initial_distance=float(
+                _ctx_value(
+                    "min_initial_distance", MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
+                )
+            ),
+            min_contact_ratio=float(
+                _ctx_value("min_contact_ratio", MIN_CONTACT_RATIO_DEFAULT)
+            ),
             top_layer_tolerance=float(_ctx_value("top_layer_tolerance", 0.5)),
-            symmetry_tolerance=float(_ctx_value("symmetry_tolerance", 0.1)),
+            symmetry_tolerance=float(
+                _ctx_value("symmetry_tolerance", DEFAULT_SYMMETRY_TOLERANCE)
+            ),
             site_equivalence_tolerance=float(
-                _ctx_value("site_equivalence_tolerance", 0.05)
+                _ctx_value(
+                    "site_equivalence_tolerance", DEFAULT_SITE_EQUIVALENCE_TOLERANCE
+                )
             ),
             hollow_site_dedup_tolerance=float(
-                _ctx_value("hollow_site_dedup_tolerance", 0.1)
+                _ctx_value(
+                    "hollow_site_dedup_tolerance", DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
+                )
             ),
             planar_z_variance_threshold=float(
-                _ctx_value("planar_z_variance_threshold", 0.01)
+                _ctx_value(
+                    "planar_z_variance_threshold", DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
+                )
             ),
         )
 

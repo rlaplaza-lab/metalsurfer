@@ -202,27 +202,49 @@ def test_detect_symmetry_breaking_identical_false():
 def test_get_symmetry_aware_sites_nanoparticle_envelope():
     """Non-periodic cluster: envelope sites with cluster symmetry analyzer."""
     atoms = make_nanoparticle()  # Au₁₃ icosahedral
+    raw = get_unified_sites(
+        atoms, material_type="nanoparticle", top_layer_tolerance=2.0
+    )
+    assert raw and len(raw) >= 1
     sites = get_symmetry_aware_sites(
-        atoms, top_layer_tolerance=2.0, symmetry_tolerance=0.3
+        atoms,
+        top_layer_tolerance=2.0,
+        symmetry_tolerance=0.3,
+        material_type="nanoparticle",
+        raw_sites=raw,
     )
     assert len(sites) >= 1
-    assert sum(s["symmetry_multiplicity"] for s in sites) >= len(sites)
+    # Orbit multiplicities must partition the raw site list exactly.
+    assert sum(int(s["symmetry_multiplicity"]) for s in sites) == len(raw)
+    assert all(int(s["symmetry_multiplicity"]) >= 1 for s in sites)
 
 
 def test_cube_nanoparticle_symmetry_reduces_redundant_sites_deterministically():
     """Icosahedral Au₁₃ should collapse redundant sites consistently."""
     atoms = make_nanoparticle()  # Au₁₃ icosahedral
+    raw = get_unified_sites(
+        atoms, material_type="nanoparticle", top_layer_tolerance=2.0
+    )
 
     sites1 = get_symmetry_aware_sites(
-        atoms, top_layer_tolerance=2.0, symmetry_tolerance=0.1
+        atoms,
+        top_layer_tolerance=2.0,
+        symmetry_tolerance=0.1,
+        material_type="nanoparticle",
+        raw_sites=raw,
     )
     sites2 = get_symmetry_aware_sites(
-        atoms, top_layer_tolerance=2.0, symmetry_tolerance=0.1
+        atoms,
+        top_layer_tolerance=2.0,
+        symmetry_tolerance=0.1,
+        material_type="nanoparticle",
+        raw_sites=raw,
     )
 
     assert len(sites1) == len(sites2)
     assert len(sites1) >= 1
-    assert sum(s["symmetry_multiplicity"] for s in sites1) >= len(sites1)
+    assert sum(int(s["symmetry_multiplicity"]) for s in sites1) == len(raw)
+    assert len(sites1) < len(raw), "symmetry should collapse redundant envelope sites"
     assert any(int(s["symmetry_multiplicity"]) > 1 for s in sites1)
     for s1, s2 in zip(sites1, sites2, strict=True):
         np.testing.assert_allclose(

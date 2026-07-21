@@ -19,6 +19,8 @@ Canonical high-level entry points:
 - `run_saturation(...)` — sequential saturation until coverage heuristic is met (**requires explicit** `molecules`).
 - `run_saturation_bo(...)` — saturation with BO-guided placement selection and step-to-step transfer learning.
 
+Prefer the `run_*_bo` entry points; do not toggle `bo_enabled` on `AdsorptionConfig` for ordinary screening (non-BO APIs ignore it with a warning).
+
 All four accept a `SlabContainer` (or plain ASE `Atoms`), `molecules` (list or CSV path), `AdsorptionConfig`, and `surface_type`.
 
 `run_adsorption` / `run_adsorption_bo` return `BindingCampaignResult`.
@@ -33,7 +35,7 @@ With `save_results=True` (default):
 
 ### 2. Surface preparation API
 
-`prepare_substrate(...)` in `metalsurfer.surface_prep` builds or loads a slab, **equilibrates ionic positions by default** (`slab_relaxation_mode="ionic_only"`), optionally applies alloy substitution and adatom deposition, and attaches ASE `FixAtoms` via prep kwargs (`relax_top_layer`, `freeze_symbols`, `top_layer_tolerance`; default: entire substrate frozen). For slabs, `relax_top_layer=True` frees a **simple height band** within `top_layer_tolerance` of the exposed surface (not the stepped site-discovery mask). If that policy would freeze nobody, prep falls back to freezing the whole substrate. Prep-time relaxation knobs mirror `AdsorptionConfig.slab_relaxation_*`. Writes `clean_slab*` artifacts under `results_dir`.
+`prepare_substrate(...)` in `metalsurfer.surface_prep` builds or loads a slab, **equilibrates ionic positions by default** (`slab_relaxation_mode="ionic_only"`), optionally applies alloy substitution and adatom deposition, and attaches ASE `FixAtoms` via prep kwargs (`relax_top_layer`, `freeze_symbols`, `top_layer_tolerance`; default: entire substrate frozen). Freeze policy is **prep-only** (not `AdsorptionConfig` / `run_*` kwargs). For slabs, `relax_top_layer=True` frees a **simple height band** within `top_layer_tolerance` of the exposed surface (not the stepped site-discovery mask). If that policy would freeze nobody, prep falls back to freezing the whole substrate. Deliberately omitting `FixAtoms` is allowed: campaigns warn but do not auto-freeze. Prep-time relaxation knobs mirror `AdsorptionConfig.slab_relaxation_*`. Writes `clean_slab*` artifacts under `results_dir`.
 
 Also exported from `metalsurfer.surface_prep`: `finalize_substrate`, `relax_substrate`, `resize_substrate_for_molecule`, `create_slab_from_bulk`, `create_slab_from_atoms`, `substitute_alloy`, `deposit_adatoms`, `auto_resize_substrate_for_molecule`, `compute_minimum_supercell`.
 
@@ -206,7 +208,7 @@ Site generation is **orientation-aware**: slab top-layer detection, Voronoi filt
 - **Slab placement center:** For `material_type=="slab"`, the adsorbate anchor is `site["xyz"]` offset along the slab normal to `surface_ref + z_offset` (from `placement_z_range` and `spec.z_fraction`). Nanoparticle/porous paths offset along the site local normal. Rotations/tilts use `compute_surface_site_frame(normal)` in `geometry.py` (no forced “z-up” flip).
 - **Distance recovery (default on):** After a `too_close` / `too_far` covalent check, `_finalize_placement` nudges height within the z window, then tries a few deterministic in-plane offsets within `placement_x/y_range` (±0.5 Å by default; `(0,0)` disables XY). Successful recoveries update absolute pose fields on the descriptor. VDW / contact-quality / adsorbate-overlap failures are not recovered.
 - **Voronoi auto-widen (default on):** If the first accessibility window yields no sites, `_get_unique_sites_for_specs` retries once with a wider probe/max window (`voronoi_auto_widen`).
-- **Dissociative branch:** Homonuclear diatomics (e.g. H₂) on **slabs** or **nanoparticles** generate dissociative specs when `skip_topology_check=True` (topology/decomposition checks disabled). Slabs use hollow/pore site pairs; nanoparticles use Voronoi site pairs with outward normals from the cluster center or site metadata. Each fragment is offset along its site normal (not necessarily the slab normal). Porous frameworks reject dissociative placement. Centroid absolute coordinates populate the descriptor.
+- **Dissociative branch:** Homonuclear diatomics (e.g. H₂) on **slabs** or **nanoparticles** generate dissociative specs when `skip_topology_check=True`, which also **disables** post-relaxation connectivity / decomposition checks. Slabs use hollow/pore site pairs; nanoparticles use Voronoi site pairs with outward normals from the cluster center or site metadata. Each fragment is offset along its site normal (not necessarily the slab normal). Porous frameworks reject dissociative placement. Centroid absolute coordinates populate the descriptor.
 - **`workflow/shared._materialize_spec_placements`:** Materializes each `PlacementSpec`; failures become `PlacementFailureEvent` records (BO negative labels when enabled).
 
 #### ML/BO injectivity (spec → geometry → features)
@@ -443,6 +445,7 @@ Equal footing means consistent validation, PBC, and honest config — not identi
 - `min_initial_distance`, `max_initial_distance`, `min_contact_ratio`
 - `flat_aromatic_parallel_fraction`, `adaptive_parallel_fraction` (default **True**)
 - Voronoi/classification: `voronoi_*` (including `voronoi_auto_widen`), `site_classification_method`, `rough_slab_local_z`, `hollow_site_dedup_tolerance`, `planar_z_variance_threshold`
+- Symmetry / site tolerances: `symmetry_tolerance`, `site_equivalence_tolerance` (defaults from `_numeric_defaults`)
 
 ### Placement validation (initial geometry)
 
@@ -452,15 +455,17 @@ Three independent layers (do not conflate):
 2. **VDW** — `reject_vdw_overlaps`, `vdw_overlap_scale` (harder contact than covalent alone).
 3. **Contact quality** — `strict_initial_placement`, `max_closest_approach` (deprecated alias `min_contact_distance`), `min_contact_atoms`, `contact_distance_threshold`, `require_multiple_contact` (≥2 contacts when enabled, plus clustering variance).
 
-Under saturation, substrate contact uses `exclude_slab_atoms` while prior adsorbates are checked via adsorbate–adsorbate separation.
+Under saturation, substrate contact uses `exclude_slab_atoms` while prior adsorbates are checked via adsorbate–adsorbate separation. Generation failures emit typed reasons (`too_close`, `too_far`, `vdw_overlap`, `adsorbate_overlap`, `distance_check_failed`, …). For one release, BO penalty overrides may still use the legacy key `initial_distance_or_site_constraints` (maps to the split distance tokens).
 
 ### Relaxation and validation
 
 - `model_name`, `device`, `fmax`, `stage1_steps`, `stage2_steps`, `reference_optimization_steps`
 - `optimize_isolated_sequentially`
 - `min_interatomic_distance`, `max_force_convergence`, `binding_distance_threshold`, `max_adsorption_energy`
-- `skip_desorption_check`, `skip_topology_check`
+- `skip_desorption_check`, `skip_topology_check` (also enables dissociative H₂ placements)
 - `connectivity_multipliers`, `energy_dedup_threshold`, `rmsd_dedup_threshold`
+
+`fmax` is the optimizer stop criterion; `max_force_convergence` is the post-relax reject threshold. Raising `fmax` alone does **not** loosen acceptance — raise both when intentionally accepting softer convergence.
 
 ### Surface prep and TorchSim autobatching
 
@@ -504,7 +509,7 @@ Root directory: `results_{surface_type}/`.
 | `adsorption_energies_detailed.csv` (flattened from saturation steps) | `save_benchmark_dataset=True` |
 | `ml_dataset.csv`, `ml_dataset_metadata.json` | `DatasetLogger` during binding campaigns and saturation |
 | `xyz_structures/`, optional `vasp_inputs/` | Always / when `write_vasp_inputs=True` |
-| `run_metadata.json` | Campaign `write_settings` / `write_metadata` (either True writes the full file) |
+| `run_metadata.json` | Prefer campaign `write_settings=True` (default); `write_metadata` is an alias (either True writes the full file) |
 
 Rows include `schema_version` and computation context (`model_name`, `fmax`, `stage1_steps`, `stage2_steps`, `seed`, context hash) when config is passed to save helpers.
 
@@ -518,9 +523,9 @@ Public ML utilities beyond BO:
 
 - `extract_features` / `extract_features_from_dataset`
 - `train_model`, `evaluate_model`, `grouped_cross_validate`, `BindingEnergyPredictor`
-- `load_dataset`; `ml/reproduce.py` can rebuild `AdsorptionConfig` from saved context rows
+- `load_dataset`; `ml/reproduce.py` rebuilds `PlacementDescriptor` and `AdsorptionConfig` from saved context rows (replay geometry via `generate_placement_from_descriptor`)
 
-Schema versioning lives in `ml/schema.py` (`SCHEMA_VERSION`, `ComputationContext`).
+Schema versioning lives in `ml/schema.py` (`SCHEMA_VERSION`, `ComputationContext`). Shared numeric defaults for config / ML context / placement live in `_numeric_defaults.py` (internal; prefer `AdsorptionConfig` fields — avoids a `config` ↔ `placement` import cycle).
 
 ## Comparison with AdsorbML and BOSS
 
@@ -567,11 +572,11 @@ BOSS learns a **continuous PES** in a hand-crafted parameterization; Metalsurfer
 
 - **Many placements, not one pose:** binding energy is the best of a sampled distribution after aggressive filtering—not a single user-specified geometry.
 - **Saturation proxy:** stop when the next adsorption is endothermic (`E_ads ≥ 0`), not at an explicit coverage fraction or chemical potential.
-- **Rigid substrate by default during adsorption:** entire substrate frozen via prep-time `FixAtoms` (`relax_top_layer=False`). `relax_top_layer=True` is a material-aware shortcut via `identify_relaxable_surface_indices`: **slab** — simple height band within `top_layer_tolerance` of max height along the slab normal (distinct from `top_layer_mask_by_normal`, which expands for stepped **site** enumeration); **nanoparticle** — outer shell; **porous** — pore boundary. Empty freeze sets fall back to freezing the whole substrate. Custom ASE constraints override the shortcut. Prep equilibration uses separate ASE `slab_relaxation_mode` (default `ionic_only`).
+- **Rigid substrate by default during adsorption:** entire substrate frozen via prep-time `FixAtoms` (`relax_top_layer=False`). Freeze knobs stay on prep helpers — not campaign kwargs. `relax_top_layer=True` is a material-aware shortcut via `identify_relaxable_surface_indices`: **slab** — simple height band within `top_layer_tolerance` of max height along the slab normal (distinct from `top_layer_mask_by_normal`, which expands for stepped **site** enumeration); **nanoparticle** — outer shell; **porous** — pore boundary. Empty freeze sets fall back to freezing the whole substrate. Omitting `FixAtoms` is intentional and supported (campaigns warn only). Custom ASE constraints override the shortcut. Prep equilibration uses separate ASE `slab_relaxation_mode` (default `ionic_only`).
 - **Symmetry as accelerator:** symmetry-reduced sites until the covered slab breaks symmetry vs the reference structure.
 - **GPU-first TorchSim:** autotune parallel batch size; `InFlightAutoBatcher` packs relaxations; `saturation_autobatcher_reuse` amortizes probes on deep coverage runs.
 - **BO + transfer for coverage:** `run_saturation_bo` carries `BOStepMemory` across steps so later layers warm-start from an informed surrogate.
-- **Layered topology guards:** per-placement decomposition, saturation-step connectivity guard; `skip_topology_check` for expected bond breaking (e.g. H₂ dissociation).
+- **Layered topology guards:** per-placement decomposition, saturation-step connectivity guard; `skip_topology_check=True` enables dissociative H₂ placements **and** skips connectivity / decomposition checks.
 - **Substrate-only site view** on partially covered slabs so new placements target bare surface, not prior adsorbates.
 - **Compare to post-adatom substrate files** when adatoms were deposited during `prepare_substrate`.
 - **Orientation-aware placement + geometry-only ML features:** site indices label enumeration slots; BO/training features come from materialized absolute poses so tilted slabs and local surface normals do not leak categorical site IDs into the surrogate.

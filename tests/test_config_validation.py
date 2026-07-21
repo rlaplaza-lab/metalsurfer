@@ -2,11 +2,16 @@
 
 import pytest
 
+from metalsurfer import _numeric_defaults as numeric_defaults
 from metalsurfer.config import (
     AdsorptionConfig,
     bo_eval_schedule,
     resolved_bo_eval_budget,
 )
+from metalsurfer.ml.schema import ComputationContext
+from metalsurfer.placement import _constants as placement_constants
+from metalsurfer.placement import geometry as placement_geometry
+from metalsurfer.symmetry import SymmetryAnalyzer
 
 from .conftest import make_slab
 
@@ -37,6 +42,64 @@ def test_default_config():
     assert config.voronoi_auto_widen is True
     assert config.placement_x_range == (-0.5, 0.5)
     assert config.placement_y_range == (-0.5, 0.5)
+    assert (
+        config.min_initial_distance
+        == numeric_defaults.MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
+    )
+    assert config.min_contact_ratio == numeric_defaults.MIN_CONTACT_RATIO_DEFAULT
+    assert (
+        config.max_closest_approach
+        == numeric_defaults.CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
+    )
+    assert (
+        config.contact_distance_threshold
+        == numeric_defaults.CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
+    )
+    assert config.symmetry_tolerance == numeric_defaults.DEFAULT_SYMMETRY_TOLERANCE
+    assert (
+        config.site_equivalence_tolerance
+        == numeric_defaults.DEFAULT_SITE_EQUIVALENCE_TOLERANCE
+    )
+    assert (
+        config.hollow_site_dedup_tolerance
+        == numeric_defaults.DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
+    )
+    assert (
+        config.planar_z_variance_threshold
+        == numeric_defaults.DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
+    )
+
+
+def test_numeric_defaults_single_source_of_truth():
+    """Config, ML context, symmetry, and placement share the same defaults."""
+    cfg = AdsorptionConfig()
+    ctx = ComputationContext()
+    assert ctx.min_initial_distance == cfg.min_initial_distance
+    assert ctx.min_contact_ratio == cfg.min_contact_ratio
+    assert ctx.symmetry_tolerance == cfg.symmetry_tolerance
+    assert ctx.site_equivalence_tolerance == cfg.site_equivalence_tolerance
+    assert ctx.hollow_site_dedup_tolerance == cfg.hollow_site_dedup_tolerance
+    assert ctx.planar_z_variance_threshold == cfg.planar_z_variance_threshold
+
+    analyzer = SymmetryAnalyzer(make_slab())
+    assert analyzer.symmetry_tolerance == numeric_defaults.DEFAULT_SYMMETRY_TOLERANCE
+
+    assert (
+        placement_constants._MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
+        == numeric_defaults.MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
+    )
+    assert (
+        placement_constants._MIN_CONTACT_RATIO_DEFAULT
+        == numeric_defaults.MIN_CONTACT_RATIO_DEFAULT
+    )
+    assert (
+        placement_geometry.check_initial_placement_distance.__defaults__[0]
+        == numeric_defaults.MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
+    )
+    assert (
+        placement_geometry.check_initial_placement_distance.__defaults__[1]
+        == numeric_defaults.MIN_CONTACT_RATIO_DEFAULT
+    )
 
 
 def test_valid_custom_config():

@@ -569,14 +569,19 @@ def test_run_saturation_screening_h2_ni111_real_gpu():
         os.unlink(smiles_path)
 
     if not results:
-        return
+        pytest.fail(
+            "Saturation screening returned no results; expected at least one "
+            "SaturationRunResult for H2 on Ni(111)"
+        )
 
     assert len(results) == 1
     sr = results[0]
     assert sr.molecule == "H2"
     if not sr.steps:
-        assert sr.n_molecules_at_saturation == 0
-        return
+        pytest.fail(
+            "Saturation produced zero steps; expected at least one placement "
+            "attempt with recorded E_ads (empty steps silently green-wash failures)"
+        )
 
     # Saturation logic: last step either has E_ads >= 0 (stopped) or E_ads < 0 (added)
     last = sr.steps[-1]
@@ -1134,7 +1139,10 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
 
     assert isinstance(result, MultiMolSaturationRunResult)
     if not result.steps:
-        return
+        pytest.fail(
+            "Multi-molecule BO saturation produced zero steps; expected at least "
+            "one competitive placement attempt"
+        )
     step0 = result.steps[0]
     # Keys match molecules that got conformers and entered the competitive loop.
     assert set(step0.per_molecule_results) == set(step0.bo_transfer_used)

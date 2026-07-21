@@ -29,14 +29,14 @@ def _results_dir(surface_type: str) -> Path:
     return Path(f"results_{surface_type}")
 
 
-def results_dir(surface_type: str) -> Path:
-    """Return the canonical results directory for a *surface_type* label."""
+def results_dir_for(surface_type: str) -> Path:
+    """Return ``results_{surface_type}/`` for a campaign *surface_type* label."""
     return _results_dir(surface_type)
 
 
-def results_dir_for(surface_type: str) -> Path:
-    """Return ``results_{surface_type}/`` (alias for :func:`results_dir`)."""
-    return results_dir(surface_type)
+def results_dir(surface_type: str) -> Path:
+    """Alias for :func:`results_dir_for`."""
+    return results_dir_for(surface_type)
 
 
 def _build_run_metadata(

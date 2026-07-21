@@ -91,10 +91,6 @@ class DatasetLogger:
         """Directly add a pre-built PlacementRecord."""
         self._records.append(record)
 
-    @property
-    def n_records(self) -> int:
-        return len(self._records)
-
     def flush(self) -> str:
         """Write accumulated records to CSV (append mode). Returns the CSV path."""
         if not self._records:

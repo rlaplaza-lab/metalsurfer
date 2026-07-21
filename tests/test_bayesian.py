@@ -706,6 +706,13 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
     for r in results:
         assert hasattr(r, "energy_adsorption") and hasattr(r, "placement_id")
         assert isinstance(r.energy_adsorption, (int, float))
+        assert np.isfinite(r.energy_adsorption)
+        assert -5.0 <= r.energy_adsorption < 2.0, (
+            f"E_ads should be in a physical binding window [-5, 2) eV, got {r.energy_adsorption}"
+        )
+        assert 1.5 <= r.distance <= 4.5, (
+            f"Adsorbate–surface distance should be 1.5–4.5 Å, got {r.distance:.2f}"
+        )
     assert len(set(r.placement_id for r in results)) == len(results), (
         "No duplicate placement_id in results"
     )

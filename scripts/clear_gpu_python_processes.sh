@@ -19,6 +19,7 @@ done
 
 MYUID=$(id -u)
 SELF=$$
+PROTECT_MARKER="${METALSURFER_GPU_PROTECT_MARKER:-METALSURFER_KEEP_GPU=1}"
 
 _is_python_like() {
   local pid=$1
@@ -34,6 +35,14 @@ _is_python_like() {
   return 1
 }
 
+_is_protected() {
+  local pid=$1
+  local environ
+  # Skip intentional long GPU jobs that export METALSURFER_KEEP_GPU=1.
+  environ=$(tr '\0' '\n' <"/proc/${pid}/environ" 2>/dev/null || true)
+  [[ "$environ" == *"${PROTECT_MARKER}"* ]]
+}
+
 found=0
 while IFS= read -r line || [[ -n "$line" ]]; do
   line="${line// /}"
@@ -45,6 +54,10 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   owner=$(stat -c %u "/proc/$pid" 2>/dev/null || echo "")
   [[ "$owner" == "$MYUID" ]] || continue
   _is_python_like "$pid" || continue
+  if _is_protected "$pid"; then
+    echo "Skipping protected GPU compute PID $pid (METALSURFER_KEEP_GPU)"
+    continue
+  fi
 
   found=1
   cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || echo "(unknown)")
@@ -86,6 +99,9 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   owner=$(stat -c %u "/proc/$pid" 2>/dev/null || echo "")
   [[ "$owner" == "$MYUID" ]] || continue
   _is_python_like "$pid" || continue
+  if _is_protected "$pid"; then
+    continue
+  fi
   still=1
   echo "PID $pid still running; SIGKILL"
   kill -KILL "$pid" 2>/dev/null || true

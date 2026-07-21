@@ -913,6 +913,9 @@ def deposit_adatoms(
         best_energy,
     )
 
+    # Base-slab FixAtoms indices become stale after atoms are appended; refresh
+    # so adatoms are frozen with the rest of the substrate (default freeze-all).
+    best_atoms = apply_surface_constraints(best_atoms)
     return SlabContainer(best_atoms)
 
 

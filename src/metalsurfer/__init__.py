@@ -29,6 +29,8 @@ from .models import (
 __all__ = [
     "__version__",
     "AdsorptionConfig",
+    "resolved_bo_eval_budget",
+    "bo_eval_schedule",
     "run_adsorption",
     "run_adsorption_bo",
     "run_saturation",
@@ -49,10 +51,12 @@ __all__ = [
     "GeometryValidationError",
     "OptimizationError",
     "configure_logging",
+    "results_dir_for",
 ]
 
 _LAZY_MODULES = {
     "_logging": {"configure_logging"},
+    "config": {"resolved_bo_eval_budget", "bo_eval_schedule"},
     "surface_prep": {
         "prepare_substrate",
         "finalize_substrate",

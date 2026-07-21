@@ -26,6 +26,7 @@ from metalsurfer import (
     AdsorptionConfig,
     BindingCampaignResult,
     configure_logging,
+    results_dir_for,
     run_adsorption,
 )
 from metalsurfer.surface_prep import prepare_substrate
@@ -66,7 +67,7 @@ def main() -> int:
     configure_logging(default_level="INFO")
 
     surface_type = "co2_mof"
-    results_dir = f"results_{surface_type}"
+    results_dir = str(results_dir_for(surface_type))
     cif_path = os.path.join(os.path.dirname(__file__), "mof_structures", "RUBTAK01.cif")
 
     if not os.path.exists(cif_path):
@@ -82,20 +83,16 @@ def main() -> int:
     print(f"MOF has {len(mof_atoms)} atoms")
     print(f"MOF cell: {mof_atoms.cell}")
 
+    # Modest placement count + GPU memory padding for small demo GPUs (~15 GB).
     config = AdsorptionConfig(
         material_type="porous",
         slab_relaxation_mode="none",  # keep experimental CIF framework geometry
-        model_name="uma-s-1p2",
         seed=42,
         num_conformers=1,
         num_placements=5,
         autobatcher_max_memory_padding=0.8,
         autobatcher_max_memory_scaler=500,
         autobatcher_max_atoms_to_try=5000,
-        device="cuda",
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        stage1_steps=50,
         stage2_steps=500,
     )
 

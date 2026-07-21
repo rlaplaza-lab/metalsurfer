@@ -1,13 +1,37 @@
 """Internal constants for placement numerics and physical heuristics."""
 
+from ase.data import atomic_numbers
+from ase.data import covalent_radii as ase_covalent_radii
+
+from .. import _numeric_defaults
+
+# Re-export shared defaults under placement-private names (used by geometry/sites).
+_CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM = (
+    _numeric_defaults.CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
+)
+_CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM = (
+    _numeric_defaults.CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
+)
+_DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE = (
+    _numeric_defaults.DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
+)
+_DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD = (
+    _numeric_defaults.DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
+)
+_DEFAULT_SITE_EQUIVALENCE_TOLERANCE = (
+    _numeric_defaults.DEFAULT_SITE_EQUIVALENCE_TOLERANCE
+)
+_DEFAULT_SYMMETRY_TOLERANCE = _numeric_defaults.DEFAULT_SYMMETRY_TOLERANCE
+_MIN_CONTACT_RATIO_DEFAULT = _numeric_defaults.MIN_CONTACT_RATIO_DEFAULT
+_MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM = (
+    _numeric_defaults.MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
+)
+
 
 # Compute mean covalent radius of common adsorbate elements from ASE data.
 # This replaces hardcoded fallback values with dynamically computed values.
 def _compute_mean_adsorbate_covalent_radius() -> float:
     """Mean covalent radius of common adsorbate elements (C, H, O, N, S, P)."""
-    from ase.data import atomic_numbers
-    from ase.data import covalent_radii as ase_covalent_radii
-
     common_elements = ["C", "H", "O", "N", "S", "P"]
     radii = []
     for elem in common_elements:
@@ -21,14 +45,6 @@ def _compute_mean_adsorbate_covalent_radius() -> float:
     # Ultimate fallback if ASE data is unavailable (should never happen)
     return 0.77
 
-
-# ---------------------------------------------------------------------------
-# Material detection
-# ---------------------------------------------------------------------------
-
-# Fraction of unit-cell z-extent occupied by framework atoms above which a
-# 3D-periodic structure is treated as porous instead of slab-like.
-_SLAB_MAX_OCCUPIED_FRACTION: float = 0.70
 
 # ---------------------------------------------------------------------------
 # Voronoi site detection
@@ -107,6 +123,9 @@ _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE: float = 1.2
 _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE: float = 0.2
 _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE: float = 0.3
 _PARALLEL_Z_MIN_HI_MARGIN: float = 0.3  # ensure z_base_hi >= z_base_lo + this (Å)
+# Absolute shrink fallbacks when site surface radii are unavailable (Å).
+_PARALLEL_Z_LO_SHRINK_FALLBACK_ANGSTROM: float = 0.4
+_PARALLEL_Z_HI_SHRINK_FALLBACK_ANGSTROM: float = 0.6
 
 # ---------------------------------------------------------------------------
 # Dissociative placement (e.g. H₂ → 2 H on hollow sites)
@@ -150,10 +169,6 @@ _ATOP_INJECTION_HEIGHT_FACTOR: float = 0.8
 # ---------------------------------------------------------------------------
 # Site clustering and symmetry
 # ---------------------------------------------------------------------------
-_DEFAULT_SYMMETRY_TOLERANCE: float = 0.1
-_DEFAULT_SITE_EQUIVALENCE_TOLERANCE: float = 0.05
-_DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE: float = 0.1
-_DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD: float = 0.01
 _BOUNDING_BOX_CELL_PAD_ANGSTROM: float = 5.0
 _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM: float = 0.5
 _KD_RADIUS_SEARCH_PADDING: float = 1.5
@@ -186,15 +201,10 @@ _PRINCIPAL_AXIS_ROTATION_STEP_DEG: float = 10.0
 # Radius-derived fallback and contact-quality thresholds.
 _VDW_RADIUS_FROM_COVALENT_SCALE: float = 1.2
 _CONTACT_QUALITY_COVALENT_SUM_SCALE: float = 1.35
-# Soft upper bound on closest mol–slab approach for "strict" initial contact (Å).
-_CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM: float = 0.8
-# Distance cutoff counting an adsorbate atom as contacting the surface (Å).
-_CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM: float = 2.5
 # Max variance of contact distances when requiring multi-atom contact (Å²).
 _CONTACT_ATOM_VARIANCE_MAX: float = 0.5
 _MIN_DISTANCE_COVALENT_FALLBACK_SCALE: float = 1.0
 _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM: float = 2.0
-_MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM: float = 1.5
 _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE: float = 1.0
 
 # ---------------------------------------------------------------------------

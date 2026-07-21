@@ -122,11 +122,11 @@ class TestH2OnPt12:
 
         e_ads = np.array([r.energy_adsorption for r in results])
         assert np.all(np.isfinite(e_ads))
-        assert np.all(e_ads < 2.0), (
-            f"E_ads should stay in a weak-binding smoke window (< 2 eV), got {e_ads}"
+        assert np.all(e_ads < 1.5), (
+            f"E_ads should stay in a binding window (< 1.5 eV), got {e_ads}"
         )
-        assert np.all(e_ads >= -5.0), (
-            f"E_ads should be >= -5.0 eV for H2 on Pt12, got min {e_ads.min():.3f}"
+        assert np.all(e_ads >= -3.5), (
+            f"E_ads should be >= -3.5 eV for H2 on Pt12, got min {e_ads.min():.3f}"
         )
 
         if len(results) >= 2:
@@ -143,6 +143,6 @@ class TestH2OnPt12:
             )
             hh = _hh_bond_length(r.atoms, slab_size)
             # Molecular (~0.74 Å) or dissociated H on Pt are both valid.
-            assert 0.7 <= hh <= 5.0, (
+            assert 0.7 <= hh <= 4.0, (
                 f"H–H separation should be molecular or dissociated on cluster, got {hh:.3f}"
             )

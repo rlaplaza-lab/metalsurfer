@@ -67,6 +67,12 @@ empty ``FixAtoms``.
 For custom freeze patterns, attach ASE ``FixAtoms`` yourself or call
 ``apply_surface_constraints`` / ``finalize_substrate`` with ``freeze_symbols``.
 
+**Deliberate no freeze:** build or finalize geometry without calling
+``apply_surface_constraints``, or clear constraints on the ``Atoms`` object
+before ``run_*``. Campaign APIs warn when FixAtoms are absent but do **not**
+auto-freeze — a fully mobile substrate remains intentional. Freeze policy is
+prep-only (not on ``AdsorptionConfig`` / ``run_*``).
+
 Example — rigid substrate (default) vs top-layer relaxation::
 
    config = AdsorptionConfig(material_type="slab")

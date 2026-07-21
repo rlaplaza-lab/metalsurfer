@@ -27,7 +27,7 @@ def main():
         autobatcher_max_memory_scaler=500,
         autobatcher_max_atoms_to_try=5000,
         device="cuda",
-        skip_topology_check=True,
+        skip_topology_check=True,  # H2→2H hollow pairs + skip connectivity checks
         skip_desorption_check=False,
         stage1_steps=50,
         stage2_steps=500,

@@ -214,3 +214,24 @@ def test_relax_top_layer_empty_freeze_falls_back_to_full_substrate(caplog):
     frozen = frozen_indices_from_constraints(constrained)
     assert frozen == list(range(len(slab)))
     assert any("no atoms frozen" in r.message for r in caplog.records)
+
+
+def test_deposit_adatoms_refreshes_fixatoms_for_new_atoms(tmp_path):
+    """Appending adatoms must not leave them free under stale base FixAtoms."""
+    from metalsurfer.surface_prep import SlabContainer, deposit_adatoms
+
+    base = SlabContainer(make_slab(nx=4, ny=4, n_layers=3))
+    n_base = len(base.atoms)
+    assert frozen_indices_from_constraints(base.atoms) == list(range(n_base))
+
+    deposited = deposit_adatoms(
+        base,
+        "Sn",
+        coverage_fraction=0.2,
+        seed=42,
+        results_dir=str(tmp_path),
+        relaxation_mode="none",
+    )
+    n_total = len(deposited.atoms)
+    assert n_total > n_base
+    assert frozen_indices_from_constraints(deposited.atoms) == list(range(n_total))

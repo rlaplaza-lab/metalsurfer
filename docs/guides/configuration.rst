@@ -28,6 +28,10 @@ Set ``material_type`` on the same ``AdsorptionConfig`` instance used for both
 Mismatch between ``material_type`` and the prepared structure's PBC/layout causes
 validation errors at campaign start.
 
+``surface_type`` on ``run_*`` is **only** the results folder label
+(``results_{surface_type}/``). It does not change physics; set ``material_type``
+for that.
+
 Autotuning placements on GPU
 ----------------------------
 
@@ -55,14 +59,26 @@ For homonuclear diatomics that may dissociate on slabs or nanoparticles:
        seed=42,
    )
 
-Effects:
+``skip_topology_check=True`` does two related things:
 
 - Enables hollow-site pair initial placements for H₂
 - Disables post-relaxation connectivity / decomposition checks
-- Reference energy remains the **isolated molecule**; positive :math:`E_\mathrm{ads}`
-  is possible when the relaxed state is dissociated
+
+Reference energy remains the **isolated molecule**; positive :math:`E_\mathrm{ads}`
+is possible when the relaxed state is dissociated.
 
 See ``examples/h2_ru_slab_binding_energy.py``.
+
+Common mistakes
+---------------
+
+- Raising ``fmax`` alone does not relax the post-relax force filter — also raise
+  ``max_force_convergence`` if you intend softer acceptance.
+- ``bo_total_budget`` is acquisition **batches**, not total evaluations. Use
+  :func:`~metalsurfer.resolved_bo_eval_budget` once batch sizes are resolved (or
+  see the budget section below).
+- Prefer ``write_settings=True`` (default) for ``run_metadata.json``;
+  ``write_metadata`` is a deprecated alias for the same file.
 
 Initial placement validation
 ----------------------------
@@ -74,9 +90,16 @@ Three independent layers (do not conflate):
 3. **Contact quality** — ``strict_initial_placement``, ``max_closest_approach``,
    ``min_contact_atoms``, ``contact_distance_threshold``, ``require_multiple_contact``
 
+Do not confuse ``min_contact_ratio`` (default **0.8**, unitless fraction of the
+covalent-radius sum) with ``max_closest_approach`` (default **0.8** Å, absolute
+closest-approach distance used by the contact-quality layer). The deprecated
+``min_contact_distance`` ctor alias maps to ``max_closest_approach``, not to
+``min_contact_ratio``.
+
 Under saturation, substrate contact uses the bare-slab atom prefix while prior
 adsorbates are checked with adsorbate–adsorbate separation. Generation failures
-emit typed reasons (``too_close``, ``vdw_overlap``, ``adsorbate_overlap``, …) into
+emit typed reasons (``too_close``, ``too_far``, ``vdw_overlap``,
+``adsorbate_overlap``, ``distance_check_failed``, …) into
 ``PlacementFailureEvent`` / placement ``failure_summary``.
 
 Placement success levers
@@ -121,9 +144,12 @@ Total BO placement evaluations (after autotune resolves batch sizes):
 ``bo_total_budget`` counts **acquisition batches** after the initial random batch,
 not total evaluations. Example: target ~300 evals with autotuned batch size 16 and
 initial random 16 → set ``bo_total_budget = (300 - 16) // 16`` (integer division).
+After sizes are resolved, :func:`~metalsurfer.resolved_bo_eval_budget` returns the
+total evaluation count.
 
 Use :func:`~metalsurfer.run_adsorption_bo` or :func:`~metalsurfer.run_saturation_bo`;
-``bo_enabled=True`` on the config alone has no effect on non-BO entry points.
+``bo_enabled`` is set by those APIs — toggling it on the config alone has no effect
+on non-BO entry points.
 
 Saturation essentials
 ---------------------
@@ -143,11 +169,22 @@ Prep vs campaign relaxation
 ---------------------------
 
 ``slab_relaxation_*`` equilibrates the substrate **before** campaigns during prep.
-During adsorption relaxation, only adsorbate atoms and substrate atoms **not** in ASE
-``FixAtoms`` move. Default prep freezes the entire substrate; ``relax_top_layer=True``
-(on ``prepare_substrate``) leaves a material-aware surface band free (for slabs: atoms
-within ``top_layer_tolerance`` of max height — a simple band, not the stepped site
-mask). Details: :doc:`surface_engineering`.
+Freeze policy is also **prep-only** (``relax_top_layer``, ``freeze_symbols``, custom
+ASE ``FixAtoms``) — not fields on :class:`~metalsurfer.AdsorptionConfig` or
+``run_*`` kwargs. During adsorption relaxation, only adsorbate atoms and substrate
+atoms **not** in ASE ``FixAtoms`` move.
+
+- **Default prep** (``prepare_substrate`` / ``finalize_substrate``): freezes the
+  entire substrate (``relax_top_layer=False``).
+- **Partial freeze:** ``relax_top_layer=True`` on prep leaves a material-aware
+  surface band free (for slabs: atoms within ``top_layer_tolerance`` of max height —
+  a simple band, not the stepped site mask).
+- **Deliberate no freeze:** skip ``apply_surface_constraints`` (or clear ASE
+  constraints on the prepared ``Atoms``) before calling ``run_*``. Campaign APIs
+  only **warn** when FixAtoms are missing; they do not auto-attach constraints, so
+  a fully mobile substrate remains intentional and supported.
+
+Details: :doc:`surface_engineering`.
 
 Literature or pre-relaxed slabs
 -------------------------------

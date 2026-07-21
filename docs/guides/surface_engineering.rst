@@ -113,6 +113,11 @@ For more control, use the individual helpers from :mod:`metalsurfer.surface_prep
 
    slab = finalize_substrate(slab, config)
 
+``deposit_adatoms`` refreshes ASE ``FixAtoms`` after appending adatoms so
+stale base-slab freeze indices do not leave adatoms mobile. Prefer
+``finalize_substrate`` / ``prepare_substrate`` when you need a non-default
+freeze band (``relax_top_layer=True``).
+
 This fast path calls :func:`~metalsurfer.surface_prep.finalize_substrate` without
 :func:`~metalsurfer.surface_prep.relax_substrate`, so it does **not** equilibrate
 ionic positions. Use the energy-ranked variant below (or
@@ -326,6 +331,13 @@ instead. Use for workflows where the surface should restructure with the
 adsorbate (e.g. graphene oxide slabs, H-saturated surfaces, flexible pore
 mouths, camphor/Cu(111) with two free Cu layers). For catalyst descriptors and
 rigid binding energies, keep the default.
+
+**Deliberate fully mobile substrate:** skip
+:func:`~metalsurfer.surface_prep.apply_surface_constraints` (or clear ASE
+constraints on the prepared ``Atoms``) before ``run_*``. Campaign APIs only
+**warn** when FixAtoms are missing; they do not auto-attach freeze constraints.
+Freeze knobs stay on prep helpers — not on :class:`~metalsurfer.AdsorptionConfig`
+or ``run_*`` arguments.
 
 **Manual constraints:** attach your own ASE ``FixAtoms`` (or other constraints)
 to the substrate before calling campaign APIs, or call lower-level helpers and

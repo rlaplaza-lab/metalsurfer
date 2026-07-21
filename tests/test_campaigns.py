@@ -262,16 +262,17 @@ def test_run_saturation_write_metadata_persists_json(tmp_path, monkeypatch):
         lambda surface_types, **kwargs: None,
     )
 
-    campaign = run_saturation(
-        slab=object(),
-        molecules=[("C", "demo")],
-        config=AdsorptionConfig(seed=1),
-        surface_type="st_meta",
-        skip_existing=False,
-        write_settings=False,
-        write_metadata=True,
-        run_metadata_out=run_metadata,
-    )
+    with pytest.warns(DeprecationWarning, match="write_metadata"):
+        campaign = run_saturation(
+            slab=object(),
+            molecules=[("C", "demo")],
+            config=AdsorptionConfig(seed=1),
+            surface_type="st_meta",
+            skip_existing=False,
+            write_settings=False,
+            write_metadata=True,
+            run_metadata_out=run_metadata,
+        )
     assert isinstance(campaign, SaturationCampaignResult)
 
     path = tmp_path / "results_st_meta" / "run_metadata.json"

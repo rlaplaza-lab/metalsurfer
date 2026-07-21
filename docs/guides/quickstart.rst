@@ -128,9 +128,13 @@ By default, ``skip_existing=True`` skips molecules already listed in
 ``adsorption_energies_detailed.csv`` (in-memory lists and CSV paths). Official
 demos pass ``skip_existing=False`` so re-runs always compute.
 
+``surface_type`` is only the output folder name (``results_{surface_type}/``);
+physics come from ``AdsorptionConfig.material_type`` and the prepared substrate.
+
 Use :func:`~metalsurfer.run_adsorption_bo` for Bayesian placement search; setting
 ``bo_enabled=True`` on :class:`~metalsurfer.AdsorptionConfig` with
 :func:`~metalsurfer.run_adsorption` emits a warning and has no effect.
+Prefer the ``run_*_bo`` entry points — do not toggle ``bo_enabled`` yourself.
 
 Campaign APIs accept plain ASE ``Atoms`` or :class:`~metalsurfer.surface_prep.SlabContainer`,
 but the structure must be **campaign-ready** before the call: **equilibrated ionic
@@ -140,6 +144,9 @@ positions** (from prep unless ``slab_relaxation_mode="none"``), PBC matching
 build the substrate with ASE, then pass it to
 :func:`~metalsurfer.surface_prep.prepare_substrate` via ``slab=``. Layout
 conventions are described in :doc:`surface_engineering`.
+
+Prefer ``write_settings=True`` (default) so campaigns write ``run_metadata.json``.
+``write_metadata`` is a deprecated alias for the same file.
 
 **Slab** — :func:`~metalsurfer.surface_prep.prepare_substrate` equilibrates ions
 by default (``slab_relaxation_mode="ionic_only"``), applies bottom-anchored
@@ -204,7 +211,7 @@ The runnable ``examples/ethene_pt12_binding_energy.py`` uses the same workflow w
    )
 
 **Dissociative H₂ on a slab** — ``skip_topology_check=True`` enables hollow-site pair
-placements and allows bond breaking after relaxation; E_ads still uses molecular E(H₂):
+placements **and** skips post-relax connectivity checks; E_ads still uses molecular E(H₂):
 
 .. code-block:: python
 
@@ -283,6 +290,8 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
 BO knobs live on :class:`~metalsurfer.AdsorptionConfig`; see
 :doc:`../guides/configuration` (budget math and recipes) and
 :doc:`../api/config` (full field reference — Bayesian optimization).
+Remember ``bo_total_budget`` is acquisition batches; after sizes resolve, call
+:func:`~metalsurfer.resolved_bo_eval_budget` for the total evaluation count.
 
 Sequential Saturation
 ---------------------

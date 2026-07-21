@@ -59,8 +59,6 @@ def _format_ctx_prefix(ctx: dict[str, Any]) -> str:
 class ContextFilter(logging.Filter):
     """Inject ctx_prefix into log records from current context."""
 
-    _KEY_ORDER = CTX_KEY_ORDER
-
     def filter(self, record: logging.LogRecord) -> bool:
         ctx = _LOG_CTX.get() or {}
         record.ctx_prefix = _format_ctx_prefix(ctx)

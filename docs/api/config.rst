@@ -346,7 +346,9 @@ Relaxation and MLIP
    **Type:** ``float`` · **Default:** ``0.05`` (eV/Å)
 
    Maximum force magnitude for adsorbate–slab and reference-molecule optimization
-   convergence.
+   convergence. Raising ``fmax`` does **not** relax the post-relaxation force
+   reject threshold; set ``max_force_convergence`` as well if you want looser
+   acceptance after optimization.
 
 ``stage1_steps``, ``stage2_steps``
    **Type:** ``int`` · **Default:** ``50``, ``150``
@@ -425,7 +427,8 @@ Post-relaxation validation
    **Type:** ``float`` · **Default:** ``0.05`` (eV/Å)
 
    Reject structures whose maximum force remains above this threshold after
-   relaxation (failed optimization filter).
+   relaxation (failed optimization filter). Independent of ``fmax`` (optimizer
+   stop criterion); raise both when intentionally accepting softer convergence.
 
 ``binding_distance_threshold``
    **Type:** ``float`` · **Default:** ``4.0`` (Å)
@@ -442,9 +445,10 @@ Post-relaxation validation
 ``skip_topology_check``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Disable molecular connectivity / decomposition checks after relaxation. When
-   ``True``, also enables dissociative initial placements for homonuclear diatomics
-   on slabs and nanoparticles (e.g. H₂ → 2H). Reference energies remain the isolated
+   Dual-purpose H₂ / dissociation knob: when ``True``, (1) enables dissociative
+   hollow-site-pair initial placements for homonuclear diatomics on slabs and
+   nanoparticles (e.g. H₂ → 2H), and (2) disables post-relaxation molecular
+   connectivity / decomposition checks. Reference energies remain the isolated
    molecule; positive :math:`E_\mathrm{ads}` can result after dissociation.
 
 ``connectivity_multipliers``
@@ -478,14 +482,15 @@ Bayesian optimization
 ~~~~~~~~~~~~~~~~~~~~~
 
 Used by :func:`~metalsurfer.run_adsorption_bo` and :func:`~metalsurfer.run_saturation_bo`.
-Setting ``bo_enabled=True`` on the config with non-BO entry points emits a warning and
-has no effect.
+Do not set ``bo_enabled`` yourself — BO entry points force it on; setting it on
+non-BO entry points only emits a warning and has no effect.
 
 ``bo_enabled``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Internal flag set by BO campaign APIs. Prefer ``run_adsorption_bo`` /
-   ``run_saturation_bo`` over toggling this manually.
+   Internal / set by BO campaign APIs only. Prefer ``run_adsorption_bo`` /
+   ``run_saturation_bo``; do not toggle this on :class:`~metalsurfer.AdsorptionConfig`
+   for ordinary screening.
 
 ``bo_initial_random``
    **Type:** ``int | None`` · **Default:** ``None``
@@ -510,12 +515,14 @@ has no effect.
 
    Number of **acquisition batches** after the initial random batch—not total
    evaluations. Total BO evaluations (once autotune resolves) is
-   ``bo_initial_random + bo_total_budget * bo_batch_size``.
+   ``bo_initial_random + bo_total_budget * bo_batch_size`` (see
+   :func:`~metalsurfer.resolved_bo_eval_budget`).
 
 ``bo_ucb_kappa``
    **Type:** ``float`` · **Default:** ``1.96``
 
-   Exploration parameter for LCB acquisition; also passed to EI/PI where applicable.
+   Exploration parameter for **LCB** acquisition only (``bo_acquisition="lcb"``).
+   Ignored for the default ``"ei"`` and for ``"pi"``.
 
 ``bo_acquisition``
    **Type:** ``Literal["lcb", "ei", "pi"]`` · **Default:** ``"ei"``
@@ -555,10 +562,10 @@ has no effect.
 
    Override penalty energies by failure stage (``"generation"``, ``"optimization"``,
    ``"validation"``, ``"energy_cap"``, ``"filter"``) or by generation reason token
-   (e.g. ``"too_close"``, ``"vdw_overlap"``). For one release, the legacy key
-   ``"initial_distance_or_site_constraints"`` also applies to the split generation
-   reasons ``too_close``, ``too_far``, ``vdw_overlap``, ``adsorbate_overlap``, and
-   ``missing_z_abs``.
+   (e.g. ``"too_close"``, ``"vdw_overlap"``, ``"distance_check_failed"``). For one
+   release, the legacy key ``"initial_distance_or_site_constraints"`` also applies
+   to the split generation reasons ``too_close``, ``too_far``, ``vdw_overlap``,
+   ``adsorbate_overlap``, and ``missing_z_abs``.
 
 ``bo_transfer_enabled``
    **Type:** ``bool`` · **Default:** ``True``

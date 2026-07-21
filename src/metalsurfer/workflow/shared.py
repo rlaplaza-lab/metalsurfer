@@ -32,7 +32,7 @@ from ..placement.generators import (
     enumerate_placement_specs,
     generate_placement_from_spec_with_reason,
 )
-from ..placement.geometry import calculate_min_distance, check_initial_contact_quality
+from ..placement.geometry import calculate_min_distance
 from ..surfaces import SlabContainer, accept_substrate_for_api, validate_substrate
 
 logger = logging.getLogger(__name__)
@@ -266,27 +266,6 @@ def _surface_positions_for_distance(
     if np.any(mask):
         return slab_positions[mask]
     return slab_positions
-
-
-def _validate_initial_placement_geometry(
-    adsorbate: Atoms,
-    slab: Atoms,
-    config: AdsorptionConfig,
-    *,
-    exclude_slab_atoms: int | None = None,
-) -> tuple[bool, str]:
-    """Pre-optimization check for surface contact; returns (ok, reason_token)."""
-    return check_initial_contact_quality(
-        adsorbate,
-        slab,
-        strict_initial_placement=config.strict_initial_placement,
-        require_multiple_contact=config.require_multiple_contact,
-        max_closest_approach=float(config.max_closest_approach),
-        min_contact_atoms=int(config.min_contact_atoms),
-        contact_distance_threshold=config.contact_distance_threshold,
-        exclude_slab_atoms=exclude_slab_atoms,
-        material_type=config.material_type,
-    )
 
 
 def _evaluate_optimized_candidate(
@@ -687,8 +666,6 @@ class MoleculeScreeningContext:
     effective_base_slab_for_frozen: Atoms | None
     conformers: list[Atoms]
     site_context: placement_generators.SiteContext | None
-    frozen_indices: list[int]
-    representative_atoms: Atoms
     config: AdsorptionConfig
     E_slab: float
     E_mol: float
@@ -786,8 +763,6 @@ def _prepare_molecule_screening(
         effective_base_slab_for_frozen=effective_base_slab_for_frozen,
         conformers=conformers,
         site_context=site_context,
-        frozen_indices=frozen_indices,
-        representative_atoms=representative_atoms,
         config=config,
         E_slab=E_slab,
         E_mol=E_mol,

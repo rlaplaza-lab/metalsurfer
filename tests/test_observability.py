@@ -321,7 +321,7 @@ class TestLogContext:
         assert record.ctx_prefix == ""
 
     def test_context_filter_includes_extra_keys(self):
-        """ContextFilter includes keys beyond _KEY_ORDER in ctx_prefix."""
+        """ContextFilter includes keys beyond CTX_KEY_ORDER in ctx_prefix."""
         filt = ContextFilter()
         record = logging.LogRecord(
             name="test",

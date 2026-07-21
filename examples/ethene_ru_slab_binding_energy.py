@@ -17,6 +17,7 @@ from metalsurfer import (
     AdsorptionConfig,
     BindingCampaignResult,
     configure_logging,
+    results_dir_for,
     run_adsorption,
 )
 from metalsurfer.surface_prep import prepare_substrate
@@ -50,21 +51,17 @@ def main() -> int:
     configure_logging(default_level="INFO")
 
     surface_type = "ethene_ru_slab"
-    results_dir = f"results_{surface_type}"
+    results_dir = str(results_dir_for(surface_type))
 
+    # Modest placement count + GPU memory padding for small demo GPUs (~15 GB).
     config = AdsorptionConfig(
         material_type="slab",
-        model_name="uma-s-1p2",
         seed=42,
         num_conformers=3,
         num_placements=5,
         autobatcher_max_memory_padding=0.8,
         autobatcher_max_memory_scaler=500,
         autobatcher_max_atoms_to_try=5000,
-        device="cuda",
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        stage1_steps=50,
         stage2_steps=500,
     )
 

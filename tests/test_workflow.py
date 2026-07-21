@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from ase import Atoms
+from scipy.spatial.distance import pdist
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.io_results import (
@@ -92,9 +93,10 @@ class TestValidateGeometry:
         calc.get_potential_energy.return_value = (
             energy if energy is not None else -100.0
         )
-        calc.get_forces.return_value = np.random.RandomState(0).uniform(
-            -forces_max, forces_max, (len(combined), 3)
-        )
+        # Deterministic force field: only the last adsorbate atom carries |F|.
+        forces = np.zeros((len(combined), 3))
+        forces[-1, 2] = float(forces_max)
+        calc.get_forces.return_value = forces
         combined.calc = calc
         return combined, slab
 
@@ -129,13 +131,17 @@ class TestValidateGeometry:
         ok, reason = _validate_geometry(combined, slab, config)
         assert not ok
         assert "too close" in reason
+        clash = float(np.min(pdist(combined.get_positions())))
+        assert f"{clash:.3f}" in reason  # reports the actual clash distance
 
     def test_high_forces_fails(self):
-        combined, slab = self._combined(energy=-100.0, forces_max=10.0)
+        injected = 10.0
+        combined, slab = self._combined(energy=-100.0, forces_max=injected)
         config = AdsorptionConfig(max_force_convergence=0.05)
         ok, reason = _validate_geometry(combined, slab, config)
         assert not ok
         assert "forces" in reason
+        assert f"{injected:.3f}" in reason
 
 
 # ---------------------------------------------------------------------------

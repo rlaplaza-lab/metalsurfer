@@ -93,7 +93,7 @@ Runnable scripts in [`examples/`](examples/) (requires `pip install -e ".[mlip]"
 | [`examples/ethene_pt12_binding_energy.py`](examples/ethene_pt12_binding_energy.py) | `nanoparticle` | Ethene on a Pt₁₂ cluster |
 | [`examples/co2_mof_binding_energy.py`](examples/co2_mof_binding_energy.py) | `porous` | CO₂ in a MOF (RUBTAK01) |
 | [`examples/ethene_ru_slab_binding_energy.py`](examples/ethene_ru_slab_binding_energy.py) | `slab` | Ethene on Ru(0001) |
-| [`examples/h2_ru_slab_binding_energy.py`](examples/h2_ru_slab_binding_energy.py) | `slab` | H₂ dissociative adsorption (`skip_topology_check=True`) |
+| [`examples/h2_ru_slab_binding_energy.py`](examples/h2_ru_slab_binding_energy.py) | `slab` | H₂ dissociative adsorption (`skip_topology_check=True`: hollow pairs + skip connectivity checks) |
 | [`examples/camphor_cu111_binding_energy.py`](examples/camphor_cu111_binding_energy.py) | `slab` | Bayesian placement search on literature Cu(111) slab |
 | [`examples/bipyridine_au111_defects_saturation_raw.py`](examples/bipyridine_au111_defects_saturation_raw.py) | `slab` | HPC-scale saturation demo (also under `scripts/`) |
 

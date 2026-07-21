@@ -99,11 +99,11 @@ class TestCO2InMOF:
         assert len(results) >= 3, f"Expected >= 3 valid placements, got {len(results)}"
 
         e_ads = np.array([r.energy_adsorption for r in results])
-        assert np.all(e_ads < 1.0), (
-            f"E_ads should stay in a weak-physisorption window (< 1 eV), got {e_ads}"
+        assert np.all(e_ads < 0.5), (
+            f"E_ads should stay in a physisorption window (< 0.5 eV), got {e_ads}"
         )
-        assert np.all(e_ads >= -10.0), (
-            f"E_ads should be >= -10.0 eV for CO2 in MOF, got min {e_ads.min():.3f}"
+        assert np.all(e_ads >= -2.5), (
+            f"E_ads should be >= -2.5 eV for CO2 in MOF, got min {e_ads.min():.3f}"
         )
 
         spread = float(e_ads.max() - e_ads.min())
@@ -122,4 +122,20 @@ class TestCO2InMOF:
             )
             assert 1.1 <= co2 <= 1.4, (
                 f"C–O bond length should be ~1.16 Å (1.1–1.4), got {co2:.3f}"
+            )
+            # CO2 should remain approximately linear after relaxation.
+            ads = r.atoms[slab_size:]
+            syms = ads.get_chemical_symbols()
+            c_idx = syms.index("C")
+            o_idxs = [i for i, s in enumerate(syms) if s == "O"]
+            pos = ads.get_positions()
+            cell = np.asarray(r.atoms.get_cell(), dtype=float)
+            v1 = pos[o_idxs[0]] - pos[c_idx]
+            v2 = pos[o_idxs[1]] - pos[c_idx]
+            v1 = v1 - np.round(v1 @ np.linalg.inv(cell)) @ cell
+            v2 = v2 - np.round(v2 @ np.linalg.inv(cell)) @ cell
+            cosang = float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)))
+            angle = float(np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))))
+            assert 165.0 <= angle <= 180.0, (
+                f"O–C–O angle should be ~180°, got {angle:.1f}"
             )

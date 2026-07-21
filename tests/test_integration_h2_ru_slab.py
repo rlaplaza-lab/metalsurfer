@@ -90,8 +90,11 @@ class TestH2OnRu0001:
 
         e_ads = np.array([r.energy_adsorption for r in results])
         assert np.all(np.isfinite(e_ads))
-        assert np.all(e_ads < 5.0), (
-            f"E_ads should stay in a smoke window (< 5 eV), got {e_ads}"
+        assert np.all(e_ads < 2.0), (
+            f"E_ads should stay below 2 eV for H2 on Ru, got {e_ads}"
+        )
+        assert np.all(e_ads >= -3.0), (
+            f"E_ads should be >= -3.0 eV for H2 on Ru, got min {e_ads.min():.3f}"
         )
 
         for r in results:
@@ -103,6 +106,8 @@ class TestH2OnRu0001:
 
         slab_size = len(results[0].atoms) - 2
         hh_lengths = [_hh_bond_length(r.atoms, slab_size) for r in results]
+        # Initial placements are dissociative hollow pairs; UMA on Ru(0001) often
+        # recombines to molecular H₂ (~0.75 Å). Accept molecular or dissociated.
         assert all(0.7 <= hh <= 5.0 for hh in hh_lengths), (
             f"H–H separation should be molecular or dissociated, got {hh_lengths}"
         )

@@ -56,6 +56,13 @@ def _write_run_metadata_json(
     available). Prefer leaving the defaults so one coherent metadata file is
     written; set both to False to suppress it.
     """
+    if write_metadata:
+        warnings.warn(
+            "write_metadata=True is deprecated; use write_settings=True "
+            "(the default) to write run_metadata.json.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
     return write_settings or write_metadata
 
 
@@ -300,10 +307,10 @@ def run_adsorption(
         ``config.write_vasp_inputs=True``.
     write_settings:
         When True (default), write the full ``run_metadata.json`` (config, campaign
-        fields, and timing/counts). ``write_metadata`` is an alias for the same file.
+        fields, and timing/counts). Prefer this over ``write_metadata``.
     write_metadata:
-        Alias for enabling the same ``run_metadata.json`` write. Either flag True
-        writes the full file; set both False to suppress it.
+        Deprecated alias for the same ``run_metadata.json`` write. Emits
+        :class:`DeprecationWarning` when True; set both False to suppress the file.
     skip_existing:
         Skip molecules already listed in ``adsorption_energies_detailed.csv``
         (in-memory lists and CSV paths).
@@ -363,10 +370,10 @@ def run_adsorption_bo(
         ``config.write_vasp_inputs=True``.
     write_settings:
         When True (default), write the full ``run_metadata.json`` (config, campaign
-        fields, and timing/counts). ``write_metadata`` is an alias for the same file.
+        fields, and timing/counts). Prefer this over ``write_metadata``.
     write_metadata:
-        Alias for enabling the same ``run_metadata.json`` write. Either flag True
-        writes the full file; set both False to suppress it.
+        Deprecated alias for the same ``run_metadata.json`` write. Emits
+        :class:`DeprecationWarning` when True; set both False to suppress the file.
     skip_existing:
         Skip molecules already listed in ``adsorption_energies_detailed.csv``
         (in-memory lists and CSV paths).
@@ -520,10 +527,10 @@ def run_saturation(
         ``config.write_vasp_inputs=True``.
     write_settings:
         When True (default), write the full ``run_metadata.json`` (config, campaign
-        fields, and timing/counts when available). ``write_metadata`` is an alias.
+        fields, and timing/counts when available). Prefer this over ``write_metadata``.
     write_metadata:
-        Alias for enabling the same ``run_metadata.json`` write. Either flag True
-        writes the full file; set both False to suppress it.
+        Deprecated alias for the same ``run_metadata.json`` write. Emits
+        :class:`DeprecationWarning` when True; set both False to suppress the file.
     skip_existing:
         Skip molecules already listed in ``saturation_summary.csv``.
     run_metadata_out:
@@ -580,10 +587,10 @@ def run_saturation_bo(
         ``config.write_vasp_inputs=True``.
     write_settings:
         When True (default), write the full ``run_metadata.json`` (config, campaign
-        fields, and timing/counts when available). ``write_metadata`` is an alias.
+        fields, and timing/counts when available). Prefer this over ``write_metadata``.
     write_metadata:
-        Alias for enabling the same ``run_metadata.json`` write. Either flag True
-        writes the full file; set both False to suppress it.
+        Deprecated alias for the same ``run_metadata.json`` write. Emits
+        :class:`DeprecationWarning` when True; set both False to suppress the file.
     skip_existing:
         Skip molecules already listed in ``saturation_summary.csv``.
     run_metadata_out:

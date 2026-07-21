@@ -4,6 +4,10 @@
 Runs without GPU (``slab_relaxation_mode="none"``, ``device="cpu"``) and prints a
 reason histogram so operators can tune distance / strict / VDW knobs before a
 full ML campaign.
+
+Typical tokens: ``too_close``, ``too_far``, ``vdw_overlap``,
+``adsorbate_overlap``, ``contact_distance_too_large``,
+``insufficient_contact_atoms``, ``distance_check_failed``, ``no_sites_found``.
 """
 
 from __future__ import annotations

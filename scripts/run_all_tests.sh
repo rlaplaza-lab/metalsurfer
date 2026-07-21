@@ -67,7 +67,10 @@ _run_phase "2_dependency_behavior" \
   "$PYTHON" -m pytest tests/test_dependency_behavior.py --tb=short -v
 
 _run_phase "3_cpu_integration" \
-  "$PYTHON" -m pytest tests/test_integration_seeded.py --tb=short -v
+  "$PYTHON" -m pytest \
+    tests/test_integration_seeded.py \
+    tests/test_integration_physics.py \
+    --tb=short -v
 
 _run_phase "4_mlip_unit" \
   "$PYTHON" -m pytest tests/test_optimization.py -m mlip --tb=short -v

@@ -41,9 +41,10 @@ from metalsurfer import (
     AdsorptionConfig,
     BindingCampaignResult,
     configure_logging,
+    resolved_bo_eval_budget,
+    results_dir_for,
     run_adsorption_bo,
 )
-from metalsurfer.config import resolved_bo_eval_budget
 from metalsurfer.models import ScreeningResult
 from metalsurfer.surface_prep import SlabContainer, prepare_substrate
 
@@ -52,7 +53,7 @@ from metalsurfer.surface_prep import SlabContainer, prepare_substrate
 CAMPHOR_SMILES = "[H][C@]12CC[C@](C)(C(=O)C1)C2(C)C"
 MOLECULE_NAME = "camphor"
 SURFACE_TYPE = "camphor_cu111"
-RESULTS_DIR = f"results_{SURFACE_TYPE}"
+RESULTS_DIR = str(results_dir_for(SURFACE_TYPE))
 # Acquisition batches after the initial random batch (~300+ MLIP evals on a 15GB GPU).
 BO_TOTAL_BUDGET = 25
 
@@ -224,28 +225,20 @@ def prepare_campaign_slab(
 
 
 def build_config(*, device: str) -> AdsorptionConfig:
+    # GPU memory padding for ~15 GB cards; BO budget is acquisition batches.
     return AdsorptionConfig(
         material_type="slab",
-        model_name="uma-s-1p2",
         seed=42,
         num_conformers=1,
-        num_placements=None,
         autobatcher_max_memory_padding=0.8,
         autobatcher_max_memory_scaler=500,
         autobatcher_max_atoms_to_try=5000,
         device=device,
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        stage1_steps=50,
         stage2_steps=500,
         placement_z_range=(4.0, 7.0),
         placement_z_scale_by_covalent_radius=False,
-        adaptive_parallel_fraction=True,
         slab_relaxation_mode="none",
         top_layer_tolerance=PAPER_TOP_LAYER_TOLERANCE,
-        bo_enabled=True,
-        bo_initial_random=None,
-        bo_batch_size=None,
         bo_total_budget=BO_TOTAL_BUDGET,
         bo_acquisition="ei",
     )

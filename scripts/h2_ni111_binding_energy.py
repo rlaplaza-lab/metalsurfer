@@ -4,6 +4,9 @@
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e . && pip install -e ".[mlip]"
 
+``skip_topology_check=True`` enables dissociative hollow-site pair placements and
+skips post-relax connectivity checks (E_ads still vs isolated molecular E(H₂)).
+
 Rerun note: ``skip_existing=True`` by default skips molecules already in
 ``adsorption_energies_detailed.csv``; delete ``results_h2_ni111/`` or pass
 ``skip_existing=False`` to force a fresh run.
@@ -32,7 +35,7 @@ def main() -> int:
         autobatcher_max_memory_scaler=500,
         autobatcher_max_atoms_to_try=5000,
         device="cuda",
-        skip_topology_check=True,
+        skip_topology_check=True,  # H2→2H hollow pairs + skip connectivity checks
         skip_desorption_check=False,
         stage1_steps=50,
         stage2_steps=500,

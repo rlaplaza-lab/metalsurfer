@@ -4,11 +4,12 @@
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e ".[mlip]"
 
-``skip_topology_check=True`` enables dissociative hollow-site pair placements on the
-periodic slab and allows relaxed structures where the H–H bond has broken. E_ads is
-always reported vs isolated molecular E(H₂). On Ru(0001) with UMA, many minima
-relax to molecular H₂ physisorption (~0.75 Å H–H); dissociated minima are also
-allowed when the model finds them.
+``skip_topology_check=True`` (1) enables dissociative hollow-site pair placements on
+the periodic slab and (2) disables post-relaxation connectivity / decomposition
+checks so structures where the H–H bond has broken are retained. E_ads is always
+reported vs isolated molecular E(H₂). On Ru(0001) with UMA, many minima relax to
+molecular H₂ physisorption (~0.75 Å H–H); dissociated minima are also allowed when
+the model finds them.
 
 Uses a modest placement count because many dissociative trials desorb on this surface.
 Initial z heights use default ``placement_z_range`` scale factors on
@@ -30,6 +31,7 @@ from metalsurfer import (
     BindingCampaignResult,
     ScreeningResult,
     configure_logging,
+    results_dir_for,
     run_adsorption,
 )
 from metalsurfer.surface_prep import prepare_substrate
@@ -82,21 +84,19 @@ def main() -> int:
     configure_logging(default_level="INFO")
 
     surface_type = "h2_ru_slab"
-    results_dir = f"results_{surface_type}"
+    results_dir = str(results_dir_for(surface_type))
 
+    # skip_topology_check=True: hollow-pair placements + skip connectivity checks.
+    # Modest placement count + GPU memory padding for small demo GPUs (~15 GB).
     config = AdsorptionConfig(
         material_type="slab",
-        model_name="uma-s-1p2",
         seed=42,
         num_conformers=1,
         num_placements=10,
         autobatcher_max_memory_padding=0.8,
         autobatcher_max_memory_scaler=500,
         autobatcher_max_atoms_to_try=5000,
-        device="cuda",
         skip_topology_check=True,
-        skip_desorption_check=False,
-        stage1_steps=50,
         stage2_steps=500,
     )
 

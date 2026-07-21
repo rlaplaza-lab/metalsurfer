@@ -1,18 +1,79 @@
-"""Deterministic integration tests: same seed → same output."""
+"""Deterministic integration tests: same seed → same output.
+
+Also assert physical placement invariants (clearance, height, intramolecular
+geometry) so reproducibility is not the only gate that must pass.
+"""
 
 import numpy as np
 import pytest
+from ase.data import atomic_numbers, covalent_radii
 
+from metalsurfer._numeric_defaults import (
+    MIN_CONTACT_RATIO_DEFAULT,
+    MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
+)
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.conformers import create_conformers_from_smiles
 from metalsurfer.placement import (
+    check_initial_placement_distance,
     enumerate_placement_specs,
     generate_placement_from_spec,
 )
+from metalsurfer.placement.geometry import calculate_min_distance
 
 from .conftest import make_slab
 
 pytestmark = pytest.mark.integration
+
+
+def _assert_physical_placement(adsorbate, slab, *, material_type: str = "slab") -> None:
+    """Shared physics gates for successful initial placements."""
+    ok, min_d, reason = check_initial_placement_distance(
+        adsorbate,
+        slab,
+        min_distance=MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
+        min_contact_ratio=MIN_CONTACT_RATIO_DEFAULT,
+        material_type=material_type,
+    )
+    assert ok, f"placement fails distance gate: min_d={min_d:.3f} reason={reason}"
+    assert min_d >= MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM * 0.5
+
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = list(slab.get_pbc())
+    # Adsorbate must sit above the top-layer atoms (slab normal ≈ +z here).
+    ads_z = adsorbate.get_positions()[:, 2]
+    slab_z = slab.get_positions()[:, 2]
+    assert float(np.min(ads_z)) > float(np.max(slab_z)) - 0.25, (
+        f"adsorbate not above surface: min_ads_z={ads_z.min():.3f}, "
+        f"max_slab_z={slab_z.max():.3f}"
+    )
+
+    # No unphysical intramolecular clashes (pairs closer than 0.55 * covalent sum).
+    pos = adsorbate.get_positions()
+    syms = adsorbate.get_chemical_symbols()
+    for i in range(len(pos)):
+        for j in range(i + 1, len(pos)):
+            dvec = pos[j] - pos[i]
+            if np.any(pbc):
+                dvec = dvec - np.round(dvec @ np.linalg.inv(cell)) @ cell
+            d = float(np.linalg.norm(dvec))
+            r_sum = float(covalent_radii[atomic_numbers[syms[i]]]) + float(
+                covalent_radii[atomic_numbers[syms[j]]]
+            )
+            assert d > 0.55 * r_sum, (
+                f"intramolecular clash {syms[i]}-{syms[j]} at {d:.3f} Å "
+                f"(0.55×covalent sum={0.55 * r_sum:.3f})"
+            )
+
+    # Explicit MIC adsorbate–slab clearance via the public distance helper.
+    mic_min = calculate_min_distance(
+        adsorbate.get_positions(),
+        slab.get_positions(),
+        cell=cell,
+        use_pbc=True,
+        pbc=[True, True, False] if material_type == "slab" else list(pbc),
+    )
+    assert mic_min == pytest.approx(min_d, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -92,13 +153,15 @@ class TestPlacementDeterminism:
 
 
 class TestEndToEndDeterminism:
-    def _pipeline(self, seed):
-        """Run conformer generation + placement + basic validation loop."""
+    def _pipeline(self, seed, *, assert_physics: bool = False):
+        """Run conformer generation + placement (+ optional physics gates)."""
         slab = make_slab()
         cfg = AdsorptionConfig(seed=seed, num_conformers=5, num_placements=30)
         result = create_conformers_from_smiles("CCO", config=cfg)
         assert result is not None
         conformers, energies = result
+        assert len(energies) == len(conformers)
+        assert all(np.isfinite(e) for e in energies)
 
         specs = enumerate_placement_specs(
             conformers, slab, cfg, "CCO", n_desired=cfg.num_placements
@@ -110,6 +173,11 @@ class TestEndToEndDeterminism:
             )
             if placed is not None:
                 adsorbate, descriptor = placed
+                if assert_physics:
+                    _assert_physical_placement(adsorbate, slab)
+                    assert descriptor.z_abs is not None
+                    assert descriptor.z_abs > float(np.max(slab.get_positions()[:, 2]))
+                    assert 0.0 <= float(descriptor.z_fraction) <= 1.0
                 placement_results.append(
                     (
                         spec.placement_index,
@@ -127,6 +195,13 @@ class TestEndToEndDeterminism:
             assert pid1 == pid2
             assert n1 == n2
             assert np.allclose(pos1, pos2, atol=1e-8)
+
+    def test_pipeline_placements_are_physically_plausible(self):
+        """Successful CCO placements clear the surface and keep intramolecular bonds."""
+        results = self._pipeline(seed=42, assert_physics=True)
+        assert len(results) >= 5, f"Expected >=5 valid placements, got {len(results)}"
+        # Ethanol has 9 atoms; every successful placement must preserve stoichiometry.
+        assert all(n == 9 for _, _, n in results)
 
     def test_pipeline_seed_variation(self):
         r1 = self._pipeline(seed=7)
@@ -158,7 +233,8 @@ class TestEndToEndDeterminism:
             )
             if placed is None:
                 continue
-            _, desc = placed
+            adsorbate, desc = placed
+            _assert_physical_placement(adsorbate, slab)
             n_ok += 1
             for field in (
                 "quat_w",
@@ -174,4 +250,9 @@ class TestEndToEndDeterminism:
                     f"{field} is None for spec {spec.placement_index}"
                 )
                 assert np.isfinite(val), f"{field}={val} is not finite"
+            # Unit quaternion (up to floating-point noise).
+            qnorm = np.sqrt(
+                desc.quat_w**2 + desc.quat_x**2 + desc.quat_y**2 + desc.quat_z**2
+            )
+            assert qnorm == pytest.approx(1.0, abs=1e-5)
         assert n_ok >= 5, f"Expected >=5 valid placements, got {n_ok}"

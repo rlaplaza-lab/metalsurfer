@@ -241,6 +241,12 @@ def test_prepare_substrate_slab_input_skips_bulk_load(monkeypatch):
 
 
 def test_finalize_substrate_applies_pbc_and_constraints():
+    from ase.constraints import FixAtoms
+
+    from metalsurfer.optimization import (
+        frozen_indices_from_constraints,
+        identify_top_layer_indices,
+    )
     from metalsurfer.surface_prep import apply_material_pbc, finalize_substrate
 
     base = make_slab()
@@ -256,5 +262,13 @@ def test_finalize_substrate_applies_pbc_and_constraints():
 
     assert list(finalized.atoms.get_pbc()) == [True, True, False]
     assert finalized.atoms.constraints
+    assert any(isinstance(c, FixAtoms) for c in finalized.atoms.constraints)
+
+    frozen = set(frozen_indices_from_constraints(finalized.atoms))
+    top = set(identify_top_layer_indices(finalized.atoms, tolerance=0.5))
+    assert frozen, "relax_top_layer=True must still freeze subsurface atoms"
+    assert frozen.isdisjoint(top), "top-layer atoms must remain free to relax"
+    assert frozen | top == set(range(len(finalized.atoms)))
+
     apply_material_pbc(base, "porous")
     assert list(base.get_pbc()) == [True, True, True]

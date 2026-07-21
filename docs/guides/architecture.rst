@@ -13,10 +13,11 @@ Public API Layers
 
 The package re-exports a curated set of symbols through lazy imports in
 ``metalsurfer.__init__`` so heavy modules are loaded only when first
-accessed.  The four layers below are the **public** surface; see
-``CORE_SYSTEM_EXPLANATION.md`` for an additional internal workflow layer
-(``_bootstrap_screening_run``, ``run_saturation_screening``, etc.) used by
-campaigns but not re-exported from the top-level package.
+accessed.  The four layers below are the **public** surface. An additional
+internal workflow layer (``_bootstrap_screening_run``, etc.) is documented in
+``CORE_SYSTEM_EXPLANATION.md``. Mid-level helpers such as
+:func:`~metalsurfer.run_saturation_screening` are also re-exported for custom
+research loops.
 
 **1. Run-Mode APIs** — canonical high-level entry points:
 
@@ -41,6 +42,7 @@ inside custom research loops:
 
 - ``process_molecule(...)``
 - ``process_molecule_bayesian(...)``
+- :func:`~metalsurfer.run_saturation_screening`
 - ``calculate_reference_energies(...)``
 - ``load_molecules(...)``
 
@@ -81,7 +83,8 @@ Across all run modes, the physical pipeline follows seven stages:
    slabs; parallel-z π-stacking floors for open surfaces only; no porous
    dissociative).  Homonuclear diatomics on slabs or nanoparticles can use a
    **dissociative** branch when ``skip_topology_check=True`` (two surface
-   sites, site-specific outward normals).  Initial placement validation has
+   sites, site-specific outward normals; also skips post-relax connectivity
+   checks).  Initial placement validation has
    three layers: covalent distance, optional VDW overlap rejection, and
    optional contact-quality checks (``strict_initial_placement``).  See
    ``placement/sites.py`` and the `Site detection` / material-aware placement
@@ -202,9 +205,9 @@ The default output root is ``results_{surface_type}/``.  Common artifacts:
   step results.
 - ``saturation_placements_detailed.csv`` and ``step_{NNN}_placements/`` when
   ``saturation_save_all_placements=True`` (default).
-- ``run_metadata.json`` — config snapshot plus timing/count metadata. Campaign
-  flags ``write_settings`` and ``write_metadata`` both control this same file;
-  either True writes the full snapshot (set both False to suppress).
+- ``run_metadata.json`` — config snapshot plus timing/count metadata. Prefer
+  campaign flag ``write_settings=True`` (default); ``write_metadata`` is a
+  deprecated alias for the same file (set both False to suppress).
 - ``ml_dataset.csv``, ``ml_dataset_metadata.json`` — ML placement records from
   :class:`~metalsurfer.DatasetLogger` during binding campaigns and saturation.
 - ``xyz_structures/`` — optimized structures in XYZ format.

@@ -14,6 +14,8 @@ import spglib
 import spglib.error as _spglib_error_module
 from ase import Atoms
 
+from ._numeric_defaults import DEFAULT_SYMMETRY_TOLERANCE
+
 # Opt into the new spglib error handling (raises SpglibError instead of
 # returning None) and suppress the DeprecationWarning it would emit otherwise.
 _spglib_error_module.OLD_ERROR_HANDLING = False
@@ -31,7 +33,7 @@ class SymmetryAnalyzer:
     def __init__(
         self,
         atoms: Atoms,
-        symmetry_tolerance: float = 0.1,
+        symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE,
         mode: SymmetryMode = "auto",
         *,
         angle_tolerance: float | None = None,
