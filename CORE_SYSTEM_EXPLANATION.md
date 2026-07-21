@@ -495,7 +495,10 @@ Under saturation, substrate contact uses `exclude_slab_atoms` while prior adsorb
 - `seed`, `fail_on_missing_reference`, `fail_on_conformer_failure`, `debug_write_initial_placements`
 - `write_vasp_inputs`, `vasp_*` parameters
 
-The `multi_molecule_saturation` flag is a metadata hint; actual behavior is determined by which API is called and how many molecules are loaded.
+When ``multi_molecule_saturation=True`` and multiple molecules are loaded,
+saturation follows the competitive multi-molecule path (shared surface pool).
+With a single molecule, or with the flag left ``False``, each SMILES runs as an
+independent sequential saturation.
 
 ## Output model and persistence
 

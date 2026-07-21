@@ -291,7 +291,7 @@ BO knobs live on :class:`~metalsurfer.AdsorptionConfig`; see
 :doc:`../guides/configuration` (budget math and recipes) and
 :doc:`../api/config` (full field reference — Bayesian optimization).
 Remember ``bo_total_budget`` is acquisition batches; after sizes resolve, call
-:func:`~metalsurfer.resolved_bo_eval_budget` for the total evaluation count.
+:func:`~metalsurfer.config.resolved_bo_eval_budget` for the total evaluation count.
 
 Sequential Saturation
 ---------------------

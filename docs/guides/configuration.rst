@@ -75,7 +75,7 @@ Common mistakes
 - Raising ``fmax`` alone does not relax the post-relax force filter — also raise
   ``max_force_convergence`` if you intend softer acceptance.
 - ``bo_total_budget`` is acquisition **batches**, not total evaluations. Use
-  :func:`~metalsurfer.resolved_bo_eval_budget` once batch sizes are resolved (or
+  :func:`~metalsurfer.config.resolved_bo_eval_budget` once batch sizes are resolved (or
   see the budget section below).
 - Prefer ``write_settings=True`` (default) for ``run_metadata.json``;
   ``write_metadata`` is a deprecated alias for the same file.
@@ -144,7 +144,7 @@ Total BO placement evaluations (after autotune resolves batch sizes):
 ``bo_total_budget`` counts **acquisition batches** after the initial random batch,
 not total evaluations. Example: target ~300 evals with autotuned batch size 16 and
 initial random 16 → set ``bo_total_budget = (300 - 16) // 16`` (integer division).
-After sizes are resolved, :func:`~metalsurfer.resolved_bo_eval_budget` returns the
+After sizes are resolved, :func:`~metalsurfer.config.resolved_bo_eval_budget` returns the
 total evaluation count.
 
 Use :func:`~metalsurfer.run_adsorption_bo` or :func:`~metalsurfer.run_saturation_bo`;

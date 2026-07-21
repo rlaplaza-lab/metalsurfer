@@ -226,10 +226,12 @@ explicitly:
 - ``"none"`` — keep published or campaign-produced coordinates (MOF CIF,
   paper DFT slabs, graphene-oxide models, saturation intermediate XYZ). Used by
   ``examples/co2_mof_binding_energy.py``, ``examples/camphor_cu111_binding_energy.py``,
+  ``examples/ethene_pt12_binding_energy.py`` (hand-built Pt₁₂ cluster — unrestricted
+  ionic prep can distort small nanoparticles),
   ``scripts/furanics_go*_binding_energy.py``, and
   ``scripts/vanillin_on_h_saturated_ni111.py`` for the loaded slab.
-- ``"ionic_only"`` (default) — equilibrate hand-built clusters or
-  unequilibrated ``Atoms`` before campaigns (e.g. ``examples/ethene_pt12_binding_energy.py``).
+- ``"ionic_only"`` (default) — equilibrate unequilibrated bulk-derived slabs or
+  other hand-built ``Atoms`` before campaigns when the geometry should relax.
 
 ``relax_top_layer=True`` on ``prepare_substrate`` controls which substrate atoms
 move **during adsorption**, not prep equilibration (e.g. top GO layer or
@@ -248,7 +250,7 @@ preamble in ``workflow/shared.py``) re-validates the slab using the maximum
 pairwise distance across conformers (the **molecule diameter**) plus
 :attr:`~metalsurfer.AdsorptionConfig.min_pbc_image_separation` (default 8 Å).
 If the in-plane cell is too small, screening raises
-:class:`~metalsurfer.exceptions.GeometryValidationError` with the minimum
+:exc:`~metalsurfer.GeometryValidationError` with the minimum
 ``(nx, ny)`` repeat factors needed.
 
 For periodic slabs and porous frameworks, expand the substrate **during prep**

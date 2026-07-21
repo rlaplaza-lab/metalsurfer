@@ -70,7 +70,9 @@ Material and substrate
    Minimum in-plane separation between periodic images. Used by
    :func:`~metalsurfer.surface_prep.auto_resize_substrate_for_molecule` and
    :func:`~metalsurfer.surface_prep.resize_substrate_for_molecule` during prep,
-   not during campaign validation.
+   and by :func:`~metalsurfer.surface_prep.validate_substrate` during campaign
+   molecule preamble checks (nanoparticle vacuum margins and in-plane supercell
+   sizing once conformer diameters are known).
 
 ``vacuum_box_size``
    **Type:** ``float`` · **Default:** ``20.0`` (Å)
@@ -238,7 +240,7 @@ Placement generation
    **Type:** ``Callable[[PlacementSpec], bool] | None`` · **Default:** ``None``
 
    Optional callback to reject placement specifications before materialization.
-   Receives a :class:`~metalsurfer.PlacementSpec`; return ``False`` to skip.
+   Receives a :class:`~metalsurfer.models.PlacementSpec`; return ``False`` to skip.
 
 ``placement_retry_enabled``
    **Type:** ``bool`` · **Default:** ``True``
@@ -516,7 +518,7 @@ non-BO entry points only emits a warning and has no effect.
    Number of **acquisition batches** after the initial random batch—not total
    evaluations. Total BO evaluations (once autotune resolves) is
    ``bo_initial_random + bo_total_budget * bo_batch_size`` (see
-   :func:`~metalsurfer.resolved_bo_eval_budget`).
+   :func:`~metalsurfer.config.resolved_bo_eval_budget`).
 
 ``bo_ucb_kappa``
    **Type:** ``float`` · **Default:** ``1.96``

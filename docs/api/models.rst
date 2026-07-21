@@ -67,3 +67,27 @@ Timing
 .. autoclass:: metalsurfer.TimingInfo
    :members:
    :undoc-members:
+
+Placement specifications
+------------------------
+
+.. autoclass:: metalsurfer.models.PlacementSpec
+   :members:
+   :undoc-members:
+
+Exceptions
+----------
+
+.. autoexception:: metalsurfer.GeometryValidationError
+
+.. autoexception:: metalsurfer.DependencyMissingError
+
+.. autoexception:: metalsurfer.OptimizationError
+
+ML helpers
+----------
+
+.. autoclass:: metalsurfer.ml.DatasetLogger
+   :members:
+   :undoc-members:
+

@@ -64,7 +64,7 @@ autodoc_default_options = {
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
-    "ase": ("https://ase-lib.org/", None),
+    "ase": ("https://docs.ase-lib.org/", None),
 }
 
 # -- Theme ---------------------------------------------------------------------

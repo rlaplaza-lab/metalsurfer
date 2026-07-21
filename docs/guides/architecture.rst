@@ -209,7 +209,7 @@ The default output root is ``results_{surface_type}/``.  Common artifacts:
   campaign flag ``write_settings=True`` (default); ``write_metadata`` is a
   deprecated alias for the same file (set both False to suppress).
 - ``ml_dataset.csv``, ``ml_dataset_metadata.json`` — ML placement records from
-  :class:`~metalsurfer.DatasetLogger` during binding campaigns and saturation.
+  :class:`~metalsurfer.ml.DatasetLogger` during binding campaigns and saturation.
 - ``xyz_structures/`` — optimized structures in XYZ format.
 - ``vasp_inputs/`` — optional POSCAR/INCAR/KPOINTS bundles for DFT follow-up
   (written only when ``write_vasp_inputs=True``).
