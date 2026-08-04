@@ -8,9 +8,9 @@ from ase import Atoms
 
 from .. import optimization
 from ..config import (
-    AdsorptionConfig,
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
+    AdsorptionConfig,
 )
 from ..placement._material import material_aware_pbc
 from ._surfaces import (

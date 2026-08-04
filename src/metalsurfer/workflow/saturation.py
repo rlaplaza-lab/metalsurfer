@@ -30,8 +30,7 @@ from ..placement.generators import (
     distribute_placement_budget,
     estimate_molecule_complexity,
 )
-from ..surface_prep import apply_material_pbc
-from ..surface_prep import SlabContainer
+from ..surface_prep import SlabContainer, apply_material_pbc
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import BOTransferInfo, process_molecule_bayesian
 from .core import process_molecule
@@ -361,10 +360,7 @@ def _saturation_should_stop(
     if best_energy >= 0:
         logger.info("%s: slab saturated at step %d (E_ads >= 0)", log_prefix, step)
         return True
-    if (
-        config.saturation_max_steps is not None
-        and step >= config.saturation_max_steps
-    ):
+    if config.saturation_max_steps is not None and step >= config.saturation_max_steps:
         logger.info(
             "%s: reached max steps (%d)",
             log_prefix,
@@ -508,9 +504,7 @@ def _run_single_molecule_saturation(
             payload=(mol_results, transfer_info),
         )
 
-    def record_step(
-        step: int, n_on_slab: int, outcome: _StepScreenOutcome
-    ) -> None:
+    def record_step(step: int, n_on_slab: int, outcome: _StepScreenOutcome) -> None:
         mol_results, transfer_info = outcome.payload
         steps.append(
             SaturationStepResult(
@@ -675,9 +669,7 @@ def _run_multi_molecule_saturation(
                 active_smiles[mol],
                 full_slab=slab.atoms,
             )
-        budget_inputs = {
-            m: c for m, c in step_complexities.items() if c > 0.0
-        }
+        budget_inputs = {m: c for m, c in step_complexities.items() if c > 0.0}
         if not budget_inputs:
             logger.warning(
                 "Step %d: no molecules with available sites under coverage; stopping",
@@ -785,9 +777,7 @@ def _run_multi_molecule_saturation(
             ),
         )
 
-    def record_step(
-        step: int, n_on_slab: int, outcome: _StepScreenOutcome
-    ) -> None:
+    def record_step(step: int, n_on_slab: int, outcome: _StepScreenOutcome) -> None:
         (
             winning_molecule,
             per_molecule_results,
@@ -901,9 +891,7 @@ def run_saturation_screening(
         base_slab = slab.atoms.copy()
         results_dir = f"results_{surface_type}"
         ds_logger = DatasetLogger(results_dir, config=config, surface_id=surface_type)
-        process_fn = (
-            process_molecule_bayesian if bo_enabled else process_molecule
-        )
+        process_fn = process_molecule_bayesian if bo_enabled else process_molecule
 
         if config.multi_molecule_saturation and len(molecule_names) > 1:
             logger.info(

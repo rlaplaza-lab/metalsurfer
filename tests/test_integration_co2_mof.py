@@ -8,7 +8,6 @@ physically plausible physisorption window rather than demanding strict negativit
 import os
 
 import numpy as np
-import pytest
 from ase.io import read
 
 from metalsurfer.config import AdsorptionConfig

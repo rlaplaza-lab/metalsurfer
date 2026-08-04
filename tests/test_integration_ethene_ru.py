@@ -1,7 +1,6 @@
 """Integration test: ethene on Ru(0001) – negative E_ads, reasonable geometries."""
 
 import numpy as np
-import pytest
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.optimization import setup_single_model

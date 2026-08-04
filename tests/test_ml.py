@@ -256,9 +256,7 @@ class TestPlacementRecord:
             min_contact_ratio=0.7,
             top_layer_tolerance=0.4,
         )
-        r2 = PlacementRecord.from_flat_dict(
-            r.to_flat_dict(include_provenance=True)
-        )
+        r2 = PlacementRecord.from_flat_dict(r.to_flat_dict(include_provenance=True))
         assert r2.context.device == "cpu"
         assert r2.context.placement_z_range == (1.8, 2.9)
         assert r2.context.placement_z_scale_by_covalent_radius is False

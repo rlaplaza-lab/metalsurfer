@@ -12,9 +12,9 @@ from ase.optimize import BFGS, FIRE, LBFGS
 
 from .._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
 from ..config import (
-    AdsorptionConfig,
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
+    AdsorptionConfig,
 )
 from ..exceptions import (
     DependencyMissingError,
@@ -29,6 +29,7 @@ from .freeze import (
     frozen_indices_from_constraints,
     top_layer_indices_by_height,
 )
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_SLAB_TOP_VACUUM_ANG = 15.0

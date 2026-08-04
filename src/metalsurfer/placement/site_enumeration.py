@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import cast
 
 import numpy as np
 from ase import Atoms
@@ -80,15 +79,15 @@ def _merge_dedup_site_arrays(
     combined = np.vstack([vertices, new_vertices])
     combined_dists = np.concatenate([nn_dists, new_dists])
     combined_sources = source_hints + list(new_sources)
-    keep = _deduplicate_points(
-        combined, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
-    )
+    keep = _deduplicate_points(combined, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc)
     kept_idx = np.nonzero(keep)[0]
     return combined[keep], combined_dists[keep], [combined_sources[i] for i in kept_idx]
+
 
 DEFAULT_SYMMETRY_TOLERANCE = _DEFAULT_SYMMETRY_TOLERANCE
 DEFAULT_SITE_EQUIVALENCE_TOLERANCE = _DEFAULT_SITE_EQUIVALENCE_TOLERANCE
 DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE = _DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
+
 
 def get_unified_sites(
     atoms: Atoms,
@@ -477,7 +476,7 @@ def _env_fingerprint(site: Site) -> tuple:
     """Return the local-environment fingerprint of *site*."""
     fp = site.env_fingerprint
     if fp is not None:
-        return cast(tuple, fp)
+        return tuple(fp)
     return (str(site.site_type),)
 
 

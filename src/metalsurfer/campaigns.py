@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import warnings
+from collections.abc import Callable
 from typing import Any, Literal, cast
 
 from ase import Atoms
@@ -476,7 +477,7 @@ def run_saturation_bo(
     )
 
 
-_RUNNERS = {
+_RUNNERS: dict[str, Callable[..., Any]] = {
     "adsorption": run_adsorption,
     "adsorption_bo": run_adsorption_bo,
     "saturation": run_saturation,

@@ -12,8 +12,8 @@ import pandas as pd
 from ase import Atoms
 from scipy.spatial.distance import pdist
 
-from .._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
 from .._logging import log_context, warn_once
+from .._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
 from ..conformers import create_conformers_from_smiles
 from ..exceptions import OptimizationError
@@ -33,7 +33,6 @@ from ..optimization import (
     optimize_adsorbate_slab_batched,
     setup_single_model,
 )
-from ..placement import generators as placement_generators
 from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
 from ..placement.generators import (
     enumerate_placement_specs,
@@ -42,13 +41,13 @@ from ..placement.generators import (
 from ..placement.geometry import calculate_min_distance
 from ..placement.site_context import SiteContext, resolve_site_context_for_sampling
 from ..placement.site_enumeration import _compute_site_z_base
+from ..surface_prep import SlabContainer, accept_substrate_for_api
+from ..surface_prep._surfaces import validate_substrate_conformer_sizing
 from ..surface_prep.freeze import (
     check_frozen_substrate_displacement,
     frozen_indices_from_constraints,
     log_substrate_freeze_policy,
 )
-from ..surface_prep import SlabContainer, accept_substrate_for_api
-from ..surface_prep._surfaces import validate_substrate_conformer_sizing
 
 logger = logging.getLogger(__name__)
 
@@ -608,7 +607,7 @@ def resolve_workload_config(
     )
 
     updates: dict[str, Any] = {}
-    bo_updates: dict[str, int] = {}
+    bo_updates: dict[str, Any] = {}
     if config.num_placements is None:
         updates["num_placements"] = capacity
     if bo_enabled:
@@ -816,9 +815,7 @@ def _prepare_molecule_screening(
     if E_mol is None:
         logger.error("Missing reference energy for %s", molecule_name)
         failure_summary["stage"] = "reference"
-        failure_summary["reason"] = (
-            f"missing reference energy for {molecule_name}"
-        )
+        failure_summary["reason"] = f"missing reference energy for {molecule_name}"
         return None
 
     t0 = time.perf_counter()

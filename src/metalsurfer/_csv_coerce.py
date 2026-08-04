@@ -62,6 +62,4 @@ def parse_fragment_positions(
         raise TypeError(
             f"fragment_positions must be a sequence or JSON list, got {type(value)!r}"
         )
-    return tuple(
-        (float(p[0]), float(p[1]), float(p[2])) for p in value  # type: ignore[index]
-    )
+    return tuple((float(p[0]), float(p[1]), float(p[2])) for p in value)

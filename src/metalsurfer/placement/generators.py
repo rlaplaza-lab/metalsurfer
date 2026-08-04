@@ -19,10 +19,15 @@ from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
 from . import geometry as geom
 from . import policy
+from ._material import material_aware_pbc
 from .dissociative import (
     _generate_dissociative_placement_from_spec,
     _get_dissociative_site_pairs,
     _is_dissociable_diatomic,
+)
+from .occupancy import (
+    available_site_indices,
+    existing_adsorbate_positions,
 )
 from .orientation import (
     _estimate_parallel_fraction,
@@ -34,16 +39,11 @@ from .pose import (
     _pose_from_spec,
     generate_placement_from_pose,
 )
-from .occupancy import (
-    available_site_indices,
-    existing_adsorbate_positions,
-)
 from .site_context import (
     SiteContext,
     _get_unique_sites_for_specs,
 )
 from .site_types import Site
-from ._material import material_aware_pbc
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +83,7 @@ def _spec_grid_info(
 ) -> _SpecGridInfo:
     """Compute the spec-enumeration inputs once for both enumerate and estimate."""
     is_dissociative = (
-        (
-            config.enable_dissociative_placement
-            or config.skip_topology_check
-        )
+        (config.enable_dissociative_placement or config.skip_topology_check)
         and config.material_type in ("slab", "nanoparticle")
         and _is_dissociable_diatomic(conformers[0])
     )

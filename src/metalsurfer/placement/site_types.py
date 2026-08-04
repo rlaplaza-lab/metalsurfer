@@ -109,11 +109,14 @@ def _coerce_slab_indices(raw_indices: object) -> tuple[int, ...]:
 
 def site_from_dict(data: Mapping[str, object]) -> Site:
     """Boundary adapter: legacy dict → Site (tests / CSV loaders)."""
+    xyz: np.ndarray
+    normal: np.ndarray
     if "xyz" in data:
         xyz = np.asarray(data["xyz"], dtype=float).reshape(3)
     else:
         xy = np.asarray(data.get("xy", (0.0, 0.0)), dtype=float).reshape(2)
-        z = float(data.get("z", 0.0))  # type: ignore[arg-type]
+        z_raw = data.get("z", 0.0)
+        z = float(z_raw) if isinstance(z_raw, (int, float, str)) else 0.0
         xyz = np.array([xy[0], xy[1], z], dtype=float)
     if "normal" in data:
         normal = np.asarray(data["normal"], dtype=float).reshape(3)
@@ -130,6 +133,7 @@ def site_from_dict(data: Mapping[str, object]) -> Site:
     equiv_tuple: tuple | None = None
     if equiv is not None:
         equiv_tuple = tuple(equiv) if isinstance(equiv, (list, tuple)) else None
+    nn_distance = float(nn) if isinstance(nn, (int, float, str)) else None
     return Site(
         xyz=xyz,
         normal=normal,
@@ -138,8 +142,10 @@ def site_from_dict(data: Mapping[str, object]) -> Site:
         material_type=str(data.get("material_type", "slab")),
         site_source=str(data.get("site_source", "voronoi")),
         env_fingerprint=env,
-        nn_distance=float(nn) if nn is not None else None,
-        hollow_order=int(ho) if ho is not None else None,
-        symmetry_multiplicity=int(mult) if mult is not None else None,
+        nn_distance=nn_distance,
+        hollow_order=int(ho) if isinstance(ho, (int, float, str)) else None,
+        symmetry_multiplicity=int(mult)
+        if isinstance(mult, (int, float, str))
+        else None,
         symmetry_equivalent_sites=equiv_tuple,
     )

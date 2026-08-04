@@ -86,7 +86,9 @@ def _result_for_step(
                 atoms=current_slab.atoms.copy(),
                 slab_size=len(current_slab.atoms),
                 distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=placement_id),
+                placement_descriptor=make_placement_descriptor(
+                    placement_id=placement_id
+                ),
             )
         ]
     )
@@ -818,17 +820,19 @@ def test_multi_mol_saturation_step_result_structure(monkeypatch):
     def _fake_process_molecule(smi, mol, current_slab, *_args, **kwargs):
         call_count[0] += 1
         e_ads = -0.3 if call_count[0] <= 2 else 0.2
-        return MoleculeScreenOutcome(results=[
-            make_screening_result(
-                molecule=mol,
-                placement_id=0,
-                energy_adsorption=e_ads,
-                atoms=current_slab.atoms.copy(),
-                slab_size=len(current_slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=0),
-            )
-        ])
+        return MoleculeScreenOutcome(
+            results=[
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=0,
+                    energy_adsorption=e_ads,
+                    atoms=current_slab.atoms.copy(),
+                    slab_size=len(current_slab.atoms),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=0),
+                )
+            ]
+        )
 
     _patch_multi_mol_saturation_mocks(
         monkeypatch,
@@ -917,17 +921,19 @@ def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
         sat_step = (step_count[0] + 1) // 2
         sat_step = min(sat_step, 3)
         e_ads = energies[sat_step][mol]
-        return MoleculeScreenOutcome(results=[
-            make_screening_result(
-                molecule=mol,
-                placement_id=0,
-                energy_adsorption=e_ads,
-                atoms=current_slab.atoms.copy(),
-                slab_size=len(current_slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=0),
-            )
-        ])
+        return MoleculeScreenOutcome(
+            results=[
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=0,
+                    energy_adsorption=e_ads,
+                    atoms=current_slab.atoms.copy(),
+                    slab_size=len(current_slab.atoms),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=0),
+                )
+            ]
+        )
 
     _patch_multi_mol_saturation_mocks(
         monkeypatch,
@@ -1004,7 +1010,9 @@ def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypat
                     atoms=current_slab.atoms.copy(),
                     slab_size=len(current_slab.atoms),
                     distance=2.5,
-                    placement_descriptor=make_placement_descriptor(placement_id=step_idx),
+                    placement_descriptor=make_placement_descriptor(
+                        placement_id=step_idx
+                    ),
                 )
             ],
             bo_memory=memory,
@@ -1434,37 +1442,41 @@ def test_saturation_step2_selects_intact_not_rearranged(monkeypatch):
     def _fake_process_molecule(_smi, mol, current_slab, *_args, **_kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
-            return MoleculeScreenOutcome(results=[
+            return MoleculeScreenOutcome(
+                results=[
+                    make_screening_result(
+                        molecule=mol,
+                        placement_id=0,
+                        energy_adsorption=-0.5,
+                        atoms=slab_plus_one.copy(),
+                        slab_size=len(bare),
+                        distance=2.5,
+                        placement_descriptor=make_placement_descriptor(placement_id=0),
+                    )
+                ]
+            )
+        return MoleculeScreenOutcome(
+            results=[
                 make_screening_result(
                     molecule=mol,
                     placement_id=0,
-                    energy_adsorption=-0.5,
-                    atoms=slab_plus_one.copy(),
-                    slab_size=len(bare),
+                    energy_adsorption=-2.0,
+                    atoms=coupled.copy(),
+                    slab_size=len(slab.atoms),
                     distance=2.5,
                     placement_descriptor=make_placement_descriptor(placement_id=0),
-                )
-            ])
-        return MoleculeScreenOutcome(results=[
-            make_screening_result(
-                molecule=mol,
-                placement_id=0,
-                energy_adsorption=-2.0,
-                atoms=coupled.copy(),
-                slab_size=len(slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=0),
-            ),
-            make_screening_result(
-                molecule=mol,
-                placement_id=1,
-                energy_adsorption=-1.0,
-                atoms=separated.copy(),
-                slab_size=len(slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=1),
-            ),
-        ])
+                ),
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=1,
+                    energy_adsorption=-1.0,
+                    atoms=separated.copy(),
+                    slab_size=len(slab.atoms),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=1),
+                ),
+            ]
+        )
 
     _patch_single_mol_saturation_mocks(
         monkeypatch,
@@ -1510,39 +1522,45 @@ def test_multi_mol_saturation_topology_guard_step2(monkeypatch):
         step_idx[0] += 1
         if step_idx[0] <= 2:
             if step_idx[0] == 1 and mol == "water":
-                return MoleculeScreenOutcome(results=[
+                return MoleculeScreenOutcome(
+                    results=[
+                        make_screening_result(
+                            molecule=mol,
+                            placement_id=0,
+                            energy_adsorption=-0.4,
+                            atoms=slab_plus_one.copy(),
+                            slab_size=len(bare),
+                            distance=2.5,
+                            placement_descriptor=make_placement_descriptor(
+                                placement_id=0
+                            ),
+                        )
+                    ]
+                )
+            return _result_for_step(mol, current_slab, -0.4)
+        if mol == "water":
+            return MoleculeScreenOutcome(
+                results=[
                     make_screening_result(
                         molecule=mol,
                         placement_id=0,
-                        energy_adsorption=-0.4,
-                        atoms=slab_plus_one.copy(),
-                        slab_size=len(bare),
+                        energy_adsorption=-2.0,
+                        atoms=coupled.copy(),
+                        slab_size=len(slab.atoms),
                         distance=2.5,
                         placement_descriptor=make_placement_descriptor(placement_id=0),
-                    )
-                ])
-            return _result_for_step(mol, current_slab, -0.4)
-        if mol == "water":
-            return MoleculeScreenOutcome(results=[
-                make_screening_result(
-                    molecule=mol,
-                    placement_id=0,
-                    energy_adsorption=-2.0,
-                    atoms=coupled.copy(),
-                    slab_size=len(slab.atoms),
-                    distance=2.5,
-                    placement_descriptor=make_placement_descriptor(placement_id=0),
-                ),
-                make_screening_result(
-                    molecule=mol,
-                    placement_id=1,
-                    energy_adsorption=-1.0,
-                    atoms=separated.copy(),
-                    slab_size=len(slab.atoms),
-                    distance=2.5,
-                    placement_descriptor=make_placement_descriptor(placement_id=1),
-                ),
-            ])
+                    ),
+                    make_screening_result(
+                        molecule=mol,
+                        placement_id=1,
+                        energy_adsorption=-1.0,
+                        atoms=separated.copy(),
+                        slab_size=len(slab.atoms),
+                        distance=2.5,
+                        placement_descriptor=make_placement_descriptor(placement_id=1),
+                    ),
+                ]
+            )
         return _result_for_step(mol, current_slab, -0.2)
 
     _patch_multi_mol_saturation_mocks(
@@ -1581,28 +1599,32 @@ def test_saturation_topology_guard_all_filtered_stops(monkeypatch, caplog):
     def _fake_process_molecule(_smi, mol, current_slab, *_args, **_kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
-            return MoleculeScreenOutcome(results=[
+            return MoleculeScreenOutcome(
+                results=[
+                    make_screening_result(
+                        molecule=mol,
+                        placement_id=0,
+                        energy_adsorption=-0.5,
+                        atoms=slab_plus_one.copy(),
+                        slab_size=len(bare),
+                        distance=2.5,
+                        placement_descriptor=make_placement_descriptor(placement_id=0),
+                    )
+                ]
+            )
+        return MoleculeScreenOutcome(
+            results=[
                 make_screening_result(
                     molecule=mol,
                     placement_id=0,
-                    energy_adsorption=-0.5,
-                    atoms=slab_plus_one.copy(),
-                    slab_size=len(bare),
+                    energy_adsorption=-2.0,
+                    atoms=coupled.copy(),
+                    slab_size=len(slab.atoms),
                     distance=2.5,
                     placement_descriptor=make_placement_descriptor(placement_id=0),
-                )
-            ])
-        return MoleculeScreenOutcome(results=[
-            make_screening_result(
-                molecule=mol,
-                placement_id=0,
-                energy_adsorption=-2.0,
-                atoms=coupled.copy(),
-                slab_size=len(slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=0),
-            ),
-        ])
+                ),
+            ]
+        )
 
     _patch_single_mol_saturation_mocks(
         monkeypatch,

@@ -918,8 +918,9 @@ def test_deposit_adatoms_height_follows_tilted_slab_normal():
         # Cartesian target differs from the normal-aware height.
         z_max = float(np.max(base_pos[:, 2]))
         cartesian_target_z = z_max + height
-        assert abs(p[2] - cartesian_target_z) > 0.05 or abs(
-            float(np.dot(n_hat, [0, 0, 1])) - 1.0
-        ) < 1e-6
+        assert (
+            abs(p[2] - cartesian_target_z) > 0.05
+            or abs(float(np.dot(n_hat, [0, 0, 1])) - 1.0) < 1e-6
+        )
         # Displacement along normal from projection onto top plane ≈ height
         assert abs((h - top_h) - height) < 1.5 or h > top_h

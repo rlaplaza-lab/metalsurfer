@@ -51,15 +51,15 @@ from metalsurfer.placement.policy import (
     max_batch_placement_specs,
 )
 from metalsurfer.placement.pose import (
-    _PlacementContext,
     _finalize_placement,
+    _PlacementContext,
     _resolve_surface_ref,
     _validate_posed_adsorbate,
 )
 from metalsurfer.placement.site_classify import _compute_local_normal
 from metalsurfer.placement.site_context import (
-    SiteContext,
     _SITE_CONTEXT_CACHE,
+    SiteContext,
     _get_unique_sites_for_specs,
     clear_site_caches,
 )
@@ -87,7 +87,6 @@ from .conftest import (
     make_slab,
     make_water,
     place_adsorbate_above_slab,
-    place_molecule_on_slab,
     water_conformers,
 )
 
@@ -209,9 +208,7 @@ def _assert_replay_matches(
 
 
 def test_classify_molecule_shape_linear_flat_round():
-    shape_h2, _, _ = _classify_molecule_shape(
-        make_h2().get_positions()
-    )
+    shape_h2, _, _ = _classify_molecule_shape(make_h2().get_positions())
     assert shape_h2 == "linear"
 
     shape_flat, _, _ = _classify_molecule_shape(
@@ -830,7 +827,6 @@ def test_get_unified_sites_upgrades_pbc_edge_atop_on_production_path():
     slab = make_slab()
     positions = np.asarray(slab.get_positions(), dtype=float)
     cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = np.asarray(slab.get_pbc(), dtype=bool)
     top_idx = np.nonzero(top_layer_mask_by_normal(positions, cell, 0.5))[0]
     top_2d = _project_to_slab_plane(positions[top_idx], cell)
     tri = Delaunay(top_2d)
@@ -872,8 +868,9 @@ def test_get_unified_sites_upgrades_pbc_edge_atop_on_production_path():
         "expected get_unified_sites to upgrade near-boundary primary-atop → bridge"
     )
     # Interior hollow count must stay intact (upgrade-only, not global reclassify).
-    assert sum(1 for s in sites if s.site_type == "hollow") == (
-        _GOLDEN_SLAB_SITE_TYPE_MULTISET["hollow"]
+    assert (
+        sum(1 for s in sites if s.site_type == "hollow")
+        == (_GOLDEN_SLAB_SITE_TYPE_MULTISET["hollow"])
     )
 
 
@@ -2121,7 +2118,9 @@ def test_hollow_site_pairs_found_for_slab():
     for p in pairs:
         assert len(p.xyz1) == 3
         assert len(p.xyz2) == 3
-        _, dists = find_mic((np.asarray(p.xyz1) - np.asarray(p.xyz2)).reshape(1, 3), cell)
+        _, dists = find_mic(
+            (np.asarray(p.xyz1) - np.asarray(p.xyz2)).reshape(1, 3), cell
+        )
         sep = float(dists[0])
         assert (
             _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM
@@ -2217,7 +2216,9 @@ def test_topology_bridges_keep_distinct_pbc_midpoints():
         if src == "topology_bridge"
     ]
     # Interior midpoints around (2,1)/(1,2) and near-boundary midpoints near x/y≈0.
-    assert (2.0, 1.0) in bridge_xy or any(abs(x - 2.0) < 0.05 and abs(y - 1.0) < 0.05 for x, y in bridge_xy)
+    assert (2.0, 1.0) in bridge_xy or any(
+        abs(x - 2.0) < 0.05 and abs(y - 1.0) < 0.05 for x, y in bridge_xy
+    )
     assert any(abs(x) < 0.15 or abs(x - 4.0) < 0.15 for x, _y in bridge_xy) or any(
         abs(y) < 0.15 or abs(y - 4.0) < 0.15 for _x, y in bridge_xy
     )
@@ -2636,9 +2637,7 @@ def test_site_classification_auto_matches_delaunay_on_slab():
     del_sites = get_unified_sites(
         slab, material_type="slab", site_classification_method="delaunay"
     )
-    assert [s.site_type for s in auto_sites] == [
-        s.site_type for s in del_sites
-    ]
+    assert [s.site_type for s in auto_sites] == [s.site_type for s in del_sites]
 
 
 # ---------------------------------------------------------------------------
@@ -2989,9 +2988,7 @@ def test_extract_features_depends_only_on_absolute_geometry():
 def test_dissociative_descriptor_replay_round_trip():
     """fragment_positions must replay dissociative geometry exactly."""
     slab = make_slab()
-    config = AdsorptionConfig(
-        material_type="slab", enable_dissociative_placement=True
-    )
+    config = AdsorptionConfig(material_type="slab", enable_dissociative_placement=True)
     h2 = make_h2()
     spec = PlacementSpec(
         conformer_index=0,
@@ -3021,9 +3018,7 @@ def test_dissociative_descriptor_replay_round_trip():
 
 def test_dissociative_descriptor_without_fragment_positions_fails():
     slab = make_slab()
-    config = AdsorptionConfig(
-        material_type="slab", enable_dissociative_placement=True
-    )
+    config = AdsorptionConfig(material_type="slab", enable_dissociative_placement=True)
     h2 = make_h2()
     descriptor = make_placement_descriptor(
         orientation_type="dissociative",
@@ -3145,7 +3140,9 @@ def test_molecular_ml_features_are_injective():
             continue
         _, descriptor = generated
         assert descriptor.fragment_positions is None
-        record = PlacementRecord.from_descriptor(descriptor, molecule="water", smiles="O")
+        record = PlacementRecord.from_descriptor(
+            descriptor, molecule="water", smiles="O"
+        )
         feats = extract_features(record)
         assert list(feats.keys()) == FEATURE_NAMES
         assert "fragment_positions" not in feats
@@ -3174,7 +3171,9 @@ def test_dissociative_com_features_injective_and_record_replay():
             continue
         placed, descriptor = result
         assert descriptor.fragment_positions is not None
-        record = PlacementRecord.from_descriptor(descriptor, molecule="H2", smiles="[H][H]")
+        record = PlacementRecord.from_descriptor(
+            descriptor, molecule="H2", smiles="[H][H]"
+        )
         assert record.fragment_positions == descriptor.fragment_positions
         feats = extract_features(record)
         assert list(feats.keys()) == FEATURE_NAMES
@@ -3186,9 +3185,7 @@ def test_dissociative_com_features_injective_and_record_replay():
         assert restored.fragment_positions == record.fragment_positions
         replay_desc = restored.to_placement_descriptor()
         assert replay_desc.fragment_positions == descriptor.fragment_positions
-        replayed = generate_placement_from_descriptor(
-            replay_desc, [h2], slab, config
-        )
+        replayed = generate_placement_from_descriptor(replay_desc, [h2], slab, config)
         assert replayed is not None
         assert np.allclose(replayed.get_positions(), placed.get_positions(), atol=1e-8)
 
@@ -3492,8 +3489,7 @@ def test_clearance_aware_height_raises_protruding_pose():
     assert lift > 0.2, f"expected nontrivial protrusion lift, got {lift:.3f}"
     # Closest atom along the normal should sit near surface_ref + z_offset.
     atom_heights = (
-        ctx.rotated_pos
-        + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs])
+        ctx.rotated_pos + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs])
     ) @ n_hat
     closest_h = float(np.min(atom_heights))
     z_offset = ctx.z_base_lo + spec.z_fraction * (ctx.z_base_hi - ctx.z_base_lo)
@@ -3628,9 +3624,7 @@ def test_site_context_cache_key_float_packing_no_collision():
     )
 
     # Naive str concat collides for these triples; structured packing must not.
-    assert (
-        f"{1.5}{20.0}{0.5}" == f"{1.52}{0.0}{0.5}"
-    )
+    assert f"{1.5}{20.0}{0.5}" == f"{1.52}{0.0}{0.5}"
     packed_a = (
         _pack_optional_float(1.5)
         + _pack_optional_float(20.0)
@@ -3878,14 +3872,16 @@ def test_retry_blocks_repeated_bad_site_index(monkeypatch):
         placement_retry_max_attempts=3,
         seed=0,
     )
-    _combined, _ids, _desc, _fails, _attempts = core_mod._generate_placements_with_retry(
-        [make_water()],
-        make_slab(),
-        config,
-        "O",
-        None,
-        make_slab(),
-        calculator=None,
+    _combined, _ids, _desc, _fails, _attempts = (
+        core_mod._generate_placements_with_retry(
+            [make_water()],
+            make_slab(),
+            config,
+            "O",
+            None,
+            make_slab(),
+            calculator=None,
+        )
     )
     assert _RETRY_BLOCK_SITE_AFTER >= 2
     # After enough failures on site 3, later attempts should exclude it.

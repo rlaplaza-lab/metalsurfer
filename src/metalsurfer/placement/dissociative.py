@@ -15,6 +15,7 @@ from scipy.spatial import KDTree
 
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
+from . import geometry as geom
 from ._constants import (
     _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM,
     _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM,
@@ -23,7 +24,6 @@ from ._constants import (
     _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE,
     _VECTOR_NORM_EPS,
 )
-from . import geometry as geom
 from ._material import material_aware_pbc
 from .occupancy import existing_adsorbate_positions, filter_sites_by_occupancy
 from .orientation import _site_type_z_offset
@@ -37,7 +37,11 @@ from .site_coords import (
     _slab_plane_projectors,
     top_layer_mask_by_normal,
 )
-from .site_enumeration import _compute_site_z_base, get_hollow_sites_for_adatoms, get_unified_sites
+from .site_enumeration import (
+    _compute_site_z_base,
+    get_hollow_sites_for_adatoms,
+    get_unified_sites,
+)
 from .site_types import Site
 
 
@@ -103,7 +107,9 @@ def _dissociative_pair_cache_key(
         + _pack_optional_float_local(config.top_layer_tolerance)
         + config.material_type.encode()
     )
-    return hashlib.sha256(pos_bytes + cell_bytes + numbers_bytes + cfg_bytes).hexdigest()
+    return hashlib.sha256(
+        pos_bytes + cell_bytes + numbers_bytes + cfg_bytes
+    ).hexdigest()
 
 
 def _pack_optional_float_local(value: float | None) -> bytes:
@@ -220,9 +226,7 @@ def _compute_dissociative_site_pairs(
 
     # Hollow helper already deduplicated; still dedup raw/context catalogs.
     used_hollow_helper = (
-        raw_sites is None
-        and site_context is None
-        and config.material_type == "slab"
+        raw_sites is None and site_context is None and config.material_type == "slab"
     )
     site_xyz = np.array(
         [np.asarray(s.xyz, dtype=float) for s in site_entries], dtype=float

@@ -148,9 +148,7 @@ def _split_flat_bo_kwargs(
 def _merge_flat_into_bo(base: BOConfig, flat: Mapping[str, Any]) -> BOConfig:
     bo_kwargs, transfer_kwargs = _split_flat_bo_kwargs(flat)
     transfer = (
-        replace(base.transfer, **transfer_kwargs)
-        if transfer_kwargs
-        else base.transfer
+        replace(base.transfer, **transfer_kwargs) if transfer_kwargs else base.transfer
     )
     return replace(base, transfer=transfer, **bo_kwargs)
 
@@ -162,9 +160,7 @@ def fold_bo_config(config_data: dict[str, Any]) -> BOConfig:
     """
     nested_raw = config_data.pop("bo", None)
     flat = {
-        key: config_data.pop(key)
-        for key in list(config_data)
-        if key.startswith("bo_")
+        key: config_data.pop(key) for key in list(config_data) if key.startswith("bo_")
     }
     bo = _bo_config_from_mapping(nested_raw)
     if flat:
@@ -218,16 +214,14 @@ def _check_unit_interval(
     name: str, value: float, *, exclusive_upper: bool = False
 ) -> None:
     upper_ok = value < 1.0 if exclusive_upper else value <= 1.0
-    if not isfinite(value) or not 0.0 <= value or not upper_ok:
+    if not isfinite(value) or not value >= 0.0 or not upper_ok:
         bound = "[0.0, 1.0)" if exclusive_upper else "[0.0, 1.0]"
         raise ValueError(f"{name} must be finite in {bound}, got {value!r}")
 
 
 def _check_finite_nonneg(name: str, value: float) -> None:
     if not isfinite(value) or value < 0.0:
-        raise ValueError(
-            f"{name} must be finite and non-negative, got {value!r}"
-        )
+        raise ValueError(f"{name} must be finite and non-negative, got {value!r}")
 
 
 CONFORMER_SAMPLING_OPTIONS: tuple[str, ...] = ("boltzmann", "cycle", "mixed")
@@ -269,7 +263,6 @@ SLAB_RELAXATION_OPTIMIZER_OPTIONS: tuple[SLAB_RELAXATION_OPTIMIZER, ...] = (
     "bfgs",
     "fire",
 )
-
 
 
 def _validate_placement(root: "AdsorptionConfig") -> None:
@@ -407,9 +400,7 @@ def _validate_bo_transfer(transfer: BOTransferConfig) -> None:
         "bo_transfer_min_step_observations",
         transfer.min_step_observations,
     )
-    _check_positive_int(
-        "bo_transfer_trust_patience", transfer.trust_patience
-    )
+    _check_positive_int("bo_transfer_trust_patience", transfer.trust_patience)
     if transfer.prior_step_window is not None:
         _check_positive_int(
             "bo_transfer_prior_step_window",
@@ -446,18 +437,14 @@ def _validate_bo_transfer(transfer: BOTransferConfig) -> None:
 def _validate_bo(root: "AdsorptionConfig") -> None:
     bo = root.bo
     if not isinstance(bo, BOConfig):
-        raise ValueError(
-            f"bo must be a BOConfig, got {type(bo).__name__}"
-        )
+        raise ValueError(f"bo must be a BOConfig, got {type(bo).__name__}")
     if bo.initial_random is not None:
         _check_positive_int("bo_initial_random", bo.initial_random)
     if bo.batch_size is not None:
         _check_positive_int("bo_batch_size", bo.batch_size)
     _check_positive_int("bo_total_budget", bo.total_budget)
     if bo.ucb_kappa < 0:
-        raise ValueError(
-            f"bo_ucb_kappa must be non-negative, got {bo.ucb_kappa}"
-        )
+        raise ValueError(f"bo_ucb_kappa must be non-negative, got {bo.ucb_kappa}")
     _check_choice(
         "bo_initial_sampling",
         bo.initial_sampling,
@@ -473,10 +460,7 @@ def _validate_bo(root: "AdsorptionConfig") -> None:
         bo.surrogate,
         allowed=BO_SURROGATE_OPTIONS,
     )
-    if (
-        bo.transfer.enabled
-        and bo.surrogate not in BO_TRANSFER_CAPABLE_SURROGATES
-    ):
+    if bo.transfer.enabled and bo.surrogate not in BO_TRANSFER_CAPABLE_SURROGATES:
         raise ValueError(
             "bo_transfer_enabled requires a surrogate that supports "
             "per-sample weights "
@@ -485,13 +469,8 @@ def _validate_bo(root: "AdsorptionConfig") -> None:
             f"bo_surrogate={bo.surrogate!r}"
         )
     if bo.candidate_pool_size is not None:
-        _check_positive_int(
-            "bo_candidate_pool_size", bo.candidate_pool_size
-        )
-    if (
-        not isfinite(bo.failure_penalty_default)
-        or bo.failure_penalty_default < 0
-    ):
+        _check_positive_int("bo_candidate_pool_size", bo.candidate_pool_size)
+    if not isfinite(bo.failure_penalty_default) or bo.failure_penalty_default < 0:
         raise ValueError(
             "bo_failure_penalty_default must be a finite non-negative value, "
             f"got {bo.failure_penalty_default!r}"
@@ -514,8 +493,7 @@ def _validate_bo(root: "AdsorptionConfig") -> None:
             )
     if not isinstance(bo.transfer, BOTransferConfig):
         raise ValueError(
-            "bo.transfer must be a BOTransferConfig, "
-            f"got {type(bo.transfer).__name__}"
+            f"bo.transfer must be a BOTransferConfig, got {type(bo.transfer).__name__}"
         )
     _validate_bo_transfer(bo.transfer)
 
@@ -529,9 +507,7 @@ def _validate_io(root: "AdsorptionConfig") -> None:
         )
     for i, k in enumerate(root.vasp_kpoints):
         if not isinstance(k, int) or k <= 0:
-            raise ValueError(
-                f"vasp_kpoints[{i}] must be a positive integer, got {k!r}"
-            )
+            raise ValueError(f"vasp_kpoints[{i}] must be a positive integer, got {k!r}")
 
 
 def resolved_bo_eval_budget(config: "AdsorptionConfig") -> int:
@@ -744,7 +720,7 @@ def _adsorption_config_init_with_flat_bo(self, *args, **kwargs):
         for key in list(kwargs)
         if key.startswith("bo_") and key != "bo"
     }
-    bo = kwargs.get("bo", None)
+    bo = kwargs.get("bo")
     if isinstance(bo, Mapping) and not isinstance(bo, BOConfig):
         bo = _bo_config_from_mapping(bo)
         kwargs["bo"] = bo
@@ -754,4 +730,4 @@ def _adsorption_config_init_with_flat_bo(self, *args, **kwargs):
     _adsorption_config_init(self, *args, **kwargs)
 
 
-AdsorptionConfig.__init__ = _adsorption_config_init_with_flat_bo
+AdsorptionConfig.__init__ = _adsorption_config_init_with_flat_bo  # type: ignore[method-assign]

@@ -531,7 +531,9 @@ def _mol_slab_contact_arrays(
     material_type: str = "slab",
     exclude_slab_atoms: int | None = None,
     pairwise_distances: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray, list[str], list[str], np.ndarray, list[bool], np.ndarray]:
+) -> tuple[
+    np.ndarray, np.ndarray, list[str], list[str], np.ndarray, list[bool], np.ndarray
+]:
     """Slice mol/slab positions and symbols; return MIC pairwise distances."""
     mol_syms = list(molecule_atoms.get_chemical_symbols())
     mol_pos = molecule_atoms.get_positions()
@@ -810,6 +812,7 @@ def check_adsorbate_separation(
                 "cell with non-zero volume must be provided when pbc is requested; "
                 "pass slab/cluster/porous cell explicitly"
             )
+        assert pbc is not None
         cell_arr = np.asarray(cell, dtype=float)
         dmat = _mol_slab_pairwise_distances(
             new_pos, pre_adsorbed_positions, cell_arr, list(pbc)

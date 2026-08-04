@@ -46,6 +46,7 @@ dev = [
     "mypy",
     "pandas-stubs",
     "scipy-stubs",
+    "types-PyYAML",
 ]
 docs = [
     "sphinx>=7.0",
@@ -76,7 +77,12 @@ follow_imports = "skip"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["metalsurfer.placement.site_enumeration"]
+module = [
+    "metalsurfer.placement.site_enumeration",
+    "metalsurfer.placement.site_coords",
+    "metalsurfer.placement.site_voronoi",
+    "metalsurfer.placement.site_classify",
+]
 disable_error_code = ["misc", "has-type", "union-attr", "arg-type", "attr-defined"]
 
 [tool.ruff]

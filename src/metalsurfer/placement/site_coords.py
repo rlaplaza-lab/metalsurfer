@@ -24,6 +24,7 @@ from .geometry import _get_covalent_radius
 
 logger = logging.getLogger(__name__)
 
+
 def _cart_to_frac(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
     """Convert Cartesian row-vectors to fractional coordinates for ASE cells."""
     arr = np.asarray(points, dtype=float)
@@ -398,4 +399,3 @@ def derive_pore_threshold(symbols: list[str]) -> float:
     return max(
         _PORE_THRESHOLD_MIN_ANGSTROM, _PORE_THRESHOLD_COVALENT_SCALE * mean_radius
     )
-

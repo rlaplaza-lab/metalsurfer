@@ -20,6 +20,7 @@ from .site_voronoi import (
     _hollow_coordination_order,
 )
 
+
 def _compute_local_normal(
     vertex: np.ndarray,
     positions: np.ndarray,
@@ -246,11 +247,13 @@ def _build_site_records(
             ):
                 frac = vertex_frac[i]
                 near_boundary = bool(
-                    (bool(pbc_arr[0])
-                     and (
-                         frac[0] < _PBC_DELAUNAY_BOUNDARY_FRAC
-                         or frac[0] > 1.0 - _PBC_DELAUNAY_BOUNDARY_FRAC
-                     ))
+                    (
+                        bool(pbc_arr[0])
+                        and (
+                            frac[0] < _PBC_DELAUNAY_BOUNDARY_FRAC
+                            or frac[0] > 1.0 - _PBC_DELAUNAY_BOUNDARY_FRAC
+                        )
+                    )
                     or (
                         bool(pbc_arr[1])
                         and (
@@ -319,4 +322,3 @@ def _build_site_records(
             )
         )
     return sites
-

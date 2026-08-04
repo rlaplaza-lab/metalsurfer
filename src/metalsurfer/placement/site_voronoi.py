@@ -709,4 +709,3 @@ def _delaunay_site_classification(
         best_indices = tuple(int(i) for i in idx3[:3])
 
     return best_type, best_indices
-

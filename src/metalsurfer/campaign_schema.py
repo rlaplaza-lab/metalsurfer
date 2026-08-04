@@ -10,9 +10,7 @@ import yaml
 
 from .config import AdsorptionConfig, fold_bo_config
 
-CampaignKind = Literal[
-    "adsorption", "adsorption_bo", "saturation", "saturation_bo"
-]
+CampaignKind = Literal["adsorption", "adsorption_bo", "saturation", "saturation_bo"]
 
 _SUBSTRATE_KEYS = frozenset(
     {

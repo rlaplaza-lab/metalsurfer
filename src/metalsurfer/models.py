@@ -131,9 +131,7 @@ def provenance_export_fields(values: Mapping[str, Any]) -> dict[str, Any]:
                 ",".join(str(i) for i in val) if val is not None else None
             )
         elif attr == "fragment_positions":
-            row[export_name] = (
-                json.dumps(list(val)) if val is not None else None
-            )
+            row[export_name] = json.dumps(list(val)) if val is not None else None
         else:
             row[export_name] = val
     return row
@@ -356,7 +354,9 @@ class ScreeningResult:
             row["xyz_path"] = xyz_path
         if poscar_path is not None:
             row["poscar_path"] = poscar_path
-        row.update(self.placement_descriptor.to_row(include_provenance=include_provenance))
+        row.update(
+            self.placement_descriptor.to_row(include_provenance=include_provenance)
+        )
         if context_row:
             row.update(dict(context_row))
         return row
@@ -414,7 +414,6 @@ def build_molecule_summary(
         best_placement_id=results[best_idx].placement_id,
         e_ads_best=results[best_idx].energy_adsorption,
     )
-
 
 
 @dataclass

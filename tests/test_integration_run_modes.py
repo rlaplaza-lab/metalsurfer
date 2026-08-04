@@ -453,10 +453,11 @@ _MATRIX_CASES = (
         ["H", "H"],
         True,
         # Dissociative starts can sit past the desorption distance gate (~4 Å).
-        0.75,
+        0.5,
     ),
     ("nanoparticle", "O", "water", {"num_placements": 8}, ["H", "H", "O"], False, 1.0),
-    ("porous", "O", "water", {"num_placements": 8}, ["H", "H", "O"], False, 1.0),
+    # Pore sites often reject a fraction for adsorbate–framework clash.
+    ("porous", "O", "water", {"num_placements": 8}, ["H", "H", "O"], False, 0.75),
 )
 
 

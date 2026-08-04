@@ -512,6 +512,7 @@ def _raise_fairchem_load_error(exc: Exception, model_name: str) -> NoReturn:
         raise RuntimeError(_fairchem_pytorch26_unpickling_message()) from exc
     raise RuntimeError(_fairchem_load_failure_message(error_msg, model_name)) from exc
 
+
 def setup_torchsim_model(model_name: str = "uma-s-1p2", device: str = "cuda"):
     """Create a TorchSim FairChemModel wrapper.
 

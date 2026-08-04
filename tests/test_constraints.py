@@ -204,9 +204,7 @@ def test_relax_top_layer_empty_freeze_falls_back_to_full_substrate(caplog):
     """If every atom would be free, apply_surface_constraints freezes all atoms."""
     slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
     # Tolerance larger than slab thickness → simple band frees everyone.
-    with caplog.at_level(
-        logging.WARNING, logger="metalsurfer.surface_prep._surfaces"
-    ):
+    with caplog.at_level(logging.WARNING, logger="metalsurfer.surface_prep._surfaces"):
         constrained = apply_surface_constraints(
             slab,
             relax_top_layer=True,

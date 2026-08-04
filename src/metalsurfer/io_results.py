@@ -258,9 +258,7 @@ def save_summary_results(
     ``initial_*`` placement provenance.
     """
     results_dir = results_dir_for(surface_type)
-    include_provenance = bool(
-        config.export_placement_provenance if config else False
-    )
+    include_provenance = bool(config.export_placement_provenance if config else False)
     context_row = (
         config_to_context_row(config, include_provenance=include_provenance)
         if config
@@ -388,9 +386,7 @@ def _write_final_saturated_slab(atoms: Atoms | None, mol_dir: str) -> None:
     final.write(f"{mol_dir}/final_saturated_slab.xyz", format="extxyz")
 
 
-def _ensure_saturation_mol_dirs(
-    mol_dir: str, vasp_mol_dir: str | None
-) -> None:
+def _ensure_saturation_mol_dirs(mol_dir: str, vasp_mol_dir: str | None) -> None:
     os.makedirs(mol_dir, exist_ok=True)
     if vasp_mol_dir is not None:
         os.makedirs(vasp_mol_dir, exist_ok=True)
@@ -500,7 +496,7 @@ def _persist_saturation_outputs(
 def _collect_saturation_csv_rows(
     steps: Sequence[SaturationStepResult | MultiMolSaturationStepResult],
     *,
-    results_dir: Path,
+    results_dir: str | Path,
     context_row: dict[str, Any],
     include_provenance: bool,
     save_all: bool,

@@ -494,7 +494,11 @@ class PlacementRecord:
             "quat_z": round(float(d.quat_z or 0.0), 6),
             "fragment_positions": (
                 tuple(
-                    (round(float(p[0]), 6), round(float(p[1]), 6), round(float(p[2]), 6))
+                    (
+                        round(float(p[0]), 6),
+                        round(float(p[1]), 6),
+                        round(float(p[2]), 6),
+                    )
                     for p in d.fragment_positions
                 )
                 if d.fragment_positions is not None

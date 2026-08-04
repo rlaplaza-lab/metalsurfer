@@ -17,7 +17,6 @@ from ..models import (
     ReferenceEnergies,
     ScreeningResult,
 )
-from ..placement import generators as placement_generators
 from ..placement._constants import _RETRY_BLOCK_SITE_AFTER
 from ..placement.generators import enumerate_placement_specs
 from ..placement.site_context import SiteContext
@@ -412,9 +411,7 @@ def process_molecule(
             logger.warning("No valid placements after validation")
             failure_summary["stage"] = "validation"
             failure_summary["n_initial_placements"] = len(all_combined)
-            failure_summary["n_optimized"] = (
-                len(all_combined) - n_optimization_failed
-            )
+            failure_summary["n_optimized"] = len(all_combined) - n_optimization_failed
             failure_summary["n_optimization_failed"] = n_optimization_failed
             failure_summary["validation_failures"] = validation_failures
             return MoleculeScreenOutcome(

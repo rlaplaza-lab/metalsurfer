@@ -17,8 +17,8 @@ from metalsurfer.models import (
 )
 
 from .conftest import (
-    make_placement_descriptor,
     make_h2,
+    make_placement_descriptor,
     make_slab,
     make_water,
     place_molecule_on_slab,

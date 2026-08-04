@@ -88,11 +88,15 @@ def test_run_adsorption_water_on_cu111(tmp_path, monkeypatch):
         )
         assert len(overlaps) == 0, f"hard VDW clash after relaxation: {overlaps[:3]}"
         # Intact water should sit above the Cu surface.
-        assert float(np.min(ads.get_positions()[:, 2])) > float(
-            np.max(slab_part.get_positions()[:, 2])
-        ) - 0.5
+        assert (
+            float(np.min(ads.get_positions()[:, 2]))
+            > float(np.max(slab_part.get_positions()[:, 2])) - 0.5
+        )
         assert_water_oh_hh_geometry(ads)
-        if r.placement_descriptor is not None and r.placement_descriptor.site_index is not None:
+        if (
+            r.placement_descriptor is not None
+            and r.placement_descriptor.site_index is not None
+        ):
             site_ids.add(int(r.placement_descriptor.site_index))
 
     if len(results) >= 2:

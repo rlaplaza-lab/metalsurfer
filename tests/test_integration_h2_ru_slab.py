@@ -1,7 +1,6 @@
 """Integration test: H2 on Ru(0001) – dissociative placements and geometries."""
 
 import numpy as np
-import pytest
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.optimization import setup_single_model

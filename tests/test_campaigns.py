@@ -9,17 +9,16 @@ from metalsurfer import (
 )
 from metalsurfer.campaigns import (
     run_adsorption,
-    run_adsorption_bo,
     run_saturation,
     run_saturation_bo,
 )
 from metalsurfer.config import AdsorptionConfig
-from metalsurfer.workflow.shared import MoleculeScreenOutcome
 from metalsurfer.models import (
     MultiMolSaturationRunResult,
     SaturationRunResult,
     SaturationStepResult,
 )
+from metalsurfer.workflow.shared import MoleculeScreenOutcome
 from tests.conftest import make_screening_result
 
 

@@ -9,6 +9,7 @@ from ase import Atoms
 
 from ..exceptions import DependencyMissingError
 from ..models import PlacementSpec
+from . import geometry as geom
 from ._constants import (
     _MOL_COVALENT_RADIUS_FALLBACK,
     _ORIENTATION_CLASSIFICATION_PARALLEL_DOT_THRESHOLD,
@@ -29,7 +30,6 @@ from ._constants import (
     _SITE_Z_OFFSET_FROM_SURFACE_RADIUS,
     _VECTOR_NORM_EPS,
 )
-from . import geometry as geom
 from .site_coords import _slab_normal
 from .site_enumeration import _get_site_surface_radii
 from .site_types import Site
@@ -169,7 +169,9 @@ def classify_adsorbate_orientation(
         surface_normal = np.asarray(normal, dtype=float)
         nrm = float(np.linalg.norm(surface_normal))
         surface_normal = (
-            surface_normal / nrm if nrm > _VECTOR_NORM_EPS else np.array([0.0, 0.0, 1.0])
+            surface_normal / nrm
+            if nrm > _VECTOR_NORM_EPS
+            else np.array([0.0, 0.0, 1.0])
         )
     if float(np.dot(plane_normal, surface_normal)) < 0:
         plane_normal = -plane_normal

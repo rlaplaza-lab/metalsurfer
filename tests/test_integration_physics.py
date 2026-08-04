@@ -20,10 +20,9 @@ from metalsurfer.placement import (
     generate_placement_from_spec_with_reason,
 )
 from metalsurfer.placement._constants import _SITE_Z_OFFSET_FROM_SURFACE_RADIUS
-from metalsurfer.placement.site_context import SiteContext
 from metalsurfer.placement.geometry import detect_vdw_overlaps
 from metalsurfer.placement.orientation import _site_type_z_offset
-from metalsurfer.placement.site_context import _get_unique_sites_for_specs
+from metalsurfer.placement.site_context import SiteContext, _get_unique_sites_for_specs
 from metalsurfer.placement.site_types import site_from_dict
 from metalsurfer.surface_prep import SlabContainer
 from metalsurfer.workflow import process_molecule

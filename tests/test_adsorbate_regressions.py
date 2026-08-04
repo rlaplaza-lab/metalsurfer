@@ -28,7 +28,9 @@ def test_deposit_adatoms_then_generate_placement_from_spec():
         num_placements=8,
         placement_z_range=(2.0, 3.0),
     )
-    result = create_conformers_from_smiles("O", config=AdsorptionConfig(num_conformers=1))
+    result = create_conformers_from_smiles(
+        "O", config=AdsorptionConfig(num_conformers=1)
+    )
     if result is None:
         pytest.skip("RDKit required")
     conformers, _ = result

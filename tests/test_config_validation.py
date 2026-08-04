@@ -611,7 +611,10 @@ def test_bo_eval_schedule():
             "bo_failure_penalty_overrides values",
         ),
         ({"bo_transfer_weight_cap": 1.0}, "bo_transfer_weight_cap"),
-        ({"bo_transfer_proximity_lengthscale": 0.0}, "bo_transfer_proximity_lengthscale"),
+        (
+            {"bo_transfer_proximity_lengthscale": 0.0},
+            "bo_transfer_proximity_lengthscale",
+        ),
         ({"bo_transfer_proximity_floor": 1.5}, "bo_transfer_proximity_floor"),
     ],
 )

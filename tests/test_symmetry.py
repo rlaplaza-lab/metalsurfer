@@ -250,9 +250,7 @@ def test_cube_nanoparticle_symmetry_reduces_redundant_sites_deterministically():
     assert len(sites1) < len(raw), "symmetry should collapse redundant envelope sites"
     assert any(int(s.symmetry_multiplicity or 0) > 1 for s in sites1)
     for s1, s2 in zip(sites1, sites2, strict=True):
-        np.testing.assert_allclose(
-            np.asarray(s1.xy), np.asarray(s2.xy), atol=1e-8
-        )
+        np.testing.assert_allclose(np.asarray(s1.xy), np.asarray(s2.xy), atol=1e-8)
         assert int(s1.symmetry_multiplicity or 0) == int(s2.symmetry_multiplicity or 0)
 
 

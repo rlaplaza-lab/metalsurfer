@@ -13,19 +13,19 @@ from ase import Atoms
 from .._utils import is_finite_number as _is_finite_number
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
+from . import geometry as geom
 from ._constants import (
     _DISTANCE_RECOVERY_HEIGHT_STEPS,
     _DISTANCE_RECOVERY_XY_ATTEMPTS,
     _PARALLEL_Z_MIN_HI_MARGIN,
     _VECTOR_NORM_EPS,
 )
-from . import geometry as geom
 from ._material import material_aware_pbc, material_type_for_placement
-from .orientation import orient_from_spec
 from .orientation import (
     _is_flat_aromatic,
     _parallel_z_adjustments,
     _site_type_z_offset,
+    orient_from_spec,
 )
 from .site_context import SiteContext, _get_unique_sites_for_specs
 from .site_coords import _slab_normal, _slab_plane_projectors
@@ -37,6 +37,7 @@ from .site_enumeration import (
 from .site_types import Site
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class _PlacementContext:
@@ -81,6 +82,7 @@ def _clearance_lift_along_normal(
         return 0.0
     return float(max(0.0, -float(np.min(heights))))
 
+
 def _pose_from_descriptor(descriptor: PlacementDescriptor) -> PlacementPose:
     return PlacementPose(
         conformer_index=descriptor.conformer_index,
@@ -103,6 +105,7 @@ def _pose_from_descriptor(descriptor: PlacementDescriptor) -> PlacementPose:
         azimuth_in_plane_deg=descriptor.azimuth_in_plane_deg,
     )
 
+
 def _resolve_surface_ref(
     site: Site | None,
     slab: Atoms,
@@ -123,11 +126,7 @@ def _resolve_surface_ref(
     if mat_type == "slab":
         cell = np.asarray(slab.get_cell(), dtype=float)
         positions = slab.get_positions()
-        if (
-            rough_slab_local_z
-            and site is not None
-            and not _is_top_layer_planar(slab)
-        ):
+        if rough_slab_local_z and site is not None and not _is_top_layer_planar(slab):
             return float(_height_along_slab_normal(site.xyz, cell)), True
         return float(np.max(_height_along_slab_normal(positions, cell))), False
     if site is not None:
@@ -231,21 +230,16 @@ def _pose_from_spec(
     if mat_type == "slab":
         cell = np.asarray(placement_reference_slab.get_cell(), dtype=float)
         n_hat = _slab_normal(cell)
-        lift = (
-            _clearance_lift_along_normal(rotated_pos, n_hat) if apply_lift else 0.0
-        )
+        lift = _clearance_lift_along_normal(rotated_pos, n_hat) if apply_lift else 0.0
         base = np.asarray(site.xyz, dtype=float)
         base_h = float(np.dot(base, n_hat))
         # Intended height of the closest atom; COM sits higher by *lift*.
         target_h = float(surface_ref + z_offset + lift)
         placement_center = base + (target_h - base_h) * n_hat
     else:
-        lift = (
-            _clearance_lift_along_normal(rotated_pos, normal) if apply_lift else 0.0
-        )
+        lift = _clearance_lift_along_normal(rotated_pos, normal) if apply_lift else 0.0
         placement_center = (
-            np.asarray(site.xyz, dtype=float)
-            + float(z_offset + lift) * normal
+            np.asarray(site.xyz, dtype=float) + float(z_offset + lift) * normal
         )
 
     pose = PlacementPose(
@@ -778,9 +772,7 @@ def _finalize_placement(
         shape=geom._classify_molecule_shape(ctx.canonical_pos)[0],
         slab_indices=slab_indices,
         site_source=site_source,
-        site_reference_frame=(
-            "local_site" if ctx.is_local_ref else "global_top_layer"
-        ),
+        site_reference_frame=("local_site" if ctx.is_local_ref else "global_top_layer"),
         site_xy_frac_a=float(xy_frac[0]),
         site_xy_frac_b=float(xy_frac[1]),
         placement_mode_resolved="sites" if ctx.use_sites else "no_sites",
