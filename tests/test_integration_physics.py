@@ -20,11 +20,11 @@ from metalsurfer.placement import (
     generate_placement_from_spec_with_reason,
 )
 from metalsurfer.placement._constants import _SITE_Z_OFFSET_FROM_SURFACE_RADIUS
-from metalsurfer.placement.generators import (
-    _get_unique_sites_for_specs,
-    _site_type_z_offset,
-)
+from metalsurfer.placement.site_context import SiteContext
 from metalsurfer.placement.geometry import detect_vdw_overlaps
+from metalsurfer.placement.orientation import _site_type_z_offset
+from metalsurfer.placement.site_context import _get_unique_sites_for_specs
+from metalsurfer.placement.site_types import site_from_dict
 from metalsurfer.surface_prep import SlabContainer
 from metalsurfer.workflow import process_molecule
 from metalsurfer.workflow.shared import (
@@ -37,22 +37,16 @@ from .conftest import (
     make_screening_result,
     make_slab,
     make_water,
+    mock_calculator,
     place_molecule_on_slab,
 )
 
 pytestmark = pytest.mark.integration
 
 
-def _mock_calculator(*, energy: float, n_atoms: int) -> MagicMock:
-    calc = MagicMock()
-    calc.get_potential_energy.return_value = float(energy)
-    calc.get_forces.return_value = np.zeros((n_atoms, 3), dtype=float)
-    return calc
-
-
 def _attach_calc(atoms: Atoms, energy: float) -> Atoms:
     atoms = atoms.copy()
-    atoms.calc = _mock_calculator(energy=energy, n_atoms=len(atoms))
+    atoms.calc = mock_calculator(energy=energy, n_atoms=len(atoms))
     return atoms
 
 
@@ -157,7 +151,7 @@ class TestValidationAndFilterPhysics:
         slab = make_slab()
         desorbed = place_molecule_on_slab(slab, make_water(), z_offset=10.0)
         config = AdsorptionConfig(binding_distance_threshold=4.0)
-        ok, reason = _validate_adsorption(desorbed, slab, config)
+        ok, reason, _ = _validate_adsorption(desorbed, slab, config)
         assert not ok
         assert "desorb" in reason.lower()
 
@@ -293,8 +287,6 @@ class TestAdsorptionEnergyPhysics:
 class TestProcessMoleculePhysicsSurvival:
     def test_only_physically_valid_geometries_survive(self, monkeypatch):
         """Stub optimizer returns good / overlapping / desorbed; only good survives."""
-        from metalsurfer.placement.generators import SiteContext
-
         slab_atoms = make_slab()
         slab = SlabContainer(slab_atoms)
         e_slab = -200.0
@@ -325,15 +317,19 @@ class TestProcessMoleculePhysicsSurvival:
         xy = slab_atoms.get_positions()[top_idx, :2]
         cheap_sites = SiteContext(
             sites=[
-                {
-                    "xy": xy,
-                    "xyz": np.array([xy[0], xy[1], top_z]),
-                    "z": top_z,
-                    "site_type": "atop",
-                    "material_type": "slab",
-                    "normal": np.array([0.0, 0.0, 1.0]),
-                    "slab_indices": (top_idx,),
-                }
+                site_from_dict(
+                    {
+                        "xy": xy,
+                        "xyz": np.array([xy[0], xy[1], top_z]),
+                        "z": top_z,
+                        "site_type": "atop",
+                        "material_type": "slab",
+                        "normal": np.array([0.0, 0.0, 1.0]),
+                        "slab_indices": (top_idx,),
+                        "site_source": "topology",
+                        "env_fingerprint": (),
+                    }
+                )
             ],
             use_sites=True,
             source="test",
@@ -369,18 +365,18 @@ class TestProcessMoleculePhysicsSurvival:
                     pos = a.get_positions().copy()
                     pos[slab_size:, 2] += 20.0
                     a.set_positions(pos)
-                a.calc = _mock_calculator(
+                a.calc = mock_calculator(
                     energy=e_slab + e_mol + e_ads_good, n_atoms=len(a)
                 )
                 out.append(a)
             return out
 
         monkeypatch.setattr(
-            "metalsurfer.workflow.core.optimize_adsorbate_slab_batched",
+            "metalsurfer.workflow.shared.optimize_adsorbate_slab_batched",
             _fake_optimize,
         )
         monkeypatch.setattr(
-            "metalsurfer.workflow.core.clear_autobatcher_cache",
+            "metalsurfer.workflow.shared.clear_autobatcher_cache",
             lambda *a, **k: None,
         )
         monkeypatch.setattr(
@@ -388,11 +384,11 @@ class TestProcessMoleculePhysicsSurvival:
             lambda *_a, **_k: ([make_water()], [e_mol]),
         )
         monkeypatch.setattr(
-            "metalsurfer.workflow.shared._resolve_site_context_for_sampling",
+            "metalsurfer.workflow.shared.resolve_site_context_for_sampling",
             lambda *_a, **_k: cheap_sites,
         )
 
-        results = process_molecule(
+        outcome = process_molecule(
             "O",
             "water",
             slab,
@@ -402,6 +398,7 @@ class TestProcessMoleculePhysicsSurvival:
             config=config,
             surface_type="physics_stub",
         )
+        results = outcome.results
 
         assert len(results) >= 1, (
             "Expected at least one physically valid survivor from stubbed pipeline"

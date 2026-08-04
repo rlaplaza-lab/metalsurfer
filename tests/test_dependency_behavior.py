@@ -86,13 +86,13 @@ class TestMissingRDKit:
 
     def test_is_flat_aromatic_with_en_raises_when_rdkit_missing(self):
         """_is_flat_aromatic_with_en must raise DependencyMissingError when RDKit missing."""
-        import metalsurfer.placement.generators as gmod
+        import metalsurfer.placement.orientation as omod
 
         with (
-            _reload_with_missing(gmod, {"rdkit": None, "rdkit.Chem": None}),
+            _reload_with_missing(omod, {"rdkit": None, "rdkit.Chem": None}),
             pytest.raises(DependencyMissingError, match="rdkit"),
         ):
-            gmod._is_flat_aromatic_with_en("c1ccccc1O")
+            omod._is_flat_aromatic_with_en("c1ccccc1O")
 
 
 # ---------------------------------------------------------------------------
@@ -205,15 +205,18 @@ class TestCreateSlabFromBulkImportErrors:
     reason="torch installed; optimization does top-level import, patching unreliable",
 )
 class TestMissingFAIRChem:
-    def test_setup_calculator_raises(self):
-        """setup_calculator must raise DependencyMissingError when fairchem is missing."""
+    def test_setup_single_model_raises(self):
+        """setup_single_model must raise DependencyMissingError when torch_sim is missing."""
         import metalsurfer.optimization as omod
 
         with (
-            _reload_with_missing(omod, {"fairchem": None, "fairchem.core": None}),
-            pytest.raises(DependencyMissingError, match="fairchem"),
+            _reload_with_missing(
+                omod,
+                {"torch_sim.models": None, "torch_sim.models.fairchem": None},
+            ),
+            pytest.raises(DependencyMissingError, match="torch-sim"),
         ):
-            omod.setup_calculator()
+            omod.setup_single_model()
 
     def test_setup_torchsim_model_raises(self):
         """setup_torchsim_model must raise DependencyMissingError when torch_sim.models is missing."""

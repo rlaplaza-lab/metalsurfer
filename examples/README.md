@@ -18,7 +18,8 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 Demos set explicit small `num_placements` for quick runs and pass
 `skip_existing=False` so re-runs always compute. Results directories use
 `results_dir_for(surface_type)` (`results_{surface_type}/`). For production
-screening, omit `num_placements` (and BO batch fields) to autotune to GPU
+screening, omit `num_placements` (and `bo.initial_random` / `bo.batch_size`) to
+autotune to GPU
 parallel capacity via TorchSim memory probing at workflow start. For saturation
 with Bayesian placement search, use `run_saturation_bo`.
 
@@ -60,5 +61,5 @@ set `bo_total_budget` as a total evaluation count should now set it to the numbe
 (e.g. `(300 - initial) // batch` to preserve a 300-eval budget with fixed batch sizes).
 After sizes resolve, `resolved_bo_eval_budget(config)` (also
 `from metalsurfer import resolved_bo_eval_budget`) returns the total evaluation
-count. Prefer `run_*_bo` entry points — do not toggle `bo_enabled` on the config
-yourself.
+count. Prefer `run_*_bo` (or YAML `campaign: adsorption_bo` /
+`saturation_bo`) for Bayesian mode; config only holds BO hyperparameters.

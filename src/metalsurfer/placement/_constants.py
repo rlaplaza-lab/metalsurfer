@@ -53,6 +53,9 @@ def _compute_mean_adsorbate_covalent_radius() -> float:
 # Minimum separation (Å) used to deduplicate Voronoi vertices as the same site.
 _VORONOI_DEDUP_TOLERANCE: float = 0.1
 _VORONOI_FRACTIONAL_CELL_MARGIN: float = 0.01
+# Fractional distance to a/b faces: near-boundary atops may be reclassified using
+# PBC-expanded Delaunay bridge candidates.
+_PBC_DELAUNAY_BOUNDARY_FRAC: float = 0.2
 _SURFACE_NORMAL_FALLBACK_NORM_EPS: float = 1e-8
 _DISTANCE_ZERO_EPS: float = 1e-12
 _DISTANCE_RATIO_FLOOR_EPS: float = 1e-8
@@ -78,11 +81,12 @@ _PORE_THRESHOLD_MIN_ANGSTROM: float = 2.0
 # max_distance = beta * mean(top-layer covalent radius)
 _VORONOI_PROBE_RADIUS_COVALENT_SCALE: float = 1.25
 _VORONOI_MAX_DISTANCE_COVALENT_SCALE: float = 4.25
-# Unified fallback: mean covalent radius of common adsorbate elements (C,H,O,N,S,P)
-# Computed dynamically from ASE data to avoid magic numbers.
+# Unified fallback: mean covalent radius of common adsorbate elements (C,H,O,N,S,P).
 _MEAN_COVALENT_RADIUS_FALLBACK: float = _compute_mean_adsorbate_covalent_radius()
-# Backwards compatibility alias
+# Alias kept for call sites that name the geometric role.
 _VORONOI_RADIUS_FALLBACK_ANGSTROM: float = _MEAN_COVALENT_RADIUS_FALLBACK
+_DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM: float = _MEAN_COVALENT_RADIUS_FALLBACK
+_MOL_COVALENT_RADIUS_FALLBACK: float = _MEAN_COVALENT_RADIUS_FALLBACK
 
 # Ridge-based geodesic enrichment
 # Subdivide Voronoi edges longer than _ENRICHMENT_SPACING_BETA × median(nn_distance).
@@ -93,22 +97,25 @@ _ENRICHMENT_MAX_SUBDIVISIONS: int = 6
 # Top-layer depth for slab filtering based on local covalent radii.
 _TOP_LAYER_DEPTH_COVALENT_SCALE: float = 1.8
 _TOP_LAYER_DEPTH_MIN_ANGSTROM: float = 0.5
+# Cap derived depth so FCC-like interlayers (~2.1 A) stay a single primary layer.
+_TOP_LAYER_DEPTH_MAX_ANGSTROM: float = 1.2
+# Include one terrace below the primary band only when this close to h_max.
+_STEP_TERRACE_MAX_GAP_ANGSTROM: float = 1.0
 
 # Delaunay reference classification.
 _DELAUNAY_BRIDGE_THRESHOLD_FRACTION: float = 0.3
-# Use unified fallback for Delaunay characteristic length
-_DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM: float = _MEAN_COVALENT_RADIUS_FALLBACK
 
 # ---------------------------------------------------------------------------
 # Placement geometry (z-offsets and parallel placement)
 # ---------------------------------------------------------------------------
 
 # Per-site-type z-offset as a fraction of mean local surface covalent radius.
-# Hollow / bridge sites sit slightly lower than atop; envelope is intermediate.
+# Hollow / pore / bridge sites sit slightly lower than atop; envelope is intermediate.
 _SITE_Z_OFFSET_FROM_SURFACE_RADIUS: dict[str, float] = {
     "atop": 0.0,
     "bridge": -0.09,
     "hollow": -0.18,
+    "pore": -0.18,
     "envelope": -0.135,
 }
 
@@ -130,40 +137,19 @@ _PARALLEL_Z_HI_SHRINK_FALLBACK_ANGSTROM: float = 0.6
 # ---------------------------------------------------------------------------
 # Dissociative placement (e.g. H₂ → 2 H on hollow sites)
 # ---------------------------------------------------------------------------
-
-# Minimum and maximum separation between fragment landing sites (adaptive
-# min/max from atomic radii and surface geometry; see implementation).
-#
-# Note: The algorithm now uses an adaptive approach that considers both atomic
-# properties (covalent radii) and surface geometry (hollow site distances).
-# This makes it automatically compatible with both close-packed and open surfaces.
-#
-# The adaptive approach uses:
-# - atomic_constraint = scale * (2 * mean_surface_atom_covalent_radius)
-# - surface_constraint = 0.8 * mean_hollow_site_NN_distance
-# - min_sep = max(floor, min(atomic_constraint, surface_constraint))
-#
-# This ensures that:
-# 1. For close-packed surfaces: surface_constraint is smaller, so it dominates
-# 2. For open surfaces: atomic_constraint is smaller, so it dominates
-# 3. Always respects the absolute minimum floor for physical reasonableness
-_DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE: float = (
-    0.7  # More conservative atomic constraint
-)
-_DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM: float = 1.0  # Absolute minimum: 1.0 Å
-_DISSOCIATIVE_MAX_ADJACENT_SEP_NN_SCALE: float = 1.2  # Conservative surface scaling
-_DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM: float = (
-    1.5  # Minimum max separation: 1.5 Å
-)
-_DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM: float = 3.2  # Maximum reasonable: 3.2 Å
+# Adaptive min/max fragment separation from atomic radii and hollow NN geometry;
+# see dissociative placement implementation for the constraint formulas.
+_DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE: float = 0.7
+_DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM: float = 1.0
+_DISSOCIATIVE_MAX_ADJACENT_SEP_NN_SCALE: float = 1.2
+_DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM: float = 1.5
+_DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM: float = 3.2
 
 # ---------------------------------------------------------------------------
 # Atop site injection
 # ---------------------------------------------------------------------------
 
 # Height factor for injected atop sites: site_z = atom_z + factor × median(nn_distance).
-# 0.8 places the site slightly below the median Voronoi vertex height, closer to
-# the binding geometry expected for atop adsorbates (CO, H₂O, NH₃).
 _ATOP_INJECTION_HEIGHT_FACTOR: float = 0.8
 
 # ---------------------------------------------------------------------------
@@ -172,9 +158,6 @@ _ATOP_INJECTION_HEIGHT_FACTOR: float = 0.8
 _BOUNDING_BOX_CELL_PAD_ANGSTROM: float = 5.0
 _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM: float = 0.5
 _KD_RADIUS_SEARCH_PADDING: float = 1.5
-
-# Use unified fallback for molecular covalent radius
-_MOL_COVALENT_RADIUS_FALLBACK: float = _MEAN_COVALENT_RADIUS_FALLBACK
 
 # ---------------------------------------------------------------------------
 # Geometry numerics and shape/orientation heuristics
@@ -212,6 +195,7 @@ _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE: float = 1.0
 # ---------------------------------------------------------------------------
 _ORIENTATION_CLASSIFICATION_PARALLEL_DOT_THRESHOLD: float = 0.7
 _PARALLEL_FRACTION_NO_BINDERS: float = 0.8
+_PARALLEL_FRACTION_SINGLE_BINDER: float = 0.3
 _PARALLEL_FRACTION_LOW_BINDER_RATIO: float = 0.8
 _PARALLEL_FRACTION_NO_RING: float = 0.5
 _PARALLEL_FRACTION_HIGH_BINDER_RATIO: float = 0.3
@@ -228,9 +212,17 @@ _AZIMUTH: tuple[float, ...] = (0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.
 _AZIMUTH_IN_PLANE: tuple[float, ...] = (0.0, 90.0, 180.0, 270.0)
 _Z_FRACTIONS: tuple[float, ...] = (0.1, 0.3, 0.5, 0.7, 0.9)
 
-# Bounded recovery after too_close / too_far distance failures.
+# Soft priors when stratifying the placement grid down to n_desired: prefer
+# milder tilts and mid-window heights (still seeded / deterministic).
+_POLICY_PRIOR_TILT_WEIGHT_PER_DEG: float = 0.02
+_POLICY_PRIOR_Z_FRACTION_TARGET: float = 0.5
+_POLICY_PRIOR_Z_FRACTION_WEIGHT: float = 2.0
+
+# Bounded recovery after too_close / too_far / adsorbate_overlap distance failures.
 _DISTANCE_RECOVERY_HEIGHT_STEPS: int = 3
 _DISTANCE_RECOVERY_XY_ATTEMPTS: int = 4
+# Block a site_index on placement retry after this many clash/distance failures.
+_RETRY_BLOCK_SITE_AFTER: int = 2
 # One-shot Voronoi accessibility widen when the first window finds no sites.
 _VORONOI_AUTO_WIDEN_PROBE_SCALE: float = 0.8
 _VORONOI_AUTO_WIDEN_MAX_SCALE: float = 1.25

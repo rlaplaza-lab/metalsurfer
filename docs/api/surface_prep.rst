@@ -5,6 +5,10 @@ All substrate and material preparation lives in :mod:`metalsurfer.surface_prep`.
 Import from this module — campaign APIs validate substrates but never align,
 resize, rewrite constraints, or re-equilibrate ionic positions.
 
+Freeze helpers live in :mod:`metalsurfer.surface_prep.freeze` (re-exported from
+:mod:`metalsurfer.surface_prep`). Slab construction / alloy / adatom
+implementation lives in :mod:`metalsurfer.surface_prep._surfaces`.
+
 Layout conventions and worked examples: :doc:`../guides/surface_engineering`.
 
 Two stages: prep equilibration vs adsorption freeze
@@ -132,6 +136,14 @@ Public API overview
 - :func:`~metalsurfer.surface_prep.validate_substrate`
 - :func:`~metalsurfer.surface_prep.accept_substrate_for_api`
 - :func:`~metalsurfer.surface_prep.coerce_slab_container`
+
+``finalize_substrate`` runs full ``validate_substrate`` and marks the
+:class:`~metalsurfer.surface_prep.SlabContainer` as ``finalized``. Campaign
+bootstrap then uses ``accept_substrate_for_api``, which only re-checks API
+invariants for finalized containers (no second full vacuum/cell pass).
+Conformer sizing stays in screening prep after resize.
+``coerce_slab_container(..., copy=False)`` returns an existing container
+unchanged; pass ``copy=True`` when isolation is required.
 
 **Construction and modification**
 

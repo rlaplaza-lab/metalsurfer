@@ -91,7 +91,11 @@ Additional CI jobs locally:
 .. code-block:: bash
 
    python -m pytest tests/test_dependency_behavior.py -v --tb=short
-   python -m pytest tests/test_integration_seeded.py -v --tb=short
+   python -m pytest \
+     tests/test_integration_seeded.py \
+     tests/test_integration_physics.py \
+     tests/test_integration_run_modes.py \
+     -v --tb=short
 
 GPU / MLIP integration tests (optional, often run in separate processes):
 
@@ -112,16 +116,16 @@ reference assets on first run (~15 GB GPU, outbound HTTPS).
 CI parity
 ---------
 
-+---------------------------+------------------------------------------+
-| Local command             | GitHub Actions job                       |
-+===========================+==========================================+
-| ``ruff check .``          | ``lint`` → Ruff lint and format          |
-| ``ruff format --check .`` | ``lint`` → Ruff lint and format          |
-| ``mypy src/metalsurfer``  | ``lint`` → Mypy typecheck                |
-| Fast pytest + coverage    | ``test-full``                            |
-| ``test_dependency_behavior`` | ``test-dependency-behavior``          |
-| ``test_integration_seeded``  | ``test-integration``                  |
-+---------------------------+------------------------------------------+
++----------------------------------+------------------------------------------+
+| Local command                    | GitHub Actions job                       |
++==================================+==========================================+
+| ``ruff check .``                 | ``lint`` → Ruff lint and format          |
+| ``ruff format --check .``        | ``lint`` → Ruff lint and format          |
+| ``mypy src/metalsurfer``         | ``lint`` → Mypy typecheck                |
+| Fast pytest + coverage           | ``test-full``                            |
+| ``test_dependency_behavior``     | ``test-dependency-behavior``             |
+| seeded + physics + run-modes     | ``test-integration``                     |
++----------------------------------+------------------------------------------+
 
 Read the Docs builds Sphinx docs but does not run mypy; type checking runs in CI.
 

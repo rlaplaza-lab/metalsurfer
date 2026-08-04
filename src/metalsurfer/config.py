@@ -1,10 +1,9 @@
 """Configuration for adsorption screening workflows."""
 
-from collections.abc import Callable
-from dataclasses import InitVar, dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, fields, replace
 from math import isfinite
-from typing import Literal
-from warnings import warn
+from typing import Any, Literal
 
 from ._numeric_defaults import (
     CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
@@ -17,6 +16,160 @@ from ._numeric_defaults import (
     MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
 )
 from .models import PlacementSpec
+
+
+def _default_bo_failure_penalty_overrides() -> dict[str, float]:
+    return {
+        "generation": 18.0,
+        "optimization": 20.0,
+        "validation": 14.0,
+        "energy_cap": 12.0,
+        "filter": 11.0,
+    }
+
+
+@dataclass
+class BOTransferConfig:
+    """Cross-step Bayesian transfer hyperparameters for saturation BO."""
+
+    enabled: bool = True
+    mode: Literal["weighted", "cumulative_refit"] = "weighted"
+    min_step_observations: int = 5
+    weight_cap: float = 0.35
+    similarity_lengthscale: float = 4.0
+    min_similarity: float = 0.05
+    trust_patience: int = 2
+    mae_tolerance: float = 0.0
+    exploration_fraction: float = 0.2
+    proximity_lengthscale: float = 1.0
+    proximity_floor: float = 0.0
+    prior_step_window: int | None = 2
+    recency_lengthscale: float = 4.0
+    occupancy_lengthscale: float = 1.0
+    occupancy_floor: float = 0.0
+
+
+@dataclass
+class BOConfig:
+    """Bayesian placement-selection hyperparameters."""
+
+    initial_random: int | None = None
+    initial_sampling: Literal["random", "spread", "spread_xyz", "stratified"] = (
+        "spread_xyz"
+    )
+    batch_size: int | None = None
+    total_budget: int = 18
+    ucb_kappa: float = 1.96
+    acquisition: Literal["lcb", "ei", "pi"] = "ei"
+    surrogate: Literal[
+        "random_forest",
+        "extra_trees",
+        "gradient_boost",
+        "ridge",
+        "gaussian_process",
+        "ensemble",
+    ] = "gradient_boost"
+    candidate_pool_size: int | None = None
+    include_failure_negatives: bool = True
+    failure_penalty_default: float = 10.0
+    failure_penalty_overrides: dict[str, float] = field(
+        default_factory=_default_bo_failure_penalty_overrides
+    )
+    transfer: BOTransferConfig = field(default_factory=BOTransferConfig)
+
+
+_BO_TRANSFER_FLAT_PREFIX = "bo_transfer_"
+_BO_TOP_FIELD_BY_FLAT: dict[str, str] = {
+    "bo_initial_random": "initial_random",
+    "bo_initial_sampling": "initial_sampling",
+    "bo_batch_size": "batch_size",
+    "bo_total_budget": "total_budget",
+    "bo_ucb_kappa": "ucb_kappa",
+    "bo_acquisition": "acquisition",
+    "bo_surrogate": "surrogate",
+    "bo_candidate_pool_size": "candidate_pool_size",
+    "bo_include_failure_negatives": "include_failure_negatives",
+    "bo_failure_penalty_default": "failure_penalty_default",
+    "bo_failure_penalty_overrides": "failure_penalty_overrides",
+}
+_BO_TRANSFER_FIELDS: frozenset[str] = frozenset(
+    f.name for f in fields(BOTransferConfig)
+)
+_BO_TOP_FIELDS: frozenset[str] = frozenset(
+    f.name for f in fields(BOConfig) if f.name != "transfer"
+)
+
+
+def _bo_transfer_from_mapping(data: Mapping[str, Any] | None) -> BOTransferConfig:
+    if data is None:
+        return BOTransferConfig()
+    if isinstance(data, BOTransferConfig):
+        return data
+    unknown = set(data) - _BO_TRANSFER_FIELDS
+    if unknown:
+        quoted = ", ".join(sorted(unknown))
+        raise ValueError(f"bo.transfer contains unknown keys: {quoted}")
+    return BOTransferConfig(**dict(data))
+
+
+def _bo_config_from_mapping(data: Mapping[str, Any] | None) -> BOConfig:
+    if data is None:
+        return BOConfig()
+    if isinstance(data, BOConfig):
+        return data
+    payload = dict(data)
+    transfer = _bo_transfer_from_mapping(payload.pop("transfer", None))
+    unknown = set(payload) - _BO_TOP_FIELDS
+    if unknown:
+        quoted = ", ".join(sorted(unknown))
+        raise ValueError(f"bo contains unknown keys: {quoted}")
+    return BOConfig(**payload, transfer=transfer)
+
+
+def _split_flat_bo_kwargs(
+    flat: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split legacy ``bo_*`` / ``bo_transfer_*`` kwargs into nested field dicts."""
+    bo_kwargs: dict[str, Any] = {}
+    transfer_kwargs: dict[str, Any] = {}
+    for key, value in flat.items():
+        if key.startswith(_BO_TRANSFER_FLAT_PREFIX):
+            field_name = key[len(_BO_TRANSFER_FLAT_PREFIX) :]
+            if field_name not in _BO_TRANSFER_FIELDS:
+                raise ValueError(f"Unknown BO transfer config key: {key!r}")
+            transfer_kwargs[field_name] = value
+        elif key in _BO_TOP_FIELD_BY_FLAT:
+            bo_kwargs[_BO_TOP_FIELD_BY_FLAT[key]] = value
+        else:
+            raise ValueError(f"Unknown BO config key: {key!r}")
+    return bo_kwargs, transfer_kwargs
+
+
+def _merge_flat_into_bo(base: BOConfig, flat: Mapping[str, Any]) -> BOConfig:
+    bo_kwargs, transfer_kwargs = _split_flat_bo_kwargs(flat)
+    transfer = (
+        replace(base.transfer, **transfer_kwargs)
+        if transfer_kwargs
+        else base.transfer
+    )
+    return replace(base, transfer=transfer, **bo_kwargs)
+
+
+def fold_bo_config(config_data: dict[str, Any]) -> BOConfig:
+    """Fold nested ``bo:`` and/or legacy flat ``bo_*`` keys into a :class:`BOConfig`.
+
+    Mutates *config_data* by removing ``bo`` and any flat ``bo_*`` keys.
+    """
+    nested_raw = config_data.pop("bo", None)
+    flat = {
+        key: config_data.pop(key)
+        for key in list(config_data)
+        if key.startswith("bo_")
+    }
+    bo = _bo_config_from_mapping(nested_raw)
+    if flat:
+        bo = _merge_flat_into_bo(bo, flat)
+    return bo
 
 
 def _check_positive(name: str, value: float) -> None:
@@ -61,20 +214,26 @@ def _check_choice(name: str, value: str, *, allowed: tuple[str, ...]) -> None:
         raise ValueError(f"{name} must be {message}, got {value!r}")
 
 
+def _check_unit_interval(
+    name: str, value: float, *, exclusive_upper: bool = False
+) -> None:
+    upper_ok = value < 1.0 if exclusive_upper else value <= 1.0
+    if not isfinite(value) or not 0.0 <= value or not upper_ok:
+        bound = "[0.0, 1.0)" if exclusive_upper else "[0.0, 1.0]"
+        raise ValueError(f"{name} must be finite in {bound}, got {value!r}")
+
+
+def _check_finite_nonneg(name: str, value: float) -> None:
+    if not isfinite(value) or value < 0.0:
+        raise ValueError(
+            f"{name} must be finite and non-negative, got {value!r}"
+        )
+
+
 CONFORMER_SAMPLING_OPTIONS: tuple[str, ...] = ("boltzmann", "cycle", "mixed")
 MATERIAL_TYPE_OPTIONS: tuple[str, ...] = ("slab", "nanoparticle", "porous")
 SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("auto", "distance_ratio", "delaunay")
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
-# Legacy coarse generation reason → split tokens (one-release BO override alias).
-BO_LEGACY_GENERATION_REASON_ALIASES: dict[str, tuple[str, ...]] = {
-    "initial_distance_or_site_constraints": (
-        "too_close",
-        "too_far",
-        "vdw_overlap",
-        "adsorbate_overlap",
-        "missing_z_abs",
-    ),
-}
 BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = (
     "random",
     "spread",
@@ -97,38 +256,307 @@ BO_TRANSFER_CAPABLE_SURROGATES: tuple[str, ...] = (
     "ensemble",
 )
 TS_OPTIMIZER_OPTIONS: tuple[str, ...] = ("fire", "lbfgs", "bfgs")
-SLAB_RELAXATION_MODE_OPTIONS: tuple[str, ...] = (
+SLAB_RELAXATION_MODE = Literal["none", "ionic_only", "cell_only", "full"]
+SLAB_RELAXATION_OPTIMIZER = Literal["lbfgs", "bfgs", "fire"]
+SLAB_RELAXATION_MODE_OPTIONS: tuple[SLAB_RELAXATION_MODE, ...] = (
     "none",
     "ionic_only",
     "cell_only",
     "full",
 )
-SLAB_RELAXATION_OPTIMIZER_OPTIONS: tuple[str, ...] = ("lbfgs", "bfgs", "fire")
+SLAB_RELAXATION_OPTIMIZER_OPTIONS: tuple[SLAB_RELAXATION_OPTIMIZER, ...] = (
+    "lbfgs",
+    "bfgs",
+    "fire",
+)
+
+
+
+def _validate_placement(root: "AdsorptionConfig") -> None:
+    _check_positive("max_closest_approach", root.max_closest_approach)
+    _check_positive_int("min_contact_atoms", root.min_contact_atoms)
+    _check_positive("contact_distance_threshold", root.contact_distance_threshold)
+
+    if root.num_placements is not None:
+        _check_positive_int("num_placements", root.num_placements)
+
+    if root.placement_retry_enabled:
+        _check_positive_int(
+            "placement_retry_max_attempts", root.placement_retry_max_attempts
+        )
+        _check_positive_int(
+            "placement_retry_diversity_seed_increment",
+            root.placement_retry_diversity_seed_increment,
+        )
+
+    for pos_name, pos_value in (
+        ("min_initial_distance", root.min_initial_distance),
+        ("top_layer_tolerance", root.top_layer_tolerance),
+        ("symmetry_tolerance", root.symmetry_tolerance),
+        ("site_equivalence_tolerance", root.site_equivalence_tolerance),
+        ("hollow_site_dedup_tolerance", root.hollow_site_dedup_tolerance),
+        ("planar_z_variance_threshold", root.planar_z_variance_threshold),
+    ):
+        _check_positive(pos_name, pos_value)
+
+    _check_range_tuple("placement_z_range", root.placement_z_range)
+    for xy_name, xy_value in (
+        ("placement_x_range", root.placement_x_range),
+        ("placement_y_range", root.placement_y_range),
+    ):
+        _check_range_tuple(xy_name, xy_value, allow_equal=True)
+
+    if not 0.5 <= root.min_contact_ratio <= 1.2:
+        raise ValueError(
+            f"min_contact_ratio must be in [0.5, 1.2], got {root.min_contact_ratio}"
+        )
+    if root.max_initial_distance is not None and root.max_initial_distance <= 0:
+        raise ValueError(
+            "max_initial_distance must be positive when set, "
+            f"got {root.max_initial_distance}"
+        )
+    if not 0.0 <= root.flat_aromatic_parallel_fraction <= 1.0:
+        raise ValueError(
+            "flat_aromatic_parallel_fraction must be in [0.0, 1.0], "
+            f"got {root.flat_aromatic_parallel_fraction}"
+        )
+    if root.voronoi_probe_radius is not None and root.voronoi_probe_radius <= 0:
+        raise ValueError(
+            f"voronoi_probe_radius must be positive, got {root.voronoi_probe_radius}"
+        )
+    if (
+        root.voronoi_probe_radius is not None
+        and root.voronoi_max_site_distance is not None
+        and root.voronoi_max_site_distance <= root.voronoi_probe_radius
+    ):
+        raise ValueError(
+            f"voronoi_max_site_distance ({root.voronoi_max_site_distance}) must be "
+            f"greater than voronoi_probe_radius ({root.voronoi_probe_radius})"
+        )
+    if not isinstance(root.voronoi_site_enrichment, bool):
+        raise ValueError(
+            "voronoi_site_enrichment must be a bool, "
+            f"got {type(root.voronoi_site_enrichment).__name__}"
+        )
+    _check_choice(
+        "site_classification_method",
+        root.site_classification_method,
+        allowed=SITE_CLASSIFICATION_OPTIONS,
+    )
+
+
+def _validate_relaxation(root: "AdsorptionConfig") -> None:
+    for int_name, int_value in (
+        ("stage1_steps", root.stage1_steps),
+        ("stage2_steps", root.stage2_steps),
+        ("reference_optimization_steps", root.reference_optimization_steps),
+        ("steps_between_swaps", root.steps_between_swaps),
+        (
+            "saturation_autobatcher_reuse_growth_atoms",
+            root.saturation_autobatcher_reuse_growth_atoms,
+        ),
+    ):
+        _check_positive_int(int_name, int_value)
+
+    _check_positive("fmax", root.fmax)
+    _check_choice("ts_optimizer", root.ts_optimizer, allowed=TS_OPTIMIZER_OPTIONS)
+    _check_choice(
+        "slab_relaxation_mode",
+        root.slab_relaxation_mode,
+        allowed=SLAB_RELAXATION_MODE_OPTIONS,
+    )
+    _check_choice(
+        "slab_relaxation_optimizer",
+        root.slab_relaxation_optimizer,
+        allowed=SLAB_RELAXATION_OPTIMIZER_OPTIONS,
+    )
+    _check_positive_int("slab_relaxation_steps", root.slab_relaxation_steps)
+    if root.slab_relaxation_fmax is not None:
+        _check_positive("slab_relaxation_fmax", root.slab_relaxation_fmax)
+    if not 0.1 <= root.autobatcher_max_memory_padding <= 1.0:
+        raise ValueError(
+            "autobatcher_max_memory_padding must be in [0.1, 1.0], "
+            f"got {root.autobatcher_max_memory_padding}"
+        )
+    if (
+        root.autobatcher_max_memory_scaler is not None
+        and root.autobatcher_max_memory_scaler <= 0
+    ):
+        raise ValueError(
+            "autobatcher_max_memory_scaler must be positive when set, "
+            f"got {root.autobatcher_max_memory_scaler}"
+        )
+    if root.autobatcher_max_atoms_to_try is not None:
+        _check_positive_int(
+            "autobatcher_max_atoms_to_try", root.autobatcher_max_atoms_to_try
+        )
+    if not 0.0 <= root.saturation_autobatcher_reuse_growth_fraction <= 1.0:
+        raise ValueError(
+            "saturation_autobatcher_reuse_growth_fraction must be in [0.0, 1.0], "
+            f"got {root.saturation_autobatcher_reuse_growth_fraction}"
+        )
+
+
+def _validate_bo_transfer(transfer: BOTransferConfig) -> None:
+    _check_choice(
+        "bo_transfer_mode",
+        transfer.mode,
+        allowed=("weighted", "cumulative_refit"),
+    )
+    _check_positive_int(
+        "bo_transfer_min_step_observations",
+        transfer.min_step_observations,
+    )
+    _check_positive_int(
+        "bo_transfer_trust_patience", transfer.trust_patience
+    )
+    if transfer.prior_step_window is not None:
+        _check_positive_int(
+            "bo_transfer_prior_step_window",
+            transfer.prior_step_window,
+        )
+    _check_positive(
+        "bo_transfer_recency_lengthscale",
+        transfer.recency_lengthscale,
+    )
+    _check_positive(
+        "bo_transfer_occupancy_lengthscale",
+        transfer.occupancy_lengthscale,
+    )
+    _check_unit_interval("bo_transfer_occupancy_floor", transfer.occupancy_floor)
+    _check_unit_interval(
+        "bo_transfer_weight_cap", transfer.weight_cap, exclusive_upper=True
+    )
+    _check_positive(
+        "bo_transfer_similarity_lengthscale",
+        transfer.similarity_lengthscale,
+    )
+    _check_unit_interval("bo_transfer_min_similarity", transfer.min_similarity)
+    _check_finite_nonneg("bo_transfer_mae_tolerance", transfer.mae_tolerance)
+    _check_unit_interval(
+        "bo_transfer_exploration_fraction", transfer.exploration_fraction
+    )
+    _check_positive(
+        "bo_transfer_proximity_lengthscale",
+        transfer.proximity_lengthscale,
+    )
+    _check_unit_interval("bo_transfer_proximity_floor", transfer.proximity_floor)
+
+
+def _validate_bo(root: "AdsorptionConfig") -> None:
+    bo = root.bo
+    if not isinstance(bo, BOConfig):
+        raise ValueError(
+            f"bo must be a BOConfig, got {type(bo).__name__}"
+        )
+    if bo.initial_random is not None:
+        _check_positive_int("bo_initial_random", bo.initial_random)
+    if bo.batch_size is not None:
+        _check_positive_int("bo_batch_size", bo.batch_size)
+    _check_positive_int("bo_total_budget", bo.total_budget)
+    if bo.ucb_kappa < 0:
+        raise ValueError(
+            f"bo_ucb_kappa must be non-negative, got {bo.ucb_kappa}"
+        )
+    _check_choice(
+        "bo_initial_sampling",
+        bo.initial_sampling,
+        allowed=BO_INITIAL_SAMPLING_OPTIONS,
+    )
+    _check_choice(
+        "bo_acquisition",
+        bo.acquisition,
+        allowed=BO_ACQUISITION_OPTIONS,
+    )
+    _check_choice(
+        "bo_surrogate",
+        bo.surrogate,
+        allowed=BO_SURROGATE_OPTIONS,
+    )
+    if (
+        bo.transfer.enabled
+        and bo.surrogate not in BO_TRANSFER_CAPABLE_SURROGATES
+    ):
+        raise ValueError(
+            "bo_transfer_enabled requires a surrogate that supports "
+            "per-sample weights "
+            f"({', '.join(BO_TRANSFER_CAPABLE_SURROGATES)}); "
+            "sample_weight is not supported for "
+            f"bo_surrogate={bo.surrogate!r}"
+        )
+    if bo.candidate_pool_size is not None:
+        _check_positive_int(
+            "bo_candidate_pool_size", bo.candidate_pool_size
+        )
+    if (
+        not isfinite(bo.failure_penalty_default)
+        or bo.failure_penalty_default < 0
+    ):
+        raise ValueError(
+            "bo_failure_penalty_default must be a finite non-negative value, "
+            f"got {bo.failure_penalty_default!r}"
+        )
+    if not isinstance(bo.failure_penalty_overrides, dict):
+        raise ValueError(
+            "bo_failure_penalty_overrides must be a dict[str, float], "
+            f"got {type(bo.failure_penalty_overrides).__name__}"
+        )
+    for penalty_key, penalty_value in bo.failure_penalty_overrides.items():
+        if not isinstance(penalty_key, str) or not penalty_key:
+            raise ValueError(
+                "bo_failure_penalty_overrides keys must be non-empty strings, "
+                f"got {penalty_key!r}"
+            )
+        if not isfinite(penalty_value) or penalty_value < 0:
+            raise ValueError(
+                "bo_failure_penalty_overrides values must be finite non-negative, "
+                f"got {penalty_value!r} for key {penalty_key!r}"
+            )
+    if not isinstance(bo.transfer, BOTransferConfig):
+        raise ValueError(
+            "bo.transfer must be a BOTransferConfig, "
+            f"got {type(bo.transfer).__name__}"
+        )
+    _validate_bo_transfer(bo.transfer)
+
+
+def _validate_io(root: "AdsorptionConfig") -> None:
+    _check_positive_int("vasp_nsw", root.vasp_nsw)
+    _check_positive_int("vasp_encut", root.vasp_encut)
+    if len(root.vasp_kpoints) != 3:
+        raise ValueError(
+            f"vasp_kpoints must be a 3-tuple, got length {len(root.vasp_kpoints)}"
+        )
+    for i, k in enumerate(root.vasp_kpoints):
+        if not isinstance(k, int) or k <= 0:
+            raise ValueError(
+                f"vasp_kpoints[{i}] must be a positive integer, got {k!r}"
+            )
 
 
 def resolved_bo_eval_budget(config: "AdsorptionConfig") -> int:
     """Total BO placement evaluations after auto-resolution of batch sizes."""
-    if config.bo_initial_random is None or config.bo_batch_size is None:
+    if config.bo.initial_random is None or config.bo.batch_size is None:
         raise ValueError(
-            "resolved_bo_eval_budget requires bo_initial_random and bo_batch_size "
+            "resolved_bo_eval_budget requires bo.initial_random and bo.batch_size "
             "to be resolved (not None)"
         )
-    return config.bo_initial_random + config.bo_total_budget * config.bo_batch_size
+    return config.bo.initial_random + config.bo.total_budget * config.bo.batch_size
 
 
 def bo_eval_schedule(config: "AdsorptionConfig") -> list[int]:
     """Cumulative placement-evaluation counts for BO replay curves.
 
     Matches the live workflow: one initial-random batch plus
-    ``bo_total_budget`` acquisition batches of ``bo_batch_size`` placements.
+    ``bo.total_budget`` acquisition batches of ``bo.batch_size`` placements.
     """
-    if config.bo_initial_random is None or config.bo_batch_size is None:
+    if config.bo.initial_random is None or config.bo.batch_size is None:
         raise ValueError(
-            "bo_eval_schedule requires bo_initial_random and bo_batch_size "
+            "bo_eval_schedule requires bo.initial_random and bo.batch_size "
             "to be resolved (not None)"
         )
-    initial = int(config.bo_initial_random)
-    batch = int(config.bo_batch_size)
+    initial = int(config.bo.initial_random)
+    batch = int(config.bo.batch_size)
     budget = resolved_bo_eval_budget(config)
     schedule = [initial]
     current = initial
@@ -144,10 +572,13 @@ class AdsorptionConfig:
 
     Primary knobs: ``model_name``, ``num_conformers``, ``num_placements``,
     and ``material_type``. For dissociative adsorption (e.g. H₂ → 2H), set
-    ``skip_topology_check=True`` (enables dissociative H₂ placements and skips
-    connectivity checks). Prefer ``run_*_bo`` entry points over toggling
-    ``bo_enabled``. Reference energies remain isolated-molecule energies;
-    positive E_ads can result when the relaxed adsorbate dissociates.
+    ``enable_dissociative_placement=True`` (and usually ``skip_topology_check=True``
+    so connectivity filters allow fragmented adsorbates). Use ``run_*_bo``
+    (or YAML ``campaign: adsorption_bo`` / ``saturation_bo``) for Bayesian
+    placement selection; nested ``bo`` (and legacy flat ``bo_*`` constructor /
+    YAML keys) are hyperparameters only. Reference energies remain
+    isolated-molecule energies; positive E_ads can result when the relaxed
+    adsorbate dissociates.
 
     Full field documentation:
     https://metalsurfer.readthedocs.io/en/latest/api/config.html
@@ -194,8 +625,6 @@ class AdsorptionConfig:
     reject_vdw_overlaps: bool = False
     vdw_overlap_scale: float = 1.0
     max_closest_approach: float = CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
-    # Deprecated ctor-only alias for max_closest_approach.
-    min_contact_distance: InitVar[float | None] = None
     min_contact_atoms: int = 1
     contact_distance_threshold: float = CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
     require_multiple_contact: bool = False
@@ -216,9 +645,13 @@ class AdsorptionConfig:
     multi_molecule_saturation: bool = False
     saturation_save_all_placements: bool = True
     save_benchmark_dataset: bool = False
+    # When False (default), CSV exports keep ML feature geometry + labels only.
+    # When True, also write initial_* placement provenance and full ctx_* settings.
+    export_placement_provenance: bool = False
     saturation_discard_topology_rearrangements: bool = True
     saturation_max_steps: int | None = None
     skip_topology_check: bool = False
+    enable_dissociative_placement: bool = False
     skip_desorption_check: bool = False
     fail_on_missing_reference: bool = False
     fail_on_conformer_failure: bool = False
@@ -241,103 +674,21 @@ class AdsorptionConfig:
     saturation_autobatcher_reuse: bool = True
     saturation_autobatcher_reuse_growth_atoms: int = 32
     saturation_autobatcher_reuse_growth_fraction: float = 0.1
-    bo_enabled: bool = False
-    bo_initial_random: int | None = None
-    bo_initial_sampling: Literal["random", "spread", "spread_xyz", "stratified"] = (
-        "spread_xyz"
-    )
-    bo_batch_size: int | None = None
-    bo_total_budget: int = 18
-    bo_ucb_kappa: float = 1.96
-    bo_acquisition: Literal["lcb", "ei", "pi"] = "ei"
-    bo_surrogate: Literal[
-        "random_forest",
-        "extra_trees",
-        "gradient_boost",
-        "ridge",
-        "gaussian_process",
-        "ensemble",
-    ] = "gradient_boost"
-    bo_candidate_pool_size: int | None = None
-    bo_include_failure_negatives: bool = True
-    bo_failure_penalty_default: float = 10.0
-    bo_failure_penalty_overrides: dict[str, float] = field(
-        default_factory=lambda: {
-            "generation": 18.0,
-            "optimization": 20.0,
-            "validation": 14.0,
-            "energy_cap": 12.0,
-            "filter": 11.0,
-        }
-    )
-    bo_transfer_enabled: bool = True
-    bo_transfer_mode: Literal["weighted", "cumulative_refit"] = "weighted"
-    bo_transfer_min_step_observations: int = 5
-    bo_transfer_weight_cap: float = 0.35
-    bo_transfer_similarity_lengthscale: float = 4.0
-    bo_transfer_min_similarity: float = 0.05
-    bo_transfer_trust_patience: int = 2
-    bo_transfer_mae_tolerance: float = 0.0
-    bo_transfer_exploration_fraction: float = 0.2
-    bo_transfer_proximity_lengthscale: float = 1.0
-    bo_transfer_proximity_floor: float = 0.0
-    bo_transfer_prior_step_window: int | None = 2
-    bo_transfer_recency_lengthscale: float = 4.0
-    bo_transfer_occupancy_lengthscale: float = 1.0
-    bo_transfer_occupancy_floor: float = 0.0
+    bo: BOConfig = field(default_factory=BOConfig)
 
-    def __post_init__(self, min_contact_distance: float | None = None) -> None:
-        if min_contact_distance is not None:
-            warn(
-                "AdsorptionConfig.min_contact_distance is deprecated; "
-                "use max_closest_approach (max allowed closest-approach distance). "
-                "For covalent-radius contact fraction filtering, use min_contact_ratio.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            object.__setattr__(
-                self, "max_closest_approach", float(min_contact_distance)
-            )
-        _check_positive("max_closest_approach", self.max_closest_approach)
-        _check_positive_int("min_contact_atoms", self.min_contact_atoms)
-        _check_positive("contact_distance_threshold", self.contact_distance_threshold)
+    def __post_init__(self) -> None:
+        _validate_placement(self)
+        _validate_relaxation(self)
+        _validate_io(self)
+        _validate_bo(self)
 
         positive_int_fields: list[tuple[str, int]] = [
             ("num_conformers", self.num_conformers),
-            ("stage1_steps", self.stage1_steps),
-            ("stage2_steps", self.stage2_steps),
-            ("reference_optimization_steps", self.reference_optimization_steps),
-            ("vasp_nsw", self.vasp_nsw),
-            ("vasp_encut", self.vasp_encut),
-            ("steps_between_swaps", self.steps_between_swaps),
-            (
-                "saturation_autobatcher_reuse_growth_atoms",
-                self.saturation_autobatcher_reuse_growth_atoms,
-            ),
         ]
-        if self.num_placements is not None:
-            positive_int_fields.append(("num_placements", self.num_placements))
         for int_name, int_value in positive_int_fields:
             _check_positive_int(int_name, int_value)
 
-        # Placement retry validation
-        if self.placement_retry_enabled:
-            _check_positive_int(
-                "placement_retry_max_attempts", self.placement_retry_max_attempts
-            )
-            _check_positive_int(
-                "placement_retry_diversity_seed_increment",
-                self.placement_retry_diversity_seed_increment,
-            )
-
         positive_fields: list[tuple[str, float]] = [
-            ("fmax", self.fmax),
-            ("min_initial_distance", self.min_initial_distance),
-            ("top_layer_tolerance", self.top_layer_tolerance),
-            ("symmetry_tolerance", self.symmetry_tolerance),
-            ("site_equivalence_tolerance", self.site_equivalence_tolerance),
-            ("hollow_site_dedup_tolerance", self.hollow_site_dedup_tolerance),
-            ("planar_z_variance_threshold", self.planar_z_variance_threshold),
             ("min_interatomic_distance", self.min_interatomic_distance),
             ("max_force_convergence", self.max_force_convergence),
             ("binding_distance_threshold", self.binding_distance_threshold),
@@ -356,31 +707,6 @@ class AdsorptionConfig:
         for nn_name, nn_value in non_negative_fields:
             _check_non_negative(nn_name, nn_value)
 
-        range_fields: list[tuple[str, tuple[float, float]]] = [
-            ("placement_z_range", self.placement_z_range),
-        ]
-        for range_name, range_value in range_fields:
-            _check_range_tuple(range_name, range_value)
-        for xy_name, xy_value in (
-            ("placement_x_range", self.placement_x_range),
-            ("placement_y_range", self.placement_y_range),
-        ):
-            # Equal bounds disable in-plane distance recovery.
-            _check_range_tuple(xy_name, xy_value, allow_equal=True)
-
-        if not 0.5 <= self.min_contact_ratio <= 1.2:
-            raise ValueError(
-                f"min_contact_ratio must be in [0.5, 1.2], got {self.min_contact_ratio}"
-            )
-        if self.max_initial_distance is not None and self.max_initial_distance <= 0:
-            raise ValueError(
-                f"max_initial_distance must be positive when set, got {self.max_initial_distance}"
-            )
-        if not 0.0 <= self.flat_aromatic_parallel_fraction <= 1.0:
-            raise ValueError(
-                f"flat_aromatic_parallel_fraction must be in [0.0, 1.0], "
-                f"got {self.flat_aromatic_parallel_fraction}"
-            )
         _check_choice(
             "conformer_sampling",
             self.conformer_sampling,
@@ -391,29 +717,6 @@ class AdsorptionConfig:
             self.material_type,
             allowed=MATERIAL_TYPE_OPTIONS,
         )
-        if self.voronoi_probe_radius is not None and self.voronoi_probe_radius <= 0:
-            raise ValueError(
-                f"voronoi_probe_radius must be positive, got {self.voronoi_probe_radius}"
-            )
-        if (
-            self.voronoi_probe_radius is not None
-            and self.voronoi_max_site_distance is not None
-            and self.voronoi_max_site_distance <= self.voronoi_probe_radius
-        ):
-            raise ValueError(
-                f"voronoi_max_site_distance ({self.voronoi_max_site_distance}) must be "
-                f"greater than voronoi_probe_radius ({self.voronoi_probe_radius})"
-            )
-        if not isinstance(self.voronoi_site_enrichment, bool):
-            raise ValueError(
-                "voronoi_site_enrichment must be a bool, "
-                f"got {type(self.voronoi_site_enrichment).__name__}"
-            )
-        _check_choice(
-            "site_classification_method",
-            self.site_classification_method,
-            allowed=SITE_CLASSIFICATION_OPTIONS,
-        )
         if not self.connectivity_multipliers:
             raise ValueError("connectivity_multipliers must be a non-empty list")
         for i, m in enumerate(self.connectivity_multipliers):
@@ -421,214 +724,34 @@ class AdsorptionConfig:
                 raise ValueError(
                     f"connectivity_multipliers[{i}] must be positive, got {m}"
                 )
-        if len(self.vasp_kpoints) != 3:
-            raise ValueError(
-                f"vasp_kpoints must be a 3-tuple, got length {len(self.vasp_kpoints)}"
-            )
-        for i, k in enumerate(self.vasp_kpoints):
-            if not isinstance(k, int) or k <= 0:
-                raise ValueError(
-                    f"vasp_kpoints[{i}] must be a positive integer, got {k!r}"
-                )
 
         if not self.model_name:
             raise ValueError("model_name must be a non-empty string")
 
         _check_choice("device", self.device, allowed=("cuda", "cpu"))
 
-        # Bayesian optimisation knobs
-        if self.bo_enabled:
-            if self.bo_initial_random is not None:
-                _check_positive_int("bo_initial_random", self.bo_initial_random)
-            if self.bo_batch_size is not None:
-                _check_positive_int("bo_batch_size", self.bo_batch_size)
-            _check_positive_int("bo_total_budget", self.bo_total_budget)
-            if self.bo_ucb_kappa < 0:
-                raise ValueError(
-                    f"bo_ucb_kappa must be non-negative, got {self.bo_ucb_kappa}"
-                )
-            _check_choice(
-                "bo_initial_sampling",
-                self.bo_initial_sampling,
-                allowed=BO_INITIAL_SAMPLING_OPTIONS,
-            )
-            _check_choice(
-                "bo_acquisition",
-                self.bo_acquisition,
-                allowed=BO_ACQUISITION_OPTIONS,
-            )
-            _check_choice(
-                "bo_surrogate",
-                self.bo_surrogate,
-                allowed=BO_SURROGATE_OPTIONS,
-            )
-            _check_choice(
-                "bo_transfer_mode",
-                self.bo_transfer_mode,
-                allowed=("weighted", "cumulative_refit"),
-            )
-            if (
-                self.bo_transfer_enabled
-                and self.bo_surrogate not in BO_TRANSFER_CAPABLE_SURROGATES
-            ):
-                raise ValueError(
-                    "bo_transfer_enabled requires a surrogate that supports "
-                    "per-sample weights "
-                    f"({', '.join(BO_TRANSFER_CAPABLE_SURROGATES)}); "
-                    "sample_weight is not supported for "
-                    f"bo_surrogate={self.bo_surrogate!r}"
-                )
-            if self.bo_candidate_pool_size is not None:
-                _check_positive_int(
-                    "bo_candidate_pool_size", self.bo_candidate_pool_size
-                )
-            if (
-                not isfinite(self.bo_failure_penalty_default)
-                or self.bo_failure_penalty_default < 0
-            ):
-                raise ValueError(
-                    "bo_failure_penalty_default must be a finite non-negative value, "
-                    f"got {self.bo_failure_penalty_default!r}"
-                )
-            if not isinstance(self.bo_failure_penalty_overrides, dict):
-                raise ValueError(
-                    "bo_failure_penalty_overrides must be a dict[str, float], "
-                    f"got {type(self.bo_failure_penalty_overrides).__name__}"
-                )
-            for penalty_key, penalty_value in self.bo_failure_penalty_overrides.items():
-                if not isinstance(penalty_key, str) or not penalty_key:
-                    raise ValueError(
-                        "bo_failure_penalty_overrides keys must be non-empty strings, "
-                        f"got {penalty_key!r}"
-                    )
-                if not isfinite(penalty_value) or penalty_value < 0:
-                    raise ValueError(
-                        "bo_failure_penalty_overrides values must be finite non-negative, "
-                        f"got {penalty_value!r} for key {penalty_key!r}"
-                    )
-            _check_positive_int(
-                "bo_transfer_min_step_observations",
-                self.bo_transfer_min_step_observations,
-            )
-            _check_positive_int(
-                "bo_transfer_trust_patience", self.bo_transfer_trust_patience
-            )
-            if self.bo_transfer_prior_step_window is not None:
-                _check_positive_int(
-                    "bo_transfer_prior_step_window",
-                    self.bo_transfer_prior_step_window,
-                )
-            _check_positive(
-                "bo_transfer_recency_lengthscale",
-                self.bo_transfer_recency_lengthscale,
-            )
-            _check_positive(
-                "bo_transfer_occupancy_lengthscale",
-                self.bo_transfer_occupancy_lengthscale,
-            )
-            if (
-                not isfinite(self.bo_transfer_occupancy_floor)
-                or not 0.0 <= self.bo_transfer_occupancy_floor <= 1.0
-            ):
-                raise ValueError(
-                    "bo_transfer_occupancy_floor must be finite in [0.0, 1.0], "
-                    f"got {self.bo_transfer_occupancy_floor!r}"
-                )
-            if (
-                not isfinite(self.bo_transfer_weight_cap)
-                or not 0.0 <= self.bo_transfer_weight_cap < 1.0
-            ):
-                raise ValueError(
-                    "bo_transfer_weight_cap must be finite in [0.0, 1.0), "
-                    f"got {self.bo_transfer_weight_cap!r}"
-                )
-            _check_positive(
-                "bo_transfer_similarity_lengthscale",
-                self.bo_transfer_similarity_lengthscale,
-            )
-            if (
-                not isfinite(self.bo_transfer_min_similarity)
-                or not 0.0 <= self.bo_transfer_min_similarity <= 1.0
-            ):
-                raise ValueError(
-                    "bo_transfer_min_similarity must be finite in [0.0, 1.0], "
-                    f"got {self.bo_transfer_min_similarity!r}"
-                )
-            if (
-                not isfinite(self.bo_transfer_mae_tolerance)
-                or self.bo_transfer_mae_tolerance < 0.0
-            ):
-                raise ValueError(
-                    "bo_transfer_mae_tolerance must be finite and non-negative, "
-                    f"got {self.bo_transfer_mae_tolerance!r}"
-                )
-            if (
-                not isfinite(self.bo_transfer_exploration_fraction)
-                or not 0.0 <= self.bo_transfer_exploration_fraction <= 1.0
-            ):
-                raise ValueError(
-                    "bo_transfer_exploration_fraction must be finite in [0.0, 1.0], "
-                    f"got {self.bo_transfer_exploration_fraction!r}"
-                )
-            _check_positive(
-                "bo_transfer_proximity_lengthscale",
-                self.bo_transfer_proximity_lengthscale,
-            )
-            if (
-                not isfinite(self.bo_transfer_proximity_floor)
-                or not 0.0 <= self.bo_transfer_proximity_floor <= 1.0
-            ):
-                raise ValueError(
-                    "bo_transfer_proximity_floor must be finite in [0.0, 1.0], "
-                    f"got {self.bo_transfer_proximity_floor!r}"
-                )
-        _check_choice("ts_optimizer", self.ts_optimizer, allowed=TS_OPTIMIZER_OPTIONS)
-        _check_choice(
-            "slab_relaxation_mode",
-            self.slab_relaxation_mode,
-            allowed=SLAB_RELAXATION_MODE_OPTIONS,
-        )
-        _check_choice(
-            "slab_relaxation_optimizer",
-            self.slab_relaxation_optimizer,
-            allowed=SLAB_RELAXATION_OPTIMIZER_OPTIONS,
-        )
-        _check_positive_int("slab_relaxation_steps", self.slab_relaxation_steps)
-        if self.slab_relaxation_fmax is not None:
-            _check_positive("slab_relaxation_fmax", self.slab_relaxation_fmax)
-        if not 0.1 <= self.autobatcher_max_memory_padding <= 1.0:
-            raise ValueError(
-                f"autobatcher_max_memory_padding must be in [0.1, 1.0], got {self.autobatcher_max_memory_padding}"
-            )
-        if (
-            self.autobatcher_max_memory_scaler is not None
-            and self.autobatcher_max_memory_scaler <= 0
-        ):
-            raise ValueError(
-                f"autobatcher_max_memory_scaler must be positive when set, got {self.autobatcher_max_memory_scaler}"
-            )
-        if self.autobatcher_max_atoms_to_try is not None:
-            _check_positive_int(
-                "autobatcher_max_atoms_to_try", self.autobatcher_max_atoms_to_try
-            )
-        if not 0.0 <= self.saturation_autobatcher_reuse_growth_fraction <= 1.0:
-            raise ValueError(
-                "saturation_autobatcher_reuse_growth_fraction must be in [0.0, 1.0], "
-                f"got {self.saturation_autobatcher_reuse_growth_fraction}"
-            )
         if self.saturation_max_steps is not None:
             _check_positive_int("saturation_max_steps", self.saturation_max_steps)
 
 
-# InitVar leaves a class attribute equal to its default; remove it so
-# dataclasses.replace does not pick up a stale class default via getattr.
-# ``__getattr__`` returns None so replace passes the InitVar through as unset.
-def _adsorption_config_getattr(self: "AdsorptionConfig", name: str) -> float | None:
-    if name == "min_contact_distance":
-        return None
-    raise AttributeError(f"{type(self).__name__!s} object has no attribute {name!r}")
+_adsorption_config_init = AdsorptionConfig.__init__
 
 
-AdsorptionConfig.__getattr__ = _adsorption_config_getattr  # type: ignore[attr-defined]
-if hasattr(AdsorptionConfig, "min_contact_distance"):
-    delattr(AdsorptionConfig, "min_contact_distance")
+def _adsorption_config_init_with_flat_bo(self, *args, **kwargs):
+    """Accept nested ``bo=`` and legacy flat ``bo_*`` constructor kwargs."""
+    flat = {
+        key: kwargs.pop(key)
+        for key in list(kwargs)
+        if key.startswith("bo_") and key != "bo"
+    }
+    bo = kwargs.get("bo", None)
+    if isinstance(bo, Mapping) and not isinstance(bo, BOConfig):
+        bo = _bo_config_from_mapping(bo)
+        kwargs["bo"] = bo
+    if flat:
+        base = bo if isinstance(bo, BOConfig) else BOConfig()
+        kwargs["bo"] = _merge_flat_into_bo(base, flat)
+    _adsorption_config_init(self, *args, **kwargs)
+
+
+AdsorptionConfig.__init__ = _adsorption_config_init_with_flat_bo

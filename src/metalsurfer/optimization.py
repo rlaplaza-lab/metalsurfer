@@ -4,23 +4,16 @@ import contextlib
 import gc
 import logging
 import math
-from collections import Counter
 from typing import Any, NoReturn, cast
 
 import numpy as np
 from ase import Atoms
 from ase.calculators.calculator import all_changes
-from ase.constraints import FixAtoms
 
 from ._logging import torchsim_output_capture
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
-from .placement._constants import _TOP_LAYER_DEPTH_MIN_ANGSTROM
-from .placement.sites import (
-    _height_along_slab_normal,
-    derive_pore_threshold,
-    get_unified_sites,
-)
+from .surface_prep.freeze import frozen_indices_from_constraints
 
 logger = logging.getLogger(__name__)
 
@@ -454,282 +447,6 @@ def estimate_parallel_relaxation_capacity(
 
 
 # ---------------------------------------------------------------------------
-# Surface-layer identification (prep freeze shortcut)
-# ---------------------------------------------------------------------------
-
-
-def identify_relaxable_surface_indices(
-    slab: Atoms,
-    *,
-    material_type: str = "slab",
-    tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
-    pore_threshold: float | None = None,
-) -> list[int]:
-    """Return substrate atom indices left free when ``relax_top_layer=True``.
-
-    - **slab:** simple height band along the slab normal (within *tolerance* of
-      the maximum height). This is **not**
-      :func:`~metalsurfer.placement.sites.top_layer_mask_by_normal`, which
-      expands for stepped site enumeration and can free an entire thin slab.
-    - **nanoparticle:** outermost shell (within *tolerance* of the maximum
-      distance from the centre of mass).
-    - **porous:** framework atoms on pore walls — closest neighbour of each
-      pore-classified Voronoi void site.
-    """
-    if material_type not in ("slab", "nanoparticle", "porous"):
-        raise ValueError(
-            "material_type must be 'slab', 'nanoparticle', or 'porous', "
-            f"got {material_type!r}"
-        )
-
-    positions = slab.get_positions()
-    n_atoms = len(positions)
-    if n_atoms == 0:
-        return []
-
-    if material_type == "slab":
-        # Simple top-band cutoff: atoms within *tolerance* of the exposed surface.
-        # Do not use top_layer_mask_by_normal here — that helper expands for stepped
-        # site enumeration and can free an entire thin multi-layer slab when
-        # tolerance spans ~2 interlayer spacings (e.g. camphor Cu(111)).
-        cell = np.asarray(slab.get_cell(), dtype=float)
-        heights = _height_along_slab_normal(positions, cell)
-        h_max = float(np.max(heights))
-        mask = heights >= (h_max - float(tolerance))
-        return [int(i) for i in np.nonzero(mask)[0]]
-
-    if material_type == "nanoparticle":
-        com = np.mean(positions, axis=0)
-        dists = np.linalg.norm(positions - com, axis=1)
-        r_max = float(np.max(dists))
-        return [int(i) for i, d in enumerate(dists) if d >= r_max - float(tolerance)]
-
-    symbols = slab.get_chemical_symbols()
-    if pore_threshold is None:
-        pore_threshold = derive_pore_threshold(symbols)
-
-    sites = get_unified_sites(
-        slab,
-        material_type="porous",
-        top_layer_tolerance=float(tolerance),
-        pore_threshold=float(pore_threshold),
-        enrich=False,
-    )
-    boundary: set[int] = set()
-    for site in sites:
-        if site.get("site_type") != "pore":
-            continue
-        raw_indices = site.get("slab_indices")
-        if not isinstance(raw_indices, tuple) or not raw_indices:
-            continue
-        idx = int(raw_indices[0])
-        if 0 <= idx < n_atoms:
-            boundary.add(idx)
-
-    if not boundary:
-        logger.warning(
-            "relax_top_layer=True on porous substrate identified no pore-boundary "
-            "atoms; freezing entire substrate during placement relaxation"
-        )
-    return sorted(boundary)
-
-
-def identify_top_layer_indices(
-    slab: Atoms,
-    tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
-) -> list[int]:
-    """Return atom indices in the exposed slab surface layer.
-
-    Slab-only convenience wrapper around :func:`identify_relaxable_surface_indices`.
-    Atoms within *tolerance* of the maximum height along the slab normal are
-    considered part of the top layer.
-    """
-    return identify_relaxable_surface_indices(
-        slab,
-        material_type="slab",
-        tolerance=tolerance,
-    )
-
-
-def compute_frozen_indices(
-    slab: Atoms,
-    *,
-    relax_top_layer: bool = False,
-    freeze_symbols: list[str] | None = None,
-    top_layer_tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
-    material_type: str = "slab",
-    pore_threshold: float | None = None,
-) -> list[int]:
-    """Determine which slab atom indices should be frozen during optimisation.
-
-    Prep-time policy helper used by :func:`~metalsurfer.surface_prep.apply_surface_constraints`.
-    Default policy: freeze the entire substrate (``relax_top_layer=False``).
-    If ``relax_top_layer`` is ``True``, only the interior is frozen; which atoms
-    remain free depends on *material_type* (see
-    :func:`identify_relaxable_surface_indices`).
-    If ``freeze_symbols`` is set, only atoms whose symbol is in that list are
-    frozen (regardless of layer).
-    """
-    n_slab = len(slab)
-
-    if freeze_symbols is not None:
-        syms = slab.get_chemical_symbols()
-        return [i for i, s in enumerate(syms) if s in freeze_symbols]
-
-    if not relax_top_layer:
-        return list(range(n_slab))
-
-    free_indices = set(
-        identify_relaxable_surface_indices(
-            slab,
-            material_type=material_type,
-            tolerance=top_layer_tolerance,
-            pore_threshold=pore_threshold,
-        )
-    )
-    return [i for i in range(n_slab) if i not in free_indices]
-
-
-def frozen_indices_from_constraints(atoms: Atoms) -> list[int]:
-    """Return frozen atom indices from ASE ``FixAtoms`` constraints on *atoms*."""
-    indices: list[int] = []
-    for constraint in atoms.constraints:
-        if isinstance(constraint, FixAtoms):
-            idx = constraint.index
-            if isinstance(idx, (int, np.integer)):
-                indices.append(int(idx))
-            else:
-                indices.extend(int(i) for i in idx)
-    return sorted(set(indices))
-
-
-_DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG = 0.01
-
-
-def max_frozen_substrate_displacement(
-    optimized: Atoms,
-    reference_slab: Atoms,
-    *,
-    slab_size: int | None = None,
-    frozen_indices: list[int] | None = None,
-) -> float:
-    """Maximum Cartesian displacement (Å) among constrained substrate atoms."""
-    if slab_size is None:
-        slab_size = len(reference_slab)
-    if frozen_indices is None:
-        frozen_indices = frozen_indices_from_constraints(reference_slab)
-    if not frozen_indices:
-        return 0.0
-    ref_pos = reference_slab.get_positions()
-    opt_pos = optimized.get_positions()
-    max_disp = 0.0
-    for idx in frozen_indices:
-        if idx >= slab_size:
-            continue
-        max_disp = max(max_disp, float(np.linalg.norm(opt_pos[idx] - ref_pos[idx])))
-    return max_disp
-
-
-def check_frozen_substrate_displacement(
-    optimized: Atoms,
-    reference_slab: Atoms,
-    *,
-    slab_size: int | None = None,
-    tolerance_ang: float = _DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG,
-) -> tuple[bool, str]:
-    """Return whether *optimized* kept FixAtoms substrate indices fixed."""
-    max_disp = max_frozen_substrate_displacement(
-        optimized,
-        reference_slab,
-        slab_size=slab_size,
-    )
-    frozen = frozen_indices_from_constraints(reference_slab)
-    if not frozen:
-        return True, "no FixAtoms constraints on reference slab"
-    if max_disp > tolerance_ang:
-        return (
-            False,
-            f"frozen substrate atoms displaced up to {max_disp:.4f} A "
-            f"(tolerance {tolerance_ang:.4f} A)",
-        )
-    return True, f"frozen substrate displacement {max_disp:.6f} A"
-
-
-def format_atom_index_ranges(indices: list[int]) -> str:
-    """Format sorted atom indices as compact ranges (e.g. ``0-31, 40-47``)."""
-    if not indices:
-        return "(none)"
-    sorted_idx = sorted(set(indices))
-    parts: list[str] = []
-    start = prev = sorted_idx[0]
-    for idx in sorted_idx[1:]:
-        if idx == prev + 1:
-            prev = idx
-            continue
-        parts.append(f"{start}-{prev}" if start != prev else str(start))
-        start = prev = idx
-    parts.append(f"{start}-{prev}" if start != prev else str(start))
-    return ", ".join(parts)
-
-
-def _symbol_count_label(indices: list[int], symbols: list[str]) -> str:
-    counts = Counter(symbols[i] for i in indices)
-    return ", ".join(f"{sym}×{n}" for sym, n in sorted(counts.items()))
-
-
-def log_substrate_freeze_policy(
-    substrate: Atoms,
-    *,
-    context: str = "Substrate",
-) -> None:
-    """Log which substrate atoms are frozen vs free during placement relaxation."""
-    n_substrate = len(substrate)
-    symbols = substrate.get_chemical_symbols()
-    frozen = frozen_indices_from_constraints(substrate)
-    frozen_set = set(frozen)
-    moving = [i for i in range(n_substrate) if i not in frozen_set]
-
-    if not frozen:
-        logger.info(
-            "%s freeze policy: no FixAtoms on %d substrate atoms — all substrate "
-            "atoms free to move during placement relaxation",
-            context,
-            n_substrate,
-        )
-        return
-
-    if not moving:
-        logger.info(
-            "%s freeze policy: all %d substrate atoms frozen during placement "
-            "relaxation (%s; indices %s)",
-            context,
-            n_substrate,
-            _symbol_count_label(frozen, symbols),
-            format_atom_index_ranges(frozen),
-        )
-        return
-
-    logger.info(
-        "%s freeze policy: %d/%d substrate atoms frozen, %d free to move during "
-        "placement relaxation",
-        context,
-        len(frozen),
-        n_substrate,
-        len(moving),
-    )
-    logger.info(
-        "  frozen (%s): indices %s",
-        _symbol_count_label(frozen, symbols),
-        format_atom_index_ranges(frozen),
-    )
-    logger.info(
-        "  moving (%s): indices %s",
-        _symbol_count_label(moving, symbols),
-        format_atom_index_ranges(moving),
-    )
-
-
-# ---------------------------------------------------------------------------
 # model setup helpers
 # ---------------------------------------------------------------------------
 
@@ -769,45 +486,19 @@ def _ensure_torch_checkpoint_safe_globals() -> None:
 
 def _fairchem_pytorch26_unpickling_message() -> str:
     return (
-        "FairChem model loading failed due to PyTorch 2.6+ security changes.\n"
-        "This is a known issue with FairChem checkpoints and PyTorch 2.6+.\n"
-        "\n"
-        "To fix this issue, you have two options:\n"
-        "1. Add 'slice' to PyTorch's safe globals before loading the model:\n"
-        "   import torch\n"
-        "   torch.serialization.add_safe_globals([slice])\n"
-        "   # Then proceed with your code\n"
-        "\n"
-        "2. Set weights_only=False when loading the checkpoint (not recommended for security):\n"
-        "   # Only do this if you trust the source of the checkpoint\n"
-        "\n"
-        "For more details, see:\n"
-        "- PyTorch documentation: https://pytorch.org/docs/stable/generated/torch.load.html\n"
-        "- FairChem GitHub: https://github.com/facebookresearch/fairchem\n"
-        "\n"
-        "The metalsurfer package attempts to handle this automatically, but if you're seeing this error, "
-        "please report it at: https://github.com/rlaplaza/metalsurfer/issues"
+        "FairChem model loading failed due to PyTorch 2.6+ weights_only changes "
+        "(UnpicklingError involving slice). metalsurfer registers slice via "
+        "add_safe_globals; if this persists, see "
+        "https://pytorch.org/docs/stable/generated/torch.load.html and "
+        "https://github.com/facebookresearch/fairchem"
     )
 
 
 def _fairchem_load_failure_message(error_msg: str, model_name: str) -> str:
     return (
-        f"FairChem model loading failed: {error_msg}\n"
-        "This may be due to missing API keys, network issues, or model availability problems.\n"
-        "\n"
-        "Common solutions:\n"
-        "1. Ensure you have a HuggingFace API key if required by the model\n"
-        "2. Check your internet connection\n"
-        f"3. Verify the model name is correct: '{model_name}'\n"
-        "4. Try a different device (CPU vs GPU)\n"
-        "\n"
-        "For HuggingFace API key setup:\n"
-        "1. Create an account at https://huggingface.co/\n"
-        "2. Generate an API key at https://huggingface.co/settings/tokens\n"
-        "3. Set it as environment variable: export HF_TOKEN=your_token_here\n"
-        "4. Or configure it in Python: from huggingface_hub import login; login()\n"
-        "\n"
-        "For more information, see: https://github.com/facebookresearch/fairchem"
+        f"FairChem model loading failed: {error_msg}. "
+        f"Check HF token, network, and model name {model_name!r}. "
+        "See https://github.com/facebookresearch/fairchem"
     )
 
 
@@ -820,33 +511,6 @@ def _raise_fairchem_load_error(exc: Exception, model_name: str) -> NoReturn:
     ):
         raise RuntimeError(_fairchem_pytorch26_unpickling_message()) from exc
     raise RuntimeError(_fairchem_load_failure_message(error_msg, model_name)) from exc
-
-
-def setup_calculator(model_name: str = "uma-s-1p2", device: str = "cuda"):
-    """Create a FAIRChem ASE calculator for the given model."""
-    try:
-        from fairchem.core import FAIRChemCalculator, pretrained_mlip
-    except ImportError as exc:
-        raise DependencyMissingError(
-            "fairchem-core",
-            "setup_calculator",
-            "Install with: pip install fairchem-core",
-        ) from exc
-
-    resolved_device = _resolve_device(device)
-    if resolved_device is None:
-        raise ValueError("device must be set for calculator initialization")
-    device = resolved_device
-    _ensure_torch_checkpoint_safe_globals()
-    logger.info("Initializing FAIRChem calculator (%s) on %s...", model_name, device)
-    try:
-        predictor = pretrained_mlip.get_predict_unit(model_name, device=device)
-    except Exception as exc:
-        _raise_fairchem_load_error(exc, model_name)
-    calc = FAIRChemCalculator(predictor, task_name="oc20")
-    logger.info("Calculator initialized successfully")
-    return calc
-
 
 def setup_torchsim_model(model_name: str = "uma-s-1p2", device: str = "cuda"):
     """Create a TorchSim FairChemModel wrapper.
@@ -984,7 +648,7 @@ def setup_single_model(model_name: str = "uma-s-1p2", device: str = "cuda"):
     """Create a single FairChemModel shared by calculator and TorchSim.
 
     Returns (calculator, ts_model) where calculator wraps ts_model.
-    Use this instead of setup_calculator + setup_torchsim_model to reduce GPU memory.
+    Prefer this over separate calculator and TorchSim model setup to reduce GPU memory.
     """
     ts_model = setup_torchsim_model(model_name, device)
     calculator = TorchSimCalculator(ts_model)

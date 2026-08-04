@@ -22,6 +22,7 @@ from ..config import (
 )
 from ..models import PlacementDescriptor, PlacementSpec
 from ..placement import generators as placement_generators
+from ..placement.site_context import SiteContext
 from .features import extract_features
 from .regression import (
     TreeSurrogateKind,
@@ -993,7 +994,7 @@ def build_spec_features_geometry_aware(
     smiles: str | None = None,
     molecule: str = "",
     surface_id: str = "",
-    site_context: placement_generators.SiteContext | None = None,
+    site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
 ) -> tuple[pd.DataFrame, list[int]]:

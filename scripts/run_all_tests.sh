@@ -70,6 +70,7 @@ _run_phase "3_cpu_integration" \
   "$PYTHON" -m pytest \
     tests/test_integration_seeded.py \
     tests/test_integration_physics.py \
+    tests/test_integration_run_modes.py \
     --tb=short -v
 
 _run_phase "4_mlip_unit" \

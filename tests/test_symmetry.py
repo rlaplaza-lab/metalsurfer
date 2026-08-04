@@ -53,7 +53,7 @@ def _raw_indices_matching_orbit(
     """Indices of raw sites whose xy lies on an equivalent position in this orbit."""
     idxs: list[int] = []
     for k, s in enumerate(raw_sites):
-        sxy = np.asarray(s["xy"], dtype=float)
+        sxy = np.asarray(s.xy, dtype=float)
         for xy in equiv_xy:
             if np.linalg.norm(sxy - np.asarray(xy, dtype=float)) < tol:
                 idxs.append(k)
@@ -69,15 +69,18 @@ def _assert_orbit_pairwise_symops(
     """Each orbit from ``analyze_site_symmetry`` is pairwise connected by one symop."""
     frac_ops = analyzer._frac_ops_from_dataset()
     cart_pts = [analyzer._site_3d_cart(s) for s in raw_sites]
+    site_types = [str(s.site_type) for s in raw_sites]
     grouped = analyzer.analyze_site_symmetry(raw_sites, planar=planar)
-    assert sum(g["symmetry_multiplicity"] for g in grouped) == len(raw_sites)
+    assert sum(int(g.symmetry_multiplicity or 0) for g in grouped) == len(raw_sites)
     for g in grouped:
-        idxs = _raw_indices_matching_orbit(g["symmetry_equivalent_sites"], raw_sites)
-        assert len(idxs) == g["symmetry_multiplicity"]
+        idxs = _raw_indices_matching_orbit(
+            list(g.symmetry_equivalent_sites or ()), raw_sites
+        )
+        assert len(idxs) == g.symmetry_multiplicity
         for ii, i in enumerate(idxs):
             for j in idxs[ii + 1 :]:
                 assert analyzer._site_pair_connected_by_ops(
-                    i, j, cart_pts, frac_ops, planar
+                    i, j, cart_pts, frac_ops, planar, site_types=site_types
                 )
 
 
@@ -147,7 +150,7 @@ def test_get_symmetry_aware_sites_multiplicity_partition():
     assert raw is not None and len(raw) >= 1
     sym = get_symmetry_aware_sites(slab)
     assert len(sym) >= 1
-    assert sum(s["symmetry_multiplicity"] for s in sym) == len(raw)
+    assert sum((s.symmetry_multiplicity or 0) for s in sym) == len(raw)
     assert len(sym) <= len(raw)
 
 
@@ -215,8 +218,8 @@ def test_get_symmetry_aware_sites_nanoparticle_envelope():
     )
     assert len(sites) >= 1
     # Orbit multiplicities must partition the raw site list exactly.
-    assert sum(int(s["symmetry_multiplicity"]) for s in sites) == len(raw)
-    assert all(int(s["symmetry_multiplicity"]) >= 1 for s in sites)
+    assert sum(int(s.symmetry_multiplicity or 0) for s in sites) == len(raw)
+    assert all(int(s.symmetry_multiplicity or 0) >= 1 for s in sites)
 
 
 def test_cube_nanoparticle_symmetry_reduces_redundant_sites_deterministically():
@@ -243,14 +246,14 @@ def test_cube_nanoparticle_symmetry_reduces_redundant_sites_deterministically():
 
     assert len(sites1) == len(sites2)
     assert len(sites1) >= 1
-    assert sum(int(s["symmetry_multiplicity"]) for s in sites1) == len(raw)
+    assert sum(int(s.symmetry_multiplicity or 0) for s in sites1) == len(raw)
     assert len(sites1) < len(raw), "symmetry should collapse redundant envelope sites"
-    assert any(int(s["symmetry_multiplicity"]) > 1 for s in sites1)
+    assert any(int(s.symmetry_multiplicity or 0) > 1 for s in sites1)
     for s1, s2 in zip(sites1, sites2, strict=True):
         np.testing.assert_allclose(
-            np.asarray(s1["xy"]), np.asarray(s2["xy"]), atol=1e-8
+            np.asarray(s1.xy), np.asarray(s2.xy), atol=1e-8
         )
-        assert int(s1["symmetry_multiplicity"]) == int(s2["symmetry_multiplicity"])
+        assert int(s1.symmetry_multiplicity or 0) == int(s2.symmetry_multiplicity or 0)
 
 
 def test_symmetry_info_includes_hall_and_mode():
@@ -359,7 +362,7 @@ def test_fcc111_pt_slab_symmetry_reduces_sites_and_verifies_orbits():
     sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15)
     assert len(sym) >= 1
     assert len(sym) <= len(raw)
-    assert sum(s["symmetry_multiplicity"] for s in sym) == len(raw)
+    assert sum((s.symmetry_multiplicity or 0) for s in sym) == len(raw)
 
     an = SymmetryAnalyzer(slab, symmetry_tolerance=0.15)
     _assert_orbit_pairwise_symops(an, raw, planar=True)
@@ -398,3 +401,104 @@ def test_get_symmetry_aware_sites_precomputed_raw_matches_internal_fetch():
     )
     assert with_pre is not None and without is not None
     assert len(with_pre) == len(without)
+
+
+def test_analyze_site_symmetry_keeps_distinct_site_types_separate():
+    """Identical xyz with different site_type must not share an orbit."""
+    from metalsurfer.placement.site_types import site_from_dict
+
+    slab = make_slab(nx=2, ny=2)
+    an = SymmetryAnalyzer(slab, symmetry_tolerance=0.1)
+    xyz = [1.0, 1.0, 5.0]
+    sites = [
+        site_from_dict(
+            {
+                "xy": xyz[:2],
+                "z": xyz[2],
+                "xyz": xyz,
+                "site_type": "atop",
+                "slab_indices": (0,),
+                "normal": [0.0, 0.0, 1.0],
+                "material_type": "slab",
+                "site_source": "test",
+                "env_fingerprint": (("Cu",), "atop"),
+            }
+        ),
+        site_from_dict(
+            {
+                "xy": xyz[:2],
+                "z": xyz[2],
+                "xyz": xyz,
+                "site_type": "hollow",
+                "slab_indices": (0, 1, 2),
+                "normal": [0.0, 0.0, 1.0],
+                "material_type": "slab",
+                "site_source": "test",
+                "env_fingerprint": (("Cu", "Cu", "Cu"), "hollow"),
+            }
+        ),
+    ]
+    grouped = an.analyze_site_symmetry(sites, planar=True)
+    assert len(grouped) == 2
+    assert {g.site_type for g in grouped} == {"atop", "hollow"}
+    assert all(int(g.symmetry_multiplicity or 0) == 1 for g in grouped)
+
+
+def test_planar_separation_distance_uses_slab_normal_not_cartesian_xy():
+    """Planar mode drops the a×b normal component, not Cartesian z."""
+    # Orthorhombic cell rotated so the slab normal is not +z.
+    tilt = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 0.866, -0.5],
+            [0.0, 0.5, 0.866],
+        ],
+        dtype=float,
+    )
+    atoms = make_slab(nx=2, ny=2)
+    cell = tilt @ np.asarray(atoms.get_cell(), dtype=float)
+    atoms.set_cell(cell)
+    pos = atoms.get_positions()
+    pos[:] = (tilt @ pos.T).T
+    atoms.set_positions(pos)
+
+    an = SymmetryAnalyzer(atoms, symmetry_tolerance=0.1)
+    n = an._slab_normal()
+    # Pure normal separation: planar distance must be ~0; Cartesian [:2] is not.
+    sep = 1.5 * n
+    assert an._separation_distance(sep, planar=True) < 1e-9
+    assert float(np.linalg.norm(sep[:2])) > 0.5
+    # Pure in-plane separation along a: planar distance equals |sep|.
+    sep_ab = np.asarray(an._lattice[0], dtype=float)
+    sep_ab = sep_ab / np.linalg.norm(sep_ab)
+    assert an._separation_distance(sep_ab, planar=True) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_tilted_slab_symmetry_multiplicities_partition_raw():
+    """Tilted slab (normal ≠ +z) still partitions raw sites into orbits."""
+    slab = make_slab(nx=2, ny=2)
+    cell = np.array(slab.get_cell(), dtype=float)
+    tilt = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 0.866, -0.5],
+            [0.0, 0.5, 0.866],
+        ],
+        dtype=float,
+    )
+    cell[:3] = tilt @ cell[:3]
+    slab.set_cell(cell)
+    pos = slab.get_positions()
+    pos[:] = (tilt @ pos.T).T
+    slab.set_positions(pos)
+
+    raw = get_unified_sites(slab, material_type="slab")
+    assert raw is not None and len(raw) >= 1
+    sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15)
+    assert len(sym) >= 1
+    assert len(sym) <= len(raw)
+    assert sum(int(s.symmetry_multiplicity or 0) for s in sym) == len(raw)
+    # analyze_site_symmetry re-verifies pairwise symop connectivity (raises on failure).
+    an = SymmetryAnalyzer(slab, symmetry_tolerance=0.15)
+    regrouped = an.analyze_site_symmetry(raw, planar=True)
+    assert sum(int(g.symmetry_multiplicity or 0) for g in regrouped) == len(raw)

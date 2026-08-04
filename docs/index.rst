@@ -20,9 +20,11 @@ Adsorption on arbitrary materials
 
 Pass any ASE ``Atoms`` structure (slab, nanoparticle, or porous framework),
 prepare it with optional equilibration and freeze constraints, supply SMILES
-adsorbates, and run screening or saturation via the ``run_*`` campaign APIs.
-See :doc:`guides/quickstart` for install steps and runnable examples, and
-:doc:`guides/configuration` for ``AdsorptionConfig`` recipes.
+adsorbates, and run screening or saturation via the ``run_*`` campaign APIs
+or YAML documents loaded with :func:`~metalsurfer.load_campaign_yaml` and
+:func:`~metalsurfer.run_campaign`. See :doc:`guides/quickstart` for install
+steps and runnable examples, and :doc:`guides/configuration` for
+``AdsorptionConfig`` recipes.
 
 .. toctree::
    :maxdepth: 2

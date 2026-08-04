@@ -2,7 +2,6 @@
 source = src/metalsurfer
 omit =
     optimization.py
-    ml/reproduce.py
     */__pycache__/*
 
 [report]

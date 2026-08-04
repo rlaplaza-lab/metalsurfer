@@ -3,7 +3,6 @@
 import logging
 import math
 import os
-from typing import Literal
 
 import numpy as np
 from ase import Atoms
@@ -11,23 +10,30 @@ from ase.constraints import FixAtoms
 from ase.filters import UnitCellFilter
 from ase.optimize import BFGS, FIRE, LBFGS
 
-from .config import AdsorptionConfig
-from .exceptions import (
+from .._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
+from ..config import (
+    AdsorptionConfig,
+    SLAB_RELAXATION_MODE,
+    SLAB_RELAXATION_OPTIMIZER,
+)
+from ..exceptions import (
     DependencyMissingError,
     GeometryValidationError,
     OptimizationError,
 )
-from .io_results import _write_clean_xyz
-from .optimization import compute_frozen_indices, frozen_indices_from_constraints
-
+from ..io_results import _write_clean_xyz
+from ..placement._material import MATERIAL_PBC, material_aware_pbc
+from ..placement.site_enumeration import get_hollow_sites_for_adatoms
+from .freeze import (
+    compute_frozen_indices,
+    frozen_indices_from_constraints,
+    top_layer_indices_by_height,
+)
 logger = logging.getLogger(__name__)
-SLAB_RELAXATION_MODE = Literal["none", "ionic_only", "cell_only", "full"]
-SLAB_RELAXATION_OPTIMIZER = Literal["lbfgs", "bfgs", "fire"]
 
 DEFAULT_SLAB_TOP_VACUUM_ANG = 15.0
 _INVERTED_SLAB_VACUUM_MARGIN_ANG = 1.0
-# Keep in sync with workflow.shared.MIN_CALCULATOR_CELL_C_ANG
-_MIN_CALCULATOR_CELL_C_ANG = 18.0
+_MIN_CALCULATOR_CELL_C_ANG = MIN_CALCULATOR_CELL_C_ANG
 _CELL_DET_EPS = 1e-8
 
 
@@ -97,10 +103,15 @@ class SlabContainer:
     Existing workflows access the ASE Atoms via ``slab.atoms``.  This
     container lets generic code produce an object with the same API
     without requiring the FAIRChem data package.
+
+    ``finalized`` is set by :func:`~metalsurfer.surface_prep.finalize_substrate`
+    after full vacuum/cell/PBC validation so campaign entry points can skip
+    repeating that work.
     """
 
-    def __init__(self, atoms: Atoms):
+    def __init__(self, atoms: Atoms, *, finalized: bool = False):
         self.atoms = atoms
+        self.finalized = finalized
 
 
 def ensure_slab_z_alignment(
@@ -193,20 +204,44 @@ def apply_surface_constraints(
     return result
 
 
-def coerce_slab_container(slab: SlabContainer | Atoms) -> SlabContainer:
+def coerce_slab_container(
+    slab: SlabContainer | Atoms,
+    *,
+    copy: bool = False,
+) -> SlabContainer:
     """Normalize slab-like input to :class:`SlabContainer` without modification.
 
     Accepts either a pre-wrapped ``SlabContainer`` or a plain ASE ``Atoms``
-    object. ``Atoms`` inputs are defensively copied to avoid mutating caller
-    state across workflow steps. Geometry alignment, sizing, and constraints
-    must be applied via the prep helpers before calling campaign APIs.
+    object. Policy:
+
+    - Already a ``SlabContainer``: returned as-is unless ``copy=True``, in which
+      case a new container wrapping ``atoms.copy()`` is returned (``finalized``
+      flag is preserved).
+    - Plain ``Atoms``: always wrapped in a new container around ``atoms.copy()``
+      so caller state is not mutated across workflow steps.
+
+    Geometry alignment, sizing, and constraints must be applied via the prep
+    helpers before calling campaign APIs.
     """
     if isinstance(slab, SlabContainer):
-        return SlabContainer(slab.atoms.copy())
+        if not copy:
+            return slab
+        return SlabContainer(slab.atoms.copy(), finalized=slab.finalized)
     if isinstance(slab, Atoms):
         return SlabContainer(slab.copy())
     raise TypeError(
         f"slab must be a SlabContainer or ase.Atoms, got {type(slab).__name__}"
+    )
+
+
+def _warn_missing_fixatoms(slab: Atoms) -> None:
+    if frozen_indices_from_constraints(slab):
+        return
+    logger.warning(
+        "Substrate has no FixAtoms constraints; all %d substrate atoms will "
+        "relax during adsorption. Call apply_surface_constraints during "
+        "substrate preparation to freeze atoms.",
+        len(slab),
     )
 
 
@@ -222,6 +257,10 @@ def validate_substrate(
 
     Raises :class:`~metalsurfer.exceptions.GeometryValidationError` when the
     substrate is misaligned, undersized, or incompatible with *material_type*.
+
+    When *conformers* is provided, also checks in-plane image separation
+    (prefer calling :func:`validate_substrate_conformer_sizing` from screening
+    prep after resize instead of bundling it here).
     """
     cfg = config if config is not None else AdsorptionConfig()
     pos = slab.get_positions()
@@ -239,16 +278,12 @@ def validate_substrate(
     cell = np.array(slab.get_cell(), dtype=float)
     c_len = float(np.linalg.norm(cell[2]))
     pbc = np.array(slab.get_pbc(), dtype=bool)
-    expected_pbc = {
-        "slab": [True, True, False],
-        "porous": [True, True, True],
-        "nanoparticle": [False, False, False],
-    }.get(material_type)
-    if expected_pbc is None:
+    if material_type not in MATERIAL_PBC:
         raise GeometryValidationError(
             f"Unknown material_type={material_type!r}; "
             "expected 'slab', 'porous', or 'nanoparticle'"
         )
+    expected_pbc = material_aware_pbc(material_type)
     if not np.array_equal(pbc, expected_pbc):
         raise GeometryValidationError(
             f"Substrate PBC {pbc.tolist()} is inconsistent with "
@@ -306,27 +341,44 @@ def validate_substrate(
                 "calling campaign APIs."
             )
 
-    if not frozen_indices_from_constraints(slab):
-        logger.warning(
-            "Substrate has no FixAtoms constraints; all %d substrate atoms will "
-            "relax during adsorption. Call apply_surface_constraints during "
-            "substrate preparation to freeze atoms.",
-            len(slab),
-        )
+    _warn_missing_fixatoms(slab)
 
     if conformers:
-        diameter = _molecule_diameter(conformers)
-        nx, ny = compute_minimum_supercell(
-            cell,
-            diameter,
-            cfg.min_pbc_image_separation,
+        validate_substrate_conformer_sizing(
+            slab,
+            conformers=conformers,
+            config=cfg,
         )
-        if nx > 1 or ny > 1:
-            raise GeometryValidationError(
-                f"In-plane periodic image separation is too small for adsorbate "
-                f"diameter {diameter:.1f} A (needs repeat at least ({nx}, {ny}, 1)). "
-                "Call auto_resize_substrate_for_molecule during substrate preparation."
-            )
+
+
+def validate_substrate_conformer_sizing(
+    slab: Atoms,
+    *,
+    conformers: list[Atoms],
+    config: AdsorptionConfig | None = None,
+) -> None:
+    """Ensure in-plane image separation is adequate for *conformers*."""
+    cfg = config if config is not None else AdsorptionConfig()
+    cell = np.array(slab.get_cell(), dtype=float)
+    diameter = _molecule_diameter(conformers)
+    nx, ny = compute_minimum_supercell(
+        cell,
+        diameter,
+        cfg.min_pbc_image_separation,
+    )
+    if nx > 1 or ny > 1:
+        raise GeometryValidationError(
+            f"In-plane periodic image separation is too small for adsorbate "
+            f"diameter {diameter:.1f} A (needs repeat at least ({nx}, {ny}, 1)). "
+            "Call auto_resize_substrate_for_molecule during substrate preparation."
+        )
+
+
+def _check_api_substrate_invariants(slab: Atoms) -> None:
+    """Lightweight campaign-entry checks (constraints present / FixAtoms type)."""
+    if len(slab) == 0:
+        raise GeometryValidationError("Substrate has no atoms")
+    _warn_missing_fixatoms(slab)
 
 
 def accept_substrate_for_api(
@@ -335,15 +387,28 @@ def accept_substrate_for_api(
     config: AdsorptionConfig,
     conformers: list[Atoms] | None = None,
 ) -> SlabContainer:
-    """Wrap, validate, and return a substrate ready for campaign APIs."""
+    """Wrap and return a substrate ready for campaign APIs.
+
+    When *slab* is already a finalized :class:`SlabContainer` (from
+    :func:`~metalsurfer.surface_prep.finalize_substrate`), only API invariants
+    are checked — full vacuum/cell validation is not repeated. Plain ``Atoms``
+    or non-finalized containers still run :func:`validate_substrate`.
+
+    *conformers* is accepted for API compatibility but sizing checks belong in
+    :func:`~metalsurfer.workflow.shared.prepare_substrate_for_screening`.
+    """
+    del conformers  # sizing is deferred to prepare_substrate_for_screening
     container = coerce_slab_container(slab)
-    validate_substrate(
-        container.atoms,
-        material_type=config.material_type,
-        config=config,
-        conformers=conformers,
-        require_bottom_anchor=False,
-    )
+    if container.finalized:
+        _check_api_substrate_invariants(container.atoms)
+    else:
+        validate_substrate(
+            container.atoms,
+            material_type=config.material_type,
+            config=config,
+            conformers=None,
+            require_bottom_anchor=False,
+        )
     return container
 
 
@@ -454,15 +519,12 @@ def create_slab_from_bulk(
     slab.atoms = ensure_slab_z_alignment(slab.atoms)
 
     cfg = config if config is not None else AdsorptionConfig()
-    os.makedirs(results_dir, exist_ok=True)
-    _write_clean_xyz(slab.atoms, f"{results_dir}/clean_slab.xyz")
-    if cfg.write_vasp_inputs:
-        slab.atoms.write(
-            f"{results_dir}/clean_slab_POSCAR",
-            format="vasp",
-            vasp5=True,
-            direct=True,
-        )
+    _save_reference_slab_artifacts(
+        slab.atoms,
+        results_dir=results_dir,
+        stem="clean_slab",
+        write_vasp=cfg.write_vasp_inputs,
+    )
     logger.info("Saved clean slab reference files to %s", results_dir)
 
     return SlabContainer(slab.atoms)
@@ -500,6 +562,44 @@ def _evaluate_variant_energy(variant: Atoms, calculator, context: str = "") -> f
         if context:
             logger.warning("%s failed: %s", context, exc)
         return float("inf")
+
+
+def _consider_variant(
+    candidate: Atoms,
+    *,
+    calculator,
+    best_energy: float,
+    best_atoms: Atoms | None,
+    context: str,
+) -> tuple[float, Atoms | None]:
+    """Update best variant when *candidate* is better (or first without calculator)."""
+    if calculator is not None:
+        energy = _evaluate_variant_energy(candidate, calculator, context=context)
+        if energy < best_energy:
+            return energy, candidate.copy()
+        return best_energy, best_atoms
+    if best_atoms is None:
+        return best_energy, candidate.copy()
+    return best_energy, best_atoms
+
+
+def _save_reference_slab_artifacts(
+    atoms: Atoms,
+    *,
+    results_dir: str,
+    stem: str,
+    write_vasp: bool,
+) -> None:
+    """Write ``{stem}.xyz`` and optional VASP POSCAR under *results_dir*."""
+    os.makedirs(results_dir, exist_ok=True)
+    _write_clean_xyz(atoms, f"{results_dir}/{stem}.xyz")
+    if write_vasp:
+        atoms.write(
+            f"{results_dir}/{stem}_POSCAR",
+            format="vasp",
+            vasp5=True,
+            direct=True,
+        )
 
 
 def _resolve_slab_relaxation_settings(
@@ -662,8 +762,8 @@ def substitute_alloy(
             )
 
         positions = base.get_positions()
-        z_max = float(np.max(positions[:, 2]))
-        top_set = set(np.nonzero(positions[:, 2] >= (z_max - tol))[0].tolist())
+        cell = np.asarray(base.get_cell(), dtype=float)
+        top_set = set(top_layer_indices_by_height(positions, cell, float(tol)))
         top_host_indices = [idx for idx in host_indices if idx in top_set]
         subsurface_host_indices = [idx for idx in host_indices if idx not in top_set]
 
@@ -719,15 +819,13 @@ def substitute_alloy(
             syms[i] = guest_symbol
         variant.set_chemical_symbols(syms)
 
-        if calculator is not None:
-            energy = _evaluate_variant_energy(
-                variant, calculator, context=f"Variant {v}"
-            )
-            if energy < best_energy:
-                best_energy = energy
-                best_atoms = variant.copy()
-        elif best_atoms is None:
-            best_atoms = variant.copy()
+        best_energy, best_atoms = _consider_variant(
+            variant,
+            calculator=calculator,
+            best_energy=best_energy,
+            best_atoms=best_atoms,
+            context=f"Variant {v}",
+        )
 
     if best_atoms is None:
         raise GeometryValidationError(
@@ -748,16 +846,13 @@ def substitute_alloy(
             raise OptimizationError(f"Alloy slab relaxation failed: {exc}") from exc
 
     cfg = config if config is not None else AdsorptionConfig()
-    os.makedirs(results_dir, exist_ok=True)
     label = f"{host_symbol}_{guest_symbol}_{int(guest_fraction * 100)}"
-    _write_clean_xyz(best_atoms, f"{results_dir}/clean_{label}_slab.xyz")
-    if cfg.write_vasp_inputs:
-        best_atoms.write(
-            f"{results_dir}/clean_{label}_slab_POSCAR",
-            format="vasp",
-            vasp5=True,
-            direct=True,
-        )
+    _save_reference_slab_artifacts(
+        best_atoms,
+        results_dir=results_dir,
+        stem=f"clean_{label}_slab",
+        write_vasp=cfg.write_vasp_inputs,
+    )
     logger.info("Saved alloy slab (%s) to %s", label, results_dir)
 
     return SlabContainer(best_atoms)
@@ -785,11 +880,11 @@ def deposit_adatoms(
 ) -> SlabContainer:
     """Place *adatom_symbol* atoms at hollow sites above the top layer.
 
-    Uses Delaunay triangulation of the top-layer xy coordinates to
-    identify candidate hollow sites.  *coverage_fraction* of the
-    available sites are filled.  The lowest-energy variant is kept.
-    Optional relaxation presets can be applied to each generated
-    adatom variant before energy ranking.
+    Candidate hollow/pore sites come from unified site detection. Placement
+    height is ``site.xyz + site.normal * adsorption_height`` (normal-aware).
+    *coverage_fraction* of the available sites are filled. The lowest-energy
+    variant is kept. Optional relaxation presets can be applied to each
+    generated adatom variant before energy ranking.
     """
     if config is None:
         config = AdsorptionConfig()
@@ -819,25 +914,26 @@ def deposit_adatoms(
     if seed is None:
         seed = config.seed
 
-    from .placement import get_hollow_sites_for_adatoms
-
     base = slab.atoms.copy()
     positions = base.get_positions()
-    z_max = float(np.max(positions[:, 2]))
+    cell = np.asarray(base.get_cell(), dtype=float)
     top_tol = config.top_layer_tolerance
 
-    top_mask = positions[:, 2] >= (z_max - top_tol)
-    top_indices = np.nonzero(top_mask)[0]
+    top_indices = np.asarray(
+        top_layer_indices_by_height(positions, cell, float(top_tol)), dtype=int
+    )
     if len(top_indices) < 3:
         raise GeometryValidationError(
             "Cannot identify top surface layer for adatom placement "
-            f"(found {len(top_indices)} atoms within {top_tol} A of z_max)"
+            f"(found {len(top_indices)} atoms within {top_tol} A of max height "
+            "along the slab normal)"
         )
 
     candidate_sites = get_hollow_sites_for_adatoms(
         base,
         top_layer_tolerance=top_tol,
         dedup_tolerance=config.hollow_site_dedup_tolerance,
+        material_type=config.material_type,
     )
 
     if not candidate_sites:
@@ -856,10 +952,13 @@ def deposit_adatoms(
     for v in range(n_variants):
         chosen = rng.choice(len(candidate_sites), size=n_place, replace=False)
         variant = base.copy()
-        ad_positions = [
-            [candidate_sites[i][0], candidate_sites[i][1], z_max + adsorption_height]
-            for i in chosen
-        ]
+        ad_positions = []
+        for i in chosen:
+            site = candidate_sites[i]
+            normal = np.asarray(site.normal, dtype=float)
+            nrm = float(np.linalg.norm(normal))
+            normal = normal / nrm if nrm > 1e-12 else np.array([0.0, 0.0, 1.0])
+            ad_positions.append(site.xyz + float(adsorption_height) * normal)
         adatoms = Atoms(
             symbols=[adatom_symbol] * len(ad_positions),
             positions=ad_positions,
@@ -868,26 +967,24 @@ def deposit_adatoms(
         adatoms.set_pbc(variant.get_pbc())
         variant += adatoms
 
-        if calculator is not None:
-            candidate = variant
-            if mode != "none":
-                candidate = _relax_slab_structure(
-                    variant,
-                    calculator,
-                    mode=mode,
-                    optimizer_name=opt_name,
-                    fmax=fmax,
-                    steps=steps,
-                    context=f"deposit_adatoms variant {v}",
-                )
-            energy = _evaluate_variant_energy(
-                candidate, calculator, context=f"Adatom variant {v}"
+        candidate = variant
+        if calculator is not None and mode != "none":
+            candidate = _relax_slab_structure(
+                variant,
+                calculator,
+                mode=mode,
+                optimizer_name=opt_name,
+                fmax=fmax,
+                steps=steps,
+                context=f"deposit_adatoms variant {v}",
             )
-            if energy < best_energy:
-                best_energy = energy
-                best_atoms = candidate.copy()
-        elif best_atoms is None:
-            best_atoms = variant.copy()
+        best_energy, best_atoms = _consider_variant(
+            candidate,
+            calculator=calculator,
+            best_energy=best_energy,
+            best_atoms=best_atoms,
+            context=f"Adatom variant {v}",
+        )
 
     if best_atoms is None:
         raise GeometryValidationError(
@@ -895,17 +992,14 @@ def deposit_adatoms(
         )
 
     cfg = config if config is not None else AdsorptionConfig()
-    os.makedirs(results_dir, exist_ok=True)
     pct = int(round(coverage_fraction * 100))
     label = f"{adatom_symbol}{pct}"
-    _write_clean_xyz(best_atoms, f"{results_dir}/clean_slab_{label}.xyz")
-    if cfg.write_vasp_inputs:
-        best_atoms.write(
-            f"{results_dir}/clean_slab_{label}_POSCAR",
-            format="vasp",
-            vasp5=True,
-            direct=True,
-        )
+    _save_reference_slab_artifacts(
+        best_atoms,
+        results_dir=results_dir,
+        stem=f"clean_slab_{label}",
+        write_vasp=cfg.write_vasp_inputs,
+    )
     logger.info(
         "Created adatom-deposited slab (%s, %.0f%%): E=%.4f eV",
         adatom_symbol,

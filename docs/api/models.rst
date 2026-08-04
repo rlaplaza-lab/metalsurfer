@@ -75,6 +75,31 @@ Placement specifications
    :members:
    :undoc-members:
 
+.. autoclass:: metalsurfer.models.PlacementDescriptor
+   :members:
+   :undoc-members:
+
+Bayesian transfer bookkeeping
+-----------------------------
+
+Embedded on :class:`~metalsurfer.SaturationStepResult.transfer` and
+:class:`~metalsurfer.MultiMolSaturationStepResult.transfer_by_molecule`.
+CSV exports still flatten to stable ``bo_transfer_*`` column names.
+
+.. autoclass:: metalsurfer.models.BOTransferInfo
+   :members:
+   :undoc-members:
+
+Workflow screen outcome
+-----------------------
+
+Returned by mid-level ``process_molecule`` /
+``process_molecule_bayesian`` (campaign APIs consume these internally).
+
+.. autoclass:: metalsurfer.workflow.MoleculeScreenOutcome
+   :members:
+   :undoc-members:
+
 Exceptions
 ----------
 
@@ -86,6 +111,12 @@ Exceptions
 
 ML helpers
 ----------
+
+``PlacementRecord`` (in :mod:`metalsurfer.ml.schema`) stores geometry as a
+nested :class:`~metalsurfer.models.PlacementDescriptor` plus energies,
+labels, and :class:`~metalsurfer.ml.schema.ComputationContext`. CSV
+``to_flat_dict`` / ``from_flat_dict`` keep a flat column layout for
+compatibility.
 
 .. autoclass:: metalsurfer.ml.DatasetLogger
    :members:

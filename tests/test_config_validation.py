@@ -113,14 +113,27 @@ def test_valid_custom_config():
     assert config.placement_z_range == (1.5, 4.0)
 
 
-def test_optimize_isolated_sequentially_default():
-    config = AdsorptionConfig()
-    assert config.optimize_isolated_sequentially is False
+@pytest.mark.parametrize(
+    "field, default, override",
+    [
+        ("optimize_isolated_sequentially", False, True),
+        ("adaptive_parallel_fraction", True, False),
+        ("placement_z_scale_by_covalent_radius", True, False),
+        ("export_placement_provenance", False, True),
+        ("voronoi_site_enrichment", True, False),
+    ],
+)
+def test_bool_config_default_and_override(field, default, override):
+    assert getattr(AdsorptionConfig(), field) is default
+    assert getattr(AdsorptionConfig(**{field: override}), field) is override
 
 
-def test_optimize_isolated_sequentially_custom():
-    config = AdsorptionConfig(optimize_isolated_sequentially=True)
-    assert config.optimize_isolated_sequentially is True
+def test_site_classification_method_auto_default_and_invalid():
+    assert AdsorptionConfig().site_classification_method == "auto"
+    c = AdsorptionConfig(site_classification_method="auto")
+    assert c.site_classification_method == "auto"
+    with pytest.raises(ValueError, match="site_classification_method"):
+        AdsorptionConfig(site_classification_method="invalid")
 
 
 def test_ts_optimizer_defaults():
@@ -350,27 +363,19 @@ def test_zero_energy_dedup_accepted():
 # ---------------------------------------------------------------------------
 
 
-def test_placement_range_wrong_length_rejected():
-    """placement_*_range must be a 2-tuple."""
-    with pytest.raises(ValueError, match="placement_x_range.*2-tuple.*length"):
-        AdsorptionConfig(placement_x_range=(1.0,))
-    with pytest.raises(ValueError, match="placement_x_range.*2-tuple.*length"):
-        AdsorptionConfig(placement_x_range=(1.0, 2.0, 3.0))
-
-
-def test_inverted_z_range_rejected():
-    with pytest.raises(ValueError, match="placement_z_range.*lower bound"):
-        AdsorptionConfig(placement_z_range=(5.0, 2.0))
-
-
-def test_equal_z_range_rejected():
-    with pytest.raises(ValueError, match="placement_z_range.*lower bound"):
-        AdsorptionConfig(placement_z_range=(2.0, 2.0))
-
-
-def test_inverted_x_range_rejected():
-    with pytest.raises(ValueError, match="placement_x_range.*lower bound"):
-        AdsorptionConfig(placement_x_range=(4.0, -4.0))
+@pytest.mark.parametrize(
+    ("kwargs", "error_match"),
+    [
+        ({"placement_x_range": (1.0,)}, "placement_x_range.*2-tuple.*length"),
+        ({"placement_x_range": (1.0, 2.0, 3.0)}, "placement_x_range.*2-tuple.*length"),
+        ({"placement_z_range": (5.0, 2.0)}, "placement_z_range.*lower bound"),
+        ({"placement_z_range": (2.0, 2.0)}, "placement_z_range.*lower bound"),
+        ({"placement_x_range": (4.0, -4.0)}, "placement_x_range.*lower bound"),
+    ],
+)
+def test_placement_range_invalid_rejected(kwargs, error_match):
+    with pytest.raises(ValueError, match=error_match):
+        AdsorptionConfig(**kwargs)
 
 
 def test_equal_xy_range_allowed_disables_lateral_recovery():
@@ -388,19 +393,14 @@ def test_equal_xy_range_allowed_disables_lateral_recovery():
 # ---------------------------------------------------------------------------
 
 
-def test_empty_multipliers_rejected():
-    with pytest.raises(ValueError, match="connectivity_multipliers.*non-empty"):
-        AdsorptionConfig(connectivity_multipliers=[])
-
-
-def test_negative_multiplier_rejected():
-    with pytest.raises(ValueError, match="connectivity_multipliers.*positive"):
-        AdsorptionConfig(connectivity_multipliers=[1.2, -0.5])
-
-
-def test_zero_multiplier_rejected():
-    with pytest.raises(ValueError, match="connectivity_multipliers.*positive"):
-        AdsorptionConfig(connectivity_multipliers=[0.0])
+@pytest.mark.parametrize(
+    "multipliers",
+    [[], [1.2, -0.5], [0.0]],
+)
+def test_invalid_connectivity_multipliers_rejected(multipliers):
+    match = "non-empty" if multipliers == [] else "positive"
+    with pytest.raises(ValueError, match=f"connectivity_multipliers.*{match}"):
+        AdsorptionConfig(connectivity_multipliers=multipliers)
 
 
 # ---------------------------------------------------------------------------
@@ -434,18 +434,6 @@ def test_empty_model_name_rejected():
 # ---------------------------------------------------------------------------
 
 
-def test_placement_z_scale_by_covalent_radius_default():
-    """placement_z_scale_by_covalent_radius defaults to True."""
-    config = AdsorptionConfig()
-    assert config.placement_z_scale_by_covalent_radius is True
-
-
-def test_placement_z_scale_by_covalent_radius_disabled():
-    """placement_z_scale_by_covalent_radius=False uses placement_z_range as literal Å."""
-    config = AdsorptionConfig(placement_z_scale_by_covalent_radius=False)
-    assert config.placement_z_scale_by_covalent_radius is False
-
-
 @pytest.mark.parametrize("mode", ["cycle", "boltzmann", "mixed"])
 def test_conformer_sampling_valid_values(mode):
     """conformer_sampling accepts cycle, boltzmann, mixed."""
@@ -472,13 +460,6 @@ def test_flat_aromatic_parallel_fraction_valid():
 def test_flat_aromatic_parallel_fraction_out_of_range_rejected(fraction):
     with pytest.raises(ValueError, match="flat_aromatic_parallel_fraction"):
         AdsorptionConfig(flat_aromatic_parallel_fraction=fraction)
-
-
-def test_voronoi_site_enrichment_default_and_override():
-    config = AdsorptionConfig()
-    assert config.voronoi_site_enrichment is True
-    config = AdsorptionConfig(voronoi_site_enrichment=False)
-    assert config.voronoi_site_enrichment is False
 
 
 def test_voronoi_site_enrichment_requires_bool():
@@ -549,39 +530,37 @@ def test_error_message_includes_field_and_value():
 
 def test_bo_defaults():
     c = AdsorptionConfig()
-    assert c.bo_enabled is False
     assert c.num_placements is None
-    assert c.bo_initial_random is None
-    assert c.bo_initial_sampling == "spread_xyz"
-    assert c.bo_batch_size is None
-    assert c.bo_total_budget == 18
-    assert c.bo_ucb_kappa == 1.96
-    assert c.bo_acquisition == "ei"
-    assert c.bo_surrogate == "gradient_boost"
-    assert c.bo_candidate_pool_size is None
-    assert c.bo_include_failure_negatives is True
-    assert c.bo_failure_penalty_default == 10.0
-    assert c.bo_failure_penalty_overrides["generation"] > 0.0
-    assert c.bo_transfer_enabled is True
-    assert c.bo_transfer_mode == "weighted"
-    assert c.bo_transfer_min_step_observations == 5
-    assert c.bo_transfer_weight_cap == 0.35
-    assert c.bo_transfer_similarity_lengthscale == 4.0
-    assert c.bo_transfer_min_similarity == 0.05
-    assert c.bo_transfer_trust_patience == 2
-    assert c.bo_transfer_mae_tolerance == 0.0
-    assert c.bo_transfer_exploration_fraction == 0.2
-    assert c.bo_transfer_proximity_lengthscale == 1.0
-    assert c.bo_transfer_proximity_floor == 0.0
-    assert c.bo_transfer_prior_step_window == 2
-    assert c.bo_transfer_recency_lengthscale == 4.0
-    assert c.bo_transfer_occupancy_lengthscale == 1.0
-    assert c.bo_transfer_occupancy_floor == 0.0
+    assert c.bo.initial_random is None
+    assert c.bo.initial_sampling == "spread_xyz"
+    assert c.bo.batch_size is None
+    assert c.bo.total_budget == 18
+    assert c.bo.ucb_kappa == 1.96
+    assert c.bo.acquisition == "ei"
+    assert c.bo.surrogate == "gradient_boost"
+    assert c.bo.candidate_pool_size is None
+    assert c.bo.include_failure_negatives is True
+    assert c.bo.failure_penalty_default == 10.0
+    assert c.bo.failure_penalty_overrides["generation"] > 0.0
+    assert c.bo.transfer.enabled is True
+    assert c.bo.transfer.mode == "weighted"
+    assert c.bo.transfer.min_step_observations == 5
+    assert c.bo.transfer.weight_cap == 0.35
+    assert c.bo.transfer.similarity_lengthscale == 4.0
+    assert c.bo.transfer.min_similarity == 0.05
+    assert c.bo.transfer.trust_patience == 2
+    assert c.bo.transfer.mae_tolerance == 0.0
+    assert c.bo.transfer.exploration_fraction == 0.2
+    assert c.bo.transfer.proximity_lengthscale == 1.0
+    assert c.bo.transfer.proximity_floor == 0.0
+    assert c.bo.transfer.prior_step_window == 2
+    assert c.bo.transfer.recency_lengthscale == 4.0
+    assert c.bo.transfer.occupancy_lengthscale == 1.0
+    assert c.bo.transfer.occupancy_floor == 0.0
 
 
 def test_resolved_bo_eval_budget():
     config = AdsorptionConfig(
-        bo_enabled=True,
         bo_initial_random=10,
         bo_batch_size=5,
         bo_total_budget=18,
@@ -591,7 +570,6 @@ def test_resolved_bo_eval_budget():
 
 def test_bo_eval_schedule():
     config = AdsorptionConfig(
-        bo_enabled=True,
         bo_initial_random=10,
         bo_batch_size=5,
         bo_total_budget=18,
@@ -619,47 +597,42 @@ def test_bo_eval_schedule():
     ]
 
 
-def test_bo_invalid_initial_sampling():
-    with pytest.raises(ValueError, match="bo_initial_sampling"):
-        AdsorptionConfig(bo_enabled=True, bo_initial_sampling="latin_hypercube")  # type: ignore[arg-type]
+@pytest.mark.parametrize(
+    ("kwargs", "error_match"),
+    [
+        ({"bo_initial_sampling": "latin_hypercube"}, "bo_initial_sampling"),
+        ({"bo_ucb_kappa": -1.0}, "bo_ucb_kappa"),
+        ({"bo_acquisition": "invalid"}, "bo_acquisition"),
+        ({"bo_surrogate": "invalid"}, "bo_surrogate"),
+        ({"bo_candidate_pool_size": 0}, "bo_candidate_pool_size"),
+        ({"bo_failure_penalty_default": -1.0}, "bo_failure_penalty_default"),
+        (
+            {"bo_failure_penalty_overrides": {"validation": -0.1}},
+            "bo_failure_penalty_overrides values",
+        ),
+        ({"bo_transfer_weight_cap": 1.0}, "bo_transfer_weight_cap"),
+        ({"bo_transfer_proximity_lengthscale": 0.0}, "bo_transfer_proximity_lengthscale"),
+        ({"bo_transfer_proximity_floor": 1.5}, "bo_transfer_proximity_floor"),
+    ],
+)
+def test_bo_invalid_config_rejected(kwargs, error_match):
+    with pytest.raises(ValueError, match=error_match):
+        AdsorptionConfig(**kwargs)
 
 
-def test_bo_invalid_acquisition_surrogate_kappa():
-    with pytest.raises(ValueError, match="bo_ucb_kappa"):
-        AdsorptionConfig(bo_enabled=True, bo_ucb_kappa=-1.0)
-    with pytest.raises(ValueError, match="bo_acquisition"):
-        AdsorptionConfig(bo_enabled=True, bo_acquisition="invalid")
-    with pytest.raises(ValueError, match="bo_surrogate"):
-        AdsorptionConfig(bo_enabled=True, bo_surrogate="invalid")
-
-
-def test_bo_candidate_pool_size_validation():
-    c = AdsorptionConfig(bo_enabled=True, bo_candidate_pool_size=500)
-    assert c.bo_candidate_pool_size == 500
-    with pytest.raises(ValueError):
-        AdsorptionConfig(bo_enabled=True, bo_candidate_pool_size=0)
-
-
-def test_bo_failure_penalty_validation():
+def test_bo_candidate_pool_size_and_failure_penalty_accepted():
     c = AdsorptionConfig(
-        bo_enabled=True,
+        bo_candidate_pool_size=500,
         bo_failure_penalty_default=22.5,
         bo_failure_penalty_overrides={"validation": 17.0},
     )
-    assert c.bo_failure_penalty_default == 22.5
-    assert c.bo_failure_penalty_overrides["validation"] == 17.0
-    with pytest.raises(ValueError, match="bo_failure_penalty_default"):
-        AdsorptionConfig(bo_enabled=True, bo_failure_penalty_default=-1.0)
-    with pytest.raises(ValueError, match="bo_failure_penalty_overrides values"):
-        AdsorptionConfig(
-            bo_enabled=True,
-            bo_failure_penalty_overrides={"validation": -0.1},
-        )
+    assert c.bo.candidate_pool_size == 500
+    assert c.bo.failure_penalty_default == 22.5
+    assert c.bo.failure_penalty_overrides["validation"] == 17.0
 
 
 def test_bo_transfer_config_validation():
     c = AdsorptionConfig(
-        bo_enabled=True,
         bo_transfer_enabled=True,
         bo_transfer_weight_cap=0.25,
         bo_transfer_min_step_observations=3,
@@ -668,47 +641,32 @@ def test_bo_transfer_config_validation():
         bo_transfer_trust_patience=3,
         bo_transfer_mae_tolerance=0.02,
         bo_transfer_exploration_fraction=0.15,
-    )
-    assert c.bo_transfer_enabled is True
-    assert c.bo_transfer_weight_cap == 0.25
-    with pytest.raises(ValueError, match="bo_transfer_weight_cap"):
-        AdsorptionConfig(bo_enabled=True, bo_transfer_weight_cap=1.0)
-
-
-def test_bo_transfer_proximity_validation():
-    c = AdsorptionConfig(
-        bo_enabled=True,
         bo_transfer_proximity_lengthscale=0.5,
         bo_transfer_proximity_floor=0.1,
     )
-    assert c.bo_transfer_proximity_lengthscale == 0.5
-    assert c.bo_transfer_proximity_floor == 0.1
-    with pytest.raises(ValueError, match="bo_transfer_proximity_lengthscale"):
-        AdsorptionConfig(bo_enabled=True, bo_transfer_proximity_lengthscale=0.0)
-    with pytest.raises(ValueError, match="bo_transfer_proximity_floor"):
-        AdsorptionConfig(bo_enabled=True, bo_transfer_proximity_floor=1.5)
+    assert c.bo.transfer.enabled is True
+    assert c.bo.transfer.weight_cap == 0.25
+    assert c.bo.transfer.proximity_lengthscale == 0.5
+    assert c.bo.transfer.proximity_floor == 0.1
 
 
 def test_bo_transfer_requires_weighted_surrogate():
     with pytest.raises(ValueError, match="bo_transfer_enabled requires"):
         AdsorptionConfig(
-            bo_enabled=True,
             bo_transfer_enabled=True,
             bo_surrogate="gaussian_process",
         )
     for sur in ("ridge", "gradient_boost", "random_forest", "extra_trees", "ensemble"):
         c = AdsorptionConfig(
-            bo_enabled=True,
             bo_transfer_enabled=True,
             bo_surrogate=sur,  # type: ignore[arg-type]
         )
-        assert c.bo_surrogate == sur
+        assert c.bo.surrogate == sur
     gp = AdsorptionConfig(
-        bo_enabled=True,
         bo_transfer_enabled=False,
         bo_surrogate="gaussian_process",
     )
-    assert gp.bo_surrogate == "gaussian_process"
+    assert gp.bo.surrogate == "gaussian_process"
 
 
 def test_saturation_max_steps_must_be_positive_when_set():

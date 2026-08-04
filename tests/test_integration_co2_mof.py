@@ -5,8 +5,11 @@ that placements relax to sensible CO2 geometries with a spread of E_ads values i
 physically plausible physisorption window rather than demanding strict negativity.
 """
 
+import os
+
 import numpy as np
 import pytest
+from ase.io import read
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.optimization import setup_single_model
@@ -15,47 +18,29 @@ from metalsurfer.workflow import (
     calculate_reference_energies,
     process_molecule,
 )
-from tests.optional_deps import cuda_available, has_mlip_stack
+from tests.conftest import GPU_MLIP_MARKS, pair_distance
 
-pytestmark = [
-    pytest.mark.slow,
-    pytest.mark.mlip,
-    pytest.mark.gpu,
-    pytest.mark.no_fork,  # CUDA incompatible with pytest-forked
-    pytest.mark.skipif(
-        not has_mlip_stack,
-        reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
-    ),
-    pytest.mark.skipif(
-        not cuda_available,
-        reason="CUDA GPU required; skipped in CI (no GPU)",
-    ),
-]
+pytestmark = GPU_MLIP_MARKS
 
 
-def _co_bond_length(atoms, slab_size: int) -> float:
-    """C–O distance in adsorbate (CO2 has exactly 2 C–O bonds)."""
+def _co_bond_length(atoms, slab_size: int) -> tuple[float, float]:
+    """C–O distances in adsorbate (CO2 has exactly 2 C–O bonds)."""
     ads = atoms[slab_size:]
     syms = ads.get_chemical_symbols()
     c_indices = [i for i, s in enumerate(syms) if s == "C"]
     o_indices = [i for i, s in enumerate(syms) if s == "O"]
     if len(c_indices) != 1 or len(o_indices) != 2:
-        return float("nan")
+        return float("nan"), float("nan")
     pos = ads.get_positions()
     cell = atoms.get_cell()
-    d1 = pos[o_indices[0]] - pos[c_indices[0]]
-    d1 = d1 - np.round(d1 @ np.linalg.inv(cell)) @ cell
-    d2 = pos[o_indices[1]] - pos[c_indices[0]]
-    d2 = d2 - np.round(d2 @ np.linalg.inv(cell)) @ cell
-    return float(np.linalg.norm(d1)), float(np.linalg.norm(d2))
+    return (
+        pair_distance(pos[c_indices[0]], pos[o_indices[0]], cell=cell),
+        pair_distance(pos[c_indices[0]], pos[o_indices[1]], cell=cell),
+    )
 
 
 def _run_co2_in_mof():
     """Load MOF structure and run a single CO2 screening flow."""
-    import os
-
-    from ase.io import read
-
     cif_path = os.path.join("examples", "mof_structures", "RUBTAK01.cif")
     mof_atoms = read(cif_path)
     config = AdsorptionConfig(
@@ -90,7 +75,7 @@ def _run_co2_in_mof():
         ts_model=ts_model,
         config=config,
         surface_type="co2_mof",
-    )
+    ).results
 
 
 class TestCO2InMOF:

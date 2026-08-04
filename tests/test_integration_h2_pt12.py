@@ -9,6 +9,7 @@ unique configuration.
 
 import numpy as np
 import pytest
+from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.optimization import setup_single_model
@@ -17,43 +18,18 @@ from metalsurfer.workflow import (
     calculate_reference_energies,
     process_molecule,
 )
-from tests.optional_deps import cuda_available, has_mlip_stack
+from tests.conftest import GPU_MLIP_MARKS, adsorbate_symbol_pair_distance
 
-pytestmark = [
-    pytest.mark.slow,
-    pytest.mark.mlip,
-    pytest.mark.gpu,
-    pytest.mark.no_fork,  # CUDA incompatible with pytest-forked
-    pytest.mark.skipif(
-        not has_mlip_stack,
-        reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
-    ),
-    pytest.mark.skipif(
-        not cuda_available,
-        reason="CUDA GPU required; skipped in CI (no GPU)",
-    ),
-]
+pytestmark = GPU_MLIP_MARKS
 
 
 def _hh_bond_length(atoms, slab_size: int) -> float:
     """H–H distance in adsorbate (H2 has exactly 2 H atoms)."""
-    ads = atoms[slab_size:]
-    syms = ads.get_chemical_symbols()
-    h_indices = [i for i, s in enumerate(syms) if s == "H"]
-    if len(h_indices) != 2:
-        return float("nan")
-    pos = ads.get_positions()
-    d = pos[h_indices[1]] - pos[h_indices[0]]
-    if np.any(atoms.get_pbc()):
-        cell = atoms.get_cell()
-        d = d - np.round(d @ np.linalg.inv(cell)) @ cell
-    return float(np.linalg.norm(d))
+    return adsorbate_symbol_pair_distance(atoms, slab_size, "H")
 
 
 def _run_h2_on_pt12():
     """Create Pt12 nanocluster and run a single H2 screening flow."""
-    from ase import Atoms
-
     pt_atoms = Atoms(
         symbols=["Pt"] * 12,
         positions=[
@@ -112,7 +88,7 @@ def _run_h2_on_pt12():
         ts_model=ts_model,
         config=config,
         surface_type="h2_pt12",
-    )
+    ).results
 
 
 class TestH2OnPt12:

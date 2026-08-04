@@ -24,6 +24,7 @@ dependencies = [
     "ase",
     "spglib",
     "pandas",
+    "pyyaml>=6.0",
     "rdkit>=2024.9,<2026.3.3",
     "scipy",
     "scikit-learn",
@@ -75,7 +76,7 @@ follow_imports = "skip"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["metalsurfer.placement.sites"]
+module = ["metalsurfer.placement.site_enumeration"]
 disable_error_code = ["misc", "has-type", "union-attr", "arg-type", "attr-defined"]
 
 [tool.ruff]

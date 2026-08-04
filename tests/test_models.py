@@ -1,7 +1,6 @@
 """Tests for typed domain models."""
 
 import pytest
-from ase import Atoms
 
 from metalsurfer.models import (
     BindingCampaignResult,
@@ -19,6 +18,7 @@ from metalsurfer.models import (
 
 from .conftest import (
     make_placement_descriptor,
+    make_h2,
     make_slab,
     make_water,
     place_molecule_on_slab,
@@ -42,7 +42,7 @@ def test_reference_energies_empty():
 
 
 def test_screening_result():
-    atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
+    atoms = make_h2()
     sr = ScreeningResult(
         molecule="water",
         placement_id=5,
@@ -64,10 +64,18 @@ def test_screening_result():
     assert row["placement_id"] == 5
     assert row["xyz_path"] == "results/x.xyz"
     assert row["poscar_path"] == "results/POSCAR"
-    assert row["orientation_type"] == sr.placement_descriptor.orientation_type
-    assert row["z_fraction"] == sr.placement_descriptor.z_fraction
+    assert "orientation_type" not in row
+    assert "z_fraction" not in row
+    assert row["x_abs"] == (
+        sr.placement_descriptor.x_abs
+        if sr.placement_descriptor.x_abs is not None
+        else sr.placement_descriptor.x
+    )
     for field in ("quat_w", "quat_x", "quat_y", "quat_z"):
         assert field in row
+    rich = sr.to_row(include_provenance=True)
+    assert rich["initial_orientation_type"] == sr.placement_descriptor.orientation_type
+    assert rich["initial_z_fraction"] == sr.placement_descriptor.z_fraction
 
 
 def test_timing_info():
@@ -136,7 +144,7 @@ def test_build_molecule_summary():
 
 
 def test_screening_run_result():
-    atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
+    atoms = make_h2()
     sr = ScreeningResult(
         molecule="water",
         placement_id=0,

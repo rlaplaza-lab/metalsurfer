@@ -20,6 +20,7 @@ import numpy as np
 from ase.io import read
 
 from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption_bo
+from metalsurfer._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
 from metalsurfer.surface_prep import prepare_substrate
 
 # List of smiles and molecule name pairs
@@ -38,7 +39,6 @@ CITABLE_BASE = (
     "https://raw.githubusercontent.com/fxcoudert/citable-data/master"
     "/122-Mouhat_NatureCommun_2020/models/GO"
 )
-MIN_CALCULATOR_CELL_C_ANG = 18.0
 
 
 def _ensure_calculator_safe_pbc_and_vacuum(atoms) -> None:

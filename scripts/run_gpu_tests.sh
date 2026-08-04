@@ -54,6 +54,7 @@ _run_phase() {
 _run_phase tests/test_bayesian.py -m gpu
 _run_phase tests/test_integration_ethene_ru.py
 _run_phase tests/test_integration_h2_ru_slab.py
+_run_phase tests/test_integration_water_cu_slab.py
 _run_phase tests/test_integration_co2_mof.py
 _run_phase tests/test_integration_h2_pt12.py
 _run_phase tests/test_saturation.py::test_run_saturation_screening_h2_ni111_real_gpu

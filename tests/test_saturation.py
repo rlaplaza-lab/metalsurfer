@@ -19,6 +19,7 @@ from metalsurfer.io_results import (
 )
 from metalsurfer.models import (
     BOStepMemory,
+    BOTransferInfo,
     MultiMolSaturationRunResult,
     MultiMolSaturationStepResult,
     SaturationRunResult,
@@ -41,19 +42,20 @@ from metalsurfer.workflow.saturation import (
     _saturation_adsorbate_topology_ok,
     _slab_after_saturation_step,
 )
-from metalsurfer.workflow.shared import ScreeningRunBootstrap
+from metalsurfer.workflow.shared import MoleculeScreenOutcome, ScreeningRunBootstrap
 
 from .conftest import (
     DummyReferenceEnergies,
     NoopDatasetLogger,
     assert_paths_exist,
+    gpu_mlip_test,
+    make_h2,
     make_placement_descriptor,
     make_screening_result,
     make_slab,
     make_water,
     place_molecule_on_slab,
 )
-from .optional_deps import cuda_available, has_mlip_stack
 
 
 def _mock_saturation_config(**kwargs) -> AdsorptionConfig:
@@ -75,17 +77,19 @@ def _uniform_placement_budget(
 def _result_for_step(
     molecule: str, current_slab: SlabContainer, e_ads: float, placement_id: int = 0
 ):
-    return [
-        make_screening_result(
-            molecule=molecule,
-            placement_id=placement_id,
-            energy_adsorption=e_ads,
-            atoms=current_slab.atoms.copy(),
-            slab_size=len(current_slab.atoms),
-            distance=2.5,
-            placement_descriptor=make_placement_descriptor(placement_id=placement_id),
-        )
-    ]
+    return MoleculeScreenOutcome(
+        results=[
+            make_screening_result(
+                molecule=molecule,
+                placement_id=placement_id,
+                energy_adsorption=e_ads,
+                atoms=current_slab.atoms.copy(),
+                slab_size=len(current_slab.atoms),
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(placement_id=placement_id),
+            )
+        ]
+    )
 
 
 def _make_schedule_process(
@@ -148,6 +152,10 @@ def _patch_single_mol_saturation_mocks(
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation.DatasetLogger", NoopDatasetLogger
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.create_conformers_from_smiles",
+        lambda *_a, **_kw: ([make_water()], [0.0]),
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation.process_molecule", process_molecule
@@ -282,11 +290,13 @@ def test_save_saturation_results_writes_csv_and_xyz(workdir):
         best_result=best,
         all_results=[best, other],
         bo_transfer_enabled=True,
-        bo_transfer_used=True,
-        bo_transfer_disabled_reason=None,
-        bo_transfer_weight_share=0.2,
-        bo_transfer_bad_rounds=0,
-        bo_transfer_last_mae_delta=-0.01,
+        transfer=BOTransferInfo(
+            transfer_used=True,
+            transfer_disabled_reason=None,
+            transfer_weight_share=0.2,
+            transfer_bad_rounds=0,
+            transfer_last_mae_delta=-0.01,
+        ),
     )
     sr = SaturationRunResult(
         molecule="water",
@@ -410,11 +420,7 @@ def test_save_saturation_results_skips_all_placements_when_disabled(workdir):
         best_result=best,
         all_results=[best],
         bo_transfer_enabled=False,
-        bo_transfer_used=False,
-        bo_transfer_disabled_reason=None,
-        bo_transfer_weight_share=0.0,
-        bo_transfer_bad_rounds=0,
-        bo_transfer_last_mae_delta=None,
+        transfer=BOTransferInfo(),
     )
     sr = SaturationRunResult(
         molecule="water",
@@ -452,7 +458,7 @@ def test_saturation_slab_for_sites_uses_resized_slab():
         slab.atoms.get_cell()[0, 0],
         slab.atoms.get_cell()[1, 1],
     )
-    h2 = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
+    h2 = make_h2()
     min_sep = 8.0
     required = 0.74 + min_sep
     assert cell_diag < required, (
@@ -474,7 +480,7 @@ def test_saturation_slab_for_sites_uses_resized_slab():
 
 def test_saturation_validate_posed_adsorbate_overlap_reason():
     """Under coverage, clash with prior adsorbate yields adsorbate_overlap."""
-    from metalsurfer.placement.generators import _validate_posed_adsorbate
+    from metalsurfer.placement.pose import _validate_posed_adsorbate
 
     slab = make_slab(nx=2, ny=2, n_layers=3)
     water = Atoms(
@@ -511,18 +517,7 @@ def test_slab_after_saturation_step_restores_material_pbc():
     assert list(restored.atoms.get_pbc()) == [True, True, False]
 
 
-@pytest.mark.slow
-@pytest.mark.mlip
-@pytest.mark.gpu
-@pytest.mark.no_fork  # CUDA incompatible with pytest-forked
-@pytest.mark.skipif(
-    not has_mlip_stack,
-    reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
-)
-@pytest.mark.skipif(
-    not cuda_available,
-    reason="CUDA GPU required; skipped in CI (no GPU)",
-)
+@gpu_mlip_test
 def test_run_saturation_screening_h2_ni111_real_gpu():
     """Saturation screening with real MLIP on GPU: H2 on Ni(111).
 
@@ -679,6 +674,20 @@ def test_distribute_placement_budget_min_one():
     assert sum(budgets.values()) == 5
 
 
+def test_distribute_placement_budget_extreme_skew_sums_to_total():
+    """Min-1 floor must not overshoot total_budget under extreme score skew."""
+    complexities = {"A": 1000.0, "B": 1.0, "C": 1.0, "D": 1.0, "E": 1.0}
+    budgets = distribute_placement_budget(complexities, total_budget=5)
+    assert sum(budgets.values()) == 5
+    assert all(v >= 1 for v in budgets.values())
+    budgets4 = distribute_placement_budget(
+        {f"m{i}": (1000.0 if i == 0 else 1.0) for i in range(4)},
+        total_budget=4,
+    )
+    assert sum(budgets4.values()) == 4
+    assert all(v >= 1 for v in budgets4.values())
+
+
 @pytest.mark.parametrize(
     "complexities,total,expected",
     [
@@ -715,7 +724,7 @@ def test_estimate_molecule_complexity_more_conformers_higher_score():
     slab = make_slab()
     config = AdsorptionConfig(num_conformers=3, num_placements=50)
 
-    mol = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
+    mol = make_h2()
 
     score_one = estimate_molecule_complexity([mol], slab, config, smiles="[H][H]")
     score_three = estimate_molecule_complexity(
@@ -809,7 +818,7 @@ def test_multi_mol_saturation_step_result_structure(monkeypatch):
     def _fake_process_molecule(smi, mol, current_slab, *_args, **kwargs):
         call_count[0] += 1
         e_ads = -0.3 if call_count[0] <= 2 else 0.2
-        return [
+        return MoleculeScreenOutcome(results=[
             make_screening_result(
                 molecule=mol,
                 placement_id=0,
@@ -819,7 +828,7 @@ def test_multi_mol_saturation_step_result_structure(monkeypatch):
                 distance=2.5,
                 placement_descriptor=make_placement_descriptor(placement_id=0),
             )
-        ]
+        ])
 
     _patch_multi_mol_saturation_mocks(
         monkeypatch,
@@ -908,7 +917,7 @@ def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
         sat_step = (step_count[0] + 1) // 2
         sat_step = min(sat_step, 3)
         e_ads = energies[sat_step][mol]
-        return [
+        return MoleculeScreenOutcome(results=[
             make_screening_result(
                 molecule=mol,
                 placement_id=0,
@@ -918,7 +927,7 @@ def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
                 distance=2.5,
                 placement_descriptor=make_placement_descriptor(placement_id=0),
             )
-        ]
+        ])
 
     _patch_multi_mol_saturation_mocks(
         monkeypatch,
@@ -946,7 +955,7 @@ def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
 def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypatch):
     """Competing BO saturation carries BO state forward independently per molecule."""
     slab = SlabContainer(make_slab())
-    config = _mock_saturation_config(multi_molecule_saturation=True, bo_enabled=True)
+    config = _mock_saturation_config(multi_molecule_saturation=True)
 
     ref = DummyReferenceEnergies({"water": -5.0, "CO2": -10.0})
 
@@ -959,7 +968,6 @@ def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypat
         current_slab,
         *_args,
         bo_step_memory_in=None,
-        bo_step_memory_out=None,
         **_kwargs,
     ):
         call_counts[mol] += 1
@@ -976,29 +984,32 @@ def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypat
             assert bo_step_memory_in.observed_y == [float(step_idx - 1)]
             assert bo_step_memory_in.best_energy == pytest.approx(-0.1 * (step_idx - 1))
 
-        if bo_step_memory_out is not None:
-            bo_step_memory_out["memory"] = BOStepMemory(
-                observed_X_rows=[{"step": float(step_idx), "mol_len": float(len(mol))}],
-                observed_y=[float(step_idx)],
-                best_energy=-0.1 * step_idx,
-            )
+        memory = BOStepMemory(
+            observed_X_rows=[{"step": float(step_idx), "mol_len": float(len(mol))}],
+            observed_y=[float(step_idx)],
+            best_energy=-0.1 * step_idx,
+        )
 
         energies = {
             "water": [-0.5, 0.4],
             "CO2": [-1.2, 0.3],
         }
         e_ads = energies[mol][step_idx - 1]
-        return [
-            make_screening_result(
-                molecule=mol,
-                placement_id=step_idx,
-                energy_adsorption=e_ads,
-                atoms=current_slab.atoms.copy(),
-                slab_size=len(current_slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=step_idx),
-            )
-        ]
+        return MoleculeScreenOutcome(
+            results=[
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=step_idx,
+                    energy_adsorption=e_ads,
+                    atoms=current_slab.atoms.copy(),
+                    slab_size=len(current_slab.atoms),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=step_idx),
+                )
+            ],
+            bo_memory=memory,
+            transfer_info=BOTransferInfo(),
+        )
 
     _patch_multi_mol_saturation_mocks(
         monkeypatch,
@@ -1014,6 +1025,7 @@ def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypat
         config=config,
         surface_type="multi_mol_bo_memory",
         skip_existing=False,
+        bo_enabled=True,
     )
 
     assert len(out) == 1
@@ -1029,7 +1041,7 @@ def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypat
 def test_multi_mol_saturation_bo_rejects_shared_memory_objects(monkeypatch):
     """Competing BO saturation rejects shared BOStepMemory objects across adsorbates."""
     slab = SlabContainer(make_slab())
-    config = _mock_saturation_config(multi_molecule_saturation=True, bo_enabled=True)
+    config = _mock_saturation_config(multi_molecule_saturation=True)
 
     ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
 
@@ -1044,22 +1056,23 @@ def test_multi_mol_saturation_bo_rejects_shared_memory_objects(monkeypatch):
         mol,
         current_slab,
         *_args,
-        bo_step_memory_out=None,
         **_kwargs,
     ):
-        if bo_step_memory_out is not None:
-            bo_step_memory_out["memory"] = shared_memory
-        return [
-            make_screening_result(
-                molecule=mol,
-                placement_id=0,
-                energy_adsorption=-0.2,
-                atoms=current_slab.atoms.copy(),
-                slab_size=len(current_slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=0),
-            )
-        ]
+        return MoleculeScreenOutcome(
+            results=[
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=0,
+                    energy_adsorption=-0.2,
+                    atoms=current_slab.atoms.copy(),
+                    slab_size=len(current_slab.atoms),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=0),
+                )
+            ],
+            bo_memory=shared_memory,
+            transfer_info=BOTransferInfo(),
+        )
 
     _patch_multi_mol_saturation_mocks(
         monkeypatch,
@@ -1076,21 +1089,11 @@ def test_multi_mol_saturation_bo_rejects_shared_memory_objects(monkeypatch):
             config=config,
             surface_type="multi_mol_bo_shared_memory",
             skip_existing=False,
+            bo_enabled=True,
         )
 
 
-@pytest.mark.slow
-@pytest.mark.mlip
-@pytest.mark.gpu
-@pytest.mark.no_fork
-@pytest.mark.skipif(
-    not has_mlip_stack,
-    reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
-)
-@pytest.mark.skipif(
-    not cuda_available,
-    reason="CUDA GPU required; skipped in CI (no GPU)",
-)
+@gpu_mlip_test
 def test_run_saturation_screening_multi_mol_bo_real_gpu():
     """Smoke-level GPU integration test for BO-enabled competing saturation."""
     config = AdsorptionConfig(
@@ -1101,7 +1104,6 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
         device="cuda",
         material_type="slab",
         multi_molecule_saturation=True,
-        bo_enabled=True,
         bo_initial_random=1,
         bo_batch_size=1,
         bo_total_budget=2,
@@ -1130,6 +1132,7 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
             config=config,
             surface_type="test_multi_mol_bo_gpu",
             skip_existing=False,
+            bo_enabled=True,
         )
     finally:
         os.unlink(smiles_path)
@@ -1145,7 +1148,7 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
         )
     step0 = result.steps[0]
     # Keys match molecules that got conformers and entered the competitive loop.
-    assert set(step0.per_molecule_results) == set(step0.bo_transfer_used)
+    assert set(step0.per_molecule_results) == set(step0.transfer_by_molecule)
     assert any(len(v) >= 1 for v in step0.per_molecule_results.values()), (
         "Expected at least one competitive adsorbate with valid placements; "
         f"got counts: { {k: len(v) for k, v in step0.per_molecule_results.items()} }"
@@ -1431,7 +1434,7 @@ def test_saturation_step2_selects_intact_not_rearranged(monkeypatch):
     def _fake_process_molecule(_smi, mol, current_slab, *_args, **_kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
-            return [
+            return MoleculeScreenOutcome(results=[
                 make_screening_result(
                     molecule=mol,
                     placement_id=0,
@@ -1441,8 +1444,8 @@ def test_saturation_step2_selects_intact_not_rearranged(monkeypatch):
                     distance=2.5,
                     placement_descriptor=make_placement_descriptor(placement_id=0),
                 )
-            ]
-        return [
+            ])
+        return MoleculeScreenOutcome(results=[
             make_screening_result(
                 molecule=mol,
                 placement_id=0,
@@ -1461,7 +1464,7 @@ def test_saturation_step2_selects_intact_not_rearranged(monkeypatch):
                 distance=2.5,
                 placement_descriptor=make_placement_descriptor(placement_id=1),
             ),
-        ]
+        ])
 
     _patch_single_mol_saturation_mocks(
         monkeypatch,
@@ -1507,7 +1510,7 @@ def test_multi_mol_saturation_topology_guard_step2(monkeypatch):
         step_idx[0] += 1
         if step_idx[0] <= 2:
             if step_idx[0] == 1 and mol == "water":
-                return [
+                return MoleculeScreenOutcome(results=[
                     make_screening_result(
                         molecule=mol,
                         placement_id=0,
@@ -1517,10 +1520,10 @@ def test_multi_mol_saturation_topology_guard_step2(monkeypatch):
                         distance=2.5,
                         placement_descriptor=make_placement_descriptor(placement_id=0),
                     )
-                ]
+                ])
             return _result_for_step(mol, current_slab, -0.4)
         if mol == "water":
-            return [
+            return MoleculeScreenOutcome(results=[
                 make_screening_result(
                     molecule=mol,
                     placement_id=0,
@@ -1539,7 +1542,7 @@ def test_multi_mol_saturation_topology_guard_step2(monkeypatch):
                     distance=2.5,
                     placement_descriptor=make_placement_descriptor(placement_id=1),
                 ),
-            ]
+            ])
         return _result_for_step(mol, current_slab, -0.2)
 
     _patch_multi_mol_saturation_mocks(
@@ -1578,7 +1581,7 @@ def test_saturation_topology_guard_all_filtered_stops(monkeypatch, caplog):
     def _fake_process_molecule(_smi, mol, current_slab, *_args, **_kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
-            return [
+            return MoleculeScreenOutcome(results=[
                 make_screening_result(
                     molecule=mol,
                     placement_id=0,
@@ -1588,8 +1591,8 @@ def test_saturation_topology_guard_all_filtered_stops(monkeypatch, caplog):
                     distance=2.5,
                     placement_descriptor=make_placement_descriptor(placement_id=0),
                 )
-            ]
-        return [
+            ])
+        return MoleculeScreenOutcome(results=[
             make_screening_result(
                 molecule=mol,
                 placement_id=0,
@@ -1599,7 +1602,7 @@ def test_saturation_topology_guard_all_filtered_stops(monkeypatch, caplog):
                 distance=2.5,
                 placement_descriptor=make_placement_descriptor(placement_id=0),
             ),
-        ]
+        ])
 
     _patch_single_mol_saturation_mocks(
         monkeypatch,

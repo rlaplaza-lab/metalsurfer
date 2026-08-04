@@ -6,7 +6,8 @@ import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
 
-from metalsurfer.optimization import (
+from metalsurfer.surface_prep import (
+    apply_surface_constraints,
     check_frozen_substrate_displacement,
     compute_frozen_indices,
     format_atom_index_ranges,
@@ -16,7 +17,6 @@ from metalsurfer.optimization import (
     log_substrate_freeze_policy,
     max_frozen_substrate_displacement,
 )
-from metalsurfer.surface_prep import apply_surface_constraints
 
 from .conftest import make_nanoparticle, make_porous_framework, make_slab
 
@@ -204,7 +204,9 @@ def test_relax_top_layer_empty_freeze_falls_back_to_full_substrate(caplog):
     """If every atom would be free, apply_surface_constraints freezes all atoms."""
     slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
     # Tolerance larger than slab thickness → simple band frees everyone.
-    with caplog.at_level(logging.WARNING, logger="metalsurfer.surfaces"):
+    with caplog.at_level(
+        logging.WARNING, logger="metalsurfer.surface_prep._surfaces"
+    ):
         constrained = apply_surface_constraints(
             slab,
             relax_top_layer=True,

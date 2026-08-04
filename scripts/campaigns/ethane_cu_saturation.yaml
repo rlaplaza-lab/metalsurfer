@@ -1,0 +1,24 @@
+# Ethane saturation on Cu(111) — mirrors scripts/ethane_cu_saturation.py
+campaign: saturation
+surface_type: ethane_cu_saturation
+substrate:
+  bulk_id: mp-30
+  miller_indices: [1, 1, 1]
+  supercell: [1, 1, 1]
+molecules:
+  - smiles: CC
+    name: ethane
+config:
+  material_type: slab
+  model_name: uma-s-1p1
+  seed: 42
+  num_conformers: 10
+  num_placements: 250
+  autobatcher_max_memory_padding: 0.8
+  autobatcher_max_memory_scaler: 500
+  autobatcher_max_atoms_to_try: 5000
+  device: cuda
+  skip_topology_check: false
+  skip_desorption_check: false
+  stage1_steps: 50
+  stage2_steps: 500

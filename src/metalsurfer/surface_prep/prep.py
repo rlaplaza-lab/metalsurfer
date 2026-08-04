@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 import ase.io
 import numpy as np
 from ase import Atoms
 
 from .. import optimization
-from ..config import AdsorptionConfig
-from ..surfaces import (
+from ..config import (
+    AdsorptionConfig,
+    SLAB_RELAXATION_MODE,
+    SLAB_RELAXATION_OPTIMIZER,
+)
+from ..placement._material import material_aware_pbc
+from ._surfaces import (
     SlabContainer,
     _relax_slab_structure,
     _resolve_slab_relaxation_settings,
@@ -33,9 +36,6 @@ __all__ = [
     "resize_substrate_for_molecule",
 ]
 
-SLAB_RELAXATION_MODE = Literal["none", "ionic_only", "cell_only", "full"]
-SLAB_RELAXATION_OPTIMIZER = Literal["lbfgs", "bfgs", "fire"]
-
 
 def _anchor_atoms_bottom(atoms: Atoms) -> Atoms:
     """Translate *atoms* so the lowest atom sits at z = 0."""
@@ -50,19 +50,10 @@ def apply_material_pbc(atoms: Atoms, material_type: str) -> None:
     """Set ASE boundary conditions expected for *material_type*.
 
     Slabs use ``[True, True, False]``, porous frameworks ``[True, True, True]``,
-    and nanoparticles ``[False, False, False]``.
+    and nanoparticles ``[False, False, False]``. Uses the shared
+    :func:`~metalsurfer.placement._material.material_aware_pbc` map.
     """
-    pbc_map = {
-        "slab": [True, True, False],
-        "porous": [True, True, True],
-        "nanoparticle": [False, False, False],
-    }
-    if material_type not in pbc_map:
-        raise ValueError(
-            f"Unknown material_type={material_type!r}; "
-            "expected 'slab', 'porous', or 'nanoparticle'"
-        )
-    atoms.set_pbc(pbc_map[material_type])
+    atoms.set_pbc(material_aware_pbc(material_type))
 
 
 def relax_substrate(
@@ -82,7 +73,7 @@ def relax_substrate(
     fields. Explicit arguments override *config* when provided.
     """
     cfg = config if config is not None else AdsorptionConfig()
-    container = coerce_slab_container(slab)
+    container = coerce_slab_container(slab, copy=True)
     mode, opt_name, fmax, steps = _resolve_slab_relaxation_settings(
         cfg,
         relaxation_mode=relaxation_mode,
@@ -132,7 +123,7 @@ def finalize_substrate(
     after custom modification steps when needed.
     """
     cfg = config if config is not None else AdsorptionConfig()
-    container = coerce_slab_container(slab)
+    container = coerce_slab_container(slab, copy=True)
     material_type = cfg.material_type
     should_align = align if align is not None else material_type == "slab"
     check_bottom_anchor = (
@@ -155,6 +146,7 @@ def finalize_substrate(
         conformers=conformers,
         require_bottom_anchor=check_bottom_anchor,
     )
+    container.finalized = True
     return container
 
 
@@ -246,7 +238,7 @@ def prepare_substrate(
         calculator, _ = optimization.setup_single_model(cfg.model_name, cfg.device)
 
     if slab is not None:
-        slab_container = coerce_slab_container(slab)
+        slab_container = coerce_slab_container(slab, copy=True)
     elif slab_file is not None:
         loaded = ase.io.read(slab_file)
         if isinstance(loaded, list):

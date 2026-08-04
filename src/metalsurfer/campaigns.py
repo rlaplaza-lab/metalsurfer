@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses as _dc
 import logging
 import time
 import warnings
@@ -10,6 +9,7 @@ from typing import Any, Literal, cast
 
 from ase import Atoms
 
+from .campaign_schema import CampaignDocument
 from .config import AdsorptionConfig
 from .io_results import (
     results_dir_for,
@@ -23,7 +23,6 @@ from .io_results import (
     write_run_settings,
 )
 from .ml.dataset import DatasetLogger
-from .ml.schema import PlacementRecord
 from .models import (
     BindingCampaignResult,
     MoleculeCampaignSummary,
@@ -32,8 +31,7 @@ from .models import (
     SaturationRunResult,
     ScreeningResult,
 )
-from .placement import classify_adsorbate_orientation
-from .surfaces import SlabContainer
+from .surface_prep import SlabContainer, prepare_substrate
 from .workflow import (
     process_molecule,
     process_molecule_bayesian,
@@ -44,32 +42,9 @@ from .workflow.shared import _bootstrap_screening_run, _normalize_molecules_inpu
 logger = logging.getLogger(__name__)
 
 
-def _write_run_metadata_json(
-    *,
-    write_settings: bool,
-    write_metadata: bool,
-) -> bool:
-    """Return True when campaign APIs should persist ``run_metadata.json``.
-
-    ``write_settings`` and ``write_metadata`` both control the same file; either
-    flag being True writes the full snapshot (config plus timing/counts when
-    available). Prefer leaving the defaults so one coherent metadata file is
-    written; set both to False to suppress it.
-    """
-    if write_metadata:
-        warnings.warn(
-            "write_metadata=True is deprecated; use write_settings=True "
-            "(the default) to write run_metadata.json.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-    return write_settings or write_metadata
-
-
 def _summarize_molecule(
     molecule_name: str,
     results: list[ScreeningResult],
-    surface_symbols: set[str],
 ) -> MoleculeCampaignSummary:
     if not results:
         return MoleculeCampaignSummary(
@@ -78,28 +53,10 @@ def _summarize_molecule(
             best_adsorption_energy=None,
         )
     best = min(results, key=lambda r: r.energy_adsorption)
-    slab_size = next(
-        (
-            i
-            for i, sym in enumerate(results[0].atoms.get_chemical_symbols())
-            if sym not in surface_symbols
-        ),
-        None,
-    )
-    n_parallel = 0
-    n_endown = 0
-    if slab_size is not None:
-        orientations = [
-            classify_adsorbate_orientation(r.atoms, slab_size) for r in results
-        ]
-        n_parallel = sum(1 for ori in orientations if ori == "parallel")
-        n_endown = sum(1 for ori in orientations if ori == "EN-down")
     return MoleculeCampaignSummary(
         molecule=molecule_name,
         n_valid_placements=len(results),
         best_adsorption_energy=best.energy_adsorption,
-        n_parallel=n_parallel,
-        n_endown=n_endown,
     )
 
 
@@ -114,18 +71,10 @@ def _run_binding_campaign(
     system_name: str | None,
     save_results: bool,
     write_settings: bool,
-    write_metadata: bool,
     skip_existing: bool = True,
     run_metadata_out: dict[str, Any] | None = None,
     process_kwargs: dict[str, Any] | None = None,
 ) -> BindingCampaignResult:
-    if mode == "non_bo" and config.bo_enabled:
-        warnings.warn(
-            "bo_enabled=True on AdsorptionConfig has no effect with run_adsorption; "
-            "use run_adsorption_bo instead (preferred) rather than setting bo_enabled.",
-            stacklevel=3,
-        )
-
     molecule_pairs, load_status, molecules_source = _normalize_molecules_input(
         molecules,
         skip_existing=skip_existing,
@@ -176,7 +125,6 @@ def _run_binding_campaign(
     run_results = []
     summaries = []
     failure_summaries: dict[str, dict[str, object]] = {}
-    surface_symbols = set(slab.atoms.get_chemical_symbols())
     ds_logger = DatasetLogger(
         str(results_dir_for(surface_type)),
         config=config,
@@ -184,9 +132,7 @@ def _run_binding_campaign(
     )
 
     for smiles, molecule_name in molecule_pairs:
-        failure_summary: dict[str, object] = {}
-        extra_ml_records: list[PlacementRecord] = []
-        results = process_fn(
+        outcome = process_fn(
             smiles,
             molecule_name,
             slab,
@@ -196,21 +142,19 @@ def _run_binding_campaign(
             config=config,
             surface_type=surface_type,
             reference_smiles=smiles,
-            failure_summary_out=failure_summary,
-            extra_ml_records_out=extra_ml_records,
             **process_kwargs,
         )
-        if failure_summary:
-            failure_summaries[molecule_name] = failure_summary
+        results = outcome.results
+        if outcome.failure_summary:
+            failure_summaries[molecule_name] = outcome.failure_summary
         summaries.append(
             _summarize_molecule(
                 molecule_name,
                 results if results else [],
-                surface_symbols,
             )
         )
         if not results:
-            for record in extra_ml_records:
+            for record in outcome.ml_records:
                 ds_logger.add_record(record)
             continue
         if save_results:
@@ -224,7 +168,7 @@ def _run_binding_campaign(
             )
         run_results.append(screening_run_result(molecule_name, results))
         ds_logger.add_results(results, smiles=smiles, surface_id=surface_type)
-        for record in extra_ml_records:
+        for record in outcome.ml_records:
             ds_logger.add_record(record)
 
     ds_logger.flush()
@@ -233,9 +177,7 @@ def _run_binding_campaign(
         save_summary_results(run_results, surface_type=surface_type, config=config)
     total_configurations = sum(len(rr.results) for rr in run_results)
     t_total_s = time.perf_counter() - t_start
-    if _write_run_metadata_json(
-        write_settings=write_settings, write_metadata=write_metadata
-    ):
+    if write_settings:
         write_run_settings(
             surface_type,
             config,
@@ -283,7 +225,6 @@ def run_adsorption(
     system_name: str | None = None,
     save_results: bool = True,
     write_settings: bool = True,
-    write_metadata: bool = False,
     skip_existing: bool = True,
     run_metadata_out: dict[str, Any] | None = None,
     process_kwargs: dict[str, Any] | None = None,
@@ -307,10 +248,7 @@ def run_adsorption(
         ``config.write_vasp_inputs=True``.
     write_settings:
         When True (default), write the full ``run_metadata.json`` (config, campaign
-        fields, and timing/counts). Prefer this over ``write_metadata``.
-    write_metadata:
-        Deprecated alias for the same ``run_metadata.json`` write. Emits
-        :class:`DeprecationWarning` when True; set both False to suppress the file.
+        fields, and timing/counts). Set False to suppress the file.
     skip_existing:
         Skip molecules already listed in ``adsorption_energies_detailed.csv``
         (in-memory lists and CSV paths).
@@ -330,7 +268,6 @@ def run_adsorption(
         system_name=system_name,
         save_results=save_results,
         write_settings=write_settings,
-        write_metadata=write_metadata,
         skip_existing=skip_existing,
         run_metadata_out=run_metadata_out,
         process_kwargs=process_kwargs,
@@ -346,44 +283,13 @@ def run_adsorption_bo(
     system_name: str | None = None,
     save_results: bool = True,
     write_settings: bool = True,
-    write_metadata: bool = False,
     skip_existing: bool = True,
     run_metadata_out: dict[str, Any] | None = None,
     process_kwargs: dict[str, Any] | None = None,
 ) -> BindingCampaignResult:
-    """Multi-molecule adsorption screening with BO (``bo_enabled`` forced on).
-
-    Parameters
-    ----------
-    slab:
-        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
-    molecules:
-        In-memory list or CSV path (``smiles``, ``name``).
-    config:
-        Screening configuration.  ``bo_enabled`` is forced to ``True``.
-    surface_type:
-        Label used to name the ``results_{surface_type}/`` output directory.
-    system_name:
-        Optional system identifier for per-molecule XYZ files.
-    save_results:
-        Whether to write CSV/XYZ output files. VASP bundles require
-        ``config.write_vasp_inputs=True``.
-    write_settings:
-        When True (default), write the full ``run_metadata.json`` (config, campaign
-        fields, and timing/counts). Prefer this over ``write_metadata``.
-    write_metadata:
-        Deprecated alias for the same ``run_metadata.json`` write. Emits
-        :class:`DeprecationWarning` when True; set both False to suppress the file.
-    skip_existing:
-        Skip molecules already listed in ``adsorption_energies_detailed.csv``
-        (in-memory lists and CSV paths).
-    run_metadata_out:
-        Optional dict to populate with timing and count metadata.
-    process_kwargs:
-        Extra keyword arguments forwarded to
-        :func:`~metalsurfer.workflow.bayesian.process_molecule_bayesian`.
+    """Same as :func:`run_adsorption`, with BO-guided placement via
+    :func:`~metalsurfer.workflow.bayesian.process_molecule_bayesian`.
     """
-    config = _dc.replace(config, bo_enabled=True)
     return _run_binding_campaign(
         slab=slab,
         molecules=molecules,
@@ -394,7 +300,6 @@ def run_adsorption_bo(
         system_name=system_name,
         save_results=save_results,
         write_settings=write_settings,
-        write_metadata=write_metadata,
         skip_existing=skip_existing,
         run_metadata_out=run_metadata_out,
         process_kwargs=process_kwargs,
@@ -428,17 +333,9 @@ def _run_saturation_campaign(
     mode: Literal["non_bo", "bo"],
     save_results: bool,
     write_settings: bool,
-    write_metadata: bool,
     skip_existing: bool,
     run_metadata_out: dict[str, Any] | None,
 ) -> SaturationCampaignResult:
-    if mode == "non_bo" and config.bo_enabled:
-        warnings.warn(
-            "bo_enabled=True on AdsorptionConfig has no effect with run_saturation; "
-            "use run_saturation_bo instead (preferred) rather than setting bo_enabled.",
-            stacklevel=3,
-        )
-
     setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
     failure_summary: dict[str, object] = {}
     run_metadata: dict[str, Any] = (
@@ -453,6 +350,7 @@ def _run_saturation_campaign(
         skip_existing=skip_existing,
         failure_summary_out=failure_summary,
         run_metadata_out=run_metadata,
+        bo_enabled=(mode == "bo"),
     )
     runs = cast(
         list[SaturationRunResult | MultiMolSaturationRunResult],
@@ -464,9 +362,7 @@ def _run_saturation_campaign(
         _save_benchmark_dataset_if_requested(
             runs, surface_type=surface_type, config=config
         )
-    if _write_run_metadata_json(
-        write_settings=write_settings, write_metadata=write_metadata
-    ):
+    if write_settings:
         write_run_settings(
             surface_type,
             config,
@@ -506,7 +402,6 @@ def run_saturation(
     surface_type: str = "manual",
     save_results: bool = True,
     write_settings: bool = True,
-    write_metadata: bool = False,
     skip_existing: bool = True,
     run_metadata_out: dict[str, Any] | None = None,
 ) -> SaturationCampaignResult:
@@ -527,10 +422,7 @@ def run_saturation(
         ``config.write_vasp_inputs=True``.
     write_settings:
         When True (default), write the full ``run_metadata.json`` (config, campaign
-        fields, and timing/counts when available). Prefer this over ``write_metadata``.
-    write_metadata:
-        Deprecated alias for the same ``run_metadata.json`` write. Emits
-        :class:`DeprecationWarning` when True; set both False to suppress the file.
+        fields, and timing/counts when available). Set False to suppress the file.
     skip_existing:
         Skip molecules already listed in ``saturation_summary.csv``.
     run_metadata_out:
@@ -552,7 +444,6 @@ def run_saturation(
         mode="non_bo",
         save_results=save_results,
         write_settings=write_settings,
-        write_metadata=write_metadata,
         skip_existing=skip_existing,
         run_metadata_out=run_metadata_out,
     )
@@ -566,44 +457,12 @@ def run_saturation_bo(
     surface_type: str = "manual",
     save_results: bool = True,
     write_settings: bool = True,
-    write_metadata: bool = False,
     skip_existing: bool = True,
     run_metadata_out: dict[str, Any] | None = None,
 ) -> SaturationCampaignResult:
-    """Saturation with BO-guided placement selection.
-
-    Parameters
-    ----------
-    slab:
-        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
-    molecules:
-        In-memory list or CSV path (``smiles``, ``name`` columns).
-    config:
-        Screening configuration; ``bo_enabled`` is set to ``True``.
-    surface_type:
-        Label for the ``results_{surface_type}/`` output directory.
-    save_results:
-        Whether to write CSV/XYZ output files. VASP bundles require
-        ``config.write_vasp_inputs=True``.
-    write_settings:
-        When True (default), write the full ``run_metadata.json`` (config, campaign
-        fields, and timing/counts when available). Prefer this over ``write_metadata``.
-    write_metadata:
-        Deprecated alias for the same ``run_metadata.json`` write. Emits
-        :class:`DeprecationWarning` when True; set both False to suppress the file.
-    skip_existing:
-        Skip molecules already listed in ``saturation_summary.csv``.
-    run_metadata_out:
-        Optional dict populated with timing and count metadata.
-
-    Notes
-    -----
-    With ``save_results`` true, calls :func:`save_saturation_results` with the same ``config``
-    (after ``bo_enabled`` is set true).
-    """
+    """Same as :func:`run_saturation`, with BO-guided placement selection."""
     if config is None:
         config = AdsorptionConfig()
-    config = _dc.replace(config, bo_enabled=True)
     return _run_saturation_campaign(
         slab=slab,
         molecules=molecules,
@@ -612,7 +471,40 @@ def run_saturation_bo(
         mode="bo",
         save_results=save_results,
         write_settings=write_settings,
-        write_metadata=write_metadata,
         skip_existing=skip_existing,
         run_metadata_out=run_metadata_out,
+    )
+
+
+_RUNNERS = {
+    "adsorption": run_adsorption,
+    "adsorption_bo": run_adsorption_bo,
+    "saturation": run_saturation,
+    "saturation_bo": run_saturation_bo,
+}
+
+
+def run_campaign(document: CampaignDocument, *, skip_existing: bool = True) -> Any:
+    """Prepare substrate from a YAML campaign document and dispatch the runner.
+
+    Parameters
+    ----------
+    document:
+        Parsed campaign from :func:`~metalsurfer.load_campaign_yaml` or
+        :func:`~metalsurfer.campaign_schema.parse_campaign_dict`.
+    skip_existing:
+        Skip molecules already present in prior result CSVs (default: True).
+    """
+    slab = prepare_substrate(
+        **document.substrate,
+        config=document.config,
+        results_dir=document.results_dir,
+    )
+    runner = _RUNNERS[document.campaign]
+    return runner(
+        slab=slab,
+        molecules=document.molecules,
+        config=document.config,
+        surface_type=document.surface_type,
+        skip_existing=skip_existing,
     )

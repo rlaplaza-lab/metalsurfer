@@ -1,0 +1,25 @@
+# H2 saturation on Cu(111) — mirrors scripts/h2_cu_saturation.py
+campaign: saturation
+surface_type: h2_cu_saturation
+substrate:
+  bulk_id: mp-30
+  miller_indices: [1, 1, 1]
+  supercell: [1, 1, 1]
+molecules:
+  - smiles: "[H][H]"
+    name: H2
+config:
+  material_type: slab
+  model_name: uma-s-1p1
+  seed: 42
+  num_conformers: 1
+  num_placements: 250
+  autobatcher_max_memory_padding: 0.8
+  autobatcher_max_memory_scaler: 500
+  autobatcher_max_atoms_to_try: 5000
+  device: cuda
+  enable_dissociative_placement: true
+  skip_topology_check: true
+  skip_desorption_check: false
+  stage1_steps: 50
+  stage2_steps: 500

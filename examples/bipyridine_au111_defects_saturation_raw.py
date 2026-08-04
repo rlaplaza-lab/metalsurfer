@@ -42,7 +42,6 @@ def main():
         seed=42,
         num_conformers=20,
         num_placements=1000,
-        bo_enabled=False,
         device="cuda",
         fmax=0.05,
         stage1_steps=80,

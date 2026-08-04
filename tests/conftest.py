@@ -6,6 +6,7 @@
 import contextlib
 import multiprocessing
 from pathlib import Path
+from unittest.mock import MagicMock
 
 with contextlib.suppress(RuntimeError):
     multiprocessing.set_start_method("spawn", force=True)
@@ -16,7 +17,31 @@ from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.models import PlacementDescriptor, ScreeningResult
-from metalsurfer.surface_prep import SlabContainer
+
+from .optional_deps import cuda_available, has_mlip_stack
+
+# Shared markers for GPU/MLIP e2e modules (keep process isolation in run_gpu_tests.sh).
+GPU_MLIP_MARKS = [
+    pytest.mark.slow,
+    pytest.mark.mlip,
+    pytest.mark.gpu,
+    pytest.mark.no_fork,  # CUDA incompatible with pytest-forked
+    pytest.mark.skipif(
+        not has_mlip_stack,
+        reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
+    ),
+    pytest.mark.skipif(
+        not cuda_available,
+        reason="CUDA GPU required; skipped in CI (no GPU)",
+    ),
+]
+
+
+def gpu_mlip_test(fn):
+    """Apply GPU_MLIP_MARKS to a single test function."""
+    for mark in reversed(GPU_MLIP_MARKS):
+        fn = mark(fn)
+    return fn
 
 
 def _clear_cuda_for_gpu_test() -> None:
@@ -62,18 +87,6 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-@pytest.fixture
-def slab_container() -> SlabContainer:
-    """Default slab container for saturation tests."""
-    return SlabContainer(make_slab())
-
-
-@pytest.fixture
-def default_adsorption_config() -> AdsorptionConfig:
-    """Default config for workflow tests; override fields per test."""
-    return AdsorptionConfig()
-
-
 def adsorption_config_factory(**overrides: object) -> AdsorptionConfig:
     """Build AdsorptionConfig with compact test overrides."""
     return AdsorptionConfig(**overrides)
@@ -88,31 +101,6 @@ def assert_paths_exist(base: Path, relpaths: list[str]) -> None:
     """Assert all relative paths exist under *base*."""
     missing = [p for p in relpaths if not (base / p).exists()]
     assert not missing, f"Missing paths: {missing}"
-
-
-@pytest.fixture
-def screening_result_factory():
-    """Factory wrapper around make_screening_result with compact defaults."""
-
-    def _build(
-        *,
-        molecule: str,
-        energy_adsorption: float,
-        atoms: Atoms,
-        placement_id: int = 0,
-        slab_size: int | None = None,
-    ) -> ScreeningResult:
-        return make_screening_result(
-            molecule=molecule,
-            placement_id=placement_id,
-            energy_adsorption=energy_adsorption,
-            atoms=atoms,
-            slab_size=slab_size if slab_size is not None else len(atoms),
-            distance=2.5,
-            placement_descriptor=make_placement_descriptor(placement_id=placement_id),
-        )
-
-    return _build
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +186,11 @@ def make_water() -> Atoms:
             [-0.24, 0.93, 0.24],
         ],
     )
+
+
+def make_h2() -> Atoms:
+    """Canonical H–H = 0.74 Å molecule for placement / dissociative tests."""
+    return Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
 
 
 def make_ethanol() -> Atoms:
@@ -312,7 +305,24 @@ def place_molecule_on_slab(
     y_shift: float = 5.0,
 ) -> Atoms:
     """Place *mol* above *slab* and return combined system."""
-    slab_z = max(slab.get_positions()[:, 2])
+    adsorbate = place_adsorbate_above_slab(
+        slab, mol, z_offset=z_offset, x_shift=x_shift, y_shift=y_shift
+    )
+    combined = slab + adsorbate
+    combined.set_cell(slab.get_cell())
+    combined.set_pbc(slab.get_pbc())
+    return combined
+
+
+def place_adsorbate_above_slab(
+    slab: Atoms,
+    mol: Atoms,
+    z_offset: float = 3.0,
+    x_shift: float = 5.0,
+    y_shift: float = 5.0,
+) -> Atoms:
+    """Return adsorbate-only atoms centered above the slab surface."""
+    slab_z = float(np.max(slab.get_positions()[:, 2]))
     mol = mol.copy()
     pos = mol.get_positions().copy()
     pos -= np.mean(pos, axis=0)
@@ -320,10 +330,86 @@ def place_molecule_on_slab(
     pos[:, 1] += y_shift
     pos[:, 2] += slab_z + z_offset
     mol.set_positions(pos)
-    combined = slab + mol
-    combined.set_cell(slab.get_cell())
-    combined.set_pbc(slab.get_pbc())
-    return combined
+    mol.set_cell(slab.get_cell())
+    mol.set_pbc(slab.get_pbc())
+    return mol
+
+
+def mock_calculator(*, energy: float, n_atoms: int) -> MagicMock:
+    """Stub ASE calculator returning fixed energy and zero forces."""
+    calc = MagicMock()
+    calc.get_potential_energy.return_value = float(energy)
+    calc.get_forces.return_value = np.zeros((n_atoms, 3), dtype=float)
+    return calc
+
+
+def mic_delta(
+    dvec: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray | list[bool] | None = None,
+) -> np.ndarray:
+    """Apply minimum-image convention to a displacement vector when PBC is on."""
+    if pbc is not None and not np.any(pbc):
+        return np.asarray(dvec, dtype=float)
+    d = np.asarray(dvec, dtype=float)
+    cell_arr = np.asarray(cell, dtype=float)
+    return d - np.round(d @ np.linalg.inv(cell_arr)) @ cell_arr
+
+
+def pair_distance(
+    pos_i: np.ndarray,
+    pos_j: np.ndarray,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | list[bool] | None = None,
+) -> float:
+    """Euclidean distance between two positions, optionally under MIC."""
+    d = np.asarray(pos_j, dtype=float) - np.asarray(pos_i, dtype=float)
+    if cell is not None:
+        d = mic_delta(d, cell, pbc=pbc)
+    return float(np.linalg.norm(d))
+
+
+def adsorbate_symbol_pair_distance(
+    atoms: Atoms,
+    slab_size: int,
+    symbol: str,
+) -> float:
+    """MIC distance between the two adsorbate atoms of the given symbol."""
+    ads = atoms[slab_size:]
+    indices = [i for i, s in enumerate(ads.get_chemical_symbols()) if s == symbol]
+    if len(indices) != 2:
+        return float("nan")
+    pos = ads.get_positions()
+    return pair_distance(
+        pos[indices[0]],
+        pos[indices[1]],
+        cell=atoms.get_cell() if np.any(atoms.get_pbc()) else None,
+        pbc=atoms.get_pbc(),
+    )
+
+
+def assert_water_oh_hh_geometry(
+    ads: Atoms,
+    *,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | list[bool] | None = None,
+    oh_range: tuple[float, float] = (0.85, 1.25),
+    hh_range: tuple[float, float] = (1.2, 2.0),
+) -> None:
+    """Assert intact-water O–H and H–H distances (shared by CI and GPU water tests)."""
+    syms = ads.get_chemical_symbols()
+    o_idx = syms.index("O")
+    h_idx = [i for i, s in enumerate(syms) if s == "H"]
+    assert len(h_idx) == 2
+    pos = ads.get_positions()
+    oh1 = pair_distance(pos[o_idx], pos[h_idx[0]], cell=cell, pbc=pbc)
+    oh2 = pair_distance(pos[o_idx], pos[h_idx[1]], cell=cell, pbc=pbc)
+    hh = pair_distance(pos[h_idx[0]], pos[h_idx[1]], cell=cell, pbc=pbc)
+    assert oh_range[0] <= oh1 <= oh_range[1], f"O–H bond out of range: {oh1:.3f} Å"
+    assert oh_range[0] <= oh2 <= oh_range[1], f"O–H bond out of range: {oh2:.3f} Å"
+    assert hh_range[0] <= hh <= hh_range[1], (
+        f"H–H distance out of range for intact water: {hh:.3f} Å"
+    )
 
 
 def assert_lines_contain(text: str, expected_lines: list[str]) -> None:

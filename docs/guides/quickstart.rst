@@ -131,10 +131,10 @@ demos pass ``skip_existing=False`` so re-runs always compute.
 ``surface_type`` is only the output folder name (``results_{surface_type}/``);
 physics come from ``AdsorptionConfig.material_type`` and the prepared substrate.
 
-Use :func:`~metalsurfer.run_adsorption_bo` for Bayesian placement search; setting
-``bo_enabled=True`` on :class:`~metalsurfer.AdsorptionConfig` with
-:func:`~metalsurfer.run_adsorption` emits a warning and has no effect.
-Prefer the ``run_*_bo`` entry points — do not toggle ``bo_enabled`` yourself.
+Use :func:`~metalsurfer.run_adsorption_bo` for Bayesian placement search, or
+YAML ``campaign: adsorption_bo`` with :func:`~metalsurfer.run_campaign`. BO mode
+is selected by the entry point / YAML ``campaign`` field; config only holds BO
+hyperparameters.
 
 Campaign APIs accept plain ASE ``Atoms`` or :class:`~metalsurfer.surface_prep.SlabContainer`,
 but the structure must be **campaign-ready** before the call: **equilibrated ionic
@@ -146,7 +146,19 @@ build the substrate with ASE, then pass it to
 conventions are described in :doc:`surface_engineering`.
 
 Prefer ``write_settings=True`` (default) so campaigns write ``run_metadata.json``.
-``write_metadata`` is a deprecated alias for the same file.
+Set ``write_settings=False`` to suppress it.
+
+YAML-driven runs via the Python API (requires the MLIP stack)::
+
+   from metalsurfer import load_campaign_yaml, run_campaign
+
+   document = load_campaign_yaml("path/to/campaign.yaml")
+   result = run_campaign(document)
+
+Set ``campaign`` to one of ``adsorption``, ``adsorption_bo``,
+``saturation``, or ``saturation_bo`` (same four modes as the Python APIs).
+Examples: ``scripts/campaigns/``; schema fixtures: ``tests/fixtures/campaigns/``.
+See :doc:`../api/campaigns`.
 
 **Slab** — :func:`~metalsurfer.surface_prep.prepare_substrate` equilibrates ions
 by default (``slab_relaxation_mode="ionic_only"``), applies bottom-anchored
@@ -175,7 +187,8 @@ z-layout, PBC, freeze constraints, and validation:
    )
 
 **Nanoparticle** — minimal Pt₄ snippet below; for dissociative H₂ on a periodic slab see
-``examples/h2_ru_slab_binding_energy.py`` (Ru(0001), ``skip_topology_check=True``).
+``examples/h2_ru_slab_binding_energy.py`` (Ru(0001),
+``enable_dissociative_placement=True`` + ``skip_topology_check=True``).
 The runnable ``examples/ethene_pt12_binding_energy.py`` uses the same workflow with a
 12-atom Pt cluster and molecular ethene adsorption:
 
@@ -210,8 +223,9 @@ The runnable ``examples/ethene_pt12_binding_energy.py`` uses the same workflow w
        surface_type="pt4_nanoparticle",
    )
 
-**Dissociative H₂ on a slab** — ``skip_topology_check=True`` enables hollow-site pair
-placements **and** skips post-relax connectivity checks; E_ads still uses molecular E(H₂):
+**Dissociative H₂ on a slab** — set ``enable_dissociative_placement=True`` for
+hollow-site pair placements and ``skip_topology_check=True`` to skip post-relax
+connectivity checks; E_ads still uses molecular E(H₂):
 
 .. code-block:: python
 
@@ -221,6 +235,7 @@ placements **and** skips post-relax connectivity checks; E_ads still uses molecu
    config = AdsorptionConfig(
        material_type="slab",
        seed=42,
+       enable_dissociative_placement=True,
        skip_topology_check=True,
    )
    slab = prepare_substrate(
@@ -287,11 +302,15 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
        surface_type="Ru0001_bo",
    )
 
-BO knobs live on :class:`~metalsurfer.AdsorptionConfig`; see
+BO knobs live on :class:`~metalsurfer.AdsorptionConfig` as nested
+``config.bo`` / ``config.bo.transfer`` (:class:`~metalsurfer.BOConfig`,
+:class:`~metalsurfer.BOTransferConfig`); see
 :doc:`../guides/configuration` (budget math and recipes) and
 :doc:`../api/config` (full field reference — Bayesian optimization).
-Remember ``bo_total_budget`` is acquisition batches; after sizes resolve, call
+Remember ``bo.total_budget`` is acquisition batches; after sizes resolve, call
 :func:`~metalsurfer.config.resolved_bo_eval_budget` for the total evaluation count.
+Mode itself comes from calling ``run_adsorption_bo`` (or YAML
+``campaign: adsorption_bo``), not from a config flag.
 
 Sequential Saturation
 ---------------------
@@ -347,9 +366,10 @@ Important saturation behaviors:
   :doc:`configuration`.
 - Resize in-plane supercells during prep
   (``auto_resize_substrate_for_molecule``) before calling campaign APIs.
-- Use :func:`~metalsurfer.run_saturation_bo` for BO-guided saturation.
+- Use :func:`~metalsurfer.run_saturation_bo` (or YAML ``campaign: saturation_bo``)
+  for BO-guided saturation.
 - Saturation-specific config fields (``saturation_*``, ``multi_molecule_saturation``,
-  ``bo_transfer_*``): :doc:`configuration` and :doc:`../api/config`.
+  ``bo.transfer.*``): :doc:`configuration` and :doc:`../api/config`.
 - When printing completion summaries, pass
   ``write_vasp_inputs=config.write_vasp_inputs`` to
   :meth:`~metalsurfer.SaturationCampaignResult.format_completion`.

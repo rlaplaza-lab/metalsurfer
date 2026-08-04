@@ -35,6 +35,7 @@ from metalsurfer.models import ScreeningResult
 
 from .conftest import (
     make_placement_descriptor,
+    make_screening_result,
     make_slab,
     make_water,
     place_molecule_on_slab,
@@ -43,13 +44,13 @@ from .conftest import (
 
 def _sr(atoms, energy_adsorption, placement_id, molecule="test"):
     """Shorthand to build a ScreeningResult for testing."""
-    return ScreeningResult(
+    return make_screening_result(
         molecule=molecule,
         placement_id=placement_id,
+        energy_adsorption=energy_adsorption,
         energy_adslab=energy_adsorption,
         energy_slab=0.0,
         energy_adsorbate=0.0,
-        energy_adsorption=energy_adsorption,
         atoms=atoms,
         slab_size=16,
         distance=2.5,
@@ -145,19 +146,16 @@ def _make_acetic_acid():
 # ---------------------------------------------------------------------------
 
 
-def test_formula_from_smiles_water():
-    f = _formula_from_smiles("O")
-    assert f == {"O": 1, "H": 2}
-
-
-def test_formula_from_smiles_ethanol():
-    f = _formula_from_smiles("CCO")
-    assert f == {"C": 2, "H": 6, "O": 1}
-
-
-def test_formula_from_smiles_acetic_acid():
-    f = _formula_from_smiles("CC(=O)O")
-    assert f == {"C": 2, "H": 4, "O": 2}
+@pytest.mark.parametrize(
+    ("smiles", "expected"),
+    [
+        ("O", {"O": 1, "H": 2}),
+        ("CCO", {"C": 2, "H": 6, "O": 1}),
+        ("CC(=O)O", {"C": 2, "H": 4, "O": 2}),
+    ],
+)
+def test_formula_from_smiles(smiles, expected):
+    assert _formula_from_smiles(smiles) == expected
 
 
 def test_formula_from_smiles_invalid():
@@ -370,63 +368,25 @@ def test_coordination_fingerprint_detects_h_shift():
 # ---------------------------------------------------------------------------
 
 
-def test_decomposition_intact_water():
-    slab = make_slab(n_layers=1)
-    combined = place_molecule_on_slab(slab, make_water())
+@pytest.mark.parametrize(
+    ("mol_factory", "smiles", "surface_symbols", "multipliers", "slab_factory"),
+    [
+        (make_water, "O", ["Ru"], [1.2, 1.3], lambda: make_slab(n_layers=1)),
+        (_make_ethanol, "CCO", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
+        (_make_methanol, "CO", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
+        (_make_acetic_acid, "CC(=O)O", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
+        (make_water, "O", ["Ru", "Cu"], [1.2, 1.3], _make_alloy_slab),
+    ],
+)
+def test_decomposition_intact(
+    mol_factory, smiles, surface_symbols, multipliers, slab_factory
+):
+    combined = place_molecule_on_slab(slab_factory(), mol_factory())
     ok, reason = check_decomposition(
         combined,
-        reference_smiles="O",
-        surface_symbols=["Ru"],
-        connectivity_multipliers=[1.2, 1.3],
-    )
-    assert ok, reason
-
-
-def test_decomposition_intact_ethanol():
-    slab = make_slab(n_layers=1)
-    combined = place_molecule_on_slab(slab, _make_ethanol())
-    ok, reason = check_decomposition(
-        combined,
-        reference_smiles="CCO",
-        surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
-    )
-    assert ok, reason
-
-
-def test_decomposition_intact_methanol():
-    slab = make_slab(n_layers=1)
-    combined = place_molecule_on_slab(slab, _make_methanol())
-    ok, reason = check_decomposition(
-        combined,
-        reference_smiles="CO",
-        surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
-    )
-    assert ok, reason
-
-
-def test_decomposition_intact_acetic_acid():
-    slab = make_slab(n_layers=1)
-    combined = place_molecule_on_slab(slab, _make_acetic_acid())
-    ok, reason = check_decomposition(
-        combined,
-        reference_smiles="CC(=O)O",
-        surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
-    )
-    assert ok, reason
-
-
-def test_decomposition_intact_on_alloy():
-    """Intact molecule on a Ru/Cu alloy surface."""
-    slab = _make_alloy_slab()
-    combined = place_molecule_on_slab(slab, make_water())
-    ok, reason = check_decomposition(
-        combined,
-        reference_smiles="O",
-        surface_symbols=["Ru", "Cu"],
-        connectivity_multipliers=[1.2, 1.3],
+        reference_smiles=smiles,
+        surface_symbols=surface_symbols,
+        connectivity_multipliers=multipliers,
     )
     assert ok, reason
 
@@ -732,34 +692,25 @@ def test_decomposition_h_shift_caught_by_coordination():
 # ---------------------------------------------------------------------------
 
 
-def test_desorption_adsorbed():
+@pytest.mark.parametrize(
+    ("z_offset", "expect_ok", "reason_substr"),
+    [
+        (2.5, True, None),
+        (10.0, False, "too far"),
+        (4.5, False, "too far"),
+    ],
+)
+def test_desorption_by_height(z_offset, expect_ok, reason_substr):
     slab = make_slab(n_layers=1)
-    combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    combined = place_molecule_on_slab(slab, make_water(), z_offset=z_offset)
     ok, reason = check_desorption(
         combined, slab, binding_threshold=4.0, material_type="slab"
     )
-    assert ok, reason
-
-
-def test_desorption_too_far():
-    slab = make_slab(n_layers=1)
-    combined = place_molecule_on_slab(slab, make_water(), z_offset=10.0)
-    ok, reason = check_desorption(
-        combined, slab, binding_threshold=4.0, material_type="slab"
-    )
-    assert not ok
-    assert "too far" in reason
-
-
-def test_desorption_borderline():
-    """Molecule right at the threshold should be marked desorbed (> not >=)."""
-    slab = make_slab(n_layers=1)
-    combined = place_molecule_on_slab(slab, make_water(), z_offset=4.5)
-    ok, reason = check_desorption(
-        combined, slab, binding_threshold=4.0, material_type="slab"
-    )
-    assert not ok
-    assert "too far" in reason
+    assert ok is expect_ok
+    if reason_substr is not None:
+        assert reason_substr in reason
+    elif expect_ok:
+        assert ok, reason
 
 
 def test_desorption_threshold_is_strict_greater_than():

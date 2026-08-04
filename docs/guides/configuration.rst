@@ -38,7 +38,8 @@ Autotuning placements on GPU
 Leave these at their defaults (``None``) for production GPU runs:
 
 - ``num_placements`` — non-BO screening batch size
-- ``bo_initial_random``, ``bo_batch_size`` — BO batch sizes
+- ``bo.initial_random``, ``bo.batch_size`` — BO batch sizes (legacy YAML /
+  constructor keys ``bo_initial_random``, ``bo_batch_size`` still fold in)
 
 At workflow start Metalsurfer probes TorchSim memory using ``autobatcher_*`` fields
 and sets parallel capacity. Demos and CI tests set small explicit integers instead.
@@ -55,30 +56,40 @@ For homonuclear diatomics that may dissociate on slabs or nanoparticles:
 
    config = AdsorptionConfig(
        material_type="slab",
+       enable_dissociative_placement=True,
        skip_topology_check=True,
        seed=42,
    )
 
-``skip_topology_check=True`` does two related things:
+- ``enable_dissociative_placement=True`` — preferred gate for hollow-site pair
+  (or nanoparticle site-pair) initial placements
+- ``skip_topology_check=True`` — disables post-relaxation connectivity /
+  decomposition checks so fragmented adsorbates are retained
 
-- Enables hollow-site pair initial placements for H₂
-- Disables post-relaxation connectivity / decomposition checks
+Using ``skip_topology_check=True`` alone still enables dissociative placement
+with a ``DeprecationWarning``; set both flags in new code.
 
 Reference energy remains the **isolated molecule**; positive :math:`E_\mathrm{ads}`
 is possible when the relaxed state is dissociated.
 
-See ``examples/h2_ru_slab_binding_energy.py``.
+See ``examples/h2_ru_slab_binding_energy.py`` and ``scripts/campaigns/``.
 
 Common mistakes
 ---------------
 
 - Raising ``fmax`` alone does not relax the post-relax force filter — also raise
   ``max_force_convergence`` if you intend softer acceptance.
-- ``bo_total_budget`` is acquisition **batches**, not total evaluations. Use
+- ``bo.total_budget`` is acquisition **batches**, not total evaluations. Use
   :func:`~metalsurfer.config.resolved_bo_eval_budget` once batch sizes are resolved (or
-  see the budget section below).
-- Prefer ``write_settings=True`` (default) for ``run_metadata.json``;
-  ``write_metadata`` is a deprecated alias for the same file.
+  see the budget section below). Legacy flat key ``bo_total_budget`` still folds in.
+- BO mode is the ``run_*_bo`` entry point or YAML ``campaign: *_bo`` — not a
+  config field. Unknown keys such as ``bo_enabled`` in YAML ``config:`` raise
+  ``TypeError`` from :class:`~metalsurfer.AdsorptionConfig`.
+- Prefer ``write_settings=True`` (default) for ``run_metadata.json``.
+  Set ``write_settings=False`` to suppress it.
+- CSV exports (``ml_dataset.csv`` and detailed result CSVs) are lean by
+  default. Set ``export_placement_provenance=True`` for ``initial_*``
+  placement provenance and full ``ctx_*`` computation settings.
 
 Initial placement validation
 ----------------------------
@@ -92,9 +103,7 @@ Three independent layers (do not conflate):
 
 Do not confuse ``min_contact_ratio`` (default **0.8**, unitless fraction of the
 covalent-radius sum) with ``max_closest_approach`` (default **0.8** Å, absolute
-closest-approach distance used by the contact-quality layer). The deprecated
-``min_contact_distance`` ctor alias maps to ``max_closest_approach``, not to
-``min_contact_ratio``.
+closest-approach distance used by the contact-quality layer).
 
 Under saturation, substrate contact uses the bare-slab atom prefix while prior
 adsorbates are checked with adsorbate–adsorbate separation. Generation failures
@@ -130,7 +139,7 @@ honored for A/B comparisons.
 
 Material-aware placement asymmetries (hybrid topology on slabs, parallel-z floors
 for open surfaces only, no porous dissociative) are intentional for sampling
-effectiveness — see :doc:`architecture` and ``CORE_SYSTEM_EXPLANATION.md``.
+effectiveness — see :doc:`architecture`.
 
 Bayesian optimization budget
 ----------------------------
@@ -139,17 +148,44 @@ Total BO placement evaluations (after autotune resolves batch sizes):
 
 .. code-block:: text
 
-   bo_initial_random + bo_total_budget * bo_batch_size
+   bo.initial_random + bo.total_budget * bo.batch_size
 
-``bo_total_budget`` counts **acquisition batches** after the initial random batch,
+``bo.total_budget`` counts **acquisition batches** after the initial random batch,
 not total evaluations. Example: target ~300 evals with autotuned batch size 16 and
-initial random 16 → set ``bo_total_budget = (300 - 16) // 16`` (integer division).
+initial random 16 → set ``bo.total_budget = (300 - 16) // 16`` (integer division).
 After sizes are resolved, :func:`~metalsurfer.config.resolved_bo_eval_budget` returns the
 total evaluation count.
 
-Use :func:`~metalsurfer.run_adsorption_bo` or :func:`~metalsurfer.run_saturation_bo`;
-``bo_enabled`` is set by those APIs — toggling it on the config alone has no effect
-on non-BO entry points.
+Prefer nested Python / YAML::
+
+   from metalsurfer import AdsorptionConfig, BOConfig, BOTransferConfig
+
+   config = AdsorptionConfig(
+       bo=BOConfig(
+           initial_random=16,
+           batch_size=16,
+           total_budget=18,
+           transfer=BOTransferConfig(enabled=True),
+       ),
+   )
+
+   # YAML:
+   # config:
+   #   bo:
+   #     initial_random: 16
+   #     batch_size: 16
+   #     total_budget: 18
+   #     transfer:
+   #       enabled: true
+
+Legacy flat constructor kwargs (``bo_initial_random``, …) and flat YAML
+``bo_*`` / ``bo_transfer_*`` keys still fold into ``AdsorptionConfig.bo``.
+
+Use :func:`~metalsurfer.run_adsorption_bo` or :func:`~metalsurfer.run_saturation_bo`
+(or YAML ``campaign: adsorption_bo`` / ``saturation_bo`` with
+:func:`~metalsurfer.run_campaign`). Those select BO mode; ``bo`` / ``bo.transfer``
+fields are hyperparameters only. See :doc:`../api/campaigns` for the YAML
+``campaign`` mapping.
 
 Saturation essentials
 ---------------------
@@ -162,7 +198,7 @@ Key fields:
 - ``saturation_save_all_placements`` (default ``True``) — disk-heavy; set ``False``
   for large placement counts
 - ``multi_molecule_saturation`` — competitive saturation when multiple SMILES are loaded
-- ``bo_transfer_*`` — cross-step BO memory in ``run_saturation_bo`` (see
+- ``bo.transfer.*`` — cross-step BO memory in ``run_saturation_bo`` (see
   :doc:`../api/config` — Bayesian optimization)
 
 Prep vs campaign relaxation

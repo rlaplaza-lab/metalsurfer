@@ -13,11 +13,8 @@ from ase.build import fcc111
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.exceptions import GeometryValidationError
 from metalsurfer.io_results import _write_clean_xyz
-from metalsurfer.surfaces import (
-    DEFAULT_SLAB_TOP_VACUUM_ANG,
+from metalsurfer.surface_prep import (
     SlabContainer,
-    _molecule_diameter,
-    _perpendicular_heights_2d,
     apply_surface_constraints,
     auto_resize_substrate_for_molecule,
     coerce_slab_container,
@@ -28,6 +25,11 @@ from metalsurfer.surfaces import (
     ensure_slab_z_alignment,
     substitute_alloy,
     validate_substrate,
+)
+from metalsurfer.surface_prep._surfaces import (
+    DEFAULT_SLAB_TOP_VACUUM_ANG,
+    _molecule_diameter,
+    _perpendicular_heights_2d,
 )
 
 from .conftest import make_slab, make_water
@@ -551,7 +553,9 @@ class TestDepositAdatoms:
                 _ = force_consistent
                 return float(len(atoms) if atoms is not None else 0.0)
 
-        monkeypatch.setattr("metalsurfer.surfaces._relax_slab_structure", _fake_relax)
+        monkeypatch.setattr(
+            "metalsurfer.surface_prep._surfaces._relax_slab_structure", _fake_relax
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             deposit_adatoms(
                 slab,
@@ -862,3 +866,60 @@ class TestWriteCleanXyz:
             with open(path) as f:
                 lines = f.readlines()
             assert int(lines[0].strip()) == len(atoms)
+
+
+def test_deposit_adatoms_height_follows_tilted_slab_normal():
+    """Adatom offset must follow site/slab normal, not Cartesian +z."""
+    import numpy as np
+    from ase import Atoms
+
+    from metalsurfer.config import AdsorptionConfig
+    from metalsurfer.placement.site_coords import _slab_normal
+    from metalsurfer.surface_prep import deposit_adatoms
+
+    # Orthorhombic slab then tilt c so normal is not [0,0,1]
+    a = 2.7
+    positions = []
+    for iz in range(3):
+        for ix in range(3):
+            for iy in range(3):
+                positions.append([ix * a, iy * a, iz * a])
+    atoms = Atoms("Cu" * len(positions), positions=positions)
+    atoms.set_cell([3 * a, 3 * a, 3 * a + 12.0])
+    atoms.set_pbc([True, True, False])
+    # Shear cell so slab normal tilts in xz
+    cell = atoms.get_cell().array.copy()
+    cell[2, 0] = 4.0
+    atoms.set_cell(cell, scale_atoms=False)
+
+    height = 1.8
+    result = deposit_adatoms(
+        atoms,
+        "H",
+        coverage_fraction=0.15,
+        n_variants=1,
+        adsorption_height=height,
+        config=AdsorptionConfig(
+            material_type="slab", seed=0, slab_relaxation_mode="none"
+        ),
+        results_dir="/tmp/adatom_tilt_test",
+    )
+    n_base = len(atoms)
+    ad_pos = result.atoms.get_positions()[n_base:]
+    assert len(ad_pos) >= 1
+    n_hat = _slab_normal(np.asarray(result.atoms.get_cell(), dtype=float))
+    base_pos = result.atoms.get_positions()[:n_base]
+    base_h = base_pos @ n_hat
+    top_h = float(np.max(base_h))
+    for p in ad_pos:
+        h = float(np.dot(p, n_hat))
+        assert h > top_h + 0.3, f"adatom height along normal {h:.3f} vs top {top_h:.3f}"
+        # Cartesian z alone would be z_max + height; with tilted normal that
+        # Cartesian target differs from the normal-aware height.
+        z_max = float(np.max(base_pos[:, 2]))
+        cartesian_target_z = z_max + height
+        assert abs(p[2] - cartesian_target_z) > 0.05 or abs(
+            float(np.dot(n_hat, [0, 0, 1])) - 1.0
+        ) < 1e-6
+        # Displacement along normal from projection onto top plane ≈ height
+        assert abs((h - top_h) - height) < 1.5 or h > top_h

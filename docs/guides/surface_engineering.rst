@@ -129,7 +129,8 @@ surfaces):
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, setup_single_model
+   from metalsurfer import AdsorptionConfig
+   from metalsurfer.optimization import setup_single_model
    from metalsurfer.surface_prep import (
        create_slab_from_bulk,
        deposit_adatoms,

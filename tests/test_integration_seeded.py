@@ -4,6 +4,8 @@ Also assert physical placement invariants (clearance, height, intramolecular
 geometry) so reproducibility is not the only gate that must pass.
 """
 
+import math
+
 import numpy as np
 import pytest
 from ase.data import atomic_numbers, covalent_radii
@@ -199,7 +201,11 @@ class TestEndToEndDeterminism:
     def test_pipeline_placements_are_physically_plausible(self):
         """Successful CCO placements clear the surface and keep intramolecular bonds."""
         results = self._pipeline(seed=42, assert_physics=True)
-        assert len(results) >= 5, f"Expected >=5 valid placements, got {len(results)}"
+        n_requested = 30
+        min_ok = max(27, int(math.ceil(0.9 * n_requested)))
+        assert len(results) >= min_ok, (
+            f"Expected >= {min_ok}/{n_requested} valid placements, got {len(results)}"
+        )
         # Ethanol has 9 atoms; every successful placement must preserve stoichiometry.
         assert all(n == 9 for _, _, n in results)
 
@@ -255,4 +261,5 @@ class TestEndToEndDeterminism:
                 desc.quat_w**2 + desc.quat_x**2 + desc.quat_y**2 + desc.quat_z**2
             )
             assert qnorm == pytest.approx(1.0, abs=1e-5)
-        assert n_ok >= 5, f"Expected >=5 valid placements, got {n_ok}"
+        min_ok = max(18, int(math.ceil(0.9 * 20)))
+        assert n_ok >= min_ok, f"Expected >= {min_ok}/20 valid placements, got {n_ok}"

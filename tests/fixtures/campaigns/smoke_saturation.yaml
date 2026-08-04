@@ -1,0 +1,20 @@
+# Minimal saturation campaign for CI schema / API e2e (no MLIP run).
+campaign: saturation
+surface_type: smoke_saturation
+substrate:
+  bulk_id: mp-30
+  miller_indices: [1, 1, 1]
+  supercell: [1, 1, 1]
+molecules:
+  - smiles: O
+    name: water
+config:
+  material_type: slab
+  model_name: uma-s-1p1
+  seed: 1
+  num_conformers: 1
+  num_placements: 4
+  device: cpu
+  stage1_steps: 2
+  stage2_steps: 2
+  saturation_max_steps: 2

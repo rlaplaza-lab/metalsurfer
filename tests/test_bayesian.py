@@ -123,49 +123,36 @@ class TestSurrogate:
         assert sigma.shape == (20,)
         assert np.all(sigma == 0.0)
 
-    def test_train_surrogate_accepts_sample_weights(self):
-        X, y = _make_synthetic_training_data(30)
-        weights = np.ones(len(y), dtype=float)
-        weights[:5] = 2.0
-        model = train_surrogate(X, y, n_estimators=10, sample_weight=weights)
-        mu, sigma = predict_with_uncertainty(model, X)
-        assert mu.shape == (30,)
-        assert sigma.shape == (30,)
-
-    def test_train_surrogate_ridge_accepts_sample_weights(self):
-        X, y = _make_synthetic_training_data(20)
-        w = np.ones(20, dtype=float)
-        w[:5] = 2.0
-        model = train_surrogate(X, y, surrogate="ridge", sample_weight=w)
-        mu, sigma = predict_with_uncertainty(model, X)
-        assert mu.shape == (20,)
-        assert sigma.shape == (20,)
-
-    def test_train_surrogate_gradient_boost_accepts_sample_weights(self):
-        X, y = _make_synthetic_training_data(20)
-        w = np.ones(20, dtype=float)
-        w[:5] = 2.0
-        model = train_surrogate(X, y, surrogate="gradient_boost", sample_weight=w)
-        mu, sigma = predict_with_uncertainty(model, X)
-        assert mu.shape == (20,)
-        assert sigma.shape == (20,)
-        assert np.all(sigma > 0)
-
     def test_train_surrogate_rejects_sample_weight_for_non_weighted(self):
         X, y = _make_synthetic_training_data(20)
         w = np.ones(20, dtype=float)
         with pytest.raises(ValueError, match="sample_weight"):
             train_surrogate(X, y, surrogate="gaussian_process", sample_weight=w)
 
-    def test_ensemble_accepts_sample_weight_for_tree_members(self):
-        X, y = _make_synthetic_training_data(20)
-        w = np.ones(20, dtype=float)
-        model = train_surrogate(
-            X, y, surrogate="ensemble", n_estimators=5, sample_weight=w
-        )
+    @pytest.mark.parametrize(
+        "surrogate, kwargs, expect_sigma_gt0, n_samples",
+        [
+            (None, {"n_estimators": 10}, False, 30),
+            ("ridge", {}, False, 20),
+            ("gradient_boost", {}, True, 20),
+            ("ensemble", {"n_estimators": 5}, False, 20),
+        ],
+    )
+    def test_train_surrogate_accepts_sample_weights(
+        self, surrogate, kwargs, expect_sigma_gt0, n_samples
+    ):
+        X, y = _make_synthetic_training_data(n_samples)
+        weights = np.ones(n_samples, dtype=float)
+        weights[:5] = 2.0
+        train_kwargs = dict(kwargs)
+        if surrogate is not None:
+            train_kwargs["surrogate"] = surrogate
+        model = train_surrogate(X, y, sample_weight=weights, **train_kwargs)
         mu, sigma = predict_with_uncertainty(model, X)
-        assert mu.shape == (20,)
-        assert sigma.shape == (20,)
+        assert mu.shape == (n_samples,)
+        assert sigma.shape == (n_samples,)
+        if expect_sigma_gt0:
+            assert np.all(sigma > 0)
 
     def test_gaussian_process_matern_length_scale(self):
         X, y = _make_synthetic_training_data(25)
@@ -517,10 +504,17 @@ class TestScoreAndSelect:
 
 
 class TestTransferSmoke:
-    def test_build_transfer_surrogate_smoke(self):
+    @pytest.mark.parametrize(
+        "surrogate",
+        [None, "ridge", "gradient_boost"],
+    )
+    def test_build_transfer_surrogate_smoke(self, surrogate):
         X, y = _make_synthetic_training_data(20)
         X_prev = X.iloc[:10].copy()
         y_prev = (y.iloc[:10] - 0.5).to_numpy()
+        kwargs = {}
+        if surrogate is not None:
+            kwargs["surrogate"] = surrogate
         result = build_transfer_surrogate(
             X.iloc[:8],
             y.iloc[:8].to_numpy(),
@@ -530,42 +524,7 @@ class TestTransferSmoke:
             similarity_lengthscale=1.0,
             min_similarity=0.0,
             mae_tolerance=1.0,
-        )
-        assert result.surrogate is not None
-        assert result.transfer_weight_share > 0.0
-
-    def test_build_transfer_surrogate_ridge(self):
-        X, y = _make_synthetic_training_data(20)
-        X_prev = X.iloc[:10].copy()
-        y_prev = (y.iloc[:10] - 0.5).to_numpy()
-        result = build_transfer_surrogate(
-            X.iloc[:8],
-            y.iloc[:8].to_numpy(),
-            X_prev,
-            y_prev,
-            surrogate="ridge",
-            weight_cap=0.35,
-            similarity_lengthscale=1.0,
-            min_similarity=0.0,
-            mae_tolerance=1.0,
-        )
-        assert result.surrogate is not None
-        assert result.transfer_weight_share > 0.0
-
-    def test_build_transfer_surrogate_gradient_boost(self):
-        X, y = _make_synthetic_training_data(20)
-        X_prev = X.iloc[:10].copy()
-        y_prev = (y.iloc[:10] - 0.5).to_numpy()
-        result = build_transfer_surrogate(
-            X.iloc[:8],
-            y.iloc[:8].to_numpy(),
-            X_prev,
-            y_prev,
-            surrogate="gradient_boost",
-            weight_cap=0.35,
-            similarity_lengthscale=1.0,
-            min_similarity=0.0,
-            mae_tolerance=1.0,
+            **kwargs,
         )
         assert result.surrogate is not None
         assert result.transfer_weight_share > 0.0
@@ -670,7 +629,6 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
 
     n_placements = 3
     config = AdsorptionConfig(
-        bo_enabled=True,
         bo_initial_random=n_placements,
         bo_batch_size=n_placements,
         bo_total_budget=1,
@@ -688,7 +646,7 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         ts_model=ts_model,
         config=config,
     )
-    results = process_molecule_bayesian(
+    outcome = process_molecule_bayesian(
         "O",
         "water",
         slab,
@@ -698,7 +656,8 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         config=config,
         surface_type="defect_test",
     )
-    assert results is not None, "BO pipeline should return a list (possibly empty)"
+    assert outcome is not None, "BO pipeline should return an outcome"
+    results = outcome.results
     assert len(results) >= 1, (
         "BO two generations on defect/doped surface should yield at least one valid "
         "binding energy result"

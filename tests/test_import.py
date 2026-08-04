@@ -104,6 +104,9 @@ def test_campaign_entry_points_in_all():
         "run_adsorption_bo",
         "run_saturation",
         "run_saturation_bo",
+        "run_campaign",
+        "load_campaign_yaml",
+        "CampaignDocument",
     ):
         assert name in metalsurfer.__all__
 
@@ -125,9 +128,8 @@ def test_lazy_getattr_loads_module():
     """Lazy __getattr__ loads submodules on first access of deferred symbols."""
     import metalsurfer
 
-    # SlabContainer is lazy-exported from surface_prep
-    slab_container = metalsurfer.SlabContainer
-    assert slab_container.__name__ == "SlabContainer"
+    prepare = metalsurfer.prepare_substrate
+    assert callable(prepare)
 
 
 def test_surface_prep_import_path():
@@ -184,7 +186,17 @@ def test_removed_lazy_exports_are_not_available():
     """Removed public symbols must not reappear in lazy exports."""
     import metalsurfer
 
-    removed = ("precompute_results",)
+    removed = (
+        "precompute_results",
+        "results_dir",
+        "SlabContainer",
+        "setup_directories",
+        "process_molecule",
+        "create_slab_from_bulk",
+        "deposit_adatoms",
+        "clear_unique_sites_cache",
+        "clear_site_context_cache",
+    )
     for name in removed:
         with pytest.raises(AttributeError, match=f"has no attribute {name!r}"):
             _ = getattr(metalsurfer, name)

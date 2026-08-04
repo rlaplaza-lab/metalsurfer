@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-from ase import Atoms
-
-from ..symmetry import SymmetryAnalyzer
 from ._material import (
     material_aware_pbc as material_aware_pbc,
-)
-from .generators import (
-    classify_adsorbate_orientation as classify_adsorbate_orientation,
 )
 from .generators import (
     distribute_placement_budget as distribute_placement_budget,
@@ -24,9 +18,6 @@ from .generators import (
     generate_placement_from_descriptor as generate_placement_from_descriptor,
 )
 from .generators import (
-    generate_placement_from_pose as generate_placement_from_pose,
-)
-from .generators import (
     generate_placement_from_spec as generate_placement_from_spec,
 )
 from .generators import (
@@ -38,24 +29,21 @@ from .geometry import (
 from .geometry import (
     check_initial_placement_distance as check_initial_placement_distance,
 )
-from .sites import (
-    DEFAULT_SYMMETRY_TOLERANCE,
+from .orientation import (
+    classify_adsorbate_orientation as classify_adsorbate_orientation,
 )
-from .sites import (
+from .pose import (
+    generate_placement_from_pose as generate_placement_from_pose,
+)
+from .site_coords import (
+    top_layer_mask_by_normal as top_layer_mask_by_normal,
+)
+from .site_enumeration import (
     get_hollow_sites_for_adatoms as get_hollow_sites_for_adatoms,
 )
-from .sites import (
+from .site_enumeration import (
     get_symmetry_aware_sites as get_symmetry_aware_sites,
 )
-from .sites import (
+from .site_enumeration import (
     get_unified_sites as get_unified_sites,
 )
-
-
-def get_symmetry_info(
-    slab: Atoms,
-    symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE,
-) -> dict[str, object]:
-    """Symmetry metadata including spglib space group."""
-    symmetry_analyzer = SymmetryAnalyzer(slab, symmetry_tolerance=symmetry_tolerance)
-    return symmetry_analyzer.get_symmetry_info()

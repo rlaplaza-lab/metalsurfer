@@ -79,6 +79,7 @@ for summary in result.molecule_summaries:
 | BO saturation | `run_saturation_bo` | [Quick start — Saturation](https://metalsurfer.readthedocs.io/en/latest/guides/quickstart.html#sequential-saturation) |
 | Substrate preparation | `prepare_substrate` | [Surface engineering](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html) |
 | Configuration options | `AdsorptionConfig` | [Field reference](https://metalsurfer.readthedocs.io/en/latest/api/config.html) · [Configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) |
+| YAML campaign | `load_campaign_yaml` + `run_campaign` | [`scripts/campaigns/`](scripts/campaigns/); `campaign:` is `adsorption` / `adsorption_bo` / `saturation` / `saturation_bo` ([API](https://metalsurfer.readthedocs.io/en/latest/api/campaigns.html)) |
 
 Pass one of three `material_type` values on every run: `slab`, `nanoparticle`, or `porous`. See the [configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) for when to use each.
 
@@ -93,7 +94,7 @@ Runnable scripts in [`examples/`](examples/) (requires `pip install -e ".[mlip]"
 | [`examples/ethene_pt12_binding_energy.py`](examples/ethene_pt12_binding_energy.py) | `nanoparticle` | Ethene on a Pt₁₂ cluster |
 | [`examples/co2_mof_binding_energy.py`](examples/co2_mof_binding_energy.py) | `porous` | CO₂ in a MOF (RUBTAK01) |
 | [`examples/ethene_ru_slab_binding_energy.py`](examples/ethene_ru_slab_binding_energy.py) | `slab` | Ethene on Ru(0001) |
-| [`examples/h2_ru_slab_binding_energy.py`](examples/h2_ru_slab_binding_energy.py) | `slab` | H₂ dissociative adsorption (`skip_topology_check=True`: hollow pairs + skip connectivity checks) |
+| [`examples/h2_ru_slab_binding_energy.py`](examples/h2_ru_slab_binding_energy.py) | `slab` | H₂ dissociative adsorption (`enable_dissociative_placement` + `skip_topology_check`) |
 | [`examples/camphor_cu111_binding_energy.py`](examples/camphor_cu111_binding_energy.py) | `slab` | Bayesian placement search on literature Cu(111) slab |
 | [`examples/bipyridine_au111_defects_saturation_raw.py`](examples/bipyridine_au111_defects_saturation_raw.py) | `slab` | HPC-scale saturation demo (also under `scripts/`) |
 
@@ -110,7 +111,7 @@ python -m pytest tests/ -m "not dependency_behavior and not mlip and not gpu and
   --cov=src/metalsurfer --cov-report=term-missing --tb=short -v
 ```
 
-CI parity, coverage gates, and contributor test markers: [development guide](https://metalsurfer.readthedocs.io/en/latest/guides/development.html). Architecture: [`CORE_SYSTEM_EXPLANATION.md`](CORE_SYSTEM_EXPLANATION.md).
+CI parity, coverage gates, and contributor test markers: [development guide](https://metalsurfer.readthedocs.io/en/latest/guides/development.html). Mental model: [`CORE_SYSTEM_EXPLANATION.md`](CORE_SYSTEM_EXPLANATION.md). Full mechanics: [architecture guide](https://metalsurfer.readthedocs.io/en/latest/guides/architecture.html).
 
 ---
 

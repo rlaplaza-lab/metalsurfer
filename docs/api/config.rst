@@ -12,7 +12,12 @@ and :doc:`../guides/surface_engineering`.
 
    Primary knobs: ``model_name``, ``num_conformers``, ``num_placements``, and
    ``material_type``. For dissociative adsorption (e.g. H₂ → 2H), set
-   ``skip_topology_check=True``. Reference energies remain isolated-molecule
+   ``enable_dissociative_placement=True`` and usually ``skip_topology_check=True``
+   so connectivity filters allow fragmented adsorbates. Use ``run_*_bo`` (or
+   YAML ``campaign: adsorption_bo`` / ``saturation_bo``) for Bayesian placement
+   selection; nested ``bo`` (:class:`~metalsurfer.BOConfig`) hyperparameters
+   only. Legacy flat ``bo_*`` constructor / YAML keys still fold into ``bo``.
+   Reference energies remain isolated-molecule
    energies; positive :math:`E_\mathrm{ads}` can result when the relaxed adsorbate
    dissociates.
 
@@ -307,8 +312,7 @@ Initial placement validation
    substrate when ``strict_initial_placement`` or ``require_multiple_contact`` is
    enabled. Rejects placements whose nearest contact is farther than this
    threshold. Distinct from ``contact_distance_threshold``, which only counts
-   contacting atoms. Deprecated constructor alias: ``min_contact_distance=...``
-   (prefer this field; ``dataclasses.replace`` ignores the alias).
+   contacting atoms.
 
 ``min_contact_atoms``
    **Type:** ``int`` · **Default:** ``1``
@@ -444,14 +448,24 @@ Post-relaxation validation
    Disable the post-relaxation adsorbate–surface distance validation. Use when
    legitimate bound states sit at unusually large distances or for debugging.
 
+``enable_dissociative_placement``
+   **Type:** ``bool`` · **Default:** ``False``
+
+   Preferred gate for dissociative hollow/site-pair initial placements of
+   homonuclear diatomics on slabs and nanoparticles (e.g. H₂ → 2H). Pair with
+   ``skip_topology_check=True`` when fragmented post-relax states must pass
+   connectivity filters. Descriptor ``fragment_positions`` support replay but
+   are omitted from BO feature vectors.
+
 ``skip_topology_check``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Dual-purpose H₂ / dissociation knob: when ``True``, (1) enables dissociative
-   hollow-site-pair initial placements for homonuclear diatomics on slabs and
-   nanoparticles (e.g. H₂ → 2H), and (2) disables post-relaxation molecular
-   connectivity / decomposition checks. Reference energies remain the isolated
-   molecule; positive :math:`E_\mathrm{ads}` can result after dissociation.
+   Disables post-relaxation molecular connectivity / decomposition checks.
+   Legacy: when ``True`` alone, also enables dissociative hollow-site-pair
+   placements (emits ``DeprecationWarning``; prefer
+   ``enable_dissociative_placement=True``). Reference energies remain the
+   isolated molecule; positive :math:`E_\mathrm{ads}` can result after
+   dissociation.
 
 ``connectivity_multipliers``
    **Type:** ``list[float]`` · **Default:** ``[1.2, 1.3]``
@@ -483,83 +497,85 @@ Deduplication
 Bayesian optimization
 ~~~~~~~~~~~~~~~~~~~~~
 
-Used by :func:`~metalsurfer.run_adsorption_bo` and :func:`~metalsurfer.run_saturation_bo`.
-Do not set ``bo_enabled`` yourself — BO entry points force it on; setting it on
-non-BO entry points only emits a warning and has no effect.
+Used by :func:`~metalsurfer.run_adsorption_bo` and
+:func:`~metalsurfer.run_saturation_bo` (and YAML ``campaign: adsorption_bo`` /
+``saturation_bo``). Those entry points select BO mode; nested ``bo`` /
+``bo.transfer`` fields below are hyperparameters only. Legacy flat ``bo_*`` /
+``bo_transfer_*`` constructor and YAML keys still fold into these nested
+objects for one release.
 
-``bo_enabled``
-   **Type:** ``bool`` · **Default:** ``False``
+``bo``
+   **Type:** :class:`~metalsurfer.BOConfig` · **Default:** ``BOConfig()``
 
-   Internal / set by BO campaign APIs only. Prefer ``run_adsorption_bo`` /
-   ``run_saturation_bo``; do not toggle this on :class:`~metalsurfer.AdsorptionConfig`
-   for ordinary screening.
+   Nested Bayesian hyperparameters. Prefer ``config.bo.*`` in Python; YAML may
+   use a nested ``bo:`` block or legacy flat ``bo_*`` keys.
 
-``bo_initial_random``
+``bo.initial_random``
    **Type:** ``int | None`` · **Default:** ``None``
 
    Number of placements evaluated in the initial random batch before surrogate-guided
    acquisition. When ``None``, autotunes to GPU parallel capacity.
 
-``bo_initial_sampling``
+``bo.initial_sampling``
    **Type:** ``Literal["random", "spread", "spread_xyz", "stratified"]`` · **Default:** ``"spread_xyz"``
 
    Strategy for selecting the initial random batch. ``"spread_xyz"`` uses
    farthest-point sampling in absolute (*x*, *y*, *z*) feature space.
 
-``bo_batch_size``
+``bo.batch_size``
    **Type:** ``int | None`` · **Default:** ``None``
 
    Placements per acquisition batch after the initial random phase. When ``None``,
    autotunes to GPU capacity.
 
-``bo_total_budget``
+``bo.total_budget``
    **Type:** ``int`` · **Default:** ``18``
 
    Number of **acquisition batches** after the initial random batch—not total
    evaluations. Total BO evaluations (once autotune resolves) is
-   ``bo_initial_random + bo_total_budget * bo_batch_size`` (see
+   ``bo.initial_random + bo.total_budget * bo.batch_size`` (see
    :func:`~metalsurfer.config.resolved_bo_eval_budget`).
 
-``bo_ucb_kappa``
+``bo.ucb_kappa``
    **Type:** ``float`` · **Default:** ``1.96``
 
-   Exploration parameter for **LCB** acquisition only (``bo_acquisition="lcb"``).
+   Exploration parameter for **LCB** acquisition only (``bo.acquisition="lcb"``).
    Ignored for the default ``"ei"`` and for ``"pi"``.
 
-``bo_acquisition``
+``bo.acquisition``
    **Type:** ``Literal["lcb", "ei", "pi"]`` · **Default:** ``"ei"``
 
    Acquisition function: lower confidence bound, expected improvement, or probability
    of improvement.
 
-``bo_surrogate``
+``bo.surrogate``
    **Type:** ``Literal["random_forest", "extra_trees", "gradient_boost", "ridge", "gaussian_process", "ensemble"]`` · **Default:** ``"gradient_boost"``
 
    Surrogate regressor mapping placement geometry features to adsorption energy.
    ``"gaussian_process"`` does not support sample weights and is incompatible
-   with ``bo_transfer_enabled=True``. Transfer-capable surrogates are
+   with ``bo.transfer.enabled=True``. Transfer-capable surrogates are
    ``random_forest``, ``extra_trees``, ``gradient_boost``, ``ridge``, and
    ``ensemble``.
 
-``bo_candidate_pool_size``
+``bo.candidate_pool_size``
    **Type:** ``int | None`` · **Default:** ``None``
 
    Optional cap on the number of unexecuted placement specs considered during each
    acquisition step.
 
-``bo_include_failure_negatives``
+``bo.include_failure_negatives``
    **Type:** ``bool`` · **Default:** ``True``
 
    Train the surrogate on failed placements (generation, optimization, validation)
    using penalty energies so the model learns to avoid bad regions.
 
-``bo_failure_penalty_default``
+``bo.failure_penalty_default``
    **Type:** ``float`` · **Default:** ``10.0`` (eV)
 
-   Penalty energy assigned to failed placements when ``bo_include_failure_negatives``
+   Penalty energy assigned to failed placements when ``bo.include_failure_negatives``
    is ``True``.
 
-``bo_failure_penalty_overrides``
+``bo.failure_penalty_overrides``
    **Type:** ``dict[str, float]`` · **Default:** per failure-type map
 
    Override penalty energies by failure stage (``"generation"``, ``"optimization"``,
@@ -569,87 +585,87 @@ non-BO entry points only emits a warning and has no effect.
    to the split generation reasons ``too_close``, ``too_far``, ``vdw_overlap``,
    ``adsorbate_overlap``, and ``missing_z_abs``.
 
-``bo_transfer_enabled``
+``bo.transfer.enabled``
    **Type:** ``bool`` · **Default:** ``True``
 
    Reuse observations from prior saturation steps when running
    ``run_saturation_bo``. Requires a surrogate that supports sample weights.
 
-``bo_transfer_mode``
+``bo.transfer.mode``
    **Type:** ``Literal["weighted", "cumulative_refit"]`` · **Default:** ``"weighted"``
 
    ``"weighted"`` downweights prior-step rows; ``"cumulative_refit"`` refits on the
    union of prior and current observations.
 
-``bo_transfer_min_step_observations``
+``bo.transfer.min_step_observations``
    **Type:** ``int`` · **Default:** ``5``
 
    Minimum current-step observations before prior-step transfer weights apply.
 
-``bo_transfer_weight_cap``
+``bo.transfer.weight_cap``
    **Type:** ``float`` · **Default:** ``0.35``
 
    Maximum total weight contributed by transferred prior-step observations.
 
-``bo_transfer_similarity_lengthscale``
+``bo.transfer.similarity_lengthscale``
    **Type:** ``float`` · **Default:** ``4.0``
 
    Length scale for gating prior rows by feature-space similarity to current
    candidates.
 
-``bo_transfer_min_similarity``
+``bo.transfer.min_similarity``
    **Type:** ``float`` · **Default:** ``0.05``
 
    Minimum similarity score for a prior observation to receive non-zero transfer
    weight.
 
-``bo_transfer_trust_patience``
+``bo.transfer.trust_patience``
    **Type:** ``int`` · **Default:** ``2``
 
    Steps to wait before trusting transfer weights when surrogate error is high.
 
-``bo_transfer_mae_tolerance``
+``bo.transfer.mae_tolerance``
    **Type:** ``float`` · **Default:** ``0.0`` (eV)
 
    Allow transfer when surrogate MAE on held-out current-step points is below this
    tolerance.
 
-``bo_transfer_exploration_fraction``
+``bo.transfer.exploration_fraction``
    **Type:** ``float`` · **Default:** ``0.2``
 
    Fraction of each BO batch reserved for exploration (random or spread picks) rather
    than pure acquisition.
 
-``bo_transfer_proximity_lengthscale``
+``bo.transfer.proximity_lengthscale``
    **Type:** ``float`` · **Default:** ``1.0``
 
    Feature-space decay length for downweighting prior rows near already-executed
    placements in the current step.
 
-``bo_transfer_proximity_floor``
+``bo.transfer.proximity_floor``
    **Type:** ``float`` · **Default:** ``0.0``
 
    Minimum sample weight for prior rows after proximity decay.
 
-``bo_transfer_prior_step_window``
+``bo.transfer.prior_step_window``
    **Type:** ``int | None`` · **Default:** ``2``
 
    Number of most recent prior saturation steps whose BO memories are eligible for
    transfer. ``None`` uses all prior steps.
 
-``bo_transfer_recency_lengthscale``
+``bo.transfer.recency_lengthscale``
    **Type:** ``float`` · **Default:** ``4.0``
 
    Exponential decay vs step age within the transfer window (``0`` = most recent
    prior step).
 
-``bo_transfer_occupancy_lengthscale``
+``bo.transfer.occupancy_lengthscale``
    **Type:** ``float`` · **Default:** ``1.0``
 
    Downweight prior rows near the previous step's winning placement site to reduce
    redundant re-exploration.
 
-``bo_transfer_occupancy_floor``
+``bo.transfer.occupancy_floor``
    **Type:** ``float`` · **Default:** ``0.0``
 
    Minimum transfer modifier at the executed placement site after occupancy decay.
@@ -680,6 +696,17 @@ loop behavior and I/O only.
 
    Flatten all saturation-step placements into ``adsorption_energies_detailed.csv``
    for benchmarking or ML dataset export.
+
+``export_placement_provenance``
+   **Type:** ``bool`` · **Default:** ``False``
+
+   Control richness of ``ml_dataset.csv`` and detailed result CSVs. Default lean
+   rows keep identity, the eight ML feature columns (absolute initial pose +
+   ``conformer_index`` + quaternion), energies, and ``context_hash``. Set
+   ``True`` to also write ``initial_*`` pre-relax placement provenance (site,
+   orientation, fragment positions, …) and full ``ctx_*`` computation settings.
+   These provenance fields describe the **initial** placement, not the relaxed
+   geometry (relaxed structures remain in XYZ/POSCAR).
 
 ``saturation_discard_topology_rearrangements``
    **Type:** ``bool`` · **Default:** ``True``
@@ -758,3 +785,16 @@ Helper functions
 .. autofunction:: metalsurfer.config.resolved_bo_eval_budget
 
 .. autofunction:: metalsurfer.config.bo_eval_schedule
+
+.. autofunction:: metalsurfer.config.fold_bo_config
+
+Nested BO types
+---------------
+
+.. autoclass:: metalsurfer.BOConfig
+   :members:
+   :undoc-members:
+
+.. autoclass:: metalsurfer.BOTransferConfig
+   :members:
+   :undoc-members:

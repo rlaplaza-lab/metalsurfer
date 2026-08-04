@@ -1,0 +1,22 @@
+# Minimal BO adsorption campaign for CI schema / API e2e (no MLIP run).
+campaign: adsorption_bo
+surface_type: smoke_adsorption_bo
+substrate:
+  bulk_id: mp-30
+  miller_indices: [1, 1, 1]
+  supercell: [1, 1, 1]
+molecules:
+  - smiles: O
+    name: water
+config:
+  material_type: slab
+  model_name: uma-s-1p1
+  seed: 1
+  num_conformers: 1
+  num_placements: 4
+  device: cpu
+  stage1_steps: 2
+  stage2_steps: 2
+  bo_initial_random: 2
+  bo_batch_size: 2
+  bo_total_budget: 1

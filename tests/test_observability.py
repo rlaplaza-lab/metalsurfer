@@ -246,9 +246,8 @@ class TestRunMetadata:
         assert meta["config"]["seed"] == 42
 
     def test_results_dir_helper(self):
-        from metalsurfer.io_results import results_dir, results_dir_for
+        from metalsurfer.io_results import results_dir_for
 
-        assert results_dir("demo").as_posix() == "results_demo"
         assert results_dir_for("demo").as_posix() == "results_demo"
 
 

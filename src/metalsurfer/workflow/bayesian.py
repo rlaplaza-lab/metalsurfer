@@ -8,7 +8,6 @@ import pandas as pd
 from ase import Atoms
 
 from ..config import (
-    BO_LEGACY_GENERATION_REASON_ALIASES,
     BO_TRANSFER_CAPABLE_SURROGATES,
     AdsorptionConfig,
     resolved_bo_eval_budget,
@@ -25,14 +24,15 @@ from ..ml.bayesian import (
 )
 from ..ml.features import extract_features
 from ..ml.schema import PlacementRecord
-from ..models import BOStepMemory, ReferenceEnergies, ScreeningResult
+from ..models import BOStepMemory, BOTransferInfo, ReferenceEnergies, ScreeningResult
 from ..placement.generators import (
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
 )
-from ..surfaces import SlabContainer
+from ..surface_prep import SlabContainer
 from .core import _evaluate_placement_batch
 from .shared import (
+    MoleculeScreenOutcome,
     PlacementFailureEvent,
     _infer_surface_symbols,
     _prepare_molecule_screening,
@@ -40,6 +40,8 @@ from .shared import (
 )
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["BOTransferInfo", "process_molecule_bayesian"]
 
 
 def _train_surrogate_for_bo(
@@ -52,16 +54,16 @@ def _train_surrogate_for_bo(
     """Fit BO surrogate. Per-sample weights for transfer-capable surrogates."""
     if (
         sample_weight is not None
-        and config.bo_surrogate not in BO_TRANSFER_CAPABLE_SURROGATES
+        and config.bo.surrogate not in BO_TRANSFER_CAPABLE_SURROGATES
     ):
         raise ValueError(
             "sample_weight is only supported for transfer-capable BO surrogates "
-            f"{BO_TRANSFER_CAPABLE_SURROGATES}, not {config.bo_surrogate!r}"
+            f"{BO_TRANSFER_CAPABLE_SURROGATES}, not {config.bo.surrogate!r}"
         )
     return train_surrogate(
         X,
         y,
-        surrogate=config.bo_surrogate,
+        surrogate=config.bo.surrogate,
         n_estimators=100,
         random_state=config.seed,
         sample_weight=sample_weight,
@@ -80,20 +82,32 @@ def process_molecule_bayesian(
     reference_smiles: str | None = None,
     base_slab_for_frozen: Atoms | None = None,
     slab_energy_override: float | None = None,
-    failure_summary_out: dict[str, object] | None = None,
-    extra_ml_records_out: list[PlacementRecord] | None = None,
     symmetry_broken: bool = False,
     bo_step_memory_in: BOStepMemory | None = None,
     bo_prior_step_memory: BOStepMemory | None = None,
-    bo_step_memory_out: dict[str, BOStepMemory] | None = None,
-    bo_transfer_info_out: dict[str, object] | None = None,
-) -> list[ScreeningResult]:
+    conformers: list[Atoms] | None = None,
+    skip_workload_autotune: bool = False,
+) -> MoleculeScreenOutcome:
     """Bayesian-optimisation-guided placement screening for one molecule."""
     if config is None:
-        config = AdsorptionConfig(bo_enabled=True)
+        config = AdsorptionConfig()
 
     if reference_smiles is None:
         reference_smiles = smiles
+
+    failure_summary: dict[str, object] = {}
+    ml_records: list[PlacementRecord] = []
+    transfer_info = BOTransferInfo()
+    bo_memory: BOStepMemory | None = None
+
+    def _outcome(results: list[ScreeningResult]) -> MoleculeScreenOutcome:
+        return MoleculeScreenOutcome(
+            results=results,
+            failure_summary=failure_summary,
+            ml_records=ml_records,
+            bo_memory=bo_memory,
+            transfer_info=transfer_info,
+        )
 
     ctx = _prepare_molecule_screening(
         smiles=smiles,
@@ -106,11 +120,13 @@ def process_molecule_bayesian(
         base_slab_for_frozen=base_slab_for_frozen,
         slab_energy_override=slab_energy_override,
         symmetry_broken=symmetry_broken,
-        failure_summary_out=failure_summary_out,
+        failure_summary=failure_summary,
         bo_enabled=True,
+        conformers=conformers,
+        skip_workload_autotune=skip_workload_autotune,
     )
     if ctx is None:
-        return []
+        return _outcome([])
 
     slab = ctx.slab
     slab_for_sites = ctx.slab_for_sites
@@ -121,8 +137,8 @@ def process_molecule_bayesian(
     E_slab = ctx.E_slab
     E_mol = ctx.E_mol
 
-    assert config.bo_initial_random is not None
-    assert config.bo_batch_size is not None
+    assert config.bo.initial_random is not None
+    assert config.bo.batch_size is not None
     num_placements = config.num_placements
     assert num_placements is not None
     bo_eval_budget = resolved_bo_eval_budget(config)
@@ -135,8 +151,8 @@ def process_molecule_bayesian(
         site_context=site_context,
         full_slab=slab.atoms,
     )
-    if config.bo_candidate_pool_size is not None:
-        pool_size = config.bo_candidate_pool_size
+    if config.bo.candidate_pool_size is not None:
+        pool_size = config.bo.candidate_pool_size
     else:
         pool_size = max_enumerated_specs
         if pool_size <= 0:
@@ -154,21 +170,20 @@ def process_molecule_bayesian(
     )
     if not all_specs:
         logger.warning("No candidate specs generated for BO")
-        if failure_summary_out is not None:
-            failure_summary_out["stage"] = "placement"
-            failure_summary_out["n_candidate_specs"] = 0
-            failure_summary_out["n_valid_pool"] = 0
-        return []
+        failure_summary["stage"] = "placement"
+        failure_summary["n_candidate_specs"] = 0
+        failure_summary["n_valid_pool"] = 0
+        return _outcome([])
 
     logger.info(
         "BO: %d/%d candidate specs, batches=%d (initial=%d, batch=%d, eval_budget=%d, kappa=%.2f)",
         len(all_specs),
         max_enumerated_specs,
-        config.bo_total_budget,
-        config.bo_initial_random,
-        config.bo_batch_size,
+        config.bo.total_budget,
+        config.bo.initial_random,
+        config.bo.batch_size,
         bo_eval_budget,
-        config.bo_ucb_kappa,
+        config.bo.ucb_kappa,
     )
 
     surface_symbols = _infer_surface_symbols(slab_for_sites)
@@ -187,11 +202,10 @@ def process_molecule_bayesian(
     )
     if candidate_features.empty:
         logger.warning("BO: no specs produced valid placements; aborting")
-        if failure_summary_out is not None:
-            failure_summary_out["stage"] = "placement"
-            failure_summary_out["n_candidate_specs"] = len(all_specs)
-            failure_summary_out["n_valid_pool"] = 0
-        return []
+        failure_summary["stage"] = "placement"
+        failure_summary["n_candidate_specs"] = len(all_specs)
+        failure_summary["n_valid_pool"] = 0
+        return _outcome([])
     # Map feature-row indices back to the original all_specs list
     valid_pool_indices = valid_spec_indices
 
@@ -213,41 +227,33 @@ def process_molecule_bayesian(
     transfer_weight_share = 0.0
 
     def _flush_bo_outputs() -> None:
-        if bo_step_memory_out is not None:
-            bo_step_memory_out["memory"] = BOStepMemory(
-                observed_X_rows=[dict(r) for r in observed_X_rows],
-                observed_y=[float(v) for v in observed_y],
-                best_energy=best_energy if np.isfinite(best_energy) else None,
-                best_X_row=dict(best_X_row) if best_X_row is not None else None,
-            )
-        if bo_transfer_info_out is not None:
-            bo_transfer_info_out.update(
-                {
-                    "transfer_enabled": bool(config.bo_transfer_enabled),
-                    "transfer_used": bool(transfer_used_rounds > 0),
-                    "transfer_disabled_reason": transfer_disabled_reason,
-                    "transfer_bad_rounds": int(transfer_bad_rounds),
-                    "transfer_last_mae_delta": transfer_last_mae_delta,
-                    "transfer_weight_share": float(transfer_weight_share),
-                }
-            )
+        nonlocal bo_memory
+        bo_memory = BOStepMemory(
+            observed_X_rows=[dict(r) for r in observed_X_rows],
+            observed_y=[float(v) for v in observed_y],
+            best_energy=best_energy if np.isfinite(best_energy) else None,
+            best_X_row=dict(best_X_row) if best_X_row is not None else None,
+        )
+        transfer_info.transfer_enabled = bool(config.bo.transfer.enabled)
+        transfer_info.transfer_used = bool(transfer_used_rounds > 0)
+        transfer_info.transfer_disabled_reason = transfer_disabled_reason
+        transfer_info.transfer_bad_rounds = int(transfer_bad_rounds)
+        transfer_info.transfer_last_mae_delta = transfer_last_mae_delta
+        transfer_info.transfer_weight_share = float(transfer_weight_share)
 
     def _failure_penalty(stage: str, reason: str) -> float:
-        overrides = config.bo_failure_penalty_overrides
+        overrides = config.bo.failure_penalty_overrides
         if reason in overrides:
             return float(overrides[reason])
-        for legacy_key, aliases in BO_LEGACY_GENERATION_REASON_ALIASES.items():
-            if legacy_key in overrides and reason in aliases:
-                return float(overrides[legacy_key])
         if stage in overrides:
             return float(overrides[stage])
-        return float(config.bo_failure_penalty_default)
+        return float(config.bo.failure_penalty_default)
 
-    n_initial = min(config.bo_initial_random, len(valid_pool_indices))
+    n_initial = min(config.bo.initial_random, len(valid_pool_indices))
     initial_positions = select_initial_bo_indices(
         candidate_features,
         n_initial,
-        sampling=config.bo_initial_sampling,
+        sampling=config.bo.initial_sampling,
         random_state=config.seed,
     )
 
@@ -293,7 +299,7 @@ def process_molecule_bayesian(
                 best_energy = r.energy_adsorption
                 best_X_row = dict(features)
 
-        if config.bo_include_failure_negatives:
+        if config.bo.include_failure_negatives:
             pid_to_pool_position: dict[int, int] = {
                 all_specs[valid_pool_indices[pos]].placement_index: pos
                 for pos in pool_positions
@@ -349,8 +355,8 @@ def process_molecule_bayesian(
     _run_batch(initial_positions)
 
     batches_run = 0
-    while batches_run < config.bo_total_budget:
-        remaining_batches = config.bo_total_budget - batches_run
+    while batches_run < config.bo.total_budget:
+        remaining_batches = config.bo.total_budget - batches_run
         if remaining_batches <= 0:
             break
 
@@ -362,7 +368,7 @@ def process_molecule_bayesian(
             ]
             if not unevaluated:
                 break
-            n_extra = min(config.bo_batch_size, len(unevaluated))
+            n_extra = min(config.bo.batch_size, len(unevaluated))
             next_positions = rng.choice(
                 unevaluated, size=n_extra, replace=False
             ).tolist()
@@ -376,20 +382,20 @@ def process_molecule_bayesian(
 
             transfer_memory = bo_step_memory_in
             can_try_transfer = (
-                config.bo_transfer_enabled
+                config.bo.transfer.enabled
                 and transfer_memory is not None
                 and len(transfer_memory.observed_X_rows) > 0
                 and len(transfer_memory.observed_y) > 0
             )
             can_try_weighted = (
                 can_try_transfer
-                and config.bo_transfer_mode == "weighted"
+                and config.bo.transfer.mode == "weighted"
                 and not transfer_disabled
-                and len(X_current) >= config.bo_transfer_min_step_observations
+                and len(X_current) >= config.bo.transfer.min_step_observations
             )
             can_try_refit = (
                 can_try_transfer
-                and config.bo_transfer_mode == "cumulative_refit"
+                and config.bo.transfer.mode == "cumulative_refit"
                 and len(X_current) >= 3
             )
             if can_try_refit:
@@ -403,9 +409,9 @@ def process_molecule_bayesian(
                     len(X_current),
                     X_prior,
                     X_current,
-                    weight_cap=config.bo_transfer_weight_cap,
-                    proximity_lengthscale=config.bo_transfer_proximity_lengthscale,
-                    proximity_floor=config.bo_transfer_proximity_floor,
+                    weight_cap=config.bo.transfer.weight_cap,
+                    proximity_lengthscale=config.bo.transfer.proximity_lengthscale,
+                    proximity_floor=config.bo.transfer.proximity_floor,
                 )
                 surrogate = _train_surrogate_for_bo(
                     X_combined,
@@ -427,22 +433,22 @@ def process_molecule_bayesian(
                     y_current,
                     transfer_memory.observed_X_rows,
                     transfer_memory.observed_y,
-                    surrogate=cast(TransferCapableSurrogateType, config.bo_surrogate),
+                    surrogate=cast(TransferCapableSurrogateType, config.bo.surrogate),
                     n_estimators=100,
                     random_state=config.seed,
-                    weight_cap=config.bo_transfer_weight_cap,
-                    similarity_lengthscale=config.bo_transfer_similarity_lengthscale,
-                    min_similarity=config.bo_transfer_min_similarity,
-                    mae_tolerance=config.bo_transfer_mae_tolerance,
+                    weight_cap=config.bo.transfer.weight_cap,
+                    similarity_lengthscale=config.bo.transfer.similarity_lengthscale,
+                    min_similarity=config.bo.transfer.min_similarity,
+                    mae_tolerance=config.bo.transfer.mae_tolerance,
                     transfer_bad_rounds=transfer_bad_rounds,
-                    trust_patience=config.bo_transfer_trust_patience,
-                    proximity_lengthscale=config.bo_transfer_proximity_lengthscale,
-                    proximity_floor=config.bo_transfer_proximity_floor,
+                    trust_patience=config.bo.transfer.trust_patience,
+                    proximity_lengthscale=config.bo.transfer.proximity_lengthscale,
+                    proximity_floor=config.bo.transfer.proximity_floor,
                     prior_step_ages=transfer_memory.step_ages,
-                    recency_lengthscale=config.bo_transfer_recency_lengthscale,
+                    recency_lengthscale=config.bo.transfer.recency_lengthscale,
                     prior_placement_X=prior_placement,
-                    occupancy_lengthscale=config.bo_transfer_occupancy_lengthscale,
-                    occupancy_floor=config.bo_transfer_occupancy_floor,
+                    occupancy_lengthscale=config.bo.transfer.occupancy_lengthscale,
+                    occupancy_floor=config.bo.transfer.occupancy_floor,
                 )
                 transfer_weight_share = transfer_result.transfer_weight_share
                 transfer_last_mae_delta = transfer_result.transfer_mae_delta
@@ -469,14 +475,14 @@ def process_molecule_bayesian(
             ]
             if not unevaluated:
                 break
-            batch_size = min(config.bo_batch_size, len(unevaluated))
+            batch_size = min(config.bo.batch_size, len(unevaluated))
             next_positions = score_and_select(
                 surrogate,
                 candidate_features,
                 batch_size=batch_size,
-                kappa=config.bo_ucb_kappa,
+                kappa=config.bo.ucb_kappa,
                 evaluated_indices=evaluated_pool_positions,
-                acquisition=config.bo_acquisition,
+                acquisition=config.bo.acquisition,
                 f_best=best_energy if np.isfinite(best_energy) else None,
             )
             # Random exploration only while transfer learning is active.
@@ -484,7 +490,7 @@ def process_molecule_bayesian(
             explore_n = 0
             if can_try_transfer and not transfer_disabled:
                 explore_n = int(
-                    np.ceil(batch_size * config.bo_transfer_exploration_fraction)
+                    np.ceil(batch_size * config.bo.transfer.exploration_fraction)
                 )
             if explore_n > 0:
                 unevaluated = [
@@ -525,14 +531,16 @@ def process_molecule_bayesian(
 
     if not all_results:
         _flush_bo_outputs()
-        if failure_summary_out is not None:
-            failure_summary_out["stage"] = "validation"
-            failure_summary_out["n_candidate_specs"] = len(all_specs)
-            failure_summary_out["n_valid_pool"] = len(valid_pool_indices)
-            failure_summary_out["n_evaluated"] = total_evaluated
-            failure_summary_out["n_valid_results"] = 0
-        return []
+        failure_summary["stage"] = "validation"
+        failure_summary["n_candidate_specs"] = len(all_specs)
+        failure_summary["n_valid_pool"] = len(valid_pool_indices)
+        failure_summary["n_evaluated"] = total_evaluated
+        failure_summary["n_valid_results"] = 0
+        return _outcome([])
 
+    # Filter + dedup labeling follows the same pattern as core's
+    # ``_finalize_screen_results``, but BO also builds failure-penalty negatives
+    # for rejected non-duplicates, so the shared helper is not used here.
     bo_duplicate_results: list[ScreeningResult] = []
     filtered = filter_results(
         all_results,
@@ -561,7 +569,7 @@ def process_molecule_bayesian(
         _summarize_failure_events(
             filter_failures, label=f"{molecule_name} BO post-filter"
         )
-        if config.bo_include_failure_negatives:
+        if config.bo.include_failure_negatives:
             for event in filter_failures:
                 if event.descriptor is None:
                     continue
@@ -598,14 +606,13 @@ def process_molecule_bayesian(
 
     if not filtered:
         _flush_bo_outputs()
-        if failure_summary_out is not None:
-            failure_summary_out["stage"] = "filter"
-            failure_summary_out["n_candidate_specs"] = len(all_specs)
-            failure_summary_out["n_valid_pool"] = len(valid_pool_indices)
-            failure_summary_out["n_evaluated"] = total_evaluated
-            failure_summary_out["n_before_filter"] = len(all_results)
-            failure_summary_out["n_after_filter"] = 0
-        return []
+        failure_summary["stage"] = "filter"
+        failure_summary["n_candidate_specs"] = len(all_specs)
+        failure_summary["n_valid_pool"] = len(valid_pool_indices)
+        failure_summary["n_evaluated"] = total_evaluated
+        failure_summary["n_before_filter"] = len(all_results)
+        failure_summary["n_after_filter"] = 0
+        return _outcome([])
 
     logger.info(
         "BO filtered: %d -> %d results, E_ads range [%.4f, %.4f]",
@@ -614,8 +621,8 @@ def process_molecule_bayesian(
         min(r.energy_adsorption for r in filtered),
         max(r.energy_adsorption for r in filtered),
     )
-    if extra_ml_records_out is not None and bo_negative_records:
-        extra_ml_records_out.extend(bo_negative_records)
+    if bo_negative_records:
+        ml_records.extend(bo_negative_records)
     _flush_bo_outputs()
 
-    return filtered
+    return _outcome(filtered)

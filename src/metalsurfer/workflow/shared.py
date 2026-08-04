@@ -4,7 +4,7 @@ import csv
 import logging
 import os
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -12,36 +12,45 @@ import pandas as pd
 from ase import Atoms
 from scipy.spatial.distance import pdist
 
-from .._logging import warn_once
+from .._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
+from .._logging import log_context, warn_once
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
 from ..conformers import create_conformers_from_smiles
 from ..exceptions import OptimizationError
+from ..filters import filter_results
 from ..io_results import results_dir_for
-from ..models import PlacementDescriptor, ReferenceEnergies, ScreeningResult
+from ..ml.schema import PlacementRecord
+from ..models import (
+    BOStepMemory,
+    BOTransferInfo,
+    PlacementDescriptor,
+    ReferenceEnergies,
+    ScreeningResult,
+)
 from ..optimization import (
-    check_frozen_substrate_displacement,
+    clear_autobatcher_cache,
     estimate_parallel_relaxation_capacity,
-    frozen_indices_from_constraints,
-    log_substrate_freeze_policy,
+    optimize_adsorbate_slab_batched,
     setup_single_model,
 )
 from ..placement import generators as placement_generators
-from ..placement import sites as placement_sites
 from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
 from ..placement.generators import (
     enumerate_placement_specs,
     generate_placement_from_spec_with_reason,
 )
 from ..placement.geometry import calculate_min_distance
-from ..surfaces import SlabContainer, accept_substrate_for_api, validate_substrate
+from ..placement.site_context import SiteContext, resolve_site_context_for_sampling
+from ..placement.site_enumeration import _compute_site_z_base
+from ..surface_prep.freeze import (
+    check_frozen_substrate_displacement,
+    frozen_indices_from_constraints,
+    log_substrate_freeze_policy,
+)
+from ..surface_prep import SlabContainer, accept_substrate_for_api
+from ..surface_prep._surfaces import validate_substrate_conformer_sizing
 
 logger = logging.getLogger(__name__)
-MIN_CALCULATOR_CELL_C_ANG = 18.0
-
-
-def clear_site_context_cache() -> None:
-    """Clear cached site contexts (mainly for tests and long-running sessions)."""
-    placement_generators.clear_site_caches()
 
 
 @dataclass
@@ -52,6 +61,17 @@ class PlacementFailureEvent:
     stage: str
     reason: str
     descriptor: PlacementDescriptor | None = None
+
+
+@dataclass
+class MoleculeScreenOutcome:
+    """Typed return value for single-molecule screening workflows."""
+
+    results: list[ScreeningResult]
+    failure_summary: dict[str, Any] = field(default_factory=dict)
+    ml_records: list[PlacementRecord] = field(default_factory=list)
+    bo_memory: BOStepMemory | None = None
+    transfer_info: BOTransferInfo | None = None
 
 
 def _summarize_failure_events(
@@ -135,7 +155,7 @@ def _materialize_spec_placements(
     calculator,
     config: AdsorptionConfig,
     smiles: str,
-    site_context: placement_generators.SiteContext | None,
+    site_context: SiteContext | None,
     slab_for_sites: Atoms | None = None,
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
 ) -> tuple[
@@ -220,11 +240,11 @@ def _validate_adsorption(
     slab: Atoms,
     config: AdsorptionConfig,
     surface_symbols: list[str] | None = None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, float | None]:
     slab_size = len(slab)
     adsorbate = atoms[slab_size:]
     if len(adsorbate) == 0:
-        return False, "no adsorbate atoms"
+        return False, "no adsorbate atoms", None
 
     if config.skip_desorption_check:
         warn_once(
@@ -232,14 +252,9 @@ def _validate_adsorption(
             "skip_desorption",
             "skip_desorption_check=True: desorption distance validation skipped",
         )
-        return True, "desorption check skipped"
+        return True, "desorption check skipped", None
 
-    slab_positions = slab.get_positions()
-    if surface_symbols:
-        slab_syms = np.array(slab.get_chemical_symbols())
-        mask = np.isin(slab_syms, surface_symbols)
-        if np.any(mask):
-            slab_positions = slab_positions[mask]
+    slab_positions = _surface_positions_for_distance(slab, surface_symbols)
 
     cell = np.asarray(atoms.get_cell())
     min_d = calculate_min_distance(
@@ -250,8 +265,8 @@ def _validate_adsorption(
         pbc=material_aware_pbc(config.material_type),
     )
     if min_d > config.binding_distance_threshold:
-        return False, f"desorbed ({min_d:.2f} A)"
-    return True, f"adsorbed ({min_d:.2f} A)"
+        return False, f"desorbed ({min_d:.2f} A)", min_d
+    return True, f"adsorbed ({min_d:.2f} A)", min_d
 
 
 def _surface_positions_for_distance(
@@ -316,7 +331,7 @@ def _evaluate_optimized_candidate(
             descriptor=descriptor,
         )
 
-    ok, reason = _validate_adsorption(
+    ok, reason, min_d = _validate_adsorption(
         opt_atoms,
         slab_atoms,
         config,
@@ -344,15 +359,7 @@ def _evaluate_optimized_candidate(
         )
 
     slab_size = len(slab_atoms)
-    mol_atoms = opt_atoms[slab_size:]
-    slab_opt = opt_atoms[:slab_size]
-    dist = calculate_min_distance(
-        mol_atoms.get_positions(),
-        _surface_positions_for_distance(slab_opt, surface_symbols),
-        np.asarray(opt_atoms.get_cell()),
-        use_pbc=True,
-        pbc=material_aware_pbc(config.material_type),
-    )
+    dist = float(min_d) if min_d is not None else float("nan")
     result = ScreeningResult(
         molecule=molecule_name,
         placement_id=placement_id,
@@ -366,6 +373,117 @@ def _evaluate_optimized_candidate(
         placement_descriptor=descriptor,
     )
     return result, None
+
+
+def _optimize_and_evaluate_placements(
+    all_combined: list[Atoms],
+    placement_ids: list[int],
+    placement_descriptors: list[PlacementDescriptor],
+    *,
+    slab: Atoms,
+    calculator,
+    ts_model,
+    config: AdsorptionConfig,
+    energies: tuple[float, float],
+    molecule_name: str,
+    surface_symbols: list[str] | None,
+    base_slab_for_frozen: Atoms | None = None,
+    saturation_reuse: bool = False,
+    log_prefix: str = "",
+) -> tuple[list[ScreeningResult], list[PlacementFailureEvent], int]:
+    """Optimize materialized placements and evaluate each optimized candidate.
+
+    Returns ``(results, validation_failure_events, n_optimization_failed)``.
+    When optimize returns empty/falsy, returns empty results with zero failures.
+    """
+    e_slab, e_mol = energies
+    clear_autobatcher_cache()
+    optimized = optimize_adsorbate_slab_batched(
+        all_combined,
+        slab,
+        ts_model,
+        config=config,
+        base_slab_for_frozen=base_slab_for_frozen,
+        saturation_reuse=saturation_reuse,
+    )
+    if not optimized:
+        logger.warning("Optimization failed for all placements")
+        return [], [], 0
+
+    results: list[ScreeningResult] = []
+    validation_failure_events: list[PlacementFailureEvent] = []
+    n_optimization_failed = sum(1 for o in optimized if o is None)
+    for opt_atoms, pid, descriptor in zip(
+        optimized, placement_ids, placement_descriptors, strict=True
+    ):
+        with log_context(placement_id=pid):
+            result, failure_event = _evaluate_optimized_candidate(
+                opt_atoms=opt_atoms,
+                placement_id=pid,
+                descriptor=descriptor,
+                molecule_name=molecule_name,
+                slab_atoms=slab,
+                calculator=calculator,
+                config=config,
+                E_slab=e_slab,
+                E_mol=e_mol,
+                surface_symbols=surface_symbols,
+                log_prefix=log_prefix,
+            )
+        if result is None:
+            if failure_event is not None:
+                validation_failure_events.append(failure_event)
+            continue
+        results.append(result)
+    return results, validation_failure_events, n_optimization_failed
+
+
+def _finalize_screen_results(
+    results: list[ScreeningResult],
+    *,
+    slab_atoms: Atoms,
+    surface_symbols: list[str] | None,
+    reference_smiles: str | None,
+    config: AdsorptionConfig,
+    smiles: str,
+    surface_type: str,
+    failure_summary: dict[str, Any],
+    ml_records: list[PlacementRecord],
+    label_source_for_duplicates: str = "deduplicated_duplicate",
+) -> tuple[list[ScreeningResult], float]:
+    """Filter results, record dedup ML labels, and set filter-stage failure summary.
+
+    Returns ``(filtered_results, t_filtering)``.
+    """
+    t0 = time.perf_counter()
+    n_before_filter = len(results)
+    deduplicated_results: list[ScreeningResult] = []
+    filtered = filter_results(
+        results,
+        slab=slab_atoms,
+        surface_symbols=surface_symbols,
+        reference_smiles=reference_smiles,
+        config=config,
+        duplicate_results_out=deduplicated_results,
+    )
+    t_filtering = time.perf_counter() - t0
+
+    for dup in deduplicated_results:
+        record = PlacementRecord.from_screening_result(
+            dup,
+            smiles=smiles,
+            surface_id=surface_type,
+            config=config,
+        )
+        record.label_source = label_source_for_duplicates
+        ml_records.append(record)
+
+    if not filtered:
+        failure_summary["stage"] = "filter"
+        failure_summary["n_before_filter"] = n_before_filter
+        failure_summary["n_after_filter"] = 0
+
+    return filtered, t_filtering
 
 
 @dataclass
@@ -384,12 +502,10 @@ def prepare_substrate_for_screening(
     config: AdsorptionConfig,
 ) -> SubstrateRefState:
     """Resolve placement and freeze references without modifying the substrate."""
-    validate_substrate(
+    validate_substrate_conformer_sizing(
         slab.atoms,
-        material_type=config.material_type,
-        config=config,
         conformers=conformers,
-        require_bottom_anchor=False,
+        config=config,
     )
     slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab_for_frozen)
     effective_base_slab_for_frozen = (
@@ -415,7 +531,7 @@ def build_representative_relaxation_atoms(
     config: AdsorptionConfig,
     smiles: str,
     *,
-    site_context: placement_generators.SiteContext | None,
+    site_context: SiteContext | None,
 ) -> Atoms:
     """Build one slab+adsorbate geometry for GPU parallel-capacity probing."""
     if not conformers:
@@ -450,7 +566,7 @@ def build_representative_relaxation_atoms(
     positions = largest.get_positions().copy()
     z_min = float(np.min(positions[:, 2]))
     slab_z_max = float(np.max(slab_atoms.get_positions()[:, 2]))
-    z_lo, _ = placement_sites._compute_site_z_base(
+    z_lo, _ = _compute_site_z_base(
         config,
         slab_atoms,
         None,
@@ -465,6 +581,13 @@ def build_representative_relaxation_atoms(
     return combined
 
 
+def needs_workload_autotune(config: AdsorptionConfig, *, bo: bool) -> bool:
+    """Return True when placement and/or BO batch sizes still need autotuning."""
+    return config.num_placements is None or (
+        bo and (config.bo.initial_random is None or config.bo.batch_size is None)
+    )
+
+
 def resolve_workload_config(
     config: AdsorptionConfig,
     *,
@@ -474,11 +597,7 @@ def resolve_workload_config(
     bo_enabled: bool,
 ) -> AdsorptionConfig:
     """Fill auto placement/BO batch fields from probed GPU parallel capacity."""
-    needs_autotune = config.num_placements is None or (
-        bo_enabled
-        and (config.bo_initial_random is None or config.bo_batch_size is None)
-    )
-    if not needs_autotune:
+    if not needs_workload_autotune(config, bo=bo_enabled):
         return config
 
     capacity = estimate_parallel_relaxation_capacity(
@@ -488,22 +607,18 @@ def resolve_workload_config(
         frozen_indices=frozen_indices,
     )
 
-    updates: dict[str, int] = {}
+    updates: dict[str, Any] = {}
+    bo_updates: dict[str, int] = {}
     if config.num_placements is None:
         updates["num_placements"] = capacity
     if bo_enabled:
-        if config.bo_initial_random is None:
-            updates["bo_initial_random"] = capacity
-        if config.bo_batch_size is None:
-            updates["bo_batch_size"] = capacity
+        if config.bo.initial_random is None:
+            bo_updates["initial_random"] = capacity
+        if config.bo.batch_size is None:
+            bo_updates["batch_size"] = capacity
 
-    resolved = config
-    if "num_placements" in updates:
-        resolved = replace(resolved, num_placements=updates["num_placements"])
-    if "bo_initial_random" in updates:
-        resolved = replace(resolved, bo_initial_random=updates["bo_initial_random"])
-    if "bo_batch_size" in updates:
-        resolved = replace(resolved, bo_batch_size=updates["bo_batch_size"])
+    resolved_bo = replace(config.bo, **bo_updates) if bo_updates else config.bo
+    resolved = replace(config, bo=resolved_bo, **updates)
 
     if bo_enabled:
         eval_budget = resolved_bo_eval_budget(resolved)
@@ -512,9 +627,9 @@ def resolve_workload_config(
             "bo_initial=%d, bo_batch=%d, bo_batches=%d (eval_budget=%d)",
             capacity,
             resolved.num_placements,
-            resolved.bo_initial_random,
-            resolved.bo_batch_size,
-            resolved.bo_total_budget,
+            resolved.bo.initial_random,
+            resolved.bo.batch_size,
+            resolved.bo.total_budget,
             eval_budget,
         )
     else:
@@ -539,14 +654,10 @@ def resolve_saturation_step_workload_config(
     bo_enabled: bool,
 ) -> AdsorptionConfig:
     """Resolve placement budget before multi-molecule budget splitting."""
-    needs_autotune = config.num_placements is None or (
-        bo_enabled
-        and (config.bo_initial_random is None or config.bo_batch_size is None)
-    )
-    if not needs_autotune:
+    if not needs_workload_autotune(config, bo=bo_enabled):
         return config
 
-    site_context = _resolve_site_context_for_sampling(
+    site_context = resolve_site_context_for_sampling(
         slab_for_sites,
         config,
         symmetry_broken=symmetry_broken,
@@ -576,10 +687,28 @@ def _build_surface_reference_slab(
     slab_atoms: Atoms,
     base_slab_for_frozen: Atoms | None,
 ) -> Atoms:
-    """Build a substrate-only slab reference for placement/validation/filtering."""
+    """Build a substrate-only slab reference for placement/validation/filtering.
+
+    Prefers a prefix of length ``len(base_slab_for_frozen)`` (saturation appends
+    adsorbates as a suffix). Falls back to symbol-set stripping only when the
+    covered slab is shorter than the frozen base (unexpected).
+    """
     if base_slab_for_frozen is None:
         return slab_atoms
 
+    n_sub = len(base_slab_for_frozen)
+    if len(slab_atoms) >= n_sub:
+        surface_slab = slab_atoms[:n_sub].copy()
+        surface_slab.set_cell(slab_atoms.get_cell())
+        surface_slab.set_pbc(slab_atoms.get_pbc())
+        return surface_slab
+
+    logger.warning(
+        "Covered slab (%d atoms) shorter than base_slab_for_frozen (%d); "
+        "falling back to symbol-set substrate strip",
+        len(slab_atoms),
+        n_sub,
+    )
     surface_symbols = set(base_slab_for_frozen.get_chemical_symbols())
     symbols = slab_atoms.get_chemical_symbols()
     mask = [s in surface_symbols for s in symbols]
@@ -592,20 +721,6 @@ def _build_surface_reference_slab(
     surface_slab.set_cell(slab_atoms.get_cell())
     surface_slab.set_pbc(slab_atoms.get_pbc())
     return surface_slab
-
-
-def _resolve_site_context_for_sampling(
-    slab_atoms: Atoms,
-    config: AdsorptionConfig,
-    *,
-    symmetry_broken: bool,
-) -> placement_generators.SiteContext:
-    """Clustered Voronoi sites, then optional spglib orbit reduction unless *symmetry_broken*."""
-    return placement_generators.resolve_site_context_for_sampling(
-        slab_atoms,
-        config,
-        symmetry_broken=symmetry_broken,
-    )
 
 
 def _infer_surface_symbols(slab: Atoms) -> list[str]:
@@ -665,7 +780,7 @@ class MoleculeScreeningContext:
     slab_for_sites: Atoms
     effective_base_slab_for_frozen: Atoms | None
     conformers: list[Atoms]
-    site_context: placement_generators.SiteContext | None
+    site_context: SiteContext | None
     config: AdsorptionConfig
     E_slab: float
     E_mol: float
@@ -684,10 +799,14 @@ def _prepare_molecule_screening(
     base_slab_for_frozen: Atoms | None = None,
     slab_energy_override: float | None = None,
     symmetry_broken: bool = False,
-    failure_summary_out: dict[str, object] | None = None,
+    failure_summary: dict[str, Any] | None = None,
     bo_enabled: bool = False,
+    conformers: list[Atoms] | None = None,
+    skip_workload_autotune: bool = False,
 ) -> MoleculeScreeningContext | None:
     """Shared preamble for standard and BO molecule screening."""
+    if failure_summary is None:
+        failure_summary = {}
     E_slab = (
         slab_energy_override
         if slab_energy_override is not None
@@ -696,27 +815,28 @@ def _prepare_molecule_screening(
     E_mol = reference_energies.get_molecule_energy(molecule_name)
     if E_mol is None:
         logger.error("Missing reference energy for %s", molecule_name)
-        if failure_summary_out is not None:
-            failure_summary_out["stage"] = "reference"
-            failure_summary_out["reason"] = (
-                f"missing reference energy for {molecule_name}"
-            )
+        failure_summary["stage"] = "reference"
+        failure_summary["reason"] = (
+            f"missing reference energy for {molecule_name}"
+        )
         return None
 
     t0 = time.perf_counter()
-    conformer_pack = create_conformers_from_smiles(
-        smiles, calculator=calculator, config=config, ts_model=ts_model
-    )
-    t_conformers = time.perf_counter() - t0
-    if conformer_pack is None:
-        logger.error("Could not generate conformers for %s", molecule_name)
-        if failure_summary_out is not None:
-            failure_summary_out["stage"] = "conformers"
-            failure_summary_out["reason"] = (
+    if conformers is None:
+        conformer_pack = create_conformers_from_smiles(
+            smiles, calculator=calculator, config=config, ts_model=ts_model
+        )
+        t_conformers = time.perf_counter() - t0
+        if conformer_pack is None:
+            logger.error("Could not generate conformers for %s", molecule_name)
+            failure_summary["stage"] = "conformers"
+            failure_summary["reason"] = (
                 f"could not generate conformers for {molecule_name}"
             )
-        return None
-    conformers, _conformer_energies = conformer_pack
+            return None
+        conformers, _conformer_energies = conformer_pack
+    else:
+        t_conformers = time.perf_counter() - t0
 
     substrate_ref = prepare_substrate_for_screening(
         slab,
@@ -728,34 +848,37 @@ def _prepare_molecule_screening(
     slab_for_sites = substrate_ref.slab_for_sites
     effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
 
-    site_context = _resolve_site_context_for_sampling(
+    site_context = resolve_site_context_for_sampling(
         slab_for_sites,
         config,
         symmetry_broken=symmetry_broken,
     )
 
-    freeze_ref = (
-        effective_base_slab_for_frozen
-        if effective_base_slab_for_frozen is not None
-        else slab.atoms
-    )
-    frozen_indices = frozen_indices_from_constraints(freeze_ref)
-    representative_atoms = build_representative_relaxation_atoms(
-        conformers,
-        slab.atoms,
-        slab_for_sites,
-        config,
-        smiles,
-        site_context=site_context,
-    )
-    config = resolve_workload_config(
-        config,
-        ts_model=ts_model,
-        representative_atoms=representative_atoms,
-        frozen_indices=frozen_indices,
-        bo_enabled=bo_enabled,
-    )
-    assert config.num_placements is not None
+    if skip_workload_autotune and config.num_placements is not None:
+        resolved = config
+    else:
+        freeze_ref = (
+            effective_base_slab_for_frozen
+            if effective_base_slab_for_frozen is not None
+            else slab.atoms
+        )
+        frozen_indices = frozen_indices_from_constraints(freeze_ref)
+        representative_atoms = build_representative_relaxation_atoms(
+            conformers,
+            slab.atoms,
+            slab_for_sites,
+            config,
+            smiles,
+            site_context=site_context,
+        )
+        resolved = resolve_workload_config(
+            config,
+            ts_model=ts_model,
+            representative_atoms=representative_atoms,
+            frozen_indices=frozen_indices,
+            bo_enabled=bo_enabled,
+        )
+    assert resolved.num_placements is not None
 
     return MoleculeScreeningContext(
         slab=slab,
@@ -763,7 +886,7 @@ def _prepare_molecule_screening(
         effective_base_slab_for_frozen=effective_base_slab_for_frozen,
         conformers=conformers,
         site_context=site_context,
-        config=config,
+        config=resolved,
         E_slab=E_slab,
         E_mol=E_mol,
         t_conformers=t_conformers,

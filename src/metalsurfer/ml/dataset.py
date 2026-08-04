@@ -98,7 +98,12 @@ class DatasetLogger:
             return self.csv_path
 
         os.makedirs(self.output_dir, exist_ok=True)
-        rows = [r.to_flat_dict() for r in self._records]
+        include_provenance = bool(
+            self._config.export_placement_provenance if self._config else False
+        )
+        rows = [
+            r.to_flat_dict(include_provenance=include_provenance) for r in self._records
+        ]
         new_df = pd.DataFrame(rows)
 
         new_df = new_df.drop_duplicates(subset=["record_hash"], keep="first")
@@ -125,11 +130,13 @@ class DatasetLogger:
             total_count,
         )
 
-        self._write_metadata(total_count)
+        self._write_metadata(total_count, include_provenance=include_provenance)
         self._records.clear()
         return self.csv_path
 
-    def _write_metadata(self, total_records: int) -> None:
+    def _write_metadata(
+        self, total_records: int, *, include_provenance: bool = False
+    ) -> None:
         metadata: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "timestamp": datetime.now(UTC).isoformat(),
@@ -137,6 +144,7 @@ class DatasetLogger:
             "context": self.context.to_dict(),
             "context_hash": self.context.settings_hash(),
             "surface_id": self.surface_id,
+            "export_placement_provenance": include_provenance,
         }
         with open(self.metadata_path, "w") as f:
             json.dump(metadata, f, indent=2, default=str)

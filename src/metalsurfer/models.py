@@ -1,13 +1,42 @@
 """Typed domain models for adsorption screening results."""
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
 from ase import Atoms
+
+from ._csv_coerce import (
+    float_or as _row_float_or,
+)
+from ._csv_coerce import (
+    int_or_none as _row_int_or_none,
+)
+from ._csv_coerce import (
+    is_missing as _row_is_missing,
+)
+from ._csv_coerce import (
+    parse_bool as _row_parse_bool,
+)
+from ._csv_coerce import (
+    parse_fragment_positions as _row_parse_fragment_positions,
+)
+from ._csv_coerce import (
+    with_default as _row_with_default,
+)
+from .reporting import (
+    format_failure_summary_text as _format_failure_summary_text,
+)
+from .reporting import (
+    format_results_saved_line as _format_results_saved_line,
+)
+from .reporting import (
+    format_saturation_completion as _format_saturation_completion,
+)
 
 
 @dataclass
@@ -66,9 +95,69 @@ class PlacementPose:
     azimuth_in_plane_deg: float = 0.0
 
 
+# In-memory attribute name -> rich CSV column (pre-relax provenance only).
+INITIAL_PROVENANCE_COLUMN_MAP: dict[str, str] = {
+    "orientation_type": "initial_orientation_type",
+    "face_flip": "initial_face_flip",
+    "en_atom_index": "initial_en_atom_index",
+    "site_index": "initial_site_index",
+    "site_type": "initial_site_type",
+    "tilt_deg": "initial_tilt_deg",
+    "azimuth_deg": "initial_azimuth_deg",
+    "azimuth_in_plane_deg": "initial_azimuth_in_plane_deg",
+    "z_fraction": "initial_z_fraction",
+    "z_offset": "initial_z_offset",
+    "surface_ref_z_abs": "initial_surface_ref_z_abs",
+    "x": "initial_x",
+    "y": "initial_y",
+    "shape": "initial_shape",
+    "slab_indices": "initial_slab_indices",
+    "placement_mode_resolved": "initial_placement_mode_resolved",
+    "site_source": "initial_site_source",
+    "site_reference_frame": "initial_site_reference_frame",
+    "site_xy_frac_a": "initial_site_xy_frac_a",
+    "site_xy_frac_b": "initial_site_xy_frac_b",
+    "fragment_positions": "initial_fragment_positions",
+}
+
+
+def provenance_export_fields(values: Mapping[str, Any]) -> dict[str, Any]:
+    """Map in-memory provenance attrs to ``initial_*`` CSV columns."""
+    row: dict[str, Any] = {}
+    for attr, export_name in INITIAL_PROVENANCE_COLUMN_MAP.items():
+        val = values[attr]
+        if attr == "slab_indices":
+            row[export_name] = (
+                ",".join(str(i) for i in val) if val is not None else None
+            )
+        elif attr == "fragment_positions":
+            row[export_name] = (
+                json.dumps(list(val)) if val is not None else None
+            )
+        else:
+            row[export_name] = val
+    return row
+
+
+def _provenance_value_from_row(row: Mapping[str, Any], attr: str, default: Any) -> Any:
+    """Resolve a provenance field from ``initial_*`` then legacy unprefixed name."""
+    export_name = INITIAL_PROVENANCE_COLUMN_MAP.get(attr, attr)
+    if export_name in row and not _row_is_missing(row.get(export_name)):
+        return row.get(export_name)
+    if attr in row and not _row_is_missing(row.get(attr)):
+        return row.get(attr)
+    return default
+
+
 @dataclass
 class PlacementDescriptor:
-    """Output: spec + actual placement values for reproducibility and trend analysis."""
+    """Initial (pre-relax) placement: spec fields + resolved absolute pose.
+
+    Absolute pose (``x_abs`` / ``y_abs`` / ``z_abs`` + quaternion) is the ML/BO
+    feature geometry. Site/orientation fields are enumeration provenance for the
+    *initial* placement; adsorbates may move during relaxation. Post-relax
+    geometry lives in on-disk structures, not these fields.
+    """
 
     conformer_index: int
     orientation_type: Literal[
@@ -101,9 +190,16 @@ class PlacementDescriptor:
     quat_x: float | None = None
     quat_y: float | None = None
     quat_z: float | None = None
+    # Absolute fragment atom positions for multi-site (dissociative) replay only.
+    # Exported only when include_provenance=True (as initial_fragment_positions).
+    fragment_positions: tuple[tuple[float, float, float], ...] | None = None
 
-    def to_row(self) -> dict[str, Any]:
-        """Convert descriptor fields to a flat row for tabular exports."""
+    def to_row(self, *, include_provenance: bool = False) -> dict[str, Any]:
+        """Convert descriptor fields to a flat row for tabular exports.
+
+        Lean default: ML feature geometry only. Rich mode adds ``initial_*``
+        pre-relax provenance columns (see ``INITIAL_PROVENANCE_COLUMN_MAP``).
+        """
         x_abs = self.x_abs if self.x_abs is not None else self.x
         y_abs = self.y_abs if self.y_abs is not None else self.y
         surface_ref_z_abs = (
@@ -114,34 +210,113 @@ class PlacementDescriptor:
         )
         row: dict[str, Any] = {
             "conformer_index": self.conformer_index,
-            "orientation_type": self.orientation_type,
-            "face_flip": self.face_flip,
-            "en_atom_index": self.en_atom_index,
-            "site_index": self.site_index,
-            "site_type": self.site_type,
-            "tilt_deg": self.tilt_deg,
-            "azimuth_deg": self.azimuth_deg,
-            "azimuth_in_plane_deg": self.azimuth_in_plane_deg,
-            "z_fraction": self.z_fraction,
             "x_abs": x_abs,
             "y_abs": y_abs,
-            "z_offset": self.z_offset,
-            "surface_ref_z_abs": surface_ref_z_abs,
             "z_abs": z_abs,
-            "shape": self.shape,
-            "placement_mode_resolved": self.placement_mode_resolved,
-            "site_source": self.site_source,
-            "site_reference_frame": self.site_reference_frame,
-            "site_xy_frac_a": self.site_xy_frac_a,
-            "site_xy_frac_b": self.site_xy_frac_b,
             "quat_w": float(self.quat_w) if self.quat_w is not None else 1.0,
             "quat_x": float(self.quat_x) if self.quat_x is not None else 0.0,
             "quat_y": float(self.quat_y) if self.quat_y is not None else 0.0,
             "quat_z": float(self.quat_z) if self.quat_z is not None else 0.0,
         }
-        if self.slab_indices is not None:
-            row["slab_indices"] = ",".join(str(i) for i in self.slab_indices)
+        if include_provenance:
+            row.update(
+                provenance_export_fields(
+                    {
+                        "orientation_type": self.orientation_type,
+                        "face_flip": self.face_flip,
+                        "en_atom_index": self.en_atom_index,
+                        "site_index": self.site_index,
+                        "site_type": self.site_type,
+                        "tilt_deg": self.tilt_deg,
+                        "azimuth_deg": self.azimuth_deg,
+                        "azimuth_in_plane_deg": self.azimuth_in_plane_deg,
+                        "z_fraction": self.z_fraction,
+                        "z_offset": self.z_offset,
+                        "surface_ref_z_abs": surface_ref_z_abs,
+                        "x": self.x,
+                        "y": self.y,
+                        "shape": self.shape,
+                        "slab_indices": self.slab_indices,
+                        "placement_mode_resolved": self.placement_mode_resolved,
+                        "site_source": self.site_source,
+                        "site_reference_frame": self.site_reference_frame,
+                        "site_xy_frac_a": self.site_xy_frac_a,
+                        "site_xy_frac_b": self.site_xy_frac_b,
+                        "fragment_positions": self.fragment_positions,
+                    }
+                )
+            )
         return row
+
+    @classmethod
+    def from_row(
+        cls,
+        row: Mapping[str, Any],
+        *,
+        placement_index: int | None = None,
+    ) -> "PlacementDescriptor":
+        """Inflate a descriptor from lean/rich/legacy flat CSV or dict rows."""
+        slab_indices_raw = _provenance_value_from_row(row, "slab_indices", None)
+        slab_indices = None
+        if slab_indices_raw and not _row_is_missing(slab_indices_raw):
+            slab_indices = tuple(int(x) for x in str(slab_indices_raw).split(","))
+
+        z_offset = float(
+            _provenance_value_from_row(
+                row, "z_offset", _row_float_or(row.get("z"), 0.0)
+            )
+        )
+        surface_ref_z_abs = float(
+            _provenance_value_from_row(row, "surface_ref_z_abs", 0.0)
+        )
+        pid = (
+            int(placement_index)
+            if placement_index is not None
+            else int(_row_with_default(row.get("placement_id"), -1))
+        )
+
+        def _prov(attr: str, default: Any) -> Any:
+            return _provenance_value_from_row(row, attr, default)
+
+        return cls(
+            conformer_index=int(row["conformer_index"]),
+            orientation_type=cast(
+                Literal["parallel", "EN-down", "vertical", "round", "dissociative"],
+                _prov("orientation_type", "round"),
+            ),
+            face_flip=_row_parse_bool(_prov("face_flip", False), default=False),
+            en_atom_index=_row_int_or_none(_prov("en_atom_index", None)),
+            site_index=int(_prov("site_index", -1)),
+            site_type=_prov("site_type", None),
+            tilt_deg=float(_prov("tilt_deg", 0.0)),
+            azimuth_deg=float(_prov("azimuth_deg", 0.0)),
+            azimuth_in_plane_deg=float(_prov("azimuth_in_plane_deg", 0.0)),
+            z_fraction=float(_prov("z_fraction", 0.5)),
+            placement_index=pid,
+            x=float(_prov("x", 0.0)),
+            y=float(_prov("y", 0.0)),
+            z_offset=z_offset,
+            x_abs=_row_float_or(row.get("x_abs"), 0.0),
+            y_abs=_row_float_or(row.get("y_abs"), 0.0),
+            surface_ref_z_abs=surface_ref_z_abs,
+            z_abs=float(
+                _row_with_default(row.get("z_abs"), surface_ref_z_abs + z_offset)
+            ),
+            shape=str(_prov("shape", "round")),
+            slab_indices=slab_indices,
+            placement_mode_resolved=str(_prov("placement_mode_resolved", "no_sites")),
+            site_source=str(_prov("site_source", "no_sites")),
+            site_reference_frame=str(_prov("site_reference_frame", "global_top_layer")),
+            site_xy_frac_a=float(_prov("site_xy_frac_a", 0.0)),
+            site_xy_frac_b=float(_prov("site_xy_frac_b", 0.0)),
+            quat_w=_row_float_or(row.get("quat_w"), 1.0),
+            quat_x=_row_float_or(row.get("quat_x"), 0.0),
+            quat_y=_row_float_or(row.get("quat_y"), 0.0),
+            quat_z=_row_float_or(row.get("quat_z"), 0.0),
+            fragment_positions=_row_parse_fragment_positions(
+                _prov("fragment_positions", None)
+            ),
+        )
 
 
 @dataclass
@@ -156,7 +331,7 @@ class ScreeningResult:
     energy_adsorption: float
     atoms: Atoms
     slab_size: int
-    distance: float
+    distance: float  # Post-relax min adsorbate–surface distance (Å)
     placement_descriptor: PlacementDescriptor
 
     def to_row(
@@ -165,6 +340,7 @@ class ScreeningResult:
         xyz_path: str | None = None,
         poscar_path: str | None = None,
         context_row: Mapping[str, Any] | None = None,
+        include_provenance: bool = False,
     ) -> dict[str, Any]:
         """Return a flat row for CSV/dataframe export."""
         row: dict[str, Any] = {
@@ -180,7 +356,7 @@ class ScreeningResult:
             row["xyz_path"] = xyz_path
         if poscar_path is not None:
             row["poscar_path"] = poscar_path
-        row.update(self.placement_descriptor.to_row())
+        row.update(self.placement_descriptor.to_row(include_provenance=include_provenance))
         if context_row:
             row.update(dict(context_row))
         return row
@@ -240,69 +416,6 @@ def build_molecule_summary(
     )
 
 
-def _format_failure_summary_text(failure_summary: dict[str, object]) -> str:
-    """Produce a human-readable multi-line summary from a failure_summary dict."""
-    lines = ["Failure summary:"]
-    stage = failure_summary.get("stage", "unknown")
-    lines.append(f"  Stage: {stage}")
-
-    if stage in {"reference", "conformers"}:
-        reason = failure_summary.get("reason", "")
-        if reason:
-            lines.append(f"  Reason: {reason}")
-    elif stage == "placement":
-        n_attempted = failure_summary.get("n_placements_attempted", "?")
-        n_initial = failure_summary.get("n_initial_placements", 0)
-        lines.append(f"  Placements attempted: {n_attempted}")
-        lines.append(f"  Initial placements: {n_initial}")
-        if "n_candidate_specs" in failure_summary:
-            lines.append(
-                f"  Candidate specs: {failure_summary.get('n_candidate_specs', '?')}"
-            )
-        if "n_valid_pool" in failure_summary:
-            lines.append(f"  Valid pool: {failure_summary.get('n_valid_pool', '?')}")
-        generation_failures = failure_summary.get("generation_failures")
-        if isinstance(generation_failures, dict) and generation_failures:
-            lines.append("  Generation failures:")
-            items = [
-                (str(reason), int(count))
-                for reason, count in generation_failures.items()
-                if isinstance(count, int)
-            ]
-            for reason, count in sorted(items, key=lambda x: -x[1]):
-                lines.append(f"    {reason}: {count}")
-    elif stage == "validation":
-        n_initial = failure_summary.get("n_initial_placements", "?")
-        n_opt = failure_summary.get("n_optimized", "?")
-        n_opt_fail = failure_summary.get("n_optimization_failed", 0)
-        lines.append(f"  Initial placements: {n_initial}")
-        lines.append(f"  Optimized: {n_opt} ({n_opt_fail} failed)")
-        lines.append("  Passed validation: 0")
-        if "n_evaluated" in failure_summary:
-            lines.append(f"  BO evaluated: {failure_summary.get('n_evaluated', '?')}")
-        if "n_valid_results" in failure_summary:
-            lines.append(
-                f"  BO valid results: {failure_summary.get('n_valid_results', '?')}"
-            )
-        validation_failures = failure_summary.get("validation_failures")
-        if isinstance(validation_failures, dict):
-            items = [
-                (str(reason), int(count))
-                for reason, count in validation_failures.items()
-                if isinstance(count, int)
-            ]
-            if items:
-                lines.append("  Validation failures:")
-                for reason, count in sorted(items, key=lambda x: -x[1]):
-                    lines.append(f"    {reason}: {count}")
-    elif stage == "filter":
-        n_before = failure_summary.get("n_before_filter", "?")
-        n_after = failure_summary.get("n_after_filter", 0)
-        lines.append(f"  Before filter: {n_before}")
-        lines.append(f"  After filter: {n_after}")
-
-    return "\n".join(lines)
-
 
 @dataclass
 class ScreeningRunResult:
@@ -319,6 +432,7 @@ class ScreeningRunResult:
         results_dir: str | Path | None = None,
         context_row: Mapping[str, Any] | None = None,
         write_vasp_inputs: bool = False,
+        include_provenance: bool = False,
     ) -> list[dict[str, Any]]:
         """Flatten all placements for this molecule into detailed rows."""
         rows: list[dict[str, Any]] = []
@@ -342,6 +456,7 @@ class ScreeningRunResult:
                 xyz_path=xyz_path,
                 poscar_path=poscar_path,
                 context_row=context_row,
+                include_provenance=include_provenance,
             )
             row["molecule"] = self.molecule
             rows.append(row)
@@ -353,6 +468,7 @@ class ScreeningRunResult:
         results_dir: str | Path | None = None,
         context_row: Mapping[str, Any] | None = None,
         write_vasp_inputs: bool = False,
+        include_provenance: bool = False,
     ) -> pd.DataFrame:
         """Return a detailed pandas DataFrame for this screening run."""
         return pd.DataFrame(
@@ -360,6 +476,7 @@ class ScreeningRunResult:
                 results_dir=results_dir,
                 context_row=context_row,
                 write_vasp_inputs=write_vasp_inputs,
+                include_provenance=include_provenance,
             )
         )
 
@@ -382,6 +499,72 @@ class ScreeningRunResult:
 
 
 @dataclass
+class BOTransferInfo:
+    """Typed BO transfer bookkeeping written by Bayesian saturation steps."""
+
+    transfer_enabled: bool = False
+    transfer_used: bool = False
+    transfer_disabled_reason: str | None = None
+    transfer_bad_rounds: int = 0
+    transfer_last_mae_delta: float | None = None
+    transfer_weight_share: float = 0.0
+
+    def to_saturation_columns(self) -> dict[str, Any]:
+        """Flatten to stable ``bo_transfer_*`` CSV column names."""
+        return {
+            "bo_transfer_used": self.transfer_used,
+            "bo_transfer_disabled_reason": self.transfer_disabled_reason,
+            "bo_transfer_weight_share": self.transfer_weight_share,
+            "bo_transfer_bad_rounds": self.transfer_bad_rounds,
+            "bo_transfer_last_mae_delta": self.transfer_last_mae_delta,
+        }
+
+
+def _saturation_step_structure_paths(
+    mol_dir: Path,
+    step: int,
+    energy_adsorption: float,
+) -> dict[str, str]:
+    return {
+        "step_structure_path": str(mol_dir / f"step_{step:03d}_best_slab.xyz"),
+        "step_structure_energy_path": str(
+            mol_dir / f"step_{step:03d}_Eads_{energy_adsorption:.4f}.xyz"
+        ),
+        "step_adsorbate_path": str(mol_dir / f"step_{step:03d}_adsorbate.xyz"),
+    }
+
+
+def _placement_rows_for_results(
+    results: Sequence[ScreeningResult],
+    *,
+    step: int,
+    step_xyz: Path,
+    step_vasp: Path | None,
+    context_row: Mapping[str, Any] | None,
+    include_provenance: bool,
+    extra: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for r in results:
+        pid = r.placement_id
+        poscar_path = (
+            str(step_vasp / f"conformer_{pid:03d}" / "POSCAR")
+            if step_vasp is not None
+            else None
+        )
+        rows.append(
+            r.to_row(
+                xyz_path=str(step_xyz / f"conformer_{pid:03d}.xyz"),
+                poscar_path=poscar_path,
+                context_row=context_row,
+                include_provenance=include_provenance,
+            )
+            | {"step": step, **dict(extra)}
+        )
+    return rows
+
+
+@dataclass
 class SaturationStepResult:
     """Result of one step in a sequential saturation run."""
 
@@ -391,11 +574,7 @@ class SaturationStepResult:
     best_result: ScreeningResult
     all_results: list[ScreeningResult]
     bo_transfer_enabled: bool = False
-    bo_transfer_used: bool = False
-    bo_transfer_disabled_reason: str | None = None
-    bo_transfer_weight_share: float = 0.0
-    bo_transfer_bad_rounds: int = 0
-    bo_transfer_last_mae_delta: float | None = None
+    transfer: BOTransferInfo | None = None
 
     def to_detail_row(
         self,
@@ -403,35 +582,33 @@ class SaturationStepResult:
         results_dir: str | Path,
         saturation_molecule: str,
         context_row: Mapping[str, Any] | None = None,
+        include_provenance: bool = False,
     ) -> dict[str, Any]:
         """Return one saturation detail row for the winning placement."""
         best = self.best_result
         mol_dir = (
             Path(results_dir) / "xyz_structures" / f"{saturation_molecule}_saturation"
         )
+        info = self.transfer if self.transfer is not None else BOTransferInfo()
         row: dict[str, Any] = {
             "molecule": saturation_molecule,
             "step": self.step,
             "n_molecules_on_slab": self.n_molecules_on_slab,
             "bo_transfer_enabled": self.bo_transfer_enabled,
-            "bo_transfer_used": self.bo_transfer_used,
-            "bo_transfer_disabled_reason": self.bo_transfer_disabled_reason,
-            "bo_transfer_weight_share": self.bo_transfer_weight_share,
-            "bo_transfer_bad_rounds": self.bo_transfer_bad_rounds,
-            "bo_transfer_last_mae_delta": self.bo_transfer_last_mae_delta,
+            **info.to_saturation_columns(),
             "placement_id": best.placement_id,
             "energy_adslab": best.energy_adslab,
             "energy_slab": best.energy_slab,
             "energy_adsorbate": best.energy_adsorbate,
             "energy_adsorption": best.energy_adsorption,
             "distance": best.distance,
-            "step_structure_path": str(mol_dir / f"step_{self.step:03d}_best_slab.xyz"),
-            "step_structure_energy_path": str(
-                mol_dir / f"step_{self.step:03d}_Eads_{best.energy_adsorption:.4f}.xyz"
+            **_saturation_step_structure_paths(
+                mol_dir, self.step, best.energy_adsorption
             ),
-            "step_adsorbate_path": str(mol_dir / f"step_{self.step:03d}_adsorbate.xyz"),
         }
-        row.update(best.placement_descriptor.to_row())
+        row.update(
+            best.placement_descriptor.to_row(include_provenance=include_provenance)
+        )
         if context_row:
             row.update(dict(context_row))
         return row
@@ -444,45 +621,29 @@ class SaturationStepResult:
         context_row: Mapping[str, Any] | None = None,
         step_prefix: bool = True,
         write_vasp_inputs: bool = False,
+        include_provenance: bool = False,
     ) -> list[dict[str, Any]]:
         """Return detailed rows for every placement evaluated in this step."""
         step_placements_rel = (
             f"step_{self.step:03d}_placements" if step_prefix else "placements"
         )
-        step_xyz = (
-            Path(results_dir)
-            / "xyz_structures"
-            / f"{saturation_molecule}_saturation"
-            / step_placements_rel
+        base = Path(results_dir)
+        sat = f"{saturation_molecule}_saturation"
+        step_xyz = base / "xyz_structures" / sat / step_placements_rel
+        step_vasp = (
+            base / "vasp_inputs" / sat / step_placements_rel
+            if write_vasp_inputs
+            else None
         )
-        step_vasp: Path | None = None
-        if write_vasp_inputs:
-            step_vasp = (
-                Path(results_dir)
-                / "vasp_inputs"
-                / f"{saturation_molecule}_saturation"
-                / step_placements_rel
-            )
-        rows: list[dict[str, Any]] = []
-        for r in self.all_results:
-            pid = r.placement_id
-            poscar_path = (
-                str(step_vasp / f"conformer_{pid:03d}" / "POSCAR")
-                if step_vasp is not None
-                else None
-            )
-            rows.append(
-                r.to_row(
-                    xyz_path=str(step_xyz / f"conformer_{pid:03d}.xyz"),
-                    poscar_path=poscar_path,
-                    context_row=context_row,
-                )
-                | {
-                    "molecule": saturation_molecule,
-                    "step": self.step,
-                }
-            )
-        return rows
+        return _placement_rows_for_results(
+            self.all_results,
+            step=self.step,
+            step_xyz=step_xyz,
+            step_vasp=step_vasp,
+            context_row=context_row,
+            include_provenance=include_provenance,
+            extra={"molecule": saturation_molecule},
+        )
 
 
 @dataclass
@@ -524,14 +685,12 @@ class SaturationRunResult:
         write_vasp_inputs: bool = False,
     ) -> str:
         """Return a canonical multi-line saturation completion summary."""
-        suffix = "(XYZ, POSCAR, CSV)" if write_vasp_inputs else "(XYZ, CSV)"
-        return "\n".join(
-            [
-                f"{label} complete:",
-                f"  Molecules at saturation: {self.n_molecules_at_saturation}",
-                f"  Total steps: {len(self.steps)}",
-                f"  Results saved to {Path(results_dir).as_posix()}/ {suffix}",
-            ]
+        return _format_saturation_completion(
+            label=label,
+            n_molecules_at_saturation=self.n_molecules_at_saturation,
+            n_steps=len(self.steps),
+            results_dir=results_dir,
+            write_vasp_inputs=write_vasp_inputs,
         )
 
 
@@ -607,11 +766,67 @@ class MultiMolSaturationStepResult:
     per_molecule_results: dict[str, list[ScreeningResult]]
     per_molecule_budgets: dict[str, int]
     bo_transfer_enabled: bool = False
-    bo_transfer_used: dict[str, bool] = field(default_factory=dict)
-    bo_transfer_disabled_reason: dict[str, str | None] = field(default_factory=dict)
-    bo_transfer_weight_share: dict[str, float] = field(default_factory=dict)
-    bo_transfer_bad_rounds: dict[str, int] = field(default_factory=dict)
-    bo_transfer_last_mae_delta: dict[str, float | None] = field(default_factory=dict)
+    transfer_by_molecule: dict[str, BOTransferInfo] = field(default_factory=dict)
+
+    def to_detail_row(
+        self,
+        *,
+        results_dir: str | Path,
+        molecules_label: str,
+        context_row: Mapping[str, Any] | None = None,
+        include_provenance: bool = False,
+    ) -> dict[str, Any]:
+        """Return one saturation detail row for the winning placement."""
+        best = self.best_result
+        mol_dir = Path(results_dir) / "xyz_structures" / f"{molecules_label}_saturation"
+        return best.to_row(
+            context_row=context_row,
+            include_provenance=include_provenance,
+        ) | {
+            "molecules": molecules_label,
+            "winning_molecule": self.winning_molecule,
+            "step": self.step,
+            "n_molecules_on_slab": self.n_molecules_on_slab,
+            "per_molecule_budgets": str(self.per_molecule_budgets),
+            "bo_transfer_enabled": self.bo_transfer_enabled,
+            **_saturation_step_structure_paths(
+                mol_dir, self.step, best.energy_adsorption
+            ),
+        }
+
+    def to_rows(
+        self,
+        *,
+        results_dir: str | Path,
+        molecules_label: str,
+        context_row: Mapping[str, Any] | None = None,
+        write_vasp_inputs: bool = False,
+        include_provenance: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Return detailed rows for every placement evaluated in this step."""
+        rel = f"step_{self.step:03d}_placements"
+        base = Path(results_dir)
+        sat = f"{molecules_label}_saturation"
+        base_xyz = base / "xyz_structures" / sat / rel
+        base_vasp = base / "vasp_inputs" / sat / rel if write_vasp_inputs else None
+        rows: list[dict[str, Any]] = []
+        for pmol, res_list in self.per_molecule_results.items():
+            rows.extend(
+                _placement_rows_for_results(
+                    res_list,
+                    step=self.step,
+                    step_xyz=base_xyz / pmol,
+                    step_vasp=base_vasp / pmol if base_vasp is not None else None,
+                    context_row=context_row,
+                    include_provenance=include_provenance,
+                    extra={
+                        "molecules": molecules_label,
+                        "winning_molecule": self.winning_molecule,
+                        "molecule": pmol,
+                    },
+                )
+            )
+        return rows
 
 
 @dataclass
@@ -668,16 +883,14 @@ class SaturationCampaignResult:
                 write_vasp_inputs=write_vasp_inputs,
             )
 
-        suffix = "(XYZ, POSCAR, CSV)" if write_vasp_inputs else "(XYZ, CSV)"
         total_steps = sum(len(run.steps) for run in self.runs)
         total_mols = sum(run.n_molecules_at_saturation for run in self.runs)
-        return "\n".join(
-            [
-                f"{label} complete:",
-                f"  Molecules at saturation: {total_mols}",
-                f"  Total steps: {total_steps}",
-                f"  Results saved to {Path(results_dir).as_posix()}/ {suffix}",
-            ]
+        return _format_saturation_completion(
+            label=label,
+            n_molecules_at_saturation=total_mols,
+            n_steps=total_steps,
+            results_dir=results_dir,
+            write_vasp_inputs=write_vasp_inputs,
         )
 
 
@@ -688,8 +901,6 @@ class MoleculeCampaignSummary:
     molecule: str
     n_valid_placements: int
     best_adsorption_energy: float | None
-    n_parallel: int = 0
-    n_endown: int = 0
 
 
 @dataclass
@@ -713,8 +924,10 @@ class BindingCampaignResult:
         write_vasp_inputs: bool = False,
     ) -> str:
         """Return a canonical results output line."""
-        suffix = "(XYZ, POSCAR, CSV)" if write_vasp_inputs else "(XYZ, CSV)"
-        return f"Results saved to {Path(results_dir).as_posix()}/ {suffix}"
+        return _format_results_saved_line(
+            results_dir=results_dir,
+            write_vasp_inputs=write_vasp_inputs,
+        )
 
     def format_screening_complete(self) -> str:
         """Return a canonical screening completion line."""

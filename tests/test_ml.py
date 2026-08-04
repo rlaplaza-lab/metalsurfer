@@ -1,5 +1,6 @@
 """Tests for the metalsurfer.ml binding energy regression pipeline."""
 
+import json
 import os
 import tempfile
 from dataclasses import dataclass
@@ -53,10 +54,13 @@ from metalsurfer.ml.regression import (
     save_model,
     train_model,
 )
-from metalsurfer.ml.reproduce import record_to_config, record_to_placement_descriptor
-from metalsurfer.ml.schema import ComputationContext, PlacementRecord
+from metalsurfer.ml.schema import SCHEMA_VERSION, ComputationContext, PlacementRecord
 from metalsurfer.models import PlacementDescriptor, ScreeningResult
-from tests.factories import make_random_placement_records
+from tests.factories import make_placement_record, make_random_placement_records
+
+
+def test_schema_version_is_3_0():
+    assert SCHEMA_VERSION == "3.0"
 
 
 def test_ml_package_exports_expanded_surface():
@@ -90,44 +94,6 @@ def test_computation_context_defaults_match_numeric_defaults():
     assert (
         ctx.planar_z_variance_threshold
         == numeric_defaults.DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
-    )
-
-
-def _make_record(
-    i: int = 0,
-    molecule: str = "ethanol",
-    smiles: str = "CCO",
-    energy: float = -0.85,
-) -> PlacementRecord:
-    return PlacementRecord(
-        molecule=molecule,
-        smiles=smiles,
-        surface_id="Cu_fcc111",
-        placement_id=i,
-        conformer_index=i % 3,
-        orientation_type="round",
-        face_flip=False,
-        en_atom_index=None,
-        site_index=i % 5,
-        site_type="atop",
-        tilt_deg=15.0,
-        azimuth_deg=45.0,
-        azimuth_in_plane_deg=0.0,
-        z_fraction=0.5,
-        x=float(1.0 + i * 0.1),
-        y=float(2.0 - i * 0.1),
-        x_abs=float(1.0 + i * 0.1),
-        y_abs=float(2.0 - i * 0.1),
-        z_offset=2.5,
-        surface_ref_z_abs=10.0,
-        z_abs=12.5,
-        shape="round",
-        energy_adsorption=energy,
-        energy_adslab=-150.0 + energy,
-        energy_slab=-145.0,
-        energy_adsorbate=-5.0,
-        distance=2.3,
-        context=ComputationContext(),
     )
 
 
@@ -183,32 +149,47 @@ class TestComputationContext:
 
 class TestPlacementRecord:
     def test_record_hash_deterministic(self):
-        r1 = _make_record(0)
-        r2 = _make_record(0)
+        r1 = make_placement_record(0)
+        r2 = make_placement_record(0)
         assert r1.record_hash() == r2.record_hash()
 
     def test_record_hash_changes_with_position(self):
-        r1 = _make_record(0)
-        r2 = _make_record(1)
+        r1 = make_placement_record(0)
+        r2 = make_placement_record(1)
         assert r1.record_hash() != r2.record_hash()
 
     def test_to_flat_dict_keys(self):
-        r = _make_record()
+        r = make_placement_record()
         flat = r.to_flat_dict()
         assert "record_hash" in flat
         assert "molecule" in flat
         assert "energy_adsorption" in flat
         assert "context_hash" in flat
-        assert "model_name" in flat
+        assert "x_abs" in flat
+        assert "quat_w" in flat
+        assert "model_name" not in flat
+        assert "tilt_deg" not in flat
+        assert "initial_tilt_deg" not in flat
+        assert "orientation_type" not in flat
+
+    def test_to_flat_dict_rich_provenance_keys(self):
+        r = make_placement_record()
+        flat = r.to_flat_dict(include_provenance=True)
+        assert "initial_tilt_deg" in flat
+        assert "initial_orientation_type" in flat
+        assert "initial_site_type" in flat
+        assert "ctx_model_name" in flat
+        assert "model_name" not in flat
+        assert flat["initial_tilt_deg"] == r.tilt_deg
 
     def test_flat_dict_roundtrip(self):
-        r = _make_record(42, energy=-1.23)
+        r = make_placement_record(42, energy=-1.23)
         r.converged = False
         r.failure_stage = "validation"
         r.failure_reason = "desorbed"
         r.is_penalty_label = True
         r.label_source = "bo_failure_penalty"
-        flat = r.to_flat_dict()
+        flat = r.to_flat_dict(include_provenance=True)
         r2 = PlacementRecord.from_flat_dict(flat)
         assert r2.molecule == r.molecule
         assert r2.placement_id == r.placement_id
@@ -221,10 +202,38 @@ class TestPlacementRecord:
         assert r2.is_penalty_label is True
         assert r2.label_source == "bo_failure_penalty"
 
+    def test_lean_flat_dict_roundtrip_preserves_features(self):
+        r = make_placement_record(7, energy=-0.4)
+        flat = r.to_flat_dict(include_provenance=False)
+        r2 = PlacementRecord.from_flat_dict(flat)
+        assert r2.x_abs == r.x_abs
+        assert r2.y_abs == r.y_abs
+        assert r2.z_abs == r.z_abs
+        assert r2.conformer_index == r.conformer_index
+        assert abs(r2.energy_adsorption - r.energy_adsorption) < 1e-10
+        # Provenance absent → defaults
+        assert r2.tilt_deg == 0.0
+        assert r2.site_index == -1
+
+    def test_from_flat_dict_accepts_legacy_unprefixed_columns(self):
+        r = make_placement_record(3)
+        flat = r.to_flat_dict(include_provenance=False)
+        flat["tilt_deg"] = 15.0
+        flat["orientation_type"] = "round"
+        flat["site_index"] = 2
+        flat["site_type"] = "atop"
+        flat["azimuth_deg"] = 45.0
+        flat["azimuth_in_plane_deg"] = 0.0
+        flat["face_flip"] = False
+        r2 = PlacementRecord.from_flat_dict(flat)
+        assert r2.tilt_deg == 15.0
+        assert r2.site_index == 2
+        assert r2.site_type == "atop"
+
     def test_from_flat_dict_parses_string_bools(self):
-        r = _make_record(3)
-        flat = r.to_flat_dict()
-        flat["face_flip"] = "False"
+        r = make_placement_record(3)
+        flat = r.to_flat_dict(include_provenance=True)
+        flat["initial_face_flip"] = "False"
         flat["converged"] = "0"
         flat["is_penalty_label"] = "True"
         r2 = PlacementRecord.from_flat_dict(flat)
@@ -233,7 +242,7 @@ class TestPlacementRecord:
         assert r2.is_penalty_label is True
 
     def test_flat_dict_roundtrip_preserves_context_fields(self):
-        r = _make_record(5)
+        r = make_placement_record(5)
         r.context = ComputationContext(
             model_name="m",
             fmax=0.02,
@@ -247,16 +256,33 @@ class TestPlacementRecord:
             min_contact_ratio=0.7,
             top_layer_tolerance=0.4,
         )
-        r2 = PlacementRecord.from_flat_dict(r.to_flat_dict())
+        r2 = PlacementRecord.from_flat_dict(
+            r.to_flat_dict(include_provenance=True)
+        )
         assert r2.context.device == "cpu"
         assert r2.context.placement_z_range == (1.8, 2.9)
         assert r2.context.placement_z_scale_by_covalent_radius is False
+        assert r2.context.model_name == "m"
 
     def test_quaternion_is_canonicalized(self):
-        base = _make_record(0)
-        kwargs = {**base.__dict__}
-        kwargs.update({"quat_w": -2.0, "quat_x": 0.0, "quat_y": 0.0, "quat_z": 0.0})
-        r = PlacementRecord(**kwargs)
+        base = make_placement_record(0)
+        descriptor = PlacementDescriptor(
+            **{
+                **base.descriptor.__dict__,
+                "quat_w": -2.0,
+                "quat_x": 0.0,
+                "quat_y": 0.0,
+                "quat_z": 0.0,
+            }
+        )
+        r = PlacementRecord(
+            molecule=base.molecule,
+            smiles=base.smiles,
+            surface_id=base.surface_id,
+            placement_id=base.placement_id,
+            descriptor=descriptor,
+            context=base.context,
+        )
         assert r.quat_w == 1.0
         assert r.quat_x == 0.0
         assert r.quat_y == 0.0
@@ -309,8 +335,8 @@ class TestDatasetLogger:
     def test_flush_creates_csv(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             ds = DatasetLogger(tmpdir)
-            ds.add_record(_make_record(0))
-            ds.add_record(_make_record(1))
+            ds.add_record(make_placement_record(0))
+            ds.add_record(make_placement_record(1))
             path = ds.flush()
             assert os.path.exists(path)
             df = pd.read_csv(path)
@@ -319,11 +345,11 @@ class TestDatasetLogger:
     def test_flush_appends(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             ds1 = DatasetLogger(tmpdir)
-            ds1.add_record(_make_record(0))
+            ds1.add_record(make_placement_record(0))
             ds1.flush()
 
             ds2 = DatasetLogger(tmpdir)
-            ds2.add_record(_make_record(1))
+            ds2.add_record(make_placement_record(1))
             ds2.flush()
 
             df = pd.read_csv(ds2.csv_path)
@@ -332,11 +358,11 @@ class TestDatasetLogger:
     def test_flush_deduplicates(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             ds1 = DatasetLogger(tmpdir)
-            ds1.add_record(_make_record(0))
+            ds1.add_record(make_placement_record(0))
             ds1.flush()
 
             ds2 = DatasetLogger(tmpdir)
-            ds2.add_record(_make_record(0))  # same record
+            ds2.add_record(make_placement_record(0))  # same record
             ds2.flush()
 
             df = pd.read_csv(ds2.csv_path)
@@ -345,16 +371,45 @@ class TestDatasetLogger:
     def test_metadata_written(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             ds = DatasetLogger(tmpdir, surface_id="test")
-            ds.add_record(_make_record())
+            ds.add_record(make_placement_record())
             ds.flush()
             assert os.path.exists(ds.metadata_path)
+            with open(ds.metadata_path) as f:
+                meta = json.load(f)
+            assert meta["schema_version"] == SCHEMA_VERSION
+            assert meta["export_placement_provenance"] is False
+
+    def test_flush_lean_by_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ds = DatasetLogger(tmpdir, config=AdsorptionConfig())
+            ds.add_record(make_placement_record(0))
+            ds.flush()
+            df = pd.read_csv(ds.csv_path)
+            assert "x_abs" in df.columns
+            assert "energy_adsorption" in df.columns
+            assert "initial_tilt_deg" not in df.columns
+            assert "ctx_model_name" not in df.columns
+
+    def test_flush_rich_when_provenance_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = AdsorptionConfig(export_placement_provenance=True)
+            ds = DatasetLogger(tmpdir, config=cfg)
+            ds.add_record(make_placement_record(0))
+            ds.flush()
+            df = pd.read_csv(ds.csv_path)
+            assert "initial_tilt_deg" in df.columns
+            assert "initial_site_type" in df.columns
+            assert "ctx_model_name" in df.columns
+            with open(ds.metadata_path) as f:
+                meta = json.load(f)
+            assert meta["export_placement_provenance"] is True
 
 
 class TestLoadDataset:
     def test_load_from_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             ds = DatasetLogger(tmpdir)
-            ds.add_record(_make_record(0))
+            ds.add_record(make_placement_record(0))
             ds.flush()
             df = load_dataset(tmpdir)
             assert isinstance(df, pd.DataFrame)
@@ -363,7 +418,7 @@ class TestLoadDataset:
     def test_load_as_records(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             ds = DatasetLogger(tmpdir)
-            ds.add_record(_make_record(0))
+            ds.add_record(make_placement_record(0))
             ds.flush()
             records = load_dataset(tmpdir, as_records=True)
             assert isinstance(records, list)
@@ -380,12 +435,12 @@ class TestMergeDatasets:
             dir1 = os.path.join(tmpdir, "a")
             dir2 = os.path.join(tmpdir, "b")
             ds1 = DatasetLogger(dir1)
-            ds1.add_record(_make_record(0))
-            ds1.add_record(_make_record(1))
+            ds1.add_record(make_placement_record(0))
+            ds1.add_record(make_placement_record(1))
             ds1.flush()
             ds2 = DatasetLogger(dir2)
-            ds2.add_record(_make_record(1))  # duplicate
-            ds2.add_record(_make_record(2))
+            ds2.add_record(make_placement_record(1))  # duplicate
+            ds2.add_record(make_placement_record(2))
             ds2.flush()
 
             merged = merge_datasets(dir1, dir2)
@@ -397,7 +452,7 @@ class TestMergeDatasets:
 
 class TestFeatureExtraction:
     def test_feature_count(self):
-        r = _make_record()
+        r = make_placement_record()
         features = extract_features(r)
         assert len(features) == 8
         assert "height_above_surface" not in features
@@ -407,7 +462,7 @@ class TestFeatureExtraction:
         assert "z_fraction" not in features
 
     def test_quaternion_features(self):
-        r = _make_record()
+        r = make_placement_record()
         r.quat_w = 2.0
         r.quat_x = 2.0
         r.quat_y = 2.0
@@ -419,8 +474,8 @@ class TestFeatureExtraction:
         assert abs(features["quat_z"] - 0.5) < 1e-8
 
     def test_quaternion_sign_invariance(self):
-        r1 = _make_record()
-        r2 = _make_record()
+        r1 = make_placement_record()
+        r2 = make_placement_record()
         r1.quat_w, r1.quat_x, r1.quat_y, r1.quat_z = 0.5, 0.5, 0.5, 0.5
         r2.quat_w, r2.quat_x, r2.quat_y, r2.quat_z = -0.5, -0.5, -0.5, -0.5
         f1 = extract_features(r1)
@@ -428,7 +483,7 @@ class TestFeatureExtraction:
         assert f1 == f2
 
     def test_rotation_and_categorical_independence(self):
-        r = _make_record()
+        r = make_placement_record()
         r.orientation_type = "parallel"
         r.site_type = "bridge"
         features = extract_features(r)
@@ -439,15 +494,15 @@ class TestFeatureExtraction:
         assert "azimuth_in_plane_sin" not in features
 
     def test_face_flip_not_encoded_in_features(self):
-        r1 = _make_record()
-        r2 = _make_record()
+        r1 = make_placement_record()
+        r2 = make_placement_record()
         r1.face_flip = False
         r2.face_flip = True
         assert extract_features(r1) == extract_features(r2)
 
     def test_z_fraction_not_encoded_in_features(self):
-        r1 = _make_record()
-        r2 = _make_record()
+        r1 = make_placement_record()
+        r2 = make_placement_record()
         r1.z_fraction = 0.1
         r2.z_fraction = 0.9
         assert extract_features(r1) == extract_features(r2)
@@ -468,7 +523,7 @@ class TestFeatureExtraction:
             assert "z_fraction" not in X.columns
 
     def test_extract_features_uses_absolute_geometry_only(self):
-        r = _make_record()
+        r = make_placement_record()
         r.x = 99.0
         r.y = 88.0
         r.z_offset = 77.0
@@ -494,7 +549,7 @@ class TestFeatureExtraction:
 
     def test_feature_names_consistent(self):
         names = get_feature_names()
-        r = _make_record()
+        r = make_placement_record()
         features = extract_features(r)
         assert list(features.keys()) == names
 
@@ -635,17 +690,17 @@ class TestPredictor:
 
     def test_predict_descriptor(self, trained_predictor):
         pred, records = trained_predictor
-        descriptor = record_to_placement_descriptor(records[0])
+        descriptor = records[0].to_placement_descriptor()
         result = pred.predict_descriptor(descriptor, molecule="ethanol", smiles="CCO")
         assert isinstance(result.energy, float)
 
 
-# ── Reproduce tests ──
+# ── Record replay tests ──
 
 
-class TestReproduce:
+class TestRecordReplay:
     def test_record_to_descriptor(self):
-        r = _make_record()
+        r = make_placement_record()
         r.x_abs = 4.1
         r.y_abs = -1.2
         r.z_offset = 2.8
@@ -655,7 +710,7 @@ class TestReproduce:
         r.site_reference_frame = "local_site"
         r.site_xy_frac_a = 0.25
         r.site_xy_frac_b = 0.75
-        d = record_to_placement_descriptor(r)
+        d = r.to_placement_descriptor()
         assert d.conformer_index == r.conformer_index
         assert d.tilt_deg == r.tilt_deg
         assert d.x == r.x
@@ -668,9 +723,23 @@ class TestReproduce:
         assert d.site_reference_frame == r.site_reference_frame
         assert d.site_xy_frac_a == r.site_xy_frac_a
         assert d.site_xy_frac_b == r.site_xy_frac_b
+        assert d.fragment_positions is None
+
+    def test_record_to_descriptor_preserves_fragment_positions(self):
+        r = make_placement_record()
+        fragments = ((1.0, 2.0, 3.0), (1.5, 2.5, 3.5))
+        r.fragment_positions = fragments
+        d = r.to_placement_descriptor()
+        assert d.fragment_positions == fragments
+        flat = r.to_flat_dict(include_provenance=True)
+        r2 = PlacementRecord.from_flat_dict(flat)
+        assert r2.fragment_positions == fragments
+        lean = r.to_flat_dict(include_provenance=False)
+        assert "initial_fragment_positions" not in lean
+        assert "fragment_positions" not in lean
 
     def test_record_to_config(self):
-        r = _make_record()
+        r = make_placement_record()
         cfg = AdsorptionConfig(
             symmetry_tolerance=0.2,
             site_equivalence_tolerance=0.06,
@@ -678,7 +747,7 @@ class TestReproduce:
             planar_z_variance_threshold=0.04,
         )
         r.context = ComputationContext.from_config(cfg)
-        config = record_to_config(r)
+        config = r.to_config()
         assert config.model_name == r.context.model_name
         assert config.fmax == r.context.fmax
         assert config.seed == r.context.seed
@@ -692,12 +761,12 @@ class TestReproduce:
         )
 
     def test_record_to_descriptor_requires_finite_geometry(self):
-        r = _make_record()
+        r = make_placement_record()
         r.z_abs = float("nan")
         with pytest.raises(
             ValueError, match="missing finite deterministic geometry fields"
         ):
-            record_to_placement_descriptor(r)
+            r.to_placement_descriptor()
 
 
 class TestAcquisitionMinimization:

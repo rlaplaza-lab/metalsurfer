@@ -2,6 +2,7 @@
 
 import itertools
 import random
+from collections import defaultdict
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -12,6 +13,9 @@ from ._constants import (
     _EARLY_CAP_WORKING_SET_MULTIPLIER,
     _GRID_BUILD_CAP,
     _PLACEMENT_GRID_COUNT_SEED,
+    _POLICY_PRIOR_TILT_WEIGHT_PER_DEG,
+    _POLICY_PRIOR_Z_FRACTION_TARGET,
+    _POLICY_PRIOR_Z_FRACTION_WEIGHT,
     _TILT_FULL,
     _TILT_PARALLEL,
     _Z_FRACTIONS,
@@ -32,7 +36,9 @@ def max_batch_placement_specs(
     n_sites = max(len(site_indices), 1)
 
     if dissociative:
-        return min(max(n_hollow_pairs, 1) * len(_Z_FRACTIONS), _GRID_BUILD_CAP)
+        if n_hollow_pairs <= 0:
+            return 0
+        return min(n_hollow_pairs * len(_Z_FRACTIONS), _GRID_BUILD_CAP)
 
     if flat_aromatic:
         parallel = (
@@ -62,6 +68,69 @@ def max_batch_placement_specs(
     )
 
 
+def _spec_prior_key(spec: PlacementSpec, tie: float) -> tuple[float, float]:
+    """Sort key for soft physical priors: lower score is preferred.
+
+    Prefers milder absolute tilt and ``z_fraction`` near the mid-window target.
+    *tie* breaks remaining ties deterministically (seeded shuffle rank).
+    """
+    tilt_pen = abs(float(spec.tilt_deg)) * _POLICY_PRIOR_TILT_WEIGHT_PER_DEG
+    z_pen = (
+        abs(float(spec.z_fraction) - _POLICY_PRIOR_Z_FRACTION_TARGET)
+        * _POLICY_PRIOR_Z_FRACTION_WEIGHT
+    )
+    return (tilt_pen + z_pen, tie)
+
+
+def _stratified_sample(
+    specs: list[PlacementSpec],
+    n_desired: int,
+    seed: int,
+) -> list[PlacementSpec]:
+    """Sample up to *n_desired* specs stratified by ``site_type`` (seeded, deterministic).
+
+    Within each site-type bucket, specs are ordered by a soft prior (milder tilt,
+    mid ``z_fraction``) with a seeded tie-break so draws remain deterministic.
+    """
+    if len(specs) <= n_desired:
+        return list(specs)
+
+    buckets: dict[str, list[PlacementSpec]] = defaultdict(list)
+    for spec in specs:
+        key = str(spec.site_type) if spec.site_type is not None else "none"
+        buckets[key].append(spec)
+
+    # Stable bucket order for determinism.
+    keys = sorted(buckets)
+    rng = random.Random(seed)
+    for key in keys:
+        bucket = buckets[key]
+        # Seeded permutation ranks for tie-breaking, then sort by prior score.
+        ranks = list(range(len(bucket)))
+        rng.shuffle(ranks)
+        ordered = sorted(
+            zip(bucket, ranks, strict=True),
+            key=lambda item: _spec_prior_key(item[0], float(item[1])),
+        )
+        # Pop from end → reverse so preferred specs come off first.
+        buckets[key] = [spec for spec, _ in reversed(ordered)]
+
+    selected: list[PlacementSpec] = []
+    # Round-robin across buckets until n_desired.
+    while len(selected) < n_desired:
+        progressed = False
+        for key in keys:
+            if len(selected) >= n_desired:
+                break
+            bucket = buckets[key]
+            if bucket:
+                selected.append(bucket.pop())
+                progressed = True
+        if not progressed:
+            break
+    return selected
+
+
 def build_batch_placement_specs(
     *,
     n_conformers: int,
@@ -77,7 +146,7 @@ def build_batch_placement_specs(
     n_hollow_pairs: int = 0,
     seed: int = _PLACEMENT_GRID_COUNT_SEED,
 ) -> list[PlacementSpec]:
-    """BO candidate ``PlacementSpec`` list: full Cartesian grid (capped), then uniform subsample to *n_desired* (*seed*); dissociative branch is small and fully enumerated."""
+    """BO candidate ``PlacementSpec`` list: full Cartesian grid (capped), then stratified subsample to *n_desired* (*seed*)."""
     normalized_sites = site_indices if site_indices else [-1]
     base_fields = {
         "face_flip": False,
@@ -107,30 +176,35 @@ def build_batch_placement_specs(
         return out
 
     if dissociative:
-        # Bounded working set then sample (avoids prefix-of-product bias).
-        # Same seed may differ from the old early-stop prefix behavior.
-        pair_indices = range(max(n_hollow_pairs, 1))
-        items = (
-            _fields(
-                conformer_index=0,
-                orientation_type="dissociative",
-                site_index=pair_idx,
-                tilt_deg=0.0,
-                azimuth_deg=0.0,
-                z_fraction=zfv,
+        if n_hollow_pairs <= 0:
+            specs = []
+        else:
+            # Shuffle pair indices before expanding z so early-cap is not
+            # biased toward the first pairs in enumeration order.
+            pair_indices = list(range(n_hollow_pairs))
+            random.Random(seed).shuffle(pair_indices)
+            items = (
+                _fields(
+                    conformer_index=0,
+                    orientation_type="dissociative",
+                    site_index=pair_idx,
+                    tilt_deg=0.0,
+                    azimuth_deg=0.0,
+                    z_fraction=zfv,
+                )
+                for pair_idx, zfv in itertools.product(pair_indices, _Z_FRACTIONS)
             )
-            for pair_idx, zfv in itertools.product(pair_indices, _Z_FRACTIONS)
-        )
-        working_cap = min(
-            _GRID_BUILD_CAP,
-            max(n_desired * _EARLY_CAP_WORKING_SET_MULTIPLIER, n_desired),
-        )
-        specs = _collect(items, cap=working_cap)
-        if len(specs) > n_desired:
-            specs = random.Random(seed).sample(specs, n_desired)
+            working_cap = min(
+                _GRID_BUILD_CAP,
+                max(n_desired * _EARLY_CAP_WORKING_SET_MULTIPLIER, n_desired),
+            )
+            specs = _collect(items, cap=working_cap)
+            if len(specs) > n_desired:
+                specs = _stratified_sample(specs, n_desired, seed)
     elif flat_aromatic:
-        n_par = max(1, int(n_desired * parallel_fraction))
-        n_en = max(1, n_desired - n_par)
+        n_par = int(round(n_desired * parallel_fraction))
+        n_par = max(0, min(n_par, n_desired))
+        n_en = n_desired - n_par
 
         parallel_items = (
             _fields(
@@ -176,11 +250,10 @@ def build_batch_placement_specs(
         )
         en_specs = _collect(en_down_items, cap=_GRID_BUILD_CAP)
 
-        rng = random.Random(seed)
         if len(par_specs) > n_par:
-            par_specs = rng.sample(par_specs, n_par)
+            par_specs = _stratified_sample(par_specs, n_par, seed)
         if len(en_specs) > n_en:
-            en_specs = rng.sample(en_specs, n_en)
+            en_specs = _stratified_sample(en_specs, n_en, seed + 1)
         specs = par_specs + en_specs
     else:
         orient = "vertical" if shape == "linear" else "round"
@@ -203,7 +276,7 @@ def build_batch_placement_specs(
         )
         specs = _collect(items, cap=_GRID_BUILD_CAP)
         if len(specs) > n_desired:
-            specs = random.Random(seed).sample(specs, n_desired)
+            specs = _stratified_sample(specs, n_desired, seed)
 
     for i, spec in enumerate(specs):
         spec.placement_index = i

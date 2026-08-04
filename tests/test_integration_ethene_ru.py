@@ -10,36 +10,14 @@ from metalsurfer.workflow import (
     calculate_reference_energies,
     process_molecule,
 )
-from tests.optional_deps import cuda_available, has_mlip_stack
+from tests.conftest import GPU_MLIP_MARKS, adsorbate_symbol_pair_distance
 
-pytestmark = [
-    pytest.mark.slow,
-    pytest.mark.mlip,
-    pytest.mark.gpu,
-    pytest.mark.no_fork,  # CUDA incompatible with pytest-forked
-    pytest.mark.skipif(
-        not has_mlip_stack,
-        reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
-    ),
-    pytest.mark.skipif(
-        not cuda_available,
-        reason="CUDA GPU required; skipped in CI (no GPU)",
-    ),
-]
+pytestmark = GPU_MLIP_MARKS
 
 
 def _cc_bond_length(atoms, slab_size: int) -> float:
     """C–C distance in adsorbate (ethene has exactly 2 C atoms)."""
-    ads = atoms[slab_size:]
-    syms = ads.get_chemical_symbols()
-    c_indices = [i for i, s in enumerate(syms) if s == "C"]
-    if len(c_indices) != 2:
-        return float("nan")
-    pos = ads.get_positions()
-    cell = atoms.get_cell()
-    d = pos[c_indices[1]] - pos[c_indices[0]]
-    d = d - np.round(d @ np.linalg.inv(cell)) @ cell
-    return float(np.linalg.norm(d))
+    return adsorbate_symbol_pair_distance(atoms, slab_size, "C")
 
 
 def _run_ethene_on_ru():
@@ -71,7 +49,7 @@ def _run_ethene_on_ru():
         ts_model=ts_model,
         config=config,
         surface_type="Ru_001",
-    )
+    ).results
 
 
 class TestEtheneOnRu0001:

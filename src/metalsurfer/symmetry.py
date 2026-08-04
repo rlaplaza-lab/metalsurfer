@@ -15,6 +15,7 @@ import spglib.error as _spglib_error_module
 from ase import Atoms
 
 from ._numeric_defaults import DEFAULT_SYMMETRY_TOLERANCE
+from .placement.site_types import Site, with_symmetry
 
 # Opt into the new spglib error handling (raises SpglibError instead of
 # returning None) and suppress the DeprecationWarning it would emit otherwise.
@@ -207,6 +208,24 @@ class SymmetryAnalyzer:
         """Cartesian separation vector (row) from fractional MIC difference."""
         return d_frac @ self._lattice.T
 
+    def _slab_normal(self) -> np.ndarray:
+        """Unit normal from lattice a × b (slab plane)."""
+        a = np.asarray(self._lattice[0], dtype=float)
+        b = np.asarray(self._lattice[1], dtype=float)
+        n = np.cross(a, b)
+        norm_n = float(np.linalg.norm(n))
+        if norm_n < 1e-12:
+            return np.array([0.0, 0.0, 1.0], dtype=float)
+        return n / norm_n
+
+    def _separation_distance(self, sep: np.ndarray, planar: bool) -> float:
+        """Cartesian MIC distance; when *planar*, drop the slab-normal component."""
+        if not planar:
+            return float(np.linalg.norm(sep))
+        n = self._slab_normal()
+        sep_plane = sep - float(np.dot(sep, n)) * n
+        return float(np.linalg.norm(sep_plane))
+
     def _site_distance_under_symop(
         self,
         frac_i: np.ndarray,
@@ -220,9 +239,7 @@ class SymmetryAnalyzer:
             frac_p = self._wrap_frac(frac_p)
         d_frac = self._mic_frac_delta(frac_p, frac_j)
         sep = self._cart_sep_from_frac_delta(d_frac)
-        if planar:
-            return float(np.linalg.norm(sep[:2]))
-        return float(np.linalg.norm(sep))
+        return self._separation_distance(sep, planar)
 
     def _site_pair_connected_by_ops(
         self,
@@ -231,9 +248,12 @@ class SymmetryAnalyzer:
         cart_pts: list[np.ndarray],
         frac_ops: list[tuple[np.ndarray, np.ndarray]],
         planar: bool,
+        site_types: list[str] | None = None,
     ) -> bool:
         if i == j:
             return True
+        if site_types is not None and site_types[i] != site_types[j]:
+            return False
         frac_i = self._cart_to_frac(cart_pts[i])
         frac_j = self._cart_to_frac(cart_pts[j])
         tol = self.symmetry_tolerance
@@ -248,13 +268,14 @@ class SymmetryAnalyzer:
         frac_ops: list[tuple[np.ndarray, np.ndarray]],
         planar: bool,
         orbits: list[list[int]],
+        site_types: list[str] | None = None,
     ) -> None:
         """Every pair in an orbit must be related by at least one symmetry operation."""
         for idxs in orbits:
             for ii, i in enumerate(idxs):
                 for j in idxs[ii + 1 :]:
                     if not self._site_pair_connected_by_ops(
-                        i, j, cart_pts, frac_ops, planar
+                        i, j, cart_pts, frac_ops, planar, site_types=site_types
                     ):
                         raise SymmetryAnalysisError(
                             "site orbit failed verification: no symmetry operation "
@@ -275,54 +296,54 @@ class SymmetryAnalyzer:
         self._equivalent_atoms.sort(key=lambda g: g[0])
         return self._equivalent_atoms
 
-    def _site_3d_cart(self, site: dict[str, Any]) -> np.ndarray:
-        xy = np.asarray(site["xy"], dtype=float)
-        z = float(site.get("z", 0.0))
-        return np.array([xy[0], xy[1], z], dtype=float)
+    def _site_3d_cart(self, site: Site) -> np.ndarray:
+        return np.asarray(site.xyz, dtype=float).reshape(3).copy()
 
-    def _site_sort_key(self, site: dict[str, Any]) -> tuple[float, float, float, str]:
-        xy = np.asarray(site["xy"], dtype=float)
-        z = float(site.get("z", 0.0))
-        site_type = str(site.get("site_type", ""))
-        return (float(xy[0]), float(xy[1]), z, site_type)
+    def _site_sort_key(self, site: Site) -> tuple[float, float, float, str]:
+        xy = site.xy
+        return (float(xy[0]), float(xy[1]), float(site.z), str(site.site_type))
 
     def _build_orbit_output(
         self,
-        sites: list[dict[str, Any]],
+        sites: list[Site],
         orbits: list[list[int]],
-    ) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
+    ) -> list[Site]:
+        out: list[Site] = []
         for idxs in orbits:
             rep = min(idxs, key=lambda i: self._site_sort_key(sites[i]))
-            base = sites[rep].copy()
-            equiv_xy = [sites[k]["xy"] for k in idxs]
-            base["symmetry_equivalent_sites"] = equiv_xy
-            base["symmetry_multiplicity"] = len(idxs)
-            out.append(base)
+            equiv_xy = tuple(sites[k].xy.copy() for k in idxs)
+            out.append(
+                with_symmetry(
+                    sites[rep],
+                    symmetry_multiplicity=len(idxs),
+                    symmetry_equivalent_sites=equiv_xy,
+                )
+            )
         return out
 
     def analyze_site_symmetry(
         self,
-        sites: list[dict[str, Any]],
+        sites: list[Site],
         planar: bool | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[Site]:
         """Group equivalent adsorption sites using spglib operations and union-find.
 
         Full symmetry operations are available from :meth:`detect_symmetry_operations`
-        or :meth:`get_symmetry_info`; orbit dicts only add multiplicity and
+        or :meth:`get_symmetry_info`; returned sites carry multiplicity and
         equivalent-site coordinates.
         """
         if not sites:
             return []
 
         if planar is None:
-            zs = np.array([float(s.get("z", 0.0)) for s in sites], dtype=float)
+            zs = np.array([float(s.z) for s in sites], dtype=float)
             planar = bool(zs.size > 0 and float(np.ptp(zs)) < self.symmetry_tolerance)
 
         sorted_sites = sorted(sites, key=self._site_sort_key)
         frac_ops = self._frac_ops_from_dataset()
         n = len(sorted_sites)
         cart_pts = [self._site_3d_cart(s) for s in sorted_sites]
+        site_types = [str(s.site_type) for s in sorted_sites]
 
         parent: list[int] = list(range(n))
         rank = [0] * n
@@ -352,15 +373,12 @@ class SymmetryAnalyzer:
                 if self._mode == "periodic":
                     frac_p = self._wrap_frac(frac_p)
                 for j in range(n):
-                    if i == j:
+                    if i == j or site_types[i] != site_types[j]:
                         continue
                     frac_j = self._cart_to_frac(cart_pts[j])
                     d_frac = self._mic_frac_delta(frac_p, frac_j)
                     sep = self._cart_sep_from_frac_delta(d_frac)
-                    if planar:
-                        dist = float(np.linalg.norm(sep[:2]))
-                    else:
-                        dist = float(np.linalg.norm(sep))
+                    dist = self._separation_distance(sep, bool(planar))
                     if dist < self.symmetry_tolerance:
                         union(i, j)
 
@@ -370,7 +388,9 @@ class SymmetryAnalyzer:
             roots.setdefault(r, []).append(i)
 
         orbits = [sorted(v) for _k, v in sorted(roots.items(), key=lambda x: x[0])]
-        self._verify_site_orbits(cart_pts, frac_ops, planar, orbits)
+        self._verify_site_orbits(
+            cart_pts, frac_ops, planar, orbits, site_types=site_types
+        )
         return self._build_orbit_output(sorted_sites, orbits)
 
     def detect_symmetry_breaking(self, reference_atoms: Atoms) -> bool:

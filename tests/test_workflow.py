@@ -154,7 +154,7 @@ class TestValidateAdsorption:
         slab = make_slab()
         combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
         config = AdsorptionConfig(binding_distance_threshold=4.0)
-        ok, reason = _validate_adsorption(combined, slab, config)
+        ok, reason, _ = _validate_adsorption(combined, slab, config)
         assert ok
         assert "adsorbed" in reason
 
@@ -162,14 +162,14 @@ class TestValidateAdsorption:
         slab = make_slab()
         combined = place_molecule_on_slab(slab, make_water(), z_offset=20.0)
         config = AdsorptionConfig(binding_distance_threshold=4.0)
-        ok, reason = _validate_adsorption(combined, slab, config)
+        ok, reason, _ = _validate_adsorption(combined, slab, config)
         assert not ok
         assert "desorbed" in reason
 
     def test_no_adsorbate_fails(self):
         slab = make_slab()
         config = AdsorptionConfig()
-        ok, reason = _validate_adsorption(slab, slab, config)
+        ok, reason, _ = _validate_adsorption(slab, slab, config)
         assert not ok
         assert "no adsorbate" in reason
 
@@ -178,7 +178,7 @@ class TestValidateAdsorption:
         mol = make_water()
         combined = place_molecule_on_slab(slab, mol, z_offset=3.9)
         config = AdsorptionConfig(binding_distance_threshold=4.0)
-        ok, _ = _validate_adsorption(combined, slab, config)
+        ok, _, _ = _validate_adsorption(combined, slab, config)
         assert ok
 
     def test_skip_desorption_check_passes_desorbed(self):
@@ -188,7 +188,7 @@ class TestValidateAdsorption:
         config = AdsorptionConfig(
             binding_distance_threshold=4.0, skip_desorption_check=True
         )
-        ok, reason = _validate_adsorption(combined, slab, config)
+        ok, reason, _ = _validate_adsorption(combined, slab, config)
         assert ok
         assert "skipped" in reason
 
@@ -224,10 +224,10 @@ class TestValidateAdsorption:
         combined.set_pbc(slab_with_pre_adsorbate.get_pbc())
         config = AdsorptionConfig(binding_distance_threshold=4.0)
 
-        ok, _ = _validate_adsorption(combined, slab_with_pre_adsorbate, config)
+        ok, _, _ = _validate_adsorption(combined, slab_with_pre_adsorbate, config)
         assert ok, "Without surface_symbols, pre-adsorbed atoms can mask desorption"
 
-        ok, reason = _validate_adsorption(
+        ok, reason, _ = _validate_adsorption(
             combined,
             slab_with_pre_adsorbate,
             config,
@@ -314,22 +314,12 @@ class TestProcessMolecule:
     )
     def test_early_failure_paths(self, smiles, name, refs, expected_stage):
         slab = SlabContainer(make_slab())
-        result = process_molecule(
+        outcome = process_molecule(
             smiles, name, slab, MagicMock(), reference_energies=refs
         )
-        assert result == []
-        failure_summary = {}
-        result = process_molecule(
-            smiles,
-            name,
-            slab,
-            MagicMock(),
-            reference_energies=refs,
-            failure_summary_out=failure_summary,
-        )
-        assert result == []
-        assert failure_summary["stage"] == expected_stage
-        assert name in str(failure_summary["reason"])
+        assert outcome.results == []
+        assert outcome.failure_summary["stage"] == expected_stage
+        assert name in str(outcome.failure_summary["reason"])
 
     def test_no_valid_placements_returns_none(self):
         slab = SlabContainer(make_slab())
@@ -339,7 +329,7 @@ class TestProcessMolecule:
         with patch(
             "metalsurfer.workflow.shared.create_conformers_from_smiles", mock_cfs
         ):
-            result = process_molecule(
+            outcome = process_molecule(
                 "O",
                 "water",
                 slab,
@@ -347,28 +337,26 @@ class TestProcessMolecule:
                 reference_energies=refs,
                 config=config,
             )
-        assert result == []
+        assert outcome.results == []
 
     def test_no_conformers_populates_failure_summary(self):
         slab = SlabContainer(make_slab())
         refs = self._make_refs()
         config = AdsorptionConfig(num_placements=1, num_conformers=1, seed=42)
-        failure_summary = {}
         mock_cfs = MagicMock(return_value=None)
         with patch(
             "metalsurfer.workflow.shared.create_conformers_from_smiles", mock_cfs
         ):
-            result = process_molecule(
+            outcome = process_molecule(
                 "O",
                 "water",
                 slab,
                 MagicMock(),
                 reference_energies=refs,
                 config=config,
-                failure_summary_out=failure_summary,
             )
-        assert result == []
-        assert failure_summary["stage"] == "conformers"
+        assert outcome.results == []
+        assert outcome.failure_summary["stage"] == "conformers"
 
     def test_prepare_substrate_validates_image_separation(self):
         from metalsurfer.exceptions import GeometryValidationError
@@ -403,7 +391,6 @@ class TestProcessMolecule:
         slab = SlabContainer(make_slab())
         refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
         config = AdsorptionConfig(
-            bo_enabled=True,
             bo_initial_random=1,
             bo_batch_size=1,
             bo_total_budget=1,
@@ -453,7 +440,6 @@ class TestProcessMolecule:
                 ],
             )
         )
-        extra_records = []
         with (
             patch(
                 "metalsurfer.workflow.shared.create_conformers_from_smiles",
@@ -479,7 +465,7 @@ class TestProcessMolecule:
                 ),
             ),
         ):
-            results = process_molecule_bayesian(
+            outcome = process_molecule_bayesian(
                 "O",
                 "water",
                 slab,
@@ -487,19 +473,17 @@ class TestProcessMolecule:
                 refs,
                 ts_model=MagicMock(),
                 config=config,
-                extra_ml_records_out=extra_records,
             )
-        assert results is not None
-        assert len(results) == 1
-        assert len(extra_records) == 1
-        assert extra_records[0].is_penalty_label is True
-        assert extra_records[0].failure_stage == "validation"
+        assert outcome.results is not None
+        assert len(outcome.results) == 1
+        assert len(outcome.ml_records) == 1
+        assert outcome.ml_records[0].is_penalty_label is True
+        assert outcome.ml_records[0].failure_stage == "validation"
 
     def test_bo_deduplicated_results_are_tracked_for_ml(self):
         slab = SlabContainer(make_slab())
         refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
         config = AdsorptionConfig(
-            bo_enabled=True,
             bo_initial_random=1,
             bo_batch_size=1,
             bo_total_budget=1,
@@ -554,7 +538,6 @@ class TestProcessMolecule:
             kwargs["duplicate_results_out"].append(results[1])
             return [results[0]]
 
-        extra_records = []
         with (
             patch(
                 "metalsurfer.workflow.shared.create_conformers_from_smiles",
@@ -579,7 +562,7 @@ class TestProcessMolecule:
                 ),
             ),
         ):
-            results = process_molecule_bayesian(
+            outcome = process_molecule_bayesian(
                 "O",
                 "water",
                 slab,
@@ -587,15 +570,14 @@ class TestProcessMolecule:
                 refs,
                 ts_model=MagicMock(),
                 config=config,
-                extra_ml_records_out=extra_records,
             )
 
-        assert results is not None
-        assert len(results) == 1
-        assert len(extra_records) == 1
-        assert extra_records[0].placement_id == 1
-        assert extra_records[0].label_source == "deduplicated_duplicate"
-        assert extra_records[0].is_penalty_label is False
+        assert outcome.results is not None
+        assert len(outcome.results) == 1
+        assert len(outcome.ml_records) == 1
+        assert outcome.ml_records[0].placement_id == 1
+        assert outcome.ml_records[0].label_source == "deduplicated_duplicate"
+        assert outcome.ml_records[0].is_penalty_label is False
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +764,7 @@ class TestSaveSummaryResults:
         save_summary_results([], surface_type="empty")
 
     def test_detailed_csv_includes_placement_descriptor_columns(self, workdir):
-        """When placement_descriptor is present, detailed CSV has descriptor columns."""
+        """Lean detailed CSV keeps pose features; provenance needs the knob."""
         atoms = place_molecule_on_slab(make_slab(), make_water())
         descriptor = make_placement_descriptor(
             placement_id=0,
@@ -814,11 +796,26 @@ class TestSaveSummaryResults:
             workdir / "results_test" / "adsorption_energies_detailed.csv"
         )
         assert "conformer_index" in detail_df.columns
-        assert "orientation_type" in detail_df.columns
-        assert "site_type" in detail_df.columns
-        assert "shape" in detail_df.columns
-        assert detail_df.iloc[0]["orientation_type"] == "vertical"
-        assert detail_df.iloc[0]["shape"] == "linear"
+        assert "x_abs" in detail_df.columns
+        assert "quat_w" in detail_df.columns
+        assert "orientation_type" not in detail_df.columns
+        assert "site_type" not in detail_df.columns
+        assert "shape" not in detail_df.columns
+        assert "initial_orientation_type" not in detail_df.columns
+
+        save_summary_results(
+            [rr],
+            surface_type="test_rich",
+            config=AdsorptionConfig(export_placement_provenance=True),
+        )
+        rich_df = pd.read_csv(
+            workdir / "results_test_rich" / "adsorption_energies_detailed.csv"
+        )
+        assert "initial_orientation_type" in rich_df.columns
+        assert "initial_site_type" in rich_df.columns
+        assert "initial_shape" in rich_df.columns
+        assert rich_df.iloc[0]["initial_orientation_type"] == "vertical"
+        assert rich_df.iloc[0]["initial_shape"] == "linear"
 
 
 # ---------------------------------------------------------------------------

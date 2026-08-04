@@ -4,12 +4,13 @@
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
 Run from project root: pip install -e ".[mlip]"
 
-``skip_topology_check=True`` (1) enables dissociative hollow-site pair placements on
-the periodic slab and (2) disables post-relaxation connectivity / decomposition
-checks so structures where the H–H bond has broken are retained. E_ads is always
-reported vs isolated molecular E(H₂). On Ru(0001) with UMA, many minima relax to
-molecular H₂ physisorption (~0.75 Å H–H); dissociated minima are also allowed when
-the model finds them.
+``enable_dissociative_placement=True`` enables dissociative hollow-site pair
+placements on the periodic slab. ``skip_topology_check=True`` disables
+post-relaxation connectivity / decomposition checks so structures where the
+H–H bond has broken are retained. E_ads is always reported vs isolated
+molecular E(H₂). On Ru(0001) with UMA, many minima relax to molecular H₂
+physisorption (~0.75 Å H–H); dissociated minima are also allowed when the
+model finds them.
 
 Uses a modest placement count because many dissociative trials desorb on this surface.
 Initial z heights use default ``placement_z_range`` scale factors on
@@ -86,7 +87,8 @@ def main() -> int:
     surface_type = "h2_ru_slab"
     results_dir = str(results_dir_for(surface_type))
 
-    # skip_topology_check=True: hollow-pair placements + skip connectivity checks.
+    # enable_dissociative_placement: hollow-pair placements.
+    # skip_topology_check: allow fragmented adsorbates after relax.
     # Modest placement count + GPU memory padding for small demo GPUs (~15 GB).
     config = AdsorptionConfig(
         material_type="slab",
@@ -96,6 +98,7 @@ def main() -> int:
         autobatcher_max_memory_padding=0.8,
         autobatcher_max_memory_scaler=500,
         autobatcher_max_atoms_to_try=5000,
+        enable_dissociative_placement=True,
         skip_topology_check=True,
         stage2_steps=500,
     )

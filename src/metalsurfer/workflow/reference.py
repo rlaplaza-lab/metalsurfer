@@ -12,7 +12,7 @@ from ..optimization import (
     clear_autobatcher_cache,
     optimize_isolated_molecules_batched,
 )
-from ..surfaces import SlabContainer
+from ..surface_prep import SlabContainer
 from .shared import _prepare_atoms_for_calculator
 
 logger = logging.getLogger(__name__)

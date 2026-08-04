@@ -1,12 +1,20 @@
-"""Material-type helpers shared by geometry and sites modules.
+"""Material-type helpers shared by geometry and site-enumeration modules.
 
 Kept in a separate module so that both :mod:`geometry` (which needs
-:func:`material_aware_pbc`) and :mod:`sites` (which defines site detection
-but imports covalent radii from :mod:`geometry`) can import these utilities
-without creating a circular dependency.
+:func:`material_aware_pbc`) and site enumeration / Voronoi helpers can import
+these utilities without creating a circular dependency.
 """
 
 from ase import Atoms
+
+from .site_types import Site
+
+# Shared PBC flags for distance math, ASE layout, and substrate validation.
+MATERIAL_PBC: dict[str, tuple[bool, bool, bool]] = {
+    "slab": (True, True, False),
+    "porous": (True, True, True),
+    "nanoparticle": (False, False, False),
+}
 
 
 def material_aware_pbc(material_type: str) -> list[bool]:
@@ -16,15 +24,13 @@ def material_aware_pbc(material_type: str) -> list[bool]:
     - porous: ``[True, True, True]`` — fully 3D periodic.
     - nanoparticle: ``[False, False, False]`` — no PBC.
     """
-    if material_type == "porous":
-        return [True, True, True]
-    if material_type == "nanoparticle":
-        return [False, False, False]
-    if material_type == "slab":
-        return [True, True, False]
-    raise ValueError(
-        f"material_type must be 'slab', 'nanoparticle', or 'porous', got {material_type!r}"
-    )
+    try:
+        return list(MATERIAL_PBC[material_type])
+    except KeyError as exc:
+        raise ValueError(
+            f"material_type must be 'slab', 'nanoparticle', or 'porous', "
+            f"got {material_type!r}"
+        ) from exc
 
 
 def calculator_pbc_for_atoms(atoms: Atoms) -> list[bool]:
@@ -40,20 +46,11 @@ def calculator_pbc_for_atoms(atoms: Atoms) -> list[bool]:
 
 
 def material_type_for_placement(
-    site: dict[str, object] | None,
+    site: Site | None,
     *,
     when_no_site: str,
 ) -> str:
-    """Return ``site['material_type']`` or *when_no_site* when *site* is None.
-
-    When *site* is provided, it must be a site dict from
-    :func:`sites.get_unified_sites` (or equivalent) including ``material_type``.
-    """
+    """Return ``site.material_type`` or *when_no_site* when *site* is None."""
     if site is None:
         return when_no_site
-    material_type = site.get("material_type")
-    if material_type is None:
-        raise ValueError(
-            "placement site dict must include 'material_type' (use get_unified_sites)"
-        )
-    return str(material_type)
+    return str(site.material_type)

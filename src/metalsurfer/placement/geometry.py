@@ -190,6 +190,11 @@ def _get_vdw_radius(symbol: str) -> float | None:
     return float(cov * _VDW_RADIUS_FROM_COVALENT_SCALE)
 
 
+def _cell_has_volume(cell: np.ndarray) -> bool:
+    """True when *cell* has non-zero volume (supports left-handed cells)."""
+    return abs(float(np.linalg.det(np.asarray(cell, dtype=float)))) > 0.0
+
+
 def _mol_slab_pairwise_distances(
     mol_pos: np.ndarray,
     slab_pos: np.ndarray,
@@ -201,7 +206,7 @@ def _mol_slab_pairwise_distances(
     if m == 0 or s == 0:
         return np.zeros((m, s))
     diffs = mol_pos[:, None, :] - slab_pos[None, :, :]
-    if np.linalg.det(cell) > 0 and np.any(pbc):
+    if _cell_has_volume(cell) and np.any(pbc):
         diffs_flat = diffs.reshape(-1, 3)
         _, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
         return mic_dists.reshape(m, s)
@@ -301,7 +306,9 @@ def _compute_inertia_tensor(
     else:
         masses = np.asarray(masses, dtype=float)
         if len(masses) != n:
-            masses = np.ones(n)
+            raise ValueError(
+                f"masses length {len(masses)} does not match positions length {n}"
+            )
     com = np.average(pos, axis=0, weights=masses)
     inertia = np.zeros((3, 3))
     for i in range(n):
@@ -461,42 +468,51 @@ def _principal_axis_rotation(
     """
     pos = np.asarray(adsorbate_positions, dtype=float).copy()
     com = np.mean(pos, axis=0)
+    normal = np.asarray(normal_vector, dtype=float)
+    nrm = float(np.linalg.norm(normal))
+    if nrm > _VECTOR_NORM_EPS:
+        normal = normal / nrm
 
     _, eigenvecs = _compute_inertia_tensor(pos)
     principal_axes = eigenvecs
 
-    # gentle pre-alignment toward surface normal
+    # Gentle pre-alignment toward surface normal. Skip when already flat-ish:
+    # shortest axis already aligned with n, or longest not aligned with n.
     shortest_axis = principal_axes[:, 0]
     longest_axis = principal_axes[:, -1]
-    if (
-        abs(np.dot(shortest_axis, normal_vector)) < _PRINCIPAL_AXIS_SHORT_ALIGN_MAX_DOT
-        and abs(np.dot(longest_axis, normal_vector))
+    needs_prealign = (
+        abs(float(np.dot(shortest_axis, normal))) < _PRINCIPAL_AXIS_SHORT_ALIGN_MAX_DOT
+        and abs(float(np.dot(longest_axis, normal)))
         > _PRINCIPAL_AXIS_LONG_ALIGN_MIN_DOT
-    ):
-        if np.dot(shortest_axis, normal_vector) < 0:
+    )
+    if needs_prealign:
+        if float(np.dot(shortest_axis, normal)) < 0:
             shortest_axis = -shortest_axis
-        rot_ax = np.cross(shortest_axis, normal_vector)
-        norm = np.linalg.norm(rot_ax)
+        rot_ax = np.cross(shortest_axis, normal)
+        norm = float(np.linalg.norm(rot_ax))
         if norm > _PRINCIPAL_AXIS_ROT_AXIS_MIN_NORM:
             rot_ax /= norm
             angle_deg = 0.5 * np.degrees(
-                np.arccos(np.clip(np.dot(shortest_axis, normal_vector), -1, 1))
+                np.arccos(np.clip(float(np.dot(shortest_axis, normal)), -1, 1))
             )
             R_pre = _rotation_around_axis(rot_ax, angle_deg)
             pos = (R_pre @ (pos - com).T).T + com
+            # Axes change after the pre-align rotation.
+            _, principal_axes = _compute_inertia_tensor(pos)
+            com = np.mean(pos, axis=0)
 
     best_score = float("-inf")
     best_positions: np.ndarray | None = None
 
     for ax_idx in range(3):
         axis = principal_axes[:, ax_idx].copy()
-        if np.dot(axis, normal_vector) < 0:
+        if float(np.dot(axis, normal)) < 0:
             axis = -axis
         for step in range(_PRINCIPAL_AXIS_ROTATION_STEPS):
             R = _rotation_around_axis(axis, step * _PRINCIPAL_AXIS_ROTATION_STEP_DEG)
             test = (R @ (pos - com).T).T + com
             # score by clearance along the surface normal (higher = more clearance)
-            clearance = float(np.min(test @ normal_vector))
+            clearance = float(np.min(test @ normal))
             if clearance > best_score:
                 best_score = clearance
                 best_positions = test.copy()
@@ -508,6 +524,33 @@ def _principal_axis_rotation(
     return best_positions, best_score
 
 
+def _mol_slab_contact_arrays(
+    molecule_atoms: Atoms,
+    slab: Atoms,
+    *,
+    material_type: str = "slab",
+    exclude_slab_atoms: int | None = None,
+    pairwise_distances: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, list[str], list[str], np.ndarray, list[bool], np.ndarray]:
+    """Slice mol/slab positions and symbols; return MIC pairwise distances."""
+    mol_syms = list(molecule_atoms.get_chemical_symbols())
+    mol_pos = molecule_atoms.get_positions()
+    slab_syms = list(slab.get_chemical_symbols())
+    if exclude_slab_atoms is not None:
+        slab_pos = slab.get_positions()[:exclude_slab_atoms]
+        slab_syms = slab_syms[:exclude_slab_atoms]
+    else:
+        slab_pos = slab.get_positions()
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = material_aware_pbc(material_type)
+    dists = (
+        pairwise_distances
+        if pairwise_distances is not None
+        else _mol_slab_pairwise_distances(mol_pos, slab_pos, cell, pbc)
+    )
+    return mol_pos, slab_pos, mol_syms, slab_syms, cell, pbc, dists
+
+
 def detect_vdw_overlaps(
     molecule_atoms: Atoms,
     slab: Atoms,
@@ -515,25 +558,25 @@ def detect_vdw_overlaps(
     material_type: str = "slab",
     vdw_scale: float = 1.0,
     exclude_slab_atoms: int | None = None,
+    pairwise_distances: np.ndarray | None = None,
 ) -> tuple[list[tuple[int, int, float, float]], float]:
     """Detect VDW overlaps between molecule and slab atoms.
 
     Returns (overlaps, min_distance) where overlaps entries are
     (mol_idx, slab_idx, distance, overlap_amount).
-    """
-    mol_syms = molecule_atoms.get_chemical_symbols()
-    slab_syms = slab.get_chemical_symbols()
-    mol_pos = molecule_atoms.get_positions()
-    if exclude_slab_atoms is not None:
-        slab_pos = slab.get_positions()[:exclude_slab_atoms]
-        slab_syms = slab_syms[:exclude_slab_atoms]
-    else:
-        slab_pos = slab.get_positions()
 
-    # Use the slab's cell and PBC for all MIC distances (adsorbate shares that frame).
-    cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(material_type)
-    dists = _mol_slab_pairwise_distances(mol_pos, slab_pos, cell, pbc)
+    When *pairwise_distances* is provided (shape ``(n_mol, n_slab)``), skip
+    recomputing MIC distances via :func:`_mol_slab_pairwise_distances`.
+    """
+    _mol_pos, _slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
+        _mol_slab_contact_arrays(
+            molecule_atoms,
+            slab,
+            material_type=material_type,
+            exclude_slab_atoms=exclude_slab_atoms,
+            pairwise_distances=pairwise_distances,
+        )
+    )
     min_distance = float(np.min(dists)) if dists.size else float("inf")
 
     if dists.size == 0:
@@ -570,19 +613,14 @@ def calculate_contact_quality(
     material_type: str = "slab",
 ) -> dict[str, float | int]:
     """Contact metrics: min distance, covalent ratio at closest pair, and pair counts."""
-    mol_syms = molecule_atoms.get_chemical_symbols()
-    slab_syms = slab.get_chemical_symbols()
-    mol_pos = molecule_atoms.get_positions()
-    if exclude_slab_atoms is not None:
-        slab_pos = slab.get_positions()[:exclude_slab_atoms]
-        slab_syms = slab_syms[:exclude_slab_atoms]
-    else:
-        slab_pos = slab.get_positions()
-
-    # Use the slab's cell and PBC for all MIC distances (adsorbate shares that frame).
-    cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(material_type)
-    dists = _mol_slab_pairwise_distances(mol_pos, slab_pos, cell, pbc)
+    _mol_pos, _slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
+        _mol_slab_contact_arrays(
+            molecule_atoms,
+            slab,
+            material_type=material_type,
+            exclude_slab_atoms=exclude_slab_atoms,
+        )
+    )
     mol_size, slab_size = dists.shape
     if mol_size == 0 or slab_size == 0:
         return {
@@ -603,12 +641,8 @@ def calculate_contact_quality(
     )
 
     if contact_distance_threshold is None:
-        r1c = _get_covalent_radius(mol_syms[i_closest])
-        r2c = _get_covalent_radius(slab_syms[j_closest])
-        if r1c is not None and r2c is not None:
-            contact_distance_threshold = _CONTACT_QUALITY_COVALENT_SUM_SCALE * (
-                r1c + r2c
-            )
+        if r1 is not None and r2 is not None:
+            contact_distance_threshold = _CONTACT_QUALITY_COVALENT_SUM_SCALE * (r1 + r2)
         else:
             contact_distance_threshold = _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM
     mask = dists <= contact_distance_threshold
@@ -638,60 +672,28 @@ def calculate_min_distance(
     """Minimum interatomic distance between two position arrays.
 
     Uses ASE's :func:`~ase.geometry.find_mic` for minimum-image distances
-    with non-orthogonal cells.
+    with non-orthogonal cells via :func:`_mol_slab_pairwise_distances`.
 
-    When *cell* is periodic (det > 0), *pbc* must be provided explicitly so
+    When *cell* is periodic (``abs(det) > 0``), *pbc* must be provided explicitly so
     slab ([True, True, False]), nanoparticle ([False, False, False]), and
     porous ([True, True, True]) calculations cannot accidentally fall back to
     incorrect full-3D periodicity.
     """
-    if use_pbc and cell is not None and np.linalg.det(cell) > 0:
-        if pbc is None:
-            raise ValueError(
-                "pbc must be provided when cell is periodic; "
-                "pass slab/cluster/porous flags explicitly"
-            )
-        p1 = np.asarray(positions1)
-        p2 = np.asarray(positions2)
-        diffs = p1[:, None, :] - p2[None, :, :]
-        diffs_flat = diffs.reshape(-1, 3)
-        _, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
-        return float(np.min(mic_dists))
-    p1 = positions1.reshape(-1, 1, 3)
-    p2 = positions2.reshape(1, -1, 3)
-    return float(np.min(np.linalg.norm(p1 - p2, axis=2)))
-
-
-def calculate_min_distance_pair(
-    positions1: np.ndarray,
-    positions2: np.ndarray,
-    cell: np.ndarray | None = None,
-    pbc: list[bool] | None = None,
-) -> tuple[float, int, int]:
-    """Like :func:`calculate_min_distance` but also returns the index pair.
-
-    Returns ``(min_distance, idx1, idx2)`` where *idx1* indexes into
-    *positions1* and *idx2* indexes into *positions2*.
-    """
     p1 = np.asarray(positions1)
     p2 = np.asarray(positions2)
-    if cell is not None and np.linalg.det(cell) > 0:
+    if use_pbc and cell is not None and _cell_has_volume(cell):
         if pbc is None:
             raise ValueError(
                 "pbc must be provided when cell is periodic; "
                 "pass slab/cluster/porous flags explicitly"
             )
-        diffs = p1[:, None, :] - p2[None, :, :]
-        diffs_flat = diffs.reshape(-1, 3)
-        _, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
-        flat_idx = int(np.argmin(mic_dists))
+        cell_arr = np.asarray(cell, dtype=float)
+        pbc_list = list(pbc)
     else:
-        diffs = p1[:, None, :] - p2[None, :, :]
-        dists = np.linalg.norm(diffs.reshape(-1, 3), axis=1)
-        mic_dists = dists
-        flat_idx = int(np.argmin(mic_dists))
-    idx1, idx2 = divmod(flat_idx, len(p2))
-    return float(mic_dists[flat_idx]), idx1, idx2
+        cell_arr = np.eye(3)
+        pbc_list = [False, False, False]
+    dists = _mol_slab_pairwise_distances(p1, p2, cell_arr, pbc_list)
+    return float(np.min(dists))
 
 
 def check_initial_placement_distance(
@@ -708,53 +710,38 @@ def check_initial_placement_distance(
 ) -> tuple[bool, float, str | None]:
     """Check if the initial placement satisfies distance constraints.
 
-    Lower bound: no atom may be within covalent binding distance. Uses
-    (r_mol + r_surf) * min_contact_ratio for the closest atom pair, ensuring
-    we avoid bond breaking or formation in standard cases.
-    Upper bound: when max_initial_distance is set, reject placements too far
-    (desorption-prone starts). Post-optimization, check_desorption uses
-    binding_distance_threshold to reject structures that drifted too far.
+    Lower bound uses ``max(min_distance, covalent_sum * min_contact_ratio)``
+    for the closest pair when radii are known.
+    Optional upper bound and vdw-overlap checks when configured.
+    ``exclude_slab_atoms`` limits the slab side (saturation with pre-adsorbed atoms).
+    PBC comes from *material_type* via :func:`material_aware_pbc`.
 
-    When reject_vdw_overlaps=True, also checks for van der Waals overlaps
-    (harder contact), which catches cases where atoms are too close even if
-    covalent scaling is satisfied. Useful for stricter initial validation.
-
-    exclude_slab_atoms: if set, only consider first N atoms of slab for
-    distance checking (for saturation mode where slab may contain pre-adsorbed
-    atoms). Use len(bare_slab) to exclude previously placed adsorbates.
-
-    PBC flags come from explicit *material_type* via :func:`material_aware_pbc`,
-    consistent with the post-optimisation desorption check in
-    :mod:`~metalsurfer.filters`.
-
-    Returns:
-        ``(ok, actual_min_distance, reason)`` where ``reason`` is ``None`` on
-        success or one of ``\"too_close\"``, ``\"too_far\"``, ``\"vdw_overlap\"``.
+    Returns ``(ok, actual_min_distance, reason)`` with ``reason`` one of
+    ``None``, ``\"too_close\"``, ``\"too_far\"``, ``\"vdw_overlap\"``,
+    ``\"empty_geometry\"``.
     """
-    mol_syms = molecule_atoms.get_chemical_symbols()
-    mol_pos = molecule_atoms.get_positions()
-
-    if exclude_slab_atoms is not None:
-        slab_pos = slab.get_positions()[:exclude_slab_atoms]
-        slab_syms = np.array(slab.get_chemical_symbols())[:exclude_slab_atoms]
-    else:
-        slab_pos = slab.get_positions()
-        slab_syms = slab.get_chemical_symbols()
-
-    cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(material_type)
-
-    actual_min, mol_idx, slab_idx = calculate_min_distance_pair(
-        mol_pos, slab_pos, cell=cell, pbc=pbc
+    _mol_pos, _slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
+        _mol_slab_contact_arrays(
+            molecule_atoms,
+            slab,
+            material_type=material_type,
+            exclude_slab_atoms=exclude_slab_atoms,
+        )
     )
+    if dists.size == 0 or dists.shape[0] == 0 or dists.shape[1] == 0:
+        return False, float("inf"), "empty_geometry"
+
+    flat_idx = int(np.argmin(dists.ravel()))
+    mol_idx, slab_idx = divmod(flat_idx, dists.shape[1])
+    actual_min = float(dists[mol_idx, slab_idx])
 
     r1 = _get_covalent_radius(mol_syms[mol_idx])
     r2 = _get_covalent_radius(slab_syms[slab_idx])
     if r1 is not None and r2 is not None:
-        min_allowed = (r1 + r2) * min_contact_ratio
+        min_allowed = max(float(min_distance), (r1 + r2) * float(min_contact_ratio))
     else:
         min_allowed = max(
-            min_distance,
+            float(min_distance),
             _MIN_DISTANCE_COVALENT_FALLBACK_SCALE
             * _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM,
         )
@@ -770,7 +757,6 @@ def check_initial_placement_distance(
     if max_initial_distance is not None and actual_min > max_initial_distance:
         return False, actual_min, "too_far"
 
-    # Optional VDW overlap check: stricter contact validation
     if reject_vdw_overlaps:
         overlaps, _ = detect_vdw_overlaps(
             molecule_atoms,
@@ -778,6 +764,7 @@ def check_initial_placement_distance(
             material_type=material_type,
             vdw_scale=vdw_overlap_scale,
             exclude_slab_atoms=exclude_slab_atoms,
+            pairwise_distances=dists,
         )
         if overlaps:
             logger.debug(
@@ -816,12 +803,23 @@ def check_adsorbate_separation(
         return True, float("inf")
 
     new_pos = new_adsorbate.get_positions()
-
-    cell_arr = np.asarray(cell, dtype=float) if cell is not None else np.eye(3)
-    pbc_list = pbc if pbc is not None else [False, False, False]
-    if pbc is not None and cell is not None and np.linalg.det(cell_arr) > 0:
+    pbc_requested = pbc is not None and any(pbc)
+    if pbc_requested:
+        if cell is None or not _cell_has_volume(cell):
+            raise ValueError(
+                "cell with non-zero volume must be provided when pbc is requested; "
+                "pass slab/cluster/porous cell explicitly"
+            )
+        cell_arr = np.asarray(cell, dtype=float)
         dmat = _mol_slab_pairwise_distances(
-            new_pos, pre_adsorbed_positions, cell_arr, list(pbc_list)
+            new_pos, pre_adsorbed_positions, cell_arr, list(pbc)
+        )
+        min_dist = float(np.min(dmat)) if dmat.size else float("inf")
+    elif cell is not None and _cell_has_volume(cell) and pbc is not None:
+        # Explicit all-False pbc with a cell: still use the pairwise helper.
+        cell_arr = np.asarray(cell, dtype=float)
+        dmat = _mol_slab_pairwise_distances(
+            new_pos, pre_adsorbed_positions, cell_arr, list(pbc)
         )
         min_dist = float(np.min(dmat)) if dmat.size else float("inf")
     else:
