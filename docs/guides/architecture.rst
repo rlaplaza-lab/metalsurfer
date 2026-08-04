@@ -70,10 +70,12 @@ Also: ``finalize_substrate``, ``relax_substrate``,
 
 **3. Mid-level per-molecule APIs** (custom research loops)
 
+Import from :mod:`metalsurfer.workflow` (not the package root):
+
 - ``process_molecule`` / ``process_molecule_bayesian`` — return
   :class:`~metalsurfer.workflow.MoleculeScreenOutcome` (``results``,
   ``failure_summary``, ``ml_records``, optional BO memory / transfer)
-- :func:`~metalsurfer.run_saturation_screening` (pass
+- :func:`~metalsurfer.workflow.run_saturation_screening` (pass
   ``bo_enabled=True`` for BO steps; campaign APIs set this for you)
 - ``calculate_reference_energies``, ``load_molecules``
 
@@ -81,13 +83,20 @@ Internal helpers (``_bootstrap_screening_run``, ``_normalize_molecules_input``,
 …) live in ``workflow/shared.py`` and are not part of the stable public
 surface.
 
-**4. Infrastructure**
+**4. Infrastructure and YAML**
 
-Placement (``enumerate_placement_specs``, ``generate_placement_from_spec``,
-``generate_placement_from_descriptor``, ``calculate_min_distance``,
-``get_symmetry_aware_sites``, …), optimization / TorchSim helpers, filters,
-I/O, ML utilities, symmetry, logging/errors — importable from the top-level
-``metalsurfer`` namespace where re-exported. YAML campaigns:
+Root re-exports a small placement surface:
+:func:`~metalsurfer.enumerate_placement_specs` and
+:func:`~metalsurfer.generate_placement_from_spec`. Everything else lives in
+submodules — import explicitly, for example:
+
+- ``metalsurfer.placement`` — ``generate_placement_from_descriptor``,
+  ``calculate_min_distance``, ``get_symmetry_aware_sites``, …
+- ``metalsurfer.optimization`` — TorchSim / FairChem helpers
+- ``metalsurfer.filters``, ``metalsurfer.io_results``, ``metalsurfer.ml``,
+  ``metalsurfer.symmetry``, ``metalsurfer.conformers``
+
+YAML campaigns use the root helpers
 :func:`~metalsurfer.load_campaign_yaml` + :func:`~metalsurfer.run_campaign`
 (``campaign_schema.py`` + ``campaigns.py``).
 
@@ -126,12 +135,19 @@ Physical stages across run modes:
 
 Campaign routing:
 
-=========== ======================== ===========================================
-API         ``molecules``            Path
-=========== ======================== ===========================================
-``run_adsorption`` / ``_bo``  CSV or list   ``campaigns._run_binding_campaign``
-``run_saturation`` / ``_bo``  CSV or list   ``run_saturation_screening`` (``bo_enabled`` from mode)
-=========== ======================== ===========================================
+.. list-table::
+   :header-rows: 1
+   :widths: 28 22 50
+
+   * - API
+     - ``molecules``
+     - Path
+   * - ``run_adsorption`` / ``_bo``
+     - CSV or list
+     - ``campaigns._run_binding_campaign``
+   * - ``run_saturation`` / ``_bo``
+     - CSV or list
+     - ``workflow.run_saturation_screening`` (``bo_enabled`` from mode)
 
 Both share ``process_molecule`` or ``process_molecule_bayesian`` (returning
 ``MoleculeScreenOutcome``) where applicable.
@@ -223,13 +239,18 @@ contexts) backs ``resolve_site_context_for_sampling``, which:
 
 Material strategies:
 
-======= ================================================================
-Type    Site strategy
-======= ================================================================
-slab    Top layer along normal → hybrid topology + Voronoi enrichment
-nanoparticle  Full-framework Voronoi; outward normals; no PBC images
-porous  3×3×3 images; pore sites when the framework spans the cell
-======= ================================================================
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Type
+     - Site strategy
+   * - slab
+     - Top layer along normal → hybrid topology + Voronoi enrichment
+   * - nanoparticle
+     - Full-framework Voronoi; outward normals; no PBC images
+   * - porous
+     - 3×3×3 images; pore sites when the framework spans the cell
 
 Key knobs: ``voronoi_probe_radius``, ``voronoi_max_site_distance``,
 ``top_layer_tolerance``, ``symmetry_tolerance``,
@@ -321,18 +342,23 @@ Placement materialization and ML injectivity
 
 The surrogate sees **resolved absolute geometry**, not discrete site IDs.
 
-=========================== ================================================
-Stage                       Role
-=========================== ================================================
-``PlacementSpec``           Enumeration template
-``generate_placement_from_spec``  → ``PlacementDescriptor`` + ``Atoms``
-``PlacementDescriptor`` / ``PlacementPose``  ``x_abs``, ``y_abs``, ``z_abs``, quat, …
-``PlacementRecord``         ML row (schema **3.0**); stores a
-                            ``descriptor: PlacementDescriptor`` plus
-                            energies/labels/context (CSV still flattens)
-``extract_features``        **8 features:** x, y, z, ``conformer_index``,
-                            quat_w/x/y/z
-=========================== ================================================
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Stage
+     - Role
+   * - ``PlacementSpec``
+     - Enumeration template
+   * - ``generate_placement_from_spec``
+     - → ``PlacementDescriptor`` + ``Atoms``
+   * - ``PlacementDescriptor`` / ``PlacementPose``
+     - ``x_abs``, ``y_abs``, ``z_abs``, quat, …
+   * - ``PlacementRecord``
+     - ML row (schema **3.0**); stores a ``descriptor: PlacementDescriptor``
+       plus energies/labels/context (CSV still flattens)
+   * - ``extract_features``
+     - **8 features:** x, y, z, ``conformer_index``, quat_w/x/y/z
 
 **Not in the feature vector:** ``site_index``, ``site_type``,
 ``hollow_order``, ``orientation_type``, tilts/azimuths, ``z_fraction``,
@@ -355,16 +381,24 @@ TorchSim batched relaxation
 Many slab+adsorbate relaxations run **in parallel** on GPU
 (``optimization.py``).
 
-==================================== ========================================
-Mechanism                            Role
-==================================== ========================================
-``optimize_adsorbate_slab_batched`` + ``InFlightAutoBatcher``  Pack N relaxations per wave
-``estimate_parallel_relaxation_capacity``  Memory probe / scalers
-``resolve_workload_config``          Autotune ``num_placements`` / BO batches
-``resolve_saturation_step_workload_config``  Re-probe as the slab grows
-``stage1_steps`` + ``stage2_steps``  Two-stage ``ts.optimize`` (FIRE default)
-``saturation_reuse`` / ``saturation_autobatcher_reuse``  Amortize probes on deep coverage
-==================================== ========================================
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Mechanism
+     - Role
+   * - ``optimize_adsorbate_slab_batched`` + ``InFlightAutoBatcher``
+     - Pack N relaxations per wave
+   * - ``estimate_parallel_relaxation_capacity``
+     - Memory probe / scalers
+   * - ``resolve_workload_config``
+     - Autotune ``num_placements`` / BO batches
+   * - ``resolve_saturation_step_workload_config``
+     - Re-probe as the slab grows
+   * - ``stage1_steps`` + ``stage2_steps``
+     - Two-stage ``ts.optimize`` (FIRE default)
+   * - ``saturation_reuse`` / ``saturation_autobatcher_reuse``
+     - Amortize probes on deep coverage
 
 Leaving ``num_placements`` (and BO batch fields) as ``None`` is intentional:
 the library sizes parallel work to GPU memory.

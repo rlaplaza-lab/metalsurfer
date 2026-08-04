@@ -19,7 +19,7 @@ E_ads = E_adslab - E_slab - E_molecule
 | Screen many molecules | `run_adsorption` / `run_adsorption_bo` |
 | Grow coverage on one surface | `run_saturation` / `run_saturation_bo` |
 | YAML campaign | `load_campaign_yaml` + `run_campaign` |
-| Build/load the surface first | `surface_prep.prepare_substrate` |
+| Build/load the surface first | `prepare_substrate` (also `surface_prep.prepare_substrate`) |
 
 Prefer `run_*_bo` when you want Bayesian placement selection. BO mode is
 chosen by the entry point (`run_adsorption_bo` / `run_saturation_bo`) or YAML

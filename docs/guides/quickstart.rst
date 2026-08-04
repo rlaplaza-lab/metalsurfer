@@ -73,8 +73,7 @@ molecule list in memory and you want a typed
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, run_adsorption
-   from metalsurfer.surface_prep import prepare_substrate
+   from metalsurfer import AdsorptionConfig, prepare_substrate, run_adsorption
 
    config = AdsorptionConfig(
        material_type="slab",
@@ -167,8 +166,7 @@ z-layout, PBC, freeze constraints, and validation:
 .. code-block:: python
 
    from ase.build import fcc111
-   from metalsurfer import AdsorptionConfig, run_adsorption
-   from metalsurfer.surface_prep import prepare_substrate
+   from metalsurfer import AdsorptionConfig, prepare_substrate, run_adsorption
 
    config = AdsorptionConfig(material_type="slab", seed=42)
 
@@ -195,8 +193,7 @@ The runnable ``examples/ethene_pt12_binding_energy.py`` uses the same workflow w
 .. code-block:: python
 
    from ase import Atoms
-   from metalsurfer import AdsorptionConfig, run_adsorption
-   from metalsurfer.surface_prep import prepare_substrate
+   from metalsurfer import AdsorptionConfig, prepare_substrate, run_adsorption
 
    config = AdsorptionConfig(
        material_type="nanoparticle",
@@ -229,8 +226,7 @@ connectivity checks; E_ads still uses molecular E(H₂):
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, run_adsorption
-   from metalsurfer.surface_prep import prepare_substrate
+   from metalsurfer import AdsorptionConfig, prepare_substrate, run_adsorption
 
    config = AdsorptionConfig(
        material_type="slab",
@@ -262,7 +258,7 @@ porous frameworks, z-alignment is skipped; PBC and constraints still apply:
 
 .. code-block:: python
 
-   from metalsurfer.surface_prep import finalize_substrate
+   from metalsurfer import AdsorptionConfig, finalize_substrate
 
    config = AdsorptionConfig(material_type="slab", slab_relaxation_mode="none", seed=42)
    slab = finalize_substrate(slab_atoms, config)
@@ -279,8 +275,7 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, run_adsorption_bo
-   from metalsurfer.surface_prep import prepare_substrate
+   from metalsurfer import AdsorptionConfig, prepare_substrate, run_adsorption_bo
 
    config = AdsorptionConfig(
        material_type="slab",
@@ -324,9 +319,9 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
    from metalsurfer import (
        AdsorptionConfig,
        MultiMolSaturationRunResult,
+       prepare_substrate,
        run_saturation,
    )
-   from metalsurfer.surface_prep import prepare_substrate
 
    config = AdsorptionConfig(
        material_type="slab",

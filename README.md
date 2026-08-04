@@ -46,8 +46,7 @@ See the [installation guide](https://metalsurfer.readthedocs.io/en/latest/guides
 ## Quick start
 
 ```python
-from metalsurfer import AdsorptionConfig, run_adsorption
-from metalsurfer.surface_prep import prepare_substrate
+from metalsurfer import AdsorptionConfig, prepare_substrate, run_adsorption
 
 config = AdsorptionConfig(material_type="slab", seed=42)
 

@@ -260,7 +260,8 @@ For periodic slabs and porous frameworks, expand the substrate **during prep**
 
 .. code-block:: python
 
-   from metalsurfer import AdsorptionConfig, create_conformers_from_smiles
+   from metalsurfer import AdsorptionConfig
+   from metalsurfer.conformers import create_conformers_from_smiles
    from metalsurfer.surface_prep import prepare_substrate, resize_substrate_for_molecule
 
    config = AdsorptionConfig(material_type="slab", seed=42)
