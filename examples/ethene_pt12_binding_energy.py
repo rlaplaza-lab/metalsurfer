@@ -88,11 +88,12 @@ def main() -> int:
     )
 
     # Modest placement count + GPU memory padding for small demo GPUs (~15 GB).
+    # Prefer enough samples that at least one chemisorbed ethene pose survives.
     config = AdsorptionConfig(
         material_type="nanoparticle",
         seed=42,
         num_conformers=3,
-        num_placements=5,
+        num_placements=25,
         autobatcher_max_memory_padding=0.8,
         autobatcher_max_memory_scaler=500,
         autobatcher_max_atoms_to_try=5000,

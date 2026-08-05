@@ -235,8 +235,12 @@ def build_config(*, device: str) -> AdsorptionConfig:
         autobatcher_max_atoms_to_try=5000,
         device=device,
         stage2_steps=500,
-        placement_z_range=(4.0, 7.0),
+        # Clearance-aware height: nearest adsorbate atom sits in this window.
+        # (Older COM-centered demos used ~4–7 Å; that now starts desorbed.)
+        placement_z_range=(2.0, 3.5),
         placement_z_scale_by_covalent_radius=False,
+        # Bulky physisorption can sit slightly past the default 4 Å chemisorption gate.
+        binding_distance_threshold=5.0,
         slab_relaxation_mode="none",
         top_layer_tolerance=PAPER_TOP_LAYER_TOLERANCE,
         bo_total_budget=BO_TOTAL_BUDGET,
@@ -245,12 +249,12 @@ def build_config(*, device: str) -> AdsorptionConfig:
 
 
 def resolve_bo_budget(config: AdsorptionConfig) -> ResolvedBoBudget | None:
-    if config.bo_initial_random is None or config.bo_batch_size is None:
+    if config.bo.initial_random is None or config.bo.batch_size is None:
         return None
     return ResolvedBoBudget(
-        bo_initial_random=config.bo_initial_random,
-        bo_batch_size=config.bo_batch_size,
-        bo_total_budget=config.bo_total_budget,
+        bo_initial_random=config.bo.initial_random,
+        bo_batch_size=config.bo.batch_size,
+        bo_total_budget=config.bo.total_budget,
         eval_budget=resolved_bo_eval_budget(config),
     )
 
@@ -939,7 +943,7 @@ def print_found_minima(
         )
     else:
         print(
-            f"BO acquisition batches: {config.bo_total_budget} "
+            f"BO acquisition batches: {config.bo.total_budget} "
             "(initial/batch sizes autotuned — see workflow log)"
         )
     print(
