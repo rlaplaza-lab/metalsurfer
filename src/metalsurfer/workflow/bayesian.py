@@ -476,14 +476,23 @@ def process_molecule_bayesian(
             if not unevaluated:
                 break
             batch_size = min(config.bo.batch_size, len(unevaluated))
+            acquisition = config.bo.acquisition
+            f_best = best_energy if np.isfinite(best_energy) else None
+            # EI/PI need a finite incumbent; before any valid E_ads, use LCB.
+            if acquisition in ("ei", "pi") and f_best is None:
+                logger.info(
+                    "BO: no valid E_ads yet; using LCB instead of %s for this batch",
+                    acquisition,
+                )
+                acquisition = "lcb"
             next_positions = score_and_select(
                 surrogate,
                 candidate_features,
                 batch_size=batch_size,
                 kappa=config.bo.ucb_kappa,
                 evaluated_indices=evaluated_pool_positions,
-                acquisition=config.bo.acquisition,
-                f_best=best_energy if np.isfinite(best_energy) else None,
+                acquisition=acquisition,
+                f_best=f_best,
             )
             # Random exploration only while transfer learning is active.
             # Pure BO screening keeps the full acquisition batch.

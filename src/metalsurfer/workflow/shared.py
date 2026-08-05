@@ -245,14 +245,6 @@ def _validate_adsorption(
     if len(adsorbate) == 0:
         return False, "no adsorbate atoms", None
 
-    if config.skip_desorption_check:
-        warn_once(
-            logger,
-            "skip_desorption",
-            "skip_desorption_check=True: desorption distance validation skipped",
-        )
-        return True, "desorption check skipped", None
-
     slab_positions = _surface_positions_for_distance(slab, surface_symbols)
 
     cell = np.asarray(atoms.get_cell())
@@ -263,6 +255,13 @@ def _validate_adsorption(
         use_pbc=True,
         pbc=material_aware_pbc(config.material_type),
     )
+    if config.skip_desorption_check:
+        warn_once(
+            logger,
+            "skip_desorption",
+            "skip_desorption_check=True: desorption distance validation skipped",
+        )
+        return True, f"desorption check skipped ({min_d:.2f} A)", float(min_d)
     if min_d > config.binding_distance_threshold:
         return False, f"desorbed ({min_d:.2f} A)", min_d
     return True, f"adsorbed ({min_d:.2f} A)", min_d
