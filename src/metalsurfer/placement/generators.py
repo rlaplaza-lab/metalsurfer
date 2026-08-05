@@ -8,8 +8,9 @@ and ``site_context`` — import those modules directly in tests.
 from __future__ import annotations
 
 import logging
-import warnings
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -48,6 +49,85 @@ from .site_types import Site
 logger = logging.getLogger(__name__)
 
 
+def resolve_materialize_workers(
+    n_jobs: int,
+    *,
+    n_tasks: int | None = None,
+    cpu_count: int | None = None,
+) -> int:
+    """Resolve joblib-style ``n_jobs`` to a concrete thread-pool size.
+
+    ``1`` is serial, ``>1`` is that many workers, ``-1`` uses all CPUs, and
+    values ``< -1`` use ``max(1, cpu_count + 1 + n_jobs)`` (so ``-2`` is all
+    but one CPU). When ``n_tasks`` is set, the result is capped at ``n_tasks``.
+    """
+    if n_jobs == 0:
+        raise ValueError("n_jobs must be != 0")
+    cpus = cpu_count if cpu_count is not None else (os.cpu_count() or 1)
+    cpus = max(int(cpus), 1)
+    if n_jobs < 0:
+        workers = cpus + 1 + int(n_jobs) if n_jobs < -1 else cpus
+        workers = max(1, workers)
+    else:
+        workers = max(1, int(n_jobs))
+    if n_tasks is not None:
+        workers = min(workers, max(1, int(n_tasks)))
+    return workers
+
+
+def generate_placements_from_specs(
+    specs: Sequence[PlacementSpec],
+    conformers: list[Atoms],
+    slab: Atoms,
+    config: AdsorptionConfig,
+    *,
+    smiles: str | None = None,
+    site_context: SiteContext | None = None,
+    slab_for_sites: Atoms | None = None,
+    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
+) -> list[tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]]:
+    """Materialize specs in input order, optionally via a thread pool.
+
+    Each entry is ``(result, fail_reason)`` matching
+    :func:`generate_placement_from_spec_with_reason`. Calculator attachment is
+    left to the caller. Worker count comes from
+    ``config.placement_materialize_workers`` (joblib-style ``n_jobs``).
+    """
+    if not specs:
+        return []
+
+    def _one(
+        spec: PlacementSpec,
+    ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
+        cached = (
+            materialization_cache.get(int(spec.placement_index))
+            if materialization_cache is not None
+            else None
+        )
+        if cached is not None:
+            adsorbate, descriptor = cached
+            return (adsorbate.copy(), descriptor), None
+        return generate_placement_from_spec_with_reason(
+            spec,
+            conformers,
+            slab,
+            config,
+            smiles=smiles,
+            site_context=site_context,
+            slab_for_sites=slab_for_sites,
+        )
+
+    n_workers = resolve_materialize_workers(
+        config.placement_materialize_workers,
+        n_tasks=len(specs),
+    )
+    if n_workers == 1 or len(specs) == 1:
+        return [_one(spec) for spec in specs]
+
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        return list(pool.map(_one, specs))
+
+
 @dataclass
 class _SpecGridInfo:
     is_dissociative: bool
@@ -83,22 +163,10 @@ def _spec_grid_info(
 ) -> _SpecGridInfo:
     """Compute the spec-enumeration inputs once for both enumerate and estimate."""
     is_dissociative = (
-        (config.enable_dissociative_placement or config.skip_topology_check)
+        config.enable_dissociative_placement
         and config.material_type in ("slab", "nanoparticle")
         and _is_dissociable_diatomic(conformers[0])
     )
-    if (
-        is_dissociative
-        and config.skip_topology_check
-        and not config.enable_dissociative_placement
-    ):
-        warnings.warn(
-            "skip_topology_check=True enabling dissociative placement is deprecated; "
-            "set enable_dissociative_placement=True (and keep skip_topology_check=True "
-            "if connectivity filters should still be skipped).",
-            DeprecationWarning,
-            stacklevel=3,
-        )
     _ctx = (
         site_context
         if site_context is not None
@@ -481,4 +549,6 @@ __all__ = [
     "generate_placement_from_descriptor",
     "generate_placement_from_spec",
     "generate_placement_from_spec_with_reason",
+    "generate_placements_from_specs",
+    "resolve_materialize_workers",
 ]

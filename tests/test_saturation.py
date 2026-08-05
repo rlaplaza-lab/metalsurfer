@@ -11,7 +11,7 @@ import pytest
 from ase import Atoms
 from ase.io import read
 
-from metalsurfer.config import AdsorptionConfig
+from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.io_results import (
     save_multi_mol_saturation_results,
     save_saturation_results,
@@ -1112,9 +1112,7 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu():
         device="cuda",
         material_type="slab",
         multi_molecule_saturation=True,
-        bo_initial_random=1,
-        bo_batch_size=1,
-        bo_total_budget=2,
+        bo=BOConfig(initial_random=1, batch_size=1, total_budget=2),
         saturation_max_steps=1,
         skip_topology_check=True,
         skip_desorption_check=False,

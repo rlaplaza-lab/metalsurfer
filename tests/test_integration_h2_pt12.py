@@ -7,7 +7,10 @@ initial placements can relax to the same dissociative minimum and deduplicate to
 unique configuration.
 """
 
+import math
+
 import numpy as np
+import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
@@ -20,6 +23,12 @@ from metalsurfer.workflow import (
 from tests.conftest import GPU_MLIP_MARKS, adsorbate_symbol_pair_distance
 
 pytestmark = GPU_MLIP_MARKS
+
+_GPU_AUTOBATCH = {
+    "autobatcher_max_memory_padding": 0.8,
+    "autobatcher_max_memory_scaler": 500,
+    "autobatcher_max_atoms_to_try": 5000,
+}
 
 
 def _hh_bond_length(atoms, slab_size: int) -> float:
@@ -52,22 +61,20 @@ def _run_h2_on_pt12():
         pbc=False,
     )
 
+    num_placements = 5
     config = AdsorptionConfig(
         material_type="nanoparticle",
-        model_name="uma-s-1p2",
         seed=42,
         num_conformers=1,
-        num_placements=5,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
+        num_placements=num_placements,
         device="cuda",
         slab_relaxation_mode="none",
+        enable_dissociative_placement=True,
         skip_topology_check=True,
-        skip_desorption_check=False,
-        stage1_steps=50,
-        stage2_steps=500,
+        **_GPU_AUTOBATCH,
     )
+    assert config.stage1_steps == 50
+    assert config.stage2_steps == 150
 
     nanocluster = prepare_substrate(
         slab=pt_atoms,
@@ -78,7 +85,7 @@ def _run_h2_on_pt12():
     ref = calculate_reference_energies(
         nanocluster, calculator, ["H2"], ["[H][H]"], ts_model=ts_model, config=config
     )
-    return process_molecule(
+    results = process_molecule(
         "[H][H]",
         "H2",
         nanocluster,
@@ -88,17 +95,26 @@ def _run_h2_on_pt12():
         config=config,
         surface_type="h2_pt12",
     ).results
+    return results, num_placements
 
 
 class TestH2OnPt12:
     def test_h2_pt12_pipeline_smoke_and_reasonable_geometries(self):
-        results = _run_h2_on_pt12()
-        assert len(results) >= 1, f"Expected >= 1 valid placement, got {len(results)}"
+        results, num_placements = _run_h2_on_pt12()
+        # Dedup can collapse equivalent dissociative minima; still require a
+        # non-trivial survivor fraction of the requested budget.
+        min_ok = max(2, int(math.ceil(0.4 * num_placements)))
+        assert len(results) >= min_ok, (
+            f"Expected >= {min_ok}/{num_placements} valid placements, got {len(results)}"
+        )
 
         e_ads = np.array([r.energy_adsorption for r in results])
         assert np.all(np.isfinite(e_ads))
-        assert np.all(e_ads < 1.5), (
-            f"E_ads should stay in a binding window (< 1.5 eV), got {e_ads}"
+        assert float(e_ads.min()) < 0.5, (
+            f"Best E_ads should be near-binding for H2 on Pt12, got {e_ads}"
+        )
+        assert np.all(e_ads < 1.0), (
+            f"E_ads should stay in a binding window (< 1.0 eV), got {e_ads}"
         )
         assert np.all(e_ads >= -3.5), (
             f"E_ads should be >= -3.5 eV for H2 on Pt12, got min {e_ads.min():.3f}"
@@ -113,11 +129,17 @@ class TestH2OnPt12:
 
         slab_size = len(results[0].atoms) - 2  # H2
         for r in results:
+            assert r.energy_adsorption == pytest.approx(
+                r.energy_adslab - r.energy_slab - r.energy_adsorbate,
+                abs=1e-4,
+            )
+            assert r.placement_descriptor is not None
+            assert r.placement_descriptor.orientation_type == "dissociative"
             assert 1.5 <= r.distance <= 4.0, (
                 f"Adsorbate–surface distance should be 1.5–4 Å, got {r.distance:.2f}"
             )
             hh = _hh_bond_length(r.atoms, slab_size)
             # Molecular (~0.74 Å) or dissociated H on Pt are both valid.
-            assert 0.7 <= hh <= 4.0, (
-                f"H–H separation should be molecular or dissociated on cluster, got {hh:.3f}"
+            assert (0.7 <= hh <= 0.9) or (1.5 <= hh <= 4.0), (
+                f"H–H should be molecular or dissociated on cluster, got {hh:.3f}"
             )

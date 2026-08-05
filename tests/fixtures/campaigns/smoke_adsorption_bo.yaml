@@ -17,6 +17,7 @@ config:
   device: cpu
   stage1_steps: 2
   stage2_steps: 2
-  bo_initial_random: 2
-  bo_batch_size: 2
-  bo_total_budget: 1
+  bo:
+    initial_random: 2
+    batch_size: 2
+    total_budget: 1

@@ -1,7 +1,7 @@
 """Configuration for adsorption screening workflows."""
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields
 from math import isfinite
 from typing import Any, Literal
 
@@ -78,20 +78,6 @@ class BOConfig:
     transfer: BOTransferConfig = field(default_factory=BOTransferConfig)
 
 
-_BO_TRANSFER_FLAT_PREFIX = "bo_transfer_"
-_BO_TOP_FIELD_BY_FLAT: dict[str, str] = {
-    "bo_initial_random": "initial_random",
-    "bo_initial_sampling": "initial_sampling",
-    "bo_batch_size": "batch_size",
-    "bo_total_budget": "total_budget",
-    "bo_ucb_kappa": "ucb_kappa",
-    "bo_acquisition": "acquisition",
-    "bo_surrogate": "surrogate",
-    "bo_candidate_pool_size": "candidate_pool_size",
-    "bo_include_failure_negatives": "include_failure_negatives",
-    "bo_failure_penalty_default": "failure_penalty_default",
-    "bo_failure_penalty_overrides": "failure_penalty_overrides",
-}
 _BO_TRANSFER_FIELDS: frozenset[str] = frozenset(
     f.name for f in fields(BOTransferConfig)
 )
@@ -126,46 +112,20 @@ def _bo_config_from_mapping(data: Mapping[str, Any] | None) -> BOConfig:
     return BOConfig(**payload, transfer=transfer)
 
 
-def _split_flat_bo_kwargs(
-    flat: Mapping[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Split legacy ``bo_*`` / ``bo_transfer_*`` kwargs into nested field dicts."""
-    bo_kwargs: dict[str, Any] = {}
-    transfer_kwargs: dict[str, Any] = {}
-    for key, value in flat.items():
-        if key.startswith(_BO_TRANSFER_FLAT_PREFIX):
-            field_name = key[len(_BO_TRANSFER_FLAT_PREFIX) :]
-            if field_name not in _BO_TRANSFER_FIELDS:
-                raise ValueError(f"Unknown BO transfer config key: {key!r}")
-            transfer_kwargs[field_name] = value
-        elif key in _BO_TOP_FIELD_BY_FLAT:
-            bo_kwargs[_BO_TOP_FIELD_BY_FLAT[key]] = value
-        else:
-            raise ValueError(f"Unknown BO config key: {key!r}")
-    return bo_kwargs, transfer_kwargs
-
-
-def _merge_flat_into_bo(base: BOConfig, flat: Mapping[str, Any]) -> BOConfig:
-    bo_kwargs, transfer_kwargs = _split_flat_bo_kwargs(flat)
-    transfer = (
-        replace(base.transfer, **transfer_kwargs) if transfer_kwargs else base.transfer
-    )
-    return replace(base, transfer=transfer, **bo_kwargs)
-
-
 def fold_bo_config(config_data: dict[str, Any]) -> BOConfig:
-    """Fold nested ``bo:`` and/or legacy flat ``bo_*`` keys into a :class:`BOConfig`.
+    """Extract nested ``bo:`` from a campaign config mapping into a :class:`BOConfig`.
 
-    Mutates *config_data* by removing ``bo`` and any flat ``bo_*`` keys.
+    Mutates *config_data* by removing the ``bo`` key. Flat ``bo_*`` keys are
+    rejected — use nested ``bo:`` / ``bo.transfer:`` instead.
     """
-    nested_raw = config_data.pop("bo", None)
-    flat = {
-        key: config_data.pop(key) for key in list(config_data) if key.startswith("bo_")
-    }
-    bo = _bo_config_from_mapping(nested_raw)
+    flat = [key for key in config_data if key.startswith("bo_") and key != "bo"]
     if flat:
-        bo = _merge_flat_into_bo(bo, flat)
-    return bo
+        quoted = ", ".join(sorted(flat))
+        raise ValueError(
+            "Flat BO keys are not supported; nest under 'bo:' / 'bo.transfer:' "
+            f"(got: {quoted})"
+        )
+    return _bo_config_from_mapping(config_data.pop("bo", None))
 
 
 def _check_positive(name: str, value: float) -> None:
@@ -281,6 +241,16 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
             "placement_retry_diversity_seed_increment",
             root.placement_retry_diversity_seed_increment,
         )
+    if root.placement_retry_oversample_max < 1.0:
+        raise ValueError(
+            "placement_retry_oversample_max must be >= 1.0, "
+            f"got {root.placement_retry_oversample_max}"
+        )
+    if root.placement_materialize_workers == 0:
+        raise ValueError(
+            "placement_materialize_workers must be != 0 "
+            "(positive count, or joblib-style negative: -1=all CPUs, -2=all but one)"
+        )
 
     for pos_name, pos_value in (
         ("min_initial_distance", root.min_initial_distance),
@@ -392,46 +362,46 @@ def _validate_relaxation(root: "AdsorptionConfig") -> None:
 
 def _validate_bo_transfer(transfer: BOTransferConfig) -> None:
     _check_choice(
-        "bo_transfer_mode",
+        "bo.transfer.mode",
         transfer.mode,
         allowed=("weighted", "cumulative_refit"),
     )
     _check_positive_int(
-        "bo_transfer_min_step_observations",
+        "bo.transfer.min_step_observations",
         transfer.min_step_observations,
     )
-    _check_positive_int("bo_transfer_trust_patience", transfer.trust_patience)
+    _check_positive_int("bo.transfer.trust_patience", transfer.trust_patience)
     if transfer.prior_step_window is not None:
         _check_positive_int(
-            "bo_transfer_prior_step_window",
+            "bo.transfer.prior_step_window",
             transfer.prior_step_window,
         )
     _check_positive(
-        "bo_transfer_recency_lengthscale",
+        "bo.transfer.recency_lengthscale",
         transfer.recency_lengthscale,
     )
     _check_positive(
-        "bo_transfer_occupancy_lengthscale",
+        "bo.transfer.occupancy_lengthscale",
         transfer.occupancy_lengthscale,
     )
-    _check_unit_interval("bo_transfer_occupancy_floor", transfer.occupancy_floor)
+    _check_unit_interval("bo.transfer.occupancy_floor", transfer.occupancy_floor)
     _check_unit_interval(
-        "bo_transfer_weight_cap", transfer.weight_cap, exclusive_upper=True
+        "bo.transfer.weight_cap", transfer.weight_cap, exclusive_upper=True
     )
     _check_positive(
-        "bo_transfer_similarity_lengthscale",
+        "bo.transfer.similarity_lengthscale",
         transfer.similarity_lengthscale,
     )
-    _check_unit_interval("bo_transfer_min_similarity", transfer.min_similarity)
-    _check_finite_nonneg("bo_transfer_mae_tolerance", transfer.mae_tolerance)
+    _check_unit_interval("bo.transfer.min_similarity", transfer.min_similarity)
+    _check_finite_nonneg("bo.transfer.mae_tolerance", transfer.mae_tolerance)
     _check_unit_interval(
-        "bo_transfer_exploration_fraction", transfer.exploration_fraction
+        "bo.transfer.exploration_fraction", transfer.exploration_fraction
     )
     _check_positive(
-        "bo_transfer_proximity_lengthscale",
+        "bo.transfer.proximity_lengthscale",
         transfer.proximity_lengthscale,
     )
-    _check_unit_interval("bo_transfer_proximity_floor", transfer.proximity_floor)
+    _check_unit_interval("bo.transfer.proximity_floor", transfer.proximity_floor)
 
 
 def _validate_bo(root: "AdsorptionConfig") -> None:
@@ -439,56 +409,56 @@ def _validate_bo(root: "AdsorptionConfig") -> None:
     if not isinstance(bo, BOConfig):
         raise ValueError(f"bo must be a BOConfig, got {type(bo).__name__}")
     if bo.initial_random is not None:
-        _check_positive_int("bo_initial_random", bo.initial_random)
+        _check_positive_int("bo.initial_random", bo.initial_random)
     if bo.batch_size is not None:
-        _check_positive_int("bo_batch_size", bo.batch_size)
-    _check_positive_int("bo_total_budget", bo.total_budget)
+        _check_positive_int("bo.batch_size", bo.batch_size)
+    _check_positive_int("bo.total_budget", bo.total_budget)
     if bo.ucb_kappa < 0:
-        raise ValueError(f"bo_ucb_kappa must be non-negative, got {bo.ucb_kappa}")
+        raise ValueError(f"bo.ucb_kappa must be non-negative, got {bo.ucb_kappa}")
     _check_choice(
-        "bo_initial_sampling",
+        "bo.initial_sampling",
         bo.initial_sampling,
         allowed=BO_INITIAL_SAMPLING_OPTIONS,
     )
     _check_choice(
-        "bo_acquisition",
+        "bo.acquisition",
         bo.acquisition,
         allowed=BO_ACQUISITION_OPTIONS,
     )
     _check_choice(
-        "bo_surrogate",
+        "bo.surrogate",
         bo.surrogate,
         allowed=BO_SURROGATE_OPTIONS,
     )
     if bo.transfer.enabled and bo.surrogate not in BO_TRANSFER_CAPABLE_SURROGATES:
         raise ValueError(
-            "bo_transfer_enabled requires a surrogate that supports "
+            "bo.transfer.enabled requires a surrogate that supports "
             "per-sample weights "
             f"({', '.join(BO_TRANSFER_CAPABLE_SURROGATES)}); "
             "sample_weight is not supported for "
-            f"bo_surrogate={bo.surrogate!r}"
+            f"bo.surrogate={bo.surrogate!r}"
         )
     if bo.candidate_pool_size is not None:
-        _check_positive_int("bo_candidate_pool_size", bo.candidate_pool_size)
+        _check_positive_int("bo.candidate_pool_size", bo.candidate_pool_size)
     if not isfinite(bo.failure_penalty_default) or bo.failure_penalty_default < 0:
         raise ValueError(
-            "bo_failure_penalty_default must be a finite non-negative value, "
+            "bo.failure_penalty_default must be a finite non-negative value, "
             f"got {bo.failure_penalty_default!r}"
         )
     if not isinstance(bo.failure_penalty_overrides, dict):
         raise ValueError(
-            "bo_failure_penalty_overrides must be a dict[str, float], "
+            "bo.failure_penalty_overrides must be a dict[str, float], "
             f"got {type(bo.failure_penalty_overrides).__name__}"
         )
     for penalty_key, penalty_value in bo.failure_penalty_overrides.items():
         if not isinstance(penalty_key, str) or not penalty_key:
             raise ValueError(
-                "bo_failure_penalty_overrides keys must be non-empty strings, "
+                "bo.failure_penalty_overrides keys must be non-empty strings, "
                 f"got {penalty_key!r}"
             )
         if not isfinite(penalty_value) or penalty_value < 0:
             raise ValueError(
-                "bo_failure_penalty_overrides values must be finite non-negative, "
+                "bo.failure_penalty_overrides values must be finite non-negative, "
                 f"got {penalty_value!r} for key {penalty_key!r}"
             )
     if not isinstance(bo.transfer, BOTransferConfig):
@@ -551,10 +521,9 @@ class AdsorptionConfig:
     ``enable_dissociative_placement=True`` (and usually ``skip_topology_check=True``
     so connectivity filters allow fragmented adsorbates). Use ``run_*_bo``
     (or YAML ``campaign: adsorption_bo`` / ``saturation_bo``) for Bayesian
-    placement selection; nested ``bo`` (and legacy flat ``bo_*`` constructor /
-    YAML keys) are hyperparameters only. Reference energies remain
-    isolated-molecule energies; positive E_ads can result when the relaxed
-    adsorbate dissociates.
+    placement selection; nested ``bo`` / ``bo.transfer`` hold BO hyperparameters
+    only. Reference energies remain isolated-molecule energies; positive E_ads
+    can result when the relaxed adsorbate dissociates.
 
     Full field documentation:
     https://metalsurfer.readthedocs.io/en/latest/api/config.html
@@ -633,8 +602,12 @@ class AdsorptionConfig:
     fail_on_conformer_failure: bool = False
     debug_write_initial_placements: bool = False
     placement_retry_enabled: bool = True
-    placement_retry_max_attempts: int = 3
+    placement_retry_max_attempts: int = 8
     placement_retry_diversity_seed_increment: int = 1000
+    # Max specs requested per deficit round as a multiple of remaining slots.
+    placement_retry_oversample_max: float = 6.0
+    # Joblib-style n_jobs for placement materialization threads (-2 = all but one CPU).
+    placement_materialize_workers: int = -2
     optimize_isolated_sequentially: bool = False
     ts_optimizer: Literal["fire", "lbfgs", "bfgs"] = "fire"
     steps_between_swaps: int = 5
@@ -653,6 +626,8 @@ class AdsorptionConfig:
     bo: BOConfig = field(default_factory=BOConfig)
 
     def __post_init__(self) -> None:
+        if isinstance(self.bo, Mapping) and not isinstance(self.bo, BOConfig):
+            object.__setattr__(self, "bo", _bo_config_from_mapping(self.bo))
         _validate_placement(self)
         _validate_relaxation(self)
         _validate_io(self)
@@ -708,26 +683,3 @@ class AdsorptionConfig:
 
         if self.saturation_max_steps is not None:
             _check_positive_int("saturation_max_steps", self.saturation_max_steps)
-
-
-_adsorption_config_init = AdsorptionConfig.__init__
-
-
-def _adsorption_config_init_with_flat_bo(self, *args, **kwargs):
-    """Accept nested ``bo=`` and legacy flat ``bo_*`` constructor kwargs."""
-    flat = {
-        key: kwargs.pop(key)
-        for key in list(kwargs)
-        if key.startswith("bo_") and key != "bo"
-    }
-    bo = kwargs.get("bo")
-    if isinstance(bo, Mapping) and not isinstance(bo, BOConfig):
-        bo = _bo_config_from_mapping(bo)
-        kwargs["bo"] = bo
-    if flat:
-        base = bo if isinstance(bo, BOConfig) else BOConfig()
-        kwargs["bo"] = _merge_flat_into_bo(base, flat)
-    _adsorption_config_init(self, *args, **kwargs)
-
-
-AdsorptionConfig.__init__ = _adsorption_config_init_with_flat_bo  # type: ignore[method-assign]

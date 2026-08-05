@@ -27,11 +27,14 @@ from ._constants import (
 from ._material import material_aware_pbc
 from .occupancy import existing_adsorbate_positions, filter_sites_by_occupancy
 from .orientation import _site_type_z_offset
-from .pose import _descriptor_from_placement, _validate_posed_adsorbate
+from .pose import (
+    _descriptor_from_placement,
+    _resolve_surface_ref,
+    _validate_posed_adsorbate,
+)
 from .site_context import SiteContext
 from .site_coords import (
     _deduplicate_points,
-    _height_along_slab_normal,
     _periodic_image_offsets,
     _slab_normal,
     _slab_plane_projectors,
@@ -417,7 +420,13 @@ def _place_dissociative_two_sites(
     slab: Atoms,
     slab_for_sites: Atoms | None,
 ) -> tuple[Atoms, PlacementDescriptor] | None:
-    """Place a diatomic at two sites with shared height offset along each normal."""
+    """Place a diatomic at two sites with shared height offset along each normal.
+
+    On slabs, ``height_override`` is the gap above the top-layer surface
+    reference (same convention as molecular placement). Hollow Voronoi
+    vertices often sit above the metal, so stacking the offset on
+    ``site.xyz`` would overshoot the desorption gate.
+    """
     if len(sites) != 2 or len(adsorbate) != 2:
         return None
     site1, site2 = sites[0], sites[1]
@@ -441,8 +450,32 @@ def _place_dissociative_two_sites(
     )
 
     z_offset = float(height_override)
-    pos1 = np.asarray(site1.xyz, dtype=float) + z_offset * n1
-    pos2 = np.asarray(site2.xyz, dtype=float) + z_offset * n2
+    base1 = np.asarray(site1.xyz, dtype=float)
+    base2 = np.asarray(site2.xyz, dtype=float)
+
+    if config.material_type == "slab":
+        n_hat = np.asarray(slab_normal, dtype=float)
+        n_hat = n_hat / (float(np.linalg.norm(n_hat)) + _VECTOR_NORM_EPS)
+        surface_ref, _ = _resolve_surface_ref(
+            site1,
+            sites_slab,
+            "slab",
+            rough_slab_local_z=config.rough_slab_local_z,
+        )
+        target_h = float(surface_ref + z_offset)
+        pos1 = base1 + (target_h - float(np.dot(base1, n_hat))) * n_hat
+        pos2 = base2 + (target_h - float(np.dot(base2, n_hat))) * n_hat
+        h_surface = float(surface_ref)
+        site_reference_frame = "local_site" if config.rough_slab_local_z else "global_top_layer"
+    else:
+        # Nanoparticle: Voronoi vertex is the local surface reference.
+        pos1 = base1 + z_offset * n1
+        pos2 = base2 + z_offset * n2
+        h_surface = 0.5 * (
+            float(np.dot(base1, n1)) + float(np.dot(base2, n2))
+        )
+        site_reference_frame = "local_site"
+
     symbols = adsorbate.get_chemical_symbols()
     result = Atoms(symbols=symbols, positions=[pos1, pos2])
     result.set_cell(slab.get_cell())
@@ -453,17 +486,6 @@ def _place_dissociative_two_sites(
     )
     if fail_reason is not None:
         return None
-
-    if config.material_type == "nanoparticle":
-        h_surface = 0.5 * (
-            float(np.dot(np.asarray(site1.xyz, dtype=float), n1))
-            + float(np.dot(np.asarray(site2.xyz, dtype=float), n2))
-        )
-        site_reference_frame = "local_site"
-    else:
-        heights = _height_along_slab_normal(sites_slab.get_positions(), cell_arr)
-        h_surface = float(np.max(heights))
-        site_reference_frame = "global_top_layer"
 
     centroid = (pos1 + pos2) / 2.0
     pinv_ab_T, _ = _slab_plane_projectors(cell_arr)

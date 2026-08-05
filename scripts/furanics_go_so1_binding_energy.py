@@ -19,7 +19,7 @@ from urllib.request import urlopen
 import numpy as np
 from ase.io import read
 
-from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption_bo
+from metalsurfer import AdsorptionConfig, BOConfig, configure_logging, run_adsorption_bo
 from metalsurfer._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
 from metalsurfer.surface_prep import prepare_substrate
 
@@ -96,10 +96,12 @@ def main() -> int:
         stage1_steps=50,
         stage2_steps=500,
         debug_write_initial_placements=False,
-        bo_initial_random=100,
-        bo_batch_size=100,
-        # bo_total_budget = acquisition batches after initial (not total evals).
-        bo_total_budget=2,  # 100 initial + 2×100 ≈ 300 evaluations
+        # total_budget = acquisition batches after initial (not total evals).
+        bo=BOConfig(
+            initial_random=100,
+            batch_size=100,
+            total_budget=2,  # 100 initial + 2×100 ≈ 300 evaluations
+        ),
     )
 
     slab = _load_go_slab("semi_ordered/SO1")

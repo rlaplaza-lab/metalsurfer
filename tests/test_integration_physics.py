@@ -32,6 +32,7 @@ from metalsurfer.workflow.shared import (
 )
 
 from .conftest import (
+    assert_water_oh_hh_geometry,
     make_placement_descriptor,
     make_screening_result,
     make_slab,
@@ -300,10 +301,7 @@ class TestProcessMoleculePhysicsSurvival:
             seed=42,
             num_conformers=1,
             num_placements=6,
-            placement_z_range=(2.0, 3.0),
-            skip_topology_check=False,
-            skip_desorption_check=False,
-            max_adsorption_energy=5.0,
+            # Stub optimizer: no real forces; keep physics gates at defaults.
             max_force_convergence=1.0,
         )
 
@@ -399,12 +397,8 @@ class TestProcessMoleculePhysicsSurvival:
         )
         results = outcome.results
 
-        assert len(results) >= 1, (
-            "Expected at least one physically valid survivor from stubbed pipeline"
-        )
-        # Intentional bad modes (overlap / desorption) must not survive
-        assert len(results) <= 2, (
-            f"Expected at most the 'good' stub modes to survive, got {len(results)}"
+        assert len(results) == 2, (
+            f"Expected exactly the two 'good' stub modes to survive, got {len(results)}"
         )
         for r in results:
             assert r.energy_adsorption == pytest.approx(e_ads_good, abs=1e-6)
@@ -425,3 +419,11 @@ class TestProcessMoleculePhysicsSurvival:
             # Topology filter still on: water connectivity preserved
             assert len(ads) == 3
             assert sorted(ads.get_chemical_symbols()) == ["H", "H", "O"]
+            assert_water_oh_hh_geometry(ads)
+            assert r.placement_descriptor is not None
+            assert r.placement_descriptor.orientation_type == "round"
+            assert r.placement_descriptor.surface_ref_z_abs is not None
+            assert r.placement_descriptor.z_abs is not None
+            assert float(r.placement_descriptor.z_abs) >= float(
+                r.placement_descriptor.surface_ref_z_abs
+            ) - 0.05

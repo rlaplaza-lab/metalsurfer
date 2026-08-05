@@ -386,7 +386,6 @@ def accept_substrate_for_api(
     slab: SlabContainer | Atoms,
     *,
     config: AdsorptionConfig,
-    conformers: list[Atoms] | None = None,
 ) -> SlabContainer:
     """Wrap and return a substrate ready for campaign APIs.
 
@@ -394,11 +393,7 @@ def accept_substrate_for_api(
     :func:`~metalsurfer.surface_prep.finalize_substrate`), only API invariants
     are checked — full vacuum/cell validation is not repeated. Plain ``Atoms``
     or non-finalized containers still run :func:`validate_substrate`.
-
-    *conformers* is accepted for API compatibility but sizing checks belong in
-    :func:`~metalsurfer.workflow.shared.prepare_substrate_for_screening`.
     """
-    del conformers  # sizing is deferred to prepare_substrate_for_screening
     container = coerce_slab_container(slab)
     if container.finalized:
         _check_api_substrate_invariants(container.atoms)

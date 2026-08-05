@@ -5,9 +5,11 @@ that placements relax to sensible CO2 geometries with a spread of E_ads values i
 physically plausible physisorption window rather than demanding strict negativity.
 """
 
+import math
 import os
 
 import numpy as np
+import pytest
 from ase.io import read
 
 from metalsurfer.config import AdsorptionConfig
@@ -20,6 +22,12 @@ from metalsurfer.workflow import (
 from tests.conftest import GPU_MLIP_MARKS, pair_distance
 
 pytestmark = GPU_MLIP_MARKS
+
+_GPU_AUTOBATCH = {
+    "autobatcher_max_memory_padding": 0.8,
+    "autobatcher_max_memory_scaler": 500,
+    "autobatcher_max_atoms_to_try": 5000,
+}
 
 
 def _co_bond_length(atoms, slab_size: int) -> tuple[float, float]:
@@ -42,19 +50,22 @@ def _run_co2_in_mof():
     """Load MOF structure and run a single CO2 screening flow."""
     cif_path = os.path.join("examples", "mof_structures", "RUBTAK01.cif")
     mof_atoms = read(cif_path)
+    num_placements = 5
+    # Near-default porous campaign: keep experimental CIF geometry, default stages.
     config = AdsorptionConfig(
         material_type="porous",
         slab_relaxation_mode="none",
         seed=42,
         num_conformers=1,
-        num_placements=5,
+        num_placements=num_placements,
         device="cuda",
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        stage1_steps=16,
-        stage2_steps=80,
-        min_initial_distance=1.8,
+        **_GPU_AUTOBATCH,
     )
+    assert config.stage1_steps == 50
+    assert config.stage2_steps == 150
+    assert config.skip_topology_check is False
+    assert config.skip_desorption_check is False
+
     mof_slab = prepare_substrate(
         slab=mof_atoms,
         config=config,
@@ -65,7 +76,7 @@ def _run_co2_in_mof():
     ref = calculate_reference_energies(
         mof_slab, calculator, ["CO2"], ["O=C=O"], ts_model=ts_model, config=config
     )
-    return process_molecule(
+    results = process_molecule(
         "O=C=O",
         "CO2",
         mof_slab,
@@ -75,19 +86,26 @@ def _run_co2_in_mof():
         config=config,
         surface_type="co2_mof",
     ).results
+    return results, num_placements
 
 
 class TestCO2InMOF:
     def test_co2_mof_negative_adsorption_energies_and_reasonable_geometries(self):
-        results = _run_co2_in_mof()
-        assert len(results) >= 3, f"Expected >= 3 valid placements, got {len(results)}"
+        results, num_placements = _run_co2_in_mof()
+        min_ok = max(4, int(math.ceil(0.8 * num_placements)))
+        assert len(results) >= min_ok, (
+            f"Expected >= {min_ok}/{num_placements} valid placements, got {len(results)}"
+        )
 
         e_ads = np.array([r.energy_adsorption for r in results])
-        assert np.all(e_ads < 0.5), (
-            f"E_ads should stay in a physisorption window (< 0.5 eV), got {e_ads}"
+        assert np.all(e_ads < 0.2), (
+            f"E_ads should stay in a physisorption window (< 0.2 eV), got {e_ads}"
         )
         assert np.all(e_ads >= -2.5), (
             f"E_ads should be >= -2.5 eV for CO2 in MOF, got min {e_ads.min():.3f}"
+        )
+        assert float(e_ads.min()) < 0.0, (
+            f"Best E_ads should be negative for CO2 in MOF, got {e_ads}"
         )
 
         spread = float(e_ads.max() - e_ads.min())
@@ -95,11 +113,20 @@ class TestCO2InMOF:
             f"Expected distribution of E_ads (spread >= 0.03 eV), got spread {spread:.4f}"
         )
 
+        site_ids = set()
         slab_size = len(results[0].atoms) - 3  # CO2
         for r in results:
-            assert 1.5 <= r.distance <= 6.0, (
-                f"Adsorbate–surface distance should be 1.5–6 Å, got {r.distance:.2f}"
+            assert r.energy_adsorption == pytest.approx(
+                r.energy_adslab - r.energy_slab - r.energy_adsorbate,
+                abs=1e-4,
             )
+            assert 1.5 <= r.distance <= 4.5, (
+                f"Adsorbate–surface distance should be 1.5–4.5 Å, got {r.distance:.2f}"
+            )
+            assert r.placement_descriptor is not None
+            assert r.placement_descriptor.surface_ref_z_abs is not None
+            if r.placement_descriptor.site_index is not None:
+                site_ids.add(int(r.placement_descriptor.site_index))
             co1, co2 = _co_bond_length(r.atoms, slab_size)
             assert 1.1 <= co1 <= 1.4, (
                 f"C–O bond length should be ~1.16 Å (1.1–1.4), got {co1:.3f}"
@@ -110,6 +137,7 @@ class TestCO2InMOF:
             # CO2 should remain approximately linear after relaxation.
             ads = r.atoms[slab_size:]
             syms = ads.get_chemical_symbols()
+            assert sorted(syms) == ["C", "O", "O"]
             c_idx = syms.index("C")
             o_idxs = [i for i, s in enumerate(syms) if s == "O"]
             pos = ads.get_positions()
@@ -123,3 +151,5 @@ class TestCO2InMOF:
             assert 165.0 <= angle <= 180.0, (
                 f"O–C–O angle should be ~180°, got {angle:.1f}"
             )
+        if len(results) >= 2:
+            assert len(site_ids) >= 2, f"Expected multi-site coverage, got {site_ids}"

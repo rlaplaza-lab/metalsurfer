@@ -3,7 +3,6 @@
 import logging
 import os
 import time
-from collections import Counter
 
 from ase import Atoms
 
@@ -13,21 +12,22 @@ from ..io_results import _write_clean_xyz
 from ..ml.schema import PlacementRecord
 from ..models import (
     PlacementDescriptor,
-    PlacementSpec,
     ReferenceEnergies,
     ScreeningResult,
 )
-from ..placement._constants import _RETRY_BLOCK_SITE_AFTER
-from ..placement.generators import enumerate_placement_specs
 from ..placement.site_context import SiteContext
 from ..surface_prep import SlabContainer
+from .placement_fill import (
+    fill_materialized_placements,
+    materialize_specs_filling_target,
+    placement_spec_key,
+)
 from .shared import (
     MoleculeScreenOutcome,
     PlacementFailureEvent,
     _finalize_screen_results,
     _generation_failure_histogram,
     _infer_surface_symbols,
-    _materialize_spec_placements,
     _optimize_and_evaluate_placements,
     _prepare_molecule_screening,
     _summarize_failure_events,
@@ -35,32 +35,8 @@ from .shared import (
 
 logger = logging.getLogger(__name__)
 
-
-def _placement_spec_key(
-    spec: PlacementSpec,
-) -> tuple[
-    int,
-    str,
-    int,
-    float,
-    float,
-    float,
-    float,
-    bool,
-    int | None,
-]:
-    """Hashable identity for retry diversity (exclude known-bad specs)."""
-    return (
-        spec.conformer_index,
-        spec.orientation_type,
-        spec.site_index,
-        float(spec.z_fraction),
-        float(spec.tilt_deg),
-        float(spec.azimuth_deg),
-        float(spec.azimuth_in_plane_deg),
-        bool(spec.face_flip),
-        spec.en_atom_index,
-    )
+# Backward-compatible aliases for tests and external callers.
+_placement_spec_key = placement_spec_key
 
 
 def _generate_placements_with_retry(
@@ -74,138 +50,27 @@ def _generate_placements_with_retry(
 ) -> tuple[
     list[Atoms], list[int], list[PlacementDescriptor], list[PlacementFailureEvent], int
 ]:
-    """Generate placements with retry loop to meet requested count.
+    """Generate placements with yield-aware retry to meet requested count.
 
     Returns:
         Tuple of (all_combined, placement_ids, placement_descriptors, failures, n_attempts)
     """
-    assert config.num_placements is not None
-    num_placements = config.num_placements
-    all_combined: list[Atoms] = []
-    placement_ids: list[int] = []
-    placement_descriptors: list[PlacementDescriptor] = []
-    failures: list[PlacementFailureEvent] = []
-    failed_keys: set[tuple] = set()
-    site_fail_counts: Counter[int] = Counter()
-    blocked_sites: set[int] = set()
-    # Map placement_index -> key for failures in the latest attempt.
-    last_spec_by_index: dict[int, PlacementSpec] = {}
-    _clash_reasons = frozenset({"adsorbate_overlap", "too_close"})
-
-    max_attempts = (
-        config.placement_retry_max_attempts if config.placement_retry_enabled else 1
+    result = fill_materialized_placements(
+        conformers=conformers,
+        slab_for_sites=slab_for_sites,
+        config=config,
+        smiles=smiles,
+        site_context=site_context,
+        slab_atoms=slab_atoms,
+        calculator=calculator,
     )
-    seed_increment = config.placement_retry_diversity_seed_increment
-
-    for attempt in range(max_attempts):
-        if len(all_combined) >= num_placements:
-            break
-
-        attempt_seed = config.seed + (seed_increment * attempt)
-        remaining = num_placements - len(all_combined)
-        if remaining <= 0:
-            break
-
-        def _composed_filter(
-            spec,
-            *,
-            _failed=failed_keys,
-            _blocked=blocked_sites,
-        ):
-            if _placement_spec_key(spec) in _failed:
-                return False
-            if int(spec.site_index) in _blocked:
-                return False
-            if config.placement_filter is not None:
-                return bool(config.placement_filter(spec))
-            return True
-
-        specs = enumerate_placement_specs(
-            conformers,
-            slab_for_sites,
-            config,
-            smiles,
-            remaining,
-            filter_spec=_composed_filter,
-            site_context=site_context,
-            seed=attempt_seed,
-            full_slab=slab_atoms,
-        )
-        # Empty after failed-key exclusion: one unfiltered fallback (log), then continue.
-        # Blocked sites stay excluded on the fallback.
-        if not specs and failed_keys and remaining > 0:
-            logger.warning(
-                "Placement retry attempt %d: failed-key filter emptied the pool; "
-                "falling back to unfiltered enumeration once (blocked sites kept)",
-                attempt + 1,
-            )
-
-            def _fallback_filter(spec, *, _blocked=blocked_sites):
-                if int(spec.site_index) in _blocked:
-                    return False
-                if config.placement_filter is not None:
-                    return bool(config.placement_filter(spec))
-                return True
-
-            specs = enumerate_placement_specs(
-                conformers,
-                slab_for_sites,
-                config,
-                smiles,
-                remaining,
-                filter_spec=_fallback_filter,
-                site_context=site_context,
-                seed=attempt_seed + 1,
-                full_slab=slab_atoms,
-            )
-
-        id_offset = attempt * num_placements
-        for spec in specs:
-            spec.placement_index = int(spec.placement_index) + id_offset
-            last_spec_by_index[spec.placement_index] = spec
-
-        (
-            new_combined,
-            new_ids,
-            new_descriptors,
-            new_failures,
-        ) = _materialize_spec_placements(
-            specs=specs,
-            conformers=conformers,
-            slab_atoms=slab_atoms,
-            calculator=calculator,
-            config=config,
-            smiles=smiles,
-            site_context=site_context,
-            slab_for_sites=slab_for_sites,
-        )
-
-        for fail in new_failures:
-            failed_spec = last_spec_by_index.get(fail.placement_id)
-            if failed_spec is not None:
-                failed_keys.add(_placement_spec_key(failed_spec))
-                site_idx = int(failed_spec.site_index)
-                if site_idx >= 0 and fail.reason in _clash_reasons:
-                    site_fail_counts[site_idx] += 1
-                    if site_fail_counts[site_idx] >= _RETRY_BLOCK_SITE_AFTER:
-                        blocked_sites.add(site_idx)
-
-        all_combined.extend(new_combined)
-        placement_ids.extend(new_ids)
-        placement_descriptors.extend(new_descriptors)
-        failures.extend(new_failures)
-
-        if attempt > 0 and new_combined:
-            logger.debug(
-                "Retry attempt %d/%d: generated %d new placements (total: %d/%d)",
-                attempt + 1,
-                max_attempts,
-                len(new_combined),
-                len(all_combined),
-                num_placements,
-            )
-
-    return all_combined, placement_ids, placement_descriptors, failures, max_attempts
+    return (
+        result.combined,
+        result.placement_ids,
+        result.descriptors,
+        result.failures,
+        result.n_attempts,
+    )
 
 
 def process_molecule(
@@ -472,15 +337,23 @@ def _evaluate_placement_batch(
     base_slab_for_frozen: Atoms | None = None,
     slab_for_sites: Atoms | None = None,
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
-) -> tuple[list[ScreeningResult], list[PlacementFailureEvent]]:
-    """Run placement-generation + optimization + validation for a batch of specs."""
-    (
-        all_combined,
-        placement_ids,
-        placement_descriptors,
-        failures,
-    ) = _materialize_spec_placements(
-        specs=specs,
+    backfill_specs: list | None = None,
+    n_target: int | None = None,
+) -> tuple[list[ScreeningResult], list[PlacementFailureEvent], int]:
+    """Run placement-generation + optimization + validation for a batch of specs.
+
+    When ``backfill_specs`` is provided, materialization failures in ``specs`` are
+    replaced from the backfill list until ``n_target`` (default: ``len(specs)``)
+    geometry-valid placements are obtained or the backfill is exhausted.
+
+    Returns:
+        ``(results, failures, n_backfill_used)``
+    """
+    target = len(specs) if n_target is None else n_target
+    fill = materialize_specs_filling_target(
+        primary_specs=specs,
+        backfill_specs=backfill_specs or [],
+        n_target=target,
         conformers=conformers,
         slab_atoms=slab.atoms,
         calculator=calculator,
@@ -490,9 +363,13 @@ def _evaluate_placement_batch(
         slab_for_sites=slab_for_sites,
         materialization_cache=materialization_cache,
     )
+    all_combined = fill.combined
+    placement_ids = fill.placement_ids
+    placement_descriptors = fill.descriptors
+    failures = list(fill.failures)
 
     if not all_combined:
-        return [], failures
+        return [], failures, fill.n_backfill_used
 
     results, validation_failure_events, _n_optimization_failed = (
         _optimize_and_evaluate_placements(
@@ -512,7 +389,7 @@ def _evaluate_placement_batch(
     )
     if not results and not validation_failure_events and _n_optimization_failed == 0:
         # Optimize returned empty; preserve prior batch behavior (drop gen failures).
-        return [], []
+        return [], [], fill.n_backfill_used
 
     failures.extend(validation_failure_events)
-    return results, failures
+    return results, failures, fill.n_backfill_used

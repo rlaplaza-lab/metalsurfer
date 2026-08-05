@@ -55,11 +55,11 @@ DFT reference geometries are downloaded from
 into `examples/camphor_cu111/nomad_references/` and compared via adsorbate RMSD
 (permutation-aware Kabsch) plus Ox/Hy binding-mode labels.
 
-For large HPC runs, use the matching script under `scripts/`. BO scripts that previously
-set `bo_total_budget` as a total evaluation count should now set it to the number of
-**acquisition batches** after the initial random batch
-(e.g. `(300 - initial) // batch` to preserve a 300-eval budget with fixed batch sizes).
-After sizes resolve, `resolved_bo_eval_budget(config)` (also
+For large HPC runs, use the matching script under `scripts/`. Nested `bo.total_budget`
+is the number of **acquisition batches** after the initial random batch—not total
+evaluations (e.g. `(300 - initial) // batch` to preserve a 300-eval budget with
+fixed batch sizes). After sizes resolve, `resolved_bo_eval_budget(config)` (also
 `from metalsurfer import resolved_bo_eval_budget`) returns the total evaluation
 count. Prefer `run_*_bo` (or YAML `campaign: adsorption_bo` /
-`saturation_bo`) for Bayesian mode; config only holds BO hyperparameters.
+`saturation_bo`) for Bayesian mode; config only holds nested `bo` / `bo.transfer`
+hyperparameters.

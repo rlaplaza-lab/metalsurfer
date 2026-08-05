@@ -262,8 +262,9 @@ Delaunay on slabs (pure Voronoi floods GPU with weak candidates); global
 ``surface_ref`` along the slab normal for height; dissociative hollow pairs
 on slabs (rejected for porous; NP uses outward-normal Voronoi pairs);
 parallel-z floors for slab/NP aromatics (skipped for porous); no atop
-injection / dissociative for porous. NP/porous molecular Cartesian-``z``
-``surface_ref`` consistency remains a known follow-up.
+injection / dissociative for porous. NP/porous ``surface_ref`` is the
+Voronoi vertex projected onto the local site normal (same axis as
+placement and ``z_offset`` recovery).
 
 
 Placement
@@ -303,25 +304,31 @@ zero-capacity species in ``distribute_placement_budget``.
   normal so the **closest adsorbate atom** (not the COM) lands at
   ``surface_ref + z_offset`` (clearance-aware lift after orientation).
   Porous frameworks skip the lift (confined pores have opposing walls).
+  For NP/porous, ``surface_ref`` is ``dot(site.xyz, n_site)``.
 - **Distance recovery** (default on): ``too_close`` / ``too_far`` try height
   then XY; ``adsorbate_overlap`` tries XY only
-  (``placement_x/y_range``, ±0.5 Å default). VDW / contact-quality failures
-  are not recovered.
+  (``placement_x/y_range``, ±0.5 Å default). Porous recovery is inverted
+  (shrink toward the free-volume site when too close; push out when too
+  far). VDW / contact-quality failures are not recovered.
 - **Voronoi auto-widen** (default on): one wider probe/max retry when the
   first window finds no sites.
 - **Dissociative** (``dissociative.py`` / ``place_at_sites``): homonuclear
-  diatomics when ``enable_dissociative_placement=True`` (preferred). Legacy:
-  ``skip_topology_check=True`` alone still enables placement with
-  ``DeprecationWarning``. Keep ``skip_topology_check=True`` to disable
-  post-relax connectivity checks for fragments. Descriptor COM + identity
-  quaternion feed ML; ``fragment_positions`` are replay-only.
+  diatomics when ``enable_dissociative_placement=True``. Keep
+  ``skip_topology_check=True`` to disable post-relax connectivity checks for
+  fragments. Descriptor COM + identity quaternion feed ML; ``fragment_positions``
+  are replay-only.
 - ``_materialize_spec_placements`` — failures become
   ``PlacementFailureEvent`` (BO negatives when enabled).
 
-**Placement retry** (``workflow/core.py``): up to
-``placement_retry_max_attempts`` rounds with seed increments fill the
-remaining deficit; exact failed-spec keys are excluded; site indices that
-repeatedly fail with ``adsorbate_overlap`` / ``too_close`` are blocked.
+**Placement fill** (``workflow/placement_fill.py``): up to
+``placement_retry_max_attempts`` deficit rounds with seed increments fill the
+remaining count. Each round oversamples by estimated materialization yield
+(capped by ``placement_retry_oversample_max``), excludes exact failed-spec keys,
+and blocks site indices that repeatedly fail with ``adsorbate_overlap`` /
+``too_close``. Spec materialization inside a round is threaded via
+``placement_materialize_workers`` (joblib-style ``n_jobs``, default ``-2``).
+BO eval batches use the same materialization helper to backfill from the unused
+valid pool (yield-aware chunk sizes) until the batch size is met.
 
 **Initial geometry validation** (three layers):
 
@@ -454,8 +461,8 @@ Eval budget once autotuned:
 ``bo.initial_random + bo.total_budget * bo.batch_size``.
 
 Nested config: :class:`~metalsurfer.BOConfig` on ``AdsorptionConfig.bo``
-(with ``bo.transfer`` = :class:`~metalsurfer.BOTransferConfig`). Legacy flat
-``bo_*`` / ``bo_transfer_*`` constructor and YAML keys still fold in.
+(with ``bo.transfer`` = :class:`~metalsurfer.BOTransferConfig`). Flat
+``bo_*`` / ``bo_transfer_*`` constructor and YAML keys are rejected.
 
 **Saturation transfer** (``run_saturation_bo``): each step emits
 ``BOStepMemory`` and records ``BOTransferInfo`` on

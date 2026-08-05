@@ -10,7 +10,7 @@ import pytest
 from ase import Atoms
 from scipy.spatial.distance import pdist
 
-from metalsurfer.config import AdsorptionConfig
+from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.io_results import (
     _write_vasp_inputs,
     save_molecule_results,
@@ -391,9 +391,7 @@ class TestProcessMolecule:
         slab = SlabContainer(make_slab())
         refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
         config = AdsorptionConfig(
-            bo_initial_random=1,
-            bo_batch_size=1,
-            bo_total_budget=1,
+            bo=BOConfig(initial_random=1, batch_size=1, total_budget=1),
             num_placements=2,
             num_conformers=1,
             seed=7,
@@ -438,6 +436,7 @@ class TestProcessMolecule:
                         descriptor=make_placement_descriptor(placement_id=0),
                     )
                 ],
+                0,
             )
         )
         with (
@@ -484,9 +483,7 @@ class TestProcessMolecule:
         slab = SlabContainer(make_slab())
         refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
         config = AdsorptionConfig(
-            bo_initial_random=1,
-            bo_batch_size=1,
-            bo_total_budget=1,
+            bo=BOConfig(initial_random=1, batch_size=1, total_budget=1),
             num_placements=2,
             num_conformers=1,
             seed=7,
@@ -532,7 +529,7 @@ class TestProcessMolecule:
         mock_conformers = MagicMock(return_value=([Atoms("H")], [0.0]))
         mock_capacity = MagicMock(return_value=1)
         mock_specs = MagicMock(return_value=specs)
-        mock_eval = MagicMock(return_value=([unique, duplicate], []))
+        mock_eval = MagicMock(return_value=([unique, duplicate], [], 0))
 
         def _mock_filter(results, **kwargs):
             kwargs["duplicate_results_out"].append(results[1])

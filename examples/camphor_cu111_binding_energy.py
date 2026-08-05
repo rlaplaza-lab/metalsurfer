@@ -40,6 +40,7 @@ from scipy.spatial import cKDTree
 from metalsurfer import (
     AdsorptionConfig,
     BindingCampaignResult,
+    BOConfig,
     configure_logging,
     resolved_bo_eval_budget,
     results_dir_for,
@@ -103,9 +104,9 @@ PAPER_DFT_MINIMA: tuple[tuple[str, str, float], ...] = (
 
 @dataclass(frozen=True)
 class ResolvedBoBudget:
-    bo_initial_random: int
-    bo_batch_size: int
-    bo_total_budget: int
+    initial_random: int
+    batch_size: int
+    total_budget: int
     eval_budget: int
 
 
@@ -243,8 +244,10 @@ def build_config(*, device: str) -> AdsorptionConfig:
         binding_distance_threshold=5.0,
         slab_relaxation_mode="none",
         top_layer_tolerance=PAPER_TOP_LAYER_TOLERANCE,
-        bo_total_budget=BO_TOTAL_BUDGET,
-        bo_acquisition="ei",
+        bo=BOConfig(
+            total_budget=BO_TOTAL_BUDGET,
+            acquisition="ei",
+        ),
     )
 
 
@@ -252,9 +255,9 @@ def resolve_bo_budget(config: AdsorptionConfig) -> ResolvedBoBudget | None:
     if config.bo.initial_random is None or config.bo.batch_size is None:
         return None
     return ResolvedBoBudget(
-        bo_initial_random=config.bo.initial_random,
-        bo_batch_size=config.bo.batch_size,
-        bo_total_budget=config.bo.total_budget,
+        initial_random=config.bo.initial_random,
+        batch_size=config.bo.batch_size,
+        total_budget=config.bo.total_budget,
         eval_budget=resolved_bo_eval_budget(config),
     )
 
@@ -936,9 +939,9 @@ def print_found_minima(
     print("=" * 60)
     if budget is not None:
         print(
-            f"BO budget: initial={budget.bo_initial_random}, "
-            f"batch={budget.bo_batch_size}, "
-            f"batches={budget.bo_total_budget} "
+            f"BO budget: initial={budget.initial_random}, "
+            f"batch={budget.batch_size}, "
+            f"batches={budget.total_budget} "
             f"(eval_budget={budget.eval_budget})"
         )
     else:

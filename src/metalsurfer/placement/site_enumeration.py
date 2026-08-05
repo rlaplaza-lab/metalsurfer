@@ -567,7 +567,16 @@ def _cluster_equivalent_sites(
             kdtree_radius=tolerance,
         )
         result = [sorted_sites[i] for i in reps]
-        return sorted(result, key=_sort_key)
+
+        # Prefer open pore sites (larger nn_distance) so early caps / stratified
+        # samples are less likely to start inside framework walls.
+        def _porous_priority(s: Site) -> tuple:
+            xyz = _get_xyz(s)
+            nn = float(s.nn_distance) if s.nn_distance is not None else -1.0
+            pore_rank = 0 if s.site_type == "pore" else 1
+            return (pore_rank, -nn, float(xyz[0]), float(xyz[1]), float(xyz[2]))
+
+        return sorted(result, key=_porous_priority)
 
     z_tol = (
         z_abs_tolerance

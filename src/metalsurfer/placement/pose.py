@@ -113,11 +113,12 @@ def _resolve_surface_ref(
     *,
     rough_slab_local_z: bool = False,
 ) -> tuple[float, bool]:
-    """Return *(surface_ref_z, is_local_ref)* for z-offset calculations.
+    """Return *(surface_ref, is_local_ref)* for z-offset calculations.
 
     For slabs the reference is the topmost height along the slab normal so that
     z_offset is the gap above the surface layer.  For nanoparticles and porous
-    materials the Voronoi vertex z IS the surface reference (local).
+    materials the reference is the Voronoi vertex projected onto the local site
+    normal (matching placement along that normal).
 
     When *rough_slab_local_z* is True and the slab is non-planar, use the
     site's own height along the normal instead of the global maximum.  This
@@ -130,7 +131,12 @@ def _resolve_surface_ref(
             return float(_height_along_slab_normal(site.xyz, cell)), True
         return float(np.max(_height_along_slab_normal(positions, cell))), False
     if site is not None:
-        return float(site.xyz[2]), True
+        site_xyz = np.asarray(site.xyz, dtype=float)
+        site_normal = np.asarray(site.normal, dtype=float)
+        nrm = float(np.linalg.norm(site_normal))
+        if nrm > _VECTOR_NORM_EPS:
+            return float(np.dot(site_xyz, site_normal / nrm)), True
+        return float(site_xyz[2]), True
     return float(np.max(slab.get_positions()[:, 2])), False
 
 
@@ -345,29 +351,25 @@ def _recover_z_offset(
     Returned ``z_offset`` is the adsorbate COM displacement above
     *surface_ref* (along the slab/site normal).  It includes any clearance
     lift applied at placement time, so ``surface_ref + z_offset`` reconstructs
-    the COM absolute height — not the closest-atom gap.
+    the COM height along that normal — not the closest-atom gap.
 
-    For axis-aligned slabs this equals ``z_abs - surface_ref``.  For
-    nanoparticle / pore sites with an oriented normal we project the
-    displacement onto the local normal.
+    For slabs this is ``dot(placement, n_slab) - surface_ref``.  For
+    nanoparticle / pore sites it is ``dot(placement, n_site) - surface_ref``
+    when the site normal is usable (``surface_ref`` is the site projected onto
+    the same normal).
     """
     pose = ctx.pose
     site = ctx.site
+    placement = np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float)
     if ctx.mat_type == "slab" and slab is not None:
         cell = np.asarray(slab.get_cell(), dtype=float)
         n_hat = _slab_normal(cell)
-        placement = np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float)
         return float(np.dot(placement, n_hat) - ctx.surface_ref)
     if site is not None:
-        site_xyz = np.asarray(site.xyz, dtype=float)
         site_normal = np.asarray(site.normal, dtype=float)
         nrm = float(np.linalg.norm(site_normal))
         if nrm > _VECTOR_NORM_EPS:
-            site_normal = site_normal / nrm
-            displacement = (
-                np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float) - site_xyz
-            )
-            return float(np.dot(displacement, site_normal))
+            return float(np.dot(placement, site_normal / nrm) - ctx.surface_ref)
     return float(z_abs - ctx.surface_ref)
 
 
@@ -510,9 +512,17 @@ def _recover_distance_failure(
         for step in range(1, _DISTANCE_RECOVERY_HEIGHT_STEPS + 1):
             frac = step / float(_DISTANCE_RECOVERY_HEIGHT_STEPS + 1)
             if fail_reason == "too_close":
-                cand = zf + (1.0 - zf) * frac
+                # Slabs/NPs: raise away from the surface. Porous: Voronoi sites
+                # already sit in free volume — shrink toward the site center.
+                if ctx.mat_type == "porous":
+                    cand = zf * (1.0 - frac)
+                else:
+                    cand = zf + (1.0 - zf) * frac
             else:
-                cand = zf * (1.0 - frac)
+                if ctx.mat_type == "porous":
+                    cand = zf + (1.0 - zf) * frac
+                else:
+                    cand = zf * (1.0 - frac)
             cand = float(min(1.0, max(0.0, cand)))
             if abs(cand - zf) > 1e-9:
                 height_candidates.append(cand)
@@ -548,9 +558,17 @@ def _recover_distance_failure(
 
     work_zf = zf
     if fail_reason == "too_close" and height_candidates:
-        work_zf = max(height_candidates)
+        work_zf = (
+            min(height_candidates)
+            if ctx.mat_type == "porous"
+            else max(height_candidates)
+        )
     elif fail_reason == "too_far" and height_candidates:
-        work_zf = min(height_candidates)
+        work_zf = (
+            max(height_candidates)
+            if ctx.mat_type == "porous"
+            else min(height_candidates)
+        )
 
     work_center = _center_with_height_delta(
         origin,

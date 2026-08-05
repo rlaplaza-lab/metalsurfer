@@ -394,17 +394,15 @@ def _surface_aligned_rotation(
     normal: np.ndarray,
     symbols: list[str] | None = None,
     en_binder_index: int | None = None,
-    *,
-    en_atom_index: int | None = None,
 ) -> np.ndarray:
     """Rotate adsorbate so a binding vector points toward surface. Returns centred positions.
 
-    When *en_binder_index* (or legacy alias *en_atom_index*) is provided and valid,
-    use that index into the filtered electronegative-atom list from
-    :func:`_binding_atom_candidates`, not a raw atom index.  Otherwise select
-    the binder with highest dot product toward the surface normal.
+    When *en_binder_index* is provided and valid, use that index into the filtered
+    electronegative-atom list from :func:`_binding_atom_candidates`, not a raw
+    atom index.  Otherwise select the binder with highest dot product toward the
+    surface normal.
     """
-    binder_idx = en_binder_index if en_binder_index is not None else en_atom_index
+    binder_idx = en_binder_index
     pos = np.asarray(ads_pos, dtype=float).copy()
     com = np.mean(pos, axis=0)
     pos -= com

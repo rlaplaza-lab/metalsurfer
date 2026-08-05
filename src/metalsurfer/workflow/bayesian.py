@@ -259,10 +259,19 @@ def process_molecule_bayesian(
 
     def _run_batch(pool_positions: list[int]) -> None:
         nonlocal total_evaluated, best_energy, best_X_row
+        n_target = len(pool_positions)
+        primary_set = set(pool_positions)
         batch_specs = [all_specs[valid_pool_indices[p]] for p in pool_positions]
-        evaluated_pool_positions.update(pool_positions)
+        backfill_positions = [
+            p
+            for p in range(len(valid_pool_indices))
+            if p not in evaluated_pool_positions and p not in primary_set
+        ]
+        backfill_specs = [
+            all_specs[valid_pool_indices[p]] for p in backfill_positions
+        ]
 
-        batch_results, batch_failures = _evaluate_placement_batch(
+        batch_results, batch_failures, n_backfill_used = _evaluate_placement_batch(
             batch_specs,
             conformers,
             slab,
@@ -278,9 +287,13 @@ def process_molecule_bayesian(
             base_slab_for_frozen=effective_base_slab_for_frozen,
             slab_for_sites=slab_for_sites,
             materialization_cache=materialization_cache,
+            backfill_specs=backfill_specs,
+            n_target=n_target,
         )
 
-        total_evaluated += len(pool_positions)
+        used_positions = list(pool_positions) + backfill_positions[:n_backfill_used]
+        evaluated_pool_positions.update(used_positions)
+        total_evaluated += len(used_positions)
         all_results.extend(batch_results)
         bo_failure_events.extend(batch_failures)
 
@@ -302,7 +315,7 @@ def process_molecule_bayesian(
         if config.bo.include_failure_negatives:
             pid_to_pool_position: dict[int, int] = {
                 all_specs[valid_pool_indices[pos]].placement_index: pos
-                for pos in pool_positions
+                for pos in used_positions
             }
             for event in batch_failures:
                 pool_pos = pid_to_pool_position.get(event.placement_id)
@@ -339,7 +352,7 @@ def process_molecule_bayesian(
             batch_best = min(r.energy_adsorption for r in batch_results)
             logger.info(
                 "BO batch: %d evaluated, %d valid, %d failed, batch_best=%.4f, overall_best=%.4f",
-                len(pool_positions),
+                len(used_positions),
                 len(batch_results),
                 len(batch_failures),
                 batch_best,
@@ -348,7 +361,7 @@ def process_molecule_bayesian(
         else:
             logger.info(
                 "BO batch: %d evaluated, 0 valid results, %d failed",
-                len(pool_positions),
+                len(used_positions),
                 len(batch_failures),
             )
 

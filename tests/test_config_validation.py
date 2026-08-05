@@ -5,7 +5,10 @@ import pytest
 from metalsurfer import _numeric_defaults as numeric_defaults
 from metalsurfer.config import (
     AdsorptionConfig,
+    BOConfig,
+    BOTransferConfig,
     bo_eval_schedule,
+    fold_bo_config,
     resolved_bo_eval_budget,
 )
 from metalsurfer.ml.schema import ComputationContext
@@ -42,6 +45,9 @@ def test_default_config():
     assert config.voronoi_auto_widen is True
     assert config.placement_x_range == (-0.5, 0.5)
     assert config.placement_y_range == (-0.5, 0.5)
+    assert config.placement_retry_oversample_max == 6.0
+    assert config.placement_retry_max_attempts == 8
+    assert config.placement_materialize_workers == -2
     assert (
         config.min_initial_distance
         == numeric_defaults.MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
@@ -68,6 +74,16 @@ def test_default_config():
         config.planar_z_variance_threshold
         == numeric_defaults.DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
     )
+
+
+def test_placement_retry_oversample_max_rejects_below_one():
+    with pytest.raises(ValueError, match="placement_retry_oversample_max"):
+        AdsorptionConfig(placement_retry_oversample_max=0.5)
+
+
+def test_placement_materialize_workers_rejects_zero():
+    with pytest.raises(ValueError, match="placement_materialize_workers"):
+        AdsorptionConfig(placement_materialize_workers=0)
 
 
 def test_numeric_defaults_single_source_of_truth():
@@ -561,18 +577,14 @@ def test_bo_defaults():
 
 def test_resolved_bo_eval_budget():
     config = AdsorptionConfig(
-        bo_initial_random=10,
-        bo_batch_size=5,
-        bo_total_budget=18,
+        bo=BOConfig(initial_random=10, batch_size=5, total_budget=18),
     )
     assert resolved_bo_eval_budget(config) == 10 + 18 * 5
 
 
 def test_bo_eval_schedule():
     config = AdsorptionConfig(
-        bo_initial_random=10,
-        bo_batch_size=5,
-        bo_total_budget=18,
+        bo=BOConfig(initial_random=10, batch_size=5, total_budget=18),
     )
     assert bo_eval_schedule(config) == [
         10,
@@ -600,22 +612,25 @@ def test_bo_eval_schedule():
 @pytest.mark.parametrize(
     ("kwargs", "error_match"),
     [
-        ({"bo_initial_sampling": "latin_hypercube"}, "bo_initial_sampling"),
-        ({"bo_ucb_kappa": -1.0}, "bo_ucb_kappa"),
-        ({"bo_acquisition": "invalid"}, "bo_acquisition"),
-        ({"bo_surrogate": "invalid"}, "bo_surrogate"),
-        ({"bo_candidate_pool_size": 0}, "bo_candidate_pool_size"),
-        ({"bo_failure_penalty_default": -1.0}, "bo_failure_penalty_default"),
+        ({"bo": {"initial_sampling": "latin_hypercube"}}, "bo.initial_sampling"),
+        ({"bo": {"ucb_kappa": -1.0}}, "bo.ucb_kappa"),
+        ({"bo": {"acquisition": "invalid"}}, "bo.acquisition"),
+        ({"bo": {"surrogate": "invalid"}}, "bo.surrogate"),
+        ({"bo": {"candidate_pool_size": 0}}, "bo.candidate_pool_size"),
+        ({"bo": {"failure_penalty_default": -1.0}}, "bo.failure_penalty_default"),
         (
-            {"bo_failure_penalty_overrides": {"validation": -0.1}},
-            "bo_failure_penalty_overrides values",
+            {"bo": {"failure_penalty_overrides": {"validation": -0.1}}},
+            "bo.failure_penalty_overrides values",
         ),
-        ({"bo_transfer_weight_cap": 1.0}, "bo_transfer_weight_cap"),
+        ({"bo": {"transfer": {"weight_cap": 1.0}}}, "bo.transfer.weight_cap"),
         (
-            {"bo_transfer_proximity_lengthscale": 0.0},
-            "bo_transfer_proximity_lengthscale",
+            {"bo": {"transfer": {"proximity_lengthscale": 0.0}}},
+            "bo.transfer.proximity_lengthscale",
         ),
-        ({"bo_transfer_proximity_floor": 1.5}, "bo_transfer_proximity_floor"),
+        (
+            {"bo": {"transfer": {"proximity_floor": 1.5}}},
+            "bo.transfer.proximity_floor",
+        ),
     ],
 )
 def test_bo_invalid_config_rejected(kwargs, error_match):
@@ -625,9 +640,11 @@ def test_bo_invalid_config_rejected(kwargs, error_match):
 
 def test_bo_candidate_pool_size_and_failure_penalty_accepted():
     c = AdsorptionConfig(
-        bo_candidate_pool_size=500,
-        bo_failure_penalty_default=22.5,
-        bo_failure_penalty_overrides={"validation": 17.0},
+        bo=BOConfig(
+            candidate_pool_size=500,
+            failure_penalty_default=22.5,
+            failure_penalty_overrides={"validation": 17.0},
+        ),
     )
     assert c.bo.candidate_pool_size == 500
     assert c.bo.failure_penalty_default == 22.5
@@ -636,16 +653,20 @@ def test_bo_candidate_pool_size_and_failure_penalty_accepted():
 
 def test_bo_transfer_config_validation():
     c = AdsorptionConfig(
-        bo_transfer_enabled=True,
-        bo_transfer_weight_cap=0.25,
-        bo_transfer_min_step_observations=3,
-        bo_transfer_similarity_lengthscale=0.5,
-        bo_transfer_min_similarity=0.1,
-        bo_transfer_trust_patience=3,
-        bo_transfer_mae_tolerance=0.02,
-        bo_transfer_exploration_fraction=0.15,
-        bo_transfer_proximity_lengthscale=0.5,
-        bo_transfer_proximity_floor=0.1,
+        bo=BOConfig(
+            transfer=BOTransferConfig(
+                enabled=True,
+                weight_cap=0.25,
+                min_step_observations=3,
+                similarity_lengthscale=0.5,
+                min_similarity=0.1,
+                trust_patience=3,
+                mae_tolerance=0.02,
+                exploration_fraction=0.15,
+                proximity_lengthscale=0.5,
+                proximity_floor=0.1,
+            ),
+        ),
     )
     assert c.bo.transfer.enabled is True
     assert c.bo.transfer.weight_cap == 0.25
@@ -654,20 +675,20 @@ def test_bo_transfer_config_validation():
 
 
 def test_bo_transfer_requires_weighted_surrogate():
-    with pytest.raises(ValueError, match="bo_transfer_enabled requires"):
+    with pytest.raises(ValueError, match="bo.transfer.enabled requires"):
         AdsorptionConfig(
-            bo_transfer_enabled=True,
-            bo_surrogate="gaussian_process",
+            bo=BOConfig(surrogate="gaussian_process", transfer=BOTransferConfig(enabled=True)),
         )
     for sur in ("ridge", "gradient_boost", "random_forest", "extra_trees", "ensemble"):
         c = AdsorptionConfig(
-            bo_transfer_enabled=True,
-            bo_surrogate=sur,  # type: ignore[arg-type]
+            bo=BOConfig(surrogate=sur, transfer=BOTransferConfig(enabled=True)),  # type: ignore[arg-type]
         )
         assert c.bo.surrogate == sur
     gp = AdsorptionConfig(
-        bo_transfer_enabled=False,
-        bo_surrogate="gaussian_process",
+        bo=BOConfig(
+            surrogate="gaussian_process",
+            transfer=BOTransferConfig(enabled=False),
+        ),
     )
     assert gp.bo.surrogate == "gaussian_process"
 
@@ -677,3 +698,13 @@ def test_saturation_max_steps_must_be_positive_when_set():
         AdsorptionConfig(saturation_max_steps=0)
     c = AdsorptionConfig(saturation_max_steps=1)
     assert c.saturation_max_steps == 1
+
+
+def test_flat_bo_constructor_kwargs_rejected():
+    with pytest.raises(TypeError):
+        AdsorptionConfig(bo_initial_random=2)  # type: ignore[call-arg]
+
+
+def test_fold_bo_config_rejects_flat_keys():
+    with pytest.raises(ValueError, match="Flat BO keys"):
+        fold_bo_config({"bo_initial_random": 2, "num_conformers": 1})

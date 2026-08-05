@@ -131,7 +131,7 @@ def parse_campaign_dict(data: dict[str, Any]) -> CampaignDocument:
     if not isinstance(config_raw, dict):
         raise ValueError("config must be a mapping when provided")
     config_payload = dict(config_raw)
-    # Nested ``bo:`` and legacy flat ``bo_*`` keys fold into AdsorptionConfig.bo.
+    # Nested ``bo:`` / ``bo.transfer:`` only (flat ``bo_*`` keys are rejected).
     config_payload["bo"] = fold_bo_config(config_payload)
     config = AdsorptionConfig(**config_payload)
 

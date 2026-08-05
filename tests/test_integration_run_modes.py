@@ -28,7 +28,7 @@ from metalsurfer.campaigns import (
     run_saturation,
     run_saturation_bo,
 )
-from metalsurfer.config import AdsorptionConfig
+from metalsurfer.config import AdsorptionConfig, BOConfig, resolved_bo_eval_budget
 from metalsurfer.models import (
     BindingCampaignResult,
     ReferenceEnergies,
@@ -67,6 +67,13 @@ MOL_SMILES = "O"
 
 
 def _tiny_config(**overrides: Any) -> AdsorptionConfig:
+    """Near-default config for stubbed-MLIP CI e2e.
+
+    Only CI-speed overrides differ from :class:`AdsorptionConfig` defaults:
+    ``device="cpu"``, tiny conformer/placement counts, short stage steps, and a
+    relaxed ``max_force_convergence`` (stub optimizer does not attach forces).
+    Physics gates (desorption, topology, energy cap, contact) stay at defaults.
+    """
     defaults: dict[str, Any] = {
         "material_type": "slab",
         "seed": 42,
@@ -75,9 +82,6 @@ def _tiny_config(**overrides: Any) -> AdsorptionConfig:
         "device": "cpu",
         "stage1_steps": 2,
         "stage2_steps": 2,
-        "skip_topology_check": False,
-        "skip_desorption_check": False,
-        "max_adsorption_energy": 5.0,
         "max_force_convergence": 1.0,
     }
     defaults.update(overrides)
@@ -85,14 +89,33 @@ def _tiny_config(**overrides: Any) -> AdsorptionConfig:
 
 
 def _bo_config(**overrides: Any) -> AdsorptionConfig:
-    bo_defaults: dict[str, Any] = {
-        "bo_initial_random": 3,
-        "bo_batch_size": 2,
-        "bo_total_budget": 2,
-        "num_placements": 8,
-    }
-    bo_defaults.update(overrides)
-    return _tiny_config(**bo_defaults)
+    bo = overrides.pop("bo", None)
+    if bo is None:
+        bo_kwargs = {
+            "initial_random": overrides.pop("initial_random", 3),
+            "batch_size": overrides.pop("batch_size", 2),
+            "total_budget": overrides.pop("total_budget", 2),
+        }
+        extra_bo = {
+            k: overrides.pop(k)
+            for k in list(overrides)
+            if k
+            in {
+                "initial_random",
+                "batch_size",
+                "total_budget",
+                "acquisition",
+                "surrogate",
+                "initial_sampling",
+                "ucb_kappa",
+                "transfer",
+            }
+        }
+        bo_kwargs.update(extra_bo)
+        bo = BOConfig(**bo_kwargs)
+    return _tiny_config(
+        bo=bo, num_placements=overrides.pop("num_placements", 8), **overrides
+    )
 
 
 def _substrate(material_type: str) -> SlabContainer:
@@ -235,9 +258,9 @@ class _StubHarness:
 
 def _distance_window(material_type: str) -> tuple[float, float]:
     # Lower bound tracks covalent contact gate (can be < 1.5 Å); upper is desorption.
-    if material_type == "porous":
-        return 0.7, 6.0
-    return 0.8, 4.0
+    # Same band for slab / nanoparticle / porous campaign survivors.
+    _ = material_type
+    return 1.0, 4.0
 
 
 def _assert_no_intramolecular_clashes(adsorbate: Atoms, slab: Atoms) -> None:
@@ -282,8 +305,8 @@ def _assert_dissociative_h2_geometry(ads: Atoms, slab: Atoms) -> None:
     assert len(ads) == 2
     hh = _pair_distance(ads, 0, 1, slab)
     # Dissociative hollow-pair starts are stretched vs molecular H2 (~0.74 Å).
-    assert hh >= 1.0, f"dissociative H–H should be non-molecular, got {hh:.3f} Å"
-    assert hh <= 5.0, f"dissociative H–H unphysically far: {hh:.3f} Å"
+    assert hh >= 1.5, f"dissociative H–H should be non-molecular, got {hh:.3f} Å"
+    assert hh <= 3.5, f"dissociative H–H unphysically far: {hh:.3f} Å"
 
 
 def _assert_survivor_physics(
@@ -353,19 +376,19 @@ def _assert_survivor_physics(
 
     desc = result.placement_descriptor
     assert desc is not None
-    for field in ("x_abs", "y_abs", "z_abs"):
+    for field in ("x_abs", "y_abs", "z_abs", "surface_ref_z_abs"):
         val = getattr(desc, field)
         assert val is not None and np.isfinite(val), f"{field}={val}"
-    if (
-        material_type == "slab"
-        and not dissociative
-        and desc.surface_ref_z_abs is not None
-        and desc.z_abs is not None
-    ):
-        # Flat-slab +z convention: adsorbate reference height above surface ref.
-        assert float(desc.z_abs) >= float(desc.surface_ref_z_abs) - 0.5, (
-            f"z_abs={desc.z_abs:.3f} below surface_ref_z_abs={desc.surface_ref_z_abs:.3f}"
-        )
+    if not dissociative and desc.z_abs is not None and desc.surface_ref_z_abs is not None:
+        if material_type == "slab":
+            assert float(desc.z_abs) >= float(desc.surface_ref_z_abs) - 0.05, (
+                f"z_abs={desc.z_abs:.3f} below surface_ref_z_abs={desc.surface_ref_z_abs:.3f}"
+            )
+        else:
+            # Local-normal materials: COM height along the site normal equals
+            # surface_ref + z_offset (clearance lift included for NP).
+            assert desc.z_offset is not None
+            assert float(desc.z_offset) > 0.0
 
     if dissociative:
         assert desc.orientation_type == "dissociative"
@@ -373,6 +396,7 @@ def _assert_survivor_physics(
         assert sorted(ads.get_chemical_symbols()) == ["H", "H"]
         _assert_dissociative_h2_geometry(ads, slab_part)
     elif expected_symbols is not None and sorted(expected_symbols) == ["H", "H", "O"]:
+        assert desc.orientation_type == "round"
         _assert_water_geometry(ads, slab_part)
 
 
@@ -440,24 +464,22 @@ def _assert_saturation_artifacts(results_dir: Path) -> None:
 
 _MATRIX_CASES = (
     # material, smiles, name, config overrides, symbols, dissociative, min_success_rate
-    ("slab", "O", "water", {"num_placements": 8}, ["H", "H", "O"], False, 1.0),
+    ("slab", "O", "water", {}, ["H", "H", "O"], False, 1.0),
     (
         "slab",
         "[H][H]",
         "H2",
         {
+            # Near-default dissociative slab settings (same as demos).
             "enable_dissociative_placement": True,
             "skip_topology_check": True,
-            "num_placements": 8,
         },
         ["H", "H"],
         True,
-        # Dissociative starts can sit past the desorption distance gate (~4 Å).
-        0.5,
+        1.0,
     ),
-    ("nanoparticle", "O", "water", {"num_placements": 8}, ["H", "H", "O"], False, 1.0),
-    # Pore sites often reject a fraction for adsorbate–framework clash.
-    ("porous", "O", "water", {"num_placements": 8}, ["H", "H", "O"], False, 0.75),
+    ("nanoparticle", "O", "water", {}, ["H", "H", "O"], False, 1.0),
+    ("porous", "O", "water", {}, ["H", "H", "O"], False, 1.0),
 )
 
 
@@ -492,6 +514,10 @@ def test_run_adsorption_substrate_matrix(
     surface_type = f"e2e_{material_type}_{mol_name}"
     config = _tiny_config(material_type=material_type, **config_overrides)
     n_requested = int(config.num_placements or 8)
+    assert config.skip_desorption_check is False
+    assert config.max_adsorption_energy == 5.0
+    if not dissociative:
+        assert config.skip_topology_check is False
 
     campaign = run_adsorption(
         slab=slab,
@@ -616,8 +642,14 @@ def _assert_binding_api_campaign(
     assert campaign.n_molecules == 1
     assert len(campaign.run_results) == 1
     results = campaign.run_results[0].results
+    # BO evaluates resolved_bo_eval_budget candidates, not necessarily num_placements.
+    n_requested = (
+        resolved_bo_eval_budget(config)
+        if mode == "bo"
+        else int(config.num_placements or 8)
+    )
     kwargs: dict[str, Any] = {
-        "n_requested": int(config.num_placements or 8),
+        "n_requested": n_requested,
         "min_success_rate": min_success_rate,
     }
     if min_absolute is not None:
@@ -670,7 +702,7 @@ class TestRunModeApiE2E:
             tmp_path,
             surface_type,
             mode="bo",
-            min_success_rate=0.75,
+            min_success_rate=1.0,
             min_absolute=2,
         )
 

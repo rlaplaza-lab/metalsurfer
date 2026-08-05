@@ -1016,23 +1016,26 @@ def build_spec_features_geometry_aware(
             "build_spec_features_geometry_aware requires at least one conformer"
         )
 
-    for i, spec in enumerate(specs):
-        generated = placement_generators.generate_placement_from_spec(
-            spec,
-            conformers,
-            slab,
-            config,
-            smiles=smiles,
-            site_context=site_context,
-            slab_for_sites=slab_for_sites,
-        )
-        if generated is None:
+    generated = placement_generators.generate_placements_from_specs(
+        specs,
+        conformers,
+        slab,
+        config,
+        smiles=smiles,
+        site_context=site_context,
+        slab_for_sites=slab_for_sites,
+        materialization_cache=materialization_cache,
+    )
+    for i, (spec, (result, _fail_reason)) in enumerate(
+        zip(specs, generated, strict=True)
+    ):
+        if result is None:
             logger.debug(
                 "Skipping spec placement_index=%d: no valid placement",
                 spec.placement_index,
             )
             continue
-        adsorbate, descriptor = generated
+        adsorbate, descriptor = result
         if materialization_cache is not None:
             materialization_cache[int(descriptor.placement_index)] = (
                 adsorbate.copy(),

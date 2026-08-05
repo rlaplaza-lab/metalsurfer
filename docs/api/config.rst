@@ -16,7 +16,8 @@ and :doc:`../guides/surface_engineering`.
    so connectivity filters allow fragmented adsorbates. Use ``run_*_bo`` (or
    YAML ``campaign: adsorption_bo`` / ``saturation_bo``) for Bayesian placement
    selection; nested ``bo`` (:class:`~metalsurfer.BOConfig`) hyperparameters
-   only. Legacy flat ``bo_*`` constructor / YAML keys still fold into ``bo``.
+   only. Flat ``bo_*`` constructor / YAML keys are rejected—use nested
+   ``bo:`` / ``bo.transfer:``.
    Reference energies remain isolated-molecule
    energies; positive :math:`E_\mathrm{ads}` can result when the relaxed adsorbate
    dissociates.
@@ -251,18 +252,33 @@ Placement generation
    **Type:** ``bool`` · **Default:** ``True``
 
    Retry failed placement generation with perturbed seeds until
-   ``num_placements`` valid specs are found or retries are exhausted.
+   ``num_placements`` valid specs are found or deficit rounds are exhausted.
 
 ``placement_retry_max_attempts``
-   **Type:** ``int`` · **Default:** ``3``
+   **Type:** ``int`` · **Default:** ``8``
 
-   Maximum retry rounds per placement slot when ``placement_retry_enabled`` is
-   ``True``.
+   Maximum deficit rounds when ``placement_retry_enabled`` is ``True``. Each
+   round requests more specs than the remaining count (yield-aware oversampling)
+   rather than one retry per placement slot.
 
 ``placement_retry_diversity_seed_increment``
    **Type:** ``int`` · **Default:** ``1000``
 
    Added to the RNG seed on each placement retry for diversity.
+
+``placement_retry_oversample_max``
+   **Type:** ``float`` · **Default:** ``6.0`` · **Valid range:** ``>= 1.0``
+
+   Cap on specs requested per deficit round as a multiple of the remaining
+   placement count. Combined with the observed materialization yield so rounds
+   stay short while still filling ``num_placements``.
+
+``placement_materialize_workers``
+   **Type:** ``int`` · **Default:** ``-2``
+
+   Thread-pool size for per-spec placement materialization (joblib-style
+   ``n_jobs``). ``1`` is serial, positive values use that many workers,
+   ``-1`` uses all CPUs, and ``-2`` uses all but one CPU. Must not be ``0``.
 
 Initial placement validation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -460,12 +476,11 @@ Post-relaxation validation
 ``skip_topology_check``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Disables post-relaxation molecular connectivity / decomposition checks.
-   Legacy: when ``True`` alone, also enables dissociative hollow-site-pair
-   placements (emits ``DeprecationWarning``; prefer
-   ``enable_dissociative_placement=True``). Reference energies remain the
-   isolated molecule; positive :math:`E_\mathrm{ads}` can result after
-   dissociation.
+   Disables post-relaxation molecular connectivity / decomposition checks so
+   fragmented adsorbates can be retained. Does **not** enable dissociative
+   placement—set ``enable_dissociative_placement=True`` for hollow/site-pair
+   initial placements. Reference energies remain the isolated molecule;
+   positive :math:`E_\mathrm{ads}` can result after dissociation.
 
 ``connectivity_multipliers``
    **Type:** ``list[float]`` · **Default:** ``[1.2, 1.3]``
@@ -500,15 +515,14 @@ Bayesian optimization
 Used by :func:`~metalsurfer.run_adsorption_bo` and
 :func:`~metalsurfer.run_saturation_bo` (and YAML ``campaign: adsorption_bo`` /
 ``saturation_bo``). Those entry points select BO mode; nested ``bo`` /
-``bo.transfer`` fields below are hyperparameters only. Legacy flat ``bo_*`` /
-``bo_transfer_*`` constructor and YAML keys still fold into these nested
-objects for one release.
+``bo.transfer`` fields below are hyperparameters only. Flat ``bo_*`` /
+``bo_transfer_*`` constructor and YAML keys are rejected.
 
 ``bo``
    **Type:** :class:`~metalsurfer.BOConfig` · **Default:** ``BOConfig()``
 
-   Nested Bayesian hyperparameters. Prefer ``config.bo.*`` in Python; YAML may
-   use a nested ``bo:`` block or legacy flat ``bo_*`` keys.
+   Nested Bayesian hyperparameters. Use ``config.bo.*`` in Python; YAML must
+   use a nested ``bo:`` / ``bo.transfer:`` block.
 
 ``bo.initial_random``
    **Type:** ``int | None`` · **Default:** ``None``
@@ -580,10 +594,7 @@ objects for one release.
 
    Override penalty energies by failure stage (``"generation"``, ``"optimization"``,
    ``"validation"``, ``"energy_cap"``, ``"filter"``) or by generation reason token
-   (e.g. ``"too_close"``, ``"vdw_overlap"``, ``"distance_check_failed"``). For one
-   release, the legacy key ``"initial_distance_or_site_constraints"`` also applies
-   to the split generation reasons ``too_close``, ``too_far``, ``vdw_overlap``,
-   ``adsorbate_overlap``, and ``missing_z_abs``.
+   (e.g. ``"too_close"``, ``"vdw_overlap"``, ``"distance_check_failed"``).
 
 ``bo.transfer.enabled``
    **Type:** ``bool`` · **Default:** ``True``

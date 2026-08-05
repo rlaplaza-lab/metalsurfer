@@ -38,8 +38,8 @@ Autotuning placements on GPU
 Leave these at their defaults (``None``) for production GPU runs:
 
 - ``num_placements`` — non-BO screening batch size
-- ``bo.initial_random``, ``bo.batch_size`` — BO batch sizes (legacy YAML /
-  constructor keys ``bo_initial_random``, ``bo_batch_size`` still fold in)
+- ``bo.initial_random``, ``bo.batch_size`` — BO batch sizes (nested
+  ``bo:`` only; flat ``bo_*`` keys are rejected)
 
 At workflow start Metalsurfer probes TorchSim memory using ``autobatcher_*`` fields
 and sets parallel capacity. Demos and CI tests set small explicit integers instead.
@@ -61,13 +61,14 @@ For homonuclear diatomics that may dissociate on slabs or nanoparticles:
        seed=42,
    )
 
-- ``enable_dissociative_placement=True`` — preferred gate for hollow-site pair
+- ``enable_dissociative_placement=True`` — gate for hollow-site pair
   (or nanoparticle site-pair) initial placements
 - ``skip_topology_check=True`` — disables post-relaxation connectivity /
   decomposition checks so fragmented adsorbates are retained
 
-Using ``skip_topology_check=True`` alone still enables dissociative placement
-with a ``DeprecationWarning``; set both flags in new code.
+Both flags are independent: dissociative placement requires
+``enable_dissociative_placement``; topology skip only affects post-relax
+filters.
 
 Reference energy remains the **isolated molecule**; positive :math:`E_\mathrm{ads}`
 is possible when the relaxed state is dissociated.
@@ -81,7 +82,7 @@ Common mistakes
   ``max_force_convergence`` if you intend softer acceptance.
 - ``bo.total_budget`` is acquisition **batches**, not total evaluations. Use
   :func:`~metalsurfer.config.resolved_bo_eval_budget` once batch sizes are resolved (or
-  see the budget section below). Legacy flat key ``bo_total_budget`` still folds in.
+  see the budget section below).
 - BO mode is the ``run_*_bo`` entry point or YAML ``campaign: *_bo`` — not a
   config field. Unknown keys such as ``bo_enabled`` in YAML ``config:`` raise
   ``TypeError`` from :class:`~metalsurfer.AdsorptionConfig`.
@@ -128,7 +129,13 @@ Defaults aim for high accept rates with low overhead (work runs mainly on failur
   accessibility window when the first pass finds no sites; pair with explicit
   ``voronoi_probe_radius`` / ``voronoi_max_site_distance`` when comparing windows.
 - **Retries** — ``placement_retry_*`` re-enumerates remaining slots with new seeds
-  after generation failures.
+  after generation failures. Each deficit round oversamples by estimated
+  materialization yield (capped by ``placement_retry_oversample_max``) and stops
+  early when the target is met or enumeration returns nothing. Per-spec
+  materialization runs in a thread pool sized by ``placement_materialize_workers``
+  (joblib-style; default ``-2`` = all but one CPU). BO eval batches backfill from
+  the unused valid pool (also yield-oversampled) so each step still reaches its
+  requested size before relaxation.
 - **Gates** — keep ``reject_vdw_overlaps`` and ``strict_initial_placement`` off
   unless you need stricter starts (they reduce yield).
 
@@ -178,8 +185,8 @@ Prefer nested Python / YAML::
    #     transfer:
    #       enabled: true
 
-Legacy flat constructor kwargs (``bo_initial_random``, …) and flat YAML
-``bo_*`` / ``bo_transfer_*`` keys still fold into ``AdsorptionConfig.bo``.
+Flat ``bo_*`` constructor kwargs and flat YAML ``bo_*`` / ``bo_transfer_*``
+keys are rejected; nest under ``bo`` / ``bo.transfer``.
 
 Use :func:`~metalsurfer.run_adsorption_bo` or :func:`~metalsurfer.run_saturation_bo`
 (or YAML ``campaign: adsorption_bo`` / ``saturation_bo`` with

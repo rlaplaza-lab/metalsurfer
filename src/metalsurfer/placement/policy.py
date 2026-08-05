@@ -282,7 +282,3 @@ def build_batch_placement_specs(
         spec.placement_index = i
 
     return specs[:n_desired]
-
-
-# Public alias for backward compatibility
-Z_FRACTIONS = _Z_FRACTIONS

@@ -1,4 +1,4 @@
-"""Typed adsorption site records and dict adapters."""
+"""Typed adsorption site records and dict helpers."""
 
 from __future__ import annotations
 
@@ -108,20 +108,14 @@ def _coerce_slab_indices(raw_indices: object) -> tuple[int, ...]:
 
 
 def site_from_dict(data: Mapping[str, object]) -> Site:
-    """Boundary adapter: legacy dict → Site (tests / CSV loaders)."""
-    xyz: np.ndarray
-    normal: np.ndarray
-    if "xyz" in data:
-        xyz = np.asarray(data["xyz"], dtype=float).reshape(3)
-    else:
-        xy = np.asarray(data.get("xy", (0.0, 0.0)), dtype=float).reshape(2)
-        z_raw = data.get("z", 0.0)
-        z = float(z_raw) if isinstance(z_raw, (int, float, str)) else 0.0
-        xyz = np.array([xy[0], xy[1], z], dtype=float)
-    if "normal" in data:
-        normal = np.asarray(data["normal"], dtype=float).reshape(3)
-    else:
-        normal = np.array([0.0, 0.0, 1.0], dtype=float)
+    """Build a :class:`Site` from a mapping (tests / CSV loaders).
+
+    Requires ``xyz`` (length-3). Optional keys mirror :class:`Site` fields.
+    """
+    if "xyz" not in data:
+        raise KeyError("site_from_dict requires 'xyz'")
+    xyz = np.asarray(data["xyz"], dtype=float).reshape(3)
+    normal = np.asarray(data.get("normal", (0.0, 0.0, 1.0)), dtype=float).reshape(3)
     slab_indices = _coerce_slab_indices(data.get("slab_indices", ()))
     env = data.get("env_fingerprint", ())
     if not isinstance(env, tuple):

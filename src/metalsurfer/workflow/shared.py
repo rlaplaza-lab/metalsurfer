@@ -37,6 +37,7 @@ from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
 from ..placement.generators import (
     enumerate_placement_specs,
     generate_placement_from_spec_with_reason,
+    generate_placements_from_specs,
 )
 from ..placement.geometry import calculate_min_distance
 from ..placement.site_context import SiteContext, resolve_site_context_for_sampling
@@ -166,28 +167,17 @@ def _materialize_spec_placements(
     placement_descriptors: list[PlacementDescriptor] = []
     failures: list[PlacementFailureEvent] = []
 
-    for spec in specs:
-        cached = (
-            materialization_cache.get(int(spec.placement_index))
-            if materialization_cache is not None
-            else None
-        )
-        result: tuple[Atoms, PlacementDescriptor] | None
-        fail_reason: str | None
-        if cached is not None:
-            adsorbate, descriptor = cached
-            result = (adsorbate.copy(), descriptor)
-            fail_reason = None
-        else:
-            result, fail_reason = generate_placement_from_spec_with_reason(
-                spec,
-                conformers,
-                slab_atoms,
-                config,
-                smiles=smiles,
-                site_context=site_context,
-                slab_for_sites=slab_for_sites,
-            )
+    generated = generate_placements_from_specs(
+        specs,
+        conformers,
+        slab_atoms,
+        config,
+        smiles=smiles,
+        site_context=site_context,
+        slab_for_sites=slab_for_sites,
+        materialization_cache=materialization_cache,
+    )
+    for spec, (result, fail_reason) in zip(specs, generated, strict=True):
         if result is None:
             failures.append(
                 PlacementFailureEvent(

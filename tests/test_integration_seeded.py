@@ -38,14 +38,14 @@ def _assert_physical_placement(adsorbate, slab, *, material_type: str = "slab") 
         material_type=material_type,
     )
     assert ok, f"placement fails distance gate: min_d={min_d:.3f} reason={reason}"
-    assert min_d >= MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM * 0.5
+    assert min_d >= MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM * MIN_CONTACT_RATIO_DEFAULT
 
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = list(slab.get_pbc())
     # Adsorbate must sit above the top-layer atoms (slab normal ≈ +z here).
     ads_z = adsorbate.get_positions()[:, 2]
     slab_z = slab.get_positions()[:, 2]
-    assert float(np.min(ads_z)) > float(np.max(slab_z)) - 0.25, (
+    assert float(np.min(ads_z)) > float(np.max(slab_z)) - 0.05, (
         f"adsorbate not above surface: min_ads_z={ads_z.min():.3f}, "
         f"max_slab_z={slab_z.max():.3f}"
     )
@@ -141,12 +141,16 @@ class TestPlacementDeterminism:
         # at least some successful placements at different specs should differ
         valid = [p for p in positions if p is not None]
         assert len(valid) >= 2, "Need at least 2 successful placements"
+        n_pairs = len(valid) * (len(valid) - 1) // 2
         diffs = 0
         for i in range(len(valid)):
             for j in range(i + 1, len(valid)):
                 if not np.allclose(valid[i], valid[j], atol=1e-6):
                     diffs += 1
-        assert diffs > 0, "Different specs should produce different placements"
+        assert diffs >= max(1, n_pairs // 2), (
+            f"Different specs should usually produce different placements "
+            f"({diffs}/{n_pairs} differing pairs)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -178,8 +182,18 @@ class TestEndToEndDeterminism:
                 if assert_physics:
                     _assert_physical_placement(adsorbate, slab)
                     assert descriptor.z_abs is not None
+                    assert descriptor.surface_ref_z_abs is not None
                     assert descriptor.z_abs > float(np.max(slab.get_positions()[:, 2]))
+                    assert float(descriptor.z_abs) >= float(
+                        descriptor.surface_ref_z_abs
+                    ) - 0.05
                     assert 0.0 <= float(descriptor.z_fraction) <= 1.0
+                    assert descriptor.orientation_type in {
+                        "round",
+                        "parallel",
+                        "en_down",
+                        "vertical",
+                    }
                 placement_results.append(
                     (
                         spec.placement_index,
@@ -212,17 +226,18 @@ class TestEndToEndDeterminism:
     def test_pipeline_seed_variation(self):
         r1 = self._pipeline(seed=7)
         r2 = self._pipeline(seed=123)
-        if len(r1) > 0 and len(r2) > 0:
-            # count how many positions differ
-            min_len = min(len(r1), len(r2))
-            diffs = sum(
-                1
-                for (_, p1, _), (_, p2, _) in zip(
-                    r1[:min_len], r2[:min_len], strict=True
-                )
-                if not np.allclose(p1, p2, atol=1e-6)
+        min_ok = max(18, int(math.ceil(0.9 * 30)))
+        assert len(r1) >= min_ok, f"seed=7 yield too low: {len(r1)}"
+        assert len(r2) >= min_ok, f"seed=123 yield too low: {len(r2)}"
+        min_len = min(len(r1), len(r2))
+        diffs = sum(
+            1
+            for (_, p1, _), (_, p2, _) in zip(
+                r1[:min_len], r2[:min_len], strict=True
             )
-            assert diffs > 0 or len(r1) != len(r2)
+            if not np.allclose(p1, p2, atol=1e-6)
+        )
+        assert diffs >= 1, "Different seeds should produce distinct placements"
 
     def test_descriptor_quaternions_always_finite(self):
         """Every descriptor from the pipeline must have finite quaternion fields."""

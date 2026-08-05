@@ -21,8 +21,8 @@ Set ``write_settings=False`` to suppress it.
 BO vs non-BO is chosen by **which function you call** (or the YAML
 ``campaign`` field below)—not by a flag on
 :class:`~metalsurfer.AdsorptionConfig`. Config only holds nested BO
-hyperparameters (``config.bo`` / ``config.bo.transfer``). Legacy flat
-``bo_*`` constructor and YAML keys still fold into those nested objects.
+hyperparameters (``config.bo`` / ``config.bo.transfer``). Flat ``bo_*``
+constructor and YAML keys are rejected—use nested ``bo:`` / ``bo.transfer:``.
 
 YAML campaigns
 --------------
@@ -46,9 +46,9 @@ The top-level ``campaign`` key selects the runner:
 ``saturation_bo``  :func:`~metalsurfer.run_saturation_bo`
 ================== ==========================================
 
-``config:`` maps onto :class:`~metalsurfer.AdsorptionConfig` fields. Prefer
-a nested ``bo:`` block for Bayesian hyperparameters; flat ``bo_*`` keys are
-still accepted and folded. Do not put a ``bo_enabled`` key there—it is not
+``config:`` maps onto :class:`~metalsurfer.AdsorptionConfig` fields. Put
+Bayesian hyperparameters under a nested ``bo:`` block (flat ``bo_*`` keys
+are rejected). Do not put a ``bo_enabled`` key there—it is not
 a config field.
 
 .. autofunction:: metalsurfer.run_campaign

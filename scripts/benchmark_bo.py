@@ -7,7 +7,7 @@ Single entry point for the bipyridine/Au(111) benchmark workflow:
   - Steps 2+: baseline BO vs transfer BO (production weighted transfer)
   - Publication figures and CSV artifacts
 
-``bo_total_budget`` in :class:`~metalsurfer.AdsorptionConfig` counts acquisition
+``bo.total_budget`` in :class:`~metalsurfer.AdsorptionConfig` counts acquisition
 batches (default 18), not total evaluations. Offline replay uses
 :func:`~metalsurfer.config.resolved_bo_eval_budget` and
 :func:`~metalsurfer.config.bo_eval_schedule` so random and BO perform the same
@@ -34,6 +34,7 @@ from metalsurfer import configure_logging
 from metalsurfer.config import (
     BO_INITIAL_SAMPLING_OPTIONS,
     AdsorptionConfig,
+    BOConfig,
     bo_eval_schedule,
     resolved_bo_eval_budget,
 )
@@ -170,9 +171,7 @@ def _cfg() -> AdsorptionConfig:
 def _replay_cfg() -> AdsorptionConfig:
     """Fixed offline-replay budget (10 init + 18 batches of 5 = 100 evals)."""
     return AdsorptionConfig(
-        bo_initial_random=10,
-        bo_batch_size=5,
-        bo_total_budget=18,
+        bo=BOConfig(initial_random=10, batch_size=5, total_budget=18),
     )
 
 
@@ -182,10 +181,12 @@ _REPLAY = _replay_cfg()
 def _replay_cfg_for_init(sampling: str) -> AdsorptionConfig:
     """Replay budget with a specific initial-placement sampling strategy."""
     return AdsorptionConfig(
-        bo_initial_random=_REPLAY.bo_initial_random,
-        bo_batch_size=_REPLAY.bo_batch_size,
-        bo_total_budget=_REPLAY.bo_total_budget,
-        bo_initial_sampling=sampling,  # type: ignore[arg-type]
+        bo=BOConfig(
+            initial_random=_REPLAY.bo.initial_random,
+            batch_size=_REPLAY.bo.batch_size,
+            total_budget=_REPLAY.bo.total_budget,
+            initial_sampling=sampling,  # type: ignore[arg-type]
+        ),
     )
 
 
@@ -195,38 +196,37 @@ def _replay_cfg_for_batch(batch_size: int) -> AdsorptionConfig:
     Uses ceil(remaining / batch_size) acquisition rounds; ``_run_replay`` caps
     total lookups at the default replay budget so batch 5/10/20 share a horizon.
     """
-    init = int(_REPLAY.bo_initial_random)
+    init = int(_REPLAY.bo.initial_random)
     target = resolved_bo_eval_budget(_REPLAY)
     remaining = max(0, target - init)
     n_batches = max(1, (remaining + batch_size - 1) // batch_size)
     return AdsorptionConfig(
-        bo_initial_random=init,
-        bo_batch_size=batch_size,
-        bo_total_budget=n_batches,
+        bo=BOConfig(initial_random=init, batch_size=batch_size, total_budget=n_batches),
     )
 
 
 _CFG = _cfg()
 
-SURROGATE = _CFG.bo_surrogate  # type: ignore[assignment]
-ACQUISITION = _CFG.bo_acquisition  # type: ignore[assignment]
-KAPPA = float(_CFG.bo_ucb_kappa)
+SURROGATE = _CFG.bo.surrogate  # type: ignore[assignment]
+ACQUISITION = _CFG.bo.acquisition  # type: ignore[assignment]
+KAPPA = float(_CFG.bo.ucb_kappa)
 EVAL_BUDGET = resolved_bo_eval_budget(_REPLAY)
+_t = _CFG.bo.transfer
 TRANSFER_KWARGS = {
-    "weight_cap": _CFG.bo_transfer_weight_cap,
-    "similarity_lengthscale": _CFG.bo_transfer_similarity_lengthscale,
-    "min_similarity": _CFG.bo_transfer_min_similarity,
-    "mae_tolerance": _CFG.bo_transfer_mae_tolerance,
-    "trust_patience": _CFG.bo_transfer_trust_patience,
-    "min_step_observations": _CFG.bo_transfer_min_step_observations,
-    "exploration_fraction": _CFG.bo_transfer_exploration_fraction,
-    "proximity_lengthscale": _CFG.bo_transfer_proximity_lengthscale,
-    "proximity_floor": _CFG.bo_transfer_proximity_floor,
-    "recency_lengthscale": _CFG.bo_transfer_recency_lengthscale,
-    "occupancy_lengthscale": _CFG.bo_transfer_occupancy_lengthscale,
-    "occupancy_floor": _CFG.bo_transfer_occupancy_floor,
+    "weight_cap": _t.weight_cap,
+    "similarity_lengthscale": _t.similarity_lengthscale,
+    "min_similarity": _t.min_similarity,
+    "mae_tolerance": _t.mae_tolerance,
+    "trust_patience": _t.trust_patience,
+    "min_step_observations": _t.min_step_observations,
+    "exploration_fraction": _t.exploration_fraction,
+    "proximity_lengthscale": _t.proximity_lengthscale,
+    "proximity_floor": _t.proximity_floor,
+    "recency_lengthscale": _t.recency_lengthscale,
+    "occupancy_lengthscale": _t.occupancy_lengthscale,
+    "occupancy_floor": _t.occupancy_floor,
 }
-TRANSFER_WINDOW = _CFG.bo_transfer_prior_step_window
+TRANSFER_WINDOW = _t.prior_step_window
 
 
 class SearchRunResult(NamedTuple):
@@ -447,9 +447,9 @@ def load_pool(data_dir: str, *, step: int) -> tuple[pd.DataFrame, pd.Series]:
 
 
 def _require_resolved_replay(config: AdsorptionConfig) -> None:
-    if config.bo_initial_random is None or config.bo_batch_size is None:
+    if config.bo.initial_random is None or config.bo.batch_size is None:
         raise ValueError(
-            "Offline replay requires resolved bo_initial_random and bo_batch_size"
+            "Offline replay requires resolved bo.initial_random and bo.batch_size"
         )
 
 
@@ -534,9 +534,9 @@ def _best_keys_by_metric(
 
 def _sweep_default_key(label: str) -> str:
     if label == "batch":
-        return f"batch_{int(_REPLAY.bo_batch_size)}"
+        return f"batch_{int(_REPLAY.bo.batch_size)}"
     if label == "initial sampling":
-        return f"init_{_CFG.bo_initial_sampling}"
+        return f"init_{_CFG.bo.initial_sampling}"
     return _default_key()
 
 
@@ -578,8 +578,8 @@ def _run_replay(
     """Replay pool lookups with production batch-count semantics.
 
     Random and BO paths share the same initial-random batch and the same
-    number of acquisition batches (``bo_total_budget``), each requesting up
-    to ``bo_batch_size`` unevaluated placements. When ``max_evals`` is set,
+    number of acquisition batches (``bo.total_budget``), each requesting up
+    to ``bo.batch_size`` unevaluated placements. When ``max_evals`` is set,
     total lookups are capped (used to equalize batch-size sweeps).
     """
     _require_resolved_replay(config)
@@ -603,11 +603,11 @@ def _run_replay(
     weight_shares: list[float] = []
     eval_cap = max_evals if max_evals is not None else resolved_bo_eval_budget(config)
 
-    n_init = min(int(config.bo_initial_random), n, eval_cap)
+    n_init = min(int(config.bo.initial_random), n, eval_cap)
     init_idx = select_initial_bo_indices(
         X,
         n_init,
-        sampling=config.bo_initial_sampling,
+        sampling=config.bo.initial_sampling,
         random_state=seed,
     )
     best = _record_batch(
@@ -628,14 +628,14 @@ def _run_replay(
                 best_X = dict(row)
 
     batches_run = 0
-    while batches_run < int(config.bo_total_budget):
+    while batches_run < int(config.bo.total_budget):
         remaining = eval_cap - len(selected)
         if remaining <= 0:
             break
         uneval = [i for i in range(n) if i not in evaluated]
         if not uneval:
             break
-        batch = min(int(config.bo_batch_size), len(uneval), remaining)
+        batch = min(int(config.bo.batch_size), len(uneval), remaining)
 
         if mode == "random" or len(evaluated) < 3:
             chosen = rng.choice(uneval, size=batch, replace=False).tolist()
@@ -821,18 +821,18 @@ def _run_bo(
 
 def _transfer_kwargs_from_config(config: AdsorptionConfig) -> dict[str, float | int]:
     return {
-        "weight_cap": config.bo_transfer_weight_cap,
-        "similarity_lengthscale": config.bo_transfer_similarity_lengthscale,
-        "min_similarity": config.bo_transfer_min_similarity,
-        "mae_tolerance": config.bo_transfer_mae_tolerance,
-        "trust_patience": config.bo_transfer_trust_patience,
-        "min_step_observations": config.bo_transfer_min_step_observations,
-        "exploration_fraction": config.bo_transfer_exploration_fraction,
-        "proximity_lengthscale": config.bo_transfer_proximity_lengthscale,
-        "proximity_floor": config.bo_transfer_proximity_floor,
-        "recency_lengthscale": config.bo_transfer_recency_lengthscale,
-        "occupancy_lengthscale": config.bo_transfer_occupancy_lengthscale,
-        "occupancy_floor": config.bo_transfer_occupancy_floor,
+        "weight_cap": config.bo.transfer.weight_cap,
+        "similarity_lengthscale": config.bo.transfer.similarity_lengthscale,
+        "min_similarity": config.bo.transfer.min_similarity,
+        "mae_tolerance": config.bo.transfer.mae_tolerance,
+        "trust_patience": config.bo.transfer.trust_patience,
+        "min_step_observations": config.bo.transfer.min_step_observations,
+        "exploration_fraction": config.bo.transfer.exploration_fraction,
+        "proximity_lengthscale": config.bo.transfer.proximity_lengthscale,
+        "proximity_floor": config.bo.transfer.proximity_floor,
+        "recency_lengthscale": config.bo.transfer.recency_lengthscale,
+        "occupancy_lengthscale": config.bo.transfer.occupancy_lengthscale,
+        "occupancy_floor": config.bo.transfer.occupancy_floor,
     }
 
 
@@ -1224,7 +1224,7 @@ def write_figures(
     init_curves: pd.DataFrame,
 ) -> None:
     default_key = _default_key()
-    default_init = f"init_{_CFG.bo_initial_sampling}"
+    default_init = f"init_{_CFG.bo.initial_sampling}"
     default_keys = frozenset({default_key, "baseline", "batch_5", default_init})
 
     def oracle(step: int) -> float:
@@ -1274,7 +1274,7 @@ def write_figures(
         label_overrides={
             f"batch_{b}": f"Batch {b}"
             for b in BATCH_SIZES
-            if b != int(_REPLAY.bo_batch_size)
+            if b != int(_REPLAY.bo.batch_size)
         },
         x_max=EVAL_BUDGET,
     )
@@ -1396,22 +1396,22 @@ def write_report(
         "",
         f"Data directory: `{data_dir}`",
         f"Seeds: {seeds}",
-        f"Default BO: `{cfg.bo_surrogate}` / `{cfg.bo_acquisition}` (κ={cfg.bo_ucb_kappa}), "
-        f"init=`{cfg.bo_initial_sampling}`",
-        f"Transfer: `{cfg.bo_transfer_mode}`, window={cfg.bo_transfer_prior_step_window}, "
-        f"recency_ls={cfg.bo_transfer_recency_lengthscale}, "
-        f"occupancy_ls={cfg.bo_transfer_occupancy_lengthscale}",
+        f"Default BO: `{cfg.bo.surrogate}` / `{cfg.bo.acquisition}` (κ={cfg.bo.ucb_kappa}), "
+        f"init=`{cfg.bo.initial_sampling}`",
+        f"Transfer: `{cfg.bo.transfer.mode}`, window={cfg.bo.transfer.prior_step_window}, "
+        f"recency_ls={cfg.bo.transfer.recency_lengthscale}, "
+        f"occupancy_ls={cfg.bo.transfer.occupancy_lengthscale}",
         f"Replay budget: {EVAL_BUDGET} lookups "
-        f"({_REPLAY.bo_initial_random} init + {_REPLAY.bo_total_budget}×"
-        f"{_REPLAY.bo_batch_size}); exploration only when transfer is active "
-        f"(fraction={cfg.bo_transfer_exploration_fraction})",
+        f"({_REPLAY.bo.initial_random} init + {_REPLAY.bo.total_budget}×"
+        f"{_REPLAY.bo.batch_size}); exploration only when transfer is active "
+        f"(fraction={cfg.bo.transfer.exploration_fraction})",
         "",
         "## Methods caveats",
         "",
         "- Offline **filtered-pool** discrete BO (successful placements only); "
         "no MLIP cost; no failure-penalty labels.",
         "- Fixed 100-eval proxy schedule; live GPU runs autotune "
-        "`bo_initial_random` / `bo_batch_size` to parallel capacity.",
+        "`bo.initial_random` / `bo.batch_size` to parallel capacity.",
         "- Primary decision metrics are **anytime** (regret@20/30/50, AURC@50); "
         "regret@100 is a ceiling/sanity check only.",
         "- Steps 9–10 have small pools relative to budget (secondary).",

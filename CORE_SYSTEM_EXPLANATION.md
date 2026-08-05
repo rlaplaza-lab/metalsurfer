@@ -24,8 +24,8 @@ E_ads = E_adslab - E_slab - E_molecule
 Prefer `run_*_bo` when you want Bayesian placement selection. BO mode is
 chosen by the entry point (`run_adsorption_bo` / `run_saturation_bo`) or YAML
 `campaign: adsorption_bo` / `saturation_bo`; config only holds nested BO
-hyperparameters (`AdsorptionConfig.bo` / `bo.transfer`). Legacy flat `bo_*`
-constructor and YAML keys still fold into those nested objects.
+hyperparameters (`AdsorptionConfig.bo` / `bo.transfer`). Flat `bo_*`
+constructor and YAML keys are rejected.
 
 Inputs: `SlabContainer` or ASE `Atoms`, molecules (list or CSV), `AdsorptionConfig`, `surface_type` (results folder label only). Prep freeze policy is set in `prepare_substrate`, not on campaign kwargs.
 
