@@ -1,0 +1,21 @@
+# Ethene on Ru(0001) — mirrors ethene_ru_slab_binding_energy.py (demo-scale)
+campaign: adsorption
+surface_type: ethene_ru_slab_yaml
+substrate:
+  bulk_id: mp-33
+  miller_indices: [0, 0, 1]
+  supercell: [2, 2, 1]
+  slab_relaxation_mode: none
+molecules:
+  - smiles: C=C
+    name: ethene
+config:
+  material_type: slab
+  seed: 42
+  num_conformers: 1
+  num_placements: 4
+  autobatcher_max_memory_padding: 0.8
+  autobatcher_max_memory_scaler: 500
+  autobatcher_max_atoms_to_try: 5000
+  stage1_steps: 5
+  stage2_steps: 10

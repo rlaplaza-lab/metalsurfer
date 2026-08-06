@@ -1,0 +1,22 @@
+# Ethane saturation on Cu(111) — slim demo cousin of scripts/campaigns/ethane_cu_saturation.yaml
+campaign: saturation
+surface_type: ethane_cu_saturation_yaml
+substrate:
+  bulk_id: mp-30
+  miller_indices: [1, 1, 1]
+  supercell: [2, 2, 1]
+  slab_relaxation_mode: none
+molecules:
+  - smiles: CC
+    name: ethane
+config:
+  material_type: slab
+  seed: 42
+  num_conformers: 1
+  num_placements: 4
+  autobatcher_max_memory_padding: 0.8
+  autobatcher_max_memory_scaler: 500
+  autobatcher_max_atoms_to_try: 5000
+  stage1_steps: 5
+  stage2_steps: 10
+  saturation_max_steps: 2

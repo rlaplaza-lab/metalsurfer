@@ -130,10 +130,9 @@ demos pass ``skip_existing=False`` so re-runs always compute.
 ``surface_type`` is only the output folder name (``results_{surface_type}/``);
 physics come from ``AdsorptionConfig.material_type`` and the prepared substrate.
 
-Use :func:`~metalsurfer.run_adsorption_bo` for Bayesian placement search, or
-YAML ``campaign: adsorption_bo`` with :func:`~metalsurfer.run_campaign`. BO mode
-is selected by the entry point / YAML ``campaign`` field; config only holds BO
-hyperparameters.
+Use :func:`~metalsurfer.run_adsorption_bo` for Bayesian placement search.
+BO mode is selected by the entry point (or YAML ``campaign``; see
+:doc:`yaml_campaigns`); config only holds BO hyperparameters.
 
 Campaign APIs accept plain ASE ``Atoms`` or :class:`~metalsurfer.surface_prep.SlabContainer`,
 but the structure must be **campaign-ready** before the call: **equilibrated ionic
@@ -147,17 +146,8 @@ conventions are described in :doc:`surface_engineering`.
 Prefer ``write_settings=True`` (default) so campaigns write ``run_metadata.json``.
 Set ``write_settings=False`` to suppress it.
 
-YAML-driven runs via the Python API (requires the MLIP stack)::
-
-   from metalsurfer import load_campaign_yaml, run_campaign
-
-   document = load_campaign_yaml("path/to/campaign.yaml")
-   result = run_campaign(document)
-
-Set ``campaign`` to one of ``adsorption``, ``adsorption_bo``,
-``saturation``, or ``saturation_bo`` (same four modes as the Python APIs).
-Examples: ``scripts/campaigns/``; schema fixtures: ``tests/fixtures/campaigns/``.
-See :doc:`../api/campaigns`.
+YAML campaigns (structure, limitations, and demo files under ``examples/``):
+:doc:`yaml_campaigns`.
 
 **Slab** — :func:`~metalsurfer.surface_prep.prepare_substrate` equilibrates ions
 by default (``slab_relaxation_mode="ionic_only"``), applies bottom-anchored
@@ -305,7 +295,7 @@ BO knobs live on :class:`~metalsurfer.AdsorptionConfig` as nested
 Remember ``bo.total_budget`` is acquisition batches; after sizes resolve, call
 :func:`~metalsurfer.config.resolved_bo_eval_budget` for the total evaluation count.
 Mode itself comes from calling ``run_adsorption_bo`` (or YAML
-``campaign: adsorption_bo``), not from a config flag.
+``campaign: adsorption_bo``; see :doc:`yaml_campaigns`), not from a config flag.
 
 Sequential Saturation
 ---------------------
@@ -361,8 +351,8 @@ Important saturation behaviors:
   :doc:`configuration`.
 - Resize in-plane supercells during prep
   (``auto_resize_substrate_for_molecule``) before calling campaign APIs.
-- Use :func:`~metalsurfer.run_saturation_bo` (or YAML ``campaign: saturation_bo``)
-  for BO-guided saturation.
+- Use :func:`~metalsurfer.run_saturation_bo` (or YAML ``campaign: saturation_bo``;
+  see :doc:`yaml_campaigns`) for BO-guided saturation.
 - Saturation-specific config fields (``saturation_*``, ``multi_molecule_saturation``,
   ``bo.transfer.*``): :doc:`configuration` and :doc:`../api/config`.
 - When printing completion summaries, pass

@@ -1,0 +1,23 @@
+# H2 on Ru(0001) with dissociative placements — mirrors h2_ru_slab_binding_energy.py
+campaign: adsorption
+surface_type: h2_ru_slab_yaml
+substrate:
+  bulk_id: mp-33
+  miller_indices: [0, 0, 1]
+  supercell: [2, 2, 1]
+  slab_relaxation_mode: none
+molecules:
+  - smiles: "[H][H]"
+    name: H2
+config:
+  material_type: slab
+  seed: 42
+  num_conformers: 1
+  num_placements: 4
+  autobatcher_max_memory_padding: 0.8
+  autobatcher_max_memory_scaler: 500
+  autobatcher_max_atoms_to_try: 5000
+  enable_dissociative_placement: true
+  skip_topology_check: true
+  stage1_steps: 5
+  stage2_steps: 10

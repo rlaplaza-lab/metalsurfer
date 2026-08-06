@@ -192,8 +192,8 @@ keys are rejected; nest under ``bo`` / ``bo.transfer``.
 Use :func:`~metalsurfer.run_adsorption_bo` or :func:`~metalsurfer.run_saturation_bo`
 (or YAML ``campaign: adsorption_bo`` / ``saturation_bo`` with
 :func:`~metalsurfer.run_campaign`). Those select BO mode; ``bo`` / ``bo.transfer``
-fields are hyperparameters only. See :doc:`../api/campaigns` for the YAML
-``campaign`` mapping.
+fields are hyperparameters only. See :doc:`yaml_campaigns` for YAML structure
+and limitations, and :doc:`../api/campaigns` for the ``campaign`` mapping.
 
 Saturation essentials
 ---------------------

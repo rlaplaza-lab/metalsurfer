@@ -1,0 +1,25 @@
+# Water on Cu(111) with Bayesian placement search (slim demo)
+campaign: adsorption_bo
+surface_type: water_cu111_adsorption_bo_yaml
+substrate:
+  bulk_id: mp-30
+  miller_indices: [1, 1, 1]
+  supercell: [2, 2, 1]
+  slab_relaxation_mode: none
+molecules:
+  - smiles: O
+    name: water
+config:
+  material_type: slab
+  seed: 42
+  num_conformers: 1
+  num_placements: 4
+  autobatcher_max_memory_padding: 0.8
+  autobatcher_max_memory_scaler: 500
+  autobatcher_max_atoms_to_try: 5000
+  stage1_steps: 5
+  stage2_steps: 10
+  bo:
+    initial_random: 2
+    batch_size: 2
+    total_budget: 1

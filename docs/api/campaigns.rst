@@ -27,8 +27,9 @@ constructor and YAML keys are rejected—use nested ``bo:`` / ``bo.transfer:``.
 YAML campaigns
 --------------
 
-Load a campaign document and dispatch with the Python API
-(see ``scripts/campaigns/`` and ``tests/fixtures/campaigns/``)::
+Load a campaign document and dispatch with the Python API. Full schema,
+limitations, and demo YAML files: :doc:`../guides/yaml_campaigns`
+(also ``scripts/campaigns/`` and ``tests/fixtures/campaigns/``)::
 
    from metalsurfer import load_campaign_yaml, run_campaign
 

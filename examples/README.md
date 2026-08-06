@@ -15,6 +15,25 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 | `bipyridine_au111_defects_saturation_raw.py` | HPC-scale saturation on defected Au(111) (1000 placements; not a quick demo) |
 | `camphor_cu111_binding_energy.py` | (1S)-camphor on Cu(111) vs Järvi et al. BOSS benchmark (BO, 15GB GPU) |
 
+### YAML campaigns
+
+Demo-scale YAML documents (same physics as the small Python demos). Schema and
+limitations: [YAML campaigns guide](https://metalsurfer.readthedocs.io/en/latest/guides/yaml_campaigns.html).
+Production templates: `scripts/campaigns/`.
+
+```bash
+python examples/run_campaign_yaml.py examples/ethene_ru_slab_binding_energy.yaml
+```
+
+| YAML | Description |
+|------|-------------|
+| `ethene_ru_slab_binding_energy.yaml` | Ethene on Ru(0001) (`campaign: adsorption`) |
+| `h2_ru_slab_binding_energy.yaml` | H₂ dissociative on Ru(0001) |
+| `co2_mof_binding_energy.yaml` | CO₂ in RUBTAK01 MOF (`slab_file`) |
+| `water_cu111_adsorption_bo.yaml` | Water on Cu(111) with nested `bo:` (`adsorption_bo`) |
+| `ethane_cu_saturation.yaml` | Slim ethane/Cu(111) saturation |
+| `run_campaign_yaml.py` | Runner: `load_campaign_yaml` → `run_campaign` |
+
 Demos set explicit small `num_placements` for quick runs and pass
 `skip_existing=False` so re-runs always compute. Results directories use
 `results_dir_for(surface_type)` (`results_{surface_type}/`). For production

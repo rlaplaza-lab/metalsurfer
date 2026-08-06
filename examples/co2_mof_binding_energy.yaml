@@ -1,0 +1,22 @@
+# CO2 in a MOF — mirrors co2_mof_binding_energy.py
+# Run from the project root so slab_file resolves.
+campaign: adsorption
+surface_type: co2_mof_yaml
+substrate:
+  slab_file: examples/mof_structures/RUBTAK01.cif
+  align: false
+  slab_relaxation_mode: none
+molecules:
+  - smiles: O=C=O
+    name: CO2
+config:
+  material_type: porous
+  slab_relaxation_mode: none
+  seed: 42
+  num_conformers: 1
+  num_placements: 4
+  autobatcher_max_memory_padding: 0.8
+  autobatcher_max_memory_scaler: 500
+  autobatcher_max_atoms_to_try: 5000
+  stage1_steps: 5
+  stage2_steps: 10
