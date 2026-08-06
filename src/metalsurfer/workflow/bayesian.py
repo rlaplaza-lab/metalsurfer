@@ -267,9 +267,7 @@ def process_molecule_bayesian(
             for p in range(len(valid_pool_indices))
             if p not in evaluated_pool_positions and p not in primary_set
         ]
-        backfill_specs = [
-            all_specs[valid_pool_indices[p]] for p in backfill_positions
-        ]
+        backfill_specs = [all_specs[valid_pool_indices[p]] for p in backfill_positions]
 
         batch_results, batch_failures, n_backfill_used = _evaluate_placement_batch(
             batch_specs,

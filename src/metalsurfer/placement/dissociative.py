@@ -420,12 +420,13 @@ def _place_dissociative_two_sites(
     slab: Atoms,
     slab_for_sites: Atoms | None,
 ) -> tuple[Atoms, PlacementDescriptor] | None:
-    """Place a diatomic at two sites with shared height offset along each normal.
+    """Place a diatomic at two sites with a shared height offset.
 
     On slabs, ``height_override`` is the gap above the top-layer surface
     reference (same convention as molecular placement). Hollow Voronoi
     vertices often sit above the metal, so stacking the offset on
-    ``site.xyz`` would overshoot the desorption gate.
+    ``site.xyz`` would overshoot the desorption gate. On nanoparticles,
+    both fragments share one offset direction so pair spacing is preserved.
     """
     if len(sites) != 2 or len(adsorbate) != 2:
         return None
@@ -466,14 +467,18 @@ def _place_dissociative_two_sites(
         pos1 = base1 + (target_h - float(np.dot(base1, n_hat))) * n_hat
         pos2 = base2 + (target_h - float(np.dot(base2, n_hat))) * n_hat
         h_surface = float(surface_ref)
-        site_reference_frame = "local_site" if config.rough_slab_local_z else "global_top_layer"
-    else:
-        # Nanoparticle: Voronoi vertex is the local surface reference.
-        pos1 = base1 + z_offset * n1
-        pos2 = base2 + z_offset * n2
-        h_surface = 0.5 * (
-            float(np.dot(base1, n1)) + float(np.dot(base2, n2))
+        site_reference_frame = (
+            "local_site" if config.rough_slab_local_z else "global_top_layer"
         )
+    else:
+        # Nanoparticle / porous: offset both fragments along a shared normal so
+        # divergent local site normals do not laterally expand the H–H spacing.
+        n_sum = np.asarray(n1, dtype=float) + np.asarray(n2, dtype=float)
+        n_norm = float(np.linalg.norm(n_sum))
+        n_hat = n_sum / (n_norm + _VECTOR_NORM_EPS) if n_norm > _VECTOR_NORM_EPS else n1
+        pos1 = base1 + z_offset * n_hat
+        pos2 = base2 + z_offset * n_hat
+        h_surface = 0.5 * (float(np.dot(base1, n_hat)) + float(np.dot(base2, n_hat)))
         site_reference_frame = "local_site"
 
     symbols = adsorbate.get_chemical_symbols()

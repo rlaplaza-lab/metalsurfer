@@ -291,8 +291,10 @@ zero-capacity species in ``distribute_placement_budget``.
 
 - ``policy.py`` — Cartesian product over conformers × sites × orientation
   knobs; **stratified** subsample by ``site_type`` to ``n_desired`` (seeded),
-  with soft priors preferring milder tilt and mid ``z_fraction``.
-  Topology-sourced sites are ordered first on slabs.
+- Soft priors preferring milder tilt and mid ``z_fraction``.
+  Topology-sourced sites are ordered first on slabs. Porous frameworks
+  restrict enumeration to open ``pore`` sites (nn-distance sorted) when any
+  exist, and soft-prior draws prefer those earlier indices.
 - ``orientation.py`` — aromatic heuristics plus ``orient_from_spec`` used by
   pose. Dissociative two-site placement uses ``place_at_sites`` in
   ``dissociative.py``. Molecular / adatom placement goes through
@@ -300,6 +302,10 @@ zero-capacity species in ``distribute_placement_budget``.
 - ``generators.py`` — public orchestration (enumerate, materialize, replay,
   complexity/budget). Optional ``placement_filter``;
   ``adaptive_parallel_fraction`` (default on).
+  ``generate_placements_from_specs`` materializes a list of specs (optionally
+  threaded); ``resolve_materialize_workers`` maps joblib-style ``n_jobs`` /
+  ``placement_materialize_workers`` to a concrete thread-pool size. Both are
+  exported from ``metalsurfer.placement.generators`` for advanced callers.
 - Slab / nanoparticle anchor: ``site.xyz`` offset along the slab or site
   normal so the **closest adsorbate atom** (not the COM) lands at
   ``surface_ref + z_offset`` (clearance-aware lift after orientation).
@@ -308,8 +314,9 @@ zero-capacity species in ``distribute_placement_budget``.
 - **Distance recovery** (default on): ``too_close`` / ``too_far`` try height
   then XY; ``adsorbate_overlap`` tries XY only
   (``placement_x/y_range``, ±0.5 Å default). Porous recovery is inverted
-  (shrink toward the free-volume site when too close; push out when too
-  far). VDW / contact-quality failures are not recovered.
+  (shrink toward the free-volume site when too close or VDW-overlapping;
+  push out when too far). Non-porous VDW contact-quality failures are not
+  recovered.
 - **Voronoi auto-widen** (default on): one wider probe/max retry when the
   first window finds no sites.
 - **Dissociative** (``dissociative.py`` / ``place_at_sites``): homonuclear

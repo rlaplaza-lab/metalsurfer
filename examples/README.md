@@ -11,7 +11,7 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 | `ethene_pt12_binding_energy.py` | Ethene on a Pt₁₂ nanoparticle (`material_type="nanoparticle"`) |
 | `co2_mof_binding_energy.py` | CO₂ in a MOF (porous; `prepare_substrate`) |
 | `ethene_ru_slab_binding_energy.py` | Ethene on Ru(0001) (`prepare_substrate`) |
-| `h2_ru_slab_binding_energy.py` | H₂ dissociative adsorption on Ru(0001) (`skip_topology_check=True`: hollow pairs + skip connectivity checks) |
+| `h2_ru_slab_binding_energy.py` | H₂ dissociative adsorption on Ru(0001) (`enable_dissociative_placement=True`; usually also `skip_topology_check=True`) |
 | `bipyridine_au111_defects_saturation_raw.py` | HPC-scale saturation on defected Au(111) (1000 placements; not a quick demo) |
 | `camphor_cu111_binding_energy.py` | (1S)-camphor on Cu(111) vs Järvi et al. BOSS benchmark (BO, 15GB GPU) |
 
@@ -24,9 +24,10 @@ parallel capacity via TorchSim memory probing at workflow start. For saturation
 with Bayesian placement search, use `run_saturation_bo`.
 
 Most binding demos validate favorable molecular E_ads before exit. The H₂/Ru(0001) demo
-uses ``skip_topology_check=True`` for dissociative hollow-site placements **and** to
-skip post-relax connectivity checks; it checks that the dissociative workflow
-completes with adsorbed geometries (molecular or dissociated H₂ after relaxation).
+sets ``enable_dissociative_placement=True`` for hollow-site pair placements and
+``skip_topology_check=True`` so fragmented post-relax states pass connectivity
+checks; it checks that the dissociative workflow completes with adsorbed
+geometries (molecular or dissociated H₂ after relaxation).
 
 `prepare_substrate` equilibrates substrate ionic positions by default (`slab_relaxation_mode="ionic_only"`) and freezes the entire substrate during adsorption by default (prep-only ASE `FixAtoms` — not campaign kwargs). `relax_top_layer=True` leaves a material-aware surface band free (slab: simple height band within `top_layer_tolerance`; nanoparticle outer shell; porous pore boundary). Omitting freeze constraints is allowed (campaigns warn; substrate stays fully mobile). See the [surface engineering guide](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html). Loaded experimental or saturation slabs use `slab_relaxation_mode="none"` (e.g. `co2_mof`, `camphor_cu111`, `scripts/furanics_go*_binding_energy.py`, `scripts/vanillin_on_h_saturated_ni111.py` for the loaded slab).
 

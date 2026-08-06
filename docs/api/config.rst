@@ -279,6 +279,10 @@ Placement generation
    Thread-pool size for per-spec placement materialization (joblib-style
    ``n_jobs``). ``1`` is serial, positive values use that many workers,
    ``-1`` uses all CPUs, and ``-2`` uses all but one CPU. Must not be ``0``.
+   Advanced callers that materialize specs directly use
+   :func:`~metalsurfer.placement.generators.generate_placements_from_specs`
+   (pool size via
+   :func:`~metalsurfer.placement.generators.resolve_materialize_workers`).
 
 Initial placement validation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -33,7 +33,7 @@ from metalsurfer.workflow import (
     process_molecule,
     process_molecule_bayesian,
 )
-from metalsurfer.workflow.core import _placement_spec_key
+from metalsurfer.workflow.placement_fill import placement_spec_key
 from metalsurfer.workflow.shared import (
     PlacementFailureEvent,
     _build_surface_reference_slab,
@@ -71,8 +71,8 @@ def test_placement_spec_key_distinguishes_azimuth_in_plane():
     )
     a = PlacementSpec(**base, azimuth_in_plane_deg=0.0)
     b = PlacementSpec(**base, azimuth_in_plane_deg=90.0)
-    assert _placement_spec_key(a) != _placement_spec_key(b)
-    assert _placement_spec_key(a) == _placement_spec_key(
+    assert placement_spec_key(a) != placement_spec_key(b)
+    assert placement_spec_key(a) == placement_spec_key(
         PlacementSpec(**base, azimuth_in_plane_deg=0.0)
     )
 

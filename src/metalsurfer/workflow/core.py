@@ -20,7 +20,6 @@ from ..surface_prep import SlabContainer
 from .placement_fill import (
     fill_materialized_placements,
     materialize_specs_filling_target,
-    placement_spec_key,
 )
 from .shared import (
     MoleculeScreenOutcome,
@@ -34,43 +33,6 @@ from .shared import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Backward-compatible aliases for tests and external callers.
-_placement_spec_key = placement_spec_key
-
-
-def _generate_placements_with_retry(
-    conformers: list[Atoms],
-    slab_for_sites: Atoms,
-    config: AdsorptionConfig,
-    smiles: str,
-    site_context: SiteContext | None,
-    slab_atoms: Atoms,
-    calculator,
-) -> tuple[
-    list[Atoms], list[int], list[PlacementDescriptor], list[PlacementFailureEvent], int
-]:
-    """Generate placements with yield-aware retry to meet requested count.
-
-    Returns:
-        Tuple of (all_combined, placement_ids, placement_descriptors, failures, n_attempts)
-    """
-    result = fill_materialized_placements(
-        conformers=conformers,
-        slab_for_sites=slab_for_sites,
-        config=config,
-        smiles=smiles,
-        site_context=site_context,
-        slab_atoms=slab_atoms,
-        calculator=calculator,
-    )
-    return (
-        result.combined,
-        result.placement_ids,
-        result.descriptors,
-        result.failures,
-        result.n_attempts,
-    )
 
 
 def process_molecule(
@@ -148,21 +110,20 @@ def process_molecule(
         E_slab = ctx.E_slab
 
         t0 = time.perf_counter()
-        (
-            all_combined,
-            placement_ids,
-            placement_descriptors,
-            placement_failure_events,
-            n_placement_attempts,
-        ) = _generate_placements_with_retry(
-            conformers,
-            slab_for_sites,
-            config,
-            smiles,
-            site_context,
-            slab.atoms,
-            calculator,
+        fill = fill_materialized_placements(
+            conformers=conformers,
+            slab_for_sites=slab_for_sites,
+            config=config,
+            smiles=smiles,
+            site_context=site_context,
+            slab_atoms=slab.atoms,
+            calculator=calculator,
         )
+        all_combined = fill.combined
+        placement_ids = fill.placement_ids
+        placement_descriptors = fill.descriptors
+        placement_failure_events = fill.failures
+        n_placement_attempts = fill.n_attempts
         t_placement = time.perf_counter() - t0
 
         # Log retry info if applicable

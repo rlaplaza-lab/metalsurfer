@@ -677,7 +677,9 @@ def test_bo_transfer_config_validation():
 def test_bo_transfer_requires_weighted_surrogate():
     with pytest.raises(ValueError, match="bo.transfer.enabled requires"):
         AdsorptionConfig(
-            bo=BOConfig(surrogate="gaussian_process", transfer=BOTransferConfig(enabled=True)),
+            bo=BOConfig(
+                surrogate="gaussian_process", transfer=BOTransferConfig(enabled=True)
+            ),
         )
     for sur in ("ridge", "gradient_boost", "random_forest", "extra_trees", "ensemble"):
         c = AdsorptionConfig(

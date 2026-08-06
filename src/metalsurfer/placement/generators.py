@@ -194,6 +194,20 @@ def _spec_grid_info(
             use_sites = False
         else:
             site_indices = _topology_first_site_indices(unique_sites, site_indices)
+            if config.material_type == "porous":
+                # Free-volume pores dominate adsorption in frameworks; wall sites
+                # (atop/bridge/hollow) are usually clash-prone under VDW gates.
+                pore_indices = [
+                    i for i in site_indices if str(unique_sites[i].site_type) == "pore"
+                ]
+                if pore_indices:
+                    # Prefer open pores (larger nn_distance); keep a working set
+                    # large enough for diversity but biased toward free volume.
+                    pore_indices.sort(
+                        key=lambda i: -float(unique_sites[i].nn_distance or 0.0)
+                    )
+                    pore_cap = max(int(config.num_placements or 20) * 20, 80)
+                    site_indices = pore_indices[:pore_cap]
     else:
         # No sites / use_sites=False: empty capacity (random-XY fallback removed).
         site_indices = []
@@ -286,6 +300,9 @@ def enumerate_placement_specs(
         dissociative=info.is_dissociative,
         n_hollow_pairs=info.n_hollow_pairs,
         seed=eff_seed,
+        preferred_site_types=("pore",) if config.material_type == "porous" else (),
+        # Quality-sorted pore lists: keep open pores near the front of the draw.
+        site_index_weight=1e-3 if config.material_type == "porous" else 0.0,
     )
 
 

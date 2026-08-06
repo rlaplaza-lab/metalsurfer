@@ -184,9 +184,10 @@ class TestEndToEndDeterminism:
                     assert descriptor.z_abs is not None
                     assert descriptor.surface_ref_z_abs is not None
                     assert descriptor.z_abs > float(np.max(slab.get_positions()[:, 2]))
-                    assert float(descriptor.z_abs) >= float(
-                        descriptor.surface_ref_z_abs
-                    ) - 0.05
+                    assert (
+                        float(descriptor.z_abs)
+                        >= float(descriptor.surface_ref_z_abs) - 0.05
+                    )
                     assert 0.0 <= float(descriptor.z_fraction) <= 1.0
                     assert descriptor.orientation_type in {
                         "round",
@@ -232,9 +233,7 @@ class TestEndToEndDeterminism:
         min_len = min(len(r1), len(r2))
         diffs = sum(
             1
-            for (_, p1, _), (_, p2, _) in zip(
-                r1[:min_len], r2[:min_len], strict=True
-            )
+            for (_, p1, _), (_, p2, _) in zip(r1[:min_len], r2[:min_len], strict=True)
             if not np.allclose(p1, p2, atol=1e-6)
         )
         assert diffs >= 1, "Different seeds should produce distinct placements"

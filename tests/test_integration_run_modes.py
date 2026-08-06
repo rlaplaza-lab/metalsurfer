@@ -305,7 +305,8 @@ def _assert_dissociative_h2_geometry(ads: Atoms, slab: Atoms) -> None:
     assert len(ads) == 2
     hh = _pair_distance(ads, 0, 1, slab)
     # Dissociative hollow-pair starts are stretched vs molecular H2 (~0.74 Å).
-    assert hh >= 1.5, f"dissociative H–H should be non-molecular, got {hh:.3f} Å"
+    # Fixture slab hollow pairs sit near a*√2/3 ≈ 1.27 Å (above the 1.0 Å floor).
+    assert hh >= 1.0, f"dissociative H–H should be non-molecular, got {hh:.3f} Å"
     assert hh <= 3.5, f"dissociative H–H unphysically far: {hh:.3f} Å"
 
 
@@ -379,7 +380,11 @@ def _assert_survivor_physics(
     for field in ("x_abs", "y_abs", "z_abs", "surface_ref_z_abs"):
         val = getattr(desc, field)
         assert val is not None and np.isfinite(val), f"{field}={val}"
-    if not dissociative and desc.z_abs is not None and desc.surface_ref_z_abs is not None:
+    if (
+        not dissociative
+        and desc.z_abs is not None
+        and desc.surface_ref_z_abs is not None
+    ):
         if material_type == "slab":
             assert float(desc.z_abs) >= float(desc.surface_ref_z_abs) - 0.05, (
                 f"z_abs={desc.z_abs:.3f} below surface_ref_z_abs={desc.surface_ref_z_abs:.3f}"

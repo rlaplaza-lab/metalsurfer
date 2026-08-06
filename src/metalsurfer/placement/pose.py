@@ -494,10 +494,20 @@ def _recover_distance_failure(
 
     ``too_close`` / ``too_far`` try height first, then lateral XY.
     ``adsorbate_overlap`` skips height (rarely helps) and tries lateral XY only.
+    For porous frameworks, ``vdw_overlap`` is treated like ``too_close`` (shrink
+    toward the free-volume site center, then XY).
     """
-    recoverable = ("too_close", "too_far", "adsorbate_overlap")
+    recoverable = ("too_close", "too_far", "adsorbate_overlap", "vdw_overlap")
     if fail_reason not in recoverable:
         return ctx, fail_reason
+    # Height recovery only for contact-distance failures (and porous VDW).
+    height_reasons: tuple[str, ...] = ("too_close", "too_far")
+    if ctx.mat_type == "porous":
+        height_reasons = ("too_close", "too_far", "vdw_overlap")
+    # Map porous VDW to the same shrink-toward-center strategy as too_close.
+    height_mode = fail_reason
+    if fail_reason == "vdw_overlap" and ctx.mat_type == "porous":
+        height_mode = "too_close"
 
     pose = ctx.pose
     if pose.z_abs is None:
@@ -508,10 +518,10 @@ def _recover_distance_failure(
     z_span = float(ctx.z_base_hi - ctx.z_base_lo)
 
     height_candidates: list[float] = []
-    if fail_reason in ("too_close", "too_far") and z_span > 1e-9:
+    if fail_reason in height_reasons and z_span > 1e-9:
         for step in range(1, _DISTANCE_RECOVERY_HEIGHT_STEPS + 1):
             frac = step / float(_DISTANCE_RECOVERY_HEIGHT_STEPS + 1)
-            if fail_reason == "too_close":
+            if height_mode == "too_close":
                 # Slabs/NPs: raise away from the surface. Porous: Voronoi sites
                 # already sit in free volume — shrink toward the site center.
                 if ctx.mat_type == "porous":
@@ -557,13 +567,13 @@ def _recover_distance_failure(
             return ctx, last_reason
 
     work_zf = zf
-    if fail_reason == "too_close" and height_candidates:
+    if height_mode == "too_close" and height_candidates:
         work_zf = (
             min(height_candidates)
             if ctx.mat_type == "porous"
             else max(height_candidates)
         )
-    elif fail_reason == "too_far" and height_candidates:
+    elif height_mode == "too_far" and height_candidates:
         work_zf = (
             max(height_candidates)
             if ctx.mat_type == "porous"
@@ -751,7 +761,8 @@ def _finalize_placement(
         if (
             allow_distance_recovery
             and config.placement_distance_recovery
-            and fail_reason in ("too_close", "too_far", "adsorbate_overlap")
+            and fail_reason
+            in ("too_close", "too_far", "adsorbate_overlap", "vdw_overlap")
         ):
             ctx, fail_reason = _recover_distance_failure(
                 ctx,

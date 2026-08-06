@@ -63,6 +63,42 @@ def _request_count(remaining: int, yield_est: float, oversample_max: float) -> i
     return max(remaining, min(by_yield, by_cap))
 
 
+def _yield_floor(oversample_max: float) -> float:
+    return 1.0 / max(float(oversample_max), 1.0)
+
+
+def _absorb_chunk(
+    *,
+    combined: list[Atoms],
+    placement_ids: list[int],
+    descriptors: list[PlacementDescriptor],
+    failures: list[PlacementFailureEvent],
+    new_combined: list[Atoms],
+    new_ids: list[int],
+    new_descriptors: list[PlacementDescriptor],
+    new_failures: list[PlacementFailureEvent],
+    n_target: int,
+    n_tried: int,
+    yield_est: float,
+    yield_floor: float,
+) -> tuple[float, int]:
+    """Record failures, update yield estimate, and trim successes into room.
+
+    Returns ``(updated_yield_est, n_taken)``.
+    """
+    failures.extend(new_failures)
+    n_ok = len(new_combined)
+    if n_tried > 0:
+        yield_est = max(n_ok / n_tried, yield_floor)
+    room = n_target - len(combined)
+    take = min(room, n_ok)
+    if take:
+        combined.extend(new_combined[:take])
+        placement_ids.extend(new_ids[:take])
+        descriptors.extend(new_descriptors[:take])
+    return yield_est, take
+
+
 @dataclass
 class MaterializeFillResult:
     """Outcome of materializing specs up to a target count."""
@@ -104,18 +140,16 @@ def materialize_specs_filling_target(
     descriptors: list[PlacementDescriptor] = []
     failures: list[PlacementFailureEvent] = []
     oversample_max = float(config.placement_retry_oversample_max)
-    yield_floor = 1.0 / max(oversample_max, 1.0)
+    yield_floor = _yield_floor(oversample_max)
     yield_est = _YIELD_EST_PRIOR
 
-    def _absorb(
+    def _materialize_and_absorb(
         specs: Sequence[PlacementSpec],
     ) -> tuple[int, int]:
-        """Materialize ``specs``; append until target. Returns (n_tried, n_new_ok)."""
+        """Materialize ``specs``; append until target. Returns (n_tried, n_taken)."""
         nonlocal yield_est
         if not specs or len(combined) >= n_target:
             return 0, 0
-        room = n_target - len(combined)
-        # Materialize all requested specs so failures are recorded, then trim.
         new_combined, new_ids, new_descs, new_failures = _materialize_spec_placements(
             specs=list(specs),
             conformers=conformers,
@@ -127,19 +161,23 @@ def materialize_specs_filling_target(
             slab_for_sites=slab_for_sites,
             materialization_cache=materialization_cache,
         )
-        failures.extend(new_failures)
-        n_tried = len(specs)
-        n_ok = len(new_combined)
-        if n_tried > 0:
-            yield_est = max(n_ok / n_tried, yield_floor)
-        take = min(room, n_ok)
-        if take:
-            combined.extend(new_combined[:take])
-            placement_ids.extend(new_ids[:take])
-            descriptors.extend(new_descs[:take])
-        return n_tried, take
+        yield_est, take = _absorb_chunk(
+            combined=combined,
+            placement_ids=placement_ids,
+            descriptors=descriptors,
+            failures=failures,
+            new_combined=new_combined,
+            new_ids=new_ids,
+            new_descriptors=new_descs,
+            new_failures=new_failures,
+            n_target=n_target,
+            n_tried=len(specs),
+            yield_est=yield_est,
+            yield_floor=yield_floor,
+        )
+        return len(specs), take
 
-    _absorb(primary_specs)
+    _materialize_and_absorb(primary_specs)
 
     n_backfill_used = 0
     if len(combined) < n_target and backfill_specs:
@@ -150,7 +188,7 @@ def materialize_specs_filling_target(
             chunk = list(backfill_specs[offset : offset + n_request])
             if not chunk:
                 break
-            tried, ok = _absorb(chunk)
+            tried, ok = _materialize_and_absorb(chunk)
             n_backfill_used += tried
             offset += tried
             if tried > 0 and ok == 0:
@@ -202,6 +240,7 @@ def fill_materialized_placements(
     )
     seed_increment = config.placement_retry_diversity_seed_increment
     oversample_max = float(config.placement_retry_oversample_max)
+    yield_floor = _yield_floor(oversample_max)
     yield_est = _YIELD_EST_PRIOR
     attempts_used = 0
 
@@ -302,20 +341,20 @@ def fill_materialized_placements(
                     if site_fail_counts[site_idx] >= _RETRY_BLOCK_SITE_AFTER:
                         blocked_sites.add(site_idx)
 
-        n_tried = len(specs)
-        n_ok = len(new_combined)
-        if n_tried > 0:
-            # Floor so a zero-success round still oversamples on the next attempt.
-            yield_floor = 1.0 / max(oversample_max, 1.0)
-            yield_est = max(n_ok / n_tried, yield_floor)
-
-        room = n_target - len(combined)
-        take = min(room, n_ok)
-        if take:
-            combined.extend(new_combined[:take])
-            placement_ids.extend(new_ids[:take])
-            descriptors.extend(new_descriptors[:take])
-        failures.extend(new_failures)
+        yield_est, take = _absorb_chunk(
+            combined=combined,
+            placement_ids=placement_ids,
+            descriptors=descriptors,
+            failures=failures,
+            new_combined=new_combined,
+            new_ids=new_ids,
+            new_descriptors=new_descriptors,
+            new_failures=new_failures,
+            n_target=n_target,
+            n_tried=len(specs),
+            yield_est=yield_est,
+            yield_floor=yield_floor,
+        )
 
         if attempt > 0 and take:
             logger.debug(

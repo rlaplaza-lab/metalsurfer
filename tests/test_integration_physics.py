@@ -397,8 +397,10 @@ class TestProcessMoleculePhysicsSurvival:
         )
         results = outcome.results
 
-        assert len(results) == 2, (
-            f"Expected exactly the two 'good' stub modes to survive, got {len(results)}"
+        # Identical stub "good" geometries collapse under RMSD dedup → one survivor.
+        assert len(results) == 1, (
+            f"Expected the identical 'good' stub modes to dedup to 1 survivor, "
+            f"got {len(results)}"
         )
         for r in results:
             assert r.energy_adsorption == pytest.approx(e_ads_good, abs=1e-6)
@@ -424,6 +426,7 @@ class TestProcessMoleculePhysicsSurvival:
             assert r.placement_descriptor.orientation_type == "round"
             assert r.placement_descriptor.surface_ref_z_abs is not None
             assert r.placement_descriptor.z_abs is not None
-            assert float(r.placement_descriptor.z_abs) >= float(
-                r.placement_descriptor.surface_ref_z_abs
-            ) - 0.05
+            assert (
+                float(r.placement_descriptor.z_abs)
+                >= float(r.placement_descriptor.surface_ref_z_abs) - 0.05
+            )

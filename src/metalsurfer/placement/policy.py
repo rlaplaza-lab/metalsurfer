@@ -68,29 +68,46 @@ def max_batch_placement_specs(
     )
 
 
-def _spec_prior_key(spec: PlacementSpec, tie: float) -> tuple[float, float]:
+def _spec_prior_key(
+    spec: PlacementSpec,
+    tie: float,
+    *,
+    z_fraction_target: float = _POLICY_PRIOR_Z_FRACTION_TARGET,
+    site_index_weight: float = 0.0,
+) -> tuple[float, float]:
     """Sort key for soft physical priors: lower score is preferred.
 
-    Prefers milder absolute tilt and ``z_fraction`` near the mid-window target.
+    Prefers milder absolute tilt and ``z_fraction`` near *z_fraction_target*.
+    When *site_index_weight* > 0 (porous open-pore lists), lower ``site_index``
+    is preferred so quality-sorted site lists stay near the front.
     *tie* breaks remaining ties deterministically (seeded shuffle rank).
     """
     tilt_pen = abs(float(spec.tilt_deg)) * _POLICY_PRIOR_TILT_WEIGHT_PER_DEG
     z_pen = (
-        abs(float(spec.z_fraction) - _POLICY_PRIOR_Z_FRACTION_TARGET)
+        abs(float(spec.z_fraction) - float(z_fraction_target))
         * _POLICY_PRIOR_Z_FRACTION_WEIGHT
     )
-    return (tilt_pen + z_pen, tie)
+    site_pen = float(spec.site_index) * float(site_index_weight)
+    return (tilt_pen + z_pen + site_pen, tie)
 
 
 def _stratified_sample(
     specs: list[PlacementSpec],
     n_desired: int,
     seed: int,
+    *,
+    preferred_site_types: tuple[str, ...] = (),
+    z_fraction_target: float = _POLICY_PRIOR_Z_FRACTION_TARGET,
+    site_index_weight: float = 0.0,
 ) -> list[PlacementSpec]:
     """Sample up to *n_desired* specs stratified by ``site_type`` (seeded, deterministic).
 
     Within each site-type bucket, specs are ordered by a soft prior (milder tilt,
-    mid ``z_fraction``) with a seeded tie-break so draws remain deterministic.
+    ``z_fraction`` near *z_fraction_target*) with a seeded tie-break so draws
+    remain deterministic. When *preferred_site_types* is set (e.g. ``("pore",)``
+    for porous frameworks), those buckets are drawn first each round-robin pass.
+    When *site_index_weight* > 0, draws also round-robin across ``site_index``
+    values (quality-sorted) so open-pore lists keep multi-site coverage.
     """
     if len(specs) <= n_desired:
         return list(specs)
@@ -100,23 +117,63 @@ def _stratified_sample(
         key = str(spec.site_type) if spec.site_type is not None else "none"
         buckets[key].append(spec)
 
-    # Stable bucket order for determinism.
-    keys = sorted(buckets)
+    # Preferred buckets first, then remaining keys sorted for determinism.
+    preferred = [k for k in preferred_site_types if k in buckets]
+    keys = preferred + [k for k in sorted(buckets) if k not in preferred]
     rng = random.Random(seed)
     for key in keys:
         bucket = buckets[key]
-        # Seeded permutation ranks for tie-breaking, then sort by prior score.
         ranks = list(range(len(bucket)))
         rng.shuffle(ranks)
-        ordered = sorted(
-            zip(bucket, ranks, strict=True),
-            key=lambda item: _spec_prior_key(item[0], float(item[1])),
-        )
-        # Pop from end → reverse so preferred specs come off first.
-        buckets[key] = [spec for spec, _ in reversed(ordered)]
+        if site_index_weight > 0.0:
+            # Round-robin across site indices so quality bias does not collapse
+            # the draw onto a single open pore.
+            by_site: dict[int, list[PlacementSpec]] = defaultdict(list)
+            for spec, _rank in zip(bucket, ranks, strict=True):
+                by_site[int(spec.site_index)].append(spec)
+            ranked_by_site: dict[int, list[PlacementSpec]] = {}
+            for si, site_specs in by_site.items():
+                site_ranks = list(range(len(site_specs)))
+                rng.shuffle(site_ranks)
+                ordered = sorted(
+                    zip(site_specs, site_ranks, strict=True),
+                    key=lambda item: _spec_prior_key(
+                        item[0],
+                        float(item[1]),
+                        z_fraction_target=z_fraction_target,
+                        site_index_weight=0.0,
+                    ),
+                )
+                # Best first for round-robin.
+                ranked_by_site[si] = [spec for spec, _ in ordered]
+            site_order = sorted(ranked_by_site.keys())
+            interleaved: list[PlacementSpec] = []
+            while True:
+                progressed = False
+                for si in site_order:
+                    site_bucket = ranked_by_site[si]
+                    if site_bucket:
+                        interleaved.append(site_bucket.pop(0))
+                        progressed = True
+                if not progressed:
+                    break
+            # Pop from end → reverse so preferred (earlier interleaved) come off first.
+            buckets[key] = list(reversed(interleaved))
+        else:
+            ordered = sorted(
+                zip(bucket, ranks, strict=True),
+                key=lambda item: _spec_prior_key(
+                    item[0],
+                    float(item[1]),
+                    z_fraction_target=z_fraction_target,
+                    site_index_weight=0.0,
+                ),
+            )
+            # Pop from end → reverse so preferred specs come off first.
+            buckets[key] = [spec for spec, _ in reversed(ordered)]
 
     selected: list[PlacementSpec] = []
-    # Round-robin across buckets until n_desired.
+    # Round-robin across buckets until n_desired (preferred keys first each pass).
     while len(selected) < n_desired:
         progressed = False
         for key in keys:
@@ -145,6 +202,9 @@ def build_batch_placement_specs(
     dissociative: bool = False,
     n_hollow_pairs: int = 0,
     seed: int = _PLACEMENT_GRID_COUNT_SEED,
+    preferred_site_types: tuple[str, ...] = (),
+    z_fraction_target: float = _POLICY_PRIOR_Z_FRACTION_TARGET,
+    site_index_weight: float = 0.0,
 ) -> list[PlacementSpec]:
     """BO candidate ``PlacementSpec`` list: full Cartesian grid (capped), then stratified subsample to *n_desired* (*seed*)."""
     normalized_sites = site_indices if site_indices else [-1]
@@ -175,6 +235,18 @@ def build_batch_placement_specs(
                 out.append(spec)
         return out
 
+    def _subsample(
+        specs: list[PlacementSpec], n: int, sub_seed: int
+    ) -> list[PlacementSpec]:
+        return _stratified_sample(
+            specs,
+            n,
+            sub_seed,
+            preferred_site_types=preferred_site_types,
+            z_fraction_target=z_fraction_target,
+            site_index_weight=site_index_weight,
+        )
+
     if dissociative:
         if n_hollow_pairs <= 0:
             specs = []
@@ -200,7 +272,7 @@ def build_batch_placement_specs(
             )
             specs = _collect(items, cap=working_cap)
             if len(specs) > n_desired:
-                specs = _stratified_sample(specs, n_desired, seed)
+                specs = _subsample(specs, n_desired, seed)
     elif flat_aromatic:
         n_par = int(round(n_desired * parallel_fraction))
         n_par = max(0, min(n_par, n_desired))
@@ -251,9 +323,9 @@ def build_batch_placement_specs(
         en_specs = _collect(en_down_items, cap=_GRID_BUILD_CAP)
 
         if len(par_specs) > n_par:
-            par_specs = _stratified_sample(par_specs, n_par, seed)
+            par_specs = _subsample(par_specs, n_par, seed)
         if len(en_specs) > n_en:
-            en_specs = _stratified_sample(en_specs, n_en, seed + 1)
+            en_specs = _subsample(en_specs, n_en, seed + 1)
         specs = par_specs + en_specs
     else:
         orient = "vertical" if shape == "linear" else "round"
@@ -276,7 +348,7 @@ def build_batch_placement_specs(
         )
         specs = _collect(items, cap=_GRID_BUILD_CAP)
         if len(specs) > n_desired:
-            specs = _stratified_sample(specs, n_desired, seed)
+            specs = _subsample(specs, n_desired, seed)
 
     for i, spec in enumerate(specs):
         spec.placement_index = i

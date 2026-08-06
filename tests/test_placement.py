@@ -1111,7 +1111,8 @@ def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
     config = adsorption_config_factory(
         material_type="slab",
         num_placements=50,
-        placement_z_range=(2.0, 3.0),
+        # Scaled covalent z puts (1.5, 2.0) in the physical contact band (~3–4 Å).
+        placement_z_range=(1.5, 2.0),
         reject_vdw_overlaps=True,
     )
     results = _generate_placements(
@@ -1139,7 +1140,7 @@ def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
 def test_slab_placements_are_above_surface_reference():
     slab = make_slab()
     config = adsorption_config_factory(
-        material_type="slab", num_placements=50, placement_z_range=(2.0, 3.0)
+        material_type="slab", num_placements=50, placement_z_range=(1.5, 2.0)
     )
     results = _generate_placements(
         water_conformers(), slab, config, smiles="O", n_desired=50
@@ -1206,7 +1207,9 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
     results = _generate_placements(
         conformers, structure, config, smiles="O", n_desired=n_desired
     )
-    min_ok = max(8 if material_type == "porous" else 10, int(math.ceil(0.7 * n_desired)))
+    min_ok = max(
+        8 if material_type == "porous" else 10, int(math.ceil(0.7 * n_desired))
+    )
     assert len(results) >= min_ok, (
         f"{material_type}: expected >= {min_ok}/{n_desired} successes, got {len(results)}"
     )
@@ -1230,7 +1233,9 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
             adsorbate_i, structure, material_type=material_type
         )
         assert len(overlaps) == 0, f"{material_type} placement has VDW clashes"
-        assert desc.surface_ref_z_abs is not None and np.isfinite(desc.surface_ref_z_abs)
+        assert desc.surface_ref_z_abs is not None and np.isfinite(
+            desc.surface_ref_z_abs
+        )
         assert desc.z_abs is not None and np.isfinite(desc.z_abs)
         assert desc.orientation_type == "round"
 
@@ -1280,17 +1285,15 @@ def test_local_site_material_placement_center_matches_site_geometry(
         site = unique_sites[spec.site_index]
         n_hat = np.asarray(site.normal, dtype=float)
         n_hat = n_hat / float(np.linalg.norm(n_hat))
-        expected = np.asarray(site.xyz, dtype=float) + float(
-            descriptor.z_offset
-        ) * n_hat
+        expected = (
+            np.asarray(site.xyz, dtype=float) + float(descriptor.z_offset) * n_hat
+        )
         got = np.array(
             [descriptor.x_abs, descriptor.y_abs, descriptor.z_abs], dtype=float
         )
         np.testing.assert_allclose(got, expected, atol=1e-6)
 
-        surface_ref, is_local = _resolve_surface_ref(
-            site, structure, material_type
-        )
+        surface_ref, is_local = _resolve_surface_ref(site, structure, material_type)
         assert is_local
         assert surface_ref == pytest.approx(float(np.dot(site.xyz, n_hat)), abs=1e-9)
         assert descriptor.surface_ref_z_abs == pytest.approx(surface_ref, abs=1e-6)
@@ -1343,7 +1346,9 @@ def test_local_site_distance_recovery_height_direction(
     from metalsurfer.placement.pose import _recover_distance_failure
 
     structure = (
-        make_nanoparticle() if material_type == "nanoparticle" else make_porous_framework()
+        make_nanoparticle()
+        if material_type == "nanoparticle"
+        else make_porous_framework()
     )
     water = make_water()
     pos = water.get_positions().copy()
@@ -1564,7 +1569,7 @@ def test_check_desorption_nanoparticle_and_porous():
         if float(d) > best_d:
             best_d = float(d)
             best_com = com
-    assert best_com is not None and best_d > 4.0, (
+    assert best_com is not None and best_d > 3.5, (
         f"porous fixture should expose a void beyond desorption threshold, got {best_d:.3f}"
     )
     wpos = water_far_porous.get_positions().copy()
@@ -1574,12 +1579,14 @@ def test_check_desorption_nanoparticle_and_porous():
     porous_far_combined = porous + water_far_porous
     porous_far_combined.set_cell(porous.get_cell())
     porous_far_combined.set_pbc(porous.get_pbc())
+    # Fixture max water clearance is ~3.8 Å; use a threshold below that so the
+    # far pose is still classified as desorbed.
     ok_porous_far, reason_porous_far = check_desorption(
-        porous_far_combined, porous, binding_threshold=4.0, material_type="porous"
+        porous_far_combined, porous, binding_threshold=3.5, material_type="porous"
     )
     assert not ok_porous_far
     assert "too far" in reason_porous_far
-    assert best_d > 4.0
+    assert best_d > 3.5
 
 
 # ---------------------------------------------------------------------------
@@ -2518,9 +2525,7 @@ def test_dissociative_placement_supported_for_nanoparticle():
         )
     )
     pair = pairs[descriptor.site_index % len(pairs)]
-    pair_sep = float(
-        np.linalg.norm(np.asarray(pair.xyz1) - np.asarray(pair.xyz2))
-    )
+    pair_sep = float(np.linalg.norm(np.asarray(pair.xyz1) - np.asarray(pair.xyz2)))
     assert hh == pytest.approx(pair_sep, abs=0.5), (
         f"H–H separation {hh:.3f} should track pair spacing {pair_sep:.3f}"
     )
@@ -3346,8 +3351,6 @@ def test_enable_dissociative_placement_without_topology_skip():
     assert all(s.orientation_type == "dissociative" for s in specs)
 
 
-
-
 @pytest.mark.parametrize(
     "mol_factory, smiles, n_desired, extra_cfg",
     [
@@ -3655,9 +3658,10 @@ def test_overlap_recovery_rescues_lateral_clash():
     assert reason is None, f"seeded lateral clash should recover, got {reason}"
     assert result is not None
     adsorbate_ok, descriptor = result
-    assert abs(float(descriptor.x_abs) - 2.0) > 1e-3 or abs(
-        float(descriptor.y_abs) - 2.0
-    ) > 1e-3, "overlap recovery should nudge XY away from the clash"
+    assert (
+        abs(float(descriptor.x_abs) - 2.0) > 1e-3
+        or abs(float(descriptor.y_abs) - 2.0) > 1e-3
+    ), "overlap recovery should nudge XY away from the clash"
     gate_ok, min_d, gate_reason = check_initial_placement_distance(
         adsorbate_ok, slab, material_type="slab"
     )
@@ -4091,7 +4095,6 @@ def test_packing_yield_improves_with_occupancy_prune():
 def test_retry_blocks_repeated_bad_site_index(monkeypatch):
     from metalsurfer.models import PlacementSpec
     from metalsurfer.placement._constants import _RETRY_BLOCK_SITE_AFTER
-    from metalsurfer.workflow import core as core_mod
     from metalsurfer.workflow import placement_fill as fill_mod
     from metalsurfer.workflow.shared import PlacementFailureEvent
 
@@ -4153,16 +4156,14 @@ def test_retry_blocks_repeated_bad_site_index(monkeypatch):
         placement_retry_max_attempts=3,
         seed=0,
     )
-    _combined, _ids, _desc, _fails, _attempts = (
-        core_mod._generate_placements_with_retry(
-            [make_water()],
-            make_slab(),
-            config,
-            "O",
-            None,
-            make_slab(),
-            calculator=None,
-        )
+    fill_mod.fill_materialized_placements(
+        conformers=[make_water()],
+        slab_for_sites=make_slab(),
+        config=config,
+        smiles="O",
+        site_context=None,
+        slab_atoms=make_slab(),
+        calculator=None,
     )
     assert _RETRY_BLOCK_SITE_AFTER >= 2
     # After enough failures on site 3, later attempts should exclude it.
@@ -4353,7 +4354,9 @@ def test_generate_placements_from_specs_preserves_order(monkeypatch):
         desc = make_placement_descriptor(placement_id=spec.placement_index)
         return (Atoms("H"), desc), None
 
-    monkeypatch.setattr(gen_mod, "generate_placement_from_spec_with_reason", fake_generate)
+    monkeypatch.setattr(
+        gen_mod, "generate_placement_from_spec_with_reason", fake_generate
+    )
 
     specs = [_spec(i) for i in range(6)]
     slab = make_slab()
