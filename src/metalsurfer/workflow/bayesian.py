@@ -15,6 +15,7 @@ from ..config import (
 from ..filters import filter_results
 from ..ml.bayesian import (
     TransferCapableSurrogateType,
+    _align_to_columns,
     build_spec_features_geometry_aware,
     build_transfer_surrogate,
     cumulative_refit_sample_weights,
@@ -413,7 +414,7 @@ def process_molecule_bayesian(
                 assert transfer_memory is not None
                 X_prior = pd.DataFrame(transfer_memory.observed_X_rows)
                 y_prior = np.asarray(transfer_memory.observed_y, dtype=float)
-                X_prior = X_prior.reindex(columns=X_current.columns, fill_value=0.0)
+                X_prior = _align_to_columns(X_prior, X_current)
                 X_combined = pd.concat([X_prior, X_current], ignore_index=True)
                 y_combined = np.concatenate([y_prior, y_current])
                 refit_weights = cumulative_refit_sample_weights(

@@ -556,18 +556,18 @@ class TorchSimCalculator:
     during ASE optimization loops) are detected correctly.
     """
 
-    def __init__(self, ts_model):
+    def __init__(self, ts_model: Any) -> None:
         """Wrap a TorchSim model (e.g. FairChemModel) for ASE compatibility."""
         self._model = ts_model
-        self.results: dict = {}
+        self.results: dict[str, Any] = {}
         self._last_positions_hash: int | None = None
 
     def calculate(
         self,
-        atoms=None,
-        properties=None,
-        system_changes=all_changes,
-    ):
+        atoms: Atoms | None = None,
+        properties: list[str] | None = None,
+        system_changes: Any = all_changes,
+    ) -> None:
         """Run single-point calculation via ``ts.static()``.
 
         ``system_changes`` is accepted for ASE calculator compatibility but

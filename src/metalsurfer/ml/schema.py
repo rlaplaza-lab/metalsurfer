@@ -545,15 +545,13 @@ class PlacementRecord:
     def from_flat_dict(cls, row: dict[str, Any]) -> "PlacementRecord":
         """Reconstruct a PlacementRecord from a flattened dict (e.g. CSV row).
 
-        Accepts schema 3.0 ``initial_*`` provenance columns and legacy unprefixed
-        names from schema ≤2.3. Lean rows without provenance use safe defaults.
+        Accepts schema 3.0 ``initial_*`` provenance columns and ``ctx_*`` context
+        columns. Lean rows without provenance use safe defaults.
         Geometry is inflated via :meth:`PlacementDescriptor.from_row`.
         """
 
         def _ctx_value(name: str, default: Any) -> Any:
-            return _with_default(
-                row.get(f"ctx_{name}"), _with_default(row.get(name), default)
-            )
+            return _with_default(row.get(f"ctx_{name}"), default)
 
         ctx = ComputationContext(
             model_name=str(_ctx_value("model_name", "uma-s-1p2")),

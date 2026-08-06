@@ -138,12 +138,10 @@ def provenance_export_fields(values: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _provenance_value_from_row(row: Mapping[str, Any], attr: str, default: Any) -> Any:
-    """Resolve a provenance field from ``initial_*`` then legacy unprefixed name."""
+    """Resolve a provenance field from its ``initial_*`` CSV column."""
     export_name = INITIAL_PROVENANCE_COLUMN_MAP.get(attr, attr)
     if export_name in row and not _row_is_missing(row.get(export_name)):
         return row.get(export_name)
-    if attr in row and not _row_is_missing(row.get(attr)):
-        return row.get(attr)
     return default
 
 
@@ -211,39 +209,15 @@ class PlacementDescriptor:
             "x_abs": x_abs,
             "y_abs": y_abs,
             "z_abs": z_abs,
-            "quat_w": float(self.quat_w) if self.quat_w is not None else 1.0,
-            "quat_x": float(self.quat_x) if self.quat_x is not None else 0.0,
-            "quat_y": float(self.quat_y) if self.quat_y is not None else 0.0,
-            "quat_z": float(self.quat_z) if self.quat_z is not None else 0.0,
+            "quat_w": _row_float_or(self.quat_w, 1.0),
+            "quat_x": _row_float_or(self.quat_x, 0.0),
+            "quat_y": _row_float_or(self.quat_y, 0.0),
+            "quat_z": _row_float_or(self.quat_z, 0.0),
         }
         if include_provenance:
-            row.update(
-                provenance_export_fields(
-                    {
-                        "orientation_type": self.orientation_type,
-                        "face_flip": self.face_flip,
-                        "en_atom_index": self.en_atom_index,
-                        "site_index": self.site_index,
-                        "site_type": self.site_type,
-                        "tilt_deg": self.tilt_deg,
-                        "azimuth_deg": self.azimuth_deg,
-                        "azimuth_in_plane_deg": self.azimuth_in_plane_deg,
-                        "z_fraction": self.z_fraction,
-                        "z_offset": self.z_offset,
-                        "surface_ref_z_abs": surface_ref_z_abs,
-                        "x": self.x,
-                        "y": self.y,
-                        "shape": self.shape,
-                        "slab_indices": self.slab_indices,
-                        "placement_mode_resolved": self.placement_mode_resolved,
-                        "site_source": self.site_source,
-                        "site_reference_frame": self.site_reference_frame,
-                        "site_xy_frac_a": self.site_xy_frac_a,
-                        "site_xy_frac_b": self.site_xy_frac_b,
-                        "fragment_positions": self.fragment_positions,
-                    }
-                )
-            )
+            prov_vals = {attr: getattr(self, attr) for attr in INITIAL_PROVENANCE_COLUMN_MAP}
+            prov_vals["surface_ref_z_abs"] = surface_ref_z_abs
+            row.update(provenance_export_fields(prov_vals))
         return row
 
     @classmethod
@@ -253,7 +227,7 @@ class PlacementDescriptor:
         *,
         placement_index: int | None = None,
     ) -> "PlacementDescriptor":
-        """Inflate a descriptor from lean/rich/legacy flat CSV or dict rows."""
+        """Inflate a descriptor from lean or rich (``initial_*``) flat CSV/dict rows."""
         slab_indices_raw = _provenance_value_from_row(row, "slab_indices", None)
         slab_indices = None
         if slab_indices_raw and not _row_is_missing(slab_indices_raw):
@@ -543,24 +517,15 @@ def _placement_rows_for_results(
     include_provenance: bool,
     extra: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for r in results:
-        pid = r.placement_id
-        poscar_path = (
-            str(step_vasp / f"conformer_{pid:03d}" / "POSCAR")
-            if step_vasp is not None
-            else None
-        )
-        rows.append(
-            r.to_row(
-                xyz_path=str(step_xyz / f"conformer_{pid:03d}.xyz"),
-                poscar_path=poscar_path,
-                context_row=context_row,
-                include_provenance=include_provenance,
-            )
-            | {"step": step, **dict(extra)}
-        )
-    return rows
+    return [
+        r.to_row(
+            xyz_path=str(step_xyz / f"conformer_{r.placement_id:03d}.xyz"),
+            poscar_path=str(step_vasp / f"conformer_{r.placement_id:03d}" / "POSCAR") if step_vasp is not None else None,
+            context_row=context_row,
+            include_provenance=include_provenance,
+        ) | {"step": step, **dict(extra)}
+        for r in results
+    ]
 
 
 @dataclass

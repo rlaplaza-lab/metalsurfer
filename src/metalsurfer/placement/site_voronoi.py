@@ -1,6 +1,5 @@
 """Voronoi site generation, topology candidates, ridge enrichment, and classification."""
 
-from __future__ import annotations
 
 import logging
 

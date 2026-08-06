@@ -5,7 +5,6 @@ Private helpers live in ``dissociative``, ``orientation``, ``pose``,
 and ``site_context`` — import those modules directly in tests.
 """
 
-from __future__ import annotations
 
 import logging
 import os

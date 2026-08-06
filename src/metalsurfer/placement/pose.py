@@ -1,6 +1,5 @@
 """Pose construction, validation, and finalization."""
 
-from __future__ import annotations
 
 import dataclasses
 import logging

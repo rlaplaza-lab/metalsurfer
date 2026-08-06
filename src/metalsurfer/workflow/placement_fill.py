@@ -1,6 +1,5 @@
 """Yield-aware placement fill shared by non-BO and BO screening."""
 
-from __future__ import annotations
 
 import logging
 import math

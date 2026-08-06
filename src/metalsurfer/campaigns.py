@@ -1,6 +1,5 @@
 """High-level campaign APIs for adsorption screening library scripts and workflows."""
 
-from __future__ import annotations
 
 import logging
 import time

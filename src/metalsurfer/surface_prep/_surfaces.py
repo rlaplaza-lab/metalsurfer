@@ -15,6 +15,7 @@ from ..config import (
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
     AdsorptionConfig,
+    resolve_adsorption_config,
 )
 from ..exceptions import (
     DependencyMissingError,
@@ -56,45 +57,22 @@ def _vacuum_margins_ang(atoms: Atoms) -> np.ndarray:
     return lengths * (1.0 - frac_span)
 
 
-def _import_chain(exc: BaseException | None) -> list[BaseException]:
-    """Flatten exception.__cause__ into a list (root first)."""
-    chain: list[BaseException] = []
-    cur: BaseException | None = exc
-    while cur is not None:
-        chain.append(cur)
-        cur = cur.__cause__
-    return chain
-
-
-def _is_pkg_resources_missing(exc: ImportError) -> bool:
-    """True if *exc* or its :attr:`__cause__` chain indicates missing ``pkg_resources``."""
-    for err in _import_chain(exc):
-        if isinstance(err, ModuleNotFoundError) and err.name == "pkg_resources":
-            return True
-        if "pkg_resources" in str(err):
-            return True
-    return False
-
-
 def _dependency_error_for_slab_import(exc: ImportError) -> DependencyMissingError:
     """Map a failed ``fairchem.data.oc`` import to an actionable :class:`DependencyMissingError`."""
-    if _is_pkg_resources_missing(exc):
-        return DependencyMissingError(
-            "setuptools",
-            "create_slab_from_bulk",
-            "Install with: pip install 'setuptools<82' (setuptools 82+ removed pkg_resources)",
-        )
-    msg_l = str(exc).lower()
-    if "fairchem" in msg_l:
-        return DependencyMissingError(
-            "fairchem-data-oc",
-            "create_slab_from_bulk",
-            "Install with: pip install fairchem-data-oc",
-        )
+    cur: BaseException | None = exc
+    while cur is not None:
+        if (isinstance(cur, ModuleNotFoundError) and cur.name == "pkg_resources") or "pkg_resources" in str(cur):
+            return DependencyMissingError(
+                "setuptools",
+                "create_slab_from_bulk",
+                "Install with: pip install 'setuptools<82' (setuptools 82+ removed pkg_resources)",
+            )
+        cur = cur.__cause__
+    extra = f". Underlying error: {exc!s}" if "fairchem" not in str(exc).lower() else ""
     return DependencyMissingError(
         "fairchem-data-oc",
         "create_slab_from_bulk",
-        f"Install with: pip install fairchem-data-oc. Underlying error: {exc!s}",
+        f"Install with: pip install fairchem-data-oc{extra}",
     )
 
 
@@ -263,7 +241,7 @@ def validate_substrate(
     (prefer calling :func:`validate_substrate_conformer_sizing` from screening
     prep after resize instead of bundling it here).
     """
-    cfg = config if config is not None else AdsorptionConfig()
+    cfg = resolve_adsorption_config(config)
     pos = slab.get_positions()
     if len(pos) == 0:
         raise GeometryValidationError("Substrate has no atoms")
@@ -359,7 +337,7 @@ def validate_substrate_conformer_sizing(
     config: AdsorptionConfig | None = None,
 ) -> None:
     """Ensure in-plane image separation is adequate for *conformers*."""
-    cfg = config if config is not None else AdsorptionConfig()
+    cfg = resolve_adsorption_config(config)
     cell = np.array(slab.get_cell(), dtype=float)
     diameter = _molecule_diameter(conformers)
     nx, ny = compute_minimum_supercell(
@@ -514,7 +492,7 @@ def create_slab_from_bulk(
 
     slab.atoms = ensure_slab_z_alignment(slab.atoms)
 
-    cfg = config if config is not None else AdsorptionConfig()
+    cfg = resolve_adsorption_config(config)
     _save_reference_slab_artifacts(
         slab.atoms,
         results_dir=results_dir,
@@ -549,17 +527,6 @@ def create_slab_from_atoms(
 # ---------------------------------------------------------------------------
 
 
-def _evaluate_variant_energy(variant: Atoms, calculator, context: str = "") -> float:
-    """Run single-point energy on variant; return inf on failure."""
-    try:
-        variant.calc = calculator
-        return float(variant.get_potential_energy())
-    except (RuntimeError, ValueError) as exc:
-        if context:
-            logger.warning("%s failed: %s", context, exc)
-        return float("inf")
-
-
 def _consider_variant(
     candidate: Atoms,
     *,
@@ -569,13 +536,16 @@ def _consider_variant(
     context: str,
 ) -> tuple[float, Atoms | None]:
     """Update best variant when *candidate* is better (or first without calculator)."""
-    if calculator is not None:
-        energy = _evaluate_variant_energy(candidate, calculator, context=context)
+    if calculator is None:
+        return best_energy, (candidate.copy() if best_atoms is None else best_atoms)
+    try:
+        candidate.calc = calculator
+        energy = float(candidate.get_potential_energy())
         if energy < best_energy:
             return energy, candidate.copy()
-        return best_energy, best_atoms
-    if best_atoms is None:
-        return best_energy, candidate.copy()
+    except (RuntimeError, ValueError) as exc:
+        if context:
+            logger.warning("%s failed: %s", context, exc)
     return best_energy, best_atoms
 
 
@@ -607,30 +577,12 @@ def _resolve_slab_relaxation_settings(
     relaxation_steps: int | None = None,
 ) -> tuple[SLAB_RELAXATION_MODE, SLAB_RELAXATION_OPTIMIZER, float, int]:
     """Resolve per-call slab relaxation settings with config fallbacks."""
-    resolved_config = config if config is not None else AdsorptionConfig()
-    mode = (
-        relaxation_mode
-        if relaxation_mode is not None
-        else resolved_config.slab_relaxation_mode
-    )
-    optimizer = (
-        relaxation_optimizer
-        if relaxation_optimizer is not None
-        else resolved_config.slab_relaxation_optimizer
-    )
-    fmax = (
-        relaxation_fmax
-        if relaxation_fmax is not None
-        else resolved_config.slab_relaxation_fmax
-    )
-    if fmax is None:
-        fmax = resolved_config.fmax
-    steps = (
-        relaxation_steps
-        if relaxation_steps is not None
-        else resolved_config.slab_relaxation_steps
-    )
-    return mode, optimizer, fmax, steps
+    cfg = config or AdsorptionConfig()
+    mode = relaxation_mode if relaxation_mode is not None else cfg.slab_relaxation_mode
+    opt = relaxation_optimizer if relaxation_optimizer is not None else cfg.slab_relaxation_optimizer
+    fmax = relaxation_fmax if relaxation_fmax is not None else (cfg.slab_relaxation_fmax or cfg.fmax)
+    steps = relaxation_steps if relaxation_steps is not None else cfg.slab_relaxation_steps
+    return mode, opt, fmax, steps
 
 
 def _relax_slab_structure(
@@ -841,7 +793,7 @@ def substitute_alloy(
         except (RuntimeError, ValueError) as exc:
             raise OptimizationError(f"Alloy slab relaxation failed: {exc}") from exc
 
-    cfg = config if config is not None else AdsorptionConfig()
+    cfg = resolve_adsorption_config(config)
     label = f"{host_symbol}_{guest_symbol}_{int(guest_fraction * 100)}"
     _save_reference_slab_artifacts(
         best_atoms,
@@ -987,7 +939,7 @@ def deposit_adatoms(
             "Failed to generate any valid adatom-deposited slab"
         )
 
-    cfg = config if config is not None else AdsorptionConfig()
+    cfg = resolve_adsorption_config(config)
     pct = int(round(coverage_fraction * 100))
     label = f"{adatom_symbol}{pct}"
     _save_reference_slab_artifacts(

@@ -1,6 +1,5 @@
 """Aromatic heuristics, parallel fraction, and adsorbate orientation classification."""
 
-from __future__ import annotations
 
 from dataclasses import dataclass
 

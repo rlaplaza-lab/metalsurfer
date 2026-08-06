@@ -1,6 +1,5 @@
 """Dissociative diatomic placement and hollow site pair enumeration."""
 
-from __future__ import annotations
 
 import hashlib
 import struct

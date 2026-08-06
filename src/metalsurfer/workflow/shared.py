@@ -4,6 +4,7 @@ import csv
 import logging
 import os
 import time
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -80,39 +81,22 @@ def _summarize_failure_events(
     label: str,
 ) -> dict[str, int]:
     """Log compact failure summaries; return stage:reason → count."""
-    stage_reason_counts: dict[str, int] = {}
     if not events:
-        return stage_reason_counts
-    for event in events:
-        key = f"{event.stage}:{event.reason}"
-        stage_reason_counts[key] = stage_reason_counts.get(key, 0) + 1
-        logger.debug(
-            "%s failure pid=%d stage=%s reason=%s",
-            label,
-            event.placement_id,
-            event.stage,
-            event.reason,
-        )
+        return {}
+    counts = Counter(f"{e.stage}:{e.reason}" for e in events)
     summary = ", ".join(
         f"{k}={n}"
-        for k, n in sorted(
-            stage_reason_counts.items(), key=lambda item: (-item[1], item[0])
-        )
+        for k, n in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     )
     logger.warning("%s failures (%d): %s", label, len(events), summary)
-    return stage_reason_counts
+    return dict(counts)
 
 
 def _generation_failure_histogram(
     events: list[PlacementFailureEvent],
 ) -> dict[str, int]:
     """Count generation-stage failures by reason token."""
-    counts: dict[str, int] = {}
-    for event in events:
-        if event.stage != "generation":
-            continue
-        counts[event.reason] = counts.get(event.reason, 0) + 1
-    return counts
+    return dict(Counter(e.reason for e in events if e.stage == "generation"))
 
 
 def _prepare_atoms_for_calculator(

@@ -335,6 +335,29 @@ class TransferSurrogateResult:
     transfer_disabled_reason: str | None
 
 
+def _min_feature_distances(
+    X_prior: pd.DataFrame,
+    X_ref: pd.DataFrame,
+    *,
+    exclude_self: bool = False,
+) -> np.ndarray:
+    """Minimum Euclidean distance in aligned feature space from each X_prior row to X_ref."""
+    if len(X_prior) == 0 or len(X_ref) == 0:
+        return np.array([], dtype=float)
+    cols = list(X_ref.columns)
+    p_arr = X_prior.reindex(columns=cols, fill_value=0.0).to_numpy(dtype=float)
+    r_arr = X_ref.reindex(columns=cols, fill_value=0.0).to_numpy(dtype=float)
+    dists: np.ndarray = cdist(p_arr, r_arr)
+    if exclude_self:
+        dists = np.where(dists <= 1e-12, np.inf, dists)
+    return np.min(dists, axis=1)
+
+
+def _align_to_columns(df: pd.DataFrame, ref: pd.DataFrame) -> pd.DataFrame:
+    """Reindex ``df`` to ``ref``'s columns, padding missing features with 0.0."""
+    return df.reindex(columns=ref.columns, fill_value=0.0)
+
+
 def prior_similarity_to_current(
     X_prior: pd.DataFrame,
     X_current: pd.DataFrame,
@@ -342,19 +365,8 @@ def prior_similarity_to_current(
     lengthscale: float,
 ) -> np.ndarray:
     """Similarity of each prior row to the nearest current-step placement (feature space)."""
-    if len(X_prior) == 0 or len(X_current) == 0:
-        return np.array([], dtype=float)
-    columns = list(X_current.columns)
-    prior_vals = X_prior.reindex(columns=columns, fill_value=0.0).to_numpy(dtype=float)
-    current_vals = X_current.reindex(columns=columns, fill_value=0.0).to_numpy(
-        dtype=float
-    )
-    dists = np.linalg.norm(
-        prior_vals[:, None, :] - current_vals[None, :, :],
-        axis=2,
-    )
-    min_dist = np.min(dists, axis=1)
-    return np.exp(-min_dist / float(lengthscale))
+    min_dist = _min_feature_distances(X_prior, X_current)
+    return np.exp(-min_dist / float(lengthscale)) if len(min_dist) else np.array([], dtype=float)
 
 
 def prior_recency_weights(
@@ -381,14 +393,8 @@ def prior_placement_downweight(
         return np.array([], dtype=float)
     if len(placement_X) == 0:
         return np.ones(len(X_prior), dtype=float)
-    columns = list(X_prior.columns)
-    prior_vals = X_prior.reindex(columns=columns, fill_value=0.0).to_numpy(dtype=float)
-    place_vals = placement_X.reindex(columns=columns, fill_value=0.0).to_numpy(
-        dtype=float
-    )
-    anchor = place_vals[0]
-    dists = np.linalg.norm(prior_vals - anchor[None, :], axis=1)
-    near = np.exp(-dists / float(lengthscale))
+    min_dist = _min_feature_distances(X_prior, placement_X.iloc[[0]])
+    near = np.exp(-min_dist / float(lengthscale))
     return np.maximum(floor, 1.0 - near)
 
 
@@ -402,22 +408,8 @@ def prior_proximity_weights(
     """Downweight prior observations near executed placement sites in feature space."""
     if len(X_prior) == 0 or len(X_anchor) == 0:
         return np.array([], dtype=float)
-    columns = list(X_anchor.columns)
-    prior_vals = X_prior.reindex(columns=columns, fill_value=0.0).to_numpy(dtype=float)
-    anchor_vals = X_anchor.reindex(columns=columns, fill_value=0.0).to_numpy(
-        dtype=float
-    )
-    dists = np.linalg.norm(
-        prior_vals[:, None, :] - anchor_vals[None, :, :],
-        axis=2,
-    )
-    min_dist = np.empty(len(prior_vals), dtype=float)
-    for j in range(len(prior_vals)):
-        row_dists = dists[j]
-        other_dists = row_dists[row_dists > 1e-12]
-        min_dist[j] = float(np.min(other_dists)) if other_dists.size else np.inf
+    min_dist = _min_feature_distances(X_prior, X_anchor, exclude_self=True)
     proximity = np.exp(-min_dist / float(lengthscale))
-    # No other anchors: treat as fully transferable.
     proximity = np.where(np.isfinite(min_dist), proximity, 1.0)
     return np.maximum(floor, proximity)
 
@@ -513,7 +505,7 @@ def build_transfer_surrogate(
         else observed_X_prev.copy()
     )
     y_prev = np.asarray(observed_y_prev, dtype=float)
-    X_prev = X_prev.reindex(columns=X_current.columns, fill_value=0.0)
+    X_prev = _align_to_columns(X_prev, X_current)
     prox_lengthscale = (
         float(similarity_lengthscale)
         if proximity_lengthscale is None
@@ -567,7 +559,7 @@ def build_transfer_surrogate(
             placement_df = pd.DataFrame([prior_placement_X])
         else:
             placement_df = pd.DataFrame(prior_placement_X)
-        placement_df = placement_df.reindex(columns=X_current.columns, fill_value=0.0)
+        placement_df = _align_to_columns(placement_df, X_current)
     if prior_placement_X is not None and len(placement_df) > 0:
         occupancy = prior_placement_downweight(
             X_prev,

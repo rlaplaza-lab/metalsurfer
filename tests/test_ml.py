@@ -215,7 +215,7 @@ class TestPlacementRecord:
         assert r2.tilt_deg == 0.0
         assert r2.site_index == -1
 
-    def test_from_flat_dict_accepts_legacy_unprefixed_columns(self):
+    def test_from_flat_dict_ignores_unprefixed_provenance_columns(self):
         r = make_placement_record(3)
         flat = r.to_flat_dict(include_provenance=False)
         flat["tilt_deg"] = 15.0
@@ -226,9 +226,9 @@ class TestPlacementRecord:
         flat["azimuth_in_plane_deg"] = 0.0
         flat["face_flip"] = False
         r2 = PlacementRecord.from_flat_dict(flat)
-        assert r2.tilt_deg == 15.0
-        assert r2.site_index == 2
-        assert r2.site_type == "atop"
+        assert r2.tilt_deg == 0.0
+        assert r2.site_index == -1
+        assert r2.site_type is None
 
     def test_from_flat_dict_parses_string_bools(self):
         r = make_placement_record(3)

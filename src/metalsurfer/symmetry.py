@@ -4,7 +4,6 @@ Slab symmetry follows the 3D ASE supercell (not layer groups). `symmetry_toleran
 is `symprec` for spglib and the Cartesian threshold for site matching.
 """
 
-from __future__ import annotations
 
 import hashlib
 from typing import Any, Literal
@@ -411,7 +410,7 @@ class SymmetryAnalyzer:
         fp_cur = self._operations_fingerprint(self)
         return fp_ref != fp_cur
 
-    def _operations_fingerprint(self, analyzer: SymmetryAnalyzer) -> str:
+    def _operations_fingerprint(self, analyzer: "SymmetryAnalyzer") -> str:
         frac_ops = list(analyzer._frac_ops_from_dataset())
 
         def sort_key(

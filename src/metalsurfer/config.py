@@ -683,3 +683,10 @@ class AdsorptionConfig:
 
         if self.saturation_max_steps is not None:
             _check_positive_int("saturation_max_steps", self.saturation_max_steps)
+
+
+def resolve_adsorption_config(
+    config: AdsorptionConfig | None,
+) -> AdsorptionConfig:
+    """Return ``config`` or a default :class:`AdsorptionConfig` when ``None``."""
+    return config if config is not None else AdsorptionConfig()

@@ -1,6 +1,5 @@
 """Human-readable campaign and run summary formatting."""
 
-from __future__ import annotations
 
 from pathlib import Path
 

@@ -10,7 +10,6 @@ adsorbate atom (MIC when a periodic cell is provided).
 substrate used for site detection.
 """
 
-from __future__ import annotations
 
 from collections.abc import Sequence
 

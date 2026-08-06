@@ -23,7 +23,6 @@ Prep-time ASE relaxation (``slab_relaxation_*``) is separate from TorchSim place
 relaxation (``fmax``, ``stage1_steps``, ``stage2_steps``).
 """
 
-from __future__ import annotations
 
 import importlib
 from typing import Any

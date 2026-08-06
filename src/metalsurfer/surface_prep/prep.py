@@ -1,6 +1,5 @@
 """Orchestration helpers for campaign-ready substrate preparation."""
 
-from __future__ import annotations
 
 import ase.io
 import numpy as np
@@ -11,6 +10,7 @@ from ..config import (
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
     AdsorptionConfig,
+    resolve_adsorption_config,
 )
 from ..placement._material import material_aware_pbc
 from ._surfaces import (
@@ -72,7 +72,7 @@ def relax_substrate(
     Knobs mirror :class:`~metalsurfer.AdsorptionConfig` ``slab_relaxation_*``
     fields. Explicit arguments override *config* when provided.
     """
-    cfg = config if config is not None else AdsorptionConfig()
+    cfg = resolve_adsorption_config(config)
     container = coerce_slab_container(slab, copy=True)
     mode, opt_name, fmax, steps = _resolve_slab_relaxation_settings(
         cfg,
@@ -122,7 +122,7 @@ def finalize_substrate(
     :func:`prepare_substrate` or the lower-level helpers first, then call this
     after custom modification steps when needed.
     """
-    cfg = config if config is not None else AdsorptionConfig()
+    cfg = resolve_adsorption_config(config)
     container = coerce_slab_container(slab, copy=True)
     material_type = cfg.material_type
     should_align = align if align is not None else material_type == "slab"
@@ -221,7 +221,7 @@ def prepare_substrate(
             "Exactly one of 'bulk_id', 'slab_file', or 'slab' must be provided"
         )
 
-    cfg = config if config is not None else AdsorptionConfig()
+    cfg = resolve_adsorption_config(config)
     material_type = cfg.material_type
     should_align = align if align is not None else material_type == "slab"
     from_loaded = slab is not None or slab_file is not None
@@ -345,7 +345,7 @@ def resize_substrate_for_molecule(
     Re-applies material PBC and freeze constraints after resizing. Call after
     :func:`prepare_substrate` and conformer generation, before campaign APIs.
     """
-    cfg = config if config is not None else AdsorptionConfig()
+    cfg = resolve_adsorption_config(config)
     resized, was_resized = auto_resize_substrate_for_molecule(
         slab,
         conformers,
