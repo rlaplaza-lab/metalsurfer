@@ -202,9 +202,10 @@ Placement generation
    **Type:** ``tuple[float, float]`` · **Default:** ``(-0.5, 0.5)`` (Å)
 
    In-plane search radius used only by **distance recovery** after a
-   ``too_close`` / ``too_far`` failure (not applied to every successful site-centered
-   pose). Equal bounds such as ``(0.0, 0.0)`` disable lateral recovery while leaving
-   height recovery on. Widen for bulky adsorbates; keep small for reproducibility.
+   ``too_close`` / ``too_far`` / ``adsorbate_overlap`` / ``vdw_overlap`` failure
+   (not applied to every successful site-centered pose). Equal bounds such as
+   ``(0.0, 0.0)`` disable lateral recovery while leaving height recovery on.
+   Widen for bulky adsorbates; keep small for reproducibility.
 
 ``placement_z_range``
    **Type:** ``tuple[float, float]`` · **Default:** ``(0.7, 1.25)``
@@ -223,11 +224,11 @@ Placement generation
 ``placement_distance_recovery``
    **Type:** ``bool`` · **Default:** ``True``
 
-   After a covalent distance failure (``too_close`` / ``too_far``), nudge height
-   within the placement *z* window, then try a few deterministic in-plane offsets
-   within ``placement_x_range`` / ``placement_y_range``, and revalidate. Does not
-   apply to VDW, contact-quality, or adsorbate–adsorbate failures. Set ``False`` to
-   keep binary accept/reject only.
+   After ``too_close`` / ``too_far``, nudge height within the placement *z*
+   window, then try deterministic in-plane offsets within
+   ``placement_x_range`` / ``placement_y_range``. ``adsorbate_overlap`` and
+   non-porous ``vdw_overlap`` try XY only; porous ``vdw_overlap`` uses the same
+   height-then-XY path as ``too_close``. Set ``False`` for binary accept/reject.
 
 ``flat_aromatic_parallel_fraction``
    **Type:** ``float`` · **Default:** ``0.5``

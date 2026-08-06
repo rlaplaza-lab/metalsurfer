@@ -175,6 +175,7 @@ Module layout
        ├── core.py           # standard per-molecule screening
        ├── bayesian.py       # BO-guided per-molecule screening
        ├── saturation.py     # sequential / multi-mol saturation
+       ├── placement_fill.py # deficit rounds + yield-aware materialize
        ├── reference.py      # reference energy preparation
        └── shared.py         # bootstrap, outcomes, validation, autotune
 
@@ -312,18 +313,18 @@ zero-capacity species in ``distribute_placement_budget``.
   Porous frameworks skip the lift (confined pores have opposing walls).
   For NP/porous, ``surface_ref`` is ``dot(site.xyz, n_site)``.
 - **Distance recovery** (default on): ``too_close`` / ``too_far`` try height
-  then XY; ``adsorbate_overlap`` tries XY only
+  then XY; ``adsorbate_overlap`` and non-porous ``vdw_overlap`` try XY only
   (``placement_x/y_range``, ±0.5 Å default). Porous recovery is inverted
   (shrink toward the free-volume site when too close or VDW-overlapping;
-  push out when too far). Non-porous VDW contact-quality failures are not
-  recovered.
+  push out when too far).
 - **Voronoi auto-widen** (default on): one wider probe/max retry when the
   first window finds no sites.
 - **Dissociative** (``dissociative.py`` / ``place_at_sites``): homonuclear
   diatomics when ``enable_dissociative_placement=True``. Keep
   ``skip_topology_check=True`` to disable post-relax connectivity checks for
-  fragments. Descriptor COM + identity quaternion feed ML; ``fragment_positions``
-  are replay-only.
+  fragments. On NP/non-slab materials, both fragments share one offset
+  direction so pair spacing is preserved. Descriptor COM + identity
+  quaternion feed ML; ``fragment_positions`` are replay-only.
 - ``_materialize_spec_placements`` — failures become
   ``PlacementFailureEvent`` (BO negatives when enabled).
 

@@ -14,11 +14,11 @@ E_ads = E_adslab - E_slab - E_molecule
 
 ## How to enter
 
-| Want | Call |
-|------|------|
-| Screen many molecules | `run_adsorption` / `run_adsorption_bo` |
-| Grow coverage on one surface | `run_saturation` / `run_saturation_bo` |
-| YAML campaign | `load_campaign_yaml` + `run_campaign` |
+| Want                         | Call                                                       |
+|------------------------------|------------------------------------------------------------|
+| Screen many molecules        | `run_adsorption` / `run_adsorption_bo`                     |
+| Grow coverage on one surface | `run_saturation` / `run_saturation_bo`                     |
+| YAML campaign                | `load_campaign_yaml` + `run_campaign`                      |
 | Build/load the surface first | `prepare_substrate` (also `surface_prep.prepare_substrate`) |
 
 Prefer `run_*_bo` when you want Bayesian placement selection. BO mode is
@@ -58,22 +58,22 @@ Almost every packing/saturation bug traces to one of these:
 
 ## Module map (where to look)
 
-| Concern | Package / module |
-|---------|------------------|
-| Campaigns / YAML | `campaigns.py`, `campaign_schema.py` |
-| Config / typed results | `config.py` (`AdsorptionConfig`, nested `BOConfig` / `BOTransferConfig`), `models.py` |
-| Substrate prep / freeze | `surface_prep/` |
-| Sites + placement | `placement/` (`generators` orchestration; `site_*`, `orientation`, `pose`, `policy`, `occupancy`, `dissociative`) |
-| Per-molecule / saturation / BO loops | `workflow/` (`core`, `saturation`, `bayesian`, `shared`; `MoleculeScreenOutcome`) |
-| Batched MLIP relax | `optimization.py` |
-| Post-relax filters | `filters.py` |
-| Dataset / surrogates | `ml/` |
-| Persistence | `io_results.py` |
+| Concern                              | Package / module                                                                                          |
+|--------------------------------------|-----------------------------------------------------------------------------------------------------------|
+| Campaigns / YAML                     | `campaigns.py`, `campaign_schema.py`                                                                      |
+| Config / typed results               | `config.py` (`AdsorptionConfig`, nested `BOConfig` / `BOTransferConfig`), `models.py`                     |
+| Substrate prep / freeze              | `surface_prep/`                                                                                           |
+| Sites + placement                    | `placement/` (`generators` orchestration; `site_*`, `orientation`, `pose`, `policy`, `occupancy`, `dissociative`) |
+| Per-molecule / saturation / BO loops | `workflow/` (`core`, `saturation`, `bayesian`, `placement_fill`, `shared`; `MoleculeScreenOutcome`)       |
+| Batched MLIP relax                   | `optimization.py`                                                                                         |
+| Post-relax filters                   | `filters.py`                                                                                              |
+| Dataset / surrogates                 | `ml/`                                                                                                     |
+| Persistence                          | `io_results.py`                                                                                           |
 
 ## Design heuristics (one line each)
 
 - Sample **many** placements per GPU wave; binding energy is the best survivor after filters—not a single hand-picked pose.
-- Clearance-aware height (slab/NP): after orientation, lift the COM so the closest adsorbate atom sits at the intended ``z_offset`` (avoids alkyl/H dig-in from COM-centered poses; skipped for porous).
+- Clearance-aware height (slab/NP): after orientation, lift the COM so the closest adsorbate atom sits at the intended `z_offset` (avoids alkyl/H dig-in from COM-centered poses; skipped for porous).
 - Saturation stops when the next `E_ads ≥ 0` (coverage proxy), not at a fixed ML.
 - Under coverage, prune occupied sites before the orientation grid; clash with prior adsorbates is a first-class failure (`adsorbate_overlap`), with optional XY recovery.
 - Symmetry-reduced sites until coverage breaks symmetry vs the clean reference.
@@ -81,12 +81,12 @@ Almost every packing/saturation bug traces to one of these:
 
 ## Where detail lives
 
-| Topic | Doc |
-|-------|-----|
+| Topic                                                                                          | Doc |
+|------------------------------------------------------------------------------------------------|-----|
 | API layers, site detection, placement, TorchSim, BO transfer, validation, materials, outputs, AdsorbML/BOSS | [Architecture](https://metalsurfer.readthedocs.io/en/latest/guides/architecture.html) |
-| `AdsorptionConfig` recipes and common mistakes | [Configuration](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) |
-| Prep, freeze, resize, adatoms | [Surface engineering](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html) |
-| Field reference | [API: config](https://metalsurfer.readthedocs.io/en/latest/api/config.html), [API: campaigns](https://metalsurfer.readthedocs.io/en/latest/api/campaigns.html), [API: surface_prep](https://metalsurfer.readthedocs.io/en/latest/api/surface_prep.html) |
-| Tests / CI | [Development](https://metalsurfer.readthedocs.io/en/latest/guides/development.html) |
+| `AdsorptionConfig` recipes and common mistakes                                                 | [Configuration](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) |
+| Prep, freeze, resize, adatoms                                                                  | [Surface engineering](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html) |
+| Field reference                                                                                | [API: config](https://metalsurfer.readthedocs.io/en/latest/api/config.html), [API: campaigns](https://metalsurfer.readthedocs.io/en/latest/api/campaigns.html), [API: surface_prep](https://metalsurfer.readthedocs.io/en/latest/api/surface_prep.html) |
+| Tests / CI                                                                                     | [Development](https://metalsurfer.readthedocs.io/en/latest/guides/development.html) |
 
 Python **3.12+**. Core deps: `numpy`, `ase`, `pandas`, `rdkit`, `scipy`, `scikit-learn`, `spglib`. Optional MLIP stack: `torch`, `torch-sim-atomistic`, FairChem/UMA.
