@@ -215,7 +215,9 @@ class PlacementDescriptor:
             "quat_z": _row_float_or(self.quat_z, 0.0),
         }
         if include_provenance:
-            prov_vals = {attr: getattr(self, attr) for attr in INITIAL_PROVENANCE_COLUMN_MAP}
+            prov_vals = {
+                attr: getattr(self, attr) for attr in INITIAL_PROVENANCE_COLUMN_MAP
+            }
             prov_vals["surface_ref_z_abs"] = surface_ref_z_abs
             row.update(provenance_export_fields(prov_vals))
         return row
@@ -520,10 +522,13 @@ def _placement_rows_for_results(
     return [
         r.to_row(
             xyz_path=str(step_xyz / f"conformer_{r.placement_id:03d}.xyz"),
-            poscar_path=str(step_vasp / f"conformer_{r.placement_id:03d}" / "POSCAR") if step_vasp is not None else None,
+            poscar_path=str(step_vasp / f"conformer_{r.placement_id:03d}" / "POSCAR")
+            if step_vasp is not None
+            else None,
             context_row=context_row,
             include_provenance=include_provenance,
-        ) | {"step": step, **dict(extra)}
+        )
+        | {"step": step, **dict(extra)}
         for r in results
     ]
 

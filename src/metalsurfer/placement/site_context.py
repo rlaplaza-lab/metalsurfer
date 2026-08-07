@@ -1,6 +1,5 @@
 """Cached Voronoi site context for placement sampling."""
 
-
 import hashlib
 import logging
 import struct

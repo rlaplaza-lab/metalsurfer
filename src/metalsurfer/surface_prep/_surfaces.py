@@ -61,7 +61,9 @@ def _dependency_error_for_slab_import(exc: ImportError) -> DependencyMissingErro
     """Map a failed ``fairchem.data.oc`` import to an actionable :class:`DependencyMissingError`."""
     cur: BaseException | None = exc
     while cur is not None:
-        if (isinstance(cur, ModuleNotFoundError) and cur.name == "pkg_resources") or "pkg_resources" in str(cur):
+        if (
+            isinstance(cur, ModuleNotFoundError) and cur.name == "pkg_resources"
+        ) or "pkg_resources" in str(cur):
             return DependencyMissingError(
                 "setuptools",
                 "create_slab_from_bulk",
@@ -579,9 +581,19 @@ def _resolve_slab_relaxation_settings(
     """Resolve per-call slab relaxation settings with config fallbacks."""
     cfg = config or AdsorptionConfig()
     mode = relaxation_mode if relaxation_mode is not None else cfg.slab_relaxation_mode
-    opt = relaxation_optimizer if relaxation_optimizer is not None else cfg.slab_relaxation_optimizer
-    fmax = relaxation_fmax if relaxation_fmax is not None else (cfg.slab_relaxation_fmax or cfg.fmax)
-    steps = relaxation_steps if relaxation_steps is not None else cfg.slab_relaxation_steps
+    opt = (
+        relaxation_optimizer
+        if relaxation_optimizer is not None
+        else cfg.slab_relaxation_optimizer
+    )
+    fmax = (
+        relaxation_fmax
+        if relaxation_fmax is not None
+        else (cfg.slab_relaxation_fmax or cfg.fmax)
+    )
+    steps = (
+        relaxation_steps if relaxation_steps is not None else cfg.slab_relaxation_steps
+    )
     return mode, opt, fmax, steps
 
 

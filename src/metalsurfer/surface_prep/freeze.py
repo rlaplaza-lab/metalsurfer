@@ -5,7 +5,6 @@ live here. Site-enumeration top-layer masks are separate — see
 :func:`~metalsurfer.placement.site_coords.top_layer_mask_by_normal`.
 """
 
-
 import logging
 from collections import Counter
 

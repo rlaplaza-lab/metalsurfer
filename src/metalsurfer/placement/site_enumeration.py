@@ -1,6 +1,5 @@
 """Unified site enumeration, clustering, symmetry reduction, and z-base helpers."""
 
-
 import logging
 from collections.abc import Callable
 
@@ -118,9 +117,7 @@ def _delaunay_classify_inputs(
     assert slab_top_atom_indices is not None
     if len(slab_top_atom_indices) < 3:
         return None
-    top_positions_2d = _project_to_slab_plane(
-        positions[slab_top_atom_indices], cell
-    )
+    top_positions_2d = _project_to_slab_plane(positions[slab_top_atom_indices], cell)
     tri = topology_primary_delaunay
     if tri is None:
         try:
@@ -133,9 +130,7 @@ def _delaunay_classify_inputs(
         slab_top_atom_indices,
         tri,
     )
-    class_index_pbc: (
-        tuple[np.ndarray, list[str], list[tuple[int, ...]]] | None
-    ) = None
+    class_index_pbc: tuple[np.ndarray, list[str], list[tuple[int, ...]]] | None = None
     if bool(pbc[0]) or bool(pbc[1]):
         class_index_pbc = _build_delaunay_classification_index(
             top_positions_2d,
@@ -198,9 +193,7 @@ def _inject_atop_sites(
         _, norm_idx_all = local_tree.query(positions, k=k_norm)
         if np.ndim(norm_idx_all) == 1:
             norm_idx_all = np.asarray(norm_idx_all, dtype=int).reshape(-1, 1)
-        atom_normals = _compute_local_normals_batch(
-            positions, positions, norm_idx_all
-        )
+        atom_normals = _compute_local_normals_batch(positions, positions, norm_idx_all)
         outward_dots = np.einsum("ij,ij->i", atom_normals, positions - com)
         top_atom_indices = np.nonzero(outward_dots > 0.0)[0].astype(int)
 
@@ -214,9 +207,7 @@ def _inject_atop_sites(
                 atom_pos.reshape(1, 3), cell, atop_height
             )[0]
             if np.any(pbc):
-                candidate = _wrap_cartesian(
-                    candidate.reshape(1, 3), cell, pbc
-                )[0]
+                candidate = _wrap_cartesian(candidate.reshape(1, 3), cell, pbc)[0]
         else:
             assert atom_normals is not None
             candidate = atom_pos + atop_height * atom_normals[int(ai)]

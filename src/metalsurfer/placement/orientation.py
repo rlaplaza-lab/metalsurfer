@@ -1,6 +1,5 @@
 """Aromatic heuristics, parallel fraction, and adsorbate orientation classification."""
 
-
 from dataclasses import dataclass
 
 import numpy as np

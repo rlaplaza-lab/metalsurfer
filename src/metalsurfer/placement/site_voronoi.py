@@ -1,6 +1,5 @@
 """Voronoi site generation, topology candidates, ridge enrichment, and classification."""
 
-
 import logging
 
 import numpy as np

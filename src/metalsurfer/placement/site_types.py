@@ -1,6 +1,5 @@
 """Typed adsorption site records and dict helpers."""
 
-
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 

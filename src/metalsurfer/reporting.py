@@ -1,6 +1,5 @@
 """Human-readable campaign and run summary formatting."""
 
-
 from pathlib import Path
 
 

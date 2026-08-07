@@ -3446,7 +3446,10 @@ def test_dissociative_com_features_injective_and_record_replay():
         flat = record.to_flat_dict(include_provenance=True)
         assert flat.get("initial_fragment_positions") is not None
         restored = PlacementRecord.from_flat_dict(flat)
-        assert restored.descriptor.fragment_positions == record.descriptor.fragment_positions
+        assert (
+            restored.descriptor.fragment_positions
+            == record.descriptor.fragment_positions
+        )
         replay_desc = restored.to_placement_descriptor()
         assert replay_desc.fragment_positions == descriptor.fragment_positions
         replayed = generate_placement_from_descriptor(replay_desc, [h2], slab, config)

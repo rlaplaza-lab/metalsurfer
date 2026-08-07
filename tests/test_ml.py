@@ -474,13 +474,23 @@ class TestFeatureExtraction:
     def test_quaternion_sign_invariance(self):
         r1 = make_placement_record()
         r2 = make_placement_record()
-        r1.descriptor.quat_w, r1.descriptor.quat_x, r1.descriptor.quat_y, r1.descriptor.quat_z = (
+        (
+            r1.descriptor.quat_w,
+            r1.descriptor.quat_x,
+            r1.descriptor.quat_y,
+            r1.descriptor.quat_z,
+        ) = (
             0.5,
             0.5,
             0.5,
             0.5,
         )
-        r2.descriptor.quat_w, r2.descriptor.quat_x, r2.descriptor.quat_y, r2.descriptor.quat_z = (
+        (
+            r2.descriptor.quat_w,
+            r2.descriptor.quat_x,
+            r2.descriptor.quat_y,
+            r2.descriptor.quat_z,
+        ) = (
             -0.5,
             -0.5,
             -0.5,

@@ -815,7 +815,9 @@ def check_adsorbate_separation(
     else:
         cell_arr = np.eye(3)
         pbc_list = [False, False, False]
-    dmat = _mol_slab_pairwise_distances(new_pos, pre_adsorbed_positions, cell_arr, pbc_list)
+    dmat = _mol_slab_pairwise_distances(
+        new_pos, pre_adsorbed_positions, cell_arr, pbc_list
+    )
     min_dist = float(np.min(dmat)) if dmat.size else float("inf")
 
     if min_separation is None:

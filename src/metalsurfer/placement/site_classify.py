@@ -1,6 +1,5 @@
 """Local surface normals and site record construction."""
 
-
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -29,9 +28,7 @@ class _DelaunayClassifyInputs(NamedTuple):
     top_positions_2d: np.ndarray
     top_atom_indices: np.ndarray
     class_index: tuple[np.ndarray, list[str], list[tuple[int, ...]]]
-    class_index_pbc: (
-        tuple[np.ndarray, list[str], list[tuple[int, ...]]] | None
-    ) = None
+    class_index_pbc: tuple[np.ndarray, list[str], list[tuple[int, ...]]] | None = None
 
 
 def _compute_local_normal(

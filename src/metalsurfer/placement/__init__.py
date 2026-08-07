@@ -1,6 +1,5 @@
 """Placement package: site detection, generators, geometry, and policy."""
 
-
 from ._material import (
     material_aware_pbc as material_aware_pbc,
 )

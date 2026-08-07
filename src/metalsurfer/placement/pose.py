@@ -1,6 +1,5 @@
 """Pose construction, validation, and finalization."""
 
-
 import dataclasses
 import logging
 import random

@@ -1,6 +1,5 @@
 """Shared CSV cell coercion helpers for result rows."""
 
-
 import json
 from typing import Any
 

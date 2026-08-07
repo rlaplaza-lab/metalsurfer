@@ -1,6 +1,5 @@
 """Dissociative diatomic placement and hollow site pair enumeration."""
 
-
 import hashlib
 import struct
 import threading

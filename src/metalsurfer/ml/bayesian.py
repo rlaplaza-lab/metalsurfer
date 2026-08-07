@@ -366,7 +366,11 @@ def prior_similarity_to_current(
 ) -> np.ndarray:
     """Similarity of each prior row to the nearest current-step placement (feature space)."""
     min_dist = _min_feature_distances(X_prior, X_current)
-    return np.exp(-min_dist / float(lengthscale)) if len(min_dist) else np.array([], dtype=float)
+    return (
+        np.exp(-min_dist / float(lengthscale))
+        if len(min_dist)
+        else np.array([], dtype=float)
+    )
 
 
 def prior_recency_weights(
@@ -444,9 +448,7 @@ def cumulative_refit_sample_weights(
     )
 
 
-def _no_transfer(
-    baseline: Any, transfer_bad_rounds: int
-) -> "TransferSurrogateResult":
+def _no_transfer(baseline: Any, transfer_bad_rounds: int) -> "TransferSurrogateResult":
     return TransferSurrogateResult(
         surrogate=baseline,
         transfer_used_this_round=False,

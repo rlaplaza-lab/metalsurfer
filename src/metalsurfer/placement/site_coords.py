@@ -1,6 +1,5 @@
 """Coordinate frame, PBC images, deduplication, and radii helpers for site detection."""
 
-
 import logging
 
 import numpy as np

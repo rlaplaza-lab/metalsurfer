@@ -484,8 +484,8 @@ def process_molecule_bayesian(
                     X_train,
                     y_train,
                     config=config,
-                sample_weight=sample_weight,
-            )
+                    sample_weight=sample_weight,
+                )
 
             unevaluated = _unevaluated()
             if not unevaluated:

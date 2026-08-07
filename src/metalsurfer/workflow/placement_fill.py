@@ -1,6 +1,5 @@
 """Yield-aware placement fill shared by non-BO and BO screening."""
 
-
 import logging
 import math
 from collections import Counter

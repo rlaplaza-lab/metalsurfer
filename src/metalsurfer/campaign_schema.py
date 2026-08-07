@@ -1,6 +1,5 @@
 """YAML campaign schema parsing for the Python campaign API."""
 
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal

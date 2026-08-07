@@ -4,7 +4,6 @@ Slab symmetry follows the 3D ASE supercell (not layer groups). `symmetry_toleran
 is `symprec` for spglib and the Cartesian threshold for site matching.
 """
 
-
 import hashlib
 from typing import Any, Literal
 
