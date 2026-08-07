@@ -1,6 +1,6 @@
 """Package root: lazy exports for core campaign and placement APIs."""
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 import importlib
 

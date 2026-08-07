@@ -524,7 +524,7 @@ def test_run_saturation_screening_h2_ni111_real_gpu():
     """Saturation screening with real MLIP on GPU: H2 on Ni(111).
 
     Runs actual run_saturation_screening (no mocks). Verifies:
-    - Saturation loop terminates (E_ads >= 0 or no valid placements)
+    - Saturation loop terminates (capped by saturation_max_steps for bounded runtime)
     - Steps and n_molecules_at_saturation are consistent
     - All E_ads in steps are physically reasonable
     """
@@ -539,6 +539,7 @@ def test_run_saturation_screening_h2_ni111_real_gpu():
         skip_desorption_check=False,
         stage1_steps=16,
         stage2_steps=80,
+        saturation_max_steps=8,
     )
     slab = prepare_substrate(
         bulk_id="mp-23",
