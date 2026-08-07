@@ -110,6 +110,11 @@ def process_molecule_bayesian(
             transfer_info=transfer_info,
         )
 
+    def _bail_outcome(stage: str, **counts: object) -> MoleculeScreenOutcome:
+        failure_summary["stage"] = stage
+        failure_summary.update(counts)
+        return _outcome([])
+
     ctx = _prepare_molecule_screening(
         smiles=smiles,
         molecule_name=molecule_name,
@@ -171,10 +176,7 @@ def process_molecule_bayesian(
     )
     if not all_specs:
         logger.warning("No candidate specs generated for BO")
-        failure_summary["stage"] = "placement"
-        failure_summary["n_candidate_specs"] = 0
-        failure_summary["n_valid_pool"] = 0
-        return _outcome([])
+        return _bail_outcome("placement", n_candidate_specs=0, n_valid_pool=0)
 
     logger.info(
         "BO: %d/%d candidate specs, batches=%d (initial=%d, batch=%d, eval_budget=%d, kappa=%.2f)",
@@ -203,10 +205,9 @@ def process_molecule_bayesian(
     )
     if candidate_features.empty:
         logger.warning("BO: no specs produced valid placements; aborting")
-        failure_summary["stage"] = "placement"
-        failure_summary["n_candidate_specs"] = len(all_specs)
-        failure_summary["n_valid_pool"] = 0
-        return _outcome([])
+        return _bail_outcome(
+            "placement", n_candidate_specs=len(all_specs), n_valid_pool=0
+        )
     # Map feature-row indices back to the original all_specs list
     valid_pool_indices = valid_spec_indices
 
@@ -249,6 +250,23 @@ def process_molecule_bayesian(
         if stage in overrides:
             return float(overrides[stage])
         return float(config.bo.failure_penalty_default)
+
+    def _append_penalty_observation(record, stage: str, reason: str) -> None:
+        record.converged = False
+        record.failure_stage = stage
+        record.failure_reason = reason
+        record.is_penalty_label = True
+        record.label_source = "bo_failure_penalty"
+        observed_X_rows.append(extract_features(record))
+        observed_y.append(_failure_penalty(stage, reason))
+        bo_negative_records.append(record)
+
+    def _unevaluated() -> list[int]:
+        return [
+            p
+            for p in range(len(valid_pool_indices))
+            if p not in evaluated_pool_positions
+        ]
 
     n_initial = min(config.bo.initial_random, len(valid_pool_indices))
     initial_positions = select_initial_bo_indices(
@@ -338,14 +356,7 @@ def process_molecule_bayesian(
                         config=config,
                     )
                 )
-                record.converged = False
-                record.failure_stage = event.stage
-                record.failure_reason = event.reason
-                record.is_penalty_label = True
-                record.label_source = "bo_failure_penalty"
-                observed_X_rows.append(extract_features(record))
-                observed_y.append(_failure_penalty(event.stage, event.reason))
-                bo_negative_records.append(record)
+                _append_penalty_observation(record, event.stage, event.reason)
 
         if batch_results:
             batch_best = min(r.energy_adsorption for r in batch_results)
@@ -373,11 +384,7 @@ def process_molecule_bayesian(
             break
 
         if len(observed_X_rows) < 3:
-            unevaluated = [
-                p
-                for p in range(len(valid_pool_indices))
-                if p not in evaluated_pool_positions
-            ]
+            unevaluated = _unevaluated()
             if not unevaluated:
                 break
             n_extra = min(config.bo.batch_size, len(unevaluated))
@@ -477,14 +484,10 @@ def process_molecule_bayesian(
                     X_train,
                     y_train,
                     config=config,
-                    sample_weight=sample_weight,
-                )
+                sample_weight=sample_weight,
+            )
 
-            unevaluated = [
-                p
-                for p in range(len(valid_pool_indices))
-                if p not in evaluated_pool_positions
-            ]
+            unevaluated = _unevaluated()
             if not unevaluated:
                 break
             batch_size = min(config.bo.batch_size, len(unevaluated))
@@ -514,11 +517,7 @@ def process_molecule_bayesian(
                     np.ceil(batch_size * config.bo.transfer.exploration_fraction)
                 )
             if explore_n > 0:
-                unevaluated = [
-                    p
-                    for p in range(len(valid_pool_indices))
-                    if p not in evaluated_pool_positions
-                ]
+                unevaluated = _unevaluated()
                 available_for_random = [
                     p for p in unevaluated if p not in next_positions
                 ]
@@ -552,12 +551,13 @@ def process_molecule_bayesian(
 
     if not all_results:
         _flush_bo_outputs()
-        failure_summary["stage"] = "validation"
-        failure_summary["n_candidate_specs"] = len(all_specs)
-        failure_summary["n_valid_pool"] = len(valid_pool_indices)
-        failure_summary["n_evaluated"] = total_evaluated
-        failure_summary["n_valid_results"] = 0
-        return _outcome([])
+        return _bail_outcome(
+            "validation",
+            n_candidate_specs=len(all_specs),
+            n_valid_pool=len(valid_pool_indices),
+            n_evaluated=total_evaluated,
+            n_valid_results=0,
+        )
 
     # Filter + dedup labeling follows the same pattern as core's
     # ``_finalize_screen_results``, but BO also builds failure-penalty negatives
@@ -601,14 +601,7 @@ def process_molecule_bayesian(
                     surface_id=surface_type,
                     config=config,
                 )
-                record.converged = False
-                record.failure_stage = event.stage
-                record.failure_reason = event.reason
-                record.is_penalty_label = True
-                record.label_source = "bo_failure_penalty"
-                observed_X_rows.append(extract_features(record))
-                observed_y.append(_failure_penalty(event.stage, event.reason))
-                bo_negative_records.append(record)
+                _append_penalty_observation(record, event.stage, event.reason)
 
     if bo_duplicate_results:
         logger.info(
@@ -627,13 +620,14 @@ def process_molecule_bayesian(
 
     if not filtered:
         _flush_bo_outputs()
-        failure_summary["stage"] = "filter"
-        failure_summary["n_candidate_specs"] = len(all_specs)
-        failure_summary["n_valid_pool"] = len(valid_pool_indices)
-        failure_summary["n_evaluated"] = total_evaluated
-        failure_summary["n_before_filter"] = len(all_results)
-        failure_summary["n_after_filter"] = 0
-        return _outcome([])
+        return _bail_outcome(
+            "filter",
+            n_candidate_specs=len(all_specs),
+            n_valid_pool=len(valid_pool_indices),
+            n_evaluated=total_evaluated,
+            n_before_filter=len(all_results),
+            n_after_filter=0,
+        )
 
     logger.info(
         "BO filtered: %d -> %d results, E_ads range [%.4f, %.4f]",

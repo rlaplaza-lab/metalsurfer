@@ -60,6 +60,30 @@ def _covalent_threshold_matrix(syms: np.ndarray, multiplier: float) -> np.ndarra
     return multiplier * (r_cov[:, None] + r_cov[None, :])
 
 
+def _nonsurface_distance_and_threshold(
+    atoms: Atoms,
+    surface_symbols: list[str] | None,
+    multiplier: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Mask out surface atoms and return (syms, coords, dist_matrix, threshold).
+
+    Shared preamble for the bond-count and coordination-fingerprint filters: the
+    non-surface symbol mask, the MIC-aware pairwise distances, and the covalent
+    threshold matrix are computed identically in both.
+    """
+    syms = np.array(atoms.get_chemical_symbols())
+    mask = (
+        ~np.isin(syms, surface_symbols)
+        if surface_symbols is not None
+        else np.ones(len(syms), dtype=bool)
+    )
+    coords = atoms.get_positions()[mask]
+    syms = syms[mask]
+    dist_matrix = _mic_pairwise_distances(coords, atoms)
+    threshold = _covalent_threshold_matrix(syms, multiplier)
+    return syms, coords, dist_matrix, threshold
+
+
 def _adjacency_mask(
     dist_matrix: np.ndarray, threshold_matrix: np.ndarray
 ) -> np.ndarray:
@@ -75,17 +99,9 @@ def _bond_counts_from_atoms(
     multiplier: float = 1.3,
 ) -> Counter:
     """Count bonds (by element-pair) among non-surface atoms."""
-    syms = np.array(atoms.get_chemical_symbols())
-    mask = (
-        ~np.isin(syms, surface_symbols)
-        if surface_symbols is not None
-        else np.ones(len(syms), dtype=bool)
+    syms, _, dist_matrix, threshold = _nonsurface_distance_and_threshold(
+        atoms, surface_symbols, multiplier
     )
-    coords = atoms.get_positions()[mask]
-    syms = syms[mask]
-
-    dist_matrix = _mic_pairwise_distances(coords, atoms)
-    threshold = _covalent_threshold_matrix(syms, multiplier)
     bonded = _adjacency_mask(dist_matrix, threshold)
     pairs_i, pairs_j = np.nonzero(bonded)
 
@@ -155,17 +171,9 @@ def _coordination_fingerprint_from_atoms(
     multiplier: float = 1.3,
 ) -> dict[str, list[int]]:
     """Per-element sorted list of coordination numbers among non-surface atoms."""
-    syms = np.array(atoms.get_chemical_symbols())
-    mask = (
-        ~np.isin(syms, surface_symbols)
-        if surface_symbols is not None
-        else np.ones(len(syms), dtype=bool)
+    syms, _, dist_matrix, threshold = _nonsurface_distance_and_threshold(
+        atoms, surface_symbols, multiplier
     )
-    coords = atoms.get_positions()[mask]
-    syms = syms[mask]
-
-    dist_matrix = _mic_pairwise_distances(coords, atoms)
-    threshold = _covalent_threshold_matrix(syms, multiplier)
     bonded = dist_matrix <= threshold
     np.fill_diagonal(bonded, False)
     coord_counts = bonded.sum(axis=1).astype(int)

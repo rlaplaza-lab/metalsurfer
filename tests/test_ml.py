@@ -180,7 +180,7 @@ class TestPlacementRecord:
         assert "initial_site_type" in flat
         assert "ctx_model_name" in flat
         assert "model_name" not in flat
-        assert flat["initial_tilt_deg"] == r.tilt_deg
+        assert flat["initial_tilt_deg"] == r.descriptor.tilt_deg
 
     def test_flat_dict_roundtrip(self):
         r = make_placement_record(42, energy=-1.23)
@@ -194,7 +194,7 @@ class TestPlacementRecord:
         assert r2.molecule == r.molecule
         assert r2.placement_id == r.placement_id
         assert abs(r2.energy_adsorption - r.energy_adsorption) < 1e-10
-        assert r2.tilt_deg == r.tilt_deg
+        assert r2.descriptor.tilt_deg == r.descriptor.tilt_deg
         assert r2.context.model_name == r.context.model_name
         assert r2.converged is False
         assert r2.failure_stage == "validation"
@@ -206,14 +206,14 @@ class TestPlacementRecord:
         r = make_placement_record(7, energy=-0.4)
         flat = r.to_flat_dict(include_provenance=False)
         r2 = PlacementRecord.from_flat_dict(flat)
-        assert r2.x_abs == r.x_abs
-        assert r2.y_abs == r.y_abs
-        assert r2.z_abs == r.z_abs
-        assert r2.conformer_index == r.conformer_index
+        assert r2.descriptor.x_abs == r.descriptor.x_abs
+        assert r2.descriptor.y_abs == r.descriptor.y_abs
+        assert r2.descriptor.z_abs == r.descriptor.z_abs
+        assert r2.descriptor.conformer_index == r.descriptor.conformer_index
         assert abs(r2.energy_adsorption - r.energy_adsorption) < 1e-10
         # Provenance absent → defaults
-        assert r2.tilt_deg == 0.0
-        assert r2.site_index == -1
+        assert r2.descriptor.tilt_deg == 0.0
+        assert r2.descriptor.site_index == -1
 
     def test_from_flat_dict_ignores_unprefixed_provenance_columns(self):
         r = make_placement_record(3)
@@ -226,9 +226,9 @@ class TestPlacementRecord:
         flat["azimuth_in_plane_deg"] = 0.0
         flat["face_flip"] = False
         r2 = PlacementRecord.from_flat_dict(flat)
-        assert r2.tilt_deg == 0.0
-        assert r2.site_index == -1
-        assert r2.site_type is None
+        assert r2.descriptor.tilt_deg == 0.0
+        assert r2.descriptor.site_index == -1
+        assert r2.descriptor.site_type is None
 
     def test_from_flat_dict_parses_string_bools(self):
         r = make_placement_record(3)
@@ -237,7 +237,7 @@ class TestPlacementRecord:
         flat["converged"] = "0"
         flat["is_penalty_label"] = "True"
         r2 = PlacementRecord.from_flat_dict(flat)
-        assert r2.face_flip is False
+        assert r2.descriptor.face_flip is False
         assert r2.converged is False
         assert r2.is_penalty_label is True
 
@@ -281,10 +281,10 @@ class TestPlacementRecord:
             descriptor=descriptor,
             context=base.context,
         )
-        assert r.quat_w == 1.0
-        assert r.quat_x == 0.0
-        assert r.quat_y == 0.0
-        assert r.quat_z == 0.0
+        assert r.descriptor.quat_w == 1.0
+        assert r.descriptor.quat_x == 0.0
+        assert r.descriptor.quat_y == 0.0
+        assert r.descriptor.quat_z == 0.0
 
     def test_from_screening_result_returns_record_with_descriptor(self):
         descriptor = PlacementDescriptor(
@@ -461,10 +461,10 @@ class TestFeatureExtraction:
 
     def test_quaternion_features(self):
         r = make_placement_record()
-        r.quat_w = 2.0
-        r.quat_x = 2.0
-        r.quat_y = 2.0
-        r.quat_z = 2.0
+        r.descriptor.quat_w = 2.0
+        r.descriptor.quat_x = 2.0
+        r.descriptor.quat_y = 2.0
+        r.descriptor.quat_z = 2.0
         features = extract_features(r)
         assert abs(features["quat_w"] - 0.5) < 1e-8
         assert abs(features["quat_x"] - 0.5) < 1e-8
@@ -474,16 +474,26 @@ class TestFeatureExtraction:
     def test_quaternion_sign_invariance(self):
         r1 = make_placement_record()
         r2 = make_placement_record()
-        r1.quat_w, r1.quat_x, r1.quat_y, r1.quat_z = 0.5, 0.5, 0.5, 0.5
-        r2.quat_w, r2.quat_x, r2.quat_y, r2.quat_z = -0.5, -0.5, -0.5, -0.5
+        r1.descriptor.quat_w, r1.descriptor.quat_x, r1.descriptor.quat_y, r1.descriptor.quat_z = (
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+        )
+        r2.descriptor.quat_w, r2.descriptor.quat_x, r2.descriptor.quat_y, r2.descriptor.quat_z = (
+            -0.5,
+            -0.5,
+            -0.5,
+            -0.5,
+        )
         f1 = extract_features(r1)
         f2 = extract_features(r2)
         assert f1 == f2
 
     def test_rotation_and_categorical_independence(self):
         r = make_placement_record()
-        r.orientation_type = "parallel"
-        r.site_type = "bridge"
+        r.descriptor.orientation_type = "parallel"
+        r.descriptor.site_type = "bridge"
         features = extract_features(r)
         assert "orient_parallel" not in features
         assert "site_bridge" not in features
@@ -494,15 +504,15 @@ class TestFeatureExtraction:
     def test_face_flip_not_encoded_in_features(self):
         r1 = make_placement_record()
         r2 = make_placement_record()
-        r1.face_flip = False
-        r2.face_flip = True
+        r1.descriptor.face_flip = False
+        r2.descriptor.face_flip = True
         assert extract_features(r1) == extract_features(r2)
 
     def test_z_fraction_not_encoded_in_features(self):
         r1 = make_placement_record()
         r2 = make_placement_record()
-        r1.z_fraction = 0.1
-        r2.z_fraction = 0.9
+        r1.descriptor.z_fraction = 0.1
+        r2.descriptor.z_fraction = 0.9
         assert extract_features(r1) == extract_features(r2)
 
     def test_extract_from_dataset(self):
@@ -522,12 +532,12 @@ class TestFeatureExtraction:
 
     def test_extract_features_uses_absolute_geometry_only(self):
         r = make_placement_record()
-        r.x = 99.0
-        r.y = 88.0
-        r.z_offset = 77.0
-        r.x_abs = 1.25
-        r.y_abs = -2.5
-        r.z_abs = 3.75
+        r.descriptor.x = 99.0
+        r.descriptor.y = 88.0
+        r.descriptor.z_offset = 77.0
+        r.descriptor.x_abs = 1.25
+        r.descriptor.y_abs = -2.5
+        r.descriptor.z_abs = 3.75
         features = extract_features(r)
         assert features["x"] == 1.25
         assert features["y"] == -2.5
@@ -699,39 +709,39 @@ class TestPredictor:
 class TestRecordReplay:
     def test_record_to_descriptor(self):
         r = make_placement_record()
-        r.x_abs = 4.1
-        r.y_abs = -1.2
-        r.z_offset = 2.8
-        r.surface_ref_z_abs = 10.0
-        r.z_abs = 12.8
-        r.site_source = "adsorption_sites"
-        r.site_reference_frame = "local_site"
-        r.site_xy_frac_a = 0.25
-        r.site_xy_frac_b = 0.75
+        r.descriptor.x_abs = 4.1
+        r.descriptor.y_abs = -1.2
+        r.descriptor.z_offset = 2.8
+        r.descriptor.surface_ref_z_abs = 10.0
+        r.descriptor.z_abs = 12.8
+        r.descriptor.site_source = "adsorption_sites"
+        r.descriptor.site_reference_frame = "local_site"
+        r.descriptor.site_xy_frac_a = 0.25
+        r.descriptor.site_xy_frac_b = 0.75
         d = r.to_placement_descriptor()
-        assert d.conformer_index == r.conformer_index
-        assert d.tilt_deg == r.tilt_deg
-        assert d.x == r.x
-        assert d.x_abs == r.x_abs
-        assert d.y_abs == r.y_abs
-        assert d.z_offset == r.z_offset
-        assert d.surface_ref_z_abs == r.surface_ref_z_abs
-        assert d.z_abs == r.z_abs
-        assert d.site_source == r.site_source
-        assert d.site_reference_frame == r.site_reference_frame
-        assert d.site_xy_frac_a == r.site_xy_frac_a
-        assert d.site_xy_frac_b == r.site_xy_frac_b
+        assert d.conformer_index == r.descriptor.conformer_index
+        assert d.tilt_deg == r.descriptor.tilt_deg
+        assert d.x == r.descriptor.x
+        assert d.x_abs == r.descriptor.x_abs
+        assert d.y_abs == r.descriptor.y_abs
+        assert d.z_offset == r.descriptor.z_offset
+        assert d.surface_ref_z_abs == r.descriptor.surface_ref_z_abs
+        assert d.z_abs == r.descriptor.z_abs
+        assert d.site_source == r.descriptor.site_source
+        assert d.site_reference_frame == r.descriptor.site_reference_frame
+        assert d.site_xy_frac_a == r.descriptor.site_xy_frac_a
+        assert d.site_xy_frac_b == r.descriptor.site_xy_frac_b
         assert d.fragment_positions is None
 
     def test_record_to_descriptor_preserves_fragment_positions(self):
         r = make_placement_record()
         fragments = ((1.0, 2.0, 3.0), (1.5, 2.5, 3.5))
-        r.fragment_positions = fragments
+        r.descriptor.fragment_positions = fragments
         d = r.to_placement_descriptor()
         assert d.fragment_positions == fragments
         flat = r.to_flat_dict(include_provenance=True)
         r2 = PlacementRecord.from_flat_dict(flat)
-        assert r2.fragment_positions == fragments
+        assert r2.descriptor.fragment_positions == fragments
         lean = r.to_flat_dict(include_provenance=False)
         assert "initial_fragment_positions" not in lean
         assert "fragment_positions" not in lean
@@ -760,7 +770,7 @@ class TestRecordReplay:
 
     def test_record_to_descriptor_requires_finite_geometry(self):
         r = make_placement_record()
-        r.z_abs = float("nan")
+        r.descriptor.z_abs = float("nan")
         with pytest.raises(
             ValueError, match="missing finite deterministic geometry fields"
         ):

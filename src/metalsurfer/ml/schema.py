@@ -41,40 +41,6 @@ from ..placement.geometry import normalize_quaternion
 
 SCHEMA_VERSION = "3.0"
 
-_GEOMETRY_PROXY_ATTRS = frozenset(
-    {
-        "conformer_index",
-        "orientation_type",
-        "face_flip",
-        "en_atom_index",
-        "site_index",
-        "site_type",
-        "tilt_deg",
-        "azimuth_deg",
-        "azimuth_in_plane_deg",
-        "z_fraction",
-        "x_abs",
-        "y_abs",
-        "z_offset",
-        "surface_ref_z_abs",
-        "z_abs",
-        "x",
-        "y",
-        "shape",
-        "slab_indices",
-        "placement_mode_resolved",
-        "site_source",
-        "site_reference_frame",
-        "site_xy_frac_a",
-        "site_xy_frac_b",
-        "quat_w",
-        "quat_x",
-        "quat_y",
-        "quat_z",
-        "fragment_positions",
-    }
-)
-
 
 def _context_from_config(config: AdsorptionConfig | None) -> "ComputationContext":
     return (
@@ -290,10 +256,6 @@ class PlacementRecord:
     ``energy_*`` are post-relax outcomes. CSV exports default to lean
     feature+label columns; set ``export_placement_provenance=True`` for
     ``initial_*`` provenance.
-
-    Common geometry attributes (``x_abs``, ``quat_w``, ``tilt_deg``, …) are
-    available as property shims that read/write ``descriptor`` for backward
-    compatibility with existing call sites.
     """
 
     # --- Identity ---
@@ -342,19 +304,6 @@ class PlacementRecord:
         self.descriptor.quat_x = float(q[1])
         self.descriptor.quat_y = float(q[2])
         self.descriptor.quat_z = float(q[3])
-
-    def __getattr__(self, name: str) -> Any:
-        if name in _GEOMETRY_PROXY_ATTRS:
-            return getattr(self.descriptor, name)
-        raise AttributeError(
-            f"{type(self).__name__!r} object has no attribute {name!r}"
-        )
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name in _GEOMETRY_PROXY_ATTRS and "descriptor" in self.__dict__:
-            setattr(self.descriptor, name, value)
-            return
-        object.__setattr__(self, name, value)
 
     def to_placement_descriptor(self) -> PlacementDescriptor:
         """Return the stored PlacementDescriptor for placement replay.

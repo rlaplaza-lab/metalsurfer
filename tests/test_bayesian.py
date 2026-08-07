@@ -446,18 +446,18 @@ class TestFeatureBuilding:
         d = _bayesian_descriptor(7)
         record = PlacementRecord.from_descriptor(d, molecule="mol", smiles="C")
         assert record.placement_id == 7
-        assert record.tilt_deg == d.tilt_deg
-        assert record.x == d.x
-        assert record.quat_w == 1.0
-        assert record.quat_x == 0.0
+        assert record.descriptor.tilt_deg == d.tilt_deg
+        assert record.descriptor.x == d.x
+        assert record.descriptor.quat_w == 1.0
+        assert record.descriptor.quat_x == 0.0
 
     def test_record_from_spec_roundtrip(self):
         s = _placement_spec(3)
         record = PlacementRecord.from_spec(s, molecule="mol", smiles="C")
         assert record.placement_id == 3
-        assert record.tilt_deg == s.tilt_deg
-        assert record.quat_w == 1.0
-        assert record.quat_z == 0.0
+        assert record.descriptor.tilt_deg == s.tilt_deg
+        assert record.descriptor.quat_w == 1.0
+        assert record.descriptor.quat_z == 0.0
 
     def test_enumerated_pool_capacity_matches_estimate(self):
         conformer = Atoms("CO", positions=[[0.0, 0.0, 0.0], [1.2, 0.0, 0.0]])

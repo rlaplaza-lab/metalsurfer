@@ -444,6 +444,20 @@ def cumulative_refit_sample_weights(
     )
 
 
+def _no_transfer(
+    baseline: Any, transfer_bad_rounds: int
+) -> "TransferSurrogateResult":
+    return TransferSurrogateResult(
+        surrogate=baseline,
+        transfer_used_this_round=False,
+        transfer_weight_share=0.0,
+        transfer_mae_delta=None,
+        transfer_bad_rounds=transfer_bad_rounds,
+        transfer_disabled=False,
+        transfer_disabled_reason=None,
+    )
+
+
 def build_transfer_surrogate(
     X_current: pd.DataFrame,
     y_current: np.ndarray,
@@ -489,15 +503,7 @@ def build_transfer_surrogate(
         random_state=random_state,
     )
     if len(observed_X_prev) == 0 or len(observed_y_prev) == 0:
-        return TransferSurrogateResult(
-            surrogate=baseline,
-            transfer_used_this_round=False,
-            transfer_weight_share=0.0,
-            transfer_mae_delta=None,
-            transfer_bad_rounds=transfer_bad_rounds,
-            transfer_disabled=False,
-            transfer_disabled_reason=None,
-        )
+        return _no_transfer(baseline, transfer_bad_rounds)
 
     X_prev = (
         pd.DataFrame(observed_X_prev)
@@ -532,20 +538,17 @@ def build_transfer_surrogate(
     mask = similarity >= min_similarity
     if step_ages_arr is not None and len(step_ages_arr) == len(mask):
         step_ages_arr = step_ages_arr[mask]
-    X_prev = X_prev.loc[mask]
-    y_prev = y_prev[mask]
-    similarity = similarity[mask]
+    # Use positional indexing for every filtered array so features, targets,
+    # and metadata stay aligned. `X_prev` can carry a non-default index (e.g.
+    # after reindex/concat), so `.iloc`/`np.asarray` is required instead of
+    # `.loc[mask]`, which would align by label and silently desync rows.
+    keep = np.flatnonzero(mask)
+    X_prev = X_prev.iloc[keep].reset_index(drop=True)
+    y_prev = y_prev[keep]
+    similarity = similarity[keep]
 
     if len(X_prev) == 0:
-        return TransferSurrogateResult(
-            surrogate=baseline,
-            transfer_used_this_round=False,
-            transfer_weight_share=0.0,
-            transfer_mae_delta=None,
-            transfer_bad_rounds=transfer_bad_rounds,
-            transfer_disabled=False,
-            transfer_disabled_reason=None,
-        )
+        return _no_transfer(baseline, transfer_bad_rounds)
 
     recency = (
         prior_recency_weights(step_ages_arr, lengthscale=recency_ls)
@@ -576,15 +579,7 @@ def build_transfer_surrogate(
         )
     modifiers = recency * occupancy
     if float(np.sum(modifiers)) <= 0.0:
-        return TransferSurrogateResult(
-            surrogate=baseline,
-            transfer_used_this_round=False,
-            transfer_weight_share=0.0,
-            transfer_mae_delta=None,
-            transfer_bad_rounds=transfer_bad_rounds,
-            transfer_disabled=False,
-            transfer_disabled_reason=None,
-        )
+        return _no_transfer(baseline, transfer_bad_rounds)
 
     n_current = len(X_current)
     max_transfer_weight = n_current * weight_cap / max(1.0 - weight_cap, 1e-8)
@@ -912,10 +907,12 @@ def select_candidates_batch_diverse(
         )
 
     scaled = StandardScaler().fit_transform(matrix)
-    # Lengthscale: median NN distance among available points.
+    # Pairwise distances in scaled space, reused for the lengthscale estimate
+    # and for the per-step penalization (avoids recomputing norms each loop).
+    pairwise = cdist(scaled, scaled)
+    avail_positions = scaled[available]
+    d_nn = cdist(avail_positions, avail_positions)
     if len(available) >= 2:
-        sub = scaled[available]
-        d_nn = cdist(sub, sub)
         np.fill_diagonal(d_nn, np.inf)
         lengthscale = float(np.median(d_nn.min(axis=1)))
         lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
@@ -940,7 +937,7 @@ def select_candidates_batch_diverse(
         if not remaining:
             break
         rem = np.array(sorted(remaining), dtype=int)
-        dists = np.linalg.norm(scaled[rem] - scaled[pick], axis=1)
+        dists = pairwise[pick, rem]
         near = np.exp(-0.5 * np.square(dists / lengthscale))
         if higher_is_better:
             working[rem] = working[rem] - strength * near

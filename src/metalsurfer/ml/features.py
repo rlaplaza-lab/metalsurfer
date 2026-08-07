@@ -36,18 +36,20 @@ def extract_features(record: PlacementRecord) -> dict[str, float]:
     Returns a flat dictionary of feature_name -> value.
     """
     features: dict[str, float] = {
-        "x": _as_finite_float(record.x_abs, "x_abs"),
-        "y": _as_finite_float(record.y_abs, "y_abs"),
-        "z": _as_finite_float(record.z_abs, "z_abs"),
-        "conformer_index": _as_finite_float(record.conformer_index, "conformer_index"),
+        "x": _as_finite_float(record.descriptor.x_abs, "x_abs"),
+        "y": _as_finite_float(record.descriptor.y_abs, "y_abs"),
+        "z": _as_finite_float(record.descriptor.z_abs, "z_abs"),
+        "conformer_index": _as_finite_float(
+            record.descriptor.conformer_index, "conformer_index"
+        ),
     }
     quat = normalize_quaternion(
         np.array(
             [
-                float(record.quat_w),
-                float(record.quat_x),
-                float(record.quat_y),
-                float(record.quat_z),
+                float(record.descriptor.quat_w),
+                float(record.descriptor.quat_x),
+                float(record.descriptor.quat_y),
+                float(record.descriptor.quat_z),
             ],
             dtype=float,
         )

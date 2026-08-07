@@ -27,41 +27,6 @@ relaxation (``fmax``, ``stage1_steps``, ``stage2_steps``).
 import importlib
 from typing import Any
 
-__all__ = [
-    # Orchestration
-    "prepare_substrate",
-    "finalize_substrate",
-    "relax_substrate",
-    "resize_substrate_for_molecule",
-    # Layout, PBC, constraints, validation
-    "apply_material_pbc",
-    "apply_surface_constraints",
-    "ensure_slab_z_alignment",
-    "validate_substrate",
-    "validate_substrate_conformer_sizing",
-    "accept_substrate_for_api",
-    "coerce_slab_container",
-    # Construction and modification
-    "SlabContainer",
-    "create_slab_from_bulk",
-    "create_slab_from_atoms",
-    "substitute_alloy",
-    "deposit_adatoms",
-    # Sizing
-    "auto_resize_substrate_for_molecule",
-    "compute_minimum_supercell",
-    # Freeze policy
-    "identify_relaxable_surface_indices",
-    "identify_top_layer_indices",
-    "top_layer_indices_by_height",
-    "compute_frozen_indices",
-    "frozen_indices_from_constraints",
-    "max_frozen_substrate_displacement",
-    "check_frozen_substrate_displacement",
-    "format_atom_index_ranges",
-    "log_substrate_freeze_policy",
-]
-
 _LAZY_MODULES: dict[str, set[str]] = {
     "freeze": {
         "identify_relaxable_surface_indices",
@@ -99,14 +64,16 @@ _LAZY_MODULES: dict[str, set[str]] = {
 }
 
 
+__all__ = sorted({name for names in _LAZY_MODULES.values() for name in names})
+
+_NAME_TO_MODULE = {n: m for m, names in _LAZY_MODULES.items() for n in names}
+
+
 def __getattr__(name: str) -> Any:
-    if name in _LAZY_MODULES["freeze"]:
-        return getattr(importlib.import_module(".freeze", __name__), name)
-    if name in _LAZY_MODULES["_surfaces"]:
-        return getattr(importlib.import_module("._surfaces", __name__), name)
-    if name in _LAZY_MODULES["prep"]:
-        return getattr(importlib.import_module(".prep", __name__), name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    mod = _NAME_TO_MODULE.get(name)
+    if mod is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(importlib.import_module(f".{mod}", __name__), name)
 
 
 def __dir__() -> list[str]:

@@ -747,7 +747,10 @@ def test_build_site_records_upgrades_boundary_atop_via_pbc_index():
     """Production classify path upgrades near-boundary atop → bridge with PBC index."""
     from scipy.spatial import Delaunay
 
-    from metalsurfer.placement.site_classify import _build_site_records
+    from metalsurfer.placement.site_classify import (
+        _DelaunayClassifyInputs,
+        _build_site_records,
+    )
     from metalsurfer.placement.site_coords import _project_to_slab_plane
     from metalsurfer.placement.site_voronoi import _build_delaunay_classification_index
 
@@ -3242,9 +3245,9 @@ def test_extract_features_depends_only_on_absolute_geometry():
         smiles="O",
         surface_id="test",
     )
-    record.site_index = 99
-    record.surface_ref_z_abs = 0.0
-    record.z_offset = 99.0
+    record.descriptor.site_index = 99
+    record.descriptor.surface_ref_z_abs = 0.0
+    record.descriptor.z_offset = 99.0
     features = extract_features(record)
     assert set(features.keys()) == {
         "x",
@@ -3440,7 +3443,7 @@ def test_dissociative_com_features_injective_and_record_replay():
         record = PlacementRecord.from_descriptor(
             descriptor, molecule="H2", smiles="[H][H]"
         )
-        assert record.fragment_positions == descriptor.fragment_positions
+        assert record.descriptor.fragment_positions == descriptor.fragment_positions
         feats = extract_features(record)
         assert list(feats.keys()) == FEATURE_NAMES
         row = tuple(round(feats[name], 10) for name in FEATURE_NAMES)
@@ -3452,7 +3455,7 @@ def test_dissociative_com_features_injective_and_record_replay():
         flat = record.to_flat_dict(include_provenance=True)
         assert flat.get("initial_fragment_positions") is not None
         restored = PlacementRecord.from_flat_dict(flat)
-        assert restored.fragment_positions == record.fragment_positions
+        assert restored.descriptor.fragment_positions == record.descriptor.fragment_positions
         replay_desc = restored.to_placement_descriptor()
         assert replay_desc.fragment_positions == descriptor.fragment_positions
         replayed = generate_placement_from_descriptor(replay_desc, [h2], slab, config)

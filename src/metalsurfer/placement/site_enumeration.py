@@ -28,7 +28,11 @@ from ._constants import (
 )
 from ._material import material_aware_pbc, material_type_for_placement
 from .geometry import _get_covalent_radius
-from .site_classify import _build_site_records, _compute_local_normals_batch
+from .site_classify import (
+    _DelaunayClassifyInputs,
+    _build_site_records,
+    _compute_local_normals_batch,
+)
 from .site_coords import (
     _cart_to_frac,
     _deduplicate_points,
@@ -86,6 +90,172 @@ def _merge_dedup_site_arrays(
 DEFAULT_SYMMETRY_TOLERANCE = _DEFAULT_SYMMETRY_TOLERANCE
 DEFAULT_SITE_EQUIVALENCE_TOLERANCE = _DEFAULT_SITE_EQUIVALENCE_TOLERANCE
 DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE = _DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
+
+
+def _median_nn_or_fallback(nn_dists: np.ndarray) -> float:
+    """Median nearest-neighbour distance, or a covalent-scale fallback when empty."""
+    if len(nn_dists) > 0:
+        return float(np.median(nn_dists))
+    return _VORONOI_MAX_DISTANCE_COVALENT_SCALE * _VORONOI_RADIUS_FALLBACK_ANGSTROM
+
+
+def _delaunay_classify_inputs(
+    positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    *,
+    material_type: str,
+    site_classification_method: str,
+    slab_top_atom_indices: np.ndarray,
+    topology_primary_delaunay: Delaunay | None,
+) -> _DelaunayClassifyInputs | None:
+    """Build prebuilt Delaunay classification inputs, or ``None`` when disabled."""
+    if material_type != "slab" or site_classification_method not in (
+        "delaunay",
+        "auto",
+    ):
+        return None
+    assert slab_top_atom_indices is not None
+    if len(slab_top_atom_indices) < 3:
+        return None
+    top_positions_2d = _project_to_slab_plane(
+        positions[slab_top_atom_indices], cell
+    )
+    tri = topology_primary_delaunay
+    if tri is None:
+        try:
+            tri = Delaunay(top_positions_2d)
+        except (QhullError, ValueError, RuntimeError) as exc:
+            logger.debug("Delaunay classification disabled (%s)", exc)
+            return None
+    class_index = _build_delaunay_classification_index(
+        top_positions_2d,
+        slab_top_atom_indices,
+        tri,
+    )
+    class_index_pbc: (
+        tuple[np.ndarray, list[str], list[tuple[int, ...]]] | None
+    ) = None
+    if bool(pbc[0]) or bool(pbc[1]):
+        class_index_pbc = _build_delaunay_classification_index(
+            top_positions_2d,
+            slab_top_atom_indices,
+            tri,
+            cell=cell,
+            pbc=pbc,
+        )
+    return _DelaunayClassifyInputs(
+        tri,
+        top_positions_2d,
+        slab_top_atom_indices,
+        class_index,
+        class_index_pbc,
+    )
+
+
+def _apply_site_mask(
+    vertices: np.ndarray,
+    nn_dists: np.ndarray,
+    source_hints: list[str],
+    mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Keep only vertices selected by boolean *mask* (index arrays stay aligned)."""
+    kept = np.nonzero(mask)[0]
+    return vertices[mask], nn_dists[mask], [source_hints[i] for i in kept]
+
+
+def _inject_atop_sites(
+    vertices: np.ndarray,
+    nn_dists: np.ndarray,
+    source_hints: list[str],
+    *,
+    positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    material_type: str,
+    local_tree: KDTree,
+    slab_top_atom_indices: np.ndarray | None,
+    slab_has_topology_atop: bool,
+    probe_radius: float,
+    max_site_distance: float,
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Atop injection safety net for nanoparticles, and slabs lacking topology atop."""
+    if material_type == "slab" and slab_has_topology_atop:
+        return vertices, nn_dists, source_hints
+    if material_type not in ("slab", "nanoparticle") or len(vertices) == 0:
+        return vertices, nn_dists, source_hints
+
+    assert slab_top_atom_indices is not None
+    median_nn = _median_nn_or_fallback(nn_dists)
+    atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
+
+    if material_type == "slab":
+        top_atom_indices = slab_top_atom_indices
+        atom_normals: np.ndarray | None = None
+    else:
+        com = np.mean(positions, axis=0)
+        k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
+        _, norm_idx_all = local_tree.query(positions, k=k_norm)
+        if np.ndim(norm_idx_all) == 1:
+            norm_idx_all = np.asarray(norm_idx_all, dtype=int).reshape(-1, 1)
+        atom_normals = _compute_local_normals_batch(
+            positions, positions, norm_idx_all
+        )
+        outward_dots = np.einsum("ij,ij->i", atom_normals, positions - com)
+        top_atom_indices = np.nonzero(outward_dots > 0.0)[0].astype(int)
+
+    candidate_verts: list[np.ndarray] = []
+    candidate_dists: list[float] = []
+    candidate_sources: list[str] = []
+    for ai in top_atom_indices:
+        atom_pos = positions[int(ai)]
+        if material_type == "slab":
+            candidate = _shift_along_slab_normal(
+                atom_pos.reshape(1, 3), cell, atop_height
+            )[0]
+            if np.any(pbc):
+                candidate = _wrap_cartesian(
+                    candidate.reshape(1, 3), cell, pbc
+                )[0]
+        else:
+            assert atom_normals is not None
+            candidate = atom_pos + atop_height * atom_normals[int(ai)]
+
+        d_nn = float(local_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0])
+        if d_nn < float(probe_radius) or d_nn > float(max_site_distance):
+            continue
+        candidate_verts.append(candidate)
+        candidate_dists.append(d_nn)
+        candidate_sources.append("atop_injected")
+
+    if candidate_verts:
+        candidate_arr = np.asarray(candidate_verts, dtype=float)
+        keep_new = _filter_non_duplicate_candidates(
+            candidate_arr, vertices, _VORONOI_DEDUP_TOLERANCE
+        )
+        candidate_arr = candidate_arr[keep_new]
+        candidate_dist_arr = np.asarray(candidate_dists, dtype=float)[keep_new]
+        candidate_sources = [candidate_sources[i] for i in np.nonzero(keep_new)[0]]
+        if len(candidate_arr) > 0:
+            n_existing = len(vertices)
+            vertices, nn_dists, source_hints = _merge_dedup_site_arrays(
+                vertices,
+                nn_dists,
+                source_hints,
+                candidate_arr,
+                candidate_dist_arr,
+                candidate_sources,
+                cell=cell,
+                pbc=pbc,
+            )
+            n_injected = len(vertices) - n_existing
+            logger.debug(
+                "Injected %d atop candidate sites (%d total sites)",
+                max(n_injected, 0),
+                len(vertices),
+            )
+
+    return vertices, nn_dists, source_hints
 
 
 def get_unified_sites(
@@ -153,7 +323,6 @@ def get_unified_sites(
         )
 
     voronoi_positions = positions
-    slab_top_mask: np.ndarray | None = None
     slab_top_atom_indices: np.ndarray | None = None
     if material_type == "slab":
         # Compute once; reused for Voronoi crop, topology, and atop injection.
@@ -184,12 +353,7 @@ def get_unified_sites(
 
     # Slab-specific topology enrichment becomes part of the default generator.
     if material_type == "slab" and slab_top_atom_indices is not None:
-        median_nn = (
-            float(np.median(nn_dists))
-            if len(nn_dists) > 0
-            else _VORONOI_MAX_DISTANCE_COVALENT_SCALE
-            * _VORONOI_RADIUS_FALLBACK_ANGSTROM
-        )
+        median_nn = _median_nn_or_fallback(nn_dists)
         site_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
         (
             topo_vertices,
@@ -239,9 +403,9 @@ def get_unified_sites(
         )
         h_min = h_surface - max(float(top_layer_tolerance), nn_margin)
         keep_mask = _height_along_slab_normal(vertices, cell) >= h_min
-        vertices = vertices[keep_mask]
-        nn_dists = nn_dists[keep_mask]
-        source_hints = [source_hints[i] for i in np.nonzero(keep_mask)[0]]
+        vertices, nn_dists, source_hints = _apply_site_mask(
+            vertices, nn_dists, source_hints, keep_mask
+        )
 
     if material_type == "nanoparticle" and len(vertices) > 0:
         com = np.mean(positions, axis=0)
@@ -251,146 +415,41 @@ def get_unified_sites(
             norm_idx = np.asarray(norm_idx, dtype=int).reshape(-1, 1)
         normals = _compute_local_normals_batch(vertices, positions, norm_idx)
         outward = np.einsum("ij,ij->i", normals, vertices - com) > 0.0
-        vertices = vertices[outward]
-        nn_dists = nn_dists[outward]
-        source_hints = [source_hints[i] for i in np.nonzero(outward)[0]]
+        vertices, nn_dists, source_hints = _apply_site_mask(
+            vertices, nn_dists, source_hints, outward
+        )
 
     # Atop injection safety net for nanoparticles; for slabs only when topology
     # did not already produce atop candidates.
-    skip_slab_atop_injection = material_type == "slab" and slab_has_topology_atop
-    if (
-        material_type in ("slab", "nanoparticle")
-        and len(vertices) > 0
-        and not skip_slab_atop_injection
-    ):
-        median_nn = (
-            float(np.median(nn_dists))
-            if len(nn_dists) > 0
-            else _VORONOI_MAX_DISTANCE_COVALENT_SCALE
-            * _VORONOI_RADIUS_FALLBACK_ANGSTROM
-        )
-        atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
-
-        if material_type == "slab":
-            if slab_top_atom_indices is None:
-                slab_top_mask = top_layer_mask_by_normal(
-                    positions, cell, float(top_layer_tolerance)
-                )
-                slab_top_atom_indices = np.nonzero(slab_top_mask)[0]
-            top_atom_indices = slab_top_atom_indices
-            atom_normals: np.ndarray | None = None
-        else:
-            com = np.mean(positions, axis=0)
-            k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
-            _, norm_idx_all = local_tree.query(positions, k=k_norm)
-            if np.ndim(norm_idx_all) == 1:
-                norm_idx_all = np.asarray(norm_idx_all, dtype=int).reshape(-1, 1)
-            atom_normals = _compute_local_normals_batch(
-                positions, positions, norm_idx_all
-            )
-            outward_dots = np.einsum("ij,ij->i", atom_normals, positions - com)
-            top_atom_indices = np.nonzero(outward_dots > 0.0)[0].astype(int)
-
-        candidate_verts: list[np.ndarray] = []
-        candidate_dists: list[float] = []
-        candidate_sources: list[str] = []
-        for ai in top_atom_indices:
-            atom_pos = positions[int(ai)]
-            if material_type == "slab":
-                candidate = _shift_along_slab_normal(
-                    atom_pos.reshape(1, 3), cell, atop_height
-                )[0]
-                if np.any(pbc_for_voronoi):
-                    candidate = _wrap_cartesian(
-                        candidate.reshape(1, 3), cell, pbc_for_voronoi
-                    )[0]
-            else:
-                assert atom_normals is not None
-                candidate = atom_pos + atop_height * atom_normals[int(ai)]
-
-            d_nn = float(local_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0])
-            if d_nn < float(probe_radius) or d_nn > float(max_site_distance):
-                continue
-            candidate_verts.append(candidate)
-            candidate_dists.append(d_nn)
-            candidate_sources.append("atop_injected")
-
-        if candidate_verts:
-            candidate_arr = np.asarray(candidate_verts, dtype=float)
-            keep_new = _filter_non_duplicate_candidates(
-                candidate_arr, vertices, _VORONOI_DEDUP_TOLERANCE
-            )
-            candidate_arr = candidate_arr[keep_new]
-            candidate_dist_arr = np.asarray(candidate_dists, dtype=float)[keep_new]
-            candidate_sources = [candidate_sources[i] for i in np.nonzero(keep_new)[0]]
-            if len(candidate_arr) > 0:
-                n_existing = len(vertices)
-                vertices, nn_dists, source_hints = _merge_dedup_site_arrays(
-                    vertices,
-                    nn_dists,
-                    source_hints,
-                    candidate_arr,
-                    candidate_dist_arr,
-                    candidate_sources,
-                    cell=cell,
-                    pbc=pbc_for_voronoi,
-                )
-                n_injected = len(vertices) - n_existing
-                logger.debug(
-                    "Injected %d atop candidate sites (%d total sites)",
-                    max(n_injected, 0),
-                    len(vertices),
-                )
+    vertices, nn_dists, source_hints = _inject_atop_sites(
+        vertices,
+        nn_dists,
+        source_hints,
+        positions=positions,
+        cell=cell,
+        pbc=pbc_for_voronoi,
+        material_type=material_type,
+        local_tree=local_tree,
+        slab_top_atom_indices=slab_top_atom_indices,
+        slab_has_topology_atop=slab_has_topology_atop,
+        probe_radius=probe_radius,
+        max_site_distance=max_site_distance,
+    )
 
     if len(vertices) == 0:
         return []
 
     # ``auto`` / ``delaunay`` use Delaunay on slabs; ``distance_ratio`` is honored
     # literally (opt-in A/B). Default config ``auto`` preserves catalysis sampling.
-    _use_delaunay = material_type == "slab" and site_classification_method in (
-        "delaunay",
-        "auto",
+    delaunay_inputs = _delaunay_classify_inputs(
+        positions,
+        cell,
+        pbc_for_voronoi,
+        material_type=material_type,
+        site_classification_method=site_classification_method,
+        slab_top_atom_indices=slab_top_atom_indices,
+        topology_primary_delaunay=topology_primary_delaunay,
     )
-    _delaunay_tri = topology_primary_delaunay
-    _top_positions_2d: np.ndarray | None = None
-    _top_atom_indices: np.ndarray | None = None
-    delaunay_class_index = None
-    delaunay_class_index_pbc = None
-    if _use_delaunay:
-        if material_type == "slab" and slab_top_atom_indices is not None:
-            _top_atom_indices = slab_top_atom_indices
-        else:
-            top_mask = top_layer_mask_by_normal(
-                positions, cell, float(top_layer_tolerance)
-            )
-            _top_atom_indices = np.nonzero(top_mask)[0]
-        if len(_top_atom_indices) >= 3:
-            top_positions = positions[_top_atom_indices]
-            _top_positions_2d = _project_to_slab_plane(top_positions, cell)
-            if _delaunay_tri is None:
-                try:
-                    _delaunay_tri = Delaunay(_top_positions_2d)
-                except (QhullError, ValueError, RuntimeError) as exc:
-                    logger.debug("Delaunay classification disabled (%s)", exc)
-                    _use_delaunay = False
-            if _use_delaunay and _delaunay_tri is not None:
-                # Primary-cell index + PBC-augmented index (edge atop upgrades).
-                delaunay_class_index = _build_delaunay_classification_index(
-                    _top_positions_2d,
-                    _top_atom_indices,
-                    _delaunay_tri,
-                )
-                delaunay_class_index_pbc = None
-                if bool(pbc_for_voronoi[0]) or bool(pbc_for_voronoi[1]):
-                    delaunay_class_index_pbc = _build_delaunay_classification_index(
-                        _top_positions_2d,
-                        _top_atom_indices,
-                        _delaunay_tri,
-                        cell=cell,
-                        pbc=pbc_for_voronoi,
-                    )
-        else:
-            _use_delaunay = False
 
     sites = _build_site_records(
         vertices,
@@ -400,15 +459,10 @@ def get_unified_sites(
         local_tree,
         material_type,
         pore_threshold,
-        use_delaunay=_use_delaunay,
-        delaunay_tri=_delaunay_tri,
-        top_positions_2d=_top_positions_2d,
-        top_atom_indices=_top_atom_indices,
         cell=cell,
         source_hints=source_hints,
-        delaunay_class_index=delaunay_class_index,
-        delaunay_class_index_pbc=delaunay_class_index_pbc,
         pbc=pbc_for_voronoi,
+        delaunay=delaunay_inputs,
     )
 
     if abs(float(np.linalg.det(cell))) > 1e-12:

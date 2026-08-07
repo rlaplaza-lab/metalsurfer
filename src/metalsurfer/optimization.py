@@ -917,9 +917,9 @@ def optimize_adsorbate_slab_batched(
         if ab is None:
             raise RuntimeError("Could not create autobatcher")
 
-        try:
+        def _run_optimize(ab):
             with torchsim_output_capture():
-                batch = ts.optimize(
+                return ts.optimize(
                     system=sim_states,
                     model=ts_model,
                     optimizer=optimizer,
@@ -928,6 +928,9 @@ def optimize_adsorbate_slab_batched(
                     steps_between_swaps=swaps,
                     autobatcher=ab,
                 )
+
+        try:
+            batch = _run_optimize(ab)
         except RuntimeError as exc:
             if (
                 use_saturation_reuse
@@ -951,21 +954,27 @@ def optimize_adsorbate_slab_batched(
                 )
                 if ab is None:
                     raise RuntimeError("Could not create autobatcher") from exc
-                with torchsim_output_capture():
-                    batch = ts.optimize(
-                        system=sim_states,
-                        model=ts_model,
-                        optimizer=optimizer,
-                        convergence_fn=conv,
-                        max_steps=max_steps,
-                        steps_between_swaps=swaps,
-                        autobatcher=ab,
-                    )
+                batch = _run_optimize(ab)
             else:
                 raise
         result = batch.to_atoms()
         energies = batch.energy
         forces_list = batch.forces
+        n_input = len(combined_atoms_list)
+        n_returned = len(result)
+        if n_returned != n_input:
+            # TorchSim silently dropped one or more systems (partial failure).
+            # We cannot safely map returned atoms back to the input order, so
+            # fail every placement rather than risk misattributing energies to
+            # the wrong descriptor (which would corrupt downstream results and
+            # also trip the `zip(..., strict=True)` in the workflow layer).
+            logger.error(
+                "Autobatcher returned %d systems but %d were submitted; "
+                "treating all as failed to avoid misalignment",
+                n_returned,
+                n_input,
+            )
+            return [None] * n_input
         for i, atoms in enumerate(result):
             calc = TorchSimCalculator(ts_model)
             if energies is not None and i < len(energies):
@@ -976,7 +985,7 @@ def optimize_adsorbate_slab_batched(
                 calc.results["forces"] = forces_list[i].detach().cpu().numpy()
             calc._last_positions_hash = _positions_cell_hash(atoms)
             atoms.calc = calc
-        logger.info("Autobatcher optimisation succeeded: %d systems", len(result))
+        logger.info("Autobatcher optimisation succeeded: %d systems", n_returned)
         return result
     finally:
         if saturation_reuse and config.saturation_autobatcher_reuse:

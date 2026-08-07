@@ -310,19 +310,14 @@ def _compute_inertia_tensor(
                 f"masses length {len(masses)} does not match positions length {n}"
             )
     com = np.average(pos, axis=0, weights=masses)
-    inertia = np.zeros((3, 3))
-    for i in range(n):
-        r = pos[i] - com
-        m = masses[i]
-        inertia[0, 0] += m * (r[1] ** 2 + r[2] ** 2)
-        inertia[1, 1] += m * (r[0] ** 2 + r[2] ** 2)
-        inertia[2, 2] += m * (r[0] ** 2 + r[1] ** 2)
-        inertia[0, 1] -= m * r[0] * r[1]
-        inertia[0, 2] -= m * r[0] * r[2]
-        inertia[1, 2] -= m * r[1] * r[2]
-    inertia[1, 0] = inertia[0, 1]
-    inertia[2, 0] = inertia[0, 2]
-    inertia[2, 1] = inertia[1, 2]
+    r = pos - com  # (n, 3)
+    m = masses[:, None]  # (n, 1)
+    # I = sum_k m_k * (|r_k|^2 * I_3 - r_k r_k^T)
+    r2 = np.einsum("ij,ij->i", r, r)  # |r_k|^2
+    outer = r[:, :, None] * r[:, None, :]  # (n, 3, 3)
+    inertia = np.einsum("i->", m[:, 0] * r2) * np.eye(3) - np.einsum(
+        "i,ijk->jk", m[:, 0], outer
+    )
     eigenvals, eigenvecs = np.linalg.eigh(inertia)
     order = np.argsort(eigenvals)
     return eigenvals[order], eigenvecs[:, order]
@@ -810,22 +805,18 @@ def check_adsorbate_separation(
                 "cell with non-zero volume must be provided when pbc is requested; "
                 "pass slab/cluster/porous cell explicitly"
             )
-        assert pbc is not None
+        assert pbc is not None  # guaranteed by `pbc_requested`
         cell_arr = np.asarray(cell, dtype=float)
-        dmat = _mol_slab_pairwise_distances(
-            new_pos, pre_adsorbed_positions, cell_arr, list(pbc)
-        )
-        min_dist = float(np.min(dmat)) if dmat.size else float("inf")
+        pbc_list = list(pbc)
     elif cell is not None and _cell_has_volume(cell) and pbc is not None:
         # Explicit all-False pbc with a cell: still use the pairwise helper.
         cell_arr = np.asarray(cell, dtype=float)
-        dmat = _mol_slab_pairwise_distances(
-            new_pos, pre_adsorbed_positions, cell_arr, list(pbc)
-        )
-        min_dist = float(np.min(dmat)) if dmat.size else float("inf")
+        pbc_list = list(pbc)
     else:
-        diffs = new_pos[:, None, :] - pre_adsorbed_positions[None, :, :]
-        min_dist = float(np.min(np.linalg.norm(diffs, axis=2)))
+        cell_arr = np.eye(3)
+        pbc_list = [False, False, False]
+    dmat = _mol_slab_pairwise_distances(new_pos, pre_adsorbed_positions, cell_arr, pbc_list)
+    min_dist = float(np.min(dmat)) if dmat.size else float("inf")
 
     if min_separation is None:
         new_syms = new_adsorbate.get_chemical_symbols()

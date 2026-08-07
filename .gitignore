@@ -79,3 +79,6 @@ ENV/
 
 # Sphinx documentation build
 docs/_build/
+
+# Agent scratch / plans (Kilo)
+.kilo/

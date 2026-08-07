@@ -243,6 +243,18 @@ def fill_materialized_placements(
     yield_est = _YIELD_EST_PRIOR
     attempts_used = 0
 
+    def _make_spec_filter(*, check_failed: bool):
+        def _filter(spec, *, _failed=failed_keys, _blocked=blocked_sites):
+            if check_failed and placement_spec_key(spec) in _failed:
+                return False
+            if int(spec.site_index) in _blocked:
+                return False
+            if config.placement_filter is not None:
+                return bool(config.placement_filter(spec))
+            return True
+
+        return _filter
+
     for attempt in range(max_attempts):
         if len(combined) >= n_target:
             break
@@ -255,27 +267,13 @@ def fill_materialized_placements(
         attempt_seed = config.seed + (seed_increment * attempt)
         attempts_used = attempt + 1
 
-        def _composed_filter(
-            spec,
-            *,
-            _failed=failed_keys,
-            _blocked=blocked_sites,
-        ):
-            if placement_spec_key(spec) in _failed:
-                return False
-            if int(spec.site_index) in _blocked:
-                return False
-            if config.placement_filter is not None:
-                return bool(config.placement_filter(spec))
-            return True
-
         specs = enumerate_placement_specs(
             conformers,
             slab_for_sites,
             config,
             smiles,
             n_request,
-            filter_spec=_composed_filter,
+            filter_spec=_make_spec_filter(check_failed=True),
             site_context=site_context,
             seed=attempt_seed,
             full_slab=slab_atoms,
@@ -287,20 +285,13 @@ def fill_materialized_placements(
                 attempt + 1,
             )
 
-            def _fallback_filter(spec, *, _blocked=blocked_sites):
-                if int(spec.site_index) in _blocked:
-                    return False
-                if config.placement_filter is not None:
-                    return bool(config.placement_filter(spec))
-                return True
-
             specs = enumerate_placement_specs(
                 conformers,
                 slab_for_sites,
                 config,
                 smiles,
                 n_request,
-                filter_spec=_fallback_filter,
+                filter_spec=_make_spec_filter(check_failed=False),
                 site_context=site_context,
                 seed=attempt_seed + 1,
                 full_slab=slab_atoms,

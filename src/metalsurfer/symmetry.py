@@ -365,8 +365,9 @@ class SymmetryAnalyzer:
                 parent[rb] = ra
                 rank[ra] += 1
 
+        frac_pts = [self._cart_to_frac(p) for p in cart_pts]
         for i in range(n):
-            frac_i = self._cart_to_frac(cart_pts[i])
+            frac_i = frac_pts[i]
             for R, t in frac_ops:
                 frac_p = self._apply_frac_symop(frac_i, R, t)
                 if self._mode == "periodic":
@@ -374,8 +375,7 @@ class SymmetryAnalyzer:
                 for j in range(n):
                     if i == j or site_types[i] != site_types[j]:
                         continue
-                    frac_j = self._cart_to_frac(cart_pts[j])
-                    d_frac = self._mic_frac_delta(frac_p, frac_j)
+                    d_frac = self._mic_frac_delta(frac_p, frac_pts[j])
                     sep = self._cart_sep_from_frac_delta(d_frac)
                     dist = self._separation_distance(sep, bool(planar))
                     if dist < self.symmetry_tolerance:
