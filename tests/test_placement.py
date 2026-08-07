@@ -748,8 +748,8 @@ def test_build_site_records_upgrades_boundary_atop_via_pbc_index():
     from scipy.spatial import Delaunay
 
     from metalsurfer.placement.site_classify import (
-        _DelaunayClassifyInputs,
         _build_site_records,
+        _DelaunayClassifyInputs,
     )
     from metalsurfer.placement.site_coords import _project_to_slab_plane
     from metalsurfer.placement.site_voronoi import _build_delaunay_classification_index
@@ -779,6 +779,7 @@ def test_build_site_records_upgrades_boundary_atop_via_pbc_index():
     local_tree = KDTree(positions)
     symbols = ["Cu", "Cu", "Cu", "Cu"]
 
+    inputs = _DelaunayClassifyInputs(tri, top_2d, top_idx, primary, pbc_index)
     upgraded = _build_site_records(
         vertex,
         nn_dists,
@@ -787,14 +788,9 @@ def test_build_site_records_upgrades_boundary_atop_via_pbc_index():
         local_tree,
         "slab",
         pore_threshold=2.5,
-        use_delaunay=True,
-        delaunay_tri=tri,
-        top_positions_2d=top_2d,
-        top_atom_indices=top_idx,
         cell=cell,
-        delaunay_class_index=primary,
-        delaunay_class_index_pbc=pbc_index,
         pbc=pbc_on,
+        delaunay=inputs,
     )
     primary_only = _build_site_records(
         vertex,
@@ -804,14 +800,9 @@ def test_build_site_records_upgrades_boundary_atop_via_pbc_index():
         local_tree,
         "slab",
         pore_threshold=2.5,
-        use_delaunay=True,
-        delaunay_tri=tri,
-        top_positions_2d=top_2d,
-        top_atom_indices=top_idx,
         cell=cell,
-        delaunay_class_index=primary,
-        delaunay_class_index_pbc=pbc_index,
         pbc=pbc_off,
+        delaunay=inputs,
     )
     assert upgraded[0].site_type == "bridge"
     assert frozenset(upgraded[0].slab_indices) == frozenset((0, 1))

@@ -23,7 +23,9 @@ FEATURE_NAMES = [
 ]
 
 
-def _as_finite_float(value: float, field_name: str) -> float:
+def _as_finite_float(value: float | None, field_name: str) -> float:
+    if value is None:
+        raise ValueError(f"{field_name} must be finite, got {value!r}")
     parsed = float(value)
     if not np.isfinite(parsed):
         raise ValueError(f"{field_name} must be finite, got {value!r}")
@@ -46,10 +48,10 @@ def extract_features(record: PlacementRecord) -> dict[str, float]:
     quat = normalize_quaternion(
         np.array(
             [
-                float(record.descriptor.quat_w),
-                float(record.descriptor.quat_x),
-                float(record.descriptor.quat_y),
-                float(record.descriptor.quat_z),
+                _as_finite_float(record.descriptor.quat_w, "quat_w"),
+                _as_finite_float(record.descriptor.quat_x, "quat_x"),
+                _as_finite_float(record.descriptor.quat_y, "quat_y"),
+                _as_finite_float(record.descriptor.quat_z, "quat_z"),
             ],
             dtype=float,
         )

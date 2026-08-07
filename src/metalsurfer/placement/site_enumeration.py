@@ -29,9 +29,9 @@ from ._constants import (
 from ._material import material_aware_pbc, material_type_for_placement
 from .geometry import _get_covalent_radius
 from .site_classify import (
-    _DelaunayClassifyInputs,
     _build_site_records,
     _compute_local_normals_batch,
+    _DelaunayClassifyInputs,
 )
 from .site_coords import (
     _cart_to_frac,
@@ -185,11 +185,11 @@ def _inject_atop_sites(
     if material_type not in ("slab", "nanoparticle") or len(vertices) == 0:
         return vertices, nn_dists, source_hints
 
-    assert slab_top_atom_indices is not None
     median_nn = _median_nn_or_fallback(nn_dists)
     atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
 
     if material_type == "slab":
+        assert slab_top_atom_indices is not None
         top_atom_indices = slab_top_atom_indices
         atom_normals: np.ndarray | None = None
     else:
