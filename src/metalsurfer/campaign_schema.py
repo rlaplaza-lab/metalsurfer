@@ -1,5 +1,7 @@
 """YAML campaign schema parsing for the Python campaign API."""
 
+import dataclasses
+import difflib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -9,6 +11,10 @@ import yaml
 from .config import AdsorptionConfig, fold_bo_config
 
 CampaignKind = Literal["adsorption", "adsorption_bo", "saturation", "saturation_bo"]
+
+_ROOT_KEYS = frozenset({"campaign", "surface_type", "substrate", "molecules", "config"})
+
+_CONFIG_KEYS = frozenset(f.name for f in dataclasses.fields(AdsorptionConfig))
 
 _SUBSTRATE_KEYS = frozenset(
     {
@@ -104,8 +110,27 @@ def _parse_campaign_kind(raw: Any) -> CampaignKind:
     return raw
 
 
+def _validate_config_keys(config_raw: dict[str, Any]) -> None:
+    """Reject unknown ``config:`` keys with a helpful "did you mean" hint."""
+    allowed = _CONFIG_KEYS | {"bo"}
+    unknown = set(config_raw) - allowed
+    if not unknown:
+        return
+    for key in sorted(unknown):
+        suggestion = difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.6)
+        hint = f" (did you mean {suggestion[0]!r}?)" if suggestion else ""
+        raise ValueError(f"config contains unknown key {key!r}{hint}")
+
+
 def parse_campaign_dict(data: dict[str, Any]) -> CampaignDocument:
     """Validate a campaign mapping and return a :class:`CampaignDocument`."""
+    unknown_root = set(data) - _ROOT_KEYS
+    if unknown_root:
+        quoted = ", ".join(sorted(unknown_root))
+        raise ValueError(
+            f"campaign contains unknown keys: {quoted}. "
+            f"Allowed root keys: {sorted(_ROOT_KEYS)}"
+        )
     campaign = _parse_campaign_kind(data.get("campaign"))
     surface_type = data.get("surface_type")
     if not isinstance(surface_type, str) or not surface_type.strip():
@@ -128,6 +153,7 @@ def parse_campaign_dict(data: dict[str, Any]) -> CampaignDocument:
         config_raw = {}
     if not isinstance(config_raw, dict):
         raise ValueError("config must be a mapping when provided")
+    _validate_config_keys(config_raw)
     config_payload = dict(config_raw)
     # Nested ``bo:`` / ``bo.transfer:`` only (flat ``bo_*`` keys are rejected).
     config_payload["bo"] = fold_bo_config(config_payload)

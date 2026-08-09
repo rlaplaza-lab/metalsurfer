@@ -650,6 +650,7 @@ def _validate_posed_adsorbate(
         sep_ok, _ = geom.check_adsorbate_separation(
             adsorbate,
             pre_ads,
+            min_separation=config.min_adsorbate_separation,
             cell=np.asarray(slab.get_cell(), dtype=float),
             pbc=calculator_pbc_for_atoms(slab),
         )

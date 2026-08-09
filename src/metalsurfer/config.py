@@ -13,6 +13,7 @@ from ._numeric_defaults import (
     DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     DEFAULT_SYMMETRY_TOLERANCE,
+    MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM,
     MIN_CONTACT_RATIO_DEFAULT,
     MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
 )
@@ -588,6 +589,13 @@ class AdsorptionConfig:
     strict_initial_placement: bool = False
     reject_vdw_overlaps: bool = False
     vdw_overlap_scale: float = 1.0
+    # Minimum gap between a newly placed adsorbate and any pre-adsorbed molecule
+    # during saturation. Distinct from ``min_initial_distance`` (adsorbate vs
+    # substrate). Kept low by default so a single molecule on a bare slab is not
+    # affected; raise it to stop saturation packing adsorbates on top of each
+    # other. The placement gate enforces at least this value (never the looser
+    # covalent-sum default).
+    min_adsorbate_separation: float = MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM
     max_closest_approach: float = CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
     min_contact_atoms: int = 1
     contact_distance_threshold: float = CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM

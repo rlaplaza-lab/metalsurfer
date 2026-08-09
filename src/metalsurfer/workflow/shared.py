@@ -267,6 +267,7 @@ def _evaluate_optimized_candidate(
     E_slab: float,
     E_mol: float,
     surface_symbols: list[str] | None,
+    base_slab_for_frozen: Atoms | None = None,
     log_prefix: str = "",
 ) -> tuple[ScreeningResult | None, PlacementFailureEvent | None]:
     if opt_atoms is None:
@@ -279,10 +280,18 @@ def _evaluate_optimized_candidate(
     if opt_atoms.calc is None:
         opt_atoms.calc = calculator
 
+    # The frozen-substrate drift guard must compare against the *original* frozen
+    # slab, not the covered slab: from saturation step >= 2 the covered slab comes
+    # back from the batcher without FixAtoms, so its own constraints are empty and
+    # the guard would wrongly pass. Fall back to the covered slab only when no
+    # base slab is supplied (plain binding mode).
+    frozen_reference = (
+        base_slab_for_frozen if base_slab_for_frozen is not None else slab_atoms
+    )
     ok, reason = check_frozen_substrate_displacement(
         opt_atoms,
-        slab_atoms,
-        slab_size=len(slab_atoms),
+        frozen_reference,
+        slab_size=len(frozen_reference),
     )
     if not ok:
         logger.warning("%sfrozen substrate drift: %s", log_prefix, reason)
@@ -400,6 +409,7 @@ def _optimize_and_evaluate_placements(
                 E_slab=e_slab,
                 E_mol=e_mol,
                 surface_symbols=surface_symbols,
+                base_slab_for_frozen=base_slab_for_frozen,
                 log_prefix=log_prefix,
             )
         if result is None:

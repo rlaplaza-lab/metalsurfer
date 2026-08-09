@@ -154,10 +154,16 @@ def _reference_smiles_units_multi_molecule(
     molecule_counts: dict[str, int],
     placing_molecule: str,
 ) -> list[str]:
-    """SMILES list for all adsorbate units after placing *placing_molecule* this step."""
+    """SMILES list for all adsorbate units present on the slab when *placing_molecule*
+    is screened this step.
+
+    The screen runs *before* ``record_step`` increments ``molecule_counts``, so the
+    count already reflects every unit physically on the slab; do not add one for the
+    molecule being placed.
+    """
     units: list[str] = []
     for mol in active_molecules:
-        n = molecule_counts.get(mol, 0) + (1 if mol == placing_molecule else 0)
+        n = molecule_counts.get(mol, 0)
         units.extend([active_smiles[mol]] * n)
     return units
 
@@ -418,6 +424,13 @@ def _run_saturation_steps(
 
         record_step(step, n_on_slab, outcome)
 
+        # Only fold a bound step into the coverage slab. An unbound final step is
+        # recorded for the record but not incorporated (matches
+        # ``_n_at_saturation_from_steps``), and this also fixes the max-steps path
+        # so the final slab holds exactly ``n_molecules_at_saturation`` adsorbates.
+        if outcome.best.energy_adsorption < 0:
+            current_slab = _slab_after_saturation_step(outcome.best.atoms, config)
+
         if _saturation_should_stop(
             best_energy=outcome.best.energy_adsorption,
             step=step,
@@ -425,8 +438,6 @@ def _run_saturation_steps(
             log_prefix=log_prefix,
         ):
             break
-
-        current_slab = _slab_after_saturation_step(outcome.best.atoms, config)
 
     return current_slab.atoms.copy()
 

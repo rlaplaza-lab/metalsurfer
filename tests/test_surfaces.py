@@ -30,6 +30,7 @@ from metalsurfer.surface_prep._surfaces import (
     DEFAULT_SLAB_TOP_VACUUM_ANG,
     _molecule_diameter,
     _perpendicular_heights_2d,
+    _relax_slab_structure,
 )
 
 from .conftest import make_slab, make_water
@@ -346,6 +347,44 @@ class TestSubstituteAlloy:
 
 
 # ---------------------------------------------------------------------------
+# _relax_slab_structure constraint restoration
+# ---------------------------------------------------------------------------
+
+
+def test_relax_slab_structure_restores_caller_constraints():
+    # Plan item 9: the relaxation must not leave the returned structure
+    # unconstrained; the caller's FixAtoms must be restored (replacing any
+    # constraint the relaxation mode installed).
+    from ase.constraints import FixAtoms
+
+    from metalsurfer.surface_prep import SlabContainer
+
+    class _IdentityCalc:
+        def get_potential_energy(self, atoms, **kwargs):
+            return 0.0
+
+        def get_forces(self, atoms, **kwargs):
+            return np.zeros_like(atoms.get_positions())
+
+    slab = SlabContainer(make_slab(nx=3, ny=3, n_layers=2))
+    n = len(slab.atoms)
+    frozen = list(range(n))
+    slab.atoms.set_constraint(FixAtoms(indices=frozen))
+
+    relaxed = _relax_slab_structure(
+        slab.atoms,
+        _IdentityCalc(),
+        mode="ionic_only",
+        optimizer_name="fire",
+        fmax=0.1,
+        steps=1,
+    )
+    restored = [c for c in relaxed.constraints if isinstance(c, FixAtoms)]
+    assert restored, "caller FixAtoms constraints were not restored"
+    assert list(restored[0].index) == frozen
+
+
+# ---------------------------------------------------------------------------
 # deposit_adatoms
 # ---------------------------------------------------------------------------
 
@@ -403,6 +442,7 @@ class TestDepositAdatoms:
     def test_different_seed_differs(self):
         slab1 = self._layered_slab()
         slab2 = self._layered_slab()
+        n_sub = len(slab1.atoms)
         with tempfile.TemporaryDirectory() as tmpdir:
             r1 = deposit_adatoms(
                 slab1,
@@ -420,10 +460,16 @@ class TestDepositAdatoms:
                 config=self._NO_RELAX_CFG,
                 results_dir=tmpdir,
             )
-        # positions should differ (site selection is random)
-        assert not np.allclose(
-            r1.atoms.get_positions(), r2.atoms.get_positions(), atol=1e-6
-        )
+        # Adatom positions should differ (site selection is random). The adatom
+        # count can vary under the minimum-separation constraint, so compare the
+        # adsorbate blocks only.
+        ads1 = r1.atoms.get_positions()[n_sub:]
+        ads2 = r2.atoms.get_positions()[n_sub:]
+        # Adatom positions should differ across seeds (site selection is random).
+        # The adatom count can vary under the minimum-separation constraint, so
+        # only treat identical *positions* (same shape and coordinates) as a bug.
+        if ads1.shape == ads2.shape and np.allclose(ads1, ads2, atol=1e-6):
+            pytest.fail("different seeds produced identical adatom placements")
 
     def test_too_few_top_atoms_raises(self):
         atoms = Atoms("H2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
@@ -505,6 +551,38 @@ class TestDepositAdatoms:
         result = deposit_adatoms(slab, "Sn", coverage_fraction=0.0)
         assert len(result.atoms) == n_before
         assert result.atoms.get_chemical_symbols() == syms_before
+
+    def test_adatoms_respect_minimum_separation(self):
+        # Plan item 10: adatoms must not be packed on top of each other.
+        from ase.geometry import get_distances
+
+        from metalsurfer.placement.geometry import _get_covalent_radius
+        from metalsurfer.placement.site_coords import _periodic_image_offsets
+
+        slab = SlabContainer(fcc111("Cu", size=(4, 4, 4), vacuum=8.0))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = deposit_adatoms(
+                slab,
+                "Sn",
+                coverage_fraction=0.5,
+                seed=0,
+                config=self._NO_RELAX_CFG,
+                results_dir=tmpdir,
+            )
+        n_sub = len(slab.atoms)
+        ad_pos = result.atoms.get_positions()[n_sub:]
+        assert len(ad_pos) >= 2
+        cell = result.atoms.get_cell()
+        pbc = result.atoms.get_pbc()
+        min_sep = float("inf")
+        for off in _periodic_image_offsets(
+            np.asarray(cell, dtype=float), np.asarray(pbc, dtype=bool), 10.0
+        ):
+            dmat = get_distances(ad_pos, ad_pos + off)[1]
+            iu = np.triu_indices_from(dmat, k=1)
+            if iu[0].size:
+                min_sep = min(min_sep, float(np.min(dmat[iu])))
+        assert min_sep >= 2.0 * float(_get_covalent_radius("Sn")) - 1e-6
 
     def test_accepts_plain_atoms_input(self):
         slab = self._layered_slab()

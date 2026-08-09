@@ -1,5 +1,6 @@
 """Slab construction (bulk + Miller), alloy substitution, adatoms, and ``SlabContainer``."""
 
+import copy
 import logging
 import math
 import os
@@ -23,7 +24,10 @@ from ..exceptions import (
     OptimizationError,
 )
 from ..io_results import _write_clean_xyz
+from ..placement._constants import _MEAN_COVALENT_RADIUS_FALLBACK
 from ..placement._material import MATERIAL_PBC, material_aware_pbc
+from ..placement.geometry import _get_covalent_radius
+from ..placement.site_coords import _periodic_image_offsets
 from ..placement.site_enumeration import get_hollow_sites_for_adatoms
 from .freeze import (
     compute_frozen_indices,
@@ -536,10 +540,16 @@ def _consider_variant(
     best_energy: float,
     best_atoms: Atoms | None,
     context: str,
+    keep_last_without_calculator: bool = False,
 ) -> tuple[float, Atoms | None]:
     """Update best variant when *candidate* is better (or first without calculator)."""
     if calculator is None:
-        return best_energy, (candidate.copy() if best_atoms is None else best_atoms)
+        # No energy ranking available. By default keep the first variant so the
+        # result is deterministic regardless of seed; ``deposit_adatoms`` opts into
+        # last-wins so its (seed-dependent) placement differs across runs.
+        if best_atoms is None or keep_last_without_calculator:
+            return best_energy, candidate.copy()
+        return best_energy, best_atoms
     try:
         candidate.calc = calculator
         energy = float(candidate.get_potential_energy())
@@ -618,6 +628,11 @@ def _relax_slab_structure(
     optimizer_map = {"lbfgs": LBFGS, "bfgs": BFGS, "fire": FIRE}
     opt_cls = optimizer_map[optimizer_name]
     relaxed = atoms.copy()
+    # Snapshot the caller's constraints so we can restore them on the relaxed
+    # copy afterwards. ASE's relaxations (esp. ``cell_only``) install their own
+    # constraints and the finally block would otherwise leave the structure
+    # unconstrained, which breaks downstream frozen-substrate drift checks.
+    caller_constraints = copy.deepcopy(atoms.constraints)
     relaxed.calc = calculator
 
     if mode == "ionic_only":
@@ -635,8 +650,9 @@ def _relax_slab_structure(
             f"{context} relaxation failed in mode={mode!r}: {exc}"
         ) from exc
     finally:
-        # Keep downstream workflow behaviour unchanged by stripping prep constraints.
-        relaxed.set_constraint()
+        # Restore the caller's constraints (replacing any installed by the
+        # relaxation mode) rather than leaving the structure unconstrained.
+        relaxed.set_constraint(*copy.deepcopy(caller_constraints))
 
     return relaxed
 
@@ -830,6 +846,7 @@ def deposit_adatoms(
     calculator=None,
     n_variants: int = 5,
     adsorption_height: float = 1.8,
+    min_adatom_separation: float | None = None,
     seed: int | None = None,
     results_dir: str = "results",
     config: AdsorptionConfig | None = None,
@@ -905,23 +922,60 @@ def deposit_adatoms(
         1, int(round(coverage_fraction * len(candidate_sites)))
     )  # >=1 guaranteed since coverage_fraction > 0
 
+    if min_adatom_separation is None:
+        sym_r = _get_covalent_radius(adatom_symbol)
+        sym_r = sym_r if sym_r is not None else _MEAN_COVALENT_RADIUS_FALLBACK
+        min_adatom_separation = 2.0 * float(sym_r)
+    min_adatom_separation = float(min_adatom_separation)
+
     rng = np.random.RandomState(seed)
     best_energy = float("inf")
     best_atoms = None
 
+    pbc = list(material_aware_pbc(config.material_type))
+    cell = np.asarray(base.get_cell(), dtype=float)
+    image_offsets = _periodic_image_offsets(
+        cell, np.asarray(pbc, dtype=bool), min_adatom_separation
+    )
+
     for v in range(n_variants):
-        chosen = rng.choice(len(candidate_sites), size=n_place, replace=False)
-        variant = base.copy()
-        ad_positions = []
-        for i in chosen:
-            site = candidate_sites[i]
+        # Greedily accept candidate hollow sites whose adatom position keeps at
+        # least ``min_adatom_separation`` from every already-accepted adatom
+        # (under MIC). Random ``rng.choice`` can pack adatoms 0.78 A apart.
+        accepted: list[np.ndarray] = []
+        order = rng.permutation(len(candidate_sites))
+        for i in order:
+            site = candidate_sites[int(i)]
             normal = np.asarray(site.normal, dtype=float)
             nrm = float(np.linalg.norm(normal))
             normal = normal / nrm if nrm > 1e-12 else np.array([0.0, 0.0, 1.0])
-            ad_positions.append(site.xyz + float(adsorption_height) * normal)
+            pos = site.xyz + float(adsorption_height) * normal
+            too_close = False
+            for acc in accepted:
+                if (
+                    np.min([np.linalg.norm(pos - (acc + off)) for off in image_offsets])
+                    < min_adatom_separation
+                ):
+                    too_close = True
+                    break
+            if too_close:
+                continue
+            accepted.append(pos)
+            if len(accepted) >= n_place:
+                break
+        if len(accepted) < n_place:
+            logger.warning(
+                "deposit_adatoms: achieved coverage %d/%d sites at min separation "
+                "%.2f A (requested %d); continuing with the achievable count",
+                len(accepted),
+                n_place,
+                min_adatom_separation,
+                n_place,
+            )
+        variant = base.copy()
         adatoms = Atoms(
-            symbols=[adatom_symbol] * len(ad_positions),
-            positions=ad_positions,
+            symbols=[adatom_symbol] * len(accepted),
+            positions=np.asarray(accepted, dtype=float),
         )
         adatoms.set_cell(variant.get_cell())
         adatoms.set_pbc(variant.get_pbc())
@@ -944,6 +998,7 @@ def deposit_adatoms(
             best_energy=best_energy,
             best_atoms=best_atoms,
             context=f"Adatom variant {v}",
+            keep_last_without_calculator=True,
         )
 
     if best_atoms is None:

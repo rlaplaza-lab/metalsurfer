@@ -186,6 +186,13 @@ _CONTACT_ATOM_VARIANCE_MAX: float = 0.5
 _MIN_DISTANCE_COVALENT_FALLBACK_SCALE: float = 1.0
 _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM: float = 2.0
 _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE: float = 1.0
+# Hard floor on the gap between a newly placed adsorbate and any pre-adsorbed
+# molecule during saturation. The covalent-sum scale (default 1.0) resolves to
+# ~0.94 A for water and lets two molecules sit bonded (~1.5 A H..H); enforce a
+# physically meaningful minimum so saturation cannot pack adsorbates on top of
+# each other. It stays below the typical adsorbate-ON-top height (~2.0 A) so a
+# single molecule on a bare slab is unaffected.
+_ADSORBATE_SEPARATION_MIN_HARD_FLOOR_ANGSTROM: float = 1.7
 
 # ---------------------------------------------------------------------------
 # Policy and generator grids

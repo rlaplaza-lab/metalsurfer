@@ -10,6 +10,7 @@ DEFAULT_SITE_EQUIVALENCE_TOLERANCE: float = 0.05
 DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE: float = 0.1
 DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD: float = 0.01
 MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM: float = 1.5
+MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM: float = 1.5
 MIN_CONTACT_RATIO_DEFAULT: float = 0.8
 # Absolute distance in Angstrom (NOT a ratio): the closest adsorbate-substrate
 # contact must be no further than this for a placement to count as "in contact".

@@ -33,6 +33,46 @@ def test_parse_campaign_rejects_unknown_substrate_key():
         )
 
 
+def test_parse_campaign_rejects_unknown_root_key():
+    with pytest.raises(ValueError, match="unknown keys"):
+        parse_campaign_dict(
+            {
+                "campaign": "saturation",
+                "surface_type": "bad",
+                "confgi": "oops",
+                "substrate": {"bulk_id": "mp-30"},
+                "molecules": [{"smiles": "C", "name": "methane"}],
+            }
+        )
+
+
+def test_parse_campaign_rejects_unknown_config_key():
+    with pytest.raises(ValueError, match="unknown key"):
+        parse_campaign_dict(
+            {
+                "campaign": "saturation",
+                "surface_type": "bad",
+                "substrate": {"bulk_id": "mp-30"},
+                "molecules": [{"smiles": "C", "name": "methane"}],
+                "config": {"num_placementz": 5},
+            }
+        )
+
+
+def test_parse_campaign_accepts_nested_bo_config():
+    doc = parse_campaign_dict(
+        {
+            "campaign": "saturation_bo",
+            "surface_type": "ok",
+            "substrate": {"bulk_id": "mp-30"},
+            "molecules": [{"smiles": "C", "name": "methane"}],
+            "config": {"bo": {"transfer": {"enabled": True}}},
+        }
+    )
+    assert doc.config.bo.transfer.enabled is True
+
+
+
 def test_run_campaign_dispatches_with_mocks(monkeypatch):
     doc = load_campaign_yaml(FIXTURES / "smoke_saturation.yaml")
     calls: dict[str, object] = {}
