@@ -150,11 +150,18 @@ class SymmetryAnalyzer:
     def _symop_to_cartesian_4x4(
         self, R_frac: np.ndarray, t_frac: np.ndarray
     ) -> np.ndarray:
-        """Column-vector convention: r_frac' = R @ r_frac + t; r_cart = L @ r_frac."""
-        L = self._lattice
-        Linv = np.linalg.inv(L)
-        R_cart = L @ R_frac @ Linv
-        t_cart = L @ t_frac.reshape(3)
+        """Cartesian 4x4 for the row-vector cell convention ``r_cart = r_frac @ L``.
+
+        The fractional op acts on rows as ``r_frac' = r_frac @ R.T + t`` (see
+        :meth:`_apply_frac_symop`), so in Cartesian space
+        ``r_cart' = r_cart @ (L^-1 R.T L) + t @ L``. The returned matrix acts on
+        *column* vectors, hence ``R_cart = L.T @ R @ inv(L.T)`` and
+        ``t_cart = L.T @ t``. Using ``L`` instead of ``L.T`` would yield
+        non-orthogonal "rotations" for non-orthogonal cells.
+        """
+        Lt = self._lattice.T
+        R_cart = Lt @ R_frac @ np.linalg.inv(Lt)
+        t_cart = Lt @ t_frac.reshape(3)
         T = np.eye(4)
         T[:3, :3] = R_cart
         T[:3, 3] = t_cart

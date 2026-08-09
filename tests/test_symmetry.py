@@ -540,6 +540,36 @@ def test_manual_graphene_spacegroup():
     assert info["n_symmetry_operations"] == 24
 
 
+def test_cartesian_symops_are_rigid_motions_for_nonorthogonal_cells():
+    """Cartesian 4x4 ops are proper rigid motions, incl. non-orthogonal cells."""
+    cases = [
+        fcc111("Pt", size=(2, 2, 3), a=3.92, vacuum=10.0),
+        bulk("Mg", "hcp", a=3.2, c=5.2),
+        _manual_graphene(),
+    ]
+    for atoms in cases:
+        for op in SymmetryAnalyzer(atoms).detect_symmetry_operations():
+            rot = op[:3, :3]
+            assert np.allclose(rot @ rot.T, np.eye(3), atol=1e-9)
+            assert np.isclose(abs(np.linalg.det(rot)), 1.0, atol=1e-9)
+            assert np.allclose(op[3], [0.0, 0.0, 0.0, 1.0], atol=1e-12)
+
+
+def test_cartesian_symops_reproduce_fractional_ops():
+    """``R_cart @ x + t_cart`` matches the fractional op mapped through the cell."""
+    slab = fcc111("Pt", size=(2, 2, 3), a=3.92, vacuum=10.0)
+    an = SymmetryAnalyzer(slab)
+    lattice = an.get_spglib_cell_tuple()[0]
+    frac = an.get_spglib_cell_tuple()[1]
+    cart = frac @ lattice
+
+    for rot_f, trans_f in an._frac_ops_from_dataset():
+        expected = (frac @ rot_f.T + trans_f) @ lattice
+        op = an._symop_to_cartesian_4x4(rot_f, trans_f)
+        got = cart @ op[:3, :3].T + op[:3, 3]
+        assert np.allclose(got, expected, atol=1e-9)
+
+
 def test_symmetry_module_imports_without_circular_import():
     """``metalsurfer.symmetry`` imports standalone (pytest masks the import cycle)."""
     proc = subprocess.run(
