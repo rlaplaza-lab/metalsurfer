@@ -222,6 +222,23 @@ def test_get_symmetry_aware_sites_nanoparticle_envelope():
     assert all(int(s.symmetry_multiplicity or 0) >= 1 for s in sites)
 
 
+def test_nanoparticle_injects_atop_sites():
+    """Regression guard: nanoparticles must yield atop sites (Phase 2.1 fix).
+
+    A misplaced ``assert slab_top_atom_indices is not None`` previously crashed
+    ``_inject_atop_sites`` for every nanoparticle, so no atop sites were
+    injected. This guards that the path now yields surface atop sites.
+    """
+    atoms = make_nanoparticle()  # Au₁₃ icosahedral
+    raw = get_unified_sites(
+        atoms, material_type="nanoparticle", top_layer_tolerance=2.0
+    )
+    assert raw
+    assert any(s.site_type == "atop" for s in raw), (
+        "nanoparticle should yield atop sites; injection path regressed"
+    )
+
+
 def test_cube_nanoparticle_symmetry_reduces_redundant_sites_deterministically():
     """Icosahedral Au₁₃ should collapse redundant sites consistently."""
     atoms = make_nanoparticle()  # Au₁₃ icosahedral

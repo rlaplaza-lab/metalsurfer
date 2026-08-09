@@ -41,7 +41,7 @@ jobs:
           mypy src/metalsurfer
 
   # -----------------------------------------------------------------------
-  # Unit tests (coverage gate) + dependency-behavior + integration
+  # Unit tests (coverage gate, >=85%) + dependency-behavior + integration
   # -----------------------------------------------------------------------
 
   # -----------------------------------------------------------------------
@@ -78,7 +78,7 @@ jobs:
             --tb=short -v
 
       - name: Enforce coverage gate
-        run: coverage report --fail-under=74
+        run: coverage report --fail-under=85
 
   # -----------------------------------------------------------------------
   # Dependency-behavior tests (minimal environment)

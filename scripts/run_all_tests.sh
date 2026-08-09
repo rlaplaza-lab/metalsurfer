@@ -60,7 +60,7 @@ _run_phase "1_fast_and_coverage" \
       --cov=src/metalsurfer \
       --cov-report=term-missing \
       --tb=short -v && \
-    '$PYTHON' -m coverage report --fail-under=74
+    '$PYTHON' -m coverage report --fail-under=85
   "
 
 _run_phase "2_dependency_behavior" \
