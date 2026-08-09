@@ -72,7 +72,6 @@ def test_parse_campaign_accepts_nested_bo_config():
     assert doc.config.bo.transfer.enabled is True
 
 
-
 def test_run_campaign_dispatches_with_mocks(monkeypatch):
     doc = load_campaign_yaml(FIXTURES / "smoke_saturation.yaml")
     calls: dict[str, object] = {}

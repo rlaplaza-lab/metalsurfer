@@ -188,11 +188,7 @@ def test_surface_prep_all_is_static_and_complete():
     import metalsurfer.surface_prep as surface_prep
 
     # The static __all__ must list exactly the names the module lazily exposes.
-    expected = {
-        name
-        for names in surface_prep._LAZY_MODULES.values()
-        for name in names
-    }
+    expected = {name for names in surface_prep._LAZY_MODULES.values() for name in names}
     assert set(surface_prep.__all__) == expected
     assert isinstance(surface_prep.__all__, list)
 
