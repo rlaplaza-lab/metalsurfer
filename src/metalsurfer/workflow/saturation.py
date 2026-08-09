@@ -311,7 +311,8 @@ def _screen_saturation_molecule(
         "skip_workload_autotune": skip_workload_autotune,
     }
     if process_fn is process_molecule_bayesian:
-        assert bo_state is not None
+        if bo_state is None:
+            raise ValueError("bo_state must be provided for Bayesian processing")
         outcome = process_fn(
             smiles,
             molecule_name,
@@ -656,7 +657,8 @@ def _run_multi_molecule_saturation(
         else:
             step_config = config
 
-        assert step_config.num_placements is not None
+        if step_config.num_placements is None:
+            raise ValueError("config.num_placements must be set for saturation")
 
         slab_for_sites_budget = _build_surface_reference_slab(slab.atoms, base_slab)
         step_complexities: dict[str, float] = {}

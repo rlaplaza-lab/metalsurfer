@@ -268,17 +268,25 @@ class SymmetryAnalyzer:
         orbits: list[list[int]],
         site_types: list[str] | None = None,
     ) -> None:
-        """Every pair in an orbit must be related by at least one symmetry operation."""
+        """Every member of an orbit must be related to its representative by a symmetry operation.
+
+        Verifying only representative→member (rather than every pair) catches the
+        same failure mode at O(k) instead of O(k²).
+        """
         for idxs in orbits:
-            for ii, i in enumerate(idxs):
-                for j in idxs[ii + 1 :]:
-                    if not self._site_pair_connected_by_ops(
-                        i, j, cart_pts, frac_ops, planar, site_types=site_types
-                    ):
-                        raise SymmetryAnalysisError(
-                            "site orbit failed verification: no symmetry operation "
-                            f"maps site {i} to site {j} within tolerance"
-                        )
+            if not idxs:
+                continue
+            rep = min(idxs)
+            for j in idxs:
+                if j == rep:
+                    continue
+                if not self._site_pair_connected_by_ops(
+                    rep, j, cart_pts, frac_ops, planar, site_types=site_types
+                ):
+                    raise SymmetryAnalysisError(
+                        "site orbit failed verification: no symmetry operation "
+                        f"maps site {rep} to site {j} within tolerance"
+                    )
 
     def find_equivalent_atoms(self) -> list[list[int]]:
         """Wyckoff-equivalent atom groups from spglib."""

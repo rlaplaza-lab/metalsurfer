@@ -225,14 +225,14 @@ def test_device_resolution_fallback_for_ci():
     """
     from unittest.mock import patch
 
-    from metalsurfer.optimization import _resolve_device
+    from metalsurfer.optimization import _deps, _resolve_device
 
     assert _resolve_device("cpu") == "cpu"
     assert _resolve_device("cuda:0") in ("cuda:0", "cpu")  # cpu when no GPU
     # When cuda requested but unavailable, should return cpu
-    with patch("metalsurfer.optimization.torch") as mock_torch:
+    with patch.object(_deps, "torch", create=True) as mock_torch:
         mock_torch.cuda.is_available.return_value = False
         assert _resolve_device("cuda") == "cpu"
-    with patch("metalsurfer.optimization.torch") as mock_torch:
+    with patch.object(_deps, "torch", create=True) as mock_torch:
         mock_torch.cuda.is_available.return_value = True
         assert _resolve_device("cuda") == "cuda"

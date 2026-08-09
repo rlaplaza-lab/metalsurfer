@@ -114,7 +114,10 @@ def _delaunay_classify_inputs(
         "auto",
     ):
         return None
-    assert slab_top_atom_indices is not None
+    if slab_top_atom_indices is None:
+        raise ValueError(
+            "slab_top_atom_indices must be set for Delaunay classification"
+        )
     if len(slab_top_atom_indices) < 3:
         return None
     top_positions_2d = _project_to_slab_plane(positions[slab_top_atom_indices], cell)
@@ -184,7 +187,10 @@ def _inject_atop_sites(
     atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
 
     if material_type == "slab":
-        assert slab_top_atom_indices is not None
+        if slab_top_atom_indices is None:
+            raise ValueError(
+                "slab_top_atom_indices must be set for slab atop injection"
+            )
         top_atom_indices = slab_top_atom_indices
         atom_normals: np.ndarray | None = None
     else:
@@ -209,7 +215,10 @@ def _inject_atop_sites(
             if np.any(pbc):
                 candidate = _wrap_cartesian(candidate.reshape(1, 3), cell, pbc)[0]
         else:
-            assert atom_normals is not None
+            if atom_normals is None:
+                raise ValueError(
+                    "atom_normals must be set for nanoparticle atop injection"
+                )
             candidate = atom_pos + atop_height * atom_normals[int(ai)]
 
         d_nn = float(local_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0])

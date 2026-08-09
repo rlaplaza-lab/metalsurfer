@@ -805,7 +805,8 @@ def check_adsorbate_separation(
                 "cell with non-zero volume must be provided when pbc is requested; "
                 "pass slab/cluster/porous cell explicitly"
             )
-        assert pbc is not None  # guaranteed by `pbc_requested`
+        if pbc is None:
+            raise ValueError("pbc must be set when pbc is requested")
         cell_arr = np.asarray(cell, dtype=float)
         pbc_list = list(pbc)
     elif cell is not None and _cell_has_volume(cell) and pbc is not None:

@@ -273,7 +273,8 @@ def _generate_slab_topology_sites(
         pbc=pbc,
         top_positions_3d=top_positions,
     )
-    assert exp3d is not None
+    if exp3d is None:
+        raise ValueError("3D image expansion failed for top-layer sites")
     tri: Delaunay | None = None
     if len(exp2d) >= 3:
         try:

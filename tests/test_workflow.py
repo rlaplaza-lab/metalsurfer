@@ -160,6 +160,12 @@ class TestValidateAdsorption:
 
     def test_desorbed_fails(self):
         slab = make_slab()
+        # Realistic z-vacuum: the desorption check now uses the calculator's 3D
+        # PBC, so a lifted molecule must be genuinely far along c to be detected
+        # as desorbed rather than MIC-wrapped back near the surface.
+        _cell = slab.get_cell()
+        _cell[2, 2] = 60.0
+        slab.set_cell(_cell)
         combined = place_molecule_on_slab(slab, make_water(), z_offset=20.0)
         config = AdsorptionConfig(binding_distance_threshold=4.0)
         ok, reason, _ = _validate_adsorption(combined, slab, config)

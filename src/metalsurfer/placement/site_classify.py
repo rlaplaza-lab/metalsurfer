@@ -193,7 +193,8 @@ def _classify_delaunay_vertex(
     local_tree: KDTree,
 ) -> tuple[str, tuple[int, ...]]:
     delaunay = ctx.delaunay
-    assert delaunay is not None
+    if delaunay is None:
+        raise ValueError("ctx.delaunay must be set for Delaunay classification")
     tri = delaunay.tri
     top_positions_2d = delaunay.top_positions_2d
     top_atom_indices = delaunay.top_atom_indices
@@ -258,7 +259,10 @@ def _classify_vertices(
                 ctx, i, vertex, positions, local_tree
             )
         else:
-            assert ctx.class_dists is not None and ctx.class_idx is not None
+            if ctx.class_dists is None or ctx.class_idx is None:
+                raise ValueError(
+                    "ctx.class_dists and ctx.class_idx must be set for Voronoi classification"
+                )
             site_type, nearest_idx = _classify_voronoi_site_from_neighbors(
                 ctx.class_dists[i],
                 ctx.class_idx[i],

@@ -263,6 +263,40 @@ def test_save_saturation_results_empty_list_returns_early(workdir):
     assert not (workdir / "results_empty_test" / "saturation_summary.csv").exists()
 
 
+def test_save_saturation_results_warns_on_multiple_single_results(workdir, caplog):
+    """Multiple single-molecule results in the list trigger a truncation warning."""
+    slab = make_slab()
+    combined = place_molecule_on_slab(slab, make_water())
+    best = make_screening_result(
+        molecule="water",
+        placement_id=0,
+        energy_adsorption=-1.0,
+        atoms=combined,
+        slab_size=len(slab),
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    step = SaturationStepResult(
+        step=1,
+        molecule="water",
+        n_molecules_on_slab=0,
+        best_result=best,
+        all_results=[best],
+        bo_transfer_enabled=False,
+        transfer=BOTransferInfo(),
+    )
+    sr = SaturationRunResult(
+        molecule="water",
+        steps=[step],
+        n_molecules_at_saturation=1,
+        final_slab_atoms=combined.copy(),
+    )
+    setup_directories(["multi_single_test"])
+    with caplog.at_level(logging.WARNING, logger="metalsurfer.io_results"):
+        save_saturation_results([sr, sr], surface_type="multi_single_test")
+    assert any("2 single-molecule results" in r.message for r in caplog.records)
+
+
 def test_save_saturation_results_writes_csv_and_xyz(workdir):
     """save_saturation_results writes saturation_summary, details, and XYZ."""
     slab = make_slab()

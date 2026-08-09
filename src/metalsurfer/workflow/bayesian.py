@@ -143,10 +143,13 @@ def process_molecule_bayesian(
     E_slab = ctx.E_slab
     E_mol = ctx.E_mol
 
-    assert config.bo.initial_random is not None
-    assert config.bo.batch_size is not None
+    if config.bo.initial_random is None:
+        raise ValueError("config.bo.initial_random must be set for Bayesian screening")
+    if config.bo.batch_size is None:
+        raise ValueError("config.bo.batch_size must be set for Bayesian screening")
     num_placements = config.num_placements
-    assert num_placements is not None
+    if num_placements is None:
+        raise ValueError("config.num_placements must be set for Bayesian screening")
     bo_eval_budget = resolved_bo_eval_budget(config)
 
     max_enumerated_specs = estimate_placement_spec_capacity(
@@ -418,7 +421,10 @@ def process_molecule_bayesian(
                 and len(X_current) >= 3
             )
             if can_try_refit:
-                assert transfer_memory is not None
+                if transfer_memory is None:
+                    raise ValueError(
+                        "transfer_memory is required for cumulative_refit transfer"
+                    )
                 X_prior = pd.DataFrame(transfer_memory.observed_X_rows)
                 y_prior = np.asarray(transfer_memory.observed_y, dtype=float)
                 X_prior = _align_to_columns(X_prior, X_current)
@@ -440,7 +446,10 @@ def process_molecule_bayesian(
                 )
                 transfer_used_rounds += 1
             elif can_try_weighted:
-                assert transfer_memory is not None
+                if transfer_memory is None:
+                    raise ValueError(
+                        "transfer_memory is required for weighted transfer"
+                    )
                 prior_placement = None
                 if (
                     bo_prior_step_memory is not None

@@ -170,8 +170,9 @@ class TestRemoveDuplicateConformers:
         c1 = Atoms(
             "OH2", positions=[[0.0, 0.0, 0.0], [0.96, 0.0, 0.24], [-0.24, 0.93, 0.24]]
         )
+        # Stretched water: clearly different O-H / H-H distances from c1.
         c2 = Atoms(
-            "OH2", positions=[[0.0, 0.0, 0.0], [0.96, 0.0, -0.50], [-0.24, -1.2, 0.24]]
+            "OH2", positions=[[0.0, 0.0, 0.0], [1.8, 0.0, 0.0], [-1.8, 0.0, 0.0]]
         )
         result_c, _ = remove_duplicate_conformers(
             [c1, c2], [0.0, 0.0], distance_threshold=0.5, energy_threshold=0.1
@@ -202,6 +203,40 @@ class TestRemoveDuplicateConformers:
             [c1, c2, c3], [e1, e2, e3], distance_threshold=0.5, energy_threshold=0.01
         )
         assert result_e == sorted(result_e)
+
+    def test_rotated_identical_conformer_deduplicated(self):
+        """A rotated copy is orientation-equivalent and must be removed (QC #4)."""
+        c1, e1 = self._make_conformer(0.0, 0.0)
+        pos = c1.get_positions()
+        # Rotate 90 degrees about the x-axis.
+        rot = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
+        c2 = c1.copy()
+        c2.set_positions(pos @ rot.T)
+        # Sanity: the raw COM-centred Euclidean RMSD is large (pre-fix bug).
+        pc = pos - pos.mean(axis=0)
+        qc = c2.get_positions() - c2.get_positions().mean(axis=0)
+        raw_rmsd = float(np.sqrt(np.mean(np.sum((pc - qc) ** 2, axis=1))))
+        assert raw_rmsd > 0.5
+        result_c, _ = remove_duplicate_conformers(
+            [c1, c2], [e1, 0.0], distance_threshold=0.5, energy_threshold=0.1
+        )
+        assert len(result_c) == 1
+
+    def test_genuinely_different_conformers_kept(self):
+        """Two non-equivalent conformers must both survive dedup (QC #4)."""
+        c1 = Atoms(
+            "OH2",
+            positions=[[0.0, 0.0, 0.0], [0.96, 0.0, 0.24], [-0.24, 0.93, 0.24]],
+        )
+        # Stretched water: clearly different O-H / H-H distances from c1.
+        c2 = Atoms(
+            "OH2",
+            positions=[[0.0, 0.0, 0.0], [1.8, 0.0, 0.0], [-1.8, 0.0, 0.0]],
+        )
+        result_c, _ = remove_duplicate_conformers(
+            [c1, c2], [0.0, 0.0], distance_threshold=0.5, energy_threshold=0.1
+        )
+        assert len(result_c) == 2
 
 
 # ---------------------------------------------------------------------------

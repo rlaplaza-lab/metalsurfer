@@ -297,7 +297,8 @@ def fill_materialized_placements(
     sites that repeatedly clash. Early-exits on fill or empty enumeration.
     """
     if n_target is None:
-        assert config.num_placements is not None
+        if config.num_placements is None:
+            raise ValueError("config.num_placements must be set")
         n_target = config.num_placements
 
     # R1: clamp the success goal to the enumerable spec capacity so the retry

@@ -39,7 +39,7 @@ class BOTransferConfig:
     similarity_lengthscale: float = 4.0
     min_similarity: float = 0.05
     trust_patience: int = 2
-    mae_tolerance: float = 0.0
+    mae_tolerance: float = 0.05
     exploration_fraction: float = 0.2
     proximity_lengthscale: float = 1.0
     proximity_floor: float = 0.0

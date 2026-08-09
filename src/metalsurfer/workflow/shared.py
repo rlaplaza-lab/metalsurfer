@@ -34,7 +34,7 @@ from ..optimization import (
     optimize_adsorbate_slab_batched,
     setup_single_model,
 )
-from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
+from ..placement._material import calculator_pbc_for_atoms
 from ..placement.generators import (
     enumerate_placement_specs,
     generate_placement_from_spec_with_reason,
@@ -227,7 +227,7 @@ def _validate_adsorption(
         slab_positions,
         cell,
         use_pbc=True,
-        pbc=material_aware_pbc(config.material_type),
+        pbc=calculator_pbc_for_atoms(atoms),
     )
     if config.skip_desorption_check:
         warn_once(
@@ -848,7 +848,8 @@ def _prepare_molecule_screening(
             frozen_indices=frozen_indices,
             bo_enabled=bo_enabled,
         )
-    assert resolved.num_placements is not None
+    if resolved.num_placements is None:
+        raise ValueError("config.num_placements must be set")
 
     return MoleculeScreeningContext(
         slab=slab,

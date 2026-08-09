@@ -5,7 +5,10 @@ from typing import Any
 
 
 def is_missing(value: Any) -> bool:
-    return value is None or str(value) == "nan"
+    if value is None:
+        return True
+    text = str(value).strip()
+    return text in {"", "nan", "none", "None"}
 
 
 def with_default(value: Any, default: Any) -> Any:

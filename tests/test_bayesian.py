@@ -579,6 +579,45 @@ class TestTransferSmoke:
         assert result.surrogate is not None
         assert result.transfer_weight_share > 0.0
 
+    def test_build_transfer_surrogate_warns_on_schema_mismatch(self, caplog):
+        import logging
+
+        X, y = _make_synthetic_training_data(20)
+        X_current = X.iloc[:8].copy()
+        y_current = y.iloc[:8].to_numpy()
+        # Prior has an extra column and is missing one relative to current.
+        X_prev = X.iloc[:10].copy()
+        X_prev = X_prev.drop(columns=[X_prev.columns[0]])
+        X_prev["extra_prior_feature"] = np.arange(len(X_prev), dtype=float)
+
+        # Capture directly on the module logger so the assertion is robust to
+        # logger-propagation / caplog-handler quirks across environments.
+        _module_logger = logging.getLogger("metalsurfer.ml.bayesian")
+        _captured: list[logging.LogRecord] = []
+
+        class _CaptureHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                _captured.append(record)
+
+        _handler = _CaptureHandler()
+        _module_logger.addHandler(_handler)
+        try:
+            result = build_transfer_surrogate(
+                X_current,
+                y_current,
+                X_prev,
+                y.iloc[:10].to_numpy(),
+                weight_cap=0.35,
+                similarity_lengthscale=1.0,
+                min_similarity=0.0,
+                mae_tolerance=1.0,
+            )
+        finally:
+            _module_logger.removeHandler(_handler)
+        assert result.surrogate is not None
+        assert result.transfer_weight_share > 0.0
+        assert any("prior feature columns" in r.message for r in _captured)
+
     def test_build_transfer_surrogate_rejects_gaussian_process(self):
         X, y = _make_synthetic_training_data(20)
         with pytest.raises(ValueError, match="transfer-capable"):
@@ -634,6 +673,61 @@ class TestTransferSmoke:
         near_w = prior_proximity_weights(near, X.iloc[[0]], lengthscale=0.02, floor=0.0)
         far_w = prior_proximity_weights(far, X.iloc[:1], lengthscale=10.0, floor=0.0)
         assert near_w[0] < far_w[0]
+
+
+class TestTransferTolerance:
+    """QC #8 — ``mae_tolerance`` gating (default widened 0.0 -> 0.05 eV).
+
+    A tiny positive MAE delta must not accrue a "bad round" once the tolerance
+    covers it, but the same delta still increments under the old 0.0 tolerance.
+    """
+
+    def _slow_prior_data(self):
+        rng = np.random.default_rng(0)
+        n = 40
+        x = np.linspace(0.0, 1.0, n)
+        y_current = x + 0.01 * rng.standard_normal(n)
+        # Slightly degraded prior: small noise + a gentle perturbation that makes
+        # the transferred model marginally worse than the baseline.
+        y_prior = x + 0.02 * rng.standard_normal(n) + 0.03 * np.sin(5.0 * x)
+        X_current = pd.DataFrame({"f": x})
+        X_prior = pd.DataFrame({"f": x})
+        return X_current, y_current, X_prior, y_prior
+
+    def test_config_default_tolerance_is_0_05(self):
+        assert AdsorptionConfig().bo.transfer.mae_tolerance == 0.05
+
+    def test_tiny_positive_delta_tolerated_by_widened_tolerance(self):
+        Xc, yc, Xp, yp = self._slow_prior_data()
+        strict = build_transfer_surrogate(
+            Xc, yc, Xp, yp, mae_tolerance=0.0, random_state=42
+        )
+        tolerant = build_transfer_surrogate(
+            Xc, yc, Xp, yp, mae_tolerance=0.05, random_state=42
+        )
+        # The prior genuinely makes the transferred model a touch worse.
+        assert strict.transfer_mae_delta > 0.0
+        # Old strict tolerance (0.0) counts any positive delta as a bad round.
+        assert strict.transfer_bad_rounds == 1
+        # Widened tolerance (0.05 eV) absorbs this tiny delta -> no bad round.
+        assert tolerant.transfer_mae_delta < 0.05
+        assert tolerant.transfer_bad_rounds == 0
+        assert tolerant.transfer_disabled is False
+
+    def test_large_delta_still_increments_under_widened_tolerance(self):
+        rng = np.random.default_rng(0)
+        n = 40
+        x = np.linspace(0.0, 1.0, n)
+        y_current = x + 0.01 * rng.standard_normal(n)
+        # Opposite trend: transfer clearly degrades the model.
+        y_prior = (1.0 - x) + 0.05 * rng.standard_normal(n)
+        Xc = pd.DataFrame({"f": x})
+        Xp = pd.DataFrame({"f": x})
+        result = build_transfer_surrogate(
+            Xc, y_current, Xp, y_prior, mae_tolerance=0.05, random_state=42
+        )
+        assert result.transfer_mae_delta > 0.05
+        assert result.transfer_bad_rounds == 1
 
 
 # ---------------------------------------------------------------------------

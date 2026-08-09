@@ -513,7 +513,16 @@ def build_transfer_surrogate(
         else observed_X_prev.copy()
     )
     y_prev = np.asarray(observed_y_prev, dtype=float)
+    _X_prev_raw_columns = set(X_prev.columns)
     X_prev = _align_to_columns(X_prev, X_current)
+    _X_current_columns = set(X_current.columns)
+    if _X_prev_raw_columns != _X_current_columns:
+        logger.warning(
+            "transfer surrogate: prior feature columns {%s} differ from current {%s}; "
+            "missing columns zero-padded",
+            ", ".join(sorted(_X_prev_raw_columns - _X_current_columns)),
+            ", ".join(sorted(_X_current_columns - _X_prev_raw_columns)),
+        )
     prox_lengthscale = (
         float(similarity_lengthscale)
         if proximity_lengthscale is None
