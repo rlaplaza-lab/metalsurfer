@@ -566,6 +566,12 @@ def save_saturation_results(
         return
 
     single_results = cast(list[SaturationRunResult], list(saturation_results))
+    if len(single_results) > 1:
+        logger.warning(
+            "save_saturation_results received %d single-molecule results; "
+            "all entries will be saved (no per-molecule truncation)",
+            len(single_results),
+        )
     write_vasp = config.write_vasp_inputs
     results_dir, xyz_dir, vasp_base = _saturation_results_dirs(
         surface_type, write_vasp=write_vasp
