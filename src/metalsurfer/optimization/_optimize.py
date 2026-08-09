@@ -17,11 +17,12 @@ from ..exceptions import DependencyMissingError
 from ..surface_prep.freeze import frozen_indices_from_constraints
 from . import _deps
 from ._cache import (
-    _AUTOBATCHER_CACHE,
-    _PARALLEL_CAPACITY_CACHE,
     _get_inflight_autobatcher,
     _maybe_clear_cuda_cache,
+    capacity_cache_get,
+    capacity_cache_set,
     clear_autobatcher_cache,
+    pop_autobatcher,
 )
 from ._model import TorchSimCalculator, setup_torchsim_model
 from ._validation import (
@@ -81,8 +82,9 @@ def estimate_parallel_relaxation_capacity(
     """
     max_n_atoms = len(representative_atoms)
     cache_key = _parallel_capacity_cache_key(ts_model, max_n_atoms, config)
-    if cache_key in _PARALLEL_CAPACITY_CACHE:
-        return _PARALLEL_CAPACITY_CACHE[cache_key]
+    cached_capacity = capacity_cache_get(cache_key)
+    if cached_capacity is not None:
+        return cached_capacity
 
     fallback = 1
     uses_explicit_scaler = config.autobatcher_max_memory_scaler is not None
@@ -97,7 +99,7 @@ def estimate_parallel_relaxation_capacity(
             "TorchSim unavailable; using parallel relaxation capacity=%d",
             fallback,
         )
-        _PARALLEL_CAPACITY_CACHE[cache_key] = fallback
+        capacity_cache_set(cache_key, fallback)
         return fallback
 
     try:
@@ -139,7 +141,7 @@ def estimate_parallel_relaxation_capacity(
             )
             n_systems = max(1, int(probed * 0.8 * padding))
 
-        _PARALLEL_CAPACITY_CACHE[cache_key] = n_systems
+        capacity_cache_set(cache_key, n_systems)
         logger.info(
             "Probed parallel relaxation capacity=%d (max_n_atoms=%d, padding=%.2f)",
             n_systems,
@@ -153,7 +155,7 @@ def estimate_parallel_relaxation_capacity(
             exc,
             fallback,
         )
-        _PARALLEL_CAPACITY_CACHE[cache_key] = fallback
+        capacity_cache_set(cache_key, fallback)
         return fallback
 
 
@@ -309,6 +311,16 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
     (:func:`frozen_indices_from_constraints`). When *base_slab_for_frozen* is
     provided (e.g. for sequential saturation or adatom workflows), it supplies
     the constraint-bearing substrate reference instead of *slab*.
+
+    Ordering guarantee: with torch-sim-atomistic 0.5.2, ``ts.optimize`` ends
+    with ``autobatcher.restore_original_order(...)``, which pairs completed
+    states with their original input indices and raises on any count mismatch.
+    The returned list is therefore in the original input order and has the same
+    length as *combined_atoms_list*, which is what lets callers (e.g.
+    :func:`metalsurfer.workflow.shared._optimize_and_evaluate_placements`) zip
+    the results positionally against their placement descriptors. A violation
+    of that invariant raises :class:`RuntimeError` rather than silently
+    returning misaligned or all-``None`` results.
     """
     if config is None:
         config = AdsorptionConfig()
@@ -435,7 +447,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
                     "dropping reused cache entry and retrying with fresh estimate",
                     max_n_atoms,
                 )
-                _AUTOBATCHER_CACHE.pop(cache_key, None)
+                pop_autobatcher(cache_key)
                 _maybe_clear_cuda_cache(ts_model)
                 ab, _, _ = _get_inflight_autobatcher(
                     ts_model,
@@ -455,18 +467,20 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         n_input = len(combined_atoms_list)
         n_returned = len(result)
         if n_returned != n_input:
-            # TorchSim silently dropped one or more systems (partial failure).
-            # We cannot safely map returned atoms back to the input order, so
-            # fail every placement rather than risk misattributing energies to
-            # the wrong descriptor (which would corrupt downstream results and
-            # also trip the `zip(..., strict=True)` in the workflow layer).
-            logger.error(
-                "Autobatcher returned %d systems but %d were submitted; "
-                "treating all as failed to avoid misalignment",
-                n_returned,
-                n_input,
+            # torch-sim 0.5.2 guarantees count-preserving, original-order output
+            # (``InFlightAutoBatcher.restore_original_order`` itself raises on a
+            # count mismatch, and ``max_iterations`` force-converges stragglers),
+            # so this branch is unreachable in practice. If it ever fires the
+            # invariant is broken: results are mapped to inputs positionally and
+            # the returned state carries no stable per-system id to recover a
+            # permutation from, so continuing would misattribute energies to the
+            # wrong descriptor. Fail loudly instead, matching the ``batch_static``
+            # guard above.
+            raise RuntimeError(
+                "Autobatcher returned mismatched batch size in ts.optimize: "
+                f"expected {n_input}, got {n_returned}. Results are mapped to "
+                "inputs positionally and cannot be realigned."
             )
-            return [None] * n_input
         for i, atoms in enumerate(result):
             calc = TorchSimCalculator(ts_model)
             if energies is not None and i < len(energies):

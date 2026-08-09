@@ -85,7 +85,9 @@ def calculate_reference_energies(
                 )
             logger.error("Failed to optimise any conformers for %s", mol_name)
 
-    clear_autobatcher_cache()
+    # Model/substrate boundary: the reference stage is done, so drop the probed
+    # capacity estimates too rather than carrying them into later stages.
+    clear_autobatcher_cache(clear_capacity=True)
     return ReferenceEnergies(
         slab_energy=slab_energy,
         molecule_energies=molecule_energies,

@@ -49,7 +49,7 @@ def _clear_cuda_for_gpu_test() -> None:
     try:
         from metalsurfer.optimization import clear_autobatcher_cache
 
-        clear_autobatcher_cache()
+        clear_autobatcher_cache(clear_capacity=True)
     except (ImportError, RuntimeError):
         pass
 

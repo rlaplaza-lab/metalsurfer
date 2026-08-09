@@ -249,7 +249,10 @@ def test_parallel_capacity_cache_key_deterministic():
 # -- clear_autobatcher_cache ------------------------------------------------
 
 
-def test_clear_autobatcher_cache_full(monkeypatch: pytest.MonkeyPatch):
+def test_clear_autobatcher_cache_full_preserves_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Default clear evicts autobatchers (GPU memory) but keeps probed capacities."""
     _cache._AUTOBATCHER_CACHE.clear()
     _cache._PARALLEL_CAPACITY_CACHE.clear()
     fake = object()
@@ -260,22 +263,104 @@ def test_clear_autobatcher_cache_full(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(_deps, "torch", torch_stub)
     _cache.clear_autobatcher_cache()
     assert _cache._AUTOBATCHER_CACHE == {}
+    assert _cache._PARALLEL_CAPACITY_CACHE == {("k",): 1}
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
+
+
+def test_clear_autobatcher_cache_clear_capacity_wipes_both(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _cache._AUTOBATCHER_CACHE.clear()
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
+    _cache._AUTOBATCHER_CACHE[("k",)] = object()
+    _cache._PARALLEL_CAPACITY_CACHE[("k",)] = 1
+    torch_stub = MagicMock()
+    torch_stub.cuda.is_available.return_value = False
+    monkeypatch.setattr(_deps, "torch", torch_stub)
+    _cache.clear_autobatcher_cache(clear_capacity=True)
+    assert _cache._AUTOBATCHER_CACHE == {}
     assert _cache._PARALLEL_CAPACITY_CACHE == {}
 
 
 def test_clear_autobatcher_cache_threshold_eviction(monkeypatch: pytest.MonkeyPatch):
     _cache._AUTOBATCHER_CACHE.clear()
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
     model = object()
     small = (id(model), "cpu", "n_atoms", 0.5, 1000, None, 100_000)
     large = (id(model), "cpu", "n_atoms", 0.5, 50_000, None, 100_000)
     _cache._AUTOBATCHER_CACHE[small] = object()
     _cache._AUTOBATCHER_CACHE[large] = object()
+    _cache._PARALLEL_CAPACITY_CACHE[small] = 7
     torch_stub = MagicMock()
     torch_stub.cuda.is_available.return_value = False
     monkeypatch.setattr(_deps, "torch", torch_stub)
     _cache.clear_autobatcher_cache(max_n_atoms_threshold=10_000)
     assert small not in _cache._AUTOBATCHER_CACHE
     assert large in _cache._AUTOBATCHER_CACHE
+    # threshold eviction never touches the capacity cache
+    assert dict(_cache._PARALLEL_CAPACITY_CACHE) == {small: 7}
+    _cache._AUTOBATCHER_CACHE.clear()
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
+
+
+def test_capacity_cache_helpers_round_trip():
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
+    key = ("model", "cpu", 100)
+    assert _cache.capacity_cache_get(key) is None
+    _cache.capacity_cache_set(key, 12)
+    assert _cache.capacity_cache_get(key) == 12
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
+
+
+def test_pop_autobatcher_returns_and_removes_entry():
+    _cache._AUTOBATCHER_CACHE.clear()
+    key = ("k",)
+    sentinel = object()
+    _cache._AUTOBATCHER_CACHE[key] = sentinel
+    assert _cache.pop_autobatcher(key) is sentinel
+    assert key not in _cache._AUTOBATCHER_CACHE
+    assert _cache.pop_autobatcher(key) is None
+
+
+def test_cache_helpers_are_thread_safe(
+    monkeypatch: pytest.MonkeyPatch, stub_autobatcher
+):
+    """Concurrent get/clear must not raise and must leave a consistent cache."""
+    import threading
+
+    torch_stub = MagicMock()
+    torch_stub.cuda.is_available.return_value = False
+    monkeypatch.setattr(_deps, "torch", torch_stub)
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
+
+    models = [type("MockModel", (), {"device": "cpu"})() for _ in range(4)]
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(4)
+
+    def worker(idx: int) -> None:
+        try:
+            barrier.wait(timeout=5)
+            for i in range(50):
+                _cache._get_inflight_autobatcher(models[idx], 100 + i)
+                _cache.capacity_cache_set((idx, i), i)
+                _cache.capacity_cache_get((idx, i))
+                if i % 5 == 0:
+                    _cache.clear_autobatcher_cache()
+        except BaseException as exc:  # pragma: no cover - only on a real failure
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not any(t.is_alive() for t in threads)
+    assert errors == []
+    # capacity survived every default clear
+    assert len(_cache._PARALLEL_CAPACITY_CACHE) == 4 * 50
+    assert all(isinstance(v, object) for v in _cache._AUTOBATCHER_CACHE.values())
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
 
 
 def test_clear_autobatcher_cache_runs_cuda_path(monkeypatch: pytest.MonkeyPatch):
@@ -471,6 +556,57 @@ def test_optimize_slab_raises_without_torchsim(monkeypatch: pytest.MonkeyPatch):
     slab = _make_atoms_with_cell()
     with pytest.raises(DependencyMissingError):
         _optimize.optimize_adsorbate_slab_batched([slab], slab, ts_model=MagicMock())
+
+
+def test_optimize_slab_raises_on_batch_size_mismatch(monkeypatch: pytest.MonkeyPatch):
+    """A short batch must raise, not silently return all-None placements.
+
+    torch-sim 0.5.2 guarantees count-preserving, original-order output, so this
+    is only reachable with a broken/faked autobatcher -- but silently nulling
+    every placement would hide real data loss.
+    """
+
+    class _FakeBatch:
+        """Returns fewer systems than were submitted."""
+
+        energy = None
+        forces = None
+
+        def to_atoms(self):
+            return [_make_atoms_with_cell()]
+
+    class _FakeTs:
+        Optimizer = MagicMock()
+
+        @staticmethod
+        def generate_force_convergence_fn(force_tol, include_cell_forces):
+            return object()
+
+        @staticmethod
+        def optimize(**kwargs):
+            return _FakeBatch()
+
+    monkeypatch.setattr(_deps, "ts", _FakeTs())
+    monkeypatch.setattr(_deps, "ts_constraints", object())
+    monkeypatch.setattr(_deps, "InFlightAutoBatcher", lambda *a, **k: object())
+    monkeypatch.setattr(_deps, "torch", None)
+    monkeypatch.setattr(
+        _optimize,
+        "_make_state_with_frozen_constraint",
+        lambda *args, **kwargs: object(),
+    )
+    _cache._AUTOBATCHER_CACHE.clear()
+
+    slab = _make_atoms_with_cell()
+    combined = [slab.copy(), slab.copy(), slab.copy()]
+    with pytest.raises(RuntimeError, match=r"expected 3, got 1"):
+        _optimize.optimize_adsorbate_slab_batched(
+            combined,
+            slab,
+            ts_model=type("MockModel", (), {"device": "cpu"})(),
+            config=AdsorptionConfig(device="cpu"),
+        )
+    _cache._AUTOBATCHER_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------
