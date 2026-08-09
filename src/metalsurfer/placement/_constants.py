@@ -26,6 +26,7 @@ _MIN_CONTACT_RATIO_DEFAULT = _numeric_defaults.MIN_CONTACT_RATIO_DEFAULT
 _MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM = (
     _numeric_defaults.MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
 )
+_SURFACE_NORMAL_FALLBACK_NORM_EPS = _numeric_defaults.SURFACE_NORMAL_FALLBACK_NORM_EPS
 
 
 # Compute mean covalent radius of common adsorbate elements from ASE data.
@@ -53,7 +54,6 @@ def _compute_mean_adsorbate_covalent_radius() -> float:
 # Minimum separation (Å) used to deduplicate Voronoi vertices as the same site.
 _VORONOI_DEDUP_TOLERANCE: float = 0.1
 _VORONOI_FRACTIONAL_CELL_MARGIN: float = 0.01
-_SURFACE_NORMAL_FALLBACK_NORM_EPS: float = 1e-8
 _DISTANCE_ZERO_EPS: float = 1e-12
 _DISTANCE_RATIO_FLOOR_EPS: float = 1e-8
 

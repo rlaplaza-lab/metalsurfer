@@ -26,3 +26,7 @@ MIN_CONTACT_RATIO_DEFAULT: float = 0.8
 CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM: float = 3.0
 CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM: float = 2.5
 MIN_CALCULATOR_CELL_C_ANG: float = 18.0
+# Degeneracy guard for cell-frame geometry: below this norm the a x b cross
+# product (or an in-plane basis vector) is treated as degenerate and a
+# Cartesian fallback axis is used instead.
+SURFACE_NORMAL_FALLBACK_NORM_EPS: float = 1e-8

@@ -580,6 +580,36 @@ def test_symmetry_module_imports_without_circular_import():
     assert proc.returncode == 0, proc.stderr
 
 
+def test_geom_pbc_is_the_single_source_of_cell_frame_helpers():
+    """``site_coords`` re-exports ``_geom_pbc`` objects, not private copies."""
+    from metalsurfer import _geom_pbc
+    from metalsurfer.placement import site_coords
+
+    assert site_coords._slab_normal is _geom_pbc.slab_normal
+    assert site_coords._cart_to_frac is _geom_pbc.cart_to_frac
+    assert site_coords._wrap_cartesian is _geom_pbc.wrap_cartesian
+    assert (
+        site_coords._minimum_image_fractional_delta
+        is _geom_pbc.minimum_image_fractional_delta
+    )
+
+
+def test_geom_pbc_imports_without_placement_or_scipy():
+    """``_geom_pbc`` must stay light so ``symmetry`` can import it at module scope.
+
+    ``ase`` is excluded from the check because ``metalsurfer/__init__.py`` itself
+    pulls it in; the point here is that ``_geom_pbc`` drags in neither ``scipy``
+    nor the ``placement`` package (the latter is the circular-import trap).
+    """
+    code = (
+        "import sys; import metalsurfer._geom_pbc; "
+        "print([m for m in ('scipy', 'metalsurfer.placement') if m in sys.modules])"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "[]", proc.stdout
+
+
 def test_equivalent_site_reduction_nonorthogonal():
     """Top-layer atop sites of a non-orthogonal fcc(111) slab collapse into orbits."""
     from metalsurfer.placement.site_types import Site

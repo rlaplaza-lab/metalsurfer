@@ -14,6 +14,13 @@ import spglib
 import spglib.error as _spglib_error_module
 from ase import Atoms
 
+from ._geom_pbc import (
+    cart_to_frac,
+    frac_to_cart,
+    minimum_image_fractional_delta,
+    slab_normal,
+    wrap_fractional,
+)
 from ._numeric_defaults import DEFAULT_SYMMETRY_TOLERANCE
 from ._utils import cell_has_volume
 
@@ -214,7 +221,6 @@ class SymmetryAnalyzer:
         and the orbit assignment depends on where the cluster happens to sit in
         absolute Cartesian space.
         """
-        inv = np.linalg.inv(self._lattice)
         arr = np.asarray(cart, dtype=float)
         if (
             self._mode == "cluster"
@@ -222,17 +228,13 @@ class SymmetryAnalyzer:
             and self._cluster_half is not None
         ):
             arr = arr - self._cluster_com + self._cluster_half
-        return arr @ inv
+        return cart_to_frac(arr, self._lattice)
 
     def _wrap_frac(self, frac: np.ndarray) -> np.ndarray:
         pbc = self._symmetry_pbc()
         if not np.any(pbc):
             return frac
-        wrapped = np.asarray(frac, dtype=float).copy()
-        for dim in range(3):
-            if bool(pbc[dim]):
-                wrapped[..., dim] -= np.floor(wrapped[..., dim])
-        return wrapped
+        return wrap_fractional(frac, pbc)
 
     def _apply_frac_symop(
         self, frac_row: np.ndarray, R: np.ndarray, t: np.ndarray
@@ -246,25 +248,17 @@ class SymmetryAnalyzer:
         Shape-generic: the last axis must be the three fractional components.
         """
         d = np.asarray(fa, dtype=float) - np.asarray(fb, dtype=float)
-        pbc = self._symmetry_pbc()
-        for k in range(3):
-            if bool(pbc[k]):
-                d[..., k] -= np.round(d[..., k])
-        return d
+        return minimum_image_fractional_delta(d, self._symmetry_pbc(), copy=False)
 
     def _cart_sep_from_frac_delta(self, d_frac: np.ndarray) -> np.ndarray:
         """Cartesian separation vector (row) from fractional MIC difference."""
-        return d_frac @ self._lattice
+        return frac_to_cart(d_frac, self._lattice)
 
     def _slab_normal(self) -> np.ndarray:
         """Unit normal from lattice a × b (slab plane)."""
         if self._slab_normal_cache is not None:
             return self._slab_normal_cache
-        a = np.asarray(self._lattice[0], dtype=float)
-        b = np.asarray(self._lattice[1], dtype=float)
-        n = np.cross(a, b)
-        norm_n = float(np.linalg.norm(n))
-        n_hat = np.array([0.0, 0.0, 1.0], dtype=float) if norm_n < 1e-12 else n / norm_n
+        n_hat = slab_normal(self._lattice)
         self._slab_normal_cache = n_hat
         return n_hat
 
@@ -492,11 +486,10 @@ class SymmetryAnalyzer:
         """
         transformed = self._wrap_frac(frac_pts @ R.T + t)
         delta = transformed[:, None, :] - frac_pts[None, :, :]
-        pbc = self._symmetry_pbc()
-        for k in range(3):
-            if bool(pbc[k]):
-                delta[..., k] -= np.round(delta[..., k])
-        sep = delta @ self._lattice
+        # ``delta`` is a freshly allocated n×n×3 temporary, so fold it in place:
+        # the copying form would transiently double this buffer (~40 MB at a 6×6 slab).
+        delta = minimum_image_fractional_delta(delta, self._symmetry_pbc(), copy=False)
+        sep = frac_to_cart(delta, self._lattice)
         if planar:
             n_hat = self._slab_normal()
             sep = sep - (sep @ n_hat)[..., None] * n_hat

@@ -1,15 +1,53 @@
-"""Coordinate frame, PBC images, deduplication, and radii helpers for site detection."""
+"""Coordinate frame, PBC images, deduplication, and radii helpers for site detection.
+
+The cell-frame primitives (fractional conversion, wrapping, minimum image, slab
+frame) live in :mod:`metalsurfer._geom_pbc` so :mod:`metalsurfer.symmetry` can use
+them without importing the ``placement`` package. They are re-exported here under
+their historical underscore names for existing call sites.
+"""
 
 import logging
 
 import numpy as np
 from scipy.spatial import KDTree
 
+from .._geom_pbc import (
+    cart_to_frac as _cart_to_frac,
+)
+from .._geom_pbc import (
+    frac_to_cart as _frac_to_cart,
+)
+from .._geom_pbc import (
+    height_along_slab_normal as _height_along_slab_normal,
+)
+from .._geom_pbc import (
+    minimum_image_fractional_delta as _minimum_image_fractional_delta,
+)
+from .._geom_pbc import (
+    project_to_slab_plane as _project_to_slab_plane,
+)
+from .._geom_pbc import (
+    reciprocal_plane_spacings as _reciprocal_plane_spacings,
+)
+from .._geom_pbc import (
+    shift_along_slab_normal as _shift_along_slab_normal,
+)
+from .._geom_pbc import (
+    slab_normal as _slab_normal,
+)
+from .._geom_pbc import (
+    slab_plane_projectors as _slab_plane_projectors,
+)
+from .._geom_pbc import (
+    wrap_cartesian as _wrap_cartesian,
+)
+from .._geom_pbc import (
+    wrap_fractional as _wrap_fractional,
+)
 from ._constants import (
     _PORE_THRESHOLD_COVALENT_SCALE,
     _PORE_THRESHOLD_MIN_ANGSTROM,
     _STEP_TERRACE_MAX_GAP_ANGSTROM,
-    _SURFACE_NORMAL_FALLBACK_NORM_EPS,
     _TOP_LAYER_DEPTH_COVALENT_SCALE,
     _TOP_LAYER_DEPTH_MAX_ANGSTROM,
     _TOP_LAYER_DEPTH_MIN_ANGSTROM,
@@ -20,132 +58,33 @@ from ._constants import (
 )
 from .geometry import _get_covalent_radius
 
+__all__ = [
+    # Re-exported cell-frame geometry (see metalsurfer._geom_pbc).
+    "_cart_to_frac",
+    "_frac_to_cart",
+    "_height_along_slab_normal",
+    "_minimum_image_fractional_delta",
+    "_project_to_slab_plane",
+    "_reciprocal_plane_spacings",
+    "_shift_along_slab_normal",
+    "_slab_normal",
+    "_slab_plane_projectors",
+    "_wrap_cartesian",
+    "_wrap_fractional",
+    # Defined here.
+    "_build_periodic_images",
+    "_deduplicate_points",
+    "_derive_top_layer_tolerance",
+    "_derive_voronoi_distance_window",
+    "_filter_non_duplicate_candidates",
+    "_mean_covalent_radius",
+    "_periodic_image_offsets",
+    "_union_find_cluster",
+    "derive_pore_threshold",
+    "top_layer_mask_by_normal",
+]
+
 logger = logging.getLogger(__name__)
-
-
-def _cart_to_frac(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
-    """Convert Cartesian row-vectors to fractional coordinates for ASE cells."""
-    arr = np.asarray(points, dtype=float)
-    inv_cell = np.linalg.inv(cell)
-    return arr @ inv_cell
-
-
-def _frac_to_cart(points_frac: np.ndarray, cell: np.ndarray) -> np.ndarray:
-    """Convert fractional row-vectors to Cartesian coordinates."""
-    return np.asarray(points_frac, dtype=float) @ cell
-
-
-def _wrap_fractional(frac: np.ndarray, pbc: np.ndarray) -> np.ndarray:
-    """Wrap fractional coordinates to [0, 1) on periodic axes only."""
-    wrapped = np.asarray(frac, dtype=float).copy()
-    for dim in range(3):
-        if bool(pbc[dim]):
-            wrapped[..., dim] -= np.floor(wrapped[..., dim])
-    return wrapped
-
-
-def _wrap_cartesian(
-    points: np.ndarray, cell: np.ndarray, pbc: np.ndarray
-) -> np.ndarray:
-    """Wrap Cartesian points into the reference cell along periodic axes."""
-    if not np.any(pbc):
-        return np.asarray(points, dtype=float).copy()
-    frac = _cart_to_frac(points, cell)
-    return _frac_to_cart(_wrap_fractional(frac, pbc), cell)
-
-
-def _minimum_image_fractional_delta(
-    delta_frac: np.ndarray, pbc: np.ndarray
-) -> np.ndarray:
-    """Apply the minimum-image convention to fractional coordinate differences."""
-    delta = np.asarray(delta_frac, dtype=float).copy()
-    for dim in range(3):
-        if bool(pbc[dim]):
-            delta[..., dim] -= np.round(delta[..., dim])
-    return delta
-
-
-def _reciprocal_plane_spacings(cell: np.ndarray) -> np.ndarray:
-    """Distance between adjacent lattice planes normal to each cell vector."""
-    inv_cell = np.linalg.inv(cell)
-    spacings = np.empty(3, dtype=float)
-    for dim in range(3):
-        g = inv_cell[:, dim]
-        norm_g = float(np.linalg.norm(g))
-        spacings[dim] = 1.0 / norm_g if norm_g > 0.0 else np.inf
-    return spacings
-
-
-def _slab_plane_projectors(cell: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Return projectors for slab-plane coordinates.
-
-    Returns
-    -------
-    (pinv_ab_T, ortho_basis)
-        pinv_ab_T : (3, 2) array
-            Right-multiplier for least-squares coordinates in the span of a/b.
-            For Cartesian row vectors r, in-plane coordinates are r @ pinv_ab_T.
-        ortho_basis : (2, 3) array
-            Two orthonormal basis vectors spanning the same plane.
-    """
-    a = np.asarray(cell[0], dtype=float)
-    b = np.asarray(cell[1], dtype=float)
-
-    ab = np.column_stack([a, b])
-    pinv_ab = np.linalg.pinv(ab)
-    pinv_ab_T = pinv_ab.T
-
-    norm_a = float(np.linalg.norm(a))
-    if norm_a < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
-        e1 = np.array([1.0, 0.0, 0.0])
-    else:
-        e1 = a / norm_a
-
-    b_perp = b - np.dot(b, e1) * e1
-    norm_b_perp = float(np.linalg.norm(b_perp))
-    if norm_b_perp < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
-        trial = np.array([0.0, 0.0, 1.0])
-        if abs(np.dot(trial, e1)) > 0.9:
-            trial = np.array([0.0, 1.0, 0.0])
-        b_perp = trial - np.dot(trial, e1) * e1
-        norm_b_perp = float(np.linalg.norm(b_perp))
-    e2 = b_perp / max(norm_b_perp, _SURFACE_NORMAL_FALLBACK_NORM_EPS)
-    ortho_basis = np.vstack([e1, e2])
-    return pinv_ab_T, ortho_basis
-
-
-def _slab_normal(cell: np.ndarray) -> np.ndarray:
-    """Unit normal to the slab plane spanned by cell a and b."""
-    a = np.asarray(cell[0], dtype=float)
-    b = np.asarray(cell[1], dtype=float)
-    n = np.cross(a, b)
-    norm_n = float(np.linalg.norm(n))
-    if norm_n < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
-        return np.array([0.0, 0.0, 1.0])
-    return n / norm_n
-
-
-def _height_along_slab_normal(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
-    """Signed coordinate of points along the slab normal."""
-    n = _slab_normal(cell)
-    arr = np.asarray(points, dtype=float)
-    return arr @ n
-
-
-def _shift_along_slab_normal(
-    points: np.ndarray, cell: np.ndarray, distance: float
-) -> np.ndarray:
-    """Translate points by *distance* along the slab normal."""
-    n = _slab_normal(cell)
-    arr = np.asarray(points, dtype=float)
-    return arr + float(distance) * n
-
-
-def _project_to_slab_plane(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
-    """Project Cartesian points to a 2D orthonormal basis spanning a/b."""
-    _, ortho_basis = _slab_plane_projectors(cell)
-    arr = np.asarray(points, dtype=float)
-    return arr @ ortho_basis.T
 
 
 def top_layer_mask_by_normal(
