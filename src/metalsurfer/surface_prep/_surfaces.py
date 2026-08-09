@@ -120,7 +120,7 @@ def ensure_slab_z_alignment(
             logger.warning(
                 "Slab has more vacuum below the substrate (%.1f A) than above "
                 "(%.1f A); re-aligning to bottom-anchored layout with vacuum "
-                "above max(z).",
+                "above max(z)",
                 vacuum_below,
                 vacuum_above,
             )
@@ -175,8 +175,8 @@ def apply_surface_constraints(
     )
     if relax_top_layer and not frozen and len(result) > 0:
         logger.warning(
-            "relax_top_layer=True left no atoms frozen (tolerance=%.3f A, "
-            "material_type=%s); freezing entire substrate instead.",
+            "Relax_top_layer=True left no atoms frozen (tolerance=%.3f A, "
+            "material_type=%s); freezing entire substrate instead",
             top_layer_tolerance,
             material_type,
         )
@@ -221,7 +221,7 @@ def _warn_missing_fixatoms(slab: Atoms) -> None:
     logger.warning(
         "Substrate has no FixAtoms constraints; all %d substrate atoms will "
         "relax during adsorption. Call apply_surface_constraints during "
-        "substrate preparation to freeze atoms.",
+        "substrate preparation to freeze atoms",
         len(slab),
     )
 
@@ -438,7 +438,7 @@ def create_slab_from_bulk(
         raise _dependency_error_for_slab_import(exc) from exc
 
     logger.info(
-        "Creating slab from %s, Miller %s, supercell %s...",
+        "Creating slab from %s, Miller %s, supercell %s",
         bulk_id,
         miller_indices,
         supercell,
@@ -687,7 +687,7 @@ def substitute_alloy(
 
     if n_replace == 0:
         logger.info(
-            "guest_fraction=%.2f yields 0 replacements; returning base slab",
+            "Guest_fraction=%.2f yields 0 replacements; returning base slab",
             guest_fraction,
         )
         return SlabContainer(base)
@@ -794,7 +794,7 @@ def substitute_alloy(
 
     if relax and calculator is not None:
         try:
-            logger.info("Relaxing alloy slab geometry...")
+            logger.info("Relaxing alloy slab geometry")
             best_atoms.calc = calculator
             dyn = LBFGS(best_atoms, logfile="-")
             dyn.run(fmax=config.fmax)
@@ -864,7 +864,7 @@ def deposit_adatoms(
         )
 
     if coverage_fraction == 0.0:
-        logger.info("coverage_fraction=0; returning unmodified slab")
+        logger.info("Coverage_fraction=0; returning unmodified slab")
         return SlabContainer(slab.atoms.copy())
     if mode != "none" and calculator is None:
         raise ValueError(

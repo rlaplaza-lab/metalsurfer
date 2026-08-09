@@ -118,7 +118,7 @@ def identify_relaxable_surface_indices(
 
     if not boundary:
         logger.warning(
-            "relax_top_layer=True on porous substrate identified no pore-boundary "
+            "Relax_top_layer=True on porous substrate identified no pore-boundary "
             "atoms; freezing entire substrate during placement relaxation"
         )
     return sorted(boundary)

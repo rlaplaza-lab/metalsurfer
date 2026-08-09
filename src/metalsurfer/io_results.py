@@ -554,7 +554,7 @@ def save_saturation_results(
     if isinstance(saturation_results[0], MultiMolSaturationRunResult):
         if len(saturation_results) > 1:
             logger.warning(
-                "save_saturation_results received %d multi-molecule results; "
+                "Save_saturation_results received %d multi-molecule results; "
                 "only the first will be saved",
                 len(saturation_results),
             )
@@ -568,7 +568,7 @@ def save_saturation_results(
     single_results = cast(list[SaturationRunResult], list(saturation_results))
     if len(single_results) > 1:
         logger.warning(
-            "save_saturation_results received %d single-molecule results; "
+            "Save_saturation_results received %d single-molecule results; "
             "all entries will be saved (no per-molecule truncation)",
             len(single_results),
         )

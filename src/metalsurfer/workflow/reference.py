@@ -49,7 +49,7 @@ def calculate_reference_energies(
 
     molecule_energies: dict[str, float] = {}
     for mol_name, smiles in zip(molecules, smiles_list, strict=True):
-        logger.info("Calculating isolated %s energy...", mol_name)
+        logger.info("Calculating isolated %s energy", mol_name)
         result = create_conformers_from_smiles(
             smiles, calculator=calculator, config=config, ts_model=ts_model
         )

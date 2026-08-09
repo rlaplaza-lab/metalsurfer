@@ -1048,7 +1048,7 @@ def _select_molecules_for_processing(
             skipped = len(all_molecules) - len(molecules)
             logger.warning(
                 "Skipped %d already-processed molecule(s) listed in %s. "
-                "Set skip_existing=False or remove that CSV to force a fresh run.",
+                "Set skip_existing=False or remove that CSV to force a fresh run",
                 skipped,
                 summary,
             )

@@ -80,7 +80,7 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
         raise ValueError("device must be set for TorchSim model initialization")
     device = resolved_device
     _ensure_torch_checkpoint_safe_globals()
-    logger.info("Initializing TorchSim FairChemModel (%s) on %s...", model_name, device)
+    logger.info("Initializing TorchSim FairChemModel (%s) on %s", model_name, device)
     torch = _deps.torch
     dev = torch.device(device) if torch is not None and device else None
     try:

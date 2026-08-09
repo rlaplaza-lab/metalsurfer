@@ -232,7 +232,7 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
     use_autobatcher = config is not None and not config.optimize_isolated_sequentially
     optimizer = _resolve_ts_optimizer(config.ts_optimizer if config else "fire")
     swaps = config.steps_between_swaps if config else 5
-    logger.info("Batched optimisation of %d isolated conformers...", len(conformers))
+    logger.info("Batched optimisation of %d isolated conformers", len(conformers))
     with torchsim_output_capture():
         conv = ts.generate_force_convergence_fn(
             force_tol=fmax, include_cell_forces=False
@@ -349,7 +349,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
     ref_len = len(slab_for_frozen)
     if base_slab_for_frozen is not None and ref_len > slab_size:
         logger.warning(
-            "base_slab_for_frozen has %d atoms but slab reference has %d; "
+            "Base_slab_for_frozen has %d atoms but slab reference has %d; "
             "frozen indices may not align with the substrate prefix",
             ref_len,
             slab_size,
@@ -366,7 +366,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         clear_autobatcher_cache(max_n_atoms_threshold=slab_size)
 
     logger.info(
-        "Batched optimisation of %d systems (slab=%d atoms, freeze_ref=%d, frozen=%d)...",
+        "Batched optimisation of %d systems (slab=%d atoms, freeze_ref=%d, frozen=%d)",
         len(combined_atoms_list),
         slab_size,
         ref_len,

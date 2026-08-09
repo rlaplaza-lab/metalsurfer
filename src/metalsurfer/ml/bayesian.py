@@ -518,7 +518,7 @@ def build_transfer_surrogate(
     _X_current_columns = set(X_current.columns)
     if _X_prev_raw_columns != _X_current_columns:
         logger.warning(
-            "transfer surrogate: prior feature columns {%s} differ from current {%s}; "
+            "Transfer surrogate: prior feature columns {%s} differ from current {%s}; "
             "missing columns zero-padded",
             ", ".join(sorted(_X_prev_raw_columns - _X_current_columns)),
             ", ".join(sorted(_X_current_columns - _X_prev_raw_columns)),
@@ -1054,7 +1054,7 @@ def build_spec_features_geometry_aware(
     n_skip = len(specs) - len(rows)
     if n_skip > 0:
         logger.info(
-            "build_spec_features_geometry_aware: skipped %d/%d specs (no valid placement)",
+            "Build_spec_features_geometry_aware: skipped %d/%d specs (no valid placement)",
             n_skip,
             len(specs),
         )

@@ -172,7 +172,7 @@ def _pose_from_spec(
         return None, "no_sites_found"
     if not (0 <= spec.site_index < len(ctx.sites)):
         logger.debug(
-            "site_index=%d out of range for %d sites (placement_index=%d)",
+            "Site_index=%d out of range for %d sites (placement_index=%d)",
             spec.site_index,
             len(ctx.sites),
             spec.placement_index,

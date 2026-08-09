@@ -61,7 +61,6 @@ def _saturation_symmetry_broken_vs_reference(
     reference_atoms: Atoms,
     *,
     symmetry_tolerance: float,
-    log_context: str,
 ) -> bool:
     """True if symmetry vs *reference_atoms* is broken or analysis fails (treat as C1)."""
     analyzer = SymmetryAnalyzer(current_atoms, symmetry_tolerance=symmetry_tolerance)
@@ -69,13 +68,12 @@ def _saturation_symmetry_broken_vs_reference(
         broken = analyzer.detect_symmetry_breaking(reference_atoms)
     except SymmetryAnalysisError as exc:
         logger.warning(
-            "%s: symmetry analysis unavailable (%s); assuming C1",
-            log_context,
+            "Symmetry analysis unavailable (%s); assuming C1",
             exc,
         )
         return True
     if broken:
-        logger.debug("%s: symmetry broken; using full site sampling", log_context)
+        logger.debug("Symmetry broken; using full site sampling")
     return broken
 
 
@@ -263,7 +261,6 @@ def _saturation_step_preamble(
             current_slab.atoms,
             reference_slab_for_symmetry,
             symmetry_tolerance=config.symmetry_tolerance,
-            log_context=log_label,
         )
 
     E_slab = _compute_slab_energy(
@@ -873,7 +870,7 @@ def run_saturation_screening(
                 summary_csv = f"results_{surface_type}/saturation_summary.csv"
                 logger.warning(
                     "No molecules to process: all already listed in %s. "
-                    "Set skip_existing=False or remove that CSV to rerun.",
+                    "Set skip_existing=False or remove that CSV to rerun",
                     summary_csv,
                 )
             elif load_status == "empty_file":
@@ -938,7 +935,7 @@ def run_saturation_screening(
 
         if config.multi_molecule_saturation and len(molecule_names) == 1:
             logger.warning(
-                "multi_molecule_saturation=True but only one molecule provided; falling back to standard single-molecule saturation"
+                "Multi_molecule_saturation=True but only one molecule provided; falling back to standard single-molecule saturation"
             )
 
         all_saturation_results: list[SaturationRunResult] = []
