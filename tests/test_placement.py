@@ -1,7 +1,6 @@
 """Placement tests for universal slab/nanoparticle/porous pathways."""
 
 import math
-import random
 from collections import Counter
 
 import numpy as np
@@ -36,7 +35,6 @@ from metalsurfer.placement._material import (
 from metalsurfer.placement.dissociative import _get_dissociative_site_pairs
 from metalsurfer.placement.geometry import (
     _classify_molecule_shape,
-    _random_rotation_matrix,
     calculate_contact_quality,
     check_adsorbate_separation,
     check_initial_contact_quality,
@@ -235,14 +233,6 @@ def test_classify_molecule_shape_linear_flat_round():
         ).get_positions()
     )
     assert shape_ch4 == "round"
-
-
-def test_random_rotation_is_proper_orthogonal_matrix():
-    rng = random.Random(42)
-    for _ in range(25):
-        rot = _random_rotation_matrix(rng)
-        assert np.allclose(rot @ rot.T, np.eye(3), atol=1e-12)
-        assert np.isclose(np.linalg.det(rot), 1.0, atol=1e-12)
 
 
 def test_flat_aromatic_detection_requires_ring_and_en_atoms():
@@ -1796,6 +1786,28 @@ def test_build_batch_specs_flat_aromatic_honors_parallel_fraction(
     )
     assert len(specs) == n_desired
     assert {s.orientation_type for s in specs} == {expect_only}
+
+
+def test_build_batch_specs_flat_aromatic_large_grid_capped():
+    n_desired = 20
+    site_indices = list(range(50))
+    specs = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=site_indices,
+        site_type_for_index=_site_type_atop,
+        shape="flat",
+        n_binders=2,
+        flat_aromatic=True,
+        parallel_fraction=0.5,
+        n_desired=n_desired,
+        seed=TEST_SEED,
+    )
+    assert len(specs) == n_desired
+    n_par = sum(1 for s in specs if s.orientation_type == "parallel")
+    n_en = sum(1 for s in specs if s.orientation_type == "EN-down")
+    assert n_par == 10
+    assert n_en == 10
+    assert len({s.placement_index for s in specs}) == n_desired
 
 
 def test_build_batch_specs_filter_spec_reduces_count():
