@@ -1,5 +1,7 @@
 """Tests for AdsorptionConfig validation rules."""
 
+import warnings
+
 import pytest
 
 from metalsurfer import _numeric_defaults as numeric_defaults
@@ -734,3 +736,18 @@ def test_flat_bo_constructor_kwargs_rejected():
 def test_fold_bo_config_rejects_flat_keys():
     with pytest.raises(ValueError, match="Flat BO keys"):
         fold_bo_config({"bo_initial_random": 2, "num_conformers": 1})
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [("conformer_sampling", "boltzmann"), ("boltzmann_temperature", 500.0)],
+)
+def test_deprecated_conformer_knobs_warn(field_name, value):
+    with pytest.warns(DeprecationWarning, match="no longer affect"):
+        AdsorptionConfig(**{field_name: value})
+
+
+def test_default_config_does_not_warn():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        AdsorptionConfig()

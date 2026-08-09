@@ -3,7 +3,7 @@
 import logging
 from contextlib import contextmanager
 
-from metalsurfer._logging import _LogStreamToLogger
+from metalsurfer._logging import _LogStreamToLogger, configure_logging
 
 
 class _CaptureHandler(logging.Handler):
@@ -131,3 +131,32 @@ class TestLogStreamToLogger:
             stream.flush()
             assert len(sink) == 1
             assert sink[0].getMessage() == "partial"
+
+
+def test_configure_logging_preserves_file_handlers(tmp_path, monkeypatch):
+    """Regression: ``FileHandler`` subclasses ``StreamHandler``.
+
+    The isinstance sweep pointed the caller's file handler at stdout, silently
+    killing file logging and dropping the open file object without closing it.
+    """
+    monkeypatch.setenv("METALSURFER_FORCE_STDOUT_LOGS", "1")
+    log_path = tmp_path / "run.log"
+    file_handler = logging.FileHandler(log_path)
+    root = logging.getLogger()
+    previous_level = root.level
+    root.addHandler(file_handler)
+    try:
+        root.setLevel(logging.INFO)
+        logging.getLogger("metalsurfer.test").info("before configure")
+        configure_logging()
+        logging.getLogger("metalsurfer.test").info("after configure")
+        file_handler.flush()
+
+        assert file_handler.stream.name == str(log_path)
+        contents = log_path.read_text()
+        assert "before configure" in contents
+        assert "after configure" in contents
+    finally:
+        root.removeHandler(file_handler)
+        file_handler.close()
+        root.setLevel(previous_level)

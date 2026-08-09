@@ -14,6 +14,7 @@ from metalsurfer.ml.bayesian import (
     build_candidate_features,
     build_spec_features_geometry_aware,
     build_transfer_surrogate,
+    cumulative_refit_training_set,
     ei_scores,
     lcb_scores,
     matern_length_scale_for_n_features,
@@ -835,3 +836,174 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
     assert len(set(r.placement_id for r in results)) == len(results), (
         "No duplicate placement_id in results"
     )
+
+
+# ---------------------------------------------------------------------------
+# Migrated regression tests (from tests/test_tier1_regressions.py)
+# ---------------------------------------------------------------------------
+
+
+def _feature_frame(values):
+    return pd.DataFrame({"x": np.asarray(values, dtype=float)})
+
+
+_BO_FEATURES = [
+    "x",
+    "y",
+    "z",
+    "conformer_index",
+    "quat_w",
+    "quat_x",
+    "quat_y",
+    "quat_z",
+]
+
+
+def _bo_training_data(n=24, seed=0):
+    rng = np.random.default_rng(seed)
+    X = pd.DataFrame(rng.normal(size=(n, len(_BO_FEATURES))), columns=_BO_FEATURES)
+    y = 1.5 * X["x"] - 0.7 * X["z"] + rng.normal(scale=0.1, size=n)
+    return X, np.asarray(y, dtype=float)
+
+
+def test_cumulative_refit_training_set_aligns_weights_with_rows():
+    """Regression: weights were built current-first, rows prior-first.
+
+    Both orderings have the same length so nothing raised; prior rows silently
+    received weight 1.0 and the current observations received the decayed prior
+    weights, inverting the ``weight_cap`` guarantee.
+    """
+    X_prior = _feature_frame([0.0, 1.0, 2.0, 3.0])
+    y_prior = np.array([0.0, 1.0, 2.0, 3.0])
+    X_current = _feature_frame([10.0, 11.0])
+    y_current = np.array([10.0, 11.0])
+
+    X, y, w = cumulative_refit_training_set(
+        X_prior,
+        y_prior,
+        X_current,
+        y_current,
+        weight_cap=0.35,
+        proximity_lengthscale=1.0,
+    )
+
+    assert X["x"].tolist() == [0.0, 1.0, 2.0, 3.0, 10.0, 11.0]
+    assert y.tolist() == [0.0, 1.0, 2.0, 3.0, 10.0, 11.0]
+    # Current observations are the anchor and must carry full weight.
+    np.testing.assert_allclose(w[-2:], 1.0)
+    # Prior rows are decayed, and their total mass honours weight_cap.
+    assert np.all(w[:4] < 1.0)
+    assert float(w[:4].sum() / w.sum()) == pytest.approx(0.35, abs=1e-6)
+
+
+def test_cumulative_refit_training_set_rejects_length_mismatch():
+    with pytest.raises(ValueError, match="X_prior/y_prior length mismatch"):
+        cumulative_refit_training_set(
+            _feature_frame([0.0, 1.0]),
+            np.array([0.0]),
+            _feature_frame([2.0]),
+            np.array([2.0]),
+            weight_cap=0.35,
+            proximity_lengthscale=1.0,
+        )
+
+
+@pytest.mark.parametrize("surrogate", ["gradient_boost", "ridge"])
+def test_expected_improvement_is_not_identically_zero(surrogate):
+    """Regression: sigma came from *in-sample* residuals of an interpolator.
+
+    ``HistGradientBoostingRegressor`` essentially interpolates its training
+    rows, so residual RMSE collapsed to the 1e-3 floor and EI evaluated to
+    exactly 0.0 for every candidate. Acquisition then fell through to
+    ``np.argmax`` over a constant array, i.e. pool-ordered sampling rather than
+    Bayesian optimisation.
+    """
+    X, y = _bo_training_data()
+    rng = np.random.default_rng(7)
+    X_pool = pd.DataFrame(
+        rng.normal(size=(200, len(_BO_FEATURES))), columns=_BO_FEATURES
+    )
+
+    model = train_surrogate(X, y, surrogate=surrogate)
+    mu, sigma = predict_with_uncertainty(model, X_pool)
+    ei = ei_scores(mu, sigma, float(np.min(y)))
+
+    assert np.all(sigma > 0.0)
+    assert float(np.max(ei)) > 0.0
+    assert int(np.count_nonzero(ei)) > 1, "EI must discriminate between candidates"
+
+
+def test_residual_sigma_uses_a_scaler_shared_with_predict_time():
+    """The NN-distance term must be computed in one consistent feature space."""
+    X, y = _bo_training_data()
+    model = train_surrogate(X, y, surrogate="gradient_boost")
+    regressor = model.named_steps["regressor"]
+
+    assert hasattr(regressor, "bo_sigma_scaler_")
+    scaled = regressor.bo_X_train_scaled_
+    # Standardised: zero mean, unit variance per column.
+    np.testing.assert_allclose(scaled.mean(axis=0), 0.0, atol=1e-8)
+    np.testing.assert_allclose(scaled.std(axis=0), 1.0, atol=1e-8)
+
+
+def test_transfer_gate_rejects_a_misleading_prior():
+    """Regression: the gate compared in-sample MAE, so it measured capacity.
+
+    With the default ``gradient_boost`` surrogate both models interpolated the
+    current step, the delta came out at ~1e-4 (far below ``mae_tolerance``), and
+    a prior encoding the opposite relationship was trusted indefinitely.
+    """
+    from metalsurfer.ml.bayesian import build_transfer_surrogate
+
+    rng_c = np.random.default_rng(2)
+    X_current = pd.DataFrame(
+        rng_c.normal(size=(20, len(_BO_FEATURES))), columns=_BO_FEATURES
+    )
+    y_current = np.asarray(X_current["x"] - 0.4 * X_current["y"], dtype=float)
+
+    rng_p = np.random.default_rng(3)
+    X_prior = pd.DataFrame(
+        rng_p.normal(size=(30, len(_BO_FEATURES))), columns=_BO_FEATURES
+    )
+    # Deliberately contradicts the current-step relationship.
+    y_prior = np.asarray(-3.0 * X_prior["x"] + 5.0, dtype=float)
+
+    result = build_transfer_surrogate(
+        X_current,
+        y_current,
+        X_prior,
+        y_prior,
+        surrogate="gradient_boost",
+        min_similarity=0.0,
+        mae_tolerance=0.05,
+        trust_patience=1,
+    )
+    assert result.transfer_mae_delta > 0.05
+    assert result.transfer_disabled
+    assert not result.transfer_used_this_round
+
+
+def test_transfer_gate_accepts_a_consistent_prior():
+    from metalsurfer.ml.bayesian import build_transfer_surrogate
+
+    def _sample(seed):
+        rng = np.random.default_rng(seed)
+        X = pd.DataFrame(rng.normal(size=(20, len(_BO_FEATURES))), columns=_BO_FEATURES)
+        y = np.asarray(X["x"] - 0.4 * X["y"], dtype=float)
+        return X, y
+
+    X_current, y_current = _sample(2)
+    X_prior, y_prior = _sample(7)
+
+    result = build_transfer_surrogate(
+        X_current,
+        y_current,
+        X_prior,
+        y_prior,
+        surrogate="gradient_boost",
+        min_similarity=0.0,
+        mae_tolerance=0.05,
+        trust_patience=1,
+    )
+    assert not result.transfer_disabled
+    assert result.transfer_used_this_round

@@ -1297,3 +1297,15 @@ def test_connected_molecule_across_pbc():
         connectivity_multipliers=[1.3],
     )
     assert ok, f"Molecule crossing PBC should be seen as connected, got: {reason}"
+
+
+def test_filters_mic_distances_use_left_handed_cells():
+    from ase import Atoms
+
+    from metalsurfer.filters import _mic_pairwise_distances
+
+    cell = np.diag([6.0, 6.0, -20.0])
+    atoms = Atoms("H2", positions=[[0.5, 0.5, 0.0], [5.5, 0.5, 0.0]], cell=cell)
+    atoms.set_pbc([True, True, False])
+    dist = _mic_pairwise_distances(atoms.get_positions(), atoms)
+    assert float(dist[0, 1]) == pytest.approx(1.0, abs=1e-6)

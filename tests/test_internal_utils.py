@@ -4,6 +4,7 @@ These raise coverage on small helper modules and lock their behaviour so
 refactors cannot silently change parsing/validation semantics.
 """
 
+import numpy as np
 import pytest
 
 from metalsurfer._csv_coerce import (
@@ -99,3 +100,36 @@ def test_parse_fragment_positions_covers_all_branches():
     )
     with pytest.raises(TypeError):
         parse_fragment_positions(42)
+
+
+def test_cell_has_volume_accepts_left_handed_cells():
+    """Regression: five call sites tested ``det > 0``.
+
+    A left-handed cell (e.g. a loaded POSCAR with a flipped axis) has a negative
+    determinant but is perfectly valid and periodic. Treating it as degenerate
+    silently dropped PBC from distance checks and site enumeration.
+    """
+    from metalsurfer._utils import cell_has_volume
+
+    right_handed = np.diag([4.0, 4.0, 12.0])
+    left_handed = right_handed.copy()
+    left_handed[2, 2] = -12.0
+
+    assert float(np.linalg.det(left_handed)) < 0.0
+    assert cell_has_volume(right_handed)
+    assert cell_has_volume(left_handed)
+    assert not cell_has_volume(np.zeros((3, 3)))
+    assert not cell_has_volume(np.diag([4.0, 4.0, 0.0]))
+    assert not cell_has_volume(np.zeros((2, 2)))
+
+
+def test_left_handed_cell_keeps_periodic_distances():
+    """A left-handed cell must still use the minimum-image convention."""
+    from metalsurfer.placement.geometry import calculate_min_distance
+
+    cell = np.diag([6.0, 6.0, -20.0])
+    a = np.array([[0.5, 0.5, 0.0]])
+    b = np.array([[5.5, 0.5, 0.0]])  # 1.0 A away across the x boundary
+
+    d = calculate_min_distance(a, b, cell, use_pbc=True, pbc=[True, True, False])
+    assert float(d) == pytest.approx(1.0, abs=1e-6)

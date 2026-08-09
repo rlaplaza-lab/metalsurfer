@@ -898,3 +898,81 @@ def test_resolve_autobatcher_max_atoms_to_try_is_conservative_vs_estimate():
     )
     assert cap >= estimated
     assert source == "dynamic"
+
+
+class _FakeTensor:
+    """Minimal stand-in for a torch tensor supporting .detach().cpu().numpy()."""
+
+    def __init__(self, array):
+        self._array = np.asarray(array)
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self._array
+
+
+class _FakeBatch:
+    def __init__(self, forces, system_idx):
+        self.forces = _FakeTensor(forces)
+        self.system_idx = _FakeTensor(system_idx)
+
+
+def test_split_forces_by_system_returns_per_system_arrays():
+    """``forces`` is an atom attribute; indexing it by system index is wrong.
+
+    Regression: ``forces_list[i]`` returned atom *i*'s ``(3,)`` force vector, so
+    the adsorbate force-convergence check downstream sliced an empty array and
+    never fired.
+    """
+    from metalsurfer.optimization._optimize import _split_forces_by_system
+
+    # Two systems: 3 atoms and 5 atoms.
+    atom_counts = [3, 5]
+    forces = np.arange(8 * 3, dtype=float).reshape(8, 3)
+    system_idx = np.array([0, 0, 0, 1, 1, 1, 1, 1])
+    batch = _FakeBatch(forces, system_idx)
+
+    per_system = _split_forces_by_system(batch, 2, atom_counts)
+
+    assert per_system is not None
+    assert [f.shape for f in per_system] == [(3, 3), (5, 3)]
+    np.testing.assert_allclose(per_system[0], forces[:3])
+    np.testing.assert_allclose(per_system[1], forces[3:])
+    # The pre-fix behaviour would have produced shape (3,) for system 1.
+    assert per_system[1].shape != (3,)
+
+
+def test_split_forces_by_system_raises_on_atom_count_mismatch():
+    from metalsurfer.optimization._optimize import _split_forces_by_system
+
+    batch = _FakeBatch(np.zeros((8, 3)), np.array([0, 0, 0, 1, 1, 1, 1, 1]))
+    with pytest.raises(RuntimeError, match="could not be split per system"):
+        _split_forces_by_system(batch, 2, [4, 4])
+
+
+def test_get_inflight_autobatcher_returns_triple_when_unavailable(monkeypatch):
+    """Regression: a bare ``None`` broke both unpacking call sites.
+
+    ``optimize_isolated_molecules_batched`` does ``...[0]`` and
+    ``optimize_adsorbate_slab_batched`` does ``a, b, c = ...``; both raised
+    ``TypeError`` when the optional MLIP stack was partly unavailable.
+    """
+    from metalsurfer.optimization import _cache, _deps
+
+    monkeypatch.setattr(_deps, "InFlightAutoBatcher", None, raising=False)
+    result = _cache._get_inflight_autobatcher(object(), 100)
+
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+    autobatcher, cache_key, reused = result
+    assert autobatcher is None
+    assert cache_key is None
+    assert reused is False
+    # Both call-site shapes must work.
+    assert result[0] is None
+    _a, _b, _c = result
