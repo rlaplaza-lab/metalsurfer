@@ -2,6 +2,7 @@
 
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -182,6 +183,20 @@ def test_removed_surface_prep_aliases_are_not_exported():
             _ = getattr(metalsurfer, name)
 
 
+def test_surface_prep_all_is_static_and_complete():
+    """surface_prep.__all__ must be a static literal and cover every lazy export."""
+    import metalsurfer.surface_prep as surface_prep
+
+    # The static __all__ must list exactly the names the module lazily exposes.
+    expected = {
+        name
+        for names in surface_prep._LAZY_MODULES.values()
+        for name in names
+    }
+    assert set(surface_prep.__all__) == expected
+    assert isinstance(surface_prep.__all__, list)
+
+
 def test_removed_lazy_exports_are_not_available():
     """Removed public symbols must not reappear in lazy exports."""
     import metalsurfer
@@ -236,3 +251,22 @@ def test_device_resolution_fallback_for_ci():
     with patch.object(_deps, "torch", create=True) as mock_torch:
         mock_torch.cuda.is_available.return_value = True
         assert _resolve_device("cuda") == "cuda"
+
+
+def test_import_does_not_load_torch_or_sklearn():
+    """Importing metalsurfer (and metalsurfer.conformers) must not eagerly pull
+    in torch or sklearn — both are heavy and must stay lazy."""
+    import subprocess
+
+    script = (
+        "import sys, metalsurfer, metalsurfer.conformers\n"
+        "assert 'torch' not in sys.modules, 'torch imported at package import'\n"
+        "assert 'sklearn' not in sys.modules, 'sklearn imported at package import'\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    assert result.returncode == 0, result.stderr

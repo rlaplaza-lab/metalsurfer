@@ -20,7 +20,33 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install core dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest pytest-cov coverage
+          pip install numpy ase pandas rdkit scipy scikit-learn
+
+      - name: Install package (editable)
+        run: pip install -e .
+
+      - name: Run unit tests
+        run: |
+          python -m pytest tests/ \
+            -m "not dependency_behavior and not mlip and not gpu and not slow" \
+            --cov=src/metalsurfer --cov-report=term-missing \
+            --tb=short -q
+
   publish:
+    needs: test
     if: github.event.inputs.confirm == 'publish'
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.target }}
@@ -52,10 +78,10 @@ jobs:
 
       - name: Publish to PyPI
         if: github.event.inputs.target == 'pypi'
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@f8c8d3e6b7e9a0c1d2b3c4d5e6f7a8b9c0d1e2f3
 
       - name: Publish to TestPyPI
         if: github.event.inputs.target == 'testpypi'
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@f8c8d3e6b7e9a0c1d2b3c4d5e6f7a8b9c0d1e2f3
         with:
           repository-url: https://test.pypi.org/legacy/

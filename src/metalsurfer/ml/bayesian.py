@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from ase import Atoms
 from scipy import stats
+from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist
 from sklearn.base import BaseEstimator, RegressorMixin, clone
 from sklearn.gaussian_process import GaussianProcessRegressor
@@ -17,6 +18,7 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from .._numeric_defaults import DEFAULT_SEED
 from ..config import (
     BO_INITIAL_SAMPLING_OPTIONS,
     BO_TRANSFER_CAPABLE_SURROGATES,
@@ -24,6 +26,7 @@ from ..config import (
 )
 from ..models import PlacementDescriptor, PlacementSpec
 from ..placement import generators as placement_generators
+from ..placement._constants import _DISTANCE_ZERO_EPS
 from ..placement.site_context import SiteContext
 from .features import extract_features
 from .regression import (
@@ -426,7 +429,7 @@ def _min_feature_distances(
     r_arr = X_ref.reindex(columns=cols, fill_value=0.0).to_numpy(dtype=float)
     dists: np.ndarray = cdist(p_arr, r_arr)
     if exclude_self:
-        dists = np.where(dists <= 1e-12, np.inf, dists)
+        dists = np.where(dists <= _DISTANCE_ZERO_EPS, np.inf, dists)
     return np.min(dists, axis=1)
 
 
@@ -1024,7 +1027,7 @@ def select_initial_bo_indices(
     n_initial: int,
     *,
     sampling: InitialSamplingType = "spread_xyz",
-    random_state: int = 0,
+    random_state: int = DEFAULT_SEED,
 ) -> list[int]:
     """Pick initial BO pool positions before any energy evaluations.
 
@@ -1120,14 +1123,14 @@ def select_candidates_batch_diverse(
         )
 
     scaled = StandardScaler().fit_transform(matrix)
-    # Pairwise distances in scaled space, reused for the lengthscale estimate
-    # and for the per-step penalization (avoids recomputing norms each loop).
-    pairwise = cdist(scaled, scaled)
+    # Lengthscale from the median nearest-neighbour separation, estimated with a
+    # KDTree (k=2) instead of a full N x N cdist matrix — avoids the ~234 MB
+    # allocation at the real pool size of 3840 while giving an identical value.
     avail_positions = scaled[available]
-    d_nn = cdist(avail_positions, avail_positions)
     if len(available) >= 2:
-        np.fill_diagonal(d_nn, np.inf)
-        lengthscale = float(np.median(d_nn.min(axis=1)))
+        tree = KDTree(avail_positions)
+        nn_dist = np.asarray(tree.query(avail_positions, k=2)[0])[:, 1]
+        lengthscale = float(np.median(nn_dist))
         lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
     else:
         lengthscale = 1.0
@@ -1150,7 +1153,7 @@ def select_candidates_batch_diverse(
         if not remaining:
             break
         rem = np.array(sorted(remaining), dtype=int)
-        dists = pairwise[pick, rem]
+        dists = cdist(scaled[pick : pick + 1], scaled[rem])[0]
         near = np.exp(-0.5 * np.square(dists / lengthscale))
         if higher_is_better:
             working[rem] = working[rem] - strength * near

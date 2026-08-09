@@ -14,6 +14,7 @@ from scipy.spatial import KDTree
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
 from . import geometry as geom
+from ._cache_key import _pack_optional_float
 from ._constants import (
     _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM,
     _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM,
@@ -105,18 +106,12 @@ def _dissociative_pair_cache_key(
     cfg_bytes = (
         struct.pack("<d", float(config.hollow_site_dedup_tolerance))
         + struct.pack("<d", float(config.min_initial_distance))
-        + _pack_optional_float_local(config.top_layer_tolerance)
+        + _pack_optional_float(config.top_layer_tolerance)
         + config.material_type.encode()
     )
     return hashlib.sha256(
         pos_bytes + cell_bytes + numbers_bytes + cfg_bytes
     ).hexdigest()
-
-
-def _pack_optional_float_local(value: float | None) -> bytes:
-    if value is None:
-        return b"\x00" + struct.pack("<d", float("nan"))
-    return b"\x01" + struct.pack("<d", float(value))
 
 
 def _get_dissociative_site_pairs(

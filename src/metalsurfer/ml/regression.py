@@ -24,6 +24,8 @@ from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from .._numeric_defaults import DEFAULT_SEED
+
 logger = logging.getLogger(__name__)
 
 ModelType = Literal["ridge", "random_forest", "gradient_boost"]
@@ -52,7 +54,7 @@ def tree_regressor_for_bayesian_surrogate(
 
 def _build_estimator(
     model_type: ModelType,
-    random_state: int = 42,
+    random_state: int = DEFAULT_SEED,
     **kwargs: Any,
 ) -> Pipeline:
     """Build a scikit-learn pipeline for the selected regressor."""
@@ -85,7 +87,7 @@ def train_model(
     X: pd.DataFrame | np.ndarray,
     y: pd.Series | np.ndarray,
     model_type: ModelType = "gradient_boost",
-    random_state: int = 42,
+    random_state: int = DEFAULT_SEED,
     **kwargs: Any,
 ) -> Pipeline:
     """Train a regression model on the full dataset; returns fitted scaler + regressor pipeline."""
@@ -133,7 +135,7 @@ def grouped_cross_validate(
     groups: pd.Series | np.ndarray,
     model_type: ModelType = "gradient_boost",
     n_splits: int = 5,
-    random_state: int = 42,
+    random_state: int = DEFAULT_SEED,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Grouped K-fold CV (by molecule/surface) to avoid leakage; returns fold_metrics and mean/std MAE, RMSE, R²."""

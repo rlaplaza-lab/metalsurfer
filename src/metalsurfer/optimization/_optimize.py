@@ -12,6 +12,7 @@ import numpy as np
 from ase import Atoms
 
 from .._logging import torchsim_output_capture
+from .._numeric_defaults import DEFAULT_FMAX
 from ..config import AdsorptionConfig
 from ..exceptions import DependencyMissingError
 from ..surface_prep.freeze import frozen_indices_from_constraints
@@ -250,7 +251,7 @@ def _split_forces_by_system(
 def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP stack / GPU
     conformers: list[Atoms],
     ts_model,
-    fmax: float = 0.05,
+    fmax: float = DEFAULT_FMAX,
     steps: int = 100,
     config: AdsorptionConfig | None = None,
 ) -> list[tuple[Atoms, float]]:

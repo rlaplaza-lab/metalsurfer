@@ -9,8 +9,10 @@ from typing import Any, Literal
 from ._numeric_defaults import (
     CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
     CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
+    DEFAULT_FMAX,
     DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
     DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
+    DEFAULT_SEED,
     DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     DEFAULT_SYMMETRY_TOLERANCE,
     MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM,
@@ -141,8 +143,16 @@ def _check_non_negative(name: str, value: float) -> None:
 
 
 def _check_positive_int(name: str, value: int) -> None:
-    if not isinstance(value, int) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{name} must be a positive integer, got {value!r}")
+
+
+def _check_device(value: str) -> None:
+    if value == "cpu" or value == "cuda":
+        return
+    if value.startswith("cuda:") and value[5:].isdigit():
+        return
+    raise ValueError(f"device must be 'cpu', 'cuda', or 'cuda:<int>', got {value!r}")
 
 
 def _check_range_tuple(
@@ -288,6 +298,14 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
         raise ValueError(
             "max_initial_distance must be positive when set, "
             f"got {root.max_initial_distance}"
+        )
+    if (
+        root.max_initial_distance is not None
+        and root.min_initial_distance > root.max_initial_distance
+    ):
+        raise ValueError(
+            "min_initial_distance must be <= max_initial_distance, "
+            f"got min={root.min_initial_distance}, max={root.max_initial_distance}"
         )
     if not 0.0 <= root.flat_aromatic_parallel_fraction <= 1.0:
         raise ValueError(
@@ -544,7 +562,7 @@ class AdsorptionConfig:
     num_conformers: int = 10
     num_placements: int | None = None
     device: str = "cuda"
-    fmax: float = 0.05
+    fmax: float = DEFAULT_FMAX
     stage1_steps: int = 50
     stage2_steps: int = 150
     reference_optimization_steps: int = 100
@@ -604,7 +622,7 @@ class AdsorptionConfig:
     energy_dedup_threshold: float = 0.05
     rmsd_dedup_threshold: float = 0.1
     connectivity_multipliers: list[float] = field(default_factory=lambda: [1.2, 1.3])
-    seed: int = 42
+    seed: int = DEFAULT_SEED
     # Deprecated no-op: see ``conformer_sampling``.
     boltzmann_temperature: float = 300.0
     min_pbc_image_separation: float = 8.0
@@ -744,7 +762,7 @@ class AdsorptionConfig:
         if not self.model_name:
             raise ValueError("model_name must be a non-empty string")
 
-        _check_choice("device", self.device, allowed=("cuda", "cpu"))
+        _check_device(self.device)
 
         if self.saturation_max_steps is not None:
             _check_positive_int("saturation_max_steps", self.saturation_max_steps)

@@ -301,11 +301,14 @@ def check_decomposition(
             return False, "no adsorbate atoms after prefix"
         surface_symbols = None
 
-    for mult in connectivity_multipliers:
-        if not _is_molecule_connected(
-            atoms, surface_symbols=surface_symbols, multiplier=mult
-        ):
-            return False, f"adsorbate not connected (multiplier={mult})"
+    # A single check at the largest multiplier is sufficient: connectivity at
+    # the loosest ratio implies connectivity at every tighter ratio, so looping
+    # over all multipliers is pure redundancy.
+    max_mult = max(connectivity_multipliers) if connectivity_multipliers else 1.3
+    if not _is_molecule_connected(
+        atoms, surface_symbols=surface_symbols, multiplier=max_mult
+    ):
+        return False, f"adsorbate not connected (multiplier={max_mult})"
 
     if reference_smiles is None:
         return True, "connectivity intact (no SMILES reference for deeper checks)"

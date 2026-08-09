@@ -5,6 +5,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from ..placement._constants import _DISTANCE_ZERO_EPS
 from ..placement.geometry import normalize_quaternion
 from .schema import PlacementRecord
 
@@ -119,7 +120,7 @@ def extract_features_from_dataset(
     )
     quat_values = quat_cols.to_numpy(dtype=float)
     norms = np.linalg.norm(quat_values, axis=1)
-    zero_mask = norms < 1e-12
+    zero_mask = norms < _DISTANCE_ZERO_EPS
     norms[zero_mask] = 1.0
     quat_values = quat_values / norms[:, np.newaxis]
     neg_mask = quat_values[:, 0] < 0.0

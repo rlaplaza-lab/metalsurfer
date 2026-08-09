@@ -90,7 +90,7 @@ target-version = "py312"
 line-length = 88
 exclude = [".git", ".pytest_cache", "__pycache__", "*.egg-info", "results_*", "results", ".ruff_cache", "do_not_stage_tests"]
 
-[tool.ruff.lint]
+ [tool.ruff.lint]
 select = [
     "E",    # pycodestyle errors
     "F",    # pyflakes

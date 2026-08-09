@@ -15,6 +15,7 @@ from . import geometry as geom
 from ._constants import (
     _DISTANCE_RECOVERY_HEIGHT_STEPS,
     _DISTANCE_RECOVERY_XY_ATTEMPTS,
+    _DISTANCE_ZERO_EPS,
     _PARALLEL_Z_MIN_HI_MARGIN,
     _VECTOR_NORM_EPS,
 )
@@ -409,7 +410,7 @@ def _center_with_height_delta(
     """Shift *center* along the placement normal by the height-window delta."""
     z_span = float(ctx.z_base_hi - ctx.z_base_lo)
     delta_h = (new_z_fraction - old_z_fraction) * z_span
-    if abs(delta_h) < 1e-12:
+    if abs(delta_h) < _DISTANCE_ZERO_EPS:
         return np.asarray(center, dtype=float).copy()
     n_hat = _placement_normal(ctx, slab)
     return np.asarray(center, dtype=float) + float(delta_h) * n_hat
@@ -424,7 +425,7 @@ def _xy_recovery_offsets(
     """Deterministic in-plane recovery offsets within configured XY ranges."""
     x_lo, x_hi = config.placement_x_range
     y_lo, y_hi = config.placement_y_range
-    if abs(x_hi - x_lo) < 1e-12 and abs(y_hi - y_lo) < 1e-12:
+    if abs(x_hi - x_lo) < _DISTANCE_ZERO_EPS and abs(y_hi - y_lo) < _DISTANCE_ZERO_EPS:
         return []
     rng = random.Random(
         (int(config.seed) * 1_000_003)

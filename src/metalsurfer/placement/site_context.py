@@ -11,6 +11,7 @@ from ase import Atoms
 
 from ..config import AdsorptionConfig
 from ..symmetry import SymmetryAnalysisError
+from ._cache_key import _pack_optional_float
 from ._constants import (
     _VORONOI_AUTO_WIDEN_MAX_SCALE,
     _VORONOI_AUTO_WIDEN_PROBE_SCALE,
@@ -71,12 +72,6 @@ def clear_site_caches() -> None:
     from .dissociative import clear_dissociative_pair_caches
 
     clear_dissociative_pair_caches()
-
-
-def _pack_optional_float(value: float | None) -> bytes:
-    if value is None:
-        return b"\x00" + struct.pack("<d", float("nan"))
-    return b"\x01" + struct.pack("<d", float(value))
 
 
 def _unique_sites_cache_key(slab: Atoms, config: AdsorptionConfig) -> str:

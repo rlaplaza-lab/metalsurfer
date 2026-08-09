@@ -1,14 +1,18 @@
 """Typed domain models for adsorption screening results."""
 
+from __future__ import annotations
+
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
-import pandas as pd
 from ase import Atoms
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from ._csv_coerce import (
     float_or as _row_float_or,
@@ -228,7 +232,7 @@ class PlacementDescriptor:
         row: Mapping[str, Any],
         *,
         placement_index: int | None = None,
-    ) -> "PlacementDescriptor":
+    ) -> PlacementDescriptor:
         """Inflate a descriptor from lean or rich (``initial_*``) flat CSV/dict rows."""
         slab_indices_raw = _provenance_value_from_row(row, "slab_indices", None)
         slab_indices = None
@@ -451,6 +455,8 @@ class ScreeningRunResult:
         include_provenance: bool = False,
     ) -> pd.DataFrame:
         """Return a detailed pandas DataFrame for this screening run."""
+        import pandas as pd
+
         return pd.DataFrame(
             self.to_rows(
                 results_dir=results_dir,

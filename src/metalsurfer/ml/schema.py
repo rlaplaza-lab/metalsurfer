@@ -23,8 +23,10 @@ from .._csv_coerce import (
     with_default as _with_default,
 )
 from .._numeric_defaults import (
+    DEFAULT_FMAX,
     DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
     DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
+    DEFAULT_SEED,
     DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     DEFAULT_SYMMETRY_TOLERANCE,
     MIN_CONTACT_RATIO_DEFAULT,
@@ -153,11 +155,11 @@ class ComputationContext:
     """
 
     model_name: str = "uma-s-1p2"
-    fmax: float = 0.05
+    fmax: float = DEFAULT_FMAX
     stage1_steps: int = 50
     stage2_steps: int = 150
     device: str = "cuda"
-    seed: int = 42
+    seed: int = DEFAULT_SEED
     placement_z_range: tuple[float, float] = (0.7, 1.25)
     placement_z_scale_by_covalent_radius: bool = True
     min_initial_distance: float = MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM

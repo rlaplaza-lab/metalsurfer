@@ -24,7 +24,10 @@ from ..exceptions import (
     OptimizationError,
 )
 from ..io_results import _write_clean_xyz
-from ..placement._constants import _MEAN_COVALENT_RADIUS_FALLBACK
+from ..placement._constants import (
+    _MEAN_COVALENT_RADIUS_FALLBACK,
+    _SURFACE_NORMAL_FALLBACK_NORM_EPS,
+)
 from ..placement._material import MATERIAL_PBC, material_aware_pbc
 from ..placement.geometry import _get_covalent_radius
 from ..placement.site_coords import _periodic_image_offsets
@@ -948,7 +951,11 @@ def deposit_adatoms(
             site = candidate_sites[int(i)]
             normal = np.asarray(site.normal, dtype=float)
             nrm = float(np.linalg.norm(normal))
-            normal = normal / nrm if nrm > 1e-12 else np.array([0.0, 0.0, 1.0])
+            normal = (
+                normal / nrm
+                if nrm > _SURFACE_NORMAL_FALLBACK_NORM_EPS
+                else np.array([0.0, 0.0, 1.0])
+            )
             pos = site.xyz + float(adsorption_height) * normal
             too_close = False
             for acc in accepted:

@@ -1,14 +1,11 @@
 [run]
 source = src/metalsurfer
-omit =
-    optimization.py
-    */__pycache__/*
 
 [report]
 precision = 2
 show_missing = True
 skip_covered = False
-fail_under = 74
+fail_under = 85
 
 exclude_lines =
     pragma: no cover

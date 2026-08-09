@@ -26,12 +26,24 @@ from .conftest import make_slab
 def test_valid_device_values():
     AdsorptionConfig(device="cuda")
     AdsorptionConfig(device="cpu")
+    AdsorptionConfig(device="cuda:0")
+    AdsorptionConfig(device="cuda:3")
 
 
-@pytest.mark.parametrize("device", ["gpu", "", "CUDA"])
+@pytest.mark.parametrize("device", ["gpu", "", "CUDA", "cuda:abc", "cuda:-1"])
 def test_invalid_device_raises(device):
     with pytest.raises(ValueError, match="device"):
         AdsorptionConfig(device=device)
+
+
+def test_positive_int_rejects_bool():
+    with pytest.raises(ValueError, match="positive integer"):
+        AdsorptionConfig(num_conformers=True)
+
+
+def test_initial_distance_order_validated():
+    with pytest.raises(ValueError, match="min_initial_distance must be <="):
+        AdsorptionConfig(min_initial_distance=5.0, max_initial_distance=2.0)
 
 
 def test_default_config():
