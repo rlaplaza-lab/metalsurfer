@@ -4,8 +4,10 @@ Slab symmetry follows the 3D ASE supercell (not layer groups). `symmetry_toleran
 is `symprec` for spglib and the Cartesian threshold for site matching.
 """
 
+from __future__ import annotations
+
 import hashlib
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import spglib
@@ -13,7 +15,9 @@ import spglib.error as _spglib_error_module
 from ase import Atoms
 
 from ._numeric_defaults import DEFAULT_SYMMETRY_TOLERANCE
-from .placement.site_types import Site, with_symmetry
+
+if TYPE_CHECKING:
+    from .placement.site_types import Site
 
 # Opt into the new spglib error handling (raises SpglibError instead of
 # returning None) and suppress the DeprecationWarning it would emit otherwise.
@@ -85,7 +89,7 @@ class SymmetryAnalyzer:
                 )
             self._lattice = self.cell.copy()
             inv = np.linalg.inv(self._lattice)
-            self._fractional = self.positions @ inv.T
+            self._fractional = self.positions @ inv
             return
 
         # Cluster: orthorhombic box, atoms centered
@@ -182,7 +186,7 @@ class SymmetryAnalyzer:
 
     def _cart_to_frac(self, cart: np.ndarray) -> np.ndarray:
         inv = np.linalg.inv(self._lattice)
-        return cart @ inv.T
+        return cart @ inv
 
     def _wrap_frac(self, frac: np.ndarray) -> np.ndarray:
         if self._mode == "periodic":
@@ -204,7 +208,7 @@ class SymmetryAnalyzer:
 
     def _cart_sep_from_frac_delta(self, d_frac: np.ndarray) -> np.ndarray:
         """Cartesian separation vector (row) from fractional MIC difference."""
-        return d_frac @ self._lattice.T
+        return d_frac @ self._lattice
 
     def _slab_normal(self) -> np.ndarray:
         """Unit normal from lattice a × b (slab plane)."""
@@ -314,6 +318,10 @@ class SymmetryAnalyzer:
         sites: list[Site],
         orbits: list[list[int]],
     ) -> list[Site]:
+        # Imported lazily: `placement` imports `symmetry` at module scope, so a
+        # top-level import here would create a circular import.
+        from .placement.site_types import with_symmetry
+
         out: list[Site] = []
         for idxs in orbits:
             rep = min(idxs, key=lambda i: self._site_sort_key(sites[i]))
@@ -417,7 +425,7 @@ class SymmetryAnalyzer:
         fp_cur = self._operations_fingerprint(self)
         return fp_ref != fp_cur
 
-    def _operations_fingerprint(self, analyzer: "SymmetryAnalyzer") -> str:
+    def _operations_fingerprint(self, analyzer: SymmetryAnalyzer) -> str:
         frac_ops = list(analyzer._frac_ops_from_dataset())
 
         def sort_key(

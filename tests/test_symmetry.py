@@ -1,5 +1,8 @@
 """Tests for spglib-backed symmetry analysis (periodic slabs and clusters)."""
 
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 import spglib
@@ -500,3 +503,75 @@ def test_tilted_slab_symmetry_multiplicities_partition_raw():
     an = SymmetryAnalyzer(slab, symmetry_tolerance=0.15)
     regrouped = an.analyze_site_symmetry(raw, planar=True)
     assert sum(int(g.symmetry_multiplicity or 0) for g in regrouped) == len(raw)
+
+
+def _manual_graphene() -> Atoms:
+    """Two-atom graphene cell (``ase.build.graphene`` basis, built explicitly)."""
+    a = 2.46
+    c = 12.0
+    cell = [[a, 0.0, 0.0], [a * 0.5, a * np.sqrt(3) / 2, 0.0], [0.0, 0.0, c]]
+    pos = [[0.0, 0.0, 0.0], [a / 2, a * np.sqrt(3) / 6, 0.0]]  # second C at (1/3, 1/3)
+    return Atoms("C2", positions=pos, cell=cell, pbc=[True, True, False])
+
+
+def test_fcc111_pt_spacegroup():
+    """Non-orthogonal fcc(111) Pt slab is P-3m1 (164) with 48 operations."""
+    slab = fcc111("Pt", size=(2, 2, 3), a=3.92, vacuum=10.0)
+    info = SymmetryAnalyzer(slab).get_symmetry_info()
+    assert info["spacegroup_number"] == 164
+    assert info["international_symbol"] == "P-3m1"
+    assert info["n_symmetry_operations"] == 48
+
+
+def test_bulk_mg_hcp_spacegroup():
+    """Hexagonal bulk Mg is P6_3/mmc (194) with 24 operations."""
+    atoms = bulk("Mg", "hcp", a=3.2, c=5.2)
+    info = SymmetryAnalyzer(atoms).get_symmetry_info()
+    assert info["spacegroup_number"] == 194
+    assert info["international_symbol"] == "P6_3/mmc"
+    assert info["n_symmetry_operations"] == 24
+
+
+def test_manual_graphene_spacegroup():
+    """Graphene honeycomb net is P6/mmm (191) with 24 operations."""
+    info = SymmetryAnalyzer(_manual_graphene()).get_symmetry_info()
+    assert info["spacegroup_number"] == 191
+    assert info["international_symbol"] == "P6/mmm"
+    assert info["n_symmetry_operations"] == 24
+
+
+def test_symmetry_module_imports_without_circular_import():
+    """``metalsurfer.symmetry`` imports standalone (pytest masks the import cycle)."""
+    proc = subprocess.run(
+        [sys.executable, "-c", "from metalsurfer.symmetry import SymmetryAnalyzer"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_equivalent_site_reduction_nonorthogonal():
+    """Top-layer atop sites of a non-orthogonal fcc(111) slab collapse into orbits."""
+    from metalsurfer.placement.site_types import Site
+
+    slab = fcc111("Pt", size=(2, 2, 3), a=3.92, vacuum=10.0)
+    z = slab.positions[:, 2]
+    top = slab.positions[z > float(z.max()) - 0.5]
+    sites = [
+        Site(
+            xyz=p,
+            normal=[0.0, 0.0, 1.0],
+            site_type="atop",
+            slab_indices=(),
+            material_type="slab",
+            site_source="test",
+            env_fingerprint=(),
+        )
+        for p in top
+    ]
+    assert len(sites) >= 4
+
+    an = SymmetryAnalyzer(slab, symmetry_tolerance=0.1)
+    reduced = an.analyze_site_symmetry(sites)
+    assert sum(int(s.symmetry_multiplicity or 0) for s in reduced) == len(sites)
+    assert len(reduced) < len(sites)
