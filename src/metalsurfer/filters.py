@@ -22,7 +22,7 @@ from ._logging import warn_once
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
 from .models import ScreeningResult
-from .placement._material import material_aware_pbc
+from .placement._material import calculator_pbc_for_atoms
 from .placement.geometry import calculate_min_distance
 
 logger = logging.getLogger(__name__)
@@ -386,7 +386,7 @@ def check_desorption(
         if np.any(mask):
             slab_positions = slab_positions[mask]
 
-    _pbc_for_dist = material_aware_pbc(material_type)
+    _pbc_for_dist = calculator_pbc_for_atoms(atoms)
     min_d = calculate_min_distance(
         adsorbate.get_positions(),
         slab_positions,

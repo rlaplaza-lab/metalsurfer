@@ -6,6 +6,7 @@ from metalsurfer.models import (
     BindingCampaignResult,
     MoleculeCampaignSummary,
     MoleculeSummary,
+    PlacementDescriptor,
     ReferenceEnergies,
     SaturationCampaignResult,
     SaturationRunResult,
@@ -448,3 +449,75 @@ def test_binding_campaign_format_summary_empty_run():
     summary = campaign.format_summary(results_dir="results_manual")
     assert "No molecules processed" in summary
     assert "(XYZ, CSV)" in summary
+
+
+# ---------------------------------------------------------------------------
+# PlacementDescriptor row coercion / round-trip (QC #5)
+# ---------------------------------------------------------------------------
+
+
+class TestPlacementDescriptorRow:
+    def test_to_row_from_row_preserves_fields(self):
+        desc = make_placement_descriptor(
+            placement_id=3,
+            conformer_index=2,
+            tilt_deg=15.0,
+            azimuth_deg=45.0,
+            x=1.2,
+            y=2.3,
+            z_offset=2.5,
+            shape="flat",
+            site_type="fcc",
+        )
+        row = desc.to_row(include_provenance=True)
+        restored = PlacementDescriptor.from_row(row, placement_index=3)
+        for attr in (
+            "conformer_index",
+            "orientation_type",
+            "face_flip",
+            "en_atom_index",
+            "site_index",
+            "site_type",
+            "tilt_deg",
+            "azimuth_deg",
+            "azimuth_in_plane_deg",
+            "z_fraction",
+            "placement_index",
+            "x",
+            "y",
+            "z_offset",
+            "shape",
+        ):
+            assert getattr(restored, attr) == getattr(desc, attr), attr
+
+    def test_from_row_handles_missing_columns(self):
+        """Missing optional columns fall back to sane defaults without raising."""
+        row = {"conformer_index": 0, "x": 1.0, "y": 2.0}
+        desc = PlacementDescriptor.from_row(row)
+        assert desc.conformer_index == 0
+        assert desc.orientation_type == "round"
+        assert desc.site_index == -1
+        assert desc.z_fraction == 0.5
+        assert desc.face_flip is False
+
+    def test_from_row_rejects_missing_conformer_index(self):
+        """A missing required conformer_index raises a clear error, not KeyError."""
+        with pytest.raises(ValueError, match="conformer_index"):
+            PlacementDescriptor.from_row({"x": 1.0})
+
+    def test_from_row_handles_nan_string_cells(self):
+        # Provenance fields arrive as ``initial_*`` columns; values may be
+        # "nan" strings or empty cells when read back from CSV.
+        row = {
+            "conformer_index": "0",
+            "initial_en_atom_index": "nan",
+            "initial_x": "1.5",
+            "initial_face_flip": "false",
+            "initial_site_index": "",
+        }
+        desc = PlacementDescriptor.from_row(row)
+        assert desc.conformer_index == 0
+        assert desc.en_atom_index is None
+        assert desc.x == pytest.approx(1.5)
+        assert desc.face_flip is False
+        assert desc.site_index == -1

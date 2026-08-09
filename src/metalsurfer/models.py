@@ -252,8 +252,13 @@ class PlacementDescriptor:
         def _prov(attr: str, default: Any) -> Any:
             return _provenance_value_from_row(row, attr, default)
 
+        conformer_index_raw = row.get("conformer_index")
+        if _row_is_missing(conformer_index_raw) or conformer_index_raw is None:
+            raise ValueError(
+                "PlacementDescriptor.from_row requires a 'conformer_index' column"
+            )
         return cls(
-            conformer_index=int(row["conformer_index"]),
+            conformer_index=int(conformer_index_raw),
             orientation_type=cast(
                 Literal["parallel", "EN-down", "vertical", "round", "dissociative"],
                 _prov("orientation_type", "round"),

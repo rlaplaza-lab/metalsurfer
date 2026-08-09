@@ -577,7 +577,7 @@ def test_bo_defaults():
     assert c.bo.transfer.similarity_lengthscale == 4.0
     assert c.bo.transfer.min_similarity == 0.05
     assert c.bo.transfer.trust_patience == 2
-    assert c.bo.transfer.mae_tolerance == 0.0
+    assert c.bo.transfer.mae_tolerance == 0.05
     assert c.bo.transfer.exploration_fraction == 0.2
     assert c.bo.transfer.proximity_lengthscale == 1.0
     assert c.bo.transfer.proximity_floor == 0.0

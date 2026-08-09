@@ -754,6 +754,29 @@ def test_desorption_threshold_is_strict_greater_than():
     assert "too far" in reason_gt
 
 
+def test_desorption_uses_calculator_pbc(monkeypatch):
+    """QC #1: desorption distance check must use the calculator's PBC, not material_aware_pbc."""
+    from metalsurfer.placement._material import calculator_pbc_for_atoms
+
+    slab = make_slab(n_layers=1)
+    combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+
+    captured = {}
+
+    def _fake(ads_pos, slab_pos, cell, *, use_pbc=True, pbc=None, **kwargs):
+        captured["pbc"] = list(pbc)
+        return 0.0
+
+    monkeypatch.setattr("metalsurfer.filters.calculate_min_distance", _fake)
+    ok, reason = check_desorption(
+        combined, slab, binding_threshold=4.0, material_type="slab"
+    )
+    assert ok
+    # Calculator PBC maps any partial-periodic substrate to (True, True, True).
+    assert captured["pbc"] == calculator_pbc_for_atoms(combined)
+    assert captured["pbc"] == [True, True, True]
+
+
 def test_desorption_no_adsorbate():
     slab = make_slab(n_layers=1)
     ok, reason = check_desorption(
@@ -828,7 +851,7 @@ def test_filter_results_desorption_uses_surface_symbols_masking():
     combined = place_molecule_on_slab(
         slab_with_pre_adsorbate,
         make_water(),
-        z_offset=10.0,
+        z_offset=14.0,
         x_shift=5.0,
         y_shift=5.0,
     )

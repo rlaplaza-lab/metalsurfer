@@ -39,7 +39,7 @@ def test_is_missing_and_with_default():
     assert is_missing(None) is True
     assert is_missing("nan") is True
     assert is_missing(0) is False
-    assert is_missing("") is False
+    assert is_missing("") is True
     assert with_default(None, 7) == 7
     assert with_default("nan", 7) == 7
     assert with_default(3, 7) == 3

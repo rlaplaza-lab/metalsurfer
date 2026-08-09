@@ -18,7 +18,7 @@ from ._constants import (
     _PARALLEL_Z_MIN_HI_MARGIN,
     _VECTOR_NORM_EPS,
 )
-from ._material import material_aware_pbc, material_type_for_placement
+from ._material import calculator_pbc_for_atoms, material_type_for_placement
 from .orientation import (
     _is_flat_aromatic,
     _parallel_z_adjustments,
@@ -651,7 +651,7 @@ def _validate_posed_adsorbate(
             adsorbate,
             pre_ads,
             cell=np.asarray(slab.get_cell(), dtype=float),
-            pbc=material_aware_pbc(mat_type),
+            pbc=calculator_pbc_for_atoms(slab),
         )
         if not sep_ok:
             return "adsorbate_overlap"

@@ -142,11 +142,7 @@ def remove_duplicate_conformers(
         is_duplicate = False
         for uc, ue in zip(unique_conformers, unique_energies, strict=True):
             if abs(energy - ue) < energy_threshold:
-                pos1 = conformer.get_positions()
-                pos2 = uc.get_positions()
-                pos1_c = pos1 - np.mean(pos1, axis=0)
-                pos2_c = pos2 - np.mean(pos2, axis=0)
-                rmsd = float(np.sqrt(np.mean(np.sum((pos1_c - pos2_c) ** 2, axis=1))))
+                rmsd = _kabsch_rmsd(conformer.get_positions(), uc.get_positions())
                 if rmsd < distance_threshold:
                     is_duplicate = True
                     break
@@ -161,6 +157,25 @@ def remove_duplicate_conformers(
         len(conformers),
     )
     return unique_conformers, unique_energies
+
+
+def _kabsch_rmsd(pos_a: np.ndarray, pos_b: np.ndarray) -> float:
+    """RMSD after optimal Kabsch rotation, so orientation-equivalent conformers match.
+
+    Both point sets are centred on their centroids, then ``pos_a`` is rotated by the
+    optimal rotation (SVD of the cross-covariance) before measuring RMSD against
+    ``pos_b``. Returns ``inf`` when the atom counts disagree.
+    """
+    if np.asarray(pos_a).shape != np.asarray(pos_b).shape:
+        return float("inf")
+    a = np.asarray(pos_a, dtype=float) - np.mean(pos_a, axis=0)
+    b = np.asarray(pos_b, dtype=float) - np.mean(pos_b, axis=0)
+    H = a.T @ b
+    U, _S, Vt = np.linalg.svd(H)
+    d = float(np.sign(np.linalg.det(Vt.T @ U.T)))
+    rot = Vt.T @ np.diag([1.0, 1.0, d]) @ U.T
+    a_rot = a @ rot.T
+    return float(np.sqrt(np.mean(np.sum((a_rot - b) ** 2, axis=1))))
 
 
 def select_conformer_boltzmann(

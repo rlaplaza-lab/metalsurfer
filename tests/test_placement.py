@@ -2863,6 +2863,30 @@ def test_saturation_finalize_rejects_adsorbate_overlap():
     assert reason_far != "adsorbate_overlap"
 
 
+def test_validate_posed_adsorbate_uses_calculator_pbc(monkeypatch):
+    """QC #1: the separation-distance check must use the calculator PBC."""
+    captured = {}
+
+    def _fake_separation(ads, pre, *, cell, pbc=None, **kwargs):
+        captured["pbc"] = list(pbc)
+        return True, 99.0
+
+    monkeypatch.setattr(
+        "metalsurfer.placement.pose.geom.check_adsorbate_separation",
+        _fake_separation,
+    )
+
+    slab = make_slab()
+    water = place_adsorbate_above_slab(
+        slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
+    )
+    covered = slab + water
+    config = AdsorptionConfig()
+    _validate_posed_adsorbate(water, covered, config, slab_for_sites=slab)
+    assert captured["pbc"] == calculator_pbc_for_atoms(slab)
+    assert captured["pbc"] == [True, True, True]
+
+
 def test_strict_initial_placement_e2e_reason():
     slab = make_slab()
     config = AdsorptionConfig(
