@@ -113,6 +113,12 @@ Almost every packing/saturation bug traces to one of these:
 - Symmetry-reduced sites until coverage breaks symmetry vs the clean reference.
 - GPU-first: leave `num_placements` / `bo.initial_random` / `bo.batch_size` as
   `None` so TorchSim autotunes parallel capacity.
+- Fill target is **capacity-bounded**: the effective placement count is clamped
+  to the enumerable spec capacity (`estimate_molecule_complexity`), so the retry
+  loop cannot spin to `placement_retry_max_attempts` on an unreachable target
+  when occupancy-pruned sites leave fewer enumerable placements than requested
+  (`placement_fill_clamp_to_capacity`, default `True`). Retries also early-stop
+  after `placement_retry_early_stop_patience` consecutive zero-yield attempts.
 
 ## Where detail lives
 

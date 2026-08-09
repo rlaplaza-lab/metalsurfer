@@ -241,6 +241,15 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
             "placement_retry_diversity_seed_increment",
             root.placement_retry_diversity_seed_increment,
         )
+        _check_positive_int(
+            "placement_retry_early_stop_patience",
+            root.placement_retry_early_stop_patience,
+        )
+    if root.placement_retry_early_stop_patience < 1:
+        raise ValueError(
+            "placement_retry_early_stop_patience must be >= 1, "
+            f"got {root.placement_retry_early_stop_patience}"
+        )
     if root.placement_retry_oversample_max < 1.0:
         raise ValueError(
             "placement_retry_oversample_max must be >= 1.0, "
@@ -606,6 +615,12 @@ class AdsorptionConfig:
     placement_retry_diversity_seed_increment: int = 1000
     # Max specs requested per deficit round as a multiple of remaining slots.
     placement_retry_oversample_max: float = 6.0
+    # When True, clamp the fill target to the enumerable spec capacity so the
+    # retry loop cannot spin until max_attempts on an unreachable target.
+    placement_fill_clamp_to_capacity: bool = True
+    # Consecutive zero-yield retry attempts before giving up early (a plateau
+    # signal). placement_retry_max_attempts remains the absolute hard cap.
+    placement_retry_early_stop_patience: int = 2
     # Joblib-style n_jobs for placement materialization threads (-2 = all but one CPU).
     placement_materialize_workers: int = -2
     optimize_isolated_sequentially: bool = False

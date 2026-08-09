@@ -11,7 +11,10 @@ from ase import Atoms
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
 from ..placement._constants import _RETRY_BLOCK_SITE_AFTER
-from ..placement.generators import enumerate_placement_specs
+from ..placement.generators import (
+    enumerate_placement_specs,
+    estimate_molecule_complexity,
+)
 from ..placement.site_context import SiteContext
 from .shared import PlacementFailureEvent, _materialize_spec_placements
 
@@ -44,6 +47,25 @@ def placement_spec_key(
         float(spec.tilt_deg),
         float(spec.azimuth_deg),
         float(spec.azimuth_in_plane_deg),
+        bool(spec.face_flip),
+        spec.en_atom_index,
+    )
+
+
+def placement_cell_key(
+    spec: PlacementSpec,
+) -> tuple[int, str, int, bool, int | None]:
+    """Discrete placement neighborhood (excludes continuous pose params).
+
+    Two specs in the same cell share conformer/orientation/site/face/EN-slot;
+    they differ only in continuous z/tilt/azimuth, which is why re-seeding the
+    retry sampler reproduces the same failing neighborhood. Used to avoid
+    re-relaxing already-explored cells.
+    """
+    return (
+        spec.conformer_index,
+        spec.orientation_type,
+        spec.site_index,
         bool(spec.face_flip),
         spec.en_atom_index,
     )
@@ -132,6 +154,28 @@ def materialize_specs_filling_target(
     """
     if n_target <= 0:
         return MaterializeFillResult([], [], [], [], n_backfill_used=0, n_attempts=0)
+
+    original_n_target = n_target
+    if config.placement_fill_clamp_to_capacity:
+        capacity = estimate_molecule_complexity(
+            conformers,
+            slab_for_sites if slab_for_sites is not None else slab_atoms,
+            config,
+            smiles,
+            site_context=site_context,
+            full_slab=slab_atoms,
+        )
+        capacity_int = int(math.floor(capacity))
+        if capacity_int < n_target:
+            n_target = max(capacity_int, 0)
+            if n_target < original_n_target:
+                logger.warning(
+                    "Placement fill target (BO) clamped from %d to %d: enumerable "
+                    "spec capacity exhausted (material_type=%s)",
+                    original_n_target,
+                    n_target,
+                    config.material_type,
+                )
 
     combined: list[Atoms] = []
     placement_ids: list[int] = []
@@ -224,11 +268,39 @@ def fill_materialized_placements(
         assert config.num_placements is not None
         n_target = config.num_placements
 
+    # R1: clamp the success goal to the enumerable spec capacity so the retry
+    # loop cannot spin until max_attempts on a target that is unreachable.
+    # `n_target` keeps the original request (used for placement-index offsets);
+    # `effective_target` is the clamped success goal.
+    effective_target = n_target
+    if config.placement_fill_clamp_to_capacity:
+        capacity = estimate_molecule_complexity(
+            conformers,
+            slab_for_sites,
+            config,
+            smiles,
+            site_context=site_context,
+            full_slab=slab_atoms,
+        )
+        capacity_int = int(math.floor(capacity))
+        if capacity_int < n_target:
+            effective_target = max(capacity_int, 0)
+            if effective_target < n_target:
+                logger.warning(
+                    "Placement fill target clamped from %d to %d: enumerable spec "
+                    "capacity exhausted (material_type=%s)",
+                    n_target,
+                    effective_target,
+                    config.material_type,
+                )
+
     combined: list[Atoms] = []
     placement_ids: list[int] = []
     descriptors: list[PlacementDescriptor] = []
     failures: list[PlacementFailureEvent] = []
     failed_keys: set[tuple] = set()
+    # R3: discrete placement neighborhoods already relaxed (failures only).
+    tried_cells: set[tuple] = set()
     site_fail_counts: Counter[int] = Counter()
     blocked_sites: set[int] = set()
     last_spec_by_index: dict[int, PlacementSpec] = {}
@@ -241,10 +313,20 @@ def fill_materialized_placements(
     yield_floor = _yield_floor(oversample_max)
     yield_est = _YIELD_EST_PRIOR
     attempts_used = 0
+    # R2: consecutive zero-yield attempts (no new placements absorbed).
+    consecutive_zero_yield = 0
 
-    def _make_spec_filter(*, check_failed: bool):
-        def _filter(spec, *, _failed=failed_keys, _blocked=blocked_sites):
+    def _make_spec_filter(*, check_failed: bool, check_cells: bool = False):
+        def _filter(
+            spec,
+            *,
+            _failed=failed_keys,
+            _blocked=blocked_sites,
+            _cells=tried_cells,
+        ):
             if check_failed and placement_spec_key(spec) in _failed:
+                return False
+            if check_cells and placement_cell_key(spec) in _cells:
                 return False
             if int(spec.site_index) in _blocked:
                 return False
@@ -255,10 +337,10 @@ def fill_materialized_placements(
         return _filter
 
     for attempt in range(max_attempts):
-        if len(combined) >= n_target:
+        if len(combined) >= effective_target:
             break
 
-        remaining = n_target - len(combined)
+        remaining = effective_target - len(combined)
         if remaining <= 0:
             break
 
@@ -266,35 +348,70 @@ def fill_materialized_placements(
         attempt_seed = config.seed + (seed_increment * attempt)
         attempts_used = attempt + 1
 
+        # R3: on retry attempts also exclude already-tried discrete cells so a
+        # new seed explores fresh neighborhoods instead of re-relaxing failures.
         specs = enumerate_placement_specs(
             conformers,
             slab_for_sites,
             config,
             smiles,
             n_request,
-            filter_spec=_make_spec_filter(check_failed=True),
+            filter_spec=_make_spec_filter(check_failed=True, check_cells=(attempt > 0)),
             site_context=site_context,
             seed=attempt_seed,
             full_slab=slab_atoms,
         )
-        if not specs and failed_keys and remaining > 0:
-            logger.warning(
-                "Placement retry attempt %d: failed-key filter emptied the pool; "
-                "falling back to unfiltered enumeration once (blocked sites kept)",
-                attempt + 1,
-            )
 
-            specs = enumerate_placement_specs(
-                conformers,
-                slab_for_sites,
-                config,
-                smiles,
-                n_request,
-                filter_spec=_make_spec_filter(check_failed=False),
-                site_context=site_context,
-                seed=attempt_seed + 1,
-                full_slab=slab_atoms,
-            )
+        # R4: if the failed-key/cell filter emptied the pool, relax the block
+        # partially (unblock the least-clashing sites) before the ultimate
+        # unfiltered fallback, which the plan keeps as a final safety net.
+        if not specs and failed_keys and remaining > 0:
+            if blocked_sites:
+                ranked = sorted(blocked_sites, key=lambda s: (site_fail_counts[s], s))
+                unblock_k = max(1, len(ranked) // 2)
+                for site_idx in ranked[:unblock_k]:
+                    blocked_sites.discard(site_idx)
+                logger.info(
+                    "Placement retry attempt %d: failed-key filter emptied the pool; "
+                    "partially unblocking %d least-clashing site(s) (kept %d blocked)",
+                    attempt + 1,
+                    unblock_k,
+                    len(blocked_sites),
+                )
+                specs = enumerate_placement_specs(
+                    conformers,
+                    slab_for_sites,
+                    config,
+                    smiles,
+                    n_request,
+                    filter_spec=_make_spec_filter(
+                        check_failed=True, check_cells=False
+                    ),
+                    site_context=site_context,
+                    seed=attempt_seed + 1,
+                    full_slab=slab_atoms,
+                )
+
+            if not specs:
+                logger.warning(
+                    "Placement retry attempt %d: pool still empty after partial "
+                    "unblock; falling back to unfiltered enumeration once "
+                    "(blocked sites kept)",
+                    attempt + 1,
+                )
+                specs = enumerate_placement_specs(
+                    conformers,
+                    slab_for_sites,
+                    config,
+                    smiles,
+                    n_request,
+                    filter_spec=_make_spec_filter(
+                        check_failed=False, check_cells=False
+                    ),
+                    site_context=site_context,
+                    seed=attempt_seed + 2,
+                    full_slab=slab_atoms,
+                )
 
         if not specs:
             break
@@ -324,6 +441,7 @@ def fill_materialized_placements(
             failed_spec = last_spec_by_index.get(fail.placement_id)
             if failed_spec is not None:
                 failed_keys.add(placement_spec_key(failed_spec))
+                tried_cells.add(placement_cell_key(failed_spec))
                 site_idx = int(failed_spec.site_index)
                 if site_idx >= 0 and fail.reason in _CLASH_REASONS:
                     site_fail_counts[site_idx] += 1
@@ -339,7 +457,7 @@ def fill_materialized_placements(
             new_ids=new_ids,
             new_descriptors=new_descriptors,
             new_failures=new_failures,
-            n_target=n_target,
+            n_target=effective_target,
             n_tried=len(specs),
             yield_est=yield_est,
             yield_floor=yield_floor,
@@ -352,8 +470,28 @@ def fill_materialized_placements(
                 max_attempts,
                 take,
                 len(combined),
-                n_target,
+                effective_target,
             )
+
+        # R2: a zero-yield attempt (no new placements absorbed) is a plateau
+        # signal; give up early after `patience` such attempts. max_attempts
+        # remains the absolute hard cap.
+        if take == 0:
+            consecutive_zero_yield += 1
+        else:
+            consecutive_zero_yield = 0
+        if (
+            consecutive_zero_yield >= config.placement_retry_early_stop_patience
+            and len(combined) < effective_target
+        ):
+            logger.info(
+                "Placement fill early-stop after %d consecutive zero-yield attempts "
+                "(capacity likely exhausted; got %d/%d)",
+                consecutive_zero_yield,
+                len(combined),
+                effective_target,
+            )
+            break
 
     return MaterializeFillResult(
         combined=combined,
