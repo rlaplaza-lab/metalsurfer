@@ -71,6 +71,49 @@ def placement_cell_key(
     )
 
 
+def _clamp_target_to_capacity(
+    *,
+    n_target: int,
+    conformers: list[Atoms],
+    slab_for_sites: Atoms,
+    config: AdsorptionConfig,
+    smiles: str,
+    site_context: SiteContext | None,
+    slab_atoms: Atoms,
+    log_label: str = "",
+) -> int:
+    """R1: clamp a fill target to the enumerable placement-spec capacity.
+
+    Returns ``n_target`` unchanged when the clamp is disabled or capacity is
+    already sufficient; otherwise returns the (non-negative) capacity so the
+    retry loop cannot spin until ``max_attempts`` on an unreachable target.
+    """
+    if not config.placement_fill_clamp_to_capacity:
+        return n_target
+
+    capacity = estimate_molecule_complexity(
+        conformers,
+        slab_for_sites,
+        config,
+        smiles,
+        site_context=site_context,
+        full_slab=slab_atoms,
+    )
+    capacity_int = max(int(math.floor(capacity)), 0)
+    if capacity_int >= n_target:
+        return n_target
+
+    logger.warning(
+        "Placement fill target%s clamped from %d to %d: enumerable spec "
+        "capacity exhausted (material_type=%s)",
+        log_label,
+        n_target,
+        capacity_int,
+        config.material_type,
+    )
+    return capacity_int
+
+
 def _request_count(remaining: int, yield_est: float, oversample_max: float) -> int:
     """How many specs to enumerate given deficit and estimated materialization yield."""
     if remaining <= 0:
@@ -155,27 +198,16 @@ def materialize_specs_filling_target(
     if n_target <= 0:
         return MaterializeFillResult([], [], [], [], n_backfill_used=0, n_attempts=0)
 
-    original_n_target = n_target
-    if config.placement_fill_clamp_to_capacity:
-        capacity = estimate_molecule_complexity(
-            conformers,
-            slab_for_sites if slab_for_sites is not None else slab_atoms,
-            config,
-            smiles,
-            site_context=site_context,
-            full_slab=slab_atoms,
-        )
-        capacity_int = int(math.floor(capacity))
-        if capacity_int < n_target:
-            n_target = max(capacity_int, 0)
-            if n_target < original_n_target:
-                logger.warning(
-                    "Placement fill target (BO) clamped from %d to %d: enumerable "
-                    "spec capacity exhausted (material_type=%s)",
-                    original_n_target,
-                    n_target,
-                    config.material_type,
-                )
+    n_target = _clamp_target_to_capacity(
+        n_target=n_target,
+        conformers=conformers,
+        slab_for_sites=slab_for_sites if slab_for_sites is not None else slab_atoms,
+        config=config,
+        smiles=smiles,
+        site_context=site_context,
+        slab_atoms=slab_atoms,
+        log_label=" (BO)",
+    )
 
     combined: list[Atoms] = []
     placement_ids: list[int] = []
@@ -272,27 +304,15 @@ def fill_materialized_placements(
     # loop cannot spin until max_attempts on a target that is unreachable.
     # `n_target` keeps the original request (used for placement-index offsets);
     # `effective_target` is the clamped success goal.
-    effective_target = n_target
-    if config.placement_fill_clamp_to_capacity:
-        capacity = estimate_molecule_complexity(
-            conformers,
-            slab_for_sites,
-            config,
-            smiles,
-            site_context=site_context,
-            full_slab=slab_atoms,
-        )
-        capacity_int = int(math.floor(capacity))
-        if capacity_int < n_target:
-            effective_target = max(capacity_int, 0)
-            if effective_target < n_target:
-                logger.warning(
-                    "Placement fill target clamped from %d to %d: enumerable spec "
-                    "capacity exhausted (material_type=%s)",
-                    n_target,
-                    effective_target,
-                    config.material_type,
-                )
+    effective_target = _clamp_target_to_capacity(
+        n_target=n_target,
+        conformers=conformers,
+        slab_for_sites=slab_for_sites,
+        config=config,
+        smiles=smiles,
+        site_context=site_context,
+        slab_atoms=slab_atoms,
+    )
 
     combined: list[Atoms] = []
     placement_ids: list[int] = []
@@ -384,9 +404,7 @@ def fill_materialized_placements(
                     config,
                     smiles,
                     n_request,
-                    filter_spec=_make_spec_filter(
-                        check_failed=True, check_cells=False
-                    ),
+                    filter_spec=_make_spec_filter(check_failed=True, check_cells=False),
                     site_context=site_context,
                     seed=attempt_seed + 1,
                     full_slab=slab_atoms,
