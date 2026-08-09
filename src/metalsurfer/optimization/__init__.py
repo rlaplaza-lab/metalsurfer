@@ -27,7 +27,7 @@ callers that swap models mid-run should call :func:`clear_autobatcher_cache`
 in between. See :mod:`metalsurfer.optimization._cache` for details.
 """
 
-from ._cache import clear_autobatcher_cache
+from ._cache import _get_inflight_autobatcher, clear_autobatcher_cache
 from ._model import TorchSimCalculator, setup_torchsim_model
 from ._optimize import (
     batch_static,
@@ -43,6 +43,7 @@ __all__ = [
     "_resolve_device",
     "batch_static",
     "clear_autobatcher_cache",
+    "_get_inflight_autobatcher",
     "estimate_parallel_relaxation_capacity",
     "optimize_adsorbate_slab_batched",
     "optimize_isolated_molecules_batched",
