@@ -66,6 +66,7 @@ class SymmetryAnalyzer:
         self._fractional: np.ndarray
         self._cluster_com: np.ndarray | None = None
         self._cluster_half: np.ndarray | None = None
+        self._slab_normal_cache: np.ndarray | None = None
 
         self._prepare_lattice_and_fractional()
 
@@ -192,14 +193,46 @@ class SymmetryAnalyzer:
         pbc = np.asarray(self.pbc, dtype=bool)
         return bool(pbc[0] and pbc[1])
 
+    def _symmetry_pbc(self) -> np.ndarray:
+        """Per-axis periodicity used for wrapping and minimum-image folding.
+
+        Periodic mode hands spglib a genuine 3D lattice, so all three axes fold.
+        Cluster mode builds a *padded box* around a finite object: that box has
+        no periodicity at all, and folding across it would merge antipodal sites
+        of any cluster wider than roughly twice the padding margin.
+        """
+        if self._mode == "periodic":
+            return np.array([True, True, True], dtype=bool)
+        return np.array([False, False, False], dtype=bool)
+
     def _cart_to_frac(self, cart: np.ndarray) -> np.ndarray:
+        """Cartesian → fractional in the *same* frame spglib was given.
+
+        Cluster mode re-applies the centre-of-mass shift and half-box offset
+        used by :meth:`_prepare_lattice_and_fractional`; without it, site
+        fractional coordinates live in a different origin than the atomic ones
+        and the orbit assignment depends on where the cluster happens to sit in
+        absolute Cartesian space.
+        """
         inv = np.linalg.inv(self._lattice)
-        return cart @ inv
+        arr = np.asarray(cart, dtype=float)
+        if (
+            self._mode == "cluster"
+            and self._cluster_com is not None
+            and self._cluster_half is not None
+        ):
+            arr = arr - self._cluster_com + self._cluster_half
+        return arr @ inv
 
     def _wrap_frac(self, frac: np.ndarray) -> np.ndarray:
-        if self._mode == "periodic":
-            return frac % 1.0
-        return frac
+        pbc = self._symmetry_pbc()
+        if not np.any(pbc):
+            return frac
+        wrapped = np.asarray(frac, dtype=float).copy()
+        for dim in range(3):
+            if bool(pbc[dim]):
+                wrapped[..., dim] -= np.floor(wrapped[..., dim])
+        return wrapped
 
     def _apply_frac_symop(
         self, frac_row: np.ndarray, R: np.ndarray, t: np.ndarray
@@ -208,10 +241,15 @@ class SymmetryAnalyzer:
         return frac_row @ R.T + t
 
     def _mic_frac_delta(self, fa: np.ndarray, fb: np.ndarray) -> np.ndarray:
-        """Shortest fractional difference (MIC in the spglib unit cell)."""
+        """Shortest fractional difference, folded only on genuinely periodic axes.
+
+        Shape-generic: the last axis must be the three fractional components.
+        """
         d = np.asarray(fa, dtype=float) - np.asarray(fb, dtype=float)
+        pbc = self._symmetry_pbc()
         for k in range(3):
-            d[k] -= np.round(d[k])
+            if bool(pbc[k]):
+                d[..., k] -= np.round(d[..., k])
         return d
 
     def _cart_sep_from_frac_delta(self, d_frac: np.ndarray) -> np.ndarray:
@@ -220,36 +258,59 @@ class SymmetryAnalyzer:
 
     def _slab_normal(self) -> np.ndarray:
         """Unit normal from lattice a × b (slab plane)."""
+        if self._slab_normal_cache is not None:
+            return self._slab_normal_cache
         a = np.asarray(self._lattice[0], dtype=float)
         b = np.asarray(self._lattice[1], dtype=float)
         n = np.cross(a, b)
         norm_n = float(np.linalg.norm(n))
-        if norm_n < 1e-12:
-            return np.array([0.0, 0.0, 1.0], dtype=float)
-        return n / norm_n
+        n_hat = np.array([0.0, 0.0, 1.0], dtype=float) if norm_n < 1e-12 else n / norm_n
+        self._slab_normal_cache = n_hat
+        return n_hat
+
+    def _separation_norms(self, sep: np.ndarray, planar: bool) -> np.ndarray:
+        """Cartesian separation norms; when *planar*, drop the slab-normal component."""
+        arr = np.asarray(sep, dtype=float)
+        if planar:
+            n = self._slab_normal()
+            arr = arr - (arr @ n)[..., None] * n
+        return np.linalg.norm(arr, axis=-1)
 
     def _separation_distance(self, sep: np.ndarray, planar: bool) -> float:
         """Cartesian MIC distance; when *planar*, drop the slab-normal component."""
-        if not planar:
-            return float(np.linalg.norm(sep))
-        n = self._slab_normal()
-        sep_plane = sep - float(np.dot(sep, n)) * n
-        return float(np.linalg.norm(sep_plane))
+        return float(
+            self._separation_norms(np.asarray(sep, dtype=float).reshape(1, 3), planar)[
+                0
+            ]
+        )
 
-    def _site_distance_under_symop(
+    def _orbit_connectivity(
         self,
-        frac_i: np.ndarray,
-        frac_j: np.ndarray,
-        R: np.ndarray,
-        t: np.ndarray,
+        frac_pts: np.ndarray,
+        frac_ops: list[tuple[np.ndarray, np.ndarray]],
+        source: int,
+        targets: list[int],
         planar: bool,
-    ) -> float:
-        frac_p = self._apply_frac_symop(frac_i, R, t)
-        if self._mode == "periodic":
-            frac_p = self._wrap_frac(frac_p)
-        d_frac = self._mic_frac_delta(frac_p, frac_j)
-        sep = self._cart_sep_from_frac_delta(d_frac)
-        return self._separation_distance(sep, planar)
+    ) -> np.ndarray:
+        """Boolean per target: is ``targets[k]`` the image of *source* under some op?
+
+        Batched over targets, looping over operations, with an early exit once
+        every target is accounted for.
+        """
+        if not targets:
+            return np.zeros(0, dtype=bool)
+        frac_source = np.asarray(frac_pts[source], dtype=float)
+        frac_targets = np.asarray(frac_pts, dtype=float)[np.asarray(targets, dtype=int)]
+        connected = np.zeros(len(targets), dtype=bool)
+        tol = self.symmetry_tolerance
+        for R, t in frac_ops:
+            moved = self._wrap_frac(self._apply_frac_symop(frac_source, R, t))
+            d_frac = self._mic_frac_delta(moved, frac_targets)
+            sep = self._cart_sep_from_frac_delta(d_frac)
+            connected |= self._separation_norms(sep, planar) < tol
+            if bool(connected.all()):
+                break
+        return connected
 
     def _site_pair_connected_by_ops(
         self,
@@ -259,18 +320,15 @@ class SymmetryAnalyzer:
         frac_ops: list[tuple[np.ndarray, np.ndarray]],
         planar: bool,
         site_types: list[str] | None = None,
+        frac_pts: np.ndarray | None = None,
     ) -> bool:
         if i == j:
             return True
         if site_types is not None and site_types[i] != site_types[j]:
             return False
-        frac_i = self._cart_to_frac(cart_pts[i])
-        frac_j = self._cart_to_frac(cart_pts[j])
-        tol = self.symmetry_tolerance
-        for R, t in frac_ops:
-            if self._site_distance_under_symop(frac_i, frac_j, R, t, planar) < tol:
-                return True
-        return False
+        if frac_pts is None:
+            frac_pts = self._cart_to_frac(np.asarray(cart_pts, dtype=float))
+        return bool(self._orbit_connectivity(frac_pts, frac_ops, i, [j], planar)[0])
 
     def _verify_site_orbits(
         self,
@@ -279,26 +337,30 @@ class SymmetryAnalyzer:
         planar: bool,
         orbits: list[list[int]],
         site_types: list[str] | None = None,
+        frac_pts: np.ndarray | None = None,
     ) -> None:
         """Every member of an orbit must be related to its representative by a symmetry operation.
 
         Verifying only representative→member (rather than every pair) catches the
-        same failure mode at O(k) instead of O(k²).
+        same failure mode at O(k) instead of O(k²). Union-find merges through
+        transitive chains, so this is a genuine independent check.
         """
+        if frac_pts is None:
+            frac_pts = self._cart_to_frac(np.asarray(cart_pts, dtype=float))
         for idxs in orbits:
-            if not idxs:
+            if len(idxs) < 2:
                 continue
             rep = min(idxs)
-            for j in idxs:
-                if j == rep:
-                    continue
-                if not self._site_pair_connected_by_ops(
-                    rep, j, cart_pts, frac_ops, planar, site_types=site_types
-                ):
-                    raise SymmetryAnalysisError(
-                        "site orbit failed verification: no symmetry operation "
-                        f"maps site {rep} to site {j} within tolerance"
-                    )
+            members = [j for j in idxs if j != rep]
+            connected = self._orbit_connectivity(
+                frac_pts, frac_ops, rep, members, planar
+            )
+            if not bool(connected.all()):
+                bad = members[int(np.argmin(connected))]
+                raise SymmetryAnalysisError(
+                    "site orbit failed verification: no symmetry operation "
+                    f"maps site {rep} to site {bad} within tolerance"
+                )
 
     def find_equivalent_atoms(self) -> list[list[int]]:
         """Wyckoff-equivalent atom groups from spglib."""
@@ -388,21 +450,16 @@ class SymmetryAnalyzer:
                 parent[rb] = ra
                 rank[ra] += 1
 
-        frac_pts = [self._cart_to_frac(p) for p in cart_pts]
-        for i in range(n):
-            frac_i = frac_pts[i]
-            for R, t in frac_ops:
-                frac_p = self._apply_frac_symop(frac_i, R, t)
-                if self._mode == "periodic":
-                    frac_p = self._wrap_frac(frac_p)
-                for j in range(n):
-                    if i == j or site_types[i] != site_types[j]:
-                        continue
-                    d_frac = self._mic_frac_delta(frac_p, frac_pts[j])
-                    sep = self._cart_sep_from_frac_delta(d_frac)
-                    dist = self._separation_distance(sep, bool(planar))
-                    if dist < self.symmetry_tolerance:
-                        union(i, j)
+        frac_pts = self._cart_to_frac(np.asarray(cart_pts, dtype=float))
+        type_index = {name: k for k, name in enumerate(dict.fromkeys(site_types))}
+        type_codes = np.array([type_index[s] for s in site_types], dtype=int)
+        same_type = type_codes[:, None] == type_codes[None, :]
+        np.fill_diagonal(same_type, False)
+        tol = self.symmetry_tolerance
+        for R, t in frac_ops:
+            dist = self._pairwise_symop_distances(frac_pts, R, t, bool(planar))
+            for i, j in np.argwhere((dist < tol) & same_type):
+                union(int(i), int(j))
 
         roots: dict[int, list[int]] = {}
         for i in range(n):
@@ -411,9 +468,39 @@ class SymmetryAnalyzer:
 
         orbits = [sorted(v) for _k, v in sorted(roots.items(), key=lambda x: x[0])]
         self._verify_site_orbits(
-            cart_pts, frac_ops, planar, orbits, site_types=site_types
+            cart_pts,
+            frac_ops,
+            planar,
+            orbits,
+            site_types=site_types,
+            frac_pts=frac_pts,
         )
         return self._build_orbit_output(sorted_sites, orbits)
+
+    def _pairwise_symop_distances(
+        self,
+        frac_pts: np.ndarray,
+        R: np.ndarray,
+        t: np.ndarray,
+        planar: bool,
+    ) -> np.ndarray:
+        """``dist[i, j]`` = distance from ``op(site_i)`` to ``site_j``.
+
+        Vectorised equivalent of looping ``_site_distance_under_symop`` over all
+        ``(i, j)``. Only one ``n×n×3`` buffer is materialised per operation; the
+        full ``m×n×n×3`` stack is never built (~484 MB at a 6×6 slab).
+        """
+        transformed = self._wrap_frac(frac_pts @ R.T + t)
+        delta = transformed[:, None, :] - frac_pts[None, :, :]
+        pbc = self._symmetry_pbc()
+        for k in range(3):
+            if bool(pbc[k]):
+                delta[..., k] -= np.round(delta[..., k])
+        sep = delta @ self._lattice
+        if planar:
+            n_hat = self._slab_normal()
+            sep = sep - (sep @ n_hat)[..., None] * n_hat
+        return np.linalg.norm(sep, axis=-1)
 
     def detect_symmetry_breaking(self, reference_atoms: Atoms) -> bool:
         """True if space group or symmetry operation set differs from reference."""
