@@ -2,7 +2,6 @@
 
 import functools
 import logging
-import random
 from typing import Literal
 
 import numpy as np
@@ -211,32 +210,6 @@ def _mol_slab_pairwise_distances(
         _, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
         return mic_dists.reshape(m, s)
     return np.linalg.norm(diffs, axis=2)
-
-
-def _random_rotation_matrix(rng: random.Random) -> np.ndarray:
-    """Return a uniformly random 3x3 rotation matrix (Arvo's method)."""
-    u1 = rng.random()
-    u2 = rng.random()
-    u3 = rng.random()
-
-    theta = 2.0 * np.pi * u1
-    phi = 2.0 * np.pi * u2
-    z_val = u3
-
-    v = np.array(
-        [
-            np.cos(phi) * np.sqrt(z_val),
-            np.sin(phi) * np.sqrt(z_val),
-            np.sqrt(1.0 - z_val),
-        ]
-    )
-
-    st, ct = np.sin(theta), np.cos(theta)
-    Rz = np.array([[ct, st, 0], [-st, ct, 0], [0, 0, 1]])
-
-    # Householder reflection
-    H = np.eye(3) - 2.0 * np.outer(v, v)
-    return -H @ Rz
 
 
 def _rodrigues(axis: np.ndarray, c: float, s: float) -> np.ndarray:

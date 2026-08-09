@@ -299,7 +299,14 @@ def build_batch_placement_specs(
                 normalized_sites,
             )
         )
-        par_specs = _collect(parallel_items, cap=_GRID_BUILD_CAP)
+        if n_par == 0:
+            par_specs = []
+        else:
+            par_cap = min(
+                _GRID_BUILD_CAP,
+                max(n_par * _EARLY_CAP_WORKING_SET_MULTIPLIER, n_par),
+            )
+            par_specs = _collect(parallel_items, cap=par_cap)
 
         en_down_items = (
             _fields(
@@ -320,7 +327,14 @@ def build_batch_placement_specs(
                 normalized_sites,
             )
         )
-        en_specs = _collect(en_down_items, cap=_GRID_BUILD_CAP)
+        if n_en == 0:
+            en_specs = []
+        else:
+            en_cap = min(
+                _GRID_BUILD_CAP,
+                max(n_en * _EARLY_CAP_WORKING_SET_MULTIPLIER, n_en),
+            )
+            en_specs = _collect(en_down_items, cap=en_cap)
 
         if len(par_specs) > n_par:
             par_specs = _subsample(par_specs, n_par, seed)
