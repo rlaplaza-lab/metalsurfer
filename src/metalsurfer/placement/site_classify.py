@@ -6,13 +6,17 @@ from typing import NamedTuple
 import numpy as np
 from scipy.spatial import Delaunay, KDTree
 
+from .._utils import cell_has_volume
 from ._constants import (
     _NORMAL_K_NEIGHBOURS,
-    _PBC_DELAUNAY_BOUNDARY_FRAC,
     _SITE_CLASSIFICATION_NEIGHBOURS,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
 )
-from .site_coords import _cart_to_frac, _project_to_slab_plane, _wrap_fractional
+from .site_coords import (
+    _build_periodic_images,
+    _project_to_slab_plane,
+    _slab_normal,
+)
 from .site_types import Site
 from .site_voronoi import (
     _classify_voronoi_site_from_neighbors,
@@ -22,13 +26,18 @@ from .site_voronoi import (
 
 
 class _DelaunayClassifyInputs(NamedTuple):
-    """Prebuilt Delaunay classification inputs. All fields are required."""
+    """Prebuilt Delaunay classification inputs. All fields are required.
+
+    ``class_index`` is a single atop/bridge/hollow candidate index. On periodic
+    slabs it is built from the ±1 a/b expanded top layer, so cross-boundary
+    bridges and hollows are represented directly and no separate PBC "upgrade"
+    pass is needed.
+    """
 
     tri: Delaunay
     top_positions_2d: np.ndarray
     top_atom_indices: np.ndarray
     class_index: tuple[np.ndarray, list[str], list[tuple[int, ...]]]
-    class_index_pbc: tuple[np.ndarray, list[str], list[tuple[int, ...]]] | None = None
 
 
 def _compute_local_normal(
@@ -75,18 +84,91 @@ def _compute_local_normals_batch(
     return out
 
 
+def _slab_site_normals(n_verts: int, cell: np.ndarray) -> np.ndarray:
+    """Exact surface normals for slab sites.
+
+    Every slab site shares the a×b surface normal. This is the same ``n_hat``
+    that :func:`_generate_slab_topology_sites` offsets candidates along, so the
+    site positions and their normals are consistent by construction. A k-nearest
+    centroid estimate is *not* used here: with only 3-4 neighbours it tilts by
+    tens of degrees on bridge/hollow sites and near cell boundaries.
+    """
+    if n_verts == 0:
+        return np.empty((0, 3), dtype=float)
+    return np.tile(_slab_normal(cell).reshape(1, 3), (n_verts, 1))
+
+
+def _periodic_local_normals(
+    vertices: np.ndarray,
+    positions: np.ndarray,
+    local_tree: KDTree,
+    *,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    k: int,
+) -> np.ndarray:
+    """Local normals from a k-nearest centroid taken over periodic images.
+
+    The centroid is computed on *image* coordinates rather than wrapped primary
+    positions, so 3D-periodic frameworks stop tilting at cell faces.
+    """
+    if len(vertices) == 0:
+        return np.empty((0, 3), dtype=float)
+    d_knn, _ = local_tree.query(vertices, k=k)
+    d_arr = np.asarray(d_knn, dtype=float)
+    if d_arr.ndim == 1:
+        d_arr = d_arr.reshape(-1, 1)
+    # The non-periodic k-th neighbour distance upper-bounds the periodic one,
+    # so it is a safe image margin.
+    margin = float(np.max(d_arr[:, -1])) if d_arr.size else 0.0
+    images = _build_periodic_images(positions, cell, pbc, margin=margin)
+    image_tree = KDTree(images)
+    _, idx = image_tree.query(vertices, k=min(k, len(images)))
+    idx_arr = np.asarray(idx, dtype=int)
+    if idx_arr.ndim == 1:
+        idx_arr = idx_arr.reshape(-1, 1)
+    return _compute_local_normals_batch(vertices, images, idx_arr)
+
+
+def _site_normals_for_material(
+    vertices: np.ndarray,
+    positions: np.ndarray,
+    local_tree: KDTree,
+    *,
+    material_type: str,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    k: int,
+) -> np.ndarray:
+    """Per-material-type surface normal dispatch."""
+    n_verts = len(vertices)
+    if n_verts == 0:
+        return np.empty((0, 3), dtype=float)
+    if material_type == "slab":
+        return _slab_site_normals(n_verts, cell)
+    if material_type == "porous" and bool(np.any(pbc)) and cell_has_volume(cell):
+        return _periodic_local_normals(
+            vertices, positions, local_tree, cell=cell, pbc=pbc, k=k
+        )
+    # Nanoparticles (and degenerate/non-periodic frameworks): the plain
+    # non-periodic k-nearest centroid is the correct outward estimate.
+    _, norm_idx = local_tree.query(vertices, k=k)
+    norm_idx_arr = np.asarray(norm_idx, dtype=int)
+    if norm_idx_arr.ndim == 1:
+        norm_idx_arr = norm_idx_arr.reshape(-1, 1)
+    return _compute_local_normals_batch(vertices, positions, norm_idx_arr)
+
+
 @dataclass(frozen=True)
 class _ClassificationContext:
     vertex_2d: np.ndarray
     normals: np.ndarray
     pbc: np.ndarray
-    vertex_frac: np.ndarray
     class_dists: np.ndarray | None  # Voronoi path
     class_idx: np.ndarray | None  # Voronoi path
     delaunay: _DelaunayClassifyInputs | None
     char_len: float | None
     cand_tree: KDTree | None
-    cand_tree_pbc: KDTree | None
 
 
 def _build_classification_context(
@@ -94,6 +176,7 @@ def _build_classification_context(
     positions: np.ndarray,
     local_tree: KDTree,
     *,
+    material_type: str,
     cell: np.ndarray,
     pbc: np.ndarray | None,
     delaunay: _DelaunayClassifyInputs | None,
@@ -111,13 +194,15 @@ def _build_classification_context(
         else np.array([False, False, False], dtype=bool)
     )
 
-    if n_verts > 0:
-        _, norm_idx = local_tree.query(vertices, k=k_norm)
-        if np.ndim(norm_idx) == 1:
-            norm_idx = np.asarray(norm_idx, dtype=int).reshape(-1, 1)
-        normals = _compute_local_normals_batch(vertices, positions, norm_idx)
-    else:
-        normals = np.empty((0, 3))
+    normals = _site_normals_for_material(
+        vertices,
+        positions,
+        local_tree,
+        material_type=material_type,
+        cell=cell,
+        pbc=pbc_arr,
+        k=k_norm,
+    )
 
     if n_verts > 0 and delaunay is None:
         dists_raw, idx_raw = local_tree.query(vertices, k=k_class)
@@ -132,7 +217,6 @@ def _build_classification_context(
 
     char_len: float | None = None
     cand_tree: KDTree | None = None
-    cand_tree_pbc: KDTree | None = None
     if n_verts > 0 and delaunay is not None:
         top_positions_2d = delaunay.top_positions_2d
         if len(top_positions_2d) >= 2:
@@ -141,47 +225,16 @@ def _build_classification_context(
             char_len = float(np.mean(np.asarray(_nn_d, dtype=float)[:, 1]))
         cand_xy, _cand_types, _cand_indices = delaunay.class_index
         cand_tree = KDTree(cand_xy) if len(cand_xy) > 0 else None
-        if delaunay.class_index_pbc is not None:
-            cand_xy_pbc, _cand_types_pbc, _cand_indices_pbc = delaunay.class_index_pbc
-            cand_tree_pbc = KDTree(cand_xy_pbc) if len(cand_xy_pbc) > 0 else None
-
-    vertex_frac = (
-        _wrap_fractional(_cart_to_frac(vertices, cell), pbc_arr)
-        if n_verts and delaunay is not None
-        else np.empty((0, 3))
-    )
 
     return _ClassificationContext(
         vertex_2d=vertex_2d,
         normals=normals,
         pbc=pbc_arr,
-        vertex_frac=vertex_frac,
         class_dists=class_dists,
         class_idx=class_idx,
         delaunay=delaunay,
         char_len=char_len,
         cand_tree=cand_tree,
-        cand_tree_pbc=cand_tree_pbc,
-    )
-
-
-def _near_ab_boundary(frac: np.ndarray, pbc: np.ndarray) -> bool:
-    """True when *frac* lies near a periodic a/b boundary."""
-    return bool(
-        (
-            bool(pbc[0])
-            and (
-                frac[0] < _PBC_DELAUNAY_BOUNDARY_FRAC
-                or frac[0] > 1.0 - _PBC_DELAUNAY_BOUNDARY_FRAC
-            )
-        )
-        or (
-            bool(pbc[1])
-            and (
-                frac[1] < _PBC_DELAUNAY_BOUNDARY_FRAC
-                or frac[1] > 1.0 - _PBC_DELAUNAY_BOUNDARY_FRAC
-            )
-        )
     )
 
 
@@ -195,16 +248,13 @@ def _classify_delaunay_vertex(
     delaunay = ctx.delaunay
     if delaunay is None:
         raise ValueError("ctx.delaunay must be set for Delaunay classification")
-    tri = delaunay.tri
-    top_positions_2d = delaunay.top_positions_2d
-    top_atom_indices = delaunay.top_atom_indices
     cand_xy, cand_types, cand_indices = delaunay.class_index
 
-    site_type, nearest_idx = _delaunay_site_classification(
+    return _delaunay_site_classification(
         vertex,
-        top_positions_2d,
-        top_atom_indices,
-        tri,
+        delaunay.top_positions_2d,
+        delaunay.top_atom_indices,
+        delaunay.tri,
         positions,
         vertex_2d=ctx.vertex_2d[i],
         char_len=ctx.char_len,
@@ -214,31 +264,6 @@ def _classify_delaunay_vertex(
         cand_indices=cand_indices,
         cand_tree=ctx.cand_tree,
     )
-
-    # Primary-cell Delaunay misses bridges across a/b. Upgrade near-boundary
-    # atops using PBC-expanded candidates without touching interior hollows.
-    if site_type == "atop" and delaunay.class_index_pbc is not None:
-        cand_xy_pbc, cand_types_pbc, cand_indices_pbc = delaunay.class_index_pbc
-        if _near_ab_boundary(ctx.vertex_frac[i], ctx.pbc):
-            site_type_pbc, nearest_idx_pbc = _delaunay_site_classification(
-                vertex,
-                top_positions_2d,
-                top_atom_indices,
-                tri,
-                positions,
-                vertex_2d=ctx.vertex_2d[i],
-                char_len=ctx.char_len,
-                positions_tree=local_tree,
-                cand_xy=cand_xy_pbc,
-                cand_types=cand_types_pbc,
-                cand_indices=cand_indices_pbc,
-                cand_tree=ctx.cand_tree_pbc,
-            )
-            if site_type_pbc == "bridge":
-                site_type = site_type_pbc
-                nearest_idx = nearest_idx_pbc
-
-    return site_type, nearest_idx
 
 
 def _classify_vertices(
@@ -315,7 +340,13 @@ def _build_site_records(
     delaunay: _DelaunayClassifyInputs | None = None,
 ) -> list[Site]:
     ctx = _build_classification_context(
-        vertices, positions, local_tree, cell=cell, pbc=pbc, delaunay=delaunay
+        vertices,
+        positions,
+        local_tree,
+        material_type=material_type,
+        cell=cell,
+        pbc=pbc,
+        delaunay=delaunay,
     )
     return _classify_vertices(
         ctx,

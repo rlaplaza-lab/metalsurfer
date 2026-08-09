@@ -93,8 +93,10 @@ TEST_SEED = 0
 
 # Golden snapshot for make_slab() unified sites (captured before Delaunay sharing).
 _GOLDEN_SLAB_UNIFIED_SITE_COUNT = 126
-# PBC edge upgrade re-labels near-boundary primary-atops as bridge; hollows unchanged.
-_GOLDEN_SLAB_SITE_TYPE_MULTISET = {"atop": 16, "bridge": 64, "hollow": 46}
+# The Delaunay classification index is built from the ±1 a/b expanded top layer,
+# so cross-boundary bridges/hollows are labelled directly instead of collapsing
+# onto the nearest interior candidate.
+_GOLDEN_SLAB_SITE_TYPE_MULTISET = {"atop": 16, "bridge": 78, "hollow": 32}
 
 
 def test_unified_sites_slab_golden_count_and_type_multiset():
@@ -733,8 +735,8 @@ def test_delaunay_classification_pbc_edge_is_not_mislabeled_atop():
     assert site_type_nopbc == "atop"
 
 
-def test_build_site_records_upgrades_boundary_atop_via_pbc_index():
-    """Production classify path upgrades near-boundary atop → bridge with PBC index."""
+def test_build_site_records_classifies_boundary_bridge_via_expanded_index():
+    """Production classify path labels a cross-boundary bridge without an upgrade pass."""
     from scipy.spatial import Delaunay
 
     from metalsurfer.placement.site_classify import (
@@ -760,17 +762,16 @@ def test_build_site_records_upgrades_boundary_atop_via_pbc_index():
     top_2d = _project_to_slab_plane(positions, cell)
     tri = Delaunay(top_2d)
     primary = _build_delaunay_classification_index(top_2d, top_idx, tri)
-    pbc_index = _build_delaunay_classification_index(
+    expanded = _build_delaunay_classification_index(
         top_2d, top_idx, tri, cell=cell, pbc=pbc_on
     )
-    # Cross-a-boundary bridge midpoint: primary labels atop, PBC labels bridge.
+    # Cross-a-boundary bridge midpoint: primary labels atop, expanded labels bridge.
     vertex = np.array([[0.0, 1.0, 0.5]], dtype=float)
     nn_dists = np.array([1.0], dtype=float)
     local_tree = KDTree(positions)
     symbols = ["Cu", "Cu", "Cu", "Cu"]
 
-    inputs = _DelaunayClassifyInputs(tri, top_2d, top_idx, primary, pbc_index)
-    upgraded = _build_site_records(
+    with_pbc = _build_site_records(
         vertex,
         nn_dists,
         positions,
@@ -780,7 +781,7 @@ def test_build_site_records_upgrades_boundary_atop_via_pbc_index():
         pore_threshold=2.5,
         cell=cell,
         pbc=pbc_on,
-        delaunay=inputs,
+        delaunay=_DelaunayClassifyInputs(tri, top_2d, top_idx, expanded),
     )
     primary_only = _build_site_records(
         vertex,
@@ -792,15 +793,15 @@ def test_build_site_records_upgrades_boundary_atop_via_pbc_index():
         pore_threshold=2.5,
         cell=cell,
         pbc=pbc_off,
-        delaunay=inputs,
+        delaunay=_DelaunayClassifyInputs(tri, top_2d, top_idx, primary),
     )
-    assert upgraded[0].site_type == "bridge"
-    assert frozenset(upgraded[0].slab_indices) == frozenset((0, 1))
+    assert with_pbc[0].site_type == "bridge"
+    assert frozenset(with_pbc[0].slab_indices) == frozenset((0, 1))
     assert primary_only[0].site_type == "atop"
 
 
-def test_get_unified_sites_upgrades_pbc_edge_atop_on_production_path():
-    """Hot path on a real slab: boundary sites primary-atop become bridge via PBC."""
+def test_get_unified_sites_labels_pbc_edge_bridge_on_production_path():
+    """Hot path on a real slab: boundary sites primary-atop are labelled bridge."""
     from scipy.spatial import Delaunay
 
     from metalsurfer.placement.site_coords import (
@@ -854,9 +855,8 @@ def test_get_unified_sites_upgrades_pbc_edge_atop_on_production_path():
         if primary_type == "atop" and site.site_type == "bridge":
             upgraded.append(site)
     assert upgraded, (
-        "expected get_unified_sites to upgrade near-boundary primary-atop → bridge"
+        "expected get_unified_sites to label near-boundary primary-atop as bridge"
     )
-    # Interior hollow count must stay intact (upgrade-only, not global reclassify).
     assert (
         sum(1 for s in sites if s.site_type == "hollow")
         == (_GOLDEN_SLAB_SITE_TYPE_MULTISET["hollow"])

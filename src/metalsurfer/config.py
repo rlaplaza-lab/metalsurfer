@@ -553,8 +553,14 @@ class AdsorptionConfig:
     placement_z_scale_by_covalent_radius: bool = True
     placement_distance_recovery: bool = True
     material_type: Literal["slab", "nanoparticle", "porous"] = "slab"
+    # ``voronoi_probe_radius`` / ``voronoi_max_site_distance`` / ``voronoi_auto_widen``
+    # apply to *every* material type: on slabs they gate the topology generator's
+    # accessibility window and drive the one-shot widen retry.
     voronoi_probe_radius: float | None = None
     voronoi_max_site_distance: float | None = None
+    # Ridge enrichment of Voronoi vertices. Porous / nanoparticle only: a planar
+    # slab top layer has no 3D Voronoi diagram, so slab sites come entirely from
+    # the topology generator and this flag is a no-op there.
     voronoi_site_enrichment: bool = True
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"

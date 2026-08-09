@@ -535,10 +535,17 @@ def _build_delaunay_classification_index(
 ) -> tuple[np.ndarray, list[str], list[tuple[int, ...]]]:
     """Precompute (atop, bridge midpoint, hollow centroid) XY candidates for KDTree classify.
 
-    When *cell* and *pbc* are provided, also append bridge candidates from ±1
-    a/b images (cross-boundary edges only). Callers should classify with the
-    primary index first and only consult the PBC-augmented index to upgrade
-    near-boundary atops, so interior hollow labels stay stable.
+    When *cell* and *pbc* are provided and a or b is periodic, the whole index is
+    built from the ±1 a/b expanded top-layer point set: atop, bridge **and**
+    hollow candidates are emitted for every simplex of the expanded
+    triangulation. This is what makes cross-boundary bridges and hollows
+    classifiable at all — the primary-cell triangulation has no simplices
+    spanning the periodic cut, so sites there would otherwise fall back to the
+    nearest interior candidate (usually an atop).
+
+    Candidate atom indices are always mapped back to primary-cell indices
+    through the image origin, so the returned ``cand_indices`` reference
+    ``top_atom_indices`` entries regardless of which image produced them.
     """
     top_xy = np.asarray(top_positions_2d, dtype=float)
     top_atom_indices = np.asarray(top_atom_indices, dtype=int)
@@ -546,37 +553,39 @@ def _build_delaunay_classification_index(
     cand_types: list[str] = []
     cand_indices: list[tuple[int, ...]] = []
 
-    for li, gi in enumerate(top_atom_indices):
-        cand_xy.append(top_xy[li])
-        cand_types.append("atop")
-        cand_indices.append((int(gi),))
+    work_xy = top_xy
+    origin_local = list(range(len(top_xy)))
+    work_tri = triangulation
 
-    def _add_from_triangulation(
-        work_xy: np.ndarray,
-        work_tri: Delaunay,
-        origin_local: list[int],
-        *,
-        image_id: list[tuple[int, int]] | None = None,
-        only_cross_boundary: bool = False,
-    ) -> None:
+    use_pbc = cell is not None and pbc is not None and (bool(pbc[0]) or bool(pbc[1]))
+    if cell is not None and pbc is not None and use_pbc:
+        exp_xy, exp_origin, _image_id, _ = _expand_top_layer_ab_images(
+            top_xy, cell=cell, pbc=pbc
+        )
+        exp_tri: Delaunay | None = None
+        if len(exp_xy) >= 3:
+            try:
+                exp_tri = Delaunay(exp_xy)
+            except (QhullError, ValueError, RuntimeError):
+                exp_tri = None
+        if exp_tri is not None:
+            work_xy = exp_xy
+            origin_local = exp_origin
+            work_tri = exp_tri
+
+    for wi in range(len(work_xy)):
+        cand_xy.append(work_xy[wi])
+        cand_types.append("atop")
+        cand_indices.append((int(top_atom_indices[origin_local[wi]]),))
+
+    if work_tri is not None:
         seen: set[tuple] = set()
         for simplex in np.asarray(work_tri.simplices, dtype=int):
-            if only_cross_boundary and image_id is not None:
-                imgs = {image_id[int(k)] for k in simplex}
-                if imgs == {(0, 0)}:
-                    continue
             for e0, e1 in ((0, 1), (1, 2), (0, 2)):
                 i_exp, j_exp = int(simplex[e0]), int(simplex[e1])
                 li0 = origin_local[i_exp]
                 li1 = origin_local[j_exp]
                 if li0 == li1:
-                    continue
-                if (
-                    only_cross_boundary
-                    and image_id is not None
-                    and image_id[i_exp] == (0, 0)
-                    and image_id[j_exp] == (0, 0)
-                ):
                     continue
                 mid = (work_xy[i_exp] + work_xy[j_exp]) / 2.0
                 mid_key = (
@@ -598,10 +607,6 @@ def _build_delaunay_classification_index(
             local_ids = tuple(sorted({origin_local[int(k)] for k in simplex}))
             if len(local_ids) != 3:
                 continue
-            # Cross-boundary pass only adds bridges; primary hollows stay authoritative
-            # so interior labels are not pulled toward image centroids.
-            if only_cross_boundary:
-                continue
             centroid = np.mean(work_xy[list(simplex)], axis=0)
             hollow_key = (
                 "hollow",
@@ -621,32 +626,6 @@ def _build_delaunay_classification_index(
                     int(top_atom_indices[local_ids[2]]),
                 )
             )
-
-    if triangulation is not None:
-        _add_from_triangulation(
-            top_xy,
-            triangulation,
-            list(range(len(top_xy))),
-            only_cross_boundary=False,
-        )
-
-    if cell is not None and pbc is not None and (bool(pbc[0]) or bool(pbc[1])):
-        work_xy, origin_local, image_id, _ = _expand_top_layer_ab_images(
-            top_xy, cell=cell, pbc=pbc
-        )
-        if len(work_xy) >= 3:
-            try:
-                work_tri = Delaunay(work_xy)
-            except (QhullError, ValueError, RuntimeError):
-                work_tri = None
-            if work_tri is not None:
-                _add_from_triangulation(
-                    work_xy,
-                    work_tri,
-                    origin_local,
-                    image_id=image_id,
-                    only_cross_boundary=True,
-                )
 
     if not cand_xy:
         return np.empty((0, 2), dtype=float), [], []

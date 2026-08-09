@@ -35,6 +35,7 @@ from metalsurfer.models import (
     SaturationCampaignResult,
 )
 from metalsurfer.placement import check_initial_placement_distance
+from metalsurfer.placement.geometry import check_adsorbate_separation
 from metalsurfer.placement.site_context import (
     SiteContext,
     resolve_site_context_for_sampling,
@@ -316,6 +317,7 @@ def _assert_survivor_physics(
     material_type: str = "slab",
     expected_symbols: list[str] | None = None,
     dissociative: bool = False,
+    base_slab_size: int | None = None,
 ) -> None:
     """Critical physics gates for campaign survivors (stubbed or real MLIP)."""
     assert np.isfinite(result.energy_adsorption)
@@ -340,9 +342,16 @@ def _assert_survivor_physics(
         assert sorted(ads.get_chemical_symbols()) == sorted(expected_symbols)
 
     # Same covalent-contact gate used at placement time (production path).
+    # Saturation slabs carry co-adsorbates: production excludes them from the
+    # substrate gate (``exclude_slab_atoms``) and validates them with the looser
+    # adsorbate-separation gate instead, so mirror that split here.
+    n_substrate = (
+        int(base_slab_size) if base_slab_size is not None else int(result.slab_size)
+    )
+    substrate = slab_part[:n_substrate]
     ok, min_d, reason = check_initial_placement_distance(
         ads,
-        slab_part,
+        substrate,
         min_distance=MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
         min_contact_ratio=MIN_CONTACT_RATIO_DEFAULT,
         material_type=material_type,
@@ -350,6 +359,14 @@ def _assert_survivor_physics(
     assert ok, (
         f"survivor fails placement distance gate: min_d={min_d:.3f} reason={reason}"
     )
+    if n_substrate < len(slab_part):
+        sep_ok, sep_d = check_adsorbate_separation(
+            ads,
+            np.asarray(slab_part.get_positions()[n_substrate:], dtype=float),
+            cell=np.asarray(slab_part.get_cell(), dtype=float),
+            pbc=list(slab_part.get_pbc()),
+        )
+        assert sep_ok, f"survivor overlaps a co-adsorbate: min_d={sep_d:.3f}"
     # result.distance and the gate share MIC semantics; allow small path differences
     # (e.g. saturation slabs that already contain co-adsorbates).
     assert abs(float(result.distance) - float(min_d)) < 0.15, (
@@ -680,8 +697,13 @@ def _assert_saturation_api_campaign(
     assert len(campaign.runs) == 1
     run = campaign.runs[0]
     assert len(run.steps) >= 1
+    base_slab_size = int(run.steps[0].best_result.slab_size)
     for step in run.steps:
-        _assert_survivor_physics(step.best_result, expected_symbols=["H", "H", "O"])
+        _assert_survivor_physics(
+            step.best_result,
+            expected_symbols=["H", "H", "O"],
+            base_slab_size=base_slab_size,
+        )
     assert run.steps[0].best_result.energy_adsorption == pytest.approx(
         E_ADS_BINDING, abs=1e-6
     )

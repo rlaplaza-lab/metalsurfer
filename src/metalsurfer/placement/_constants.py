@@ -53,9 +53,6 @@ def _compute_mean_adsorbate_covalent_radius() -> float:
 # Minimum separation (Å) used to deduplicate Voronoi vertices as the same site.
 _VORONOI_DEDUP_TOLERANCE: float = 0.1
 _VORONOI_FRACTIONAL_CELL_MARGIN: float = 0.01
-# Fractional distance to a/b faces: near-boundary atops may be reclassified using
-# PBC-expanded Delaunay bridge candidates.
-_PBC_DELAUNAY_BOUNDARY_FRAC: float = 0.2
 _SURFACE_NORMAL_FALLBACK_NORM_EPS: float = 1e-8
 _DISTANCE_ZERO_EPS: float = 1e-12
 _DISTANCE_RATIO_FLOOR_EPS: float = 1e-8

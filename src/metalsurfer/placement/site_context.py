@@ -227,6 +227,15 @@ def _get_unique_sites_for_specs(
     probe_radius = config.voronoi_probe_radius
     max_site_dist = config.voronoi_max_site_distance
 
+    if mat_type == "slab" and not config.voronoi_site_enrichment:
+        # Slab sites come from the topology generator (the top layer is coplanar
+        # so there is no 3D Voronoi diagram to enrich). probe_radius /
+        # max_site_distance / auto_widen do still apply.
+        logger.warning(
+            "voronoi_site_enrichment=False has no effect for material_type='slab'; "
+            "ridge enrichment only applies to porous and nanoparticle materials"
+        )
+
     if len(slab) < 4:
         logger.warning(
             "Slab has fewer than 4 atoms (%d); cannot detect adsorption sites",

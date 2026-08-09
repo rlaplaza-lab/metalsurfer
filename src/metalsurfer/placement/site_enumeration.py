@@ -34,6 +34,7 @@ from .site_classify import (
     _DelaunayClassifyInputs,
 )
 from .site_coords import (
+    _build_periodic_images,
     _cart_to_frac,
     _deduplicate_points,
     _derive_top_layer_tolerance,
@@ -99,6 +100,25 @@ def _median_nn_or_fallback(nn_dists: np.ndarray) -> float:
     return _VORONOI_MAX_DISTANCE_COVALENT_SCALE * _VORONOI_RADIUS_FALLBACK_ANGSTROM
 
 
+def _periodic_accessibility_tree(
+    positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    max_distance: float,
+) -> KDTree:
+    """KDTree over periodic images, for candidate-to-framework distance gating.
+
+    A plain ``KDTree(positions)`` reports the *in-cell* nearest-neighbour
+    distance, which overestimates the true minimum-image distance for
+    candidates near an a/b boundary. The image margin covers ``max_distance``
+    so any candidate that would pass the accessibility window is found.
+    """
+    if not np.any(pbc) or not cell_has_volume(cell):
+        return KDTree(positions)
+    margin = float(max_distance) + _VORONOI_DEDUP_TOLERANCE
+    return KDTree(_build_periodic_images(positions, cell, pbc, margin=margin))
+
+
 def _delaunay_classify_inputs(
     positions: np.ndarray,
     cell: np.ndarray,
@@ -133,22 +153,14 @@ def _delaunay_classify_inputs(
         top_positions_2d,
         slab_top_atom_indices,
         tri,
+        cell=cell,
+        pbc=pbc,
     )
-    class_index_pbc: tuple[np.ndarray, list[str], list[tuple[int, ...]]] | None = None
-    if bool(pbc[0]) or bool(pbc[1]):
-        class_index_pbc = _build_delaunay_classification_index(
-            top_positions_2d,
-            slab_top_atom_indices,
-            tri,
-            cell=cell,
-            pbc=pbc,
-        )
     return _DelaunayClassifyInputs(
         tri,
         top_positions_2d,
         slab_top_atom_indices,
         class_index,
-        class_index_pbc,
     )
 
 
@@ -271,10 +283,21 @@ def get_unified_sites(
 ) -> list[Site]:
     """Return adsorption/placement sites for *atoms*.
 
-    Improved default behaviour
-    --------------------------
-    - slabs use a hybrid site generator: topology-derived surface sites plus
-      Voronoi enrichment
+    Per-material behaviour
+    ----------------------
+    - **slab**: sites come from the topology generator
+      (:func:`_generate_slab_topology_sites`), which enumerates atop, bridge and
+      hollow candidates from the top layer including its ±1 a/b periodic images.
+      A flat top layer is coplanar, so Qhull cannot build a 3D Voronoi diagram
+      from it (``QH6154 initial simplex is flat``); the Voronoi pass is therefore
+      skipped explicitly for planar slabs rather than being attempted and
+      swallowed. ``voronoi_probe_radius``, ``voronoi_max_site_distance`` and
+      ``voronoi_auto_widen`` **remain active** on slabs — they drive the
+      topology accessibility window and the retry. Only ``enrich``
+      (``voronoi_site_enrichment``) has no effect on planar slabs.
+    - **porous** / **nanoparticle**: Voronoi vertices are the primary source,
+      with optional ridge enrichment, plus an atop-injection safety net for
+      nanoparticles.
     - rotated slabs are handled using the slab normal rather than Cartesian z
     """
     if material_type is None:
@@ -325,6 +348,7 @@ def get_unified_sites(
 
     voronoi_positions = positions
     slab_top_atom_indices: np.ndarray | None = None
+    slab_skip_voronoi = False
     if material_type == "slab":
         # Compute once; reused for Voronoi crop, topology, and atop injection.
         slab_top_mask = top_layer_mask_by_normal(
@@ -334,17 +358,34 @@ def get_unified_sites(
         top_only = positions[slab_top_mask]
         if len(top_only) >= 4:
             voronoi_positions = top_only
+        # A coplanar top layer has no 3D Voronoi diagram: Qhull raises
+        # "QH6154 initial simplex is flat" and the generator returns zero
+        # vertices. Skip it explicitly instead of raising-and-swallowing.
+        slab_skip_voronoi = _top_layer_is_planar_from_arrays(
+            positions, cell, float(top_layer_tolerance)
+        )
+        if slab_skip_voronoi:
+            logger.info(
+                "Slab top layer is planar; skipping Voronoi vertex generation. "
+                "Slab sites come from the topology generator "
+                "(atop/bridge/hollow). probe_radius/max_site_distance still "
+                "gate accessibility; site enrichment does not apply."
+            )
 
-    vertices, nn_dists = _voronoi_sites(
-        voronoi_positions,
-        cell,
-        pbc_for_voronoi,
-        probe_radius=probe_radius,
-        max_distance=max_site_distance,
-        enrich=enrich,
-        symbols=symbols,
-        nn_reference_positions=positions,
-    )
+    if slab_skip_voronoi:
+        vertices = np.empty((0, 3), dtype=float)
+        nn_dists = np.empty(0, dtype=float)
+    else:
+        vertices, nn_dists = _voronoi_sites(
+            voronoi_positions,
+            cell,
+            pbc_for_voronoi,
+            probe_radius=probe_radius,
+            max_distance=max_site_distance,
+            enrich=enrich,
+            symbols=symbols,
+            nn_reference_positions=positions,
+        )
     source_hints = ["voronoi"] * len(vertices)
 
     local_tree = KDTree(positions)
@@ -356,6 +397,15 @@ def get_unified_sites(
     if material_type == "slab" and slab_top_atom_indices is not None:
         median_nn = _median_nn_or_fallback(nn_dists)
         site_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
+        # The accessibility gate compares candidate-to-framework distances, so
+        # it must respect PBC: a hollow whose defining atoms straddle an a/b
+        # boundary otherwise gets an inflated d_nn and is silently dropped.
+        accessibility_tree = _periodic_accessibility_tree(
+            positions,
+            cell,
+            pbc_for_voronoi,
+            float(max_site_distance),
+        )
         (
             topo_vertices,
             topo_dists,
@@ -366,7 +416,7 @@ def get_unified_sites(
             cell,
             pbc_for_voronoi,
             slab_top_atom_indices,
-            local_tree,
+            accessibility_tree,
             site_height,
             float(probe_radius),
             float(max_site_distance),
@@ -746,18 +796,19 @@ def get_symmetry_aware_sites(
 # ---------------------------------------------------------------------------
 
 
-def _is_top_layer_planar(
-    slab: Atoms,
+def _top_layer_is_planar_from_arrays(
+    positions: np.ndarray,
+    cell: np.ndarray,
     top_layer_tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
     z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
 ) -> bool:
-    """True if the topmost atomic layer is approximately flat.
+    """True if the topmost atomic layer of *positions* is approximately flat.
 
     The fit is done in an orientation-aware slab coordinate system rather than
     assuming the slab normal is Cartesian z.
     """
-    positions = slab.get_positions()
-    cell = np.asarray(slab.get_cell(), dtype=float)
+    positions = np.asarray(positions, dtype=float)
+    cell = np.asarray(cell, dtype=float)
     top_mask = top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
     top_indices = np.nonzero(top_mask)[0]
     if len(top_indices) < 3:
@@ -771,6 +822,20 @@ def _is_top_layer_planar(
         return False
     h_pred = A @ coeffs
     return float(np.var(h - h_pred)) < z_variance_threshold
+
+
+def _is_top_layer_planar(
+    slab: Atoms,
+    top_layer_tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
+    z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
+) -> bool:
+    """True if the topmost atomic layer is approximately flat."""
+    return _top_layer_is_planar_from_arrays(
+        slab.get_positions(),
+        np.asarray(slab.get_cell(), dtype=float),
+        top_layer_tolerance,
+        z_variance_threshold,
+    )
 
 
 def _bounding_box_cell(
