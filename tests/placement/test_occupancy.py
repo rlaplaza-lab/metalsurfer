@@ -386,6 +386,7 @@ def test_retry_blocks_repeated_bad_site_index(monkeypatch):
         site_context=None,
         seed=None,
         full_slab=None,
+        conformer_energies=None,
     ):
         calls["n"] += 1
         specs = []
@@ -466,6 +467,7 @@ def test_fill_oversamples_to_meet_num_placements(monkeypatch):
         site_context=None,
         seed=None,
         full_slab=None,
+        conformer_energies=None,
     ):
         requested.append(n_desired)
         specs = []
@@ -548,6 +550,7 @@ def test_fill_early_stops_on_empty_enumeration(monkeypatch):
         site_context=None,
         seed=None,
         full_slab=None,
+        conformer_energies=None,
     ):
         calls["n"] += 1
         return []
@@ -611,6 +614,7 @@ def test_fill_yield_floor_keeps_oversampling_after_zero_success(monkeypatch):
         site_context=None,
         seed=None,
         full_slab=None,
+        conformer_energies=None,
     ):
         requested.append(n_desired)
         specs = []
@@ -798,6 +802,7 @@ def test_fill_clamps_target_to_capacity(monkeypatch, caplog):
         site_context=None,
         seed=None,
         full_slab=None,
+        conformer_energies=None,
     ):
         specs = []
         for i in range(n_desired):
@@ -869,6 +874,7 @@ def test_early_stop_on_plateaued_yield(monkeypatch):
         site_context=None,
         seed=None,
         full_slab=None,
+        conformer_energies=None,
     ):
         specs = []
         for i in range(min(n_desired, 4)):
@@ -973,6 +979,7 @@ def test_cell_tracking_skips_retried_cells(monkeypatch):
         site_context=None,
         seed=None,
         full_slab=None,
+        conformer_energies=None,
     ):
         specs = [s for s in pool if filter_spec is None or filter_spec(s)]
         return specs[:n_desired]
@@ -1059,6 +1066,7 @@ def test_pool_empty_partial_unblock(monkeypatch, caplog):
         site_context=None,
         seed=None,
         full_slab=None,
+        conformer_energies=None,
     ):
         if filter_spec is not None:
             filter_accepts_known.append(bool(filter_spec(known)))
@@ -1132,6 +1140,7 @@ def test_clamp_flag_false_legacy(monkeypatch):
         site_context=None,
         seed=None,
         full_slab=None,
+        conformer_energies=None,
     ):
         specs = []
         for i in range(n_desired):

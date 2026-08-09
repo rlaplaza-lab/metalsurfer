@@ -50,6 +50,7 @@ def process_molecule(
     saturation_reuse: bool = False,
     symmetry_broken: bool = False,
     conformers: list[Atoms] | None = None,
+    conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
 ) -> MoleculeScreenOutcome:
     """Run the full placement-optimise-validate pipeline for one molecule."""
@@ -90,6 +91,7 @@ def process_molecule(
             failure_summary=failure_summary,
             bo_enabled=False,
             conformers=conformers,
+            conformer_energies=conformer_energies,
             skip_workload_autotune=skip_workload_autotune,
         )
         if ctx is None:
@@ -108,6 +110,7 @@ def process_molecule(
         E_mol = ctx.E_mol
         t_conformers = ctx.t_conformers
         E_slab = ctx.E_slab
+        conformer_energies = ctx.conformer_energies
 
         t0 = time.perf_counter()
         fill = fill_materialized_placements(
@@ -118,6 +121,7 @@ def process_molecule(
             site_context=site_context,
             slab_atoms=slab.atoms,
             calculator=calculator,
+            conformer_energies=conformer_energies,
         )
         all_combined = fill.combined
         placement_ids = fill.placement_ids

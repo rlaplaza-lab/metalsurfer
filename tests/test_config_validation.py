@@ -476,16 +476,27 @@ def test_empty_model_name_rejected():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("mode", ["cycle", "boltzmann", "mixed"])
-def test_conformer_sampling_valid_values(mode):
-    """conformer_sampling accepts cycle, boltzmann, mixed."""
-    config = AdsorptionConfig(conformer_sampling=mode)
-    assert config.conformer_sampling == mode
+@pytest.mark.parametrize("mode", ["uniform", "boltzmann"])
+def test_conformer_weighting_valid_values(mode):
+    """conformer_weighting accepts uniform and boltzmann."""
+    config = AdsorptionConfig(conformer_weighting=mode)
+    assert config.conformer_weighting == mode
 
 
-def test_conformer_sampling_invalid_rejected():
-    with pytest.raises(ValueError, match="conformer_sampling"):
-        AdsorptionConfig(conformer_sampling="invalid")
+def test_conformer_weighting_defaults_to_uniform():
+    assert AdsorptionConfig().conformer_weighting == "boltzmann"
+
+
+def test_conformer_weighting_invalid_rejected():
+    with pytest.raises(ValueError, match="conformer_weighting"):
+        AdsorptionConfig(conformer_weighting="invalid")
+
+
+def test_conformer_weighting_does_not_warn():
+    """The live knob replaced a deprecated no-op; setting it must be silent."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        AdsorptionConfig(conformer_weighting="boltzmann", boltzmann_temperature=500.0)
 
 
 def test_flat_aromatic_parallel_fraction_valid():
@@ -736,15 +747,6 @@ def test_flat_bo_constructor_kwargs_rejected():
 def test_fold_bo_config_rejects_flat_keys():
     with pytest.raises(ValueError, match="Flat BO keys"):
         fold_bo_config({"bo_initial_random": 2, "num_conformers": 1})
-
-
-@pytest.mark.parametrize(
-    ("field_name", "value"),
-    [("conformer_sampling", "boltzmann"), ("boltzmann_temperature", 500.0)],
-)
-def test_deprecated_conformer_knobs_warn(field_name, value):
-    with pytest.warns(DeprecationWarning, match="no longer affect"):
-        AdsorptionConfig(**{field_name: value})
 
 
 def test_default_config_does_not_warn():

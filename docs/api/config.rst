@@ -121,21 +121,28 @@ Conformers
    enumeration. More conformers increase coverage of flexible molecules at higher
    compute cost.
 
-``conformer_sampling``
-   **Type:** ``Literal["boltzmann", "cycle", "mixed"]`` · **Default:** ``"cycle"``
+``conformer_weighting``
+   **Type:** ``Literal["uniform", "boltzmann"]`` · **Default:** ``"boltzmann"``
 
-   .. deprecated::
-      No-op. Superseded by spec-based placement: every ``PlacementSpec`` carries
-      an explicit ``conformer_index``, enumerated by the placement policy, so no
-      code path reads this field. Setting it to a non-default value emits a
-      ``DeprecationWarning``. Use ``num_conformers`` to control how many
-      conformers enter enumeration.
+   Conformer prior for placement-spec selection. ``"uniform"`` keeps the
+   conformer-agnostic stratified draw; ``"boltzmann"`` allocates the
+   enumerated spec slots per conformer in proportion to
+   ``exp(-(E_i - E_min) / (k_B * boltzmann_temperature))`` using the MMFF /
+   MLIP energies produced during conformer generation
+   (:func:`~metalsurfer.create_conformers_from_smiles`). When those energies
+   are unavailable (e.g. no calculator, or a length mismatch), the draw
+   degrades gracefully to uniform and a warning is logged. The allocation is
+   fully deterministic (no RNG); only the within-conformer seeded tie-break
+   remains, so the same config + energies + seed always yields the same specs.
 
 ``boltzmann_temperature``
    **Type:** ``float`` · **Default:** ``300.0`` (K)
 
-   .. deprecated::
-      No-op, for the same reason as ``conformer_sampling``.
+   Weighting temperature for ``conformer_weighting="boltzmann"``. This is **not**
+   a stochastic pre-filter: it only sets how sharply the deterministic
+   per-conformer spec allocation is skewed toward low-energy conformers. Higher
+   values flatten the prior toward uniform; lower values concentrate specs on
+   the lowest-energy conformers. Ignored when weighting is uniform.
 
 Site detection
 ~~~~~~~~~~~~~~

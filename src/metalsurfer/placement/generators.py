@@ -255,8 +255,15 @@ def enumerate_placement_specs(
     site_context: SiteContext | None = None,
     seed: int | None = None,
     full_slab: Atoms | None = None,
+    conformer_energies: list[float] | None = None,
 ) -> list[PlacementSpec]:
-    """Enumerate placement specs for diverse sampling."""
+    """Enumerate placement specs for diverse sampling.
+
+    *conformer_energies* (same order/length as *conformers*) enables the
+    deterministic Boltzmann conformer prior when
+    ``config.conformer_weighting == "boltzmann"``. Without them the draw stays
+    conformer-agnostic (the default).
+    """
     if not conformers:
         return []
 
@@ -301,6 +308,9 @@ def enumerate_placement_specs(
         preferred_site_types=("pore",) if config.material_type == "porous" else (),
         # Quality-sorted pore lists: keep open pores near the front of the draw.
         site_index_weight=1e-3 if config.material_type == "porous" else 0.0,
+        conformer_energies=conformer_energies,
+        conformer_weighting=config.conformer_weighting,
+        boltzmann_temperature=config.boltzmann_temperature,
     )
 
 

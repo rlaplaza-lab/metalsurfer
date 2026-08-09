@@ -514,6 +514,7 @@ def build_representative_relaxation_atoms(
     smiles: str,
     *,
     site_context: SiteContext | None,
+    conformer_energies: list[float] | None = None,
 ) -> Atoms:
     """Build one slab+adsorbate geometry for GPU parallel-capacity probing."""
     if not conformers:
@@ -527,6 +528,7 @@ def build_representative_relaxation_atoms(
         1,
         site_context=site_context,
         full_slab=slab_atoms,
+        conformer_energies=conformer_energies,
     )
     if specs:
         result, _ = generate_placement_from_spec_with_reason(
@@ -767,6 +769,9 @@ class MoleculeScreeningContext:
     E_slab: float
     E_mol: float
     t_conformers: float
+    # MMFF/MLIP conformer energies aligned with ``conformers``; ``None`` when the
+    # caller supplied conformers without them (placement then stays uniform).
+    conformer_energies: list[float] | None = None
 
 
 def _prepare_molecule_screening(
@@ -784,6 +789,7 @@ def _prepare_molecule_screening(
     failure_summary: dict[str, Any] | None = None,
     bo_enabled: bool = False,
     conformers: list[Atoms] | None = None,
+    conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
 ) -> MoleculeScreeningContext | None:
     """Shared preamble for standard and BO molecule screening."""
@@ -814,9 +820,17 @@ def _prepare_molecule_screening(
                 f"could not generate conformers for {molecule_name}"
             )
             return None
-        conformers, _conformer_energies = conformer_pack
+        conformers, conformer_energies = conformer_pack
     else:
         t_conformers = time.perf_counter() - t0
+    if conformer_energies is not None and len(conformer_energies) != len(conformers):
+        logger.warning(
+            "Discarding %d conformer energies that do not match %d conformers for %s",
+            len(conformer_energies),
+            len(conformers),
+            molecule_name,
+        )
+        conformer_energies = None
 
     substrate_ref = prepare_substrate_for_screening(
         slab,
@@ -850,6 +864,7 @@ def _prepare_molecule_screening(
             config,
             smiles,
             site_context=site_context,
+            conformer_energies=conformer_energies,
         )
         resolved = resolve_workload_config(
             config,
@@ -871,6 +886,7 @@ def _prepare_molecule_screening(
         E_slab=E_slab,
         E_mol=E_mol,
         t_conformers=t_conformers,
+        conformer_energies=conformer_energies,
     )
 
 

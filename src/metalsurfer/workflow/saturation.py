@@ -299,6 +299,7 @@ def _screen_saturation_molecule(
     bo_state: _BoMemoryState | None,
     reference_unit_smiles: list[str],
     conformers: list[Atoms] | None = None,
+    conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
 ) -> tuple[list[ScreeningResult], BOTransferInfo, BOStepMemory | None]:
     """Run one molecule's place/opt/filter for a saturation step."""
@@ -311,6 +312,7 @@ def _screen_saturation_molecule(
         "slab_energy_override": E_slab,
         "symmetry_broken": symmetry_broken,
         "conformers": conformers,
+        "conformer_energies": conformer_energies,
         "skip_workload_autotune": skip_workload_autotune,
     }
     if process_fn is process_molecule_bayesian:
@@ -459,11 +461,12 @@ def _run_single_molecule_saturation(
     """Coverage loop for one adsorbate until unbound or max steps."""
     bo_enabled = process_fn is process_molecule_bayesian
     cached_conformers: list[Atoms] | None = None
+    cached_conformer_energies: list[float] | None = None
     conformer_pack = create_conformers_from_smiles(
         smiles, calculator=calculator, config=config, ts_model=ts_model
     )
     if conformer_pack is not None:
-        cached_conformers, _ = conformer_pack
+        cached_conformers, cached_conformer_energies = conformer_pack
 
     current_slab = SlabContainer(base_slab.copy())
     steps: list[SaturationStepResult] = []
@@ -493,6 +496,7 @@ def _run_single_molecule_saturation(
             bo_state=bo_state if bo_enabled else None,
             reference_unit_smiles=[smiles] * step,
             conformers=cached_conformers,
+            conformer_energies=cached_conformer_energies,
             skip_workload_autotune=skip_autotune,
         )
         if bo_enabled:
@@ -737,6 +741,7 @@ def _run_multi_molecule_saturation(
                     mol,
                 ),
                 conformers=conformer_cache[mol][0],
+                conformer_energies=conformer_cache[mol][1],
                 skip_workload_autotune=True,
             )
             per_molecule_bo_transfer[mol] = transfer_info

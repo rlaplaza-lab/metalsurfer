@@ -1,6 +1,8 @@
 """Sampler policy for batch-based BO placement spec proposals."""
 
 import itertools
+import logging
+import math
 import random
 from collections import defaultdict
 from collections.abc import Callable, Iterable
@@ -20,6 +22,11 @@ from ._constants import (
     _TILT_PARALLEL,
     _Z_FRACTIONS,
 )
+
+logger = logging.getLogger(__name__)
+
+# Boltzmann constant in eV/K (conformer energies are in eV).
+_K_B_EV_PER_K: float = 8.617e-5
 
 
 def max_batch_placement_specs(
@@ -91,6 +98,145 @@ def _spec_prior_key(
     return (tilt_pen + z_pen + site_pen, tie)
 
 
+def _boltzmann_weights(
+    energies: list[float] | None,
+    temperature: float,
+) -> list[float] | None:
+    """Deterministic Boltzmann weights ``exp(-(E_i - E_min) / (k_B * T))``.
+
+    Returns ``None`` when weighting is not meaningful (non-positive/non-finite
+    *temperature*, fewer than two finite energies, or all finite energies equal),
+    which the caller treats as "fall back to the uniform draw". Non-finite
+    entries get weight ``0.0``: they are not dropped, they simply sort behind
+    every finite conformer in the proportional allocation.
+    """
+    if energies is None:
+        return None
+    if not math.isfinite(temperature) or temperature <= 0.0:
+        return None
+
+    finite = [(i, float(e)) for i, e in enumerate(energies) if math.isfinite(e)]
+    if len(finite) < 2:
+        return None
+
+    finite_values = [e for _i, e in finite]
+    e_min = min(finite_values)
+    if max(finite_values) - e_min <= 0.0:
+        # Degenerate (all equal, e.g. unscored conformers): uniform is exact.
+        return None
+
+    kt = _K_B_EV_PER_K * temperature
+    weights = [0.0] * len(energies)
+    for i, energy in finite:
+        # Exponent is <= 0 by construction, so exp() cannot overflow.
+        weights[i] = math.exp(-(energy - e_min) / kt)
+    if sum(weights) <= 0.0:
+        return None
+    return weights
+
+
+def resolve_conformer_weights(
+    *,
+    n_conformers: int,
+    conformer_energies: list[float] | None,
+    conformer_weighting: str = "uniform",
+    boltzmann_temperature: float = 300.0,
+) -> list[float] | None:
+    """Resolve the per-conformer prior, or ``None`` for the uniform draw.
+
+    Logs the reason whenever ``"boltzmann"`` was requested but the inputs cannot
+    support it, so a silently uniform run is always explained.
+    """
+    if conformer_weighting != "boltzmann":
+        return None
+    if n_conformers < 2:
+        return None
+    if conformer_energies is None:
+        logger.debug(
+            "conformer_weighting='boltzmann' but no conformer energies were "
+            "supplied; using the uniform conformer draw"
+        )
+        return None
+    if len(conformer_energies) != n_conformers:
+        logger.warning(
+            "conformer_weighting='boltzmann': %d energies for %d conformers; "
+            "using the uniform conformer draw",
+            len(conformer_energies),
+            n_conformers,
+        )
+        return None
+    if not all(math.isfinite(float(e)) for e in conformer_energies):
+        logger.warning(
+            "conformer_weighting='boltzmann': non-finite conformer energies; "
+            "affected conformers are de-prioritised (weight 0), not dropped"
+        )
+
+    weights = _boltzmann_weights(conformer_energies, boltzmann_temperature)
+    if weights is None:
+        logger.warning(
+            "conformer_weighting='boltzmann': energies are degenerate or "
+            "unusable (T=%.3g K); using the uniform conformer draw",
+            boltzmann_temperature,
+        )
+    return weights
+
+
+def _weighted_conformer_order(
+    ordered_best_first: list[PlacementSpec],
+    weights: list[float],
+    limit: int,
+) -> list[PlacementSpec]:
+    """Interleave *ordered_best_first* across conformers proportionally to *weights*.
+
+    Largest-remainder (Hamilton) allocation applied at every prefix: pick the
+    conformer with the largest deficit ``share_i * k - count_i`` at draw ``k``,
+    ties going to the lower ``conformer_index``. Every prefix of the result is
+    therefore an exact proportional apportionment (per-conformer error < 1 slot),
+    and relative order *within* a conformer is preserved, so the existing prior +
+    seeded tie-break still decides which spec of that conformer comes next.
+    The step is RNG-free: same inputs, same output.
+
+    Only the first *limit* specs are built; the caller never draws more than that
+    from one bucket.
+    """
+    limit = min(limit, len(ordered_best_first))
+    if limit <= 0:
+        return []
+
+    groups: dict[int, list[PlacementSpec]] = defaultdict(list)
+    for spec in ordered_best_first:
+        groups[int(spec.conformer_index)].append(spec)
+    if len(groups) < 2:
+        return ordered_best_first[:limit]
+
+    keys = sorted(groups)
+    total = sum(max(weights[key], 0.0) for key in keys)
+    if total <= 0.0:
+        return ordered_best_first[:limit]
+    shares = {key: max(weights[key], 0.0) / total for key in keys}
+    counts = dict.fromkeys(keys, 0)
+    cursors = dict.fromkeys(keys, 0)
+
+    out: list[PlacementSpec] = []
+    while len(out) < limit:
+        draw = len(out) + 1
+        best_key: int | None = None
+        best_deficit = 0.0
+        for key in keys:
+            if cursors[key] >= len(groups[key]):
+                continue
+            deficit = shares[key] * draw - counts[key]
+            if best_key is None or deficit > best_deficit:
+                best_key = key
+                best_deficit = deficit
+        if best_key is None:
+            break
+        out.append(groups[best_key][cursors[best_key]])
+        cursors[best_key] += 1
+        counts[best_key] += 1
+    return out
+
+
 def _stratified_sample(
     specs: list[PlacementSpec],
     n_desired: int,
@@ -99,6 +245,7 @@ def _stratified_sample(
     preferred_site_types: tuple[str, ...] = (),
     z_fraction_target: float = _POLICY_PRIOR_Z_FRACTION_TARGET,
     site_index_weight: float = 0.0,
+    conformer_weights: list[float] | None = None,
 ) -> list[PlacementSpec]:
     """Sample up to *n_desired* specs stratified by ``site_type`` (seeded, deterministic).
 
@@ -108,6 +255,10 @@ def _stratified_sample(
     for porous frameworks), those buckets are drawn first each round-robin pass.
     When *site_index_weight* > 0, draws also round-robin across ``site_index``
     values (quality-sorted) so open-pore lists keep multi-site coverage.
+    When *conformer_weights* is set, each bucket is additionally interleaved
+    across ``conformer_index`` in proportion to those weights
+    (:func:`_weighted_conformer_order`); ``None`` keeps the conformer-agnostic
+    ordering unchanged.
     """
     if len(specs) <= n_desired:
         return list(specs)
@@ -116,6 +267,17 @@ def _stratified_sample(
     for spec in specs:
         key = str(spec.site_type) if spec.site_type is not None else "none"
         buckets[key].append(spec)
+
+    weights = conformer_weights
+    if weights is not None and not all(
+        0 <= int(spec.conformer_index) < len(weights) for spec in specs
+    ):
+        logger.warning(
+            "conformer weighting skipped: spec conformer_index out of range for "
+            "%d weights; using the uniform conformer draw",
+            len(weights),
+        )
+        weights = None
 
     # Preferred buckets first, then remaining keys sorted for determinism.
     preferred = [k for k in preferred_site_types if k in buckets]
@@ -147,18 +309,16 @@ def _stratified_sample(
                 # Best first for round-robin.
                 ranked_by_site[si] = [spec for spec, _ in ordered]
             site_order = sorted(ranked_by_site.keys())
-            interleaved: list[PlacementSpec] = []
+            best_first: list[PlacementSpec] = []
             while True:
                 progressed = False
                 for si in site_order:
                     site_bucket = ranked_by_site[si]
                     if site_bucket:
-                        interleaved.append(site_bucket.pop(0))
+                        best_first.append(site_bucket.pop(0))
                         progressed = True
                 if not progressed:
                     break
-            # Pop from end → reverse so preferred (earlier interleaved) come off first.
-            buckets[key] = list(reversed(interleaved))
         else:
             ordered = sorted(
                 zip(bucket, ranks, strict=True),
@@ -169,8 +329,12 @@ def _stratified_sample(
                     site_index_weight=0.0,
                 ),
             )
-            # Pop from end → reverse so preferred specs come off first.
-            buckets[key] = [spec for spec, _ in reversed(ordered)]
+            best_first = [spec for spec, _ in ordered]
+
+        if weights is not None:
+            best_first = _weighted_conformer_order(best_first, weights, n_desired)
+        # Pop from end → reverse so preferred (earlier) specs come off first.
+        buckets[key] = list(reversed(best_first))
 
     selected: list[PlacementSpec] = []
     # Round-robin across buckets until n_desired (preferred keys first each pass).
@@ -205,9 +369,30 @@ def build_batch_placement_specs(
     preferred_site_types: tuple[str, ...] = (),
     z_fraction_target: float = _POLICY_PRIOR_Z_FRACTION_TARGET,
     site_index_weight: float = 0.0,
+    conformer_energies: list[float] | None = None,
+    conformer_weighting: str = "uniform",
+    boltzmann_temperature: float = 300.0,
 ) -> list[PlacementSpec]:
-    """BO candidate ``PlacementSpec`` list: full Cartesian grid (capped), then stratified subsample to *n_desired* (*seed*)."""
+    """BO candidate ``PlacementSpec`` list: full Cartesian grid (capped), then stratified subsample to *n_desired* (*seed*).
+
+    With ``conformer_weighting="boltzmann"`` and *conformer_energies* supplied,
+    the subsample allocates spec slots per ``conformer_index`` in proportion to
+    ``exp(-(E_i - E_min) / (k_B * boltzmann_temperature))``. The allocation is
+    deterministic (no RNG) and degrades to the uniform draw whenever the
+    energies cannot support weighting. The dissociative branch pins
+    ``conformer_index=0``, so it is never weighted.
+    """
     normalized_sites = site_indices if site_indices else [-1]
+    conformer_weights = (
+        None
+        if dissociative
+        else resolve_conformer_weights(
+            n_conformers=n_conformers,
+            conformer_energies=conformer_energies,
+            conformer_weighting=conformer_weighting,
+            boltzmann_temperature=boltzmann_temperature,
+        )
+    )
     base_fields = {
         "face_flip": False,
         "en_atom_index": None,
@@ -245,6 +430,7 @@ def build_batch_placement_specs(
             preferred_site_types=preferred_site_types,
             z_fraction_target=z_fraction_target,
             site_index_weight=site_index_weight,
+            conformer_weights=conformer_weights,
         )
 
     if dissociative:
@@ -278,6 +464,34 @@ def build_batch_placement_specs(
         n_par = max(0, min(n_par, n_desired))
         n_en = n_desired - n_par
 
+        # These two branches cap the working set early (``*_cap`` below), so the
+        # conformer axis must vary fastest under weighting: with it outermost an
+        # early cap would truncate the working set to the first conformer(s) and
+        # leave the proportional allocation nothing to allocate over.
+        parallel_axes: Iterable[tuple[Any, ...]]
+        if conformer_weights is None:
+            parallel_axes = itertools.product(
+                range(n_conformers),
+                [False, True],
+                _TILT_PARALLEL,
+                _AZIMUTH,
+                _Z_FRACTIONS,
+                _AZIMUTH_IN_PLANE,
+                normalized_sites,
+            )
+        else:
+            parallel_axes = (
+                (ci, ff, tl, azv, zfv, aip, si)
+                for ff, tl, azv, zfv, aip, si, ci in itertools.product(
+                    [False, True],
+                    _TILT_PARALLEL,
+                    _AZIMUTH,
+                    _Z_FRACTIONS,
+                    _AZIMUTH_IN_PLANE,
+                    normalized_sites,
+                    range(n_conformers),
+                )
+            )
         parallel_items = (
             _fields(
                 conformer_index=ci,
@@ -289,15 +503,7 @@ def build_batch_placement_specs(
                 azimuth_in_plane_deg=aip,
                 z_fraction=zfv,
             )
-            for ci, ff, tl, azv, zfv, aip, si in itertools.product(
-                range(n_conformers),
-                [False, True],
-                _TILT_PARALLEL,
-                _AZIMUTH,
-                _Z_FRACTIONS,
-                _AZIMUTH_IN_PLANE,
-                normalized_sites,
-            )
+            for ci, ff, tl, azv, zfv, aip, si in parallel_axes
         )
         if n_par == 0:
             par_specs = []
@@ -308,6 +514,28 @@ def build_batch_placement_specs(
             )
             par_specs = _collect(parallel_items, cap=par_cap)
 
+        en_down_axes: Iterable[tuple[Any, ...]]
+        if conformer_weights is None:
+            en_down_axes = itertools.product(
+                range(n_conformers),
+                range(max(n_binders, 1)),
+                _TILT_FULL,
+                _AZIMUTH,
+                _Z_FRACTIONS,
+                normalized_sites,
+            )
+        else:
+            en_down_axes = (
+                (ci, ei, tl, azv, zfv, si)
+                for ei, tl, azv, zfv, si, ci in itertools.product(
+                    range(max(n_binders, 1)),
+                    _TILT_FULL,
+                    _AZIMUTH,
+                    _Z_FRACTIONS,
+                    normalized_sites,
+                    range(n_conformers),
+                )
+            )
         en_down_items = (
             _fields(
                 conformer_index=ci,
@@ -318,14 +546,7 @@ def build_batch_placement_specs(
                 azimuth_deg=azv,
                 z_fraction=zfv,
             )
-            for ci, ei, tl, azv, zfv, si in itertools.product(
-                range(n_conformers),
-                range(max(n_binders, 1)),
-                _TILT_FULL,
-                _AZIMUTH,
-                _Z_FRACTIONS,
-                normalized_sites,
-            )
+            for ci, ei, tl, azv, zfv, si in en_down_axes
         )
         if n_en == 0:
             en_specs = []

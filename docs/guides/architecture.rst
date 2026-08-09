@@ -120,8 +120,10 @@ Physical stages across run modes:
    ``E_molecule`` is the lowest MLIP-optimized conformer energy
    (``workflow/reference.py``). Clean-slab energy must be finite and not ~0.
 3. **Conformer generation** — RDKit embed + MMFF; MLIP scoring via
-   ``batch_static`` when available; dedup by RMSD/energy.
-   ``conformer_sampling``: ``cycle`` (default), ``boltzmann``, or ``mixed``.
+   ``batch_static`` when available; dedup by RMSD/energy. The per-conformer
+   energies feed the optional Boltzmann conformer prior
+   (``conformer_weighting`` / ``boltzmann_temperature``), which allocates
+   placement-spec slots in proportion to ``exp(-(E_i - E_min) / (k_B * T))``.
 4. **Placement specification** — deterministic ``PlacementSpec`` grid over
    conformer, site, orientation, tilt, azimuth, height. Sites are
    orientation-aware (slab normal, not Cartesian ``z``). See

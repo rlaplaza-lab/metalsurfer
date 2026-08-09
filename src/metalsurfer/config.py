@@ -1,6 +1,5 @@
 """Configuration for adsorption screening workflows."""
 
-import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
 from math import isfinite
@@ -196,7 +195,7 @@ def _check_finite_nonneg(name: str, value: float) -> None:
         raise ValueError(f"{name} must be finite and non-negative, got {value!r}")
 
 
-CONFORMER_SAMPLING_OPTIONS: tuple[str, ...] = ("boltzmann", "cycle", "mixed")
+CONFORMER_WEIGHTING_OPTIONS: tuple[str, ...] = ("uniform", "boltzmann")
 MATERIAL_TYPE_OPTIONS: tuple[str, ...] = ("slab", "nanoparticle", "porous")
 SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("auto", "distance_ratio", "delaunay")
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
@@ -583,10 +582,12 @@ class AdsorptionConfig:
     voronoi_site_enrichment: bool = True
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
-    # Deprecated no-op: conformer choice is now carried explicitly by
-    # ``PlacementSpec.conformer_index`` and enumerated by the placement policy,
-    # so nothing reads this. Setting it emits a DeprecationWarning.
-    conformer_sampling: Literal["boltzmann", "cycle", "mixed"] = "cycle"
+    # Conformer prior for placement-spec selection. ``"uniform"`` (default) keeps
+    # the conformer-agnostic stratified draw; ``"boltzmann"`` allocates spec slots
+    # per conformer in proportion to ``exp(-(E_i - E_min) / (k_B * T))`` using the
+    # conformer energies produced during conformer generation. Requires those
+    # energies to be available; falls back to uniform otherwise.
+    conformer_weighting: Literal["uniform", "boltzmann"] = "boltzmann"
     placement_filter: Callable[[PlacementSpec], bool] | None = field(
         default=None, repr=False
     )
@@ -623,7 +624,11 @@ class AdsorptionConfig:
     rmsd_dedup_threshold: float = 0.1
     connectivity_multipliers: list[float] = field(default_factory=lambda: [1.2, 1.3])
     seed: int = DEFAULT_SEED
-    # Deprecated no-op: see ``conformer_sampling``.
+    # Weighting temperature (K) for ``conformer_weighting="boltzmann"``. This is
+    # NOT a stochastic pre-filter: it only sets how sharply the deterministic
+    # per-conformer spec allocation is skewed toward low-energy conformers.
+    # Higher values flatten the prior toward uniform; lower values concentrate
+    # specs on the lowest-energy conformers. Ignored when weighting is uniform.
     boltzmann_temperature: float = 300.0
     min_pbc_image_separation: float = 8.0
     vacuum_box_size: float = 20.0
@@ -677,36 +682,6 @@ class AdsorptionConfig:
     saturation_autobatcher_reuse_growth_fraction: float = 0.1
     bo: BOConfig = field(default_factory=BOConfig)
 
-    def _warn_deprecated_conformer_selection(self) -> None:
-        """Warn when a caller sets one of the two no-op conformer knobs.
-
-        ``conformer_sampling`` / ``boltzmann_temperature`` predate spec-based
-        placement. Conformer choice is now carried explicitly by
-        ``PlacementSpec.conformer_index`` and enumerated by the placement
-        policy, so no code path reads either field. They are still validated and
-        accepted so existing configs and YAML campaigns keep loading, but a
-        non-default value would silently do nothing, which is worse than saying
-        so.
-        """
-        stale = [
-            name
-            for name, value, default in (
-                ("conformer_sampling", self.conformer_sampling, "cycle"),
-                ("boltzmann_temperature", self.boltzmann_temperature, 300.0),
-            )
-            if value != default
-        ]
-        if stale:
-            warnings.warn(
-                f"{', '.join(stale)} no longer affect(s) conformer selection. "
-                "Conformers are chosen per placement via "
-                "PlacementSpec.conformer_index; use num_conformers and the "
-                "placement policy instead. This field is a deprecated no-op and "
-                "will be removed in a future release.",
-                DeprecationWarning,
-                stacklevel=3,
-            )
-
     def __post_init__(self) -> None:
         if isinstance(self.bo, Mapping) and not isinstance(self.bo, BOConfig):
             object.__setattr__(self, "bo", _bo_config_from_mapping(self.bo))
@@ -741,11 +716,10 @@ class AdsorptionConfig:
             _check_non_negative(nn_name, nn_value)
 
         _check_choice(
-            "conformer_sampling",
-            self.conformer_sampling,
-            allowed=CONFORMER_SAMPLING_OPTIONS,
+            "conformer_weighting",
+            self.conformer_weighting,
+            allowed=CONFORMER_WEIGHTING_OPTIONS,
         )
-        self._warn_deprecated_conformer_selection()
         _check_choice(
             "material_type",
             self.material_type,

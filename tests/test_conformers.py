@@ -1,6 +1,4 @@
-"""Tests for conformer generation, deduplication, and Boltzmann selection."""
-
-import random
+"""Tests for conformer generation and deduplication."""
 
 import numpy as np
 from ase import Atoms
@@ -9,8 +7,6 @@ from metalsurfer.config import AdsorptionConfig
 from metalsurfer.conformers import (
     create_conformers_from_smiles,
     remove_duplicate_conformers,
-    select_conformer_boltzmann,
-    select_conformer_for_placement,
 )
 
 # ---------------------------------------------------------------------------
@@ -237,126 +233,3 @@ class TestRemoveDuplicateConformers:
             [c1, c2], [0.0, 0.0], distance_threshold=0.5, energy_threshold=0.1
         )
         assert len(result_c) == 2
-
-
-# ---------------------------------------------------------------------------
-# select_conformer_boltzmann
-# ---------------------------------------------------------------------------
-
-
-class TestSelectConformerBoltzmann:
-    def _make_conformers(self, n: int = 3):
-        conformers = []
-        energies = []
-        for i in range(n):
-            c = Atoms("H", positions=[[float(i), 0.0, 0.0]])
-            conformers.append(c)
-            energies.append(float(i))
-        return conformers, energies
-
-    def test_single_conformer_returned(self):
-        c = Atoms("H", positions=[[0.0, 0.0, 0.0]])
-        result = select_conformer_boltzmann([c], [0.0])
-        assert isinstance(result, Atoms)
-        assert np.allclose(result.get_positions(), c.get_positions())
-
-    def test_returns_copy(self):
-        c = Atoms("H", positions=[[0.0, 0.0, 0.0]])
-        result = select_conformer_boltzmann([c], [0.0])
-        assert result is not c
-
-    def test_mismatched_lengths_uses_random(self):
-        conformers, _ = self._make_conformers(3)
-        result = select_conformer_boltzmann(conformers, [0.0])
-        assert isinstance(result, Atoms)
-
-    def test_no_valid_energies_uses_random(self):
-        conformers, _ = self._make_conformers(3)
-        energies = [float("nan"), float("inf"), float("-inf")]
-        result = select_conformer_boltzmann(conformers, energies)
-        assert isinstance(result, Atoms)
-
-    def test_deterministic_with_seeded_rng(self):
-        conformers, energies = self._make_conformers(5)
-        rng1 = random.Random(42)
-        rng2 = random.Random(42)
-        r1 = select_conformer_boltzmann(conformers, energies, rng=rng1)
-        r2 = select_conformer_boltzmann(conformers, energies, rng=rng2)
-        assert np.allclose(r1.get_positions(), r2.get_positions())
-
-    def test_different_seeds_may_differ(self):
-        conformers, energies = self._make_conformers(10)
-        # with spread energies, different seeds should sometimes pick different conformers
-        picks = set()
-        for seed in range(100):
-            rng = random.Random(seed)
-            r = select_conformer_boltzmann(
-                conformers, energies, temperature=1e6, rng=rng
-            )
-            picks.add(tuple(r.get_positions().flatten()))
-        assert len(picks) > 1, (
-            "Different seeds should pick different conformers at high T"
-        )
-
-    def test_low_temperature_prefers_lowest_energy(self):
-        conformers, energies = self._make_conformers(5)
-        picks = []
-        for seed in range(50):
-            rng = random.Random(seed)
-            r = select_conformer_boltzmann(
-                conformers, energies, temperature=1.0, rng=rng
-            )
-            picks.append(r.get_positions()[0, 0])
-        # at very low temperature, nearly all picks should be the lowest energy (index 0)
-        assert picks.count(0.0) > 40
-
-    def test_all_nan_energies_still_returns(self):
-        conformers, _ = self._make_conformers(3)
-        energies = [float("nan")] * 3
-        result = select_conformer_boltzmann(conformers, energies)
-        assert isinstance(result, Atoms)
-
-
-# ---------------------------------------------------------------------------
-# select_conformer_for_placement
-# ---------------------------------------------------------------------------
-
-
-class TestSelectConformerForPlacement:
-    def _make_conformers(self, n: int = 4):
-        conformers = []
-        energies = []
-        for i in range(n):
-            c = Atoms("H", positions=[[float(i), 0.0, 0.0]])
-            conformers.append(c)
-            energies.append(float(i))
-        return conformers, energies
-
-    def test_cycle_uses_all_conformers(self):
-        """cycle sampling ensures all conformers are used across placement_ids."""
-        conformers, energies = self._make_conformers(4)
-        picked = set()
-        for pid in range(8):
-            r = select_conformer_for_placement(
-                conformers, energies, pid, sampling="cycle"
-            )
-            picked.add(tuple(r.get_positions().flatten()))
-        assert len(picked) == 4, "All 4 conformers should appear in 8 placements"
-
-    def test_cycle_deterministic(self):
-        conformers, energies = self._make_conformers(5)
-        r1 = select_conformer_for_placement(conformers, energies, 3, sampling="cycle")
-        r2 = select_conformer_for_placement(conformers, energies, 3, sampling="cycle")
-        assert np.allclose(r1.get_positions(), r2.get_positions())
-
-    def test_boltzmann_fallback(self):
-        conformers, energies = self._make_conformers(3)
-        r = select_conformer_for_placement(
-            conformers, energies, 0, sampling="boltzmann", rng=random.Random(42)
-        )
-        assert isinstance(r, Atoms)
-
-    def test_single_conformer_returned(self):
-        c = Atoms("H", positions=[[1.0, 2.0, 3.0]])
-        r = select_conformer_for_placement([c], [0.0], 99, sampling="cycle")
-        assert np.allclose(r.get_positions(), c.get_positions())

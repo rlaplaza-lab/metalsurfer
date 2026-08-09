@@ -289,6 +289,7 @@ def fill_materialized_placements(
     slab_atoms: Atoms,
     calculator,
     n_target: int | None = None,
+    conformer_energies: list[float] | None = None,
 ) -> MaterializeFillResult:
     """Enumerate and materialize until ``n_target`` valid placements or retries end.
 
@@ -381,6 +382,7 @@ def fill_materialized_placements(
             site_context=site_context,
             seed=attempt_seed,
             full_slab=slab_atoms,
+            conformer_energies=conformer_energies,
         )
 
         # R4: if the failed-key/cell filter emptied the pool, relax the block
@@ -409,6 +411,7 @@ def fill_materialized_placements(
                     site_context=site_context,
                     seed=attempt_seed + 1,
                     full_slab=slab_atoms,
+                    conformer_energies=conformer_energies,
                 )
 
             if not specs:
@@ -430,6 +433,7 @@ def fill_materialized_placements(
                     site_context=site_context,
                     seed=attempt_seed + 2,
                     full_slab=slab_atoms,
+                    conformer_energies=conformer_energies,
                 )
 
         if not specs:

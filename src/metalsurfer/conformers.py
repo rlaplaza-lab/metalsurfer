@@ -1,7 +1,6 @@
 """Conformer generation from SMILES via RDKit and deduplication."""
 
 import logging
-import random
 from typing import Any
 
 import numpy as np
@@ -177,95 +176,3 @@ def _kabsch_rmsd(pos_a: np.ndarray, pos_b: np.ndarray) -> float:
     rot = Vt.T @ np.diag([1.0, 1.0, d]) @ U.T
     a_rot = a @ rot.T
     return float(np.sqrt(np.mean(np.sum((a_rot - b) ** 2, axis=1))))
-
-
-def select_conformer_boltzmann(
-    conformers: list[Atoms],
-    energies: list[float],
-    temperature: float = 300.0,
-    rng: random.Random | None = None,
-) -> Atoms:
-    """Pick a conformer by Boltzmann weighting and return a *copy*.
-
-    Parameters
-    ----------
-    rng:
-        Seeded ``random.Random`` instance for reproducibility.  When
-        ``None`` a module-level default is used (non-deterministic).
-    """
-    _rng = rng if rng is not None else random
-
-    if len(conformers) == 1:
-        return conformers[0].copy()
-
-    if len(energies) != len(conformers):
-        logger.warning(
-            "Mismatch between conformers and energies, using random selection"
-        )
-        return _rng.choice(conformers).copy()
-
-    valid_indices = [i for i, e in enumerate(energies) if np.isfinite(e)]
-    if not valid_indices:
-        logger.warning("No valid energies found, using random selection")
-        return _rng.choice(conformers).copy()
-
-    valid_energies = [energies[i] for i in valid_indices]
-    min_energy = min(valid_energies)
-
-    kB_T = 8.617e-5 * temperature
-    weights = [np.exp(-(e - min_energy) / kB_T) for e in valid_energies]
-    total = sum(weights)
-    weights = [w / total for w in weights]
-
-    rand_val = _rng.random()
-    cumulative = 0.0
-    for i, w in enumerate(weights):
-        cumulative += w
-        if rand_val <= cumulative:
-            return conformers[valid_indices[i]].copy()
-
-    # Fallback for floating-point rounding: use last valid conformer
-    return conformers[valid_indices[-1]].copy()
-
-
-def select_conformer_for_placement(
-    conformers: list[Atoms],
-    energies: list[float],
-    placement_id: int,
-    sampling: str = "cycle",
-    temperature: float = 300.0,
-    rng: random.Random | None = None,
-) -> Atoms:
-    """Select a conformer for placement with diversity-aware sampling.
-
-    .. deprecated::
-        Superseded by spec-based placement. Conformer choice is carried
-        explicitly by ``PlacementSpec.conformer_index`` and enumerated by the
-        placement policy, so nothing in the pipeline calls this. It is kept only
-        for backwards compatibility; ``AdsorptionConfig.conformer_sampling`` and
-        ``boltzmann_temperature`` are no-ops for the same reason.
-
-    When *sampling* is "cycle", cycles through conformers by placement_id to
-    ensure all conformers are used. When "boltzmann", uses Boltzmann weighting.
-    When "mixed", alternates: even placement_ids use cycle, odd use Boltzmann.
-    """
-    if not conformers:
-        raise ValueError("conformers must not be empty")
-    if len(conformers) == 1:
-        return conformers[0].copy()
-
-    if sampling == "cycle":
-        idx = placement_id % len(conformers)
-        return conformers[idx].copy()
-
-    if sampling == "mixed":
-        if placement_id % 2 == 0:
-            idx = placement_id % len(conformers)
-            return conformers[idx].copy()
-        return select_conformer_boltzmann(
-            conformers, energies, temperature=temperature, rng=rng
-        )
-
-    return select_conformer_boltzmann(
-        conformers, energies, temperature=temperature, rng=rng
-    )

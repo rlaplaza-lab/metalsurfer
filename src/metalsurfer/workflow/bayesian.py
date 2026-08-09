@@ -87,6 +87,7 @@ def process_molecule_bayesian(
     bo_step_memory_in: BOStepMemory | None = None,
     bo_prior_step_memory: BOStepMemory | None = None,
     conformers: list[Atoms] | None = None,
+    conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
 ) -> MoleculeScreenOutcome:
     """Bayesian-optimisation-guided placement screening for one molecule."""
@@ -129,6 +130,7 @@ def process_molecule_bayesian(
         failure_summary=failure_summary,
         bo_enabled=True,
         conformers=conformers,
+        conformer_energies=conformer_energies,
         skip_workload_autotune=skip_workload_autotune,
     )
     if ctx is None:
@@ -138,6 +140,7 @@ def process_molecule_bayesian(
     slab_for_sites = ctx.slab_for_sites
     effective_base_slab_for_frozen = ctx.effective_base_slab_for_frozen
     conformers = ctx.conformers
+    conformer_energies = ctx.conformer_energies
     site_context = ctx.site_context
     config = ctx.config
     E_slab = ctx.E_slab
@@ -176,6 +179,7 @@ def process_molecule_bayesian(
         site_context=site_context,
         seed=config.seed,
         full_slab=slab.atoms,
+        conformer_energies=conformer_energies,
     )
     if not all_specs:
         logger.warning("No candidate specs generated for BO")
