@@ -288,6 +288,13 @@ class TestProcessMoleculePhysicsSurvival:
     def test_only_physically_valid_geometries_survive(self, monkeypatch):
         """Stub optimizer returns good / overlapping / desorbed; only good survives."""
         slab_atoms = make_slab()
+        # Give the slab realistic z-vacuum: the desorption check now uses the
+        # calculator's 3D PBC (matching the energy geometry), so a lifted
+        # molecule must be genuinely far along c to be detected as desorbed
+        # rather than MIC-wrapped back near the surface on a thin cell.
+        _cell = slab_atoms.get_cell()
+        _cell[2, 2] = 60.0
+        slab_atoms.set_cell(_cell)
         slab = SlabContainer(slab_atoms)
         e_slab = -200.0
         e_mol = -10.0
