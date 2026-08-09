@@ -2,6 +2,12 @@
 
 from math import isfinite
 
+import numpy as np
+
+# Cells with |det| below this are treated as degenerate (no usable volume), so
+# periodic distance conventions are disabled rather than producing garbage.
+CELL_DET_EPS: float = 1e-12
+
 
 def is_finite_number(value: object) -> bool:
     """Return True if *value* converts to a finite float."""
@@ -11,3 +17,19 @@ def is_finite_number(value: object) -> bool:
         return bool(isfinite(float(value)))
     except (TypeError, ValueError):
         return False
+
+
+def cell_has_volume(cell, *, eps: float = CELL_DET_EPS) -> bool:
+    """Return True when *cell* spans a non-degenerate volume.
+
+    Uses ``abs(det)`` deliberately. A left-handed cell (negative determinant,
+    e.g. from a loaded POSCAR with a flipped axis) is perfectly valid and
+    periodic; testing ``det > 0`` silently classifies it as degenerate, which
+    drops PBC from distance checks and site enumeration. Keep every
+    "is this cell usable?" test routed through here so the convention and the
+    tolerance stay in one place.
+    """
+    arr = np.asarray(cell, dtype=float)
+    if arr.shape != (3, 3):
+        return False
+    return abs(float(np.linalg.det(arr))) > eps

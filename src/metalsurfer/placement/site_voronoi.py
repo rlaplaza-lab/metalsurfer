@@ -5,6 +5,7 @@ import logging
 import numpy as np
 from scipy.spatial import Delaunay, KDTree, QhullError, Voronoi
 
+from .._utils import cell_has_volume
 from ._constants import (
     _ATOP_RATIO,
     _BRIDGE_EQ_TOL,
@@ -91,7 +92,7 @@ def _voronoi_sites(
         probe_radius = derived_probe if probe_radius is None else probe_radius
         max_distance = derived_max if max_distance is None else max_distance
 
-    if np.linalg.det(cell) <= 0.0:
+    if not cell_has_volume(cell):
         logger.debug(
             "Degenerate cell for Voronoi generation; falling back to no-PBC enumeration"
         )

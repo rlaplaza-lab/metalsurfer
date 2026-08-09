@@ -124,15 +124,18 @@ Conformers
 ``conformer_sampling``
    **Type:** ``Literal["boltzmann", "cycle", "mixed"]`` · **Default:** ``"cycle"``
 
-   Strategy for selecting which conformers enter the placement loop.
-   ``"cycle"`` rotates through conformers deterministically; ``"boltzmann"`` weights
-   by relative energy at ``boltzmann_temperature``; ``"mixed"`` combines both.
+   .. deprecated::
+      No-op. Superseded by spec-based placement: every ``PlacementSpec`` carries
+      an explicit ``conformer_index``, enumerated by the placement policy, so no
+      code path reads this field. Setting it to a non-default value emits a
+      ``DeprecationWarning``. Use ``num_conformers`` to control how many
+      conformers enter enumeration.
 
 ``boltzmann_temperature``
    **Type:** ``float`` · **Default:** ``300.0`` (K)
 
-   Temperature for Boltzmann-weighted conformer selection when
-   ``conformer_sampling`` is ``"boltzmann"`` or ``"mixed"``.
+   .. deprecated::
+      No-op, for the same reason as ``conformer_sampling``.
 
 Site detection
 ~~~~~~~~~~~~~~

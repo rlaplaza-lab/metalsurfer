@@ -687,9 +687,11 @@ class TestTransferTolerance:
         n = 40
         x = np.linspace(0.0, 1.0, n)
         y_current = x + 0.01 * rng.standard_normal(n)
-        # Slightly degraded prior: small noise + a gentle perturbation that makes
-        # the transferred model marginally worse than the baseline.
-        y_prior = x + 0.02 * rng.standard_normal(n) + 0.03 * np.sin(5.0 * x)
+        # Mildly degraded prior: same linear trend but offset by a constant.
+        # Out-of-fold this makes the transferred model marginally (but
+        # consistently) worse than the current-only baseline -> a small positive
+        # MAE delta, used to exercise the tolerance gate below.
+        y_prior = x + 0.01 * rng.standard_normal(n) + 0.08
         X_current = pd.DataFrame({"f": x})
         X_prior = pd.DataFrame({"f": x})
         return X_current, y_current, X_prior, y_prior

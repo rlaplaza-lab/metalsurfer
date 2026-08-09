@@ -19,10 +19,11 @@ from ase.data import atomic_numbers, covalent_radii
 from ase.geometry import find_mic
 
 from ._logging import warn_once
+from ._utils import cell_has_volume
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
 from .models import ScreeningResult
-from .placement._material import calculator_pbc_for_atoms
+from .placement._material import material_aware_pbc
 from .placement.geometry import calculate_min_distance
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ def _mic_pairwise_distances(coords: np.ndarray, atoms: Atoms) -> np.ndarray:
     diffs = coords[idx_i] - coords[idx_j]
     cell = atoms.get_cell()
     pbc = atoms.get_pbc()
-    if np.any(pbc) and np.linalg.det(cell) > 0:
+    if np.any(pbc) and cell_has_volume(cell):
         _, mic_dists = find_mic(diffs, cell, pbc=pbc)
         dists = np.asarray(mic_dists).ravel()
     else:
@@ -372,6 +373,17 @@ def check_desorption(
     Complementary to placement: initial placement uses min_contact_ratio to avoid
     covalent binding; this post-optimization filter rejects structures that
     drifted too far from the surface (binding_threshold, default 4.0 Å).
+
+    Periodicity note: this is a *geometric* criterion, so it uses the substrate's
+    real periodicity (:func:`material_aware_pbc`) rather than the calculator's
+    promoted 3D PBC. For a slab the difference is the ``c`` axis, which is the
+    vacuum direction: under 3D PBC an adsorbate that has flown off the surface
+    minimum-image-wraps to the bottom of the periodic image and is scored as
+    still bound. With ``MIN_CALCULATOR_CELL_C_ANG = 18`` a molecule 12 Å above a
+    slab whose top sits at z=3 gives an image distance of 3 Å, i.e. below the
+    default 4 Å threshold, so desorption would go undetected. Porous frameworks
+    keep ``[True, True, True]`` because there the wrap is physical, and this also
+    matches the convention used by :func:`check_decomposition`.
     """
     slab_size = len(slab)
     adsorbate = atoms[slab_size:]
@@ -386,7 +398,7 @@ def check_desorption(
         if np.any(mask):
             slab_positions = slab_positions[mask]
 
-    _pbc_for_dist = calculator_pbc_for_atoms(atoms)
+    _pbc_for_dist = material_aware_pbc(material_type)
     min_d = calculate_min_distance(
         adsorbate.get_positions(),
         slab_positions,

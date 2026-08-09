@@ -11,6 +11,7 @@ from ase.data import covalent_radii as ase_covalent_radii
 from ase.data import vdw_radii as ase_vdw_radii
 from ase.geometry import find_mic
 
+from .._utils import cell_has_volume
 from ._constants import (
     _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE,
     _BINDER_ALIGNMENT_TARGET_DOT,
@@ -191,7 +192,7 @@ def _get_vdw_radius(symbol: str) -> float | None:
 
 def _cell_has_volume(cell: np.ndarray) -> bool:
     """True when *cell* has non-zero volume (supports left-handed cells)."""
-    return abs(float(np.linalg.det(np.asarray(cell, dtype=float)))) > 0.0
+    return cell_has_volume(cell)
 
 
 def _mol_slab_pairwise_distances(

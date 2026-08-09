@@ -204,6 +204,44 @@ def batch_static(
     return out
 
 
+def _split_forces_by_system(
+    batch, n_systems: int, atom_counts: list[int]
+) -> list[np.ndarray] | None:
+    """Split a torch-sim batch's per-atom force tensor into per-system arrays.
+
+    ``forces`` is an *atom* attribute on torch-sim ``OptimState`` (unlike
+    ``energy``/``stress``, which are *system* attributes), so it is a single
+    ``(n_atoms_total, 3)`` tensor for the whole concatenated batch. Indexing it
+    with a system index silently yields the force vector of one atom, which
+    makes downstream per-adsorbate force-convergence checks operate on a
+    ``(3,)`` array and never fire. Split on ``system_idx`` instead.
+
+    Returns ``None`` when forces (or the system index) are unavailable, and
+    raises ``RuntimeError`` if the split does not reproduce *atom_counts*.
+    """
+    forces = getattr(batch, "forces", None)
+    if forces is None:
+        return None
+    forces_np = np.asarray(forces.detach().cpu().numpy(), dtype=float)
+    system_idx = getattr(batch, "system_idx", None)
+    if system_idx is None:
+        return None
+    idx_np = np.asarray(system_idx.detach().cpu().numpy()).reshape(-1)
+    if forces_np.ndim != 2 or forces_np.shape[0] != idx_np.shape[0]:
+        raise RuntimeError(
+            "Batched forces do not align with the per-atom system index: "
+            f"forces shape {forces_np.shape}, system_idx length {idx_np.shape[0]}."
+        )
+    per_system = [forces_np[idx_np == k] for k in range(n_systems)]
+    for k, (got, expected) in enumerate(zip(per_system, atom_counts, strict=True)):
+        if got.shape != (expected, 3):
+            raise RuntimeError(
+                "Batched forces could not be split per system: system "
+                f"{k} has {got.shape[0]} force rows but {expected} atoms."
+            )
+    return per_system
+
+
 # ---------------------------------------------------------------------------
 # isolated molecule optimisation
 # ---------------------------------------------------------------------------
@@ -463,7 +501,6 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
                 raise
         result = batch.to_atoms()
         energies = batch.energy
-        forces_list = batch.forces
         n_input = len(combined_atoms_list)
         n_returned = len(result)
         if n_returned != n_input:
@@ -481,14 +518,17 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
                 f"expected {n_input}, got {n_returned}. Results are mapped to "
                 "inputs positionally and cannot be realigned."
             )
+        forces_list = _split_forces_by_system(
+            batch, n_returned, [len(a) for a in result]
+        )
         for i, atoms in enumerate(result):
             calc = TorchSimCalculator(ts_model)
             if energies is not None and i < len(energies):
                 calc.results["energy"] = float(
                     energies[i].detach().cpu().numpy().squeeze()
                 )
-            if forces_list is not None and i < len(forces_list):
-                calc.results["forces"] = forces_list[i].detach().cpu().numpy()
+            if forces_list is not None:
+                calc.results["forces"] = forces_list[i]
             calc._last_positions_hash = _positions_cell_hash(atoms)
             atoms.calc = calc
         logger.info("Autobatcher optimisation succeeded: %d systems", n_returned)

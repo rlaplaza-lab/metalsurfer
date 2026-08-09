@@ -149,9 +149,15 @@ def _get_inflight_autobatcher(
     config: AdsorptionConfig | None = None,
     saturation_reuse: bool = False,
 ):
-    """Create or return cached InFlightAutoBatcher for batched relaxations."""
+    """Create or return cached InFlightAutoBatcher for batched relaxations.
+
+    Always returns a ``(autobatcher, cache_key, reused_prior_estimate)`` triple.
+    ``autobatcher`` is ``None`` when the optional MLIP stack is unavailable or
+    construction failed; callers must handle that case. Returning a bare ``None``
+    here would break both unpacking call sites (``a, b, c = ...`` and ``...[0]``).
+    """
     if _deps.InFlightAutoBatcher is None or _deps.ts is None or ts_model is None:
-        return None
+        return None, None, False
     if config is not None:
         max_memory_padding = config.autobatcher_max_memory_padding
         max_memory_scaler = config.autobatcher_max_memory_scaler

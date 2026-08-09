@@ -15,6 +15,7 @@ import spglib.error as _spglib_error_module
 from ase import Atoms
 
 from ._numeric_defaults import DEFAULT_SYMMETRY_TOLERANCE
+from ._utils import cell_has_volume
 
 if TYPE_CHECKING:
     from .placement.site_types import Site
@@ -83,9 +84,9 @@ class SymmetryAnalyzer:
 
     def _prepare_lattice_and_fractional(self) -> None:
         if self._mode == "periodic":
-            if self.cell.shape != (3, 3) or np.linalg.det(self.cell) <= 0:
+            if not cell_has_volume(self.cell):
                 raise ValueError(
-                    "Periodic symmetry requires a valid 3x3 cell with det > 0"
+                    "Periodic symmetry requires a valid 3x3 cell with non-zero volume"
                 )
             self._lattice = self.cell.copy()
             inv = np.linalg.inv(self._lattice)

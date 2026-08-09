@@ -237,10 +237,19 @@ def select_conformer_for_placement(
 ) -> Atoms:
     """Select a conformer for placement with diversity-aware sampling.
 
+    .. deprecated::
+        Superseded by spec-based placement. Conformer choice is carried
+        explicitly by ``PlacementSpec.conformer_index`` and enumerated by the
+        placement policy, so nothing in the pipeline calls this. It is kept only
+        for backwards compatibility; ``AdsorptionConfig.conformer_sampling`` and
+        ``boltzmann_temperature`` are no-ops for the same reason.
+
     When *sampling* is "cycle", cycles through conformers by placement_id to
     ensure all conformers are used. When "boltzmann", uses Boltzmann weighting.
     When "mixed", alternates: even placement_ids use cycle, odd use Boltzmann.
     """
+    if not conformers:
+        raise ValueError("conformers must not be empty")
     if len(conformers) == 1:
         return conformers[0].copy()
 

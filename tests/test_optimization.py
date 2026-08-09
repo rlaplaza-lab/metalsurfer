@@ -375,7 +375,12 @@ def test_clear_autobatcher_cache_runs_cuda_path(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_get_inflight_autobatcher_returns_none_without_ts():
-    assert _cache._get_inflight_autobatcher(ts_model=None, max_n_atoms=0) is None
+    batcher, state, available = _cache._get_inflight_autobatcher(
+        ts_model=None, max_n_atoms=0
+    )
+    assert batcher is None
+    assert state is None
+    assert available is False
 
 
 # -- _maybe_clear_cuda_cache ------------------------------------------------

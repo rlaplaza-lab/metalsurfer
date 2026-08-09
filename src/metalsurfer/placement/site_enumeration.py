@@ -7,6 +7,7 @@ import numpy as np
 from ase import Atoms
 from scipy.spatial import Delaunay, KDTree, QhullError
 
+from .._utils import cell_has_volume
 from ..symmetry import SymmetryAnalyzer
 from ._constants import (
     _ATOP_INJECTION_HEIGHT_FACTOR,
@@ -304,7 +305,7 @@ def get_unified_sites(
     if pore_threshold is None:
         pore_threshold = derive_pore_threshold(symbols)
 
-    if abs(float(np.linalg.det(cell))) < 1e-12:
+    if not cell_has_volume(cell):
         cell = _bounding_box_cell(positions)
         if np.any(pbc_for_voronoi):
             logger.warning(
@@ -465,7 +466,7 @@ def get_unified_sites(
         delaunay=delaunay_inputs,
     )
 
-    if abs(float(np.linalg.det(cell))) > 1e-12:
+    if cell_has_volume(cell):
 
         def _site_frac_key(site: Site) -> tuple:
             frac = _wrap_fractional(
@@ -596,7 +597,7 @@ def _cluster_equivalent_sites(
     sorted_sites = [sites[i] for i in order]
     fps = [_env_fingerprint(s) for s in sorted_sites]
 
-    if mat_type == "nanoparticle" or np.linalg.det(cell) <= 0:
+    if mat_type == "nanoparticle" or not cell_has_volume(cell):
         coords = np.array([_get_xyz(s) for s in sorted_sites])
         reps = _cluster_with_metric(
             n,

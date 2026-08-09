@@ -9,9 +9,11 @@ import pandas as pd
 from ase import Atoms
 from scipy import stats
 from scipy.spatial.distance import cdist
-from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.base import BaseEstimator, RegressorMixin, clone
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern
+from sklearn.model_selection import KFold, cross_val_predict
+from sklearn.neighbors import NearestNeighbors
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -168,12 +170,54 @@ def _tree_pipeline_fit_kwargs(
 
 
 _RESIDUAL_STD_FLOOR = 1e-3
+# Relative floor on sigma, as a fraction of the spread of the observed targets.
+# Guards against a surrogate that interpolates its training set reporting
+# sigma ~= 0, which collapses EI/PI to exactly zero for every candidate.
+_RESIDUAL_STD_RELATIVE_FLOOR = 0.05
+_RESIDUAL_OOF_MIN_SAMPLES = 4
+_RESIDUAL_OOF_MAX_FOLDS = 5
+
+
+def _format_residual_std(pipeline: Pipeline) -> str:
+    """Render the attached residual std for logging, or "n/a" when skipped."""
+    value = getattr(pipeline.named_steps["regressor"], "bo_residual_std_", None)
+    return "n/a" if value is None else f"{float(value):.4f}"
+
+
+def _out_of_fold_residual_std(
+    pipeline: Pipeline,
+    X: pd.DataFrame | np.ndarray,
+    y_arr: np.ndarray,
+    *,
+    random_state: int,
+) -> float | None:
+    """Return cross-validated residual RMSE, or None when not estimable.
+
+    Fitted unweighted on clones: this estimates generalisation error, which is
+    what sigma should represent.
+    """
+    n = int(y_arr.size)
+    if n < _RESIDUAL_OOF_MIN_SAMPLES:
+        return None
+    n_splits = min(_RESIDUAL_OOF_MAX_FOLDS, n)
+    cv = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    try:
+        oof = cross_val_predict(clone(pipeline), X, y_arr, cv=cv)
+    except (ValueError, RuntimeError) as exc:
+        logger.debug("Out-of-fold residual estimation failed (%s)", exc)
+        return None
+    resid = y_arr - np.asarray(oof, dtype=float).ravel()
+    if not np.all(np.isfinite(resid)):
+        return None
+    return float(np.sqrt(np.mean(np.square(resid))))
 
 
 def _attach_residual_uncertainty(
     pipeline: Pipeline,
     X: pd.DataFrame | np.ndarray,
     y: pd.Series | np.ndarray,
+    *,
+    random_state: int = 42,
 ) -> None:
     """Store residual RMSE and scaled training features for distance-aware σ.
 
@@ -181,18 +225,42 @@ def _attach_residual_uncertainty(
     estimator itself. Using residual RMSE plus nearest-neighbour distance in
     scaled feature space restores usable EI/PI/LCB without changing the mean
     predictor.
+
+    The RMSE is estimated **out of fold**. An in-sample estimate is close to
+    zero for an interpolating learner such as ``HistGradientBoostingRegressor``,
+    which drives σ to the floor and makes EI/PI identically zero for every
+    candidate -- i.e. silently turns BO into pool-ordered sampling.
+
+    Features are standardised with a scaler stored on the regressor so that the
+    nearest-neighbour distance is computed in the same space at predict time,
+    and so it is not dominated by whichever feature happens to have the largest
+    units (x/y in Ångström vs unit quaternion components).
     """
     regressor = pipeline.named_steps["regressor"]
-    scaler = pipeline.named_steps.get("scaler")
-    X_scaled = scaler.transform(X) if scaler is not None else np.asarray(X, dtype=float)
     y_arr = np.asarray(y, dtype=float).ravel()
-    resid = y_arr - np.asarray(pipeline.predict(X), dtype=float).ravel()
-    n = int(resid.size)
-    p = int(np.asarray(X_scaled).shape[1]) if np.ndim(X_scaled) == 2 else 1
-    dof = max(n - p - 1, 1)
-    residual_std = float(np.sqrt(np.sum(np.square(resid)) / dof))
-    regressor.bo_residual_std_ = max(residual_std, _RESIDUAL_STD_FLOOR)
-    regressor.bo_X_train_scaled_ = np.asarray(X_scaled, dtype=float)
+    X_arr = np.asarray(X, dtype=float)
+
+    residual_std = _out_of_fold_residual_std(
+        pipeline, X, y_arr, random_state=random_state
+    )
+    if residual_std is None:
+        # Too few observations to cross-validate: fall back to the in-sample
+        # estimate with a dof correction. Only reached for n < 4.
+        resid = y_arr - np.asarray(pipeline.predict(X), dtype=float).ravel()
+        n = int(resid.size)
+        p = int(X_arr.shape[1]) if X_arr.ndim == 2 else 1
+        dof = max(n - p - 1, 1)
+        residual_std = float(np.sqrt(np.sum(np.square(resid)) / dof))
+
+    spread = float(np.std(y_arr)) if y_arr.size > 1 else 0.0
+    floor = max(_RESIDUAL_STD_FLOOR, _RESIDUAL_STD_RELATIVE_FLOOR * spread)
+    regressor.bo_residual_std_ = max(residual_std, floor)
+
+    sigma_scaler = StandardScaler().fit(X_arr)
+    regressor.bo_sigma_scaler_ = sigma_scaler
+    regressor.bo_X_train_scaled_ = np.asarray(
+        sigma_scaler.transform(X_arr), dtype=float
+    )
 
 
 def _sigma_from_residual(
@@ -213,13 +281,18 @@ def _sigma_from_residual(
     if X_train is None or len(X_train) == 0:
         return np.full_like(mu, base)
     X_e = np.asarray(X_eval, dtype=float)
-    d = cdist(X_e, np.asarray(X_train, dtype=float)).min(axis=1)
-    if len(X_train) >= 2:
-        d_train = cdist(
-            np.asarray(X_train, dtype=float), np.asarray(X_train, dtype=float)
-        )
-        np.fill_diagonal(d_train, np.inf)
-        lengthscale = float(np.median(d_train.min(axis=1)))
+    # Evaluate in the same standardised space the training features were stored
+    # in; comparing raw candidates against scaled training rows would make the
+    # distance term meaningless.
+    sigma_scaler = getattr(regressor, "bo_sigma_scaler_", None)
+    if sigma_scaler is not None:
+        X_e = np.asarray(sigma_scaler.transform(X_e), dtype=float)
+    X_train_arr = np.asarray(X_train, dtype=float)
+    d = cdist(X_e, X_train_arr).min(axis=1)
+    if len(X_train_arr) >= 2:
+        nn = NearestNeighbors(n_neighbors=2).fit(X_train_arr)
+        nn_dist, _ = nn.kneighbors(X_train_arr)
+        lengthscale = float(np.median(nn_dist[:, 1]))
         lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
     else:
         lengthscale = 1.0
@@ -235,15 +308,17 @@ def train_surrogate(
     n_estimators: int = 100,
     random_state: int = 42,
     sample_weight: np.ndarray | None = None,
+    attach_uncertainty: bool = True,
     **kwargs: Any,
 ) -> Pipeline:
     """Fit a surrogate on observed placement data.
 
     Tree ensembles (``random_forest``, ``extra_trees``) return a single-step
-    ``Pipeline`` with a regressor only. ``gradient_boost`` and ``ridge`` return
-    a ``scaler`` + ``regressor`` pipeline from :func:`regression.train_model`
-    / :func:`regression._build_estimator`. Per-sample ``sample_weight`` is
-    supported for tree ensembles, ``ridge``, and ``gradient_boost``.
+    ``Pipeline`` with a regressor only. ``ridge`` returns a ``scaler`` +
+    ``regressor`` pipeline from :func:`regression._build_estimator`;
+    ``gradient_boost`` returns a regressor-only pipeline (trees do not need
+    feature scaling). Per-sample ``sample_weight`` is supported for tree
+    ensembles, ``ridge``, and ``gradient_boost``.
     """
     if surrogate in ("random_forest", "extra_trees"):
         tree_kind: TreeSurrogateKind = (
@@ -267,11 +342,12 @@ def train_surrogate(
     if surrogate == "ridge":
         pipeline = _build_estimator("ridge", random_state=random_state, **kwargs)
         pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
-        _attach_residual_uncertainty(pipeline, X, y)
+        if attach_uncertainty:
+            _attach_residual_uncertainty(pipeline, X, y, random_state=random_state)
         logger.info(
-            "Trained ridge surrogate on %d samples (residual_std=%.4f)",
+            "Trained ridge surrogate on %d samples (residual_std=%s)",
             len(np.asarray(y)),
-            float(pipeline.named_steps["regressor"].bo_residual_std_),
+            _format_residual_std(pipeline),
         )
         return pipeline
     if surrogate == "gradient_boost":
@@ -280,11 +356,12 @@ def train_surrogate(
             "gradient_boost", random_state=random_state, **kwargs
         )
         pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
-        _attach_residual_uncertainty(pipeline, X, y)
+        if attach_uncertainty:
+            _attach_residual_uncertainty(pipeline, X, y, random_state=random_state)
         logger.info(
-            "Trained gradient_boost surrogate on %d samples (residual_std=%.4f)",
+            "Trained gradient_boost surrogate on %d samples (residual_std=%s)",
             len(np.asarray(y)),
-            float(pipeline.named_steps["regressor"].bo_residual_std_),
+            _format_residual_std(pipeline),
         )
         return pipeline
     if surrogate == "gaussian_process":
@@ -418,34 +495,160 @@ def prior_proximity_weights(
     return np.maximum(floor, proximity)
 
 
-def cumulative_refit_sample_weights(
-    n_current: int,
+def cumulative_refit_training_set(
     X_prior: pd.DataFrame,
-    X_anchor: pd.DataFrame,
+    y_prior: np.ndarray,
+    X_current: pd.DataFrame,
+    y_current: np.ndarray,
     *,
     weight_cap: float,
     proximity_lengthscale: float,
     proximity_floor: float = 0.0,
-) -> np.ndarray:
-    """Sample weights for cumulative refit: current rows at 1.0, prior rows proximity-decayed."""
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    """Assemble the cumulative-refit training set as ``(X, y, sample_weight)``.
+
+    Rows are ordered prior-first, then current. Current observations get weight
+    1.0; prior observations are proximity-decayed and renormalised so their
+    total mass is ``weight_cap`` of the combined mass.
+
+    This returns the features, targets and weights together on purpose. The
+    previous API returned only the weight vector, leaving the caller to
+    concatenate ``X``/``y`` itself; because both orderings have the same length
+    nothing raised when the two disagreed, and the weights were silently applied
+    to the wrong rows (prior rows got 1.0 and current observations got the
+    decayed prior weights, inverting the ``weight_cap`` guarantee).
+    """
+    if len(X_prior) != len(y_prior):
+        raise ValueError(
+            f"X_prior/y_prior length mismatch: {len(X_prior)} vs {len(y_prior)}"
+        )
+    if len(X_current) != len(y_current):
+        raise ValueError(
+            f"X_current/y_current length mismatch: {len(X_current)} vs {len(y_current)}"
+        )
+
+    n_current = len(X_current)
     n_prior = len(X_prior)
+    current_weights = np.ones(n_current, dtype=float)
     if n_prior == 0:
-        return np.ones(n_current, dtype=float)
+        return X_current.reset_index(drop=True), np.asarray(y_current), current_weights
+
     prox = prior_proximity_weights(
         X_prior,
-        X_anchor,
+        X_current,
         lengthscale=proximity_lengthscale,
         floor=proximity_floor,
     )
-    if float(np.sum(prox)) <= 0.0:
-        return np.concatenate(
-            [np.ones(n_current, dtype=float), np.zeros(n_prior, dtype=float)]
+    total_prox = float(np.sum(prox))
+    prior_weights: np.ndarray = np.zeros(n_prior, dtype=float)
+    if total_prox > 0.0:
+        max_transfer_weight = n_current * weight_cap / max(1.0 - weight_cap, 1e-8)
+        prior_weights = np.asarray(
+            prox / max(total_prox, 1e-8) * max_transfer_weight, dtype=float
         )
-    max_transfer_weight = n_current * weight_cap / max(1.0 - weight_cap, 1e-8)
-    prior_weights = prox / max(float(np.sum(prox)), 1e-8) * max_transfer_weight
-    return np.concatenate(
-        [np.ones(n_current, dtype=float), prior_weights.astype(float)]
+
+    X_combined = pd.concat([X_prior, X_current], ignore_index=True)
+    y_combined = np.concatenate([np.asarray(y_prior), np.asarray(y_current)])
+    weights = np.concatenate([prior_weights, current_weights])
+    return X_combined, y_combined, weights
+
+
+_TRANSFER_GATE_MIN_SAMPLES = 4
+_TRANSFER_GATE_FOLDS = 3
+
+
+def _transfer_trust_gate(
+    X_current: pd.DataFrame,
+    y_current: np.ndarray,
+    X_prev: pd.DataFrame,
+    y_prev: np.ndarray,
+    transfer_weights: np.ndarray,
+    *,
+    baseline: Any,
+    surrogate: SurrogateType,
+    n_estimators: int,
+    random_state: int,
+) -> tuple[float, float, Pipeline, bool]:
+    """Compare baseline vs transfer MAE and return the fitted transfer model.
+
+    Returns ``(base_mae, transfer_mae, transfer_model, out_of_sample)``.
+
+    The comparison is made **out of fold** on the current step's observations.
+    Scoring both models on data they were both fitted on measures capacity, not
+    transferability: for an interpolating surrogate such as the default
+    ``gradient_boost`` both in-sample MAEs collapse towards zero, so the delta
+    stays far below ``mae_tolerance`` and a badly mismatched prior is never
+    rejected.
+
+    Falls back to the in-sample comparison (flagged via the returned bool) when
+    there are too few current observations to split.
+    """
+    n_current = len(X_current)
+    sample_weight = np.concatenate(
+        [np.ones(n_current, dtype=float), transfer_weights], axis=0
     )
+    transfer_model = train_surrogate(
+        pd.concat([X_current, X_prev], ignore_index=True),
+        np.concatenate([y_current, y_prev], axis=0),
+        surrogate=surrogate,
+        n_estimators=n_estimators,
+        random_state=random_state,
+        sample_weight=sample_weight,
+    )
+
+    if n_current < _TRANSFER_GATE_MIN_SAMPLES:
+        base_mae = float(np.mean(np.abs(baseline.predict(X_current) - y_current)))
+        transfer_mae = float(
+            np.mean(np.abs(transfer_model.predict(X_current) - y_current))
+        )
+        return base_mae, transfer_mae, transfer_model, False
+
+    n_splits = min(_TRANSFER_GATE_FOLDS, n_current)
+    cv = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    base_pred = np.empty(n_current, dtype=float)
+    transfer_pred = np.empty(n_current, dtype=float)
+    try:
+        for train_idx, test_idx in cv.split(np.arange(n_current)):
+            X_tr = X_current.iloc[train_idx]
+            y_tr = y_current[train_idx]
+            X_te = X_current.iloc[test_idx]
+
+            base_fold = train_surrogate(
+                X_tr,
+                y_tr,
+                surrogate=surrogate,
+                n_estimators=n_estimators,
+                random_state=random_state,
+                attach_uncertainty=False,
+            )
+            base_pred[test_idx] = np.asarray(base_fold.predict(X_te)).ravel()
+
+            fold_weight = np.concatenate(
+                [np.ones(len(train_idx), dtype=float), transfer_weights], axis=0
+            )
+            transfer_fold = train_surrogate(
+                pd.concat([X_tr, X_prev], ignore_index=True),
+                np.concatenate([y_tr, y_prev], axis=0),
+                surrogate=surrogate,
+                n_estimators=n_estimators,
+                random_state=random_state,
+                sample_weight=fold_weight,
+                attach_uncertainty=False,
+            )
+            transfer_pred[test_idx] = np.asarray(transfer_fold.predict(X_te)).ravel()
+    except (ValueError, RuntimeError) as exc:
+        logger.debug(
+            "Out-of-fold transfer trust gate failed (%s); using in-sample MAE", exc
+        )
+        base_mae = float(np.mean(np.abs(baseline.predict(X_current) - y_current)))
+        transfer_mae = float(
+            np.mean(np.abs(transfer_model.predict(X_current) - y_current))
+        )
+        return base_mae, transfer_mae, transfer_model, False
+
+    base_mae = float(np.mean(np.abs(base_pred - y_current)))
+    transfer_mae = float(np.mean(np.abs(transfer_pred - y_current)))
+    return base_mae, transfer_mae, transfer_model, True
 
 
 def _no_transfer(baseline: Any, transfer_bad_rounds: int) -> "TransferSurrogateResult":
@@ -601,22 +804,17 @@ def build_transfer_surrogate(
         np.sum(transfer_weights) / (np.sum(transfer_weights) + float(n_current))
     )
 
-    base_mae = float(np.mean(np.abs(baseline.predict(X_current) - y_current)))
-
-    X_train = pd.concat([X_current, X_prev], ignore_index=True)
-    y_train = np.concatenate([y_current, y_prev], axis=0)
-    sample_weight = np.concatenate(
-        [np.ones(n_current, dtype=float), transfer_weights], axis=0
-    )
-    transfer_model = train_surrogate(
-        X_train,
-        y_train,
+    base_mae, transfer_mae, transfer_model, gate_out_of_sample = _transfer_trust_gate(
+        X_current,
+        y_current,
+        X_prev,
+        y_prev,
+        transfer_weights,
+        baseline=baseline,
         surrogate=surrogate,
         n_estimators=n_estimators,
         random_state=random_state,
-        sample_weight=sample_weight,
     )
-    transfer_mae = float(np.mean(np.abs(transfer_model.predict(X_current) - y_current)))
     transfer_mae_delta = transfer_mae - base_mae
     bad_rounds = transfer_bad_rounds
     if transfer_mae_delta > mae_tolerance:
@@ -632,7 +830,11 @@ def build_transfer_surrogate(
             transfer_mae_delta=transfer_mae_delta,
             transfer_bad_rounds=bad_rounds,
             transfer_disabled=True,
-            transfer_disabled_reason="trust_degraded_on_current_step_residuals",
+            transfer_disabled_reason=(
+                "trust_degraded_on_current_step_residuals"
+                if gate_out_of_sample
+                else "trust_degraded_on_current_step_residuals_in_sample"
+            ),
         )
 
     return TransferSurrogateResult(

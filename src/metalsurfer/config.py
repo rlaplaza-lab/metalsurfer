@@ -1,5 +1,6 @@
 """Configuration for adsorption screening workflows."""
 
+import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
 from math import isfinite
@@ -557,6 +558,9 @@ class AdsorptionConfig:
     voronoi_site_enrichment: bool = True
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
+    # Deprecated no-op: conformer choice is now carried explicitly by
+    # ``PlacementSpec.conformer_index`` and enumerated by the placement policy,
+    # so nothing reads this. Setting it emits a DeprecationWarning.
     conformer_sampling: Literal["boltzmann", "cycle", "mixed"] = "cycle"
     placement_filter: Callable[[PlacementSpec], bool] | None = field(
         default=None, repr=False
@@ -587,6 +591,7 @@ class AdsorptionConfig:
     rmsd_dedup_threshold: float = 0.1
     connectivity_multipliers: list[float] = field(default_factory=lambda: [1.2, 1.3])
     seed: int = 42
+    # Deprecated no-op: see ``conformer_sampling``.
     boltzmann_temperature: float = 300.0
     min_pbc_image_separation: float = 8.0
     vacuum_box_size: float = 20.0
@@ -640,6 +645,36 @@ class AdsorptionConfig:
     saturation_autobatcher_reuse_growth_fraction: float = 0.1
     bo: BOConfig = field(default_factory=BOConfig)
 
+    def _warn_deprecated_conformer_selection(self) -> None:
+        """Warn when a caller sets one of the two no-op conformer knobs.
+
+        ``conformer_sampling`` / ``boltzmann_temperature`` predate spec-based
+        placement. Conformer choice is now carried explicitly by
+        ``PlacementSpec.conformer_index`` and enumerated by the placement
+        policy, so no code path reads either field. They are still validated and
+        accepted so existing configs and YAML campaigns keep loading, but a
+        non-default value would silently do nothing, which is worse than saying
+        so.
+        """
+        stale = [
+            name
+            for name, value, default in (
+                ("conformer_sampling", self.conformer_sampling, "cycle"),
+                ("boltzmann_temperature", self.boltzmann_temperature, 300.0),
+            )
+            if value != default
+        ]
+        if stale:
+            warnings.warn(
+                f"{', '.join(stale)} no longer affect(s) conformer selection. "
+                "Conformers are chosen per placement via "
+                "PlacementSpec.conformer_index; use num_conformers and the "
+                "placement policy instead. This field is a deprecated no-op and "
+                "will be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+
     def __post_init__(self) -> None:
         if isinstance(self.bo, Mapping) and not isinstance(self.bo, BOConfig):
             object.__setattr__(self, "bo", _bo_config_from_mapping(self.bo))
@@ -678,6 +713,7 @@ class AdsorptionConfig:
             self.conformer_sampling,
             allowed=CONFORMER_SAMPLING_OPTIONS,
         )
+        self._warn_deprecated_conformer_selection()
         _check_choice(
             "material_type",
             self.material_type,

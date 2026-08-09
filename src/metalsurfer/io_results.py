@@ -245,6 +245,45 @@ def save_single_molecule_results(
         )
 
 
+def _merge_preserving_existing_molecules(
+    path: Path, new_df: pd.DataFrame, *, key_col: str = "molecule"
+) -> pd.DataFrame:
+    """Merge *new_df* into an existing CSV, preserving untouched molecules.
+
+    Incremental runs (``skip_existing=True``) hand us only the molecules
+    processed in *this* run, so a plain truncating write would delete the rows
+    for every molecule that was skipped -- and those rows are exactly what
+    ``skip_existing`` reads back to decide what to skip. Rows for molecules
+    present in *new_df* are replaced (they were just recomputed); rows for any
+    other molecule are carried over. Columns are unioned so a schema change
+    between runs widens the file instead of misaligning it.
+    """
+    if not path.is_file():
+        return new_df
+    try:
+        existing = pd.read_csv(path)
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+        logger.warning(
+            "Could not read existing %s (%s); it will be replaced", path.name, exc
+        )
+        return new_df
+    if key_col not in existing.columns or key_col not in new_df.columns:
+        logger.warning(
+            "Existing %s has no %r column; it will be replaced", path.name, key_col
+        )
+        return new_df
+    retained = existing[~existing[key_col].isin(set(new_df[key_col]))]
+    if retained.empty:
+        return new_df
+    logger.info(
+        "Merging %d new row(s) into %s, preserving %d row(s) from previous runs",
+        len(new_df),
+        path.name,
+        len(retained),
+    )
+    return pd.concat([retained, new_df], ignore_index=True)
+
+
 def save_summary_results(
     run_results: list[ScreeningRunResult],
     surface_type: str = "manual",
@@ -256,6 +295,9 @@ def save_summary_results(
     context. Lean default writes ``context_hash`` / ``schema_version`` only;
     set ``export_placement_provenance=True`` for full ``ctx_*`` settings and
     ``initial_*`` placement provenance.
+
+    Existing rows for molecules that are not part of *run_results* are
+    preserved, so incremental runs do not discard earlier results.
     """
     results_dir = results_dir_for(surface_type)
     include_provenance = bool(config.export_placement_provenance if config else False)
@@ -281,8 +323,9 @@ def save_summary_results(
 
     os.makedirs(results_dir, exist_ok=True)
 
-    df = pd.DataFrame(all_rows)
-    df.to_csv(results_dir / "adsorption_energies_detailed.csv", index=False)
+    detailed_path = results_dir / "adsorption_energies_detailed.csv"
+    df = _merge_preserving_existing_molecules(detailed_path, pd.DataFrame(all_rows))
+    df.to_csv(detailed_path, index=False)
 
     summary_rows: list[dict[str, Any]] = []
     for rr in run_results:
@@ -291,8 +334,11 @@ def save_summary_results(
             summary_rows.append(summary_row)
 
     if summary_rows:
-        sdf = pd.DataFrame(summary_rows)
-        sdf.to_csv(results_dir / "adsorption_energy_summary.csv", index=False)
+        summary_path = results_dir / "adsorption_energy_summary.csv"
+        sdf = _merge_preserving_existing_molecules(
+            summary_path, pd.DataFrame(summary_rows)
+        )
+        sdf.to_csv(summary_path, index=False)
 
     logger.info("Saved summary results to %s", results_dir)
 
@@ -317,17 +363,23 @@ def _write_saturation_csv_bundle(
     summary_rows: list[dict[str, Any]],
     save_all: bool,
 ) -> None:
+    """Write the saturation CSV bundle, preserving molecules from earlier runs.
+
+    ``saturation_summary.csv`` is what ``skip_saturation_file`` reads back, so a
+    truncating write here would delete the very rows that drive incremental
+    reruns.
+    """
+
+    def _write(path_str: str, rows: list[dict[str, Any]]) -> None:
+        path = Path(path_str)
+        merged = _merge_preserving_existing_molecules(path, pd.DataFrame(rows))
+        merged.to_csv(path, index=False)
+
     if detail_rows:
-        pd.DataFrame(detail_rows).to_csv(
-            f"{results_dir}/saturation_details.csv", index=False
-        )
+        _write(f"{results_dir}/saturation_details.csv", detail_rows)
     if save_all and placement_rows:
-        pd.DataFrame(placement_rows).to_csv(
-            f"{results_dir}/saturation_placements_detailed.csv", index=False
-        )
-    pd.DataFrame(summary_rows).to_csv(
-        f"{results_dir}/saturation_summary.csv", index=False
-    )
+        _write(f"{results_dir}/saturation_placements_detailed.csv", placement_rows)
+    _write(f"{results_dir}/saturation_summary.csv", summary_rows)
 
 
 def _write_saturation_step_bundle(

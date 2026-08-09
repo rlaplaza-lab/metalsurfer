@@ -754,9 +754,19 @@ def test_desorption_threshold_is_strict_greater_than():
     assert "too far" in reason_gt
 
 
-def test_desorption_uses_calculator_pbc(monkeypatch):
-    """QC #1: desorption distance check must use the calculator's PBC, not material_aware_pbc."""
-    from metalsurfer.placement._material import calculator_pbc_for_atoms
+def test_desorption_uses_material_pbc_not_calculator_pbc(monkeypatch):
+    """Desorption is a geometric criterion, so it must use the material's PBC.
+
+    Using the calculator's promoted 3D PBC lets an adsorbate that flew off the
+    surface minimum-image-wrap through the vacuum gap to the bottom of the
+    periodic image, where it scores as still bound. The ``material_type``
+    argument exists precisely to select the right convention and must not be
+    ignored.
+    """
+    from metalsurfer.placement._material import (
+        calculator_pbc_for_atoms,
+        material_aware_pbc,
+    )
 
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
@@ -768,13 +778,41 @@ def test_desorption_uses_calculator_pbc(monkeypatch):
         return 0.0
 
     monkeypatch.setattr("metalsurfer.filters.calculate_min_distance", _fake)
-    ok, reason = check_desorption(
+    ok, _reason = check_desorption(
         combined, slab, binding_threshold=4.0, material_type="slab"
     )
     assert ok
-    # Calculator PBC maps any partial-periodic substrate to (True, True, True).
-    assert captured["pbc"] == calculator_pbc_for_atoms(combined)
-    assert captured["pbc"] == [True, True, True]
+    assert captured["pbc"] == material_aware_pbc("slab") == [True, True, False]
+    # Explicitly *not* the calculator convention, which would wrap through vacuum.
+    assert captured["pbc"] != calculator_pbc_for_atoms(combined)
+
+    for material_type in ("porous", "nanoparticle"):
+        check_desorption(
+            combined, slab, binding_threshold=4.0, material_type=material_type
+        )
+        assert captured["pbc"] == material_aware_pbc(material_type)
+
+
+def test_desorption_detects_liftoff_without_wrapping_through_vacuum():
+    """Regression: a lifted adsorbate must not wrap to the image slab below.
+
+    With the enforced minimum cell height (18 A) an adsorbate ~12 A above the
+    surface is closer to the periodic image below than the 4 A binding
+    threshold. Under 3D PBC that structure was reported as "adsorbed".
+    """
+    slab = make_slab(n_layers=1)
+    cell = slab.get_cell()
+    cell[2, 2] = 18.0
+    slab.set_cell(cell)
+
+    combined = place_molecule_on_slab(slab, make_water(), z_offset=12.0)
+    combined.set_cell(cell)
+
+    ok, reason = check_desorption(
+        combined, slab, binding_threshold=4.0, material_type="slab"
+    )
+    assert not ok, f"lifted adsorbate should be desorbed, got: {reason}"
+    assert "too far" in reason
 
 
 def test_desorption_no_adsorbate():

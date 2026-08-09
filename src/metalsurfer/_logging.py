@@ -7,7 +7,7 @@ import os
 import sys
 import time
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, TypeGuard
 
 _LOG_CTX: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
     "adsorption_log_ctx", default=None
@@ -195,6 +195,29 @@ def _ensure_context_filter(handler: logging.Handler) -> None:
         handler.addFilter(ContextFilter())
 
 
+def _is_console_stream_handler(
+    handler: logging.Handler,
+) -> TypeGuard[logging.StreamHandler]:
+    """Return True only for handlers writing to the real stdout/stderr.
+
+    ``logging.FileHandler`` subclasses ``StreamHandler``, so a naive isinstance
+    check would retarget a caller's file handler at stdout (silently killing
+    file logging and leaking the open file object). Restrict retargeting to
+    handlers that are already pointed at a console stream.
+    """
+    if not isinstance(handler, logging.StreamHandler):
+        return False
+    if isinstance(handler, logging.FileHandler):
+        return False
+    stream = getattr(handler, "stream", None)
+    if stream is None:
+        return False
+    return any(
+        stream is console
+        for console in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__)
+    )
+
+
 def configure_logging(
     *,
     default_level: str = "INFO",
@@ -240,7 +263,7 @@ def configure_logging(
 
         stream_handler_found = False
         for handler in root.handlers:
-            if isinstance(handler, logging.StreamHandler):
+            if _is_console_stream_handler(handler):
                 handler.setStream(target_stream)
                 handler.setFormatter(formatter)
                 _ensure_context_filter(handler)
@@ -265,7 +288,7 @@ def configure_logging(
             torch_logger.propagate = True
         if not (running_pytest and not force_stdout):
             for handler in torch_logger.handlers:
-                if isinstance(handler, logging.StreamHandler):
+                if _is_console_stream_handler(handler):
                     handler.setStream(target_stream)
                     handler.setFormatter(formatter)
 

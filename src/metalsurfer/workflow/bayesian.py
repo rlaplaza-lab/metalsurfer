@@ -18,7 +18,7 @@ from ..ml.bayesian import (
     _align_to_columns,
     build_spec_features_geometry_aware,
     build_transfer_surrogate,
-    cumulative_refit_sample_weights,
+    cumulative_refit_training_set,
     score_and_select,
     select_initial_bo_indices,
     train_surrogate,
@@ -428,12 +428,11 @@ def process_molecule_bayesian(
                 X_prior = pd.DataFrame(transfer_memory.observed_X_rows)
                 y_prior = np.asarray(transfer_memory.observed_y, dtype=float)
                 X_prior = _align_to_columns(X_prior, X_current)
-                X_combined = pd.concat([X_prior, X_current], ignore_index=True)
-                y_combined = np.concatenate([y_prior, y_current])
-                refit_weights = cumulative_refit_sample_weights(
-                    len(X_current),
+                X_combined, y_combined, refit_weights = cumulative_refit_training_set(
                     X_prior,
+                    y_prior,
                     X_current,
+                    y_current,
                     weight_cap=config.bo.transfer.weight_cap,
                     proximity_lengthscale=config.bo.transfer.proximity_lengthscale,
                     proximity_floor=config.bo.transfer.proximity_floor,
