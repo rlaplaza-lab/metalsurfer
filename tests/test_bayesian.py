@@ -590,7 +590,18 @@ class TestTransferSmoke:
         X_prev = X_prev.drop(columns=[X_prev.columns[0]])
         X_prev["extra_prior_feature"] = np.arange(len(X_prev), dtype=float)
 
-        with caplog.at_level(logging.WARNING, logger="metalsurfer.ml.bayesian"):
+        # Capture directly on the module logger so the assertion is robust to
+        # logger-propagation / caplog-handler quirks across environments.
+        _module_logger = logging.getLogger("metalsurfer.ml.bayesian")
+        _captured: list[logging.LogRecord] = []
+
+        class _CaptureHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                _captured.append(record)
+
+        _handler = _CaptureHandler()
+        _module_logger.addHandler(_handler)
+        try:
             result = build_transfer_surrogate(
                 X_current,
                 y_current,
@@ -601,9 +612,11 @@ class TestTransferSmoke:
                 min_similarity=0.0,
                 mae_tolerance=1.0,
             )
+        finally:
+            _module_logger.removeHandler(_handler)
         assert result.surrogate is not None
         assert result.transfer_weight_share > 0.0
-        assert any("prior feature columns" in r.message for r in caplog.records)
+        assert any("prior feature columns" in r.message for r in _captured)
 
     def test_build_transfer_surrogate_rejects_gaussian_process(self):
         X, y = _make_synthetic_training_data(20)
