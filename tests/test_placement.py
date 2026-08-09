@@ -2424,6 +2424,82 @@ def test_hollow_site_pairs_include_pbc_adjacent_on_small_cell():
     assert float(d[0]) <= 1.5
 
 
+def test_periodic_site_pair_distances_match_find_mic_on_wrap_cell():
+    """Distances returned alongside the pairs must be the true MIC distances."""
+    from ase.geometry import find_mic
+
+    from metalsurfer.placement.dissociative import _periodic_site_pair_candidates
+
+    sites = np.array(
+        [
+            [0.5, 0.5, 5.0],
+            [3.5, 0.5, 5.0],
+            [0.5, 3.5, 5.0],
+            [3.5, 3.5, 5.0],
+        ],
+        dtype=float,
+    )
+    cell = np.diag([4.0, 4.0, 20.0])
+    pbc = [True, True, False]
+    max_sep = 1.5
+
+    pairs = _periodic_site_pair_candidates(sites, cell, pbc, max_sep=max_sep)
+    assert pairs, "wrap-around cell must yield MIC-adjacent pairs"
+    for (i, j), d in pairs.items():
+        _, dm = find_mic((sites[i] - sites[j]).reshape(1, 3), cell, pbc=pbc)
+        assert abs(float(dm[0]) - d) < 1e-9, (
+            f"pair ({i},{j}) distance {d:.12f} != find_mic {float(dm[0]):.12f}"
+        )
+        assert d <= max_sep + 1e-12
+
+    # No MIC-adjacent pair may be dropped.
+    for i in range(len(sites)):
+        for j in range(i + 1, len(sites)):
+            _, dm = find_mic((sites[i] - sites[j]).reshape(1, 3), cell, pbc=pbc)
+            if float(dm[0]) <= max_sep:
+                assert (i, j) in pairs
+
+
+def test_mean_nn_separation_mic_matches_find_mic_reference():
+    """Offsets + KDTree must reproduce find_mic, including the self-image trap."""
+    from ase.build import fcc111
+    from ase.geometry import find_mic
+
+    from metalsurfer.placement.dissociative import _mean_nn_separation_mic
+
+    def reference(points, cell, pbc):
+        nn = []
+        for i in range(len(points)):
+            _, dists = find_mic(points - points[i], cell, pbc=pbc)
+            dists = np.asarray(dists, dtype=float)
+            dists[i] = np.inf
+            nn.append(float(np.min(dists)))
+        return float(np.mean(nn))
+
+    pbc = [True, True, False]
+
+    # Hexagonal fcc111 cell.
+    slab = fcc111("Pt", (3, 3, 4), vacuum=10.0)
+    slab.set_pbc(pbc)
+    hex_points = slab.get_positions()
+    hex_cell = np.asarray(slab.get_cell(), dtype=float)
+    assert (
+        abs(
+            _mean_nn_separation_mic(hex_points, hex_cell, pbc)
+            - reference(hex_points, hex_cell, pbc)
+        )
+        < 1e-9
+    )
+
+    # Elongated orthorhombic cell: a naive k=2 query returns each site's own
+    # image at |a| = 3 A, which is shorter than the true 10 A neighbour.
+    elong_cell = np.diag([3.0, 20.0, 30.0])
+    elong_points = np.array([[0.0, 0.0, 5.0], [0.0, 10.0, 5.0]], dtype=float)
+    got = _mean_nn_separation_mic(elong_points, elong_cell, pbc)
+    assert abs(got - reference(elong_points, elong_cell, pbc)) < 1e-9
+    assert abs(got - 10.0) < 1e-9, f"self-image leaked into the mean NN: {got}"
+
+
 def test_is_top_layer_planar_true_for_three_coplanar_atoms():
     from metalsurfer.placement.site_enumeration import _is_top_layer_planar
 

@@ -8,7 +8,6 @@ from dataclasses import dataclass
 
 import numpy as np
 from ase import Atoms
-from ase.geometry import find_mic
 from scipy.spatial import KDTree
 
 from ..config import AdsorptionConfig
@@ -309,24 +308,22 @@ def _compute_dissociative_site_pairs(
     )
 
     if config.material_type == "slab":
-        candidate_pairs = _periodic_site_pair_candidates(
+        pair_distances = _periodic_site_pair_candidates(
             site_3d, cell_arr, pbc_xy, max_adjacent_sep
         )
     else:
         tree = KDTree(site_3d)
-        candidate_pairs = tree.query_pairs(r=max_adjacent_sep)
+        pair_distances = {
+            (min(int(i), int(j)), max(int(i), int(j))): float(
+                np.linalg.norm(site_3d[i] - site_3d[j])
+            )
+            for i, j in tree.query_pairs(r=max_adjacent_sep)
+        }
 
     pairs: list[_DissociativeSitePair] = []
-    for i, j in sorted(candidate_pairs):
-        if config.material_type == "slab":
-            _, dists = find_mic(
-                (site_3d[i] - site_3d[j]).reshape(1, 3),
-                cell_arr,
-                pbc=pbc_xy,
-            )
-            d = float(dists[0])
-        else:
-            d = float(np.linalg.norm(site_3d[i] - site_3d[j]))
+    # Sorting by the origin-index key keeps the catalog order deterministic:
+    # ``spec.site_index`` indexes straight into the returned list.
+    for (i, j), d in sorted(pair_distances.items()):
         if min_fragment_sep <= d <= max_adjacent_sep:
             normal_i = _site_outward_normal(
                 site_3d[i],
@@ -358,17 +355,41 @@ def _mean_nn_separation_mic(
     cell: np.ndarray,
     pbc: list[bool] | np.ndarray,
 ) -> float:
-    """Mean nearest-neighbour separation under MIC for slab sites."""
+    """Mean nearest-neighbour separation under MIC for slab sites.
+
+    Built from explicit periodic images plus a single KD-tree query instead of a
+    per-site ``ase.geometry.find_mic`` call (which Minkowski-reduces the cell on
+    every call for 2D-periodic slabs). Images are taken from the *original*
+    basis, so heavily skewed, non-reduced cells could in principle disagree with
+    ``find_mic``; this is the same assumption already made by
+    ``_periodic_site_pair_candidates`` and ``site_coords._deduplicate_points``,
+    and ASE-generated slab cells are (near-)reduced.
+    """
     n = len(site_3d)
     if n < 2:
         return _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM
-    nn = np.full(n, np.inf, dtype=float)
-    for i in range(n):
-        deltas = site_3d - site_3d[i]
-        _, dists = find_mic(deltas, cell, pbc=pbc)
-        dists = np.asarray(dists, dtype=float)
-        dists[i] = np.inf
-        nn[i] = float(np.min(dists))
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    cell_arr = np.asarray(cell, dtype=float)
+    # One full cell vector of margin guarantees at least the ±1 image shell on
+    # every periodic axis, which is what the minimum image needs.
+    margin = (
+        float(np.max(np.linalg.norm(cell_arr[pbc_arr], axis=1)))
+        if np.any(pbc_arr)
+        else 0.0
+    )
+    offsets = _periodic_image_offsets(cell_arr, pbc_arr, margin)
+    ext = np.vstack([np.asarray(site_3d, dtype=float) + off for off in offsets])
+    tree = KDTree(ext)
+    # Each site has exactly len(offsets) images of itself in *ext*, so asking for
+    # one more neighbour always leaves at least one genuinely distinct site.
+    k = min(len(ext), len(offsets) + 1)
+    dists, idxs = tree.query(site_3d, k=k)
+    dists = np.atleast_2d(np.asarray(dists, dtype=float))
+    idxs = np.atleast_2d(np.asarray(idxs))
+    # Drop each site's own periodic images: in an elongated cell a self-image can
+    # be closer than the nearest distinct site, so this filter is not optional.
+    valid = (idxs % n) != np.arange(n)[:, None]
+    nn = np.where(valid, dists, np.inf).min(axis=1)
     finite = nn[np.isfinite(nn)]
     if len(finite) == 0:
         return _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM
@@ -380,27 +401,48 @@ def _periodic_site_pair_candidates(
     cell: np.ndarray,
     pbc: list[bool] | np.ndarray,
     max_sep: float,
-) -> set[tuple[int, int]]:
-    """Origin-index pairs within *max_sep* including periodic images."""
+) -> dict[tuple[int, int], float]:
+    """Origin-index pairs within *max_sep*, mapped to their minimum-image distance.
+
+    The distance comes straight from the extended image coordinates, so it is the
+    true minimum-image distance for every pair that is kept (pairs further apart
+    than *max_sep* are dropped and never get a distance). Images are enumerated
+    from the *original* basis rather than a Minkowski-reduced one; see
+    :func:`_mean_nn_separation_mic` for the same caveat.
+    """
+    pts = np.asarray(site_3d, dtype=float)
+    n = len(pts)
+    if n < 2:
+        return {}
     pbc_arr = np.asarray(pbc, dtype=bool)
-    offsets = _periodic_image_offsets(cell, pbc_arr, margin=float(max_sep))
-    extended: list[np.ndarray] = []
-    origin_idx: list[int] = []
-    for off in offsets:
-        for i, pos in enumerate(site_3d):
-            extended.append(pos + off)
-            origin_idx.append(i)
-    ext_arr = np.asarray(extended, dtype=float)
-    tree = KDTree(ext_arr)
-    raw_pairs = tree.query_pairs(r=float(max_sep))
-    out: set[tuple[int, int]] = set()
-    for ia, ib in raw_pairs:
-        i = origin_idx[ia]
-        j = origin_idx[ib]
-        if i == j:
-            continue
-        out.add((min(i, j), max(i, j)))
-    return out
+    offsets = _periodic_image_offsets(
+        np.asarray(cell, dtype=float), pbc_arr, margin=float(max_sep)
+    )
+    # Stacking image-major keeps the origin index at ``idx % n``.
+    ext = np.vstack([pts + off for off in offsets])
+    tree = KDTree(ext)
+    raw_pairs = tree.query_pairs(r=float(max_sep), output_type="ndarray")
+    if len(raw_pairs) == 0:
+        return {}
+    origin_a = raw_pairs[:, 0] % n
+    origin_b = raw_pairs[:, 1] % n
+    keep = origin_a != origin_b
+    if not np.any(keep):
+        return {}
+    origin_a = origin_a[keep]
+    origin_b = origin_b[keep]
+    lo = np.minimum(origin_a, origin_b)
+    hi = np.maximum(origin_a, origin_b)
+    dist = np.linalg.norm(ext[raw_pairs[keep, 0]] - ext[raw_pairs[keep, 1]], axis=1)
+    # Per-key minimum without an n×n buffer: sort by (key, distance) and take the
+    # first entry of each run of equal keys.
+    flat_key = lo.astype(np.int64) * n + hi.astype(np.int64)
+    order = np.lexsort((dist, flat_key))
+    flat_sorted = flat_key[order]
+    first = np.ones(len(flat_sorted), dtype=bool)
+    first[1:] = flat_sorted[1:] != flat_sorted[:-1]
+    sel = order[first]
+    return {(int(lo[s]), int(hi[s])): float(dist[s]) for s in sel}
 
 
 def _place_dissociative_two_sites(
