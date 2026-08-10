@@ -435,7 +435,7 @@ def _write_final_saturated_slab(atoms: Atoms | None, mol_dir: str) -> None:
         return
     final = atoms.copy()
     final.calc = None
-    final.write(f"{mol_dir}/final_saturated_slab.xyz", format="extxyz")
+    _write_clean_xyz(final, f"{mol_dir}/final_saturated_slab.xyz")
 
 
 def _ensure_saturation_mol_dirs(mol_dir: str, vasp_mol_dir: str | None) -> None:
@@ -865,6 +865,10 @@ def _write_clean_xyz(atoms: Atoms, filename: str) -> None:
     # Create a copy without calculator to avoid shape mismatches in results arrays
     atoms_copy = atoms.copy()
     atoms_copy.calc = None
+    # Drop stale ASE build metadata: fcc111/surface cache the cell + site table, which
+    # is invalid after our supercell / z-alignment / vacuum transforms. ASE extxyz drops
+    # it with a UserWarning anyway, so remove it here to keep output clean.
+    atoms_copy.info.pop("adsorbate_info", None)
     atoms_copy.write(filename, format="extxyz")
 
 
@@ -877,7 +881,8 @@ def _write_saturation_step_xyz(best: ScreeningResult, mol_dir: str, step: int) -
     step_adsorbate_path = f"{mol_dir}/step_{step:03d}_adsorbate.xyz"
     best_atoms_copy = best.atoms.copy()
     best_atoms_copy.calc = None
-    best_atoms_copy.write(step_structure_path, format="extxyz")
-    best_atoms_copy.write(step_energy_path, format="extxyz")
+    best_atoms_copy.info.pop("adsorbate_info", None)
+    _write_clean_xyz(best_atoms_copy, step_structure_path)
+    _write_clean_xyz(best_atoms_copy, step_energy_path)
     adsorbate = best.atoms[best.slab_size :].copy()
     _write_clean_xyz(adsorbate, step_adsorbate_path)
