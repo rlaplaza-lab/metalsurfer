@@ -154,16 +154,16 @@ def _reference_smiles_units_multi_molecule(
     molecule_counts: dict[str, int],
     placing_molecule: str,
 ) -> list[str]:
-    """SMILES list for all adsorbate units present on the slab when *placing_molecule*
-    is screened this step.
+    """SMILES for every adsorbate unit present in the *screened* structure.
 
-    The screen runs *before* ``record_step`` increments ``molecule_counts``, so the
-    count already reflects every unit physically on the slab; do not add one for the
-    molecule being placed.
+    ``molecule_counts`` is read before ``record_step`` increments it, so it holds
+    the units already on the slab (``step - 1`` of them). The candidate being
+    screened also contains the unit currently being placed, so add one for
+    *placing_molecule*. This mirrors ``[smiles] * step`` in the single-molecule path.
     """
     units: list[str] = []
     for mol in active_molecules:
-        n = molecule_counts.get(mol, 0)
+        n = molecule_counts.get(mol, 0) + (1 if mol == placing_molecule else 0)
         units.extend([active_smiles[mol]] * n)
     return units
 
