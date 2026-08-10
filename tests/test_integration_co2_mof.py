@@ -48,7 +48,12 @@ def _co_bond_length(atoms, slab_size: int) -> tuple[float, float]:
 
 def _run_co2_in_mof():
     """Load MOF structure and run a single CO2 screening flow."""
-    cif_path = os.path.join("examples", "mof_structures", "RUBTAK01.cif")
+    cif_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "examples",
+        "mof_structures",
+        "RUBTAK01.cif",
+    )
     mof_atoms = read(cif_path)
     num_placements = 5
     # Near-default porous campaign: keep experimental CIF geometry, default stages.
@@ -90,7 +95,9 @@ def _run_co2_in_mof():
 
 
 class TestCO2InMOF:
-    def test_co2_mof_negative_adsorption_energies_and_reasonable_geometries(self):
+    def test_co2_mof_negative_adsorption_energies_and_reasonable_geometries(
+        self, workdir
+    ):
         results, num_placements = _run_co2_in_mof()
         min_ok = max(4, int(math.ceil(0.8 * num_placements)))
         assert len(results) >= min_ok, (
@@ -154,5 +161,7 @@ class TestCO2InMOF:
             assert 165.0 <= angle <= 180.0, (
                 f"O–C–O angle should be ~180°, got {angle:.1f}"
             )
-        if len(results) >= 2:
-            assert len(site_ids) >= 2, f"Expected multi-site coverage, got {site_ids}"
+        assert len(results) >= 2, (
+            f"Expected multi-site coverage, got {len(results)} results"
+        )
+        assert len(site_ids) >= 2, f"Expected multi-site coverage, got {site_ids}"

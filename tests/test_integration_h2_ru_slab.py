@@ -71,7 +71,7 @@ def _run_h2_on_ru():
 
 
 class TestH2OnRu0001:
-    def test_h2_ru_dissociative_placements_and_geometries(self):
+    def test_h2_ru_dissociative_placements_and_geometries(self, workdir):
         results, num_placements = _run_h2_on_ru()
         min_ok = max(5, int(math.ceil(0.5 * num_placements)))
         assert len(results) >= min_ok, (
@@ -104,8 +104,10 @@ class TestH2OnRu0001:
             if r.placement_descriptor.site_index is not None:
                 site_ids.add(int(r.placement_descriptor.site_index))
 
-        if len(results) >= 2:
-            assert len(site_ids) >= 2, f"Expected multi-site coverage, got {site_ids}"
+        assert len(results) >= 2, (
+            f"Expected multi-site coverage, got {len(results)} results"
+        )
+        assert len(site_ids) >= 2, f"Expected multi-site coverage, got {site_ids}"
 
         slab_size = len(results[0].atoms) - 2
         hh_lengths = [_hh_bond_length(r.atoms, slab_size) for r in results]

@@ -70,7 +70,9 @@ def _run_ethene_on_ru():
 
 
 class TestEtheneOnRu0001:
-    def test_ethene_ru_negative_adsorption_energies_and_reasonable_geometries(self):
+    def test_ethene_ru_negative_adsorption_energies_and_reasonable_geometries(
+        self, workdir
+    ):
         results, num_placements = _run_ethene_on_ru()
         min_ok = max(6, int(math.ceil(0.5 * num_placements)))
         assert len(results) >= min_ok, (

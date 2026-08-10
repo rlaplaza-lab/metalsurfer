@@ -98,7 +98,9 @@ def test_parse_fragment_positions_covers_all_branches():
         (1.0, 2.0, 3.0),
         (4.0, 5.0, 6.0),
     )
-    with pytest.raises(TypeError):
+    with pytest.raises(
+        TypeError, match="fragment_positions must be a sequence or JSON list"
+    ):
         parse_fragment_positions(42)
 
 

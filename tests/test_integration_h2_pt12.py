@@ -99,7 +99,7 @@ def _run_h2_on_pt12():
 
 
 class TestH2OnPt12:
-    def test_h2_pt12_pipeline_smoke_and_reasonable_geometries(self):
+    def test_h2_pt12_pipeline_smoke_and_reasonable_geometries(self, workdir):
         results, num_placements = _run_h2_on_pt12()
         # Dedup can collapse equivalent dissociative minima; still require a
         # non-trivial survivor fraction of the requested budget.
@@ -122,12 +122,14 @@ class TestH2OnPt12:
             f"E_ads should be >= -3.5 eV for H2 on Pt12, got min {e_ads.min():.3f}"
         )
 
-        if len(results) >= 2:
-            spread = float(e_ads.max() - e_ads.min())
-            assert spread >= 0.01, (
-                f"Expected distinct E_ads when multiple unique configs remain, "
-                f"got spread {spread:.4f}"
-            )
+        assert len(results) >= 2, (
+            f"Expected multiple configs, got {len(results)} results"
+        )
+        spread = float(e_ads.max() - e_ads.min())
+        assert spread >= 0.01, (
+            f"Expected distinct E_ads when multiple unique configs remain, "
+            f"got spread {spread:.4f}"
+        )
 
         slab_size = len(results[0].atoms) - 2  # H2
         for r in results:

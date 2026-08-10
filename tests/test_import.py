@@ -177,9 +177,9 @@ def test_removed_surface_prep_aliases_are_not_exported():
     )
     for name in removed:
         assert name not in surface_prep.__all__
-        with pytest.raises(AttributeError):
+        with pytest.raises(AttributeError, match=name):
             _ = getattr(surface_prep, name)
-        with pytest.raises(AttributeError):
+        with pytest.raises(AttributeError, match=name):
             _ = getattr(metalsurfer, name)
 
 

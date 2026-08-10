@@ -460,9 +460,6 @@ class TestDepositAdatoms:
                 config=self._NO_RELAX_CFG,
                 results_dir=tmpdir,
             )
-        # Adatom positions should differ (site selection is random). The adatom
-        # count can vary under the minimum-separation constraint, so compare the
-        # adsorbate blocks only.
         ads1 = r1.atoms.get_positions()[n_sub:]
         ads2 = r2.atoms.get_positions()[n_sub:]
         # Adatom positions should differ across seeds (site selection is random).

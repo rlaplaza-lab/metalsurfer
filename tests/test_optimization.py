@@ -471,7 +471,7 @@ def test_batch_static_raises_without_torchsim(monkeypatch: pytest.MonkeyPatch):
     from metalsurfer.exceptions import DependencyMissingError
 
     monkeypatch.setattr(_deps, "ts", None)
-    with pytest.raises(DependencyMissingError):
+    with pytest.raises(DependencyMissingError, match="torch-sim-atomistic"):
         _optimize.batch_static([_make_atoms_with_cell()[:3]], ts_model=object())
 
 
@@ -537,7 +537,7 @@ def test_setup_torchsim_model_raises_without_torchsim(monkeypatch: pytest.Monkey
 
     with (
         patch("builtins.__import__", side_effect=fake_import),
-        pytest.raises(DependencyMissingError),
+        pytest.raises(DependencyMissingError, match="torch-sim-atomistic"),
     ):
         _model.setup_torchsim_model("uma-s-1p2", "cpu")
 
@@ -546,7 +546,7 @@ def test_optimize_isolated_raises_without_torchsim(monkeypatch: pytest.MonkeyPat
     from metalsurfer.exceptions import DependencyMissingError
 
     monkeypatch.setattr(_deps, "ts", None)
-    with pytest.raises(DependencyMissingError):
+    with pytest.raises(DependencyMissingError, match="torch-sim-atomistic"):
         optimize_isolated_molecules_batched(
             [_make_atoms_with_cell()[:3]], ts_model=MagicMock()
         )
@@ -559,7 +559,7 @@ def test_optimize_slab_raises_without_torchsim(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(_deps, "InFlightAutoBatcher", None)
     monkeypatch.setattr(_deps, "ts_constraints", None)
     slab = _make_atoms_with_cell()
-    with pytest.raises(DependencyMissingError):
+    with pytest.raises(DependencyMissingError, match="torch-sim-atomistic"):
         _optimize.optimize_adsorbate_slab_batched([slab], slab, ts_model=MagicMock())
 
 
@@ -663,7 +663,6 @@ class TestTorchSimCalculator:
             assert f.shape == (n_atoms, 3)
 
 
-@pytest.mark.mlip
 @pytest.mark.mlip
 @pytest.mark.skipif(
     not has_mlip_stack,

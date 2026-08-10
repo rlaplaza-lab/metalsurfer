@@ -740,7 +740,7 @@ def test_saturation_max_steps_must_be_positive_when_set():
 
 
 def test_flat_bo_constructor_kwargs_rejected():
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="bo_initial_random"):
         AdsorptionConfig(bo_initial_random=2)  # type: ignore[call-arg]
 
 

@@ -39,6 +39,7 @@ from metalsurfer.symmetry import SymmetryAnalysisError
 from metalsurfer.workflow import load_molecules, run_saturation_screening
 from metalsurfer.workflow.saturation import (
     _filter_saturation_topology_results,
+    _reference_smiles_units_multi_molecule,
     _saturation_adsorbate_topology_ok,
     _slab_after_saturation_step,
 )
@@ -554,7 +555,7 @@ def test_slab_after_saturation_step_restores_material_pbc():
 
 
 @gpu_mlip_test
-def test_run_saturation_screening_h2_ni111_real_gpu():
+def test_run_saturation_screening_h2_ni111_real_gpu(workdir):
     """Saturation screening with real MLIP on GPU: H2 on Ni(111).
 
     Runs actual run_saturation_screening (no mocks). Verifies:
@@ -1137,7 +1138,7 @@ def test_multi_mol_saturation_bo_rejects_shared_memory_objects(monkeypatch):
 
 
 @gpu_mlip_test
-def test_run_saturation_screening_multi_mol_bo_real_gpu():
+def test_run_saturation_screening_multi_mol_bo_real_gpu(workdir):
     """Smoke-level GPU integration test for BO-enabled competing saturation."""
     config = AdsorptionConfig(
         model_name="uma-s-1p1",
@@ -1618,6 +1619,51 @@ def test_multi_mol_saturation_topology_guard_step2(monkeypatch):
     step2 = result.steps[1]
     assert step2.winning_molecule == "water"
     assert step2.best_result.placement_id == 1
+
+
+def test_reference_smiles_units_multi_molecule_counts_placing_unit():
+    """The screened candidate includes the unit being placed, so +1 it."""
+    active_molecules = ["water", "CO2"]
+    active_smiles = {"water": "O", "CO2": "O=C=O"}
+    units = _reference_smiles_units_multi_molecule(
+        active_molecules,
+        active_smiles,
+        molecule_counts={"water": 2, "CO2": 1},
+        placing_molecule="CO2",
+    )
+    assert units == ["O", "O", "O=C=O", "O=C=O"]
+
+
+def test_reference_smiles_units_multi_molecule_fresh_slab():
+    """Even with nothing yet on the slab, placing a unit yields one entry."""
+    units = _reference_smiles_units_multi_molecule(
+        ["water", "CO2"],
+        {"water": "O", "CO2": "O=C=O"},
+        molecule_counts={"water": 0, "CO2": 0},
+        placing_molecule="water",
+    )
+    assert units == ["O"]
+
+
+def test_reference_smiles_units_multi_molecule_parity_with_single():
+    """For one active molecule the length must equal ``step`` (one per unit placed)."""
+    step = 3
+    for placing in ("water", "CO2"):
+        molecule_counts = (
+            {"water": step - 1, "CO2": 0}
+            if placing == "water"
+            else {
+                "water": 0,
+                "CO2": step - 1,
+            }
+        )
+        units = _reference_smiles_units_multi_molecule(
+            ["water", "CO2"],
+            {"water": "O", "CO2": "O=C=O"},
+            molecule_counts=molecule_counts,
+            placing_molecule=placing,
+        )
+        assert len(units) == step
 
 
 def test_saturation_topology_guard_all_filtered_stops(monkeypatch, caplog):

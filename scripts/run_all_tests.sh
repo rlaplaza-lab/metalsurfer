@@ -51,7 +51,7 @@ _run_phase() {
   fi
 }
 
-FAST_MARKER='not (slow or mlip or gpu)'
+FAST_MARKER='not (slow or mlip or gpu or dependency_behavior)'
 
 _run_phase "1_fast_and_coverage" \
   bash -c "

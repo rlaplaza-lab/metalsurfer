@@ -423,7 +423,7 @@ class TestLoadDataset:
             assert isinstance(records[0], PlacementRecord)
 
     def test_load_missing_raises(self):
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError, match="Dataset not found:"):
             load_dataset("/nonexistent/path")
 
 

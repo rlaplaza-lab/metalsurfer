@@ -179,7 +179,7 @@ class TestMissingTorchSim:
 class TestCreateSlabFromBulkImportErrors:
     """``create_slab_from_bulk`` must report setuptools vs fairchem-data-oc accurately."""
 
-    def test_raises_setuptools_hint_when_pkg_resources_missing(self):
+    def test_raises_setuptools_hint_when_pkg_resources_missing(self, tmp_path):
         def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
             if name == "fairchem.data.oc.core":
                 raise ModuleNotFoundError("pkg_resources")
@@ -189,9 +189,11 @@ class TestCreateSlabFromBulkImportErrors:
             patch("builtins.__import__", side_effect=fake_import),
             pytest.raises(DependencyMissingError, match="setuptools"),
         ):
-            create_slab_from_bulk("mp-23", results_dir="results_test_dep")
+            create_slab_from_bulk(
+                "mp-23", results_dir=str(tmp_path / "results_test_dep")
+            )
 
-    def test_raises_fairchem_data_oc_hint_when_fairchem_missing(self):
+    def test_raises_fairchem_data_oc_hint_when_fairchem_missing(self, tmp_path):
         def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
             if name == "fairchem.data.oc.core":
                 raise ModuleNotFoundError("No module named 'fairchem.data.oc'")
@@ -201,7 +203,9 @@ class TestCreateSlabFromBulkImportErrors:
             patch("builtins.__import__", side_effect=fake_import),
             pytest.raises(DependencyMissingError, match="fairchem-data-oc"),
         ):
-            create_slab_from_bulk("mp-23", results_dir="results_test_dep")
+            create_slab_from_bulk(
+                "mp-23", results_dir=str(tmp_path / "results_test_dep")
+            )
 
 
 # ---------------------------------------------------------------------------
