@@ -582,9 +582,10 @@ class AdsorptionConfig:
     voronoi_site_enrichment: bool = True
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
-    # Conformer prior for placement-spec selection. ``"boltzmann"`` (default) keeps
-    # the conformer-agnostic stratified draw; ``"boltzmann"`` allocates spec slots
-    # per conformer in proportion to ``exp(-(E_i - E_min) / (k_B * T))`` using the
+    # Conformer prior for placement-spec selection.
+    # ``"uniform"`` keeps the conformer-agnostic stratified draw (ignores
+    # conformer energies). ``"boltzmann"`` (default) allocates spec slots per
+    # conformer in proportion to ``exp(-(E_i - E_min) / (k_B * T))`` using the
     # conformer energies produced during conformer generation. Requires those
     # energies to be available; falls back to uniform otherwise.
     conformer_weighting: Literal["uniform", "boltzmann"] = "boltzmann"

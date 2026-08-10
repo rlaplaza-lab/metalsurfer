@@ -32,7 +32,6 @@ def test_merge_preserves_molecules_absent_from_the_new_run(tmp_path):
 
 
 def test_merge_replaces_rows_for_recomputed_molecules(tmp_path):
-
     path = tmp_path / "summary.csv"
     pd.DataFrame(
         [{"molecule": "A", "E_ads": -1.0}, {"molecule": "B", "E_ads": -2.0}]
@@ -47,7 +46,6 @@ def test_merge_replaces_rows_for_recomputed_molecules(tmp_path):
 
 
 def test_merge_falls_back_when_existing_file_is_corrupt(tmp_path):
-
     path = tmp_path / "summary.csv"
     path.write_text("not,a,valid\ncsv\x00row\n")
     new = pd.DataFrame([{"molecule": "C", "E_ads": -3.0}])
@@ -56,7 +54,6 @@ def test_merge_falls_back_when_existing_file_is_corrupt(tmp_path):
 
 
 def test_merge_unions_columns_across_schema_versions(tmp_path):
-
     path = tmp_path / "detailed.csv"
     pd.DataFrame([{"molecule": "A", "E_ads": -1.0}]).to_csv(path, index=False)
 

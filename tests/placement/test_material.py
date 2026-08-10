@@ -125,7 +125,6 @@ def test_slab_placements_are_above_surface_reference():
 def test_local_site_material_enumeration_generation_and_reproducibility(
     material_type, factory, num_placements, z_range, n_desired
 ):
-
     structure = factory()
     config = adsorption_config_factory(
         material_type=material_type,

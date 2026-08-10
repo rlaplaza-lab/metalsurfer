@@ -483,7 +483,7 @@ def test_conformer_weighting_valid_values(mode):
     assert config.conformer_weighting == mode
 
 
-def test_conformer_weighting_defaults_to_uniform():
+def test_conformer_weighting_defaults_to_boltzmann():
     assert AdsorptionConfig().conformer_weighting == "boltzmann"
 
 

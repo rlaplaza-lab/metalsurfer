@@ -229,7 +229,6 @@ def test_cluster_equivalent_sites_case_matrix(sites, expected_count):
 
 
 def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
-
     slab = make_slab()
     config = adsorption_config_factory(
         material_type="slab",
