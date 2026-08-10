@@ -34,6 +34,7 @@ _LOCAL_SITE_MATERIAL_PARAMS = [
     ("porous", make_porous_framework, 12, (1.5, 3.0), 12),
 ]
 
+
 def _first_successful_placement(conformers, slab, config, smiles, n_desired=20):
     specs = enumerate_placement_specs(
         conformers,
@@ -54,6 +55,7 @@ def _first_successful_placement(conformers, slab, config, smiles, n_desired=20):
             return spec, result
     return None, None
 
+
 def _generate_placements(conformers, slab, config, smiles=None, n_desired=30):
     specs = enumerate_placement_specs(conformers, slab, config, smiles, n_desired)
     results = []
@@ -68,6 +70,7 @@ def _generate_placements(conformers, slab, config, smiles=None, n_desired=30):
         if result is not None:
             results.append((spec, result[0], result[1]))
     return results
+
 
 def _pose_from_descriptor(descriptor: PlacementDescriptor) -> PlacementPose:
     return PlacementPose(
@@ -90,6 +93,7 @@ def _pose_from_descriptor(descriptor: PlacementDescriptor) -> PlacementPose:
         azimuth_deg=descriptor.azimuth_deg,
         azimuth_in_plane_deg=descriptor.azimuth_in_plane_deg,
     )
+
 
 def _assert_replay_matches(
     mode: str,
@@ -120,8 +124,10 @@ def _assert_replay_matches(
         adsorbate.get_positions(), replayed.get_positions(), atol=1e-10
     )
 
+
 def _site_type_atop(idx: int) -> str:
     return "atop"
+
 
 def _site_ordering_key(site: Site) -> tuple:
     xyz = np.asarray(site.xyz, dtype=float)
@@ -132,6 +138,7 @@ def _site_ordering_key(site: Site) -> tuple:
         str(site.site_type),
         str(site.site_source),
     )
+
 
 def _make_site(xyz, site_type="hollow", source="topology_hollow"):
     from metalsurfer.placement.site_types import Site
@@ -145,6 +152,7 @@ def _make_site(xyz, site_type="hollow", source="topology_hollow"):
         site_source=source,
         env_fingerprint=(("Ru",), site_type),
     )
+
 
 def _tilted_make_slab():
     """Cu-like slab with a non-Cartesian surface normal (tilted b/c)."""
@@ -164,4 +172,3 @@ def _tilted_make_slab():
     pos[:] = (tilt @ pos.T).T
     slab.set_positions(pos)
     return slab
-

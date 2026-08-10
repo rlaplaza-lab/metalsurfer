@@ -1,6 +1,5 @@
 """Dissociative (fragment) placement pathways."""
 
-
 import numpy as np
 import pytest
 from scipy.spatial import KDTree
@@ -79,6 +78,7 @@ def test_dissociative_z_offset_uses_radius_derived_range():
     expected = z_lo + 0.5 * (z_hi - z_lo)
     assert descriptor.z_offset == pytest.approx(expected)
 
+
 def test_hollow_site_pairs_found_for_slab():
     """_get_dissociative_site_pairs must find adjacent hollow pairs within adaptive bounds."""
     from ase.geometry import find_mic
@@ -109,6 +109,7 @@ def test_hollow_site_pairs_found_for_slab():
             <= _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM
         ), f"hollow-pair MIC separation {sep:.3f} Å outside adaptive window"
 
+
 def test_hollow_site_pairs_include_pbc_adjacent_on_small_cell():
     """Small PBC cells must retain MIC-adjacent pairs missed by Cartesian KDTree."""
     from ase.geometry import find_mic
@@ -137,6 +138,7 @@ def test_hollow_site_pairs_include_pbc_adjacent_on_small_cell():
     assert (0, 1) not in cart
     _, d = find_mic((sites[0] - sites[1]).reshape(1, 3), cell, pbc=pbc)
     assert float(d[0]) <= 1.5
+
 
 def test_periodic_site_pair_distances_match_find_mic_on_wrap_cell():
     """Distances returned alongside the pairs must be the true MIC distances."""
@@ -172,6 +174,7 @@ def test_periodic_site_pair_distances_match_find_mic_on_wrap_cell():
             _, dm = find_mic((sites[i] - sites[j]).reshape(1, 3), cell, pbc=pbc)
             if float(dm[0]) <= max_sep:
                 assert (i, j) in pairs
+
 
 def test_mean_nn_separation_mic_matches_find_mic_reference():
     """Offsets + KDTree must reproduce find_mic, including the self-image trap."""
@@ -211,6 +214,7 @@ def test_mean_nn_separation_mic_matches_find_mic_reference():
     got = _mean_nn_separation_mic(elong_points, elong_cell, pbc)
     assert abs(got - reference(elong_points, elong_cell, pbc)) < 1e-9
     assert abs(got - 10.0) < 1e-9, f"self-image leaked into the mean NN: {got}"
+
 
 def test_dissociative_placement_supported_for_nanoparticle():
     nanoparticle = make_nanoparticle()
@@ -265,6 +269,7 @@ def test_dissociative_placement_supported_for_nanoparticle():
     )
     assert ok, (min_d, dist_reason)
     assert 1.0 <= min_d <= 3.5
+
 
 def test_dissociative_placement_on_slab_separates_and_clears_surface():
     """Dissociative H2 on a slab must land on a hollow pair with physical clearance."""
@@ -341,6 +346,7 @@ def test_dissociative_placement_on_slab_separates_and_clears_surface():
         f"dissociative H–surface distance should be chemisorption-like, got {min_d:.3f}"
     )
 
+
 def test_dissociative_placement_rejected_for_porous_material_type():
     porous = make_porous_framework()
     config = AdsorptionConfig(
@@ -372,6 +378,7 @@ def test_dissociative_placement_rejected_for_porous_material_type():
     assert result is None
     assert reason == "dissociative_not_supported_for_porous"
 
+
 def test_dissociative_descriptor_replay_round_trip():
     """fragment_positions must replay dissociative geometry exactly."""
     slab = make_slab()
@@ -402,6 +409,7 @@ def test_dissociative_descriptor_replay_round_trip():
     assert replayed is not None
     assert np.allclose(replayed.get_positions(), placed.get_positions(), atol=1e-8)
 
+
 def test_dissociative_descriptor_without_fragment_positions_fails():
     slab = make_slab()
     config = AdsorptionConfig(material_type="slab", enable_dissociative_placement=True)
@@ -420,6 +428,7 @@ def test_dissociative_descriptor_without_fragment_positions_fails():
     )
     assert generate_placement_from_descriptor(descriptor, [h2], slab, config) is None
 
+
 def test_enable_dissociative_placement_without_topology_skip():
     """Placement dissociative gate uses enable_dissociative_placement alone."""
     slab = make_slab()
@@ -434,6 +443,7 @@ def test_enable_dissociative_placement_without_topology_skip():
     specs = enumerate_placement_specs([h2], slab, config, "HH", n_desired=4)
     assert specs
     assert all(s.orientation_type == "dissociative" for s in specs)
+
 
 def test_dissociative_com_features_injective_and_record_replay():
     """Dissociative COM+quat features stay diverse; fragments survive record round-trip.
@@ -496,6 +506,7 @@ def test_dissociative_com_features_injective_and_record_replay():
         if len(z_to_feat) >= 2:
             assert len(set(z_to_feat.values())) == len(z_to_feat)
 
+
 def test_fcc_catalog_has_atop_bridge_hollow_and_topology_majority():
     clear_site_caches()
     slab = make_slab(nx=4, ny=4, n_layers=3)
@@ -504,4 +515,3 @@ def test_fcc_catalog_has_atop_bridge_hollow_and_topology_majority():
     assert {"atop", "bridge", "hollow"} <= types
     topo = sum(1 for s in sites if str(s.site_source).startswith("topology"))
     assert topo >= len(sites) // 3
-

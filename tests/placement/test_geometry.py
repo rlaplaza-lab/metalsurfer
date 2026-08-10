@@ -1,6 +1,5 @@
 """Geometry invariants: distances, material typing, contact quality."""
 
-
 import numpy as np
 import pytest
 from ase import Atoms
@@ -59,6 +58,7 @@ def test_classify_molecule_shape_linear_flat_round():
     )
     assert shape_ch4 == "round"
 
+
 def test_calculate_min_distance_mic_wraps_periodic_boundary():
     cell = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 20.0]])
     p1 = np.array([[0.5, 0.5, 5.0]])
@@ -67,12 +67,14 @@ def test_calculate_min_distance_mic_wraps_periodic_boundary():
     # Minimum image of (0.5,0.5)↔(9.5,9.5) in a 10×10 cell is √(1²+1²)=√2
     assert d == pytest.approx(np.sqrt(2.0), abs=1e-6)
 
+
 def test_calculate_min_distance_requires_explicit_pbc_for_periodic_cell():
     cell = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 20.0]])
     p1 = np.array([[0.5, 0.5, 5.0]])
     p2 = np.array([[9.5, 9.5, 5.0]])
     with pytest.raises(ValueError, match="pbc must be provided"):
         calculate_min_distance(p1, p2, cell=cell, use_pbc=True)
+
 
 def test_initial_placement_distance_accepts_and_rejects_expected_heights():
     slab = make_slab()
@@ -105,6 +107,7 @@ def test_initial_placement_distance_accepts_and_rejects_expected_heights():
     assert ok_valid
     assert reason_valid is None
 
+
 def test_check_initial_placement_distance_too_far_reason():
     slab = make_slab()
     water = make_water()
@@ -120,6 +123,7 @@ def test_check_initial_placement_distance_too_far_reason():
     )
     assert not ok
     assert reason == "too_far"
+
 
 def test_min_contact_ratio_default_is_covalent_binding_boundary():
     """Default min_contact_ratio rejects covalent overlap and accepts physisorption."""
@@ -166,6 +170,7 @@ def test_min_contact_ratio_default_is_covalent_binding_boundary():
     assert ok_pass, (min_pass, reason_pass)
     assert min_pass >= covalent_sum * MIN_CONTACT_RATIO_DEFAULT
 
+
 def test_vdw_overlap_detection_accepts_good_contact():
     """VDW overlap detection should accept placements with adequate separation."""
     slab = make_slab()
@@ -176,6 +181,7 @@ def test_vdw_overlap_detection_accepts_good_contact():
     overlaps, min_dist = detect_vdw_overlaps(water, slab, material_type="slab")
     assert len(overlaps) == 0, "Should not detect overlaps for well-separated water"
     assert min_dist > 2.0
+
 
 def test_calculate_contact_quality_detects_good_contact():
     """calculate_contact_quality should correctly identify contact atoms."""
@@ -191,6 +197,7 @@ def test_calculate_contact_quality_detects_good_contact():
     assert metrics["num_contacting_atoms"] > 0, "Should have contacting atoms"
     assert metrics["contact_distance"] < 3.0, "Should have reasonable contact distance"
     assert metrics["contact_ratio"] > 0.0, "Should have contact ratio"
+
 
 def test_adsorbate_separation_accepts_well_separated():
     """check_adsorbate_separation should accept well-separated adsorbates."""
@@ -219,6 +226,7 @@ def test_adsorbate_separation_accepts_well_separated():
     assert ok, "Should accept well-separated adsorbates"
     assert dist > 2.0
 
+
 def test_adsorbate_separation_rejects_close_atoms():
     """check_adsorbate_separation should reject too-close adsorbates."""
     slab = make_slab()
@@ -243,6 +251,7 @@ def test_adsorbate_separation_rejects_close_atoms():
     )
     assert not ok, "Should reject too-close adsorbates"
 
+
 def test_check_initial_placement_distance_empty_geometry():
     slab = make_slab()
     empty = Atoms()
@@ -254,6 +263,7 @@ def test_check_initial_placement_distance_empty_geometry():
     assert not ok
     assert dist == float("inf")
     assert reason == "empty_geometry"
+
 
 def test_min_distance_floor_rejects_close_o_cu():
     """Explicit min_distance=5 Å must reject O–Cu at ~1.5 Å even if covalent ratio allows."""
@@ -281,11 +291,13 @@ def test_min_distance_floor_rejects_close_o_cu():
     assert reason == "too_close"
     assert dist == pytest.approx(height, abs=1e-6)
 
+
 def test_check_adsorbate_separation_requires_cell_when_pbc_requested():
     mol = make_water()
     pre = np.array([[0.0, 0.0, 0.0]])
     with pytest.raises(ValueError, match="cell"):
         check_adsorbate_separation(mol, pre, pbc=[True, True, False])
+
 
 def test_calculate_min_distance_left_handed_cell_uses_abs_det():
     p1 = np.array([[0.1, 0.1, 0.0]])
@@ -330,4 +342,3 @@ def test_strict_contact_gate_accepts_physical_heights_and_rejects_liftoff():
     )
     assert not ok_far
     assert reason_far == "contact_distance_too_large"
-

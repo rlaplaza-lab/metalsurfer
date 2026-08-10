@@ -1,6 +1,5 @@
 """Site-context caching and surface references."""
 
-
 import numpy as np
 import pytest
 from ase import Atoms
@@ -46,6 +45,7 @@ def test_site_context_cache_clear_resets_cached_entries():
     clear_site_caches()
     assert len(_SITE_CONTEXT_CACHE) == 0
 
+
 def test_site_context_cache_keys_differ_by_symmetry_broken():
     slab = make_slab(nx=2, ny=2)
     config = AdsorptionConfig(material_type="slab")
@@ -60,6 +60,7 @@ def test_site_context_cache_keys_differ_by_symmetry_broken():
     # Unique-sites + sym=True + sym=False.
     assert len(_SITE_CONTEXT_CACHE) == 3
     assert ctx_broken is not ctx_intact
+
 
 def test_extract_features_depends_only_on_absolute_geometry():
     record = PlacementRecord.from_descriptor(
@@ -95,6 +96,7 @@ def test_extract_features_depends_only_on_absolute_geometry():
     assert features["y"] == pytest.approx(2.5)
     assert features["z"] == pytest.approx(7.75)
 
+
 def test_site_context_cache_key_includes_config_and_symmetry():
     from metalsurfer.placement.site_context import (
         _site_context_cache_key,
@@ -114,6 +116,7 @@ def test_site_context_cache_key_includes_config_and_symmetry():
     a = resolve_site_context_for_sampling(slab, c1, symmetry_broken=False)
     b = resolve_site_context_for_sampling(slab, c1, symmetry_broken=False)
     assert a is b
+
 
 def test_site_context_cache_key_includes_species_and_symmetry_tol():
     from metalsurfer.placement.site_context import (
@@ -136,6 +139,7 @@ def test_site_context_cache_key_includes_species_and_symmetry_tol():
     assert _site_context_cache_key(
         cu, c_loose, symmetry_broken=False
     ) != _site_context_cache_key(cu, c_tight, symmetry_broken=False)
+
 
 def test_site_context_cache_key_float_packing_no_collision():
     from metalsurfer.placement.site_context import (
@@ -172,6 +176,7 @@ def test_site_context_cache_key_float_packing_no_collision():
     )
     assert _unique_sites_cache_key(slab, a) != _unique_sites_cache_key(slab, b)
 
+
 def test_surface_reference_uses_prefix_not_symbols():
     from metalsurfer.workflow.shared import _build_surface_reference_slab
 
@@ -182,6 +187,7 @@ def test_surface_reference_uses_prefix_not_symbols():
     ref = _build_surface_reference_slab(decorated, base)
     assert len(ref) == len(base)
     assert len(ref) == len(decorated) - 1
+
 
 def test_tilted_slab_site_xy_frac_uses_full_3d_projection():
     """Descriptor frac a/b must project the full COM, not [x, y, 0]."""
@@ -211,4 +217,3 @@ def test_tilted_slab_site_xy_frac_uses_full_3d_projection():
     assert descriptor.site_xy_frac_a == pytest.approx(float(expected[0]), abs=1e-9)
     assert descriptor.site_xy_frac_b == pytest.approx(float(expected[1]), abs=1e-9)
     assert descriptor.placement_mode_resolved == "sites"
-

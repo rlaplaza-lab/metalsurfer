@@ -1,6 +1,5 @@
 """Occupancy-aware packing, recovery and fill strategies."""
 
-
 import numpy as np
 import pytest
 from ase import Atoms
@@ -47,6 +46,7 @@ def test_env_fingerprint_present_in_unified_sites():
         assert isinstance(fp[0], tuple)
         assert isinstance(fp[1], str)
 
+
 def test_filter_sites_by_occupancy_drops_near_adsorbate():
     from metalsurfer.placement._material import material_aware_pbc
     from metalsurfer.placement.occupancy import filter_sites_by_occupancy
@@ -73,6 +73,7 @@ def test_filter_sites_by_occupancy_drops_near_adsorbate():
     )
     assert len(unchanged) == 2
 
+
 def test_estimate_complexity_shrinks_under_coverage():
     from metalsurfer.placement.generators import estimate_molecule_complexity
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
@@ -98,6 +99,7 @@ def test_estimate_complexity_shrinks_under_coverage():
     )
     assert covered < clean
     assert covered == 0.0
+
 
 def test_overlap_recovery_rescues_lateral_clash():
     clear_site_caches()
@@ -163,6 +165,7 @@ def test_overlap_recovery_rescues_lateral_clash():
     )
     assert gate_ok, (min_d, gate_reason)
 
+
 def test_clearance_lift_along_normal_helper():
     from metalsurfer.placement.pose import _clearance_lift_along_normal
 
@@ -175,6 +178,7 @@ def test_clearance_lift_along_normal_helper():
     assert _clearance_lift_along_normal(above, normal) == pytest.approx(0.0)
     # Degenerate normal → no lift.
     assert _clearance_lift_along_normal(rotated, np.zeros(3)) == pytest.approx(0.0)
+
 
 def test_clearance_aware_height_raises_protruding_pose():
     """Clearance lift must raise z_abs when orientation puts atoms below the COM."""
@@ -228,6 +232,7 @@ def test_clearance_aware_height_raises_protruding_pose():
     closest_h = float(np.min(atom_heights))
     z_offset = ctx.z_base_lo + spec.z_fraction * (ctx.z_base_hi - ctx.z_base_lo)
     assert closest_h == pytest.approx(ctx.surface_ref + z_offset, abs=1e-5)
+
 
 def test_place_at_sites_two_site_matches_dissociative():
     from metalsurfer.models import PlacementSpec
@@ -310,6 +315,7 @@ def test_place_at_sites_two_site_matches_dissociative():
     assert np.allclose(placed_a.get_positions(), placed_b.get_positions(), atol=1e-6)
     assert desc_a.fragment_positions is not None
 
+
 def test_packing_yield_improves_with_occupancy_prune():
     from metalsurfer.placement.generators import (
         enumerate_placement_specs,
@@ -366,6 +372,7 @@ def test_packing_yield_improves_with_occupancy_prune():
     assert n_pruned > 0 and n_unpruned > 0
     # Pruning should not increase the overlap-fail share among failures.
     assert pruned_frac <= unpruned_frac + 1e-9
+
 
 def test_retry_blocks_repeated_bad_site_index(monkeypatch):
     from metalsurfer.models import PlacementSpec
@@ -444,6 +451,7 @@ def test_retry_blocks_repeated_bad_site_index(monkeypatch):
     assert _RETRY_BLOCK_SITE_AFTER >= 2
     # After enough failures on site 3, later attempts should exclude it.
     assert any(3 not in batch for batch in seen_filters[1:])
+
 
 def test_fill_oversamples_to_meet_num_placements(monkeypatch):
     """50% materialization yield still fills n_target via oversampling."""
@@ -535,6 +543,7 @@ def test_fill_oversamples_to_meet_num_placements(monkeypatch):
     assert requested[0] >= 4  # oversampled beyond exact remaining
     assert result.n_attempts <= 3
 
+
 def test_fill_early_stops_on_empty_enumeration(monkeypatch):
     from metalsurfer.workflow import placement_fill as fill_mod
 
@@ -577,12 +586,14 @@ def test_fill_early_stops_on_empty_enumeration(monkeypatch):
     assert calls["n"] == 1  # early exit; no wasted attempts
     assert result.n_attempts == 1
 
+
 def test_request_count_respects_oversample_cap():
     from metalsurfer.workflow.placement_fill import _request_count
 
     assert _request_count(10, yield_est=0.5, oversample_max=4.0) == 20
     assert _request_count(10, yield_est=0.05, oversample_max=4.0) == 40
     assert _request_count(10, yield_est=1.0, oversample_max=4.0) == 10
+
 
 def test_resolve_materialize_workers_joblib_semantics():
     from metalsurfer.placement.generators import resolve_materialize_workers
@@ -595,6 +606,7 @@ def test_resolve_materialize_workers_joblib_semantics():
     assert resolve_materialize_workers(4, n_tasks=2, cpu_count=8) == 2
     with pytest.raises(ValueError, match="n_jobs"):
         resolve_materialize_workers(0, cpu_count=8)
+
 
 def test_fill_yield_floor_keeps_oversampling_after_zero_success(monkeypatch):
     """A zero-success round must not collapse the next request to remaining only."""
@@ -686,6 +698,7 @@ def test_fill_yield_floor_keeps_oversampling_after_zero_success(monkeypatch):
     assert len(requested) >= 2
     # After zero yield, next round still oversamples (cap = remaining * 4).
     assert requested[1] >= 4
+
 
 def test_backfill_oversamples_by_yield(monkeypatch):
     """Backfill requests more than remaining when observed yield is low."""
@@ -779,6 +792,7 @@ def test_backfill_oversamples_by_yield(monkeypatch):
     assert chunk_sizes[0] == 2  # primary
     assert chunk_sizes[1] >= 4  # oversampled backfill for remaining=3 at 50% yield
 
+
 def test_fill_clamps_target_to_capacity(monkeypatch, caplog):
     """R1: target is clamped to enumerable capacity; warns and bounds attempts."""
     import logging
@@ -856,6 +870,7 @@ def test_fill_clamps_target_to_capacity(monkeypatch, caplog):
     assert len(result.combined) == CAPACITY  # fully reachable here
     assert result.n_attempts < config.placement_retry_max_attempts
     assert any("clamped from" in r.message for r in caplog.records)
+
 
 def test_early_stop_on_plateaued_yield(monkeypatch):
     """R2: give up after `patience` consecutive zero-yield retry attempts."""
@@ -939,6 +954,7 @@ def test_early_stop_on_plateaued_yield(monkeypatch):
     # 1 successful attempt + 2 zero-yield attempts -> early stop at 3.
     assert result.n_attempts == 3
     assert len(result.combined) == 1
+
 
 def test_cell_tracking_skips_retried_cells(monkeypatch):
     """R3: the same discrete cell is never materialized more than once across
@@ -1027,6 +1043,7 @@ def test_cell_tracking_skips_retried_cells(monkeypatch):
                 f"{seen_per_cell.get(cell)} and {batch_idx}"
             )
             seen_per_cell[cell] = batch_idx
+
 
 def test_pool_empty_partial_unblock(monkeypatch, caplog):
     """R4: failed-key filter empties pool -> partial unblock (filter kept),
@@ -1118,6 +1135,7 @@ def test_pool_empty_partial_unblock(monkeypatch, caplog):
     )
     assert any("still empty after partial unblock" in r.message for r in caplog.records)
 
+
 def test_clamp_flag_false_legacy(monkeypatch):
     """Legacy behavior: with clamp disabled, the full target is attempted
     even when enumerable capacity is far smaller."""
@@ -1194,6 +1212,7 @@ def test_clamp_flag_false_legacy(monkeypatch):
     assert len(result.combined) == n_target
     assert len(result.combined) > CAPACITY
 
+
 def test_filter_sites_by_occupancy_mic_wrap():
     """Occupancy prune must use MIC so a near-boundary adsorbate blocks the wrapped site."""
     from metalsurfer.placement._material import material_aware_pbc
@@ -1227,4 +1246,3 @@ def test_filter_sites_by_occupancy_mic_wrap():
         )
         == 2
     )
-

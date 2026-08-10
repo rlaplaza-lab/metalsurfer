@@ -1,6 +1,5 @@
 """Unified site generation, clustering and enumeration."""
 
-
 import numpy as np
 import pytest
 from ase import Atoms
@@ -63,6 +62,7 @@ def test_get_unified_sites_slab_nanoparticle_porous_have_expected_metadata():
             assert np.asarray(site.xyz).shape == (3,)
             assert np.linalg.norm(np.asarray(site.normal)) > 0.5
 
+
 def test_site_enumeration_exports_wrap_cartesian_for_atop_injection():
     """Atop injection under PBC uses _wrap_cartesian from site_coords."""
     from metalsurfer.placement import site_enumeration as enum_mod
@@ -76,6 +76,7 @@ def test_site_enumeration_exports_wrap_cartesian_for_atop_injection():
     wrapped = enum_mod._wrap_cartesian(pts, cell, pbc)
     assert wrapped.shape == pts.shape
     assert len(get_unified_sites(slab, material_type="slab")) > 0
+
 
 def test_get_unified_sites_slab_atop_injection_wraps_under_pbc(monkeypatch):
     """Atop injection must call _wrap_cartesian and emit atop_injected sites."""
@@ -118,6 +119,7 @@ def test_get_unified_sites_slab_atop_injection_wraps_under_pbc(monkeypatch):
     assert wrap_calls, "_wrap_cartesian must run on the atop-injection path"
     assert any(str(s.site_source) == "atop_injected" for s in sites)
 
+
 def test_cluster_equivalent_sites_reduces_or_keeps_sites_per_material():
     slab = make_slab()
     nanoparticle = make_nanoparticle()
@@ -140,6 +142,7 @@ def test_cluster_equivalent_sites_reduces_or_keeps_sites_per_material():
     assert 0 < len(slab_unique) <= len(slab_raw)
     assert 0 < len(np_unique) <= len(np_raw)
     assert 0 < len(porous_unique) <= len(porous_raw)
+
 
 @pytest.mark.parametrize(
     "sites,expected_count",
@@ -224,6 +227,7 @@ def test_cluster_equivalent_sites_case_matrix(sites, expected_count):
     unique = _cluster_equivalent_sites(sites, cell, tolerance=0.05)
     assert len(unique) == expected_count
 
+
 def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
 
     slab = make_slab()
@@ -255,6 +259,7 @@ def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
         overlaps, _ = detect_vdw_overlaps(adsorbate, slab, material_type="slab")
         assert len(overlaps) == 0, "Successful placement must not have VDW clashes"
 
+
 def test_is_top_layer_planar_true_for_three_coplanar_atoms():
     from metalsurfer.placement.site_enumeration import _is_top_layer_planar
 
@@ -266,6 +271,7 @@ def test_is_top_layer_planar_true_for_three_coplanar_atoms():
     )
     assert _is_top_layer_planar(atoms, top_layer_tolerance=0.5) is True
 
+
 def test_get_unified_sites_uses_material_aware_pbc_not_atoms_ttt():
     """TTT atoms with material_type=slab must still enumerate as TTF slab sites."""
     slab = make_slab()
@@ -275,6 +281,7 @@ def test_get_unified_sites_uses_material_aware_pbc_not_atoms_ttt():
     sites_ttt = get_unified_sites(ttt, material_type="slab")
     assert len(sites_ttt) == len(ttf)
     assert {s.site_type for s in sites_ttt} == {s.site_type for s in ttf}
+
 
 def test_topology_bridges_keep_distinct_pbc_midpoints():
     """Same atom-pair interior vs boundary bridges must both survive generation."""
@@ -316,6 +323,7 @@ def test_topology_bridges_keep_distinct_pbc_midpoints():
         abs(y) < 0.15 or abs(y - 4.0) < 0.15 for _x, y in bridge_xy
     )
 
+
 def test_cluster_equivalent_sites_cartesian_tolerance_scales_with_cell():
     """0.05 Å tolerance merges sub-0.05 Cartesian duplicates regardless of cell size."""
     site_a = site_from_dict(
@@ -342,6 +350,7 @@ def test_cluster_equivalent_sites_cartesian_tolerance_scales_with_cell():
         cell = np.array([[a_len, 0.0, 0.0], [0.0, a_len, 0.0], [0.0, 0.0, 20.0]])
         unique = _cluster_equivalent_sites([site_a, site_b], cell, tolerance=0.05)
         assert len(unique) == 1
+
 
 def test_cluster_equivalent_sites_tilted_slab_uses_in_plane_distance():
     """Clustering must use slab-plane distance, not Cartesian xy.
@@ -412,6 +421,7 @@ def test_cluster_equivalent_sites_tilted_slab_uses_in_plane_distance():
     )
     assert len(unique_near) == 1
 
+
 def test_top_layer_mask_unchanged_for_bulk_slab():
     from metalsurfer.placement.site_coords import (
         _height_along_slab_normal,
@@ -426,6 +436,7 @@ def test_top_layer_mask_unchanged_for_bulk_slab():
     legacy = heights >= (float(np.max(heights)) - tol)
     layered = top_layer_mask_by_normal(positions, cell, tol)
     assert np.array_equal(legacy, layered)
+
 
 def test_top_layer_mask_derived_tol_excludes_subsurface_fcc():
     """Derived tol must not mask an entire multi-layer FCC-like slab."""
@@ -452,6 +463,7 @@ def test_top_layer_mask_derived_tol_excludes_subsurface_fcc():
     assert np.all(heights[mask] >= h_max - tol - 1e-9)
     assert not np.any(heights[mask] < h_max - 1.5)
 
+
 def test_top_layer_mask_includes_step_terrace_for_reconstructed_surface():
     from metalsurfer.placement.site_coords import top_layer_mask_by_normal
 
@@ -469,6 +481,7 @@ def test_top_layer_mask_includes_step_terrace_for_reconstructed_surface():
     assert mask.sum() == 12  # 9 top + 3 step; exclude bulk at 2.7
     assert np.any(positions[mask, 2] < 5.2)
     assert not np.any(np.isclose(positions[mask, 2], 2.7))
+
 
 def test_top_layer_mask_includes_step_just_outside_tol():
     """Terrace just below the primary band is included via gap rule."""
@@ -489,6 +502,7 @@ def test_top_layer_mask_includes_step_just_outside_tol():
     assert np.any(np.isclose(positions[mask, 2], 4.8))
     assert not np.any(np.isclose(positions[mask, 2], 2.7))
 
+
 def test_top_layer_mask_empty_positions():
     from metalsurfer.placement.site_coords import top_layer_mask_by_normal
 
@@ -499,6 +513,7 @@ def test_top_layer_mask_empty_positions():
     )
     assert mask.shape == (0,)
     assert mask.dtype == bool
+
 
 def test_hollow_order_metadata_on_slab():
     """Slab hollow sites should carry hollow_order metadata when classified as hollow."""
@@ -565,4 +580,3 @@ def test_hollow_count_is_twice_the_top_layer_on_fcc111(size):
     sites = get_unified_sites(slab, material_type="slab")
     n_hollow = sum(1 for s in sites if s.site_source == "topology_hollow")
     assert n_hollow == 2 * n_top
-

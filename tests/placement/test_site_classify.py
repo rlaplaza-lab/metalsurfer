@@ -1,6 +1,5 @@
 """Delaunay/local-normal site classification and symmetry reduction."""
 
-
 import dataclasses
 import time
 from collections import Counter
@@ -303,6 +302,7 @@ def test_delaunay_classification_pbc_edge_is_not_mislabeled_atop():
     )
     assert site_type_nopbc == "atop"
 
+
 def test_build_site_records_classifies_boundary_bridge_via_expanded_index():
     """Production classify path labels a cross-boundary bridge without an upgrade pass."""
 
@@ -366,6 +366,7 @@ def test_build_site_records_classifies_boundary_bridge_via_expanded_index():
     assert frozenset(with_pbc[0].slab_indices) == frozenset((0, 1))
     assert primary_only[0].site_type == "atop"
 
+
 def test_get_unified_sites_labels_pbc_edge_bridge_on_production_path():
     """Hot path on a real slab: boundary sites primary-atop are labelled bridge."""
 
@@ -427,6 +428,7 @@ def test_get_unified_sites_labels_pbc_edge_bridge_on_production_path():
         == (_GOLDEN_SLAB_SITE_TYPE_MULTISET["hollow"])
     )
 
+
 def test_compute_local_normal_points_outward_from_surface_centroid():
     positions = np.array(
         [
@@ -440,6 +442,7 @@ def test_compute_local_normal_points_outward_from_surface_centroid():
     normal = _compute_local_normal(vertex, positions)
     assert np.isclose(np.linalg.norm(normal), 1.0, atol=1e-12)
     assert normal[2] > 0.9
+
 
 def test_symmetry_aware_sites_are_consistent_with_core_sites_on_slab():
     slab = make_slab(nx=2, ny=2)
@@ -459,6 +462,7 @@ def test_symmetry_aware_sites_are_consistent_with_core_sites_on_slab():
     )
     assert 0 < len(reduced) <= len(core_sites)
 
+
 def test_delaunay_classification_on_slab():
     """Delaunay method should produce valid site types for a simple slab."""
     slab = make_slab()
@@ -469,6 +473,7 @@ def test_delaunay_classification_on_slab():
     valid_types = {"atop", "bridge", "hollow"}
     for s in sites:
         assert s.site_type in valid_types, f"Bad type: {s.site_type}"
+
 
 def test_delaunay_fallback_for_nanoparticle():
     """Delaunay classification should fall back to distance_ratio for NPs."""
@@ -485,6 +490,7 @@ def test_delaunay_fallback_for_nanoparticle():
     # Both should produce the same result (fallback to distance_ratio)
     assert len(np_sites_del) == len(np_sites_dr)
 
+
 def test_site_classification_auto_matches_delaunay_on_slab():
     slab = make_slab()
     auto_sites = get_unified_sites(
@@ -495,6 +501,7 @@ def test_site_classification_auto_matches_delaunay_on_slab():
     )
     assert [s.site_type for s in auto_sites] == [s.site_type for s in del_sites]
 
+
 def test_get_unified_sites_ordering_is_deterministic():
     slab = make_slab()
     first = get_unified_sites(slab, material_type="slab")
@@ -502,6 +509,7 @@ def test_get_unified_sites_ordering_is_deterministic():
     assert [_site_ordering_key(s) for s in first] == [
         _site_ordering_key(s) for s in second
     ]
+
 
 def test_unique_sites_cache_hit_and_miss():
     clear_site_caches()
@@ -514,4 +522,3 @@ def test_unique_sites_cache_hit_and_miss():
     ctx_b = _get_unique_sites_for_specs(slab_b, config)
     assert ctx_a1 is ctx_a2
     assert ctx_a1 is not ctx_b
-

@@ -1,6 +1,5 @@
 """Adsorbate orientation strategies and parallel-fraction estimation."""
 
-
 import numpy as np
 import pytest
 from ase import Atoms
@@ -25,6 +24,7 @@ def test_flat_aromatic_detection_requires_ring_and_en_atoms():
     assert _is_flat_aromatic_with_en("c1(C=O)cc(OC)c(O)cc1") is True
     assert _is_flat_aromatic_with_en("c1ccccc1") is False
     assert _is_flat_aromatic_with_en("CCO") is False
+
 
 def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
     slab = make_slab()
@@ -53,6 +53,7 @@ def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
     assert "parallel" in kinds
     assert "EN-down" in kinds
 
+
 @pytest.mark.parametrize(
     "symbols, smiles, expected",
     [
@@ -69,6 +70,7 @@ def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
 def test_estimate_parallel_fraction(symbols, smiles, expected):
     frac = _estimate_parallel_fraction(symbols, smiles=smiles)
     assert frac == expected
+
 
 def test_classify_adsorbate_orientation_parallel_tilted_unknown():
     # Planar hexagon in xy → parallel to +z surface.
@@ -111,6 +113,7 @@ def test_classify_adsorbate_orientation_parallel_tilted_unknown():
     )
     assert classify_adsorbate_orientation(diatomic, slab_size=0) == "unknown"
 
+
 def test_principal_axis_rotation_flat_hexagon_stays_near_flat():
     from metalsurfer.placement.geometry import _principal_axis_rotation
 
@@ -126,4 +129,3 @@ def test_principal_axis_rotation_flat_hexagon_stays_near_flat():
     assert rotated is not None
     # Plane normal ≈ z → z-span stays small (near-flat).
     assert float(np.ptp(rotated[:, 2])) < 0.35
-

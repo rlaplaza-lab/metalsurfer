@@ -66,14 +66,17 @@ def test_material_type_for_placement():
         material_type_for_placement(nanoparticle, when_no_site="slab") == "nanoparticle"
     )
 
+
 def test_material_aware_pbc():
     assert material_aware_pbc("slab") == [True, True, False]
     assert material_aware_pbc("nanoparticle") == [False, False, False]
     assert material_aware_pbc("porous") == [True, True, True]
 
+
 def test_material_aware_pbc_unknown_raises():
     with pytest.raises(ValueError, match="material_type"):
         material_aware_pbc("bulk")
+
 
 def test_calculator_pbc_for_atoms():
     slab = Atoms("Cu", positions=[[0, 0, 0]], cell=[5, 5, 20], pbc=[True, True, False])
@@ -85,12 +88,14 @@ def test_calculator_pbc_for_atoms():
     cluster = Atoms("Pt", positions=[[0, 0, 0]], cell=[20, 20, 20], pbc=False)
     assert calculator_pbc_for_atoms(cluster) == [False, False, False]
 
+
 def test_prepare_atoms_for_calculator_maps_slab_pbc():
     from metalsurfer.workflow.shared import _prepare_atoms_for_calculator
 
     atoms = Atoms("Cu", positions=[[0, 0, 0]], cell=[5, 5, 20], pbc=[True, True, False])
     _prepare_atoms_for_calculator(atoms, label="test slab")
     assert list(atoms.get_pbc()) == [True, True, True]
+
 
 def test_slab_placements_are_above_surface_reference():
     slab = make_slab()
@@ -111,6 +116,7 @@ def test_slab_placements_are_above_surface_reference():
         )
         assert ok, reason
         assert 1.2 <= dist <= 4.0
+
 
 @pytest.mark.parametrize(
     "material_type,factory,num_placements,z_range,n_desired",
@@ -174,6 +180,7 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
         "pose", adsorbate, descriptor, spec, conformers, structure, config
     )
 
+
 @pytest.mark.parametrize(
     "material_type,factory,num_placements,z_range,n_desired",
     _LOCAL_SITE_MATERIAL_PARAMS,
@@ -231,6 +238,7 @@ def test_local_site_material_placement_center_matches_site_geometry(
         f"got {n_matched}"
     )
 
+
 def test_porous_clustered_sites_prefer_pores_first():
     """Open pore sites are ordered ahead of wall-adjacent sites after clustering."""
     porous = make_porous_framework()
@@ -250,6 +258,7 @@ def test_porous_clustered_sites_prefer_pores_first():
         if s.site_type == "pore"
     ]
     assert pore_nns == sorted(pore_nns, reverse=True)
+
 
 @pytest.mark.parametrize(
     "material_type,fail_reason,expect_raise",
@@ -340,6 +349,7 @@ def test_local_site_distance_recovery_height_direction(
     else:
         assert delta_along_n < 0.0
 
+
 def test_resolve_surface_ref_rough_slab():
     """On a rough slab, local z should be used when rough_slab_local_z=True."""
     # Build a stepped slab: two terraces at different z
@@ -381,6 +391,7 @@ def test_resolve_surface_ref_rough_slab():
     assert ref_global == float(np.max(slab.get_positions()[:, 2]))
     assert not is_local_g
 
+
 def test_compute_site_z_base_multiplicative_from_covalent_radii():
     """z_lo/hi scale with placement_z_range × (r_mol + r_surface)."""
     from ase.data import atomic_numbers, covalent_radii
@@ -403,6 +414,7 @@ def test_compute_site_z_base_multiplicative_from_covalent_radii():
     assert z_lo == pytest.approx(1.0 * r_sum)
     assert z_hi == pytest.approx(1.5 * r_sum)
 
+
 def test_compute_site_z_base_literal_when_scaling_disabled():
     slab = make_slab()
     config = AdsorptionConfig(
@@ -411,6 +423,7 @@ def test_compute_site_z_base_literal_when_scaling_disabled():
     )
     z_lo, z_hi = _compute_site_z_base(config, slab, None, ["H"])
     assert (z_lo, z_hi) == (2.1, 3.4)
+
 
 def test_compute_site_z_base_same_formula_for_pore_site():
     from ase.data import atomic_numbers, covalent_radii
@@ -428,6 +441,7 @@ def test_compute_site_z_base_same_formula_for_pore_site():
     r_sum = r_o + r_surface
     assert z_lo == pytest.approx(1.0 * r_sum)
     assert z_hi == pytest.approx(1.5 * r_sum)
+
 
 def test_saturation_placement_height_uses_reference_slab():
     """Saturation placement should not anchor new molecules above old adsorbates."""
@@ -511,6 +525,7 @@ def test_saturation_placement_height_uses_reference_slab():
         existing_adsorbate_top
     )
 
+
 def test_distance_recovery_rescues_too_close_placement():
     """Height recovery should accept a placement that starts too close."""
     slab = make_slab()
@@ -576,6 +591,7 @@ def test_distance_recovery_rescues_too_close_placement():
     assert gate_ok, (min_d, gate_reason)
     assert 1.2 <= float(min_d) <= 4.0
 
+
 def test_distance_recovery_height_only_when_xy_disabled():
     """Zero XY ranges still allow height recovery."""
     slab = make_slab()
@@ -630,4 +646,3 @@ def test_distance_recovery_height_only_when_xy_disabled():
     )
     assert gate_ok, (min_d, gate_reason)
     assert 1.2 <= float(min_d) <= 4.0
-

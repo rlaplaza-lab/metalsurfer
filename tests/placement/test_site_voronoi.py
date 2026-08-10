@@ -1,6 +1,5 @@
 """Voronoi vertex generation and enrichment."""
 
-
 import logging
 
 import numpy as np
@@ -65,6 +64,7 @@ def test_classify_voronoi_site_types_for_simple_geometries():
     assert site_type == "hollow"
     assert len(idx) == 3
 
+
 def test_voronoi_nn_distances_match_periodic_image_query_for_porous():
     porous = make_porous_framework()
     positions = porous.get_positions()
@@ -92,6 +92,7 @@ def test_voronoi_nn_distances_match_periodic_image_query_for_porous():
     expected, _ = KDTree(extended_positions).query(vertices, k=1)
     np.testing.assert_allclose(nn_dists, np.ravel(expected), atol=1e-8)
 
+
 def test_voronoi_enrichment_increases_site_count_on_porous():
     porous = make_porous_framework()
     positions = porous.get_positions()
@@ -118,6 +119,7 @@ def test_voronoi_enrichment_increases_site_count_on_porous():
     assert len(vertices_base) > 0
     # Real 3D ridge polygons must yield subdivision candidates on this framework.
     assert len(vertices_enriched) > len(vertices_base)
+
 
 def test_enrich_along_ridges_walks_polygonal_faces():
     """Closed 3D ridge faces (len > 2) contribute consecutive edges for subdivision.
@@ -166,6 +168,7 @@ def test_enrich_along_ridges_walks_polygonal_faces():
         pbc=np.array([False, False, False], dtype=bool),
     )
     assert len(out_edge) > 2
+
 
 def test_voronoi_enrichment_uses_ridge_vertices(monkeypatch):
     class _FakeVoronoi:
@@ -229,6 +232,7 @@ def test_voronoi_enrichment_uses_ridge_vertices(monkeypatch):
 
     assert captured["ridge_vertices"] == fake_vor.ridge_vertices
 
+
 def test_voronoi_auto_widen_retries_when_first_window_empty(monkeypatch):
     """Empty first Voronoi window triggers one widened retry when enabled."""
     import metalsurfer.placement.site_context as site_context_mod
@@ -249,6 +253,7 @@ def test_voronoi_auto_widen_retries_when_first_window_empty(monkeypatch):
     assert calls["n"] == 2
     assert ctx.use_sites
     assert len(ctx.sites) > 0
+
 
 def test_voronoi_auto_widen_disabled_skips_retry(monkeypatch):
     import metalsurfer.placement.site_context as site_context_mod
@@ -321,4 +326,3 @@ def test_slab_only_enrichment_flag_warns(caplog):
         "voronoi_site_enrichment=False has no effect" in record.getMessage()
         for record in caplog.records
     )
-

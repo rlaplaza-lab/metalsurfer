@@ -1,6 +1,5 @@
 """Pose finalization, descriptor replay and validation."""
 
-
 import numpy as np
 import pytest
 from ase import Atoms
@@ -60,6 +59,7 @@ def test_descriptor_replay_requires_explicit_absolute_geometry():
     )
     assert replayed is None
 
+
 def test_validate_initial_placement_geometry_with_strict_config():
     """check_initial_contact_quality should accept good contact under strict config."""
     slab = make_slab()
@@ -88,6 +88,7 @@ def test_validate_initial_placement_geometry_with_strict_config():
     )
     assert ok, f"Should pass strict validation with good contact: {reason}"
     assert reason == "placement_geometry_valid"
+
 
 def test_validate_initial_placement_geometry_rejects_poor_contact():
     """check_initial_contact_quality should reject poor contact placements."""
@@ -123,6 +124,7 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
         "insufficient_contact_atoms",
     }
 
+
 def test_require_multiple_contact_rejects_single_contact():
     """A monoatomic adsorbate can have at most one contacting atom → reject."""
     slab = make_slab()
@@ -145,6 +147,7 @@ def test_require_multiple_contact_rejects_single_contact():
     )
     assert not ok
     assert reason == "insufficient_contact_atoms"
+
 
 def test_require_multiple_contact_accepts_multi_atom_contact():
     """Water placed for multi-atom contact should pass require_multiple_contact."""
@@ -171,6 +174,7 @@ def test_require_multiple_contact_accepts_multi_atom_contact():
     assert ok, reason
     assert reason == "placement_geometry_valid"
 
+
 def test_saturation_finalize_rejects_adsorbate_overlap():
     slab = make_slab()
     water = place_adsorbate_above_slab(
@@ -192,6 +196,7 @@ def test_saturation_finalize_rejects_adsorbate_overlap():
     far.set_positions(far_pos)
     reason_far = _validate_posed_adsorbate(far, covered, config, slab_for_sites=slab)
     assert reason_far != "adsorbate_overlap"
+
 
 def test_validate_posed_adsorbate_uses_calculator_pbc(monkeypatch):
     """QC #1: the separation-distance check must use the calculator PBC."""
@@ -215,6 +220,7 @@ def test_validate_posed_adsorbate_uses_calculator_pbc(monkeypatch):
     _validate_posed_adsorbate(water, covered, config, slab_for_sites=slab)
     assert captured["pbc"] == calculator_pbc_for_atoms(slab)
     assert captured["pbc"] == [True, True, True]
+
 
 def test_strict_initial_placement_e2e_reason():
     slab = make_slab()
@@ -251,6 +257,7 @@ def test_strict_initial_placement_e2e_reason():
     )
     assert "initial_distance_or_site_constraints" not in reasons
 
+
 def test_rotated_slab_descriptor_round_trip():
     slab = make_slab()
     cell = np.array(slab.get_cell(), dtype=float)
@@ -271,6 +278,7 @@ def test_rotated_slab_descriptor_round_trip():
     _assert_replay_matches(
         "descriptor", adsorbate, descriptor, spec, water_conformers(), slab, config
     )
+
 
 def test_tilted_slab_descriptor_round_trip():
     """Slab tilted so the surface normal is not Cartesian +z."""
@@ -301,6 +309,7 @@ def test_tilted_slab_descriptor_round_trip():
         "descriptor", adsorbate, descriptor, spec, water_conformers(), slab, config
     )
 
+
 def test_generate_placement_from_spec_invalid_conformer_index():
     slab = make_slab()
     config = AdsorptionConfig(material_type="slab")
@@ -323,6 +332,7 @@ def test_generate_placement_from_spec_invalid_conformer_index():
     )
     assert result is None
     assert reason == "invalid_conformer_index"
+
 
 @pytest.mark.parametrize(
     "mol_factory, smiles, n_desired, extra_cfg",
@@ -359,6 +369,7 @@ def test_placement_specs_deterministic_across_runs(
     assert specs_a == specs_b
     assert specs_a != specs_c
 
+
 def test_molecular_ml_features_are_injective():
     """Distinct molecular placements must yield distinct BO feature vectors."""
     slab = make_slab()
@@ -381,6 +392,7 @@ def test_molecular_ml_features_are_injective():
         feature_rows.append(tuple(round(feats[name], 10) for name in FEATURE_NAMES))
     assert len(feature_rows) >= 16
     assert len(set(feature_rows)) == len(feature_rows)
+
 
 def test_invalid_site_index_reason_distinct_from_no_sites():
     slab = make_slab()
@@ -405,4 +417,3 @@ def test_invalid_site_index_reason_distinct_from_no_sites():
     )
     assert _result is None
     assert reason == "invalid_site_index"
-

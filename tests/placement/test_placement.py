@@ -34,6 +34,7 @@ def test_unified_sites_slab_golden_count_and_type_multiset():
     assert len(sites) == _GOLDEN_SLAB_UNIFIED_SITE_COUNT
     assert dict(Counter(s.site_type for s in sites)) == _GOLDEN_SLAB_SITE_TYPE_MULTISET
 
+
 @pytest.mark.parametrize("mode", ["spec", "descriptor", "pose"])
 def test_slab_replay_reproduces_positions(mode):
     slab = make_slab()
@@ -56,6 +57,7 @@ def test_slab_replay_reproduces_positions(mode):
         slab,
         config,
     )
+
 
 def test_check_desorption_nanoparticle_and_porous():
     nanoparticle = make_nanoparticle()
@@ -168,4 +170,3 @@ def test_check_desorption_nanoparticle_and_porous():
     assert not ok_porous_far
     assert "too far" in reason_porous_far
     assert best_d > 3.5
-

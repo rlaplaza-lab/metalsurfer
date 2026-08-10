@@ -57,6 +57,7 @@ def test_max_batch_specs_matches_build_batch_uncapped(
     )
     assert len(actual) == expected
 
+
 def test_build_batch_specs_respects_n_desired():
     n_desired = 7
     specs = build_batch_placement_specs(
@@ -71,6 +72,7 @@ def test_build_batch_specs_respects_n_desired():
         seed=TEST_SEED,
     )
     assert len(specs) <= n_desired
+
 
 def test_build_batch_specs_dissociative_branch():
     n_hollow_pairs = 3
@@ -90,6 +92,7 @@ def test_build_batch_specs_dissociative_branch():
     assert len(specs) > 0
     assert all(s.orientation_type == "dissociative" for s in specs)
     assert all(0 <= s.site_index < n_hollow_pairs for s in specs)
+
 
 def test_build_batch_specs_dissociative_zero_pairs_returns_empty():
     specs = build_batch_placement_specs(
@@ -119,6 +122,7 @@ def test_build_batch_specs_dissociative_zero_pairs_returns_empty():
         == 0
     )
 
+
 def test_build_batch_specs_dissociative_samples_beyond_prefix_pairs():
     """Early-cap must not keep only the first pair indices after z expansion."""
     n_hollow_pairs = 200
@@ -141,6 +145,7 @@ def test_build_batch_specs_dissociative_samples_beyond_prefix_pairs():
     assert max(indices) >= 32
     assert len(indices) > 1
 
+
 def test_max_batch_specs_dissociative_equals_pairs_times_z_fractions():
     n_hollow_pairs = 4
     count = max_batch_placement_specs(
@@ -153,6 +158,7 @@ def test_max_batch_specs_dissociative_equals_pairs_times_z_fractions():
         n_hollow_pairs=n_hollow_pairs,
     )
     assert count == n_hollow_pairs * len(_Z_FRACTIONS)
+
 
 def test_build_batch_specs_flat_aromatic_generates_both_orientation_types():
     specs = build_batch_placement_specs(
@@ -169,6 +175,7 @@ def test_build_batch_specs_flat_aromatic_generates_both_orientation_types():
     orientation_types = {s.orientation_type for s in specs}
     assert "parallel" in orientation_types
     assert "EN-down" in orientation_types
+
 
 @pytest.mark.parametrize(
     "parallel_fraction,n_desired,expect_only",
@@ -196,6 +203,7 @@ def test_build_batch_specs_flat_aromatic_honors_parallel_fraction(
     assert len(specs) == n_desired
     assert {s.orientation_type for s in specs} == {expect_only}
 
+
 def test_build_batch_specs_flat_aromatic_large_grid_capped():
     n_desired = 20
     site_indices = list(range(50))
@@ -216,6 +224,7 @@ def test_build_batch_specs_flat_aromatic_large_grid_capped():
     assert n_par == 10
     assert n_en == 10
     assert len({s.placement_index for s in specs}) == n_desired
+
 
 def test_build_batch_specs_filter_spec_reduces_count():
     all_specs = build_batch_placement_specs(
@@ -244,6 +253,7 @@ def test_build_batch_specs_filter_spec_reduces_count():
     assert len(filtered_specs) < len(all_specs)
     assert all(s.tilt_deg == 0.0 for s in filtered_specs)
 
+
 def test_build_batch_specs_placement_indices_are_unique():
     specs = build_batch_placement_specs(
         n_conformers=2,
@@ -258,6 +268,7 @@ def test_build_batch_specs_placement_indices_are_unique():
     )
     ids = [s.placement_index for s in specs]
     assert len(set(ids)) == len(ids), "placement_index values must be unique"
+
 
 def test_policy_subsample_covers_multiple_site_types():
     from metalsurfer.placement.policy import build_batch_placement_specs
@@ -281,6 +292,7 @@ def test_policy_subsample_covers_multiple_site_types():
     types = {s.site_type for s in specs}
     assert len(types) >= 2
 
+
 def test_policy_stratified_is_seed_deterministic():
     from metalsurfer.placement.policy import build_batch_placement_specs
 
@@ -300,6 +312,7 @@ def test_policy_stratified_is_seed_deterministic():
     assert [(s.site_index, s.tilt_deg, s.azimuth_deg, s.z_fraction) for s in a] == [
         (s.site_index, s.tilt_deg, s.azimuth_deg, s.z_fraction) for s in b
     ]
+
 
 def test_cco_generation_yield_meets_seeded_bar():
     """Flexible ethanol should clear the seeded ≥40% generation bar (target ≥60%)."""
@@ -331,6 +344,7 @@ def test_cco_generation_yield_meets_seeded_bar():
     assert n_ok >= min_ok, (
         f"CCO generation yield too low: {n_ok}/{n_desired} (need >= {min_ok})"
     )
+
 
 def test_policy_prior_prefers_mild_tilt_and_mid_z():
     """When subsampling, prefer milder tilts / mid z vs a uniform shuffle of the same pool."""
@@ -364,4 +378,3 @@ def test_policy_prior_prefers_mild_tilt_and_mid_z():
     # Full-grid means are 40° tilt and 0.5 z; prior should pull tilt down.
     assert mean_tilt < 40.0, f"expected mild-tilt bias, got mean tilt {mean_tilt:.1f}"
     assert abs(mean_zf - 0.5) <= 0.15, f"expected mid-z bias, got mean zf {mean_zf:.2f}"
-
