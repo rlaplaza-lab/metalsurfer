@@ -3,8 +3,7 @@
 Runnable demos from the project root (after `pip install -e ".[mlip]"`). Each script
 defines `AdsorptionConfig` first, then calls `prepare_substrate` from
 `metalsurfer.surface_prep` before the campaign API. These are small-N demos;
-production/HPC campaigns live under `scripts/` as standalone copy-paste workflows
-(not orchestrated from here).
+production/HPC campaigns live under `scripts/` as standalone copy-paste workflows.
 
 | Script | Description |
 |--------|-------------|
@@ -32,7 +31,9 @@ python examples/run_campaign_yaml.py examples/ethene_ru_slab_binding_energy.yaml
 | `co2_mof_binding_energy.yaml` | CO₂ in RUBTAK01 MOF (`slab_file`) |
 | `water_cu111_adsorption_bo.yaml` | Water on Cu(111) with nested `bo:` (`adsorption_bo`) |
 | `ethane_cu_saturation.yaml` | Slim ethane/Cu(111) saturation |
-| `run_campaign_yaml.py` | Runner: `load_campaign_yaml` → `run_campaign` |
+
+Run any of the above with `python examples/run_campaign_yaml.py <file>`
+(`load_campaign_yaml` → `run_campaign`).
 
 Demos set explicit small `num_placements` for quick runs and pass
 `skip_existing=False` so re-runs always compute. Results directories use
@@ -43,8 +44,8 @@ parallel capacity via TorchSim memory probing at workflow start. For saturation
 with Bayesian placement search, use `run_saturation_bo`.
 
 Most binding demos validate favorable molecular E_ads before exit. The H₂/Ru(0001) demo
-sets ``enable_dissociative_placement=True`` for hollow-site pair placements and
-``skip_topology_check=True`` so fragmented post-relax states pass connectivity
+sets `enable_dissociative_placement=True` for hollow-site pair placements and
+`skip_topology_check=True` so fragmented post-relax states pass connectivity
 checks; it checks that the dissociative workflow completes with adsorbed
 geometries (molecular or dissociated H₂ after relaxation).
 
@@ -80,6 +81,4 @@ is the number of **acquisition batches** after the initial random batch—not to
 evaluations (e.g. `(300 - initial) // batch` to preserve a 300-eval budget with
 fixed batch sizes). After sizes resolve, `resolved_bo_eval_budget(config)` (also
 `from metalsurfer import resolved_bo_eval_budget`) returns the total evaluation
-count. Prefer `run_*_bo` (or YAML `campaign: adsorption_bo` /
-`saturation_bo`) for Bayesian mode; config only holds nested `bo` / `bo.transfer`
-hyperparameters.
+count.

@@ -34,7 +34,8 @@ Lazy re-exports in ``metalsurfer.__init__`` load heavy modules on first access.
 
 Prefer ``run_*_bo`` when you want Bayesian selection. BO mode is chosen by the
 entry point (or YAML ``campaign: adsorption_bo`` / ``saturation_bo``);
-:class:`~metalsurfer.AdsorptionConfig` holds ``bo_*`` hyperparameters only.
+:class:`~metalsurfer.AdsorptionConfig` holds ``bo`` / ``bo.transfer``
+hyperparameters only (nested — flat ``bo_*`` keys are rejected).
 
 All four accept a ``SlabContainer`` (or ASE ``Atoms``), ``molecules``,
 :class:`~metalsurfer.AdsorptionConfig`, and ``surface_type`` (results folder
@@ -168,7 +169,7 @@ Module layout
    ├── filters.py            # decomposition / desorption / duplicate filtering
    ├── io_results.py         # CSV, XYZ, optional VASP I/O, metadata
    ├── models.py             # typed result dataclasses
-   ├── optimization.py       # MLIP setup, batched relaxation
+   ├── optimization/         # MLIP setup, batched relaxation (TorchSim / FairChem)
    ├── surface_prep/         # prepare_substrate, freeze, …
    ├── symmetry.py           # spglib-based symmetry analysis
    ├── ml/                   # BO surrogates, dataset, features (schema 3.0)

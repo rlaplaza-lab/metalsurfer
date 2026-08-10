@@ -47,7 +47,7 @@ YAML is a convenience dispatch layer, not a full substitute for the Python
 - **No post-run validation hooks.** Python demos can assert on E_ads or
   placement provenance; YAML runs stop at campaign results.
 - **Same runtime requirements.** Still needs the MLIP stack (and typically a
-  GPU). YAML does not change physics or hardware needs.
+  GPU).
 
 Prefer ``prepare_substrate`` + ``run_*`` when you need custom ASE
 construction, CSV molecule libraries, extra campaign kwargs, or result
@@ -99,11 +99,9 @@ Config
 ~~~~~~
 
 ``config:`` maps onto :class:`~metalsurfer.AdsorptionConfig`. Put Bayesian
-hyperparameters under a nested ``bo:`` block (and optional ``bo.transfer:``).
-Flat ``bo_*`` / ``bo_transfer_*`` keys are rejected. There is no
-``bo_enabled`` field — BO mode comes from ``campaign: adsorption_bo`` or
-``saturation_bo``. Field recipes: :doc:`configuration`; full reference:
-:doc:`../api/config`.
+hyperparameters under a nested ``bo:`` block (and optional ``bo.transfer:``);
+flat ``bo_*`` / ``bo_transfer_*`` keys are rejected. Field recipes:
+:doc:`configuration`; full reference: :doc:`../api/config`.
 
 Demo examples
 -------------

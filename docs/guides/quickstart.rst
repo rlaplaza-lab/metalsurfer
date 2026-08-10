@@ -260,7 +260,7 @@ Bayesian Screening
 ------------------
 
 Bayesian mode keeps the same physical pipeline and output types, but
-replaces exhaustive placement evaluation with surrogate-guided candidate
+replaces sampled placement evaluation with surrogate-guided candidate
 selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
 
 .. code-block:: python
@@ -290,12 +290,10 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
 BO knobs live on :class:`~metalsurfer.AdsorptionConfig` as nested
 ``config.bo`` / ``config.bo.transfer`` (:class:`~metalsurfer.BOConfig`,
 :class:`~metalsurfer.BOTransferConfig`); see
-:doc:`../guides/configuration` (budget math and recipes) and
+:doc:`configuration` (budget math and recipes) and
 :doc:`../api/config` (full field reference — Bayesian optimization).
 Remember ``bo.total_budget`` is acquisition batches; after sizes resolve, call
 :func:`~metalsurfer.config.resolved_bo_eval_budget` for the total evaluation count.
-Mode itself comes from calling ``run_adsorption_bo`` (or YAML
-``campaign: adsorption_bo``; see :doc:`yaml_campaigns`), not from a config flag.
 
 Sequential Saturation
 ---------------------

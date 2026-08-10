@@ -80,7 +80,7 @@ for summary in result.molecule_summaries:
 | Configuration options | `AdsorptionConfig` | [Field reference](https://metalsurfer.readthedocs.io/en/latest/api/config.html) · [Configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) |
 | YAML campaign | `load_campaign_yaml` + `run_campaign` | [`scripts/campaigns/`](scripts/campaigns/); `campaign:` is `adsorption` / `adsorption_bo` / `saturation` / `saturation_bo` ([API](https://metalsurfer.readthedocs.io/en/latest/api/campaigns.html)) |
 
-Pass one of three `material_type` values on every run: `slab`, `nanoparticle`, or `porous`. See the [configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) for when to use each.
+Set `material_type` (defaults to `slab`) to match your substrate: `slab`, `nanoparticle`, or `porous`. See the [configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) for when to use each.
 
 Output is written under `results_{surface_type}/` (XYZ structures, CSV summaries, optional VASP inputs). See [Quick start](https://metalsurfer.readthedocs.io/en/latest/guides/quickstart.html) for output layout details.
 
@@ -97,7 +97,7 @@ Runnable scripts in [`examples/`](examples/) (requires `pip install -e ".[mlip]"
 | [`examples/camphor_cu111_binding_energy.py`](examples/camphor_cu111_binding_energy.py) | `slab` | Bayesian placement search on literature Cu(111) slab |
 | [`examples/bipyridine_au111_defects_saturation_raw.py`](examples/bipyridine_au111_defects_saturation_raw.py) | `slab` | HPC-scale saturation demo (also under `scripts/`) |
 
-Demos use modest explicit placement counts. Omit `num_placements` in production to autotune to GPU parallel capacity. See [`examples/README.md`](examples/README.md) for run commands and notes.
+Omit `num_placements` in production to autotune to GPU parallel capacity. See [`examples/README.md`](examples/README.md) for run commands and notes.
 
 ## Development
 

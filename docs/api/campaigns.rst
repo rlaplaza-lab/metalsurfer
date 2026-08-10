@@ -15,8 +15,9 @@ Use :func:`~metalsurfer.surface_prep.prepare_substrate` or
 validation, see :func:`~metalsurfer.surface_prep.accept_substrate_for_api` on
 the surface-prep API page.
 
-Prefer ``write_settings=True`` (default) to write ``run_metadata.json``.
-Set ``write_settings=False`` to suppress it.
+The Python ``run_*`` functions accept ``write_settings=True`` (default) to write
+``run_metadata.json``; set ``write_settings=False`` to suppress it. ``run_campaign``
+does not expose this flag (YAML runs always write ``run_metadata.json``).
 
 BO vs non-BO is chosen by **which function you call** (or the YAML
 ``campaign`` field below)—not by a flag on

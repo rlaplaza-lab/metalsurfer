@@ -42,8 +42,10 @@ keyword arguments ``relax_top_layer``, ``freeze_symbols``, and
 +================================+===============================================+
 | ``relax_top_layer=False``      | All substrate atoms frozen (default, rigid    |
 | (default)                      | reference surface)                            |
++--------------------------------+-----------------------------------------------+
 | ``relax_top_layer=True``       | Material-aware shortcut: interior frozen;     |
 |                                | exposed surface free (see table below)        |
++--------------------------------+-----------------------------------------------+
 | ``freeze_symbols`` set         | Only listed elements frozen (ignores layer    |
 |                                | policy)                                       |
 +--------------------------------+-----------------------------------------------+
@@ -60,7 +62,9 @@ the same config in ``run_*`` (omitting *config* defaults to ``"slab"``).
 | ``"slab"``         | Simple height band along the slab normal (within        |
 |                    | tolerance of max height). Not the stepped               |
 |                    | ``top_layer_mask_by_normal`` used for site discovery.   |
++--------------------+---------------------------------------------------------+
 | ``"nanoparticle"`` | Outermost shell (max distance from centre of mass)      |
++--------------------+---------------------------------------------------------+
 | ``"porous"``       | Pore-wall atoms (closest neighbour per pore void site)  |
 +--------------------+---------------------------------------------------------+
 
@@ -181,10 +185,14 @@ Relaxation knob mapping:
 | ``prepare_substrate`` kw       | ``AdsorptionConfig`` field                    |
 +================================+===============================================+
 | ``slab_relaxation_mode``       | ``slab_relaxation_mode``                      |
++--------------------------------+-----------------------------------------------+
 | ``slab_relaxation_optimizer``  | ``slab_relaxation_optimizer``                 |
++--------------------------------+-----------------------------------------------+
 | ``slab_relaxation_fmax``       | ``slab_relaxation_fmax`` (falls back to       |
 |                                | ``fmax`` when unset)                          |
++--------------------------------+-----------------------------------------------+
 | ``slab_relaxation_steps``      | ``slab_relaxation_steps``                     |
++--------------------------------+-----------------------------------------------+
 | ``adatom_relaxation_*``        | defaults to ``slab_relaxation_*`` on *config* |
 |                                | when unset                                    |
 +--------------------------------+-----------------------------------------------+
@@ -252,6 +260,8 @@ Building-block reference
 
 .. autofunction:: metalsurfer.surface_prep.validate_substrate
 
+.. autofunction:: metalsurfer.surface_prep.validate_substrate_conformer_sizing
+
 .. autofunction:: metalsurfer.surface_prep.accept_substrate_for_api
 
 .. autofunction:: metalsurfer.surface_prep.create_slab_from_bulk
@@ -267,6 +277,31 @@ Building-block reference
 .. autofunction:: metalsurfer.surface_prep.compute_minimum_supercell
 
 .. autofunction:: metalsurfer.surface_prep.auto_resize_substrate_for_molecule
+
+Freeze helpers
+--------------
+
+Live in :mod:`metalsurfer.surface_prep.freeze` (re-exported from
+:mod:`metalsurfer.surface_prep`). These compute and inspect the ASE ``FixAtoms``
+attached during prep; campaign APIs read ``frozen_indices_from_constraints``.
+
+.. autofunction:: metalsurfer.surface_prep.identify_relaxable_surface_indices
+
+.. autofunction:: metalsurfer.surface_prep.identify_top_layer_indices
+
+.. autofunction:: metalsurfer.surface_prep.top_layer_indices_by_height
+
+.. autofunction:: metalsurfer.surface_prep.compute_frozen_indices
+
+.. autofunction:: metalsurfer.surface_prep.frozen_indices_from_constraints
+
+.. autofunction:: metalsurfer.surface_prep.max_frozen_substrate_displacement
+
+.. autofunction:: metalsurfer.surface_prep.check_frozen_substrate_displacement
+
+.. autofunction:: metalsurfer.surface_prep.log_substrate_freeze_policy
+
+.. autofunction:: metalsurfer.surface_prep.format_atom_index_ranges
 
 .. autoclass:: metalsurfer.surface_prep.SlabContainer
    :members:

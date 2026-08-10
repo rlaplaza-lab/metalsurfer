@@ -1,7 +1,7 @@
 # Metalsurfer: core system
 
-Short mental model for developers. Overlap with Sphinx guides is fine; this
-file stays the one-page map of what the code does and where complexity lives.
+Short mental model for developers.
+This covers what the codes does in general.
 
 Install / demos: [`README.md`](README.md), [`examples/`](examples/). Field knobs:
 [configuration](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html).
@@ -12,15 +12,22 @@ Full mechanics (sites, placement, TorchSim, BO, validation, AdsorbML/BOSS):
 
 ## What it does
 
-Prep a substrate → enumerate adsorbate placements → **batch-relax** them with an
-MLIP (TorchSim) → filter survivors → optionally grow **coverage** by committing
-the best adsorbate and repeating.
+The pipeline takes a material (the *substrate*) and a list of molecules, then
+decides where on the material each molecule could plausibly stick, gives each
+guess a geometry, relaxes that geometry with a machine-learned interatomic
+potential, and keeps the survivors. It can repeat that loop to pack more and
+more molecules onto the surface until they stop binding.
 
-Adsorption energy is always:
+Adsorption energy — the number the whole pipeline is trying to rank — is always
+computed the same way:
 
 ```text
 E_ads = E_adslab - E_slab - E_molecule
 ```
+
+A negative `E_ads` means the molecule prefers to be on the surface. In coverage
+mode the loop stops the moment the next molecule would *cost* energy to adsorb
+(`E_ads >= 0`).
 
 ## How to enter
 
@@ -45,82 +52,461 @@ Inputs: `SlabContainer` or ASE `Atoms`, molecules (list or CSV),
 `AdsorptionConfig`, `surface_type` (results folder label only). Prep freeze
 policy is set in `prepare_substrate`, not on campaign kwargs.
 
-## Pipeline (one molecule)
+## 1. The pipeline, end to end
+
+Read this section first if you have never looked at the code. The whole system
+is one loop:
 
 ```mermaid
 flowchart LR
-  prep[Prep] --> ref[References]
-  ref --> conf[Conformers]
-  conf --> place[Place]
-  place --> relax[Batch_relax]
-  relax --> filter[Filter]
-  filter --> out[Results]
+  prep[Prepare substrate] --> ref[Compute reference energies]
+  ref --> conf[Generate conformers]
+  conf --> sites[Find candidate sites]
+  sites --> pose[Choose orientation + height for each site]
+  pose --> relax[Batch-relax with MLIP]
+  relax --> filter[Filter survivors]
+  filter --> out[Report best E_ads]
+  filter -. saturation only .-> sites
 ```
 
-Saturation repeats place→relax→filter, commits the best `E_ads < 0` structure
-onto the slab, refreshes `E_slab`, and stops when the next step is endothermic
-or no valid placements remain.
+Step by step, for a single molecule:
 
-## Three dual models (the load-bearing complexity)
+1. **Prepare the substrate.** The material — a slab, a nanoparticle, or a porous
+   framework — is cleaned up and, optionally, lightly relaxed. This is the
+   *bare* surface. All site finding reads this bare surface, never the
+   already-covered one.
+2. **Compute reference energies.** The energy of the bare slab (`E_slab`) and of
+   the free molecule (`E_molecule`) are calculated so that every later
+   `E_ads` can be formed by subtraction.
+3. **Generate conformers.** The molecule is sampled into several 3D shapes (a
+   *conformer* is one folded shape of the same molecule). They are cheap,
+   pre-relaxed shapes; the pipeline never invents new shapes later.
+4. **Find candidate sites.** The code looks at the surface geometry and returns a
+   list of points where a molecule might bind — an *atop* atom, a *bridge*
+   between two atoms, a *hollow* over a gap, a *pore* in a framework, and so on.
+   (See §3 for how this differs per material type.)
+5. **Build placements.** For each site it picks an orientation (which way the
+   molecule faces the surface) and a height, producing a full 3D geometry. A
+   *placement* is therefore one concrete candidate structure: a specific
+   conformer, at a specific site, in a specific orientation, at a specific
+   height. (See §4.)
+6. **Relax.** All candidates are relaxed together in one batch using a
+   machine-learned potential (TorchSim / UMA by default).
+7. **Filter and keep the best.** Relaxed candidates that crashed, flew away, or
+   ended up unbound are dropped. The lowest `E_ads` wins.
 
-Almost every packing/saturation bug traces to one of these:
+In saturation mode the loop jumps back to step 4 after committing the best
+survivor onto the slab, refreshing `E_slab`, and continuing until the next
+molecule would not bind or no valid sites remain.
 
-1. **Substrate vs covered slab**  
-   Site catalogs and substrate distance checks use a **substrate-only** view
-   (`slab_for_sites`: prefix of length `len(base_slab_for_frozen)`). Relaxation
-   and adsorbate–adsorbate separation use the **full** slab (prior adsorbates
-   appended as a suffix).
+The key idea to internalise: the pipeline does not hand-place one perfect pose.
+It generates *many* candidate placements, lets physics decide, and reports the
+survivor with the most negative `E_ads`.
 
-2. **Spec vs pose**  
-   `PlacementSpec` is a discrete enumeration slot (site index, tilt, …).
-   Materialization yields absolute geometry (`PlacementDescriptor` / pose). BO
-   and ML features see **absolute xyz + quaternion only**, not site IDs or
-   orientation labels. CSV exports default to those pose features (+ labels);
-   set `export_placement_provenance=True` for `initial_*` site/orientation
-   provenance (pre-relax intent, not final binding mode).
+## 2. The three views that matter
 
-3. **Prep freeze vs adsorption freeze**  
-   Prep may equilibrate the bare surface (`slab_relaxation_mode`). During
-   adsorbate relaxation, frozen substrate atoms come from ASE `FixAtoms`
-   attached at prep (`frozen_indices_from_constraints`). Saturation keeps the
-   original substrate length so new adsorbate atoms can move.
+Almost every packing or coverage bug traces back to one of three distinctions
+the code keeps deliberately separate:
 
-## Module map (where to look)
+1. **Substrate vs covered slab**
+   Site catalogs and distance checks against the surface use a *substrate-only*
+   view (the bare atoms, `slab_for_sites`). Relaxation and checks between
+   already-placed molecules use the *full* slab (earlier adsorbates appended as
+   a suffix). Mixing these two views is the classic source of "ghost" overlaps.
 
-| Concern                              | Package / module |
-|--------------------------------------|------------------|
-| Campaigns / YAML                     | `campaigns.py`, `campaign_schema.py` |
-| Config / typed results               | `config.py` (`AdsorptionConfig`, nested `BOConfig` / `BOTransferConfig`), `models.py` |
-| Substrate prep / freeze              | `surface_prep/` |
-| Sites + placement                    | `placement/` (`generators` orchestration; `site_*`, `orientation`, `pose`, `geometry`, `policy`, `occupancy`, `dissociative`) |
-| Per-molecule / saturation / BO loops | `workflow/` (`core`, `saturation`, `bayesian`, `placement_fill`, `reference`, `shared`; `MoleculeScreenOutcome`) |
-| Batched MLIP relax                   | `optimization.py` |
-| Post-relax filters                   | `filters.py` |
-| Dataset / surrogates                 | `ml/` |
-| Persistence                          | `io_results.py` |
+2. **Spec vs pose**
+   A `PlacementSpec` is a discrete *instruction slot*: "conformer 3, site 7,
+   tilt 30°, azimuth 90°". Turning that slot into actual xyz coordinates yields
+   a `PlacementDescriptor`, also called the *pose*. The machine-learning features
+   and the Bayesian optimizer see only absolute xyz plus a rotation
+   (quaternion) — never the site index or the orientation label. CSV exports
+   default to those pose features plus labels; set
+   `export_placement_provenance=True` to also record the pre-relaxation
+   *intent* (which site and orientation were chosen), which is not necessarily
+   the final binding mode after relaxation.
 
-## Design heuristics
+3. **Prep freeze vs adsorption freeze**
+   During surface preparation the bare substrate may be allowed to equilibrate
+   (`slab_relaxation_mode`). During adsorbate relaxation, the substrate atoms
+   that are frozen come from ASE `FixAtoms` attached back at prep time. In
+   saturation the original substrate length is preserved so newly added
+   adsorbate atoms are free to move.
 
-- Sample **many** placements per GPU wave; binding energy is the best survivor
-  after filters—not a single hand-picked pose.
-- Clearance-aware height (slab/NP): after orientation, lift the COM so the
-  closest adsorbate atom sits at the intended `z_offset` (avoids alkyl/H dig-in
-  from COM-centered poses; skipped for porous).
-- Saturation stops when the next `E_ads ≥ 0` (coverage proxy), not at a fixed ML.
-- Under coverage, prune occupied sites before the orientation grid; clash with
-  prior adsorbates is a first-class failure (`adsorbate_overlap`), with optional
-  XY recovery.
-- Symmetry-reduced sites until coverage breaks symmetry vs the clean reference.
-- GPU-first: leave `num_placements` / `bo.initial_random` / `bo.batch_size` as
-  `None` so TorchSim autotunes parallel capacity.
-- Fill target is **capacity-bounded**: the effective placement count is clamped
-  to the enumerable spec capacity (`estimate_molecule_complexity`), so the retry
-  loop cannot spin to `placement_retry_max_attempts` on an unreachable target
-  when occupancy-pruned sites leave fewer enumerable placements than requested
-  (`placement_fill_clamp_to_capacity`, default `True`). Retries also early-stop
-  after `placement_retry_early_stop_patience` consecutive zero-yield attempts.
+## 3. System types: how sites are found
 
-## Where detail lives
+Everything in this section is organised by `material_type`. That one field
+(`slab`, `nanoparticle`, or `porous`) decides which periodicity the geometry
+uses, which site sources run, and which heuristics apply. Behind the scenes each
+type maps to a periodicity: slabs are periodic in the two surface directions and
+open in the third; nanoparticles are fully non-periodic; porous frameworks are
+periodic in all three directions.
+
+A *site* is always a point in space plus a local *outward normal* (the direction
+away from the material) and a *site type*. The site types are:
+
+- `atop` — directly above a single surface atom;
+- `bridge` — above the midpoint between two surface atoms;
+- `hollow` — above a gap surrounded by three or four surface atoms;
+- `pore` — inside the open void of a framework, far from any wall (only porous);
+- `envelope` — a generic "just outside the surface" point;
+- `unknown` — could not be classified.
+
+Sites are labelled by looking at the distances from the candidate point to the
+nearest surface atoms: if the nearest atom is far closer than the second, it is
+atop; if the nearest two are about equally close, it is a bridge; if the nearest
+three or four are equal, it is a hollow; if the nearest atom is unusually far,
+it is a pore.
+
+### 3.1 Slab
+
+A slab top layer is a set of atoms lying in roughly one plane. Because that
+layer is *coplanar*, it has no genuine 3D Voronoi diagram (the maths would
+collapse to a flat plane), so the code never attempts one there. Instead the
+slab uses a *topology generator* that reads the top layer — including its ±1
+periodic images along the two surface directions — and explicitly constructs:
+
+- **atop** candidates, one above each top-layer atom (lifted by a fraction of
+  the median surface spacing);
+- **bridge** candidates, at the midpoint of every top-layer edge (so cross-cell
+  edges are not missed);
+- **hollow** candidates, at the centroid of every top-layer triangle.
+
+After the topology candidates are built, an *accessibility window* still
+gates them: a candidate is kept only if its distance to the nearest framework
+atom sits between `voronoi_probe_radius` and `voronoi_max_site_distance`. These
+two knobs are scaled by the surface's covalent radii unless overridden, and
+they remain active on slabs — they simply drive the topology accessibility
+window rather than a Voronoi pass. (Ridge *enrichment*,
+`voronoi_site_enrichment`, does nothing on a planar slab; that knob only matters
+for nanoparticles and porous frameworks.)
+
+Two extra slab behaviours:
+
+- A **height mask** keeps only candidates at or above the surface layer, so a
+  site that ended up behind a step edge is dropped.
+- When `site_classification_method` is `auto` (the default) or `delaunay`, the
+  code builds a Delaunay triangulation of the top layer and re-classifies each
+  candidate as atop / bridge / hollow against that triangulation. This makes
+  cross-periodic-boundary bridges and hollows classifiable that a plain
+  distance ratio would mislabel. `distance_ratio` uses the raw
+  nearest-neighbour distance rules instead.
+
+If the topology generator produced no atop site, a small **atop-injection**
+safety net lifts a candidate above each top-layer atom along the surface normal
+and keeps those gated by the same window. (Slabs that already have topology atop
+skip this, since it would be redundant.)
+
+### 3.2 Nanoparticle
+
+A nanoparticle is a finite cluster with no periodicity. Its sites come
+primarily from the 3D Voronoi diagram of all its atoms: the vertices of that
+diagram are the pockets and kinks where a molecule could sit. Optionally
+(`voronoi_site_enrichment`) long Voronoi *ridges* are subdivided and re-checked,
+so a narrow channel between atoms gets more than one candidate instead of one.
+
+Two nanoparticle-specific steps:
+
+- **Outward-normal filter.** A Voronoi vertex is kept only if its outward
+  direction (from the cluster centre toward the vertex) agrees with the local
+  surface normal. Interior vertices pointing into the cluster are discarded.
+- **Atop-injection safety net.** For every surface atom whose local outward
+  normal points away from the cluster centre, a candidate is lifted along that
+  normal and gated by the window. This guarantees every exposed atom has an
+  atop option even if the Voronoi diagram missed it.
+
+### 3.3 Porous
+
+A porous framework (a MOF/COF) is fully 3D periodic, so its Voronoi vertices
+fill the void space. As with nanoparticles, vertices are the primary source
+plus optional ridge enrichment. Pores versus walls are distinguished by the
+nearest-atom distance: a vertex whose nearest framework atom is farther than a
+covalent-radius-based threshold is a `pore` (free volume); a closer one is a
+`hollow`. Open pores — those with a *larger* nearest-atom distance — are
+preferred, because they are less likely to clash with the walls.
+
+Porous frameworks do **not** use atop injection (covalent radii do not define a
+unique "up" inside a confined void), and the clearance lift described in §4 is
+skipped there.
+
+### 3.4 Shared behaviour across all three types
+
+Regardless of material type, three things happen to the raw candidate set:
+
+- **Clustering** merges near-duplicate points into one representative per
+  `site_equivalence_tolerance`. The comparison respects periodicity (periodic
+  images are folded back) and, for slabs, also checks that two candidates are at
+  the same height, so a point one layer down is not merged with the surface one.
+- **Symmetry reduction** uses spglib to collapse symmetry-equivalent sites into
+  one representative each, reducing wasted work. This runs until coverage breaks
+  the symmetry: once molecules are already on the surface, the code falls back to
+  the clustered (non-symmetry-reduced) set so asymmetric, partially covered
+  arrangements are explored.
+- **One-shot auto-widen.** If the very first accessibility window finds no sites
+  at all, the code retries once with a wider window (tighter probe radius and a
+  larger max distance, scaled by the covalent-radius-derived defaults) before
+  giving up. This is `voronoi_auto_widen`.
+
+Site detection results are cached per substrate geometry and relevant Voronoi
+settings, so repeating the same material does not recompute them.
+
+## 4. How a placement is built from a site
+
+Once sites exist, the code turns each (site, conformer) pair into one or more
+concrete placements. A placement is defined by:
+
+- **which conformer** (which folded shape of the molecule);
+- **orientation** (which way the molecule faces the surface);
+- **height** (how far above the site);
+- **in-plane jitter** (a small sideways nudge, used for recovery);
+- **tilt and azimuth** (how much the molecule is tipped and rotated).
+
+### 4.1 Orientation choice
+
+The code first decides whether the molecule is *flat and aromatic* (for example
+benzene, or a pyridine-like ring with binding atoms). Flatness comes from the
+molecule's inertia — a flat molecule has most of its mass in a plane. Aromaticity
+and binding atoms come from the SMILES string when available, otherwise from the
+atom types.
+
+Two orientation families result:
+
+- **Parallel (π-stacking).** The molecular plane is laid flat, parallel to the
+  surface — like a coin set face-down. Used for flat aromatics.
+- **Binder-down.** The molecule is rotated so a binding atom (an oxygen,
+  nitrogen, sulfur, or halogen) points toward the surface.
+
+For flat aromatics the *fraction* of placements done parallel versus binder-down
+is controlled by `flat_aromatic_parallel_fraction`. When
+`adaptive_parallel_fraction` is on (the default), that fraction is estimated
+from the molecule: a ring with no binders leans heavily parallel (≈0.8), a ring
+with a single binder leans binder-down (≈0.3), and rings with several binders
+scale between those based on how many binders sit on the ring.
+
+### 4.2 Height / z-offset
+
+The baseline height window is `placement_z_range` (a low and high fraction),
+scaled by the sum of the molecule's and the surface's covalent radii when
+`placement_z_scale_by_covalent_radius` is on (the default). So a bigger molecule
+or a bigger surface atom gets a proportionally larger gap — the numbers stay
+physically sensible across chemistries.
+
+On top of that, each site type gets a small fixed offset from the surface: atop
+sits highest, bridge slightly lower, hollow and pore lower still, envelope in
+between. For parallel flat aromatics the window is shrunk toward the surface so
+the ring sits close to (but not inside) the material.
+
+Then comes **clearance-aware lift** (slabs and nanoparticles, not porous). After
+the molecule is oriented, its centre of mass may hang a fingertip below the
+intended height — an alkyl chain or a hydrogen poking toward the surface. The
+code lifts the whole molecule so that the *closest atom* — not the centre — sits
+at the target height. This is what prevents alkyl or hydrogen atoms from digging
+into the surface. Inside confined pores the local normal is not a single
+well-defined "away" direction, so this lift is skipped.
+
+### 4.3 In-plane jitter and validation
+
+Before relaxing, each placement is checked against the surface: the closest
+adsorbate–substrate distance must exceed a floor (the larger of
+`min_initial_distance` and a covalent-radius-based minimum), and optionally must
+not exceed `max_initial_distance`. If `reject_vdw_overlaps` is on, hard
+van-der-Waals clashes are also rejected.
+
+If a placement fails these checks, the code can **recover automatically**
+(`placement_distance_recovery`, on by default). It first nudges the height
+(raise it for `too_close`, lower it for `too_far`; inside porous frameworks it
+moves toward the free-volume site centre instead), then, if needed, slides the
+molecule to a new in-plane (x, y) position drawn deterministically within
+`placement_x_range` / `placement_y_range`. Only `too_close`, `too_far`,
+`adsorbate_overlap`, and (for porous) `vdw_overlap` are recoverable; other
+failures are final.
+
+## 5. Sampling many placements
+
+For every (conformer, site) pair the code enumerates a full Cartesian grid of
+variations: every conformer, a set of tilts, a set of azimuthal rotations, a set
+of height fractions, and the site itself. The grid is capped at an internal
+upper bound so a tiny molecule on a huge surface cannot explode the count.
+
+Because that raw grid is far larger than the number of placements you actually
+want (`num_placements`), the code takes a **deterministic, stratified subsample**
+down to the requested count:
+
+- Within each site-type bucket, candidates are ordered by a soft prior that
+  prefers *milder tilts* and *mid-window heights* (so the sample is not biased
+  toward extreme poses).
+- For flat aromatics the parallel and binder-down branches are each subsampled
+  proportionally to the parallel fraction from §4.1.
+- For porous frameworks, pore sites are drawn first and in an order biased
+  toward the most open pores.
+- The whole draw is seeded (`seed`) and reproducible: same inputs, same placements.
+
+Two further behaviours:
+
+- **Conformer Boltzmann prior.** When `conformer_weighting="boltzmann"` and the
+  conformer energies are available, the slots are allocated across conformers in
+  proportion to `exp(-(E_i - E_min) / (k_B * T))` using `boltzmann_temperature`.
+  Higher temperature flattens the preference toward uniform; lower temperature
+  concentrates on the lowest-energy conformers. If energies are missing the code
+  silently falls back to the uniform draw.
+- **Capacity-based budgeting across molecules.** The function
+  `estimate_molecule_complexity` scores each molecule by how many placement specs
+  it can generate (the grid size from above), and `distribute_placement_budget`
+  splits the total placement budget across molecules in proportion to those
+  scores, guaranteeing every molecule gets at least one. This keeps a simple
+  molecule from starving a complex one, and vice versa.
+
+## 6. Coverage and saturation
+
+When molecules are already on the surface (saturation, or any retry round), the
+pipeline prunes sites that are *occupied*.
+
+**Occupancy pruning** compares each site's point to the atoms of the already
+adsorbed molecules. A site is kept only if its point is at least
+`min_adsorbate_separation` from every existing adsorbate atom (using minimum
+image distances under periodicity). Note it checks the site *point* against
+adsorbate *atoms* — not full molecule footprints. Topology-sourced sites are
+tried before pure Voronoi ones, and for porous frameworks open pore sites are
+preferred.
+
+The important consequence: if occupancy pruning removes *all* sites under
+coverage, the capacity for that step is empty. The code does **not** fall back to
+random (x, y) scatter guesses — it simply reports zero available sites and moves
+on. This avoids packing molecules on top of each other inside a filled region.
+
+On top of pruning, a **retry / fill loop** in the workflow makes sure you actually
+get close to `num_placements` valid structures:
+
+- **Capacity clamp** (`placement_fill_clamp_to_capacity`, default `True`). The
+  success target is clamped to the enumerable spec capacity, so the retry loop
+  cannot spin until `placement_retry_max_attempts` chasing an impossible target.
+- **Oversample** (`placement_retry_oversample_max`, default 6.0). Each deficit
+  round requests more specs than the remaining slots, scaled by an estimated
+  success rate, so one bad batch does not stall the loop.
+- **Early stop** (`placement_retry_early_stop_patience`, default 2). After this
+  many consecutive rounds that produce zero new placements, the loop gives up
+  early — a signal the capacity is exhausted. `placement_retry_max_attempts`
+  (default 8) remains the absolute hard cap.
+- **Failed-spec and cell exclusion.** Specs that already failed, and whole
+  discrete placement neighbourhoods already relaxed, are excluded on retry so a
+  new seed explores fresh territory.
+- **Clash-based site blocking.** After a site triggers `too_close` /
+  `adsorbate_overlap` failures a few times (`_RETRY_BLOCK_SITE_AFTER`), that site
+  is blocked for the rest of the fill.
+
+## 7. Dissociative placement
+
+Some molecules, such as H₂, do not stay intact on a surface — they split into two
+atoms that sit on two separate sites. This is handled by a dedicated path enabled
+with `enable_dissociative_placement` (usually together with
+`skip_topology_check`, so the connectivity filters allow a fragmented adsorbate).
+
+It applies only to *homonuclear diatomics* (two identical atoms, e.g. H₂, O₂,
+N₂) on `slab` or `nanoparticle` (not porous). The code pairs up nearby hollow /
+pore sites and places one fragment atom at each. The separation between the two
+fragments is chosen adaptively: a minimum set by the atoms' covalent radii and a
+maximum set by the spacing between neighbouring hollow sites, clipped to a sane
+range. The resulting geometry is stored not just as xyz but with an explicit
+*fragment positions* record, so replaying the placement reproduces the split
+exactly.
+
+## 8. Every knob
+
+The fields below affect where sites are found and how placements are built.
+Defaults and ranges are taken from `AdsorptionConfig` and the placement
+constants; knobs marked "scaled by radius" multiply the cited base by the sum of
+the molecule's and surface's covalent radii when the relevant flag is on.
+
+### Material and site sources
+
+| Field | Default | What it controls / when to change it |
+|-------|---------|--------------------------------------|
+| `material_type` | `"slab"` | Selects `slab`, `nanoparticle`, or `porous`. Sets the periodicity and which site-finding path runs. Match it to your substrate. |
+| `voronoi_probe_radius` | auto (covalent-radius scaled) | Lower bound of the accessibility window: a candidate closer than this to the surface is rejected. Raise it to forbid sites buried in the surface. |
+| `voronoi_max_site_distance` | auto (covalent-radius scaled) | Upper bound of the window: a candidate farther than this is rejected. Lower it to forbid far-floating sites. Must exceed `voronoi_probe_radius`. |
+| `voronoi_site_enrichment` | `True` | Subdivides long Voronoi ridges into extra candidates. Matters for nanoparticle / porous only; a no-op on planar slabs. |
+| `voronoi_auto_widen` | `True` | If the first window finds no sites, retries once with a wider window before giving up. |
+| `site_classification_method` | `"auto"` | `auto`/`delaunay` use a Delaunay triangulation to classify slab sites (better cross-boundary bridges/hollows); `distance_ratio` uses raw nearest-neighbour distances. |
+| `top_layer_tolerance` | `0.5` Å | Depth of the top layer used for slab topology and height masking. Covalent-radius-derived with a cap. |
+| `symmetry_tolerance` | `0.1` Å | Tolerance for spglib symmetry reduction of sites. |
+| `site_equivalence_tolerance` | `0.05` Å | Distance under which two candidates are merged into one site. |
+| `hollow_site_dedup_tolerance` | `0.1` Å | Dedup tolerance for hollow/pore sites (dissociative pairing). |
+| `planar_z_variance_threshold` | `0.01` Å² | Variance tolerated when deciding whether a top layer is flat (skips the 3D Voronoi pass for slabs). |
+| `rough_slab_local_z` | `True` | When the slab is non-planar, measure each site's height locally instead of from the global top, so step-edge sites are not over-lifted. |
+
+### Placement geometry
+
+| Field | Default | What it controls / when to change it |
+|-------|---------|--------------------------------------|
+| `num_placements` | `None` (autotune) | How many valid placements to aim for. Leave `None` in production to autotune to GPU capacity. |
+| `num_conformers` | `10` | How many folded shapes of the molecule to generate. More shapes = more diverse sampling. |
+| `placement_z_range` | `(0.7, 1.25)` | Low/high height fractions above the site. Scaled by covalent radii when `placement_z_scale_by_covalent_radius` is on. |
+| `placement_z_scale_by_covalent_radius` | `True` | When on, `placement_z_range` is multiplied by the molecule+surface covalent-radius sum. Keeps gaps chemistry-aware. |
+| `placement_x_range` | `(-0.5, 0.5)` Å | In-plane x window for distance-recovery nudges. |
+| `placement_y_range` | `(-0.5, 0.5)` Å | In-plane y window for distance-recovery nudges. |
+| `placement_distance_recovery` | `True` | When on, recover from `too_close`/`too_far`/overlap by raising height then sliding in-plane. |
+| `min_initial_distance` | `1.5` Å | Hard floor on the closest adsorbate–substrate distance at placement. |
+| `max_initial_distance` | `None` | Optional ceiling on the closest distance; beyond it the placement is `too_far`. |
+| `min_contact_ratio` | `0.8` | Fraction of the covalent-radius sum used as the contact floor: effective minimum = max(`min_initial_distance`, radius_sum × this). Range `[0.5, 1.2]`. |
+| `rough_slab_local_z` | (see above) | Listed under site sources. |
+| `flat_aromatic_parallel_fraction` | `0.5` | Fraction of flat-aromatic placements done parallel (π-stacking) vs binder-down. Range `[0.0, 1.0]`. |
+| `adaptive_parallel_fraction` | `True` | When on, estimate the parallel fraction from the molecule's binder count instead of using the fixed value above. |
+| `conformer_weighting` | `"boltzmann"` | `"boltzmann"` allocates spec slots across conformers by energy; `"uniform"` ignores conformer energy. (Falls back to uniform if energies are absent.) |
+| `boltzmann_temperature` | `300.0` K | Temperature for the Boltzmann conformer prior. Higher → flatter (more uniform); lower → concentrates on low-energy conformers. |
+
+### Contact quality and clashes
+
+| Field | Default | What it controls / when to change it |
+|-------|---------|--------------------------------------|
+| `min_adsorbate_separation` | `1.5` Å | Minimum gap between a newly placed molecule and any pre-adsorbed one (saturation). Enforced at least at a hard floor. |
+| `placement_filter` | `None` | Optional callable to accept/reject a `PlacementSpec` before materialization. |
+| `reject_vdw_overlaps` | `False` | When on, reject placements with hard van-der-Waals overlaps. |
+| `vdw_overlap_scale` | `1.0` | Multiplier on the van-der-Waals radii used for the overlap test. |
+| `strict_initial_placement` | `False` | When on, require the closest contact to be within `max_closest_approach`. |
+| `require_multiple_contact` | `False` | When on, require at least two contacting atoms (a more binding-like pose). |
+| `min_contact_atoms` | `1` | Minimum number of contacting atoms for the contact-quality gate. |
+| `max_closest_approach` | `3.0` Å | Farthest the closest contact may be for the placement to count as "in contact". |
+| `contact_distance_threshold` | `2.5` Å | Absolute distance under which an atom pair counts as a contact. |
+| `skip_topology_check` | `False` | Skip connectivity filters; set `True` for dissociative adsorption so fragmented adsorbates are allowed. |
+| `enable_dissociative_placement` | `False` | Enable H₂→2H style split placement on slab/nanoparticle. |
+| `skip_desorption_check` | `False` | Skip the desorption-energy sanity gate (advanced). |
+
+### Retry / fill loop
+
+| Field | Default | What it controls / when to change it |
+|-------|---------|--------------------------------------|
+| `placement_retry_enabled` | `True` | Turn the retry/fill loop on or off (off = single attempt). |
+| `placement_retry_max_attempts` | `8` | Absolute maximum retry rounds. |
+| `placement_retry_diversity_seed_increment` | `1000` | Seed offset added per retry round so each round explores fresh neighbourhoods. |
+| `placement_retry_oversample_max` | `6.0` | Max specs requested per deficit round as a multiple of remaining slots (must be ≥ 1.0). |
+| `placement_fill_clamp_to_capacity` | `True` | Clamp the success target to the enumerable spec capacity so retries can't chase an impossible count. |
+| `placement_retry_early_stop_patience` | `2` | Consecutive zero-yield rounds before early stop (must be ≥ 1). |
+| `placement_materialize_workers` | `-2` | Joblib-style worker count for building placements (`-2` = all but one CPU; `1` = serial). |
+| `export_placement_provenance` | `False` | When on, CSV/descriptor also records the pre-relaxation site/orientation intent (not the final binding mode). |
+
+### Bayesian placement selection (nested `bo` / `bo.transfer`)
+
+These live under the nested `AdsorptionConfig.bo` and `AdsorptionConfig.bo.transfer`
+fields and affect *which* placements the optimizer proposes, not the geometric
+site finding above.
+
+| Field | Default | What it controls / when to change it |
+|-------|---------|--------------------------------------|
+| `bo.initial_random` | `None` (autotune) | Number of random placements before acquisition. Leave `None` to autotune to GPU capacity. |
+| `bo.initial_sampling` | `"spread_xyz"` | How the initial batch is spread (`random`, `spread`, `spread_xyz`, `stratified`). |
+| `bo.batch_size` | `None` (autotune) | Placements per acquisition batch. |
+| `bo.total_budget` | `18` | Number of acquisition batches. |
+| `bo.acquisition` | `"ei"` | Acquisition function (`lcb`, `ei`, `pi`). |
+| `bo.surrogate` | `"gradient_boost"` | Surrogate model for the acquisition function. |
+| `bo.ucb_kappa` | `1.96` | Exploration weight for the `lcb` acquisition. |
+| `bo.transfer.enabled` | `True` | Reuse observations across saturation steps (transfer learning). |
+| `bo.transfer.mode` | `"weighted"` | How past steps are weighted (`weighted` or `cumulative_refit`). |
+| `bo.transfer.similarity_lengthscale` | `4.0` | Lengthscale controlling how similar two steps must be to transfer. |
+| `bo.transfer.weight_cap` | `0.35` | Maximum weight given to transferred observations. |
+| `bo.transfer.exploration_fraction` | `0.2` | Fraction of each batch reserved for pure exploration. |
+
+Flat `bo_*` keys are rejected — nest everything under `bo:` / `bo.transfer:`.
+
+## 9. Where the detail lives
 
 | Topic | Doc |
 |-------|-----|

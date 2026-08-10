@@ -2,8 +2,9 @@ Result Models
 =============
 
 These dataclasses represent the typed outputs returned by the run-mode
-functions and workflow helpers. Only the public API types exported from
-the top-level ``metalsurfer`` module are documented here.
+functions and workflow helpers. Types prefixed with ``models.`` / ``workflow.`` /
+``ml.`` are documented at their defining module; all are part of the supported
+public API.
 
 Campaign Results
 ----------------
@@ -82,8 +83,8 @@ Placement specifications
 Bayesian transfer bookkeeping
 -----------------------------
 
-Embedded on :class:`~metalsurfer.SaturationStepResult.transfer` and
-:class:`~metalsurfer.MultiMolSaturationStepResult.transfer_by_molecule`.
+Embedded on :attr:`~metalsurfer.SaturationStepResult.transfer` and
+:attr:`~metalsurfer.MultiMolSaturationStepResult.transfer_by_molecule`.
 CSV exports still flatten to stable ``bo_transfer_*`` column names.
 
 .. autoclass:: metalsurfer.models.BOTransferInfo
@@ -117,6 +118,14 @@ nested :class:`~metalsurfer.models.PlacementDescriptor` plus energies,
 labels, and :class:`~metalsurfer.ml.schema.ComputationContext`. CSV
 ``to_flat_dict`` / ``from_flat_dict`` keep a flat column layout for
 compatibility.
+
+.. autoclass:: metalsurfer.ml.schema.PlacementRecord
+   :members:
+   :undoc-members:
+
+.. autoclass:: metalsurfer.ml.schema.ComputationContext
+   :members:
+   :undoc-members:
 
 .. autoclass:: metalsurfer.ml.DatasetLogger
    :members:

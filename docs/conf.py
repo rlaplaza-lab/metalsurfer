@@ -1,5 +1,19 @@
 """Sphinx configuration for metalsurfer documentation."""
 
+import sys
+from unittest import mock
+
+try:
+    import torch  # noqa: F401
+except ImportError:
+    # On hosts without torch (e.g. Read the Docs), ``autodoc`` would otherwise
+    # mock torch with a non-class ``Tensor``. Importing real scipy then crashes
+    # because ``scipy.array_api_compat`` calls ``issubclass(..., torch.Tensor)``.
+    # Provide a minimal stub so torch.Tensor is a real class.
+    _torch_stub = mock.MagicMock()
+    _torch_stub.Tensor = object
+    sys.modules["torch"] = _torch_stub
+
 project = "metalsurfer"
 copyright = "2026, metalsurfer contributors"
 author = "metalsurfer contributors"
@@ -31,7 +45,6 @@ autodoc_class_signature = "separated"
 autodoc_docstring_signature = True
 
 autodoc_mock_imports = [
-    "torch",
     "torch_sim",
     "fairchem",
     "fairchem.core",

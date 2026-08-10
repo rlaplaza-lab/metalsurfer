@@ -85,9 +85,7 @@ Common mistakes
   see the budget section below).
 - BO mode is the ``run_*_bo`` entry point or YAML ``campaign: *_bo`` — not a
   config field. Unknown keys such as ``bo_enabled`` in YAML ``config:`` raise
-  ``TypeError`` from :class:`~metalsurfer.AdsorptionConfig`.
-- Prefer ``write_settings=True`` (default) for ``run_metadata.json``.
-  Set ``write_settings=False`` to suppress it.
+  ``ValueError`` from the campaign schema (before ``AdsorptionConfig`` is built).
 - CSV exports (``ml_dataset.csv`` and detailed result CSVs) are lean by
   default. Set ``export_placement_provenance=True`` for ``initial_*``
   placement provenance and full ``ctx_*`` computation settings.
@@ -102,8 +100,8 @@ Three independent layers (do not conflate):
 3. **Contact quality** — ``strict_initial_placement``, ``max_closest_approach``,
    ``min_contact_atoms``, ``contact_distance_threshold``, ``require_multiple_contact``
 
-Do not confuse ``min_contact_ratio`` (default **0.8**, unitless fraction of the
-covalent-radius sum) with ``max_closest_approach`` (default **0.8** Å, absolute
+Do not confuse ``min_contact_ratio`` (default **0.8**, a unitless fraction of the
+covalent-radius sum) with ``max_closest_approach`` (default **3.0** Å, the absolute
 closest-approach distance used by the contact-quality layer).
 
 Under saturation, substrate contact uses the bare-slab atom prefix while prior
@@ -114,8 +112,6 @@ emit typed reasons (``too_close``, ``too_far``, ``vdw_overlap``,
 
 Placement success levers
 ------------------------
-
-Defaults aim for high accept rates with low overhead (work runs mainly on failures):
 
 - **Orientation mix** — ``adaptive_parallel_fraction=True`` picks parallel vs EN-down
   from binder/ring chemistry; set ``False`` and tune
@@ -144,10 +140,6 @@ Site classification defaults to ``site_classification_method="auto"``: Delaunay
 for slabs (catalysis-style atop/bridge/hollow catalogs) and distance-ratio for
 nanoparticles and porous materials. Explicit ``"distance_ratio"`` on slabs is
 honored for A/B comparisons.
-
-Material-aware placement asymmetries (hybrid topology on slabs, parallel-z floors
-for open surfaces only, no porous dissociative) are intentional for sampling
-effectiveness — see :doc:`architecture`.
 
 Bayesian optimization budget
 ----------------------------
@@ -191,8 +183,7 @@ keys are rejected; nest under ``bo`` / ``bo.transfer``.
 
 Use :func:`~metalsurfer.run_adsorption_bo` or :func:`~metalsurfer.run_saturation_bo`
 (or YAML ``campaign: adsorption_bo`` / ``saturation_bo`` with
-:func:`~metalsurfer.run_campaign`). Those select BO mode; ``bo`` / ``bo.transfer``
-fields are hyperparameters only. See :doc:`yaml_campaigns` for YAML structure
+:func:`~metalsurfer.run_campaign`). See :doc:`yaml_campaigns` for YAML structure
 and limitations, and :doc:`../api/campaigns` for the ``campaign`` mapping.
 
 Saturation essentials

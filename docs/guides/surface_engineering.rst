@@ -27,17 +27,25 @@ Campaign-ready substrates
 
 Import all prep helpers from :mod:`metalsurfer.surface_prep` (see
 :doc:`Substrate preparation <../api/surface_prep>`). Before ``run_adsorption``, ``run_saturation``, or
-related APIs, the substrate must have:
+related APIs, the substrate should be **campaign-ready**: prepared with
+:func:`~metalsurfer.surface_prep.prepare_substrate` (or equivalent step-by-step
+helpers). Prep equilibrates ions, applies PBC, attaches constraints, and validates.
+The entry points re-validate PBC, vacuum, and cell geometry (and warn if ``FixAtoms``
+are missing), but they do **not** re-equilibrate ions or re-anchor the slab — those
+are prep outputs you are responsible for.
 
-- **Equilibrated ionic positions** — :func:`~metalsurfer.surface_prep.prepare_substrate`
-  relaxes the substrate by default (``slab_relaxation_mode="ionic_only"``).
-  Campaign APIs assume this optimized reference for ``E(slab)`` and ``E_ads``.
+A campaign-ready substrate therefore has:
+
+- **Equilibrated ionic positions** — ``prepare_substrate`` relaxes the substrate by
+  default (``slab_relaxation_mode="ionic_only"``); campaign APIs assume this
+  optimized reference for ``E(slab)`` and ``E_ads``. Use
+  ``slab_relaxation_mode="none"`` only for experimental geometries that must not move.
 - PBC matching ``AdsorptionConfig.material_type`` (``[T,T,F]`` for slabs,
   ``[T,T,T]`` for porous frameworks, ``[F,F,F]`` for nanoparticles)
-- Bottom-anchored slab layout (``min(z) ≈ 0``) when ``material_type="slab"``
-- ASE ``FixAtoms`` from :func:`~metalsurfer.surface_prep.apply_surface_constraints`
-  (attached by :func:`~metalsurfer.surface_prep.prepare_substrate`; default freezes
-  the entire substrate; ``relax_top_layer=True`` is a material-aware shortcut)
+- For ``material_type="slab"``, a bottom-anchored layout (``min(z) ≈ 0``) produced
+  by prep — the entry points expect prep's z-alignment rather than re-imposing it
+- ASE ``FixAtoms`` (attached by ``prepare_substrate``; default freezes the entire
+  substrate; ``relax_top_layer=True`` is a material-aware shortcut)
 - Sufficient in-plane image separation for your adsorbates (use
   :func:`~metalsurfer.surface_prep.resize_substrate_for_molecule` after
   conformer generation when needed)
@@ -357,17 +365,3 @@ reference (e.g. ``clean_slab_Au20``), not ``clean_slab`` from before deposition.
 
 See :ref:`large-adsorbates-in-plane-sizing` for when and how to expand the
 in-plane cell for wide adsorbates.
-
-
-Material Type
--------------
-
-:attr:`AdsorptionConfig.material_type <metalsurfer.AdsorptionConfig.material_type>`
-must be set explicitly.  Valid values:
-
-- ``"slab"`` — in-plane periodic surfaces.
-- ``"nanoparticle"`` — non-periodic clusters.
-- ``"porous"`` — fully periodic porous frameworks.
-
-This choice affects site generation, adsorption validation, and distance
-handling throughout the workflow.

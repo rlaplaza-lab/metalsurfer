@@ -84,7 +84,7 @@ Fast unit tests (matches the ``test-full`` CI job, excluding slow/MLIP markers):
    python -m pytest tests/ \
      -m "not dependency_behavior and not mlip and not gpu and not slow" \
      --cov=src/metalsurfer --cov-report=term-missing --tb=short -v
-   coverage report --fail-under=74
+    coverage report --fail-under=85
 
 Additional CI jobs locally:
 
@@ -127,16 +127,14 @@ CI parity
 | seeded + physics + run-modes     | ``test-integration``                     |
 +----------------------------------+------------------------------------------+
 
-Read the Docs builds Sphinx docs but does not run mypy; type checking runs in CI.
-
 Fixing failures
 ---------------
 
 - **Ruff:** run ``ruff check . --fix`` for auto-fixable rules, then ``ruff format .``.
 - **Mypy:** read the error code (e.g. ``[arg-type]``) and fix the annotation or add a
   targeted ignore only when third-party stubs are missing.
-- **Coverage:** the gate is ``--fail-under=74`` on ``src/metalsurfer``; add tests for
-  new branches rather than lowering the threshold.
+- **Coverage:** the gate is ``--fail-under=85`` on ``src/metalsurfer``; add tests for
+   new branches rather than lowering the threshold.
 
 Publishing
 ----------

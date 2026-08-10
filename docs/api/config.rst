@@ -129,7 +129,7 @@ Conformers
    enumerated spec slots per conformer in proportion to
    ``exp(-(E_i - E_min) / (k_B * boltzmann_temperature))`` using the MMFF /
    MLIP energies produced during conformer generation
-   (:func:`~metalsurfer.create_conformers_from_smiles`). When those energies
+   (``create_conformers_from_smiles``). When those energies
    are unavailable (e.g. no calculator, or a length mismatch), the draw
    degrades gracefully to uniform and a warning is logged. The allocation is
    fully deterministic (no RNG); only the within-conformer seeded tie-break
@@ -162,10 +162,12 @@ Site detection
    set.
 
 ``voronoi_site_enrichment``
-   **Type:** ``bool`` · **Default:** ``True``
+    **Type:** ``bool`` · **Default:** ``True``
 
-   Enable geodesic ridge subdivision to add denser candidate sites on irregular
-   surfaces (especially porous materials and rough slabs).
+    Enable geodesic ridge subdivision to add denser candidate sites on irregular
+    surfaces. Effective for ``material_type="porous"`` and ``"nanoparticle"``; a
+    no-op for ``material_type="slab"`` (the planar top layer has no 3D Voronoi
+    diagram, so ridge subdivision is skipped).
 
 ``voronoi_auto_widen``
    **Type:** ``bool`` · **Default:** ``True``
@@ -278,11 +280,26 @@ Placement generation
    Added to the RNG seed on each placement retry for diversity.
 
 ``placement_retry_oversample_max``
-   **Type:** ``float`` · **Default:** ``6.0`` · **Valid range:** ``>= 1.0``
+    **Type:** ``float`` · **Default:** ``6.0`` · **Valid range:** ``>= 1.0``
 
-   Cap on specs requested per deficit round as a multiple of the remaining
-   placement count. Combined with the observed materialization yield so rounds
-   stay short while still filling ``num_placements``.
+    Cap on specs requested per deficit round as a multiple of the remaining
+    placement count. Combined with the observed materialization yield so rounds
+    stay short while still filling ``num_placements``.
+
+``placement_fill_clamp_to_capacity``
+    **Type:** ``bool`` · **Default:** ``True``
+
+    Clamp the effective placement target to the enumerable spec capacity
+    (``estimate_molecule_complexity``) so the retry loop cannot spin to
+    ``placement_retry_max_attempts`` on an unreachable count when occupancy-pruned
+    sites leave fewer enumerable placements than requested.
+
+``placement_retry_early_stop_patience``
+    **Type:** ``int`` · **Default:** ``2``
+
+    Stop deficit rounds early after this many consecutive zero-yield attempts
+    (yield-aware early-out that usually ends retries well before
+    ``placement_retry_max_attempts``).
 
 ``placement_materialize_workers``
    **Type:** ``int`` · **Default:** ``-2``
@@ -299,10 +316,18 @@ Initial placement validation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``min_initial_distance``
-   **Type:** ``float`` · **Default:** ``1.5`` (Å)
+    **Type:** ``float`` · **Default:** ``1.5`` (Å)
 
-   Minimum adsorbate–surface separation at placement time. Rejects structures
-   starting too close before relaxation.
+    Minimum adsorbate–surface separation at placement time. Rejects structures
+    starting too close before relaxation.
+
+``min_adsorbate_separation``
+    **Type:** ``float`` · **Default:** ``1.5`` (Å)
+
+    Minimum adsorbate–adsorbate separation enforced under coverage (saturation).
+    Rejects placements that would pack a new adsorbate on top of an already
+    adsorbed one; corresponds to the ``adsorbate_overlap`` failure reason when
+    violated.
 
 ``min_contact_ratio``
    **Type:** ``float`` · **Default:** ``0.8`` · **Valid range:** ``[0.5, 1.2]``
@@ -337,7 +362,7 @@ Initial placement validation
    are stricter; ``< 1`` more lenient.
 
 ``max_closest_approach``
-   **Type:** ``float`` · **Default:** ``0.8`` (Å)
+    **Type:** ``float`` · **Default:** ``3.0`` (Å)
 
    Maximum allowed closest-approach distance (Å) between the adsorbate and the
    substrate when ``strict_initial_placement`` or ``require_multiple_contact`` is
@@ -374,10 +399,11 @@ Relaxation and MLIP
    evaluations during relaxation and reference calculations.
 
 ``device``
-   **Type:** ``Literal["cuda", "cpu"]`` · **Default:** ``"cuda"``
+    **Type:** ``str`` · **Default:** ``"cuda"``
 
-   Compute device for MLIP calculations. Use ``"cpu"`` when CUDA is unavailable;
-   autotuning still applies but batch sizes will be smaller.
+    Compute device for MLIP calculations. Accepts ``"cpu"``, ``"cuda"``, or
+    ``"cuda:<int>"`` (a specific GPU index). Use ``"cpu"`` when CUDA is
+    unavailable; autotuning still applies but batch sizes will be smaller.
 
 ``fmax``
    **Type:** ``float`` · **Default:** ``0.05`` (eV/Å)
@@ -534,13 +560,19 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
 ``bo_transfer_*`` constructor and YAML keys are rejected.
 
 ``bo``
-   **Type:** :class:`~metalsurfer.BOConfig` · **Default:** ``BOConfig()``
+    **Type:** :class:`~metalsurfer.BOConfig` · **Default:** ``BOConfig()``
 
-   Nested Bayesian hyperparameters. Use ``config.bo.*`` in Python; YAML must
-   use a nested ``bo:`` / ``bo.transfer:`` block.
+    Nested Bayesian hyperparameters. Use ``config.bo.*`` in Python; YAML must
+    use a nested ``bo:`` / ``bo.transfer:`` block.
+
+``bo.transfer``
+    **Type:** :class:`~metalsurfer.BOTransferConfig` · **Default:** ``BOTransferConfig()``
+
+    Nested transfer-learning hyperparameters for ``run_saturation_bo``. Documented
+    field-by-field below (``bo.transfer.*``).
 
 ``bo.initial_random``
-   **Type:** ``int | None`` · **Default:** ``None``
+    **Type:** ``int | None`` · **Default:** ``None``
 
    Number of placements evaluated in the initial random batch before surrogate-guided
    acquisition. When ``None``, autotunes to GPU parallel capacity.
@@ -605,11 +637,11 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
    is ``True``.
 
 ``bo.failure_penalty_overrides``
-   **Type:** ``dict[str, float]`` · **Default:** per failure-type map
+    **Type:** ``dict[str, float]`` · **Default:** ``{"generation": 18.0, "optimization": 20.0, "validation": 14.0, "energy_cap": 12.0, "filter": 11.0}``
 
-   Override penalty energies by failure stage (``"generation"``, ``"optimization"``,
-   ``"validation"``, ``"energy_cap"``, ``"filter"``) or by generation reason token
-   (e.g. ``"too_close"``, ``"vdw_overlap"``, ``"distance_check_failed"``).
+    Override penalty energies by failure stage (``"generation"``, ``"optimization"``,
+    ``"validation"``, ``"energy_cap"``, ``"filter"``) or by generation reason token
+    (e.g. ``"too_close"``, ``"vdw_overlap"``, ``"distance_check_failed"``).
 
 ``bo.transfer.enabled``
    **Type:** ``bool`` · **Default:** ``True``
@@ -646,15 +678,18 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
    weight.
 
 ``bo.transfer.trust_patience``
-   **Type:** ``int`` · **Default:** ``2``
+    **Type:** ``int`` · **Default:** ``2``
 
-   Steps to wait before trusting transfer weights when surrogate error is high.
+    Consecutive acquisition rounds with high transfer-model residual error
+    (relative to the baseline) before transfer is disabled.
 
 ``bo.transfer.mae_tolerance``
-   **Type:** ``float`` · **Default:** ``0.0`` (eV)
+    **Type:** ``float`` · **Default:** ``0.05`` (eV)
 
-   Allow transfer when surrogate MAE on held-out current-step points is below this
-   tolerance.
+    Maximum tolerated *increase* in the transfer-model MAE over the baseline
+    surrogate, measured out-of-fold on current-step observations. When the
+    degradation exceeds this tolerance, the round counts as bad; repeated bad
+    rounds disable transfer (see ``bo.transfer.trust_patience``).
 
 ``bo.transfer.exploration_fraction``
    **Type:** ``float`` · **Default:** ``0.2``
