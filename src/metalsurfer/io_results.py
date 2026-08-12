@@ -28,7 +28,13 @@ logger = logging.getLogger(__name__)
 
 
 def results_dir_for(surface_type: str) -> Path:
-    """Return ``results_{surface_type}/`` for a campaign *surface_type* label."""
+    """Return ``results_{surface_type}/`` for a campaign *surface_type* label.
+
+    Parameters
+    ----------
+    surface_type
+        Campaign surface type label.
+    """
     return Path(f"results_{surface_type}")
 
 
@@ -92,6 +98,15 @@ def write_run_settings(
 
     Merges with any existing metadata in the results directory (for example
     timing blocks written by :func:`write_run_metadata`).
+
+    Parameters
+    ----------
+    surface_type
+        Campaign surface type label.
+    config
+        Adsorption configuration.
+    **run_info
+        Optional additional run metadata fields.
     """
     results_dir = results_dir_for(surface_type)
     metadata = _build_run_metadata(
@@ -108,7 +123,15 @@ def setup_directories(
     *,
     write_vasp_inputs: bool = False,
 ) -> None:
-    """Create the results directory tree for each surface type."""
+    """Create the results directory tree for each surface type.
+
+    Parameters
+    ----------
+    surface_types
+        List of surface type labels, or None for ``["manual"]``.
+    write_vasp_inputs
+        Whether to also create the ``vasp_inputs`` subdirectory.
+    """
     if surface_types is None:
         surface_types = ["manual"]
     for st in surface_types:
@@ -165,7 +188,21 @@ def save_molecule_results(
     system_name: str | None = None,
     config: AdsorptionConfig | None = None,
 ) -> None:
-    """Write XYZ and VASP input files for each result."""
+    """Write XYZ and VASP input files for each result.
+
+    Parameters
+    ----------
+    molecule_name
+        Name of the molecule.
+    results
+        Screening results to save.
+    surface_type
+        Campaign surface type label.
+    system_name
+        Optional system identifier for VASP inputs.
+    config
+        Adsorption configuration.
+    """
     if config is None:
         config = AdsorptionConfig()
 
@@ -195,7 +232,15 @@ def screening_run_result(
     molecule_name: str,
     results: list[ScreeningResult],
 ) -> ScreeningRunResult:
-    """Build a :class:`ScreeningRunResult` for :func:`save_summary_results` after a campaign."""
+    """Build a :class:`ScreeningRunResult` for :func:`save_summary_results` after a campaign.
+
+    Parameters
+    ----------
+    molecule_name
+        Name of the molecule.
+    results
+        Screening results to include in the run result.
+    """
     summary = build_molecule_summary(molecule_name, results)
     return ScreeningRunResult(
         molecule=molecule_name,
@@ -221,6 +266,21 @@ def save_single_molecule_results(
     For multi-molecule campaigns, pass ``write_csv=False`` in the loop (structures only),
     accumulate :class:`ScreeningRunResult` via :func:`screening_run_result`, then call
     :func:`save_summary_results` and :func:`write_run_settings` once at the end.
+
+    Parameters
+    ----------
+    molecule_name
+        Name of the molecule.
+    results
+        Screening results to save.
+    surface_type
+        Campaign surface type label.
+    system_name
+        Optional system identifier for VASP inputs.
+    config
+        Adsorption configuration.
+    write_csv
+        Whether to write the detailed and summary CSV files.
     """
     if not results:
         logger.warning("No results to save for %s", molecule_name)
@@ -298,6 +358,15 @@ def save_summary_results(
 
     Existing rows for molecules that are not part of *run_results* are
     preserved, so incremental runs do not discard earlier results.
+
+    Parameters
+    ----------
+    run_results
+        List of screening run results to export.
+    surface_type
+        Campaign surface type label.
+    config
+        Adsorption configuration.
     """
     results_dir = results_dir_for(surface_type)
     include_provenance = bool(config.export_placement_provenance if config else False)
@@ -595,6 +664,15 @@ def save_saturation_results(
     ``saturation_placements_detailed.csv`` and, for each step, every structure in
     ``all_results`` under ``step_{NNN}_placements/`` (mirroring screening
     ``conformer_*`` layout). The per-step best-slab files are always written.
+
+    Parameters
+    ----------
+    saturation_results
+        Sequence of saturation run results.
+    surface_type
+        Campaign surface type label.
+    config
+        Adsorption configuration.
     """
     if config is None:
         config = AdsorptionConfig()
@@ -704,6 +782,15 @@ def save_multi_mol_saturation_results(
     When ``config.saturation_save_all_placements`` is true, writes
     ``saturation_placements_detailed.csv`` and per-step placement trees under
     ``step_{NNN}_placements/{molecule}/`` for each molecule's result list.
+
+    Parameters
+    ----------
+    result
+        Multi-molecule saturation run result.
+    surface_type
+        Campaign surface type label.
+    config
+        Adsorption configuration.
     """
     if config is None:
         config = AdsorptionConfig()
@@ -773,7 +860,19 @@ def write_run_metadata_from_out(
     config: AdsorptionConfig,
     molecules: list[tuple[str, str]] | str,
 ) -> None:
-    """Persist run metadata from a populated ``run_metadata_out`` dict."""
+    """Persist run metadata from a populated ``run_metadata_out`` dict.
+
+    Parameters
+    ----------
+    run_metadata_out
+        Dict populated with timing and count metadata.
+    surface_type
+        Campaign surface type label.
+    config
+        Adsorption configuration.
+    molecules
+        In-memory molecule list or path to a CSV file.
+    """
     if not run_metadata_out:
         return
     smiles_file = molecules if isinstance(molecules, str) else "<inline-molecules>"
@@ -801,6 +900,23 @@ def write_run_metadata(
 
     Merges with any existing metadata in the results directory (for example
     campaign fields written by :func:`write_run_settings`).
+
+    Parameters
+    ----------
+    surface_type
+        Campaign surface type label.
+    config
+        Adsorption configuration.
+    smiles_file
+        Path to the SMILES input file or ``<inline-molecules>``.
+    n_molecules
+        Number of molecules processed.
+    total_configs
+        Total number of configurations evaluated.
+    t_ref_s
+        Reference energy computation time in seconds.
+    t_total_s
+        Total wall-clock time in seconds.
     """
     results_dir = results_dir_for(surface_type)
 

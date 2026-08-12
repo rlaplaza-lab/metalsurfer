@@ -51,7 +51,7 @@ def _is_flat_aromatic(
     smiles: str | None,
     symbols: list[str],
 ) -> bool:
-    """True if the adsorbate is flat with aromatic EN atoms (parallel-placement candidate).
+    """Check whether the adsorbate is flat with aromatic EN atoms (parallel-placement candidate).
 
     With SMILES, requires RDKit aromatic rings plus electronegative binders.
     Without SMILES, any flat molecule that has binder candidates qualifies
@@ -66,7 +66,7 @@ def _is_flat_aromatic(
 
 
 def _is_flat_aromatic_with_en(smiles: str) -> bool:
-    """True if molecule has aromatic rings and electronegative (binding) atoms.
+    """Check whether the molecule has aromatic rings and electronegative (binding) atoms.
 
     Uses the heavy-atom SMILES graph only (no explicit H addition); aromaticity
     and binder identity are defined on heavy atoms.
@@ -153,6 +153,17 @@ def classify_adsorbate_orientation(
 
     *normal* defaults to the slab normal from the cell (``a×b``); pass an explicit
     unit vector for non-standard frames.
+
+    Parameters
+    ----------
+    atoms
+        Combined :class:`~ase.Atoms` object (slab + adsorbate).
+    slab_size
+        Number of atoms belonging to the substrate.
+    threshold
+        Dot-product threshold for ``"parallel"`` classification.
+    normal
+        Optional explicit surface normal vector.
     """
     pos = atoms.get_positions()[slab_size:]
     if len(pos) < 3:
@@ -286,7 +297,19 @@ def orient_from_spec(
     symbols: list[str],
     spec: PlacementSpec,
 ) -> OrientedAdsorbate:
-    """Select parallel vs binder-aligned orientation from *spec.orientation_type*."""
+    """Select parallel vs binder-aligned orientation from *spec.orientation_type*.
+
+    Parameters
+    ----------
+    canonical_pos
+        Canonical adsorbate positions.
+    normal
+        Surface normal vector.
+    symbols
+        Chemical symbols of the adsorbate atoms.
+    spec
+        :class:`~metalsurfer.models.PlacementSpec` defining the orientation.
+    """
     if spec.orientation_type == "parallel":
         return _orient_parallel(canonical_pos, normal=normal, spec=spec)
     return _orient_binder_aligned(

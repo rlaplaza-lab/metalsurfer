@@ -47,19 +47,39 @@ _PARALLEL_CAPACITY_CACHE: dict[tuple, int] = {}
 
 
 def capacity_cache_get(cache_key: tuple) -> int | None:
-    """Return the cached parallel-relaxation capacity for *cache_key*, if any."""
+    """Return the cached parallel-relaxation capacity for *cache_key*, if any.
+
+    Parameters
+    ----------
+    cache_key
+        Cache lookup key.
+    """
     with _CACHE_LOCK:
         return _PARALLEL_CAPACITY_CACHE.get(cache_key)
 
 
 def capacity_cache_set(cache_key: tuple, n_systems: int) -> None:
-    """Store the probed parallel-relaxation capacity for *cache_key*."""
+    """Store the probed parallel-relaxation capacity for *cache_key*.
+
+    Parameters
+    ----------
+    cache_key
+        Cache key.
+    n_systems
+        Number of systems that can run in parallel.
+    """
     with _CACHE_LOCK:
         _PARALLEL_CAPACITY_CACHE[cache_key] = n_systems
 
 
 def pop_autobatcher(cache_key: tuple) -> Any:
-    """Remove and return the cached autobatcher for *cache_key* (``None`` if absent)."""
+    """Remove and return the cached autobatcher for *cache_key* (``None`` if absent).
+
+    Parameters
+    ----------
+    cache_key
+        Cache key.
+    """
     with _CACHE_LOCK:
         return _AUTOBATCHER_CACHE.pop(cache_key, None)
 
@@ -85,6 +105,13 @@ def clear_autobatcher_cache(
     Pass ``clear_capacity=True`` at a model/substrate boundary (e.g. when
     swapping ``ts_model``), where the estimate is no longer valid or no longer
     needed. It is ignored when *max_n_atoms_threshold* is set.
+
+    Parameters
+    ----------
+    max_n_atoms_threshold
+        Evict only entries with ``max_n_atoms`` below this value.
+    clear_capacity
+        Also clear the parallel-capacity cache.
     """
     if max_n_atoms_threshold is None:
         with _CACHE_LOCK:

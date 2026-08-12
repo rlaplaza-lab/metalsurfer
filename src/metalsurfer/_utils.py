@@ -10,7 +10,13 @@ CELL_DET_EPS: float = 1e-12
 
 
 def is_finite_number(value: object) -> bool:
-    """Return True if *value* converts to a finite float."""
+    """Return True if *value* converts to a finite float.
+
+    Parameters
+    ----------
+    value
+        Value to test for finite float conversion.
+    """
     if not isinstance(value, (int, float, str)):
         return False
     try:
@@ -28,6 +34,13 @@ def cell_has_volume(cell, *, eps: float = CELL_DET_EPS) -> bool:
     drops PBC from distance checks and site enumeration. Keep every
     "is this cell usable?" test routed through here so the convention and the
     tolerance stay in one place.
+
+    Parameters
+    ----------
+    cell
+        3x3 cell matrix.
+    eps
+        Absolute determinant tolerance.
     """
     arr = np.asarray(cell, dtype=float)
     if arr.shape != (3, 3):

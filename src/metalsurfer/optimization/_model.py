@@ -65,6 +65,13 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
     """Create a TorchSim FairChemModel wrapper.
 
     Uses torch-sim-atomistic FairChemModel API: model, device, task_name.
+
+    Parameters
+    ----------
+    model_name
+        FairChem model name.
+    device
+        Device string (e.g. "cuda" or "cpu").
     """
     try:
         from torch_sim.models.fairchem import FairChemModel
@@ -106,7 +113,13 @@ class TorchSimCalculator:
     """
 
     def __init__(self, ts_model: Any) -> None:
-        """Wrap a TorchSim model (e.g. FairChemModel) for ASE compatibility."""
+        """Wrap a TorchSim model (e.g. FairChemModel) for ASE compatibility.
+
+        Parameters
+        ----------
+        ts_model
+            TorchSim model instance.
+        """
         self._model = ts_model
         self.results: dict[str, Any] = {}
         self._last_positions_hash: int | None = None
@@ -121,6 +134,15 @@ class TorchSimCalculator:
 
         ``system_changes`` is accepted for ASE calculator compatibility but
         ignored; each call recomputes from the current ``Atoms`` geometry.
+
+        Parameters
+        ----------
+        atoms
+            ASE Atoms object.
+        properties
+            List of requested properties (e.g. ["energy", "forces"]).
+        system_changes
+            Accepted for ASE compatibility but ignored.
         """
         _ = system_changes
         ts = _deps.ts
@@ -154,7 +176,7 @@ class TorchSimCalculator:
         self._last_positions_hash = _positions_cell_hash(atoms)
 
     def _atoms_changed(self, atoms) -> bool:
-        """True when positions/cell/species changed since the last calculation."""
+        """Check whether positions/cell/species changed since the last calculation."""
         if atoms is None or self._last_positions_hash is None:
             return True
         return _positions_cell_hash(atoms) != self._last_positions_hash
@@ -163,6 +185,13 @@ class TorchSimCalculator:
         """Return energy in eV.
 
         ``force_consistent`` is accepted for ASE compatibility but ignored.
+
+        Parameters
+        ----------
+        atoms
+            ASE Atoms object.
+        force_consistent
+            Accepted for ASE compatibility but ignored.
         """
         _ = force_consistent
         if atoms is not None and self._atoms_changed(atoms):
@@ -176,14 +205,26 @@ class TorchSimCalculator:
         return energy
 
     def get_forces(self, atoms=None):
-        """Return forces in eV/Å, shape (n_atoms, 3)."""
+        """Return forces in eV/Å, shape (n_atoms, 3).
+
+        Parameters
+        ----------
+        atoms
+            ASE Atoms object.
+        """
         if atoms is not None and self._atoms_changed(atoms):
             self.calculate(atoms, ["energy", "forces"])
         n = len(atoms) if atoms is not None else 0
         return self.results.get("forces", np.zeros((n, 3)))
 
     def get_stress(self, atoms=None):
-        """Return stress in Voigt order (xx, yy, zz, yz, xz, xy)."""
+        """Return stress in Voigt order (xx, yy, zz, yz, xz, xy).
+
+        Parameters
+        ----------
+        atoms
+            ASE Atoms object.
+        """
         if atoms is not None and self._atoms_changed(atoms):
             self.calculate(atoms, ["energy", "forces", "stress"])
         return self.results.get("stress", np.zeros(6))

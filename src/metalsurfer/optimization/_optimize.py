@@ -49,6 +49,13 @@ def setup_single_model(  # pragma: no cover - requires MLIP stack / GPU
 
     Returns (calculator, ts_model) where calculator wraps ts_model.
     Prefer this over separate calculator and TorchSim model setup to reduce GPU memory.
+
+    Parameters
+    ----------
+    model_name
+        FairChem model name.
+    device
+        Device string (e.g. "cuda" or "cpu").
     """
     ts_model = setup_torchsim_model(model_name, device)
     calculator = TorchSimCalculator(ts_model)
@@ -80,6 +87,17 @@ def estimate_parallel_relaxation_capacity(
     """Estimate how many slab+adsorbate relaxations can run in parallel on GPU.
 
     Mirrors TorchSim ``InFlightAutoBatcher`` memory probing. Returns at least 1.
+
+    Parameters
+    ----------
+    ts_model
+        TorchSim model instance.
+    representative_atoms
+        Representative ASE Atoms for the systems to relax.
+    config
+        Adsorption configuration.
+    frozen_indices
+        Atom indices that are frozen during relaxation.
     """
     max_n_atoms = len(representative_atoms)
     cache_key = _parallel_capacity_cache_key(ts_model, max_n_atoms, config)
@@ -169,6 +187,13 @@ def batch_static(
     Returns a list of ``(energy, forces)`` tuples, one per input Atoms.
     Much faster than calling ``ts.static`` once per system because the model
     forward pass is fused across all systems.
+
+    Parameters
+    ----------
+    atoms_list
+        List of ASE Atoms objects.
+    ts_model
+        TorchSim model instance.
     """
     ts = _deps.ts
     if ts is None:
@@ -255,7 +280,21 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
     steps: int = 100,
     config: AdsorptionConfig | None = None,
 ) -> list[tuple[Atoms, float]]:
-    """Batch-optimise isolated molecule conformers (no constraints)."""
+    """Batch-optimise isolated molecule conformers (no constraints).
+
+    Parameters
+    ----------
+    conformers
+        List of ASE Atoms conformers.
+    ts_model
+        TorchSim model instance.
+    fmax
+        Force convergence threshold in eV/Å.
+    steps
+        Maximum optimization steps.
+    config
+        Adsorption configuration.
+    """
     if not conformers:
         return []
     ts = _deps.ts
@@ -360,6 +399,21 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
     the results positionally against their placement descriptors. A violation
     of that invariant raises :class:`RuntimeError` rather than silently
     returning misaligned or all-``None`` results.
+
+    Parameters
+    ----------
+    combined_atoms_list
+        List of combined slab+adsorbate ASE Atoms.
+    slab
+        Reference slab Atoms.
+    ts_model
+        TorchSim model instance.
+    config
+        Adsorption configuration.
+    base_slab_for_frozen
+        Substrate reference used to read freeze constraints.
+    saturation_reuse
+        Whether to reuse autobatcher estimates across saturation steps.
     """
     if config is None:
         config = AdsorptionConfig()

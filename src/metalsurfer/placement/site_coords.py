@@ -100,6 +100,15 @@ def top_layer_mask_by_normal(
     terrace is included once if its gap from ``h_max`` is at most
     ``_STEP_TERRACE_MAX_GAP_ANGSTROM``.  The mask never walks deeper into the
     bulk by lowering the floor by another full tolerance.
+
+    Parameters
+    ----------
+    positions
+        Atomic Cartesian positions.
+    cell
+        Unit-cell matrix.
+    tolerance
+        Height tolerance for the top layer.
     """
     positions = np.asarray(positions, dtype=float)
     if positions.size == 0:
@@ -200,12 +209,28 @@ def _union_find_cluster(
     rank = [0] * n
 
     def find(x: int) -> int:
+        """Find the root of *x* with path compression.
+
+        Parameters
+        ----------
+        x
+            Element index.
+        """
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
 
     def union(a: int, b: int) -> None:
+        """Merge the sets containing *a* and *b*.
+
+        Parameters
+        ----------
+        a
+            First element index.
+        b
+            Second element index.
+        """
         ra, rb = find(a), find(b)
         if ra == rb:
             return
@@ -331,7 +356,13 @@ def _derive_top_layer_tolerance(symbols: list[str]) -> float:
 
 
 def derive_pore_threshold(symbols: list[str]) -> float:
-    """Return pore classification threshold from mean covalent radius."""
+    """Return pore classification threshold from mean covalent radius.
+
+    Parameters
+    ----------
+    symbols
+        List of element symbols.
+    """
     mean_radius = _mean_covalent_radius(symbols)
     return max(
         _PORE_THRESHOLD_MIN_ANGSTROM, _PORE_THRESHOLD_COVALENT_SCALE * mean_radius

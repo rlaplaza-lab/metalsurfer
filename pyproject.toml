@@ -68,6 +68,10 @@ warn_unused_ignores = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = ["fairchem.*", "torch_sim.*", "torch.*", "sklearn.*"]
 ignore_missing_imports = true
 
@@ -103,13 +107,17 @@ select = [
     "RUF100",  # stale noqa
     "FURB105",  # print("") -> print()
     "PGH003",  # blanket type: ignore
+    "D",    # full pydocstyle suite (NumPy convention)
 ]
 ignore = ["E501"]  # line length handled by formatter
 
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
 [tool.ruff.lint.per-file-ignores]
-"scripts/**/*.py" = ["T201", "EXE001", "E402"]
-"examples/**/*.py" = ["T201", "EXE001"]
-"tests/**/*.py" = ["S101"]
+"scripts/**/*.py" = ["T201", "EXE001", "E402", "D"]
+"examples/**/*.py" = ["T201", "EXE001", "D"]
+"tests/**/*.py" = ["S101", "D"]
 
 [tool.ruff.format]
 quote-style = "double"

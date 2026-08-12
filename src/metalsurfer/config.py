@@ -120,6 +120,11 @@ def fold_bo_config(config_data: dict[str, Any]) -> BOConfig:
 
     Mutates *config_data* by removing the ``bo`` key. Flat ``bo_*`` keys are
     rejected — use nested ``bo:`` / ``bo.transfer:`` instead.
+
+    Parameters
+    ----------
+    config_data
+        Campaign config mapping that may contain a nested ``bo`` key.
     """
     flat = [key for key in config_data if key.startswith("bo_") and key != "bo"]
     if flat:
@@ -509,7 +514,13 @@ def _validate_io(root: "AdsorptionConfig") -> None:
 
 
 def resolved_bo_eval_budget(config: "AdsorptionConfig") -> int:
-    """Total BO placement evaluations after auto-resolution of batch sizes."""
+    """Total BO placement evaluations after auto-resolution of batch sizes.
+
+    Parameters
+    ----------
+    config
+        Adsorption configuration with resolved BO fields.
+    """
     if config.bo.initial_random is None or config.bo.batch_size is None:
         raise ValueError(
             "resolved_bo_eval_budget requires bo.initial_random and bo.batch_size "
@@ -523,6 +534,11 @@ def bo_eval_schedule(config: "AdsorptionConfig") -> list[int]:
 
     Matches the live workflow: one initial-random batch plus
     ``bo.total_budget`` acquisition batches of ``bo.batch_size`` placements.
+
+    Parameters
+    ----------
+    config
+        Adsorption configuration with resolved BO fields.
     """
     if config.bo.initial_random is None or config.bo.batch_size is None:
         raise ValueError(
@@ -684,6 +700,7 @@ class AdsorptionConfig:
     bo: BOConfig = field(default_factory=BOConfig)
 
     def __post_init__(self) -> None:
+        """Validate configuration fields after initialization."""
         if isinstance(self.bo, Mapping) and not isinstance(self.bo, BOConfig):
             object.__setattr__(self, "bo", _bo_config_from_mapping(self.bo))
         _validate_placement(self)
@@ -746,5 +763,11 @@ class AdsorptionConfig:
 def resolve_adsorption_config(
     config: AdsorptionConfig | None,
 ) -> AdsorptionConfig:
-    """Return ``config`` or a default :class:`AdsorptionConfig` when ``None``."""
+    """Return ``config`` or a default :class:`AdsorptionConfig` when ``None``.
+
+    Parameters
+    ----------
+    config
+        Adsorption configuration, or None to use defaults.
+    """
     return config if config is not None else AdsorptionConfig()

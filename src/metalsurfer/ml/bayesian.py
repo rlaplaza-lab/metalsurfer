@@ -67,7 +67,13 @@ logger = logging.getLogger(__name__)
 
 
 def matern_length_scale_for_n_features(n_features: int) -> float:
-    """Characteristic length scale for BO GP: sqrt(number of features)."""
+    """Characteristic length scale for BO GP: sqrt(number of features).
+
+    Parameters
+    ----------
+    n_features
+        Number of features.
+    """
     if n_features < 1:
         raise ValueError(f"n_features must be >= 1, got {n_features}")
     return float(np.sqrt(n_features))
@@ -102,6 +108,17 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
         n_estimators: int = 100,
         random_state: int = 42,
     ) -> None:
+        """Instantiate the ensemble regressor.
+
+        Parameters
+        ----------
+        member_surrogates
+            Tuple of surrogate model identifiers.
+        n_estimators
+            Number of estimators per member.
+        random_state
+            Random seed for reproducibility.
+        """
         self.member_surrogates = member_surrogates
         self.n_estimators = n_estimators
         self.random_state = random_state
@@ -113,6 +130,22 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
         y: pd.Series | np.ndarray,
         sample_weight: np.ndarray | None = None,
     ) -> "EnsembleRegressor":
+        """Fit each ensemble member.
+
+        Parameters
+        ----------
+        X
+            Feature matrix.
+        y
+            Target values.
+        sample_weight
+            Per-sample weights.
+
+        Returns
+        -------
+        EnsembleRegressor
+            Fitted self.
+        """
         self.members_ = []
         for spec in self.member_surrogates:
             if spec == "ensemble":
@@ -136,12 +169,36 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
         return self
 
     def predict(self, X: pd.DataFrame | np.ndarray) -> np.ndarray:
+        """Predict mean values.
+
+        Parameters
+        ----------
+        X
+            Feature matrix.
+
+        Returns
+        -------
+        np.ndarray
+            Predicted means.
+        """
         mu, _ = self.predict_with_uncertainty(X)
         return mu
 
     def predict_with_uncertainty(
         self, X: pd.DataFrame | np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
+        """Predict with uncertainty estimates.
+
+        Parameters
+        ----------
+        X
+            Feature matrix.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            (mean, standard deviation) per sample.
+        """
         if not self.members_:
             raise RuntimeError("EnsembleRegressor is not fitted")
         mus: list[np.ndarray] = []
@@ -322,6 +379,25 @@ def train_surrogate(
     ``gradient_boost`` returns a regressor-only pipeline (trees do not need
     feature scaling). Per-sample ``sample_weight`` is supported for tree
     ensembles, ``ridge``, and ``gradient_boost``.
+
+    Parameters
+    ----------
+    X
+        Feature matrix.
+    y
+        Target values.
+    surrogate
+        Surrogate model type to train.
+    n_estimators
+        Number of estimators for tree-based surrogates.
+    random_state
+        Random seed for reproducibility.
+    sample_weight
+        Optional per-sample weights.
+    attach_uncertainty
+        Whether to attach residual uncertainty for deterministic models.
+    **kwargs
+        Additional keyword arguments passed to the regressor builder.
     """
     if surrogate in ("random_forest", "extra_trees"):
         tree_kind: TreeSurrogateKind = (
@@ -444,7 +520,17 @@ def prior_similarity_to_current(
     *,
     lengthscale: float,
 ) -> np.ndarray:
-    """Similarity of each prior row to the nearest current-step placement (feature space)."""
+    """Similarity of each prior row to the nearest current-step placement (feature space).
+
+    Parameters
+    ----------
+    X_prior
+        Prior feature matrix.
+    X_current
+        Current feature matrix.
+    lengthscale
+        Length scale for the exponential similarity kernel.
+    """
     min_dist = _min_feature_distances(X_prior, X_current)
     return (
         np.exp(-min_dist / float(lengthscale))
@@ -458,7 +544,15 @@ def prior_recency_weights(
     *,
     lengthscale: float,
 ) -> np.ndarray:
-    """Exponential decay for older saturation-step observations (age 0 = most recent)."""
+    """Exponential decay for older saturation-step observations (age 0 = most recent).
+
+    Parameters
+    ----------
+    step_ages
+        Ages of prior observations (0 = most recent).
+    lengthscale
+        Decay length scale.
+    """
     ages = np.asarray(step_ages, dtype=float)
     if ages.size == 0:
         return np.array([], dtype=float)
@@ -472,7 +566,19 @@ def prior_placement_downweight(
     lengthscale: float,
     floor: float = 0.0,
 ) -> np.ndarray:
-    """Reduce transfer weight for prior rows near an executed placement site."""
+    """Reduce transfer weight for prior rows near an executed placement site.
+
+    Parameters
+    ----------
+    X_prior
+        Prior feature matrix.
+    placement_X
+        Feature vector of the executed placement.
+    lengthscale
+        Length scale for the exponential distance kernel.
+    floor
+        Minimum downweight value.
+    """
     if len(X_prior) == 0:
         return np.array([], dtype=float)
     if len(placement_X) == 0:
@@ -489,7 +595,19 @@ def prior_proximity_weights(
     lengthscale: float,
     floor: float = 0.0,
 ) -> np.ndarray:
-    """Downweight prior observations near executed placement sites in feature space."""
+    """Downweight prior observations near executed placement sites in feature space.
+
+    Parameters
+    ----------
+    X_prior
+        Prior feature matrix.
+    X_anchor
+        Anchor feature matrix (e.g. current placements).
+    lengthscale
+        Length scale for the exponential distance kernel.
+    floor
+        Minimum weight value.
+    """
     if len(X_prior) == 0 or len(X_anchor) == 0:
         return np.array([], dtype=float)
     min_dist = _min_feature_distances(X_prior, X_anchor, exclude_self=True)
@@ -520,6 +638,23 @@ def cumulative_refit_training_set(
     nothing raised when the two disagreed, and the weights were silently applied
     to the wrong rows (prior rows got 1.0 and current observations got the
     decayed prior weights, inverting the ``weight_cap`` guarantee).
+
+    Parameters
+    ----------
+    X_prior
+        Prior-step feature matrix.
+    y_prior
+        Prior-step target values.
+    X_current
+        Current-step feature matrix.
+    y_current
+        Current-step target values.
+    weight_cap
+        Fraction of total weight allocated to prior observations.
+    proximity_lengthscale
+        Length scale for proximity-based downweighting.
+    proximity_floor
+        Minimum proximity weight value.
     """
     if len(X_prior) != len(y_prior):
         raise ValueError(
@@ -696,6 +831,49 @@ def build_transfer_surrogate(
 
     Mirrors the transfer block in :func:`workflow.bayesian.process_molecule_bayesian`.
     Only surrogates in ``BO_TRANSFER_CAPABLE_SURROGATES`` are accepted.
+
+    Parameters
+    ----------
+    X_current
+        Current-step feature matrix.
+    y_current
+        Current-step target values.
+    observed_X_prev
+        Prior-step observed features.
+    observed_y_prev
+        Prior-step observed targets.
+    surrogate
+        Surrogate model type to train.
+    n_estimators
+        Number of estimators for tree-based surrogates.
+    random_state
+        Random seed for reproducibility.
+    weight_cap
+        Fraction of total weight allocated to prior observations.
+    similarity_lengthscale
+        Length scale for feature-space similarity.
+    min_similarity
+        Minimum similarity threshold for transfer.
+    mae_tolerance
+        MAE delta tolerance for trust gating.
+    transfer_bad_rounds
+        Number of consecutive bad transfer rounds so far.
+    trust_patience
+        Maximum allowed consecutive bad rounds before disabling transfer.
+    proximity_lengthscale
+        Length scale for proximity-based downweighting.
+    proximity_floor
+        Minimum proximity weight value.
+    prior_step_ages
+        Ages of prior observations for recency decay.
+    recency_lengthscale
+        Length scale for recency decay.
+    prior_placement_X
+        Features of previously executed placements.
+    occupancy_lengthscale
+        Length scale for occupancy-based downweighting.
+    occupancy_floor
+        Minimum occupancy weight value.
     """
     if surrogate not in BO_TRANSFER_CAPABLE_SURROGATES:
         raise ValueError(
@@ -867,6 +1045,13 @@ def predict_with_uncertainty(
     pipeline's scaled feature space (see :func:`_attach_residual_uncertainty`).
     Plain linear models without attached residual stats still return σ=0; EI/PI
     then rank by ``-mu``.
+
+    Parameters
+    ----------
+    model
+        Fitted sklearn Pipeline with a regressor step.
+    X
+        Feature matrix for prediction.
     """
     regressor = model.named_steps["regressor"]
     if "scaler" in model.named_steps:
@@ -907,6 +1092,15 @@ def lcb_scores(
     """Lower confidence bound for minimisation: mu - kappa * sigma.
 
     Lower scores are better (more promising candidates).
+
+    Parameters
+    ----------
+    mu
+        Predicted mean values.
+    sigma
+        Predicted standard deviations.
+    kappa
+        Exploration-exploitation trade-off parameter.
     """
     return mu - kappa * sigma
 
@@ -917,11 +1111,22 @@ def ei_scores(
     f_best: float,
     xi: float = 1e-6,
 ) -> np.ndarray:
-    """Expected Improvement for minimisation (minimize E_ads).
+    """Compute expected improvement scores for minimisation.
 
     EI = E[max(0, f_best - Y)] under Gaussian Y ~ N(mu, sigma^2). Higher EI is better.
     When ``sigma`` is (near) zero, ranks by ``-mu`` so the pool does not collapse
     to an arbitrary tied ordering of zeros.
+
+    Parameters
+    ----------
+    mu
+        Predicted mean values.
+    sigma
+        Predicted standard deviations.
+    f_best
+        Best observed function value so far.
+    xi
+        Small jitter to encourage exploration.
     """
     mu = np.asarray(mu, dtype=float).ravel()
     sigma = np.asarray(sigma, dtype=float).ravel()
@@ -943,6 +1148,17 @@ def pi_scores(
     """Probability of Improvement for minimisation: P(Y < f_best - xi).
 
     Higher PI is better. When sigma is zero, ranks by ``-mu`` (same rationale as EI).
+
+    Parameters
+    ----------
+    mu
+        Predicted mean values.
+    sigma
+        Predicted standard deviations.
+    f_best
+        Best observed function value so far.
+    xi
+        Small jitter to encourage exploration.
     """
     mu = np.asarray(mu, dtype=float).ravel()
     sigma = np.asarray(sigma, dtype=float).ravel()
@@ -1036,6 +1252,17 @@ def select_initial_bo_indices(
     - ``spread``: farthest-point on all geometry-aware features
     - ``spread_xyz``: farthest-point on absolute position (x, y, z) only
     - ``stratified``: round-robin across conformer_index, then spread-fill
+
+    Parameters
+    ----------
+    candidate_features
+        DataFrame of candidate placement features.
+    n_initial
+        Number of initial samples to select.
+    sampling
+        Sampling strategy name.
+    random_state
+        Random seed for reproducibility.
     """
     if sampling not in BO_INITIAL_SAMPLING_OPTIONS:
         allowed = ", ".join(repr(item) for item in BO_INITIAL_SAMPLING_OPTIONS)
@@ -1072,6 +1299,17 @@ def select_candidates(
     For minimisation objectives (default), ranks by ascending *scores*.
     For *higher_is_better* (e.g. EI, PI), ranks by descending *scores*.
     Indices in *evaluated_indices* are excluded.
+
+    Parameters
+    ----------
+    scores
+        Acquisition scores for each candidate.
+    batch_size
+        Number of candidates to select.
+    evaluated_indices
+        Set of already-evaluated indices to exclude.
+    higher_is_better
+        If True, rank by descending scores.
     """
     s = np.asarray(scores, dtype=float).ravel()
     order = np.argsort(-s) if higher_is_better else np.argsort(s)
@@ -1098,6 +1336,19 @@ def select_candidates_batch_diverse(
     Picks the best remaining score, then down-weights (or up-penalizes for
     minimisation) candidates near the chosen point so a single batch does not
     collapse onto a tight cluster of near-duplicates.
+
+    Parameters
+    ----------
+    scores
+        Acquisition scores for each candidate.
+    features
+        Feature matrix for diversity computation.
+    batch_size
+        Number of candidates to select.
+    evaluated_indices
+        Set of already-evaluated indices to exclude.
+    higher_is_better
+        If True, rank by descending scores.
     """
     s = np.asarray(scores, dtype=float).copy().ravel()
     matrix = (
@@ -1174,7 +1425,21 @@ def build_candidate_features(
     surface_id: str = "",
     config: AdsorptionConfig | None = None,
 ) -> pd.DataFrame:
-    """Extract feature matrix for a list of PlacementDescriptors."""
+    """Extract feature matrix for a list of PlacementDescriptors.
+
+    Parameters
+    ----------
+    descriptors
+        List of placement descriptors.
+    molecule
+        Molecule name.
+    smiles
+        SMILES string for the molecule.
+    surface_id
+        Surface identifier.
+    config
+        Optional adsorption configuration.
+    """
     rows = [
         extract_features(
             PlacementRecord.from_descriptor(
@@ -1213,6 +1478,29 @@ def build_spec_features_geometry_aware(
     When *materialization_cache* is provided, successful
     ``(adsorbate, descriptor)`` pairs are stored under ``placement_index`` for
     reuse by evaluate paths.
+
+    Parameters
+    ----------
+    specs
+        List of placement specifications.
+    conformers
+        List of conformer structures.
+    slab
+        Surface slab atoms.
+    config
+        Adsorption configuration.
+    smiles
+        Optional SMILES string for the molecule.
+    molecule
+        Molecule name.
+    surface_id
+        Surface identifier.
+    site_context
+        Optional site context for placement.
+    slab_for_sites
+        Optional alternate slab for site detection.
+    materialization_cache
+        Optional cache for materialized placements.
     """
     rows: list[dict[str, float]] = []
     valid_indices: list[int] = []
@@ -1283,6 +1571,23 @@ def score_and_select(
     With near-zero ``sigma`` (unfitted linear models), EI/PI fall back to
     ranking by ``-mu`` so the pool does not collapse to an arbitrary tie.
     Batches use soft local penalization in feature space so picks are diverse.
+
+    Parameters
+    ----------
+    model
+        Fitted surrogate pipeline.
+    candidate_features
+        DataFrame of candidate placement features.
+    batch_size
+        Number of candidates to select.
+    kappa
+        Exploration parameter for LCB acquisition.
+    evaluated_indices
+        Set of already-evaluated indices to exclude.
+    acquisition
+        Acquisition function type ("lcb", "ei", or "pi").
+    f_best
+        Best observed value (required for EI and PI).
     """
     mu, sigma = predict_with_uncertainty(model, candidate_features)
     if acquisition == "lcb":

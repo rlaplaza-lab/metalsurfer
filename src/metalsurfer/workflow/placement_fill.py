@@ -38,7 +38,13 @@ def placement_spec_key(
     bool,
     int | None,
 ]:
-    """Hashable identity for retry diversity (exclude known-bad specs)."""
+    """Hashable identity for retry diversity (exclude known-bad specs).
+
+    Parameters
+    ----------
+    spec
+        Placement specification.
+    """
     return (
         spec.conformer_index,
         spec.orientation_type,
@@ -61,6 +67,11 @@ def placement_cell_key(
     they differ only in continuous z/tilt/azimuth, which is why re-seeding the
     retry sampler reproduces the same failing neighborhood. Used to avoid
     re-relaxing already-explored cells.
+
+    Parameters
+    ----------
+    spec
+        Placement specification.
     """
     return (
         spec.conformer_index,
@@ -194,6 +205,31 @@ def materialize_specs_filling_target(
     Extra successes beyond ``n_target`` are discarded (oversampling trim).
     Backfill chunks oversample by estimated materialization yield (capped by
     ``placement_retry_oversample_max``).
+
+    Parameters
+    ----------
+    primary_specs
+        Primary placement specs to materialize.
+    backfill_specs
+        Backfill specs used when primary is insufficient.
+    n_target
+        Target number of valid placements.
+    conformers
+        List of conformer geometries.
+    slab_atoms
+        Full slab atoms.
+    calculator
+        ASE calculator instance.
+    config
+        Adsorption configuration.
+    smiles
+        SMILES string of the molecule.
+    site_context
+        Resolved site context for sampling.
+    slab_for_sites
+        Substrate reference for site enumeration.
+    materialization_cache
+        Cache for spec materialization.
     """
     if n_target <= 0:
         return MaterializeFillResult([], [], [], [], n_backfill_used=0, n_attempts=0)
@@ -296,6 +332,27 @@ def fill_materialized_placements(
     Each deficit round oversamples by estimated materialization yield (capped by
     ``placement_retry_oversample_max``), excludes failed spec keys, and blocks
     sites that repeatedly clash. Early-exits on fill or empty enumeration.
+
+    Parameters
+    ----------
+    conformers
+        List of conformer geometries.
+    slab_for_sites
+        Substrate reference for site enumeration.
+    config
+        Adsorption configuration.
+    smiles
+        SMILES string of the molecule.
+    site_context
+        Resolved site context for sampling.
+    slab_atoms
+        Full slab atoms.
+    calculator
+        ASE calculator instance.
+    n_target
+        Target number of valid placements (optional).
+    conformer_energies
+        Energies aligned with conformers (optional).
     """
     if n_target is None:
         if config.num_placements is None:

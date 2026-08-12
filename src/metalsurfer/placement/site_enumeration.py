@@ -299,6 +299,25 @@ def get_unified_sites(
       with optional ridge enrichment, plus an atop-injection safety net for
       nanoparticles.
     - rotated slabs are handled using the slab normal rather than Cartesian z
+
+    Parameters
+    ----------
+    atoms
+        :class:`~ase.Atoms` structure to detect sites on.
+    probe_radius
+        Voronoi probe radius (auto-derived if None).
+    max_site_distance
+        Maximum site-to-atom distance (auto-derived if None).
+    top_layer_tolerance
+        Height tolerance for the top layer (auto-derived if None).
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
+    pore_threshold
+        Pore classification threshold (auto-derived if None).
+    enrich
+        Whether to enrich Voronoi ridge candidates.
+    site_classification_method
+        Site classification method (``"auto"``, ``"delaunay"``, etc.).
     """
     if material_type is None:
         raise ValueError(
@@ -551,7 +570,27 @@ def get_hollow_sites_for_adatoms(
     enrich: bool = True,
     site_classification_method: str = "auto",
 ) -> list[Site]:
-    """Hollow/pore sites for adatom placement, deduplicated (full :class:`Site` list)."""
+    """Return hollow/pore sites for adatom placement, deduplicated.
+
+    Parameters
+    ----------
+    slab
+        :class:`~ase.Atoms` substrate.
+    top_layer_tolerance
+        Height tolerance for the top layer (auto-derived if None).
+    dedup_tolerance
+        Spatial tolerance for deduplication.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
+    probe_radius
+        Voronoi probe radius (auto-derived if None).
+    max_site_distance
+        Maximum site-to-atom distance (auto-derived if None).
+    enrich
+        Whether to enrich Voronoi ridge candidates.
+    site_classification_method
+        Site classification method (``"auto"``, ``"delaunay"``, etc.).
+    """
     raw = get_unified_sites(
         slab,
         probe_radius=probe_radius,
@@ -749,7 +788,29 @@ def get_symmetry_aware_sites(
     site_classification_method: str = "auto",
     raw_sites: list[Site] | None = None,
 ) -> list[Site]:
-    """Symmetry-reduced adsorption sites using spglib."""
+    """Return symmetry-reduced adsorption sites using spglib.
+
+    Parameters
+    ----------
+    slab
+        :class:`~ase.Atoms` substrate.
+    top_layer_tolerance
+        Height tolerance for the top layer (auto-derived if None).
+    symmetry_tolerance
+        Spatial tolerance for symmetry analysis.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
+    probe_radius
+        Voronoi probe radius (auto-derived if None).
+    max_site_distance
+        Maximum site-to-atom distance (auto-derived if None).
+    enrich
+        Whether to enrich Voronoi ridge candidates.
+    site_classification_method
+        Site classification method (``"auto"``, ``"delaunay"``, etc.).
+    raw_sites
+        Optional pre-computed raw site list.
+    """
     if material_type not in ("slab", "nanoparticle", "porous"):
         raise ValueError(
             f"material_type must be 'slab', 'nanoparticle', or 'porous', got {material_type!r}"
@@ -802,7 +863,7 @@ def _top_layer_is_planar_from_arrays(
     top_layer_tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
     z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
 ) -> bool:
-    """True if the topmost atomic layer of *positions* is approximately flat.
+    """Check whether the topmost atomic layer of *positions* is approximately flat.
 
     The fit is done in an orientation-aware slab coordinate system rather than
     assuming the slab normal is Cartesian z.
@@ -829,7 +890,7 @@ def _is_top_layer_planar(
     top_layer_tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
     z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
 ) -> bool:
-    """True if the topmost atomic layer is approximately flat."""
+    """Check whether the topmost atomic layer is approximately flat."""
     return _top_layer_is_planar_from_arrays(
         slab.get_positions(),
         np.asarray(slab.get_cell(), dtype=float),

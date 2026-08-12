@@ -39,7 +39,19 @@ def tree_regressor_for_bayesian_surrogate(
     random_state: int,
     **kwargs: Any,
 ) -> RandomForestRegressor | ExtraTreesRegressor:
-    """Unscaled tree ensemble for BO surrogates (no ``StandardScaler`` in the pipeline)."""
+    """Unscaled tree ensemble for BO surrogates (no ``StandardScaler`` in the pipeline).
+
+    Parameters
+    ----------
+    kind
+        Type of tree regressor to build.
+    n_estimators
+        Number of estimators in the ensemble.
+    random_state
+        Random seed for reproducibility.
+    **kwargs
+        Additional keyword arguments passed to the regressor.
+    """
     params: dict[str, Any] = {
         "n_estimators": n_estimators,
         "min_samples_leaf": kwargs.get("min_samples_leaf", 2),
@@ -90,7 +102,21 @@ def train_model(
     random_state: int = DEFAULT_SEED,
     **kwargs: Any,
 ) -> Pipeline:
-    """Train a regression model on the full dataset; returns fitted scaler + regressor pipeline."""
+    """Train a regression model on the full dataset; returns fitted scaler + regressor pipeline.
+
+    Parameters
+    ----------
+    X
+        Feature matrix.
+    y
+        Target values.
+    model_type
+        Type of regression model to train.
+    random_state
+        Random seed for reproducibility.
+    **kwargs
+        Additional keyword arguments for the estimator.
+    """
     pipeline = _build_estimator(model_type, random_state=random_state, **kwargs)
     pipeline.fit(X, y)
     logger.info(
@@ -107,7 +133,17 @@ def evaluate_model(
     X: pd.DataFrame | np.ndarray,
     y: pd.Series | np.ndarray,
 ) -> dict[str, float]:
-    """Compute regression metrics (MAE, RMSE, R², max_error, n_samples) on held-out data."""
+    """Compute regression metrics (MAE, RMSE, R², max_error, n_samples) on held-out data.
+
+    Parameters
+    ----------
+    model
+        Fitted scikit-learn pipeline.
+    X
+        Feature matrix.
+    y
+        True target values.
+    """
     y_pred = model.predict(X)
     y_true = np.asarray(y)
     errors = y_true - y_pred
@@ -138,7 +174,25 @@ def grouped_cross_validate(
     random_state: int = DEFAULT_SEED,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Grouped K-fold CV (by molecule/surface) to avoid leakage; returns fold_metrics and mean/std MAE, RMSE, R²."""
+    """Run grouped K-fold cross-validation (by molecule/surface) to avoid leakage.
+
+    Parameters
+    ----------
+    X
+        Feature matrix.
+    y
+        Target values.
+    groups
+        Group labels for each sample.
+    model_type
+        Type of regression model to train.
+    n_splits
+        Number of cross-validation folds.
+    random_state
+        Random seed for reproducibility.
+    **kwargs
+        Additional keyword arguments for the estimator.
+    """
     X_arr = np.asarray(X)
     y_arr = np.asarray(y)
     groups_arr = np.asarray(groups)
@@ -223,6 +277,19 @@ def feature_importance(
     a warning).
 
     Returns a DataFrame sorted by importance (descending).
+
+    Parameters
+    ----------
+    model
+        Fitted scikit-learn pipeline.
+    feature_names
+        Names of features corresponding to model columns.
+    X
+        Optional feature matrix for permutation importance.
+    y
+        Optional target values for permutation importance.
+    top_k
+        Number of top features to return.
     """
     regressor = model.named_steps["regressor"]
 
@@ -265,6 +332,19 @@ def save_model(
     """Save a trained model and its metadata to disk.
 
     Returns the path to the saved model file.
+
+    Parameters
+    ----------
+    model
+        Fitted scikit-learn pipeline.
+    output_dir
+        Directory to write the model and metadata.
+    model_type
+        Identifier string for the model type.
+    metrics
+        Optional evaluation metrics to store.
+    feature_names
+        Optional list of feature names to store.
     """
     os.makedirs(output_dir, exist_ok=True)
     model_path = os.path.join(output_dir, "binding_energy_model.pkl")
@@ -291,6 +371,11 @@ def load_model(model_dir: str) -> tuple[Pipeline, dict[str, Any]]:
     """Load a saved model and its metadata.
 
     Returns (model, metadata_dict).
+
+    Parameters
+    ----------
+    model_dir
+        Directory containing the saved model files.
     """
     model_path = os.path.join(model_dir, "binding_energy_model.pkl")
     meta_path = os.path.join(model_dir, "binding_energy_model_metadata.json")

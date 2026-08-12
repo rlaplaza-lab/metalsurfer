@@ -49,6 +49,19 @@ class SymmetryAnalyzer:
         *,
         angle_tolerance: float | None = None,
     ):
+        """Instantiate the symmetry analyzer.
+
+        Parameters
+        ----------
+        atoms
+            ASE Atoms object.
+        symmetry_tolerance
+            Tolerance for symmetry detection.
+        mode
+            Symmetry mode ("auto", "periodic", or "cluster").
+        angle_tolerance
+            Optional angle tolerance.
+        """
         self.atoms = atoms
         self.symmetry_tolerance = float(symmetry_tolerance)
         self.symprec = max(self.symmetry_tolerance, 1e-5)
@@ -255,7 +268,7 @@ class SymmetryAnalyzer:
         return frac_to_cart(d_frac, self._lattice)
 
     def _slab_normal(self) -> np.ndarray:
-        """Unit normal from lattice a × b (slab plane)."""
+        """Return unit normal from lattice a × b (slab plane)."""
         if self._slab_normal_cache is not None:
             return self._slab_normal_cache
         n_hat = slab_normal(self._lattice)
@@ -286,7 +299,7 @@ class SymmetryAnalyzer:
         targets: list[int],
         planar: bool,
     ) -> np.ndarray:
-        """Boolean per target: is ``targets[k]`` the image of *source* under some op?
+        """Return whether each target is an image of *source* under some symmetry op.
 
         Batched over targets, looping over operations, with an early exit once
         every target is accounted for.
@@ -409,6 +422,13 @@ class SymmetryAnalyzer:
         Full symmetry operations are available from :meth:`detect_symmetry_operations`
         or :meth:`get_symmetry_info`; returned sites carry multiplicity and
         equivalent-site coordinates.
+
+        Parameters
+        ----------
+        sites
+            List of adsorption sites to analyze.
+        planar
+            When true, ignore differences along the slab normal.
         """
         if not sites:
             return []
@@ -427,12 +447,28 @@ class SymmetryAnalyzer:
         rank = [0] * n
 
         def find(x: int) -> int:
+            """Find the root of *x* with path compression.
+
+            Parameters
+            ----------
+            x
+                Element index.
+            """
             while parent[x] != x:
                 parent[x] = parent[parent[x]]
                 x = parent[x]
             return x
 
         def union(a: int, b: int) -> None:
+            """Merge the sets containing *a* and *b* by rank.
+
+            Parameters
+            ----------
+            a
+                First element index.
+            b
+                Second element index.
+            """
             ra, rb = find(a), find(b)
             if ra == rb:
                 return
@@ -496,7 +532,13 @@ class SymmetryAnalyzer:
         return np.linalg.norm(sep, axis=-1)
 
     def detect_symmetry_breaking(self, reference_atoms: Atoms) -> bool:
-        """True if space group or symmetry operation set differs from reference."""
+        """Check whether space group or symmetry operation set differs from reference.
+
+        Parameters
+        ----------
+        reference_atoms
+            ASE Atoms to compare against.
+        """
         ref = SymmetryAnalyzer(
             reference_atoms,
             self.symmetry_tolerance,
@@ -519,6 +561,13 @@ class SymmetryAnalyzer:
         def sort_key(
             item: tuple[np.ndarray, np.ndarray],
         ) -> tuple[bytes, bytes]:
+            """Sort key for fractional symmetry operations.
+
+            Parameters
+            ----------
+            item
+                Tuple of (rotation, translation) arrays.
+            """
             R, t = item
             return (
                 np.round(R, decimals=5).tobytes(),

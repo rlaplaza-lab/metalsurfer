@@ -35,6 +35,17 @@ def create_conformers_from_smiles(
     significantly faster on GPU.
 
     Returns ``(conformers, energies)`` or ``None`` on failure.
+
+    Parameters
+    ----------
+    smiles
+        SMILES string of the molecule.
+    calculator
+        Optional ASE calculator for energy evaluation.
+    config
+        Adsorption configuration.
+    ts_model
+        Optional TorchSim model for batched scoring.
     """
     if Chem is None or AllChem is None:
         raise RuntimeError(
@@ -127,7 +138,19 @@ def remove_duplicate_conformers(
     distance_threshold: float = 0.1,
     energy_threshold: float = 0.05,
 ) -> tuple[list[Atoms], list[float]]:
-    """Remove near-duplicate conformers by centred RMSD + energy."""
+    """Remove near-duplicate conformers by centred RMSD + energy.
+
+    Parameters
+    ----------
+    conformers
+        List of ASE Atoms objects.
+    energies
+        Energy value for each conformer.
+    distance_threshold
+        RMSD threshold for duplicates.
+    energy_threshold
+        Energy difference threshold for duplicates.
+    """
     if len(conformers) <= 1:
         return conformers, energies
 

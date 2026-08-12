@@ -23,6 +23,11 @@ def material_aware_pbc(material_type: str) -> list[bool]:
     - slab: ``[True, True, False]`` — periodic in xy, free in z.
     - porous: ``[True, True, True]`` — fully 3D periodic.
     - nanoparticle: ``[False, False, False]`` — no PBC.
+
+    Parameters
+    ----------
+    material_type
+        Material type string (``"slab"``, ``"porous"``, or ``"nanoparticle"``).
     """
     try:
         return list(MATERIAL_PBC[material_type])
@@ -39,6 +44,11 @@ def calculator_pbc_for_atoms(atoms: Atoms) -> list[bool]:
     Slab-style ``[True, True, False]`` and fully periodic substrates map to
     ``[True, True, True]``; non-periodic clusters stay ``[False, False, False]``.
     Call at the calculator boundary on copies so stored substrate PBC is unchanged.
+
+    Parameters
+    ----------
+    atoms
+        ASE :class:`~ase.Atoms` object.
     """
     if any(atoms.get_pbc()):
         return [True, True, True]
@@ -50,7 +60,15 @@ def material_type_for_placement(
     *,
     when_no_site: str,
 ) -> str:
-    """Return ``site.material_type`` or *when_no_site* when *site* is None."""
+    """Return ``site.material_type`` or *when_no_site* when *site* is None.
+
+    Parameters
+    ----------
+    site
+        Adsorption :class:`Site` or None.
+    when_no_site
+        Fallback material type when *site* is None.
+    """
     if site is None:
         return when_no_site
     return str(site.material_type)

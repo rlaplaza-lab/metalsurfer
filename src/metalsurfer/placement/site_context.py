@@ -125,7 +125,17 @@ def resolve_site_context_for_sampling(
     *,
     symmetry_broken: bool,
 ) -> SiteContext:
-    """Clustered Voronoi sites, then optional spglib orbit reduction unless *symmetry_broken*."""
+    """Return clustered Voronoi sites, then optional spglib orbit reduction unless *symmetry_broken*.
+
+    Parameters
+    ----------
+    slab_atoms
+        :class:`~ase.Atoms` substrate.
+    config
+        :class:`~metalsurfer.config.AdsorptionConfig` with placement settings.
+    symmetry_broken
+        If True, skip symmetry reduction.
+    """
     cache_key = _site_context_cache_key(
         slab_atoms, config, symmetry_broken=symmetry_broken
     )

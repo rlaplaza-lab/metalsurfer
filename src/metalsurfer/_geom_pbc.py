@@ -18,19 +18,43 @@ from ._numeric_defaults import SURFACE_NORMAL_FALLBACK_NORM_EPS
 
 
 def cart_to_frac(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
-    """Convert Cartesian row-vectors to fractional coordinates for ASE cells."""
+    """Convert Cartesian row-vectors to fractional coordinates for ASE cells.
+
+    Parameters
+    ----------
+    points
+        Cartesian coordinates, shape (..., 3).
+    cell
+        3x3 cell matrix with lattice vectors as rows.
+    """
     arr = np.asarray(points, dtype=float)
     inv_cell = np.linalg.inv(cell)
     return arr @ inv_cell
 
 
 def frac_to_cart(points_frac: np.ndarray, cell: np.ndarray) -> np.ndarray:
-    """Convert fractional row-vectors to Cartesian coordinates."""
+    """Convert fractional row-vectors to Cartesian coordinates.
+
+    Parameters
+    ----------
+    points_frac
+        Fractional coordinates, shape (..., 3).
+    cell
+        3x3 cell matrix with lattice vectors as rows.
+    """
     return np.asarray(points_frac, dtype=float) @ cell
 
 
 def wrap_fractional(frac: np.ndarray, pbc: np.ndarray) -> np.ndarray:
-    """Wrap fractional coordinates to [0, 1) on periodic axes only."""
+    """Wrap fractional coordinates to [0, 1) on periodic axes only.
+
+    Parameters
+    ----------
+    frac
+        Fractional coordinates.
+    pbc
+        Boolean periodic-boundary flags for each axis.
+    """
     wrapped = np.asarray(frac, dtype=float).copy()
     for dim in range(3):
         if bool(pbc[dim]):
@@ -39,7 +63,17 @@ def wrap_fractional(frac: np.ndarray, pbc: np.ndarray) -> np.ndarray:
 
 
 def wrap_cartesian(points: np.ndarray, cell: np.ndarray, pbc: np.ndarray) -> np.ndarray:
-    """Wrap Cartesian points into the reference cell along periodic axes."""
+    """Wrap Cartesian points into the reference cell along periodic axes.
+
+    Parameters
+    ----------
+    points
+        Cartesian coordinates.
+    cell
+        3x3 cell matrix.
+    pbc
+        Boolean periodic-boundary flags for each axis.
+    """
     if not np.any(pbc):
         return np.asarray(points, dtype=float).copy()
     frac = cart_to_frac(points, cell)
@@ -54,6 +88,15 @@ def minimum_image_fractional_delta(
     With ``copy=False`` the folding is done in place and the input buffer is
     returned. Only pass ``copy=False`` for a freshly allocated, caller-owned
     array; it exists so large ``n x n x 3`` intermediates are not duplicated.
+
+    Parameters
+    ----------
+    delta_frac
+        Fractional coordinate differences.
+    pbc
+        Boolean periodic-boundary flags for each axis.
+    copy
+        Whether to copy the input before modifying.
     """
     delta = np.asarray(delta_frac, dtype=float)
     if copy:
@@ -65,7 +108,13 @@ def minimum_image_fractional_delta(
 
 
 def reciprocal_plane_spacings(cell: np.ndarray) -> np.ndarray:
-    """Distance between adjacent lattice planes normal to each cell vector."""
+    """Distance between adjacent lattice planes normal to each cell vector.
+
+    Parameters
+    ----------
+    cell
+        3x3 cell matrix.
+    """
     inv_cell = np.linalg.inv(cell)
     spacings = np.empty(3, dtype=float)
     for dim in range(3):
@@ -77,6 +126,11 @@ def reciprocal_plane_spacings(cell: np.ndarray) -> np.ndarray:
 
 def slab_plane_projectors(cell: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return projectors for slab-plane coordinates.
+
+    Parameters
+    ----------
+    cell
+        3x3 cell matrix.
 
     Returns
     -------
@@ -114,7 +168,13 @@ def slab_plane_projectors(cell: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def slab_normal(cell: np.ndarray) -> np.ndarray:
-    """Unit normal to the slab plane spanned by cell a and b."""
+    """Return unit normal to the slab plane spanned by cell a and b.
+
+    Parameters
+    ----------
+    cell
+        3x3 cell matrix.
+    """
     a = np.asarray(cell[0], dtype=float)
     b = np.asarray(cell[1], dtype=float)
     n = np.cross(a, b)
@@ -125,7 +185,15 @@ def slab_normal(cell: np.ndarray) -> np.ndarray:
 
 
 def height_along_slab_normal(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
-    """Signed coordinate of points along the slab normal."""
+    """Signed coordinate of points along the slab normal.
+
+    Parameters
+    ----------
+    points
+        Cartesian coordinates.
+    cell
+        3x3 cell matrix.
+    """
     n = slab_normal(cell)
     arr = np.asarray(points, dtype=float)
     return arr @ n
@@ -134,14 +202,32 @@ def height_along_slab_normal(points: np.ndarray, cell: np.ndarray) -> np.ndarray
 def shift_along_slab_normal(
     points: np.ndarray, cell: np.ndarray, distance: float
 ) -> np.ndarray:
-    """Translate points by *distance* along the slab normal."""
+    """Translate points by *distance* along the slab normal.
+
+    Parameters
+    ----------
+    points
+        Cartesian coordinates.
+    cell
+        3x3 cell matrix.
+    distance
+        Shift distance in Å.
+    """
     n = slab_normal(cell)
     arr = np.asarray(points, dtype=float)
     return arr + float(distance) * n
 
 
 def project_to_slab_plane(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
-    """Project Cartesian points to a 2D orthonormal basis spanning a/b."""
+    """Project Cartesian points to a 2D orthonormal basis spanning a/b.
+
+    Parameters
+    ----------
+    points
+        Cartesian coordinates.
+    cell
+        3x3 cell matrix.
+    """
     _, ortho_basis = slab_plane_projectors(cell)
     arr = np.asarray(points, dtype=float)
     return arr @ ortho_basis.T

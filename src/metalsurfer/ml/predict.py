@@ -37,29 +37,59 @@ class BindingEnergyPredictor:
         metadata: dict[str, Any] | None = None,
         ensemble: list[Pipeline] | None = None,
     ) -> None:
+        """Instantiate the predictor.
+
+        Parameters
+        ----------
+        model
+            Trained scikit-learn pipeline.
+        metadata
+            Optional model metadata dictionary.
+        ensemble
+            Optional list of ensemble member pipelines.
+        """
         self._model = model
         self._metadata = metadata or {}
         self._ensemble = ensemble
 
     @classmethod
     def load(cls, model_dir: str) -> "BindingEnergyPredictor":
-        """Load a predictor from a saved model directory."""
+        """Load a predictor from a saved model directory.
+
+        Parameters
+        ----------
+        model_dir
+            Path to the saved model directory.
+        """
         model, metadata = load_model(model_dir)
         return cls(model=model, metadata=metadata)
 
     @property
     def model_type(self) -> str:
+        """Identifying string for the loaded model type."""
         return self._metadata.get("model_type", "unknown")
 
     def predict_record(self, record: PlacementRecord) -> PredictionResult:
-        """Predict binding energy for a single PlacementRecord."""
+        """Predict binding energy for a single PlacementRecord.
+
+        Parameters
+        ----------
+        record
+            Placement record to predict.
+        """
         return self.predict_batch([record])[0]
 
     def predict_batch(
         self,
         records: list[PlacementRecord],
     ) -> list[PredictionResult]:
-        """Predict binding energies for multiple records efficiently."""
+        """Predict binding energies for multiple records efficiently.
+
+        Parameters
+        ----------
+        records
+            List of placement records to predict.
+        """
         if not records:
             return []
 
@@ -95,6 +125,19 @@ class BindingEnergyPredictor:
 
         Builds a temporary PlacementRecord with zero energies, extracts
         features, and returns the prediction.
+
+        Parameters
+        ----------
+        descriptor
+            Placement descriptor to predict from.
+        molecule
+            Molecule name.
+        smiles
+            SMILES string.
+        surface_id
+            Surface identifier.
+        config
+            Optional adsorption config for context.
         """
         record = PlacementRecord.from_descriptor(
             descriptor,
@@ -114,6 +157,13 @@ class BindingEnergyPredictor:
 
         Returns a sorted list of (record, prediction) tuples.
         Useful as a pre-filter before running expensive optimizations.
+
+        Parameters
+        ----------
+        records
+            List of placement records to rank.
+        top_k
+            If given, return only the top *k* records.
         """
         predictions = self.predict_batch(records)
         paired = list(zip(records, predictions, strict=True))

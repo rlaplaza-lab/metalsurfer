@@ -90,7 +90,45 @@ def process_molecule_bayesian(
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
 ) -> MoleculeScreenOutcome:
-    """Bayesian-optimisation-guided placement screening for one molecule."""
+    """Bayesian-optimisation-guided placement screening for one molecule.
+
+    Parameters
+    ----------
+    smiles
+        SMILES string of the molecule.
+    molecule_name
+        Human-readable molecule identifier.
+    slab
+        Substrate container.
+    calculator
+        ASE calculator instance.
+    reference_energies
+        Reference energies for slab and molecules.
+    ts_model
+        Transition-state model (optional).
+    config
+        Adsorption configuration.
+    surface_type
+        Surface type label.
+    reference_smiles
+        SMILES used for reference energy lookup.
+    base_slab_for_frozen
+        Base slab for freeze constraints.
+    slab_energy_override
+        Override slab reference energy.
+    symmetry_broken
+        Whether symmetry is broken.
+    bo_step_memory_in
+        Prior BO step memory for transfer learning.
+    bo_prior_step_memory
+        Memory from the immediately preceding step.
+    conformers
+        Pre-generated conformers (optional).
+    conformer_energies
+        Energies aligned with conformers (optional).
+    skip_workload_autotune
+        Whether to skip workload autotuning.
+    """
     if config is None:
         config = AdsorptionConfig()
 

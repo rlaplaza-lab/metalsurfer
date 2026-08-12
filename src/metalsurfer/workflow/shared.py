@@ -483,7 +483,19 @@ def prepare_substrate_for_screening(
     base_slab_for_frozen: Atoms | None,
     config: AdsorptionConfig,
 ) -> SubstrateRefState:
-    """Resolve placement and freeze references without modifying the substrate."""
+    """Resolve placement and freeze references without modifying the substrate.
+
+    Parameters
+    ----------
+    slab
+        Substrate container.
+    conformers
+        List of conformer geometries.
+    base_slab_for_frozen
+        Base slab for freeze constraints.
+    config
+        Adsorption configuration.
+    """
     validate_substrate_conformer_sizing(
         slab.atoms,
         conformers=conformers,
@@ -516,7 +528,25 @@ def build_representative_relaxation_atoms(
     site_context: SiteContext | None,
     conformer_energies: list[float] | None = None,
 ) -> Atoms:
-    """Build one slab+adsorbate geometry for GPU parallel-capacity probing."""
+    """Build one slab+adsorbate geometry for GPU parallel-capacity probing.
+
+    Parameters
+    ----------
+    conformers
+        List of conformer geometries.
+    slab_atoms
+        Full slab atoms.
+    slab_for_sites
+        Substrate reference for site enumeration.
+    config
+        Adsorption configuration.
+    smiles
+        SMILES string of the molecule.
+    site_context
+        Resolved site context for sampling.
+    conformer_energies
+        Energies aligned with conformers (optional).
+    """
     if not conformers:
         raise ValueError("conformers must not be empty")
 
@@ -566,7 +596,15 @@ def build_representative_relaxation_atoms(
 
 
 def needs_workload_autotune(config: AdsorptionConfig, *, bo: bool) -> bool:
-    """Return True when placement and/or BO batch sizes still need autotuning."""
+    """Return True when placement and/or BO batch sizes still need autotuning.
+
+    Parameters
+    ----------
+    config
+        Adsorption configuration.
+    bo
+        Whether Bayesian optimisation is enabled.
+    """
     return config.num_placements is None or (
         bo and (config.bo.initial_random is None or config.bo.batch_size is None)
     )
@@ -580,7 +618,21 @@ def resolve_workload_config(
     frozen_indices: list[int],
     bo_enabled: bool,
 ) -> AdsorptionConfig:
-    """Fill auto placement/BO batch fields from probed GPU parallel capacity."""
+    """Fill auto placement/BO batch fields from probed GPU parallel capacity.
+
+    Parameters
+    ----------
+    config
+        Adsorption configuration.
+    ts_model
+        Transition-state model.
+    representative_atoms
+        Representative atoms for capacity probing.
+    frozen_indices
+        Indices of frozen atoms.
+    bo_enabled
+        Whether Bayesian optimisation is enabled.
+    """
     if not needs_workload_autotune(config, bo=bo_enabled):
         return config
 
@@ -637,7 +689,29 @@ def resolve_saturation_step_workload_config(
     symmetry_broken: bool,
     bo_enabled: bool,
 ) -> AdsorptionConfig:
-    """Resolve placement budget before multi-molecule budget splitting."""
+    """Resolve placement budget before multi-molecule budget splitting.
+
+    Parameters
+    ----------
+    config
+        Adsorption configuration.
+    ts_model
+        Transition-state model.
+    conformers
+        List of conformer geometries.
+    slab_atoms
+        Full slab atoms.
+    slab_for_sites
+        Substrate reference for site enumeration.
+    smiles
+        SMILES string of the molecule.
+    base_slab_for_frozen
+        Base slab for freeze constraints.
+    symmetry_broken
+        Whether symmetry is broken.
+    bo_enabled
+        Whether Bayesian optimisation is enabled.
+    """
     if not needs_workload_autotune(config, bo=bo_enabled):
         return config
 
@@ -967,7 +1041,19 @@ def load_molecules(
     surface_type: str | None = None,
     skip_saturation_file: bool = False,
 ) -> tuple[list[str], list[str], str]:
-    """Load molecules from a two-column (smiles, name) CSV."""
+    """Load molecules from a two-column (smiles, name) CSV.
+
+    Parameters
+    ----------
+    csv_file
+        Path to the CSV file.
+    skip_existing
+        Whether to skip molecules already processed.
+    surface_type
+        Surface type label.
+    skip_saturation_file
+        Whether to skip based on saturation summary.
+    """
     results_dir = (
         str(results_dir_for(surface_type)) if surface_type else "results_manual"
     )
@@ -989,7 +1075,19 @@ def load_molecules_from_pairs(
     surface_type: str | None = None,
     skip_saturation_file: bool = False,
 ) -> tuple[list[str], list[str], str]:
-    """Load molecules from in-memory ``(smiles, name)`` tuples."""
+    """Load molecules from in-memory ``(smiles, name)`` tuples.
+
+    Parameters
+    ----------
+    molecule_pairs
+        List or single tuple of (smiles, name).
+    skip_existing
+        Whether to skip molecules already processed.
+    surface_type
+        Surface type label.
+    skip_saturation_file
+        Whether to skip based on saturation summary.
+    """
     results_dir = (
         str(results_dir_for(surface_type)) if surface_type else "results_manual"
     )
