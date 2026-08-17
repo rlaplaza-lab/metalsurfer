@@ -887,6 +887,11 @@ def test_estimate_parallel_relaxation_capacity_runtime_error_falls_back(
         "_make_state_with_frozen_constraint",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("probe failed")),
     )
+    monkeypatch.setattr(
+        _deps,
+        "calculate_memory_scalers",
+        lambda *args, **kwargs: [100.0],
+    )
     config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
     atoms = _make_atoms_with_cell()
     capacity = _optimize.estimate_parallel_relaxation_capacity(
@@ -910,6 +915,11 @@ def test_estimate_parallel_relaxation_capacity_value_error_propagates(
         _optimize,
         "_make_state_with_frozen_constraint",
         lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad config")),
+    )
+    monkeypatch.setattr(
+        _deps,
+        "calculate_memory_scalers",
+        lambda *args, **kwargs: [100.0],
     )
     config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
     atoms = _make_atoms_with_cell()

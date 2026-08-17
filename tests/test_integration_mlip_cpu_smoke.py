@@ -5,9 +5,9 @@ import pytest
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.optimization import setup_single_model
-from metalsurfer.surface_prep import SlabContainer
+from metalsurfer.surface_prep import SlabContainer, auto_resize_substrate_for_molecule
 from metalsurfer.workflow import calculate_reference_energies, process_molecule
-from tests.conftest import MLIP_CPU_MARKS, make_slab
+from tests.conftest import MLIP_CPU_MARKS, make_slab, make_water
 
 pytestmark = MLIP_CPU_MARKS
 
@@ -29,6 +29,7 @@ def test_process_molecule_water_on_tiny_slab_cpu():
         slab_relaxation_mode="none",
     )
     slab = SlabContainer(make_slab(nx=2, ny=2, n_layers=2))
+    slab, _ = auto_resize_substrate_for_molecule(slab, [make_water()])
 
     calculator, ts_model = setup_single_model(config.model_name, config.device)
     ref = calculate_reference_energies(
