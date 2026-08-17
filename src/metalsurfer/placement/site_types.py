@@ -32,6 +32,7 @@ class Site:
     symmetry_equivalent_sites: tuple | None = None
 
     def __post_init__(self) -> None:
+        """Coerce array and sequence fields after initialization."""
         object.__setattr__(
             self, "xyz", np.asarray(self.xyz, dtype=float).reshape(3).copy()
         )
@@ -57,11 +58,13 @@ class Site:
         )
 
     def __eq__(self, other: object) -> bool:
+        """Check equality by identity key."""
         if not isinstance(other, Site):
             return NotImplemented
         return self._identity_key() == other._identity_key()
 
     def __hash__(self) -> int:
+        """Return hash from identity key."""
         return hash(self._identity_key())
 
     @property
@@ -81,7 +84,17 @@ def with_symmetry(
     symmetry_multiplicity: int,
     symmetry_equivalent_sites: tuple,
 ) -> Site:
-    """Return a copy of *site* with symmetry orbit metadata."""
+    """Return a copy of *site* with symmetry orbit metadata.
+
+    Parameters
+    ----------
+    site
+        :class:`Site` to copy.
+    symmetry_multiplicity
+        Multiplicity of the symmetry orbit.
+    symmetry_equivalent_sites
+        Tuple of equivalent site positions.
+    """
     return replace(
         site,
         symmetry_multiplicity=int(symmetry_multiplicity),
@@ -109,6 +122,11 @@ def site_from_dict(data: Mapping[str, object]) -> Site:
     """Build a :class:`Site` from a mapping (tests / CSV loaders).
 
     Requires ``xyz`` (length-3). Optional keys mirror :class:`Site` fields.
+
+    Parameters
+    ----------
+    data
+        Mapping of site field names to values.
     """
     if "xyz" not in data:
         raise KeyError("site_from_dict requires 'xyz'")

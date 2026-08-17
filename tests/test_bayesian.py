@@ -8,6 +8,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from metalsurfer import _numeric_defaults as numeric_defaults
 from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.ml.bayesian import (
     EnsembleRegressor,
@@ -206,7 +207,9 @@ class TestAcquisition:
         mu = np.array([1.0, 2.0, -0.5])
         sigma = np.array([0.0, 0.0, 0.0])
         f_best = 0.0
-        ei = ei_scores(mu, sigma, f_best=f_best, xi=1e-6)
+        ei = ei_scores(
+            mu, sigma, f_best=f_best, xi=numeric_defaults.ACQUISITION_XI_DEFAULT
+        )
         np.testing.assert_allclose(ei, -mu, rtol=0, atol=1e-5)
         assert int(np.argmax(ei)) == 2
 

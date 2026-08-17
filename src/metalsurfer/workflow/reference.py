@@ -26,7 +26,23 @@ def calculate_reference_energies(
     ts_model=None,
     config: AdsorptionConfig | None = None,
 ) -> ReferenceEnergies:
-    """Compute clean-slab and isolated-molecule energies."""
+    """Compute clean-slab and isolated-molecule energies.
+
+    Parameters
+    ----------
+    slab
+        Substrate container.
+    calculator
+        ASE calculator instance.
+    molecules
+        List of molecule names.
+    smiles_list
+        SMILES strings aligned with molecules.
+    ts_model
+        Transition-state model (optional).
+    config
+        Adsorption configuration.
+    """
     if config is None:
         config = AdsorptionConfig()
 

@@ -39,6 +39,17 @@ class DatasetLogger:
         config: AdsorptionConfig | None = None,
         surface_id: str = "",
     ) -> None:
+        """Instantiate a dataset logger.
+
+        Parameters
+        ----------
+        output_dir
+            Directory where CSV and metadata are written.
+        config
+            Optional adsorption config for context.
+        surface_id
+            Surface identifier string.
+        """
         self.output_dir = output_dir
         self.surface_id = surface_id
         self.context = (
@@ -51,10 +62,12 @@ class DatasetLogger:
 
     @property
     def csv_path(self) -> str:
+        """Path to the dataset CSV file."""
         return os.path.join(self.output_dir, _DATASET_FILENAME)
 
     @property
     def metadata_path(self) -> str:
+        """Path to the dataset metadata JSON file."""
         return os.path.join(self.output_dir, _METADATA_FILENAME)
 
     def add_result(
@@ -63,7 +76,17 @@ class DatasetLogger:
         smiles: str,
         surface_id: str | None = None,
     ) -> PlacementRecord:
-        """Convert a ScreeningResult to a PlacementRecord and store it."""
+        """Convert a ScreeningResult to a PlacementRecord and store it.
+
+        Parameters
+        ----------
+        result
+            Screening result to log.
+        smiles
+            SMILES string of the molecule.
+        surface_id
+            Optional surface identifier override.
+        """
         sid = surface_id if surface_id is not None else self.surface_id
         record = PlacementRecord.from_screening_result(
             result, smiles=smiles, surface_id=sid, config=self._config
@@ -82,13 +105,29 @@ class DatasetLogger:
         smiles: str,
         surface_id: str | None = None,
     ) -> int:
-        """Batch-add multiple ScreeningResults. Returns count of records added."""
+        """Batch-add multiple ScreeningResults. Returns count of records added.
+
+        Parameters
+        ----------
+        results
+            List of screening results to log.
+        smiles
+            SMILES string of the molecule.
+        surface_id
+            Optional surface identifier override.
+        """
         for r in results:
             self.add_result(r, smiles=smiles, surface_id=surface_id)
         return len(results)
 
     def add_record(self, record: PlacementRecord) -> None:
-        """Directly add a pre-built PlacementRecord."""
+        """Directly add a pre-built PlacementRecord.
+
+        Parameters
+        ----------
+        record
+            Pre-built placement record to add.
+        """
         self._records.append(record)
 
     def flush(self) -> str:

@@ -51,6 +51,17 @@ class ReferenceEnergies:
     molecule_energies: dict[str, float] = field(default_factory=dict)
 
     def get_molecule_energy(self, molecule_name: str) -> float | None:
+        """Return the reference energy for a molecule, if known.
+
+        Parameters
+        ----------
+        molecule_name
+            Name of the molecule to look up.
+
+        Returns
+        -------
+        float or None
+        """
         return self.molecule_energies.get(molecule_name)
 
 
@@ -126,7 +137,13 @@ INITIAL_PROVENANCE_COLUMN_MAP: dict[str, str] = {
 
 
 def provenance_export_fields(values: Mapping[str, Any]) -> dict[str, Any]:
-    """Map in-memory provenance attrs to ``initial_*`` CSV columns."""
+    """Map in-memory provenance attrs to ``initial_*`` CSV columns.
+
+    Parameters
+    ----------
+    values
+        In-memory provenance attribute mapping.
+    """
     row: dict[str, Any] = {}
     for attr, export_name in INITIAL_PROVENANCE_COLUMN_MAP.items():
         val = values[attr]
@@ -199,6 +216,11 @@ class PlacementDescriptor:
 
         Lean default: ML feature geometry only. Rich mode adds ``initial_*``
         pre-relax provenance columns (see ``INITIAL_PROVENANCE_COLUMN_MAP``).
+
+        Parameters
+        ----------
+        include_provenance
+            If True, include pre-relax provenance columns.
         """
         x_abs = self.x_abs if self.x_abs is not None else self.x
         y_abs = self.y_abs if self.y_abs is not None else self.y
@@ -233,7 +255,15 @@ class PlacementDescriptor:
         *,
         placement_index: int | None = None,
     ) -> PlacementDescriptor:
-        """Inflate a descriptor from lean or rich (``initial_*``) flat CSV/dict rows."""
+        """Inflate a descriptor from lean or rich (``initial_*``) flat CSV/dict rows.
+
+        Parameters
+        ----------
+        row
+            Flat dict or CSV row with descriptor fields.
+        placement_index
+            Optional placement index to override the row value.
+        """
         slab_indices_raw = _provenance_value_from_row(row, "slab_indices", None)
         slab_indices = None
         if slab_indices_raw and not _row_is_missing(slab_indices_raw):
@@ -325,7 +355,19 @@ class ScreeningResult:
         context_row: Mapping[str, Any] | None = None,
         include_provenance: bool = False,
     ) -> dict[str, Any]:
-        """Return a flat row for CSV/dataframe export."""
+        """Return a flat row for CSV/dataframe export.
+
+        Parameters
+        ----------
+        xyz_path
+            Optional path to the XYZ structure file.
+        poscar_path
+            Optional path to the POSCAR file.
+        context_row
+            Optional extra context fields to merge into the row.
+        include_provenance
+            If True, include pre-relax provenance columns.
+        """
         row: dict[str, Any] = {
             "molecule": self.molecule,
             "placement_id": self.placement_id,
@@ -382,7 +424,15 @@ def build_molecule_summary(
     molecule_name: str,
     results: list[ScreeningResult],
 ) -> MoleculeSummary:
-    """Compute aggregate statistics for a set of screening results."""
+    """Compute aggregate statistics for a set of screening results.
+
+    Parameters
+    ----------
+    molecule_name
+        Name of the molecule.
+    results
+        List of screening results for the molecule.
+    """
     if not results:
         raise ValueError("Cannot build molecule summary from empty results")
     energies = [r.energy_adsorption for r in results]
@@ -418,7 +468,19 @@ class ScreeningRunResult:
         write_vasp_inputs: bool = False,
         include_provenance: bool = False,
     ) -> list[dict[str, Any]]:
-        """Flatten all placements for this molecule into detailed rows."""
+        """Flatten all placements for this molecule into detailed rows.
+
+        Parameters
+        ----------
+        results_dir
+            Optional base directory for writing structure files.
+        context_row
+            Optional extra context fields to merge into each row.
+        write_vasp_inputs
+            If True, write VASP input directories.
+        include_provenance
+            If True, include pre-relax provenance columns.
+        """
         rows: list[dict[str, Any]] = []
         xyz_dir: Path | None = None
         vasp_dir: Path | None = None
@@ -454,7 +516,19 @@ class ScreeningRunResult:
         write_vasp_inputs: bool = False,
         include_provenance: bool = False,
     ) -> pd.DataFrame:
-        """Return a detailed pandas DataFrame for this screening run."""
+        """Return a detailed pandas DataFrame for this screening run.
+
+        Parameters
+        ----------
+        results_dir
+            Optional base directory for writing structure files.
+        context_row
+            Optional extra context fields to merge into each row.
+        write_vasp_inputs
+            If True, write VASP input directories.
+        include_provenance
+            If True, include pre-relax provenance columns.
+        """
         import pandas as pd
 
         return pd.DataFrame(
@@ -564,7 +638,19 @@ class SaturationStepResult:
         context_row: Mapping[str, Any] | None = None,
         include_provenance: bool = False,
     ) -> dict[str, Any]:
-        """Return one saturation detail row for the winning placement."""
+        """Return one saturation detail row for the winning placement.
+
+        Parameters
+        ----------
+        results_dir
+            Base directory for writing structure files.
+        saturation_molecule
+            Molecule label for the saturation run.
+        context_row
+            Optional extra context fields to merge into the row.
+        include_provenance
+            If True, include pre-relax provenance columns.
+        """
         best = self.best_result
         mol_dir = (
             Path(results_dir) / "xyz_structures" / f"{saturation_molecule}_saturation"
@@ -603,7 +689,23 @@ class SaturationStepResult:
         write_vasp_inputs: bool = False,
         include_provenance: bool = False,
     ) -> list[dict[str, Any]]:
-        """Return detailed rows for every placement evaluated in this step."""
+        """Return detailed rows for every placement evaluated in this step.
+
+        Parameters
+        ----------
+        results_dir
+            Base directory for writing structure files.
+        saturation_molecule
+            Molecule label for the saturation run.
+        context_row
+            Optional extra context fields to merge into each row.
+        step_prefix
+            If True, prefix placement directories with the step number.
+        write_vasp_inputs
+            If True, write VASP input directories.
+        include_provenance
+            If True, include pre-relax provenance columns.
+        """
         step_placements_rel = (
             f"step_{self.step:03d}_placements" if step_prefix else "placements"
         )
@@ -637,7 +739,13 @@ class SaturationRunResult:
 
     @staticmethod
     def format_failure_summary(failure_summary: dict[str, object]) -> str:
-        """Return a canonical human-readable failure summary."""
+        """Return a canonical human-readable failure summary.
+
+        Parameters
+        ----------
+        failure_summary
+            Mapping of failure categories to counts or details.
+        """
         return _format_failure_summary_text(failure_summary)
 
     def to_flattened_runs(self) -> list[ScreeningRunResult]:
@@ -664,7 +772,17 @@ class SaturationRunResult:
         results_dir: str,
         write_vasp_inputs: bool = False,
     ) -> str:
-        """Return a canonical multi-line saturation completion summary."""
+        """Return a canonical multi-line saturation completion summary.
+
+        Parameters
+        ----------
+        label
+            Run label for the summary header.
+        results_dir
+            Directory where results were saved.
+        write_vasp_inputs
+            If True, VASP inputs were generated.
+        """
         return _format_saturation_completion(
             label=label,
             n_molecules_at_saturation=self.n_molecules_at_saturation,
@@ -690,7 +808,15 @@ def windowed_bo_step_memories(
     *,
     window: int | None,
 ) -> BOStepMemory | None:
-    """Select the most recent *window* step memories and merge them."""
+    """Select the most recent *window* step memories and merge them.
+
+    Parameters
+    ----------
+    memories
+        Sequence of BO step memories (may contain None values).
+    window
+        Number of most recent steps to include, or None to use all.
+    """
     if window is None:
         return merge_bo_step_memories(memories)
     if window <= 0:
@@ -702,7 +828,13 @@ def windowed_bo_step_memories(
 def merge_bo_step_memories(
     memories: Sequence[BOStepMemory | None],
 ) -> BOStepMemory | None:
-    """Concatenate observations from multiple prior saturation steps."""
+    """Concatenate observations from multiple prior saturation steps.
+
+    Parameters
+    ----------
+    memories
+        Sequence of BO step memories (may contain None values).
+    """
     rows: list[dict[str, float]] = []
     ys: list[float] = []
     ages: list[int] = []
@@ -756,7 +888,19 @@ class MultiMolSaturationStepResult:
         context_row: Mapping[str, Any] | None = None,
         include_provenance: bool = False,
     ) -> dict[str, Any]:
-        """Return one saturation detail row for the winning placement."""
+        """Return one saturation detail row for the winning placement.
+
+        Parameters
+        ----------
+        results_dir
+            Base directory for writing structure files.
+        molecules_label
+            Label for the multi-molecule saturation run.
+        context_row
+            Optional extra context fields to merge into the row.
+        include_provenance
+            If True, include pre-relax provenance columns.
+        """
         best = self.best_result
         mol_dir = Path(results_dir) / "xyz_structures" / f"{molecules_label}_saturation"
         return best.to_row(
@@ -783,7 +927,21 @@ class MultiMolSaturationStepResult:
         write_vasp_inputs: bool = False,
         include_provenance: bool = False,
     ) -> list[dict[str, Any]]:
-        """Return detailed rows for every placement evaluated in this step."""
+        """Return detailed rows for every placement evaluated in this step.
+
+        Parameters
+        ----------
+        results_dir
+            Base directory for writing structure files.
+        molecules_label
+            Label for the multi-molecule saturation run.
+        context_row
+            Optional extra context fields to merge into each row.
+        write_vasp_inputs
+            If True, write VASP input directories.
+        include_provenance
+            If True, include pre-relax provenance columns.
+        """
         rel = f"step_{self.step:03d}_placements"
         base = Path(results_dir)
         sat = f"{molecules_label}_saturation"
@@ -848,7 +1006,17 @@ class SaturationCampaignResult:
         results_dir: str,
         write_vasp_inputs: bool = False,
     ) -> str:
-        """Return a canonical multi-line saturation completion summary."""
+        """Return a canonical multi-line saturation completion summary.
+
+        Parameters
+        ----------
+        label
+            Run label for the summary header.
+        results_dir
+            Directory where results were saved.
+        write_vasp_inputs
+            If True, VASP inputs were generated.
+        """
         if not self.runs:
             lines = [f"{label}: no saturation results produced."]
             if self.failure_summary:
@@ -903,7 +1071,15 @@ class BindingCampaignResult:
         results_dir: str,
         write_vasp_inputs: bool = False,
     ) -> str:
-        """Return a canonical results output line."""
+        """Return a canonical results output line.
+
+        Parameters
+        ----------
+        results_dir
+            Directory where results were saved.
+        write_vasp_inputs
+            If True, VASP inputs were generated.
+        """
         return _format_results_saved_line(
             results_dir=results_dir,
             write_vasp_inputs=write_vasp_inputs,
@@ -920,7 +1096,17 @@ class BindingCampaignResult:
         title: str = "Binding energy summary",
         write_vasp_inputs: bool = False,
     ) -> str:
-        """Return a canonical multi-line binding summary block."""
+        """Return a canonical multi-line binding summary block.
+
+        Parameters
+        ----------
+        results_dir
+            Directory where results were saved.
+        title
+            Title for the summary header.
+        write_vasp_inputs
+            If True, VASP inputs were generated.
+        """
         lines = [
             "=" * 60,
             title,
@@ -972,5 +1158,11 @@ class BindingCampaignResult:
 
     @staticmethod
     def format_failure_summary(failure_summary: dict[str, object]) -> str:
-        """Return a canonical human-readable failure summary."""
+        """Return a canonical human-readable failure summary.
+
+        Parameters
+        ----------
+        failure_summary
+            Mapping of failure categories to counts or details.
+        """
         return _format_failure_summary_text(failure_summary)

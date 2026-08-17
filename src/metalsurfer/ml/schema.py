@@ -172,6 +172,17 @@ class ComputationContext:
 
     @classmethod
     def from_config(cls, config: AdsorptionConfig) -> "ComputationContext":
+        """Build a computation context from an AdsorptionConfig.
+
+        Parameters
+        ----------
+        config
+            Adsorption configuration to translate.
+
+        Returns
+        -------
+        ComputationContext
+        """
         return cls(
             model_name=config.model_name,
             fmax=config.fmax,
@@ -191,6 +202,12 @@ class ComputationContext:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to a plain dictionary.
+
+        Returns
+        -------
+        dict[str, Any]
+        """
         d = asdict(self)
         d["placement_z_range"] = list(d["placement_z_range"])
         return d
@@ -233,6 +250,13 @@ def config_to_context_row(
     Lean default (``include_provenance=False`` / config default): ``context_hash``
     and ``schema_version`` only. Rich mode adds full ``ctx_*`` settings and
     ``reference_optimization_steps``.
+
+    Parameters
+    ----------
+    config
+        Adsorption configuration to translate.
+    include_provenance
+        If True, include full provenance fields.
     """
     if include_provenance is None:
         include_provenance = bool(config.export_placement_provenance)
@@ -349,7 +373,19 @@ class PlacementRecord:
         surface_id: str,
         config: AdsorptionConfig | None = None,
     ) -> "PlacementRecord":
-        """Build a record from a validated ScreeningResult."""
+        """Build a record from a validated ScreeningResult.
+
+        Parameters
+        ----------
+        result
+            Screening result to convert.
+        smiles
+            SMILES string of the molecule.
+        surface_id
+            Surface identifier.
+        config
+            Optional adsorption config for context.
+        """
         return cls(
             molecule=result.molecule,
             smiles=smiles,
@@ -382,6 +418,27 @@ class PlacementRecord:
         config: AdsorptionConfig | None = None,
         placement_id: int | None = None,
     ) -> "PlacementRecord":
+        """Build a PlacementRecord from a descriptor.
+
+        Parameters
+        ----------
+        descriptor
+            Placement descriptor to convert.
+        molecule
+            Molecule name.
+        smiles
+            SMILES string.
+        surface_id
+            Surface identifier.
+        config
+            Optional adsorption config for context.
+        placement_id
+            Optional placement index override.
+
+        Returns
+        -------
+        PlacementRecord
+        """
         pid = descriptor.placement_index if placement_id is None else placement_id
         return cls(
             molecule=molecule,
@@ -402,6 +459,25 @@ class PlacementRecord:
         surface_id: str = "",
         config: AdsorptionConfig | None = None,
     ) -> "PlacementRecord":
+        """Build a PlacementRecord from a placement spec.
+
+        Parameters
+        ----------
+        spec
+            Placement spec to convert.
+        molecule
+            Molecule name.
+        smiles
+            SMILES string.
+        surface_id
+            Surface identifier.
+        config
+            Optional adsorption config for context.
+
+        Returns
+        -------
+        PlacementRecord
+        """
         return cls(
             molecule=molecule,
             smiles=smiles,
@@ -466,6 +542,11 @@ class PlacementRecord:
         Lean default: identity, ML pose features, energies/labels, and
         ``context_hash``. Rich mode adds ``initial_*`` provenance and ``ctx_*``.
         Geometry columns come from :meth:`PlacementDescriptor.to_row`.
+
+        Parameters
+        ----------
+        include_provenance
+            If True, include full provenance and context fields.
         """
         row: dict[str, Any] = {
             "record_hash": self.record_hash(),
@@ -499,6 +580,11 @@ class PlacementRecord:
         Accepts schema 3.0 ``initial_*`` provenance columns and ``ctx_*`` context
         columns. Lean rows without provenance use safe defaults.
         Geometry is inflated via :meth:`PlacementDescriptor.from_row`.
+
+        Parameters
+        ----------
+        row
+            Flat dictionary representing a placement record.
         """
 
         def _ctx_value(name: str, default: Any) -> Any:

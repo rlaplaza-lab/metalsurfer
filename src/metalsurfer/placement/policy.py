@@ -39,7 +39,25 @@ def max_batch_placement_specs(
     dissociative: bool = False,
     n_hollow_pairs: int = 0,
 ) -> int:
-    """Closed-form count of policy-grid specs (per-branch clamp at ``_GRID_BUILD_CAP``)."""
+    """Closed-form count of policy-grid specs (per-branch clamp at ``_GRID_BUILD_CAP``).
+
+    Parameters
+    ----------
+    n_conformers
+        Number of conformers.
+    site_indices
+        List of available site indices.
+    shape
+        Molecule shape classification.
+    n_binders
+        Number of binding atoms.
+    flat_aromatic
+        Whether the molecule is flat and aromatic.
+    dissociative
+        Whether dissociative placement is enabled.
+    n_hollow_pairs
+        Number of hollow site pairs for dissociative placement.
+    """
     n_sites = max(len(site_indices), 1)
 
     if dissociative:
@@ -146,6 +164,17 @@ def resolve_conformer_weights(
 
     Logs the reason whenever ``"boltzmann"`` was requested but the inputs cannot
     support it, so a silently uniform run is always explained.
+
+    Parameters
+    ----------
+    n_conformers
+        Number of conformers.
+    conformer_energies
+        Optional list of conformer energies (eV).
+    conformer_weighting
+        Weighting scheme (``"uniform"`` or ``"boltzmann"``).
+    boltzmann_temperature
+        Temperature for Boltzmann weighting (K).
     """
     if conformer_weighting != "boltzmann":
         return None
@@ -381,6 +410,45 @@ def build_batch_placement_specs(
     deterministic (no RNG) and degrades to the uniform draw whenever the
     energies cannot support weighting. The dissociative branch pins
     ``conformer_index=0``, so it is never weighted.
+
+    Parameters
+    ----------
+    n_conformers
+        Number of conformers.
+    site_indices
+        List of available site indices.
+    site_type_for_index
+        Callable mapping site index to site type string.
+    shape
+        Molecule shape classification.
+    n_binders
+        Number of binding atoms.
+    flat_aromatic
+        Whether the molecule is flat and aromatic.
+    parallel_fraction
+        Fraction of placements to orient parallel.
+    n_desired
+        Target number of specs in the returned list.
+    filter_spec
+        Optional callable to filter generated specs.
+    dissociative
+        Whether dissociative placement is enabled.
+    n_hollow_pairs
+        Number of hollow site pairs for dissociative placement.
+    seed
+        Random seed for deterministic subsampling.
+    preferred_site_types
+        Site types to prioritize in stratified sampling.
+    z_fraction_target
+        Preferred z-fraction for prior ordering.
+    site_index_weight
+        Weight for site-index prior penalty.
+    conformer_energies
+        Optional list of conformer energies (eV).
+    conformer_weighting
+        Conformer weighting scheme (``"uniform"`` or ``"boltzmann"``).
+    boltzmann_temperature
+        Temperature for Boltzmann weighting (K).
     """
     normalized_sites = site_indices if site_indices else [-1]
     conformer_weights = (

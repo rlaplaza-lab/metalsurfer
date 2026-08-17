@@ -13,6 +13,7 @@ from metalsurfer.config import (
     fold_bo_config,
     resolved_bo_eval_budget,
 )
+from metalsurfer.ml.bayesian import ei_scores, pi_scores
 from metalsurfer.ml.schema import ComputationContext
 from metalsurfer.placement import _constants as placement_constants
 from metalsurfer.placement import geometry as placement_geometry
@@ -141,6 +142,13 @@ def test_numeric_defaults_single_source_of_truth():
     assert (
         placement_geometry.check_initial_placement_distance.__defaults__[1]
         == numeric_defaults.MIN_CONTACT_RATIO_DEFAULT
+    )
+
+    assert ei_scores.__defaults__[-1] == numeric_defaults.ACQUISITION_XI_DEFAULT
+    assert pi_scores.__defaults__[-1] == numeric_defaults.ACQUISITION_XI_DEFAULT
+    assert (
+        BOTransferConfig().exploration_fraction
+        == numeric_defaults.DEFAULT_TRANSFER_EXPLORATION_FRACTION
     )
 
 
@@ -603,7 +611,10 @@ def test_bo_defaults():
     assert c.bo.transfer.min_similarity == 0.05
     assert c.bo.transfer.trust_patience == 2
     assert c.bo.transfer.mae_tolerance == 0.05
-    assert c.bo.transfer.exploration_fraction == 0.2
+    assert (
+        c.bo.transfer.exploration_fraction
+        == numeric_defaults.DEFAULT_TRANSFER_EXPLORATION_FRACTION
+    )
     assert c.bo.transfer.proximity_lengthscale == 1.0
     assert c.bo.transfer.proximity_floor == 0.0
     assert c.bo.transfer.prior_step_window == 2

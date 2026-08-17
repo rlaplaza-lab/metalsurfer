@@ -49,7 +49,13 @@ logger = logging.getLogger(__name__)
 
 
 def normalize_quaternion(quat: np.ndarray) -> np.ndarray:
-    """Return normalized quaternion [w, x, y, z] with canonical sign."""
+    """Return normalized quaternion [w, x, y, z] with canonical sign.
+
+    Parameters
+    ----------
+    quat
+        Input quaternion array (4-element).
+    """
     q: np.ndarray = np.asarray(quat, dtype=float).reshape(4)
     nrm = float(np.linalg.norm(q))
     if nrm < _QUATERNION_NORM_EPS:
@@ -62,7 +68,13 @@ def normalize_quaternion(quat: np.ndarray) -> np.ndarray:
 
 
 def quaternion_to_rotation_matrix(quat: np.ndarray) -> np.ndarray:
-    """Convert quaternion [w, x, y, z] to a 3x3 rotation matrix."""
+    """Convert quaternion [w, x, y, z] to a 3x3 rotation matrix.
+
+    Parameters
+    ----------
+    quat
+        Input quaternion array (4-element).
+    """
     w, x, y, z = normalize_quaternion(quat)
     return np.array(
         [
@@ -75,7 +87,13 @@ def quaternion_to_rotation_matrix(quat: np.ndarray) -> np.ndarray:
 
 
 def rotation_matrix_to_quaternion(R: np.ndarray) -> np.ndarray:
-    """Convert rotation matrix to quaternion [w, x, y, z]."""
+    """Convert rotation matrix to quaternion [w, x, y, z].
+
+    Parameters
+    ----------
+    R
+        3×3 rotation matrix.
+    """
     r = np.asarray(R, dtype=float)
     trace = float(np.trace(r))
     if trace > 0.0:
@@ -107,7 +125,15 @@ def rotation_matrix_to_quaternion(R: np.ndarray) -> np.ndarray:
 
 
 def best_fit_rotation(source: np.ndarray, target: np.ndarray) -> np.ndarray:
-    """Return the proper rotation matrix that best maps source to target."""
+    """Return the proper rotation matrix that best maps source to target.
+
+    Parameters
+    ----------
+    source
+        Source coordinate array (n, 3).
+    target
+        Target coordinate array (n, 3).
+    """
     src = np.asarray(source, dtype=float)
     dst = np.asarray(target, dtype=float)
     H = src.T @ dst
@@ -122,7 +148,15 @@ def best_fit_rotation(source: np.ndarray, target: np.ndarray) -> np.ndarray:
 def compute_canonical_molecular_frame(
     ads_pos: np.ndarray, symbols: list[str] | None = None
 ) -> np.ndarray:
-    """Return centred positions in a deterministic principal-axis frame."""
+    """Return centred positions in a deterministic principal-axis frame.
+
+    Parameters
+    ----------
+    ads_pos
+        Adsorbate positions (n, 3).
+    symbols
+        Optional chemical symbols for tie-breaking.
+    """
     pos = np.asarray(ads_pos, dtype=float).copy()
     pos -= np.mean(pos, axis=0)
     _, eigenvecs = _compute_inertia_tensor(pos)
@@ -154,7 +188,13 @@ def _safe_normalize(v: np.ndarray) -> np.ndarray:
 
 
 def compute_surface_site_frame(normal: np.ndarray) -> np.ndarray:
-    """Return deterministic orthonormal frame whose z-axis is surface normal."""
+    """Return deterministic orthonormal frame whose z-axis is surface normal.
+
+    Parameters
+    ----------
+    normal
+        Surface normal vector (3-element).
+    """
     z_axis = _safe_normalize(np.asarray(normal, dtype=float))
     ref = np.array([1.0, 0.0, 0.0], dtype=float)
     if abs(np.dot(ref, z_axis)) > _FRAME_REF_ALIGNMENT_DOT_THRESHOLD:
@@ -192,7 +232,7 @@ def _get_vdw_radius(symbol: str) -> float | None:
 
 
 def _cell_has_volume(cell: np.ndarray) -> bool:
-    """True when *cell* has non-zero volume (supports left-handed cells)."""
+    """Check whether *cell* has non-zero volume (supports left-handed cells)."""
     return cell_has_volume(cell)
 
 
@@ -257,7 +297,7 @@ def _rotation_to_align_vector_to_target(
 
 
 def _binding_atom_candidates(symbols: list[str]) -> list[int]:
-    """Indices of atoms likely to bind (O, N, S, halogens)."""
+    """Return indices of atoms likely to bind (O, N, S, halogens)."""
     binders = {"O", "N", "S", "F", "Cl", "Br", "I"}
     return [i for i, s in enumerate(symbols) if s in binders]
 
@@ -537,6 +577,21 @@ def detect_vdw_overlaps(
 
     When *pairwise_distances* is provided (shape ``(n_mol, n_slab)``), skip
     recomputing MIC distances via :func:`_mol_slab_pairwise_distances`.
+
+    Parameters
+    ----------
+    molecule_atoms
+        Adsorbate :class:`~ase.Atoms` object.
+    slab
+        Substrate :class:`~ase.Atoms` object.
+    material_type
+        Material type for PBC flags.
+    vdw_scale
+        Scale factor for VDW radii.
+    exclude_slab_atoms
+        Number of substrate atoms to exclude from checks.
+    pairwise_distances
+        Optional precomputed pairwise distance matrix.
     """
     _mol_pos, _slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
         _mol_slab_contact_arrays(
@@ -582,7 +637,21 @@ def calculate_contact_quality(
     *,
     material_type: str = "slab",
 ) -> dict[str, float | int]:
-    """Contact metrics: min distance, covalent ratio at closest pair, and pair counts."""
+    """Contact metrics: min distance, covalent ratio at closest pair, and pair counts.
+
+    Parameters
+    ----------
+    molecule_atoms
+        Adsorbate :class:`~ase.Atoms` object.
+    slab
+        Substrate :class:`~ase.Atoms` object.
+    contact_distance_threshold
+        Optional distance threshold for contact counting.
+    exclude_slab_atoms
+        Number of substrate atoms to exclude from checks.
+    material_type
+        Material type for PBC flags.
+    """
     _mol_pos, _slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
         _mol_slab_contact_arrays(
             molecule_atoms,
@@ -648,6 +717,19 @@ def calculate_min_distance(
     slab ([True, True, False]), nanoparticle ([False, False, False]), and
     porous ([True, True, True]) calculations cannot accidentally fall back to
     incorrect full-3D periodicity.
+
+    Parameters
+    ----------
+    positions1
+        First set of positions (n, 3).
+    positions2
+        Second set of positions (m, 3).
+    cell
+        Optional unit cell matrix.
+    use_pbc
+        Whether to use periodic boundary conditions.
+    pbc
+        Optional periodic boundary condition flags [x, y, z].
     """
     p1 = np.asarray(positions1)
     p2 = np.asarray(positions2)
@@ -678,7 +760,7 @@ def check_initial_placement_distance(
     *,
     material_type: str = "slab",
 ) -> tuple[bool, float, str | None]:
-    """Check if the initial placement satisfies distance constraints.
+    r"""Check if the initial placement satisfies distance constraints.
 
     Lower bound uses ``max(min_distance, covalent_sum * min_contact_ratio)``
     for the closest pair when radii are known.
@@ -689,6 +771,27 @@ def check_initial_placement_distance(
     Returns ``(ok, actual_min_distance, reason)`` with ``reason`` one of
     ``None``, ``\"too_close\"``, ``\"too_far\"``, ``\"vdw_overlap\"``,
     ``\"empty_geometry\"``.
+
+    Parameters
+    ----------
+    molecule_atoms
+        Adsorbate :class:`~ase.Atoms` object.
+    slab
+        Substrate :class:`~ase.Atoms` object.
+    min_distance
+        Minimum allowed distance (Å).
+    min_contact_ratio
+        Minimum contact ratio relative to covalent radii.
+    max_initial_distance
+        Optional maximum allowed distance (Å).
+    reject_vdw_overlaps
+        Whether to reject VDW overlaps.
+    vdw_overlap_scale
+        Scale factor for VDW overlap detection.
+    exclude_slab_atoms
+        Number of substrate atoms to exclude from checks.
+    material_type
+        Material type for PBC flags.
     """
     _mol_pos, _slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
         _mol_slab_contact_arrays(
@@ -759,15 +862,23 @@ def check_adsorbate_separation(
     Used in saturation mode where slab already contains previously placed
     adsorbates. Ensures new placements don't collide with existing ones.
 
-    Args:
-        new_adsorbate: Atoms object representing new molecule to place
-        pre_adsorbed_positions: (N, 3) array of pre-adsorbed atom positions
-        min_separation: minimum allowed distance (Å) between atoms
-        cell: unit cell (required if pbc is used)
-        pbc: periodic boundary conditions [x, y, z]
+    Parameters
+    ----------
+    new_adsorbate
+        Atoms object representing new molecule to place.
+    pre_adsorbed_positions
+        (N, 3) array of pre-adsorbed atom positions.
+    min_separation
+        Minimum allowed distance (\u00c5) between atoms.
+    cell
+        Unit cell (required if pbc is used).
+    pbc
+        Periodic boundary conditions [x, y, z].
 
-    Returns:
-        (ok, min_distance) where ok=True if separation is adequate
+    Returns
+    -------
+    tuple[bool, float]
+        (ok, min_distance) where ok is True if separation is adequate.
     """
     if len(pre_adsorbed_positions) == 0:
         return True, float("inf")
@@ -830,7 +941,29 @@ def check_initial_contact_quality(
     exclude_slab_atoms: int | None = None,
     material_type: str = "slab",
 ) -> tuple[bool, str]:
-    """Contact-quality gate for initial placements; returns (ok, reason_token)."""
+    """Contact-quality gate for initial placements; returns (ok, reason_token).
+
+    Parameters
+    ----------
+    molecule_atoms
+        Adsorbate :class:`~ase.Atoms` object.
+    slab
+        Substrate :class:`~ase.Atoms` object.
+    strict_initial_placement
+        Whether to enforce strict placement checks.
+    require_multiple_contact
+        Whether to require multiple contacting atoms.
+    max_closest_approach
+        Maximum allowed closest approach distance (Å).
+    min_contact_atoms
+        Minimum number of atoms that must make contact.
+    contact_distance_threshold
+        Distance threshold for contact counting (Å).
+    exclude_slab_atoms
+        Number of substrate atoms to exclude from checks.
+    material_type
+        Material type for PBC flags.
+    """
     if not strict_initial_placement and not require_multiple_contact:
         return True, "strict_placement_checks_disabled"
 

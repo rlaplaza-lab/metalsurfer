@@ -5,6 +5,13 @@ from typing import Any
 
 
 def is_missing(value: Any) -> bool:
+    """Check whether a CSV cell value represents a missing entry.
+
+    Parameters
+    ----------
+    value
+        Cell value to inspect.
+    """
     if value is None:
         return True
     text = str(value).strip()
@@ -12,20 +19,54 @@ def is_missing(value: Any) -> bool:
 
 
 def with_default(value: Any, default: Any) -> Any:
+    """Return *default* if *value* is missing, otherwise *value*.
+
+    Parameters
+    ----------
+    value
+        Cell value to inspect.
+    default
+        Fallback to return when *value* is missing.
+    """
     return default if is_missing(value) else value
 
 
 def float_or(value: Any, default: float) -> float:
+    """Coerce a CSV cell to float, falling back to *default*.
+
+    Parameters
+    ----------
+    value
+        Cell value to coerce.
+    default
+        Fallback when *value* is missing.
+    """
     return float(with_default(value, default))
 
 
 def int_or_none(value: Any) -> int | None:
+    """Coerce a CSV cell to int, returning None when missing.
+
+    Parameters
+    ----------
+    value
+        Cell value to coerce.
+    """
     if is_missing(value):
         return None
     return int(value)
 
 
 def parse_bool(value: Any, default: bool = False) -> bool:
+    """Parse a CSV cell as a boolean.
+
+    Parameters
+    ----------
+    value
+        Cell value to parse.
+    default
+        Fallback when *value* is missing or unrecognised.
+    """
     if is_missing(value):
         return default
     if isinstance(value, bool):
@@ -41,6 +82,15 @@ def parse_bool(value: Any, default: bool = False) -> bool:
 
 
 def parse_float_pair(value: Any, default: tuple[float, float]) -> tuple[float, float]:
+    """Parse a CSV cell as a pair of floats.
+
+    Parameters
+    ----------
+    value
+        Cell value to parse.
+    default
+        Fallback when *value* is missing or malformed.
+    """
     if is_missing(value):
         return default
     if isinstance(value, (list, tuple)) and len(value) == 2:
@@ -55,6 +105,13 @@ def parse_float_pair(value: Any, default: tuple[float, float]) -> tuple[float, f
 def parse_fragment_positions(
     value: Any,
 ) -> tuple[tuple[float, float, float], ...] | None:
+    """Parse a CSV cell as a sequence of 3-D Cartesian positions.
+
+    Parameters
+    ----------
+    value
+        Cell value to parse (sequence or JSON string).
+    """
     if is_missing(value):
         return None
     if isinstance(value, str):

@@ -18,7 +18,13 @@ CTX_KEY_ORDER = ("molecule", "surface_type", "placement_id", "seed")
 
 @contextmanager
 def log_context(**kwargs: Any):
-    """Push key-value pairs into logging context for this scope."""
+    """Push key-value pairs into logging context for this scope.
+
+    Parameters
+    ----------
+    **kwargs
+        Key-value pairs to add to the logging context.
+    """
     prev = _LOG_CTX.get() or {}
     merged = {**prev, **kwargs}
     token = _LOG_CTX.set(merged)
@@ -37,7 +43,17 @@ _warned_once: set[str] = set()
 
 
 def warn_once(logger: logging.Logger, key: str, message: str) -> None:
-    """Emit a warning log message at most once per *key* across the process."""
+    """Emit a warning log message at most once per *key* across the process.
+
+    Parameters
+    ----------
+    logger
+        Logger instance to emit through.
+    key
+        Deduplication key.
+    message
+        Warning message text.
+    """
     if key not in _warned_once:
         _warned_once.add(key)
         logger.warning(message)
@@ -60,6 +76,18 @@ class ContextFilter(logging.Filter):
     """Inject ctx_prefix into log records from current context."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Inject ctx_prefix into the log record.
+
+        Parameters
+        ----------
+        record
+            Log record to modify.
+
+        Returns
+        -------
+        bool
+            Always True so the record is processed.
+        """
         ctx = _LOG_CTX.get() or {}
         record.ctx_prefix = _format_ctx_prefix(ctx)
         return True
@@ -78,6 +106,20 @@ def _install_log_record_factory() -> None:
     old_factory = logging.getLogRecordFactory()
 
     def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
+        """Create a log record with ctx_prefix set.
+
+        Parameters
+        ----------
+        *args
+            Positional arguments forwarded to the original factory.
+        **kwargs
+            Keyword arguments forwarded to the original factory.
+
+        Returns
+        -------
+        logging.LogRecord
+            The newly created log record.
+        """
         record = old_factory(*args, **kwargs)
         if not hasattr(record, "ctx_prefix"):
             record.ctx_prefix = _ctx_prefix_from_context()
@@ -154,6 +196,18 @@ class _LogStreamToLogger(io.TextIOBase):
             self._last_cr_text = ""
 
     def write(self, s: str) -> int:
+        """Write a string to the logger, handling newlines and carriage returns.
+
+        Parameters
+        ----------
+        s
+            String to write.
+
+        Returns
+        -------
+        int
+            Number of characters written.
+        """
         if not s:
             return 0
         if not isinstance(s, str):
@@ -230,11 +284,21 @@ def configure_logging(
     - METALSURFER_LOG_LEVEL (default: INFO)
     - TORCHSIM_LOG_LEVEL (default: WARNING)
 
-    Notes:
+    Notes
+    -----
     - Metalsurfer logs are routed to stdout (not stderr) so HPC job
       launchers that split stdout/stderr capture INFO logs in `.out`.
     - When running under pytest, we avoid reconfiguring stream handlers by
       default to avoid interacting badly with pytest's logging capture.
+
+    Parameters
+    ----------
+    default_level
+        Default logging level.
+    fmt
+        Log record format string.
+    datefmt
+        Date format string for log timestamps.
     """
     _install_log_record_factory()
 
@@ -301,17 +365,28 @@ def torchsim_output_capture(
     stderr_level: int = logging.WARNING,
     carriage_return_rate_limit_s: float = 1.0,
 ):
-    """Capture TorchSim's stdout/stderr and route through logging.
+    r"""Capture TorchSim's stdout/stderr and route through logging.
 
     Useful because TorchSim (and its progress bars) may print directly to
     stdout/stderr, bypassing Python's logging configuration.
 
-    Notes:
+    Notes
+    -----
     - stdout is mapped to INFO, stderr is mapped to WARNING.
-    - stdout updates using carriage return (``\\r``) are rate-limited so we
+    - stdout updates using carriage return (``\r``) are rate-limited so we
       don't emit thousands of near-identical log lines.
-    """
 
+    Parameters
+    ----------
+    logger_name
+        Name of the logger to forward to.
+    stdout_level
+        Logging level for stdout lines.
+    stderr_level
+        Logging level for stderr lines.
+    carriage_return_rate_limit_s
+        Minimum interval between emitting consecutive ``\r`` snapshot lines.
+    """
     pkg_logger = logging.getLogger(logger_name)
     old_stdout = sys.stdout
     old_stderr = sys.stderr

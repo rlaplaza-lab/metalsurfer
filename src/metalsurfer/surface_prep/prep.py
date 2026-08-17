@@ -51,6 +51,13 @@ def apply_material_pbc(atoms: Atoms, material_type: str) -> None:
     Slabs use ``[True, True, False]``, porous frameworks ``[True, True, True]``,
     and nanoparticles ``[False, False, False]``. Uses the shared
     :func:`~metalsurfer.placement._material.material_aware_pbc` map.
+
+    Parameters
+    ----------
+    atoms
+        ASE Atoms object.
+    material_type
+        Type of material.
     """
     atoms.set_pbc(material_aware_pbc(material_type))
 
@@ -70,6 +77,25 @@ def relax_substrate(
 
     Knobs mirror :class:`~metalsurfer.AdsorptionConfig` ``slab_relaxation_*``
     fields. Explicit arguments override *config* when provided.
+
+    Parameters
+    ----------
+    slab
+        Substrate as :class:`SlabContainer` or ASE Atoms.
+    calculator
+        ASE calculator for relaxation.
+    config
+        Adsorption configuration. Defaults to global config.
+    relaxation_mode
+        Override relaxation mode from *config*.
+    relaxation_optimizer
+        Override optimizer from *config*.
+    relaxation_fmax
+        Override force convergence from *config*.
+    relaxation_steps
+        Override step limit from *config*.
+    context
+        Label for logging.
     """
     cfg = resolve_adsorption_config(config)
     container = coerce_slab_container(slab, copy=True)
@@ -120,6 +146,25 @@ def finalize_substrate(
     from bulk, resize in-plane cells, or deposit adatoms — use
     :func:`prepare_substrate` or the lower-level helpers first, then call this
     after custom modification steps when needed.
+
+    Parameters
+    ----------
+    slab
+        Substrate as :class:`SlabContainer` or ASE Atoms.
+    config
+        Adsorption configuration. Defaults to global config.
+    conformers
+        Optional list of conformers for validation.
+    align
+        Whether to align the slab along z.
+    require_bottom_anchor
+        Require the bottom atom at z = 0.
+    relax_top_layer
+        Leave the top layer free during placement relaxation.
+    freeze_symbols
+        Chemical symbols to freeze.
+    top_layer_tolerance
+        Height tolerance for the top layer in Å.
     """
     cfg = resolve_adsorption_config(config)
     container = coerce_slab_container(slab, copy=True)
@@ -213,6 +258,59 @@ def prepare_substrate(
     ``adatom_relaxation_*`` arguments override *config* for each stage.
 
     MLIP model and device come from *config* (``model_name``, ``device``).
+
+    Parameters
+    ----------
+    bulk_id
+        Material identifier for bulk creation.
+    miller_indices
+        Miller indices for cleavage.
+    supercell
+        Supercell dimensions.
+    slab_file
+        Path to a structure file.
+    slab
+        Existing substrate structure.
+    results_dir
+        Directory for output files.
+    alloy_host
+        Host element for alloying.
+    alloy_guest
+        Guest element for alloying.
+    alloy_fraction
+        Fraction of guest atoms.
+    enforce_top_layer_fraction
+        Enforce top-layer alloy concentration.
+    adatom_symbol
+        Symbol for deposited adatoms.
+    adatom_coverage
+        Adatom coverage fraction.
+    config
+        Adsorption configuration. Defaults to global config.
+    align
+        Whether to align the slab along z.
+    slab_relaxation_mode
+        Override relaxation mode for the slab stage.
+    slab_relaxation_optimizer
+        Override optimizer for the slab stage.
+    slab_relaxation_fmax
+        Override force convergence for the slab stage.
+    slab_relaxation_steps
+        Override step limit for the slab stage.
+    adatom_relaxation_mode
+        Override relaxation mode for the adatom stage.
+    adatom_relaxation_optimizer
+        Override optimizer for the adatom stage.
+    adatom_relaxation_fmax
+        Override force convergence for the adatom stage.
+    adatom_relaxation_steps
+        Override step limit for the adatom stage.
+    relax_top_layer
+        Leave the top layer free during placement relaxation.
+    freeze_symbols
+        Chemical symbols to freeze.
+    top_layer_tolerance
+        Height tolerance for the top layer in Å.
     """
     sources = [bulk_id is not None, slab_file is not None, slab is not None]
     if sum(sources) != 1:
@@ -343,6 +441,21 @@ def resize_substrate_for_molecule(
 
     Re-applies material PBC and freeze constraints after resizing. Call after
     :func:`prepare_substrate` and conformer generation, before campaign APIs.
+
+    Parameters
+    ----------
+    slab
+        Substrate as :class:`SlabContainer` or ASE Atoms.
+    conformers
+        List of conformer ASE Atoms.
+    config
+        Adsorption configuration. Defaults to global config.
+    relax_top_layer
+        Leave the top layer free during placement relaxation.
+    freeze_symbols
+        Chemical symbols to freeze.
+    top_layer_tolerance
+        Height tolerance for the top layer in Å.
     """
     cfg = resolve_adsorption_config(config)
     resized, was_resized = auto_resize_substrate_for_molecule(

@@ -83,7 +83,7 @@ def _resolve_device(device: str | None) -> str | None:
 
 
 def _is_cuda_oom_error(exc: BaseException) -> bool:
-    """True when *exc* looks like a CUDA out-of-memory failure."""
+    """Check whether *exc* looks like a CUDA out-of-memory failure."""
     message = str(exc).lower()
     return (
         "out of memory" in message

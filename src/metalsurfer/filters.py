@@ -235,7 +235,17 @@ def adsorbate_connected_components(
     base_slab_len: int,
     connectivity_multipliers: list[float],
 ) -> list[Atoms]:
-    """Split ``atoms[base_slab_len:]`` into connected adsorbate fragments."""
+    """Split ``atoms[base_slab_len:]`` into connected adsorbate fragments.
+
+    Parameters
+    ----------
+    atoms
+        Combined slab+adsorbate ASE Atoms.
+    base_slab_len
+        Number of atoms belonging to the base slab.
+    connectivity_multipliers
+        Covalent-radius multipliers for bond detection.
+    """
     ads = atoms[base_slab_len:]
     if len(ads) == 0:
         return []
@@ -280,14 +290,27 @@ def check_decomposition(
     connectivity_multipliers: list[float],
     adsorbate_prefix_atoms: int | None = None,
 ) -> tuple[bool, str]:
-    """Return ``(ok, reason)``; ``ok=False`` means the adsorbate decomposed
-    or rearranged.
+    """Return ``(ok, reason)`` indicating whether the adsorbate decomposed.
 
+    ``ok=False`` means the adsorbate decomposed or rearranged.
     When *adsorbate_prefix_atoms* is set, only ``atoms[adsorbate_prefix_atoms:]``
     is checked (sequential saturation: slab already contains prior adsorbates).
     That slice must match ASE ordering ``slab_passed_to_filter + new_adsorbate``,
     consistent with :func:`check_desorption`. When unset, all non-surface atoms
     in *atoms* are checked (legacy behaviour).
+
+    Parameters
+    ----------
+    atoms
+        Structure to check.
+    reference_smiles
+        SMILES of the original molecule for reference connectivity.
+    surface_symbols
+        Element symbols of the surface atoms.
+    connectivity_multipliers
+        Covalent-radius multipliers for bond detection.
+    adsorbate_prefix_atoms
+        When set, only ``atoms[adsorbate_prefix_atoms:]`` is checked.
     """
     if adsorbate_prefix_atoms is not None:
         if adsorbate_prefix_atoms < 0 or adsorbate_prefix_atoms > len(atoms):
@@ -387,6 +410,19 @@ def check_desorption(
     default 4 Å threshold, so desorption would go undetected. Porous frameworks
     keep ``[True, True, True]`` because there the wrap is physical, and this also
     matches the convention used by :func:`check_decomposition`.
+
+    Parameters
+    ----------
+    atoms
+        Optimized structure to check.
+    slab
+        Reference slab Atoms.
+    binding_threshold
+        Maximum allowed adsorbate-surface distance in Å.
+    surface_symbols
+        Element symbols of the surface atoms.
+    material_type
+        Material type string (e.g. "slab", "porous", "nanoparticle").
     """
     slab_size = len(slab)
     adsorbate = atoms[slab_size:]

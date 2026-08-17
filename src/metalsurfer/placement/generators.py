@@ -58,6 +58,15 @@ def resolve_materialize_workers(
     ``1`` is serial, ``>1`` is that many workers, ``-1`` uses all CPUs, and
     values ``< -1`` use ``max(1, cpu_count + 1 + n_jobs)`` (so ``-2`` is all
     but one CPU). When ``n_tasks`` is set, the result is capped at ``n_tasks``.
+
+    Parameters
+    ----------
+    n_jobs
+        Number of parallel workers (joblib convention).
+    n_tasks
+        Optional cap on workers based on task count.
+    cpu_count
+        Optional CPU count override.
     """
     if n_jobs == 0:
         raise ValueError("n_jobs must be != 0")
@@ -90,6 +99,25 @@ def generate_placements_from_specs(
     :func:`generate_placement_from_spec_with_reason`. Calculator attachment is
     left to the caller. Worker count comes from
     ``config.placement_materialize_workers`` (joblib-style ``n_jobs``).
+
+    Parameters
+    ----------
+    specs
+        Sequence of placement specifications.
+    conformers
+        List of adsorbate conformers.
+    slab
+        Substrate slab.
+    config
+        Adsorption configuration.
+    smiles
+        Optional SMILES string for the adsorbate.
+    site_context
+        Optional precomputed site context.
+    slab_for_sites
+        Optional substrate for site detection.
+    materialization_cache
+        Optional cache of materialized placements keyed by placement index.
     """
     if not specs:
         return []
@@ -263,6 +291,29 @@ def enumerate_placement_specs(
     deterministic Boltzmann conformer prior when
     ``config.conformer_weighting == "boltzmann"``. Without them the draw stays
     conformer-agnostic (the default).
+
+    Parameters
+    ----------
+    conformers
+        List of adsorbate conformers.
+    slab
+        Substrate slab.
+    config
+        Adsorption configuration.
+    smiles
+        SMILES string or None.
+    n_desired
+        Number of specs to generate.
+    filter_spec
+        Optional callable to filter generated specs.
+    site_context
+        Optional precomputed site context.
+    seed
+        Optional random seed override.
+    full_slab
+        Optional full slab including pre-adsorbed atoms.
+    conformer_energies
+        Optional conformer energies for Boltzmann weighting.
     """
     if not conformers:
         return []
@@ -282,6 +333,13 @@ def enumerate_placement_specs(
         return []
 
     def site_type_for(site_idx: int) -> str | None:
+        """Return the site type string for a given site index.
+
+        Parameters
+        ----------
+        site_idx
+            Index into the unique sites list.
+        """
         if info.is_dissociative:
             return "hollow"
         if not use_sites or site_idx < 0 or site_idx >= len(unique_sites):
@@ -322,7 +380,23 @@ def estimate_placement_spec_capacity(
     site_context: SiteContext | None = None,
     full_slab: Atoms | None = None,
 ) -> int:
-    """Estimate total enumerated specs for current conformers/site grid."""
+    """Estimate total enumerated specs for current conformers/site grid.
+
+    Parameters
+    ----------
+    conformers
+        List of adsorbate conformers.
+    slab
+        Substrate slab.
+    config
+        Adsorption configuration.
+    smiles
+        SMILES string or None.
+    site_context
+        Optional precomputed site context.
+    full_slab
+        Optional full slab including pre-adsorbed atoms.
+    """
     if not conformers:
         return 0
     info = _spec_grid_info(
@@ -359,6 +433,21 @@ def estimate_molecule_complexity(
     that structure (site detection still uses *slab* / *site_context*).
     Returns ``0.0`` when pruning leaves no available sites (callers should skip
     budgeting that molecule for the step).
+
+    Parameters
+    ----------
+    conformers
+        List of adsorbate conformers.
+    slab
+        Substrate slab.
+    config
+        Adsorption configuration.
+    smiles
+        SMILES string or None.
+    site_context
+        Optional precomputed site context.
+    full_slab
+        Optional full slab including pre-adsorbed atoms.
     """
     capacity = estimate_placement_spec_capacity(
         conformers,
@@ -381,6 +470,13 @@ def distribute_placement_budget(
 
     Uses largest-remainder (Hamilton) allocation with a floor of 1 per molecule
     so the returned values always sum to exactly *total_budget*.
+
+    Parameters
+    ----------
+    complexities
+        Mapping from molecule name to complexity score.
+    total_budget
+        Total number of placements to distribute.
     """
     if not complexities:
         return {}
@@ -424,7 +520,25 @@ def generate_placement_from_spec(
     site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
 ) -> tuple[Atoms, PlacementDescriptor] | None:
-    """Generate adsorbate placement from spec. Returns (adsorbate, descriptor) or None."""
+    """Generate adsorbate placement from spec. Returns (adsorbate, descriptor) or None.
+
+    Parameters
+    ----------
+    spec
+        Placement specification.
+    conformers
+        List of adsorbate conformers.
+    slab
+        Substrate slab.
+    config
+        Adsorption configuration.
+    smiles
+        Optional SMILES string.
+    site_context
+        Optional precomputed site context.
+    slab_for_sites
+        Optional substrate for site detection.
+    """
     result, _ = generate_placement_from_spec_with_reason(
         spec,
         conformers,
@@ -446,7 +560,25 @@ def generate_placement_from_spec_with_reason(
     site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
-    """Generate placement from spec and provide a failure reason when unavailable."""
+    """Generate placement from spec and provide a failure reason when unavailable.
+
+    Parameters
+    ----------
+    spec
+        Placement specification.
+    conformers
+        List of adsorbate conformers.
+    slab
+        Substrate slab.
+    config
+        Adsorption configuration.
+    smiles
+        Optional SMILES string.
+    site_context
+        Optional precomputed site context.
+    slab_for_sites
+        Optional substrate for site detection.
+    """
     if not conformers:
         return None, "no_conformers"
     if spec.conformer_index < 0 or spec.conformer_index >= len(conformers):
@@ -509,7 +641,23 @@ def generate_placement_from_descriptor(
     smiles: str | None = None,
     site_context: SiteContext | None = None,
 ) -> Atoms | None:
-    """Reproduce placement deterministically from descriptor."""
+    """Reproduce placement deterministically from descriptor.
+
+    Parameters
+    ----------
+    descriptor
+        Placement descriptor to replay.
+    conformers
+        List of adsorbate conformers.
+    slab
+        Substrate slab.
+    config
+        Adsorption configuration.
+    smiles
+        Optional SMILES string (unused but kept for API consistency).
+    site_context
+        Optional precomputed site context.
+    """
     _ = smiles
     if not conformers:
         return None

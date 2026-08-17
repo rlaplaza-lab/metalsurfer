@@ -44,6 +44,15 @@ def top_layer_indices_by_height(
     enforcement, and adatom site selection. This is **not** the stepped-surface
     expansion performed by
     :func:`~metalsurfer.placement.site_coords.top_layer_mask_by_normal`.
+
+    Parameters
+    ----------
+    positions
+        Atom positions array.
+    cell
+        Unit cell matrix.
+    tolerance
+        Height tolerance in Å.
     """
     heights = _height_along_slab_normal(positions, cell)
     h_max = float(np.max(heights))
@@ -68,6 +77,17 @@ def identify_relaxable_surface_indices(
       distance from the centre of mass).
     - **porous:** framework atoms on pore walls — closest neighbour of each
       pore-classified Voronoi void site.
+
+    Parameters
+    ----------
+    slab
+        ASE Atoms object.
+    material_type
+        Type of material: ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
+    tolerance
+        Distance tolerance in Å.
+    pore_threshold
+        Pore threshold for porous materials.
     """
     if material_type not in ("slab", "nanoparticle", "porous"):
         raise ValueError(
@@ -133,6 +153,13 @@ def identify_top_layer_indices(
     Slab-only convenience wrapper around :func:`identify_relaxable_surface_indices`.
     Atoms within *tolerance* of the maximum height along the slab normal are
     considered part of the top layer.
+
+    Parameters
+    ----------
+    slab
+        ASE Atoms object.
+    tolerance
+        Height tolerance in Å.
     """
     return identify_relaxable_surface_indices(
         slab,
@@ -159,6 +186,21 @@ def compute_frozen_indices(
     :func:`identify_relaxable_surface_indices`).
     If ``freeze_symbols`` is set, only atoms whose symbol is in that list are
     frozen (regardless of layer).
+
+    Parameters
+    ----------
+    slab
+        ASE Atoms object.
+    relax_top_layer
+        If True, leave the top layer free.
+    freeze_symbols
+        Chemical symbols to freeze.
+    top_layer_tolerance
+        Height tolerance for the top layer in Å.
+    material_type
+        Type of material.
+    pore_threshold
+        Pore threshold for porous materials.
     """
     n_slab = len(slab)
 
@@ -181,7 +223,13 @@ def compute_frozen_indices(
 
 
 def frozen_indices_from_constraints(atoms: Atoms) -> list[int]:
-    """Return frozen atom indices from ASE ``FixAtoms`` constraints on *atoms*."""
+    """Return frozen atom indices from ASE ``FixAtoms`` constraints on *atoms*.
+
+    Parameters
+    ----------
+    atoms
+        ASE Atoms object.
+    """
     indices: list[int] = []
     for constraint in atoms.constraints:
         if isinstance(constraint, FixAtoms):
@@ -200,7 +248,19 @@ def max_frozen_substrate_displacement(
     slab_size: int | None = None,
     frozen_indices: list[int] | None = None,
 ) -> float:
-    """Maximum Cartesian displacement (Å) among constrained substrate atoms."""
+    """Maximum Cartesian displacement (Å) among constrained substrate atoms.
+
+    Parameters
+    ----------
+    optimized
+        Optimized ASE Atoms structure.
+    reference_slab
+        Reference slab ASE Atoms.
+    slab_size
+        Number of atoms in the substrate. Defaults to length of *reference_slab*.
+    frozen_indices
+        Indices of frozen atoms. Defaults to constraints on *reference_slab*.
+    """
     if slab_size is None:
         slab_size = len(reference_slab)
     if frozen_indices is None:
@@ -224,7 +284,19 @@ def check_frozen_substrate_displacement(
     slab_size: int | None = None,
     tolerance_ang: float = _DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG,
 ) -> tuple[bool, str]:
-    """Return whether *optimized* kept FixAtoms substrate indices fixed."""
+    """Return whether *optimized* kept FixAtoms substrate indices fixed.
+
+    Parameters
+    ----------
+    optimized
+        Optimized ASE Atoms structure.
+    reference_slab
+        Reference slab ASE Atoms.
+    slab_size
+        Number of atoms in the substrate. Defaults to length of *reference_slab*.
+    tolerance_ang
+        Displacement tolerance in Å.
+    """
     max_disp = max_frozen_substrate_displacement(
         optimized,
         reference_slab,
@@ -243,7 +315,13 @@ def check_frozen_substrate_displacement(
 
 
 def format_atom_index_ranges(indices: list[int]) -> str:
-    """Format sorted atom indices as compact ranges (e.g. ``0-31, 40-47``)."""
+    """Format sorted atom indices as compact ranges (e.g. ``0-31, 40-47``).
+
+    Parameters
+    ----------
+    indices
+        List of atom indices.
+    """
     if not indices:
         return "(none)"
     sorted_idx = sorted(set(indices))
@@ -269,7 +347,15 @@ def log_substrate_freeze_policy(
     *,
     context: str = "Substrate",
 ) -> None:
-    """Log which substrate atoms are frozen vs free during placement relaxation."""
+    """Log which substrate atoms are frozen vs free during placement relaxation.
+
+    Parameters
+    ----------
+    substrate
+        ASE Atoms object.
+    context
+        Prefix string for log messages.
+    """
     n_substrate = len(substrate)
     symbols = substrate.get_chemical_symbols()
     frozen = frozen_indices_from_constraints(substrate)

@@ -62,7 +62,7 @@ def _saturation_symmetry_broken_vs_reference(
     *,
     symmetry_tolerance: float,
 ) -> bool:
-    """True if symmetry vs *reference_atoms* is broken or analysis fails (treat as C1)."""
+    """Check whether symmetry vs *reference_atoms* is broken or analysis fails (treat as C1)."""
     analyzer = SymmetryAnalyzer(current_atoms, symmetry_tolerance=symmetry_tolerance)
     try:
         broken = analyzer.detect_symmetry_breaking(reference_atoms)
@@ -479,6 +479,19 @@ def _run_single_molecule_saturation(
         symmetry_broken: bool,
         slab: SlabContainer,
     ) -> _StepScreenOutcome | None:
+        """Screen placements for one saturation step.
+
+        Parameters
+        ----------
+        step
+            Current step number (1-based).
+        preamble
+            Precomputed slab energy and symmetry state.
+        symmetry_broken
+            Whether symmetry is already broken.
+        slab
+            Current slab container.
+        """
         mol_results, transfer_info, new_memory = _screen_saturation_molecule(
             smiles=smiles,
             molecule_name=molecule,
@@ -518,6 +531,17 @@ def _run_single_molecule_saturation(
         )
 
     def record_step(step: int, n_on_slab: int, outcome: _StepScreenOutcome) -> None:
+        """Record the results of one saturation step.
+
+        Parameters
+        ----------
+        step
+            Current step number (1-based).
+        n_on_slab
+            Number of molecules already adsorbed before this step.
+        outcome
+            Screening outcome to record.
+        """
         mol_results, transfer_info = outcome.payload
         steps.append(
             SaturationStepResult(
@@ -643,6 +667,19 @@ def _run_multi_molecule_saturation(
         symmetry_broken: bool,
         slab: SlabContainer,
     ) -> _StepScreenOutcome | None:
+        """Screen placements for one multi-molecule saturation step.
+
+        Parameters
+        ----------
+        step
+            Current step number (1-based).
+        preamble
+            Precomputed slab energy and symmetry state.
+        symmetry_broken
+            Whether symmetry is already broken.
+        slab
+            Current slab container.
+        """
         if bo_enabled:
             _validate_distinct_bo_memories(
                 {m: s.prior_step_memory for m, s in bo_states.items()},
@@ -793,6 +830,17 @@ def _run_multi_molecule_saturation(
         )
 
     def record_step(step: int, n_on_slab: int, outcome: _StepScreenOutcome) -> None:
+        """Record the results of one multi-molecule saturation step.
+
+        Parameters
+        ----------
+        step
+            Current step number (1-based).
+        n_on_slab
+            Number of molecules already adsorbed before this step.
+        outcome
+            Screening outcome to record.
+        """
         (
             winning_molecule,
             per_molecule_results,
@@ -862,9 +910,21 @@ def run_saturation_screening(
 
     Parameters
     ----------
-    molecules:
+    slab
+        Substrate structure.
+    molecules
         In-memory ``(smiles, name)`` list/tuple or path to a two-column CSV.
-    bo_enabled:
+    config
+        Adsorption configuration.
+    surface_type
+        Surface type label.
+    skip_existing
+        Whether to skip molecules with existing results.
+    failure_summary_out
+        Optional dict to populate with failure summaries.
+    run_metadata_out
+        Optional dict to populate with run metadata.
+    bo_enabled
         When True, each step uses Bayesian placement selection (and optional
         cross-step transfer). Prefer :func:`~metalsurfer.run_saturation_bo` at
         the campaign layer.

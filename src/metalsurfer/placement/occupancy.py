@@ -28,6 +28,13 @@ def existing_adsorbate_positions(
     Contract: *slab_for_sites* is the bare substrate used for site detection;
     *full_slab* may append previously placed adsorbate atoms.  Returns ``None``
     when there is no adsorbate suffix.
+
+    Parameters
+    ----------
+    slab_for_sites
+        Bare substrate used for site detection.
+    full_slab
+        Full system that may include pre-adsorbed atoms.
     """
     if full_slab is None:
         return None
@@ -86,7 +93,21 @@ def available_site_indices(
     pbc: list[bool],
     min_separation: float,
 ) -> list[int]:
-    """Original indices into *sites* that pass occupancy (or all if *existing_positions* is None/empty)."""
+    """Original indices into *sites* that pass occupancy (or all if *existing_positions* is None/empty).
+
+    Parameters
+    ----------
+    sites
+        Sequence of :class:`Site` objects.
+    existing_positions
+        Existing adsorbate positions or None.
+    cell
+        Unit cell matrix.
+    pbc
+        Periodic boundary condition flags.
+    min_separation
+        Minimum separation distance (Å).
+    """
     if existing_positions is None or np.asarray(existing_positions).size == 0:
         return list(range(len(sites)))
 
@@ -113,6 +134,19 @@ def filter_sites_by_occupancy(
     *existing_positions* may be ``None`` or empty; then *sites* is returned
     unchanged (order preserved).  Site vertices are compared to adsorbate atoms,
     not full molecular footprints.
+
+    Parameters
+    ----------
+    sites
+        Sequence of :class:`Site` objects.
+    existing_positions
+        Existing adsorbate positions or None.
+    cell
+        Unit cell matrix.
+    pbc
+        Periodic boundary condition flags.
+    min_separation
+        Minimum separation distance (Å).
     """
     keep = available_site_indices(
         sites,

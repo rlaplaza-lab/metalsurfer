@@ -386,7 +386,7 @@ def _saturation_exclude_count(
 
 
 def _placement_normal(ctx: _PlacementContext, slab: Atoms) -> np.ndarray:
-    """Unit normal used for height/lateral recovery."""
+    """Return unit normal used for height/lateral recovery."""
     if ctx.mat_type == "slab":
         return _slab_normal(np.asarray(slab.get_cell(), dtype=float))
     normal = ctx.normal
@@ -816,7 +816,21 @@ def generate_placement_from_pose(
     config: AdsorptionConfig,
     site_context: SiteContext | None = None,
 ) -> tuple[Atoms, PlacementDescriptor] | None:
-    """Generate adsorbate placement using universal pose semantics."""
+    """Generate adsorbate placement using universal pose semantics.
+
+    Parameters
+    ----------
+    pose
+        :class:`~metalsurfer.models.PlacementPose` with placement parameters.
+    conformers
+        List of adsorbate :class:`~ase.Atoms` conformers.
+    slab
+        Substrate :class:`~ase.Atoms`.
+    config
+        :class:`~metalsurfer.config.AdsorptionConfig` with placement settings.
+    site_context
+        Optional cached :class:`SiteContext`.
+    """
     if not conformers:
         return None
     if pose.conformer_index < 0 or pose.conformer_index >= len(conformers):

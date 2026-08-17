@@ -112,6 +112,15 @@ def ensure_slab_z_alignment(
 
     Returns a copy of *atoms* shifted so ``min(z) == 0`` and with the c-vector
     extended to at least ``max(z_max + min_top_vacuum, min_cell_c)``.
+
+    Parameters
+    ----------
+    atoms
+        ASE Atoms object.
+    min_top_vacuum
+        Minimum vacuum height above the top surface layer in Å.
+    min_cell_c
+        Minimum c-vector length in Å.
     """
     aligned = atoms.copy()
     pos = aligned.get_positions()
@@ -171,6 +180,19 @@ def apply_surface_constraints(
     exposed surface free (see :func:`~metalsurfer.identify_relaxable_surface_indices`;
     requires the correct *material_type*, default ``"slab"``). For full control,
     attach custom ASE constraints to *atoms* yourself and skip this helper.
+
+    Parameters
+    ----------
+    atoms
+        ASE Atoms object.
+    relax_top_layer
+        Whether to leave the top surface layer free.
+    freeze_symbols
+        Symbols to freeze regardless of layer.
+    top_layer_tolerance
+        Height tolerance for identifying the top layer in Å.
+    material_type
+        Material type string (e.g. "slab", "porous", "nanoparticle").
     """
     result = atoms.copy()
     frozen = compute_frozen_indices(
@@ -210,6 +232,13 @@ def coerce_slab_container(
 
     Geometry alignment, sizing, and constraints must be applied via the prep
     helpers before calling campaign APIs.
+
+    Parameters
+    ----------
+    slab
+        SlabContainer or ASE Atoms.
+    copy
+        Whether to copy the underlying atoms.
     """
     if isinstance(slab, SlabContainer):
         if not copy:
@@ -249,6 +278,19 @@ def validate_substrate(
     When *conformers* is provided, also checks in-plane image separation
     (prefer calling :func:`validate_substrate_conformer_sizing` from screening
     prep after resize instead of bundling it here).
+
+    Parameters
+    ----------
+    slab
+        ASE Atoms substrate.
+    material_type
+        Material type string (e.g. "slab", "porous", "nanoparticle").
+    config
+        Adsorption configuration.
+    conformers
+        Optional conformer list for image-separation checks.
+    require_bottom_anchor
+        Whether to enforce bottom-anchored geometry.
     """
     cfg = resolve_adsorption_config(config)
     pos = slab.get_positions()
@@ -345,7 +387,17 @@ def validate_substrate_conformer_sizing(
     conformers: list[Atoms],
     config: AdsorptionConfig | None = None,
 ) -> None:
-    """Ensure in-plane image separation is adequate for *conformers*."""
+    """Ensure in-plane image separation is adequate for *conformers*.
+
+    Parameters
+    ----------
+    slab
+        ASE Atoms substrate.
+    conformers
+        List of conformer ASE Atoms.
+    config
+        Adsorption configuration.
+    """
     cfg = resolve_adsorption_config(config)
     cell = np.array(slab.get_cell(), dtype=float)
     diameter = _molecule_diameter(conformers)
@@ -380,6 +432,13 @@ def accept_substrate_for_api(
     :func:`~metalsurfer.surface_prep.finalize_substrate`), only API invariants
     are checked — full vacuum/cell validation is not repeated. Plain ``Atoms``
     or non-finalized containers still run :func:`validate_substrate`.
+
+    Parameters
+    ----------
+    slab
+        SlabContainer or ASE Atoms substrate.
+    config
+        Adsorption configuration.
     """
     container = coerce_slab_container(slab)
     if container.finalized:
@@ -524,6 +583,15 @@ def create_slab_from_atoms(
     When *material_type* is ``"slab"`` and *align* is true, applies
     :func:`ensure_slab_z_alignment`. Pass ``align=False`` for pre-aligned
     DFT or experimental structures.
+
+    Parameters
+    ----------
+    atoms
+        ASE Atoms object.
+    material_type
+        Material type string.
+    align
+        Whether to apply z-alignment for slabs.
     """
     container = coerce_slab_container(atoms)
     if material_type == "slab" and align:
@@ -684,6 +752,33 @@ def substitute_alloy(
     constrained substitution pattern so the top surface layer composition
     follows *guest_fraction* as closely as possible (subject to integer site
     counts).
+
+    Parameters
+    ----------
+    slab
+        SlabContainer or ASE Atoms substrate.
+    host_symbol
+        Element symbol to replace.
+    guest_symbol
+        Element symbol to insert.
+    guest_fraction
+        Fraction of host atoms to replace.
+    calculator
+        Optional ASE calculator for energy ranking.
+    n_variants
+        Number of random variants to generate.
+    seed
+        Random seed.
+    relax
+        Whether to relax the best variant.
+    enforce_top_layer_fraction
+        Whether to enforce the fraction on the top surface layer.
+    top_layer_tolerance
+        Height tolerance for identifying the top layer in Å.
+    config
+        Adsorption configuration.
+    results_dir
+        Directory for output files.
     """
     if config is None:
         config = AdsorptionConfig()
@@ -865,6 +960,37 @@ def deposit_adatoms(
     *coverage_fraction* of the available sites are filled. The lowest-energy
     variant is kept. Optional relaxation presets can be applied to each
     generated adatom variant before energy ranking.
+
+    Parameters
+    ----------
+    slab
+        SlabContainer or ASE Atoms substrate.
+    adatom_symbol
+        Element symbol of the adatom.
+    coverage_fraction
+        Fraction of hollow sites to fill.
+    calculator
+        Optional ASE calculator for energy ranking.
+    n_variants
+        Number of random variants to generate.
+    adsorption_height
+        Height above the surface site in Å.
+    min_adatom_separation
+        Minimum distance between adatoms in Å.
+    seed
+        Random seed.
+    results_dir
+        Directory for output files.
+    config
+        Adsorption configuration.
+    relaxation_mode
+        Slab relaxation mode preset.
+    relaxation_optimizer
+        Optimizer preset for relaxation.
+    relaxation_fmax
+        Force convergence threshold for relaxation.
+    relaxation_steps
+        Maximum relaxation steps.
     """
     if config is None:
         config = AdsorptionConfig()
@@ -1085,6 +1211,15 @@ def compute_minimum_supercell(
 
     The cell is repeated so that both perpendicular heights of the
     in-plane parallelogram exceed ``molecule_diameter + min_separation``.
+
+    Parameters
+    ----------
+    cell
+        3x3 cell matrix.
+    molecule_diameter
+        Maximum adsorbate diameter in Å.
+    min_separation
+        Minimum image separation in Å.
     """
     required = molecule_diameter + min_separation
     h_a, h_b = _perpendicular_heights_2d(cell)
@@ -1107,6 +1242,15 @@ def auto_resize_substrate_for_molecule(
 
     Returns ``(slab, was_resized)`` where *was_resized* is ``True``
     when the cell was expanded.
+
+    Parameters
+    ----------
+    slab
+        SlabContainer or ASE Atoms substrate.
+    conformers
+        List of conformer ASE Atoms.
+    min_separation
+        Minimum image separation in Å.
     """
     slab = coerce_slab_container(slab)
 

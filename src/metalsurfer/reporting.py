@@ -4,7 +4,13 @@ from pathlib import Path
 
 
 def format_failure_summary_text(failure_summary: dict[str, object]) -> str:
-    """Produce a human-readable multi-line summary from a failure_summary dict."""
+    """Produce a human-readable multi-line summary from a failure_summary dict.
+
+    Parameters
+    ----------
+    failure_summary
+        Dictionary containing failure stage and counts.
+    """
     lines = ["Failure summary:"]
     stage = failure_summary.get("stage", "unknown")
     lines.append(f"  Stage: {stage}")
@@ -68,6 +74,17 @@ def format_failure_summary_text(failure_summary: dict[str, object]) -> str:
 
 
 def results_output_suffix(*, write_vasp_inputs: bool) -> str:
+    """Return a human-readable suffix listing output formats.
+
+    Parameters
+    ----------
+    write_vasp_inputs
+        Whether POSCAR outputs are included.
+
+    Returns
+    -------
+    str
+    """
     return "(XYZ, POSCAR, CSV)" if write_vasp_inputs else "(XYZ, CSV)"
 
 
@@ -76,6 +93,19 @@ def format_results_saved_line(
     results_dir: str,
     write_vasp_inputs: bool = False,
 ) -> str:
+    """Format a "Results saved to ..." message.
+
+    Parameters
+    ----------
+    results_dir
+        Path to the results directory.
+    write_vasp_inputs
+        Whether POSCAR outputs are included.
+
+    Returns
+    -------
+    str
+    """
     suffix = results_output_suffix(write_vasp_inputs=write_vasp_inputs)
     return f"Results saved to {Path(results_dir).as_posix()}/ {suffix}"
 
@@ -88,6 +118,25 @@ def format_saturation_completion(
     results_dir: str,
     write_vasp_inputs: bool = False,
 ) -> str:
+    """Format a saturation-run completion message.
+
+    Parameters
+    ----------
+    label
+        Run label.
+    n_molecules_at_saturation
+        Number of molecules at saturation.
+    n_steps
+        Total number of saturation steps.
+    results_dir
+        Path to the results directory.
+    write_vasp_inputs
+        Whether POSCAR outputs are included.
+
+    Returns
+    -------
+    str
+    """
     suffix = results_output_suffix(write_vasp_inputs=write_vasp_inputs)
     return "\n".join(
         [

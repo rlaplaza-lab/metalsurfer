@@ -66,7 +66,7 @@ def clear_dissociative_pair_caches() -> None:
 
 
 def _is_dissociable_diatomic(adsorbate: Atoms) -> bool:
-    """True if molecule is a homonuclear diatomic (e.g. H2, O2, N2)."""
+    """Check whether the molecule is a homonuclear diatomic (e.g. H2, O2, N2)."""
     syms = adsorbate.get_chemical_symbols()
     return len(syms) == 2 and syms[0] == syms[1]
 
@@ -79,7 +79,7 @@ def _site_outward_normal(
     reference_positions: np.ndarray,
     slab_normal: np.ndarray,
 ) -> np.ndarray:
-    """Unit outward normal for dissociative fragment placement."""
+    """Return unit outward normal for dissociative fragment placement."""
     normal = np.asarray(site.normal, dtype=float)
     norm = float(np.linalg.norm(normal))
     if norm > _VECTOR_NORM_EPS:
@@ -579,7 +579,25 @@ def place_at_sites(
     slab: Atoms | None = None,
     slab_for_sites: Atoms | None = None,
 ) -> tuple[Atoms, PlacementDescriptor] | None:
-    """Place a diatomic at exactly two sites (dissociative path)."""
+    """Place a diatomic at exactly two sites (dissociative path).
+
+    Parameters
+    ----------
+    adsorbate
+        ASE :class:`~ase.Atoms` object for the diatomic adsorbate.
+    sites
+        Sequence of exactly two :class:`Site` objects.
+    config
+        Adsorption configuration.
+    spec
+        Placement specification.
+    height_override
+        Override height offset (required for two-site placement).
+    slab
+        Full slab structure.
+    slab_for_sites
+        Substrate used for site detection (defaults to *slab*).
+    """
     if not sites:
         return None
     if slab is None:

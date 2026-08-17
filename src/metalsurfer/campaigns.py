@@ -286,8 +286,34 @@ def run_adsorption_bo(
     run_metadata_out: dict[str, Any] | None = None,
     process_kwargs: dict[str, Any] | None = None,
 ) -> BindingCampaignResult:
-    """Same as :func:`run_adsorption`, with BO-guided placement via
+    """Run adsorption with BO-guided placement.
+
+    Same as :func:`run_adsorption`, using
     :func:`~metalsurfer.workflow.bayesian.process_molecule_bayesian`.
+
+    Parameters
+    ----------
+    slab
+        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
+    molecules
+        In-memory ``(smiles, name)`` list or path to a CSV with ``smiles`` and ``name`` columns.
+    config
+        Screening configuration.
+    surface_type
+        Label used to name the ``results_{surface_type}/`` output directory.
+    system_name
+        Optional system identifier written into per-molecule XYZ files.
+    save_results
+        Whether to write CSV/XYZ output files.
+    write_settings
+        When True (default), write the full ``run_metadata.json``.
+    skip_existing
+        Skip molecules already listed in ``adsorption_energies_detailed.csv``.
+    run_metadata_out
+        Optional dict to populate with timing and count metadata.
+    process_kwargs
+        Extra keyword arguments forwarded to
+        :func:`~metalsurfer.workflow.bayesian.process_molecule_bayesian`.
     """
     return _run_binding_campaign(
         slab=slab,
@@ -459,7 +485,27 @@ def run_saturation_bo(
     skip_existing: bool = True,
     run_metadata_out: dict[str, Any] | None = None,
 ) -> SaturationCampaignResult:
-    """Same as :func:`run_saturation`, with BO-guided placement selection."""
+    """Run saturation with BO-guided placement selection.
+
+    Parameters
+    ----------
+    slab
+        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
+    molecules
+        In-memory list or CSV path (``smiles``, ``name`` columns).
+    config
+        Screening configuration.
+    surface_type
+        Label for the ``results_{surface_type}/`` output directory.
+    save_results
+        Whether to write CSV/XYZ output files.
+    write_settings
+        When True (default), write the full ``run_metadata.json``.
+    skip_existing
+        Skip molecules already listed in ``saturation_summary.csv``.
+    run_metadata_out
+        Optional dict populated with timing and count metadata.
+    """
     if config is None:
         config = AdsorptionConfig()
     return _run_saturation_campaign(

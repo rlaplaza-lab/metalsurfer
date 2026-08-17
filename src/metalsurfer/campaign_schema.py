@@ -57,6 +57,7 @@ class CampaignDocument:
 
     @property
     def results_dir(self) -> str:
+        """Campaign results directory name."""
         return f"results_{self.surface_type}"
 
 
@@ -123,7 +124,13 @@ def _validate_config_keys(config_raw: dict[str, Any]) -> None:
 
 
 def parse_campaign_dict(data: dict[str, Any]) -> CampaignDocument:
-    """Validate a campaign mapping and return a :class:`CampaignDocument`."""
+    """Validate a campaign mapping and return a :class:`CampaignDocument`.
+
+    Parameters
+    ----------
+    data
+        Campaign dictionary parsed from YAML or constructed in memory.
+    """
     unknown_root = set(data) - _ROOT_KEYS
     if unknown_root:
         quoted = ", ".join(sorted(unknown_root))
@@ -169,7 +176,13 @@ def parse_campaign_dict(data: dict[str, Any]) -> CampaignDocument:
 
 
 def load_campaign_yaml(path: str | Path) -> CampaignDocument:
-    """Load and validate a campaign YAML file."""
+    """Load and validate a campaign YAML file.
+
+    Parameters
+    ----------
+    path
+        Path to the YAML campaign file.
+    """
     yaml_path = Path(path)
     raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
     if raw is None:

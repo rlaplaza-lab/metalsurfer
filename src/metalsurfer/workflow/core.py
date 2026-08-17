@@ -53,7 +53,43 @@ def process_molecule(
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
 ) -> MoleculeScreenOutcome:
-    """Run the full placement-optimise-validate pipeline for one molecule."""
+    """Run the full placement-optimise-validate pipeline for one molecule.
+
+    Parameters
+    ----------
+    smiles
+        SMILES string of the molecule.
+    molecule_name
+        Human-readable molecule identifier.
+    slab
+        Substrate container.
+    calculator
+        ASE calculator instance.
+    reference_energies
+        Reference energies for slab and molecules.
+    ts_model
+        Transition-state model (optional).
+    config
+        Adsorption configuration.
+    surface_type
+        Surface type label.
+    reference_smiles
+        SMILES used for reference energy lookup.
+    base_slab_for_frozen
+        Base slab for freeze constraints.
+    slab_energy_override
+        Override slab reference energy.
+    saturation_reuse
+        Whether to reuse saturation-optimized substrate.
+    symmetry_broken
+        Whether symmetry is broken.
+    conformers
+        Pre-generated conformers (optional).
+    conformer_energies
+        Energies aligned with conformers (optional).
+    skip_workload_autotune
+        Whether to skip workload autotuning.
+    """
     if config is None:
         config = AdsorptionConfig()
 
@@ -311,8 +347,9 @@ def _evaluate_placement_batch(
     replaced from the backfill list until ``n_target`` (default: ``len(specs)``)
     geometry-valid placements are obtained or the backfill is exhausted.
 
-    Returns:
-        ``(results, failures, n_backfill_used)``
+    Returns
+    -------
+    ``(results, failures, n_backfill_used)``
     """
     target = len(specs) if n_target is None else n_target
     fill = materialize_specs_filling_target(

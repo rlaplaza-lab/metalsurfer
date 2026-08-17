@@ -37,6 +37,11 @@ def extract_features(record: PlacementRecord) -> dict[str, float]:
     """Extract numeric features from a single PlacementRecord.
 
     Returns a flat dictionary of feature_name -> value.
+
+    Parameters
+    ----------
+    record
+        Placement record to extract features from.
     """
     features: dict[str, float] = {
         "x": _as_finite_float(record.descriptor.x_abs, "x_abs"),
