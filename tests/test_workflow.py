@@ -348,24 +348,6 @@ class TestProcessMolecule:
         assert outcome.failure_summary["stage"] == expected_stage
         assert name in str(outcome.failure_summary["reason"])
 
-    def test_no_valid_placements_returns_none(self):
-        slab = SlabContainer(make_slab())
-        refs = self._make_refs()
-        config = AdsorptionConfig(num_placements=1, num_conformers=1, seed=42)
-        mock_cfs = MagicMock(return_value=None)
-        with patch(
-            "metalsurfer.workflow.shared.create_conformers_from_smiles", mock_cfs
-        ):
-            outcome = process_molecule(
-                "O",
-                "water",
-                slab,
-                MagicMock(),
-                reference_energies=refs,
-                config=config,
-            )
-        assert outcome.results == []
-
     def test_no_conformers_populates_failure_summary(self):
         slab = SlabContainer(make_slab())
         refs = self._make_refs()

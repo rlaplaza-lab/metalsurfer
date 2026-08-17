@@ -8,12 +8,13 @@ import os
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.build import fcc111
 from ase.io import read
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.models import ScreeningResult
 from metalsurfer.optimization import setup_single_model
-from metalsurfer.surface_prep import prepare_substrate
+from metalsurfer.surface_prep import apply_surface_constraints, prepare_substrate
 from metalsurfer.workflow import calculate_reference_energies, process_molecule
 from tests.conftest import GPU_MLIP_MARKS, adsorbate_symbol_pair_distance, pair_distance
 
@@ -50,6 +51,11 @@ def _pt12_cluster() -> Atoms:
     )
 
 
+def _local_ru_001_slab() -> Atoms:
+    """Local Ru(001)-like slab; avoids Materials Project network dependency."""
+    return apply_surface_constraints(fcc111("Ru", size=(2, 2, 3), a=2.7, vacuum=10.0))
+
+
 def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
     if case_id == "ethene_ru":
         num_placements = 12
@@ -64,9 +70,7 @@ def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
         assert config.skip_topology_check is False
         assert config.skip_desorption_check is False
         slab = prepare_substrate(
-            bulk_id="mp-33",
-            miller_indices=(0, 0, 1),
-            supercell=(2, 2, 1),
+            slab=_local_ru_001_slab(),
             config=config,
             results_dir="results_test_ethene",
         )
@@ -85,9 +89,7 @@ def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
         )
         assert config.skip_desorption_check is False
         slab = prepare_substrate(
-            bulk_id="mp-33",
-            miller_indices=(0, 0, 1),
-            supercell=(2, 2, 1),
+            slab=_local_ru_001_slab(),
             config=config,
             results_dir="results_test_h2_ru_slab",
         )

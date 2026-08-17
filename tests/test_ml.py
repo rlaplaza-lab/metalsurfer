@@ -631,6 +631,13 @@ class TestAcquisitionMinimization:
         assert_allclose(out, -mu)
         assert out[0] > out[1]
 
+    def test_ei_scores_sigma_zero_ranks_by_negative_mu(self):
+        mu = np.array([1.0, 2.0, -0.5])
+        sig = np.array([0.0, 0.0, 0.0])
+        out = ei_scores(mu, sig, f_best=0.0, xi=numeric_defaults.ACQUISITION_XI_DEFAULT)
+        assert_allclose(out, -mu)
+        assert int(np.argmax(out)) == 2
+
     def test_ei_matches_analytic_normal(self):
         mu = np.array([0.5])
         sig = np.array([1.0])

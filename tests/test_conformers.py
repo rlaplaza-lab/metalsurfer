@@ -51,7 +51,7 @@ class TestCreateConformers:
         result = create_conformers_from_smiles("CCO", config=config)
         assert result is not None
         conformers, energies = result
-        assert len(conformers) >= 1
+        assert len(conformers) > 1
         assert all(np.isfinite(e) for e in energies)
         for c in conformers:
             assert len(c) == 9

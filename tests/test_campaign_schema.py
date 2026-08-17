@@ -66,10 +66,11 @@ def test_parse_campaign_accepts_nested_bo_config():
             "surface_type": "ok",
             "substrate": {"bulk_id": "mp-30"},
             "molecules": [{"smiles": "C", "name": "methane"}],
-            "config": {"bo": {"transfer": {"enabled": True}}},
+            "config": {"bo": {"transfer": {"enabled": False, "weight_cap": 0.25}}},
         }
     )
-    assert doc.config.bo.transfer.enabled is True
+    assert doc.config.bo.transfer.enabled is False
+    assert doc.config.bo.transfer.weight_cap == pytest.approx(0.25)
 
 
 def test_run_campaign_dispatches_with_mocks(monkeypatch):

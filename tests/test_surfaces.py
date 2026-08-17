@@ -13,6 +13,7 @@ from ase.build import fcc111
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.exceptions import GeometryValidationError
 from metalsurfer.io_results import _write_clean_xyz
+from metalsurfer.placement import get_hollow_sites_for_adatoms
 from metalsurfer.surface_prep import (
     SlabContainer,
     apply_surface_constraints,
@@ -943,14 +944,9 @@ class TestWriteCleanXyz:
             assert int(lines[0].strip()) == len(atoms)
 
 
-def test_deposit_adatoms_height_follows_tilted_slab_normal():
+def test_deposit_adatoms_height_follows_tilted_slab_normal(tmp_path):
     """Adatom offset must follow site/slab normal, not Cartesian +z."""
-    import numpy as np
-    from ase import Atoms
-
-    from metalsurfer.config import AdsorptionConfig
     from metalsurfer.placement.site_coords import _slab_normal
-    from metalsurfer.surface_prep import deposit_adatoms
 
     # Orthorhombic slab then tilt c so normal is not [0,0,1]
     a = 2.7
@@ -968,16 +964,15 @@ def test_deposit_adatoms_height_follows_tilted_slab_normal():
     atoms.set_cell(cell, scale_atoms=False)
 
     height = 1.8
+    config = AdsorptionConfig(material_type="slab", seed=0, slab_relaxation_mode="none")
     result = deposit_adatoms(
         atoms,
         "H",
         coverage_fraction=0.15,
         n_variants=1,
         adsorption_height=height,
-        config=AdsorptionConfig(
-            material_type="slab", seed=0, slab_relaxation_mode="none"
-        ),
-        results_dir="/tmp/adatom_tilt_test",
+        config=config,
+        results_dir=str(tmp_path),
     )
     n_base = len(atoms)
     ad_pos = result.atoms.get_positions()[n_base:]
@@ -986,6 +981,19 @@ def test_deposit_adatoms_height_follows_tilted_slab_normal():
     base_pos = result.atoms.get_positions()[:n_base]
     base_h = base_pos @ n_hat
     top_h = float(np.max(base_h))
+    hollow_sites = get_hollow_sites_for_adatoms(
+        atoms,
+        top_layer_tolerance=config.top_layer_tolerance,
+        dedup_tolerance=config.hollow_site_dedup_tolerance,
+        material_type=config.material_type,
+    )
+    expected_targets = []
+    for site in hollow_sites:
+        normal = np.asarray(site.normal, dtype=float)
+        nrm = float(np.linalg.norm(normal))
+        if nrm > 1e-12:
+            normal = normal / nrm
+        expected_targets.append(site.xyz + float(height) * normal)
     for p in ad_pos:
         h = float(np.dot(p, n_hat))
         assert h > top_h + 0.3, f"adatom height along normal {h:.3f} vs top {top_h:.3f}"
@@ -997,5 +1005,8 @@ def test_deposit_adatoms_height_follows_tilted_slab_normal():
             abs(p[2] - cartesian_target_z) > 0.05
             or abs(float(np.dot(n_hat, [0, 0, 1])) - 1.0) < 1e-6
         )
-        # Displacement along normal from projection onto top plane ≈ height
-        assert abs((h - top_h) - height) < 1.5 or h > top_h
+        # Each adatom sits adsorption_height along the site normal from a hollow.
+        dists = [float(np.linalg.norm(p - target)) for target in expected_targets]
+        assert min(dists) < 0.05, (
+            f"adatom at {p} not on any hollow+height target (min dist {min(dists):.3f})"
+        )

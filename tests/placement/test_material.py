@@ -15,6 +15,7 @@ from metalsurfer.placement import (
     get_unified_sites,
     material_aware_pbc,
 )
+from metalsurfer.placement._constants import _DISTANCE_RECOVERY_HEIGHT_STEPS
 from metalsurfer.placement._material import (
     calculator_pbc_for_atoms,
     material_type_for_placement,
@@ -25,6 +26,7 @@ from metalsurfer.placement.geometry import (
 from metalsurfer.placement.pose import (
     _finalize_placement,
     _PlacementContext,
+    _recover_distance_failure,
     _resolve_surface_ref,
 )
 from metalsurfer.placement.site_context import (
@@ -265,8 +267,6 @@ def test_local_site_distance_recovery_height_direction(
     material_type, fail_reason, expect_raise, monkeypatch
 ):
     """NP raises on too_close / lowers on too_far; porous inverts that."""
-    from metalsurfer.placement.pose import _recover_distance_failure
-
     structure = (
         make_nanoparticle()
         if material_type == "nanoparticle"
@@ -327,7 +327,8 @@ def test_local_site_distance_recovery_height_direction(
     )
     assert reason is None
     zf_final = float(new_ctx.pose.z_fraction)
-    assert abs(zf_final - zf0) >= 0.05
+    min_step_delta = min(zf0, 1.0 - zf0) / float(_DISTANCE_RECOVERY_HEIGHT_STEPS + 1)
+    assert abs(zf_final - zf0) >= min_step_delta - 1e-6
     if expect_raise:
         assert zf_final > zf0
     else:

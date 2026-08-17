@@ -340,12 +340,15 @@ def test_cache_helpers_are_thread_safe(
     def worker(idx: int) -> None:
         try:
             barrier.wait(timeout=5)
-            for i in range(50):
-                _cache._get_inflight_autobatcher(models[idx], 100 + i)
+            for i in range(12):
+                _cache._get_inflight_autobatcher(models[idx], 100)
                 _cache.capacity_cache_set((idx, i), i)
                 _cache.capacity_cache_get((idx, i))
-                if i % 5 == 0:
-                    _cache.clear_autobatcher_cache()
+                if i % 5 == 4:
+                    barrier.wait(timeout=5)
+                    if idx == 0:
+                        _cache.clear_autobatcher_cache()
+                    barrier.wait(timeout=5)
         except BaseException as exc:  # pragma: no cover - only on a real failure
             errors.append(exc)
 
@@ -358,8 +361,9 @@ def test_cache_helpers_are_thread_safe(
     assert not any(t.is_alive() for t in threads)
     assert errors == []
     # capacity survived every default clear
-    assert len(_cache._PARALLEL_CAPACITY_CACHE) == 4 * 50
-    assert all(isinstance(v, object) for v in _cache._AUTOBATCHER_CACHE.values())
+    assert len(_cache._PARALLEL_CAPACITY_CACHE) == 4 * 12
+    assert len(_cache._AUTOBATCHER_CACHE) == 4
+    assert len(set(id(v) for v in _cache._AUTOBATCHER_CACHE.values())) == 4
     _cache._PARALLEL_CAPACITY_CACHE.clear()
 
 
@@ -407,7 +411,6 @@ def test_maybe_clear_cuda_cache_noop_without_torch(monkeypatch: pytest.MonkeyPat
 def test_torchsim_calculator_extracts_energy_forces_stress(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(_deps, "ts", MagicMock())
     atoms = _make_atoms_with_cell()[:6]
     atoms.set_cell([10, 10, 15])
     atoms.set_pbc([True, True, True])
@@ -884,11 +887,6 @@ def test_estimate_parallel_relaxation_capacity_runtime_error_falls_back(
         "_make_state_with_frozen_constraint",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("probe failed")),
     )
-    monkeypatch.setattr(
-        _deps,
-        "calculate_memory_scalers",
-        lambda *args, **kwargs: [100.0],
-    )
     config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
     atoms = _make_atoms_with_cell()
     capacity = _optimize.estimate_parallel_relaxation_capacity(
@@ -912,11 +910,6 @@ def test_estimate_parallel_relaxation_capacity_value_error_propagates(
         _optimize,
         "_make_state_with_frozen_constraint",
         lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad config")),
-    )
-    monkeypatch.setattr(
-        _deps,
-        "calculate_memory_scalers",
-        lambda *args, **kwargs: [100.0],
     )
     config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
     atoms = _make_atoms_with_cell()
@@ -973,22 +966,6 @@ def test_resolve_autobatcher_max_atoms_to_try_is_conservative_vs_estimate():
     )
     assert cap >= estimated
     assert source == "dynamic"
-
-
-class _FakeTensor:
-    """Minimal stand-in for a torch tensor supporting .detach().cpu().numpy()."""
-
-    def __init__(self, array):
-        self._array = np.asarray(array)
-
-    def detach(self):
-        return self
-
-    def cpu(self):
-        return self
-
-    def numpy(self):
-        return self._array
 
 
 class _FakeBatch:

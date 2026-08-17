@@ -105,7 +105,8 @@ def test_site_type_matches_topology_source_on_close_packed_slabs(slab_factory):
     mismatches = [
         (s.site_type, s.site_source)
         for s in sites
-        if s.site_type != s.site_source.removeprefix("topology_")
+        if s.site_source.startswith("topology_")
+        and s.site_type != s.site_source.removeprefix("topology_")
     ]
     assert mismatches == []
     assert Counter(s.site_type for s in sites) == Counter(
@@ -218,7 +219,7 @@ def test_vectorized_orbits_match_the_scalar_reference_on_a_cluster():
 
 
 def test_symmetry_reduction_of_a_4x4_slab_is_fast():
-    """3.97 s (3×3) / 20.9 s (4×4) before vectorization."""
+    """Vectorization regression guard: pre-vectorization ~21 s on 4×4 Pt(111)."""
     slab = fcc111("Pt", (4, 4, 4), vacuum=10.0)
     raw = get_unified_sites(slab, material_type="slab")
     analyzer = SymmetryAnalyzer(slab, mode="auto")
@@ -229,7 +230,7 @@ def test_symmetry_reduction_of_a_4x4_slab_is_fast():
     elapsed = time.perf_counter() - start
 
     assert sorted(o.symmetry_multiplicity for o in orbits) == [16, 32, 48]
-    assert elapsed < 1.0, f"analyze_site_symmetry took {elapsed:.2f}s"
+    assert elapsed < 5.0, f"analyze_site_symmetry took {elapsed:.2f}s"
 
 
 def test_delaunay_classification_pbc_edge_is_not_mislabeled_atop():

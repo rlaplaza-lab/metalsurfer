@@ -41,10 +41,6 @@ jobs:
           mypy src/metalsurfer
 
   # -----------------------------------------------------------------------
-  # Unit tests (coverage gate, >=85%) + dependency-behavior + integration
-  # -----------------------------------------------------------------------
-
-  # -----------------------------------------------------------------------
   # Unit + integration tests with full optional dependencies
   # -----------------------------------------------------------------------
   test-full:
@@ -133,3 +129,39 @@ jobs:
             tests/test_integration_physics.py \
             tests/test_integration_run_modes.py \
             -v --tb=short
+
+  # -----------------------------------------------------------------------
+  # CPU MLIP smoke (gated UMA model download via HF_TOKEN)
+  # -----------------------------------------------------------------------
+  test-mlip-cpu:
+    if: ${{ secrets.HF_TOKEN != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CUDA_VISIBLE_DEVICES: ""
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache HuggingFace model downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: huggingface-uma-${{ runner.os }}-py3.12
+          restore-keys: |
+            huggingface-uma-${{ runner.os }}-
+
+      - name: Install CPU PyTorch and MLIP stack
+        run: |
+          pip install --upgrade pip
+          pip install pytest
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[mlip]"
+          pip install torch --index-url https://download.pytorch.org/whl/cpu --force-reinstall --no-deps
+
+      - name: Run CPU MLIP unit and smoke tests
+        run: |
+          python -m pytest tests/test_optimization.py tests/test_integration_mlip_cpu_smoke.py -m mlip --tb=short -v

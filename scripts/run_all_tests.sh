@@ -74,7 +74,7 @@ _run_phase "3_cpu_integration" \
     --tb=short -v
 
 _run_phase "4_mlip_unit" \
-  "$PYTHON" -m pytest tests/test_optimization.py -m mlip --tb=short -v
+  "$PYTHON" -m pytest tests/test_optimization.py tests/test_integration_mlip_cpu_smoke.py -m mlip --tb=short -v
 
 _run_phase "5_gpu_integration" \
   bash "$ROOT/scripts/run_gpu_tests.sh" "$PYTHON"

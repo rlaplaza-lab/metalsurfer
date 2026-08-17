@@ -27,6 +27,7 @@ from metalsurfer.filters import (
     _formula_from_atoms,
     _formula_from_smiles,
     _is_molecule_connected_from_dist,
+    _mic_pairwise_distances,
     _nonsurface_distance_and_threshold,
     check_decomposition,
     check_desorption,
@@ -385,11 +386,11 @@ def test_coordination_fingerprint_detects_h_shift():
 @pytest.mark.parametrize(
     ("mol_factory", "smiles", "surface_symbols", "multipliers", "slab_factory"),
     [
-        (make_water, "O", ["Ru"], [1.2, 1.3], lambda: make_slab(n_layers=1)),
+        (make_water, "O", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
         (_make_ethanol, "CCO", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
         (_make_methanol, "CO", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
         (_make_acetic_acid, "CC(=O)O", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
-        (make_water, "O", ["Ru", "Cu"], [1.2, 1.3], _make_alloy_slab),
+        (make_water, "O", ["Ru", "Cu"], [1.3], _make_alloy_slab),
     ],
 )
 def test_decomposition_intact(
@@ -457,10 +458,29 @@ def test_decomposition_fragmented_water():
         combined,
         reference_smiles="O",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.2, 1.3],
+        connectivity_multipliers=[1.3],
     )
     assert not ok
     assert "not connected" in reason
+
+
+def test_decomposition_connectivity_uses_max_multiplier_only():
+    slab = make_slab(n_layers=1)
+    combined = place_molecule_on_slab(slab, make_water())
+    ok_a, reason_a = check_decomposition(
+        combined,
+        reference_smiles="O",
+        surface_symbols=["Ru"],
+        connectivity_multipliers=[1.2, 9.0],
+    )
+    ok_b, reason_b = check_decomposition(
+        combined,
+        reference_smiles="O",
+        surface_symbols=["Ru"],
+        connectivity_multipliers=[9.0],
+    )
+    assert ok_a == ok_b
+    assert reason_a == reason_b
 
 
 def _combined_slab_two_waters_far_apart():
@@ -908,20 +928,29 @@ def test_desorption_ignores_pre_adsorbed_atoms_when_surface_symbols_provided():
 def test_filter_results_desorption_uses_surface_symbols_masking():
     """filter_results should pass surface_symbols into desorption filtering."""
     slab_metal = make_slab(n_layers=1, symbol="Ru")
-    slab_z = float(np.max(slab_metal.get_positions()[:, 2]))
+    x_shift = 5.0
+    y_shift = 5.0
+    z_offset = 10.0
 
-    pre_adsorbed = Atoms("C", positions=[[5.0, 5.0, slab_z + 9.8]])
+    slab_metal_z = float(np.max(slab_metal.get_positions()[:, 2]))
+    water = make_water().copy()
+    pos = water.get_positions().copy()
+    pos -= np.mean(pos, axis=0)
+    pos[:, 0] += x_shift
+    pos[:, 1] += y_shift
+    pos[:, 2] += slab_metal_z + z_offset
+    water.set_positions(pos)
+
+    # Pre-adsorbed atom at the oxygen position masks desorption without surface_symbols.
+    o_pos = water.get_positions()[0].copy()
+    pre_adsorbed = Atoms("C", positions=[o_pos])
     slab_with_pre_adsorbate = slab_metal + pre_adsorbed
     slab_with_pre_adsorbate.set_cell(slab_metal.get_cell())
     slab_with_pre_adsorbate.set_pbc(slab_metal.get_pbc())
 
-    combined = place_molecule_on_slab(
-        slab_with_pre_adsorbate,
-        make_water(),
-        z_offset=14.0,
-        x_shift=5.0,
-        y_shift=5.0,
-    )
+    combined = slab_with_pre_adsorbate + water
+    combined.set_cell(slab_with_pre_adsorbate.get_cell())
+    combined.set_pbc(slab_with_pre_adsorbate.get_pbc())
     results = [_sr(combined, -1.0, 0)]
 
     config = AdsorptionConfig(skip_topology_check=True, connectivity_multipliers=[1.3])
@@ -1276,8 +1305,6 @@ def test_connected_molecule_across_pbc():
 
 def test_filters_mic_distances_use_left_handed_cells():
     from ase import Atoms
-
-    from metalsurfer.filters import _mic_pairwise_distances
 
     cell = np.diag([6.0, 6.0, -20.0])
     atoms = Atoms("H2", positions=[[0.5, 0.5, 0.0], [5.5, 0.5, 0.0]], cell=cell)

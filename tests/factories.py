@@ -8,9 +8,9 @@ import numpy as np
 
 from metalsurfer.ml.schema import ComputationContext, PlacementRecord
 from metalsurfer.models import PlacementDescriptor
-from tests.conftest import make_slab
 
-DEFAULT_TEST_SLAB_SURFACE_Z = float(np.max(make_slab().get_positions()[:, 2]))
+# Top-layer z for default ``make_slab()`` (n_layers=3, spacing=2.7 → max z = 5.4).
+DEFAULT_TEST_SLAB_SURFACE_Z = 5.4
 
 Variant = Literal["bayesian", "ml"]
 

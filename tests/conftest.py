@@ -20,20 +20,27 @@ from metalsurfer.models import PlacementDescriptor, ScreeningResult
 
 from .optional_deps import cuda_available, has_mlip_stack
 
+_SKIP_WITHOUT_MLIP = pytest.mark.skipif(
+    not has_mlip_stack,
+    reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
+)
+
 # Shared markers for GPU/MLIP e2e modules (keep process isolation in run_gpu_tests.sh).
 GPU_MLIP_MARKS = [
     pytest.mark.slow,
     pytest.mark.mlip,
     pytest.mark.gpu,
     pytest.mark.no_fork,  # CUDA incompatible with pytest-forked
-    pytest.mark.skipif(
-        not has_mlip_stack,
-        reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
-    ),
+    _SKIP_WITHOUT_MLIP,
     pytest.mark.skipif(
         not cuda_available,
         reason="CUDA GPU required; skipped in CI (no GPU)",
     ),
+]
+
+MLIP_CPU_MARKS = [
+    pytest.mark.mlip,
+    _SKIP_WITHOUT_MLIP,
 ]
 
 

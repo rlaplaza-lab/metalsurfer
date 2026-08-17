@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import tempfile
 from collections.abc import Callable
 
@@ -13,6 +14,7 @@ from ase.io import read
 
 from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.io_results import (
+    _saturation_molecule_label,
     save_multi_mol_saturation_results,
     save_saturation_results,
     setup_directories,
@@ -24,6 +26,7 @@ from metalsurfer.models import (
     MultiMolSaturationStepResult,
     SaturationRunResult,
     SaturationStepResult,
+    _saturation_step_eads_xyz_name,
 )
 from metalsurfer.placement import (
     distribute_placement_budget,
@@ -293,7 +296,9 @@ def test_save_saturation_results_warns_on_multiple_single_results(workdir, caplo
     setup_directories(["multi_single_test"])
     with caplog.at_level(logging.WARNING, logger="metalsurfer.io_results"):
         save_saturation_results([sr, sr], surface_type="multi_single_test")
-    assert any("2 single-molecule results" in r.message for r in caplog.records)
+    assert any(
+        re.search(r"received 2 single-molecule", r.message) for r in caplog.records
+    )
 
 
 def test_save_saturation_results_writes_csv_and_xyz(workdir):
@@ -347,13 +352,14 @@ def test_save_saturation_results_writes_csv_and_xyz(workdir):
     stable_xyz_path = (
         output_dir / "xyz_structures/water_saturation/step_001_best_slab.xyz"
     )
+    eads_xyz = _saturation_step_eads_xyz_name(1, best.energy_adsorption)
     assert_paths_exist(
         output_dir,
         [
             "saturation_summary.csv",
             "saturation_details.csv",
             "saturation_placements_detailed.csv",
-            "xyz_structures/water_saturation/step_001_Eads_-1.0000.xyz",
+            f"xyz_structures/water_saturation/{eads_xyz}",
             "xyz_structures/water_saturation/step_001_best_slab.xyz",
             "xyz_structures/water_saturation/step_001_placements/conformer_000.xyz",
             "xyz_structures/water_saturation/step_001_placements/conformer_001.xyz",
@@ -805,7 +811,7 @@ def test_multi_mol_saturation_picks_best_across_molecules(monkeypatch):
     assert len(out) == 1
     result = out[0]
     assert isinstance(result, MultiMolSaturationRunResult)
-    assert len(result.steps) >= 1
+    assert len(result.steps) == 2
     assert result.steps[0].winning_molecule == "CO2"
 
 
@@ -935,26 +941,26 @@ def test_multi_mol_saturation_single_molecule_fallback(monkeypatch, caplog):
 def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
     """molecule_counts tracks how many steps each molecule won."""
     slab = SlabContainer(make_slab())
-    config = _mock_saturation_config(multi_molecule_saturation=True)
+    config = _mock_saturation_config(
+        multi_molecule_saturation=True,
+        saturation_max_steps=2,
+    )
 
     ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
 
-    step_count = [0]
+    call_index = [0]
+    energy_table = {
+        ("A", 1): -0.8,
+        ("B", 2): -0.5,
+        ("A", 3): -0.3,
+        ("B", 4): -0.7,
+    }
 
     def _fake_process_molecule(smi, mol, current_slab, *_args, **kwargs):
-        step_count[0] += 1
-        # Step 1: A=-0.8, B=-0.5 → A wins; Step 2: A=-0.3, B=-0.7 → B wins;
-        # Step 3: both positive → saturated
-        energies = {
-            1: {"A": -0.8, "B": -0.5},
-            2: {"A": -0.3, "B": -0.7},
-            3: {"A": 0.1, "B": 0.2},
-        }
-        # Determine current saturation step from slab size (rough proxy)
-        # Use step_count: each step calls both mols, so step = ceil(count/2)
-        sat_step = (step_count[0] + 1) // 2
-        sat_step = min(sat_step, 3)
-        e_ads = energies[sat_step][mol]
+        call_index[0] += 1
+        key = (mol, call_index[0])
+        assert key in energy_table, f"unexpected saturation call {key}"
+        e_ads = energy_table[key]
         return MoleculeScreenOutcome(
             results=[
                 make_screening_result(
@@ -987,9 +993,8 @@ def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
 
     assert len(out) == 1
     result = out[0]
-    assert result.molecule_counts["A"] + result.molecule_counts["B"] == len(
-        result.steps
-    )
+    assert len(result.steps) == 2
+    assert result.molecule_counts == {"A": 1, "B": 1}
 
 
 def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypatch):
@@ -1267,22 +1272,23 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
     output_dir = workdir / "results_multi_mol_io_test"
     summary_path = output_dir / "saturation_summary.csv"
     details_path = output_dir / "saturation_details.csv"
+    mol_label = _saturation_molecule_label(["water", "CO2"])
     assert_paths_exist(
         output_dir,
         [
             "saturation_summary.csv",
             "saturation_details.csv",
             "saturation_placements_detailed.csv",
-            "xyz_structures/water_CO2_saturation",
-            "xyz_structures/water_CO2_saturation/step_001_placements/water/conformer_000.xyz",
-            "xyz_structures/water_CO2_saturation/step_001_placements/water/conformer_001.xyz",
-            "xyz_structures/water_CO2_saturation/step_001_placements/CO2/conformer_000.xyz",
+            f"xyz_structures/{mol_label}_saturation",
+            f"xyz_structures/{mol_label}_saturation/step_001_placements/water/conformer_000.xyz",
+            f"xyz_structures/{mol_label}_saturation/step_001_placements/water/conformer_001.xyz",
+            f"xyz_structures/{mol_label}_saturation/step_001_placements/CO2/conformer_000.xyz",
         ],
     )
 
     summary_df = pd.read_csv(summary_path)
     assert len(summary_df) == 1
-    assert "water_CO2" in str(summary_df.iloc[0]["molecules"])
+    assert mol_label in str(summary_df.iloc[0]["molecules"])
     assert int(summary_df.iloc[0]["n_molecules_at_saturation"]) == 1
 
     details_df = pd.read_csv(details_path)

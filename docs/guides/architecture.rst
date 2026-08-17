@@ -399,7 +399,7 @@ TorchSim batched relaxation
 ---------------------------
 
 Many slab+adsorbate relaxations run **in parallel** on GPU
-(``optimization.py``).
+(``optimization/``).
 
 .. list-table::
    :header-rows: 1

@@ -1,41 +1,10 @@
 """Tests for the CR-aware log stream in :mod:`metalsurfer._logging`."""
 
 import logging
-from contextlib import contextmanager
 
 from metalsurfer._logging import _LogStreamToLogger, configure_logging
 
-
-class _CaptureHandler(logging.Handler):
-    def __init__(self, sink: list[logging.LogRecord]):
-        super().__init__()
-        self._sink = sink
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self._sink.append(record)
-
-
-@contextmanager
-def _configured_logger(
-    logger: logging.Logger,
-    *,
-    level: int = logging.INFO,
-    handler: logging.Handler | None = None,
-):
-    old_handlers = list(logger.handlers)
-    old_level = logger.level
-    old_propagate = logger.propagate
-    logger.handlers.clear()
-    if handler is not None:
-        logger.addHandler(handler)
-    logger.setLevel(level)
-    logger.propagate = False
-    try:
-        yield
-    finally:
-        logger.handlers = old_handlers
-        logger.setLevel(old_level)
-        logger.propagate = old_propagate
+from ._logging_helpers import CaptureHandler, configured_logger
 
 
 class TestLogStreamToLogger:
@@ -43,8 +12,8 @@ class TestLogStreamToLogger:
         """Rapid CR-only updates within the rate window are coalesced."""
         logger = logging.getLogger("test.cr.ratelimit")
         sink: list[logging.LogRecord] = []
-        handler = _CaptureHandler(sink)
-        with _configured_logger(logger, handler=handler):
+        handler = CaptureHandler(sink)
+        with configured_logger(logger, handler=handler):
             stream = _LogStreamToLogger(
                 logger=logger, level=logging.INFO, carriage_return_rate_limit_s=100.0
             )
@@ -62,8 +31,8 @@ class TestLogStreamToLogger:
         """With a zero rate limit each CR snapshot is emitted once."""
         logger = logging.getLogger("test.cr.zerolimit")
         sink: list[logging.LogRecord] = []
-        handler = _CaptureHandler(sink)
-        with _configured_logger(logger, handler=handler):
+        handler = CaptureHandler(sink)
+        with configured_logger(logger, handler=handler):
             stream = _LogStreamToLogger(
                 logger=logger, level=logging.INFO, carriage_return_rate_limit_s=0.0
             )
@@ -77,8 +46,8 @@ class TestLogStreamToLogger:
         """A trailing newline flushes any buffered (non-CR) content."""
         logger = logging.getLogger("test.cr.newline")
         sink: list[logging.LogRecord] = []
-        handler = _CaptureHandler(sink)
-        with _configured_logger(logger, handler=handler):
+        handler = CaptureHandler(sink)
+        with configured_logger(logger, handler=handler):
             stream = _LogStreamToLogger(
                 logger=logger, level=logging.INFO, carriage_return_rate_limit_s=100.0
             )
@@ -92,8 +61,8 @@ class TestLogStreamToLogger:
         """flush emits the last CR snapshot when no pending line exists."""
         logger = logging.getLogger("test.cr.flush")
         sink: list[logging.LogRecord] = []
-        handler = _CaptureHandler(sink)
-        with _configured_logger(logger, handler=handler):
+        handler = CaptureHandler(sink)
+        with configured_logger(logger, handler=handler):
             stream = _LogStreamToLogger(
                 logger=logger, level=logging.INFO, carriage_return_rate_limit_s=100.0
             )
@@ -107,8 +76,8 @@ class TestLogStreamToLogger:
         """Each newline-terminated chunk becomes its own log record."""
         logger = logging.getLogger("test.cr.split")
         sink: list[logging.LogRecord] = []
-        handler = _CaptureHandler(sink)
-        with _configured_logger(logger, handler=handler):
+        handler = CaptureHandler(sink)
+        with configured_logger(logger, handler=handler):
             stream = _LogStreamToLogger(
                 logger=logger, level=logging.INFO, carriage_return_rate_limit_s=100.0
             )
@@ -121,8 +90,8 @@ class TestLogStreamToLogger:
         """Content without a trailing newline is buffered until flush."""
         logger = logging.getLogger("test.cr.partial")
         sink: list[logging.LogRecord] = []
-        handler = _CaptureHandler(sink)
-        with _configured_logger(logger, handler=handler):
+        handler = CaptureHandler(sink)
+        with configured_logger(logger, handler=handler):
             stream = _LogStreamToLogger(
                 logger=logger, level=logging.INFO, carriage_return_rate_limit_s=100.0
             )

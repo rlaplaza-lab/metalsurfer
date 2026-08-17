@@ -10,7 +10,6 @@ Covers:
 import json
 import logging
 import sys
-from contextlib import contextmanager
 from io import StringIO
 
 import numpy as np
@@ -37,41 +36,8 @@ from metalsurfer.filters import (
 from metalsurfer.io_results import write_run_metadata
 from metalsurfer.workflow import load_molecules
 
+from ._logging_helpers import CaptureHandler, configured_logger
 from .conftest import make_slab, make_water, place_molecule_on_slab
-
-
-@contextmanager
-def _configured_logger(
-    logger: logging.Logger,
-    *,
-    level: int = logging.INFO,
-    propagate: bool = False,
-    handler: logging.Handler | None = None,
-):
-    old_handlers = list(logger.handlers)
-    old_level = logger.level
-    old_propagate = logger.propagate
-    logger.handlers.clear()
-    if handler is not None:
-        logger.addHandler(handler)
-    logger.setLevel(level)
-    logger.propagate = propagate
-    try:
-        yield
-    finally:
-        logger.handlers = old_handlers
-        logger.setLevel(old_level)
-        logger.propagate = old_propagate
-
-
-class _CaptureHandler(logging.Handler):
-    def __init__(self, sink: list[logging.LogRecord]):
-        super().__init__()
-        self._sink = sink
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self._sink.append(record)
-
 
 # ---------------------------------------------------------------------------
 # load_molecules — single CSV read
@@ -266,7 +232,7 @@ class TestLogContext:
         logger = logging.getLogger("metalsurfer.preconfig_test")
 
         try:
-            with _configured_logger(logger, handler=handler):
+            with configured_logger(logger, handler=handler):
                 logger.info("preconfig message")
                 output = stream.getvalue()
                 assert output.strip() == "preconfig message"
@@ -318,8 +284,8 @@ class TestLogContext:
         logger = logging.getLogger("metalsurfer.io_results")
 
         captured: list[logging.LogRecord] = []
-        handler = _CaptureHandler(captured)
-        with _configured_logger(logger, handler=handler):
+        handler = CaptureHandler(captured)
+        with configured_logger(logger, handler=handler):
             with log_context(molecule="ethanol"):
                 logger.info("hello")
 
@@ -399,8 +365,8 @@ class TestLogContext:
         torchsim_logger = logging.getLogger("metalsurfer.torchsim")
 
         captured: list[logging.LogRecord] = []
-        handler = _CaptureHandler(captured)
-        with _configured_logger(torchsim_logger, handler=handler):
+        handler = CaptureHandler(captured)
+        with configured_logger(torchsim_logger, handler=handler):
             with torchsim_output_capture(carriage_return_rate_limit_s=0.0):
                 if to_stderr:
                     print(message, file=sys.stderr)
@@ -417,8 +383,8 @@ class TestLogContext:
         torchsim_logger = logging.getLogger("metalsurfer.torchsim")
 
         captured: list[logging.LogRecord] = []
-        handler = _CaptureHandler(captured)
-        with _configured_logger(torchsim_logger, handler=handler):
+        handler = CaptureHandler(captured)
+        with configured_logger(torchsim_logger, handler=handler):
             # Very large rate limit: only the final newline-terminated line
             # should be emitted.
             with torchsim_output_capture(carriage_return_rate_limit_s=9999.0):

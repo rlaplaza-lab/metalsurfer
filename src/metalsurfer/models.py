@@ -527,6 +527,10 @@ class BOTransferInfo:
         }
 
 
+def _saturation_step_eads_xyz_name(step: int, energy_adsorption: float) -> str:
+    return f"step_{step:03d}_Eads_{energy_adsorption:.4f}.xyz"
+
+
 def _saturation_step_structure_paths(
     mol_dir: Path,
     step: int,
@@ -535,7 +539,7 @@ def _saturation_step_structure_paths(
     return {
         "step_structure_path": str(mol_dir / f"step_{step:03d}_best_slab.xyz"),
         "step_structure_energy_path": str(
-            mol_dir / f"step_{step:03d}_Eads_{energy_adsorption:.4f}.xyz"
+            mol_dir / _saturation_step_eads_xyz_name(step, energy_adsorption)
         ),
         "step_adsorbate_path": str(mol_dir / f"step_{step:03d}_adsorbate.xyz"),
     }

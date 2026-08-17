@@ -300,9 +300,18 @@ def test_planar_slab_skips_voronoi_and_says_so(caplog, monkeypatch):
     )
 
 
-def test_non_planar_slab_still_runs_voronoi():
+def test_non_planar_slab_still_runs_voronoi(monkeypatch):
     """Only coplanar top layers skip the Voronoi pass."""
     import metalsurfer.placement.site_enumeration as site_enumeration
+
+    calls = {"n": 0}
+    real_voronoi = site_enumeration._voronoi_sites
+
+    def _counting_voronoi(*args, **kwargs):
+        calls["n"] += 1
+        return real_voronoi(*args, **kwargs)
+
+    monkeypatch.setattr(site_enumeration, "_voronoi_sites", _counting_voronoi)
 
     slab = fcc111("Pt", (3, 3, 4), vacuum=10.0)
     positions = slab.get_positions()
@@ -313,6 +322,9 @@ def test_non_planar_slab_still_runs_voronoi():
     assert not site_enumeration._top_layer_is_planar_from_arrays(
         np.asarray(slab.get_positions(), dtype=float), cell, 0.5
     )
+    sites = site_enumeration.get_unified_sites(slab, material_type="slab")
+    assert calls["n"] >= 1
+    assert sites
 
 
 def test_slab_only_enrichment_flag_warns(caplog):

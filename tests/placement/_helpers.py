@@ -1,5 +1,7 @@
 """Shared helpers and golden constants for the placement test package."""
 
+from dataclasses import replace
+
 import numpy as np
 from ase import Atoms
 
@@ -157,6 +159,25 @@ def _make_site(
         site_source=source,
         env_fingerprint=tuple(env_fingerprint),
     )
+
+
+_DISSOC_PLACEMENT_SPEC = PlacementSpec(
+    conformer_index=0,
+    orientation_type="dissociative",
+    face_flip=False,
+    en_atom_index=None,
+    site_index=0,
+    site_type="hollow",
+    tilt_deg=0.0,
+    azimuth_deg=0.0,
+    azimuth_in_plane_deg=0.0,
+    z_fraction=0.5,
+    placement_index=0,
+)
+
+
+def dissoc_placement_spec(**overrides) -> PlacementSpec:
+    return replace(_DISSOC_PLACEMENT_SPEC, **overrides)
 
 
 def _tilted_make_slab():

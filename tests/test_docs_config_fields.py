@@ -23,12 +23,17 @@ def _documented_field_names() -> set[str]:
     text = _CONFIG_RST.read_text(encoding="utf-8").splitlines()
     documented: set[str] = set()
     for i, line in enumerate(text):
-        nxt = text[i + 1] if i + 1 < len(text) else ""
-        if "**Type:**" not in nxt:
+        if "**Type:**" not in line:
             continue
-        # A field-name line may list several comma-separated names
-        # (e.g. ``placement_x_range``, ``placement_y_range``).
-        for token in re.finditer(r"``([^`]+)``", line):
+        prev = ""
+        for j in range(i - 1, -1, -1):
+            candidate = text[j].strip()
+            if candidate:
+                prev = text[j]
+                break
+        if not prev:
+            continue
+        for token in re.finditer(r"``([^`]+)``", prev):
             documented.add(token.group(1))
     return documented
 

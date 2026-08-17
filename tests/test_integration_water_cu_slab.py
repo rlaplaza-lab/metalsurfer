@@ -4,11 +4,12 @@ import math
 
 import numpy as np
 import pytest
+from ase.build import fcc111
 
 from metalsurfer.campaigns import run_adsorption
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.placement.geometry import detect_vdw_overlaps
-from metalsurfer.surface_prep import prepare_substrate
+from metalsurfer.surface_prep import apply_surface_constraints, prepare_substrate
 from tests.conftest import GPU_MLIP_MARKS, assert_water_oh_hh_geometry
 
 pytestmark = GPU_MLIP_MARKS
@@ -41,9 +42,9 @@ def test_run_adsorption_water_on_cu111(tmp_path, monkeypatch):
     assert config.max_force_convergence == 0.05
 
     slab = prepare_substrate(
-        bulk_id="mp-30",
-        miller_indices=(1, 1, 1),
-        supercell=(2, 2, 1),
+        slab=apply_surface_constraints(
+            fcc111("Cu", size=(2, 2, 3), a=3.6, vacuum=10.0)
+        ),
         config=config,
         results_dir="results_test_water_cu_slab",
     )

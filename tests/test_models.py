@@ -470,6 +470,34 @@ class TestPlacementDescriptorRow:
         ):
             assert getattr(restored, attr) == getattr(desc, attr), attr
 
+    def test_to_row_from_row_preserves_absolute_pose(self):
+        """x_abs/y_abs/z_abs and quat_* must survive lean CSV round-trip."""
+        desc = make_placement_descriptor(
+            placement_id=5,
+            x=1.0,
+            y=2.0,
+            x_abs=9.1,
+            y_abs=8.2,
+            z_abs=12.3,
+            quat_w=0.6,
+            quat_x=0.1,
+            quat_y=0.2,
+            quat_z=0.3,
+        )
+        assert desc.x_abs != desc.x
+        row = desc.to_row(include_provenance=False)
+        restored = PlacementDescriptor.from_row(row, placement_index=5)
+        for attr in (
+            "x_abs",
+            "y_abs",
+            "z_abs",
+            "quat_w",
+            "quat_x",
+            "quat_y",
+            "quat_z",
+        ):
+            assert getattr(restored, attr) == pytest.approx(getattr(desc, attr)), attr
+
     def test_from_row_handles_missing_columns(self):
         """Missing optional columns fall back to sane defaults without raising."""
         row = {"conformer_index": 0, "x": 1.0, "y": 2.0}

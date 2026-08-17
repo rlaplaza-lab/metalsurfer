@@ -21,6 +21,7 @@ from .models import (
     SaturationStepResult,
     ScreeningResult,
     ScreeningRunResult,
+    _saturation_step_structure_paths,
     build_molecule_summary,
 )
 
@@ -799,7 +800,7 @@ def save_multi_mol_saturation_results(
     results_dir, xyz_dir, vasp_base = _saturation_results_dirs(
         surface_type, write_vasp=write_vasp
     )
-    mol_label = "_".join(result.molecules)
+    mol_label = _saturation_molecule_label(result.molecules)
     mol_dir = f"{xyz_dir}/{mol_label}_saturation"
 
     include_provenance = bool(config.export_placement_provenance)
@@ -995,17 +996,19 @@ def _write_clean_xyz(atoms: Atoms, filename: str) -> None:
     atoms_copy.write(filename, format="extxyz")
 
 
+def _saturation_molecule_label(molecules: Sequence[str]) -> str:
+    return "_".join(molecules)
+
+
 def _write_saturation_step_xyz(best: ScreeningResult, mol_dir: str, step: int) -> None:
     """Write best-slab, energy-tagged, and adsorbate-only XYZ for one saturation step."""
-    step_structure_path = f"{mol_dir}/step_{step:03d}_best_slab.xyz"
-    step_energy_path = (
-        f"{mol_dir}/step_{step:03d}_Eads_{best.energy_adsorption:.4f}.xyz"
+    paths = _saturation_step_structure_paths(
+        Path(mol_dir), step, best.energy_adsorption
     )
-    step_adsorbate_path = f"{mol_dir}/step_{step:03d}_adsorbate.xyz"
     best_atoms_copy = best.atoms.copy()
     best_atoms_copy.calc = None
     best_atoms_copy.info.pop("adsorbate_info", None)
-    _write_clean_xyz(best_atoms_copy, step_structure_path)
-    _write_clean_xyz(best_atoms_copy, step_energy_path)
+    _write_clean_xyz(best_atoms_copy, paths["step_structure_path"])
+    _write_clean_xyz(best_atoms_copy, paths["step_structure_energy_path"])
     adsorbate = best.atoms[best.slab_size :].copy()
-    _write_clean_xyz(adsorbate, step_adsorbate_path)
+    _write_clean_xyz(adsorbate, paths["step_adsorbate_path"])

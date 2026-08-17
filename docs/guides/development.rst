@@ -97,6 +97,15 @@ Additional CI jobs locally:
      tests/test_integration_run_modes.py \
      -v --tb=short
 
+CPU MLIP unit + smoke (optional; needs ``pip install -e ".[mlip]"`` and a
+HuggingFace token for the gated UMA model). Skipped in GitHub Actions when
+``HF_TOKEN`` is unset or on fork PRs:
+
+.. code-block:: bash
+
+   python -m pytest tests/test_optimization.py \
+     tests/test_integration_mlip_cpu_smoke.py -m mlip --tb=short -v
+
 GPU / MLIP integration tests (optional, often run in separate processes):
 
 .. code-block:: bash
@@ -107,7 +116,7 @@ Overnight / local parity helpers (optional):
 
 .. code-block:: bash
 
-   ./scripts/run_all_tests.sh      # full CI test phases (fast, dependency, integration, MLIP, GPU)
+   ./scripts/run_all_tests.sh      # full CI test phases (fast, dependency, integration, CPU MLIP, GPU)
    ./scripts/run_all_examples.sh   # five official examples (excludes bipyridine); deletes cached results first
 
 The example runner requires a GPU and ``pip install -e ".[mlip]"``. Camphor downloads
@@ -125,6 +134,7 @@ CI parity
 | Fast pytest + coverage           | ``test-full``                            |
 | ``test_dependency_behavior``     | ``test-dependency-behavior``             |
 | seeded + physics + run-modes     | ``test-integration``                     |
+| CPU MLIP (``HF_TOKEN``)          | ``test-mlip-cpu`` (skipped if unset)     |
 +----------------------------------+------------------------------------------+
 
 Fixing failures

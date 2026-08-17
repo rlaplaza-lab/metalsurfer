@@ -7,7 +7,6 @@ from scipy.spatial import KDTree
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.ml.features import FEATURE_NAMES, extract_features
 from metalsurfer.ml.schema import PlacementRecord
-from metalsurfer.models import PlacementSpec
 from metalsurfer.placement import (
     check_initial_placement_distance,
     enumerate_placement_specs,
@@ -32,6 +31,7 @@ from ..conftest import (
     make_porous_framework,
     make_slab,
 )
+from ._helpers import dissoc_placement_spec
 
 
 def test_dissociative_z_offset_uses_radius_derived_range():
@@ -42,19 +42,7 @@ def test_dissociative_z_offset_uses_radius_derived_range():
         placement_z_range=(1.0, 1.5),
     )
     h2 = make_h2()
-    spec = PlacementSpec(
-        conformer_index=0,
-        orientation_type="dissociative",
-        face_flip=False,
-        en_atom_index=None,
-        site_index=0,
-        site_type="hollow",
-        tilt_deg=0.0,
-        azimuth_deg=0.0,
-        azimuth_in_plane_deg=0.0,
-        z_fraction=0.5,
-        placement_index=0,
-    )
+    spec = dissoc_placement_spec()
     result, reason = generate_placement_from_spec_with_reason(
         spec, [h2], slab, config, smiles="[H][H]"
     )
@@ -228,19 +216,7 @@ def test_dissociative_placement_supported_for_nanoparticle():
     pairs = _get_dissociative_site_pairs(nanoparticle, config)
     assert pairs, "Au₁₃ fixture must expose dissociative site pairs"
     h2 = make_h2()
-    spec = PlacementSpec(
-        conformer_index=0,
-        orientation_type="dissociative",
-        face_flip=False,
-        en_atom_index=None,
-        site_index=0,
-        site_type="hollow",
-        tilt_deg=0.0,
-        azimuth_deg=0.0,
-        azimuth_in_plane_deg=0.0,
-        z_fraction=0.5,
-        placement_index=0,
-    )
+    spec = dissoc_placement_spec()
 
     result, reason = generate_placement_from_spec_with_reason(
         spec,
@@ -281,19 +257,7 @@ def test_dissociative_placement_on_slab_separates_and_clears_surface():
     pairs = _get_dissociative_site_pairs(slab, config)
     assert pairs, "fixture slab must expose hollow pairs for dissociative placement"
     h2 = make_h2()
-    spec = PlacementSpec(
-        conformer_index=0,
-        orientation_type="dissociative",
-        face_flip=False,
-        en_atom_index=None,
-        site_index=0,
-        site_type="hollow",
-        tilt_deg=0.0,
-        azimuth_deg=0.0,
-        azimuth_in_plane_deg=0.0,
-        z_fraction=0.5,
-        placement_index=0,
-    )
+    spec = dissoc_placement_spec()
     result, reason = generate_placement_from_spec_with_reason(spec, [h2], slab, config)
     assert result is not None, reason
     placed, descriptor = result
@@ -356,19 +320,7 @@ def test_dissociative_placement_rejected_for_porous_material_type():
         num_placements=1,
     )
     h2 = make_h2()
-    spec = PlacementSpec(
-        conformer_index=0,
-        orientation_type="dissociative",
-        face_flip=False,
-        en_atom_index=None,
-        site_index=0,
-        site_type="hollow",
-        tilt_deg=0.0,
-        azimuth_deg=0.0,
-        azimuth_in_plane_deg=0.0,
-        z_fraction=0.5,
-        placement_index=0,
-    )
+    spec = dissoc_placement_spec()
 
     result, reason = generate_placement_from_spec_with_reason(
         spec,
@@ -385,19 +337,7 @@ def test_dissociative_fragment_positions_round_trip():
     slab = make_slab()
     config = AdsorptionConfig(material_type="slab", enable_dissociative_placement=True)
     h2 = make_h2()
-    spec = PlacementSpec(
-        conformer_index=0,
-        orientation_type="dissociative",
-        face_flip=False,
-        en_atom_index=None,
-        site_index=0,
-        site_type="hollow",
-        tilt_deg=0.0,
-        azimuth_deg=0.0,
-        azimuth_in_plane_deg=0.0,
-        z_fraction=0.5,
-        placement_index=0,
-    )
+    spec = dissoc_placement_spec()
     result, reason = generate_placement_from_spec_with_reason(spec, [h2], slab, config)
     assert result is not None, reason
     placed, descriptor = result

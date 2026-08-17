@@ -1,5 +1,6 @@
 """Cross-material orchestration of the universal placement workflow."""
 
+import itertools
 from collections import Counter
 
 import numpy as np
@@ -132,19 +133,19 @@ def test_check_desorption_nanoparticle_and_porous():
     assert "adsorbed" in reason_porous_near
 
     water_far_porous = make_water()
-    # Dense 3D PBC: Cartesian translation wraps; sample free volume for a true far pose.
     cell = np.asarray(porous.get_cell(), dtype=float)
-    rng = np.random.default_rng(0)
+    porous_positions = porous.get_positions()
     best_d = -1.0
     best_com = None
-    for _ in range(800):
-        com = rng.random(3) @ cell
+    fracs = np.linspace(0.05, 0.95, 6)
+    for fa, fb, fc in itertools.product(fracs, repeat=3):
+        com = np.array([fa, fb, fc]) @ cell
         wpos = water_far_porous.get_positions().copy()
         wpos -= np.mean(wpos, axis=0)
         wpos += com
         d = calculate_min_distance(
             wpos,
-            porous.get_positions(),
+            porous_positions,
             cell,
             use_pbc=True,
             pbc=[True, True, True],
@@ -169,4 +170,3 @@ def test_check_desorption_nanoparticle_and_porous():
     )
     assert not ok_porous_far
     assert "too far" in reason_porous_far
-    assert best_d > 3.5

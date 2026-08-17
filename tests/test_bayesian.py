@@ -1,5 +1,7 @@
 """Tests for Bayesian optimisation placement selection pipeline."""
 
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -8,7 +10,6 @@ from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from metalsurfer import _numeric_defaults as numeric_defaults
 from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.ml.bayesian import (
     EnsembleRegressor,
@@ -44,6 +45,7 @@ from metalsurfer.placement import (
 from tests.factories import make_random_placement_records
 from tests.optional_deps import cuda_available, has_mlip_stack
 
+from ._logging_helpers import CaptureHandler
 from .conftest import make_placement_descriptor, make_slab, make_water
 
 
@@ -163,7 +165,7 @@ class TestSurrogate:
         model = train_surrogate(X, y, surrogate="gaussian_process", random_state=7)
         reg = model.named_steps["regressor"]
         kernel = reg.kernel_
-        assert float(kernel.k2.length_scale) == pytest.approx(expected)
+        assert float(kernel.get_params()["k2__length_scale"]) == pytest.approx(expected)
 
     def test_gaussian_process_predict_with_uncertainty(self):
         X, y = _make_synthetic_training_data(25)
@@ -201,17 +203,6 @@ class TestSurrogate:
 
 
 class TestAcquisition:
-    def test_ei_scores_zero_sigma_ranks_by_negative_mu(self):
-        """When sigma=0, EI ranks by -mu so the pool does not collapse to zeros."""
-        mu = np.array([1.0, 2.0, -0.5])
-        sigma = np.array([0.0, 0.0, 0.0])
-        f_best = 0.0
-        ei = ei_scores(
-            mu, sigma, f_best=f_best, xi=numeric_defaults.ACQUISITION_XI_DEFAULT
-        )
-        np.testing.assert_allclose(ei, -mu, rtol=0, atol=1e-5)
-        assert int(np.argmax(ei)) == 2
-
     def test_ridge_predict_with_uncertainty_is_positive(self):
         X, y = _make_synthetic_training_data(40)
         model = train_surrogate(X, y, surrogate="ridge", random_state=0)
@@ -589,8 +580,6 @@ class TestTransferSmoke:
         assert result.transfer_weight_share > 0.0
 
     def test_build_transfer_surrogate_warns_on_schema_mismatch(self, caplog):
-        import logging
-
         X, y = _make_synthetic_training_data(20)
         X_current = X.iloc[:8].copy()
         y_current = y.iloc[:8].to_numpy()
@@ -603,12 +592,7 @@ class TestTransferSmoke:
         # logger-propagation / caplog-handler quirks across environments.
         _module_logger = logging.getLogger("metalsurfer.ml.bayesian")
         _captured: list[logging.LogRecord] = []
-
-        class _CaptureHandler(logging.Handler):
-            def emit(self, record: logging.LogRecord) -> None:
-                _captured.append(record)
-
-        _handler = _CaptureHandler()
+        _handler = CaptureHandler(_captured)
         _module_logger.addHandler(_handler)
         try:
             result = build_transfer_surrogate(

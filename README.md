@@ -82,7 +82,7 @@ for summary in result.molecule_summaries:
 
 Set `material_type` (defaults to `slab`) to match your substrate: `slab`, `nanoparticle`, or `porous`. See the [configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) for when to use each.
 
-Output is written under `results_{surface_type}/` (XYZ structures, CSV summaries, optional VASP inputs). See [Quick start](https://metalsurfer.readthedocs.io/en/latest/guides/quickstart.html) for output layout details.
+Output is written under `results_{surface_type}/` (XYZ structures, CSV summaries, optional VASP inputs). See [architecture — output structure](https://metalsurfer.readthedocs.io/en/latest/guides/architecture.html#output-structure) for layout details.
 
 ## Examples
 
