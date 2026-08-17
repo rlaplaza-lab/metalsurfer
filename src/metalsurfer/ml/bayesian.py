@@ -18,7 +18,12 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from .._numeric_defaults import DEFAULT_SEED
+from .._numeric_defaults import (
+    ACQUISITION_SIGMA_FLOOR,
+    ACQUISITION_XI_DEFAULT,
+    DEFAULT_SEED,
+    RESIDUAL_SIGMA_DISTANCE_TEMPER,
+)
 from ..config import (
     BO_INITIAL_SAMPLING_OPTIONS,
     BO_TRANSFER_CAPABLE_SURROGATES,
@@ -357,7 +362,7 @@ def _sigma_from_residual(
     else:
         lengthscale = 1.0
     # Mild distance tempering; cap prevents EI from ignoring the mean.
-    sigma = base * (1.0 + 0.25 * (d / lengthscale))
+    sigma = base * (1.0 + RESIDUAL_SIGMA_DISTANCE_TEMPER * (d / lengthscale))
     return np.minimum(sigma, 2.0 * base)
 
 
@@ -1109,7 +1114,7 @@ def ei_scores(
     mu: np.ndarray,
     sigma: np.ndarray,
     f_best: float,
-    xi: float = 1e-6,
+    xi: float = ACQUISITION_XI_DEFAULT,
 ) -> np.ndarray:
     """Compute expected improvement scores for minimisation.
 
@@ -1131,9 +1136,14 @@ def ei_scores(
     mu = np.asarray(mu, dtype=float).ravel()
     sigma = np.asarray(sigma, dtype=float).ravel()
     imp = f_best - mu - xi
-    z = np.divide(imp, sigma, out=np.zeros_like(imp, dtype=float), where=sigma > 1e-9)
+    z = np.divide(
+        imp,
+        sigma,
+        out=np.zeros_like(imp, dtype=float),
+        where=sigma > ACQUISITION_SIGMA_FLOOR,
+    )
     return np.where(
-        sigma > 1e-9,
+        sigma > ACQUISITION_SIGMA_FLOOR,
         imp * stats.norm.cdf(z) + sigma * stats.norm.pdf(z),
         -mu,
     )
@@ -1143,7 +1153,7 @@ def pi_scores(
     mu: np.ndarray,
     sigma: np.ndarray,
     f_best: float,
-    xi: float = 1e-6,
+    xi: float = ACQUISITION_XI_DEFAULT,
 ) -> np.ndarray:
     """Probability of Improvement for minimisation: P(Y < f_best - xi).
 
@@ -1166,9 +1176,9 @@ def pi_scores(
         f_best - xi - mu,
         sigma,
         out=np.zeros_like(mu, dtype=float),
-        where=sigma > 1e-9,
+        where=sigma > ACQUISITION_SIGMA_FLOOR,
     )
-    return np.where(sigma > 1e-9, stats.norm.cdf(z), -mu)
+    return np.where(sigma > ACQUISITION_SIGMA_FLOOR, stats.norm.cdf(z), -mu)
 
 
 def _farthest_point_indices(

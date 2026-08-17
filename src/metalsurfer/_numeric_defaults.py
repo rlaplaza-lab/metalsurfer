@@ -1,4 +1,4 @@
-"""Internal shared numeric defaults for AdsorptionConfig and placement.
+"""Internal shared numeric defaults for AdsorptionConfig, placement, and BO.
 
 Private module (leading underscore): prefer ``AdsorptionConfig`` fields as the
 user-facing API. Kept outside ``placement`` so ``config`` can import without
@@ -30,3 +30,7 @@ MIN_CALCULATOR_CELL_C_ANG: float = 18.0
 # product (or an in-plane basis vector) is treated as degenerate and a
 # Cartesian fallback axis is used instead.
 SURFACE_NORMAL_FALLBACK_NORM_EPS: float = 1e-8
+ACQUISITION_XI_DEFAULT: float = 1e-6
+ACQUISITION_SIGMA_FLOOR: float = 1e-9
+RESIDUAL_SIGMA_DISTANCE_TEMPER: float = 0.25
+DEFAULT_TRANSFER_EXPLORATION_FRACTION: float = 0.2

@@ -14,6 +14,7 @@ from ._numeric_defaults import (
     DEFAULT_SEED,
     DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     DEFAULT_SYMMETRY_TOLERANCE,
+    DEFAULT_TRANSFER_EXPLORATION_FRACTION,
     MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM,
     MIN_CONTACT_RATIO_DEFAULT,
     MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
@@ -43,7 +44,7 @@ class BOTransferConfig:
     min_similarity: float = 0.05
     trust_patience: int = 2
     mae_tolerance: float = 0.05
-    exploration_fraction: float = 0.2
+    exploration_fraction: float = DEFAULT_TRANSFER_EXPLORATION_FRACTION
     proximity_lengthscale: float = 1.0
     proximity_floor: float = 0.0
     prior_step_window: int | None = 2
