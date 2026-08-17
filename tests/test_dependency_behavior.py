@@ -163,7 +163,7 @@ class TestMissingTorchSim:
                 "torch_sim.constraints": None,
             },
         ):
-            autobatcher, cache_key, reused = omod._get_inflight_autobatcher(
+            autobatcher, cache_key, reused = omod._cache._get_inflight_autobatcher(
                 ts_model=None, max_n_atoms=0
             )
             assert autobatcher is None

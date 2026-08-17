@@ -35,7 +35,7 @@ def test_unified_sites_slab_golden_count_and_type_multiset():
     assert dict(Counter(s.site_type for s in sites)) == _GOLDEN_SLAB_SITE_TYPE_MULTISET
 
 
-@pytest.mark.parametrize("mode", ["spec", "descriptor", "pose"])
+@pytest.mark.parametrize("mode", ["spec", "pose"])
 def test_slab_replay_reproduces_positions(mode):
     slab = make_slab()
     config = adsorption_config_factory(

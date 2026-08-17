@@ -1,4 +1,4 @@
-"""Pose finalization, descriptor replay and validation."""
+"""Pose finalization, replay, and validation."""
 
 import numpy as np
 import pytest
@@ -10,13 +10,10 @@ from metalsurfer.ml.schema import PlacementRecord
 from metalsurfer.models import PlacementSpec
 from metalsurfer.placement import (
     enumerate_placement_specs,
-    generate_placement_from_descriptor,
     generate_placement_from_spec,
     generate_placement_from_spec_with_reason,
 )
-from metalsurfer.placement._material import (
-    calculator_pbc_for_atoms,
-)
+from metalsurfer.placement._material import material_aware_pbc
 from metalsurfer.placement.geometry import (
     calculate_contact_quality,
     check_initial_contact_quality,
@@ -40,24 +37,6 @@ from ._helpers import (
     _assert_replay_matches,
     _first_successful_placement,
 )
-
-
-def test_descriptor_replay_requires_explicit_absolute_geometry():
-    slab = make_slab()
-    config = AdsorptionConfig(
-        material_type="slab", num_placements=8, placement_z_range=(2.0, 3.0)
-    )
-    spec, result = _first_successful_placement(
-        [make_water()], slab, config, "O", n_desired=8
-    )
-    assert spec is not None and result is not None
-
-    _, descriptor = result
-    descriptor.z_abs = None
-    replayed = generate_placement_from_descriptor(
-        descriptor, [make_water()], slab, config, smiles="O"
-    )
-    assert replayed is None
 
 
 def test_validate_initial_placement_geometry_with_strict_config():
@@ -198,8 +177,8 @@ def test_saturation_finalize_rejects_adsorbate_overlap():
     assert reason_far != "adsorbate_overlap"
 
 
-def test_validate_posed_adsorbate_uses_calculator_pbc(monkeypatch):
-    """QC #1: the separation-distance check must use the calculator PBC."""
+def test_validate_posed_adsorbate_uses_material_pbc(monkeypatch):
+    """Separation check uses material PBC, not calculator-promoted 3D PBC."""
     captured = {}
 
     def _fake_separation(ads, pre, *, cell, pbc=None, **kwargs):
@@ -218,8 +197,8 @@ def test_validate_posed_adsorbate_uses_calculator_pbc(monkeypatch):
     covered = slab + water
     config = AdsorptionConfig()
     _validate_posed_adsorbate(water, covered, config, slab_for_sites=slab)
-    assert captured["pbc"] == calculator_pbc_for_atoms(slab)
-    assert captured["pbc"] == [True, True, True]
+    assert captured["pbc"] == material_aware_pbc("slab")
+    assert captured["pbc"] == [True, True, False]
 
 
 def test_strict_initial_placement_e2e_reason():
@@ -258,7 +237,7 @@ def test_strict_initial_placement_e2e_reason():
     assert "initial_distance_or_site_constraints" not in reasons
 
 
-def test_rotated_slab_descriptor_round_trip():
+def test_rotated_slab_pose_round_trip():
     slab = make_slab()
     cell = np.array(slab.get_cell(), dtype=float)
     rot = np.array(
@@ -276,11 +255,11 @@ def test_rotated_slab_descriptor_round_trip():
     assert spec is not None and result is not None
     adsorbate, descriptor = result
     _assert_replay_matches(
-        "descriptor", adsorbate, descriptor, spec, water_conformers(), slab, config
+        "pose", adsorbate, descriptor, spec, water_conformers(), slab, config
     )
 
 
-def test_tilted_slab_descriptor_round_trip():
+def test_tilted_slab_pose_round_trip():
     """Slab tilted so the surface normal is not Cartesian +z."""
     slab = make_slab()
     cell = np.array(slab.get_cell(), dtype=float)
@@ -306,7 +285,7 @@ def test_tilted_slab_descriptor_round_trip():
     assert spec is not None and result is not None
     adsorbate, descriptor = result
     _assert_replay_matches(
-        "descriptor", adsorbate, descriptor, spec, water_conformers(), slab, config
+        "pose", adsorbate, descriptor, spec, water_conformers(), slab, config
     )
 
 

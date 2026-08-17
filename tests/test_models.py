@@ -13,7 +13,6 @@ from metalsurfer.models import (
     SaturationStepResult,
     ScreeningResult,
     ScreeningRunResult,
-    TimingInfo,
     build_molecule_summary,
 )
 
@@ -77,19 +76,6 @@ def test_screening_result():
     rich = sr.to_row(include_provenance=True)
     assert rich["initial_orientation_type"] == sr.placement_descriptor.orientation_type
     assert rich["initial_z_fraction"] == sr.placement_descriptor.z_fraction
-
-
-def test_timing_info():
-    t = TimingInfo(
-        molecule="water",
-        conformer_generation_s=1.0,
-        optimization_s=5.0,
-        total_s=8.0,
-        n_placements_attempted=100,
-        n_results_after_filter=3,
-    )
-    assert t.molecule == "water"
-    assert t.total_s == 8.0
 
 
 def test_molecule_summary():
@@ -183,9 +169,6 @@ def test_screening_run_result():
     assert "poscar_path" not in rows[0]
     rows_vasp = rr.to_rows(results_dir="results_test", write_vasp_inputs=True)
     assert rows_vasp[0]["poscar_path"].endswith("water_all/conformer_000/POSCAR")
-    df = rr.to_dataframe(results_dir="results_test")
-    assert len(df.index) == 1
-    assert set(df.columns) >= {"molecule", "energy_adsorption", "xyz_path"}
     summary_row = rr.to_summary_row()
     assert summary_row is not None
     assert summary_row["best_placement_id"] == 0
@@ -372,9 +355,6 @@ def test_binding_campaign_result_formatters():
     assert "POSCAR" in campaign.format_results_saved_line(
         results_dir="results_manual",
         write_vasp_inputs=True,
-    )
-    assert campaign.format_screening_complete() == (
-        "Screening complete: 42 total configurations"
     )
     summary = campaign.format_summary(
         title="Binding summary",

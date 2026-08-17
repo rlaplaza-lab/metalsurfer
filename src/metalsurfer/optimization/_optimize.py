@@ -100,7 +100,9 @@ def estimate_parallel_relaxation_capacity(
         Atom indices that are frozen during relaxation.
     """
     max_n_atoms = len(representative_atoms)
-    cache_key = _parallel_capacity_cache_key(ts_model, max_n_atoms, config)
+    cache_key = _parallel_capacity_cache_key(
+        ts_model, max_n_atoms, config, frozen_indices=frozen_indices
+    )
     cached_capacity = capacity_cache_get(cache_key)
     if cached_capacity is not None:
         return cached_capacity
@@ -144,9 +146,15 @@ def estimate_parallel_relaxation_capacity(
         first_metric = _deps.calculate_memory_scalers(state, memory_scales_with)[0]
         padding = config.autobatcher_max_memory_padding
 
+        if first_metric <= 0 or not np.isfinite(first_metric):
+            raise RuntimeError(
+                f"Invalid memory scaler metric from probe: {first_metric!r}"
+            )
+
         if config.autobatcher_max_memory_scaler is not None:
-            effective_scaler = config.autobatcher_max_memory_scaler * padding
-            n_systems = max(1, int(effective_scaler // first_metric))
+            n_systems = max(
+                1, int(config.autobatcher_max_memory_scaler // first_metric)
+            )
         else:  # pragma: no cover - requires MLIP stack / GPU
             resolved_max_atoms_to_try, _ = _resolve_autobatcher_max_atoms_to_try(
                 max_n_atoms=max_n_atoms,
@@ -174,7 +182,6 @@ def estimate_parallel_relaxation_capacity(
             exc,
             fallback,
         )
-        capacity_cache_set(cache_key, fallback)
         return fallback
 
 
@@ -307,7 +314,6 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
     if ts_model is None:
         raise ValueError("ts_model must not be None")
 
-    use_autobatcher = config is not None and not config.optimize_isolated_sequentially
     optimizer = _resolve_ts_optimizer(config.ts_optimizer if config else "fire")
     swaps = config.steps_between_swaps if config else 5
     logger.info("Batched optimisation of %d isolated conformers", len(conformers))
@@ -318,7 +324,7 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
     _maybe_clear_cuda_cache(ts_model)
     try:
         ab = None
-        if use_autobatcher and config is not None:
+        if config is not None and not config.optimize_isolated_sequentially:
             max_n_atoms = max(len(a) for a in conformers)
             resolved_max_atoms_to_try, cap_source = (
                 _resolve_autobatcher_max_atoms_to_try(
@@ -454,9 +460,6 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             max(frozen_indices),
             ref_len,
         )
-
-    if not saturation_reuse:
-        clear_autobatcher_cache(max_n_atoms_threshold=slab_size)
 
     logger.info(
         "Batched optimisation of %d systems (slab=%d atoms, freeze_ref=%d, frozen=%d)",

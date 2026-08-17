@@ -8,12 +8,13 @@ from scipy.spatial import KDTree
 
 import metalsurfer.placement.site_voronoi as site_voronoi_module
 from metalsurfer.config import AdsorptionConfig
+from metalsurfer.placement._constants import _SITE_CLASSIFICATION_NEIGHBOURS
 from metalsurfer.placement.site_context import (
     _get_unique_sites_for_specs,
     clear_site_caches,
 )
 from metalsurfer.placement.site_voronoi import (
-    _classify_voronoi_site,
+    _classify_voronoi_site_from_neighbors,
     _enrich_along_ridges,
     _voronoi_sites,
 )
@@ -22,6 +23,15 @@ from ..conftest import (
     make_porous_framework,
     make_slab,
 )
+
+
+def _classify_vertex(vertex, positions, k=_SITE_CLASSIFICATION_NEIGHBOURS):
+    k_query = min(k, len(positions))
+    dists, idx = KDTree(positions).query(np.asarray(vertex).reshape(1, 3), k=k_query)
+    return _classify_voronoi_site_from_neighbors(
+        np.asarray(dists, dtype=float).ravel(),
+        np.asarray(idx, dtype=int).ravel(),
+    )
 
 
 def test_classify_voronoi_site_types_for_simple_geometries():
@@ -33,7 +43,7 @@ def test_classify_voronoi_site_types_for_simple_geometries():
             [0.0, 0.0, 4.0],
         ]
     )
-    site_type, _ = _classify_voronoi_site(np.array([0.8, 0.0, 0.0]), positions_atop)
+    site_type, _ = _classify_vertex(np.array([0.8, 0.0, 0.0]), positions_atop)
     assert site_type == "atop"
 
     positions_bridge = np.array(
@@ -44,9 +54,7 @@ def test_classify_voronoi_site_types_for_simple_geometries():
             [6.0, 2.0, 0.0],
         ]
     )
-    site_type, idx = _classify_voronoi_site(
-        np.array([1.0, 0.0, 0.0]), positions_bridge, k=4
-    )
+    site_type, idx = _classify_vertex(np.array([1.0, 0.0, 0.0]), positions_bridge, k=4)
     assert site_type == "bridge"
     assert len(idx) == 2
 
@@ -58,7 +66,7 @@ def test_classify_voronoi_site_types_for_simple_geometries():
             [6.0, 6.0, 0.0],
         ]
     )
-    site_type, idx = _classify_voronoi_site(
+    site_type, idx = _classify_vertex(
         np.array([1.0, np.sqrt(3.0) / 3.0, 0.0]), positions_hollow, k=4
     )
     assert site_type == "hollow"

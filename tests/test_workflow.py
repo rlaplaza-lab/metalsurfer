@@ -27,6 +27,8 @@ from metalsurfer.models import (
     ScreeningRunResult,
     build_molecule_summary,
 )
+from metalsurfer.placement._material import calculator_pbc_for_atoms
+from metalsurfer.placement.geometry import calculate_min_distance
 from metalsurfer.surface_prep import SlabContainer, apply_surface_constraints
 from metalsurfer.workflow import (
     load_molecules,
@@ -160,17 +162,36 @@ class TestValidateAdsorption:
 
     def test_desorbed_fails(self):
         slab = make_slab()
-        # Realistic z-vacuum: the desorption check now uses the calculator's 3D
-        # PBC, so a lifted molecule must be genuinely far along c to be detected
-        # as desorbed rather than MIC-wrapped back near the surface.
-        _cell = slab.get_cell()
-        _cell[2, 2] = 60.0
-        slab.set_cell(_cell)
         combined = place_molecule_on_slab(slab, make_water(), z_offset=20.0)
         config = AdsorptionConfig(binding_distance_threshold=4.0)
         ok, reason, _ = _validate_adsorption(combined, slab, config)
         assert not ok
         assert "desorbed" in reason
+
+    def test_desorbed_fails_without_wrapping_through_vacuum(self):
+        """Regression: material PBC must not MIC-wrap a lifted adsorbate to the image slab."""
+        slab = make_slab(n_layers=3)
+        cell = slab.get_cell()
+        cell[2, 2] = 18.0
+        slab.set_cell(cell)
+
+        combined = place_molecule_on_slab(slab, make_water(), z_offset=12.0)
+        combined.set_cell(cell)
+
+        wrapped_d = calculate_min_distance(
+            combined[len(slab) :].get_positions(),
+            slab.get_positions(),
+            cell,
+            use_pbc=True,
+            pbc=calculator_pbc_for_atoms(combined),
+        )
+        assert wrapped_d < 4.0, "3D PBC would falsely score this as bound"
+
+        config = AdsorptionConfig(binding_distance_threshold=4.0)
+        ok, reason, min_d = _validate_adsorption(combined, slab, config)
+        assert not ok, f"lifted adsorbate should be desorbed, got: {reason}"
+        assert "desorbed" in reason
+        assert min_d is not None and min_d > 4.0
 
     def test_no_adsorbate_fails(self):
         slab = make_slab()

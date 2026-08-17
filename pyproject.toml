@@ -92,9 +92,9 @@ disable_error_code = ["misc", "has-type", "union-attr", "arg-type", "attr-define
 [tool.ruff]
 target-version = "py312"
 line-length = 88
-exclude = [".git", ".pytest_cache", "__pycache__", "*.egg-info", "results_*", "results", ".ruff_cache", "do_not_stage_tests"]
+exclude = [".git", ".pytest_cache", "__pycache__", "*.egg-info", ".ruff_cache"]
 
- [tool.ruff.lint]
+[tool.ruff.lint]
 select = [
     "E",    # pycodestyle errors
     "F",    # pyflakes
@@ -115,9 +115,9 @@ ignore = ["E501"]  # line length handled by formatter
 convention = "numpy"
 
 [tool.ruff.lint.per-file-ignores]
-"scripts/**/*.py" = ["T201", "EXE001", "E402", "D"]
-"examples/**/*.py" = ["T201", "EXE001", "D"]
-"tests/**/*.py" = ["S101", "D"]
+"scripts/**/*.py" = ["E402", "D"]
+"examples/**/*.py" = ["D"]
+"tests/**/*.py" = ["D"]
 
 [tool.ruff.format]
 quote-style = "double"

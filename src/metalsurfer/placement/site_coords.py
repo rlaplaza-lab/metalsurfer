@@ -44,6 +44,7 @@ from .._geom_pbc import (
 from .._geom_pbc import (
     wrap_fractional as _wrap_fractional,
 )
+from .._utils import union_find_cluster as _union_find_cluster
 from ._constants import (
     _PORE_THRESHOLD_COVALENT_SCALE,
     _PORE_THRESHOLD_MIN_ANGSTROM,
@@ -87,19 +88,34 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
+def _primary_height_band_mask(
+    heights: np.ndarray,
+    tolerance: float,
+    *,
+    h_max: float | None = None,
+) -> np.ndarray:
+    """Boolean mask for atoms within *tolerance* of the maximum slab-normal height."""
+    if h_max is None:
+        h_max = float(np.max(heights))
+    return heights >= (h_max - float(tolerance))
+
+
 def top_layer_mask_by_normal(
     positions: np.ndarray,
     cell: np.ndarray,
     tolerance: float,
+    *,
+    include_terrace: bool = True,
 ) -> np.ndarray:
     """Return mask of atoms belonging to exposed surface layers of a slab.
 
     For flat top layers (including standard multi-layer bulk slabs) this reduces
-    to the topmost layer (``h_max - tolerance``).  When a discrete terrace sits
-    immediately below the primary band (stepped/reconstructed surfaces), that
-    terrace is included once if its gap from ``h_max`` is at most
-    ``_STEP_TERRACE_MAX_GAP_ANGSTROM``.  The mask never walks deeper into the
-    bulk by lowering the floor by another full tolerance.
+    to the topmost layer (``h_max - tolerance``).  When *include_terrace* is
+    true and a discrete terrace sits immediately below the primary band
+    (stepped/reconstructed surfaces), that terrace is included once if its gap
+    from ``h_max`` is at most ``_STEP_TERRACE_MAX_GAP_ANGSTROM``.  The mask
+    never walks deeper into the bulk by lowering the floor by another full
+    tolerance.
 
     Parameters
     ----------
@@ -109,15 +125,20 @@ def top_layer_mask_by_normal(
         Unit-cell matrix.
     tolerance
         Height tolerance for the top layer.
+    include_terrace
+        When false, return only the primary height band (no stepped-surface
+        terrace expansion). Used by freeze policy and alloy top-layer selection.
     """
     positions = np.asarray(positions, dtype=float)
     if positions.size == 0:
         return np.zeros(0, dtype=bool)
 
     heights = _height_along_slab_normal(positions, cell)
-    h_max = float(np.max(heights))
     tol = float(tolerance)
-    primary = heights >= (h_max - tol)
+    h_max = float(np.max(heights))
+    primary = _primary_height_band_mask(heights, tol, h_max=h_max)
+    if not include_terrace:
+        return primary
 
     # Steps already inside the primary band (e.g. Δh ≤ tol) stay in primary.
     below = ~primary
@@ -200,55 +221,6 @@ def _build_periodic_images(
 # ---------------------------------------------------------------------------
 
 
-def _union_find_cluster(
-    n: int,
-    merge_pairs: list[tuple[int, int]],
-) -> list[list[int]]:
-    """Union-find with path compression and union-by-rank."""
-    parent = list(range(n))
-    rank = [0] * n
-
-    def find(x: int) -> int:
-        """Find the root of *x* with path compression.
-
-        Parameters
-        ----------
-        x
-            Element index.
-        """
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: int, b: int) -> None:
-        """Merge the sets containing *a* and *b*.
-
-        Parameters
-        ----------
-        a
-            First element index.
-        b
-            Second element index.
-        """
-        ra, rb = find(a), find(b)
-        if ra == rb:
-            return
-        if rank[ra] < rank[rb]:
-            ra, rb = rb, ra
-        parent[rb] = ra
-        if rank[ra] == rank[rb]:
-            rank[ra] += 1
-
-    for a, b in merge_pairs:
-        union(a, b)
-
-    groups: dict[int, list[int]] = {}
-    for i in range(n):
-        groups.setdefault(find(i), []).append(i)
-    return list(groups.values())
-
-
 def _deduplicate_points(
     points: np.ndarray,
     tolerance: float,
@@ -326,9 +298,8 @@ def _derive_voronoi_distance_window(
         # Slab: characterise the exposed top layer along the slab normal
         # (orientation-aware), not a Cartesian-z slice or the bulk average.
         heights = _height_along_slab_normal(positions, cell)
-        h_max = float(np.max(heights))
         top_depth = _derive_top_layer_tolerance(symbols)
-        top_mask = heights >= (h_max - top_depth)
+        top_mask = _primary_height_band_mask(heights, top_depth)
         top_idx = np.nonzero(top_mask)[0]
         top_symbols = [symbols[int(i)] for i in top_idx] if len(top_idx) else symbols
         base_radius = _mean_covalent_radius(top_symbols)

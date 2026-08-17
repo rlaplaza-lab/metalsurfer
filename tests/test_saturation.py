@@ -123,7 +123,6 @@ def _make_bootstrap_mock(
     return ScreeningRunBootstrap(
         calculator=object(),
         ts_model=None,
-        molecule_pairs=[(smiles, molecule)],
         ref=ref,
         t_ref_s=0.0,
         slab=slab,
@@ -195,7 +194,6 @@ def _patch_multi_mol_saturation_mocks(
         lambda slab, *_a, **_kw: ScreeningRunBootstrap(
             calculator=object(),
             ts_model=None,
-            molecule_pairs=list(zip(smiles_list, molecules, strict=True)),
             ref=ref,
             t_ref_s=0.0,
             slab=slab if isinstance(slab, SlabContainer) else SlabContainer(slab),
@@ -1241,7 +1239,19 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
         best_result=best_a,
         per_molecule_results={"water": [best_a, second_water], "CO2": [best_co2]},
         per_molecule_budgets={"water": 75, "CO2": 25},
-        bo_transfer_enabled=False,
+        bo_transfer_enabled=True,
+        transfer_by_molecule={
+            "water": BOTransferInfo(
+                transfer_used=True,
+                transfer_weight_share=0.2,
+                transfer_bad_rounds=0,
+                transfer_last_mae_delta=-0.01,
+            ),
+            "CO2": BOTransferInfo(
+                transfer_used=False,
+                transfer_disabled_reason="insufficient_overlap",
+            ),
+        },
     )
     result = MultiMolSaturationRunResult(
         molecules=["water", "CO2"],
@@ -1279,10 +1289,21 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
     assert len(details_df) == 1
     assert details_df.iloc[0]["winning_molecule"] == "water"
     assert "water" in str(details_df.iloc[0]["per_molecule_budgets"])
+    assert bool(details_df.iloc[0]["bo_transfer_enabled"]) is True
+    assert bool(details_df.iloc[0]["bo_transfer_used"]) is True
+    assert float(details_df.iloc[0]["bo_transfer_weight_share"]) == pytest.approx(0.2)
 
     placements_df = pd.read_csv(output_dir / "saturation_placements_detailed.csv")
     assert len(placements_df) == 3
     assert set(placements_df["molecule"]) == {"water", "CO2"}
+    water_rows = placements_df[placements_df["molecule"] == "water"]
+    co2_rows = placements_df[placements_df["molecule"] == "CO2"]
+    assert bool(water_rows.iloc[0]["bo_transfer_used"]) is True
+    assert float(water_rows.iloc[0]["bo_transfer_weight_share"]) == pytest.approx(0.2)
+    assert bool(co2_rows.iloc[0]["bo_transfer_used"]) is False
+    assert (
+        str(co2_rows.iloc[0]["bo_transfer_disabled_reason"]) == "insufficient_overlap"
+    )
 
 
 def test_save_saturation_results_dispatches_multi_mol(workdir):

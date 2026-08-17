@@ -543,6 +543,9 @@ def compare_geometries_to_nomad(
     }
     ref_mode = {ref.label: _paper_binding_mode(ref.binding_class) for ref in references}
 
+    if not ref_ads:
+        return []
+
     matches: list[GeometryMatch] = []
     for result in sorted(results, key=lambda row: row.energy_adsorption):
         _, mlip_ads = split_slab_adsorbate(result.atoms)
@@ -605,14 +608,18 @@ def build_overlay_structure(
     dft_ads_aligned: np.ndarray,
     *,
     slab_indices: np.ndarray | None = None,
+    dft_symbols: list[str] | None = None,
 ) -> Atoms:
     """Assemble slab + MLIP adsorbate + Kabsch-aligned DFT adsorbate for figure export."""
     slab_sel = slab if slab_indices is None else slab[slab_indices]
     n_slab = len(slab_sel)
     n_ads = len(mlip_ads)
+    dft_syms = (
+        dft_symbols if dft_symbols is not None else mlip_ads.get_chemical_symbols()
+    )
 
     symbols = slab_sel.get_chemical_symbols() + mlip_ads.get_chemical_symbols()
-    symbols += mlip_ads.get_chemical_symbols()
+    symbols += list(dft_syms)
     positions = np.vstack(
         (
             slab_sel.get_positions(),
@@ -689,10 +696,19 @@ def export_figure_overlays(
             else vmd_dir / f"{stem}_dft_ads_on_mlip_slab.xyz"
         )
 
-        full_overlay = build_overlay_structure(mlip_slab, mlip_ads, dft_ads_positions)
+        full_overlay = build_overlay_structure(
+            mlip_slab,
+            mlip_ads,
+            dft_ads_positions,
+            dft_symbols=dft_ads.get_chemical_symbols(),
+        )
         patch_idx = _slab_patch_indices(mlip_slab, mlip_ads, slab_patch_cutoff)
         patch_overlay = build_overlay_structure(
-            mlip_slab, mlip_ads, dft_ads_positions, slab_indices=patch_idx
+            mlip_slab,
+            mlip_ads,
+            dft_ads_positions,
+            slab_indices=patch_idx,
+            dft_symbols=dft_ads.get_chemical_symbols(),
         )
 
         if native_frame:

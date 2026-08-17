@@ -1,4 +1,4 @@
-"""Aromatic heuristics, parallel fraction, and adsorbate orientation classification."""
+"""Aromatic heuristics, parallel fraction, and adsorbate orientation."""
 
 from dataclasses import dataclass
 
@@ -9,8 +9,6 @@ from ..exceptions import DependencyMissingError
 from ..models import PlacementSpec
 from . import geometry as geom
 from ._constants import (
-    _MOL_COVALENT_RADIUS_FALLBACK,
-    _ORIENTATION_CLASSIFICATION_PARALLEL_DOT_THRESHOLD,
     _PARALLEL_FRACTION_HIGH_BINDER_RATIO,
     _PARALLEL_FRACTION_HIGH_RATIO_CUTOFF,
     _PARALLEL_FRACTION_LOW_BINDER_RATIO,
@@ -26,9 +24,8 @@ from ._constants import (
     _PARALLEL_Z_LO_SHRINK_FALLBACK_ANGSTROM,
     _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE,
     _SITE_Z_OFFSET_FROM_SURFACE_RADIUS,
-    _VECTOR_NORM_EPS,
 )
-from .site_coords import _slab_normal
+from .site_coords import _mean_covalent_radius
 from .site_enumeration import _get_site_surface_radii
 from .site_types import Site
 
@@ -81,14 +78,6 @@ def _is_flat_aromatic_with_en(smiles: str) -> bool:
     return bool(aromatic and has_en)
 
 
-def _mean_molecule_covalent_radius(symbols: list[str]) -> float:
-    radii = [geom._get_covalent_radius(s) for s in symbols]
-    valid = [r for r in radii if r is not None]
-    if not valid:
-        return _MOL_COVALENT_RADIUS_FALLBACK
-    return float(np.mean(valid))
-
-
 def _radius_sum_for_site(
     slab: Atoms,
     site: Site | None,
@@ -97,7 +86,7 @@ def _radius_sum_for_site(
     r_surface = _get_site_surface_radii(slab, site)
     if r_surface is None:
         return None
-    return r_surface + _mean_molecule_covalent_radius(mol_symbols)
+    return r_surface + _mean_covalent_radius(mol_symbols)
 
 
 def _site_type_z_offset(
@@ -133,59 +122,6 @@ def _parallel_z_adjustments(
         _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE * radius_sum,
         _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE * radius_sum,
     )
-
-
-def classify_adsorbate_orientation(
-    atoms: Atoms,
-    slab_size: int,
-    threshold: float = _ORIENTATION_CLASSIFICATION_PARALLEL_DOT_THRESHOLD,
-    *,
-    normal: np.ndarray | None = None,
-) -> str:
-    """Classify adsorbate plane as ``"parallel"``, ``"tilted"``, or ``"unknown"``.
-
-    Uses the inertia-tensor plane normal vs the surface normal. For flat
-    molecules, the plane normal is the axis of largest inertia (eigenvecs[:, 2]),
-    per the perpendicular axis theorem. Parallel = ring approximately horizontal;
-    tilted = ring not parallel to the surface.
-
-    Returns ``"unknown"`` when the adsorbate has fewer than 3 atoms (no plane).
-
-    *normal* defaults to the slab normal from the cell (``a×b``); pass an explicit
-    unit vector for non-standard frames.
-
-    Parameters
-    ----------
-    atoms
-        Combined :class:`~ase.Atoms` object (slab + adsorbate).
-    slab_size
-        Number of atoms belonging to the substrate.
-    threshold
-        Dot-product threshold for ``"parallel"`` classification.
-    normal
-        Optional explicit surface normal vector.
-    """
-    pos = atoms.get_positions()[slab_size:]
-    if len(pos) < 3:
-        return "unknown"
-    masses = atoms.get_masses()[slab_size:]
-    _, eigenvecs = geom._compute_inertia_tensor(pos, masses)
-    plane_normal = eigenvecs[:, 2]
-    if normal is None:
-        cell = np.asarray(atoms.get_cell(), dtype=float)
-        surface_normal = _slab_normal(cell)
-    else:
-        surface_normal = np.asarray(normal, dtype=float)
-        nrm = float(np.linalg.norm(surface_normal))
-        surface_normal = (
-            surface_normal / nrm
-            if nrm > _VECTOR_NORM_EPS
-            else np.array([0.0, 0.0, 1.0])
-        )
-    if float(np.dot(plane_normal, surface_normal)) < 0:
-        plane_normal = -plane_normal
-    dot = abs(float(np.dot(plane_normal, surface_normal)))
-    return "parallel" if dot > threshold else "tilted"
 
 
 def _estimate_parallel_fraction(

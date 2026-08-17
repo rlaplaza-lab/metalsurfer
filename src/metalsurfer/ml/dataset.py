@@ -4,7 +4,6 @@ import json
 import logging
 import os
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -220,41 +219,3 @@ def load_dataset(
         return [PlacementRecord.from_flat_dict(dict(row)) for _, row in df.iterrows()]
 
     return df
-
-
-def merge_datasets(*paths: str, output_path: str | None = None) -> pd.DataFrame:
-    """Merge multiple ML dataset CSVs, deduplicating by record_hash.
-
-    Parameters
-    ----------
-    *paths : str
-        Paths to CSV files or directories.
-    output_path : str, optional
-        If set, write the merged dataset to this path.
-
-    Returns
-    -------
-    DataFrame
-        The merged, deduplicated dataset.
-    """
-    if not paths:
-        raise ValueError("merge_datasets requires at least one path")
-    frames: list[pd.DataFrame] = []
-    for path in paths:
-        loaded = load_dataset(path, as_records=False)
-        if not isinstance(loaded, pd.DataFrame):
-            raise TypeError("merge_datasets expects CSV inputs, not record lists")
-        frames.append(loaded)
-
-    merged: pd.DataFrame = pd.concat(frames, ignore_index=True)
-    merged = merged.drop_duplicates(subset=["record_hash"], keep="first")
-    merged = merged.sort_values("record_hash").reset_index(drop=True)
-
-    logger.info("Merged %d datasets -> %d unique records", len(frames), len(merged))
-
-    if output_path is not None:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        merged.to_csv(output_path, index=False)
-        logger.info("Saved merged dataset to %s", output_path)
-
-    return merged

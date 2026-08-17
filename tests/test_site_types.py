@@ -5,7 +5,7 @@ import pytest
 
 from metalsurfer.placement._constants import _SITE_Z_OFFSET_FROM_SURFACE_RADIUS
 from metalsurfer.placement._material import MATERIAL_PBC, material_aware_pbc
-from metalsurfer.placement.site_types import Site, site_from_dict, with_symmetry
+from metalsurfer.placement.site_types import Site, with_symmetry
 
 
 def _site(**overrides) -> Site:
@@ -39,24 +39,6 @@ def test_site_xy_returns_copy():
     xy = site.xy
     xy[0] = 99.0
     assert site.xyz[0] == pytest.approx(1.0)
-
-
-def test_site_from_dict_accepts_ndarray_and_iterable_slab_indices():
-    from_list = site_from_dict({"xyz": [0.0, 0.0, 1.0], "slab_indices": [1, 2]})
-    from_arr = site_from_dict(
-        {"xyz": [0.0, 0.0, 1.0], "slab_indices": np.array([1, 2])}
-    )
-    from_range = site_from_dict({"xyz": [0.0, 0.0, 1.0], "slab_indices": range(2)})
-    assert from_list.slab_indices == (1, 2)
-    assert from_arr.slab_indices == (1, 2)
-    assert from_range.slab_indices == (0, 1)
-
-
-def test_site_from_dict_rejects_bad_slab_indices():
-    with pytest.raises(TypeError, match="slab_indices"):
-        site_from_dict({"xyz": [0.0, 0.0, 1.0], "slab_indices": 3})
-    with pytest.raises(TypeError, match="slab_indices"):
-        site_from_dict({"xyz": [0.0, 0.0, 1.0], "slab_indices": "01"})
 
 
 def test_with_symmetry_preserves_identity_fields():

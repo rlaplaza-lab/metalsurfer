@@ -52,11 +52,11 @@ _run_phase() {
 
 # One subprocess per module / test so VRAM is released when the interpreter exits.
 _run_phase tests/test_bayesian.py -m gpu
-_run_phase tests/test_integration_ethene_ru.py
-_run_phase tests/test_integration_h2_ru_slab.py
+_run_phase "tests/test_integration_mlip_pipeline.py::test_mlip_pipeline[ethene_ru]"
+_run_phase "tests/test_integration_mlip_pipeline.py::test_mlip_pipeline[h2_ru]"
 _run_phase tests/test_integration_water_cu_slab.py
-_run_phase tests/test_integration_co2_mof.py
-_run_phase tests/test_integration_h2_pt12.py
+_run_phase "tests/test_integration_mlip_pipeline.py::test_mlip_pipeline[co2_mof]"
+_run_phase "tests/test_integration_mlip_pipeline.py::test_mlip_pipeline[h2_pt12]"
 _run_phase tests/test_saturation.py::test_run_saturation_screening_h2_ni111_real_gpu
 _run_phase tests/test_saturation.py::test_run_saturation_screening_multi_mol_bo_real_gpu
 

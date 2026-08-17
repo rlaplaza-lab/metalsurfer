@@ -392,6 +392,7 @@ def fill_materialized_placements(
     yield_floor = _yield_floor(oversample_max)
     yield_est = _YIELD_EST_PRIOR
     attempts_used = 0
+    next_placement_index = 0
     # R2: consecutive zero-yield attempts (no new placements absorbed).
     consecutive_zero_yield = 0
 
@@ -496,9 +497,9 @@ def fill_materialized_placements(
         if not specs:
             break
 
-        id_offset = attempt * n_target
         for spec in specs:
-            spec.placement_index = int(spec.placement_index) + id_offset
+            spec.placement_index = next_placement_index
+            next_placement_index += 1
             last_spec_by_index[spec.placement_index] = spec
 
         (

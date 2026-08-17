@@ -16,6 +16,7 @@ from ..filters import adsorbate_connected_components
 from ..ml.dataset import DatasetLogger
 from ..models import (
     BOStepMemory,
+    BOTransferInfo,
     MultiMolSaturationRunResult,
     MultiMolSaturationStepResult,
     ReferenceEnergies,
@@ -32,7 +33,7 @@ from ..placement.generators import (
 )
 from ..surface_prep import SlabContainer, apply_material_pbc
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
-from .bayesian import BOTransferInfo, process_molecule_bayesian
+from .bayesian import process_molecule_bayesian
 from .core import process_molecule
 from .shared import (
     MoleculeScreenOutcome,
@@ -680,6 +681,7 @@ def _run_multi_molecule_saturation(
         slab
             Current slab container.
         """
+        nonlocal config
         if bo_enabled:
             _validate_distinct_bo_memories(
                 {m: s.prior_step_memory for m, s in bo_states.items()},
@@ -689,9 +691,9 @@ def _run_multi_molecule_saturation(
         E_slab = preamble.E_slab
         ref_step = preamble.ref_step
 
+        slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
         if needs_workload_autotune(config, bo=bo_enabled):
             largest_conformers, _ = conformer_cache[largest_mol]
-            slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
             step_config = resolve_saturation_step_workload_config(
                 config,
                 ts_model=ts_model,
@@ -703,13 +705,14 @@ def _run_multi_molecule_saturation(
                 symmetry_broken=symmetry_broken,
                 bo_enabled=bo_enabled,
             )
+            config = step_config
         else:
             step_config = config
 
         if step_config.num_placements is None:
             raise ValueError("config.num_placements must be set for saturation")
 
-        slab_for_sites_budget = _build_surface_reference_slab(slab.atoms, base_slab)
+        slab_for_sites_budget = slab_for_sites
         step_complexities: dict[str, float] = {}
         for mol in active_molecules:
             confs, _ = conformer_cache[mol]

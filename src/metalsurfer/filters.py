@@ -17,6 +17,7 @@ import numpy as np
 from ase import Atoms
 from ase.data import atomic_numbers, covalent_radii
 from ase.geometry import find_mic
+from scipy.sparse.csgraph import connected_components
 
 from ._logging import warn_once
 from ._utils import cell_has_volume
@@ -94,15 +95,12 @@ def _adjacency_mask(
     return np.triu(bonded, k=1)
 
 
-def _bond_counts_from_atoms(
-    atoms: Atoms,
-    surface_symbols: list[str] | None = None,
-    multiplier: float = 1.3,
+def _bond_counts_from_dist(
+    syms: np.ndarray,
+    dist_matrix: np.ndarray,
+    threshold: np.ndarray,
 ) -> Counter:
-    """Count bonds (by element-pair) among non-surface atoms."""
-    syms, _, dist_matrix, threshold = _nonsurface_distance_and_threshold(
-        atoms, surface_symbols, multiplier
-    )
+    """Count bonds (by element-pair) from a precomputed distance matrix."""
     bonded = _adjacency_mask(dist_matrix, threshold)
     pairs_i, pairs_j = np.nonzero(bonded)
 
@@ -166,15 +164,12 @@ def _formula_from_atoms(
     return formula
 
 
-def _coordination_fingerprint_from_atoms(
-    atoms: Atoms,
-    surface_symbols: list[str] | None = None,
-    multiplier: float = 1.3,
+def _coordination_fingerprint_from_dist(
+    syms: np.ndarray,
+    dist_matrix: np.ndarray,
+    threshold: np.ndarray,
 ) -> dict[str, list[int]]:
-    """Per-element sorted list of coordination numbers among non-surface atoms."""
-    syms, _, dist_matrix, threshold = _nonsurface_distance_and_threshold(
-        atoms, surface_symbols, multiplier
-    )
+    """Per-element sorted coordination numbers from a distance matrix."""
     bonded = dist_matrix <= threshold
     np.fill_diagonal(bonded, False)
     coord_counts = bonded.sum(axis=1).astype(int)
@@ -211,8 +206,6 @@ def _connected_components_from_coords(
     multiplier: float,
 ) -> list[np.ndarray]:
     """Return boolean masks (one per fragment) for bonded clusters in *coords*."""
-    from scipy.sparse.csgraph import connected_components
-
     if len(coords) <= 1:
         return [np.ones(len(coords), dtype=bool)] if len(coords) == 1 else []
 
@@ -257,25 +250,18 @@ def adsorbate_connected_components(
     return [ads[mask] for mask in masks]
 
 
-def _is_molecule_connected(
-    atoms: Atoms,
-    surface_symbols: list[str] | None = None,
-    multiplier: float = 1.3,
+def _is_molecule_connected_from_dist(
+    syms: np.ndarray,
+    dist_matrix: np.ndarray,
+    threshold: np.ndarray,
 ) -> bool:
-    """Return ``True`` if non-surface atoms form a single connected fragment."""
-    syms = np.array(atoms.get_chemical_symbols())
-    mask = (
-        ~np.isin(syms, surface_symbols)
-        if surface_symbols is not None
-        else np.ones(len(syms), dtype=bool)
-    )
-    if mask.sum() <= 1:
+    """Return ``True`` if atoms form a single connected fragment."""
+    if len(syms) <= 1:
         return True
-
-    coords = atoms.get_positions()[mask]
-    syms = syms[mask]
-
-    return len(_connected_components_from_coords(coords, syms, atoms, multiplier)) == 1
+    bonded = dist_matrix <= threshold
+    np.fill_diagonal(bonded, False)
+    n_components, _ = connected_components(bonded, directed=False)
+    return n_components == 1
 
 
 # ---------------------------------------------------------------------------
@@ -328,9 +314,10 @@ def check_decomposition(
     # the loosest ratio implies connectivity at every tighter ratio, so looping
     # over all multipliers is pure redundancy.
     max_mult = max(connectivity_multipliers) if connectivity_multipliers else 1.3
-    if not _is_molecule_connected(
-        atoms, surface_symbols=surface_symbols, multiplier=max_mult
-    ):
+    syms, _coords, dist_matrix, threshold = _nonsurface_distance_and_threshold(
+        atoms, surface_symbols, max_mult
+    )
+    if not _is_molecule_connected_from_dist(syms, dist_matrix, threshold):
         return False, f"adsorbate not connected (multiplier={max_mult})"
 
     if reference_smiles is None:
@@ -355,12 +342,9 @@ def check_decomposition(
                 f"got {dict(actual_formula)}",
             )
 
-    bond_mult = max(connectivity_multipliers) if connectivity_multipliers else 1.3
     ref_bonds = _bond_counts_from_smiles(reference_smiles)
     if ref_bonds is not None:
-        actual_bonds = _bond_counts_from_atoms(
-            atoms, surface_symbols=surface_symbols, multiplier=bond_mult
-        )
+        actual_bonds = _bond_counts_from_dist(syms, dist_matrix, threshold)
         if actual_bonds != ref_bonds:
             return (
                 False,
@@ -370,9 +354,7 @@ def check_decomposition(
 
     ref_coord = _coordination_fingerprint_from_smiles(reference_smiles)
     if ref_coord is not None:
-        actual_coord = _coordination_fingerprint_from_atoms(
-            atoms, surface_symbols=surface_symbols, multiplier=bond_mult
-        )
+        actual_coord = _coordination_fingerprint_from_dist(syms, dist_matrix, threshold)
         if actual_coord != ref_coord:
             return (
                 False,
@@ -381,9 +363,50 @@ def check_decomposition(
             )
 
     if ref_formula is None and ref_bonds is None and ref_coord is None:
-        return False, "could not parse reference SMILES for decomposition check"
+        logger.warning(
+            "Could not parse reference SMILES %r for decomposition check; "
+            "falling back to connectivity-only screening",
+            reference_smiles,
+        )
+        return True, (
+            "connectivity intact (SMILES unparseable; skipped formula/bond/coord checks)"
+        )
 
     return True, "connectivity intact"
+
+
+def _adsorbate_surface_min_distance(
+    atoms: Atoms,
+    slab: Atoms,
+    surface_symbols: list[str] | None = None,
+    *,
+    material_type: str = "slab",
+) -> float | None:
+    """Minimum adsorbate-to-surface distance using material-aware PBC.
+
+    Returns ``None`` when the combined structure has no adsorbate atoms.
+    """
+    slab_size = len(slab)
+    adsorbate = atoms[slab_size:]
+    if len(adsorbate) == 0:
+        return None
+
+    cell = atoms.get_cell()
+    slab_positions = slab.get_positions()
+    if surface_symbols:
+        slab_syms = np.array(slab.get_chemical_symbols())
+        mask = np.isin(slab_syms, surface_symbols)
+        if np.any(mask):
+            slab_positions = slab_positions[mask]
+
+    pbc_for_dist = material_aware_pbc(material_type)
+    return calculate_min_distance(
+        adsorbate.get_positions(),
+        slab_positions,
+        cell,
+        use_pbc=True,
+        pbc=pbc_for_dist,
+    )
 
 
 def check_desorption(
@@ -424,27 +447,14 @@ def check_desorption(
     material_type
         Material type string (e.g. "slab", "porous", "nanoparticle").
     """
-    slab_size = len(slab)
-    adsorbate = atoms[slab_size:]
-    if len(adsorbate) == 0:
-        return False, "no adsorbate atoms found"
-
-    cell = atoms.get_cell()
-    slab_positions = slab.get_positions()
-    if surface_symbols:
-        slab_syms = np.array(slab.get_chemical_symbols())
-        mask = np.isin(slab_syms, surface_symbols)
-        if np.any(mask):
-            slab_positions = slab_positions[mask]
-
-    _pbc_for_dist = material_aware_pbc(material_type)
-    min_d = calculate_min_distance(
-        adsorbate.get_positions(),
-        slab_positions,
-        cell,
-        use_pbc=True,
-        pbc=_pbc_for_dist,
+    min_d = _adsorbate_surface_min_distance(
+        atoms,
+        slab,
+        surface_symbols=surface_symbols,
+        material_type=material_type,
     )
+    if min_d is None:
+        return False, "no adsorbate atoms found"
     if min_d > binding_threshold:
         return False, f"adsorbate too far from surface ({min_d:.2f} A)"
 
@@ -487,7 +497,6 @@ def filter_results(
     surface_symbols: list[str] | None = None,
     reference_smiles: str | None = None,
     config: AdsorptionConfig | None = None,
-    keep_best: bool = False,
     duplicate_results_out: list[ScreeningResult] | None = None,
 ) -> list[ScreeningResult]:
     """Apply decomposition, desorption and duplicate filters in sequence.
@@ -510,8 +519,6 @@ def filter_results(
         ``config.skip_topology_check`` is True, decomposition checks are skipped
         (e.g. for dissociative adsorption). When ``config.skip_desorption_check``
         is True, desorption distance checks are skipped.
-    keep_best:
-        If ``True``, collapse to the single most-stable entry (minimum E_ads).
     duplicate_results_out:
         Optional sink for entries removed by duplicate filtering.
     """
@@ -655,10 +662,4 @@ def filter_results(
         )
     if duplicate_results_out is not None and deduplicated:
         duplicate_results_out.extend(deduplicated)
-    results = unique
-
-    if keep_best and results:
-        best = min(results, key=lambda r: r.energy_adsorption)
-        return [best]
-
-    return results
+    return unique

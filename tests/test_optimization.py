@@ -662,6 +662,80 @@ class TestTorchSimCalculator:
             f = calc.get_forces(atoms)
             assert f.shape == (n_atoms, 3)
 
+    def test_get_stress_recomputes_when_missing_from_prior_calculate(self):
+        """Same geometry: energy-only calculate then get_stress must not return zeros."""
+        import torch
+
+        mock_model = type("MockModel", (), {})()
+        mock_model.device = torch.device("cpu")
+        mock_model.dtype = torch.float32
+
+        n_atoms = 6
+        calc = TorchSimCalculator(mock_model)
+        atoms = _make_atoms_with_cell()[:n_atoms]
+        atoms.set_cell([10.0, 10.0, 15.0])
+        atoms.set_pbc([True, True, True])
+
+        energy_only = [
+            {
+                "potential_energy": torch.tensor([[-42.5]], dtype=torch.float32),
+                "forces": torch.randn(n_atoms, 3, dtype=torch.float32) * 0.1,
+            }
+        ]
+        with_stress = [
+            {
+                "potential_energy": torch.tensor([[-42.5]], dtype=torch.float32),
+                "forces": torch.randn(n_atoms, 3, dtype=torch.float32) * 0.1,
+                "stress": torch.eye(3, dtype=torch.float32) * 0.05,
+            }
+        ]
+        with patch(
+            "torch_sim.static", side_effect=[energy_only, with_stress]
+        ) as mock_static:
+            calc.calculate(atoms, ["energy", "forces"])
+            assert "stress" not in calc.results
+            stress = calc.get_stress(atoms)
+            assert mock_static.call_count == 2
+            assert stress.shape == (6,)
+            assert not np.allclose(stress, 0.0)
+
+    def test_get_forces_raises_when_missing(self):
+        """Missing forces after calculate must raise, not return zeros."""
+        import torch
+
+        mock_model = type("MockModel", (), {})()
+        mock_model.device = torch.device("cpu")
+        mock_model.dtype = torch.float32
+
+        n_atoms = 4
+        calc = TorchSimCalculator(mock_model)
+        atoms = _make_atoms_with_cell()[:n_atoms]
+        atoms.set_cell([10.0, 10.0, 15.0])
+        atoms.set_pbc([True, True, True])
+
+        no_forces = [
+            {
+                "potential_energy": torch.tensor([[-10.0]], dtype=torch.float32),
+            }
+        ]
+        with patch("torch_sim.static", return_value=no_forces):
+            calc.calculate(atoms, ["energy", "forces"])
+            with pytest.raises(RuntimeError, match="no forces"):
+                calc.get_forces(atoms)
+
+
+class TestTorchSimCalculatorDeps:
+    """Calculator behavior without a real MLIP model."""
+
+    def test_calculate_raises_when_torchsim_missing(self, monkeypatch):
+        monkeypatch.setattr(_deps, "ts", None)
+        calc = TorchSimCalculator(object())
+        atoms = _make_atoms_with_cell()
+        from metalsurfer.exceptions import DependencyMissingError
+
+        with pytest.raises(DependencyMissingError, match="torch-sim"):
+            calc.calculate(atoms, ["energy", "forces"])
+
 
 @pytest.mark.mlip
 @pytest.mark.skipif(
@@ -824,6 +898,8 @@ def test_estimate_parallel_relaxation_capacity_runtime_error_falls_back(
         frozen_indices=[],
     )
     assert capacity == 1
+    cache_key = _validation._parallel_capacity_cache_key(object(), len(atoms), config)
+    assert _cache.capacity_cache_get(cache_key) is None
 
 
 def test_estimate_parallel_relaxation_capacity_value_error_propagates(
@@ -880,7 +956,7 @@ def test_estimate_parallel_relaxation_capacity_uses_memory_scaler(
         config=config,
         frozen_indices=[],
     )
-    assert capacity == 6
+    assert capacity == 12
 
 
 def test_resolve_autobatcher_max_atoms_to_try_is_conservative_vs_estimate():

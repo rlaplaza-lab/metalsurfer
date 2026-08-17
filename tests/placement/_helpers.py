@@ -11,7 +11,6 @@ from metalsurfer.models import (
 )
 from metalsurfer.placement import (
     enumerate_placement_specs,
-    generate_placement_from_descriptor,
     generate_placement_from_pose,
     generate_placement_from_spec,
 )
@@ -110,11 +109,6 @@ def _assert_replay_matches(
         )
         assert replay is not None
         replayed = replay[0]
-    elif mode == "descriptor":
-        replayed = generate_placement_from_descriptor(
-            descriptor, conformers, slab, config, smiles="O"
-        )
-        assert replayed is not None
     else:
         pose = _pose_from_descriptor(descriptor)
         replay = generate_placement_from_pose(pose, conformers, slab, config)
@@ -140,17 +134,28 @@ def _site_ordering_key(site: Site) -> tuple:
     )
 
 
-def _make_site(xyz, site_type="hollow", source="topology_hollow"):
-    from metalsurfer.placement.site_types import Site
-
+def _make_site(
+    xyz,
+    site_type="hollow",
+    source="topology_hollow",
+    *,
+    normal=None,
+    slab_indices=(0,),
+    material_type="slab",
+    env_fingerprint=None,
+):
+    if normal is None:
+        normal = np.array([0.0, 0.0, 1.0])
+    if env_fingerprint is None:
+        env_fingerprint = (("Ru",), site_type)
     return Site(
         xyz=np.asarray(xyz, dtype=float),
-        normal=np.array([0.0, 0.0, 1.0]),
+        normal=np.asarray(normal, dtype=float),
         site_type=site_type,
-        slab_indices=(0,),
-        material_type="slab",
+        slab_indices=tuple(slab_indices),
+        material_type=material_type,
         site_source=source,
-        env_fingerprint=(("Ru",), site_type),
+        env_fingerprint=tuple(env_fingerprint),
     )
 
 

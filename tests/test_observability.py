@@ -3,7 +3,7 @@
 Covers:
 - load_molecules single-read CSV caching
 - run_metadata.json output
-- Logging context manager and filter
+- Logging context manager and record factory
 - Vectorized connectivity helpers produce correct results on edge cases
 """
 
@@ -19,19 +19,20 @@ import pytest
 from ase import Atoms
 
 from metalsurfer._logging import (
-    ContextFilter,
+    _LOG_CTX,
     configure_logging,
-    get_log_context,
+    ensure_log_record_defaults,
     log_context,
     torchsim_output_capture,
 )
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.filters import (
     _adjacency_mask,
-    _bond_counts_from_atoms,
-    _coordination_fingerprint_from_atoms,
+    _bond_counts_from_dist,
+    _coordination_fingerprint_from_dist,
     _covalent_threshold_matrix,
-    _is_molecule_connected,
+    _is_molecule_connected_from_dist,
+    _nonsurface_distance_and_threshold,
 )
 from metalsurfer.io_results import write_run_metadata
 from metalsurfer.workflow import load_molecules
@@ -275,64 +276,40 @@ class TestLogContext:
 
     def test_nested_context(self):
         with log_context(molecule="water"):
-            ctx = get_log_context()
+            ctx = dict(_LOG_CTX.get() or {})
             assert ctx["molecule"] == "water"
 
             with log_context(placement_id=5):
-                ctx2 = get_log_context()
+                ctx2 = dict(_LOG_CTX.get() or {})
                 assert ctx2["molecule"] == "water"
                 assert ctx2["placement_id"] == 5
 
-            ctx3 = get_log_context()
+            ctx3 = dict(_LOG_CTX.get() or {})
             assert "placement_id" not in ctx3
             assert ctx3["molecule"] == "water"
 
-        assert get_log_context() == {}
+        assert dict(_LOG_CTX.get() or {}) == {}
 
-    def test_context_filter_adds_prefix(self):
-        filt = ContextFilter()
-        record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="hello",
-            args=(),
-            exc_info=None,
-        )
+    def test_log_record_factory_adds_prefix(self):
+        ensure_log_record_defaults()
+        factory = logging.getLogRecordFactory()
         with log_context(molecule="ethanol", surface_type="Ru001"):
-            filt.filter(record)
+            record = factory("test", logging.INFO, "", 0, "hello", (), None)
             assert "molecule=ethanol" in record.ctx_prefix
             assert "surface_type=Ru001" in record.ctx_prefix
 
     def test_empty_context_no_prefix(self):
-        filt = ContextFilter()
-        record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="hello",
-            args=(),
-            exc_info=None,
-        )
-        filt.filter(record)
+        ensure_log_record_defaults()
+        factory = logging.getLogRecordFactory()
+        record = factory("test", logging.INFO, "", 0, "hello", (), None)
         assert record.ctx_prefix == ""
 
-    def test_context_filter_includes_extra_keys(self):
-        """ContextFilter includes keys beyond CTX_KEY_ORDER in ctx_prefix."""
-        filt = ContextFilter()
-        record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="hello",
-            args=(),
-            exc_info=None,
-        )
+    def test_log_record_factory_includes_extra_keys(self):
+        """Factory includes keys beyond CTX_KEY_ORDER in ctx_prefix."""
+        ensure_log_record_defaults()
+        factory = logging.getLogRecordFactory()
         with log_context(molecule="water", custom_key="extra_value"):
-            filt.filter(record)
+            record = factory("test", logging.INFO, "", 0, "hello", (), None)
             assert "molecule=water" in record.ctx_prefix
             assert "custom_key=extra_value" in record.ctx_prefix
 
@@ -487,31 +464,28 @@ class TestVectorizedHelpers:
         combined = slab + mol
         combined.set_cell(slab.get_cell())
         combined.set_pbc(slab.get_pbc())
-        assert _is_molecule_connected(
-            combined,
-            surface_symbols=["Ru"],
-            multiplier=1.3,
+        syms, _, dist, thresh = _nonsurface_distance_and_threshold(
+            combined, ["Ru"], 1.3
         )
+        assert _is_molecule_connected_from_dist(syms, dist, thresh)
 
     def test_vectorized_bond_counts_match_manual(self):
         """Verify vectorized bond counting matches a manually constructed case."""
         slab = make_slab()
         combined = place_molecule_on_slab(slab, make_water())
-        bonds = _bond_counts_from_atoms(
-            combined,
-            surface_symbols=["Ru"],
-            multiplier=1.3,
+        syms, _, dist, thresh = _nonsurface_distance_and_threshold(
+            combined, ["Ru"], 1.3
         )
+        bonds = _bond_counts_from_dist(syms, dist, thresh)
         assert frozenset({"O", "H"}) in bonds
         assert bonds[frozenset({"O", "H"})] == 2
 
     def test_vectorized_coord_fingerprint_water(self):
         slab = make_slab()
         combined = place_molecule_on_slab(slab, make_water())
-        fp = _coordination_fingerprint_from_atoms(
-            combined,
-            surface_symbols=["Ru"],
-            multiplier=1.3,
+        syms, _, dist, thresh = _nonsurface_distance_and_threshold(
+            combined, ["Ru"], 1.3
         )
+        fp = _coordination_fingerprint_from_dist(syms, dist, thresh)
         assert fp["O"] == [2]
         assert fp["H"] == [1, 1]

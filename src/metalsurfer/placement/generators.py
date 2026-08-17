@@ -1,6 +1,6 @@
 """Build placements from specs: sites, orientations, and validation.
 
-Public orchestration façade (enumerate, materialize, replay, complexity/budget).
+Public orchestration façade (enumerate, materialize, complexity/budget).
 Private helpers live in ``dissociative``, ``orientation``, ``pose``,
 and ``site_context`` — import those modules directly in tests.
 """
@@ -34,9 +34,7 @@ from .orientation import (
 )
 from .pose import (
     _finalize_placement,
-    _pose_from_descriptor,
     _pose_from_spec,
-    generate_placement_from_pose,
 )
 from .site_context import (
     SiteContext,
@@ -633,93 +631,11 @@ def generate_placement_from_spec_with_reason(
     return None, fail_reason or "distance_check_failed"
 
 
-def generate_placement_from_descriptor(
-    descriptor: PlacementDescriptor,
-    conformers: list[Atoms],
-    slab: Atoms,
-    config: AdsorptionConfig,
-    smiles: str | None = None,
-    site_context: SiteContext | None = None,
-) -> Atoms | None:
-    """Reproduce placement deterministically from descriptor.
-
-    Parameters
-    ----------
-    descriptor
-        Placement descriptor to replay.
-    conformers
-        List of adsorbate conformers.
-    slab
-        Substrate slab.
-    config
-        Adsorption configuration.
-    smiles
-        Optional SMILES string (unused but kept for API consistency).
-    site_context
-        Optional precomputed site context.
-    """
-    _ = smiles
-    if not conformers:
-        return None
-    if descriptor.conformer_index < 0 or descriptor.conformer_index >= len(conformers):
-        logger.warning(
-            "Descriptor conformer_index=%d out of range for %d conformers",
-            descriptor.conformer_index,
-            len(conformers),
-        )
-        return None
-
-    if descriptor.orientation_type == "dissociative":
-        if descriptor.fragment_positions is None:
-            logger.warning(
-                "Dissociative descriptor missing fragment_positions; cannot replay"
-            )
-            return None
-        adsorbate = conformers[descriptor.conformer_index].copy()
-        if len(descriptor.fragment_positions) != len(adsorbate):
-            logger.warning(
-                "Dissociative fragment_positions length %d != adsorbate atoms %d",
-                len(descriptor.fragment_positions),
-                len(adsorbate),
-            )
-            return None
-        adsorbate.set_positions(np.asarray(descriptor.fragment_positions, dtype=float))
-        adsorbate.set_cell(slab.get_cell())
-        adsorbate.set_pbc(slab.get_pbc())
-        return adsorbate
-
-    if descriptor.x_abs is None or descriptor.y_abs is None or descriptor.z_abs is None:
-        logger.warning(
-            "Descriptor replay requires x_abs, y_abs, and z_abs; got x_abs=%s y_abs=%s z_abs=%s",
-            descriptor.x_abs,
-            descriptor.y_abs,
-            descriptor.z_abs,
-        )
-        return None
-    if None in (
-        descriptor.quat_w,
-        descriptor.quat_x,
-        descriptor.quat_y,
-        descriptor.quat_z,
-    ):
-        logger.warning("Descriptor replay requires quaternion components")
-        return None
-    pose = _pose_from_descriptor(descriptor)
-    result = generate_placement_from_pose(
-        pose, conformers, slab, config, site_context=site_context
-    )
-    if result is None:
-        return None
-    adsorbate, _ = result
-    return adsorbate
-
-
 __all__ = [
     "distribute_placement_budget",
     "enumerate_placement_specs",
     "estimate_molecule_complexity",
     "estimate_placement_spec_capacity",
-    "generate_placement_from_descriptor",
     "generate_placement_from_spec",
     "generate_placement_from_spec_with_reason",
     "generate_placements_from_specs",

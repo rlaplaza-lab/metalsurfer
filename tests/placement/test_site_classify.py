@@ -15,7 +15,8 @@ from metalsurfer.placement import (
     get_symmetry_aware_sites,
     get_unified_sites,
 )
-from metalsurfer.placement.site_classify import _compute_local_normal
+from metalsurfer.placement._constants import _NORMAL_K_NEIGHBOURS
+from metalsurfer.placement.site_classify import _compute_local_normals_batch
 from metalsurfer.placement.site_context import (
     _get_unique_sites_for_specs,
     clear_site_caches,
@@ -70,8 +71,9 @@ def _reference_orbits(analyzer, sites, planar):
                     continue
                 d_frac = analyzer._mic_frac_delta(moved, frac[j])
                 sep = analyzer._cart_sep_from_frac_delta(d_frac)
-                if analyzer._separation_distance(sep, planar) < (
-                    analyzer.symmetry_tolerance
+                if (
+                    float(analyzer._separation_norms(sep.reshape(1, 3), planar)[0])
+                    < analyzer.symmetry_tolerance
                 ):
                     union(i, j)
 
@@ -429,7 +431,7 @@ def test_get_unified_sites_labels_pbc_edge_bridge_on_production_path():
     )
 
 
-def test_compute_local_normal_points_outward_from_surface_centroid():
+def test_compute_local_normals_batch_points_outward_from_surface_centroid():
     positions = np.array(
         [
             [0.0, 0.0, 0.0],
@@ -439,7 +441,12 @@ def test_compute_local_normal_points_outward_from_surface_centroid():
         ]
     )
     vertex = np.array([1.0, 1.0, 2.0])
-    normal = _compute_local_normal(vertex, positions)
+    k = min(_NORMAL_K_NEIGHBOURS, len(positions))
+    _, idx = KDTree(positions).query(vertex.reshape(1, 3), k=k)
+    normals = _compute_local_normals_batch(
+        vertex.reshape(1, 3), positions, np.asarray(idx)
+    )
+    normal = normals[0]
     assert np.isclose(np.linalg.norm(normal), 1.0, atol=1e-12)
     assert normal[2] > 0.9
 

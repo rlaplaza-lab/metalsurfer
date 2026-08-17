@@ -19,8 +19,13 @@ from urllib.request import urlopen
 import numpy as np
 from ase.io import read
 
-from metalsurfer import AdsorptionConfig, BOConfig, configure_logging, run_adsorption_bo
-from metalsurfer._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
+from metalsurfer import (
+    MIN_CALCULATOR_CELL_C_ANG,
+    AdsorptionConfig,
+    BOConfig,
+    configure_logging,
+    run_adsorption_bo,
+)
 from metalsurfer.surface_prep import prepare_substrate
 
 # List of smiles and molecule name pairs

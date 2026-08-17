@@ -21,7 +21,6 @@ from .site_types import Site
 from .site_voronoi import (
     _classify_voronoi_site_from_neighbors,
     _delaunay_site_classification,
-    _hollow_coordination_order,
 )
 
 
@@ -40,25 +39,6 @@ class _DelaunayClassifyInputs(NamedTuple):
     class_index: tuple[np.ndarray, list[str], list[tuple[int, ...]]]
 
 
-def _compute_local_normal(
-    vertex: np.ndarray,
-    positions: np.ndarray,
-    tree: KDTree | None = None,
-    k: int = _NORMAL_K_NEIGHBOURS,
-) -> np.ndarray:
-    """Outward unit normal at *vertex* from centroid of k nearest atoms."""
-    k = min(k, len(positions))
-    if tree is None:
-        tree = KDTree(positions)
-    _, idx = tree.query(vertex.reshape(1, 3), k=k)
-    centroid = np.mean(positions[np.asarray(idx).ravel()], axis=0)
-    vec = np.asarray(vertex, dtype=float) - centroid
-    norm = float(np.linalg.norm(vec))
-    if norm < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
-        return np.array([0.0, 0.0, 1.0])
-    return vec / norm
-
-
 def _compute_local_normals_batch(
     vertices: np.ndarray,
     positions: np.ndarray,
@@ -75,12 +55,10 @@ def _compute_local_normals_batch(
     vecs = np.asarray(vertices, dtype=float) - centroids
     norms = np.linalg.norm(vecs, axis=1)
     fallback = np.array([0.0, 0.0, 1.0], dtype=float)
-    out = np.empty((n, 3), dtype=float)
-    for i in range(n):
-        if norms[i] < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
-            out[i] = fallback
-        else:
-            out[i] = vecs[i] / norms[i]
+    small = norms < _SURFACE_NORMAL_FALLBACK_NORM_EPS
+    out = np.empty_like(vecs)
+    out[small] = fallback
+    out[~small] = vecs[~small] / norms[~small, np.newaxis]
     return out
 
 
@@ -299,11 +277,8 @@ def _classify_vertices(
             site_type,
         )
         hollow_order: int | None = None
-        if site_type == "hollow":
-            if nearest_idx:
-                hollow_order = len(nearest_idx)
-            elif ctx.class_dists is not None:
-                hollow_order = _hollow_coordination_order(ctx.class_dists[i])
+        if site_type == "hollow" and nearest_idx:
+            hollow_order = len(nearest_idx)
         normal = ctx.normals[i]
         sites.append(
             Site(

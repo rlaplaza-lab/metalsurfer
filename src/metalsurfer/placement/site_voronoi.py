@@ -225,20 +225,26 @@ def _generate_slab_topology_sites(
     candidate_dists: list[float] = []
     candidate_sources: list[str] = []
 
-    def _add_candidate(point: np.ndarray, source: str) -> None:
-        p = np.asarray(point, dtype=float)
+    def _add_candidates_batch(points: np.ndarray, source: str) -> None:
+        if len(points) == 0:
+            return
+        pts = np.asarray(points, dtype=float)
         if np.any(pbc):
-            p = _wrap_cartesian(p.reshape(1, 3), cell, pbc)[0]
-        d_nn = float(local_tree.query(p.reshape(1, 3), k=1)[0].ravel()[0])
-        if probe_radius <= d_nn <= max_distance:
-            candidates.append(p)
-            candidate_dists.append(d_nn)
-            candidate_sources.append(source)
+            pts = _wrap_cartesian(pts, cell, pbc)
+        dists, _ = local_tree.query(pts, k=1)
+        for p, d_nn in zip(pts, np.asarray(dists).ravel(), strict=True):
+            d_val = float(d_nn)
+            if probe_radius <= d_val <= max_distance:
+                candidates.append(np.asarray(p, dtype=float))
+                candidate_dists.append(d_val)
+                candidate_sources.append(source)
+
+    def _add_candidate(point: np.ndarray, source: str) -> None:
+        _add_candidates_batch(np.asarray(point, dtype=float).reshape(1, 3), source)
 
     # Atop candidates: always useful and cheap.
     atop_positions = top_positions + float(site_height) * n_hat
-    for p in atop_positions:
-        _add_candidate(p, "topology_atop")
+    _add_candidates_batch(atop_positions, "topology_atop")
 
     top_positions_2d = _project_to_slab_plane(top_positions, cell)
     primary_delaunay: Delaunay | None = None
@@ -486,43 +492,6 @@ def _classify_voronoi_site_from_neighbors(
         if far3:
             return "bridge", tuple(int(i) for i in idx[:2])
     return "hollow", tuple(int(i) for i in idx[:3])
-
-
-def _hollow_coordination_order(dists: np.ndarray) -> int | None:
-    """Return 3 or 4 when *dists* indicate equidistant hollow coordination."""
-    dists_arr = np.asarray(dists, dtype=float).ravel()
-    if len(dists_arr) < 3:
-        return None
-    d1 = float(dists_arr[0])
-    if d1 < _DISTANCE_ZERO_EPS:
-        return None
-    floor = max(d1, _DISTANCE_RATIO_FLOOR_EPS)
-    count = 1
-    for i in range(1, len(dists_arr)):
-        if abs(float(dists_arr[i]) - d1) / floor < _HOLLOW_EQ_TOL:
-            count += 1
-        else:
-            break
-    return count if count >= 3 else None
-
-
-def _classify_voronoi_site(
-    vertex: np.ndarray,
-    positions: np.ndarray,
-    tree: KDTree | None = None,
-    pore_threshold: float = _PORE_THRESHOLD_MIN_ANGSTROM,
-    k: int = _SITE_CLASSIFICATION_NEIGHBOURS,
-) -> tuple[str, tuple[int, ...]]:
-    """Classify vertex as atop/bridge/hollow/pore."""
-    k = min(k, len(positions))
-    if tree is None:
-        tree = KDTree(positions)
-    dists, idx = tree.query(vertex.reshape(1, 3), k=k)
-    return _classify_voronoi_site_from_neighbors(
-        np.asarray(dists, dtype=float).ravel(),
-        np.asarray(idx, dtype=int).ravel(),
-        pore_threshold=pore_threshold,
-    )
 
 
 def _build_delaunay_classification_index(

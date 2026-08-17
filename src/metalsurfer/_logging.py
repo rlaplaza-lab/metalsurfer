@@ -34,11 +34,6 @@ def log_context(**kwargs: Any):
         _LOG_CTX.reset(token)
 
 
-def get_log_context() -> dict[str, Any]:
-    """Return current logging context (read-only)."""
-    return dict(_LOG_CTX.get() or {})
-
-
 _warned_once: set[str] = set()
 
 
@@ -70,27 +65,6 @@ def _format_ctx_prefix(ctx: dict[str, Any]) -> str:
         if k not in CTX_KEY_ORDER:
             parts.append(f"{k}={v}")
     return "[" + " ".join(parts) + "] "
-
-
-class ContextFilter(logging.Filter):
-    """Inject ctx_prefix into log records from current context."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        """Inject ctx_prefix into the log record.
-
-        Parameters
-        ----------
-        record
-            Log record to modify.
-
-        Returns
-        -------
-        bool
-            Always True so the record is processed.
-        """
-        ctx = _LOG_CTX.get() or {}
-        record.ctx_prefix = _format_ctx_prefix(ctx)
-        return True
 
 
 def _ctx_prefix_from_context() -> str:
@@ -243,12 +217,6 @@ def _parse_level(level_name: str, default: int) -> int:
     return level if isinstance(level, int) else default
 
 
-def _ensure_context_filter(handler: logging.Handler) -> None:
-    """Attach ContextFilter once so ctx_prefix is set at format time."""
-    if not any(isinstance(f, ContextFilter) for f in handler.filters):
-        handler.addFilter(ContextFilter())
-
-
 def _is_console_stream_handler(
     handler: logging.Handler,
 ) -> TypeGuard[logging.StreamHandler]:
@@ -330,13 +298,11 @@ def configure_logging(
             if _is_console_stream_handler(handler):
                 handler.setStream(target_stream)
                 handler.setFormatter(formatter)
-                _ensure_context_filter(handler)
                 stream_handler_found = True
 
         if not stream_handler_found:
             sh = logging.StreamHandler(target_stream)
             sh.setFormatter(formatter)
-            _ensure_context_filter(sh)
             root.addHandler(sh)
 
     torchsim_level = _parse_level(

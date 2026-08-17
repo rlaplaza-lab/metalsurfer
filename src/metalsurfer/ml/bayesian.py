@@ -326,6 +326,13 @@ def _attach_residual_uncertainty(
     regressor.bo_X_train_scaled_ = np.asarray(
         sigma_scaler.transform(X_arr), dtype=float
     )
+    if len(regressor.bo_X_train_scaled_) >= 2:
+        nn = NearestNeighbors(n_neighbors=2).fit(regressor.bo_X_train_scaled_)
+        nn_dist, _ = nn.kneighbors(regressor.bo_X_train_scaled_)
+        lengthscale = float(np.median(nn_dist[:, 1]))
+        regressor.bo_lengthscale_ = max(lengthscale, _RESIDUAL_STD_FLOOR)
+    else:
+        regressor.bo_lengthscale_ = 1.0
 
 
 def _sigma_from_residual(
@@ -354,13 +361,17 @@ def _sigma_from_residual(
         X_e = np.asarray(sigma_scaler.transform(X_e), dtype=float)
     X_train_arr = np.asarray(X_train, dtype=float)
     d = cdist(X_e, X_train_arr).min(axis=1)
-    if len(X_train_arr) >= 2:
-        nn = NearestNeighbors(n_neighbors=2).fit(X_train_arr)
-        nn_dist, _ = nn.kneighbors(X_train_arr)
-        lengthscale = float(np.median(nn_dist[:, 1]))
-        lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
+    lengthscale = getattr(regressor, "bo_lengthscale_", None)
+    if lengthscale is None or not np.isfinite(lengthscale) or lengthscale <= 0:
+        if len(X_train_arr) >= 2:
+            nn = NearestNeighbors(n_neighbors=2).fit(X_train_arr)
+            nn_dist, _ = nn.kneighbors(X_train_arr)
+            lengthscale = float(np.median(nn_dist[:, 1]))
+            lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
+        else:
+            lengthscale = 1.0
     else:
-        lengthscale = 1.0
+        lengthscale = float(lengthscale)
     # Mild distance tempering; cap prevents EI from ignoring the mean.
     sigma = base * (1.0 + RESIDUAL_SIGMA_DISTANCE_TEMPER * (d / lengthscale))
     return np.minimum(sigma, 2.0 * base)
@@ -767,7 +778,11 @@ def _transfer_trust_gate(
             base_pred[test_idx] = np.asarray(base_fold.predict(X_te)).ravel()
 
             fold_weight = np.concatenate(
-                [np.ones(len(train_idx), dtype=float), transfer_weights], axis=0
+                [
+                    np.ones(len(train_idx), dtype=float),
+                    transfer_weights * (len(train_idx) / max(n_current, 1)),
+                ],
+                axis=0,
             )
             transfer_fold = train_surrogate(
                 pd.concat([X_tr, X_prev], ignore_index=True),
@@ -1079,7 +1094,7 @@ def predict_with_uncertainty(
         sigma = tree_preds.std(axis=0)
     else:
         mu = np.asarray(regressor.predict(X_eval)).ravel()
-        sigma = _sigma_from_residual(regressor, np.asarray(X_eval, dtype=float), mu)
+        sigma = _sigma_from_residual(regressor, np.asarray(X, dtype=float), mu)
 
     return mu, sigma
 
@@ -1426,43 +1441,6 @@ def select_candidates_batch_diverse(
 # ---------------------------------------------------------------------------
 # High-level helpers
 # ---------------------------------------------------------------------------
-
-
-def build_candidate_features(
-    descriptors: list[PlacementDescriptor],
-    molecule: str = "",
-    smiles: str = "",
-    surface_id: str = "",
-    config: AdsorptionConfig | None = None,
-) -> pd.DataFrame:
-    """Extract feature matrix for a list of PlacementDescriptors.
-
-    Parameters
-    ----------
-    descriptors
-        List of placement descriptors.
-    molecule
-        Molecule name.
-    smiles
-        SMILES string for the molecule.
-    surface_id
-        Surface identifier.
-    config
-        Optional adsorption configuration.
-    """
-    rows = [
-        extract_features(
-            PlacementRecord.from_descriptor(
-                d,
-                molecule=molecule,
-                smiles=smiles,
-                surface_id=surface_id,
-                config=config,
-            )
-        )
-        for d in descriptors
-    ]
-    return pd.DataFrame(rows)
 
 
 def build_spec_features_geometry_aware(

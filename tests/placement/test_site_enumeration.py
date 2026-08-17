@@ -20,7 +20,6 @@ from metalsurfer.placement.site_coords import (
 from metalsurfer.placement.site_enumeration import (
     _cluster_equivalent_sites,
 )
-from metalsurfer.placement.site_types import site_from_dict
 
 from ..conftest import (
     adsorption_config_factory,
@@ -31,6 +30,7 @@ from ..conftest import (
 )
 from ._helpers import (
     _generate_placements,
+    _make_site,
 )
 
 
@@ -149,73 +149,49 @@ def test_cluster_equivalent_sites_reduces_or_keeps_sites_per_material():
     [
         (
             [
-                site_from_dict(
-                    {
-                        "xy": np.array([1.0, 1.0]),
-                        "z": 5.0,
-                        "xyz": np.array([1.0, 1.0, 5.0]),
-                        "site_type": "atop",
-                        "material_type": "slab",
-                    }
+                _make_site(
+                    [1.0, 1.0, 5.0],
+                    site_type="atop",
+                    material_type="slab",
                 ),
-                site_from_dict(
-                    {
-                        "xy": np.array([1.0, 1.0]),
-                        "z": 6.0,
-                        "xyz": np.array([1.0, 1.0, 6.0]),
-                        "site_type": "atop",
-                        "material_type": "slab",
-                    }
+                _make_site(
+                    [1.0, 1.0, 6.0],
+                    site_type="atop",
+                    material_type="slab",
                 ),
             ],
             2,
         ),
         (
             [
-                site_from_dict(
-                    {
-                        "xy": np.array([1.0, 1.0]),
-                        "z": 5.0,
-                        "xyz": np.array([1.0, 1.0, 5.0]),
-                        "site_type": "atop",
-                        "material_type": "slab",
-                        "env_fingerprint": (("Ni",), "atop"),
-                    }
+                _make_site(
+                    [1.0, 1.0, 5.0],
+                    site_type="atop",
+                    material_type="slab",
+                    env_fingerprint=(("Ni",), "atop"),
                 ),
-                site_from_dict(
-                    {
-                        "xy": np.array([1.0, 1.0]),
-                        "z": 5.0,
-                        "xyz": np.array([1.0, 1.0, 5.0]),
-                        "site_type": "atop",
-                        "material_type": "slab",
-                        "env_fingerprint": (("Pt",), "atop"),
-                    }
+                _make_site(
+                    [1.0, 1.0, 5.0],
+                    site_type="atop",
+                    material_type="slab",
+                    env_fingerprint=(("Pt",), "atop"),
                 ),
             ],
             2,
         ),
         (
             [
-                site_from_dict(
-                    {
-                        "xy": np.array([1.0, 1.0]),
-                        "z": 5.0,
-                        "xyz": np.array([1.0, 1.0, 5.0]),
-                        "site_type": "atop",
-                        "material_type": "slab",
-                        "env_fingerprint": (("Ru",), "atop"),
-                    }
+                _make_site(
+                    [1.0, 1.0, 5.0],
+                    site_type="atop",
+                    material_type="slab",
+                    env_fingerprint=(("Ru",), "atop"),
                 ),
-                site_from_dict(
-                    {
-                        "xy": np.array([1.001, 1.001]),
-                        "z": 5.0,
-                        "xyz": np.array([1.001, 1.001, 5.0]),
-                        "site_type": "atop",
-                        "material_type": "slab",
-                        "env_fingerprint": (("Ru",), "atop"),
-                    }
+                _make_site(
+                    [1.001, 1.001, 5.0],
+                    site_type="atop",
+                    material_type="slab",
+                    env_fingerprint=(("Ru",), "atop"),
                 ),
             ],
             1,
@@ -325,25 +301,17 @@ def test_topology_bridges_keep_distinct_pbc_midpoints():
 
 def test_cluster_equivalent_sites_cartesian_tolerance_scales_with_cell():
     """0.05 Å tolerance merges sub-0.05 Cartesian duplicates regardless of cell size."""
-    site_a = site_from_dict(
-        {
-            "xy": np.array([1.0, 1.0]),
-            "z": 5.0,
-            "xyz": np.array([1.0, 1.0, 5.0]),
-            "site_type": "atop",
-            "material_type": "slab",
-            "env_fingerprint": (("Ru",), "atop"),
-        }
+    site_a = _make_site(
+        [1.0, 1.0, 5.0],
+        site_type="atop",
+        material_type="slab",
+        env_fingerprint=(("Ru",), "atop"),
     )
-    site_b = site_from_dict(
-        {
-            "xy": np.array([1.04, 1.0]),
-            "z": 5.0,
-            "xyz": np.array([1.04, 1.0, 5.0]),
-            "site_type": "atop",
-            "material_type": "slab",
-            "env_fingerprint": (("Ru",), "atop"),
-        }
+    site_b = _make_site(
+        [1.04, 1.0, 5.0],
+        site_type="atop",
+        material_type="slab",
+        env_fingerprint=(("Ru",), "atop"),
     )
     for a_len in (8.1, 16.2):
         cell = np.array([[a_len, 0.0, 0.0], [0.0, a_len, 0.0], [0.0, 0.0, 20.0]])
@@ -377,25 +345,17 @@ def test_cluster_equivalent_sites_tilted_slab_uses_in_plane_distance():
     assert np.linalg.norm((other - base)[:2]) < 0.35
     assert np.linalg.norm((other - base) - np.dot(other - base, n) * n) > 0.35
 
-    site_a = site_from_dict(
-        {
-            "xy": base[:2],
-            "z": float(base[2]),
-            "xyz": base.copy(),
-            "site_type": "atop",
-            "material_type": "slab",
-            "env_fingerprint": (("Cu",), "atop"),
-        }
+    site_a = _make_site(
+        base.copy(),
+        site_type="atop",
+        material_type="slab",
+        env_fingerprint=(("Cu",), "atop"),
     )
-    site_b = site_from_dict(
-        {
-            "xy": other[:2],
-            "z": float(other[2]),
-            "xyz": other.copy(),
-            "site_type": "atop",
-            "material_type": "slab",
-            "env_fingerprint": (("Cu",), "atop"),
-        }
+    site_b = _make_site(
+        other.copy(),
+        site_type="atop",
+        material_type="slab",
+        env_fingerprint=(("Cu",), "atop"),
     )
     unique = _cluster_equivalent_sites(
         [site_a, site_b], cell, tolerance=0.35, z_abs_tolerance=0.2
@@ -405,15 +365,11 @@ def test_cluster_equivalent_sites_tilted_slab_uses_in_plane_distance():
     # Same height, truly close in-plane → still merge.
     along_a = cell[0] / np.linalg.norm(cell[0])
     near = base + 0.05 * along_a
-    site_near = site_from_dict(
-        {
-            "xy": near[:2],
-            "z": float(near[2]),
-            "xyz": near.copy(),
-            "site_type": "atop",
-            "material_type": "slab",
-            "env_fingerprint": (("Cu",), "atop"),
-        }
+    site_near = _make_site(
+        near.copy(),
+        site_type="atop",
+        material_type="slab",
+        env_fingerprint=(("Cu",), "atop"),
     )
     unique_near = _cluster_equivalent_sites(
         [site_a, site_near], cell, tolerance=0.35, z_abs_tolerance=0.2

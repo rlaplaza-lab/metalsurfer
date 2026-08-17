@@ -62,13 +62,6 @@ Reference Energies
    :members:
    :undoc-members:
 
-Timing
-------
-
-.. autoclass:: metalsurfer.TimingInfo
-   :members:
-   :undoc-members:
-
 Placement specifications
 ------------------------
 

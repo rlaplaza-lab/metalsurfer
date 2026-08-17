@@ -374,7 +374,14 @@ def prepare_substrate(
     if alloy_guest and alloy_fraction > 0:
         host = alloy_host
         if host is None:
-            host = sorted(set(slab_container.atoms.get_chemical_symbols()))[0]
+            unique_symbols = sorted(set(slab_container.atoms.get_chemical_symbols()))
+            if len(unique_symbols) == 1:
+                host = unique_symbols[0]
+            else:
+                raise ValueError(
+                    "alloy_host must be set when the substrate has more than one "
+                    f"element (found {unique_symbols}); cannot infer host symbol"
+                )
         slab_container = substitute_alloy(
             slab_container,
             host_symbol=host,

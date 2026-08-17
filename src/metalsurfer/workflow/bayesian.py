@@ -42,7 +42,7 @@ from .shared import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BOTransferInfo", "process_molecule_bayesian"]
+__all__ = ["process_molecule_bayesian"]
 
 
 def _train_surrogate_for_bo(
@@ -253,9 +253,6 @@ def process_molecule_bayesian(
         return _bail_outcome(
             "placement", n_candidate_specs=len(all_specs), n_valid_pool=0
         )
-    # Map feature-row indices back to the original all_specs list
-    valid_pool_indices = valid_spec_indices
-
     evaluated_pool_positions: set[int] = set()
     all_results: list[ScreeningResult] = []
     observed_X_rows: list[dict[str, float]] = []
@@ -281,7 +278,6 @@ def process_molecule_bayesian(
             best_energy=best_energy if np.isfinite(best_energy) else None,
             best_X_row=dict(best_X_row) if best_X_row is not None else None,
         )
-        transfer_info.transfer_enabled = bool(config.bo.transfer.enabled)
         transfer_info.transfer_used = bool(transfer_used_rounds > 0)
         transfer_info.transfer_disabled_reason = transfer_disabled_reason
         transfer_info.transfer_bad_rounds = int(transfer_bad_rounds)
@@ -309,11 +305,11 @@ def process_molecule_bayesian(
     def _unevaluated() -> list[int]:
         return [
             p
-            for p in range(len(valid_pool_indices))
+            for p in range(len(valid_spec_indices))
             if p not in evaluated_pool_positions
         ]
 
-    n_initial = min(config.bo.initial_random, len(valid_pool_indices))
+    n_initial = min(config.bo.initial_random, len(valid_spec_indices))
     initial_positions = select_initial_bo_indices(
         candidate_features,
         n_initial,
@@ -325,13 +321,13 @@ def process_molecule_bayesian(
         nonlocal total_evaluated, best_energy, best_X_row
         n_target = len(pool_positions)
         primary_set = set(pool_positions)
-        batch_specs = [all_specs[valid_pool_indices[p]] for p in pool_positions]
+        batch_specs = [all_specs[valid_spec_indices[p]] for p in pool_positions]
         backfill_positions = [
             p
-            for p in range(len(valid_pool_indices))
+            for p in range(len(valid_spec_indices))
             if p not in evaluated_pool_positions and p not in primary_set
         ]
-        backfill_specs = [all_specs[valid_pool_indices[p]] for p in backfill_positions]
+        backfill_specs = [all_specs[valid_spec_indices[p]] for p in backfill_positions]
 
         batch_results, batch_failures, n_backfill_used = _evaluate_placement_batch(
             batch_specs,
@@ -376,14 +372,14 @@ def process_molecule_bayesian(
 
         if config.bo.include_failure_negatives:
             pid_to_pool_position: dict[int, int] = {
-                all_specs[valid_pool_indices[pos]].placement_index: pos
+                all_specs[valid_spec_indices[pos]].placement_index: pos
                 for pos in used_positions
             }
             for event in batch_failures:
                 pool_pos = pid_to_pool_position.get(event.placement_id)
                 if pool_pos is None:
                     continue
-                spec = all_specs[valid_pool_indices[pool_pos]]
+                spec = all_specs[valid_spec_indices[pool_pos]]
                 record = (
                     PlacementRecord.from_descriptor(
                         event.descriptor,
@@ -604,7 +600,7 @@ def process_molecule_bayesian(
         return _bail_outcome(
             "validation",
             n_candidate_specs=len(all_specs),
-            n_valid_pool=len(valid_pool_indices),
+            n_valid_pool=len(valid_spec_indices),
             n_evaluated=total_evaluated,
             n_valid_results=0,
         )
@@ -673,7 +669,7 @@ def process_molecule_bayesian(
         return _bail_outcome(
             "filter",
             n_candidate_specs=len(all_specs),
-            n_valid_pool=len(valid_pool_indices),
+            n_valid_pool=len(valid_spec_indices),
             n_evaluated=total_evaluated,
             n_before_filter=len(all_results),
             n_after_filter=0,

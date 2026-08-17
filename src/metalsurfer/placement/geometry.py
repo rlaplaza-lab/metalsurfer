@@ -231,11 +231,6 @@ def _get_vdw_radius(symbol: str) -> float | None:
     return float(cov * _VDW_RADIUS_FROM_COVALENT_SCALE)
 
 
-def _cell_has_volume(cell: np.ndarray) -> bool:
-    """Check whether *cell* has non-zero volume (supports left-handed cells)."""
-    return cell_has_volume(cell)
-
-
 def _mol_slab_pairwise_distances(
     mol_pos: np.ndarray,
     slab_pos: np.ndarray,
@@ -247,7 +242,7 @@ def _mol_slab_pairwise_distances(
     if m == 0 or s == 0:
         return np.zeros((m, s))
     diffs = mol_pos[:, None, :] - slab_pos[None, :, :]
-    if _cell_has_volume(cell) and np.any(pbc):
+    if cell_has_volume(cell) and np.any(pbc):
         diffs_flat = diffs.reshape(-1, 3)
         _, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
         return mic_dists.reshape(m, s)
@@ -733,7 +728,7 @@ def calculate_min_distance(
     """
     p1 = np.asarray(positions1)
     p2 = np.asarray(positions2)
-    if use_pbc and cell is not None and _cell_has_volume(cell):
+    if use_pbc and cell is not None and cell_has_volume(cell):
         if pbc is None:
             raise ValueError(
                 "pbc must be provided when cell is periodic; "
@@ -886,7 +881,7 @@ def check_adsorbate_separation(
     new_pos = new_adsorbate.get_positions()
     pbc_requested = pbc is not None and any(pbc)
     if pbc_requested:
-        if cell is None or not _cell_has_volume(cell):
+        if cell is None or not cell_has_volume(cell):
             raise ValueError(
                 "cell with non-zero volume must be provided when pbc is requested; "
                 "pass slab/cluster/porous cell explicitly"
@@ -895,7 +890,7 @@ def check_adsorbate_separation(
             raise ValueError("pbc must be set when pbc is requested")
         cell_arr = np.asarray(cell, dtype=float)
         pbc_list = list(pbc)
-    elif cell is not None and _cell_has_volume(cell) and pbc is not None:
+    elif cell is not None and cell_has_volume(cell) and pbc is not None:
         # Explicit all-False pbc with a cell: still use the pairwise helper.
         cell_arr = np.asarray(cell, dtype=float)
         pbc_list = list(pbc)

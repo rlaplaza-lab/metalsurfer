@@ -46,3 +46,44 @@ def cell_has_volume(cell, *, eps: float = CELL_DET_EPS) -> bool:
     if arr.shape != (3, 3):
         return False
     return abs(float(np.linalg.det(arr))) > eps
+
+
+def union_find_cluster(
+    n: int,
+    merge_pairs: list[tuple[int, int]],
+) -> list[list[int]]:
+    """Cluster ``n`` elements by union-find with path compression and union-by-rank.
+
+    Parameters
+    ----------
+    n
+        Number of elements, indexed ``0 .. n-1``.
+    merge_pairs
+        Pairs of indices to merge into the same cluster.
+    """
+    parent = list(range(n))
+    rank = [0] * n
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        if rank[ra] < rank[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        if rank[ra] == rank[rb]:
+            rank[ra] += 1
+
+    for a, b in merge_pairs:
+        union(a, b)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    return list(groups.values())

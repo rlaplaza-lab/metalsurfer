@@ -409,104 +409,11 @@ range. The resulting geometry is stored not just as xyz but with an explicit
 *fragment positions* record, so replaying the placement reproduces the split
 exactly.
 
-## 8. Every knob
+## 8. Where the detail lives
 
-The fields below affect where sites are found and how placements are built.
-Defaults and ranges are taken from `AdsorptionConfig` and the placement
-constants; knobs marked "scaled by radius" multiply the cited base by the sum of
-the molecule's and surface's covalent radii when the relevant flag is on.
-
-### Material and site sources
-
-| Field | Default | What it controls / when to change it |
-|-------|---------|--------------------------------------|
-| `material_type` | `"slab"` | Selects `slab`, `nanoparticle`, or `porous`. Sets the periodicity and which site-finding path runs. Match it to your substrate. |
-| `voronoi_probe_radius` | auto (covalent-radius scaled) | Lower bound of the accessibility window: a candidate closer than this to the surface is rejected. Raise it to forbid sites buried in the surface. |
-| `voronoi_max_site_distance` | auto (covalent-radius scaled) | Upper bound of the window: a candidate farther than this is rejected. Lower it to forbid far-floating sites. Must exceed `voronoi_probe_radius`. |
-| `voronoi_site_enrichment` | `True` | Subdivides long Voronoi ridges into extra candidates. Matters for nanoparticle / porous only; a no-op on planar slabs. |
-| `voronoi_auto_widen` | `True` | If the first window finds no sites, retries once with a wider window before giving up. |
-| `site_classification_method` | `"auto"` | `auto`/`delaunay` use a Delaunay triangulation to classify slab sites (better cross-boundary bridges/hollows); `distance_ratio` uses raw nearest-neighbour distances. |
-| `top_layer_tolerance` | `0.5` Å | Depth of the top layer used for slab topology and height masking. Covalent-radius-derived with a cap. |
-| `symmetry_tolerance` | `0.1` Å | Tolerance for spglib symmetry reduction of sites. |
-| `site_equivalence_tolerance` | `0.05` Å | Distance under which two candidates are merged into one site. |
-| `hollow_site_dedup_tolerance` | `0.1` Å | Dedup tolerance for hollow/pore sites (dissociative pairing). |
-| `planar_z_variance_threshold` | `0.01` Å² | Variance tolerated when deciding whether a top layer is flat (skips the 3D Voronoi pass for slabs). |
-| `rough_slab_local_z` | `True` | When the slab is non-planar, measure each site's height locally instead of from the global top, so step-edge sites are not over-lifted. |
-
-### Placement geometry
-
-| Field | Default | What it controls / when to change it |
-|-------|---------|--------------------------------------|
-| `num_placements` | `None` (autotune) | How many valid placements to aim for. Leave `None` in production to autotune to GPU capacity. |
-| `num_conformers` | `10` | How many folded shapes of the molecule to generate. More shapes = more diverse sampling. |
-| `placement_z_range` | `(0.7, 1.25)` | Low/high height fractions above the site. Scaled by covalent radii when `placement_z_scale_by_covalent_radius` is on. |
-| `placement_z_scale_by_covalent_radius` | `True` | When on, `placement_z_range` is multiplied by the molecule+surface covalent-radius sum. Keeps gaps chemistry-aware. |
-| `placement_x_range` | `(-0.5, 0.5)` Å | In-plane x window for distance-recovery nudges. |
-| `placement_y_range` | `(-0.5, 0.5)` Å | In-plane y window for distance-recovery nudges. |
-| `placement_distance_recovery` | `True` | When on, recover from `too_close`/`too_far`/overlap by raising height then sliding in-plane. |
-| `min_initial_distance` | `1.5` Å | Hard floor on the closest adsorbate–substrate distance at placement. |
-| `max_initial_distance` | `None` | Optional ceiling on the closest distance; beyond it the placement is `too_far`. |
-| `min_contact_ratio` | `0.8` | Fraction of the covalent-radius sum used as the contact floor: effective minimum = max(`min_initial_distance`, radius_sum × this). Range `[0.5, 1.2]`. |
-| `rough_slab_local_z` | (see above) | Listed under site sources. |
-| `flat_aromatic_parallel_fraction` | `0.5` | Fraction of flat-aromatic placements done parallel (π-stacking) vs binder-down. Range `[0.0, 1.0]`. |
-| `adaptive_parallel_fraction` | `True` | When on, estimate the parallel fraction from the molecule's binder count instead of using the fixed value above. |
-| `conformer_weighting` | `"boltzmann"` | `"boltzmann"` allocates spec slots across conformers by energy; `"uniform"` ignores conformer energy. (Falls back to uniform if energies are absent.) |
-| `boltzmann_temperature` | `300.0` K | Temperature for the Boltzmann conformer prior. Higher → flatter (more uniform); lower → concentrates on low-energy conformers. |
-
-### Contact quality and clashes
-
-| Field | Default | What it controls / when to change it |
-|-------|---------|--------------------------------------|
-| `min_adsorbate_separation` | `1.5` Å | Minimum gap between a newly placed molecule and any pre-adsorbed one (saturation). Enforced at least at a hard floor. |
-| `placement_filter` | `None` | Optional callable to accept/reject a `PlacementSpec` before materialization. |
-| `reject_vdw_overlaps` | `False` | When on, reject placements with hard van-der-Waals overlaps. |
-| `vdw_overlap_scale` | `1.0` | Multiplier on the van-der-Waals radii used for the overlap test. |
-| `strict_initial_placement` | `False` | When on, require the closest contact to be within `max_closest_approach`. |
-| `require_multiple_contact` | `False` | When on, require at least two contacting atoms (a more binding-like pose). |
-| `min_contact_atoms` | `1` | Minimum number of contacting atoms for the contact-quality gate. |
-| `max_closest_approach` | `3.0` Å | Farthest the closest contact may be for the placement to count as "in contact". |
-| `contact_distance_threshold` | `2.5` Å | Absolute distance under which an atom pair counts as a contact. |
-| `skip_topology_check` | `False` | Skip connectivity filters; set `True` for dissociative adsorption so fragmented adsorbates are allowed. |
-| `enable_dissociative_placement` | `False` | Enable H₂→2H style split placement on slab/nanoparticle. |
-| `skip_desorption_check` | `False` | Skip the desorption-energy sanity gate (advanced). |
-
-### Retry / fill loop
-
-| Field | Default | What it controls / when to change it |
-|-------|---------|--------------------------------------|
-| `placement_retry_enabled` | `True` | Turn the retry/fill loop on or off (off = single attempt). |
-| `placement_retry_max_attempts` | `8` | Absolute maximum retry rounds. |
-| `placement_retry_diversity_seed_increment` | `1000` | Seed offset added per retry round so each round explores fresh neighbourhoods. |
-| `placement_retry_oversample_max` | `6.0` | Max specs requested per deficit round as a multiple of remaining slots (must be ≥ 1.0). |
-| `placement_fill_clamp_to_capacity` | `True` | Clamp the success target to the enumerable spec capacity so retries can't chase an impossible count. |
-| `placement_retry_early_stop_patience` | `2` | Consecutive zero-yield rounds before early stop (must be ≥ 1). |
-| `placement_materialize_workers` | `-2` | Joblib-style worker count for building placements (`-2` = all but one CPU; `1` = serial). |
-| `export_placement_provenance` | `False` | When on, CSV/descriptor also records the pre-relaxation site/orientation intent (not the final binding mode). |
-
-### Bayesian placement selection (nested `bo` / `bo.transfer`)
-
-These live under the nested `AdsorptionConfig.bo` and `AdsorptionConfig.bo.transfer`
-fields and affect *which* placements the optimizer proposes, not the geometric
-site finding above.
-
-| Field | Default | What it controls / when to change it |
-|-------|---------|--------------------------------------|
-| `bo.initial_random` | `None` (autotune) | Number of random placements before acquisition. Leave `None` to autotune to GPU capacity. |
-| `bo.initial_sampling` | `"spread_xyz"` | How the initial batch is spread (`random`, `spread`, `spread_xyz`, `stratified`). |
-| `bo.batch_size` | `None` (autotune) | Placements per acquisition batch. |
-| `bo.total_budget` | `18` | Number of acquisition batches. |
-| `bo.acquisition` | `"ei"` | Acquisition function (`lcb`, `ei`, `pi`). |
-| `bo.surrogate` | `"gradient_boost"` | Surrogate model for the acquisition function. |
-| `bo.ucb_kappa` | `1.96` | Exploration weight for the `lcb` acquisition. |
-| `bo.transfer.enabled` | `True` | Reuse observations across saturation steps (transfer learning). |
-| `bo.transfer.mode` | `"weighted"` | How past steps are weighted (`weighted` or `cumulative_refit`). |
-| `bo.transfer.similarity_lengthscale` | `4.0` | Lengthscale controlling how similar two steps must be to transfer. |
-| `bo.transfer.weight_cap` | `0.35` | Maximum weight given to transferred observations. |
-| `bo.transfer.exploration_fraction` | `0.2` | Fraction of each batch reserved for pure exploration. |
-
-Flat `bo_*` keys are rejected — nest everything under `bo:` / `bo.transfer:`.
-
-## 9. Where the detail lives
+Field reference for `AdsorptionConfig` (and nested `bo` / `bo.transfer`) is maintained
+in Sphinx only — see the configuration guide and API config pages below, not
+hand-copied tables here.
 
 | Topic | Doc |
 |-------|-----|

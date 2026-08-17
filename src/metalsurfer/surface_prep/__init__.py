@@ -29,7 +29,6 @@ from typing import Any
 _LAZY_MODULES: dict[str, set[str]] = {
     "freeze": {
         "identify_relaxable_surface_indices",
-        "identify_top_layer_indices",
         "top_layer_indices_by_height",
         "compute_frozen_indices",
         "frozen_indices_from_constraints",
@@ -81,7 +80,6 @@ __all__ = [
     "format_atom_index_ranges",
     "frozen_indices_from_constraints",
     "identify_relaxable_surface_indices",
-    "identify_top_layer_indices",
     "log_substrate_freeze_policy",
     "max_frozen_substrate_displacement",
     "prepare_substrate",

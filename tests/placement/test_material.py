@@ -36,7 +36,6 @@ from metalsurfer.placement.site_enumeration import (
     _compute_site_z_base,
     _get_site_surface_radii,
 )
-from metalsurfer.placement.site_types import site_from_dict
 
 from ..conftest import (
     adsorption_config_factory,
@@ -50,18 +49,15 @@ from ._helpers import (
     _LOCAL_SITE_MATERIAL_PARAMS,
     _assert_replay_matches,
     _generate_placements,
+    _make_site,
 )
 
 
 def test_material_type_for_placement():
     assert material_type_for_placement(None, when_no_site="slab") == "slab"
-    porous = site_from_dict(
-        {"xyz": [0.0, 0.0, 1.0], "site_type": "atop", "material_type": "porous"}
-    )
+    porous = _make_site([0.0, 0.0, 1.0], site_type="atop", material_type="porous")
     assert material_type_for_placement(porous, when_no_site="slab") == "porous"
-    nanoparticle = site_from_dict(
-        {"xyz": [0.0, 0.0, 1.0], "material_type": "nanoparticle"}
-    )
+    nanoparticle = _make_site([0.0, 0.0, 1.0], material_type="nanoparticle")
     assert (
         material_type_for_placement(nanoparticle, when_no_site="slab") == "nanoparticle"
     )
@@ -171,9 +167,6 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
     spec, adsorbate, descriptor = results[0]
     _assert_replay_matches(
         "spec", adsorbate, descriptor, spec, conformers, structure, config
-    )
-    _assert_replay_matches(
-        "descriptor", adsorbate, descriptor, spec, conformers, structure, config
     )
     _assert_replay_matches(
         "pose", adsorbate, descriptor, spec, conformers, structure, config
@@ -367,7 +360,7 @@ def test_resolve_surface_ref_rough_slab():
         pbc=[True, True, True],
     )
 
-    site_low = site_from_dict({"z": 2.7, "xyz": np.array([0.0, 0.0, 2.7])})
+    site_low = _make_site([0.0, 0.0, 2.7])
 
     # With rough_slab_local_z=True and non-planar slab: use site z
     ref_low, is_local = _resolve_surface_ref(
@@ -397,12 +390,10 @@ def test_compute_site_z_base_multiplicative_from_covalent_radii():
 
     slab = make_slab()
     top_index = int(np.argmax(slab.get_positions()[:, 2]))
-    site = site_from_dict(
-        {
-            "xyz": slab.get_positions()[top_index],
-            "site_type": "atop",
-            "slab_indices": (top_index,),
-        }
+    site = _make_site(
+        slab.get_positions()[top_index],
+        site_type="atop",
+        slab_indices=(top_index,),
     )
     config = AdsorptionConfig(placement_z_range=(1.0, 1.5))
     z_lo, z_hi = _compute_site_z_base(config, slab, site, ["H"])
@@ -450,15 +441,11 @@ def test_saturation_placement_height_uses_reference_slab():
     site_xy = slab.get_positions()[top_index, :2]
     site_context = SiteContext(
         sites=[
-            site_from_dict(
-                {
-                    "xy": site_xy,
-                    "xyz": np.array([site_xy[0], site_xy[1], slab_top]),
-                    "z": slab_top,
-                    "site_type": "atop",
-                    "material_type": "slab",
-                    "slab_indices": (top_index,),
-                }
+            _make_site(
+                [site_xy[0], site_xy[1], slab_top],
+                site_type="atop",
+                material_type="slab",
+                slab_indices=(top_index,),
             )
         ],
         use_sites=True,

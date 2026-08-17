@@ -875,6 +875,13 @@ def write_run_metadata_from_out(
     """
     if not run_metadata_out:
         return
+    required_keys = ("n_molecules", "total_configs", "t_ref_s", "t_total_s")
+    if not all(key in run_metadata_out for key in required_keys):
+        logger.warning(
+            "Skipping run metadata write: incomplete run_metadata_out keys %s",
+            sorted(run_metadata_out.keys()),
+        )
+        return
     smiles_file = molecules if isinstance(molecules, str) else "<inline-molecules>"
     write_run_metadata(
         surface_type=surface_type,

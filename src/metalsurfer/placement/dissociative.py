@@ -104,8 +104,12 @@ def _dissociative_pair_cache_key(
     ).tobytes()
     cfg_bytes = (
         struct.pack("<d", float(config.hollow_site_dedup_tolerance))
-        + struct.pack("<d", float(config.min_initial_distance))
+        + _pack_optional_float(config.voronoi_probe_radius)
+        + _pack_optional_float(config.voronoi_max_site_distance)
         + _pack_optional_float(config.top_layer_tolerance)
+        + struct.pack("<?", bool(config.voronoi_site_enrichment))
+        + str(config.site_classification_method).encode()
+        + b"\x00"
         + config.material_type.encode()
     )
     return hashlib.sha256(
@@ -567,56 +571,6 @@ def _place_dissociative_two_sites(
         ),
     )
     return result, descriptor
-
-
-def place_at_sites(
-    adsorbate: Atoms,
-    sites: Sequence[Site],
-    *,
-    config: AdsorptionConfig,
-    spec: PlacementSpec,
-    height_override: float | None = None,
-    slab: Atoms | None = None,
-    slab_for_sites: Atoms | None = None,
-) -> tuple[Atoms, PlacementDescriptor] | None:
-    """Place a diatomic at exactly two sites (dissociative path).
-
-    Parameters
-    ----------
-    adsorbate
-        ASE :class:`~ase.Atoms` object for the diatomic adsorbate.
-    sites
-        Sequence of exactly two :class:`Site` objects.
-    config
-        Adsorption configuration.
-    spec
-        Placement specification.
-    height_override
-        Override height offset (required for two-site placement).
-    slab
-        Full slab structure.
-    slab_for_sites
-        Substrate used for site detection (defaults to *slab*).
-    """
-    if not sites:
-        return None
-    if slab is None:
-        raise ValueError("place_at_sites requires slab")
-    if len(sites) != 2:
-        raise ValueError(
-            f"place_at_sites supports exactly 2 sites (dissociative), got {len(sites)}"
-        )
-    if height_override is None:
-        raise ValueError("two-site place_at_sites requires height_override")
-    return _place_dissociative_two_sites(
-        adsorbate,
-        sites,
-        config=config,
-        spec=spec,
-        height_override=float(height_override),
-        slab=slab,
-        slab_for_sites=slab_for_sites,
-    )
 
 
 def _generate_dissociative_placement_from_spec(

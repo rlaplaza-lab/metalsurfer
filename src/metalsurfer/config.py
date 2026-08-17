@@ -119,21 +119,13 @@ def _bo_config_from_mapping(data: Mapping[str, Any] | None) -> BOConfig:
 def fold_bo_config(config_data: dict[str, Any]) -> BOConfig:
     """Extract nested ``bo:`` from a campaign config mapping into a :class:`BOConfig`.
 
-    Mutates *config_data* by removing the ``bo`` key. Flat ``bo_*`` keys are
-    rejected — use nested ``bo:`` / ``bo.transfer:`` instead.
+    Mutates *config_data* by removing the ``bo`` key.
 
     Parameters
     ----------
     config_data
         Campaign config mapping that may contain a nested ``bo`` key.
     """
-    flat = [key for key in config_data if key.startswith("bo_") and key != "bo"]
-    if flat:
-        quoted = ", ".join(sorted(flat))
-        raise ValueError(
-            "Flat BO keys are not supported; nest under 'bo:' / 'bo.transfer:' "
-            f"(got: {quoted})"
-        )
     return _bo_config_from_mapping(config_data.pop("bo", None))
 
 
@@ -702,8 +694,6 @@ class AdsorptionConfig:
 
     def __post_init__(self) -> None:
         """Validate configuration fields after initialization."""
-        if isinstance(self.bo, Mapping) and not isinstance(self.bo, BOConfig):
-            object.__setattr__(self, "bo", _bo_config_from_mapping(self.bo))
         _validate_placement(self)
         _validate_relaxation(self)
         _validate_io(self)

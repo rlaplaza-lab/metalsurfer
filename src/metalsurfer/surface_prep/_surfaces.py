@@ -151,7 +151,8 @@ def ensure_slab_z_alignment(
     target_c = max(min_cell_c, z_max + min_top_vacuum)
     if c_len < target_c:
         if abs(cell[2, 0]) < 1e-6 and abs(cell[2, 1]) < 1e-6:
-            cell[2, 2] = target_c
+            c_sign = np.sign(cell[2, 2]) if abs(cell[2, 2]) > 1e-12 else 1.0
+            cell[2, 2] = float(c_sign * target_c)
         elif c_len > 0.0:
             cell[2] = cell[2] * (target_c / c_len)
         else:
@@ -805,15 +806,6 @@ def substitute_alloy(
             guest_fraction,
         )
         return SlabContainer(base)
-
-    if guest_fraction >= 1.0:
-        atoms = base.copy()
-        syms = [
-            guest_symbol if s == host_symbol else s
-            for s in atoms.get_chemical_symbols()
-        ]
-        atoms.set_chemical_symbols(syms)
-        return SlabContainer(atoms)
 
     rng = np.random.RandomState(seed)
     best_energy = float("inf")

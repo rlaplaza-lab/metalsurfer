@@ -13,9 +13,6 @@ from .generators import (
     estimate_placement_spec_capacity as estimate_placement_spec_capacity,
 )
 from .generators import (
-    generate_placement_from_descriptor as generate_placement_from_descriptor,
-)
-from .generators import (
     generate_placement_from_spec as generate_placement_from_spec,
 )
 from .generators import (
@@ -26,9 +23,6 @@ from .geometry import (
 )
 from .geometry import (
     check_initial_placement_distance as check_initial_placement_distance,
-)
-from .orientation import (
-    classify_adsorbate_orientation as classify_adsorbate_orientation,
 )
 from .pose import (
     generate_placement_from_pose as generate_placement_from_pose,

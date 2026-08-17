@@ -1,9 +1,8 @@
-"""Tests for the metalsurfer.ml binding energy regression pipeline."""
+"""Tests for metalsurfer.ml dataset, features, schema, and surrogate builders."""
 
 import json
 import os
 import tempfile
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -24,36 +23,19 @@ from metalsurfer.ml import (
     PlacementRecord as PublicPlacementRecord,
 )
 from metalsurfer.ml import (
-    evaluate_model as public_evaluate_model,
-)
-from metalsurfer.ml import (
     extract_features as public_extract_features,
-)
-from metalsurfer.ml import (
-    grouped_cross_validate as public_grouped_cross_validate,
 )
 from metalsurfer.ml import (
     load_dataset as public_load_dataset,
 )
-from metalsurfer.ml import (
-    train_model as public_train_model,
-)
 from metalsurfer.ml.bayesian import ei_scores, lcb_scores, pi_scores
-from metalsurfer.ml.dataset import DatasetLogger, load_dataset, merge_datasets
+from metalsurfer.ml.dataset import DatasetLogger, load_dataset
 from metalsurfer.ml.features import (
     extract_features,
     extract_features_from_dataset,
     get_feature_names,
 )
-from metalsurfer.ml.predict import BindingEnergyPredictor, PredictionResult
-from metalsurfer.ml.regression import (
-    evaluate_model,
-    feature_importance,
-    grouped_cross_validate,
-    load_model,
-    save_model,
-    train_model,
-)
+from metalsurfer.ml.regression import _build_estimator
 from metalsurfer.ml.schema import SCHEMA_VERSION, ComputationContext, PlacementRecord
 from metalsurfer.models import PlacementDescriptor, ScreeningResult
 from tests.factories import make_placement_record, make_random_placement_records
@@ -64,15 +46,12 @@ def test_schema_version_is_3_0():
 
 
 def test_ml_package_exports_expanded_surface():
-    """Public ml package re-exports dataset/schema/features/regression helpers."""
+    """Public ml package re-exports dataset/schema/features helpers."""
     assert PublicComputationContext is ComputationContext
     assert PublicPlacementRecord is PlacementRecord
     assert PublicDatasetLogger is DatasetLogger
     assert public_load_dataset is load_dataset
     assert public_extract_features is extract_features
-    assert public_evaluate_model is evaluate_model
-    assert public_grouped_cross_validate is grouped_cross_validate
-    assert public_train_model is train_model
 
 
 def test_computation_context_defaults_match_numeric_defaults():
@@ -95,27 +74,6 @@ def test_computation_context_defaults_match_numeric_defaults():
         ctx.planar_z_variance_threshold
         == numeric_defaults.DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
     )
-
-
-@dataclass
-class _MLRegressionData:
-    X: pd.DataFrame
-    y: pd.Series
-    df: pd.DataFrame
-    records: list[PlacementRecord]
-
-
-@pytest.fixture(scope="module")
-def ml_regression_data(tmp_path_factory) -> _MLRegressionData:
-    tmpdir = tmp_path_factory.mktemp("ml_regression_dataset")
-    records = make_random_placement_records(80, variant="ml")
-    ds = DatasetLogger(str(tmpdir))
-    for r in records:
-        ds.add_record(r)
-    ds.flush()
-    df = load_dataset(str(tmpdir))
-    X, y = extract_features_from_dataset(df)
-    return _MLRegressionData(X=X, y=y, df=df, records=records)
 
 
 # ── Schema tests ──
@@ -427,24 +385,6 @@ class TestLoadDataset:
             load_dataset("/nonexistent/path")
 
 
-class TestMergeDatasets:
-    def test_merge_deduplicates(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            dir1 = os.path.join(tmpdir, "a")
-            dir2 = os.path.join(tmpdir, "b")
-            ds1 = DatasetLogger(dir1)
-            ds1.add_record(make_placement_record(0))
-            ds1.add_record(make_placement_record(1))
-            ds1.flush()
-            ds2 = DatasetLogger(dir2)
-            ds2.add_record(make_placement_record(1))  # duplicate
-            ds2.add_record(make_placement_record(2))
-            ds2.flush()
-
-            merged = merge_datasets(dir1, dir2)
-            assert len(merged) == 3
-
-
 # ── Feature tests ──
 
 
@@ -572,145 +512,13 @@ class TestFeatureExtraction:
         assert list(features.keys()) == names
 
 
-# ── Regression tests ──
+# ── Estimator construction ──
 
 
-class TestRegression:
-    def test_train_ridge(self, ml_regression_data):
-        X, y, _ = ml_regression_data.X, ml_regression_data.y, ml_regression_data.df
-        model = train_model(X, y, model_type="ridge")
-        metrics = evaluate_model(model, X, y)
-        assert metrics["mae"] >= 0
-        assert metrics["rmse"] >= metrics["mae"]
-
-    def test_train_random_forest(self, ml_regression_data):
-        X, y, _ = (
-            ml_regression_data.X,
-            ml_regression_data.y,
-            ml_regression_data.df,
-        )
-        model = train_model(X, y, model_type="random_forest")
-        metrics = evaluate_model(model, X, y)
-        assert metrics["r2"] > 0
-
-    def test_train_gradient_boost(self, ml_regression_data):
-        X, y, _ = (
-            ml_regression_data.X,
-            ml_regression_data.y,
-            ml_regression_data.df,
-        )
-        model = train_model(X, y, model_type="gradient_boost")
-        metrics = evaluate_model(model, X, y)
-        assert -1.0 <= metrics["r2"] <= 1.0
-
-    def test_grouped_cv(self, ml_regression_data):
-        X, y, df = ml_regression_data.X, ml_regression_data.y, ml_regression_data.df
-        result = grouped_cross_validate(
-            X, y, groups=df["molecule"], model_type="ridge", n_splits=4
-        )
-        assert "mean_mae" in result
-        assert "fold_metrics" in result
-        assert len(result["fold_metrics"]) == 4
-
-    def test_grouped_cv_raises_for_single_sample(self):
-        X = pd.DataFrame({"x": [0.1], "y": [0.2]})
-        y = pd.Series([-0.3])
-        groups = pd.Series(["g1"])
-        with pytest.raises(ValueError, match="at least 2 samples"):
-            grouped_cross_validate(X, y, groups=groups, model_type="ridge", n_splits=4)
-
-    def test_grouped_cv_raises_for_single_group(self):
-        X = pd.DataFrame({"x": [0.1, 0.2], "y": [0.2, 0.3]})
-        y = pd.Series([-0.3, -0.4])
-        groups = pd.Series(["g1", "g1"])
-        with pytest.raises(ValueError, match="at least 2 unique groups"):
-            grouped_cross_validate(X, y, groups=groups, model_type="ridge", n_splits=4)
-
-    def test_feature_importance_rf(self, ml_regression_data):
-        X, y, _ = (
-            ml_regression_data.X,
-            ml_regression_data.y,
-            ml_regression_data.df,
-        )
-        model = train_model(X, y, model_type="random_forest")
-        fi = feature_importance(model, list(X.columns), top_k=5)
-        assert len(fi) == 5
-        assert "feature" in fi.columns
-        assert "importance" in fi.columns
-
-    def test_feature_importance_permutation(self, ml_regression_data):
-        X, y, _ = (
-            ml_regression_data.X,
-            ml_regression_data.y,
-            ml_regression_data.df,
-        )
-        model = train_model(X, y, model_type="gradient_boost")
-        fi = feature_importance(model, list(X.columns), X=X, y=y, top_k=5)
-        assert len(fi) == 5
-
-    def test_save_load_model(self, ml_regression_data):
-        X, y, _ = (
-            ml_regression_data.X,
-            ml_regression_data.y,
-            ml_regression_data.df,
-        )
-        model = train_model(X, y, model_type="ridge")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            save_model(model, tmpdir, "ridge", feature_names=list(X.columns))
-            loaded, meta = load_model(tmpdir)
-            assert meta["model_type"] == "ridge"
-            y_pred = loaded.predict(X)
-            assert len(y_pred) == len(y)
-
-    def test_invalid_model_type(self, ml_regression_data):
-        X, y, _ = (
-            ml_regression_data.X,
-            ml_regression_data.y,
-            ml_regression_data.df,
-        )
+class TestBuildEstimator:
+    def test_invalid_model_type(self):
         with pytest.raises(ValueError, match="Unknown model_type"):
-            train_model(X, y, model_type="invalid")
-
-
-# ── Prediction tests ──
-
-
-class TestPredictor:
-    @pytest.fixture(scope="module")
-    def trained_predictor(self, ml_regression_data):
-        X, y = ml_regression_data.X, ml_regression_data.y
-        model = train_model(X, y, model_type="gradient_boost")
-        metadata = {
-            "model_type": "gradient_boost",
-            "feature_names": list(X.columns),
-        }
-        return BindingEnergyPredictor(
-            model, metadata=metadata
-        ), ml_regression_data.records
-
-    def test_predict_single(self, trained_predictor):
-        pred, records = trained_predictor
-        result = pred.predict_record(records[0])
-        assert isinstance(result, PredictionResult)
-        assert isinstance(result.energy, float)
-
-    def test_predict_batch(self, trained_predictor):
-        pred, records = trained_predictor
-        results = pred.predict_batch(records[:10])
-        assert len(results) == 10
-
-    def test_rank_placements(self, trained_predictor):
-        pred, records = trained_predictor
-        ranked = pred.rank_placements(records[:20], top_k=5)
-        assert len(ranked) == 5
-        energies = [p.energy for _, p in ranked]
-        assert energies == sorted(energies)
-
-    def test_predict_descriptor(self, trained_predictor):
-        pred, records = trained_predictor
-        descriptor = records[0].to_placement_descriptor()
-        result = pred.predict_descriptor(descriptor, molecule="ethanol", smiles="CCO")
-        assert isinstance(result.energy, float)
+            _build_estimator("invalid")
 
 
 # ── Record replay tests ──

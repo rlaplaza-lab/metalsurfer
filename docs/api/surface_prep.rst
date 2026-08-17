@@ -287,8 +287,6 @@ attached during prep; campaign APIs read ``frozen_indices_from_constraints``.
 
 .. autofunction:: metalsurfer.surface_prep.identify_relaxable_surface_indices
 
-.. autofunction:: metalsurfer.surface_prep.identify_top_layer_indices
-
 .. autofunction:: metalsurfer.surface_prep.top_layer_indices_by_height
 
 .. autofunction:: metalsurfer.surface_prep.compute_frozen_indices

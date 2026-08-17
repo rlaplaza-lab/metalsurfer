@@ -11,14 +11,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from ase import Atoms
-from scipy.spatial.distance import pdist
+from scipy.spatial import cKDTree
 
 from .._logging import log_context, warn_once
 from .._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
 from ..conformers import create_conformers_from_smiles
 from ..exceptions import OptimizationError
-from ..filters import filter_results
+from ..filters import _adsorbate_surface_min_distance, filter_results
 from ..io_results import results_dir_for
 from ..ml.schema import PlacementRecord
 from ..models import (
@@ -40,7 +40,6 @@ from ..placement.generators import (
     generate_placement_from_spec_with_reason,
     generate_placements_from_specs,
 )
-from ..placement.geometry import calculate_min_distance
 from ..placement.site_context import SiteContext, resolve_site_context_for_sampling
 from ..placement.site_enumeration import _compute_site_z_base
 from ..surface_prep import SlabContainer, accept_substrate_for_api
@@ -193,9 +192,15 @@ def _validate_geometry(
     if not np.isfinite(energy):
         return False, f"non-finite energy: {energy}"
 
-    dists = pdist(atoms.get_positions())
-    if len(dists) > 0 and np.min(dists) < config.min_interatomic_distance:
-        return False, f"atoms too close: {np.min(dists):.3f} A"
+    positions = atoms.get_positions()
+    if len(positions) >= 2:
+        nn_dists = np.asarray(
+            cKDTree(positions).query(positions, k=2)[0],
+            dtype=float,
+        ).reshape(-1, 2)
+        min_dist = float(np.min(nn_dists[:, 1]))
+        if min_dist < config.min_interatomic_distance:
+            return False, f"atoms too close: {min_dist:.3f} A"
 
     forces = atoms.get_forces()
     slab_size = len(slab)
@@ -214,21 +219,15 @@ def _validate_adsorption(
     config: AdsorptionConfig,
     surface_symbols: list[str] | None = None,
 ) -> tuple[bool, str, float | None]:
-    slab_size = len(slab)
-    adsorbate = atoms[slab_size:]
-    if len(adsorbate) == 0:
+    min_d = _adsorbate_surface_min_distance(
+        atoms,
+        slab,
+        surface_symbols=surface_symbols,
+        material_type=config.material_type,
+    )
+    if min_d is None:
         return False, "no adsorbate atoms", None
 
-    slab_positions = _surface_positions_for_distance(slab, surface_symbols)
-
-    cell = np.asarray(atoms.get_cell())
-    min_d = calculate_min_distance(
-        adsorbate.get_positions(),
-        slab_positions,
-        cell,
-        use_pbc=True,
-        pbc=calculator_pbc_for_atoms(atoms),
-    )
     if config.skip_desorption_check:
         warn_once(
             logger,
@@ -239,20 +238,6 @@ def _validate_adsorption(
     if min_d > config.binding_distance_threshold:
         return False, f"desorbed ({min_d:.2f} A)", min_d
     return True, f"adsorbed ({min_d:.2f} A)", min_d
-
-
-def _surface_positions_for_distance(
-    slab_atoms: Atoms,
-    surface_symbols: list[str] | None,
-) -> np.ndarray:
-    slab_positions = slab_atoms.get_positions()
-    if not surface_symbols:
-        return slab_positions
-    slab_syms = np.array(slab_atoms.get_chemical_symbols())
-    mask = np.isin(slab_syms, surface_symbols)
-    if np.any(mask):
-        return slab_positions[mask]
-    return slab_positions
 
 
 def _evaluate_optimized_candidate(
@@ -378,7 +363,8 @@ def _optimize_and_evaluate_placements(
     When optimize returns empty/falsy, returns empty results with zero failures.
     """
     e_slab, e_mol = energies
-    clear_autobatcher_cache()
+    if not (saturation_reuse and config.saturation_autobatcher_reuse):
+        clear_autobatcher_cache()
     optimized = optimize_adsorbate_slab_batched(
         all_combined,
         slab,
@@ -792,7 +778,6 @@ class ScreeningRunBootstrap:
 
     calculator: Any
     ts_model: Any
-    molecule_pairs: list[tuple[str, str]]
     ref: ReferenceEnergies
     t_ref_s: float
     slab: SlabContainer
@@ -823,7 +808,6 @@ def _bootstrap_screening_run(
     return ScreeningRunBootstrap(
         calculator=calculator,
         ts_model=ts_model,
-        molecule_pairs=molecule_pairs,
         ref=ref,
         t_ref_s=t_ref_s,
         slab=slab_container,

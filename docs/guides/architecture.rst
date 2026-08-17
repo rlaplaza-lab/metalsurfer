@@ -91,8 +91,9 @@ Root re-exports a small placement surface:
 :func:`~metalsurfer.generate_placement_from_spec`. Everything else lives in
 submodules — import explicitly, for example:
 
-- ``metalsurfer.placement`` — ``generate_placement_from_descriptor``,
-  ``calculate_min_distance``, ``get_symmetry_aware_sites``, …
+- ``metalsurfer.placement`` — ``generate_placement_from_spec``,
+  ``generate_placement_from_pose``, ``calculate_min_distance``,
+  ``get_symmetry_aware_sites``, …
 - ``metalsurfer.optimization`` — TorchSim / FairChem helpers
 - ``metalsurfer.filters``, ``metalsurfer.io_results``, ``metalsurfer.ml``,
   ``metalsurfer.symmetry``, ``metalsurfer.conformers``
@@ -300,8 +301,9 @@ zero-capacity species in ``distribute_placement_budget``.
   restrict enumeration to open ``pore`` sites (nn-distance sorted) when any
   exist, and soft-prior draws prefer those earlier indices.
 - ``orientation.py`` — aromatic heuristics plus ``orient_from_spec`` used by
-  pose. Dissociative two-site placement uses ``place_at_sites`` in
-  ``dissociative.py``. Molecular / adatom placement goes through
+  pose. Dissociative two-site placement uses ``_place_dissociative_two_sites``
+  / ``_generate_dissociative_placement_from_spec`` in ``dissociative.py``.
+  Molecular / adatom placement goes through
   ``_pose_from_spec`` + validation/descriptor build in ``pose.py``.
 - ``generators.py`` — public orchestration (enumerate, materialize, replay,
   complexity/budget). Optional ``placement_filter``;
@@ -322,7 +324,7 @@ zero-capacity species in ``distribute_placement_budget``.
   push out when too far).
 - **Voronoi auto-widen** (default on): one wider probe/max retry when the
   first window finds no sites.
-- **Dissociative** (``dissociative.py`` / ``place_at_sites``): homonuclear
+- **Dissociative** (``dissociative.py`` / ``_place_dissociative_two_sites``): homonuclear
   diatomics when ``enable_dissociative_placement=True``. Keep
   ``skip_topology_check=True`` to disable post-relax connectivity checks for
   fragments. On NP/non-slab materials, both fragments share one offset
@@ -527,7 +529,7 @@ See :doc:`../api/models`. Highlights:
 ``ScreeningResult``, ``ScreeningRunResult``, ``SaturationStepResult``
 (with embedded ``transfer: BOTransferInfo | None``),
 ``SaturationRunResult``, ``MultiMolSaturation*``, campaign wrappers,
-``BOStepMemory``, ``MoleculeCampaignSummary``, ``TimingInfo``, plus
+``BOStepMemory``, ``MoleculeCampaignSummary``, and
 workflow ``MoleculeScreenOutcome``.
 
 
@@ -558,7 +560,7 @@ Root: ``results_{surface_type}/``.
 - ``ml_dataset.csv`` / ``ml_dataset_metadata.json`` — ``DatasetLogger``.
 - ``xyz_structures/``, optional ``vasp_inputs/``, ``run_metadata.json``.
 
-Result-object export helpers (``to_row``, ``to_dataframe``,
+Result-object export helpers (``to_row``, ``to_rows``,
 ``format_completion``, …) are methods on the typed result classes so scripts
 need not import internal I/O helpers.
 
@@ -576,8 +578,7 @@ provenance (site, orientation, ``initial_fragment_positions``, …) and full
 started, not the relaxed geometry (relaxed structures remain in XYZ/POSCAR;
 ``distance`` / energies are post-relax).
 
-Utilities: ``extract_features``, ``train_model``, ``evaluate_model``,
-``grouped_cross_validate``, ``BindingEnergyPredictor``, ``load_dataset``,
+Utilities: ``extract_features``, ``load_dataset``,
 ``PlacementRecord.to_placement_descriptor`` / ``to_config``. Schema versioning
 in ``ml/schema.py`` (``SCHEMA_VERSION`` **3.0**). Shared numerics in
 ``_numeric_defaults.py``.

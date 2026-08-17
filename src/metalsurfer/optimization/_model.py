@@ -6,7 +6,6 @@ from typing import Any, NoReturn, cast
 
 import numpy as np
 from ase import Atoms
-from ase.calculators.calculator import all_changes
 
 from .._logging import torchsim_output_capture
 from ..exceptions import DependencyMissingError
@@ -128,12 +127,8 @@ class TorchSimCalculator:
         self,
         atoms: Atoms | None = None,
         properties: list[str] | None = None,
-        system_changes: Any = all_changes,
     ) -> None:
         """Run single-point calculation via ``ts.static()``.
-
-        ``system_changes`` is accepted for ASE calculator compatibility but
-        ignored; each call recomputes from the current ``Atoms`` geometry.
 
         Parameters
         ----------
@@ -141,13 +136,17 @@ class TorchSimCalculator:
             ASE Atoms object.
         properties
             List of requested properties (e.g. ["energy", "forces"]).
-        system_changes
-            Accepted for ASE compatibility but ignored.
         """
-        _ = system_changes
-        ts = _deps.ts
-        if ts is None or atoms is None:
+        if atoms is None:
             return
+        ts = _deps.ts
+        if ts is None:
+            raise DependencyMissingError(
+                "torch-sim-atomistic",
+                "TorchSimCalculator.calculate",
+                "Install with: pip install torch-sim-atomistic",
+            )
+        self.results = {}
         _validate_model_pbc(atoms, context="TorchSimCalculator.calculate")
         properties = properties or ["energy", "forces"]
         with torchsim_output_capture():
@@ -194,7 +193,9 @@ class TorchSimCalculator:
             Accepted for ASE compatibility but ignored.
         """
         _ = force_consistent
-        if atoms is not None and self._atoms_changed(atoms):
+        if atoms is not None and (
+            self._atoms_changed(atoms) or "energy" not in self.results
+        ):
             self.calculate(atoms, ["energy", "forces"])
         energy = self.results.get("energy")
         if energy is None or not np.isfinite(energy):
@@ -212,10 +213,18 @@ class TorchSimCalculator:
         atoms
             ASE Atoms object.
         """
-        if atoms is not None and self._atoms_changed(atoms):
+        if atoms is not None and (
+            self._atoms_changed(atoms) or "forces" not in self.results
+        ):
             self.calculate(atoms, ["energy", "forces"])
-        n = len(atoms) if atoms is not None else 0
-        return self.results.get("forces", np.zeros((n, 3)))
+        forces = self.results.get("forces")
+        if forces is None:
+            n = len(atoms) if atoms is not None else 0
+            raise RuntimeError(
+                f"Calculator has no forces (expected shape ({n}, 3)). "
+                "The model may have failed to produce forces for this system."
+            )
+        return forces
 
     def get_stress(self, atoms=None):
         """Return stress in Voigt order (xx, yy, zz, yz, xz, xy).
@@ -225,9 +234,17 @@ class TorchSimCalculator:
         atoms
             ASE Atoms object.
         """
-        if atoms is not None and self._atoms_changed(atoms):
+        if atoms is not None and (
+            self._atoms_changed(atoms) or "stress" not in self.results
+        ):
             self.calculate(atoms, ["energy", "forces", "stress"])
-        return self.results.get("stress", np.zeros(6))
+        stress = self.results.get("stress")
+        if stress is None:
+            raise RuntimeError(
+                "Calculator has no stress. "
+                "The model may have failed to produce stress for this system."
+            )
+        return stress
 
 
 def _voigt_6(stress_3x3) -> np.ndarray:

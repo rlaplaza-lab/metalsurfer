@@ -5,8 +5,7 @@ Package layout (all public names are re-exported here, so
 working exactly as it did when this was a single module):
 
 ``_deps``
-    Sole owner of the optional ``torch`` / ``torch_sim`` imports, the CUDA
-    ``OutOfMemoryError`` registration and the ``_split_state`` device patch.
+    Sole owner of the optional ``torch`` / ``torch_sim`` imports.
 ``_validation``
     Pure CPU logic: PBC validation, device resolution, geometry hashing, CUDA
     OOM classification and autobatcher probe-cap sizing.
@@ -27,7 +26,7 @@ callers that swap models mid-run should call :func:`clear_autobatcher_cache`
 in between. See :mod:`metalsurfer.optimization._cache` for details.
 """
 
-from ._cache import _get_inflight_autobatcher, clear_autobatcher_cache
+from ._cache import clear_autobatcher_cache
 from ._model import TorchSimCalculator, setup_torchsim_model
 from ._optimize import (
     batch_static,
@@ -36,14 +35,11 @@ from ._optimize import (
     optimize_isolated_molecules_batched,
     setup_single_model,
 )
-from ._validation import _resolve_device
 
 __all__ = [
     "TorchSimCalculator",
-    "_resolve_device",
     "batch_static",
     "clear_autobatcher_cache",
-    "_get_inflight_autobatcher",
     "estimate_parallel_relaxation_capacity",
     "optimize_adsorbate_slab_batched",
     "optimize_isolated_molecules_batched",

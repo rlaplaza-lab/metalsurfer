@@ -33,7 +33,6 @@ def _patch_binding_bootstrap(monkeypatch, slab_container, ref=None):
         lambda _slab, pairs, _config: ScreeningRunBootstrap(
             calculator=object(),
             ts_model=object(),
-            molecule_pairs=pairs,
             ref=ref,
             t_ref_s=0.0,
             slab=slab_container,

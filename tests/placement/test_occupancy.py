@@ -234,11 +234,11 @@ def test_clearance_aware_height_raises_protruding_pose():
     assert closest_h == pytest.approx(ctx.surface_ref + z_offset, abs=1e-5)
 
 
-def test_place_at_sites_two_site_matches_dissociative():
+def test_place_dissociative_two_sites_matches_spec_path():
     from metalsurfer.models import PlacementSpec
     from metalsurfer.placement.dissociative import (
         _generate_dissociative_placement_from_spec,
-        place_at_sites,
+        _place_dissociative_two_sites,
     )
     from metalsurfer.placement.orientation import _site_type_z_offset
 
@@ -301,7 +301,7 @@ def test_place_at_sites_two_site_matches_dissociative():
         site_source="dissociative_hollow_pair",
         env_fingerprint=((), "hollow"),
     )
-    via_place = place_at_sites(
+    via_place = _place_dissociative_two_sites(
         h2,
         [site_a, site_b],
         config=config,
@@ -542,6 +542,85 @@ def test_fill_oversamples_to_meet_num_placements(monkeypatch):
     assert len(result.combined) == 4
     assert requested[0] >= 4  # oversampled beyond exact remaining
     assert result.n_attempts <= 3
+
+
+def test_fill_placement_indices_disjoint_across_oversampled_attempts(monkeypatch):
+    """Monotonic placement_index must not collide when n_request > n_target."""
+    from metalsurfer.models import PlacementSpec
+    from metalsurfer.workflow import placement_fill as fill_mod
+    from metalsurfer.workflow.shared import PlacementFailureEvent
+
+    attempt_indices: list[list[int]] = []
+
+    def fake_enumerate(
+        conformers,
+        slab_for_sites,
+        config,
+        smiles,
+        n_desired,
+        filter_spec=None,
+        site_context=None,
+        seed=None,
+        full_slab=None,
+        conformer_energies=None,
+    ):
+        specs = []
+        for i in range(n_desired):
+            spec = PlacementSpec(
+                conformer_index=0,
+                orientation_type="round",
+                face_flip=False,
+                en_atom_index=None,
+                site_index=i,
+                site_type="atop",
+                tilt_deg=0.0,
+                azimuth_deg=0.0,
+                azimuth_in_plane_deg=0.0,
+                z_fraction=0.5,
+                placement_index=i,
+            )
+            if filter_spec is None or filter_spec(spec):
+                specs.append(spec)
+        return specs
+
+    def fake_materialize(**kwargs):
+        attempt_indices.append([spec.placement_index for spec in kwargs["specs"]])
+        failures = [
+            PlacementFailureEvent(
+                placement_id=spec.placement_index,
+                stage="generation",
+                reason="too_close",
+                descriptor=None,
+            )
+            for spec in kwargs["specs"]
+        ]
+        return [], [], [], failures
+
+    monkeypatch.setattr(fill_mod, "enumerate_placement_specs", fake_enumerate)
+    monkeypatch.setattr(fill_mod, "_materialize_spec_placements", fake_materialize)
+
+    config = AdsorptionConfig(
+        material_type="slab",
+        num_placements=4,
+        placement_retry_enabled=True,
+        placement_retry_max_attempts=2,
+        placement_retry_oversample_max=6.0,
+        seed=0,
+    )
+    fill_mod.fill_materialized_placements(
+        conformers=[make_water()],
+        slab_for_sites=make_slab(),
+        config=config,
+        smiles="O",
+        site_context=None,
+        slab_atoms=make_slab(),
+        calculator=None,
+    )
+    assert len(attempt_indices) >= 2
+    flat = [idx for batch in attempt_indices for idx in batch]
+    assert len(flat) == len(set(flat)), (
+        "placement_index values must be unique across attempts"
+    )
 
 
 def test_fill_early_stops_on_empty_enumeration(monkeypatch):

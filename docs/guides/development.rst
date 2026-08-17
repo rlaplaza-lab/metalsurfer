@@ -43,8 +43,8 @@ code, stale ``noqa`` comments, and similar).
    ruff check .
    ruff format --check .    # use ``ruff format .`` to apply formatting
 
-Scripts and examples may use ``print``; tests may use ``assert`` — see
-``[tool.ruff.lint.per-file-ignores]`` in ``pyproject.toml``.
+Per-file pydocstyle (``D``) ignores for scripts, examples, and tests are listed
+under ``[tool.ruff.lint.per-file-ignores]`` in ``pyproject.toml``.
 
 Type checking
 -------------

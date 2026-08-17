@@ -13,7 +13,10 @@ from ase import Atoms
 from ase.constraints import FixAtoms
 
 from ..placement._constants import _TOP_LAYER_DEPTH_MIN_ANGSTROM
-from ..placement.site_coords import _height_along_slab_normal, derive_pore_threshold
+from ..placement.site_coords import (
+    derive_pore_threshold,
+    top_layer_mask_by_normal,
+)
 from ..placement.site_enumeration import get_unified_sites
 
 logger = logging.getLogger(__name__)
@@ -22,7 +25,6 @@ _DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG = 0.01
 
 __all__ = [
     "identify_relaxable_surface_indices",
-    "identify_top_layer_indices",
     "top_layer_indices_by_height",
     "compute_frozen_indices",
     "frozen_indices_from_constraints",
@@ -40,10 +42,9 @@ def top_layer_indices_by_height(
 ) -> list[int]:
     """Return atom indices within *tolerance* of the max height along the slab normal.
 
-    Shared simple height-band mask used by freeze policy, alloy top-layer
-    enforcement, and adatom site selection. This is **not** the stepped-surface
-    expansion performed by
-    :func:`~metalsurfer.placement.site_coords.top_layer_mask_by_normal`.
+    Primary height band only — calls
+    :func:`~metalsurfer.placement.site_coords.top_layer_mask_by_normal` with
+    ``include_terrace=False`` so freeze/alloy paths do not expand stepped terraces.
 
     Parameters
     ----------
@@ -54,9 +55,12 @@ def top_layer_indices_by_height(
     tolerance
         Height tolerance in Å.
     """
-    heights = _height_along_slab_normal(positions, cell)
-    h_max = float(np.max(heights))
-    mask = heights >= (h_max - float(tolerance))
+    mask = top_layer_mask_by_normal(
+        positions,
+        cell,
+        tolerance,
+        include_terrace=False,
+    )
     return [int(i) for i in np.nonzero(mask)[0]]
 
 
@@ -69,10 +73,9 @@ def identify_relaxable_surface_indices(
 ) -> list[int]:
     """Return substrate atom indices left free when ``relax_top_layer=True``.
 
-    - **slab:** simple height band along the slab normal (within *tolerance* of
-      the maximum height). This is **not**
-      :func:`~metalsurfer.placement.site_coords.top_layer_mask_by_normal`, which
-      expands for stepped site enumeration and can free an entire thin slab.
+    - **slab:** primary height band along the slab normal (within *tolerance* of
+      the maximum height), via
+      :func:`top_layer_indices_by_height` with terrace expansion disabled.
     - **nanoparticle:** outermost shell (within *tolerance* of the maximum
       distance from the centre of mass).
     - **porous:** framework atoms on pore walls — closest neighbour of each
@@ -101,10 +104,6 @@ def identify_relaxable_surface_indices(
         return []
 
     if material_type == "slab":
-        # Simple top-band cutoff: atoms within *tolerance* of the exposed surface.
-        # Do not use top_layer_mask_by_normal here — that helper expands for stepped
-        # site enumeration and can free an entire thin multi-layer slab when
-        # tolerance spans ~2 interlayer spacings (e.g. camphor Cu(111)).
         cell = np.asarray(slab.get_cell(), dtype=float)
         return top_layer_indices_by_height(positions, cell, float(tolerance))
 
@@ -142,30 +141,6 @@ def identify_relaxable_surface_indices(
             "atoms; freezing entire substrate during placement relaxation"
         )
     return sorted(boundary)
-
-
-def identify_top_layer_indices(
-    slab: Atoms,
-    tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
-) -> list[int]:
-    """Return atom indices in the exposed slab surface layer.
-
-    Slab-only convenience wrapper around :func:`identify_relaxable_surface_indices`.
-    Atoms within *tolerance* of the maximum height along the slab normal are
-    considered part of the top layer.
-
-    Parameters
-    ----------
-    slab
-        ASE Atoms object.
-    tolerance
-        Height tolerance in Å.
-    """
-    return identify_relaxable_surface_indices(
-        slab,
-        material_type="slab",
-        tolerance=tolerance,
-    )
 
 
 def compute_frozen_indices(

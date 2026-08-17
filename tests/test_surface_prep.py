@@ -1,5 +1,7 @@
 """Tests for prepare_substrate relaxation option forwarding."""
 
+import pytest
+
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.surface_prep import SlabContainer, prepare_substrate
 
@@ -231,7 +233,7 @@ def test_finalize_substrate_applies_pbc_and_constraints():
         apply_material_pbc,
         finalize_substrate,
         frozen_indices_from_constraints,
-        identify_top_layer_indices,
+        identify_relaxable_surface_indices,
     )
 
     base = make_slab()
@@ -250,10 +252,59 @@ def test_finalize_substrate_applies_pbc_and_constraints():
     assert any(isinstance(c, FixAtoms) for c in finalized.atoms.constraints)
 
     frozen = set(frozen_indices_from_constraints(finalized.atoms))
-    top = set(identify_top_layer_indices(finalized.atoms, tolerance=0.5))
+    top = set(
+        identify_relaxable_surface_indices(
+            finalized.atoms, material_type="slab", tolerance=0.5
+        )
+    )
     assert frozen, "relax_top_layer=True must still freeze subsurface atoms"
     assert frozen.isdisjoint(top), "top-layer atoms must remain free to relax"
     assert frozen | top == set(range(len(finalized.atoms)))
 
     apply_material_pbc(base, "porous")
     assert list(base.get_pbc()) == [True, True, True]
+
+
+def test_prepare_substrate_multi_element_alloy_requires_host(monkeypatch):
+    alloy_slab = make_slab(n_layers=1)
+    syms = alloy_slab.get_chemical_symbols()
+    for i in range(len(syms)):
+        if i % 2 == 1:
+            syms[i] = "Cu"
+    alloy_slab.set_chemical_symbols(syms)
+
+    _patch_prepare_substrate(monkeypatch)
+
+    with pytest.raises(ValueError, match="alloy_host must be set"):
+        prepare_substrate(
+            slab=SlabContainer(alloy_slab),
+            alloy_guest="Au",
+            alloy_fraction=0.25,
+            config=AdsorptionConfig(device="cpu"),
+        )
+
+
+def test_prepare_substrate_single_element_alloy_infers_host(monkeypatch):
+    captured: dict = {}
+
+    def _fake_alloy(
+        slab,
+        host_symbol,
+        guest_symbol,
+        guest_fraction,
+        calculator=None,
+        **kwargs,
+    ):
+        captured["host_symbol"] = host_symbol
+        return slab
+
+    _patch_prepare_substrate(monkeypatch, alloy=_fake_alloy)
+
+    prepare_substrate(
+        bulk_id="mp-33",
+        alloy_guest="Cu",
+        alloy_fraction=0.25,
+        config=AdsorptionConfig(device="cpu"),
+    )
+
+    assert captured["host_symbol"] == "Ru"

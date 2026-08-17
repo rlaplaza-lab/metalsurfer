@@ -23,7 +23,6 @@ from .models import (
     SaturationStepResult,
     ScreeningResult,
     ScreeningRunResult,
-    TimingInfo,
 )
 
 __all__ = [
@@ -51,7 +50,7 @@ __all__ = [
     "MultiMolSaturationStepResult",
     "ScreeningResult",
     "ScreeningRunResult",
-    "TimingInfo",
+    "MIN_CALCULATOR_CELL_C_ANG",
     "DependencyMissingError",
     "GeometryValidationError",
     "OptimizationError",
@@ -87,6 +86,9 @@ _LAZY_MODULES = {
     },
     "io_results": {
         "results_dir_for",
+    },
+    "_numeric_defaults": {
+        "MIN_CALCULATOR_CELL_C_ANG",
     },
 }
 

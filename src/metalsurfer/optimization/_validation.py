@@ -118,6 +118,8 @@ def _parallel_capacity_cache_key(
     ts_model,
     max_n_atoms: int,
     config: AdsorptionConfig,
+    *,
+    frozen_indices: list[int] | None = None,
 ) -> tuple:
     """Cache key for :func:`estimate_parallel_relaxation_capacity`.
 
@@ -126,10 +128,12 @@ def _parallel_capacity_cache_key(
     """
     dev = getattr(ts_model, "device", None)
     dev_key = str(dev) if dev is not None else "unknown"
+    frozen_key = tuple(sorted(int(i) for i in (frozen_indices or [])))
     return (
         id(ts_model),
         dev_key,
         max_n_atoms,
+        frozen_key,
         config.autobatcher_max_memory_padding,
         config.autobatcher_max_memory_scaler,
         config.autobatcher_max_atoms_to_try,

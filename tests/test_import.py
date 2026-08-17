@@ -80,7 +80,6 @@ def test_typed_models_importable():
         ReferenceEnergies,
         ScreeningResult,
         ScreeningRunResult,
-        TimingInfo,
     )
 
     exported_models = {
@@ -90,7 +89,6 @@ def test_typed_models_importable():
         "ScreeningResult": ScreeningResult,
         "MoleculeSummary": MoleculeSummary,
         "ScreeningRunResult": ScreeningRunResult,
-        "TimingInfo": TimingInfo,
     }
     assert set(exported_models).issubset(set(metalsurfer.__all__))
     assert all(isinstance(symbol, type) for symbol in exported_models.values())
@@ -110,6 +108,13 @@ def test_campaign_entry_points_in_all():
         "CampaignDocument",
     ):
         assert name in metalsurfer.__all__
+
+
+def test_min_calculator_cell_c_ang_exported():
+    import metalsurfer
+
+    assert "MIN_CALCULATOR_CELL_C_ANG" in metalsurfer.__all__
+    assert metalsurfer.MIN_CALCULATOR_CELL_C_ANG == 18.0
 
 
 def test_exceptions_importable():
@@ -236,7 +241,8 @@ def test_device_resolution_fallback_for_ci():
     """
     from unittest.mock import patch
 
-    from metalsurfer.optimization import _deps, _resolve_device
+    from metalsurfer.optimization import _deps
+    from metalsurfer.optimization._validation import _resolve_device
 
     assert _resolve_device("cpu") == "cpu"
     assert _resolve_device("cuda:0") in ("cuda:0", "cpu")  # cpu when no GPU

@@ -12,7 +12,6 @@ from metalsurfer import _numeric_defaults as numeric_defaults
 from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.ml.bayesian import (
     EnsembleRegressor,
-    build_candidate_features,
     build_spec_features_geometry_aware,
     build_transfer_surrogate,
     cumulative_refit_training_set,
@@ -226,6 +225,19 @@ class TestAcquisition:
         _, sigma_far = predict_with_uncertainty(model, X_far)
         assert float(np.mean(sigma_far)) >= float(np.mean(sigma))
 
+    def test_ridge_in_sample_sigma_uses_correct_feature_space(self):
+        """In-sample residual NN distance should be ~0 (not double-scaled)."""
+        from scipy.spatial.distance import cdist
+
+        X, y = _make_synthetic_training_data(40)
+        model = train_surrogate(X, y, surrogate="ridge", random_state=0)
+        regressor = model.named_steps["regressor"]
+        X_train = regressor.bo_X_train_scaled_
+        X_raw = np.asarray(X, dtype=float)
+        X_eval_scaled = regressor.bo_sigma_scaler_.transform(X_raw)
+        d_in_sample = cdist(X_eval_scaled, X_train).min(axis=1)
+        assert float(np.max(d_in_sample)) < 1e-6
+
     def test_lcb_scores_shape(self):
         mu = np.array([1.0, 2.0, 3.0])
         sigma = np.array([0.5, 0.5, 0.5])
@@ -348,13 +360,6 @@ class TestInitialSampling:
 
 
 class TestFeatureBuilding:
-    def test_build_candidate_features(self):
-        descriptors = [_bayesian_descriptor(i) for i in range(5)]
-        X = build_candidate_features(descriptors, molecule="test", smiles="C")
-        assert isinstance(X, pd.DataFrame)
-        assert X.shape[0] == 5
-        assert X.shape[1] > 0
-
     def test_build_spec_features_geometry_aware_varies_with_site(self):
         slab = make_slab(nx=2, ny=2, n_layers=3)
         conformers = [make_water()]

@@ -660,23 +660,26 @@ def test_bo_eval_schedule():
 @pytest.mark.parametrize(
     ("kwargs", "error_match"),
     [
-        ({"bo": {"initial_sampling": "latin_hypercube"}}, "bo.initial_sampling"),
-        ({"bo": {"ucb_kappa": -1.0}}, "bo.ucb_kappa"),
-        ({"bo": {"acquisition": "invalid"}}, "bo.acquisition"),
-        ({"bo": {"surrogate": "invalid"}}, "bo.surrogate"),
-        ({"bo": {"candidate_pool_size": 0}}, "bo.candidate_pool_size"),
-        ({"bo": {"failure_penalty_default": -1.0}}, "bo.failure_penalty_default"),
+        ({"bo": BOConfig(initial_sampling="latin_hypercube")}, "bo.initial_sampling"),
+        ({"bo": BOConfig(ucb_kappa=-1.0)}, "bo.ucb_kappa"),
+        ({"bo": BOConfig(acquisition="invalid")}, "bo.acquisition"),
+        ({"bo": BOConfig(surrogate="invalid")}, "bo.surrogate"),
+        ({"bo": BOConfig(candidate_pool_size=0)}, "bo.candidate_pool_size"),
+        ({"bo": BOConfig(failure_penalty_default=-1.0)}, "bo.failure_penalty_default"),
         (
-            {"bo": {"failure_penalty_overrides": {"validation": -0.1}}},
+            {"bo": BOConfig(failure_penalty_overrides={"validation": -0.1})},
             "bo.failure_penalty_overrides values",
         ),
-        ({"bo": {"transfer": {"weight_cap": 1.0}}}, "bo.transfer.weight_cap"),
         (
-            {"bo": {"transfer": {"proximity_lengthscale": 0.0}}},
+            {"bo": BOConfig(transfer=BOTransferConfig(weight_cap=1.0))},
+            "bo.transfer.weight_cap",
+        ),
+        (
+            {"bo": BOConfig(transfer=BOTransferConfig(proximity_lengthscale=0.0))},
             "bo.transfer.proximity_lengthscale",
         ),
         (
-            {"bo": {"transfer": {"proximity_floor": 1.5}}},
+            {"bo": BOConfig(transfer=BOTransferConfig(proximity_floor=1.5))},
             "bo.transfer.proximity_floor",
         ),
     ],
@@ -755,9 +758,13 @@ def test_flat_bo_constructor_kwargs_rejected():
         AdsorptionConfig(bo_initial_random=2)  # type: ignore[call-arg]
 
 
-def test_fold_bo_config_rejects_flat_keys():
-    with pytest.raises(ValueError, match="Flat BO keys"):
-        fold_bo_config({"bo_initial_random": 2, "num_conformers": 1})
+def test_fold_bo_config_extracts_nested_bo():
+    payload = {"num_conformers": 3, "bo": {"initial_random": 4, "batch_size": 2}}
+    bo = fold_bo_config(payload)
+    assert isinstance(bo, BOConfig)
+    assert bo.initial_random == 4
+    assert bo.batch_size == 2
+    assert payload == {"num_conformers": 3}
 
 
 def test_default_config_does_not_warn():

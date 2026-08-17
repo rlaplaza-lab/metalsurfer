@@ -72,7 +72,7 @@ def _assert_orbit_pairwise_symops(
     """Each orbit from ``analyze_site_symmetry`` is pairwise connected by one symop."""
     frac_ops = analyzer._frac_ops_from_dataset()
     cart_pts = [analyzer._site_3d_cart(s) for s in raw_sites]
-    site_types = [str(s.site_type) for s in raw_sites]
+    frac_pts = analyzer._cart_to_frac(np.asarray(cart_pts, dtype=float))
     grouped = analyzer.analyze_site_symmetry(raw_sites, planar=planar)
     assert sum(int(g.symmetry_multiplicity or 0) for g in grouped) == len(raw_sites)
     for g in grouped:
@@ -82,37 +82,37 @@ def _assert_orbit_pairwise_symops(
         assert len(idxs) == g.symmetry_multiplicity
         for ii, i in enumerate(idxs):
             for j in idxs[ii + 1 :]:
-                assert analyzer._site_pair_connected_by_ops(
-                    i, j, cart_pts, frac_ops, planar, site_types=site_types
-                )
+                assert analyzer._orbit_connectivity(frac_pts, frac_ops, i, [j], planar)[
+                    0
+                ]
 
 
 def _assert_op_count_matches_spglib(analyzer: SymmetryAnalyzer, symprec: float) -> None:
     cell, frac, numbers = analyzer.get_spglib_cell_tuple()
     ds = spglib.get_symmetry_dataset((cell, frac, numbers), symprec=symprec)
     assert ds is not None
-    assert len(analyzer.detect_symmetry_operations()) == len(ds.rotations)
+    assert len(analyzer._frac_ops_from_dataset()) == len(ds.rotations)
 
 
 def test_bulk_cu_space_group_and_symop_count():
     """FCC primitive Cu has Fm-3m (225) and 48 symmetry operations."""
     atoms = bulk("Cu", "fcc", a=3.6)
     an = SymmetryAnalyzer(atoms, symmetry_tolerance=0.01)
-    info = an.get_symmetry_info()
-    assert info["spacegroup_number"] == 225
-    assert info["international_symbol"] == "Fm-3m"
-    assert info["symmetry_mode"] == "periodic"
-    assert len(an.detect_symmetry_operations()) == 48
+    ds = an._ensure_dataset()
+    assert int(ds.number) == 225
+    assert str(ds.international) == "Fm-3m"
+    assert an._mode == "periodic"
+    assert len(an._frac_ops_from_dataset()) == 48
 
 
 def test_hexagonal_cell_not_p1():
     """Off-diagonal in-plane cell (graphene net) yields non-trivial symmetry."""
     atoms = graphene(vacuum=10.0)
     an = SymmetryAnalyzer(atoms, symmetry_tolerance=0.1)
-    info = an.get_symmetry_info()
-    assert info["spacegroup_number"] is not None
-    assert int(info["spacegroup_number"]) != 1
-    assert len(an.detect_symmetry_operations()) > 1
+    ds = an._ensure_dataset()
+    assert ds.number is not None
+    assert int(ds.number) != 1
+    assert len(an._frac_ops_from_dataset()) > 1
 
 
 def test_spglib_symop_roundtrip_bulk_cu():
@@ -130,20 +130,17 @@ def test_fcc111_slab_consistent_symmetry():
     slab = fcc111("Al", size=(2, 2, 3), vacuum=7.0)
     a1 = SymmetryAnalyzer(slab, symmetry_tolerance=0.1)
     a2 = SymmetryAnalyzer(slab, symmetry_tolerance=0.1)
-    assert (
-        a1.get_symmetry_info()["spacegroup_number"]
-        == a2.get_symmetry_info()["spacegroup_number"]
-    )
-    assert len(a1.detect_symmetry_operations()) == len(a2.detect_symmetry_operations())
+    assert int(a1._ensure_dataset().number) == int(a2._ensure_dataset().number)
+    assert len(a1._frac_ops_from_dataset()) == len(a2._frac_ops_from_dataset())
 
 
 def test_equivalent_atoms_bulk_cu():
     """Single-atom primitive cell: one Wyckoff class."""
     atoms = bulk("Cu", "fcc", a=3.6)
     an = SymmetryAnalyzer(atoms, 0.01)
-    groups = an.find_equivalent_atoms()
-    assert len(groups) == 1
-    assert groups[0] == [0]
+    eq = np.asarray(an._ensure_dataset().equivalent_atoms, dtype=int)
+    assert len(set(eq.tolist())) == 1
+    assert int(eq[0]) == 0
 
 
 def test_get_symmetry_aware_sites_multiplicity_partition():
@@ -173,8 +170,8 @@ def test_cluster_methane_td_operation_count():
     methane.set_cell([20, 20, 20])
     methane.set_pbc([False, False, False])
     an = SymmetryAnalyzer(methane, symmetry_tolerance=0.15, mode="cluster")
-    assert an.get_symmetry_info()["symmetry_mode"] == "cluster"
-    assert len(an.detect_symmetry_operations()) == 24
+    assert an._mode == "cluster"
+    assert len(an._frac_ops_from_dataset()) == 24
 
 
 def test_cluster_octahedron_oh_operation_count():
@@ -186,7 +183,7 @@ def test_cluster_octahedron_oh_operation_count():
     atoms.set_cell([20, 20, 20])
     atoms.set_pbc([False, False, False])
     an = SymmetryAnalyzer(atoms, symmetry_tolerance=0.2, mode="cluster")
-    assert len(an.detect_symmetry_operations()) == 48
+    assert len(an._frac_ops_from_dataset()) == 48
 
 
 def test_detect_symmetry_breaking_distorted_cu():
@@ -257,13 +254,13 @@ def test_cube_nanoparticle_symmetry_reduces_redundant_sites_deterministically():
         assert int(s1.symmetry_multiplicity or 0) == int(s2.symmetry_multiplicity or 0)
 
 
-def test_symmetry_info_includes_hall_and_mode():
-    """Extended info dict includes Hall symbol and mode when spglib succeeds."""
+def test_symmetry_dataset_includes_hall_and_mode():
+    """spglib dataset includes Hall symbol; analyzer mode is periodic for bulk."""
     atoms = bulk("Cu", "fcc", a=3.6)
-    info = SymmetryAnalyzer(atoms, 0.01).get_symmetry_info()
-    assert "hall_symbol" in info
-    assert info["hall_symbol"] is not None
-    assert info["symmetry_mode"] == "periodic"
+    an = SymmetryAnalyzer(atoms, 0.01)
+    ds = an._ensure_dataset()
+    assert ds.hall is not None
+    assert an._mode == "periodic"
 
 
 def test_spglib_returns_none_raises(monkeypatch):
@@ -276,7 +273,7 @@ def test_spglib_returns_none_raises(monkeypatch):
     monkeypatch.setattr(spglib, "get_symmetry_dataset", _none)
     an = SymmetryAnalyzer(atoms, symmetry_tolerance=0.01)
     with pytest.raises(SymmetryAnalysisError, match="returned None"):
-        an.detect_symmetry_operations()
+        an._ensure_dataset()
 
 
 def test_cluster_symop_roundtrip_ni6_and_ch4():
@@ -386,7 +383,7 @@ def test_angle_tolerance_passes_to_spglib():
         symmetry_tolerance=0.01,
         angle_tolerance=5.0,
     )
-    assert an.get_symmetry_info()["spacegroup_number"] == 225
+    assert an._ensure_dataset().number == 225
 
 
 def test_get_symmetry_aware_sites_precomputed_raw_matches_internal_fetch():
@@ -406,37 +403,29 @@ def test_get_symmetry_aware_sites_precomputed_raw_matches_internal_fetch():
 
 def test_analyze_site_symmetry_keeps_distinct_site_types_separate():
     """Identical xyz with different site_type must not share an orbit."""
-    from metalsurfer.placement.site_types import site_from_dict
+    from metalsurfer.placement.site_types import Site
 
     slab = make_slab(nx=2, ny=2)
     an = SymmetryAnalyzer(slab, symmetry_tolerance=0.1)
     xyz = [1.0, 1.0, 5.0]
     sites = [
-        site_from_dict(
-            {
-                "xy": xyz[:2],
-                "z": xyz[2],
-                "xyz": xyz,
-                "site_type": "atop",
-                "slab_indices": (0,),
-                "normal": [0.0, 0.0, 1.0],
-                "material_type": "slab",
-                "site_source": "test",
-                "env_fingerprint": (("Cu",), "atop"),
-            }
+        Site(
+            xyz=xyz,
+            normal=[0.0, 0.0, 1.0],
+            site_type="atop",
+            slab_indices=(0,),
+            material_type="slab",
+            site_source="test",
+            env_fingerprint=(("Cu",), "atop"),
         ),
-        site_from_dict(
-            {
-                "xy": xyz[:2],
-                "z": xyz[2],
-                "xyz": xyz,
-                "site_type": "hollow",
-                "slab_indices": (0, 1, 2),
-                "normal": [0.0, 0.0, 1.0],
-                "material_type": "slab",
-                "site_source": "test",
-                "env_fingerprint": (("Cu", "Cu", "Cu"), "hollow"),
-            }
+        Site(
+            xyz=xyz,
+            normal=[0.0, 0.0, 1.0],
+            site_type="hollow",
+            slab_indices=(0, 1, 2),
+            material_type="slab",
+            site_source="test",
+            env_fingerprint=(("Cu", "Cu", "Cu"), "hollow"),
         ),
     ]
     grouped = an.analyze_site_symmetry(sites, planar=True)
@@ -467,12 +456,14 @@ def test_planar_separation_distance_uses_slab_normal_not_cartesian_xy():
     n = an._slab_normal()
     # Pure normal separation: planar distance must be ~0; Cartesian [:2] is not.
     sep = 1.5 * n
-    assert an._separation_distance(sep, planar=True) < 1e-9
+    assert float(an._separation_norms(sep.reshape(1, 3), planar=True)[0]) < 1e-9
     assert float(np.linalg.norm(sep[:2])) > 0.5
     # Pure in-plane separation along a: planar distance equals |sep|.
     sep_ab = np.asarray(an._lattice[0], dtype=float)
     sep_ab = sep_ab / np.linalg.norm(sep_ab)
-    assert an._separation_distance(sep_ab, planar=True) == pytest.approx(1.0, abs=1e-9)
+    assert float(
+        an._separation_norms(sep_ab.reshape(1, 3), planar=True)[0]
+    ) == pytest.approx(1.0, abs=1e-9)
 
 
 def test_tilted_slab_symmetry_multiplicities_partition_raw():
@@ -499,7 +490,7 @@ def test_tilted_slab_symmetry_multiplicities_partition_raw():
     assert len(sym) >= 1
     assert len(sym) <= len(raw)
     assert sum(int(s.symmetry_multiplicity or 0) for s in sym) == len(raw)
-    # analyze_site_symmetry re-verifies pairwise symop connectivity (raises on failure).
+    # analyze_site_symmetry re-verifies orbit connectivity (raises on failure).
     an = SymmetryAnalyzer(slab, symmetry_tolerance=0.15)
     regrouped = an.analyze_site_symmetry(raw, planar=True)
     assert sum(int(g.symmetry_multiplicity or 0) for g in regrouped) == len(raw)
@@ -517,57 +508,30 @@ def _manual_graphene() -> Atoms:
 def test_fcc111_pt_spacegroup():
     """Non-orthogonal fcc(111) Pt slab is P-3m1 (164) with 48 operations."""
     slab = fcc111("Pt", size=(2, 2, 3), a=3.92, vacuum=10.0)
-    info = SymmetryAnalyzer(slab).get_symmetry_info()
-    assert info["spacegroup_number"] == 164
-    assert info["international_symbol"] == "P-3m1"
-    assert info["n_symmetry_operations"] == 48
+    an = SymmetryAnalyzer(slab)
+    ds = an._ensure_dataset()
+    assert int(ds.number) == 164
+    assert str(ds.international) == "P-3m1"
+    assert len(an._frac_ops_from_dataset()) == 48
 
 
 def test_bulk_mg_hcp_spacegroup():
     """Hexagonal bulk Mg is P6_3/mmc (194) with 24 operations."""
     atoms = bulk("Mg", "hcp", a=3.2, c=5.2)
-    info = SymmetryAnalyzer(atoms).get_symmetry_info()
-    assert info["spacegroup_number"] == 194
-    assert info["international_symbol"] == "P6_3/mmc"
-    assert info["n_symmetry_operations"] == 24
+    an = SymmetryAnalyzer(atoms)
+    ds = an._ensure_dataset()
+    assert int(ds.number) == 194
+    assert str(ds.international) == "P6_3/mmc"
+    assert len(an._frac_ops_from_dataset()) == 24
 
 
 def test_manual_graphene_spacegroup():
     """Graphene honeycomb net is P6/mmm (191) with 24 operations."""
-    info = SymmetryAnalyzer(_manual_graphene()).get_symmetry_info()
-    assert info["spacegroup_number"] == 191
-    assert info["international_symbol"] == "P6/mmm"
-    assert info["n_symmetry_operations"] == 24
-
-
-def test_cartesian_symops_are_rigid_motions_for_nonorthogonal_cells():
-    """Cartesian 4x4 ops are proper rigid motions, incl. non-orthogonal cells."""
-    cases = [
-        fcc111("Pt", size=(2, 2, 3), a=3.92, vacuum=10.0),
-        bulk("Mg", "hcp", a=3.2, c=5.2),
-        _manual_graphene(),
-    ]
-    for atoms in cases:
-        for op in SymmetryAnalyzer(atoms).detect_symmetry_operations():
-            rot = op[:3, :3]
-            assert np.allclose(rot @ rot.T, np.eye(3), atol=1e-9)
-            assert np.isclose(abs(np.linalg.det(rot)), 1.0, atol=1e-9)
-            assert np.allclose(op[3], [0.0, 0.0, 0.0, 1.0], atol=1e-12)
-
-
-def test_cartesian_symops_reproduce_fractional_ops():
-    """``R_cart @ x + t_cart`` matches the fractional op mapped through the cell."""
-    slab = fcc111("Pt", size=(2, 2, 3), a=3.92, vacuum=10.0)
-    an = SymmetryAnalyzer(slab)
-    lattice = an.get_spglib_cell_tuple()[0]
-    frac = an.get_spglib_cell_tuple()[1]
-    cart = frac @ lattice
-
-    for rot_f, trans_f in an._frac_ops_from_dataset():
-        expected = (frac @ rot_f.T + trans_f) @ lattice
-        op = an._symop_to_cartesian_4x4(rot_f, trans_f)
-        got = cart @ op[:3, :3].T + op[:3, 3]
-        assert np.allclose(got, expected, atol=1e-9)
+    an = SymmetryAnalyzer(_manual_graphene())
+    ds = an._ensure_dataset()
+    assert int(ds.number) == 191
+    assert str(ds.international) == "P6/mmm"
+    assert len(an._frac_ops_from_dataset()) == 24
 
 
 def test_symmetry_module_imports_without_circular_import():

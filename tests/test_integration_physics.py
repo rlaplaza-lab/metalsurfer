@@ -23,7 +23,7 @@ from metalsurfer.placement._constants import _SITE_Z_OFFSET_FROM_SURFACE_RADIUS
 from metalsurfer.placement.geometry import detect_vdw_overlaps
 from metalsurfer.placement.orientation import _site_type_z_offset
 from metalsurfer.placement.site_context import SiteContext, _get_unique_sites_for_specs
-from metalsurfer.placement.site_types import site_from_dict
+from metalsurfer.placement.site_types import Site
 from metalsurfer.surface_prep import SlabContainer
 from metalsurfer.workflow import process_molecule
 from metalsurfer.workflow.shared import (
@@ -321,18 +321,14 @@ class TestProcessMoleculePhysicsSurvival:
         xy = slab_atoms.get_positions()[top_idx, :2]
         cheap_sites = SiteContext(
             sites=[
-                site_from_dict(
-                    {
-                        "xy": xy,
-                        "xyz": np.array([xy[0], xy[1], top_z]),
-                        "z": top_z,
-                        "site_type": "atop",
-                        "material_type": "slab",
-                        "normal": np.array([0.0, 0.0, 1.0]),
-                        "slab_indices": (top_idx,),
-                        "site_source": "topology",
-                        "env_fingerprint": (),
-                    }
+                Site(
+                    xyz=np.array([xy[0], xy[1], top_z]),
+                    normal=np.array([0.0, 0.0, 1.0]),
+                    site_type="atop",
+                    slab_indices=(top_idx,),
+                    material_type="slab",
+                    site_source="topology",
+                    env_fingerprint=(),
                 )
             ],
             use_sites=True,

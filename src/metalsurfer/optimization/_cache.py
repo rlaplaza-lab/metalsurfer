@@ -113,16 +113,13 @@ def clear_autobatcher_cache(
     clear_capacity
         Also clear the parallel-capacity cache.
     """
+    evicted = False
     if max_n_atoms_threshold is None:
         with _CACHE_LOCK:
-            # Drop strong refs explicitly: TorchSim InFlightAutoBatcher can retain GPU
-            # tensors until batchers are GC'd; dict.clear() alone is easy to leave
-            # garbage uncollected between pytest tests.
-            _holders = list(_AUTOBATCHER_CACHE.values())
             _AUTOBATCHER_CACHE.clear()
             if clear_capacity:
                 _PARALLEL_CAPACITY_CACHE.clear()
-            del _holders
+        evicted = True
         logger.debug(
             "Cleared entire autobatcher cache (clear_capacity=%s)", clear_capacity
         )
@@ -131,12 +128,15 @@ def clear_autobatcher_cache(
             to_remove = [k for k in _AUTOBATCHER_CACHE if k[4] < max_n_atoms_threshold]
             for k in to_remove:
                 del _AUTOBATCHER_CACHE[k]
+        evicted = bool(to_remove)
         if to_remove:
             logger.debug(
                 "Evicted %d autobatcher(s) with max_n_atoms < %d",
                 len(to_remove),
                 max_n_atoms_threshold,
             )
+    if not evicted:
+        return
     torch = _deps.torch
     if torch is not None and torch.cuda.is_available():  # pragma: no cover - needs GPU
         with contextlib.suppress(RuntimeError):
@@ -169,9 +169,6 @@ def _get_inflight_autobatcher(
     ts_model,
     max_n_atoms: int,
     *,
-    memory_scales_with: str = "n_atoms",
-    max_memory_padding: float = 0.5,
-    max_memory_scaler: float | None = None,
     max_atoms_to_try: int = 100_000,
     config: AdsorptionConfig | None = None,
     saturation_reuse: bool = False,
@@ -185,6 +182,8 @@ def _get_inflight_autobatcher(
     """
     if _deps.InFlightAutoBatcher is None or _deps.ts is None or ts_model is None:
         return None, None, False
+    max_memory_padding = 0.5
+    max_memory_scaler = None
     if config is not None:
         max_memory_padding = config.autobatcher_max_memory_padding
         max_memory_scaler = config.autobatcher_max_memory_scaler
@@ -193,7 +192,7 @@ def _get_inflight_autobatcher(
         key = (
             id(ts_model),
             str(dev),
-            memory_scales_with,
+            "n_atoms",
             float(max_memory_padding),
             int(max_n_atoms),
             max_memory_scaler,
@@ -243,7 +242,7 @@ def _get_inflight_autobatcher(
                         )
                         return cache_ab, cache_key, True
         kwargs: dict = {
-            "memory_scales_with": memory_scales_with,
+            "memory_scales_with": "n_atoms",
             "max_memory_padding": max_memory_padding,
             "max_atoms_to_try": max_atoms_to_try,
         }
@@ -261,5 +260,5 @@ def _get_inflight_autobatcher(
             _AUTOBATCHER_CACHE[key] = ab
         return ab, key, False
     except (RuntimeError, TypeError, ValueError) as exc:
-        logger.debug("Failed to create InFlightAutoBatcher: %s", exc)
+        logger.warning("Failed to create InFlightAutoBatcher: %s", exc)
         return None, None, False

@@ -198,7 +198,6 @@ class _StubHarness:
             return ScreeningRunBootstrap(
                 calculator=self.calculator,
                 ts_model=None,
-                molecule_pairs=pairs,
                 ref=ReferenceEnergies(
                     slab_energy=E_SLAB,
                     molecule_energies=mol_energies,

@@ -197,7 +197,6 @@ _ADSORBATE_SEPARATION_MIN_HARD_FLOOR_ANGSTROM: float = 1.7
 # ---------------------------------------------------------------------------
 # Policy and generator grids
 # ---------------------------------------------------------------------------
-_ORIENTATION_CLASSIFICATION_PARALLEL_DOT_THRESHOLD: float = 0.7
 _PARALLEL_FRACTION_NO_BINDERS: float = 0.8
 _PARALLEL_FRACTION_SINGLE_BINDER: float = 0.3
 _PARALLEL_FRACTION_LOW_BINDER_RATIO: float = 0.8

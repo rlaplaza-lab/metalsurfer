@@ -20,13 +20,14 @@ from ase.data import atomic_numbers, covalent_radii
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.filters import (
-    _bond_counts_from_atoms,
+    _bond_counts_from_dist,
     _bond_counts_from_smiles,
-    _coordination_fingerprint_from_atoms,
+    _coordination_fingerprint_from_dist,
     _coordination_fingerprint_from_smiles,
     _formula_from_atoms,
     _formula_from_smiles,
-    _is_molecule_connected,
+    _is_molecule_connected_from_dist,
+    _nonsurface_distance_and_threshold,
     check_decomposition,
     check_desorption,
     filter_results,
@@ -40,6 +41,14 @@ from .conftest import (
     make_water,
     place_molecule_on_slab,
 )
+
+
+def _nonsurface_graph(atoms, surface_symbols, multiplier=1.3):
+    """Return (syms, dist_matrix, threshold) for non-surface atoms."""
+    syms, _, dist_matrix, threshold = _nonsurface_distance_and_threshold(
+        atoms, surface_symbols, multiplier
+    )
+    return syms, dist_matrix, threshold
 
 
 def _sr(atoms, energy_adsorption, placement_id, molecule="test"):
@@ -237,7 +246,8 @@ def test_formula_detects_missing_hydrogen():
 def test_is_connected_intact_water():
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, make_water())
-    assert _is_molecule_connected(combined, surface_symbols=["Ru"], multiplier=1.3)
+    syms, dist, thresh = _nonsurface_graph(combined, ["Ru"], 1.3)
+    assert _is_molecule_connected_from_dist(syms, dist, thresh)
 
 
 def test_is_connected_fragmented():
@@ -254,7 +264,8 @@ def test_is_connected_fragmented():
     combined = slab + mol
     combined.set_cell(slab.get_cell())
     combined.set_pbc(slab.get_pbc())
-    assert not _is_molecule_connected(combined, surface_symbols=["Ru"], multiplier=1.3)
+    syms, dist, thresh = _nonsurface_graph(combined, ["Ru"], 1.3)
+    assert not _is_molecule_connected_from_dist(syms, dist, thresh)
 
 
 def test_is_connected_single_atom():
@@ -265,7 +276,8 @@ def test_is_connected_single_atom():
     combined = slab + mol
     combined.set_cell(slab.get_cell())
     combined.set_pbc(slab.get_pbc())
-    assert _is_molecule_connected(combined, surface_symbols=["Ru"], multiplier=1.3)
+    syms, dist, thresh = _nonsurface_graph(combined, ["Ru"], 1.3)
+    assert _is_molecule_connected_from_dist(syms, dist, thresh)
 
 
 def test_connectivity_multiplier_sensitivity():
@@ -284,8 +296,10 @@ def test_connectivity_multiplier_sensitivity():
     pos[slab_size + 1] = o_pos + direction * r_OH * 1.5
     combined.set_positions(pos)
 
-    assert _is_molecule_connected(combined, surface_symbols=["Ru"], multiplier=1.6)
-    assert not _is_molecule_connected(combined, surface_symbols=["Ru"], multiplier=1.2)
+    loose = _nonsurface_graph(combined, ["Ru"], 1.6)
+    tight = _nonsurface_graph(combined, ["Ru"], 1.2)
+    assert _is_molecule_connected_from_dist(*loose)
+    assert not _is_molecule_connected_from_dist(*tight)
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +310,7 @@ def test_connectivity_multiplier_sensitivity():
 def test_bond_counts_intact_ethanol():
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, _make_ethanol())
-    actual = _bond_counts_from_atoms(combined, surface_symbols=["Ru"], multiplier=1.3)
+    actual = _bond_counts_from_dist(*_nonsurface_graph(combined, ["Ru"], 1.3))
     ref = _bond_counts_from_smiles("CCO")
     assert actual == ref
 
@@ -314,7 +328,7 @@ def test_bond_counts_detect_cc_break():
     for idx in [slab_size + 2, slab_size + 3, slab_size + 7, slab_size + 8]:
         pos[idx, 0] += 5.0
     combined.set_positions(pos)
-    actual = _bond_counts_from_atoms(combined, surface_symbols=["Ru"], multiplier=1.3)
+    actual = _bond_counts_from_dist(*_nonsurface_graph(combined, ["Ru"], 1.3))
     ref = _bond_counts_from_smiles("CCO")
     assert actual != ref
 
@@ -327,8 +341,8 @@ def test_bond_counts_detect_cc_break():
 def test_coordination_fingerprint_intact_ethanol():
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, _make_ethanol())
-    actual = _coordination_fingerprint_from_atoms(
-        combined, surface_symbols=["Ru"], multiplier=1.3
+    actual = _coordination_fingerprint_from_dist(
+        *_nonsurface_graph(combined, ["Ru"], 1.3)
     )
     ref = _coordination_fingerprint_from_smiles("CCO")
     assert actual == ref
@@ -354,8 +368,8 @@ def test_coordination_fingerprint_detects_h_shift():
     pos[slab_size + 4] = c2_pos + np.array([0.0, 0.0, r_CH * 0.9])
     combined.set_positions(pos)
 
-    actual = _coordination_fingerprint_from_atoms(
-        combined, surface_symbols=["Ru"], multiplier=1.3
+    actual = _coordination_fingerprint_from_dist(
+        *_nonsurface_graph(combined, ["Ru"], 1.3)
     )
     ref = _coordination_fingerprint_from_smiles("CCO")
     assert actual != ref, (
@@ -401,8 +415,23 @@ def test_decomposition_no_smiles_reference():
         surface_symbols=["Ru"],
         connectivity_multipliers=[1.3],
     )
+    assert ok, reason
+    assert "no SMILES" in reason
+
+
+def test_decomposition_unparseable_smiles_falls_back_to_connectivity_only(caplog):
+    """Unparseable reference SMILES must not reject every intact structure."""
+    slab = make_slab(n_layers=1)
+    combined = place_molecule_on_slab(slab, make_water())
+    ok, reason = check_decomposition(
+        combined,
+        reference_smiles="not-a-valid-smiles-string",
+        surface_symbols=["Ru"],
+        connectivity_multipliers=[1.3],
+    )
+    assert "Could not parse reference SMILES" in caplog.text
     assert ok
-    assert "no SMILES reference" in reason
+    assert "unparseable" in reason.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1135,29 +1164,6 @@ def test_filter_pipeline_all_rejected():
     assert len(filtered) == 0
 
 
-def test_filter_pipeline_keep_best():
-    """keep_best=True should return only the best configuration."""
-    slab = make_slab(n_layers=1)
-    c1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5, x_shift=3.0)
-    c2 = place_molecule_on_slab(slab, make_water(), z_offset=2.5, x_shift=7.0)
-
-    results = [
-        _sr(c1, -0.5, 0),
-        _sr(c2, -2.5, 1),
-    ]
-    config = AdsorptionConfig(connectivity_multipliers=[1.3])
-    filtered = filter_results(
-        results,
-        slab=slab,
-        surface_symbols=["Ru"],
-        reference_smiles="O",
-        config=config,
-        keep_best=True,
-    )
-    assert len(filtered) == 1
-    assert filtered[0].placement_id == 1
-
-
 def test_filter_pipeline_skip_topology_check_allows_decomposed():
     """When skip_topology_check=True, decomposed structures pass through."""
     slab = make_slab(n_layers=1)
@@ -1233,37 +1239,6 @@ def test_filter_pipeline_alloy_surface():
     )
     assert len(filtered) == 1
     assert filtered[0].placement_id == 0
-
-
-# ---------------------------------------------------------------------------
-# keep_best selects minimum E_ads (most negative), not max |E_ads|
-# ---------------------------------------------------------------------------
-
-
-def test_keep_best_selects_minimum_energy():
-    """keep_best=True must select the most negative E_ads, not largest |E_ads|."""
-    slab = make_slab(n_layers=1)
-    c1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5, x_shift=3.0)
-    c2 = place_molecule_on_slab(slab, make_water(), z_offset=2.5, x_shift=7.0)
-    c3 = place_molecule_on_slab(slab, make_water(), z_offset=2.5, x_shift=5.0)
-
-    results = [
-        _sr(c1, -0.5, 0),
-        _sr(c2, -2.5, 1),
-        _sr(c3, 3.0, 2),
-    ]
-    config = AdsorptionConfig(connectivity_multipliers=[1.3])
-    filtered = filter_results(
-        results,
-        slab=slab,
-        surface_symbols=["Ru"],
-        reference_smiles="O",
-        config=config,
-        keep_best=True,
-    )
-    assert len(filtered) == 1
-    assert filtered[0].placement_id == 1
-    assert filtered[0].energy_adsorption == -2.5
 
 
 # ---------------------------------------------------------------------------

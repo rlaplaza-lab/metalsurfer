@@ -19,7 +19,7 @@ from ._constants import (
     _PARALLEL_Z_MIN_HI_MARGIN,
     _VECTOR_NORM_EPS,
 )
-from ._material import calculator_pbc_for_atoms, material_type_for_placement
+from ._material import material_aware_pbc, material_type_for_placement
 from .orientation import (
     _is_flat_aromatic,
     _parallel_z_adjustments,
@@ -56,10 +56,6 @@ class _PlacementContext:
     normal: np.ndarray | None = None
 
 
-def _require_float(value: float | None, *, default: float = 0.0) -> float:
-    return float(value) if value is not None else default
-
-
 def _clearance_lift_along_normal(
     rotated_pos: np.ndarray,
     normal: np.ndarray,
@@ -80,29 +76,6 @@ def _clearance_lift_along_normal(
     if heights.size == 0:
         return 0.0
     return float(max(0.0, -float(np.min(heights))))
-
-
-def _pose_from_descriptor(descriptor: PlacementDescriptor) -> PlacementPose:
-    return PlacementPose(
-        conformer_index=descriptor.conformer_index,
-        site_index=descriptor.site_index,
-        site_type=descriptor.site_type,
-        placement_index=descriptor.placement_index,
-        quat_w=_require_float(descriptor.quat_w),
-        quat_x=_require_float(descriptor.quat_x),
-        quat_y=_require_float(descriptor.quat_y),
-        quat_z=_require_float(descriptor.quat_z),
-        x_abs=_require_float(descriptor.x_abs),
-        y_abs=_require_float(descriptor.y_abs),
-        z_fraction=descriptor.z_fraction,
-        z_abs=descriptor.z_abs,
-        orientation_type=descriptor.orientation_type,
-        face_flip=descriptor.face_flip,
-        en_atom_index=descriptor.en_atom_index,
-        tilt_deg=descriptor.tilt_deg,
-        azimuth_deg=descriptor.azimuth_deg,
-        azimuth_in_plane_deg=descriptor.azimuth_in_plane_deg,
-    )
 
 
 def _resolve_surface_ref(
@@ -653,7 +626,7 @@ def _validate_posed_adsorbate(
             pre_ads,
             min_separation=config.min_adsorbate_separation,
             cell=np.asarray(slab.get_cell(), dtype=float),
-            pbc=calculator_pbc_for_atoms(slab),
+            pbc=material_aware_pbc(mat_type),
         )
         if not sep_ok:
             return "adsorbate_overlap"

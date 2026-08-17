@@ -109,6 +109,12 @@ def extract_features_from_dataset(
             "Dataset contains missing/invalid values in strict geometric columns "
             "(x_abs, y_abs, z_abs, conformer_index)"
         )
+    geom_values = working[list(required_geometry_cols)].to_numpy(dtype=float)
+    if not np.all(np.isfinite(geom_values)):
+        raise ValueError(
+            "Dataset contains non-finite values in strict geometric columns "
+            "(x_abs, y_abs, z_abs, conformer_index)"
+        )
     for col, default in (
         ("quat_w", 1.0),
         ("quat_x", 0.0),
@@ -124,6 +130,11 @@ def extract_features_from_dataset(
         .fillna({"quat_w": 1.0, "quat_x": 0.0, "quat_y": 0.0, "quat_z": 0.0})
     )
     quat_values = quat_cols.to_numpy(dtype=float)
+    if not np.all(np.isfinite(quat_values)):
+        raise ValueError(
+            "Dataset contains non-finite values in quaternion columns "
+            "(quat_w, quat_x, quat_y, quat_z)"
+        )
     norms = np.linalg.norm(quat_values, axis=1)
     zero_mask = norms < _DISTANCE_ZERO_EPS
     norms[zero_mask] = 1.0

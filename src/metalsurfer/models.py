@@ -6,13 +6,10 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 from ase import Atoms
-
-if TYPE_CHECKING:
-    import pandas as pd
 
 from ._csv_coerce import (
     float_or as _row_float_or,
@@ -390,22 +387,6 @@ class ScreeningResult:
 
 
 @dataclass
-class TimingInfo:
-    """Per-molecule wall-clock timing breakdown (seconds)."""
-
-    molecule: str
-    conformer_generation_s: float = 0.0
-    placement_generation_s: float = 0.0
-    optimization_s: float = 0.0
-    validation_s: float = 0.0
-    filtering_s: float = 0.0
-    total_s: float = 0.0
-    n_placements_attempted: int = 0
-    n_placements_valid: int = 0
-    n_results_after_filter: int = 0
-
-
-@dataclass
 class MoleculeSummary:
     """Aggregate adsorption-energy statistics for one molecule."""
 
@@ -457,7 +438,6 @@ class ScreeningRunResult:
 
     molecule: str
     results: list[ScreeningResult]
-    timing: TimingInfo | None = None
     summary: MoleculeSummary | None = None
 
     def to_rows(
@@ -508,38 +488,6 @@ class ScreeningRunResult:
             rows.append(row)
         return rows
 
-    def to_dataframe(
-        self,
-        *,
-        results_dir: str | Path | None = None,
-        context_row: Mapping[str, Any] | None = None,
-        write_vasp_inputs: bool = False,
-        include_provenance: bool = False,
-    ) -> pd.DataFrame:
-        """Return a detailed pandas DataFrame for this screening run.
-
-        Parameters
-        ----------
-        results_dir
-            Optional base directory for writing structure files.
-        context_row
-            Optional extra context fields to merge into each row.
-        write_vasp_inputs
-            If True, write VASP input directories.
-        include_provenance
-            If True, include pre-relax provenance columns.
-        """
-        import pandas as pd
-
-        return pd.DataFrame(
-            self.to_rows(
-                results_dir=results_dir,
-                context_row=context_row,
-                write_vasp_inputs=write_vasp_inputs,
-                include_provenance=include_provenance,
-            )
-        )
-
     def to_summary_row(self) -> dict[str, Any] | None:
         """Return one summary row for this molecule."""
         if self.summary is None:
@@ -562,7 +510,6 @@ class ScreeningRunResult:
 class BOTransferInfo:
     """Typed BO transfer bookkeeping written by Bayesian saturation steps."""
 
-    transfer_enabled: bool = False
     transfer_used: bool = False
     transfer_disabled_reason: str | None = None
     transfer_bad_rounds: int = 0
@@ -737,17 +684,6 @@ class SaturationRunResult:
     n_molecules_at_saturation: int
     final_slab_atoms: Atoms | None = None
 
-    @staticmethod
-    def format_failure_summary(failure_summary: dict[str, object]) -> str:
-        """Return a canonical human-readable failure summary.
-
-        Parameters
-        ----------
-        failure_summary
-            Mapping of failure categories to counts or details.
-        """
-        return _format_failure_summary_text(failure_summary)
-
     def to_flattened_runs(self) -> list[ScreeningRunResult]:
         """Flatten all saturation steps into screening-like run results."""
         flattened_runs: list[ScreeningRunResult] = []
@@ -903,6 +839,7 @@ class MultiMolSaturationStepResult:
         """
         best = self.best_result
         mol_dir = Path(results_dir) / "xyz_structures" / f"{molecules_label}_saturation"
+        info = self.transfer_by_molecule.get(self.winning_molecule, BOTransferInfo())
         return best.to_row(
             context_row=context_row,
             include_provenance=include_provenance,
@@ -913,6 +850,7 @@ class MultiMolSaturationStepResult:
             "n_molecules_on_slab": self.n_molecules_on_slab,
             "per_molecule_budgets": str(self.per_molecule_budgets),
             "bo_transfer_enabled": self.bo_transfer_enabled,
+            **info.to_saturation_columns(),
             **_saturation_step_structure_paths(
                 mol_dir, self.step, best.energy_adsorption
             ),
@@ -949,6 +887,7 @@ class MultiMolSaturationStepResult:
         base_vasp = base / "vasp_inputs" / sat / rel if write_vasp_inputs else None
         rows: list[dict[str, Any]] = []
         for pmol, res_list in self.per_molecule_results.items():
+            info = self.transfer_by_molecule.get(pmol, BOTransferInfo())
             rows.extend(
                 _placement_rows_for_results(
                     res_list,
@@ -961,6 +900,8 @@ class MultiMolSaturationStepResult:
                         "molecules": molecules_label,
                         "winning_molecule": self.winning_molecule,
                         "molecule": pmol,
+                        "bo_transfer_enabled": self.bo_transfer_enabled,
+                        **info.to_saturation_columns(),
                     },
                 )
             )
@@ -1084,10 +1025,6 @@ class BindingCampaignResult:
             results_dir=results_dir,
             write_vasp_inputs=write_vasp_inputs,
         )
-
-    def format_screening_complete(self) -> str:
-        """Return a canonical screening completion line."""
-        return f"Screening complete: {self.total_configurations} total configurations"
 
     def format_summary(
         self,

@@ -2,7 +2,6 @@
 
 import numpy as np
 import pytest
-from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.conformers import create_conformers_from_smiles
@@ -12,7 +11,6 @@ from metalsurfer.placement import (
 from metalsurfer.placement.orientation import (
     _estimate_parallel_fraction,
     _is_flat_aromatic_with_en,
-    classify_adsorbate_orientation,
 )
 
 from ..conftest import (
@@ -70,48 +68,6 @@ def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
 def test_estimate_parallel_fraction(symbols, smiles, expected):
     frac = _estimate_parallel_fraction(symbols, smiles=smiles)
     assert frac == expected
-
-
-def test_classify_adsorbate_orientation_parallel_tilted_unknown():
-    # Planar hexagon in xy → parallel to +z surface.
-    parallel = Atoms(
-        "C6",
-        positions=[
-            [1.0, 0.0, 5.0],
-            [0.5, 0.866, 5.0],
-            [-0.5, 0.866, 5.0],
-            [-1.0, 0.0, 5.0],
-            [-0.5, -0.866, 5.0],
-            [0.5, -0.866, 5.0],
-        ],
-        cell=[10, 10, 20],
-        pbc=[True, True, False],
-    )
-    assert classify_adsorbate_orientation(parallel, slab_size=0) == "parallel"
-
-    # Same ring standing in xz → tilted relative to +z.
-    tilted = Atoms(
-        "C6",
-        positions=[
-            [1.0, 0.0, 5.0],
-            [0.5, 0.0, 5.866],
-            [-0.5, 0.0, 5.866],
-            [-1.0, 0.0, 5.0],
-            [-0.5, 0.0, 4.134],
-            [0.5, 0.0, 4.134],
-        ],
-        cell=[10, 10, 20],
-        pbc=[True, True, False],
-    )
-    assert classify_adsorbate_orientation(tilted, slab_size=0) == "tilted"
-
-    diatomic = Atoms(
-        "CO",
-        positions=[[0.0, 0.0, 5.0], [0.0, 0.0, 6.1]],
-        cell=[10, 10, 20],
-        pbc=[True, True, False],
-    )
-    assert classify_adsorbate_orientation(diatomic, slab_size=0) == "unknown"
 
 
 def test_principal_axis_rotation_flat_hexagon_stays_near_flat():

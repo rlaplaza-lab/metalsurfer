@@ -11,11 +11,13 @@ from metalsurfer.models import PlacementSpec
 from metalsurfer.placement import (
     check_initial_placement_distance,
     enumerate_placement_specs,
-    generate_placement_from_descriptor,
     generate_placement_from_spec_with_reason,
     get_unified_sites,
 )
-from metalsurfer.placement.dissociative import _get_dissociative_site_pairs
+from metalsurfer.placement.dissociative import (
+    _dissociative_pair_cache_key,
+    _get_dissociative_site_pairs,
+)
 from metalsurfer.placement.site_context import (
     clear_site_caches,
 )
@@ -27,7 +29,6 @@ from metalsurfer.placement.site_types import Site
 from ..conftest import (
     make_h2,
     make_nanoparticle,
-    make_placement_descriptor,
     make_porous_framework,
     make_slab,
 )
@@ -379,8 +380,8 @@ def test_dissociative_placement_rejected_for_porous_material_type():
     assert reason == "dissociative_not_supported_for_porous"
 
 
-def test_dissociative_descriptor_replay_round_trip():
-    """fragment_positions must replay dissociative geometry exactly."""
+def test_dissociative_fragment_positions_round_trip():
+    """fragment_positions must match the placed dissociative geometry."""
     slab = make_slab()
     config = AdsorptionConfig(material_type="slab", enable_dissociative_placement=True)
     h2 = make_h2()
@@ -405,28 +406,11 @@ def test_dissociative_descriptor_replay_round_trip():
     assert "initial_fragment_positions" not in descriptor.to_row()
     rich_row = descriptor.to_row(include_provenance=True)
     assert rich_row.get("initial_fragment_positions") is not None
-    replayed = generate_placement_from_descriptor(descriptor, [h2], slab, config)
-    assert replayed is not None
-    assert np.allclose(replayed.get_positions(), placed.get_positions(), atol=1e-8)
-
-
-def test_dissociative_descriptor_without_fragment_positions_fails():
-    slab = make_slab()
-    config = AdsorptionConfig(material_type="slab", enable_dissociative_placement=True)
-    h2 = make_h2()
-    descriptor = make_placement_descriptor(
-        orientation_type="dissociative",
-        site_type="hollow",
-        x_abs=1.0,
-        y_abs=1.0,
-        z_abs=3.0,
-        quat_w=1.0,
-        quat_x=0.0,
-        quat_y=0.0,
-        quat_z=0.0,
-        fragment_positions=None,
+    assert np.allclose(
+        np.asarray(descriptor.fragment_positions, dtype=float),
+        placed.get_positions(),
+        atol=1e-8,
     )
-    assert generate_placement_from_descriptor(descriptor, [h2], slab, config) is None
 
 
 def test_enable_dissociative_placement_without_topology_skip():
@@ -492,9 +476,11 @@ def test_dissociative_com_features_injective_and_record_replay():
         )
         replay_desc = restored.to_placement_descriptor()
         assert replay_desc.fragment_positions == descriptor.fragment_positions
-        replayed = generate_placement_from_descriptor(replay_desc, [h2], slab, config)
-        assert replayed is not None
-        assert np.allclose(replayed.get_positions(), placed.get_positions(), atol=1e-8)
+        assert np.allclose(
+            np.asarray(replay_desc.fragment_positions, dtype=float),
+            placed.get_positions(),
+            atol=1e-8,
+        )
 
     assert len(feature_rows) >= 8
     assert len(set(feature_rows)) >= max(8, int(0.75 * len(feature_rows)))
@@ -515,3 +501,15 @@ def test_fcc_catalog_has_atop_bridge_hollow_and_topology_majority():
     assert {"atop", "bridge", "hollow"} <= types
     topo = sum(1 for s in sites if str(s.site_source).startswith("topology"))
     assert topo >= len(sites) // 3
+
+
+def test_dissociative_pair_cache_key_includes_voronoi_params():
+    slab = make_slab()
+    base = AdsorptionConfig(material_type="slab")
+    alt = AdsorptionConfig(
+        material_type="slab",
+        voronoi_probe_radius=(base.voronoi_probe_radius or 1.0) + 0.5,
+    )
+    assert _dissociative_pair_cache_key(slab, base) != _dissociative_pair_cache_key(
+        slab, alt
+    )

@@ -13,7 +13,6 @@ from metalsurfer.surface_prep import (
     format_atom_index_ranges,
     frozen_indices_from_constraints,
     identify_relaxable_surface_indices,
-    identify_top_layer_indices,
     log_substrate_freeze_policy,
     max_frozen_substrate_displacement,
 )
@@ -21,9 +20,9 @@ from metalsurfer.surface_prep import (
 from .conftest import make_nanoparticle, make_porous_framework, make_slab
 
 
-def test_identify_top_layer():
+def test_identify_relaxable_surface_slab():
     slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
-    top = identify_top_layer_indices(slab, tolerance=0.5)
+    top = identify_relaxable_surface_indices(slab, material_type="slab", tolerance=0.5)
     expected_z = 6.0
     for idx in top:
         assert abs(slab.get_positions()[idx, 2] - expected_z) <= 0.5
