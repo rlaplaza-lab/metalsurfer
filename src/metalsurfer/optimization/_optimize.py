@@ -35,7 +35,6 @@ from ._validation import (
     _resolve_autobatcher_max_atoms_to_try,
     _resolve_device,
     _resolve_ts_optimizer,
-    _ts_model_on_cuda,
     _validate_model_pbc,
 )
 
@@ -325,7 +324,13 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
     _maybe_clear_cuda_cache(ts_model)
     try:
         ab = None
-        if config is not None and not config.optimize_isolated_sequentially:
+        if (
+            config is not None
+            and not config.optimize_isolated_sequentially
+            and str(getattr(ts_model, "device", None) or "cpu")
+            .lower()
+            .startswith("cuda")
+        ):
             max_n_atoms = max(len(a) for a in conformers)
             resolved_max_atoms_to_try, cap_source = (
                 _resolve_autobatcher_max_atoms_to_try(
@@ -508,8 +513,9 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         )
         _maybe_clear_cuda_cache(ts_model)
         use_saturation_reuse = saturation_reuse and config.saturation_autobatcher_reuse
-        on_cuda = _ts_model_on_cuda(ts_model, model_device)
-        if on_cuda:
+        # TorchSim memory probing is CUDA-only; CPU uses a single sequential batch.
+        use_autobatcher = str(model_device).lower().startswith("cuda")
+        if use_autobatcher:
             ab, cache_key, reused_prior_estimate = _get_inflight_autobatcher(
                 ts_model,
                 max_n_atoms,
@@ -520,12 +526,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             if ab is None:
                 raise RuntimeError("Could not create autobatcher")
         else:
-            logger.info(
-                "Skipping InFlightAutoBatcher on CPU (memory probing unsupported)"
-            )
-            ab = None
-            cache_key = None
-            reused_prior_estimate = False
+            ab, cache_key, reused_prior_estimate = None, None, False
 
         def _run_optimize(autobatcher):
             with torchsim_output_capture():
@@ -543,8 +544,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             batch = _run_optimize(ab)
         except RuntimeError as exc:
             if (
-                on_cuda
-                and use_saturation_reuse
+                use_saturation_reuse
                 and reused_prior_estimate
                 and _is_cuda_oom_error(exc)
                 and cache_key is not None

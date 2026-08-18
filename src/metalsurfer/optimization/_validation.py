@@ -82,19 +82,6 @@ def _resolve_device(device: str | None) -> str | None:
     return device
 
 
-def _ts_model_on_cuda(ts_model, fallback_device: str | None = None) -> bool:
-    """Return True when the TorchSim model is on a CUDA device."""
-    dev = getattr(ts_model, "device", None)
-    if dev is None:
-        dev = fallback_device
-    if dev is None:
-        return False
-    if isinstance(dev, str):
-        return dev.lower().startswith("cuda")
-    dev_type = getattr(dev, "type", None)
-    return str(dev_type).lower() == "cuda"
-
-
 def _is_cuda_oom_error(exc: BaseException) -> bool:
     """Check whether *exc* looks like a CUDA out-of-memory failure."""
     message = str(exc).lower()
