@@ -35,6 +35,7 @@ from ._validation import (
     _resolve_autobatcher_max_atoms_to_try,
     _resolve_device,
     _resolve_ts_optimizer,
+    _ts_model_on_cuda,
     _validate_model_pbc,
 )
 
@@ -507,17 +508,26 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         )
         _maybe_clear_cuda_cache(ts_model)
         use_saturation_reuse = saturation_reuse and config.saturation_autobatcher_reuse
-        ab, cache_key, reused_prior_estimate = _get_inflight_autobatcher(
-            ts_model,
-            max_n_atoms,
-            config=config,
-            saturation_reuse=use_saturation_reuse,
-            max_atoms_to_try=resolved_max_atoms_to_try,
-        )
-        if ab is None:
-            raise RuntimeError("Could not create autobatcher")
+        on_cuda = _ts_model_on_cuda(ts_model, model_device)
+        if on_cuda:
+            ab, cache_key, reused_prior_estimate = _get_inflight_autobatcher(
+                ts_model,
+                max_n_atoms,
+                config=config,
+                saturation_reuse=use_saturation_reuse,
+                max_atoms_to_try=resolved_max_atoms_to_try,
+            )
+            if ab is None:
+                raise RuntimeError("Could not create autobatcher")
+        else:
+            logger.info(
+                "Skipping InFlightAutoBatcher on CPU (memory probing unsupported)"
+            )
+            ab = None
+            cache_key = None
+            reused_prior_estimate = False
 
-        def _run_optimize(ab):
+        def _run_optimize(autobatcher):
             with torchsim_output_capture():
                 return ts.optimize(
                     system=sim_states,
@@ -526,14 +536,15 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
                     convergence_fn=conv,
                     max_steps=max_steps,
                     steps_between_swaps=swaps,
-                    autobatcher=ab,
+                    autobatcher=autobatcher if autobatcher is not None else False,
                 )
 
         try:
             batch = _run_optimize(ab)
         except RuntimeError as exc:
             if (
-                use_saturation_reuse
+                on_cuda
+                and use_saturation_reuse
                 and reused_prior_estimate
                 and _is_cuda_oom_error(exc)
                 and cache_key is not None
