@@ -85,3 +85,37 @@ def test_principal_axis_rotation_flat_hexagon_stays_near_flat():
     assert rotated is not None
     # Plane normal ≈ z → z-span stays small (near-flat).
     assert float(np.ptp(rotated[:, 2])) < 0.35
+
+
+@pytest.mark.parametrize("tilt_deg", [0.0, 10.0, 15.0])
+def test_surface_aligned_rotation_flips_binder_pointing_up(tilt_deg):
+    """Binder near +normal must rotate to point toward the surface (−normal)."""
+    from metalsurfer.placement.geometry import _surface_aligned_rotation
+
+    normal = np.array([0.0, 0.0, 1.0])
+    angle = np.deg2rad(tilt_deg)
+    # C at origin, O tilted slightly from +z (away from surface).
+    pos = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [np.sin(angle), 0.0, np.cos(angle)],
+        ],
+        dtype=float,
+    )
+    out = _surface_aligned_rotation(pos, normal, symbols=["C", "O"])
+    com = out.mean(axis=0)
+    binder_dir = out[1] - com
+    binder_dir /= np.linalg.norm(binder_dir)
+    assert float(np.dot(binder_dir, normal)) < -0.95
+
+
+def test_surface_aligned_rotation_noop_when_already_pointing_down():
+    from metalsurfer.placement.geometry import _surface_aligned_rotation
+
+    normal = np.array([0.0, 0.0, 1.0])
+    pos = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, -1.0]], dtype=float)
+    out = _surface_aligned_rotation(pos, normal, symbols=["C", "O"])
+    com = out.mean(axis=0)
+    binder_dir = out[1] - com
+    binder_dir /= np.linalg.norm(binder_dir)
+    assert float(np.dot(binder_dir, normal)) < -0.95

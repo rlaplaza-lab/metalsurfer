@@ -3,6 +3,7 @@
 import logging
 
 import numpy as np
+from ase import Atoms
 
 from ..config import AdsorptionConfig
 from ..conformers import create_conformers_from_smiles
@@ -64,6 +65,7 @@ def calculate_reference_energies(
     logger.info("Clean slab energy: %.4f eV", slab_energy)
 
     molecule_energies: dict[str, float] = {}
+    conformer_packs: dict[str, tuple[list[Atoms], list[float]]] = {}
     for mol_name, smiles in zip(molecules, smiles_list, strict=True):
         logger.info("Calculating isolated %s energy", mol_name)
         result = create_conformers_from_smiles(
@@ -76,7 +78,9 @@ def calculate_reference_energies(
                 )
             logger.warning("Could not create %s from SMILES: %s", mol_name, smiles)
             continue
-        conformers, _ = result
+        conformers, conformer_energies = result
+        # Keep the pre–isolated-opt pack for placement (must not use post-opt geoms).
+        conformer_packs[mol_name] = (list(conformers), list(conformer_energies))
         opt_results = optimize_isolated_molecules_batched(
             conformers,
             ts_model,
@@ -107,4 +111,5 @@ def calculate_reference_energies(
     return ReferenceEnergies(
         slab_energy=slab_energy,
         molecule_energies=molecule_energies,
+        conformer_packs=conformer_packs,
     )

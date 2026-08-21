@@ -248,6 +248,61 @@ def test_dissociative_placement_supported_for_nanoparticle():
     assert 1.0 <= min_d <= 3.5
 
 
+def test_dissociative_wrap_pair_cartesian_separation_matches_mic():
+    """Boundary-crossing pairs must place fragments at MIC images, not in-cell coords."""
+    from ase.build import fcc111
+    from ase.geometry import find_mic
+
+    from metalsurfer.placement.dissociative import clear_dissociative_pair_caches
+
+    clear_dissociative_pair_caches()
+    clear_site_caches()
+    slab = fcc111("Pt", (3, 3, 3), vacuum=10.0)
+    slab.set_pbc([True, True, False])
+    config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
+    pairs = _get_dissociative_site_pairs(slab, config)
+    assert pairs, "Pt 3x3 must expose dissociative hollow pairs"
+
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    wrap_pairs = []
+    for idx, pair in enumerate(pairs):
+        xyz1 = np.asarray(pair.xyz1, dtype=float)
+        xyz2 = np.asarray(pair.xyz2, dtype=float)
+        cart = float(np.linalg.norm(xyz2 - xyz1))
+        _, mic_d = find_mic((xyz2 - xyz1).reshape(1, 3), cell, pbc=[True, True, False])
+        mic = float(mic_d[0])
+        # Stored coords should already realize MIC in Cartesian space.
+        assert cart == pytest.approx(mic, abs=1e-6), (
+            f"pair {idx}: stored Cartesian sep {cart:.3f} != MIC {mic:.3f}"
+        )
+        a_len = float(np.linalg.norm(cell[0]))
+        if mic < 0.6 * a_len:
+            wrap_pairs.append((idx, pair, mic))
+
+    assert wrap_pairs, "expected at least one MIC wrap pair on Pt 3x3"
+
+    h2 = make_h2()
+    for idx, pair, mic_sep in wrap_pairs[:3]:
+        spec = dissoc_placement_spec(site_index=idx)
+        result, reason = generate_placement_from_spec_with_reason(
+            spec, [h2], slab, config
+        )
+        assert result is not None, reason
+        placed, descriptor = result
+        pos = placed.get_positions()
+        cart_hh = float(np.linalg.norm(pos[1] - pos[0]))
+        assert cart_hh == pytest.approx(mic_sep, abs=0.35), (
+            f"placed H–H Cartesian {cart_hh:.3f} should match MIC pair {mic_sep:.3f}, "
+            "not the wrapped in-cell gap"
+        )
+        # Centroid must sit near the midpoint of the unfolded sites, not mid-cell void.
+        mid = 0.5 * (np.asarray(pair.xyz1) + np.asarray(pair.xyz2))
+        centroid = np.array(
+            [descriptor.x_abs, descriptor.y_abs, descriptor.z_abs], dtype=float
+        )
+        assert float(np.linalg.norm(centroid[:2] - mid[:2])) < 0.5
+
+
 def test_dissociative_placement_on_slab_separates_and_clears_surface():
     """Dissociative H2 on a slab must land on a hollow pair with physical clearance."""
     from ase.geometry import find_mic
@@ -453,3 +508,35 @@ def test_dissociative_pair_cache_key_includes_voronoi_params():
     assert _dissociative_pair_cache_key(slab, base) != _dissociative_pair_cache_key(
         slab, alt
     )
+
+
+def test_dissociative_pair_cache_ignores_site_context_calls():
+    """site_context catalogs must not poison the clean-slab process cache."""
+    from metalsurfer.placement.dissociative import clear_dissociative_pair_caches
+    from metalsurfer.placement.site_context import SiteContext
+
+    clear_dissociative_pair_caches()
+    clear_site_caches()
+    slab = make_slab()
+    config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
+
+    lonely = Site(
+        xyz=np.array([1.0, 1.0, 6.0]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_type="hollow",
+        slab_indices=(0,),
+        material_type="slab",
+        site_source="test",
+        env_fingerprint=((), "hollow"),
+    )
+    ctx = SiteContext(
+        sites=[lonely],
+        use_sites=True,
+        source="test",
+        raw_unclustered=[lonely],
+    )
+    empty = _get_dissociative_site_pairs(slab, config, site_context=ctx)
+    assert empty == []
+
+    full = _get_dissociative_site_pairs(slab, config)
+    assert full, "clean-slab path must still discover pairs after a site_context call"

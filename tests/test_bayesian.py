@@ -639,12 +639,38 @@ class TestTransferSmoke:
         assert weights[0] > weights[1] > weights[2]
 
     def test_prior_placement_downweight_prefers_far_sites(self):
+        priors = pd.DataFrame(
+            [
+                {"x": 0.05, "y": 0.0, "z": 0.0},
+                {"x": 5.0, "y": 0.0, "z": 0.0},
+                {"x": 2.0, "y": 1.0, "z": 0.0},
+            ]
+        )
         placement = pd.DataFrame([{"x": 0.0, "y": 0.0, "z": 0.0}])
-        near = pd.DataFrame([{"x": 0.05, "y": 0.0, "z": 0.0}])
-        far = pd.DataFrame([{"x": 5.0, "y": 0.0, "z": 0.0}])
-        near_w = prior_placement_downweight(near, placement, lengthscale=0.1, floor=0.0)
-        far_w = prior_placement_downweight(far, placement, lengthscale=1.0, floor=0.0)
-        assert near_w[0] < far_w[0]
+        weights = prior_placement_downweight(
+            priors, placement, lengthscale=1.0, floor=0.0
+        )
+        assert weights[0] < weights[1]
+
+    def test_prior_placement_downweight_uses_all_committed_rows(self):
+        placements = pd.DataFrame(
+            [
+                {"x": 0.0, "y": 0.0, "z": 0.0},
+                {"x": 10.0, "y": 0.0, "z": 0.0},
+            ]
+        )
+        probes = pd.DataFrame(
+            [
+                {"x": 0.05, "y": 0.0, "z": 0.0},
+                {"x": 10.05, "y": 0.0, "z": 0.0},
+                {"x": 5.0, "y": 5.0, "z": 0.0},
+            ]
+        )
+        weights = prior_placement_downweight(
+            probes, placements, lengthscale=1.0, floor=0.0
+        )
+        assert weights[0] < weights[2]
+        assert weights[1] < weights[2]
 
     def test_prior_similarity_to_current_prefers_nearby(self):
         X, _ = _make_synthetic_training_data(5)
@@ -666,6 +692,47 @@ class TestTransferSmoke:
         near_w = prior_proximity_weights(near, X.iloc[[0]], lengthscale=0.02, floor=0.0)
         far_w = prior_proximity_weights(far, X.iloc[:1], lengthscale=10.0, floor=0.0)
         assert near_w[0] < far_w[0]
+
+    def test_occupancy_fallback_downweights_clustered_priors(self):
+        """Fallback occupancy is 1 - proximity(exclude_self), matching build_transfer."""
+        clustered = pd.DataFrame(
+            [
+                {"x": 0.0, "y": 0.0, "z": 0.0},
+                {"x": 0.1, "y": 0.0, "z": 0.0},
+                {"x": 10.0, "y": 0.0, "z": 0.0},
+            ]
+        )
+        # prior_placement_X is None → invert proximity to other prior rows.
+        occupancy = np.maximum(
+            0.0,
+            1.0
+            - prior_proximity_weights(clustered, clustered, lengthscale=1.0, floor=0.0),
+        )
+        assert occupancy[0] < occupancy[2]
+        assert occupancy[1] < occupancy[2]
+        assert occupancy[2] > occupancy[0] + 0.3
+
+    def test_transfer_similarity_ignores_conformer_index_vs_translation(self):
+        """Same pose, Δconformer must not look as far as a multi-Å translation."""
+        base = {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 2.0,
+            "conformer_index": 0.0,
+            "quat_w": 1.0,
+            "quat_x": 0.0,
+            "quat_y": 0.0,
+            "quat_z": 0.0,
+        }
+        current = pd.DataFrame([base])
+        same_pose_diff_conf = pd.DataFrame([{**base, "conformer_index": 5.0}])
+        translated = pd.DataFrame([{**base, "x": 5.0}])
+        sim_conf = prior_similarity_to_current(
+            same_pose_diff_conf, current, lengthscale=4.0
+        )
+        sim_trans = prior_similarity_to_current(translated, current, lengthscale=4.0)
+        assert sim_conf[0] > sim_trans[0]
+        assert sim_conf[0] > 0.9
 
 
 class TestTransferTolerance:
@@ -723,6 +790,8 @@ class TestTransferTolerance:
         )
         assert result.transfer_mae_delta > 0.05
         assert result.transfer_bad_rounds == 1
+        assert result.transfer_used_this_round is False
+        assert result.transfer_disabled is False
 
 
 # ---------------------------------------------------------------------------
@@ -999,3 +1068,32 @@ def test_transfer_gate_accepts_a_consistent_prior():
     )
     assert not result.transfer_disabled
     assert result.transfer_used_this_round
+
+
+def test_bo_rng_seed_decorrelates_by_slab_atom_count():
+    """Coverage growth must change the exploration RNG stream (L5)."""
+    seed = 42
+    rng_a = np.random.RandomState(int(seed + 1_000_003 * 36) % (2**31))
+    rng_b = np.random.RandomState(int(seed + 1_000_003 * 39) % (2**31))
+    draw_a = rng_a.choice([0, 1, 2, 3, 4], size=2, replace=False).tolist()
+    draw_b = rng_b.choice([0, 1, 2, 3, 4], size=2, replace=False).tolist()
+    assert draw_a != draw_b
+
+
+def test_cumulative_refit_transfer_weight_share_from_weights():
+    """Prior weight fraction matches transfer_weight_share formula (L6)."""
+    X_prior = _feature_frame([0.0, 1.0, 2.0, 3.0])
+    y_prior = np.array([0.0, 1.0, 2.0, 3.0])
+    X_current = _feature_frame([10.0, 11.0])
+    y_current = np.array([10.0, 11.0])
+    _, _, refit_weights = cumulative_refit_training_set(
+        X_prior,
+        y_prior,
+        X_current,
+        y_current,
+        weight_cap=0.35,
+        proximity_lengthscale=1.0,
+    )
+    n_prior = len(X_prior)
+    share = float(np.sum(refit_weights[:n_prior]) / np.sum(refit_weights))
+    assert share == pytest.approx(0.35, abs=1e-6)

@@ -264,11 +264,20 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
             "placement_retry_oversample_max must be >= 1.0, "
             f"got {root.placement_retry_oversample_max}"
         )
+    if isinstance(root.placement_materialize_workers, bool) or not isinstance(
+        root.placement_materialize_workers, int
+    ):
+        raise ValueError(
+            "placement_materialize_workers must be a nonzero integer, "
+            f"got {root.placement_materialize_workers!r}"
+        )
     if root.placement_materialize_workers == 0:
         raise ValueError(
             "placement_materialize_workers must be != 0 "
             "(positive count, or joblib-style negative: -1=all CPUs, -2=all but one)"
         )
+    if isinstance(root.seed, bool) or not isinstance(root.seed, int):
+        raise ValueError(f"seed must be an integer, got {root.seed!r}")
 
     for pos_name, pos_value in (
         ("min_initial_distance", root.min_initial_distance),
@@ -304,6 +313,23 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
             "min_initial_distance must be <= max_initial_distance, "
             f"got min={root.min_initial_distance}, max={root.max_initial_distance}"
         )
+    if root.strict_initial_placement or root.require_multiple_contact:
+        floor = float(root.min_initial_distance)
+        max_approach = float(root.max_closest_approach)
+        contact_thresh = float(root.contact_distance_threshold)
+        if (
+            max_approach < floor
+            or contact_thresh < floor
+            or max_approach < contact_thresh
+        ):
+            raise ValueError(
+                "When strict_initial_placement or require_multiple_contact is enabled, "
+                "require max_closest_approach >= contact_distance_threshold >= "
+                "min_initial_distance (empty admissible contact window otherwise); "
+                f"got max_closest_approach={root.max_closest_approach}, "
+                f"contact_distance_threshold={root.contact_distance_threshold}, "
+                f"min_initial_distance={root.min_initial_distance}"
+            )
     if not 0.0 <= root.flat_aromatic_parallel_fraction <= 1.0:
         raise ValueError(
             "flat_aromatic_parallel_fraction must be in [0.0, 1.0], "

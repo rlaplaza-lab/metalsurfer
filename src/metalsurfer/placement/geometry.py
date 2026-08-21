@@ -51,6 +51,11 @@ logger = logging.getLogger(__name__)
 def normalize_quaternion(quat: np.ndarray) -> np.ndarray:
     """Return normalized quaternion [w, x, y, z] with canonical sign.
 
+    Antipodal quaternions ``q`` and ``-q`` represent the same rotation. After
+    unit-norm, the sign is chosen so ``w > 0``, or when ``w == 0`` so the first
+    non-zero of ``(x, y, z)`` is positive (lexicographic). Signed zeros are
+    collapsed so the canonical form is hash-stable.
+
     Parameters
     ----------
     quat
@@ -62,9 +67,28 @@ def normalize_quaternion(quat: np.ndarray) -> np.ndarray:
         q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
     else:
         q = np.asarray(q / nrm, dtype=float)
-    if q[0] < 0.0:
+    if q[0] < 0.0 or (q[0] == 0.0 and (q[1], q[2], q[3]) < (0.0, 0.0, 0.0)):
         q = -q
-    return q
+    return np.where(q == 0.0, 0.0, q)
+
+
+def normalize_quaternions(quats: np.ndarray) -> np.ndarray:
+    """Normalize a batch of quaternions to unit length with canonical sign.
+
+    Parameters
+    ----------
+    quats
+        Array of shape ``(n, 4)`` with rows ``[w, x, y, z]``.
+    """
+    arr = np.asarray(quats, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] != 4:
+        raise ValueError(f"quats must have shape (n, 4), got {arr.shape}")
+    if arr.shape[0] == 0:
+        return arr.copy()
+    out = np.empty_like(arr)
+    for i in range(arr.shape[0]):
+        out[i] = normalize_quaternion(arr[i])
+    return out
 
 
 def quaternion_to_rotation_matrix(quat: np.ndarray) -> np.ndarray:
@@ -436,7 +460,7 @@ def _surface_aligned_rotation(
         if nv > _BINDER_VECTOR_MIN_NORM:
             best_vec = v / nv
             dot = np.dot(best_vec, normal)
-            if dot < _BINDER_ALIGNMENT_TARGET_DOT:
+            if dot > -_BINDER_ALIGNMENT_TARGET_DOT:
                 R = _rotation_to_align_vector_to_target(-best_vec, normal)
                 pos = (R @ pos.T).T
     else:
@@ -879,15 +903,12 @@ def check_adsorbate_separation(
         return True, float("inf")
 
     new_pos = new_adsorbate.get_positions()
-    pbc_requested = pbc is not None and any(pbc)
-    if pbc_requested:
+    if pbc is not None and any(pbc):
         if cell is None or not cell_has_volume(cell):
             raise ValueError(
                 "cell with non-zero volume must be provided when pbc is requested; "
                 "pass slab/cluster/porous cell explicitly"
             )
-        if pbc is None:
-            raise ValueError("pbc must be set when pbc is requested")
         cell_arr = np.asarray(cell, dtype=float)
         pbc_list = list(pbc)
     elif cell is not None and cell_has_volume(cell) and pbc is not None:

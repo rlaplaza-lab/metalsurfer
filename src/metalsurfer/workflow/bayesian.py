@@ -6,6 +6,7 @@ from typing import cast
 import numpy as np
 import pandas as pd
 from ase import Atoms
+from sklearn.preprocessing import StandardScaler
 
 from ..config import (
     BO_TRANSFER_CAPABLE_SURROGATES,
@@ -50,7 +51,7 @@ def _train_surrogate_for_bo(
     y: np.ndarray,
     *,
     config: AdsorptionConfig,
-    sample_weight: np.ndarray | None,
+    sample_weight: np.ndarray | None = None,
 ):
     """Fit BO surrogate. Per-sample weights for transfer-capable surrogates."""
     if (
@@ -85,10 +86,11 @@ def process_molecule_bayesian(
     slab_energy_override: float | None = None,
     symmetry_broken: bool = False,
     bo_step_memory_in: BOStepMemory | None = None,
-    bo_prior_step_memory: BOStepMemory | None = None,
+    occupancy_placement_X: list[dict[str, float]] | None = None,
     conformers: list[Atoms] | None = None,
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
+    saturation_reuse: bool = True,
 ) -> MoleculeScreenOutcome:
     """Bayesian-optimisation-guided placement screening for one molecule.
 
@@ -120,14 +122,18 @@ def process_molecule_bayesian(
         Whether symmetry is broken.
     bo_step_memory_in
         Prior BO step memory for transfer learning.
-    bo_prior_step_memory
-        Memory from the immediately preceding step.
+    occupancy_placement_X
+        Feature rows of placements already committed on the slab; used as
+        occupancy anchors for transfer down-weighting.
     conformers
         Pre-generated conformers (optional).
     conformer_energies
         Energies aligned with conformers (optional).
     skip_workload_autotune
         Whether to skip workload autotuning.
+    saturation_reuse
+        Reuse the slab+adsorbate autobatcher across acquisition batches
+        (default True; same molecule/slab for the whole call).
     """
     if config is None:
         config = AdsorptionConfig()
@@ -253,6 +259,10 @@ def process_molecule_bayesian(
         return _bail_outcome(
             "placement", n_candidate_specs=len(all_specs), n_valid_pool=0
         )
+    # Standardize the fixed candidate pool once for diversity across rounds.
+    scaled_candidate_features = StandardScaler().fit_transform(
+        candidate_features.to_numpy(dtype=float)
+    )
     evaluated_pool_positions: set[int] = set()
     all_results: list[ScreeningResult] = []
     observed_X_rows: list[dict[str, float]] = []
@@ -262,7 +272,10 @@ def process_molecule_bayesian(
     best_energy = float("inf")
     best_X_row: dict[str, float] | None = None
     bo_failure_events: list[PlacementFailureEvent] = []
-    rng = np.random.RandomState(config.seed)
+    # Coverage-decorrelated seed: atom count grows across saturation steps.
+    rng = np.random.RandomState(
+        int(config.seed + 1_000_003 * len(slab.atoms)) % (2**31)
+    )
     transfer_disabled = False
     transfer_disabled_reason: str | None = None
     transfer_bad_rounds = 0
@@ -293,13 +306,15 @@ def process_molecule_bayesian(
         return float(config.bo.failure_penalty_default)
 
     def _append_penalty_observation(record, stage: str, reason: str) -> None:
+        penalty = _failure_penalty(stage, reason)
         record.converged = False
         record.failure_stage = stage
         record.failure_reason = reason
         record.is_penalty_label = True
         record.label_source = "bo_failure_penalty"
+        record.energy_adsorption = penalty
         observed_X_rows.append(extract_features(record))
-        observed_y.append(_failure_penalty(stage, reason))
+        observed_y.append(penalty)
         bo_negative_records.append(record)
 
     def _unevaluated() -> list[int]:
@@ -347,6 +362,7 @@ def process_molecule_bayesian(
             materialization_cache=materialization_cache,
             backfill_specs=backfill_specs,
             n_target=n_target,
+            saturation_reuse=saturation_reuse,
         )
 
         used_positions = list(pool_positions) + backfill_positions[:n_backfill_used]
@@ -420,10 +436,6 @@ def process_molecule_bayesian(
 
     batches_run = 0
     while batches_run < config.bo.total_budget:
-        remaining_batches = config.bo.total_budget - batches_run
-        if remaining_batches <= 0:
-            break
-
         if len(observed_X_rows) < 3:
             unevaluated = _unevaluated()
             if not unevaluated:
@@ -435,9 +447,6 @@ def process_molecule_bayesian(
         else:
             X_current = pd.DataFrame(observed_X_rows)
             y_current = np.array(observed_y)
-            X_train = X_current
-            y_train = y_current
-            sample_weight: np.ndarray | None = None
             surrogate = None
 
             transfer_memory = bo_step_memory_in
@@ -481,18 +490,20 @@ def process_molecule_bayesian(
                     config=config,
                     sample_weight=refit_weights,
                 )
+                n_prior = len(X_prior)
+                prior_weight_sum = float(np.sum(refit_weights[:n_prior]))
+                total_weight_sum = float(np.sum(refit_weights))
+                transfer_weight_share = (
+                    prior_weight_sum / total_weight_sum
+                    if total_weight_sum > 0.0
+                    else 0.0
+                )
                 transfer_used_rounds += 1
             elif can_try_weighted:
                 if transfer_memory is None:
                     raise ValueError(
                         "transfer_memory is required for weighted transfer"
                     )
-                prior_placement = None
-                if (
-                    bo_prior_step_memory is not None
-                    and bo_prior_step_memory.best_X_row is not None
-                ):
-                    prior_placement = bo_prior_step_memory.best_X_row
                 transfer_result = build_transfer_surrogate(
                     X_current,
                     y_current,
@@ -511,7 +522,7 @@ def process_molecule_bayesian(
                     proximity_floor=config.bo.transfer.proximity_floor,
                     prior_step_ages=transfer_memory.step_ages,
                     recency_lengthscale=config.bo.transfer.recency_lengthscale,
-                    prior_placement_X=prior_placement,
+                    prior_placement_X=occupancy_placement_X,
                     occupancy_lengthscale=config.bo.transfer.occupancy_lengthscale,
                     occupancy_floor=config.bo.transfer.occupancy_floor,
                 )
@@ -527,10 +538,9 @@ def process_molecule_bayesian(
 
             if surrogate is None or transfer_disabled:
                 surrogate = _train_surrogate_for_bo(
-                    X_train,
-                    y_train,
+                    X_current,
+                    y_current,
                     config=config,
-                    sample_weight=sample_weight,
                 )
 
             unevaluated = _unevaluated()
@@ -554,6 +564,7 @@ def process_molecule_bayesian(
                 evaluated_indices=evaluated_pool_positions,
                 acquisition=acquisition,
                 f_best=f_best,
+                scaled_features=scaled_candidate_features,
             )
             # Random exploration only while transfer learning is active.
             # Pure BO screening keeps the full acquisition batch.
@@ -568,16 +579,20 @@ def process_molecule_bayesian(
                     p for p in unevaluated if p not in next_positions
                 ]
                 if available_for_random:
+                    # Leave ≥1 acquisition pick (batch_size==1 must not go fully random).
                     explore_n = min(
-                        explore_n, len(available_for_random), len(next_positions)
+                        explore_n,
+                        len(available_for_random),
+                        max(0, len(next_positions) - 1),
                     )
-                    random_positions = rng.choice(
-                        available_for_random,
-                        size=explore_n,
-                        replace=False,
-                    ).tolist()
-                    next_positions[-explore_n:] = random_positions
-                    next_positions = list(dict.fromkeys(next_positions))
+                    if explore_n > 0:
+                        random_positions = rng.choice(
+                            available_for_random,
+                            size=explore_n,
+                            replace=False,
+                        ).tolist()
+                        next_positions[-explore_n:] = random_positions
+                        next_positions = list(dict.fromkeys(next_positions))
 
         if not next_positions:
             logger.info("BO: no more candidates to evaluate")

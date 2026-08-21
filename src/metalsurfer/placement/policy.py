@@ -29,6 +29,16 @@ logger = logging.getLogger(__name__)
 _K_B_EV_PER_K: float = 8.617e-5
 
 
+def _unravel_product_index(flat: int, shape: tuple[int, ...]) -> tuple[int, ...]:
+    """Decode a flat index into ``itertools.product`` coordinates (last axis fastest)."""
+    coords: list[int] = []
+    rem = int(flat)
+    for size in reversed(shape):
+        coords.append(rem % size)
+        rem //= size
+    return tuple(reversed(coords))
+
+
 def max_batch_placement_specs(
     *,
     n_conformers: int,
@@ -66,13 +76,17 @@ def max_batch_placement_specs(
         return min(n_hollow_pairs * len(_Z_FRACTIONS), _GRID_BUILD_CAP)
 
     if flat_aromatic:
+        # At tilt=0, azimuth and azimuth_in_plane both rotate about the surface
+        # normal and commute, so only one in-plane angle is kept (aip=0).
+        tilt_aip_pairs = sum(
+            1 if float(tl) == 0.0 else len(_AZIMUTH_IN_PLANE) for tl in _TILT_PARALLEL
+        )
         parallel = (
             n_conformers
             * 2
-            * len(_TILT_PARALLEL)
+            * tilt_aip_pairs
             * len(_AZIMUTH)
             * len(_Z_FRACTIONS)
-            * len(_AZIMUTH_IN_PLANE)
             * n_sites
         )
         en_down = (
@@ -536,29 +550,36 @@ def build_batch_placement_specs(
         # conformer axis must vary fastest under weighting: with it outermost an
         # early cap would truncate the working set to the first conformer(s) and
         # leave the proportional allocation nothing to allocate over.
+        def _parallel_aip_values(tilt: float) -> tuple[float, ...]:
+            # At tilt=0, aip is redundant with azimuth (see count path above).
+            return (0.0,) if float(tilt) == 0.0 else _AZIMUTH_IN_PLANE
+
         parallel_axes: Iterable[tuple[Any, ...]]
         if conformer_weights is None:
-            parallel_axes = itertools.product(
-                range(n_conformers),
-                [False, True],
-                _TILT_PARALLEL,
-                _AZIMUTH,
-                _Z_FRACTIONS,
-                _AZIMUTH_IN_PLANE,
-                normalized_sites,
-            )
-        else:
             parallel_axes = (
                 (ci, ff, tl, azv, zfv, aip, si)
-                for ff, tl, azv, zfv, aip, si, ci in itertools.product(
+                for ci, ff, tl, azv, zfv, si in itertools.product(
+                    range(n_conformers),
                     [False, True],
                     _TILT_PARALLEL,
                     _AZIMUTH,
                     _Z_FRACTIONS,
-                    _AZIMUTH_IN_PLANE,
+                    normalized_sites,
+                )
+                for aip in _parallel_aip_values(tl)
+            )
+        else:
+            parallel_axes = (
+                (ci, ff, tl, azv, zfv, aip, si)
+                for ff, tl, azv, zfv, si, ci in itertools.product(
+                    [False, True],
+                    _TILT_PARALLEL,
+                    _AZIMUTH,
+                    _Z_FRACTIONS,
                     normalized_sites,
                     range(n_conformers),
                 )
+                for aip in _parallel_aip_values(tl)
             )
         parallel_items = (
             _fields(
@@ -632,24 +653,42 @@ def build_batch_placement_specs(
         specs = par_specs + en_specs
     else:
         orient = "vertical" if shape == "linear" else "round"
-        items = (
-            _fields(
-                conformer_index=ci,
-                orientation_type=orient,
-                site_index=si,
-                tilt_deg=tl,
-                azimuth_deg=azv,
-                z_fraction=zfv,
-            )
-            for ci, tl, azv, zfv, si in itertools.product(
-                range(n_conformers),
-                _TILT_FULL,
-                _AZIMUTH,
-                _Z_FRACTIONS,
-                normalized_sites,
-            )
+        site_list = list(normalized_sites)
+        n_sites = len(site_list)
+        n_tilt = len(_TILT_FULL)
+        n_az = len(_AZIMUTH)
+        n_z = len(_Z_FRACTIONS)
+        n_total = n_conformers * n_tilt * n_az * n_z * n_sites
+        working_cap = min(
+            _GRID_BUILD_CAP,
+            max(n_desired * _EARLY_CAP_WORKING_SET_MULTIPLIER, n_desired),
+            n_total if n_total > 0 else 0,
         )
-        specs = _collect(items, cap=_GRID_BUILD_CAP)
+        # Uniform sample avoids early-cap bias toward the product prefix.
+        rng = random.Random(seed)
+        if n_total <= 0:
+            flat_indices: list[int] = []
+        elif working_cap >= n_total:
+            flat_indices = list(range(n_total))
+        else:
+            flat_indices = rng.sample(range(n_total), working_cap)
+
+        # Decode product(ci, tl, az, z, si) with si fastest.
+        shape_axes = (n_conformers, n_tilt, n_az, n_z, n_sites)
+
+        def _else_items():
+            for flat in flat_indices:
+                ci, tl_i, az_i, z_i, si_i = _unravel_product_index(flat, shape_axes)
+                yield _fields(
+                    conformer_index=ci,
+                    orientation_type=orient,
+                    site_index=site_list[si_i],
+                    tilt_deg=_TILT_FULL[tl_i],
+                    azimuth_deg=_AZIMUTH[az_i],
+                    z_fraction=_Z_FRACTIONS[z_i],
+                )
+
+        specs = _collect(_else_items(), cap=working_cap)
         if len(specs) > n_desired:
             specs = _subsample(specs, n_desired, seed)
 

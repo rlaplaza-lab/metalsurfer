@@ -58,6 +58,19 @@ def test_frozen_indices_by_symbol():
     assert all(ci not in frozen for ci in cu_indices)
 
 
+def test_frozen_indices_empty_symbols_means_freeze_all():
+    """YAML/API ``freeze_symbols=[]`` must not silently freeze nothing."""
+    slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
+    frozen_empty = compute_frozen_indices(
+        slab, relax_top_layer=False, freeze_symbols=[]
+    )
+    frozen_none = compute_frozen_indices(
+        slab, relax_top_layer=False, freeze_symbols=None
+    )
+    assert frozen_empty == list(range(len(slab)))
+    assert frozen_empty == frozen_none
+
+
 def test_apply_surface_constraints_round_trip():
     slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
     slab.set_constraint()

@@ -62,6 +62,26 @@ def setup_single_model(  # pragma: no cover - requires MLIP stack / GPU
     return calculator, ts_model
 
 
+def _clip_frozen_indices_to_slab(
+    frozen_indices: list[int],
+    *,
+    slab_size: int,
+) -> list[int]:
+    """Drop freeze indices that fall outside the combined-system slab prefix."""
+    if not frozen_indices:
+        return []
+    kept = [i for i in frozen_indices if 0 <= i < slab_size]
+    dropped = len(frozen_indices) - len(kept)
+    if dropped:
+        logger.warning(
+            "Dropped %d frozen index(es) >= slab_size=%d (max was %d)",
+            dropped,
+            slab_size,
+            max(frozen_indices),
+        )
+    return kept
+
+
 def _make_state_with_frozen_constraint(  # pragma: no cover - requires MLIP stack / GPU
     atoms: Atoms,
     frozen_indices: list[int],
@@ -247,25 +267,36 @@ def _split_forces_by_system(
     ``(n_atoms_total, 3)`` tensor for the whole concatenated batch. Indexing it
     with a system index silently yields the force vector of one atom, which
     makes downstream per-adsorbate force-convergence checks operate on a
-    ``(3,)`` array and never fire. Split on ``system_idx`` instead.
+    ``(3,)`` array and never fire. Prefer ``system_idx`` when present; otherwise
+    fall back to a contiguous split by *atom_counts* (original input order).
 
-    Returns ``None`` when forces (or the system index) are unavailable, and
-    raises ``RuntimeError`` if the split does not reproduce *atom_counts*.
+    Returns ``None`` when forces are unavailable or cannot be aligned, and
+    raises ``RuntimeError`` if a ``system_idx`` split does not reproduce
+    *atom_counts*.
     """
     forces = getattr(batch, "forces", None)
     if forces is None:
         return None
     forces_np = np.asarray(forces.detach().cpu().numpy(), dtype=float)
+    if forces_np.ndim != 2 or forces_np.shape[1] != 3:
+        return None
+    expected_atoms = int(sum(atom_counts))
+    if forces_np.shape[0] != expected_atoms:
+        return None
+
     system_idx = getattr(batch, "system_idx", None)
     if system_idx is None:
-        return None
-    idx_np = np.asarray(system_idx.detach().cpu().numpy()).reshape(-1)
-    if forces_np.ndim != 2 or forces_np.shape[0] != idx_np.shape[0]:
-        raise RuntimeError(
-            "Batched forces do not align with the per-atom system index: "
-            f"forces shape {forces_np.shape}, system_idx length {idx_np.shape[0]}."
-        )
-    per_system = [forces_np[idx_np == k] for k in range(n_systems)]
+        splits = np.cumsum(atom_counts[:-1]).tolist() if len(atom_counts) > 1 else []
+        per_system = list(np.split(forces_np, splits))
+    else:
+        idx_np = np.asarray(system_idx.detach().cpu().numpy()).reshape(-1)
+        if forces_np.shape[0] != idx_np.shape[0]:
+            raise RuntimeError(
+                "Batched forces do not align with the per-atom system index: "
+                f"forces shape {forces_np.shape}, system_idx length {idx_np.shape[0]}."
+            )
+        per_system = [forces_np[idx_np == k] for k in range(n_systems)]
+
     for k, (got, expected) in enumerate(zip(per_system, atom_counts, strict=True)):
         if got.shape != (expected, 3):
             raise RuntimeError(
@@ -459,13 +490,10 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             ref_len,
             slab_size,
         )
-    frozen_indices = frozen_indices_from_constraints(slab_for_frozen)
-    if frozen_indices and max(frozen_indices) >= ref_len:
-        logger.warning(
-            "Frozen index %d exceeds freeze reference length %d",
-            max(frozen_indices),
-            ref_len,
-        )
+    frozen_indices = _clip_frozen_indices_to_slab(
+        frozen_indices_from_constraints(slab_for_frozen),
+        slab_size=slab_size,
+    )
 
     logger.info(
         "Batched optimisation of %d systems (slab=%d atoms, freeze_ref=%d, frozen=%d)",
@@ -511,7 +539,6 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
             _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
         )
-        _maybe_clear_cuda_cache(ts_model)
         use_saturation_reuse = saturation_reuse and config.saturation_autobatcher_reuse
         # TorchSim memory probing is CUDA-only; CPU uses a single sequential batch.
         use_autobatcher = str(model_device).lower().startswith("cuda")
@@ -590,20 +617,42 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         forces_list = _split_forces_by_system(
             batch, n_returned, [len(a) for a in result]
         )
+        out: list[Atoms | None] = []
         for i, atoms in enumerate(result):
-            calc = TorchSimCalculator(ts_model)
+            energy_val: float | None = None
             if energies is not None and i < len(energies):
-                calc.results["energy"] = float(
-                    energies[i].detach().cpu().numpy().squeeze()
+                energy_val = float(energies[i].detach().cpu().numpy().squeeze())
+            if energy_val is None or not np.isfinite(energy_val):
+                logger.warning(
+                    "Batched optimisation system %d returned non-finite energy %s; "
+                    "dropping candidate",
+                    i,
+                    energy_val,
                 )
-            if forces_list is not None:
-                calc.results["forces"] = forces_list[i]
+                out.append(None)
+                continue
+            forces_i = forces_list[i] if forces_list is not None else None
+            if forces_i is not None and not np.all(np.isfinite(forces_i)):
+                logger.warning(
+                    "Batched optimisation system %d returned non-finite forces; "
+                    "dropping candidate",
+                    i,
+                )
+                out.append(None)
+                continue
+            calc = TorchSimCalculator(ts_model)
+            calc.results["energy"] = energy_val
+            if forces_i is not None:
+                calc.results["forces"] = forces_i
             calc._last_positions_hash = _positions_cell_hash(atoms)
             atoms.calc = calc
-        logger.info("Autobatcher optimisation succeeded: %d systems", n_returned)
-        return result
+            out.append(atoms)
+        n_ok = sum(1 for a in out if a is not None)
+        logger.info(
+            "Autobatcher optimisation succeeded: %d/%d systems",
+            n_ok,
+            n_returned,
+        )
+        return out
     finally:
-        if saturation_reuse and config.saturation_autobatcher_reuse:
-            clear_autobatcher_cache(max_n_atoms_threshold=max_n_atoms)
-        else:
-            clear_autobatcher_cache()
+        clear_autobatcher_cache(max_n_atoms_threshold=max_n_atoms)

@@ -88,6 +88,7 @@ def clear_autobatcher_cache(
     max_n_atoms_threshold: int | None = None,
     *,
     clear_capacity: bool = False,
+    drain_cuda: bool = False,
 ) -> None:
     """Evict cached autobatchers to free GPU memory before larger runs.
 
@@ -106,12 +107,18 @@ def clear_autobatcher_cache(
     swapping ``ts_model``), where the estimate is no longer valid or no longer
     needed. It is ignored when *max_n_atoms_threshold* is set.
 
+    CUDA ``empty_cache`` / sync / ``ipc_collect`` run only when *drain_cuda* is
+    True or *clear_capacity* is True (stage boundaries / OOM recovery). Ordinary
+    per-batch eviction skips the drain to avoid allocator churn on the hot path.
+
     Parameters
     ----------
     max_n_atoms_threshold
         Evict only entries with ``max_n_atoms`` below this value.
     clear_capacity
         Also clear the parallel-capacity cache.
+    drain_cuda
+        Synchronize and empty the CUDA caching allocator after eviction.
     """
     evicted = False
     if max_n_atoms_threshold is None:
@@ -121,7 +128,9 @@ def clear_autobatcher_cache(
                 _PARALLEL_CAPACITY_CACHE.clear()
         evicted = True
         logger.debug(
-            "Cleared entire autobatcher cache (clear_capacity=%s)", clear_capacity
+            "Cleared entire autobatcher cache (clear_capacity=%s, drain_cuda=%s)",
+            clear_capacity,
+            drain_cuda,
         )
     else:
         with _CACHE_LOCK:
@@ -137,13 +146,14 @@ def clear_autobatcher_cache(
             )
     if not evicted:
         return
+    if not (drain_cuda or clear_capacity):
+        return
+    for _ in range(3):
+        gc.collect()
     torch = _deps.torch
     if torch is not None and torch.cuda.is_available():  # pragma: no cover - needs GPU
         with contextlib.suppress(RuntimeError):
             torch.cuda.synchronize()
-    for _ in range(3):
-        gc.collect()
-    if torch is not None and torch.cuda.is_available():  # pragma: no cover - needs GPU
         with contextlib.suppress(RuntimeError):
             torch.cuda.empty_cache()
         ipc = getattr(torch.cuda, "ipc_collect", None)

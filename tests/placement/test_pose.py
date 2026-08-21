@@ -83,7 +83,8 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
 
     config = AdsorptionConfig(
         strict_initial_placement=True,
-        max_closest_approach=1.5,
+        max_closest_approach=3.0,
+        contact_distance_threshold=2.5,
         min_contact_atoms=3,  # Require 3 contacting atoms
     )
 
@@ -208,6 +209,8 @@ def test_strict_initial_placement_e2e_reason():
         num_placements=12,
         seed=1,
         strict_initial_placement=True,
+        min_initial_distance=0.3,
+        contact_distance_threshold=0.4,
         max_closest_approach=0.5,
         min_contact_atoms=1,
     )

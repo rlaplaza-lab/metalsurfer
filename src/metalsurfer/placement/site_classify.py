@@ -183,9 +183,23 @@ def _build_classification_context(
     )
 
     if n_verts > 0 and delaunay is None:
-        dists_raw, idx_raw = local_tree.query(vertices, k=k_class)
-        class_dists = np.asarray(dists_raw, dtype=float)
-        class_idx = np.asarray(idx_raw, dtype=int)
+        # MIC neighbours when PBC is on (porous / slab distance_ratio).
+        use_periodic = bool(np.any(pbc_arr)) and cell_has_volume(cell)
+        if use_periodic:
+            d_knn, _ = local_tree.query(vertices, k=k_class)
+            d_arr = np.asarray(d_knn, dtype=float)
+            if d_arr.ndim == 1:
+                d_arr = d_arr.reshape(-1, 1)
+            margin = float(np.max(d_arr[:, -1])) if d_arr.size else 0.0
+            images = _build_periodic_images(positions, cell, pbc_arr, margin=margin)
+            image_tree = KDTree(images)
+            dists_raw, idx_raw = image_tree.query(vertices, k=min(k_class, len(images)))
+            class_dists = np.asarray(dists_raw, dtype=float)
+            class_idx = np.asarray(idx_raw, dtype=int) % len(positions)
+        else:
+            dists_raw, idx_raw = local_tree.query(vertices, k=k_class)
+            class_dists = np.asarray(dists_raw, dtype=float)
+            class_idx = np.asarray(idx_raw, dtype=int)
         if class_dists.ndim == 1:
             class_dists = class_dists.reshape(-1, 1)
             class_idx = class_idx.reshape(-1, 1)

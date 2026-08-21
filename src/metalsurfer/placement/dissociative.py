@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from ase import Atoms
+from ase.geometry import find_mic
 from scipy.spatial import KDTree
 
 from ..config import AdsorptionConfig
@@ -137,7 +138,8 @@ def _get_dissociative_site_pairs(
     )
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
     cache_key: str | None = None
-    if not occupancy_active and raw_sites is None:
+    # Skip cache when site_context/raw_sites alter the catalog for the same geometry.
+    if not occupancy_active and raw_sites is None and site_context is None:
         cache_key = _dissociative_pair_cache_key(sites_slab, config)
         with _DISSOCIATIVE_PAIR_CACHE_LOCK:
             cached = _DISSOCIATIVE_PAIR_CACHE.get(cache_key)
@@ -251,7 +253,7 @@ def _compute_dissociative_site_pairs(
             existing_adsorbate_positions,
             cell=cell_arr,
             pbc=pbc,
-            min_separation=float(config.min_initial_distance),
+            min_separation=float(config.min_adsorbate_separation),
         )
         if len(available) < 2:
             return []
@@ -277,32 +279,20 @@ def _compute_dissociative_site_pairs(
     mean_top_radius = float(np.mean(top_radii)) if top_radii else 1.0
 
     site_3d = site_xyz
-    if len(site_3d) >= 2:
-        if config.material_type == "slab":
-            mean_nn_sep = _mean_nn_separation_mic(site_3d, cell_arr, pbc_xy)
-        else:
-            _nn_tree = KDTree(site_3d)
-            nn_d, _ = _nn_tree.query(site_3d, k=2)
-            nn_d_arr = np.asarray(nn_d, dtype=float)
-            if nn_d_arr.ndim == 2:
-                mean_nn_sep = float(np.mean(nn_d_arr[:, 1]))
-            else:
-                mean_nn_sep = float(np.mean(nn_d_arr))
-
-        atomic_constraint = _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE * (
-            2.0 * mean_top_radius
-        )
-        surface_constraint = 0.8 * mean_nn_sep
-        adaptive_min = min(atomic_constraint, surface_constraint)
-        min_fragment_sep = max(
-            _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM, adaptive_min
-        )
+    if config.material_type == "slab":
+        mean_nn_sep = _mean_nn_separation_mic(site_3d, cell_arr, pbc_xy)
     else:
-        mean_nn_sep = _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM
-        min_fragment_sep = max(
-            _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM,
-            _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE * (2.0 * mean_top_radius),
-        )
+        _nn_tree = KDTree(site_3d)
+        nn_d, _ = _nn_tree.query(site_3d, k=2)
+        # len(site_3d) >= 2 (early-return above), so query(..., k=2) is 2-D.
+        mean_nn_sep = float(np.mean(np.asarray(nn_d, dtype=float)[:, 1]))
+
+    atomic_constraint = _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE * (
+        2.0 * mean_top_radius
+    )
+    surface_constraint = 0.8 * mean_nn_sep
+    adaptive_min = min(atomic_constraint, surface_constraint)
+    min_fragment_sep = max(_DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM, adaptive_min)
     max_adjacent_sep = float(
         np.clip(
             _DISSOCIATIVE_MAX_ADJACENT_SEP_NN_SCALE * mean_nn_sep,
@@ -343,11 +333,21 @@ def _compute_dissociative_site_pairs(
                 reference_positions=top_positions,
                 slab_normal=slab_normal,
             )
+            xyz1 = site_3d[i].copy()
+            if config.material_type == "slab":
+                dvec, _ = find_mic(
+                    (site_3d[j] - site_3d[i]).reshape(1, 3),
+                    cell_arr,
+                    pbc=pbc_xy,
+                )
+                xyz2 = site_3d[i] + dvec[0]
+            else:
+                xyz2 = site_3d[j].copy()
             pairs.append(
                 _DissociativeSitePair(
-                    xyz1=site_3d[i].copy(),
+                    xyz1=xyz1,
                     normal1=normal_i,
-                    xyz2=site_3d[j].copy(),
+                    xyz2=xyz2,
                     normal2=normal_j,
                 )
             )
@@ -501,6 +501,8 @@ def _place_dissociative_two_sites(
             sites_slab,
             "slab",
             rough_slab_local_z=config.rough_slab_local_z,
+            top_layer_tolerance=config.top_layer_tolerance,
+            planar_z_variance_threshold=config.planar_z_variance_threshold,
         )
         target_h = float(surface_ref + z_offset)
         pos1 = base1 + (target_h - float(np.dot(base1, n_hat))) * n_hat

@@ -487,6 +487,9 @@ class TestProcessMolecule:
         assert len(outcome.ml_records) == 1
         assert outcome.ml_records[0].is_penalty_label is True
         assert outcome.ml_records[0].failure_stage == "validation"
+        assert outcome.ml_records[0].energy_adsorption == pytest.approx(
+            config.bo.failure_penalty_overrides["validation"]
+        )
 
     def test_bo_deduplicated_results_are_tracked_for_ml(self):
         slab = SlabContainer(make_slab())
@@ -643,6 +646,27 @@ class TestFormatFailureSummary:
             ],
         )
         assert "E_ads too high" in out
+
+    def test_validation_stage_bo(self):
+        summary = {
+            "stage": "validation",
+            "n_evaluated": 12,
+            "n_valid_results": 0,
+            "n_candidate_specs": 40,
+            "n_valid_pool": 30,
+        }
+        out = BindingCampaignResult.format_failure_summary(summary)
+        assert_lines_contain(
+            out,
+            [
+                "  Stage: validation",
+                "  BO evaluated: 12",
+                "  BO valid results: 0",
+            ],
+        )
+        assert "Initial placements" not in out
+        assert "Optimized:" not in out
+        assert "?" not in out
 
     def test_filter_stage(self):
         summary = {

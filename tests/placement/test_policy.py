@@ -12,7 +12,14 @@ from metalsurfer.placement import (
     enumerate_placement_specs,
     generate_placement_from_spec,
 )
-from metalsurfer.placement._constants import _Z_FRACTIONS
+from metalsurfer.placement import (
+    geometry as placement_geometry,
+)
+from metalsurfer.placement._constants import (
+    _AZIMUTH,
+    _AZIMUTH_IN_PLANE,
+    _Z_FRACTIONS,
+)
 from metalsurfer.placement.policy import (
     build_batch_placement_specs,
     max_batch_placement_specs,
@@ -56,6 +63,58 @@ def test_max_batch_specs_matches_build_batch_uncapped(
         seed=TEST_SEED,
     )
     assert len(actual) == expected
+
+
+def test_build_batch_specs_tilt_zero_drops_redundant_azimuth_in_plane():
+    """At tilt=0, azimuth_in_plane is fixed to 0 (azimuth already covers in-plane)."""
+    specs = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=[0],
+        site_type_for_index=_site_type_atop,
+        shape="flat",
+        n_binders=1,
+        flat_aromatic=True,
+        parallel_fraction=1.0,
+        n_desired=10**7,
+        seed=TEST_SEED,
+    )
+    tilt0 = [s for s in specs if s.orientation_type == "parallel" and s.tilt_deg == 0.0]
+    assert tilt0
+    assert all(s.azimuth_in_plane_deg == 0.0 for s in tilt0)
+    # Nonzero tilt still varies azimuth_in_plane.
+    tilted = [
+        s for s in specs if s.orientation_type == "parallel" and s.tilt_deg != 0.0
+    ]
+    assert tilted
+    assert {s.azimuth_in_plane_deg for s in tilted} > {0.0}
+
+
+def test_tilt_zero_azimuth_pairs_collapse_to_eight_geometries():
+    """At tilt=0, az × aip commute about the normal → 8 unique of 32 pairs."""
+    pos = np.array(
+        [
+            [1.3, 0.0, 0.0],
+            [0.5, 0.866, 0.0],
+            [-0.5, 0.866, 0.0],
+            [-1.0, 0.0, 0.0],
+            [-0.5, -0.866, 0.0],
+            [0.5, -0.866, 0.0],
+        ],
+        dtype=float,
+    )
+    normal = np.array([0.0, 0.0, 1.0])
+    unique: set[bytes] = set()
+    for az in _AZIMUTH:
+        for aip in _AZIMUTH_IN_PLANE:
+            base = placement_geometry._flat_orientation_from_principal_axis(
+                pos, normal, azimuth_in_plane_deg=aip
+            )
+            rotated = placement_geometry._rotation_with_tilt(base, normal, 0.0, az)
+            rounded = np.round(rotated, decimals=6)
+            rounded[rounded == 0.0] = 0.0
+            unique.add(rounded.tobytes())
+    assert len(unique) == len(_AZIMUTH)
+    assert len(unique) < len(_AZIMUTH) * len(_AZIMUTH_IN_PLANE)
 
 
 def test_build_batch_specs_respects_n_desired():
@@ -344,6 +403,50 @@ def test_cco_generation_yield_meets_seeded_bar():
     assert n_ok >= min_ok, (
         f"CCO generation yield too low: {n_ok}/{n_desired} (need >= {min_ok})"
     )
+
+
+def test_build_batch_specs_else_branch_early_caps_without_prefix_bias():
+    """Non-flat path must not materialize the full Cartesian grid before subsample."""
+    from metalsurfer.placement._constants import (
+        _AZIMUTH,
+        _EARLY_CAP_WORKING_SET_MULTIPLIER,
+        _TILT_FULL,
+        _Z_FRACTIONS,
+    )
+
+    n_sites = 1000
+    n_conformers = 3
+    n_desired = 20
+    site_indices = list(range(n_sites))
+    full_grid = (
+        n_conformers * len(_TILT_FULL) * len(_AZIMUTH) * len(_Z_FRACTIONS) * n_sites
+    )
+    assert full_grid > 100_000
+
+    specs = build_batch_placement_specs(
+        n_conformers=n_conformers,
+        site_indices=site_indices,
+        site_type_for_index=_site_type_atop,
+        shape="round",
+        n_binders=1,
+        flat_aromatic=False,
+        parallel_fraction=0.5,
+        n_desired=n_desired,
+        seed=TEST_SEED,
+    )
+    assert len(specs) == n_desired
+
+    # Uniform sample of the working set must not collapse to the product prefix
+    # (tilt=0, az=0, z=first, sites 0..n).
+    az_vals = {s.azimuth_deg for s in specs}
+    tilt_vals = {s.tilt_deg for s in specs}
+    conf_vals = {s.conformer_index for s in specs}
+    site_vals = {s.site_index for s in specs}
+    assert len(az_vals) > 1
+    assert len(tilt_vals) > 1
+    assert len(conf_vals) >= 2
+    # Sites should not be only the first working_cap / n_pose contiguous block.
+    assert max(site_vals) > n_desired * _EARLY_CAP_WORKING_SET_MULTIPLIER
 
 
 def test_policy_prior_prefers_mild_tilt_and_mid_z():

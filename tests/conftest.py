@@ -136,14 +136,21 @@ class DummyReferenceEnergies:
         molecule_energies: dict[str, float] | None = None,
         *,
         constant_energy: float | None = None,
+        slab_energy: float = -100.0,
+        conformer_packs: dict | None = None,
     ) -> None:
         self.molecule_energies = dict(molecule_energies or {})
         self._constant_energy = constant_energy
+        self.slab_energy = float(slab_energy)
+        self.conformer_packs = dict(conformer_packs or {})
 
     def get_molecule_energy(self, mol: str) -> float:
         if self._constant_energy is not None:
             return float(self._constant_energy)
         return self.molecule_energies[mol]
+
+    def get_conformer_pack(self, mol: str):
+        return self.conformer_packs.get(mol)
 
 
 # ---------------------------------------------------------------------------

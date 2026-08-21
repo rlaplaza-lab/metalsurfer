@@ -244,6 +244,37 @@ class TestPlacementRecord:
         assert r.descriptor.quat_y == 0.0
         assert r.descriptor.quat_z == 0.0
 
+    def test_quaternion_w_zero_antipodal_canonicalized(self):
+        base = make_placement_record(0)
+        common = {
+            **base.descriptor.__dict__,
+            "quat_w": 0.0,
+            "quat_y": 0.0,
+            "quat_z": 0.0,
+        }
+        r1 = PlacementRecord(
+            molecule=base.molecule,
+            smiles=base.smiles,
+            surface_id=base.surface_id,
+            placement_id=0,
+            descriptor=PlacementDescriptor(**{**common, "quat_x": 1.0}),
+            context=base.context,
+        )
+        r2 = PlacementRecord(
+            molecule=base.molecule,
+            smiles=base.smiles,
+            surface_id=base.surface_id,
+            placement_id=0,
+            descriptor=PlacementDescriptor(**{**common, "quat_x": -1.0}),
+            context=base.context,
+        )
+        assert r1.descriptor.quat_w == pytest.approx(0.0)
+        assert r1.descriptor.quat_x == pytest.approx(1.0)
+        assert r2.descriptor.quat_w == pytest.approx(0.0)
+        assert r2.descriptor.quat_x == pytest.approx(1.0)
+        assert extract_features(r1) == extract_features(r2)
+        assert r1.record_hash() == r2.record_hash()
+
     def test_from_screening_result_returns_record_with_descriptor(self):
         descriptor = PlacementDescriptor(
             conformer_index=0,
@@ -288,6 +319,31 @@ class TestPlacementRecord:
 
 
 class TestDatasetLogger:
+    def test_flush_metadata_counts_duplicate_csv_rows(self):
+        """total_records should count CSV rows even when hashes are duplicated on disk."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ds = DatasetLogger(tmpdir)
+            ds.add_record(make_placement_record(0))
+            ds.flush()
+            # Corrupt on-disk CSV by duplicating the data row (same record_hash).
+            path = ds.csv_path
+            with open(path) as f:
+                lines = f.readlines()
+            assert len(lines) == 2  # header + 1 row
+            with open(path, "a") as f:
+                f.write(lines[1])
+            with open(path) as f:
+                assert sum(1 for _ in f) - 1 == 2
+
+            ds2 = DatasetLogger(tmpdir)
+            ds2.add_record(make_placement_record(1))
+            ds2.flush()
+            with open(ds2.metadata_path) as f:
+                meta = json.load(f)
+            # Unique hashes would report 2; row count must report 3.
+            assert meta["total_records"] == 3
+            assert len(pd.read_csv(ds2.csv_path)) == 3
+
     def test_flush_creates_csv(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             ds = DatasetLogger(tmpdir)
@@ -359,6 +415,41 @@ class TestDatasetLogger:
             with open(ds.metadata_path) as f:
                 meta = json.load(f)
             assert meta["export_placement_provenance"] is True
+
+    def test_flush_rejects_provenance_schema_mismatch(self):
+        """Lean↔provenance append must abort before corrupting the CSV."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lean = DatasetLogger(tmpdir, config=AdsorptionConfig())
+            lean.add_record(make_placement_record(0))
+            lean.flush()
+            with open(lean.csv_path, encoding="utf-8") as f:
+                before = f.read()
+
+            rich = DatasetLogger(
+                tmpdir, config=AdsorptionConfig(export_placement_provenance=True)
+            )
+            rich.add_record(make_placement_record(1))
+            with pytest.raises(ValueError, match="column schema mismatch"):
+                rich.flush()
+            with open(lean.csv_path, encoding="utf-8") as f:
+                assert f.read() == before
+
+            # Opposite direction: provenance file, lean append.
+            with tempfile.TemporaryDirectory() as tmpdir2:
+                rich2 = DatasetLogger(
+                    tmpdir2, config=AdsorptionConfig(export_placement_provenance=True)
+                )
+                rich2.add_record(make_placement_record(0))
+                rich2.flush()
+                with open(rich2.csv_path, encoding="utf-8") as f:
+                    before2 = f.read()
+
+                lean2 = DatasetLogger(tmpdir2, config=AdsorptionConfig())
+                lean2.add_record(make_placement_record(1))
+                with pytest.raises(ValueError, match="column schema mismatch"):
+                    lean2.flush()
+                with open(rich2.csv_path, encoding="utf-8") as f:
+                    assert f.read() == before2
 
 
 class TestLoadDataset:
@@ -505,6 +596,26 @@ class TestFeatureExtraction:
             with pytest.raises(ValueError, match="strict geometric feature columns"):
                 extract_features_from_dataset(df)
 
+    def test_extract_from_dataset_rejects_empty_or_nonfinite_targets(self):
+        records = make_random_placement_records(3, variant="ml")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ds = DatasetLogger(tmpdir)
+            for r in records:
+                ds.add_record(r)
+            ds.flush()
+            df = load_dataset(tmpdir)
+            empty = df.iloc[0:0].copy()
+            with pytest.raises(ValueError, match="empty"):
+                extract_features_from_dataset(empty)
+            bad = df.copy()
+            bad.loc[0, "energy_adsorption"] = float("nan")
+            with pytest.raises(ValueError, match="non-finite"):
+                extract_features_from_dataset(bad)
+            bad2 = df.copy()
+            bad2.loc[1, "energy_adsorption"] = float("inf")
+            with pytest.raises(ValueError, match="non-finite"):
+                extract_features_from_dataset(bad2)
+
     def test_feature_names_consistent(self):
         names = get_feature_names()
         r = make_placement_record()
@@ -648,3 +759,24 @@ class TestAcquisitionMinimization:
         expected = imp * stats.norm.cdf(z) + sig * stats.norm.pdf(z)
         out = ei_scores(mu, sig, f_best=f_best, xi=xi)
         assert_allclose(out, expected)
+
+    def test_mixed_sigma_pi_stays_in_unit_interval(self):
+        mu = np.array([-1.5, -0.2, -2.0, -0.8])
+        sig = np.array([0.0, 0.3, 0.0, 0.25])
+        f_best = -1.0
+        xi = 0.0
+        out = pi_scores(mu, sig, f_best=f_best, xi=xi)
+        assert np.all(out >= 0.0) and np.all(out <= 1.0)
+
+    def test_mixed_sigma_worse_zero_sigma_does_not_beat_better_uncertain(self):
+        # Zero-σ μ=-0.1 (worse) vs uncertain μ=-1.8 (better); finite-σ should win.
+        mu = np.array([-0.1, -1.8])
+        sig = np.array([0.0, 0.4])
+        f_best = -1.0
+        xi = 0.0
+        ei = ei_scores(mu, sig, f_best=f_best, xi=xi)
+        pi = pi_scores(mu, sig, f_best=f_best, xi=xi)
+        assert int(np.argmax(ei)) == 1
+        assert int(np.argmax(pi)) == 1
+        assert ei[0] == pytest.approx(0.0)
+        assert pi[0] == pytest.approx(0.0)

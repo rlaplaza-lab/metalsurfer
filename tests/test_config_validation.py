@@ -49,6 +49,22 @@ def test_initial_distance_order_validated():
         AdsorptionConfig(min_initial_distance=5.0, max_initial_distance=2.0)
 
 
+def test_strict_contact_window_rejects_empty_admissible_range():
+    with pytest.raises(ValueError, match="empty admissible contact window"):
+        AdsorptionConfig(
+            strict_initial_placement=True,
+            min_initial_distance=2.0,
+            max_closest_approach=1.0,
+        )
+    with pytest.raises(ValueError, match="empty admissible contact window"):
+        AdsorptionConfig(
+            require_multiple_contact=True,
+            min_initial_distance=2.0,
+            contact_distance_threshold=1.0,
+            max_closest_approach=3.0,
+        )
+
+
 def test_default_config():
     config = AdsorptionConfig()
     assert config.model_name == "uma-s-1p2"
@@ -111,6 +127,22 @@ def test_placement_retry_early_stop_patience_defaults_and_rejects_below_one():
 def test_placement_materialize_workers_rejects_zero():
     with pytest.raises(ValueError, match="placement_materialize_workers"):
         AdsorptionConfig(placement_materialize_workers=0)
+
+
+def test_placement_materialize_workers_rejects_non_int():
+    with pytest.raises(ValueError, match="placement_materialize_workers"):
+        AdsorptionConfig(placement_materialize_workers=-2.0)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="placement_materialize_workers"):
+        AdsorptionConfig(placement_materialize_workers=True)  # type: ignore[arg-type]
+
+
+def test_seed_rejects_non_int():
+    with pytest.raises(ValueError, match="seed"):
+        AdsorptionConfig(seed=42.0)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="seed"):
+        AdsorptionConfig(seed=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="seed"):
+        AdsorptionConfig(seed="42")  # type: ignore[arg-type]
 
 
 def test_numeric_defaults_single_source_of_truth():

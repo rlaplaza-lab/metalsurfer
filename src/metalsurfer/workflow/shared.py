@@ -364,7 +364,8 @@ def _optimize_and_evaluate_placements(
     """
     e_slab, e_mol = energies
     if not (saturation_reuse and config.saturation_autobatcher_reuse):
-        clear_autobatcher_cache()
+        max_n = max((len(a) for a in all_combined), default=0)
+        clear_autobatcher_cache(max_n_atoms_threshold=max_n)
     optimized = optimize_adsorbate_slab_batched(
         all_combined,
         slab,
@@ -867,18 +868,23 @@ def _prepare_molecule_screening(
 
     t0 = time.perf_counter()
     if conformers is None:
-        conformer_pack = create_conformers_from_smiles(
-            smiles, calculator=calculator, config=config, ts_model=ts_model
-        )
-        t_conformers = time.perf_counter() - t0
-        if conformer_pack is None:
-            logger.error("Could not generate conformers for %s", molecule_name)
-            failure_summary["stage"] = "conformers"
-            failure_summary["reason"] = (
-                f"could not generate conformers for {molecule_name}"
+        cached_pack = reference_energies.get_conformer_pack(molecule_name)
+        if cached_pack is not None:
+            conformers, conformer_energies = cached_pack
+            t_conformers = time.perf_counter() - t0
+        else:
+            conformer_pack = create_conformers_from_smiles(
+                smiles, calculator=calculator, config=config, ts_model=ts_model
             )
-            return None
-        conformers, conformer_energies = conformer_pack
+            t_conformers = time.perf_counter() - t0
+            if conformer_pack is None:
+                logger.error("Could not generate conformers for %s", molecule_name)
+                failure_summary["stage"] = "conformers"
+                failure_summary["reason"] = (
+                    f"could not generate conformers for {molecule_name}"
+                )
+                return None
+            conformers, conformer_energies = conformer_pack
     else:
         t_conformers = time.perf_counter() - t0
     if conformer_energies is not None and len(conformer_energies) != len(conformers):

@@ -75,7 +75,10 @@ Import from :mod:`metalsurfer.workflow` (not the package root):
 
 - ``process_molecule`` / ``process_molecule_bayesian`` — return
   :class:`~metalsurfer.workflow.MoleculeScreenOutcome` (``results``,
-  ``failure_summary``, ``ml_records``, optional BO memory / transfer)
+  flat ``failure_summary``, ``ml_records``, optional BO memory / transfer).
+  Campaign-level :class:`~metalsurfer.SaturationCampaignResult` stores
+  ``failure_summary`` keyed by molecule name
+  (``dict[str, dict[str, object]]``).
 - :func:`~metalsurfer.workflow.run_saturation_screening` (pass
   ``bo_enabled=True`` for BO steps; campaign APIs set this for you)
 - ``calculate_reference_energies``, ``load_molecules``
@@ -121,6 +124,9 @@ Physical stages across run modes:
    Saturation refreshes ``E_slab`` each step (``slab_energy_override``).
    ``E_molecule`` is the lowest MLIP-optimized conformer energy
    (``workflow/reference.py``). Clean-slab energy must be finite and not ~0.
+   The reference step also stores each molecule's pre-optimized conformer
+   pack on :class:`~metalsurfer.ReferenceEnergies` (``conformer_packs`` /
+   ``get_conformer_pack``) so later placement reuses those geometries.
 3. **Conformer generation** — RDKit embed + MMFF; MLIP scoring via
    ``batch_static`` when available; dedup by RMSD/energy. The per-conformer
    energies feed the optional Boltzmann conformer prior
@@ -215,7 +221,9 @@ Pipeline:
    from triangulation edges; hollows from triangle centroids.
 5. Vertices filtered to the primary cell within
    ``[voronoi_probe_radius, voronoi_max_site_distance]``.
-6. Optional ridge enrichment (``voronoi_site_enrichment``).
+6. Optional ridge enrichment (``voronoi_site_enrichment``). On planar slabs
+   the topology generator path does not use ridge enrichment; the flag
+   matters for nanoparticles, porous frameworks, and rough/non-planar slabs.
 7. Typing: distance ratios on six nearest neighbours, or **Delaunay**
    nearest-candidate classify (precomputed atop/bridge/hollow XY KDTree) when
    ``site_classification_method`` is ``delaunay`` / ``auto`` on slabs.

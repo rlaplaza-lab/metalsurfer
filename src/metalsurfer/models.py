@@ -46,6 +46,10 @@ class ReferenceEnergies:
 
     slab_energy: float
     molecule_energies: dict[str, float] = field(default_factory=dict)
+    # Pre–isolated-opt conformer packs keyed by molecule name (placement reuse).
+    conformer_packs: dict[str, tuple[list[Atoms], list[float]]] = field(
+        default_factory=dict
+    )
 
     def get_molecule_energy(self, molecule_name: str) -> float | None:
         """Return the reference energy for a molecule, if known.
@@ -60,6 +64,12 @@ class ReferenceEnergies:
         float or None
         """
         return self.molecule_energies.get(molecule_name)
+
+    def get_conformer_pack(
+        self, molecule_name: str
+    ) -> tuple[list[Atoms], list[float]] | None:
+        """Return the cached pre-opt conformer pack for *molecule_name*, if any."""
+        return self.conformer_packs.get(molecule_name)
 
 
 @dataclass
@@ -936,13 +946,20 @@ class SaturationCampaignResult:
     mode: Literal["non_bo", "bo"]
     surface_type: str
     runs: list[SaturationRunResult | MultiMolSaturationRunResult]
-    failure_summary: dict[str, object] = field(default_factory=dict)
+    # Per-molecule failure summaries (same shape as BindingCampaignResult).
+    failure_summary: dict[str, dict[str, object]] = field(default_factory=dict)
     t_ref_s: float = 0.0
     t_total_s: float = 0.0
 
     def format_failure_summary(self) -> str:
-        """Return a canonical human-readable failure summary."""
-        return _format_failure_summary_text(self.failure_summary)
+        """Return a canonical human-readable failure summary for all molecules."""
+        if not self.failure_summary:
+            return ""
+        lines: list[str] = []
+        for molecule_name, summary in self.failure_summary.items():
+            lines.append(f"Failures for {molecule_name}:")
+            lines.append(_format_failure_summary_text(summary))
+        return "\n".join(lines)
 
     def format_completion(
         self,
@@ -970,21 +987,27 @@ class SaturationCampaignResult:
             return "\n".join(lines)
 
         if len(self.runs) == 1 and isinstance(self.runs[0], SaturationRunResult):
-            return self.runs[0].format_completion(
+            text = self.runs[0].format_completion(
                 label=label,
                 results_dir=results_dir,
                 write_vasp_inputs=write_vasp_inputs,
             )
+            if self.failure_summary:
+                text = f"{text}\n\n{self.format_failure_summary()}"
+            return text
 
         total_steps = sum(len(run.steps) for run in self.runs)
         total_mols = sum(run.n_molecules_at_saturation for run in self.runs)
-        return _format_saturation_completion(
+        text = _format_saturation_completion(
             label=label,
             n_molecules_at_saturation=total_mols,
             n_steps=total_steps,
             results_dir=results_dir,
             write_vasp_inputs=write_vasp_inputs,
         )
+        if self.failure_summary:
+            text = f"{text}\n\n{self.format_failure_summary()}"
+        return text
 
 
 @dataclass

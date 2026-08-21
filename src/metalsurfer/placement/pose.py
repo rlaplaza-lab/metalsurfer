@@ -54,6 +54,40 @@ class _PlacementContext:
     z_base_lo: float = 0.0
     z_base_hi: float = 0.0
     normal: np.ndarray | None = None
+    shape: str = "round"
+
+
+@dataclass
+class _PoseBatchCache:
+    """Per-batch invariants shared across placements on the same substrate."""
+
+    top_layer_planar: bool | None = None
+    pinv_ab_T: np.ndarray | None = None
+    # conformer_index -> (canonical_pos, shape)
+    frames: dict[int, tuple[np.ndarray, str]] = dataclasses.field(default_factory=dict)
+
+
+def build_pose_batch_cache(
+    slab: Atoms,
+    conformers: list[Atoms],
+    config: AdsorptionConfig,
+) -> _PoseBatchCache:
+    """Precompute slab planarity, plane projectors, and per-conformer frames."""
+    cache = _PoseBatchCache()
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    cache.pinv_ab_T, _ = _slab_plane_projectors(cell)
+    planar_kwargs: dict[str, float] = {
+        "top_layer_tolerance": float(config.top_layer_tolerance),
+        "z_variance_threshold": float(config.planar_z_variance_threshold),
+    }
+    cache.top_layer_planar = bool(_is_top_layer_planar(slab, **planar_kwargs))
+    for i, conf in enumerate(conformers):
+        ads_pos = conf.get_positions()
+        symbols = conf.get_chemical_symbols()
+        canonical = geom.compute_canonical_molecular_frame(ads_pos, symbols=symbols)
+        shape, _, _ = geom._classify_molecule_shape(canonical)
+        cache.frames[i] = (canonical, shape)
+    return cache
 
 
 def _clearance_lift_along_normal(
@@ -84,6 +118,9 @@ def _resolve_surface_ref(
     mat_type: str,
     *,
     rough_slab_local_z: bool = False,
+    top_layer_tolerance: float | None = None,
+    planar_z_variance_threshold: float | None = None,
+    top_layer_planar: bool | None = None,
 ) -> tuple[float, bool]:
     """Return *(surface_ref, is_local_ref)* for z-offset calculations.
 
@@ -95,12 +132,29 @@ def _resolve_surface_ref(
     When *rough_slab_local_z* is True and the slab is non-planar, use the
     site's own height along the normal instead of the global maximum.  This
     prevents step-edge sites from getting excessive z offsets.
+
+    Pass the same *top_layer_tolerance* / *planar_z_variance_threshold* used for
+    site enumeration so planarity decisions stay consistent.
+
+    *top_layer_planar* skips the per-placement lstsq when provided by a batch cache.
     """
     if mat_type == "slab":
         cell = np.asarray(slab.get_cell(), dtype=float)
         positions = slab.get_positions()
-        if rough_slab_local_z and site is not None and not _is_top_layer_planar(slab):
-            return float(_height_along_slab_normal(site.xyz, cell)), True
+        if rough_slab_local_z and site is not None:
+            if top_layer_planar is None:
+                planar_kwargs: dict[str, float] = {}
+                if top_layer_tolerance is not None:
+                    planar_kwargs["top_layer_tolerance"] = float(top_layer_tolerance)
+                if planar_z_variance_threshold is not None:
+                    planar_kwargs["z_variance_threshold"] = float(
+                        planar_z_variance_threshold
+                    )
+                is_planar = _is_top_layer_planar(slab, **planar_kwargs)
+            else:
+                is_planar = top_layer_planar
+            if not is_planar:
+                return float(_height_along_slab_normal(site.xyz, cell)), True
         return float(np.max(_height_along_slab_normal(positions, cell))), False
     if site is not None:
         site_xyz = np.asarray(site.xyz, dtype=float)
@@ -118,9 +172,9 @@ def _pose_from_spec(
     slab: Atoms,
     config: AdsorptionConfig,
     smiles: str | None,
-    z_fraction: float | None = None,
     site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
+    pose_cache: _PoseBatchCache | None = None,
 ) -> tuple[_PlacementContext | None, str | None]:
     """Build a placement context (pose + resolved geometry) from a spec.
 
@@ -129,9 +183,17 @@ def _pose_from_spec(
     """
     ads_pos = adsorbate.get_positions().copy()
     symbols = adsorbate.get_chemical_symbols()
-    canonical_pos = geom.compute_canonical_molecular_frame(ads_pos, symbols=symbols)
+    cached_frame = (
+        pose_cache.frames.get(int(spec.conformer_index))
+        if pose_cache is not None
+        else None
+    )
+    if cached_frame is not None:
+        canonical_pos, shape = cached_frame
+    else:
+        canonical_pos = geom.compute_canonical_molecular_frame(ads_pos, symbols=symbols)
+        shape, _, _ = geom._classify_molecule_shape(canonical_pos)
     normal = np.array([0.0, 0.0, 1.0])
-    shape, _, _ = geom._classify_molecule_shape(canonical_pos)
 
     ctx = (
         site_context
@@ -181,7 +243,7 @@ def _pose_from_spec(
             z_base_hi - z_hi_shrink,
         )
 
-    zf = spec.z_fraction if z_fraction is None else z_fraction
+    zf = float(spec.z_fraction)
     z_offset = z_base_lo + zf * (z_base_hi - z_base_lo)
 
     # Slab: top-layer z (Voronoi vertex z can sit between layers). NP/pore: local vertex.
@@ -190,6 +252,11 @@ def _pose_from_spec(
         placement_reference_slab,
         mat_type,
         rough_slab_local_z=config.rough_slab_local_z,
+        top_layer_tolerance=config.top_layer_tolerance,
+        planar_z_variance_threshold=config.planar_z_variance_threshold,
+        top_layer_planar=(
+            pose_cache.top_layer_planar if pose_cache is not None else None
+        ),
     )
 
     oriented = orient_from_spec(
@@ -254,6 +321,7 @@ def _pose_from_spec(
             z_base_lo=float(z_base_lo),
             z_base_hi=float(z_base_hi),
             normal=np.asarray(normal, dtype=float),
+            shape=shape,
         ),
         None,
     )
@@ -265,6 +333,7 @@ def _context_from_pose(
     slab: Atoms,
     config: AdsorptionConfig,
     site_context: SiteContext | None,
+    slab_for_sites: Atoms | None = None,
 ) -> _PlacementContext | None:
     """Replay path: normalize quaternion, rotate *canonical_pos*, resolve site for ``_finalize_placement``."""
     raw_q = np.array([pose.quat_w, pose.quat_x, pose.quat_y, pose.quat_z], dtype=float)
@@ -278,10 +347,11 @@ def _context_from_pose(
     quat = geom.normalize_quaternion(raw_q)
     rotated_pos = (geom.quaternion_to_rotation_matrix(quat) @ canonical_pos.T).T
 
+    placement_reference_slab = slab_for_sites if slab_for_sites is not None else slab
     ctx = (
         site_context
         if site_context is not None
-        else _get_unique_sites_for_specs(slab, config)
+        else _get_unique_sites_for_specs(placement_reference_slab, config)
     )
     site = None
     if ctx.use_sites and 0 <= pose.site_index < len(ctx.sites):
@@ -289,9 +359,11 @@ def _context_from_pose(
     mat_type = material_type_for_placement(site, when_no_site=config.material_type)
     surface_ref, is_local_ref = _resolve_surface_ref(
         site,
-        slab,
+        placement_reference_slab,
         mat_type,
         rough_slab_local_z=config.rough_slab_local_z,
+        top_layer_tolerance=config.top_layer_tolerance,
+        planar_z_variance_threshold=config.planar_z_variance_threshold,
     )
 
     pose_normalized = dataclasses.replace(
@@ -312,6 +384,7 @@ def _context_from_pose(
         canonical_pos=canonical_pos,
         use_sites=ctx.use_sites,
         rotated_pos=rotated_pos,
+        shape=geom._classify_molecule_shape(canonical_pos)[0],
     )
 
 
@@ -418,6 +491,7 @@ def _apply_lateral_offset(
     dy: float,
     ctx: _PlacementContext,
     slab: Atoms,
+    pose_cache: _PoseBatchCache | None = None,
 ) -> np.ndarray:
     """Apply a lateral recovery offset in the plane perpendicular to the site/slab normal."""
     n_hat = _placement_normal(ctx, slab)
@@ -432,7 +506,10 @@ def _apply_lateral_offset(
     if ctx.mat_type == "slab":
         cell = np.asarray(slab.get_cell(), dtype=float)
         # MIC-wrap the in-plane a–b components; keep height along normal.
-        pinv_ab_T, _ = _slab_plane_projectors(cell)
+        if pose_cache is not None and pose_cache.pinv_ab_T is not None:
+            pinv_ab_T = pose_cache.pinv_ab_T
+        else:
+            pinv_ab_T, _ = _slab_plane_projectors(cell)
         frac2 = shifted @ pinv_ab_T
         frac2 = np.mod(frac2, 1.0)
         # Reconstruct Cartesian from fractional a,b plus original height along normal.
@@ -461,6 +538,7 @@ def _recover_distance_failure(
     fail_reason: str,
     *,
     slab_for_sites: Atoms | None = None,
+    pose_cache: _PoseBatchCache | None = None,
 ) -> tuple[_PlacementContext, str | None]:
     """Nudge height then XY after distance/overlap failures; return updated ctx or last reason.
 
@@ -565,7 +643,14 @@ def _recover_distance_failure(
         placement_index=pose.placement_index,
         site_index=pose.site_index,
     ):
-        center = _apply_lateral_offset(work_center, dx=dx, dy=dy, ctx=ctx, slab=slab)
+        center = _apply_lateral_offset(
+            work_center,
+            dx=dx,
+            dy=dy,
+            ctx=ctx,
+            slab=slab,
+            pose_cache=pose_cache,
+        )
         _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, center)
         last_reason = _validate_posed_adsorbate(
             adsorbate,
@@ -709,6 +794,7 @@ def _finalize_placement(
     *,
     slab_for_sites: Atoms | None = None,
     allow_distance_recovery: bool = False,
+    pose_cache: _PoseBatchCache | None = None,
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
     """Translate the pre-rotated positions, validate, and build a descriptor."""
     pose = ctx.pose
@@ -744,6 +830,7 @@ def _finalize_placement(
                 config,
                 fail_reason,
                 slab_for_sites=slab_for_sites,
+                pose_cache=pose_cache,
             )
             pose = ctx.pose
             if fail_reason is not None:
@@ -760,7 +847,10 @@ def _finalize_placement(
     if ctx.site is not None:
         slab_indices = ctx.site.slab_indices
     cell = np.asarray(slab.get_cell(), dtype=float)
-    pinv_ab_T, _ = _slab_plane_projectors(cell)
+    if pose_cache is not None and pose_cache.pinv_ab_T is not None:
+        pinv_ab_T = pose_cache.pinv_ab_T
+    else:
+        pinv_ab_T, _ = _slab_plane_projectors(cell)
     # Full 3D point: zeroing z biases frac a/b on tilted (non-orthogonal) cells.
     placement_xyz = np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float)
     frac2 = placement_xyz @ pinv_ab_T
@@ -771,7 +861,7 @@ def _finalize_placement(
         pose,
         z_offset=z_offset,
         surface_ref=ctx.surface_ref,
-        shape=geom._classify_molecule_shape(ctx.canonical_pos)[0],
+        shape=ctx.shape,
         slab_indices=slab_indices,
         site_source=site_source,
         site_reference_frame=("local_site" if ctx.is_local_ref else "global_top_layer"),
@@ -788,6 +878,7 @@ def generate_placement_from_pose(
     slab: Atoms,
     config: AdsorptionConfig,
     site_context: SiteContext | None = None,
+    slab_for_sites: Atoms | None = None,
 ) -> tuple[Atoms, PlacementDescriptor] | None:
     """Generate adsorbate placement using universal pose semantics.
 
@@ -798,11 +889,14 @@ def generate_placement_from_pose(
     conformers
         List of adsorbate :class:`~ase.Atoms` conformers.
     slab
-        Substrate :class:`~ase.Atoms`.
+        Substrate :class:`~ase.Atoms` (may include pre-adsorbed molecules).
     config
         :class:`~metalsurfer.config.AdsorptionConfig` with placement settings.
     site_context
         Optional cached :class:`SiteContext`.
+    slab_for_sites
+        Optional bare-substrate reference for surface_ref / site detection
+        (same contract as :func:`generate_placement_from_spec`).
     """
     if not conformers:
         return None
@@ -826,7 +920,14 @@ def generate_placement_from_pose(
         adsorbate.get_positions(), symbols=symbols
     )
 
-    ctx = _context_from_pose(pose, canonical_pos, slab, config, site_context)
+    ctx = _context_from_pose(
+        pose,
+        canonical_pos,
+        slab,
+        config,
+        site_context,
+        slab_for_sites=slab_for_sites,
+    )
     if ctx is None:
         return None
     result, fail_reason = _finalize_placement(ctx, adsorbate, slab, config)

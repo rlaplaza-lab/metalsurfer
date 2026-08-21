@@ -41,18 +41,19 @@ def format_failure_summary_text(failure_summary: dict[str, object]) -> str:
             for reason, count in sorted(items, key=lambda x: -x[1]):
                 lines.append(f"    {reason}: {count}")
     elif stage == "validation":
-        n_initial = failure_summary.get("n_initial_placements", "?")
-        n_opt = failure_summary.get("n_optimized", "?")
-        n_opt_fail = failure_summary.get("n_optimization_failed", 0)
-        lines.append(f"  Initial placements: {n_initial}")
-        lines.append(f"  Optimized: {n_opt} ({n_opt_fail} failed)")
-        lines.append("  Passed validation: 0")
         if "n_evaluated" in failure_summary:
-            lines.append(f"  BO evaluated: {failure_summary.get('n_evaluated', '?')}")
-        if "n_valid_results" in failure_summary:
-            lines.append(
-                f"  BO valid results: {failure_summary.get('n_valid_results', '?')}"
-            )
+            lines.append(f"  BO evaluated: {failure_summary['n_evaluated']}")
+            if "n_valid_results" in failure_summary:
+                lines.append(
+                    f"  BO valid results: {failure_summary['n_valid_results']}"
+                )
+        else:
+            n_initial = failure_summary.get("n_initial_placements", "?")
+            n_opt = failure_summary.get("n_optimized", "?")
+            n_opt_fail = failure_summary.get("n_optimization_failed", 0)
+            lines.append(f"  Initial placements: {n_initial}")
+            lines.append(f"  Optimized: {n_opt} ({n_opt_fail} failed)")
+            lines.append("  Passed validation: 0")
         validation_failures = failure_summary.get("validation_failures")
         if isinstance(validation_failures, dict):
             items = [
@@ -80,10 +81,6 @@ def results_output_suffix(*, write_vasp_inputs: bool) -> str:
     ----------
     write_vasp_inputs
         Whether POSCAR outputs are included.
-
-    Returns
-    -------
-    str
     """
     return "(XYZ, POSCAR, CSV)" if write_vasp_inputs else "(XYZ, CSV)"
 
@@ -101,10 +98,6 @@ def format_results_saved_line(
         Path to the results directory.
     write_vasp_inputs
         Whether POSCAR outputs are included.
-
-    Returns
-    -------
-    str
     """
     suffix = results_output_suffix(write_vasp_inputs=write_vasp_inputs)
     return f"Results saved to {Path(results_dir).as_posix()}/ {suffix}"
@@ -132,10 +125,6 @@ def format_saturation_completion(
         Path to the results directory.
     write_vasp_inputs
         Whether POSCAR outputs are included.
-
-    Returns
-    -------
-    str
     """
     suffix = results_output_suffix(write_vasp_inputs=write_vasp_inputs)
     return "\n".join(

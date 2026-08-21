@@ -159,8 +159,10 @@ def compute_frozen_indices(
     If ``relax_top_layer`` is ``True``, only the interior is frozen; which atoms
     remain free depends on *material_type* (see
     :func:`identify_relaxable_surface_indices`).
-    If ``freeze_symbols`` is set, only atoms whose symbol is in that list are
-    frozen (regardless of layer).
+    If ``freeze_symbols`` is a non-empty list, only atoms whose symbol is in
+    that list are frozen (regardless of layer). ``None`` and ``[]`` both mean
+    "use the default layer policy" (freeze everything when
+    ``relax_top_layer=False``).
 
     Parameters
     ----------
@@ -169,7 +171,7 @@ def compute_frozen_indices(
     relax_top_layer
         If True, leave the top layer free.
     freeze_symbols
-        Chemical symbols to freeze.
+        Chemical symbols to freeze. Empty or ``None`` → layer policy.
     top_layer_tolerance
         Height tolerance for the top layer in Å.
     material_type
@@ -179,7 +181,7 @@ def compute_frozen_indices(
     """
     n_slab = len(slab)
 
-    if freeze_symbols is not None:
+    if freeze_symbols:
         syms = slab.get_chemical_symbols()
         return [i for i, s in enumerate(syms) if s in freeze_symbols]
 

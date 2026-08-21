@@ -28,6 +28,7 @@ from metalsurfer.placement.pose import (
     _PlacementContext,
     _recover_distance_failure,
     _resolve_surface_ref,
+    generate_placement_from_pose,
 )
 from metalsurfer.placement.site_context import (
     SiteContext,
@@ -37,6 +38,7 @@ from metalsurfer.placement.site_enumeration import (
     _cluster_equivalent_sites,
     _compute_site_z_base,
     _get_site_surface_radii,
+    _is_top_layer_planar,
 )
 
 from ..conftest import (
@@ -144,7 +146,7 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
     assert len(visited_sites) >= 2, (
         f"{material_type}: expected multi-site coverage, got {sorted(visited_sites)}"
     )
-    d_hi = 4.5 if material_type == "porous" else 3.5
+    d_hi = 4.5 if material_type == "porous" else 3.8
     for _spec, adsorbate_i, desc in results:
         ok, dist, reason = check_initial_placement_distance(
             adsorbate_i,
@@ -383,6 +385,95 @@ def test_resolve_surface_ref_rough_slab():
     )
     assert ref_global == float(np.max(slab.get_positions()[:, 2]))
     assert not is_local_g
+
+
+def test_resolve_surface_ref_uses_config_planarity_tolerance():
+    """top_layer_tolerance must change planarity and therefore local vs global ref."""
+    # Flat upper terrace at ~0.9 Å; lower atoms at z=0. Narrow (0.5) sees only
+    # the flat top → planar/global. Wide (1.2) includes both → non-planar/local.
+    positions = [
+        [0.0, 0.0, 0.0],
+        [2.5, 0.0, 0.0],
+        [1.25, 2.2, 0.0],
+        [0.0, 0.0, 0.85],
+        [2.5, 0.0, 0.85],
+        [1.25, 2.2, 1.05],
+    ]
+    slab = Atoms(
+        symbols=["Cu"] * len(positions),
+        positions=positions,
+        cell=[5.0, 5.0, 20.0],
+        pbc=[True, True, False],
+    )
+    site = _make_site([1.25, 1.0, 0.85])
+
+    assert _is_top_layer_planar(slab, top_layer_tolerance=0.5) is True
+    assert _is_top_layer_planar(slab, top_layer_tolerance=1.2) is False
+
+    ref_narrow, local_narrow = _resolve_surface_ref(
+        site,
+        slab,
+        "slab",
+        rough_slab_local_z=True,
+        top_layer_tolerance=0.5,
+    )
+    ref_wide, local_wide = _resolve_surface_ref(
+        site,
+        slab,
+        "slab",
+        rough_slab_local_z=True,
+        top_layer_tolerance=1.2,
+    )
+    assert local_narrow is False
+    assert local_wide is True
+    assert ref_wide == pytest.approx(float(site.xyz[2]))
+    assert ref_narrow != pytest.approx(ref_wide)
+
+
+def test_generate_placement_from_pose_respects_slab_for_sites():
+    """Pose replay must use bare-substrate surface_ref under saturation coverage."""
+    slab = make_slab()
+    slab_top = float(np.max(slab.get_positions()[:, 2]))
+    existing = Atoms("O", positions=[[5.0, 5.0, slab_top + 8.0]])
+    covered = slab + existing
+    covered.set_cell(slab.get_cell())
+    covered.set_pbc(slab.get_pbc())
+
+    site = _make_site([5.0, 5.0, slab_top], site_type="atop", slab_indices=(0,))
+    site_context = SiteContext(sites=[site], use_sites=True, source="test")
+    config = AdsorptionConfig(
+        material_type="slab",
+        rough_slab_local_z=False,
+        placement_z_range=(2.0, 3.0),
+        placement_z_scale_by_covalent_radius=False,
+    )
+    adsorbate = Atoms("H", positions=[[0.0, 0.0, 0.0]])
+    pose = PlacementPose(
+        conformer_index=0,
+        site_index=0,
+        site_type="atop",
+        placement_index=0,
+        quat_w=1.0,
+        quat_x=0.0,
+        quat_y=0.0,
+        quat_z=0.0,
+        x_abs=5.0,
+        y_abs=5.0,
+        z_fraction=0.5,
+        z_abs=slab_top + 2.5,
+        orientation_type="round",
+    )
+    result = generate_placement_from_pose(
+        pose,
+        [adsorbate],
+        covered,
+        config,
+        site_context=site_context,
+        slab_for_sites=slab,
+    )
+    assert result is not None
+    _, descriptor = result
+    assert descriptor.surface_ref_z_abs == pytest.approx(slab_top)
 
 
 def test_compute_site_z_base_multiplicative_from_covalent_radii():

@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from ase import Atoms
 
 from .config import AdsorptionConfig, fold_bo_config
+from .surface_prep import SlabContainer
 
 CampaignKind = Literal["adsorption", "adsorption_bo", "saturation", "saturation_bo"]
 
@@ -95,6 +97,14 @@ def _normalize_substrate(raw: Any) -> dict[str, Any]:
             if not isinstance(value, list) or len(value) != 3:
                 raise ValueError(f"substrate.{tuple_key} must be a 3-element list")
             substrate[tuple_key] = tuple(int(v) for v in value)
+    if "slab" in substrate and substrate["slab"] is not None:
+        slab_value = substrate["slab"]
+        if not isinstance(slab_value, (Atoms, SlabContainer)):
+            raise ValueError(
+                "substrate.slab must be an ase.Atoms or SlabContainer instance "
+                f"(got {type(slab_value).__name__}); use slab_file or bulk_id "
+                "for file-/id-based substrates"
+            )
     return substrate
 
 

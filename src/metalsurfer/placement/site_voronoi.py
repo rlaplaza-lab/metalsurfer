@@ -104,10 +104,12 @@ def _voronoi_sites(
     nn_positions = (
         nn_reference_positions if nn_reference_positions is not None else positions
     )
-    nn_extension_margin = extension_margin
-    nn_extended = _build_periodic_images(
-        nn_positions, cell, pbc, margin=nn_extension_margin
-    )
+    if nn_positions is positions:
+        nn_extended = extended
+    else:
+        nn_extended = _build_periodic_images(
+            nn_positions, cell, pbc, margin=extension_margin
+        )
 
     try:
         vor = Voronoi(extended)
@@ -239,9 +241,6 @@ def _generate_slab_topology_sites(
                 candidate_dists.append(d_val)
                 candidate_sources.append(source)
 
-    def _add_candidate(point: np.ndarray, source: str) -> None:
-        _add_candidates_batch(np.asarray(point, dtype=float).reshape(1, 3), source)
-
     # Atop candidates: always useful and cheap.
     atop_positions = top_positions + float(site_height) * n_hat
     _add_candidates_batch(atop_positions, "topology_atop")
@@ -291,6 +290,7 @@ def _generate_slab_topology_sites(
 
     if tri is not None:
         seen_edges: set[tuple[int, int, float, float, float]] = set()
+        bridge_points: list[np.ndarray] = []
         for simplex in np.asarray(tri.simplices, dtype=int):
             for e0, e1 in ((0, 1), (1, 2), (0, 2)):
                 i_exp, j_exp = int(simplex[e0]), int(simplex[e1])
@@ -311,9 +311,14 @@ def _generate_slab_topology_sites(
                 if edge_key in seen_edges:
                     continue
                 seen_edges.add(edge_key)
-                _add_candidate(midpoint, "topology_bridge")
+                bridge_points.append(midpoint)
+        if bridge_points:
+            _add_candidates_batch(
+                np.asarray(bridge_points, dtype=float), "topology_bridge"
+            )
 
         seen_tris: set[tuple[int, int, int, float, float, float]] = set()
+        hollow_points: list[np.ndarray] = []
         for simplex in np.asarray(tri.simplices, dtype=int):
             local_ids = tuple(
                 sorted({expanded_origin_local_index[int(k)] for k in simplex})
@@ -332,7 +337,11 @@ def _generate_slab_topology_sites(
             if tri_key in seen_tris:
                 continue
             seen_tris.add(tri_key)
-            _add_candidate(centroid, "topology_hollow")
+            hollow_points.append(centroid)
+        if hollow_points:
+            _add_candidates_batch(
+                np.asarray(hollow_points, dtype=float), "topology_hollow"
+            )
 
     if not candidates:
         return (
@@ -527,7 +536,7 @@ def _build_delaunay_classification_index(
     work_tri = triangulation
 
     use_pbc = cell is not None and pbc is not None and (bool(pbc[0]) or bool(pbc[1]))
-    if cell is not None and pbc is not None and use_pbc:
+    if use_pbc:
         exp_xy, exp_origin, _image_id, _ = _expand_top_layer_ab_images(
             top_xy, cell=cell, pbc=pbc
         )

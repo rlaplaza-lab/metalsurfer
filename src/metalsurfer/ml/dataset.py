@@ -58,6 +58,10 @@ class DatasetLogger:
         )
         self._records: list[PlacementRecord] = []
         self._config = config
+        self._seen_hashes: set[str] = set()
+        self._row_count = 0
+        self._csv_columns: list[str] | None = None
+        self._disk_state_loaded = False
 
     @property
     def csv_path(self) -> str:
@@ -146,20 +150,41 @@ class DatasetLogger:
 
         new_df = new_df.drop_duplicates(subset=["record_hash"], keep="first")
 
-        if os.path.exists(self.csv_path):
-            existing_hashes = set(
-                pd.read_csv(self.csv_path, usecols=["record_hash"])["record_hash"]
-            )
-            new_df = new_df[~new_df["record_hash"].isin(existing_hashes)]
+        if not self._disk_state_loaded:
+            if os.path.exists(self.csv_path):
+                hash_col = pd.read_csv(self.csv_path, usecols=["record_hash"])[
+                    "record_hash"
+                ].astype(str)
+                # Row count includes duplicate hashes already present on disk.
+                self._row_count = int(len(hash_col))
+                self._seen_hashes = set(hash_col)
+                self._csv_columns = list(pd.read_csv(self.csv_path, nrows=0).columns)
+            self._disk_state_loaded = True
+
+        if self._csv_columns is not None:
+            new_cols = list(new_df.columns)
+            if self._csv_columns != new_cols:
+                raise ValueError(
+                    f"Refusing to append to {self.csv_path}: column schema mismatch "
+                    f"(existing {len(self._csv_columns)} cols vs new {len(new_cols)} cols). "
+                    "export_placement_provenance must match the existing dataset "
+                    f"(existing={self._csv_columns[:8]}..., new={new_cols[:8]}...)."
+                )
+            new_df = new_df[~new_df["record_hash"].astype(str).isin(self._seen_hashes)]
             if new_df.empty:
                 logger.info("All %d records already in dataset", len(self._records))
                 self._records.clear()
                 return self.csv_path
             new_df.to_csv(self.csv_path, mode="a", header=False, index=False)
-            total_count = len(existing_hashes) + len(new_df)
+            self._seen_hashes.update(new_df["record_hash"].astype(str))
+            self._row_count += len(new_df)
         else:
             new_df.to_csv(self.csv_path, index=False)
-            total_count = len(new_df)
+            self._seen_hashes = set(new_df["record_hash"].astype(str))
+            self._row_count = len(new_df)
+            self._csv_columns = list(new_df.columns)
+
+        total_count = self._row_count
 
         logger.info(
             "Flushed %d new records to %s (total: %d)",

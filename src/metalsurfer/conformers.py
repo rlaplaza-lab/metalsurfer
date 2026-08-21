@@ -101,9 +101,8 @@ def create_conformers_from_smiles(
             symbols.append(atom.GetSymbol())
 
         atoms = Atoms(symbols=symbols, positions=np.array(positions))
-        if calculator is not None or ts_model is not None:
-            atoms.cell = [config.vacuum_box_size] * 3
-            atoms.set_pbc([False, False, False])
+        atoms.cell = [config.vacuum_box_size] * 3
+        atoms.set_pbc([False, False, False])
         conformers.append(atoms)
 
     if ts_model is not None and len(conformers) > 0:
@@ -119,16 +118,15 @@ def create_conformers_from_smiles(
     else:
         energies = [0.0] * len(conformers)
 
-    logger.info("Created %d conformers for %s", len(conformers), smiles)
-    if (calculator is not None or ts_model is not None) and energies:
-        logger.info("Energies range: %.4f to %.4f eV", min(energies), max(energies))
-
     conformers, energies = remove_duplicate_conformers(
         conformers,
         energies,
         distance_threshold=config.rmsd_dedup_threshold,
         energy_threshold=config.energy_dedup_threshold,
     )
+    logger.info("Created %d conformers for %s", len(conformers), smiles)
+    if (calculator is not None or ts_model is not None) and energies:
+        logger.info("Energies range: %.4f to %.4f eV", min(energies), max(energies))
     return conformers, energies
 
 

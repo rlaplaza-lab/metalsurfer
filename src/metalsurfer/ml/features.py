@@ -5,8 +5,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from ..placement._constants import _DISTANCE_ZERO_EPS
-from ..placement.geometry import normalize_quaternion
+from ..placement.geometry import normalize_quaternion, normalize_quaternions
 from .schema import PlacementRecord
 
 logger = logging.getLogger(__name__)
@@ -66,7 +65,6 @@ def extract_features(record: PlacementRecord) -> dict[str, float]:
     features["quat_x"] = float(quat[1])
     features["quat_y"] = float(quat[2])
     features["quat_z"] = float(quat[3])
-
     return features
 
 
@@ -92,6 +90,8 @@ def extract_features_from_dataset(
     """
     if target_column not in df.columns:
         raise ValueError(f"Target column '{target_column}' not in dataset")
+    if len(df) == 0:
+        raise ValueError("Dataset is empty; cannot extract training features")
 
     working = df.copy()
     required_geometry_cols = ("x_abs", "y_abs", "z_abs", "conformer_index")
@@ -135,13 +135,7 @@ def extract_features_from_dataset(
             "Dataset contains non-finite values in quaternion columns "
             "(quat_w, quat_x, quat_y, quat_z)"
         )
-    norms = np.linalg.norm(quat_values, axis=1)
-    zero_mask = norms < _DISTANCE_ZERO_EPS
-    norms[zero_mask] = 1.0
-    quat_values = quat_values / norms[:, np.newaxis]
-    neg_mask = quat_values[:, 0] < 0.0
-    quat_values[neg_mask] *= -1.0
-    quat_values[zero_mask] = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+    quat_values = normalize_quaternions(quat_values)
 
     X = pd.DataFrame(
         {
@@ -155,7 +149,12 @@ def extract_features_from_dataset(
             "quat_z": quat_values[:, 3].astype(float),
         }
     )
-    y = df[target_column].copy()
+    y = pd.to_numeric(df[target_column], errors="coerce")
+    if y.isna().any() or not np.all(np.isfinite(y.to_numpy(dtype=float))):
+        raise ValueError(
+            f"Dataset contains missing/non-finite values in target column "
+            f"'{target_column}'"
+        )
 
     n_features = X.shape[1]
     logger.info("Extracted %d features from %d records", n_features, len(X))

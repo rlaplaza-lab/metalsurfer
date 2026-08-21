@@ -7,7 +7,7 @@
 #
 # Usage (from repo root, with metalsurfer conda env and GPU):
 #   ./scripts/run_all_examples.sh
-#   nohup bash scripts/run_all_examples.sh > logs/example_runs/v0.3_all_$(date +%Y%m%d_%H%M).log 2>&1 &
+#   nohup bash scripts/run_all_examples.sh > logs/example_runs/v0.4_all_$(date +%Y%m%d_%H%M).log 2>&1 &
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -59,7 +59,7 @@ declare -a EXAMPLE_STATUS=()
 for example in "${EXAMPLES[@]}"; do
   name="$(basename "$example" .py)"
   results_dir="${EXAMPLE_RESULTS[$example]:-results_${name}}"
-  log_file="${LOG_DIR}/v0.3_${name}_${STAMP}.log"
+  log_file="${LOG_DIR}/v0.4_${name}_${STAMP}.log"
   echo "===== START ${example} (fresh run; removing ${results_dir}) =====" | tee -a "$log_file"
   rm -rf "$results_dir"
   set +e

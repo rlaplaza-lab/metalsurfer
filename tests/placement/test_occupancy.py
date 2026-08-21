@@ -228,6 +228,43 @@ def test_estimate_complexity_shrinks_under_coverage():
     assert covered == 0.0
 
 
+def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distance():
+    """Site pruning must honour min_adsorbate_separation when defaults diverge."""
+    from metalsurfer.placement.generators import estimate_molecule_complexity
+    from metalsurfer.placement.site_context import resolve_site_context_for_sampling
+
+    clear_site_caches()
+    slab = make_slab()
+    ctx = resolve_site_context_for_sampling(
+        slab, AdsorptionConfig(material_type="slab", seed=0), symmetry_broken=True
+    )
+    assert ctx.use_sites and ctx.sites
+    site = ctx.sites[0]
+    # Place an adsorbate atom ~2 A from the site vertex.
+    ads = Atoms("H", positions=[site.xyz + np.array([2.0, 0.0, 0.0])])
+    full = slab.copy() + ads
+
+    loose = AdsorptionConfig(
+        material_type="slab",
+        seed=0,
+        min_initial_distance=1.5,
+        min_adsorbate_separation=1.5,
+    )
+    strict = AdsorptionConfig(
+        material_type="slab",
+        seed=0,
+        min_initial_distance=1.5,
+        min_adsorbate_separation=3.0,
+    )
+    score_loose = estimate_molecule_complexity(
+        [make_water()], slab, loose, "O", site_context=ctx, full_slab=full
+    )
+    score_strict = estimate_molecule_complexity(
+        [make_water()], slab, strict, "O", site_context=ctx, full_slab=full
+    )
+    assert score_strict < score_loose
+
+
 def test_overlap_recovery_rescues_lateral_clash():
     clear_site_caches()
     slab = make_slab()

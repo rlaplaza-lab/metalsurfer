@@ -13,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 
 from .._numeric_defaults import DEFAULT_SEED
 
-ModelType = Literal["ridge", "random_forest", "gradient_boost"]
+ModelType = Literal["ridge", "gradient_boost"]
 TreeSurrogateKind = Literal["random_forest", "extra_trees"]
 
 
@@ -58,15 +58,7 @@ def _build_estimator(
     if model_type == "ridge":
         estimator = Ridge(alpha=kwargs.get("alpha", 1.0), random_state=random_state)
         return Pipeline([("scaler", StandardScaler()), ("regressor", estimator)])
-    if model_type == "random_forest":
-        estimator = RandomForestRegressor(
-            n_estimators=kwargs.get("n_estimators", 200),
-            max_depth=kwargs.get("max_depth"),
-            min_samples_leaf=kwargs.get("min_samples_leaf", 2),
-            random_state=random_state,
-            n_jobs=-1,
-        )
-    elif model_type == "gradient_boost":
+    if model_type == "gradient_boost":
         estimator = HistGradientBoostingRegressor(
             max_iter=kwargs.get("max_iter", 300),
             max_depth=kwargs.get("max_depth", 6),

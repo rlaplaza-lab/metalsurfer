@@ -35,6 +35,8 @@ from .orientation import (
 from .pose import (
     _finalize_placement,
     _pose_from_spec,
+    _PoseBatchCache,
+    build_pose_batch_cache,
 )
 from .site_context import (
     SiteContext,
@@ -120,6 +122,9 @@ def generate_placements_from_specs(
     if not specs:
         return []
 
+    placement_ref = slab_for_sites if slab_for_sites is not None else slab
+    pose_cache = build_pose_batch_cache(placement_ref, conformers, config)
+
     def _one(
         spec: PlacementSpec,
     ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
@@ -139,6 +144,7 @@ def generate_placements_from_specs(
             smiles=smiles,
             site_context=site_context,
             slab_for_sites=slab_for_sites,
+            pose_cache=pose_cache,
         )
 
     n_workers = resolve_materialize_workers(
@@ -205,7 +211,7 @@ def _spec_grid_info(
             existing_ads_pos,
             cell=np.asarray(slab.get_cell(), dtype=float),
             pbc=material_aware_pbc(config.material_type),
-            min_separation=float(config.min_initial_distance),
+            min_separation=float(config.min_adsorbate_separation),
         )
         if not site_indices:
             logger.warning(
@@ -469,6 +475,10 @@ def distribute_placement_budget(
     Uses largest-remainder (Hamilton) allocation with a floor of 1 per molecule
     so the returned values always sum to exactly *total_budget*.
 
+    When *total_budget* is smaller than the number of molecules, only the
+    top-*total_budget* molecules by complexity receive 1 placement each; the
+    rest are omitted (callers already skip molecules missing from the budget).
+
     Parameters
     ----------
     complexities
@@ -484,10 +494,12 @@ def distribute_placement_budget(
     names = list(complexities)
     n = len(names)
     if total_budget < n:
-        raise ValueError(
-            f"total_budget ({total_budget}) must be >= number of molecules "
-            f"({n}); cannot guarantee every molecule at least 1 placement"
+        # Prefer higher complexity; stable tie-break by name for determinism.
+        ranked = sorted(
+            names,
+            key=lambda name: (-max(1.0, float(complexities[name])), name),
         )
+        return {name: 1 for name in ranked[:total_budget]}
 
     scores = [max(1.0, float(complexities[name])) for name in names]
     total_score = sum(scores)
@@ -557,6 +569,7 @@ def generate_placement_from_spec_with_reason(
     smiles: str | None = None,
     site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
+    pose_cache: _PoseBatchCache | None = None,
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
     """Generate placement from spec and provide a failure reason when unavailable.
 
@@ -576,6 +589,8 @@ def generate_placement_from_spec_with_reason(
         Optional precomputed site context.
     slab_for_sites
         Optional substrate for site detection.
+    pose_cache
+        Optional per-batch slab/conformer cache.
     """
     if not conformers:
         return None, "no_conformers"
@@ -614,6 +629,7 @@ def generate_placement_from_spec_with_reason(
         smiles,
         site_context=resolved_ctx,
         slab_for_sites=slab_for_sites,
+        pose_cache=pose_cache,
     )
     if placement_ctx is None:
         return None, pose_fail or "no_sites_found"
@@ -625,6 +641,7 @@ def generate_placement_from_spec_with_reason(
         config,
         slab_for_sites=slab_for_sites,
         allow_distance_recovery=True,
+        pose_cache=pose_cache,
     )
     if result is not None:
         return result, None

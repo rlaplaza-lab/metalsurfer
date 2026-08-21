@@ -1,6 +1,5 @@
 """Sequential and multi-molecule saturation workflow entry points."""
 
-import copy
 import logging
 import time
 from collections.abc import Callable
@@ -14,6 +13,8 @@ from ..config import AdsorptionConfig
 from ..conformers import create_conformers_from_smiles
 from ..filters import adsorbate_connected_components
 from ..ml.dataset import DatasetLogger
+from ..ml.features import extract_features
+from ..ml.schema import PlacementRecord
 from ..models import (
     BOStepMemory,
     BOTransferInfo,
@@ -62,11 +63,14 @@ def _saturation_symmetry_broken_vs_reference(
     reference_atoms: Atoms,
     *,
     symmetry_tolerance: float,
+    reference_analyzer: SymmetryAnalyzer | None = None,
 ) -> bool:
     """Check whether symmetry vs *reference_atoms* is broken or analysis fails (treat as C1)."""
     analyzer = SymmetryAnalyzer(current_atoms, symmetry_tolerance=symmetry_tolerance)
     try:
-        broken = analyzer.detect_symmetry_breaking(reference_atoms)
+        broken = analyzer.detect_symmetry_breaking(
+            reference_atoms, reference_analyzer=reference_analyzer
+        )
     except SymmetryAnalysisError as exc:
         logger.warning(
             "Symmetry analysis unavailable (%s); assuming C1",
@@ -111,10 +115,9 @@ def _commit_bo_memory_state(
     if new_memory is None:
         state.prior_step_memory = None
     else:
-        committed = copy.deepcopy(new_memory)
-        state.prior_step_memory = committed
-        state.prior_step_memories.append(committed)
-    if config.bo.transfer.enabled:
+        state.prior_step_memory = new_memory
+        state.prior_step_memories.append(new_memory)
+    if config.bo.transfer.enabled and config.bo.transfer.mode == "cumulative_refit":
         state.prior_cumulative_memory = merge_bo_step_memories(
             [state.prior_cumulative_memory, state.prior_step_memory]
         )
@@ -258,28 +261,57 @@ def _saturation_step_preamble(
     ref: ReferenceEnergies,
     config: AdsorptionConfig,
     log_label: str,
+    reference_analyzer: SymmetryAnalyzer | None = None,
 ) -> _SaturationStepPreamble:
     """Shared per-step setup before molecule screening."""
     if step > 1 and not config.saturation_autobatcher_reuse:
         clear_autobatcher_cache()
 
     if step > 1 and not symmetry_broken:
-        symmetry_broken = _saturation_symmetry_broken_vs_reference(
+        # Substrate only: adsorbates would always flip the space-group fingerprint.
+        substrate_for_symmetry = _build_surface_reference_slab(
             current_slab.atoms,
             reference_slab_for_symmetry,
+        )
+        symmetry_broken = _saturation_symmetry_broken_vs_reference(
+            substrate_for_symmetry,
+            reference_slab_for_symmetry,
             symmetry_tolerance=config.symmetry_tolerance,
+            reference_analyzer=reference_analyzer,
         )
 
-    E_slab = _compute_slab_energy(
-        current_slab.atoms,
-        calculator,
-        label=f"{log_label} slab",
+    E_slab = (
+        ref.slab_energy
+        if step == 1
+        else _compute_slab_energy(
+            current_slab.atoms,
+            calculator,
+            label=f"{log_label} slab",
+        )
     )
     ref_step = ReferenceEnergies(
         slab_energy=E_slab,
         molecule_energies=ref.molecule_energies,
+        conformer_packs=ref.conformer_packs,
     )
     return _SaturationStepPreamble(symmetry_broken, E_slab, ref_step)
+
+
+def _committed_placement_features(
+    result: ScreeningResult,
+    *,
+    smiles: str,
+    surface_id: str,
+    config: AdsorptionConfig,
+) -> dict[str, float]:
+    """Feature row for a placement that was committed onto the slab."""
+    record = PlacementRecord.from_screening_result(
+        result,
+        smiles=smiles,
+        surface_id=surface_id,
+        config=config,
+    )
+    return extract_features(record)
 
 
 def _screen_saturation_molecule(
@@ -294,7 +326,7 @@ def _screen_saturation_molecule(
     surface_type: str,
     base_slab: Atoms,
     E_slab: float,
-    failure_summary_out: dict[str, object] | None,
+    failure_summary_out: dict[str, dict[str, object]] | None,
     symmetry_broken: bool,
     process_fn: Callable[..., MoleculeScreenOutcome],
     bo_state: _BoMemoryState | None,
@@ -302,7 +334,10 @@ def _screen_saturation_molecule(
     conformers: list[Atoms] | None = None,
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
-) -> tuple[list[ScreeningResult], BOTransferInfo, BOStepMemory | None]:
+    occupancy_placement_X: list[dict[str, float]] | None = None,
+) -> tuple[
+    list[ScreeningResult], BOTransferInfo, BOStepMemory | None, list[PlacementRecord]
+]:
     """Run one molecule's place/opt/filter for a saturation step."""
     common_kwargs: dict[str, Any] = {
         "ts_model": ts_model,
@@ -326,7 +361,8 @@ def _screen_saturation_molecule(
             calculator,
             ref_step,
             bo_step_memory_in=_bo_transfer_memory_in(config, bo_state),
-            bo_prior_step_memory=bo_state.prior_step_memory,
+            occupancy_placement_X=occupancy_placement_X,
+            saturation_reuse=True,
             **common_kwargs,
         )
         transfer_info = outcome.transfer_info or BOTransferInfo()
@@ -345,8 +381,7 @@ def _screen_saturation_molecule(
         new_memory = None
 
     if failure_summary_out is not None and outcome.failure_summary:
-        failure_summary_out.clear()
-        failure_summary_out.update(outcome.failure_summary)
+        failure_summary_out[molecule_name] = dict(outcome.failure_summary)
 
     filtered = _filter_saturation_topology_results(
         list(outcome.results) if outcome.results else [],
@@ -354,7 +389,7 @@ def _screen_saturation_molecule(
         reference_unit_smiles=reference_unit_smiles,
         config=config,
     )
-    return filtered, transfer_info, new_memory
+    return filtered, transfer_info, new_memory, list(outcome.ml_records)
 
 
 def _saturation_should_stop(
@@ -403,6 +438,11 @@ def _run_saturation_steps(
 ) -> Atoms:
     """Shared coverage loop; single/multi differ only via screen/record callbacks."""
     symmetry_broken = False
+    # Clean reference is fixed for the run; build its analyzer once.
+    reference_analyzer = SymmetryAnalyzer(
+        reference_slab_for_symmetry,
+        symmetry_tolerance=config.symmetry_tolerance,
+    )
     step = 0
     while True:
         step += 1
@@ -418,6 +458,7 @@ def _run_saturation_steps(
             ref=ref,
             config=config,
             log_label=make_log_label(step),
+            reference_analyzer=reference_analyzer,
         )
         symmetry_broken = preamble.symmetry_broken
 
@@ -455,7 +496,7 @@ def _run_single_molecule_saturation(
     ref: ReferenceEnergies,
     config: AdsorptionConfig,
     surface_type: str,
-    failure_summary_out: dict[str, object] | None,
+    failure_summary_out: dict[str, dict[str, object]] | None,
     ds_logger: DatasetLogger,
     process_fn: Callable[..., MoleculeScreenOutcome],
 ) -> SaturationRunResult | None:
@@ -463,16 +504,20 @@ def _run_single_molecule_saturation(
     bo_enabled = process_fn is process_molecule_bayesian
     cached_conformers: list[Atoms] | None = None
     cached_conformer_energies: list[float] | None = None
-    conformer_pack = create_conformers_from_smiles(
-        smiles, calculator=calculator, config=config, ts_model=ts_model
-    )
-    if conformer_pack is not None:
-        cached_conformers, cached_conformer_energies = conformer_pack
+    cached_pack = ref.get_conformer_pack(molecule)
+    if cached_pack is not None:
+        cached_conformers, cached_conformer_energies = cached_pack
+    else:
+        conformer_pack = create_conformers_from_smiles(
+            smiles, calculator=calculator, config=config, ts_model=ts_model
+        )
+        if conformer_pack is not None:
+            cached_conformers, cached_conformer_energies = conformer_pack
 
     current_slab = SlabContainer(base_slab.copy())
     steps: list[SaturationStepResult] = []
     bo_state = _BoMemoryState()
-    skip_autotune = not needs_workload_autotune(config, bo=bo_enabled)
+    committed_placement_X: list[dict[str, float]] = []
 
     def screen_step(
         step: int,
@@ -493,26 +538,49 @@ def _run_single_molecule_saturation(
         slab
             Current slab container.
         """
-        mol_results, transfer_info, new_memory = _screen_saturation_molecule(
-            smiles=smiles,
-            molecule_name=molecule,
-            current_slab=slab,
-            calculator=calculator,
-            ref_step=preamble.ref_step,
-            ts_model=ts_model,
-            config=config,
-            surface_type=surface_type,
-            base_slab=base_slab,
-            E_slab=preamble.E_slab,
-            failure_summary_out=failure_summary_out,
-            symmetry_broken=symmetry_broken,
-            process_fn=process_fn,
-            bo_state=bo_state if bo_enabled else None,
-            reference_unit_smiles=[smiles] * step,
-            conformers=cached_conformers,
-            conformer_energies=cached_conformer_energies,
-            skip_workload_autotune=skip_autotune,
+        nonlocal config
+        if needs_workload_autotune(config, bo=bo_enabled):
+            if cached_conformers is None:
+                raise ValueError(
+                    "conformers required to resolve saturation workload config"
+                )
+            slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
+            config = resolve_saturation_step_workload_config(
+                config,
+                ts_model=ts_model,
+                conformers=cached_conformers,
+                slab_atoms=slab.atoms,
+                slab_for_sites=slab_for_sites,
+                smiles=smiles,
+                base_slab_for_frozen=base_slab,
+                symmetry_broken=symmetry_broken,
+                bo_enabled=bo_enabled,
+            )
+        mol_results, transfer_info, new_memory, ml_records = (
+            _screen_saturation_molecule(
+                smiles=smiles,
+                molecule_name=molecule,
+                current_slab=slab,
+                calculator=calculator,
+                ref_step=preamble.ref_step,
+                ts_model=ts_model,
+                config=config,
+                surface_type=surface_type,
+                base_slab=base_slab,
+                E_slab=preamble.E_slab,
+                failure_summary_out=failure_summary_out,
+                symmetry_broken=symmetry_broken,
+                process_fn=process_fn,
+                bo_state=bo_state if bo_enabled else None,
+                reference_unit_smiles=[smiles] * step,
+                conformers=cached_conformers,
+                conformer_energies=cached_conformer_energies,
+                skip_workload_autotune=True,
+                occupancy_placement_X=committed_placement_X or None,
+            )
         )
+        for record in ml_records:
+            ds_logger.add_record(record)
         if bo_enabled:
             _commit_bo_memory_state(bo_state, new_memory, config=config)
 
@@ -556,6 +624,15 @@ def _run_single_molecule_saturation(
             )
         )
         ds_logger.add_results(mol_results, smiles=smiles, surface_id=surface_type)
+        if outcome.best.energy_adsorption < 0:
+            committed_placement_X.append(
+                _committed_placement_features(
+                    outcome.best,
+                    smiles=smiles,
+                    surface_id=surface_type,
+                    config=config,
+                )
+            )
         logger.info(
             "Step %d: best E_ads = %.4f eV (placement %d)",
             step,
@@ -600,7 +677,7 @@ def _run_multi_molecule_saturation(
     ref: ReferenceEnergies,
     config: AdsorptionConfig,
     surface_type: str,
-    failure_summary_out: dict[str, object] | None,
+    failure_summary_out: dict[str, dict[str, object]] | None,
     ds_logger: DatasetLogger,
     *,
     process_fn: Callable[..., MoleculeScreenOutcome],
@@ -610,19 +687,23 @@ def _run_multi_molecule_saturation(
     conformer_cache: dict[str, tuple[list[Atoms], list[float]]] = {}
 
     for smi, mol in zip(smiles_list, molecules, strict=True):
-        result = create_conformers_from_smiles(
-            smi,
-            calculator=calculator,
-            config=config,
-            ts_model=ts_model,
-        )
-        if result is None:
-            logger.warning(
-                "Multi-mol saturation: could not generate conformers for %s; skipping this molecule",
-                mol,
+        cached_pack = ref.get_conformer_pack(mol)
+        if cached_pack is not None:
+            conformers, conformer_energies = cached_pack
+        else:
+            generated = create_conformers_from_smiles(
+                smi,
+                calculator=calculator,
+                config=config,
+                ts_model=ts_model,
             )
-            continue
-        conformers, conformer_energies = result
+            if generated is None:
+                logger.warning(
+                    "Multi-mol saturation: could not generate conformers for %s; skipping this molecule",
+                    mol,
+                )
+                continue
+            conformers, conformer_energies = generated
         conformer_cache[mol] = (conformers, conformer_energies)
 
     active_smiles = {
@@ -661,6 +742,7 @@ def _run_multi_molecule_saturation(
     bo_states: dict[str, _BoMemoryState] = {
         mol: _BoMemoryState() for mol in active_molecules
     }
+    committed_placement_X: list[dict[str, float]] = []
 
     def screen_step(
         step: int,
@@ -759,31 +841,36 @@ def _run_multi_molecule_saturation(
             smi = active_smiles[mol]
             mol_config = replace(step_config, num_placements=budgets[mol])
 
-            resolved, transfer_info, new_memory = _screen_saturation_molecule(
-                smiles=smi,
-                molecule_name=mol,
-                current_slab=slab,
-                calculator=calculator,
-                ref_step=ref_step,
-                ts_model=ts_model,
-                config=mol_config,
-                surface_type=surface_type,
-                base_slab=base_slab,
-                E_slab=E_slab,
-                failure_summary_out=failure_summary_out,
-                symmetry_broken=symmetry_broken,
-                process_fn=process_fn,
-                bo_state=bo_states[mol] if bo_enabled else None,
-                reference_unit_smiles=_reference_smiles_units_multi_molecule(
-                    active_molecules,
-                    active_smiles,
-                    molecule_counts,
-                    mol,
-                ),
-                conformers=conformer_cache[mol][0],
-                conformer_energies=conformer_cache[mol][1],
-                skip_workload_autotune=True,
+            resolved, transfer_info, new_memory, ml_records = (
+                _screen_saturation_molecule(
+                    smiles=smi,
+                    molecule_name=mol,
+                    current_slab=slab,
+                    calculator=calculator,
+                    ref_step=ref_step,
+                    ts_model=ts_model,
+                    config=mol_config,
+                    surface_type=surface_type,
+                    base_slab=base_slab,
+                    E_slab=E_slab,
+                    failure_summary_out=failure_summary_out,
+                    symmetry_broken=symmetry_broken,
+                    process_fn=process_fn,
+                    bo_state=bo_states[mol] if bo_enabled else None,
+                    reference_unit_smiles=_reference_smiles_units_multi_molecule(
+                        active_molecules,
+                        active_smiles,
+                        molecule_counts,
+                        mol,
+                    ),
+                    conformers=conformer_cache[mol][0],
+                    conformer_energies=conformer_cache[mol][1],
+                    skip_workload_autotune=True,
+                    occupancy_placement_X=committed_placement_X or None,
+                )
             )
+            for record in ml_records:
+                ds_logger.add_record(record)
             per_molecule_bo_transfer[mol] = transfer_info
             new_bo_memory_raw[mol] = new_memory
             per_molecule_results[mol] = resolved
@@ -863,7 +950,17 @@ def _run_multi_molecule_saturation(
                 transfer_by_molecule=dict(per_molecule_bo_transfer),
             )
         )
-        molecule_counts[winning_molecule] += 1
+        if outcome.best.energy_adsorption < 0:
+            molecule_counts[winning_molecule] += 1
+            winning_smiles = active_smiles[winning_molecule]
+            committed_placement_X.append(
+                _committed_placement_features(
+                    outcome.best,
+                    smiles=winning_smiles,
+                    surface_id=surface_type,
+                    config=config,
+                )
+            )
 
         logger.info(
             "Step %d: winner = %s, E_ads = %.4f eV",
@@ -904,7 +1001,7 @@ def run_saturation_screening(
     config: AdsorptionConfig | None = None,
     surface_type: str = "manual",
     skip_existing: bool = True,
-    failure_summary_out: dict[str, object] | None = None,
+    failure_summary_out: dict[str, dict[str, object]] | None = None,
     run_metadata_out: dict[str, Any] | None = None,
     *,
     bo_enabled: bool = False,
@@ -924,7 +1021,8 @@ def run_saturation_screening(
     skip_existing
         Whether to skip molecules with existing results.
     failure_summary_out
-        Optional dict to populate with failure summaries.
+        Optional per-molecule failure summaries
+        (``{molecule_name: summary_dict}``).
     run_metadata_out
         Optional dict to populate with run metadata.
     bo_enabled

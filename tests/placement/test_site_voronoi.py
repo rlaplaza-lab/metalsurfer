@@ -327,8 +327,8 @@ def test_non_planar_slab_still_runs_voronoi(monkeypatch):
     assert sites
 
 
-def test_slab_only_enrichment_flag_warns(caplog):
-    """voronoi_site_enrichment is porous/nanoparticle-only; slabs get a warning."""
+def test_slab_enrichment_flag_does_not_warn_from_site_context(caplog):
+    """Planar slabs skip Voronoi in enumeration; site_context must not warn."""
     from metalsurfer.config import AdsorptionConfig
     from metalsurfer.placement.site_context import (
         _get_unique_sites_for_specs,
@@ -342,7 +342,55 @@ def test_slab_only_enrichment_flag_warns(caplog):
         _get_unique_sites_for_specs(slab, config)
     clear_site_caches()
 
-    assert any(
+    assert not any(
         "voronoi_site_enrichment=False has no effect" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_porous_classification_uses_periodic_neighbours_near_cell_face():
+    """Near-face porous sites must type from MIC k-NN, not in-cell distances."""
+    from metalsurfer.placement.site_classify import _build_classification_context
+    from metalsurfer.placement.site_coords import derive_pore_threshold
+    from metalsurfer.placement.site_enumeration import get_unified_sites
+
+    porous = make_porous_framework()
+    sites = get_unified_sites(porous, material_type="porous")
+    assert sites, "porous fixture must expose sites"
+
+    positions = porous.get_positions()
+    cell = np.asarray(porous.get_cell(), dtype=float)
+    pbc = np.asarray(porous.get_pbc(), dtype=bool)
+    local_tree = KDTree(positions)
+    vertices = np.asarray([s.xyz for s in sites], dtype=float)
+    k_class = min(_SITE_CLASSIFICATION_NEIGHBOURS, len(positions))
+
+    ctx = _build_classification_context(
+        vertices,
+        positions,
+        local_tree,
+        material_type="porous",
+        cell=cell,
+        pbc=pbc,
+        delaunay=None,
+    )
+    assert ctx.class_dists is not None and ctx.class_idx is not None
+
+    plain_dists, plain_idx = local_tree.query(vertices, k=k_class)
+    plain_dists = np.asarray(plain_dists, dtype=float)
+    plain_idx = np.asarray(plain_idx, dtype=int)
+    if plain_dists.ndim == 1:
+        plain_dists = plain_dists.reshape(-1, 1)
+        plain_idx = plain_idx.reshape(-1, 1)
+    assert np.any(
+        ~np.isclose(plain_dists, ctx.class_dists, atol=1e-6)
+        | (plain_idx != ctx.class_idx)
+    ), "expected at least one near-face site where in-cell k-NN differs from MIC"
+
+    pore_threshold = derive_pore_threshold(list(porous.get_chemical_symbols()))
+    for site, d_ref, i_ref in zip(sites, ctx.class_dists, ctx.class_idx, strict=True):
+        expected_type, expected_idx = _classify_voronoi_site_from_neighbors(
+            d_ref, i_ref, pore_threshold=pore_threshold
+        )
+        assert site.site_type == expected_type
+        assert tuple(site.slab_indices) == expected_idx

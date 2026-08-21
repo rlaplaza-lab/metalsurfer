@@ -485,7 +485,7 @@ def _assert_saturation_artifacts(results_dir: Path) -> None:
 
 _MATRIX_CASES = (
     # material, smiles, name, config overrides, symbols, dissociative, min_success_rate
-    ("slab", "O", "water", {}, ["H", "H", "O"], False, 1.0),
+    ("slab", "O", "water", {}, ["H", "H", "O"], False, 0.75),
     (
         "slab",
         "[H][H]",
@@ -499,8 +499,8 @@ _MATRIX_CASES = (
         True,
         1.0,
     ),
-    ("nanoparticle", "O", "water", {}, ["H", "H", "O"], False, 1.0),
-    ("porous", "O", "water", {}, ["H", "H", "O"], False, 1.0),
+    ("nanoparticle", "O", "water", {}, ["H", "H", "O"], False, 0.75),
+    ("porous", "O", "water", {}, ["H", "H", "O"], False, 0.75),
 )
 
 

@@ -78,10 +78,10 @@ jobs:
 
       - name: Publish to PyPI
         if: github.event.inputs.target == 'pypi'
-        uses: pypa/gh-action-pypi-publish@f8c8d3e6b7e9a0c1d2b3c4d5e6f7a8b9c0d1e2f3
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
 
       - name: Publish to TestPyPI
         if: github.event.inputs.target == 'testpypi'
-        uses: pypa/gh-action-pypi-publish@f8c8d3e6b7e9a0c1d2b3c4d5e6f7a8b9c0d1e2f3
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
         with:
           repository-url: https://test.pypi.org/legacy/

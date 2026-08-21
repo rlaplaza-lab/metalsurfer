@@ -244,7 +244,6 @@ def process_molecule(
             )
         )
         t_optimization = time.perf_counter() - t0
-        t_validation = 0.0
 
         if not results and not validation_failure_events and n_optimization_failed == 0:
             failure_summary["stage"] = "optimization"
@@ -303,14 +302,13 @@ def process_molecule(
         logger.info(
             "%d unique configs, E_ads [%.4f, %.4f] eV | "
             "timing: conformers=%.2fs placement=%.2fs opt=%.2fs "
-            "validation=%.2fs filter=%.2fs total=%.2fs",
+            "filter=%.2fs total=%.2fs",
             len(results),
             min(r.energy_adsorption for r in results) if results else float("nan"),
             max(r.energy_adsorption for r in results) if results else float("nan"),
             t_conformers,
             t_placement,
             t_optimization,
-            t_validation,
             t_filtering,
             t_mol_total,
         )
@@ -340,6 +338,7 @@ def _evaluate_placement_batch(
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
     backfill_specs: list | None = None,
     n_target: int | None = None,
+    saturation_reuse: bool = False,
 ) -> tuple[list[ScreeningResult], list[PlacementFailureEvent], int]:
     """Run placement-generation + optimization + validation for a batch of specs.
 
@@ -386,6 +385,7 @@ def _evaluate_placement_batch(
             molecule_name=molecule_name,
             surface_symbols=surface_symbols,
             base_slab_for_frozen=base_slab_for_frozen,
+            saturation_reuse=saturation_reuse,
             log_prefix="BO batch ",
         )
     )

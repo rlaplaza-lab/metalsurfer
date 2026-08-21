@@ -53,6 +53,12 @@ Bayesian hyperparameters under a nested ``bo:`` block (flat ``bo_*`` keys
 are rejected). Do not put a ``bo_enabled`` key there—it is not
 a config field.
 
+.. autofunction:: metalsurfer.load_campaign_yaml
+
+.. autoclass:: metalsurfer.CampaignDocument
+   :members:
+   :undoc-members:
+
 .. autofunction:: metalsurfer.run_campaign
 
 Standard Screening

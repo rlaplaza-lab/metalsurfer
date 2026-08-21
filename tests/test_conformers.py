@@ -45,6 +45,9 @@ class TestCreateConformers:
             assert 0.85 <= oh1 <= 1.15, f"O–H1={oh1:.3f}"
             assert 0.85 <= oh2 <= 1.15, f"O–H2={oh2:.3f}"
             assert 1.20 <= hh <= 1.80, f"H–H={hh:.3f}"
+            # Cell/PBC always set (even without calculator / ts_model).
+            assert np.allclose(c.cell.lengths(), [config.vacuum_box_size] * 3)
+            assert list(c.get_pbc()) == [False, False, False]
 
     def test_ethanol_produces_multiple_conformers(self):
         config = AdsorptionConfig(num_conformers=5, seed=42)

@@ -1,6 +1,7 @@
 """Aromatic heuristics, parallel fraction, and adsorbate orientation."""
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 from ase import Atoms
@@ -62,20 +63,33 @@ def _is_flat_aromatic(
     return bool(binders)
 
 
+@lru_cache(maxsize=256)
+def _smiles_aromatic_binder_info(smiles: str) -> tuple[bool, int] | None:
+    """Parse *smiles* once: ``(flat_aromatic_with_en, n_aromatic_atoms)`` or None."""
+    Chem = _rdkit_chem()
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    symbols = [a.GetSymbol() for a in mol.GetAtoms()]
+    n_aromatic = sum(1 for a in mol.GetAtoms() if a.GetIsAromatic())
+    has_en = bool(geom._binding_atom_candidates(symbols))
+    return bool(n_aromatic > 0 and has_en), n_aromatic
+
+
 def _is_flat_aromatic_with_en(smiles: str) -> bool:
     """Check whether the molecule has aromatic rings and electronegative (binding) atoms.
 
     Uses the heavy-atom SMILES graph only (no explicit H addition); aromaticity
     and binder identity are defined on heavy atoms.
     """
-    Chem = _rdkit_chem()
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        return False
-    aromatic = any(a.GetIsAromatic() for a in mol.GetAtoms())
-    symbols = [a.GetSymbol() for a in mol.GetAtoms()]
-    has_en = bool(geom._binding_atom_candidates(symbols))
-    return bool(aromatic and has_en)
+    info = _smiles_aromatic_binder_info(smiles)
+    return bool(info is not None and info[0])
+
+
+def _aromatic_ring_atom_count(smiles: str) -> int | None:
+    """Return aromatic heavy-atom count for *smiles*, or None if parse fails."""
+    info = _smiles_aromatic_binder_info(smiles)
+    return None if info is None else info[1]
 
 
 def _radius_sum_for_site(
@@ -149,10 +163,9 @@ def _estimate_parallel_fraction(
 
     n_ring = 0
     if smiles is not None:
-        Chem = _rdkit_chem()
-        mol = Chem.MolFromSmiles(smiles)
-        if mol is not None:
-            n_ring = sum(1 for a in mol.GetAtoms() if a.GetIsAromatic())
+        counted = _aromatic_ring_atom_count(smiles)
+        if counted is not None:
+            n_ring = counted
     if n_ring == 0:
         n_ring = sum(1 for s in symbols if s == "C")
 
@@ -171,9 +184,7 @@ class OrientedAdsorbate:
     """Canonical-frame adsorbate after orientation, before site translation."""
 
     rotated_pos: np.ndarray
-    canonical_pos: np.ndarray
     quat: np.ndarray  # (w, x, y, z)
-    normal: np.ndarray
 
 
 def _finish_orientation(
@@ -189,9 +200,7 @@ def _finish_orientation(
     quat = geom.rotation_matrix_to_quaternion(rot_mat)
     return OrientedAdsorbate(
         rotated_pos=rotated_pos,
-        canonical_pos=canonical_pos,
         quat=np.asarray(quat, dtype=float),
-        normal=np.asarray(normal, dtype=float),
     )
 
 

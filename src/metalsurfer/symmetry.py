@@ -392,15 +392,23 @@ class SymmetryAnalyzer:
             sep = sep - (sep @ n_hat)[..., None] * n_hat
         return np.linalg.norm(sep, axis=-1)
 
-    def detect_symmetry_breaking(self, reference_atoms: Atoms) -> bool:
+    def detect_symmetry_breaking(
+        self,
+        reference_atoms: Atoms,
+        *,
+        reference_analyzer: SymmetryAnalyzer | None = None,
+    ) -> bool:
         """Check whether space group or symmetry operation set differs from reference.
 
         Parameters
         ----------
         reference_atoms
             ASE Atoms to compare against.
+        reference_analyzer
+            Optional pre-built analyzer for *reference_atoms* (avoids re-running
+            spglib on an unchanging clean reference).
         """
-        ref = SymmetryAnalyzer(
+        ref = reference_analyzer or SymmetryAnalyzer(
             reference_atoms,
             self.symmetry_tolerance,
             mode="auto",

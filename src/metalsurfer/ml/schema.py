@@ -44,6 +44,11 @@ from ..placement.geometry import normalize_quaternion
 SCHEMA_VERSION = "3.0"
 
 
+def _quat_component(value: float | None, default: float) -> float:
+    """Coerce quaternion component; treat only ``None`` as missing (not ``0.0``)."""
+    return float(default) if value is None else float(value)
+
+
 def _context_from_config(config: AdsorptionConfig | None) -> "ComputationContext":
     return (
         ComputationContext.from_config(config)
@@ -318,10 +323,10 @@ class PlacementRecord:
         q = normalize_quaternion(
             np.array(
                 [
-                    float(self.descriptor.quat_w or 1.0),
-                    float(self.descriptor.quat_x or 0.0),
-                    float(self.descriptor.quat_y or 0.0),
-                    float(self.descriptor.quat_z or 0.0),
+                    _quat_component(self.descriptor.quat_w, 1.0),
+                    _quat_component(self.descriptor.quat_x, 0.0),
+                    _quat_component(self.descriptor.quat_y, 0.0),
+                    _quat_component(self.descriptor.quat_z, 0.0),
                 ],
                 dtype=float,
             )
@@ -515,10 +520,10 @@ class PlacementRecord:
             "z_offset": round(float(d.z_offset), 6),
             "surface_ref_z_abs": round(float(d.surface_ref_z_abs or 0.0), 6),
             "z_abs": round(float(d.z_abs or 0.0), 6),
-            "quat_w": round(float(d.quat_w or 1.0), 6),
-            "quat_x": round(float(d.quat_x or 0.0), 6),
-            "quat_y": round(float(d.quat_y or 0.0), 6),
-            "quat_z": round(float(d.quat_z or 0.0), 6),
+            "quat_w": round(_quat_component(d.quat_w, 1.0), 6),
+            "quat_x": round(_quat_component(d.quat_x, 0.0), 6),
+            "quat_y": round(_quat_component(d.quat_y, 0.0), 6),
+            "quat_z": round(_quat_component(d.quat_z, 0.0), 6),
             "fragment_positions": (
                 tuple(
                     (

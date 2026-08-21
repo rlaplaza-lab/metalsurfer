@@ -373,9 +373,45 @@ def test_clear_autobatcher_cache_runs_cuda_path(monkeypatch: pytest.MonkeyPatch)
     torch_stub.cuda.is_available.return_value = True
     torch_stub.cuda.ipc_collect = MagicMock()
     monkeypatch.setattr(_deps, "torch", torch_stub)
-    _cache.clear_autobatcher_cache()
+    _cache.clear_autobatcher_cache(drain_cuda=True)
     torch_stub.cuda.synchronize.assert_called()
     torch_stub.cuda.empty_cache.assert_called()
+
+
+def test_clear_autobatcher_cache_default_skips_cuda_drain(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Per-batch eviction must not synchronize/empty_cache by default."""
+    _cache._AUTOBATCHER_CACHE.clear()
+    _cache._AUTOBATCHER_CACHE[("k",)] = object()
+    torch_stub = MagicMock()
+    torch_stub.cuda.is_available.return_value = True
+    monkeypatch.setattr(_deps, "torch", torch_stub)
+    _cache.clear_autobatcher_cache()
+    torch_stub.cuda.synchronize.assert_not_called()
+    torch_stub.cuda.empty_cache.assert_not_called()
+    assert _cache._AUTOBATCHER_CACHE == {}
+
+
+def test_clear_autobatcher_cache_clear_capacity_drains_cuda(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _cache._AUTOBATCHER_CACHE.clear()
+    _cache._AUTOBATCHER_CACHE[("k",)] = object()
+    torch_stub = MagicMock()
+    torch_stub.cuda.is_available.return_value = True
+    torch_stub.cuda.ipc_collect = MagicMock()
+    monkeypatch.setattr(_deps, "torch", torch_stub)
+    _cache.clear_autobatcher_cache(clear_capacity=True)
+    torch_stub.cuda.synchronize.assert_called()
+    torch_stub.cuda.empty_cache.assert_called()
+
+
+def test_clip_frozen_indices_to_slab_drops_out_of_range():
+    kept = _optimize._clip_frozen_indices_to_slab([0, 1, 5, 10], slab_size=5)
+    assert kept == [0, 1]
+    assert _optimize._clip_frozen_indices_to_slab([0, 1, 2], slab_size=5) == [0, 1, 2]
+    assert _optimize._clip_frozen_indices_to_slab([], slab_size=5) == []
 
 
 def test_get_inflight_autobatcher_returns_none_without_ts():
@@ -979,9 +1015,12 @@ def test_resolve_autobatcher_max_atoms_to_try_is_conservative_vs_estimate():
 
 
 class _FakeBatch:
-    def __init__(self, forces, system_idx):
+    def __init__(self, forces, system_idx=None):
         self.forces = _FakeTensor(forces)
-        self.system_idx = _FakeTensor(system_idx)
+        if system_idx is None:
+            self.system_idx = None
+        else:
+            self.system_idx = _FakeTensor(system_idx)
 
 
 def test_split_forces_by_system_returns_per_system_arrays():
@@ -1007,6 +1046,19 @@ def test_split_forces_by_system_returns_per_system_arrays():
     np.testing.assert_allclose(per_system[1], forces[3:])
     # The pre-fix behaviour would have produced shape (3,) for system 1.
     assert per_system[1].shape != (3,)
+
+
+def test_split_forces_by_system_falls_back_without_system_idx():
+    from metalsurfer.optimization._optimize import _split_forces_by_system
+
+    atom_counts = [3, 5]
+    forces = np.arange(8 * 3, dtype=float).reshape(8, 3)
+    batch = _FakeBatch(forces, system_idx=None)
+    per_system = _split_forces_by_system(batch, 2, atom_counts)
+    assert per_system is not None
+    assert [f.shape for f in per_system] == [(3, 3), (5, 3)]
+    np.testing.assert_allclose(per_system[0], forces[:3])
+    np.testing.assert_allclose(per_system[1], forces[3:])
 
 
 def test_split_forces_by_system_raises_on_atom_count_mismatch():
@@ -1038,3 +1090,58 @@ def test_get_inflight_autobatcher_returns_triple_when_unavailable(monkeypatch):
     # Both call-site shapes must work.
     assert result[0] is None
     _a, _b, _c = result
+
+
+def test_optimize_and_evaluate_skips_preclear_when_saturation_reuse(monkeypatch):
+    """Reuse path must not wipe the autobatcher cache before each BO batch."""
+    from metalsurfer.workflow import shared as shared_mod
+
+    from .conftest import make_placement_descriptor
+
+    calls: list[dict] = []
+
+    def _fake_clear(*_a, **kwargs):
+        calls.append(dict(kwargs))
+
+    monkeypatch.setattr(shared_mod, "clear_autobatcher_cache", _fake_clear)
+    monkeypatch.setattr(
+        shared_mod,
+        "optimize_adsorbate_slab_batched",
+        lambda *a, **k: [],
+    )
+
+    slab = make_slab()
+    combined = [slab.copy()]
+    desc = make_placement_descriptor(placement_id=0)
+    config = AdsorptionConfig(saturation_autobatcher_reuse=True)
+    shared_mod._optimize_and_evaluate_placements(
+        combined,
+        [0],
+        [desc],
+        slab=slab,
+        calculator=object(),
+        ts_model=object(),
+        config=config,
+        energies=(-1.0, -1.0),
+        molecule_name="water",
+        surface_symbols=["Pt"],
+        saturation_reuse=True,
+    )
+    assert calls == []
+
+    shared_mod._optimize_and_evaluate_placements(
+        combined,
+        [0],
+        [desc],
+        slab=slab,
+        calculator=object(),
+        ts_model=object(),
+        config=config,
+        energies=(-1.0, -1.0),
+        molecule_name="water",
+        surface_symbols=["Pt"],
+        saturation_reuse=False,
+    )
+    assert len(calls) == 1
+    assert "max_n_atoms_threshold" in calls[0]
+    assert calls[0].get("drain_cuda") in (None, False)

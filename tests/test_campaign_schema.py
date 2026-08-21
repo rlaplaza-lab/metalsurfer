@@ -33,6 +33,18 @@ def test_parse_campaign_rejects_unknown_substrate_key():
         )
 
 
+def test_parse_campaign_rejects_non_atoms_slab():
+    with pytest.raises(ValueError, match="substrate.slab must be"):
+        parse_campaign_dict(
+            {
+                "campaign": "saturation",
+                "surface_type": "bad",
+                "substrate": {"slab": "not-an-atoms"},
+                "molecules": [{"smiles": "C", "name": "methane"}],
+            }
+        )
+
+
 def test_parse_campaign_rejects_unknown_root_key():
     with pytest.raises(ValueError, match="unknown keys"):
         parse_campaign_dict(

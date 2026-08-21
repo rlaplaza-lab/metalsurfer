@@ -44,9 +44,14 @@ from metalsurfer.workflow.saturation import (
     _filter_saturation_topology_results,
     _reference_smiles_units_multi_molecule,
     _saturation_adsorbate_topology_ok,
+    _saturation_symmetry_broken_vs_reference,
     _slab_after_saturation_step,
 )
-from metalsurfer.workflow.shared import MoleculeScreenOutcome, ScreeningRunBootstrap
+from metalsurfer.workflow.shared import (
+    MoleculeScreenOutcome,
+    ScreeningRunBootstrap,
+    _build_surface_reference_slab,
+)
 
 from .conftest import (
     DummyReferenceEnergies,
@@ -716,6 +721,45 @@ def test_distribute_placement_budget_min_one():
     assert sum(budgets.values()) == 5
 
 
+def test_distribute_placement_budget_below_n_keeps_top_complexity():
+    """When budget < n molecules, keep top-budget by complexity (1 each)."""
+    budgets = distribute_placement_budget(
+        {"low": 1.0, "mid": 10.0, "high": 100.0},
+        total_budget=2,
+    )
+    assert budgets == {"high": 1, "mid": 1}
+    assert "low" not in budgets
+    budgets_one = distribute_placement_budget(
+        {"a": 5.0, "b": 50.0, "c": 1.0},
+        total_budget=1,
+    )
+    assert budgets_one == {"b": 1}
+
+
+def test_saturation_symmetry_uses_substrate_prefix_not_adsorbates():
+    """Covered slab must not auto-break symmetry vs bare base (L1)."""
+    base = make_slab()
+    covered = base.copy()
+    covered.extend(
+        Atoms(
+            "O",
+            positions=[[1.0, 1.0, float(np.max(base.positions[:, 2])) + 2.0]],
+        )
+    )
+    substrate = _build_surface_reference_slab(covered, base)
+    assert not _saturation_symmetry_broken_vs_reference(
+        substrate,
+        base,
+        symmetry_tolerance=0.1,
+    )
+    # Full covered vs bare still breaks (historical adsorbate contamination).
+    assert _saturation_symmetry_broken_vs_reference(
+        covered,
+        base,
+        symmetry_tolerance=0.1,
+    )
+
+
 def test_distribute_placement_budget_extreme_skew_sums_to_total():
     """Min-1 floor must not overshoot total_budget under extreme score skew."""
     complexities = {"A": 1000.0, "B": 1.0, "C": 1.0, "D": 1.0, "E": 1.0}
@@ -995,6 +1039,68 @@ def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
     result = out[0]
     assert len(result.steps) == 2
     assert result.molecule_counts == {"A": 1, "B": 1}
+
+
+def test_multi_mol_saturation_molecule_counts_omit_unbound_final_step(monkeypatch):
+    """Unbound terminal winners must not inflate molecule_counts vs molecules on slab."""
+    slab = SlabContainer(make_slab())
+    config = _mock_saturation_config(
+        multi_molecule_saturation=True,
+        saturation_max_steps=3,
+    )
+
+    ref = DummyReferenceEnergies({"A": -5.0, "B": -5.0})
+
+    call_index = [0]
+    # Step 1: A wins bound. Step 2: B wins unbound → stop. Counts must be A=1 only.
+    energy_table = {
+        ("A", 1): -0.8,
+        ("B", 2): -0.5,
+        ("A", 3): 0.2,
+        ("B", 4): 0.1,
+    }
+
+    def _fake_process_molecule(smi, mol, current_slab, *_args, **kwargs):
+        call_index[0] += 1
+        key = (mol, call_index[0])
+        assert key in energy_table, f"unexpected saturation call {key}"
+        e_ads = energy_table[key]
+        return MoleculeScreenOutcome(
+            results=[
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=0,
+                    energy_adsorption=e_ads,
+                    atoms=current_slab.atoms.copy(),
+                    slab_size=len(current_slab.atoms),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=0),
+                )
+            ]
+        )
+
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["A", "B"],
+        smiles_list=["sa", "sb"],
+        ref=ref,
+        process_molecule=_fake_process_molecule,
+    )
+
+    out = run_saturation_screening(
+        slab,
+        molecules="unused.csv",
+        config=config,
+        surface_type="molecule_counts_unbound",
+        skip_existing=False,
+    )
+
+    assert len(out) == 1
+    result = out[0]
+    assert len(result.steps) == 2
+    assert result.steps[-1].best_result.energy_adsorption >= 0
+    assert result.molecule_counts == {"A": 1, "B": 0}
+    assert sum(result.molecule_counts.values()) == result.n_molecules_at_saturation == 1
 
 
 def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypatch):
@@ -1754,3 +1860,61 @@ def test_saturation_topology_guard_all_filtered_stops(monkeypatch, caplog):
     assert any(
         "topology rearrangement guard" in rec.getMessage() for rec in caplog.records
     )
+
+
+def test_single_mol_saturation_resolves_workload_config_once(monkeypatch):
+    """Unset placement sizes must autotune once, then reuse the written-back config."""
+    from dataclasses import replace
+
+    slab = SlabContainer(make_slab())
+    bare = slab.atoms.copy()
+    resolve_calls: list[int] = []
+
+    def _fake_resolve(config, **_kwargs):
+        resolve_calls.append(1)
+        return replace(config, num_placements=4)
+
+    def _fake_process(_smi, mol, current_slab, *_args, **kwargs):
+        assert kwargs.get("skip_workload_autotune") is True
+        assert kwargs["config"].num_placements == 4
+        return MoleculeScreenOutcome(
+            results=[
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=0,
+                    energy_adsorption=-0.5,
+                    atoms=place_molecule_on_slab(current_slab.atoms, make_water()),
+                    slab_size=len(bare),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=0),
+                )
+            ]
+        )
+
+    _patch_single_mol_saturation_mocks(
+        monkeypatch,
+        molecule="water",
+        smiles="O",
+        ref=DummyReferenceEnergies(constant_energy=-1.0),
+        process_molecule=_fake_process,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.resolve_saturation_step_workload_config",
+        _fake_resolve,
+    )
+
+    out = run_saturation_screening(
+        slab,
+        molecules="unused.csv",
+        config=AdsorptionConfig(
+            num_placements=None,
+            saturation_max_steps=2,
+            saturation_discard_topology_rearrangements=False,
+        ),
+        surface_type="autotune_once",
+        skip_existing=False,
+    )
+
+    assert len(resolve_calls) == 1
+    assert len(out) == 1
+    assert len(out[0].steps) == 2

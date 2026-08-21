@@ -362,7 +362,7 @@ def _run_saturation_campaign(
     run_metadata_out: dict[str, Any] | None,
 ) -> SaturationCampaignResult:
     setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
-    failure_summary: dict[str, object] = {}
+    failure_summary: dict[str, dict[str, object]] = {}
     run_metadata: dict[str, Any] = (
         run_metadata_out if run_metadata_out is not None else {}
     )

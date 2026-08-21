@@ -1,7 +1,7 @@
 # Metalsurfer: core system
 
 Short mental model for developers.
-This covers what the codes does in general.
+This covers what the code does in general.
 
 Install / demos: [`README.md`](README.md), [`examples/`](examples/). Field knobs:
 [configuration](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html).
@@ -77,7 +77,10 @@ Step by step, for a single molecule:
    already-covered one.
 2. **Compute reference energies.** The energy of the bare slab (`E_slab`) and of
    the free molecule (`E_molecule`) are calculated so that every later
-   `E_ads` can be formed by subtraction.
+   `E_ads` can be formed by subtraction. The same reference step also caches
+   each molecule's pre-optimized conformer pack on
+   `ReferenceEnergies.conformer_packs` (via `get_conformer_pack`) so placement
+   reuses those geometries instead of regenerating them.
 3. **Generate conformers.** The molecule is sampled into several 3D shapes (a
    *conformer* is one folded shape of the same molecule). They are cheap,
    pre-relaxed shapes; the pipeline never invents new shapes later.

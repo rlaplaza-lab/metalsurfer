@@ -513,12 +513,26 @@ def _min_feature_distances(
     *,
     exclude_self: bool = False,
 ) -> np.ndarray:
-    """Minimum Euclidean distance in aligned feature space from each X_prior row to X_ref."""
+    """Minimum Euclidean distance in standardized pose space from each prior row to X_ref.
+
+    Discrete ``conformer_index`` is excluded from the kernel metric (it remains a
+    surrogate training feature). Remaining columns are z-scored on the
+    concatenated prior+ref matrix so Å positions and unit quaternions share a
+    common scale. Transfer ``similarity_lengthscale`` / proximity lengthscales
+    are therefore in standardized units.
+    """
     if len(X_prior) == 0 or len(X_ref) == 0:
         return np.array([], dtype=float)
-    cols = list(X_ref.columns)
+    cols = [c for c in X_ref.columns if c != "conformer_index"]
+    if not cols:
+        cols = list(X_ref.columns)
     p_arr = X_prior.reindex(columns=cols, fill_value=0.0).to_numpy(dtype=float)
     r_arr = X_ref.reindex(columns=cols, fill_value=0.0).to_numpy(dtype=float)
+    combined = np.vstack([p_arr, r_arr])
+    if combined.shape[0] >= 2 and combined.shape[1] > 0:
+        scaled = StandardScaler().fit_transform(combined)
+        p_arr = scaled[: len(p_arr)]
+        r_arr = scaled[len(p_arr) :]
     dists: np.ndarray = cdist(p_arr, r_arr)
     if exclude_self:
         dists = np.where(dists <= _DISTANCE_ZERO_EPS, np.inf, dists)
@@ -536,7 +550,10 @@ def prior_similarity_to_current(
     *,
     lengthscale: float,
 ) -> np.ndarray:
-    """Similarity of each prior row to the nearest current-step placement (feature space).
+    """Similarity of each prior row to the nearest current-step placement.
+
+    Distances use standardized pose features (see :func:`_min_feature_distances`);
+    ``lengthscale`` is in those standardized units.
 
     Parameters
     ----------
@@ -582,14 +599,15 @@ def prior_placement_downweight(
     lengthscale: float,
     floor: float = 0.0,
 ) -> np.ndarray:
-    """Reduce transfer weight for prior rows near an executed placement site.
+    """Reduce transfer weight for prior rows near executed placement sites.
 
     Parameters
     ----------
     X_prior
         Prior feature matrix.
     placement_X
-        Feature vector of the executed placement.
+        Feature rows of committed (on-slab) placements; all rows are used as
+        occupancy anchors.
     lengthscale
         Length scale for the exponential distance kernel.
     floor
@@ -599,7 +617,7 @@ def prior_placement_downweight(
         return np.array([], dtype=float)
     if len(placement_X) == 0:
         return np.ones(len(X_prior), dtype=float)
-    min_dist = _min_feature_distances(X_prior, placement_X.iloc[[0]])
+    min_dist = _min_feature_distances(X_prior, placement_X)
     near = np.exp(-min_dist / float(lengthscale))
     return np.maximum(floor, 1.0 - near)
 
@@ -722,35 +740,32 @@ def _transfer_trust_gate(
     surrogate: SurrogateType,
     n_estimators: int,
     random_state: int,
-) -> tuple[float, float, Pipeline, bool]:
-    """Compare baseline vs transfer MAE and return the fitted transfer model.
+    mae_tolerance: float = 0.0,
+) -> tuple[float, float, Pipeline | None, bool]:
+    """Compare baseline vs transfer MAE; fit the full transfer model only if useful.
 
     Returns ``(base_mae, transfer_mae, transfer_model, out_of_sample)``.
-
-    The comparison is made **out of fold** on the current step's observations.
-    Scoring both models on data they were both fitted on measures capacity, not
-    transferability: for an interpolating surrogate such as the default
-    ``gradient_boost`` both in-sample MAEs collapse towards zero, so the delta
-    stays far below ``mae_tolerance`` and a badly mismatched prior is never
-    rejected.
-
-    Falls back to the in-sample comparison (flagged via the returned bool) when
-    there are too few current observations to split.
+    ``transfer_model`` is ``None`` when out-of-fold MAE already rejects transfer
+    (``transfer_mae > base_mae + mae_tolerance``), so the caller can skip the
+    full-data fit.
     """
     n_current = len(X_current)
-    sample_weight = np.concatenate(
-        [np.ones(n_current, dtype=float), transfer_weights], axis=0
-    )
-    transfer_model = train_surrogate(
-        pd.concat([X_current, X_prev], ignore_index=True),
-        np.concatenate([y_current, y_prev], axis=0),
-        surrogate=surrogate,
-        n_estimators=n_estimators,
-        random_state=random_state,
-        sample_weight=sample_weight,
-    )
+
+    def _fit_full_transfer() -> Pipeline:
+        sample_weight = np.concatenate(
+            [np.ones(n_current, dtype=float), transfer_weights], axis=0
+        )
+        return train_surrogate(
+            pd.concat([X_current, X_prev], ignore_index=True),
+            np.concatenate([y_current, y_prev], axis=0),
+            surrogate=surrogate,
+            n_estimators=n_estimators,
+            random_state=random_state,
+            sample_weight=sample_weight,
+        )
 
     if n_current < _TRANSFER_GATE_MIN_SAMPLES:
+        transfer_model = _fit_full_transfer()
         base_mae = float(np.mean(np.abs(baseline.predict(X_current) - y_current)))
         transfer_mae = float(
             np.mean(np.abs(transfer_model.predict(X_current) - y_current))
@@ -798,6 +813,7 @@ def _transfer_trust_gate(
         logger.debug(
             "Out-of-fold transfer trust gate failed (%s); using in-sample MAE", exc
         )
+        transfer_model = _fit_full_transfer()
         base_mae = float(np.mean(np.abs(baseline.predict(X_current) - y_current)))
         transfer_mae = float(
             np.mean(np.abs(transfer_model.predict(X_current) - y_current))
@@ -806,7 +822,10 @@ def _transfer_trust_gate(
 
     base_mae = float(np.mean(np.abs(base_pred - y_current)))
     transfer_mae = float(np.mean(np.abs(transfer_pred - y_current)))
-    return base_mae, transfer_mae, transfer_model, True
+    # Defer the expensive full-data fit when OOF already rejects transfer.
+    if transfer_mae > base_mae + mae_tolerance:
+        return base_mae, transfer_mae, None, True
+    return base_mae, transfer_mae, _fit_full_transfer(), True
 
 
 def _no_transfer(baseline: Any, transfer_bad_rounds: int) -> "TransferSurrogateResult":
@@ -881,9 +900,10 @@ def build_transfer_surrogate(
     trust_patience
         Maximum allowed consecutive bad rounds before disabling transfer.
     proximity_lengthscale
-        Length scale for proximity-based downweighting.
+        Length scale for proximity weighting (also default for occupancy).
     proximity_floor
-        Minimum proximity weight value.
+        Floor for :func:`prior_proximity_weights` / cumulative refit. Occupancy
+        in this function uses ``occupancy_floor`` instead.
     prior_step_ages
         Ages of prior observations for recency decay.
     recency_lengthscale
@@ -986,12 +1006,18 @@ def build_transfer_surrogate(
             floor=occupancy_floor,
         )
     else:
-        occupancy = prior_proximity_weights(
-            X_prev,
-            X_prev,
-            lengthscale=prox_lengthscale,
-            floor=proximity_floor,
-        )
+        # Invert proximity so clustered priors are down-weighted; do not pass
+        # proximity weights through as occupancy (cumulative_refit upweights).
+        if len(X_prev) <= 1:
+            occupancy = np.ones(len(X_prev), dtype=float)
+        else:
+            prox = prior_proximity_weights(
+                X_prev,
+                X_prev,
+                lengthscale=occ_lengthscale,
+                floor=0.0,
+            )
+            occupancy = np.maximum(occupancy_floor, 1.0 - prox)
     modifiers = recency * occupancy
     if float(np.sum(modifiers)) <= 0.0:
         return _no_transfer(baseline, transfer_bad_rounds)
@@ -1015,6 +1041,7 @@ def build_transfer_surrogate(
         surrogate=surrogate,
         n_estimators=n_estimators,
         random_state=random_state,
+        mae_tolerance=mae_tolerance,
     )
     transfer_mae_delta = transfer_mae - base_mae
     bad_rounds = transfer_bad_rounds
@@ -1036,6 +1063,19 @@ def build_transfer_surrogate(
                 if gate_out_of_sample
                 else "trust_degraded_on_current_step_residuals_in_sample"
             ),
+        )
+
+    # OOF already rejected transfer: skip the full-data fit and use baseline
+    # this round while still counting the bad round toward patience.
+    if transfer_model is None:
+        return TransferSurrogateResult(
+            surrogate=baseline,
+            transfer_used_this_round=False,
+            transfer_weight_share=transfer_weight_share,
+            transfer_mae_delta=transfer_mae_delta,
+            transfer_bad_rounds=bad_rounds,
+            transfer_disabled=False,
+            transfer_disabled_reason=None,
         )
 
     return TransferSurrogateResult(
@@ -1134,8 +1174,10 @@ def ei_scores(
     """Compute expected improvement scores for minimisation.
 
     EI = E[max(0, f_best - Y)] under Gaussian Y ~ N(mu, sigma^2). Higher EI is better.
-    When ``sigma`` is (near) zero, ranks by ``-mu`` so the pool does not collapse
-    to an arbitrary tied ordering of zeros.
+    When *every* ``sigma`` is (near) zero, ranks by ``-mu`` so the pool does not
+    collapse to an arbitrary tied ordering of zeros. In a mixed-``sigma`` pool,
+    zero-``sigma`` rows use the analytic limit ``max(f_best - mu - xi, 0)`` so
+    they stay on the same scale as finite-``sigma`` EI.
 
     Parameters
     ----------
@@ -1151,17 +1193,17 @@ def ei_scores(
     mu = np.asarray(mu, dtype=float).ravel()
     sigma = np.asarray(sigma, dtype=float).ravel()
     imp = f_best - mu - xi
+    finite = sigma > ACQUISITION_SIGMA_FLOOR
+    if not np.any(finite):
+        return -mu
     z = np.divide(
         imp,
         sigma,
         out=np.zeros_like(imp, dtype=float),
-        where=sigma > ACQUISITION_SIGMA_FLOOR,
+        where=finite,
     )
-    return np.where(
-        sigma > ACQUISITION_SIGMA_FLOOR,
-        imp * stats.norm.cdf(z) + sigma * stats.norm.pdf(z),
-        -mu,
-    )
+    ei = imp * stats.norm.cdf(z) + sigma * stats.norm.pdf(z)
+    return np.where(finite, ei, np.maximum(imp, 0.0))
 
 
 def pi_scores(
@@ -1172,7 +1214,9 @@ def pi_scores(
 ) -> np.ndarray:
     """Probability of Improvement for minimisation: P(Y < f_best - xi).
 
-    Higher PI is better. When sigma is zero, ranks by ``-mu`` (same rationale as EI).
+    Higher PI is better. When every ``sigma`` is zero, ranks by ``-mu`` (same
+    rationale as EI). In a mixed-``sigma`` pool, zero-``sigma`` rows use the
+    analytic step ``1`` if ``mu < f_best - xi`` else ``0``.
 
     Parameters
     ----------
@@ -1187,13 +1231,18 @@ def pi_scores(
     """
     mu = np.asarray(mu, dtype=float).ravel()
     sigma = np.asarray(sigma, dtype=float).ravel()
+    finite = sigma > ACQUISITION_SIGMA_FLOOR
+    if not np.any(finite):
+        return -mu
     z = np.divide(
         f_best - xi - mu,
         sigma,
         out=np.zeros_like(mu, dtype=float),
-        where=sigma > ACQUISITION_SIGMA_FLOOR,
+        where=finite,
     )
-    return np.where(sigma > ACQUISITION_SIGMA_FLOOR, stats.norm.cdf(z), -mu)
+    pi = stats.norm.cdf(z)
+    degenerate = np.where(mu < f_best - xi, 1.0, 0.0)
+    return np.clip(np.where(finite, pi, degenerate), 0.0, 1.0)
 
 
 def _farthest_point_indices(
@@ -1252,7 +1301,8 @@ def _stratified_conformer_indices(
             break
 
     if len(chosen) < n_pick:
-        remaining = [i for i in range(len(features)) if i not in chosen]
+        chosen_set = set(chosen)
+        remaining = [i for i in range(len(features)) if i not in chosen_set]
         if remaining:
             local = _farthest_point_indices(
                 features.iloc[remaining],
@@ -1355,6 +1405,7 @@ def select_candidates_batch_diverse(
     evaluated_indices: set[int] | None = None,
     *,
     higher_is_better: bool = False,
+    scaled_features: np.ndarray | None = None,
 ) -> list[int]:
     """Greedy batch selection with soft local penalization in feature space.
 
@@ -1374,6 +1425,9 @@ def select_candidates_batch_diverse(
         Set of already-evaluated indices to exclude.
     higher_is_better
         If True, rank by descending scores.
+    scaled_features
+        Optional pre-standardized feature matrix (same row order as *features*).
+        When provided, skips re-fitting ``StandardScaler`` every acquisition round.
     """
     s = np.asarray(scores, dtype=float).copy().ravel()
     matrix = (
@@ -1398,7 +1452,14 @@ def select_candidates_batch_diverse(
             higher_is_better=higher_is_better,
         )
 
-    scaled = StandardScaler().fit_transform(matrix)
+    if scaled_features is not None:
+        scaled = np.asarray(scaled_features, dtype=float)
+        if scaled.shape[0] != n:
+            raise ValueError(
+                f"scaled_features rows ({scaled.shape[0]}) must match scores length ({n})"
+            )
+    else:
+        scaled = StandardScaler().fit_transform(matrix)
     # Lengthscale from the median nearest-neighbour separation, estimated with a
     # KDTree (k=2) instead of a full N x N cdist matrix — avoids the ~234 MB
     # allocation at the real pool size of 3840 while giving an identical value.
@@ -1550,6 +1611,7 @@ def score_and_select(
     evaluated_indices: set[int] | None = None,
     acquisition: AcquisitionType = "lcb",
     f_best: float | None = None,
+    scaled_features: np.ndarray | None = None,
 ) -> list[int]:
     """Score candidates with the given acquisition and select the top batch.
 
@@ -1576,6 +1638,9 @@ def score_and_select(
         Acquisition function type ("lcb", "ei", or "pi").
     f_best
         Best observed value (required for EI and PI).
+    scaled_features
+        Optional pre-standardized pool matrix for diversity (avoids re-scaling
+        every acquisition round).
     """
     mu, sigma = predict_with_uncertainty(model, candidate_features)
     if acquisition == "lcb":
@@ -1586,6 +1651,7 @@ def score_and_select(
             batch_size,
             evaluated_indices=evaluated_indices,
             higher_is_better=False,
+            scaled_features=scaled_features,
         )
     if acquisition in ("ei", "pi"):
         if f_best is None:
@@ -1600,5 +1666,6 @@ def score_and_select(
             batch_size,
             evaluated_indices=evaluated_indices,
             higher_is_better=True,
+            scaled_features=scaled_features,
         )
     raise ValueError(f"Unknown acquisition: {acquisition!r}")

@@ -12,6 +12,7 @@ when ``saturation_discard_topology_rearrangements`` is enabled.
 import logging
 import time
 from collections import Counter
+from importlib.util import find_spec
 
 import numpy as np
 from ase import Atoms
@@ -323,14 +324,12 @@ def check_decomposition(
     if reference_smiles is None:
         return True, "connectivity intact (no SMILES reference for deeper checks)"
 
-    try:
-        from rdkit import Chem  # noqa: F401
-    except (ImportError, AttributeError) as exc:
+    if find_spec("rdkit") is None:
         raise DependencyMissingError(
             "rdkit",
             "check_decomposition",
             "pip install rdkit",
-        ) from exc
+        )
 
     ref_formula = _formula_from_smiles(reference_smiles)
     if ref_formula is not None:
