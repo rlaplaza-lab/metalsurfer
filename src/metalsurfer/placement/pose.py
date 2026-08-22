@@ -18,6 +18,7 @@ from ._constants import (
     _DISTANCE_ZERO_EPS,
     _PARALLEL_Z_MIN_HI_MARGIN,
     _VECTOR_NORM_EPS,
+    RECOVERABLE_DISTANCE_REASONS,
 )
 from ._material import material_aware_pbc, material_type_for_placement
 from .orientation import (
@@ -51,9 +52,9 @@ class _PlacementContext:
     canonical_pos: np.ndarray
     use_sites: bool
     rotated_pos: np.ndarray
+    normal: np.ndarray
     z_base_lo: float = 0.0
     z_base_hi: float = 0.0
-    normal: np.ndarray | None = None
     shape: str = "round"
 
 
@@ -218,7 +219,7 @@ def _pose_from_spec(
 
     site_normal = np.asarray(site.normal, dtype=float)
     if np.linalg.norm(site_normal) > _VECTOR_NORM_EPS:
-        normal = site_normal / np.linalg.norm(site_normal)
+        normal = geom._safe_normalize(site_normal)
 
     mat_type = material_type_for_placement(site, when_no_site=config.material_type)
 
@@ -374,6 +375,17 @@ def _context_from_pose(
         quat_z=float(quat[3]),
     )
 
+    if site is not None:
+        site_normal = np.asarray(site.normal, dtype=float)
+        nrm = float(np.linalg.norm(site_normal))
+        normal = (
+            site_normal / nrm
+            if nrm > _VECTOR_NORM_EPS
+            else np.array([0.0, 0.0, 1.0], dtype=float)
+        )
+    else:
+        normal = np.array([0.0, 0.0, 1.0], dtype=float)
+
     return _PlacementContext(
         pose=pose_normalized,
         site=site,
@@ -384,6 +396,7 @@ def _context_from_pose(
         canonical_pos=canonical_pos,
         use_sites=ctx.use_sites,
         rotated_pos=rotated_pos,
+        normal=normal,
         shape=geom._classify_molecule_shape(canonical_pos)[0],
     )
 
@@ -435,10 +448,7 @@ def _placement_normal(ctx: _PlacementContext, slab: Atoms) -> np.ndarray:
     """Return unit normal used for height/lateral recovery."""
     if ctx.mat_type == "slab":
         return _slab_normal(np.asarray(slab.get_cell(), dtype=float))
-    normal = ctx.normal
-    if normal is None:
-        return np.array([0.0, 0.0, 1.0], dtype=float)
-    normal = np.asarray(normal, dtype=float)
+    normal = np.asarray(ctx.normal, dtype=float)
     nrm = float(np.linalg.norm(normal))
     if nrm > _VECTOR_NORM_EPS:
         return normal / nrm
@@ -547,8 +557,7 @@ def _recover_distance_failure(
     For porous frameworks, ``vdw_overlap`` is treated like ``too_close`` (shrink
     toward the free-volume site center, then XY).
     """
-    recoverable = ("too_close", "too_far", "adsorbate_overlap", "vdw_overlap")
-    if fail_reason not in recoverable:
+    if fail_reason not in RECOVERABLE_DISTANCE_REASONS:
         return ctx, fail_reason
     # Height recovery only for contact-distance failures (and porous VDW).
     height_reasons: tuple[str, ...] = ("too_close", "too_far")
@@ -560,11 +569,8 @@ def _recover_distance_failure(
         height_mode = "too_close"
 
     pose = ctx.pose
-    if pose.z_abs is None:
-        return ctx, fail_reason
-
     zf = float(pose.z_fraction)
-    origin = np.array([pose.x_abs, pose.y_abs, float(pose.z_abs)], dtype=float)
+    origin = np.array([pose.x_abs, pose.y_abs, float(pose.z_abs or 0.0)], dtype=float)
     z_span = float(ctx.z_base_hi - ctx.z_base_lo)
 
     height_candidates: list[float] = []
@@ -613,7 +619,7 @@ def _recover_distance_failure(
                 z_fraction=float(cand_zf),
             )
             return dataclasses.replace(ctx, pose=new_pose), None
-        if last_reason not in recoverable:
+        if last_reason not in RECOVERABLE_DISTANCE_REASONS:
             return ctx, last_reason
 
     work_zf = zf
@@ -668,10 +674,10 @@ def _recover_distance_failure(
                 z_fraction=float(work_zf),
             )
             return dataclasses.replace(ctx, pose=new_pose), None
-        if last_reason not in recoverable:
+        if last_reason not in RECOVERABLE_DISTANCE_REASONS:
             return ctx, last_reason
 
-    return ctx, last_reason or fail_reason
+    return ctx, last_reason
 
 
 def _validate_posed_adsorbate(
@@ -702,7 +708,7 @@ def _validate_posed_adsorbate(
         material_type=mat_type,
     )
     if not ok:
-        return dist_reason or "distance_check_failed"
+        return dist_reason
 
     if exclude_n is not None:
         pre_ads = np.asarray(slab.get_positions()[exclude_n:], dtype=float)
@@ -745,6 +751,7 @@ def _descriptor_from_placement(
     site_reference_frame: str,
     site_xy_frac_a: float,
     site_xy_frac_b: float,
+    z_abs: float,
     placement_mode_resolved: str = "no_sites",
     fragment_positions: tuple[tuple[float, float, float], ...] | None = None,
 ) -> PlacementDescriptor:
@@ -770,7 +777,7 @@ def _descriptor_from_placement(
         x_abs=float(pose.x_abs),
         y_abs=float(pose.y_abs),
         surface_ref_z_abs=surface_ref,
-        z_abs=float(pose.z_abs) if pose.z_abs is not None else None,
+        z_abs=float(z_abs),
         shape=shape,
         slab_indices=slab_indices,
         placement_mode_resolved=placement_mode_resolved,
@@ -821,7 +828,7 @@ def _finalize_placement(
             allow_distance_recovery
             and config.placement_distance_recovery
             and fail_reason
-            in ("too_close", "too_far", "adsorbate_overlap", "vdw_overlap")
+            and fail_reason in RECOVERABLE_DISTANCE_REASONS
         ):
             ctx, fail_reason = _recover_distance_failure(
                 ctx,
@@ -835,9 +842,7 @@ def _finalize_placement(
             pose = ctx.pose
             if fail_reason is not None:
                 return None, fail_reason
-            if pose.z_abs is None:
-                return None, "missing_z_abs"
-            z_abs = float(pose.z_abs)
+            z_abs = float(pose.z_abs or 0.0)
         else:
             return None, fail_reason
 
@@ -867,6 +872,7 @@ def _finalize_placement(
         site_reference_frame=("local_site" if ctx.is_local_ref else "global_top_layer"),
         site_xy_frac_a=float(xy_frac[0]),
         site_xy_frac_b=float(xy_frac[1]),
+        z_abs=z_abs,
         placement_mode_resolved="sites" if ctx.use_sites else "no_sites",
     )
     return (adsorbate, descriptor), None

@@ -80,3 +80,8 @@ Bayesian Saturation
 -------------------
 
 .. autofunction:: metalsurfer.run_saturation_bo
+
+Results directories
+-------------------
+
+.. autofunction:: metalsurfer.results_dir_for

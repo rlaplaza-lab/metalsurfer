@@ -175,6 +175,24 @@ _DISSOC_PLACEMENT_SPEC = PlacementSpec(
     placement_index=0,
 )
 
+_ROUND_ATOP_PLACEMENT_SPEC = PlacementSpec(
+    conformer_index=0,
+    orientation_type="round",
+    face_flip=False,
+    en_atom_index=None,
+    site_index=0,
+    site_type="atop",
+    tilt_deg=0.0,
+    azimuth_deg=0.0,
+    azimuth_in_plane_deg=0.0,
+    z_fraction=0.5,
+    placement_index=0,
+)
+
+
+def _round_atop_placement_spec(**overrides) -> PlacementSpec:
+    return replace(_ROUND_ATOP_PLACEMENT_SPEC, **overrides)
+
 
 def dissoc_placement_spec(**overrides) -> PlacementSpec:
     return replace(_DISSOC_PLACEMENT_SPEC, **overrides)

@@ -41,9 +41,9 @@ jobs:
           mypy src/metalsurfer
 
   # -----------------------------------------------------------------------
-  # Unit + integration tests with full optional dependencies
+  # Quick unit + integration tests (default CI suite)
   # -----------------------------------------------------------------------
-  test-full:
+  test-quick:
     runs-on: ubuntu-latest
     env:
       # Ensure CPU-only: no GPU in GitHub Actions; avoids false failures if torch/cuda code runs
@@ -66,15 +66,15 @@ jobs:
       - name: Install package (editable)
         run: pip install -e .
 
-      - name: Run unit tests
+      - name: Run quick tests
         run: |
           python -m pytest tests/ \
-            -m "not dependency_behavior and not mlip and not gpu and not slow" \
+            -m quick \
             --cov=src/metalsurfer --cov-report=xml --cov-report=term-missing \
             --tb=short -v
 
       - name: Enforce coverage gate
-        run: coverage report
+        run: coverage report --fail-under=85
 
   # -----------------------------------------------------------------------
   # Dependency-behavior tests (minimal environment)
@@ -98,37 +98,7 @@ jobs:
         run: pip install -e .
 
       - name: Run dependency behavior tests
-        run: |
-          python -m pytest tests/test_dependency_behavior.py -v --tb=short
-
-  # -----------------------------------------------------------------------
-  # Integration / determinism tests
-  # -----------------------------------------------------------------------
-  test-integration:
-    runs-on: ubuntu-latest
-    env:
-      CUDA_VISIBLE_DEVICES: ""
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install pytest numpy ase pandas rdkit scipy scikit-learn
-
-      - name: Install package (editable)
-        run: pip install -e .
-
-      - name: Run integration tests
-        run: |
-          python -m pytest \
-            tests/test_integration_seeded.py \
-            tests/test_integration_physics.py \
-            tests/test_integration_run_modes.py \
-            -v --tb=short
+        run: python -m pytest tests/ -m dependency_behavior -v --tb=short
 
   # -----------------------------------------------------------------------
   # CPU MLIP smoke (gated UMA model download via HF_TOKEN)
@@ -170,7 +140,6 @@ jobs:
           pip install -e ".[mlip]"
           pip install torch --index-url https://download.pytorch.org/whl/cpu --force-reinstall --no-deps
 
-      - name: Run CPU MLIP unit and smoke tests
+      - name: Run CPU MLIP tests
         if: env.HF_TOKEN != ''
-        run: |
-          python -m pytest tests/test_optimization.py tests/test_integration_mlip_cpu_smoke.py -m mlip --tb=short -v
+        run: python -m pytest tests/ -m "cpu and mlip" --tb=short -v

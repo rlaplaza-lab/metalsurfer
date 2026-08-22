@@ -43,7 +43,6 @@ def max_batch_placement_specs(
     *,
     n_conformers: int,
     site_indices: list[int],
-    shape: str,
     n_binders: int,
     flat_aromatic: bool,
     dissociative: bool = False,
@@ -57,8 +56,6 @@ def max_batch_placement_specs(
         Number of conformers.
     site_indices
         List of available site indices.
-    shape
-        Molecule shape classification.
     n_binders
         Number of binding atoms.
     flat_aromatic
@@ -99,8 +96,6 @@ def max_batch_placement_specs(
         )
         return min(parallel, _GRID_BUILD_CAP) + min(en_down, _GRID_BUILD_CAP)
 
-    # Shape only selects orientation label ("vertical" vs "round"); grid is the same size for both.
-    _ = shape
     return min(
         n_conformers * len(_TILT_FULL) * len(_AZIMUTH) * len(_Z_FRACTIONS) * n_sites,
         _GRID_BUILD_CAP,
@@ -112,26 +107,24 @@ def _spec_prior_key(
     tie: float,
     *,
     z_fraction_target: float = _POLICY_PRIOR_Z_FRACTION_TARGET,
-    site_index_weight: float = 0.0,
 ) -> tuple[float, float]:
     """Sort key for soft physical priors: lower score is preferred.
 
     Prefers milder absolute tilt and ``z_fraction`` near *z_fraction_target*.
-    When *site_index_weight* > 0 (porous open-pore lists), lower ``site_index``
-    is preferred so quality-sorted site lists stay near the front.
     *tie* breaks remaining ties deterministically (seeded shuffle rank).
+    Site-index diversity for porous materials is handled by by-site round-robin
+    in :func:`_stratified_sample`, not here.
     """
     tilt_pen = abs(float(spec.tilt_deg)) * _POLICY_PRIOR_TILT_WEIGHT_PER_DEG
     z_pen = (
         abs(float(spec.z_fraction) - float(z_fraction_target))
         * _POLICY_PRIOR_Z_FRACTION_WEIGHT
     )
-    site_pen = float(spec.site_index) * float(site_index_weight)
-    return (tilt_pen + z_pen + site_pen, tie)
+    return (tilt_pen + z_pen, tie)
 
 
 def _boltzmann_weights(
-    energies: list[float] | None,
+    energies: list[float],
     temperature: float,
 ) -> list[float] | None:
     """Deterministic Boltzmann weights ``exp(-(E_i - E_min) / (k_B * T))``.
@@ -142,8 +135,6 @@ def _boltzmann_weights(
     entries get weight ``0.0``: they are not dropped, they simply sort behind
     every finite conformer in the proportional allocation.
     """
-    if energies is None:
-        return None
     if not math.isfinite(temperature) or temperature <= 0.0:
         return None
 
@@ -195,7 +186,7 @@ def resolve_conformer_weights(
     if n_conformers < 2:
         return None
     if conformer_energies is None:
-        logger.debug(
+        logger.warning(
             "conformer_weighting='boltzmann' but no conformer energies were "
             "supplied; using the uniform conformer draw"
         )
@@ -332,9 +323,10 @@ def _stratified_sample(
         rng.shuffle(ranks)
         if site_index_weight > 0.0:
             # Round-robin across site indices so quality bias does not collapse
-            # the draw onto a single open pore.
+            # the draw onto a single open pore. The unused bucket shuffle above
+            # keeps the RNG sequence aligned with the non-porous branch.
             by_site: dict[int, list[PlacementSpec]] = defaultdict(list)
-            for spec, _rank in zip(bucket, ranks, strict=True):
+            for spec in bucket:
                 by_site[int(spec.site_index)].append(spec)
             ranked_by_site: dict[int, list[PlacementSpec]] = {}
             for si, site_specs in by_site.items():
@@ -346,7 +338,6 @@ def _stratified_sample(
                         item[0],
                         float(item[1]),
                         z_fraction_target=z_fraction_target,
-                        site_index_weight=0.0,
                     ),
                 )
                 # Best first for round-robin.
@@ -369,7 +360,6 @@ def _stratified_sample(
                     item[0],
                     float(item[1]),
                     z_fraction_target=z_fraction_target,
-                    site_index_weight=0.0,
                 ),
             )
             best_first = [spec for spec, _ in ordered]
@@ -594,14 +584,6 @@ def build_batch_placement_specs(
             )
             for ci, ff, tl, azv, zfv, aip, si in parallel_axes
         )
-        if n_par == 0:
-            par_specs = []
-        else:
-            par_cap = min(
-                _GRID_BUILD_CAP,
-                max(n_par * _EARLY_CAP_WORKING_SET_MULTIPLIER, n_par),
-            )
-            par_specs = _collect(parallel_items, cap=par_cap)
 
         en_down_axes: Iterable[tuple[Any, ...]]
         if conformer_weights is None:
@@ -637,19 +619,27 @@ def build_batch_placement_specs(
             )
             for ci, ei, tl, azv, zfv, si in en_down_axes
         )
-        if n_en == 0:
-            en_specs = []
-        else:
-            en_cap = min(
-                _GRID_BUILD_CAP,
-                max(n_en * _EARLY_CAP_WORKING_SET_MULTIPLIER, n_en),
-            )
-            en_specs = _collect(en_down_items, cap=en_cap)
 
-        if len(par_specs) > n_par:
-            par_specs = _subsample(par_specs, n_par, seed)
-        if len(en_specs) > n_en:
-            en_specs = _subsample(en_specs, n_en, seed + 1)
+        # Size each working set for full n_desired so a filtered-out branch can
+        # be topped up from the other side's surplus.
+        shared_cap = min(
+            _GRID_BUILD_CAP,
+            max(n_desired * _EARLY_CAP_WORKING_SET_MULTIPLIER, n_desired),
+        )
+        par_pool = _collect(parallel_items, cap=shared_cap)
+        en_pool = _collect(en_down_items, cap=shared_cap)
+
+        n_par_take = min(n_par, len(par_pool))
+        n_en_take = min(n_en, len(en_pool))
+        deficit = n_desired - (n_par_take + n_en_take)
+        if deficit > 0:
+            par_extra = min(deficit, len(par_pool) - n_par_take)
+            n_par_take += par_extra
+            deficit -= par_extra
+            n_en_take += min(deficit, len(en_pool) - n_en_take)
+
+        par_specs = _subsample(par_pool, n_par_take, seed) if n_par_take > 0 else []
+        en_specs = _subsample(en_pool, n_en_take, seed + 1) if n_en_take > 0 else []
         specs = par_specs + en_specs
     else:
         orient = "vertical" if shape == "linear" else "round"

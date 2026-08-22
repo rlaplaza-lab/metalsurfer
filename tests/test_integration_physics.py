@@ -32,6 +32,7 @@ from metalsurfer.workflow.shared import (
 )
 
 from .conftest import (
+    E_ADS_IDENTITY_TOL,
     assert_water_oh_hh_geometry,
     make_placement_descriptor,
     make_screening_result,
@@ -207,7 +208,7 @@ class TestValidationAndFilterPhysics:
             ),
         ]
         config = AdsorptionConfig(
-            connectivity_multipliers=[1.3],
+            connectivity_multiplier=1.3,
             skip_topology_check=False,
             skip_desorption_check=False,
         )
@@ -246,7 +247,6 @@ class TestAdsorptionEnergyPhysics:
             descriptor=descriptor,
             molecule_name="water",
             slab_atoms=slab,
-            calculator=ok_atoms.calc,
             config=config,
             E_slab=e_slab,
             E_mol=e_mol,
@@ -254,10 +254,12 @@ class TestAdsorptionEnergyPhysics:
         )
         assert failure is None
         assert result is not None
-        assert result.energy_adsorption == pytest.approx(e_ads_ok, abs=1e-9)
+        assert result.energy_adsorption == pytest.approx(
+            e_ads_ok, abs=E_ADS_IDENTITY_TOL
+        )
         assert result.energy_adsorption == pytest.approx(
             result.energy_adslab - result.energy_slab - result.energy_adsorbate,
-            abs=1e-9,
+            abs=E_ADS_IDENTITY_TOL,
         )
 
         capped = _attach_calc(good, energy=e_slab + e_mol + e_ads_cap)
@@ -267,7 +269,6 @@ class TestAdsorptionEnergyPhysics:
             descriptor=make_placement_descriptor(placement_id=1),
             molecule_name="water",
             slab_atoms=slab,
-            calculator=capped.calc,
             config=config,
             E_slab=e_slab,
             E_mol=e_mol,
@@ -406,10 +407,12 @@ class TestProcessMoleculePhysicsSurvival:
             f"got {len(results)}"
         )
         for r in results:
-            assert r.energy_adsorption == pytest.approx(e_ads_good, abs=1e-6)
+            assert r.energy_adsorption == pytest.approx(
+                e_ads_good, abs=E_ADS_IDENTITY_TOL
+            )
             assert r.energy_adsorption == pytest.approx(
                 r.energy_adslab - r.energy_slab - r.energy_adsorbate,
-                abs=1e-6,
+                abs=E_ADS_IDENTITY_TOL,
             )
             assert 1.5 <= r.distance <= 4.0, (
                 f"Survivor must remain adsorbed (1.5–4 Å), got {r.distance:.2f}"

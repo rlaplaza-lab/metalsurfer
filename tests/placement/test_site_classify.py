@@ -17,10 +17,7 @@ from metalsurfer.placement import (
 )
 from metalsurfer.placement._constants import _NORMAL_K_NEIGHBOURS
 from metalsurfer.placement.site_classify import _compute_local_normals_batch
-from metalsurfer.placement.site_context import (
-    _get_unique_sites_for_specs,
-    clear_site_caches,
-)
+from metalsurfer.placement.site_context import _get_unique_sites_for_specs
 from metalsurfer.placement.site_coords import top_layer_mask_by_normal
 from metalsurfer.symmetry import SymmetryAnalyzer
 
@@ -43,11 +40,15 @@ _TRANSLATIONS = [
 
 
 def _reference_orbits(analyzer, sites, planar):
-    """Original O(n²·m) scalar triple loop, kept here as the oracle."""
+    """Brute-force orbit oracle; MIC distances via ASE find_mic (not analyzer MIC helpers)."""
+    from ase.geometry import find_mic
+
+    from metalsurfer._geom_pbc import frac_to_cart
+
     sorted_sites = sorted(sites, key=analyzer._site_sort_key)
     frac_ops = analyzer._frac_ops_from_dataset()
     n = len(sorted_sites)
-    cart = [analyzer._site_3d_cart(s) for s in sorted_sites]
+    cart = np.asarray([analyzer._site_3d_cart(s) for s in sorted_sites], dtype=float)
     types = [str(s.site_type) for s in sorted_sites]
     parent = list(range(n))
 
@@ -62,19 +63,33 @@ def _reference_orbits(analyzer, sites, planar):
         if ra != rb:
             parent[rb] = ra
 
+    cell = np.asarray(analyzer._lattice, dtype=float)
+    pbc = list(analyzer._symmetry_pbc())
     frac = [analyzer._cart_to_frac(p) for p in cart]
+    tol = float(analyzer.symmetry_tolerance)
+    n_hat = analyzer._slab_normal() if planar else None
+    cluster_com = getattr(analyzer, "_cluster_com", None)
+    cluster_half = getattr(analyzer, "_cluster_half", None)
     for i in range(n):
         for R, t in frac_ops:
-            moved = analyzer._wrap_frac(analyzer._apply_frac_symop(frac[i], R, t))
+            moved_frac = analyzer._wrap_frac(analyzer._apply_frac_symop(frac[i], R, t))
+            moved_cart = frac_to_cart(moved_frac, cell)
+            # Undo cluster COM/half-box shift applied by _cart_to_frac.
+            if (
+                getattr(analyzer, "_mode", None) == "cluster"
+                and cluster_com is not None
+                and cluster_half is not None
+            ):
+                moved_cart = moved_cart - cluster_half + cluster_com
             for j in range(n):
                 if i == j or types[i] != types[j]:
                     continue
-                d_frac = analyzer._mic_frac_delta(moved, frac[j])
-                sep = analyzer._cart_sep_from_frac_delta(d_frac)
-                if (
-                    float(analyzer._separation_norms(sep.reshape(1, 3), planar)[0])
-                    < analyzer.symmetry_tolerance
-                ):
+                delta = cart[j] - moved_cart
+                mic_vec, _ = find_mic(delta.reshape(1, 3), cell, pbc=pbc)
+                sep = np.asarray(mic_vec[0], dtype=float)
+                if n_hat is not None:
+                    sep = sep - float(np.dot(sep, n_hat)) * n_hat
+                if float(np.linalg.norm(sep)) < tol:
                     union(i, j)
 
     roots: dict[int, list[int]] = {}
@@ -233,79 +248,6 @@ def test_symmetry_reduction_of_a_4x4_slab_is_fast():
     assert elapsed < 5.0, f"analyze_site_symmetry took {elapsed:.2f}s"
 
 
-def test_delaunay_classification_pbc_edge_is_not_mislabeled_atop():
-    """Cross-boundary bridge midpoints are required to label an a-edge site."""
-
-    from metalsurfer.placement.site_coords import _project_to_slab_plane
-    from metalsurfer.placement.site_voronoi import (
-        _build_delaunay_classification_index,
-        _delaunay_site_classification,
-    )
-
-    # 2×2 square lattice centred in a 4 Å cell.
-    positions = np.array(
-        [
-            [1.0, 1.0, 0.0],
-            [3.0, 1.0, 0.0],
-            [1.0, 3.0, 0.0],
-            [3.0, 3.0, 0.0],
-        ],
-        dtype=float,
-    )
-    cell = np.diag([4.0, 4.0, 20.0])
-    pbc = np.array([True, True, False], dtype=bool)
-    top_idx = np.arange(4, dtype=int)
-    top_2d = _project_to_slab_plane(positions, cell)
-    tri = Delaunay(top_2d)
-
-    # Bridge midpoint across the a-boundary: atom (3,1) ↔ image of (1,1) at (-1,1).
-    vertex = np.array([0.0, 1.0, 0.5], dtype=float)
-    vertex_2d = _project_to_slab_plane(vertex.reshape(1, 3), cell)[0]
-
-    cand_xy, cand_types, cand_indices = _build_delaunay_classification_index(
-        top_2d, top_idx, tri, cell=cell, pbc=pbc
-    )
-    assert "bridge" in cand_types
-    # At least one bridge candidate must involve the two atoms across the a-cut.
-    cross = {
-        frozenset(idx)
-        for typ, idx in zip(cand_types, cand_indices, strict=True)
-        if typ == "bridge"
-    }
-    assert frozenset((0, 1)) in cross
-
-    site_type, nearest_idx = _delaunay_site_classification(
-        vertex,
-        top_2d,
-        top_idx,
-        tri,
-        positions,
-        vertex_2d=vertex_2d,
-        cand_xy=cand_xy,
-        cand_types=cand_types,
-        cand_indices=cand_indices,
-    )
-    assert site_type == "bridge"
-    assert frozenset(int(i) for i in nearest_idx) == frozenset((0, 1))
-
-    # Without PBC expansion the nearest primary-cell candidate is an atop.
-    cand_xy_nopbc, cand_types_nopbc, cand_indices_nopbc = (
-        _build_delaunay_classification_index(top_2d, top_idx, tri)
-    )
-    site_type_nopbc, _ = _delaunay_site_classification(
-        vertex,
-        top_2d,
-        top_idx,
-        tri,
-        positions,
-        vertex_2d=vertex_2d,
-        cand_xy=cand_xy_nopbc,
-        cand_types=cand_types_nopbc,
-        cand_indices=cand_indices_nopbc,
-    )
-    assert site_type_nopbc == "atop"
-
-
 def test_build_site_records_classifies_boundary_bridge_via_expanded_index():
     """Production classify path labels a cross-boundary bridge without an upgrade pass."""
 
@@ -335,7 +277,13 @@ def test_build_site_records_classifies_boundary_bridge_via_expanded_index():
     expanded = _build_delaunay_classification_index(
         top_2d, top_idx, tri, cell=cell, pbc=pbc_on
     )
-    # Cross-a-boundary bridge midpoint: primary labels atop, expanded labels bridge.
+    _, expanded_types, expanded_indices = expanded
+    assert "bridge" in expanded_types
+    assert frozenset((0, 1)) in {
+        frozenset(idx)
+        for typ, idx in zip(expanded_types, expanded_indices, strict=True)
+        if typ == "bridge"
+    }
     vertex = np.array([[0.0, 1.0, 0.5]], dtype=float)
     nn_dists = np.array([1.0], dtype=float)
     local_tree = KDTree(positions)
@@ -351,7 +299,7 @@ def test_build_site_records_classifies_boundary_bridge_via_expanded_index():
         pore_threshold=2.5,
         cell=cell,
         pbc=pbc_on,
-        delaunay=_DelaunayClassifyInputs(tri, top_2d, top_idx, expanded),
+        delaunay=_DelaunayClassifyInputs(top_2d, top_idx, expanded),
     )
     primary_only = _build_site_records(
         vertex,
@@ -363,7 +311,7 @@ def test_build_site_records_classifies_boundary_bridge_via_expanded_index():
         pore_threshold=2.5,
         cell=cell,
         pbc=pbc_off,
-        delaunay=_DelaunayClassifyInputs(tri, top_2d, top_idx, primary),
+        delaunay=_DelaunayClassifyInputs(top_2d, top_idx, primary),
     )
     assert with_pbc[0].site_type == "bridge"
     assert frozenset(with_pbc[0].slab_indices) == frozenset((0, 1))
@@ -373,23 +321,28 @@ def test_build_site_records_classifies_boundary_bridge_via_expanded_index():
 def test_get_unified_sites_labels_pbc_edge_bridge_on_production_path():
     """Hot path on a real slab: boundary sites primary-atop are labelled bridge."""
 
+    from metalsurfer.placement.site_classify import (
+        _build_site_records,
+        _DelaunayClassifyInputs,
+    )
     from metalsurfer.placement.site_coords import (
         _cart_to_frac,
         _project_to_slab_plane,
         top_layer_mask_by_normal,
     )
-    from metalsurfer.placement.site_voronoi import (
-        _build_delaunay_classification_index,
-        _delaunay_site_classification,
-    )
+    from metalsurfer.placement.site_voronoi import _build_delaunay_classification_index
 
     slab = make_slab()
     positions = np.asarray(slab.get_positions(), dtype=float)
     cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = np.asarray(slab.get_pbc(), dtype=bool)
     top_idx = np.nonzero(top_layer_mask_by_normal(positions, cell, 0.5))[0]
     top_2d = _project_to_slab_plane(positions[top_idx], cell)
     tri = Delaunay(top_2d)
     primary = _build_delaunay_classification_index(top_2d, top_idx, tri)
+    delaunay_primary = _DelaunayClassifyInputs(top_2d, top_idx, primary)
+    local_tree = KDTree(positions)
+    symbols = list(slab.get_chemical_symbols())
 
     sites = get_unified_sites(
         slab,
@@ -397,38 +350,41 @@ def test_get_unified_sites_labels_pbc_edge_bridge_on_production_path():
         site_classification_method="delaunay",
     )
     assert sites
-    upgraded = []
+
+    boundary_sites = []
     for site in sites:
         frac = _cart_to_frac(np.asarray(site.xyz, dtype=float).reshape(1, 3), cell)[0]
-        near_boundary = (
+        if (
             float(frac[0]) < 0.2
             or float(frac[0]) > 0.8
             or float(frac[1]) < 0.2
             or float(frac[1]) > 0.8
-        )
-        if not near_boundary:
-            continue
-        vertex = np.asarray(site.xyz, dtype=float)
-        vertex_2d = _project_to_slab_plane(vertex.reshape(1, 3), cell)[0]
-        primary_type, _ = _delaunay_site_classification(
-            vertex,
-            top_2d,
-            top_idx,
-            tri,
-            positions,
-            vertex_2d=vertex_2d,
-            cand_xy=primary[0],
-            cand_types=primary[1],
-            cand_indices=primary[2],
-        )
-        if primary_type == "atop" and site.site_type == "bridge":
-            upgraded.append(site)
+        ):
+            boundary_sites.append(site)
+
+    primary_records = _build_site_records(
+        np.asarray([s.xyz for s in boundary_sites], dtype=float),
+        np.asarray([s.nn_distance for s in boundary_sites], dtype=float),
+        positions,
+        symbols,
+        local_tree,
+        "slab",
+        pore_threshold=2.5,
+        cell=cell,
+        pbc=pbc,
+        delaunay=delaunay_primary,
+    )
+    upgraded = [
+        site
+        for site, rec in zip(boundary_sites, primary_records, strict=True)
+        if rec.site_type == "atop" and site.site_type == "bridge"
+    ]
     assert upgraded, (
         "expected get_unified_sites to label near-boundary primary-atop as bridge"
     )
     assert (
         sum(1 for s in sites if s.site_type == "hollow")
-        == (_GOLDEN_SLAB_SITE_TYPE_MULTISET["hollow"])
+        == _GOLDEN_SLAB_SITE_TYPE_MULTISET["hollow"]
     )
 
 
@@ -520,8 +476,6 @@ def test_get_unified_sites_ordering_is_deterministic():
 
 
 def test_unique_sites_cache_hit_and_miss():
-    clear_site_caches()
-    clear_site_caches()
     slab_a = make_slab(nx=4)
     slab_b = make_slab(nx=5)
     config = AdsorptionConfig(material_type="slab")

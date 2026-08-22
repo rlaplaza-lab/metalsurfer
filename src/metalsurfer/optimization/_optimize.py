@@ -29,11 +29,12 @@ from ._model import TorchSimCalculator, setup_torchsim_model
 from ._validation import (
     _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
     _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
+    _device_is_cuda,
     _is_cuda_oom_error,
     _parallel_capacity_cache_key,
     _positions_cell_hash,
     _resolve_autobatcher_max_atoms_to_try,
-    _resolve_device,
+    _resolve_model_device,
     _resolve_ts_optimizer,
     _validate_model_pbc,
 )
@@ -93,7 +94,17 @@ def _make_state_with_frozen_constraint(  # pragma: no cover - requires MLIP stac
     state = _deps.ts.initialize_state(atoms, device=device, dtype=ts_model.dtype)
     target_dev = state.positions.device
     idx_tensor = torch.tensor(frozen_indices, dtype=torch.long, device=target_dev)
-    state.constraints = [_deps.ts_constraints.FixAtoms(atom_idx=idx_tensor)]
+
+    # Align atom_idx device before TorchSim select_sub_constraint (CPU/CUDA mix).
+    base_cls = _deps.ts_constraints.FixAtoms
+
+    class _DeviceAlignedFixAtoms(base_cls):  # type: ignore[misc,valid-type]
+        def select_sub_constraint(self, atom_idx, sys_idx):
+            if hasattr(atom_idx, "device") and atom_idx.device != self.atom_idx.device:
+                atom_idx = atom_idx.to(device=self.atom_idx.device)
+            return super().select_sub_constraint(atom_idx, sys_idx)
+
+    state.constraints = [_DeviceAlignedFixAtoms(atom_idx=idx_tensor)]
     return state
 
 
@@ -148,11 +159,7 @@ def estimate_parallel_relaxation_capacity(
             representative_atoms,
             context="estimate_parallel_relaxation_capacity",
         )
-        model_device = getattr(ts_model, "device", None)
-        if model_device is None:
-            model_device = _resolve_device(config.device)
-        if model_device is None:
-            model_device = "cpu"
+        model_device = _resolve_model_device(ts_model, config)
 
         with torchsim_output_capture():
             state = _make_state_with_frozen_constraint(
@@ -173,7 +180,8 @@ def estimate_parallel_relaxation_capacity(
 
         if config.autobatcher_max_memory_scaler is not None:
             n_systems = max(
-                1, int(config.autobatcher_max_memory_scaler // first_metric)
+                1,
+                int(config.autobatcher_max_memory_scaler * padding // first_metric),
             )
         else:  # pragma: no cover - requires MLIP stack / GPU
             resolved_max_atoms_to_try, _ = _resolve_autobatcher_max_atoms_to_try(
@@ -186,7 +194,7 @@ def estimate_parallel_relaxation_capacity(
                 ts_model,
                 max_atoms=resolved_max_atoms_to_try,
             )
-            n_systems = max(1, int(probed * 0.8 * padding))
+            n_systems = max(1, int(probed * padding))
 
         capacity_cache_set(cache_key, n_systems)
         logger.info(
@@ -316,7 +324,8 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
     ts_model,
     fmax: float = DEFAULT_FMAX,
     steps: int = 100,
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
 ) -> list[tuple[Atoms, float]]:
     """Batch-optimise isolated molecule conformers (no constraints).
 
@@ -345,8 +354,8 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
     if ts_model is None:
         raise ValueError("ts_model must not be None")
 
-    optimizer = _resolve_ts_optimizer(config.ts_optimizer if config else "fire")
-    swaps = config.steps_between_swaps if config else 5
+    optimizer = _resolve_ts_optimizer(config.ts_optimizer)
+    swaps = config.steps_between_swaps
     logger.info("Batched optimisation of %d isolated conformers", len(conformers))
     with torchsim_output_capture():
         conv = ts.generate_force_convergence_fn(
@@ -355,12 +364,8 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
     _maybe_clear_cuda_cache(ts_model)
     try:
         ab = None
-        if (
-            config is not None
-            and not config.optimize_isolated_sequentially
-            and str(getattr(ts_model, "device", None) or "cpu")
-            .lower()
-            .startswith("cuda")
+        if not config.optimize_isolated_sequentially and _device_is_cuda(
+            getattr(ts_model, "device", None) or "cpu"
         ):
             max_n_atoms = max(len(a) for a in conformers)
             resolved_max_atoms_to_try, cap_source = (
@@ -507,11 +512,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
     optimizer = _resolve_ts_optimizer(config.ts_optimizer)
     swaps = config.steps_between_swaps
 
-    model_device = getattr(ts_model, "device", None)
-    if model_device is None:
-        model_device = _resolve_device(config.device)
-    if model_device is None:
-        model_device = "cpu"
+    model_device = _resolve_model_device(ts_model, config)
     with torchsim_output_capture():
         conv = ts.generate_force_convergence_fn(
             force_tol=config.fmax, include_cell_forces=False
@@ -541,7 +542,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         )
         use_saturation_reuse = saturation_reuse and config.saturation_autobatcher_reuse
         # TorchSim memory probing is CUDA-only; CPU uses a single sequential batch.
-        use_autobatcher = str(model_device).lower().startswith("cuda")
+        use_autobatcher = _device_is_cuda(model_device)
         if use_autobatcher:
             ab, cache_key, reused_prior_estimate = _get_inflight_autobatcher(
                 ts_model,

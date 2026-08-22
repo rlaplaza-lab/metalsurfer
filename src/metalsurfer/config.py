@@ -14,6 +14,7 @@ from ._numeric_defaults import (
     DEFAULT_SEED,
     DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     DEFAULT_SYMMETRY_TOLERANCE,
+    DEFAULT_TOP_LAYER_TOLERANCE,
     DEFAULT_TRANSFER_EXPLORATION_FRACTION,
     MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM,
     MIN_CONTACT_RATIO_DEFAULT,
@@ -278,6 +279,8 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
         )
     if isinstance(root.seed, bool) or not isinstance(root.seed, int):
         raise ValueError(f"seed must be an integer, got {root.seed!r}")
+    if root.seed < 0:
+        raise ValueError(f"seed must be non-negative, got {root.seed}")
 
     for pos_name, pos_value in (
         ("min_initial_distance", root.min_initial_distance),
@@ -632,7 +635,7 @@ class AdsorptionConfig:
     min_initial_distance: float = MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
     min_contact_ratio: float = MIN_CONTACT_RATIO_DEFAULT
     max_initial_distance: float | None = None
-    top_layer_tolerance: float = 0.5
+    top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE
     symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
     site_equivalence_tolerance: float = DEFAULT_SITE_EQUIVALENCE_TOLERANCE
     hollow_site_dedup_tolerance: float = DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
@@ -658,7 +661,7 @@ class AdsorptionConfig:
     max_adsorption_energy: float = 5.0
     energy_dedup_threshold: float = 0.05
     rmsd_dedup_threshold: float = 0.1
-    connectivity_multipliers: list[float] = field(default_factory=lambda: [1.2, 1.3])
+    connectivity_multiplier: float = 1.3
     seed: int = DEFAULT_SEED
     # Weighting temperature (K) for ``conformer_weighting="boltzmann"``. This is
     # NOT a stochastic pre-filter: it only sets how sharply the deterministic
@@ -760,16 +763,26 @@ class AdsorptionConfig:
             self.material_type,
             allowed=MATERIAL_TYPE_OPTIONS,
         )
-        if not self.connectivity_multipliers:
-            raise ValueError("connectivity_multipliers must be a non-empty list")
-        for i, m in enumerate(self.connectivity_multipliers):
-            if m <= 0:
-                raise ValueError(
-                    f"connectivity_multipliers[{i}] must be positive, got {m}"
-                )
+        if isinstance(self.connectivity_multiplier, bool) or not isinstance(
+            self.connectivity_multiplier, (int, float)
+        ):
+            raise ValueError(
+                "connectivity_multiplier must be a positive number, "
+                f"got {self.connectivity_multiplier!r}"
+            )
+        if self.connectivity_multiplier <= 0:
+            raise ValueError(
+                f"connectivity_multiplier must be positive, got {self.connectivity_multiplier}"
+            )
 
         if not self.model_name:
             raise ValueError("model_name must be a non-empty string")
+
+        if not isinstance(self.skip_topology_check, bool):
+            raise ValueError(
+                "skip_topology_check must be a bool, "
+                f"got {type(self.skip_topology_check).__name__}"
+            )
 
         _check_device(self.device)
 

@@ -7,6 +7,7 @@ import numpy as np
 from ase import Atoms
 
 from .config import AdsorptionConfig
+from .exceptions import DependencyMissingError
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +49,10 @@ def create_conformers_from_smiles(
         Optional TorchSim model for batched scoring.
     """
     if Chem is None or AllChem is None:
-        raise RuntimeError(
-            "RDKit is required for conformer generation. "
-            "Install it with: pip install rdkit"
+        raise DependencyMissingError(
+            "rdkit",
+            "create_conformers_from_smiles",
+            "Install it with: pip install rdkit",
         )
     if config is None:
         config = AdsorptionConfig()

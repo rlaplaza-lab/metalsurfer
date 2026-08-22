@@ -1,5 +1,6 @@
 """Tests for AdsorptionConfig validation rules."""
 
+import inspect
 import warnings
 
 import pytest
@@ -27,10 +28,9 @@ from .conftest import make_slab
 
 
 def test_valid_device_values():
-    AdsorptionConfig(device="cuda")
-    AdsorptionConfig(device="cpu")
-    AdsorptionConfig(device="cuda:0")
-    AdsorptionConfig(device="cuda:3")
+    for device in ("cuda", "cpu", "cuda:0", "cuda:3"):
+        cfg = AdsorptionConfig(device=device)
+        assert cfg.device == device
 
 
 @pytest.mark.parametrize("device", ["gpu", "", "CUDA", "cuda:abc", "cuda:-1"])
@@ -167,17 +167,22 @@ def test_numeric_defaults_single_source_of_truth():
         placement_constants._MIN_CONTACT_RATIO_DEFAULT
         == numeric_defaults.MIN_CONTACT_RATIO_DEFAULT
     )
+    _cipd_params = inspect.signature(
+        placement_geometry.check_initial_placement_distance
+    ).parameters
     assert (
-        placement_geometry.check_initial_placement_distance.__defaults__[0]
+        _cipd_params["min_distance"].default
         == numeric_defaults.MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
     )
     assert (
-        placement_geometry.check_initial_placement_distance.__defaults__[1]
+        _cipd_params["min_contact_ratio"].default
         == numeric_defaults.MIN_CONTACT_RATIO_DEFAULT
     )
 
-    assert ei_scores.__defaults__[-1] == numeric_defaults.ACQUISITION_XI_DEFAULT
-    assert pi_scores.__defaults__[-1] == numeric_defaults.ACQUISITION_XI_DEFAULT
+    _ei_params = inspect.signature(ei_scores).parameters
+    _pi_params = inspect.signature(pi_scores).parameters
+    assert _ei_params["xi"].default == numeric_defaults.ACQUISITION_XI_DEFAULT
+    assert _pi_params["xi"].default == numeric_defaults.ACQUISITION_XI_DEFAULT
     assert (
         BOTransferConfig().exploration_fraction
         == numeric_defaults.DEFAULT_TRANSFER_EXPLORATION_FRACTION
@@ -453,6 +458,8 @@ def test_zero_energy_dedup_accepted():
         ({"placement_z_range": (5.0, 2.0)}, "placement_z_range.*lower bound"),
         ({"placement_z_range": (2.0, 2.0)}, "placement_z_range.*lower bound"),
         ({"placement_x_range": (4.0, -4.0)}, "placement_x_range.*lower bound"),
+        ({"placement_y_range": (1.0, -1.0)}, "placement_y_range.*lower bound"),
+        ({"placement_y_range": (1.0,)}, "placement_y_range.*2-tuple.*length"),
     ],
 )
 def test_placement_range_invalid_rejected(kwargs, error_match):
@@ -476,13 +483,16 @@ def test_equal_xy_range_allowed_disables_lateral_recovery():
 
 
 @pytest.mark.parametrize(
-    "multipliers",
-    [[], [1.2, -0.5], [0.0]],
+    "multiplier",
+    [-0.5, 0.0, None, [1.3]],
 )
-def test_invalid_connectivity_multipliers_rejected(multipliers):
-    match = "non-empty" if multipliers == [] else "positive"
-    with pytest.raises(ValueError, match=f"connectivity_multipliers.*{match}"):
-        AdsorptionConfig(connectivity_multipliers=multipliers)
+def test_invalid_connectivity_multiplier_rejected(multiplier):
+    if multiplier is None or isinstance(multiplier, list):
+        match = "positive number"
+    else:
+        match = "positive"
+    with pytest.raises(ValueError, match=f"connectivity_multiplier.*{match}"):
+        AdsorptionConfig(connectivity_multiplier=multiplier)
 
 
 # ---------------------------------------------------------------------------
@@ -638,7 +648,7 @@ def test_bo_defaults():
     assert c.bo.transfer.enabled is True
     assert c.bo.transfer.mode == "weighted"
     assert c.bo.transfer.min_step_observations == 5
-    assert c.bo.transfer.weight_cap == 0.35
+    assert c.bo.transfer.weight_cap == BOTransferConfig().weight_cap
     assert c.bo.transfer.similarity_lengthscale == 4.0
     assert c.bo.transfer.min_similarity == 0.05
     assert c.bo.transfer.trust_patience == 2
@@ -647,7 +657,9 @@ def test_bo_defaults():
         c.bo.transfer.exploration_fraction
         == numeric_defaults.DEFAULT_TRANSFER_EXPLORATION_FRACTION
     )
-    assert c.bo.transfer.proximity_lengthscale == 1.0
+    assert (
+        c.bo.transfer.proximity_lengthscale == BOTransferConfig().proximity_lengthscale
+    )
     assert c.bo.transfer.proximity_floor == 0.0
     assert c.bo.transfer.prior_step_window == 2
     assert c.bo.transfer.recency_lengthscale == 4.0
@@ -803,3 +815,18 @@ def test_default_config_does_not_warn():
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
         AdsorptionConfig()
+
+
+def test_num_conformers_rejects_float():
+    with pytest.raises(ValueError, match="positive integer"):
+        AdsorptionConfig(num_conformers=2.5)
+
+
+def test_negative_seed_rejected():
+    with pytest.raises(ValueError, match="non-negative"):
+        AdsorptionConfig(seed=-5)
+
+
+def test_bool_field_rejects_non_bool_string():
+    with pytest.raises(ValueError, match="skip_topology_check must be a bool"):
+        AdsorptionConfig(skip_topology_check="yes")

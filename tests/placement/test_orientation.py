@@ -84,7 +84,7 @@ def test_principal_axis_rotation_flat_hexagon_stays_near_flat():
     rotated, _score = _principal_axis_rotation(hex_pos, np.array([0.0, 0.0, 1.0]))
     assert rotated is not None
     # Plane normal ≈ z → z-span stays small (near-flat).
-    assert float(np.ptp(rotated[:, 2])) < 0.35
+    assert float(np.ptp(rotated[:, 2])) < 0.28
 
 
 @pytest.mark.parametrize("tilt_deg", [0.0, 10.0, 15.0])

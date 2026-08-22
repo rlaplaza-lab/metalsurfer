@@ -28,6 +28,10 @@ _MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM = (
 )
 _SURFACE_NORMAL_FALLBACK_NORM_EPS = _numeric_defaults.SURFACE_NORMAL_FALLBACK_NORM_EPS
 
+RECOVERABLE_DISTANCE_REASONS = frozenset(
+    {"adsorbate_overlap", "too_close", "too_far", "vdw_overlap"}
+)
+
 
 # Compute mean covalent radius of common adsorbate elements from ASE data.
 # This replaces hardcoded fallback values with dynamically computed values.
@@ -41,10 +45,7 @@ def _compute_mean_adsorbate_covalent_radius() -> float:
             r = float(ase_covalent_radii[z])
             if r > 0.0:
                 radii.append(r)
-    if radii:
-        return float(sum(radii) / len(radii))
-    # Ultimate fallback if ASE data is unavailable (should never happen)
-    return 0.77
+    return float(sum(radii) / len(radii))
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +54,6 @@ def _compute_mean_adsorbate_covalent_radius() -> float:
 
 # Minimum separation (Å) used to deduplicate Voronoi vertices as the same site.
 _VORONOI_DEDUP_TOLERANCE: float = 0.1
-_VORONOI_FRACTIONAL_CELL_MARGIN: float = 0.01
 _DISTANCE_ZERO_EPS: float = 1e-12
 _DISTANCE_RATIO_FLOOR_EPS: float = 1e-8
 
@@ -183,7 +183,6 @@ _VDW_RADIUS_FROM_COVALENT_SCALE: float = 1.2
 _CONTACT_QUALITY_COVALENT_SUM_SCALE: float = 1.35
 # Max variance of contact distances when requiring multi-atom contact (Å²).
 _CONTACT_ATOM_VARIANCE_MAX: float = 0.5
-_MIN_DISTANCE_COVALENT_FALLBACK_SCALE: float = 1.0
 _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM: float = 2.0
 _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE: float = 1.0
 # Hard floor on the gap between a newly placed adsorbate and any pre-adsorbed

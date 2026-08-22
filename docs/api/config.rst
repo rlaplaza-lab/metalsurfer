@@ -523,11 +523,11 @@ Post-relaxation validation
    initial placements. Reference energies remain the isolated molecule;
    positive :math:`E_\mathrm{ads}` can result after dissociation.
 
-``connectivity_multipliers``
-   **Type:** ``list[float]`` · **Default:** ``[1.2, 1.3]``
+``connectivity_multiplier``
+   **Type:** ``float`` · **Default:** ``1.3``
 
-   Covalent-radius multipliers used in connectivity analysis. The workflow tries
-   each multiplier in order when testing whether the adsorbate remains intact.
+   Covalent-radius multiplier used in connectivity analysis when testing
+   whether the adsorbate remains intact after relaxation.
 
 ``max_adsorption_energy``
    **Type:** ``float`` · **Default:** ``5.0`` (eV)

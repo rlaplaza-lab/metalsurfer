@@ -670,7 +670,6 @@ def _run_replay(
                         transfer_bad_rounds=transfer_bad_rounds,
                         trust_patience=int(xfer_kw["trust_patience"]),
                         proximity_lengthscale=float(xfer_kw["proximity_lengthscale"]),
-                        proximity_floor=float(xfer_kw["proximity_floor"]),
                         prior_step_ages=prior.step_ages,
                         recency_lengthscale=float(xfer_kw["recency_lengthscale"]),
                         prior_placement_X=placement,

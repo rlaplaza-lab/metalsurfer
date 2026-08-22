@@ -14,7 +14,6 @@ from typing import Any
 import numpy as np
 import pytest
 from ase import Atoms
-from ase.data import atomic_numbers, covalent_radii
 
 from metalsurfer._numeric_defaults import (
     MIN_CONTACT_RATIO_DEFAULT,
@@ -44,6 +43,8 @@ from metalsurfer.surface_prep import SlabContainer
 from metalsurfer.workflow.shared import ScreeningRunBootstrap
 
 from .conftest import (
+    E_ADS_IDENTITY_TOL,
+    assert_no_intramolecular_clashes,
     assert_paths_exist,
     assert_water_oh_hh_geometry,
     make_h2,
@@ -257,53 +258,24 @@ class _StubHarness:
 
 
 def _distance_window(material_type: str) -> tuple[float, float]:
-    # Lower bound tracks covalent contact gate (can be < 1.5 Å); upper is desorption.
-    # Same band for slab / nanoparticle / porous campaign survivors.
+    # Match production MIN_INITIAL_DISTANCE_DEFAULT; upper is desorption threshold.
     _ = material_type
-    return 1.0, 4.0
+    return MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM, 4.0
 
 
 def _assert_no_intramolecular_clashes(adsorbate: Atoms, slab: Atoms) -> None:
-    pos = adsorbate.get_positions()
-    syms = adsorbate.get_chemical_symbols()
-    cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = list(slab.get_pbc())
-    for i in range(len(pos)):
-        for j in range(i + 1, len(pos)):
-            dvec = pos[j] - pos[i]
-            if np.any(pbc):
-                dvec = dvec - np.round(dvec @ np.linalg.inv(cell)) @ cell
-            d = float(np.linalg.norm(dvec))
-            r_sum = float(covalent_radii[atomic_numbers[syms[i]]]) + float(
-                covalent_radii[atomic_numbers[syms[j]]]
-            )
-            assert d > 0.55 * r_sum, (
-                f"intramolecular clash {syms[i]}-{syms[j]} at {d:.3f} Å "
-                f"(0.55×covalent sum={0.55 * r_sum:.3f})"
-            )
-
-
-def _pair_distance(ads: Atoms, i: int, j: int, slab: Atoms) -> float:
-    pos = ads.get_positions()
-    return pair_distance(
-        pos[i],
-        pos[j],
-        cell=np.asarray(slab.get_cell(), dtype=float),
-        pbc=list(slab.get_pbc()),
-    )
-
-
-def _assert_water_geometry(ads: Atoms, slab: Atoms) -> None:
-    assert_water_oh_hh_geometry(
-        ads,
-        cell=np.asarray(slab.get_cell(), dtype=float),
-        pbc=list(slab.get_pbc()),
-    )
+    assert_no_intramolecular_clashes(adsorbate, slab)
 
 
 def _assert_dissociative_h2_geometry(ads: Atoms, slab: Atoms) -> None:
     assert len(ads) == 2
-    hh = _pair_distance(ads, 0, 1, slab)
+    pos = ads.get_positions()
+    hh = pair_distance(
+        pos[0],
+        pos[1],
+        cell=np.asarray(slab.get_cell(), dtype=float),
+        pbc=list(slab.get_pbc()),
+    )
     # Dissociative hollow-pair starts are stretched vs molecular H2 (~0.74 Å).
     # Fixture slab hollow pairs sit near a*√2/3 ≈ 1.27 Å (above the 1.0 Å floor).
     assert hh >= 1.0, f"dissociative H–H should be non-molecular, got {hh:.3f} Å"
@@ -322,7 +294,7 @@ def _assert_survivor_physics(
     assert np.isfinite(result.energy_adsorption)
     assert result.energy_adsorption == pytest.approx(
         result.energy_adslab - result.energy_slab - result.energy_adsorbate,
-        abs=1e-6,
+        abs=E_ADS_IDENTITY_TOL,
     )
     d_lo, d_hi = _distance_window(material_type)
     assert d_lo <= result.distance <= d_hi, (
@@ -386,7 +358,7 @@ def _assert_survivor_physics(
         if metal_idx:
             ads_z = ads.get_positions()[:, 2]
             slab_z = slab_part.get_positions()[metal_idx, 2]
-            assert float(np.min(ads_z)) > float(np.max(slab_z)) - 0.25, (
+            assert float(np.min(ads_z)) > float(np.max(slab_z)) - 0.05, (
                 f"adsorbate not above surface: min_ads_z={ads_z.min():.3f}, "
                 f"max_slab_z={slab_z.max():.3f}"
             )
@@ -418,7 +390,11 @@ def _assert_survivor_physics(
         _assert_dissociative_h2_geometry(ads, slab_part)
     elif expected_symbols is not None and sorted(expected_symbols) == ["H", "H", "O"]:
         assert desc.orientation_type == "round"
-        _assert_water_geometry(ads, slab_part)
+        assert_water_oh_hh_geometry(
+            ads,
+            cell=np.asarray(slab_part.get_cell(), dtype=float),
+            pbc=list(slab_part.get_pbc()),
+        )
 
 
 def _assert_binding_yield(
@@ -569,7 +545,9 @@ def test_run_adsorption_substrate_matrix(
             expected_symbols=expected_symbols,
             dissociative=dissociative,
         )
-        assert r.energy_adsorption == pytest.approx(E_ADS_BINDING, abs=1e-6)
+        assert r.energy_adsorption == pytest.approx(
+            E_ADS_BINDING, abs=E_ADS_IDENTITY_TOL
+        )
     _assert_binding_artifacts(tmp_path / f"results_{surface_type}")
 
 
@@ -679,7 +657,9 @@ def _assert_binding_api_campaign(
     assert campaign.total_configurations == len(results)
     for r in results:
         _assert_survivor_physics(r, expected_symbols=["H", "H", "O"])
-        assert r.energy_adsorption == pytest.approx(E_ADS_BINDING, abs=1e-6)
+        assert r.energy_adsorption == pytest.approx(
+            E_ADS_BINDING, abs=E_ADS_IDENTITY_TOL
+        )
     _assert_binding_artifacts(tmp_path / f"results_{surface_type}")
 
 

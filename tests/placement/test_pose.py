@@ -36,6 +36,7 @@ from ..conftest import (
 from ._helpers import (
     _assert_replay_matches,
     _first_successful_placement,
+    _tilted_make_slab,
 )
 
 
@@ -199,7 +200,6 @@ def test_validate_posed_adsorbate_uses_material_pbc(monkeypatch):
     config = AdsorptionConfig()
     _validate_posed_adsorbate(water, covered, config, slab_for_sites=slab)
     assert captured["pbc"] == material_aware_pbc("slab")
-    assert captured["pbc"] == [True, True, False]
 
 
 def test_strict_initial_placement_e2e_reason():
@@ -264,21 +264,7 @@ def test_rotated_slab_pose_round_trip():
 
 def test_tilted_slab_pose_round_trip():
     """Slab tilted so the surface normal is not Cartesian +z."""
-    slab = make_slab()
-    cell = np.array(slab.get_cell(), dtype=float)
-    tilt = np.array(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, 0.866, -0.5],
-            [0.0, 0.5, 0.866],
-        ],
-        dtype=float,
-    )
-    cell[:3] = tilt @ cell[:3]
-    slab.set_cell(cell)
-    pos = slab.get_positions()
-    pos[:] = (tilt @ pos.T).T
-    slab.set_positions(pos)
+    slab = _tilted_make_slab()
     config = adsorption_config_factory(
         material_type="slab", num_placements=20, placement_z_range=(2.0, 3.0)
     )

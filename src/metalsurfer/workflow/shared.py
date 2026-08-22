@@ -11,15 +11,15 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from ase import Atoms
-from scipy.spatial import cKDTree
+from ase.geometry import find_mic
 
 from .._logging import log_context, warn_once
 from .._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
+from .._utils import cell_has_volume
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
 from ..conformers import create_conformers_from_smiles
 from ..exceptions import OptimizationError
 from ..filters import _adsorbate_surface_min_distance, filter_results
-from ..io_results import results_dir_for
 from ..ml.schema import PlacementRecord
 from ..models import (
     BOStepMemory,
@@ -34,7 +34,7 @@ from ..optimization import (
     optimize_adsorbate_slab_batched,
     setup_single_model,
 )
-from ..placement._material import calculator_pbc_for_atoms
+from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
 from ..placement.generators import (
     enumerate_placement_specs,
     generate_placement_from_spec_with_reason,
@@ -42,6 +42,13 @@ from ..placement.generators import (
 )
 from ..placement.site_context import SiteContext, resolve_site_context_for_sampling
 from ..placement.site_enumeration import _compute_site_z_base
+from ..reporting import (
+    ConformerFailure,
+    FailureSummary,
+    FilterFailure,
+    ReferenceFailure,
+)
+from ..result_paths import results_dir_for
 from ..surface_prep import SlabContainer, accept_substrate_for_api
 from ..surface_prep._surfaces import validate_substrate_conformer_sizing
 from ..surface_prep.freeze import (
@@ -68,7 +75,7 @@ class MoleculeScreenOutcome:
     """Typed return value for single-molecule screening workflows."""
 
     results: list[ScreeningResult]
-    failure_summary: dict[str, Any] = field(default_factory=dict)
+    failure_summary: FailureSummary | None = None
     ml_records: list[PlacementRecord] = field(default_factory=list)
     bo_memory: BOStepMemory | None = None
     transfer_info: BOTransferInfo | None = None
@@ -78,41 +85,48 @@ def _summarize_failure_events(
     events: list[PlacementFailureEvent],
     *,
     label: str,
-) -> dict[str, int]:
-    """Log compact failure summaries; return stage:reason → count."""
+) -> None:
+    """Log compact failure summaries."""
     if not events:
-        return {}
+        return
     counts = Counter(f"{e.stage}:{e.reason}" for e in events)
     summary = ", ".join(
         f"{k}={n}"
         for k, n in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     )
     logger.warning("%s failures (%d): %s", label, len(events), summary)
-    return dict(counts)
 
 
 def _generation_failure_histogram(
     events: list[PlacementFailureEvent],
 ) -> dict[str, int]:
     """Count generation-stage failures by reason token."""
-    return dict(Counter(e.reason for e in events if e.stage == "generation"))
+    return _failure_reason_counts(events, stage="generation")
+
+
+def _failure_reason_counts(
+    events: list[PlacementFailureEvent],
+    *,
+    stage: str | None = None,
+) -> dict[str, int]:
+    """Count failure events by reason, optionally filtered to one stage."""
+    return dict(Counter(e.reason for e in events if stage is None or e.stage == stage))
 
 
 def _prepare_atoms_for_calculator(
     atoms: Atoms,
     *,
     label: str,
-    min_cell_c: float = MIN_CALCULATOR_CELL_C_ANG,
 ) -> None:
     """Normalize PBC for UMA and enforce minimum c-vector size."""
     atoms.set_pbc(calculator_pbc_for_atoms(atoms))
     pbc = np.array(atoms.get_pbc(), dtype=bool)
     if bool(pbc.all()):
         c_len = float(np.linalg.norm(np.asarray(atoms.get_cell())[2]))
-        if c_len < min_cell_c:
+        if c_len < MIN_CALCULATOR_CELL_C_ANG:
             raise OptimizationError(
                 f"{label}: periodic z-cell too small ({c_len:.3f} A). "
-                f"Increase vacuum to at least {min_cell_c:.1f} A "
+                f"Increase vacuum to at least {MIN_CALCULATOR_CELL_C_ANG:.1f} A "
                 "to avoid self-interaction between periodic images."
             )
 
@@ -162,11 +176,12 @@ def _materialize_spec_placements(
     )
     for spec, (result, fail_reason) in zip(specs, generated, strict=True):
         if result is None:
+            assert fail_reason is not None
             failures.append(
                 PlacementFailureEvent(
                     placement_id=spec.placement_index,
                     stage="generation",
-                    reason=fail_reason or "unknown_generation_failure",
+                    reason=fail_reason,
                     descriptor=None,
                 )
             )
@@ -194,11 +209,15 @@ def _validate_geometry(
 
     positions = atoms.get_positions()
     if len(positions) >= 2:
-        nn_dists = np.asarray(
-            cKDTree(positions).query(positions, k=2)[0],
-            dtype=float,
-        ).reshape(-1, 2)
-        min_dist = float(np.min(nn_dists[:, 1]))
+        idx_i, idx_j = np.triu_indices(len(positions), k=1)
+        diffs = positions[idx_i] - positions[idx_j]
+        cell = np.asarray(atoms.get_cell(), dtype=float)
+        pbc = material_aware_pbc(config.material_type)
+        if cell_has_volume(cell) and np.any(pbc):
+            _, mic_dists = find_mic(diffs, cell, pbc=pbc)
+            min_dist = float(np.min(np.asarray(mic_dists, dtype=float).ravel()))
+        else:
+            min_dist = float(np.min(np.linalg.norm(diffs, axis=1)))
         if min_dist < config.min_interatomic_distance:
             return False, f"atoms too close: {min_dist:.3f} A"
 
@@ -210,7 +229,7 @@ def _validate_geometry(
         if max_f > config.max_force_convergence:
             return False, f"high adsorbate forces: {max_f:.3f} eV/A"
 
-    return True, "geometry valid"
+    return True, ""
 
 
 def _validate_adsorption(
@@ -234,10 +253,10 @@ def _validate_adsorption(
             "skip_desorption",
             "skip_desorption_check=True: desorption distance validation skipped",
         )
-        return True, f"desorption check skipped ({min_d:.2f} A)", float(min_d)
+        return True, "", float(min_d)
     if min_d > config.binding_distance_threshold:
         return False, f"desorbed ({min_d:.2f} A)", min_d
-    return True, f"adsorbed ({min_d:.2f} A)", min_d
+    return True, "", min_d
 
 
 def _evaluate_optimized_candidate(
@@ -247,7 +266,6 @@ def _evaluate_optimized_candidate(
     descriptor: PlacementDescriptor,
     molecule_name: str,
     slab_atoms: Atoms,
-    calculator,
     config: AdsorptionConfig,
     E_slab: float,
     E_mol: float,
@@ -262,14 +280,6 @@ def _evaluate_optimized_candidate(
             reason="optimizer_returned_none",
             descriptor=descriptor,
         )
-    if opt_atoms.calc is None:
-        opt_atoms.calc = calculator
-
-    # The frozen-substrate drift guard must compare against the *original* frozen
-    # slab, not the covered slab: from saturation step >= 2 the covered slab comes
-    # back from the batcher without FixAtoms, so its own constraints are empty and
-    # the guard would wrongly pass. Fall back to the covered slab only when no
-    # base slab is supplied (plain binding mode).
     frozen_reference = (
         base_slab_for_frozen if base_slab_for_frozen is not None else slab_atoms
     )
@@ -325,7 +335,8 @@ def _evaluate_optimized_candidate(
         )
 
     slab_size = len(slab_atoms)
-    dist = float(min_d) if min_d is not None else float("nan")
+    assert min_d is not None
+    dist = float(min_d)
     result = ScreeningResult(
         molecule=molecule_name,
         placement_id=placement_id,
@@ -347,7 +358,6 @@ def _optimize_and_evaluate_placements(
     placement_descriptors: list[PlacementDescriptor],
     *,
     slab: Atoms,
-    calculator,
     ts_model,
     config: AdsorptionConfig,
     energies: tuple[float, float],
@@ -360,7 +370,6 @@ def _optimize_and_evaluate_placements(
     """Optimize materialized placements and evaluate each optimized candidate.
 
     Returns ``(results, validation_failure_events, n_optimization_failed)``.
-    When optimize returns empty/falsy, returns empty results with zero failures.
     """
     e_slab, e_mol = energies
     if not (saturation_reuse and config.saturation_autobatcher_reuse):
@@ -374,9 +383,6 @@ def _optimize_and_evaluate_placements(
         base_slab_for_frozen=base_slab_for_frozen,
         saturation_reuse=saturation_reuse,
     )
-    if not optimized:
-        logger.warning("Optimization failed for all placements")
-        return [], [], 0
 
     results: list[ScreeningResult] = []
     validation_failure_events: list[PlacementFailureEvent] = []
@@ -391,7 +397,6 @@ def _optimize_and_evaluate_placements(
                 descriptor=descriptor,
                 molecule_name=molecule_name,
                 slab_atoms=slab,
-                calculator=calculator,
                 config=config,
                 E_slab=e_slab,
                 E_mol=e_mol,
@@ -400,11 +405,51 @@ def _optimize_and_evaluate_placements(
                 log_prefix=log_prefix,
             )
         if result is None:
-            if failure_event is not None:
-                validation_failure_events.append(failure_event)
+            assert failure_event is not None
+            validation_failure_events.append(failure_event)
             continue
         results.append(result)
     return results, validation_failure_events, n_optimization_failed
+
+
+def _filter_and_label_duplicates(
+    results: list[ScreeningResult],
+    *,
+    slab_atoms: Atoms,
+    surface_symbols: list[str] | None,
+    reference_smiles: str | None,
+    config: AdsorptionConfig,
+    smiles: str,
+    surface_type: str,
+    ml_records: list[PlacementRecord],
+) -> tuple[list[ScreeningResult], list[ScreeningResult], float]:
+    """Filter results and append labeled duplicate ML records.
+
+    Returns ``(filtered, duplicates, t_filtering)``.
+    """
+    t0 = time.perf_counter()
+    duplicates: list[ScreeningResult] = []
+    filtered = filter_results(
+        results,
+        slab=slab_atoms,
+        surface_symbols=surface_symbols,
+        reference_smiles=reference_smiles,
+        config=config,
+        duplicate_results_out=duplicates,
+    )
+    t_filtering = time.perf_counter() - t0
+
+    for dup in duplicates:
+        record = PlacementRecord.from_screening_result(
+            dup,
+            smiles=smiles,
+            surface_id=surface_type,
+            config=config,
+        )
+        record.label_source = "deduplicated_duplicate"
+        ml_records.append(record)
+
+    return filtered, duplicates, t_filtering
 
 
 def _finalize_screen_results(
@@ -416,50 +461,38 @@ def _finalize_screen_results(
     config: AdsorptionConfig,
     smiles: str,
     surface_type: str,
-    failure_summary: dict[str, Any],
     ml_records: list[PlacementRecord],
-    label_source_for_duplicates: str = "deduplicated_duplicate",
-) -> tuple[list[ScreeningResult], float]:
+) -> tuple[list[ScreeningResult], float, FilterFailure | None]:
     """Filter results, record dedup ML labels, and set filter-stage failure summary.
 
-    Returns ``(filtered_results, t_filtering)``.
+    Returns ``(filtered_results, t_filtering, filter_failure_or_None)``.
     """
-    t0 = time.perf_counter()
     n_before_filter = len(results)
-    deduplicated_results: list[ScreeningResult] = []
-    filtered = filter_results(
+    filtered, _duplicates, t_filtering = _filter_and_label_duplicates(
         results,
-        slab=slab_atoms,
+        slab_atoms=slab_atoms,
         surface_symbols=surface_symbols,
         reference_smiles=reference_smiles,
         config=config,
-        duplicate_results_out=deduplicated_results,
+        smiles=smiles,
+        surface_type=surface_type,
+        ml_records=ml_records,
     )
-    t_filtering = time.perf_counter() - t0
 
-    for dup in deduplicated_results:
-        record = PlacementRecord.from_screening_result(
-            dup,
-            smiles=smiles,
-            surface_id=surface_type,
-            config=config,
-        )
-        record.label_source = label_source_for_duplicates
-        ml_records.append(record)
-
+    filter_failure: FilterFailure | None = None
     if not filtered:
-        failure_summary["stage"] = "filter"
-        failure_summary["n_before_filter"] = n_before_filter
-        failure_summary["n_after_filter"] = 0
+        filter_failure = FilterFailure(
+            n_before_filter=n_before_filter,
+            n_after_filter=0,
+        )
 
-    return filtered, t_filtering
+    return filtered, t_filtering, filter_failure
 
 
 @dataclass
 class SubstrateRefState:
     """Resolved substrate references for placement and freeze policy."""
 
-    slab: SlabContainer
     slab_for_sites: Atoms
     effective_base_slab_for_frozen: Atoms | None
 
@@ -499,7 +532,6 @@ def prepare_substrate_for_screening(
     )
     log_substrate_freeze_policy(freeze_ref)
     return SubstrateRefState(
-        slab=slab,
         slab_for_sites=slab_for_sites,
         effective_base_slab_for_frozen=effective_base_slab_for_frozen,
     )
@@ -699,9 +731,6 @@ def resolve_saturation_step_workload_config(
     bo_enabled
         Whether Bayesian optimisation is enabled.
     """
-    if not needs_workload_autotune(config, bo=bo_enabled):
-        return config
-
     site_context = resolve_site_context_for_sampling(
         slab_for_sites,
         config,
@@ -734,35 +763,20 @@ def _build_surface_reference_slab(
 ) -> Atoms:
     """Build a substrate-only slab reference for placement/validation/filtering.
 
-    Prefers a prefix of length ``len(base_slab_for_frozen)`` (saturation appends
-    adsorbates as a suffix). Falls back to symbol-set stripping only when the
-    covered slab is shorter than the frozen base (unexpected).
+    Uses a prefix of length ``len(base_slab_for_frozen)`` (saturation appends
+    adsorbates as a suffix). Raises if the covered slab is shorter than the
+    frozen base.
     """
     if base_slab_for_frozen is None:
         return slab_atoms
 
     n_sub = len(base_slab_for_frozen)
-    if len(slab_atoms) >= n_sub:
-        surface_slab = slab_atoms[:n_sub].copy()
-        surface_slab.set_cell(slab_atoms.get_cell())
-        surface_slab.set_pbc(slab_atoms.get_pbc())
-        return surface_slab
-
-    logger.warning(
-        "Covered slab (%d atoms) shorter than base_slab_for_frozen (%d); "
-        "falling back to symbol-set substrate strip",
-        len(slab_atoms),
-        n_sub,
-    )
-    surface_symbols = set(base_slab_for_frozen.get_chemical_symbols())
-    symbols = slab_atoms.get_chemical_symbols()
-    mask = [s in surface_symbols for s in symbols]
-    if not any(mask):
-        return slab_atoms
-    if all(mask):
-        return slab_atoms
-
-    surface_slab = slab_atoms[mask].copy()
+    if len(slab_atoms) < n_sub:
+        raise ValueError(
+            f"Covered slab ({len(slab_atoms)} atoms) is shorter than "
+            f"base_slab_for_frozen ({n_sub}); cannot strip a substrate prefix"
+        )
+    surface_slab = slab_atoms[:n_sub].copy()
     surface_slab.set_cell(slab_atoms.get_cell())
     surface_slab.set_pbc(slab_atoms.get_pbc())
     return surface_slab
@@ -845,15 +859,15 @@ def _prepare_molecule_screening(
     base_slab_for_frozen: Atoms | None = None,
     slab_energy_override: float | None = None,
     symmetry_broken: bool = False,
-    failure_summary: dict[str, Any] | None = None,
     bo_enabled: bool = False,
     conformers: list[Atoms] | None = None,
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
-) -> MoleculeScreeningContext | None:
-    """Shared preamble for standard and BO molecule screening."""
-    if failure_summary is None:
-        failure_summary = {}
+) -> tuple[MoleculeScreeningContext | None, FailureSummary | None]:
+    """Shared preamble for standard and BO molecule screening.
+
+    Returns ``(context, None)`` on success, or ``(None, failure)`` on early bailout.
+    """
     E_slab = (
         slab_energy_override
         if slab_energy_override is not None
@@ -862,9 +876,9 @@ def _prepare_molecule_screening(
     E_mol = reference_energies.get_molecule_energy(molecule_name)
     if E_mol is None:
         logger.error("Missing reference energy for %s", molecule_name)
-        failure_summary["stage"] = "reference"
-        failure_summary["reason"] = f"missing reference energy for {molecule_name}"
-        return None
+        return None, ReferenceFailure(
+            reason=f"missing reference energy for {molecule_name}"
+        )
 
     t0 = time.perf_counter()
     if conformers is None:
@@ -879,22 +893,17 @@ def _prepare_molecule_screening(
             t_conformers = time.perf_counter() - t0
             if conformer_pack is None:
                 logger.error("Could not generate conformers for %s", molecule_name)
-                failure_summary["stage"] = "conformers"
-                failure_summary["reason"] = (
-                    f"could not generate conformers for {molecule_name}"
+                return None, ConformerFailure(
+                    reason=f"could not generate conformers for {molecule_name}"
                 )
-                return None
             conformers, conformer_energies = conformer_pack
     else:
         t_conformers = time.perf_counter() - t0
     if conformer_energies is not None and len(conformer_energies) != len(conformers):
-        logger.warning(
-            "Discarding %d conformer energies that do not match %d conformers for %s",
-            len(conformer_energies),
-            len(conformers),
-            molecule_name,
+        raise ValueError(
+            f"conformer_energies length {len(conformer_energies)} does not match "
+            f"{len(conformers)} conformers for {molecule_name}"
         )
-        conformer_energies = None
 
     substrate_ref = prepare_substrate_for_screening(
         slab,
@@ -902,7 +911,6 @@ def _prepare_molecule_screening(
         base_slab_for_frozen,
         config,
     )
-    slab = substrate_ref.slab
     slab_for_sites = substrate_ref.slab_for_sites
     effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
 
@@ -940,17 +948,20 @@ def _prepare_molecule_screening(
     if resolved.num_placements is None:
         raise ValueError("config.num_placements must be set")
 
-    return MoleculeScreeningContext(
-        slab=slab,
-        slab_for_sites=slab_for_sites,
-        effective_base_slab_for_frozen=effective_base_slab_for_frozen,
-        conformers=conformers,
-        site_context=site_context,
-        config=resolved,
-        E_slab=E_slab,
-        E_mol=E_mol,
-        t_conformers=t_conformers,
-        conformer_energies=conformer_energies,
+    return (
+        MoleculeScreeningContext(
+            slab=slab,
+            slab_for_sites=slab_for_sites,
+            effective_base_slab_for_frozen=effective_base_slab_for_frozen,
+            conformers=conformers,
+            site_context=site_context,
+            config=resolved,
+            E_slab=E_slab,
+            E_mol=E_mol,
+            t_conformers=t_conformers,
+            conformer_energies=conformer_energies,
+        ),
+        None,
     )
 
 
@@ -981,7 +992,7 @@ def _normalize_molecules_input(
 
     pairs = _normalize_molecule_pairs(molecules)
     if skip_existing:
-        molecule_names, smiles_list, load_status = load_molecules_from_pairs(
+        molecule_names, smiles_list, load_status = _load_normalized_molecule_pairs(
             pairs,
             skip_existing=skip_existing,
             surface_type=surface_type,
@@ -1058,33 +1069,18 @@ def load_molecules(
     )
 
 
-def load_molecules_from_pairs(
-    molecule_pairs: list[tuple[str, str]] | tuple[str, str],
+def _load_normalized_molecule_pairs(
+    pairs: list[tuple[str, str]],
     *,
-    skip_existing: bool = True,
-    surface_type: str | None = None,
-    skip_saturation_file: bool = False,
+    skip_existing: bool,
+    surface_type: str | None,
+    skip_saturation_file: bool,
 ) -> tuple[list[str], list[str], str]:
-    """Load molecules from in-memory ``(smiles, name)`` tuples.
-
-    Parameters
-    ----------
-    molecule_pairs
-        List or single tuple of (smiles, name).
-    skip_existing
-        Whether to skip molecules already processed.
-    surface_type
-        Surface type label.
-    skip_saturation_file
-        Whether to skip based on saturation summary.
-    """
     results_dir = (
         str(results_dir_for(surface_type)) if surface_type else "results_manual"
     )
-    pairs = _normalize_molecule_pairs(molecule_pairs)
     all_smiles = [smiles for smiles, _ in pairs]
     all_molecules = [name for _, name in pairs]
-
     return _select_molecules_for_processing(
         all_molecules=all_molecules,
         all_smiles=all_smiles,
@@ -1132,9 +1128,6 @@ def _select_molecules_for_processing(
     skip_saturation_file: bool,
     results_dir: str,
 ) -> tuple[list[str], list[str], str]:
-    if len(all_molecules) != len(all_smiles):
-        raise ValueError("molecule names and smiles must have matching lengths")
-
     if not all_molecules:
         return [], [], "empty_file"
 

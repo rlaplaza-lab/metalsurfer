@@ -18,10 +18,7 @@ from metalsurfer.placement.pose import (
     _finalize_placement,
     _PlacementContext,
 )
-from metalsurfer.placement.site_context import (
-    _get_unique_sites_for_specs,
-    clear_site_caches,
-)
+from metalsurfer.placement.site_context import _get_unique_sites_for_specs
 from metalsurfer.placement.site_enumeration import (
     _compute_site_z_base,
 )
@@ -205,7 +202,6 @@ def test_estimate_complexity_shrinks_under_coverage():
     from metalsurfer.placement.generators import estimate_molecule_complexity
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
-    clear_site_caches()
     slab = make_slab()
     config = AdsorptionConfig(material_type="slab", seed=0)
     ctx = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
@@ -233,7 +229,6 @@ def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distanc
     from metalsurfer.placement.generators import estimate_molecule_complexity
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
-    clear_site_caches()
     slab = make_slab()
     ctx = resolve_site_context_for_sampling(
         slab, AdsorptionConfig(material_type="slab", seed=0), symmetry_broken=True
@@ -266,7 +261,6 @@ def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distanc
 
 
 def test_overlap_recovery_rescues_lateral_clash():
-    clear_site_caches()
     slab = make_slab()
     z_top = float(np.max(slab.get_positions()[:, 2]))
     pre = Atoms("O", positions=[[2.0, 2.0, z_top + 2.2]])
@@ -308,6 +302,7 @@ def test_overlap_recovery_rescues_lateral_clash():
         rotated_pos=water.get_positions().copy(),
         z_base_lo=z_top + 1.5,
         z_base_hi=z_top + 3.0,
+        normal=np.array([0.0, 0.0, 1.0]),
     )
     result, reason = _finalize_placement(
         ctx,
@@ -395,7 +390,7 @@ def test_clearance_aware_height_raises_protruding_pose():
     ) @ n_hat
     closest_h = float(np.min(atom_heights))
     z_offset = ctx.z_base_lo + spec.z_fraction * (ctx.z_base_hi - ctx.z_base_lo)
-    assert closest_h == pytest.approx(ctx.surface_ref + z_offset, abs=1e-5)
+    assert closest_h == pytest.approx(ctx.surface_ref + z_offset, abs=1e-9)
 
 
 def test_place_dissociative_two_sites_matches_spec_path():
@@ -405,7 +400,6 @@ def test_place_dissociative_two_sites_matches_spec_path():
     )
     from metalsurfer.placement.orientation import _site_type_z_offset
 
-    clear_site_caches()
     slab = make_slab()
     h2 = make_h2()
     config = AdsorptionConfig(
@@ -474,7 +468,6 @@ def test_packing_yield_improves_with_occupancy_prune():
     )
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
-    clear_site_caches()
     slab = make_slab()
     config = AdsorptionConfig(
         material_type="slab",
@@ -557,6 +550,40 @@ def test_retry_blocks_repeated_bad_site_index(monkeypatch):
     _run_fill(fill_mod, config)
     assert _RETRY_BLOCK_SITE_AFTER >= 2
     # After enough failures on site 3, later attempts should exclude it.
+    assert any(3 not in batch for batch in seen_filters[1:])
+
+
+@pytest.mark.parametrize("fail_reason", ["too_far", "vdw_overlap"])
+def test_retry_blocks_repeated_clash_reasons(fail_reason, monkeypatch):
+    """Sites with repeated too_far/vdw_overlap failures are blocked like too_close."""
+    from metalsurfer.workflow import placement_fill as fill_mod
+
+    seen_filters = []
+
+    def make_specs(_n_desired, filter_spec):
+        specs = [
+            _atop_spec(i, site_index=site_idx, site_type="hollow")
+            for i, site_idx in enumerate([3, 3, 5])
+        ]
+        filtered = _filter_specs(specs, filter_spec)
+        seen_filters.append([s.site_index for s in filtered])
+        return filtered[:_n_desired]
+
+    _patch_fill(
+        monkeypatch,
+        fill_mod,
+        enumerate_fn=_enumerate_from(make_specs),
+        materialize_fn=_materialize_all_fail(fail_reason),
+    )
+
+    config = AdsorptionConfig(
+        material_type="slab",
+        num_placements=3,
+        placement_retry_enabled=True,
+        placement_retry_max_attempts=3,
+        seed=0,
+    )
+    _run_fill(fill_mod, config)
     assert any(3 not in batch for batch in seen_filters[1:])
 
 

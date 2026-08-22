@@ -80,6 +80,10 @@ Embedded on :attr:`~metalsurfer.SaturationStepResult.transfer` and
 :attr:`~metalsurfer.MultiMolSaturationStepResult.transfer_by_molecule`.
 CSV exports still flatten to stable ``bo_transfer_*`` column names.
 
+.. autoclass:: metalsurfer.models.BOStepMemory
+   :members:
+   :undoc-members:
+
 .. autoclass:: metalsurfer.models.BOTransferInfo
    :members:
    :undoc-members:

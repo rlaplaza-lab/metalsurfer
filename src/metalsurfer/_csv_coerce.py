@@ -69,8 +69,6 @@ def parse_bool(value: Any, default: bool = False) -> bool:
     """
     if is_missing(value):
         return default
-    if isinstance(value, bool):
-        return value
     if isinstance(value, (int, float)):
         return bool(value)
     text = str(value).strip().lower()

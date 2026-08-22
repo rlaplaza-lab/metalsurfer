@@ -13,6 +13,7 @@ import numpy as np
 from ase import Atoms
 
 from ..config import AdsorptionConfig
+from ..exceptions import DependencyMissingError
 from . import _deps
 
 logger = logging.getLogger(__name__)
@@ -48,16 +49,33 @@ def _positions_cell_hash(atoms: Atoms) -> int:
 
 
 def _resolve_ts_optimizer(name: str) -> Any:
-    """Map config string to ``ts.Optimizer`` enum member (``fire`` when unknown)."""
+    """Map config string to ``ts.Optimizer`` enum member."""
     ts = _deps.ts
     if ts is None:
-        return None
+        raise DependencyMissingError(
+            "torch-sim-atomistic",
+            "_resolve_ts_optimizer",
+            "Install with: pip install torch-sim-atomistic",
+        )
     _map = {
         "fire": ts.Optimizer.fire,
         "lbfgs": ts.Optimizer.lbfgs,
         "bfgs": ts.Optimizer.bfgs,
     }
-    return _map.get(name, ts.Optimizer.fire)
+    return _map[name]
+
+
+def _device_is_cuda(device: Any) -> bool:
+    """Return True when *device* names a CUDA target (str or torch.device)."""
+    if isinstance(device, str):
+        return device.lower().startswith("cuda")
+    type_attr = getattr(device, "type", None)
+    return isinstance(type_attr, str) and type_attr.lower() == "cuda"
+
+
+def _device_key(device: Any) -> str:
+    """Stable string key for cache entries; ``None`` maps to ``unknown``."""
+    return str(device) if device is not None else "unknown"
 
 
 def _resolve_device(device: str | None) -> str | None:
@@ -66,9 +84,7 @@ def _resolve_device(device: str | None) -> str | None:
     Enables tests and CI (no GPU) to run without false failures when
     config defaults to device='cuda'.
     """
-    if device is None or not (
-        isinstance(device, str) and device.lower().startswith("cuda")
-    ):
+    if device is None or not _device_is_cuda(device):
         return device
     torch = _deps.torch
     if torch is None:
@@ -80,6 +96,16 @@ def _resolve_device(device: str | None) -> str | None:
     except (RuntimeError, AttributeError):
         return "cpu"
     return device
+
+
+def _resolve_model_device(ts_model: Any, config: AdsorptionConfig) -> str:
+    """Resolve the device used for TorchSim state / autobatcher decisions."""
+    model_device = getattr(ts_model, "device", None)
+    if model_device is None:
+        model_device = _resolve_device(config.device)
+    if model_device is None:
+        model_device = "cpu"
+    return model_device
 
 
 def _is_cuda_oom_error(exc: BaseException) -> bool:
@@ -127,11 +153,10 @@ def _parallel_capacity_cache_key(
     lifetime assumption that makes this safe.
     """
     dev = getattr(ts_model, "device", None)
-    dev_key = str(dev) if dev is not None else "unknown"
     frozen_key = tuple(sorted(int(i) for i in (frozen_indices or [])))
     return (
         id(ts_model),
-        dev_key,
+        _device_key(dev),
         max_n_atoms,
         frozen_key,
         config.autobatcher_max_memory_padding,

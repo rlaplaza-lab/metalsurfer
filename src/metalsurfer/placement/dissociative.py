@@ -60,12 +60,6 @@ _DISSOCIATIVE_PAIR_CACHE: dict[str, list[_DissociativeSitePair]] = {}
 _DISSOCIATIVE_PAIR_CACHE_LOCK = threading.Lock()
 
 
-def clear_dissociative_pair_caches() -> None:
-    """Clear the process-local dissociative pair catalog cache."""
-    with _DISSOCIATIVE_PAIR_CACHE_LOCK:
-        _DISSOCIATIVE_PAIR_CACHE.clear()
-
-
 def _is_dissociable_diatomic(adsorbate: Atoms) -> bool:
     """Check whether the molecule is a homonuclear diatomic (e.g. H2, O2, N2)."""
     syms = adsorbate.get_chemical_symbols()
@@ -82,16 +76,28 @@ def _site_outward_normal(
 ) -> np.ndarray:
     """Return unit outward normal for dissociative fragment placement."""
     normal = np.asarray(site.normal, dtype=float)
-    norm = float(np.linalg.norm(normal))
-    if norm > _VECTOR_NORM_EPS:
-        return normal / norm
+    unit = geom._safe_normalize(normal)
+    if np.linalg.norm(unit) > _VECTOR_NORM_EPS:
+        return unit
     if material_type == "nanoparticle":
         com = np.mean(reference_positions, axis=0)
-        outward = np.asarray(site_xyz, dtype=float) - com
-        norm = float(np.linalg.norm(outward))
-        if norm > _VECTOR_NORM_EPS:
-            return outward / norm
+        outward = geom._safe_normalize(np.asarray(site_xyz, dtype=float) - com)
+        if np.linalg.norm(outward) > _VECTOR_NORM_EPS:
+            return outward
     return np.asarray(slab_normal, dtype=float)
+
+
+def _xyz_array_hash(positions: np.ndarray | None) -> str:
+    """Stable short hash of an ``(n, 3)`` position array (rounded to 1e-6 Å)."""
+    if positions is None:
+        return "none"
+    arr = np.asarray(positions, dtype=float)
+    if arr.size == 0:
+        return "none"
+    if arr.ndim == 1:
+        arr = arr.reshape(1, 3)
+    rounded = np.round(arr, 6)
+    return hashlib.sha256(rounded.tobytes()).hexdigest()[:32]
 
 
 def _dissociative_pair_cache_key(
@@ -112,10 +118,83 @@ def _dissociative_pair_cache_key(
         + str(config.site_classification_method).encode()
         + b"\x00"
         + config.material_type.encode()
+        + struct.pack("<d", float(config.min_adsorbate_separation))
     )
     return hashlib.sha256(
         pos_bytes + cell_bytes + numbers_bytes + cfg_bytes
     ).hexdigest()
+
+
+def _filter_hollow_pore_sites(
+    sites: Sequence[Site], *, material_type: str
+) -> list[Site]:
+    if material_type != "slab":
+        return list(sites)
+    return [s for s in sites if s.site_type in ("hollow", "pore")]
+
+
+def _resolve_dissociative_site_entries(
+    sites_slab: Atoms,
+    config: AdsorptionConfig,
+    *,
+    raw_sites: list[Site] | None = None,
+    site_context: SiteContext | None = None,
+    cell_arr: np.ndarray,
+    pbc_xy: list[bool],
+) -> list[Site]:
+    """Resolve hollow/pore site list before occupancy pruning."""
+    used_hollow_helper = False
+    if raw_sites is not None:
+        site_entries = _filter_hollow_pore_sites(
+            raw_sites, material_type=config.material_type
+        )
+    elif site_context is not None and site_context.raw_unclustered is not None:
+        site_entries = _filter_hollow_pore_sites(
+            site_context.raw_unclustered, material_type=config.material_type
+        )
+    elif site_context is not None and site_context.sites:
+        site_entries = _filter_hollow_pore_sites(
+            site_context.sites, material_type=config.material_type
+        )
+    elif config.material_type == "slab":
+        site_entries = get_hollow_sites_for_adatoms(
+            sites_slab,
+            top_layer_tolerance=config.top_layer_tolerance,
+            dedup_tolerance=config.hollow_site_dedup_tolerance,
+            material_type=config.material_type,
+            probe_radius=config.voronoi_probe_radius,
+            max_site_distance=config.voronoi_max_site_distance,
+            enrich=config.voronoi_site_enrichment,
+            site_classification_method=config.site_classification_method,
+        )
+        used_hollow_helper = True
+    else:
+        site_entries = get_unified_sites(
+            sites_slab,
+            top_layer_tolerance=config.top_layer_tolerance,
+            material_type=config.material_type,
+            probe_radius=config.voronoi_probe_radius,
+            max_site_distance=config.voronoi_max_site_distance,
+            enrich=config.voronoi_site_enrichment,
+            site_classification_method=config.site_classification_method,
+        )
+
+    if (
+        config.material_type == "slab"
+        and not used_hollow_helper
+        and len(site_entries) >= 2
+    ):
+        site_xyz = np.array(
+            [np.asarray(s.xyz, dtype=float) for s in site_entries], dtype=float
+        )
+        keep = _deduplicate_points(
+            site_xyz,
+            config.hollow_site_dedup_tolerance,
+            cell=cell_arr,
+            pbc=np.asarray(pbc_xy, dtype=bool),
+        )
+        site_entries = [site_entries[i] for i in np.nonzero(keep)[0]]
+    return site_entries
 
 
 def _get_dissociative_site_pairs(
@@ -129,22 +208,56 @@ def _get_dissociative_site_pairs(
 ) -> list[_DissociativeSitePair]:
     """Return outward-oriented site pairs for dissociative diatomic placement.
 
-    Clean-slab catalogs are cached in a process-local store keyed by geometry and
-    dissociative-relevant config (not on :class:`SiteContext`).
+    Catalogs are cached in a process-local store keyed by substrate geometry,
+    dissociative-relevant config, the hollow-site XYZ set actually used (so
+    ``site_context`` / ``raw_sites`` cannot poison the clean-slab entry), and
+    an occupancy-position hash when coverage is active.
     """
+    if config.material_type not in ("slab", "nanoparticle"):
+        return []
+
+    sites_slab = slab_for_sites if slab_for_sites is not None else slab
+    cell_arr = np.asarray(slab.get_cell(), dtype=float)
+    pbc = material_aware_pbc(config.material_type)
+    pbc_xy = [bool(pbc[0]), bool(pbc[1]), False]
+
+    # Clean-slab path keeps sites_tag="default" so we can look up before the
+    # expensive hollow-site discovery. Context/raw paths hash the resolved XYZ
+    # so they share a separate key and never overwrite the default entry.
+    pre_resolved: list[Site] | None = None
+    if raw_sites is not None or site_context is not None:
+        pre_resolved = _resolve_dissociative_site_entries(
+            sites_slab,
+            config,
+            raw_sites=raw_sites,
+            site_context=site_context,
+            cell_arr=cell_arr,
+            pbc_xy=pbc_xy,
+        )
+        if len(pre_resolved) < 2:
+            return []
+        sites_tag = _xyz_array_hash(
+            np.array([np.asarray(s.xyz, dtype=float) for s in pre_resolved])
+        )
+    else:
+        sites_tag = "default"
+
     occupancy_active = (
         existing_adsorbate_positions is not None
         and len(existing_adsorbate_positions) > 0
     )
-    sites_slab = slab_for_sites if slab_for_sites is not None else slab
-    cache_key: str | None = None
-    # Skip cache when site_context/raw_sites alter the catalog for the same geometry.
-    if not occupancy_active and raw_sites is None and site_context is None:
-        cache_key = _dissociative_pair_cache_key(sites_slab, config)
-        with _DISSOCIATIVE_PAIR_CACHE_LOCK:
-            cached = _DISSOCIATIVE_PAIR_CACHE.get(cache_key)
-        if cached is not None:
-            return list(cached)
+    occ_tag = (
+        _xyz_array_hash(existing_adsorbate_positions) if occupancy_active else "none"
+    )
+    base = _dissociative_pair_cache_key(sites_slab, config)
+    cache_key = hashlib.sha256(
+        f"{base}|sites={sites_tag}|occ={occ_tag}".encode()
+    ).hexdigest()
+
+    with _DISSOCIATIVE_PAIR_CACHE_LOCK:
+        cached = _DISSOCIATIVE_PAIR_CACHE.get(cache_key)
+    if cached is not None:
+        return list(cached)
 
     pairs = _compute_dissociative_site_pairs(
         slab,
@@ -153,12 +266,12 @@ def _get_dissociative_site_pairs(
         existing_adsorbate_positions=existing_adsorbate_positions,
         raw_sites=raw_sites,
         site_context=site_context,
+        pre_resolved_sites=pre_resolved,
     )
-    if cache_key is not None:
-        with _DISSOCIATIVE_PAIR_CACHE_LOCK:
-            if len(_DISSOCIATIVE_PAIR_CACHE) >= _DISSOCIATIVE_PAIR_CACHE_MAX_ENTRIES:
-                _DISSOCIATIVE_PAIR_CACHE.pop(next(iter(_DISSOCIATIVE_PAIR_CACHE)))
-            _DISSOCIATIVE_PAIR_CACHE[cache_key] = list(pairs)
+    with _DISSOCIATIVE_PAIR_CACHE_LOCK:
+        if len(_DISSOCIATIVE_PAIR_CACHE) >= _DISSOCIATIVE_PAIR_CACHE_MAX_ENTRIES:
+            _DISSOCIATIVE_PAIR_CACHE.pop(next(iter(_DISSOCIATIVE_PAIR_CACHE)))
+        _DISSOCIATIVE_PAIR_CACHE[cache_key] = list(pairs)
     return pairs
 
 
@@ -170,6 +283,7 @@ def _compute_dissociative_site_pairs(
     *,
     raw_sites: list[Site] | None = None,
     site_context: SiteContext | None = None,
+    pre_resolved_sites: list[Site] | None = None,
 ) -> list[_DissociativeSitePair]:
     """Return outward-oriented site pairs for dissociative diatomic placement."""
     if config.material_type not in ("slab", "nanoparticle"):
@@ -182,67 +296,23 @@ def _compute_dissociative_site_pairs(
     pbc_xy = [bool(pbc[0]), bool(pbc[1]), False]
     slab_normal = _slab_normal(cell_arr)
 
-    if raw_sites is not None:
-        site_entries: list[Site] = list(raw_sites)
-        if config.material_type == "slab":
-            site_entries = [
-                s for s in site_entries if s.site_type in ("hollow", "pore")
-            ]
-    elif site_context is not None and site_context.raw_unclustered is not None:
-        site_entries = list(site_context.raw_unclustered)
-        if config.material_type == "slab":
-            site_entries = [
-                s for s in site_entries if s.site_type in ("hollow", "pore")
-            ]
-    elif site_context is not None and site_context.sites:
-        site_entries = list(site_context.sites)
-        if config.material_type == "slab":
-            site_entries = [
-                s for s in site_entries if s.site_type in ("hollow", "pore")
-            ]
-    elif config.material_type == "slab":
-        # Reuse hollow catalog (unified + hollow/pore filter + dedup).
-        site_entries = get_hollow_sites_for_adatoms(
-            sites_slab,
-            top_layer_tolerance=config.top_layer_tolerance,
-            dedup_tolerance=config.hollow_site_dedup_tolerance,
-            material_type=config.material_type,
-            probe_radius=config.voronoi_probe_radius,
-            max_site_distance=config.voronoi_max_site_distance,
-            enrich=config.voronoi_site_enrichment,
-            site_classification_method=config.site_classification_method,
-        )
+    if pre_resolved_sites is not None:
+        site_entries = list(pre_resolved_sites)
     else:
-        site_entries = get_unified_sites(
+        site_entries = _resolve_dissociative_site_entries(
             sites_slab,
-            top_layer_tolerance=config.top_layer_tolerance,
-            material_type=config.material_type,
-            probe_radius=config.voronoi_probe_radius,
-            max_site_distance=config.voronoi_max_site_distance,
-            enrich=config.voronoi_site_enrichment,
-            site_classification_method=config.site_classification_method,
+            config,
+            raw_sites=raw_sites,
+            site_context=site_context,
+            cell_arr=cell_arr,
+            pbc_xy=pbc_xy,
         )
     if len(site_entries) < 2:
         return []
 
-    # Hollow helper already deduplicated; still dedup raw/context catalogs.
-    used_hollow_helper = (
-        raw_sites is None and site_context is None and config.material_type == "slab"
-    )
     site_xyz = np.array(
         [np.asarray(s.xyz, dtype=float) for s in site_entries], dtype=float
     )
-    if config.material_type == "slab" and not used_hollow_helper:
-        keep = _deduplicate_points(
-            site_xyz,
-            config.hollow_site_dedup_tolerance,
-            cell=cell_arr,
-            pbc=np.asarray(pbc_xy, dtype=bool),
-        )
-        site_xyz = site_xyz[keep]
-        site_entries = [site_entries[i] for i in np.nonzero(keep)[0]]
-    if len(site_xyz) < 2:
-        return []
 
     if (
         existing_adsorbate_positions is not None
@@ -317,40 +387,49 @@ def _compute_dissociative_site_pairs(
     pairs: list[_DissociativeSitePair] = []
     # Sorting by the origin-index key keeps the catalog order deterministic:
     # ``spec.site_index`` indexes straight into the returned list.
+    n_hat = np.asarray(slab_normal, dtype=float)
+    n_norm = float(np.linalg.norm(n_hat))
+    if n_norm > _VECTOR_NORM_EPS:
+        n_hat = n_hat / n_norm
     for (i, j), d in sorted(pair_distances.items()):
-        if min_fragment_sep <= d <= max_adjacent_sep:
-            normal_i = _site_outward_normal(
-                site_3d[i],
-                site_entries[i],
-                material_type=config.material_type,
-                reference_positions=top_positions,
-                slab_normal=slab_normal,
+        # On slabs both fragments are later projected to the same height, so the
+        # placed separation is the in-plane MIC — gate on that, not 3-D distance.
+        if config.material_type == "slab":
+            dvec_mic, _ = find_mic(
+                (site_3d[j] - site_3d[i]).reshape(1, 3),
+                cell_arr,
+                pbc=pbc_xy,
             )
-            normal_j = _site_outward_normal(
-                site_3d[j],
-                site_entries[j],
-                material_type=config.material_type,
-                reference_positions=top_positions,
-                slab_normal=slab_normal,
+            delta = np.asarray(dvec_mic[0], dtype=float)
+            d_gate = float(np.linalg.norm(delta - np.dot(delta, n_hat) * n_hat))
+            xyz2 = site_3d[i] + dvec_mic[0]
+        else:
+            d_gate = float(d)
+            xyz2 = site_3d[j].copy()
+        if not (min_fragment_sep <= d_gate <= max_adjacent_sep):
+            continue
+        normal_i = _site_outward_normal(
+            site_3d[i],
+            site_entries[i],
+            material_type=config.material_type,
+            reference_positions=top_positions,
+            slab_normal=slab_normal,
+        )
+        normal_j = _site_outward_normal(
+            site_3d[j],
+            site_entries[j],
+            material_type=config.material_type,
+            reference_positions=top_positions,
+            slab_normal=slab_normal,
+        )
+        pairs.append(
+            _DissociativeSitePair(
+                xyz1=site_3d[i].copy(),
+                normal1=normal_i,
+                xyz2=xyz2,
+                normal2=normal_j,
             )
-            xyz1 = site_3d[i].copy()
-            if config.material_type == "slab":
-                dvec, _ = find_mic(
-                    (site_3d[j] - site_3d[i]).reshape(1, 3),
-                    cell_arr,
-                    pbc=pbc_xy,
-                )
-                xyz2 = site_3d[i] + dvec[0]
-            else:
-                xyz2 = site_3d[j].copy()
-            pairs.append(
-                _DissociativeSitePair(
-                    xyz1=xyz1,
-                    normal1=normal_i,
-                    xyz2=xyz2,
-                    normal2=normal_j,
-                )
-            )
+        )
     return pairs
 
 
@@ -566,6 +645,7 @@ def _place_dissociative_two_sites(
         site_reference_frame=site_reference_frame,
         site_xy_frac_a=float(xy_frac[0]),
         site_xy_frac_b=float(xy_frac[1]),
+        z_abs=float(centroid[2]),
         placement_mode_resolved="sites",
         fragment_positions=(
             (float(pos1[0]), float(pos1[1]), float(pos1[2])),

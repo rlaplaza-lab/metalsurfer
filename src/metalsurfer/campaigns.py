@@ -11,7 +11,6 @@ from ase import Atoms
 from .campaign_schema import CampaignDocument
 from .config import AdsorptionConfig
 from .io_results import (
-    results_dir_for,
     save_saturation_results,
     save_single_molecule_results,
     save_summary_results,
@@ -30,6 +29,8 @@ from .models import (
     SaturationRunResult,
     ScreeningResult,
 )
+from .reporting import FailureSummary
+from .result_paths import results_dir_for
 from .surface_prep import SlabContainer, prepare_substrate
 from .workflow import (
     process_molecule,
@@ -123,7 +124,7 @@ def _run_binding_campaign(
 
     run_results = []
     summaries = []
-    failure_summaries: dict[str, dict[str, object]] = {}
+    failure_summaries: dict[str, FailureSummary] = {}
     ds_logger = DatasetLogger(
         str(results_dir_for(surface_type)),
         config=config,
@@ -362,7 +363,7 @@ def _run_saturation_campaign(
     run_metadata_out: dict[str, Any] | None,
 ) -> SaturationCampaignResult:
     setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
-    failure_summary: dict[str, dict[str, object]] = {}
+    failure_summary: dict[str, FailureSummary] = {}
     run_metadata: dict[str, Any] = (
         run_metadata_out if run_metadata_out is not None else {}
     )

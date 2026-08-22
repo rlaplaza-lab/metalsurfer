@@ -312,7 +312,7 @@ class TestPlacementRecord:
         assert record is not None
         assert record.molecule == "test"
         assert record.placement_id == 0
-        assert record.energy_adsorption == -0.5
+        assert record.energy_adsorption == pytest.approx(-0.5)
 
 
 # ── Dataset tests ──
@@ -780,3 +780,8 @@ class TestAcquisitionMinimization:
         assert int(np.argmax(pi)) == 1
         assert ei[0] == pytest.approx(0.0)
         assert pi[0] == pytest.approx(0.0)
+
+
+def test_from_flat_dict_rejects_corrupt_payload():
+    with pytest.raises((KeyError, TypeError, ValueError)):
+        PlacementRecord.from_flat_dict({"schema_version": "not-a-real-record"})

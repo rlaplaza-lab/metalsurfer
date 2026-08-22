@@ -30,6 +30,9 @@ from ._csv_coerce import (
     with_default as _row_with_default,
 )
 from .reporting import (
+    FailureSummary,
+)
+from .reporting import (
     format_failure_summary_text as _format_failure_summary_text,
 )
 from .reporting import (
@@ -37,6 +40,12 @@ from .reporting import (
 )
 from .reporting import (
     format_saturation_completion as _format_saturation_completion,
+)
+from .result_paths import (
+    molecule_all_vasp_dir,
+    molecule_all_xyz_dir,
+    saturation_vasp_dir,
+    saturation_xyz_dir,
 )
 
 
@@ -476,9 +485,9 @@ class ScreeningRunResult:
         vasp_dir: Path | None = None
         if results_dir is not None:
             base = Path(results_dir)
-            xyz_dir = base / "xyz_structures" / f"{self.molecule}_all"
+            xyz_dir = molecule_all_xyz_dir(base, self.molecule)
             if write_vasp_inputs:
-                vasp_dir = base / "vasp_inputs" / f"{self.molecule}_all"
+                vasp_dir = molecule_all_vasp_dir(base, self.molecule)
 
         for sr in self.results:
             pid = sr.placement_id
@@ -613,9 +622,7 @@ class SaturationStepResult:
             If True, include pre-relax provenance columns.
         """
         best = self.best_result
-        mol_dir = (
-            Path(results_dir) / "xyz_structures" / f"{saturation_molecule}_saturation"
-        )
+        mol_dir = saturation_xyz_dir(results_dir, saturation_molecule)
         info = self.transfer if self.transfer is not None else BOTransferInfo()
         row: dict[str, Any] = {
             "molecule": saturation_molecule,
@@ -671,10 +678,9 @@ class SaturationStepResult:
             f"step_{self.step:03d}_placements" if step_prefix else "placements"
         )
         base = Path(results_dir)
-        sat = f"{saturation_molecule}_saturation"
-        step_xyz = base / "xyz_structures" / sat / step_placements_rel
+        step_xyz = saturation_xyz_dir(base, saturation_molecule) / step_placements_rel
         step_vasp = (
-            base / "vasp_inputs" / sat / step_placements_rel
+            saturation_vasp_dir(base, saturation_molecule) / step_placements_rel
             if write_vasp_inputs
             else None
         )
@@ -696,7 +702,7 @@ class SaturationRunResult:
     molecule: str
     steps: list[SaturationStepResult]
     n_molecules_at_saturation: int
-    final_slab_atoms: Atoms | None = None
+    final_slab_atoms: Atoms
 
     def to_flattened_runs(self) -> list[ScreeningRunResult]:
         """Flatten all saturation steps into screening-like run results."""
@@ -852,7 +858,7 @@ class MultiMolSaturationStepResult:
             If True, include pre-relax provenance columns.
         """
         best = self.best_result
-        mol_dir = Path(results_dir) / "xyz_structures" / f"{molecules_label}_saturation"
+        mol_dir = saturation_xyz_dir(results_dir, molecules_label)
         info = self.transfer_by_molecule.get(self.winning_molecule, BOTransferInfo())
         return best.to_row(
             context_row=context_row,
@@ -896,9 +902,12 @@ class MultiMolSaturationStepResult:
         """
         rel = f"step_{self.step:03d}_placements"
         base = Path(results_dir)
-        sat = f"{molecules_label}_saturation"
-        base_xyz = base / "xyz_structures" / sat / rel
-        base_vasp = base / "vasp_inputs" / sat / rel if write_vasp_inputs else None
+        base_xyz = saturation_xyz_dir(base, molecules_label) / rel
+        base_vasp = (
+            saturation_vasp_dir(base, molecules_label) / rel
+            if write_vasp_inputs
+            else None
+        )
         rows: list[dict[str, Any]] = []
         for pmol, res_list in self.per_molecule_results.items():
             info = self.transfer_by_molecule.get(pmol, BOTransferInfo())
@@ -935,7 +944,7 @@ class MultiMolSaturationRunResult:
     molecules: list[str]
     steps: list[MultiMolSaturationStepResult]
     n_molecules_at_saturation: int
-    final_slab_atoms: Atoms | None = None
+    final_slab_atoms: Atoms
     molecule_counts: dict[str, int] = field(default_factory=dict)
 
 
@@ -947,7 +956,7 @@ class SaturationCampaignResult:
     surface_type: str
     runs: list[SaturationRunResult | MultiMolSaturationRunResult]
     # Per-molecule failure summaries (same shape as BindingCampaignResult).
-    failure_summary: dict[str, dict[str, object]] = field(default_factory=dict)
+    failure_summary: dict[str, FailureSummary] = field(default_factory=dict)
     t_ref_s: float = 0.0
     t_total_s: float = 0.0
 
@@ -1031,7 +1040,7 @@ class BindingCampaignResult:
     n_molecules: int
     t_ref_s: float
     t_total_s: float
-    failure_summaries: dict[str, dict[str, object]] = field(default_factory=dict)
+    failure_summaries: dict[str, FailureSummary] = field(default_factory=dict)
 
     def format_results_saved_line(
         self,
@@ -1121,12 +1130,12 @@ class BindingCampaignResult:
         return "\n".join(lines)
 
     @staticmethod
-    def format_failure_summary(failure_summary: dict[str, object]) -> str:
+    def format_failure_summary(failure_summary: FailureSummary) -> str:
         """Return a canonical human-readable failure summary.
 
         Parameters
         ----------
         failure_summary
-            Mapping of failure categories to counts or details.
+            Stage-typed failure summary.
         """
         return _format_failure_summary_text(failure_summary)

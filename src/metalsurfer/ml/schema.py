@@ -29,6 +29,7 @@ from .._numeric_defaults import (
     DEFAULT_SEED,
     DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     DEFAULT_SYMMETRY_TOLERANCE,
+    DEFAULT_TOP_LAYER_TOLERANCE,
     MIN_CONTACT_RATIO_DEFAULT,
     MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
 )
@@ -44,17 +45,9 @@ from ..placement.geometry import normalize_quaternion
 SCHEMA_VERSION = "3.0"
 
 
-def _quat_component(value: float | None, default: float) -> float:
+def _quat_component(value: float | None, default: float = 0.0) -> float:
     """Coerce quaternion component; treat only ``None`` as missing (not ``0.0``)."""
-    return float(default) if value is None else float(value)
-
-
-def _context_from_config(config: AdsorptionConfig | None) -> "ComputationContext":
-    return (
-        ComputationContext.from_config(config)
-        if config is not None
-        else ComputationContext()
-    )
+    return float(default if value is None else value)
 
 
 def _normalized_descriptor(
@@ -169,7 +162,7 @@ class ComputationContext:
     placement_z_scale_by_covalent_radius: bool = True
     min_initial_distance: float = MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
     min_contact_ratio: float = MIN_CONTACT_RATIO_DEFAULT
-    top_layer_tolerance: float = 0.5
+    top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE
     symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
     site_equivalence_tolerance: float = DEFAULT_SITE_EQUIVALENCE_TOLERANCE
     hollow_site_dedup_tolerance: float = DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
@@ -324,9 +317,9 @@ class PlacementRecord:
             np.array(
                 [
                     _quat_component(self.descriptor.quat_w, 1.0),
-                    _quat_component(self.descriptor.quat_x, 0.0),
-                    _quat_component(self.descriptor.quat_y, 0.0),
-                    _quat_component(self.descriptor.quat_z, 0.0),
+                    _quat_component(self.descriptor.quat_x),
+                    _quat_component(self.descriptor.quat_y),
+                    _quat_component(self.descriptor.quat_z),
                 ],
                 dtype=float,
             )
@@ -409,7 +402,11 @@ class PlacementRecord:
             failure_reason=None,
             is_penalty_label=False,
             label_source="observed",
-            context=_context_from_config(config),
+            context=(
+                ComputationContext.from_config(config)
+                if config is not None
+                else ComputationContext()
+            ),
         )
 
     @classmethod
@@ -451,7 +448,11 @@ class PlacementRecord:
             surface_id=surface_id,
             placement_id=pid,
             descriptor=_normalized_descriptor(descriptor, placement_index=pid),
-            context=_context_from_config(config),
+            context=(
+                ComputationContext.from_config(config)
+                if config is not None
+                else ComputationContext()
+            ),
         )
 
     @classmethod
@@ -489,7 +490,11 @@ class PlacementRecord:
             surface_id=surface_id,
             placement_id=spec.placement_index,
             descriptor=_descriptor_from_spec(spec),
-            context=_context_from_config(config),
+            context=(
+                ComputationContext.from_config(config)
+                if config is not None
+                else ComputationContext()
+            ),
         )
 
     def record_hash(self) -> str:
@@ -521,9 +526,9 @@ class PlacementRecord:
             "surface_ref_z_abs": round(float(d.surface_ref_z_abs or 0.0), 6),
             "z_abs": round(float(d.z_abs or 0.0), 6),
             "quat_w": round(_quat_component(d.quat_w, 1.0), 6),
-            "quat_x": round(_quat_component(d.quat_x, 0.0), 6),
-            "quat_y": round(_quat_component(d.quat_y, 0.0), 6),
-            "quat_z": round(_quat_component(d.quat_z, 0.0), 6),
+            "quat_x": round(_quat_component(d.quat_x), 6),
+            "quat_y": round(_quat_component(d.quat_y), 6),
+            "quat_z": round(_quat_component(d.quat_z), 6),
             "fragment_positions": (
                 tuple(
                     (
@@ -618,7 +623,9 @@ class PlacementRecord:
             min_contact_ratio=float(
                 _ctx_value("min_contact_ratio", MIN_CONTACT_RATIO_DEFAULT)
             ),
-            top_layer_tolerance=float(_ctx_value("top_layer_tolerance", 0.5)),
+            top_layer_tolerance=float(
+                _ctx_value("top_layer_tolerance", DEFAULT_TOP_LAYER_TOLERANCE)
+            ),
             symmetry_tolerance=float(
                 _ctx_value("symmetry_tolerance", DEFAULT_SYMMETRY_TOLERANCE)
             ),

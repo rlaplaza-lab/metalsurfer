@@ -135,7 +135,7 @@ class TestRunMetadata:
         assert meta["input"]["smiles_file"] == "smiles.csv"
         assert meta["input"]["n_molecules"] == 3
         assert meta["results"]["total_configurations"] == 10
-        assert meta["timing"]["total_wall_clock_s"] == 5.0
+        assert meta["timing"]["total_wall_clock_s"] == pytest.approx(5.0)
         assert "timestamp" in meta
 
     def test_write_settings_and_metadata_merge(self, tmp_path, monkeypatch):
@@ -168,7 +168,7 @@ class TestRunMetadata:
         assert meta["campaign"] == "multi_molecule_binding"
         assert meta["mode"] == "non_bo"
         assert meta["input"]["smiles_file"] == "demo.csv"
-        assert meta["timing"]["total_wall_clock_s"] == 4.0
+        assert meta["timing"]["total_wall_clock_s"] == pytest.approx(4.0)
         assert meta["config"]["seed"] == 7
 
     def test_metadata_contains_throughput(self, tmp_path, monkeypatch):
@@ -213,7 +213,7 @@ class TestRunMetadata:
         assert meta["config"]["seed"] == 42
 
     def test_results_dir_helper(self):
-        from metalsurfer.io_results import results_dir_for
+        from metalsurfer.result_paths import results_dir_for
 
         assert results_dir_for("demo").as_posix() == "results_demo"
 
@@ -422,6 +422,22 @@ class TestVectorizedHelpers:
         assert mask[1, 2]
         assert not mask[0, 2]
         assert not mask[1, 0]  # lower triangle is zero
+
+    def test_disconnected_adsorbate_connectivity(self):
+        """Two far-apart adsorbate atoms must not count as connected."""
+        slab = make_slab()
+        slab_z = max(slab.get_positions()[:, 2])
+        mol = Atoms(
+            "OH",
+            positions=[[5.0, 5.0, slab_z + 3.0], [8.0, 8.0, slab_z + 3.0]],
+        )
+        combined = slab + mol
+        combined.set_cell(slab.get_cell())
+        combined.set_pbc(slab.get_pbc())
+        syms, _, dist, thresh = _nonsurface_distance_and_threshold(
+            combined, ["Ru"], 1.3
+        )
+        assert not _is_molecule_connected_from_dist(syms, dist, thresh)
 
     def test_single_atom_connectivity(self):
         slab = make_slab()

@@ -283,6 +283,7 @@ def configure_logging(
 
     # Avoid touching stream handlers under pytest unless explicitly forced.
     if not (running_pytest and not force_stdout):
+        stream_handler_found = False
         if not root.handlers:
             logging.basicConfig(
                 level=_parse_level(level_name, logging.INFO),
@@ -290,15 +291,13 @@ def configure_logging(
                 datefmt=datefmt,
                 stream=target_stream,
             )
+            stream_handler_found = True
         else:
-            root.setLevel(_parse_level(level_name, root.level))
-
-        stream_handler_found = False
-        for handler in root.handlers:
-            if _is_console_stream_handler(handler):
-                handler.setStream(target_stream)
-                handler.setFormatter(formatter)
-                stream_handler_found = True
+            for handler in root.handlers:
+                if _is_console_stream_handler(handler):
+                    handler.setStream(target_stream)
+                    handler.setFormatter(formatter)
+                    stream_handler_found = True
 
         if not stream_handler_found:
             sh = logging.StreamHandler(target_stream)

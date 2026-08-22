@@ -7,10 +7,7 @@ from ase import Atoms
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.ml.features import extract_features
 from metalsurfer.ml.schema import PlacementRecord
-from metalsurfer.placement.site_context import (
-    _SITE_CONTEXT_CACHE,
-    clear_site_caches,
-)
+from metalsurfer.placement.site_context import _SITE_CONTEXT_CACHE
 from metalsurfer.workflow import shared as workflow_shared
 
 from ..conftest import (
@@ -25,31 +22,9 @@ from ._helpers import (
 )
 
 
-def test_site_context_cache_clear_resets_cached_entries():
-    from metalsurfer.placement.site_context import clear_site_caches
-
-    slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(material_type="slab")
-
-    clear_site_caches()
-    assert len(_SITE_CONTEXT_CACHE) == 0
-
-    workflow_shared.resolve_site_context_for_sampling(
-        slab,
-        config,
-        symmetry_broken=True,
-    )
-    # Unique-sites entry + resolved (sym=True) entry share one cache.
-    assert len(_SITE_CONTEXT_CACHE) == 2
-
-    clear_site_caches()
-    assert len(_SITE_CONTEXT_CACHE) == 0
-
-
 def test_site_context_cache_keys_differ_by_symmetry_broken():
     slab = make_slab(nx=2, ny=2)
     config = AdsorptionConfig(material_type="slab")
-    clear_site_caches()
 
     ctx_broken = workflow_shared.resolve_site_context_for_sampling(
         slab, config, symmetry_broken=True
@@ -60,6 +35,34 @@ def test_site_context_cache_keys_differ_by_symmetry_broken():
     # Unique-sites + sym=True + sym=False.
     assert len(_SITE_CONTEXT_CACHE) == 3
     assert ctx_broken is not ctx_intact
+
+
+def test_unique_sites_cache_key_uses_material_aware_pbc_not_ase_pbc():
+    """ASE calculator PBC vs material PBC must share one unique-sites entry."""
+    from metalsurfer.placement.site_context import (
+        _get_unique_sites_for_specs,
+        _unique_sites_cache_key,
+    )
+
+    slab_mat = make_slab(nx=2, ny=2)
+    slab_mat.set_pbc([True, True, False])
+    slab_calc = slab_mat.copy()
+    slab_calc.set_pbc([True, True, True])
+    config = AdsorptionConfig(material_type="slab")
+
+    assert _unique_sites_cache_key(slab_mat, config) == _unique_sites_cache_key(
+        slab_calc, config
+    )
+    _get_unique_sites_for_specs(slab_mat, config)
+    assert len(_SITE_CONTEXT_CACHE) == 1
+    _get_unique_sites_for_specs(slab_calc, config)
+    assert len(_SITE_CONTEXT_CACHE) == 1
+
+    # Different material_type must still split the cache.
+    np_config = AdsorptionConfig(material_type="nanoparticle")
+    assert _unique_sites_cache_key(slab_mat, config) != _unique_sites_cache_key(
+        slab_mat, np_config
+    )
 
 
 def test_extract_features_depends_only_on_absolute_geometry():
@@ -100,11 +103,9 @@ def test_extract_features_depends_only_on_absolute_geometry():
 def test_site_context_cache_key_includes_config_and_symmetry():
     from metalsurfer.placement.site_context import (
         _site_context_cache_key,
-        clear_site_caches,
         resolve_site_context_for_sampling,
     )
 
-    clear_site_caches()
     slab = make_slab()
     c1 = AdsorptionConfig(material_type="slab", voronoi_probe_radius=1.0)
     c2 = AdsorptionConfig(material_type="slab", voronoi_probe_radius=1.5)
@@ -122,10 +123,8 @@ def test_site_context_cache_key_includes_species_and_symmetry_tol():
     from metalsurfer.placement.site_context import (
         _site_context_cache_key,
         _unique_sites_cache_key,
-        clear_site_caches,
     )
 
-    clear_site_caches()
     cu = make_slab(symbol="Cu")
     ni = make_slab(symbol="Ni")
     # Same lattice geometry, different chemistry.

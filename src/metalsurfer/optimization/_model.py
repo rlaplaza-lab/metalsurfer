@@ -88,7 +88,7 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
     _ensure_torch_checkpoint_safe_globals()
     logger.info("Initializing TorchSim FairChemModel (%s) on %s", model_name, device)
     torch = _deps.torch
-    dev = torch.device(device) if torch is not None and device else None
+    dev = torch.device(device)
     try:
         with torchsim_output_capture():
             model = cast(Any, FairChemModel)(

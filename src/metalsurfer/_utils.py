@@ -21,7 +21,7 @@ def is_finite_number(value: object) -> bool:
         return False
     try:
         return bool(isfinite(float(value)))
-    except (TypeError, ValueError):
+    except ValueError:
         return False
 
 

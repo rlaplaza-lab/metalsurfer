@@ -47,7 +47,6 @@ def test_max_batch_specs_matches_build_batch_uncapped(
     expected = max_batch_placement_specs(
         n_conformers=n_conformers,
         site_indices=site_indices,
-        shape=shape,
         n_binders=n_binders,
         flat_aromatic=flat_aromatic,
     )
@@ -111,6 +110,7 @@ def test_tilt_zero_azimuth_pairs_collapse_to_eight_geometries():
             )
             rotated = placement_geometry._rotation_with_tilt(base, normal, 0.0, az)
             rounded = np.round(rotated, decimals=6)
+            # Canonicalize +0.0/-0.0 so tobytes() uniqueness matches geometry uniqueness.
             rounded[rounded == 0.0] = 0.0
             unique.add(rounded.tobytes())
     assert len(unique) == len(_AZIMUTH)
@@ -172,7 +172,6 @@ def test_build_batch_specs_dissociative_zero_pairs_returns_empty():
         max_batch_placement_specs(
             n_conformers=1,
             site_indices=[0],
-            shape="linear",
             n_binders=0,
             flat_aromatic=False,
             dissociative=True,
@@ -210,7 +209,6 @@ def test_max_batch_specs_dissociative_equals_pairs_times_z_fractions():
     count = max_batch_placement_specs(
         n_conformers=1,
         site_indices=[0],
-        shape="linear",
         n_binders=0,
         flat_aromatic=False,
         dissociative=True,
@@ -283,6 +281,25 @@ def test_build_batch_specs_flat_aromatic_large_grid_capped():
     assert n_par == 10
     assert n_en == 10
     assert len({s.placement_index for s in specs}) == n_desired
+
+
+def test_build_batch_specs_tops_up_when_one_branch_filtered():
+    """If filter empties one orientation branch, fill n_desired from the other."""
+    n_desired = 20
+    specs = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=list(range(50)),
+        site_type_for_index=_site_type_atop,
+        shape="flat",
+        n_binders=2,
+        flat_aromatic=True,
+        parallel_fraction=0.5,
+        n_desired=n_desired,
+        seed=TEST_SEED,
+        filter_spec=lambda s: s.orientation_type != "parallel",
+    )
+    assert len(specs) == n_desired
+    assert {s.orientation_type for s in specs} == {"EN-down"}
 
 
 def test_build_batch_specs_filter_spec_reduces_count():

@@ -17,9 +17,8 @@ from metalsurfer.optimization import (
     optimize_isolated_molecules_batched,
     setup_single_model,
 )
-from tests.optional_deps import has_mlip_stack
 
-from .conftest import make_slab
+from .conftest import MLIP_CPU_MARKS, make_slab
 
 # ---------------------------------------------------------------------------
 # CPU unit tests (no MLIP/GPU required, no skip markers)
@@ -108,21 +107,22 @@ def test_validate_model_pbc_passes(pbc):
 # -- _resolve_ts_optimizer --------------------------------------------------
 
 
-def test_resolve_ts_optimizer_unknown_returns_fire(monkeypatch: pytest.MonkeyPatch):
+def test_resolve_ts_optimizer(monkeypatch: pytest.MonkeyPatch):
+    from metalsurfer.exceptions import DependencyMissingError
+
     fire = object()
     ts_stub = MagicMock()
     ts_stub.Optimizer.fire = fire
+    ts_stub.Optimizer.lbfgs = object()
+    ts_stub.Optimizer.bfgs = object()
     monkeypatch.setattr(_deps, "ts", ts_stub)
-    assert _validation._resolve_ts_optimizer("does-not-exist") is fire
+    assert _validation._resolve_ts_optimizer("fire") is fire
+    with pytest.raises(KeyError):
+        _validation._resolve_ts_optimizer("does-not-exist")
 
-
-def test_resolve_ts_optimizer_none_when_no_ts():
-    saved = _deps.ts
-    _deps.ts = None
-    try:
-        assert _validation._resolve_ts_optimizer("fire") is None
-    finally:
-        _deps.ts = saved
+    monkeypatch.setattr(_deps, "ts", None)
+    with pytest.raises(DependencyMissingError):
+        _validation._resolve_ts_optimizer("fire")
 
 
 # -- _resolve_device --------------------------------------------------------
@@ -131,6 +131,17 @@ def test_resolve_ts_optimizer_none_when_no_ts():
 def test_resolve_device_passthrough():
     assert _validation._resolve_device(None) is None
     assert _validation._resolve_device("cpu") == "cpu"
+    assert _validation._device_is_cuda("cuda") is True
+    assert _validation._device_is_cuda("cuda:0") is True
+    assert _validation._device_is_cuda("cpu") is False
+    assert _validation._device_is_cuda(None) is False
+    torch_dev = MagicMock()
+    torch_dev.type = "cuda"
+    assert _validation._device_is_cuda(torch_dev) is True
+    torch_dev.type = "cpu"
+    assert _validation._device_is_cuda(torch_dev) is False
+    assert _validation._device_key(None) == "unknown"
+    assert _validation._device_key("cuda") == "cuda"
 
 
 def test_resolve_device_cuda_falls_back_when_no_torch(monkeypatch: pytest.MonkeyPatch):
@@ -152,6 +163,23 @@ def test_resolve_device_cuda_kept_when_available(monkeypatch: pytest.MonkeyPatch
     torch_stub.cuda.is_available.return_value = True
     monkeypatch.setattr(_deps, "torch", torch_stub)
     assert _validation._resolve_device("cuda") == "cuda"
+
+    class _NoDevice:
+        pass
+
+    monkeypatch.setattr(_validation, "_resolve_device", lambda _d: None)
+    assert (
+        _validation._resolve_model_device(_NoDevice(), AdsorptionConfig(device="cuda"))
+        == "cpu"
+    )
+
+    class _HasDevice:
+        device = "cuda:1"
+
+    assert (
+        _validation._resolve_model_device(_HasDevice(), AdsorptionConfig(device="cpu"))
+        == "cuda:1"
+    )
 
 
 # -- _positions_cell_hash ---------------------------------------------------
@@ -244,6 +272,7 @@ def test_parallel_capacity_cache_key_deterministic():
     k2 = _validation._parallel_capacity_cache_key(model, 100, config)
     assert k1 == k2
     assert k1[0] == id(model)
+    assert k1[1] == "unknown"  # no .device on model -> unified None key
 
 
 # -- clear_autobatcher_cache ------------------------------------------------
@@ -587,7 +616,9 @@ def test_optimize_isolated_raises_without_torchsim(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(_deps, "ts", None)
     with pytest.raises(DependencyMissingError, match="torch-sim-atomistic"):
         optimize_isolated_molecules_batched(
-            [_make_atoms_with_cell()[:3]], ts_model=MagicMock()
+            [_make_atoms_with_cell()[:3]],
+            ts_model=MagicMock(),
+            config=AdsorptionConfig(),
         )
 
 
@@ -658,12 +689,8 @@ def test_optimize_slab_raises_on_batch_size_mismatch(monkeypatch: pytest.MonkeyP
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.mlip
-@pytest.mark.skipif(
-    not has_mlip_stack,
-    reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
-)
 class TestTorchSimCalculator:
+    pytestmark = MLIP_CPU_MARKS
     """Unit tests with mocked model."""
 
     def test_calculator_interface_with_mock_model(self):
@@ -776,12 +803,8 @@ class TestTorchSimCalculatorDeps:
             calc.calculate(atoms, ["energy", "forces"])
 
 
-@pytest.mark.mlip
-@pytest.mark.skipif(
-    not has_mlip_stack,
-    reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
-)
 class TestSetupSingleModel:
+    pytestmark = MLIP_CPU_MARKS
     """Integration tests with real FairChemModel."""
 
     def test_setup_single_model_returns_calculator_and_model(self):
@@ -995,7 +1018,7 @@ def test_estimate_parallel_relaxation_capacity_uses_memory_scaler(
         config=config,
         frozen_indices=[],
     )
-    assert capacity == 12
+    assert capacity == 6
 
 
 def test_resolve_autobatcher_max_atoms_to_try_is_conservative_vs_estimate():
@@ -1107,7 +1130,7 @@ def test_optimize_and_evaluate_skips_preclear_when_saturation_reuse(monkeypatch)
     monkeypatch.setattr(
         shared_mod,
         "optimize_adsorbate_slab_batched",
-        lambda *a, **k: [],
+        lambda *a, **k: [None],
     )
 
     slab = make_slab()
@@ -1119,7 +1142,6 @@ def test_optimize_and_evaluate_skips_preclear_when_saturation_reuse(monkeypatch)
         [0],
         [desc],
         slab=slab,
-        calculator=object(),
         ts_model=object(),
         config=config,
         energies=(-1.0, -1.0),
@@ -1134,7 +1156,6 @@ def test_optimize_and_evaluate_skips_preclear_when_saturation_reuse(monkeypatch)
         [0],
         [desc],
         slab=slab,
-        calculator=object(),
         ts_model=object(),
         config=config,
         energies=(-1.0, -1.0),

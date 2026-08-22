@@ -88,22 +88,24 @@ def calculate_reference_energies(
             steps=config.reference_optimization_steps,
             config=config,
         )
-        energies = [(e, i) for i, (_, e) in enumerate(opt_results)]
-        if energies:
-            energies.sort()
-            molecule_energies[mol_name] = energies[0][0]
-            logger.info(
-                "%s isolated energy: %.4f eV (best conformer: %d)",
-                mol_name,
-                energies[0][0],
-                energies[0][1],
-            )
-        else:
+        if not opt_results:
             if config.fail_on_conformer_failure:
                 raise OptimizationError(
                     f"Failed to optimise any conformers for {mol_name}"
                 )
             logger.error("Failed to optimise any conformers for %s", mol_name)
+            continue
+        best_e, best_i = min(
+            ((e, i) for i, (_, e) in enumerate(opt_results)),
+            key=lambda item: item[0],
+        )
+        molecule_energies[mol_name] = best_e
+        logger.info(
+            "%s isolated energy: %.4f eV (best conformer: %d)",
+            mol_name,
+            best_e,
+            best_i,
+        )
 
     # Model/substrate boundary: the reference stage is done, so drop the probed
     # capacity estimates too rather than carrying them into later stages.

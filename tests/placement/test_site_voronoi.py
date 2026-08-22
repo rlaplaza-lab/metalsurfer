@@ -4,14 +4,20 @@ import logging
 
 import numpy as np
 from ase.build import fcc111
-from scipy.spatial import KDTree
+from scipy.spatial import KDTree, Voronoi
 
 import metalsurfer.placement.site_voronoi as site_voronoi_module
 from metalsurfer.config import AdsorptionConfig
-from metalsurfer.placement._constants import _SITE_CLASSIFICATION_NEIGHBOURS
-from metalsurfer.placement.site_context import (
-    _get_unique_sites_for_specs,
-    clear_site_caches,
+from metalsurfer.placement._constants import (
+    _SITE_CLASSIFICATION_NEIGHBOURS,
+    _VORONOI_DEDUP_TOLERANCE,
+)
+from metalsurfer.placement.site_context import _get_unique_sites_for_specs
+from metalsurfer.placement.site_coords import (
+    _build_periodic_images,
+    _cart_to_frac,
+    _deduplicate_points,
+    _wrap_cartesian,
 )
 from metalsurfer.placement.site_voronoi import (
     _classify_voronoi_site_from_neighbors,
@@ -85,6 +91,7 @@ def test_voronoi_nn_distances_match_periodic_image_query_for_porous():
         pbc,
         probe_radius=1.0,
         max_distance=4.5,
+        symbols=list(porous.get_chemical_symbols()),
     )
     assert len(vertices) > 0
 
@@ -101,6 +108,60 @@ def test_voronoi_nn_distances_match_periodic_image_query_for_porous():
     np.testing.assert_allclose(nn_dists, np.ravel(expected), atol=1e-8)
 
 
+def test_voronoi_keeps_vertices_that_wrap_into_cell():
+    """Unwrapped frac just outside [-margin, 1+margin) must not drop wrapped sites.
+
+    Regression: the old ``inside`` filter used raw fractional coords, so a
+    vertex at frac 1.02 was discarded even though wrap maps it to 0.02.
+    """
+    porous = make_porous_framework()
+    positions = porous.get_positions()
+    cell = np.asarray(porous.get_cell(), dtype=float)
+    pbc = np.asarray(porous.get_pbc(), dtype=bool)
+
+    vertices, _ = _voronoi_sites(
+        positions,
+        cell,
+        pbc,
+        probe_radius=1.0,
+        max_distance=4.5,
+        enrich=False,
+        symbols=list(porous.get_chemical_symbols()),
+    )
+    assert len(vertices) > 0
+
+    # Reconstruct what the old unwrapped-frac filter would have kept from the
+    # same accessibility window, then show wrap+dedup retains strictly more.
+    extension_margin = 4.5 + _VORONOI_DEDUP_TOLERANCE
+    extended = _build_periodic_images(positions, cell, pbc, margin=extension_margin)
+    vor = Voronoi(extended)
+    raw = np.asarray(vor.vertices, dtype=float)
+    wrapped = _wrap_cartesian(raw, cell, pbc)
+    nn_dists, _ = KDTree(extended).query(wrapped, k=1)
+    nn_dists = np.asarray(nn_dists, dtype=float).ravel()
+    accessible = (nn_dists >= 1.0) & (nn_dists <= 4.5)
+    wrapped_acc = wrapped[accessible]
+    raw_acc = raw[accessible]
+
+    frac = _cart_to_frac(raw_acc, cell)
+    # Historical unwrapped-frac filter margin (removed from production).
+    old_frac_margin = 0.01
+    inside = np.ones(len(frac), dtype=bool)
+    for dim in range(3):
+        if bool(pbc[dim]):
+            inside &= (frac[:, dim] >= -old_frac_margin) & (
+                frac[:, dim] < 1.0 + old_frac_margin
+            )
+    old_keep = _deduplicate_points(
+        wrapped_acc[inside], _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
+    )
+    new_keep = _deduplicate_points(
+        wrapped_acc, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
+    )
+    assert int(np.count_nonzero(new_keep)) > int(np.count_nonzero(old_keep))
+    assert len(vertices) == int(np.count_nonzero(new_keep))
+
+
 def test_voronoi_enrichment_increases_site_count_on_porous():
     porous = make_porous_framework()
     positions = porous.get_positions()
@@ -114,6 +175,7 @@ def test_voronoi_enrichment_increases_site_count_on_porous():
         probe_radius=1.0,
         max_distance=4.5,
         enrich=False,
+        symbols=list(porous.get_chemical_symbols()),
     )
     vertices_enriched, _ = _voronoi_sites(
         positions,
@@ -122,6 +184,7 @@ def test_voronoi_enrichment_increases_site_count_on_porous():
         probe_radius=1.0,
         max_distance=4.5,
         enrich=True,
+        symbols=list(porous.get_chemical_symbols()),
     )
 
     assert len(vertices_base) > 0
@@ -236,6 +299,7 @@ def test_voronoi_enrichment_uses_ridge_vertices(monkeypatch):
         probe_radius=0.0,
         max_distance=100.0,
         enrich=True,
+        symbols=["C"] * len(positions),
     )
 
     assert captured["ridge_vertices"] == fake_vor.ridge_vertices
@@ -243,20 +307,19 @@ def test_voronoi_enrichment_uses_ridge_vertices(monkeypatch):
 
 def test_voronoi_auto_widen_retries_when_first_window_empty(monkeypatch):
     """Empty first Voronoi window triggers one widened retry when enabled."""
-    import metalsurfer.placement.site_context as site_context_mod
+    import metalsurfer.placement.site_enumeration as site_enumeration
 
-    clear_site_caches()
     slab = make_slab()
     calls = {"n": 0}
-    real = site_context_mod.get_unified_sites
+    real = site_enumeration._enumerate_unified_sites
 
-    def fake_get_unified_sites(*args, **kwargs):
+    def fake_enumerate(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             return []
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(site_context_mod, "get_unified_sites", fake_get_unified_sites)
+    monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
     ctx = _get_unique_sites_for_specs(slab, AdsorptionConfig(voronoi_auto_widen=True))
     assert calls["n"] == 2
     assert ctx.use_sites
@@ -264,17 +327,16 @@ def test_voronoi_auto_widen_retries_when_first_window_empty(monkeypatch):
 
 
 def test_voronoi_auto_widen_disabled_skips_retry(monkeypatch):
-    import metalsurfer.placement.site_context as site_context_mod
+    import metalsurfer.placement.site_enumeration as site_enumeration
 
-    clear_site_caches()
     slab = make_slab()
     calls = {"n": 0}
 
-    def fake_get_unified_sites(*args, **kwargs):
+    def fake_enumerate(*args, **kwargs):
         calls["n"] += 1
         return []
 
-    monkeypatch.setattr(site_context_mod, "get_unified_sites", fake_get_unified_sites)
+    monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
     ctx = _get_unique_sites_for_specs(slab, AdsorptionConfig(voronoi_auto_widen=False))
     assert calls["n"] == 1
     assert not ctx.use_sites
@@ -330,17 +392,12 @@ def test_non_planar_slab_still_runs_voronoi(monkeypatch):
 def test_slab_enrichment_flag_does_not_warn_from_site_context(caplog):
     """Planar slabs skip Voronoi in enumeration; site_context must not warn."""
     from metalsurfer.config import AdsorptionConfig
-    from metalsurfer.placement.site_context import (
-        _get_unique_sites_for_specs,
-        clear_site_caches,
-    )
+    from metalsurfer.placement.site_context import _get_unique_sites_for_specs
 
-    clear_site_caches()
     config = AdsorptionConfig(material_type="slab", voronoi_site_enrichment=False)
     slab = fcc111("Pt", (3, 3, 4), vacuum=10.0)
     with caplog.at_level(logging.WARNING, logger="metalsurfer.placement.site_context"):
         _get_unique_sites_for_specs(slab, config)
-    clear_site_caches()
 
     assert not any(
         "voronoi_site_enrichment=False has no effect" in record.getMessage()

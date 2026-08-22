@@ -90,12 +90,9 @@ def test_get_unified_sites_slab_atop_injection_wraps_under_pbc(monkeypatch):
 
     def _topo_without_atop(*args, **kwargs):
         result = real_topo(*args, **kwargs)
-        # Topology may return (verts, dists, sources) or (+ triangulation).
-        if len(result) == 4:
-            verts, dists, sources, primary_tri = result
-        else:
-            verts, dists, sources = result
-            primary_tri = None
+        # Topology returns (verts, dists, sources, primary_tri, exp_xy, exp_origin, exp_tri).
+        verts, dists, sources = result[0], result[1], result[2]
+        rest = result[3:]
         keep = [i for i, src in enumerate(sources) if src != "topology_atop"]
         if not keep:
             empty = (
@@ -103,10 +100,10 @@ def test_get_unified_sites_slab_atop_injection_wraps_under_pbc(monkeypatch):
                 np.zeros(0, dtype=float),
                 [],
             )
-            return empty if primary_tri is None else (*empty, primary_tri)
+            return (*empty, *rest) if rest else empty
         idx = np.asarray(keep, dtype=int)
         trimmed = (verts[idx], dists[idx], [sources[i] for i in keep])
-        return trimmed if primary_tri is None else (*trimmed, primary_tri)
+        return (*trimmed, *rest) if rest else trimmed
 
     def _counting_wrap(points, cell, pbc):
         wrap_calls.append(len(np.asarray(points)))
@@ -233,8 +230,9 @@ def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
             material_type="slab",
         )
         assert ok, f"Successful placement must pass contact gates: {reason}"
-        assert 1.2 <= dist <= 4.0, (
-            f"Adsorbate–surface distance should be physical (1.2–4.0 Å), got {dist:.3f}"
+        # Upper only; lower already gated by assert ok.
+        assert dist <= 4.0, (
+            f"Adsorbate–surface distance should be physical (<=4.0 Å), got {dist:.3f}"
         )
         overlaps, _ = detect_vdw_overlaps(adsorbate, slab, material_type="slab")
         assert len(overlaps) == 0, "Successful placement must not have VDW clashes"
@@ -280,7 +278,7 @@ def test_topology_bridges_keep_distinct_pbc_midpoints():
     pbc = np.array([True, True, False], dtype=bool)
     top_idx = np.arange(4, dtype=int)
     local_tree = KDTree(positions)
-    verts, _dists, sources, _tri = _generate_slab_topology_sites(
+    verts, _dists, sources, _tri, *_rest = _generate_slab_topology_sites(
         positions,
         cell,
         pbc,

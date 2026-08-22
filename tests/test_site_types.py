@@ -1,4 +1,4 @@
-"""Unit tests for Site identity, adapters, and defensive copies."""
+"""Unit tests for Site adapters and defensive copies."""
 
 import numpy as np
 import pytest
@@ -22,18 +22,6 @@ def _site(**overrides) -> Site:
     return Site(**base)
 
 
-def test_site_eq_hash_uses_rounded_coords_and_types():
-    a = _site(xyz=np.array([1.0, 2.0, 3.0]))
-    b = _site(xyz=np.array([1.0 + 1e-9, 2.0, 3.0]))
-    c = _site(xyz=np.array([1.1, 2.0, 3.0]))
-    d = _site(site_type="bridge")
-    assert a == b
-    assert hash(a) == hash(b)
-    assert a != c
-    assert a != d
-    assert len({a, b, c}) == 2
-
-
 def test_site_xy_returns_copy():
     site = _site()
     xy = site.xy
@@ -41,13 +29,18 @@ def test_site_xy_returns_copy():
     assert site.xyz[0] == pytest.approx(1.0)
 
 
-def test_with_symmetry_preserves_identity_fields():
+def test_with_symmetry_preserves_geometry_fields():
     site = _site()
     enriched = with_symmetry(
         site, symmetry_multiplicity=3, symmetry_equivalent_sites=((0.0, 0.0),)
     )
-    assert enriched == site
+    np.testing.assert_array_equal(enriched.xyz, site.xyz)
+    np.testing.assert_array_equal(enriched.normal, site.normal)
+    assert enriched.site_type == site.site_type
+    assert enriched.slab_indices == site.slab_indices
+    assert enriched.material_type == site.material_type
     assert enriched.symmetry_multiplicity == 3
+    assert enriched.symmetry_equivalent_sites == ((0.0, 0.0),)
 
 
 def test_material_pbc_values_are_immutable_tuples():

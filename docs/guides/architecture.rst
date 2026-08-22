@@ -73,12 +73,13 @@ Also: ``finalize_substrate``, ``relax_substrate``,
 
 Import from :mod:`metalsurfer.workflow` (not the package root):
 
-- ``process_molecule`` / ``process_molecule_bayesian`` — return
+- ``process_molecule`` / ``process_molecule_bayesian`` — require an
+  :class:`~metalsurfer.AdsorptionConfig` and return
   :class:`~metalsurfer.workflow.MoleculeScreenOutcome` (``results``,
-  flat ``failure_summary``, ``ml_records``, optional BO memory / transfer).
-  Campaign-level :class:`~metalsurfer.SaturationCampaignResult` stores
-  ``failure_summary`` keyed by molecule name
-  (``dict[str, dict[str, object]]``).
+  optional stage-typed ``failure_summary``, ``ml_records``, optional BO
+  memory / transfer). Campaign-level
+  :class:`~metalsurfer.SaturationCampaignResult` stores ``failure_summary``
+  keyed by molecule name (``dict[str, FailureSummary]``).
 - :func:`~metalsurfer.workflow.run_saturation_screening` (pass
   ``bo_enabled=True`` for BO steps; campaign APIs set this for you)
 - ``calculate_reference_energies``, ``load_molecules``
@@ -175,6 +176,8 @@ Module layout
    ├── conformers.py         # SMILES → conformers
    ├── filters.py            # decomposition / desorption / duplicate filtering
    ├── io_results.py         # CSV, XYZ, optional VASP I/O, metadata
+   ├── result_paths.py       # canonical results_{surface_type}/ path helpers
+   ├── reporting.py          # typed FailureSummary formatting helpers
    ├── models.py             # typed result dataclasses
    ├── optimization/         # MLIP setup, batched relaxation (TorchSim / FairChem)
    ├── surface_prep/         # prepare_substrate, freeze, …
@@ -247,8 +250,6 @@ contexts) backs ``resolve_site_context_for_sampling``, which:
 2. Uses clustered sites if symmetry is broken (typical mid-saturation).
 3. Otherwise tries ``get_symmetry_aware_sites`` (reusing ``raw_unclustered``);
    falls back to clustered Voronoi on failure/empty.
-
-``clear_site_caches()`` clears the shared cache.
 
 Material strategies:
 
@@ -558,7 +559,7 @@ Representative defaults (verify in ``config.py`` when debugging):
 Output structure
 ----------------
 
-Root: ``results_{surface_type}/``.
+Root: ``results_{surface_type}/`` (see :func:`~metalsurfer.results_dir_for`).
 
 - ``adsorption_energies_detailed.csv`` / ``adsorption_energy_summary.csv`` —
   binding.
@@ -568,9 +569,10 @@ Root: ``results_{surface_type}/``.
 - ``ml_dataset.csv`` / ``ml_dataset_metadata.json`` — ``DatasetLogger``.
 - ``xyz_structures/``, optional ``vasp_inputs/``, ``run_metadata.json``.
 
-Result-object export helpers (``to_row``, ``to_rows``,
-``format_completion``, …) are methods on the typed result classes so scripts
-need not import internal I/O helpers.
+Writers and CSV row builders share path layout via :mod:`metalsurfer.result_paths`
+(``molecule_all_xyz_dir``, ``saturation_xyz_dir``, …). Result-object export
+helpers (``to_row``, ``to_rows``, ``format_completion``, …) live on the typed
+result classes so scripts need not import internal I/O helpers.
 
 
 Dataset logging and ML

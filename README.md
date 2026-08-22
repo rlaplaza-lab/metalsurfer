@@ -103,10 +103,9 @@ Omit `num_placements` in production to autotune to GPU parallel capacity. See [`
 
 ```bash
 pip install -e ".[mlip,dev]"
-./scripts/run_all_examples.sh          # GPU smoke (fresh runs)
-./scripts/run_all_tests.sh             # full local parity
+./scripts/run_all_tests.sh             # quick + cpu + gpu
 ruff check . && ruff format --check . && mypy src/metalsurfer
-python -m pytest tests/ -m "not dependency_behavior and not mlip and not gpu and not slow" \
+python -m pytest tests/ -m quick \
   --cov=src/metalsurfer --cov-report=term-missing --tb=short -v
 ```
 

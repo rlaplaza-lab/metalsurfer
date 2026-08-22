@@ -10,7 +10,7 @@ from ase import Atoms
 
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
-from ..placement._constants import _RETRY_BLOCK_SITE_AFTER
+from ..placement._constants import _RETRY_BLOCK_SITE_AFTER, RECOVERABLE_DISTANCE_REASONS
 from ..placement.generators import (
     enumerate_placement_specs,
     estimate_molecule_complexity,
@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 
 # Prior success rate before the first attempt observes real yield.
 _YIELD_EST_PRIOR = 0.5
-_CLASH_REASONS = frozenset({"adsorbate_overlap", "too_close"})
 
 
 def placement_spec_key(
@@ -129,8 +128,7 @@ def _request_count(remaining: int, yield_est: float, oversample_max: float) -> i
     """How many specs to enumerate given deficit and estimated materialization yield."""
     if remaining <= 0:
         return 0
-    # Floor so ceil(remaining / floor) never exceeds remaining * oversample_max.
-    yield_floor = 1.0 / max(float(oversample_max), 1.0)
+    yield_floor = _yield_floor(oversample_max)
     effective_yield = max(float(yield_est), yield_floor)
     by_yield = int(math.ceil(remaining / effective_yield))
     by_cap = int(math.ceil(remaining * float(oversample_max)))
@@ -181,7 +179,6 @@ class MaterializeFillResult:
     placement_ids: list[int]
     descriptors: list[PlacementDescriptor]
     failures: list[PlacementFailureEvent]
-    n_backfill_used: int = 0
     n_attempts: int = 0
 
 
@@ -232,7 +229,7 @@ def materialize_specs_filling_target(
         Cache for spec materialization.
     """
     if n_target <= 0:
-        return MaterializeFillResult([], [], [], [], n_backfill_used=0, n_attempts=0)
+        return MaterializeFillResult([], [], [], [], n_attempts=0)
 
     n_target = _clamp_target_to_capacity(
         n_target=n_target,
@@ -289,7 +286,6 @@ def materialize_specs_filling_target(
 
     _materialize_and_absorb(primary_specs)
 
-    n_backfill_used = 0
     if len(combined) < n_target and backfill_specs:
         offset = 0
         while len(combined) < n_target and offset < len(backfill_specs):
@@ -299,7 +295,6 @@ def materialize_specs_filling_target(
             if not chunk:
                 break
             tried, ok = _materialize_and_absorb(chunk)
-            n_backfill_used += tried
             offset += tried
             if tried > 0 and ok == 0:
                 # Entire chunk failed; advance and try further backfill.
@@ -310,7 +305,6 @@ def materialize_specs_filling_target(
         placement_ids=placement_ids,
         descriptors=descriptors,
         failures=failures,
-        n_backfill_used=n_backfill_used,
         n_attempts=1,
     )
 
@@ -324,7 +318,6 @@ def fill_materialized_placements(
     site_context: SiteContext | None,
     slab_atoms: Atoms,
     calculator,
-    n_target: int | None = None,
     conformer_energies: list[float] | None = None,
 ) -> MaterializeFillResult:
     """Enumerate and materialize until ``n_target`` valid placements or retries end.
@@ -349,15 +342,12 @@ def fill_materialized_placements(
         Full slab atoms.
     calculator
         ASE calculator instance.
-    n_target
-        Target number of valid placements (optional).
     conformer_energies
         Energies aligned with conformers (optional).
     """
+    n_target = config.num_placements
     if n_target is None:
-        if config.num_placements is None:
-            raise ValueError("config.num_placements must be set")
-        n_target = config.num_placements
+        raise ValueError("num_placements must be set before materializing placements")
 
     # R1: clamp the success goal to the enumerable spec capacity so the retry
     # loop cannot spin until max_attempts on a target that is unreachable.
@@ -524,7 +514,7 @@ def fill_materialized_placements(
                 failed_keys.add(placement_spec_key(failed_spec))
                 tried_cells.add(placement_cell_key(failed_spec))
                 site_idx = int(failed_spec.site_index)
-                if site_idx >= 0 and fail.reason in _CLASH_REASONS:
+                if site_idx >= 0 and fail.reason in RECOVERABLE_DISTANCE_REASONS:
                     site_fail_counts[site_idx] += 1
                     if site_fail_counts[site_idx] >= _RETRY_BLOCK_SITE_AFTER:
                         blocked_sites.add(site_idx)
@@ -579,6 +569,5 @@ def fill_materialized_placements(
         placement_ids=placement_ids,
         descriptors=descriptors,
         failures=failures,
-        n_backfill_used=0,
         n_attempts=attempts_used if attempts_used > 0 else (1 if max_attempts else 0),
     )

@@ -38,10 +38,10 @@ jobs:
       - name: Install package (editable)
         run: pip install -e .
 
-      - name: Run unit tests
+      - name: Run quick tests
         run: |
           python -m pytest tests/ \
-            -m "not dependency_behavior and not mlip and not gpu and not slow" \
+            -m quick \
             --cov=src/metalsurfer --cov-report=term-missing \
             --tb=short -q
 

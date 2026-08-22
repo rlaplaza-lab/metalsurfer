@@ -12,12 +12,7 @@ from ase import Atoms
 from ..config import AdsorptionConfig
 from ..symmetry import SymmetryAnalysisError
 from ._cache_key import _pack_optional_float
-from ._constants import (
-    _VORONOI_AUTO_WIDEN_MAX_SCALE,
-    _VORONOI_AUTO_WIDEN_PROBE_SCALE,
-)
-from ._material import material_aware_pbc
-from .site_coords import _derive_voronoi_distance_window
+from ._material import material_aware_pbc, validate_material_type
 from .site_enumeration import (
     _cluster_equivalent_sites,
     get_symmetry_aware_sites,
@@ -30,23 +25,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SiteContext:
-    """Cached result of Voronoi site detection for a given slab geometry.
-
-    ``dissociative_pairs`` is a per-call sidecar and is never stored on
-    process-cached contexts (see :mod:`metalsurfer.placement.dissociative`).
-    """
+    """Cached result of Voronoi site detection for a given slab geometry."""
 
     sites: list[Site]
     use_sites: bool
     source: str
     # Pre-clustering output of :func:`get_unified_sites` (same as used for clustering).
     raw_unclustered: list[Site] | None = None
-    # Not populated on cached cores; dissociative uses a separate process cache.
-    dissociative_pairs: list | None = None
 
 
 # Bounded FIFO cache for unique-sites (pre-symmetry) and resolved site contexts.
-_SITE_CONTEXT_CACHE_MAX_ENTRIES = 16
+# Unique-sites + resolved context use 2 slots per geometry; 64 covers ~32 slabs
+# (e.g. miller/facet sweeps) without thrashing.
+_SITE_CONTEXT_CACHE_MAX_ENTRIES = 64
 _SITE_CONTEXT_CACHE: dict[str, SiteContext] = {}
 _SITE_CONTEXT_CACHE_LOCK = threading.Lock()
 
@@ -60,25 +51,21 @@ def _no_sites_context(
         use_sites=False,
         source="no_sites",
         raw_unclustered=raw_unclustered,
-        dissociative_pairs=None,
     )
 
 
-def clear_site_caches() -> None:
-    """Clear unique-sites, resolved site-context, and dissociative-pair caches."""
-    with _SITE_CONTEXT_CACHE_LOCK:
-        _SITE_CONTEXT_CACHE.clear()
-    # Lazy import avoids a placement package cycle at module load.
-    from .dissociative import clear_dissociative_pair_caches
-
-    clear_dissociative_pair_caches()
-
-
 def _unique_sites_cache_key(slab: Atoms, config: AdsorptionConfig) -> str:
-    """Geometry + chemistry + Voronoi config key (pre-symmetry)."""
+    """Geometry + chemistry + Voronoi config key (pre-symmetry).
+
+    PBC is keyed on :func:`material_aware_pbc` (what enumeration actually uses),
+    not ``slab.get_pbc()``, so calculator-boundary PBC (e.g. ``[T,T,T]``) and
+    material PBC (e.g. ``[T,T,F]`` for slabs) share one cache entry.
+    """
     pos_bytes = slab.get_positions().tobytes()
     cell_bytes = np.asarray(slab.get_cell()).tobytes()
-    pbc_bytes = np.asarray(slab.get_pbc(), dtype=np.uint8).tobytes()
+    pbc_bytes = np.asarray(
+        material_aware_pbc(config.material_type), dtype=np.uint8
+    ).tobytes()
     numbers_bytes = np.asarray(slab.get_atomic_numbers(), dtype=np.int32).tobytes()
     cfg_bytes = (
         _pack_optional_float(config.voronoi_probe_radius)
@@ -110,8 +97,6 @@ def _site_context_cache_key(
 
 
 def _store_site_context_cache(cache_key: str, ctx: SiteContext) -> SiteContext:
-    # Never cache dissociative sidecar state on Voronoi-keyed entries.
-    ctx.dissociative_pairs = None
     with _SITE_CONTEXT_CACHE_LOCK:
         if len(_SITE_CONTEXT_CACHE) >= _SITE_CONTEXT_CACHE_MAX_ENTRIES:
             _SITE_CONTEXT_CACHE.pop(next(iter(_SITE_CONTEXT_CACHE)))
@@ -222,11 +207,7 @@ def _get_unique_sites_for_specs(
     if cached is not None:
         return cached
 
-    if config.material_type not in ("slab", "nanoparticle", "porous"):
-        raise ValueError(
-            "config.material_type must be 'slab', 'nanoparticle', or 'porous', "
-            f"got {config.material_type!r}"
-        )
+    validate_material_type(config.material_type)
 
     mat_type = config.material_type
     probe_radius = config.voronoi_probe_radius
@@ -247,36 +228,8 @@ def _get_unique_sites_for_specs(
         material_type=mat_type,
         enrich=config.voronoi_site_enrichment,
         site_classification_method=config.site_classification_method,
+        auto_widen=config.voronoi_auto_widen,
     )
-    if not raw_sites and config.voronoi_auto_widen:
-        positions = slab.get_positions()
-        symbols = list(slab.get_chemical_symbols())
-        cell = np.asarray(slab.get_cell(), dtype=float)
-        pbc = material_aware_pbc(mat_type)
-        derived_probe, derived_max = _derive_voronoi_distance_window(
-            positions, symbols, np.asarray(pbc, dtype=bool), cell
-        )
-        eff_probe = float(probe_radius) if probe_radius is not None else derived_probe
-        eff_max = float(max_site_dist) if max_site_dist is not None else derived_max
-        wide_probe = float(eff_probe * _VORONOI_AUTO_WIDEN_PROBE_SCALE)
-        wide_max = float(max(eff_max * _VORONOI_AUTO_WIDEN_MAX_SCALE, wide_probe))
-        logger.info(
-            "Voronoi auto-widen: retrying site detection with probe=%.3f max=%.3f "
-            "(was probe=%.3f max=%.3f)",
-            wide_probe,
-            wide_max,
-            eff_probe,
-            eff_max,
-        )
-        raw_sites = get_unified_sites(
-            slab,
-            probe_radius=wide_probe,
-            max_site_distance=wide_max,
-            top_layer_tolerance=config.top_layer_tolerance,
-            material_type=mat_type,
-            enrich=config.voronoi_site_enrichment,
-            site_classification_method=config.site_classification_method,
-        )
     if not raw_sites:
         logger.warning(
             "Unified Voronoi site detection found no sites for %d-atom structure "

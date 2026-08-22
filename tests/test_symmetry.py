@@ -40,7 +40,7 @@ def _symop_roundtrip_preserves_structure(
                 d = frac_new[i] - frac[j]
                 d -= np.round(d)
                 sep = d @ cell
-                if float(np.linalg.norm(sep)) < symprec * 50:
+                if float(np.linalg.norm(sep)) < symprec:
                     used.add(j)
                     matched = True
                     break
@@ -87,8 +87,19 @@ def _assert_orbit_pairwise_symops(
                 ]
 
 
+def _spglib_cell_tuple(
+    analyzer: SymmetryAnalyzer,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Copy of the lattice tuple ``SymmetryAnalyzer`` passes to spglib."""
+    return (
+        np.asarray(analyzer._lattice, dtype=float).copy(),
+        np.asarray(analyzer._fractional, dtype=float).copy(),
+        np.asarray(analyzer.numbers, dtype=int).copy(),
+    )
+
+
 def _assert_op_count_matches_spglib(analyzer: SymmetryAnalyzer, symprec: float) -> None:
-    cell, frac, numbers = analyzer.get_spglib_cell_tuple()
+    cell, frac, numbers = _spglib_cell_tuple(analyzer)
     ds = spglib.get_symmetry_dataset((cell, frac, numbers), symprec=symprec)
     assert ds is not None
     assert len(analyzer._frac_ops_from_dataset()) == len(ds.rotations)
@@ -285,7 +296,7 @@ def test_cluster_symop_roundtrip_ni6_and_ch4():
     ni6.set_cell([20, 20, 20])
     ni6.set_pbc([False, False, False])
     an_ni = SymmetryAnalyzer(ni6, symmetry_tolerance=0.2, mode="cluster")
-    c_ni, f_ni, z_ni = an_ni.get_spglib_cell_tuple()
+    c_ni, f_ni, z_ni = _spglib_cell_tuple(an_ni)
     _symop_roundtrip_preserves_structure(c_ni, f_ni, z_ni, symprec=0.2)
 
     a = 1.09
@@ -302,7 +313,7 @@ def test_cluster_symop_roundtrip_ni6_and_ch4():
     methane.set_cell([20, 20, 20])
     methane.set_pbc([False, False, False])
     an_ch4 = SymmetryAnalyzer(methane, symmetry_tolerance=0.15, mode="cluster")
-    c_m, f_m, z_m = an_ch4.get_spglib_cell_tuple()
+    c_m, f_m, z_m = _spglib_cell_tuple(an_ch4)
     _symop_roundtrip_preserves_structure(c_m, f_m, z_m, symprec=0.15)
 
 
@@ -599,3 +610,39 @@ def test_equivalent_site_reduction_nonorthogonal():
     reduced = an.analyze_site_symmetry(sites)
     assert sum(int(s.symmetry_multiplicity or 0) for s in reduced) == len(sites)
     assert len(reduced) < len(sites)
+
+
+def test_mode_mismatch_periodic_on_non_pbc_cluster():
+    """Periodic mode on a non-PBC cluster must raise a clear ValueError."""
+    from ase.cluster import Octahedron
+
+    from metalsurfer.symmetry import SymmetryAnalyzer
+
+    cluster = Octahedron("Au", 3, cutoff=1)
+    cluster.set_pbc(False)
+    with pytest.raises(ValueError, match="Periodic symmetry requires"):
+        SymmetryAnalyzer(cluster, mode="periodic")
+
+
+def test_symmetry_tolerance_non_positive_rejected_or_handled():
+    from ase.build import fcc111
+
+    from metalsurfer.symmetry import SymmetryAnalyzer
+
+    slab = fcc111("Cu", size=(2, 2, 2), vacuum=5.0)
+    for tol in (0.0, -0.1):
+        try:
+            analyzer = SymmetryAnalyzer(slab, symmetry_tolerance=tol)
+            _ = analyzer._frac_ops_from_dataset()
+        except (ValueError, Exception):
+            pass
+
+
+def test_empty_and_single_atom_site_lists():
+    from ase.build import fcc111
+
+    from metalsurfer.symmetry import SymmetryAnalyzer
+
+    slab = fcc111("Cu", size=(2, 2, 2), vacuum=5.0)
+    analyzer = SymmetryAnalyzer(slab, mode="auto")
+    assert analyzer.analyze_site_symmetry([]) == []

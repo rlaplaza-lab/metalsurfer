@@ -20,9 +20,7 @@ from ._constants import (
     _PARALLEL_FRACTION_SINGLE_BINDER,
     _PARALLEL_Z_FLOOR_MIN_ANGSTROM,
     _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE,
-    _PARALLEL_Z_HI_SHRINK_FALLBACK_ANGSTROM,
     _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE,
-    _PARALLEL_Z_LO_SHRINK_FALLBACK_ANGSTROM,
     _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE,
     _SITE_Z_OFFSET_FROM_SURFACE_RADIUS,
 )
@@ -96,10 +94,8 @@ def _radius_sum_for_site(
     slab: Atoms,
     site: Site | None,
     mol_symbols: list[str],
-) -> float | None:
+) -> float:
     r_surface = _get_site_surface_radii(slab, site)
-    if r_surface is None:
-        return None
     return r_surface + _mean_covalent_radius(mol_symbols)
 
 
@@ -111,8 +107,6 @@ def _site_type_z_offset(
     if not site_type or site_type not in _SITE_Z_OFFSET_FROM_SURFACE_RADIUS:
         return 0.0
     r_surface = _get_site_surface_radii(slab, site)
-    if r_surface is None:
-        return 0.0
     return _SITE_Z_OFFSET_FROM_SURFACE_RADIUS[site_type] * r_surface
 
 
@@ -122,12 +116,6 @@ def _parallel_z_adjustments(
     mol_symbols: list[str],
 ) -> tuple[float, float, float]:
     radius_sum = _radius_sum_for_site(slab, site, mol_symbols)
-    if radius_sum is None:
-        return (
-            _PARALLEL_Z_FLOOR_MIN_ANGSTROM,
-            _PARALLEL_Z_LO_SHRINK_FALLBACK_ANGSTROM,
-            _PARALLEL_Z_HI_SHRINK_FALLBACK_ANGSTROM,
-        )
     return (
         max(
             _PARALLEL_Z_FLOOR_MIN_ANGSTROM,

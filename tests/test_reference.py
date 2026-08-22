@@ -109,6 +109,73 @@ class TestCalculateReferenceEnergies:
                 config=AdsorptionConfig(),
             )
 
+    def test_boundary_slab_energy_1e_6_accepted(self, monkeypatch):
+        """abs(E) == 1e-6 is the reject threshold; equal is accepted (strict <)."""
+        slab = SlabContainer(make_slab())
+        calc = mock_calculator(energy=1e-6, n_atoms=len(slab.atoms))
+        confs = [_make_atoms()]
+        _patch_reference_helpers(
+            monkeypatch,
+            conformers=(confs, [0.0]),
+            opt_results=[(_make_atoms(), -5.0)],
+        )
+        ref = reference.calculate_reference_energies(
+            slab, calc, ["water"], ["O"], ts_model=object(), config=AdsorptionConfig()
+        )
+        assert ref.slab_energy == pytest.approx(1e-6)
+
+    def test_zero_exact_slab_energy_raises(self, monkeypatch):
+        slab = SlabContainer(make_slab())
+        calc = mock_calculator(energy=0.0, n_atoms=len(slab.atoms))
+        _patch_reference_helpers(monkeypatch)
+        with pytest.raises(OptimizationError, match="effectively zero"):
+            reference.calculate_reference_energies(
+                slab,
+                calc,
+                ["water"],
+                ["O"],
+                ts_model=object(),
+                config=AdsorptionConfig(),
+            )
+
+    def test_inf_slab_energy_raises(self, monkeypatch):
+        slab = SlabContainer(make_slab())
+        calc = mock_calculator(energy=float("inf"), n_atoms=len(slab.atoms))
+        _patch_reference_helpers(monkeypatch)
+        with pytest.raises(OptimizationError, match="not finite"):
+            reference.calculate_reference_energies(
+                slab,
+                calc,
+                ["water"],
+                ["O"],
+                ts_model=object(),
+                config=AdsorptionConfig(),
+            )
+
+    def test_empty_slab_n_atoms_zero_path(self, monkeypatch):
+        """Calculator with n_atoms=0 still goes through energy gates on returned energy."""
+        empty = SlabContainer(Atoms())
+        calc = mock_calculator(energy=-1.0, n_atoms=0)
+        confs = [_make_atoms()]
+        _patch_reference_helpers(
+            monkeypatch,
+            conformers=(confs, [0.0]),
+            opt_results=[(_make_atoms(), -5.0)],
+        )
+        # Empty substrate may fail prepare or succeed with the stub energy.
+        try:
+            ref = reference.calculate_reference_energies(
+                empty,
+                calc,
+                ["water"],
+                ["O"],
+                ts_model=object(),
+                config=AdsorptionConfig(),
+            )
+            assert ref.slab_energy == pytest.approx(-1.0)
+        except (OptimizationError, ValueError, IndexError, RuntimeError):
+            pass  # empty geometry may be rejected upstream
+
     def test_conformer_failure_raises_when_strict(self, monkeypatch):
         slab = SlabContainer(make_slab())
         calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))

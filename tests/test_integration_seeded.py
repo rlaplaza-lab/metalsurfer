@@ -8,7 +8,6 @@ import math
 
 import numpy as np
 import pytest
-from ase.data import atomic_numbers, covalent_radii
 
 from metalsurfer._numeric_defaults import (
     MIN_CONTACT_RATIO_DEFAULT,
@@ -23,7 +22,7 @@ from metalsurfer.placement import (
 )
 from metalsurfer.placement.geometry import calculate_min_distance
 
-from .conftest import make_slab
+from .conftest import assert_no_intramolecular_clashes, make_slab
 
 pytestmark = pytest.mark.integration
 
@@ -50,22 +49,7 @@ def _assert_physical_placement(adsorbate, slab, *, material_type: str = "slab") 
         f"max_slab_z={slab_z.max():.3f}"
     )
 
-    # No unphysical intramolecular clashes (pairs closer than 0.55 * covalent sum).
-    pos = adsorbate.get_positions()
-    syms = adsorbate.get_chemical_symbols()
-    for i in range(len(pos)):
-        for j in range(i + 1, len(pos)):
-            dvec = pos[j] - pos[i]
-            if np.any(pbc):
-                dvec = dvec - np.round(dvec @ np.linalg.inv(cell)) @ cell
-            d = float(np.linalg.norm(dvec))
-            r_sum = float(covalent_radii[atomic_numbers[syms[i]]]) + float(
-                covalent_radii[atomic_numbers[syms[j]]]
-            )
-            assert d > 0.55 * r_sum, (
-                f"intramolecular clash {syms[i]}-{syms[j]} at {d:.3f} Å "
-                f"(0.55×covalent sum={0.55 * r_sum:.3f})"
-            )
+    assert_no_intramolecular_clashes(adsorbate, slab)
 
     # Explicit MIC adsorbate–slab clearance via the public distance helper.
     mic_min = calculate_min_distance(
@@ -84,13 +68,17 @@ def _assert_physical_placement(adsorbate, slab, *, material_type: str = "slab") 
 
 
 class TestConformerDeterminism:
+    @pytest.fixture(autouse=True)
+    def _require_rdkit(self):
+        pytest.importorskip("rdkit")
+
     @pytest.mark.parametrize("smiles", ["O", "CCO", "CC(=O)O", "c1ccccc1"])
     def test_same_seed_same_conformers(self, smiles):
         cfg = AdsorptionConfig(num_conformers=5, seed=42)
         r1 = create_conformers_from_smiles(smiles, config=cfg)
         r2 = create_conformers_from_smiles(smiles, config=cfg)
-        if r1 is None or r2 is None:
-            pytest.skip(f"Cannot generate conformers for {smiles}")
+        assert r1 is not None, f"conformer generation failed for {smiles}"
+        assert r2 is not None, f"conformer generation failed for {smiles}"
         c1, e1 = r1
         c2, e2 = r2
         assert len(c1) == len(c2)

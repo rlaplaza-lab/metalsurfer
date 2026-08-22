@@ -10,8 +10,6 @@ from ._constants import (
     _ATOP_RATIO,
     _BRIDGE_EQ_TOL,
     _BRIDGE_FAR_RATIO,
-    _DELAUNAY_BRIDGE_THRESHOLD_FRACTION,
-    _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM,
     _DISTANCE_RATIO_FLOOR_EPS,
     _DISTANCE_ZERO_EPS,
     _ENRICHMENT_MAX_SUBDIVISIONS,
@@ -20,7 +18,6 @@ from ._constants import (
     _PORE_THRESHOLD_MIN_ANGSTROM,
     _SITE_CLASSIFICATION_NEIGHBOURS,
     _VORONOI_DEDUP_TOLERANCE,
-    _VORONOI_FRACTIONAL_CELL_MARGIN,
 )
 from .site_coords import (
     _build_periodic_images,
@@ -75,15 +72,12 @@ def _voronoi_sites(
     probe_radius: float | None = None,
     max_distance: float | None = None,
     enrich: bool = True,
-    symbols: list[str] | None = None,
-    nn_reference_positions: np.ndarray | None = None,
+    *,
+    symbols: list[str],
 ) -> tuple[np.ndarray, np.ndarray]:
     """Voronoi vertices accessible for adsorption, optionally enriched."""
     if len(positions) < 4:
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
-
-    if symbols is None:
-        symbols = ["C"] * len(positions)
 
     if probe_radius is None or max_distance is None:
         derived_probe, derived_max = _derive_voronoi_distance_window(
@@ -101,16 +95,6 @@ def _voronoi_sites(
     extension_margin = float(max_distance) + _VORONOI_DEDUP_TOLERANCE
     extended = _build_periodic_images(positions, cell, pbc, margin=extension_margin)
 
-    nn_positions = (
-        nn_reference_positions if nn_reference_positions is not None else positions
-    )
-    if nn_positions is positions:
-        nn_extended = extended
-    else:
-        nn_extended = _build_periodic_images(
-            nn_positions, cell, pbc, margin=extension_margin
-        )
-
     try:
         vor = Voronoi(extended)
     except (QhullError, ValueError, RuntimeError) as exc:
@@ -123,8 +107,10 @@ def _voronoi_sites(
 
     wrapped_vertices = _wrap_cartesian(raw_vertices, cell, pbc)
 
-    tree = KDTree(nn_extended)
-    nn_dists, _ = tree.query(raw_vertices, k=1)
+    # Accessibility and returned nn distances must use wrapped (in-cell) sites:
+    # raw vertices just outside the cell can have different framework distances.
+    tree = KDTree(extended)
+    nn_dists, _ = tree.query(wrapped_vertices, k=1)
     nn_dists = np.asarray(nn_dists, dtype=float).ravel()
 
     accessible = (nn_dists >= probe_radius) & (nn_dists <= max_distance)
@@ -135,21 +121,8 @@ def _voronoi_sites(
     if len(wrapped_vertices) == 0:
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
 
-    if np.any(pbc):
-        frac = _cart_to_frac(raw_vertices[accessible], cell)
-        inside = np.ones(len(frac), dtype=bool)
-        for dim in range(3):
-            if bool(pbc[dim]):
-                inside &= (frac[:, dim] >= -_VORONOI_FRACTIONAL_CELL_MARGIN) & (
-                    frac[:, dim] < 1.0 + _VORONOI_FRACTIONAL_CELL_MARGIN
-                )
-        wrapped_vertices = wrapped_vertices[inside]
-        nn_dists = nn_dists[inside]
-        raw_accessible_indices = raw_accessible_indices[inside]
-
-    if len(wrapped_vertices) == 0:
-        return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
-
+    # Keep wrapped vertices; PBC dedup merges images. Do not filter on unwrapped
+    # fractional coords (values just outside [0, 1) still wrap to valid sites).
     keep = _deduplicate_points(
         wrapped_vertices, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
     )
@@ -177,7 +150,7 @@ def _voronoi_sites(
         nn_dists,
         vor.ridge_vertices,
         raw_to_kept,
-        nn_extended,
+        extended,
         tree,
         probe_radius,
         max_distance,
@@ -206,18 +179,41 @@ def _generate_slab_topology_sites(
     np.ndarray,
     list[str],
     Delaunay | None,
+    np.ndarray | None,
+    list[int] | None,
+    Delaunay | None,
 ]:
     """Generate slab atop/bridge/hollow candidates from the top layer.
 
     Candidates are created in an orientation-aware way and wrapped back into the
     reference cell on periodic axes.
 
-    Returns ``(vertices, nn_dists, sources, primary_delaunay)`` where
-    *primary_delaunay* is the top-layer triangulation in the slab plane (for
-    classification reuse), or ``None`` when unavailable.
+    Returns
+    -------
+    ``(vertices, nn_dists, sources, primary_delaunay, exp_xy, exp_origin, exp_tri)``
+    where *primary_delaunay* is the top-layer triangulation in the slab plane,
+    and *exp_xy* / *exp_origin* / *exp_tri* are the ±1 a/b expanded scratchpad
+    (for classification reuse), or ``None`` when unavailable.
     """
+    empty: tuple[
+        np.ndarray,
+        np.ndarray,
+        list[str],
+        Delaunay | None,
+        np.ndarray | None,
+        list[int] | None,
+        Delaunay | None,
+    ] = (
+        np.empty((0, 3), dtype=float),
+        np.empty(0, dtype=float),
+        [],
+        None,
+        None,
+        None,
+        None,
+    )
     if len(top_atom_indices) == 0:
-        return np.empty((0, 3), dtype=float), np.empty(0, dtype=float), [], None
+        return empty
 
     n_hat = _slab_normal(cell)
     top_atom_indices = np.asarray(top_atom_indices, dtype=int)
@@ -253,6 +249,10 @@ def _generate_slab_topology_sites(
         except (QhullError, ValueError, RuntimeError):
             primary_delaunay = None
 
+    exp2d: np.ndarray | None = None
+    expanded_origin_local_index: list[int] | None = None
+    exp_tri: Delaunay | None = None
+
     # Need 2D triangulation for bridge/hollow candidates.
     if len(top_positions) < 2:
         if not candidates:
@@ -261,6 +261,9 @@ def _generate_slab_topology_sites(
                 np.empty(0, dtype=float),
                 [],
                 primary_delaunay,
+                None,
+                None,
+                None,
             )
         cand_arr = np.asarray(candidates, dtype=float)
         keep = _deduplicate_points(
@@ -271,6 +274,9 @@ def _generate_slab_topology_sites(
             np.asarray(candidate_dists, dtype=float)[keep],
             [candidate_sources[i] for i in np.nonzero(keep)[0]],
             primary_delaunay,
+            None,
+            None,
+            None,
         )
 
     exp2d, expanded_origin_local_index, _image_id, exp3d = _expand_top_layer_ab_images(
@@ -281,17 +287,16 @@ def _generate_slab_topology_sites(
     )
     if exp3d is None:
         raise ValueError("3D image expansion failed for top-layer sites")
-    tri: Delaunay | None = None
     if len(exp2d) >= 3:
         try:
-            tri = Delaunay(exp2d)
+            exp_tri = Delaunay(exp2d)
         except (QhullError, ValueError, RuntimeError):
-            tri = None
+            exp_tri = None
 
-    if tri is not None:
+    if exp_tri is not None:
         seen_edges: set[tuple[int, int, float, float, float]] = set()
         bridge_points: list[np.ndarray] = []
-        for simplex in np.asarray(tri.simplices, dtype=int):
+        for simplex in np.asarray(exp_tri.simplices, dtype=int):
             for e0, e1 in ((0, 1), (1, 2), (0, 2)):
                 i_exp, j_exp = int(simplex[e0]), int(simplex[e1])
                 li = expanded_origin_local_index[i_exp]
@@ -319,7 +324,7 @@ def _generate_slab_topology_sites(
 
         seen_tris: set[tuple[int, int, int, float, float, float]] = set()
         hollow_points: list[np.ndarray] = []
-        for simplex in np.asarray(tri.simplices, dtype=int):
+        for simplex in np.asarray(exp_tri.simplices, dtype=int):
             local_ids = tuple(
                 sorted({expanded_origin_local_index[int(k)] for k in simplex})
             )
@@ -349,6 +354,9 @@ def _generate_slab_topology_sites(
             np.empty(0, dtype=float),
             [],
             primary_delaunay,
+            exp2d,
+            expanded_origin_local_index,
+            exp_tri,
         )
 
     cand_arr = np.asarray(candidates, dtype=float)
@@ -360,6 +368,9 @@ def _generate_slab_topology_sites(
         cand_dist[keep],
         [candidate_sources[i] for i in kept_idx],
         primary_delaunay,
+        exp2d,
+        expanded_origin_local_index,
+        exp_tri,
     )
 
 
@@ -418,8 +429,7 @@ def _enrich_along_ridges(
     if not edges:
         return vertices, nn_dists
 
-    new_verts: list[np.ndarray] = []
-    new_dists: list[float] = []
+    candidate_pts: list[np.ndarray] = []
 
     for k0, k1 in sorted(edges):
         if not support_sets[k0] & support_sets[k1]:
@@ -449,18 +459,22 @@ def _enrich_along_ridges(
             candidate = v0 + t * edge_vec
             if np.any(pbc):
                 candidate = _wrap_cartesian(candidate.reshape(1, 3), cell, pbc)[0]
-            d_nn = float(
-                framework_tree.query(candidate.reshape(1, 3), k=1)[0].ravel()[0]
-            )
-            if probe_radius <= d_nn <= max_distance:
-                new_verts.append(candidate)
-                new_dists.append(d_nn)
+            candidate_pts.append(candidate)
 
-    if not new_verts:
+    if not candidate_pts:
         return vertices, nn_dists
 
-    all_verts = np.vstack([vertices, np.asarray(new_verts, dtype=float)])
-    all_dists = np.concatenate([nn_dists, np.asarray(new_dists, dtype=float)])
+    cand_arr = np.asarray(candidate_pts, dtype=float)
+    d_nn_all = np.asarray(framework_tree.query(cand_arr, k=1)[0], dtype=float).ravel()
+    keep_acc = (d_nn_all >= probe_radius) & (d_nn_all <= max_distance)
+    if not np.any(keep_acc):
+        return vertices, nn_dists
+
+    new_verts = cand_arr[keep_acc]
+    new_dists = d_nn_all[keep_acc]
+
+    all_verts = np.vstack([vertices, new_verts])
+    all_dists = np.concatenate([nn_dists, new_dists])
     keep = _deduplicate_points(all_verts, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc)
     return all_verts[keep], all_dists[keep]
 
@@ -510,6 +524,9 @@ def _build_delaunay_classification_index(
     *,
     cell: np.ndarray | None = None,
     pbc: np.ndarray | None = None,
+    expanded_xy: np.ndarray | None = None,
+    expanded_origin: list[int] | None = None,
+    expanded_tri: Delaunay | None = None,
 ) -> tuple[np.ndarray, list[str], list[tuple[int, ...]]]:
     """Precompute (atop, bridge midpoint, hollow centroid) XY candidates for KDTree classify.
 
@@ -520,6 +537,9 @@ def _build_delaunay_classification_index(
     classifiable at all — the primary-cell triangulation has no simplices
     spanning the periodic cut, so sites there would otherwise fall back to the
     nearest interior candidate (usually an atop).
+
+    When *expanded_xy* / *expanded_origin* / *expanded_tri* are provided (from
+    topology generation), the expensive expansion + Delaunay rebuild is skipped.
 
     Candidate atom indices are always mapped back to primary-cell indices
     through the image origin, so the returned ``cand_indices`` reference
@@ -537,19 +557,28 @@ def _build_delaunay_classification_index(
 
     use_pbc = cell is not None and pbc is not None and (bool(pbc[0]) or bool(pbc[1]))
     if use_pbc:
-        exp_xy, exp_origin, _image_id, _ = _expand_top_layer_ab_images(
-            top_xy, cell=cell, pbc=pbc
-        )
-        exp_tri: Delaunay | None = None
-        if len(exp_xy) >= 3:
-            try:
-                exp_tri = Delaunay(exp_xy)
-            except (QhullError, ValueError, RuntimeError):
-                exp_tri = None
-        if exp_tri is not None:
-            work_xy = exp_xy
-            origin_local = exp_origin
-            work_tri = exp_tri
+        if (
+            expanded_xy is not None
+            and expanded_origin is not None
+            and expanded_tri is not None
+        ):
+            work_xy = np.asarray(expanded_xy, dtype=float)
+            origin_local = list(expanded_origin)
+            work_tri = expanded_tri
+        else:
+            exp_xy, exp_origin, _image_id, _ = _expand_top_layer_ab_images(
+                top_xy, cell=cell, pbc=pbc
+            )
+            exp_tri: Delaunay | None = None
+            if len(exp_xy) >= 3:
+                try:
+                    exp_tri = Delaunay(exp_xy)
+                except (QhullError, ValueError, RuntimeError):
+                    exp_tri = None
+            if exp_tri is not None:
+                work_xy = exp_xy
+                origin_local = exp_origin
+                work_tri = exp_tri
 
     for wi in range(len(work_xy)):
         cand_xy.append(work_xy[wi])
@@ -608,61 +637,3 @@ def _build_delaunay_classification_index(
     if not cand_xy:
         return np.empty((0, 2), dtype=float), [], []
     return np.asarray(cand_xy, dtype=float), cand_types, cand_indices
-
-
-def _delaunay_site_classification(
-    vertex: np.ndarray,
-    top_positions_2d: np.ndarray,
-    top_atom_indices: np.ndarray,
-    triangulation: Delaunay,
-    positions: np.ndarray,
-    *,
-    vertex_2d: np.ndarray,
-    bridge_threshold: float = _DELAUNAY_BRIDGE_THRESHOLD_FRACTION,
-    char_len: float | None = None,
-    positions_tree: KDTree | None = None,
-    cand_xy: np.ndarray | None = None,
-    cand_types: list[str] | None = None,
-    cand_indices: list[tuple[int, ...]] | None = None,
-    cand_tree: KDTree | None = None,
-) -> tuple[str, tuple[int, ...]]:
-    """Classify a slab site using Delaunay triangulation in the slab plane.
-
-    When *cand_xy* / *cand_tree* are provided (preferred), classification is a
-    nearest-neighbour query over precomputed atop/bridge/hollow candidates.
-    """
-    xy = np.asarray(vertex_2d, dtype=float)
-    top_xy = np.asarray(top_positions_2d, dtype=float)
-
-    if cand_xy is None or cand_types is None or cand_indices is None:
-        cand_xy, cand_types, cand_indices = _build_delaunay_classification_index(
-            top_positions_2d, top_atom_indices, triangulation
-        )
-    if cand_tree is None and len(cand_xy) > 0:
-        cand_tree = KDTree(cand_xy)
-
-    if char_len is None:
-        if len(top_xy) >= 2:
-            _top_tree = KDTree(top_xy)
-            _nn_d, _ = _top_tree.query(top_xy, k=2)
-            char_len = float(np.mean(np.asarray(_nn_d, dtype=float)[:, 1]))
-        else:
-            char_len = _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM
-
-    if cand_tree is None or len(cand_xy) == 0:
-        return "hollow", tuple(int(i) for i in np.asarray(top_atom_indices)[:3])
-
-    _dist, idx = cand_tree.query(xy.reshape(1, 2), k=1)
-    nearest = int(np.asarray(idx, dtype=int).ravel()[0])
-    best_type = cand_types[nearest]
-    best_dist = float(np.asarray(_dist, dtype=float).ravel()[0])
-    best_indices = cand_indices[nearest]
-
-    if best_type == "bridge" and best_dist > bridge_threshold * float(char_len):
-        _tree = positions_tree if positions_tree is not None else KDTree(positions)
-        _, idx3 = _tree.query(vertex.reshape(1, 3), k=min(3, len(positions)))
-        idx3 = np.asarray(idx3, dtype=int).ravel()
-        best_type = "hollow"
-        best_indices = tuple(int(i) for i in idx3[:3])
-
-    return best_type, best_indices

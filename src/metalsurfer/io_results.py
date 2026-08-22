@@ -24,19 +24,16 @@ from .models import (
     _saturation_step_structure_paths,
     build_molecule_summary,
 )
+from .result_paths import (
+    molecule_adsorbate_only_dir,
+    molecule_all_vasp_dir,
+    molecule_all_xyz_dir,
+    results_dir_for,
+    saturation_vasp_dir,
+    saturation_xyz_dir,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def results_dir_for(surface_type: str) -> Path:
-    """Return ``results_{surface_type}/`` for a campaign *surface_type* label.
-
-    Parameters
-    ----------
-    surface_type
-        Campaign surface type label.
-    """
-    return Path(f"results_{surface_type}")
 
 
 def _build_run_metadata(
@@ -82,8 +79,16 @@ def _write_run_metadata_file(results_dir: Path, metadata: dict[str, Any]) -> Pat
     path = results_dir / "run_metadata.json"
     existing: dict[str, Any] | None = None
     if path.is_file():
-        with path.open() as f:
-            existing = json.load(f)
+        try:
+            with path.open() as f:
+                existing = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Could not read existing %s (%s); it will be replaced",
+                path.name,
+                exc,
+            )
+            existing = None
     merged = _merge_run_metadata(existing, metadata)
     with path.open("w") as f:
         json.dump(merged, f, indent=2, default=str)
@@ -120,7 +125,7 @@ def write_run_settings(
 
 
 def setup_directories(
-    surface_types: list[str] | None = None,
+    surface_types: list[str],
     *,
     write_vasp_inputs: bool = False,
 ) -> None:
@@ -129,17 +134,16 @@ def setup_directories(
     Parameters
     ----------
     surface_types
-        List of surface type labels, or None for ``["manual"]``.
+        List of surface type labels.
     write_vasp_inputs
         Whether to also create the ``vasp_inputs`` subdirectory.
     """
-    if surface_types is None:
-        surface_types = ["manual"]
     for st in surface_types:
-        os.makedirs(f"results_{st}", exist_ok=True)
-        os.makedirs(f"results_{st}/xyz_structures", exist_ok=True)
+        results_dir = results_dir_for(st)
+        os.makedirs(results_dir, exist_ok=True)
+        os.makedirs(results_dir / "xyz_structures", exist_ok=True)
         if write_vasp_inputs:
-            os.makedirs(f"results_{st}/vasp_inputs", exist_ok=True)
+            os.makedirs(results_dir / "vasp_inputs", exist_ok=True)
 
 
 def _write_placement_artifacts(
@@ -208,13 +212,9 @@ def save_molecule_results(
         config = AdsorptionConfig()
 
     results_dir = results_dir_for(surface_type)
-    xyz_dir = results_dir / "xyz_structures" / f"{molecule_name}_all"
-    mol_xyz_dir = results_dir / "xyz_structures" / f"{molecule_name}_adsorbate_only"
-    vasp_dir = results_dir / "vasp_inputs" / f"{molecule_name}_all"
-    os.makedirs(xyz_dir, exist_ok=True)
-    os.makedirs(mol_xyz_dir, exist_ok=True)
-    if config.write_vasp_inputs:
-        os.makedirs(vasp_dir, exist_ok=True)
+    xyz_dir = molecule_all_xyz_dir(results_dir, molecule_name)
+    mol_xyz_dir = molecule_adsorbate_only_dir(results_dir, molecule_name)
+    vasp_dir = molecule_all_vasp_dir(results_dir, molecule_name)
 
     for entry in results:
         _write_placement_artifacts(
@@ -283,6 +283,8 @@ def save_single_molecule_results(
     write_csv
         Whether to write the detailed and summary CSV files.
     """
+    if config is None:
+        config = AdsorptionConfig()
     if not results:
         logger.warning("No results to save for %s", molecule_name)
         return
@@ -297,13 +299,12 @@ def save_single_molecule_results(
         return
     run_result = screening_run_result(molecule_name, results)
     save_summary_results([run_result], surface_type=surface_type, config=config)
-    if config is not None:
-        write_run_settings(
-            surface_type,
-            config,
-            molecule=molecule_name,
-            n_configurations=len(results),
-        )
+    write_run_settings(
+        surface_type,
+        config,
+        molecule=molecule_name,
+        n_configurations=len(results),
+    )
 
 
 def _merge_preserving_existing_molecules(
@@ -415,14 +416,15 @@ def save_summary_results(
 
 def _saturation_results_dirs(
     surface_type: str, *, write_vasp: bool
-) -> tuple[str, str, str | None]:
-    """Return ``(results_dir, xyz_dir, vasp_base_or_None)``, creating dirs."""
-    results_dir = f"results_{surface_type}"
+) -> tuple[str, str | None]:
+    """Return ``(results_dir, vasp_base_or_None)``, creating results_dir."""
+    results_dir = results_dir_for(surface_type)
     os.makedirs(results_dir, exist_ok=True)
-    xyz_dir = f"{results_dir}/xyz_structures"
-    os.makedirs(xyz_dir, exist_ok=True)
-    vasp_base = f"{results_dir}/vasp_inputs" if write_vasp else None
-    return results_dir, xyz_dir, vasp_base
+    vasp_base = results_dir / "vasp_inputs" if write_vasp else None
+    return (
+        results_dir.as_posix(),
+        vasp_base.as_posix() if vasp_base is not None else None,
+    )
 
 
 def _write_saturation_csv_bundle(
@@ -442,7 +444,9 @@ def _write_saturation_csv_bundle(
 
     def _write(path_str: str, rows: list[dict[str, Any]]) -> None:
         path = Path(path_str)
-        merged = _merge_preserving_existing_molecules(path, pd.DataFrame(rows))
+        new_df = pd.DataFrame(rows)
+        key_col = "molecules" if "molecules" in new_df.columns else "molecule"
+        merged = _merge_preserving_existing_molecules(path, new_df, key_col=key_col)
         merged.to_csv(path, index=False)
 
     if detail_rows:
@@ -477,16 +481,12 @@ def _write_saturation_placement_tree(
     *,
     step_xyz: Path,
     step_vasp: Path | None,
-    fallback_vasp: str | None,
     molecule_name: str,
     config: AdsorptionConfig,
 ) -> None:
     if not results:
         return
-    os.makedirs(step_xyz, exist_ok=True)
-    if step_vasp is not None:
-        os.makedirs(step_vasp, exist_ok=True)
-    vasp_parent = step_vasp or fallback_vasp or ""
+    vasp_parent = str(step_vasp) if step_vasp is not None else ""
     for entry in results:
         _write_placement_artifacts(
             entry,
@@ -500,18 +500,10 @@ def _write_saturation_placement_tree(
         )
 
 
-def _write_final_saturated_slab(atoms: Atoms | None, mol_dir: str) -> None:
-    if atoms is None:
-        return
+def _write_final_saturated_slab(atoms: Atoms, mol_dir: str) -> None:
     final = atoms.copy()
     final.calc = None
     _write_clean_xyz(final, f"{mol_dir}/final_saturated_slab.xyz")
-
-
-def _ensure_saturation_mol_dirs(mol_dir: str, vasp_mol_dir: str | None) -> None:
-    os.makedirs(mol_dir, exist_ok=True)
-    if vasp_mol_dir is not None:
-        os.makedirs(vasp_mol_dir, exist_ok=True)
 
 
 def _write_saturation_run_structures(
@@ -524,7 +516,6 @@ def _write_saturation_run_structures(
     molecule_name_for_step,
 ) -> None:
     """Write per-step best slabs and optional placement trees for a saturation run."""
-    _ensure_saturation_mol_dirs(mol_dir, vasp_mol_dir)
     for step_result in steps:
         step = step_result.step
         _write_saturation_step_bundle(
@@ -548,7 +539,6 @@ def _write_saturation_run_structures(
                         if vasp_mol_dir is not None
                         else None
                     ),
-                    fallback_vasp=vasp_mol_dir,
                     molecule_name=pmol,
                     config=config,
                 )
@@ -557,7 +547,6 @@ def _write_saturation_run_structures(
                 step_result.all_results,
                 step_xyz=Path(mol_dir) / rel,
                 step_vasp=(Path(vasp_mol_dir) / rel if vasp_mol_dir else None),
-                fallback_vasp=vasp_mol_dir,
                 molecule_name=step_result.molecule,
                 config=config,
             )
@@ -568,7 +557,6 @@ def _persist_saturation_outputs(
     surface_type: str,
     config: AdsorptionConfig,
     results_dir: str,
-    xyz_dir: str,
     vasp_base: str | None,
     detail_rows: list[dict[str, Any]],
     placement_rows: list[dict[str, Any]],
@@ -598,9 +586,11 @@ def _persist_saturation_outputs(
         save_all=save_all,
     )
     for dir_label, steps, final_slab_atoms, molecule_name_for_step in structure_runs:
-        mol_dir = f"{xyz_dir}/{dir_label}_saturation"
+        mol_dir = saturation_xyz_dir(results_dir, dir_label).as_posix()
         vasp_mol_dir = (
-            f"{vasp_base}/{dir_label}_saturation" if vasp_base is not None else None
+            saturation_vasp_dir(results_dir, dir_label).as_posix()
+            if vasp_base is not None
+            else None
         )
         _write_saturation_run_structures(
             mol_dir=mol_dir,
@@ -610,7 +600,8 @@ def _persist_saturation_outputs(
             save_all=save_all,
             molecule_name_for_step=molecule_name_for_step,
         )
-        _write_final_saturated_slab(final_slab_atoms, mol_dir)
+        if final_slab_atoms is not None:
+            _write_final_saturated_slab(final_slab_atoms, mol_dir)
     write_run_settings(surface_type, config, **run_settings_kwargs)
     logger.info(log_message, results_dir)
 
@@ -683,12 +674,6 @@ def save_saturation_results(
         return
 
     if isinstance(saturation_results[0], MultiMolSaturationRunResult):
-        if len(saturation_results) > 1:
-            logger.warning(
-                "Save_saturation_results received %d multi-molecule results; "
-                "only the first will be saved",
-                len(saturation_results),
-            )
         save_multi_mol_saturation_results(
             saturation_results[0],
             surface_type=surface_type,
@@ -704,7 +689,7 @@ def save_saturation_results(
             len(single_results),
         )
     write_vasp = config.write_vasp_inputs
-    results_dir, xyz_dir, vasp_base = _saturation_results_dirs(
+    results_dir, vasp_base = _saturation_results_dirs(
         surface_type, write_vasp=write_vasp
     )
     include_provenance = bool(config.export_placement_provenance)
@@ -733,10 +718,9 @@ def save_saturation_results(
             "n_molecules_at_saturation": sr.n_molecules_at_saturation,
             "n_steps": len(sr.steps),
             "final_slab_path": (
-                f"{xyz_dir}/{sr.molecule}_saturation/final_saturated_slab.xyz"
-                if sr.final_slab_atoms is not None
-                else ""
-            ),
+                saturation_xyz_dir(results_dir, sr.molecule)
+                / "final_saturated_slab.xyz"
+            ).as_posix(),
         }
         for sr in single_results
     ]
@@ -744,7 +728,6 @@ def save_saturation_results(
         surface_type=surface_type,
         config=config,
         results_dir=results_dir,
-        xyz_dir=xyz_dir,
         vasp_base=vasp_base,
         detail_rows=detail_rows,
         placement_rows=placement_rows,
@@ -797,11 +780,11 @@ def save_multi_mol_saturation_results(
         config = AdsorptionConfig()
 
     write_vasp = config.write_vasp_inputs
-    results_dir, xyz_dir, vasp_base = _saturation_results_dirs(
+    results_dir, vasp_base = _saturation_results_dirs(
         surface_type, write_vasp=write_vasp
     )
     mol_label = _saturation_molecule_label(result.molecules)
-    mol_dir = f"{xyz_dir}/{mol_label}_saturation"
+    mol_dir = saturation_xyz_dir(results_dir, mol_label).as_posix()
 
     include_provenance = bool(config.export_placement_provenance)
     context_row = config_to_context_row(config, include_provenance=include_provenance)
@@ -820,7 +803,6 @@ def save_multi_mol_saturation_results(
         surface_type=surface_type,
         config=config,
         results_dir=results_dir,
-        xyz_dir=xyz_dir,
         vasp_base=vasp_base,
         detail_rows=detail_rows,
         placement_rows=placement_rows,
@@ -830,11 +812,7 @@ def save_multi_mol_saturation_results(
                 "n_molecules_at_saturation": result.n_molecules_at_saturation,
                 "n_steps": len(result.steps),
                 "molecule_counts": str(result.molecule_counts),
-                "final_slab_path": (
-                    f"{mol_dir}/final_saturated_slab.xyz"
-                    if result.final_slab_atoms is not None
-                    else ""
-                ),
+                "final_slab_path": f"{mol_dir}/final_saturated_slab.xyz",
             }
         ],
         structure_runs=[
@@ -960,10 +938,9 @@ def _write_vasp_inputs(
     vasp_dir: str,
     molecule_name: str,
     system_name: str | None = None,
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
 ) -> None:
-    if config is None:
-        config = AdsorptionConfig()
     os.makedirs(vasp_dir, exist_ok=True)
     atoms.write(f"{vasp_dir}/POSCAR", format="vasp", vasp5=True, direct=True)
 

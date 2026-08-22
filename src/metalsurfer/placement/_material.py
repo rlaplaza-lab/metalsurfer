@@ -17,6 +17,12 @@ MATERIAL_PBC: dict[str, tuple[bool, bool, bool]] = {
 }
 
 
+def validate_material_type(material_type: str) -> str:
+    """Validate and return a supported material type string."""
+    material_aware_pbc(material_type)
+    return material_type
+
+
 def material_aware_pbc(material_type: str) -> list[bool]:
     """Return PBC flags for distance calculations given explicit *material_type*.
 
@@ -33,7 +39,7 @@ def material_aware_pbc(material_type: str) -> list[bool]:
         return list(MATERIAL_PBC[material_type])
     except KeyError as exc:
         raise ValueError(
-            f"material_type must be 'slab', 'nanoparticle', or 'porous', "
+            f"material_type must be one of {sorted(MATERIAL_PBC)}, "
             f"got {material_type!r}"
         ) from exc
 

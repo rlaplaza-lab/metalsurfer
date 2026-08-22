@@ -4,10 +4,12 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 import numpy as np
-from scipy.spatial import Delaunay, KDTree
+from scipy.spatial import KDTree
 
 from .._utils import cell_has_volume
 from ._constants import (
+    _DELAUNAY_BRIDGE_THRESHOLD_FRACTION,
+    _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM,
     _NORMAL_K_NEIGHBOURS,
     _SITE_CLASSIFICATION_NEIGHBOURS,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
@@ -20,7 +22,6 @@ from .site_coords import (
 from .site_types import Site
 from .site_voronoi import (
     _classify_voronoi_site_from_neighbors,
-    _delaunay_site_classification,
 )
 
 
@@ -33,7 +34,6 @@ class _DelaunayClassifyInputs(NamedTuple):
     pass is needed.
     """
 
-    tri: Delaunay
     top_positions_2d: np.ndarray
     top_atom_indices: np.ndarray
     class_index: tuple[np.ndarray, list[str], list[tuple[int, ...]]]
@@ -156,7 +156,7 @@ def _build_classification_context(
     *,
     material_type: str,
     cell: np.ndarray,
-    pbc: np.ndarray | None,
+    pbc: np.ndarray,
     delaunay: _DelaunayClassifyInputs | None,
 ) -> _ClassificationContext:
     n_verts = len(vertices)
@@ -165,12 +165,7 @@ def _build_classification_context(
     k_class = min(_SITE_CLASSIFICATION_NEIGHBOURS, len(positions))
     k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
 
-    # Callers should pass material-aware PBC; default is non-periodic (safe).
-    pbc_arr = (
-        np.asarray(pbc, dtype=bool)
-        if pbc is not None
-        else np.array([False, False, False], dtype=bool)
-    )
+    pbc_arr = np.asarray(pbc, dtype=bool)
 
     normals = _site_normals_for_material(
         vertices,
@@ -230,32 +225,62 @@ def _build_classification_context(
     )
 
 
-def _classify_delaunay_vertex(
+def _classify_delaunay_vertices_batch(
     ctx: _ClassificationContext,
-    i: int,
-    vertex: np.ndarray,
+    vertices: np.ndarray,
     positions: np.ndarray,
     local_tree: KDTree,
-) -> tuple[str, tuple[int, ...]]:
+) -> list[tuple[str, tuple[int, ...]]]:
+    """Classify all vertices with one ``(M, 2)`` cand_tree query."""
     delaunay = ctx.delaunay
     if delaunay is None:
         raise ValueError("ctx.delaunay must be set for Delaunay classification")
+    n = len(vertices)
+    if n == 0:
+        return []
     cand_xy, cand_types, cand_indices = delaunay.class_index
+    cand_tree = ctx.cand_tree
+    if cand_tree is None or len(cand_xy) == 0:
+        fallback = tuple(int(i) for i in np.asarray(delaunay.top_atom_indices)[:3])
+        return [("hollow", fallback) for _ in range(n)]
 
-    return _delaunay_site_classification(
-        vertex,
-        delaunay.top_positions_2d,
-        delaunay.top_atom_indices,
-        delaunay.tri,
-        positions,
-        vertex_2d=ctx.vertex_2d[i],
-        char_len=ctx.char_len,
-        positions_tree=local_tree,
-        cand_xy=cand_xy,
-        cand_types=cand_types,
-        cand_indices=cand_indices,
-        cand_tree=ctx.cand_tree,
+    char_len = (
+        float(ctx.char_len)
+        if ctx.char_len is not None
+        else _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM
     )
+    bridge_cut = _DELAUNAY_BRIDGE_THRESHOLD_FRACTION * char_len
+
+    dists, idxs = cand_tree.query(np.asarray(ctx.vertex_2d, dtype=float), k=1)
+    dists = np.asarray(dists, dtype=float).ravel()
+    idxs = np.asarray(idxs, dtype=int).ravel()
+
+    site_types: list[str] = []
+    site_indices: list[tuple[int, ...]] = []
+    fallback_i: list[int] = []
+    for i in range(n):
+        nearest = int(idxs[i])
+        best_type = cand_types[nearest]
+        best_dist = float(dists[i])
+        best_indices = cand_indices[nearest]
+        site_types.append(best_type)
+        site_indices.append(best_indices)
+        if best_type == "bridge" and best_dist > bridge_cut:
+            fallback_i.append(i)
+
+    if fallback_i:
+        k3 = min(3, len(positions))
+        fb_verts = np.asarray(vertices[fallback_i], dtype=float)
+        _, idx3 = local_tree.query(fb_verts, k=k3)
+        idx3 = np.asarray(idx3, dtype=int)
+        # k=1 yields a 1-D index vector; reshape to (n_fb, k).
+        if idx3.ndim == 1:
+            idx3 = idx3.reshape(-1, 1)
+        for row, vi in enumerate(fallback_i):
+            site_types[vi] = "hollow"
+            site_indices[vi] = tuple(int(j) for j in idx3[row, :3])
+
+    return list(zip(site_types, site_indices, strict=True))
 
 
 def _classify_vertices(
@@ -269,23 +294,26 @@ def _classify_vertices(
     pore_threshold: float,
     source_hints: list[str] | None,
 ) -> list[Site]:
-    sites: list[Site] = []
-    for i, vertex in enumerate(vertices):
-        if ctx.delaunay is not None:
-            site_type, nearest_idx = _classify_delaunay_vertex(
-                ctx, i, vertex, positions, local_tree
+    if ctx.delaunay is not None:
+        classifications = _classify_delaunay_vertices_batch(
+            ctx, vertices, positions, local_tree
+        )
+    else:
+        if ctx.class_dists is None or ctx.class_idx is None:
+            raise ValueError(
+                "ctx.class_dists and ctx.class_idx must be set for Voronoi classification"
             )
-        else:
-            if ctx.class_dists is None or ctx.class_idx is None:
-                raise ValueError(
-                    "ctx.class_dists and ctx.class_idx must be set for Voronoi classification"
-                )
-            site_type, nearest_idx = _classify_voronoi_site_from_neighbors(
+        classifications = [
+            _classify_voronoi_site_from_neighbors(
                 ctx.class_dists[i],
                 ctx.class_idx[i],
                 pore_threshold=pore_threshold,
             )
+            for i in range(len(vertices))
+        ]
 
+    sites: list[Site] = []
+    for i, (site_type, nearest_idx) in enumerate(classifications):
         env_fingerprint = (
             tuple(sorted(symbols[j] for j in nearest_idx if j < len(symbols))),
             site_type,
@@ -296,7 +324,7 @@ def _classify_vertices(
         normal = ctx.normals[i]
         sites.append(
             Site(
-                xyz=vertex.copy(),
+                xyz=vertices[i].copy(),
                 normal=normal,
                 site_type=site_type,
                 slab_indices=tuple(int(j) for j in nearest_idx),
@@ -307,7 +335,7 @@ def _classify_vertices(
                     else "voronoi"
                 ),
                 env_fingerprint=env_fingerprint,
-                nn_distance=float(nn_dists[i]) if i < len(nn_dists) else None,
+                nn_distance=float(nn_dists[i]),
                 hollow_order=hollow_order,
             )
         )

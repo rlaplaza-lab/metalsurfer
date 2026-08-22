@@ -414,7 +414,6 @@ def estimate_placement_spec_capacity(
     return policy.max_batch_placement_specs(
         n_conformers=len(conformers),
         site_indices=info.site_indices,
-        shape=info.shape,
         n_binders=info.n_binders,
         flat_aromatic=info.flat_aromatic,
         dissociative=info.is_dissociative,
@@ -632,7 +631,7 @@ def generate_placement_from_spec_with_reason(
         pose_cache=pose_cache,
     )
     if placement_ctx is None:
-        return None, pose_fail or "no_sites_found"
+        return None, pose_fail
 
     result, fail_reason = _finalize_placement(
         placement_ctx,
@@ -645,7 +644,7 @@ def generate_placement_from_spec_with_reason(
     )
     if result is not None:
         return result, None
-    return None, fail_reason or "distance_check_failed"
+    return None, fail_reason
 
 
 __all__ = [

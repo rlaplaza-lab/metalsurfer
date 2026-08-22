@@ -46,14 +46,14 @@ def _reload_with_missing(module, missing: dict[str, object]):
 
 class TestMissingRDKit:
     def test_conformer_generation_raises_clear_error(self):
-        """create_conformers_from_smiles must raise RuntimeError with install hint."""
+        """create_conformers_from_smiles must raise DependencyMissingError with install hint."""
         import metalsurfer.conformers as mod
 
         with (
             _reload_with_missing(
                 mod, {"rdkit": None, "rdkit.Chem": None, "rdkit.Chem.AllChem": None}
             ),
-            pytest.raises(RuntimeError, match="RDKit is required"),
+            pytest.raises(DependencyMissingError, match="rdkit"),
         ):
             mod.create_conformers_from_smiles(
                 "O", config=AdsorptionConfig(num_conformers=1)
@@ -81,7 +81,7 @@ class TestMissingRDKit:
                     atoms,
                     reference_smiles="O",
                     surface_symbols=None,
-                    connectivity_multipliers=[1.3],
+                    connectivity_multiplier=1.3,
                 )
 
     def test_is_flat_aromatic_with_en_raises_when_rdkit_missing(self):
@@ -102,7 +102,7 @@ class TestMissingRDKit:
 
 @pytest.mark.skipif(
     has_torch,
-    reason="torch installed; optimization does top-level import, patching unreliable",
+    reason="torch installed (covered in CI job without torch); patching unreliable when present",
 )
 class TestMissingTorchSim:
     def test_optimize_isolated_raises_clear_error(self):
@@ -121,7 +121,11 @@ class TestMissingTorchSim:
 
             water = Atoms("OH2", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
             with pytest.raises(DependencyMissingError, match="torch-sim"):
-                omod.optimize_isolated_molecules_batched([water], ts_model=MagicMock())
+                omod.optimize_isolated_molecules_batched(
+                    [water],
+                    ts_model=MagicMock(),
+                    config=AdsorptionConfig(),
+                )
 
     def test_optimize_slab_raises_clear_error(self):
         """optimize_adsorbate_slab_batched must raise DependencyMissingError."""
@@ -215,7 +219,7 @@ class TestCreateSlabFromBulkImportErrors:
 
 @pytest.mark.skipif(
     has_torch,
-    reason="torch installed; optimization does top-level import, patching unreliable",
+    reason="torch installed (covered in CI job without torch); patching unreliable when present",
 )
 class TestMissingFAIRChem:
     def test_setup_single_model_raises(self):

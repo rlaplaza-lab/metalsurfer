@@ -4,7 +4,7 @@ __version__ = "0.4.0"
 
 import importlib
 
-from ._logging import ensure_log_record_defaults
+from . import _logging  # noqa: F401
 from .config import AdsorptionConfig, BOConfig, BOTransferConfig
 from .exceptions import (
     DependencyMissingError,
@@ -84,15 +84,13 @@ _LAZY_MODULES = {
         "load_campaign_yaml",
         "CampaignDocument",
     },
-    "io_results": {
+    "result_paths": {
         "results_dir_for",
     },
     "_numeric_defaults": {
         "MIN_CALCULATOR_CELL_C_ANG",
     },
 }
-
-ensure_log_record_defaults()
 
 
 def __getattr__(name: str):

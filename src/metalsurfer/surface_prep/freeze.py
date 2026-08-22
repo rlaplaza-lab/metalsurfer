@@ -12,7 +12,8 @@ import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
 
-from ..placement._constants import _TOP_LAYER_DEPTH_MIN_ANGSTROM
+from .._numeric_defaults import DEFAULT_TOP_LAYER_TOLERANCE
+from ..placement._material import validate_material_type
 from ..placement.site_coords import (
     derive_pore_threshold,
     top_layer_mask_by_normal,
@@ -68,7 +69,7 @@ def identify_relaxable_surface_indices(
     slab: Atoms,
     *,
     material_type: str = "slab",
-    tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
+    tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
     pore_threshold: float | None = None,
 ) -> list[int]:
     """Return substrate atom indices left free when ``relax_top_layer=True``.
@@ -92,11 +93,7 @@ def identify_relaxable_surface_indices(
     pore_threshold
         Pore threshold for porous materials.
     """
-    if material_type not in ("slab", "nanoparticle", "porous"):
-        raise ValueError(
-            "material_type must be 'slab', 'nanoparticle', or 'porous', "
-            f"got {material_type!r}"
-        )
+    validate_material_type(material_type)
 
     positions = slab.get_positions()
     n_atoms = len(positions)
@@ -148,7 +145,7 @@ def compute_frozen_indices(
     *,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
-    top_layer_tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
+    top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
     material_type: str = "slab",
     pore_threshold: float | None = None,
 ) -> list[int]:
@@ -210,11 +207,7 @@ def frozen_indices_from_constraints(atoms: Atoms) -> list[int]:
     indices: list[int] = []
     for constraint in atoms.constraints:
         if isinstance(constraint, FixAtoms):
-            idx = constraint.index
-            if isinstance(idx, (int, np.integer)):
-                indices.append(int(idx))
-            else:
-                indices.extend(int(i) for i in idx)
+            indices.extend(int(i) for i in np.atleast_1d(constraint.index))
     return sorted(set(indices))
 
 

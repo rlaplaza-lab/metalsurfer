@@ -11,10 +11,7 @@ from metalsurfer.placement.generators import (
     enumerate_placement_specs,
     generate_placement_from_spec,
 )
-from metalsurfer.placement.site_context import (
-    SiteContext,
-    clear_site_caches,
-)
+from metalsurfer.placement.site_context import SiteContext
 from metalsurfer.surface_prep import SlabContainer, deposit_adatoms
 
 from ..conftest import (
@@ -30,7 +27,6 @@ def test_enumerate_specs_empty_sites_returns_empty():
         estimate_placement_spec_capacity,
     )
 
-    clear_site_caches()
     slab = make_slab()
     config = AdsorptionConfig(material_type="slab", seed=0, num_placements=40)
     ctx = SiteContext(
@@ -58,7 +54,6 @@ def test_enumerate_specs_skips_occupied_site_indices():
     from metalsurfer.placement.generators import enumerate_placement_specs
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
-    clear_site_caches()
     slab = make_slab()
     config = AdsorptionConfig(material_type="slab", seed=0, num_placements=40)
     ctx = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
@@ -158,7 +153,6 @@ def test_deposit_adatoms_then_generate_placement_from_spec():
         pytest.skip("RDKit required")
     conformers, _ = result
 
-    clear_site_caches()
     specs = enumerate_placement_specs(
         conformers,
         decorated.atoms,
@@ -186,7 +180,6 @@ def test_boltzmann_weighting_is_deterministic_and_proportional():
 
     from metalsurfer.placement.generators import enumerate_placement_specs
 
-    clear_site_caches()
     slab = make_slab()
     n_conformers = 4
     conformers = [make_water() for _ in range(n_conformers)]

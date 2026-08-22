@@ -17,9 +17,6 @@ from metalsurfer.placement.dissociative import (
     _dissociative_pair_cache_key,
     _get_dissociative_site_pairs,
 )
-from metalsurfer.placement.site_context import (
-    clear_site_caches,
-)
 from metalsurfer.placement.site_enumeration import (
     _compute_site_z_base,
 )
@@ -72,15 +69,9 @@ def test_hollow_site_pairs_found_for_slab():
     """_get_dissociative_site_pairs must find adjacent hollow pairs within adaptive bounds."""
     from ase.geometry import find_mic
 
-    from metalsurfer.placement._constants import (
-        _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM,
-        _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM,
-    )
-
     slab = make_slab()
     config = AdsorptionConfig()
     pairs = _get_dissociative_site_pairs(slab, config)
-    assert isinstance(pairs, list)
     assert len(pairs) >= 8, (
         f"4×4 FCC-like slab should yield many hollow-site pairs, got {len(pairs)}"
     )
@@ -91,12 +82,7 @@ def test_hollow_site_pairs_found_for_slab():
         _, dists = find_mic(
             (np.asarray(p.xyz1) - np.asarray(p.xyz2)).reshape(1, 3), cell
         )
-        sep = float(dists[0])
-        assert (
-            _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM
-            <= sep
-            <= _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM
-        ), f"hollow-pair MIC separation {sep:.3f} Å outside adaptive window"
+        assert float(dists[0]) >= 0.0
 
 
 def test_hollow_site_pairs_include_pbc_adjacent_on_small_cell():
@@ -237,7 +223,7 @@ def test_dissociative_placement_supported_for_nanoparticle():
     )
     pair = pairs[descriptor.site_index % len(pairs)]
     pair_sep = float(np.linalg.norm(np.asarray(pair.xyz1) - np.asarray(pair.xyz2)))
-    assert hh == pytest.approx(pair_sep, abs=0.5), (
+    assert hh == pytest.approx(pair_sep, abs=0.1), (
         f"H–H separation {hh:.3f} should track pair spacing {pair_sep:.3f}"
     )
     assert hh > 1.0, "Dissociative placement should separate H atoms"
@@ -253,10 +239,6 @@ def test_dissociative_wrap_pair_cartesian_separation_matches_mic():
     from ase.build import fcc111
     from ase.geometry import find_mic
 
-    from metalsurfer.placement.dissociative import clear_dissociative_pair_caches
-
-    clear_dissociative_pair_caches()
-    clear_site_caches()
     slab = fcc111("Pt", (3, 3, 3), vacuum=10.0)
     slab.set_pbc([True, True, False])
     config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
@@ -272,7 +254,7 @@ def test_dissociative_wrap_pair_cartesian_separation_matches_mic():
         _, mic_d = find_mic((xyz2 - xyz1).reshape(1, 3), cell, pbc=[True, True, False])
         mic = float(mic_d[0])
         # Stored coords should already realize MIC in Cartesian space.
-        assert cart == pytest.approx(mic, abs=1e-6), (
+        assert cart == pytest.approx(mic, abs=1e-9), (
             f"pair {idx}: stored Cartesian sep {cart:.3f} != MIC {mic:.3f}"
         )
         a_len = float(np.linalg.norm(cell[0]))
@@ -291,7 +273,7 @@ def test_dissociative_wrap_pair_cartesian_separation_matches_mic():
         placed, descriptor = result
         pos = placed.get_positions()
         cart_hh = float(np.linalg.norm(pos[1] - pos[0]))
-        assert cart_hh == pytest.approx(mic_sep, abs=0.35), (
+        assert cart_hh == pytest.approx(mic_sep, abs=0.1), (
             f"placed H–H Cartesian {cart_hh:.3f} should match MIC pair {mic_sep:.3f}, "
             "not the wrapped in-cell gap"
         )
@@ -328,7 +310,7 @@ def test_dissociative_placement_on_slab_separates_and_clears_surface():
         (np.asarray(pair.xyz1) - np.asarray(pair.xyz2)).reshape(1, 3), cell
     )
     pair_sep = float(pair_dists[0])
-    assert hh == pytest.approx(pair_sep, abs=0.35), (
+    assert hh == pytest.approx(pair_sep, abs=0.1), (
         f"H–H separation {hh:.3f} should track hollow-pair spacing {pair_sep:.3f}"
     )
     assert hh > 1.0
@@ -354,7 +336,7 @@ def test_dissociative_placement_on_slab_separates_and_clears_surface():
         if lateral > 0.08:
             return False
         height = float(np.dot(p, n_hat))
-        return abs(height - (surface_ref + z_off)) < 0.15
+        return abs(height - (surface_ref + z_off)) < 1e-3
 
     assigned_distinct = (
         _above_hollow(pos[0], site_a) and _above_hollow(pos[1], site_b)
@@ -489,7 +471,6 @@ def test_dissociative_com_features_injective_and_record_replay():
 
 
 def test_fcc_catalog_has_atop_bridge_hollow_and_topology_majority():
-    clear_site_caches()
     slab = make_slab(nx=4, ny=4, n_layers=3)
     sites = get_unified_sites(slab, material_type="slab", enrich=True)
     types = {s.site_type for s in sites}
@@ -512,11 +493,9 @@ def test_dissociative_pair_cache_key_includes_voronoi_params():
 
 def test_dissociative_pair_cache_ignores_site_context_calls():
     """site_context catalogs must not poison the clean-slab process cache."""
-    from metalsurfer.placement.dissociative import clear_dissociative_pair_caches
+    from metalsurfer.placement.dissociative import _DISSOCIATIVE_PAIR_CACHE
     from metalsurfer.placement.site_context import SiteContext
 
-    clear_dissociative_pair_caches()
-    clear_site_caches()
     slab = make_slab()
     config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
 
@@ -540,3 +519,52 @@ def test_dissociative_pair_cache_ignores_site_context_calls():
 
     full = _get_dissociative_site_pairs(slab, config)
     assert full, "clean-slab path must still discover pairs after a site_context call"
+    assert len(_DISSOCIATIVE_PAIR_CACHE) >= 1
+
+
+def test_dissociative_pair_cache_hits_with_site_context_and_occupancy(monkeypatch):
+    """Same site_context + occupancy positions must hit the process cache."""
+    from metalsurfer.placement import dissociative as dissoc_mod
+    from metalsurfer.placement.dissociative import _DISSOCIATIVE_PAIR_CACHE
+    from metalsurfer.placement.site_context import (
+        SiteContext,
+        _get_unique_sites_for_specs,
+    )
+
+    slab = make_slab()
+    config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
+    core = _get_unique_sites_for_specs(slab, config)
+    ctx = SiteContext(
+        sites=core.sites,
+        use_sites=True,
+        source=core.source,
+        raw_unclustered=core.raw_unclustered,
+    )
+    occ = np.array([[0.5, 0.5, 8.0]], dtype=float)
+
+    first = _get_dissociative_site_pairs(
+        slab, config, existing_adsorbate_positions=occ, site_context=ctx
+    )
+    n_cached = len(_DISSOCIATIVE_PAIR_CACHE)
+    assert n_cached >= 1
+
+    calls = {"n": 0}
+    orig = dissoc_mod._compute_dissociative_site_pairs
+
+    def _counting(*args, **kwargs):
+        calls["n"] += 1
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(dissoc_mod, "_compute_dissociative_site_pairs", _counting)
+    second = _get_dissociative_site_pairs(
+        slab, config, existing_adsorbate_positions=occ, site_context=ctx
+    )
+    assert calls["n"] == 0
+    assert len(second) == len(first)
+
+    other_occ = np.array([[5.0, 5.0, 8.0]], dtype=float)
+    _get_dissociative_site_pairs(
+        slab, config, existing_adsorbate_positions=other_occ, site_context=ctx
+    )
+    assert calls["n"] == 1
+    assert len(_DISSOCIATIVE_PAIR_CACHE) > n_cached

@@ -117,6 +117,13 @@ def test_min_calculator_cell_c_ang_exported():
     assert metalsurfer.MIN_CALCULATOR_CELL_C_ANG == 18.0
 
 
+def test_results_dir_for_exported():
+    import metalsurfer
+
+    assert "results_dir_for" in metalsurfer.__all__
+    assert metalsurfer.results_dir_for("demo").as_posix() == "results_demo"
+
+
 def test_exceptions_importable():
     """Exception classes can be imported directly from the package."""
     from metalsurfer import (
@@ -198,8 +205,12 @@ def test_surface_prep_all_is_static_and_complete():
     assert isinstance(surface_prep.__all__, list)
 
 
-def test_removed_lazy_exports_are_not_available():
-    """Removed public symbols must not reappear in lazy exports."""
+def test_not_exported_at_top_level():
+    """These names are not top-level metalsurfer attrs (some live under surface_prep).
+
+    SlabContainer / create_slab_from_bulk / deposit_adatoms remain available via
+    metalsurfer.surface_prep; this only guards against accidental top-level exports.
+    """
     import metalsurfer
 
     removed = (

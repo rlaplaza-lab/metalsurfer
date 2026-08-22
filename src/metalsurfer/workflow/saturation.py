@@ -32,6 +32,8 @@ from ..placement.generators import (
     distribute_placement_budget,
     estimate_molecule_complexity,
 )
+from ..reporting import FailureSummary
+from ..result_paths import results_dir_for
 from ..surface_prep import SlabContainer, apply_material_pbc
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian
@@ -186,12 +188,12 @@ def _saturation_adsorbate_topology_ok(
     adsorbate-material interactions that do not change adsorbate connectivity.
     """
     if config.skip_topology_check:
-        return True, "topology checks disabled"
+        return True, ""
 
     components = adsorbate_connected_components(
         atoms,
         base_slab_len,
-        config.connectivity_multipliers,
+        config.connectivity_multiplier,
     )
     if len(components) != len(reference_unit_smiles):
         return (
@@ -200,7 +202,7 @@ def _saturation_adsorbate_topology_ok(
             f"found {len(components)} connected fragments",
         )
 
-    return True, "adsorbate connectivity intact"
+    return True, ""
 
 
 def _filter_saturation_topology_results(
@@ -212,8 +214,6 @@ def _filter_saturation_topology_results(
 ) -> list[ScreeningResult]:
     """Drop candidates with adsorbate rearrangement before best-slab selection."""
     if not config.saturation_discard_topology_rearrangements:
-        return results
-    if not results:
         return results
 
     kept: list[ScreeningResult] = []
@@ -261,7 +261,7 @@ def _saturation_step_preamble(
     ref: ReferenceEnergies,
     config: AdsorptionConfig,
     log_label: str,
-    reference_analyzer: SymmetryAnalyzer | None = None,
+    reference_analyzer: SymmetryAnalyzer,
 ) -> _SaturationStepPreamble:
     """Shared per-step setup before molecule screening."""
     if step > 1 and not config.saturation_autobatcher_reuse:
@@ -326,7 +326,7 @@ def _screen_saturation_molecule(
     surface_type: str,
     base_slab: Atoms,
     E_slab: float,
-    failure_summary_out: dict[str, dict[str, object]] | None,
+    failure_summary_out: dict[str, FailureSummary] | None,
     symmetry_broken: bool,
     process_fn: Callable[..., MoleculeScreenOutcome],
     bo_state: _BoMemoryState | None,
@@ -352,15 +352,17 @@ def _screen_saturation_molecule(
         "skip_workload_autotune": skip_workload_autotune,
     }
     if process_fn is process_molecule_bayesian:
-        if bo_state is None:
-            raise ValueError("bo_state must be provided for Bayesian processing")
         outcome = process_fn(
             smiles,
             molecule_name,
             current_slab,
             calculator,
             ref_step,
-            bo_step_memory_in=_bo_transfer_memory_in(config, bo_state),
+            bo_step_memory_in=(
+                _bo_transfer_memory_in(config, bo_state)
+                if bo_state is not None
+                else None
+            ),
             occupancy_placement_X=occupancy_placement_X,
             saturation_reuse=True,
             **common_kwargs,
@@ -381,10 +383,10 @@ def _screen_saturation_molecule(
         new_memory = None
 
     if failure_summary_out is not None and outcome.failure_summary:
-        failure_summary_out[molecule_name] = dict(outcome.failure_summary)
+        failure_summary_out[molecule_name] = outcome.failure_summary
 
     filtered = _filter_saturation_topology_results(
-        list(outcome.results) if outcome.results else [],
+        list(outcome.results),
         base_slab_len=len(base_slab),
         reference_unit_smiles=reference_unit_smiles,
         config=config,
@@ -431,10 +433,10 @@ def _run_saturation_steps(
     log_step_start: Callable[[int, int], None],
     make_log_label: Callable[[int], str],
     screen_step: Callable[
-        [int, _SaturationStepPreamble, bool, SlabContainer],
+        [int, _SaturationStepPreamble, SlabContainer],
         _StepScreenOutcome | None,
     ],
-    record_step: Callable[[int, int, _StepScreenOutcome], None],
+    record_step: Callable[[int, _StepScreenOutcome], None],
 ) -> Atoms:
     """Shared coverage loop; single/multi differ only via screen/record callbacks."""
     symmetry_broken = False
@@ -446,8 +448,7 @@ def _run_saturation_steps(
     step = 0
     while True:
         step += 1
-        n_on_slab = step - 1
-        log_step_start(step, n_on_slab)
+        log_step_start(step, step - 1)
 
         preamble = _saturation_step_preamble(
             step=step,
@@ -462,11 +463,11 @@ def _run_saturation_steps(
         )
         symmetry_broken = preamble.symmetry_broken
 
-        outcome = screen_step(step, preamble, symmetry_broken, current_slab)
+        outcome = screen_step(step, preamble, current_slab)
         if outcome is None:
             break
 
-        record_step(step, n_on_slab, outcome)
+        record_step(step, outcome)
 
         # Only fold a bound step into the coverage slab. An unbound final step is
         # recorded for the record but not incorporated (matches
@@ -496,7 +497,7 @@ def _run_single_molecule_saturation(
     ref: ReferenceEnergies,
     config: AdsorptionConfig,
     surface_type: str,
-    failure_summary_out: dict[str, dict[str, object]] | None,
+    failure_summary_out: dict[str, FailureSummary] | None,
     ds_logger: DatasetLogger,
     process_fn: Callable[..., MoleculeScreenOutcome],
 ) -> SaturationRunResult | None:
@@ -522,7 +523,6 @@ def _run_single_molecule_saturation(
     def screen_step(
         step: int,
         preamble: _SaturationStepPreamble,
-        symmetry_broken: bool,
         slab: SlabContainer,
     ) -> _StepScreenOutcome | None:
         """Screen placements for one saturation step.
@@ -533,12 +533,11 @@ def _run_single_molecule_saturation(
             Current step number (1-based).
         preamble
             Precomputed slab energy and symmetry state.
-        symmetry_broken
-            Whether symmetry is already broken.
         slab
             Current slab container.
         """
         nonlocal config
+        symmetry_broken = preamble.symmetry_broken
         if needs_workload_autotune(config, bo=bo_enabled):
             if cached_conformers is None:
                 raise ValueError(
@@ -599,18 +598,17 @@ def _run_single_molecule_saturation(
             payload=(mol_results, transfer_info),
         )
 
-    def record_step(step: int, n_on_slab: int, outcome: _StepScreenOutcome) -> None:
+    def record_step(step: int, outcome: _StepScreenOutcome) -> None:
         """Record the results of one saturation step.
 
         Parameters
         ----------
         step
             Current step number (1-based).
-        n_on_slab
-            Number of molecules already adsorbed before this step.
         outcome
             Screening outcome to record.
         """
+        n_on_slab = step - 1
         mol_results, transfer_info = outcome.payload
         steps.append(
             SaturationStepResult(
@@ -677,7 +675,7 @@ def _run_multi_molecule_saturation(
     ref: ReferenceEnergies,
     config: AdsorptionConfig,
     surface_type: str,
-    failure_summary_out: dict[str, dict[str, object]] | None,
+    failure_summary_out: dict[str, FailureSummary] | None,
     ds_logger: DatasetLogger,
     *,
     process_fn: Callable[..., MoleculeScreenOutcome],
@@ -733,7 +731,7 @@ def _run_multi_molecule_saturation(
 
     largest_mol = max(
         active_molecules,
-        key=lambda m: len(conformer_cache[m][0][0]) if conformer_cache[m][0] else 0,
+        key=lambda m: len(conformer_cache[m][0][0]),
     )
 
     current_slab = SlabContainer(base_slab.copy())
@@ -747,7 +745,6 @@ def _run_multi_molecule_saturation(
     def screen_step(
         step: int,
         preamble: _SaturationStepPreamble,
-        symmetry_broken: bool,
         slab: SlabContainer,
     ) -> _StepScreenOutcome | None:
         """Screen placements for one multi-molecule saturation step.
@@ -758,17 +755,11 @@ def _run_multi_molecule_saturation(
             Current step number (1-based).
         preamble
             Precomputed slab energy and symmetry state.
-        symmetry_broken
-            Whether symmetry is already broken.
         slab
             Current slab container.
         """
         nonlocal config
-        if bo_enabled:
-            _validate_distinct_bo_memories(
-                {m: s.prior_step_memory for m, s in bo_states.items()},
-                stage=f"step {step} input",
-            )
+        symmetry_broken = preamble.symmetry_broken
 
         E_slab = preamble.E_slab
         ref_step = preamble.ref_step
@@ -791,16 +782,12 @@ def _run_multi_molecule_saturation(
         else:
             step_config = config
 
-        if step_config.num_placements is None:
-            raise ValueError("config.num_placements must be set for saturation")
-
-        slab_for_sites_budget = slab_for_sites
         step_complexities: dict[str, float] = {}
         for mol in active_molecules:
             confs, _ = conformer_cache[mol]
             step_complexities[mol] = estimate_molecule_complexity(
                 confs,
-                slab_for_sites_budget,
+                slab_for_sites,
                 step_config,
                 active_smiles[mol],
                 full_slab=slab.atoms,
@@ -812,9 +799,12 @@ def _run_multi_molecule_saturation(
                 step,
             )
             return None
+        num_placements = step_config.num_placements
+        if num_placements is None:
+            raise ValueError("num_placements must be resolved before saturation steps")
         budgets = distribute_placement_budget(
             budget_inputs,
-            step_config.num_placements,
+            num_placements,
         )
         logger.info(
             "Step %d placement budgets: %s (complexities: %s)",
@@ -919,18 +909,17 @@ def _run_multi_molecule_saturation(
             ),
         )
 
-    def record_step(step: int, n_on_slab: int, outcome: _StepScreenOutcome) -> None:
+    def record_step(step: int, outcome: _StepScreenOutcome) -> None:
         """Record the results of one multi-molecule saturation step.
 
         Parameters
         ----------
         step
             Current step number (1-based).
-        n_on_slab
-            Number of molecules already adsorbed before this step.
         outcome
             Screening outcome to record.
         """
+        n_on_slab = step - 1
         (
             winning_molecule,
             per_molecule_results,
@@ -1001,7 +990,7 @@ def run_saturation_screening(
     config: AdsorptionConfig | None = None,
     surface_type: str = "manual",
     skip_existing: bool = True,
-    failure_summary_out: dict[str, dict[str, object]] | None = None,
+    failure_summary_out: dict[str, FailureSummary] | None = None,
     run_metadata_out: dict[str, Any] | None = None,
     *,
     bo_enabled: bool = False,
@@ -1044,7 +1033,9 @@ def run_saturation_screening(
         )
         if not molecule_pairs:
             if load_status == "all_skipped":
-                summary_csv = f"results_{surface_type}/saturation_summary.csv"
+                summary_csv = (
+                    results_dir_for(surface_type) / "saturation_summary.csv"
+                ).as_posix()
                 logger.warning(
                     "No molecules to process: all already listed in %s. "
                     "Set skip_existing=False or remove that CSV to rerun",
@@ -1052,8 +1043,6 @@ def run_saturation_screening(
                 )
             elif load_status == "empty_file":
                 logger.warning("No molecules to process: file empty or no valid rows")
-            else:
-                logger.warning("No molecules to process")
             return []
 
         bootstrap = _bootstrap_screening_run(slab, molecule_pairs, config)
@@ -1065,7 +1054,7 @@ def run_saturation_screening(
         smiles_list = [smiles for smiles, _ in molecule_pairs]
         molecule_names = [name for _, name in molecule_pairs]
         base_slab = slab.atoms.copy()
-        results_dir = f"results_{surface_type}"
+        results_dir = results_dir_for(surface_type).as_posix()
         ds_logger = DatasetLogger(results_dir, config=config, surface_id=surface_type)
         process_fn = process_molecule_bayesian if bo_enabled else process_molecule
 

@@ -65,7 +65,7 @@ def test_calculate_min_distance_mic_wraps_periodic_boundary():
     p2 = np.array([[9.5, 9.5, 5.0]])
     d = calculate_min_distance(p1, p2, cell=cell, use_pbc=True, pbc=[True, True, False])
     # Minimum image of (0.5,0.5)↔(9.5,9.5) in a 10×10 cell is √(1²+1²)=√2
-    assert d == pytest.approx(np.sqrt(2.0), abs=1e-6)
+    assert d == pytest.approx(np.sqrt(2.0), abs=1e-9)
 
 
 def test_calculate_min_distance_requires_explicit_pbc_for_periodic_cell():
@@ -167,8 +167,51 @@ def test_min_contact_ratio_default_is_covalent_binding_boundary():
         min_contact_ratio=MIN_CONTACT_RATIO_DEFAULT,
         material_type="slab",
     )
-    assert ok_pass, (min_pass, reason_pass)
-    assert min_pass >= covalent_sum * MIN_CONTACT_RATIO_DEFAULT
+    assert ok_pass
+    assert reason_pass is None
+    assert min_pass > covalent_sum * MIN_CONTACT_RATIO_DEFAULT
+
+
+def test_check_initial_placement_distance_gates_every_covalent_pair():
+    """A second pair can violate covalent floors while the global min clears min_distance."""
+    from ase.data import atomic_numbers, covalent_radii
+
+    # Pt slab atom + H (small) and Ge (large) adsorbate atoms.
+    slab = Atoms(
+        "Pt",
+        positions=[[0.0, 0.0, 0.0]],
+        cell=[10.0, 10.0, 20.0],
+        pbc=[True, True, False],
+    )
+    r_pt = float(covalent_radii[atomic_numbers["Pt"]])
+    r_h = float(covalent_radii[atomic_numbers["H"]])
+    r_ge = float(covalent_radii[atomic_numbers["Ge"]])
+    ratio = 0.8
+    min_distance = 1.5
+    # H–Pt at 1.52 Å: above flat min_distance, and above H covalent floor.
+    h_z = 1.52
+    assert h_z >= min_distance
+    assert h_z >= (r_h + r_pt) * ratio
+    # Ge–Pt at 1.70 Å: above flat min_distance but below Ge covalent floor.
+    ge_z = 1.70
+    assert ge_z >= min_distance
+    assert ge_z < (r_ge + r_pt) * ratio
+
+    mol = Atoms(
+        "HGe",
+        positions=[[0.0, 0.0, h_z], [0.0, 0.0, ge_z]],
+        cell=slab.get_cell(),
+        pbc=slab.get_pbc(),
+    )
+    ok, _, reason = check_initial_placement_distance(
+        mol,
+        slab,
+        min_distance=min_distance,
+        min_contact_ratio=ratio,
+        material_type="slab",
+    )
+    assert not ok
+    assert reason == "too_close"
 
 
 def test_vdw_overlap_detection_accepts_good_contact():
@@ -180,7 +223,7 @@ def test_vdw_overlap_detection_accepts_good_contact():
 
     overlaps, min_dist = detect_vdw_overlaps(water, slab, material_type="slab")
     assert len(overlaps) == 0, "Should not detect overlaps for well-separated water"
-    assert min_dist > 2.0
+    assert min_dist > 3.0
 
 
 def test_calculate_contact_quality_detects_good_contact():
@@ -195,7 +238,7 @@ def test_calculate_contact_quality_detects_good_contact():
     )
 
     assert metrics["num_contacting_atoms"] > 0, "Should have contacting atoms"
-    assert metrics["contact_distance"] < 3.0, "Should have reasonable contact distance"
+    assert metrics["contact_distance"] < 2.8
     assert metrics["contact_ratio"] > 0.0, "Should have contact ratio"
 
 
@@ -224,7 +267,7 @@ def test_adsorbate_separation_accepts_well_separated():
         pbc=material_aware_pbc("slab"),
     )
     assert ok, "Should accept well-separated adsorbates"
-    assert dist > 2.0
+    assert dist > 6.0
 
 
 def test_adsorbate_separation_rejects_close_atoms():
@@ -289,7 +332,7 @@ def test_min_distance_floor_rejects_close_o_cu():
     )
     assert not ok
     assert reason == "too_close"
-    assert dist == pytest.approx(height, abs=1e-6)
+    assert dist == pytest.approx(height, abs=1e-9)
 
 
 def test_check_adsorbate_separation_requires_cell_when_pbc_requested():
@@ -306,7 +349,7 @@ def test_calculate_min_distance_left_handed_cell_uses_abs_det():
     cell = np.array([[10.0, 0.0, 0.0], [0.0, -10.0, 0.0], [0.0, 0.0, 15.0]])
     assert float(np.linalg.det(cell)) < 0.0
     d = calculate_min_distance(p1, p2, cell=cell, use_pbc=True, pbc=[True, True, False])
-    assert d == pytest.approx(0.2, abs=1e-6)
+    assert d == pytest.approx(0.2, abs=1e-9)
 
 
 def test_strict_contact_gate_accepts_physical_heights_and_rejects_liftoff():

@@ -10,6 +10,7 @@ import yaml
 from ase import Atoms
 
 from .config import AdsorptionConfig, fold_bo_config
+from .result_paths import results_dir_for
 from .surface_prep import SlabContainer
 
 CampaignKind = Literal["adsorption", "adsorption_bo", "saturation", "saturation_bo"]
@@ -60,7 +61,7 @@ class CampaignDocument:
     @property
     def results_dir(self) -> str:
         """Campaign results directory name."""
-        return f"results_{self.surface_type}"
+        return results_dir_for(self.surface_type).as_posix()
 
 
 def _require_mapping(data: Any, *, context: str) -> dict[str, Any]:

@@ -28,7 +28,6 @@ from ._constants import (
     _INERTIA_EPS,
     _LINEAR_SHAPE_RATIO_MAX,
     _MIN_CONTACT_RATIO_DEFAULT,
-    _MIN_DISTANCE_COVALENT_FALLBACK_SCALE,
     _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM,
     _MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
     _PRINCIPAL_AXIS_LONG_ALIGN_MIN_DOT,
@@ -322,7 +321,7 @@ def _binding_atom_candidates(symbols: list[str]) -> list[int]:
 
 
 def _compute_inertia_tensor(
-    positions: np.ndarray, masses: np.ndarray | None = None
+    positions: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute inertia tensor and return (eigenvalues, eigenvectors).
 
@@ -335,14 +334,7 @@ def _compute_inertia_tensor(
     """
     pos = np.asarray(positions, dtype=float)
     n = len(pos)
-    if masses is None:
-        masses = np.ones(n)
-    else:
-        masses = np.asarray(masses, dtype=float)
-        if len(masses) != n:
-            raise ValueError(
-                f"masses length {len(masses)} does not match positions length {n}"
-            )
+    masses = np.ones(n)
     com = np.average(pos, axis=0, weights=masses)
     r = pos - com  # (n, 3)
     m = masses[:, None]  # (n, 1)
@@ -823,28 +815,24 @@ def check_initial_placement_distance(
     if dists.size == 0 or dists.shape[0] == 0 or dists.shape[1] == 0:
         return False, float("inf"), "empty_geometry"
 
-    flat_idx = int(np.argmin(dists.ravel()))
-    mol_idx, slab_idx = divmod(flat_idx, dists.shape[1])
-    actual_min = float(dists[mol_idx, slab_idx])
+    actual_min = float(np.min(dists))
 
-    r1 = _get_covalent_radius(mol_syms[mol_idx])
-    r2 = _get_covalent_radius(slab_syms[slab_idx])
-    if r1 is not None and r2 is not None:
-        min_allowed = max(float(min_distance), (r1 + r2) * float(min_contact_ratio))
-    else:
-        min_allowed = max(
-            float(min_distance),
-            _MIN_DISTANCE_COVALENT_FALLBACK_SCALE
-            * _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM,
-        )
-        logger.debug(
-            "Unknown covalent radius for %s or %s; using conservative min distance %.2f A",
-            mol_syms[mol_idx],
-            slab_syms[slab_idx],
-            min_allowed,
-        )
-
-    if actual_min < min_allowed:
+    mol_r = np.array(
+        [r if (r := _get_covalent_radius(s)) is not None else np.nan for s in mol_syms],
+        dtype=float,
+    )
+    slab_r = np.array(
+        [
+            r if (r := _get_covalent_radius(s)) is not None else np.nan
+            for s in slab_syms
+        ],
+        dtype=float,
+    )
+    covalent_allowed = (mol_r[:, None] + slab_r[None, :]) * float(min_contact_ratio)
+    allowed = np.maximum(float(min_distance), covalent_allowed)
+    # Unknown radii: fall back to flat min_distance for that pair.
+    allowed = np.where(np.isnan(allowed), float(min_distance), allowed)
+    if np.any(dists < allowed):
         return False, actual_min, "too_close"
     if max_initial_distance is not None and actual_min > max_initial_distance:
         return False, actual_min, "too_far"

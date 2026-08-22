@@ -53,7 +53,19 @@ Mypy is configured in ``pyproject.toml`` and run on the library only:
 
 .. code-block:: bash
 
+   python - <<'PY'
+   import pathlib
+   import shutil
+   import site
+
+   for root in site.getsitepackages():
+       stubs = pathlib.Path(root) / "rdkit-stubs"
+       if stubs.is_dir():
+           shutil.rmtree(stubs)
+   PY
    mypy src/metalsurfer
+
+RDKit wheels bundle a broken ``rdkit-stubs/`` tree; CI removes it before mypy.
 
 The package ships a ``py.typed`` marker. Tests, scripts, and examples are not
 gated in CI; focus is on ``src/metalsurfer``.
@@ -77,50 +89,21 @@ By default, INFO logs go to **stdout** so HPC schedulers capture progress in
 Tests
 -----
 
-Fast unit tests (matches the ``test-full`` CI job, excluding slow/MLIP markers):
+Three suites (``quick`` / ``cpu`` / ``gpu`` are applied automatically in
+``tests/conftest.py``). Activate the ``metalsurfer`` conda env (or any env with
+``pip install -e ".[mlip,dev]"``) from the repo root:
 
 .. code-block:: bash
 
-   python -m pytest tests/ \
-     -m "not dependency_behavior and not mlip and not gpu and not slow" \
-     --cov=src/metalsurfer --cov-report=term-missing --tb=short -v
-    coverage report --fail-under=85
+   python -m pytest tests/ -m quick --cov=src/metalsurfer --tb=short -v   # CI default
+   python -m pytest tests/ -m cpu --tb=short -v                           # full CPU
+   python -m pytest tests/ -m gpu --tb=short -v                           # CUDA + [mlip]
+   ./scripts/run_gpu_tests.sh                                             # GPU, VRAM-safe
+   ./scripts/run_all_tests.sh                                             # all three phases
 
-Additional CI jobs locally:
-
-.. code-block:: bash
-
-   python -m pytest tests/test_dependency_behavior.py -v --tb=short
-   python -m pytest \
-     tests/test_integration_seeded.py \
-     tests/test_integration_physics.py \
-     tests/test_integration_run_modes.py \
-     -v --tb=short
-
-CPU MLIP unit + smoke (optional; needs ``pip install -e ".[mlip]"`` and a
-HuggingFace token for the gated UMA model). Skipped in GitHub Actions when
-``HF_TOKEN`` is unset or on fork PRs:
-
-.. code-block:: bash
-
-   python -m pytest tests/test_optimization.py \
-     tests/test_integration_mlip_cpu_smoke.py -m mlip --tb=short -v
-
-GPU / MLIP integration tests (optional, often run in separate processes):
-
-.. code-block:: bash
-
-   ./scripts/run_gpu_tests.sh
-
-Overnight / local parity helpers (optional):
-
-.. code-block:: bash
-
-   ./scripts/run_all_tests.sh      # full CI test phases (fast, dependency, integration, CPU MLIP, GPU)
-   ./scripts/run_all_examples.sh   # five official examples (excludes bipyridine); deletes cached results first
-
-The example runner requires a GPU and ``pip install -e ".[mlip]"``. Camphor downloads
-reference assets on first run (~15 GB GPU, outbound HTTPS).
+CPU MLIP tests (``cpu and mlip``) need ``pip install -e ".[mlip]"`` and a
+HuggingFace token for the gated UMA model. CI runs them in ``test-mlip-cpu``
+when ``HF_TOKEN`` is set. GPU tests are local-only (no CUDA runners in Actions).
 
 CI parity
 ---------
@@ -128,13 +111,13 @@ CI parity
 +----------------------------------+------------------------------------------+
 | Local command                    | GitHub Actions job                       |
 +==================================+==========================================+
-| ``ruff check .``                 | ``lint`` → Ruff lint and format          |
-| ``ruff format --check .``        | ``lint`` → Ruff lint and format          |
-| ``mypy src/metalsurfer``         | ``lint`` → Mypy typecheck                |
-| Fast pytest + coverage           | ``test-full``                            |
-| ``test_dependency_behavior``     | ``test-dependency-behavior``             |
-| seeded + physics + run-modes     | ``test-integration``                     |
-| CPU MLIP (``HF_TOKEN``)          | ``test-mlip-cpu`` (skipped if unset)     |
+| ``ruff check .``                 | ``lint``                                 |
+| ``ruff format --check .``        | ``lint``                                 |
+| ``mypy src/metalsurfer``         | ``lint``                                 |
+| ``pytest -m quick`` + coverage   | ``test-quick``                           |
+| ``pytest -m dependency_behavior``| ``test-dependency-behavior``             |
+| ``pytest -m "cpu and mlip"``     | ``test-mlip-cpu`` (skipped if unset)     |
+| ``pytest -m gpu``                | local only                               |
 +----------------------------------+------------------------------------------+
 
 Fixing failures
@@ -152,8 +135,8 @@ Publishing
 Release builds are uploaded manually via the **Publish to PyPI** GitHub Actions
 workflow (``workflow_dispatch``).
 
-1. Bump ``version`` in ``pyproject.toml`` and ``src/metalsurfer/__init__.py`` (and
-   ``docs/conf.py`` if you version docs).
+1. Bump ``version`` in ``pyproject.toml`` and ``src/metalsurfer/__init__.py``
+   (``docs/conf.py`` reads the installed package version automatically).
 2. Merge to ``main`` and wait for CI to pass.
 3. On PyPI (and TestPyPI if used), configure a **trusted publisher** for this repo:
    owner ``rlaplaza-lab``, repository ``metalsurfer``, workflow

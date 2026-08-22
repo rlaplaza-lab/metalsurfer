@@ -1,6 +1,7 @@
 """Surrogate training, uncertainty-aware prediction, and acquisition scoring for BO."""
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -465,7 +466,7 @@ def train_surrogate(
                 "sample_weight is only supported for tree surrogates, ridge, and "
                 f"gradient_boost, not {surrogate!r}"
             )
-        n_features = int(X.shape[1]) if hasattr(X, "shape") else len(X[0])
+        n_features = int(X.shape[1])
         reg = _gaussian_process_regressor(n_features, random_state)
         pipeline = Pipeline([("scaler", StandardScaler()), ("regressor", reg)])
         pipeline.fit(X, y)
@@ -524,8 +525,6 @@ def _min_feature_distances(
     if len(X_prior) == 0 or len(X_ref) == 0:
         return np.array([], dtype=float)
     cols = [c for c in X_ref.columns if c != "conformer_index"]
-    if not cols:
-        cols = list(X_ref.columns)
     p_arr = X_prior.reindex(columns=cols, fill_value=0.0).to_numpy(dtype=float)
     r_arr = X_ref.reindex(columns=cols, fill_value=0.0).to_numpy(dtype=float)
     combined = np.vstack([p_arr, r_arr])
@@ -736,7 +735,7 @@ def _transfer_trust_gate(
     y_prev: np.ndarray,
     transfer_weights: np.ndarray,
     *,
-    baseline: Any,
+    fit_baseline: Callable[[], Any],
     surrogate: SurrogateType,
     n_estimators: int,
     random_state: int,
@@ -748,8 +747,18 @@ def _transfer_trust_gate(
     ``transfer_model`` is ``None`` when out-of-fold MAE already rejects transfer
     (``transfer_mae > base_mae + mae_tolerance``), so the caller can skip the
     full-data fit.
+
+    *fit_baseline* is called lazily only for the small-n path or the in-sample
+    exception fallback (OOF gating does not need a full-data baseline).
     """
     n_current = len(X_current)
+    baseline: Any | None = None
+
+    def _get_baseline() -> Any:
+        nonlocal baseline
+        if baseline is None:
+            baseline = fit_baseline()
+        return baseline
 
     def _fit_full_transfer() -> Pipeline:
         sample_weight = np.concatenate(
@@ -765,12 +774,10 @@ def _transfer_trust_gate(
         )
 
     if n_current < _TRANSFER_GATE_MIN_SAMPLES:
-        transfer_model = _fit_full_transfer()
-        base_mae = float(np.mean(np.abs(baseline.predict(X_current) - y_current)))
-        transfer_mae = float(
-            np.mean(np.abs(transfer_model.predict(X_current) - y_current))
-        )
-        return base_mae, transfer_mae, transfer_model, False
+        # Tiny current sets make in-sample MAE untrustworthy; skip transfer.
+        base = _get_baseline()
+        base_mae = float(np.mean(np.abs(base.predict(X_current) - y_current)))
+        return base_mae, base_mae, None, False
 
     n_splits = min(_TRANSFER_GATE_FOLDS, n_current)
     cv = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
@@ -814,7 +821,8 @@ def _transfer_trust_gate(
             "Out-of-fold transfer trust gate failed (%s); using in-sample MAE", exc
         )
         transfer_model = _fit_full_transfer()
-        base_mae = float(np.mean(np.abs(baseline.predict(X_current) - y_current)))
+        base = _get_baseline()
+        base_mae = float(np.mean(np.abs(base.predict(X_current) - y_current)))
         transfer_mae = float(
             np.mean(np.abs(transfer_model.predict(X_current) - y_current))
         )
@@ -856,7 +864,6 @@ def build_transfer_surrogate(
     transfer_bad_rounds: int = 0,
     trust_patience: int = 2,
     proximity_lengthscale: float | None = None,
-    proximity_floor: float = 0.0,
     prior_step_ages: list[int] | None = None,
     recency_lengthscale: float | None = None,
     prior_placement_X: pd.DataFrame
@@ -901,9 +908,6 @@ def build_transfer_surrogate(
         Maximum allowed consecutive bad rounds before disabling transfer.
     proximity_lengthscale
         Length scale for proximity weighting (also default for occupancy).
-    proximity_floor
-        Floor for :func:`prior_proximity_weights` / cumulative refit. Occupancy
-        in this function uses ``occupancy_floor`` instead.
     prior_step_ages
         Ages of prior observations for recency decay.
     recency_lengthscale
@@ -921,15 +925,25 @@ def build_transfer_surrogate(
             f"(one of {BO_TRANSFER_CAPABLE_SURROGATES}); got {surrogate!r}"
         )
     y_current = np.asarray(y_current, dtype=float)
-    baseline = train_surrogate(
-        X_current,
-        y_current,
-        surrogate=surrogate,
-        n_estimators=n_estimators,
-        random_state=random_state,
-    )
+    # Full-data baseline is only needed for early exits, small-n gating, gate
+    # exceptions, or when transfer is rejected. Skip the eager fit when the
+    # OOF gate can decide without it (n_current >= 4).
+    baseline: Any | None = None
+
+    def _fit_baseline() -> Any:
+        nonlocal baseline
+        if baseline is None:
+            baseline = train_surrogate(
+                X_current,
+                y_current,
+                surrogate=surrogate,
+                n_estimators=n_estimators,
+                random_state=random_state,
+            )
+        return baseline
+
     if len(observed_X_prev) == 0 or len(observed_y_prev) == 0:
-        return _no_transfer(baseline, transfer_bad_rounds)
+        return _no_transfer(_fit_baseline(), transfer_bad_rounds)
 
     X_prev = (
         pd.DataFrame(observed_X_prev)
@@ -983,7 +997,7 @@ def build_transfer_surrogate(
     similarity = similarity[keep]
 
     if len(X_prev) == 0:
-        return _no_transfer(baseline, transfer_bad_rounds)
+        return _no_transfer(_fit_baseline(), transfer_bad_rounds)
 
     recency = (
         prior_recency_weights(step_ages_arr, lengthscale=recency_ls)
@@ -1020,7 +1034,7 @@ def build_transfer_surrogate(
             occupancy = np.maximum(occupancy_floor, 1.0 - prox)
     modifiers = recency * occupancy
     if float(np.sum(modifiers)) <= 0.0:
-        return _no_transfer(baseline, transfer_bad_rounds)
+        return _no_transfer(_fit_baseline(), transfer_bad_rounds)
 
     n_current = len(X_current)
     max_transfer_weight = n_current * weight_cap / max(1.0 - weight_cap, 1e-8)
@@ -1037,7 +1051,7 @@ def build_transfer_surrogate(
         X_prev,
         y_prev,
         transfer_weights,
-        baseline=baseline,
+        fit_baseline=_fit_baseline,
         surrogate=surrogate,
         n_estimators=n_estimators,
         random_state=random_state,
@@ -1052,7 +1066,7 @@ def build_transfer_surrogate(
 
     if bad_rounds >= trust_patience:
         return TransferSurrogateResult(
-            surrogate=baseline,
+            surrogate=_fit_baseline(),
             transfer_used_this_round=False,
             transfer_weight_share=transfer_weight_share,
             transfer_mae_delta=transfer_mae_delta,
@@ -1069,7 +1083,7 @@ def build_transfer_surrogate(
     # this round while still counting the bad round toward patience.
     if transfer_model is None:
         return TransferSurrogateResult(
-            surrogate=baseline,
+            surrogate=_fit_baseline(),
             transfer_used_this_round=False,
             transfer_weight_share=transfer_weight_share,
             transfer_mae_delta=transfer_mae_delta,

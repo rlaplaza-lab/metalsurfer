@@ -1,6 +1,7 @@
 """Tests for the io_results merge helper and related result-writing behaviour."""
 
 import json
+import logging
 import warnings
 
 import pandas as pd
@@ -10,6 +11,7 @@ from ase.io import read
 from metalsurfer.io_results import (
     _merge_preserving_existing_molecules,
     _write_clean_xyz,
+    _write_run_metadata_file,
 )
 
 
@@ -29,6 +31,24 @@ def test_merge_preserves_molecules_absent_from_the_new_run(tmp_path):
         path, pd.DataFrame([{"molecule": "C", "E_ads": -3.0}])
     )
     assert set(merged["molecule"]) == {"A", "B", "C"}
+
+    # Multi-mol saturation summaries key on ``molecules``.
+    multi_path = tmp_path / "saturation_summary.csv"
+    pd.DataFrame(
+        [
+            {"molecules": "water_CO2", "n": 1},
+            {"molecules": "ethanol_methanol", "n": 2},
+        ]
+    ).to_csv(multi_path, index=False)
+    multi_merged = _merge_preserving_existing_molecules(
+        multi_path,
+        pd.DataFrame([{"molecules": "water_CO2", "n": 3}]),
+        key_col="molecules",
+    )
+    assert set(multi_merged["molecules"]) == {"water_CO2", "ethanol_methanol"}
+    assert multi_merged.loc[multi_merged["molecules"] == "water_CO2", "n"].tolist() == [
+        3
+    ]
 
 
 def test_merge_replaces_rows_for_recomputed_molecules(tmp_path):
@@ -53,6 +73,19 @@ def test_merge_falls_back_when_existing_file_is_corrupt(tmp_path):
     assert set(merged["molecule"]) == {"C"}
 
 
+def test_write_run_metadata_replaces_corrupt_json(tmp_path, caplog):
+    """Truncated run_metadata.json must not crash the final metadata write."""
+    path = tmp_path / "run_metadata.json"
+    path.write_text('{"timestamp": "partial", "config": ')  # truncated
+    with caplog.at_level(logging.WARNING):
+        written = _write_run_metadata_file(tmp_path, {"surface_type": "test", "n": 1})
+    assert written == path
+    payload = json.loads(path.read_text())
+    assert payload["surface_type"] == "test"
+    assert payload["n"] == 1
+    assert "Could not read existing" in caplog.text
+
+
 def test_merge_unions_columns_across_schema_versions(tmp_path):
     path = tmp_path / "detailed.csv"
     pd.DataFrame([{"molecule": "A", "E_ads": -1.0}]).to_csv(path, index=False)
@@ -65,7 +98,9 @@ def test_merge_unions_columns_across_schema_versions(tmp_path):
     assert set(merged["molecule"]) == {"A", "B"}
     # The pre-existing row must not have acquired a bogus value.
     assert pd.isna(merged.loc[merged["molecule"] == "A", "new_column"]).all()
-    json.dumps(merged.to_dict(orient="records"), default=str)
+    payload = json.dumps(merged.to_dict(orient="records"), default=str)
+    assert isinstance(payload, str) and len(payload) > 2
+    assert "molecule" in payload
 
 
 def test_write_clean_xyz_drops_stale_adsorbate_info(tmp_path):

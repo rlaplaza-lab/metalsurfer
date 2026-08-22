@@ -130,7 +130,7 @@ def test_prepare_substrate_passes_adatom_relaxation_options(monkeypatch):
     assert captured["kwargs"]["relaxation_steps"] == 77
 
 
-def test_prepare_substrate_relaxes_loaded_slab_before_finalize(monkeypatch):
+def test_prepare_substrate_forwards_relax_kwargs_for_loaded_slab(monkeypatch):
     captured: dict = {}
     base = SlabContainer(make_slab(symbol="Ru"))
 

@@ -6,8 +6,6 @@ them without importing the ``placement`` package. They are re-exported here unde
 their historical underscore names for existing call sites.
 """
 
-import logging
-
 import numpy as np
 from scipy.spatial import KDTree
 
@@ -55,7 +53,6 @@ from ._constants import (
     _VORONOI_DEDUP_TOLERANCE,
     _VORONOI_MAX_DISTANCE_COVALENT_SCALE,
     _VORONOI_PROBE_RADIUS_COVALENT_SCALE,
-    _VORONOI_RADIUS_FALLBACK_ANGSTROM,
 )
 from .geometry import _get_covalent_radius
 
@@ -84,8 +81,6 @@ __all__ = [
     "derive_pore_threshold",
     "top_layer_mask_by_normal",
 ]
-
-logger = logging.getLogger(__name__)
 
 
 def _primary_height_band_mask(
@@ -282,7 +277,10 @@ def _mean_covalent_radius(symbols: list[str]) -> float:
     radii = [_get_covalent_radius(s) for s in symbols]
     valid = [r for r in radii if r is not None]
     if not valid:
-        return _VORONOI_RADIUS_FALLBACK_ANGSTROM
+        raise ValueError(
+            f"No positive covalent radii for symbols {symbols!r}; "
+            "cannot derive Voronoi distance window"
+        )
     return float(np.mean(valid))
 
 
@@ -293,8 +291,8 @@ def _derive_voronoi_distance_window(
     cell: np.ndarray | None = None,
 ) -> tuple[float, float]:
     if len(positions) == 0:
-        base_radius = _VORONOI_RADIUS_FALLBACK_ANGSTROM
-    elif bool(pbc[0]) and bool(pbc[1]) and not bool(pbc[2]) and cell is not None:
+        raise ValueError("Cannot derive Voronoi distance window from empty positions")
+    if bool(pbc[0]) and bool(pbc[1]) and not bool(pbc[2]) and cell is not None:
         # Slab: characterise the exposed top layer along the slab normal
         # (orientation-aware), not a Cartesian-z slice or the bulk average.
         heights = _height_along_slab_normal(positions, cell)

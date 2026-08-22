@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the full metalsurfer test suite in isolated phases (CI + GPU integration).
+# Run all test suites: quick (CI), remaining CPU, then GPU.
 #
 # Usage (from repo root, with metalsurfer conda env activated):
 #   ./scripts/run_all_tests.sh
@@ -51,32 +51,19 @@ _run_phase() {
   fi
 }
 
-FAST_MARKER='not (slow or mlip or gpu or dependency_behavior)'
-
-_run_phase "1_fast_and_coverage" \
+_run_phase "1_quick" \
   bash -c "
-    '$PYTHON' -m pytest tests/ \
-      -m \"$FAST_MARKER\" \
+    '$PYTHON' -m pytest tests/ -m quick \
       --cov=src/metalsurfer \
       --cov-report=term-missing \
       --tb=short -v && \
     '$PYTHON' -m coverage report --fail-under=85
   "
 
-_run_phase "2_dependency_behavior" \
-  "$PYTHON" -m pytest tests/test_dependency_behavior.py --tb=short -v
+_run_phase "2_cpu" \
+  "$PYTHON" -m pytest tests/ -m "cpu and not quick" --tb=short -v
 
-_run_phase "3_cpu_integration" \
-  "$PYTHON" -m pytest \
-    tests/test_integration_seeded.py \
-    tests/test_integration_physics.py \
-    tests/test_integration_run_modes.py \
-    --tb=short -v
-
-_run_phase "4_mlip_unit" \
-  "$PYTHON" -m pytest tests/test_optimization.py tests/test_integration_mlip_cpu_smoke.py -m mlip --tb=short -v
-
-_run_phase "5_gpu_integration" \
+_run_phase "3_gpu" \
   bash "$ROOT/scripts/run_gpu_tests.sh" "$PYTHON"
 
 echo "" | tee -a "$PHASE_LOG"

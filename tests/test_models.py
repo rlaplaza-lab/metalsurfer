@@ -15,6 +15,7 @@ from metalsurfer.models import (
     ScreeningRunResult,
     build_molecule_summary,
 )
+from metalsurfer.reporting import ConformerFailure
 
 from .conftest import (
     make_h2,
@@ -57,7 +58,7 @@ def test_screening_result():
     )
     assert sr.molecule == "water"
     assert sr.placement_id == 5
-    assert sr.energy_adsorption == -0.5
+    assert sr.energy_adsorption == pytest.approx(-0.5)
     assert len(sr.atoms) == 2
     row = sr.to_row(xyz_path="results/x.xyz", poscar_path="results/POSCAR")
     assert row["molecule"] == "water"
@@ -217,7 +218,7 @@ def test_saturation_step_result():
     )
     assert step.step == 1
     assert step.n_molecules_on_slab == 0
-    assert step.best_result.energy_adsorption == -1.0
+    assert step.best_result.energy_adsorption == pytest.approx(-1.0)
     detail_row = step.to_detail_row(
         results_dir="results_test",
         saturation_molecule="water",
@@ -403,7 +404,7 @@ def test_binding_campaign_format_summary_includes_failures():
         t_ref_s=0.0,
         t_total_s=0.0,
         failure_summaries={
-            "bad": {"stage": "conformers", "reason": "could not generate conformers"}
+            "bad": ConformerFailure(reason="could not generate conformers")
         },
     )
     summary = campaign.format_summary(

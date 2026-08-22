@@ -93,14 +93,6 @@ class SymmetryAnalyzer:
         self._dataset: Any | None = None
         self._operations_frac: list[tuple[np.ndarray, np.ndarray]] | None = None
 
-    def get_spglib_cell_tuple(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return ``(lattice, fractional_positions, atomic_numbers)`` passed to spglib."""
-        return (
-            np.asarray(self._lattice, dtype=float).copy(),
-            np.asarray(self._fractional, dtype=float).copy(),
-            np.asarray(self.numbers, dtype=int).copy(),
-        )
-
     def _prepare_lattice_and_fractional(self) -> None:
         if self._mode == "periodic":
             if not cell_has_volume(self.cell):
@@ -117,7 +109,6 @@ class SymmetryAnalyzer:
         rel = self.positions - com
         margin = max(8.0 * self.symprec, 5.0)
         half = np.max(np.abs(rel), axis=0) + margin
-        half = np.maximum(half, margin)
         self._cluster_com = com
         self._cluster_half = half
         self._lattice = np.diag(2.0 * half)

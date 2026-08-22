@@ -1,7 +1,6 @@
 """Tests for workflow validators, process_molecule branches, and I/O helpers."""
 
 import os
-import tempfile
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -12,7 +11,6 @@ from scipy.spatial.distance import pdist
 
 from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.io_results import (
-    _write_vasp_inputs,
     save_molecule_results,
     save_single_molecule_results,
     save_summary_results,
@@ -29,6 +27,14 @@ from metalsurfer.models import (
 )
 from metalsurfer.placement._material import calculator_pbc_for_atoms
 from metalsurfer.placement.geometry import calculate_min_distance
+from metalsurfer.reporting import (
+    BOValidationFailure,
+    FilterFailure,
+    OptimizationFailure,
+    PlacementFailure,
+    ReferenceFailure,
+    ValidationFailure,
+)
 from metalsurfer.surface_prep import SlabContainer, apply_surface_constraints
 from metalsurfer.workflow import (
     load_molecules,
@@ -107,7 +113,7 @@ class TestValidateGeometry:
         config = AdsorptionConfig()
         ok, reason = _validate_geometry(combined, slab, config)
         assert ok
-        assert "valid" in reason
+        assert reason == ""
 
     @pytest.mark.parametrize("bad_energy", [float("nan"), float("inf")])
     def test_non_finite_energy_fails(self, bad_energy):
@@ -136,6 +142,32 @@ class TestValidateGeometry:
         clash = float(np.min(pdist(combined.get_positions())))
         assert f"{clash:.3f}" in reason  # reports the actual clash distance
 
+    def test_atoms_too_close_across_periodic_boundary_fails(self):
+        """MIC clash across opposite a-faces must fail (Cartesian NN misses it)."""
+        slab = make_slab()
+        cell = np.asarray(slab.get_cell(), dtype=float)
+        a_len = float(np.linalg.norm(cell[0]))
+        # Two atoms near opposite a-faces: Cartesian distance ≈ a_len, MIC ≈ 0.2 Å.
+        atoms = Atoms(
+            "HH",
+            positions=[[0.1, 2.0, 8.0], [a_len - 0.1, 2.0, 8.0]],
+            cell=cell,
+            pbc=[True, True, False],
+        )
+        calc = MagicMock()
+        calc.get_potential_energy.return_value = -100.0
+        calc.get_forces.return_value = np.zeros((2, 3))
+        atoms.calc = calc
+        config = AdsorptionConfig(
+            material_type="slab",
+            min_interatomic_distance=0.5,
+        )
+        ok, reason = _validate_geometry(atoms, slab[:0], config)
+        assert not ok
+        assert "too close" in reason
+        # Cartesian NN would see ~a_len and pass; MIC must report ~0.2 Å.
+        assert float(reason.split(":")[1].split()[0]) < 0.5
+
     def test_high_forces_fails(self):
         injected = 10.0
         combined, slab = self._combined(energy=-100.0, forces_max=injected)
@@ -158,7 +190,7 @@ class TestValidateAdsorption:
         config = AdsorptionConfig(binding_distance_threshold=4.0)
         ok, reason, _ = _validate_adsorption(combined, slab, config)
         assert ok
-        assert "adsorbed" in reason
+        assert reason == ""
 
     def test_desorbed_fails(self):
         slab = make_slab()
@@ -217,7 +249,7 @@ class TestValidateAdsorption:
         )
         ok, reason, _ = _validate_adsorption(combined, slab, config)
         assert ok
-        assert "skipped" in reason
+        assert reason == ""
 
     def test_validate_adsorption_ignores_pre_adsorbed_atoms_with_surface_symbols(self):
         """Regression: saturation slabs may include previously adsorbed atoms.
@@ -341,12 +373,19 @@ class TestProcessMolecule:
     )
     def test_early_failure_paths(self, smiles, name, refs, expected_stage):
         slab = SlabContainer(make_slab())
+        config = AdsorptionConfig(num_placements=1, num_conformers=1, seed=42)
         outcome = process_molecule(
-            smiles, name, slab, MagicMock(), reference_energies=refs
+            smiles,
+            name,
+            slab,
+            MagicMock(),
+            reference_energies=refs,
+            config=config,
         )
         assert outcome.results == []
-        assert outcome.failure_summary["stage"] == expected_stage
-        assert name in str(outcome.failure_summary["reason"])
+        assert outcome.failure_summary is not None
+        assert outcome.failure_summary.stage == expected_stage
+        assert name in str(outcome.failure_summary.reason)
 
     def test_no_conformers_populates_failure_summary(self):
         slab = SlabContainer(make_slab())
@@ -365,7 +404,8 @@ class TestProcessMolecule:
                 config=config,
             )
         assert outcome.results == []
-        assert outcome.failure_summary["stage"] == "conformers"
+        assert outcome.failure_summary is not None
+        assert outcome.failure_summary.stage == "conformers"
 
     def test_prepare_substrate_validates_image_separation(self):
         from metalsurfer.exceptions import GeometryValidationError
@@ -389,12 +429,6 @@ class TestProcessMolecule:
                 None,
                 config,
             )
-
-    # Note: Full process_molecule integration on pre-adsorbed slab is covered by
-    # test_placement.test_placement_auto_uses_envelope_for_non_planar and
-    # test_placement.test_placement_mode_envelope. The process_molecule flow with
-    # base_slab_for_frozen is used in saturation and works; mocking optimize_adsorbate
-    # is unreliable when run in full test suite due to import order.
 
     def test_bo_failure_events_emit_negative_records(self):
         slab = SlabContainer(make_slab())
@@ -445,7 +479,6 @@ class TestProcessMolecule:
                         descriptor=make_placement_descriptor(placement_id=0),
                     )
                 ],
-                0,
             )
         )
         with (
@@ -462,7 +495,7 @@ class TestProcessMolecule:
             ),
             patch("metalsurfer.workflow.bayesian._evaluate_placement_batch", mock_eval),
             patch(
-                "metalsurfer.workflow.bayesian.filter_results",
+                "metalsurfer.workflow.shared.filter_results",
                 side_effect=lambda results, **_: results,
             ),
             patch(
@@ -541,7 +574,7 @@ class TestProcessMolecule:
         mock_conformers = MagicMock(return_value=([Atoms("H")], [0.0]))
         mock_capacity = MagicMock(return_value=1)
         mock_specs = MagicMock(return_value=specs)
-        mock_eval = MagicMock(return_value=([unique, duplicate], [], 0))
+        mock_eval = MagicMock(return_value=([unique, duplicate], []))
 
         def _mock_filter(results, **kwargs):
             kwargs["duplicate_results_out"].append(results[1])
@@ -561,7 +594,7 @@ class TestProcessMolecule:
             ),
             patch("metalsurfer.workflow.bayesian._evaluate_placement_batch", mock_eval),
             patch(
-                "metalsurfer.workflow.bayesian.filter_results", side_effect=_mock_filter
+                "metalsurfer.workflow.shared.filter_results", side_effect=_mock_filter
             ),
             patch(
                 "metalsurfer.workflow.bayesian.build_spec_features_geometry_aware",
@@ -596,7 +629,7 @@ class TestProcessMolecule:
 
 class TestFormatFailureSummary:
     def test_reference_stage(self):
-        summary = {"stage": "reference", "reason": "missing reference energy for H2"}
+        summary = ReferenceFailure(reason="missing reference energy for H2")
         out = BindingCampaignResult.format_failure_summary(summary)
         assert_lines_contain(
             out,
@@ -607,11 +640,10 @@ class TestFormatFailureSummary:
         )
 
     def test_placement_stage(self):
-        summary = {
-            "stage": "placement",
-            "n_placements_attempted": 50,
-            "n_initial_placements": 0,
-        }
+        summary = PlacementFailure(
+            n_placements_attempted=50,
+            n_initial_placements=0,
+        )
         out = BindingCampaignResult.format_failure_summary(summary)
         assert_lines_contain(
             out,
@@ -623,17 +655,16 @@ class TestFormatFailureSummary:
         )
 
     def test_validation_stage(self):
-        summary = {
-            "stage": "validation",
-            "n_initial_placements": 50,
-            "n_optimized": 48,
-            "n_optimization_failed": 2,
-            "validation_failures": {
+        summary = ValidationFailure(
+            n_initial_placements=50,
+            n_optimized=48,
+            n_optimization_failed=2,
+            validation_failures={
                 "desorbed (5.23 A)": 35,
                 "high adsorbate forces: 12.34 eV/A": 8,
                 "E_ads too high: 1.50 eV": 5,
             },
-        }
+        )
         out = BindingCampaignResult.format_failure_summary(summary)
         assert_lines_contain(
             out,
@@ -648,13 +679,12 @@ class TestFormatFailureSummary:
         assert "E_ads too high" in out
 
     def test_validation_stage_bo(self):
-        summary = {
-            "stage": "validation",
-            "n_evaluated": 12,
-            "n_valid_results": 0,
-            "n_candidate_specs": 40,
-            "n_valid_pool": 30,
-        }
+        summary = BOValidationFailure(
+            n_evaluated=12,
+            n_valid_results=0,
+            n_candidate_specs=40,
+            n_valid_pool=30,
+        )
         out = BindingCampaignResult.format_failure_summary(summary)
         assert_lines_contain(
             out,
@@ -669,11 +699,10 @@ class TestFormatFailureSummary:
         assert "?" not in out
 
     def test_filter_stage(self):
-        summary = {
-            "stage": "filter",
-            "n_before_filter": 5,
-            "n_after_filter": 0,
-        }
+        summary = FilterFailure(
+            n_before_filter=5,
+            n_after_filter=0,
+        )
         out = BindingCampaignResult.format_failure_summary(summary)
         assert_lines_contain(
             out,
@@ -683,6 +712,31 @@ class TestFormatFailureSummary:
                 "  After filter: 0",
             ],
         )
+
+    def test_optimization_stage(self):
+        failed = OptimizationFailure(
+            n_placements_attempted=10,
+            n_initial_placements=10,
+            n_optimized=0,
+            n_optimization_failed=10,
+            validation_failures={"optimizer_crash": 10},
+        )
+        out = BindingCampaignResult.format_failure_summary(failed)
+        assert_lines_contain(
+            out,
+            [
+                "  Stage: optimization",
+                "  Placements attempted: 10",
+                "  Initial placements: 10",
+                "  Optimized: 0 (10 failed)",
+                "    optimizer_crash: 10",
+            ],
+        )
+        empty = OptimizationFailure(
+            n_placements_attempted=20,
+            n_initial_placements=20,
+        )
+        assert "Optimized:" not in BindingCampaignResult.format_failure_summary(empty)
 
 
 # ---------------------------------------------------------------------------
@@ -1017,20 +1071,10 @@ class TestSaveMoleculeResults:
         )
         config = AdsorptionConfig(write_vasp_inputs=True)
         save_molecule_results("water", [entry], surface_type="vasp_test", config=config)
-        vasp_path = (
-            workdir / "results_vasp_test/vasp_inputs/water_all/conformer_000/POSCAR"
-        )
-        assert vasp_path.exists()
-
-    def test_write_vasp_inputs_accepts_none_config(self):
-        """_write_vasp_inputs creates default config when config=None."""
-        atoms = place_molecule_on_slab(make_slab(), make_water())
-        with tempfile.TemporaryDirectory() as tmpdir:
-            vasp_dir = os.path.join(tmpdir, "vasp_test")
-            _write_vasp_inputs(atoms, vasp_dir, "water", config=None)
-            assert os.path.exists(os.path.join(vasp_dir, "POSCAR"))
-            assert os.path.exists(os.path.join(vasp_dir, "INCAR"))
-            assert os.path.exists(os.path.join(vasp_dir, "KPOINTS"))
+        vasp_dir = workdir / "results_vasp_test/vasp_inputs/water_all/conformer_000"
+        assert (vasp_dir / "POSCAR").exists()
+        assert (vasp_dir / "INCAR").exists()
+        assert (vasp_dir / "KPOINTS").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1048,10 +1092,3 @@ class TestSetupDirectories:
     def test_creates_vasp_directories_when_enabled(self, workdir):
         setup_directories(["test_surface"], write_vasp_inputs=True)
         assert os.path.isdir("results_test_surface/vasp_inputs")
-
-    def test_default_surface_types_when_none(self, workdir):
-        """setup_directories(surface_types=None) uses default ['manual']."""
-        setup_directories(surface_types=None)
-        assert os.path.isdir("results_manual")
-        assert not os.path.isdir("results_manual/vasp_inputs")
-        assert os.path.isdir("results_manual/xyz_structures")

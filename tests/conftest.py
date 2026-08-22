@@ -14,6 +14,7 @@ with contextlib.suppress(RuntimeError):
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.data import atomic_numbers, covalent_radii
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.models import PlacementDescriptor, ScreeningResult
@@ -25,12 +26,11 @@ _SKIP_WITHOUT_MLIP = pytest.mark.skipif(
     reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
 )
 
-# Shared markers for GPU/MLIP e2e modules (keep process isolation in run_gpu_tests.sh).
+# GPU e2e tests (run via scripts/run_gpu_tests.sh for VRAM isolation).
 GPU_MLIP_MARKS = [
-    pytest.mark.slow,
     pytest.mark.mlip,
     pytest.mark.gpu,
-    pytest.mark.no_fork,  # CUDA incompatible with pytest-forked
+    pytest.mark.no_fork,
     _SKIP_WITHOUT_MLIP,
     pytest.mark.skipif(
         not cuda_available,
@@ -43,12 +43,49 @@ MLIP_CPU_MARKS = [
     _SKIP_WITHOUT_MLIP,
 ]
 
+# Energy-identity tolerances: stub arithmetic vs MLIP noise.
+E_ADS_IDENTITY_TOL = 1e-9
+E_ADS_MLIP_TOL = 1e-4
+E_ADS_MLIP_CPU_TOL = 1e-3
+
+# Shared TorchSim autobatch settings for GPU e2e modules.
+GPU_AUTOBATCH = {
+    "autobatcher_max_memory_padding": 0.8,
+    "autobatcher_max_memory_scaler": 500,
+    "autobatcher_max_atoms_to_try": 5000,
+}
+
 
 def gpu_mlip_test(fn):
     """Apply GPU_MLIP_MARKS to a single test function."""
     for mark in reversed(GPU_MLIP_MARKS):
         fn = mark(fn)
     return fn
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Tag every test with quick or cpu; gpu tests stay gpu-only."""
+    for item in items:
+        if item.get_closest_marker("gpu"):
+            continue
+        item.add_marker(pytest.mark.cpu)
+        if not (
+            item.get_closest_marker("mlip")
+            or item.get_closest_marker("dependency_behavior")
+        ):
+            item.add_marker(pytest.mark.quick)
+
+    for item in items:
+        has_cpu = item.get_closest_marker("cpu") is not None
+        has_gpu = item.get_closest_marker("gpu") is not None
+        if has_cpu == has_gpu:
+            raise pytest.UsageError(
+                f"{item.nodeid}: must have exactly one of cpu or gpu"
+            )
+        if item.get_closest_marker("quick") and has_gpu:
+            raise pytest.UsageError(f"{item.nodeid}: quick tests cannot be gpu")
+        if has_gpu and not item.get_closest_marker("mlip"):
+            raise pytest.UsageError(f"{item.nodeid}: gpu tests must be mlip")
 
 
 def _clear_cuda_for_gpu_test() -> None:
@@ -208,6 +245,7 @@ def make_h2() -> Atoms:
 
 
 def make_ethanol() -> Atoms:
+    """Hardcoded C2H6O with O last (index 8); used by placement/pose tests."""
     return Atoms(
         "C2H6O",
         positions=[
@@ -220,6 +258,32 @@ def make_ethanol() -> Atoms:
             [2.04, -0.89, 0.0],
             [1.54, 0.0, 1.09],
             [2.54, 0.0, -0.5],
+        ],
+    )
+
+
+def make_ethanol_ccoh6() -> Atoms:
+    """C2H5OH with covalent-radii geometry (O at index 2) for bond-count filter tests.
+
+    Distinct from :func:`make_ethanol` (``C2H6O``, O last): filters assert
+    connectivity by atom index / bond counts, so radii-based geometry is required.
+    """
+    r_cc = covalent_radii[atomic_numbers["C"]] + covalent_radii[atomic_numbers["C"]]
+    r_co = covalent_radii[atomic_numbers["C"]] + covalent_radii[atomic_numbers["O"]]
+    r_ch = covalent_radii[atomic_numbers["C"]] + covalent_radii[atomic_numbers["H"]]
+    r_oh = covalent_radii[atomic_numbers["O"]] + covalent_radii[atomic_numbers["H"]]
+    return Atoms(
+        "CCOH6",
+        positions=[
+            [0.0, 0.0, 0.0],
+            [r_cc, 0.0, 0.0],
+            [r_cc + r_co, 0.0, 0.0],
+            [r_cc + r_co + r_oh, 0.0, 0.0],
+            [-r_ch * 0.33, r_ch * 0.94, 0.0],
+            [-r_ch * 0.33, -r_ch * 0.47, r_ch * 0.82],
+            [-r_ch * 0.33, -r_ch * 0.47, -r_ch * 0.82],
+            [r_cc + r_ch * 0.33, r_ch * 0.94, 0.0],
+            [r_cc + r_ch * 0.33, -r_ch * 0.94, 0.0],
         ],
     )
 
@@ -402,13 +466,34 @@ def adsorbate_symbol_pair_distance(
     )
 
 
+def assert_no_intramolecular_clashes(adsorbate: Atoms, slab: Atoms) -> None:
+    """Reject pairs closer than 0.55 × covalent radii sum (MIC when PBC)."""
+    pos = adsorbate.get_positions()
+    syms = adsorbate.get_chemical_symbols()
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = list(slab.get_pbc())
+    for i in range(len(pos)):
+        for j in range(i + 1, len(pos)):
+            dvec = pos[j] - pos[i]
+            if np.any(pbc):
+                dvec = dvec - np.round(dvec @ np.linalg.inv(cell)) @ cell
+            d = float(np.linalg.norm(dvec))
+            r_sum = float(covalent_radii[atomic_numbers[syms[i]]]) + float(
+                covalent_radii[atomic_numbers[syms[j]]]
+            )
+            assert d > 0.55 * r_sum, (
+                f"intramolecular clash {syms[i]}-{syms[j]} at {d:.3f} Å "
+                f"(0.55×covalent sum={0.55 * r_sum:.3f})"
+            )
+
+
 def assert_water_oh_hh_geometry(
     ads: Atoms,
     *,
     cell: np.ndarray | None = None,
     pbc: np.ndarray | list[bool] | None = None,
-    oh_range: tuple[float, float] = (0.85, 1.25),
-    hh_range: tuple[float, float] = (1.2, 2.0),
+    oh_range: tuple[float, float] = (0.90, 1.15),
+    hh_range: tuple[float, float] = (1.30, 1.80),
 ) -> None:
     """Assert intact-water O–H and H–H distances (shared by CI and GPU water tests)."""
     syms = ads.get_chemical_symbols()

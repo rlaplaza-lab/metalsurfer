@@ -115,19 +115,20 @@ def extract_features_from_dataset(
             "Dataset contains non-finite values in strict geometric columns "
             "(x_abs, y_abs, z_abs, conformer_index)"
         )
-    for col, default in (
-        ("quat_w", 1.0),
-        ("quat_x", 0.0),
-        ("quat_y", 0.0),
-        ("quat_z", 0.0),
-    ):
+    quat_defaults = {
+        "quat_w": 1.0,
+        "quat_x": 0.0,
+        "quat_y": 0.0,
+        "quat_z": 0.0,
+    }
+    for col, default in quat_defaults.items():
         if col not in working.columns:
             working[col] = default
 
     quat_cols = (
-        working[["quat_w", "quat_x", "quat_y", "quat_z"]]
+        working[list(quat_defaults.keys())]
         .apply(pd.to_numeric, errors="coerce")
-        .fillna({"quat_w": 1.0, "quat_x": 0.0, "quat_y": 0.0, "quat_z": 0.0})
+        .fillna(quat_defaults)
     )
     quat_values = quat_cols.to_numpy(dtype=float)
     if not np.all(np.isfinite(quat_values)):

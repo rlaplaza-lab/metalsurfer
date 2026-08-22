@@ -7,7 +7,7 @@ from metalsurfer.config import AdsorptionConfig
 from metalsurfer.optimization import setup_single_model
 from metalsurfer.surface_prep import SlabContainer
 from metalsurfer.workflow import calculate_reference_energies, process_molecule
-from tests.conftest import MLIP_CPU_MARKS, make_slab
+from tests.conftest import E_ADS_MLIP_CPU_TOL, MLIP_CPU_MARKS, make_slab
 
 pytestmark = MLIP_CPU_MARKS
 
@@ -59,5 +59,5 @@ def test_process_molecule_water_on_small_slab_cpu():
         assert np.isfinite(r.energy_adsorption)
         assert r.energy_adsorption == pytest.approx(
             r.energy_adslab - r.energy_slab - r.energy_adsorbate,
-            abs=1e-3,
+            abs=E_ADS_MLIP_CPU_TOL,
         )

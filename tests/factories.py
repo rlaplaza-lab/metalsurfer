@@ -7,7 +7,13 @@ from typing import Literal
 import numpy as np
 
 from metalsurfer.ml.schema import ComputationContext, PlacementRecord
-from metalsurfer.models import PlacementDescriptor
+from metalsurfer.models import (
+    BOTransferInfo,
+    PlacementDescriptor,
+    SaturationRunResult,
+    SaturationStepResult,
+    ScreeningResult,
+)
 
 # Top-layer z for default ``make_slab()`` (n_layers=3, spacing=2.7 → max z = 5.4).
 DEFAULT_TEST_SLAB_SURFACE_Z = 5.4
@@ -144,3 +150,78 @@ def make_random_placement_records(
         records.append(PlacementRecord(**kwargs))
 
     return records
+
+
+# ---------------------------------------------------------------------------
+# Saturation scaffolding (shared by tests/test_saturation.py)
+# ---------------------------------------------------------------------------
+
+REF_WATER_CO2 = {"water": -5.0, "CO2": -10.0}
+REF_A_B = {"A": -5.0, "B": -5.0}
+REF_CONSTANT = -1.0
+
+
+def make_saturation_step(
+    *,
+    step: int = 1,
+    molecule: str = "water",
+    n_molecules_on_slab: int = 0,
+    best_result: ScreeningResult | None = None,
+    all_results: list[ScreeningResult] | None = None,
+    bo_transfer_enabled: bool = False,
+    transfer: BOTransferInfo | None = None,
+    energy_adsorption: float = -1.0,
+    **screening_kwargs,
+) -> SaturationStepResult:
+    """Build a SaturationStepResult; creates a screening best_result if omitted."""
+    # Local import avoids conftest↔factories cycles at module load.
+    from .conftest import make_placement_descriptor, make_screening_result
+
+    if best_result is None:
+        best_result = make_screening_result(
+            molecule=molecule,
+            placement_id=0,
+            energy_adsorption=energy_adsorption,
+            distance=2.5,
+            placement_descriptor=make_placement_descriptor(placement_id=0),
+            **screening_kwargs,
+        )
+    if all_results is None:
+        all_results = [best_result]
+    if transfer is None:
+        transfer = BOTransferInfo()
+    return SaturationStepResult(
+        step=step,
+        molecule=molecule,
+        n_molecules_on_slab=n_molecules_on_slab,
+        best_result=best_result,
+        all_results=all_results,
+        bo_transfer_enabled=bo_transfer_enabled,
+        transfer=transfer,
+    )
+
+
+def make_saturation_run(
+    *,
+    molecule: str = "water",
+    steps: list[SaturationStepResult] | None = None,
+    n_molecules_at_saturation: int | None = None,
+    final_slab_atoms=None,
+    **step_kwargs,
+) -> SaturationRunResult:
+    """Build a SaturationRunResult with one step by default."""
+    if steps is None:
+        steps = [make_saturation_step(molecule=molecule, **step_kwargs)]
+    if n_molecules_at_saturation is None:
+        n_molecules_at_saturation = len(steps)
+    if final_slab_atoms is None:
+        # Local import avoids conftest↔factories cycles at module load.
+        from .conftest import make_slab
+
+        final_slab_atoms = make_slab()
+    return SaturationRunResult(
+        molecule=molecule,
+        steps=list(steps),
+        n_molecules_at_saturation=n_molecules_at_saturation,
+        final_slab_atoms=final_slab_atoms,
+    )

@@ -11,7 +11,7 @@ from ase.constraints import FixAtoms
 from ase.filters import UnitCellFilter
 from ase.optimize import BFGS, FIRE, LBFGS
 
-from .._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
+from .._numeric_defaults import DEFAULT_TOP_LAYER_TOLERANCE, MIN_CALCULATOR_CELL_C_ANG
 from ..config import (
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
@@ -28,7 +28,11 @@ from ..placement._constants import (
     _MEAN_COVALENT_RADIUS_FALLBACK,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
 )
-from ..placement._material import MATERIAL_PBC, material_aware_pbc
+from ..placement._material import (
+    MATERIAL_PBC,
+    calculator_pbc_for_atoms,
+    material_aware_pbc,
+)
 from ..placement.geometry import _get_covalent_radius
 from ..placement.site_coords import _periodic_image_offsets
 from ..placement.site_enumeration import get_hollow_sites_for_adatoms
@@ -42,7 +46,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SLAB_TOP_VACUUM_ANG = 15.0
 _INVERTED_SLAB_VACUUM_MARGIN_ANG = 1.0
-_MIN_CALCULATOR_CELL_C_ANG = MIN_CALCULATOR_CELL_C_ANG
 _CELL_DET_EPS = 1e-8
 
 
@@ -106,7 +109,7 @@ def ensure_slab_z_alignment(
     atoms: Atoms,
     *,
     min_top_vacuum: float = DEFAULT_SLAB_TOP_VACUUM_ANG,
-    min_cell_c: float = _MIN_CALCULATOR_CELL_C_ANG,
+    min_cell_c: float = MIN_CALCULATOR_CELL_C_ANG,
 ) -> Atoms:
     """Bottom-anchor a slab and ensure vacuum above the top surface layer.
 
@@ -153,10 +156,8 @@ def ensure_slab_z_alignment(
         if abs(cell[2, 0]) < 1e-6 and abs(cell[2, 1]) < 1e-6:
             c_sign = np.sign(cell[2, 2]) if abs(cell[2, 2]) > 1e-12 else 1.0
             cell[2, 2] = float(c_sign * target_c)
-        elif c_len > 0.0:
-            cell[2] = cell[2] * (target_c / c_len)
         else:
-            cell[2, 2] = target_c
+            cell[2] = cell[2] * (target_c / c_len)
         aligned.set_cell(cell)
 
     return aligned
@@ -167,7 +168,7 @@ def apply_surface_constraints(
     *,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
-    top_layer_tolerance: float = 0.5,
+    top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
     material_type: str = "slab",
 ) -> Atoms:
     """Attach ASE ``FixAtoms`` to *atoms* according to the surface freeze policy.
@@ -347,17 +348,17 @@ def validate_substrate(
                 f"Call ensure_slab_z_alignment with at least "
                 f"{DEFAULT_SLAB_TOP_VACUUM_ANG:.0f} A top vacuum."
             )
-        if c_len < _MIN_CALCULATOR_CELL_C_ANG:
+        if c_len < MIN_CALCULATOR_CELL_C_ANG:
             raise GeometryValidationError(
                 f"Slab c-vector ({c_len:.1f} A) is below the minimum "
-                f"{_MIN_CALCULATOR_CELL_C_ANG:.0f} A required by the calculator. "
+                f"{MIN_CALCULATOR_CELL_C_ANG:.0f} A required by the calculator. "
                 "Extend vacuum via ensure_slab_z_alignment during preparation."
             )
 
-    if material_type == "porous" and c_len < _MIN_CALCULATOR_CELL_C_ANG:
+    if material_type == "porous" and c_len < MIN_CALCULATOR_CELL_C_ANG:
         raise GeometryValidationError(
             f"Porous cell c-vector ({c_len:.1f} A) is below the minimum "
-            f"{_MIN_CALCULATOR_CELL_C_ANG:.0f} A required by the calculator."
+            f"{MIN_CALCULATOR_CELL_C_ANG:.0f} A required by the calculator."
         )
 
     if material_type == "nanoparticle" and abs(cell_det) > _CELL_DET_EPS:
@@ -705,6 +706,16 @@ def _relax_slab_structure(
     # constraints and the finally block would otherwise leave the structure
     # unconstrained, which breaks downstream frozen-substrate drift checks.
     caller_constraints = copy.deepcopy(atoms.constraints)
+    caller_pbc = list(atoms.get_pbc())
+    # UMA rejects mixed PBC; switch to calculator-legal flags on the work copy only.
+    relaxed.set_pbc(calculator_pbc_for_atoms(relaxed))
+    if bool(np.all(relaxed.get_pbc())):
+        c_len = float(np.linalg.norm(np.asarray(relaxed.get_cell())[2]))
+        if c_len < MIN_CALCULATOR_CELL_C_ANG:
+            raise OptimizationError(
+                f"{context} relaxation: periodic z-cell too small ({c_len:.3f} A). "
+                f"Increase vacuum to at least {MIN_CALCULATOR_CELL_C_ANG:.1f} A."
+            )
     relaxed.calc = calculator
 
     if mode == "ionic_only":
@@ -725,6 +736,8 @@ def _relax_slab_structure(
         # Restore the caller's constraints (replacing any installed by the
         # relaxation mode) rather than leaving the structure unconstrained.
         relaxed.set_constraint(*copy.deepcopy(caller_constraints))
+        # Keep stored substrate PBC as the material-aware flags (slab xy-only).
+        relaxed.set_pbc(caller_pbc)
 
     return relaxed
 
@@ -834,31 +847,7 @@ def substitute_alloy(
         subsurface_host_indices = [idx for idx in host_indices if idx not in top_set]
 
         n_top_replace = int(round(len(top_host_indices) * guest_fraction))
-        n_top_replace = max(0, min(n_top_replace, len(top_host_indices)))
         n_sub_replace = n_replace - n_top_replace
-
-        if n_sub_replace > len(subsurface_host_indices):
-            deficit = n_sub_replace - len(subsurface_host_indices)
-            n_sub_replace = len(subsurface_host_indices)
-            n_top_replace = min(len(top_host_indices), n_top_replace + deficit)
-        elif n_sub_replace < 0:
-            n_top_replace = max(0, n_top_replace + n_sub_replace)
-            n_sub_replace = 0
-
-        assigned = n_top_replace + n_sub_replace
-        if assigned != n_replace:
-            remaining = n_replace - assigned
-            n_top_extra = min(remaining, len(top_host_indices) - n_top_replace)
-            n_top_replace += n_top_extra
-            remaining -= n_top_extra
-            n_sub_extra = min(remaining, len(subsurface_host_indices) - n_sub_replace)
-            n_sub_replace += n_sub_extra
-            remaining -= n_sub_extra
-            if remaining != 0:
-                raise GeometryValidationError(
-                    "Could not allocate alloy substitutions while enforcing "
-                    "top-layer composition constraints"
-                )
 
     for v in range(n_variants):
         if enforce_top_layer_fraction:
@@ -902,8 +891,9 @@ def substitute_alloy(
         try:
             logger.info("Relaxing alloy slab geometry")
             best_atoms.calc = calculator
+            _, _, relax_fmax, _ = _resolve_slab_relaxation_settings(config)
             dyn = LBFGS(best_atoms, logfile="-")
-            dyn.run(fmax=config.fmax)
+            dyn.run(fmax=relax_fmax)
             logger.info(
                 "Post-relax slab energy: %.4f eV",
                 best_atoms.get_potential_energy(),
@@ -911,13 +901,12 @@ def substitute_alloy(
         except (RuntimeError, ValueError) as exc:
             raise OptimizationError(f"Alloy slab relaxation failed: {exc}") from exc
 
-    cfg = resolve_adsorption_config(config)
     label = f"{host_symbol}_{guest_symbol}_{int(guest_fraction * 100)}"
     _save_reference_slab_artifacts(
         best_atoms,
         results_dir=results_dir,
         stem=f"clean_{label}_slab",
-        write_vasp=cfg.write_vasp_inputs,
+        write_vasp=config.write_vasp_inputs,
     )
     logger.info("Saved alloy slab (%s) to %s", label, results_dir)
 
@@ -1003,7 +992,11 @@ def deposit_adatoms(
 
     if coverage_fraction == 0.0:
         logger.info("Coverage_fraction=0; returning unmodified slab")
-        return SlabContainer(slab.atoms.copy())
+        frozen = apply_surface_constraints(
+            slab.atoms.copy(),
+            material_type=config.material_type,
+        )
+        return SlabContainer(frozen)
     if mode != "none" and calculator is None:
         raise ValueError(
             f"deposit_adatoms relaxation mode={mode!r} requires a calculator"
@@ -1131,14 +1124,13 @@ def deposit_adatoms(
             "Failed to generate any valid adatom-deposited slab"
         )
 
-    cfg = resolve_adsorption_config(config)
     pct = int(round(coverage_fraction * 100))
     label = f"{adatom_symbol}{pct}"
     _save_reference_slab_artifacts(
         best_atoms,
         results_dir=results_dir,
         stem=f"clean_slab_{label}",
-        write_vasp=cfg.write_vasp_inputs,
+        write_vasp=config.write_vasp_inputs,
     )
     logger.info(
         "Created adatom-deposited slab (%s, %.0f%%): E=%.4f eV",
@@ -1151,7 +1143,7 @@ def deposit_adatoms(
     # so adatoms are frozen with the rest of the substrate (default freeze-all).
     best_atoms = apply_surface_constraints(
         best_atoms,
-        material_type=cfg.material_type,
+        material_type=config.material_type,
     )
     return SlabContainer(best_atoms)
 

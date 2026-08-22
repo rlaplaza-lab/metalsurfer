@@ -5,6 +5,7 @@ import numpy as np
 from ase import Atoms
 
 from .. import optimization
+from .._numeric_defaults import DEFAULT_TOP_LAYER_TOLERANCE
 from ..config import (
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
@@ -129,7 +130,7 @@ def finalize_substrate(
     require_bottom_anchor: bool | None = None,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
-    top_layer_tolerance: float = 0.5,
+    top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
 ) -> SlabContainer:
     """Apply PBC, freeze constraints, and validate a substrate for campaign APIs.
 
@@ -194,15 +195,6 @@ def finalize_substrate(
     return container
 
 
-def _resolved_relaxation_mode(
-    config: AdsorptionConfig,
-    override: SLAB_RELAXATION_MODE | None,
-) -> SLAB_RELAXATION_MODE:
-    if override is not None:
-        return override
-    return config.slab_relaxation_mode
-
-
 def prepare_substrate(
     *,
     bulk_id: str | None = None,
@@ -229,7 +221,7 @@ def prepare_substrate(
     adatom_relaxation_steps: int | None = None,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
-    top_layer_tolerance: float = 0.5,
+    top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
 ) -> SlabContainer:
     """Build or load a substrate, optionally modify it, and finalize for campaigns.
 
@@ -323,7 +315,13 @@ def prepare_substrate(
     should_align = align if align is not None else material_type == "slab"
     from_loaded = slab is not None or slab_file is not None
 
-    slab_relax_mode = _resolved_relaxation_mode(cfg, slab_relaxation_mode)
+    slab_relax_mode, _, _, _ = _resolve_slab_relaxation_settings(
+        cfg,
+        relaxation_mode=slab_relaxation_mode,
+        relaxation_optimizer=slab_relaxation_optimizer,
+        relaxation_fmax=slab_relaxation_fmax,
+        relaxation_steps=slab_relaxation_steps,
+    )
     needs_calculator = (
         (alloy_guest and alloy_fraction > 0)
         or (adatom_symbol and adatom_coverage > 0)
@@ -354,10 +352,7 @@ def prepare_substrate(
             align=should_align,
         )
     else:
-        if bulk_id is None:
-            raise ValueError(
-                "bulk_id is required when neither slab_file nor slab is provided"
-            )
+        assert bulk_id is not None
         slab_container = create_slab_from_bulk(
             bulk_id=bulk_id,
             miller_indices=miller_indices,
@@ -442,7 +437,7 @@ def resize_substrate_for_molecule(
     *,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
-    top_layer_tolerance: float = 0.5,
+    top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
 ) -> SlabContainer:
     """Expand *slab* in-plane when conformers require larger image separation.
 

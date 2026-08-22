@@ -19,7 +19,7 @@ from metalsurfer.models import (
     SaturationStepResult,
 )
 from metalsurfer.workflow.shared import MoleculeScreenOutcome
-from tests.conftest import make_screening_result
+from tests.conftest import make_screening_result, make_slab
 
 
 def _patch_binding_bootstrap(monkeypatch, slab_container, ref=None):
@@ -71,6 +71,7 @@ def test_run_saturation_bo_passes_bo_enabled_and_preserves_multi_molecule(monkey
                 molecules=["demo"],
                 steps=[],
                 n_molecules_at_saturation=0,
+                final_slab_atoms=make_slab(),
             )
         ]
 
@@ -126,6 +127,7 @@ def test_run_saturation_passes_config_to_save_saturation_results(monkeypatch):
                 molecule="demo",
                 steps=[],
                 n_molecules_at_saturation=0,
+                final_slab_atoms=make_slab(),
             )
         ]
 
@@ -177,6 +179,7 @@ def test_run_saturation_save_benchmark_dataset(monkeypatch):
                     )
                 ],
                 n_molecules_at_saturation=1,
+                final_slab_atoms=make_slab(),
             )
         ]
 
@@ -235,6 +238,7 @@ def test_run_saturation_write_settings_persists_json(tmp_path, monkeypatch):
                 molecule="demo",
                 steps=[],
                 n_molecules_at_saturation=0,
+                final_slab_atoms=make_slab(),
             )
         ]
 
@@ -268,8 +272,8 @@ def test_run_saturation_write_settings_persists_json(tmp_path, monkeypatch):
         meta = json.load(f)
     assert meta["input"]["n_molecules"] == 2
     assert meta["results"]["total_configurations"] == 7
-    assert meta["timing"]["reference_energies_s"] == 1.0
-    assert meta["timing"]["total_wall_clock_s"] == 3.5
+    assert meta["timing"]["reference_energies_s"] == pytest.approx(1.0)
+    assert meta["timing"]["total_wall_clock_s"] == pytest.approx(3.5)
 
 
 def test_run_adsorption_csv_path_unified_with_inline(tmp_path, monkeypatch):
@@ -433,6 +437,7 @@ def test_run_saturation_write_settings_includes_campaign_metadata(
                 molecule="demo",
                 steps=[],
                 n_molecules_at_saturation=0,
+                final_slab_atoms=make_slab(),
             )
         ],
     )

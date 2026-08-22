@@ -9,11 +9,9 @@ from ase import Atoms
 from sklearn.preprocessing import StandardScaler
 
 from ..config import (
-    BO_TRANSFER_CAPABLE_SURROGATES,
     AdsorptionConfig,
     resolved_bo_eval_budget,
 )
-from ..filters import filter_results
 from ..ml.bayesian import (
     TransferCapableSurrogateType,
     _align_to_columns,
@@ -26,24 +24,35 @@ from ..ml.bayesian import (
 )
 from ..ml.features import extract_features
 from ..ml.schema import PlacementRecord
-from ..models import BOStepMemory, BOTransferInfo, ReferenceEnergies, ScreeningResult
+from ..models import (
+    BOStepMemory,
+    BOTransferInfo,
+    PlacementDescriptor,
+    ReferenceEnergies,
+    ScreeningResult,
+)
 from ..placement.generators import (
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
+)
+from ..reporting import (
+    BOPlacementFailure,
+    BOValidationFailure,
+    FailureSummary,
+    FilterFailure,
 )
 from ..surface_prep import SlabContainer
 from .core import _evaluate_placement_batch
 from .shared import (
     MoleculeScreenOutcome,
     PlacementFailureEvent,
+    _filter_and_label_duplicates,
     _infer_surface_symbols,
     _prepare_molecule_screening,
     _summarize_failure_events,
 )
 
 logger = logging.getLogger(__name__)
-
-__all__ = ["process_molecule_bayesian"]
 
 
 def _train_surrogate_for_bo(
@@ -54,14 +63,6 @@ def _train_surrogate_for_bo(
     sample_weight: np.ndarray | None = None,
 ):
     """Fit BO surrogate. Per-sample weights for transfer-capable surrogates."""
-    if (
-        sample_weight is not None
-        and config.bo.surrogate not in BO_TRANSFER_CAPABLE_SURROGATES
-    ):
-        raise ValueError(
-            "sample_weight is only supported for transfer-capable BO surrogates "
-            f"{BO_TRANSFER_CAPABLE_SURROGATES}, not {config.bo.surrogate!r}"
-        )
     return train_surrogate(
         X,
         y,
@@ -79,7 +80,8 @@ def process_molecule_bayesian(
     calculator,
     reference_energies: ReferenceEnergies,
     ts_model=None,
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
     surface_type: str = "manual",
     reference_smiles: str | None = None,
     base_slab_for_frozen: Atoms | None = None,
@@ -109,7 +111,7 @@ def process_molecule_bayesian(
     ts_model
         Transition-state model (optional).
     config
-        Adsorption configuration.
+        Adsorption configuration (required).
     surface_type
         Surface type label.
     reference_smiles
@@ -135,13 +137,10 @@ def process_molecule_bayesian(
         Reuse the slab+adsorbate autobatcher across acquisition batches
         (default True; same molecule/slab for the whole call).
     """
-    if config is None:
-        config = AdsorptionConfig()
-
     if reference_smiles is None:
         reference_smiles = smiles
 
-    failure_summary: dict[str, object] = {}
+    failure_summary: FailureSummary | None = None
     ml_records: list[PlacementRecord] = []
     transfer_info = BOTransferInfo()
     bo_memory: BOStepMemory | None = None
@@ -155,12 +154,12 @@ def process_molecule_bayesian(
             transfer_info=transfer_info,
         )
 
-    def _bail_outcome(stage: str, **counts: object) -> MoleculeScreenOutcome:
-        failure_summary["stage"] = stage
-        failure_summary.update(counts)
+    def _bail_outcome(summary: FailureSummary) -> MoleculeScreenOutcome:
+        nonlocal failure_summary
+        failure_summary = summary
         return _outcome([])
 
-    ctx = _prepare_molecule_screening(
+    ctx, early_failure = _prepare_molecule_screening(
         smiles=smiles,
         molecule_name=molecule_name,
         slab=slab,
@@ -171,14 +170,14 @@ def process_molecule_bayesian(
         base_slab_for_frozen=base_slab_for_frozen,
         slab_energy_override=slab_energy_override,
         symmetry_broken=symmetry_broken,
-        failure_summary=failure_summary,
         bo_enabled=True,
         conformers=conformers,
         conformer_energies=conformer_energies,
         skip_workload_autotune=skip_workload_autotune,
     )
     if ctx is None:
-        return _outcome([])
+        assert early_failure is not None
+        return _bail_outcome(early_failure)
 
     slab = ctx.slab
     slab_for_sites = ctx.slab_for_sites
@@ -195,8 +194,7 @@ def process_molecule_bayesian(
     if config.bo.batch_size is None:
         raise ValueError("config.bo.batch_size must be set for Bayesian screening")
     num_placements = config.num_placements
-    if num_placements is None:
-        raise ValueError("config.num_placements must be set for Bayesian screening")
+    assert num_placements is not None
     bo_eval_budget = resolved_bo_eval_budget(config)
 
     max_enumerated_specs = estimate_placement_spec_capacity(
@@ -227,7 +225,7 @@ def process_molecule_bayesian(
     )
     if not all_specs:
         logger.warning("No candidate specs generated for BO")
-        return _bail_outcome("placement", n_candidate_specs=0, n_valid_pool=0)
+        return _bail_outcome(BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0))
 
     logger.info(
         "BO: %d/%d candidate specs, batches=%d (initial=%d, batch=%d, eval_budget=%d, kappa=%.2f)",
@@ -241,7 +239,7 @@ def process_molecule_bayesian(
     )
 
     surface_symbols = _infer_surface_symbols(slab_for_sites)
-    materialization_cache: dict[int, tuple] = {}
+    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] = {}
     candidate_features, valid_spec_indices = build_spec_features_geometry_aware(
         all_specs,
         conformers,
@@ -257,7 +255,10 @@ def process_molecule_bayesian(
     if candidate_features.empty:
         logger.warning("BO: no specs produced valid placements; aborting")
         return _bail_outcome(
-            "placement", n_candidate_specs=len(all_specs), n_valid_pool=0
+            BOPlacementFailure(
+                n_candidate_specs=len(all_specs),
+                n_valid_pool=0,
+            )
         )
     # Standardize the fixed candidate pool once for diversity across rounds.
     scaled_candidate_features = StandardScaler().fit_transform(
@@ -344,7 +345,7 @@ def process_molecule_bayesian(
         ]
         backfill_specs = [all_specs[valid_spec_indices[p]] for p in backfill_positions]
 
-        batch_results, batch_failures, n_backfill_used = _evaluate_placement_batch(
+        batch_results, batch_failures = _evaluate_placement_batch(
             batch_specs,
             conformers,
             slab,
@@ -365,7 +366,16 @@ def process_molecule_bayesian(
             saturation_reuse=saturation_reuse,
         )
 
-        used_positions = list(pool_positions) + backfill_positions[:n_backfill_used]
+        # Mark primary always. For backfill, only mark specs that produced an
+        # outcome (result or failure) — oversampled successes trimmed before
+        # relax must stay selectable for later BO batches.
+        outcome_pids = {r.placement_id for r in batch_results}
+        outcome_pids.update(event.placement_id for event in batch_failures)
+        used_positions = list(pool_positions)
+        for p in backfill_positions:
+            pid = int(all_specs[valid_spec_indices[p]].placement_index)
+            if pid in outcome_pids:
+                used_positions.append(p)
         evaluated_pool_positions.update(used_positions)
         total_evaluated += len(used_positions)
         all_results.extend(batch_results)
@@ -467,13 +477,12 @@ def process_molecule_bayesian(
                 and config.bo.transfer.mode == "cumulative_refit"
                 and len(X_current) >= 3
             )
+            if can_try_refit or can_try_weighted:
+                assert transfer_memory is not None
+                memory = transfer_memory
             if can_try_refit:
-                if transfer_memory is None:
-                    raise ValueError(
-                        "transfer_memory is required for cumulative_refit transfer"
-                    )
-                X_prior = pd.DataFrame(transfer_memory.observed_X_rows)
-                y_prior = np.asarray(transfer_memory.observed_y, dtype=float)
+                X_prior = pd.DataFrame(memory.observed_X_rows)
+                y_prior = np.asarray(memory.observed_y, dtype=float)
                 X_prior = _align_to_columns(X_prior, X_current)
                 X_combined, y_combined, refit_weights = cumulative_refit_training_set(
                     X_prior,
@@ -500,15 +509,11 @@ def process_molecule_bayesian(
                 )
                 transfer_used_rounds += 1
             elif can_try_weighted:
-                if transfer_memory is None:
-                    raise ValueError(
-                        "transfer_memory is required for weighted transfer"
-                    )
                 transfer_result = build_transfer_surrogate(
                     X_current,
                     y_current,
-                    transfer_memory.observed_X_rows,
-                    transfer_memory.observed_y,
+                    memory.observed_X_rows,
+                    memory.observed_y,
                     surrogate=cast(TransferCapableSurrogateType, config.bo.surrogate),
                     n_estimators=100,
                     random_state=config.seed,
@@ -519,8 +524,7 @@ def process_molecule_bayesian(
                     transfer_bad_rounds=transfer_bad_rounds,
                     trust_patience=config.bo.transfer.trust_patience,
                     proximity_lengthscale=config.bo.transfer.proximity_lengthscale,
-                    proximity_floor=config.bo.transfer.proximity_floor,
-                    prior_step_ages=transfer_memory.step_ages,
+                    prior_step_ages=memory.step_ages,
                     recency_lengthscale=config.bo.transfer.recency_lengthscale,
                     prior_placement_X=occupancy_placement_X,
                     occupancy_lengthscale=config.bo.transfer.occupancy_lengthscale,
@@ -574,7 +578,6 @@ def process_molecule_bayesian(
                     np.ceil(batch_size * config.bo.transfer.exploration_fraction)
                 )
             if explore_n > 0:
-                unevaluated = _unevaluated()
                 available_for_random = [
                     p for p in unevaluated if p not in next_positions
                 ]
@@ -613,24 +616,24 @@ def process_molecule_bayesian(
     if not all_results:
         _flush_bo_outputs()
         return _bail_outcome(
-            "validation",
-            n_candidate_specs=len(all_specs),
-            n_valid_pool=len(valid_spec_indices),
-            n_evaluated=total_evaluated,
-            n_valid_results=0,
+            BOValidationFailure(
+                n_candidate_specs=len(all_specs),
+                n_valid_pool=len(valid_spec_indices),
+                n_evaluated=total_evaluated,
+                n_valid_results=0,
+            )
         )
 
-    # Filter + dedup labeling follows the same pattern as core's
-    # ``_finalize_screen_results``, but BO also builds failure-penalty negatives
-    # for rejected non-duplicates, so the shared helper is not used here.
-    bo_duplicate_results: list[ScreeningResult] = []
-    filtered = filter_results(
+    # BO also builds failure-penalty negatives for rejected non-duplicates.
+    filtered, bo_duplicate_results, _t_filtering = _filter_and_label_duplicates(
         all_results,
-        slab=slab.atoms,
+        slab_atoms=slab.atoms,
         surface_symbols=surface_symbols,
         reference_smiles=reference_smiles,
         config=config,
-        duplicate_results_out=bo_duplicate_results,
+        smiles=smiles,
+        surface_type=surface_type,
+        ml_records=bo_negative_records,
     )
     duplicate_result_ids = {id(result) for result in bo_duplicate_results}
     kept_result_ids = {id(result) for result in filtered}
@@ -669,25 +672,14 @@ def process_molecule_bayesian(
             "BO post-filter deduplicated %d results (tracked for ML/BO)",
             len(bo_duplicate_results),
         )
-        for duplicate in bo_duplicate_results:
-            record = PlacementRecord.from_screening_result(
-                duplicate,
-                smiles=smiles,
-                surface_id=surface_type,
-                config=config,
-            )
-            record.label_source = "deduplicated_duplicate"
-            bo_negative_records.append(record)
 
     if not filtered:
         _flush_bo_outputs()
         return _bail_outcome(
-            "filter",
-            n_candidate_specs=len(all_specs),
-            n_valid_pool=len(valid_spec_indices),
-            n_evaluated=total_evaluated,
-            n_before_filter=len(all_results),
-            n_after_filter=0,
+            FilterFailure(
+                n_before_filter=len(all_results),
+                n_after_filter=0,
+            )
         )
 
     logger.info(
@@ -697,8 +689,7 @@ def process_molecule_bayesian(
         min(r.energy_adsorption for r in filtered),
         max(r.energy_adsorption for r in filtered),
     )
-    if bo_negative_records:
-        ml_records.extend(bo_negative_records)
+    ml_records.extend(bo_negative_records)
     _flush_bo_outputs()
 
     return _outcome(filtered)

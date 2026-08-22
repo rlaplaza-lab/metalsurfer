@@ -1,7 +1,6 @@
 """Core single-molecule workflow orchestration."""
 
 import logging
-import os
 import time
 
 from ase import Atoms
@@ -16,6 +15,13 @@ from ..models import (
     ScreeningResult,
 )
 from ..placement.site_context import SiteContext
+from ..reporting import (
+    FailureSummary,
+    OptimizationFailure,
+    PlacementFailure,
+    ValidationFailure,
+)
+from ..result_paths import molecule_all_xyz_dir, results_dir_for
 from ..surface_prep import SlabContainer
 from .placement_fill import (
     fill_materialized_placements,
@@ -24,6 +30,7 @@ from .placement_fill import (
 from .shared import (
     MoleculeScreenOutcome,
     PlacementFailureEvent,
+    _failure_reason_counts,
     _finalize_screen_results,
     _generation_failure_histogram,
     _infer_surface_symbols,
@@ -42,7 +49,8 @@ def process_molecule(
     calculator,
     reference_energies: ReferenceEnergies,
     ts_model=None,
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
     surface_type: str = "manual",
     reference_smiles: str | None = None,
     base_slab_for_frozen: Atoms | None = None,
@@ -70,7 +78,7 @@ def process_molecule(
     ts_model
         Transition-state model (optional).
     config
-        Adsorption configuration.
+        Adsorption configuration (required).
     surface_type
         Surface type label.
     reference_smiles
@@ -90,13 +98,9 @@ def process_molecule(
     skip_workload_autotune
         Whether to skip workload autotuning.
     """
-    if config is None:
-        config = AdsorptionConfig()
-
     if reference_smiles is None:
         reference_smiles = smiles
 
-    failure_summary: dict[str, object] = {}
     ml_records: list[PlacementRecord] = []
 
     with log_context(
@@ -113,7 +117,7 @@ def process_molecule(
             config.seed,
         )
 
-        ctx = _prepare_molecule_screening(
+        ctx, early_failure = _prepare_molecule_screening(
             smiles=smiles,
             molecule_name=molecule_name,
             slab=slab,
@@ -124,16 +128,16 @@ def process_molecule(
             base_slab_for_frozen=base_slab_for_frozen,
             slab_energy_override=slab_energy_override,
             symmetry_broken=symmetry_broken,
-            failure_summary=failure_summary,
             bo_enabled=False,
             conformers=conformers,
             conformer_energies=conformer_energies,
             skip_workload_autotune=skip_workload_autotune,
         )
         if ctx is None:
+            assert early_failure is not None
             return MoleculeScreenOutcome(
                 results=[],
-                failure_summary=failure_summary,
+                failure_summary=early_failure,
                 ml_records=ml_records,
             )
 
@@ -188,11 +192,10 @@ def process_molecule(
         )
 
         if config.debug_write_initial_placements and all_combined:
-            xyz_dir = f"results_{surface_type}/xyz_structures/{molecule_name}_all"
-            os.makedirs(xyz_dir, exist_ok=True)
+            xyz_dir = molecule_all_xyz_dir(results_dir_for(surface_type), molecule_name)
             for combined, pid in zip(all_combined, placement_ids, strict=True):
-                path = f"{xyz_dir}/initial_{pid:03d}.xyz"
-                _write_clean_xyz(combined, path)
+                path = xyz_dir / f"initial_{pid:03d}.xyz"
+                _write_clean_xyz(combined, str(path))
             logger.info(
                 "Wrote %d initial placement XYZ files to %s",
                 len(all_combined),
@@ -201,17 +204,18 @@ def process_molecule(
 
         if not all_combined:
             logger.warning("No valid placements")
-            failure_summary["stage"] = "placement"
-            failure_summary["n_placements_attempted"] = config.num_placements
-            failure_summary["n_initial_placements"] = 0
-            failure_summary["generation_failures"] = _generation_failure_histogram(
-                placement_failure_events
-            )
-            if config.placement_retry_enabled:
-                failure_summary["n_retry_attempts"] = n_placement_attempts
             return MoleculeScreenOutcome(
                 results=[],
-                failure_summary=failure_summary,
+                failure_summary=PlacementFailure(
+                    n_placements_attempted=config.num_placements or 0,
+                    n_initial_placements=0,
+                    generation_failures=_generation_failure_histogram(
+                        placement_failure_events
+                    ),
+                    n_retry_attempts=(
+                        n_placement_attempts if config.placement_retry_enabled else None
+                    ),
+                ),
                 ml_records=ml_records,
             )
 
@@ -233,7 +237,6 @@ def process_molecule(
                 placement_ids,
                 placement_descriptors,
                 slab=slab.atoms,
-                calculator=calculator,
                 ts_model=ts_model,
                 config=config,
                 energies=(E_slab, E_mol),
@@ -246,20 +249,16 @@ def process_molecule(
         t_optimization = time.perf_counter() - t0
 
         if not results and not validation_failure_events and n_optimization_failed == 0:
-            failure_summary["stage"] = "optimization"
-            failure_summary["n_placements_attempted"] = len(placement_ids)
-            failure_summary["n_initial_placements"] = len(all_combined)
             return MoleculeScreenOutcome(
                 results=[],
-                failure_summary=failure_summary,
+                failure_summary=OptimizationFailure(
+                    n_placements_attempted=len(placement_ids),
+                    n_initial_placements=len(all_combined),
+                ),
                 ml_records=ml_records,
             )
 
-        validation_failures: dict[str, int] = {}
-        for failure_event in validation_failure_events:
-            validation_failures[failure_event.reason] = (
-                validation_failures.get(failure_event.reason, 0) + 1
-            )
+        validation_failures = _failure_reason_counts(validation_failure_events)
         for result in results:
             logger.info(
                 "E_ads = %.4f eV, distance = %.2f A",
@@ -274,18 +273,30 @@ def process_molecule(
 
         if not results:
             logger.warning("No valid placements after validation")
-            failure_summary["stage"] = "validation"
-            failure_summary["n_initial_placements"] = len(all_combined)
-            failure_summary["n_optimized"] = len(all_combined) - n_optimization_failed
-            failure_summary["n_optimization_failed"] = n_optimization_failed
-            failure_summary["validation_failures"] = validation_failures
+            n_optimized = len(all_combined) - n_optimization_failed
+            failure: FailureSummary
+            if n_optimization_failed == len(all_combined) and len(all_combined) > 0:
+                failure = OptimizationFailure(
+                    n_placements_attempted=len(placement_ids),
+                    n_initial_placements=len(all_combined),
+                    n_optimized=n_optimized,
+                    n_optimization_failed=n_optimization_failed,
+                    validation_failures=validation_failures,
+                )
+            else:
+                failure = ValidationFailure(
+                    n_initial_placements=len(all_combined),
+                    n_optimized=n_optimized,
+                    n_optimization_failed=n_optimization_failed,
+                    validation_failures=validation_failures,
+                )
             return MoleculeScreenOutcome(
                 results=[],
-                failure_summary=failure_summary,
+                failure_summary=failure,
                 ml_records=ml_records,
             )
 
-        results, t_filtering = _finalize_screen_results(
+        results, t_filtering, filter_failure = _finalize_screen_results(
             results,
             slab_atoms=slab.atoms,
             surface_symbols=surface_symbols,
@@ -293,7 +304,6 @@ def process_molecule(
             config=config,
             smiles=smiles,
             surface_type=surface_type,
-            failure_summary=failure_summary,
             ml_records=ml_records,
         )
 
@@ -315,7 +325,7 @@ def process_molecule(
 
         return MoleculeScreenOutcome(
             results=results,
-            failure_summary=failure_summary,
+            failure_summary=filter_failure,
             ml_records=ml_records,
         )
 
@@ -339,7 +349,7 @@ def _evaluate_placement_batch(
     backfill_specs: list | None = None,
     n_target: int | None = None,
     saturation_reuse: bool = False,
-) -> tuple[list[ScreeningResult], list[PlacementFailureEvent], int]:
+) -> tuple[list[ScreeningResult], list[PlacementFailureEvent]]:
     """Run placement-generation + optimization + validation for a batch of specs.
 
     When ``backfill_specs`` is provided, materialization failures in ``specs`` are
@@ -348,7 +358,7 @@ def _evaluate_placement_batch(
 
     Returns
     -------
-    ``(results, failures, n_backfill_used)``
+    ``(results, failures)``
     """
     target = len(specs) if n_target is None else n_target
     fill = materialize_specs_filling_target(
@@ -370,7 +380,7 @@ def _evaluate_placement_batch(
     failures = list(fill.failures)
 
     if not all_combined:
-        return [], failures, fill.n_backfill_used
+        return [], failures
 
     results, validation_failure_events, _n_optimization_failed = (
         _optimize_and_evaluate_placements(
@@ -378,7 +388,6 @@ def _evaluate_placement_batch(
             placement_ids,
             placement_descriptors,
             slab=slab.atoms,
-            calculator=calculator,
             ts_model=ts_model,
             config=config,
             energies=(E_slab, E_mol),
@@ -391,7 +400,7 @@ def _evaluate_placement_batch(
     )
     if not results and not validation_failure_events and _n_optimization_failed == 0:
         # Optimize returned empty; preserve prior batch behavior (drop gen failures).
-        return [], [], fill.n_backfill_used
+        return [], []
 
     failures.extend(validation_failure_events)
-    return results, failures, fill.n_backfill_used
+    return results, failures

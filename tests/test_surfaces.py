@@ -371,6 +371,7 @@ def test_relax_slab_structure_restores_caller_constraints():
     n = len(slab.atoms)
     frozen = list(range(n))
     slab.atoms.set_constraint(FixAtoms(indices=frozen))
+    assert list(slab.atoms.get_pbc()) == [True, True, False]
 
     relaxed = _relax_slab_structure(
         slab.atoms,
@@ -383,6 +384,8 @@ def test_relax_slab_structure_restores_caller_constraints():
     restored = [c for c in relaxed.constraints if isinstance(c, FixAtoms)]
     assert restored, "caller FixAtoms constraints were not restored"
     assert list(restored[0].index) == frozen
+    # Calculator-legal PBC is used only during dyn.run; stored PBC stays slab-like.
+    assert list(relaxed.get_pbc()) == [True, True, False]
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +552,9 @@ class TestDepositAdatoms:
         result = deposit_adatoms(slab, "Sn", coverage_fraction=0.0)
         assert len(result.atoms) == n_before
         assert result.atoms.get_chemical_symbols() == syms_before
+        from ase.constraints import FixAtoms
+
+        assert any(isinstance(c, FixAtoms) for c in result.atoms.constraints)
 
     def test_adatoms_respect_minimum_separation(self):
         # Plan item 10: adatoms must not be packed on top of each other.

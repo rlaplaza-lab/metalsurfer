@@ -10,6 +10,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from metalsurfer._numeric_defaults import ACQUISITION_SIGMA_FLOOR
 from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.ml.bayesian import (
     EnsembleRegressor,
@@ -43,10 +44,9 @@ from metalsurfer.placement import (
     estimate_placement_spec_capacity,
 )
 from tests.factories import make_random_placement_records
-from tests.optional_deps import cuda_available, has_mlip_stack
 
 from ._logging_helpers import CaptureHandler
-from .conftest import make_placement_descriptor, make_slab, make_water
+from .conftest import gpu_mlip_test, make_placement_descriptor, make_slab, make_water
 
 
 def _make_synthetic_training_data(n: int = 40):
@@ -100,7 +100,7 @@ class TestSurrogate:
         mu, sigma = predict_with_uncertainty(model, X)
         assert mu.shape == (40,)
         assert sigma.shape == (40,)
-        assert np.all(sigma >= 0)
+        assert np.all(sigma >= ACQUISITION_SIGMA_FLOOR)
         assert not np.any(np.isnan(mu))
 
     def test_seed_reproducibility(self):
@@ -124,7 +124,7 @@ class TestSurrogate:
         mu, sigma = predict_with_uncertainty(pipeline, X)
         assert mu.shape == (20,)
         assert sigma.shape == (20,)
-        assert np.all(sigma == 0.0)
+        assert np.all(np.isclose(sigma, 0.0))
 
     def test_train_surrogate_rejects_sample_weight_for_non_weighted(self):
         X, y = _make_synthetic_training_data(20)
@@ -440,7 +440,6 @@ class TestFeatureBuilding:
         )
         assert len(result.combined) == 2
         assert set(result.placement_ids) == {1, 2}
-        assert result.n_backfill_used == 1
 
     def test_record_from_descriptor_roundtrip(self):
         d = _bayesian_descriptor(7)
@@ -799,19 +798,7 @@ class TestTransferTolerance:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
-@pytest.mark.slow
-@pytest.mark.mlip
-@pytest.mark.gpu
-@pytest.mark.no_fork
-@pytest.mark.skipif(
-    not has_mlip_stack,
-    reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
-)
-@pytest.mark.skipif(
-    not cuda_available,
-    reason="CUDA GPU required; run in conda env metalsurfer with GPU",
-)
+@gpu_mlip_test
 def test_bayesian_two_generations_on_defect_surface(tmp_path):
     """BO smoke test for two generations on an adatom-defect surface.
 

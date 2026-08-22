@@ -25,7 +25,7 @@ def test_identify_relaxable_surface_slab():
     top = identify_relaxable_surface_indices(slab, material_type="slab", tolerance=0.5)
     expected_z = 6.0
     for idx in top:
-        assert abs(slab.get_positions()[idx, 2] - expected_z) <= 0.5
+        assert abs(slab.get_positions()[idx, 2] - expected_z) < 1e-9
     assert len(top) == 4
 
 

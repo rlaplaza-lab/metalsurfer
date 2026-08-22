@@ -36,6 +36,9 @@ from metalsurfer.filters import (
 from metalsurfer.models import ScreeningResult
 
 from .conftest import (
+    make_ethanol_ccoh6 as _make_ethanol,
+)
+from .conftest import (
     make_placement_descriptor,
     make_screening_result,
     make_slab,
@@ -82,28 +85,6 @@ def _make_alloy_slab():
             syms[i] = "Cu"
     atoms.set_chemical_symbols(syms)
     return atoms
-
-
-def _make_ethanol():
-    """C2H5OH – 9 atoms with correct connectivity (covalent_radii geometry for bond-count tests)."""
-    r_CC = covalent_radii[atomic_numbers["C"]] + covalent_radii[atomic_numbers["C"]]
-    r_CO = covalent_radii[atomic_numbers["C"]] + covalent_radii[atomic_numbers["O"]]
-    r_CH = covalent_radii[atomic_numbers["C"]] + covalent_radii[atomic_numbers["H"]]
-    r_OH = covalent_radii[atomic_numbers["O"]] + covalent_radii[atomic_numbers["H"]]
-    return Atoms(
-        "CCOH6",
-        positions=[
-            [0.0, 0.0, 0.0],  # C1
-            [r_CC, 0.0, 0.0],  # C2
-            [r_CC + r_CO, 0.0, 0.0],  # O
-            [r_CC + r_CO + r_OH, 0.0, 0.0],  # H (on O)
-            [-r_CH * 0.33, r_CH * 0.94, 0.0],  # H (on C1)
-            [-r_CH * 0.33, -r_CH * 0.47, r_CH * 0.82],  # H (on C1)
-            [-r_CH * 0.33, -r_CH * 0.47, -r_CH * 0.82],  # H (on C1)
-            [r_CC + r_CH * 0.33, r_CH * 0.94, 0.0],  # H (on C2)
-            [r_CC + r_CH * 0.33, -r_CH * 0.94, 0.0],  # H (on C2)
-        ],
-    )
 
 
 def _make_methanol():
@@ -390,7 +371,7 @@ def test_coordination_fingerprint_detects_h_shift():
         (_make_ethanol, "CCO", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
         (_make_methanol, "CO", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
         (_make_acetic_acid, "CC(=O)O", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
-        (make_water, "O", ["Ru", "Cu"], [1.3], _make_alloy_slab),
+        (make_water, "O", ["Ru", "Cu"], 1.3, _make_alloy_slab),
     ],
 )
 def test_decomposition_intact(
@@ -401,7 +382,7 @@ def test_decomposition_intact(
         combined,
         reference_smiles=smiles,
         surface_symbols=surface_symbols,
-        connectivity_multipliers=multipliers,
+        connectivity_multiplier=multipliers,
     )
     assert ok, reason
 
@@ -414,7 +395,7 @@ def test_decomposition_no_smiles_reference():
         combined,
         reference_smiles=None,
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     assert ok, reason
     assert "no SMILES" in reason
@@ -428,7 +409,7 @@ def test_decomposition_unparseable_smiles_falls_back_to_connectivity_only(caplog
         combined,
         reference_smiles="not-a-valid-smiles-string",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     assert "Could not parse reference SMILES" in caplog.text
     assert ok
@@ -458,29 +439,22 @@ def test_decomposition_fragmented_water():
         combined,
         reference_smiles="O",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     assert not ok
     assert "not connected" in reason
 
 
-def test_decomposition_connectivity_uses_max_multiplier_only():
+def test_decomposition_connectivity_multiplier_applied():
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, make_water())
-    ok_a, reason_a = check_decomposition(
+    ok, reason = check_decomposition(
         combined,
         reference_smiles="O",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.2, 9.0],
+        connectivity_multiplier=1.3,
     )
-    ok_b, reason_b = check_decomposition(
-        combined,
-        reference_smiles="O",
-        surface_symbols=["Ru"],
-        connectivity_multipliers=[9.0],
-    )
-    assert ok_a == ok_b
-    assert reason_a == reason_b
+    assert ok, reason
 
 
 def _combined_slab_two_waters_far_apart():
@@ -512,7 +486,7 @@ def test_check_decomposition_prefix_ignores_prior_adsorbate():
         combined,
         reference_smiles="O",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
         adsorbate_prefix_atoms=prefix,
     )
     assert ok, reason
@@ -521,7 +495,7 @@ def test_check_decomposition_prefix_ignores_prior_adsorbate():
         combined,
         reference_smiles="O",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     assert not ok_legacy
     assert "not connected" in reason_legacy
@@ -532,7 +506,7 @@ def test_check_decomposition_prefix_invalid():
         make_slab(n_layers=1),
         reference_smiles="O",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
         adsorbate_prefix_atoms=999,
     )
     assert not ok
@@ -542,7 +516,7 @@ def test_check_decomposition_prefix_invalid():
 def test_filter_results_uses_slab_prefix_for_decomposition():
     """filter_results passes len(slab) so the second molecule is checked alone."""
     slab, slab_plus_first, combined = _combined_slab_two_waters_far_apart()
-    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     results = [_sr(combined, -1.0, 0)]
     filtered = filter_results(
         results,
@@ -590,7 +564,7 @@ def test_decomposition_fragmented_ethanol_two_pieces():
         combined,
         reference_smiles="CCO",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     assert not ok, f"Fragmented ethanol should be detected, got: {reason}"
 
@@ -619,7 +593,7 @@ def test_decomposition_h_loss():
         truncated,
         reference_smiles="O",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     assert not ok
     assert "formula mismatch" in reason
@@ -639,7 +613,7 @@ def test_decomposition_extra_atom():
         combined,
         reference_smiles="O",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     assert not ok
     assert "formula mismatch" in reason
@@ -669,7 +643,7 @@ def test_decomposition_bond_mismatch_wrong_molecule():
         combined,
         reference_smiles="CCO",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     assert not ok
     # formula check will fire first since CC vs CCO differs in atom count
@@ -693,7 +667,7 @@ def test_decomposition_oh_bond_break():
         combined,
         reference_smiles="CO",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     assert not ok
     # the H moved from O to C: coordination changes
@@ -728,7 +702,7 @@ def test_decomposition_h_shift_caught_by_coordination():
         combined,
         reference_smiles="CCO",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     assert not ok, (
         "H-shift should be caught by coordination fingerprint or bond mismatch"
@@ -953,7 +927,7 @@ def test_filter_results_desorption_uses_surface_symbols_masking():
     combined.set_pbc(slab_with_pre_adsorbate.get_pbc())
     results = [_sr(combined, -1.0, 0)]
 
-    config = AdsorptionConfig(skip_topology_check=True, connectivity_multipliers=[1.3])
+    config = AdsorptionConfig(skip_topology_check=True, connectivity_multiplier=1.3)
     filtered = filter_results(
         results,
         slab=slab_with_pre_adsorbate,
@@ -981,7 +955,7 @@ def test_duplicate_removal():
     config = AdsorptionConfig(
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
     assert len(filtered) == 1
@@ -999,7 +973,7 @@ def test_duplicate_removal_tracks_removed_duplicates():
     config = AdsorptionConfig(
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     removed: list[ScreeningResult] = []
     filtered = filter_results(
@@ -1031,7 +1005,7 @@ def test_distinct_kept():
     config = AdsorptionConfig(
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
     assert len(filtered) == 2
@@ -1050,7 +1024,7 @@ def test_duplicate_different_energy_kept():
     config = AdsorptionConfig(
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
     assert len(filtered) == 2
@@ -1084,7 +1058,7 @@ def test_filter_pipeline_removes_decomposed_and_desorbed():
         _sr(decomposed, -0.5, 1),
         _sr(desorbed, -0.8, 2),
     ]
-    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     filtered = filter_results(
         results,
         slab=slab,
@@ -1115,7 +1089,7 @@ def test_filter_pipeline_catches_rearranged():
         _sr(good, -1.5, 0),
         _sr(rearranged, -2.0, 1),
     ]
-    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     filtered = filter_results(
         results,
         slab=slab,
@@ -1148,7 +1122,7 @@ def test_filter_pipeline_catches_atom_loss():
         _sr(good, -1.0, 0),
         _sr(truncated, -2.0, 1),
     ]
-    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     filtered = filter_results(
         results,
         slab=slab,
@@ -1182,7 +1156,7 @@ def test_filter_pipeline_all_rejected():
     combined.set_pbc(slab.get_pbc())
 
     results = [_sr(combined, -1.0, 0)]
-    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     filtered = filter_results(
         results,
         slab=slab,
@@ -1214,7 +1188,7 @@ def test_filter_pipeline_skip_topology_check_allows_decomposed():
         _sr(good, -1.0, 0),
         _sr(decomposed, -0.5, 1),
     ]
-    config = AdsorptionConfig(connectivity_multipliers=[1.3], skip_topology_check=True)
+    config = AdsorptionConfig(connectivity_multiplier=1.3, skip_topology_check=True)
     filtered = filter_results(
         results,
         slab=slab,
@@ -1258,7 +1232,7 @@ def test_filter_pipeline_alloy_surface():
         _sr(good, -1.0, 0),
         _sr(desorbed, -0.2, 1),
     ]
-    config = AdsorptionConfig(connectivity_multipliers=[1.3])
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     filtered = filter_results(
         results,
         slab=slab,
@@ -1298,7 +1272,7 @@ def test_connected_molecule_across_pbc():
         combined,
         reference_smiles="O",
         surface_symbols=["Ru"],
-        connectivity_multipliers=[1.3],
+        connectivity_multiplier=1.3,
     )
     assert ok, f"Molecule crossing PBC should be seen as connected, got: {reason}"
 

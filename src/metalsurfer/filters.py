@@ -227,7 +227,7 @@ def _connected_components_from_coords(
 def adsorbate_connected_components(
     atoms: Atoms,
     base_slab_len: int,
-    connectivity_multipliers: list[float],
+    connectivity_multiplier: float,
 ) -> list[Atoms]:
     """Split ``atoms[base_slab_len:]`` into connected adsorbate fragments.
 
@@ -237,8 +237,8 @@ def adsorbate_connected_components(
         Combined slab+adsorbate ASE Atoms.
     base_slab_len
         Number of atoms belonging to the base slab.
-    connectivity_multipliers
-        Covalent-radius multipliers for bond detection.
+    connectivity_multiplier
+        Covalent-radius multiplier for bond detection.
     """
     ads = atoms[base_slab_len:]
     if len(ads) == 0:
@@ -246,8 +246,9 @@ def adsorbate_connected_components(
 
     syms = np.array(ads.get_chemical_symbols())
     coords = ads.get_positions()
-    multiplier = max(connectivity_multipliers) if connectivity_multipliers else 1.3
-    masks = _connected_components_from_coords(coords, syms, ads, multiplier)
+    masks = _connected_components_from_coords(
+        coords, syms, ads, connectivity_multiplier
+    )
     return [ads[mask] for mask in masks]
 
 
@@ -274,7 +275,7 @@ def check_decomposition(
     atoms: Atoms,
     reference_smiles: str | None,
     surface_symbols: list[str] | None,
-    connectivity_multipliers: list[float],
+    connectivity_multiplier: float,
     adsorbate_prefix_atoms: int | None = None,
 ) -> tuple[bool, str]:
     """Return ``(ok, reason)`` indicating whether the adsorbate decomposed.
@@ -294,8 +295,8 @@ def check_decomposition(
         SMILES of the original molecule for reference connectivity.
     surface_symbols
         Element symbols of the surface atoms.
-    connectivity_multipliers
-        Covalent-radius multipliers for bond detection.
+    connectivity_multiplier
+        Covalent-radius multiplier for bond detection.
     adsorbate_prefix_atoms
         When set, only ``atoms[adsorbate_prefix_atoms:]`` is checked.
     """
@@ -311,15 +312,11 @@ def check_decomposition(
             return False, "no adsorbate atoms after prefix"
         surface_symbols = None
 
-    # A single check at the largest multiplier is sufficient: connectivity at
-    # the loosest ratio implies connectivity at every tighter ratio, so looping
-    # over all multipliers is pure redundancy.
-    max_mult = max(connectivity_multipliers) if connectivity_multipliers else 1.3
     syms, _coords, dist_matrix, threshold = _nonsurface_distance_and_threshold(
-        atoms, surface_symbols, max_mult
+        atoms, surface_symbols, connectivity_multiplier
     )
     if not _is_molecule_connected_from_dist(syms, dist_matrix, threshold):
-        return False, f"adsorbate not connected (multiplier={max_mult})"
+        return False, f"adsorbate not connected (multiplier={connectivity_multiplier})"
 
     if reference_smiles is None:
         return True, "connectivity intact (no SMILES reference for deeper checks)"
@@ -554,7 +551,7 @@ def filter_results(
                 entry.atoms,
                 reference_smiles=reference_smiles,
                 surface_symbols=surface_symbols,
-                connectivity_multipliers=config.connectivity_multipliers,
+                connectivity_multiplier=config.connectivity_multiplier,
                 adsorbate_prefix_atoms=prefix,
             )
             if ok:

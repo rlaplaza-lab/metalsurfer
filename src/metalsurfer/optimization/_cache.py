@@ -38,6 +38,7 @@ from typing import Any
 
 from ..config import AdsorptionConfig
 from . import _deps
+from ._validation import _device_is_cuda, _device_key
 
 logger = logging.getLogger(__name__)
 
@@ -168,10 +169,7 @@ def _maybe_clear_cuda_cache(ts_model) -> None:
     if torch is None or not torch.cuda.is_available():
         return
     dev = getattr(ts_model, "device", None)
-    on_cuda = (isinstance(dev, str) and dev.lower().startswith("cuda")) or (
-        hasattr(dev, "type") and str(getattr(dev, "type", "")).lower() == "cuda"
-    )
-    if on_cuda:
+    if _device_is_cuda(dev):
         torch.cuda.empty_cache()
 
 
@@ -201,7 +199,7 @@ def _get_inflight_autobatcher(
         dev = getattr(ts_model, "device", None)
         key = (
             id(ts_model),
-            str(dev),
+            _device_key(dev),
             "n_atoms",
             float(max_memory_padding),
             int(max_n_atoms),

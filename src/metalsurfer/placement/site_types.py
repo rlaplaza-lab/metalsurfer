@@ -9,9 +9,6 @@ __all__ = [
     "with_symmetry",
 ]
 
-# Coordinate rounding for hash/eq so float noise does not splinter identity.
-_SITE_COORD_EQ_DECIMALS: int = 6
-
 
 @dataclass(frozen=True, eq=False)
 class Site:
@@ -46,24 +43,6 @@ class Site:
                 "symmetry_equivalent_sites",
                 tuple(self.symmetry_equivalent_sites),
             )
-
-    def _identity_key(self) -> tuple:
-        return (
-            tuple(np.round(self.xyz, decimals=_SITE_COORD_EQ_DECIMALS).tolist()),
-            tuple(np.round(self.normal, decimals=_SITE_COORD_EQ_DECIMALS).tolist()),
-            self.site_type,
-            self.material_type,
-        )
-
-    def __eq__(self, other: object) -> bool:
-        """Check equality by identity key."""
-        if not isinstance(other, Site):
-            return NotImplemented
-        return self._identity_key() == other._identity_key()
-
-    def __hash__(self) -> int:
-        """Return hash from identity key."""
-        return hash(self._identity_key())
 
     @property
     def xy(self) -> np.ndarray:
