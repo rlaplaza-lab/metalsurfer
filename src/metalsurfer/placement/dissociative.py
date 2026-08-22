@@ -352,8 +352,9 @@ def _compute_dissociative_site_pairs(
     if config.material_type == "slab":
         mean_nn_sep = _mean_nn_separation_mic(site_3d, cell_arr, pbc_xy)
     else:
-        _nn_tree = KDTree(site_3d)
-        nn_d, _ = _nn_tree.query(site_3d, k=2)
+        _site_query = np.asarray(site_3d, dtype=np.float64)
+        _nn_tree = KDTree(_site_query)
+        nn_d, _ = _nn_tree.query(_site_query, k=2)  # type: ignore[arg-type]
         # len(site_3d) >= 2 (early-return above), so query(..., k=2) is 2-D.
         mean_nn_sep = float(np.mean(np.asarray(nn_d, dtype=float)[:, 1]))
 

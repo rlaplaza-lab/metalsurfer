@@ -1479,8 +1479,9 @@ def select_candidates_batch_diverse(
     # allocation at the real pool size of 3840 while giving an identical value.
     avail_positions = scaled[available]
     if len(available) >= 2:
-        tree = KDTree(avail_positions)
-        nn_dist = np.asarray(tree.query(avail_positions, k=2)[0])[:, 1]
+        _query = np.asarray(avail_positions, dtype=np.float64)
+        tree = KDTree(_query)
+        nn_dist = np.asarray(tree.query(_query, k=2)[0])[:, 1]  # type: ignore[arg-type]
         lengthscale = float(np.median(nn_dist))
         lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
     else:
