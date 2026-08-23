@@ -484,3 +484,119 @@ def test_unique_sites_cache_hit_and_miss():
     ctx_b = _get_unique_sites_for_specs(slab_b, config)
     assert ctx_a1 is ctx_a2
     assert ctx_a1 is not ctx_b
+
+
+def test_delaunay_bridge_fallback_uses_top_layer_not_bulk():
+    """1.3: a bridge→hollow reclassification must reference surface atoms.
+
+    The fallback used the full (bulk-inclusive) ``local_tree``; here a vertex
+    whose three nearest bulk atoms differ from its three nearest top-layer atoms
+    must resolve to top-layer indices only.
+    """
+    from metalsurfer.placement.site_classify import (
+        _ClassificationContext,
+        _classify_delaunay_vertices_batch,
+        _DelaunayClassifyInputs,
+    )
+
+    # Top-layer atoms (indices 0,1,2) sit far from the vertex; bulk atoms
+    # (indices 3,4) sit much closer, so the full-tree nearest-3 includes bulk.
+    positions = np.array(
+        [
+            [2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [-2.0, 0.0, 0.0],
+            [0.1, 0.0, -1.0],
+            [0.0, 0.1, -1.0],
+        ],
+        dtype=float,
+    )
+    top_atom_indices = np.array([0, 1, 2], dtype=int)
+
+    vertex_2d = np.array([[0.0, 0.15]], dtype=float)
+    vertices = np.array([[0.0, 0.15, 0.1]], dtype=float)
+
+    cand_xy = np.array(
+        [[0.0, 0.0], [2.0, 0.0], [0.0, 2.0], [-2.0, 0.0]], dtype=float
+    )
+    cand_types = ["bridge", "atop", "atop", "atop"]
+    cand_indices = [(1,), (0,), (1,), (2,)]
+    cand_tree = KDTree(cand_xy)
+
+    delaunay = _DelaunayClassifyInputs(
+        top_positions_2d=np.array([[2.0, 0.0], [0.0, 2.0], [-2.0, 0.0]], dtype=float),
+        top_atom_indices=top_atom_indices,
+        class_index=(cand_xy, cand_types, cand_indices),
+    )
+    ctx = _ClassificationContext(
+        vertex_2d=vertex_2d,
+        normals=np.array([[0.0, 0.0, 1.0]], dtype=float),
+        pbc=np.array([True, True, False]),
+        class_dists=None,
+        class_idx=None,
+        delaunay=delaunay,
+        char_len=1e-6,  # tiny so any off-bridge vertex exceeds bridge_cut
+        cand_tree=cand_tree,
+    )
+    local_tree = KDTree(positions)
+
+    result = _classify_delaunay_vertices_batch(ctx, vertices, positions, local_tree)
+    site_type, site_indices = result[0]
+    assert site_type == "hollow"
+    # The reclassified hollow must reference only top-layer atoms.
+    assert set(site_indices).issubset(set(top_atom_indices.tolist()))
+    assert len(site_indices) == 3
+
+
+def test_build_classification_context_builds_images_once_porous(monkeypatch):
+    """4.1: porous 3D-periodic contexts build the periodic-image KDTree once.
+
+    The normals path and the Voronoi classifier must share a single
+    periodic-image build, and the merged nearest-k distances must match the
+    previous (separate) classification build.
+    """
+    from metalsurfer.placement import site_classify as sc
+    from metalsurfer.placement._constants import _SITE_CLASSIFICATION_NEIGHBOURS
+
+    rng = np.random.default_rng(0)
+    cell = np.diag([5.0, 5.0, 5.0])
+    pbc = np.array([True, True, True])
+    positions = rng.uniform(0, 5, size=(40, 3))
+    local_tree = KDTree(positions)
+    vertices = positions[:5] + 0.01
+
+    calls: list[int] = []
+    orig = sc._build_periodic_images
+
+    def counting(*a, **k):
+        calls.append(1)
+        return orig(*a, **k)
+
+    monkeypatch.setattr(sc, "_build_periodic_images", counting)
+
+    ctx = sc._build_classification_context(
+        vertices,
+        positions,
+        local_tree,
+        material_type="porous",
+        cell=cell,
+        pbc=pbc,
+        delaunay=None,
+    )
+
+    # Single shared build (normals reuses it instead of rebuilding).
+    assert len(calls) == 1
+    assert ctx.class_dists is not None
+    assert ctx.class_idx is not None
+    assert np.all(ctx.class_idx >= 0) and np.all(ctx.class_idx < len(positions))
+    assert np.isfinite(ctx.normals).all()
+
+    # Reference: original separate classification build using k_class margin.
+    k_class = min(_SITE_CLASSIFICATION_NEIGHBOURS, len(positions))
+    d_ref, _ = local_tree.query(vertices, k=k_class)
+    d_ref = np.atleast_2d(np.asarray(d_ref, dtype=float))
+    margin_ref = float(np.max(d_ref[:, -1]))
+    images_ref = orig(positions, cell, pbc, margin=margin_ref)
+    dists_ref, _ = KDTree(images_ref).query(vertices, k=min(k_class, len(images_ref)))
+    class_dists_ref = np.atleast_2d(np.asarray(dists_ref, dtype=float))
+    assert np.allclose(ctx.class_dists, class_dists_ref)

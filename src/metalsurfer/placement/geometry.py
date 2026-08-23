@@ -63,6 +63,7 @@ class _SlabDistanceScratch:
     cell: np.ndarray
     pbc: list[bool]
     slab_syms: list[str]
+    slab_cov_r: np.ndarray | None = None
     pre_ads_pos: np.ndarray | None = None
 
 
@@ -826,6 +827,7 @@ def check_initial_placement_distance(
     *,
     material_type: str = "slab",
     pairwise_distances: np.ndarray | None = None,
+    slab_scratch: _SlabDistanceScratch | None = None,
 ) -> tuple[bool, float, str | None]:
     r"""Check if the initial placement satisfies distance constraints.
 
@@ -867,6 +869,7 @@ def check_initial_placement_distance(
             material_type=material_type,
             exclude_slab_atoms=exclude_slab_atoms,
             pairwise_distances=pairwise_distances,
+            slab_scratch=slab_scratch,
         )
     )
     if dists.size == 0 or dists.shape[0] == 0 or dists.shape[1] == 0:
@@ -878,17 +881,22 @@ def check_initial_placement_distance(
         [r if (r := _get_covalent_radius(s)) is not None else np.nan for s in mol_syms],
         dtype=float,
     )
-    slab_r = np.array(
-        [
-            r if (r := _get_covalent_radius(s)) is not None else np.nan
-            for s in slab_syms
-        ],
-        dtype=float,
-    )
-    covalent_allowed = (mol_r[:, None] + slab_r[None, :]) * float(min_contact_ratio)
-    allowed = np.maximum(float(min_distance), covalent_allowed)
+    # Reuse precomputed slab covalent radii from the scratch when available
+    # (otherwise recompute, as before).
+    if slab_scratch is not None and slab_scratch.slab_cov_r is not None:
+        slab_r = np.asarray(slab_scratch.slab_cov_r, dtype=float)
+    else:
+        slab_r = np.array(
+            [
+                r if (r := _get_covalent_radius(s)) is not None else np.nan
+                for s in slab_syms
+            ],
+            dtype=float,
+        )
+    allowed = (mol_r[:, None] + slab_r[None, :]) * float(min_contact_ratio)
+    np.maximum(allowed, float(min_distance), out=allowed)
     # Unknown radii: fall back to flat min_distance for that pair.
-    allowed = np.where(np.isnan(allowed), float(min_distance), allowed)
+    np.nan_to_num(allowed, nan=float(min_distance), copy=False)
     if np.any(dists < allowed):
         return False, actual_min, "too_close"
     if max_initial_distance is not None and actual_min > max_initial_distance:

@@ -48,6 +48,24 @@ def _compute_mean_adsorbate_covalent_radius() -> float:
     return float(sum(radii) / len(radii))
 
 
+def _compute_mean_framework_covalent_radius() -> float:
+    """Mean covalent radius of common framework (metal) elements.
+
+    Used as the surface-radius fallback when a slab/framework exposes no
+    recognised covalent radii. This is physically distinct from the adsorbate
+    fallback and must not reuse it.
+    """
+    framework_elements = ["Cu", "Pt", "Pd", "Ag", "Au", "Ni", "Fe", "Al", "Co"]
+    radii = []
+    for elem in framework_elements:
+        z = atomic_numbers.get(elem)
+        if z is not None and z < len(ase_covalent_radii):
+            r = float(ase_covalent_radii[z])
+            if r > 0.0:
+                radii.append(r)
+    return float(sum(radii) / len(radii))
+
+
 # ---------------------------------------------------------------------------
 # Voronoi site detection
 # ---------------------------------------------------------------------------
@@ -83,7 +101,11 @@ _MEAN_COVALENT_RADIUS_FALLBACK: float = _compute_mean_adsorbate_covalent_radius(
 # Alias kept for call sites that name the geometric role.
 _VORONOI_RADIUS_FALLBACK_ANGSTROM: float = _MEAN_COVALENT_RADIUS_FALLBACK
 _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM: float = _MEAN_COVALENT_RADIUS_FALLBACK
-_MOL_COVALENT_RADIUS_FALLBACK: float = _MEAN_COVALENT_RADIUS_FALLBACK
+_ADSORBATE_COVALENT_RADIUS_FALLBACK: float = _MEAN_COVALENT_RADIUS_FALLBACK
+# Surface (framework/metal) fallback — distinct from the adsorbate fallback so a
+# slab with no recognisable radii degrades to a metal-like value, not an
+# adsorbate-like one.
+_SURFACE_COVALENT_RADIUS_FALLBACK: float = _compute_mean_framework_covalent_radius()
 
 # Ridge-based geodesic enrichment
 # Subdivide Voronoi edges longer than _ENRICHMENT_SPACING_BETA × median(nn_distance).

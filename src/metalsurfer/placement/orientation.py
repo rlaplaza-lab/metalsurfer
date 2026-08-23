@@ -55,9 +55,9 @@ def _is_flat_aromatic(
     """
     if shape != "flat":
         return False
-    binders = geom._binding_atom_candidates(symbols)
     if smiles is not None:
         return _is_flat_aromatic_with_en(smiles)
+    binders = geom._binding_atom_candidates(symbols)
     return bool(binders)
 
 
@@ -197,14 +197,13 @@ def _finish_orientation(
         base_pos, normal, spec.tilt_deg, spec.azimuth_deg
     )
     R_total = R_tilt @ R_base
-    # Equivalence guard: the composed rotation must reproduce the sequentially
-    # computed (COM-centred) rotated positions. If it ever diverges (numerical
-    # drift or a future refactor), fall back to a direct Kabsch fit.
+    # `R_total` is the product of proper orthonormal rotations, and `canonical`
+    # is COM-centred, so the composed rotation reproduces `rotated_pos` to ~1e-14.
+    # The previous Kabsch fallback was dead code; keep only a debug assertion to
+    # catch a future regression in the COM-centred invariant.
     canonical = np.asarray(canonical_pos, dtype=float)
     equiv = (R_total @ canonical.T).T
-    if not np.allclose(equiv, rotated_pos, atol=1e-10):
-        R_fallback = geom.best_fit_rotation(canonical, rotated_pos)
-        R_total = R_fallback
+    np.testing.assert_allclose(equiv, rotated_pos, atol=1e-10)
     quat = geom.rotation_matrix_to_quaternion(R_total)
     return OrientedAdsorbate(
         rotated_pos=rotated_pos,

@@ -10,6 +10,7 @@ from .._utils import cell_has_volume
 from ._constants import (
     _DELAUNAY_BRIDGE_THRESHOLD_FRACTION,
     _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM,
+    _KD_RADIUS_SEARCH_PADDING,
     _NORMAL_K_NEIGHBOURS,
     _SITE_CLASSIFICATION_NEIGHBOURS,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
@@ -84,27 +85,39 @@ def _periodic_local_normals(
     cell: np.ndarray,
     pbc: np.ndarray,
     k: int,
+    images: np.ndarray | None = None,
+    image_idx: np.ndarray | None = None,
 ) -> np.ndarray:
     """Local normals from a k-nearest centroid taken over periodic images.
 
     The centroid is computed on *image* coordinates rather than wrapped primary
     positions, so 3D-periodic frameworks stop tilting at cell faces.
+
+    *images* / *image_idx* may be supplied from a shared build (so the normals
+    path reuses the same periodic-image KDTree as the classifier). When omitted,
+    they are built here from ``local_tree``.
     """
     if len(vertices) == 0:
         return np.empty((0, 3), dtype=float)
-    d_knn, _ = local_tree.query(vertices, k=k)
-    d_arr = np.asarray(d_knn, dtype=float)
-    if d_arr.ndim == 1:
-        d_arr = d_arr.reshape(-1, 1)
-    # The non-periodic k-th neighbour distance upper-bounds the periodic one,
-    # so it is a safe image margin.
-    margin = float(np.max(d_arr[:, -1])) if d_arr.size else 0.0
-    images = _build_periodic_images(positions, cell, pbc, margin=margin)
-    image_tree = KDTree(images)
-    _, idx = image_tree.query(vertices, k=min(k, len(images)))
-    idx_arr = np.asarray(idx, dtype=int)
+    if images is None or image_idx is None:
+        d_knn, _ = local_tree.query(vertices, k=k)
+        d_arr = np.asarray(d_knn, dtype=float)
+        if d_arr.ndim == 1:
+            d_arr = d_arr.reshape(-1, 1)
+        # The non-periodic k-th neighbour distance upper-bounds the periodic one,
+        # so it is a safe image margin.
+        margin = float(np.max(d_arr[:, -1])) if d_arr.size else 0.0
+        images = _build_periodic_images(positions, cell, pbc, margin=margin)
+        image_tree = KDTree(images)
+        _, idx = image_tree.query(vertices, k=min(k, len(images)))
+        idx_arr = np.asarray(idx, dtype=int)
+    else:
+        idx_arr = np.asarray(image_idx, dtype=int)
     if idx_arr.ndim == 1:
         idx_arr = idx_arr.reshape(-1, 1)
+    # A shared build may have queried a larger k; slice to the requested k.
+    if idx_arr.shape[1] > k:
+        idx_arr = idx_arr[:, :k]
     return _compute_local_normals_batch(vertices, images, idx_arr)
 
 
@@ -117,6 +130,8 @@ def _site_normals_for_material(
     cell: np.ndarray,
     pbc: np.ndarray,
     k: int,
+    images: np.ndarray | None = None,
+    image_idx: np.ndarray | None = None,
 ) -> np.ndarray:
     """Per-material-type surface normal dispatch."""
     n_verts = len(vertices)
@@ -126,7 +141,8 @@ def _site_normals_for_material(
         return _slab_site_normals(n_verts, cell)
     if material_type == "porous" and bool(np.any(pbc)) and cell_has_volume(cell):
         return _periodic_local_normals(
-            vertices, positions, local_tree, cell=cell, pbc=pbc, k=k
+            vertices, positions, local_tree, cell=cell, pbc=pbc, k=k,
+            images=images, image_idx=image_idx,
         )
     # Nanoparticles (and degenerate/non-periodic frameworks): the plain
     # non-periodic k-nearest centroid is the correct outward estimate.
@@ -164,8 +180,30 @@ def _build_classification_context(
 
     k_class = min(_SITE_CLASSIFICATION_NEIGHBOURS, len(positions))
     k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
+    k_max = max(k_norm, k_class)
 
     pbc_arr = np.asarray(pbc, dtype=bool)
+    use_periodic = n_verts > 0 and bool(np.any(pbc_arr)) and cell_has_volume(cell)
+
+    # Build periodic images + KDTree ONCE and reuse it for both local normals
+    # and the Voronoi classifier (previously duplicated for porous 3D-periodic
+    # systems). Use the larger k (k_class) so the image set is a superset of the
+    # old separate builds; the nearest-k over a superset is at least as correct.
+    images = None
+    image_tree = None
+    idx_img = None
+    if use_periodic:
+        d0, _ = local_tree.query(vertices, k=k_max)
+        d0_arr = np.asarray(d0, dtype=float)
+        if d0_arr.ndim == 1:
+            d0_arr = d0_arr.reshape(-1, 1)
+        margin = float(np.max(d0_arr[:, -1])) + _KD_RADIUS_SEARCH_PADDING
+        images = _build_periodic_images(positions, cell, pbc_arr, margin=margin)
+        image_tree = KDTree(images)
+        _, idx_raw = image_tree.query(vertices, k=min(k_max, len(images)))
+        idx_img = np.asarray(idx_raw, dtype=int)
+        if idx_img.ndim == 1:
+            idx_img = idx_img.reshape(-1, 1)
 
     normals = _site_normals_for_material(
         vertices,
@@ -175,22 +213,17 @@ def _build_classification_context(
         cell=cell,
         pbc=pbc_arr,
         k=k_norm,
+        images=images,
+        image_idx=idx_img,
     )
 
     if n_verts > 0 and delaunay is None:
         # MIC neighbours when PBC is on (porous / slab distance_ratio).
-        use_periodic = bool(np.any(pbc_arr)) and cell_has_volume(cell)
-        if use_periodic:
-            d_knn, _ = local_tree.query(vertices, k=k_class)
-            d_arr = np.asarray(d_knn, dtype=float)
-            if d_arr.ndim == 1:
-                d_arr = d_arr.reshape(-1, 1)
-            margin = float(np.max(d_arr[:, -1])) if d_arr.size else 0.0
-            images = _build_periodic_images(positions, cell, pbc_arr, margin=margin)
-            image_tree = KDTree(images)
-            dists_raw, idx_raw = image_tree.query(vertices, k=min(k_class, len(images)))
+        if use_periodic and idx_img is not None:
+            k_slice = min(k_class, idx_img.shape[1])
+            dists_raw, _ = image_tree.query(vertices, k=k_slice)
             class_dists = np.asarray(dists_raw, dtype=float)
-            class_idx = np.asarray(idx_raw, dtype=int) % len(positions)
+            class_idx = np.asarray(idx_img[:, :k_slice], dtype=int) % len(positions)
         else:
             dists_raw, idx_raw = local_tree.query(vertices, k=k_class)
             class_dists = np.asarray(dists_raw, dtype=float)
@@ -269,13 +302,28 @@ def _classify_delaunay_vertices_batch(
             fallback_i.append(i)
 
     if fallback_i:
-        k3 = min(3, len(positions))
-        fb_verts = np.asarray(vertices[fallback_i], dtype=float)
-        _, idx3 = local_tree.query(fb_verts, k=k3)
-        idx3 = np.asarray(idx3, dtype=int)
-        # k=1 yields a 1-D index vector; reshape to (n_fb, k).
-        if idx3.ndim == 1:
-            idx3 = idx3.reshape(-1, 1)
+        # Reclassify overgrown bridge sites as hollow using the *top-layer*
+        # atoms, not the full (bulk-inclusive) ``local_tree``. ``top_atom_indices``
+        # is already available from the Delaunay input and is the same index set
+        # used by the empty-candidate-tree fallback above.
+        top_idx = np.asarray(delaunay.top_atom_indices)
+        if len(top_idx) > 0:
+            top_tree = KDTree(positions[top_idx])
+            k3 = min(3, len(top_idx))
+            fb_verts = np.asarray(vertices[fallback_i], dtype=float)
+            _, idx3 = top_tree.query(fb_verts, k=k3)
+            idx3 = np.asarray(idx3, dtype=int)
+            # k=1 yields a 1-D index vector; reshape to (n_fb, k).
+            if idx3.ndim == 1:
+                idx3 = idx3.reshape(-1, 1)
+            idx3 = top_idx[idx3]
+        else:
+            k3 = min(3, len(positions))
+            fb_verts = np.asarray(vertices[fallback_i], dtype=float)
+            _, idx3 = local_tree.query(fb_verts, k=k3)
+            idx3 = np.asarray(idx3, dtype=int)
+            if idx3.ndim == 1:
+                idx3 = idx3.reshape(-1, 1)
         for row, vi in enumerate(fallback_i):
             site_types[vi] = "hollow"
             site_indices[vi] = tuple(int(j) for j in idx3[row, :3])

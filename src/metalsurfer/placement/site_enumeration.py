@@ -10,6 +10,7 @@ from scipy.spatial import Delaunay, KDTree, QhullError
 from .._utils import cell_has_volume
 from ..symmetry import SymmetryAnalyzer
 from ._constants import (
+    _ADSORBATE_COVALENT_RADIUS_FALLBACK,
     _ATOP_INJECTION_HEIGHT_FACTOR,
     _BOUNDING_BOX_CELL_PAD_ANGSTROM,
     _DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
@@ -17,11 +18,11 @@ from ._constants import (
     _DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     _DEFAULT_SYMMETRY_TOLERANCE,
     _KD_RADIUS_SEARCH_PADDING,
-    _MOL_COVALENT_RADIUS_FALLBACK,
     _NORMAL_K_NEIGHBOURS,
     _PARALLEL_Z_MIN_HI_MARGIN,
     _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
     _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM,
+    _SURFACE_COVALENT_RADIUS_FALLBACK,
     _VORONOI_AUTO_WIDEN_MAX_SCALE,
     _VORONOI_AUTO_WIDEN_PROBE_SCALE,
     _VORONOI_DEDUP_TOLERANCE,
@@ -239,10 +240,15 @@ def _inject_atop_sites(
     probe_radius: float,
     max_site_distance: float,
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Atop injection safety net for nanoparticles, and slabs lacking topology atop."""
+    """Atop injection safety net for nanoparticles, and slabs lacking topology atop.
+
+    Atop sites are derived purely from *positions* (top atoms / outward normals),
+    so they can be built even when *vertices* is empty — see the early-return
+    bypass fix in ``_enumerate_unified_sites``.
+    """
     if material_type == "slab" and slab_has_topology_atop:
         return vertices, nn_dists, source_hints
-    if material_type not in ("slab", "nanoparticle") or len(vertices) == 0:
+    if material_type not in ("slab", "nanoparticle"):
         return vertices, nn_dists, source_hints
 
     median_nn = _median_nn_or_fallback(
@@ -259,9 +265,7 @@ def _inject_atop_sites(
 
     if material_type == "slab":
         if slab_top_atom_indices is None:
-            raise ValueError(
-                "slab_top_atom_indices must be set for slab atop injection"
-            )
+            return vertices, nn_dists, source_hints
         top_atom_indices = slab_top_atom_indices
         atom_normals: np.ndarray | None = None
     else:
@@ -537,6 +541,11 @@ def _enumerate_unified_sites(
 
     # Slab-specific topology enrichment becomes part of the default generator.
     if material_type == "slab" and slab_top_atom_indices is not None:
+        # For planar slabs `slab_skip_voronoi` empties `vertices`/`nn_dists` before
+        # reaching this point, so `nn_dists` may be empty. `_median_nn_or_fallback`
+        # then intentionally takes its periodic-image KDTree fallback (NOT dead
+        # code) — keep this path even though `_inject_atop_sites`'s own guard would
+        # otherwise make the fallback appear unreachable from there.
         median_nn = _median_nn_or_fallback(
             nn_dists,
             reference_positions=positions[slab_top_atom_indices],
@@ -584,14 +593,17 @@ def _enumerate_unified_sites(
                 pbc=pbc_for_voronoi,
             )
 
-    if len(vertices) == 0:
+    if len(vertices) == 0 and material_type not in ("slab", "nanoparticle"):
+        # Slabs and nanoparticles fall through to the atop-injection safety net
+        # below even when the Voronoi/topology passes produced nothing, so only
+        # give up immediately for other material types.
         logger.warning(
             "No accessible sites for %d-atom structure (probe_radius=%s, max_distance=%s, material_type=%r)",
-            len(atoms),
-            f"{probe_radius:.2f}" if probe_radius is not None else "auto",
-            f"{max_site_distance:.2f}" if max_site_distance is not None else "auto",
-            material_type,
-        )
+                len(atoms),
+                f"{probe_radius:.2f}" if probe_radius is not None else "auto",
+                f"{max_site_distance:.2f}" if max_site_distance is not None else "auto",
+                material_type,
+            )
         return []
 
     if material_type == "slab":
@@ -638,6 +650,14 @@ def _enumerate_unified_sites(
     )
 
     if len(vertices) == 0:
+        logger.warning(
+            "No accessible sites after atop-injection safety net for %d-atom "
+            "structure (probe_radius=%s, max_distance=%s, material_type=%r)",
+            len(atoms),
+            f"{probe_radius:.2f}" if probe_radius is not None else "auto",
+            f"{max_site_distance:.2f}" if max_site_distance is not None else "auto",
+            material_type,
+        )
         return []
 
     # ``auto`` / ``delaunay`` use Delaunay on slabs; ``distance_ratio`` is honored
@@ -781,11 +801,16 @@ def _cluster_with_metric(
         b = int(b_exp) % n
         if a == b:
             continue
+        key = (min(a, b), max(a, b))
+        # The same primary pair can appear from multiple periodic-image copies;
+        # once merged there is no need to re-run the (expensive) pair filter.
+        if key in merge_set:
+            continue
         if fps[a] != fps[b]:
             continue
         if pair_filter is not None and not pair_filter(a, b, coords):
             continue
-        merge_set.add((min(a, b), max(a, b)))
+        merge_set.add(key)
 
     components = _union_find_cluster(n, list(merge_set))
     return sorted(min(comp) for comp in components)
@@ -865,17 +890,21 @@ def _cluster_equivalent_sites(
     heights = _height_along_slab_normal(coords, cell)
     pbc_slab = np.array([True, True, False])
     image_offsets = _periodic_image_offsets(cell, pbc_slab, tolerance)
+    # Hoist loop-invariant quantities out of the per-pair closure: the slab
+    # normal and the inverse cell (otherwise ``_cart_to_frac`` recomputes
+    # ``np.linalg.inv(cell)`` on every pair).
+    n_hat = _slab_normal(cell)
+    inv_cell = np.linalg.inv(cell)
 
     def _slab_pair_filter(a: int, b: int, _coords_arr: np.ndarray) -> bool:
         xyz_a = coords[a]
         xyz_b = coords[b]
         delta_frac = _minimum_image_fractional_delta(
-            _cart_to_frac((xyz_b - xyz_a).reshape(1, 3), cell),
+            (xyz_b - xyz_a).reshape(1, 3) @ inv_cell,
             pbc_slab,
         )[0]
         delta_cart = _frac_to_cart(delta_frac.reshape(1, 3), cell)[0]
         # In-plane distance: drop the component along the slab normal.
-        n_hat = _slab_normal(cell)
         delta_plane = delta_cart - float(np.dot(delta_cart, n_hat)) * n_hat
         dxy = float(np.linalg.norm(delta_plane))
         dz = abs(float(heights[a]) - float(heights[b]))
@@ -896,8 +925,10 @@ def _cluster_equivalent_sites(
         xyz = _get_xyz(s)
         frac2 = xyz @ pinv_ab_T
         frac2 = frac2 - np.floor(frac2)
-        z = float(s.z)
-        return np.array([float(frac2[0]), float(frac2[1]), z])
+        # Use the height along the slab normal (not Cartesian z) so the ordered
+        # representatives follow the surface, not an arbitrary tilted-z ordering.
+        h = float(_height_along_slab_normal(xyz.reshape(1, 3), cell)[0])
+        return np.array([float(frac2[0]), float(frac2[1]), h])
 
     def _slab_key(s: Site) -> tuple:
         c = _slab_coord(s)
@@ -1070,12 +1101,12 @@ def _get_site_surface_radii(
         site_symbols = [symbols[int(i)] for i in indices]
         logger.warning(
             "No positive covalent radii for site surface symbols %r (indices %r); "
-            "using mean adsorbate fallback %.3f Å",
+            "using mean surface (framework) fallback %.3f Å",
             site_symbols,
             list(indices),
-            _MOL_COVALENT_RADIUS_FALLBACK,
+            _SURFACE_COVALENT_RADIUS_FALLBACK,
         )
-        return float(_MOL_COVALENT_RADIUS_FALLBACK)
+        return float(_SURFACE_COVALENT_RADIUS_FALLBACK)
     return float(np.mean(radii))
 
 
@@ -1105,7 +1136,7 @@ def _compute_site_z_base(
         r_surface = _get_site_surface_radii(slab, site)
     mol_radii = [_get_covalent_radius(s) for s in mol_symbols]
     mol_radii = [r for r in mol_radii if r is not None]
-    r_mol = float(np.mean(mol_radii)) if mol_radii else _MOL_COVALENT_RADIUS_FALLBACK
+    r_mol = float(np.mean(mol_radii)) if mol_radii else _ADSORBATE_COVALENT_RADIUS_FALLBACK
     r_sum = r_mol + r_surface
 
     z_lo = float(z_lo) * r_sum

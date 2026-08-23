@@ -33,6 +33,7 @@ from ..conftest import (
 from ._helpers import (
     _generate_placements,
     _make_site,
+    _tilted_make_slab,
 )
 
 
@@ -597,3 +598,82 @@ def test_fcc100_site_type_ratios_and_coordination_numbers():
             assert len(s.slab_indices) == 2
         elif s.site_type == "hollow":
             assert len(s.slab_indices) == 3
+
+
+def test_atop_injection_runs_when_voronoi_empty_nanoparticle(monkeypatch):
+    """1.1: a zero-Voronoi nanoparticle must still get atop sites from the net."""
+    from metalsurfer.placement import site_enumeration as enum_mod
+
+    monkeypatch.setattr(
+        enum_mod,
+        "_voronoi_sites",
+        lambda *a, **k: (
+            np.empty((0, 3), dtype=float),
+            np.empty((0,), dtype=float),
+        ),
+    )
+    struct = make_nanoparticle()
+    sites = get_unified_sites(struct, material_type="nanoparticle", enrich=False)
+    assert len(sites) > 0
+    assert any(s.site_source == "atop_injected" for s in sites)
+
+
+def test_atop_injection_runs_when_voronoi_and_topology_empty_slab(monkeypatch):
+    """1.1: planar slab with no Voronoi vertices and no topology still gets atop."""
+    from metalsurfer.placement import site_enumeration as enum_mod
+
+    monkeypatch.setattr(
+        enum_mod,
+        "_voronoi_sites",
+        lambda *a, **k: (
+            np.empty((0, 3), dtype=float),
+            np.empty((0,), dtype=float),
+        ),
+    )
+    monkeypatch.setattr(
+        enum_mod,
+        "_generate_slab_topology_sites",
+        lambda *a, **k: (
+            np.empty((0, 3), dtype=float),
+            np.empty((0,), dtype=float),
+            [],
+            None,
+            None,
+            None,
+            None,
+        ),
+    )
+    slab = make_slab()
+    sites = get_unified_sites(slab, material_type="slab", enrich=False)
+    assert len(sites) > 0
+    assert any(s.site_source == "atop_injected" for s in sites)
+
+
+def test_cluster_equivalent_sites_orders_by_slab_normal_height():
+    """1.2: representative ordering follows slab-normal height, never Cartesian z.
+
+    For a tilted slab the surface normal is not Cartesian-z; the ordered
+    representatives must be keyed on height along the slab normal (as computed by
+    the fixed ``_slab_coord``), reproduced here independently.
+    """
+    from metalsurfer._geom_pbc import height_along_slab_normal
+    from metalsurfer.placement.site_coords import _slab_plane_projectors
+    from metalsurfer.placement.site_enumeration import _cluster_equivalent_sites
+
+    slab = _tilted_make_slab()
+    sites = get_unified_sites(slab, material_type="slab")
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    clustered = _cluster_equivalent_sites(sites, cell, tolerance=0.5)
+    assert len(clustered) > 0
+
+    pinv_ab_T, _ = _slab_plane_projectors(cell)
+
+    def slab_key(s):
+        xyz = np.asarray(s.xyz, dtype=float)
+        frac = xyz @ pinv_ab_T
+        frac = frac - np.floor(frac)
+        h = float(height_along_slab_normal(xyz.reshape(1, 3), cell)[0])
+        return (float(frac[0]), float(frac[1]), h, str(s.site_type))
+
+    # The output must already be in slab-normal-height order.
+    assert clustered == sorted(clustered, key=slab_key)

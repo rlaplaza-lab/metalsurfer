@@ -28,6 +28,7 @@ from .site_coords import (
     _minimum_image_fractional_delta,
     _project_to_slab_plane,
     _slab_normal,
+    _slab_plane_projectors,
     _wrap_cartesian,
 )
 
@@ -51,10 +52,13 @@ def _expand_top_layer_ab_images(
     origin_local: list[int] = []
     image_id: list[tuple[int, int]] = []
     exp_3d: list[np.ndarray] | None = [] if top_positions_3d is not None else None
+    # Hoist the slab-plane basis once: every (ia, ib) image shares the same
+    # ortho_basis, so projecting each offset via the repeated pinv is wasted.
+    _, ortho_basis = _slab_plane_projectors(cell)
     for ia in ranges_a:
         for ib in ranges_b:
             offset = ia * cell[0] + ib * cell[1]
-            off_2d = _project_to_slab_plane(offset.reshape(1, 3), cell)[0]
+            off_2d = offset @ ortho_basis.T
             for li in range(len(top_xy)):
                 exp_xy.append(top_xy[li] + off_2d)
                 origin_local.append(int(li))

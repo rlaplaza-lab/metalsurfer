@@ -525,3 +525,35 @@ def test_voronoi_area_conservation_fcc111():
         bounded += 1
     assert bounded == n_top
     assert area_sum == pytest.approx(cell_area, abs=1e-6)
+
+
+def test_expand_top_layer_ab_images_matches_projection():
+    """4.2: the hoisted ortho-basis projection equals the per-offset projection."""
+    from ase.build import fcc111
+
+    from metalsurfer._geom_pbc import slab_plane_projectors
+    from metalsurfer.placement.site_coords import _project_to_slab_plane
+
+    slab = fcc111("Cu", (3, 3, 3), vacuum=8.0)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    top_xy = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=float)
+    top_3d = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 0.0]], dtype=float)
+
+    exp_xy, _, _, _ = site_voronoi_module._expand_top_layer_ab_images(
+        top_xy,
+        cell=cell,
+        pbc=np.array([True, True, False]),
+        top_positions_3d=top_3d,
+    )
+
+    # Reference: the same expansion computed with the explicit per-offset
+    # projection must match the hoisted-basis result.
+    _, ortho_basis = slab_plane_projectors(cell)
+    ref_xy = []
+    for ia in (-1, 0, 1):
+        for ib in (-1, 0, 1):
+            offset = ia * cell[0] + ib * cell[1]
+            off_2d = _project_to_slab_plane(offset.reshape(1, 3), cell)[0]
+            for li in range(len(top_xy)):
+                ref_xy.append(top_xy[li] + off_2d)
+    assert np.allclose(exp_xy, np.asarray(ref_xy))

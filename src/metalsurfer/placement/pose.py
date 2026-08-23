@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 from ase import Atoms
 
+from .._utils import cell_has_volume
 from .._utils import is_finite_number as _is_finite_number
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
@@ -170,7 +171,29 @@ def _resolve_surface_ref(
         if nrm > _VECTOR_NORM_EPS:
             return float(np.dot(site_xyz, site_normal / nrm)), True
         return float(site_xyz[2]), True
-    return float(np.max(slab.get_positions()[:, 2])), False
+    # No site and no site normal: the Cartesian z-max is arbitrary for radially
+    # symmetric nanoparticles/porous clusters and corrupts the recovered z
+    # offset. Prefer a slab-normal height (planar systems) or, failing that, the
+    # radial distance from the center of mass (clusters) which tracks the outer
+    # shell for any orientation.
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    if cell_has_volume(cell):
+        return (
+            float(np.max(_height_along_slab_normal(slab.get_positions(), cell))),
+            False,
+        )
+    com = np.mean(slab.get_positions(), axis=0)
+    logger.warning(
+        "Resolving surface reference for %s without a site; using radial "
+        "distance from COM (stale or out-of-range site_index is the likely cause)",
+        mat_type,
+    )
+    return (
+        float(
+            np.max(np.linalg.norm(slab.get_positions() - com, axis=1))
+        ),
+        False,
+    )
 
 
 def _pose_from_spec(
@@ -734,11 +757,16 @@ def _build_slab_distance_scratch(
         pre_ads_pos = None
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = material_aware_pbc(mat_type)
+    slab_cov_r = np.array(
+        [r if (r := geom._get_covalent_radius(s)) is not None else np.nan for s in slab_syms],
+        dtype=float,
+    )
     return geom._SlabDistanceScratch(
         slab_pos=slab_pos,
         cell=cell,
         pbc=pbc,
         slab_syms=slab_syms,
+        slab_cov_r=slab_cov_r,
         pre_ads_pos=pre_ads_pos,
     )
 
@@ -787,6 +815,7 @@ def _validate_posed_adsorbate(
         exclude_slab_atoms=exclude_n,
         material_type=mat_type,
         pairwise_distances=dists,
+        slab_scratch=slab_scratch,
     )
     if not ok:
         return dist_reason

@@ -429,3 +429,68 @@ def test_validate_posed_adsorbate_scratch_equivalence():
     )
     assert reason_no_scratch == reason_scratch
     assert reason_no_scratch is None
+
+
+def test_check_initial_placement_distance_reuses_slab_scratch():
+    """4.4: passing a slab scratch (with precomputed covalent radii) must agree
+    with the no-scratch path and avoid re-slicing the ASE object."""
+    from metalsurfer.placement import geometry as geom
+    from metalsurfer.placement.pose import _build_slab_distance_scratch
+
+    slab = make_slab()
+    water = place_adsorbate_above_slab(
+        slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
+    )
+    config = AdsorptionConfig()
+
+    scratch = _build_slab_distance_scratch(slab, None, "slab")
+    assert scratch.slab_cov_r is not None
+
+    base = geom.check_initial_placement_distance(
+        water, slab,
+        min_distance=config.min_initial_distance,
+        min_contact_ratio=config.min_contact_ratio,
+        material_type="slab",
+    )
+    with_scratch = geom.check_initial_placement_distance(
+        water, slab,
+        min_distance=config.min_initial_distance,
+        min_contact_ratio=config.min_contact_ratio,
+        material_type="slab",
+        slab_scratch=scratch,
+    )
+    assert base == with_scratch
+
+
+def test_resolve_surface_ref_no_site_nanoparticle_uses_radial_com(caplog):
+    """1.4: nanoparticle replay with no site uses the COM radial distance.
+
+    Cartesian z-max is arbitrary for a radially symmetric cluster and must not
+    be used as the z-offset reference.
+    """
+    import logging
+
+    from metalsurfer.placement.pose import _resolve_surface_ref
+
+    # Anisotropic cluster offset from the origin so Cartesian z-max differs from
+    # the radial distance from the centre of mass.
+    positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [0.0, 4.0, 0.0],
+            [0.0, 0.0, 2.0],
+        ],
+        dtype=float,
+    )
+    slab = Atoms("Cu4", positions=positions)
+
+    with caplog.at_level(logging.WARNING, logger="metalsurfer.placement.pose"):
+        ref, is_local = _resolve_surface_ref(None, slab, "nanoparticle")
+
+    com = positions.mean(axis=0)
+    expected = float(np.max(np.linalg.norm(positions - com, axis=1)))
+    assert ref == pytest.approx(expected)
+    assert ref != pytest.approx(float(np.max(positions[:, 2])))
+    assert is_local is False
+    assert "without a site" in caplog.text
