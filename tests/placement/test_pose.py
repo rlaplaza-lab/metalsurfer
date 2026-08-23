@@ -447,13 +447,15 @@ def test_check_initial_placement_distance_reuses_slab_scratch():
     assert scratch.slab_cov_r is not None
 
     base = geom.check_initial_placement_distance(
-        water, slab,
+        water,
+        slab,
         min_distance=config.min_initial_distance,
         min_contact_ratio=config.min_contact_ratio,
         material_type="slab",
     )
     with_scratch = geom.check_initial_placement_distance(
-        water, slab,
+        water,
+        slab,
         min_distance=config.min_initial_distance,
         min_contact_ratio=config.min_contact_ratio,
         material_type="slab",

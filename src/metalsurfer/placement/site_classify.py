@@ -141,8 +141,14 @@ def _site_normals_for_material(
         return _slab_site_normals(n_verts, cell)
     if material_type == "porous" and bool(np.any(pbc)) and cell_has_volume(cell):
         return _periodic_local_normals(
-            vertices, positions, local_tree, cell=cell, pbc=pbc, k=k,
-            images=images, image_idx=image_idx,
+            vertices,
+            positions,
+            local_tree,
+            cell=cell,
+            pbc=pbc,
+            k=k,
+            images=images,
+            image_idx=image_idx,
         )
     # Nanoparticles (and degenerate/non-periodic frameworks): the plain
     # non-periodic k-nearest centroid is the correct outward estimate.

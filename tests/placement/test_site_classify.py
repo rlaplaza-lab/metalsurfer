@@ -516,9 +516,7 @@ def test_delaunay_bridge_fallback_uses_top_layer_not_bulk():
     vertex_2d = np.array([[0.0, 0.15]], dtype=float)
     vertices = np.array([[0.0, 0.15, 0.1]], dtype=float)
 
-    cand_xy = np.array(
-        [[0.0, 0.0], [2.0, 0.0], [0.0, 2.0], [-2.0, 0.0]], dtype=float
-    )
+    cand_xy = np.array([[0.0, 0.0], [2.0, 0.0], [0.0, 2.0], [-2.0, 0.0]], dtype=float)
     cand_types = ["bridge", "atop", "atop", "atop"]
     cand_indices = [(1,), (0,), (1,), (2,)]
     cand_tree = KDTree(cand_xy)

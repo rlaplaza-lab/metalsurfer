@@ -599,11 +599,11 @@ def _enumerate_unified_sites(
         # give up immediately for other material types.
         logger.warning(
             "No accessible sites for %d-atom structure (probe_radius=%s, max_distance=%s, material_type=%r)",
-                len(atoms),
-                f"{probe_radius:.2f}" if probe_radius is not None else "auto",
-                f"{max_site_distance:.2f}" if max_site_distance is not None else "auto",
-                material_type,
-            )
+            len(atoms),
+            f"{probe_radius:.2f}" if probe_radius is not None else "auto",
+            f"{max_site_distance:.2f}" if max_site_distance is not None else "auto",
+            material_type,
+        )
         return []
 
     if material_type == "slab":
@@ -1136,7 +1136,9 @@ def _compute_site_z_base(
         r_surface = _get_site_surface_radii(slab, site)
     mol_radii = [_get_covalent_radius(s) for s in mol_symbols]
     mol_radii = [r for r in mol_radii if r is not None]
-    r_mol = float(np.mean(mol_radii)) if mol_radii else _ADSORBATE_COVALENT_RADIUS_FALLBACK
+    r_mol = (
+        float(np.mean(mol_radii)) if mol_radii else _ADSORBATE_COVALENT_RADIUS_FALLBACK
+    )
     r_sum = r_mol + r_surface
 
     z_lo = float(z_lo) * r_sum

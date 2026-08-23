@@ -189,9 +189,7 @@ def _resolve_surface_ref(
         mat_type,
     )
     return (
-        float(
-            np.max(np.linalg.norm(slab.get_positions() - com, axis=1))
-        ),
+        float(np.max(np.linalg.norm(slab.get_positions() - com, axis=1))),
         False,
     )
 
@@ -758,7 +756,10 @@ def _build_slab_distance_scratch(
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = material_aware_pbc(mat_type)
     slab_cov_r = np.array(
-        [r if (r := geom._get_covalent_radius(s)) is not None else np.nan for s in slab_syms],
+        [
+            r if (r := geom._get_covalent_radius(s)) is not None else np.nan
+            for s in slab_syms
+        ],
         dtype=float,
     )
     return geom._SlabDistanceScratch(
