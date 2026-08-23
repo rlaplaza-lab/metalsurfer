@@ -270,12 +270,23 @@ def estimate_parallel_relaxation_capacity(
 def batch_static(
     atoms_list: list[Atoms],
     ts_model,
-) -> list[tuple[float, np.ndarray]]:
+    *,
+    zero_fallback: bool = True,
+    validate_pbc: bool = True,
+    require_energy: bool = True,
+) -> list[tuple[float, np.ndarray | None]]:
     """Batched single-point via ``ts.static(system=atoms_list, model=...)``.
 
     Returns a list of ``(energy, forces)`` tuples, one per input Atoms.
     Much faster than calling ``ts.static`` once per system because the model
     forward pass is fused across all systems.
+
+    When *zero_fallback* is False, systems whose forces are missing yield
+    ``None`` forces instead of zeros. When *validate_pbc* is False, the
+    per-system PBC check is skipped (callers that already validated the inputs
+    can pass False for a hot path). When *require_energy* is False, a missing
+    energy is tolerated (substituted with ``NaN``) — used by force-recovery
+    paths that only need forces.
 
     Parameters
     ----------
@@ -283,6 +294,12 @@ def batch_static(
         List of ASE Atoms objects.
     ts_model
         TorchSim model instance.
+    zero_fallback
+        Replace missing forces with zeros when True, else ``None``.
+    validate_pbc
+        Validate per-system PBC before running the model.
+    require_energy
+        Raise if a system returns no energy when True, else substitute ``NaN``.
     """
     ts = _deps.ts
     if ts is None:
@@ -294,7 +311,8 @@ def batch_static(
     if not atoms_list:
         return []
     for i, atoms in enumerate(atoms_list):
-        _validate_model_pbc(atoms, context=f"batch_static system[{i}]")
+        if validate_pbc:
+            _validate_model_pbc(atoms, context=f"batch_static system[{i}]")
     with torchsim_output_capture():
         result_list = ts.static(system=atoms_list, model=ts_model)
     if len(result_list) != len(atoms_list):
@@ -302,18 +320,23 @@ def batch_static(
             "ML model returned mismatched batch size in ts.static: "
             f"expected {len(atoms_list)}, got {len(result_list)}."
         )
-    out: list[tuple[float, np.ndarray]] = []
+    out: list[tuple[float, np.ndarray | None]] = []
     for atoms, res in zip(atoms_list, result_list, strict=True):
         e = res.get("potential_energy")
         f = res.get("forces")
         if e is None:
-            raise RuntimeError(
-                "ML model returned no energy (out['potential_energy'] is None). "
-                "Check GPU memory and model output."
-            )
-        energy = float(e.detach().cpu().numpy().squeeze())
+            if require_energy:
+                raise RuntimeError(
+                    "ML model returned no energy (out['potential_energy'] is None). "
+                    "Check GPU memory and model output."
+                )
+            energy = float("nan")
+        else:
+            energy = float(e.detach().cpu().numpy().squeeze())
         forces = (
-            f.detach().cpu().numpy() if f is not None else np.zeros((len(atoms), 3))
+            f.detach().cpu().numpy()
+            if f is not None
+            else (np.zeros((len(atoms), 3)) if zero_fallback else None)
         )
         out.append((energy, forces))
     return out
@@ -418,18 +441,22 @@ def _forces_for_optimized_systems(
         return [None] * n_systems
 
     survivor_atoms = [result[i] for i in survivor_idx]
-    ts = _deps.ts
     try:
-        with torchsim_output_capture():
-            static_results = ts.static(system=survivor_atoms, model=ts_model)
+        recovered = batch_static(
+            survivor_atoms,
+            ts_model,
+            zero_fallback=False,
+            validate_pbc=False,
+            require_energy=False,
+        )
     except Exception:
         logger.warning("ts.static force recovery failed", exc_info=True)
         return [None] * n_systems
 
-    per_system: list[np.ndarray | None] = []
-    for res in static_results:
-        f = res.get("forces") if isinstance(res, dict) else None
-        per_system.append(f.detach().cpu().numpy() if f is not None else None)
+    per_system = [
+        None if forces is None or not np.any(forces) else forces
+        for _energy, forces in recovered
+    ]
     if len(per_system) != len(survivor_idx):
         return [None] * n_systems
 

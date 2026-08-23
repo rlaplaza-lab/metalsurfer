@@ -167,27 +167,6 @@ def rotation_matrix_to_quaternion(R: np.ndarray) -> np.ndarray:
     return normalize_quaternion(np.array([w, x, y, z], dtype=float))
 
 
-def best_fit_rotation(source: np.ndarray, target: np.ndarray) -> np.ndarray:
-    """Return the proper rotation matrix that best maps source to target.
-
-    Parameters
-    ----------
-    source
-        Source coordinate array (n, 3).
-    target
-        Target coordinate array (n, 3).
-    """
-    src = np.asarray(source, dtype=float)
-    dst = np.asarray(target, dtype=float)
-    H = src.T @ dst
-    U, _S, Vt = np.linalg.svd(H)
-    R = Vt.T @ U.T
-    if np.linalg.det(R) < 0:
-        Vt[-1, :] *= -1.0
-        R = Vt.T @ U.T
-    return R
-
-
 def compute_canonical_molecular_frame(
     ads_pos: np.ndarray, symbols: list[str] | None = None
 ) -> np.ndarray:

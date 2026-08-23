@@ -539,7 +539,7 @@ def test_get_site_surface_radii_falls_back_when_no_positive_radius(monkeypatch, 
     slab = make_slab()
     monkeypatch.setattr(site_enum, "_get_covalent_radius", lambda _sym: None)
     with caplog.at_level(
-        logging.WARNING, logger="metalsurfer.placement.site_enumeration"
+        logging.DEBUG, logger="metalsurfer.placement.site_enumeration"
     ):
         r_surface = _get_site_surface_radii(slab, None)
     assert r_surface == pytest.approx(_SURFACE_COVALENT_RADIUS_FALLBACK)

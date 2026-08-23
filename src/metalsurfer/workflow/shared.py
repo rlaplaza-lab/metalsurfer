@@ -220,8 +220,7 @@ def _validate_geometry(
         )
         if len(dists) > 0:
             min_dist = float(np.min(np.asarray(dists, dtype=float).ravel()))
-            if min_dist < cutoff:
-                return False, f"atoms too close: {min_dist:.3f} A"
+            return False, f"atoms too close: {min_dist:.3f} A"
 
     forces = atoms.get_forces()
     slab_size = len(slab)

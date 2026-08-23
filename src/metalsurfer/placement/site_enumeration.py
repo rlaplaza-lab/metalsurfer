@@ -541,11 +541,7 @@ def _enumerate_unified_sites(
 
     # Slab-specific topology enrichment becomes part of the default generator.
     if material_type == "slab" and slab_top_atom_indices is not None:
-        # For planar slabs `slab_skip_voronoi` empties `vertices`/`nn_dists` before
-        # reaching this point, so `nn_dists` may be empty. `_median_nn_or_fallback`
-        # then intentionally takes its periodic-image KDTree fallback (NOT dead
-        # code) — keep this path even though `_inject_atop_sites`'s own guard would
-        # otherwise make the fallback appear unreachable from there.
+        # `nn_dists` may be empty here, so the fallback below is reachable (not dead code).
         median_nn = _median_nn_or_fallback(
             nn_dists,
             reference_positions=positions[slab_top_atom_indices],
@@ -1099,7 +1095,7 @@ def _get_site_surface_radii(
     radii = [r for r in radii if r is not None]
     if not radii:
         site_symbols = [symbols[int(i)] for i in indices]
-        logger.warning(
+        logger.debug(
             "No positive covalent radii for site surface symbols %r (indices %r); "
             "using mean surface (framework) fallback %.3f Å",
             site_symbols,

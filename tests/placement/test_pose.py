@@ -487,7 +487,7 @@ def test_resolve_surface_ref_no_site_nanoparticle_uses_radial_com(caplog):
     )
     slab = Atoms("Cu4", positions=positions)
 
-    with caplog.at_level(logging.WARNING, logger="metalsurfer.placement.pose"):
+    with caplog.at_level(logging.DEBUG, logger="metalsurfer.placement.pose"):
         ref, is_local = _resolve_surface_ref(None, slab, "nanoparticle")
 
     com = positions.mean(axis=0)

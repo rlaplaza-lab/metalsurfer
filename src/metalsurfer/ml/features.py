@@ -37,34 +37,17 @@ def _finite_quaternion(
     x: float | None,
     y: float | None,
     z: float | None,
-    *,
-    field_prefix: str = "quat",
-    allow_default: bool = False,
 ) -> np.ndarray:
     """Parse and normalize a quaternion from four components.
 
-    When *allow_default* is False, ``None`` or non-finite values raise
-    :class:`ValueError`. When True, missing/non-finite components default to
-    identity ``(1, 0, 0, 0)``.
+    ``None`` or non-finite components raise :class:`ValueError`.
     """
-    defaults = (1.0, 0.0, 0.0, 0.0)
-    components: list[float] = []
-    for name, value, default in zip(
-        ("w", "x", "y", "z"), (w, x, y, z), defaults, strict=True
-    ):
-        field = f"{field_prefix}_{name}"
-        if value is None or (isinstance(value, float) and not np.isfinite(value)):
-            if not allow_default:
-                raise ValueError(f"{field} must be finite, got {value!r}")
-            components.append(default)
-            continue
-        parsed = float(value)
-        if not np.isfinite(parsed):
-            if not allow_default:
-                raise ValueError(f"{field} must be finite, got {value!r}")
-            components.append(default)
-            continue
-        components.append(parsed)
+    components = [
+        _as_finite_float(w, "quat_w"),
+        _as_finite_float(x, "quat_x"),
+        _as_finite_float(y, "quat_y"),
+        _as_finite_float(z, "quat_z"),
+    ]
     return normalize_quaternion(np.array(components, dtype=float))
 
 
@@ -91,7 +74,6 @@ def extract_features(record: PlacementRecord) -> dict[str, float]:
         record.descriptor.quat_x,
         record.descriptor.quat_y,
         record.descriptor.quat_z,
-        allow_default=False,
     )
     features["quat_w"] = float(quat[0])
     features["quat_x"] = float(quat[1])

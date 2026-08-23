@@ -183,7 +183,7 @@ def _resolve_surface_ref(
             False,
         )
     com = np.mean(slab.get_positions(), axis=0)
-    logger.warning(
+    logger.debug(
         "Resolving surface reference for %s without a site; using radial "
         "distance from COM (stale or out-of-range site_index is the likely cause)",
         mat_type,
@@ -228,7 +228,7 @@ def _pose_from_spec(
         shape, _, _ = geom._classify_molecule_shape(canonical_pos)
     normal = np.array([0.0, 0.0, 1.0])
 
-    reference = placement_reference_slab(slab, slab_for_sites)
+    reference = slab_for_sites if slab_for_sites is not None else slab
     ctx = (
         site_context
         if site_context is not None
@@ -393,7 +393,7 @@ def _context_from_pose(
     quat = geom.normalize_quaternion(raw_q)
     rotated_pos = (geom.quaternion_to_rotation_matrix(quat) @ canonical_pos.T).T
 
-    reference = placement_reference_slab(slab, slab_for_sites)
+    reference = slab_for_sites if slab_for_sites is not None else slab
     ctx = (
         site_context
         if site_context is not None
@@ -487,17 +487,6 @@ def _saturation_exclude_count(
     if n_sub < len(slab):
         return n_sub
     return None
-
-
-def placement_reference_slab(slab: Atoms, slab_for_sites: Atoms | None) -> Atoms:
-    """Bare-substrate reference for site enumeration, surface_ref and z-offsets.
-
-    Contract: *slab* may already contain previously placed adsorbates
-    (saturation); *slab_for_sites* is then the bare substrate. Occupancy and
-    clash checks keep using the full *slab* plus
-    :func:`_saturation_exclude_count`.
-    """
-    return slab_for_sites if slab_for_sites is not None else slab
 
 
 def _placement_normal(ctx: _PlacementContext, slab: Atoms) -> np.ndarray:

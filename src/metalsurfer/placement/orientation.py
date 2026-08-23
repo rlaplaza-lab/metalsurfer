@@ -197,13 +197,12 @@ def _finish_orientation(
         base_pos, normal, spec.tilt_deg, spec.azimuth_deg
     )
     R_total = R_tilt @ R_base
-    # `R_total` is the product of proper orthonormal rotations, and `canonical`
-    # is COM-centred, so the composed rotation reproduces `rotated_pos` to ~1e-14.
-    # The previous Kabsch fallback was dead code; keep only a debug assertion to
-    # catch a future regression in the COM-centred invariant.
+    # R_total is the product of proper orthonormal rotations and `canonical` is
+    # COM-centred, so it reproduces `rotated_pos` to ~1e-14; this assert catches
+    # a regression in that invariant (stripped under `python -O`).
     canonical = np.asarray(canonical_pos, dtype=float)
     equiv = (R_total @ canonical.T).T
-    np.testing.assert_allclose(equiv, rotated_pos, atol=1e-10)
+    assert np.allclose(equiv, rotated_pos, atol=1e-10)
     quat = geom.rotation_matrix_to_quaternion(R_total)
     return OrientedAdsorbate(
         rotated_pos=rotated_pos,

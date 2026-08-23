@@ -21,16 +21,14 @@ except ImportError:  # pragma: no cover - depends on the optional MLIP stack
 else:  # pragma: no cover - depends on the optional MLIP stack
     torch = _torch_mod
 
-# GPU memory probe errors. torch.cuda.OutOfMemoryError subclasses RuntimeError, so it is
-# already covered; listing it first is only for explicitness when torch is importable.
+# GPU memory probe errors. torch.cuda.OutOfMemoryError subclasses RuntimeError,
+# so it is already covered; an OSError can also escape (CUDA IPC/driver), so it
+# is kept here.
 _CAPACITY_PROBE_ERRORS: tuple[type[BaseException], ...] = (
     RuntimeError,
     MemoryError,
+    OSError,
 )
-if torch is not None:
-    _cuda_oom = getattr(getattr(torch, "cuda", None), "OutOfMemoryError", None)
-    if _cuda_oom is not None:
-        _CAPACITY_PROBE_ERRORS = (_cuda_oom, RuntimeError, MemoryError)
 
 ts: Any = None
 ts_constraints: Any = None
