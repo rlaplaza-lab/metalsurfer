@@ -3,7 +3,7 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -1512,7 +1512,7 @@ def select_candidates_batch_diverse(
     if len(available) >= 2:
         _query = np.asarray(avail_positions, dtype=np.float64)
         tree = KDTree(_query)
-        nn_dist = np.asarray(tree.query(_query, k=2)[0])[:, 1]
+        nn_dist = np.asarray(cast(Any, tree).query(_query, k=2)[0])[:, 1]
         lengthscale = float(np.median(nn_dist))
         lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
     else:

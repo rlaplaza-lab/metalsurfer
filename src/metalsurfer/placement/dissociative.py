@@ -5,6 +5,7 @@ import struct
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any, cast
 
 import numpy as np
 from ase import Atoms
@@ -355,7 +356,7 @@ def _compute_dissociative_site_pairs(
     else:
         _site_query = np.asarray(site_3d, dtype=np.float64)
         _nn_tree = KDTree(_site_query)
-        nn_d, _ = _nn_tree.query(_site_query, k=2)
+        nn_d, _ = cast(Any, _nn_tree).query(_site_query, k=2)
         # len(site_3d) >= 2 (early-return above), so query(..., k=2) is 2-D.
         mean_nn_sep = float(np.mean(np.asarray(nn_d, dtype=float)[:, 1]))
 
