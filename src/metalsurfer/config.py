@@ -126,6 +126,12 @@ def fold_bo_config(config_data: dict[str, Any]) -> BOConfig:
     ----------
     config_data
         Campaign config mapping that may contain a nested ``bo`` key.
+
+    Returns
+    -------
+    BOConfig
+        The constructed Bayesian-optimization configuration. The ``bo`` key is
+        popped (removed) from *config_data*.
     """
     return _bo_config_from_mapping(config_data.pop("bo", None))
 

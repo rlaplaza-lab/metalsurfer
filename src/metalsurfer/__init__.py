@@ -32,6 +32,7 @@ __all__ = [
     "BOTransferConfig",
     "resolved_bo_eval_budget",
     "bo_eval_schedule",
+    "fold_bo_config",
     "run_adsorption",
     "run_adsorption_bo",
     "run_saturation",
@@ -64,7 +65,7 @@ __all__ = [
 
 _LAZY_MODULES = {
     "_logging": {"configure_logging"},
-    "config": {"resolved_bo_eval_budget", "bo_eval_schedule"},
+    "config": {"resolved_bo_eval_budget", "bo_eval_schedule", "fold_bo_config"},
     "surface_prep": {
         "prepare_substrate",
         "finalize_substrate",
