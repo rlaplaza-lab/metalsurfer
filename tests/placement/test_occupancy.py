@@ -1,7 +1,6 @@
 """Occupancy-aware packing, recovery and fill strategies."""
 
 from collections.abc import Callable
-from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -12,8 +11,10 @@ from metalsurfer.models import PlacementPose, PlacementSpec
 from metalsurfer.placement import (
     check_initial_placement_distance,
     get_unified_sites,
+    material_aware_pbc,
 )
 from metalsurfer.placement.dissociative import _get_dissociative_site_pairs
+from metalsurfer.placement.occupancy import filter_sites_by_occupancy
 from metalsurfer.placement.pose import (
     _finalize_placement,
     _PlacementContext,
@@ -27,49 +28,22 @@ from metalsurfer.workflow.shared import PlacementFailureEvent
 
 from ..conftest import (
     make_h2,
+    make_nanoparticle,
     make_placement_descriptor,
+    make_porous_framework,
     make_slab,
     make_water,
+    water_conformers,
 )
 from ._helpers import (
+    _generate_placements,
     _make_site,
+    _round_atop_placement_spec,
     dissoc_placement_spec,
 )
 
 _SpecFilter = Callable[[PlacementSpec], bool] | None
 _SpecFactory = Callable[[int, _SpecFilter], list[PlacementSpec]]
-
-_ATOP_PLACEMENT_SPEC = PlacementSpec(
-    conformer_index=0,
-    orientation_type="round",
-    face_flip=False,
-    en_atom_index=None,
-    site_index=0,
-    site_type="atop",
-    tilt_deg=0.0,
-    azimuth_deg=0.0,
-    azimuth_in_plane_deg=0.0,
-    z_fraction=0.5,
-    placement_index=0,
-)
-
-
-def _atop_spec(
-    placement_index: int,
-    *,
-    site_index: int | None = None,
-    site_type: str = "atop",
-    **overrides: object,
-) -> PlacementSpec:
-    if site_index is None:
-        site_index = placement_index
-    return replace(
-        _ATOP_PLACEMENT_SPEC,
-        placement_index=placement_index,
-        site_index=site_index,
-        site_type=site_type,
-        **overrides,
-    )
 
 
 def _filter_specs(
@@ -81,7 +55,9 @@ def _filter_specs(
 
 
 def _atop_specs(n_desired: int, filter_spec: _SpecFilter) -> list[PlacementSpec]:
-    return _filter_specs([_atop_spec(i) for i in range(n_desired)], filter_spec)
+    return _filter_specs(
+        [_round_atop_placement_spec(i) for i in range(n_desired)], filter_spec
+    )
 
 
 def _enumerate_from(
@@ -221,6 +197,7 @@ def test_estimate_complexity_shrinks_under_coverage():
         full_slab=full,
     )
     assert covered < clean
+    # Full-surface saturation collapses estimated complexity to zero by construction.
     assert covered == 0.0
 
 
@@ -526,7 +503,7 @@ def test_retry_blocks_repeated_bad_site_index(monkeypatch):
 
     def make_specs(_n_desired, filter_spec):
         specs = [
-            _atop_spec(i, site_index=site_idx, site_type="hollow")
+            _round_atop_placement_spec(i, site_index=site_idx, site_type="hollow")
             for i, site_idx in enumerate([3, 3, 5])
         ]
         filtered = _filter_specs(specs, filter_spec)
@@ -562,7 +539,7 @@ def test_retry_blocks_repeated_clash_reasons(fail_reason, monkeypatch):
 
     def make_specs(_n_desired, filter_spec):
         specs = [
-            _atop_spec(i, site_index=site_idx, site_type="hollow")
+            _round_atop_placement_spec(i, site_index=site_idx, site_type="hollow")
             for i, site_idx in enumerate([3, 3, 5])
         ]
         filtered = _filter_specs(specs, filter_spec)
@@ -740,7 +717,7 @@ def test_fill_yield_floor_keeps_oversampling_after_zero_success(monkeypatch):
     def make_specs(n_desired, filter_spec):
         requested.append(n_desired)
         specs = [
-            _atop_spec(i, site_index=i + 1000 * len(requested))
+            _round_atop_placement_spec(i, site_index=i + 1000 * len(requested))
             for i in range(n_desired)
         ]
         return _filter_specs(specs, filter_spec)
@@ -821,9 +798,11 @@ def test_backfill_oversamples_by_yield(monkeypatch):
 
     monkeypatch.setattr(fill_mod, "_materialize_spec_placements", fake_materialize)
 
-    primary = [_atop_spec(i) for i in range(2)]
+    primary = [_round_atop_placement_spec(i) for i in range(2)]
     # First primary succeeds once (50% of 2) → need 3 more; yield_est=0.5 → request 6.
-    backfill = [_atop_spec(100 + i, site_index=100 + i) for i in range(20)]
+    backfill = [
+        _round_atop_placement_spec(100 + i, site_index=100 + i) for i in range(20)
+    ]
     config = AdsorptionConfig(
         material_type="slab",
         num_placements=4,
@@ -941,7 +920,7 @@ def test_cell_tracking_skips_retried_cells(monkeypatch):
     # Large fixed pool of distinct cells so the pool never exhausts (no fallback
     # re-materialization); check_cells must then keep every cell in <=1 batch.
     POOL_SIZE = 200
-    pool = [_atop_spec(i) for i in range(POOL_SIZE)]
+    pool = [_round_atop_placement_spec(i) for i in range(POOL_SIZE)]
 
     seen_cells: list[list] = []
 
@@ -1001,7 +980,10 @@ def test_pool_empty_partial_unblock(monkeypatch, caplog):
 
     from metalsurfer.workflow import placement_fill as fill_mod
 
-    known_specs = [_atop_spec(i, site_index=3, site_type="hollow") for i in range(3)]
+    known_specs = [
+        _round_atop_placement_spec(i, site_index=3, site_type="hollow")
+        for i in range(3)
+    ]
     known = known_specs[0]
     # Per enumerate call, record whether the failed-key block is still active.
     filter_accepts_known: list[bool] = []
@@ -1108,3 +1090,74 @@ def test_filter_sites_by_occupancy_mic_wrap():
         )
         == 2
     )
+
+
+# ---------------------------------------------------------------------------
+# Rec 2a — occupancy packing / blocked-site exclusion across material types.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "material_type, factory",
+    [
+        ("slab", make_slab),
+        ("nanoparticle", make_nanoparticle),
+        ("porous", make_porous_framework),
+    ],
+)
+def test_occupancy_filter_excludes_near_adsorbate_each_material(material_type, factory):
+    """A site near an existing adsorbate is blocked; a free site is kept (per material)."""
+    structure = factory()
+    cell = np.asarray(structure.get_cell(), dtype=float)
+    pbc = material_aware_pbc(material_type)
+    site = _make_site([2.0, 2.0, 5.0], material_type=material_type)
+    far = _make_site([8.0, 8.0, 5.0], material_type=material_type)
+    existing = np.array([[2.05, 2.05, 5.0]])
+    kept = filter_sites_by_occupancy(
+        [site, far],
+        existing,
+        cell=cell,
+        pbc=pbc,
+        min_separation=2.0,
+    )
+    assert len(kept) == 1
+    assert np.allclose(kept[0].xyz, far.xyz)
+
+
+@pytest.mark.parametrize(
+    "material_type, factory",
+    [
+        ("slab", make_slab),
+        ("nanoparticle", make_nanoparticle),
+        ("porous", make_porous_framework),
+    ],
+)
+def test_initial_placement_distance_packs_free_rejects_blocked_each_material(
+    material_type, factory
+):
+    """A real generated placement passes the gate; an overlapping one is blocked."""
+    structure = factory()
+    config = AdsorptionConfig(material_type=material_type, seed=0)
+    accepted = False
+    for _spec, adsorbate, _desc in _generate_placements(
+        water_conformers(), structure, config, smiles="O", n_desired=8
+    ):
+        ok_free, _, reason_free = check_initial_placement_distance(
+            adsorbate, structure, material_type=material_type
+        )
+        if ok_free:
+            accepted = True
+            break
+    assert accepted, "expected at least one gate-accepted generated placement"
+
+    blocked = make_water().copy()
+    bpos = blocked.get_positions().copy()
+    bpos += structure.get_positions()[0]
+    blocked.set_positions(bpos)
+    blocked.set_cell(structure.get_cell())
+    blocked.set_pbc(structure.get_pbc())
+    ok_blocked, _, reason_blocked = check_initial_placement_distance(
+        blocked, structure, material_type=material_type
+    )
+    assert not ok_blocked
+    assert reason_blocked in ("too_close", "empty_geometry")

@@ -246,7 +246,8 @@ def test_dissociative_placement_supported_for_nanoparticle():
         placed, nanoparticle, material_type="nanoparticle"
     )
     assert ok, (min_d, dist_reason)
-    assert 1.0 <= min_d <= 3.5
+    # Lower floor is gated by `assert ok`; only the slack upper tail is checked.
+    assert min_d <= descriptor.z_offset + 0.8
 
 
 def test_dissociative_wrap_pair_cartesian_separation_matches_mic():
@@ -359,7 +360,8 @@ def test_dissociative_placement_on_slab_separates_and_clears_surface():
     assert assigned_distinct, (
         "each H must map to a distinct hollow column at surface_ref + z_offset"
     )
-    assert 0.8 <= float(min_d) <= 3.5, (
+    # Lower floor is gated by the contact gate; only the slack upper tail is checked.
+    assert float(min_d) <= descriptor.z_offset + 0.8, (
         f"dissociative H–surface distance should be chemisorption-like, got {min_d:.3f}"
     )
 

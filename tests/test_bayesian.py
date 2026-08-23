@@ -137,6 +137,7 @@ class TestSurrogate:
         [
             (None, {"n_estimators": 10}, False, 30),
             ("ridge", {}, False, 20),
+            ("extra_trees", {"n_estimators": 10}, True, 20),
             ("gradient_boost", {}, True, 20),
             ("ensemble", {"n_estimators": 5}, False, 20),
         ],

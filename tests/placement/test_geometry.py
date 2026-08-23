@@ -184,14 +184,11 @@ def test_check_initial_placement_distance_gates_every_covalent_pair():
         pbc=[True, True, False],
     )
     r_pt = float(covalent_radii[atomic_numbers["Pt"]])
-    r_h = float(covalent_radii[atomic_numbers["H"]])
     r_ge = float(covalent_radii[atomic_numbers["Ge"]])
     ratio = 0.8
     min_distance = 1.5
     # H–Pt at 1.52 Å: above flat min_distance, and above H covalent floor.
     h_z = 1.52
-    assert h_z >= min_distance
-    assert h_z >= (r_h + r_pt) * ratio
     # Ge–Pt at 1.70 Å: above flat min_distance but below Ge covalent floor.
     ge_z = 1.70
     assert ge_z >= min_distance
@@ -223,7 +220,7 @@ def test_vdw_overlap_detection_accepts_good_contact():
 
     overlaps, min_dist = detect_vdw_overlaps(water, slab, material_type="slab")
     assert len(overlaps) == 0, "Should not detect overlaps for well-separated water"
-    assert min_dist > 3.0
+    assert min_dist > 3.3
 
 
 def test_calculate_contact_quality_detects_good_contact():
@@ -238,7 +235,7 @@ def test_calculate_contact_quality_detects_good_contact():
     )
 
     assert metrics["num_contacting_atoms"] > 0, "Should have contacting atoms"
-    assert metrics["contact_distance"] < 2.8
+    assert metrics["contact_distance"] < 2.3
     assert metrics["contact_ratio"] > 0.0, "Should have contact ratio"
 
 
@@ -267,7 +264,7 @@ def test_adsorbate_separation_accepts_well_separated():
         pbc=material_aware_pbc("slab"),
     )
     assert ok, "Should accept well-separated adsorbates"
-    assert dist > 6.0
+    assert dist > 7.0
 
 
 def test_adsorbate_separation_rejects_close_atoms():
@@ -310,16 +307,10 @@ def test_check_initial_placement_distance_empty_geometry():
 
 def test_min_distance_floor_rejects_close_o_cu():
     """Explicit min_distance=5 Å must reject O–Cu at ~1.5 Å even if covalent ratio allows."""
-    from ase.data import atomic_numbers, covalent_radii
-
     slab = make_slab(n_layers=1, symbol="Cu")
     cu = slab.get_positions()[0]
-    r_o = float(covalent_radii[atomic_numbers["O"]])
-    r_cu = float(covalent_radii[atomic_numbers["Cu"]])
     # Within covalent-ratio acceptance but far below a 5 Å floor.
     height = 1.5
-    assert height < 5.0
-    assert height > (r_o + r_cu) * 0.5
     oxygen = Atoms("O", positions=[cu + np.array([0.0, 0.0, height])])
     oxygen.set_cell(slab.get_cell())
     oxygen.set_pbc(slab.get_pbc())

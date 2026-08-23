@@ -146,6 +146,8 @@ def _make_site(
     material_type="slab",
     env_fingerprint=None,
 ):
+    # Default env_fingerprint is `(("Ru",), site_type)`; manual sites needing a
+    # different element/fingerprint MUST pass `env_fingerprint` explicitly.
     if normal is None:
         normal = np.array([0.0, 0.0, 1.0])
     if env_fingerprint is None:
@@ -190,8 +192,22 @@ _ROUND_ATOP_PLACEMENT_SPEC = PlacementSpec(
 )
 
 
-def _round_atop_placement_spec(**overrides) -> PlacementSpec:
-    return replace(_ROUND_ATOP_PLACEMENT_SPEC, **overrides)
+def _round_atop_placement_spec(
+    placement_index: int = 0,
+    *,
+    site_index: int | None = None,
+    site_type: str = "atop",
+    **overrides: object,
+) -> PlacementSpec:
+    if site_index is None:
+        site_index = placement_index
+    return replace(
+        _ROUND_ATOP_PLACEMENT_SPEC,
+        placement_index=placement_index,
+        site_index=site_index,
+        site_type=site_type,
+        **overrides,
+    )
 
 
 def dissoc_placement_spec(**overrides) -> PlacementSpec:

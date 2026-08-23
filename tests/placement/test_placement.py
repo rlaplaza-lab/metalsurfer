@@ -81,7 +81,7 @@ def test_check_desorption_nanoparticle_and_porous():
         use_pbc=True,
         pbc=list(nanoparticle.get_pbc()),
     )
-    assert float(dist_np_far) > 25.0
+    assert float(dist_np_far) > 28.0
 
     np_sites = get_unified_sites(nanoparticle, material_type="nanoparticle")
     assert np_sites

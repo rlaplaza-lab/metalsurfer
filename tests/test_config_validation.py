@@ -63,6 +63,15 @@ def test_strict_contact_window_rejects_empty_admissible_range():
             contact_distance_threshold=1.0,
             max_closest_approach=3.0,
         )
+    # Third sub-condition: max_closest_approach < contact_distance_threshold
+    # (both below min_initial_distance) leaves the admissible window empty.
+    with pytest.raises(ValueError, match="empty admissible contact window"):
+        AdsorptionConfig(
+            strict_initial_placement=True,
+            min_initial_distance=3.0,
+            contact_distance_threshold=2.0,
+            max_closest_approach=1.0,
+        )
 
 
 def test_default_config():
@@ -223,6 +232,12 @@ def test_site_classification_method_auto_default_and_invalid():
         AdsorptionConfig(site_classification_method="invalid")
 
 
+@pytest.mark.parametrize("material_type", ["invalid", "bulk", "molecule"])
+def test_material_type_invalid_rejected(material_type):
+    with pytest.raises(ValueError, match="material_type"):
+        AdsorptionConfig(material_type=material_type)
+
+
 def test_ts_optimizer_defaults():
     config = AdsorptionConfig()
     assert config.ts_optimizer == "fire"
@@ -331,6 +346,26 @@ def test_autobatcher_max_memory_padding_out_of_range_rejected():
         AdsorptionConfig(autobatcher_max_memory_padding=1.5)
 
 
+@pytest.mark.parametrize("padding", [0.1, 1.0])
+def test_autobatcher_max_memory_padding_inclusive_edges_accepted(padding):
+    config = AdsorptionConfig(autobatcher_max_memory_padding=padding)
+    assert config.autobatcher_max_memory_padding == padding
+
+
+@pytest.mark.parametrize("fraction", [-0.01, 1.1])
+def test_autobatcher_saturation_growth_fraction_out_of_range_rejected(fraction):
+    with pytest.raises(
+        ValueError, match="saturation_autobatcher_reuse_growth_fraction"
+    ):
+        AdsorptionConfig(saturation_autobatcher_reuse_growth_fraction=fraction)
+
+
+@pytest.mark.parametrize("fraction", [0.0, 1.0])
+def test_autobatcher_saturation_growth_fraction_inclusive_edges_accepted(fraction):
+    config = AdsorptionConfig(saturation_autobatcher_reuse_growth_fraction=fraction)
+    assert config.saturation_autobatcher_reuse_growth_fraction == fraction
+
+
 @pytest.mark.parametrize(
     ("kwargs", "error_match"),
     [
@@ -370,6 +405,8 @@ def test_autobatcher_invalid_rejected(kwargs, error_match):
         "reference_optimization_steps",
         "vasp_nsw",
         "vasp_encut",
+        "min_contact_atoms",
+        "placement_retry_max_attempts",
     ],
 )
 def test_zero_positive_int_rejected(field):
@@ -384,6 +421,8 @@ def test_zero_positive_int_rejected(field):
         "num_placements",
         "stage1_steps",
         "stage2_steps",
+        "min_contact_atoms",
+        "placement_retry_max_attempts",
     ],
 )
 def test_negative_int_rejected(field):
@@ -409,6 +448,12 @@ def test_negative_int_rejected(field):
         "max_adsorption_energy",
         "vacuum_box_size",
         "boltzmann_temperature",
+        "max_closest_approach",
+        "contact_distance_threshold",
+        "symmetry_tolerance",
+        "site_equivalence_tolerance",
+        "hollow_site_dedup_tolerance",
+        "voronoi_probe_radius",
     ],
 )
 def test_zero_positive_float_rejected(field):
@@ -423,6 +468,12 @@ def test_zero_positive_float_rejected(field):
         "min_initial_distance",
         "top_layer_tolerance",
         "planar_z_variance_threshold",
+        "max_closest_approach",
+        "contact_distance_threshold",
+        "symmetry_tolerance",
+        "site_equivalence_tolerance",
+        "hollow_site_dedup_tolerance",
+        "voronoi_probe_radius",
     ],
 )
 def test_negative_float_rejected(field):
@@ -443,6 +494,14 @@ def test_negative_energy_dedup_rejected():
 def test_zero_energy_dedup_accepted():
     config = AdsorptionConfig(energy_dedup_threshold=0.0)
     assert config.energy_dedup_threshold == 0.0
+
+
+@pytest.mark.parametrize("field", ["energy_dedup_threshold", "rmsd_dedup_threshold"])
+def test_dedup_threshold_non_negative(field):
+    config = AdsorptionConfig(**{field: 0.0})
+    assert getattr(config, field) == 0.0
+    with pytest.raises(ValueError, match=f"{field}.*non-negative"):
+        AdsorptionConfig(**{field: -0.1})
 
 
 # ---------------------------------------------------------------------------
@@ -575,10 +634,16 @@ def test_min_contact_ratio_valid():
     assert config.min_contact_ratio == 0.9
 
 
-@pytest.mark.parametrize("ratio", [0.3, 1.5])
+@pytest.mark.parametrize("ratio", [0.3, 0.49, 1.21, 1.5])
 def test_min_contact_ratio_out_of_range_rejected(ratio):
     with pytest.raises(ValueError, match="min_contact_ratio"):
         AdsorptionConfig(min_contact_ratio=ratio)
+
+
+@pytest.mark.parametrize("ratio", [0.5, 1.2])
+def test_min_contact_ratio_inclusive_edges_accepted(ratio):
+    config = AdsorptionConfig(min_contact_ratio=ratio)
+    assert config.min_contact_ratio == ratio
 
 
 def test_max_initial_distance_optional():
@@ -710,9 +775,56 @@ def test_bo_eval_schedule():
         ({"bo": BOConfig(surrogate="invalid")}, "bo.surrogate"),
         ({"bo": BOConfig(candidate_pool_size=0)}, "bo.candidate_pool_size"),
         ({"bo": BOConfig(failure_penalty_default=-1.0)}, "bo.failure_penalty_default"),
+        ({"bo": BOConfig(initial_random=-1)}, "bo.initial_random"),
+        ({"bo": BOConfig(batch_size=0)}, "bo.batch_size.*positive"),
+        ({"bo": BOConfig(total_budget=0)}, "bo.total_budget.*positive"),
         (
-            {"bo": BOConfig(failure_penalty_overrides={"validation": -0.1})},
-            "bo.failure_penalty_overrides values",
+            {"bo": BOConfig(failure_penalty_overrides="notadict")},
+            "bo.failure_penalty_overrides.*dict",
+        ),
+        (
+            {"bo": BOConfig(failure_penalty_overrides={1: 0.1})},
+            "bo.failure_penalty_overrides",
+        ),
+        (
+            {"bo": BOConfig(transfer=BOTransferConfig(mode="invalid"))},
+            "bo.transfer.mode",
+        ),
+        (
+            {"bo": BOConfig(transfer=BOTransferConfig(min_step_observations=0))},
+            "bo.transfer.min_step_observations",
+        ),
+        (
+            {"bo": BOConfig(transfer=BOTransferConfig(trust_patience=0))},
+            "bo.transfer.trust_patience",
+        ),
+        (
+            {"bo": BOConfig(transfer=BOTransferConfig(prior_step_window=0))},
+            "bo.transfer.prior_step_window",
+        ),
+        (
+            {"bo": BOConfig(transfer=BOTransferConfig(recency_lengthscale=-1.0))},
+            "bo.transfer.recency_lengthscale",
+        ),
+        (
+            {"bo": BOConfig(transfer=BOTransferConfig(occupancy_lengthscale=-1.0))},
+            "bo.transfer.occupancy_lengthscale",
+        ),
+        (
+            {"bo": BOConfig(transfer=BOTransferConfig(occupancy_floor=1.5))},
+            "bo.transfer.occupancy_floor",
+        ),
+        (
+            {"bo": BOConfig(transfer=BOTransferConfig(min_similarity=-0.1))},
+            "bo.transfer.min_similarity",
+        ),
+        (
+            {"bo": BOConfig(transfer=BOTransferConfig(mae_tolerance=-1.0))},
+            "bo.transfer.mae_tolerance",
+        ),
+        (
+            {"bo": BOConfig(transfer=BOTransferConfig(exploration_fraction=1.5))},
+            "bo.transfer.exploration_fraction",
         ),
         (
             {"bo": BOConfig(transfer=BOTransferConfig(weight_cap=1.0))},

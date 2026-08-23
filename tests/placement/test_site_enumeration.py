@@ -231,9 +231,9 @@ def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
             material_type="slab",
         )
         assert ok, f"Successful placement must pass contact gates: {reason}"
-        # Upper only; lower already gated by assert ok.
-        assert dist <= 4.0, (
-            f"Adsorbate–surface distance should be physical (<=4.0 Å), got {dist:.3f}"
+        # Lower floor is gated by `assert ok`; only the slack upper tail is checked.
+        assert dist <= _descriptor.z_offset + 0.5, (
+            f"Adsorbate–surface distance should be physical, got {dist:.3f}"
         )
         overlaps, _ = detect_vdw_overlaps(adsorbate, slab, material_type="slab")
         assert len(overlaps) == 0, "Successful placement must not have VDW clashes"

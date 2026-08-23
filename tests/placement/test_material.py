@@ -10,6 +10,7 @@ from ase import Atoms
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.models import PlacementPose, PlacementSpec
 from metalsurfer.placement import (
+    calculate_min_distance,
     check_initial_placement_distance,
     enumerate_placement_specs,
     generate_placement_from_spec,
@@ -117,10 +118,8 @@ def test_slab_placements_are_above_surface_reference():
             adsorbate, slab, material_type="slab"
         )
         assert ok, reason
-        # Lower bound made explicit: the covalent-radius gate inside
-        # check_initial_placement_distance already enforces max(min_distance,
-        # covalent_sum * min_contact_ratio), so 1.0 Å is a visible floor here.
-        assert 1.0 <= dist <= 4.0
+        # Lower floor is already gated by `assert ok`; only the slack upper tail is checked.
+        assert dist <= descriptor.z_offset + 0.5
 
 
 @pytest.mark.parametrize(
@@ -162,7 +161,8 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
             material_type=material_type,
         )
         assert ok, f"{material_type} placement failed contact gate: {reason}"
-        assert 1.0 <= dist <= d_hi, (
+        # Lower floor is gated by `assert ok`; only the per-material upper band is checked.
+        assert dist <= d_hi, (
             f"{material_type} adsorbate–surface distance out of band: {dist:.3f}"
         )
         overlaps, _ = detect_vdw_overlaps(
@@ -774,8 +774,8 @@ def test_distance_recovery_rescues_too_close_placement():
         adsorbate_ok, slab, material_type="slab"
     )
     assert gate_ok, (min_d, gate_reason)
-    # Lower bound made explicit, mirroring the covalent-radius gate above.
-    assert 1.0 <= float(min_d) <= 4.0
+    # Lower floor is gated by `assert ok`; only the slack upper tail is checked.
+    assert float(min_d) <= descriptor.z_offset + 0.5
 
 
 def test_distance_recovery_height_only_when_xy_disabled():
@@ -831,5 +831,68 @@ def test_distance_recovery_height_only_when_xy_disabled():
         adsorbate_ok, slab, material_type="slab"
     )
     assert gate_ok, (min_d, gate_reason)
-    # Lower bound made explicit, mirroring the covalent-radius gate above.
-    assert 1.0 <= float(min_d) <= 4.0
+    # Lower floor is gated by `assert ok`; only the slack upper tail is checked.
+    assert float(min_d) <= descriptor.z_offset + 0.5
+
+
+# ---------------------------------------------------------------------------
+# Rec 2d / 2e — material-aware MIC path + non-auto porous site classification
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "material_type, factory",
+    [("nanoparticle", make_nanoparticle), ("porous", make_porous_framework)],
+)
+def test_material_aware_distance_checks_pbc(material_type, factory):
+    """calculate_min_distance honours the material PBC (off for NP, full for porous)."""
+    structure = factory()
+    cell = np.asarray(structure.get_cell(), dtype=float)
+    pbc = material_aware_pbc(material_type)
+    p1 = np.array([[0.5, 0.5, 5.0]])
+    p2 = np.array([[cell[0, 0] - 0.5, cell[1, 1] - 0.5, 5.0]])
+    d = calculate_min_distance(p1, p2, cell=cell, use_pbc=True, pbc=pbc)
+    euclidean = float(np.linalg.norm(p2[0] - p1[0]))
+    if material_type == "nanoparticle":
+        # No PBC: Euclidean distance across the large cell (no MIC wrap).
+        assert d == pytest.approx(euclidean, abs=1e-6)
+    else:
+        # Fully periodic: opposite-face points are adjacent via MIC.
+        assert d < euclidean - 1.0
+
+    # A gate-accepted placement exists for the material (free site packed).
+    if material_type == "nanoparticle":
+        ads = make_water().copy()
+        pos = ads.get_positions().copy()
+        pos[:, 2] += float(np.max(structure.get_positions()[:, 2])) + 2.5
+        ads.set_positions(pos)
+        ads.set_cell(structure.get_cell())
+        ads.set_pbc(structure.get_pbc())
+        ok, _, reason = check_initial_placement_distance(
+            ads, structure, material_type=material_type
+        )
+        assert ok, reason
+    else:
+        config = AdsorptionConfig(material_type=material_type, seed=0)
+        accepted = False
+        for _spec, adsorbate, _desc in _generate_placements(
+            water_conformers(), structure, config, smiles="O", n_desired=8
+        ):
+            ok, _, _ = check_initial_placement_distance(
+                adsorbate, structure, material_type=material_type
+            )
+            if ok:
+                accepted = True
+                break
+        assert accepted
+
+
+def test_porous_site_classification_delaunay():
+    """Porous enumeration succeeds and is non-empty with non-auto (delaunay) method."""
+    porous = make_porous_framework()
+    sites = get_unified_sites(
+        porous,
+        material_type="porous",
+        site_classification_method="delaunay",
+    )
+    assert len(sites) > 0

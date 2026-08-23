@@ -27,7 +27,12 @@ from metalsurfer.campaigns import (
     run_saturation,
     run_saturation_bo,
 )
-from metalsurfer.config import AdsorptionConfig, BOConfig, resolved_bo_eval_budget
+from metalsurfer.config import (
+    AdsorptionConfig,
+    BOConfig,
+    BOTransferConfig,
+    resolved_bo_eval_budget,
+)
 from metalsurfer.models import (
     BindingCampaignResult,
     ReferenceEnergies,
@@ -40,6 +45,7 @@ from metalsurfer.placement.site_context import (
     resolve_site_context_for_sampling,
 )
 from metalsurfer.surface_prep import SlabContainer
+from metalsurfer.workflow import process_molecule_bayesian
 from metalsurfer.workflow.shared import ScreeningRunBootstrap
 
 from .conftest import (
@@ -551,6 +557,84 @@ def test_run_adsorption_substrate_matrix(
     _assert_binding_artifacts(tmp_path / f"results_{surface_type}")
 
 
+# ---------------------------------------------------------------------------
+# Rec 2c / 2f — saturation across substrates + relaxation modes across substrates
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("material_type", ["slab", "nanoparticle", "porous"])
+def test_run_saturation_substrate_matrix(tmp_path, monkeypatch, material_type):
+    """Rec 2c: stubbed saturation advances and keeps finite E_ads on np/porous."""
+    monkeypatch.chdir(tmp_path)
+    slab = _substrate(material_type)
+    harness = _StubHarness(slab, saturation_schedule=True)
+    harness.apply(monkeypatch)
+    config = _tiny_config(material_type=material_type, saturation_max_steps=2)
+    surface_type = f"e2e_sat_{material_type}"
+    campaign = run_saturation(
+        slab=slab,
+        molecules=[(MOL_SMILES, MOL_NAME)],
+        config=config,
+        surface_type=surface_type,
+        skip_existing=False,
+        save_results=True,
+        write_settings=True,
+    )
+    assert isinstance(campaign, SaturationCampaignResult)
+    assert len(campaign.runs) == 1
+    run = campaign.runs[0]
+    assert len(run.steps) >= 1
+    d_lo, d_hi = _distance_window(material_type)
+    for step in run.steps:
+        r = step.best_result
+        assert np.isfinite(r.energy_adsorption)
+        assert d_lo <= r.distance <= d_hi
+        ads = r.atoms[r.slab_size :]
+        assert sorted(ads.get_chemical_symbols()) == ["H", "H", "O"]
+    # First step binds (stub schedule), a later step goes non-binding on a crowded
+    # slab; the slab must actually advance (more adsorbed mass in a later step).
+    assert run.steps[0].best_result.energy_adsorption == pytest.approx(
+        E_ADS_BINDING, abs=1e-6
+    )
+    assert run.steps[-1].best_result.energy_adsorption >= 0.0
+    assert run.steps[-1].best_result.slab_size >= run.steps[0].best_result.slab_size
+    _assert_saturation_artifacts(tmp_path / f"results_{surface_type}")
+
+
+@pytest.mark.parametrize("material_type", ["slab", "nanoparticle", "porous"])
+@pytest.mark.parametrize("slab_relaxation_mode", ["ionic_only", "full"])
+def test_run_adsorption_relaxation_modes(
+    tmp_path, monkeypatch, material_type, slab_relaxation_mode
+):
+    """Rec 2f: non-default substrate relaxation modes complete with survivors."""
+    monkeypatch.chdir(tmp_path)
+    slab = _substrate(material_type)
+    harness = _StubHarness(slab, molecule_name=MOL_NAME)
+    harness.apply(monkeypatch)
+    config = _tiny_config(
+        material_type=material_type, slab_relaxation_mode=slab_relaxation_mode
+    )
+    n_requested = int(config.num_placements or 8)
+    campaign = run_adsorption(
+        slab=slab,
+        molecules=[(MOL_SMILES, MOL_NAME)],
+        config=config,
+        surface_type=f"e2e_relax_{material_type}_{slab_relaxation_mode}",
+        skip_existing=False,
+        save_results=False,
+        write_settings=False,
+    )
+    assert isinstance(campaign, BindingCampaignResult)
+    results = campaign.run_results[0].results
+    _assert_binding_yield(
+        results, n_requested=n_requested, min_success_rate=0.5, min_absolute=1
+    )
+    for r in results:
+        _assert_survivor_physics(
+            r, material_type=material_type, expected_symbols=["H", "H", "O"]
+        )
+
+
 def test_run_adsorption_rejects_crushed_geometries(tmp_path, monkeypatch):
     """Critical: overlapping post-relax geometries must not become survivors."""
     monkeypatch.chdir(tmp_path)
@@ -748,6 +832,107 @@ class TestRunModeApiE2E:
             surface_type,
             mode="bo",
         )
+
+
+# ---------------------------------------------------------------------------
+# Rec 3b / 3c — BO transfer both modes + non-default sampling / surrogate
+# ---------------------------------------------------------------------------
+
+
+def _stubbed_process_molecule_bayesian(
+    tmp_path,
+    monkeypatch,
+    *,
+    config: AdsorptionConfig,
+    bo_step_memory_in=None,
+):
+    """Drive a single-molecule BO run with the MLIP boundary stubbed."""
+    monkeypatch.chdir(tmp_path)
+    slab = _substrate("slab")
+    harness = _StubHarness(slab)
+    harness.apply(monkeypatch)
+    return (
+        slab,
+        process_molecule_bayesian(
+            MOL_SMILES,
+            MOL_NAME,
+            slab,
+            harness.calculator,
+            harness.ref,
+            ts_model=None,
+            config=config,
+            surface_type="e2e_bo_transfer",
+            bo_step_memory_in=bo_step_memory_in,
+        ),
+    )
+
+
+def test_process_molecule_bayesian_transfer_cumulative_refit(tmp_path, monkeypatch):
+    """Rec 3b: cumulative_refit transfer runs and records a positive weight share."""
+    config = _bo_config(
+        initial_random=4,
+        batch_size=2,
+        total_budget=2,
+        transfer=BOTransferConfig(mode="cumulative_refit"),
+    )
+    _slab, first = _stubbed_process_molecule_bayesian(
+        tmp_path, monkeypatch, config=config
+    )
+    assert first.bo_memory is not None
+    assert len(first.bo_memory.observed_X_rows) > 0
+    assert len(first.bo_memory.observed_y) > 0
+
+    _slab, second = _stubbed_process_molecule_bayesian(
+        tmp_path,
+        monkeypatch,
+        config=config,
+        bo_step_memory_in=first.bo_memory,
+    )
+    assert second.transfer_info.transfer_used is True
+    assert second.transfer_info.transfer_weight_share > 0
+
+
+def test_process_molecule_bayesian_transfer_weighted(tmp_path, monkeypatch):
+    """Rec 3c: weighted transfer branch runs at the workflow level."""
+    config = _bo_config(
+        initial_random=4,
+        batch_size=2,
+        total_budget=2,
+        transfer=BOTransferConfig(mode="weighted"),
+    )
+    _slab, first = _stubbed_process_molecule_bayesian(
+        tmp_path, monkeypatch, config=config
+    )
+    assert first.bo_memory is not None
+
+    _slab, second = _stubbed_process_molecule_bayesian(
+        tmp_path,
+        monkeypatch,
+        config=config,
+        bo_step_memory_in=first.bo_memory,
+    )
+    assert second.transfer_info.transfer_used is True
+    assert second.transfer_info.transfer_weight_share > 0
+
+
+@pytest.mark.parametrize(
+    "extra_config",
+    [
+        {"initial_sampling": "stratified"},
+        {"surrogate": "random_forest"},
+    ],
+)
+def test_process_molecule_bayesian_nondefault_bo_branches(
+    tmp_path, monkeypatch, extra_config
+):
+    """Rec 3c: non-default initial_sampling / surrogate complete with survivors."""
+    config = _bo_config(**extra_config)
+    _slab, outcome = _stubbed_process_molecule_bayesian(
+        tmp_path, monkeypatch, config=config
+    )
+    assert len(outcome.results) >= 1
+    for r in outcome.results:
+        assert np.isfinite(r.energy_adsorption)
 
 
 # ---------------------------------------------------------------------------

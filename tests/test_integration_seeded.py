@@ -93,6 +93,10 @@ class TestConformerDeterminism:
 
 
 class TestPlacementDeterminism:
+    @pytest.fixture(autouse=True)
+    def _require_rdkit(self):
+        pytest.importorskip("rdkit")
+
     def _run_placements(self, seed, n=20):
         """Generate n placements with the given seed and return positions."""
         slab = make_slab()
@@ -147,6 +151,10 @@ class TestPlacementDeterminism:
 
 
 class TestEndToEndDeterminism:
+    @pytest.fixture(autouse=True)
+    def _require_rdkit(self):
+        pytest.importorskip("rdkit")
+
     def _pipeline(self, seed, *, assert_physics: bool = False):
         """Run conformer generation + placement (+ optional physics gates)."""
         slab = make_slab()
@@ -200,6 +208,14 @@ class TestEndToEndDeterminism:
             assert pid1 == pid2
             assert n1 == n2
             assert np.allclose(pos1, pos2, atol=1e-8)
+        # Determinism must hold for a different seed too, not only seed 42.
+        r3 = self._pipeline(seed=7)
+        r4 = self._pipeline(seed=7)
+        assert len(r3) == len(r4)
+        for (pid3, pos3, n3), (pid4, pos4, n4) in zip(r3, r4, strict=True):
+            assert pid3 == pid4
+            assert n3 == n4
+            assert np.allclose(pos3, pos4, atol=1e-8)
 
     def test_pipeline_placements_are_physically_plausible(self):
         """Successful CCO placements clear the surface and keep intramolecular bonds."""

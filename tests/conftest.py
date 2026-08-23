@@ -45,8 +45,8 @@ MLIP_CPU_MARKS = [
 
 # Energy-identity tolerances: stub arithmetic vs MLIP noise.
 E_ADS_IDENTITY_TOL = 1e-9
-E_ADS_MLIP_TOL = 1e-4
-E_ADS_MLIP_CPU_TOL = 1e-3
+E_ADS_MLIP_TOL = 1e-6
+E_ADS_MLIP_CPU_TOL = 1e-6
 
 # Shared TorchSim autobatch settings for GPU e2e modules.
 GPU_AUTOBATCH = {
