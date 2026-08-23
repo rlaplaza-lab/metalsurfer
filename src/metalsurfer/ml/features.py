@@ -32,6 +32,42 @@ def _as_finite_float(value: float | None, field_name: str) -> float:
     return parsed
 
 
+def _finite_quaternion(
+    w: float | None,
+    x: float | None,
+    y: float | None,
+    z: float | None,
+    *,
+    field_prefix: str = "quat",
+    allow_default: bool = False,
+) -> np.ndarray:
+    """Parse and normalize a quaternion from four components.
+
+    When *allow_default* is False, ``None`` or non-finite values raise
+    :class:`ValueError`. When True, missing/non-finite components default to
+    identity ``(1, 0, 0, 0)``.
+    """
+    defaults = (1.0, 0.0, 0.0, 0.0)
+    components: list[float] = []
+    for name, value, default in zip(
+        ("w", "x", "y", "z"), (w, x, y, z), defaults, strict=True
+    ):
+        field = f"{field_prefix}_{name}"
+        if value is None or (isinstance(value, float) and not np.isfinite(value)):
+            if not allow_default:
+                raise ValueError(f"{field} must be finite, got {value!r}")
+            components.append(default)
+            continue
+        parsed = float(value)
+        if not np.isfinite(parsed):
+            if not allow_default:
+                raise ValueError(f"{field} must be finite, got {value!r}")
+            components.append(default)
+            continue
+        components.append(parsed)
+    return normalize_quaternion(np.array(components, dtype=float))
+
+
 def extract_features(record: PlacementRecord) -> dict[str, float]:
     """Extract numeric features from a single PlacementRecord.
 
@@ -50,16 +86,12 @@ def extract_features(record: PlacementRecord) -> dict[str, float]:
             record.descriptor.conformer_index, "conformer_index"
         ),
     }
-    quat = normalize_quaternion(
-        np.array(
-            [
-                _as_finite_float(record.descriptor.quat_w, "quat_w"),
-                _as_finite_float(record.descriptor.quat_x, "quat_x"),
-                _as_finite_float(record.descriptor.quat_y, "quat_y"),
-                _as_finite_float(record.descriptor.quat_z, "quat_z"),
-            ],
-            dtype=float,
-        )
+    quat = _finite_quaternion(
+        record.descriptor.quat_w,
+        record.descriptor.quat_x,
+        record.descriptor.quat_y,
+        record.descriptor.quat_z,
+        allow_default=False,
     )
     features["quat_w"] = float(quat[0])
     features["quat_x"] = float(quat[1])
@@ -121,21 +153,33 @@ def extract_features_from_dataset(
         "quat_y": 0.0,
         "quat_z": 0.0,
     }
-    for col, default in quat_defaults.items():
-        if col not in working.columns:
-            working[col] = default
+    quat_col_names = list(quat_defaults)
+    missing_quat_cols = [col for col in quat_col_names if col not in df.columns]
+    for col in missing_quat_cols:
+        working[col] = quat_defaults[col]
 
-    quat_cols = (
-        working[list(quat_defaults.keys())]
+    quat_values = (
+        working[quat_col_names]
         .apply(pd.to_numeric, errors="coerce")
-        .fillna(quat_defaults)
+        .to_numpy(dtype=float)
+        .copy()
     )
-    quat_values = quat_cols.to_numpy(dtype=float)
-    if not np.all(np.isfinite(quat_values)):
-        raise ValueError(
-            "Dataset contains non-finite values in quaternion columns "
-            "(quat_w, quat_x, quat_y, quat_z)"
+    # A quaternion is only meaningful as a whole: if any component is absent or
+    # non-finite, reset the entire row to identity instead of mixing a defaulted
+    # component with the surviving ones (which would fabricate an orientation).
+    if missing_quat_cols:
+        defaulted_rows = np.ones(len(working), dtype=bool)
+    else:
+        defaulted_rows = ~np.all(np.isfinite(quat_values), axis=1)
+    n_defaulted = int(defaulted_rows.sum())
+    if n_defaulted > 0:
+        logger.warning(
+            "Dataset quaternion: %d/%d rows used identity default (1,0,0,0) "
+            "due to missing or non-finite quat columns",
+            n_defaulted,
+            len(working),
         )
+        quat_values[defaulted_rows] = [1.0, 0.0, 0.0, 0.0]
     quat_values = normalize_quaternions(quat_values)
 
     X = pd.DataFrame(

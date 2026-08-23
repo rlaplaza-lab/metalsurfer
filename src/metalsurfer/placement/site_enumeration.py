@@ -20,8 +20,8 @@ from ._constants import (
     _MOL_COVALENT_RADIUS_FALLBACK,
     _NORMAL_K_NEIGHBOURS,
     _PARALLEL_Z_MIN_HI_MARGIN,
+    _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
     _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM,
-    _TOP_LAYER_DEPTH_MIN_ANGSTROM,
     _VORONOI_AUTO_WIDEN_MAX_SCALE,
     _VORONOI_AUTO_WIDEN_PROBE_SCALE,
     _VORONOI_DEDUP_TOLERANCE,
@@ -991,7 +991,7 @@ def get_symmetry_aware_sites(
 def _top_layer_is_planar_from_arrays(
     positions: np.ndarray,
     cell: np.ndarray,
-    top_layer_tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
+    top_layer_tolerance: float = _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
     z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
 ) -> bool:
     """Check whether the topmost atomic layer of *positions* is approximately flat.
@@ -1018,7 +1018,7 @@ def _top_layer_is_planar_from_arrays(
 
 def _is_top_layer_planar(
     slab: Atoms,
-    top_layer_tolerance: float = _TOP_LAYER_DEPTH_MIN_ANGSTROM,
+    top_layer_tolerance: float = _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
     z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
 ) -> bool:
     """Check whether the topmost atomic layer is approximately flat."""
@@ -1067,10 +1067,15 @@ def _get_site_surface_radii(
     radii = [_get_covalent_radius(symbols[int(i)]) for i in indices]
     radii = [r for r in radii if r is not None]
     if not radii:
-        raise ValueError(
-            f"No positive covalent radii for site surface symbols "
-            f"{[symbols[int(i)] for i in indices]!r}"
+        site_symbols = [symbols[int(i)] for i in indices]
+        logger.warning(
+            "No positive covalent radii for site surface symbols %r (indices %r); "
+            "using mean adsorbate fallback %.3f Å",
+            site_symbols,
+            list(indices),
+            _MOL_COVALENT_RADIUS_FALLBACK,
         )
+        return float(_MOL_COVALENT_RADIUS_FALLBACK)
     return float(np.mean(radii))
 
 
@@ -1079,19 +1084,25 @@ def _compute_site_z_base(
     slab: Atoms,
     site: Site | None,
     mol_symbols: list[str],
+    r_surface: float | None = None,
 ) -> tuple[float, float]:
     """Compute z-offset range for placement above *site*.
 
     When ``placement_z_scale_by_covalent_radius`` is True (default), each bound
     is ``placement_z_range[i] * (r_mol + r_surface)``. Otherwise the config
     tuple is returned as literal Å offsets.
+
+    *r_surface* may be supplied to avoid recomputing the surface radius (e.g.
+    when the caller already fetched it once per pose via
+    :func:`_get_site_surface_radii`).
     """
     z_lo, z_hi = config.placement_z_range
 
     if not config.placement_z_scale_by_covalent_radius:
         return z_lo, z_hi
 
-    r_surface = _get_site_surface_radii(slab, site)
+    if r_surface is None:
+        r_surface = _get_site_surface_radii(slab, site)
     mol_radii = [_get_covalent_radius(s) for s in mol_symbols]
     mol_radii = [r for r in mol_radii if r is not None]
     r_mol = float(np.mean(mol_radii)) if mol_radii else _MOL_COVALENT_RADIUS_FALLBACK

@@ -105,10 +105,12 @@ def test_tilt_zero_azimuth_pairs_collapse_to_eight_geometries():
     unique: set[bytes] = set()
     for az in _AZIMUTH:
         for aip in _AZIMUTH_IN_PLANE:
-            base = placement_geometry._flat_orientation_from_principal_axis(
+            base, _R_base = placement_geometry._flat_orientation_from_principal_axis(
                 pos, normal, azimuth_in_plane_deg=aip
             )
-            rotated = placement_geometry._rotation_with_tilt(base, normal, 0.0, az)
+            rotated, _R_tilt = placement_geometry._rotation_with_tilt(
+                base, normal, 0.0, az
+            )
             rounded = np.round(rotated, decimals=6)
             # Canonicalize +0.0/-0.0 so tobytes() uniqueness matches geometry uniqueness.
             rounded[rounded == 0.0] = 0.0

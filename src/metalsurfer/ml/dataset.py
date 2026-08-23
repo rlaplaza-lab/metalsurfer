@@ -37,6 +37,7 @@ class DatasetLogger:
         output_dir: str,
         config: AdsorptionConfig | None = None,
         surface_id: str = "",
+        allow_mixed_context: bool = False,
     ) -> None:
         """Instantiate a dataset logger.
 
@@ -48,9 +49,13 @@ class DatasetLogger:
             Optional adsorption config for context.
         surface_id
             Surface identifier string.
+        allow_mixed_context
+            When False (default), refuse to append rows whose ``context_hash``
+            or ``schema_version`` differ from existing CSV content.
         """
         self.output_dir = output_dir
         self.surface_id = surface_id
+        self.allow_mixed_context = allow_mixed_context
         self.context = (
             ComputationContext.from_config(config)
             if config is not None
@@ -62,6 +67,56 @@ class DatasetLogger:
         self._row_count = 0
         self._csv_columns: list[str] | None = None
         self._disk_state_loaded = False
+        self._legacy_context_warned = False
+
+    def _validate_context_compatibility(self) -> None:
+        """Ensure append rows match existing CSV context_hash / schema_version."""
+        if not os.path.exists(self.csv_path):
+            return
+        current_hash = self.context.settings_hash()
+        usecols: list[str] = []
+        if "context_hash" in (self._csv_columns or []):
+            usecols.append("context_hash")
+        if "schema_version" in (self._csv_columns or []):
+            usecols.append("schema_version")
+        if not usecols:
+            if not self._legacy_context_warned:
+                logger.warning(
+                    "Appending to %s without context_hash column; cannot verify "
+                    "computation context matches prior rows",
+                    self.csv_path,
+                )
+                self._legacy_context_warned = True
+            return
+        existing = pd.read_csv(self.csv_path, usecols=usecols)
+        mismatches: list[str] = []
+        if "context_hash" in existing.columns:
+            disk_hashes = set(existing["context_hash"].astype(str).unique())
+            if disk_hashes != {current_hash}:
+                mismatches.append(
+                    f"context_hash disk={sorted(disk_hashes)!r} new={current_hash!r}"
+                )
+        if "schema_version" in existing.columns:
+            disk_versions = set(existing["schema_version"].astype(str).unique())
+            if disk_versions != {SCHEMA_VERSION}:
+                mismatches.append(
+                    f"schema_version disk={sorted(disk_versions)!r} "
+                    f"new={SCHEMA_VERSION!r}"
+                )
+        if not mismatches:
+            return
+        detail = "; ".join(mismatches)
+        if self.allow_mixed_context:
+            logger.warning(
+                "Appending mixed computation context to %s (%s)",
+                self.csv_path,
+                detail,
+            )
+            return
+        raise ValueError(
+            f"Refusing to append to {self.csv_path}: computation context mismatch "
+            f"({detail}). Pass allow_mixed_context=True to override."
+        )
 
     @property
     def csv_path(self) -> str:
@@ -162,6 +217,7 @@ class DatasetLogger:
             self._disk_state_loaded = True
 
         if self._csv_columns is not None:
+            self._validate_context_compatibility()
             new_cols = list(new_df.columns)
             if self._csv_columns != new_cols:
                 raise ValueError(

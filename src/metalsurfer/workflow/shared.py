@@ -11,11 +11,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from ase import Atoms
-from ase.geometry import find_mic
+from ase.neighborlist import primitive_neighbor_list
 
 from .._logging import log_context, warn_once
 from .._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
-from .._utils import cell_has_volume
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
 from ..conformers import create_conformers_from_smiles
 from ..exceptions import OptimizationError
@@ -209,17 +208,20 @@ def _validate_geometry(
 
     positions = atoms.get_positions()
     if len(positions) >= 2:
-        idx_i, idx_j = np.triu_indices(len(positions), k=1)
-        diffs = positions[idx_i] - positions[idx_j]
         cell = np.asarray(atoms.get_cell(), dtype=float)
         pbc = material_aware_pbc(config.material_type)
-        if cell_has_volume(cell) and np.any(pbc):
-            _, mic_dists = find_mic(diffs, cell, pbc=pbc)
-            min_dist = float(np.min(np.asarray(mic_dists, dtype=float).ravel()))
-        else:
-            min_dist = float(np.min(np.linalg.norm(diffs, axis=1)))
-        if min_dist < config.min_interatomic_distance:
-            return False, f"atoms too close: {min_dist:.3f} A"
+        cutoff = float(config.min_interatomic_distance)
+        # Cutoff neighbor query: any pair closer than *cutoff* (ASE uses
+        # strictly-less-than) rejects. This covers adsorbate↔slab, slab↔slab,
+        # and adsorbate↔adsorbate collapses, and honours the material PBC
+        # (microperiodic wrap across x/y for slabs, none for nanoparticles).
+        dists = primitive_neighbor_list(
+            "d", pbc, cell, positions, cutoff=cutoff, self_interaction=False
+        )
+        if len(dists) > 0:
+            min_dist = float(np.min(np.asarray(dists, dtype=float).ravel()))
+            if min_dist < cutoff:
+                return False, f"atoms too close: {min_dist:.3f} A"
 
     forces = atoms.get_forces()
     slab_size = len(slab)
@@ -368,6 +370,9 @@ def _optimize_and_evaluate_placements(
     log_prefix: str = "",
 ) -> tuple[list[ScreeningResult], list[PlacementFailureEvent], int]:
     """Optimize materialized placements and evaluate each optimized candidate.
+
+    Every element of *all_combined* yields either a result or a failure event,
+    so callers need no empty-result special case.
 
     Returns ``(results, validation_failure_events, n_optimization_failed)``.
     """

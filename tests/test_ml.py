@@ -1,6 +1,7 @@
 """Tests for metalsurfer.ml dataset, features, schema, and surrogate builders."""
 
 import json
+import logging
 import os
 import tempfile
 
@@ -451,6 +452,35 @@ class TestDatasetLogger:
                 with open(rich2.csv_path, encoding="utf-8") as f:
                     assert f.read() == before2
 
+    def test_flush_rejects_mixed_context_hash(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ds1 = DatasetLogger(tmpdir, config=AdsorptionConfig(model_name="uma-s-1p2"))
+            ds1.add_record(make_placement_record(0))
+            ds1.flush()
+
+            ds2 = DatasetLogger(tmpdir, config=AdsorptionConfig(model_name="uma-s-1p1"))
+            ds2.add_record(make_placement_record(1))
+            with pytest.raises(ValueError, match="computation context mismatch"):
+                ds2.flush()
+
+    def test_flush_allow_mixed_context(self, caplog):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ds1 = DatasetLogger(tmpdir, config=AdsorptionConfig(model_name="uma-s-1p2"))
+            ds1.add_record(make_placement_record(0))
+            ds1.flush()
+
+            ds2 = DatasetLogger(
+                tmpdir,
+                config=AdsorptionConfig(model_name="uma-s-1p1"),
+                allow_mixed_context=True,
+            )
+            ds2.add_record(make_placement_record(1))
+            with caplog.at_level(logging.WARNING, logger="metalsurfer.ml.dataset"):
+                ds2.flush()
+            assert "mixed computation context" in caplog.text
+            df = pd.read_csv(ds2.csv_path)
+            assert len(df) == 2
+
 
 class TestLoadDataset:
     def test_load_from_dir(self):
@@ -615,6 +645,26 @@ class TestFeatureExtraction:
             bad2.loc[1, "energy_adsorption"] = float("inf")
             with pytest.raises(ValueError, match="non-finite"):
                 extract_features_from_dataset(bad2)
+
+    def test_extract_from_dataset_warns_on_nan_quaternion(self, caplog):
+        records = make_random_placement_records(3, variant="ml")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ds = DatasetLogger(tmpdir)
+            for r in records:
+                ds.add_record(r)
+            ds.flush()
+            df = load_dataset(tmpdir)
+            df.loc[0, "quat_w"] = float("nan")
+            with caplog.at_level(logging.WARNING, logger="metalsurfer.ml.features"):
+                X, _ = extract_features_from_dataset(df)
+            assert "identity default" in caplog.text
+            assert X.loc[0, "quat_w"] == pytest.approx(1.0)
+
+    def test_extract_features_raises_on_none_quaternion(self):
+        r = make_placement_record()
+        r.descriptor.quat_w = None
+        with pytest.raises(ValueError, match="quat_w must be finite"):
+            extract_features(r)
 
     def test_feature_names_consistent(self):
         names = get_feature_names()

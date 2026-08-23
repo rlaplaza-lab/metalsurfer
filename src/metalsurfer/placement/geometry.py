@@ -2,6 +2,7 @@
 
 import functools
 import logging
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -45,6 +46,24 @@ from ._constants import (
 from ._material import material_aware_pbc
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _SlabDistanceScratch:
+    """Invariant slab-side slice reused across candidate validations.
+
+    Holds the pre-sliced slab positions, symbols, cell, and PBC so that
+    repeated distance checks during height/XY recovery do not re-slice the ASE
+    ``Atoms`` object or recompute the slab-side MIC geometry. *pre_ads_pos* is
+    the slab slice *excluded* from the mol↔slab contact check (used by the
+    separate adsorbate-separation check during saturation).
+    """
+
+    slab_pos: np.ndarray
+    cell: np.ndarray
+    pbc: list[bool]
+    slab_syms: list[str]
+    pre_ads_pos: np.ndarray | None = None
 
 
 def normalize_quaternion(quat: np.ndarray) -> np.ndarray:
@@ -379,12 +398,14 @@ def _flat_orientation_from_principal_axis(
     normal: np.ndarray,
     azimuth_in_plane_deg: float = 0.0,
     face_flip: bool = False,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """Rotate adsorbate so its molecular plane is parallel to the surface.
 
     Aligns the plane normal (axis of largest inertia for flat molecules;
     perpendicular axis theorem: I3 = I1 + I2 for planar bodies) with the
-    surface normal. Returns centred positions.
+    surface normal. Returns ``(centred_positions, R)`` where *R* maps the
+    centred input onto *centred_positions* (used to compose a full rotation
+    instead of fitting it with Kabsch).
 
     When face_flip is True, flips the plane normal so the other face of
     the molecule faces the surface.
@@ -403,11 +424,13 @@ def _flat_orientation_from_principal_axis(
     if face_flip:
         plane_normal = -plane_normal
 
-    R = _rotation_to_align_vector_to_target(plane_normal, normal)
-    pos = (R @ pos.T).T
+    R_align = _rotation_to_align_vector_to_target(plane_normal, normal)
+    pos = (R_align @ pos.T).T
 
     R_az = _rotation_around_axis(normal, azimuth_in_plane_deg)
-    return (R_az @ pos.T).T
+    pos = (R_az @ pos.T).T
+    R_total = R_az @ R_align
+    return pos, R_total
 
 
 def _surface_aligned_rotation(
@@ -415,13 +438,15 @@ def _surface_aligned_rotation(
     normal: np.ndarray,
     symbols: list[str] | None = None,
     en_binder_index: int | None = None,
-) -> np.ndarray:
-    """Rotate adsorbate so a binding vector points toward surface. Returns centred positions.
+) -> tuple[np.ndarray, np.ndarray]:
+    """Rotate adsorbate so a binding vector points toward surface. Returns ``(centred_positions, R)``.
 
     When *en_binder_index* is provided and valid, use that index into the filtered
     electronegative-atom list from :func:`_binding_atom_candidates`, not a raw
     atom index.  Otherwise select the binder with highest dot product toward the
     surface normal.
+
+    *R* maps the centred input onto *centred_positions*.
     """
     binder_idx = en_binder_index
     pos = np.asarray(ads_pos, dtype=float).copy()
@@ -431,6 +456,7 @@ def _surface_aligned_rotation(
         np.linalg.norm(normal) + _VECTOR_NORM_EPS
     )
 
+    R_total = np.eye(3)
     binders = _binding_atom_candidates(symbols) if symbols else []
     if binders:
         if binder_idx is not None and binder_idx in range(len(binders)):
@@ -455,35 +481,45 @@ def _surface_aligned_rotation(
             if dot > -_BINDER_ALIGNMENT_TARGET_DOT:
                 R = _rotation_to_align_vector_to_target(-best_vec, normal)
                 pos = (R @ pos.T).T
+                R_total = R
     else:
-        rotated, _ = _principal_axis_rotation(pos, normal)
+        rotated, _, best_R = _principal_axis_rotation(pos, normal)
         if rotated is not None:
             pos = rotated
+            R_total = best_R
         else:
             pos = np.asarray(ads_pos, dtype=float).copy() - com
-    return pos
+            R_total = np.eye(3)
+    return pos, R_total
 
 
 def _rotation_with_tilt(
     pos: np.ndarray, normal: np.ndarray, tilt_deg: float, azimuth_deg: float
-) -> np.ndarray:
-    """Apply tilt and azimuth to positions (centred at origin)."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply tilt and azimuth to positions (centred at origin). Returns ``(rotated_positions, R)``.
+
+    *R* is the full rotation matrix ``frame @ R_az @ R_tilt @ frame.T`` mapping
+    the centred input onto *rotated_positions*.
+    """
     frame = compute_surface_site_frame(normal)
     pos_local = (frame.T @ np.asarray(pos, dtype=float).T).T
     R_tilt = _rotation_around_axis(np.array([1.0, 0.0, 0.0]), tilt_deg)
     R_az = _rotation_around_axis(np.array([0.0, 0.0, 1.0]), azimuth_deg)
     pos_local = (R_az @ R_tilt @ pos_local.T).T
-    return (frame @ pos_local.T).T
+    rotated = (frame @ pos_local.T).T
+    R_total = frame @ R_az @ R_tilt @ frame.T
+    return rotated, R_total
 
 
 def _principal_axis_rotation(
     adsorbate_positions: np.ndarray,
     normal_vector: np.ndarray,
-) -> tuple[np.ndarray | None, float]:
+) -> tuple[np.ndarray | None, float, np.ndarray]:
     """Rotate the adsorbate around its principal axes to maximise clearance.
 
-    Returns centred-at-origin positions (no surface_z offset) and the best
-    min-z score.
+    Returns centred-at-origin positions (no surface_z offset), the best
+    min-z score, and *best_R*, the rotation matrix mapping the centred input
+    onto the returned positions (used to compose a full rotation).
     """
     pos = np.asarray(adsorbate_positions, dtype=float).copy()
     com = np.mean(pos, axis=0)
@@ -504,6 +540,7 @@ def _principal_axis_rotation(
         and abs(float(np.dot(longest_axis, normal)))
         > _PRINCIPAL_AXIS_LONG_ALIGN_MIN_DOT
     )
+    R_total = np.eye(3)
     if needs_prealign:
         if float(np.dot(shortest_axis, normal)) < 0:
             shortest_axis = -shortest_axis
@@ -516,12 +553,14 @@ def _principal_axis_rotation(
             )
             R_pre = _rotation_around_axis(rot_ax, angle_deg)
             pos = (R_pre @ (pos - com).T).T + com
+            R_total = R_pre
             # Axes change after the pre-align rotation.
             _, principal_axes = _compute_inertia_tensor(pos)
             com = np.mean(pos, axis=0)
 
     best_score = float("-inf")
     best_positions: np.ndarray | None = None
+    best_R = np.eye(3)
 
     for ax_idx in range(3):
         axis = principal_axes[:, ax_idx].copy()
@@ -535,12 +574,13 @@ def _principal_axis_rotation(
             if clearance > best_score:
                 best_score = clearance
                 best_positions = test.copy()
+                best_R = R @ R_total
 
     # re-centre at origin so caller controls the final offset
     if best_positions is not None:
         best_positions -= np.mean(best_positions, axis=0)
 
-    return best_positions, best_score
+    return best_positions, best_score, best_R
 
 
 def _mol_slab_contact_arrays(
@@ -550,20 +590,33 @@ def _mol_slab_contact_arrays(
     material_type: str = "slab",
     exclude_slab_atoms: int | None = None,
     pairwise_distances: np.ndarray | None = None,
+    slab_scratch: _SlabDistanceScratch | None = None,
 ) -> tuple[
     np.ndarray, np.ndarray, list[str], list[str], np.ndarray, list[bool], np.ndarray
 ]:
-    """Slice mol/slab positions and symbols; return MIC pairwise distances."""
+    """Slice mol/slab positions and symbols; return MIC pairwise distances.
+
+    When *slab_scratch* is provided, the slab side (positions, symbols, cell,
+    pbc) is reused from the scratch instead of re-slicing the ASE ``Atoms``
+    object.  This keeps the invariant slab slice fixed across distance-recovery
+    candidate validations.
+    """
     mol_syms = list(molecule_atoms.get_chemical_symbols())
     mol_pos = molecule_atoms.get_positions()
-    slab_syms = list(slab.get_chemical_symbols())
-    if exclude_slab_atoms is not None:
-        slab_pos = slab.get_positions()[:exclude_slab_atoms]
-        slab_syms = slab_syms[:exclude_slab_atoms]
+    if slab_scratch is not None:
+        slab_pos = slab_scratch.slab_pos
+        slab_syms = slab_scratch.slab_syms
+        cell = slab_scratch.cell
+        pbc = slab_scratch.pbc
     else:
-        slab_pos = slab.get_positions()
-    cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(material_type)
+        slab_syms = list(slab.get_chemical_symbols())
+        if exclude_slab_atoms is not None:
+            slab_pos = slab.get_positions()[:exclude_slab_atoms]
+            slab_syms = slab_syms[:exclude_slab_atoms]
+        else:
+            slab_pos = slab.get_positions()
+        cell = np.asarray(slab.get_cell(), dtype=float)
+        pbc = material_aware_pbc(material_type)
     dists = (
         pairwise_distances
         if pairwise_distances is not None
@@ -647,6 +700,7 @@ def calculate_contact_quality(
     exclude_slab_atoms: int | None = None,
     *,
     material_type: str = "slab",
+    pairwise_distances: np.ndarray | None = None,
 ) -> dict[str, float | int]:
     """Contact metrics: min distance, covalent ratio at closest pair, and pair counts.
 
@@ -669,6 +723,7 @@ def calculate_contact_quality(
             slab,
             material_type=material_type,
             exclude_slab_atoms=exclude_slab_atoms,
+            pairwise_distances=pairwise_distances,
         )
     )
     mol_size, slab_size = dists.shape
@@ -770,6 +825,7 @@ def check_initial_placement_distance(
     exclude_slab_atoms: int | None = None,
     *,
     material_type: str = "slab",
+    pairwise_distances: np.ndarray | None = None,
 ) -> tuple[bool, float, str | None]:
     r"""Check if the initial placement satisfies distance constraints.
 
@@ -810,6 +866,7 @@ def check_initial_placement_distance(
             slab,
             material_type=material_type,
             exclude_slab_atoms=exclude_slab_atoms,
+            pairwise_distances=pairwise_distances,
         )
     )
     if dists.size == 0 or dists.shape[0] == 0 or dists.shape[1] == 0:
@@ -880,7 +937,9 @@ def check_adsorbate_separation(
     cell
         Unit cell (required if pbc is used).
     pbc
-        Periodic boundary conditions [x, y, z].
+        Periodic boundary conditions [x, y, z]. When *cell* has non-zero volume
+        (a periodic substrate), *pbc* must be provided explicitly; passing
+        ``pbc=None`` with a volumed cell raises :class:`ValueError`.
 
     Returns
     -------
@@ -890,22 +949,26 @@ def check_adsorbate_separation(
     if len(pre_adsorbed_positions) == 0:
         return True, float("inf")
 
+    if pbc is None and cell is not None and cell_has_volume(cell):
+        raise ValueError(
+            "pbc must be provided when cell is periodic; "
+            "pass slab/cluster/porous flags explicitly"
+        )
+
     new_pos = new_adsorbate.get_positions()
-    if pbc is not None and any(pbc):
-        if cell is None or not cell_has_volume(cell):
-            raise ValueError(
-                "cell with non-zero volume must be provided when pbc is requested; "
-                "pass slab/cluster/porous cell explicitly"
-            )
-        cell_arr = np.asarray(cell, dtype=float)
-        pbc_list = list(pbc)
-    elif cell is not None and cell_has_volume(cell) and pbc is not None:
-        # Explicit all-False pbc with a cell: still use the pairwise helper.
-        cell_arr = np.asarray(cell, dtype=float)
-        pbc_list = list(pbc)
+    if (
+        pbc is not None
+        and any(pbc)
+        and not (cell is not None and cell_has_volume(cell))
+    ):
+        raise ValueError(
+            "cell with non-zero volume must be provided when pbc is requested; "
+            "pass slab/cluster/porous cell explicitly"
+        )
+    if pbc is not None and cell is not None and cell_has_volume(cell):
+        cell_arr, pbc_list = np.asarray(cell, dtype=float), list(pbc)
     else:
-        cell_arr = np.eye(3)
-        pbc_list = [False, False, False]
+        cell_arr, pbc_list = np.eye(3), [False, False, False]
     dmat = _mol_slab_pairwise_distances(
         new_pos, pre_adsorbed_positions, cell_arr, pbc_list
     )
@@ -944,6 +1007,7 @@ def check_initial_contact_quality(
     contact_distance_threshold: float = _CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
     exclude_slab_atoms: int | None = None,
     material_type: str = "slab",
+    pairwise_distances: np.ndarray | None = None,
 ) -> tuple[bool, str]:
     """Contact-quality gate for initial placements; returns (ok, reason_token).
 
@@ -980,6 +1044,7 @@ def check_initial_contact_quality(
         contact_distance_threshold=contact_distance_threshold,
         exclude_slab_atoms=exclude_slab_atoms,
         material_type=material_type,
+        pairwise_distances=pairwise_distances,
     )
 
     contact_dist = float(metrics["contact_distance"])

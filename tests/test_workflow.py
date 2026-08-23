@@ -168,6 +168,48 @@ class TestValidateGeometry:
         # Cartesian NN would see ~a_len and pass; MIC must report ~0.2 Å.
         assert float(reason.split(":")[1].split()[0]) < 0.5
 
+    def test_atoms_too_close_across_xy_wrap_fails(self):
+        """Two atoms closer than cutoff across an xy wrap on a slab cell fail."""
+        slab = make_slab()
+        cell = np.asarray(slab.get_cell(), dtype=float)
+        a_len = float(np.linalg.norm(cell[0]))
+        b_len = float(np.linalg.norm(cell[1]))
+        atoms = Atoms(
+            "HH",
+            positions=[[0.1, 0.1, 8.0], [a_len - 0.1, b_len - 0.1, 8.0]],
+            cell=cell,
+            pbc=[True, True, False],
+        )
+        calc = MagicMock()
+        calc.get_potential_energy.return_value = -100.0
+        calc.get_forces.return_value = np.zeros((2, 3))
+        atoms.calc = calc
+        config = AdsorptionConfig(material_type="slab", min_interatomic_distance=0.5)
+        ok, reason = _validate_geometry(atoms, slab[:0], config)
+        assert not ok
+        assert "too close" in reason
+        assert float(reason.split(":")[1].split()[0]) < 0.5
+
+    def test_atoms_just_above_cutoff_passes(self):
+        """A pair just above the cutoff (no MIC wrap-clash) is accepted."""
+        slab = make_slab()
+        cell = np.asarray(slab.get_cell(), dtype=float)
+        cutoff = 0.5
+        atoms = Atoms(
+            "HH",
+            positions=[[0.1, 0.1, 8.0], [0.1 + cutoff + 0.1, 0.1, 8.0]],
+            cell=cell,
+            pbc=[True, True, False],
+        )
+        calc = MagicMock()
+        calc.get_potential_energy.return_value = -100.0
+        calc.get_forces.return_value = np.zeros((2, 3))
+        atoms.calc = calc
+        config = AdsorptionConfig(material_type="slab", min_interatomic_distance=cutoff)
+        ok, reason = _validate_geometry(atoms, slab[:0], config)
+        assert ok
+        assert reason == ""
+
     def test_high_forces_fails(self):
         injected = 10.0
         combined, slab = self._combined(energy=-100.0, forces_max=injected)

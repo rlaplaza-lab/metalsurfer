@@ -13,6 +13,7 @@ from ase import Atoms
 from ase.constraints import FixAtoms
 
 from .._numeric_defaults import DEFAULT_TOP_LAYER_TOLERANCE
+from ..exceptions import GeometryValidationError
 from ..placement._material import validate_material_type
 from ..placement.site_coords import (
     derive_pore_threshold,
@@ -180,7 +181,22 @@ def compute_frozen_indices(
 
     if freeze_symbols:
         syms = slab.get_chemical_symbols()
-        return [i for i, s in enumerate(syms) if s in freeze_symbols]
+        slab_symbol_set = set(syms)
+        requested = set(freeze_symbols)
+        unmatched = sorted(requested - slab_symbol_set)
+        if unmatched:
+            logger.warning(
+                "freeze_symbols %s not present on substrate (symbols on slab: %s)",
+                unmatched,
+                sorted(slab_symbol_set),
+            )
+        frozen = [i for i, s in enumerate(syms) if s in freeze_symbols]
+        if not frozen:
+            raise ValueError(
+                f"freeze_symbols {sorted(requested)!r} matched no atoms on "
+                f"substrate with symbols {sorted(slab_symbol_set)!r}"
+            )
+        return frozen
 
     if not relax_top_layer:
         return list(range(n_slab))
@@ -239,6 +255,16 @@ def max_frozen_substrate_displacement(
         return 0.0
     ref_pos = reference_slab.get_positions()
     opt_pos = optimized.get_positions()
+    if len(opt_pos) < slab_size:
+        raise GeometryValidationError(
+            f"optimized structure has {len(opt_pos)} atoms, expected at least "
+            f"{slab_size} (slab_size)"
+        )
+    if len(ref_pos) < slab_size:
+        raise GeometryValidationError(
+            f"reference slab has {len(ref_pos)} atoms, expected at least "
+            f"{slab_size} (slab_size)"
+        )
     max_disp = 0.0
     for idx in frozen_indices:
         if idx >= slab_size:

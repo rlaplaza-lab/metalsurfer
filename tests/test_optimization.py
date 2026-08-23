@@ -1,5 +1,6 @@
 """Tests for optimization package: pure CPU helpers, TorchSimCalculator, setup_single_model."""
 
+import gc
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -202,6 +203,22 @@ def test_positions_cell_hash_deterministic_and_changes():
 )
 def test_is_cuda_oom_error_true(msg):
     assert _validation._is_cuda_oom_error(RuntimeError(msg)) is True
+
+
+def test_is_cuda_oom_error_true_for_cuda_oom_type(monkeypatch):
+    from types import SimpleNamespace
+
+    from metalsurfer.optimization import _deps
+
+    class FakeCudaOOM(RuntimeError):
+        pass
+
+    monkeypatch.setattr(
+        _deps,
+        "torch",
+        SimpleNamespace(cuda=SimpleNamespace(OutOfMemoryError=FakeCudaOOM)),
+    )
+    assert _validation._is_cuda_oom_error(FakeCudaOOM("boom")) is True
 
 
 @pytest.mark.parametrize("msg", ["boom", "shape mismatch", ""])
@@ -444,12 +461,9 @@ def test_clip_frozen_indices_to_slab_drops_out_of_range():
 
 
 def test_get_inflight_autobatcher_returns_none_without_ts():
-    batcher, state, available = _cache._get_inflight_autobatcher(
-        ts_model=None, max_n_atoms=0
-    )
+    batcher, cache_key = _cache._get_inflight_autobatcher(ts_model=None, max_n_atoms=0)
     assert batcher is None
-    assert state is None
-    assert available is False
+    assert cache_key is None
 
 
 # -- _maybe_clear_cuda_cache ------------------------------------------------
@@ -511,6 +525,67 @@ def test_torchsim_calculator_non_finite_energy_raises(monkeypatch: pytest.Monkey
     calc = TorchSimCalculator(object())
     with pytest.raises(RuntimeError, match="non-finite energy"):
         calc.calculate(_make_atoms_with_cell()[:3], ["energy", "forces"])
+
+
+# -- _forces_for_optimized_systems (D5) --------------------------------------
+
+
+def test_forces_for_optimized_systems_recovers_via_static(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from types import SimpleNamespace
+
+    n_systems = 3
+    result = [_make_atoms_with_cell()[:5] for _ in range(n_systems)]
+    energies = [_FakeTensor([[-100.0 - i]]) for i in range(n_systems)]
+    # Optimised batch hid its forces -> _split_forces_by_system returns None.
+    batch = SimpleNamespace(forces=None)
+
+    per_system_forces = [
+        np.full((5, 3), 0.1),
+        np.full((5, 3), 0.2),
+        np.full((5, 3), 0.3),
+    ]
+    captured = {}
+
+    class _FakeStatic:
+        def static(self, system=None, model=None):
+            captured["system"] = system
+            return [{"forces": _FakeTensor(f)} for f in per_system_forces]
+
+    monkeypatch.setattr(_deps, "ts", _FakeStatic())
+
+    out = _optimize._forces_for_optimized_systems(batch, energies, result, object())
+    assert out is not None
+    assert len(out) == n_systems
+    for i in range(n_systems):
+        assert out[i] is not None
+        assert np.allclose(out[i], per_system_forces[i])
+    # One fused static call over all finite-energy survivors.
+    assert len(captured["system"]) == n_systems
+
+
+def test_forces_for_optimized_systems_none_when_static_omits(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from types import SimpleNamespace
+
+    n_systems = 2
+    result = [_make_atoms_with_cell()[:4] for _ in range(n_systems)]
+    energies = [_FakeTensor([[-100.0]]) for _ in range(n_systems)]
+    batch = SimpleNamespace(forces=None)
+
+    class _FakeStatic:
+        def static(self, system=None, model=None):
+            # Both systems omit forces: must yield None, never zero-force fallback.
+            return [{"forces": None}, {"forces": None}]
+
+    monkeypatch.setattr(_deps, "ts", _FakeStatic())
+
+    out = _optimize._forces_for_optimized_systems(batch, energies, result, object())
+    assert out is not None
+    assert len(out) == n_systems
+    assert all(o is None for o in out)
 
 
 # -- batch_static -----------------------------------------------------------
@@ -682,6 +757,80 @@ def test_optimize_slab_raises_on_batch_size_mismatch(monkeypatch: pytest.MonkeyP
             config=AdsorptionConfig(device="cpu"),
         )
     _cache._AUTOBATCHER_CACHE.clear()
+
+
+def test_optimize_slab_rebuilds_states_after_cuda_oom(monkeypatch: pytest.MonkeyPatch):
+    """On CUDA OOM the retry must rebuild systems and release the first attempt.
+
+    The retried ``ts.optimize`` receives freshly built states (disjoint tags),
+    and the first-attempt states must be released (weakrefs dead) so the failed
+    attempt's tensors cannot pin GPU memory.
+    """
+    import weakref
+
+    calls: list[list[int]] = []
+    refs: list[weakref.ref] = []
+    counter = {"n": 0}
+
+    class _State:
+        def __init__(self, tag):
+            self.tag = tag
+
+    def _spy_make_state(*args, **kwargs):
+        counter["n"] += 1
+        state = _State(counter["n"])
+        refs.append(weakref.ref(state))
+        return state
+
+    class _FakeBatch:
+        def __init__(self, n):
+            self.energy = [_FakeTensor([-1.0])] * n
+            self.forces = None
+
+        def to_atoms(self):
+            return [make_slab(nx=2, ny=2, n_layers=2) for _ in range(len(self.energy))]
+
+    class _FakeTs:
+        Optimizer = MagicMock()
+
+        @staticmethod
+        def generate_force_convergence_fn(force_tol, include_cell_forces):
+            return object()
+
+        def optimize(self, **kwargs):
+            tags = [s.tag for s in kwargs["system"]]
+            calls.append(tags)
+            if len(calls) == 1:
+                raise RuntimeError("CUDA out of memory")
+            return _FakeBatch(len(tags))
+
+    monkeypatch.setattr(_deps, "ts", _FakeTs())
+    monkeypatch.setattr(_deps, "ts_constraints", object())
+    monkeypatch.setattr(_deps, "InFlightAutoBatcher", lambda *a, **k: object())
+    monkeypatch.setattr(_deps, "torch", None)
+    monkeypatch.setattr(
+        _optimize, "_make_state_with_frozen_constraint", _spy_make_state
+    )
+    _cache._AUTOBATCHER_CACHE.clear()
+
+    slab = _make_atoms_with_cell()
+    combined = [slab.copy(), slab.copy(), slab.copy()]
+    result = _optimize.optimize_adsorbate_slab_batched(
+        combined,
+        slab,
+        ts_model=type("MockModel", (), {"device": "cpu"})(),
+        config=AdsorptionConfig(device="cpu"),
+    )
+    _cache._AUTOBATCHER_CACHE.clear()
+
+    assert counter["n"] == 6
+    assert calls[0] == [1, 2, 3]
+    assert calls[1] == [4, 5, 6]
+    assert len(result) == 3
+    assert all(r is not None for r in result)
+
+    gc.collect()
+    assert all(r() is None for r in refs[:3])
 
 
 # ---------------------------------------------------------------------------
@@ -862,13 +1011,13 @@ def test_get_inflight_autobatcher_saturation_reuses_small_growth(stub_autobatche
         saturation_autobatcher_reuse_growth_atoms=8,
         saturation_autobatcher_reuse_growth_fraction=0.0,
     )
-    ab1, key1, reused1 = _cache._get_inflight_autobatcher(
+    ab1, key1 = _cache._get_inflight_autobatcher(
         model,
         100,
         config=config,
         saturation_reuse=True,
     )
-    ab2, key2, reused2 = _cache._get_inflight_autobatcher(
+    ab2, key2 = _cache._get_inflight_autobatcher(
         model,
         105,
         config=config,
@@ -877,21 +1026,19 @@ def test_get_inflight_autobatcher_saturation_reuses_small_growth(stub_autobatche
     assert ab1 is not None
     assert ab2 is ab1
     assert key2 == key1
-    assert reused1 is False
-    assert reused2 is True
 
 
 def test_get_inflight_autobatcher_non_saturation_uses_exact_size_key(stub_autobatcher):
     """Non-saturation mode should not reuse different max_n_atoms keys."""
     model = type("MockModel", (), {"device": "cpu"})()
     config = AdsorptionConfig(device="cpu")
-    ab1, key1, reused1 = _cache._get_inflight_autobatcher(
+    ab1, key1 = _cache._get_inflight_autobatcher(
         model,
         100,
         config=config,
         saturation_reuse=False,
     )
-    ab2, key2, reused2 = _cache._get_inflight_autobatcher(
+    ab2, key2 = _cache._get_inflight_autobatcher(
         model,
         105,
         config=config,
@@ -901,14 +1048,12 @@ def test_get_inflight_autobatcher_non_saturation_uses_exact_size_key(stub_autoba
     assert ab2 is not None
     assert ab2 is not ab1
     assert key2 != key1
-    assert reused1 is False
-    assert reused2 is False
 
 
 def test_get_inflight_autobatcher_uses_explicit_probe_cap(stub_autobatcher):
     model = type("MockModel", (), {"device": "cpu"})()
     config = AdsorptionConfig(device="cpu", autobatcher_max_atoms_to_try=123_456)
-    _, key, _ = _cache._get_inflight_autobatcher(
+    _, key = _cache._get_inflight_autobatcher(
         model,
         100,
         config=config,
@@ -1071,17 +1216,26 @@ def test_split_forces_by_system_returns_per_system_arrays():
     assert per_system[1].shape != (3,)
 
 
-def test_split_forces_by_system_falls_back_without_system_idx():
+def test_split_forces_by_system_raises_without_system_idx_for_multiple_systems():
     from metalsurfer.optimization._optimize import _split_forces_by_system
 
     atom_counts = [3, 5]
     forces = np.arange(8 * 3, dtype=float).reshape(8, 3)
     batch = _FakeBatch(forces, system_idx=None)
-    per_system = _split_forces_by_system(batch, 2, atom_counts)
+    with pytest.raises(RuntimeError, match="system_idx"):
+        _split_forces_by_system(batch, 2, atom_counts)
+
+
+def test_split_forces_by_system_single_system_without_system_idx():
+    from metalsurfer.optimization._optimize import _split_forces_by_system
+
+    atom_counts = [4]
+    forces = np.arange(4 * 3, dtype=float).reshape(4, 3)
+    batch = _FakeBatch(forces, system_idx=None)
+    per_system = _split_forces_by_system(batch, 1, atom_counts)
     assert per_system is not None
-    assert [f.shape for f in per_system] == [(3, 3), (5, 3)]
-    np.testing.assert_allclose(per_system[0], forces[:3])
-    np.testing.assert_allclose(per_system[1], forces[3:])
+    assert [f.shape for f in per_system] == [(4, 3)]
+    np.testing.assert_allclose(per_system[0], forces)
 
 
 def test_split_forces_by_system_raises_on_atom_count_mismatch():
@@ -1092,12 +1246,12 @@ def test_split_forces_by_system_raises_on_atom_count_mismatch():
         _split_forces_by_system(batch, 2, [4, 4])
 
 
-def test_get_inflight_autobatcher_returns_triple_when_unavailable(monkeypatch):
-    """Regression: a bare ``None`` broke both unpacking call sites.
+def test_get_inflight_autobatcher_returns_pair_when_unavailable(monkeypatch):
+    """Regression: a bare ``None`` broke the unpacking call site.
 
     ``optimize_isolated_molecules_batched`` does ``...[0]`` and
-    ``optimize_adsorbate_slab_batched`` does ``a, b, c = ...``; both raised
-    ``TypeError`` when the optional MLIP stack was partly unavailable.
+    ``optimize_adsorbate_slab_batched`` does ``a, b = ...``; both must keep
+    working when the optional MLIP stack is partly unavailable.
     """
     from metalsurfer.optimization import _cache, _deps
 
@@ -1105,14 +1259,13 @@ def test_get_inflight_autobatcher_returns_triple_when_unavailable(monkeypatch):
     result = _cache._get_inflight_autobatcher(object(), 100)
 
     assert isinstance(result, tuple)
-    assert len(result) == 3
-    autobatcher, cache_key, reused = result
+    assert len(result) == 2
+    autobatcher, cache_key = result
     assert autobatcher is None
     assert cache_key is None
-    assert reused is False
     # Both call-site shapes must work.
     assert result[0] is None
-    _a, _b, _c = result
+    _a, _b = result
 
 
 def test_optimize_and_evaluate_skips_preclear_when_saturation_reuse(monkeypatch):

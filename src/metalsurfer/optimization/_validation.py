@@ -110,6 +110,11 @@ def _resolve_model_device(ts_model: Any, config: AdsorptionConfig) -> str:
 
 def _is_cuda_oom_error(exc: BaseException) -> bool:
     """Check whether *exc* looks like a CUDA out-of-memory failure."""
+    torch = _deps.torch
+    if torch is not None:
+        oom_type = getattr(torch.cuda, "OutOfMemoryError", None)
+        if oom_type is not None and isinstance(exc, oom_type):
+            return True
     message = str(exc).lower()
     return (
         "out of memory" in message

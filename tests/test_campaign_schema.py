@@ -21,6 +21,18 @@ def test_load_smoke_saturation_yaml():
     assert doc.substrate["miller_indices"] == (1, 1, 1)
 
 
+def test_load_campaign_yaml_missing_file():
+    with pytest.raises(ValueError, match="Campaign file not found"):
+        load_campaign_yaml("/nonexistent/campaign.yaml")
+
+
+def test_load_campaign_yaml_empty_file(tmp_path):
+    empty = tmp_path / "empty.yaml"
+    empty.write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="Campaign file is empty"):
+        load_campaign_yaml(empty)
+
+
 def test_parse_campaign_rejects_unknown_substrate_key():
     with pytest.raises(ValueError, match="unknown keys"):
         parse_campaign_dict(

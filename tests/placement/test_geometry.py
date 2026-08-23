@@ -342,6 +342,26 @@ def test_check_adsorbate_separation_requires_cell_when_pbc_requested():
         check_adsorbate_separation(mol, pre, pbc=[True, True, False])
 
 
+def test_check_adsorbate_separation_requires_pbc_when_cell_periodic():
+    slab = make_slab()
+    mol = make_water()
+    pre = np.array([[0.0, 0.0, 5.0]])
+    with pytest.raises(ValueError, match="pbc must be provided"):
+        check_adsorbate_separation(mol, pre, cell=slab.get_cell(), pbc=None)
+
+
+def test_check_adsorbate_separation_explicit_false_pbc_uses_nonperiodic():
+    slab = make_slab()
+    mol = make_water()
+    pre = np.array([[0.0, 0.0, 5.0]])
+    ok, dist = check_adsorbate_separation(
+        mol, pre, cell=slab.get_cell(), pbc=[False, False, False]
+    )
+    assert ok
+    expected = calculate_min_distance(mol.get_positions(), pre, use_pbc=False)
+    assert dist == pytest.approx(expected)
+
+
 def test_calculate_min_distance_left_handed_cell_uses_abs_det():
     p1 = np.array([[0.1, 0.1, 0.0]])
     p2 = np.array([[9.9, 0.1, 0.0]])

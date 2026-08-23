@@ -72,13 +72,20 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
     device
         Device string (e.g. "cuda" or "cpu").
     """
-    try:
-        from torch_sim.models.fairchem import FairChemModel
-    except ImportError as exc:
+    if _deps.ts is None:
         raise DependencyMissingError(
             "torch-sim-atomistic",
             "setup_torchsim_model",
             "Install with: pip install torch-sim-atomistic",
+        )
+    try:
+        from torch_sim.models.fairchem import FairChemModel
+    except ImportError as exc:
+        raise DependencyMissingError(
+            "fairchem",
+            "setup_torchsim_model",
+            "Install FairChem (e.g. pip install fairchem-core) and ensure "
+            "torch-sim-atomistic is built with FairChem support",
         ) from exc
 
     resolved_device = _resolve_device(device)

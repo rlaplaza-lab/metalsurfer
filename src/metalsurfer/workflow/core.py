@@ -248,16 +248,6 @@ def process_molecule(
         )
         t_optimization = time.perf_counter() - t0
 
-        if not results and not validation_failure_events and n_optimization_failed == 0:
-            return MoleculeScreenOutcome(
-                results=[],
-                failure_summary=OptimizationFailure(
-                    n_placements_attempted=len(placement_ids),
-                    n_initial_placements=len(all_combined),
-                ),
-                ml_records=ml_records,
-            )
-
         validation_failures = _failure_reason_counts(validation_failure_events)
         for result in results:
             logger.info(
@@ -398,9 +388,5 @@ def _evaluate_placement_batch(
             log_prefix="BO batch ",
         )
     )
-    if not results and not validation_failure_events and _n_optimization_failed == 0:
-        # Optimize returned empty; preserve prior batch behavior (drop gen failures).
-        return [], []
-
     failures.extend(validation_failure_events)
     return results, failures

@@ -41,6 +41,7 @@ from .site_coords import (
 )
 from .site_enumeration import (
     _compute_site_z_base,
+    _get_site_surface_radii,
     get_hollow_sites_for_adatoms,
     get_unified_sites,
 )
@@ -354,7 +355,7 @@ def _compute_dissociative_site_pairs(
     else:
         _site_query = np.asarray(site_3d, dtype=np.float64)
         _nn_tree = KDTree(_site_query)
-        nn_d, _ = _nn_tree.query(_site_query, k=2)  # type: ignore[arg-type]
+        nn_d, _ = _nn_tree.query(_site_query, k=2)
         # len(site_3d) >= 2 (early-return above), so query(..., k=2) is 2-D.
         mean_nn_sep = float(np.mean(np.asarray(nn_d, dtype=float)[:, 1]))
 
@@ -699,8 +700,13 @@ def _generate_dissociative_placement_from_spec(
         env_fingerprint=((), "hollow"),
     )
     syms = adsorbate.get_chemical_symbols()
-    z_lo, z_hi = _compute_site_z_base(config, sites_slab, site_a, syms)
-    site_offset = _site_type_z_offset(sites_slab, site_a, "hollow")
+    # site_a / site_b have empty slab_indices, so the surface radius is the
+    # top-layer radius. Fetch it once and reuse for both z-base helpers.
+    r_surface = _get_site_surface_radii(sites_slab, None)
+    z_lo, z_hi = _compute_site_z_base(
+        config, sites_slab, site_a, syms, r_surface=r_surface
+    )
+    site_offset = _site_type_z_offset(sites_slab, site_a, "hollow", r_surface=r_surface)
     z_lo += site_offset
     z_hi += site_offset
     z_offset = z_lo + spec.z_fraction * (z_hi - z_lo)

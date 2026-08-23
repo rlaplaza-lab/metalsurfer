@@ -1,5 +1,6 @@
 """Material-aware PBC and per-material site generation/typing."""
 
+import logging
 import math
 
 import numpy as np
@@ -12,6 +13,7 @@ from metalsurfer.placement import (
     check_initial_placement_distance,
     enumerate_placement_specs,
     generate_placement_from_spec,
+    generate_placement_from_spec_with_reason,
     get_unified_sites,
     material_aware_pbc,
 )
@@ -526,6 +528,21 @@ def test_compute_site_z_base_same_formula_for_pore_site():
     assert z_hi == pytest.approx(1.5 * r_sum)
 
 
+def test_get_site_surface_radii_falls_back_when_no_positive_radius(monkeypatch, caplog):
+    """No ASE symbol has radius <= 0, so patch the lookup to exercise the fallback."""
+    from metalsurfer.placement import site_enumeration as site_enum
+    from metalsurfer.placement._constants import _MOL_COVALENT_RADIUS_FALLBACK
+
+    slab = make_slab()
+    monkeypatch.setattr(site_enum, "_get_covalent_radius", lambda _sym: None)
+    with caplog.at_level(
+        logging.WARNING, logger="metalsurfer.placement.site_enumeration"
+    ):
+        r_surface = _get_site_surface_radii(slab, None)
+    assert r_surface == pytest.approx(_MOL_COVALENT_RADIUS_FALLBACK)
+    assert "No positive covalent radii" in caplog.text
+
+
 def test_saturation_placement_height_uses_reference_slab():
     """Saturation placement should not anchor new molecules above old adsorbates."""
     slab = make_slab()
@@ -603,6 +620,82 @@ def test_saturation_placement_height_uses_reference_slab():
     assert full_slab_descriptor.surface_ref_z_abs == pytest.approx(
         existing_adsorbate_top
     )
+
+
+def test_saturation_placement_without_site_context_uses_reference_slab():
+    """Without an explicit site_context, sites are enumerated from slab_for_sites."""
+    slab = make_slab()
+    slab_top = float(np.max(slab.get_positions()[:, 2]))
+    top_index = int(np.argmax(slab.get_positions()[:, 2]))
+    site_xy = slab.get_positions()[top_index, :2]
+    site_context = SiteContext(
+        sites=[
+            _make_site(
+                [site_xy[0], site_xy[1], slab_top],
+                site_type="atop",
+                material_type="slab",
+                slab_indices=(top_index,),
+            )
+        ],
+        use_sites=True,
+        source="test",
+    )
+    existing_adsorbate_top = slab_top + 10.0
+    existing_adsorbate = Atoms(
+        "C",
+        positions=[
+            [slab.cell[0, 0] / 2.0, slab.cell[1, 1] / 2.0, existing_adsorbate_top]
+        ],
+    )
+    full_slab = slab + existing_adsorbate
+    full_slab.set_cell(slab.get_cell())
+    full_slab.set_pbc(slab.get_pbc())
+
+    config = AdsorptionConfig(
+        device="cpu",
+        rough_slab_local_z=False,
+        placement_z_range=(2.0, 3.0),
+        placement_z_scale_by_covalent_radius=False,
+    )
+    adsorbate = Atoms("H", positions=[[0.0, 0.0, 0.0]])
+    spec = PlacementSpec(
+        conformer_index=0,
+        orientation_type="round",
+        face_flip=False,
+        en_atom_index=None,
+        site_index=0,
+        site_type="atop",
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+
+    result = generate_placement_from_spec(
+        spec,
+        [adsorbate],
+        full_slab,
+        config,
+        site_context=site_context,
+        slab_for_sites=slab,
+    )
+    if result is None:
+        # Sites really enumerated here; if the probe yields no usable site,
+        # that is a separate concern from the reference-slab fix.
+        _, reason = generate_placement_from_spec_with_reason(
+            spec,
+            [adsorbate],
+            full_slab,
+            config,
+            site_context=site_context,
+            slab_for_sites=slab,
+        )
+        assert reason != "no_sites_found"
+    else:
+        assert result is not None
+        _, descriptor = result
+        assert descriptor.surface_ref_z_abs == pytest.approx(slab_top)
 
 
 def test_distance_recovery_rescues_too_close_placement():

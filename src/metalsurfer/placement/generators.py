@@ -37,6 +37,7 @@ from .pose import (
     _pose_from_spec,
     _PoseBatchCache,
     build_pose_batch_cache,
+    placement_reference_slab,
 )
 from .site_context import (
     SiteContext,
@@ -531,6 +532,10 @@ def generate_placement_from_spec(
 ) -> tuple[Atoms, PlacementDescriptor] | None:
     """Generate adsorbate placement from spec. Returns (adsorbate, descriptor) or None.
 
+    *slab* may already contain previously placed adsorbates (saturation); when
+    it does, *slab_for_sites* must be the bare substrate used for site
+    enumeration and ``surface_ref`` resolution.
+
     Parameters
     ----------
     spec
@@ -538,7 +543,7 @@ def generate_placement_from_spec(
     conformers
         List of adsorbate conformers.
     slab
-        Substrate slab.
+        Substrate slab (may include pre-adsorbed atoms).
     config
         Adsorption configuration.
     smiles
@@ -546,7 +551,8 @@ def generate_placement_from_spec(
     site_context
         Optional precomputed site context.
     slab_for_sites
-        Optional substrate for site detection.
+        Optional bare substrate for site detection (required when *slab* has
+        pre-adsorbates).
     """
     result, _ = generate_placement_from_spec_with_reason(
         spec,
@@ -572,6 +578,10 @@ def generate_placement_from_spec_with_reason(
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
     """Generate placement from spec and provide a failure reason when unavailable.
 
+    *slab* may already contain previously placed adsorbates (saturation); when
+    it does, *slab_for_sites* must be the bare substrate used for site
+    enumeration and ``surface_ref`` resolution.
+
     Parameters
     ----------
     spec
@@ -579,7 +589,7 @@ def generate_placement_from_spec_with_reason(
     conformers
         List of adsorbate conformers.
     slab
-        Substrate slab.
+        Substrate slab (may include pre-adsorbed atoms).
     config
         Adsorption configuration.
     smiles
@@ -587,7 +597,8 @@ def generate_placement_from_spec_with_reason(
     site_context
         Optional precomputed site context.
     slab_for_sites
-        Optional substrate for site detection.
+        Optional bare substrate for site detection (required when *slab* has
+        pre-adsorbates).
     pose_cache
         Optional per-batch slab/conformer cache.
     """
@@ -615,7 +626,9 @@ def generate_placement_from_spec_with_reason(
     resolved_ctx = (
         site_context
         if site_context is not None
-        else _get_unique_sites_for_specs(slab, config)
+        else _get_unique_sites_for_specs(
+            placement_reference_slab(slab, slab_for_sites), config
+        )
     )
 
     adsorbate = conformers[spec.conformer_index].copy()

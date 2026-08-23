@@ -195,7 +195,10 @@ def load_campaign_yaml(path: str | Path) -> CampaignDocument:
         Path to the YAML campaign file.
     """
     yaml_path = Path(path)
-    raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    try:
+        raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"Campaign file not found: {yaml_path}") from exc
     if raw is None:
         raise ValueError(f"Campaign file is empty: {yaml_path}")
     return parse_campaign_dict(_require_mapping(raw, context="campaign root"))

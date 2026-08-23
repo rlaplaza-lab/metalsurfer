@@ -81,7 +81,7 @@ def test_principal_axis_rotation_flat_hexagon_stays_near_flat():
         dtype=float,
     )
     hex_pos -= hex_pos.mean(axis=0)
-    rotated, _score = _principal_axis_rotation(hex_pos, np.array([0.0, 0.0, 1.0]))
+    rotated, _score, _R = _principal_axis_rotation(hex_pos, np.array([0.0, 0.0, 1.0]))
     assert rotated is not None
     # Plane normal ≈ z → z-span stays small (near-flat).
     assert float(np.ptp(rotated[:, 2])) < 0.28
@@ -102,7 +102,7 @@ def test_surface_aligned_rotation_flips_binder_pointing_up(tilt_deg):
         ],
         dtype=float,
     )
-    out = _surface_aligned_rotation(pos, normal, symbols=["C", "O"])
+    out, _R = _surface_aligned_rotation(pos, normal, symbols=["C", "O"])
     com = out.mean(axis=0)
     binder_dir = out[1] - com
     binder_dir /= np.linalg.norm(binder_dir)
@@ -114,8 +114,30 @@ def test_surface_aligned_rotation_noop_when_already_pointing_down():
 
     normal = np.array([0.0, 0.0, 1.0])
     pos = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, -1.0]], dtype=float)
-    out = _surface_aligned_rotation(pos, normal, symbols=["C", "O"])
+    out, _R = _surface_aligned_rotation(pos, normal, symbols=["C", "O"])
     com = out.mean(axis=0)
     binder_dir = out[1] - com
     binder_dir /= np.linalg.norm(binder_dir)
     assert float(np.dot(binder_dir, normal)) < -0.95
+
+
+def test_composed_rotation_reproduces_sequential():
+    """R_base @ R_tilt @ canonical must equal the sequentially built rotated_pos."""
+    from metalsurfer.placement.geometry import (
+        _flat_orientation_from_principal_axis,
+        _rotation_with_tilt,
+    )
+
+    normal = np.array([0.0, 0.0, 1.0])
+    rng = np.random.default_rng(0)
+    pos = rng.normal(size=(7, 3))
+    pos -= pos.mean(axis=0)
+    base_pos, R_base = _flat_orientation_from_principal_axis(
+        pos, normal, azimuth_in_plane_deg=37.0, face_flip=True
+    )
+    rotated, R_tilt = _rotation_with_tilt(
+        base_pos, normal, tilt_deg=15.0, azimuth_deg=22.0
+    )
+    R_total = R_tilt @ R_base
+    composed = (R_total @ np.asarray(pos, dtype=float).T).T
+    assert np.allclose(composed, rotated, atol=1e-10)

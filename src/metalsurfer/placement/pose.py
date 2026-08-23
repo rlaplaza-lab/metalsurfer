@@ -31,6 +31,7 @@ from .site_context import SiteContext, _get_unique_sites_for_specs
 from .site_coords import _slab_normal, _slab_plane_projectors
 from .site_enumeration import (
     _compute_site_z_base,
+    _get_site_surface_radii,
     _height_along_slab_normal,
     _is_top_layer_planar,
 )
@@ -64,6 +65,10 @@ class _PoseBatchCache:
 
     top_layer_planar: bool | None = None
     pinv_ab_T: np.ndarray | None = None
+    # Mean covalent radius of the bare substrate top layer; computed once per
+    # batch and reused for z-offset scaling when a spec's site has no explicit
+    # slab_indices. Read-only across worker threads.
+    r_surface_top_layer: float | None = None
     # conformer_index -> (canonical_pos, shape)
     frames: dict[int, tuple[np.ndarray, str]] = dataclasses.field(default_factory=dict)
 
@@ -82,6 +87,7 @@ def build_pose_batch_cache(
         "z_variance_threshold": float(config.planar_z_variance_threshold),
     }
     cache.top_layer_planar = bool(_is_top_layer_planar(slab, **planar_kwargs))
+    cache.r_surface_top_layer = _get_site_surface_radii(slab, None)
     for i, conf in enumerate(conformers):
         ads_pos = conf.get_positions()
         symbols = conf.get_chemical_symbols()
@@ -179,6 +185,11 @@ def _pose_from_spec(
 ) -> tuple[_PlacementContext | None, str | None]:
     """Build a placement context (pose + resolved geometry) from a spec.
 
+    *slab* may already contain previously placed adsorbates (saturation); when
+    it does, *slab_for_sites* must be the bare substrate used for site
+    enumeration and ``surface_ref``. Occupancy and clash checks still use the
+    full *slab*.
+
     Returns ``(ctx, None)`` on success, or ``(None, reason)`` when placement
     cannot proceed (``"no_sites_found"`` or ``"invalid_site_index"``).
     """
@@ -196,10 +207,11 @@ def _pose_from_spec(
         shape, _, _ = geom._classify_molecule_shape(canonical_pos)
     normal = np.array([0.0, 0.0, 1.0])
 
+    reference = placement_reference_slab(slab, slab_for_sites)
     ctx = (
         site_context
         if site_context is not None
-        else _get_unique_sites_for_specs(slab, config)
+        else _get_unique_sites_for_specs(reference, config)
     )
     if not ctx.use_sites or len(ctx.sites) == 0:
         logger.debug(
@@ -223,20 +235,32 @@ def _pose_from_spec(
 
     mat_type = material_type_for_placement(site, when_no_site=config.material_type)
 
-    placement_reference_slab = slab_for_sites if slab_for_sites is not None else slab
+    ref_slab = reference
+
+    # Fetch the surface radius once per pose. Per-site radii (non-empty
+    # slab_indices) still need a per-spec fetch; the top-layer radius is taken
+    # from the batch cache when available, else computed once here.
+    if site.slab_indices:
+        r_surface = _get_site_surface_radii(ref_slab, site)
+    elif pose_cache is not None and pose_cache.r_surface_top_layer is not None:
+        r_surface = pose_cache.r_surface_top_layer
+    else:
+        r_surface = _get_site_surface_radii(ref_slab, None)
 
     z_base_lo, z_base_hi = _compute_site_z_base(
-        config, placement_reference_slab, site, symbols
+        config, ref_slab, site, symbols, r_surface=r_surface
     )
     if spec.site_type:
-        offset = _site_type_z_offset(placement_reference_slab, site, spec.site_type)
+        offset = _site_type_z_offset(
+            ref_slab, site, spec.site_type, r_surface=r_surface
+        )
         z_base_lo += offset
         z_base_hi += offset
 
     flat_aromatic = _is_flat_aromatic(shape, smiles, symbols)
     if flat_aromatic and spec.orientation_type == "parallel" and mat_type != "porous":
         z_floor, z_lo_shrink, z_hi_shrink = _parallel_z_adjustments(
-            placement_reference_slab, site, symbols
+            ref_slab, site, symbols, r_surface=r_surface
         )
         z_base_lo = max(z_floor, z_base_lo - z_lo_shrink)
         z_base_hi = max(
@@ -250,7 +274,7 @@ def _pose_from_spec(
     # Slab: top-layer z (Voronoi vertex z can sit between layers). NP/pore: local vertex.
     surface_ref, is_local_ref = _resolve_surface_ref(
         site,
-        placement_reference_slab,
+        ref_slab,
         mat_type,
         rough_slab_local_z=config.rough_slab_local_z,
         top_layer_tolerance=config.top_layer_tolerance,
@@ -274,7 +298,7 @@ def _pose_from_spec(
     apply_lift = mat_type != "porous"
 
     if mat_type == "slab":
-        cell = np.asarray(placement_reference_slab.get_cell(), dtype=float)
+        cell = np.asarray(ref_slab.get_cell(), dtype=float)
         n_hat = _slab_normal(cell)
         lift = _clearance_lift_along_normal(rotated_pos, n_hat) if apply_lift else 0.0
         base = np.asarray(site.xyz, dtype=float)
@@ -348,11 +372,11 @@ def _context_from_pose(
     quat = geom.normalize_quaternion(raw_q)
     rotated_pos = (geom.quaternion_to_rotation_matrix(quat) @ canonical_pos.T).T
 
-    placement_reference_slab = slab_for_sites if slab_for_sites is not None else slab
+    reference = placement_reference_slab(slab, slab_for_sites)
     ctx = (
         site_context
         if site_context is not None
-        else _get_unique_sites_for_specs(placement_reference_slab, config)
+        else _get_unique_sites_for_specs(reference, config)
     )
     site = None
     if ctx.use_sites and 0 <= pose.site_index < len(ctx.sites):
@@ -360,7 +384,7 @@ def _context_from_pose(
     mat_type = material_type_for_placement(site, when_no_site=config.material_type)
     surface_ref, is_local_ref = _resolve_surface_ref(
         site,
-        placement_reference_slab,
+        reference,
         mat_type,
         rough_slab_local_z=config.rough_slab_local_z,
         top_layer_tolerance=config.top_layer_tolerance,
@@ -442,6 +466,17 @@ def _saturation_exclude_count(
     if n_sub < len(slab):
         return n_sub
     return None
+
+
+def placement_reference_slab(slab: Atoms, slab_for_sites: Atoms | None) -> Atoms:
+    """Bare-substrate reference for site enumeration, surface_ref and z-offsets.
+
+    Contract: *slab* may already contain previously placed adsorbates
+    (saturation); *slab_for_sites* is then the bare substrate. Occupancy and
+    clash checks keep using the full *slab* plus
+    :func:`_saturation_exclude_count`.
+    """
+    return slab_for_sites if slab_for_sites is not None else slab
 
 
 def _placement_normal(ctx: _PlacementContext, slab: Atoms) -> np.ndarray:
@@ -549,6 +584,7 @@ def _recover_distance_failure(
     *,
     slab_for_sites: Atoms | None = None,
     pose_cache: _PoseBatchCache | None = None,
+    slab_scratch: geom._SlabDistanceScratch | None = None,
 ) -> tuple[_PlacementContext, str | None]:
     """Nudge height then XY after distance/overlap failures; return updated ctx or last reason.
 
@@ -609,6 +645,7 @@ def _recover_distance_failure(
             config,
             slab_for_sites=slab_for_sites,
             material_type=ctx.mat_type,
+            slab_scratch=slab_scratch,
         )
         if last_reason is None:
             new_pose = dataclasses.replace(
@@ -664,6 +701,7 @@ def _recover_distance_failure(
             config,
             slab_for_sites=slab_for_sites,
             material_type=ctx.mat_type,
+            slab_scratch=slab_scratch,
         )
         if last_reason is None:
             new_pose = dataclasses.replace(
@@ -680,6 +718,31 @@ def _recover_distance_failure(
     return ctx, last_reason
 
 
+def _build_slab_distance_scratch(
+    slab: Atoms,
+    exclude_n: int | None,
+    mat_type: str,
+) -> geom._SlabDistanceScratch:
+    """Build the invariant slab-side slice used across candidate validations."""
+    slab_syms = list(slab.get_chemical_symbols())
+    if exclude_n is not None:
+        slab_pos = np.asarray(slab.get_positions()[:exclude_n], dtype=float)
+        slab_syms = slab_syms[:exclude_n]
+        pre_ads_pos = np.asarray(slab.get_positions()[exclude_n:], dtype=float)
+    else:
+        slab_pos = np.asarray(slab.get_positions(), dtype=float)
+        pre_ads_pos = None
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = material_aware_pbc(mat_type)
+    return geom._SlabDistanceScratch(
+        slab_pos=slab_pos,
+        cell=cell,
+        pbc=pbc,
+        slab_syms=slab_syms,
+        pre_ads_pos=pre_ads_pos,
+    )
+
+
 def _validate_posed_adsorbate(
     adsorbate: Atoms,
     slab: Atoms,
@@ -687,15 +750,32 @@ def _validate_posed_adsorbate(
     *,
     slab_for_sites: Atoms | None = None,
     material_type: str | None = None,
+    slab_scratch: geom._SlabDistanceScratch | None = None,
 ) -> str | None:
     """Run distance, adsorbate-separation, and optional contact-quality checks.
 
     Returns a failure reason token, or ``None`` when the placement is accepted.
     *material_type* defaults to ``config.material_type``; callers with a resolved
     placement context should pass ``ctx.mat_type``.
+
+    The mol↔slab MIC distance matrix is computed **once** and reused for the
+    distance gate and the contact-quality gate.  When *slab_scratch* is provided,
+    the slab side is reused from it instead of re-slicing the ASE ``Atoms``.
     """
     mat_type = material_type if material_type is not None else config.material_type
     exclude_n = _saturation_exclude_count(slab, slab_for_sites)
+    if slab_scratch is None:
+        slab_scratch = _build_slab_distance_scratch(slab, exclude_n, mat_type)
+
+    _mol_pos, _slab_pos, _mol_syms, _slab_syms, _cell, _pbc, dists = (
+        geom._mol_slab_contact_arrays(
+            adsorbate,
+            slab,
+            material_type=mat_type,
+            exclude_slab_atoms=exclude_n,
+            slab_scratch=slab_scratch,
+        )
+    )
     ok, _, dist_reason = geom.check_initial_placement_distance(
         adsorbate,
         slab,
@@ -706,12 +786,17 @@ def _validate_posed_adsorbate(
         vdw_overlap_scale=config.vdw_overlap_scale,
         exclude_slab_atoms=exclude_n,
         material_type=mat_type,
+        pairwise_distances=dists,
     )
     if not ok:
         return dist_reason
 
     if exclude_n is not None:
-        pre_ads = np.asarray(slab.get_positions()[exclude_n:], dtype=float)
+        pre_ads = (
+            slab_scratch.pre_ads_pos
+            if slab_scratch.pre_ads_pos is not None
+            else np.asarray(slab.get_positions()[exclude_n:], dtype=float)
+        )
         sep_ok, _ = geom.check_adsorbate_separation(
             adsorbate,
             pre_ads,
@@ -733,6 +818,7 @@ def _validate_posed_adsorbate(
             contact_distance_threshold=config.contact_distance_threshold,
             exclude_slab_atoms=exclude_n,
             material_type=mat_type,
+            pairwise_distances=dists,
         )
         if not contact_ok:
             return contact_reason
@@ -830,6 +916,11 @@ def _finalize_placement(
             and fail_reason
             and fail_reason in RECOVERABLE_DISTANCE_REASONS
         ):
+            # Build the slab-side scratch once; the slab does not change during
+            # recovery (only the adsorbate moves), so reuse it for every
+            # height/XY candidate validation.
+            exclude_n = _saturation_exclude_count(slab, slab_for_sites)
+            slab_scratch = _build_slab_distance_scratch(slab, exclude_n, ctx.mat_type)
             ctx, fail_reason = _recover_distance_failure(
                 ctx,
                 adsorbate,
@@ -838,6 +929,7 @@ def _finalize_placement(
                 fail_reason,
                 slab_for_sites=slab_for_sites,
                 pose_cache=pose_cache,
+                slab_scratch=slab_scratch,
             )
             pose = ctx.pose
             if fail_reason is not None:

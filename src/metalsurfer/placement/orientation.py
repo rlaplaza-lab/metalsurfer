@@ -94,8 +94,10 @@ def _radius_sum_for_site(
     slab: Atoms,
     site: Site | None,
     mol_symbols: list[str],
+    r_surface: float | None = None,
 ) -> float:
-    r_surface = _get_site_surface_radii(slab, site)
+    if r_surface is None:
+        r_surface = _get_site_surface_radii(slab, site)
     return r_surface + _mean_covalent_radius(mol_symbols)
 
 
@@ -103,19 +105,27 @@ def _site_type_z_offset(
     slab: Atoms,
     site: Site | None,
     site_type: str | None,
+    r_surface: float | None = None,
 ) -> float:
     if not site_type or site_type not in _SITE_Z_OFFSET_FROM_SURFACE_RADIUS:
         return 0.0
-    r_surface = _get_site_surface_radii(slab, site)
-    return _SITE_Z_OFFSET_FROM_SURFACE_RADIUS[site_type] * r_surface
+    multiplier = _SITE_Z_OFFSET_FROM_SURFACE_RADIUS[site_type]
+    # A zero multiplier never depends on the surface radius; short-circuit so a
+    # caller may omit a precomputed *r_surface* without changing the result.
+    if multiplier == 0.0:
+        return 0.0
+    if r_surface is None:
+        r_surface = _get_site_surface_radii(slab, site)
+    return multiplier * r_surface
 
 
 def _parallel_z_adjustments(
     slab: Atoms,
     site: Site | None,
     mol_symbols: list[str],
+    r_surface: float | None = None,
 ) -> tuple[float, float, float]:
-    radius_sum = _radius_sum_for_site(slab, site, mol_symbols)
+    radius_sum = _radius_sum_for_site(slab, site, mol_symbols, r_surface=r_surface)
     return (
         max(
             _PARALLEL_Z_FLOOR_MIN_ANGSTROM,
@@ -180,12 +190,22 @@ def _finish_orientation(
     base_pos: np.ndarray,
     normal: np.ndarray,
     spec: PlacementSpec,
+    *,
+    R_base: np.ndarray,
 ) -> OrientedAdsorbate:
-    rotated_pos = geom._rotation_with_tilt(
+    rotated_pos, R_tilt = geom._rotation_with_tilt(
         base_pos, normal, spec.tilt_deg, spec.azimuth_deg
     )
-    rot_mat = geom.best_fit_rotation(canonical_pos, rotated_pos)
-    quat = geom.rotation_matrix_to_quaternion(rot_mat)
+    R_total = R_tilt @ R_base
+    # Equivalence guard: the composed rotation must reproduce the sequentially
+    # computed (COM-centred) rotated positions. If it ever diverges (numerical
+    # drift or a future refactor), fall back to a direct Kabsch fit.
+    canonical = np.asarray(canonical_pos, dtype=float)
+    equiv = (R_total @ canonical.T).T
+    if not np.allclose(equiv, rotated_pos, atol=1e-10):
+        R_fallback = geom.best_fit_rotation(canonical, rotated_pos)
+        R_total = R_fallback
+    quat = geom.rotation_matrix_to_quaternion(R_total)
     return OrientedAdsorbate(
         rotated_pos=rotated_pos,
         quat=np.asarray(quat, dtype=float),
@@ -198,13 +218,13 @@ def _orient_parallel(
     normal: np.ndarray,
     spec: PlacementSpec,
 ) -> OrientedAdsorbate:
-    base_pos = geom._flat_orientation_from_principal_axis(
+    base_pos, R_base = geom._flat_orientation_from_principal_axis(
         canonical_pos,
         normal,
         azimuth_in_plane_deg=spec.azimuth_in_plane_deg,
         face_flip=spec.face_flip,
     )
-    return _finish_orientation(canonical_pos, base_pos, normal, spec)
+    return _finish_orientation(canonical_pos, base_pos, normal, spec, R_base=R_base)
 
 
 def _orient_binder_aligned(
@@ -214,13 +234,13 @@ def _orient_binder_aligned(
     symbols: list[str],
     spec: PlacementSpec,
 ) -> OrientedAdsorbate:
-    base_pos = geom._surface_aligned_rotation(
+    base_pos, R_base = geom._surface_aligned_rotation(
         canonical_pos,
         normal,
         symbols,
         en_binder_index=spec.en_atom_index,
     )
-    return _finish_orientation(canonical_pos, base_pos, normal, spec)
+    return _finish_orientation(canonical_pos, base_pos, normal, spec, R_base=R_base)
 
 
 def orient_from_spec(

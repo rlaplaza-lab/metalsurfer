@@ -160,12 +160,16 @@ class TestSurrogate:
     def test_gaussian_process_matern_length_scale(self):
         X, y = _make_synthetic_training_data(25)
         n_features = X.shape[1]
-        expected = matern_length_scale_for_n_features(n_features)
-        assert expected == pytest.approx(np.sqrt(n_features))
+        init_scale = matern_length_scale_for_n_features(n_features)
+        assert init_scale == pytest.approx(np.sqrt(n_features))
         model = train_surrogate(X, y, surrogate="gaussian_process", random_state=7)
         reg = model.named_steps["regressor"]
         kernel = reg.kernel_
-        assert float(kernel.get_params()["k2__length_scale"]) == pytest.approx(expected)
+        params = kernel.get_params()
+        assert params["k2__length_scale_bounds"] != "fixed"
+        fitted_ls = float(params["k2__length_scale"])
+        assert np.isfinite(fitted_ls)
+        assert 1e-2 <= fitted_ls <= 1e2
 
     def test_gaussian_process_predict_with_uncertainty(self):
         X, y = _make_synthetic_training_data(25)
@@ -175,6 +179,60 @@ class TestSurrogate:
         assert sigma.shape == (25,)
         assert np.all(sigma >= 0)
         assert np.any(sigma > 0)
+
+    def test_ridge_skips_oof_when_in_sample_above_floor(self, monkeypatch):
+        """Ridge with usable in-sample residual should not run KFold OOF."""
+        from metalsurfer.ml import bayesian as bayesian_mod
+
+        called = {"oof": False}
+
+        def _fake_oof(*args, **kwargs):
+            called["oof"] = True
+            return 999.0
+
+        monkeypatch.setattr(bayesian_mod, "_out_of_fold_residual_std", _fake_oof)
+        X, y = _make_synthetic_training_data(40)
+        model = train_surrogate(X, y, surrogate="ridge", random_state=0)
+        assert not called["oof"]
+        reg = model.named_steps["regressor"]
+        assert getattr(reg, "bo_residual_std_", None) is not None
+        assert reg.bo_residual_std_ > 0
+
+        resid = y.to_numpy(dtype=float) - model.predict(X)
+        dof = max(len(y) - X.shape[1] - 1, 1)
+        expected = float(np.sqrt(np.sum(np.square(resid)) / dof))
+        floor = max(1e-3, 0.05 * float(np.std(y.to_numpy(dtype=float))))
+        assert reg.bo_residual_std_ == pytest.approx(max(expected, floor))
+
+    def test_interpolating_regressor_still_runs_oof(self, monkeypatch):
+        """An interpolating learner has in-sample RMSE ~= 0, so OOF must kick in."""
+        from sklearn.tree import DecisionTreeRegressor
+
+        from metalsurfer.ml import bayesian as bayesian_mod
+
+        X, y = _make_synthetic_training_data(40)
+        pipeline = Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                ("regressor", DecisionTreeRegressor(random_state=0)),
+            ]
+        )
+        pipeline.fit(X, y)
+
+        real_oof = bayesian_mod._out_of_fold_residual_std
+        called = {"oof": False}
+
+        def _spy(*args, **kwargs):
+            called["oof"] = True
+            return real_oof(*args, **kwargs)
+
+        monkeypatch.setattr(bayesian_mod, "_out_of_fold_residual_std", _spy)
+        bayesian_mod._attach_residual_uncertainty(pipeline, X, y, random_state=0)
+
+        reg = pipeline.named_steps["regressor"]
+        floor = max(1e-3, 0.05 * float(np.std(y.to_numpy(dtype=float))))
+        assert called["oof"]
+        assert reg.bo_residual_std_ >= floor
 
     def test_ensemble_trains_multiple_members(self):
         X, y = _make_synthetic_training_data(30)

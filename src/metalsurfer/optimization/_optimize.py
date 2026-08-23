@@ -6,7 +6,10 @@ require the MLIP stack and a GPU to be meaningful, so they are marked
 and :mod:`._cache` and is unit-tested on CPU.
 """
 
+import gc
 import logging
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import numpy as np
 from ase import Atoms
@@ -106,6 +109,57 @@ def _make_state_with_frozen_constraint(  # pragma: no cover - requires MLIP stac
 
     state.constraints = [_DeviceAlignedFixAtoms(atom_idx=idx_tensor)]
     return state
+
+
+def _run_optimize_with_oom_retry(
+    run_optimize: Callable[[Any, Any], Any],
+    *,
+    build_systems: Callable[[], Any],
+    initial_autobatcher: Any,
+    ts_model,
+    max_n_atoms: int,
+    config: AdsorptionConfig,
+    cache_key: tuple | None,
+    resolved_max_atoms_to_try: int,
+    context: str,
+) -> Any:
+    """Run *run_optimize* once; on CUDA OOM rebuild systems + autobatcher, retry once.
+
+    The retried attempt gets freshly built systems: a failed CUDA attempt may
+    leave mutated / NaN state behind, and holding the originals would also keep
+    the failed attempt's device tensors alive across
+    :func:`_maybe_clear_cuda_cache`.
+    """
+    systems = build_systems()
+    oom_exc: RuntimeError | None = None
+    try:
+        return run_optimize(initial_autobatcher, systems)
+    except RuntimeError as exc:
+        if not _is_cuda_oom_error(exc):
+            raise
+        # Drop the traceback: its frames reference the states handed to
+        # ts.optimize and would otherwise pin them for the whole retry.
+        oom_exc = exc.with_traceback(None)
+    del systems
+    gc.collect()
+    if cache_key is not None:
+        pop_autobatcher(cache_key)
+    _maybe_clear_cuda_cache(ts_model)
+    logger.warning(
+        "CUDA OOM during %s; dropped autobatcher cache entry, rebuilding "
+        "systems and retrying once",
+        context,
+    )
+    ab, _ = _get_inflight_autobatcher(
+        ts_model,
+        max_n_atoms,
+        config=config,
+        saturation_reuse=False,
+        max_atoms_to_try=resolved_max_atoms_to_try,
+    )
+    if ab is None:
+        raise RuntimeError("Could not create autobatcher after OOM") from oom_exc
+    return run_optimize(ab, build_systems())
 
 
 def estimate_parallel_relaxation_capacity(
@@ -275,8 +329,10 @@ def _split_forces_by_system(
     ``(n_atoms_total, 3)`` tensor for the whole concatenated batch. Indexing it
     with a system index silently yields the force vector of one atom, which
     makes downstream per-adsorbate force-convergence checks operate on a
-    ``(3,)`` array and never fire. Prefer ``system_idx`` when present; otherwise
-    fall back to a contiguous split by *atom_counts* (original input order).
+    ``(3,)`` array and never fire. Prefer ``system_idx`` when present; a single
+    system without ``system_idx`` is an unambiguous contiguous split, but a
+    multi-system batch without ``system_idx`` now raises because the contiguous
+    per-atom-count split cannot be verified.
 
     Returns ``None`` when forces are unavailable or cannot be aligned, and
     raises ``RuntimeError`` if a ``system_idx`` split does not reproduce
@@ -294,8 +350,13 @@ def _split_forces_by_system(
 
     system_idx = getattr(batch, "system_idx", None)
     if system_idx is None:
-        splits = np.cumsum(atom_counts[:-1]).tolist() if len(atom_counts) > 1 else []
-        per_system = list(np.split(forces_np, splits))
+        if n_systems > 1:
+            raise RuntimeError(
+                "Batched forces cannot be split per system: the returned batch has "
+                f"{n_systems} systems but no per-atom system_idx, and a contiguous "
+                "split by atom count cannot be verified."
+            )
+        per_system = [forces_np]
     else:
         idx_np = np.asarray(system_idx.detach().cpu().numpy()).reshape(-1)
         if forces_np.shape[0] != idx_np.shape[0]:
@@ -312,6 +373,70 @@ def _split_forces_by_system(
                 f"{k} has {got.shape[0]} force rows but {expected} atoms."
             )
     return per_system
+
+
+def _forces_for_optimized_systems(
+    batch,
+    energies,
+    result: list[Atoms],
+    ts_model,
+) -> Sequence[np.ndarray | None]:
+    """Return per-system force arrays, recovering them when the batched run hid them.
+
+    Tries :func:`_split_forces_by_system` first (the fast path). If that returns
+    ``None`` (forces unavailable or unaligned with atom counts), runs **one**
+    ``ts.static`` over the finite-energy survivors and extracts per-system
+    forces — the same fused path as :func:`batch_static`, but without its
+    zero-force fallback. Systems whose forces are still missing yield ``None``
+    (never zeros) so downstream force-convergence checks never see a spurious
+    ``|F| == 0``. The optimised energies are kept as-is.
+    """
+    n_systems = len(result)
+    atom_counts = [len(a) for a in result]
+    forces_list = _split_forces_by_system(batch, n_systems, atom_counts)
+    if forces_list is not None:
+        return forces_list
+
+    logger.warning(
+        "Batched optimisation returned no splitable per-system forces; "
+        "recovering via a single ts.static over %d survivors",
+        n_systems,
+    )
+    survivor_idx: list[int] = []
+    if energies is not None:
+        for i in range(n_systems):
+            if i < len(energies):
+                try:
+                    ev = float(energies[i].detach().cpu().numpy().squeeze())
+                except Exception:
+                    ev = float("nan")
+                if np.isfinite(ev):
+                    survivor_idx.append(i)
+    else:
+        survivor_idx = list(range(n_systems))
+    if not survivor_idx:
+        return [None] * n_systems
+
+    survivor_atoms = [result[i] for i in survivor_idx]
+    ts = _deps.ts
+    try:
+        with torchsim_output_capture():
+            static_results = ts.static(system=survivor_atoms, model=ts_model)
+    except Exception:
+        logger.warning("ts.static force recovery failed", exc_info=True)
+        return [None] * n_systems
+
+    per_system: list[np.ndarray | None] = []
+    for res in static_results:
+        f = res.get("forces") if isinstance(res, dict) else None
+        per_system.append(f.detach().cpu().numpy() if f is not None else None)
+    if len(per_system) != len(survivor_idx):
+        return [None] * n_systems
+
+    out: list[np.ndarray | None] = [None] * n_systems
+    for k, i in enumerate(survivor_idx):
+        out[i] = per_system[k]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +489,9 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
     _maybe_clear_cuda_cache(ts_model)
     try:
         ab = None
+        cache_key: tuple | None = None
+        max_n_atoms = 0
+        resolved_max_atoms_to_try = 0
         if not config.optimize_isolated_sequentially and _device_is_cuda(
             getattr(ts_model, "device", None) or "cpu"
         ):
@@ -384,22 +512,39 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
                 _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
                 _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
             )
-            ab = _get_inflight_autobatcher(
+            ab, cache_key = _get_inflight_autobatcher(
                 ts_model,
                 max_n_atoms,
                 config=config,
                 max_atoms_to_try=resolved_max_atoms_to_try,
-            )[0]
-        with torchsim_output_capture():
-            state = ts.optimize(
-                system=conformers,
-                model=ts_model,
-                optimizer=optimizer,
-                convergence_fn=conv,
-                max_steps=steps,
-                steps_between_swaps=swaps,
-                autobatcher=ab if ab is not None else False,
             )
+
+        def _run_optimize(autobatcher, systems):
+            with torchsim_output_capture():
+                return ts.optimize(
+                    system=systems,
+                    model=ts_model,
+                    optimizer=optimizer,
+                    convergence_fn=conv,
+                    max_steps=steps,
+                    steps_between_swaps=swaps,
+                    autobatcher=autobatcher if autobatcher is not None else False,
+                )
+
+        if ab is not None:
+            state = _run_optimize_with_oom_retry(
+                _run_optimize,
+                build_systems=lambda: conformers,
+                initial_autobatcher=ab,
+                ts_model=ts_model,
+                max_n_atoms=max_n_atoms,
+                config=config,
+                cache_key=cache_key,
+                resolved_max_atoms_to_try=resolved_max_atoms_to_try,
+                context="isolated-molecule",
+            )
+        else:
+            state = _run_optimize(None, conformers)
         atoms_list = state.to_atoms()
         energies = state.energy
         if len(atoms_list) != len(energies):
@@ -483,8 +628,6 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             atoms, context=f"optimize_adsorbate_slab_batched system[{i}]"
         )
 
-    # pragma: no cover below -- the remaining body builds TorchSim states and
-    # drives ts.optimize on a real MLIP model (``mlip``/``gpu`` suites).
     slab_for_frozen = base_slab_for_frozen if base_slab_for_frozen is not None else slab
     slab_size = len(slab)
     ref_len = len(slab_for_frozen)
@@ -517,12 +660,6 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         conv = ts.generate_force_convergence_fn(
             force_tol=config.fmax, include_cell_forces=False
         )
-        sim_states = [
-            _make_state_with_frozen_constraint(
-                atoms, frozen_indices, ts_model, model_device
-            )
-            for atoms in combined_atoms_list
-        ]
 
     try:
         max_n_atoms = max(len(a) for a in combined_atoms_list)
@@ -544,7 +681,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         # TorchSim memory probing is CUDA-only; CPU uses a single sequential batch.
         use_autobatcher = _device_is_cuda(model_device)
         if use_autobatcher:
-            ab, cache_key, reused_prior_estimate = _get_inflight_autobatcher(
+            ab, cache_key = _get_inflight_autobatcher(
                 ts_model,
                 max_n_atoms,
                 config=config,
@@ -554,12 +691,21 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             if ab is None:
                 raise RuntimeError("Could not create autobatcher")
         else:
-            ab, cache_key, reused_prior_estimate = None, None, False
+            ab, cache_key = None, None
 
-        def _run_optimize(autobatcher):
+        def _build_sim_states():
+            with torchsim_output_capture():
+                return [
+                    _make_state_with_frozen_constraint(
+                        atoms, frozen_indices, ts_model, model_device
+                    )
+                    for atoms in combined_atoms_list
+                ]
+
+        def _run_optimize(autobatcher, systems):
             with torchsim_output_capture():
                 return ts.optimize(
-                    system=sim_states,
+                    system=systems,
                     model=ts_model,
                     optimizer=optimizer,
                     convergence_fn=conv,
@@ -568,34 +714,17 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
                     autobatcher=autobatcher if autobatcher is not None else False,
                 )
 
-        try:
-            batch = _run_optimize(ab)
-        except RuntimeError as exc:
-            if (
-                use_saturation_reuse
-                and reused_prior_estimate
-                and _is_cuda_oom_error(exc)
-                and cache_key is not None
-            ):
-                logger.warning(
-                    "OOM after reusing saturation autobatcher estimate for max_n_atoms=%d; "
-                    "dropping reused cache entry and retrying with fresh estimate",
-                    max_n_atoms,
-                )
-                pop_autobatcher(cache_key)
-                _maybe_clear_cuda_cache(ts_model)
-                ab, _, _ = _get_inflight_autobatcher(
-                    ts_model,
-                    max_n_atoms,
-                    config=config,
-                    saturation_reuse=False,
-                    max_atoms_to_try=resolved_max_atoms_to_try,
-                )
-                if ab is None:
-                    raise RuntimeError("Could not create autobatcher") from exc
-                batch = _run_optimize(ab)
-            else:
-                raise
+        batch = _run_optimize_with_oom_retry(
+            _run_optimize,
+            build_systems=_build_sim_states,
+            initial_autobatcher=ab,
+            ts_model=ts_model,
+            max_n_atoms=max_n_atoms,
+            config=config,
+            cache_key=cache_key,
+            resolved_max_atoms_to_try=resolved_max_atoms_to_try,
+            context="slab+adsorbate",
+        )
         result = batch.to_atoms()
         energies = batch.energy
         n_input = len(combined_atoms_list)
@@ -615,9 +744,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
                 f"expected {n_input}, got {n_returned}. Results are mapped to "
                 "inputs positionally and cannot be realigned."
             )
-        forces_list = _split_forces_by_system(
-            batch, n_returned, [len(a) for a in result]
-        )
+        forces_list = _forces_for_optimized_systems(batch, energies, result, ts_model)
         out: list[Atoms | None] = []
         for i, atoms in enumerate(result):
             energy_val: float | None = None

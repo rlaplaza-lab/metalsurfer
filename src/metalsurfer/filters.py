@@ -380,6 +380,10 @@ def _adsorbate_surface_min_distance(
 ) -> float | None:
     """Minimum adsorbate-to-surface distance using material-aware PBC.
 
+    *slab* supplies ``slab_size`` (and optional ``surface_symbols`` identity);
+    substrate positions are taken from the optimized ``atoms[:slab_size]`` slice
+    so relaxed substrate motion is reflected in the distance check.
+
     Returns ``None`` when the combined structure has no adsorbate atoms.
     """
     slab_size = len(slab)
@@ -388,9 +392,10 @@ def _adsorbate_surface_min_distance(
         return None
 
     cell = atoms.get_cell()
-    slab_positions = slab.get_positions()
+    optimized_slab = atoms[:slab_size]
+    slab_positions = optimized_slab.get_positions()
     if surface_symbols:
-        slab_syms = np.array(slab.get_chemical_symbols())
+        slab_syms = np.array(optimized_slab.get_chemical_symbols())
         mask = np.isin(slab_syms, surface_symbols)
         if np.any(mask):
             slab_positions = slab_positions[mask]
@@ -502,9 +507,13 @@ def filter_results(
     results:
         Typed :class:`ScreeningResult` objects from the compute pipeline.
     slab:
-        Reference slab Atoms (used for desorption distance check and, when
+        Reference slab Atoms. Contract: *slab* must be the cumulative substrate
+        prefix of every ``entry.atoms`` (bare slab + all previously accepted
+        adsorbates). It is used for the desorption distance check and, when
         decomposition is enabled, as the atom-count prefix ``len(slab)`` for
-        validating only the newly added adsorbate in each ``entry.atoms``).
+        validating only the newly added adsorbate in each ``entry.atoms``. A
+        suffix/formula mismatch now raises :class:`ValueError` instead of
+        silently dropping the entry as decomposed.
     surface_symbols:
         Element symbols of the surface (e.g. ``["Ru"]`` or ``["Ru", "Cu"]``).
     reference_smiles:
@@ -546,6 +555,22 @@ def filter_results(
         decomp_count = 0
         decomp_reasons: dict[str, list[int]] = {}  # reason -> [placement_ids]
         prefix = len(slab)
+        ref_formula = (
+            _formula_from_smiles(reference_smiles) if reference_smiles else None
+        )
+        if ref_formula is not None:
+            expected_suffix = sum(ref_formula.values())
+            for entry in results:
+                got = len(entry.atoms) - prefix
+                if got != expected_suffix:
+                    raise ValueError(
+                        "filter_results slab prefix contract violated for "
+                        f"placement_id={entry.placement_id}: len(entry.atoms)="
+                        f"{len(entry.atoms)} minus len(slab)={prefix} leaves {got} "
+                        f"adsorbate atoms, but reference_smiles {reference_smiles!r} has "
+                        f"{expected_suffix}. Pass the cumulative substrate prefix (bare "
+                        "slab + all previously accepted adsorbates) as `slab`."
+                    )
         for entry in results:
             ok, reason = check_decomposition(
                 entry.atoms,

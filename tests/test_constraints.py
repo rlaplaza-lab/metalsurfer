@@ -3,6 +3,7 @@
 import logging
 
 import numpy as np
+import pytest
 from ase import Atoms
 from ase.constraints import FixAtoms
 
@@ -56,6 +57,25 @@ def test_frozen_indices_by_symbol():
         assert slab.get_chemical_symbols()[idx] == "Ru"
     cu_indices = [i for i, s in enumerate(slab.get_chemical_symbols()) if s == "Cu"]
     assert all(ci not in frozen for ci in cu_indices)
+
+
+def test_freeze_symbols_no_match_raises():
+    slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
+    with pytest.raises(ValueError, match="matched no atoms"):
+        compute_frozen_indices(slab, freeze_symbols=["Pt"])
+
+
+def test_freeze_symbols_partial_match_warns(caplog):
+    slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
+    syms = slab.get_chemical_symbols()
+    for i in range(0, len(syms), 2):
+        syms[i] = "Cu"
+    slab.set_chemical_symbols(syms)
+    with caplog.at_level(logging.WARNING, logger="metalsurfer.surface_prep.freeze"):
+        frozen = compute_frozen_indices(slab, freeze_symbols=["Ru", "Pt"])
+    assert "Pt" in caplog.text
+    assert frozen
+    assert all(slab.get_chemical_symbols()[i] == "Ru" for i in frozen)
 
 
 def test_frozen_indices_empty_symbols_means_freeze_all():
@@ -185,6 +205,18 @@ def test_check_frozen_substrate_displacement_passes_when_fixed():
     combined += Atoms("H", positions=[[0.0, 0.0, 8.0]])
     ok, _ = check_frozen_substrate_displacement(combined, slab, slab_size=len(slab))
     assert ok
+
+
+def test_max_frozen_substrate_displacement_raises_on_short_atoms():
+    from metalsurfer.exceptions import GeometryValidationError
+
+    slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
+    slab = apply_surface_constraints(slab, relax_top_layer=False)
+    combined = slab.copy()
+    combined += Atoms("H", positions=[[0.0, 0.0, 8.0]])
+    short = combined[:2].copy()
+    with pytest.raises(GeometryValidationError, match="optimized structure"):
+        max_frozen_substrate_displacement(short, slab, slab_size=len(slab))
 
 
 def test_relax_top_layer_two_layer_tolerance_freezes_bottom_half():

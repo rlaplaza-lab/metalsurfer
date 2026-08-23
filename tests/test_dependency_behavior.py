@@ -151,11 +151,11 @@ class TestMissingTorchSim:
                 )
 
     def test_autobatcher_returns_none_when_unavailable(self):
-        """_get_inflight_autobatcher should degrade gracefully to a null triple.
+        """_get_inflight_autobatcher should degrade gracefully to a null pair.
 
-        The accessor always returns ``(autobatcher, cache_key,
-        reused_prior_estimate)`` so the unpacking call sites in
-        ``_optimize`` keep working when the optional MLIP stack is missing.
+        The accessor always returns ``(autobatcher, cache_key)`` so the
+        unpacking call sites in ``_optimize`` keep working when the optional
+        MLIP stack is missing.
         """
         import metalsurfer.optimization as omod
 
@@ -167,12 +167,11 @@ class TestMissingTorchSim:
                 "torch_sim.constraints": None,
             },
         ):
-            autobatcher, cache_key, reused = omod._cache._get_inflight_autobatcher(
+            autobatcher, cache_key = omod._cache._get_inflight_autobatcher(
                 ts_model=None, max_n_atoms=0
             )
             assert autobatcher is None
             assert cache_key is None
-            assert reused is False
 
 
 # ---------------------------------------------------------------------------

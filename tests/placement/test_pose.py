@@ -385,3 +385,47 @@ def test_invalid_site_index_reason_distinct_from_no_sites():
     )
     assert _result is None
     assert reason == "invalid_site_index"
+
+
+def test_validate_posed_adsorbate_single_mic_with_strict(monkeypatch):
+    import metalsurfer.placement.geometry as geom_mod
+
+    calls = {"n": 0}
+    orig = geom_mod._mol_slab_pairwise_distances
+
+    def _counted(mol_pos, slab_pos, cell, pbc):
+        calls["n"] += 1
+        return orig(mol_pos, slab_pos, cell, pbc)
+
+    monkeypatch.setattr(geom_mod, "_mol_slab_pairwise_distances", _counted)
+
+    slab = make_slab()
+    water = place_adsorbate_above_slab(
+        slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
+    )
+    config = AdsorptionConfig(
+        strict_initial_placement=True,
+        min_initial_distance=0.3,
+        contact_distance_threshold=0.4,
+        max_closest_approach=0.5,
+    )
+    _validate_posed_adsorbate(water, slab, config)
+    # Distance gate and contact-quality gate must share ONE MIC matrix.
+    assert calls["n"] == 1
+
+
+def test_validate_posed_adsorbate_scratch_equivalence():
+    from metalsurfer.placement.pose import _build_slab_distance_scratch
+
+    slab = make_slab()
+    water = place_adsorbate_above_slab(
+        slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
+    )
+    config = AdsorptionConfig()
+    reason_no_scratch = _validate_posed_adsorbate(water, slab, config)
+    scratch = _build_slab_distance_scratch(slab, None, "slab")
+    reason_scratch = _validate_posed_adsorbate(
+        water, slab, config, slab_scratch=scratch
+    )
+    assert reason_no_scratch == reason_scratch
+    assert reason_no_scratch is None

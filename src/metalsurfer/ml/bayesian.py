@@ -89,11 +89,15 @@ def _gaussian_process_regressor(
     n_features: int,
     random_state: int,
 ) -> GaussianProcessRegressor:
-    """Matern GP with fixed length scale sqrt(n_features)."""
+    """Matern GP with marginal-likelihood-tuned length scale.
+
+    Initialized at ``sqrt(n_features)`` in standardized feature space; the
+    length scale is optimized within ``(1e-2, 1e2)`` during ``fit``.
+    """
     length_scale = matern_length_scale_for_n_features(n_features)
     kernel = ConstantKernel(1.0, constant_value_bounds=(1e-2, 1e2)) * Matern(
         length_scale=length_scale,
-        length_scale_bounds="fixed",
+        length_scale_bounds=(1e-2, 1e2),
         nu=2.5,
     )
     return GaussianProcessRegressor(
@@ -101,12 +105,19 @@ def _gaussian_process_regressor(
         alpha=1e-5,
         normalize_y=True,
         random_state=random_state,
-        n_restarts_optimizer=0,
+        n_restarts_optimizer=2,
     )
 
 
 class EnsembleRegressor(BaseEstimator, RegressorMixin):
-    """Average several BO surrogates; combine mean and disagreement as uncertainty."""
+    """Average several BO surrogates; combine mean and disagreement as uncertainty.
+
+    Each member reports ``sigma`` with different semantics (inter-tree std for
+    forests, OOF residual RMSE for ridge/HGB, GP posterior std for
+    ``gaussian_process``). :meth:`predict_with_uncertainty` combines them as
+    ``sqrt(mean(sigma^2) + var(mu))`` — a heuristic exploration signal, not a
+    calibrated predictive variance.
+    """
 
     def __init__(
         self,
@@ -195,6 +206,11 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Predict with uncertainty estimates.
 
+        Combines member ``(mu, sigma)`` pairs as
+        ``sqrt(mean(sigma^2) + var(mu))``. Member sigmas are not harmonized to
+        a single uncertainty semantics; the result is a heuristic, not a
+        calibrated predictive variance.
+
         Parameters
         ----------
         X
@@ -241,7 +257,7 @@ _RESIDUAL_STD_FLOOR = 1e-3
 # sigma ~= 0, which collapses EI/PI to exactly zero for every candidate.
 _RESIDUAL_STD_RELATIVE_FLOOR = 0.05
 _RESIDUAL_OOF_MIN_SAMPLES = 4
-_RESIDUAL_OOF_MAX_FOLDS = 5
+_RESIDUAL_OOF_MAX_FOLDS = 3
 
 
 def _format_residual_std(pipeline: Pipeline) -> str:
@@ -261,6 +277,12 @@ def _out_of_fold_residual_std(
 
     Fitted unweighted on clones: this estimates generalisation error, which is
     what sigma should represent.
+
+    Only invoked by :func:`_attach_residual_uncertainty` when the cheap
+    in-sample dof-corrected residual is at or below the sigma floor (the
+    interpolating-learner case). Folds are capped at
+    ``_RESIDUAL_OOF_MAX_FOLDS`` (3) to bound the extra fits per BO batch; no
+    result cache is kept because the training set grows every round.
     """
     n = int(y_arr.size)
     if n < _RESIDUAL_OOF_MIN_SAMPLES:
@@ -292,10 +314,11 @@ def _attach_residual_uncertainty(
     scaled feature space restores usable EI/PI/LCB without changing the mean
     predictor.
 
-    The RMSE is estimated **out of fold**. An in-sample estimate is close to
-    zero for an interpolating learner such as ``HistGradientBoostingRegressor``,
-    which drives σ to the floor and makes EI/PI identically zero for every
-    candidate -- i.e. silently turns BO into pool-ordered sampling.
+    Residual RMSE is estimated in-sample (dof-corrected) first. Out-of-fold
+    cross-validation runs **only** when that in-sample value is at or below the
+    sigma floor — the interpolating-learner case (e.g. ``HistGradientBoostingRegressor``)
+    where in-sample RMSE ≈ 0 would collapse EI/PI to zero. Well-regularized
+    ridge models skip the extra KFold fits.
 
     Features are standardised with a scaler stored on the regressor so that the
     nearest-neighbour distance is computed in the same space at predict time,
@@ -306,20 +329,23 @@ def _attach_residual_uncertainty(
     y_arr = np.asarray(y, dtype=float).ravel()
     X_arr = np.asarray(X, dtype=float)
 
-    residual_std = _out_of_fold_residual_std(
-        pipeline, X, y_arr, random_state=random_state
-    )
-    if residual_std is None:
-        # Too few observations to cross-validate: fall back to the in-sample
-        # estimate with a dof correction. Only reached for n < 4.
-        resid = y_arr - np.asarray(pipeline.predict(X), dtype=float).ravel()
-        n = int(resid.size)
-        p = int(X_arr.shape[1]) if X_arr.ndim == 2 else 1
-        dof = max(n - p - 1, 1)
-        residual_std = float(np.sqrt(np.sum(np.square(resid)) / dof))
-
     spread = float(np.std(y_arr)) if y_arr.size > 1 else 0.0
     floor = max(_RESIDUAL_STD_FLOOR, _RESIDUAL_STD_RELATIVE_FLOOR * spread)
+
+    resid = y_arr - np.asarray(pipeline.predict(X), dtype=float).ravel()
+    n = int(resid.size)
+    p = int(X_arr.shape[1]) if X_arr.ndim == 2 else 1
+    dof = max(n - p - 1, 1)
+    in_sample_std = float(np.sqrt(np.sum(np.square(resid)) / dof))
+
+    residual_std = in_sample_std
+    if in_sample_std <= floor:
+        oof_std = _out_of_fold_residual_std(
+            pipeline, X, y_arr, random_state=random_state
+        )
+        if oof_std is not None:
+            residual_std = oof_std
+
     regressor.bo_residual_std_ = max(residual_std, floor)
 
     sigma_scaler = StandardScaler().fit(X_arr)
@@ -470,12 +496,15 @@ def train_surrogate(
         reg = _gaussian_process_regressor(n_features, random_state)
         pipeline = Pipeline([("scaler", StandardScaler()), ("regressor", reg)])
         pipeline.fit(X, y)
+        fitted_reg = pipeline.named_steps["regressor"]
+        fitted_ls = float(fitted_reg.kernel_.get_params()["k2__length_scale"])
         logger.info(
             "Trained gaussian_process surrogate on %d samples "
-            "(Matern length_scale=%.4f = sqrt(%d))",
+            "(Matern length_scale=%.4f, init=sqrt(%d)=%.4f)",
             len(np.asarray(y)),
-            matern_length_scale_for_n_features(n_features),
+            fitted_ls,
             n_features,
+            matern_length_scale_for_n_features(n_features),
         )
         return pipeline
     if surrogate == "ensemble":
@@ -1117,8 +1146,10 @@ def predict_with_uncertainty(
     Tree ensembles: ``sigma`` is std dev across ``estimators_``. Ridge / HGB:
     ``sigma`` is residual RMSE with mild nearest-neighbour inflation in the
     pipeline's scaled feature space (see :func:`_attach_residual_uncertainty`).
-    Plain linear models without attached residual stats still return σ=0; EI/PI
-    then rank by ``-mu``.
+    GP: ``sigma`` is the posterior standard deviation. For
+    :class:`EnsembleRegressor`, member sigmas are combined heuristically (see
+    that class). Plain linear models without attached residual stats still
+    return σ=0; EI/PI then rank by ``-mu``.
 
     Parameters
     ----------
@@ -1481,7 +1512,7 @@ def select_candidates_batch_diverse(
     if len(available) >= 2:
         _query = np.asarray(avail_positions, dtype=np.float64)
         tree = KDTree(_query)
-        nn_dist = np.asarray(tree.query(_query, k=2)[0])[:, 1]  # type: ignore[arg-type]
+        nn_dist = np.asarray(tree.query(_query, k=2)[0])[:, 1]
         lengthscale = float(np.median(nn_dist))
         lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
     else:

@@ -46,6 +46,11 @@ _CACHE_LOCK = threading.RLock()
 _AUTOBATCHER_CACHE: dict[tuple, Any] = {}
 _PARALLEL_CAPACITY_CACHE: dict[tuple, int] = {}
 
+# Fallback growth bounds when a saturation autobatcher is reused for a slightly
+# larger neighbour. Overridable via AdsorptionConfig.
+_SATURATION_REUSE_GROWTH_ATOMS = 32
+_SATURATION_REUSE_GROWTH_FRACTION = 0.1
+
 
 def capacity_cache_get(cache_key: tuple) -> int | None:
     """Return the cached parallel-relaxation capacity for *cache_key*, if any.
@@ -183,13 +188,13 @@ def _get_inflight_autobatcher(
 ):
     """Create or return cached InFlightAutoBatcher for batched relaxations.
 
-    Always returns a ``(autobatcher, cache_key, reused_prior_estimate)`` triple.
-    ``autobatcher`` is ``None`` when the optional MLIP stack is unavailable or
-    construction failed; callers must handle that case. Returning a bare ``None``
-    here would break both unpacking call sites (``a, b, c = ...`` and ``...[0]``).
+    Returns a ``(autobatcher, cache_key)`` pair. ``autobatcher`` is ``None`` when
+    the optional MLIP stack is unavailable or construction failed; callers must
+    handle that case. Returning a bare ``None`` here would break both unpacking
+    call sites (``a, b = ...`` and ``...[0]``).
     """
     if _deps.InFlightAutoBatcher is None or _deps.ts is None or ts_model is None:
-        return None, None, False
+        return None, None
     max_memory_padding = 0.5
     max_memory_scaler = None
     if config is not None:
@@ -209,7 +214,7 @@ def _get_inflight_autobatcher(
         with _CACHE_LOCK:
             cached = _AUTOBATCHER_CACHE.get(key)
             if cached is not None:
-                return cached, key, False
+                return cached, key
             if saturation_reuse:
                 matching_candidates: list[tuple[tuple, Any]] = []
                 for cache_key, cache_ab in _AUTOBATCHER_CACHE.items():
@@ -223,8 +228,8 @@ def _get_inflight_autobatcher(
                     ):
                         matching_candidates.append((cache_key, cache_ab))
                 matching_candidates.sort(key=lambda item: int(item[0][4]), reverse=True)
-                growth_atoms = 32
-                growth_fraction = 0.1
+                growth_atoms = _SATURATION_REUSE_GROWTH_ATOMS
+                growth_fraction = _SATURATION_REUSE_GROWTH_FRACTION
                 if config is not None:
                     growth_atoms = config.saturation_autobatcher_reuse_growth_atoms
                     growth_fraction = (
@@ -248,7 +253,7 @@ def _get_inflight_autobatcher(
                             max_n_atoms,
                             allowed_growth,
                         )
-                        return cache_ab, cache_key, True
+                        return cache_ab, cache_key
         kwargs: dict = {
             "memory_scales_with": "n_atoms",
             "max_memory_padding": max_memory_padding,
@@ -264,9 +269,13 @@ def _get_inflight_autobatcher(
             # the already-published instance so all threads share one batcher.
             existing = _AUTOBATCHER_CACHE.get(key)
             if existing is not None:
-                return existing, key, False
+                return existing, key
             _AUTOBATCHER_CACHE[key] = ab
-        return ab, key, False
-    except (RuntimeError, TypeError, ValueError) as exc:
-        logger.warning("Failed to create InFlightAutoBatcher: %s", exc)
-        return None, None, False
+        return ab, key
+    except RuntimeError as exc:
+        logger.warning(
+            "Failed to create InFlightAutoBatcher (%s): %s",
+            type(exc).__name__,
+            exc,
+        )
+        return None, None

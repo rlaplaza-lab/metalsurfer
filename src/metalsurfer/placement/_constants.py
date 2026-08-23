@@ -96,6 +96,9 @@ _TOP_LAYER_DEPTH_COVALENT_SCALE: float = 1.8
 _TOP_LAYER_DEPTH_MIN_ANGSTROM: float = 0.5
 # Cap derived depth so FCC-like interlayers (~2.1 A) stay a single primary layer.
 _TOP_LAYER_DEPTH_MAX_ANGSTROM: float = 1.2
+# Default flatness tolerance (z-band half-width) for top-layer planarity checks.
+# Distinct from _TOP_LAYER_DEPTH_MIN_ANGSTROM, which floors the derived depth.
+_PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM: float = 0.5
 # Include one terrace below the primary band only when this close to h_max.
 _STEP_TERRACE_MAX_GAP_ANGSTROM: float = 1.0
 

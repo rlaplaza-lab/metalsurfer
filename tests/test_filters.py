@@ -527,14 +527,14 @@ def test_filter_results_uses_slab_prefix_for_decomposition():
     )
     assert len(filtered) == 1
 
-    filtered_wrong = filter_results(
-        results,
-        slab=slab,
-        surface_symbols=["Ru"],
-        reference_smiles="O",
-        config=config,
-    )
-    assert len(filtered_wrong) == 0
+    with pytest.raises(ValueError, match="prefix contract"):
+        filter_results(
+            results,
+            slab=slab,
+            surface_symbols=["Ru"],
+            reference_smiles="O",
+            config=config,
+        )
 
 
 def test_decomposition_fragmented_ethanol_two_pieces():
@@ -814,6 +814,24 @@ def test_desorption_uses_material_pbc_not_calculator_pbc(monkeypatch):
             combined, slab, binding_threshold=4.0, material_type=material_type
         )
         assert captured["pbc"] == material_aware_pbc(material_type)
+
+
+def test_desorption_uses_relaxed_substrate_positions():
+    """Desorption distance must use optimized substrate, not reference slab."""
+    slab = make_slab(n_layers=1)
+    combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    # The slab atoms are fixed by constraints; clear them so the artificial
+    # relaxation below is actually applied to the stored positions.
+    combined.set_constraint()
+    n_slab = len(slab)
+    pos = combined.get_positions().copy()
+    pos[:n_slab, 2] -= 3.0
+    combined.set_positions(pos)
+    ok, reason = check_desorption(
+        combined, slab, binding_threshold=4.0, material_type="slab"
+    )
+    assert not ok, f"shifted substrate should expose desorption, got: {reason}"
+    assert "too far" in reason
 
 
 def test_desorption_detects_liftoff_without_wrapping_through_vacuum():
@@ -1102,7 +1120,7 @@ def test_filter_pipeline_catches_rearranged():
 
 
 def test_filter_pipeline_catches_atom_loss():
-    """A molecule that lost an H must be filtered."""
+    """A molecule that lost an H is a slab-prefix contract violation."""
     slab = make_slab(n_layers=1)
     good = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
 
@@ -1123,15 +1141,14 @@ def test_filter_pipeline_catches_atom_loss():
         _sr(truncated, -2.0, 1),
     ]
     config = AdsorptionConfig(connectivity_multiplier=1.3)
-    filtered = filter_results(
-        results,
-        slab=slab,
-        surface_symbols=["Ru"],
-        reference_smiles="O",
-        config=config,
-    )
-    assert len(filtered) == 1
-    assert filtered[0].placement_id == 0
+    with pytest.raises(ValueError, match="prefix contract"):
+        filter_results(
+            results,
+            slab=slab,
+            surface_symbols=["Ru"],
+            reference_smiles="O",
+            config=config,
+        )
 
 
 def test_filter_pipeline_empty_input():
