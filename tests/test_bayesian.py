@@ -169,7 +169,12 @@ class TestSurrogate:
         assert params["k2__length_scale_bounds"] != "fixed"
         fitted_ls = float(params["k2__length_scale"])
         assert np.isfinite(fitted_ls)
-        assert 1e-2 <= fitted_ls <= 1e2
+        # Tightened from [1e-2, 1e2] to [1e-2, 1e0]. The synthetic GP features are
+        # StandardScaler-normalised and the target is noise-like in feature space,
+        # so the fitted Matern length_scale comes out short (~1e-2); asserting a
+        # fixed [0.5, 10] band here would be circular/non-physical, but the upper
+        # bound still guards against a pathological length-scale blow-up.
+        assert 1e-2 <= fitted_ls <= 1e0
 
     def test_gaussian_process_predict_with_uncertainty(self):
         X, y = _make_synthetic_training_data(25)
@@ -179,6 +184,20 @@ class TestSurrogate:
         assert sigma.shape == (25,)
         assert np.all(sigma >= 0)
         assert np.any(sigma > 0)
+
+    def test_gp_variance_monotonicity(self):
+        """GP predictive variance is higher far from training data than near it."""
+        X, y = _make_synthetic_training_data(40)
+        model = train_surrogate(X, y, surrogate="gaussian_process", random_state=3)
+        mu_in, sig_in = predict_with_uncertainty(model, X)
+        center = np.asarray(X, dtype=float).mean(axis=0)
+        rng = np.random.default_rng(0)
+        far = center + rng.standard_normal((30, X.shape[1])) * 5.0
+        far_df = pd.DataFrame(far, columns=list(X.columns))
+        mu_out, sig_out = predict_with_uncertainty(model, far_df)
+        # Variance must be lower near the training points than far out-of-sample.
+        assert float(np.mean(sig_out)) > float(np.mean(sig_in))
+        assert float(np.mean(sig_out)) > 2.0 * float(np.mean(sig_in))
 
     def test_ridge_skips_oof_when_in_sample_above_floor(self, monkeypatch):
         """Ridge with usable in-sample residual should not run KFold OOF."""

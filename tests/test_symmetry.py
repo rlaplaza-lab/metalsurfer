@@ -377,6 +377,26 @@ def test_fcc111_pt_slab_symmetry_reduces_sites_and_verifies_orbits():
     _assert_orbit_pairwise_symops(an, raw, planar=True)
 
 
+def test_fcc111_pt_2x2_top_atop_single_orbit():
+    """fcc111(2×2) top-layer atop sites collapse to exactly one orbit of size 4.
+
+    A (2×2) surface has four top-layer atoms, all symmetry-equivalent under the
+    slab's point group, so symmetry reduction must yield a single atop orbit with
+    ``symmetry_multiplicity == 4`` (the N² degeneracy of the 2×2 top layer).
+    """
+    slab = create_slab_from_atoms(
+        fcc111("Pt", size=(2, 2, 3), vacuum=7.0, orthogonal=True)
+    ).atoms
+    raw = get_unified_sites(slab, material_type="slab")
+    sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15)
+
+    atop_orbits = [s for s in sym if s.site_type == "atop"]
+    assert len(atop_orbits) == 1
+    assert atop_orbits[0].symmetry_multiplicity == 4
+    # The reduced multiplicity budget still accounts for every raw site.
+    assert sum((s.symmetry_multiplicity or 0) for s in sym) == len(raw)
+
+
 def test_make_slab_orbit_soundness():
     """Synthetic FCC-like slab: pairwise orbit property."""
     slab = make_slab(nx=2, ny=2)

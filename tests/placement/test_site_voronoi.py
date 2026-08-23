@@ -3,6 +3,7 @@
 import logging
 
 import numpy as np
+import pytest
 from ase.build import fcc111
 from scipy.spatial import KDTree, Voronoi
 
@@ -18,6 +19,7 @@ from metalsurfer.placement.site_coords import (
     _cart_to_frac,
     _deduplicate_points,
     _wrap_cartesian,
+    top_layer_mask_by_normal,
 )
 from metalsurfer.placement.site_voronoi import (
     _classify_voronoi_site_from_neighbors,
@@ -451,3 +453,75 @@ def test_porous_classification_uses_periodic_neighbours_near_cell_face():
         )
         assert site.site_type == expected_type
         assert tuple(site.slab_indices) == expected_idx
+
+
+def _primitive_in_plane_vectors(pts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Two shortest independent in-plane lattice vectors spanning *pts*."""
+    p0 = pts[0]
+    diffs = [p - p0 for p in pts[1:]]
+    cands: list[np.ndarray] = []
+    for d in diffs:
+        cands.append(np.asarray(d, dtype=float))
+        cands.append(-np.asarray(d, dtype=float))
+    cands.sort(key=lambda v: float(np.linalg.norm(v)))
+    v1 = cands[0]
+    for v in cands[1:]:
+        # 2D cross product (avoid NumPy 2.x 2-vector deprecation).
+        if abs(v1[0] * v[1] - v1[1] * v[0]) > 1e-6:
+            v2 = v
+            break
+    else:
+        raise RuntimeError("could not find two independent in-plane lattice vectors")
+    return v1, v2
+
+
+def _polygon_area(verts: np.ndarray) -> float:
+    """Shoelace area of a closed 2D polygon (rows = vertices)."""
+    return 0.5 * abs(
+        np.dot(verts[:, 0], np.roll(verts[:, 1], -1))
+        - np.dot(verts[:, 1], np.roll(verts[:, 0], -1))
+    )
+
+
+def test_voronoi_area_conservation_fcc111():
+    """Projected fcc111(2×2) top-layer Voronoi cells tile one surface unit cell.
+
+    The flat top layer is a 2D Bravais lattice. Replicating it and summing the
+    Voronoi cell areas of the interior lattice points must reproduce the cell's
+    in-plane cross-sectional area: a tessellation partitions space, so the
+    central unit cell's worth of Voronoi polygons conserves the surface area.
+    """
+    slab = fcc111("Pt", (2, 2, 3), vacuum=10.0)
+    positions = np.asarray(slab.get_positions(), dtype=float)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    top_mask = top_layer_mask_by_normal(positions, cell, 0.5)
+    top_xy = positions[top_mask][:, :2]
+    n_top = len(top_xy)
+
+    # Primitive in-plane lattice vectors derived from the top-layer point set.
+    v1, v2 = _primitive_in_plane_vectors(top_xy)
+
+    # Replicate broadly so the central (0, 0)-shift copies are interior points
+    # with fully bounded Voronoi cells.
+    R = 5
+    shifts = np.array(
+        [[i, j] for i in range(-R, R + 1) for j in range(-R, R + 1)],
+        dtype=float,
+    )
+    basis = np.stack([v1, v2])
+    all_pts = (top_xy[:, None, :] + (shifts @ basis)[None, :, :]).reshape(-1, 2)
+    vor = Voronoi(all_pts)
+
+    central = R * (2 * R + 1) + R
+    cell_area = abs(float(np.linalg.det(cell[:2, :2])))
+
+    area_sum = 0.0
+    bounded = 0
+    for io in range(n_top):
+        gi = io * len(shifts) + central
+        region = vor.regions[vor.point_region[gi]]
+        assert region and -1 not in region, "interior Voronoi cell must be bounded"
+        area_sum += _polygon_area(vor.vertices[region])
+        bounded += 1
+    assert bounded == n_top
+    assert area_sum == pytest.approx(cell_area, abs=1e-6)

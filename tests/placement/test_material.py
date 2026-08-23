@@ -117,7 +117,10 @@ def test_slab_placements_are_above_surface_reference():
             adsorbate, slab, material_type="slab"
         )
         assert ok, reason
-        assert dist <= 4.0  # upper only; lower already gated by assert ok
+        # Lower bound made explicit: the covalent-radius gate inside
+        # check_initial_placement_distance already enforces max(min_distance,
+        # covalent_sum * min_contact_ratio), so 1.0 Å is a visible floor here.
+        assert 1.0 <= dist <= 4.0
 
 
 @pytest.mark.parametrize(
@@ -761,7 +764,8 @@ def test_distance_recovery_rescues_too_close_placement():
         adsorbate_ok, slab, material_type="slab"
     )
     assert gate_ok, (min_d, gate_reason)
-    assert float(min_d) <= 4.0  # upper only; lower already gated
+    # Lower bound made explicit, mirroring the covalent-radius gate above.
+    assert 1.0 <= float(min_d) <= 4.0
 
 
 def test_distance_recovery_height_only_when_xy_disabled():
@@ -817,4 +821,5 @@ def test_distance_recovery_height_only_when_xy_disabled():
         adsorbate_ok, slab, material_type="slab"
     )
     assert gate_ok, (min_d, gate_reason)
-    assert float(min_d) <= 4.0  # upper only; lower already gated
+    # Lower bound made explicit, mirroring the covalent-radius gate above.
+    assert 1.0 <= float(min_d) <= 4.0

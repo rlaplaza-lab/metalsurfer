@@ -42,9 +42,16 @@ class TestCreateConformers:
             oh1 = float(np.linalg.norm(pos[h_idxs[0]] - pos[o_idx]))
             oh2 = float(np.linalg.norm(pos[h_idxs[1]] - pos[o_idx]))
             hh = float(np.linalg.norm(pos[h_idxs[1]] - pos[h_idxs[0]]))
-            assert 0.85 <= oh1 <= 1.15, f"O–H1={oh1:.3f}"
-            assert 0.85 <= oh2 <= 1.15, f"O–H2={oh2:.3f}"
+            # Tightened physical water geometry windows.
+            assert 0.95 <= oh1 <= 0.98, f"O–H1={oh1:.3f}"
+            assert 0.95 <= oh2 <= 0.98, f"O–H2={oh2:.3f}"
             assert 1.20 <= hh <= 1.80, f"H–H={hh:.3f}"
+            # H–O–H angle from the bond-vector dot product.
+            b1 = pos[h_idxs[0]] - pos[o_idx]
+            b2 = pos[h_idxs[1]] - pos[o_idx]
+            cosang = float(np.dot(b1, b2) / (np.linalg.norm(b1) * np.linalg.norm(b2)))
+            angle = np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0)))
+            assert 102.0 <= angle <= 107.0, f"H–O–H angle={angle:.2f}°"
             # Cell/PBC always set (even without calculator / ts_model).
             assert np.allclose(c.cell.lengths(), [config.vacuum_box_size] * 3)
             assert list(c.get_pbc()) == [False, False, False]
@@ -81,6 +88,34 @@ class TestCreateConformers:
             ]
             assert any(1.4 <= d <= 1.7 for d in cc), cc
             assert any(1.2 <= d <= 1.6 for d in co), co
+
+    def test_ethanol_conformer_geometry_windows(self):
+        """Tightened C–C / C–O bond and C–C–O angle windows for ethanol."""
+        config = AdsorptionConfig(num_conformers=5, seed=42)
+        result = create_conformers_from_smiles("CCO", config=config)
+        assert result is not None
+        conformers, energies = result
+        for c in conformers:
+            syms = c.get_chemical_symbols()
+            pos = c.get_positions()
+            cis = [i for i, s in enumerate(syms) if s == "C"]
+            oi = syms.index("O")
+            c0, c1 = cis[0], cis[1]
+            cc = float(np.linalg.norm(pos[c0] - pos[c1]))
+            co = float(np.linalg.norm(pos[c1] - pos[oi]))
+            # Tightened physical windows.
+            assert 1.50 <= cc <= 1.56, f"C–C={cc:.3f}"
+            assert 1.40 <= co <= 1.45, f"C–O={co:.3f}"
+            b_c = pos[c0] - pos[c1]
+            b_o = pos[oi] - pos[c1]
+            cosang = float(
+                np.dot(b_c, b_o) / (np.linalg.norm(b_c) * np.linalg.norm(b_o))
+            )
+            cco = np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0)))
+            assert 107.0 <= cco <= 112.0, f"C–C–O angle={cco:.2f}°"
+        # Trans/gauche rotamer energy ordering is intentionally NOT asserted:
+        # create_conformers_from_smiles returns constant (zero) energies here,
+        # not a real force-field ranking, so any ordering would be meaningless.
 
     def test_invalid_smiles_returns_none(self):
         config = AdsorptionConfig(num_conformers=3, seed=42)

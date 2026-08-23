@@ -66,6 +66,10 @@ class TestSlabZAlignment:
         c_len = float(np.linalg.norm(aligned.get_cell()[2]))
         assert z_min == pytest.approx(0.0)
         assert c_len >= max(18.0, z_max + DEFAULT_SLAB_TOP_VACUUM_ANG)
+        # Explicit clear-vacuum gap: at least 12 Å of vacuum above the topmost
+        # atom (DEFAULT_SLAB_TOP_VACUUM_ANG is already 15 Å, so this is a
+        # defensive bound, not a behavioural change).
+        assert c_len - z_max >= 12.0
 
     def test_coerce_slab_container_is_pure_wrap(self):
         centered = fcc111("Al", size=(2, 2, 2), vacuum=7.0)

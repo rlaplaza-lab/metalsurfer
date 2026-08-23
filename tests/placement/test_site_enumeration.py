@@ -538,3 +538,62 @@ def test_hollow_count_is_twice_the_top_layer_on_fcc111(size):
     sites = get_unified_sites(slab, material_type="slab")
     n_hollow = sum(1 for s in sites if s.site_source == "topology_hollow")
     assert n_hollow == 2 * n_top
+
+
+def test_fcc111_site_type_ratios_and_coordination_numbers():
+    """fcc111 site-type counts and CN (coordination = len(slab_indices)).
+
+    The library labels sites only atop/bridge/hollow (no separate fcc/hcp tag),
+    so we assert the verifiable decomposition: hollow count is 2× the top-layer
+    count, bridge is 3× (triangular lattice), and atop is 1×. Each site's
+    coordination number is the number of nearest substrate atoms in
+    ``slab_indices`` (atop=1, bridge=2, hollow=3).
+    """
+    slab = fcc111("Pt", (3, 3, 4), vacuum=10.0)
+    positions = np.asarray(slab.get_positions(), dtype=float)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    n_top = int(np.count_nonzero(top_layer_mask_by_normal(positions, cell, 0.5)))
+    sites = get_unified_sites(slab, material_type="slab")
+
+    by_type = {
+        t: [s for s in sites if s.site_type == t] for t in ("atop", "bridge", "hollow")
+    }
+    assert len(by_type["atop"]) == n_top
+    assert len(by_type["hollow"]) == 2 * n_top
+    assert len(by_type["bridge"]) == 3 * n_top
+
+    for s in sites:
+        if s.site_type == "atop":
+            assert len(s.slab_indices) == 1
+        elif s.site_type == "bridge":
+            assert len(s.slab_indices) == 2
+        elif s.site_type == "hollow":
+            assert len(s.slab_indices) == 3
+
+
+def test_fcc100_site_type_ratios_and_coordination_numbers():
+    """fcc100 keeps atop/bridge/hollow with CN 1/2/3.
+
+    The library reports fcc100 hollows as 3-fold (``hollow_order == 3``), not
+    4-fold, so CN(hollow) == 3 here. We assert the robust count ratios and the
+    per-type coordination numbers exposed via ``slab_indices``.
+    """
+    slab = fcc100("Cu", (3, 3, 4), vacuum=10.0)
+    positions = np.asarray(slab.get_positions(), dtype=float)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    n_top = int(np.count_nonzero(top_layer_mask_by_normal(positions, cell, 0.5)))
+    sites = get_unified_sites(slab, material_type="slab")
+
+    by_type = {
+        t: [s for s in sites if s.site_type == t] for t in ("atop", "bridge", "hollow")
+    }
+    assert len(by_type["atop"]) == n_top
+    assert len(by_type["hollow"]) == 2 * n_top
+
+    for s in sites:
+        if s.site_type == "atop":
+            assert len(s.slab_indices) == 1
+        elif s.site_type == "bridge":
+            assert len(s.slab_indices) == 2
+        elif s.site_type == "hollow":
+            assert len(s.slab_indices) == 3

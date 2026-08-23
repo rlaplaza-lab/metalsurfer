@@ -586,6 +586,43 @@ class TestFeatureExtraction:
         r2.descriptor.z_fraction = 0.9
         assert extract_features(r1) == extract_features(r2)
 
+    @pytest.mark.xfail(
+        strict=False,
+        reason=(
+            "extract_features includes the absolute Cartesian coordinates "
+            "x/x_abs and y/y_abs, so it is NOT invariant under a 2D lattice "
+            "translation or an SO(2) surface rotation of the pose. This is a "
+            "missing pose-relative capability (TODO/bug report: derive features "
+            "from pose-relative descriptors only, not absolute in-plane x/y)."
+        ),
+    )
+    def test_feature_translation_rotation_invariance(self):
+        """Features must be unchanged by a 2D translation or SO(2) rotation.
+
+        A physically pose-relative feature vector should depend only on the
+        placement's relationship to the surface (height, orientation, site type),
+        not on the absolute in-plane Cartesian position.
+        """
+        from metalsurfer.ml.features import extract_features
+
+        r0 = make_placement_record()
+        f0 = extract_features(r0)
+
+        # 2D lattice translation of the adsorbate.
+        r1 = make_placement_record()
+        r1.descriptor.x_abs += 2.0
+        r1.descriptor.y_abs += 1.0
+        f1 = extract_features(r1)
+        assert f1 == f0
+
+        # SO(2) rotation about the surface normal: rotate the in-plane position.
+        r2 = make_placement_record()
+        x, y = float(r0.descriptor.x_abs), float(r0.descriptor.y_abs)
+        r2.descriptor.x_abs = -y
+        r2.descriptor.y_abs = x
+        f2 = extract_features(r2)
+        assert f2 == f0
+
     def test_extract_from_dataset(self):
         records = make_random_placement_records(20, variant="ml")
         with tempfile.TemporaryDirectory() as tmpdir:

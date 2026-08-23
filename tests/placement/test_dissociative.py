@@ -11,6 +11,7 @@ from metalsurfer.placement import (
     check_initial_placement_distance,
     enumerate_placement_specs,
     generate_placement_from_spec_with_reason,
+    get_hollow_sites_for_adatoms,
     get_unified_sites,
 )
 from metalsurfer.placement.dissociative import (
@@ -76,13 +77,27 @@ def test_hollow_site_pairs_found_for_slab():
         f"4×4 FCC-like slab should yield many hollow-site pairs, got {len(pairs)}"
     )
     cell = np.asarray(slab.get_cell(), dtype=float)
+    # The dissociative pairs connect adjacent hollow sites, so their separation
+    # should be comparable to the hollow-site spacing of the surface (the
+    # physically relevant length scale). The slab's flat top layer is a periodic
+    # lattice, so we derive this spacing from the slab's own hollow sites via a
+    # KDTree rather than hard-coding a constant.
+    hollows = get_hollow_sites_for_adatoms(slab, material_type="slab")
+    assert hollows, "slab must expose hollow sites for the NN reference"
+    hpos = np.array([h.xyz for h in hollows], dtype=float)
+    h_d, _ = KDTree(hpos).query(hpos, k=2)
+    d_NN = float(np.median(h_d[:, 1]))
     for p in pairs:
         assert len(p.xyz1) == 3
         assert len(p.xyz2) == 3
         _, dists = find_mic(
             (np.asarray(p.xyz1) - np.asarray(p.xyz2)).reshape(1, 3), cell
         )
-        assert float(dists[0]) >= 0.0
+        sep = float(dists[0])
+        assert 0.5 * d_NN <= sep <= 1.5 * d_NN, (
+            f"hollow-pair separation {sep:.3f} Å out of physical band "
+            f"[0.5, 1.5]×d_NN={d_NN:.3f} Å"
+        )
 
 
 def test_hollow_site_pairs_include_pbc_adjacent_on_small_cell():
@@ -223,7 +238,7 @@ def test_dissociative_placement_supported_for_nanoparticle():
     )
     pair = pairs[descriptor.site_index % len(pairs)]
     pair_sep = float(np.linalg.norm(np.asarray(pair.xyz1) - np.asarray(pair.xyz2)))
-    assert hh == pytest.approx(pair_sep, abs=0.1), (
+    assert hh == pytest.approx(pair_sep, abs=1e-5), (
         f"H–H separation {hh:.3f} should track pair spacing {pair_sep:.3f}"
     )
     assert hh > 1.0, "Dissociative placement should separate H atoms"
@@ -273,7 +288,7 @@ def test_dissociative_wrap_pair_cartesian_separation_matches_mic():
         placed, descriptor = result
         pos = placed.get_positions()
         cart_hh = float(np.linalg.norm(pos[1] - pos[0]))
-        assert cart_hh == pytest.approx(mic_sep, abs=0.1), (
+        assert cart_hh == pytest.approx(mic_sep, abs=1e-5), (
             f"placed H–H Cartesian {cart_hh:.3f} should match MIC pair {mic_sep:.3f}, "
             "not the wrapped in-cell gap"
         )
@@ -310,7 +325,7 @@ def test_dissociative_placement_on_slab_separates_and_clears_surface():
         (np.asarray(pair.xyz1) - np.asarray(pair.xyz2)).reshape(1, 3), cell
     )
     pair_sep = float(pair_dists[0])
-    assert hh == pytest.approx(pair_sep, abs=0.1), (
+    assert hh == pytest.approx(pair_sep, abs=1e-5), (
         f"H–H separation {hh:.3f} should track hollow-pair spacing {pair_sep:.3f}"
     )
     assert hh > 1.0

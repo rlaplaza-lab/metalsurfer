@@ -975,6 +975,26 @@ class TestSetupSingleModel:
         assert forces.shape == (len(atoms), 3)
         assert np.all(np.isfinite(forces))
 
+        # The single point is not force-minimised, so we use generous (but
+        # non-trivial) tolerances. Total force on a periodic system must vanish
+        # (momentum conservation: internal forces sum to zero).
+        assert np.linalg.norm(forces.sum(axis=0)) < 1e-2
+
+        # Rotational covariance: forces transform as vectors under an SO(3)
+        # rotation of the structure (positions and cell rotated by R). The real
+        # UMA model does not expose stress for this system, so the stress-tensor
+        # symmetry check from the plan is intentionally omitted here.
+        from scipy.spatial.transform import Rotation as _Rot
+
+        R = _Rot.from_euler("z", 30.0, degrees=True).as_matrix()
+        rotated = atoms.copy()
+        rotated.set_positions(rotated.get_positions() @ R.T)
+        cell = np.asarray(rotated.get_cell(), dtype=float)
+        rotated.set_cell(cell @ R.T)
+        rotated.calc = calculator
+        forces_rot = rotated.get_forces()
+        assert np.allclose(forces_rot, forces @ R.T, atol=1e-2)
+
     def test_optimize_isolated_sequentially_skips_autobatcher(self):
         """With optimize_isolated_sequentially=True, _get_inflight_autobatcher is not called."""
         calculator, ts_model = setup_single_model("uma-s-1p1", "cpu")
