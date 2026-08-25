@@ -27,6 +27,7 @@ def main() -> int:
     config = AdsorptionConfig(
         material_type="slab",
         model_name="uma-s-1p1",
+        task_name="oc20",
         seed=42,
         num_conformers=10,
         num_placements=250,

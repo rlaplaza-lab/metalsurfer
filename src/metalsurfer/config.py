@@ -602,6 +602,10 @@ class AdsorptionConfig:
     """
 
     model_name: str = "uma-s-1p2"
+    # UMA/FairChem task head for energy/force evaluation. ``"oc25"`` targets
+    # (electro)catalysis and requires ``*-1p2`` checkpoints; use ``"oc20"``
+    # with ``uma-s-1p1`` / ``uma-m-1p1``.
+    task_name: str = "oc25"
     num_conformers: int = 10
     num_placements: int | None = None
     device: str = "cuda"
@@ -783,6 +787,9 @@ class AdsorptionConfig:
 
         if not self.model_name:
             raise ValueError("model_name must be a non-empty string")
+
+        if not isinstance(self.task_name, str) or not self.task_name:
+            raise ValueError("task_name must be a non-empty string")
 
         if not isinstance(self.skip_topology_check, bool):
             raise ValueError(

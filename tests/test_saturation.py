@@ -569,6 +569,7 @@ def test_run_saturation_screening_h2_ni111_real_gpu(workdir):
     """
     config = AdsorptionConfig(
         model_name="uma-s-1p1",
+        task_name="oc20",
         seed=42,
         num_conformers=1,
         num_placements=6,
@@ -1243,6 +1244,7 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu(workdir):
     """Smoke-level GPU integration test for BO-enabled competing saturation."""
     config = AdsorptionConfig(
         model_name="uma-s-1p1",
+        task_name="oc20",
         seed=42,
         num_conformers=1,
         num_placements=2,

@@ -86,8 +86,6 @@ def test_extract_features_depends_only_on_absolute_geometry():
     record.descriptor.z_offset = 99.0
     features = extract_features(record)
     assert set(features.keys()) == {
-        "x",
-        "y",
         "z",
         "conformer_index",
         "quat_w",
@@ -95,9 +93,11 @@ def test_extract_features_depends_only_on_absolute_geometry():
         "quat_y",
         "quat_z",
     }
-    assert features["x"] == pytest.approx(1.25)
-    assert features["y"] == pytest.approx(2.5)
+    # Height uses the absolute surface-frame coordinate; in-plane position is
+    # deliberately excluded so features stay translation/rotation invariant.
     assert features["z"] == pytest.approx(7.75)
+    assert "x" not in features
+    assert "y" not in features
 
 
 def test_site_context_cache_key_includes_config_and_symmetry():

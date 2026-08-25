@@ -85,8 +85,14 @@ class TestComputationContext:
         config = AdsorptionConfig(model_name="test-model", fmax=0.03, seed=123)
         ctx = ComputationContext.from_config(config)
         assert ctx.model_name == "test-model"
+        assert ctx.task_name == "oc25"
         assert ctx.fmax == 0.03
         assert ctx.seed == 123
+
+        custom = ComputationContext.from_config(
+            AdsorptionConfig(model_name="test-model", task_name="oc20")
+        )
+        assert custom.task_name == "oc20"
 
     def test_settings_hash_deterministic(self):
         ctx1 = ComputationContext()
@@ -96,6 +102,11 @@ class TestComputationContext:
     def test_settings_hash_changes(self):
         ctx1 = ComputationContext(model_name="a")
         ctx2 = ComputationContext(model_name="b")
+        assert ctx1.settings_hash() != ctx2.settings_hash()
+
+    def test_settings_hash_changes_with_task_name(self):
+        ctx1 = ComputationContext(task_name="oc20")
+        ctx2 = ComputationContext(task_name="oc25")
         assert ctx1.settings_hash() != ctx2.settings_hash()
 
     def test_to_dict_roundtrip(self):
@@ -138,6 +149,7 @@ class TestPlacementRecord:
         assert "initial_orientation_type" in flat
         assert "initial_site_type" in flat
         assert "ctx_model_name" in flat
+        assert "ctx_task_name" in flat
         assert "model_name" not in flat
         assert flat["initial_tilt_deg"] == r.descriptor.tilt_deg
 
@@ -204,6 +216,7 @@ class TestPlacementRecord:
         r = make_placement_record(5)
         r.context = ComputationContext(
             model_name="m",
+            task_name="oc20",
             fmax=0.02,
             stage1_steps=12,
             stage2_steps=34,
@@ -220,6 +233,7 @@ class TestPlacementRecord:
         assert r2.context.placement_z_range == (1.8, 2.9)
         assert r2.context.placement_z_scale_by_covalent_radius is False
         assert r2.context.model_name == "m"
+        assert r2.context.task_name == "oc20"
 
     def test_quaternion_is_canonicalized(self):
         base = make_placement_record(0)
@@ -320,6 +334,35 @@ class TestPlacementRecord:
 
 
 class TestDatasetLogger:
+    def test_flush_empty_is_noop_returning_csv_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ds = DatasetLogger(tmpdir)
+            path = ds.flush()  # no records: must not create any file
+            assert path == ds.csv_path
+            assert not os.path.exists(path)
+
+    def test_add_result_and_add_results_log_screening_results(self):
+        from tests.conftest import make_screening_result
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ds = DatasetLogger(tmpdir, surface_id="cu111")
+            record = ds.add_result(
+                make_screening_result(molecule="water", placement_id=7), smiles="O"
+            )
+            assert isinstance(record, PlacementRecord)
+            assert record.record_hash()
+
+            results = [make_screening_result(placement_id=i) for i in range(4)]
+            assert ds.add_results(results, smiles="O", surface_id="s1") == 4
+
+            assert ds.flush() == ds.csv_path
+            df = pd.read_csv(ds.csv_path)
+            assert len(df) == 5
+            # Per-call surface_id overrides flow into the stored rows.
+            surface_ids = set(df["surface_id"])
+            assert surface_ids == {"cu111", "s1"}
+            assert (df["smiles"] == "O").all()
+
     def test_flush_metadata_counts_duplicate_csv_rows(self):
         """total_records should count CSV rows even when hashes are duplicated on disk."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -513,7 +556,9 @@ class TestFeatureExtraction:
     def test_feature_count(self):
         r = make_placement_record()
         features = extract_features(r)
-        assert len(features) == 8
+        assert len(features) == 6
+        assert "x" not in features
+        assert "y" not in features
         assert "height_above_surface" not in features
         assert "xy_radius" not in features
         assert "shape_round" not in features
@@ -586,22 +631,13 @@ class TestFeatureExtraction:
         r2.descriptor.z_fraction = 0.9
         assert extract_features(r1) == extract_features(r2)
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "extract_features includes the absolute Cartesian coordinates "
-            "x/x_abs and y/y_abs, so it is NOT invariant under a 2D lattice "
-            "translation or an SO(2) surface rotation of the pose. This is a "
-            "missing pose-relative capability (TODO/bug report: derive features "
-            "from pose-relative descriptors only, not absolute in-plane x/y)."
-        ),
-    )
     def test_feature_translation_rotation_invariance(self):
         """Features must be unchanged by a 2D translation or SO(2) rotation.
 
-        A physically pose-relative feature vector should depend only on the
-        placement's relationship to the surface (height, orientation, site type),
-        not on the absolute in-plane Cartesian position.
+        A physically pose-relative feature vector depends only on the
+        placement's relationship to the surface (height, orientation), not on
+        the absolute in-plane Cartesian position, which is arbitrary under PBC.
+        In-plane x/y are therefore excluded from the feature set.
         """
         from metalsurfer.ml.features import extract_features
 
@@ -633,8 +669,10 @@ class TestFeatureExtraction:
             df = load_dataset(tmpdir)
             X, y = extract_features_from_dataset(df)
             assert X.shape[0] == 20
-            assert X.shape[1] == 8
+            assert X.shape[1] == 6
             assert len(y) == 20
+            assert "x" not in X.columns
+            assert "y" not in X.columns
             assert "face_flip" not in X.columns
             assert "z_fraction" not in X.columns
 
@@ -647,9 +685,11 @@ class TestFeatureExtraction:
         r.descriptor.y_abs = -2.5
         r.descriptor.z_abs = 3.75
         features = extract_features(r)
-        assert features["x"] == 1.25
-        assert features["y"] == -2.5
+        # Height uses the absolute surface-frame coordinate, not the fractional
+        # offset; in-plane position is not a feature at all (pose-relative).
         assert features["z"] == 3.75
+        assert "x" not in features
+        assert "y" not in features
 
     def test_extract_from_dataset_requires_absolute_geometry_columns(self):
         records = make_random_placement_records(4, variant="ml")
@@ -870,5 +910,5 @@ class TestAcquisitionMinimization:
 
 
 def test_from_flat_dict_rejects_corrupt_payload():
-    with pytest.raises((KeyError, TypeError, ValueError)):
+    with pytest.raises(KeyError, match="placement_id"):
         PlacementRecord.from_flat_dict({"schema_version": "not-a-real-record"})

@@ -581,6 +581,30 @@ def test_empty_model_name_rejected():
 
 
 # ---------------------------------------------------------------------------
+# task_name
+# ---------------------------------------------------------------------------
+
+
+def test_task_name_defaults_to_oc25():
+    assert AdsorptionConfig().task_name == "oc25"
+
+
+def test_task_name_accepts_oc20():
+    config = AdsorptionConfig(task_name="oc20")
+    assert config.task_name == "oc20"
+
+
+def test_empty_task_name_rejected():
+    with pytest.raises(ValueError, match="task_name.*non-empty"):
+        AdsorptionConfig(task_name="")
+
+
+def test_non_string_task_name_rejected():
+    with pytest.raises(ValueError, match="task_name.*non-empty"):
+        AdsorptionConfig(task_name=None)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
 # min_contact_ratio, max_initial_distance
 # ---------------------------------------------------------------------------
 
@@ -683,12 +707,11 @@ def test_non_positive_min_pbc_image_separation_rejected(separation):
 
 
 def test_error_message_includes_field_and_value():
-    try:
+    with pytest.raises(ValueError) as excinfo:
         AdsorptionConfig(fmax=-0.5)
-    except ValueError as e:
-        msg = str(e)
-        assert "fmax" in msg
-        assert "-0.5" in msg
+    msg = str(excinfo.value)
+    assert "fmax" in msg
+    assert "-0.5" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -942,3 +965,16 @@ def test_negative_seed_rejected():
 def test_bool_field_rejects_non_bool_string():
     with pytest.raises(ValueError, match="skip_topology_check must be a bool"):
         AdsorptionConfig(skip_topology_check="yes")
+
+
+def test_resolve_adsorption_config_passthrough_and_default():
+    from metalsurfer.config import resolve_adsorption_config
+
+    # None -> a fresh default config.
+    resolved = resolve_adsorption_config(None)
+    assert isinstance(resolved, AdsorptionConfig)
+    assert resolved == AdsorptionConfig()
+
+    # A provided config is returned as the same object (no copy).
+    custom = AdsorptionConfig(material_type="porous", num_conformers=2)
+    assert resolve_adsorption_config(custom) is custom

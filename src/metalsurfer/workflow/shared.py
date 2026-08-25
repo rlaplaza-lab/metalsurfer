@@ -811,7 +811,9 @@ def _bootstrap_screening_run(
     from .reference import calculate_reference_energies
 
     slab_container = accept_substrate_for_api(slab, config=config)
-    calculator, ts_model = setup_single_model(config.model_name, config.device)
+    calculator, ts_model = setup_single_model(
+        config.model_name, config.device, task_name=config.task_name
+    )
     molecule_names = [name for _, name in molecule_pairs]
     smiles_list = [smiles for smiles, _ in molecule_pairs]
     t_ref_start = time.perf_counter()

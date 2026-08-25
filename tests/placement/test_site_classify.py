@@ -245,6 +245,8 @@ def test_symmetry_reduction_of_a_4x4_slab_is_fast():
     elapsed = time.perf_counter() - start
 
     assert sorted(o.symmetry_multiplicity for o in orbits) == [16, 32, 48]
+    # Baseline ≈0.2 s locally; 5 s leaves ~25x headroom for loaded CI while
+    # still failing on the ~21 s pre-vectorization behaviour this guards against.
     assert elapsed < 5.0, f"analyze_site_symmetry took {elapsed:.2f}s"
 
 
@@ -405,7 +407,8 @@ def test_compute_local_normals_batch_points_outward_from_surface_centroid():
     )
     normal = normals[0]
     assert np.isclose(np.linalg.norm(normal), 1.0, atol=1e-12)
-    assert normal[2] > 0.9
+    # Vertex sits above the centre of a flat square: normal is exactly +z.
+    assert float(normal[2]) > 1.0 - 1e-9
 
 
 def test_symmetry_aware_sites_are_consistent_with_core_sites_on_slab():

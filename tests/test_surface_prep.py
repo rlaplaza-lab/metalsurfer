@@ -20,8 +20,9 @@ def _patch_prepare_substrate(
     captured: dict = {}
     fake_calc = object()
 
-    def _fake_setup(model_name, device):
+    def _fake_setup(model_name, device, task_name="oc25"):
         captured["setup"] = (model_name, device)
+        captured["setup_task_name"] = task_name
         return fake_calc, None
 
     monkeypatch.setattr(

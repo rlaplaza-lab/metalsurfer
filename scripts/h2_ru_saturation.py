@@ -21,6 +21,7 @@ def main():
     config = AdsorptionConfig(
         material_type="slab",
         model_name="uma-s-1p1",
+        task_name="oc20",
         seed=42,
         num_conformers=1,  # H2 has only one geometry
         num_placements=250,

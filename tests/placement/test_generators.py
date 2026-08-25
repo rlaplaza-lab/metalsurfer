@@ -74,7 +74,10 @@ def test_enumerate_specs_skips_occupied_site_indices():
         full_slab=full,
     )
     assert specs
-    assert all(int(s.site_index) != blocked for s in specs if int(s.site_index) >= 0)
+    # No spec may target the blocked site (-1 is the "no site" sentinel, which
+    # would also silently bypass the block if emitted here).
+    assert all(int(s.site_index) != blocked for s in specs)
+    assert all(int(s.site_index) >= 0 for s in specs)
 
 
 def test_generate_placements_from_specs_preserves_order(monkeypatch):
@@ -146,11 +149,11 @@ def test_deposit_adatoms_then_generate_placement_from_spec():
         num_placements=8,
         placement_z_range=(2.0, 3.0),
     )
+    pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
     result = create_conformers_from_smiles(
         "O", config=AdsorptionConfig(num_conformers=1)
     )
-    if result is None:
-        pytest.skip("RDKit required")
+    assert result is not None
     conformers, _ = result
 
     specs = enumerate_placement_specs(

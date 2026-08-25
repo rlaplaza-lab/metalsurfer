@@ -66,8 +66,11 @@ def test_no_stale_documented_fields():
     bo = {f"bo.{f.name}" for f in fields(BOConfig)}
     transfer = {f"bo.transfer.{f.name}" for f in fields(BOTransferConfig)}
     known = ads | bo | transfer
-    # Only treat tokens that match known naming patterns as field docs.
-    fieldish = {n for n in documented if n in ads or n.startswith("bo.")}
+    # Any identifier-like token (plain or bo./bo.transfer.-prefixed) preceding a
+    # Type line is meant as a field doc. Matching on shape rather than membership
+    # keeps *removed* plain fields detectable as stale.
+    ident = re.compile(r"^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*$")
+    fieldish = {n for n in documented if ident.match(n)}
     stale = fieldish - known
     assert not stale, f"Stale documented fields: {sorted(stale)}"
 
@@ -78,7 +81,14 @@ def test_documented_defaults_match_simple_scalars():
     from dataclasses import MISSING
 
     text = _CONFIG_RST.read_text(encoding="utf-8").splitlines()
-    ads = {f.name: f for f in fields(AdsorptionConfig)}
+    # Prefixed lookup across all three documented configs.
+    configs_by_name: dict[str, object] = {}
+    for f in fields(AdsorptionConfig):
+        configs_by_name[f.name] = f
+    for f in fields(BOConfig):
+        configs_by_name[f"bo.{f.name}"] = f
+    for f in fields(BOTransferConfig):
+        configs_by_name[f"bo.transfer.{f.name}"] = f
     bad: list[tuple[str, object, list[str]]] = []
     for i, line in enumerate(text):
         if "**Default:**" not in line:
@@ -95,13 +105,13 @@ def test_documented_defaults_match_simple_scalars():
                 for k in range(j - 1, max(-1, j - 6), -1):
                     if text[k].strip():
                         names = re.findall(r"``([^`]+)``", text[k])
-                        if len(names) == 1 and names[0] in ads:
+                        if len(names) == 1 and names[0] in configs_by_name:
                             name = names[0]
                         break
                 break
         if name is None:
             continue
-        field = ads[name]
+        field = configs_by_name[name]
         if field.default is MISSING:
             continue
         val = field.default

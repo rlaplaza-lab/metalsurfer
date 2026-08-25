@@ -68,16 +68,18 @@ def test_run_adsorption_water_on_cu111(tmp_path, monkeypatch):
 
     e_ads = np.array([r.energy_adsorption for r in results])
     assert np.all(np.isfinite(e_ads))
-    assert float(e_ads.min()) < 0.0, (
-        f"Best E_ads should be negative for water on Cu, got {e_ads}"
+    # Bounds tightened against the uma-s-1p2 + oc25 reference run
+    # (observed: E_ads in [-0.39, -0.18], median -0.34).
+    assert float(e_ads.min()) < -0.15, (
+        f"Best E_ads should be clearly binding (<-0.15 eV) for water on Cu, got {e_ads}"
     )
-    assert float(np.median(e_ads)) < 0.05, (
-        f"Median E_ads should be near-binding (<0.05 eV) for water on Cu, "
+    assert float(np.median(e_ads)) < -0.15, (
+        f"Median E_ads should be binding (<-0.15 eV) for water on Cu, "
         f"got {np.median(e_ads):.3f}"
     )
-    assert np.all(e_ads < 0.5), f"E_ads should stay below 0.5 eV, got {e_ads}"
-    assert np.all(e_ads >= -2.5), (
-        f"E_ads should be >= -2.5 eV for water on Cu, got min {e_ads.min():.3f}"
+    assert np.all(e_ads < 0.0), f"All E_ads should be favorable (<0 eV), got {e_ads}"
+    assert np.all(e_ads >= -0.8), (
+        f"E_ads should be >= -0.8 eV for water on Cu, got min {e_ads.min():.3f}"
     )
 
     site_ids = set()

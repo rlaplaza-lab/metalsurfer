@@ -1,4 +1,9 @@
-"""Numeric features from :class:`PlacementRecord` (xyz, quaternion, conformer index) for sklearn."""
+"""Numeric features from :class:`PlacementRecord` (height, quaternion, conformer index) for sklearn.
+
+Features are pose-relative: the absolute in-plane position (``x_abs``/``y_abs``)
+is deliberately excluded because it is arbitrary under periodic boundary
+conditions and under the choice of global origin / surface rotation.
+"""
 
 import logging
 
@@ -12,8 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 FEATURE_NAMES = [
-    "x",
-    "y",
     "z",
     "conformer_index",
     "quat_w",
@@ -54,7 +57,10 @@ def _finite_quaternion(
 def extract_features(record: PlacementRecord) -> dict[str, float]:
     """Extract numeric features from a single PlacementRecord.
 
-    Returns a flat dictionary of feature_name -> value.
+    Returns a flat dictionary of feature_name -> value. The feature vector is
+    pose-relative: it encodes height above the surface (``z``), orientation
+    (unit quaternion), and conformer index, and is invariant under 2D lattice
+    translations and SO(2) rotations about the surface normal.
 
     Parameters
     ----------
@@ -62,8 +68,6 @@ def extract_features(record: PlacementRecord) -> dict[str, float]:
         Placement record to extract features from.
     """
     features: dict[str, float] = {
-        "x": _as_finite_float(record.descriptor.x_abs, "x_abs"),
-        "y": _as_finite_float(record.descriptor.y_abs, "y_abs"),
         "z": _as_finite_float(record.descriptor.z_abs, "z_abs"),
         "conformer_index": _as_finite_float(
             record.descriptor.conformer_index, "conformer_index"
@@ -108,7 +112,7 @@ def extract_features_from_dataset(
         raise ValueError("Dataset is empty; cannot extract training features")
 
     working = df.copy()
-    required_geometry_cols = ("x_abs", "y_abs", "z_abs", "conformer_index")
+    required_geometry_cols = ("z_abs", "conformer_index")
     missing = [col for col in required_geometry_cols if col not in working.columns]
     if missing:
         missing_csv = ", ".join(missing)
@@ -121,13 +125,13 @@ def extract_features_from_dataset(
     if working[list(required_geometry_cols)].isna().any().any():
         raise ValueError(
             "Dataset contains missing/invalid values in strict geometric columns "
-            "(x_abs, y_abs, z_abs, conformer_index)"
+            "(z_abs, conformer_index)"
         )
     geom_values = working[list(required_geometry_cols)].to_numpy(dtype=float)
     if not np.all(np.isfinite(geom_values)):
         raise ValueError(
             "Dataset contains non-finite values in strict geometric columns "
-            "(x_abs, y_abs, z_abs, conformer_index)"
+            "(z_abs, conformer_index)"
         )
     quat_defaults = {
         "quat_w": 1.0,
@@ -166,8 +170,6 @@ def extract_features_from_dataset(
 
     X = pd.DataFrame(
         {
-            "x": working["x_abs"].astype(float),
-            "y": working["y_abs"].astype(float),
             "z": working["z_abs"].astype(float),
             "conformer_index": working["conformer_index"].astype(float),
             "quat_w": quat_values[:, 0].astype(float),

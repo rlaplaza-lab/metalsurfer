@@ -111,7 +111,10 @@ def test_check_desorption_nanoparticle_and_porous():
         use_pbc=True,
         pbc=list(nanoparticle.get_pbc()),
     )
-    assert float(dist_np_near) == pytest.approx(1.29, abs=0.05)
+    # Golden: water COM sits at sites[0].xyz + 1.5*n_hat, so the closest
+    # approach (an H pointing at the cluster) is fully determined by fixture
+    # geometry; deterministic float64 pipeline -> tight tolerance.
+    assert float(dist_np_near) == pytest.approx(1.2898831, abs=1e-6)
 
     water_near = make_water()
     sites = get_unified_sites(porous, material_type="porous")

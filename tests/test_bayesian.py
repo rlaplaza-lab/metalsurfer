@@ -137,6 +137,7 @@ class TestSurrogate:
         [
             (None, {"n_estimators": 10}, False, 30),
             ("ridge", {}, False, 20),
+            ("random_forest", {"n_estimators": 10}, True, 20),
             ("extra_trees", {"n_estimators": 10}, True, 20),
             ("gradient_boost", {}, True, 20),
             ("ensemble", {"n_estimators": 5}, False, 20),
@@ -429,7 +430,7 @@ class TestInitialSampling:
 
 
 class TestFeatureBuilding:
-    def test_build_spec_features_geometry_aware_varies_with_site(self):
+    def test_build_spec_features_geometry_aware_not_constant(self):
         slab = make_slab(nx=2, ny=2, n_layers=3)
         conformers = [make_water()]
         config = AdsorptionConfig(num_conformers=1, num_placements=12)
@@ -447,8 +448,12 @@ class TestFeatureBuilding:
         assert isinstance(X, pd.DataFrame)
         assert X.shape[0] == len(valid_indices)
         assert X.shape[0] > 0
-        # Ensure candidate geometry is not collapsed to a constant placeholder.
-        assert X[["x", "y", "z"]].drop_duplicates().shape[0] > 1
+        # Pose-relative contract: no absolute in-plane coordinates.
+        assert "x" not in X.columns
+        assert "y" not in X.columns
+        # Ensure candidate geometry is not collapsed to a constant placeholder
+        # (height/orientation variation must still reach the surrogate).
+        assert X.drop_duplicates().shape[0] > 1
 
     def test_build_spec_features_fills_materialization_cache(self):
         slab = make_slab(nx=2, ny=2, n_layers=3)
@@ -661,8 +666,11 @@ class TestTransferSmoke:
         X_current = X.iloc[:8].copy()
         y_current = y.iloc[:8].to_numpy()
         # Prior has an extra column and is missing one relative to current.
+        # Drop an orientation component, not the height feature z: the synthetic
+        # target is generated from height, so zero-padding *z* would legitimately
+        # push the prior through the transfer-quality gate.
         X_prev = X.iloc[:10].copy()
-        X_prev = X_prev.drop(columns=[X_prev.columns[0]])
+        X_prev = X_prev.drop(columns=["quat_x"])
         X_prev["extra_prior_feature"] = np.arange(len(X_prev), dtype=float)
 
         # Capture directly on the module logger so the assertion is robust to
@@ -918,7 +926,9 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         stage1_steps=75,
         stage2_steps=200,
     )
-    calculator, ts_model = setup_single_model(config.model_name, config.device)
+    calculator, ts_model = setup_single_model(
+        config.model_name, config.device, task_name=config.task_name
+    )
     ref = calculate_reference_energies(
         slab,
         calculator,
@@ -953,8 +963,15 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         assert np.isfinite(r.distance) and r.distance > 0.5, (
             f"Adsorbate–surface distance should be finite and >0.5 Å, got {r.distance}"
         )
-    assert min(r.energy_adsorption for r in results) < 0.0, (
-        "Best E_ads should be favorable (negative) on this defect smoke"
+    # Sign of the best E_ads is task-head dependent: under the former oc20
+    # hardcode the best placement was negative, while the oc25 head predicts a
+    # mildly endothermic best binding at this tiny placement budget. Reference
+    # run (uma-s-1p2 + oc25): overall_best = +0.118 eV, reproducible across
+    # runs to ~1e-3. Bound at 0.5 eV: tight enough to flag garbage/penalty-
+    # dominated runs (which sit >= 1-2 eV) without pinning one head's sign.
+    assert min(r.energy_adsorption for r in results) < 0.5, (
+        "Best E_ads should stay clearly below the penalty/window ceiling on "
+        "this defect smoke"
     )
     assert any(1.0 <= float(r.distance) <= 4.5 for r in results), (
         "At least one survivor should sit in a typical binding distance window"
@@ -1137,12 +1154,21 @@ def test_transfer_gate_accepts_a_consistent_prior():
 
 def test_bo_rng_seed_decorrelates_by_slab_atom_count():
     """Coverage growth must change the exploration RNG stream (L5)."""
+    from metalsurfer.workflow.bayesian import bo_exploration_rng
+
     seed = 42
-    rng_a = np.random.RandomState(int(seed + 1_000_003 * 36) % (2**31))
-    rng_b = np.random.RandomState(int(seed + 1_000_003 * 39) % (2**31))
+    rng_a = bo_exploration_rng(seed, 36)
+    rng_b = bo_exploration_rng(seed, 39)
     draw_a = rng_a.choice([0, 1, 2, 3, 4], size=2, replace=False).tolist()
     draw_b = rng_b.choice([0, 1, 2, 3, 4], size=2, replace=False).tolist()
     assert draw_a != draw_b
+    # Same atom count must reproduce the same stream (seeded determinism).
+    assert (
+        bo_exploration_rng(seed, 36)
+        .choice([0, 1, 2, 3, 4], size=2, replace=False)
+        .tolist()
+        == draw_a
+    )
 
 
 def test_cumulative_refit_transfer_weight_share_from_weights():

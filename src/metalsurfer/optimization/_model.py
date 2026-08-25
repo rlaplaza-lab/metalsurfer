@@ -60,6 +60,7 @@ def _raise_fairchem_load_error(exc: Exception, model_name: str) -> NoReturn:
 def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
     model_name: str = "uma-s-1p2",
     device: str = "cuda",
+    task_name: str = "oc25",
 ):
     """Create a TorchSim FairChemModel wrapper.
 
@@ -71,6 +72,11 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
         FairChem model name.
     device
         Device string (e.g. "cuda" or "cpu").
+    task_name
+        UMA/FairChem task head used for energy/force evaluation.
+        ``"oc25"`` targets (electro)catalysis and is only available on
+        ``*-1p2`` checkpoints; use ``"oc20"`` with ``uma-s-1p1`` /
+        ``uma-m-1p1`` models.
     """
     if _deps.ts is None:
         raise DependencyMissingError(
@@ -99,7 +105,7 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
     try:
         with torchsim_output_capture():
             model = cast(Any, FairChemModel)(
-                model=model_name, device=dev, task_name="oc20"
+                model=model_name, device=dev, task_name=task_name
             )
     except Exception as exc:
         _raise_fairchem_load_error(exc, model_name)

@@ -338,13 +338,19 @@ def test_placement_specs_deterministic_across_runs(
     assert specs_a != specs_c
 
 
-def test_molecular_ml_features_are_injective():
-    """Distinct molecular placements must yield distinct BO feature vectors."""
+def test_molecular_ml_features_are_pose_relative():
+    """BO features encode height/orientation/conformer, not absolute position.
+
+    Distinct poses (height or orientation) must yield distinct feature vectors,
+    while placements that differ only by an in-plane lattice translation are
+    deliberately collapsed onto the same vector (pose-relative contract).
+    """
     slab = make_slab()
     water = make_water()
     config = AdsorptionConfig(material_type="slab", num_placements=48, seed=0)
     specs = enumerate_placement_specs([water], slab, config, "O", n_desired=48)
     feature_rows: list[tuple[float, ...]] = []
+    x_abs_values: list[float] = []
     for spec in specs:
         generated = generate_placement_from_spec(spec, [water], slab, config)
         if generated is None:
@@ -356,10 +362,21 @@ def test_molecular_ml_features_are_injective():
         )
         feats = extract_features(record)
         assert list(feats.keys()) == FEATURE_NAMES
+        assert "x" not in feats
+        assert "y" not in feats
         assert "fragment_positions" not in feats
         feature_rows.append(tuple(round(feats[name], 10) for name in FEATURE_NAMES))
+        x_abs_values.append(float(descriptor.x_abs))
     assert len(feature_rows) >= 16
-    assert len(set(feature_rows)) == len(feature_rows)
+    assert len(set(feature_rows)) >= 16
+    # Pure in-plane translations must collide: proves no absolute x/y leakage.
+    translation_collisions = sum(
+        1
+        for i in range(len(feature_rows))
+        for j in range(i + 1, len(feature_rows))
+        if feature_rows[i] == feature_rows[j] and x_abs_values[i] != x_abs_values[j]
+    )
+    assert translation_collisions > 0
 
 
 def test_invalid_site_index_reason_distinct_from_no_sites():
@@ -493,6 +510,7 @@ def test_resolve_surface_ref_no_site_nanoparticle_uses_radial_com(caplog):
     com = positions.mean(axis=0)
     expected = float(np.max(np.linalg.norm(positions - com, axis=1)))
     assert ref == pytest.approx(expected)
-    assert ref != pytest.approx(float(np.max(positions[:, 2])))
+    # Local-radius mode must differ clearly from the plain max-z fallback.
+    assert abs(ref - float(np.max(positions[:, 2]))) > 0.5
     assert is_local is False
     assert "without a site" in caplog.text

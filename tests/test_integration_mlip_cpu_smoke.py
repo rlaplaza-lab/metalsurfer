@@ -15,6 +15,7 @@ pytestmark = MLIP_CPU_MARKS
 def test_process_molecule_water_on_small_slab_cpu():
     config = AdsorptionConfig(
         model_name="uma-s-1p1",
+        task_name="oc20",
         material_type="slab",
         seed=42,
         num_conformers=1,
@@ -30,7 +31,9 @@ def test_process_molecule_water_on_small_slab_cpu():
     )
     slab = SlabContainer(make_slab(nx=4, ny=4, n_layers=2))
 
-    calculator, ts_model = setup_single_model(config.model_name, config.device)
+    calculator, ts_model = setup_single_model(
+        config.model_name, config.device, task_name=config.task_name
+    )
     ref = calculate_reference_energies(
         slab,
         calculator,

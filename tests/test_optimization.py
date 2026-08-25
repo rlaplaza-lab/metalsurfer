@@ -685,6 +685,64 @@ def test_setup_torchsim_model_raises_without_torchsim(monkeypatch: pytest.Monkey
         _model.setup_torchsim_model("uma-s-1p2", "cpu")
 
 
+def test_setup_torchsim_model_forwards_task_name(monkeypatch: pytest.MonkeyPatch):
+    """setup_torchsim_model passes task_name through to FairChemModel."""
+    import sys
+    import types
+
+    captured: dict[str, object] = {}
+
+    def _fake_fairchem_model(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    fairchem_mod = types.ModuleType("torch_sim.models.fairchem")
+    fairchem_mod.FairChemModel = _fake_fairchem_model
+
+    device_sentinel = object()
+    torch_stub = MagicMock()
+    torch_stub.device.return_value = device_sentinel
+
+    monkeypatch.setattr(_deps, "ts", object())
+    monkeypatch.setattr(_deps, "torch", torch_stub)
+    monkeypatch.setitem(sys.modules, "torch_sim.models.fairchem", fairchem_mod)
+
+    model = _model.setup_torchsim_model("uma-s-1p1", "cpu", task_name="oc20")
+
+    assert model is not None
+    assert captured["model"] == "uma-s-1p1"
+    assert captured["device"] is device_sentinel
+    assert captured["task_name"] == "oc20"
+
+
+def test_setup_torchsim_model_default_task_name_is_oc25(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """setup_torchsim_model defaults to the oc25 task head."""
+    import sys
+    import types
+
+    captured: dict[str, object] = {}
+
+    def _fake_fairchem_model(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    fairchem_mod = types.ModuleType("torch_sim.models.fairchem")
+    fairchem_mod.FairChemModel = _fake_fairchem_model
+
+    torch_stub = MagicMock()
+    torch_stub.device.return_value = object()
+
+    monkeypatch.setattr(_deps, "ts", object())
+    monkeypatch.setattr(_deps, "torch", torch_stub)
+    monkeypatch.setitem(sys.modules, "torch_sim.models.fairchem", fairchem_mod)
+
+    _model.setup_torchsim_model()
+
+    assert captured["task_name"] == "oc25"
+
+
 def test_optimize_isolated_raises_without_torchsim(monkeypatch: pytest.MonkeyPatch):
     from metalsurfer.exceptions import DependencyMissingError
 
@@ -958,14 +1016,14 @@ class TestSetupSingleModel:
 
     def test_setup_single_model_returns_calculator_and_model(self):
         """setup_single_model returns (calculator, ts_model) tuple."""
-        calculator, ts_model = setup_single_model("uma-s-1p1", "cpu")
+        calculator, ts_model = setup_single_model("uma-s-1p1", "cpu", task_name="oc20")
         assert calculator is not None
         assert ts_model is not None
         assert isinstance(calculator, TorchSimCalculator)
 
     def test_torchsim_calculator_single_point_with_real_model(self):
         """TorchSimCalculator from setup_single_model gives finite energy/forces."""
-        calculator, _ = setup_single_model("uma-s-1p1", "cpu")
+        calculator, _ = setup_single_model("uma-s-1p1", "cpu", task_name="oc20")
         atoms = _make_atoms_with_cell()
         atoms.calc = calculator
 
@@ -997,7 +1055,7 @@ class TestSetupSingleModel:
 
     def test_optimize_isolated_sequentially_skips_autobatcher(self):
         """With optimize_isolated_sequentially=True, _get_inflight_autobatcher is not called."""
-        calculator, ts_model = setup_single_model("uma-s-1p1", "cpu")
+        calculator, ts_model = setup_single_model("uma-s-1p1", "cpu", task_name="oc20")
         config = AdsorptionConfig(
             optimize_isolated_sequentially=True,
             device="cpu",

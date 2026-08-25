@@ -396,3 +396,130 @@ def test_strict_contact_gate_accepts_physical_heights_and_rejects_liftoff():
     )
     assert not ok_far
     assert reason_far == "contact_distance_too_large"
+
+
+# ---------------------------------------------------------------------------
+# Quaternion utilities
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_quaternion_unit_norm_and_canonical_sign():
+    from metalsurfer.placement.geometry import normalize_quaternion
+
+    q = normalize_quaternion(np.array([2.0, 2.0, 0.0, 0.0]))
+    assert float(np.linalg.norm(q)) == pytest.approx(1.0, abs=1e-12)
+    # Canonical sign: w > 0.
+    assert q[0] > 0.0
+    # Antipodal input must map to the identical canonical form.
+    q_neg = normalize_quaternion(np.array([-2.0, -2.0, 0.0, 0.0]))
+    np.testing.assert_allclose(q_neg, q, atol=1e-15)
+
+
+def test_normalize_quaternion_edge_cases():
+    from metalsurfer.placement.geometry import normalize_quaternion
+
+    # w == 0: canonical sign picks the lexicographically positive vector part.
+    q = normalize_quaternion(np.array([0.0, -1.0, 0.0, 0.0]))
+    np.testing.assert_allclose(q, [0.0, 1.0, 0.0, 0.0], atol=1e-15)
+    # Signed zeros must collapse so the canonical form is hash-stable.
+    q_z = normalize_quaternion(np.array([-0.0, -0.0, -0.0, -0.0]))
+    assert not any(np.signbit(component) for component in q_z)
+    # Zero vector falls back to the identity quaternion.
+    np.testing.assert_allclose(
+        normalize_quaternion(np.zeros(4)), [1.0, 0.0, 0.0, 0.0], atol=0.0
+    )
+
+
+def test_normalize_quaternions_batch_and_validation():
+    from metalsurfer.placement.geometry import normalize_quaternions
+
+    quats = np.array([[3.0, 0.0, 0.0, 0.0], [-1.0, -1.0, 0.0, 0.0]])
+    out = normalize_quaternions(quats)
+    assert out.shape == (2, 4)
+    np.testing.assert_allclose(np.linalg.norm(out, axis=1), np.ones(2), atol=1e-12)
+    with pytest.raises(ValueError, match="shape"):
+        normalize_quaternions(np.zeros((2, 3)))
+    # Empty batch is a valid no-op copy.
+    empty = normalize_quaternions(np.zeros((0, 4)))
+    assert empty.shape == (0, 4)
+
+
+def test_quaternion_rotation_matrix_known_rotations():
+    from metalsurfer.placement.geometry import quaternion_to_rotation_matrix
+
+    # Identity quaternion -> identity matrix.
+    np.testing.assert_allclose(
+        quaternion_to_rotation_matrix(np.array([1.0, 0.0, 0.0, 0.0])),
+        np.eye(3),
+        atol=1e-14,
+    )
+    # 180° about z flips x and y.
+    R = quaternion_to_rotation_matrix(np.array([0.0, 0.0, 0.0, 1.0]))
+    np.testing.assert_allclose(
+        R @ np.array([1.0, 0.0, 0.0]), [-1.0, 0.0, 0.0], atol=1e-12
+    )
+    # 90° about z maps x -> y; quaternion from half-angle (non-normalized input).
+    R_half_pi = quaternion_to_rotation_matrix(
+        np.array([np.sqrt(2.0), 0.0, 0.0, np.sqrt(2.0)])
+    )
+    np.testing.assert_allclose(
+        R_half_pi @ np.array([1.0, 0.0, 0.0]), [0.0, 1.0, 0.0], atol=1e-12
+    )
+
+
+@pytest.mark.parametrize("angle_deg", [17.0, 90.0, 143.0, 270.0])
+def test_matrix_to_quaternion_round_trip_preserves_rotation(angle_deg):
+    """R -> q -> R must reproduce the rotation at machine precision."""
+    from scipy.spatial.transform import Rotation
+
+    from metalsurfer.placement.geometry import (
+        quaternion_to_rotation_matrix,
+        rotation_matrix_to_quaternion,
+    )
+
+    rng = np.random.default_rng(int(angle_deg))
+    axis = rng.normal(size=3)
+    axis /= np.linalg.norm(axis)
+    R = Rotation.from_rotvec(np.deg2rad(angle_deg) * axis).as_matrix()
+    q = rotation_matrix_to_quaternion(R)
+    assert float(q[0]) >= 0.0  # canonical sign
+    R_back = quaternion_to_rotation_matrix(q)
+    np.testing.assert_allclose(R_back, R, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Shape classification boundaries
+# ---------------------------------------------------------------------------
+
+
+def test_classify_molecule_shape_boundary_ratios():
+    """Values straddling the documented ratio constants flip the class."""
+    from metalsurfer.placement._constants import (
+        _FLAT_SHAPE_I1_I3_MAX,
+        _FLAT_SHAPE_I2_I3_MIN,
+        _LINEAR_SHAPE_RATIO_MAX,
+    )
+
+    # A very long thin rod: I1/I3 far below the linear cutoff.
+    rod = np.array([[float(i), 0.0, 0.0] for i in range(-10, 11)], dtype=float)
+    shape_rod, vals_rod, _ = _classify_molecule_shape(rod)
+    assert shape_rod == "linear"
+    assert vals_rod[0] / vals_rod[2] < _LINEAR_SHAPE_RATIO_MAX
+
+    # Planar square: oblate tensor, I1 ≈ I2 << I3 within the flat window.
+    square = np.array(
+        [[x, y, 0.0] for x in (-1.0, 1.0) for y in (-1.0, 1.0)], dtype=float
+    )
+    shape_square, vals_square, _ = _classify_molecule_shape(square)
+    assert shape_square == "flat"
+    assert vals_square[0] / vals_square[2] < _FLAT_SHAPE_I1_I3_MAX
+    assert vals_square[1] / vals_square[2] > _FLAT_SHAPE_I2_I3_MIN
+
+    # Isotropic cloud: all ratios ~1 -> round (I1/I3 outside the flat window).
+    cube_corners = np.array(
+        [[x, y, z] for x in (-1.0, 1.0) for y in (-1.0, 1.0) for z in (-1.0, 1.0)],
+        dtype=float,
+    )
+    shape_cube, vals_cube, _ = _classify_molecule_shape(cube_corners)
+    assert shape_cube == "round"
+    assert vals_cube[0] / vals_cube[2] >= _FLAT_SHAPE_I1_I3_MAX

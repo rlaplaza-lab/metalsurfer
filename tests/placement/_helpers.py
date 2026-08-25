@@ -96,6 +96,33 @@ def _pose_from_descriptor(descriptor: PlacementDescriptor) -> PlacementPose:
     )
 
 
+def _identity_round_pose(
+    *,
+    x_abs: float,
+    y_abs: float,
+    z_abs: float,
+    z_fraction: float = 0.5,
+    site_type: str = "atop",
+    site_index: int = 0,
+) -> PlacementPose:
+    """Identity-quaternion round pose at the given absolute position."""
+    return PlacementPose(
+        conformer_index=0,
+        site_index=site_index,
+        site_type=site_type,
+        placement_index=0,
+        quat_w=1.0,
+        quat_x=0.0,
+        quat_y=0.0,
+        quat_z=0.0,
+        x_abs=x_abs,
+        y_abs=y_abs,
+        z_fraction=z_fraction,
+        z_abs=z_abs,
+        orientation_type="round",
+    )
+
+
 def _assert_replay_matches(
     mode: str,
     adsorbate: Atoms,
@@ -104,10 +131,11 @@ def _assert_replay_matches(
     conformers: list[Atoms],
     slab: Atoms,
     config: AdsorptionConfig,
+    smiles: str = "O",
 ) -> None:
     if mode == "spec":
         replay = generate_placement_from_spec(
-            spec, conformers, slab, config, smiles="O"
+            spec, conformers, slab, config, smiles=smiles
         )
         assert replay is not None
         replayed = replay[0]

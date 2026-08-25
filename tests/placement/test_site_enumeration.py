@@ -232,7 +232,7 @@ def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
         )
         assert ok, f"Successful placement must pass contact gates: {reason}"
         # Lower floor is gated by `assert ok`; only the slack upper tail is checked.
-        assert dist <= _descriptor.z_offset + 0.5, (
+        assert dist <= _descriptor.z_offset + 0.2, (
             f"Adsorbate–surface distance should be physical, got {dist:.3f}"
         )
         overlaps, _ = detect_vdw_overlaps(adsorbate, slab, material_type="slab")
@@ -481,7 +481,8 @@ def test_hollow_order_metadata_on_slab():
     assert len(hollow_sites) > 0
     for site in hollow_sites:
         order = site.hollow_order
-        assert order is None or order in (3, 4)
+        assert order is not None, f"hollow site {site.xyz} missing hollow_order"
+        assert order in (3, 4), f"unexpected hollow_order {order} at {site.xyz}"
 
 
 def _rotated(atoms, angle_deg: float):

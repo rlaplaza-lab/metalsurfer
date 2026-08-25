@@ -398,6 +398,13 @@ Relaxation and MLIP
    FairChem/UMA model identifier passed to TorchSim for energy and force
    evaluations during relaxation and reference calculations.
 
+``task_name``
+   **Type:** ``str`` · **Default:** ``"oc25"``
+
+   UMA/FairChem task head used for energy and force evaluation. ``"oc25"``
+   targets (electro)catalysis and requires ``*-1p2`` checkpoints; use
+   ``"oc20"`` with ``uma-s-1p1`` / ``uma-m-1p1``.
+
 ``device``
     **Type:** ``str`` · **Default:** ``"cuda"``
 

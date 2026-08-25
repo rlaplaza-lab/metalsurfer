@@ -161,7 +161,9 @@ def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
         assert config.stage1_steps >= 50
         assert config.stage2_steps >= 150
 
-    calculator, ts_model = setup_single_model(config.model_name, config.device)
+    calculator, ts_model = setup_single_model(
+        config.model_name, config.device, task_name=config.task_name
+    )
     ref = calculate_reference_energies(
         slab, calculator, [name], [smiles], ts_model=ts_model, config=config
     )
@@ -185,17 +187,19 @@ def _assert_ethene_ru(results: list[ScreeningResult], num_placements: int) -> No
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
+    # Bounds tightened against the uma-s-1p2 + oc25 reference run
+    # (observed: E_ads in [-0.14, 0.01], median -0.01, spread 0.15).
     assert e_ads.min() < 0, (
         f"Best E_ads should be negative (favorable binding), got min {e_ads.min():.3f}"
     )
     assert np.median(e_ads) < 0, (
         f"Median E_ads should be negative, got {np.median(e_ads):.3f}; all: {e_ads}"
     )
-    assert np.all(e_ads < 0.5), (
-        f"E_ads should stay below 0.5 eV for ethene on Ru, got {e_ads}"
+    assert np.all(e_ads < 0.15), (
+        f"E_ads should stay below 0.15 eV for ethene on Ru, got {e_ads}"
     )
-    assert np.all(e_ads >= -2.5), (
-        f"E_ads should be >= -2.5 eV for ethene on Ru, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -0.6), (
+        f"E_ads should be >= -0.6 eV for ethene on Ru, got min {e_ads.min():.3f}"
     )
 
     spread = float(e_ads.max() - e_ads.min())
@@ -230,15 +234,17 @@ def _assert_h2_ru(results: list[ScreeningResult], num_placements: int) -> None:
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
+    # Bounds tightened against the uma-s-1p2 + oc25 reference run
+    # (observed: every placement at E_ads = -0.1185 eV, distance 1.75 A).
     assert np.all(np.isfinite(e_ads))
     assert float(e_ads.min()) < 0.0, (
         f"Best E_ads should be negative for H2 on Ru, got {e_ads}"
     )
-    assert np.all(e_ads < 1.0), (
-        f"E_ads should stay below 1 eV for H2 on Ru, got {e_ads}"
+    assert np.all(e_ads < 0.1), (
+        f"E_ads should stay below 0.1 eV for H2 on Ru, got {e_ads}"
     )
-    assert np.all(e_ads >= -2.5), (
-        f"E_ads should be >= -2.5 eV for H2 on Ru, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -0.4), (
+        f"E_ads should be >= -0.4 eV for H2 on Ru, got min {e_ads.min():.3f}"
     )
 
     site_ids = set()
@@ -278,15 +284,17 @@ def _assert_h2_pt12(results: list[ScreeningResult], num_placements: int) -> None
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
+    # Bounds tightened against the uma-s-1p2 + oc25 reference run (observed:
+    # E_ads in [-0.10, 1.24]; two physisorbed/desorbed outliers near +1.2 eV).
     assert np.all(np.isfinite(e_ads))
-    assert float(e_ads.min()) < 0.5, (
-        f"Best E_ads should be near-binding for H2 on Pt12, got {e_ads}"
+    assert float(e_ads.min()) < 0.1, (
+        f"Best E_ads should be near-binding (<0.1 eV) for H2 on Pt12, got {e_ads}"
     )
     assert np.all(e_ads < 1.5), (
         f"E_ads should stay below a weak-binding ceiling (< 1.5 eV), got {e_ads}"
     )
-    assert np.all(e_ads >= -3.5), (
-        f"E_ads should be >= -3.5 eV for H2 on Pt12, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -0.8), (
+        f"E_ads should be >= -0.8 eV for H2 on Pt12, got min {e_ads.min():.3f}"
     )
 
     assert len(results) >= 2, f"Expected multiple configs, got {len(results)} results"
@@ -335,14 +343,16 @@ def _assert_co2_mof(results: list[ScreeningResult], num_placements: int) -> None
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
-    assert np.all(e_ads < 0.2), (
-        f"E_ads should stay in a physisorption window (< 0.2 eV), got {e_ads}"
+    # Bounds tightened against the uma-s-1p2 + oc25 reference run
+    # (observed: E_ads in [-0.22, -0.13] — all placements bind physisorptively).
+    assert np.all(e_ads < 0.05), (
+        f"E_ads should stay in a physisorption window (< 0.05 eV), got {e_ads}"
     )
-    assert np.all(e_ads >= -2.5), (
-        f"E_ads should be >= -2.5 eV for CO2 in MOF, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -0.8), (
+        f"E_ads should be >= -0.8 eV for CO2 in MOF, got min {e_ads.min():.3f}"
     )
-    assert float(e_ads.min()) < 0.5, (
-        f"Best E_ads should be weak physisorption (< 0.5 eV) for CO2 in MOF, "
+    assert float(e_ads.min()) < 0.0, (
+        f"Best E_ads should be favorable physisorption (< 0 eV) for CO2 in MOF, "
         f"got {e_ads}"
     )
 

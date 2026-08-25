@@ -91,6 +91,7 @@ def main() -> int:
         material_type="slab",
         slab_relaxation_mode="none",  # keep published GO geometry
         model_name="uma-s-1p1",
+        task_name="oc20",
         seed=42,
         num_conformers=10,
         num_placements=250,

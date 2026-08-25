@@ -73,6 +73,15 @@ def _train_surrogate_for_bo(
     )
 
 
+def bo_exploration_rng(config_seed: int, n_slab_atoms: int) -> np.random.RandomState:
+    """Coverage-decorrelated RNG stream for BO exploration.
+
+    The slab atom count grows across saturation steps, so successive
+    saturation molecules draw from decorrelated streams.
+    """
+    return np.random.RandomState(int(config_seed + 1_000_003 * n_slab_atoms) % (2**31))
+
+
 def process_molecule_bayesian(
     smiles: str,
     molecule_name: str,
@@ -273,10 +282,7 @@ def process_molecule_bayesian(
     best_energy = float("inf")
     best_X_row: dict[str, float] | None = None
     bo_failure_events: list[PlacementFailureEvent] = []
-    # Coverage-decorrelated seed: atom count grows across saturation steps.
-    rng = np.random.RandomState(
-        int(config.seed + 1_000_003 * len(slab.atoms)) % (2**31)
-    )
+    rng = bo_exploration_rng(config.seed, len(slab.atoms))
     transfer_disabled = False
     transfer_disabled_reason: str | None = None
     transfer_bad_rounds = 0

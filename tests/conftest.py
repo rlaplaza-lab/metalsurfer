@@ -44,9 +44,13 @@ MLIP_CPU_MARKS = [
 ]
 
 # Energy-identity tolerances: stub arithmetic vs MLIP noise.
+# The E_ads identity (e_adslab - e_slab - e_adsorbate) is evaluated by the
+# pipeline from exactly the floats stored on the result, so re-evaluating it
+# in tests is bitwise identical; 1e-9 already leaves generous headroom even
+# if upstream ever recomputes energies before storage.
 E_ADS_IDENTITY_TOL = 1e-9
 E_ADS_MLIP_TOL = 1e-6
-E_ADS_MLIP_CPU_TOL = 1e-6
+E_ADS_MLIP_CPU_TOL = 1e-9
 
 # Shared TorchSim autobatch settings for GPU e2e modules.
 GPU_AUTOBATCH = {

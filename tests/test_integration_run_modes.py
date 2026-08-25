@@ -344,9 +344,12 @@ def _assert_survivor_physics(
             pbc=list(slab_part.get_pbc()),
         )
         assert sep_ok, f"survivor overlaps a co-adsorbate: min_d={sep_d:.3f}"
-    # result.distance and the gate share MIC semantics; allow small path differences
-    # (e.g. saturation slabs that already contain co-adsorbates).
-    assert abs(float(result.distance) - float(min_d)) < 0.15, (
+    # result.distance and the gate share MIC semantics on identical inputs:
+    # without co-adsorbates the two computations must agree to float noise;
+    # saturation slabs exclude co-adsorbates differently per side, so allow a
+    # small path-difference band there.
+    dist_tol = 0.15 if n_substrate < len(slab_part) else 1e-6
+    assert abs(float(result.distance) - float(min_d)) < dist_tol, (
         f"result.distance={result.distance:.3f} vs gate min_d={min_d:.3f}"
     )
 

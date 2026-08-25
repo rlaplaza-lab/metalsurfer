@@ -94,9 +94,11 @@ def test_hollow_site_pairs_found_for_slab():
             (np.asarray(p.xyz1) - np.asarray(p.xyz2)).reshape(1, 3), cell
         )
         sep = float(dists[0])
-        assert 0.5 * d_NN <= sep <= 1.5 * d_NN, (
+        # Upper bound mirrors _DISSOCIATIVE_MAX_ADJACENT_SEP_NN_SCALE (=1.2);
+        # lower bound enforces "adjacent": realized separations equal d_NN.
+        assert 0.8 * d_NN <= sep <= 1.2 * d_NN, (
             f"hollow-pair separation {sep:.3f} Å out of physical band "
-            f"[0.5, 1.5]×d_NN={d_NN:.3f} Å"
+            f"[0.8, 1.2]×d_NN={d_NN:.3f} Å"
         )
 
 
@@ -238,7 +240,7 @@ def test_dissociative_placement_supported_for_nanoparticle():
     )
     pair = pairs[descriptor.site_index % len(pairs)]
     pair_sep = float(np.linalg.norm(np.asarray(pair.xyz1) - np.asarray(pair.xyz2)))
-    assert hh == pytest.approx(pair_sep, abs=1e-5), (
+    assert hh == pytest.approx(pair_sep, abs=1e-9), (
         f"H–H separation {hh:.3f} should track pair spacing {pair_sep:.3f}"
     )
     assert hh > 1.0, "Dissociative placement should separate H atoms"
@@ -289,16 +291,17 @@ def test_dissociative_wrap_pair_cartesian_separation_matches_mic():
         placed, descriptor = result
         pos = placed.get_positions()
         cart_hh = float(np.linalg.norm(pos[1] - pos[0]))
-        assert cart_hh == pytest.approx(mic_sep, abs=1e-5), (
+        assert cart_hh == pytest.approx(mic_sep, abs=1e-9), (
             f"placed H–H Cartesian {cart_hh:.3f} should match MIC pair {mic_sep:.3f}, "
             "not the wrapped in-cell gap"
         )
-        # Centroid must sit near the midpoint of the unfolded sites, not mid-cell void.
+        # Centroid must sit at the midpoint of the unfolded sites laterally
+        # (realized exactly); only the height carries a deliberate offset.
         mid = 0.5 * (np.asarray(pair.xyz1) + np.asarray(pair.xyz2))
         centroid = np.array(
             [descriptor.x_abs, descriptor.y_abs, descriptor.z_abs], dtype=float
         )
-        assert float(np.linalg.norm(centroid[:2] - mid[:2])) < 0.5
+        assert float(np.linalg.norm(centroid[:2] - mid[:2])) < 1e-9
 
 
 def test_dissociative_placement_on_slab_separates_and_clears_surface():
@@ -326,7 +329,7 @@ def test_dissociative_placement_on_slab_separates_and_clears_surface():
         (np.asarray(pair.xyz1) - np.asarray(pair.xyz2)).reshape(1, 3), cell
     )
     pair_sep = float(pair_dists[0])
-    assert hh == pytest.approx(pair_sep, abs=1e-5), (
+    assert hh == pytest.approx(pair_sep, abs=1e-9), (
         f"H–H separation {hh:.3f} should track hollow-pair spacing {pair_sep:.3f}"
     )
     assert hh > 1.0
@@ -423,7 +426,7 @@ def test_enable_dissociative_placement_without_topology_skip():
     assert all(s.orientation_type == "dissociative" for s in specs)
 
 
-def test_dissociative_com_features_injective_and_record_replay():
+def test_dissociative_com_features_pose_relative_and_record_replay():
     """Dissociative COM+quat features stay diverse; fragments survive record round-trip.
 
     Symmetry-equivalent hollow pairs share COM at a fixed height above the
@@ -440,6 +443,7 @@ def test_dissociative_com_features_injective_and_record_replay():
     )
     specs = enumerate_placement_specs([h2], slab, config, "HH", n_desired=32)
     feature_rows: list[tuple[float, ...]] = []
+    row_sites: list[int] = []
     by_pair: dict[int, list[tuple[float, tuple[float, ...]]]] = {}
     for spec in specs:
         result, _reason = generate_placement_from_spec_with_reason(
@@ -455,8 +459,11 @@ def test_dissociative_com_features_injective_and_record_replay():
         assert record.descriptor.fragment_positions == descriptor.fragment_positions
         feats = extract_features(record)
         assert list(feats.keys()) == FEATURE_NAMES
+        assert "x" not in feats
+        assert "y" not in feats
         row = tuple(round(feats[name], 10) for name in FEATURE_NAMES)
         feature_rows.append(row)
+        row_sites.append(int(spec.site_index))
         by_pair.setdefault(int(spec.site_index), []).append(
             (float(spec.z_fraction), row)
         )
@@ -477,7 +484,16 @@ def test_dissociative_com_features_injective_and_record_replay():
         )
 
     assert len(feature_rows) >= 8
-    assert len(set(feature_rows)) >= max(8, int(0.75 * len(feature_rows)))
+    # Pose-relative features keep height/orientation diversity; lateral COM
+    # differences across symmetry-equivalent sites collapse by design.
+    assert len(set(feature_rows)) >= 2
+    site_collisions = sum(
+        1
+        for i in range(len(feature_rows))
+        for j in range(i + 1, len(feature_rows))
+        if feature_rows[i] == feature_rows[j] and row_sites[i] != row_sites[j]
+    )
+    assert site_collisions > 0
     # Distinct z_fraction on the same hollow pair must change COM height features.
     for _pair_idx, rows in by_pair.items():
         z_to_feat = {}

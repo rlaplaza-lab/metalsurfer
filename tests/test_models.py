@@ -1,5 +1,7 @@
 """Tests for typed domain models."""
 
+import dataclasses
+
 import pytest
 
 from metalsurfer.models import (
@@ -67,11 +69,15 @@ def test_screening_result():
     assert row["poscar_path"] == "results/POSCAR"
     assert "orientation_type" not in row
     assert "z_fraction" not in row
-    assert row["x_abs"] == (
-        sr.placement_descriptor.x_abs
-        if sr.placement_descriptor.x_abs is not None
-        else sr.placement_descriptor.x
+    # No absolute pose on this descriptor: x_abs must fall back to relative x.
+    assert sr.placement_descriptor.x_abs is None
+    assert row["x_abs"] == pytest.approx(0.0)
+    # With an absolute pose present, x_abs must win over relative x.
+    abs_desc = make_placement_descriptor(x=1.5, x_abs=-2.25)
+    abs_row = dataclasses.replace(sr, placement_descriptor=abs_desc).to_row(
+        xyz_path="results/x.xyz", poscar_path="results/POSCAR"
     )
+    assert abs_row["x_abs"] == pytest.approx(-2.25)
     for field in ("quat_w", "quat_x", "quat_y", "quat_z"):
         assert field in row
     rich = sr.to_row(include_provenance=True)

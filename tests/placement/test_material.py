@@ -8,7 +8,7 @@ import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
-from metalsurfer.models import PlacementPose, PlacementSpec
+from metalsurfer.models import PlacementSpec
 from metalsurfer.placement import (
     calculate_min_distance,
     check_initial_placement_distance,
@@ -56,6 +56,7 @@ from ._helpers import (
     _LOCAL_SITE_MATERIAL_PARAMS,
     _assert_replay_matches,
     _generate_placements,
+    _identity_round_pose,
     _make_site,
 )
 
@@ -119,7 +120,7 @@ def test_slab_placements_are_above_surface_reference():
         )
         assert ok, reason
         # Lower floor is already gated by `assert ok`; only the slack upper tail is checked.
-        assert dist <= descriptor.z_offset + 0.5
+        assert dist <= descriptor.z_offset + 0.2
 
 
 @pytest.mark.parametrize(
@@ -152,7 +153,7 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
     assert len(visited_sites) >= 2, (
         f"{material_type}: expected multi-site coverage, got {sorted(visited_sites)}"
     )
-    d_hi = 4.5 if material_type == "porous" else 3.8
+    d_hi = 4.0 if material_type == "porous" else 3.8
     for _spec, adsorbate_i, desc in results:
         ok, dist, reason = check_initial_placement_distance(
             adsorbate_i,
@@ -162,6 +163,7 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
         )
         assert ok, f"{material_type} placement failed contact gate: {reason}"
         # Lower floor is gated by `assert ok`; only the per-material upper band is checked.
+        # Measured worst case ≈3.66 (NP) / 3.32 (porous) across the generated set.
         assert dist <= d_hi, (
             f"{material_type} adsorbate–surface distance out of band: {dist:.3f}"
         )
@@ -290,20 +292,12 @@ def test_local_site_distance_recovery_height_direction(
     surface_ref, _ = _resolve_surface_ref(site, structure, material_type)
     zf0 = 0.4
     center = np.asarray(site.xyz, dtype=float) + 2.0 * n_hat
-    pose = PlacementPose(
-        conformer_index=0,
-        site_index=0,
-        site_type=site.site_type,
-        placement_index=0,
-        quat_w=1.0,
-        quat_x=0.0,
-        quat_y=0.0,
-        quat_z=0.0,
+    pose = _identity_round_pose(
         x_abs=float(center[0]),
         y_abs=float(center[1]),
-        z_fraction=zf0,
         z_abs=float(center[2]),
-        orientation_type="round",
+        z_fraction=zf0,
+        site_type=site.site_type,
     )
     ctx = _PlacementContext(
         pose=pose,
@@ -432,8 +426,10 @@ def test_resolve_surface_ref_uses_config_planarity_tolerance():
     )
     assert local_narrow is False
     assert local_wide is True
-    assert ref_wide == pytest.approx(float(site.xyz[2]))
-    assert ref_narrow != pytest.approx(ref_wide)
+    assert ref_wide == pytest.approx(float(site.xyz[2]), abs=1e-9)
+    # Modes must differ by a clear margin (narrow=global max z=1.05,
+    # wide=local site z=0.85), not merely outside a rounding window.
+    assert abs(ref_narrow - ref_wide) > 0.1
 
 
 def test_generate_placement_from_pose_respects_slab_for_sites():
@@ -454,20 +450,8 @@ def test_generate_placement_from_pose_respects_slab_for_sites():
         placement_z_scale_by_covalent_radius=False,
     )
     adsorbate = Atoms("H", positions=[[0.0, 0.0, 0.0]])
-    pose = PlacementPose(
-        conformer_index=0,
-        site_index=0,
-        site_type="atop",
-        placement_index=0,
-        quat_w=1.0,
-        quat_x=0.0,
-        quat_y=0.0,
-        quat_z=0.0,
-        x_abs=5.0,
-        y_abs=5.0,
-        z_fraction=0.5,
-        z_abs=slab_top + 2.5,
-        orientation_type="round",
+    pose = _identity_round_pose(
+        x_abs=5.0, y_abs=5.0, z_fraction=0.5, z_abs=slab_top + 2.5
     )
     result = generate_placement_from_pose(
         pose,
@@ -718,20 +702,8 @@ def test_distance_recovery_rescues_too_close_placement():
     pos = water.get_positions().copy()
     pos -= pos.mean(axis=0)
     surface_z = float(np.max(slab.get_positions()[:, 2]))
-    pose = PlacementPose(
-        conformer_index=0,
-        site_index=0,
-        site_type="atop",
-        placement_index=0,
-        quat_w=1.0,
-        quat_x=0.0,
-        quat_y=0.0,
-        quat_z=0.0,
-        x_abs=5.0,
-        y_abs=5.0,
-        z_fraction=0.0,
-        z_abs=surface_z + 0.35,
-        orientation_type="round",
+    pose = _identity_round_pose(
+        x_abs=5.0, y_abs=5.0, z_fraction=0.0, z_abs=surface_z + 0.35
     )
     ctx = _PlacementContext(
         pose=pose,
@@ -775,7 +747,7 @@ def test_distance_recovery_rescues_too_close_placement():
     )
     assert gate_ok, (min_d, gate_reason)
     # Lower floor is gated by `assert ok`; only the slack upper tail is checked.
-    assert float(min_d) <= descriptor.z_offset + 0.5
+    assert float(min_d) <= descriptor.z_offset + 0.2
 
 
 def test_distance_recovery_height_only_when_xy_disabled():
@@ -785,20 +757,8 @@ def test_distance_recovery_height_only_when_xy_disabled():
     pos = water.get_positions().copy()
     pos -= pos.mean(axis=0)
     surface_z = float(np.max(slab.get_positions()[:, 2]))
-    pose = PlacementPose(
-        conformer_index=0,
-        site_index=0,
-        site_type="atop",
-        placement_index=0,
-        quat_w=1.0,
-        quat_x=0.0,
-        quat_y=0.0,
-        quat_z=0.0,
-        x_abs=5.0,
-        y_abs=5.0,
-        z_fraction=0.0,
-        z_abs=surface_z + 0.35,
-        orientation_type="round",
+    pose = _identity_round_pose(
+        x_abs=5.0, y_abs=5.0, z_fraction=0.0, z_abs=surface_z + 0.35
     )
     ctx = _PlacementContext(
         pose=pose,
@@ -832,7 +792,7 @@ def test_distance_recovery_height_only_when_xy_disabled():
     )
     assert gate_ok, (min_d, gate_reason)
     # Lower floor is gated by `assert ok`; only the slack upper tail is checked.
-    assert float(min_d) <= descriptor.z_offset + 0.5
+    assert float(min_d) <= descriptor.z_offset + 0.2
 
 
 # ---------------------------------------------------------------------------
@@ -857,8 +817,9 @@ def test_material_aware_distance_checks_pbc(material_type, factory):
         # No PBC: Euclidean distance across the large cell (no MIC wrap).
         assert d == pytest.approx(euclidean, abs=1e-6)
     else:
-        # Fully periodic: opposite-face points are adjacent via MIC.
-        assert d < euclidean - 1.0
+        # Fully periodic, orthogonal cell: opposite-face points offset by 1 Å
+        # along a and b are MIC-adjacent at exactly sqrt(2) Å.
+        assert d == pytest.approx(float(np.sqrt(2.0)), abs=1e-9)
 
     # A gate-accepted placement exists for the material (free site packed).
     if material_type == "nanoparticle":

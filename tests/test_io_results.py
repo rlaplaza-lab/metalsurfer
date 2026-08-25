@@ -98,9 +98,10 @@ def test_merge_unions_columns_across_schema_versions(tmp_path):
     assert set(merged["molecule"]) == {"A", "B"}
     # The pre-existing row must not have acquired a bogus value.
     assert pd.isna(merged.loc[merged["molecule"] == "A", "new_column"]).all()
-    payload = json.dumps(merged.to_dict(orient="records"), default=str)
-    assert isinstance(payload, str) and len(payload) > 2
-    assert "molecule" in payload
+    # Round-trip through JSON must preserve the merged schema and values.
+    payload = json.loads(json.dumps(merged.to_dict(orient="records"), default=str))
+    by_mol = {rec["molecule"]: float(rec["E_ads"]) for rec in payload}
+    assert by_mol == {"A": -1.0, "B": -2.0}
 
 
 def test_write_clean_xyz_drops_stale_adsorbate_info(tmp_path):

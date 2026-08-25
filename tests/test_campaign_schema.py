@@ -83,6 +83,84 @@ def test_parse_campaign_rejects_unknown_config_key():
         )
 
 
+_VALID_BASE = {
+    "campaign": "saturation",
+    "surface_type": "ok",
+    "substrate": {"bulk_id": "mp-30"},
+    "molecules": [{"smiles": "C", "name": "methane"}],
+}
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["adsorption", "adsorption_bo", "saturation", "saturation_bo"],
+)
+def test_parse_campaign_accepts_all_valid_kinds(kind):
+    doc = parse_campaign_dict({**_VALID_BASE, "campaign": kind})
+    assert doc.campaign == kind
+
+
+def test_parse_campaign_rejects_invalid_kind():
+    with pytest.raises(ValueError, match="campaign must be one of"):
+        parse_campaign_dict({**_VALID_BASE, "campaign": "vibrations"})
+
+
+@pytest.mark.parametrize("bad", [None, "", "   "])
+def test_parse_campaign_rejects_missing_or_empty_surface_type(bad):
+    # Missing key and explicit null both reach the same isinstance guard.
+    with pytest.raises(ValueError, match="surface_type must be a non-empty"):
+        parse_campaign_dict({**_VALID_BASE, "surface_type": bad})
+
+
+@pytest.mark.parametrize(
+    "molecules_raw",
+    [
+        None,  # key missing and explicit null both hit the same guard
+        [],
+        "water",
+        [{"name": "no-smiles"}],
+        [{"smiles": "C", "name": ""}],
+    ],
+)
+def test_parse_campaign_rejects_invalid_molecules(molecules_raw):
+    with pytest.raises(ValueError, match="molecules"):
+        parse_campaign_dict({**_VALID_BASE, "molecules": molecules_raw})
+
+
+def test_parse_campaign_accepts_task_name_config_key():
+    doc = parse_campaign_dict({**_VALID_BASE, "config": {"task_name": "oc20"}})
+    assert doc.config.task_name == "oc20"
+
+
+def test_parse_campaign_rejects_non_mapping_config():
+    with pytest.raises(ValueError, match="config must be a mapping"):
+        parse_campaign_dict({**_VALID_BASE, "config": 5})
+
+
+def test_parse_campaign_rejects_non_mapping_root(tmp_path):
+    list_yaml = tmp_path / "list.yaml"
+    list_yaml.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="campaign root must be a mapping"):
+        load_campaign_yaml(list_yaml)
+
+
+def test_parse_campaign_requires_exactly_one_substrate_source():
+    with pytest.raises(ValueError, match="exactly one of bulk_id"):
+        parse_campaign_dict({**_VALID_BASE, "substrate": {}})
+
+
+def test_parse_campaign_rejects_wrong_length_miller_indices():
+    with pytest.raises(
+        ValueError, match="substrate.miller_indices must be a 3-element"
+    ):
+        parse_campaign_dict(
+            {
+                **_VALID_BASE,
+                "substrate": {"bulk_id": "mp-30", "miller_indices": [1, 1]},
+            }
+        )
+
+
 def test_parse_campaign_accepts_nested_bo_config():
     doc = parse_campaign_dict(
         {

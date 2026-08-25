@@ -13,7 +13,7 @@ Pass any ASE `Atoms` structure after optional prep with `prepare_substrate`, sup
 ## Features
 
 - **Substrate-agnostic** — periodic slabs, non-periodic clusters, and fully periodic porous frameworks
-- **MLIP relaxation** — TorchSim/FairChem-backed optimization (UMA default)
+- **MLIP relaxation** — TorchSim/FairChem-backed optimization (UMA default, `task_name="oc25"`)
 - **Orientation-aware placement** — hybrid topology + Voronoi site detection, material-aware via `AdsorptionConfig.material_type`
 - **Four campaign modes** — standard screening, Bayesian screening, sequential saturation, and BO saturation
 - **Surface prep** — equilibration, PBC, alloy/adatom modifiers, and ASE `FixAtoms` via `prepare_substrate`

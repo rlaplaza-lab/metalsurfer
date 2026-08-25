@@ -25,6 +25,7 @@ def test_flat_aromatic_detection_requires_ring_and_en_atoms():
 
 
 def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
+    pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
     slab = make_slab()
     config = AdsorptionConfig(
         material_type="slab",
@@ -36,8 +37,7 @@ def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
         "c1(C=O)cc(OC)c(O)cc1",
         config=AdsorptionConfig(num_conformers=3),
     )
-    if result is None:
-        pytest.skip("RDKit required")
+    assert result is not None
     conformers, _ = result
 
     specs = enumerate_placement_specs(
@@ -82,8 +82,10 @@ def test_principal_axis_rotation_flat_hexagon_stays_near_flat():
     )
     hex_pos -= hex_pos.mean(axis=0)
     rotated, _score, _R = _principal_axis_rotation(hex_pos, np.array([0.0, 0.0, 1.0]))
-    # Plane normal ≈ z → z-span stays small (near-flat).
-    assert float(np.ptp(rotated[:, 2])) < 0.28
+    # Regular hexagon: in-plane inertia moments are exactly degenerate, so the
+    # recovered normal is only approximate (~5° tilt, z-span ≈ 0.244 Å).
+    # Deterministic eigensolver -> pin golden with small slack.
+    assert float(np.ptp(rotated[:, 2])) == pytest.approx(0.24403607968514937, abs=0.01)
 
 
 @pytest.mark.parametrize("tilt_deg", [0.0, 10.0, 15.0])
@@ -105,7 +107,9 @@ def test_surface_aligned_rotation_flips_binder_pointing_up(tilt_deg):
     com = out.mean(axis=0)
     binder_dir = out[1] - com
     binder_dir /= np.linalg.norm(binder_dir)
-    assert float(np.dot(binder_dir, normal)) < -0.95
+    # The alignment rotation maps the binder axis onto -normal exactly,
+    # regardless of the initial tilt.
+    assert float(np.dot(binder_dir, normal)) == pytest.approx(-1.0, abs=1e-9)
 
 
 def test_surface_aligned_rotation_noop_when_already_pointing_down():
@@ -117,7 +121,7 @@ def test_surface_aligned_rotation_noop_when_already_pointing_down():
     com = out.mean(axis=0)
     binder_dir = out[1] - com
     binder_dir /= np.linalg.norm(binder_dir)
-    assert float(np.dot(binder_dir, normal)) < -0.95
+    assert float(np.dot(binder_dir, normal)) == pytest.approx(-1.0, abs=1e-9)
 
 
 def test_composed_rotation_reproduces_sequential():

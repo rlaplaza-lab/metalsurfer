@@ -393,7 +393,7 @@ def test_policy_stratified_is_seed_deterministic():
 
 
 def test_cco_generation_yield_meets_seeded_bar():
-    """Flexible ethanol should clear the seeded ≥40% generation bar (target ≥60%)."""
+    """Flexible ethanol should clear the seeded 90% generation bar."""
 
     slab = make_slab()
     n_desired = 30
@@ -497,6 +497,11 @@ def test_policy_prior_prefers_mild_tilt_and_mid_z():
     assert len({s.site_type for s in selected}) >= 2
     mean_tilt = float(np.mean([s.tilt_deg for s in selected]))
     mean_zf = float(np.mean([s.z_fraction for s in selected]))
-    # Full-grid means are 40° tilt and 0.5 z; prior should pull tilt down.
-    assert mean_tilt < 40.0, f"expected mild-tilt bias, got mean tilt {mean_tilt:.1f}"
-    assert abs(mean_zf - 0.5) <= 0.15, f"expected mid-z bias, got mean zf {mean_zf:.2f}"
+    # Seeded selection is deterministic; pin the realized means so any drift
+    # in prior weighting (full-grid means: 40° tilt, 0.5 z) fails loudly.
+    assert mean_tilt == pytest.approx(10.0, abs=1e-9), (
+        f"expected mild-tilt bias golden, got mean tilt {mean_tilt:.4f}"
+    )
+    assert mean_zf == pytest.approx(0.48888888888888893, abs=1e-9), (
+        f"expected mid-z bias golden, got mean zf {mean_zf:.4f}"
+    )

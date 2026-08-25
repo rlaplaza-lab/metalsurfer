@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 def setup_single_model(  # pragma: no cover - requires MLIP stack / GPU
     model_name: str = "uma-s-1p2",
     device: str = "cuda",
+    task_name: str = "oc25",
 ):
     """Create a single FairChemModel shared by calculator and TorchSim.
 
@@ -60,8 +61,13 @@ def setup_single_model(  # pragma: no cover - requires MLIP stack / GPU
         FairChem model name.
     device
         Device string (e.g. "cuda" or "cpu").
+    task_name
+        UMA/FairChem task head used for energy/force evaluation.
+        ``"oc25"`` targets (electro)catalysis and is only available on
+        ``*-1p2`` checkpoints; use ``"oc20"`` with ``uma-s-1p1`` /
+        ``uma-m-1p1`` models.
     """
-    ts_model = setup_torchsim_model(model_name, device)
+    ts_model = setup_torchsim_model(model_name, device, task_name=task_name)
     calculator = TorchSimCalculator(ts_model)
     return calculator, ts_model
 

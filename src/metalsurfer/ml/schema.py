@@ -150,9 +150,12 @@ class ComputationContext:
 
     Stored alongside placement geometry so that results computed with
     different models or convergence criteria are distinguishable.
+    ``task_name`` is included because the UMA task head affects energies
+    even for the same checkpoint weights.
     """
 
     model_name: str = "uma-s-1p2"
+    task_name: str = "oc25"
     fmax: float = DEFAULT_FMAX
     stage1_steps: int = 50
     stage2_steps: int = 150
@@ -183,6 +186,7 @@ class ComputationContext:
         """
         return cls(
             model_name=config.model_name,
+            task_name=config.task_name,
             fmax=config.fmax,
             stage1_steps=config.stage1_steps,
             stage2_steps=config.stage2_steps,
@@ -219,6 +223,7 @@ class ComputationContext:
         """Build an AdsorptionConfig matching this computation context."""
         cfg = AdsorptionConfig()
         cfg.model_name = self.model_name
+        cfg.task_name = self.task_name
         cfg.fmax = self.fmax
         cfg.stage1_steps = self.stage1_steps
         cfg.stage2_steps = self.stage2_steps
@@ -602,6 +607,7 @@ class PlacementRecord:
 
         ctx = ComputationContext(
             model_name=str(_ctx_value("model_name", "uma-s-1p2")),
+            task_name=str(_ctx_value("task_name", "oc25")),
             fmax=float(_ctx_value("fmax", 0.05)),
             stage1_steps=int(_ctx_value("stage1_steps", 50)),
             stage2_steps=int(_ctx_value("stage2_steps", 150)),

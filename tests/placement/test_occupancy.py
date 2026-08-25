@@ -434,7 +434,8 @@ def test_place_dissociative_two_sites_matches_spec_path():
     )
     assert via_place is not None
     placed_b, _desc_b = via_place
-    assert np.allclose(placed_a.get_positions(), placed_b.get_positions(), atol=1e-6)
+    # Both code paths must realize the identical placement bit-for-bit.
+    assert np.allclose(placed_a.get_positions(), placed_b.get_positions(), atol=1e-10)
     assert desc_a.fragment_positions is not None
 
 
@@ -495,44 +496,13 @@ def test_packing_yield_improves_with_occupancy_prune():
     assert pruned_frac <= unpruned_frac + 1e-9
 
 
-def test_retry_blocks_repeated_bad_site_index(monkeypatch):
-    from metalsurfer.placement._constants import _RETRY_BLOCK_SITE_AFTER
-    from metalsurfer.workflow import placement_fill as fill_mod
-
-    seen_filters = []
-
-    def make_specs(_n_desired, filter_spec):
-        specs = [
-            _round_atop_placement_spec(i, site_index=site_idx, site_type="hollow")
-            for i, site_idx in enumerate([3, 3, 5])
-        ]
-        filtered = _filter_specs(specs, filter_spec)
-        seen_filters.append([s.site_index for s in filtered])
-        return filtered[:_n_desired]
-
-    _patch_fill(
-        monkeypatch,
-        fill_mod,
-        enumerate_fn=_enumerate_from(make_specs),
-        materialize_fn=_materialize_all_fail("adsorbate_overlap"),
-    )
-
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=3,
-        placement_retry_enabled=True,
-        placement_retry_max_attempts=3,
-        seed=0,
-    )
-    _run_fill(fill_mod, config)
-    assert _RETRY_BLOCK_SITE_AFTER >= 2
-    # After enough failures on site 3, later attempts should exclude it.
-    assert any(3 not in batch for batch in seen_filters[1:])
-
-
-@pytest.mark.parametrize("fail_reason", ["too_far", "vdw_overlap"])
-def test_retry_blocks_repeated_clash_reasons(fail_reason, monkeypatch):
-    """Sites with repeated too_far/vdw_overlap failures are blocked like too_close."""
+@pytest.mark.parametrize(
+    "fail_reason",
+    ["adsorbate_overlap", "too_far", "vdw_overlap"],
+)
+def test_retry_blocks_repeated_failures(fail_reason, monkeypatch):
+    """Sites whose placements repeatedly fail a blocking reason are excluded
+    from later retry batches (same treatment as ``too_close``)."""
     from metalsurfer.workflow import placement_fill as fill_mod
 
     seen_filters = []
@@ -561,6 +531,7 @@ def test_retry_blocks_repeated_clash_reasons(fail_reason, monkeypatch):
         seed=0,
     )
     _run_fill(fill_mod, config)
+    # After enough failures on site 3, later attempts should exclude it.
     assert any(3 not in batch for batch in seen_filters[1:])
 
 
