@@ -121,6 +121,60 @@ def available_site_indices(
     return [i for i, keep in enumerate(mask) if keep]
 
 
+def _positions_mutually_clear(
+    a_pos: np.ndarray,
+    b_pos: np.ndarray,
+    *,
+    cell: np.ndarray,
+    pbc: list[bool],
+    min_separation: float,
+) -> bool:
+    """Return whether every pair of positions is at least *min_separation* apart (MIC)."""
+    a_arr = _normalize_existing_positions(a_pos)
+    b_arr = _normalize_existing_positions(b_pos)
+    if a_arr.size == 0 or b_arr.size == 0:
+        return True
+    dists = geom._mol_slab_pairwise_distances(a_arr, b_arr, cell, pbc)
+    return bool(np.min(dists) >= float(min_separation))
+
+
+def results_mutually_clear(
+    a_atoms_suffix: Atoms,
+    b_atoms_suffix: Atoms,
+    *,
+    cell: np.ndarray,
+    pbc: list[bool],
+    min_separation: float,
+) -> bool:
+    """Whether two adsorbate fragments can coexist on one slab (MIC).
+
+    Pure n-tuplet primitive: every atom of *a_atoms_suffix* must be at least
+    *min_separation* from every atom of *b_atoms_suffix*. Empty fragments are
+    trivially clear.
+
+    Parameters
+    ----------
+    a_atoms_suffix
+        Adsorbate-only atoms of the first fragment.
+    b_atoms_suffix
+        Adsorbate-only atoms of the second fragment.
+    cell
+        Unit cell matrix of the underlying slab.
+    pbc
+        Material-aware periodicity flags (see
+        :func:`placement._material.material_aware_pbc`).
+    min_separation
+        Minimum adsorbate-atom to adsorbate-atom distance in Å.
+    """
+    return _positions_mutually_clear(
+        np.asarray(a_atoms_suffix.get_positions(), dtype=float),
+        np.asarray(b_atoms_suffix.get_positions(), dtype=float),
+        cell=cell,
+        pbc=pbc,
+        min_separation=min_separation,
+    )
+
+
 def filter_sites_by_occupancy(
     sites: Sequence[Site],
     existing_positions: np.ndarray | None,

@@ -696,7 +696,9 @@ class AdsorptionConfig:
     saturation_discard_topology_rearrangements: bool = True
     saturation_max_steps: int | None = None
     # Placements committed per saturation step. ``1`` is legacy sequential
-    # coverage; larger values reserve the n-tuplet scheduler (not implemented).
+    # coverage; larger values enable n-tuplet mode, where each step greedily
+    # commits several mutually clear winners via ONE composite relaxation.
+    # Committed rows carry the full tuplet E_ads (see workflow/composite.py).
     saturation_molecules_per_step: int = 1
     skip_topology_check: bool = False
     enable_dissociative_placement: bool = False

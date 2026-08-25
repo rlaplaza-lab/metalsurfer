@@ -3,7 +3,7 @@
 import logging
 import time
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, NamedTuple
 
@@ -29,6 +29,7 @@ from ..models import (
     windowed_bo_step_memories,
 )
 from ..optimization import clear_autobatcher_cache
+from ..placement._material import material_aware_pbc
 from ..placement.generators import (
     distribute_placement_budget,
     estimate_molecule_complexity,
@@ -38,6 +39,7 @@ from ..result_paths import results_dir_for
 from ..surface_prep import SlabContainer, apply_material_pbc
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian
+from .composite import evaluate_composite_commit, select_tuplet_winners
 from .core import process_molecule
 from .shared import (
     MoleculeScreenOutcome,
@@ -151,7 +153,7 @@ def _n_at_saturation_from_steps(
 ) -> int:
     """Total adsorbates folded onto the slab: sum of per-step ``n_added``.
 
-    Bound steps contribute one placement each today (n-tuplet steps will
+    Bound steps contribute one placement each in legacy mode (n-tuplet steps
     contribute several); an unbound final step contributes zero, so the total
     always equals the number of adsorbates on the returned final slab.
     """
@@ -163,20 +165,174 @@ def _reference_smiles_units_multi_molecule(
     active_smiles: dict[str, str],
     molecule_counts: dict[str, int],
     placing_molecule: str,
+    pending_additions: Mapping[str, int] | None = None,
 ) -> list[str]:
     """SMILES for every adsorbate unit present in the *screened* structure.
 
     ``molecule_counts`` is read before ``record_step`` commits the step's
-    winners, so it holds the units already on the slab. The candidate being
-    screened also contains one unit of *placing_molecule*, so add one for it.
-    Legacy steps commit exactly one winner; future n-tuplet steps will commit
-    several, and ``molecule_counts`` stays the single source of truth.
+    winners, so it holds the units already on the slab. By default the
+    candidate being screened contains exactly one pending unit of
+    *placing_molecule*. n-tuplet flows pass ``pending_additions`` (molecule ->
+    count committed this step) instead; the topology guard counts CONNECTED
+    COMPONENTS of the screened structure, so the reference length must equal
+    units-on-slab plus all pending units. ``molecule_counts`` stays the single
+    source of truth.
+
+    Parameters
+    ----------
+    active_molecules
+        Molecule names competing in this run.
+    active_smiles
+        Molecule name -> SMILES mapping.
+    molecule_counts
+        Units already folded onto the slab per molecule.
+    placing_molecule
+        Molecule whose candidates are being screened.
+    pending_additions
+        Explicit pending units for this step; ``None`` means one unit of
+        *placing_molecule* (legacy behavior).
     """
+    pending: Mapping[str, int] = (
+        {placing_molecule: 1} if pending_additions is None else pending_additions
+    )
     units: list[str] = []
     for mol in active_molecules:
-        n = molecule_counts.get(mol, 0) + (1 if mol == placing_molecule else 0)
+        n = molecule_counts.get(mol, 0) + pending.get(mol, 0)
         units.extend([active_smiles[mol]] * n)
     return units
+
+
+def _scale_budget_for_tuplet(config: AdsorptionConfig) -> AdsorptionConfig:
+    """Divide autotuned workload capacity across tuplet members (conservative).
+
+    The workload probe measures parallel relaxation capacity with a
+    representative ONE-molecule geometry; a composite candidate carries ~n x
+    atoms, so the probed pool size is floor-divided by the tuplet size before
+    budget distribution. Applied once, right after resolution (the scaled
+    config is written back, so repeat calls are never compounded).
+    """
+    n_per_step = config.saturation_molecules_per_step
+    num_placements = config.num_placements
+    if n_per_step <= 1 or num_placements is None:
+        return config
+    scaled = max(1, num_placements // n_per_step)
+    if scaled == num_placements:
+        return config
+    logger.info(
+        "n-tuplet mode: dividing probed workload capacity %d by %d -> "
+        "num_placements=%d",
+        num_placements,
+        n_per_step,
+        scaled,
+    )
+    return replace(config, num_placements=scaled)
+
+
+def _commit_n_tuplet(
+    *,
+    step: int,
+    candidates: Sequence[ScreeningResult],
+    slab_atoms: Atoms,
+    base_slab: Atoms,
+    ts_model: object,
+    config: AdsorptionConfig,
+    E_slab: float,
+    reference_unit_smiles: list[str],
+    smiles_by_molecule: Mapping[str, str],
+    log_prefix: str,
+) -> tuple[list[ScreeningResult], str]:
+    """Select and commit up to ``saturation_molecules_per_step`` winners at once.
+
+    Greedy mutual-clearance selection over *candidates* (already screened on
+    the current coverage slab), followed by composite relaxation/validation
+    via :func:`workflow.composite.evaluate_composite_commit`. On composite
+    failure with more than one winner, retries with the best winner alone
+    before giving up, so a broken tuplet never loses a step that a single
+    placement could have bound.
+
+    Returns
+    -------
+    tuple[list[ScreeningResult], str]
+        ``(rewritten_results, "committed")`` on success, ``([], "no_binders")``
+        when no candidate binds or is mutually clear, or
+        ``([], "failed")`` when every composite attempt failed validation.
+        Callers map these to the legacy outcome conventions upstream.
+    """
+    winners = select_tuplet_winners(
+        candidates,
+        cell=slab_atoms.get_cell(),
+        pbc=material_aware_pbc(config.material_type),
+        min_separation=config.min_adsorbate_separation,
+        max_winners=config.saturation_molecules_per_step,
+    )
+    if not winners:
+        logger.info(
+            "%sstep %d: no mutually clear binders; committing nothing this step",
+            log_prefix,
+            step,
+        )
+        return [], "no_binders"
+
+    topology_check = None
+    if config.saturation_discard_topology_rearrangements:
+
+        def topology_check(
+            opt_atoms: Atoms, pending_names: list[str]
+        ) -> tuple[bool, str]:
+            reference_units = [
+                *reference_unit_smiles,
+                *(smiles_by_molecule[name] for name in pending_names),
+            ]
+            return _saturation_adsorbate_topology_ok(
+                opt_atoms,
+                base_slab_len=len(base_slab),
+                reference_unit_smiles=reference_units,
+                config=config,
+            )
+
+    step_log_prefix = f"{log_prefix}step {step} | "
+    rewritten, failure = evaluate_composite_commit(
+        winners=winners,
+        slab_atoms=slab_atoms,
+        base_slab=base_slab,
+        ts_model=ts_model,
+        config=config,
+        E_slab=E_slab,
+        topology_check=topology_check,
+        log_prefix=step_log_prefix,
+    )
+    if rewritten:
+        return rewritten, "committed"
+    if len(winners) == 1:
+        logger.warning(
+            "%scomposite validation failed (%s); committing nothing",
+            step_log_prefix,
+            failure,
+        )
+        return [], "failed"
+    logger.warning(
+        "%scomposite validation failed (%s); retrying with best winner alone",
+        step_log_prefix,
+        failure,
+    )
+    rewritten, failure = evaluate_composite_commit(
+        winners=winners[:1],
+        slab_atoms=slab_atoms,
+        base_slab=base_slab,
+        ts_model=ts_model,
+        config=config,
+        E_slab=E_slab,
+        topology_check=topology_check,
+        log_prefix=step_log_prefix,
+    )
+    if not rewritten:
+        logger.warning(
+            "%ssingle-winner retry failed (%s); committing nothing",
+            step_log_prefix,
+            failure,
+        )
+        return [], "failed"
+    return rewritten, "committed"
 
 
 def _saturation_adsorbate_topology_ok(
@@ -407,6 +563,15 @@ def _saturation_should_stop(
     config: AdsorptionConfig,
     log_prefix: str,
 ) -> bool:
+    """Stop when the step's best E_ads is non-negative or max steps is reached.
+
+    n-tuplet semantics: ``best_energy`` is the committed tuplet's shared total
+    E_ads (negative whenever the composite binds), so a tuplet step keeps the
+    run going exactly when it committed at least one binder. A step that
+    commits nothing records an unbound final step (``n_added == 0``) upstream
+    and stops, preserving the max-steps guarantee that the final slab holds
+    exactly ``n_molecules_at_saturation`` adsorbates.
+    """
     if best_energy >= 0:
         logger.info("%s: slab saturated at step %d (E_ads >= 0)", log_prefix, step)
         return True
@@ -461,7 +626,7 @@ class _StepScreenOutcome:
     """Result of one saturation step's screening phase.
 
     ``committed`` lists the placements folded into the coverage slab this step
-    (one element in legacy sequential mode; n-tuplet steps will commit several).
+    (one element in legacy sequential mode; several for n-tuplet steps).
     """
 
     best: ScreeningResult
@@ -488,8 +653,8 @@ def _run_saturation_steps(
     """Shared coverage loop; single/multi differ only via screen/record callbacks.
 
     ``record_step`` receives the explicit number of adsorbate units already on
-    the slab (not ``step - 1``), keeping the loop correct for future n-tuplet
-    steps that commit several placements at once.
+    the slab (not ``step - 1``), keeping the loop correct for n-tuplet steps
+    that commit several placements at once.
     """
     symmetry_broken = False
     # Clean reference is fixed for the run; build its analyzer once.
@@ -526,7 +691,7 @@ def _run_saturation_steps(
         # An unbound final step is recorded for the record but not incorporated,
         # and this also fixes the max-steps path so the final slab holds exactly
         # ``n_molecules_at_saturation`` adsorbates. Legacy steps commit exactly
-        # one placement; n-tuplet steps will iterate several here.
+        # one placement; n-tuplet steps iterate several here.
         for placement in outcome.committed:
             current_slab = _slab_after_saturation_step(placement.atoms, config)
         n_on_slab += len(outcome.committed)
@@ -607,16 +772,18 @@ def _run_single_molecule_saturation(
                     "conformers required to resolve saturation workload config"
                 )
             slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
-            config = resolve_saturation_step_workload_config(
-                config,
-                ts_model=ts_model,
-                conformers=cached_conformers,
-                slab_atoms=slab.atoms,
-                slab_for_sites=slab_for_sites,
-                smiles=smiles,
-                base_slab_for_frozen=base_slab,
-                symmetry_broken=symmetry_broken,
-                bo_enabled=bo_enabled,
+            config = _scale_budget_for_tuplet(
+                resolve_saturation_step_workload_config(
+                    config,
+                    ts_model=ts_model,
+                    conformers=cached_conformers,
+                    slab_atoms=slab.atoms,
+                    slab_for_sites=slab_for_sites,
+                    smiles=smiles,
+                    base_slab_for_frozen=base_slab,
+                    symmetry_broken=symmetry_broken,
+                    bo_enabled=bo_enabled,
+                )
             )
         mol_results, transfer_info, new_memory, ml_records = (
             _screen_saturation_molecule(
@@ -657,9 +824,38 @@ def _run_single_molecule_saturation(
             return None
 
         best = min(mol_results, key=lambda r: r.energy_adsorption)
+        committed = [best] if best.energy_adsorption < 0 else []
+        if config.saturation_molecules_per_step > 1:
+            # n-tuplet step: greedy mutual-clearance selection + one composite
+            # relaxation covering all winners (legacy pools, new commit path).
+            committed, commit_status = _commit_n_tuplet(
+                step=step,
+                candidates=mol_results,
+                slab_atoms=slab.atoms,
+                base_slab=base_slab,
+                ts_model=ts_model,
+                config=config,
+                E_slab=preamble.E_slab,
+                reference_unit_smiles=list(units_on_slab),
+                smiles_by_molecule={molecule: smiles},
+                log_prefix=f"Saturation for {molecule} | ",
+            )
+            if commit_status == "failed":
+                logger.warning(
+                    "Step %d: n-tuplet composite validation failed for %s; "
+                    "stopping saturation",
+                    step,
+                    molecule,
+                )
+                return None
+        if committed:
+            best = min(
+                committed,
+                key=lambda r: (r.energy_adsorption, r.placement_id, r.molecule),
+            )
         return _StepScreenOutcome(
             best=best,
-            committed=[best] if best.energy_adsorption < 0 else [],
+            committed=committed,
             payload=_SingleStepPayload(
                 mol_results=mol_results,
                 transfer_info=transfer_info,
@@ -839,16 +1035,18 @@ def _run_multi_molecule_saturation(
         slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
         if needs_workload_autotune(config, bo=bo_enabled):
             largest_conformers, _ = conformer_cache[largest_mol]
-            step_config = resolve_saturation_step_workload_config(
-                config,
-                ts_model=ts_model,
-                conformers=largest_conformers,
-                slab_atoms=slab.atoms,
-                slab_for_sites=slab_for_sites,
-                smiles=active_smiles[largest_mol],
-                base_slab_for_frozen=base_slab,
-                symmetry_broken=symmetry_broken,
-                bo_enabled=bo_enabled,
+            step_config = _scale_budget_for_tuplet(
+                resolve_saturation_step_workload_config(
+                    config,
+                    ts_model=ts_model,
+                    conformers=largest_conformers,
+                    slab_atoms=slab.atoms,
+                    slab_for_sites=slab_for_sites,
+                    smiles=active_smiles[largest_mol],
+                    base_slab_for_frozen=base_slab,
+                    symmetry_broken=symmetry_broken,
+                    bo_enabled=bo_enabled,
+                )
             )
             config = step_config
         else:
@@ -972,11 +1170,44 @@ def _run_multi_molecule_saturation(
             r for results in per_molecule_results.values() for r in results
         ]
         best_overall = min(all_results_flat, key=lambda r: r.energy_adsorption)
+        # Legacy competitive steps commit exactly one winner per step;
+        # n-tuplet steps commit up to ``saturation_molecules_per_step``
+        # mutually clear winners via one composite relaxation.
+        committed = [best_overall] if best_overall.energy_adsorption < 0 else []
+        if step_config.saturation_molecules_per_step > 1:
+            committed, commit_status = _commit_n_tuplet(
+                step=step,
+                candidates=all_results_flat,
+                slab_atoms=slab.atoms,
+                base_slab=base_slab,
+                ts_model=ts_model,
+                config=step_config,
+                E_slab=E_slab,
+                reference_unit_smiles=_reference_smiles_units_multi_molecule(
+                    active_molecules,
+                    active_smiles,
+                    molecule_counts,
+                    best_overall.molecule,
+                    pending_additions={},
+                ),
+                smiles_by_molecule=active_smiles,
+                log_prefix="Multi-mol saturation | ",
+            )
+            if commit_status == "failed":
+                logger.warning(
+                    "Multi-mol saturation step %d: n-tuplet composite "
+                    "validation failed for every candidate; stopping",
+                    step,
+                )
+                return None
+        if committed:
+            best_overall = min(
+                committed,
+                key=lambda r: (r.energy_adsorption, r.placement_id, r.molecule),
+            )
         return _StepScreenOutcome(
             best=best_overall,
-            # Legacy competitive steps commit exactly one winner per step;
-            # n-tuplet mode will commit several winners simultaneously.
-            committed=[best_overall] if best_overall.energy_adsorption < 0 else [],
+            committed=committed,
             payload=_MultiStepPayload(
                 winning_molecule=best_overall.molecule,
                 per_molecule_results=per_molecule_results,
@@ -1100,17 +1331,19 @@ def run_saturation_screening(
         When True, each step uses Bayesian placement selection (and optional
         cross-step transfer). Prefer :func:`~metalsurfer.run_saturation_bo` at
         the campaign layer.
+
+    Notes
+    -----
+    With ``config.saturation_molecules_per_step > 1`` (n-tuplet mode), each
+    step greedily commits up to that many mutually compatible winners
+    simultaneously: per-molecule pools are screened as usual, winners are
+    selected by ascending E_ads subject to pairwise
+    ``min_adsorbate_separation`` clearance, and ONE composite candidate is
+    relaxed per step. Each committed row carries the full tuplet E_ads (see
+    ``workflow/composite.py`` for the agreed representation).
     """
     if config is None:
         config = AdsorptionConfig()
-    if config.saturation_molecules_per_step > 1:
-        # Step bookkeeping (n_on_slab counters, committed-placement lists, and
-        # per-step ``n_added``) is n-tuplet-ready, but only legacy sequential
-        # one-molecule-per-step coverage is implemented so far.
-        raise NotImplementedError(
-            "saturation_molecules_per_step > 1 (n-tuplet saturation) is not "
-            "implemented yet"
-        )
 
     t_run_start = time.perf_counter()
 

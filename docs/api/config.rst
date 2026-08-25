@@ -795,10 +795,20 @@ loop behavior and I/O only.
 
    Number of placements committed per saturation step. The default ``1`` runs
    legacy sequential coverage (one molecule folded into the slab per step).
-   Larger values reserve the n-tuplet mode for large substrates, where several
-   adsorbates are screened and committed simultaneously; that scheduler is not
-   implemented yet, and saturation campaigns raise ``NotImplementedError`` when
-   the value exceeds ``1``.
+   Larger values enable n-tuplet mode: each step screens the per-molecule
+   pools as usual, then greedily commits up to this many mutually compatible
+   winners (sorted by :math:`E_\mathrm{ads}`, tie-broken by placement id and
+   molecule name) subject to pairwise ``min_adsorbate_separation`` clearance,
+   and relaxes ONE composite candidate covering all winners. Each committed
+   detail row carries the full tuplet :math:`E_\mathrm{ads}`
+   (``E(composite) - E_slab - Σ E_mol``, shared across the step's rows;
+   per-unit identity survives in ``placement_id``, ``molecule``,
+   descriptor columns, per-unit ``distance``, and the extra
+   ``committed_molecule`` column emitted only for multi-winner steps). A step
+   stops the run when its committed tuplet does not bind; partial tuplets are
+   allowed when fewer clear binders exist. ``num_placements`` keeps its
+   meaning as the per-molecule screening-pool size and is divided by this
+   value after workload autotuning.
 
 Reproducibility, strictness, and I/O
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

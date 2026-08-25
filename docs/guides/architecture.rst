@@ -517,13 +517,17 @@ geometry-aware features (see above).
 ``E_ads < 0`` → refresh slab → repeat until endothermic or no placements.
 ``multi_molecule_saturation=True``: all molecules compete each step;
 budgets from occupancy-aware complexity; lowest ``E_ads`` wins.
+``saturation_molecules_per_step > 1`` (n-tuplet mode): each step greedily
+commits up to that many mutually clear winners at once and relaxes a single
+composite candidate; committed rows share the full tuplet ``E_ads``.
 
 **BO saturation** — :func:`~metalsurfer.run_saturation_bo` (YAML
 ``saturation_bo``): same saturation loop with Bayesian placement selection
 and optional cross-step transfer (see above).
 
-Stop conditions: best ``E_ads ≥ 0``; no valid placements after topology
-guard; ``saturation_max_steps`` (default unlimited).
+Stop conditions: best ``E_ads ≥ 0`` (for tuplet steps, the shared tuplet
+total); no valid placements after topology guard; ``saturation_max_steps``
+(default unlimited).
 
 Compare structures to **post-adatom** substrate files when adatoms were
 deposited during prep. Symmetry reduction is dropped once coverage breaks

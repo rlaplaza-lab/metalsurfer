@@ -14,7 +14,10 @@ from metalsurfer.placement import (
     material_aware_pbc,
 )
 from metalsurfer.placement.dissociative import _get_dissociative_site_pairs
-from metalsurfer.placement.occupancy import filter_sites_by_occupancy
+from metalsurfer.placement.occupancy import (
+    filter_sites_by_occupancy,
+    results_mutually_clear,
+)
 from metalsurfer.placement.pose import (
     _finalize_placement,
     _PlacementContext,
@@ -1132,3 +1135,71 @@ def test_initial_placement_distance_packs_free_rejects_blocked_each_material(
     )
     assert not ok_blocked
     assert reason_blocked in ("too_close", "empty_geometry")
+
+
+# ---------------------------------------------------------------------------
+# results_mutually_clear: n-tuplet pairwise adsorbate clearance
+# ---------------------------------------------------------------------------
+
+
+def _water_suffix_at(x_shift: float) -> Atoms:
+    """Adsorbate-only water fragment shifted along x (cell-sized slab context)."""
+    mol = make_water()
+    pos = mol.get_positions().copy()
+    pos[:, 0] += x_shift
+    mol.set_positions(pos)
+    return mol
+
+
+def test_results_mutually_clear_accepts_separated_fragments():
+    """Fragments several Å apart under the slab MIC are mutually clear."""
+    slab = make_slab()
+    clear = results_mutually_clear(
+        _water_suffix_at(3.0),
+        _water_suffix_at(7.0),
+        cell=slab.get_cell(),
+        pbc=material_aware_pbc("slab"),
+        min_separation=2.0,
+    )
+    assert clear
+
+
+def test_results_mutually_clear_rejects_overlapping_fragments():
+    """Two fragments at the same site clash below any sane min_separation."""
+    slab = make_slab()
+    clear = results_mutually_clear(
+        _water_suffix_at(5.0),
+        _water_suffix_at(5.2),
+        cell=slab.get_cell(),
+        pbc=material_aware_pbc("slab"),
+        min_separation=2.0,
+    )
+    assert not clear
+
+
+def test_results_mutually_clear_honours_boundary_equality():
+    """Distance exactly at min_separation counts as clear (>= semantics)."""
+    slab = make_slab()
+    a = Atoms("H", positions=[[10.0, 5.4, 5.7]])
+    b = Atoms("H", positions=[[12.0, 5.4, 5.7]])
+    assert results_mutually_clear(
+        a, b, cell=slab.get_cell(), pbc=material_aware_pbc("slab"), min_separation=2.0
+    )
+    assert not results_mutually_clear(
+        a, b, cell=slab.get_cell(), pbc=material_aware_pbc("slab"), min_separation=2.01
+    )
+
+
+def test_results_mutually_clear_wraps_periodic_images():
+    """A fragment near +x edge clashes with its -x periodic image."""
+    slab = make_slab()
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    near_edge = Atoms("H", positions=[[cell[0][0] - 0.5, 5.4, 5.7]])
+    other_side = Atoms("H", positions=[[0.5, 5.4, 5.7]])
+    assert not results_mutually_clear(
+        near_edge,
+        other_side,
+        cell=slab.get_cell(),
+        pbc=material_aware_pbc("slab"),
+        min_separation=2.0,
+    )

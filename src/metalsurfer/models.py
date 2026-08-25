@@ -555,6 +555,14 @@ def _saturation_step_structure_paths(
     step: int,
     energy_adsorption: float,
 ) -> dict[str, str]:
+    """Canonical per-step structure paths for one saturation step.
+
+    For n-tuplet steps (``n_added > 1``) these files hold the shared relaxed
+    composite: ``*_best_slab.xyz`` is substrate + all committed units and
+    ``*_adsorbate.xyz`` is the concatenated adsorbate pool (see
+    ``workflow/composite.py`` for the tuplet representation; per-winner
+    identity lives in the detail-CSV rows).
+    """
     return {
         "step_structure_path": str(mol_dir / f"step_{step:03d}_best_slab.xyz"),
         "step_structure_energy_path": str(

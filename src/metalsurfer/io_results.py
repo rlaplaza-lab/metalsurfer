@@ -606,6 +606,19 @@ def _persist_saturation_outputs(
     logger.info(log_message, results_dir)
 
 
+# Columns copied verbatim from the best row when emitting additional per-winner
+# detail rows for an n-tuplet step (one row per committed winner, shared step
+# number and cumulative ``n_molecules_on_slab``).
+_TUPLET_WINNER_COLUMNS = (
+    "placement_id",
+    "energy_adslab",
+    "energy_slab",
+    "energy_adsorbate",
+    "energy_adsorption",
+    "distance",
+)
+
+
 def _collect_saturation_csv_rows(
     steps: Sequence[SaturationStepResult | MultiMolSaturationStepResult],
     *,
@@ -626,8 +639,29 @@ def _collect_saturation_csv_rows(
             include_provenance=include_provenance,
             **detail_kwargs,
         )
+        committed_units = step_result.committed()
+        # n-tuplet steps back every committed unit with one relaxed composite;
+        # emit one detail row per winner so per-unit placement_id / molecule /
+        # descriptor survive in saturation_details.csv. The extra
+        # ``committed_molecule`` column appears only when a tuplet actually
+        # committed >1 winner, keeping legacy single-winner CSVs byte-identical.
+        if len(committed_units) > 1:
+            detail_row["committed_molecule"] = committed_units[0].molecule
         detail_row["schema_version"] = SCHEMA_VERSION
         detail_rows.append(detail_row)
+        for winner in committed_units[1:]:
+            winner_row = dict(detail_row)
+            winner_row.update(
+                {col: getattr(winner, col) for col in _TUPLET_WINNER_COLUMNS}
+            )
+            winner_row.update(
+                winner.placement_descriptor.to_row(
+                    include_provenance=include_provenance
+                )
+            )
+            winner_row["committed_molecule"] = winner.molecule
+            winner_row["schema_version"] = SCHEMA_VERSION
+            detail_rows.append(winner_row)
         if not save_all:
             continue
         for prow in step_result.to_rows(

@@ -1955,18 +1955,410 @@ def test_single_mol_saturation_resolves_workload_config_once(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# n-tuplet preparation: per-step commit bookkeeping
+# n-tuplet mode: multiple placements committed per step
 # ---------------------------------------------------------------------------
 
 
-def test_run_saturation_screening_rejects_n_tuplet_mode():
-    """saturation_molecules_per_step > 1 gates before any heavy setup."""
-    with pytest.raises(NotImplementedError, match="n-tuplet"):
-        run_saturation_screening(
-            make_slab(),
-            molecules=[("O", "water")],
-            config=AdsorptionConfig(saturation_molecules_per_step=2),
+def _pool_process(pools: dict[str, list[tuple[float, float]]]):
+    """process_molecule double returning a fixed multi-candidate pool per call.
+
+    Each pool entry is ``(energy_adsorption, x_shift)``; results are laid out
+    on a y-grid row so entries with distinct x_shift are mutually clear while
+    near-identical x_shifts clash.
+    """
+
+    def _fake(_smi, mol, current_slab, *_args, **_kwargs):
+        results = [
+            make_screening_result(
+                molecule=mol,
+                placement_id=i,
+                energy_adsorption=e_ads,
+                atoms=place_molecule_on_slab(
+                    current_slab.atoms, make_water(), x_shift=x_shift
+                ),
+                slab_size=len(current_slab.atoms),
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(placement_id=i),
+            )
+            for i, (e_ads, x_shift) in enumerate(pools[mol])
+        ]
+        return MoleculeScreenOutcome(results=results)
+
+    return _fake
+
+
+def _patch_identity_tuplet_relaxation(monkeypatch, *, composite_energy: float):
+    """No-op composite relaxation with a fixed total energy and zero forces."""
+
+    def _fake_optimize(combined_atoms_list, *_args, **_kwargs):
+        from .conftest import mock_calculator
+
+        relaxed = []
+        for atoms in combined_atoms_list:
+            copy = atoms.copy()
+            copy.calc = mock_calculator(energy=composite_energy, n_atoms=len(atoms))
+            relaxed.append(copy)
+        return relaxed
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.composite.optimize_adsorbate_slab_batched",
+        _fake_optimize,
+    )
+
+
+def test_run_saturation_screening_n_tuplet_commits_two_winners_per_step(
+    monkeypatch, workdir
+):
+    """n=2 multi-molecule saturation commits two clear winners per step."""
+    slab = make_slab()
+    base_n = len(slab)
+    # One clear binder per molecule on opposite sides of the slab: both join
+    # the step-1 tuplet. The non-binding entry never reaches selection.
+    process = _pool_process({"A": [(-0.6, 2.5), (0.5, 2.6)], "B": [(-0.5, 7.0)]})
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["A", "B"],
+        smiles_list=["OA", "OB"],
+        ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
+        process_molecule=process,
+    )
+    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-130.0)
+
+    out = run_saturation_screening(
+        SlabContainer(slab),
+        molecules=[("OA", "A"), ("OB", "B")],
+        config=_mock_saturation_config(
+            multi_molecule_saturation=True,
+            saturation_molecules_per_step=2,
+            saturation_max_steps=1,
+        ),
+        surface_type="tuplet_two_winners",
+        skip_existing=False,
+    )
+
+    assert len(out) == 1
+    run = out[0]
+    assert len(run.steps) == 1
+    step = run.steps[0]
+    assert step.n_added == 2
+    assert len(step.committed_results) == 2
+    assert {r.molecule for r in step.committed_results} == {"A", "B"}
+    assert run.n_molecules_at_saturation == 2
+    assert run.molecule_counts == {"A": 1, "B": 1}
+    # Max-steps guarantee: final slab holds exactly sum(n_added) adsorbates.
+    assert len(run.final_slab_atoms) == base_n + 2 * len(make_water())
+    # Option A accounting: both rows share the tuplet totals; identity holds.
+    first, second = step.committed_results
+    for row in (first, second):
+        assert row.energy_adsorption == pytest.approx(-10.0)
+        assert row.energy_adslab - row.energy_slab - row.energy_adsorbate == (
+            pytest.approx(row.energy_adsorption)
         )
+    assert first.distance > 0 and second.distance > 0
+
+
+def test_run_saturation_screening_n_tuplet_rejects_clashing_second_winner(
+    monkeypatch, workdir
+):
+    """Two binders at the same site yield a partial (single-winner) tuplet."""
+    slab = make_slab()
+    process = _pool_process({"A": [(-0.6, 5.0)], "B": [(-0.5, 5.15)]})
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["A", "B"],
+        smiles_list=["OA", "OB"],
+        ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
+        process_molecule=process,
+    )
+    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-130.0)
+
+    out = run_saturation_screening(
+        SlabContainer(slab),
+        molecules=[("OA", "A"), ("OB", "B")],
+        config=_mock_saturation_config(
+            multi_molecule_saturation=True,
+            saturation_molecules_per_step=2,
+            saturation_max_steps=1,
+        ),
+        surface_type="tuplet_clash",
+        skip_existing=False,
+    )
+
+    step = out[0].steps[0]
+    assert step.n_added == 1
+    assert len(step.committed_results) == 1
+    assert step.committed_results[0].molecule == "A"
+    assert out[0].n_molecules_at_saturation == 1
+
+
+def test_run_saturation_screening_n_tuplet_single_molecule_path(monkeypatch, workdir):
+    """The sequential single-molecule loop also commits n>1 copies per step."""
+    slab = make_slab()
+    base_n = len(slab)
+    process = _pool_process({"water": [(-0.6, 2.5), (-0.4, 7.0)]})
+    _patch_single_mol_saturation_mocks(
+        monkeypatch,
+        molecule="water",
+        smiles="O",
+        ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
+        process_molecule=process,
+    )
+    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-130.0)
+
+    out = run_saturation_screening(
+        SlabContainer(slab),
+        molecules=[("O", "water")],
+        config=_mock_saturation_config(
+            saturation_molecules_per_step=2,
+            saturation_max_steps=1,
+        ),
+        surface_type="tuplet_single_path",
+        skip_existing=False,
+    )
+
+    assert len(out) == 1
+    step = out[0].steps[0]
+    assert step.n_added == 2
+    assert len(step.committed_results) == 2
+    assert out[0].n_molecules_at_saturation == 2
+    assert len(out[0].final_slab_atoms) == base_n + 2 * len(make_water())
+
+
+def test_run_saturation_screening_n_tuplet_composite_failure_stops_run(
+    monkeypatch, workdir
+):
+    """When composite validation fails outright the run stops with zero steps."""
+
+    def _always_fail(**_kwargs):
+        return [], "boom"
+
+    slab = make_slab()
+    process = _pool_process({"A": [(-0.6, 2.5)], "B": [(-0.5, 7.0)]})
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["A", "B"],
+        smiles_list=["OA", "OB"],
+        ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
+        process_molecule=process,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.evaluate_composite_commit",
+        lambda **kw: _always_fail(),
+    )
+
+    out = run_saturation_screening(
+        SlabContainer(slab),
+        molecules=[("OA", "A"), ("OB", "B")],
+        config=_mock_saturation_config(
+            multi_molecule_saturation=True,
+            saturation_molecules_per_step=2,
+        ),
+        surface_type="tuplet_failure",
+        skip_existing=False,
+    )
+
+    # Composite failure ends the run like "no valid placements": nothing is
+    # recorded, and the returned multi-mol run carries zero steps.
+    assert len(out) == 1
+    assert out[0].steps == []
+    assert out[0].n_molecules_at_saturation == 0
+    assert len(out[0].final_slab_atoms) == len(slab)
+
+
+def test_reference_smiles_units_multi_molecule_pending_additions():
+    """pending_additions generalizes the +1 pending unit of legacy steps."""
+    units = _reference_smiles_units_multi_molecule(
+        ["A", "B"],
+        {"A": "OA", "B": "OB"},
+        {"A": 2, "B": 1},
+        "B",
+    )
+    assert units == ["OA", "OA", "OB", "OB"]
+
+    tuplet = _reference_smiles_units_multi_molecule(
+        ["A", "B"],
+        {"A": "OA", "B": "OB"},
+        {"A": 2, "B": 1},
+        "B",
+        pending_additions={"A": 3},
+    )
+    assert tuplet == ["OA"] * 5 + ["OB"]
+
+
+def test_save_multi_mol_saturation_details_one_row_per_tuplet_winner(workdir):
+    """A 2-winner step writes two detail rows sharing the step number."""
+    slab = make_slab()
+    composite = place_molecule_on_slab(slab, make_water())
+    winner_a = make_screening_result(
+        molecule="water",
+        placement_id=0,
+        energy_adsorption=-10.0,
+        energy_adslab=-130.0,
+        energy_slab=-100.0,
+        energy_adsorbate=-20.0,
+        atoms=composite,
+        slab_size=len(slab),
+        distance=2.8,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    winner_b = make_screening_result(
+        molecule="CO2",
+        placement_id=3,
+        energy_adsorption=-10.0,
+        energy_adslab=-130.0,
+        energy_slab=-100.0,
+        energy_adsorbate=-20.0,
+        atoms=composite.copy(),
+        slab_size=len(slab),
+        distance=3.1,
+        placement_descriptor=make_placement_descriptor(placement_id=3),
+    )
+    step = MultiMolSaturationStepResult(
+        step=1,
+        winning_molecule="water",
+        n_molecules_on_slab=0,
+        best_result=winner_a,
+        per_molecule_results={"water": [winner_a], "CO2": [winner_b]},
+        per_molecule_budgets={"water": 50, "CO2": 50},
+        n_added=2,
+        committed_results=[winner_a, winner_b],
+    )
+    result = MultiMolSaturationRunResult(
+        molecules=["water", "CO2"],
+        steps=[step],
+        n_molecules_at_saturation=2,
+        final_slab_atoms=composite.copy(),
+        molecule_counts={"water": 1, "CO2": 1},
+    )
+
+    setup_directories(["tuplet_io_test"])
+    save_multi_mol_saturation_results(result, surface_type="tuplet_io_test")
+
+    details_df = pd.read_csv(
+        workdir / "results_tuplet_io_test" / "saturation_details.csv"
+    )
+    assert len(details_df) == 2
+    assert set(details_df["step"]) == {1}
+    assert set(details_df["committed_molecule"]) == {"water", "CO2"}
+    assert sorted(details_df["placement_id"].tolist()) == [0, 3]
+    # Shared tuplet energies on every row.
+    assert details_df["energy_adsorption"].tolist() == pytest.approx([-10.0, -10.0])
+    water_row = details_df[details_df["committed_molecule"] == "water"].iloc[0]
+    co2_row = details_df[details_df["committed_molecule"] == "CO2"].iloc[0]
+    assert float(water_row["distance"]) == pytest.approx(2.8)
+    assert float(co2_row["distance"]) == pytest.approx(3.1)
+
+
+def test_save_saturation_details_one_row_per_tuplet_winner_single_path(workdir):
+    """Single-molecule runs emit one detail row per committed copy too."""
+    slab = make_slab()
+    combined = place_molecule_on_slab(slab, make_water())
+    best = make_screening_result(
+        molecule="water",
+        placement_id=0,
+        energy_adsorption=-10.0,
+        energy_adslab=-130.0,
+        energy_slab=-100.0,
+        energy_adsorbate=-20.0,
+        atoms=combined,
+        slab_size=len(slab),
+        distance=2.8,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    other = make_screening_result(
+        molecule="water",
+        placement_id=1,
+        energy_adsorption=-10.0,
+        energy_adslab=-130.0,
+        energy_slab=-100.0,
+        energy_adsorbate=-20.0,
+        atoms=combined.copy(),
+        slab_size=len(slab),
+        distance=3.0,
+        placement_descriptor=make_placement_descriptor(placement_id=1),
+    )
+    step = SaturationStepResult(
+        step=1,
+        molecule="water",
+        n_molecules_on_slab=0,
+        best_result=best,
+        all_results=[best, other],
+        n_added=2,
+        committed_results=[best, other],
+    )
+    run = SaturationRunResult(
+        molecule="water",
+        steps=[step],
+        n_molecules_at_saturation=2,
+        final_slab_atoms=combined.copy(),
+    )
+
+    setup_directories(["tuplet_io_single_test"])
+    save_saturation_results([run], surface_type="tuplet_io_single_test")
+
+    details_df = pd.read_csv(
+        workdir / "results_tuplet_io_single_test" / "saturation_details.csv"
+    )
+    assert len(details_df) == 2
+    assert set(details_df["step"]) == {1}
+    assert sorted(details_df["placement_id"].tolist()) == [0, 1]
+
+
+def test_single_mol_n_tuplet_divides_autotuned_budget(monkeypatch):
+    """Autotuned pool size is floor-divided by the tuplet size before screening."""
+    from dataclasses import replace as dc_replace
+
+    slab = SlabContainer(make_slab())
+    bare = slab.atoms.copy()
+    received_configs: list[int] = []
+
+    def _fake_resolve(config, **_kwargs):
+        return dc_replace(config, num_placements=11)
+
+    def _fake_process(_smi, mol, current_slab, *_args, **kwargs):
+        received_configs.append(kwargs["config"].num_placements)
+        return MoleculeScreenOutcome(
+            results=[
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=0,
+                    energy_adsorption=-0.5,
+                    atoms=place_molecule_on_slab(current_slab.atoms, make_water()),
+                    slab_size=len(bare),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=0),
+                )
+            ]
+        )
+
+    _patch_single_mol_saturation_mocks(
+        monkeypatch,
+        molecule="water",
+        smiles="O",
+        ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
+        process_molecule=_fake_process,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.resolve_saturation_step_workload_config",
+        _fake_resolve,
+    )
+    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-130.0)
+
+    out = run_saturation_screening(
+        slab,
+        molecules="unused.csv",
+        config=AdsorptionConfig(
+            num_placements=None,
+            saturation_molecules_per_step=2,
+            saturation_max_steps=1,
+            saturation_discard_topology_rearrangements=False,
+        ),
+        surface_type="tuplet_autotune",
+        skip_existing=False,
+    )
+
+    assert received_configs == [max(1, 11 // 2)]
+    assert out[0].steps[0].n_added == 1
 
 
 def _steps_for_counting():
