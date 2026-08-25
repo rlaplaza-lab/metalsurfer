@@ -695,6 +695,9 @@ class AdsorptionConfig:
     export_placement_provenance: bool = False
     saturation_discard_topology_rearrangements: bool = True
     saturation_max_steps: int | None = None
+    # Placements committed per saturation step. ``1`` is legacy sequential
+    # coverage; larger values reserve the n-tuplet scheduler (not implemented).
+    saturation_molecules_per_step: int = 1
     skip_topology_check: bool = False
     enable_dissociative_placement: bool = False
     skip_desorption_check: bool = False
@@ -801,6 +804,9 @@ class AdsorptionConfig:
 
         if self.saturation_max_steps is not None:
             _check_positive_int("saturation_max_steps", self.saturation_max_steps)
+        _check_positive_int(
+            "saturation_molecules_per_step", self.saturation_molecules_per_step
+        )
 
 
 def resolve_adsorption_config(

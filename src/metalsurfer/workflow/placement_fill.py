@@ -173,7 +173,13 @@ def _absorb_chunk(
 
 @dataclass
 class MaterializeFillResult:
-    """Outcome of materializing specs up to a target count."""
+    """Outcome of materializing specs up to a target count.
+
+    ``n_attempts`` counts enumeration/materialization rounds: always ``1``
+    for :func:`materialize_specs_filling_target` (single primary pass plus
+    yield-sized backfill chunks), and the real retry-round count for
+    :func:`fill_materialized_placements`.
+    """
 
     combined: list[Atoms]
     placement_ids: list[int]
@@ -294,11 +300,9 @@ def materialize_specs_filling_target(
             chunk = list(backfill_specs[offset : offset + n_request])
             if not chunk:
                 break
-            tried, ok = _materialize_and_absorb(chunk)
-            offset += tried
-            if tried > 0 and ok == 0:
-                # Entire chunk failed; advance and try further backfill.
-                continue
+            # A fully failed chunk just advances *offset* so the next
+            # iteration draws fresh backfill specs.
+            offset += _materialize_and_absorb(chunk)[0]
 
     return MaterializeFillResult(
         combined=combined,

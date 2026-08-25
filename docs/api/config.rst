@@ -790,6 +790,16 @@ loop behavior and I/O only.
    Optional hard cap on saturation loop depth. ``None`` runs until adsorption is
    unfavorable or no valid placements remain.
 
+``saturation_molecules_per_step``
+   **Type:** ``int`` · **Default:** ``1``
+
+   Number of placements committed per saturation step. The default ``1`` runs
+   legacy sequential coverage (one molecule folded into the slab per step).
+   Larger values reserve the n-tuplet mode for large substrates, where several
+   adsorbates are screened and committed simultaneously; that scheduler is not
+   implemented yet, and saturation campaigns raise ``NotImplementedError`` when
+   the value exceeds ``1``.
+
 Reproducibility, strictness, and I/O
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

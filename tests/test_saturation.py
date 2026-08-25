@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 from collections.abc import Callable
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -42,6 +43,7 @@ from metalsurfer.symmetry import SymmetryAnalysisError
 from metalsurfer.workflow import load_molecules, run_saturation_screening
 from metalsurfer.workflow.saturation import (
     _filter_saturation_topology_results,
+    _n_at_saturation_from_steps,
     _reference_smiles_units_multi_molecule,
     _saturation_adsorbate_topology_ok,
     _saturation_symmetry_broken_vs_reference,
@@ -70,6 +72,7 @@ from .factories import (
     REF_CONSTANT,
     REF_WATER_CO2,
     make_saturation_run,
+    make_saturation_step,
 )
 
 
@@ -1949,3 +1952,55 @@ def test_single_mol_saturation_resolves_workload_config_once(monkeypatch):
     assert len(resolve_calls) == 1
     assert len(out) == 1
     assert len(out[0].steps) == 2
+
+
+# ---------------------------------------------------------------------------
+# n-tuplet preparation: per-step commit bookkeeping
+# ---------------------------------------------------------------------------
+
+
+def test_run_saturation_screening_rejects_n_tuplet_mode():
+    """saturation_molecules_per_step > 1 gates before any heavy setup."""
+    with pytest.raises(NotImplementedError, match="n-tuplet"):
+        run_saturation_screening(
+            make_slab(),
+            molecules=[("O", "water")],
+            config=AdsorptionConfig(saturation_molecules_per_step=2),
+        )
+
+
+def _steps_for_counting():
+    """Two bound steps + unbound final step, mirroring a real run."""
+    bound_1 = make_saturation_step(step=1, n_molecules_on_slab=0)
+    bound_2 = make_saturation_step(step=2, n_molecules_on_slab=1)
+    unbound = make_saturation_step(
+        step=3,
+        n_molecules_on_slab=2,
+        energy_adsorption=0.5,
+    )
+    # Workflow contract: committed placements set n_added; the unbound final
+    # step commits nothing.
+    return [
+        replace(bound_1, n_added=1),
+        replace(bound_2, n_added=1),
+        replace(unbound, n_added=0),
+    ]
+
+
+def test_n_at_saturation_from_steps_sums_added():
+    """Total adsorbates = sum of per-step n_added (unbound final adds zero)."""
+    steps = _steps_for_counting()
+    assert _n_at_saturation_from_steps(steps) == 2
+
+
+def test_n_at_saturation_from_steps_matches_legacy_formula():
+    """Sum-based counting equals the legacy last-step formula for legacy runs."""
+    steps = _steps_for_counting()
+    legacy = steps[-1].n_molecules_on_slab + (
+        1 if steps[-1].best_result.energy_adsorption < 0 else 0
+    )
+    assert _n_at_saturation_from_steps(steps) == legacy
+
+
+def test_n_at_saturation_from_steps_empty():
+    assert _n_at_saturation_from_steps([]) == 0

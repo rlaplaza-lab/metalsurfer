@@ -244,6 +244,67 @@ def test_saturation_step_result():
     )
 
 
+def test_saturation_step_result_n_added_defaults_and_committed():
+    """Legacy steps default to one committed placement; unbound steps to none."""
+    slab = make_slab()
+    bound = ScreeningResult(
+        molecule="water",
+        placement_id=0,
+        energy_adslab=-190.0,
+        energy_slab=-200.0,
+        energy_adsorbate=-10.0,
+        energy_adsorption=-1.0,
+        atoms=place_molecule_on_slab(slab, make_water()),
+        slab_size=len(slab),
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    legacy = SaturationStepResult(
+        step=1,
+        molecule="water",
+        n_molecules_on_slab=0,
+        best_result=bound,
+        all_results=[bound],
+    )
+    assert legacy.n_added == 1
+    assert legacy.committed_results == []
+    assert legacy.committed() == [bound]
+
+    unbound_best = ScreeningResult(
+        molecule="water",
+        placement_id=1,
+        energy_adslab=-199.0,
+        energy_slab=-200.0,
+        energy_adsorbate=-10.0,
+        energy_adsorption=1.0,
+        atoms=place_molecule_on_slab(slab, make_water()),
+        slab_size=len(slab),
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=1),
+    )
+    unbound = SaturationStepResult(
+        step=2,
+        molecule="water",
+        n_molecules_on_slab=1,
+        best_result=unbound_best,
+        all_results=[unbound_best],
+        n_added=0,
+    )
+    assert unbound.committed() == []
+
+    explicit = [bound, bound]
+    multi = SaturationStepResult(
+        step=2,
+        molecule="water",
+        n_molecules_on_slab=1,
+        best_result=bound,
+        all_results=[bound],
+        n_added=2,
+        committed_results=explicit,
+    )
+    assert multi.committed() == explicit
+
+
 def test_saturation_run_result():
     """SaturationRunResult holds steps and saturation count."""
     slab = make_slab()

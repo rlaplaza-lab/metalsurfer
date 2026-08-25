@@ -2,7 +2,8 @@
 
 import logging
 import time
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, NamedTuple
 
@@ -145,13 +146,16 @@ def _validate_distinct_bo_memories(
         seen_by_id[id(memory)] = molecule
 
 
-def _n_at_saturation_from_steps(steps: list[Any]) -> int:
-    if not steps:
-        return 0
-    last_step = steps[-1]
-    return last_step.n_molecules_on_slab + (
-        1 if last_step.best_result.energy_adsorption < 0 else 0
-    )
+def _n_at_saturation_from_steps(
+    steps: Sequence[SaturationStepResult | MultiMolSaturationStepResult],
+) -> int:
+    """Total adsorbates folded onto the slab: sum of per-step ``n_added``.
+
+    Bound steps contribute one placement each today (n-tuplet steps will
+    contribute several); an unbound final step contributes zero, so the total
+    always equals the number of adsorbates on the returned final slab.
+    """
+    return sum(step.n_added for step in steps)
 
 
 def _reference_smiles_units_multi_molecule(
@@ -162,10 +166,11 @@ def _reference_smiles_units_multi_molecule(
 ) -> list[str]:
     """SMILES for every adsorbate unit present in the *screened* structure.
 
-    ``molecule_counts`` is read before ``record_step`` increments it, so it holds
-    the units already on the slab (``step - 1`` of them). The candidate being
-    screened also contains the unit currently being placed, so add one for
-    *placing_molecule*. This mirrors ``[smiles] * step`` in the single-molecule path.
+    ``molecule_counts`` is read before ``record_step`` commits the step's
+    winners, so it holds the units already on the slab. The candidate being
+    screened also contains one unit of *placing_molecule*, so add one for it.
+    Legacy steps commit exactly one winner; future n-tuplet steps will commit
+    several, and ``molecule_counts`` stays the single source of truth.
     """
     units: list[str] = []
     for mol in active_molecules:
@@ -329,6 +334,7 @@ def _screen_saturation_molecule(
     failure_summary_out: dict[str, FailureSummary] | None,
     symmetry_broken: bool,
     process_fn: Callable[..., MoleculeScreenOutcome],
+    bo_enabled: bool,
     bo_state: _BoMemoryState | None,
     reference_unit_smiles: list[str],
     conformers: list[Atoms] | None = None,
@@ -351,7 +357,7 @@ def _screen_saturation_molecule(
         "conformer_energies": conformer_energies,
         "skip_workload_autotune": skip_workload_autotune,
     }
-    if process_fn is process_molecule_bayesian:
+    if bo_enabled:
         outcome = process_fn(
             smiles,
             molecule_name,
@@ -414,12 +420,53 @@ def _saturation_should_stop(
     return False
 
 
+def _resolve_conformer_pack(
+    *,
+    smiles: str,
+    molecule: str,
+    ref: ReferenceEnergies,
+    calculator: object,
+    ts_model: object,
+    config: AdsorptionConfig,
+) -> tuple[list[Atoms], list[float]] | None:
+    """Conformers+energies for *molecule*: reference cache first, else generate."""
+    cached_pack = ref.get_conformer_pack(molecule)
+    if cached_pack is not None:
+        return cached_pack
+    return create_conformers_from_smiles(
+        smiles, calculator=calculator, config=config, ts_model=ts_model
+    )
+
+
+@dataclass(frozen=True)
+class _SingleStepPayload:
+    """Per-step bookkeeping for single-molecule saturation."""
+
+    mol_results: list[ScreeningResult]
+    transfer_info: BOTransferInfo
+
+
+@dataclass(frozen=True)
+class _MultiStepPayload:
+    """Per-step bookkeeping for competitive multi-molecule saturation."""
+
+    winning_molecule: str
+    per_molecule_results: dict[str, list[ScreeningResult]]
+    budgets: dict[str, int]
+    transfer_by_molecule: dict[str, BOTransferInfo]
+
+
 @dataclass(frozen=True)
 class _StepScreenOutcome:
-    """Result of one saturation step's screening phase."""
+    """Result of one saturation step's screening phase.
+
+    ``committed`` lists the placements folded into the coverage slab this step
+    (one element in legacy sequential mode; n-tuplet steps will commit several).
+    """
 
     best: ScreeningResult
-    payload: Any = None
+    committed: list[ScreeningResult]
+    payload: _SingleStepPayload | _MultiStepPayload
 
 
 def _run_saturation_steps(
@@ -436,9 +483,14 @@ def _run_saturation_steps(
         [int, _SaturationStepPreamble, SlabContainer],
         _StepScreenOutcome | None,
     ],
-    record_step: Callable[[int, _StepScreenOutcome], None],
+    record_step: Callable[[int, int, _StepScreenOutcome], None],
 ) -> Atoms:
-    """Shared coverage loop; single/multi differ only via screen/record callbacks."""
+    """Shared coverage loop; single/multi differ only via screen/record callbacks.
+
+    ``record_step`` receives the explicit number of adsorbate units already on
+    the slab (not ``step - 1``), keeping the loop correct for future n-tuplet
+    steps that commit several placements at once.
+    """
     symmetry_broken = False
     # Clean reference is fixed for the run; build its analyzer once.
     reference_analyzer = SymmetryAnalyzer(
@@ -446,9 +498,10 @@ def _run_saturation_steps(
         symmetry_tolerance=config.symmetry_tolerance,
     )
     step = 0
+    n_on_slab = 0
     while True:
         step += 1
-        log_step_start(step, step - 1)
+        log_step_start(step, n_on_slab)
 
         preamble = _saturation_step_preamble(
             step=step,
@@ -467,14 +520,16 @@ def _run_saturation_steps(
         if outcome is None:
             break
 
-        record_step(step, outcome)
+        record_step(step, n_on_slab, outcome)
 
-        # Only fold a bound step into the coverage slab. An unbound final step is
-        # recorded for the record but not incorporated (matches
-        # ``_n_at_saturation_from_steps``), and this also fixes the max-steps path
-        # so the final slab holds exactly ``n_molecules_at_saturation`` adsorbates.
-        if outcome.best.energy_adsorption < 0:
-            current_slab = _slab_after_saturation_step(outcome.best.atoms, config)
+        # Only fold a bound step's committed placements into the coverage slab.
+        # An unbound final step is recorded for the record but not incorporated,
+        # and this also fixes the max-steps path so the final slab holds exactly
+        # ``n_molecules_at_saturation`` adsorbates. Legacy steps commit exactly
+        # one placement; n-tuplet steps will iterate several here.
+        for placement in outcome.committed:
+            current_slab = _slab_after_saturation_step(placement.atoms, config)
+        n_on_slab += len(outcome.committed)
 
         if _saturation_should_stop(
             best_energy=outcome.best.energy_adsorption,
@@ -500,25 +555,33 @@ def _run_single_molecule_saturation(
     failure_summary_out: dict[str, FailureSummary] | None,
     ds_logger: DatasetLogger,
     process_fn: Callable[..., MoleculeScreenOutcome],
+    bo_enabled: bool,
 ) -> SaturationRunResult | None:
     """Coverage loop for one adsorbate until unbound or max steps."""
-    bo_enabled = process_fn is process_molecule_bayesian
-    cached_conformers: list[Atoms] | None = None
-    cached_conformer_energies: list[float] | None = None
-    cached_pack = ref.get_conformer_pack(molecule)
-    if cached_pack is not None:
-        cached_conformers, cached_conformer_energies = cached_pack
-    else:
-        conformer_pack = create_conformers_from_smiles(
-            smiles, calculator=calculator, config=config, ts_model=ts_model
+    pack = _resolve_conformer_pack(
+        smiles=smiles,
+        molecule=molecule,
+        ref=ref,
+        calculator=calculator,
+        ts_model=ts_model,
+        config=config,
+    )
+    cached_conformers, cached_conformer_energies = (
+        pack
+        if pack is not None
+        else (
+            None,
+            None,
         )
-        if conformer_pack is not None:
-            cached_conformers, cached_conformer_energies = conformer_pack
+    )
 
     current_slab = SlabContainer(base_slab.copy())
     steps: list[SaturationStepResult] = []
     bo_state = _BoMemoryState()
     committed_placement_X: list[dict[str, float]] = []
+    # SMILES of every adsorbate unit folded onto the slab so far (one per
+    # committed placement); the screened candidate adds *smiles* on top.
+    units_on_slab: list[str] = []
 
     def screen_step(
         step: int,
@@ -570,8 +633,9 @@ def _run_single_molecule_saturation(
                 failure_summary_out=failure_summary_out,
                 symmetry_broken=symmetry_broken,
                 process_fn=process_fn,
+                bo_enabled=bo_enabled,
                 bo_state=bo_state if bo_enabled else None,
-                reference_unit_smiles=[smiles] * step,
+                reference_unit_smiles=[*units_on_slab, smiles],
                 conformers=cached_conformers,
                 conformer_energies=cached_conformer_energies,
                 skip_workload_autotune=True,
@@ -595,37 +659,48 @@ def _run_single_molecule_saturation(
         best = min(mol_results, key=lambda r: r.energy_adsorption)
         return _StepScreenOutcome(
             best=best,
-            payload=(mol_results, transfer_info),
+            committed=[best] if best.energy_adsorption < 0 else [],
+            payload=_SingleStepPayload(
+                mol_results=mol_results,
+                transfer_info=transfer_info,
+            ),
         )
 
-    def record_step(step: int, outcome: _StepScreenOutcome) -> None:
+    def record_step(step: int, n_on_slab: int, outcome: _StepScreenOutcome) -> None:
         """Record the results of one saturation step.
 
         Parameters
         ----------
         step
             Current step number (1-based).
+        n_on_slab
+            Adsorbate units already folded onto the slab before this step.
         outcome
             Screening outcome to record.
         """
-        n_on_slab = step - 1
-        mol_results, transfer_info = outcome.payload
+        payload = outcome.payload
+        assert isinstance(payload, _SingleStepPayload)
         steps.append(
             SaturationStepResult(
                 step=step,
                 molecule=molecule,
                 n_molecules_on_slab=n_on_slab,
                 best_result=outcome.best,
-                all_results=mol_results,
+                all_results=payload.mol_results,
                 bo_transfer_enabled=bool(config.bo.transfer.enabled),
-                transfer=transfer_info,
+                transfer=payload.transfer_info,
+                n_added=len(outcome.committed),
+                committed_results=outcome.committed,
             )
         )
-        ds_logger.add_results(mol_results, smiles=smiles, surface_id=surface_type)
-        if outcome.best.energy_adsorption < 0:
+        ds_logger.add_results(
+            payload.mol_results, smiles=smiles, surface_id=surface_type
+        )
+        for placement in outcome.committed:
+            units_on_slab.append(smiles)
             committed_placement_X.append(
                 _committed_placement_features(
-                    outcome.best,
+                    placement,
                     smiles=smiles,
                     surface_id=surface_type,
                     config=config,
@@ -679,30 +754,27 @@ def _run_multi_molecule_saturation(
     ds_logger: DatasetLogger,
     *,
     process_fn: Callable[..., MoleculeScreenOutcome],
+    bo_enabled: bool,
 ) -> MultiMolSaturationRunResult:
     """Run a competitive multi-molecule saturation loop."""
-    bo_enabled = process_fn is process_molecule_bayesian
     conformer_cache: dict[str, tuple[list[Atoms], list[float]]] = {}
 
     for smi, mol in zip(smiles_list, molecules, strict=True):
-        cached_pack = ref.get_conformer_pack(mol)
-        if cached_pack is not None:
-            conformers, conformer_energies = cached_pack
-        else:
-            generated = create_conformers_from_smiles(
-                smi,
-                calculator=calculator,
-                config=config,
-                ts_model=ts_model,
+        pack = _resolve_conformer_pack(
+            smiles=smi,
+            molecule=mol,
+            ref=ref,
+            calculator=calculator,
+            ts_model=ts_model,
+            config=config,
+        )
+        if pack is None:
+            logger.warning(
+                "Multi-mol saturation: could not generate conformers for %s; skipping this molecule",
+                mol,
             )
-            if generated is None:
-                logger.warning(
-                    "Multi-mol saturation: could not generate conformers for %s; skipping this molecule",
-                    mol,
-                )
-                continue
-            conformers, conformer_energies = generated
-        conformer_cache[mol] = (conformers, conformer_energies)
+            continue
+        conformer_cache[mol] = pack
 
     active_smiles = {
         mol: smi
@@ -846,6 +918,7 @@ def _run_multi_molecule_saturation(
                     failure_summary_out=failure_summary_out,
                     symmetry_broken=symmetry_broken,
                     process_fn=process_fn,
+                    bo_enabled=bo_enabled,
                     bo_state=bo_states[mol] if bo_enabled else None,
                     reference_unit_smiles=_reference_smiles_units_multi_molecule(
                         active_molecules,
@@ -901,31 +974,33 @@ def _run_multi_molecule_saturation(
         best_overall = min(all_results_flat, key=lambda r: r.energy_adsorption)
         return _StepScreenOutcome(
             best=best_overall,
-            payload=(
-                best_overall.molecule,
-                per_molecule_results,
-                dict(budgets),
-                per_molecule_bo_transfer,
+            # Legacy competitive steps commit exactly one winner per step;
+            # n-tuplet mode will commit several winners simultaneously.
+            committed=[best_overall] if best_overall.energy_adsorption < 0 else [],
+            payload=_MultiStepPayload(
+                winning_molecule=best_overall.molecule,
+                per_molecule_results=per_molecule_results,
+                budgets=dict(budgets),
+                transfer_by_molecule=per_molecule_bo_transfer,
             ),
         )
 
-    def record_step(step: int, outcome: _StepScreenOutcome) -> None:
+    def record_step(step: int, n_on_slab: int, outcome: _StepScreenOutcome) -> None:
         """Record the results of one multi-molecule saturation step.
 
         Parameters
         ----------
         step
             Current step number (1-based).
+        n_on_slab
+            Adsorbate units already folded onto the slab before this step.
         outcome
             Screening outcome to record.
         """
-        n_on_slab = step - 1
-        (
-            winning_molecule,
-            per_molecule_results,
-            budgets,
-            per_molecule_bo_transfer,
-        ) = outcome.payload
+        payload = outcome.payload
+        assert isinstance(payload, _MultiStepPayload)
+        winning_molecule = payload.winning_molecule
+        committed = outcome.committed
 
         steps.append(
             MultiMolSaturationStepResult(
@@ -933,18 +1008,25 @@ def _run_multi_molecule_saturation(
                 winning_molecule=winning_molecule,
                 n_molecules_on_slab=n_on_slab,
                 best_result=outcome.best,
-                per_molecule_results=per_molecule_results,
-                per_molecule_budgets=budgets,
+                per_molecule_results=payload.per_molecule_results,
+                per_molecule_budgets=payload.budgets,
                 bo_transfer_enabled=bool(config.bo.transfer.enabled),
-                transfer_by_molecule=dict(per_molecule_bo_transfer),
+                transfer_by_molecule=dict(payload.transfer_by_molecule),
+                n_added=len(committed),
+                committed_results=committed,
             )
         )
-        if outcome.best.energy_adsorption < 0:
-            molecule_counts[winning_molecule] += 1
-            winning_smiles = active_smiles[winning_molecule]
+        # Fold every committed winner (one per legacy step; several per future
+        # n-tuplet step) into the coverage bookkeeping.
+        for molecule_name, count in Counter(
+            placement.molecule for placement in committed
+        ).items():
+            molecule_counts[molecule_name] += count
+        for placement in committed:
+            winning_smiles = active_smiles[placement.molecule]
             committed_placement_X.append(
                 _committed_placement_features(
-                    outcome.best,
+                    placement,
                     smiles=winning_smiles,
                     surface_id=surface_type,
                     config=config,
@@ -1021,6 +1103,14 @@ def run_saturation_screening(
     """
     if config is None:
         config = AdsorptionConfig()
+    if config.saturation_molecules_per_step > 1:
+        # Step bookkeeping (n_on_slab counters, committed-placement lists, and
+        # per-step ``n_added``) is n-tuplet-ready, but only legacy sequential
+        # one-molecule-per-step coverage is implemented so far.
+        raise NotImplementedError(
+            "saturation_molecules_per_step > 1 (n-tuplet saturation) is not "
+            "implemented yet"
+        )
 
     t_run_start = time.perf_counter()
 
@@ -1075,6 +1165,7 @@ def run_saturation_screening(
                 failure_summary_out=failure_summary_out,
                 ds_logger=ds_logger,
                 process_fn=process_fn,
+                bo_enabled=bo_enabled,
             )
             ds_logger.flush()
             t_run_total = time.perf_counter() - t_run_start
@@ -1127,6 +1218,7 @@ def run_saturation_screening(
                 failure_summary_out=failure_summary_out,
                 ds_logger=ds_logger,
                 process_fn=process_fn,
+                bo_enabled=bo_enabled,
             )
             if run_result is not None:
                 all_saturation_results.append(run_result)

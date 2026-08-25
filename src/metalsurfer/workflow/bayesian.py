@@ -1,7 +1,8 @@
 """Bayesian optimisation workflow orchestration."""
 
 import logging
-from typing import cast
+from dataclasses import dataclass
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -80,6 +81,124 @@ def bo_exploration_rng(config_seed: int, n_slab_atoms: int) -> np.random.RandomS
     saturation molecules draw from decorrelated streams.
     """
     return np.random.RandomState(int(config_seed + 1_000_003 * n_slab_atoms) % (2**31))
+
+
+@dataclass
+class _TransferRoundState:
+    """Mutable cross-step transfer bookkeeping for one BO screening call."""
+
+    used_rounds: int = 0
+    bad_rounds: int = 0
+    disabled: bool = False
+    disabled_reason: str | None = None
+    last_mae_delta: float | None = None
+    weight_share: float = 0.0
+
+
+def _build_round_surrogate(
+    *,
+    X_current: pd.DataFrame,
+    y_current: np.ndarray,
+    transfer_memory: BOStepMemory | None,
+    state: _TransferRoundState,
+    config: AdsorptionConfig,
+    occupancy_placement_X: list[dict[str, float]] | None,
+) -> tuple[Any, bool]:
+    """Fit one acquisition round's surrogate with optional cross-step transfer.
+
+    Supports both transfer modes (``weighted`` incremental trust gating and
+    ``cumulative_refit`` proximity-weighted refits) and falls back to a plain
+    current-observation fit whenever transfer is unavailable or disabled.
+
+    Returns ``(surrogate, transfer_active)`` where *transfer_active* reports
+    that transfer was attempted and remains enabled (it drives random
+    exploration within the batch).
+    """
+    surrogate = None
+    transfer = config.bo.transfer
+    can_try_transfer = (
+        transfer.enabled
+        and transfer_memory is not None
+        and len(transfer_memory.observed_X_rows) > 0
+        and len(transfer_memory.observed_y) > 0
+    )
+    can_try_weighted = (
+        can_try_transfer
+        and transfer.mode == "weighted"
+        and not state.disabled
+        and len(X_current) >= transfer.min_step_observations
+    )
+    can_try_refit = (
+        can_try_transfer and transfer.mode == "cumulative_refit" and len(X_current) >= 3
+    )
+    if can_try_refit:
+        assert transfer_memory is not None
+        X_prior = pd.DataFrame(transfer_memory.observed_X_rows)
+        y_prior = np.asarray(transfer_memory.observed_y, dtype=float)
+        X_prior = _align_to_columns(X_prior, X_current)
+        X_combined, y_combined, refit_weights = cumulative_refit_training_set(
+            X_prior,
+            y_prior,
+            X_current,
+            y_current,
+            weight_cap=transfer.weight_cap,
+            proximity_lengthscale=transfer.proximity_lengthscale,
+            proximity_floor=transfer.proximity_floor,
+        )
+        surrogate = _train_surrogate_for_bo(
+            X_combined,
+            y_combined,
+            config=config,
+            sample_weight=refit_weights,
+        )
+        n_prior = len(X_prior)
+        prior_weight_sum = float(np.sum(refit_weights[:n_prior]))
+        total_weight_sum = float(np.sum(refit_weights))
+        state.weight_share = (
+            prior_weight_sum / total_weight_sum if total_weight_sum > 0.0 else 0.0
+        )
+        state.used_rounds += 1
+    elif can_try_weighted:
+        assert transfer_memory is not None
+        transfer_result = build_transfer_surrogate(
+            X_current,
+            y_current,
+            transfer_memory.observed_X_rows,
+            transfer_memory.observed_y,
+            surrogate=cast(TransferCapableSurrogateType, config.bo.surrogate),
+            n_estimators=100,
+            random_state=config.seed,
+            weight_cap=transfer.weight_cap,
+            similarity_lengthscale=transfer.similarity_lengthscale,
+            min_similarity=transfer.min_similarity,
+            mae_tolerance=transfer.mae_tolerance,
+            transfer_bad_rounds=state.bad_rounds,
+            trust_patience=transfer.trust_patience,
+            proximity_lengthscale=transfer.proximity_lengthscale,
+            prior_step_ages=transfer_memory.step_ages,
+            recency_lengthscale=transfer.recency_lengthscale,
+            prior_placement_X=occupancy_placement_X,
+            occupancy_lengthscale=transfer.occupancy_lengthscale,
+            occupancy_floor=transfer.occupancy_floor,
+        )
+        state.weight_share = transfer_result.transfer_weight_share
+        state.last_mae_delta = transfer_result.transfer_mae_delta
+        state.bad_rounds = transfer_result.transfer_bad_rounds
+        if transfer_result.transfer_used_this_round:
+            state.used_rounds += 1
+        if transfer_result.transfer_disabled:
+            state.disabled = True
+            state.disabled_reason = transfer_result.transfer_disabled_reason
+        surrogate = transfer_result.surrogate
+
+    transfer_active = can_try_transfer and not state.disabled
+    if surrogate is None or state.disabled:
+        surrogate = _train_surrogate_for_bo(
+            X_current,
+            y_current,
+            config=config,
+        )
+    return surrogate, transfer_active
 
 
 def process_molecule_bayesian(
@@ -283,12 +402,7 @@ def process_molecule_bayesian(
     best_X_row: dict[str, float] | None = None
     bo_failure_events: list[PlacementFailureEvent] = []
     rng = bo_exploration_rng(config.seed, len(slab.atoms))
-    transfer_disabled = False
-    transfer_disabled_reason: str | None = None
-    transfer_bad_rounds = 0
-    transfer_used_rounds = 0
-    transfer_last_mae_delta: float | None = None
-    transfer_weight_share = 0.0
+    transfer_state = _TransferRoundState()
 
     def _flush_bo_outputs() -> None:
         nonlocal bo_memory
@@ -298,11 +412,11 @@ def process_molecule_bayesian(
             best_energy=best_energy if np.isfinite(best_energy) else None,
             best_X_row=dict(best_X_row) if best_X_row is not None else None,
         )
-        transfer_info.transfer_used = bool(transfer_used_rounds > 0)
-        transfer_info.transfer_disabled_reason = transfer_disabled_reason
-        transfer_info.transfer_bad_rounds = int(transfer_bad_rounds)
-        transfer_info.transfer_last_mae_delta = transfer_last_mae_delta
-        transfer_info.transfer_weight_share = float(transfer_weight_share)
+        transfer_info.transfer_used = bool(transfer_state.used_rounds > 0)
+        transfer_info.transfer_disabled_reason = transfer_state.disabled_reason
+        transfer_info.transfer_bad_rounds = int(transfer_state.bad_rounds)
+        transfer_info.transfer_last_mae_delta = transfer_state.last_mae_delta
+        transfer_info.transfer_weight_share = float(transfer_state.weight_share)
 
     def _failure_penalty(stage: str, reason: str) -> float:
         overrides = config.bo.failure_penalty_overrides
@@ -463,95 +577,15 @@ def process_molecule_bayesian(
         else:
             X_current = pd.DataFrame(observed_X_rows)
             y_current = np.array(observed_y)
-            surrogate = None
 
-            transfer_memory = bo_step_memory_in
-            can_try_transfer = (
-                config.bo.transfer.enabled
-                and transfer_memory is not None
-                and len(transfer_memory.observed_X_rows) > 0
-                and len(transfer_memory.observed_y) > 0
+            surrogate, transfer_active = _build_round_surrogate(
+                X_current=X_current,
+                y_current=y_current,
+                transfer_memory=bo_step_memory_in,
+                state=transfer_state,
+                config=config,
+                occupancy_placement_X=occupancy_placement_X,
             )
-            can_try_weighted = (
-                can_try_transfer
-                and config.bo.transfer.mode == "weighted"
-                and not transfer_disabled
-                and len(X_current) >= config.bo.transfer.min_step_observations
-            )
-            can_try_refit = (
-                can_try_transfer
-                and config.bo.transfer.mode == "cumulative_refit"
-                and len(X_current) >= 3
-            )
-            if can_try_refit or can_try_weighted:
-                assert transfer_memory is not None
-                memory = transfer_memory
-            if can_try_refit:
-                X_prior = pd.DataFrame(memory.observed_X_rows)
-                y_prior = np.asarray(memory.observed_y, dtype=float)
-                X_prior = _align_to_columns(X_prior, X_current)
-                X_combined, y_combined, refit_weights = cumulative_refit_training_set(
-                    X_prior,
-                    y_prior,
-                    X_current,
-                    y_current,
-                    weight_cap=config.bo.transfer.weight_cap,
-                    proximity_lengthscale=config.bo.transfer.proximity_lengthscale,
-                    proximity_floor=config.bo.transfer.proximity_floor,
-                )
-                surrogate = _train_surrogate_for_bo(
-                    X_combined,
-                    y_combined,
-                    config=config,
-                    sample_weight=refit_weights,
-                )
-                n_prior = len(X_prior)
-                prior_weight_sum = float(np.sum(refit_weights[:n_prior]))
-                total_weight_sum = float(np.sum(refit_weights))
-                transfer_weight_share = (
-                    prior_weight_sum / total_weight_sum
-                    if total_weight_sum > 0.0
-                    else 0.0
-                )
-                transfer_used_rounds += 1
-            elif can_try_weighted:
-                transfer_result = build_transfer_surrogate(
-                    X_current,
-                    y_current,
-                    memory.observed_X_rows,
-                    memory.observed_y,
-                    surrogate=cast(TransferCapableSurrogateType, config.bo.surrogate),
-                    n_estimators=100,
-                    random_state=config.seed,
-                    weight_cap=config.bo.transfer.weight_cap,
-                    similarity_lengthscale=config.bo.transfer.similarity_lengthscale,
-                    min_similarity=config.bo.transfer.min_similarity,
-                    mae_tolerance=config.bo.transfer.mae_tolerance,
-                    transfer_bad_rounds=transfer_bad_rounds,
-                    trust_patience=config.bo.transfer.trust_patience,
-                    proximity_lengthscale=config.bo.transfer.proximity_lengthscale,
-                    prior_step_ages=memory.step_ages,
-                    recency_lengthscale=config.bo.transfer.recency_lengthscale,
-                    prior_placement_X=occupancy_placement_X,
-                    occupancy_lengthscale=config.bo.transfer.occupancy_lengthscale,
-                    occupancy_floor=config.bo.transfer.occupancy_floor,
-                )
-                transfer_weight_share = transfer_result.transfer_weight_share
-                transfer_last_mae_delta = transfer_result.transfer_mae_delta
-                transfer_bad_rounds = transfer_result.transfer_bad_rounds
-                if transfer_result.transfer_used_this_round:
-                    transfer_used_rounds += 1
-                if transfer_result.transfer_disabled:
-                    transfer_disabled = True
-                    transfer_disabled_reason = transfer_result.transfer_disabled_reason
-                surrogate = transfer_result.surrogate
-
-            if surrogate is None or transfer_disabled:
-                surrogate = _train_surrogate_for_bo(
-                    X_current,
-                    y_current,
-                    config=config,
-                )
 
             unevaluated = _unevaluated()
             if not unevaluated:
@@ -579,7 +613,7 @@ def process_molecule_bayesian(
             # Random exploration only while transfer learning is active.
             # Pure BO screening keeps the full acquisition batch.
             explore_n = 0
-            if can_try_transfer and not transfer_disabled:
+            if transfer_active:
                 explore_n = int(
                     np.ceil(batch_size * config.bo.transfer.exploration_fraction)
                 )

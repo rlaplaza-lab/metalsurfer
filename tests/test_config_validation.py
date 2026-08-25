@@ -407,6 +407,7 @@ def test_autobatcher_invalid_rejected(kwargs, error_match):
         "vasp_encut",
         "min_contact_atoms",
         "placement_retry_max_attempts",
+        "saturation_molecules_per_step",
     ],
 )
 def test_zero_positive_int_rejected(field):
@@ -423,6 +424,7 @@ def test_zero_positive_int_rejected(field):
         "stage2_steps",
         "min_contact_atoms",
         "placement_retry_max_attempts",
+        "saturation_molecules_per_step",
     ],
 )
 def test_negative_int_rejected(field):
