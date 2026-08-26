@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generate high-placement, non-BO saturation data for bipyridine on defected Au(111).
+"""Generate high-placement, non-BO saturation data for iMes NHC on defected Ag(111).
 
 Same workflow as ``examples/bipyridine_au111_defects_saturation_raw.py`` (for HPC batch jobs).
 
 Purpose:
-- Create an irregular Au(111) surface by depositing extra Au adatoms (defects).
+- Create an irregular Ag(111) surface by depositing extra Ag adatoms (defects).
 - Run saturation screening with BO disabled so each step is sampled without BO bias.
 - Write ``results_<surface>/`` per ``AdsorptionConfig`` (README, saturation).
 """
@@ -14,9 +14,9 @@ import logging
 from metalsurfer import AdsorptionConfig, configure_logging, run_saturation
 from metalsurfer.surface_prep import prepare_substrate
 
-SURFACE_TYPE = "bipyridine_au111_defects_saturation_raw"
+SURFACE_TYPE = "imes_nhc_ag111_defects_saturation_raw"
 RESULTS_DIR = f"results_{SURFACE_TYPE}"
-BIPYRIDINE_SMILES = "n1ccccc1-c2ccccn2"
+IMES_NHC_SMILES = "CC1=CC(C)=CC(C)=C1N2[C-]N(C3=C(C)CC(C)=CC3C)C=C2"
 
 configure_logging(default_level="INFO")
 logger = logging.getLogger(__name__)
@@ -34,7 +34,6 @@ def main():
         fmax=0.05,
         stage1_steps=80,
         stage2_steps=500,
-        # Enforce min in-plane separation for auto-resize (default 8 Å).
         min_pbc_image_separation=10.0,
         slab_relaxation_mode="full",
         slab_relaxation_optimizer="lbfgs",
@@ -45,22 +44,21 @@ def main():
         save_benchmark_dataset=True,
     )
 
-    # Saturation freezes post-prep substrate (clean_slab_Au20_*), not clean_slab_* pre-adatoms.
     slab = prepare_substrate(
-        bulk_id="mp-81",
+        bulk_id="mp-124",
         miller_indices=(1, 1, 1),
         supercell=(3, 3, 1),
-        adatom_symbol="Au",
+        adatom_symbol="Ag",
         adatom_coverage=0.20,
         config=config,
         results_dir=RESULTS_DIR,
         adatom_relaxation_mode="ionic_only",
     )
-    logger.info("Defected Au(111) slab atoms: %d", len(slab.atoms))
+    logger.info("Defected Ag(111) slab atoms: %d", len(slab.atoms))
 
     campaign = run_saturation(
         slab=slab,
-        molecules=[(BIPYRIDINE_SMILES, "bipyridine")],
+        molecules=[(IMES_NHC_SMILES, "imes_nhc")],
         config=config,
         surface_type=SURFACE_TYPE,
         skip_existing=False,
@@ -74,7 +72,7 @@ def main():
 
     print(
         campaign.format_completion(
-            label="Bipyridine saturation on defected Au(111)",
+            label="iMes NHC saturation on defected Ag(111)",
             results_dir=RESULTS_DIR,
         )
     )
