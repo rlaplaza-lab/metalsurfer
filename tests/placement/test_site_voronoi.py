@@ -539,7 +539,7 @@ def test_expand_top_layer_ab_images_matches_projection():
     top_xy = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=float)
     top_3d = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 0.0]], dtype=float)
 
-    exp_xy, _, _, _ = site_voronoi_module._expand_top_layer_ab_images(
+    exp_xy, _, _ = site_voronoi_module._expand_top_layer_ab_images(
         top_xy,
         cell=cell,
         pbc=np.array([True, True, False]),

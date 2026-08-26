@@ -301,12 +301,23 @@ Placement generation
     (yield-aware early-out that usually ends retries well before
     ``placement_retry_max_attempts``).
 
-``placement_materialize_workers``
+``n_jobs``
    **Type:** ``int`` · **Default:** ``-2``
 
-   Thread-pool size for per-spec placement materialization (joblib-style
-   ``n_jobs``). ``1`` is serial, positive values use that many workers,
-   ``-1`` uses all CPUs, and ``-2`` uses all but one CPU. Must not be ``0``.
+   Global CPU-parallelism knob (joblib-style ``n_jobs``): ``1`` is serial,
+   positive values use that many workers, ``-1`` uses all CPUs, and ``-2``
+   uses all but one CPU. Woven through every CPU-parallel stage: placement
+   materialization threads (unless
+   ``placement_materialize_workers`` overrides it) and BO surrogate forest
+   training plus per-tree uncertainty prediction. Must not be ``0``.
+
+``placement_materialize_workers``
+   **Type:** ``int | None`` · **Default:** ``None``
+
+   Thread-pool size override for per-spec placement materialization
+   (joblib-style ``n_jobs``). ``None`` inherits the global ``n_jobs``. When
+   set: ``1`` is serial, positive values use that many workers, ``-1`` uses
+   all CPUs, and ``-2`` uses all but one CPU. Must not be ``0``.
    Advanced callers that materialize specs directly use
    :func:`~metalsurfer.placement.generators.generate_placements_from_specs`
    (pool size via
@@ -624,6 +635,12 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
    with ``bo.transfer.enabled=True``. Transfer-capable surrogates are
    ``random_forest``, ``extra_trees``, ``gradient_boost``, ``ridge``, and
    ``ensemble``.
+
+``bo.n_estimators``
+   **Type:** ``int`` · **Default:** ``100``
+
+   Number of estimators for tree-based surrogates (``random_forest``,
+   ``extra_trees``) and ensemble members; ignored by the other surrogates.
 
 ``bo.candidate_pool_size``
    **Type:** ``int | None`` · **Default:** ``None``

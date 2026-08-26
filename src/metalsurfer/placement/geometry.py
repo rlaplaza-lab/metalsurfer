@@ -64,6 +64,7 @@ class _SlabDistanceScratch:
     pbc: list[bool]
     slab_syms: list[str]
     slab_cov_r: np.ndarray | None = None
+    slab_vdw_r: np.ndarray | None = None
     pre_ads_pos: np.ndarray | None = None
 
 
@@ -538,27 +539,46 @@ def _principal_axis_rotation(
             _, principal_axes = _compute_inertia_tensor(pos)
             com = np.mean(pos, axis=0)
 
-    best_score = float("-inf")
-    best_positions: np.ndarray | None = None
-    best_R = np.eye(3)
+    # Rotation sweep, fully vectorized: build the (3 * steps, 3, 3) rotation
+    # stack (ax-major / step-minor so the first-max tie-break matches the old
+    # sequential scan), apply every rotation in one einsum, and score by
+    # clearance along the surface normal.
+    n_steps = int(_PRINCIPAL_AXIS_ROTATION_STEPS)
+    angles_deg = np.arange(n_steps) * float(_PRINCIPAL_AXIS_ROTATION_STEP_DEG)
 
+    rot_axes = np.empty((3, 3), dtype=float)
     for ax_idx in range(3):
         axis = principal_axes[:, ax_idx].copy()
         if float(np.dot(axis, normal)) < 0:
             axis = -axis
-        for step in range(_PRINCIPAL_AXIS_ROTATION_STEPS):
-            R = _rotation_around_axis(axis, step * _PRINCIPAL_AXIS_ROTATION_STEP_DEG)
-            test = (R @ (pos - com).T).T + com
-            # score by clearance along the surface normal (higher = more clearance)
-            clearance = float(np.min(test @ normal))
-            if clearance > best_score:
-                best_score = clearance
-                best_positions = test.copy()
-                best_R = R @ R_total
+        rot_axes[ax_idx] = axis
+
+    ax_flat = np.repeat(rot_axes, n_steps, axis=0)
+    theta = np.radians(np.tile(angles_deg, 3))
+    c, s = np.cos(theta), np.sin(theta)
+    K = np.zeros((len(theta), 3, 3), dtype=float)
+    K[:, 0, 1] = -ax_flat[:, 2]
+    K[:, 0, 2] = ax_flat[:, 1]
+    K[:, 1, 0] = ax_flat[:, 2]
+    K[:, 1, 2] = -ax_flat[:, 0]
+    K[:, 2, 0] = -ax_flat[:, 1]
+    K[:, 2, 1] = ax_flat[:, 0]
+    R_stack = (
+        np.eye(3, dtype=float)[None, :, :]
+        + s[:, None, None] * K
+        + (1.0 - c)[:, None, None] * (K @ K)
+    )
+
+    centered = pos - com
+    tests = np.einsum("kij,nj->kni", R_stack, centered) + com
+    scores = (tests @ normal).min(axis=1)
+    best_k = int(np.argmax(scores))
+    best_score = float(scores[best_k])
+    best_positions = tests[best_k]
+    best_R = R_stack[best_k] @ R_total
 
     # re-centre at origin so caller controls the final offset
-    if best_positions is not None:
-        best_positions -= np.mean(best_positions, axis=0)
+    best_positions = best_positions - np.mean(best_positions, axis=0)
 
     return best_positions, best_score, best_R
 
@@ -613,6 +633,7 @@ def detect_vdw_overlaps(
     vdw_scale: float = 1.0,
     exclude_slab_atoms: int | None = None,
     pairwise_distances: np.ndarray | None = None,
+    slab_scratch: _SlabDistanceScratch | None = None,
 ) -> tuple[list[tuple[int, int, float, float]], float]:
     """Detect VDW overlaps between molecule and slab atoms.
 
@@ -620,7 +641,9 @@ def detect_vdw_overlaps(
     (mol_idx, slab_idx, distance, overlap_amount).
 
     When *pairwise_distances* is provided (shape ``(n_mol, n_slab)``), skip
-    recomputing MIC distances via :func:`_mol_slab_pairwise_distances`.
+    recomputing MIC distances via :func:`_mol_slab_pairwise_distances`. When
+    *slab_scratch* is provided, the slab slice and its precomputed VdW radii
+    are reused instead of re-deriving them from the ASE ``Atoms``.
 
     Parameters
     ----------
@@ -636,6 +659,8 @@ def detect_vdw_overlaps(
         Number of substrate atoms to exclude from checks.
     pairwise_distances
         Optional precomputed pairwise distance matrix.
+    slab_scratch
+        Optional invariant slab-side scratch (see :class:`_SlabDistanceScratch`).
     """
     _mol_pos, _slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
         _mol_slab_contact_arrays(
@@ -644,6 +669,7 @@ def detect_vdw_overlaps(
             material_type=material_type,
             exclude_slab_atoms=exclude_slab_atoms,
             pairwise_distances=pairwise_distances,
+            slab_scratch=slab_scratch,
         )
     )
     min_distance = float(np.min(dists)) if dists.size else float("inf")
@@ -657,10 +683,13 @@ def detect_vdw_overlaps(
         [r if (r := _get_vdw_radius(s)) is not None else np.nan for s in mol_syms],
         dtype=float,
     )
-    slab_radii = np.array(
-        [r if (r := _get_vdw_radius(s)) is not None else np.nan for s in slab_syms],
-        dtype=float,
-    )
+    if slab_scratch is not None and slab_scratch.slab_vdw_r is not None:
+        slab_radii = np.asarray(slab_scratch.slab_vdw_r, dtype=float)
+    else:
+        slab_radii = np.array(
+            [r if (r := _get_vdw_radius(s)) is not None else np.nan for s in slab_syms],
+            dtype=float,
+        )
     vdw_sum = vdw_scale * (mol_radii[:, None] + slab_radii[None, :])
     overlap_amount = vdw_sum - dists
     with np.errstate(invalid="ignore"):
@@ -889,6 +918,7 @@ def check_initial_placement_distance(
             vdw_scale=vdw_overlap_scale,
             exclude_slab_atoms=exclude_slab_atoms,
             pairwise_distances=dists,
+            slab_scratch=slab_scratch,
         )
         if overlaps:
             logger.debug(

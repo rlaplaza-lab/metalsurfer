@@ -159,7 +159,7 @@ def test_get_symmetry_aware_sites_multiplicity_partition():
     slab = make_slab(nx=2, ny=2)
     raw = get_unified_sites(slab, material_type="slab")
     assert raw is not None and len(raw) >= 1
-    sym = get_symmetry_aware_sites(slab)
+    sym = get_symmetry_aware_sites(slab, material_type="slab")
     assert len(sym) >= 1
     assert sum((s.symmetry_multiplicity or 0) for s in sym) == len(raw)
     assert len(sym) <= len(raw)
@@ -368,7 +368,7 @@ def test_fcc111_pt_slab_symmetry_reduces_sites_and_verifies_orbits():
     ).atoms
     raw = get_unified_sites(slab, material_type="slab")
     assert raw is not None and len(raw) >= 1
-    sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15)
+    sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15, material_type="slab")
     assert len(sym) >= 1
     assert len(sym) <= len(raw)
     assert sum((s.symmetry_multiplicity or 0) for s in sym) == len(raw)
@@ -388,7 +388,7 @@ def test_fcc111_pt_2x2_top_atop_single_orbit():
         fcc111("Pt", size=(2, 2, 3), vacuum=7.0, orthogonal=True)
     ).atoms
     raw = get_unified_sites(slab, material_type="slab")
-    sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15)
+    sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15, material_type="slab")
 
     atop_orbits = [s for s in sym if s.site_type == "atop"]
     assert len(atop_orbits) == 1
@@ -517,7 +517,7 @@ def test_tilted_slab_symmetry_multiplicities_partition_raw():
 
     raw = get_unified_sites(slab, material_type="slab")
     assert raw is not None and len(raw) >= 1
-    sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15)
+    sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15, material_type="slab")
     assert len(sym) >= 1
     assert len(sym) <= len(raw)
     assert sum(int(s.symmetry_multiplicity or 0) for s in sym) == len(raw)

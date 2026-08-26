@@ -74,6 +74,7 @@ class BOConfig:
         "gaussian_process",
         "ensemble",
     ] = "gradient_boost"
+    n_estimators: int = 100
     candidate_pool_size: int | None = None
     include_failure_negatives: bool = True
     failure_penalty_default: float = 10.0
@@ -271,18 +272,20 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
             "placement_retry_oversample_max must be >= 1.0, "
             f"got {root.placement_retry_oversample_max}"
         )
-    if isinstance(root.placement_materialize_workers, bool) or not isinstance(
-        root.placement_materialize_workers, int
-    ):
-        raise ValueError(
-            "placement_materialize_workers must be a nonzero integer, "
-            f"got {root.placement_materialize_workers!r}"
-        )
-    if root.placement_materialize_workers == 0:
-        raise ValueError(
-            "placement_materialize_workers must be != 0 "
-            "(positive count, or joblib-style negative: -1=all CPUs, -2=all but one)"
-        )
+    for _parallel_field in ("n_jobs", "placement_materialize_workers"):
+        _value = getattr(root, _parallel_field)
+        if _value is None:
+            continue
+        if isinstance(_value, bool) or not isinstance(_value, int):
+            raise ValueError(
+                f"{_parallel_field} must be a nonzero integer (joblib-style "
+                f"n_jobs), got {_value!r}"
+            )
+        if _value == 0:
+            raise ValueError(
+                f"{_parallel_field} must be != 0 "
+                "(positive count, or joblib-style negative: -1=all CPUs, -2=all but one)"
+            )
     if isinstance(root.seed, bool) or not isinstance(root.seed, int):
         raise ValueError(f"seed must be an integer, got {root.seed!r}")
     if root.seed < 0:
@@ -491,6 +494,7 @@ def _validate_bo(root: "AdsorptionConfig") -> None:
         bo.surrogate,
         allowed=BO_SURROGATE_OPTIONS,
     )
+    _check_positive_int("bo.n_estimators", bo.n_estimators)
     if bo.transfer.enabled and bo.surrogate not in BO_TRANSFER_CAPABLE_SURROGATES:
         raise ValueError(
             "bo.transfer.enabled requires a surrogate that supports "
@@ -717,8 +721,14 @@ class AdsorptionConfig:
     # Consecutive zero-yield retry attempts before giving up early (a plateau
     # signal). placement_retry_max_attempts remains the absolute hard cap.
     placement_retry_early_stop_patience: int = 2
-    # Joblib-style n_jobs for placement materialization threads (-2 = all but one CPU).
-    placement_materialize_workers: int = -2
+    # Global CPU-parallelism knob (joblib convention): ``1`` is serial, positive
+    # values use that many workers, ``-1`` uses all CPUs, ``-2`` uses all but
+    # one. Woven through every CPU-parallel stage: placement materialization
+    # threads and BO surrogate forest training / per-tree uncertainty prediction.
+    n_jobs: int = -2
+    # Placement-materialization thread-pool size override (joblib-style);
+    # ``None`` inherits the global :attr:`n_jobs`.
+    placement_materialize_workers: int | None = None
     optimize_isolated_sequentially: bool = False
     ts_optimizer: Literal["fire", "lbfgs", "bfgs"] = "fire"
     steps_between_swaps: int = 5

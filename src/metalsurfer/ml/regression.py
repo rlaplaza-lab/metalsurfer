@@ -22,6 +22,7 @@ def tree_regressor_for_bayesian_surrogate(
     *,
     n_estimators: int,
     random_state: int,
+    n_jobs: int = -1,
     **kwargs: Any,
 ) -> RandomForestRegressor | ExtraTreesRegressor:
     """Unscaled tree ensemble for BO surrogates (no ``StandardScaler`` in the pipeline).
@@ -34,6 +35,9 @@ def tree_regressor_for_bayesian_surrogate(
         Number of estimators in the ensemble.
     random_state
         Random seed for reproducibility.
+    n_jobs
+        Parallel workers for fitting/predicting the forest (joblib convention;
+        ``-1`` uses all CPUs). Thread-based inside sklearn.
     **kwargs
         Additional keyword arguments passed to the regressor.
     """
@@ -42,7 +46,7 @@ def tree_regressor_for_bayesian_surrogate(
         "min_samples_leaf": kwargs.get("min_samples_leaf", 2),
         "max_depth": kwargs.get("max_depth"),
         "random_state": random_state,
-        "n_jobs": -1,
+        "n_jobs": int(n_jobs),
     }
     if kind == "random_forest":
         return RandomForestRegressor(**params)

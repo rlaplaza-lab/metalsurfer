@@ -1,6 +1,8 @@
 """Voronoi site generation, topology candidates, ridge enrichment, and classification."""
 
 import logging
+from collections.abc import Iterator
+from typing import NamedTuple
 
 import numpy as np
 from scipy.spatial import Delaunay, KDTree, QhullError, Voronoi
@@ -41,16 +43,15 @@ def _expand_top_layer_ab_images(
     cell: np.ndarray,
     pbc: np.ndarray | list[bool],
     top_positions_3d: np.ndarray | None = None,
-) -> tuple[np.ndarray, list[int], list[tuple[int, int]], np.ndarray | None]:
+) -> tuple[np.ndarray, list[int], np.ndarray | None]:
     """Expand top-layer 2D points by ±1 images along periodic a/b.
 
-    Returns ``(exp_xy, origin_local, image_id, exp_3d_or_None)``.
+    Returns ``(exp_xy, origin_local, exp_3d_or_None)``.
     """
     ranges_a = (-1, 0, 1) if bool(pbc[0]) else (0,)
     ranges_b = (-1, 0, 1) if bool(pbc[1]) else (0,)
     exp_xy: list[np.ndarray] = []
     origin_local: list[int] = []
-    image_id: list[tuple[int, int]] = []
     exp_3d: list[np.ndarray] | None = [] if top_positions_3d is not None else None
     # Hoist the slab-plane basis once: every (ia, ib) image shares the same
     # ortho_basis, so projecting each offset via the repeated pinv is wasted.
@@ -62,11 +63,52 @@ def _expand_top_layer_ab_images(
             for li in range(len(top_xy)):
                 exp_xy.append(top_xy[li] + off_2d)
                 origin_local.append(int(li))
-                image_id.append((int(ia), int(ib)))
                 if exp_3d is not None and top_positions_3d is not None:
                     exp_3d.append(top_positions_3d[li] + offset)
     exp3d_arr = np.asarray(exp_3d, dtype=float) if exp_3d is not None else None
-    return np.asarray(exp_xy, dtype=float), origin_local, image_id, exp3d_arr
+    return np.asarray(exp_xy, dtype=float), origin_local, exp3d_arr
+
+
+def _iter_unique_simplex_sites(
+    simplices: np.ndarray,
+    origin_local: list[int],
+    base_points: np.ndarray,
+) -> Iterator[tuple[str, tuple[int, ...], np.ndarray]]:
+    """Yield unique bridge midpoints and hollow centroids over Delaunay simplices.
+
+    Yields ``(kind, local_ids, point)`` where *kind* is ``"bridge"`` or
+    ``"hollow"``, *local_ids* are the origin-cell indices contributing to the
+    candidate, and *point* is computed from *base_points* (callers apply any
+    height offsets themselves — a constant shift cannot change which candidates
+    collide). Edges whose endpoints map to the same origin atom are skipped;
+    repeats across adjacent simplices and periodic-image copies are emitted once.
+    """
+    seen_edges: set[tuple] = set()
+    seen_tris: set[tuple] = set()
+    for simplex in np.asarray(simplices, dtype=int):
+        for e0, e1 in ((0, 1), (1, 2), (0, 2)):
+            i_exp, j_exp = int(simplex[e0]), int(simplex[e1])
+            li = origin_local[i_exp]
+            lj = origin_local[j_exp]
+            if li == lj:
+                continue
+            pair = (min(li, lj), max(li, lj))
+            mid = 0.5 * (base_points[i_exp] + base_points[j_exp])
+            edge_key = (pair, tuple(round(float(v), 5) for v in mid))
+            if edge_key in seen_edges:
+                continue
+            seen_edges.add(edge_key)
+            yield "bridge", pair, mid
+
+        local_ids = tuple(sorted({origin_local[int(k)] for k in simplex}))
+        if len(local_ids) != 3:
+            continue
+        centroid = np.mean(base_points[list(simplex)], axis=0)
+        tri_key = (local_ids, tuple(round(float(v), 5) for v in centroid))
+        if tri_key in seen_tris:
+            continue
+        seen_tris.add(tri_key)
+        yield "hollow", local_ids, centroid
 
 
 def _voronoi_sites(
@@ -169,6 +211,22 @@ def _voronoi_sites(
 # ---------------------------------------------------------------------------
 
 
+class _SlabTopologyResult(NamedTuple):
+    """Output of :func:`_generate_slab_topology_sites`.
+
+    *exp_xy* / *exp_origin* / *exp_tri* are the ±1 a/b expanded scratchpad
+    (for classification reuse), or ``None`` when unavailable.
+    """
+
+    vertices: np.ndarray
+    nn_dists: np.ndarray
+    sources: list[str]
+    primary_delaunay: Delaunay | None
+    exp_xy: np.ndarray | None
+    exp_origin: list[int] | None
+    exp_tri: Delaunay | None
+
+
 def _generate_slab_topology_sites(
     positions: np.ndarray,
     cell: np.ndarray,
@@ -178,46 +236,18 @@ def _generate_slab_topology_sites(
     site_height: float,
     probe_radius: float,
     max_distance: float,
-) -> tuple[
-    np.ndarray,
-    np.ndarray,
-    list[str],
-    Delaunay | None,
-    np.ndarray | None,
-    list[int] | None,
-    Delaunay | None,
-]:
+) -> _SlabTopologyResult:
     """Generate slab atop/bridge/hollow candidates from the top layer.
 
     Candidates are created in an orientation-aware way and wrapped back into the
     reference cell on periodic axes.
-
-    Returns
-    -------
-    ``(vertices, nn_dists, sources, primary_delaunay, exp_xy, exp_origin, exp_tri)``
-    where *primary_delaunay* is the top-layer triangulation in the slab plane,
-    and *exp_xy* / *exp_origin* / *exp_tri* are the ±1 a/b expanded scratchpad
-    (for classification reuse), or ``None`` when unavailable.
     """
-    empty: tuple[
-        np.ndarray,
-        np.ndarray,
-        list[str],
-        Delaunay | None,
-        np.ndarray | None,
-        list[int] | None,
-        Delaunay | None,
-    ] = (
-        np.empty((0, 3), dtype=float),
-        np.empty(0, dtype=float),
-        [],
-        None,
-        None,
-        None,
-        None,
-    )
+    empty_vertices = np.empty((0, 3), dtype=float)
+    empty_dists = np.empty(0, dtype=float)
     if len(top_atom_indices) == 0:
-        return empty
+        return _SlabTopologyResult(
+            empty_vertices, empty_dists, [], None, None, None, None
+        )
 
     n_hat = _slab_normal(cell)
     top_atom_indices = np.asarray(top_atom_indices, dtype=int)
@@ -241,6 +271,34 @@ def _generate_slab_topology_sites(
                 candidate_dists.append(d_val)
                 candidate_sources.append(source)
 
+    # Single exit: assemble the (deduplicated) result from everything gathered.
+    def _finalize() -> _SlabTopologyResult:
+        if not candidates:
+            return _SlabTopologyResult(
+                empty_vertices,
+                empty_dists,
+                [],
+                primary_delaunay,
+                exp2d,
+                expanded_origin_local_index,
+                exp_tri,
+            )
+        cand_arr = np.asarray(candidates, dtype=float)
+        cand_dist = np.asarray(candidate_dists, dtype=float)
+        keep = _deduplicate_points(
+            cand_arr, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
+        )
+        kept_idx = np.nonzero(keep)[0]
+        return _SlabTopologyResult(
+            cand_arr[keep],
+            cand_dist[keep],
+            [candidate_sources[i] for i in kept_idx],
+            primary_delaunay,
+            exp2d,
+            expanded_origin_local_index,
+            exp_tri,
+        )
+
     # Atop candidates: always useful and cheap.
     atop_positions = top_positions + float(site_height) * n_hat
     _add_candidates_batch(atop_positions, "topology_atop")
@@ -259,31 +317,9 @@ def _generate_slab_topology_sites(
 
     # Need 2D triangulation for bridge/hollow candidates.
     if len(top_positions) < 2:
-        if not candidates:
-            return (
-                np.empty((0, 3), dtype=float),
-                np.empty(0, dtype=float),
-                [],
-                primary_delaunay,
-                None,
-                None,
-                None,
-            )
-        cand_arr = np.asarray(candidates, dtype=float)
-        keep = _deduplicate_points(
-            cand_arr, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
-        )
-        return (
-            cand_arr[keep],
-            np.asarray(candidate_dists, dtype=float)[keep],
-            [candidate_sources[i] for i in np.nonzero(keep)[0]],
-            primary_delaunay,
-            None,
-            None,
-            None,
-        )
+        return _finalize()
 
-    exp2d, expanded_origin_local_index, _image_id, exp3d = _expand_top_layer_ab_images(
+    exp2d, expanded_origin_local_index, exp3d = _expand_top_layer_ab_images(
         top_positions_2d,
         cell=cell,
         pbc=pbc,
@@ -298,84 +334,26 @@ def _generate_slab_topology_sites(
             exp_tri = None
 
     if exp_tri is not None:
-        seen_edges: set[tuple[int, int, float, float, float]] = set()
         bridge_points: list[np.ndarray] = []
-        for simplex in np.asarray(exp_tri.simplices, dtype=int):
-            for e0, e1 in ((0, 1), (1, 2), (0, 2)):
-                i_exp, j_exp = int(simplex[e0]), int(simplex[e1])
-                li = expanded_origin_local_index[i_exp]
-                lj = expanded_origin_local_index[j_exp]
-                if li == lj:
-                    continue
-                midpoint = (
-                    0.5 * (exp3d[i_exp] + exp3d[j_exp]) + float(site_height) * n_hat
-                )
-                edge_key = (
-                    min(li, lj),
-                    max(li, lj),
-                    round(float(midpoint[0]), 5),
-                    round(float(midpoint[1]), 5),
-                    round(float(midpoint[2]), 5),
-                )
-                if edge_key in seen_edges:
-                    continue
-                seen_edges.add(edge_key)
-                bridge_points.append(midpoint)
+        hollow_points: list[np.ndarray] = []
+        for kind, _ids, pt in _iter_unique_simplex_sites(
+            exp_tri.simplices, expanded_origin_local_index, exp3d
+        ):
+            lifted = pt + float(site_height) * n_hat
+            if kind == "bridge":
+                bridge_points.append(lifted)
+            else:
+                hollow_points.append(lifted)
         if bridge_points:
             _add_candidates_batch(
                 np.asarray(bridge_points, dtype=float), "topology_bridge"
             )
-
-        seen_tris: set[tuple[int, int, int, float, float, float]] = set()
-        hollow_points: list[np.ndarray] = []
-        for simplex in np.asarray(exp_tri.simplices, dtype=int):
-            local_ids = tuple(
-                sorted({expanded_origin_local_index[int(k)] for k in simplex})
-            )
-            if len(local_ids) != 3:
-                continue
-            centroid = np.mean(exp3d[simplex], axis=0) + float(site_height) * n_hat
-            tri_key = (
-                local_ids[0],
-                local_ids[1],
-                local_ids[2],
-                round(float(centroid[0]), 5),
-                round(float(centroid[1]), 5),
-                round(float(centroid[2]), 5),
-            )
-            if tri_key in seen_tris:
-                continue
-            seen_tris.add(tri_key)
-            hollow_points.append(centroid)
         if hollow_points:
             _add_candidates_batch(
                 np.asarray(hollow_points, dtype=float), "topology_hollow"
             )
 
-    if not candidates:
-        return (
-            np.empty((0, 3), dtype=float),
-            np.empty(0, dtype=float),
-            [],
-            primary_delaunay,
-            exp2d,
-            expanded_origin_local_index,
-            exp_tri,
-        )
-
-    cand_arr = np.asarray(candidates, dtype=float)
-    cand_dist = np.asarray(candidate_dists, dtype=float)
-    keep = _deduplicate_points(cand_arr, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc)
-    kept_idx = np.nonzero(keep)[0]
-    return (
-        cand_arr[keep],
-        cand_dist[keep],
-        [candidate_sources[i] for i in kept_idx],
-        primary_delaunay,
-        exp2d,
-        expanded_origin_local_index,
-        exp_tri,
-    )
+    return _finalize()
 
 
 # ---------------------------------------------------------------------------
@@ -570,7 +548,7 @@ def _build_delaunay_classification_index(
             origin_local = list(expanded_origin)
             work_tri = expanded_tri
         else:
-            exp_xy, exp_origin, _image_id, _ = _expand_top_layer_ab_images(
+            exp_xy, exp_origin, _ = _expand_top_layer_ab_images(
                 top_xy, cell=cell, pbc=pbc
             )
             exp_tri: Delaunay | None = None
@@ -590,53 +568,14 @@ def _build_delaunay_classification_index(
         cand_indices.append((int(top_atom_indices[origin_local[wi]]),))
 
     if work_tri is not None:
-        seen: set[tuple] = set()
-        for simplex in np.asarray(work_tri.simplices, dtype=int):
-            for e0, e1 in ((0, 1), (1, 2), (0, 2)):
-                i_exp, j_exp = int(simplex[e0]), int(simplex[e1])
-                li0 = origin_local[i_exp]
-                li1 = origin_local[j_exp]
-                if li0 == li1:
-                    continue
-                mid = (work_xy[i_exp] + work_xy[j_exp]) / 2.0
-                mid_key = (
-                    "bridge",
-                    min(li0, li1),
-                    max(li0, li1),
-                    round(float(mid[0]), 5),
-                    round(float(mid[1]), 5),
-                )
-                if mid_key in seen:
-                    continue
-                seen.add(mid_key)
-                cand_xy.append(mid)
-                cand_types.append("bridge")
-                cand_indices.append(
-                    (int(top_atom_indices[li0]), int(top_atom_indices[li1]))
-                )
-
-            local_ids = tuple(sorted({origin_local[int(k)] for k in simplex}))
-            if len(local_ids) != 3:
-                continue
-            centroid = np.mean(work_xy[list(simplex)], axis=0)
-            hollow_key = (
-                "hollow",
-                local_ids,
-                round(float(centroid[0]), 5),
-                round(float(centroid[1]), 5),
-            )
-            if hollow_key in seen:
-                continue
-            seen.add(hollow_key)
-            cand_xy.append(centroid)
-            cand_types.append("hollow")
-            cand_indices.append(
-                (
-                    int(top_atom_indices[local_ids[0]]),
-                    int(top_atom_indices[local_ids[1]]),
-                    int(top_atom_indices[local_ids[2]]),
-                )
-            )
+        # Shared candidate extraction with the topology generator (same dedup
+        # keys and ordering); 2D points need no height offset.
+        for kind, ids, pt in _iter_unique_simplex_sites(
+            work_tri.simplices, origin_local, work_xy
+        ):
+            cand_xy.append(pt)
+            cand_types.append(kind)
+            cand_indices.append(tuple(int(top_atom_indices[i]) for i in ids))
 
     if not cand_xy:
         return np.empty((0, 2), dtype=float), [], []

@@ -89,7 +89,8 @@ def test_default_config():
     assert config.placement_retry_max_attempts == 8
     assert config.placement_fill_clamp_to_capacity is True
     assert config.placement_retry_early_stop_patience == 2
-    assert config.placement_materialize_workers == -2
+    assert config.placement_materialize_workers is None
+    assert config.n_jobs == -2
     assert (
         config.min_initial_distance
         == numeric_defaults.MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
@@ -143,6 +144,19 @@ def test_placement_materialize_workers_rejects_non_int():
         AdsorptionConfig(placement_materialize_workers=-2.0)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="placement_materialize_workers"):
         AdsorptionConfig(placement_materialize_workers=True)  # type: ignore[arg-type]
+
+
+def test_n_jobs_validation_and_inheritance():
+    """Global n_jobs validates like placement_materialize_workers and is inherited."""
+    assert AdsorptionConfig().n_jobs == -2
+    with pytest.raises(ValueError, match=r"\bn_jobs\b"):
+        AdsorptionConfig(n_jobs=0)
+    with pytest.raises(ValueError, match=r"\bn_jobs\b"):
+        AdsorptionConfig(n_jobs=-1.5)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match=r"\bn_jobs\b"):
+        AdsorptionConfig(n_jobs=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match=r"\bn_jobs\b"):
+        AdsorptionConfig(n_jobs=4.0)  # type: ignore[arg-type]
 
 
 def test_seed_rejects_non_int():

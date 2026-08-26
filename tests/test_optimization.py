@@ -1155,7 +1155,12 @@ class TestSetupSingleModel:
 
 
 def test_get_inflight_autobatcher_saturation_reuses_small_growth(stub_autobatcher):
-    """Saturation mode reuses prior key for small max_n_atoms increase."""
+    """Saturation mode reuses the batcher for a small max_n_atoms increase.
+
+    The entry is re-keyed under the requested size so that end-of-call
+    eviction (``key[4] < max_n_atoms``) keeps — not evicts — the reused
+    batcher for subsequent steps of the same size.
+    """
     model = type("MockModel", (), {"device": "cpu"})()
     config = AdsorptionConfig(
         device="cpu",
@@ -1176,7 +1181,22 @@ def test_get_inflight_autobatcher_saturation_reuses_small_growth(stub_autobatche
     )
     assert ab1 is not None
     assert ab2 is ab1
-    assert key2 == key1
+    # Re-keyed to the new size; old key is gone.
+    assert key2 == (key1[0], key1[1], key1[2], key1[3], 105, key1[5], key1[6])
+    assert _cache._AUTOBATCHER_CACHE.get(key1) is None
+    assert _cache._AUTOBATCHER_CACHE.get(key2) is ab1
+    # A repeat call at the reused size hits the exact key.
+    ab3, key3 = _cache._get_inflight_autobatcher(
+        model,
+        105,
+        config=config,
+        saturation_reuse=True,
+    )
+    assert ab3 is ab1
+    assert key3 == key2
+    # End-of-call eviction at the current threshold must keep the entry.
+    _cache.clear_autobatcher_cache(max_n_atoms_threshold=105)
+    assert _cache._AUTOBATCHER_CACHE.get(key2) is ab1
 
 
 def test_get_inflight_autobatcher_non_saturation_uses_exact_size_key(stub_autobatcher):

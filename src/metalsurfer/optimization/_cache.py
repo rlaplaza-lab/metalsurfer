@@ -224,7 +224,6 @@ def _get_inflight_autobatcher(
                         and cache_key[2] == key[2]
                         and cache_key[3] == key[3]
                         and cache_key[5] == key[5]
-                        and cache_key[6] == key[6]
                     ):
                         matching_candidates.append((cache_key, cache_ab))
                 matching_candidates.sort(key=lambda item: int(item[0][4]), reverse=True)
@@ -253,7 +252,14 @@ def _get_inflight_autobatcher(
                             max_n_atoms,
                             allowed_growth,
                         )
-                        return cache_ab, cache_key
+                        # Re-key under the requested size: end-of-call eviction
+                        # removes entries with ``key[4] < max_n_atoms``, so
+                        # returning the old key would let the finally block in
+                        # optimize_adsorbate_slab_batched evict the just-reused
+                        # batcher and force a fresh probe every step.
+                        del _AUTOBATCHER_CACHE[cache_key]
+                        _AUTOBATCHER_CACHE[key] = cache_ab
+                        return cache_ab, key
         kwargs: dict = {
             "memory_scales_with": "n_atoms",
             "max_memory_padding": max_memory_padding,

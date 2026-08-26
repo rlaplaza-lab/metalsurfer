@@ -152,9 +152,6 @@ _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE: float = 1.2
 _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE: float = 0.2
 _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE: float = 0.3
 _PARALLEL_Z_MIN_HI_MARGIN: float = 0.3  # ensure z_base_hi >= z_base_lo + this (Å)
-# Absolute shrink fallbacks when site surface radii are unavailable (Å).
-_PARALLEL_Z_LO_SHRINK_FALLBACK_ANGSTROM: float = 0.4
-_PARALLEL_Z_HI_SHRINK_FALLBACK_ANGSTROM: float = 0.6
 
 # ---------------------------------------------------------------------------
 # Dissociative placement (e.g. H₂ → 2 H on hollow sites)

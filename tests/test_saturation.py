@@ -515,8 +515,8 @@ def test_saturation_slab_for_sites_uses_resized_slab():
     assert was_resized, (
         "Slab must be resized for this test; check auto_resize_substrate_for_molecule logic"
     )
-    sites_original = get_hollow_sites_for_adatoms(slab.atoms)
-    sites_resized = get_hollow_sites_for_adatoms(resized.atoms)
+    sites_original = get_hollow_sites_for_adatoms(slab.atoms, material_type="slab")
+    sites_resized = get_hollow_sites_for_adatoms(resized.atoms, material_type="slab")
     assert len(sites_resized) > len(sites_original), (
         "Resized slab should have more hollow sites than original"
     )

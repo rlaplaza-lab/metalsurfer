@@ -682,6 +682,63 @@ def test_resolve_materialize_workers_joblib_semantics():
         resolve_materialize_workers(0, cpu_count=8)
 
 
+def test_placement_workers_inherit_global_n_jobs():
+    """placement_materialize_workers=None must inherit the global n_jobs knob."""
+    from metalsurfer.config import AdsorptionConfig
+    from metalsurfer.placement.generators import (
+        generate_placements_from_specs,
+        resolve_materialize_workers,
+    )
+
+    config = AdsorptionConfig(n_jobs=3, placement_materialize_workers=None)
+    inherited = (
+        config.placement_materialize_workers
+        if config.placement_materialize_workers is not None
+        else config.n_jobs
+    )
+    assert inherited == 3
+    assert resolve_materialize_workers(inherited, n_tasks=10, cpu_count=8) == 3
+    # An explicit override wins over the global knob.
+    config_override = AdsorptionConfig(n_jobs=3, placement_materialize_workers=1)
+    assert config_override.placement_materialize_workers == 1
+
+    # Smoke: serial and threaded paths return identical ordering.
+    slab = Atoms("Cu2", positions=[[0, 0, 0], [0, 0, 1.8]])
+    slab.set_cell([8.0, 8.0, 20.0])
+    slab.set_pbc([True, True, False])
+    adsorbate = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
+    from metalsurfer.models import PlacementSpec
+
+    specs = [
+        PlacementSpec(
+            conformer_index=0,
+            orientation_type="round",
+            site_index=0,
+            tilt_deg=0.0,
+            azimuth_deg=0.0,
+            azimuth_in_plane_deg=0.0,
+            z_fraction=0.5,
+            face_flip=False,
+            en_atom_index=None,
+            site_type=None,
+            placement_index=i,
+        )
+        for i in range(2)
+    ]
+    results_a = generate_placements_from_specs(
+        specs, [adsorbate], slab, AdsorptionConfig(n_jobs=1)
+    )
+    results_b = generate_placements_from_specs(
+        specs, [adsorbate], slab, AdsorptionConfig(n_jobs=-1)
+    )
+    assert len(results_a) == len(results_b) == 2
+    for (res_a, _), (res_b, _) in zip(results_a, results_b, strict=True):
+        if res_a is None or res_b is None:
+            assert res_a is None and res_b is None
+            continue
+        assert np.allclose(res_a[0].get_positions(), res_b[0].get_positions())
+
+
 def test_fill_yield_floor_keeps_oversampling_after_zero_success(monkeypatch):
     """A zero-success round must not collapse the next request to remaining only."""
     from metalsurfer.workflow import placement_fill as fill_mod

@@ -159,6 +159,35 @@ class TestSurrogate:
         if expect_sigma_gt0:
             assert np.all(sigma > 0)
 
+    @pytest.mark.parametrize("surrogate", ["random_forest", "extra_trees", "ensemble"])
+    def test_train_surrogate_n_jobs_reaches_forests(self, surrogate):
+        """The n_jobs knob must reach the forest estimators (and ensemble members)."""
+        X, y = _make_synthetic_training_data(20)
+        model = train_surrogate(
+            X,
+            y,
+            surrogate=surrogate,  # type: ignore[arg-type]
+            n_estimators=5,
+            random_state=0,
+            n_jobs=2,
+        )
+        regressor = model.named_steps["regressor"]
+        if surrogate == "ensemble":
+            members = regressor.members_
+            assert members
+            forest_jobs = {
+                getattr(m.named_steps["regressor"], "n_jobs", None)
+                for m in members
+                if hasattr(m.named_steps["regressor"], "estimators_")
+            }
+            assert forest_jobs == {2}
+            mu, sigma = predict_with_uncertainty(model, X, n_jobs=2)
+        else:
+            assert regressor.n_jobs == 2
+            mu, sigma = predict_with_uncertainty(model, X, n_jobs=2)
+        assert mu.shape == (20,)
+        assert sigma.shape == (20,)
+
     def test_gaussian_process_matern_length_scale(self):
         X, y = _make_synthetic_training_data(25)
         n_features = X.shape[1]
@@ -1168,6 +1197,34 @@ def test_bo_rng_seed_decorrelates_by_slab_atom_count():
         .choice([0, 1, 2, 3, 4], size=2, replace=False)
         .tolist()
         == draw_a
+    )
+
+
+def test_bo_rng_seed_decorrelates_by_molecule_in_multi_molecule_steps():
+    """Competing molecules on the same slab must not share exploration streams.
+
+    In a multi-molecule saturation step every adsorbate screens against the
+    identical slab (same atom count), so without molecule mixing all streams
+    — and therefore random fallback batches and exploration splices — would
+    be identical across molecules.
+    """
+    from metalsurfer.workflow.bayesian import bo_exploration_rng
+
+    seed = 42
+    atoms = 36
+    draw = lambda rng: rng.choice([0, 1, 2, 3, 4], size=2, replace=False).tolist()  # noqa: E731
+
+    water = bo_exploration_rng(seed, atoms, molecule="water")
+    h2 = bo_exploration_rng(seed, atoms, molecule="h2")
+    assert draw(water) != draw(h2)
+
+    # Deterministic per (seed, slab, molecule).
+    assert draw(bo_exploration_rng(seed, atoms, molecule="water")) == draw(
+        bo_exploration_rng(seed, atoms, molecule="water")
+    )
+    # No molecule keeps the legacy single-stream behavior.
+    assert draw(bo_exploration_rng(seed, atoms)) == draw(
+        bo_exploration_rng(seed, atoms)
     )
 
 

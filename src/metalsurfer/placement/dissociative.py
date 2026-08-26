@@ -5,7 +5,6 @@ import struct
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, cast
 
 import numpy as np
 from ase import Atoms
@@ -356,7 +355,7 @@ def _compute_dissociative_site_pairs(
     else:
         _site_query = np.asarray(site_3d, dtype=np.float64)
         _nn_tree = KDTree(_site_query)
-        nn_d, _ = cast(Any, _nn_tree).query(_site_query, k=2)
+        nn_d, _ = _nn_tree.query(_site_query, k=2)
         # len(site_3d) >= 2 (early-return above), so query(..., k=2) is 2-D.
         mean_nn_sep = float(np.mean(np.asarray(nn_d, dtype=float)[:, 1]))
 
@@ -394,18 +393,23 @@ def _compute_dissociative_site_pairs(
     n_norm = float(np.linalg.norm(n_hat))
     if n_norm > _VECTOR_NORM_EPS:
         n_hat = n_hat / n_norm
-    for (i, j), d in sorted(pair_distances.items()):
+    sorted_pairs = sorted(pair_distances.items())
+    mic_deltas: np.ndarray | None = None
+    if config.material_type == "slab" and sorted_pairs:
+        # One vectorized call instead of per-pair ``find_mic`` invocations
+        # (each of which Minkowski-reduces the cell again).
+        raw_deltas = np.asarray(
+            [site_3d[j] - site_3d[i] for (i, j), _ in sorted_pairs], dtype=float
+        )
+        dvec_mic, _dists = find_mic(raw_deltas, cell_arr, pbc=pbc_xy)
+        mic_deltas = np.asarray(dvec_mic, dtype=float)
+    for k, ((i, j), d) in enumerate(sorted_pairs):
         # On slabs both fragments are later projected to the same height, so the
         # placed separation is the in-plane MIC — gate on that, not 3-D distance.
-        if config.material_type == "slab":
-            dvec_mic, _ = find_mic(
-                (site_3d[j] - site_3d[i]).reshape(1, 3),
-                cell_arr,
-                pbc=pbc_xy,
-            )
-            delta = np.asarray(dvec_mic[0], dtype=float)
+        if mic_deltas is not None:
+            delta = mic_deltas[k]
             d_gate = float(np.linalg.norm(delta - np.dot(delta, n_hat) * n_hat))
-            xyz2 = site_3d[i] + dvec_mic[0]
+            xyz2 = site_3d[i] + delta
         else:
             d_gate = float(d)
             xyz2 = site_3d[j].copy()

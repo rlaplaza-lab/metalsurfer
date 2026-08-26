@@ -70,6 +70,9 @@ class _PoseBatchCache:
     # batch and reused for z-offset scaling when a spec's site has no explicit
     # slab_indices. Read-only across worker threads.
     r_surface_top_layer: float | None = None
+    # Global surface reference (max height along the slab normal); a pure
+    # function of the substrate, so computed once per batch instead of per pose.
+    global_surface_ref: float | None = None
     # conformer_index -> (canonical_pos, shape)
     frames: dict[int, tuple[np.ndarray, str]] = dataclasses.field(default_factory=dict)
 
@@ -89,6 +92,10 @@ def build_pose_batch_cache(
     }
     cache.top_layer_planar = bool(_is_top_layer_planar(slab, **planar_kwargs))
     cache.r_surface_top_layer = _get_site_surface_radii(slab, None)
+    if config.material_type == "slab":
+        cache.global_surface_ref = float(
+            np.max(_height_along_slab_normal(slab.get_positions(), cell))
+        )
     for i, conf in enumerate(conformers):
         ads_pos = conf.get_positions()
         symbols = conf.get_chemical_symbols()
@@ -129,6 +136,7 @@ def _resolve_surface_ref(
     top_layer_tolerance: float | None = None,
     planar_z_variance_threshold: float | None = None,
     top_layer_planar: bool | None = None,
+    global_surface_ref: float | None = None,
 ) -> tuple[float, bool]:
     """Return *(surface_ref, is_local_ref)* for z-offset calculations.
 
@@ -145,6 +153,8 @@ def _resolve_surface_ref(
     site enumeration so planarity decisions stay consistent.
 
     *top_layer_planar* skips the per-placement lstsq when provided by a batch cache.
+    *global_surface_ref* (batch-cached max height along the slab normal) skips
+    the per-placement height recomputation for the non-local slab reference.
     """
     if mat_type == "slab":
         cell = np.asarray(slab.get_cell(), dtype=float)
@@ -163,6 +173,8 @@ def _resolve_surface_ref(
                 is_planar = top_layer_planar
             if not is_planar:
                 return float(_height_along_slab_normal(site.xyz, cell)), True
+        if global_surface_ref is not None:
+            return float(global_surface_ref), False
         return float(np.max(_height_along_slab_normal(positions, cell))), False
     if site is not None:
         site_xyz = np.asarray(site.xyz, dtype=float)
@@ -303,6 +315,11 @@ def _pose_from_spec(
         top_layer_planar=(
             pose_cache.top_layer_planar if pose_cache is not None else None
         ),
+        global_surface_ref=(
+            pose_cache.global_surface_ref
+            if pose_cache is not None and mat_type == "slab"
+            else None
+        ),
     )
 
     oriented = orient_from_spec(
@@ -380,6 +397,7 @@ def _context_from_pose(
     config: AdsorptionConfig,
     site_context: SiteContext | None,
     slab_for_sites: Atoms | None = None,
+    pose_cache: _PoseBatchCache | None = None,
 ) -> _PlacementContext | None:
     """Replay path: normalize quaternion, rotate *canonical_pos*, resolve site for ``_finalize_placement``."""
     raw_q = np.array([pose.quat_w, pose.quat_x, pose.quat_y, pose.quat_z], dtype=float)
@@ -410,6 +428,14 @@ def _context_from_pose(
         rough_slab_local_z=config.rough_slab_local_z,
         top_layer_tolerance=config.top_layer_tolerance,
         planar_z_variance_threshold=config.planar_z_variance_threshold,
+        top_layer_planar=(
+            pose_cache.top_layer_planar if pose_cache is not None else None
+        ),
+        global_surface_ref=(
+            pose_cache.global_surface_ref
+            if pose_cache is not None and mat_type == "slab"
+            else None
+        ),
     )
 
     pose_normalized = dataclasses.replace(
@@ -751,12 +777,20 @@ def _build_slab_distance_scratch(
         ],
         dtype=float,
     )
+    slab_vdw_r = np.array(
+        [
+            r if (r := geom._get_vdw_radius(s)) is not None else np.nan
+            for s in slab_syms
+        ],
+        dtype=float,
+    )
     return geom._SlabDistanceScratch(
         slab_pos=slab_pos,
         cell=cell,
         pbc=pbc,
         slab_syms=slab_syms,
         slab_cov_r=slab_cov_r,
+        slab_vdw_r=slab_vdw_r,
         pre_ads_pos=pre_ads_pos,
     )
 
@@ -921,12 +955,19 @@ def _finalize_placement(
         np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float),
     )
 
+    # Build the slab-side scratch once and share it between the first
+    # validation and any distance-recovery candidates (the slab does not
+    # change while only the adsorbate moves).
+    exclude_n = _saturation_exclude_count(slab, slab_for_sites)
+    slab_scratch = _build_slab_distance_scratch(slab, exclude_n, ctx.mat_type)
+
     fail_reason = _validate_posed_adsorbate(
         adsorbate,
         slab,
         config,
         slab_for_sites=slab_for_sites,
         material_type=ctx.mat_type,
+        slab_scratch=slab_scratch,
     )
     if fail_reason is not None:
         if (
@@ -935,11 +976,6 @@ def _finalize_placement(
             and fail_reason
             and fail_reason in RECOVERABLE_DISTANCE_REASONS
         ):
-            # Build the slab-side scratch once; the slab does not change during
-            # recovery (only the adsorbate moves), so reuse it for every
-            # height/XY candidate validation.
-            exclude_n = _saturation_exclude_count(slab, slab_for_sites)
-            slab_scratch = _build_slab_distance_scratch(slab, exclude_n, ctx.mat_type)
             ctx, fail_reason = _recover_distance_failure(
                 ctx,
                 adsorbate,
@@ -996,6 +1032,7 @@ def generate_placement_from_pose(
     config: AdsorptionConfig,
     site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
+    pose_cache: _PoseBatchCache | None = None,
 ) -> tuple[Atoms, PlacementDescriptor] | None:
     """Generate adsorbate placement using universal pose semantics.
 
@@ -1014,6 +1051,9 @@ def generate_placement_from_pose(
     slab_for_sites
         Optional bare-substrate reference for surface_ref / site detection
         (same contract as :func:`generate_placement_from_spec`).
+    pose_cache
+        Optional batch cache (planarity, surface ref) shared across poses on
+        the same substrate; see :func:`build_pose_batch_cache`.
     """
     if not conformers:
         return None
@@ -1044,6 +1084,7 @@ def generate_placement_from_pose(
         config,
         site_context,
         slab_for_sites=slab_for_sites,
+        pose_cache=pose_cache,
     )
     if ctx is None:
         return None

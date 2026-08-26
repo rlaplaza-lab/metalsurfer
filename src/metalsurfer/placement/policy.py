@@ -39,6 +39,45 @@ def _unravel_product_index(flat: int, shape: tuple[int, ...]) -> tuple[int, ...]
     return tuple(reversed(coords))
 
 
+def _parallel_aip_values(tilt: float) -> tuple[float, ...]:
+    """In-plane azimuth values at *tilt* for parallel placements.
+
+    At tilt=0, azimuth and azimuth_in_plane both rotate about the surface
+    normal and commute, so only one in-plane angle (0) is kept. Single source
+    of truth for both :func:`max_batch_placement_specs` and the flat-aromatic
+    builder branch.
+    """
+    return (0.0,) if float(tilt) == 0.0 else _AZIMUTH_IN_PLANE
+
+
+def _flat_aromatic_branch_capacities(
+    *,
+    n_conformers: int,
+    n_sites: int,
+    n_binders: int,
+) -> tuple[int, int]:
+    """Uncapped ``(parallel, EN-down)`` flat-aromatic grid sizes.
+
+    Derived from exactly the axis products
+    :func:`build_batch_placement_specs` enumerates in its flat-aromatic
+    branches (including the ``_parallel_aip_values`` collapse), so budget
+    estimates cannot silently drift from the builder.
+    """
+    tilt_aip_pairs = sum(len(_parallel_aip_values(tl)) for tl in _TILT_PARALLEL)
+    parallel = (
+        n_conformers * 2 * tilt_aip_pairs * len(_AZIMUTH) * len(_Z_FRACTIONS) * n_sites
+    )
+    en_down = (
+        n_conformers
+        * max(n_binders, 1)
+        * len(_TILT_FULL)
+        * len(_AZIMUTH)
+        * len(_Z_FRACTIONS)
+        * n_sites
+    )
+    return parallel, en_down
+
+
 def max_batch_placement_specs(
     *,
     n_conformers: int,
@@ -49,6 +88,10 @@ def max_batch_placement_specs(
     n_hollow_pairs: int = 0,
 ) -> int:
     """Closed-form count of policy-grid specs (per-branch clamp at ``_GRID_BUILD_CAP``).
+
+    Mirrors the *uncapped* grids of :func:`build_batch_placement_specs`; the
+    builder additionally applies working-set caps (``filter_spec``, early-cap
+    multiplier), so the estimate is an upper bound per branch.
 
     Parameters
     ----------
@@ -73,26 +116,8 @@ def max_batch_placement_specs(
         return min(n_hollow_pairs * len(_Z_FRACTIONS), _GRID_BUILD_CAP)
 
     if flat_aromatic:
-        # At tilt=0, azimuth and azimuth_in_plane both rotate about the surface
-        # normal and commute, so only one in-plane angle is kept (aip=0).
-        tilt_aip_pairs = sum(
-            1 if float(tl) == 0.0 else len(_AZIMUTH_IN_PLANE) for tl in _TILT_PARALLEL
-        )
-        parallel = (
-            n_conformers
-            * 2
-            * tilt_aip_pairs
-            * len(_AZIMUTH)
-            * len(_Z_FRACTIONS)
-            * n_sites
-        )
-        en_down = (
-            n_conformers
-            * max(n_binders, 1)
-            * len(_TILT_FULL)
-            * len(_AZIMUTH)
-            * len(_Z_FRACTIONS)
-            * n_sites
+        parallel, en_down = _flat_aromatic_branch_capacities(
+            n_conformers=n_conformers, n_sites=n_sites, n_binders=n_binders
         )
         return min(parallel, _GRID_BUILD_CAP) + min(en_down, _GRID_BUILD_CAP)
 
@@ -540,10 +565,6 @@ def build_batch_placement_specs(
         # conformer axis must vary fastest under weighting: with it outermost an
         # early cap would truncate the working set to the first conformer(s) and
         # leave the proportional allocation nothing to allocate over.
-        def _parallel_aip_values(tilt: float) -> tuple[float, ...]:
-            # At tilt=0, aip is redundant with azimuth (see count path above).
-            return (0.0,) if float(tilt) == 0.0 else _AZIMUTH_IN_PLANE
-
         parallel_axes: Iterable[tuple[Any, ...]]
         if conformer_weights is None:
             parallel_axes = (

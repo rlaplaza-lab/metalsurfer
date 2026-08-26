@@ -206,10 +206,14 @@ def _build_classification_context(
         margin = float(np.max(d0_arr[:, -1])) + _KD_RADIUS_SEARCH_PADDING
         images = _build_periodic_images(positions, cell, pbc_arr, margin=margin)
         image_tree = KDTree(images)
-        _, idx_raw = image_tree.query(vertices, k=min(k_max, len(images)))
+        # One query for both consumers (normals + classifier): k_class <= k_max,
+        # so the classifier's slice is a prefix of these results.
+        d_img, idx_raw = image_tree.query(vertices, k=min(k_max, len(images)))
         idx_img = np.asarray(idx_raw, dtype=int)
+        dists_img = np.asarray(d_img, dtype=float)
         if idx_img.ndim == 1:
             idx_img = idx_img.reshape(-1, 1)
+            dists_img = dists_img.reshape(-1, 1)
 
     normals = _site_normals_for_material(
         vertices,
@@ -227,9 +231,8 @@ def _build_classification_context(
         # MIC neighbours when PBC is on (porous / slab distance_ratio).
         if use_periodic and idx_img is not None:
             k_slice = min(k_class, idx_img.shape[1])
-            dists_raw, _ = image_tree.query(vertices, k=k_slice)
-            class_dists = np.asarray(dists_raw, dtype=float)
-            class_idx = np.asarray(idx_img[:, :k_slice], dtype=int) % len(positions)
+            class_dists = dists_img[:, :k_slice]
+            class_idx = idx_img[:, :k_slice] % len(positions)
         else:
             dists_raw, idx_raw = local_tree.query(vertices, k=k_class)
             class_dists = np.asarray(dists_raw, dtype=float)

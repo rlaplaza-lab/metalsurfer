@@ -26,7 +26,7 @@ from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
 from .models import ScreeningResult
 from .placement._material import material_aware_pbc
-from .placement.geometry import calculate_min_distance
+from .placement.geometry import _mol_slab_pairwise_distances, calculate_min_distance
 
 logger = logging.getLogger(__name__)
 
@@ -38,22 +38,16 @@ logger = logging.getLogger(__name__)
 
 def _mic_pairwise_distances(coords: np.ndarray, atoms: Atoms) -> np.ndarray:
     """Return an (n, n) MIC-aware distance matrix for *coords*."""
+    coords = np.asarray(coords, dtype=float)
     n = len(coords)
-    dist_matrix = np.zeros((n, n))
     if n <= 1:
-        return dist_matrix
-    idx_i, idx_j = np.triu_indices(n, k=1)
-    diffs = coords[idx_i] - coords[idx_j]
-    cell = atoms.get_cell()
+        return np.zeros((n, n))
+    cell = np.asarray(atoms.get_cell(), dtype=float)
     pbc = atoms.get_pbc()
-    if np.any(pbc) and cell_has_volume(cell):
-        _, mic_dists = find_mic(diffs, cell, pbc=pbc)
-        dists = np.asarray(mic_dists).ravel()
-    else:
-        dists = np.linalg.norm(diffs, axis=1)
-    dist_matrix[idx_i, idx_j] = dists
-    dist_matrix[idx_j, idx_i] = dists
-    return dist_matrix
+    if not cell_has_volume(cell):
+        pbc = [False, False, False]
+    # Shared placement primitive (same MIC math as every other distance gate).
+    return _mol_slab_pairwise_distances(coords, coords, cell, pbc)
 
 
 def _covalent_threshold_matrix(syms: np.ndarray, multiplier: float) -> np.ndarray:

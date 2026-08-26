@@ -42,6 +42,7 @@ from metalsurfer.ml.bayesian import (
     build_transfer_surrogate,
     score_and_select,
     select_initial_bo_indices,
+    splice_exploration_picks,
     train_surrogate,
 )
 from metalsurfer.ml.features import extract_features_from_dataset, get_feature_names
@@ -661,8 +662,9 @@ def _run_replay(
                         prior.observed_X_rows,
                         prior.observed_y,
                         surrogate=surrogate,  # type: ignore[arg-type]
-                        n_estimators=100,
+                        n_estimators=int(config.bo.n_estimators),
                         random_state=seed,
+                        n_jobs=int(config.n_jobs),
                         weight_cap=float(xfer_kw["weight_cap"]),
                         similarity_lengthscale=float(xfer_kw["similarity_lengthscale"]),
                         min_similarity=float(xfer_kw["min_similarity"]),
@@ -687,8 +689,9 @@ def _run_replay(
                         X_cur,
                         y_cur,
                         surrogate=surrogate,  # type: ignore[arg-type]
-                        n_estimators=100,
+                        n_estimators=int(config.bo.n_estimators),
                         random_state=seed,
+                        n_jobs=int(config.n_jobs),
                     )
             else:
                 obs = sorted(evaluated)
@@ -696,8 +699,9 @@ def _run_replay(
                     X.iloc[obs],
                     y_arr[obs],
                     surrogate=surrogate,  # type: ignore[arg-type]
-                    n_estimators=100,
+                    n_estimators=int(config.bo.n_estimators),
                     random_state=seed,
+                    n_jobs=int(config.n_jobs),
                 )
             chosen = score_and_select(
                 model,
@@ -707,6 +711,7 @@ def _run_replay(
                 evaluated_indices=evaluated,
                 acquisition=acquisition,  # type: ignore[arg-type]
                 f_best=best if np.isfinite(best) else None,
+                n_jobs=int(config.n_jobs),
             )
             if use_exploration:
                 chosen = _inject_exploration(
@@ -844,18 +849,16 @@ def _inject_exploration(
     evaluated: set[int],
     exploration_fraction: float = TRANSFER_KWARGS["exploration_fraction"],
 ) -> list[int]:
-    frac = float(exploration_fraction)
-    if frac <= 0:
-        return chosen
-    explore_n = int(np.ceil(batch_size * frac))
-    uneval = [i for i in range(n_pool) if i not in evaluated and i not in chosen]
-    if not uneval or explore_n <= 0:
-        return chosen
-    picks = rng.choice(
-        uneval, size=min(explore_n, len(uneval), len(chosen)), replace=False
+    """Exploration splice for replay; delegates to the shared BO helper."""
+    if len(chosen) < batch_size:
+        chosen = list(chosen)
+    return splice_exploration_picks(
+        rng,
+        chosen,
+        pool_size=n_pool,
+        evaluated_indices=evaluated,
+        exploration_fraction=float(exploration_fraction),
     )
-    kept = chosen[: batch_size - len(picks)]
-    return (kept + picks.tolist())[:batch_size]
 
 
 def _run_bo_transfer(

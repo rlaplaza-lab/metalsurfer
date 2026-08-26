@@ -75,7 +75,9 @@ __all__ = [
     "_derive_top_layer_tolerance",
     "_derive_voronoi_distance_window",
     "_filter_non_duplicate_candidates",
+    "_keep_mask_from_clusters",
     "_mean_covalent_radius",
+    "_pbc_merge_pair_set",
     "_periodic_image_offsets",
     "_union_find_cluster",
     "derive_pore_threshold",
@@ -216,6 +218,43 @@ def _build_periodic_images(
 # ---------------------------------------------------------------------------
 
 
+def _pbc_merge_pair_set(
+    coords: np.ndarray,
+    radius: float,
+    *,
+    image_offsets: list[np.ndarray] | None = None,
+) -> set[tuple[int, int]]:
+    """Origin-index pairs within *radius*, PBC-aware when *image_offsets* given.
+
+    Shared primitive for every periodic union-find dedup pipeline: expands the
+    coordinates by *image_offsets* (when provided), queries a KD-tree, maps the
+    expanded indices back with ``% n``, and returns each undirected origin pair
+    once.
+    """
+    pts = np.asarray(coords, dtype=float)
+    n = len(pts)
+    all_pts = np.vstack([pts + off for off in image_offsets]) if image_offsets else pts
+    tree = KDTree(all_pts)
+    raw_pairs = tree.query_pairs(r=float(radius), output_type="ndarray")
+    merge_set: set[tuple[int, int]] = set()
+    for a_exp, b_exp in raw_pairs:
+        a = int(a_exp) % n
+        b = int(b_exp) % n
+        if a == b:
+            continue
+        merge_set.add((min(a, b), max(a, b)))
+    return merge_set
+
+
+def _keep_mask_from_clusters(n: int, pairs: set[tuple[int, int]]) -> np.ndarray:
+    """Boolean keep-mask keeping ``min(component)`` of every union-find cluster."""
+    components = _union_find_cluster(n, list(pairs))
+    keep = np.zeros(n, dtype=bool)
+    for comp in components:
+        keep[min(comp)] = True
+    return keep
+
+
 def _deduplicate_points(
     points: np.ndarray,
     tolerance: float,
@@ -233,39 +272,13 @@ def _deduplicate_points(
     if n == 0:
         return np.ones(0, dtype=bool)
 
-    if cell is None or pbc is None or not np.any(pbc):
-        ded_tree = KDTree(pts)
-        pairs = ded_tree.query_pairs(r=tolerance, output_type="ndarray")
-        merge_set: set[tuple[int, int]] = set()
-        for i, j in pairs:
-            a, b = int(i), int(j)
-            if a == b:
-                continue
-            merge_set.add((min(a, b), max(a, b)))
-        components = _union_find_cluster(n, sorted(merge_set))
-        keep = np.zeros(n, dtype=bool)
-        for comp in components:
-            keep[min(comp)] = True
-        return keep
-
-    offsets = _periodic_image_offsets(
-        np.asarray(cell, dtype=float), np.asarray(pbc, dtype=bool), tolerance
-    )
-    expanded = np.vstack([pts + off for off in offsets])
-    tree = KDTree(expanded)
-    raw_pairs = tree.query_pairs(r=tolerance, output_type="ndarray")
-    periodic_merge: set[tuple[int, int]] = set()
-    for a_exp, b_exp in raw_pairs:
-        a = int(a_exp) % n
-        b = int(b_exp) % n
-        if a == b:
-            continue
-        periodic_merge.add((min(a, b), max(a, b)))
-    components = _union_find_cluster(n, sorted(periodic_merge))
-    keep = np.zeros(n, dtype=bool)
-    for comp in components:
-        keep[min(comp)] = True
-    return keep
+    image_offsets: list[np.ndarray] | None = None
+    if cell is not None and pbc is not None and np.any(pbc):
+        image_offsets = _periodic_image_offsets(
+            np.asarray(cell, dtype=float), np.asarray(pbc, dtype=bool), tolerance
+        )
+    merge_set = _pbc_merge_pair_set(pts, tolerance, image_offsets=image_offsets)
+    return _keep_mask_from_clusters(n, merge_set)
 
 
 # ---------------------------------------------------------------------------

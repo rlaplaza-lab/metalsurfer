@@ -98,7 +98,8 @@ def generate_placements_from_specs(
     Each entry is ``(result, fail_reason)`` matching
     :func:`generate_placement_from_spec_with_reason`. Calculator attachment is
     left to the caller. Worker count comes from
-    ``config.placement_materialize_workers`` (joblib-style ``n_jobs``).
+    ``config.placement_materialize_workers``, inheriting the global
+    ``config.n_jobs`` when unset (both joblib-style ``n_jobs``).
 
     Parameters
     ----------
@@ -147,8 +148,13 @@ def generate_placements_from_specs(
             pose_cache=pose_cache,
         )
 
+    workers_setting = (
+        config.placement_materialize_workers
+        if config.placement_materialize_workers is not None
+        else config.n_jobs
+    )
     n_workers = resolve_materialize_workers(
-        config.placement_materialize_workers,
+        workers_setting,
         n_tasks=len(specs),
     )
     if n_workers == 1 or len(specs) == 1:

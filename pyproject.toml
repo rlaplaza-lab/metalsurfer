@@ -72,7 +72,7 @@ module = ["yaml"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["fairchem.*", "torch_sim.*", "torch.*", "sklearn.*"]
+module = ["fairchem.*", "torch_sim.*", "torch.*", "sklearn.*", "joblib.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

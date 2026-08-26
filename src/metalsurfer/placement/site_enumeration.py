@@ -50,6 +50,7 @@ from .site_coords import (
     _frac_to_cart,
     _height_along_slab_normal,
     _minimum_image_fractional_delta,
+    _pbc_merge_pair_set,
     _periodic_image_offsets,
     _project_to_slab_plane,
     _shift_along_slab_normal,
@@ -235,6 +236,8 @@ def _inject_atop_sites(
     pbc: np.ndarray,
     material_type: str,
     local_tree: KDTree,
+    accessibility_tree: KDTree | None,
+    median_nn: float | None,
     slab_top_atom_indices: np.ndarray | None,
     slab_has_topology_atop: bool,
     probe_radius: float,
@@ -245,22 +248,29 @@ def _inject_atop_sites(
     Atop sites are derived purely from *positions* (top atoms / outward normals),
     so they can be built even when *vertices* is empty — see the early-return
     bypass fix in ``_enumerate_unified_sites``.
+
+    *accessibility_tree* (PBC-aware) is preferred for the distance gate whenever
+    periodic boundaries are active: the plain *local_tree* reports in-cell
+    distances, which are inflated for candidates near an a/b boundary.
+    *median_nn*, when provided, must be the value used for the topology
+    generator's ``site_height`` so both atop sources share one height.
     """
     if material_type == "slab" and slab_has_topology_atop:
         return vertices, nn_dists, source_hints
     if material_type not in ("slab", "nanoparticle"):
         return vertices, nn_dists, source_hints
 
-    median_nn = _median_nn_or_fallback(
-        nn_dists,
-        reference_positions=(
-            positions[slab_top_atom_indices]
-            if slab_top_atom_indices is not None
-            else positions
-        ),
-        cell=cell,
-        pbc=pbc,
-    )
+    if median_nn is None:
+        median_nn = _median_nn_or_fallback(
+            nn_dists,
+            reference_positions=(
+                positions[slab_top_atom_indices]
+                if slab_top_atom_indices is not None
+                else positions
+            ),
+            cell=cell,
+            pbc=pbc,
+        )
     atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
 
     if material_type == "slab":
@@ -299,7 +309,14 @@ def _inject_atop_sites(
         return vertices, nn_dists, source_hints
 
     candidate_arr = np.asarray(candidate_verts, dtype=float)
-    d_nn_all = np.asarray(local_tree.query(candidate_arr, k=1)[0], dtype=float).ravel()
+    # Gate through the PBC-aware tree when available (see docstring); the plain
+    # in-cell tree would inflate d_nn for candidates near periodic boundaries.
+    gate_tree = (
+        accessibility_tree
+        if accessibility_tree is not None and np.any(pbc)
+        else local_tree
+    )
+    d_nn_all = np.asarray(gate_tree.query(candidate_arr, k=1)[0], dtype=float).ravel()
     keep_acc = (d_nn_all >= float(probe_radius)) & (
         d_nn_all <= float(max_site_distance)
     )
@@ -407,8 +424,12 @@ def get_unified_sites(
     positions = atoms.get_positions()
     symbols = list(atoms.get_chemical_symbols())
     cell = np.asarray(atoms.get_cell(), dtype=float)
-    mat = material_type if material_type is not None else "slab"
-    pbc = np.asarray(material_aware_pbc(mat), dtype=bool)
+    # _enumerate_unified_sites already validated material_type, so it is set here.
+    if material_type is None:  # pragma: no cover - defensive
+        raise ValueError(
+            "material_type must be explicitly specified: 'slab', 'nanoparticle', or 'porous'"
+        )
+    pbc = np.asarray(material_aware_pbc(material_type), dtype=bool)
     derived_probe, derived_max = _derive_voronoi_distance_window(
         positions, symbols, pbc, cell
     )
@@ -506,7 +527,10 @@ def _enumerate_unified_sites(
         # "QH6154 initial simplex is flat" and the generator returns zero
         # vertices. Skip it explicitly instead of raising-and-swallowing.
         slab_skip_voronoi = _top_layer_is_planar_from_arrays(
-            positions, cell, float(top_layer_tolerance)
+            positions,
+            cell,
+            float(top_layer_tolerance),
+            top_mask=slab_top_mask,
         )
         if slab_skip_voronoi:
             logger.info(
@@ -539,6 +563,19 @@ def _enumerate_unified_sites(
     topology_expanded_origin: list[int] | None = None
     topology_expanded_tri = None
 
+    # PBC-aware candidate-to-framework distance tree; shared by the topology
+    # generator and the atop-injection gate (a plain in-cell KDTree inflates
+    # d_nn near a/b boundaries and silently drops valid sites).
+    accessibility_tree: KDTree | None = None
+    slab_median_nn: float | None = None
+    if material_type == "slab":
+        accessibility_tree = _periodic_accessibility_tree(
+            positions,
+            cell,
+            pbc_for_voronoi,
+            float(max_site_distance),
+        )
+
     # Slab-specific topology enrichment becomes part of the default generator.
     if material_type == "slab" and slab_top_atom_indices is not None:
         # `nn_dists` may be empty here, so the fallback below is reachable (not dead code).
@@ -548,16 +585,8 @@ def _enumerate_unified_sites(
             cell=cell,
             pbc=pbc_for_voronoi,
         )
+        slab_median_nn = float(median_nn)
         site_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
-        # The accessibility gate compares candidate-to-framework distances, so
-        # it must respect PBC: a hollow whose defining atoms straddle an a/b
-        # boundary otherwise gets an inflated d_nn and is silently dropped.
-        accessibility_tree = _periodic_accessibility_tree(
-            positions,
-            cell,
-            pbc_for_voronoi,
-            float(max_site_distance),
-        )
         (
             topo_vertices,
             topo_dists,
@@ -639,6 +668,8 @@ def _enumerate_unified_sites(
         pbc=pbc_for_voronoi,
         material_type=material_type,
         local_tree=local_tree,
+        accessibility_tree=accessibility_tree,
+        median_nn=slab_median_nn,
         slab_top_atom_indices=slab_top_atom_indices,
         slab_has_topology_atop=slab_has_topology_atop,
         probe_radius=probe_radius,
@@ -686,20 +717,21 @@ def _enumerate_unified_sites(
     )
 
     if cell_has_volume(cell):
+        # One batched fractional conversion instead of an ``inv(cell)`` per site.
+        all_xyz = np.asarray([s.xyz for s in sites], dtype=float).reshape(-1, 3)
+        all_frac = _wrap_fractional(_cart_to_frac(all_xyz, cell), pbc_for_voronoi)
 
-        def _site_frac_key(site: Site) -> tuple:
-            frac = _wrap_fractional(
-                _cart_to_frac(np.asarray(site.xyz, dtype=float).reshape(1, 3), cell),
-                pbc_for_voronoi,
-            )[0]
+        def _site_frac_key(i: int) -> tuple:
+            frac = all_frac[i]
             return (
                 float(frac[0]),
                 float(frac[1]),
                 float(frac[2]),
-                str(site.site_type),
+                str(sites[i].site_type),
             )
 
-        sites.sort(key=_site_frac_key)
+        order = sorted(range(len(sites)), key=_site_frac_key)
+        sites = [sites[i] for i in order]
 
     return sites
 
@@ -714,7 +746,7 @@ def get_hollow_sites_for_adatoms(
     top_layer_tolerance: float | None = None,
     dedup_tolerance: float = _DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
     *,
-    material_type: str = "slab",
+    material_type: str,
     probe_radius: float | None = None,
     max_site_distance: float | None = None,
     enrich: bool = True,
@@ -731,7 +763,9 @@ def get_hollow_sites_for_adatoms(
     dedup_tolerance
         Spatial tolerance for deduplication.
     material_type
-        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``. Required so that the
+        PBC semantics always match the caller's intent (same as
+        :func:`get_unified_sites`).
     probe_radius
         Voronoi probe radius (auto-derived if None).
     max_site_distance
@@ -780,31 +814,18 @@ def _cluster_with_metric(
     *,
     image_offsets: list[np.ndarray] | None,
     kdtree_radius: float,
-    pair_filter: Callable[[int, int, np.ndarray], bool] | None = None,
+    pair_filter: Callable[[int, int], bool] | None = None,
 ) -> list[int]:
     """KDTree query_pairs + union-find; one representative index per cluster."""
-    if image_offsets:
-        all_coords = np.vstack([coords + off for off in image_offsets])
-    else:
-        all_coords = coords
-
-    tree = KDTree(all_coords)
-    raw_pairs = tree.query_pairs(r=kdtree_radius, output_type="ndarray")
+    # Shared PBC-aware pair extraction (same primitive as _deduplicate_points).
+    candidates = _pbc_merge_pair_set(coords, kdtree_radius, image_offsets=image_offsets)
 
     merge_set: set[tuple[int, int]] = set()
-    for a_exp, b_exp in raw_pairs:
-        a = int(a_exp) % n
-        b = int(b_exp) % n
-        if a == b:
-            continue
-        key = (min(a, b), max(a, b))
-        # The same primary pair can appear from multiple periodic-image copies;
-        # once merged there is no need to re-run the (expensive) pair filter.
-        if key in merge_set:
-            continue
+    for key in candidates:
+        a, b = key
         if fps[a] != fps[b]:
             continue
-        if pair_filter is not None and not pair_filter(a, b, coords):
+        if pair_filter is not None and not pair_filter(a, b):
             continue
         merge_set.add(key)
 
@@ -892,7 +913,7 @@ def _cluster_equivalent_sites(
     n_hat = _slab_normal(cell)
     inv_cell = np.linalg.inv(cell)
 
-    def _slab_pair_filter(a: int, b: int, _coords_arr: np.ndarray) -> bool:
+    def _slab_pair_filter(a: int, b: int) -> bool:
         xyz_a = coords[a]
         xyz_b = coords[b]
         delta_frac = _minimum_image_fractional_delta(
@@ -917,20 +938,26 @@ def _cluster_equivalent_sites(
     )
     result = [sorted_sites[i] for i in reps]
 
-    def _slab_coord(s: Site) -> np.ndarray:
-        xyz = _get_xyz(s)
+    # Batched heights for the representatives (one slab-normal + projection
+    # instead of a cross product and matrix inverse per site).
+    rep_xyz = np.asarray([_get_xyz(s) for s in result], dtype=float).reshape(-1, 3)
+    rep_heights = _height_along_slab_normal(rep_xyz, cell)
+
+    def _slab_coord(i: int) -> np.ndarray:
+        xyz = rep_xyz[i]
         frac2 = xyz @ pinv_ab_T
         frac2 = frac2 - np.floor(frac2)
         # Use the height along the slab normal (not Cartesian z) so the ordered
         # representatives follow the surface, not an arbitrary tilted-z ordering.
-        h = float(_height_along_slab_normal(xyz.reshape(1, 3), cell)[0])
+        h = float(rep_heights[i])
         return np.array([float(frac2[0]), float(frac2[1]), h])
 
-    def _slab_key(s: Site) -> tuple:
-        c = _slab_coord(s)
-        return (float(c[0]), float(c[1]), float(c[2]), str(s.site_type))
+    def _slab_key(i: int) -> tuple:
+        c = _slab_coord(i)
+        return (float(c[0]), float(c[1]), float(c[2]), str(result[i].site_type))
 
-    return sorted(result, key=_slab_key)
+    order_by_slab = sorted(range(len(result)), key=_slab_key)
+    return [result[i] for i in order_by_slab]
 
 
 # ---------------------------------------------------------------------------
@@ -942,7 +969,8 @@ def get_symmetry_aware_sites(
     slab: Atoms,
     top_layer_tolerance: float | None = None,
     symmetry_tolerance: float = _DEFAULT_SYMMETRY_TOLERANCE,
-    material_type: str = "slab",
+    *,
+    material_type: str,
     probe_radius: float | None = None,
     max_site_distance: float | None = None,
     enrich: bool = True,
@@ -960,7 +988,9 @@ def get_symmetry_aware_sites(
     symmetry_tolerance
         Spatial tolerance for symmetry analysis.
     material_type
-        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``. Required so that the
+        symmetry mode and PBC semantics always match the caller's intent (same
+        as :func:`get_unified_sites`).
     probe_radius
         Voronoi probe radius (auto-derived if None).
     max_site_distance
@@ -1020,15 +1050,20 @@ def _top_layer_is_planar_from_arrays(
     cell: np.ndarray,
     top_layer_tolerance: float = _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
     z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
+    *,
+    top_mask: np.ndarray | None = None,
 ) -> bool:
     """Check whether the topmost atomic layer of *positions* is approximately flat.
 
     The fit is done in an orientation-aware slab coordinate system rather than
-    assuming the slab normal is Cartesian z.
+    assuming the slab normal is Cartesian z. *top_mask* (from
+    :func:`top_layer_mask_by_normal`) may be supplied when the caller already
+    computed it, avoiding a redundant height scan.
     """
     positions = np.asarray(positions, dtype=float)
     cell = np.asarray(cell, dtype=float)
-    top_mask = top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
+    if top_mask is None:
+        top_mask = top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
     top_indices = np.nonzero(top_mask)[0]
     if len(top_indices) < 3:
         return False

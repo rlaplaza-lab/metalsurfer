@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
+import joblib
 import numpy as np
 import pandas as pd
 from ase import Atoms
@@ -124,6 +125,7 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
         member_surrogates: tuple[str, ...] = DEFAULT_ENSEMBLE_MEMBERS,
         n_estimators: int = 100,
         random_state: int = 42,
+        n_jobs: int = -1,
     ) -> None:
         """Instantiate the ensemble regressor.
 
@@ -135,10 +137,14 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
             Number of estimators per member.
         random_state
             Random seed for reproducibility.
+        n_jobs
+            Parallel workers forwarded to tree members and per-tree
+            uncertainty prediction (joblib convention).
         """
         self.member_surrogates = member_surrogates
         self.n_estimators = n_estimators
         self.random_state = random_state
+        self.n_jobs = int(n_jobs)
         self.members_: list[Pipeline] = []
 
     def fit(
@@ -181,6 +187,7 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
                     n_estimators=self.n_estimators,
                     random_state=self.random_state,
                     sample_weight=weight,
+                    n_jobs=self.n_jobs,
                 )
             )
         return self
@@ -226,7 +233,7 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
         mus: list[np.ndarray] = []
         sigmas: list[np.ndarray] = []
         for member in self.members_:
-            mu_i, sigma_i = predict_with_uncertainty(member, X)
+            mu_i, sigma_i = predict_with_uncertainty(member, X, n_jobs=self.n_jobs)
             mus.append(np.asarray(mu_i, dtype=float).ravel())
             sigmas.append(np.asarray(sigma_i, dtype=float).ravel())
         mus_arr = np.vstack(mus)
@@ -412,7 +419,7 @@ def train_surrogate(
     random_state: int = 42,
     sample_weight: np.ndarray | None = None,
     attach_uncertainty: bool = True,
-    **kwargs: Any,
+    n_jobs: int = -1,
 ) -> Pipeline:
     """Fit a surrogate on observed placement data.
 
@@ -439,8 +446,9 @@ def train_surrogate(
         Optional per-sample weights.
     attach_uncertainty
         Whether to attach residual uncertainty for deterministic models.
-    **kwargs
-        Additional keyword arguments passed to the regressor builder.
+    n_jobs
+        CPU workers for tree-ensemble fitting (joblib convention; ignored by
+        surrogates without native parallelism).
     """
     if surrogate in ("random_forest", "extra_trees"):
         tree_kind: TreeSurrogateKind = (
@@ -450,7 +458,7 @@ def train_surrogate(
             tree_kind,
             n_estimators=n_estimators,
             random_state=random_state,
-            **kwargs,
+            n_jobs=n_jobs,
         )
         pipeline = Pipeline([("regressor", reg)])
         pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
@@ -462,7 +470,7 @@ def train_surrogate(
         )
         return pipeline
     if surrogate == "ridge":
-        pipeline = _build_estimator("ridge", random_state=random_state, **kwargs)
+        pipeline = _build_estimator("ridge", random_state=random_state)
         pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
         if attach_uncertainty:
             _attach_residual_uncertainty(pipeline, X, y, random_state=random_state)
@@ -474,9 +482,7 @@ def train_surrogate(
         return pipeline
     if surrogate == "gradient_boost":
         # HistGradientBoostingRegressor supports sample_weight (incl. transfer).
-        pipeline = _build_estimator(
-            "gradient_boost", random_state=random_state, **kwargs
-        )
+        pipeline = _build_estimator("gradient_boost", random_state=random_state)
         pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
         if attach_uncertainty:
             _attach_residual_uncertainty(pipeline, X, y, random_state=random_state)
@@ -511,6 +517,7 @@ def train_surrogate(
         reg = EnsembleRegressor(
             n_estimators=n_estimators,
             random_state=random_state,
+            n_jobs=n_jobs,
         )
         pipeline = Pipeline([("regressor", reg)])
         pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
@@ -769,6 +776,7 @@ def _transfer_trust_gate(
     n_estimators: int,
     random_state: int,
     mae_tolerance: float = 0.0,
+    n_jobs: int = -1,
 ) -> tuple[float, float, Pipeline | None, bool]:
     """Compare baseline vs transfer MAE; fit the full transfer model only if useful.
 
@@ -800,6 +808,7 @@ def _transfer_trust_gate(
             n_estimators=n_estimators,
             random_state=random_state,
             sample_weight=sample_weight,
+            n_jobs=n_jobs,
         )
 
     if n_current < _TRANSFER_GATE_MIN_SAMPLES:
@@ -825,6 +834,7 @@ def _transfer_trust_gate(
                 n_estimators=n_estimators,
                 random_state=random_state,
                 attach_uncertainty=False,
+                n_jobs=n_jobs,
             )
             base_pred[test_idx] = np.asarray(base_fold.predict(X_te)).ravel()
 
@@ -843,6 +853,7 @@ def _transfer_trust_gate(
                 random_state=random_state,
                 sample_weight=fold_weight,
                 attach_uncertainty=False,
+                n_jobs=n_jobs,
             )
             transfer_pred[test_idx] = np.asarray(transfer_fold.predict(X_te)).ravel()
     except (ValueError, RuntimeError) as exc:
@@ -901,6 +912,7 @@ def build_transfer_surrogate(
     | None = None,
     occupancy_lengthscale: float | None = None,
     occupancy_floor: float = 0.0,
+    n_jobs: int = -1,
 ) -> TransferSurrogateResult:
     """Train baseline or transfer-weighted surrogate with production trust gating.
 
@@ -947,6 +959,8 @@ def build_transfer_surrogate(
         Length scale for occupancy-based downweighting.
     occupancy_floor
         Minimum occupancy weight value.
+    n_jobs
+        CPU workers forwarded to every surrogate fit (joblib convention).
     """
     if surrogate not in BO_TRANSFER_CAPABLE_SURROGATES:
         raise ValueError(
@@ -968,6 +982,7 @@ def build_transfer_surrogate(
                 surrogate=surrogate,
                 n_estimators=n_estimators,
                 random_state=random_state,
+                n_jobs=n_jobs,
             )
         return baseline
 
@@ -1085,6 +1100,7 @@ def build_transfer_surrogate(
         n_estimators=n_estimators,
         random_state=random_state,
         mae_tolerance=mae_tolerance,
+        n_jobs=n_jobs,
     )
     transfer_mae_delta = transfer_mae - base_mae
     bad_rounds = transfer_bad_rounds
@@ -1140,6 +1156,8 @@ def build_transfer_surrogate(
 def predict_with_uncertainty(
     model: Pipeline,
     X: pd.DataFrame | np.ndarray,
+    *,
+    n_jobs: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return ``(mean, sigma)`` for minimisation.
 
@@ -1157,6 +1175,9 @@ def predict_with_uncertainty(
         Fitted sklearn Pipeline with a regressor step.
     X
         Feature matrix for prediction.
+    n_jobs
+        CPU workers for per-tree uncertainty prediction (joblib convention).
+        ``None`` falls back to the estimator's own setting.
     """
     regressor = model.named_steps["regressor"]
     if "scaler" in model.named_steps:
@@ -1174,7 +1195,24 @@ def predict_with_uncertainty(
 
     if hasattr(regressor, "estimators_"):
         X_tree = np.asarray(X_eval)
-        tree_preds = np.array([t.predict(X_tree) for t in regressor.estimators_])
+        estimators = list(regressor.estimators_)
+        # Individual tree predictions are single-threaded, so sklearn's own
+        # n_jobs never kicks in on this code path. Tree traversal releases the
+        # GIL, making a thread pool sufficient (no X pickling across processes).
+        workers = (
+            int(n_jobs) if n_jobs is not None else getattr(regressor, "n_jobs", -1)
+        )
+        if len(estimators) > 1 and workers != 1:
+            tree_preds = np.asarray(
+                joblib.Parallel(n_jobs=workers, backend="threading")(
+                    joblib.delayed(t.predict)(X_tree) for t in estimators
+                ),
+                dtype=float,
+            )
+        else:
+            tree_preds = np.asarray(
+                [t.predict(X_tree) for t in estimators], dtype=float
+            )
         mu = tree_preds.mean(axis=0)
         sigma = tree_preds.std(axis=0)
     else:
@@ -1658,6 +1696,7 @@ def score_and_select(
     acquisition: AcquisitionType = "lcb",
     f_best: float | None = None,
     scaled_features: np.ndarray | None = None,
+    n_jobs: int | None = None,
 ) -> list[int]:
     """Score candidates with the given acquisition and select the top batch.
 
@@ -1687,8 +1726,11 @@ def score_and_select(
     scaled_features
         Optional pre-standardized pool matrix for diversity (avoids re-scaling
         every acquisition round).
+    n_jobs
+        CPU workers for per-tree uncertainty prediction (joblib convention);
+        forwarded to :func:`predict_with_uncertainty`.
     """
-    mu, sigma = predict_with_uncertainty(model, candidate_features)
+    mu, sigma = predict_with_uncertainty(model, candidate_features, n_jobs=n_jobs)
     if acquisition == "lcb":
         scores = lcb_scores(mu, sigma, kappa=kappa)
         return select_candidates_batch_diverse(
@@ -1715,3 +1757,39 @@ def score_and_select(
             scaled_features=scaled_features,
         )
     raise ValueError(f"Unknown acquisition: {acquisition!r}")
+
+
+def splice_exploration_picks(
+    rng: np.random.RandomState,
+    chosen: list[int],
+    *,
+    pool_size: int,
+    evaluated_indices: set[int] | None = None,
+    exploration_fraction: float = 0.0,
+) -> list[int]:
+    """Replace the tail of an acquisition batch with random unevaluated picks.
+
+    Single source of truth for the exploration splice used by both the
+    production BO loop and offline replay/benchmarks: ``ceil(len(chosen) *
+    fraction)`` random draws from pool positions that are neither evaluated nor
+    already picked, appended after (at least one) acquisition pick so a batch
+    of size 1 never goes fully random.
+
+    Returns a new list; *chosen* is not modified.
+    """
+    frac = float(exploration_fraction)
+    if frac <= 0.0 or not chosen:
+        return list(chosen)
+    blocked = set(evaluated_indices or ())
+    explore_n = int(np.ceil(len(chosen) * frac))
+    available = [
+        i for i in range(int(pool_size)) if i not in blocked and i not in set(chosen)
+    ]
+    if not available:
+        return list(chosen)
+    # Leave >=1 acquisition pick.
+    explore_n = min(explore_n, len(available), max(0, len(chosen) - 1))
+    if explore_n <= 0:
+        return list(chosen)
+    random_picks = rng.choice(available, size=explore_n, replace=False).tolist()
+    return chosen[: len(chosen) - explore_n] + random_picks

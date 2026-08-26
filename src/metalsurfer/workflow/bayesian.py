@@ -1,6 +1,7 @@
 """Bayesian optimisation workflow orchestration."""
 
 import logging
+import zlib
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -21,6 +22,7 @@ from ..ml.bayesian import (
     cumulative_refit_training_set,
     score_and_select,
     select_initial_bo_indices,
+    splice_exploration_picks,
     train_surrogate,
 )
 from ..ml.features import extract_features
@@ -68,19 +70,30 @@ def _train_surrogate_for_bo(
         X,
         y,
         surrogate=config.bo.surrogate,
-        n_estimators=100,
+        n_estimators=config.bo.n_estimators,
         random_state=config.seed,
         sample_weight=sample_weight,
+        n_jobs=config.n_jobs,
     )
 
 
-def bo_exploration_rng(config_seed: int, n_slab_atoms: int) -> np.random.RandomState:
-    """Coverage-decorrelated RNG stream for BO exploration.
+def bo_exploration_rng(
+    config_seed: int,
+    n_slab_atoms: int,
+    *,
+    molecule: str | None = None,
+) -> np.random.RandomState:
+    """Coverage- and molecule-decorrelated RNG stream for BO exploration.
 
     The slab atom count grows across saturation steps, so successive
-    saturation molecules draw from decorrelated streams.
+    saturation molecules draw from decorrelated streams. In multi-molecule
+    steps every adsorbate shares the *same* slab, so *molecule* is mixed into
+    the seed too; without it, competing molecules would replay identical
+    random/exploration draws against their respective pools.
     """
-    return np.random.RandomState(int(config_seed + 1_000_003 * n_slab_atoms) % (2**31))
+    mol_key = 0 if molecule is None else zlib.crc32(molecule.encode("utf-8"))
+    combined = int(config_seed) + 1_000_003 * int(n_slab_atoms) + 7_385_609 * mol_key
+    return np.random.RandomState(combined % (2**31))
 
 
 @dataclass
@@ -107,8 +120,9 @@ def _build_round_surrogate(
     """Fit one acquisition round's surrogate with optional cross-step transfer.
 
     Supports both transfer modes (``weighted`` incremental trust gating and
-    ``cumulative_refit`` proximity-weighted refits) and falls back to a plain
-    current-observation fit whenever transfer is unavailable or disabled.
+    ``cumulative_refit`` proximity-weighted refits with the same MAE-based
+    trust gate) and falls back to a plain current-observation fit whenever
+    transfer is unavailable or disabled.
 
     Returns ``(surrogate, transfer_active)`` where *transfer_active* reports
     that transfer was attempted and remains enabled (it drives random
@@ -128,8 +142,14 @@ def _build_round_surrogate(
         and not state.disabled
         and len(X_current) >= transfer.min_step_observations
     )
+    # Same entry gate as weighted mode: honour a previously disabled transfer
+    # state and require enough current observations for the MAE trust
+    # comparison to be meaningful.
     can_try_refit = (
-        can_try_transfer and transfer.mode == "cumulative_refit" and len(X_current) >= 3
+        can_try_transfer
+        and transfer.mode == "cumulative_refit"
+        and not state.disabled
+        and len(X_current) >= max(3, transfer.min_step_observations)
     )
     if can_try_refit:
         assert transfer_memory is not None
@@ -145,7 +165,7 @@ def _build_round_surrogate(
             proximity_lengthscale=transfer.proximity_lengthscale,
             proximity_floor=transfer.proximity_floor,
         )
-        surrogate = _train_surrogate_for_bo(
+        refit_surrogate = _train_surrogate_for_bo(
             X_combined,
             y_combined,
             config=config,
@@ -158,6 +178,41 @@ def _build_round_surrogate(
             prior_weight_sum / total_weight_sum if total_weight_sum > 0.0 else 0.0
         )
         state.used_rounds += 1
+
+        # Trust gate mirroring weighted mode: an in-sample MAE comparison of
+        # the transfer-informed fit against a current-observations-only
+        # baseline feeds the same bad-round / patience state machine, so
+        # degraded priors cannot pollute every subsequent step.
+        baseline = _train_surrogate_for_bo(X_current, y_current, config=config)
+        base_mae = float(
+            np.mean(np.abs(np.asarray(baseline.predict(X_current)).ravel() - y_current))
+        )
+        refit_mae = float(
+            np.mean(
+                np.abs(
+                    np.asarray(refit_surrogate.predict(X_current)).ravel() - y_current
+                )
+            )
+        )
+        mae_delta = refit_mae - base_mae
+        state.last_mae_delta = mae_delta
+        if mae_delta > transfer.mae_tolerance:
+            state.bad_rounds += 1
+        else:
+            state.bad_rounds = 0
+        if state.bad_rounds >= transfer.trust_patience:
+            logger.warning(
+                "BO cumulative_refit transfer disabled after %d degraded rounds "
+                "(last MAE delta %.4f)",
+                state.bad_rounds,
+                mae_delta,
+            )
+            state.disabled = True
+            state.disabled_reason = "trust_degraded_on_current_step_residuals"
+            state.weight_share = 0.0
+            surrogate = baseline
+        else:
+            surrogate = refit_surrogate
     elif can_try_weighted:
         assert transfer_memory is not None
         transfer_result = build_transfer_surrogate(
@@ -166,8 +221,9 @@ def _build_round_surrogate(
             transfer_memory.observed_X_rows,
             transfer_memory.observed_y,
             surrogate=cast(TransferCapableSurrogateType, config.bo.surrogate),
-            n_estimators=100,
+            n_estimators=config.bo.n_estimators,
             random_state=config.seed,
+            n_jobs=config.n_jobs,
             weight_cap=transfer.weight_cap,
             similarity_lengthscale=transfer.similarity_lengthscale,
             min_similarity=transfer.min_similarity,
@@ -401,11 +457,16 @@ def process_molecule_bayesian(
     best_energy = float("inf")
     best_X_row: dict[str, float] | None = None
     bo_failure_events: list[PlacementFailureEvent] = []
-    rng = bo_exploration_rng(config.seed, len(slab.atoms))
+    rng = bo_exploration_rng(config.seed, len(slab.atoms), molecule=molecule_name)
     transfer_state = _TransferRoundState()
 
     def _flush_bo_outputs() -> None:
         nonlocal bo_memory
+        # Penalty observations live in bo_memory regardless of how this call
+        # ends, so they must reach ml_records on every path — including
+        # validation/filter bail-outs — to keep the dataset trail in sync with
+        # what the surrogate actually trained on.
+        ml_records.extend(bo_negative_records)
         bo_memory = BOStepMemory(
             observed_X_rows=[dict(r) for r in observed_X_rows],
             observed_y=[float(v) for v in observed_y],
@@ -446,11 +507,19 @@ def process_molecule_bayesian(
         ]
 
     n_initial = min(config.bo.initial_random, len(valid_spec_indices))
+    # Molecule-decorrelated initial seed: in multi-molecule steps every
+    # adsorbate screens against a same-size pool with the same config.seed, so
+    # "random" sampling would otherwise pick identical pool positions for all.
+    initial_seed = int(
+        bo_exploration_rng(
+            config.seed, len(slab.atoms), molecule=molecule_name
+        ).randint(0, 2**31 - 1)
+    )
     initial_positions = select_initial_bo_indices(
         candidate_features,
         n_initial,
         sampling=config.bo.initial_sampling,
-        random_state=config.seed,
+        random_state=initial_seed,
     )
 
     def _run_batch(pool_positions: list[int]) -> None:
@@ -575,6 +644,9 @@ def process_molecule_bayesian(
                 unevaluated, size=n_extra, replace=False
             ).tolist()
         else:
+            unevaluated = _unevaluated()
+            if not unevaluated:
+                break
             X_current = pd.DataFrame(observed_X_rows)
             y_current = np.array(observed_y)
 
@@ -587,9 +659,6 @@ def process_molecule_bayesian(
                 occupancy_placement_X=occupancy_placement_X,
             )
 
-            unevaluated = _unevaluated()
-            if not unevaluated:
-                break
             batch_size = min(config.bo.batch_size, len(unevaluated))
             acquisition = config.bo.acquisition
             f_best = best_energy if np.isfinite(best_energy) else None
@@ -609,6 +678,7 @@ def process_molecule_bayesian(
                 acquisition=acquisition,
                 f_best=f_best,
                 scaled_features=scaled_candidate_features,
+                n_jobs=config.n_jobs,
             )
             # Random exploration only while transfer learning is active.
             # Pure BO screening keeps the full acquisition batch.
@@ -618,24 +688,13 @@ def process_molecule_bayesian(
                     np.ceil(batch_size * config.bo.transfer.exploration_fraction)
                 )
             if explore_n > 0:
-                available_for_random = [
-                    p for p in unevaluated if p not in next_positions
-                ]
-                if available_for_random:
-                    # Leave ≥1 acquisition pick (batch_size==1 must not go fully random).
-                    explore_n = min(
-                        explore_n,
-                        len(available_for_random),
-                        max(0, len(next_positions) - 1),
-                    )
-                    if explore_n > 0:
-                        random_positions = rng.choice(
-                            available_for_random,
-                            size=explore_n,
-                            replace=False,
-                        ).tolist()
-                        next_positions[-explore_n:] = random_positions
-                        next_positions = list(dict.fromkeys(next_positions))
+                next_positions = splice_exploration_picks(
+                    rng,
+                    next_positions,
+                    pool_size=len(valid_spec_indices),
+                    evaluated_indices=evaluated_pool_positions,
+                    exploration_fraction=config.bo.transfer.exploration_fraction,
+                )
 
         if not next_positions:
             logger.info("BO: no more candidates to evaluate")
@@ -729,7 +788,6 @@ def process_molecule_bayesian(
         min(r.energy_adsorption for r in filtered),
         max(r.energy_adsorption for r in filtered),
     )
-    ml_records.extend(bo_negative_records)
     _flush_bo_outputs()
 
     return _outcome(filtered)
