@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 def main():
     config = AdsorptionConfig(
         material_type="slab",
-        model_name="uma-s-1p1",
-        task_name="oc20",
+        model_name="uma-s-1p2",
+        task_name="oc25",
         seed=42,
         num_conformers=20,
         num_placements=1000,

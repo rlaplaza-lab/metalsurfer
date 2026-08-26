@@ -196,9 +196,30 @@ Key fields:
   guard on the full adsorbate pool before each step advance
 - ``saturation_save_all_placements`` (default ``True``) — disk-heavy; set ``False``
   for large placement counts
-- ``multi_molecule_saturation`` — competitive saturation when multiple SMILES are loaded
+- ``saturation_max_steps`` — hard cap on coverage steps (default unlimited)
+- ``multi_molecule_saturation`` — competitive saturation when multiple SMILES are loaded:
+  every molecule is screened each step and the best binder advances the slab
+- ``saturation_molecules_per_step`` (default ``1``) — commit up to this many mutually
+  clear winners per step in one composite relaxation (n-tuplet mode); committed rows
+  share the tuplet E_ads and a ``committed_molecule`` CSV column identifies each unit
 - ``bo.transfer.*`` — cross-step BO memory in ``run_saturation_bo`` (see
   :doc:`../api/config` — Bayesian optimization)
+
+A runnable competitive example (water + OH⁻ on rutile TiO₂(110), both flags
+combined) lives at ``examples/water_oh_rutile_saturation.py``.
+
+MLIP model selection
+--------------------
+
+Relaxations run on FairChem UMA checkpoints through TorchSim. Two fields on
+:class:`~metalsurfer.AdsorptionConfig` control them:
+
+- ``model_name`` (default ``"uma-s-1p2"``) — checkpoint size/series.
+- ``task_name`` (default ``"oc25"``) — UMA task head used for energies and forces.
+
+Keep the pair matched: current 1p2 checkpoints are evaluated with the
+``oc25`` head; older 1p1 checkpoints were trained for ``oc20``. If you set an
+older checkpoint explicitly, set its matching task head too.
 
 Prep vs campaign relaxation
 ---------------------------

@@ -116,6 +116,7 @@ class TestSlabZAlignment:
         class _FakeBulk:
             def __init__(self, bulk_src_id_from_db):
                 self.bulk_src_id_from_db = bulk_src_id_from_db
+                self.src_id = bulk_src_id_from_db
 
         class _FakeSlab:
             atoms: Atoms
@@ -153,6 +154,7 @@ class TestSlabZAlignment:
         class _FakeBulk:
             def __init__(self, bulk_src_id_from_db):
                 self.bulk_src_id_from_db = bulk_src_id_from_db
+                self.src_id = bulk_src_id_from_db
 
         class _FakeSlab:
             @staticmethod
@@ -181,12 +183,51 @@ class TestSlabZAlignment:
                 results_dir=tmpdir,
             )
 
+    def test_create_slab_from_bulk_missing_src_id_raises(self, monkeypatch, tmp_path):
+        """A bulk id absent from the FairChem database must fail loudly.
+
+        FairChem falls back to a RANDOM bulk with only a warning when the src
+        id is unknown; metalsurfer must not build a slab from the wrong
+        material.
+        """
+        core = types.ModuleType("fairchem.data.oc.core")
+
+        class _FakeBulk:
+            def __init__(self, bulk_src_id_from_db):
+                self.bulk_src_id_from_db = bulk_src_id_from_db
+                self.src_id = "mp-999-random-fallback"
+
+        class _FakeSlab:
+            @staticmethod
+            def from_bulk_get_specific_millers(bulk, specific_millers):
+                raise AssertionError("must not be called after a src-id mismatch")
+
+        core.Bulk = _FakeBulk
+        core.Slab = _FakeSlab
+        monkeypatch.setitem(sys.modules, "fairchem", types.ModuleType("fairchem"))
+        monkeypatch.setitem(
+            sys.modules, "fairchem.data", types.ModuleType("fairchem.data")
+        )
+        monkeypatch.setitem(
+            sys.modules, "fairchem.data.oc", types.ModuleType("fairchem.data.oc")
+        )
+        monkeypatch.setitem(sys.modules, "fairchem.data.oc.core", core)
+
+        with pytest.raises(GeometryValidationError, match="not found in the FairChem"):
+            create_slab_from_bulk(
+                bulk_id="mp-2657",
+                miller_indices=(1, 1, 0),
+                supercell=(1, 1, 1),
+                results_dir=str(tmp_path),
+            )
+
     def test_create_slab_from_bulk_relaxation_requires_calculator(self, monkeypatch):
         core = types.ModuleType("fairchem.data.oc.core")
 
         class _FakeBulk:
             def __init__(self, bulk_src_id_from_db):
                 self.bulk_src_id_from_db = bulk_src_id_from_db
+                self.src_id = bulk_src_id_from_db
 
         class _FakeSlabObj:
             def __init__(self):

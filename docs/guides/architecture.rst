@@ -184,13 +184,14 @@ Module layout
    ├── symmetry.py           # spglib-based symmetry analysis
    ├── ml/                   # BO surrogates, dataset, features (schema 3.0)
    ├── placement/            # site_* + generators / pose / policy
-   └── workflow/             # orchestration by run mode
-       ├── core.py           # standard per-molecule screening
-       ├── bayesian.py       # BO-guided per-molecule screening
-       ├── saturation.py     # sequential / multi-mol saturation
-       ├── placement_fill.py # deficit rounds + yield-aware materialize
-       ├── reference.py      # reference energy preparation
-       └── shared.py         # bootstrap, outcomes, validation, autotune
+    └── workflow/             # orchestration by run mode
+        ├── core.py           # standard per-molecule screening
+        ├── bayesian.py       # BO-guided per-molecule screening
+        ├── saturation.py     # sequential / multi-mol saturation
+        ├── composite.py      # n-tuplet winners + composite commit
+        ├── placement_fill.py # deficit rounds + yield-aware materialize
+        ├── reference.py      # reference energy preparation
+        └── shared.py         # bootstrap, outcomes, validation, autotune
 
 ``placement/`` internals: ``site_types``, ``site_coords``, ``site_voronoi``,
 ``site_classify``, ``site_enumeration``, ``site_context``, ``occupancy``,
@@ -519,7 +520,10 @@ geometry-aware features (see above).
 budgets from occupancy-aware complexity; lowest ``E_ads`` wins.
 ``saturation_molecules_per_step > 1`` (n-tuplet mode): each step greedily
 commits up to that many mutually clear winners at once and relaxes a single
-composite candidate; committed rows share the full tuplet ``E_ads``.
+composite candidate (``workflow/composite.py``); committed rows share the full
+tuplet ``E_ads``, with per-unit identity in ``committed_molecule`` /
+descriptor columns. Runnable demo combining both modes:
+``examples/water_oh_rutile_saturation.py`` (water vs OH⁻ on rutile TiO₂(110)).
 
 **BO saturation** — :func:`~metalsurfer.run_saturation_bo` (YAML
 ``saturation_bo``): same saturation loop with Bayesian placement selection
@@ -552,7 +556,7 @@ Configuration defaults (spot-check)
 Full field docs: :doc:`../api/config` and :doc:`configuration`.
 Representative defaults (verify in ``config.py`` when debugging):
 
-- ``model_name="uma-s-1p2"``, ``num_placements=None`` (GPU autotune)
+- ``model_name="uma-s-1p2"``, ``task_name="oc25"``, ``num_placements=None`` (GPU autotune)
 - ``placement_distance_recovery=True``, XY recovery ±0.5 Å
 - ``voronoi_auto_widen=True``, ``adaptive_parallel_fraction=True``
 - ``bo.surrogate="gradient_boost"``, ``bo.initial_sampling="spread_xyz"``,

@@ -11,6 +11,7 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 | `co2_mof_binding_energy.py` | CO₂ in a MOF (porous; `prepare_substrate`) |
 | `ethene_ru_slab_binding_energy.py` | Ethene on Ru(0001) (`prepare_substrate`) |
 | `h2_ru_slab_binding_energy.py` | H₂ dissociative adsorption on Ru(0001) (`enable_dissociative_placement=True`; usually also `skip_topology_check=True`) |
+| `water_oh_rutile_saturation.py` | Water + OH⁻ competing on rutile TiO₂(110): `multi_molecule_saturation=True` + n-tuplet steps (`saturation_molecules_per_step=2`); ASE-built oxide slab via `prepare_substrate(slab=...)` |
 | `bipyridine_au111_defects_saturation_raw.py` | HPC-scale saturation on defected Au(111) (1000 placements; not a quick demo) |
 | `camphor_cu111_binding_energy.py` | (1S)-camphor on Cu(111) vs Järvi et al. BOSS benchmark (BO, 15GB GPU) |
 
@@ -32,6 +33,9 @@ python examples/run_campaign_yaml.py examples/ethene_ru_slab_binding_energy.yaml
 | `water_cu111_adsorption_bo.yaml` | Water on Cu(111) with nested `bo:` (`adsorption_bo`) |
 | `ethane_cu_saturation.yaml` | Slim ethane/Cu(111) saturation |
 
+All demo configs use the default MLIP stack (UMA `uma-s-1p2`, task head
+`oc25`). Keep older `uma-s-1p1` checkpoints paired with `task_name: oc20`.
+
 Run any of the above with `python examples/run_campaign_yaml.py <file>`
 (`load_campaign_yaml` → `run_campaign`).
 
@@ -43,7 +47,10 @@ autotune to GPU
 parallel capacity via TorchSim memory probing at workflow start. For saturation
 with Bayesian placement search, use `run_saturation_bo`.
 
-Most binding demos validate favorable molecular E_ads before exit. The H₂/Ru(0001) demo
+Most binding demos validate favorable molecular E_ads before exit. The Pt₁₂
+and ethene/Ru(0001) demos instead validate a chemisorption contact on the best
+pose: under rigid substrates / MP lattice constants UMA can place the best
+surviving pose right around E_ads ≈ 0 eV. The H₂/Ru(0001) demo
 sets `enable_dissociative_placement=True` for hollow-site pair placements and
 `skip_topology_check=True` so fragmented post-relax states pass connectivity
 checks; it checks that the dissociative workflow completes with adsorbed

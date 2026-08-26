@@ -94,13 +94,16 @@ Step by step, for a single molecule:
    conformer, at a specific site, in a specific orientation, at a specific
    height. (See §4.)
 6. **Relax.** All candidates are relaxed together in one batch using a
-   machine-learned potential (TorchSim / UMA by default).
+   machine-learned potential (UMA via TorchSim by default: model
+   `uma-s-1p2`, task head `oc25` — both configurable on `AdsorptionConfig`
+   as `model_name` / `task_name`).
 7. **Filter and keep the best.** Relaxed candidates that crashed, flew away, or
    ended up unbound are dropped. The lowest `E_ads` wins.
 
-In saturation mode the loop jumps back to step 4 after committing the best
-survivor onto the slab, refreshing `E_slab`, and continuing until the next
-molecule would not bind or no valid sites remain.
+In saturation mode the loop jumps back to step 4 after committing the step's
+winner(s) onto the slab, refreshing `E_slab`, and continuing until the next
+molecule would not bind or no valid sites remain. By default one placement is
+committed per step; several can be committed at once (see §6).
 
 The key idea to internalise: the pipeline does not hand-place one perfect pose.
 It generates *many* candidate placements, lets physics decide, and reports the
@@ -395,6 +398,37 @@ get close to `num_placements` valid structures:
 - **Clash-based site blocking.** After a site triggers `too_close` /
   `adsorbate_overlap` failures a few times (`_RETRY_BLOCK_SITE_AFTER`), that site
   is blocked for the rest of the fill.
+
+### 6.1 Saturation run modes
+
+Three ways to grow the coverage, set on `AdsorptionConfig`:
+
+- **Sequential (default).** One molecule at a time; each step screens that
+  molecule's pool and folds its best binder into the slab. Molecules are
+  processed in input order, each on the slab left by the previous one.
+- **Competitive multi-molecule** (`multi_molecule_saturation=True`, two or
+  more molecules). All molecules compete at every step: the placement budget
+  is split across them in proportion to how many placements each can still
+  enumerate, every pool is screened on the same current slab, and the best
+  binder advances the surface. Each molecule keeps its own BO memory chain in
+  `run_saturation_bo`. A real example running water and hydroxide together on
+  rutile TiO₂(110) lives at `examples/water_oh_rutile_saturation.py`.
+- **n-tuplet steps** (`saturation_molecules_per_step > 1`). Instead of one
+  placement per step, up to *n* winners are committed simultaneously: pools
+  are screened exactly as above, then winners are greedily picked by ascending
+  E_ads (ties broken deterministically), keeping only pairs whose adsorbates
+  stay at least `min_adsorbate_separation` apart under periodicity. The chosen
+  group is relaxed as ONE composite structure; if that composite fails
+  validation, the step retries with the best winner alone before giving up.
+  Every committed row carries the full tuplet E_ads
+  (`E(composite) - E_slab - sum of molecular references`), with per-unit
+  identity preserved via `placement_id`, molecule name, descriptor columns,
+  per-unit distance, and an extra `committed_molecule` CSV column emitted only
+  for multi-winner steps.
+
+All three modes stop under the same rule: when a step's best E_ads is ≥ 0
+(the next adsorption would cost energy), when no valid placements remain, or
+when `saturation_max_steps` is reached.
 
 ## 7. Dissociative placement
 

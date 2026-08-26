@@ -17,6 +17,8 @@ config:
   autobatcher_max_memory_padding: 0.8
   autobatcher_max_memory_scaler: 500
   autobatcher_max_atoms_to_try: 5000
-  stage1_steps: 5
-  stage2_steps: 10
+# Optimizer steps match library defaults so placements reach force convergence
+# (5-10 step demo settings reject every placement on force validation).
+  stage1_steps: 50
+  stage2_steps: 150
   saturation_max_steps: 2

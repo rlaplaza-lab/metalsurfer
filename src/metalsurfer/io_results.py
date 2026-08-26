@@ -771,7 +771,7 @@ def save_saturation_results(
                 sr.molecule,
                 sr.steps,
                 sr.final_slab_atoms,
-                (lambda _step, mol=sr.molecule: mol),
+                (lambda _step_result, mol=sr.molecule: mol),
             )
             for sr in single_results
         ],

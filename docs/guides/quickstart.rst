@@ -50,10 +50,8 @@ To also install the documentation build dependencies:
 Runnable Examples
 -----------------
 
-Five quick demos under ``examples/`` cover nanoparticle, porous, slab, dissociative
-H₂, and Bayesian workflows. An additional HPC-scale saturation script
-(``bipyridine_au111_defects_saturation_raw.py``) lives under ``examples/`` and
-``scripts/`` but is not a quick demo:
+Six demos under ``examples/`` cover nanoparticle, porous, slab, dissociative
+H₂, competitive saturation, and Bayesian workflows:
 
 .. code-block:: bash
 
@@ -61,7 +59,12 @@ H₂, and Bayesian workflows. An additional HPC-scale saturation script
    python examples/co2_mof_binding_energy.py
    python examples/ethene_ru_slab_binding_energy.py
    python examples/h2_ru_slab_binding_energy.py
-   python examples/camphor_cu111_binding_energy.py
+   python examples/water_oh_rutile_saturation.py
+   python examples/camphor_cu111_binding_energy.py   # BO benchmark; ~15 GB GPU
+
+An additional HPC-scale saturation script
+(``bipyridine_au111_defects_saturation_raw.py``) lives under ``examples/`` and
+``scripts/`` but is not a quick demo.
 
 
 Standard Screening
@@ -341,6 +344,31 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
 ``molecules`` accepts either an in-memory ``(smiles, name)`` list or a CSV path
 (there is no default file). With ``skip_existing=True`` (default), molecules
 already listed in ``saturation_summary.csv`` are skipped.
+
+**Running two molecules at once.** By default molecules saturate the surface
+one after another (sequential mode). Set ``multi_molecule_saturation=True``
+and supply several molecules to make them compete at every step; optionally
+combine it with ``saturation_molecules_per_step > 1`` so each step can commit
+several placements simultaneously (n-tuplet mode):
+
+.. code-block:: python
+
+   config = AdsorptionConfig(
+       material_type="slab",
+       seed=42,
+       multi_molecule_saturation=True,
+       saturation_molecules_per_step=2,
+   )
+   campaign = run_saturation(
+       slab=slab,
+       molecules=[("O", "water"), ("[OH-]", "hydroxide")],
+       config=config,
+       surface_type="water_oh_rutile_saturation",
+   )
+
+A complete runnable version — water and hydroxide competing on a rutile
+TiO₂(110) slab built with ASE — lives at
+``examples/water_oh_rutile_saturation.py``.
 
 Important saturation behaviors:
 

@@ -10,7 +10,8 @@ molecules:
     name: H2
 config:
   material_type: slab
-  model_name: uma-s-1p1
+  model_name: uma-s-1p2
+  task_name: oc25
   seed: 42
   num_conformers: 1
   num_placements: 250

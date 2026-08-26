@@ -33,6 +33,7 @@ from ._validation import (
     _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
     _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
     _device_is_cuda,
+    _is_batcher_capacity_error,
     _is_cuda_oom_error,
     _parallel_capacity_cache_key,
     _positions_cell_hash,
@@ -129,7 +130,12 @@ def _run_optimize_with_oom_retry(
     resolved_max_atoms_to_try: int,
     context: str,
 ) -> Any:
-    """Run *run_optimize* once; on CUDA OOM rebuild systems + autobatcher, retry once.
+    """Run *run_optimize* once; on a GPU-capacity failure rebuild and retry once.
+
+    Retryable failures are CUDA OOM and TorchSim's batcher capacity refusal
+    (``ValueError`` "...greater than max_metric..."), raised when incoming
+    systems outgrow the capacity probed by the current — often cached/reused —
+    autobatcher.
 
     The retried attempt gets freshly built systems: a failed CUDA attempt may
     leave mutated / NaN state behind, and holding the originals would also keep
@@ -137,24 +143,29 @@ def _run_optimize_with_oom_retry(
     :func:`_maybe_clear_cuda_cache`.
     """
     systems = build_systems()
-    oom_exc: RuntimeError | None = None
+    retry_exc: Exception | None = None
     try:
         return run_optimize(initial_autobatcher, systems)
     except RuntimeError as exc:
         if not _is_cuda_oom_error(exc):
             raise
+        retry_exc = exc.with_traceback(None)
+    except ValueError as exc:
+        if not _is_batcher_capacity_error(exc):
+            raise
         # Drop the traceback: its frames reference the states handed to
         # ts.optimize and would otherwise pin them for the whole retry.
-        oom_exc = exc.with_traceback(None)
+        retry_exc = exc.with_traceback(None)
     del systems
     gc.collect()
     if cache_key is not None:
         pop_autobatcher(cache_key)
     _maybe_clear_cuda_cache(ts_model)
     logger.warning(
-        "CUDA OOM during %s; dropped autobatcher cache entry, rebuilding "
-        "systems and retrying once",
+        "GPU capacity failure during %s (%s); dropped autobatcher cache "
+        "entry, rebuilding systems and retrying once",
         context,
+        type(retry_exc).__name__,
     )
     ab, _ = _get_inflight_autobatcher(
         ts_model,
@@ -164,7 +175,7 @@ def _run_optimize_with_oom_retry(
         max_atoms_to_try=resolved_max_atoms_to_try,
     )
     if ab is None:
-        raise RuntimeError("Could not create autobatcher after OOM") from oom_exc
+        raise RuntimeError("Could not create autobatcher after OOM") from retry_exc
     return run_optimize(ab, build_systems())
 
 

@@ -513,6 +513,15 @@ def create_slab_from_bulk(
     )
 
     bulk = Bulk(bulk_src_id_from_db=bulk_id)
+    if bulk.src_id != bulk_id:
+        # FairChem falls back to a RANDOM bulk (warning only) when the src id
+        # is missing from its database; fail loudly instead of silently
+        # building a slab from the wrong material.
+        raise GeometryValidationError(
+            f"bulk_id={bulk_id!r} was not found in the FairChem bulk database "
+            "(OC20/OC25 bulks; many oxides are absent). Build the substrate "
+            "with ASE and pass it via slab= to prepare_substrate instead."
+        )
     slabs = Slab.from_bulk_get_specific_millers(
         bulk=bulk, specific_millers=miller_indices
     )

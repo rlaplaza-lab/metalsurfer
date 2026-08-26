@@ -15,7 +15,7 @@ Pass any ASE `Atoms` structure after optional prep with `prepare_substrate`, sup
 - **Substrate-agnostic** — periodic slabs, non-periodic clusters, and fully periodic porous frameworks
 - **MLIP relaxation** — TorchSim/FairChem-backed optimization (UMA default, `task_name="oc25"`)
 - **Orientation-aware placement** — hybrid topology + Voronoi site detection, material-aware via `AdsorptionConfig.material_type`
-- **Four campaign modes** — standard screening, Bayesian screening, sequential saturation, and BO saturation
+- **Four campaign modes** — standard screening, Bayesian screening, sequential saturation, and BO saturation; with competitive multi-molecule and multi-placement-per-step (n-tuplet) coverage modes
 - **Surface prep** — equilibration, PBC, alloy/adatom modifiers, and ASE `FixAtoms` via `prepare_substrate`
 - **Reproducible workflows** — seeded conformer and placement sampling; structured CSV/XYZ output
 
@@ -94,6 +94,7 @@ Runnable scripts in [`examples/`](examples/) (requires `pip install -e ".[mlip]"
 | [`examples/co2_mof_binding_energy.py`](examples/co2_mof_binding_energy.py) | `porous` | CO₂ in a MOF (RUBTAK01) |
 | [`examples/ethene_ru_slab_binding_energy.py`](examples/ethene_ru_slab_binding_energy.py) | `slab` | Ethene on Ru(0001) |
 | [`examples/h2_ru_slab_binding_energy.py`](examples/h2_ru_slab_binding_energy.py) | `slab` | H₂ dissociative adsorption (`enable_dissociative_placement` + `skip_topology_check`) |
+| [`examples/water_oh_rutile_saturation.py`](examples/water_oh_rutile_saturation.py) | `slab` | Water + OH⁻ competing on rutile TiO₂(110) (multi-molecule + n-tuplet saturation) |
 | [`examples/camphor_cu111_binding_energy.py`](examples/camphor_cu111_binding_energy.py) | `slab` | Bayesian placement search on literature Cu(111) slab |
 | [`examples/bipyridine_au111_defects_saturation_raw.py`](examples/bipyridine_au111_defects_saturation_raw.py) | `slab` | HPC-scale saturation demo (also under `scripts/`) |
 

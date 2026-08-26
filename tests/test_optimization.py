@@ -891,6 +891,79 @@ def test_optimize_slab_rebuilds_states_after_cuda_oom(monkeypatch: pytest.Monkey
     assert all(r() is None for r in refs[:3])
 
 
+def test_optimize_slab_retries_after_batcher_capacity_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """TorchSim's batcher-capacity refusal must trigger the rebuild-and-retry path.
+
+    ``InFlightAutoBatcher.load_states`` raises a plain ``ValueError`` ("...is
+    greater than max_metric...") when incoming systems outgrow the probed
+    bucket (e.g. a reused batcher after VRAM shrank). Before the fix this
+    propagated and killed saturation runs mid-coverage.
+    """
+    calls: list[list[int]] = []
+    counter = {"n": 0}
+
+    class _State:
+        def __init__(self, tag):
+            self.tag = tag
+
+    def _spy_make_state(*args, **kwargs):
+        counter["n"] += 1
+        return _State(counter["n"])
+
+    class _FakeBatch:
+        def __init__(self, n):
+            self.energy = [_FakeTensor([-1.0])] * n
+            self.forces = None
+
+        def to_atoms(self):
+            return [make_slab(nx=2, ny=2, n_layers=2) for _ in range(len(self.energy))]
+
+    class _FakeTs:
+        Optimizer = MagicMock()
+
+        @staticmethod
+        def generate_force_convergence_fn(force_tol, include_cell_forces):
+            return object()
+
+        def optimize(self, **kwargs):
+            tags = [s.tag for s in kwargs["system"]]
+            calls.append(tags)
+            if len(calls) == 1:
+                raise ValueError(
+                    "Max metric of system with index 0 in states: 870 is greater "
+                    "than max_metric 696.0, please set a larger max_metric or run "
+                    "smaller systems metric."
+                )
+            return _FakeBatch(len(tags))
+
+    monkeypatch.setattr(_deps, "ts", _FakeTs())
+    monkeypatch.setattr(_deps, "ts_constraints", object())
+    monkeypatch.setattr(_deps, "InFlightAutoBatcher", lambda *a, **k: object())
+    monkeypatch.setattr(_deps, "torch", None)
+    monkeypatch.setattr(
+        _optimize, "_make_state_with_frozen_constraint", _spy_make_state
+    )
+    _cache._AUTOBATCHER_CACHE.clear()
+
+    slab = _make_atoms_with_cell()
+    combined = [slab.copy(), slab.copy()]
+    result = _optimize.optimize_adsorbate_slab_batched(
+        combined,
+        slab,
+        ts_model=type("MockModel", (), {"device": "cpu"})(),
+        config=AdsorptionConfig(device="cpu"),
+    )
+    _cache._AUTOBATCHER_CACHE.clear()
+
+    assert counter["n"] == 4
+    assert calls[0] == [1, 2]
+    assert calls[1] == [3, 4]
+    assert len(result) == 2
+    assert all(r is not None for r in result)
+
+
 # ---------------------------------------------------------------------------
 # MLIP-gated tests (only run when the full stack is installed)
 # ---------------------------------------------------------------------------

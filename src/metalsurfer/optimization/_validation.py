@@ -123,6 +123,17 @@ def _is_cuda_oom_error(exc: BaseException) -> bool:
     )
 
 
+def _is_batcher_capacity_error(exc: BaseException) -> bool:
+    """Check whether TorchSim's batcher refused states beyond its probed bucket.
+
+    ``InFlightAutoBatcher.load_states`` raises ``ValueError`` when an incoming
+    system's memory-scaler metric exceeds the capacity probed at batcher
+    creation. A cached/reused batcher can hit this when free VRAM shrank since
+    the probe; callers should rebuild the autobatcher (fresh probe) and retry.
+    """
+    return "greater than max_metric" in str(exc)
+
+
 def _resolve_autobatcher_max_atoms_to_try(
     *,
     max_n_atoms: int,
