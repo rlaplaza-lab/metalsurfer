@@ -151,8 +151,7 @@ def _build_round_surrogate(
         and not state.disabled
         and len(X_current) >= max(3, transfer.min_step_observations)
     )
-    if can_try_refit:
-        assert transfer_memory is not None
+    if can_try_refit and transfer_memory is not None:
         X_prior = pd.DataFrame(transfer_memory.observed_X_rows)
         y_prior = np.asarray(transfer_memory.observed_y, dtype=float)
         X_prior = _align_to_columns(X_prior, X_current)
@@ -213,8 +212,7 @@ def _build_round_surrogate(
             surrogate = baseline
         else:
             surrogate = refit_surrogate
-    elif can_try_weighted:
-        assert transfer_memory is not None
+    elif can_try_weighted and transfer_memory is not None:
         transfer_result = build_transfer_surrogate(
             X_current,
             y_current,
@@ -247,8 +245,8 @@ def _build_round_surrogate(
             state.disabled_reason = transfer_result.transfer_disabled_reason
         surrogate = transfer_result.surrogate
 
-    transfer_active = can_try_transfer and not state.disabled
-    if surrogate is None or state.disabled:
+    transfer_active = (can_try_refit or can_try_weighted) and not state.disabled
+    if surrogate is None:
         surrogate = _train_surrogate_for_bo(
             X_current,
             y_current,

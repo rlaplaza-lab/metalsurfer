@@ -164,7 +164,7 @@ def _reference_smiles_units_multi_molecule(
     active_molecules: list[str],
     active_smiles: dict[str, str],
     molecule_counts: dict[str, int],
-    placing_molecule: str,
+    placing_molecule: str = "",
     pending_additions: Mapping[str, int] | None = None,
 ) -> list[str]:
     """SMILES for every adsorbate unit present in the *screened* structure.
@@ -1173,7 +1173,6 @@ def _run_multi_molecule_saturation(
         # Legacy competitive steps commit exactly one winner per step;
         # n-tuplet steps commit up to ``saturation_molecules_per_step``
         # mutually clear winners via one composite relaxation.
-        committed = [best_overall] if best_overall.energy_adsorption < 0 else []
         if step_config.saturation_molecules_per_step > 1:
             committed, commit_status = _commit_n_tuplet(
                 step=step,
@@ -1187,7 +1186,6 @@ def _run_multi_molecule_saturation(
                     active_molecules,
                     active_smiles,
                     molecule_counts,
-                    best_overall.molecule,
                     pending_additions={},
                 ),
                 smiles_by_molecule=active_smiles,
@@ -1200,6 +1198,8 @@ def _run_multi_molecule_saturation(
                     step,
                 )
                 return None
+        else:
+            committed = [best_overall] if best_overall.energy_adsorption < 0 else []
         if committed:
             best_overall = min(
                 committed,
