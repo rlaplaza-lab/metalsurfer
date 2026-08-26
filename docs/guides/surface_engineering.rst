@@ -87,7 +87,8 @@ Step-by-Step Preparation
 
 For more control, use the individual helpers from :mod:`metalsurfer.surface_prep`.
 
-**Fast structural modification** (no energy ranking):
+Fast structural modification
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -132,8 +133,8 @@ ionic positions. Use the energy-ranked variant below (or
 :func:`~metalsurfer.surface_prep.prepare_substrate`) when you need the default
 ``ionic_only`` reference geometry.
 
-**Energy-ranked variant selection** (recommended for realistic modified
-surfaces):
+Energy-ranked variant selection
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -319,10 +320,12 @@ Prep equilibration and adsorption freeze are **separate stages**:
    substrate reference (``frozen_indices_from_constraints``). Campaign APIs
    log which substrate atoms are frozen vs free at workflow start.
 
-**Default** (``relax_top_layer=False``): every substrate atom is frozen during
+Default
+~~~~~~~
 placement relaxation — the standard choice for rigid-surface binding energies.
 
-**Surface relaxation shortcut** (``relax_top_layer=True``): interior atoms stay
+Surface relaxation shortcut
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 fixed; which atoms remain free depends on
 :attr:`~metalsurfer.AdsorptionConfig.material_type` and
 ``top_layer_tolerance``:
@@ -344,18 +347,25 @@ adsorbate (e.g. graphene oxide slabs, H-saturated surfaces, flexible pore
 mouths, camphor/Cu(111) with two free Cu layers). For catalyst descriptors and
 rigid binding energies, keep the default.
 
-**Deliberate fully mobile substrate:** skip
+Deliberate fully mobile substrate
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Skip
 :func:`~metalsurfer.surface_prep.apply_surface_constraints` (or clear ASE
 constraints on the prepared ``Atoms``) before ``run_*``. Campaign APIs only
 **warn** when FixAtoms are missing; they do not auto-attach freeze constraints.
 Freeze knobs stay on prep helpers — not on :class:`~metalsurfer.AdsorptionConfig`
 or ``run_*`` arguments.
 
-**Manual constraints:** attach your own ASE ``FixAtoms`` (or other constraints)
+Manual constraints
+~~~~~~~~~~~~~~~~~~
+
+Attach your own ASE ``FixAtoms`` (or other constraints)
 to the substrate before calling campaign APIs, or call lower-level helpers and
 finalize with custom constraints instead of ``relax_top_layer``.
 
-**Symbol-specific freeze** (``freeze_symbols=[...]``): only listed elements are
+Symbol-specific freeze
+~~~~~~~~~~~~~~~~~~~~~~
 frozen; layer policy is ignored.
 
 Saturation stores ``base_slab`` once after ``prepare_substrate``; indices on that

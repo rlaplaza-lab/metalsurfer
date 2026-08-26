@@ -19,7 +19,8 @@ Public API layers
 
 Lazy re-exports in ``metalsurfer.__init__`` load heavy modules on first access.
 
-**1. Run-mode APIs**
+1. Run-mode APIs
+~~~~~~~~~~~~~~~~
 
 - :func:`~metalsurfer.run_adsorption` — multi-molecule screening from an
   in-memory ``(smiles, name)`` list **or** CSV path; returns
@@ -52,7 +53,8 @@ With ``save_results=True`` (default):
 ``adsorption_energies_detailed.csv`` (binding) or ``saturation_summary.csv``
 (saturation). Official demos pass ``skip_existing=False``.
 
-**2. Surface preparation** — :mod:`metalsurfer.surface_prep`
+2. Surface preparation
+~~~~~~~~~~~~~~~~~~~~~~
 
 :func:`~metalsurfer.surface_prep.prepare_substrate` builds or loads a slab,
 equilibrates ionic positions by default (``slab_relaxation_mode="ionic_only"``),
@@ -69,7 +71,8 @@ Also: ``finalize_substrate``, ``relax_substrate``,
 ``create_slab_from_atoms``, ``substitute_alloy``, ``deposit_adatoms``,
 ``auto_resize_substrate_for_molecule``, ``compute_minimum_supercell``.
 
-**3. Mid-level per-molecule APIs** (custom research loops)
+3. Mid-level per-molecule APIs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Import from :mod:`metalsurfer.workflow` (not the package root):
 
@@ -88,7 +91,8 @@ Internal helpers (``_bootstrap_screening_run``, ``_normalize_molecules_input``,
 …) live in ``workflow/shared.py`` and are not part of the stable public
 surface.
 
-**4. Infrastructure and YAML**
+4. Infrastructure and YAML
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Root re-exports a small placement surface:
 :func:`~metalsurfer.enumerate_placement_specs` and
@@ -285,7 +289,8 @@ placement and ``z_offset`` recovery).
 Placement
 ---------
 
-**Surface reference under coverage.**
+Surface reference under coverage
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ``_build_surface_reference_slab`` prefers a **prefix** of length
 ``len(base_slab_for_frozen)`` (saturation appends adsorbates as a suffix).
 Symbol-set stripping is only a fallback when the covered slab is shorter than
@@ -293,7 +298,8 @@ the freeze reference. Site enumeration and substrate distance checks use this
 substrate-only view; the full slab is relaxed. Prefix length keeps
 same-element adatoms from being treated as substrate.
 
-**Occupancy pruning.** Under coverage, molecular enumeration builds
+Occupancy pruning
+~~~~~~~~~~~~~~~~~
 ``available_indices`` into the full ``SiteContext.sites`` catalog (MIC
 distance to existing adsorbate atoms ≥ ``min_initial_distance``) without
 remapping indices—replay/BO keep stable ``site_index`` values. Dissociative
@@ -302,7 +308,8 @@ yield no specs (no random-XY fallback). Multi-molecule saturation recomputes
 ``estimate_molecule_complexity(..., full_slab=...)`` each step and skips
 zero-capacity species in ``distribute_placement_budget``.
 
-**Enumeration / materialization**
+Enumeration / materialization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - ``policy.py`` — Cartesian product over conformers × sites × orientation
   knobs; **stratified** subsample by ``site_type`` to ``n_desired`` (seeded),
@@ -343,7 +350,8 @@ zero-capacity species in ``distribute_placement_budget``.
 - ``_materialize_spec_placements`` — failures become
   ``PlacementFailureEvent`` (BO negatives when enabled).
 
-**Placement fill** (``workflow/placement_fill.py``): up to
+Placement fill
+~~~~~~~~~~~~~~
 ``placement_retry_max_attempts`` deficit rounds with seed increments fill the
 remaining count. Each round oversamples by estimated materialization yield
 (capped by ``placement_retry_oversample_max``), excludes exact failed-spec keys,
@@ -353,7 +361,8 @@ and blocks site indices that repeatedly fail with ``adsorbate_overlap`` /
 BO eval batches use the same materialization helper to backfill from the unused
 valid pool (yield-aware chunk sizes) until the batch size is met.
 
-**Initial geometry validation** (three layers):
+Initial geometry validation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 1. Covalent distance — ``min_initial_distance``, ``max_initial_distance``,
    ``min_contact_ratio``.
@@ -487,7 +496,8 @@ Nested config: :class:`~metalsurfer.BOConfig` on ``AdsorptionConfig.bo``
 (with ``bo.transfer`` = :class:`~metalsurfer.BOTransferConfig`). Flat
 ``bo_*`` / ``bo_transfer_*`` constructor and YAML keys are rejected.
 
-**Saturation transfer** (``run_saturation_bo``): each step emits
+Saturation transfer
+~~~~~~~~~~~~~~~~~~~
 ``BOStepMemory`` and records ``BOTransferInfo`` on
 ``SaturationStepResult.transfer`` (multi-mol:
 ``transfer_by_molecule``). Next step receives prior memory via
@@ -506,14 +516,17 @@ sharing). Pair with ``saturation_autobatcher_reuse`` for deep coverage.
 Run modes
 ---------
 
-**Standard screening** — :func:`~metalsurfer.run_adsorption` (YAML
+Standard screening
+~~~~~~~~~~~~~~~~~~
 ``adsorption``): enumerate, relax every sampled candidate, return survivors.
 
-**Bayesian screening** — :func:`~metalsurfer.run_adsorption_bo` (YAML
+Bayesian screening
+~~~~~~~~~~~~~~~~~~
 ``adsorption_bo``): surrogate-guided loop over the discrete pool with
 geometry-aware features (see above).
 
-**Sequential saturation** — :func:`~metalsurfer.run_saturation` (YAML
+Sequential saturation
+~~~~~~~~~~~~~~~~~~~~~
 ``saturation``): screen → optional topology guard → commit best
 ``E_ads < 0`` → refresh slab → repeat until endothermic or no placements.
 ``multi_molecule_saturation=True``: all molecules compete each step;
@@ -525,7 +538,8 @@ tuplet ``E_ads``, with per-unit identity in ``committed_molecule`` /
 descriptor columns. Runnable demo combining both modes:
 ``examples/water_oh_rutile_saturation.py`` (water vs OH⁻ on rutile TiO₂(110)).
 
-**BO saturation** — :func:`~metalsurfer.run_saturation_bo` (YAML
+BO saturation
+~~~~~~~~~~~~~
 ``saturation_bo``): same saturation loop with Bayesian placement selection
 and optional cross-step transfer (see above).
 

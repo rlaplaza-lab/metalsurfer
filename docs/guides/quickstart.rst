@@ -152,7 +152,10 @@ Set ``write_settings=False`` to suppress it.
 YAML campaigns (structure, limitations, and demo files under ``examples/``):
 :doc:`yaml_campaigns`.
 
-**Slab** — :func:`~metalsurfer.surface_prep.prepare_substrate` equilibrates ions
+Slab
+~~~~~
+
+:func:`~metalsurfer.surface_prep.prepare_substrate` equilibrates ions
 by default (``slab_relaxation_mode="ionic_only"``), applies bottom-anchored
 z-layout, PBC, freeze constraints, and validation:
 
@@ -177,7 +180,10 @@ z-layout, PBC, freeze constraints, and validation:
        surface_type="ru111_from_ase_atoms",
    )
 
-**Nanoparticle** — minimal Pt₄ snippet below; for dissociative H₂ on a periodic slab see
+Nanoparticle
+~~~~~~~~~~~~~
+
+Minimal Pt₄ snippet below; for dissociative H₂ on a periodic slab see
 ``examples/h2_ru_slab_binding_energy.py`` (Ru(0001),
 ``enable_dissociative_placement=True`` + ``skip_topology_check=True``).
 The runnable ``examples/ethene_pt12_binding_energy.py`` uses the same workflow with a
@@ -213,7 +219,10 @@ The runnable ``examples/ethene_pt12_binding_energy.py`` uses the same workflow w
        surface_type="pt4_nanoparticle",
    )
 
-**Dissociative H₂ on a slab** — set ``enable_dissociative_placement=True`` for
+Dissociative H₂ on a slab
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set ``enable_dissociative_placement=True`` for
 hollow-site pair placements and ``skip_topology_check=True`` to skip post-relax
 connectivity checks; E_ads still uses molecular E(H₂):
 
@@ -241,7 +250,10 @@ connectivity checks; E_ads still uses molecular E(H₂):
        surface_type="h2_ru_slab",
    )
 
-**Already equilibrated?** When ionic positions must not change, set
+Already equilibrated?
+~~~~~~~~~~~~~~~~~~~~~
+
+When ionic positions must not change, set
 ``slab_relaxation_mode="none"`` on *config* and use
 :func:`~metalsurfer.surface_prep.finalize_substrate` instead of the full
 :func:`~metalsurfer.surface_prep.prepare_substrate` call. For
@@ -345,7 +357,10 @@ placements remain.  Use :func:`~metalsurfer.run_saturation`:
 (there is no default file). With ``skip_existing=True`` (default), molecules
 already listed in ``saturation_summary.csv`` are skipped.
 
-**Running two molecules at once.** By default molecules saturate the surface
+Running two molecules at once
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+By default molecules saturate the surface
 one after another (sequential mode). Set ``multi_molecule_saturation=True``
 and supply several molecules to make them compete at every step; optionally
 combine it with ``saturation_molecules_per_step > 1`` so each step can commit

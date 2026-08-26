@@ -14,7 +14,10 @@ Layout conventions and worked examples: :doc:`../guides/surface_engineering`.
 Two stages: prep equilibration vs adsorption freeze
 ---------------------------------------------------
 
-**Prep equilibration** (:func:`~metalsurfer.surface_prep.prepare_substrate`)
+Prep equilibration
+~~~~~~~~~~~~~~~~~~
+
+:func:`~metalsurfer.surface_prep.prepare_substrate`
 
 By default, :func:`~metalsurfer.surface_prep.prepare_substrate` **relaxes substrate
 ionic positions** with ASE/MLIP (``AdsorptionConfig.slab_relaxation_mode="ionic_only"``).
@@ -24,7 +27,8 @@ Hand-built clusters, slabs from bulk, and loaded ``Atoms`` are all relaxed unles
 you set ``slab_relaxation_mode="none"`` (experimental geometries that must not move:
 MOF CIF, paper DFT slabs, published graphene-oxide models, saturation snapshot XYZ).
 
-**Adsorption / saturation (campaign APIs)**
+Adsorption / saturation (campaign APIs)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 During placement optimization, **only the adsorbate and any substrate atoms not
 listed in ASE ``FixAtoms`` can move**. Campaign entry points read
@@ -75,7 +79,8 @@ empty ``FixAtoms``.
 For custom freeze patterns, attach ASE ``FixAtoms`` yourself or call
 ``apply_surface_constraints`` / ``finalize_substrate`` with ``freeze_symbols``.
 
-**Deliberate no freeze:** build or finalize geometry without calling
+Deliberate no freeze
+~~~~~~~~~~~~~~~~~~~~
 ``apply_surface_constraints``, or clear constraints on the ``Atoms`` object
 before ``run_*``. Campaign APIs warn when FixAtoms are absent but do **not**
 auto-freeze — a fully mobile substrate remains intentional. Freeze policy is
@@ -122,7 +127,8 @@ Recommended import
 Public API overview
 -------------------
 
-**Orchestration**
+Orchestration
+~~~~~~~~~~~~~
 
 - :func:`~metalsurfer.surface_prep.prepare_substrate` — build/load/modify/finalize
 - :func:`~metalsurfer.surface_prep.finalize_substrate` — PBC + ``FixAtoms`` + validate
@@ -132,7 +138,8 @@ Public API overview
 - :func:`~metalsurfer.surface_prep.resize_substrate_for_molecule` — in-plane expand
   after conformer generation
 
-**Layout, PBC, constraints, validation**
+Layout, PBC, constraints, validation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - :func:`~metalsurfer.surface_prep.apply_material_pbc`
 - :func:`~metalsurfer.surface_prep.ensure_slab_z_alignment`
@@ -149,7 +156,8 @@ Conformer sizing stays in screening prep after resize.
 ``coerce_slab_container(..., copy=False)`` returns an existing container
 unchanged; pass ``copy=True`` when isolation is required.
 
-**Construction and modification**
+Construction and modification
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - :class:`~metalsurfer.surface_prep.SlabContainer`
 - :func:`~metalsurfer.surface_prep.create_slab_from_bulk`
@@ -157,7 +165,8 @@ unchanged; pass ``copy=True`` when isolation is required.
 - :func:`~metalsurfer.surface_prep.substitute_alloy`
 - :func:`~metalsurfer.surface_prep.deposit_adatoms`
 
-**In-plane sizing**
+In-plane sizing
+~~~~~~~~~~~~~~~
 
 - :func:`~metalsurfer.surface_prep.auto_resize_substrate_for_molecule`
 - :func:`~metalsurfer.surface_prep.compute_minimum_supercell`
@@ -197,7 +206,8 @@ Relaxation knob mapping:
 |                                | when unset                                    |
 +--------------------------------+-----------------------------------------------+
 
-**When each stage runs**
+When each stage runs
+~~~~~~~~~~~~~~~~~~~~
 
 - **Bulk creation** (``bulk_id=...``): ``slab_relaxation_*`` is passed to
   :func:`~metalsurfer.surface_prep.create_slab_from_bulk`.
@@ -207,7 +217,8 @@ Relaxation knob mapping:
 - **Adatom deposition**: ``adatom_relaxation_*`` is passed to
   :func:`~metalsurfer.surface_prep.deposit_adatoms`.
 
-**Modes**
+Modes
+~~~~~
 
 - ``"none"`` — no relaxation.
 - ``"ionic_only"`` — relax atomic positions with fixed cell (default).
