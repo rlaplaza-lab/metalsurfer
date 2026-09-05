@@ -33,7 +33,10 @@ from metalsurfer.placement import (
     distribute_placement_budget,
     get_hollow_sites_for_adatoms,
 )
-from metalsurfer.placement.generators import estimate_molecule_complexity
+from metalsurfer.placement.generators import (
+    estimate_conformer_count,
+    estimate_placement_capacity,
+)
 from metalsurfer.surface_prep import (
     SlabContainer,
     auto_resize_substrate_for_molecule,
@@ -787,35 +790,50 @@ def test_distribute_placement_budget_edge_cases(complexities, total, expected):
 
 
 # ---------------------------------------------------------------------------
-# Multi-molecule saturation: estimate_molecule_complexity
+# Multi-molecule saturation: estimate_placement_capacity
 # ---------------------------------------------------------------------------
 
 
-def test_estimate_molecule_complexity_positive():
-    """Complexity score must be >= 1.0 for any valid molecule."""
+def test_estimate_placement_capacity_positive():
+    """Capacity score must be >= 1.0 for any valid molecule."""
     slab = make_slab()
     # minimal linear molecule (CO-like)
     linear = Atoms("CO", positions=[[0.0, 0.0, 0.0], [1.13, 0.0, 0.0]])
     config = AdsorptionConfig(num_conformers=1, num_placements=50)
-    score = estimate_molecule_complexity([linear], slab, config, smiles="[C-]#[O+]")
+    score = estimate_placement_capacity([linear], slab, config, smiles="[C-]#[O+]")
     assert score >= 1.0
 
 
-def test_estimate_molecule_complexity_more_conformers_higher_score():
-    """More conformers always give a higher complexity score (n_conformers is a direct multiplier)."""
+def test_estimate_placement_capacity_more_conformers_higher_score():
+    """More conformers always give a higher capacity score (n_conformers is a direct multiplier)."""
     slab = make_slab()
     config = AdsorptionConfig(num_conformers=3, num_placements=50)
 
     mol = make_h2()
 
-    score_one = estimate_molecule_complexity([mol], slab, config, smiles="[H][H]")
-    score_three = estimate_molecule_complexity(
+    score_one = estimate_placement_capacity([mol], slab, config, smiles="[H][H]")
+    score_three = estimate_placement_capacity(
         [mol, mol, mol], slab, config, smiles="[H][H]"
     )
 
     assert score_three > score_one, (
         f"Three-conformer score ({score_three}) should exceed single-conformer ({score_one})"
     )
+
+
+def test_estimate_conformer_count_returns_conformer_count():
+    """Conformer count equals the number of conformers (floor 1)."""
+    mol = make_h2()
+    assert estimate_conformer_count([mol]) == 1.0
+    assert estimate_conformer_count([mol, mol, mol]) == 3.0
+    assert estimate_conformer_count([]) == 1.0
+
+
+def test_estimate_conformer_count_is_simple_count():
+    """estimate_conformer_count does not depend on slab or config."""
+    mol = make_h2()
+    score = estimate_conformer_count([mol, mol])
+    assert score == 2.0
 
 
 # ---------------------------------------------------------------------------

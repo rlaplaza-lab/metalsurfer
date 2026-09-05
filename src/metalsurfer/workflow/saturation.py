@@ -32,7 +32,7 @@ from ..optimization import clear_autobatcher_cache
 from ..placement._material import material_aware_pbc
 from ..placement.generators import (
     distribute_placement_budget,
-    estimate_molecule_complexity,
+    estimate_conformer_count,
 )
 from ..reporting import FailureSummary
 from ..result_paths import results_dir_for
@@ -1055,13 +1055,7 @@ def _run_multi_molecule_saturation(
         step_complexities: dict[str, float] = {}
         for mol in active_molecules:
             confs, _ = conformer_cache[mol]
-            step_complexities[mol] = estimate_molecule_complexity(
-                confs,
-                slab_for_sites,
-                step_config,
-                active_smiles[mol],
-                full_slab=slab.atoms,
-            )
+            step_complexities[mol] = estimate_conformer_count(confs)
         budget_inputs = {m: c for m, c in step_complexities.items() if c > 0.0}
         if not budget_inputs:
             logger.warning(

@@ -355,7 +355,7 @@ Two further behaviours:
   concentrates on the lowest-energy conformers. If energies are missing the code
   silently falls back to the uniform draw.
 - **Capacity-based budgeting across molecules.** The function
-  `estimate_molecule_complexity` scores each molecule by how many placement specs
+  `estimate_placement_capacity` scores each molecule by how many placement specs
   it can generate (the grid size from above), and `distribute_placement_budget`
   splits the total placement budget across molecules in proportion to those
   scores, guaranteeing every molecule gets at least one. This keeps a simple

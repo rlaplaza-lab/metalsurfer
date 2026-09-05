@@ -305,7 +305,7 @@ distance to existing adsorbate atoms ≥ ``min_initial_distance``) without
 remapping indices—replay/BO keep stable ``site_index`` values. Dissociative
 hollow filtering shares ``placement/occupancy.py``. Empty available sites
 yield no specs (no random-XY fallback). Multi-molecule saturation recomputes
-``estimate_molecule_complexity(..., full_slab=...)`` each step and skips
+``estimate_conformer_count`` (conformer count) each step and skips
 zero-capacity species in ``distribute_placement_budget``.
 
 Enumeration / materialization

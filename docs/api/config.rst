@@ -290,7 +290,7 @@ Placement generation
     **Type:** ``bool`` · **Default:** ``True``
 
     Clamp the effective placement target to the enumerable spec capacity
-    (``estimate_molecule_complexity``) so the retry loop cannot spin to
+    (``estimate_placement_capacity``) so the retry loop cannot spin to
     ``placement_retry_max_attempts`` on an unreachable count when occupancy-pruned
     sites leave fewer enumerable placements than requested.
 

@@ -13,7 +13,7 @@ from ..models import PlacementDescriptor, PlacementSpec
 from ..placement._constants import _RETRY_BLOCK_SITE_AFTER, RECOVERABLE_DISTANCE_REASONS
 from ..placement.generators import (
     enumerate_placement_specs,
-    estimate_molecule_complexity,
+    estimate_placement_capacity,
 )
 from ..placement.site_context import SiteContext
 from .shared import PlacementFailureEvent, _materialize_spec_placements
@@ -101,7 +101,7 @@ def _clamp_target_to_capacity(
     if not config.placement_fill_clamp_to_capacity:
         return n_target
 
-    capacity = estimate_molecule_complexity(
+    capacity = estimate_placement_capacity(
         conformers,
         slab_for_sites,
         config,

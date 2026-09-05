@@ -427,7 +427,7 @@ def estimate_placement_spec_capacity(
     )
 
 
-def estimate_molecule_complexity(
+def estimate_placement_capacity(
     conformers: list[Atoms],
     slab: Atoms,
     config: AdsorptionConfig,
@@ -469,6 +469,24 @@ def estimate_molecule_complexity(
     if capacity <= 0:
         return 0.0
     return max(1.0, float(capacity))
+
+
+def estimate_conformer_count(conformers: list[Atoms]) -> float:
+    """Conformer count for budget distribution.
+
+    Returns the number of unique conformers (with a floor of 1),
+    directly reflecting the number of conformer-based placement
+    enumerations that must be evaluated. Unlike
+    :func:`estimate_placement_capacity`, this does not query the
+    policy grid and is safe to use for budget allocation without
+    affecting capacity clamping.
+
+    Parameters
+    ----------
+    conformers
+        List of adsorbate conformers (already deduplicated).
+    """
+    return float(max(1, len(conformers)))
 
 
 def distribute_placement_budget(
@@ -668,7 +686,8 @@ def generate_placement_from_spec_with_reason(
 __all__ = [
     "distribute_placement_budget",
     "enumerate_placement_specs",
-    "estimate_molecule_complexity",
+    "estimate_conformer_count",
+    "estimate_placement_capacity",
     "estimate_placement_spec_capacity",
     "generate_placement_from_spec",
     "generate_placement_from_spec_with_reason",

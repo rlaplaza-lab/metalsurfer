@@ -90,7 +90,7 @@ def test_clamp_target_to_capacity_caps_at_enumerable_capacity(monkeypatch):
 
     monkeypatch.setattr(
         fill_mod,
-        "estimate_molecule_complexity",
+        "estimate_placement_capacity",
         lambda conformers, *a, **k: float(len(conformers)) * 21.0,
     )
     config = AdsorptionConfig(material_type="slab")
