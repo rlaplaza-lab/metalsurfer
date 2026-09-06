@@ -378,17 +378,64 @@ def test_non_planar_slab_still_runs_voronoi(monkeypatch):
     monkeypatch.setattr(site_enumeration, "_voronoi_sites", _counting_voronoi)
 
     slab = fcc111("Pt", (3, 3, 4), vacuum=10.0)
-    positions = slab.get_positions()
-    positions[-1, 2] += 1.5  # adatom-like bump breaks coplanarity
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    positions = np.asarray(slab.get_positions(), dtype=float)
+    # Keep enough top-layer atoms in-mask, but roughen heights so a plane fit fails.
+    top_mask = top_layer_mask_by_normal(positions, cell, 0.5)
+    top_idx = np.nonzero(top_mask)[0]
+    positions[top_idx[0], 2] += 0.0
+    positions[top_idx[1], 2] += 0.35
+    positions[top_idx[2], 2] += 0.45
     slab.set_positions(positions)
 
-    cell = np.asarray(slab.get_cell(), dtype=float)
     assert not site_enumeration._top_layer_is_planar_from_arrays(
         np.asarray(slab.get_positions(), dtype=float), cell, 0.5
     )
     sites = site_enumeration.get_unified_sites(slab, material_type="slab")
     assert calls["n"] >= 1
     assert sites
+
+
+def test_primitive_1x1_slab_top_layer_is_planar():
+    """1x1 cells have <3 top-layer atoms; height variance still detects planarity."""
+    import metalsurfer.placement.site_enumeration as site_enumeration
+
+    slab = fcc111("Pt", (1, 1, 3), vacuum=10.0)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    positions = np.asarray(slab.get_positions(), dtype=float)
+    top_mask = top_layer_mask_by_normal(positions, cell, 0.5)
+    assert int(np.count_nonzero(top_mask)) < 3
+    assert site_enumeration._top_layer_is_planar_from_arrays(
+        positions, cell, 0.5, top_mask=top_mask
+    )
+
+
+def test_collinear_top_layer_atoms_are_planar():
+    """Collinear top-layer points yield rank < 3; height variance still detects flatness."""
+    import metalsurfer.placement.site_enumeration as site_enumeration
+
+    # Three coplanar, collinear atoms in a flat cell (lstsq plane fit is rank-deficient).
+    positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+        ],
+        dtype=float,
+    )
+    cell = np.diag([10.0, 10.0, 20.0])
+    assert site_enumeration._top_layer_is_planar_from_arrays(positions, cell, 0.5)
+
+
+def test_empty_top_layer_mask_is_not_planar():
+    import metalsurfer.placement.site_enumeration as site_enumeration
+
+    positions = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float)
+    cell = np.diag([10.0, 10.0, 20.0])
+    top_mask = np.zeros(len(positions), dtype=bool)
+    assert not site_enumeration._top_layer_is_planar_from_arrays(
+        positions, cell, 0.5, top_mask=top_mask
+    )
 
 
 def test_slab_enrichment_flag_does_not_warn_from_site_context(caplog):

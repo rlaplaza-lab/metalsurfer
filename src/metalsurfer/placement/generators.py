@@ -435,13 +435,13 @@ def estimate_placement_capacity(
     site_context: SiteContext | None = None,
     full_slab: Atoms | None = None,
 ) -> float:
-    """Capacity-based placement-space score for budget allocation.
+    """Return enumerable placement-spec capacity for fill-loop clamping.
 
     Delegates to :func:`estimate_placement_spec_capacity` (policy-grid size).
     When *full_slab* is provided, capacity reflects occupancy-pruned sites on
     that structure (site detection still uses *slab* / *site_context*).
-    Returns ``0.0`` when pruning leaves no available sites (callers should skip
-    budgeting that molecule for the step).
+    Returns ``0.0`` when pruning leaves no available sites. Multi-molecule
+    saturation budgeting uses :func:`estimate_conformer_count` instead.
 
     Parameters
     ----------

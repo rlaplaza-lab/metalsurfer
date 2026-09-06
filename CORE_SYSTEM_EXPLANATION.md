@@ -354,12 +354,13 @@ Two further behaviours:
   Higher temperature flattens the preference toward uniform; lower temperature
   concentrates on the lowest-energy conformers. If energies are missing the code
   silently falls back to the uniform draw.
-- **Capacity-based budgeting across molecules.** The function
-  `estimate_placement_capacity` scores each molecule by how many placement specs
-  it can generate (the grid size from above), and `distribute_placement_budget`
-  splits the total placement budget across molecules in proportion to those
-  scores, guaranteeing every molecule gets at least one. This keeps a simple
-  molecule from starving a complex one, and vice versa.
+- **Conformer-count budgeting across molecules.** The function
+  `estimate_conformer_count` scores each molecule by its conformer count
+  (floor of 1), and `distribute_placement_budget` splits the total placement
+  budget across molecules in proportion to those scores, guaranteeing every
+  molecule gets at least one. Fill-loop clamping still uses
+  `estimate_placement_capacity` (enumerable policy-grid size) so retries stop
+  when the requested count exceeds what can be enumerated.
 
 ## 6. Coverage and saturation
 

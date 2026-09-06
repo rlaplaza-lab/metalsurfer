@@ -1067,16 +1067,16 @@ def _top_layer_is_planar_from_arrays(
     if top_mask is None:
         top_mask = top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
     top_indices = np.nonzero(top_mask)[0]
+    if len(top_indices) == 0:
+        return False
     top_pos = positions[top_indices]
+    h = _height_along_slab_normal(top_pos, cell)
     if len(top_indices) < 3:
-        h = _height_along_slab_normal(top_pos, cell)
         return float(np.var(h)) < z_variance_threshold
     xy = _project_to_slab_plane(top_pos, cell)
-    h = _height_along_slab_normal(top_pos, cell)
     A = np.column_stack([xy[:, 0], xy[:, 1], np.ones(len(xy))])
     coeffs, _residuals, rank, _ = np.linalg.lstsq(A, h, rcond=None)
     if rank < 3:
-        h = _height_along_slab_normal(top_pos, cell)
         return float(np.var(h)) < z_variance_threshold
     h_pred = A @ coeffs
     return float(np.var(h - h_pred)) < z_variance_threshold

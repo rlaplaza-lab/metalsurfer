@@ -755,8 +755,6 @@ def process_molecule_bayesian(
             for event in filter_failures:
                 if event.descriptor is None:
                     continue
-                if event.reason == "max_winners":
-                    continue
                 record = PlacementRecord.from_descriptor(
                     event.descriptor,
                     molecule=molecule_name,

@@ -37,6 +37,11 @@ from ._helpers import (
 )
 
 
+def test_get_unified_sites_rejects_empty_atoms():
+    with pytest.raises(ValueError, match="at least one atom"):
+        get_unified_sites(Atoms(), material_type="slab")
+
+
 def test_get_unified_sites_slab_nanoparticle_porous_have_expected_metadata():
     slab_sites = get_unified_sites(make_slab(), material_type="slab")
     np_sites = get_unified_sites(make_nanoparticle(), material_type="nanoparticle")
