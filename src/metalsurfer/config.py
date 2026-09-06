@@ -19,6 +19,7 @@ from ._numeric_defaults import (
     MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM,
     MIN_CONTACT_RATIO_DEFAULT,
     MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
+    OCCUPANCY_FOOTPRINT_SCALE_DEFAULT,
 )
 from .models import PlacementSpec
 
@@ -365,6 +366,25 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
             "voronoi_site_enrichment must be a bool, "
             f"got {type(root.voronoi_site_enrichment).__name__}"
         )
+    if not isinstance(root.occupancy_use_footprint, bool):
+        raise ValueError(
+            "occupancy_use_footprint must be a bool, "
+            f"got {type(root.occupancy_use_footprint).__name__}"
+        )
+    if not isinstance(root.placement_clash_descent, bool):
+        raise ValueError(
+            "placement_clash_descent must be a bool, "
+            f"got {type(root.placement_clash_descent).__name__}"
+        )
+    if not (
+        isinstance(root.occupancy_footprint_scale, (int, float))
+        and not isinstance(root.occupancy_footprint_scale, bool)
+        and 0.0 < float(root.occupancy_footprint_scale) <= 2.0
+    ):
+        raise ValueError(
+            "occupancy_footprint_scale must be in (0, 2], "
+            f"got {root.occupancy_footprint_scale!r}"
+        )
     _check_choice(
         "site_classification_method",
         root.site_classification_method,
@@ -622,6 +642,10 @@ class AdsorptionConfig:
     placement_z_range: tuple[float, float] = (0.7, 1.25)
     placement_z_scale_by_covalent_radius: bool = True
     placement_distance_recovery: bool = True
+    # Packmol-style rigid-body overlap descent during distance recovery and
+    # n-tuplet near-miss / pre-relax packing. When False, recovery falls back
+    # to discrete XY jitter only and n-tuplet keeps hard mutual-clearance skips.
+    placement_clash_descent: bool = True
     material_type: Literal["slab", "nanoparticle", "porous"] = "slab"
     # ``voronoi_probe_radius`` / ``voronoi_max_site_distance`` / ``voronoi_auto_widen``
     # apply to *every* material type: on slabs they gate the topology generator's
@@ -668,6 +692,15 @@ class AdsorptionConfig:
     # other. The placement gate enforces at least this value (never the looser
     # covalent-sum default).
     min_adsorbate_separation: float = MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM
+    # Under coverage, prune sites whose incoming in-plane molecular disk
+    # overlaps existing adsorbate atoms (after the cheap vertex test). When
+    # footprint pruning empties the catalog, fall back to vertex-only so
+    # saturation cannot stall on a pessimistic radius.
+    occupancy_use_footprint: bool = True
+    # Scale on the incoming in-plane footprint radius (COM-centred, thickness
+    # axis removed). Values in ``(0, 2]``; default slightly below 1.0 to avoid
+    # over-pruning binder-down flats.
+    occupancy_footprint_scale: float = OCCUPANCY_FOOTPRINT_SCALE_DEFAULT
     max_closest_approach: float = CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
     min_contact_atoms: int = 1
     contact_distance_threshold: float = CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM

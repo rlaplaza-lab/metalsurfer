@@ -39,7 +39,11 @@ from ..result_paths import results_dir_for
 from ..surface_prep import SlabContainer, apply_material_pbc
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian
-from .composite import evaluate_composite_commit, select_tuplet_winners
+from .composite import (
+    evaluate_composite_commit,
+    pack_tuplet_adsorbates,
+    select_tuplet_winners,
+)
 from .core import process_molecule
 from .shared import (
     MoleculeScreenOutcome,
@@ -264,10 +268,22 @@ def _commit_n_tuplet(
         pbc=material_aware_pbc(config.material_type),
         min_separation=config.min_adsorbate_separation,
         max_winners=config.saturation_molecules_per_step,
+        config=config,
+        slab_atoms=slab_atoms,
     )
     if not winners:
         logger.info(
             "%sstep %d: no mutually clear binders; committing nothing this step",
+            log_prefix,
+            step,
+        )
+        return [], "no_binders"
+
+    original_best = winners[0]
+    packed = pack_tuplet_adsorbates(winners, slab_atoms, config)
+    if not packed:
+        logger.info(
+            "%sstep %d: n-tuplet pack emptied the winner list; committing nothing",
             log_prefix,
             step,
         )
@@ -292,7 +308,7 @@ def _commit_n_tuplet(
 
     step_log_prefix = f"{log_prefix}step {step} | "
     rewritten, failure = evaluate_composite_commit(
-        winners=winners,
+        winners=packed,
         slab_atoms=slab_atoms,
         base_slab=base_slab,
         ts_model=ts_model,
@@ -303,7 +319,7 @@ def _commit_n_tuplet(
     )
     if rewritten:
         return rewritten, "committed"
-    if len(winners) == 1:
+    if len(packed) == 1 and packed[0].placement_id == original_best.placement_id:
         logger.warning(
             "%scomposite validation failed (%s); committing nothing",
             step_log_prefix,
@@ -316,7 +332,7 @@ def _commit_n_tuplet(
         failure,
     )
     rewritten, failure = evaluate_composite_commit(
-        winners=winners[:1],
+        winners=[original_best],
         slab_atoms=slab_atoms,
         base_slab=base_slab,
         ts_model=ts_model,

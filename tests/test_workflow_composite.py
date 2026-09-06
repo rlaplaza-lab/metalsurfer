@@ -6,9 +6,11 @@ from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.models import ScreeningResult
+from metalsurfer.placement.geometry import calculate_min_distance
 from metalsurfer.workflow.composite import (
     build_composite_candidate,
     evaluate_composite_commit,
+    pack_tuplet_adsorbates,
     select_tuplet_winners,
 )
 
@@ -221,6 +223,88 @@ class TestSelectTupletWinners:
             max_winners=2,
         )
         assert [w.placement_id for w in winners] == [3, 2]
+
+    def test_near_miss_rescued_when_clash_descent_on(self):
+        slab = make_slab()
+        # COM Δx=2.2 Å → min atom distance ~1.26 Å: below min_separation=1.5
+        # but above rescue floor (0.5 Å).
+        candidates = [
+            _winner(slab, pid=0, e_ads=-1.0, x_shift=5.0),
+            _winner(slab, pid=1, e_ads=-0.9, x_shift=7.2),
+        ]
+        config = AdsorptionConfig(
+            material_type="slab",
+            placement_clash_descent=True,
+            placement_x_range=(-1.5, 1.5),
+            placement_y_range=(-1.5, 1.5),
+            min_adsorbate_separation=1.5,
+        )
+        winners = select_tuplet_winners(
+            candidates,
+            cell=slab.get_cell(),
+            pbc=SLAB_PBC,
+            min_separation=1.5,
+            max_winners=2,
+            config=config,
+            slab_atoms=slab,
+        )
+        assert [w.placement_id for w in winners] == [0, 1]
+        s0 = winners[0].atoms.get_positions()[winners[0].slab_size :]
+        s1 = winners[1].atoms.get_positions()[winners[1].slab_size :]
+        assert (
+            calculate_min_distance(s0, s1, slab.get_cell(), use_pbc=True, pbc=SLAB_PBC)
+            >= 1.5 - 1e-3
+        )
+
+    def test_near_miss_skipped_when_clash_descent_off(self):
+        slab = make_slab()
+        candidates = [
+            _winner(slab, pid=0, e_ads=-1.0, x_shift=5.0),
+            _winner(slab, pid=1, e_ads=-0.9, x_shift=7.2),
+            _winner(slab, pid=2, e_ads=-0.8, x_shift=9.5),
+        ]
+        config = AdsorptionConfig(
+            material_type="slab",
+            placement_clash_descent=False,
+            min_adsorbate_separation=1.5,
+        )
+        winners = select_tuplet_winners(
+            candidates,
+            cell=slab.get_cell(),
+            pbc=SLAB_PBC,
+            min_separation=1.5,
+            max_winners=3,
+            config=config,
+            slab_atoms=slab,
+        )
+        assert [w.placement_id for w in winners] == [0, 2]
+
+
+def test_pack_tuplet_adsorbates_keeps_unit1_and_separates_unit2():
+    slab = make_slab()
+    # Clear but VdW-tight pair (~1.6 Å) that still passes min_separation=1.5.
+    w1 = _winner(slab, pid=0, e_ads=-1.0, x_shift=5.0)
+    w2 = _winner(slab, pid=1, e_ads=-0.9, x_shift=6.55)
+    config = AdsorptionConfig(
+        material_type="slab",
+        placement_clash_descent=True,
+        placement_x_range=(-1.5, 1.5),
+        placement_y_range=(-1.5, 1.5),
+        min_adsorbate_separation=1.5,
+    )
+    com1_before = np.mean(w1.atoms.get_positions()[w1.slab_size :], axis=0)
+    packed = pack_tuplet_adsorbates([w1, w2], slab, config)
+    assert len(packed) >= 1
+    assert packed[0].placement_id == 0
+    com1_after = np.mean(packed[0].atoms.get_positions()[packed[0].slab_size :], axis=0)
+    assert np.linalg.norm(com1_after - com1_before) < 0.41
+    if len(packed) == 2:
+        s0 = packed[0].atoms.get_positions()[packed[0].slab_size :]
+        s1 = packed[1].atoms.get_positions()[packed[1].slab_size :]
+        assert (
+            calculate_min_distance(s0, s1, slab.get_cell(), use_pbc=True, pbc=SLAB_PBC)
+            >= 1.5 - 1e-3
+        )
 
 
 # ---------------------------------------------------------------------------

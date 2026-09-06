@@ -14,6 +14,7 @@ from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
 from . import geometry as geom
 from ._constants import (
+    _CLASH_DESCENT_NEIGHBOR_CUTOFF_ANGSTROM,
     _DISTANCE_RECOVERY_HEIGHT_STEPS,
     _DISTANCE_RECOVERY_XY_ATTEMPTS,
     _DISTANCE_ZERO_EPS,
@@ -22,6 +23,11 @@ from ._constants import (
     RECOVERABLE_DISTANCE_REASONS,
 )
 from ._material import material_aware_pbc, material_type_for_placement
+from .clash import (
+    atom_radii_for_symbols,
+    compose_quaternion_with_azimuth,
+    resolve_rigid_clash,
+)
 from .orientation import (
     _is_flat_aromatic,
     _parallel_z_adjustments,
@@ -622,12 +628,12 @@ def _recover_distance_failure(
     pose_cache: _PoseBatchCache | None = None,
     slab_scratch: geom._SlabDistanceScratch | None = None,
 ) -> tuple[_PlacementContext, str | None]:
-    """Nudge height then XY after distance/overlap failures; return updated ctx or last reason.
+    """Nudge height, clash-descend, then XY after distance/overlap failures.
 
-    ``too_close`` / ``too_far`` try height first, then lateral XY.
-    ``adsorbate_overlap`` skips height (rarely helps) and tries lateral XY only.
-    For porous frameworks, ``vdw_overlap`` is treated like ``too_close`` (shrink
-    toward the free-volume site center, then XY).
+    ``too_close`` / ``too_far`` try height first, then clash descent (if enabled),
+    then lateral XY. ``adsorbate_overlap`` skips height (rarely helps) and tries
+    clash descent then XY. For porous frameworks, ``vdw_overlap`` is treated like
+    ``too_close`` (shrink toward the free-volume site center, then descent/XY).
     """
     if fail_reason not in RECOVERABLE_DISTANCE_REASONS:
         return ctx, fail_reason
@@ -716,6 +722,31 @@ def _recover_distance_failure(
         ctx=ctx,
         slab=slab,
     )
+    _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, work_center)
+
+    # Packmol-style rigid-body descent before discrete XY jitter.
+    if config.placement_clash_descent and last_reason in (
+        "adsorbate_overlap",
+        "vdw_overlap",
+        "too_close",
+    ):
+        ctx_out, last_reason = _try_clash_descent_recovery(
+            ctx,
+            adsorbate,
+            slab,
+            config,
+            fail_reason=last_reason or fail_reason,
+            work_center=work_center,
+            work_zf=work_zf,
+            slab_for_sites=slab_for_sites,
+            slab_scratch=slab_scratch,
+        )
+        if last_reason is None:
+            return ctx_out, None
+        if last_reason not in RECOVERABLE_DISTANCE_REASONS:
+            return ctx, last_reason
+        # Restore work_center pose for XY fallback after a failed descent.
+        _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, work_center)
 
     for dx, dy in _xy_recovery_offsets(
         config,
@@ -752,6 +783,173 @@ def _recover_distance_failure(
             return ctx, last_reason
 
     return ctx, last_reason
+
+
+def _try_clash_descent_recovery(
+    ctx: _PlacementContext,
+    adsorbate: Atoms,
+    slab: Atoms,
+    config: AdsorptionConfig,
+    *,
+    fail_reason: str,
+    work_center: np.ndarray,
+    work_zf: float,
+    slab_for_sites: Atoms | None,
+    slab_scratch: geom._SlabDistanceScratch | None,
+) -> tuple[_PlacementContext, str | None]:
+    """Attempt bounded rigid-body clash descent; return updated ctx or last reason."""
+    if slab_scratch is None:
+        exclude_n = _saturation_exclude_count(slab, slab_for_sites)
+        slab_scratch = _build_slab_distance_scratch(slab, exclude_n, ctx.mat_type)
+
+    use_vdw = fail_reason == "vdw_overlap"
+    ads_com = np.asarray(work_center, dtype=float)
+    fixed_pos, fixed_radii = _clash_recovery_fixed_cloud(
+        slab,
+        slab_scratch,
+        ads_com=ads_com,
+        fail_reason=fail_reason,
+        use_vdw=use_vdw,
+        min_initial_distance=float(config.min_initial_distance),
+        min_adsorbate_separation=float(config.min_adsorbate_separation),
+    )
+    if fixed_pos is None or fixed_radii is None:
+        return ctx, fail_reason
+
+    site_frame = geom.compute_surface_site_frame(_placement_normal(ctx, slab))
+    new_pos, az_delta, ok = resolve_rigid_clash(
+        adsorbate,
+        fixed_pos,
+        fixed_radii,
+        origin=np.asarray(work_center, dtype=float),
+        site_frame=site_frame,
+        cell=slab_scratch.cell,
+        pbc=slab_scratch.pbc,
+        config=config,
+        include_substrate_min_sep=(fail_reason == "adsorbate_overlap"),
+        use_vdw_moving=use_vdw,
+    )
+    if not ok:
+        return ctx, fail_reason
+
+    new_center = np.mean(new_pos, axis=0)
+    new_rotated = new_pos - new_center
+    adsorbate.set_positions(new_pos)
+
+    pose = ctx.pose
+    quat_w, quat_x, quat_y, quat_z = compose_quaternion_with_azimuth(
+        (pose.quat_w, pose.quat_x, pose.quat_y, pose.quat_z),
+        az_delta,
+        _placement_normal(ctx, slab),
+    )
+
+    new_pose = dataclasses.replace(
+        pose,
+        x_abs=float(new_center[0]),
+        y_abs=float(new_center[1]),
+        z_abs=float(new_center[2]),
+        z_fraction=float(work_zf),
+        quat_w=quat_w,
+        quat_x=quat_x,
+        quat_y=quat_y,
+        quat_z=quat_z,
+    )
+    new_ctx = dataclasses.replace(ctx, pose=new_pose, rotated_pos=new_rotated)
+    last_reason = _validate_posed_adsorbate(
+        adsorbate,
+        slab,
+        config,
+        slab_for_sites=slab_for_sites,
+        material_type=ctx.mat_type,
+        slab_scratch=slab_scratch,
+    )
+    if last_reason is None:
+        return new_ctx, None
+    return ctx, last_reason
+
+
+def _clash_recovery_fixed_cloud(
+    slab: Atoms,
+    slab_scratch: geom._SlabDistanceScratch,
+    *,
+    ads_com: np.ndarray,
+    fail_reason: str,
+    use_vdw: bool,
+    min_initial_distance: float,
+    min_adsorbate_separation: float,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Nearby substrate / pre-adsorbate atoms for clash recovery."""
+    fixed_chunks: list[np.ndarray] = []
+    radius_chunks: list[np.ndarray] = []
+    cutoff = float(_CLASH_DESCENT_NEIGHBOR_CUTOFF_ANGSTROM)
+
+    def _nearby_mask(positions: np.ndarray) -> np.ndarray:
+        if positions.size == 0:
+            return np.zeros(0, dtype=bool)
+        dists = geom._mol_slab_pairwise_distances(
+            ads_com.reshape(1, 3),
+            positions,
+            slab_scratch.cell,
+            slab_scratch.pbc,
+        ).reshape(-1)
+        return dists <= cutoff
+
+    if fail_reason in ("too_close", "vdw_overlap"):
+        near = _nearby_mask(slab_scratch.slab_pos)
+        if np.any(near):
+            fixed_chunks.append(slab_scratch.slab_pos[near])
+            if use_vdw and slab_scratch.slab_vdw_r is not None:
+                radius_chunks.append(
+                    np.asarray(slab_scratch.slab_vdw_r, dtype=float)[near]
+                )
+            elif slab_scratch.slab_cov_r is not None:
+                radius_chunks.append(
+                    np.asarray(slab_scratch.slab_cov_r, dtype=float)[near]
+                )
+            else:
+                syms = [
+                    s
+                    for s, keep in zip(slab_scratch.slab_syms, near, strict=True)
+                    if keep
+                ]
+                radius_chunks.append(
+                    atom_radii_for_symbols(
+                        syms,
+                        min_separation=min_initial_distance,
+                        use_vdw=use_vdw,
+                    )
+                )
+    if (
+        (
+            fail_reason == "adsorbate_overlap"
+            or fail_reason in ("too_close", "vdw_overlap")
+        )
+        and slab_scratch.pre_ads_pos is not None
+        and slab_scratch.pre_ads_pos.size
+    ):
+        near_pre = _nearby_mask(slab_scratch.pre_ads_pos)
+        if np.any(near_pre):
+            fixed_chunks.append(slab_scratch.pre_ads_pos[near_pre])
+            exclude_n = len(slab_scratch.slab_pos)
+            pre_syms = list(slab.get_chemical_symbols()[exclude_n:])
+            pre_syms_near = [
+                s for s, keep in zip(pre_syms, near_pre, strict=True) if keep
+            ]
+            radius_chunks.append(
+                atom_radii_for_symbols(
+                    pre_syms_near,
+                    min_separation=min_adsorbate_separation,
+                    use_vdw=use_vdw,
+                )
+            )
+
+    if not fixed_chunks:
+        return None, None
+
+    fixed_radii = np.concatenate(radius_chunks)
+    floor = min_adsorbate_separation / 2.0
+    fixed_radii = np.where(np.isfinite(fixed_radii), fixed_radii, floor)
+    return np.vstack(fixed_chunks), fixed_radii
 
 
 def _build_slab_distance_scratch(

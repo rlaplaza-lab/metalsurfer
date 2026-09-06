@@ -237,10 +237,20 @@ Placement generation
    **Type:** ``bool`` · **Default:** ``True``
 
    After ``too_close`` / ``too_far``, nudge height within the placement *z*
-   window, then try deterministic in-plane offsets within
-   ``placement_x_range`` / ``placement_y_range``. ``adsorbate_overlap`` and
-   non-porous ``vdw_overlap`` try XY only; porous ``vdw_overlap`` uses the same
-   height-then-XY path as ``too_close``. Set ``False`` for binary accept/reject.
+   window, optionally run ``placement_clash_descent``, then try deterministic
+   in-plane offsets within ``placement_x_range`` / ``placement_y_range``.
+   ``adsorbate_overlap`` and non-porous ``vdw_overlap`` skip height; porous
+   ``vdw_overlap`` uses the same height-then-descent/XY path as ``too_close``.
+   Set ``False`` for binary accept/reject.
+
+``placement_clash_descent``
+   **Type:** ``bool`` · **Default:** ``True``
+
+   Bounded Packmol-style rigid-body overlap descent during distance recovery
+   and n-tuplet near-miss / pre-relax packing. When ``False``, recovery falls
+   back to discrete XY jitter only and n-tuplet keeps hard mutual-clearance
+   skips. Disabled entirely when ``placement_distance_recovery`` is ``False``
+   for the recovery path.
 
 ``flat_aromatic_parallel_fraction``
    **Type:** ``float`` · **Default:** ``0.5``
@@ -338,7 +348,22 @@ Initial placement validation
     Minimum adsorbate–adsorbate separation enforced under coverage (saturation).
     Rejects placements that would pack a new adsorbate on top of an already
     adsorbed one; corresponds to the ``adsorbate_overlap`` failure reason when
-    violated.
+    violated. Also used as the vertex occupancy floor and as the Packmol-style
+    pair floor in clash descent / n-tuplet packing.
+
+``occupancy_use_footprint``
+   **Type:** ``bool`` · **Default:** ``True``
+
+   After the cheap site-vertex occupancy test, prune sites whose incoming
+   in-plane molecular disk overlaps existing adsorbate atoms. If footprint
+   pruning empties a non-empty vertex mask, fall back to vertex-only occupancy.
+
+``occupancy_footprint_scale``
+   **Type:** ``float`` · **Default:** ``0.85`` · **Valid range:** ``(0, 2]``
+
+   Scale applied to the incoming COM-centred in-plane footprint radius
+   (thickness / bond axis removed). Values below ``1.0`` reduce over-pruning
+   of binder-down flats.
 
 ``min_contact_ratio``
    **Type:** ``float`` · **Default:** ``0.8`` · **Valid range:** ``[0.5, 1.2]``
@@ -815,8 +840,10 @@ loop behavior and I/O only.
    Larger values enable n-tuplet mode: each step screens the per-molecule
    pools as usual, then greedily commits up to this many mutually compatible
    winners (sorted by :math:`E_\mathrm{ads}`, tie-broken by placement id and
-   molecule name) subject to pairwise ``min_adsorbate_separation`` clearance,
-   and relaxes ONE composite candidate covering all winners. Each committed
+   molecule name) subject to pairwise ``min_adsorbate_separation`` clearance
+   (with optional near-miss clash descent when ``placement_clash_descent`` is
+   on), sequentially packs units 2..n against the frozen best binder, and
+   relaxes ONE composite candidate covering all winners. Each committed
    detail row carries the full tuplet :math:`E_\mathrm{ads}`
    (``E(composite) - E_slab - Σ E_mol``, shared across the step's rows;
    per-unit identity survives in ``placement_id``, ``molecule``,

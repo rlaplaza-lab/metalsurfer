@@ -26,7 +26,9 @@ from .dissociative import (
 )
 from .occupancy import (
     available_site_indices,
-    existing_adsorbate_positions,
+    existing_adsorbate_cloud,
+    incoming_inplane_radius,
+    site_clearance_distances,
 )
 from .orientation import (
     _estimate_parallel_fraction,
@@ -177,14 +179,25 @@ class _SpecGridInfo:
     n_hollow_pairs: int
 
 
-def _topology_first_site_indices(sites: list[Site], indices: list[int]) -> list[int]:
-    """Order *indices* so topology-sourced sites come before Voronoi-only ones."""
+def _topology_first_site_indices(
+    sites: list[Site],
+    indices: list[int],
+    *,
+    clearances: np.ndarray | None = None,
+) -> list[int]:
+    """Order *indices*: topology-sourced first, then larger clearance, then index."""
 
-    def _rank(i: int) -> tuple[int, int]:
+    def _rank(i: int) -> tuple[int, float, int]:
         site = sites[i]
         src = str(site.site_source)
         prefer = 0 if src.startswith("topology") or src == "atop_injected" else 1
-        return (prefer, i)
+        # Larger clearance first → negate for ascending sort.
+        clear = (
+            -float(clearances[i])
+            if clearances is not None and i < len(clearances)
+            else 0.0
+        )
+        return (prefer, clear, i)
 
     return sorted(indices, key=_rank)
 
@@ -210,14 +223,31 @@ def _spec_grid_info(
     )
     unique_sites = _ctx.sites
     use_sites = _ctx.use_sites
-    existing_ads_pos = existing_adsorbate_positions(slab, full_slab)
+    cell_arr = np.asarray(slab.get_cell(), dtype=float)
+    pbc = material_aware_pbc(config.material_type)
+    existing_ads_pos, existing_radii = existing_adsorbate_cloud(
+        slab,
+        full_slab,
+        min_separation=float(config.min_adsorbate_separation),
+    )
+
+    r_in: float | None = None
+    if config.occupancy_use_footprint and conformers:
+        r_in = incoming_inplane_radius(
+            conformers[0],
+            footprint_scale=float(config.occupancy_footprint_scale),
+        )
+
     if use_sites and unique_sites:
         site_indices = available_site_indices(
             unique_sites,
             existing_ads_pos,
-            cell=np.asarray(slab.get_cell(), dtype=float),
-            pbc=material_aware_pbc(config.material_type),
+            cell=cell_arr,
+            pbc=pbc,
             min_separation=float(config.min_adsorbate_separation),
+            incoming_footprint_radius=r_in,
+            existing_radii=existing_radii,
+            use_footprint=bool(config.occupancy_use_footprint),
         )
         if not site_indices:
             logger.warning(
@@ -229,7 +259,15 @@ def _spec_grid_info(
             site_indices = []
             use_sites = False
         else:
-            site_indices = _topology_first_site_indices(unique_sites, site_indices)
+            clearances = site_clearance_distances(
+                unique_sites,
+                existing_ads_pos,
+                cell=cell_arr,
+                pbc=pbc,
+            )
+            site_indices = _topology_first_site_indices(
+                unique_sites, site_indices, clearances=clearances
+            )
             if config.material_type == "porous":
                 # Free-volume pores dominate adsorption in frameworks; wall sites
                 # (atop/bridge/hollow) are usually clash-prone under VDW gates.
@@ -266,6 +304,7 @@ def _spec_grid_info(
                 config,
                 slab_for_sites=slab,
                 existing_adsorbate_positions=existing_ads_pos,
+                existing_radii=existing_radii,
                 site_context=_ctx,
             )
         )

@@ -15,6 +15,8 @@ DEFAULT_FMAX: float = 0.05
 MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM: float = 1.5
 MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM: float = 1.5
 MIN_CONTACT_RATIO_DEFAULT: float = 0.8
+# Scale on the incoming in-plane footprint radius used under coverage occupancy.
+OCCUPANCY_FOOTPRINT_SCALE_DEFAULT: float = 0.85
 # Absolute distance in Angstrom (NOT a ratio): the closest adsorbate-substrate
 # contact must be no further than this for a placement to count as "in contact".
 # It is compared against ``calculate_contact_quality()["contact_distance"]``,

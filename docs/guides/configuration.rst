@@ -117,10 +117,12 @@ Placement success levers
   from binder/ring chemistry; set ``False`` and tune
   ``flat_aromatic_parallel_fraction`` for a fixed mix.
 - **Distance recovery** — ``placement_distance_recovery=True`` nudges height then
-  small in-plane offsets (``placement_x_range`` / ``placement_y_range``, default
-  ±0.5 Å) after ``too_close`` / ``too_far``; ``adsorbate_overlap`` and non-porous
-  ``vdw_overlap`` try XY only; porous ``vdw_overlap`` uses height then XY. Use
-  ``(0.0, 0.0)`` XY ranges for height-only recovery, or
+  (when ``placement_clash_descent=True``) runs a bounded Packmol-style rigid-body
+  clash descent, then small in-plane offsets (``placement_x_range`` /
+  ``placement_y_range``, default ±0.5 Å) after ``too_close`` / ``too_far``;
+  ``adsorbate_overlap`` and non-porous ``vdw_overlap`` skip height and try
+  clash descent then XY; porous ``vdw_overlap`` uses height then descent/XY.
+  Use ``(0.0, 0.0)`` XY ranges for height-only recovery, or
   ``placement_distance_recovery=False`` to disable.
 - **Site window** — ``voronoi_auto_widen=True`` retries once with a wider Voronoi
   accessibility window when the first pass finds no sites; pair with explicit

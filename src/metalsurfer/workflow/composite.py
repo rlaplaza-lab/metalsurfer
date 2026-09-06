@@ -5,11 +5,14 @@ may commit several placements simultaneously ("n-tuplet"). The per-molecule
 screening pools are produced exactly as in legacy mode; this module then
 
 1. greedily selects up to *n* mutually compatible winners
-   (:func:`select_tuplet_winners`),
-2. materializes ONE candidate containing the substrate prefix followed by all
+   (:func:`select_tuplet_winners`), optionally rescuing near-miss clashes via
+   Packmol-style rigid-body descent,
+2. sequentially packs units 2..n against frozen earlier winners
+   (:func:`pack_tuplet_adsorbates`),
+3. materializes ONE candidate containing the substrate prefix followed by all
    selected adsorbates in selection order
    (:func:`build_composite_candidate`),
-3. relaxes and validates the composite, mapping the shared result back onto
+4. relaxes and validates the composite, mapping the shared result back onto
    one :class:`~metalsurfer.models.ScreeningResult` per committed unit
    (:func:`evaluate_composite_commit`).
 
@@ -38,9 +41,20 @@ from ase import Atoms
 from ..config import AdsorptionConfig
 from ..models import ScreeningResult
 from ..optimization import optimize_adsorbate_slab_batched
+from ..placement._constants import _TUPLET_CLASH_RESCUE_FLOOR
 from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
-from ..placement.geometry import calculate_min_distance
+from ..placement.clash import (
+    atom_radii_for_symbols,
+    compose_quaternion_with_azimuth,
+    resolve_rigid_clash,
+)
+from ..placement.geometry import (
+    _mol_slab_pairwise_distances,
+    calculate_min_distance,
+    compute_surface_site_frame,
+)
 from ..placement.occupancy import _positions_mutually_clear
+from ..placement.site_coords import _slab_normal
 from ..surface_prep.freeze import check_frozen_substrate_displacement
 from .shared import _validate_geometry
 
@@ -49,6 +63,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "build_composite_candidate",
     "evaluate_composite_commit",
+    "pack_tuplet_adsorbates",
     "select_tuplet_winners",
 ]
 
@@ -80,6 +95,141 @@ def build_composite_candidate(
     return composite
 
 
+def _suffix_positions(result: ScreeningResult) -> np.ndarray:
+    return np.asarray(result.atoms.get_positions()[result.slab_size :], dtype=float)
+
+
+def _slab_site_frame(slab_atoms: Atoms) -> np.ndarray:
+    """Local site frame from slab cell normal (planar default)."""
+    cell = np.asarray(slab_atoms.get_cell(), dtype=float)
+    normal = _slab_normal(cell)
+    return compute_surface_site_frame(normal)
+
+
+def _fixed_cloud_from_coverage_and_results(
+    slab_atoms: Atoms,
+    results: Sequence[ScreeningResult],
+    suffixes: Sequence[np.ndarray],
+    *,
+    min_separation: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Coverage slab atoms plus already-accepted adsorbate suffixes."""
+    fixed_pos = np.asarray(slab_atoms.get_positions(), dtype=float)
+    fixed_radii = atom_radii_for_symbols(
+        list(slab_atoms.get_chemical_symbols()),
+        min_separation=float(min_separation),
+    )
+    for other, prev in zip(suffixes, results, strict=True):
+        fixed_pos = np.vstack([fixed_pos, other])
+        prev_syms = list(prev.atoms.get_chemical_symbols()[prev.slab_size :])
+        fixed_radii = np.concatenate(
+            [
+                fixed_radii,
+                atom_radii_for_symbols(
+                    prev_syms,
+                    min_separation=float(min_separation),
+                ),
+            ]
+        )
+    return fixed_pos, fixed_radii
+
+
+def _min_dist_to_suffixes(
+    suffix: np.ndarray,
+    others: Sequence[np.ndarray],
+    *,
+    cell: np.ndarray,
+    pbc: list[bool],
+) -> float:
+    if not others:
+        return float("inf")
+    mins = [
+        float(np.min(_mol_slab_pairwise_distances(suffix, other, cell, pbc)))
+        for other in others
+        if np.asarray(other).size
+    ]
+    return min(mins) if mins else float("inf")
+
+
+def _apply_suffix_to_result(
+    result: ScreeningResult,
+    new_suffix: np.ndarray,
+    *,
+    az_delta: float | None = None,
+    slab_atoms: Atoms,
+) -> ScreeningResult:
+    """Return a copy with adsorbate suffix positions (and descriptor COM/quat) updated."""
+    atoms = result.atoms.copy()
+    pos = atoms.get_positions()
+    pos[result.slab_size :] = np.asarray(new_suffix, dtype=float)
+    atoms.set_positions(pos)
+    com = np.mean(new_suffix, axis=0)
+    desc = result.placement_descriptor
+    quat_w = desc.quat_w
+    quat_x = desc.quat_x
+    quat_y = desc.quat_y
+    quat_z = desc.quat_z
+    if (
+        az_delta is not None
+        and quat_w is not None
+        and quat_x is not None
+        and quat_y is not None
+        and quat_z is not None
+    ):
+        normal = _slab_normal(np.asarray(slab_atoms.get_cell(), dtype=float))
+        quat_w, quat_x, quat_y, quat_z = compose_quaternion_with_azimuth(
+            (quat_w, quat_x, quat_y, quat_z),
+            az_delta,
+            normal,
+        )
+    new_desc = replace(
+        desc,
+        x=float(com[0]),
+        y=float(com[1]),
+        x_abs=float(com[0]),
+        y_abs=float(com[1]),
+        z_abs=float(com[2]),
+        quat_w=quat_w,
+        quat_x=quat_x,
+        quat_y=quat_y,
+        quat_z=quat_z,
+    )
+    return replace(result, atoms=atoms, placement_descriptor=new_desc)
+
+
+def _try_rescue_suffix(
+    candidate: ScreeningResult,
+    fixed_pos: np.ndarray,
+    fixed_radii: np.ndarray,
+    *,
+    slab_atoms: Atoms,
+    cell: np.ndarray,
+    pbc: list[bool],
+    config: AdsorptionConfig,
+) -> ScreeningResult | None:
+    """Clash-descend a candidate suffix against *fixed_pos*; None if unsalvageable."""
+    suffix = _suffix_positions(candidate)
+    ads = candidate.atoms[candidate.slab_size :].copy()
+    origin = np.mean(suffix, axis=0)
+    frame = _slab_site_frame(slab_atoms)
+    new_pos, az_delta, ok = resolve_rigid_clash(
+        ads,
+        fixed_pos,
+        fixed_radii,
+        origin=origin,
+        site_frame=frame,
+        cell=cell,
+        pbc=pbc,
+        config=config,
+        include_substrate_min_sep=True,
+    )
+    if not ok:
+        return None
+    return _apply_suffix_to_result(
+        candidate, new_pos, az_delta=az_delta, slab_atoms=slab_atoms
+    )
+
+
 def select_tuplet_winners(
     candidates: Sequence[ScreeningResult],
     *,
@@ -87,13 +237,18 @@ def select_tuplet_winners(
     pbc: list[bool],
     min_separation: float,
     max_winners: int,
+    config: AdsorptionConfig | None = None,
+    slab_atoms: Atoms | None = None,
 ) -> list[ScreeningResult]:
     """Greedily pick up to *max_winners* mutually clear binders from *candidates*.
 
     Deterministic: candidates are ordered by ``(energy_adsorption,
     placement_id, molecule)``; each candidate is accepted iff it binds
     (negative E_ads) and is mutually clear from every already-accepted winner
-    under MIC. Seed-regression safe because the sort key has full tie-breakers.
+    under MIC. When ``config.placement_clash_descent`` is on and *slab_atoms*
+    is provided, near-miss clashes (min distance ≥
+    ``_TUPLET_CLASH_RESCUE_FLOOR``) are rescued by a bounded rigid-body slide
+    instead of being skipped.
 
     Parameters
     ----------
@@ -109,6 +264,10 @@ def select_tuplet_winners(
         (``AdsorptionConfig.min_adsorbate_separation``).
     max_winners
         Tuplet size cap (``saturation_molecules_per_step``).
+    config
+        Optional config enabling clash-descent near-miss rescue.
+    slab_atoms
+        Current coverage slab (required for near-miss rescue fixed cloud).
     """
     ordered = sorted(
         candidates,
@@ -116,20 +275,25 @@ def select_tuplet_winners(
     )
     accepted: list[ScreeningResult] = []
     accepted_suffixes: list[np.ndarray] = []
+    clash_on = (
+        config is not None
+        and bool(config.placement_clash_descent)
+        and slab_atoms is not None
+    )
+    cell_arr = np.asarray(cell, dtype=float)
+
     for candidate in ordered:
         if len(accepted) >= max_winners:
             break
         # Sorted ascending by E_ads: the first non-binder ends the sweep.
         if candidate.energy_adsorption >= 0:
             break
-        suffix = np.asarray(
-            candidate.atoms.get_positions()[candidate.slab_size :], dtype=float
-        )
+        suffix = _suffix_positions(candidate)
         clear = all(
             _positions_mutually_clear(
                 suffix,
                 other,
-                cell=cell,
+                cell=cell_arr,
                 pbc=pbc,
                 min_separation=min_separation,
             )
@@ -138,7 +302,95 @@ def select_tuplet_winners(
         if clear:
             accepted.append(candidate)
             accepted_suffixes.append(suffix)
+            continue
+
+        if not clash_on or not accepted_suffixes:
+            continue
+
+        min_d = _min_dist_to_suffixes(suffix, accepted_suffixes, cell=cell_arr, pbc=pbc)
+        if min_d < float(_TUPLET_CLASH_RESCUE_FLOOR):
+            continue
+
+        assert config is not None and slab_atoms is not None
+        fixed_pos, fixed_radii = _fixed_cloud_from_coverage_and_results(
+            slab_atoms,
+            accepted,
+            accepted_suffixes,
+            min_separation=float(min_separation),
+        )
+
+        rescued = _try_rescue_suffix(
+            candidate,
+            fixed_pos,
+            fixed_radii,
+            slab_atoms=slab_atoms,
+            cell=cell_arr,
+            pbc=pbc,
+            config=config,
+        )
+        if rescued is None:
+            continue
+        accepted.append(rescued)
+        accepted_suffixes.append(_suffix_positions(rescued))
     return accepted
+
+
+def pack_tuplet_adsorbates(
+    winners: Sequence[ScreeningResult],
+    slab_atoms: Atoms,
+    config: AdsorptionConfig,
+) -> list[ScreeningResult]:
+    """Sequentially clash-pack units 2..n against frozen unit 1 + coverage.
+
+    Unit 1 stays at its screened/rescued pose. Units that fail descent are
+    dropped (partial tuplet). When ``placement_clash_descent`` is False, returns
+    *winners* unchanged.
+
+    Parameters
+    ----------
+    winners
+        Mutually clear (or rescued) binders from :func:`select_tuplet_winners`.
+    slab_atoms
+        Current coverage slab.
+    config
+        Adsorption configuration.
+    """
+    if not winners:
+        return []
+    if not config.placement_clash_descent or len(winners) == 1:
+        return list(winners)
+
+    cell = np.asarray(slab_atoms.get_cell(), dtype=float)
+    pbc = material_aware_pbc(config.material_type)
+    packed: list[ScreeningResult] = [winners[0]]
+    packed_suffixes: list[np.ndarray] = [_suffix_positions(winners[0])]
+
+    for winner in winners[1:]:
+        fixed_pos, fixed_radii = _fixed_cloud_from_coverage_and_results(
+            slab_atoms,
+            packed,
+            packed_suffixes,
+            min_separation=float(config.min_adsorbate_separation),
+        )
+        rescued = _try_rescue_suffix(
+            winner,
+            fixed_pos,
+            fixed_radii,
+            slab_atoms=slab_atoms,
+            cell=cell,
+            pbc=pbc,
+            config=config,
+        )
+        if rescued is None:
+            logger.info(
+                "n-tuplet pack: dropping unit %s (placement_id=%s); clash descent failed",
+                winner.molecule,
+                winner.placement_id,
+            )
+            continue
+        packed.append(rescued)
+        packed_suffixes.append(_suffix_positions(rescued))
+    return packed
 
 
 def _unit_suffix_bounds(winners: Sequence[ScreeningResult]) -> list[int]:

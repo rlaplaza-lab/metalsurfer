@@ -245,6 +245,18 @@ _POLICY_PRIOR_Z_FRACTION_WEIGHT: float = 2.0
 # Bounded recovery after too_close / too_far / adsorbate_overlap distance failures.
 _DISTANCE_RECOVERY_HEIGHT_STEPS: int = 3
 _DISTANCE_RECOVERY_XY_ATTEMPTS: int = 4
+# Packmol-style rigid-body clash descent (recovery + n-tuplet).
+_CLASH_DESCENT_MAXITER: int = 40
+_CLASH_DESCENT_DZ_BOUND: float = 0.4  # Å
+_CLASH_DESCENT_AZIMUTH_BOUND_DEG: float = 20.0
+_CLASH_DESCENT_SUCCESS_F: float = 1e-12
+_CLASH_DESCENT_SUCCESS_VIOLATION_ANGSTROM: float = 1e-3
+# Nearby-atom cutoff when building the fixed cloud for recovery descent.
+_CLASH_DESCENT_NEIGHBOR_CUTOFF_ANGSTROM: float = 6.0
+# Treat azimuth deltas smaller than this as zero when composing quaternions.
+_CLASH_AZIMUTH_DELTA_EPS_DEG: float = 1e-15
+# Below this min-distance, n-tuplet near-miss rescue skips (atoms stacked).
+_TUPLET_CLASH_RESCUE_FLOOR: float = 0.5  # Å
 # Block a site_index on placement retry after this many clash/distance failures.
 _RETRY_BLOCK_SITE_AFTER: int = 2
 # One-shot Voronoi accessibility widen when the first window finds no sites.

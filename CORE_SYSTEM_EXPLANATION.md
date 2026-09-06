@@ -367,18 +367,26 @@ Two further behaviours:
 When molecules are already on the surface (saturation, or any retry round), the
 pipeline prunes sites that are *occupied*.
 
-**Occupancy pruning** compares each site's point to the atoms of the already
-adsorbed molecules. A site is kept only if its point is at least
-`min_adsorbate_separation` from every existing adsorbate atom (using minimum
-image distances under periodicity). Note it checks the site *point* against
-adsorbate *atoms* — not full molecule footprints. Topology-sourced sites are
-tried before pure Voronoi ones, and for porous frameworks open pore sites are
-preferred.
+**Occupancy pruning** first keeps sites whose vertex is at least
+`min_adsorbate_separation` from every existing adsorbate atom (MIC under
+periodicity). When `occupancy_use_footprint` is on (default), it then requires
+that the incoming molecule's in-plane footprint disk (scaled by
+`occupancy_footprint_scale`) clear each existing atom's covalent radius in the
+site tangent plane. If that footprint pass empties a non-empty vertex mask, the
+code falls back to vertex-only occupancy so saturation cannot stall on a
+pessimistic radius. Surviving sites are ordered topology-first, then by
+clearance to existing adsorbates. For porous frameworks open pore sites are
+still preferred after that ranking.
 
-The important consequence: if occupancy pruning removes *all* sites under
-coverage, the capacity for that step is empty. The code does **not** fall back to
+If occupancy pruning removes *all* sites under coverage (vertex mask empty),
+the capacity for that step is empty. The code does **not** fall back to
 random (x, y) scatter guesses — it simply reports zero available sites and moves
 on. This avoids packing molecules on top of each other inside a filled region.
+
+Distance recovery (`placement_distance_recovery`) may run a bounded Packmol-style
+rigid-body clash descent (`placement_clash_descent`, default on) before the
+discrete XY jitter loop, so lateral adsorbate overlaps are often salvaged
+without another fill-loop round.
 
 On top of pruning, a **retry / fill loop** in the workflow makes sure you actually
 get close to `num_placements` valid structures:
@@ -418,10 +426,12 @@ Three ways to grow the coverage, set on `AdsorptionConfig`:
   placement per step, up to *n* winners are committed simultaneously: pools
   are screened exactly as above, then winners are greedily picked by ascending
   E_ads (ties broken deterministically), keeping only pairs whose adsorbates
-  stay at least `min_adsorbate_separation` apart under periodicity. The chosen
-  group is relaxed as ONE composite structure; if that composite fails
-  validation, the step retries with the best winner alone before giving up.
-  Every committed row carries the full tuplet E_ads
+  stay at least `min_adsorbate_separation` apart under periodicity — or,
+  when `placement_clash_descent` is on, near-miss clashes that a bounded
+  rigid-body slide can clear. Units 2..n are then sequentially packed against
+  the frozen best binder before ONE composite structure is relaxed; if that
+  composite fails validation, the step retries with the best winner alone
+  before giving up. Every committed row carries the full tuplet E_ads
   (`E(composite) - E_slab - sum of molecular references`), with per-unit
   identity preserved via `placement_id`, molecule name, descriptor columns,
   per-unit distance, and an extra `committed_molecule` CSV column emitted only

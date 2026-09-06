@@ -300,13 +300,18 @@ same-element adatoms from being treated as substrate.
 
 Occupancy pruning
 ~~~~~~~~~~~~~~~~~
-``available_indices`` into the full ``SiteContext.sites`` catalog (MIC
-distance to existing adsorbate atoms ≥ ``min_initial_distance``) without
-remapping indices—replay/BO keep stable ``site_index`` values. Dissociative
-hollow filtering shares ``placement/occupancy.py``. Empty available sites
-yield no specs (no random-XY fallback). Multi-molecule saturation recomputes
-``estimate_conformer_count`` (conformer count) each step and skips
-zero-capacity species in ``distribute_placement_budget``.
+``available_site_indices`` into the full ``SiteContext.sites`` catalog (MIC
+distance from each site vertex to existing adsorbate atoms ≥
+``min_adsorbate_separation``) without remapping indices—replay/BO keep stable
+``site_index`` values. When ``occupancy_use_footprint`` is enabled, a second
+pass requires the incoming in-plane footprint disk (scaled by
+``occupancy_footprint_scale``) to clear existing atom covalent radii in the
+site tangent plane; if that empties a non-empty vertex mask, the vertex-only
+indices are restored. Surviving sites are ordered topology-first then by
+clearance. Dissociative hollow filtering shares ``placement/occupancy.py``.
+Empty available sites yield no specs (no random-XY fallback). Multi-molecule
+saturation recomputes ``estimate_conformer_count`` (conformer count) each step
+and skips zero-capacity species in ``distribute_placement_budget``.
 
 Enumeration / materialization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

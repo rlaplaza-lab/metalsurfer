@@ -24,7 +24,10 @@ from ._constants import (
     _VECTOR_NORM_EPS,
 )
 from ._material import material_aware_pbc
-from .occupancy import existing_adsorbate_positions, filter_sites_by_occupancy
+from .occupancy import (
+    existing_adsorbate_cloud,
+    filter_sites_by_occupancy,
+)
 from .orientation import _site_type_z_offset
 from .pose import (
     _descriptor_from_placement,
@@ -204,6 +207,7 @@ def _get_dissociative_site_pairs(
     slab_for_sites: Atoms | None = None,
     existing_adsorbate_positions: np.ndarray | None = None,
     *,
+    existing_radii: np.ndarray | None = None,
     raw_sites: list[Site] | None = None,
     site_context: SiteContext | None = None,
 ) -> list[_DissociativeSitePair]:
@@ -250,9 +254,10 @@ def _get_dissociative_site_pairs(
     occ_tag = (
         _xyz_array_hash(existing_adsorbate_positions) if occupancy_active else "none"
     )
+    foot_tag = "foot=vertex" if occupancy_active else "foot=off"
     base = _dissociative_pair_cache_key(sites_slab, config)
     cache_key = hashlib.sha256(
-        f"{base}|sites={sites_tag}|occ={occ_tag}".encode()
+        f"{base}|sites={sites_tag}|occ={occ_tag}|{foot_tag}".encode()
     ).hexdigest()
 
     with _DISSOCIATIVE_PAIR_CACHE_LOCK:
@@ -265,6 +270,7 @@ def _get_dissociative_site_pairs(
         config,
         slab_for_sites=slab_for_sites,
         existing_adsorbate_positions=existing_adsorbate_positions,
+        existing_radii=existing_radii,
         raw_sites=raw_sites,
         site_context=site_context,
         pre_resolved_sites=pre_resolved,
@@ -284,6 +290,7 @@ def _compute_dissociative_site_pairs(
     slab_for_sites: Atoms | None = None,
     existing_adsorbate_positions: np.ndarray | None = None,
     *,
+    existing_radii: np.ndarray | None = None,
     raw_sites: list[Site] | None = None,
     site_context: SiteContext | None = None,
     pre_resolved_sites: list[Site] | None = None,
@@ -321,12 +328,15 @@ def _compute_dissociative_site_pairs(
         existing_adsorbate_positions is not None
         and len(existing_adsorbate_positions) > 0
     ):
+        # Dissociative fragments are atomic-scale; vertex occupancy is enough.
         available = filter_sites_by_occupancy(
             site_entries,
             existing_adsorbate_positions,
             cell=cell_arr,
             pbc=pbc,
             min_separation=float(config.min_adsorbate_separation),
+            existing_radii=existing_radii,
+            use_footprint=False,
         )
         if len(available) < 2:
             return []
@@ -680,13 +690,18 @@ def _generate_dissociative_placement_from_spec(
         return None, "not_dissociable_diatomic"
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
-    existing_ads_pos = existing_adsorbate_positions(sites_slab, slab)
+    existing_ads_pos, existing_radii = existing_adsorbate_cloud(
+        sites_slab,
+        slab,
+        min_separation=float(config.min_adsorbate_separation),
+    )
 
     pairs = _get_dissociative_site_pairs(
         slab,
         config,
         slab_for_sites=slab_for_sites,
         existing_adsorbate_positions=existing_ads_pos,
+        existing_radii=existing_radii,
         site_context=site_context,
     )
     if not pairs:

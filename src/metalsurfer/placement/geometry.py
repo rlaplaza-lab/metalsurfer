@@ -254,6 +254,34 @@ def _get_vdw_radius(symbol: str) -> float | None:
     return float(cov * _VDW_RADIUS_FROM_COVALENT_SCALE)
 
 
+def _mol_slab_pairwise_mic(
+    mol_pos: np.ndarray,
+    slab_pos: np.ndarray,
+    cell: np.ndarray,
+    pbc: list[bool],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Minimum-image vectors and distances between mol and slab atoms.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        ``(mic_vecs, mic_dists)`` with shapes ``(n_m, n_s, 3)`` and
+        ``(n_m, n_s)``. Empty inputs yield zero-sized arrays of those ranks.
+    """
+    m, s = len(mol_pos), len(slab_pos)
+    if m == 0 or s == 0:
+        return np.zeros((m, s, 3), dtype=float), np.zeros((m, s), dtype=float)
+    diffs = (
+        np.asarray(mol_pos, dtype=float)[:, None, :]
+        - np.asarray(slab_pos, dtype=float)[None, :, :]
+    )
+    if cell_has_volume(cell) and np.any(pbc):
+        diffs_flat = diffs.reshape(-1, 3)
+        mic_vecs_flat, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
+        return mic_vecs_flat.reshape(m, s, 3), mic_dists.reshape(m, s)
+    return diffs, np.linalg.norm(diffs, axis=2)
+
+
 def _mol_slab_pairwise_distances(
     mol_pos: np.ndarray,
     slab_pos: np.ndarray,
@@ -261,15 +289,8 @@ def _mol_slab_pairwise_distances(
     pbc: list[bool],
 ) -> np.ndarray:
     """Minimum-image distances between each mol atom and each slab atom, shape (n_m, n_s)."""
-    m, s = len(mol_pos), len(slab_pos)
-    if m == 0 or s == 0:
-        return np.zeros((m, s))
-    diffs = mol_pos[:, None, :] - slab_pos[None, :, :]
-    if cell_has_volume(cell) and np.any(pbc):
-        diffs_flat = diffs.reshape(-1, 3)
-        _, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
-        return mic_dists.reshape(m, s)
-    return np.linalg.norm(diffs, axis=2)
+    _, dists = _mol_slab_pairwise_mic(mol_pos, slab_pos, cell, pbc)
+    return dists
 
 
 def _rodrigues(axis: np.ndarray, c: float, s: float) -> np.ndarray:

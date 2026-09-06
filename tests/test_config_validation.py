@@ -82,6 +82,9 @@ def test_default_config():
     assert config.write_vasp_inputs is False
     assert config.adaptive_parallel_fraction is True
     assert config.placement_distance_recovery is True
+    assert config.placement_clash_descent is True
+    assert config.occupancy_use_footprint is True
+    assert config.occupancy_footprint_scale == 0.85
     assert config.voronoi_auto_widen is True
     assert config.placement_x_range == (-0.5, 0.5)
     assert config.placement_y_range == (-0.5, 0.5)
@@ -550,6 +553,25 @@ def test_equal_xy_range_allowed_disables_lateral_recovery():
     )
     assert cfg.placement_x_range == (0.0, 0.0)
     assert cfg.placement_y_range == (0.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    "scale",
+    [0.0, -0.1, 2.1, True],
+)
+def test_occupancy_footprint_scale_invalid_rejected(scale):
+    with pytest.raises(ValueError, match="occupancy_footprint_scale"):
+        AdsorptionConfig(occupancy_footprint_scale=scale)
+
+
+def test_occupancy_footprint_scale_bounds_accepted():
+    assert (
+        AdsorptionConfig(occupancy_footprint_scale=0.01).occupancy_footprint_scale
+        == 0.01
+    )
+    assert (
+        AdsorptionConfig(occupancy_footprint_scale=2.0).occupancy_footprint_scale == 2.0
+    )
 
 
 # ---------------------------------------------------------------------------
