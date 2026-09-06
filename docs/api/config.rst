@@ -213,11 +213,11 @@ Placement generation
 ``placement_x_range``, ``placement_y_range``
    **Type:** ``tuple[float, float]`` · **Default:** ``(-0.5, 0.5)`` (Å)
 
-   In-plane search radius used only by **distance recovery** after a
-   ``too_close`` / ``too_far`` / ``adsorbate_overlap`` / ``vdw_overlap`` failure
-   (not applied to every successful site-centered pose). Equal bounds such as
-   ``(0.0, 0.0)`` disable lateral recovery while leaving height recovery on.
-   Widen for bulky adsorbates; keep small for reproducibility.
+   Minimum in-plane salvage box for clash descent and (when clash descent is
+   off) discrete XY recovery. Chemistry-scaled bounds expand these ranges to
+   at least one incoming footprint radius. Equal bounds such as ``(0.0, 0.0)``
+   leave lateral travel to the footprint-derived box when clash is on, or
+   disable discrete XY when clash is off.
 
 ``placement_z_range``
    **Type:** ``tuple[float, float]`` · **Default:** ``(0.7, 1.25)``
@@ -236,21 +236,23 @@ Placement generation
 ``placement_distance_recovery``
    **Type:** ``bool`` · **Default:** ``True``
 
-   After ``too_close`` / ``too_far``, nudge height within the placement *z*
-   window, optionally run ``placement_clash_descent``, then try deterministic
-   in-plane offsets within ``placement_x_range`` / ``placement_y_range``.
+   After ``too_close`` / ``too_far``, apply one analytic height nudge within the
+   placement *z* window, then optionally run ``placement_clash_descent``.
    ``adsorbate_overlap`` and non-porous ``vdw_overlap`` skip height; porous
-   ``vdw_overlap`` uses the same height-then-descent/XY path as ``too_close``.
-   Set ``False`` for binary accept/reject.
+   ``vdw_overlap`` uses the same height-then-clash path as ``too_close``.
+   When clash descent is off, discrete XY offsets within
+   ``placement_x_range`` / ``placement_y_range`` are used. Set ``False`` for
+   binary accept/reject.
 
 ``placement_clash_descent``
    **Type:** ``bool`` · **Default:** ``True``
 
    Bounded Packmol-style rigid-body overlap descent during distance recovery
-   and n-tuplet near-miss / pre-relax packing. When ``False``, recovery falls
-   back to discrete XY jitter only and n-tuplet keeps hard mutual-clearance
-   skips. Disabled entirely when ``placement_distance_recovery`` is ``False``
-   for the recovery path.
+   and n-tuplet near-miss / pre-relax packing. Bounds scale with molecule
+   footprint and the height window. When ``False``, recovery falls back to
+   discrete XY jitter only and n-tuplet keeps hard mutual-clearance skips.
+   Disabled entirely when ``placement_distance_recovery`` is ``False`` for the
+   recovery path.
 
 ``flat_aromatic_parallel_fraction``
    **Type:** ``float`` · **Default:** ``0.5``
@@ -335,16 +337,15 @@ Initial placement validation
 ``occupancy_use_footprint``
    **Type:** ``bool`` · **Default:** ``True``
 
-   After the cheap site-vertex occupancy test, prune sites whose incoming
-   in-plane molecular disk overlaps existing adsorbate atoms. If footprint
-   pruning empties a non-empty vertex mask, fall back to vertex-only occupancy.
+   After the site-vertex occupancy gate, rank survivors by lateral footprint
+   clearance (incoming in-plane disk vs existing atom covalent radii). Does
+   not prune sites; fill and clash recovery handle residual packing.
 
 ``occupancy_footprint_scale``
    **Type:** ``float`` · **Default:** ``0.85`` · **Valid range:** ``(0, 2]``
 
    Scale applied to the incoming COM-centred in-plane footprint radius
-   (thickness / bond axis removed). Values below ``1.0`` reduce over-pruning
-   of binder-down flats.
+   (thickness / bond axis removed). Used for ranking and clash lateral bounds.
 
 ``min_contact_ratio``
    **Type:** ``float`` · **Default:** ``0.8`` · **Valid range:** ``[0.5, 1.2]``

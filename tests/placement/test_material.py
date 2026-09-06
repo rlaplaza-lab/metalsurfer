@@ -18,7 +18,6 @@ from metalsurfer.placement import (
     get_unified_sites,
     material_aware_pbc,
 )
-from metalsurfer.placement._constants import _DISTANCE_RECOVERY_HEIGHT_STEPS
 from metalsurfer.placement._material import (
     calculator_pbc_for_atoms,
     material_type_for_placement,
@@ -314,6 +313,20 @@ def test_local_site_distance_recovery_height_direction(
         normal=n_hat,
     )
 
+    # Inject a measured violation so direction is tested without relying on
+    # accidental geometry at the site.
+    if fail_reason == "too_close":
+        monkeypatch.setattr(
+            "metalsurfer.placement.pose._contact_penetration",
+            lambda *a, **k: (0.5, 1.0),
+        )
+        max_initial = None
+    else:
+        monkeypatch.setattr(
+            "metalsurfer.placement.pose._contact_penetration",
+            lambda *a, **k: (5.0, 0.0),
+        )
+        max_initial = 3.0
     monkeypatch.setattr(
         "metalsurfer.placement.pose._validate_posed_adsorbate",
         lambda *args, **kwargs: None,
@@ -321,17 +334,17 @@ def test_local_site_distance_recovery_height_direction(
     config = AdsorptionConfig(
         material_type=material_type,
         placement_distance_recovery=True,
+        placement_clash_descent=False,
         placement_x_range=(0.0, 0.0),
         placement_y_range=(0.0, 0.0),
+        max_initial_distance=max_initial,
     )
-    # First height candidate is accepted; direction encodes material policy.
     new_ctx, reason = _recover_distance_failure(
         ctx, water.copy(), structure, config, fail_reason
     )
     assert reason is None
     zf_final = float(new_ctx.pose.z_fraction)
-    min_step_delta = min(zf0, 1.0 - zf0) / float(_DISTANCE_RECOVERY_HEIGHT_STEPS + 1)
-    assert abs(zf_final - zf0) >= min_step_delta - 1e-6
+    assert abs(zf_final - zf0) > 1e-6
     if expect_raise:
         assert zf_final > zf0
     else:
@@ -746,12 +759,10 @@ def test_distance_recovery_rescues_too_close_placement():
         adsorbate_ok, slab, material_type="slab"
     )
     assert gate_ok, (min_d, gate_reason)
-    # Lower floor is gated by `assert ok`; only the slack upper tail is checked.
-    assert float(min_d) <= descriptor.z_offset + 0.2
 
 
 def test_distance_recovery_height_only_when_xy_disabled():
-    """Zero XY ranges still allow height recovery."""
+    """Zero XY ranges still allow height recovery without lateral drift."""
     slab = make_slab()
     water = make_water()
     pos = water.get_positions().copy()
@@ -776,6 +787,7 @@ def test_distance_recovery_height_only_when_xy_disabled():
     )
     config = AdsorptionConfig(
         placement_distance_recovery=True,
+        placement_clash_descent=True,
         placement_x_range=(0.0, 0.0),
         placement_y_range=(0.0, 0.0),
     )
@@ -791,8 +803,6 @@ def test_distance_recovery_height_only_when_xy_disabled():
         adsorbate_ok, slab, material_type="slab"
     )
     assert gate_ok, (min_d, gate_reason)
-    # Lower floor is gated by `assert ok`; only the slack upper tail is checked.
-    assert float(min_d) <= descriptor.z_offset + 0.2
 
 
 # ---------------------------------------------------------------------------

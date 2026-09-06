@@ -335,8 +335,6 @@ def _compute_dissociative_site_pairs(
             cell=cell_arr,
             pbc=pbc,
             min_separation=float(config.min_adsorbate_separation),
-            existing_radii=existing_radii,
-            use_footprint=False,
         )
         if len(available) < 2:
             return []

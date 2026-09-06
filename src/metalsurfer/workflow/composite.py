@@ -41,19 +41,20 @@ from ase import Atoms
 from ..config import AdsorptionConfig
 from ..models import ScreeningResult
 from ..optimization import optimize_adsorbate_slab_batched
-from ..placement._constants import _TUPLET_CLASH_RESCUE_FLOOR
 from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
 from ..placement.clash import (
     atom_radii_for_symbols,
+    clash_bounds_for_adsorbate,
     compose_quaternion_with_azimuth,
     resolve_rigid_clash,
+    tuplet_clash_rescue_floor,
 )
 from ..placement.geometry import (
     _mol_slab_pairwise_distances,
     calculate_min_distance,
     compute_surface_site_frame,
 )
-from ..placement.occupancy import _positions_mutually_clear
+from ..placement.occupancy import _positions_mutually_clear, incoming_inplane_radius
 from ..placement.site_coords import _slab_normal
 from ..surface_prep.freeze import check_frozen_substrate_displacement
 from .shared import _validate_geometry
@@ -212,6 +213,15 @@ def _try_rescue_suffix(
     ads = candidate.atoms[candidate.slab_size :].copy()
     origin = np.mean(suffix, axis=0)
     frame = _slab_site_frame(slab_atoms)
+    footprint = incoming_inplane_radius(
+        ads,
+        footprint_scale=float(config.occupancy_footprint_scale),
+    )
+    bounds = clash_bounds_for_adsorbate(
+        ads,
+        config,
+        footprint_radius=footprint,
+    )
     new_pos, az_delta, ok = resolve_rigid_clash(
         ads,
         fixed_pos,
@@ -222,6 +232,7 @@ def _try_rescue_suffix(
         pbc=pbc,
         config=config,
         include_substrate_min_sep=True,
+        bounds=bounds,
     )
     if not ok:
         return None
@@ -246,9 +257,9 @@ def select_tuplet_winners(
     placement_id, molecule)``; each candidate is accepted iff it binds
     (negative E_ads) and is mutually clear from every already-accepted winner
     under MIC. When ``config.placement_clash_descent`` is on and *slab_atoms*
-    is provided, near-miss clashes (min distance ≥
-    ``_TUPLET_CLASH_RESCUE_FLOOR``) are rescued by a bounded rigid-body slide
-    instead of being skipped.
+    is provided, near-miss clashes (min distance at or above a covalent-scaled
+    stacked-atom floor) are rescued by a bounded rigid-body slide instead of
+    being skipped.
 
     Parameters
     ----------
@@ -308,7 +319,16 @@ def select_tuplet_winners(
             continue
 
         min_d = _min_dist_to_suffixes(suffix, accepted_suffixes, cell=cell_arr, pbc=pbc)
-        if min_d < float(_TUPLET_CLASH_RESCUE_FLOOR):
+        cand_syms = list(candidate.atoms.get_chemical_symbols()[candidate.slab_size :])
+        fixed_syms: list[str] = []
+        for prev in accepted:
+            fixed_syms.extend(list(prev.atoms.get_chemical_symbols()[prev.slab_size :]))
+        rescue_floor = tuplet_clash_rescue_floor(
+            cand_syms,
+            fixed_syms,
+            min_separation=float(min_separation),
+        )
+        if min_d < rescue_floor:
             continue
 
         assert config is not None and slab_atoms is not None

@@ -17,12 +17,15 @@ from scipy.optimize import minimize
 from ..config import AdsorptionConfig
 from . import geometry as geom
 from ._constants import (
+    _ADSORBATE_COVALENT_RADIUS_FALLBACK,
     _CLASH_AZIMUTH_DELTA_EPS_DEG,
     _CLASH_DESCENT_AZIMUTH_BOUND_DEG,
-    _CLASH_DESCENT_DZ_BOUND,
     _CLASH_DESCENT_MAXITER,
     _CLASH_DESCENT_SUCCESS_F,
     _CLASH_DESCENT_SUCCESS_VIOLATION_ANGSTROM,
+    _CLASH_LATERAL_FOOTPRINT_SCALE,
+    _DISTANCE_ZERO_EPS,
+    _TUPLET_CLASH_RESCUE_COVALENT_SCALE,
     _VECTOR_NORM_EPS,
 )
 
@@ -30,10 +33,78 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "atom_radii_for_symbols",
+    "clash_bounds_for_adsorbate",
     "compose_quaternion_with_azimuth",
     "overlap_penalty",
     "resolve_rigid_clash",
+    "tuplet_clash_rescue_floor",
 ]
+
+
+def clash_bounds_for_adsorbate(
+    adsorbate: Atoms,
+    config: AdsorptionConfig,
+    *,
+    z_window: float | None = None,
+    footprint_radius: float | None = None,
+) -> tuple[tuple[float, float], tuple[float, float], float]:
+    """Return ``(x_range, y_range, dz_bound)`` scaled by footprint / height window.
+
+    Zero-width XY ranges stay disabled (height-only recovery).
+    """
+    min_sep = float(config.min_adsorbate_separation)
+    r_char = float(footprint_radius) if footprint_radius is not None else 0.0
+    if r_char <= _DISTANCE_ZERO_EPS:
+        radii = atom_radii_for_symbols(
+            list(adsorbate.get_chemical_symbols()),
+            min_separation=min_sep,
+            use_vdw=False,
+        )
+        r_char = (
+            float(np.mean(radii))
+            if radii.size
+            else max(min_sep / 2.0, _ADSORBATE_COVALENT_RADIUS_FALLBACK)
+        )
+
+    lat = float(_CLASH_LATERAL_FOOTPRINT_SCALE) * r_char
+    x_lo, x_hi = (float(v) for v in config.placement_x_range)
+    y_lo, y_hi = (float(v) for v in config.placement_y_range)
+    if (
+        abs(x_hi - x_lo) <= _DISTANCE_ZERO_EPS
+        and abs(y_hi - y_lo) <= _DISTANCE_ZERO_EPS
+    ):
+        x_range, y_range = (x_lo, x_hi), (y_lo, y_hi)
+    else:
+        x_range = (min(x_lo, -lat), max(x_hi, lat))
+        y_range = (min(y_lo, -lat), max(y_hi, lat))
+    dz_bound = (
+        float(z_window)
+        if z_window is not None and float(z_window) > _DISTANCE_ZERO_EPS
+        else r_char
+    )
+    return x_range, y_range, dz_bound
+
+
+def tuplet_clash_rescue_floor(
+    moving_symbols: Sequence[str],
+    fixed_symbols: Sequence[str],
+    *,
+    min_separation: float,
+) -> float:
+    """Skip n-tuplet rescue when atoms are closer than this (stacked nuclei).
+
+    Floor is ``scale * min(covalent_i + covalent_j)`` over symbol pairs, never
+    above ``min_separation`` so a configured packing gap still governs.
+    """
+    mov_r = atom_radii_for_symbols(moving_symbols, min_separation=min_separation)
+    fix_r = atom_radii_for_symbols(fixed_symbols, min_separation=min_separation)
+    if mov_r.size == 0 or fix_r.size == 0:
+        return float(_TUPLET_CLASH_RESCUE_COVALENT_SCALE) * float(min_separation)
+    pair_min = float(np.min(mov_r[:, None] + fix_r[None, :]))
+    return min(
+        float(min_separation),
+        float(_TUPLET_CLASH_RESCUE_COVALENT_SCALE) * pair_min,
+    )
 
 
 def atom_radii_for_symbols(
@@ -269,44 +340,12 @@ def resolve_rigid_clash(
     rotate_azimuth: bool = True,
     include_substrate_min_sep: bool = False,
     use_vdw_moving: bool = False,
+    bounds: tuple[tuple[float, float], tuple[float, float], float] | None = None,
 ) -> tuple[np.ndarray, float | None, bool]:
     """Bounded L-BFGS-B rigid-body descent to clear overlaps with *fixed* atoms.
 
-    State is ``[dx, dy, dz, d_az_deg]`` in the local site frame (columns of
-    *site_frame*; z-axis should be the surface normal). Bounds come from
-    ``config.placement_x_range`` / ``placement_y_range`` plus internal dz/az
-    caps so the molecule cannot wander to another site.
-
-    Parameters
-    ----------
-    adsorbate
-        Moving adsorbate (rigid).
-    fixed_pos
-        Fixed atom positions ``(m, 3)``.
-    fixed_radii
-        Fixed atom radii ``(m,)``.
-    origin
-        Rigid-body origin (typically COM) before the descent.
-    site_frame
-        3x3 orthonormal frame; columns are local x, y, normal.
-    cell
-        Unit cell.
-    pbc
-        Periodicity flags.
-    config
-        Adsorption configuration (bounds and ``min_adsorbate_separation``).
-    rotate_azimuth
-        If False, freeze azimuth at 0.
-    include_substrate_min_sep
-        If True, enforce ``min_adsorbate_separation`` as a pair floor (adsorbate
-        packing). If False, use raw radius sums only (substrate contact).
-    use_vdw_moving
-        Use VdW radii for the moving adsorbate.
-
-    Returns
-    -------
-    tuple[np.ndarray, float | None, bool]
-        ``(new_positions, azimuth_delta_deg_or_None, success)``.
+    State is ``[dx, dy, dz, d_az_deg]`` in the local site frame. Bounds default to
+    :func:`clash_bounds_for_adsorbate`, or pass ``(x_range, y_range, dz_bound)``.
     """
     base_pos = np.asarray(adsorbate.get_positions(), dtype=float)
     origin_arr = np.asarray(origin, dtype=float).reshape(3)
@@ -339,14 +378,12 @@ def resolve_rigid_clash(
     if f0 <= _CLASH_DESCENT_SUCCESS_F:
         return base_pos.copy(), 0.0 if rotate_azimuth else None, True
 
-    x_lo, x_hi = config.placement_x_range
-    y_lo, y_hi = config.placement_y_range
-    dz_b = float(_CLASH_DESCENT_DZ_BOUND)
+    x_range, y_range, dz_b = bounds or clash_bounds_for_adsorbate(adsorbate, config)
     az_b = float(_CLASH_DESCENT_AZIMUTH_BOUND_DEG) if rotate_azimuth else 0.0
-    bounds = [
-        (float(x_lo), float(x_hi)),
-        (float(y_lo), float(y_hi)),
-        (-dz_b, dz_b),
+    bounds_list = [
+        (float(x_range[0]), float(x_range[1])),
+        (float(y_range[0]), float(y_range[1])),
+        (-float(dz_b), float(dz_b)),
         (-az_b, az_b),
     ]
 
@@ -370,7 +407,7 @@ def resolve_rigid_clash(
         x0=np.zeros(4, dtype=float),
         method="L-BFGS-B",
         jac=True,
-        bounds=bounds,
+        bounds=bounds_list,
         options={"maxiter": int(_CLASH_DESCENT_MAXITER)},
     )
     best_state = np.asarray(result.x, dtype=float)

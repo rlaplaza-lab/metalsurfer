@@ -14,8 +14,6 @@ from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
 from . import geometry as geom
 from ._constants import (
-    _CLASH_DESCENT_NEIGHBOR_CUTOFF_ANGSTROM,
-    _DISTANCE_RECOVERY_HEIGHT_STEPS,
     _DISTANCE_RECOVERY_XY_ATTEMPTS,
     _DISTANCE_ZERO_EPS,
     _PARALLEL_Z_MIN_HI_MARGIN,
@@ -25,9 +23,11 @@ from ._constants import (
 from ._material import material_aware_pbc, material_type_for_placement
 from .clash import (
     atom_radii_for_symbols,
+    clash_bounds_for_adsorbate,
     compose_quaternion_with_azimuth,
     resolve_rigid_clash,
 )
+from .occupancy import incoming_inplane_radius
 from .orientation import (
     _is_flat_aromatic,
     _parallel_z_adjustments,
@@ -532,21 +532,97 @@ def _placement_normal(ctx: _PlacementContext, slab: Atoms) -> np.ndarray:
     return np.array([0.0, 0.0, 1.0], dtype=float)
 
 
-def _center_with_height_delta(
-    center: np.ndarray,
-    *,
-    old_z_fraction: float,
-    new_z_fraction: float,
-    ctx: _PlacementContext,
+def _contact_penetration(
+    adsorbate: Atoms,
     slab: Atoms,
-) -> np.ndarray:
-    """Shift *center* along the placement normal by the height-window delta."""
+    config: AdsorptionConfig,
+    *,
+    material_type: str,
+    slab_scratch: geom._SlabDistanceScratch | None,
+    slab_for_sites: Atoms | None,
+) -> tuple[float, float]:
+    """Return ``(actual_min_distance, max_pair_penetration)`` vs the substrate gate."""
+    exclude_n = _saturation_exclude_count(slab, slab_for_sites)
+    _mol_pos, _slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
+        geom._mol_slab_contact_arrays(
+            adsorbate,
+            slab,
+            material_type=material_type,
+            exclude_slab_atoms=exclude_n,
+            slab_scratch=slab_scratch,
+        )
+    )
+    if dists.size == 0:
+        return float("inf"), 0.0
+    actual_min = float(np.min(dists))
+    mol_r = np.array(
+        [
+            r if (r := geom._get_covalent_radius(s)) is not None else np.nan
+            for s in mol_syms
+        ],
+        dtype=float,
+    )
+    if slab_scratch is not None and slab_scratch.slab_cov_r is not None:
+        slab_r = np.asarray(slab_scratch.slab_cov_r, dtype=float)
+    else:
+        slab_r = np.array(
+            [
+                r if (r := geom._get_covalent_radius(s)) is not None else np.nan
+                for s in slab_syms
+            ],
+            dtype=float,
+        )
+    allowed = (mol_r[:, None] + slab_r[None, :]) * float(config.min_contact_ratio)
+    np.maximum(allowed, float(config.min_initial_distance), out=allowed)
+    np.nan_to_num(allowed, nan=float(config.min_initial_distance), copy=False)
+    return actual_min, float(np.max(np.maximum(0.0, allowed - dists)))
+
+
+def _analytic_height_recovery(
+    ctx: _PlacementContext,
+    adsorbate: Atoms,
+    slab: Atoms,
+    config: AdsorptionConfig,
+    height_mode: str,
+    *,
+    slab_for_sites: Atoms | None,
+    slab_scratch: geom._SlabDistanceScratch | None,
+) -> tuple[np.ndarray, float] | None:
+    """One signed height nudge along the placement normal; None if nothing to fix."""
+    pose = ctx.pose
+    zf = float(pose.z_fraction)
+    origin = np.array([pose.x_abs, pose.y_abs, float(pose.z_abs or 0.0)], dtype=float)
     z_span = float(ctx.z_base_hi - ctx.z_base_lo)
-    delta_h = (new_z_fraction - old_z_fraction) * z_span
-    if abs(delta_h) < _DISTANCE_ZERO_EPS:
-        return np.asarray(center, dtype=float).copy()
+    if z_span <= _DISTANCE_ZERO_EPS:
+        return None
+
+    actual, max_pen = _contact_penetration(
+        adsorbate,
+        slab,
+        config,
+        material_type=ctx.mat_type,
+        slab_scratch=slab_scratch,
+        slab_for_sites=slab_for_sites,
+    )
+    porous = ctx.mat_type == "porous"
+    if height_mode == "too_close":
+        if max_pen <= _DISTANCE_ZERO_EPS:
+            return None
+        # Porous: shrink toward free-volume center; slabs/NPs: raise away.
+        signed = -max_pen if porous else max_pen
+    else:
+        max_d = config.max_initial_distance
+        if max_d is None:
+            return None
+        excess = actual - float(max_d)
+        if excess <= _DISTANCE_ZERO_EPS:
+            return None
+        signed = excess if porous else -excess
+
     n_hat = _placement_normal(ctx, slab)
-    return np.asarray(center, dtype=float) + float(delta_h) * n_hat
+    new_center = origin + float(signed) * n_hat
+    new_zf = float(min(1.0, max(0.0, zf + signed / z_span)))
+    return new_center, new_zf
 
 
 def _xy_recovery_offsets(
@@ -628,103 +704,64 @@ def _recover_distance_failure(
     pose_cache: _PoseBatchCache | None = None,
     slab_scratch: geom._SlabDistanceScratch | None = None,
 ) -> tuple[_PlacementContext, str | None]:
-    """Nudge height, clash-descend, then XY after distance/overlap failures.
+    """One analytic height nudge, then clash descent (or XY if clash is off).
 
-    ``too_close`` / ``too_far`` try height first, then clash descent (if enabled),
-    then lateral XY. ``adsorbate_overlap`` skips height (rarely helps) and tries
-    clash descent then XY. For porous frameworks, ``vdw_overlap`` is treated like
-    ``too_close`` (shrink toward the free-volume site center, then descent/XY).
+    ``too_close`` / ``too_far`` try a single height shift first. Remaining
+    recoverable failures use Packmol-style clash descent when enabled; otherwise
+    discrete XY jitter within ``placement_x/y_range``. For porous frameworks,
+    ``vdw_overlap`` is treated like ``too_close`` (shrink toward free volume).
     """
     if fail_reason not in RECOVERABLE_DISTANCE_REASONS:
         return ctx, fail_reason
-    # Height recovery only for contact-distance failures (and porous VDW).
     height_reasons: tuple[str, ...] = ("too_close", "too_far")
     if ctx.mat_type == "porous":
         height_reasons = ("too_close", "too_far", "vdw_overlap")
-    # Map porous VDW to the same shrink-toward-center strategy as too_close.
     height_mode = fail_reason
     if fail_reason == "vdw_overlap" and ctx.mat_type == "porous":
         height_mode = "too_close"
 
     pose = ctx.pose
-    zf = float(pose.z_fraction)
     origin = np.array([pose.x_abs, pose.y_abs, float(pose.z_abs or 0.0)], dtype=float)
-    z_span = float(ctx.z_base_hi - ctx.z_base_lo)
-
-    height_candidates: list[float] = []
-    if fail_reason in height_reasons and z_span > 1e-9:
-        for step in range(1, _DISTANCE_RECOVERY_HEIGHT_STEPS + 1):
-            frac = step / float(_DISTANCE_RECOVERY_HEIGHT_STEPS + 1)
-            if height_mode == "too_close":
-                # Slabs/NPs: raise away from the surface. Porous: Voronoi sites
-                # already sit in free volume — shrink toward the site center.
-                if ctx.mat_type == "porous":
-                    cand = zf * (1.0 - frac)
-                else:
-                    cand = zf + (1.0 - zf) * frac
-            else:
-                if ctx.mat_type == "porous":
-                    cand = zf + (1.0 - zf) * frac
-                else:
-                    cand = zf * (1.0 - frac)
-            cand = float(min(1.0, max(0.0, cand)))
-            if abs(cand - zf) > 1e-9:
-                height_candidates.append(cand)
-
+    work_zf = float(pose.z_fraction)
+    work_center = origin.copy()
     last_reason: str | None = fail_reason
-    for cand_zf in height_candidates:
-        center = _center_with_height_delta(
-            origin,
-            old_z_fraction=zf,
-            new_z_fraction=cand_zf,
-            ctx=ctx,
-            slab=slab,
-        )
-        _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, center)
-        last_reason = _validate_posed_adsorbate(
+
+    if fail_reason in height_reasons:
+        _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, origin)
+        height_shift = _analytic_height_recovery(
+            ctx,
             adsorbate,
             slab,
             config,
+            height_mode,
             slab_for_sites=slab_for_sites,
-            material_type=ctx.mat_type,
             slab_scratch=slab_scratch,
         )
-        if last_reason is None:
-            new_pose = dataclasses.replace(
-                pose,
-                x_abs=float(center[0]),
-                y_abs=float(center[1]),
-                z_abs=float(center[2]),
-                z_fraction=float(cand_zf),
+        if height_shift is not None:
+            work_center, work_zf = height_shift
+            _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, work_center)
+            last_reason = _validate_posed_adsorbate(
+                adsorbate,
+                slab,
+                config,
+                slab_for_sites=slab_for_sites,
+                material_type=ctx.mat_type,
+                slab_scratch=slab_scratch,
             )
-            return dataclasses.replace(ctx, pose=new_pose), None
-        if last_reason not in RECOVERABLE_DISTANCE_REASONS:
-            return ctx, last_reason
+            if last_reason is None:
+                new_pose = dataclasses.replace(
+                    pose,
+                    x_abs=float(work_center[0]),
+                    y_abs=float(work_center[1]),
+                    z_abs=float(work_center[2]),
+                    z_fraction=float(work_zf),
+                )
+                return dataclasses.replace(ctx, pose=new_pose), None
+            if last_reason not in RECOVERABLE_DISTANCE_REASONS:
+                return ctx, last_reason
 
-    work_zf = zf
-    if height_mode == "too_close" and height_candidates:
-        work_zf = (
-            min(height_candidates)
-            if ctx.mat_type == "porous"
-            else max(height_candidates)
-        )
-    elif height_mode == "too_far" and height_candidates:
-        work_zf = (
-            max(height_candidates)
-            if ctx.mat_type == "porous"
-            else min(height_candidates)
-        )
-
-    work_center = _center_with_height_delta(
-        origin,
-        old_z_fraction=zf,
-        new_z_fraction=work_zf,
-        ctx=ctx,
-        slab=slab,
-    )
     _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, work_center)
 
-    # Packmol-style rigid-body descent before discrete XY jitter.
     if config.placement_clash_descent and last_reason in (
         "adsorbate_overlap",
         "vdw_overlap",
@@ -745,7 +782,6 @@ def _recover_distance_failure(
             return ctx_out, None
         if last_reason not in RECOVERABLE_DISTANCE_REASONS:
             return ctx, last_reason
-        # Restore work_center pose for XY fallback after a failed descent.
         _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, work_center)
 
     for dx, dy in _xy_recovery_offsets(
@@ -803,19 +839,35 @@ def _try_clash_descent_recovery(
         slab_scratch = _build_slab_distance_scratch(slab, exclude_n, ctx.mat_type)
 
     use_vdw = fail_reason == "vdw_overlap"
-    ads_com = np.asarray(work_center, dtype=float)
+    z_window = max(0.0, float(ctx.z_base_hi - ctx.z_base_lo))
+    footprint = incoming_inplane_radius(
+        adsorbate,
+        footprint_scale=float(config.occupancy_footprint_scale),
+    )
+    moving_r = atom_radii_for_symbols(
+        list(adsorbate.get_chemical_symbols()),
+        min_separation=float(config.min_adsorbate_separation),
+        use_vdw=use_vdw,
+    )
+    cutoff = 2.0 * float(np.max(moving_r) if moving_r.size else footprint) + z_window
     fixed_pos, fixed_radii = _clash_recovery_fixed_cloud(
         slab,
         slab_scratch,
-        ads_com=ads_com,
-        fail_reason=fail_reason,
+        ads_com=np.asarray(work_center, dtype=float),
         use_vdw=use_vdw,
         min_initial_distance=float(config.min_initial_distance),
         min_adsorbate_separation=float(config.min_adsorbate_separation),
+        neighbor_cutoff=cutoff,
     )
     if fixed_pos is None or fixed_radii is None:
         return ctx, fail_reason
 
+    bounds = clash_bounds_for_adsorbate(
+        adsorbate,
+        config,
+        z_window=z_window,
+        footprint_radius=footprint,
+    )
     site_frame = geom.compute_surface_site_frame(_placement_normal(ctx, slab))
     new_pos, az_delta, ok = resolve_rigid_clash(
         adsorbate,
@@ -828,6 +880,7 @@ def _try_clash_descent_recovery(
         config=config,
         include_substrate_min_sep=(fail_reason == "adsorbate_overlap"),
         use_vdw_moving=use_vdw,
+        bounds=bounds,
     )
     if not ok:
         return ctx, fail_reason
@@ -842,7 +895,6 @@ def _try_clash_descent_recovery(
         az_delta,
         _placement_normal(ctx, slab),
     )
-
     new_pose = dataclasses.replace(
         pose,
         x_abs=float(new_center[0]),
@@ -863,9 +915,7 @@ def _try_clash_descent_recovery(
         material_type=ctx.mat_type,
         slab_scratch=slab_scratch,
     )
-    if last_reason is None:
-        return new_ctx, None
-    return ctx, last_reason
+    return (new_ctx, None) if last_reason is None else (ctx, last_reason)
 
 
 def _clash_recovery_fixed_cloud(
@@ -873,15 +923,15 @@ def _clash_recovery_fixed_cloud(
     slab_scratch: geom._SlabDistanceScratch,
     *,
     ads_com: np.ndarray,
-    fail_reason: str,
     use_vdw: bool,
     min_initial_distance: float,
     min_adsorbate_separation: float,
+    neighbor_cutoff: float,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """Nearby substrate / pre-adsorbate atoms for clash recovery."""
     fixed_chunks: list[np.ndarray] = []
     radius_chunks: list[np.ndarray] = []
-    cutoff = float(_CLASH_DESCENT_NEIGHBOR_CUTOFF_ANGSTROM)
+    cutoff = float(neighbor_cutoff)
 
     def _nearby_mask(positions: np.ndarray) -> np.ndarray:
         if positions.size == 0:
@@ -894,39 +944,24 @@ def _clash_recovery_fixed_cloud(
         ).reshape(-1)
         return dists <= cutoff
 
-    if fail_reason in ("too_close", "vdw_overlap"):
-        near = _nearby_mask(slab_scratch.slab_pos)
-        if np.any(near):
-            fixed_chunks.append(slab_scratch.slab_pos[near])
-            if use_vdw and slab_scratch.slab_vdw_r is not None:
-                radius_chunks.append(
-                    np.asarray(slab_scratch.slab_vdw_r, dtype=float)[near]
+    near = _nearby_mask(slab_scratch.slab_pos)
+    if np.any(near):
+        fixed_chunks.append(slab_scratch.slab_pos[near])
+        if use_vdw and slab_scratch.slab_vdw_r is not None:
+            radius_chunks.append(np.asarray(slab_scratch.slab_vdw_r, dtype=float)[near])
+        elif slab_scratch.slab_cov_r is not None:
+            radius_chunks.append(np.asarray(slab_scratch.slab_cov_r, dtype=float)[near])
+        else:
+            syms = [
+                s for s, keep in zip(slab_scratch.slab_syms, near, strict=True) if keep
+            ]
+            radius_chunks.append(
+                atom_radii_for_symbols(
+                    syms, min_separation=min_initial_distance, use_vdw=use_vdw
                 )
-            elif slab_scratch.slab_cov_r is not None:
-                radius_chunks.append(
-                    np.asarray(slab_scratch.slab_cov_r, dtype=float)[near]
-                )
-            else:
-                syms = [
-                    s
-                    for s, keep in zip(slab_scratch.slab_syms, near, strict=True)
-                    if keep
-                ]
-                radius_chunks.append(
-                    atom_radii_for_symbols(
-                        syms,
-                        min_separation=min_initial_distance,
-                        use_vdw=use_vdw,
-                    )
-                )
-    if (
-        (
-            fail_reason == "adsorbate_overlap"
-            or fail_reason in ("too_close", "vdw_overlap")
-        )
-        and slab_scratch.pre_ads_pos is not None
-        and slab_scratch.pre_ads_pos.size
-    ):
+            )
+
+    if slab_scratch.pre_ads_pos is not None and slab_scratch.pre_ads_pos.size:
         near_pre = _nearby_mask(slab_scratch.pre_ads_pos)
         if np.any(near_pre):
             fixed_chunks.append(slab_scratch.pre_ads_pos[near_pre])
@@ -945,7 +980,6 @@ def _clash_recovery_fixed_cloud(
 
     if not fixed_chunks:
         return None, None
-
     fixed_radii = np.concatenate(radius_chunks)
     floor = min_adsorbate_separation / 2.0
     fixed_radii = np.where(np.isfinite(fixed_radii), fixed_radii, floor)

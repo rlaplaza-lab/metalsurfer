@@ -1,23 +1,15 @@
 """Occupancy helpers for packing-aware site selection under coverage.
 
 Occupancy compares **site vertices** (Voronoi / topology ``Site.xyz``) to
-**existing adsorbate atom positions**, optionally followed by an incoming
-in-plane molecular **footprint** disk.  A site is kept when its vertex is at
-least ``min_separation`` from every existing adsorbate atom (MIC), and — when
-footprint pruning is enabled — when the lateral clearance to each existing
-atom (minus that atom's covalent radius) is at least the incoming footprint
-radius.  If footprint pruning empties a non-empty vertex mask, the vertex-only
-mask is restored (Packmol ``avoid_overlap`` analogue).
-
-``existing_adsorbate_positions(slab_for_sites, full_slab)`` returns the suffix of
-``full_slab`` beyond ``len(slab_for_sites)`` — i.e. atoms added after the bare
-substrate used for site detection.  ``existing_adsorbate_cloud`` also returns
-per-atom covalent radii for footprint pruning.
+**existing adsorbate atom positions**.  A site is kept when its vertex is at
+least ``min_separation`` from every existing adsorbate atom (MIC).  An optional
+incoming in-plane molecular **footprint** disk is used only to *rank* surviving
+sites (larger lateral clearance first), never as a second reject mask — fill
+and clash recovery handle residual packing.
 """
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Sequence
 
 import numpy as np
@@ -27,8 +19,6 @@ from .._numeric_defaults import OCCUPANCY_FOOTPRINT_SCALE_DEFAULT
 from . import geometry as geom
 from .clash import atom_radii_for_symbols
 from .site_types import Site
-
-logger = logging.getLogger(__name__)
 
 
 def existing_adsorbate_positions(
@@ -169,28 +159,58 @@ def _sites_clearance_and_vertex_mask(
     return min_dists >= float(min_separation), min_dists, mic_vecs
 
 
-def _sites_footprint_mask(
+def _footprint_clearances_from_mic(
     sites: Sequence[Site],
     mic_vecs: np.ndarray,
     existing_radii: np.ndarray,
-    *,
     incoming_radius: float,
 ) -> np.ndarray:
-    """Lateral disk clearance: ``||d_perp|| - r_atom >= incoming_radius``."""
-    n = len(sites)
-    if n == 0:
-        return np.zeros(0, dtype=bool)
+    """``min_j (||d_perp|| - r_j) - incoming_radius`` from precomputed MIC vectors."""
     if mic_vecs.shape[1] == 0:
-        return np.ones(n, dtype=bool)
-
+        return np.full(len(sites), np.inf, dtype=float)
     normals = np.asarray([s.normal for s in sites], dtype=float)
-    # Lateral component: remove the projection along each site outward normal.
     dots = np.einsum("sjd,sd->sj", mic_vecs, normals)
     perp = mic_vecs - dots[:, :, None] * normals[:, None, :]
     lateral = np.linalg.norm(perp, axis=2)
     r_exist = np.asarray(existing_radii, dtype=float).reshape(1, -1)
-    clearance = lateral - r_exist
-    return np.min(clearance, axis=1) >= float(incoming_radius)
+    return np.min(lateral - r_exist, axis=1) - float(incoming_radius)
+
+
+def site_footprint_clearances(
+    sites: Sequence[Site],
+    existing_positions: np.ndarray | None,
+    existing_radii: np.ndarray | None,
+    *,
+    cell: np.ndarray,
+    pbc: list[bool],
+    incoming_radius: float,
+) -> np.ndarray:
+    """Per-site lateral footprint clearance (inf when no coverage).
+
+    Clearance is ``min_j (||d_perp|| - r_j) - incoming_radius``. Larger is
+    better for ranking; negative values mean the footprint disk would overlap.
+    """
+    n = len(sites)
+    if n == 0:
+        return np.zeros(0, dtype=float)
+    if (
+        existing_positions is None
+        or np.asarray(existing_positions).size == 0
+        or existing_radii is None
+        or float(incoming_radius) <= 0.0
+    ):
+        return np.full(n, np.inf, dtype=float)
+
+    _vertex_mask, _min_dists, mic_vecs = _sites_clearance_and_vertex_mask(
+        sites,
+        existing_positions,
+        cell=cell,
+        pbc=pbc,
+        min_separation=0.0,
+    )
+    return _footprint_clearances_from_mic(
+        sites, mic_vecs, existing_radii, incoming_radius
+    )
 
 
 def available_site_indices(
@@ -200,74 +220,23 @@ def available_site_indices(
     cell: np.ndarray,
     pbc: list[bool],
     min_separation: float,
-    incoming_footprint_radius: float | None = None,
-    existing_radii: np.ndarray | None = None,
-    use_footprint: bool = False,
 ) -> list[int]:
-    """Original indices into *sites* that pass occupancy (or all if empty coverage).
+    """Original indices into *sites* that pass vertex occupancy (or all if empty).
 
-    When *use_footprint* is True and *incoming_footprint_radius* / *existing_radii*
-    are provided, sites must also clear the lateral footprint disk.  If that
-    empties a non-empty vertex mask, the vertex-only indices are returned with
-    a warning.
-
-    Parameters
-    ----------
-    sites
-        Sequence of :class:`Site` objects.
-    existing_positions
-        Existing adsorbate positions or None.
-    cell
-        Unit cell matrix.
-    pbc
-        Periodic boundary condition flags.
-    min_separation
-        Minimum separation distance (Å).
-    incoming_footprint_radius
-        Optional incoming in-plane disk radius (Å).
-    existing_radii
-        Optional covalent radii for existing adsorbate atoms.
-    use_footprint
-        Enable footprint pruning (requires radius inputs).
+    Empty vertex mask means zero capacity (no random-XY fallback). Rank survivors
+    with :func:`site_footprint_clearances` when footprint ordering is desired.
     """
     if existing_positions is None or np.asarray(existing_positions).size == 0:
         return list(range(len(sites)))
 
-    vertex_mask, _min_dists, mic_vecs = _sites_clearance_and_vertex_mask(
+    vertex_mask, _min_dists, _mic_vecs = _sites_clearance_and_vertex_mask(
         sites,
         existing_positions,
         cell=cell,
         pbc=pbc,
         min_separation=min_separation,
     )
-    vertex_indices = [i for i, keep in enumerate(vertex_mask) if keep]
-    if not vertex_indices:
-        return []
-
-    if (
-        use_footprint
-        and incoming_footprint_radius is not None
-        and existing_radii is not None
-        and float(incoming_footprint_radius) > 0.0
-    ):
-        foot_mask = _sites_footprint_mask(
-            sites,
-            mic_vecs,
-            existing_radii,
-            incoming_radius=float(incoming_footprint_radius),
-        )
-        combined = vertex_mask & foot_mask
-        foot_indices = [i for i, keep in enumerate(combined) if keep]
-        if not foot_indices:
-            logger.warning(
-                "Footprint occupancy emptied %d vertex-clear sites; "
-                "falling back to vertex-only occupancy",
-                len(vertex_indices),
-            )
-            return vertex_indices
-        return foot_indices
-
-    return vertex_indices
+    return [i for i, keep in enumerate(vertex_mask) if keep]
 
 
 def site_clearance_distances(
@@ -318,26 +287,7 @@ def results_mutually_clear(
     pbc: list[bool],
     min_separation: float,
 ) -> bool:
-    """Whether two adsorbate fragments can coexist on one slab (MIC).
-
-    Pure n-tuplet primitive: every atom of *a_atoms_suffix* must be at least
-    *min_separation* from every atom of *b_atoms_suffix*. Empty fragments are
-    trivially clear.
-
-    Parameters
-    ----------
-    a_atoms_suffix
-        Adsorbate-only atoms of the first fragment.
-    b_atoms_suffix
-        Adsorbate-only atoms of the second fragment.
-    cell
-        Unit cell matrix of the underlying slab.
-    pbc
-        Material-aware periodicity flags (see
-        :func:`placement._material.material_aware_pbc`).
-    min_separation
-        Minimum adsorbate-atom to adsorbate-atom distance in Å.
-    """
+    """Whether two adsorbate fragments can coexist on one slab (MIC)."""
     return _positions_mutually_clear(
         np.asarray(a_atoms_suffix.get_positions(), dtype=float),
         np.asarray(b_atoms_suffix.get_positions(), dtype=float),
@@ -354,42 +304,13 @@ def filter_sites_by_occupancy(
     cell: np.ndarray,
     pbc: list[bool],
     min_separation: float,
-    incoming_footprint_radius: float | None = None,
-    existing_radii: np.ndarray | None = None,
-    use_footprint: bool = False,
 ) -> list[Site]:
-    """Keep sites that pass occupancy (vertex, optional footprint + fallback).
-
-    *existing_positions* may be ``None`` or empty; then *sites* is returned
-    unchanged (order preserved).
-
-    Parameters
-    ----------
-    sites
-        Sequence of :class:`Site` objects.
-    existing_positions
-        Existing adsorbate positions or None.
-    cell
-        Unit cell matrix.
-    pbc
-        Periodic boundary condition flags.
-    min_separation
-        Minimum separation distance (Å).
-    incoming_footprint_radius
-        Optional incoming in-plane disk radius (Å).
-    existing_radii
-        Optional covalent radii for existing adsorbate atoms.
-    use_footprint
-        Enable footprint pruning.
-    """
+    """Keep sites that pass vertex occupancy (order preserved)."""
     keep = available_site_indices(
         sites,
         existing_positions,
         cell=cell,
         pbc=pbc,
         min_separation=min_separation,
-        incoming_footprint_radius=incoming_footprint_radius,
-        existing_radii=existing_radii,
-        use_footprint=use_footprint,
     )
     return [sites[i] for i in keep]

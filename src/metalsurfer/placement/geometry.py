@@ -15,7 +15,6 @@ from ase.geometry import find_mic
 from .._utils import cell_has_volume
 from ._constants import (
     _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE,
-    _ADSORBATE_SEPARATION_MIN_HARD_FLOOR_ANGSTROM,
     _BINDER_ALIGNMENT_TARGET_DOT,
     _BINDER_VECTOR_MIN_NORM,
     _CONTACT_ATOM_VARIANCE_MAX,
@@ -1022,15 +1021,20 @@ def check_adsorbate_separation(
             else _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM / 2.0
         )
         min_separation = _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE * (2.0 * ref_radius)
-    # When pre-adsorbed molecules are present (saturation), enforce a physically
-    # meaningful floor so two molecules 1.5 A H..H apart (effectively bonded) are
-    # rejected. With none present the caller is checking adsorbate vs substrate,
-    # which is governed by check_initial_placement_distance instead.
-    if len(pre_adsorbed_positions) > 0:
-        min_separation = max(
-            float(min_separation), _ADSORBATE_SEPARATION_MIN_HARD_FLOOR_ANGSTROM
-        )
-    ok = min_dist >= min_separation
+    elif len(pre_adsorbed_positions) > 0:
+        # Chemistry-aware floor from the new adsorbate's mean covalent radius
+        # (pre-adsorbed symbols are not passed in). Never a silent Å hard floor.
+        cov_r: list[float] = [
+            r
+            for s in new_adsorbate.get_chemical_symbols()
+            if (r := _get_covalent_radius(s)) is not None
+        ]
+        if cov_r:
+            pair_floor = float(_ADSORBATE_SEPARATION_COVALENT_SUM_SCALE) * (
+                2.0 * float(np.mean(cov_r))
+            )
+            min_separation = max(float(min_separation), pair_floor)
+    ok = min_dist >= float(min_separation)
     return ok, min_dist
 
 

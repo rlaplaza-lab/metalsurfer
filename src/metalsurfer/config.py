@@ -675,14 +675,13 @@ class AdsorptionConfig:
     # other. The placement gate enforces at least this value (never the looser
     # covalent-sum default).
     min_adsorbate_separation: float = MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM
-    # Under coverage, prune sites whose incoming in-plane molecular disk
-    # overlaps existing adsorbate atoms (after the cheap vertex test). When
-    # footprint pruning empties the catalog, fall back to vertex-only so
-    # saturation cannot stall on a pessimistic radius.
+    # Under coverage, prune sites whose vertex is closer than
+    # ``min_adsorbate_separation`` to existing adsorbates. When
+    # ``occupancy_use_footprint`` is on, rank survivors by lateral footprint
+    # clearance (not a second reject mask) so open sites are tried first.
     occupancy_use_footprint: bool = True
     # Scale on the incoming in-plane footprint radius (COM-centred, thickness
-    # axis removed). Values in ``(0, 2]``; default slightly below 1.0 to avoid
-    # over-pruning binder-down flats.
+    # axis removed). Values in ``(0, 2]``; used only for ranking under coverage.
     occupancy_footprint_scale: float = OCCUPANCY_FOOTPRINT_SCALE_DEFAULT
     max_closest_approach: float = CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
     min_contact_atoms: int = 1

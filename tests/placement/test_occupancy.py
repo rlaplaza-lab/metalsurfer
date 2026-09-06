@@ -259,101 +259,44 @@ def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distanc
     assert score_strict < score_loose
 
 
-def test_footprint_prunes_vertex_clear_but_disk_blocked_site():
-    """Bulky incoming disk drops a near site while keeping a far one."""
-    from metalsurfer.placement.occupancy import available_site_indices
+def test_footprint_ranks_without_pruning():
+    """Vertex gate keeps both sites; footprint clearance ranks the far one higher."""
+    from metalsurfer.placement.occupancy import (
+        available_site_indices,
+        site_footprint_clearances,
+    )
     from metalsurfer.placement.site_types import Site
 
-    near = Site(
-        xyz=np.array([0.0, 0.0, 0.0], dtype=float),
-        normal=np.array([0.0, 0.0, 1.0], dtype=float),
-        site_type="atop",
-        slab_indices=(0,),
-        material_type="slab",
-        site_source="topology",
-        env_fingerprint=((), "atop"),
-    )
-    far = Site(
-        xyz=np.array([10.0, 0.0, 0.0], dtype=float),
-        normal=np.array([0.0, 0.0, 1.0], dtype=float),
-        site_type="atop",
-        slab_indices=(1,),
-        material_type="slab",
-        site_source="topology",
-        env_fingerprint=((), "atop"),
-    )
-    # Existing atom 2.2 Å from *near*: vertex-clear at min_sep=1.5, but
-    # footprint r_in=2.0 fails lateral clearance for near only.
+    def _site(xyz, idx):
+        return Site(
+            xyz=np.array(xyz, dtype=float),
+            normal=np.array([0.0, 0.0, 1.0], dtype=float),
+            site_type="atop",
+            slab_indices=(idx,),
+            material_type="slab",
+            site_source="topology",
+            env_fingerprint=((), "atop"),
+        )
+
+    near, far = _site([0.0, 0.0, 0.0], 0), _site([10.0, 0.0, 0.0], 1)
     existing = np.array([[2.2, 0.0, 0.0]], dtype=float)
     existing_radii = np.array([0.7], dtype=float)
     cell = np.eye(3) * 30.0
     pbc = [False, False, False]
-
-    vertex_only = available_site_indices(
+    assert available_site_indices(
+        [near, far], existing, cell=cell, pbc=pbc, min_separation=1.5
+    ) == [0, 1]
+    clearances = site_footprint_clearances(
         [near, far],
         existing,
+        existing_radii,
         cell=cell,
         pbc=pbc,
-        min_separation=1.5,
-        use_footprint=False,
+        incoming_radius=2.0,
     )
-    assert vertex_only == [0, 1]
-
-    with_foot = available_site_indices(
-        [near, far],
-        existing,
-        cell=cell,
-        pbc=pbc,
-        min_separation=1.5,
-        incoming_footprint_radius=2.0,
-        existing_radii=existing_radii,
-        use_footprint=True,
-    )
-    assert with_foot == [1]
-
-
-def test_footprint_fallback_restores_vertex_only(caplog):
-    from metalsurfer.placement.occupancy import available_site_indices
-    from metalsurfer.placement.site_types import Site
-
-    sites = [
-        Site(
-            xyz=np.array([0.0, 0.0, 0.0], dtype=float),
-            normal=np.array([0.0, 0.0, 1.0], dtype=float),
-            site_type="atop",
-            slab_indices=(0,),
-            material_type="slab",
-            site_source="topology",
-            env_fingerprint=((), "atop"),
-        ),
-        Site(
-            xyz=np.array([4.0, 0.0, 0.0], dtype=float),
-            normal=np.array([0.0, 0.0, 1.0], dtype=float),
-            site_type="atop",
-            slab_indices=(1,),
-            material_type="slab",
-            site_source="topology",
-            env_fingerprint=((), "atop"),
-        ),
-    ]
-    # Both vertices clear of the atom at 2.0, but a huge footprint blocks both.
-    existing = np.array([[2.0, 0.0, 0.0]], dtype=float)
-    existing_radii = np.array([0.7], dtype=float)
-    cell = np.eye(3) * 20.0
-    pbc = [False, False, False]
-    with caplog.at_level("WARNING"):
-        indices = available_site_indices(
-            sites,
-            existing,
-            cell=cell,
-            pbc=pbc,
-            min_separation=1.5,
-            incoming_footprint_radius=5.0,
-            existing_radii=existing_radii,
-            use_footprint=True,
-        )
-    assert indices == [0, 1]
-    assert any("falling back to vertex-only" in r.message for r in caplog.records)
+    assert clearances[1] > clearances[0]
+    # Negative clearance does not prune: vertex gate still returns both sites.
+    assert clearances[0] < 0.0
 
 
 def test_incoming_inplane_radius_drops_thickness_axis():
@@ -408,8 +351,8 @@ def test_overlap_recovery_rescues_lateral_clash():
         canonical_pos=water.get_positions().copy(),
         use_sites=False,
         rotated_pos=water.get_positions().copy(),
-        z_base_lo=z_top + 1.5,
-        z_base_hi=z_top + 3.0,
+        z_base_lo=1.5,
+        z_base_hi=3.0,
         normal=np.array([0.0, 0.0, 1.0]),
     )
     result, reason = _finalize_placement(
@@ -571,60 +514,51 @@ def test_place_dissociative_two_sites_matches_spec_path():
 
 
 def test_packing_yield_improves_with_occupancy_prune():
-    from metalsurfer.placement.generators import (
-        enumerate_placement_specs,
-        generate_placement_from_spec_with_reason,
+    """Vertex occupancy under coverage drops near-site capacity vs bare slab."""
+    from metalsurfer.placement.occupancy import (
+        available_site_indices,
+        existing_adsorbate_cloud,
+        incoming_inplane_radius,
+        site_footprint_clearances,
     )
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
-        seed=0,
-        num_placements=30,
-        placement_distance_recovery=False,
+        material_type="slab", seed=0, min_adsorbate_separation=1.5
     )
     ctx = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
-    # Occupy one site region heavily.
     site = ctx.sites[0]
-    pre = make_water()
-    pre.set_positions(pre.get_positions() + site.xyz + np.array([0.0, 0.0, 1.8]))
+    pre = Atoms(
+        "O", positions=[np.asarray(site.xyz, dtype=float) + np.array([0.0, 0.0, 0.4])]
+    )
     full = slab.copy() + pre
-
-    def _overlap_frac(full_slab):
-        specs = enumerate_placement_specs(
-            [make_water()],
-            slab,
-            config,
-            "O",
-            n_desired=30,
-            site_context=ctx,
-            full_slab=full_slab,
-            seed=0,
-        )
-        n_ov = 0
-        n_fail = 0
-        for spec in specs:
-            _res, reason = generate_placement_from_spec_with_reason(
-                spec,
-                [make_water()],
-                full,
-                config,
-                smiles="O",
-                site_context=ctx,
-                slab_for_sites=slab,
-            )
-            if reason is not None:
-                n_fail += 1
-                if reason == "adsorbate_overlap":
-                    n_ov += 1
-        return n_ov / max(n_fail, 1), len(specs)
-
-    pruned_frac, n_pruned = _overlap_frac(full)
-    unpruned_frac, n_unpruned = _overlap_frac(None)
-    assert n_pruned > 0 and n_unpruned > 0
-    # Pruning should not increase the overlap-fail share among failures.
-    assert pruned_frac <= unpruned_frac + 1e-9
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = [True, True, False]
+    existing_pos, existing_radii = existing_adsorbate_cloud(
+        slab, full, min_separation=1.5
+    )
+    bare = available_site_indices(
+        ctx.sites, None, cell=cell, pbc=pbc, min_separation=1.5
+    )
+    covered = available_site_indices(
+        ctx.sites, existing_pos, cell=cell, pbc=pbc, min_separation=1.5
+    )
+    assert len(covered) < len(bare)
+    occupied_idx = next(
+        i for i, s in enumerate(ctx.sites) if np.allclose(s.xyz, site.xyz)
+    )
+    assert occupied_idx not in covered
+    # Footprint ranking still scores the occupied vertex worse than survivors.
+    clearances = site_footprint_clearances(
+        ctx.sites,
+        existing_pos,
+        existing_radii,
+        cell=cell,
+        pbc=pbc,
+        incoming_radius=incoming_inplane_radius(make_water(), footprint_scale=0.85),
+    )
+    assert float(np.max(clearances[covered])) > float(clearances[occupied_idx])
 
 
 def test_fill_oversamples_to_meet_num_placements(monkeypatch):

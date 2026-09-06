@@ -18,7 +18,6 @@ from ._constants import (
     _PARALLEL_FRACTION_NO_BINDERS,
     _PARALLEL_FRACTION_NO_RING,
     _PARALLEL_FRACTION_SINGLE_BINDER,
-    _PARALLEL_Z_FLOOR_MIN_ANGSTROM,
     _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE,
     _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE,
     _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE,
@@ -127,10 +126,7 @@ def _parallel_z_adjustments(
 ) -> tuple[float, float, float]:
     radius_sum = _radius_sum_for_site(slab, site, mol_symbols, r_surface=r_surface)
     return (
-        max(
-            _PARALLEL_Z_FLOOR_MIN_ANGSTROM,
-            _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE * radius_sum,
-        ),
+        _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE * radius_sum,
         _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE * radius_sum,
         _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE * radius_sum,
     )

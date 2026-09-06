@@ -12,7 +12,7 @@ from metalsurfer.placement.clash import (
 )
 from metalsurfer.placement.geometry import compute_surface_site_frame
 
-from ..conftest import make_slab, make_water
+from ..conftest import make_water
 
 
 def test_overlap_penalty_zero_when_clear():
@@ -181,14 +181,39 @@ def test_resolve_rigid_clash_deterministic():
     np.testing.assert_allclose(p1, p2, atol=0.0)
 
 
-def test_mol_slab_pairwise_mic_returns_vectors():
-    slab = make_slab()
-    mol = make_water()
-    cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = [True, True, False]
-    vecs, dists = geom._mol_slab_pairwise_mic(
-        mol.get_positions(), slab.get_positions(), cell, pbc
+def test_clash_bounds_scale_with_molecule_size():
+    """Bulky adsorbate gets a larger salvage box; zero XY stays disabled."""
+    from metalsurfer.placement.clash import clash_bounds_for_adsorbate
+    from metalsurfer.placement.occupancy import incoming_inplane_radius
+
+    water = make_water()
+    bulky = Atoms(
+        "CCCCCC",
+        positions=[
+            [1.4 * np.cos(th), 1.4 * np.sin(th), 0.0]
+            for th in np.linspace(0.0, 2.0 * np.pi, 6, endpoint=False)
+        ],
     )
-    assert vecs.shape == (len(mol), len(slab), 3)
-    assert dists.shape == (len(mol), len(slab))
-    np.testing.assert_allclose(np.linalg.norm(vecs, axis=2), dists, atol=1e-9)
+    r_w = incoming_inplane_radius(water, footprint_scale=1.0)
+    r_b = incoming_inplane_radius(bulky, footprint_scale=1.0)
+    assert r_b > r_w
+    cfg = AdsorptionConfig(placement_x_range=(-0.5, 0.5), placement_y_range=(-0.5, 0.5))
+    b_w = clash_bounds_for_adsorbate(water, cfg, z_window=2.0, footprint_radius=r_w)
+    b_b = clash_bounds_for_adsorbate(bulky, cfg, z_window=3.5, footprint_radius=r_b)
+    assert b_b[0][1] > b_w[0][1]
+    assert b_b[2] > b_w[2]
+    pinned = AdsorptionConfig(
+        placement_x_range=(0.0, 0.0), placement_y_range=(0.0, 0.0)
+    )
+    assert clash_bounds_for_adsorbate(
+        water, pinned, z_window=2.0, footprint_radius=r_w
+    )[0] == (0.0, 0.0)
+
+
+def test_tuplet_clash_rescue_floor_scales_with_radii():
+    from metalsurfer.placement.clash import tuplet_clash_rescue_floor
+
+    floor_hh = tuplet_clash_rescue_floor(["H"], ["H"], min_separation=1.5)
+    floor_oo = tuplet_clash_rescue_floor(["O"], ["O"], min_separation=1.5)
+    assert floor_oo > floor_hh
+    assert floor_oo <= 1.5

@@ -25,10 +25,10 @@ from .dissociative import (
     _is_dissociable_diatomic,
 )
 from .occupancy import (
-    available_site_indices,
+    _footprint_clearances_from_mic,
+    _sites_clearance_and_vertex_mask,
     existing_adsorbate_cloud,
     incoming_inplane_radius,
-    site_clearance_distances,
 )
 from .orientation import (
     _estimate_parallel_fraction,
@@ -239,16 +239,28 @@ def _spec_grid_info(
         )
 
     if use_sites and unique_sites:
-        site_indices = available_site_indices(
-            unique_sites,
-            existing_ads_pos,
-            cell=cell_arr,
-            pbc=pbc,
-            min_separation=float(config.min_adsorbate_separation),
-            incoming_footprint_radius=r_in,
-            existing_radii=existing_radii,
-            use_footprint=bool(config.occupancy_use_footprint),
-        )
+        if existing_ads_pos is None or np.asarray(existing_ads_pos).size == 0:
+            site_indices = list(range(len(unique_sites)))
+            clearances = np.full(len(unique_sites), np.inf, dtype=float)
+        else:
+            vertex_mask, min_dists, mic_vecs = _sites_clearance_and_vertex_mask(
+                unique_sites,
+                existing_ads_pos,
+                cell=cell_arr,
+                pbc=pbc,
+                min_separation=float(config.min_adsorbate_separation),
+            )
+            site_indices = [i for i, keep in enumerate(vertex_mask) if keep]
+            if (
+                config.occupancy_use_footprint
+                and r_in is not None
+                and existing_radii is not None
+            ):
+                clearances = _footprint_clearances_from_mic(
+                    unique_sites, mic_vecs, existing_radii, float(r_in)
+                )
+            else:
+                clearances = min_dists
         if not site_indices:
             logger.warning(
                 "Occupancy pruning removed all %d sites under coverage; "
@@ -259,12 +271,6 @@ def _spec_grid_info(
             site_indices = []
             use_sites = False
         else:
-            clearances = site_clearance_distances(
-                unique_sites,
-                existing_ads_pos,
-                cell=cell_arr,
-                pbc=pbc,
-            )
             site_indices = _topology_first_site_indices(
                 unique_sites, site_indices, clearances=clearances
             )

@@ -309,7 +309,7 @@ at the target height. This is what prevents alkyl or hydrogen atoms from digging
 into the surface. Inside confined pores the local normal is not a single
 well-defined "away" direction, so this lift is skipped.
 
-### 4.3 In-plane jitter and validation
+### 4.3 Validation and distance recovery
 
 Before relaxing, each placement is checked against the surface: the closest
 adsorbate–substrate distance must exceed a floor (the larger of
@@ -318,13 +318,15 @@ not exceed `max_initial_distance`. If `reject_vdw_overlaps` is on, hard
 van-der-Waals clashes are also rejected.
 
 If a placement fails these checks, the code can **recover automatically**
-(`placement_distance_recovery`, on by default). It first nudges the height
-(raise it for `too_close`, lower it for `too_far`; inside porous frameworks it
-moves toward the free-volume site centre instead), then, if needed, slides the
-molecule to a new in-plane (x, y) position drawn deterministically within
-`placement_x_range` / `placement_y_range`. Only `too_close`, `too_far`,
-`adsorbate_overlap`, and (for porous) `vdw_overlap` are recoverable; other
-failures are final.
+(`placement_distance_recovery`, on by default). It applies **one** analytic
+height nudge (raise for `too_close`, lower for `too_far`; inside porous
+frameworks it moves toward the free-volume site centre instead), then — when
+`placement_clash_descent` is on — a Packmol-style rigid-body clash descent
+whose lateral/`dz` bounds scale with the molecule footprint and the height
+window. Discrete in-plane offsets within `placement_x_range` /
+`placement_y_range` remain as a cheap fallback when clash is off or leaves a
+recoverable failure. Only `too_close`, `too_far`, `adsorbate_overlap`, and
+(for porous) `vdw_overlap` are recoverable; other failures are final.
 
 ## 5. Sampling many placements
 
@@ -367,26 +369,23 @@ Two further behaviours:
 When molecules are already on the surface (saturation, or any retry round), the
 pipeline prunes sites that are *occupied*.
 
-**Occupancy pruning** first keeps sites whose vertex is at least
+**Occupancy pruning** keeps sites whose vertex is at least
 `min_adsorbate_separation` from every existing adsorbate atom (MIC under
-periodicity). When `occupancy_use_footprint` is on (default), it then requires
-that the incoming molecule's in-plane footprint disk (scaled by
-`occupancy_footprint_scale`) clear each existing atom's covalent radius in the
-site tangent plane. If that footprint pass empties a non-empty vertex mask, the
-code falls back to vertex-only occupancy so saturation cannot stall on a
-pessimistic radius. Surviving sites are ordered topology-first, then by
-clearance to existing adsorbates. For porous frameworks open pore sites are
-still preferred after that ranking.
+periodicity). When `occupancy_use_footprint` is on (default), surviving sites
+are ranked by lateral footprint clearance (incoming in-plane disk scaled by
+`occupancy_footprint_scale`) so open sites are tried first — footprint is a
+sort key, not a second reject mask. Topology-sourced sites still come first.
+For porous frameworks open pore sites are still preferred after that ranking.
 
 If occupancy pruning removes *all* sites under coverage (vertex mask empty),
 the capacity for that step is empty. The code does **not** fall back to
 random (x, y) scatter guesses — it simply reports zero available sites and moves
 on. This avoids packing molecules on top of each other inside a filled region.
 
-Distance recovery (`placement_distance_recovery`) may run a bounded Packmol-style
-rigid-body clash descent (`placement_clash_descent`, default on) before the
-discrete XY jitter loop, so lateral adsorbate overlaps are often salvaged
-without another fill-loop round.
+Distance recovery (`placement_distance_recovery`) applies one analytic height
+nudge, then a chemistry-scaled Packmol-style clash descent
+(`placement_clash_descent`, default on). Discrete XY jitter remains as a
+fallback when clash is off or does not fully clear.
 
 On top of pruning, a **one-shot fill** in the workflow makes sure you actually
 get close to `num_placements` valid structures:

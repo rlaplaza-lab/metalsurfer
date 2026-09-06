@@ -141,9 +141,7 @@ _SITE_Z_OFFSET_FROM_SURFACE_RADIUS: dict[str, float] = {
     "envelope": -0.135,
 }
 
-# Hard floor for flat-aromatic parallel placement above the surface (max of
-# min_floor and scale times the sum of surface and molecule radii).
-_PARALLEL_Z_FLOOR_MIN_ANGSTROM: float = 2.2
+# Flat-aromatic parallel placement floor as a scale on (r_surface + r_mol).
 _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE: float = 1.2
 
 # Radius-derived adjustments to z_base_lo / z_base_hi for flat-aromatic
@@ -207,13 +205,6 @@ _CONTACT_QUALITY_COVALENT_SUM_SCALE: float = 1.35
 _CONTACT_ATOM_VARIANCE_MAX: float = 0.5
 _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM: float = 2.0
 _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE: float = 1.0
-# Hard floor on the gap between a newly placed adsorbate and any pre-adsorbed
-# molecule during saturation. The covalent-sum scale (default 1.0) resolves to
-# ~0.94 A for water and lets two molecules sit bonded (~1.5 A H..H); enforce a
-# physically meaningful minimum so saturation cannot pack adsorbates on top of
-# each other. It stays below the typical adsorbate-ON-top height (~2.0 A) so a
-# single molecule on a bare slab is unaffected.
-_ADSORBATE_SEPARATION_MIN_HARD_FLOOR_ANGSTROM: float = 1.7
 
 # ---------------------------------------------------------------------------
 # Policy and generator grids
@@ -242,21 +233,21 @@ _POLICY_PRIOR_TILT_WEIGHT_PER_DEG: float = 0.02
 _POLICY_PRIOR_Z_FRACTION_TARGET: float = 0.5
 _POLICY_PRIOR_Z_FRACTION_WEIGHT: float = 2.0
 
-# Bounded recovery after too_close / too_far / adsorbate_overlap distance failures.
-_DISTANCE_RECOVERY_HEIGHT_STEPS: int = 3
+# Discrete XY jitter attempts when clash descent is disabled.
 _DISTANCE_RECOVERY_XY_ATTEMPTS: int = 4
 # Packmol-style rigid-body clash descent (recovery + n-tuplet).
 _CLASH_DESCENT_MAXITER: int = 40
-_CLASH_DESCENT_DZ_BOUND: float = 0.4  # Å
 _CLASH_DESCENT_AZIMUTH_BOUND_DEG: float = 20.0
 _CLASH_DESCENT_SUCCESS_F: float = 1e-12
 _CLASH_DESCENT_SUCCESS_VIOLATION_ANGSTROM: float = 1e-3
-# Nearby-atom cutoff when building the fixed cloud for recovery descent.
-_CLASH_DESCENT_NEIGHBOR_CUTOFF_ANGSTROM: float = 6.0
+# Lateral salvage travel as a scale on the incoming in-plane footprint
+# (or mean covalent radius for single atoms).
+_CLASH_LATERAL_FOOTPRINT_SCALE: float = 1.0
 # Treat azimuth deltas smaller than this as zero when composing quaternions.
 _CLASH_AZIMUTH_DELTA_EPS_DEG: float = 1e-15
-# Below this min-distance, n-tuplet near-miss rescue skips (atoms stacked).
-_TUPLET_CLASH_RESCUE_FLOOR: float = 0.5  # Å
+# n-tuplet near-miss rescue skips when min distance is below this fraction of
+# the smallest covalent-pair sum (stacked nuclei).
+_TUPLET_CLASH_RESCUE_COVALENT_SCALE: float = 0.5
 # One-shot Voronoi accessibility widen when the first window finds no sites.
 _VORONOI_AUTO_WIDEN_PROBE_SCALE: float = 0.8
 _VORONOI_AUTO_WIDEN_MAX_SCALE: float = 1.25

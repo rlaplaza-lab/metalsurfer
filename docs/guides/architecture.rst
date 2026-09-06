@@ -303,15 +303,14 @@ Occupancy pruning
 ``available_site_indices`` into the full ``SiteContext.sites`` catalog (MIC
 distance from each site vertex to existing adsorbate atoms ≥
 ``min_adsorbate_separation``) without remapping indices—replay/BO keep stable
-``site_index`` values. When ``occupancy_use_footprint`` is enabled, a second
-pass requires the incoming in-plane footprint disk (scaled by
-``occupancy_footprint_scale``) to clear existing atom covalent radii in the
-site tangent plane; if that empties a non-empty vertex mask, the vertex-only
-indices are restored. Surviving sites are ordered topology-first then by
-clearance. Dissociative hollow filtering shares ``placement/occupancy.py``.
-Empty available sites yield no specs (no random-XY fallback). Multi-molecule
-saturation recomputes ``estimate_conformer_count`` (conformer count) each step
-and skips zero-capacity species in ``distribute_placement_budget``.
+``site_index`` values. When ``occupancy_use_footprint`` is enabled, survivors
+are ranked by lateral footprint clearance (incoming disk scaled by
+``occupancy_footprint_scale``) rather than pruned by a second reject mask;
+topology-sourced sites still come first. Dissociative hollow filtering shares
+``placement/occupancy.py``. Empty available sites yield no specs (no random-XY
+fallback). Multi-molecule saturation recomputes ``estimate_conformer_count``
+(conformer count) each step and skips zero-capacity species in
+``distribute_placement_budget``.
 
 Enumeration / materialization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -339,11 +338,12 @@ Enumeration / materialization
   ``surface_ref + z_offset`` (clearance-aware lift after orientation).
   Porous frameworks skip the lift (confined pores have opposing walls).
   For NP/porous, ``surface_ref`` is ``dot(site.xyz, n_site)``.
-- **Distance recovery** (default on): ``too_close`` / ``too_far`` try height
-  then XY; ``adsorbate_overlap`` and non-porous ``vdw_overlap`` try XY only
-  (``placement_x/y_range``, ±0.5 Å default). Porous recovery is inverted
-  (shrink toward the free-volume site when too close or VDW-overlapping;
-  push out when too far).
+- **Distance recovery** (default on): ``too_close`` / ``too_far`` try one
+  analytic height nudge, then chemistry-scaled clash descent when
+  ``placement_clash_descent`` is on (discrete XY only when clash is off).
+  ``adsorbate_overlap`` and non-porous ``vdw_overlap`` skip height. Porous
+  recovery is inverted (shrink toward the free-volume site when too close or
+  VDW-overlapping; push out when too far).
 - **Voronoi auto-widen** (default on): one wider probe/max retry when the
   first window finds no sites.
 - **Dissociative** (``dissociative.py`` / ``_place_dissociative_two_sites``): homonuclear
