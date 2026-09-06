@@ -193,7 +193,7 @@ Module layout
         ├── bayesian.py       # BO-guided per-molecule screening
         ├── saturation.py     # sequential / multi-mol saturation
         ├── composite.py      # n-tuplet winners + composite commit
-        ├── placement_fill.py # deficit rounds + yield-aware materialize
+        ├── placement_fill.py # one-shot oversample + optional diversity retry
         ├── reference.py      # reference energy preparation
         └── shared.py         # bootstrap, outcomes, validation, autotune
 
@@ -357,14 +357,13 @@ Enumeration / materialization
 
 Placement fill
 ~~~~~~~~~~~~~~
-``placement_retry_max_attempts`` deficit rounds with seed increments fill the
-remaining count. Each round oversamples by estimated materialization yield
-(capped by ``placement_retry_oversample_max``), excludes exact failed-spec keys,
-and blocks site indices that repeatedly fail with ``adsorbate_overlap`` /
-``too_close``. Spec materialization inside a round is threaded via
-``placement_materialize_workers`` (joblib-style ``n_jobs``, default ``-2``).
-BO eval batches use the same materialization helper to backfill from the unused
-valid pool (yield-aware chunk sizes) until the batch size is met.
+One-shot fill enumerates ``min(capacity, num_placements *
+placement_retry_oversample_max)`` specs, materializes them (threaded via
+``placement_materialize_workers``), and keeps up to ``num_placements``
+successes. When ``placement_retry_enabled`` and the first pass is short, one
+diversity round re-enumerates excluding exact failed-spec keys. BO eval
+batches wrap pre-materialized cache hits (no generation backfill); the
+geometry-valid pool is built once when features are extracted.
 
 Initial geometry validation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

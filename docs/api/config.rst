@@ -274,42 +274,23 @@ Placement generation
 ``placement_retry_enabled``
    **Type:** ``bool`` · **Default:** ``True``
 
-   Retry failed placement generation with perturbed seeds until
-   ``num_placements`` valid specs are found or deficit rounds are exhausted.
-
-``placement_retry_max_attempts``
-   **Type:** ``int`` · **Default:** ``8``
-
-   Maximum deficit rounds when ``placement_retry_enabled`` is ``True``. Each
-   round requests more specs than the remaining count (yield-aware oversampling)
-   rather than one retry per placement slot.
-
-``placement_retry_diversity_seed_increment``
-   **Type:** ``int`` · **Default:** ``1000``
-
-   Added to the RNG seed on each placement retry for diversity.
+   When the first one-shot fill pass is short of ``num_placements``, run one
+   diversity round that re-enumerates excluding exact failed-spec keys (no
+   site blocking or unfiltered fallback).
 
 ``placement_retry_oversample_max``
     **Type:** ``float`` · **Default:** ``6.0`` · **Valid range:** ``>= 1.0``
 
-    Cap on specs requested per deficit round as a multiple of the remaining
-    placement count. Combined with the observed materialization yield so rounds
-    stay short while still filling ``num_placements``.
+    Cap on specs requested for one-shot fill as a multiple of the placement
+    target (``min(capacity, num_placements * oversample)`` when capacity
+    clamping is on).
 
 ``placement_fill_clamp_to_capacity``
     **Type:** ``bool`` · **Default:** ``True``
 
     Clamp the effective placement target to the enumerable spec capacity
-    (``estimate_placement_capacity``) so the retry loop cannot spin to
-    ``placement_retry_max_attempts`` on an unreachable count when occupancy-pruned
-    sites leave fewer enumerable placements than requested.
-
-``placement_retry_early_stop_patience``
-    **Type:** ``int`` · **Default:** ``2``
-
-    Stop deficit rounds early after this many consecutive zero-yield attempts
-    (yield-aware early-out that usually ends retries well before
-    ``placement_retry_max_attempts``).
+    (``estimate_placement_capacity``) so fill cannot request more successes
+    than occupancy-pruned enumeration can supply.
 
 ``n_jobs``
    **Type:** ``int`` · **Default:** ``-2``

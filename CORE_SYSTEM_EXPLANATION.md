@@ -388,25 +388,18 @@ rigid-body clash descent (`placement_clash_descent`, default on) before the
 discrete XY jitter loop, so lateral adsorbate overlaps are often salvaged
 without another fill-loop round.
 
-On top of pruning, a **retry / fill loop** in the workflow makes sure you actually
+On top of pruning, a **one-shot fill** in the workflow makes sure you actually
 get close to `num_placements` valid structures:
 
 - **Capacity clamp** (`placement_fill_clamp_to_capacity`, default `True`). The
-  success target is clamped to the enumerable spec capacity, so the retry loop
-  cannot spin until `placement_retry_max_attempts` chasing an impossible target.
-- **Oversample** (`placement_retry_oversample_max`, default 6.0). Each deficit
-  round requests more specs than the remaining slots, scaled by an estimated
-  success rate, so one bad batch does not stall the loop.
-- **Early stop** (`placement_retry_early_stop_patience`, default 2). After this
-  many consecutive rounds that produce zero new placements, the loop gives up
-  early — a signal the capacity is exhausted. `placement_retry_max_attempts`
-  (default 8) remains the absolute hard cap.
-- **Failed-spec and cell exclusion.** Specs that already failed, and whole
-  discrete placement neighbourhoods already relaxed, are excluded on retry so a
-  new seed explores fresh territory.
-- **Clash-based site blocking.** After a site triggers `too_close` /
-  `adsorbate_overlap` failures a few times (`_RETRY_BLOCK_SITE_AFTER`), that site
-  is blocked for the rest of the fill.
+  success target is clamped to the enumerable spec capacity, so fill cannot
+  request more successes than occupancy-aware enumeration can supply.
+- **Oversample** (`placement_retry_oversample_max`, default 6.0). One pass
+  requests up to `num_placements * oversample` specs (capped by capacity when
+  clamping is on), materializes them, and keeps up to the target.
+- **Optional diversity retry** (`placement_retry_enabled`, default `True`). If
+  the first pass is short, one extra round re-enumerates excluding exact
+  failed-spec keys (no site blocking or unfiltered fallback).
 
 ### 6.1 Saturation run modes
 

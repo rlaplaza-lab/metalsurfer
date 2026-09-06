@@ -89,9 +89,8 @@ def test_default_config():
     assert config.placement_x_range == (-0.5, 0.5)
     assert config.placement_y_range == (-0.5, 0.5)
     assert config.placement_retry_oversample_max == 6.0
-    assert config.placement_retry_max_attempts == 8
+    assert config.placement_retry_enabled is True
     assert config.placement_fill_clamp_to_capacity is True
-    assert config.placement_retry_early_stop_patience == 2
     assert config.placement_materialize_workers is None
     assert config.n_jobs == -2
     assert (
@@ -127,14 +126,9 @@ def test_placement_retry_oversample_max_rejects_below_one():
         AdsorptionConfig(placement_retry_oversample_max=0.5)
 
 
-def test_placement_retry_early_stop_patience_defaults_and_rejects_below_one():
+def test_placement_fill_clamp_to_capacity_defaults_true():
     config = AdsorptionConfig()
-    assert config.placement_retry_early_stop_patience == 2
     assert config.placement_fill_clamp_to_capacity is True
-    with pytest.raises(ValueError, match="placement_retry_early_stop_patience"):
-        AdsorptionConfig(placement_retry_early_stop_patience=0)
-    with pytest.raises(ValueError, match="placement_retry_early_stop_patience"):
-        AdsorptionConfig(placement_retry_early_stop_patience=-1)
 
 
 def test_placement_materialize_workers_rejects_zero():
@@ -423,7 +417,6 @@ def test_autobatcher_invalid_rejected(kwargs, error_match):
         "vasp_nsw",
         "vasp_encut",
         "min_contact_atoms",
-        "placement_retry_max_attempts",
         "saturation_molecules_per_step",
     ],
 )
@@ -440,7 +433,6 @@ def test_zero_positive_int_rejected(field):
         "stage1_steps",
         "stage2_steps",
         "min_contact_atoms",
-        "placement_retry_max_attempts",
         "saturation_molecules_per_step",
     ],
 )

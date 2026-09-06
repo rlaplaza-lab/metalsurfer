@@ -96,22 +96,6 @@ def _patch_fill(
         monkeypatch.setattr(fill_mod, "_materialize_spec_placements", materialize_fn)
 
 
-def _materialize_all_fail(reason: str) -> Callable[..., tuple]:
-    def fake_materialize(**kwargs: object) -> tuple:
-        failures = [
-            PlacementFailureEvent(
-                placement_id=spec.placement_index,
-                stage="generation",
-                reason=reason,
-                descriptor=None,
-            )
-            for spec in kwargs["specs"]
-        ]
-        return [], [], [], failures
-
-    return fake_materialize
-
-
 def _materialize_all_succeed() -> Callable[..., tuple]:
     def fake_materialize(**kwargs: object) -> tuple:
         combined, ids, descs = [], [], []
@@ -121,6 +105,41 @@ def _materialize_all_succeed() -> Callable[..., tuple]:
             ids.append(spec.placement_index)
             descs.append(desc)
         return combined, ids, descs, []
+
+    return fake_materialize
+
+
+def _materialize_all_fail(reason: str = "too_close") -> Callable[..., tuple]:
+    def fake_materialize(**kwargs: object) -> tuple:
+        return (
+            [],
+            [],
+            [],
+            [
+                PlacementFailureEvent(
+                    placement_id=spec.placement_index,
+                    stage="generation",
+                    reason=reason,
+                    descriptor=None,
+                )
+                for spec in kwargs["specs"]
+            ],
+        )
+
+    return fake_materialize
+
+
+def _materialize_every_other() -> Callable[..., tuple]:
+    """Succeed on even indices within each batch (≈50% yield)."""
+    succeed = _materialize_all_succeed()
+
+    def fake_materialize(**kwargs: object) -> tuple:
+        specs = kwargs["specs"]
+        keep = [s for i, s in enumerate(specs) if i % 2 == 0]
+        fail = [s for i, s in enumerate(specs) if i % 2 == 1]
+        combined, ids, descs, _ = succeed(specs=keep)
+        _, _, _, failures = _materialize_all_fail()(specs=fail)
+        return combined, ids, descs, failures
 
     return fake_materialize
 
@@ -608,47 +627,8 @@ def test_packing_yield_improves_with_occupancy_prune():
     assert pruned_frac <= unpruned_frac + 1e-9
 
 
-@pytest.mark.parametrize(
-    "fail_reason",
-    ["adsorbate_overlap", "too_far", "vdw_overlap"],
-)
-def test_retry_blocks_repeated_failures(fail_reason, monkeypatch):
-    """Sites whose placements repeatedly fail a blocking reason are excluded
-    from later retry batches (same treatment as ``too_close``)."""
-    from metalsurfer.workflow import placement_fill as fill_mod
-
-    seen_filters = []
-
-    def make_specs(_n_desired, filter_spec):
-        specs = [
-            _round_atop_placement_spec(i, site_index=site_idx, site_type="hollow")
-            for i, site_idx in enumerate([3, 3, 5])
-        ]
-        filtered = _filter_specs(specs, filter_spec)
-        seen_filters.append([s.site_index for s in filtered])
-        return filtered[:_n_desired]
-
-    _patch_fill(
-        monkeypatch,
-        fill_mod,
-        enumerate_fn=_enumerate_from(make_specs),
-        materialize_fn=_materialize_all_fail(fail_reason),
-    )
-
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=3,
-        placement_retry_enabled=True,
-        placement_retry_max_attempts=3,
-        seed=0,
-    )
-    _run_fill(fill_mod, config)
-    # After enough failures on site 3, later attempts should exclude it.
-    assert any(3 not in batch for batch in seen_filters[1:])
-
-
 def test_fill_oversamples_to_meet_num_placements(monkeypatch):
-    """50% materialization yield still fills n_target via oversampling."""
+    """50% materialization yield still fills n_target via one-shot oversampling."""
     from metalsurfer.workflow import placement_fill as fill_mod
 
     requested = []
@@ -657,27 +637,52 @@ def test_fill_oversamples_to_meet_num_placements(monkeypatch):
         requested.append(n_desired)
         return _atop_specs(n_desired, filter_spec)
 
+    _patch_fill(
+        monkeypatch,
+        fill_mod,
+        enumerate_fn=_enumerate_from(make_specs),
+        materialize_fn=_materialize_every_other(),
+    )
+    result = _run_fill(
+        fill_mod,
+        AdsorptionConfig(
+            material_type="slab",
+            num_placements=4,
+            placement_retry_enabled=False,
+            placement_retry_oversample_max=4.0,
+            seed=0,
+        ),
+    )
+    assert len(result.combined) == 4
+    assert requested[0] >= 4
+    assert result.n_attempts == 1
+
+
+def test_fill_diversity_retry(monkeypatch):
+    """Short first pass triggers one failed-key retry with fresh indices."""
+    from metalsurfer.workflow import placement_fill as fill_mod
+    from metalsurfer.workflow.placement_fill import placement_spec_key
+
+    seen_keys: list[set[tuple]] = []
+    attempt_indices: list[list[int]] = []
+    round_id = {"n": 0}
+
+    def make_specs(n_desired, filter_spec):
+        base = 1000 * round_id["n"]
+        round_id["n"] += 1
+        specs = [
+            _round_atop_placement_spec(i, site_index=base + i) for i in range(n_desired)
+        ]
+        filtered = _filter_specs(specs, filter_spec)
+        seen_keys.append({placement_spec_key(s) for s in filtered})
+        return filtered
+
     def fake_materialize(**kwargs):
-        combined = []
-        ids = []
-        descs = []
-        failures = []
-        for i, spec in enumerate(kwargs["specs"]):
-            if i % 2 == 0:
-                desc = make_placement_descriptor(placement_id=spec.placement_index)
-                combined.append(Atoms("H"))
-                ids.append(spec.placement_index)
-                descs.append(desc)
-            else:
-                failures.append(
-                    PlacementFailureEvent(
-                        placement_id=spec.placement_index,
-                        stage="generation",
-                        reason="too_close",
-                        descriptor=None,
-                    )
-                )
-        return combined, ids, descs, failures
+        specs = kwargs["specs"]
+        attempt_indices.append([s.placement_index for s in specs])
+        if len(attempt_indices) == 1:
+            return _materialize_all_fail()(specs=specs)
+        return _materialize_all_succeed()(specs=specs)
 
     _patch_fill(
         monkeypatch,
@@ -685,68 +690,24 @@ def test_fill_oversamples_to_meet_num_placements(monkeypatch):
         enumerate_fn=_enumerate_from(make_specs),
         materialize_fn=fake_materialize,
     )
-
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=4,
-        placement_retry_enabled=True,
-        placement_retry_max_attempts=3,
-        placement_retry_oversample_max=4.0,
-        seed=0,
-    )
-    result = _run_fill(fill_mod, config)
-    assert len(result.combined) == 4
-    assert requested[0] >= 4  # oversampled beyond exact remaining
-    assert result.n_attempts <= 3
-
-
-def test_fill_placement_indices_disjoint_across_oversampled_attempts(monkeypatch):
-    """Monotonic placement_index must not collide when n_request > n_target."""
-    from metalsurfer.workflow import placement_fill as fill_mod
-
-    attempt_indices: list[list[int]] = []
-
-    def fake_materialize(**kwargs):
-        attempt_indices.append([spec.placement_index for spec in kwargs["specs"]])
-        return (
-            [],
-            [],
-            [],
-            [
-                PlacementFailureEvent(
-                    placement_id=spec.placement_index,
-                    stage="generation",
-                    reason="too_close",
-                    descriptor=None,
-                )
-                for spec in kwargs["specs"]
-            ],
-        )
-
-    _patch_fill(
-        monkeypatch,
+    result = _run_fill(
         fill_mod,
-        enumerate_fn=_enumerate_from(_atop_specs),
-        materialize_fn=fake_materialize,
+        AdsorptionConfig(
+            material_type="slab",
+            num_placements=4,
+            placement_retry_enabled=True,
+            placement_retry_oversample_max=2.0,
+            seed=0,
+        ),
     )
-
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=4,
-        placement_retry_enabled=True,
-        placement_retry_max_attempts=2,
-        placement_retry_oversample_max=6.0,
-        seed=0,
-    )
-    _run_fill(fill_mod, config)
-    assert len(attempt_indices) >= 2
-    flat = [idx for batch in attempt_indices for idx in batch]
-    assert len(flat) == len(set(flat)), (
-        "placement_index values must be unique across attempts"
-    )
+    assert len(result.combined) == 4
+    assert result.n_attempts == 2
+    assert seen_keys[0].isdisjoint(seen_keys[1])
+    flat = [i for batch in attempt_indices for i in batch]
+    assert len(flat) == len(set(flat))
 
 
-def test_fill_early_stops_on_empty_enumeration(monkeypatch):
+def test_fill_empty_enumeration(monkeypatch):
     from metalsurfer.workflow import placement_fill as fill_mod
 
     calls = {"n": 0}
@@ -756,26 +717,13 @@ def test_fill_early_stops_on_empty_enumeration(monkeypatch):
         return []
 
     _patch_fill(monkeypatch, fill_mod, enumerate_fn=_enumerate_from(make_specs))
-
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=5,
-        placement_retry_enabled=True,
-        placement_retry_max_attempts=3,
-        seed=0,
+    result = _run_fill(
+        fill_mod,
+        AdsorptionConfig(material_type="slab", num_placements=5, seed=0),
     )
-    result = _run_fill(fill_mod, config)
     assert result.combined == []
-    assert calls["n"] == 1  # early exit; no wasted attempts
-    assert result.n_attempts == 1
-
-
-def test_request_count_respects_oversample_cap():
-    from metalsurfer.workflow.placement_fill import _request_count
-
-    assert _request_count(10, yield_est=0.5, oversample_max=4.0) == 20
-    assert _request_count(10, yield_est=0.05, oversample_max=4.0) == 40
-    assert _request_count(10, yield_est=1.0, oversample_max=4.0) == 10
+    assert calls["n"] == 1
+    assert result.n_attempts == 0
 
 
 def test_resolve_materialize_workers_joblib_semantics():
@@ -793,7 +741,6 @@ def test_resolve_materialize_workers_joblib_semantics():
 
 def test_placement_workers_inherit_global_n_jobs():
     """placement_materialize_workers=None must inherit the global n_jobs knob."""
-    from metalsurfer.config import AdsorptionConfig
     from metalsurfer.placement.generators import (
         generate_placements_from_specs,
         resolve_materialize_workers,
@@ -801,39 +748,26 @@ def test_placement_workers_inherit_global_n_jobs():
 
     config = AdsorptionConfig(n_jobs=3, placement_materialize_workers=None)
     inherited = (
-        config.placement_materialize_workers
-        if config.placement_materialize_workers is not None
-        else config.n_jobs
+        config.n_jobs
+        if config.placement_materialize_workers is None
+        else config.placement_materialize_workers
     )
     assert inherited == 3
     assert resolve_materialize_workers(inherited, n_tasks=10, cpu_count=8) == 3
-    # An explicit override wins over the global knob.
-    config_override = AdsorptionConfig(n_jobs=3, placement_materialize_workers=1)
-    assert config_override.placement_materialize_workers == 1
+    assert (
+        AdsorptionConfig(
+            n_jobs=3, placement_materialize_workers=1
+        ).placement_materialize_workers
+        == 1
+    )
 
-    # Smoke: serial and threaded paths return identical ordering.
     slab = Atoms("Cu2", positions=[[0, 0, 0], [0, 0, 1.8]])
     slab.set_cell([8.0, 8.0, 20.0])
     slab.set_pbc([True, True, False])
     adsorbate = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]])
-    from metalsurfer.models import PlacementSpec
-
-    specs = [
-        PlacementSpec(
-            conformer_index=0,
-            orientation_type="round",
-            site_index=0,
-            tilt_deg=0.0,
-            azimuth_deg=0.0,
-            azimuth_in_plane_deg=0.0,
-            z_fraction=0.5,
-            face_flip=False,
-            en_atom_index=None,
-            site_type=None,
-            placement_index=i,
-        )
-        for i in range(2)
-    ]
+    specs = [_round_atop_placement_spec(i) for i in range(2)]
+    for i, spec in enumerate(specs):
+        spec.placement_index = i
     results_a = generate_placements_from_specs(
         specs, [adsorbate], slab, AdsorptionConfig(n_jobs=1)
     )
@@ -848,353 +782,78 @@ def test_placement_workers_inherit_global_n_jobs():
         assert np.allclose(res_a[0].get_positions(), res_b[0].get_positions())
 
 
-def test_fill_yield_floor_keeps_oversampling_after_zero_success(monkeypatch):
-    """A zero-success round must not collapse the next request to remaining only."""
+def test_materialize_specs_trims_to_target(monkeypatch):
     from metalsurfer.workflow import placement_fill as fill_mod
 
-    requested = []
-
-    def make_specs(n_desired, filter_spec):
-        requested.append(n_desired)
-        specs = [
-            _round_atop_placement_spec(i, site_index=i + 1000 * len(requested))
-            for i in range(n_desired)
-        ]
-        return _filter_specs(specs, filter_spec)
-
-    def fake_materialize(**kwargs):
-        failures = [
-            PlacementFailureEvent(
-                placement_id=spec.placement_index,
-                stage="generation",
-                reason="too_close",
-                descriptor=None,
-            )
-            for spec in kwargs["specs"]
-        ]
-        # Fail entirely on first attempt; succeed all on later attempts.
-        if len(requested) == 1:
-            return [], [], [], failures
-        combined = []
-        ids = []
-        descs = []
-        for spec in kwargs["specs"]:
-            combined.append(Atoms("H"))
-            ids.append(spec.placement_index)
-            descs.append(make_placement_descriptor(placement_id=spec.placement_index))
-        return combined, ids, descs, []
-
-    _patch_fill(
-        monkeypatch,
-        fill_mod,
-        enumerate_fn=_enumerate_from(make_specs),
-        materialize_fn=fake_materialize,
+    monkeypatch.setattr(
+        fill_mod, "_materialize_spec_placements", _materialize_all_succeed()
     )
-
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=4,
-        placement_retry_enabled=True,
-        placement_retry_max_attempts=3,
-        placement_retry_oversample_max=4.0,
-        seed=0,
-    )
-    result = _run_fill(fill_mod, config)
-    assert len(result.combined) == 4
-    assert len(requested) >= 2
-    # After zero yield, next round still oversamples (cap = remaining * 4).
-    assert requested[1] >= 4
-
-
-def test_backfill_oversamples_by_yield(monkeypatch):
-    """Backfill requests more than remaining when observed yield is low."""
-    from metalsurfer.workflow import placement_fill as fill_mod
-
-    chunk_sizes = []
-
-    def fake_materialize(**kwargs):
-        specs = kwargs["specs"]
-        chunk_sizes.append(len(specs))
-        combined = []
-        ids = []
-        descs = []
-        failures = []
-        for i, spec in enumerate(specs):
-            if i % 2 == 0:
-                desc = make_placement_descriptor(placement_id=spec.placement_index)
-                combined.append(Atoms("H"))
-                ids.append(spec.placement_index)
-                descs.append(desc)
-            else:
-                failures.append(
-                    PlacementFailureEvent(
-                        placement_id=spec.placement_index,
-                        stage="generation",
-                        reason="too_close",
-                        descriptor=None,
-                    )
-                )
-        return combined, ids, descs, failures
-
-    monkeypatch.setattr(fill_mod, "_materialize_spec_placements", fake_materialize)
-
-    primary = [_round_atop_placement_spec(i) for i in range(2)]
-    # First primary succeeds once (50% of 2) → need 3 more; yield_est=0.5 → request 6.
-    backfill = [
-        _round_atop_placement_spec(100 + i, site_index=100 + i) for i in range(20)
-    ]
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=4,
-        placement_retry_oversample_max=4.0,
-        placement_materialize_workers=1,
-    )
-    result = fill_mod.materialize_specs_filling_target(
-        primary_specs=primary,
-        backfill_specs=backfill,
+    result = fill_mod.materialize_specs(
+        specs=[_round_atop_placement_spec(i) for i in range(6)],
         n_target=4,
         conformers=[make_water()],
         slab_atoms=make_slab(),
         calculator=None,
-        config=config,
+        config=AdsorptionConfig(
+            material_type="slab",
+            placement_fill_clamp_to_capacity=False,
+        ),
         smiles="O",
         site_context=None,
     )
     assert len(result.combined) == 4
-    assert chunk_sizes[0] == 2  # primary
-    assert chunk_sizes[1] >= 4  # oversampled backfill for remaining=3 at 50% yield
+    assert result.placement_ids == [0, 1, 2, 3]
+    assert result.n_attempts == 1
 
 
 def test_fill_clamps_target_to_capacity(monkeypatch, caplog):
-    """R1: target is clamped to enumerable capacity; warns and bounds attempts."""
     import logging
 
     from metalsurfer.workflow import placement_fill as fill_mod
 
-    CAPACITY = 2
-
-    def fake_estimate(*args, **kwargs):
-        return float(CAPACITY)
-
-    monkeypatch.setattr(fill_mod, "estimate_placement_capacity", fake_estimate)
-
+    monkeypatch.setattr(fill_mod, "estimate_placement_capacity", lambda *a, **k: 2.0)
     _patch_fill(
         monkeypatch,
         fill_mod,
         enumerate_fn=_enumerate_from(_atop_specs),
         materialize_fn=_materialize_all_succeed(),
     )
-
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=10,
-        placement_retry_enabled=True,
-        placement_retry_max_attempts=8,
-        seed=0,
-    )
     with caplog.at_level(logging.WARNING):
-        result = _run_fill(fill_mod, config)
-    assert len(result.combined) <= CAPACITY
-    assert len(result.combined) == CAPACITY  # fully reachable here
-    assert result.n_attempts < config.placement_retry_max_attempts
+        result = _run_fill(
+            fill_mod,
+            AdsorptionConfig(
+                material_type="slab",
+                num_placements=10,
+                placement_retry_enabled=False,
+                seed=0,
+            ),
+        )
+    assert len(result.combined) == 2
+    assert result.n_attempts == 1
     assert any("clamped from" in r.message for r in caplog.records)
 
 
-def test_early_stop_on_plateaued_yield(monkeypatch):
-    """R2: give up after `patience` consecutive zero-yield retry attempts."""
-    from metalsurfer.workflow import placement_fill as fill_mod
-
-    calls = {"n": 0}
-
-    def make_specs(n_desired, filter_spec):
-        return _atop_specs(min(n_desired, 4), filter_spec)
-
-    def fake_materialize(**kwargs):
-        calls["n"] += 1
-        combined, ids, descs, failures = [], [], [], []
-        # Succeed exactly once (first spec of the very first materialization).
-        for j, spec in enumerate(kwargs["specs"]):
-            if calls["n"] == 1 and j == 0:
-                desc = make_placement_descriptor(placement_id=spec.placement_index)
-                combined.append(Atoms("H"))
-                ids.append(spec.placement_index)
-                descs.append(desc)
-            else:
-                failures.append(
-                    PlacementFailureEvent(
-                        placement_id=spec.placement_index,
-                        stage="generation",
-                        reason="too_close",
-                        descriptor=None,
-                    )
-                )
-        return combined, ids, descs, failures
-
-    _patch_fill(
-        monkeypatch,
-        fill_mod,
-        enumerate_fn=_enumerate_from(make_specs),
-        materialize_fn=fake_materialize,
-    )
-
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=10,
-        placement_retry_enabled=True,
-        placement_retry_max_attempts=8,
-        placement_retry_early_stop_patience=2,
-        seed=0,
-    )
-    result = _run_fill(fill_mod, config)
-    # 1 successful attempt + 2 zero-yield attempts -> early stop at 3.
-    assert result.n_attempts == 3
-    assert len(result.combined) == 1
-
-
-def test_cell_tracking_skips_retried_cells(monkeypatch):
-    """R3: the same discrete cell is never materialized more than once across
-    retry attempts (the failed-key/partial-unblock filters keep it excluded)."""
-    from metalsurfer.workflow import placement_fill as fill_mod
-    from metalsurfer.workflow.placement_fill import placement_cell_key
-
-    # Large fixed pool of distinct cells so the pool never exhausts (no fallback
-    # re-materialization); check_cells must then keep every cell in <=1 batch.
-    POOL_SIZE = 200
-    pool = [_round_atop_placement_spec(i) for i in range(POOL_SIZE)]
-
-    seen_cells: list[list] = []
-
-    def make_specs(n_desired, filter_spec):
-        specs = [s for s in pool if filter_spec is None or filter_spec(s)]
-        return specs[:n_desired]
-
-    def spy_materialize(**kwargs):
-        specs = kwargs["specs"]
-        seen_cells.append([placement_cell_key(s) for s in specs])
-        return (
-            [],
-            [],
-            [],
-            [
-                PlacementFailureEvent(
-                    placement_id=s.placement_index,
-                    stage="generation",
-                    reason="too_close",
-                    descriptor=None,
-                )
-                for s in specs
-            ],
-        )
-
-    _patch_fill(
-        monkeypatch,
-        fill_mod,
-        enumerate_fn=_enumerate_from(make_specs),
-        materialize_fn=spy_materialize,
-    )
-
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=10,
-        placement_retry_enabled=True,
-        placement_retry_max_attempts=3,
-        placement_retry_early_stop_patience=100,
-        seed=0,
-    )
-    _run_fill(fill_mod, config)
-    # No discrete cell may be materialized in more than one attempt's batch.
-    seen_per_cell: dict = {}
-    for batch_idx, batch in enumerate(seen_cells):
-        for cell in batch:
-            assert cell not in seen_per_cell or seen_per_cell[cell] == batch_idx, (
-                f"cell {cell} materialized in batches "
-                f"{seen_per_cell.get(cell)} and {batch_idx}"
-            )
-            seen_per_cell[cell] = batch_idx
-
-
-def test_pool_empty_partial_unblock(monkeypatch, caplog):
-    """R4: failed-key filter empties pool -> partial unblock (filter kept),
-    with unfiltered fallback only as a last resort."""
-    import logging
-
-    from metalsurfer.workflow import placement_fill as fill_mod
-
-    known_specs = [
-        _round_atop_placement_spec(i, site_index=3, site_type="hollow")
-        for i in range(3)
-    ]
-    known = known_specs[0]
-    # Per enumerate call, record whether the failed-key block is still active.
-    filter_accepts_known: list[bool] = []
-
-    def make_specs(_n_desired, filter_spec):
-        if filter_spec is not None:
-            filter_accepts_known.append(bool(filter_spec(known)))
-        else:
-            filter_accepts_known.append(True)
-        return [s for s in known_specs if filter_spec is None or filter_spec(s)]
-
-    _patch_fill(
-        monkeypatch,
-        fill_mod,
-        enumerate_fn=_enumerate_from(make_specs),
-        materialize_fn=_materialize_all_fail("too_close"),
-    )
-
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=3,
-        placement_retry_enabled=True,
-        placement_retry_max_attempts=4,
-        placement_retry_early_stop_patience=2,
-        seed=0,
-    )
-    with caplog.at_level(logging.WARNING):
-        _run_fill(fill_mod, config)
-    # First call: block empty -> accepts. Then pool-empty: partial unblock keeps
-    # the failed-key block (rejects), and only the last-resort fallback drops it.
-    assert filter_accepts_known[0] is True
-    rejecting = [i for i, v in enumerate(filter_accepts_known) if not v]
-    accepting_after = [i for i, v in enumerate(filter_accepts_known) if v]
-    assert rejecting, "expected a partial-unblock re-enumeration that keeps the filter"
-    assert max(rejecting) < max(accepting_after), (
-        "unfiltered fallback should be a last resort after the partial unblock"
-    )
-    assert any("still empty after partial unblock" in r.message for r in caplog.records)
-
-
 def test_clamp_flag_false_legacy(monkeypatch):
-    """Legacy behavior: with clamp disabled, the full target is attempted
-    even when enumerable capacity is far smaller."""
     from metalsurfer.workflow import placement_fill as fill_mod
 
-    CAPACITY = 2
-
-    def fake_estimate(*args, **kwargs):
-        return float(CAPACITY)
-
-    monkeypatch.setattr(fill_mod, "estimate_placement_capacity", fake_estimate)
-
+    monkeypatch.setattr(fill_mod, "estimate_placement_capacity", lambda *a, **k: 2.0)
     _patch_fill(
         monkeypatch,
         fill_mod,
         enumerate_fn=_enumerate_from(_atop_specs),
         materialize_fn=_materialize_all_succeed(),
     )
-
-    n_target = 10
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=n_target,
-        placement_retry_enabled=True,
-        placement_retry_max_attempts=8,
-        placement_fill_clamp_to_capacity=False,
-        seed=0,
+    result = _run_fill(
+        fill_mod,
+        AdsorptionConfig(
+            material_type="slab",
+            num_placements=10,
+            placement_retry_enabled=False,
+            placement_fill_clamp_to_capacity=False,
+            seed=0,
+        ),
     )
-    result = _run_fill(fill_mod, config)
-    assert len(result.combined) == n_target
-    assert len(result.combined) > CAPACITY
+    assert len(result.combined) == 10
 
 
 def test_filter_sites_by_occupancy_mic_wrap():

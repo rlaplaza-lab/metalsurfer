@@ -257,8 +257,6 @@ _CLASH_DESCENT_NEIGHBOR_CUTOFF_ANGSTROM: float = 6.0
 _CLASH_AZIMUTH_DELTA_EPS_DEG: float = 1e-15
 # Below this min-distance, n-tuplet near-miss rescue skips (atoms stacked).
 _TUPLET_CLASH_RESCUE_FLOOR: float = 0.5  # Å
-# Block a site_index on placement retry after this many clash/distance failures.
-_RETRY_BLOCK_SITE_AFTER: int = 2
 # One-shot Voronoi accessibility widen when the first window finds no sites.
 _VORONOI_AUTO_WIDEN_PROBE_SCALE: float = 0.8
 _VORONOI_AUTO_WIDEN_MAX_SCALE: float = 1.25

@@ -251,23 +251,6 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
     if root.num_placements is not None:
         _check_positive_int("num_placements", root.num_placements)
 
-    if root.placement_retry_enabled:
-        _check_positive_int(
-            "placement_retry_max_attempts", root.placement_retry_max_attempts
-        )
-        _check_positive_int(
-            "placement_retry_diversity_seed_increment",
-            root.placement_retry_diversity_seed_increment,
-        )
-        _check_positive_int(
-            "placement_retry_early_stop_patience",
-            root.placement_retry_early_stop_patience,
-        )
-    if root.placement_retry_early_stop_patience < 1:
-        raise ValueError(
-            "placement_retry_early_stop_patience must be >= 1, "
-            f"got {root.placement_retry_early_stop_patience}"
-        )
     if root.placement_retry_oversample_max < 1.0:
         raise ValueError(
             "placement_retry_oversample_max must be >= 1.0, "
@@ -743,17 +726,14 @@ class AdsorptionConfig:
     fail_on_missing_reference: bool = False
     fail_on_conformer_failure: bool = False
     debug_write_initial_placements: bool = False
+    # When True and the first one-shot pass is short, run one diversity round
+    # that re-enumerates excluding exact failed-spec keys.
     placement_retry_enabled: bool = True
-    placement_retry_max_attempts: int = 8
-    placement_retry_diversity_seed_increment: int = 1000
-    # Max specs requested per deficit round as a multiple of remaining slots.
+    # Cap on specs requested for one-shot fill as a multiple of the target count.
     placement_retry_oversample_max: float = 6.0
-    # When True, clamp the fill target to the enumerable spec capacity so the
-    # retry loop cannot spin until max_attempts on an unreachable target.
+    # When True, clamp the fill target to the enumerable spec capacity so fill
+    # cannot request more successes than occupancy-aware enumeration can supply.
     placement_fill_clamp_to_capacity: bool = True
-    # Consecutive zero-yield retry attempts before giving up early (a plateau
-    # signal). placement_retry_max_attempts remains the absolute hard cap.
-    placement_retry_early_stop_patience: int = 2
     # Global CPU-parallelism knob (joblib convention): ``1`` is serial, positive
     # values use that many workers, ``-1`` uses all CPUs, ``-2`` uses all but
     # one. Woven through every CPU-parallel stage: placement materialization

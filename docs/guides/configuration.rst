@@ -127,14 +127,13 @@ Placement success levers
 - **Site window** — ``voronoi_auto_widen=True`` retries once with a wider Voronoi
   accessibility window when the first pass finds no sites; pair with explicit
   ``voronoi_probe_radius`` / ``voronoi_max_site_distance`` when comparing windows.
-- **Retries** — ``placement_retry_*`` re-enumerates remaining slots with new seeds
-  after generation failures. Each deficit round oversamples by estimated
-  materialization yield (capped by ``placement_retry_oversample_max``) and stops
-  early when the target is met or enumeration returns nothing. Per-spec
+- **Fill** — one-shot oversample (``placement_retry_oversample_max``) requests
+  ``min(capacity, num_placements * oversample)`` specs, materializes once, and
+  keeps up to ``num_placements``. When ``placement_retry_enabled`` and the first
+  pass is short, one diversity round excludes exact failed-spec keys. Per-spec
   materialization runs in a thread pool sized by ``placement_materialize_workers``
-  (joblib-style; default ``-2`` = all but one CPU). BO eval batches backfill from
-  the unused valid pool (also yield-oversampled) so each step still reaches its
-  requested size before relaxation.
+  (joblib-style; default ``-2`` = all but one CPU). BO eval batches wrap the
+  pre-materialized geometry-valid cache (no generation backfill).
 - **Gates** — keep ``reject_vdw_overlaps`` and ``strict_initial_placement`` off
   unless you need stricter starts (they reduce yield).
 

@@ -506,55 +506,6 @@ class TestFeatureBuilding:
             assert pid == desc.placement_index
             assert len(ads) > 0
 
-    def test_materialize_backfill_fills_batch_target(self, monkeypatch):
-        """Primary materialization misses are replaced from backfill specs."""
-        from metalsurfer.workflow import placement_fill as fill_mod
-        from metalsurfer.workflow.shared import PlacementFailureEvent
-
-        primary = [_placement_spec(0), _placement_spec(1)]
-        backfill = [_placement_spec(2), _placement_spec(3)]
-        fail_ids = {0}
-
-        def fake_materialize(**kwargs):
-            combined = []
-            ids = []
-            descs = []
-            failures = []
-            for spec in kwargs["specs"]:
-                if spec.placement_index in fail_ids:
-                    failures.append(
-                        PlacementFailureEvent(
-                            placement_id=spec.placement_index,
-                            stage="generation",
-                            reason="too_close",
-                            descriptor=None,
-                        )
-                    )
-                    continue
-                desc = make_placement_descriptor(placement_id=spec.placement_index)
-                combined.append(Atoms("H"))
-                ids.append(spec.placement_index)
-                descs.append(desc)
-            return combined, ids, descs, failures
-
-        monkeypatch.setattr(fill_mod, "_materialize_spec_placements", fake_materialize)
-        result = fill_mod.materialize_specs_filling_target(
-            primary_specs=primary,
-            backfill_specs=backfill,
-            n_target=2,
-            conformers=[make_water()],
-            slab_atoms=make_slab(),
-            calculator=None,
-            config=AdsorptionConfig(
-                num_placements=2,
-                placement_retry_oversample_max=1.0,
-            ),
-            smiles="O",
-            site_context=None,
-        )
-        assert len(result.combined) == 2
-        assert set(result.placement_ids) == {1, 2}
-
     def test_record_from_descriptor_roundtrip(self):
         d = _bayesian_descriptor(7)
         record = PlacementRecord.from_descriptor(d, molecule="mol", smiles="C")

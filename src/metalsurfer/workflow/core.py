@@ -25,7 +25,7 @@ from ..result_paths import molecule_all_xyz_dir, results_dir_for
 from ..surface_prep import SlabContainer
 from .placement_fill import (
     fill_materialized_placements,
-    materialize_specs_filling_target,
+    materialize_specs,
 )
 from .shared import (
     MoleculeScreenOutcome,
@@ -336,25 +336,20 @@ def _evaluate_placement_batch(
     base_slab_for_frozen: Atoms | None = None,
     slab_for_sites: Atoms | None = None,
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
-    backfill_specs: list | None = None,
-    n_target: int | None = None,
     saturation_reuse: bool = False,
 ) -> tuple[list[ScreeningResult], list[PlacementFailureEvent]]:
-    """Run placement-generation + optimization + validation for a batch of specs.
+    """Run placement wrap + optimization + validation for a batch of specs.
 
-    When ``backfill_specs`` is provided, materialization failures in ``specs`` are
-    replaced from the backfill list until ``n_target`` (default: ``len(specs)``)
-    geometry-valid placements are obtained or the backfill is exhausted.
+    BO callers pass a pre-validated pool; ``materialization_cache`` supplies
+    geometry-valid adsorbates so generation is a cache hit (no backfill).
 
     Returns
     -------
     ``(results, failures)``
     """
-    target = len(specs) if n_target is None else n_target
-    fill = materialize_specs_filling_target(
-        primary_specs=specs,
-        backfill_specs=backfill_specs or [],
-        n_target=target,
+    fill = materialize_specs(
+        specs=specs,
+        n_target=len(specs),
         conformers=conformers,
         slab_atoms=slab.atoms,
         calculator=calculator,
@@ -363,6 +358,7 @@ def _evaluate_placement_batch(
         site_context=site_context,
         slab_for_sites=slab_for_sites,
         materialization_cache=materialization_cache,
+        clamp_log_label=" (BO)",
     )
     all_combined = fill.combined
     placement_ids = fill.placement_ids
