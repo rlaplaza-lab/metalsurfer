@@ -98,6 +98,8 @@ def _site_context_cache_key(
 
 def _store_site_context_cache(cache_key: str, ctx: SiteContext) -> SiteContext:
     with _SITE_CONTEXT_CACHE_LOCK:
+        if cache_key in _SITE_CONTEXT_CACHE:
+            return _SITE_CONTEXT_CACHE[cache_key]
         if len(_SITE_CONTEXT_CACHE) >= _SITE_CONTEXT_CACHE_MAX_ENTRIES:
             _SITE_CONTEXT_CACHE.pop(next(iter(_SITE_CONTEXT_CACHE)))
         _SITE_CONTEXT_CACHE[cache_key] = ctx
@@ -160,7 +162,7 @@ def resolve_site_context_for_sampling(
                 raw_sites=raw_unclustered,
             )
         except SymmetryAnalysisError as exc:
-            logger.info(
+            logger.warning(
                 "Symmetry site reduction failed; using clustered Voronoi sites (%s)",
                 exc,
             )

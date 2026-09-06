@@ -1,0 +1,91 @@
+# Bayesian & Multi-Molecule Implementation Guide
+
+## Scope
+
+This guide contains approved implementation tasks and specifications for the Bayesian optimization (`workflow/bayesian.py`, `ml/bayesian.py`) and saturation pipelines.
+
+---
+
+## Approved Implementation Tasks
+
+### 1. Hoist Static `pid_to_pool_position` Map in Bayesian Workflow
+
+**Location:** `src/metalsurfer/workflow/bayesian.py:448-455` and `587-594`
+
+**Rationale:**
+In `process_molecule_bayesian()`, inside `_run_batch()`, the dictionary comprehension:
+```python
+pid_to_pool_position: dict[int, int] = {
+    all_specs[valid_spec_indices[pos]].placement_index: pos
+    for pos in used_positions
+}
+```
+is reconstructed on every batch iteration. Because `all_specs` and `valid_spec_indices` are fixed across all BO acquisition rounds, the mapping from `placement_index` to pool position `p` is invariant. Constructing this dictionary once upfront before the batch loop eliminates repeated dict allocations and clarifies data ownership.
+
+**Implementation:**
+In `src/metalsurfer/workflow/bayesian.py`:
+1. Define `pid_to_pool_position` once upfront after `scaled_candidate_features` (around line 448):
+```python
+    # Standardize the fixed candidate pool once for diversity across rounds.
+    scaled_candidate_features = StandardScaler().fit_transform(
+        candidate_features.to_numpy(dtype=float)
+    )
+    pid_to_pool_position: dict[int, int] = {
+        all_specs[valid_spec_indices[p]].placement_index: p
+        for p in range(len(valid_spec_indices))
+    }
+    evaluated_pool_positions: set[int] = set()
+```
+
+2. In `_run_batch()` (around line 586), remove the per-batch comprehension and directly use the outer `pid_to_pool_position`:
+```python
+        if config.bo.include_failure_negatives:
+            for event in batch_failures:
+                pool_pos = pid_to_pool_position.get(event.placement_id)
+                if pool_pos is None:
+                    continue
+                spec = all_specs[valid_spec_indices[pool_pos]]
+                record = (
+                    PlacementRecord.from_descriptor(
+                        event.descriptor,
+                        molecule=molecule_name,
+                        smiles=smiles,
+                        surface_id=surface_type,
+                        config=config,
+                    )
+                    if event.descriptor is not None
+                    else PlacementRecord.from_spec(
+                        spec,
+                        molecule=molecule_name,
+                        smiles=smiles,
+                        surface_id=surface_type,
+                        config=config,
+                    )
+                )
+                _append_penalty_observation(record, event.stage, event.reason)
+```
+
+---
+
+### 2. Failure Observation Recording Rules (Direction 3)
+
+**Location:** `src/metalsurfer/workflow/bayesian.py:490-498, 613, 743`
+
+**Specifications:**
+
+1. **Failure Stage Naming:**
+   - Retain the exact pipeline stage string from `PlacementFailureEvent.stage` (`"generation"`, `"validation"`, `"optimization"`, `"energy_cap"`, `"filter"`) in `record.failure_stage`.
+   - Do NOT collapse or alias these stages into a generic `"geometric_rejection"`.
+   - *Rationale:* Maintaining granular stage attribution allows downstream analytics and surrogate penalization to distinguish between initial steric clashes (`"generation"`), substrate drift or geometry breakdown (`"validation"`), energy threshold cutoffs (`"energy_cap"`), and diversity filtering (`"filter"`).
+
+2. **Exclusion of `max_winners` from Penalty Observations:**
+   - Do NOT record failure penalty observations for candidates excluded solely because `max_winners` was reached during post-processing.
+   - *Rationale:* `max_winners` is an arbitrary post-processing capacity cut. Placements dropped by `max_winners` are physically valid, relaxed local minima. Recording penalty observations for these candidates would distort the Bayesian surrogate acquisition surface by penalizing favorable adsorption regions.
+
+---
+
+## Validation Strategy
+
+1. Run Bayesian workflow tests:
+   `pytest tests/test_bayesian.py -v`
+2. Verify that negative penalty records generated with `config.bo.include_failure_negatives = True` correctly map placement IDs to pool positions without key errors.

@@ -468,6 +468,8 @@ def _enumerate_unified_sites(
     site_classification_method: str = "auto",
 ) -> list[Site]:
     """Core site enumeration (single pass, no auto-widen)."""
+    if len(atoms) == 0:
+        raise ValueError("atoms must contain at least one atom")
     if material_type is None:
         raise ValueError(
             "material_type must be explicitly specified: 'slab', 'nanoparticle', or 'porous'"
@@ -1065,15 +1067,17 @@ def _top_layer_is_planar_from_arrays(
     if top_mask is None:
         top_mask = top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
     top_indices = np.nonzero(top_mask)[0]
-    if len(top_indices) < 3:
-        return False
     top_pos = positions[top_indices]
+    if len(top_indices) < 3:
+        h = _height_along_slab_normal(top_pos, cell)
+        return float(np.var(h)) < z_variance_threshold
     xy = _project_to_slab_plane(top_pos, cell)
     h = _height_along_slab_normal(top_pos, cell)
     A = np.column_stack([xy[:, 0], xy[:, 1], np.ones(len(xy))])
     coeffs, _residuals, rank, _ = np.linalg.lstsq(A, h, rcond=None)
     if rank < 3:
-        return False
+        h = _height_along_slab_normal(top_pos, cell)
+        return float(np.var(h)) < z_variance_threshold
     h_pred = A @ coeffs
     return float(np.var(h - h_pred)) < z_variance_threshold
 

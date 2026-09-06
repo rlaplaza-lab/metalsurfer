@@ -446,6 +446,10 @@ def process_molecule_bayesian(
     scaled_candidate_features = StandardScaler().fit_transform(
         candidate_features.to_numpy(dtype=float)
     )
+    pid_to_pool_position: dict[int, int] = {
+        all_specs[valid_spec_indices[p]].placement_index: p
+        for p in range(len(valid_spec_indices))
+    }
     evaluated_pool_positions: set[int] = set()
     all_results: list[ScreeningResult] = []
     observed_X_rows: list[dict[str, float]] = []
@@ -584,10 +588,6 @@ def process_molecule_bayesian(
                 best_X_row = dict(features)
 
         if config.bo.include_failure_negatives:
-            pid_to_pool_position: dict[int, int] = {
-                all_specs[valid_spec_indices[pos]].placement_index: pos
-                for pos in used_positions
-            }
             for event in batch_failures:
                 pool_pos = pid_to_pool_position.get(event.placement_id)
                 if pool_pos is None:
@@ -754,6 +754,8 @@ def process_molecule_bayesian(
         if config.bo.include_failure_negatives:
             for event in filter_failures:
                 if event.descriptor is None:
+                    continue
+                if event.reason == "max_winners":
                     continue
                 record = PlacementRecord.from_descriptor(
                     event.descriptor,

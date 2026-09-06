@@ -270,6 +270,8 @@ def _get_dissociative_site_pairs(
         pre_resolved_sites=pre_resolved,
     )
     with _DISSOCIATIVE_PAIR_CACHE_LOCK:
+        if cache_key in _DISSOCIATIVE_PAIR_CACHE:
+            return list(_DISSOCIATIVE_PAIR_CACHE[cache_key])
         if len(_DISSOCIATIVE_PAIR_CACHE) >= _DISSOCIATIVE_PAIR_CACHE_MAX_ENTRIES:
             _DISSOCIATIVE_PAIR_CACHE.pop(next(iter(_DISSOCIATIVE_PAIR_CACHE)))
         _DISSOCIATIVE_PAIR_CACHE[cache_key] = list(pairs)
