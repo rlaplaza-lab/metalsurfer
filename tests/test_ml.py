@@ -556,9 +556,10 @@ class TestFeatureExtraction:
     def test_feature_count(self):
         r = make_placement_record()
         features = extract_features(r)
-        assert len(features) == 6
-        assert "x" not in features
-        assert "y" not in features
+        assert len(features) == 8
+        assert "x" in features
+        assert "y" in features
+        assert "z" in features
         assert "height_above_surface" not in features
         assert "xy_radius" not in features
         assert "shape_round" not in features
@@ -631,33 +632,30 @@ class TestFeatureExtraction:
         r2.descriptor.z_fraction = 0.9
         assert extract_features(r1) == extract_features(r2)
 
-    def test_feature_translation_rotation_invariance(self):
-        """Features must be unchanged by a 2D translation or SO(2) rotation.
-
-        A physically pose-relative feature vector depends only on the
-        placement's relationship to the surface (height, orientation), not on
-        the absolute in-plane Cartesian position, which is arbitrary under PBC.
-        In-plane x/y are therefore excluded from the feature set.
-        """
+    def test_feature_com_moves_with_translation(self):
+        """In-plane COM translation changes x/y features (replayable abs pose)."""
         from metalsurfer.ml.features import extract_features
 
         r0 = make_placement_record()
         f0 = extract_features(r0)
 
-        # 2D lattice translation of the adsorbate.
         r1 = make_placement_record()
         r1.descriptor.x_abs += 2.0
         r1.descriptor.y_abs += 1.0
         f1 = extract_features(r1)
-        assert f1 == f0
+        assert f1["x"] == pytest.approx(f0["x"] + 2.0)
+        assert f1["y"] == pytest.approx(f0["y"] + 1.0)
+        assert f1["z"] == f0["z"]
+        assert f1["quat_w"] == f0["quat_w"]
 
-        # SO(2) rotation about the surface normal: rotate the in-plane position.
         r2 = make_placement_record()
         x, y = float(r0.descriptor.x_abs), float(r0.descriptor.y_abs)
         r2.descriptor.x_abs = -y
         r2.descriptor.y_abs = x
         f2 = extract_features(r2)
-        assert f2 == f0
+        assert f2["x"] == pytest.approx(-y)
+        assert f2["y"] == pytest.approx(x)
+        assert f2["z"] == f0["z"]
 
     def test_extract_from_dataset(self):
         records = make_random_placement_records(20, variant="ml")
@@ -669,10 +667,11 @@ class TestFeatureExtraction:
             df = load_dataset(tmpdir)
             X, y = extract_features_from_dataset(df)
             assert X.shape[0] == 20
-            assert X.shape[1] == 6
+            assert X.shape[1] == 8
             assert len(y) == 20
-            assert "x" not in X.columns
-            assert "y" not in X.columns
+            assert "x" in X.columns
+            assert "y" in X.columns
+            assert "z" in X.columns
             assert "face_flip" not in X.columns
             assert "z_fraction" not in X.columns
 
@@ -685,11 +684,10 @@ class TestFeatureExtraction:
         r.descriptor.y_abs = -2.5
         r.descriptor.z_abs = 3.75
         features = extract_features(r)
-        # Height uses the absolute surface-frame coordinate, not the fractional
-        # offset; in-plane position is not a feature at all (pose-relative).
+        # Absolute COM, not fractional provenance offsets.
+        assert features["x"] == 1.25
+        assert features["y"] == -2.5
         assert features["z"] == 3.75
-        assert "x" not in features
-        assert "y" not in features
 
     def test_extract_from_dataset_requires_absolute_geometry_columns(self):
         records = make_random_placement_records(4, variant="ml")
@@ -723,7 +721,7 @@ class TestFeatureExtraction:
             with pytest.raises(ValueError, match="non-finite"):
                 extract_features_from_dataset(bad2)
 
-    def test_extract_from_dataset_warns_on_nan_quaternion(self, caplog):
+    def test_extract_from_dataset_rejects_nonfinite_quaternion(self):
         records = make_random_placement_records(3, variant="ml")
         with tempfile.TemporaryDirectory() as tmpdir:
             ds = DatasetLogger(tmpdir)
@@ -732,10 +730,8 @@ class TestFeatureExtraction:
             ds.flush()
             df = load_dataset(tmpdir)
             df.loc[0, "quat_w"] = float("nan")
-            with caplog.at_level(logging.WARNING, logger="metalsurfer.ml.features"):
-                X, _ = extract_features_from_dataset(df)
-            assert "identity default" in caplog.text
-            assert X.loc[0, "quat_w"] == pytest.approx(1.0)
+            with pytest.raises(ValueError, match="strict feature columns"):
+                extract_features_from_dataset(df)
 
     def test_extract_features_raises_on_none_quaternion(self):
         r = make_placement_record()

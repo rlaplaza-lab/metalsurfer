@@ -5,7 +5,11 @@ import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
-from metalsurfer.ml.features import FEATURE_NAMES, extract_features
+from metalsurfer.ml.features import (
+    FEATURE_NAMES,
+    extract_features,
+    placement_pose_from_features,
+)
 from metalsurfer.ml.schema import PlacementRecord
 from metalsurfer.models import PlacementSpec
 from metalsurfer.placement import (
@@ -20,6 +24,7 @@ from metalsurfer.placement.geometry import (
 )
 from metalsurfer.placement.pose import (
     _validate_posed_adsorbate,
+    generate_placement_from_pose,
 )
 from metalsurfer.placement.site_context import (
     _get_unique_sites_for_specs,
@@ -338,12 +343,11 @@ def test_placement_specs_deterministic_across_runs(
     assert specs_a != specs_c
 
 
-def test_molecular_ml_features_are_pose_relative():
-    """BO features encode height/orientation/conformer, not absolute position.
+def test_molecular_ml_features_encode_absolute_pose():
+    """BO features are the initial-pose replay ingredients (COM + quat + conformer).
 
-    Distinct poses (height or orientation) must yield distinct feature vectors,
-    while placements that differ only by an in-plane lattice translation are
-    deliberately collapsed onto the same vector (pose-relative contract).
+    Distinct placements must yield distinct feature vectors, including those that
+    differ only by an in-plane lattice translation.
     """
     slab = make_slab()
     water = make_water()
@@ -362,21 +366,44 @@ def test_molecular_ml_features_are_pose_relative():
         )
         feats = extract_features(record)
         assert list(feats.keys()) == FEATURE_NAMES
-        assert "x" not in feats
-        assert "y" not in feats
+        assert "x" in feats and "y" in feats
         assert "fragment_positions" not in feats
         feature_rows.append(tuple(round(feats[name], 10) for name in FEATURE_NAMES))
         x_abs_values.append(float(descriptor.x_abs))
+    assert len(FEATURE_NAMES) == 8
     assert len(feature_rows) >= 16
     assert len(set(feature_rows)) >= 16
-    # Pure in-plane translations must collide: proves no absolute x/y leakage.
+    # Pure in-plane translations must NOT collide once x/y are features.
     translation_collisions = sum(
         1
         for i in range(len(feature_rows))
         for j in range(i + 1, len(feature_rows))
         if feature_rows[i] == feature_rows[j] and x_abs_values[i] != x_abs_values[j]
     )
-    assert translation_collisions > 0
+    assert translation_collisions == 0
+
+
+def test_feature_row_replays_molecular_placement():
+    """extract_features → placement_pose_from_features → generate_placement_from_pose."""
+    slab = make_slab()
+    water = make_water()
+    config = AdsorptionConfig(material_type="slab", num_placements=8, seed=0)
+    _spec, generated = _first_successful_placement([water], slab, config, smiles="O")
+    assert generated is not None
+    adsorbate, descriptor = generated
+    record = PlacementRecord.from_descriptor(descriptor, molecule="water", smiles="O")
+    feats = extract_features(record)
+    assert list(feats.keys()) == FEATURE_NAMES
+    assert len(FEATURE_NAMES) == 8
+    pose = placement_pose_from_features(
+        feats, placement_index=descriptor.placement_index
+    )
+    replay = generate_placement_from_pose(pose, [water], slab, config)
+    assert replay is not None
+    replayed, _ = replay
+    np.testing.assert_allclose(
+        adsorbate.get_positions(), replayed.get_positions(), atol=1e-10
+    )
 
 
 def test_invalid_site_index_reason_distinct_from_no_sites():

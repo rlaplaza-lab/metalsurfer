@@ -7,16 +7,25 @@ imported eagerly because other modules depend on them at import time.
 """
 
 from .dataset import DatasetLogger, load_dataset
-from .features import extract_features, extract_features_from_dataset
+from .features import (
+    FEATURE_ABS_COLUMNS,
+    FEATURE_NAMES,
+    extract_features,
+    extract_features_from_dataset,
+    placement_pose_from_features,
+)
 from .schema import ComputationContext, PlacementRecord
 
 __all__ = [
     "ComputationContext",
     "DatasetLogger",
+    "FEATURE_ABS_COLUMNS",
+    "FEATURE_NAMES",
     "PlacementRecord",
     "extract_features",
     "extract_features_from_dataset",
     "load_dataset",
+    "placement_pose_from_features",
     "regression",
 ]
 

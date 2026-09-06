@@ -214,6 +214,11 @@ def _scale_budget_for_tuplet(config: AdsorptionConfig) -> AdsorptionConfig:
     atoms, so the probed pool size is floor-divided by the tuplet size before
     budget distribution. Applied once, right after resolution (the scaled
     config is written back, so repeat calls are never compounded).
+
+    Only ``num_placements`` is scaled. Bayesian eval budget
+    (``bo.initial_random + bo.total_budget * bo.batch_size``) is unchanged
+    because screening relaxations remain single-molecule; do not silently
+    shrink BO batches for n-tuplet.
     """
     n_per_step = config.saturation_molecules_per_step
     num_placements = config.num_placements

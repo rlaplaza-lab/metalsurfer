@@ -624,7 +624,8 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
    **Type:** ``Literal["random", "spread", "spread_xyz", "stratified"]`` · **Default:** ``"spread_xyz"``
 
    Strategy for selecting the initial random batch. ``"spread_xyz"`` uses
-   farthest-point sampling in absolute (*x*, *y*, *z*) feature space.
+   farthest-point sampling on the Cartesian COM feature columns (``x``, ``y``,
+   ``z`` from ``x_abs``/``y_abs``/``z_abs`` in FEATURE_NAMES).
 
 ``bo.batch_size``
    **Type:** ``int | None`` · **Default:** ``None``

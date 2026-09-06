@@ -17,6 +17,7 @@ from ..config import (
 from ..ml.bayesian import (
     TransferCapableSurrogateType,
     _align_to_columns,
+    _transfer_trust_gate,
     build_spec_features_geometry_aware,
     build_transfer_surrogate,
     cumulative_refit_training_set,
@@ -108,6 +109,85 @@ class _TransferRoundState:
     weight_share: float = 0.0
 
 
+def _fit_cumulative_refit_round(
+    *,
+    X_current: pd.DataFrame,
+    y_current: np.ndarray,
+    transfer_memory: BOStepMemory,
+    state: _TransferRoundState,
+    config: AdsorptionConfig,
+    occupancy_placement_X: list[dict[str, float]] | None,
+) -> Any:
+    """Fit one cumulative_refit round with occupancy weights and OOF trust gate."""
+    transfer = config.bo.transfer
+    X_prior = _align_to_columns(
+        pd.DataFrame(transfer_memory.observed_X_rows), X_current
+    )
+    y_prior = np.asarray(transfer_memory.observed_y, dtype=float)
+    _, _, refit_weights = cumulative_refit_training_set(
+        X_prior,
+        y_prior,
+        X_current,
+        y_current,
+        weight_cap=transfer.weight_cap,
+        proximity_lengthscale=transfer.proximity_lengthscale,
+        proximity_floor=transfer.proximity_floor,
+        occupancy_placement_X=occupancy_placement_X,
+        occupancy_lengthscale=transfer.occupancy_lengthscale,
+        occupancy_floor=transfer.occupancy_floor,
+    )
+    n_prior = len(X_prior)
+    prior_weights = np.asarray(refit_weights[:n_prior], dtype=float)
+    prior_weight_sum = float(np.sum(prior_weights))
+    total_weight_sum = float(np.sum(refit_weights))
+    state.weight_share = (
+        prior_weight_sum / total_weight_sum if total_weight_sum > 0.0 else 0.0
+    )
+
+    def _fit_baseline():
+        return _train_surrogate_for_bo(X_current, y_current, config=config)
+
+    base_mae, transfer_mae, transfer_model, gate_out_of_sample = _transfer_trust_gate(
+        X_current,
+        y_current,
+        X_prior,
+        y_prior,
+        prior_weights,
+        fit_baseline=_fit_baseline,
+        surrogate=cast(TransferCapableSurrogateType, config.bo.surrogate),
+        n_estimators=config.bo.n_estimators,
+        random_state=config.seed,
+        mae_tolerance=transfer.mae_tolerance,
+        n_jobs=config.n_jobs,
+    )
+    mae_delta = transfer_mae - base_mae
+    state.last_mae_delta = mae_delta
+    if mae_delta > transfer.mae_tolerance:
+        state.bad_rounds += 1
+    else:
+        state.bad_rounds = 0
+
+    if state.bad_rounds >= transfer.trust_patience:
+        logger.warning(
+            "BO cumulative_refit transfer disabled after %d degraded rounds "
+            "(last MAE delta %.4f)",
+            state.bad_rounds,
+            mae_delta,
+        )
+        state.disabled = True
+        state.disabled_reason = (
+            "trust_degraded_on_current_step_residuals"
+            if gate_out_of_sample
+            else "trust_degraded_on_current_step_residuals_in_sample"
+        )
+        state.weight_share = 0.0
+        return _fit_baseline()
+    if transfer_model is None:
+        return _fit_baseline()
+    state.used_rounds += 1
+    return transfer_model
+
+
 def _build_round_surrogate(
     *,
     X_current: pd.DataFrame,
@@ -120,13 +200,14 @@ def _build_round_surrogate(
     """Fit one acquisition round's surrogate with optional cross-step transfer.
 
     Supports both transfer modes (``weighted`` incremental trust gating and
-    ``cumulative_refit`` proximity-weighted refits with the same MAE-based
-    trust gate) and falls back to a plain current-observation fit whenever
+    ``cumulative_refit`` proximity×occupancy-weighted refits with the same OOF
+    MAE trust gate) and falls back to a plain current-observation fit whenever
     transfer is unavailable or disabled.
 
-    Returns ``(surrogate, transfer_active)`` where *transfer_active* reports
-    that transfer was attempted and remains enabled (it drives random
-    exploration within the batch).
+    Returns ``(surrogate, transfer_active)`` where *transfer_active* is true
+    whenever transfer is eligible and not fully disabled. That flag drives
+    random exploration within the batch even on rounds where the trust gate
+    rejected the prior (domain-shift rounds still explore).
     """
     surrogate = None
     transfer = config.bo.transfer
@@ -136,82 +217,28 @@ def _build_round_surrogate(
         and len(transfer_memory.observed_X_rows) > 0
         and len(transfer_memory.observed_y) > 0
     )
+    enough_current = len(X_current) >= transfer.min_step_observations
     can_try_weighted = (
         can_try_transfer
         and transfer.mode == "weighted"
         and not state.disabled
-        and len(X_current) >= transfer.min_step_observations
+        and enough_current
     )
-    # Same entry gate as weighted mode: honour a previously disabled transfer
-    # state and require enough current observations for the MAE trust
-    # comparison to be meaningful.
     can_try_refit = (
         can_try_transfer
         and transfer.mode == "cumulative_refit"
         and not state.disabled
-        and len(X_current) >= max(3, transfer.min_step_observations)
+        and enough_current
     )
     if can_try_refit and transfer_memory is not None:
-        X_prior = pd.DataFrame(transfer_memory.observed_X_rows)
-        y_prior = np.asarray(transfer_memory.observed_y, dtype=float)
-        X_prior = _align_to_columns(X_prior, X_current)
-        X_combined, y_combined, refit_weights = cumulative_refit_training_set(
-            X_prior,
-            y_prior,
-            X_current,
-            y_current,
-            weight_cap=transfer.weight_cap,
-            proximity_lengthscale=transfer.proximity_lengthscale,
-            proximity_floor=transfer.proximity_floor,
-        )
-        refit_surrogate = _train_surrogate_for_bo(
-            X_combined,
-            y_combined,
+        surrogate = _fit_cumulative_refit_round(
+            X_current=X_current,
+            y_current=y_current,
+            transfer_memory=transfer_memory,
+            state=state,
             config=config,
-            sample_weight=refit_weights,
+            occupancy_placement_X=occupancy_placement_X,
         )
-        n_prior = len(X_prior)
-        prior_weight_sum = float(np.sum(refit_weights[:n_prior]))
-        total_weight_sum = float(np.sum(refit_weights))
-        state.weight_share = (
-            prior_weight_sum / total_weight_sum if total_weight_sum > 0.0 else 0.0
-        )
-        state.used_rounds += 1
-
-        # Trust gate mirroring weighted mode: an in-sample MAE comparison of
-        # the transfer-informed fit against a current-observations-only
-        # baseline feeds the same bad-round / patience state machine, so
-        # degraded priors cannot pollute every subsequent step.
-        baseline = _train_surrogate_for_bo(X_current, y_current, config=config)
-        base_mae = float(
-            np.mean(np.abs(np.asarray(baseline.predict(X_current)).ravel() - y_current))
-        )
-        refit_mae = float(
-            np.mean(
-                np.abs(
-                    np.asarray(refit_surrogate.predict(X_current)).ravel() - y_current
-                )
-            )
-        )
-        mae_delta = refit_mae - base_mae
-        state.last_mae_delta = mae_delta
-        if mae_delta > transfer.mae_tolerance:
-            state.bad_rounds += 1
-        else:
-            state.bad_rounds = 0
-        if state.bad_rounds >= transfer.trust_patience:
-            logger.warning(
-                "BO cumulative_refit transfer disabled after %d degraded rounds "
-                "(last MAE delta %.4f)",
-                state.bad_rounds,
-                mae_delta,
-            )
-            state.disabled = True
-            state.disabled_reason = "trust_degraded_on_current_step_residuals"
-            state.weight_share = 0.0
-            surrogate = baseline
-        else:
-            surrogate = refit_surrogate
     elif can_try_weighted and transfer_memory is not None:
         transfer_result = build_transfer_surrogate(
             X_current,

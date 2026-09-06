@@ -426,12 +426,12 @@ def test_enable_dissociative_placement_without_topology_skip():
     assert all(s.orientation_type == "dissociative" for s in specs)
 
 
-def test_dissociative_com_features_pose_relative_and_record_replay():
+def test_dissociative_com_features_and_record_replay():
     """Dissociative COM+quat features stay diverse; fragments survive record round-trip.
 
     Symmetry-equivalent hollow pairs share COM at a fixed height above the
-    top layer, so the stratified pool need not be fully injective — require
-    height diversity within a pair and a large unique-feature count overall.
+    top layer for a given z_fraction; distinct COMs and orientations still
+    produce diverse FEATURE_NAMES rows (including x/y).
     """
     slab = make_slab()
     h2 = make_h2()
@@ -459,8 +459,8 @@ def test_dissociative_com_features_pose_relative_and_record_replay():
         assert record.descriptor.fragment_positions == descriptor.fragment_positions
         feats = extract_features(record)
         assert list(feats.keys()) == FEATURE_NAMES
-        assert "x" not in feats
-        assert "y" not in feats
+        assert "x" in feats and "y" in feats
+        assert "fragment_positions" not in feats
         row = tuple(round(feats[name], 10) for name in FEATURE_NAMES)
         feature_rows.append(row)
         row_sites.append(int(spec.site_index))
@@ -484,16 +484,8 @@ def test_dissociative_com_features_pose_relative_and_record_replay():
         )
 
     assert len(feature_rows) >= 8
-    # Pose-relative features keep height/orientation diversity; lateral COM
-    # differences across symmetry-equivalent sites collapse by design.
+    # Absolute COM features distinguish lateral sites as well as height/orientation.
     assert len(set(feature_rows)) >= 2
-    site_collisions = sum(
-        1
-        for i in range(len(feature_rows))
-        for j in range(i + 1, len(feature_rows))
-        if feature_rows[i] == feature_rows[j] and row_sites[i] != row_sites[j]
-    )
-    assert site_collisions > 0
     # Distinct z_fraction on the same hollow pair must change COM height features.
     for _pair_idx, rows in by_pair.items():
         z_to_feat = {}

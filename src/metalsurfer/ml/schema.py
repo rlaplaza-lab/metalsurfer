@@ -278,9 +278,11 @@ def config_to_context_row(
 class PlacementRecord:
     """ML dataset row: initial placement + post-relax energies/labels.
 
-    Geometry lives on ``descriptor`` (:class:`PlacementDescriptor`). Absolute pose
-    fields and ``conformer_index`` are the training features and describe the
-    **initial** placement. Site/orientation fields are initial enumeration
+    Geometry lives on ``descriptor`` (:class:`PlacementDescriptor`). Absolute
+    pose fields and ``conformer_index`` are the training features (see
+    :func:`~metalsurfer.ml.features.extract_features` /
+    :func:`~metalsurfer.ml.features.placement_pose_from_features`) and describe
+    the **initial** placement. Site/orientation fields are initial enumeration
     provenance only; adsorbates may move during relaxation. ``distance`` and
     ``energy_*`` are post-relax outcomes. CSV exports default to lean
     feature+label columns; set ``export_placement_provenance=True`` for

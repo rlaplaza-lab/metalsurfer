@@ -403,6 +403,8 @@ The surrogate sees **resolved absolute geometry**, not discrete site IDs.
        plus energies/labels/context (CSV still flattens)
    * - ``extract_features``
      - **8 features:** x, y, z, ``conformer_index``, quat_w/x/y/z
+       (``x``/``y``/``z`` ← ``x_abs``/``y_abs``/``z_abs``). These are the
+       initial-pose replay ingredients.
 
 **Not in the feature vector:** ``site_index``, ``site_type``,
 ``hollow_order``, ``orientation_type``, tilts/azimuths, ``z_fraction``,
@@ -410,9 +412,11 @@ The surrogate sees **resolved absolute geometry**, not discrete site IDs.
 mode writes them as ``initial_*`` provenance columns only.
 
 Replay paths (all tested): spec → descriptor → pose →
-``PlacementRecord.to_placement_descriptor`` (returns ``record.descriptor``).
-BO candidates use ``build_spec_features_geometry_aware`` (materialize →
-record → ``extract_features``).
+``PlacementRecord.to_placement_descriptor`` (returns ``record.descriptor``);
+sklearn row → ``placement_pose_from_features`` →
+``generate_placement_from_pose``. BO candidates use
+``build_spec_features_geometry_aware`` (materialize → record →
+``extract_features``).
 
 Determinism: fractional site ordering, order-independent dedup/clustering,
 geometry-keyed site caches, seeded stratified subsample. Within a fixed
@@ -606,19 +610,20 @@ Dataset logging and ML
 ----------------------
 
 ``DatasetLogger`` appends ``PlacementRecord`` rows during binding and
-saturation. Feature schema: eight numeric columns (absolute **initial** xyz,
-``conformer_index``, unit quaternion). CSV exports are **lean by default**
-(features + energies/labels + ``context_hash``). Set
+saturation. Feature schema: eight numeric columns — the initial-pose
+replay ingredients (absolute COM ``x``/``y``/``z`` from ``x_abs``/``y_abs``/
+``z_abs``, ``conformer_index``, unit quaternion). CSV exports are **lean by
+default** (features + energies/labels + ``context_hash``). Set
 ``export_placement_provenance=True`` to also write ``initial_*`` pre-relax
 provenance (site, orientation, ``initial_fragment_positions``, …) and full
 ``ctx_*`` settings. Those provenance fields describe the placement that was
 started, not the relaxed geometry (relaxed structures remain in XYZ/POSCAR;
 ``distance`` / energies are post-relax).
 
-Utilities: ``extract_features``, ``load_dataset``,
-``PlacementRecord.to_placement_descriptor`` / ``to_config``. Schema versioning
-in ``ml/schema.py`` (``SCHEMA_VERSION`` **3.0**). Shared numerics in
-``_numeric_defaults.py``.
+Utilities: ``extract_features``, ``placement_pose_from_features``,
+``load_dataset``, ``PlacementRecord.to_placement_descriptor`` /
+``to_config``. Schema versioning in ``ml/schema.py`` (``SCHEMA_VERSION``
+**3.0**). Shared numerics in ``_numeric_defaults.py``.
 Loaders still accept legacy unprefixed provenance columns from schema ≤2.3.
 
 

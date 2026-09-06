@@ -186,10 +186,13 @@ def _provenance_value_from_row(row: Mapping[str, Any], attr: str, default: Any) 
 class PlacementDescriptor:
     """Initial (pre-relax) placement: spec fields + resolved absolute pose.
 
-    Absolute pose (``x_abs`` / ``y_abs`` / ``z_abs`` + quaternion) is the ML/BO
-    feature geometry. Site/orientation fields are enumeration provenance for the
-    *initial* placement; adsorbates may move during relaxation. Post-relax
-    geometry lives in on-disk structures, not these fields.
+    Absolute pose (``x_abs`` / ``y_abs`` / ``z_abs`` + quaternion) plus
+    ``conformer_index`` is the ML/BO feature geometry — the same ingredients
+    :func:`~metalsurfer.ml.features.placement_pose_from_features` maps back to
+    a :class:`PlacementPose` for molecular replay. Site/orientation fields are
+    enumeration provenance for the *initial* placement; adsorbates may move
+    during relaxation. Post-relax geometry lives in on-disk structures, not
+    these fields.
     """
 
     conformer_index: int

@@ -13,7 +13,7 @@ import pytest
 from ase import Atoms
 from ase.io import read
 
-from metalsurfer.config import AdsorptionConfig, BOConfig
+from metalsurfer.config import AdsorptionConfig, BOConfig, BOTransferConfig
 from metalsurfer.io_results import (
     _saturation_molecule_label,
     save_multi_mol_saturation_results,
@@ -2140,6 +2140,142 @@ def test_run_saturation_screening_n_tuplet_single_molecule_path(monkeypatch, wor
     assert len(step.committed_results) == 2
     assert out[0].n_molecules_at_saturation == 2
     assert len(out[0].final_slab_atoms) == base_n + 2 * len(make_water())
+
+
+def test_saturation_bo_n_tuplet_keeps_single_site_memory_labels(monkeypatch, workdir):
+    """BO + n-tuplet: memory stays single-site; occupancy grows by n_added.
+
+    Screening energies feed BOStepMemory; the shared tuplet E_ads is only on
+    committed rows / the stop criterion. Occupancy anchors passed into the next
+    BO call equal the number of committed winners.
+    """
+    slab = make_slab()
+    single_site_energies = [-0.6, -0.45]
+    occupancy_seen: list[int] = []
+    prior_y_seen: list[list[float]] = []
+    call_count = {"n": 0}
+
+    def _fake_process_molecule_bayesian(
+        _smi,
+        mol,
+        current_slab,
+        *_args,
+        occupancy_placement_X=None,
+        bo_step_memory_in=None,
+        **_kwargs,
+    ):
+        call_count["n"] += 1
+        occupancy_seen.append(
+            0 if occupancy_placement_X is None else len(occupancy_placement_X)
+        )
+        if bo_step_memory_in is not None:
+            prior_y_seen.append(list(bo_step_memory_in.observed_y))
+        results = [
+            make_screening_result(
+                molecule=mol,
+                placement_id=i,
+                energy_adsorption=e_ads,
+                atoms=place_molecule_on_slab(
+                    current_slab.atoms, make_water(), x_shift=x_shift
+                ),
+                slab_size=len(current_slab.atoms),
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(
+                    placement_id=i,
+                    x_abs=float(x_shift),
+                    y_abs=0.0,
+                    z_abs=8.0,
+                    quat_w=1.0,
+                    quat_x=0.0,
+                    quat_y=0.0,
+                    quat_z=0.0,
+                ),
+            )
+            for i, (e_ads, x_shift) in enumerate(
+                zip(single_site_energies, (2.5, 7.0), strict=True)
+            )
+        ]
+        if call_count["n"] > 2:
+            # Both molecules already screened once; unbind so the run stops.
+            results = [
+                make_screening_result(
+                    molecule=mol,
+                    placement_id=99,
+                    energy_adsorption=0.5,
+                    atoms=place_molecule_on_slab(
+                        current_slab.atoms, make_water(), x_shift=3.0
+                    ),
+                    slab_size=len(current_slab.atoms),
+                    distance=2.5,
+                    placement_descriptor=make_placement_descriptor(placement_id=99),
+                )
+            ]
+            memory = BOStepMemory(
+                observed_X_rows=[{"x": 3.0}],
+                observed_y=[0.5],
+                best_energy=0.5,
+            )
+            return MoleculeScreenOutcome(
+                results=results,
+                bo_memory=memory,
+                transfer_info=BOTransferInfo(),
+            )
+
+        memory = BOStepMemory(
+            observed_X_rows=[
+                {"x": 2.5, "y": 0.0, "z": 8.0},
+                {"x": 7.0, "y": 0.0, "z": 8.0},
+            ],
+            observed_y=list(single_site_energies),
+            best_energy=min(single_site_energies),
+        )
+        return MoleculeScreenOutcome(
+            results=results,
+            bo_memory=memory,
+            transfer_info=BOTransferInfo(),
+        )
+
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["A", "B"],
+        smiles_list=["OA", "OB"],
+        ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
+        process_molecule_bayesian=_fake_process_molecule_bayesian,
+    )
+    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-130.0)
+
+    out = run_saturation_screening(
+        SlabContainer(slab),
+        molecules=[("OA", "A"), ("OB", "B")],
+        config=_mock_saturation_config(
+            multi_molecule_saturation=True,
+            saturation_molecules_per_step=2,
+            saturation_max_steps=2,
+            bo=BOConfig(transfer=BOTransferConfig(enabled=True)),
+        ),
+        surface_type="tuplet_bo_memory",
+        skip_existing=False,
+        bo_enabled=True,
+    )
+
+    assert len(out) == 1
+    run = out[0]
+    assert len(run.steps) >= 1
+    step1 = run.steps[0]
+    assert step1.n_added == 2
+    # Shared tuplet total, not the pre-composite single-site energies.
+    assert step1.best_result.energy_adsorption == pytest.approx(-10.0)
+    for row in step1.committed_results:
+        assert row.energy_adsorption == pytest.approx(-10.0)
+        assert row.energy_adsorption not in single_site_energies
+    # First screening saw empty occupancy; after the tuplet commit the next
+    # screening receives two occupancy anchors.
+    assert occupancy_seen[0] == 0
+    assert any(n == 2 for n in occupancy_seen[1:])
+    # Transfer priors carry pre-composite single-site labels, never tuplet totals.
+    assert prior_y_seen
+    assert all(ys == single_site_energies for ys in prior_y_seen)
+    assert all(-10.0 not in ys for ys in prior_y_seen)
 
 
 def test_run_saturation_screening_n_tuplet_composite_failure_stops_run(

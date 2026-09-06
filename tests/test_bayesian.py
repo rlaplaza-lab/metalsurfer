@@ -31,7 +31,7 @@ from metalsurfer.ml.bayesian import (
     select_initial_bo_indices,
     train_surrogate,
 )
-from metalsurfer.ml.features import extract_features
+from metalsurfer.ml.features import FEATURE_NAMES, extract_features
 from metalsurfer.ml.schema import PlacementRecord
 from metalsurfer.models import (
     BOStepMemory,
@@ -55,6 +55,34 @@ def _make_synthetic_training_data(n: int = 40):
     X = pd.DataFrame(rows)
     y = pd.Series([r.energy_adsorption for r in records])
     return X, y
+
+
+def _feature_row(
+    *,
+    x: float = 0.0,
+    y: float = 0.0,
+    z: float = 0.0,
+    conformer_index: float = 0.0,
+    quat_w: float = 1.0,
+    quat_x: float = 0.0,
+    quat_y: float = 0.0,
+    quat_z: float = 0.0,
+) -> dict[str, float]:
+    """One FEATURE_NAMES row for transfer/init unit tests."""
+    return {
+        "x": float(x),
+        "y": float(y),
+        "z": float(z),
+        "conformer_index": float(conformer_index),
+        "quat_w": float(quat_w),
+        "quat_x": float(quat_x),
+        "quat_y": float(quat_y),
+        "quat_z": float(quat_z),
+    }
+
+
+def _feature_frame(rows: list[dict[str, float]]) -> pd.DataFrame:
+    return pd.DataFrame(rows, columns=FEATURE_NAMES)
 
 
 def _placement_spec(idx: int = 0) -> PlacementSpec:
@@ -378,34 +406,19 @@ class TestAcquisition:
 
 class TestInitialSampling:
     def test_spread_returns_unique_indices(self):
-        X = pd.DataFrame(
-            {
-                "x": np.linspace(0.0, 10.0, 20),
-                "y": np.zeros(20),
-                "z": np.zeros(20),
-                "conformer_index": np.arange(20),
-                "quat_w": np.ones(20),
-                "quat_x": np.zeros(20),
-                "quat_y": np.zeros(20),
-                "quat_z": np.zeros(20),
-            }
+        X = _feature_frame(
+            [
+                _feature_row(x=float(i), conformer_index=float(i))
+                for i in np.linspace(0.0, 10.0, 20)
+            ]
         )
         picked = select_initial_bo_indices(X, 5, sampling="spread", random_state=7)
         assert len(picked) == 5
         assert len(set(picked)) == 5
 
     def test_spread_covers_endpoints_in_1d(self):
-        X = pd.DataFrame(
-            {
-                "x": np.linspace(0.0, 1.0, 11),
-                "y": np.zeros(11),
-                "z": np.zeros(11),
-                "conformer_index": np.zeros(11),
-                "quat_w": np.ones(11),
-                "quat_x": np.zeros(11),
-                "quat_y": np.zeros(11),
-                "quat_z": np.zeros(11),
-            }
+        X = _feature_frame(
+            [_feature_row(x=float(v)) for v in np.linspace(0.0, 1.0, 11)]
         )
         picked = select_initial_bo_indices(X, 3, sampling="spread", random_state=0)
         assert 0 in picked
@@ -418,17 +431,11 @@ class TestInitialSampling:
         np.testing.assert_array_equal(picked, expected)
 
     def test_spread_xyz_uses_position_only(self):
-        X = pd.DataFrame(
-            {
-                "x": np.linspace(0.0, 1.0, 8),
-                "y": np.zeros(8),
-                "z": np.zeros(8),
-                "conformer_index": np.arange(8),
-                "quat_w": np.ones(8),
-                "quat_x": np.zeros(8),
-                "quat_y": np.zeros(8),
-                "quat_z": np.zeros(8),
-            }
+        X = _feature_frame(
+            [
+                _feature_row(x=float(v), conformer_index=float(i))
+                for i, v in enumerate(np.linspace(0.0, 1.0, 8))
+            ]
         )
         picked = select_initial_bo_indices(X, 3, sampling="spread_xyz", random_state=0)
         assert len(picked) == 3
@@ -436,17 +443,11 @@ class TestInitialSampling:
         assert 7 in picked
 
     def test_stratified_covers_conformers(self):
-        X = pd.DataFrame(
-            {
-                "x": np.zeros(12),
-                "y": np.zeros(12),
-                "z": np.zeros(12),
-                "conformer_index": [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3],
-                "quat_w": np.ones(12),
-                "quat_x": np.zeros(12),
-                "quat_y": np.zeros(12),
-                "quat_z": np.zeros(12),
-            }
+        X = _feature_frame(
+            [
+                _feature_row(conformer_index=float(c))
+                for c in [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3]
+            ]
         )
         picked = select_initial_bo_indices(X, 4, sampling="stratified", random_state=3)
         conformers = X.iloc[picked]["conformer_index"].astype(int).tolist()
@@ -477,11 +478,12 @@ class TestFeatureBuilding:
         assert isinstance(X, pd.DataFrame)
         assert X.shape[0] == len(valid_indices)
         assert X.shape[0] > 0
-        # Pose-relative contract: no absolute in-plane coordinates.
-        assert "x" not in X.columns
-        assert "y" not in X.columns
+        # Replayable abs pose: Cartesian COM columns are present.
+        assert "x" in X.columns
+        assert "y" in X.columns
+        assert "z" in X.columns
         # Ensure candidate geometry is not collapsed to a constant placeholder
-        # (height/orientation variation must still reach the surrogate).
+        # (height/orientation/lateral variation must reach the surrogate).
         assert X.drop_duplicates().shape[0] > 1
 
     def test_build_spec_features_fills_materialization_cache(self):
@@ -753,31 +755,32 @@ class TestTransferSmoke:
         assert weights[0] > weights[1] > weights[2]
 
     def test_prior_placement_downweight_prefers_far_sites(self):
-        priors = pd.DataFrame(
+        # Same z+quat; lateral COM ~5 Å apart must prefer the far site.
+        priors = _feature_frame(
             [
-                {"x": 0.05, "y": 0.0, "z": 0.0},
-                {"x": 5.0, "y": 0.0, "z": 0.0},
-                {"x": 2.0, "y": 1.0, "z": 0.0},
+                _feature_row(x=0.05, z=2.0),
+                _feature_row(x=5.0, z=2.0),
+                _feature_row(x=2.0, y=1.0, z=2.0),
             ]
         )
-        placement = pd.DataFrame([{"x": 0.0, "y": 0.0, "z": 0.0}])
+        placement = _feature_frame([_feature_row(x=0.0, z=2.0)])
         weights = prior_placement_downweight(
             priors, placement, lengthscale=1.0, floor=0.0
         )
         assert weights[0] < weights[1]
 
     def test_prior_placement_downweight_uses_all_committed_rows(self):
-        placements = pd.DataFrame(
+        placements = _feature_frame(
             [
-                {"x": 0.0, "y": 0.0, "z": 0.0},
-                {"x": 10.0, "y": 0.0, "z": 0.0},
+                _feature_row(x=0.0, z=2.0),
+                _feature_row(x=10.0, z=2.0),
             ]
         )
-        probes = pd.DataFrame(
+        probes = _feature_frame(
             [
-                {"x": 0.05, "y": 0.0, "z": 0.0},
-                {"x": 10.05, "y": 0.0, "z": 0.0},
-                {"x": 5.0, "y": 5.0, "z": 0.0},
+                _feature_row(x=0.05, z=2.0),
+                _feature_row(x=10.05, z=2.0),
+                _feature_row(x=5.0, y=5.0, z=2.0),
             ]
         )
         weights = prior_placement_downweight(
@@ -790,9 +793,9 @@ class TestTransferSmoke:
         X, _ = _make_synthetic_training_data(5)
         current = X.iloc[[0, 1]].copy()
         near = X.iloc[[0]].copy()
-        near.iloc[0, 0] = float(X.iloc[0, 0]) + 0.05
+        near.iloc[0, X.columns.get_loc("x")] = float(X.iloc[0]["x"]) + 0.05
         far = X.iloc[[4]].copy()
-        far.iloc[0, 0] = float(X.iloc[0, 0]) + 5.0
+        far.iloc[0, X.columns.get_loc("x")] = float(X.iloc[0]["x"]) + 5.0
         near_s = prior_similarity_to_current(near, current, lengthscale=0.5)
         far_s = prior_similarity_to_current(far, current, lengthscale=0.5)
         assert near_s[0] > far_s[0]
@@ -800,20 +803,20 @@ class TestTransferSmoke:
     def test_prior_proximity_weights_smoke(self):
         X, _ = _make_synthetic_training_data(5)
         near = X.iloc[[0]].copy()
-        near.iloc[0, 0] = float(X.iloc[0, 0]) + 0.05
+        near.iloc[0, X.columns.get_loc("x")] = float(X.iloc[0]["x"]) + 0.05
         far = X.iloc[[4]].copy()
-        far.iloc[0, 0] = float(X.iloc[0, 0]) + 5.0
+        far.iloc[0, X.columns.get_loc("x")] = float(X.iloc[0]["x"]) + 5.0
         near_w = prior_proximity_weights(near, X.iloc[[0]], lengthscale=0.02, floor=0.0)
         far_w = prior_proximity_weights(far, X.iloc[:1], lengthscale=10.0, floor=0.0)
         assert near_w[0] < far_w[0]
 
     def test_occupancy_fallback_downweights_clustered_priors(self):
         """Fallback occupancy is 1 - proximity(exclude_self), matching build_transfer."""
-        clustered = pd.DataFrame(
+        clustered = _feature_frame(
             [
-                {"x": 0.0, "y": 0.0, "z": 0.0},
-                {"x": 0.1, "y": 0.0, "z": 0.0},
-                {"x": 10.0, "y": 0.0, "z": 0.0},
+                _feature_row(x=0.0, z=2.0),
+                _feature_row(x=0.1, z=2.0),
+                _feature_row(x=10.0, z=2.0),
             ]
         )
         # prior_placement_X is None → invert proximity to other prior rows.
@@ -828,19 +831,10 @@ class TestTransferSmoke:
 
     def test_transfer_similarity_ignores_conformer_index_vs_translation(self):
         """Same pose, Δconformer must not look as far as a multi-Å translation."""
-        base = {
-            "x": 0.0,
-            "y": 0.0,
-            "z": 2.0,
-            "conformer_index": 0.0,
-            "quat_w": 1.0,
-            "quat_x": 0.0,
-            "quat_y": 0.0,
-            "quat_z": 0.0,
-        }
-        current = pd.DataFrame([base])
-        same_pose_diff_conf = pd.DataFrame([{**base, "conformer_index": 5.0}])
-        translated = pd.DataFrame([{**base, "x": 5.0}])
+        base = _feature_row(x=0.0, y=0.0, z=2.0, conformer_index=0.0)
+        current = _feature_frame([base])
+        same_pose_diff_conf = _feature_frame([{**base, "conformer_index": 5.0}])
+        translated = _feature_frame([{**base, "x": 5.0}])
         sim_conf = prior_similarity_to_current(
             same_pose_diff_conf, current, lengthscale=4.0
         )
@@ -1015,7 +1009,8 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _feature_frame(values):
+def _x_only_frame(values):
+    """Minimal x-column frame for cumulative_refit weight-alignment tests."""
     return pd.DataFrame({"x": np.asarray(values, dtype=float)})
 
 
@@ -1045,9 +1040,9 @@ def test_cumulative_refit_training_set_aligns_weights_with_rows():
     received weight 1.0 and the current observations received the decayed prior
     weights, inverting the ``weight_cap`` guarantee.
     """
-    X_prior = _feature_frame([0.0, 1.0, 2.0, 3.0])
+    X_prior = _x_only_frame([0.0, 1.0, 2.0, 3.0])
     y_prior = np.array([0.0, 1.0, 2.0, 3.0])
-    X_current = _feature_frame([10.0, 11.0])
+    X_current = _x_only_frame([10.0, 11.0])
     y_current = np.array([10.0, 11.0])
 
     X, y, w = cumulative_refit_training_set(
@@ -1071,9 +1066,9 @@ def test_cumulative_refit_training_set_aligns_weights_with_rows():
 def test_cumulative_refit_training_set_rejects_length_mismatch():
     with pytest.raises(ValueError, match="X_prior/y_prior length mismatch"):
         cumulative_refit_training_set(
-            _feature_frame([0.0, 1.0]),
+            _x_only_frame([0.0, 1.0]),
             np.array([0.0]),
-            _feature_frame([2.0]),
+            _x_only_frame([2.0]),
             np.array([2.0]),
             weight_cap=0.35,
             proximity_lengthscale=1.0,
@@ -1230,9 +1225,9 @@ def test_bo_rng_seed_decorrelates_by_molecule_in_multi_molecule_steps():
 
 def test_cumulative_refit_transfer_weight_share_from_weights():
     """Prior weight fraction matches transfer_weight_share formula (L6)."""
-    X_prior = _feature_frame([0.0, 1.0, 2.0, 3.0])
+    X_prior = _x_only_frame([0.0, 1.0, 2.0, 3.0])
     y_prior = np.array([0.0, 1.0, 2.0, 3.0])
-    X_current = _feature_frame([10.0, 11.0])
+    X_current = _x_only_frame([10.0, 11.0])
     y_current = np.array([10.0, 11.0])
     _, _, refit_weights = cumulative_refit_training_set(
         X_prior,
@@ -1245,3 +1240,104 @@ def test_cumulative_refit_transfer_weight_share_from_weights():
     n_prior = len(X_prior)
     share = float(np.sum(refit_weights[:n_prior]) / np.sum(refit_weights))
     assert share == pytest.approx(0.35, abs=1e-6)
+
+
+def test_cumulative_refit_occupancy_downweights_near_committed_com():
+    """Committed occupancy anchors reduce prior weight near that COM."""
+    X_prior = _feature_frame(
+        [
+            _feature_row(x=0.0, z=2.0),
+            _feature_row(x=5.0, z=2.0),
+        ]
+    )
+    y_prior = np.array([0.0, 1.0])
+    X_current = _feature_frame(
+        [
+            _feature_row(x=2.5, z=2.0),
+            _feature_row(x=2.6, z=2.0),
+        ]
+    )
+    y_current = np.array([0.5, 0.6])
+    _, _, w_base = cumulative_refit_training_set(
+        X_prior,
+        y_prior,
+        X_current,
+        y_current,
+        weight_cap=0.35,
+        proximity_lengthscale=2.0,
+    )
+    _, _, w_occ = cumulative_refit_training_set(
+        X_prior,
+        y_prior,
+        X_current,
+        y_current,
+        weight_cap=0.35,
+        proximity_lengthscale=2.0,
+        occupancy_placement_X=[_feature_row(x=0.0, z=2.0)],
+        occupancy_lengthscale=1.0,
+        occupancy_floor=0.0,
+    )
+    # Near the occupied COM the prior mass should drop relative to the far site.
+    assert w_occ[0] / max(w_occ[1], 1e-12) < w_base[0] / max(w_base[1], 1e-12)
+
+
+def test_cumulative_refit_oof_gate_uses_baseline_on_bad_round():
+    """Failing OOF gate returns baseline this round without disabling yet."""
+    from metalsurfer.config import BOConfig, BOTransferConfig
+    from metalsurfer.workflow.bayesian import (
+        _build_round_surrogate,
+        _TransferRoundState,
+    )
+
+    rng = np.random.default_rng(0)
+    n = 12
+    X_current = _feature_frame([_feature_row(x=float(i), z=2.0) for i in range(n)])
+    # Smooth current trend.
+    y_current = np.asarray(X_current["x"], dtype=float) + 0.01 * rng.standard_normal(n)
+    # Strongly mismatched prior (offset + noise) so transfer OOF MAE loses.
+    X_prior = _feature_frame([_feature_row(x=float(i) + 3.0, z=2.0) for i in range(20)])
+    y_prior = -np.asarray(X_prior["x"], dtype=float) + 5.0
+
+    config = AdsorptionConfig(
+        bo=BOConfig(
+            surrogate="ridge",
+            transfer=BOTransferConfig(
+                enabled=True,
+                mode="cumulative_refit",
+                min_step_observations=5,
+                trust_patience=2,
+                mae_tolerance=0.0,
+                weight_cap=0.5,
+                proximity_lengthscale=1.0,
+            ),
+        )
+    )
+    memory = BOStepMemory(
+        observed_X_rows=X_prior.to_dict(orient="records"),
+        observed_y=y_prior.tolist(),
+    )
+    state = _TransferRoundState()
+    surrogate, transfer_active = _build_round_surrogate(
+        X_current=X_current,
+        y_current=y_current,
+        transfer_memory=memory,
+        state=state,
+        config=config,
+        occupancy_placement_X=None,
+    )
+    assert transfer_active
+    assert not state.disabled
+    assert state.bad_rounds >= 1
+    assert state.used_rounds == 0
+    # Baseline-only fit: predicting on current should match a fresh ridge.
+    from metalsurfer.ml.bayesian import train_surrogate
+
+    baseline = train_surrogate(
+        X_current, y_current, surrogate="ridge", random_state=config.seed
+    )
+    np.testing.assert_allclose(
+        np.asarray(surrogate.predict(X_current)).ravel(),
+        np.asarray(baseline.predict(X_current)).ravel(),
+        rtol=1e-6,
+        atol=1e-6,
+    )
