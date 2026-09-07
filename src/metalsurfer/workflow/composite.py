@@ -58,7 +58,7 @@ from ..placement.occupancy import _positions_mutually_clear, incoming_inplane_ra
 from ..placement.site_coords import _slab_normal
 from ..surface_prep import apply_material_pbc
 from ..surface_prep.freeze import check_frozen_substrate_displacement
-from .shared import _validate_geometry
+from .shared import _infer_surface_symbols, _validate_geometry
 
 logger = logging.getLogger(__name__)
 
@@ -331,8 +331,9 @@ def select_tuplet_winners(
         )
         if min_d < rescue_floor:
             continue
+        if config is None or slab_atoms is None:
+            continue
 
-        assert config is not None and slab_atoms is not None
         fixed_pos, fixed_radii = _fixed_cloud_from_coverage_and_results(
             slab_atoms,
             accepted,
@@ -425,10 +426,22 @@ def _per_unit_surface_distances(
     n_substrate: int,
     unit_sizes: Sequence[int],
     config: AdsorptionConfig,
+    surface_symbols: list[str] | None = None,
 ) -> list[float]:
-    """Per-unit min adsorbate-to-substrate distance for a relaxed composite."""
+    """Per-unit min adsorbate-to-surface distance for a relaxed composite.
+
+    When *surface_symbols* is set, prior adsorbates in the coverage prefix are
+    ignored (same mask as :func:`~metalsurfer.filters.check_desorption`).
+    """
     positions = opt_atoms.get_positions()
     substrate_positions = positions[:n_substrate]
+    if surface_symbols:
+        slab_syms = np.asarray(
+            opt_atoms.get_chemical_symbols()[:n_substrate], dtype=object
+        )
+        mask = np.isin(slab_syms, surface_symbols)
+        if np.any(mask):
+            substrate_positions = substrate_positions[mask]
     cell = opt_atoms.get_cell()
     pbc = material_aware_pbc(config.material_type)
     distances: list[float] = []
@@ -533,11 +546,15 @@ def evaluate_composite_commit(
         return [], f"geometry fail: {reason}"
 
     n_substrate = len(slab_atoms)
+    # Bare-substrate symbols only: prior adsorbates in the coverage prefix must
+    # not mask desorption the way check_desorption / filter_results avoid.
+    surface_symbols = _infer_surface_symbols(base_slab)
     unit_distances = _per_unit_surface_distances(
         opt_atoms,
         n_substrate=n_substrate,
         unit_sizes=unit_sizes,
         config=config,
+        surface_symbols=surface_symbols,
     )
     if not config.skip_desorption_check:
         for k, dist in enumerate(unit_distances):

@@ -7,7 +7,7 @@
 #
 # Usage (from repo root, with metalsurfer conda env and GPU):
 #   ./scripts/run_all_examples.sh
-#   nohup bash scripts/run_all_examples.sh > logs/example_runs/v0.4_all_$(date +%Y%m%d_%H%M).log 2>&1 &
+#   nohup bash scripts/run_all_examples.sh > logs/example_runs/v0.6_all_$(date +%Y%m%d_%H%M).log 2>&1 &
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -36,53 +36,86 @@ LOG_DIR="${ROOT}/logs/example_runs"
 mkdir -p "$LOG_DIR"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 
-EXAMPLES=(
+# Python demos (camphor last: GPU-heavy). Bipyridine is intentionally omitted.
+PYTHON_EXAMPLES=(
   examples/ethene_pt12_binding_energy.py
   examples/ethene_ru_slab_binding_energy.py
   examples/h2_ru_slab_binding_energy.py
   examples/co2_mof_binding_energy.py
+  examples/water_oh_rutile_saturation.py
   examples/camphor_cu111_binding_energy.py
 )
 
 # Must match each example's surface_type / results_dir (not the script basename).
-declare -A EXAMPLE_RESULTS=(
+declare -A PYTHON_RESULTS=(
   [examples/ethene_pt12_binding_energy.py]=results_ethene_pt12
   [examples/ethene_ru_slab_binding_energy.py]=results_ethene_ru_slab
   [examples/h2_ru_slab_binding_energy.py]=results_h2_ru_slab
   [examples/co2_mof_binding_energy.py]=results_co2_mof
+  [examples/water_oh_rutile_saturation.py]=results_water_oh_rutile_saturation
   [examples/camphor_cu111_binding_energy.py]=results_camphor_cu111
+)
+
+YAML_EXAMPLES=(
+  examples/ethene_ru_slab_binding_energy.yaml
+  examples/h2_ru_slab_binding_energy.yaml
+  examples/co2_mof_binding_energy.yaml
+  examples/water_cu111_adsorption_bo.yaml
+  examples/ethane_cu_saturation.yaml
+)
+
+declare -A YAML_RESULTS=(
+  [examples/ethene_ru_slab_binding_energy.yaml]=results_ethene_ru_slab_yaml
+  [examples/h2_ru_slab_binding_energy.yaml]=results_h2_ru_slab_yaml
+  [examples/co2_mof_binding_energy.yaml]=results_co2_mof_yaml
+  [examples/water_cu111_adsorption_bo.yaml]=results_water_cu111_adsorption_bo_yaml
+  [examples/ethane_cu_saturation.yaml]=results_ethane_cu_saturation_yaml
 )
 
 declare -a EXAMPLE_NAMES=()
 declare -a EXAMPLE_STATUS=()
 
-for example in "${EXAMPLES[@]}"; do
-  name="$(basename "$example" .py)"
-  results_dir="${EXAMPLE_RESULTS[$example]:-results_${name}}"
-  log_file="${LOG_DIR}/v0.4_${name}_${STAMP}.log"
-  echo "===== START ${example} (fresh run; removing ${results_dir}) =====" | tee -a "$log_file"
+_run_one() {
+  local label="$1"
+  local cmd="$2"
+  local results_dir="$3"
+  local log_file="${LOG_DIR}/v0.6_${label}_${STAMP}.log"
+  echo "===== START ${label} (fresh run; removing ${results_dir}) =====" | tee -a "$log_file"
   rm -rf "$results_dir"
   set +e
-  "$PYTHON" "$example" 2>&1 | tee -a "$log_file"
-  status=${PIPESTATUS[0]}
+  # shellcheck disable=SC2086
+  eval "$cmd" 2>&1 | tee -a "$log_file"
+  local status=${PIPESTATUS[0]}
   set -e
   if [[ "$status" -eq 0 ]]; then
     if grep -q 'already-processed' "$log_file"; then
-      echo "FAILED: ${example} skipped existing results (see ${log_file})" >&2
+      echo "FAILED: ${label} skipped existing results (see ${log_file})" >&2
       status=1
     elif ! grep -qE 'Initializing TorchSim|Placement generation|Batched optimisation' "$log_file"; then
-      echo "FAILED: ${example} shows no MLIP activity (see ${log_file})" >&2
+      echo "FAILED: ${label} shows no MLIP activity (see ${log_file})" >&2
       status=1
     fi
   fi
-  EXAMPLE_NAMES+=("$name")
+  EXAMPLE_NAMES+=("$label")
   EXAMPLE_STATUS+=("$status")
   if [[ "$status" -eq 0 ]]; then
-    echo "===== END ${example} exit=0 =====" | tee -a "$log_file"
+    echo "===== END ${label} exit=0 =====" | tee -a "$log_file"
   else
-    echo "===== END ${example} exit=${status} =====" | tee -a "$log_file"
-    echo "FAILED: ${example} (see ${log_file})" >&2
+    echo "===== END ${label} exit=${status} =====" | tee -a "$log_file"
+    echo "FAILED: ${label} (see ${log_file})" >&2
   fi
+}
+
+for example in "${PYTHON_EXAMPLES[@]}"; do
+  name="$(basename "$example" .py)"
+  results_dir="${PYTHON_RESULTS[$example]:-results_${name}}"
+  _run_one "$name" "\"$PYTHON\" \"$example\"" "$results_dir"
+done
+
+for yaml in "${YAML_EXAMPLES[@]}"; do
+  name="$(basename "$yaml" .yaml)"
+  results_dir="${YAML_RESULTS[$yaml]:-results_${name}}"
+  _run_one "yaml_${name}" "\"$PYTHON\" examples/run_campaign_yaml.py \"$yaml\"" "$results_dir"
 done
 
 echo ""

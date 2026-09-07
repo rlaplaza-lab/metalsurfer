@@ -8,6 +8,7 @@ from metalsurfer.config import AdsorptionConfig
 from metalsurfer.models import ScreeningResult
 from metalsurfer.placement.geometry import calculate_min_distance
 from metalsurfer.workflow.composite import (
+    _per_unit_surface_distances,
     build_composite_candidate,
     evaluate_composite_commit,
     pack_tuplet_adsorbates,
@@ -460,3 +461,67 @@ class TestEvaluateCompositeCommit:
         )
         assert rewritten == []
         assert failure == "no winners"
+
+    def test_desorption_ignores_prior_adsorbates_in_coverage_prefix(self, monkeypatch):
+        """A unit far from metal but near a prior organic must still fail desorption."""
+        bare = make_slab()
+        # Prior water bound near the surface; coverage prefix includes it.
+        coverage = place_molecule_on_slab(
+            bare, make_water(), z_offset=2.0, x_shift=5.0, y_shift=5.0
+        )
+        # New unit sits a few Å above the prior water: close to organics, far from Ru.
+        desorbed = place_molecule_on_slab(
+            coverage, make_water(), z_offset=3.0, x_shift=5.0, y_shift=5.0
+        )
+        winner = make_screening_result(
+            molecule="water",
+            placement_id=0,
+            energy_adsorption=-1.0,
+            atoms=desorbed,
+            slab_size=len(coverage),
+            distance=2.5,
+            placement_descriptor=make_placement_descriptor(placement_id=0),
+        )
+
+        # Sanity: without a metal-only mask, min distance to the coverage prefix
+        # would look bound (near prior water); metal-only distance is desorbed.
+        unit_size = len(desorbed) - len(coverage)
+        dist_all = _per_unit_surface_distances(
+            desorbed,
+            n_substrate=len(coverage),
+            unit_sizes=[unit_size],
+            config=AdsorptionConfig(),
+            surface_symbols=None,
+        )[0]
+        dist_metal = _per_unit_surface_distances(
+            desorbed,
+            n_substrate=len(coverage),
+            unit_sizes=[unit_size],
+            config=AdsorptionConfig(),
+            surface_symbols=["Ru"],
+        )[0]
+        assert dist_all < 4.0
+        assert dist_metal > 4.0
+
+        def _fake_optimize(combined_atoms_list, _slab, _ts_model, **_kwargs):
+            out = []
+            for atoms in combined_atoms_list:
+                copy = atoms.copy()
+                copy.calc = mock_calculator(energy=-230.0, n_atoms=len(copy))
+                out.append(copy)
+            return out
+
+        monkeypatch.setattr(
+            "metalsurfer.workflow.composite.optimize_adsorbate_slab_batched",
+            _fake_optimize,
+        )
+        rewritten, failure = evaluate_composite_commit(
+            winners=[winner],
+            slab_atoms=coverage,
+            base_slab=bare,
+            ts_model=None,
+            config=AdsorptionConfig(binding_distance_threshold=4.0),
+            E_slab=E_SLAB,
+        )
+        assert rewritten == []
+        assert "desorbed" in failure

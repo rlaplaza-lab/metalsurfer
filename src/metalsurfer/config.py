@@ -635,9 +635,9 @@ class AdsorptionConfig:
     # accessibility window and drive the one-shot widen retry.
     voronoi_probe_radius: float | None = None
     voronoi_max_site_distance: float | None = None
-    # Ridge enrichment of Voronoi vertices. Porous / nanoparticle only: a planar
-    # slab top layer has no 3D Voronoi diagram, so slab sites come entirely from
-    # the topology generator and this flag is a no-op there.
+    # Ridge enrichment of Voronoi vertices. Porous / nanoparticle / rough slabs:
+    # a planar slab top layer has no 3D Voronoi diagram, so planar-slab sites
+    # come entirely from the topology generator and this flag is a no-op there.
     voronoi_site_enrichment: bool = True
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
@@ -725,8 +725,8 @@ class AdsorptionConfig:
     fail_on_missing_reference: bool = False
     fail_on_conformer_failure: bool = False
     debug_write_initial_placements: bool = False
-    # When True and the first one-shot pass is short, run one diversity round
-    # that re-enumerates excluding exact failed-spec keys.
+    # When True and the first one-shot pass is short with failed-spec keys,
+    # run one diversity round that re-enumerates excluding those keys.
     placement_retry_enabled: bool = True
     # Cap on specs requested for one-shot fill as a multiple of the target count.
     placement_retry_oversample_max: float = 6.0

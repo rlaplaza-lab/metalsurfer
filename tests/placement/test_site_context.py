@@ -176,6 +176,22 @@ def test_site_context_cache_key_float_packing_no_collision():
     )
     assert _unique_sites_cache_key(slab, a) != _unique_sites_cache_key(slab, b)
 
+    c = AdsorptionConfig(
+        material_type="slab",
+        voronoi_probe_radius=1.5,
+        voronoi_max_site_distance=20.0,
+        top_layer_tolerance=0.5,
+        planar_z_variance_threshold=0.01,
+    )
+    d = AdsorptionConfig(
+        material_type="slab",
+        voronoi_probe_radius=1.5,
+        voronoi_max_site_distance=20.0,
+        top_layer_tolerance=0.5,
+        planar_z_variance_threshold=0.05,
+    )
+    assert _unique_sites_cache_key(slab, c) != _unique_sites_cache_key(slab, d)
+
 
 def test_surface_reference_uses_prefix_not_symbols():
     from metalsurfer.workflow.shared import _build_surface_reference_slab

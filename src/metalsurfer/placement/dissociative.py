@@ -621,7 +621,7 @@ def _place_dissociative_two_sites(
     symbols = adsorbate.get_chemical_symbols()
     result = Atoms(symbols=symbols, positions=[pos1, pos2])
     result.set_cell(slab.get_cell())
-    result.set_pbc(slab.get_pbc())
+    result.set_pbc(material_aware_pbc(config.material_type))
 
     fail_reason = _validate_posed_adsorbate(
         result, slab, config, slab_for_sites=slab_for_sites

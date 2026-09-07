@@ -28,6 +28,11 @@ from .models import ScreeningResult
 from .placement._material import material_aware_pbc
 from .placement.geometry import _mol_slab_pairwise_distances, calculate_min_distance
 
+try:
+    from rdkit import Chem
+except ImportError:  # pragma: no cover - simulated in dependency_behavior tests
+    Chem = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -118,9 +123,7 @@ def _bond_counts_from_dist(
 
 def _mol_from_smiles(smiles: str):
     """Parse SMILES to an RDKit mol with Hs, or None if rdkit missing or parse fails."""
-    try:
-        from rdkit import Chem
-    except ImportError:
+    if Chem is None:
         return None
     try:
         mol = Chem.MolFromSmiles(smiles)

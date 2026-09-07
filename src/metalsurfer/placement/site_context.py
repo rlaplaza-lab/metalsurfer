@@ -71,6 +71,7 @@ def _unique_sites_cache_key(slab: Atoms, config: AdsorptionConfig) -> str:
         _pack_optional_float(config.voronoi_probe_radius)
         + _pack_optional_float(config.voronoi_max_site_distance)
         + _pack_optional_float(config.top_layer_tolerance)
+        + struct.pack("<d", float(config.planar_z_variance_threshold))
         + struct.pack("<d", float(config.site_equivalence_tolerance))
         + struct.pack("<?", bool(config.voronoi_site_enrichment))
         + struct.pack("<?", bool(config.voronoi_auto_widen))
@@ -160,6 +161,7 @@ def resolve_site_context_for_sampling(
                 enrich=config.voronoi_site_enrichment,
                 site_classification_method=config.site_classification_method,
                 raw_sites=raw_unclustered,
+                planar_z_variance_threshold=config.planar_z_variance_threshold,
             )
         except SymmetryAnalysisError as exc:
             logger.warning(
@@ -231,6 +233,7 @@ def _get_unique_sites_for_specs(
         enrich=config.voronoi_site_enrichment,
         site_classification_method=config.site_classification_method,
         auto_widen=config.voronoi_auto_widen,
+        planar_z_variance_threshold=config.planar_z_variance_threshold,
     )
     if not raw_sites:
         logger.warning(

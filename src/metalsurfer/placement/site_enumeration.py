@@ -366,6 +366,7 @@ def get_unified_sites(
     site_classification_method: str = "auto",
     *,
     auto_widen: bool = True,
+    planar_z_variance_threshold: float | None = None,
 ) -> list[Site]:
     """Return adsorption/placement sites for *atoms*.
 
@@ -407,6 +408,9 @@ def get_unified_sites(
     auto_widen
         When True and the first pass finds no sites, retry once with a widened
         probe / max-distance window.
+    planar_z_variance_threshold
+        Max top-layer height variance (Å²) for classifying a slab as planar.
+        ``None`` uses the library default.
     """
     sites = _enumerate_unified_sites(
         atoms,
@@ -417,6 +421,7 @@ def get_unified_sites(
         pore_threshold=pore_threshold,
         enrich=enrich,
         site_classification_method=site_classification_method,
+        planar_z_variance_threshold=planar_z_variance_threshold,
     )
     if sites or not auto_widen:
         return sites
@@ -454,6 +459,7 @@ def get_unified_sites(
         pore_threshold=pore_threshold,
         enrich=enrich,
         site_classification_method=site_classification_method,
+        planar_z_variance_threshold=planar_z_variance_threshold,
     )
 
 
@@ -466,6 +472,7 @@ def _enumerate_unified_sites(
     pore_threshold: float | None = None,
     enrich: bool = True,
     site_classification_method: str = "auto",
+    planar_z_variance_threshold: float | None = None,
 ) -> list[Site]:
     """Core site enumeration (single pass, no auto-widen)."""
     if len(atoms) == 0:
@@ -494,6 +501,11 @@ def _enumerate_unified_sites(
         top_layer_tolerance = _derive_top_layer_tolerance(symbols)
     if pore_threshold is None:
         pore_threshold = derive_pore_threshold(symbols)
+    z_var_threshold = (
+        float(planar_z_variance_threshold)
+        if planar_z_variance_threshold is not None
+        else _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
+    )
 
     if not cell_has_volume(cell):
         cell = _bounding_box_cell(positions)
@@ -532,6 +544,7 @@ def _enumerate_unified_sites(
             positions,
             cell,
             float(top_layer_tolerance),
+            z_var_threshold,
             top_mask=slab_top_mask,
         )
         if slab_skip_voronoi:
@@ -978,6 +991,7 @@ def get_symmetry_aware_sites(
     enrich: bool = True,
     site_classification_method: str = "auto",
     raw_sites: list[Site] | None = None,
+    planar_z_variance_threshold: float | None = None,
 ) -> list[Site]:
     """Return symmetry-reduced adsorption sites using spglib.
 
@@ -1004,6 +1018,9 @@ def get_symmetry_aware_sites(
         Site classification method (``"auto"``, ``"delaunay"``, etc.).
     raw_sites
         Optional pre-computed raw site list.
+    planar_z_variance_threshold
+        Max top-layer height variance (Å²) for planar classification.
+        ``None`` uses the library default.
     """
     validate_material_type(material_type)
 
@@ -1011,6 +1028,11 @@ def get_symmetry_aware_sites(
         top_layer_tolerance = _derive_top_layer_tolerance(
             slab.get_chemical_symbols(),
         )
+    z_var_threshold = (
+        float(planar_z_variance_threshold)
+        if planar_z_variance_threshold is not None
+        else _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
+    )
 
     if raw_sites is not None:
         site_list = raw_sites
@@ -1023,13 +1045,16 @@ def get_symmetry_aware_sites(
             material_type=material_type,
             enrich=enrich,
             site_classification_method=site_classification_method,
+            planar_z_variance_threshold=z_var_threshold,
         )
     if not site_list:
         return []
 
     sym_mode = "cluster" if material_type == "nanoparticle" else "periodic"
     planar_for_symmetry = (material_type == "slab") and _is_top_layer_planar(
-        slab, top_layer_tolerance
+        slab,
+        top_layer_tolerance,
+        z_var_threshold,
     )
 
     symmetry_analyzer = SymmetryAnalyzer(

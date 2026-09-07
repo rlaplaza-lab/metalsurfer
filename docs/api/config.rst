@@ -165,9 +165,9 @@ Site detection
     **Type:** ``bool`` · **Default:** ``True``
 
     Enable geodesic ridge subdivision to add denser candidate sites on irregular
-    surfaces. Effective for ``material_type="porous"`` and ``"nanoparticle"``; a
-    no-op for ``material_type="slab"`` (the planar top layer has no 3D Voronoi
-    diagram, so ridge subdivision is skipped).
+    surfaces. Effective for ``material_type="porous"`` and ``"nanoparticle"``,
+    and for rough/non-planar slabs; a no-op for **planar** slabs (the coplanar
+    top layer has no 3D Voronoi diagram, so ridge subdivision is skipped).
 
 ``voronoi_auto_widen``
    **Type:** ``bool`` · **Default:** ``True``
@@ -277,9 +277,10 @@ Placement generation
 ``placement_retry_enabled``
    **Type:** ``bool`` · **Default:** ``True``
 
-   When the first one-shot fill pass is short of ``num_placements``, run one
-   diversity round that re-enumerates excluding exact failed-spec keys (no
-   site blocking or unfiltered fallback).
+   When the first one-shot fill pass is short of ``num_placements`` and at
+   least one spec failed materialization, run one diversity round that
+   re-enumerates excluding those exact failed-spec keys (no site blocking or
+   unfiltered fallback).
 
 ``placement_retry_oversample_max``
     **Type:** ``float`` · **Default:** ``6.0`` · **Valid range:** ``>= 1.0``

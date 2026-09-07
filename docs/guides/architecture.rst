@@ -222,11 +222,14 @@ Pipeline:
 2. Default probe/max distances from framework covalent radii
    (``_derive_voronoi_distance_window``). Slabs use **top-layer** atoms along
    the slab normal; NP/porous use mean radii over all atoms.
-3. Slabs: Voronoi on near-surface atoms only (≥4); NN filter distances still
-   reference the full framework.
+3. Slabs: for a **planar** top layer, Voronoi is skipped and sites come from
+   the topology generator only; **rough** / non-planar slabs still run
+   Voronoi on near-surface atoms (≥4) and may enrich ridges. NN filter
+   distances still reference the full framework.
 4. **Hybrid slab generator (default):** Delaunay topology atop / bridge /
-   hollow in the slab plane, merged with Voronoi enrichment. Bridge midpoints
-   from triangulation edges; hollows from triangle centroids.
+   hollow in the slab plane, merged with Voronoi enrichment when Voronoi
+   ran. Bridge midpoints from triangulation edges; hollows from triangle
+   centroids.
 5. Vertices filtered to the primary cell within
    ``[voronoi_probe_radius, voronoi_max_site_distance]``.
 6. Optional ridge enrichment (``voronoi_site_enrichment``). On planar slabs
@@ -256,7 +259,7 @@ contexts) backs ``resolve_site_context_for_sampling``, which:
    reconstruction or ionic motion under coverage; adsorbates alone do not
    trigger this).
 3. Otherwise tries ``get_symmetry_aware_sites`` (reusing ``raw_unclustered``);
-   falls back to clustered Voronoi on failure/empty.
+   falls back to the clustered unique-site set on failure/empty.
 
 Material strategies:
 
@@ -267,7 +270,8 @@ Material strategies:
    * - Type
      - Site strategy
    * - slab
-     - Top layer along normal → hybrid topology + Voronoi enrichment
+     - Planar: topology atop/bridge/hollow only. Rough: topology + Voronoi
+       enrichment on the top-layer band
    * - nanoparticle
      - Full-framework Voronoi; outward normals; no PBC images
    * - porous
@@ -362,8 +366,9 @@ Placement fill
 One-shot fill enumerates ``min(capacity, num_placements *
 placement_retry_oversample_max)`` specs, materializes them (threaded via
 ``placement_materialize_workers``), and keeps up to ``num_placements``
-successes. When ``placement_retry_enabled`` and the first pass is short, one
-diversity round re-enumerates excluding exact failed-spec keys. BO eval
+successes. When ``placement_retry_enabled``, the first pass is short, and at least
+one spec failed materialization, one diversity round re-enumerates
+excluding those exact failed-spec keys. BO eval
 batches wrap pre-materialized cache hits (no generation backfill); the
 geometry-valid pool is built once when features are extracted.
 
@@ -452,11 +457,15 @@ Many slab+adsorbate relaxations run **in parallel** on GPU
 Leaving ``num_placements`` (and BO batch fields) as ``None`` is intentional:
 the library sizes parallel work to GPU memory.
 
-**Calculator / PBC:** mixed PBC normalized to full periodic for UMA;
-periodic *c* ≥ 18 Å (``MIN_CALCULATOR_CELL_C_ANG``). Mixed PBC rejected on
+**Calculator / PBC:** geometry, filters, MIC, and spglib site symmetry use
+``material_aware_pbc(material_type)`` (slab ``[T,T,F]``, porous ``[T,T,T]``,
+nanoparticle ``[F,F,F]``) — not ``atoms.get_pbc()``. At the UMA boundary,
+mixed PBC is normalized to full periodic via ``calculator_pbc_for_atoms``;
+periodic *c* ≥ 18 Å (``MIN_CALCULATOR_CELL_C_ANG``). Mixed PBC is rejected on
 TorchSim/UMA paths. Stored ``ScreeningResult.atoms`` restore material PBC via
 :func:`~metalsurfer.surface_prep.apply_material_pbc` after the calculator
-boundary (same helper as prep).
+boundary (same helper as prep). Post-relax desorption / decomposition / RMSD
+must keep material-aware PBC so calculator TTT cannot invent vacuum wraps.
 
 **Prep vs adsorption relaxation:** prep uses ASE
 ``slab_relaxation_mode``. Adsorption freeze masks come from ASE ``FixAtoms``
@@ -585,7 +594,8 @@ Full field docs: :doc:`../api/config` and :doc:`configuration`.
 Representative defaults (verify in ``config.py`` when debugging):
 
 - ``model_name="uma-s-1p2"``, ``task_name="oc25"``, ``num_placements=None`` (GPU autotune)
-- ``placement_distance_recovery=True``, XY recovery ±0.5 Å
+- ``placement_distance_recovery=True``, ``placement_clash_descent=True``
+  (Packmol-style salvage; discrete XY ±0.5 Å only when clash is off)
 - ``voronoi_auto_widen=True``, ``adaptive_parallel_fraction=True``
 - ``bo.surrogate="gradient_boost"``, ``bo.initial_sampling="spread_xyz"``,
   ``bo.total_budget=18``, ``bo.transfer.mode="weighted"``

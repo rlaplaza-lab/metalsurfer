@@ -29,14 +29,15 @@ Limitations
 YAML is a convenience dispatch layer, not a full substitute for the Python
 ``run_*`` APIs.
 
-- **No CLI.** Load and run only via the Python API
+- **No package CLI.** Load and run via the Python API
   (:func:`~metalsurfer.load_campaign_yaml` and
-  :func:`~metalsurfer.run_campaign`).
+  :func:`~metalsurfer.run_campaign`) or the demo runner
+  ``examples/run_campaign_yaml.py``.
 - **Substrate sources from a YAML file.** Practical choices are ``bulk_id`` or
   ``slab_file``. Inline ASE ``Atoms`` (``slab=``) cannot be expressed in a
   standalone YAML file. Hand-built nanoparticles, downloaded NOMAD slabs, and
-  similar cases need the Python API (for example Pt₁₂ and camphor under
-  ``examples/``).
+  ASE-constructed oxides need the Python API (for example Pt₁₂, camphor, and
+  rutile TiO₂(110) under ``examples/``).
 - **Molecules are inline only.** A non-empty list of ``{smiles, name}``
   entries. YAML does not accept a molecules CSV path (the Python ``run_*``
   APIs do).
@@ -107,8 +108,10 @@ Demo examples
 -------------
 
 Demo-scale YAML files live under ``examples/`` (run from the project root).
-They use short optimizer steps and ``slab_relaxation_mode: none`` so local
-runs finish quickly; raise steps / restore default prep relaxation for
+They keep library optimizer defaults (``stage1_steps`` / ``stage2_steps``)
+so force-convergence filters can pass, skip prep equilibration with
+``slab_relaxation_mode: none``, and use small ``num_placements`` for speed.
+Restore default prep relaxation and omit ``num_placements`` for
 production-quality energies. Production templates: ``scripts/campaigns/``.
 Schema smoke fixtures (tiny steps, not intended as physics demos):
 ``tests/fixtures/campaigns/``.

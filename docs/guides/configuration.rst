@@ -130,10 +130,12 @@ Placement success levers
   ``voronoi_probe_radius`` / ``voronoi_max_site_distance`` when comparing windows.
 - **Fill** — one-shot oversample (``placement_retry_oversample_max``) requests
   ``min(capacity, num_placements * oversample)`` specs, materializes once, and
-  keeps up to ``num_placements``. When ``placement_retry_enabled`` and the first
-  pass is short, one diversity round excludes exact failed-spec keys. Per-spec
+  keeps up to ``num_placements``. When ``placement_retry_enabled``, the first
+  pass is short, and materialization recorded failed-spec keys, one diversity
+  round excludes those keys. Per-spec
   materialization runs in a thread pool sized by ``placement_materialize_workers``
-  (joblib-style; default ``-2`` = all but one CPU). BO eval batches wrap the
+  (joblib-style; ``None`` inherits ``n_jobs``, which defaults to ``-2`` = all
+  but one CPU). BO eval batches wrap the
   pre-materialized geometry-valid cache (no generation backfill).
 - **Gates** — keep ``reject_vdw_overlaps`` and ``strict_initial_placement`` off
   unless you need stricter starts (they reduce yield).

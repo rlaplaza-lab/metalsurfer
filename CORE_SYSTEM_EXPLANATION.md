@@ -145,7 +145,10 @@ Everything in this section is organised by `material_type`. That one field
 uses, which site sources run, and which heuristics apply. Behind the scenes each
 type maps to a periodicity: slabs are periodic in the two surface directions and
 open in the third; nanoparticles are fully non-periodic; porous frameworks are
-periodic in all three directions.
+periodic in all three directions. Distance math, filters, MIC, and site
+symmetry use that material-aware PBC (`material_aware_pbc`), not whatever
+flags the ASE Atoms carry after the calculator promotes slabs to full 3D
+periodicity. Stored results restore material PBC via `apply_material_pbc`.
 
 A *site* is always a point in space plus a local *outward normal* (the direction
 away from the material) and a *site type*. The site types are:
@@ -401,8 +404,9 @@ get close to `num_placements` valid structures:
   requests up to `num_placements * oversample` specs (capped by capacity when
   clamping is on), materializes them, and keeps up to the target.
 - **Optional diversity retry** (`placement_retry_enabled`, default `True`). If
-  the first pass is short, one extra round re-enumerates excluding exact
-  failed-spec keys (no site blocking or unfiltered fallback).
+  the first pass is short and at least one spec failed materialization, one
+  extra round re-enumerates excluding those exact failed-spec keys (no site
+  blocking or unfiltered fallback).
 
 ### 6.1 Saturation run modes
 

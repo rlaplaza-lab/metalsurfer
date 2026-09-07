@@ -5,7 +5,6 @@ import numpy as np
 from ase import Atoms
 
 from .. import optimization
-from .._numeric_defaults import DEFAULT_TOP_LAYER_TOLERANCE
 from ..config import (
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
@@ -130,7 +129,7 @@ def finalize_substrate(
     require_bottom_anchor: bool | None = None,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
-    top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
+    top_layer_tolerance: float | None = None,
 ) -> SlabContainer:
     """Apply PBC, freeze constraints, and validate a substrate for campaign APIs.
 
@@ -165,7 +164,8 @@ def finalize_substrate(
     freeze_symbols
         Chemical symbols to freeze.
     top_layer_tolerance
-        Height tolerance for the top layer in Å.
+        Height tolerance for the top layer in Å. When ``None``, uses
+        :attr:`~metalsurfer.AdsorptionConfig.top_layer_tolerance`.
     """
     cfg = resolve_adsorption_config(config)
     container = coerce_slab_container(slab, copy=True)
@@ -177,11 +177,16 @@ def finalize_substrate(
     if material_type == "slab" and should_align:
         container.atoms = ensure_slab_z_alignment(container.atoms)
     apply_material_pbc(container.atoms, material_type)
+    tol = (
+        float(top_layer_tolerance)
+        if top_layer_tolerance is not None
+        else float(cfg.top_layer_tolerance)
+    )
     container.atoms = apply_surface_constraints(
         container.atoms,
         relax_top_layer=relax_top_layer,
         freeze_symbols=freeze_symbols,
-        top_layer_tolerance=top_layer_tolerance,
+        top_layer_tolerance=tol,
         material_type=material_type,
     )
     validate_substrate(
@@ -221,7 +226,7 @@ def prepare_substrate(
     adatom_relaxation_steps: int | None = None,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
-    top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
+    top_layer_tolerance: float | None = None,
 ) -> SlabContainer:
     """Build or load a substrate, optionally modify it, and finalize for campaigns.
 
@@ -302,7 +307,8 @@ def prepare_substrate(
     freeze_symbols
         Chemical symbols to freeze.
     top_layer_tolerance
-        Height tolerance for the top layer in Å.
+        Height tolerance for the top layer in Å. When ``None``, uses
+        :attr:`~metalsurfer.AdsorptionConfig.top_layer_tolerance`.
     """
     sources = [bulk_id is not None, slab_file is not None, slab is not None]
     if sum(sources) != 1:
@@ -439,7 +445,7 @@ def resize_substrate_for_molecule(
     *,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
-    top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
+    top_layer_tolerance: float | None = None,
 ) -> SlabContainer:
     """Expand *slab* in-plane when conformers require larger image separation.
 
@@ -459,7 +465,8 @@ def resize_substrate_for_molecule(
     freeze_symbols
         Chemical symbols to freeze.
     top_layer_tolerance
-        Height tolerance for the top layer in Å.
+        Height tolerance for the top layer in Å. When ``None``, uses
+        :attr:`~metalsurfer.AdsorptionConfig.top_layer_tolerance`.
     """
     cfg = resolve_adsorption_config(config)
     resized, was_resized = auto_resize_substrate_for_molecule(

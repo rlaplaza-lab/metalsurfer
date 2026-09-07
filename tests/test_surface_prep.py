@@ -285,6 +285,33 @@ def test_prepare_substrate_multi_element_alloy_requires_host(monkeypatch):
         )
 
 
+def test_prepare_substrate_uses_config_top_layer_tolerance(monkeypatch):
+    """Omitting the prep kwarg must fall back to AdsorptionConfig.top_layer_tolerance."""
+    from metalsurfer.surface_prep.prep import finalize_substrate
+
+    applied: dict = {}
+
+    def _capture_constraints(atoms, **kwargs):
+        applied.update(kwargs)
+        return atoms
+
+    monkeypatch.setattr(
+        "metalsurfer.surface_prep.prep.apply_surface_constraints",
+        _capture_constraints,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.surface_prep.prep.validate_substrate",
+        lambda *a, **k: None,
+    )
+    finalize_substrate(
+        SlabContainer(make_slab(symbol="Ru")),
+        AdsorptionConfig(device="cpu", top_layer_tolerance=2.1),
+        top_layer_tolerance=None,
+        relax_top_layer=True,
+    )
+    assert applied["top_layer_tolerance"] == pytest.approx(2.1)
+
+
 def test_prepare_substrate_single_element_alloy_infers_host(monkeypatch):
     captured: dict = {}
 
