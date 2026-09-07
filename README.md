@@ -91,6 +91,7 @@ Runnable scripts in [`examples/`](examples/) (requires `pip install -e ".[mlip]"
 | Script | `material_type` | Notes |
 |--------|-----------------|-------|
 | [`examples/ethene_pt12_binding_energy.py`](examples/ethene_pt12_binding_energy.py) | `nanoparticle` | Ethene on a Pt₁₂ cluster |
+| [`examples/h2_pt13_binding_energy.py`](examples/h2_pt13_binding_energy.py) | `nanoparticle` | H₂ dissociative adsorption on ASE Pt₁₃ icosahedron |
 | [`examples/co2_mof_binding_energy.py`](examples/co2_mof_binding_energy.py) | `porous` | CO₂ in a MOF (RUBTAK01) |
 | [`examples/ethene_ru_slab_binding_energy.py`](examples/ethene_ru_slab_binding_energy.py) | `slab` | Ethene on Ru(0001) |
 | [`examples/h2_ru_slab_binding_energy.py`](examples/h2_ru_slab_binding_energy.py) | `slab` | H₂ dissociative adsorption (`enable_dissociative_placement` + `skip_topology_check`) |

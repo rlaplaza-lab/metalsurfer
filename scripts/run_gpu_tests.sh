@@ -49,7 +49,7 @@ _run_phase "tests/test_integration_mlip_pipeline.py::test_mlip_pipeline[ethene_r
 _run_phase "tests/test_integration_mlip_pipeline.py::test_mlip_pipeline[h2_ru]" -m gpu
 _run_phase tests/test_integration_water_cu_slab.py -m gpu
 _run_phase "tests/test_integration_mlip_pipeline.py::test_mlip_pipeline[co2_mof]" -m gpu
-_run_phase "tests/test_integration_mlip_pipeline.py::test_mlip_pipeline[h2_pt12]" -m gpu
+_run_phase "tests/test_integration_mlip_pipeline.py::test_mlip_pipeline[h2_pt13]" -m gpu
 _run_phase tests/test_saturation.py::test_run_saturation_screening_h2_ni111_real_gpu -m gpu
 _run_phase tests/test_saturation.py::test_run_saturation_screening_multi_mol_bo_real_gpu -m gpu
 

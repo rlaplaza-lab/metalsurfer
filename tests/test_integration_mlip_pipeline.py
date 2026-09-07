@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.build import hcp0001
+from ase.cluster import Icosahedron
 from ase.io import read
 
 from metalsurfer.config import AdsorptionConfig
@@ -29,29 +30,16 @@ from tests.conftest import (
 
 pytestmark = GPU_MLIP_MARKS
 
-_MLIP_CASE_IDS = ("ethene_ru", "h2_ru", "h2_pt12", "co2_mof")
+_MLIP_CASE_IDS = ("ethene_ru", "h2_ru", "h2_pt13", "co2_mof")
 
 
-def _pt12_cluster() -> Atoms:
-    return Atoms(
-        symbols=["Pt"] * 12,
-        positions=[
-            [0.0, 0.0, 0.0],
-            [2.8, 0.0, 0.0],
-            [1.4, 2.425, 0.0],
-            [4.2, 2.425, 0.0],
-            [1.4, 0.808, 2.0],
-            [4.2, 0.808, 2.0],
-            [0.0, 2.425, 2.0],
-            [2.8, 2.425, 2.0],
-            [1.4, 1.617, 4.0],
-            [4.2, 1.617, 4.0],
-            [0.0, 0.808, 4.0],
-            [2.8, 0.808, 4.0],
-        ],
-        cell=[20, 20, 20],
-        pbc=False,
-    )
+def _pt13_icosahedron():
+    """ASE Pt₁₃ icosahedron in a non-periodic cell (matches the H₂ NP example)."""
+    atoms = Icosahedron("Pt", noshells=2)
+    atoms.set_cell([30.0, 30.0, 30.0])
+    atoms.center()
+    atoms.pbc = False
+    return atoms
 
 
 def _local_ru_001_slab() -> Atoms:
@@ -101,7 +89,7 @@ def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
             results_dir="results_test_h2_ru_slab",
         )
         smiles, name, surface_type = "[H][H]", "H2", "h2_ru_slab"
-    elif case_id == "h2_pt12":
+    elif case_id == "h2_pt13":
         num_placements = 5
         config = AdsorptionConfig(
             material_type="nanoparticle",
@@ -109,17 +97,17 @@ def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
             num_conformers=1,
             num_placements=num_placements,
             device="cuda",
-            slab_relaxation_mode="none",
+            slab_relaxation_mode="ionic_only",
             enable_dissociative_placement=True,
             skip_topology_check=True,
             **GPU_AUTOBATCH,
         )
         slab = prepare_substrate(
-            slab=_pt12_cluster(),
+            slab=_pt13_icosahedron(),
             config=config,
-            results_dir="results_test_h2_pt12",
+            results_dir="results_test_h2_pt13",
         )
-        smiles, name, surface_type = "[H][H]", "H2", "h2_pt12"
+        smiles, name, surface_type = "[H][H]", "H2", "h2_pt13"
     elif case_id == "co2_mof":
         num_placements = 5
         config = AdsorptionConfig(
@@ -187,11 +175,11 @@ def _assert_ethene_ru(results: list[ScreeningResult], num_placements: int) -> No
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
-    # Bounds against uma-s-1p2 + oc25: best/median stay favorable; the full
-    # survivor pool can include a weakly endothermic pose (~0.2 eV) that still
-    # shows chemisorption contact. Cap rejects only clearly unphysical outliers.
-    assert e_ads.min() < 0, (
-        f"Best E_ads should be negative (favorable binding), got min {e_ads.min():.3f}"
+    # QC (uma-s-1p2 + oc25, ASE Ru slab): best ≈ −0.14 eV; pool may include
+    # a weakly endothermic chemisorbed pose (~0.2 eV).
+    assert float(e_ads.min()) < -0.05, (
+        f"Best E_ads regression lock (< -0.05 eV) failed for ethene on Ru, "
+        f"got min {e_ads.min():.3f}; all: {e_ads}"
     )
     assert np.median(e_ads) < 0, (
         f"Median E_ads should be negative, got {np.median(e_ads):.3f}; all: {e_ads}"
@@ -235,11 +223,10 @@ def _assert_h2_ru(results: list[ScreeningResult], num_placements: int) -> None:
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
-    # Bounds tightened against the uma-s-1p2 + oc25 reference run
-    # (observed: every placement at E_ads = -0.1185 eV, distance 1.75 A).
+    # QC (uma-s-1p2 + oc25): E_ads ≈ −0.1185 eV, distance 1.75 Å.
     assert np.all(np.isfinite(e_ads))
-    assert float(e_ads.min()) < 0.0, (
-        f"Best E_ads should be negative for H2 on Ru, got {e_ads}"
+    assert float(e_ads.min()) < -0.05, (
+        f"Best E_ads regression lock (< -0.05 eV) failed for H2 on Ru, got {e_ads}"
     )
     assert np.all(e_ads < 0.1), (
         f"E_ads should stay below 0.1 eV for H2 on Ru, got {e_ads}"
@@ -278,35 +265,24 @@ def _assert_h2_ru(results: list[ScreeningResult], num_placements: int) -> None:
         ), f"H–H should be molecular or dissociated, got {hh:.3f} (all={hh_lengths})"
 
 
-def _assert_h2_pt12(results: list[ScreeningResult], num_placements: int) -> None:
+def _assert_h2_pt13(results: list[ScreeningResult], num_placements: int) -> None:
     min_ok = max(2, int(math.ceil(0.4 * num_placements)))
     assert len(results) >= min_ok, (
         f"Expected >= {min_ok}/{num_placements} valid placements, got {len(results)}"
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
-    # Frozen Pt₁₂ + UMA oc25 often leaves H2 in a weakly endothermic
-    # physisorption well (~1.1 eV) under this small-N demo budget; the
-    # ethene/Pt₁₂ example documents the same rigid-cluster offset. Assert the
-    # dissociative workflow completes with finite, non-pathological energies
-    # rather than requiring a chemisorbed well.
+    # QC (uma-s-1p2 + oc25, prep-relaxed Pt₁₃ ico): best ≈ −1.13 eV,
+    # dissociated H–H ≈ 2.18 Å, H–Pt ≈ 1.78 Å.
     assert np.all(np.isfinite(e_ads))
-    assert float(e_ads.min()) < 1.5, (
-        f"Best E_ads should stay below the weak-binding ceiling (<1.5 eV) "
-        f"for H2 on Pt12, got {e_ads}"
+    assert float(e_ads.min()) < -0.5, (
+        f"Best E_ads regression lock (< -0.5 eV) failed for H2 on Pt13, got {e_ads}"
     )
-    assert np.all(e_ads < 1.5), (
-        f"E_ads should stay below a weak-binding ceiling (< 1.5 eV), got {e_ads}"
+    assert np.all(e_ads < 0.0), (
+        f"E_ads should stay favorable (< 0 eV) for H2 on Pt13, got {e_ads}"
     )
-    assert np.all(e_ads >= -0.8), (
-        f"E_ads should be >= -0.8 eV for H2 on Pt12, got min {e_ads.min():.3f}"
-    )
-
-    assert len(results) >= 2, f"Expected multiple configs, got {len(results)} results"
-    spread = float(e_ads.max() - e_ads.min())
-    assert spread >= 0.01, (
-        f"Expected distinct E_ads when multiple unique configs remain, "
-        f"got spread {spread:.4f}"
+    assert np.all(e_ads >= -2.0), (
+        f"E_ads should be >= -2.0 eV for H2 on Pt13, got min {e_ads.min():.3f}"
     )
 
     slab_size = len(results[0].atoms) - 2
@@ -317,13 +293,14 @@ def _assert_h2_pt12(results: list[ScreeningResult], num_placements: int) -> None
         )
         assert r.placement_descriptor is not None
         assert r.placement_descriptor.orientation_type == "dissociative"
-        assert 1.5 <= r.distance <= 4.0, (
-            f"Adsorbate–surface distance should be 1.5–4 Å, got {r.distance:.2f}"
+        assert 1.5 <= r.distance <= 2.2, (
+            f"Adsorbate–surface distance should be chemisorption (1.5–2.2 Å), "
+            f"got {r.distance:.2f}"
         )
         hh = adsorbate_symbol_pair_distance(r.atoms, slab_size, "H")
-        assert (0.7 <= hh <= 0.9) or (
-            1.5 <= hh <= _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM
-        ), f"H–H should be molecular or dissociated on cluster, got {hh:.3f}"
+        assert 1.5 <= hh <= _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM, (
+            f"H–H should stay dissociated on Pt13, got {hh:.3f}"
+        )
 
 
 def _co_bond_lengths(atoms, slab_size: int) -> tuple[float, float]:
@@ -348,16 +325,15 @@ def _assert_co2_mof(results: list[ScreeningResult], num_placements: int) -> None
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
-    # Bounds tightened against the uma-s-1p2 + oc25 reference run
-    # (observed: E_ads in [-0.22, -0.13] — all placements bind physisorptively).
+    # QC (uma-s-1p2 + oc25): E_ads in [-0.22, -0.13].
     assert np.all(e_ads < 0.05), (
         f"E_ads should stay in a physisorption window (< 0.05 eV), got {e_ads}"
     )
     assert np.all(e_ads >= -0.8), (
         f"E_ads should be >= -0.8 eV for CO2 in MOF, got min {e_ads.min():.3f}"
     )
-    assert float(e_ads.min()) < 0.0, (
-        f"Best E_ads should be favorable physisorption (< 0 eV) for CO2 in MOF, "
+    assert float(e_ads.min()) < -0.10, (
+        f"Best E_ads regression lock (< -0.10 eV) failed for CO2 in MOF, "
         f"got {e_ads}"
     )
 
@@ -418,8 +394,8 @@ def test_mlip_pipeline(case_id: str, workdir) -> None:
             _assert_ethene_ru(results, num_placements)
         case "h2_ru":
             _assert_h2_ru(results, num_placements)
-        case "h2_pt12":
-            _assert_h2_pt12(results, num_placements)
+        case "h2_pt13":
+            _assert_h2_pt13(results, num_placements)
         case "co2_mof":
             _assert_co2_mof(results, num_placements)
         case _:

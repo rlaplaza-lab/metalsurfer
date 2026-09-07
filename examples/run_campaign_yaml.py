@@ -16,7 +16,25 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from metalsurfer import configure_logging, load_campaign_yaml, run_campaign
+from metalsurfer import (
+    BindingCampaignResult,
+    SaturationCampaignResult,
+    configure_logging,
+    load_campaign_yaml,
+    run_campaign,
+)
+
+# Best-E_ads locks by YAML stem (uma-s-1p2 + oc25 QC). Exclusive upper bounds
+# on campaign best (binding) or first committed step best (saturation).
+_BINDING_BEST_E_ADS_CEILING: dict[str, float] = {
+    "ethene_ru_slab_binding_energy": 0.5,  # obs ≈ +0.24 eV
+    "h2_ru_slab_binding_energy": 0.0,  # obs ≈ −0.18 eV
+    "co2_mof_binding_energy": 0.0,  # obs ≈ −0.21 eV
+    "water_cu111_adsorption_bo": 0.0,  # obs ≈ −0.37 eV
+}
+_SATURATION_STEP1_BEST_E_ADS_CEILING: dict[str, float] = {
+    "ethane_cu_saturation": -0.2,  # obs ≈ −0.51 eV
+}
 
 
 def _resolve_device(requested: str) -> str:
@@ -35,6 +53,47 @@ def _resolve_device(requested: str) -> str:
         file=sys.stderr,
     )
     return "cpu"
+
+
+def _validate_best_e_ads_lock(yaml_stem: str, result: object) -> None:
+    """Exit non-zero when a known demo regresses past its QC best-E_ads lock."""
+    if isinstance(result, BindingCampaignResult):
+        ceiling = _BINDING_BEST_E_ADS_CEILING.get(yaml_stem)
+        if ceiling is None:
+            return
+        if not result.molecule_summaries:
+            print("No molecule summaries produced.", file=sys.stderr)
+            raise SystemExit(1)
+        best = result.molecule_summaries[0].best_adsorption_energy
+        if best is None or best >= ceiling:
+            print(
+                f"Best E_ads regression lock failed for {yaml_stem}: "
+                f"expected < {ceiling:.2f} eV, got {best}.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        return
+
+    if isinstance(result, SaturationCampaignResult):
+        ceiling = _SATURATION_STEP1_BEST_E_ADS_CEILING.get(yaml_stem)
+        if ceiling is None:
+            return
+        if not result.runs:
+            print("No saturation runs produced.", file=sys.stderr)
+            raise SystemExit(1)
+        run = result.runs[0]
+        first_bound = next((s for s in run.steps if s.n_added > 0), None)
+        if first_bound is None:
+            print("No committed saturation step found.", file=sys.stderr)
+            raise SystemExit(1)
+        best = min(u.energy_adsorption for u in first_bound.committed())
+        if best >= ceiling:
+            print(
+                f"First-step best E_ads regression lock failed for {yaml_stem}: "
+                f"expected < {ceiling:.2f} eV, got {best:.4f} eV.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -82,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         print(f"Campaign finished: {document.campaign} -> {document.results_dir}")
+
+    _validate_best_e_ads_lock(args.yaml_path.stem, result)
     return 0
 
 

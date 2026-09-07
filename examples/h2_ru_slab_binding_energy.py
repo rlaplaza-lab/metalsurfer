@@ -54,8 +54,12 @@ def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> 
     _validate_dissociative_result(best)
 
     e_ads = best.energy_adsorption
-    if not np.isfinite(e_ads) or e_ads > 5.0:
-        print(f"E_ads out of smoke-test range: {e_ads}", file=sys.stderr)
+    # Best-E_ads lock (uma-s-1p2 + oc25 QC): observed ≈ −0.11 eV.
+    if not np.isfinite(e_ads) or e_ads >= 0.0:
+        print(
+            f"Expected favorable H2 binding on Ru (best E_ads < 0 eV), got {e_ads}.",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
 
 

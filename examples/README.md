@@ -8,6 +8,7 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 | Script | Description |
 |--------|-------------|
 | `ethene_pt12_binding_energy.py` | Ethene on a Pt₁₂ nanoparticle (`material_type="nanoparticle"`) |
+| `h2_pt13_binding_energy.py` | H₂ dissociative adsorption on an ASE Pt₁₃ icosahedron (UMA prep-relaxed) |
 | `co2_mof_binding_energy.py` | CO₂ in a MOF (porous; `prepare_substrate`) |
 | `ethene_ru_slab_binding_energy.py` | Ethene on Ru(0001) (`prepare_substrate`) |
 | `h2_ru_slab_binding_energy.py` | H₂ dissociative adsorption on Ru(0001) (`enable_dissociative_placement=True`; usually also `skip_topology_check=True`) |
@@ -50,11 +51,11 @@ with Bayesian placement search, use `run_saturation_bo`.
 Most binding demos validate favorable molecular E_ads before exit. The Pt₁₂
 and ethene/Ru(0001) demos instead validate a chemisorption contact on the best
 pose: under rigid substrates / MP lattice constants UMA can place the best
-surviving pose right around E_ads ≈ 0 eV. The H₂/Ru(0001) demo
-sets `enable_dissociative_placement=True` for hollow-site pair placements and
+surviving pose right around E_ads ≈ 0 eV. The H₂/Ru(0001) and H₂/Pt₁₃ demos
+set `enable_dissociative_placement=True` for hollow-site pair placements and
 `skip_topology_check=True` so fragmented post-relax states pass connectivity
-checks; it checks that the dissociative workflow completes with adsorbed
-geometries (molecular or dissociated H₂ after relaxation).
+checks; H₂/Pt₁₃ additionally requires favorable E_ads and chemisorption contact
+on a UMA-prep-relaxed ASE icosahedron.
 
 `prepare_substrate` equilibrates substrate ionic positions by default (`slab_relaxation_mode="ionic_only"`) and freezes the entire substrate during adsorption by default (prep-only ASE `FixAtoms` — not campaign kwargs). `relax_top_layer=True` leaves a material-aware surface band free (slab: simple height band within `top_layer_tolerance`; nanoparticle outer shell; porous pore boundary). Omitting freeze constraints is allowed (campaigns warn; substrate stays fully mobile). See the [surface engineering guide](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html). Loaded experimental or saturation slabs use `slab_relaxation_mode="none"` (e.g. `co2_mof`, `camphor_cu111`, `scripts/furanics_go*_binding_energy.py`, `scripts/vanillin_on_h_saturated_ni111.py` for the loaded slab).
 

@@ -47,9 +47,10 @@ def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> 
         raise SystemExit(1)
 
     best = summary.best_adsorption_energy
-    if best is None or best >= 0.5:
+    # Best-E_ads lock (uma-s-1p2 + oc25 QC): observed ≈ −0.22 eV.
+    if best is None or best >= 0.0:
         print(
-            f"Expected weak physisorption (best E_ads < 0.5 eV), got {best}.",
+            f"Expected favorable CO₂ physisorption (best E_ads < 0 eV), got {best}.",
             file=sys.stderr,
         )
         print(campaign.format_summary(results_dir=results_dir), file=sys.stderr)

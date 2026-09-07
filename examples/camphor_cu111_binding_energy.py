@@ -1033,9 +1033,10 @@ def _validate_campaign(campaign: BindingCampaignResult) -> None:
         raise SystemExit(1)
 
     best = summary.best_adsorption_energy
-    if best is None or best >= 0.0:
+    # Best-E_ads lock (uma-s-1p2 + oc25 QC): observed ≈ −1.35 eV.
+    if best is None or best >= -0.5:
         print(
-            f"Expected favorable camphor binding (best E_ads < 0 eV), got {best}.",
+            f"Expected strong camphor binding (best E_ads < -0.5 eV), got {best}.",
             file=sys.stderr,
         )
         raise SystemExit(1)

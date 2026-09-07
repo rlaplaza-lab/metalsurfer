@@ -41,6 +41,7 @@ PYTHON_EXAMPLES=(
   examples/ethene_pt12_binding_energy.py
   examples/ethene_ru_slab_binding_energy.py
   examples/h2_ru_slab_binding_energy.py
+  examples/h2_pt13_binding_energy.py
   examples/co2_mof_binding_energy.py
   examples/water_oh_rutile_saturation.py
   examples/camphor_cu111_binding_energy.py
@@ -51,6 +52,7 @@ declare -A PYTHON_RESULTS=(
   [examples/ethene_pt12_binding_energy.py]=results_ethene_pt12
   [examples/ethene_ru_slab_binding_energy.py]=results_ethene_ru_slab
   [examples/h2_ru_slab_binding_energy.py]=results_h2_ru_slab
+  [examples/h2_pt13_binding_energy.py]=results_h2_pt13
   [examples/co2_mof_binding_energy.py]=results_co2_mof
   [examples/water_oh_rutile_saturation.py]=results_water_oh_rutile_saturation
   [examples/camphor_cu111_binding_energy.py]=results_camphor_cu111
