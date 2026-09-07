@@ -36,14 +36,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _mic_pairwise_distances(coords: np.ndarray, atoms: Atoms) -> np.ndarray:
-    """Return an (n, n) MIC-aware distance matrix for *coords*."""
+def _mic_pairwise_distances(
+    coords: np.ndarray,
+    atoms: Atoms,
+    *,
+    material_type: str = "slab",
+) -> np.ndarray:
+    """Return an (n, n) MIC-aware distance matrix for *coords*.
+
+    Uses :func:`material_aware_pbc` (not ``atoms.get_pbc()``) so calculator
+    TTT promotion cannot invent vacuum-wrap bonds on slabs.
+    """
     coords = np.asarray(coords, dtype=float)
     n = len(coords)
     if n <= 1:
         return np.zeros((n, n))
     cell = np.asarray(atoms.get_cell(), dtype=float)
-    pbc = atoms.get_pbc()
+    pbc = material_aware_pbc(material_type)
     if not cell_has_volume(cell):
         pbc = [False, False, False]
     # Shared placement primitive (same MIC math as every other distance gate).
@@ -61,6 +70,8 @@ def _nonsurface_distance_and_threshold(
     atoms: Atoms,
     surface_symbols: list[str] | None,
     multiplier: float,
+    *,
+    material_type: str = "slab",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Mask out surface atoms and return (syms, coords, dist_matrix, threshold).
 
@@ -76,7 +87,7 @@ def _nonsurface_distance_and_threshold(
     )
     coords = atoms.get_positions()[mask]
     syms = syms[mask]
-    dist_matrix = _mic_pairwise_distances(coords, atoms)
+    dist_matrix = _mic_pairwise_distances(coords, atoms, material_type=material_type)
     threshold = _covalent_threshold_matrix(syms, multiplier)
     return syms, coords, dist_matrix, threshold
 
@@ -199,12 +210,14 @@ def _connected_components_from_coords(
     syms: np.ndarray,
     atoms: Atoms,
     multiplier: float,
+    *,
+    material_type: str = "slab",
 ) -> list[np.ndarray]:
     """Return boolean masks (one per fragment) for bonded clusters in *coords*."""
     if len(coords) <= 1:
         return [np.ones(len(coords), dtype=bool)] if len(coords) == 1 else []
 
-    dist_matrix = _mic_pairwise_distances(coords, atoms)
+    dist_matrix = _mic_pairwise_distances(coords, atoms, material_type=material_type)
     threshold = _covalent_threshold_matrix(syms, multiplier)
     bonded = dist_matrix <= threshold
     np.fill_diagonal(bonded, False)
@@ -222,6 +235,8 @@ def adsorbate_connected_components(
     atoms: Atoms,
     base_slab_len: int,
     connectivity_multiplier: float,
+    *,
+    material_type: str = "slab",
 ) -> list[Atoms]:
     """Split ``atoms[base_slab_len:]`` into connected adsorbate fragments.
 
@@ -233,6 +248,8 @@ def adsorbate_connected_components(
         Number of atoms belonging to the base slab.
     connectivity_multiplier
         Covalent-radius multiplier for bond detection.
+    material_type
+        Geometric PBC via :func:`material_aware_pbc`.
     """
     ads = atoms[base_slab_len:]
     if len(ads) == 0:
@@ -241,7 +258,11 @@ def adsorbate_connected_components(
     syms = np.array(ads.get_chemical_symbols())
     coords = ads.get_positions()
     masks = _connected_components_from_coords(
-        coords, syms, ads, connectivity_multiplier
+        coords,
+        syms,
+        ads,
+        connectivity_multiplier,
+        material_type=material_type,
     )
     return [ads[mask] for mask in masks]
 
@@ -271,6 +292,8 @@ def check_decomposition(
     surface_symbols: list[str] | None,
     connectivity_multiplier: float,
     adsorbate_prefix_atoms: int | None = None,
+    *,
+    material_type: str = "slab",
 ) -> tuple[bool, str]:
     """Return ``(ok, reason)`` indicating whether the adsorbate decomposed.
 
@@ -293,6 +316,8 @@ def check_decomposition(
         Covalent-radius multiplier for bond detection.
     adsorbate_prefix_atoms
         When set, only ``atoms[adsorbate_prefix_atoms:]`` is checked.
+    material_type
+        Geometric PBC via :func:`material_aware_pbc` (see :func:`check_desorption`).
     """
     if adsorbate_prefix_atoms is not None:
         if adsorbate_prefix_atoms < 0 or adsorbate_prefix_atoms > len(atoms):
@@ -307,7 +332,10 @@ def check_decomposition(
         surface_symbols = None
 
     syms, _coords, dist_matrix, threshold = _nonsurface_distance_and_threshold(
-        atoms, surface_symbols, connectivity_multiplier
+        atoms,
+        surface_symbols,
+        connectivity_multiplier,
+        material_type=material_type,
     )
     if not _is_molecule_connected_from_dist(syms, dist_matrix, threshold):
         return False, f"adsorbate not connected (multiplier={connectivity_multiplier})"
@@ -426,8 +454,9 @@ def check_desorption(
     still bound. With ``MIN_CALCULATOR_CELL_C_ANG = 18`` a molecule 12 Å above a
     slab whose top sits at z=3 gives an image distance of 3 Å, i.e. below the
     default 4 Å threshold, so desorption would go undetected. Porous frameworks
-    keep ``[True, True, True]`` because there the wrap is physical, and this also
-    matches the convention used by :func:`check_decomposition`.
+    keep ``[True, True, True]`` because there the wrap is physical. The same
+    material-aware convention applies to :func:`check_decomposition` and
+    duplicate RMSD.
 
     Parameters
     ----------
@@ -465,8 +494,10 @@ def _adsorbate_rmsd(
     a1: Atoms,
     a2: Atoms,
     surface_symbols: list[str] | None = None,
+    *,
+    material_type: str = "slab",
 ) -> float:
-    """MIC-aware RMSD between non-surface atoms of two structures."""
+    """MIC-aware RMSD between non-surface atoms (material-aware PBC)."""
     pos1 = a1.get_positions()
     pos2 = a2.get_positions()
     if surface_symbols:
@@ -477,7 +508,11 @@ def _adsorbate_rmsd(
         if m1.sum() != m2.sum():
             return float("inf")
         pos1, pos2 = pos1[m1], pos2[m2]
-    diffs, _ = find_mic(pos1 - pos2, a1.get_cell(), a1.get_pbc())
+    pbc = material_aware_pbc(material_type)
+    cell = np.asarray(a1.get_cell(), dtype=float)
+    if not cell_has_volume(cell):
+        pbc = [False, False, False]
+    diffs, _ = find_mic(pos1 - pos2, cell, pbc)
     return float(np.sqrt(np.mean(np.sum(diffs**2, axis=1))))
 
 
@@ -572,6 +607,7 @@ def filter_results(
                 surface_symbols=surface_symbols,
                 connectivity_multiplier=config.connectivity_multiplier,
                 adsorbate_prefix_atoms=prefix,
+                material_type=config.material_type,
             )
             if ok:
                 kept.append(entry)
@@ -655,7 +691,10 @@ def filter_results(
             if len(entry.atoms) != len(u.atoms):
                 continue
             rmsd = _adsorbate_rmsd(
-                entry.atoms, u.atoms, surface_symbols=surface_symbols
+                entry.atoms,
+                u.atoms,
+                surface_symbols=surface_symbols,
+                material_type=config.material_type,
             )
             if rmsd < config.rmsd_dedup_threshold:
                 is_dup = True

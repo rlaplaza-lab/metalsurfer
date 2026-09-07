@@ -878,7 +878,7 @@ def _cluster_equivalent_sites(
 
     if mat_type == "porous":
         coords = np.array([_get_xyz(s) for s in sorted_sites])
-        pbc_full = np.array([True, True, True])
+        pbc_full = np.asarray(material_aware_pbc(mat_type), dtype=bool)
         image_offsets = _periodic_image_offsets(cell, pbc_full, tolerance)
         reps = _cluster_with_metric(
             n,
@@ -907,7 +907,7 @@ def _cluster_equivalent_sites(
     pinv_ab_T, _ = _slab_plane_projectors(cell)
     coords = np.array([_get_xyz(s) for s in sorted_sites])
     heights = _height_along_slab_normal(coords, cell)
-    pbc_slab = np.array([True, True, False])
+    pbc_slab = np.asarray(material_aware_pbc(mat_type), dtype=bool)
     image_offsets = _periodic_image_offsets(cell, pbc_slab, tolerance)
     # Hoist loop-invariant quantities out of the per-pair closure: the slab
     # normal and the inverse cell (otherwise ``_cart_to_frac`` recomputes
@@ -992,7 +992,8 @@ def get_symmetry_aware_sites(
     material_type
         ``"slab"``, ``"nanoparticle"``, or ``"porous"``. Required so that the
         symmetry mode and PBC semantics always match the caller's intent (same
-        as :func:`get_unified_sites`).
+        as :func:`get_unified_sites`): ``cluster`` for nanoparticles,
+        ``periodic`` for slabs/porous (ignores ``slab.get_pbc()``).
     probe_radius
         Voronoi probe radius (auto-derived if None).
     max_site_distance
@@ -1026,7 +1027,7 @@ def get_symmetry_aware_sites(
     if not site_list:
         return []
 
-    sym_mode = "cluster" if material_type == "nanoparticle" else "auto"
+    sym_mode = "cluster" if material_type == "nanoparticle" else "periodic"
     planar_for_symmetry = (material_type == "slab") and _is_top_layer_planar(
         slab, top_layer_tolerance
     )

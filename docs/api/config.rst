@@ -190,8 +190,9 @@ Site detection
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)
 
-   Cartesian tolerance for merging symmetrically or geometrically equivalent sites
-   after initial detection.
+   Cartesian tolerance for merging geometrically near-duplicate sites after
+   initial detection (MIC-aware clustering). Spglib symmetry reduction is a
+   separate later pass controlled by ``symmetry_tolerance``.
 
 ``hollow_site_dedup_tolerance``
    **Type:** ``float`` · **Default:** ``0.1`` (Å)

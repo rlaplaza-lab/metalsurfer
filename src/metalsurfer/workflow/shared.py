@@ -48,7 +48,7 @@ from ..reporting import (
     ReferenceFailure,
 )
 from ..result_paths import results_dir_for
-from ..surface_prep import SlabContainer, accept_substrate_for_api
+from ..surface_prep import SlabContainer, accept_substrate_for_api, apply_material_pbc
 from ..surface_prep._surfaces import validate_substrate_conformer_sizing
 from ..surface_prep.freeze import (
     check_frozen_substrate_displacement,
@@ -338,6 +338,8 @@ def _evaluate_optimized_candidate(
     slab_size = len(slab_atoms)
     assert min_d is not None
     dist = float(min_d)
+    result_atoms = opt_atoms.copy()
+    apply_material_pbc(result_atoms, config.material_type)
     result = ScreeningResult(
         molecule=molecule_name,
         placement_id=placement_id,
@@ -345,7 +347,7 @@ def _evaluate_optimized_candidate(
         energy_slab=E_slab,
         energy_adsorbate=E_mol,
         energy_adsorption=e_ads,
-        atoms=opt_atoms.copy(),
+        atoms=result_atoms,
         slab_size=slab_size,
         distance=dist,
         placement_descriptor=descriptor,

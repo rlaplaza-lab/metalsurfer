@@ -361,6 +361,7 @@ class TestEvaluateCompositeCommit:
             )
             assert row.slab_size == len(make_slab())
             assert len(row.atoms) == len(make_slab()) + 2 * len(make_water())
+            assert list(row.atoms.get_pbc()) == [True, True, False]
 
         # Per-unit identity survives the rewrite.
         assert (first.molecule, first.placement_id) == (

@@ -267,6 +267,41 @@ def test_get_unified_sites_uses_material_aware_pbc_not_atoms_ttt():
     assert {s.site_type for s in sites_ttt} == {s.site_type for s in ttf}
 
 
+def test_get_symmetry_aware_sites_mode_follows_material_type_not_atoms_pbc(
+    monkeypatch,
+):
+    """SymmetryAnalyzer mode comes from material_type, not atoms.get_pbc()."""
+    from metalsurfer.placement import get_symmetry_aware_sites
+    from metalsurfer.placement import site_enumeration as se
+    from metalsurfer.symmetry import SymmetryAnalyzer
+
+    captured: dict[str, str] = {}
+    real_analyzer = SymmetryAnalyzer
+
+    def _capturing(*args, **kwargs):
+        analyzer = real_analyzer(*args, **kwargs)
+        captured["mode"] = analyzer._mode
+        return analyzer
+
+    monkeypatch.setattr(se, "SymmetryAnalyzer", _capturing)
+
+    slab = make_slab(nx=2, ny=2)
+    raw = get_unified_sites(slab, material_type="slab")
+    fff = slab.copy()
+    fff.set_pbc([False, False, False])
+    get_symmetry_aware_sites(
+        fff, material_type="slab", raw_sites=raw, symmetry_tolerance=0.15
+    )
+    assert captured["mode"] == "periodic"
+
+    np_atoms = make_nanoparticle()
+    np_atoms.set_pbc([True, True, True])
+    np_raw = get_unified_sites(np_atoms, material_type="nanoparticle")
+    assert np_raw
+    get_symmetry_aware_sites(np_atoms, material_type="nanoparticle", raw_sites=np_raw)
+    assert captured["mode"] == "cluster"
+
+
 def test_topology_bridges_keep_distinct_pbc_midpoints():
     """Same atom-pair interior vs boundary bridges must both survive generation."""
     from metalsurfer.placement.site_voronoi import _generate_slab_topology_sites

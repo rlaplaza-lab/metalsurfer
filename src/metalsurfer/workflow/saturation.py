@@ -376,6 +376,7 @@ def _saturation_adsorbate_topology_ok(
         atoms,
         base_slab_len,
         config.connectivity_multiplier,
+        material_type=config.material_type,
     )
     if len(components) != len(reference_unit_smiles):
         return (

@@ -56,6 +56,7 @@ from ..placement.geometry import (
 )
 from ..placement.occupancy import _positions_mutually_clear, incoming_inplane_radius
 from ..placement.site_coords import _slab_normal
+from ..surface_prep import apply_material_pbc
 from ..surface_prep.freeze import check_frozen_substrate_displacement
 from .shared import _validate_geometry
 
@@ -565,19 +566,22 @@ def evaluate_composite_commit(
     if e_ads_tuplet > config.max_adsorption_energy:
         return [], f"E_ads too high: {e_ads_tuplet:.4f} eV"
 
-    rewritten = [
-        replace(
-            winner,
-            energy_adslab=e_adslab,
-            energy_slab=E_slab,
-            energy_adsorbate=e_mol_sum,
-            energy_adsorption=e_ads_tuplet,
-            atoms=opt_atoms.copy(),
-            slab_size=n_substrate,
-            distance=float(unit_distances[k]),
+    rewritten: list[ScreeningResult] = []
+    for k, winner in enumerate(winners):
+        atoms_out = opt_atoms.copy()
+        apply_material_pbc(atoms_out, config.material_type)
+        rewritten.append(
+            replace(
+                winner,
+                energy_adslab=e_adslab,
+                energy_slab=E_slab,
+                energy_adsorbate=e_mol_sum,
+                energy_adsorption=e_ads_tuplet,
+                atoms=atoms_out,
+                slab_size=n_substrate,
+                distance=float(unit_distances[k]),
+            )
         )
-        for k, winner in enumerate(winners)
-    ]
     logger.info(
         "%scomposite relaxed: %d units, E_ads(tuplet) = %.4f eV",
         log_prefix,

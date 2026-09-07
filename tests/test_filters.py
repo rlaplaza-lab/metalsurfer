@@ -20,6 +20,7 @@ from ase.data import atomic_numbers, covalent_radii
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.filters import (
+    _adsorbate_rmsd,
     _bond_counts_from_dist,
     _bond_counts_from_smiles,
     _coordination_fingerprint_from_dist,
@@ -34,6 +35,10 @@ from metalsurfer.filters import (
     filter_results,
 )
 from metalsurfer.models import ScreeningResult
+from metalsurfer.placement._material import (
+    calculator_pbc_for_atoms,
+    material_aware_pbc,
+)
 
 from .conftest import (
     make_ethanol_ccoh6 as _make_ethanol,
@@ -786,11 +791,6 @@ def test_desorption_uses_material_pbc_not_calculator_pbc(monkeypatch):
     argument exists precisely to select the right convention and must not be
     ignored.
     """
-    from metalsurfer.placement._material import (
-        calculator_pbc_for_atoms,
-        material_aware_pbc,
-    )
-
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
 
@@ -1339,5 +1339,84 @@ def test_filters_mic_distances_use_left_handed_cells():
     cell = np.diag([6.0, 6.0, -20.0])
     atoms = Atoms("H2", positions=[[0.5, 0.5, 0.0], [5.5, 0.5, 0.0]], cell=cell)
     atoms.set_pbc([True, True, False])
-    dist = _mic_pairwise_distances(atoms.get_positions(), atoms)
+    dist = _mic_pairwise_distances(atoms.get_positions(), atoms, material_type="slab")
     assert float(dist[0, 1]) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_decomposition_uses_material_pbc_not_calculator_pbc(monkeypatch):
+    """Decomposition connectivity must use material PBC, not calculator TTT."""
+    slab = make_slab(n_layers=1)
+    combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    combined.set_pbc(calculator_pbc_for_atoms(combined))
+    assert list(combined.get_pbc()) == [True, True, True]
+
+    captured = {}
+
+    def _fake(coords, atoms, *, material_type="slab"):
+        captured["pbc"] = material_aware_pbc(material_type)
+        n = len(np.asarray(coords))
+        return np.zeros((n, n))
+
+    monkeypatch.setattr("metalsurfer.filters._mic_pairwise_distances", _fake)
+    check_decomposition(
+        combined,
+        reference_smiles=None,
+        surface_symbols=["Ru"],
+        connectivity_multiplier=1.3,
+        material_type="slab",
+    )
+    assert captured["pbc"] == material_aware_pbc("slab") == [True, True, False]
+    assert captured["pbc"] != calculator_pbc_for_atoms(combined)
+
+    for material_type in ("porous", "nanoparticle"):
+        check_decomposition(
+            combined,
+            reference_smiles=None,
+            surface_symbols=["Ru"],
+            connectivity_multiplier=1.3,
+            material_type=material_type,
+        )
+        assert captured["pbc"] == material_aware_pbc(material_type)
+
+
+def test_adsorbate_rmsd_uses_material_pbc_not_calculator_pbc(monkeypatch):
+    """Duplicate RMSD must not fold height through vacuum via calculator TTT."""
+    slab = make_slab(n_layers=1)
+    a1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    a2 = place_molecule_on_slab(slab, make_water(), z_offset=2.6)
+    a1.set_pbc(calculator_pbc_for_atoms(a1))
+    a2.set_pbc(calculator_pbc_for_atoms(a2))
+
+    captured = {}
+
+    def _fake_find_mic(D, cell, pbc):
+        captured["pbc"] = list(pbc)
+        return np.asarray(D, dtype=float), None
+
+    monkeypatch.setattr("metalsurfer.filters.find_mic", _fake_find_mic)
+    _adsorbate_rmsd(a1, a2, surface_symbols=["Ru"], material_type="slab")
+    assert captured["pbc"] == material_aware_pbc("slab") == [True, True, False]
+    assert captured["pbc"] != calculator_pbc_for_atoms(a1)
+
+    for material_type in ("porous", "nanoparticle"):
+        _adsorbate_rmsd(a1, a2, surface_symbols=["Ru"], material_type=material_type)
+        assert captured["pbc"] == material_aware_pbc(material_type)
+
+
+def test_adsorbate_rmsd_does_not_merge_height_via_vacuum_wrap():
+    """Two poses differing only in height must not collapse under slab MIC."""
+    slab = make_slab(n_layers=1)
+    cell = slab.get_cell().copy()
+    cell[2, 2] = 18.0
+    slab.set_cell(cell)
+
+    low = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    high = place_molecule_on_slab(slab, make_water(), z_offset=12.0)
+    low.set_cell(cell)
+    high.set_cell(cell)
+    # Calculator TTT would fold ~9.5 A height through 18 A vacuum.
+    low.set_pbc(calculator_pbc_for_atoms(low))
+    high.set_pbc(calculator_pbc_for_atoms(high))
+
+    rmsd_slab = _adsorbate_rmsd(low, high, surface_symbols=["Ru"], material_type="slab")
+    assert rmsd_slab > 5.0, f"height difference should remain, got RMSD={rmsd_slab}"

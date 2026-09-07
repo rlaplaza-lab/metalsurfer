@@ -242,11 +242,15 @@ Regardless of material type, three things happen to the raw candidate set:
   `site_equivalence_tolerance`. The comparison respects periodicity (periodic
   images are folded back) and, for slabs, also checks that two candidates are at
   the same height, so a point one layer down is not merged with the surface one.
+  This step is geometric only; it does not use spglib.
 - **Symmetry reduction** uses spglib to collapse symmetry-equivalent sites into
-  one representative each, reducing wasted work. This runs until coverage breaks
-  the symmetry: once molecules are already on the surface, the code falls back to
-  the clustered (non-symmetry-reduced) set so asymmetric, partially covered
-  arrangements are explored.
+  one representative each, reducing wasted work. It runs on the raw unclustered
+  catalog while the *substrate* still matches the clean reference's space group
+  and symmetry operations. Adsorbates alone do not latch this off: saturation
+  strips the adsorbate suffix before the check. Once the substrate geometry
+  itself breaks that fingerprint (reconstruction, strong ionic motion, analysis
+  failure), the code falls back to the clustered (non-symmetry-reduced) set so
+  asymmetric arrangements are explored.
 - **One-shot auto-widen.** If the very first accessibility window finds no sites
   at all, the code retries once with a wider window (tighter probe radius and a
   larger max distance, scaled by the covalent-radius-derived defaults) before

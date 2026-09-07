@@ -252,7 +252,9 @@ geometry fingerprint + Voronoi config (+ ``symmetry_broken`` for resolved
 contexts) backs ``resolve_site_context_for_sampling``, which:
 
 1. Reuses unique-sites context when present, then applies symmetry.
-2. Uses clustered sites if symmetry is broken (typical mid-saturation).
+2. Uses clustered sites if symmetry is broken (typical after substrate
+   reconstruction or ionic motion under coverage; adsorbates alone do not
+   trigger this).
 3. Otherwise tries ``get_symmetry_aware_sites`` (reusing ``raw_unclustered``);
    falls back to clustered Voronoi on failure/empty.
 
@@ -452,7 +454,9 @@ the library sizes parallel work to GPU memory.
 
 **Calculator / PBC:** mixed PBC normalized to full periodic for UMA;
 periodic *c* ≥ 18 Å (``MIN_CALCULATOR_CELL_C_ANG``). Mixed PBC rejected on
-TorchSim/UMA paths.
+TorchSim/UMA paths. Stored ``ScreeningResult.atoms`` restore material PBC via
+:func:`~metalsurfer.surface_prep.apply_material_pbc` after the calculator
+boundary (same helper as prep).
 
 **Prep vs adsorption relaxation:** prep uses ASE
 ``slab_relaxation_mode``. Adsorption freeze masks come from ASE ``FixAtoms``
@@ -556,8 +560,10 @@ total); no valid placements after topology guard; ``saturation_max_steps``
 (default unlimited).
 
 Compare structures to **post-adatom** substrate files when adatoms were
-deposited during prep. Symmetry reduction is dropped once coverage breaks
-symmetry vs the clean reference.
+deposited during prep. Symmetry reduction is dropped once the *substrate
+prefix* space group / operation fingerprint differs from the clean
+reference (adsorbate atoms are stripped before that check; their presence
+alone does not latch ``symmetry_broken``).
 
 
 Typed data model
@@ -659,7 +665,9 @@ Design heuristics
 - Rigid substrate by default during adsorption (prep ``FixAtoms``);
   ``relax_top_layer=True`` is a material-aware shortcut distinct from the
   site-enumeration top-layer mask.
-- Symmetry accelerates clean-slab site catalogs until coverage breaks it.
+- Symmetry accelerates clean-slab site catalogs until the substrate
+  fingerprint vs the clean reference breaks (not merely because adsorbates
+  are present).
 - GPU-first TorchSim + optional BO transfer for deep coverage.
 - Layered topology guards; prefer ``enable_dissociative_placement=True``
   with ``skip_topology_check=True`` for fragmented H₂-like adsorbates.

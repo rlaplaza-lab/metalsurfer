@@ -241,6 +241,7 @@ class TestAdsorptionEnergyPhysics:
         config = AdsorptionConfig(max_adsorption_energy=5.0)
 
         ok_atoms = _attach_calc(good, energy=e_slab + e_mol + e_ads_ok)
+        ok_atoms.set_pbc([True, True, True])  # calculator-promoted
         result, failure = _evaluate_optimized_candidate(
             opt_atoms=ok_atoms,
             placement_id=0,
@@ -254,6 +255,7 @@ class TestAdsorptionEnergyPhysics:
         )
         assert failure is None
         assert result is not None
+        assert list(result.atoms.get_pbc()) == [True, True, False]
         assert result.energy_adsorption == pytest.approx(
             e_ads_ok, abs=E_ADS_IDENTITY_TOL
         )
