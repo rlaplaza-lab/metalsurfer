@@ -333,8 +333,7 @@ def _assert_co2_mof(results: list[ScreeningResult], num_placements: int) -> None
         f"E_ads should be >= -0.8 eV for CO2 in MOF, got min {e_ads.min():.3f}"
     )
     assert float(e_ads.min()) < -0.10, (
-        f"Best E_ads regression lock (< -0.10 eV) failed for CO2 in MOF, "
-        f"got {e_ads}"
+        f"Best E_ads regression lock (< -0.10 eV) failed for CO2 in MOF, got {e_ads}"
     )
 
     spread = float(e_ads.max() - e_ads.min())

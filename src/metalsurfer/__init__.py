@@ -100,3 +100,7 @@ def __getattr__(name: str):
         if name in names:
             return getattr(importlib.import_module(f".{mod}", __name__), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(__all__) | set(globals()))

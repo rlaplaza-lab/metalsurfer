@@ -30,6 +30,7 @@ from metalsurfer.filters import (
     _is_molecule_connected_from_dist,
     _mic_pairwise_distances,
     _nonsurface_distance_and_threshold,
+    _trailing_adsorbate_com,
     check_decomposition,
     check_desorption,
     filter_results,
@@ -1085,6 +1086,236 @@ def test_duplicate_different_energy_kept():
     )
     filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
     assert len(filtered) == 2
+
+
+def test_duplicate_removal_ignores_prior_adsorbate_geometry():
+    """Saturation dedup compares only the trailing adsorbate, not priors."""
+    slab_metal = make_slab(n_layers=1, symbol="Ru")
+    prior = make_water().copy()
+    prior_pos = prior.get_positions().copy()
+    prior_pos -= np.mean(prior_pos, axis=0)
+    prior_pos[:, 0] += 1.0
+    prior_pos[:, 1] += 1.0
+    prior_pos[:, 2] += float(np.max(slab_metal.get_positions()[:, 2])) + 2.0
+    prior.set_positions(prior_pos)
+
+    slab_with_prior = slab_metal + prior
+    slab_with_prior.set_cell(slab_metal.get_cell())
+    slab_with_prior.set_pbc(slab_metal.get_pbc())
+
+    new_water = make_water().copy()
+    new_pos = new_water.get_positions().copy()
+    new_pos -= np.mean(new_pos, axis=0)
+    new_pos[:, 0] += 5.0
+    new_pos[:, 1] += 5.0
+    new_pos[:, 2] += float(np.max(slab_metal.get_positions()[:, 2])) + 2.5
+    new_water.set_positions(new_pos)
+
+    combined1 = slab_with_prior + new_water
+    combined1.set_cell(slab_with_prior.get_cell())
+    combined1.set_pbc(slab_with_prior.get_pbc())
+
+    # Shift only the prior adsorbate; trailing water stays identical.
+    combined2 = combined1.copy()
+    pos2 = combined2.get_positions().copy()
+    prior_start = len(slab_metal)
+    prior_end = len(slab_with_prior)
+    pos2[prior_start:prior_end, 0] += 0.4
+    combined2.set_positions(pos2)
+
+    results = [
+        _sr(combined1, -1.0, 0),
+        _sr(combined2, -1.01, 1),
+    ]
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    filtered = filter_results(
+        results,
+        slab=slab_with_prior,
+        surface_symbols=["Ru"],
+        config=config,
+    )
+    assert len(filtered) == 1
+
+
+def test_duplicate_removal_keeps_distinct_trailing_poses_with_same_priors():
+    """Same priors but a far-shifted new adsorbate remain two unique results."""
+    slab_metal = make_slab(n_layers=1, symbol="Ru")
+    prior = make_water().copy()
+    prior_pos = prior.get_positions().copy()
+    prior_pos -= np.mean(prior_pos, axis=0)
+    prior_pos[:, 0] += 1.0
+    prior_pos[:, 1] += 1.0
+    prior_pos[:, 2] += float(np.max(slab_metal.get_positions()[:, 2])) + 2.0
+    prior.set_positions(prior_pos)
+
+    slab_with_prior = slab_metal + prior
+    slab_with_prior.set_cell(slab_metal.get_cell())
+    slab_with_prior.set_pbc(slab_metal.get_pbc())
+
+    def _place_new(x_shift: float) -> Atoms:
+        water = make_water().copy()
+        pos = water.get_positions().copy()
+        pos -= np.mean(pos, axis=0)
+        pos[:, 0] += x_shift
+        pos[:, 1] += 5.0
+        pos[:, 2] += float(np.max(slab_metal.get_positions()[:, 2])) + 2.5
+        water.set_positions(pos)
+        combined = slab_with_prior + water
+        combined.set_cell(slab_with_prior.get_cell())
+        combined.set_pbc(slab_with_prior.get_pbc())
+        return combined
+
+    results = [
+        _sr(_place_new(5.0), -1.0, 0),
+        _sr(_place_new(7.0), -1.01, 1),
+    ]
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    filtered = filter_results(
+        results,
+        slab=slab_with_prior,
+        surface_symbols=["Ru"],
+        config=config,
+    )
+    assert len(filtered) == 2
+
+
+def test_duplicate_removal_across_adjacent_com_bins():
+    """Near-identical poses that straddle a COM grid face still collapse."""
+    slab = make_slab(n_layers=1)
+    base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    # Shift by just under rmsd_dedup_threshold so RMSD collapses, but enough
+    # that COMs can land in neighboring bins of size rmsd_dedup_threshold.
+    shifted = base.copy()
+    pos = shifted.get_positions().copy()
+    pos[len(slab) :, 0] += 0.08
+    shifted.set_positions(pos)
+
+    results = [
+        _sr(base, -1.0, 0),
+        _sr(shifted, -1.01, 1),
+    ]
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
+    assert len(filtered) == 1
+
+
+def test_duplicate_removal_skips_rmsd_for_far_com(monkeypatch):
+    """Spatially separated placements in one energy window never call RMSD."""
+    slab = make_slab(n_layers=1)
+    placements = []
+    for i, x in enumerate((1.0, 4.0, 7.0, 10.0)):
+        atoms = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+        pos = atoms.get_positions().copy()
+        pos[len(slab) :, 0] += x
+        atoms.set_positions(pos)
+        placements.append(_sr(atoms, -1.0 - 0.001 * i, i))
+
+    calls: list[tuple[int, int]] = []
+    real_rmsd = _adsorbate_rmsd
+
+    def _spy(a1, a2, surface_symbols=None, *, material_type="slab", prefix_atoms=None):
+        calls.append((len(a1), len(a2)))
+        return real_rmsd(
+            a1,
+            a2,
+            surface_symbols=surface_symbols,
+            material_type=material_type,
+            prefix_atoms=prefix_atoms,
+        )
+
+    monkeypatch.setattr("metalsurfer.filters._adsorbate_rmsd", _spy)
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    filtered = filter_results(
+        placements, slab=slab, surface_symbols=["Ru"], config=config
+    )
+    assert len(filtered) == 4
+    # Far COMs are pruned before RMSD; no pairwise calls among the four.
+    assert calls == []
+
+
+def test_duplicate_removal_across_periodic_cell_face():
+    """Near-dups whose COMs sit on opposite periodic faces still collapse."""
+    slab = make_slab(n_layers=1)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    a_len = float(np.linalg.norm(cell[0]))
+
+    base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    # Park the adsorbate just inside +a, then place a near-dup just across 0.
+    pos = base.get_positions().copy()
+    ads = pos[len(slab) :]
+    ads_com = ads.mean(axis=0)
+    shift = (a_len - 0.04) - ads_com[0]
+    pos[len(slab) :, 0] += shift
+    base.set_positions(pos)
+
+    near = base.copy()
+    near_pos = near.get_positions().copy()
+    near_pos[len(slab) :, 0] += 0.07  # wraps across the a-face under MIC
+    near.set_positions(near_pos)
+
+    com_a = _trailing_adsorbate_com(base, len(slab), material_type="slab")
+    com_b = _trailing_adsorbate_com(near, len(slab), material_type="slab")
+    # Wrapped COMs sit near opposite faces; MIC distance stays small.
+    assert abs(com_a[0] - com_b[0]) > a_len * 0.5
+
+    results = [
+        _sr(base, -1.0, 0),
+        _sr(near, -1.01, 1),
+    ]
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
+    assert len(filtered) == 1
+
+
+def test_trailing_adsorbate_com_unwraps_pbc_straddle():
+    """A molecule straddling a periodic face must not pull COM into the cell center."""
+    slab = make_slab(n_layers=1)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    a_len = float(np.linalg.norm(cell[0]))
+    combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    pos = combined.get_positions().copy()
+    # Two atoms just inside opposite faces (ignore the third for the naive mean).
+    pos[len(slab), 0] = 0.05
+    pos[len(slab) + 1, 0] = a_len - 0.05
+    pos[len(slab) + 2, 0] = a_len - 0.05
+    combined.set_positions(pos)
+
+    naive = float(np.mean(pos[len(slab) :, 0]))
+    com = _trailing_adsorbate_com(combined, len(slab), material_type="slab")
+    # Naive Cartesian mean is pulled inward; unwrapped COM stays at the face.
+    assert abs(naive - 0.5 * a_len) < 2.0
+    assert min(abs(com[0]), abs(com[0] - a_len)) < 0.5
+    assert abs(com[0] - naive) > 2.0
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from ase.data import atomic_numbers, covalent_radii
 from ase.geometry import find_mic
 from scipy.sparse.csgraph import connected_components
 
+from ._geom_pbc import cart_to_frac, wrap_fractional
 from ._logging import warn_once
 from ._utils import cell_has_volume
 from .config import AdsorptionConfig
@@ -499,11 +500,24 @@ def _adsorbate_rmsd(
     surface_symbols: list[str] | None = None,
     *,
     material_type: str = "slab",
+    prefix_atoms: int | None = None,
 ) -> float:
-    """MIC-aware RMSD between non-surface atoms (material-aware PBC)."""
+    """MIC-aware RMSD between adsorbate atoms (material-aware PBC).
+
+    When *prefix_atoms* is set, only the trailing suffix
+    ``positions[prefix_atoms:]`` is compared (saturation uniqueness on the
+    newly added adsorbate). Otherwise, when *surface_symbols* is set, all
+    non-surface atoms are compared.
+    """
     pos1 = a1.get_positions()
     pos2 = a2.get_positions()
-    if surface_symbols:
+    if prefix_atoms is not None:
+        if prefix_atoms < 0 or len(pos1) < prefix_atoms or len(pos2) < prefix_atoms:
+            return float("inf")
+        pos1, pos2 = pos1[prefix_atoms:], pos2[prefix_atoms:]
+        if len(pos1) != len(pos2) or len(pos1) == 0:
+            return float("inf")
+    elif surface_symbols:
         s1 = np.array(a1.get_chemical_symbols())
         s2 = np.array(a2.get_chemical_symbols())
         m1 = ~np.isin(s1, surface_symbols)
@@ -511,12 +525,209 @@ def _adsorbate_rmsd(
         if m1.sum() != m2.sum():
             return float("inf")
         pos1, pos2 = pos1[m1], pos2[m2]
+        if len(pos1) == 0:
+            return float("inf")
     pbc = material_aware_pbc(material_type)
     cell = np.asarray(a1.get_cell(), dtype=float)
     if not cell_has_volume(cell):
         pbc = [False, False, False]
     diffs, _ = find_mic(pos1 - pos2, cell, pbc)
     return float(np.sqrt(np.mean(np.sum(diffs**2, axis=1))))
+
+
+def _trailing_adsorbate_com(
+    atoms: Atoms,
+    prefix_atoms: int,
+    *,
+    material_type: str,
+) -> np.ndarray:
+    """Equal-weight COM of ``positions[prefix_atoms:]``, wrapped on periodic axes.
+
+    Atoms are MIC-unwrapped relative to the first adsorbate atom before averaging
+    so a molecule that straddles a periodic face does not pull the COM into the
+    cell interior.
+    """
+    pos = np.asarray(atoms.get_positions()[prefix_atoms:], dtype=float)
+    if len(pos) == 0:
+        return np.zeros(3, dtype=float)
+    cell = np.asarray(atoms.get_cell(), dtype=float)
+    pbc = list(material_aware_pbc(material_type))
+    if not cell_has_volume(cell):
+        pbc = [False, False, False]
+    if any(pbc) and len(pos) > 1:
+        ref = pos[0]
+        mic_deltas, _ = find_mic(pos - ref, cell, pbc)
+        com = (ref + mic_deltas).mean(axis=0)
+    else:
+        com = pos.mean(axis=0)
+    if not any(pbc):
+        return com
+    frac = wrap_fractional(
+        cart_to_frac(com.reshape(1, 3), cell), np.asarray(pbc, dtype=bool)
+    )
+    return (frac @ cell).reshape(3)
+
+
+def _bin_counts_for_cell(cell: np.ndarray, bin_size: float) -> tuple[int, int, int]:
+    lengths = np.linalg.norm(np.asarray(cell, dtype=float), axis=1)
+    counts: list[int] = []
+    for length in lengths:
+        if length <= 0.0 or bin_size <= 0.0:
+            counts.append(1)
+        else:
+            counts.append(max(1, int(np.ceil(float(length) / bin_size))))
+    return (counts[0], counts[1], counts[2])
+
+
+def _com_bin_key(
+    com: np.ndarray,
+    cell: np.ndarray,
+    pbc: list[bool] | np.ndarray,
+    bin_size: float,
+) -> tuple[int, int, int]:
+    """Fractional-space grid key; periodic axes wrap into ``[0, n_bins)``."""
+    cell_arr = np.asarray(cell, dtype=float)
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    n_bins = _bin_counts_for_cell(cell_arr, bin_size)
+    if not cell_has_volume(cell_arr):
+        return (
+            int(np.floor(float(com[0]) / bin_size)),
+            int(np.floor(float(com[1]) / bin_size)),
+            int(np.floor(float(com[2]) / bin_size)),
+        )
+    frac = wrap_fractional(cart_to_frac(com.reshape(1, 3), cell_arr), pbc_arr)[0]
+    keys: list[int] = []
+    for i in range(3):
+        bi = int(np.floor(float(frac[i]) * n_bins[i]))
+        if pbc_arr[i]:
+            bi %= n_bins[i]
+        keys.append(bi)
+    return (keys[0], keys[1], keys[2])
+
+
+def _neighbor_bin_keys(
+    key: tuple[int, int, int],
+    cell: np.ndarray,
+    pbc: list[bool] | np.ndarray,
+    bin_size: float,
+) -> list[tuple[int, int, int]]:
+    """Return *key* and its 3×3×3 neighborhood (modular wrap on periodic axes)."""
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    n_bins = _bin_counts_for_cell(np.asarray(cell, dtype=float), bin_size)
+    neighbors: list[tuple[int, int, int]] = []
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            for dz in (-1, 0, 1):
+                coords = [key[0] + dx, key[1] + dy, key[2] + dz]
+                for i in range(3):
+                    if pbc_arr[i]:
+                        coords[i] %= n_bins[i]
+                neighbors.append((coords[0], coords[1], coords[2]))
+    return neighbors
+
+
+def _mic_com_distance(
+    com1: np.ndarray,
+    com2: np.ndarray,
+    cell: np.ndarray,
+    pbc: list[bool] | np.ndarray,
+) -> float:
+    cell_arr = np.asarray(cell, dtype=float)
+    pbc_list = list(pbc)
+    if not cell_has_volume(cell_arr):
+        pbc_list = [False, False, False]
+    diffs, _ = find_mic((com1 - com2).reshape(1, 3), cell_arr, pbc_list)
+    return float(np.linalg.norm(diffs[0]))
+
+
+def _deduplicate_by_energy_and_rmsd(
+    results: list[ScreeningResult],
+    *,
+    prefix_atoms: int,
+    surface_symbols: list[str] | None,
+    material_type: str,
+    energy_dedup_threshold: float,
+    rmsd_dedup_threshold: float,
+) -> tuple[list[ScreeningResult], list[ScreeningResult]]:
+    """Keep lowest-energy unique poses; prune with energy + COM bins before RMSD.
+
+    Uniqueness is on the trailing adsorbate (``prefix_atoms``), not prior
+    coverage. Full pairwise RMSD runs only for uniques that share the energy
+    window, a neighboring COM grid cell, and MIC COM distance within
+    *rmsd_dedup_threshold* (index-aligned RMSD cannot be smaller than COM MIC).
+    """
+    sorted_results = sorted(results, key=lambda r: r.energy_adsorption)
+    unique: list[ScreeningResult] = []
+    unique_energy: list[float] = []
+    unique_n_ads: list[int] = []
+    unique_com: list[np.ndarray] = []
+    bins: dict[tuple[int, int, int], list[int]] = {}
+    deduplicated: list[ScreeningResult] = []
+
+    ref_cell = np.asarray(sorted_results[0].atoms.get_cell(), dtype=float)
+    pbc = material_aware_pbc(material_type)
+    if not cell_has_volume(ref_cell):
+        pbc = [False, False, False]
+    bin_size = float(rmsd_dedup_threshold) if rmsd_dedup_threshold > 0.0 else 0.1
+
+    for entry in sorted_results:
+        e = entry.energy_adsorption
+        n_ads = len(entry.atoms) - prefix_atoms
+        if n_ads < 0:
+            unique.append(entry)
+            unique_energy.append(e)
+            unique_n_ads.append(n_ads)
+            unique_com.append(np.zeros(3, dtype=float))
+            continue
+        com = _trailing_adsorbate_com(
+            entry.atoms, prefix_atoms, material_type=material_type
+        )
+        key = _com_bin_key(com, ref_cell, pbc, bin_size)
+        is_dup = False
+
+        candidate_idxs: list[int] = []
+        seen_idx: set[int] = set()
+        for nkey in _neighbor_bin_keys(key, ref_cell, pbc, bin_size):
+            for u_idx in bins.get(nkey, ()):
+                if u_idx in seen_idx:
+                    continue
+                seen_idx.add(u_idx)
+                energy_gap = abs(e - unique_energy[u_idx])
+                if energy_gap >= energy_dedup_threshold:
+                    continue
+                if n_ads != unique_n_ads[u_idx]:
+                    continue
+                if (
+                    _mic_com_distance(com, unique_com[u_idx], ref_cell, pbc)
+                    > rmsd_dedup_threshold
+                ):
+                    continue
+                candidate_idxs.append(u_idx)
+
+        # Prefer lower-energy uniques first (stable with energy sort of `unique`).
+        for u_idx in sorted(candidate_idxs):
+            rmsd = _adsorbate_rmsd(
+                entry.atoms,
+                unique[u_idx].atoms,
+                surface_symbols=surface_symbols,
+                material_type=material_type,
+                prefix_atoms=prefix_atoms,
+            )
+            if rmsd < rmsd_dedup_threshold:
+                is_dup = True
+                break
+
+        if not is_dup:
+            u_idx = len(unique)
+            unique.append(entry)
+            unique_energy.append(e)
+            unique_n_ads.append(n_ads)
+            unique_com.append(com)
+            bins.setdefault(key, []).append(u_idx)
+        else:
+            deduplicated.append(entry)
+
+    return unique, deduplicated
 
 
 # ---------------------------------------------------------------------------
@@ -543,9 +754,11 @@ def filter_results(
         prefix of every ``entry.atoms`` (bare slab + all previously accepted
         adsorbates). It is used for the desorption distance check and, when
         decomposition is enabled, as the atom-count prefix ``len(slab)`` for
-        validating only the newly added adsorbate in each ``entry.atoms``. A
-        suffix/formula mismatch now raises :class:`ValueError` instead of
-        silently dropping the entry as decomposed.
+        validating only the newly added adsorbate in each ``entry.atoms``.
+        Duplicate RMSD uniqueness is also on that trailing adsorbate suffix,
+        not prior coverage. A suffix/formula mismatch now raises
+        :class:`ValueError` instead of silently dropping the entry as
+        decomposed.
     surface_symbols:
         Element symbols of the surface (e.g. ``["Ru"]`` or ``["Ru", "Cu"]``).
     reference_smiles:
@@ -679,33 +892,14 @@ def filter_results(
         return results
 
     t0 = time.perf_counter()
-    sorted_results = sorted(results, key=lambda r: r.energy_adsorption)
-    unique: list[ScreeningResult] = []
-    deduplicated: list[ScreeningResult] = []
-    for entry in sorted_results:
-        e = entry.energy_adsorption
-        is_dup = False
-        # unique is in ascending energy order; scan in reverse to check
-        # nearby energies first and break once past the energy window.
-        for u in reversed(unique):
-            energy_gap = abs(e - u.energy_adsorption)
-            if energy_gap >= config.energy_dedup_threshold:
-                break
-            if len(entry.atoms) != len(u.atoms):
-                continue
-            rmsd = _adsorbate_rmsd(
-                entry.atoms,
-                u.atoms,
-                surface_symbols=surface_symbols,
-                material_type=config.material_type,
-            )
-            if rmsd < config.rmsd_dedup_threshold:
-                is_dup = True
-                break
-        if not is_dup:
-            unique.append(entry)
-        else:
-            deduplicated.append(entry)
+    unique, deduplicated = _deduplicate_by_energy_and_rmsd(
+        results,
+        prefix_atoms=len(slab),
+        surface_symbols=surface_symbols,
+        material_type=config.material_type,
+        energy_dedup_threshold=config.energy_dedup_threshold,
+        rmsd_dedup_threshold=config.rmsd_dedup_threshold,
+    )
     t_dedup = time.perf_counter() - t0
 
     dup_count = len(results) - len(unique)

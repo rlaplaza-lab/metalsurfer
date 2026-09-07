@@ -205,6 +205,42 @@ def test_surface_prep_all_is_static_and_complete():
     assert isinstance(surface_prep.__all__, list)
 
 
+def test_root_dir_lists_lazy_all_before_access():
+    """dir(metalsurfer) includes every __all__ name before any lazy getattr."""
+    with _isolated_metalsurfer_modules():
+        import metalsurfer
+
+        names = dir(metalsurfer)
+        for name in metalsurfer.__all__:
+            assert name in names, f"{name!r} missing from dir() before access"
+
+
+def test_placement_all_lists_public_reexports_only():
+    """placement.__all__ lists re-exported APIs and omits submodule names."""
+    from metalsurfer import placement
+
+    expected = {
+        "material_aware_pbc",
+        "distribute_placement_budget",
+        "enumerate_placement_specs",
+        "estimate_placement_spec_capacity",
+        "generate_placement_from_spec",
+        "generate_placement_from_spec_with_reason",
+        "calculate_min_distance",
+        "check_initial_placement_distance",
+        "generate_placement_from_pose",
+        "top_layer_mask_by_normal",
+        "get_hollow_sites_for_adatoms",
+        "get_symmetry_aware_sites",
+        "get_unified_sites",
+    }
+    assert set(placement.__all__) == expected
+    for submodule in ("pose", "generators", "site_enumeration", "geometry"):
+        assert submodule not in placement.__all__
+    for name in placement.__all__:
+        assert getattr(placement, name) is not None
+
+
 def test_not_exported_at_top_level():
     """These names are not top-level metalsurfer attrs (some live under surface_prep).
 

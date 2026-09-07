@@ -13,9 +13,10 @@ Pass any ASE `Atoms` structure after optional prep with `prepare_substrate`, sup
 ## Features
 
 - **Substrate-agnostic** — periodic slabs, non-periodic clusters, and fully periodic porous frameworks
-- **MLIP relaxation** — TorchSim/FairChem-backed optimization (UMA default, `task_name="oc25"`)
-- **Orientation-aware placement** — hybrid topology + Voronoi site detection, material-aware via `AdsorptionConfig.material_type`
+- **MLIP relaxation** — TorchSim/FairChem-backed optimization (UMA default `model_name="uma-s-1p2"`, `task_name="oc25"`)
+- **Orientation-aware placement** — hybrid topology + Voronoi site detection, material-aware via `AdsorptionConfig.material_type`; clash-descent salvage and footprint occupancy ranking on by default
 - **Four campaign modes** — standard screening, Bayesian screening, sequential saturation, and BO saturation; with competitive multi-molecule and multi-placement-per-step (n-tuplet) coverage modes
+- **Bayesian pose search** — 8-D features (`x,y,z`, conformer index, quaternion) drive surrogate-guided placement
 - **Surface prep** — equilibration, PBC, alloy/adatom modifiers, and ASE `FixAtoms` via `prepare_substrate`
 - **Reproducible workflows** — seeded conformer and placement sampling; structured CSV/XYZ output
 
@@ -78,7 +79,7 @@ for summary in result.molecule_summaries:
 | BO saturation | `run_saturation_bo` | [Quick start — Saturation](https://metalsurfer.readthedocs.io/en/latest/guides/quickstart.html#sequential-saturation) |
 | Substrate preparation | `prepare_substrate` | [Surface engineering](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html) |
 | Configuration options | `AdsorptionConfig` | [Field reference](https://metalsurfer.readthedocs.io/en/latest/api/config.html) · [Configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) |
-| YAML campaign | `load_campaign_yaml` + `run_campaign` | [`scripts/campaigns/`](scripts/campaigns/); `campaign:` is `adsorption` / `adsorption_bo` / `saturation` / `saturation_bo` ([API](https://metalsurfer.readthedocs.io/en/latest/api/campaigns.html)) |
+| YAML campaign | `load_campaign_yaml` + `run_campaign` | Demo YAMLs in [`examples/`](examples/); production templates in [`scripts/campaigns/`](scripts/campaigns/); `campaign:` is `adsorption` / `adsorption_bo` / `saturation` / `saturation_bo` ([API](https://metalsurfer.readthedocs.io/en/latest/api/campaigns.html)) |
 
 Set `material_type` (defaults to `slab`) to match your substrate: `slab`, `nanoparticle`, or `porous`. See the [configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) for when to use each.
 

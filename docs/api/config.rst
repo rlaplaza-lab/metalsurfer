@@ -569,13 +569,16 @@ Deduplication
    **Type:** ``float`` · **Default:** ``0.05`` (eV)
 
    Treat two surviving configurations as duplicates when their adsorption energies
-   differ by less than this value.
+   differ by less than this value. Dedup sorts by energy (lowest wins) and only
+   compares placements inside this window.
 
 ``rmsd_dedup_threshold``
    **Type:** ``float`` · **Default:** ``0.1`` (Å)
 
    Additional RMSD threshold for structural deduplication among energy-degenerate
-   placements.
+   placements. Full adsorbate RMSD runs only after cheap energy-window and
+   centre-of-mass grid/distance pruning; uniqueness is on the trailing adsorbate
+   (``len(slab)`` prefix), not prior coverage.
 
 Bayesian optimization
 ~~~~~~~~~~~~~~~~~~~~~
