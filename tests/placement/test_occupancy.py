@@ -745,7 +745,7 @@ def test_fill_clamps_target_to_capacity(monkeypatch, caplog):
 
     from metalsurfer.workflow import placement_fill as fill_mod
 
-    monkeypatch.setattr(fill_mod, "estimate_placement_capacity", lambda *a, **k: 2.0)
+    monkeypatch.setattr(fill_mod, "estimate_placement_spec_capacity", lambda *a, **k: 2)
     _patch_fill(
         monkeypatch,
         fill_mod,
@@ -770,7 +770,7 @@ def test_fill_clamps_target_to_capacity(monkeypatch, caplog):
 def test_clamp_flag_false_legacy(monkeypatch):
     from metalsurfer.workflow import placement_fill as fill_mod
 
-    monkeypatch.setattr(fill_mod, "estimate_placement_capacity", lambda *a, **k: 2.0)
+    monkeypatch.setattr(fill_mod, "estimate_placement_spec_capacity", lambda *a, **k: 2)
     _patch_fill(
         monkeypatch,
         fill_mod,

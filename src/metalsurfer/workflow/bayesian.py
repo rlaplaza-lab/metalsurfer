@@ -301,7 +301,7 @@ def process_molecule_bayesian(
     conformers: list[Atoms] | None = None,
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
-    saturation_reuse: bool = True,
+    saturation_reuse: bool = False,
 ) -> MoleculeScreenOutcome:
     """Bayesian-optimisation-guided placement screening for one molecule.
 
@@ -344,7 +344,7 @@ def process_molecule_bayesian(
         Whether to skip workload autotuning.
     saturation_reuse
         Reuse the slab+adsorbate autobatcher across acquisition batches
-        (default True; same molecule/slab for the whole call).
+        (default False; saturation callers pass True).
     """
     if reference_smiles is None:
         reference_smiles = smiles

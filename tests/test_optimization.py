@@ -49,6 +49,13 @@ class _FakeTensor:
         return float(self._array.squeeze())
 
 
+def _fake_batch_forces(n_systems: int, n_atoms_each: int) -> tuple[_FakeTensor, _FakeTensor]:
+    """Per-atom forces + system_idx matching *n_systems* of equal size."""
+    forces = _FakeTensor(np.zeros((n_systems * n_atoms_each, 3)))
+    system_idx = _FakeTensor(np.repeat(np.arange(n_systems), n_atoms_each))
+    return forces, system_idx
+
+
 def _make_atoms_with_cell() -> Atoms:
     """Atoms with PBC for TorchSim (needs cell)."""
     slab = make_slab(nx=2, ny=2, n_layers=2)
@@ -844,7 +851,9 @@ def test_optimize_slab_rebuilds_states_after_cuda_oom(monkeypatch: pytest.Monkey
     class _FakeBatch:
         def __init__(self, n):
             self.energy = [_FakeTensor([-1.0])] * n
-            self.forces = None
+            # make_slab(nx=2, ny=2, n_layers=2) → 8 atoms; forces required
+            # so fail-closed attach does not enter ts.static recovery.
+            self.forces, self.system_idx = _fake_batch_forces(n, 8)
 
         def to_atoms(self):
             return [make_slab(nx=2, ny=2, n_layers=2) for _ in range(len(self.energy))]
@@ -916,7 +925,7 @@ def test_optimize_slab_retries_after_batcher_capacity_error(
     class _FakeBatch:
         def __init__(self, n):
             self.energy = [_FakeTensor([-1.0])] * n
-            self.forces = None
+            self.forces, self.system_idx = _fake_batch_forces(n, 8)
 
         def to_atoms(self):
             return [make_slab(nx=2, ny=2, n_layers=2) for _ in range(len(self.energy))]
@@ -997,7 +1006,7 @@ def test_optimize_slab_cuda_streams_states_via_inflight_iterator(
         def __init__(self, states):
             self._states = states
             self.energy = [_FakeTensor([-1.0])] * len(states)
-            self.forces = None
+            self.forces, self.system_idx = _fake_batch_forces(len(states), 8)
 
         def to_atoms(self):
             return [make_slab(nx=2, ny=2, n_layers=2) for _ in self._states]
@@ -1386,13 +1395,18 @@ def test_estimate_parallel_relaxation_capacity_fallback_without_torchsim(
     monkeypatch.setattr(_deps, "determine_max_batch_size", None)
     config = AdsorptionConfig()
     atoms = _make_atoms_with_cell()
+    ts_model = object()
     capacity = _optimize.estimate_parallel_relaxation_capacity(
-        ts_model=object(),
+        ts_model=ts_model,
         representative_atoms=atoms,
         config=config,
         frozen_indices=[],
     )
     assert capacity == 1
+    cache_key = _validation._parallel_capacity_cache_key(
+        ts_model, len(atoms), config, frozen_indices=[]
+    )
+    assert _cache.capacity_cache_get(cache_key) is None
 
 
 def test_estimate_parallel_relaxation_capacity_runtime_error_falls_back(
@@ -1413,14 +1427,17 @@ def test_estimate_parallel_relaxation_capacity_runtime_error_falls_back(
     )
     config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
     atoms = _make_atoms_with_cell()
+    ts_model = object()
     capacity = _optimize.estimate_parallel_relaxation_capacity(
-        ts_model=object(),
+        ts_model=ts_model,
         representative_atoms=atoms,
         config=config,
         frozen_indices=[],
     )
     assert capacity == 1
-    cache_key = _validation._parallel_capacity_cache_key(object(), len(atoms), config)
+    cache_key = _validation._parallel_capacity_cache_key(
+        ts_model, len(atoms), config, frozen_indices=[]
+    )
     assert _cache.capacity_cache_get(cache_key) is None
 
 

@@ -45,17 +45,32 @@ from ..placement.geometry import normalize_quaternion
 SCHEMA_VERSION = "3.0"
 
 
-def _quat_component(value: float | None, default: float = 0.0) -> float:
-    """Coerce quaternion component; treat only ``None`` as missing (not ``0.0``)."""
-    return float(default if value is None else value)
-
-
 def _normalized_descriptor(
     descriptor: PlacementDescriptor,
     *,
     placement_index: int | None = None,
 ) -> PlacementDescriptor:
-    """Fill optional absolute-pose fields with the same defaults as CSV lean rows."""
+    """Canonicalize absolute-pose fields; missing quaternion/COM is an error.
+
+    Unevaluated-spec placeholders must set identity quat and absolute coordinates
+    explicitly (see :func:`_descriptor_from_spec`). Successful placements always
+    carry real pose data — never invent identity quaternions or Cartesian zeros.
+    """
+    if descriptor.quat_w is None or descriptor.quat_x is None:
+        raise ValueError(
+            "PlacementDescriptor quaternion components are required "
+            "(quat_w/quat_x/quat_y/quat_z); no identity fallback"
+        )
+    if descriptor.quat_y is None or descriptor.quat_z is None:
+        raise ValueError(
+            "PlacementDescriptor quaternion components are required "
+            "(quat_w/quat_x/quat_y/quat_z); no identity fallback"
+        )
+    if descriptor.x_abs is None or descriptor.y_abs is None:
+        raise ValueError(
+            "PlacementDescriptor absolute Cartesian coordinates "
+            "(x_abs, y_abs) are required; no zero fallback"
+        )
     surface_ref_z_abs = (
         float(descriptor.surface_ref_z_abs)
         if descriptor.surface_ref_z_abs is not None
@@ -84,16 +99,8 @@ def _normalized_descriptor(
         x=float(descriptor.x),
         y=float(descriptor.y),
         z_offset=z_offset,
-        x_abs=(
-            float(descriptor.x_abs)
-            if descriptor.x_abs is not None
-            else float(descriptor.x)
-        ),
-        y_abs=(
-            float(descriptor.y_abs)
-            if descriptor.y_abs is not None
-            else float(descriptor.y)
-        ),
+        x_abs=float(descriptor.x_abs),
+        y_abs=float(descriptor.y_abs),
         surface_ref_z_abs=surface_ref_z_abs,
         z_abs=z_abs,
         shape=descriptor.shape,
@@ -101,12 +108,20 @@ def _normalized_descriptor(
         placement_mode_resolved=descriptor.placement_mode_resolved,
         site_source=descriptor.site_source,
         site_reference_frame=descriptor.site_reference_frame,
-        site_xy_frac_a=float(descriptor.site_xy_frac_a or 0.0),
-        site_xy_frac_b=float(descriptor.site_xy_frac_b or 0.0),
-        quat_w=float(descriptor.quat_w) if descriptor.quat_w is not None else 1.0,
-        quat_x=float(descriptor.quat_x) if descriptor.quat_x is not None else 0.0,
-        quat_y=float(descriptor.quat_y) if descriptor.quat_y is not None else 0.0,
-        quat_z=float(descriptor.quat_z) if descriptor.quat_z is not None else 0.0,
+        site_xy_frac_a=(
+            float(descriptor.site_xy_frac_a)
+            if descriptor.site_xy_frac_a is not None
+            else 0.0
+        ),
+        site_xy_frac_b=(
+            float(descriptor.site_xy_frac_b)
+            if descriptor.site_xy_frac_b is not None
+            else 0.0
+        ),
+        quat_w=float(descriptor.quat_w),
+        quat_x=float(descriptor.quat_x),
+        quat_y=float(descriptor.quat_y),
+        quat_z=float(descriptor.quat_z),
         fragment_positions=descriptor.fragment_positions,
     )
 
@@ -323,10 +338,10 @@ class PlacementRecord:
         q = normalize_quaternion(
             np.array(
                 [
-                    _quat_component(self.descriptor.quat_w, 1.0),
-                    _quat_component(self.descriptor.quat_x),
-                    _quat_component(self.descriptor.quat_y),
-                    _quat_component(self.descriptor.quat_z),
+                    float(self.descriptor.quat_w),
+                    float(self.descriptor.quat_x),
+                    float(self.descriptor.quat_y),
+                    float(self.descriptor.quat_z),
                 ],
                 dtype=float,
             )
@@ -527,15 +542,15 @@ class PlacementRecord:
             "azimuth_deg": round(float(d.azimuth_deg), 6),
             "azimuth_in_plane_deg": round(float(d.azimuth_in_plane_deg), 6),
             "z_fraction": round(float(d.z_fraction), 6),
-            "x_abs": round(float(d.x_abs or 0.0), 6),
-            "y_abs": round(float(d.y_abs or 0.0), 6),
+            "x_abs": round(float(d.x_abs), 6),
+            "y_abs": round(float(d.y_abs), 6),
             "z_offset": round(float(d.z_offset), 6),
-            "surface_ref_z_abs": round(float(d.surface_ref_z_abs or 0.0), 6),
-            "z_abs": round(float(d.z_abs or 0.0), 6),
-            "quat_w": round(_quat_component(d.quat_w, 1.0), 6),
-            "quat_x": round(_quat_component(d.quat_x), 6),
-            "quat_y": round(_quat_component(d.quat_y), 6),
-            "quat_z": round(_quat_component(d.quat_z), 6),
+            "surface_ref_z_abs": round(float(d.surface_ref_z_abs), 6),
+            "z_abs": round(float(d.z_abs), 6),
+            "quat_w": round(float(d.quat_w), 6),
+            "quat_x": round(float(d.quat_x), 6),
+            "quat_y": round(float(d.quat_y), 6),
+            "quat_z": round(float(d.quat_z), 6),
             "fragment_positions": (
                 tuple(
                     (

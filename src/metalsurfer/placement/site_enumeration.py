@@ -27,7 +27,6 @@ from ._constants import (
     _VORONOI_AUTO_WIDEN_PROBE_SCALE,
     _VORONOI_DEDUP_TOLERANCE,
     _VORONOI_MAX_DISTANCE_COVALENT_SCALE,
-    _VORONOI_RADIUS_FALLBACK_ANGSTROM,
 )
 from ._material import (
     material_aware_pbc,
@@ -137,7 +136,7 @@ def _median_nn_or_fallback(
             tree = KDTree(pts)
             nn_d, _ = tree.query(pts, k=2)
             return float(np.median(np.asarray(nn_d, dtype=float)[:, 1]))
-    return _VORONOI_MAX_DISTANCE_COVALENT_SCALE * _VORONOI_RADIUS_FALLBACK_ANGSTROM
+    return _VORONOI_MAX_DISTANCE_COVALENT_SCALE * _SURFACE_COVALENT_RADIUS_FALLBACK
 
 
 def _periodic_accessibility_tree(
@@ -429,11 +428,6 @@ def get_unified_sites(
     positions = atoms.get_positions()
     symbols = list(atoms.get_chemical_symbols())
     cell = np.asarray(atoms.get_cell(), dtype=float)
-    # _enumerate_unified_sites already validated material_type, so it is set here.
-    if material_type is None:  # pragma: no cover - defensive
-        raise ValueError(
-            "material_type must be explicitly specified: 'slab', 'nanoparticle', or 'porous'"
-        )
     pbc = np.asarray(material_aware_pbc(material_type), dtype=bool)
     derived_probe, derived_max = _derive_voronoi_distance_window(
         positions, symbols, pbc, cell

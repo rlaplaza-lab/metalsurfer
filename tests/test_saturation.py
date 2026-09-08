@@ -2144,6 +2144,56 @@ def test_run_saturation_screening_n_tuplet_single_molecule_path(monkeypatch, wor
     assert len(out[0].final_slab_atoms) == base_n + 2 * len(make_water())
 
 
+def test_n_tuplet_no_binders_stops_despite_negative_pool_best(monkeypatch, workdir):
+    """Empty n-tuplet commit is terminal even when the pool still binds.
+
+    Regression: before the stop check used pool-best E_ads alone, so
+    ``no_binders`` with a negative screening winner looped until max_steps.
+    """
+    slab = make_slab()
+    base_n = len(slab)
+    screen_calls = {"n": 0}
+
+    def _counting_process(*args, **kwargs):
+        screen_calls["n"] += 1
+        return _pool_process({"water": [(-0.6, 2.5), (-0.4, 7.0)]})(*args, **kwargs)
+
+    _patch_single_mol_saturation_mocks(
+        monkeypatch,
+        molecule="water",
+        smiles="O",
+        ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
+        process_molecule=_counting_process,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.select_tuplet_winners",
+        lambda *args, **kwargs: [],
+    )
+
+    out = run_saturation_screening(
+        SlabContainer(slab),
+        molecules=[("O", "water")],
+        config=_mock_saturation_config(
+            saturation_molecules_per_step=2,
+            saturation_max_steps=None,
+        ),
+        surface_type="tuplet_no_binders_stop",
+        skip_existing=False,
+    )
+
+    assert screen_calls["n"] == 1
+    assert len(out) == 1
+    run = out[0]
+    assert len(run.steps) == 1
+    step = run.steps[0]
+    assert step.n_added == 0
+    assert step.committed_results == []
+    assert step.committed() == []
+    assert step.best_result.energy_adsorption < 0
+    assert run.n_molecules_at_saturation == 0
+    assert len(run.final_slab_atoms) == base_n
+
+
 def test_saturation_bo_n_tuplet_keeps_single_site_memory_labels(monkeypatch, workdir):
     """BO + n-tuplet: memory stays single-site; occupancy grows by n_added.
 

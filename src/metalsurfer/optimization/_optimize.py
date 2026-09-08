@@ -267,7 +267,6 @@ def estimate_parallel_relaxation_capacity(
             "TorchSim unavailable; using parallel relaxation capacity=%d",
             fallback,
         )
-        capacity_cache_set(cache_key, fallback)
         return fallback
 
     try:
@@ -322,11 +321,10 @@ def estimate_parallel_relaxation_capacity(
         return n_systems
     except _deps._CAPACITY_PROBE_ERRORS as exc:
         logger.warning(
-            "Parallel capacity probe failed (%s); using capacity=%d",
+            "Parallel capacity probe failed (%s); using capacity=%d (not cached)",
             exc,
             fallback,
         )
-        capacity_cache_set(cache_key, fallback)
         return fallback
 
 
@@ -334,7 +332,7 @@ def batch_static(
     atoms_list: list[Atoms],
     ts_model,
     *,
-    zero_fallback: bool = True,
+    zero_fallback: bool = False,
     validate_pbc: bool = True,
     require_energy: bool = True,
 ) -> list[tuple[float, np.ndarray | None]]:
@@ -344,12 +342,11 @@ def batch_static(
     Much faster than calling ``ts.static`` once per system because the model
     forward pass is fused across all systems.
 
-    When *zero_fallback* is False, systems whose forces are missing yield
-    ``None`` forces instead of zeros. When *validate_pbc* is False, the
-    per-system PBC check is skipped (callers that already validated the inputs
-    can pass False for a hot path). When *require_energy* is False, a missing
-    energy is tolerated (substituted with ``NaN``) — used by force-recovery
-    paths that only need forces.
+    Missing forces yield ``None`` unless *zero_fallback* is True. When
+    *validate_pbc* is False, the per-system PBC check is skipped (callers that
+    already validated the inputs can pass False for a hot path). When
+    *require_energy* is False, a missing energy is tolerated (substituted with
+    ``NaN``) — used by force-recovery paths that only need forces.
 
     Parameters
     ----------
@@ -494,7 +491,7 @@ def _forces_for_optimized_systems(
             if i < len(energies):
                 try:
                     ev = float(energies[i].detach().cpu().numpy().squeeze())
-                except Exception:
+                except (TypeError, ValueError, AttributeError, RuntimeError):
                     ev = float("nan")
                 if np.isfinite(ev):
                     survivor_idx.append(i)
@@ -512,7 +509,7 @@ def _forces_for_optimized_systems(
             validate_pbc=False,
             require_energy=False,
         )
-    except Exception:
+    except (RuntimeError, MemoryError, OSError, DependencyMissingError):
         logger.warning("ts.static force recovery failed", exc_info=True)
         return [None] * n_systems
 
@@ -888,18 +885,17 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
                 out.append(None)
                 continue
             forces_i = forces_list[i] if forces_list is not None else None
-            if forces_i is not None and not np.all(np.isfinite(forces_i)):
+            if forces_i is None or not np.all(np.isfinite(forces_i)):
                 logger.warning(
-                    "Batched optimisation system %d returned non-finite forces; "
-                    "dropping candidate",
+                    "Batched optimisation system %d returned missing/non-finite "
+                    "forces; dropping candidate",
                     i,
                 )
                 out.append(None)
                 continue
             calc = TorchSimCalculator(ts_model)
             calc.results["energy"] = energy_val
-            if forces_i is not None:
-                calc.results["forces"] = forces_i
+            calc.results["forces"] = forces_i
             calc._last_positions_hash = _positions_cell_hash(atoms)
             atoms.calc = calc
             out.append(atoms)

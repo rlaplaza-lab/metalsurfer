@@ -306,8 +306,16 @@ class TestPlacementRecord:
             x=0.0,
             y=0.0,
             z_offset=2.5,
+            x_abs=0.0,
+            y_abs=0.0,
+            surface_ref_z_abs=0.0,
+            z_abs=2.5,
             shape="round",
             slab_indices=None,
+            quat_w=1.0,
+            quat_x=0.0,
+            quat_y=0.0,
+            quat_z=0.0,
         )
         result = ScreeningResult(
             molecule="test",

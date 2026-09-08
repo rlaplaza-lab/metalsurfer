@@ -53,6 +53,10 @@ def make_placement_record(
             surface_ref_z_abs=10.0,
             z_abs=12.5,
             shape="round",
+            quat_w=1.0,
+            quat_x=0.0,
+            quat_y=0.0,
+            quat_z=0.0,
         ),
         energy_adsorption=energy,
         energy_adslab=-150.0 + energy,
@@ -131,6 +135,10 @@ def make_random_placement_records(
             surface_ref_z_abs=surf_z,
             z_abs=surf_z + z_off,
             shape=str(rng.choice(["linear", "flat", "round"])),
+            quat_w=1.0,
+            quat_x=0.0,
+            quat_y=0.0,
+            quat_z=0.0,
         )
         kwargs: dict = {
             "molecule": molecule,

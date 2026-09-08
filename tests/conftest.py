@@ -324,12 +324,16 @@ def make_placement_descriptor(
         "x": x,
         "y": y,
         "z_offset": z_offset,
+        "x_abs": x,
+        "y_abs": y,
+        "surface_ref_z_abs": 0.0,
+        "z_abs": z_offset,
         "shape": shape,
         "slab_indices": None,
-        "quat_w": None,
-        "quat_x": None,
-        "quat_y": None,
-        "quat_z": None,
+        "quat_w": 1.0,
+        "quat_x": 0.0,
+        "quat_y": 0.0,
+        "quat_z": 0.0,
     }
     defaults.update(kwargs)
     return PlacementDescriptor(**defaults)

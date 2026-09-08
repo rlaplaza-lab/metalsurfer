@@ -35,7 +35,7 @@ RECOVERABLE_DISTANCE_REASONS = frozenset(
 
 # Compute mean covalent radius of element sets from ASE data.
 # This replaces hardcoded fallback values with dynamically computed values.
-def _mean_covalent_radius(elements: list[str]) -> float:
+def _mean_tabulated_covalent_radius(elements: list[str]) -> float:
     """Mean positive covalent radius over *elements* present in ASE tables."""
     radii = []
     for elem in elements:
@@ -49,7 +49,7 @@ def _mean_covalent_radius(elements: list[str]) -> float:
 
 def _compute_mean_adsorbate_covalent_radius() -> float:
     """Mean covalent radius of common adsorbate elements (C, H, O, N, S, P)."""
-    return _mean_covalent_radius(["C", "H", "O", "N", "S", "P"])
+    return _mean_tabulated_covalent_radius(["C", "H", "O", "N", "S", "P"])
 
 
 def _compute_mean_framework_covalent_radius() -> float:
@@ -59,7 +59,9 @@ def _compute_mean_framework_covalent_radius() -> float:
     recognised covalent radii. This is physically distinct from the adsorbate
     fallback and must not reuse it.
     """
-    return _mean_covalent_radius(["Cu", "Pt", "Pd", "Ag", "Au", "Ni", "Fe", "Al", "Co"])
+    return _mean_tabulated_covalent_radius(
+        ["Cu", "Pt", "Pd", "Ag", "Au", "Ni", "Fe", "Al", "Co"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -92,15 +94,8 @@ _PORE_THRESHOLD_MIN_ANGSTROM: float = 2.0
 # max_distance = beta * mean(top-layer covalent radius)
 _VORONOI_PROBE_RADIUS_COVALENT_SCALE: float = 1.25
 _VORONOI_MAX_DISTANCE_COVALENT_SCALE: float = 4.25
-# Unified fallback: mean covalent radius of common adsorbate elements (C,H,O,N,S,P).
-_MEAN_COVALENT_RADIUS_FALLBACK: float = _compute_mean_adsorbate_covalent_radius()
-# Alias kept for call sites that name the geometric role.
-_VORONOI_RADIUS_FALLBACK_ANGSTROM: float = _MEAN_COVALENT_RADIUS_FALLBACK
-_DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM: float = _MEAN_COVALENT_RADIUS_FALLBACK
-_ADSORBATE_COVALENT_RADIUS_FALLBACK: float = _MEAN_COVALENT_RADIUS_FALLBACK
-# Surface (framework/metal) fallback — distinct from the adsorbate fallback so a
-# slab with no recognisable radii degrades to a metal-like value, not an
-# adsorbate-like one.
+# Adsorbate vs surface fallbacks are physically distinct; do not alias them.
+_ADSORBATE_COVALENT_RADIUS_FALLBACK: float = _compute_mean_adsorbate_covalent_radius()
 _SURFACE_COVALENT_RADIUS_FALLBACK: float = _compute_mean_framework_covalent_radius()
 
 # Ridge-based geodesic enrichment

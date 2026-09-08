@@ -207,7 +207,7 @@ def process_molecule(
             return MoleculeScreenOutcome(
                 results=[],
                 failure_summary=PlacementFailure(
-                    n_placements_attempted=config.num_placements or 0,
+                    n_placements_attempted=config.num_placements,
                     n_initial_placements=0,
                     generation_failures=_generation_failure_histogram(
                         placement_failure_events

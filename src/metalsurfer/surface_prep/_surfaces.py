@@ -25,7 +25,7 @@ from ..exceptions import (
 )
 from ..io_results import _write_clean_xyz
 from ..placement._constants import (
-    _MEAN_COVALENT_RADIUS_FALLBACK,
+    _SURFACE_COVALENT_RADIUS_FALLBACK,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
 )
 from ..placement._material import (
@@ -1064,7 +1064,7 @@ def deposit_adatoms(
 
     if min_adatom_separation is None:
         sym_r = _get_covalent_radius(adatom_symbol)
-        sym_r = sym_r if sym_r is not None else _MEAN_COVALENT_RADIUS_FALLBACK
+        sym_r = sym_r if sym_r is not None else _SURFACE_COVALENT_RADIUS_FALLBACK
         min_adatom_separation = 2.0 * float(sym_r)
     min_adatom_separation = float(min_adatom_separation)
 

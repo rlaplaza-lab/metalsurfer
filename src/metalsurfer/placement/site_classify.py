@@ -9,10 +9,10 @@ from scipy.spatial import KDTree
 from .._utils import cell_has_volume
 from ._constants import (
     _DELAUNAY_BRIDGE_THRESHOLD_FRACTION,
-    _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM,
     _KD_RADIUS_SEARCH_PADDING,
     _NORMAL_K_NEIGHBOURS,
     _SITE_CLASSIFICATION_NEIGHBOURS,
+    _SURFACE_COVALENT_RADIUS_FALLBACK,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
 )
 from .site_coords import (
@@ -272,6 +272,8 @@ def _classify_delaunay_vertices_batch(
     vertices: np.ndarray,
     positions: np.ndarray,
     local_tree: KDTree,
+    *,
+    pore_threshold: float,
 ) -> list[tuple[str, tuple[int, ...]]]:
     """Classify all vertices with one ``(M, 2)`` cand_tree query."""
     delaunay = ctx.delaunay
@@ -283,13 +285,28 @@ def _classify_delaunay_vertices_batch(
     cand_xy, cand_types, cand_indices = delaunay.class_index
     cand_tree = ctx.cand_tree
     if cand_tree is None or len(cand_xy) == 0:
-        fallback = tuple(int(i) for i in np.asarray(delaunay.top_atom_indices)[:3])
-        return [("hollow", fallback) for _ in range(n)]
+        # Empty Delaunay candidate index: classify by neighbor distance ratios
+        # instead of inventing hollow labels with a shared dummy slab_indices.
+        k = min(_SITE_CLASSIFICATION_NEIGHBOURS, len(positions))
+        dists_raw, idx_raw = local_tree.query(vertices, k=k)
+        class_dists = np.asarray(dists_raw, dtype=float)
+        class_idx = np.asarray(idx_raw, dtype=int)
+        if class_dists.ndim == 1:
+            class_dists = class_dists.reshape(-1, 1)
+            class_idx = class_idx.reshape(-1, 1)
+        return [
+            _classify_voronoi_site_from_neighbors(
+                class_dists[i],
+                class_idx[i],
+                pore_threshold=pore_threshold,
+            )
+            for i in range(n)
+        ]
 
     char_len = (
         float(ctx.char_len)
         if ctx.char_len is not None
-        else _DELAUNAY_CHAR_LENGTH_FALLBACK_ANGSTROM
+        else _SURFACE_COVALENT_RADIUS_FALLBACK
     )
     bridge_cut = _DELAUNAY_BRIDGE_THRESHOLD_FRACTION * char_len
 
@@ -312,9 +329,7 @@ def _classify_delaunay_vertices_batch(
 
     if fallback_i:
         # Reclassify overgrown bridge sites as hollow using the *top-layer*
-        # atoms, not the full (bulk-inclusive) ``local_tree``. ``top_atom_indices``
-        # is already available from the Delaunay input and is the same index set
-        # used by the empty-candidate-tree fallback above.
+        # atoms, not the full (bulk-inclusive) ``local_tree``.
         top_idx = np.asarray(delaunay.top_atom_indices)
         if len(top_idx) > 0:
             top_tree = KDTree(positions[top_idx])
@@ -353,7 +368,11 @@ def _classify_vertices(
 ) -> list[Site]:
     if ctx.delaunay is not None:
         classifications = _classify_delaunay_vertices_batch(
-            ctx, vertices, positions, local_tree
+            ctx,
+            vertices,
+            positions,
+            local_tree,
+            pore_threshold=pore_threshold,
         )
     else:
         if ctx.class_dists is None or ctx.class_idx is None:

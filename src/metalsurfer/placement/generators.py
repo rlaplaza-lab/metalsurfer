@@ -471,48 +471,8 @@ def estimate_placement_spec_capacity(
     )
 
 
-def estimate_placement_capacity(
-    conformers: list[Atoms],
-    slab: Atoms,
-    config: AdsorptionConfig,
-    smiles: str | None,
-    site_context: SiteContext | None = None,
-    full_slab: Atoms | None = None,
-) -> float:
-    """Return enumerable placement-spec capacity for fill-loop clamping.
-
-    Delegates to :func:`estimate_placement_spec_capacity` (policy-grid size).
-    When *full_slab* is provided, capacity reflects occupancy-pruned sites on
-    that structure (site detection still uses *slab* / *site_context*).
-    Returns ``0.0`` when pruning leaves no available sites. Multi-molecule
-    saturation budgeting uses :func:`estimate_conformer_count` instead.
-
-    Parameters
-    ----------
-    conformers
-        List of adsorbate conformers.
-    slab
-        Substrate slab.
-    config
-        Adsorption configuration.
-    smiles
-        SMILES string or None.
-    site_context
-        Optional precomputed site context.
-    full_slab
-        Optional full slab including pre-adsorbed atoms.
-    """
-    capacity = estimate_placement_spec_capacity(
-        conformers,
-        slab,
-        config,
-        smiles,
-        site_context=site_context,
-        full_slab=full_slab,
-    )
-    if capacity <= 0:
-        return 0.0
-    return max(1.0, float(capacity))
+# Public alias: fill/capacity clamping uses the same enumerable policy-grid size.
+estimate_placement_capacity = estimate_placement_spec_capacity
 
 
 def estimate_conformer_count(conformers: list[Atoms]) -> float:
@@ -521,7 +481,7 @@ def estimate_conformer_count(conformers: list[Atoms]) -> float:
     Returns the number of unique conformers (with a floor of 1),
     directly reflecting the number of conformer-based placement
     enumerations that must be evaluated. Unlike
-    :func:`estimate_placement_capacity`, this does not query the
+    :func:`estimate_placement_spec_capacity`, this does not query the
     policy grid and is safe to use for budget allocation without
     affecting capacity clamping.
 

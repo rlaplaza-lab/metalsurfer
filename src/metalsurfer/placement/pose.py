@@ -591,7 +591,7 @@ def _analytic_height_recovery(
     """One signed height nudge along the placement normal; None if nothing to fix."""
     pose = ctx.pose
     zf = float(pose.z_fraction)
-    origin = np.array([pose.x_abs, pose.y_abs, float(pose.z_abs or 0.0)], dtype=float)
+    origin = np.array([pose.x_abs, pose.y_abs, float(pose.z_abs)], dtype=float)
     z_span = float(ctx.z_base_hi - ctx.z_base_lo)
     if z_span <= _DISTANCE_ZERO_EPS:
         return None
@@ -721,7 +721,7 @@ def _recover_distance_failure(
         height_mode = "too_close"
 
     pose = ctx.pose
-    origin = np.array([pose.x_abs, pose.y_abs, float(pose.z_abs or 0.0)], dtype=float)
+    origin = np.array([pose.x_abs, pose.y_abs, float(pose.z_abs)], dtype=float)
     work_zf = float(pose.z_fraction)
     work_center = origin.copy()
     last_reason: str | None = fail_reason
@@ -1221,7 +1221,7 @@ def _finalize_placement(
             pose = ctx.pose
             if fail_reason is not None:
                 return None, fail_reason
-            z_abs = float(pose.z_abs or 0.0)
+            z_abs = float(pose.z_abs)
         else:
             return None, fail_reason
 

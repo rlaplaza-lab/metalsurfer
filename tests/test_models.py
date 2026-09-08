@@ -69,8 +69,8 @@ def test_screening_result():
     assert row["poscar_path"] == "results/POSCAR"
     assert "orientation_type" not in row
     assert "z_fraction" not in row
-    # No absolute pose on this descriptor: x_abs must fall back to relative x.
-    assert sr.placement_descriptor.x_abs is None
+    # Absolute pose is populated on test descriptors; lean CSV x_abs uses it.
+    assert sr.placement_descriptor.x_abs == pytest.approx(0.0)
     assert row["x_abs"] == pytest.approx(0.0)
     # With an absolute pose present, x_abs must win over relative x.
     abs_desc = make_placement_descriptor(x=1.5, x_abs=-2.25)
@@ -291,6 +291,19 @@ def test_saturation_step_result_n_added_defaults_and_committed():
         n_added=0,
     )
     assert unbound.committed() == []
+
+    # Empty commit must not invent a winner from a still-negative pool best
+    # (n-tuplet no_binders / emptied-pack unbound final step).
+    empty_commit_negative_pool = SaturationStepResult(
+        step=3,
+        molecule="water",
+        n_molecules_on_slab=1,
+        best_result=bound,
+        all_results=[bound],
+        n_added=0,
+        committed_results=[],
+    )
+    assert empty_commit_negative_pool.committed() == []
 
     explicit = [bound, bound]
     multi = SaturationStepResult(

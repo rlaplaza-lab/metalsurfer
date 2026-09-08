@@ -16,11 +16,13 @@ from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
 from . import geometry as geom
 from ._cache_key import _pack_optional_float
 from ._constants import (
+    _ATOP_INJECTION_HEIGHT_FACTOR,
     _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM,
     _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM,
     _DISSOCIATIVE_MAX_ADJACENT_SEP_NN_SCALE,
     _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM,
     _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE,
+    _SURFACE_COVALENT_RADIUS_FALLBACK,
     _VECTOR_NORM_EPS,
 )
 from ._material import material_aware_pbc
@@ -356,7 +358,9 @@ def _compute_dissociative_site_pairs(
         for i in radius_indices
         if (r := geom._get_covalent_radius(symbols[int(i)])) is not None
     ]
-    mean_top_radius = float(np.mean(top_radii)) if top_radii else 1.0
+    mean_top_radius = (
+        float(np.mean(top_radii)) if top_radii else _SURFACE_COVALENT_RADIUS_FALLBACK
+    )
 
     site_3d = site_xyz
     if config.material_type == "slab":
@@ -371,7 +375,7 @@ def _compute_dissociative_site_pairs(
     atomic_constraint = _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE * (
         2.0 * mean_top_radius
     )
-    surface_constraint = 0.8 * mean_nn_sep
+    surface_constraint = _ATOP_INJECTION_HEIGHT_FACTOR * mean_nn_sep
     adaptive_min = min(atomic_constraint, surface_constraint)
     min_fragment_sep = max(_DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM, adaptive_min)
     max_adjacent_sep = float(

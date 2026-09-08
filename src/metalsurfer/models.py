@@ -602,13 +602,19 @@ def _placement_rows_for_results(
 def _committed_step_results(
     best_result: ScreeningResult,
     committed_results: Sequence[ScreeningResult],
+    *,
+    n_added: int | None = None,
 ) -> list[ScreeningResult]:
     """Placements folded into the coverage slab by one saturation step.
 
-    ``committed_results`` is the explicit record of what was committed;
-    when it is empty the step falls back to ``[best_result]`` if that
-    placement bound (negative E_ads), mirroring legacy single-winner steps.
+    ``committed_results`` is the explicit record of what was committed.
+    When it is empty and ``n_added`` is not 0, the step falls back to
+    ``[best_result]`` if that placement bound (negative E_ads), mirroring
+    legacy single-winner steps. ``n_added == 0`` is always an unbound final
+    step and never invents a winner from the pool best.
     """
+    if n_added == 0:
+        return []
     if committed_results:
         return list(committed_results)
     if best_result.energy_adsorption < 0:
@@ -627,16 +633,19 @@ class SaturationStepResult:
     all_results: list[ScreeningResult]
     bo_transfer_enabled: bool = False
     transfer: BOTransferInfo | None = None
-    # Placements folded into the slab this step (>1 once n-tuplet saturation
-    # exists); 0 for an unbound final step. Defaults keep legacy behavior.
+    # Placements folded into the slab this step (1 for sequential; >1 for
+    # n-tuplet); 0 for an unbound final step. Defaults keep sequential behavior.
     n_added: int = 1
-    # Explicit multi-winner commit record; empty means the legacy single-winner
-    # interpretation of *best_result* (see :func:`_committed_step_results`).
+    # Explicit multi-winner commit record; empty with n_added != 0 means the
+    # sequential single-winner interpretation of *best_result*
+    # (see :func:`_committed_step_results`).
     committed_results: list[ScreeningResult] = field(default_factory=list)
 
     def committed(self) -> list[ScreeningResult]:
         """Return the placements this step folded into the coverage slab."""
-        return _committed_step_results(self.best_result, self.committed_results)
+        return _committed_step_results(
+            self.best_result, self.committed_results, n_added=self.n_added
+        )
 
     def to_detail_row(
         self,
@@ -873,16 +882,19 @@ class MultiMolSaturationStepResult:
     per_molecule_budgets: dict[str, int]
     bo_transfer_enabled: bool = False
     transfer_by_molecule: dict[str, BOTransferInfo] = field(default_factory=dict)
-    # Placements folded into the slab this step (>1 once n-tuplet saturation
-    # exists); 0 for an unbound final step. Defaults keep legacy behavior.
+    # Placements folded into the slab this step (1 for sequential; >1 for
+    # n-tuplet); 0 for an unbound final step. Defaults keep sequential behavior.
     n_added: int = 1
-    # Explicit multi-winner commit record; empty means the legacy single-winner
-    # interpretation of *best_result* (see :func:`_committed_step_results`).
+    # Explicit multi-winner commit record; empty with n_added != 0 means the
+    # sequential single-winner interpretation of *best_result*
+    # (see :func:`_committed_step_results`).
     committed_results: list[ScreeningResult] = field(default_factory=list)
 
     def committed(self) -> list[ScreeningResult]:
         """Return the placements this step folded into the coverage slab."""
-        return _committed_step_results(self.best_result, self.committed_results)
+        return _committed_step_results(
+            self.best_result, self.committed_results, n_added=self.n_added
+        )
 
     def to_detail_row(
         self,

@@ -10,6 +10,7 @@ from ..exceptions import DependencyMissingError
 from ..models import PlacementSpec
 from . import geometry as geom
 from ._constants import (
+    _ADSORBATE_COVALENT_RADIUS_FALLBACK,
     _PARALLEL_FRACTION_HIGH_BINDER_RATIO,
     _PARALLEL_FRACTION_HIGH_RATIO_CUTOFF,
     _PARALLEL_FRACTION_LOW_BINDER_RATIO,
@@ -23,9 +24,17 @@ from ._constants import (
     _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE,
     _SITE_Z_OFFSET_FROM_SURFACE_RADIUS,
 )
-from .site_coords import _mean_covalent_radius
 from .site_enumeration import _get_site_surface_radii
 from .site_types import Site
+
+
+def _mean_adsorbate_covalent_radius(mol_symbols: list[str]) -> float:
+    """Mean covalent radius of adsorbate symbols, or the adsorbate fallback."""
+    radii = [geom._get_covalent_radius(s) for s in mol_symbols]
+    valid = [r for r in radii if r is not None]
+    if not valid:
+        return float(_ADSORBATE_COVALENT_RADIUS_FALLBACK)
+    return float(np.mean(valid))
 
 
 def _rdkit_chem():
@@ -97,7 +106,7 @@ def _radius_sum_for_site(
 ) -> float:
     if r_surface is None:
         r_surface = _get_site_surface_radii(slab, site)
-    return r_surface + _mean_covalent_radius(mol_symbols)
+    return r_surface + _mean_adsorbate_covalent_radius(mol_symbols)
 
 
 def _site_type_z_offset(

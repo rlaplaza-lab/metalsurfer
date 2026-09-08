@@ -11,7 +11,7 @@ from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
 from ..placement.generators import (
     enumerate_placement_specs,
-    estimate_placement_capacity,
+    estimate_placement_spec_capacity,
 )
 from ..placement.site_context import SiteContext
 from .shared import PlacementFailureEvent, _materialize_spec_placements
@@ -56,19 +56,15 @@ def _estimate_capacity_int(
     slab_atoms: Atoms,
 ) -> int:
     return max(
-        int(
-            math.floor(
-                estimate_placement_capacity(
-                    conformers,
-                    slab_for_sites,
-                    config,
-                    smiles,
-                    site_context=site_context,
-                    full_slab=slab_atoms,
-                )
-            )
-        ),
         0,
+        estimate_placement_spec_capacity(
+            conformers,
+            slab_for_sites,
+            config,
+            smiles,
+            site_context=site_context,
+            full_slab=slab_atoms,
+        ),
     )
 
 
