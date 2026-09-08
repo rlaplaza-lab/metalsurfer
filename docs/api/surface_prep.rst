@@ -81,6 +81,7 @@ For custom freeze patterns, attach ASE ``FixAtoms`` yourself or call
 
 Deliberate no freeze
 ~~~~~~~~~~~~~~~~~~~~
+Build or finalize geometry without calling
 ``apply_surface_constraints``, or clear constraints on the ``Atoms`` object
 before ``run_*``. Campaign APIs warn when FixAtoms are absent but do **not**
 auto-freeze — a fully mobile substrate remains intentional. Freeze policy is

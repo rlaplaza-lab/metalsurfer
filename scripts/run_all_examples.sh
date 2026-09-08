@@ -7,7 +7,7 @@
 #
 # Usage (from repo root, with metalsurfer conda env and GPU):
 #   ./scripts/run_all_examples.sh
-#   nohup bash scripts/run_all_examples.sh > logs/example_runs/v0.6_all_$(date +%Y%m%d_%H%M).log 2>&1 &
+#   nohup bash scripts/run_all_examples.sh > logs/example_runs/v0.6.1_all_$(date +%Y%m%d_%H%M).log 2>&1 &
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -81,7 +81,7 @@ _run_one() {
   local label="$1"
   local cmd="$2"
   local results_dir="$3"
-  local log_file="${LOG_DIR}/v0.6_${label}_${STAMP}.log"
+  local log_file="${LOG_DIR}/v0.6.1_${label}_${STAMP}.log"
   echo "===== START ${label} (fresh run; removing ${results_dir}) =====" | tee -a "$log_file"
   rm -rf "$results_dir"
   set +e

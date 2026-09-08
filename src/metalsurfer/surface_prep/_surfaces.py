@@ -637,6 +637,8 @@ def _consider_variant(
         energy = float(candidate.get_potential_energy())
         if energy < best_energy:
             return energy, candidate.copy()
+    except (OptimizationError, DependencyMissingError, GeometryValidationError):
+        raise
     except (RuntimeError, ValueError) as exc:
         if context:
             logger.warning("%s failed: %s", context, exc)
@@ -920,6 +922,8 @@ def substitute_alloy(
                 "Post-relax slab energy: %.4f eV",
                 best_atoms.get_potential_energy(),
             )
+        except OptimizationError:
+            raise
         except (RuntimeError, ValueError) as exc:
             raise OptimizationError(f"Alloy slab relaxation failed: {exc}") from exc
 

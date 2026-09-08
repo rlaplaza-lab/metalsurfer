@@ -255,9 +255,9 @@ Large adsorbates and in-plane sizing
 
 Campaign entry points validate the substrate geometry only — they do **not** know
 adsorbate size yet. Once conformers are generated for a molecule,
-:func:`~metalsurfer.surface_prep.validate_substrate` (via the shared molecule
-preamble in ``workflow/shared.py``) re-validates the slab using the maximum
-pairwise distance across conformers (the **molecule diameter**) plus
+:func:`~metalsurfer.surface_prep.validate_substrate_conformer_sizing` (via the
+shared molecule preamble in ``workflow/shared.py``) re-validates the slab using
+the maximum pairwise distance across conformers (the **molecule diameter**) plus
 :attr:`~metalsurfer.AdsorptionConfig.min_pbc_image_separation` (default 8 Å).
 If the in-plane cell is too small, screening raises
 :exc:`~metalsurfer.GeometryValidationError` with the minimum
@@ -322,10 +322,12 @@ Prep equilibration and adsorption freeze are **separate stages**:
 
 Default
 ~~~~~~~
+(``relax_top_layer=False``): every substrate atom is frozen during
 placement relaxation — the standard choice for rigid-surface binding energies.
 
 Surface relaxation shortcut
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+(``relax_top_layer=True``): interior atoms stay
 fixed; which atoms remain free depends on
 :attr:`~metalsurfer.AdsorptionConfig.material_type` and
 ``top_layer_tolerance``:
@@ -366,6 +368,7 @@ finalize with custom constraints instead of ``relax_top_layer``.
 
 Symbol-specific freeze
 ~~~~~~~~~~~~~~~~~~~~~~
+(``freeze_symbols=[...]``): only listed elements are
 frozen; layer policy is ignored.
 
 Saturation stores ``base_slab`` once after ``prepare_substrate``; indices on that

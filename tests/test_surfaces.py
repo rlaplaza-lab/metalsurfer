@@ -11,7 +11,7 @@ from ase import Atoms
 from ase.build import fcc111
 
 from metalsurfer.config import AdsorptionConfig
-from metalsurfer.exceptions import GeometryValidationError
+from metalsurfer.exceptions import GeometryValidationError, OptimizationError
 from metalsurfer.io_results import _write_clean_xyz
 from metalsurfer.placement import get_hollow_sites_for_adatoms
 from metalsurfer.surface_prep import (
@@ -390,6 +390,80 @@ class TestSubstituteAlloy:
             )
         assert isinstance(result, SlabContainer)
         assert result.atoms.get_chemical_symbols().count("Cu") > 0
+
+    def test_propagates_optimization_error_without_rewrapping(self, monkeypatch):
+        slab = self._ru_slab()
+
+        def _failing_relax(*_args, **_kwargs):
+            raise OptimizationError("inner relax boom")
+
+        class _FakeCalculator:
+            def get_potential_energy(self, atoms=None, force_consistent=False):
+                _ = atoms, force_consistent
+                return 0.0
+
+        monkeypatch.setattr(
+            "metalsurfer.surface_prep._surfaces._relax_slab_structure",
+            _failing_relax,
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            pytest.raises(
+                OptimizationError, match="^Optimization failed: inner relax boom$"
+            ),
+        ):
+            substitute_alloy(
+                slab,
+                "Ru",
+                "Cu",
+                guest_fraction=0.5,
+                relax=True,
+                calculator=_FakeCalculator(),
+                results_dir=tmpdir,
+            )
+
+    def test_wraps_non_optimization_runtime_error(self, monkeypatch):
+        slab = self._ru_slab()
+
+        class _PostRelaxBrokenCalculator:
+            def get_potential_energy(self, atoms=None, force_consistent=False):
+                _ = atoms, force_consistent
+                raise RuntimeError("energy readout failed")
+
+        calc = _PostRelaxBrokenCalculator()
+
+        def _ok_relax(atoms, calculator, *_args, **_kwargs):
+            atoms.calc = calculator
+            return atoms
+
+        monkeypatch.setattr(
+            "metalsurfer.surface_prep._surfaces._relax_slab_structure",
+            _ok_relax,
+        )
+        monkeypatch.setattr(
+            "metalsurfer.surface_prep._surfaces._consider_variant",
+            lambda variant, calculator, best_energy, best_atoms, context: (
+                -1.0,
+                variant.copy(),
+            ),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            pytest.raises(
+                OptimizationError,
+                match="Alloy slab relaxation failed: energy readout failed",
+            ),
+        ):
+            substitute_alloy(
+                slab,
+                "Ru",
+                "Cu",
+                guest_fraction=0.5,
+                relax=True,
+                calculator=calc,
+                n_variants=1,
+                results_dir=tmpdir,
+            )
 
 
 # ---------------------------------------------------------------------------

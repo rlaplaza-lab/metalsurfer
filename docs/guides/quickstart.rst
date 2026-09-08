@@ -50,12 +50,13 @@ To also install the documentation build dependencies:
 Runnable Examples
 -----------------
 
-Six demos under ``examples/`` cover nanoparticle, porous, slab, dissociative
-H₂, competitive saturation, and Bayesian workflows:
+Seven demos under ``examples/`` cover nanoparticle, porous, slab, dissociative
+H₂ (slab and cluster), competitive saturation, and Bayesian workflows:
 
 .. code-block:: bash
 
    python examples/ethene_pt12_binding_energy.py
+   python examples/h2_pt13_binding_energy.py
    python examples/co2_mof_binding_energy.py
    python examples/ethene_ru_slab_binding_energy.py
    python examples/h2_ru_slab_binding_energy.py
