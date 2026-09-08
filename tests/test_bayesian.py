@@ -931,19 +931,17 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         assert hasattr(r, "energy_adsorption") and hasattr(r, "placement_id")
         assert isinstance(r.energy_adsorption, (int, float))
         assert np.isfinite(r.energy_adsorption)
-        assert -5.0 <= r.energy_adsorption < 2.0, (
-            f"E_ads should be in a physical binding window [-5, 2) eV, got {r.energy_adsorption}"
+        assert -2.0 <= r.energy_adsorption < 1.0, (
+            f"E_ads should be in a physical binding window [-2, 1) eV, got {r.energy_adsorption}"
         )
         assert np.isfinite(r.distance) and r.distance > 0.5, (
             f"Adsorbate–surface distance should be finite and >0.5 Å, got {r.distance}"
         )
-    # Sign of the best E_ads is task-head dependent: under the former oc20
-    # hardcode the best placement was negative, while the oc25 head predicts a
-    # mildly endothermic best binding at this tiny placement budget. Reference
-    # run (uma-s-1p2 + oc25): overall_best = +0.118 eV, reproducible across
-    # runs to ~1e-3. Bound at 0.5 eV: tight enough to flag garbage/penalty-
-    # dominated runs (which sit >= 1-2 eV) without pinning one head's sign.
-    assert min(r.energy_adsorption for r in results) < 0.5, (
+    # Tiny BO smoke on a defect surface: best E_ads is head/budget sensitive
+    # (oc25 reference runs have landed near +0.12 eV and ~+0.47 eV). Bound at
+    # 0.75 eV to catch garbage/penalty-dominated runs (>= 1–2 eV) without
+    # over-fitting one seed's sign or magnitude.
+    assert min(r.energy_adsorption for r in results) < 0.75, (
         "Best E_ads should stay clearly below the penalty/window ceiling on "
         "this defect smoke"
     )

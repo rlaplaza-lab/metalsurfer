@@ -171,16 +171,26 @@ def main() -> int:
         print("Non-finite or empty committed E_ads rows found.", file=sys.stderr)
         return 1
 
-    # Best-E_ads lock (uma-s-1p2 + oc25 QC): first committed step ≈ −3.23 eV.
+    # Best-E_ads band (uma-s-1p2 + oc25 QC): first committed step ≈ −3.21 to −3.23 eV.
+    e_ads_ceiling_ev = -2.50
+    e_ads_floor_ev = -3.50
     first_bound = next((s for s in result.steps if s.n_added > 0), None)
     if first_bound is None:
         print("No committed saturation step found.", file=sys.stderr)
         return 1
     best_first = min(u.energy_adsorption for u in first_bound.committed())
-    if best_first >= -0.5:
+    if best_first >= e_ads_ceiling_ev:
         print(
-            f"Expected strong first-step binding (best E_ads < -0.5 eV), "
+            f"Expected strong first-step binding "
+            f"(best E_ads < {e_ads_ceiling_ev:.2f} eV), "
             f"got {best_first:.4f} eV.",
+            file=sys.stderr,
+        )
+        return 1
+    if best_first < e_ads_floor_ev:
+        print(
+            f"First-step best E_ads {best_first:.4f} eV is below the "
+            f"{e_ads_floor_ev:.2f} eV floor (unexpectedly strong vs QC).",
             file=sys.stderr,
         )
         return 1

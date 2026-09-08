@@ -35,8 +35,9 @@ from metalsurfer import (
 )
 from metalsurfer.surface_prep import prepare_substrate
 
-# Best-E_ads lock (uma-s-1p2 + oc25): observed ≈ −1.13 eV on prep-relaxed Pt₁₃.
-E_ADS_CEILING_EV = -0.5
+# Best-E_ads band (uma-s-1p2 + oc25): observed ≈ −1.128 eV on prep-relaxed Pt₁₃.
+E_ADS_CEILING_EV = -0.90
+E_ADS_FLOOR_EV = -1.40
 CHEMISORPTION_CONTACT_ANG = 2.2
 
 
@@ -93,7 +94,14 @@ def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> 
     if not np.isfinite(e_ads) or e_ads >= E_ADS_CEILING_EV:
         print(
             f"Expected favorable dissociative H2 binding on Pt₁₃ "
-            f"(best E_ads < {E_ADS_CEILING_EV:.1f} eV), got {e_ads}.",
+            f"(best E_ads < {E_ADS_CEILING_EV:.2f} eV), got {e_ads}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if e_ads < E_ADS_FLOOR_EV:
+        print(
+            f"Best E_ads {e_ads:.4f} eV is below the {E_ADS_FLOOR_EV:.2f} eV "
+            "floor for H2 on Pt₁₃ (unexpectedly strong vs QC).",
             file=sys.stderr,
         )
         raise SystemExit(1)

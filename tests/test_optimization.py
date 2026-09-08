@@ -1,6 +1,7 @@
 """Tests for optimization package: pure CPU helpers, TorchSimCalculator, setup_single_model."""
 
 import gc
+import warnings
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -1272,9 +1273,18 @@ class TestSetupSingleModel:
             c.set_cell([10.0, 10.0, 15.0])
             c.set_pbc([True, True, True])
 
-        with patch(
-            "metalsurfer.optimization._cache._get_inflight_autobatcher"
-        ) as mock_get_ab:
+        with (
+            patch(
+                "metalsurfer.optimization._cache._get_inflight_autobatcher"
+            ) as mock_get_ab,
+            warnings.catch_warnings(),
+        ):
+            # Short max_steps intentionally hits TorchSim's step-budget notice.
+            warnings.filterwarnings(
+                "ignore",
+                message=r"All systems have reached the maximum number of steps",
+                category=UserWarning,
+            )
             results = optimize_isolated_molecules_batched(
                 conformers,
                 ts_model,

@@ -77,8 +77,8 @@ def test_run_adsorption_water_on_cu111(tmp_path, monkeypatch):
         f"got {np.median(e_ads):.3f}"
     )
     assert np.all(e_ads < 0.0), f"All E_ads should be favorable (<0 eV), got {e_ads}"
-    assert np.all(e_ads >= -0.8), (
-        f"E_ads should be >= -0.8 eV for water on Cu, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -0.55), (
+        f"E_ads should be >= -0.55 eV for water on Cu, got min {e_ads.min():.3f}"
     )
 
     site_ids = set()

@@ -36,8 +36,9 @@ from metalsurfer.surface_prep import prepare_substrate
 # A relaxed best pose at or below this distance means ethene made a true
 # chemisorption contact (physisorption sits around 3+ Å).
 CHEMISORPTION_CONTACT_ANG = 2.6
-# Best-E_ads lock (uma-s-1p2 + oc25 QC): observed best ≈ +0.28 eV.
-E_ADS_CEILING_EV = 0.5
+# Best-E_ads band (uma-s-1p2 + oc25 QC): observed best ≈ +0.283 eV (stable).
+E_ADS_CEILING_EV = 0.35
+E_ADS_FLOOR_EV = 0.15
 
 
 def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> None:
@@ -60,7 +61,16 @@ def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> 
     if best.energy_adsorption >= E_ADS_CEILING_EV:
         print(
             f"Best E_ads {best.energy_adsorption:.4f} eV exceeds the "
-            f"{E_ADS_CEILING_EV:.1f} eV ceiling for ethene on Pt₁₂.",
+            f"{E_ADS_CEILING_EV:.2f} eV ceiling for ethene on Pt₁₂.",
+            file=sys.stderr,
+        )
+        print(campaign.format_summary(results_dir=results_dir), file=sys.stderr)
+        raise SystemExit(1)
+    if best.energy_adsorption < E_ADS_FLOOR_EV:
+        print(
+            f"Best E_ads {best.energy_adsorption:.4f} eV is below the "
+            f"{E_ADS_FLOOR_EV:.2f} eV floor for ethene on Pt₁₂ "
+            "(unexpectedly strong vs QC).",
             file=sys.stderr,
         )
         print(campaign.format_summary(results_dir=results_dir), file=sys.stderr)

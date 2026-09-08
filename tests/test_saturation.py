@@ -632,10 +632,12 @@ def test_run_saturation_screening_h2_ni111_real_gpu(workdir):
         n_at_sat = last.n_molecules_on_slab + 1
     assert sr.n_molecules_at_saturation == n_at_sat
 
-    # All E_ads should be physically reasonable (not wildly unphysical)
+    # All E_ads should be physically reasonable (not wildly unphysical).
+    # Dissociative H on Ni(111) under UMA is strongly exothermic but not
+    # multi-eV-per-H pathological.
     for step in sr.steps:
         e = step.best_result.energy_adsorption
-        assert -5.0 <= e <= 5.0, f"E_ads {e:.3f} eV out of reasonable range"
+        assert -4.0 <= e <= 2.0, f"E_ads {e:.3f} eV out of reasonable range"
 
 
 def test_run_saturation_screening_symmetry_none_falls_back_to_c1(monkeypatch, caplog):

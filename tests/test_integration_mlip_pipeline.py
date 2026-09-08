@@ -184,11 +184,11 @@ def _assert_ethene_ru(results: list[ScreeningResult], num_placements: int) -> No
     assert np.median(e_ads) < 0, (
         f"Median E_ads should be negative, got {np.median(e_ads):.3f}; all: {e_ads}"
     )
-    assert np.all(e_ads < 0.5), (
-        f"E_ads should stay below 0.5 eV for ethene on Ru, got {e_ads}"
+    assert np.all(e_ads < 0.30), (
+        f"E_ads should stay below 0.30 eV for ethene on Ru, got {e_ads}"
     )
-    assert np.all(e_ads >= -0.6), (
-        f"E_ads should be >= -0.6 eV for ethene on Ru, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -0.35), (
+        f"E_ads should be >= -0.35 eV for ethene on Ru, got min {e_ads.min():.3f}"
     )
 
     spread = float(e_ads.max() - e_ads.min())
@@ -228,11 +228,11 @@ def _assert_h2_ru(results: list[ScreeningResult], num_placements: int) -> None:
     assert float(e_ads.min()) < -0.05, (
         f"Best E_ads regression lock (< -0.05 eV) failed for H2 on Ru, got {e_ads}"
     )
-    assert np.all(e_ads < 0.1), (
-        f"E_ads should stay below 0.1 eV for H2 on Ru, got {e_ads}"
+    assert np.all(e_ads < 0.05), (
+        f"E_ads should stay below 0.05 eV for H2 on Ru, got {e_ads}"
     )
-    assert np.all(e_ads >= -0.4), (
-        f"E_ads should be >= -0.4 eV for H2 on Ru, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -0.25), (
+        f"E_ads should be >= -0.25 eV for H2 on Ru, got min {e_ads.min():.3f}"
     )
 
     site_ids = set()
@@ -275,14 +275,14 @@ def _assert_h2_pt13(results: list[ScreeningResult], num_placements: int) -> None
     # QC (uma-s-1p2 + oc25, prep-relaxed Pt₁₃ ico): best ≈ −1.13 eV,
     # dissociated H–H ≈ 2.18 Å, H–Pt ≈ 1.78 Å.
     assert np.all(np.isfinite(e_ads))
-    assert float(e_ads.min()) < -0.5, (
-        f"Best E_ads regression lock (< -0.5 eV) failed for H2 on Pt13, got {e_ads}"
+    assert float(e_ads.min()) < -0.90, (
+        f"Best E_ads regression lock (< -0.90 eV) failed for H2 on Pt13, got {e_ads}"
     )
     assert np.all(e_ads < 0.0), (
         f"E_ads should stay favorable (< 0 eV) for H2 on Pt13, got {e_ads}"
     )
-    assert np.all(e_ads >= -2.0), (
-        f"E_ads should be >= -2.0 eV for H2 on Pt13, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -1.40), (
+        f"E_ads should be >= -1.40 eV for H2 on Pt13, got min {e_ads.min():.3f}"
     )
 
     slab_size = len(results[0].atoms) - 2
@@ -329,8 +329,8 @@ def _assert_co2_mof(results: list[ScreeningResult], num_placements: int) -> None
     assert np.all(e_ads < 0.05), (
         f"E_ads should stay in a physisorption window (< 0.05 eV), got {e_ads}"
     )
-    assert np.all(e_ads >= -0.8), (
-        f"E_ads should be >= -0.8 eV for CO2 in MOF, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -0.40), (
+        f"E_ads should be >= -0.40 eV for CO2 in MOF, got min {e_ads.min():.3f}"
     )
     assert float(e_ads.min()) < -0.10, (
         f"Best E_ads regression lock (< -0.10 eV) failed for CO2 in MOF, got {e_ads}"

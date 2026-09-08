@@ -24,16 +24,26 @@ from metalsurfer import (
     run_campaign,
 )
 
-# Best-E_ads locks by YAML stem (uma-s-1p2 + oc25 QC). Exclusive upper bounds
-# on campaign best (binding) or first committed step best (saturation).
+# Best-E_ads bands by YAML stem (uma-s-1p2 + oc25 QC). Exclusive ceiling /
+# inclusive floor around campaign best (binding) or first committed step best
+# (saturation). Observed values are stable across repeated local GPU runs.
 _BINDING_BEST_E_ADS_CEILING: dict[str, float] = {
-    "ethene_ru_slab_binding_energy": 0.5,  # obs ≈ +0.24 eV
-    "h2_ru_slab_binding_energy": 0.0,  # obs ≈ −0.18 eV
-    "co2_mof_binding_energy": 0.0,  # obs ≈ −0.21 eV
-    "water_cu111_adsorption_bo": 0.0,  # obs ≈ −0.37 eV
+    "ethene_ru_slab_binding_energy": 0.35,  # obs ≈ +0.244 eV
+    "h2_ru_slab_binding_energy": -0.05,  # obs ≈ −0.183 eV
+    "co2_mof_binding_energy": -0.10,  # obs ≈ −0.21 eV
+    "water_cu111_adsorption_bo": -0.20,  # obs ≈ −0.373 eV
+}
+_BINDING_BEST_E_ADS_FLOOR: dict[str, float] = {
+    "ethene_ru_slab_binding_energy": 0.10,
+    "h2_ru_slab_binding_energy": -0.35,
+    "co2_mof_binding_energy": -0.40,
+    "water_cu111_adsorption_bo": -0.55,
 }
 _SATURATION_STEP1_BEST_E_ADS_CEILING: dict[str, float] = {
-    "ethane_cu_saturation": -0.2,  # obs ≈ −0.51 eV
+    "ethane_cu_saturation": -0.40,  # obs ≈ −0.513 eV
+}
+_SATURATION_STEP1_BEST_E_ADS_FLOOR: dict[str, float] = {
+    "ethane_cu_saturation": -0.70,
 }
 
 
@@ -56,9 +66,10 @@ def _resolve_device(requested: str) -> str:
 
 
 def _validate_best_e_ads_lock(yaml_stem: str, result: object) -> None:
-    """Exit non-zero when a known demo regresses past its QC best-E_ads lock."""
+    """Exit non-zero when a known demo leaves its QC best-E_ads band."""
     if isinstance(result, BindingCampaignResult):
         ceiling = _BINDING_BEST_E_ADS_CEILING.get(yaml_stem)
+        floor = _BINDING_BEST_E_ADS_FLOOR.get(yaml_stem)
         if ceiling is None:
             return
         if not result.molecule_summaries:
@@ -72,10 +83,18 @@ def _validate_best_e_ads_lock(yaml_stem: str, result: object) -> None:
                 file=sys.stderr,
             )
             raise SystemExit(1)
+        if floor is not None and best < floor:
+            print(
+                f"Best E_ads floor lock failed for {yaml_stem}: "
+                f"expected >= {floor:.2f} eV, got {best}.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
         return
 
     if isinstance(result, SaturationCampaignResult):
         ceiling = _SATURATION_STEP1_BEST_E_ADS_CEILING.get(yaml_stem)
+        floor = _SATURATION_STEP1_BEST_E_ADS_FLOOR.get(yaml_stem)
         if ceiling is None:
             return
         if not result.runs:
@@ -91,6 +110,13 @@ def _validate_best_e_ads_lock(yaml_stem: str, result: object) -> None:
             print(
                 f"First-step best E_ads regression lock failed for {yaml_stem}: "
                 f"expected < {ceiling:.2f} eV, got {best:.4f} eV.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if floor is not None and best < floor:
+            print(
+                f"First-step best E_ads floor lock failed for {yaml_stem}: "
+                f"expected >= {floor:.2f} eV, got {best:.4f} eV.",
                 file=sys.stderr,
             )
             raise SystemExit(1)

@@ -54,10 +54,20 @@ def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> 
     _validate_dissociative_result(best)
 
     e_ads = best.energy_adsorption
-    # Best-E_ads lock (uma-s-1p2 + oc25 QC): observed ≈ −0.11 eV.
-    if not np.isfinite(e_ads) or e_ads >= 0.0:
+    # Best-E_ads band (uma-s-1p2 + oc25 QC): observed ≈ −0.113 eV.
+    e_ads_ceiling_ev = -0.05
+    e_ads_floor_ev = -0.25
+    if not np.isfinite(e_ads) or e_ads >= e_ads_ceiling_ev:
         print(
-            f"Expected favorable H2 binding on Ru (best E_ads < 0 eV), got {e_ads}.",
+            f"Expected favorable H2 binding on Ru "
+            f"(best E_ads < {e_ads_ceiling_ev:.2f} eV), got {e_ads}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if e_ads < e_ads_floor_ev:
+        print(
+            f"Best E_ads {e_ads:.4f} eV is below the {e_ads_floor_ev:.2f} eV "
+            "floor for H2 on Ru (unexpectedly strong vs QC).",
             file=sys.stderr,
         )
         raise SystemExit(1)
