@@ -64,10 +64,9 @@ def existing_adsorbate_cloud(
         Fallback floor for unknown covalent radii (``dtol/2`` analogue).
     """
     pos = existing_adsorbate_positions(slab_for_sites, full_slab)
-    if pos is None:
+    if pos is None or full_slab is None:
         return None, None
     n_sub = len(slab_for_sites)
-    assert full_slab is not None
     symbols = list(full_slab.get_chemical_symbols()[n_sub:])
     radii = atom_radii_for_symbols(symbols, min_separation=float(min_separation))
     return pos, radii
@@ -160,13 +159,6 @@ def _footprint_clearances_from_mic(
     if mic_vecs.shape[1] == 0:
         return np.full(len(sites), np.inf, dtype=float)
     normals = np.asarray([s.normal for s in sites], dtype=float)
-    norms = np.linalg.norm(normals, axis=1, keepdims=True)
-    normals = np.divide(
-        normals,
-        norms,
-        out=np.zeros_like(normals),
-        where=norms > 1e-12,
-    )
     dots = np.einsum("sjd,sd->sj", mic_vecs, normals)
     perp = mic_vecs - dots[:, :, None] * normals[:, None, :]
     lateral = np.linalg.norm(perp, axis=2)

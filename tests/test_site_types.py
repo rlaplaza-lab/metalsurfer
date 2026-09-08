@@ -29,6 +29,12 @@ def test_site_xy_returns_copy():
     assert site.xyz[0] == pytest.approx(1.0)
 
 
+def test_site_normal_is_unit_length():
+    site = _site(normal=np.array([0.0, 0.0, 2.0]))
+    np.testing.assert_allclose(site.normal, [0.0, 0.0, 1.0])
+    assert float(np.linalg.norm(site.normal)) == pytest.approx(1.0)
+
+
 def test_with_symmetry_preserves_geometry_fields():
     site = _site()
     enriched = with_symmetry(

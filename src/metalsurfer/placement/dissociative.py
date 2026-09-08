@@ -302,7 +302,6 @@ def _compute_dissociative_site_pairs(
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
-    # For slab/nanoparticle, material_aware_pbc already has z=False.
     pbc = material_aware_pbc(config.material_type)
     slab_normal = _slab_normal(cell_arr)
 

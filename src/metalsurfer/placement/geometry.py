@@ -1016,19 +1016,19 @@ def check_adsorbate_separation(
         for s in new_adsorbate.get_chemical_symbols()
         if (r := _get_covalent_radius(s)) is not None
     ]
-    pair_floor = float(_ADSORBATE_SEPARATION_COVALENT_SUM_SCALE) * (
-        2.0
-        * (
+    if min_separation is None:
+        ref_radius = (
             float(np.mean(cov_r))
             if cov_r
             else _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM / 2.0
         )
-    )
-    if min_separation is None:
-        min_separation = pair_floor
-    else:
+        min_separation = _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE * (2.0 * ref_radius)
+    elif cov_r:
         # Chemistry-aware floor from the new adsorbate's mean covalent radius
         # (pre-adsorbed symbols are not passed in). Never a silent Å hard floor.
+        pair_floor = float(_ADSORBATE_SEPARATION_COVALENT_SUM_SCALE) * (
+            2.0 * float(np.mean(cov_r))
+        )
         min_separation = max(float(min_separation), pair_floor)
     ok = min_dist >= float(min_separation)
     return ok, min_dist

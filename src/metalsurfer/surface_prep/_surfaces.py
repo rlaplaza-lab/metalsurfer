@@ -920,7 +920,7 @@ def substitute_alloy(
                 "Post-relax slab energy: %.4f eV",
                 best_atoms.get_potential_energy(),
             )
-        except (RuntimeError, ValueError, OptimizationError) as exc:
+        except (RuntimeError, ValueError) as exc:
             raise OptimizationError(f"Alloy slab relaxation failed: {exc}") from exc
 
     label = f"{host_symbol}_{guest_symbol}_{int(guest_fraction * 100)}"
