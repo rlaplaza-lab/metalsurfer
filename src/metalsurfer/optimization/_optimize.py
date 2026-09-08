@@ -154,7 +154,7 @@ def _run_optimize_with_oom_retry(
         if not _is_batcher_capacity_error(exc):
             raise
         # Drop the traceback: its frames reference the states handed to
-        # ts.optimize and would otherwise pin them for the whole retry.
+        # the optimizer and would otherwise pin them for the whole retry.
         retry_exc = exc.with_traceback(None)
     del systems
     gc.collect()
@@ -177,6 +177,51 @@ def _run_optimize_with_oom_retry(
     if ab is None:
         raise RuntimeError("Could not create autobatcher after OOM") from retry_exc
     return run_optimize(ab, build_systems())
+
+
+def _optimize_inflight_from_iterator(  # pragma: no cover - requires MLIP stack / GPU
+    *,
+    autobatcher: Any,
+    systems_iter: Any,
+    ts_model,
+    step_fn: Callable[..., Any],
+    convergence_fn: Callable[..., Any],
+    max_steps: int,
+    steps_between_swaps: int,
+) -> Any:
+    """Drive ``InFlightAutoBatcher`` from a lazy OptimState iterator.
+
+    Same hot-swap loop as ``ts.optimize``, but waiting systems stay on CPU
+    until the batcher pulls them. Each yielded state must already be
+    optimizer-inited (FIRE/LBFGS/…).
+    """
+    ts = _deps.ts
+    autobatcher.max_iterations = max_steps // steps_between_swaps
+
+    with torchsim_output_capture():
+        autobatcher.load_states(systems_iter)
+
+        all_converged_states: list[Any] = []
+        convergence_tensor = None
+        state = None
+        while True:
+            result = autobatcher.next_batch(state, convergence_tensor)
+            if result[0] is None:
+                all_converged_states.extend(result[1])
+                break
+            state, converged_states = result
+            all_converged_states.extend(converged_states)
+
+            last_energy = None
+            for _ in range(steps_between_swaps):
+                if hasattr(state, "energy"):
+                    last_energy = state.energy
+                state = step_fn(state=state, model=ts_model)
+
+            convergence_tensor = convergence_fn(state, last_energy)
+
+        final_states = autobatcher.restore_original_order(all_converged_states)
+        return ts.concatenate_states(final_states)
 
 
 def estimate_parallel_relaxation_capacity(
@@ -627,10 +672,14 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
     provided (e.g. for sequential saturation or adatom workflows), it supplies
     the constraint-bearing substrate reference instead of *slab*.
 
-    Ordering guarantee: with torch-sim-atomistic 0.5.2, ``ts.optimize`` ends
-    with ``autobatcher.restore_original_order(...)``, which pairs completed
-    states with their original input indices and raises on any count mismatch.
-    The returned list is therefore in the original input order and has the same
+    On CUDA, constrained OptimStates are streamed into
+    ``InFlightAutoBatcher.load_states`` so waiting placements stay on CPU. On
+    CPU, ``ts.optimize`` builds the full state list up front.
+
+    Ordering guarantee: both paths end with
+    ``autobatcher.restore_original_order(...)``, which pairs completed states
+    with their original input indices and raises on any count mismatch. The
+    returned list is therefore in the original input order and has the same
     length as *combined_atoms_list*, which is what lets callers (e.g.
     :func:`metalsurfer.workflow.shared._optimize_and_evaluate_placements`) zip
     the results positionally against their placement descriptors. A violation
@@ -734,41 +783,78 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             )
             if ab is None:
                 raise RuntimeError("Could not create autobatcher")
-        else:
-            ab, cache_key = None, None
+            if _deps.OPTIM_REGISTRY is None:
+                raise DependencyMissingError(
+                    "torch-sim-atomistic",
+                    "optimize_adsorbate_slab_batched",
+                    "Install with: pip install torch-sim-atomistic",
+                )
+            init_fn, step_fn = _deps.OPTIM_REGISTRY[optimizer]
 
-        def _build_sim_states():
-            with torchsim_output_capture():
-                return [
-                    _make_state_with_frozen_constraint(
-                        atoms, frozen_indices, ts_model, model_device
-                    )
-                    for atoms in combined_atoms_list
-                ]
+            def _build_optim_state_iter():
+                for atoms in combined_atoms_list:
+                    with torchsim_output_capture():
+                        sim = _make_state_with_frozen_constraint(
+                            atoms, frozen_indices, ts_model, model_device
+                        )
+                        yield init_fn(model=ts_model, state=sim)
 
-        def _run_optimize(autobatcher, systems):
-            with torchsim_output_capture():
-                return ts.optimize(
-                    system=systems,
-                    model=ts_model,
-                    optimizer=optimizer,
+            def _run_optimize(autobatcher, systems_iter):
+                return _optimize_inflight_from_iterator(
+                    autobatcher=autobatcher,
+                    systems_iter=systems_iter,
+                    ts_model=ts_model,
+                    step_fn=step_fn,
                     convergence_fn=conv,
                     max_steps=max_steps,
                     steps_between_swaps=swaps,
-                    autobatcher=autobatcher if autobatcher is not None else False,
                 )
 
-        batch = _run_optimize_with_oom_retry(
-            _run_optimize,
-            build_systems=_build_sim_states,
-            initial_autobatcher=ab,
-            ts_model=ts_model,
-            max_n_atoms=max_n_atoms,
-            config=config,
-            cache_key=cache_key,
-            resolved_max_atoms_to_try=resolved_max_atoms_to_try,
-            context="slab+adsorbate",
-        )
+            batch = _run_optimize_with_oom_retry(
+                _run_optimize,
+                build_systems=_build_optim_state_iter,
+                initial_autobatcher=ab,
+                ts_model=ts_model,
+                max_n_atoms=max_n_atoms,
+                config=config,
+                cache_key=cache_key,
+                resolved_max_atoms_to_try=resolved_max_atoms_to_try,
+                context="slab+adsorbate",
+            )
+        else:
+
+            def _build_sim_states():
+                with torchsim_output_capture():
+                    return [
+                        _make_state_with_frozen_constraint(
+                            atoms, frozen_indices, ts_model, model_device
+                        )
+                        for atoms in combined_atoms_list
+                    ]
+
+            def _run_optimize(autobatcher, systems):
+                with torchsim_output_capture():
+                    return ts.optimize(
+                        system=systems,
+                        model=ts_model,
+                        optimizer=optimizer,
+                        convergence_fn=conv,
+                        max_steps=max_steps,
+                        steps_between_swaps=swaps,
+                        autobatcher=False,
+                    )
+
+            batch = _run_optimize_with_oom_retry(
+                _run_optimize,
+                build_systems=_build_sim_states,
+                initial_autobatcher=None,
+                ts_model=ts_model,
+                max_n_atoms=max_n_atoms,
+                config=config,
+                cache_key=None,
+                resolved_max_atoms_to_try=resolved_max_atoms_to_try,
+                context="slab+adsorbate",
+            )
         result = batch.to_atoms()
         energies = batch.energy
         n_input = len(combined_atoms_list)
@@ -784,7 +870,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             # wrong descriptor. Fail loudly instead, matching the ``batch_static``
             # guard above.
             raise RuntimeError(
-                "Autobatcher returned mismatched batch size in ts.optimize: "
+                "Autobatcher returned mismatched batch size: "
                 f"expected {n_input}, got {n_returned}. Results are mapped to "
                 "inputs positionally and cannot be realigned."
             )

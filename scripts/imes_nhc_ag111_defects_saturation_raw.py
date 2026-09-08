@@ -12,7 +12,8 @@ Purpose:
 import logging
 
 from metalsurfer import AdsorptionConfig, configure_logging, run_saturation
-from metalsurfer.surface_prep import prepare_substrate
+from metalsurfer.conformers import create_conformers_from_smiles
+from metalsurfer.surface_prep import prepare_substrate, resize_substrate_for_molecule
 
 SURFACE_TYPE = "imes_nhc_ag111_defects_saturation_raw"
 RESULTS_DIR = f"results_{SURFACE_TYPE}"
@@ -34,12 +35,16 @@ def main():
         fmax=0.05,
         stage1_steps=80,
         stage2_steps=500,
-        min_pbc_image_separation=10.0,
-        slab_relaxation_mode="full",
+        # Default 8 A keeps the 3x3 Ag(111) cell valid for iMes (~14.5 A);
+        # 10 A forced a (2,2,1) resize (~1100 Ag) that exceeded autobatcher max_metric.
+        min_pbc_image_separation=8.0,
+        # UMA oc25 does not expose stress; full cell+ionic prep fails.
+        slab_relaxation_mode="ionic_only",
         slab_relaxation_optimizer="lbfgs",
         slab_relaxation_steps=250,
         autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=650,
+        # Must exceed slab+n_adsorbates (step 3 hit 422 atoms with two prior iMes).
+        autobatcher_max_memory_scaler=800,
         debug_write_initial_placements=True,
         save_benchmark_dataset=True,
     )
@@ -55,6 +60,14 @@ def main():
         adatom_relaxation_mode="ionic_only",
     )
     logger.info("Defected Ag(111) slab atoms: %d", len(slab.atoms))
+
+    conformer_pack = create_conformers_from_smiles(IMES_NHC_SMILES, config=config)
+    if conformer_pack is None:
+        logger.error("Conformer generation failed for iMes NHC.")
+        return 1
+    conformers, _ = conformer_pack
+    slab = resize_substrate_for_molecule(slab, conformers, config)
+    logger.info("Resized defected Ag(111) slab atoms: %d", len(slab.atoms))
 
     campaign = run_saturation(
         slab=slab,

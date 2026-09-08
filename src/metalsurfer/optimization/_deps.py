@@ -33,6 +33,7 @@ _CAPACITY_PROBE_ERRORS: tuple[type[BaseException], ...] = (
 ts: Any = None
 ts_constraints: Any = None
 InFlightAutoBatcher: Any = None
+OPTIM_REGISTRY: Any = None
 determine_max_batch_size: Any = None
 calculate_memory_scalers: Any = None
 
@@ -48,10 +49,12 @@ try:  # pragma: no cover - requires the optional MLIP stack
     from torch_sim.autobatching import (
         determine_max_batch_size as _determine_max_batch_size,
     )
+    from torch_sim.optimizers import OPTIM_REGISTRY as _OPTIM_REGISTRY
 
     ts = _ts_mod
     ts_constraints = _ts_constraints_mod
     InFlightAutoBatcher = _InFlightAutoBatcher
+    OPTIM_REGISTRY = _OPTIM_REGISTRY
     determine_max_batch_size = _determine_max_batch_size
     calculate_memory_scalers = _calculate_memory_scalers
 except ImportError:

@@ -964,6 +964,140 @@ def test_optimize_slab_retries_after_batcher_capacity_error(
     assert all(r is not None for r in result)
 
 
+def test_optimize_slab_cuda_streams_states_via_inflight_iterator(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """CUDA path must feed InFlightAutoBatcher an iterator, not a prebuilt list."""
+    import collections.abc
+
+    make_state_calls: list[int] = []
+    load_states_was_iterator = {"value": False}
+    make_before_consume = {"n": -1}
+    counter = {"n": 0}
+
+    class _OptimState:
+        def __init__(self, tag: int):
+            self.tag = tag
+            self.energy = _FakeTensor([-1.0])
+            self.n_systems = 1
+
+    def _spy_make_state(*args, **kwargs):
+        counter["n"] += 1
+        make_state_calls.append(counter["n"])
+        return _OptimState(counter["n"])
+
+    def _init_fn(*, model, state):
+        return state
+
+    def _step_fn(*, state, model):
+        return state
+
+    class _FakeBatch:
+        def __init__(self, states):
+            self._states = states
+            self.energy = [_FakeTensor([-1.0])] * len(states)
+            self.forces = None
+
+        def to_atoms(self):
+            return [make_slab(nx=2, ny=2, n_layers=2) for _ in self._states]
+
+    class _FakeInFlight:
+        instances: list = []
+
+        def __init__(self, *args, **kwargs):
+            self.max_iterations = None
+            self.current_idx: list[int] = []
+            self._iter = None
+            self._first = True
+            self._og_order: list[int] = []
+            self._next_idx = 0
+            type(self).instances.append(self)
+
+        def load_states(self, states):
+            load_states_was_iterator["value"] = isinstance(
+                states, collections.abc.Iterator
+            ) and not isinstance(states, (list, tuple))
+            self._iter = iter(states)
+            make_before_consume["n"] = counter["n"]
+            self._first = True
+            self._og_order = []
+            self._next_idx = 0
+            self.current_idx = []
+
+        def next_batch(self, updated_state, convergence_tensor):
+            if self._first:
+                self._first = False
+                try:
+                    state = next(self._iter)
+                except StopIteration:
+                    return None, []
+                self.current_idx = [self._next_idx]
+                self._next_idx += 1
+                return state, []
+
+            completed = [updated_state]
+            self._og_order.append(self.current_idx[0])
+            try:
+                state = next(self._iter)
+            except StopIteration:
+                self.current_idx = []
+                return None, completed
+            self.current_idx = [self._next_idx]
+            self._next_idx += 1
+            return state, completed
+
+        def restore_original_order(self, completed_states):
+            by_og = {
+                og: state
+                for og, state in zip(self._og_order, completed_states, strict=True)
+            }
+            return [by_og[i] for i in range(len(completed_states))]
+
+    class _FakeTs:
+        fire = object()
+
+        @staticmethod
+        def generate_force_convergence_fn(force_tol, include_cell_forces):
+            return lambda state, last_energy: True
+
+        @staticmethod
+        def concatenate_states(states):
+            return _FakeBatch(states)
+
+        @staticmethod
+        def optimize(**kwargs):
+            raise AssertionError("CUDA path must not call ts.optimize")
+
+    monkeypatch.setattr(_deps, "ts", _FakeTs())
+    monkeypatch.setattr(_deps, "ts_constraints", object())
+    monkeypatch.setattr(_deps, "InFlightAutoBatcher", _FakeInFlight)
+    monkeypatch.setattr(_deps, "OPTIM_REGISTRY", {_FakeTs.fire: (_init_fn, _step_fn)})
+    monkeypatch.setattr(_deps, "torch", None)
+    monkeypatch.setattr(
+        _optimize, "_make_state_with_frozen_constraint", _spy_make_state
+    )
+    monkeypatch.setattr(_optimize, "_resolve_ts_optimizer", lambda name: _FakeTs.fire)
+    _cache._AUTOBATCHER_CACHE.clear()
+    _FakeInFlight.instances.clear()
+
+    slab = _make_atoms_with_cell()
+    combined = [slab.copy() for _ in range(3)]
+    result = _optimize.optimize_adsorbate_slab_batched(
+        combined,
+        slab,
+        ts_model=type("MockModel", (), {"device": "cuda"})(),
+        config=AdsorptionConfig(device="cuda", stage1_steps=5, stage2_steps=5),
+    )
+    _cache._AUTOBATCHER_CACHE.clear()
+
+    assert load_states_was_iterator["value"] is True
+    assert make_before_consume["n"] == 0
+    assert make_state_calls == [1, 2, 3]
+    assert len(result) == 3
+    assert all(r is not None for r in result)
+    assert _FakeInFlight.instances[0].max_iterations == 2
+
+
 # ---------------------------------------------------------------------------
 # MLIP-gated tests (only run when the full stack is installed)
 # ---------------------------------------------------------------------------

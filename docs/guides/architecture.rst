@@ -435,6 +435,12 @@ TorchSim batched relaxation
 Many slab+adsorbate relaxations run **in parallel** on GPU
 (``optimization/``).
 
+On CUDA, ``optimize_adsorbate_slab_batched`` streams constrained OptimStates
+into ``InFlightAutoBatcher.load_states`` (TorchSim's iterator API). Waiting
+placements stay as ASE ``Atoms`` on CPU, so ``num_placements`` is not a VRAM
+limit. The high-level ``ts.optimize`` path concatenates the full list first and
+is used on CPU.
+
 .. list-table::
    :header-rows: 1
    :widths: 45 55
@@ -442,7 +448,7 @@ Many slab+adsorbate relaxations run **in parallel** on GPU
    * - Mechanism
      - Role
    * - ``optimize_adsorbate_slab_batched`` + ``InFlightAutoBatcher``
-     - Pack N relaxations per wave
+     - Stream placements; pack N relaxations per inflight wave
    * - ``estimate_parallel_relaxation_capacity``
      - Memory probe / scalers
    * - ``resolve_workload_config``
@@ -450,12 +456,14 @@ Many slab+adsorbate relaxations run **in parallel** on GPU
    * - ``resolve_saturation_step_workload_config``
      - Re-probe as the slab grows
    * - ``stage1_steps`` + ``stage2_steps``
-     - Two-stage ``ts.optimize`` (FIRE default)
+     - Two-stage FIRE/LBFGS budget (default FIRE)
    * - ``saturation_reuse`` / ``saturation_autobatcher_reuse``
      - Amortize probes on deep coverage
 
 Leaving ``num_placements`` (and BO batch fields) as ``None`` is intentional:
-the library sizes parallel work to GPU memory.
+the library sizes parallel work to GPU memory. Large explicit
+``num_placements`` values are safe on small GPUs because only the active
+inflight batch holds CUDA geometry tensors.
 
 **Calculator / PBC:** geometry, filters, MIC, and spglib site symmetry use
 ``material_aware_pbc(material_type)`` (slab ``[T,T,F]``, porous ``[T,T,T]``,
