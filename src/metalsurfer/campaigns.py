@@ -147,15 +147,10 @@ def _run_binding_campaign(
         results = outcome.results
         if outcome.failure_summary:
             failure_summaries[molecule_name] = outcome.failure_summary
-        summaries.append(
-            _summarize_molecule(
-                molecule_name,
-                results if results else [],
-            )
-        )
+        summaries.append(_summarize_molecule(molecule_name, results))
+        for record in outcome.ml_records:
+            ds_logger.add_record(record)
         if not results:
-            for record in outcome.ml_records:
-                ds_logger.add_record(record)
             continue
         if save_results:
             save_single_molecule_results(
@@ -168,8 +163,6 @@ def _run_binding_campaign(
             )
         run_results.append(screening_run_result(molecule_name, results))
         ds_logger.add_results(results, smiles=smiles, surface_id=surface_type)
-        for record in outcome.ml_records:
-            ds_logger.add_record(record)
 
     ds_logger.flush()
 

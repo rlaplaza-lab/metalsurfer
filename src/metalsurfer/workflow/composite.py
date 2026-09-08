@@ -318,6 +318,7 @@ def select_tuplet_winners(
 
         if not clash_on or not accepted_suffixes:
             continue
+        assert config is not None and slab_atoms is not None
 
         min_d = _min_dist_to_suffixes(suffix, accepted_suffixes, cell=cell_arr, pbc=pbc)
         cand_syms = list(candidate.atoms.get_chemical_symbols()[candidate.slab_size :])
@@ -330,8 +331,6 @@ def select_tuplet_winners(
             min_separation=float(min_separation),
         )
         if min_d < rescue_floor:
-            continue
-        if config is None or slab_atoms is None:
             continue
 
         fixed_pos, fixed_radii = _fixed_cloud_from_coverage_and_results(

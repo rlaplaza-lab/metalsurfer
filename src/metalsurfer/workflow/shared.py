@@ -928,7 +928,7 @@ def _prepare_molecule_screening(
         symmetry_broken=symmetry_broken,
     )
 
-    if skip_workload_autotune and config.num_placements is not None:
+    if skip_workload_autotune or not needs_workload_autotune(config, bo=bo_enabled):
         resolved = config
     else:
         freeze_ref = (

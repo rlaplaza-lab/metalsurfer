@@ -24,6 +24,8 @@ def test_is_finite_number_accepts_finite_numeric():
     assert is_finite_number(3.0) is True
     assert is_finite_number("3.0") is True
     assert is_finite_number("-1.25e3") is True
+    assert is_finite_number(np.float64(2.5)) is True
+    assert is_finite_number(np.int64(7)) is True
 
 
 def test_is_finite_number_rejects_non_numeric_and_non_finite():
@@ -34,6 +36,8 @@ def test_is_finite_number_rejects_non_numeric_and_non_finite():
     assert is_finite_number(float("inf")) is False
     assert is_finite_number(float("nan")) is False
     assert is_finite_number(object()) is False
+    assert is_finite_number(np.inf) is False
+    assert is_finite_number(np.nan) is False
 
 
 def test_is_missing_and_with_default():

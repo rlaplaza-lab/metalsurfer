@@ -62,7 +62,12 @@ def _resolve_ts_optimizer(name: str) -> Any:
         "lbfgs": ts.Optimizer.lbfgs,
         "bfgs": ts.Optimizer.bfgs,
     }
-    return _map[name]
+    try:
+        return _map[name]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown ts_optimizer {name!r}; expected one of {sorted(_map)}"
+        ) from exc
 
 
 def _device_is_cuda(device: Any) -> bool:

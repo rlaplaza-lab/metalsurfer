@@ -326,6 +326,7 @@ def estimate_parallel_relaxation_capacity(
             exc,
             fallback,
         )
+        capacity_cache_set(cache_key, fallback)
         return fallback
 
 
@@ -515,10 +516,7 @@ def _forces_for_optimized_systems(
         logger.warning("ts.static force recovery failed", exc_info=True)
         return [None] * n_systems
 
-    per_system = [
-        None if forces is None or not np.any(forces) else forces
-        for _energy, forces in recovered
-    ]
+    per_system = [None if forces is None else forces for _energy, forces in recovered]
     if len(per_system) != len(survivor_idx):
         return [None] * n_systems
 

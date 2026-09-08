@@ -195,7 +195,7 @@ def _kabsch_rmsd(pos_a: np.ndarray, pos_b: np.ndarray) -> float:
     b = np.asarray(pos_b, dtype=float) - np.mean(pos_b, axis=0)
     H = a.T @ b
     U, _S, Vt = np.linalg.svd(H)
-    d = float(np.sign(np.linalg.det(Vt.T @ U.T)))
+    d = 1.0 if float(np.linalg.det(Vt.T @ U.T)) >= 0.0 else -1.0
     rot = Vt.T @ np.diag([1.0, 1.0, d]) @ U.T
     a_rot = a @ rot.T
     return float(np.sqrt(np.mean(np.sum((a_rot - b) ** 2, axis=1))))

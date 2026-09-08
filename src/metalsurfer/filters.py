@@ -12,7 +12,6 @@ when ``saturation_discard_topology_rearrangements`` is enabled.
 import logging
 import time
 from collections import Counter
-from importlib.util import find_spec
 
 import numpy as np
 from ase import Atoms
@@ -20,7 +19,7 @@ from ase.data import atomic_numbers, covalent_radii
 from ase.geometry import find_mic
 from scipy.sparse.csgraph import connected_components
 
-from ._geom_pbc import cart_to_frac, wrap_fractional
+from ._geom_pbc import cart_to_frac, frac_to_cart, wrap_fractional
 from ._logging import warn_once
 from ._utils import cell_has_volume
 from .config import AdsorptionConfig
@@ -42,6 +41,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _pbc_for_cell(material_type: str, cell: np.ndarray) -> list[bool]:
+    """Material-aware PBC, disabled when *cell* has no usable volume."""
+    pbc = material_aware_pbc(material_type)
+    if not cell_has_volume(cell):
+        return [False, False, False]
+    return pbc
+
+
 def _mic_pairwise_distances(
     coords: np.ndarray,
     atoms: Atoms,
@@ -58,9 +65,7 @@ def _mic_pairwise_distances(
     if n <= 1:
         return np.zeros((n, n))
     cell = np.asarray(atoms.get_cell(), dtype=float)
-    pbc = material_aware_pbc(material_type)
-    if not cell_has_volume(cell):
-        pbc = [False, False, False]
+    pbc = _pbc_for_cell(material_type, cell)
     # Shared placement primitive (same MIC math as every other distance gate).
     return _mol_slab_pairwise_distances(coords, coords, cell, pbc)
 
@@ -347,7 +352,7 @@ def check_decomposition(
     if reference_smiles is None:
         return True, "connectivity intact (no SMILES reference for deeper checks)"
 
-    if find_spec("rdkit") is None:
+    if Chem is None:
         raise DependencyMissingError(
             "rdkit",
             "check_decomposition",
@@ -527,10 +532,8 @@ def _adsorbate_rmsd(
         pos1, pos2 = pos1[m1], pos2[m2]
         if len(pos1) == 0:
             return float("inf")
-    pbc = material_aware_pbc(material_type)
     cell = np.asarray(a1.get_cell(), dtype=float)
-    if not cell_has_volume(cell):
-        pbc = [False, False, False]
+    pbc = _pbc_for_cell(material_type, cell)
     diffs, _ = find_mic(pos1 - pos2, cell, pbc)
     return float(np.sqrt(np.mean(np.sum(diffs**2, axis=1))))
 
@@ -551,9 +554,7 @@ def _trailing_adsorbate_com(
     if len(pos) == 0:
         return np.zeros(3, dtype=float)
     cell = np.asarray(atoms.get_cell(), dtype=float)
-    pbc = list(material_aware_pbc(material_type))
-    if not cell_has_volume(cell):
-        pbc = [False, False, False]
+    pbc = _pbc_for_cell(material_type, cell)
     if any(pbc) and len(pos) > 1:
         ref = pos[0]
         mic_deltas, _ = find_mic(pos - ref, cell, pbc)
@@ -565,7 +566,7 @@ def _trailing_adsorbate_com(
     frac = wrap_fractional(
         cart_to_frac(com.reshape(1, 3), cell), np.asarray(pbc, dtype=bool)
     )
-    return (frac @ cell).reshape(3)
+    return frac_to_cart(frac, cell).reshape(3)
 
 
 def _bin_counts_for_cell(cell: np.ndarray, bin_size: float) -> tuple[int, int, int]:
@@ -633,9 +634,7 @@ def _mic_com_distance(
     pbc: list[bool] | np.ndarray,
 ) -> float:
     cell_arr = np.asarray(cell, dtype=float)
-    pbc_list = list(pbc)
-    if not cell_has_volume(cell_arr):
-        pbc_list = [False, False, False]
+    pbc_list = list(pbc) if cell_has_volume(cell_arr) else [False, False, False]
     diffs, _ = find_mic((com1 - com2).reshape(1, 3), cell_arr, pbc_list)
     return float(np.linalg.norm(diffs[0]))
 
@@ -665,9 +664,7 @@ def _deduplicate_by_energy_and_rmsd(
     deduplicated: list[ScreeningResult] = []
 
     ref_cell = np.asarray(sorted_results[0].atoms.get_cell(), dtype=float)
-    pbc = material_aware_pbc(material_type)
-    if not cell_has_volume(ref_cell):
-        pbc = [False, False, False]
+    pbc = _pbc_for_cell(material_type, ref_cell)
     bin_size = float(rmsd_dedup_threshold) if rmsd_dedup_threshold > 0.0 else 0.1
 
     for entry in sorted_results:

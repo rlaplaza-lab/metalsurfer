@@ -182,7 +182,6 @@ class OrientedAdsorbate:
 
 
 def _finish_orientation(
-    canonical_pos: np.ndarray,
     base_pos: np.ndarray,
     normal: np.ndarray,
     spec: PlacementSpec,
@@ -212,7 +211,7 @@ def _orient_parallel(
         azimuth_in_plane_deg=spec.azimuth_in_plane_deg,
         face_flip=spec.face_flip,
     )
-    return _finish_orientation(canonical_pos, base_pos, normal, spec, R_base=R_base)
+    return _finish_orientation(base_pos, normal, spec, R_base=R_base)
 
 
 def _orient_binder_aligned(
@@ -228,7 +227,7 @@ def _orient_binder_aligned(
         symbols,
         en_binder_index=spec.en_atom_index,
     )
-    return _finish_orientation(canonical_pos, base_pos, normal, spec, R_base=R_base)
+    return _finish_orientation(base_pos, normal, spec, R_base=R_base)
 
 
 def orient_from_spec(

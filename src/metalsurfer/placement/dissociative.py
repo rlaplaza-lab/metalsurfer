@@ -118,7 +118,9 @@ def _dissociative_pair_cache_key(
         + _pack_optional_float(config.voronoi_probe_radius)
         + _pack_optional_float(config.voronoi_max_site_distance)
         + _pack_optional_float(config.top_layer_tolerance)
+        + struct.pack("<d", float(config.planar_z_variance_threshold))
         + struct.pack("<?", bool(config.voronoi_site_enrichment))
+        + struct.pack("<?", bool(config.voronoi_auto_widen))
         + str(config.site_classification_method).encode()
         + b"\x00"
         + config.material_type.encode()
@@ -224,7 +226,6 @@ def _get_dissociative_site_pairs(
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
     pbc = material_aware_pbc(config.material_type)
-    pbc_xy = [bool(pbc[0]), bool(pbc[1]), False]
 
     # Clean-slab path keeps sites_tag="default" so we can look up before the
     # expensive hollow-site discovery. Context/raw paths hash the resolved XYZ
@@ -237,7 +238,7 @@ def _get_dissociative_site_pairs(
             raw_sites=raw_sites,
             site_context=site_context,
             cell_arr=cell_arr,
-            pbc_xy=pbc_xy,
+            pbc_xy=pbc,
         )
         if len(pre_resolved) < 2:
             return []
@@ -301,9 +302,8 @@ def _compute_dissociative_site_pairs(
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
+    # For slab/nanoparticle, material_aware_pbc already has z=False.
     pbc = material_aware_pbc(config.material_type)
-    # Pair uniqueness on slabs uses xy-only MIC (intentional for planar catalogs).
-    pbc_xy = [bool(pbc[0]), bool(pbc[1]), False]
     slab_normal = _slab_normal(cell_arr)
 
     if pre_resolved_sites is not None:
@@ -315,7 +315,7 @@ def _compute_dissociative_site_pairs(
             raw_sites=raw_sites,
             site_context=site_context,
             cell_arr=cell_arr,
-            pbc_xy=pbc_xy,
+            pbc_xy=pbc,
         )
     if len(site_entries) < 2:
         return []
@@ -361,7 +361,7 @@ def _compute_dissociative_site_pairs(
 
     site_3d = site_xyz
     if config.material_type == "slab":
-        mean_nn_sep = _mean_nn_separation_mic(site_3d, cell_arr, pbc_xy)
+        mean_nn_sep = _mean_nn_separation_mic(site_3d, cell_arr, pbc)
     else:
         _site_query = np.asarray(site_3d, dtype=np.float64)
         _nn_tree = KDTree(_site_query)
@@ -385,7 +385,7 @@ def _compute_dissociative_site_pairs(
 
     if config.material_type == "slab":
         pair_distances = _periodic_site_pair_candidates(
-            site_3d, cell_arr, pbc_xy, max_adjacent_sep
+            site_3d, cell_arr, pbc, max_adjacent_sep
         )
     else:
         tree = KDTree(site_3d)
@@ -411,7 +411,7 @@ def _compute_dissociative_site_pairs(
         raw_deltas = np.asarray(
             [site_3d[j] - site_3d[i] for (i, j), _ in sorted_pairs], dtype=float
         )
-        dvec_mic, _dists = find_mic(raw_deltas, cell_arr, pbc=pbc_xy)
+        dvec_mic, _dists = find_mic(raw_deltas, cell_arr, pbc=pbc)
         mic_deltas = np.asarray(dvec_mic, dtype=float)
     for k, ((i, j), d) in enumerate(sorted_pairs):
         # On slabs both fragments are later projected to the same height, so the
@@ -592,7 +592,7 @@ def _place_dissociative_two_sites(
     if config.material_type == "slab":
         n_hat = np.asarray(slab_normal, dtype=float)
         n_hat = n_hat / (float(np.linalg.norm(n_hat)) + _VECTOR_NORM_EPS)
-        surface_ref, _ = _resolve_surface_ref(
+        surface_ref, is_local_ref = _resolve_surface_ref(
             site1,
             sites_slab,
             "slab",
@@ -604,9 +604,7 @@ def _place_dissociative_two_sites(
         pos1 = base1 + (target_h - float(np.dot(base1, n_hat))) * n_hat
         pos2 = base2 + (target_h - float(np.dot(base2, n_hat))) * n_hat
         h_surface = float(surface_ref)
-        site_reference_frame = (
-            "local_site" if config.rough_slab_local_z else "global_top_layer"
-        )
+        site_reference_frame = "local_site" if is_local_ref else "global_top_layer"
     else:
         # Nanoparticle / porous: offset both fragments along a shared normal so
         # divergent local site normals do not laterally expand the H–H spacing.

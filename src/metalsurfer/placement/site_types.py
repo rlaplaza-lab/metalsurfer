@@ -31,9 +31,11 @@ class Site:
         object.__setattr__(
             self, "xyz", np.asarray(self.xyz, dtype=float).reshape(3).copy()
         )
-        object.__setattr__(
-            self, "normal", np.asarray(self.normal, dtype=float).reshape(3).copy()
-        )
+        normal = np.asarray(self.normal, dtype=float).reshape(3).copy()
+        nrm = float(np.linalg.norm(normal))
+        if nrm > 1e-12:
+            normal /= nrm
+        object.__setattr__(self, "normal", normal)
         object.__setattr__(
             self, "slab_indices", tuple(int(i) for i in self.slab_indices)
         )

@@ -118,7 +118,7 @@ def test_resolve_ts_optimizer(monkeypatch: pytest.MonkeyPatch):
     ts_stub.Optimizer.bfgs = object()
     monkeypatch.setattr(_deps, "ts", ts_stub)
     assert _validation._resolve_ts_optimizer("fire") is fire
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="Unknown ts_optimizer"):
         _validation._resolve_ts_optimizer("does-not-exist")
 
     monkeypatch.setattr(_deps, "ts", None)

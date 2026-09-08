@@ -293,9 +293,8 @@ def _spec_grid_info(
         site_indices = []
         use_sites = False
 
-    ads_pos = conformers[0].get_positions() - np.mean(
-        conformers[0].get_positions(), axis=0
-    )
+    conf0_pos = conformers[0].get_positions()
+    ads_pos = conf0_pos - np.mean(conf0_pos, axis=0)
     shape, _, _ = geom._classify_molecule_shape(ads_pos)
     symbols = conformers[0].get_chemical_symbols()
     binders = geom._binding_atom_candidates(symbols)

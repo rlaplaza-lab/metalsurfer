@@ -17,11 +17,9 @@ def is_finite_number(value: object) -> bool:
     value
         Value to test for finite float conversion.
     """
-    if not isinstance(value, (int, float, str)):
-        return False
     try:
-        return bool(isfinite(float(value)))
-    except ValueError:
+        return bool(isfinite(float(value)))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
         return False
 
 

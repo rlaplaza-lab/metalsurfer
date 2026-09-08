@@ -304,8 +304,8 @@ def process_molecule(
             "timing: conformers=%.2fs placement=%.2fs opt=%.2fs "
             "filter=%.2fs total=%.2fs",
             len(results),
-            min(r.energy_adsorption for r in results) if results else float("nan"),
-            max(r.energy_adsorption for r in results) if results else float("nan"),
+            min(r.energy_adsorption for r in results),
+            max(r.energy_adsorption for r in results),
             t_conformers,
             t_placement,
             t_optimization,

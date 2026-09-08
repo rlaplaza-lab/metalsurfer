@@ -1320,7 +1320,14 @@ def generate_placement_from_pose(
     )
     if ctx is None:
         return None
-    result, fail_reason = _finalize_placement(ctx, adsorbate, slab, config)
+    result, fail_reason = _finalize_placement(
+        ctx,
+        adsorbate,
+        slab,
+        config,
+        slab_for_sites=slab_for_sites,
+        pose_cache=pose_cache,
+    )
     if result is None:
         logger.debug("Pose placement rejected: %s", fail_reason)
         return None

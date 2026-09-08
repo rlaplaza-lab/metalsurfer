@@ -63,14 +63,11 @@ def existing_adsorbate_cloud(
     min_separation
         Fallback floor for unknown covalent radii (``dtol/2`` analogue).
     """
-    if full_slab is None:
+    pos = existing_adsorbate_positions(slab_for_sites, full_slab)
+    if pos is None:
         return None, None
     n_sub = len(slab_for_sites)
-    if len(full_slab) <= n_sub:
-        return None, None
-    pos = np.asarray(full_slab.get_positions()[n_sub:], dtype=float)
-    if pos.size == 0:
-        return None, None
+    assert full_slab is not None
     symbols = list(full_slab.get_chemical_symbols()[n_sub:])
     radii = atom_radii_for_symbols(symbols, min_separation=float(min_separation))
     return pos, radii
@@ -101,14 +98,8 @@ def incoming_inplane_radius(
     if len(centered) == 1:
         return 0.0
     shape, _, eigenvecs = geom._classify_molecule_shape(centered)
-    if shape == "flat":
-        # Plane normal = largest-inertia axis.
-        axis = eigenvecs[:, 2]
-    elif shape == "linear":
-        # Bond axis = smallest-inertia axis.
-        axis = eigenvecs[:, 0]
-    else:
-        axis = eigenvecs[:, 0]
+    # Flat: plane normal = largest-inertia axis; otherwise smallest principal axis.
+    axis = eigenvecs[:, 2] if shape == "flat" else eigenvecs[:, 0]
     proj = centered - np.outer(centered @ axis, axis)
     norms = np.linalg.norm(proj, axis=1)
     return float(footprint_scale) * float(np.max(norms))
@@ -169,6 +160,13 @@ def _footprint_clearances_from_mic(
     if mic_vecs.shape[1] == 0:
         return np.full(len(sites), np.inf, dtype=float)
     normals = np.asarray([s.normal for s in sites], dtype=float)
+    norms = np.linalg.norm(normals, axis=1, keepdims=True)
+    normals = np.divide(
+        normals,
+        norms,
+        out=np.zeros_like(normals),
+        where=norms > 1e-12,
+    )
     dots = np.einsum("sjd,sd->sj", mic_vecs, normals)
     perp = mic_vecs - dots[:, :, None] * normals[:, None, :]
     lateral = np.linalg.norm(perp, axis=2)
@@ -237,29 +235,6 @@ def available_site_indices(
         min_separation=min_separation,
     )
     return [i for i, keep in enumerate(vertex_mask) if keep]
-
-
-def site_clearance_distances(
-    sites: Sequence[Site],
-    existing_positions: np.ndarray | None,
-    *,
-    cell: np.ndarray,
-    pbc: list[bool],
-) -> np.ndarray:
-    """Per-site minimum 3D MIC distance to existing adsorbates (inf if none)."""
-    n = len(sites)
-    if n == 0:
-        return np.zeros(0, dtype=float)
-    if existing_positions is None or np.asarray(existing_positions).size == 0:
-        return np.full(n, np.inf, dtype=float)
-    _mask, min_dists, _vecs = _sites_clearance_and_vertex_mask(
-        sites,
-        existing_positions,
-        cell=cell,
-        pbc=pbc,
-        min_separation=0.0,
-    )
-    return min_dists
 
 
 def _positions_mutually_clear(

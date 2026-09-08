@@ -855,8 +855,15 @@ def substitute_alloy(
         top_host_indices = [idx for idx in host_indices if idx in top_set]
         subsurface_host_indices = [idx for idx in host_indices if idx not in top_set]
 
-        n_top_replace = int(round(len(top_host_indices) * guest_fraction))
-        n_sub_replace = n_replace - n_top_replace
+        n_top_replace = min(
+            int(round(len(top_host_indices) * guest_fraction)),
+            n_replace,
+            len(top_host_indices),
+        )
+        n_sub_replace = min(
+            n_replace - n_top_replace,
+            len(subsurface_host_indices),
+        )
 
     for v in range(n_variants):
         if enforce_top_layer_fraction:
@@ -899,15 +906,21 @@ def substitute_alloy(
     if relax and calculator is not None:
         try:
             logger.info("Relaxing alloy slab geometry")
-            best_atoms.calc = calculator
-            _, _, relax_fmax, _ = _resolve_slab_relaxation_settings(config)
-            dyn = LBFGS(best_atoms, logfile="-")
-            dyn.run(fmax=relax_fmax)
+            _, opt_name, fmax, steps = _resolve_slab_relaxation_settings(config)
+            best_atoms = _relax_slab_structure(
+                best_atoms,
+                calculator,
+                mode="ionic_only",
+                optimizer_name=opt_name,
+                fmax=fmax,
+                steps=steps,
+                context="substitute_alloy",
+            )
             logger.info(
                 "Post-relax slab energy: %.4f eV",
                 best_atoms.get_potential_energy(),
             )
-        except (RuntimeError, ValueError) as exc:
+        except (RuntimeError, ValueError, OptimizationError) as exc:
             raise OptimizationError(f"Alloy slab relaxation failed: {exc}") from exc
 
     label = f"{host_symbol}_{guest_symbol}_{int(guest_fraction * 100)}"

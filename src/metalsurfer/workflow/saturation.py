@@ -523,7 +523,7 @@ def _screen_saturation_molecule(
     list[ScreeningResult], BOTransferInfo, BOStepMemory | None, list[PlacementRecord]
 ]:
     """Run one molecule's place/opt/filter for a saturation step."""
-    common_kwargs: dict[str, Any] = {
+    kwargs: dict[str, Any] = {
         "ts_model": ts_model,
         "config": config,
         "surface_type": surface_type,
@@ -534,35 +534,26 @@ def _screen_saturation_molecule(
         "conformers": conformers,
         "conformer_energies": conformer_energies,
         "skip_workload_autotune": skip_workload_autotune,
+        "saturation_reuse": True,
     }
     if bo_enabled:
-        outcome = process_fn(
-            smiles,
-            molecule_name,
-            current_slab,
-            calculator,
-            ref_step,
-            bo_step_memory_in=(
-                _bo_transfer_memory_in(config, bo_state)
-                if bo_state is not None
-                else None
-            ),
-            occupancy_placement_X=occupancy_placement_X,
-            saturation_reuse=True,
-            **common_kwargs,
+        kwargs["bo_step_memory_in"] = (
+            _bo_transfer_memory_in(config, bo_state) if bo_state is not None else None
         )
+        kwargs["occupancy_placement_X"] = occupancy_placement_X
+
+    outcome = process_fn(
+        smiles,
+        molecule_name,
+        current_slab,
+        calculator,
+        ref_step,
+        **kwargs,
+    )
+    if bo_enabled:
         transfer_info = outcome.transfer_info or BOTransferInfo()
         new_memory = outcome.bo_memory
     else:
-        outcome = process_fn(
-            smiles,
-            molecule_name,
-            current_slab,
-            calculator,
-            ref_step,
-            saturation_reuse=True,
-            **common_kwargs,
-        )
         transfer_info = BOTransferInfo()
         new_memory = None
 
@@ -1078,18 +1069,11 @@ def _run_multi_molecule_saturation(
         for mol in active_molecules:
             confs, _ = conformer_cache[mol]
             step_complexities[mol] = estimate_conformer_count(confs)
-        budget_inputs = {m: c for m, c in step_complexities.items() if c > 0.0}
-        if not budget_inputs:
-            logger.warning(
-                "Step %d: no molecules with available sites under coverage; stopping",
-                step,
-            )
-            return None
         num_placements = step_config.num_placements
         if num_placements is None:
             raise ValueError("num_placements must be resolved before saturation steps")
         budgets = distribute_placement_budget(
-            budget_inputs,
+            step_complexities,
             num_placements,
         )
         logger.info(
@@ -1109,7 +1093,8 @@ def _run_multi_molecule_saturation(
                 per_molecule_bo_transfer[mol] = BOTransferInfo()
                 new_bo_memory_raw[mol] = None
                 logger.warning(
-                    "Step %d | %s: zero site capacity under coverage; skipping",
+                    "Step %d | %s: omitted from placement budget "
+                    "(budget smaller than molecule count); skipping",
                     step,
                     mol,
                 )

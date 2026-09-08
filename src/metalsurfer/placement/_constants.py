@@ -33,19 +33,23 @@ RECOVERABLE_DISTANCE_REASONS = frozenset(
 )
 
 
-# Compute mean covalent radius of common adsorbate elements from ASE data.
+# Compute mean covalent radius of element sets from ASE data.
 # This replaces hardcoded fallback values with dynamically computed values.
-def _compute_mean_adsorbate_covalent_radius() -> float:
-    """Mean covalent radius of common adsorbate elements (C, H, O, N, S, P)."""
-    common_elements = ["C", "H", "O", "N", "S", "P"]
+def _mean_covalent_radius(elements: list[str]) -> float:
+    """Mean positive covalent radius over *elements* present in ASE tables."""
     radii = []
-    for elem in common_elements:
+    for elem in elements:
         z = atomic_numbers.get(elem)
         if z is not None and z < len(ase_covalent_radii):
             r = float(ase_covalent_radii[z])
             if r > 0.0:
                 radii.append(r)
     return float(sum(radii) / len(radii))
+
+
+def _compute_mean_adsorbate_covalent_radius() -> float:
+    """Mean covalent radius of common adsorbate elements (C, H, O, N, S, P)."""
+    return _mean_covalent_radius(["C", "H", "O", "N", "S", "P"])
 
 
 def _compute_mean_framework_covalent_radius() -> float:
@@ -55,15 +59,7 @@ def _compute_mean_framework_covalent_radius() -> float:
     recognised covalent radii. This is physically distinct from the adsorbate
     fallback and must not reuse it.
     """
-    framework_elements = ["Cu", "Pt", "Pd", "Ag", "Au", "Ni", "Fe", "Al", "Co"]
-    radii = []
-    for elem in framework_elements:
-        z = atomic_numbers.get(elem)
-        if z is not None and z < len(ase_covalent_radii):
-            r = float(ase_covalent_radii[z])
-            if r > 0.0:
-                radii.append(r)
-    return float(sum(radii) / len(radii))
+    return _mean_covalent_radius(["Cu", "Pt", "Pd", "Ag", "Au", "Ni", "Fe", "Al", "Co"])
 
 
 # ---------------------------------------------------------------------------
