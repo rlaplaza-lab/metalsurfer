@@ -213,8 +213,8 @@ def available_site_indices(
 ) -> list[int]:
     """Original indices into *sites* that pass vertex occupancy (or all if empty).
 
-    Empty vertex mask means zero capacity (no random-XY fallback). Rank survivors
-    with :func:`site_footprint_clearances` when footprint ordering is desired.
+    Empty vertex mask means zero capacity. Rank survivors with
+    :func:`site_footprint_clearances` when footprint ordering is desired.
     """
     if existing_positions is None or np.asarray(existing_positions).size == 0:
         return list(range(len(sites)))

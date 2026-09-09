@@ -143,3 +143,24 @@ jobs:
       - name: Run CPU MLIP tests
         if: env.HF_TOKEN != ''
         run: python -m pytest tests/ -m "cpu and mlip" --tb=short -v
+
+  # -----------------------------------------------------------------------
+  # Sphinx HTML docs (Read the Docs builds separately; this gates PRs)
+  # -----------------------------------------------------------------------
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and docs extras
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[docs]"
+
+      - name: Build Sphinx HTML
+        run: |
+          cd docs
+          sphinx-build -b html -W --keep-going . _build/html

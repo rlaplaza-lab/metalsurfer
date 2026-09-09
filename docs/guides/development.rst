@@ -6,7 +6,12 @@ Setup
 
 Requires **Python 3.12 or newer**.
 
-Core install (library import and CPU-only workflow tests):
+From PyPI::
+
+   pip install metalsurfer
+   pip install "metalsurfer[mlip]"
+
+Core install from a clone (library import and CPU-only workflow tests):
 
 .. code-block:: bash
 
@@ -117,8 +122,19 @@ CI parity
 | ``pytest -m quick`` + coverage   | ``test-quick``                           |
 | ``pytest -m dependency_behavior``| ``test-dependency-behavior``             |
 | ``pytest -m "cpu and mlip"``     | ``test-mlip-cpu`` (skipped if unset)     |
+| ``cd docs && make html``         | ``docs``                                 |
 | ``pytest -m gpu``                | local only                               |
 +----------------------------------+------------------------------------------+
+
+Documentation
+-------------
+
+Install docs extras, then build HTML (Sphinx + Furo)::
+
+   pip install -e ".[docs]"
+   cd docs && make html
+
+Config field drift is also gated by ``pytest -m docs`` (part of the quick suite).
 
 Fixing failures
 ---------------

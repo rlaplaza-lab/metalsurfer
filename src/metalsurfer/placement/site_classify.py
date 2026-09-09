@@ -191,10 +191,8 @@ def _build_classification_context(
     pbc_arr = np.asarray(pbc, dtype=bool)
     use_periodic = n_verts > 0 and bool(np.any(pbc_arr)) and cell_has_volume(cell)
 
-    # Build periodic images + KDTree ONCE and reuse it for both local normals
-    # and the Voronoi classifier (previously duplicated for porous 3D-periodic
-    # systems). Use the larger k (k_class) so the image set is a superset of the
-    # old separate builds; the nearest-k over a superset is at least as correct.
+    # One periodic image KDTree for normals and the Voronoi classifier
+    # (k_class <= k_max so nearest-k over the shared set stays correct).
     images = None
     image_tree = None
     idx_img = None
@@ -206,7 +204,7 @@ def _build_classification_context(
         margin = float(np.max(d0_arr[:, -1])) + _KD_RADIUS_SEARCH_PADDING
         images = _build_periodic_images(positions, cell, pbc_arr, margin=margin)
         image_tree = KDTree(images)
-        # One query for both consumers (normals + classifier): k_class <= k_max,
+        # Shared query for normals + classifier:
         # so the classifier's slice is a prefix of these results.
         d_img, idx_raw = image_tree.query(vertices, k=min(k_max, len(images)))
         idx_img = np.asarray(idx_raw, dtype=int)

@@ -589,7 +589,6 @@ def _enumerate_unified_sites(
 
     # Slab-specific topology enrichment becomes part of the default generator.
     if material_type == "slab" and slab_top_atom_indices is not None:
-        # `nn_dists` may be empty here, so the fallback below is reachable (not dead code).
         median_nn = _median_nn_or_fallback(
             nn_dists,
             reference_positions=positions[slab_top_atom_indices],

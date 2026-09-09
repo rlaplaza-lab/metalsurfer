@@ -238,12 +238,15 @@ def _validate_adsorption(
     slab: Atoms,
     config: AdsorptionConfig,
     surface_symbols: list[str] | None = None,
+    *,
+    surface_prefix_atoms: int | None = None,
 ) -> tuple[bool, str, float | None]:
     min_d = _adsorbate_surface_min_distance(
         atoms,
         slab,
         surface_symbols=surface_symbols,
         material_type=config.material_type,
+        surface_prefix_atoms=surface_prefix_atoms,
     )
     if min_d is None:
         return False, "no adsorbate atoms", None
@@ -313,6 +316,9 @@ def _evaluate_optimized_candidate(
         slab_atoms,
         config,
         surface_symbols=surface_symbols,
+        surface_prefix_atoms=(
+            len(base_slab_for_frozen) if base_slab_for_frozen is not None else None
+        ),
     )
     if not ok:
         logger.debug("%sadsorption fail: %s", log_prefix, reason)
@@ -428,6 +434,7 @@ def _filter_and_label_duplicates(
     smiles: str,
     surface_type: str,
     ml_records: list[PlacementRecord],
+    surface_prefix_atoms: int | None = None,
 ) -> tuple[list[ScreeningResult], list[ScreeningResult], float]:
     """Filter results and append labeled duplicate ML records.
 
@@ -442,6 +449,7 @@ def _filter_and_label_duplicates(
         reference_smiles=reference_smiles,
         config=config,
         duplicate_results_out=duplicates,
+        surface_prefix_atoms=surface_prefix_atoms,
     )
     t_filtering = time.perf_counter() - t0
 
@@ -468,6 +476,7 @@ def _finalize_screen_results(
     smiles: str,
     surface_type: str,
     ml_records: list[PlacementRecord],
+    surface_prefix_atoms: int | None = None,
 ) -> tuple[list[ScreeningResult], float, FilterFailure | None]:
     """Filter results, record dedup ML labels, and set filter-stage failure summary.
 
@@ -483,6 +492,7 @@ def _finalize_screen_results(
         smiles=smiles,
         surface_type=surface_type,
         ml_records=ml_records,
+        surface_prefix_atoms=surface_prefix_atoms,
     )
 
     filter_failure: FilterFailure | None = None

@@ -855,15 +855,8 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         n_input = len(combined_atoms_list)
         n_returned = len(result)
         if n_returned != n_input:
-            # torch-sim 0.5.2 guarantees count-preserving, original-order output
-            # (``InFlightAutoBatcher.restore_original_order`` itself raises on a
-            # count mismatch, and ``max_iterations`` force-converges stragglers),
-            # so this branch is unreachable in practice. If it ever fires the
-            # invariant is broken: results are mapped to inputs positionally and
-            # the returned state carries no stable per-system id to recover a
-            # permutation from, so continuing would misattribute energies to the
-            # wrong descriptor. Fail loudly instead, matching the ``batch_static``
-            # guard above.
+            # Autobatcher output is ordered positionally; a count mismatch cannot
+            # be realigned without per-system ids.
             raise RuntimeError(
                 "Autobatcher returned mismatched batch size: "
                 f"expected {n_input}, got {n_returned}. Results are mapped to "

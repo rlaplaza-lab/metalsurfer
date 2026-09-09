@@ -58,7 +58,7 @@ from ..placement.occupancy import _positions_mutually_clear, incoming_inplane_ra
 from ..placement.site_coords import _slab_normal
 from ..surface_prep import apply_material_pbc
 from ..surface_prep.freeze import check_frozen_substrate_displacement
-from .shared import _infer_surface_symbols, _validate_geometry
+from .shared import _validate_geometry
 
 logger = logging.getLogger(__name__)
 
@@ -426,15 +426,25 @@ def _per_unit_surface_distances(
     unit_sizes: Sequence[int],
     config: AdsorptionConfig,
     surface_symbols: list[str] | None = None,
+    surface_prefix_atoms: int | None = None,
 ) -> list[float]:
     """Per-unit min adsorbate-to-surface distance for a relaxed composite.
 
-    When *surface_symbols* is set, prior adsorbates in the coverage prefix are
-    ignored (same mask as :func:`~metalsurfer.filters.check_desorption`).
+    When *surface_prefix_atoms* is set, only that bare-substrate prefix counts
+    as the surface (preferred under saturation). Otherwise *surface_symbols*
+    masks prior adsorbates the same way as
+    :func:`~metalsurfer.filters.check_desorption`.
     """
     positions = opt_atoms.get_positions()
     substrate_positions = positions[:n_substrate]
-    if surface_symbols:
+    if surface_prefix_atoms is not None:
+        if surface_prefix_atoms < 0 or surface_prefix_atoms > n_substrate:
+            raise ValueError(
+                f"surface_prefix_atoms ({surface_prefix_atoms}) must be in "
+                f"[0, {n_substrate}] (n_substrate)"
+            )
+        substrate_positions = substrate_positions[:surface_prefix_atoms]
+    elif surface_symbols:
         slab_syms = np.asarray(
             opt_atoms.get_chemical_symbols()[:n_substrate], dtype=object
         )
@@ -545,15 +555,15 @@ def evaluate_composite_commit(
         return [], f"geometry fail: {reason}"
 
     n_substrate = len(slab_atoms)
-    # Bare-substrate symbols only: prior adsorbates in the coverage prefix must
-    # not mask desorption the way check_desorption / filter_results avoid.
-    surface_symbols = _infer_surface_symbols(base_slab)
+    # Bare-substrate prefix only: prior adsorbates in the coverage slab must
+    # not mask desorption (symbol masking fails when they share elements with
+    # organic/porous frameworks).
     unit_distances = _per_unit_surface_distances(
         opt_atoms,
         n_substrate=n_substrate,
         unit_sizes=unit_sizes,
         config=config,
-        surface_symbols=surface_symbols,
+        surface_prefix_atoms=len(base_slab),
     )
     if not config.skip_desorption_check:
         for k, dist in enumerate(unit_distances):

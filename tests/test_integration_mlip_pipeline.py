@@ -223,16 +223,16 @@ def _assert_h2_ru(results: list[ScreeningResult], num_placements: int) -> None:
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
-    # QC (uma-s-1p2 + oc25): E_ads ≈ −0.1185 eV, distance 1.75 Å.
+    # QC (uma-s-1p2 + oc25): E_ads ≈ −0.113 eV, distance 1.75 Å.
     assert np.all(np.isfinite(e_ads))
-    assert float(e_ads.min()) < -0.05, (
-        f"Best E_ads regression lock (< -0.05 eV) failed for H2 on Ru, got {e_ads}"
+    assert float(e_ads.min()) < -0.07, (
+        f"Best E_ads regression lock (< -0.07 eV) failed for H2 on Ru, got {e_ads}"
     )
     assert np.all(e_ads < 0.05), (
         f"E_ads should stay below 0.05 eV for H2 on Ru, got {e_ads}"
     )
-    assert np.all(e_ads >= -0.25), (
-        f"E_ads should be >= -0.25 eV for H2 on Ru, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -0.20), (
+        f"E_ads should be >= -0.20 eV for H2 on Ru, got min {e_ads.min():.3f}"
     )
 
     site_ids = set()
@@ -272,17 +272,17 @@ def _assert_h2_pt13(results: list[ScreeningResult], num_placements: int) -> None
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
-    # QC (uma-s-1p2 + oc25, prep-relaxed Pt₁₃ ico): best ≈ −1.13 eV,
+    # QC (uma-s-1p2 + oc25, prep-relaxed Pt₁₃ ico): best ≈ −1.128 eV,
     # dissociated H–H ≈ 2.18 Å, H–Pt ≈ 1.78 Å.
     assert np.all(np.isfinite(e_ads))
-    assert float(e_ads.min()) < -0.90, (
-        f"Best E_ads regression lock (< -0.90 eV) failed for H2 on Pt13, got {e_ads}"
+    assert float(e_ads.min()) < -1.00, (
+        f"Best E_ads regression lock (< -1.00 eV) failed for H2 on Pt13, got {e_ads}"
     )
     assert np.all(e_ads < 0.0), (
         f"E_ads should stay favorable (< 0 eV) for H2 on Pt13, got {e_ads}"
     )
-    assert np.all(e_ads >= -1.40), (
-        f"E_ads should be >= -1.40 eV for H2 on Pt13, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -1.25), (
+        f"E_ads should be >= -1.25 eV for H2 on Pt13, got min {e_ads.min():.3f}"
     )
 
     slab_size = len(results[0].atoms) - 2
@@ -325,15 +325,15 @@ def _assert_co2_mof(results: list[ScreeningResult], num_placements: int) -> None
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
-    # QC (uma-s-1p2 + oc25): E_ads in [-0.22, -0.13].
+    # QC (uma-s-1p2 + oc25): E_ads in [-0.22, -0.16]; best ≈ −0.219 eV.
     assert np.all(e_ads < 0.05), (
         f"E_ads should stay in a physisorption window (< 0.05 eV), got {e_ads}"
     )
-    assert np.all(e_ads >= -0.40), (
-        f"E_ads should be >= -0.40 eV for CO2 in MOF, got min {e_ads.min():.3f}"
+    assert np.all(e_ads >= -0.30), (
+        f"E_ads should be >= -0.30 eV for CO2 in MOF, got min {e_ads.min():.3f}"
     )
-    assert float(e_ads.min()) < -0.10, (
-        f"Best E_ads regression lock (< -0.10 eV) failed for CO2 in MOF, got {e_ads}"
+    assert float(e_ads.min()) < -0.15, (
+        f"Best E_ads regression lock (< -0.15 eV) failed for CO2 in MOF, got {e_ads}"
     )
 
     spread = float(e_ads.max() - e_ads.min())

@@ -55,8 +55,8 @@ def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> 
 
     e_ads = best.energy_adsorption
     # Best-E_ads band (uma-s-1p2 + oc25 QC): observed ≈ −0.113 eV.
-    e_ads_ceiling_ev = -0.05
-    e_ads_floor_ev = -0.25
+    e_ads_ceiling_ev = -0.07
+    e_ads_floor_ev = -0.18
     if not np.isfinite(e_ads) or e_ads >= e_ads_ceiling_ev:
         print(
             f"Expected favorable H2 binding on Ru "

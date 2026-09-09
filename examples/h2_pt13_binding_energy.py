@@ -36,8 +36,8 @@ from metalsurfer import (
 from metalsurfer.surface_prep import prepare_substrate
 
 # Best-E_ads band (uma-s-1p2 + oc25): observed ≈ −1.128 eV on prep-relaxed Pt₁₃.
-E_ADS_CEILING_EV = -0.90
-E_ADS_FLOOR_EV = -1.40
+E_ADS_CEILING_EV = -1.00
+E_ADS_FLOOR_EV = -1.25
 CHEMISORPTION_CONTACT_ANG = 2.2
 
 

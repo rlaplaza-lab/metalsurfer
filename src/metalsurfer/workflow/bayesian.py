@@ -448,6 +448,7 @@ def process_molecule_bayesian(
     )
 
     surface_symbols = _infer_surface_symbols(slab_for_sites)
+    surface_prefix_atoms = len(slab_for_sites)
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] = {}
     candidate_features, valid_spec_indices = build_spec_features_geometry_aware(
         all_specs,
@@ -739,6 +740,7 @@ def process_molecule_bayesian(
         smiles=smiles,
         surface_type=surface_type,
         ml_records=bo_negative_records,
+        surface_prefix_atoms=surface_prefix_atoms,
     )
     duplicate_result_ids = {id(result) for result in bo_duplicate_results}
     kept_result_ids = {id(result) for result in filtered}

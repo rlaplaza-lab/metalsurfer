@@ -1033,9 +1033,9 @@ def _validate_campaign(campaign: BindingCampaignResult) -> None:
         raise SystemExit(1)
 
     best = summary.best_adsorption_energy
-    # Best-E_ads band (uma-s-1p2 + oc25 QC): observed ≈ −1.35 to −1.36 eV.
-    e_ads_ceiling_ev = -1.00
-    e_ads_floor_ev = -1.70
+    # Best-E_ads band (uma-s-1p2 + oc25 QC): observed ≈ −1.372 eV.
+    e_ads_ceiling_ev = -1.20
+    e_ads_floor_ev = -1.55
     if best is None or best >= e_ads_ceiling_ev:
         print(
             f"Expected strong camphor binding "

@@ -33,8 +33,7 @@ RECOVERABLE_DISTANCE_REASONS = frozenset(
 )
 
 
-# Compute mean covalent radius of element sets from ASE data.
-# This replaces hardcoded fallback values with dynamically computed values.
+# Mean covalent radius of element sets from ASE data.
 def _mean_tabulated_covalent_radius(elements: list[str]) -> float:
     """Mean positive covalent radius over *elements* present in ASE tables."""
     radii = []

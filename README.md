@@ -24,7 +24,14 @@ Pass any ASE `Atoms` structure after optional prep with `prepare_substrate`, sup
 
 Requires **Python 3.12 or newer**.
 
-Core dependencies only (library import and CPU-only workflow tests):
+From PyPI (core library; MLIP stack for campaigns):
+
+```bash
+pip install metalsurfer
+pip install "metalsurfer[mlip]"
+```
+
+Editable install from a clone (core dependencies only — library import and CPU-only workflow tests):
 
 ```bash
 pip install -e .

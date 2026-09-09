@@ -48,7 +48,7 @@ class Site:
 
     @property
     def xy(self) -> np.ndarray:
-        """Cartesian xy of the site vertex (defensive copy)."""
+        """Cartesian xy of the site vertex."""
         return self.xyz[:2].copy()
 
     @property

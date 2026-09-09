@@ -37,8 +37,8 @@ from metalsurfer.surface_prep import prepare_substrate
 # chemisorption contact (physisorption sits around 3+ Å).
 CHEMISORPTION_CONTACT_ANG = 2.6
 # Best-E_ads band (uma-s-1p2 + oc25 QC): observed best ≈ +0.283 eV (stable).
-E_ADS_CEILING_EV = 0.35
-E_ADS_FLOOR_EV = 0.15
+E_ADS_CEILING_EV = 0.33
+E_ADS_FLOOR_EV = 0.22
 
 
 def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> None:

@@ -74,10 +74,17 @@ Bayesian Screening
 Sequential Saturation
 ---------------------
 
+Unlike :func:`~metalsurfer.run_adsorption`, ``config`` defaults to a fresh
+:class:`~metalsurfer.AdsorptionConfig` when omitted, and ``surface_type``
+defaults to ``"manual"`` (results land under ``results_manual/``). Pass both
+explicitly in production scripts.
+
 .. autofunction:: metalsurfer.run_saturation
 
 Bayesian Saturation
 -------------------
+
+Same ``config`` / ``surface_type`` defaults as :func:`~metalsurfer.run_saturation`.
 
 .. autofunction:: metalsurfer.run_saturation_bo
 

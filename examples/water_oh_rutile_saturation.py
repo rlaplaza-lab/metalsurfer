@@ -171,9 +171,9 @@ def main() -> int:
         print("Non-finite or empty committed E_ads rows found.", file=sys.stderr)
         return 1
 
-    # Best-E_ads band (uma-s-1p2 + oc25 QC): first committed step ≈ −3.21 to −3.23 eV.
-    e_ads_ceiling_ev = -2.50
-    e_ads_floor_ev = -3.50
+    # Best-E_ads band (uma-s-1p2 + oc25 QC): first committed step ≈ −3.23 eV.
+    e_ads_ceiling_ev = -3.00
+    e_ads_floor_ev = -3.40
     first_bound = next((s for s in result.steps if s.n_added > 0), None)
     if first_bound is None:
         print("No committed saturation step found.", file=sys.stderr)

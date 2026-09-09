@@ -267,7 +267,6 @@ def _spec_grid_info(
                 "no site-based placement specs will be generated",
                 len(unique_sites),
             )
-            # Empty capacity: no random XY fallback under coverage.
             site_indices = []
             use_sites = False
         else:
@@ -289,7 +288,6 @@ def _spec_grid_info(
                     pore_cap = max(int(config.num_placements or 20) * 20, 80)
                     site_indices = pore_indices[:pore_cap]
     else:
-        # No sites / use_sites=False: empty capacity (random-XY fallback removed).
         site_indices = []
         use_sites = False
 
@@ -471,7 +469,6 @@ def estimate_placement_spec_capacity(
     )
 
 
-# Public alias: fill/capacity clamping uses the same enumerable policy-grid size.
 estimate_placement_capacity = estimate_placement_spec_capacity
 
 

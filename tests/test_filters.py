@@ -918,6 +918,59 @@ def test_desorption_ignores_pre_adsorbed_atoms_when_surface_symbols_provided():
     assert "too far" in reason
 
 
+def test_desorption_prefix_ignores_shared_symbol_pre_adsorbate():
+    """Organic/porous substrates share C/H/O with adsorbates; use bare prefix.
+
+    Symbol masking alone would keep the pre-adsorbed C as "surface" and mask
+    desorption of a far-away new adsorbate.
+    """
+    # Minimal "framework" with C (as in MOF linkers) rather than a metal slab.
+    framework = Atoms(
+        "CCC",
+        positions=[[0.0, 0.0, 0.0], [1.5, 0.0, 0.0], [0.75, 1.3, 0.0]],
+        cell=[12.0, 12.0, 20.0],
+        pbc=True,
+    )
+    z_top = float(np.max(framework.get_positions()[:, 2]))
+    # Prior CO2-like carbon sitting under where the new molecule will go.
+    water = make_water().copy()
+    pos = water.get_positions().copy()
+    pos -= np.mean(pos, axis=0)
+    pos[:, 0] += 4.0
+    pos[:, 1] += 4.0
+    pos[:, 2] += z_top + 10.0
+    water.set_positions(pos)
+    o_pos = water.get_positions()[0].copy()
+    pre_adsorbed = Atoms("C", positions=[o_pos])
+    coverage = framework + pre_adsorbed
+    coverage.set_cell(framework.get_cell())
+    coverage.set_pbc(framework.get_pbc())
+    combined = coverage + water
+    combined.set_cell(coverage.get_cell())
+    combined.set_pbc(coverage.get_pbc())
+
+    framework_symbols = sorted(set(framework.get_chemical_symbols()))
+    ok, _ = check_desorption(
+        combined,
+        coverage,
+        binding_threshold=4.0,
+        surface_symbols=framework_symbols,
+        material_type="porous",
+    )
+    assert ok, "Symbol masking alone keeps shared-element prior adsorbates"
+
+    ok, reason = check_desorption(
+        combined,
+        coverage,
+        binding_threshold=4.0,
+        surface_symbols=framework_symbols,
+        material_type="porous",
+        surface_prefix_atoms=len(framework),
+    )
+    assert not ok
+    assert "too far" in reason
+
+
 def test_filter_results_desorption_uses_surface_symbols_masking():
     """filter_results should pass surface_symbols into desorption filtering."""
     slab_metal = make_slab(n_layers=1, symbol="Ru")

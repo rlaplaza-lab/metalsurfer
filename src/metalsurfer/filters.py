@@ -408,12 +408,19 @@ def _adsorbate_surface_min_distance(
     surface_symbols: list[str] | None = None,
     *,
     material_type: str = "slab",
+    surface_prefix_atoms: int | None = None,
 ) -> float | None:
     """Minimum adsorbate-to-surface distance using material-aware PBC.
 
-    *slab* supplies ``slab_size`` (and optional ``surface_symbols`` identity);
-    substrate positions are taken from the optimized ``atoms[:slab_size]`` slice
-    so relaxed substrate motion is reflected in the distance check.
+    *slab* supplies ``slab_size`` (new adsorbate starts at ``len(slab)``).
+    Substrate positions come from the optimized ``atoms[:slab_size]`` slice so
+    relaxed substrate motion is reflected in the distance check.
+
+    When *surface_prefix_atoms* is set, only ``atoms[:surface_prefix_atoms]``
+    counts as the binding surface (bare-substrate prefix under saturation).
+    Prefer that over *surface_symbols* on organic/porous frameworks where prior
+    adsorbates share element symbols with the substrate. *surface_symbols*
+    remains a fallback for callers that identify metal atoms by species.
 
     Returns ``None`` when the combined structure has no adsorbate atoms.
     """
@@ -425,7 +432,14 @@ def _adsorbate_surface_min_distance(
     cell = atoms.get_cell()
     optimized_slab = atoms[:slab_size]
     slab_positions = optimized_slab.get_positions()
-    if surface_symbols:
+    if surface_prefix_atoms is not None:
+        if surface_prefix_atoms < 0 or surface_prefix_atoms > slab_size:
+            raise ValueError(
+                f"surface_prefix_atoms ({surface_prefix_atoms}) must be in "
+                f"[0, {slab_size}] (len(slab))"
+            )
+        slab_positions = slab_positions[:surface_prefix_atoms]
+    elif surface_symbols:
         slab_syms = np.array(optimized_slab.get_chemical_symbols())
         mask = np.isin(slab_syms, surface_symbols)
         if np.any(mask):
@@ -448,6 +462,7 @@ def check_desorption(
     surface_symbols: list[str] | None = None,
     *,
     material_type: str = "slab",
+    surface_prefix_atoms: int | None = None,
 ) -> tuple[bool, str]:
     """Return ``(ok, reason)``; ``ok=False`` means the adsorbate desorbed.
 
@@ -476,15 +491,19 @@ def check_desorption(
     binding_threshold
         Maximum allowed adsorbate-surface distance in Å.
     surface_symbols
-        Element symbols of the surface atoms.
+        Element symbols of the surface atoms (fallback when no bare prefix).
     material_type
         Material type string (e.g. "slab", "porous", "nanoparticle").
+    surface_prefix_atoms
+        Bare-substrate atom count; when set, prior adsorbates in the coverage
+        prefix are ignored by index (preferred for organic/porous substrates).
     """
     min_d = _adsorbate_surface_min_distance(
         atoms,
         slab,
         surface_symbols=surface_symbols,
         material_type=material_type,
+        surface_prefix_atoms=surface_prefix_atoms,
     )
     if min_d is None:
         return False, "no adsorbate atoms found"
@@ -739,6 +758,8 @@ def filter_results(
     reference_smiles: str | None = None,
     config: AdsorptionConfig | None = None,
     duplicate_results_out: list[ScreeningResult] | None = None,
+    *,
+    surface_prefix_atoms: int | None = None,
 ) -> list[ScreeningResult]:
     """Apply decomposition, desorption and duplicate filters in sequence.
 
@@ -758,6 +779,7 @@ def filter_results(
         decomposed.
     surface_symbols:
         Element symbols of the surface (e.g. ``["Ru"]`` or ``["Ru", "Cu"]``).
+        Fallback for desorption when *surface_prefix_atoms* is unset.
     reference_smiles:
         SMILES of the original molecule; enables formula, bond-count, and
         coordination-fingerprint decomposition checks.
@@ -768,6 +790,9 @@ def filter_results(
         is True, desorption distance checks are skipped.
     duplicate_results_out:
         Optional sink for entries removed by duplicate filtering.
+    surface_prefix_atoms:
+        Bare-substrate atom count for desorption (preferred over symbol masking
+        when prior adsorbates may share elements with the framework).
     """
     if config is None:
         config = AdsorptionConfig()
@@ -865,6 +890,7 @@ def filter_results(
                 binding_threshold=config.binding_distance_threshold,
                 surface_symbols=surface_symbols,
                 material_type=config.material_type,
+                surface_prefix_atoms=surface_prefix_atoms,
             )
             if ok:
                 kept.append(entry)

@@ -20,7 +20,13 @@ Installation
 
 Requires **Python 3.12 or newer**.
 
-Core dependencies only (library import and CPU-only workflow tests):
+From PyPI (core library; MLIP stack for campaigns)::
+
+   pip install metalsurfer
+   pip install "metalsurfer[mlip]"
+
+Editable install from a clone (core dependencies only — library import and
+CPU-only workflow tests):
 
 .. code-block:: bash
 
@@ -46,6 +52,9 @@ To also install the documentation build dependencies:
 
    pip install -e ".[docs]"
 
+Then build HTML locally with::
+
+   cd docs && make html
 
 Runnable Examples
 -----------------

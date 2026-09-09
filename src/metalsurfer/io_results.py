@@ -640,11 +640,8 @@ def _collect_saturation_csv_rows(
             **detail_kwargs,
         )
         committed_units = step_result.committed()
-        # n-tuplet steps back every committed unit with one relaxed composite;
-        # emit one detail row per winner so per-unit placement_id / molecule /
-        # descriptor survive in saturation_details.csv. The extra
-        # ``committed_molecule`` column appears only when a tuplet actually
-        # committed >1 winner, keeping legacy single-winner CSVs byte-identical.
+        # One detail row per n-tuplet winner; ``committed_molecule`` only when
+        # more than one unit committed.
         if len(committed_units) > 1:
             detail_row["committed_molecule"] = committed_units[0].molecule
         detail_row["schema_version"] = SCHEMA_VERSION

@@ -222,6 +222,7 @@ def process_molecule(
             )
 
         surface_symbols = _infer_surface_symbols(slab_for_sites)
+        surface_prefix_atoms = len(slab_for_sites)
         if base_slab_for_frozen is not None:
             logger.info(
                 "Saturation surface reference: full_slab_atoms=%d, "
@@ -297,6 +298,7 @@ def process_molecule(
             smiles=smiles,
             surface_type=surface_type,
             ml_records=ml_records,
+            surface_prefix_atoms=surface_prefix_atoms,
         )
 
         t_mol_total = time.perf_counter() - t_mol_start
