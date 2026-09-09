@@ -527,7 +527,6 @@ def test_filter_results_uses_slab_prefix_for_decomposition():
     filtered = filter_results(
         results,
         slab=slab_plus_first,
-        surface_symbols=["Ru"],
         reference_smiles="O",
         config=config,
     )
@@ -537,7 +536,6 @@ def test_filter_results_uses_slab_prefix_for_decomposition():
         filter_results(
             results,
             slab=slab,
-            surface_symbols=["Ru"],
             reference_smiles="O",
             config=config,
         )
@@ -866,19 +864,13 @@ def test_desorption_no_adsorbate():
     assert "no adsorbate" in reason
 
 
-def test_desorption_ignores_pre_adsorbed_atoms_when_surface_symbols_provided():
-    """Regression: in saturation, slab may include previously adsorbed atoms.
-
-    Distance-to-surface checks must ignore those and consider only the true
-    substrate atoms (identified by surface_symbols).
-    """
+def test_desorption_ignores_pre_adsorbed_atoms_with_surface_prefix():
+    """Saturation coverage slabs include prior adsorbates; use bare prefix."""
     slab_metal = make_slab(n_layers=1, symbol="Ru")
     x_shift = 5.0
     y_shift = 5.0
     z_offset = 10.0
 
-    # Build the placement we want first, then pin a fake "pre-adsorbed" atom
-    # directly under the new molecule so it can incorrectly mask desorption.
     slab_metal_z = float(np.max(slab_metal.get_positions()[:, 2]))
     water = make_water().copy()
     pos = water.get_positions().copy()
@@ -888,7 +880,6 @@ def test_desorption_ignores_pre_adsorbed_atoms_when_surface_symbols_provided():
     pos[:, 2] += slab_metal_z + z_offset
     water.set_positions(pos)
 
-    # Place the pre-adsorbed atom at the oxygen position (very close contact).
     o_pos = water.get_positions()[0].copy()
     pre_adsorbed = Atoms("C", positions=[o_pos])
     slab_with_pre_adsorbate = slab_metal + pre_adsorbed
@@ -905,26 +896,21 @@ def test_desorption_ignores_pre_adsorbed_atoms_when_surface_symbols_provided():
         binding_threshold=4.0,
         material_type="slab",
     )
-    assert ok, "Without surface_symbols, pre-adsorbed atoms can mask desorption"
+    assert ok, "Without surface_prefix_atoms, prior adsorbates can mask desorption"
 
     ok, reason = check_desorption(
         combined,
         slab_with_pre_adsorbate,
         binding_threshold=4.0,
-        surface_symbols=["Ru"],
         material_type="slab",
+        surface_prefix_atoms=len(slab_metal),
     )
     assert not ok
     assert "too far" in reason
 
 
 def test_desorption_prefix_ignores_shared_symbol_pre_adsorbate():
-    """Organic/porous substrates share C/H/O with adsorbates; use bare prefix.
-
-    Symbol masking alone would keep the pre-adsorbed C as "surface" and mask
-    desorption of a far-away new adsorbate.
-    """
-    # Minimal "framework" with C (as in MOF linkers) rather than a metal slab.
+    """Organic/porous substrates share C/H/O with adsorbates; use bare prefix."""
     framework = Atoms(
         "CCC",
         positions=[[0.0, 0.0, 0.0], [1.5, 0.0, 0.0], [0.75, 1.3, 0.0]],
@@ -932,7 +918,6 @@ def test_desorption_prefix_ignores_shared_symbol_pre_adsorbate():
         pbc=True,
     )
     z_top = float(np.max(framework.get_positions()[:, 2]))
-    # Prior CO2-like carbon sitting under where the new molecule will go.
     water = make_water().copy()
     pos = water.get_positions().copy()
     pos -= np.mean(pos, axis=0)
@@ -949,21 +934,18 @@ def test_desorption_prefix_ignores_shared_symbol_pre_adsorbate():
     combined.set_cell(coverage.get_cell())
     combined.set_pbc(coverage.get_pbc())
 
-    framework_symbols = sorted(set(framework.get_chemical_symbols()))
     ok, _ = check_desorption(
         combined,
         coverage,
         binding_threshold=4.0,
-        surface_symbols=framework_symbols,
         material_type="porous",
     )
-    assert ok, "Symbol masking alone keeps shared-element prior adsorbates"
+    assert ok, "Without surface_prefix_atoms, prior adsorbates can mask desorption"
 
     ok, reason = check_desorption(
         combined,
         coverage,
         binding_threshold=4.0,
-        surface_symbols=framework_symbols,
         material_type="porous",
         surface_prefix_atoms=len(framework),
     )
@@ -971,8 +953,8 @@ def test_desorption_prefix_ignores_shared_symbol_pre_adsorbate():
     assert "too far" in reason
 
 
-def test_filter_results_desorption_uses_surface_symbols_masking():
-    """filter_results should pass surface_symbols into desorption filtering."""
+def test_filter_results_desorption_uses_surface_prefix():
+    """filter_results desorption uses surface_prefix_atoms for coverage slabs."""
     slab_metal = make_slab(n_layers=1, symbol="Ru")
     x_shift = 5.0
     y_shift = 5.0
@@ -987,7 +969,6 @@ def test_filter_results_desorption_uses_surface_symbols_masking():
     pos[:, 2] += slab_metal_z + z_offset
     water.set_positions(pos)
 
-    # Pre-adsorbed atom at the oxygen position masks desorption without surface_symbols.
     o_pos = water.get_positions()[0].copy()
     pre_adsorbed = Atoms("C", positions=[o_pos])
     slab_with_pre_adsorbate = slab_metal + pre_adsorbed
@@ -1000,12 +981,20 @@ def test_filter_results_desorption_uses_surface_symbols_masking():
     results = [_sr(combined, -1.0, 0)]
 
     config = AdsorptionConfig(skip_topology_check=True, connectivity_multiplier=1.3)
+    kept_masked = filter_results(
+        results,
+        slab=slab_with_pre_adsorbate,
+        reference_smiles=None,
+        config=config,
+    )
+    assert kept_masked == results, "Without prefix, prior adsorbate masks desorption"
+
     filtered = filter_results(
         results,
         slab=slab_with_pre_adsorbate,
-        surface_symbols=["Ru"],
         reference_smiles=None,
         config=config,
+        surface_prefix_atoms=len(slab_metal),
     )
     assert filtered == []
 
@@ -1029,7 +1018,7 @@ def test_duplicate_removal():
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
     )
-    filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
+    filtered = filter_results(results, slab=slab, config=config)
     assert len(filtered) == 1
 
 
@@ -1051,7 +1040,6 @@ def test_duplicate_removal_tracks_removed_duplicates():
     filtered = filter_results(
         results,
         slab=slab,
-        surface_symbols=["Ru"],
         config=config,
         duplicate_results_out=removed,
     )
@@ -1095,7 +1083,7 @@ def test_duplicate_removal_symmetry_equivalent_poses():
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
     )
-    filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
+    filtered = filter_results(results, slab=slab, config=config)
     # Symmetry-aware expectation: the two equivalent poses deduplicate to one.
     assert len(filtered) == 1
 
@@ -1118,7 +1106,7 @@ def test_distinct_kept():
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
     )
-    filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
+    filtered = filter_results(results, slab=slab, config=config)
     assert len(filtered) == 2
 
 
@@ -1137,7 +1125,7 @@ def test_duplicate_different_energy_kept():
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
     )
-    filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
+    filtered = filter_results(results, slab=slab, config=config)
     assert len(filtered) == 2
 
 
@@ -1190,7 +1178,6 @@ def test_duplicate_removal_ignores_prior_adsorbate_geometry():
     filtered = filter_results(
         results,
         slab=slab_with_prior,
-        surface_symbols=["Ru"],
         config=config,
     )
     assert len(filtered) == 1
@@ -1238,7 +1225,6 @@ def test_duplicate_removal_keeps_distinct_trailing_poses_with_same_priors():
     filtered = filter_results(
         results,
         slab=slab_with_prior,
-        surface_symbols=["Ru"],
         config=config,
     )
     assert len(filtered) == 2
@@ -1266,7 +1252,7 @@ def test_duplicate_removal_across_adjacent_com_bins():
         skip_topology_check=True,
         skip_desorption_check=True,
     )
-    filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
+    filtered = filter_results(results, slab=slab, config=config)
     assert len(filtered) == 1
 
 
@@ -1302,9 +1288,7 @@ def test_duplicate_removal_skips_rmsd_for_far_com(monkeypatch):
         skip_topology_check=True,
         skip_desorption_check=True,
     )
-    filtered = filter_results(
-        placements, slab=slab, surface_symbols=["Ru"], config=config
-    )
+    filtered = filter_results(placements, slab=slab, config=config)
     assert len(filtered) == 4
     # Far COMs are pruned before RMSD; no pairwise calls among the four.
     assert calls == []
@@ -1346,7 +1330,7 @@ def test_duplicate_removal_across_periodic_cell_face():
         skip_topology_check=True,
         skip_desorption_check=True,
     )
-    filtered = filter_results(results, slab=slab, surface_symbols=["Ru"], config=config)
+    filtered = filter_results(results, slab=slab, config=config)
     assert len(filtered) == 1
 
 
@@ -1403,7 +1387,6 @@ def test_filter_pipeline_removes_decomposed_and_desorbed():
     filtered = filter_results(
         results,
         slab=slab,
-        surface_symbols=["Ru"],
         reference_smiles="O",
         config=config,
     )
@@ -1434,7 +1417,6 @@ def test_filter_pipeline_catches_rearranged():
     filtered = filter_results(
         results,
         slab=slab,
-        surface_symbols=["Ru"],
         reference_smiles="CCO",
         config=config,
     )
@@ -1468,7 +1450,6 @@ def test_filter_pipeline_catches_atom_loss():
         filter_results(
             results,
             slab=slab,
-            surface_symbols=["Ru"],
             reference_smiles="O",
             config=config,
         )
@@ -1476,7 +1457,7 @@ def test_filter_pipeline_catches_atom_loss():
 
 def test_filter_pipeline_empty_input():
     slab = make_slab(n_layers=1)
-    filtered = filter_results([], slab=slab, surface_symbols=["Ru"])
+    filtered = filter_results([], slab=slab)
     assert filtered == []
 
 
@@ -1500,7 +1481,6 @@ def test_filter_pipeline_all_rejected():
     filtered = filter_results(
         results,
         slab=slab,
-        surface_symbols=["Ru"],
         reference_smiles="O",
         config=config,
     )
@@ -1532,7 +1512,6 @@ def test_filter_pipeline_skip_topology_check_allows_decomposed():
     filtered = filter_results(
         results,
         slab=slab,
-        surface_symbols=["Ru"],
         reference_smiles="O",
         config=config,
     )
@@ -1554,7 +1533,6 @@ def test_filter_pipeline_skip_desorption_check_allows_desorbed():
     filtered = filter_results(
         results,
         slab=slab,
-        surface_symbols=["Ru"],
         reference_smiles="O",
         config=config,
     )
@@ -1576,7 +1554,6 @@ def test_filter_pipeline_alloy_surface():
     filtered = filter_results(
         results,
         slab=slab,
-        surface_symbols=["Ru", "Cu"],
         reference_smiles="O",
         config=config,
     )

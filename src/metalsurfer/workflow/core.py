@@ -33,7 +33,6 @@ from .shared import (
     _failure_reason_counts,
     _finalize_screen_results,
     _generation_failure_histogram,
-    _infer_surface_symbols,
     _optimize_and_evaluate_placements,
     _prepare_molecule_screening,
     _summarize_failure_events,
@@ -221,16 +220,14 @@ def process_molecule(
                 ml_records=ml_records,
             )
 
-        surface_symbols = _infer_surface_symbols(slab_for_sites)
         surface_prefix_atoms = len(slab_for_sites)
         if base_slab_for_frozen is not None:
             logger.info(
                 "Saturation surface reference: full_slab_atoms=%d, "
-                "surface_ref_atoms=%d, freeze_ref_atoms=%d, surface_symbols=%s",
+                "surface_ref_atoms=%d, freeze_ref_atoms=%d",
                 len(slab.atoms),
                 len(slab_for_sites),
                 len(effective_base_slab_for_frozen or slab.atoms),
-                surface_symbols,
             )
 
         t0 = time.perf_counter()
@@ -244,9 +241,9 @@ def process_molecule(
                 config=config,
                 energies=(E_slab, E_mol),
                 molecule_name=molecule_name,
-                surface_symbols=surface_symbols,
                 base_slab_for_frozen=effective_base_slab_for_frozen,
                 saturation_reuse=saturation_reuse,
+                surface_prefix_atoms=surface_prefix_atoms,
             )
         )
         t_optimization = time.perf_counter() - t0
@@ -292,7 +289,6 @@ def process_molecule(
         results, t_filtering, filter_failure = _finalize_screen_results(
             results,
             slab_atoms=slab.atoms,
-            surface_symbols=surface_symbols,
             reference_smiles=reference_smiles,
             config=config,
             smiles=smiles,
@@ -335,12 +331,12 @@ def _evaluate_placement_batch(
     E_slab: float,
     E_mol: float,
     molecule_name: str,
-    surface_symbols: list[str] | None,
     site_context: SiteContext | None = None,
     base_slab_for_frozen: Atoms | None = None,
     slab_for_sites: Atoms | None = None,
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
     saturation_reuse: bool = False,
+    surface_prefix_atoms: int | None = None,
 ) -> tuple[list[ScreeningResult], list[PlacementFailureEvent]]:
     """Run placement wrap + optimization + validation for a batch of specs.
 
@@ -382,10 +378,10 @@ def _evaluate_placement_batch(
             config=config,
             energies=(E_slab, E_mol),
             molecule_name=molecule_name,
-            surface_symbols=surface_symbols,
             base_slab_for_frozen=base_slab_for_frozen,
             saturation_reuse=saturation_reuse,
             log_prefix="BO batch ",
+            surface_prefix_atoms=surface_prefix_atoms,
         )
     )
     failures.extend(validation_failure_events)

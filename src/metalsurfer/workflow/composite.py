@@ -425,15 +425,12 @@ def _per_unit_surface_distances(
     n_substrate: int,
     unit_sizes: Sequence[int],
     config: AdsorptionConfig,
-    surface_symbols: list[str] | None = None,
     surface_prefix_atoms: int | None = None,
 ) -> list[float]:
     """Per-unit min adsorbate-to-surface distance for a relaxed composite.
 
     When *surface_prefix_atoms* is set, only that bare-substrate prefix counts
-    as the surface (preferred under saturation). Otherwise *surface_symbols*
-    masks prior adsorbates the same way as
-    :func:`~metalsurfer.filters.check_desorption`.
+    as the surface. When unset, the full coverage prefix ``n_substrate`` is used.
     """
     positions = opt_atoms.get_positions()
     substrate_positions = positions[:n_substrate]
@@ -444,13 +441,6 @@ def _per_unit_surface_distances(
                 f"[0, {n_substrate}] (n_substrate)"
             )
         substrate_positions = substrate_positions[:surface_prefix_atoms]
-    elif surface_symbols:
-        slab_syms = np.asarray(
-            opt_atoms.get_chemical_symbols()[:n_substrate], dtype=object
-        )
-        mask = np.isin(slab_syms, surface_symbols)
-        if np.any(mask):
-            substrate_positions = substrate_positions[mask]
     cell = opt_atoms.get_cell()
     pbc = material_aware_pbc(config.material_type)
     distances: list[float] = []
@@ -555,9 +545,6 @@ def evaluate_composite_commit(
         return [], f"geometry fail: {reason}"
 
     n_substrate = len(slab_atoms)
-    # Bare-substrate prefix only: prior adsorbates in the coverage slab must
-    # not mask desorption (symbol masking fails when they share elements with
-    # organic/porous frameworks).
     unit_distances = _per_unit_surface_distances(
         opt_atoms,
         n_substrate=n_substrate,

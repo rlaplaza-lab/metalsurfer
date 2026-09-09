@@ -51,7 +51,6 @@ from .shared import (
     MoleculeScreenOutcome,
     PlacementFailureEvent,
     _filter_and_label_duplicates,
-    _infer_surface_symbols,
     _prepare_molecule_screening,
     _summarize_failure_events,
 )
@@ -447,7 +446,6 @@ def process_molecule_bayesian(
         config.bo.ucb_kappa,
     )
 
-    surface_symbols = _infer_surface_symbols(slab_for_sites)
     surface_prefix_atoms = len(slab_for_sites)
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] = {}
     candidate_features, valid_spec_indices = build_spec_features_geometry_aware(
@@ -567,12 +565,12 @@ def process_molecule_bayesian(
             E_slab,
             E_mol,
             molecule_name,
-            surface_symbols,
             site_context=site_context,
             base_slab_for_frozen=effective_base_slab_for_frozen,
             slab_for_sites=slab_for_sites,
             materialization_cache=materialization_cache,
             saturation_reuse=saturation_reuse,
+            surface_prefix_atoms=surface_prefix_atoms,
         )
 
         # Pool was pre-materialized for features; eval wraps cache hits only.
@@ -734,7 +732,6 @@ def process_molecule_bayesian(
     filtered, bo_duplicate_results, _t_filtering = _filter_and_label_duplicates(
         all_results,
         slab_atoms=slab.atoms,
-        surface_symbols=surface_symbols,
         reference_smiles=reference_smiles,
         config=config,
         smiles=smiles,

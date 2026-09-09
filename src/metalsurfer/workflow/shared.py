@@ -237,14 +237,12 @@ def _validate_adsorption(
     atoms: Atoms,
     slab: Atoms,
     config: AdsorptionConfig,
-    surface_symbols: list[str] | None = None,
     *,
     surface_prefix_atoms: int | None = None,
 ) -> tuple[bool, str, float | None]:
     min_d = _adsorbate_surface_min_distance(
         atoms,
         slab,
-        surface_symbols=surface_symbols,
         material_type=config.material_type,
         surface_prefix_atoms=surface_prefix_atoms,
     )
@@ -273,9 +271,9 @@ def _evaluate_optimized_candidate(
     config: AdsorptionConfig,
     E_slab: float,
     E_mol: float,
-    surface_symbols: list[str] | None,
     base_slab_for_frozen: Atoms | None = None,
     log_prefix: str = "",
+    surface_prefix_atoms: int | None = None,
 ) -> tuple[ScreeningResult | None, PlacementFailureEvent | None]:
     if opt_atoms is None:
         return None, PlacementFailureEvent(
@@ -315,10 +313,7 @@ def _evaluate_optimized_candidate(
         opt_atoms,
         slab_atoms,
         config,
-        surface_symbols=surface_symbols,
-        surface_prefix_atoms=(
-            len(base_slab_for_frozen) if base_slab_for_frozen is not None else None
-        ),
+        surface_prefix_atoms=surface_prefix_atoms,
     )
     if not ok:
         logger.debug("%sadsorption fail: %s", log_prefix, reason)
@@ -371,10 +366,10 @@ def _optimize_and_evaluate_placements(
     config: AdsorptionConfig,
     energies: tuple[float, float],
     molecule_name: str,
-    surface_symbols: list[str] | None,
     base_slab_for_frozen: Atoms | None = None,
     saturation_reuse: bool = False,
     log_prefix: str = "",
+    surface_prefix_atoms: int | None = None,
 ) -> tuple[list[ScreeningResult], list[PlacementFailureEvent], int]:
     """Optimize materialized placements and evaluate each optimized candidate.
 
@@ -412,9 +407,9 @@ def _optimize_and_evaluate_placements(
                 config=config,
                 E_slab=e_slab,
                 E_mol=e_mol,
-                surface_symbols=surface_symbols,
                 base_slab_for_frozen=base_slab_for_frozen,
                 log_prefix=log_prefix,
+                surface_prefix_atoms=surface_prefix_atoms,
             )
         if result is None:
             assert failure_event is not None
@@ -428,7 +423,6 @@ def _filter_and_label_duplicates(
     results: list[ScreeningResult],
     *,
     slab_atoms: Atoms,
-    surface_symbols: list[str] | None,
     reference_smiles: str | None,
     config: AdsorptionConfig,
     smiles: str,
@@ -445,7 +439,6 @@ def _filter_and_label_duplicates(
     filtered = filter_results(
         results,
         slab=slab_atoms,
-        surface_symbols=surface_symbols,
         reference_smiles=reference_smiles,
         config=config,
         duplicate_results_out=duplicates,
@@ -470,7 +463,6 @@ def _finalize_screen_results(
     results: list[ScreeningResult],
     *,
     slab_atoms: Atoms,
-    surface_symbols: list[str] | None,
     reference_smiles: str | None,
     config: AdsorptionConfig,
     smiles: str,
@@ -486,7 +478,6 @@ def _finalize_screen_results(
     filtered, _duplicates, t_filtering = _filter_and_label_duplicates(
         results,
         slab_atoms=slab_atoms,
-        surface_symbols=surface_symbols,
         reference_smiles=reference_smiles,
         config=config,
         smiles=smiles,
@@ -796,11 +787,6 @@ def _build_surface_reference_slab(
     surface_slab.set_cell(slab_atoms.get_cell())
     surface_slab.set_pbc(slab_atoms.get_pbc())
     return surface_slab
-
-
-def _infer_surface_symbols(slab: Atoms) -> list[str]:
-    """Return unique element symbols present in *slab*."""
-    return sorted(set(slab.get_chemical_symbols()))
 
 
 @dataclass

@@ -169,7 +169,6 @@ class TestValidationAndFilterPhysics:
         filtered = filter_results(
             results,
             slab=slab,
-            surface_symbols=["Ru"],
             reference_smiles="O",
             config=config,
         )
@@ -215,7 +214,6 @@ class TestValidationAndFilterPhysics:
         filtered = filter_results(
             results,
             slab=slab,
-            surface_symbols=["Ru"],
             reference_smiles="O",
             config=config,
         )
@@ -251,7 +249,6 @@ class TestAdsorptionEnergyPhysics:
             config=config,
             E_slab=e_slab,
             E_mol=e_mol,
-            surface_symbols=["Ru"],
         )
         assert failure is None
         assert result is not None
@@ -274,7 +271,6 @@ class TestAdsorptionEnergyPhysics:
             config=config,
             E_slab=e_slab,
             E_mol=e_mol,
-            surface_symbols=["Ru"],
         )
         assert result_cap is None
         assert failure_cap is not None

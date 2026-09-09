@@ -483,22 +483,14 @@ class TestEvaluateCompositeCommit:
             placement_descriptor=make_placement_descriptor(placement_id=0),
         )
 
-        # Sanity: without a bare-prefix / metal-only mask, min distance to the
-        # coverage prefix would look bound (near prior water).
+        # Sanity: without a bare prefix, min distance to the coverage slab looks
+        # bound (near prior water); with bare prefix the new unit is desorbed.
         unit_size = len(desorbed) - len(coverage)
         dist_all = _per_unit_surface_distances(
             desorbed,
             n_substrate=len(coverage),
             unit_sizes=[unit_size],
             config=AdsorptionConfig(),
-            surface_symbols=None,
-        )[0]
-        dist_metal = _per_unit_surface_distances(
-            desorbed,
-            n_substrate=len(coverage),
-            unit_sizes=[unit_size],
-            config=AdsorptionConfig(),
-            surface_symbols=["Ru"],
         )[0]
         dist_prefix = _per_unit_surface_distances(
             desorbed,
@@ -508,7 +500,6 @@ class TestEvaluateCompositeCommit:
             surface_prefix_atoms=len(bare),
         )[0]
         assert dist_all < 4.0
-        assert dist_metal > 4.0
         assert dist_prefix > 4.0
 
         def _fake_optimize(combined_atoms_list, _slab, _ts_model, **_kwargs):

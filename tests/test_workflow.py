@@ -45,7 +45,6 @@ from metalsurfer.workflow.placement_fill import placement_spec_key
 from metalsurfer.workflow.shared import (
     PlacementFailureEvent,
     _build_surface_reference_slab,
-    _infer_surface_symbols,
     _validate_adsorption,
     _validate_geometry,
 )
@@ -293,12 +292,8 @@ class TestValidateAdsorption:
         assert ok
         assert reason == ""
 
-    def test_validate_adsorption_ignores_pre_adsorbed_atoms_with_surface_symbols(self):
-        """Regression: saturation slabs may include previously adsorbed atoms.
-
-        Validation must check adsorption distance to substrate atoms only
-        (selected by surface_symbols), not to pre-adsorbed atoms.
-        """
+    def test_validate_adsorption_ignores_pre_adsorbed_atoms_with_surface_prefix(self):
+        """Saturation slabs may include prior adsorbates; use bare prefix."""
         slab_metal = make_slab(symbol="Ru")
         x_shift = 5.0
         y_shift = 5.0
@@ -313,7 +308,6 @@ class TestValidateAdsorption:
         pos[:, 2] += slab_metal_z + z_offset
         water.set_positions(pos)
 
-        # Place fake pre-adsorbate at oxygen position (close contact).
         o_pos = water.get_positions()[0].copy()
         pre_adsorbed = Atoms("C", positions=[o_pos])
         slab_with_pre_adsorbate = slab_metal + pre_adsorbed
@@ -326,36 +320,16 @@ class TestValidateAdsorption:
         config = AdsorptionConfig(binding_distance_threshold=4.0)
 
         ok, _, _ = _validate_adsorption(combined, slab_with_pre_adsorbate, config)
-        assert ok, "Without surface_symbols, pre-adsorbed atoms can mask desorption"
+        assert ok, "Without surface_prefix_atoms, prior adsorbates can mask desorption"
 
         ok, reason, _ = _validate_adsorption(
             combined,
             slab_with_pre_adsorbate,
             config,
-            surface_symbols=["Ru"],
+            surface_prefix_atoms=len(slab_metal),
         )
         assert not ok
         assert "desorbed" in reason
-
-
-# ---------------------------------------------------------------------------
-# _infer_surface_symbols
-# ---------------------------------------------------------------------------
-
-
-class TestInferSurfaceSymbols:
-    def test_pure_slab(self):
-        slab = make_slab(symbol="Ru")
-        assert _infer_surface_symbols(slab) == ["Ru"]
-
-    def test_alloy_slab(self):
-        slab = make_slab(symbol="Ru")
-        syms = slab.get_chemical_symbols()
-        for i in range(0, len(syms), 2):
-            syms[i] = "Cu"
-        slab.set_chemical_symbols(syms)
-        result = _infer_surface_symbols(slab)
-        assert result == ["Cu", "Ru"]
 
 
 # ---------------------------------------------------------------------------

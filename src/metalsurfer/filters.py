@@ -405,7 +405,6 @@ def check_decomposition(
 def _adsorbate_surface_min_distance(
     atoms: Atoms,
     slab: Atoms,
-    surface_symbols: list[str] | None = None,
     *,
     material_type: str = "slab",
     surface_prefix_atoms: int | None = None,
@@ -417,10 +416,8 @@ def _adsorbate_surface_min_distance(
     relaxed substrate motion is reflected in the distance check.
 
     When *surface_prefix_atoms* is set, only ``atoms[:surface_prefix_atoms]``
-    counts as the binding surface (bare-substrate prefix under saturation).
-    Prefer that over *surface_symbols* on organic/porous frameworks where prior
-    adsorbates share element symbols with the substrate. *surface_symbols*
-    remains a fallback for callers that identify metal atoms by species.
+    counts as the binding surface (bare substrate under saturation). When unset,
+    the full coverage prefix ``atoms[:slab_size]`` is used.
 
     Returns ``None`` when the combined structure has no adsorbate atoms.
     """
@@ -439,11 +436,6 @@ def _adsorbate_surface_min_distance(
                 f"[0, {slab_size}] (len(slab))"
             )
         slab_positions = slab_positions[:surface_prefix_atoms]
-    elif surface_symbols:
-        slab_syms = np.array(optimized_slab.get_chemical_symbols())
-        mask = np.isin(slab_syms, surface_symbols)
-        if np.any(mask):
-            slab_positions = slab_positions[mask]
 
     pbc_for_dist = material_aware_pbc(material_type)
     return calculate_min_distance(
@@ -459,7 +451,6 @@ def check_desorption(
     atoms: Atoms,
     slab: Atoms,
     binding_threshold: float = 4.0,
-    surface_symbols: list[str] | None = None,
     *,
     material_type: str = "slab",
     surface_prefix_atoms: int | None = None,
@@ -487,21 +478,18 @@ def check_desorption(
     atoms
         Optimized structure to check.
     slab
-        Reference slab Atoms.
+        Reference slab Atoms (coverage prefix; new adsorbate starts at ``len(slab)``).
     binding_threshold
         Maximum allowed adsorbate-surface distance in Å.
-    surface_symbols
-        Element symbols of the surface atoms (fallback when no bare prefix).
     material_type
         Material type string (e.g. "slab", "porous", "nanoparticle").
     surface_prefix_atoms
-        Bare-substrate atom count; when set, prior adsorbates in the coverage
-        prefix are ignored by index (preferred for organic/porous substrates).
+        Bare-substrate atom count. When set, prior adsorbates in the coverage
+        prefix are ignored by index. When unset, the full coverage prefix is used.
     """
     min_d = _adsorbate_surface_min_distance(
         atoms,
         slab,
-        surface_symbols=surface_symbols,
         material_type=material_type,
         surface_prefix_atoms=surface_prefix_atoms,
     )
@@ -662,7 +650,6 @@ def _deduplicate_by_energy_and_rmsd(
     results: list[ScreeningResult],
     *,
     prefix_atoms: int,
-    surface_symbols: list[str] | None,
     material_type: str,
     energy_dedup_threshold: float,
     rmsd_dedup_threshold: float,
@@ -725,7 +712,6 @@ def _deduplicate_by_energy_and_rmsd(
             rmsd = _adsorbate_rmsd(
                 entry.atoms,
                 unique[u_idx].atoms,
-                surface_symbols=surface_symbols,
                 material_type=material_type,
                 prefix_atoms=prefix_atoms,
             )
@@ -754,7 +740,6 @@ def _deduplicate_by_energy_and_rmsd(
 def filter_results(
     results: list[ScreeningResult],
     slab: Atoms,
-    surface_symbols: list[str] | None = None,
     reference_smiles: str | None = None,
     config: AdsorptionConfig | None = None,
     duplicate_results_out: list[ScreeningResult] | None = None,
@@ -777,9 +762,6 @@ def filter_results(
         not prior coverage. A suffix/formula mismatch now raises
         :class:`ValueError` instead of silently dropping the entry as
         decomposed.
-    surface_symbols:
-        Element symbols of the surface (e.g. ``["Ru"]`` or ``["Ru", "Cu"]``).
-        Fallback for desorption when *surface_prefix_atoms* is unset.
     reference_smiles:
         SMILES of the original molecule; enables formula, bond-count, and
         coordination-fingerprint decomposition checks.
@@ -791,8 +773,8 @@ def filter_results(
     duplicate_results_out:
         Optional sink for entries removed by duplicate filtering.
     surface_prefix_atoms:
-        Bare-substrate atom count for desorption (preferred over symbol masking
-        when prior adsorbates may share elements with the framework).
+        Bare-substrate atom count for desorption. When unset, the full coverage
+        prefix ``len(slab)`` is treated as the surface.
     """
     if config is None:
         config = AdsorptionConfig()
@@ -842,7 +824,7 @@ def filter_results(
             ok, reason = check_decomposition(
                 entry.atoms,
                 reference_smiles=reference_smiles,
-                surface_symbols=surface_symbols,
+                surface_symbols=None,
                 connectivity_multiplier=config.connectivity_multiplier,
                 adsorbate_prefix_atoms=prefix,
                 material_type=config.material_type,
@@ -888,7 +870,6 @@ def filter_results(
                 entry.atoms,
                 slab,
                 binding_threshold=config.binding_distance_threshold,
-                surface_symbols=surface_symbols,
                 material_type=config.material_type,
                 surface_prefix_atoms=surface_prefix_atoms,
             )
@@ -918,7 +899,6 @@ def filter_results(
     unique, deduplicated = _deduplicate_by_energy_and_rmsd(
         results,
         prefix_atoms=len(slab),
-        surface_symbols=surface_symbols,
         material_type=config.material_type,
         energy_dedup_threshold=config.energy_dedup_threshold,
         rmsd_dedup_threshold=config.rmsd_dedup_threshold,
