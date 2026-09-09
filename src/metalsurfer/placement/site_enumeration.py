@@ -428,6 +428,8 @@ def get_unified_sites(
     positions = atoms.get_positions()
     symbols = list(atoms.get_chemical_symbols())
     cell = np.asarray(atoms.get_cell(), dtype=float)
+    # Caller (_enumerate_unified_sites) already validates material_type.
+    assert material_type is not None
     pbc = np.asarray(material_aware_pbc(material_type), dtype=bool)
     derived_probe, derived_max = _derive_voronoi_distance_window(
         positions, symbols, pbc, cell

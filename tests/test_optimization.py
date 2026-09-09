@@ -49,7 +49,9 @@ class _FakeTensor:
         return float(self._array.squeeze())
 
 
-def _fake_batch_forces(n_systems: int, n_atoms_each: int) -> tuple[_FakeTensor, _FakeTensor]:
+def _fake_batch_forces(
+    n_systems: int, n_atoms_each: int
+) -> tuple[_FakeTensor, _FakeTensor]:
     """Per-atom forces + system_idx matching *n_systems* of equal size."""
     forces = _FakeTensor(np.zeros((n_systems * n_atoms_each, 3)))
     system_idx = _FakeTensor(np.repeat(np.arange(n_systems), n_atoms_each))

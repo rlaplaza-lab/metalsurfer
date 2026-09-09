@@ -368,8 +368,8 @@ Two further behaviours:
   (floor of 1), and `distribute_placement_budget` splits the total placement
   budget across molecules in proportion to those scores, guaranteeing every
   molecule gets at least one. Fill-loop clamping still uses
-  `estimate_placement_capacity` (enumerable policy-grid size) so retries stop
-  when the requested count exceeds what can be enumerated.
+  `estimate_placement_spec_capacity` (enumerable policy-grid size) so retries
+  stop when the requested count exceeds what can be enumerated.
 
 ## 6. Coverage and saturation
 
@@ -437,9 +437,11 @@ Three ways to grow the coverage, set on `AdsorptionConfig`:
   per-unit distance, and an extra `committed_molecule` CSV column emitted only
   for multi-winner steps.
 
-All three modes stop under the same rule: when a step's best E_ads is ≥ 0
-(the next adsorption would cost energy), when no valid placements remain, or
-when `saturation_max_steps` is reached.
+All three modes stop under the same rules: when a step commits nothing
+(unbound final step — including n-tuplet `no_binders` / emptied pack even if
+the screening pool still has a negative E_ads candidate), when the step's
+best committed E_ads is ≥ 0, when no valid placements remain after screening /
+topology guard, or when `saturation_max_steps` is reached.
 
 ## 7. Dissociative placement
 

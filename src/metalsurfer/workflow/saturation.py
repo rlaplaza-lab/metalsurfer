@@ -888,7 +888,7 @@ def _run_single_molecule_saturation(
             return None
 
         best = min(mol_results, key=lambda r: r.energy_adsorption)
-        resolved = _resolve_step_commit(
+        commit = _resolve_step_commit(
             step=step,
             candidates=mol_results,
             pool_best=best,
@@ -905,9 +905,9 @@ def _run_single_molecule_saturation(
                 f"{molecule}; stopping saturation"
             ),
         )
-        if resolved is None:
+        if commit is None:
             return None
-        best, committed = resolved
+        best, committed = commit
         return _StepScreenOutcome(
             best=best,
             committed=committed,
@@ -1213,7 +1213,7 @@ def _run_multi_molecule_saturation(
             r for results in per_molecule_results.values() for r in results
         ]
         best_overall = min(all_results_flat, key=lambda r: r.energy_adsorption)
-        resolved = _resolve_step_commit(
+        commit = _resolve_step_commit(
             step=step,
             candidates=all_results_flat,
             pool_best=best_overall,
@@ -1235,9 +1235,9 @@ def _run_multi_molecule_saturation(
                 "validation failed for every candidate; stopping"
             ),
         )
-        if resolved is None:
+        if commit is None:
             return None
-        best_overall, committed = resolved
+        best_overall, committed = commit
         return _StepScreenOutcome(
             best=best_overall,
             committed=committed,

@@ -47,6 +47,13 @@ from .site_types import Site
 logger = logging.getLogger(__name__)
 
 
+def _require_pose_z_abs(pose: PlacementPose) -> float:
+    """Return absolute z; recovery paths must not invent ``0.0`` for missing pose."""
+    if pose.z_abs is None:
+        raise ValueError("PlacementPose.z_abs is required; no zero fallback")
+    return float(pose.z_abs)
+
+
 @dataclass
 class _PlacementContext:
     """Inputs for ``_finalize_placement``: pose, site/material refs, canonical and rotated positions."""
@@ -591,7 +598,8 @@ def _analytic_height_recovery(
     """One signed height nudge along the placement normal; None if nothing to fix."""
     pose = ctx.pose
     zf = float(pose.z_fraction)
-    origin = np.array([pose.x_abs, pose.y_abs, float(pose.z_abs)], dtype=float)
+    z_abs = _require_pose_z_abs(pose)
+    origin = np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float)
     z_span = float(ctx.z_base_hi - ctx.z_base_lo)
     if z_span <= _DISTANCE_ZERO_EPS:
         return None
@@ -721,7 +729,7 @@ def _recover_distance_failure(
         height_mode = "too_close"
 
     pose = ctx.pose
-    origin = np.array([pose.x_abs, pose.y_abs, float(pose.z_abs)], dtype=float)
+    origin = np.array([pose.x_abs, pose.y_abs, _require_pose_z_abs(pose)], dtype=float)
     work_zf = float(pose.z_fraction)
     work_center = origin.copy()
     last_reason: str | None = fail_reason
@@ -1221,7 +1229,7 @@ def _finalize_placement(
             pose = ctx.pose
             if fail_reason is not None:
                 return None, fail_reason
-            z_abs = float(pose.z_abs)
+            z_abs = _require_pose_z_abs(pose)
         else:
             return None, fail_reason
 

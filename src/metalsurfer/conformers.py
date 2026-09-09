@@ -8,7 +8,6 @@ from ase import Atoms
 
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
-from .optimization import batch_static
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +108,9 @@ def create_conformers_from_smiles(
         conformers.append(atoms)
 
     if ts_model is not None and len(conformers) > 0:
+        # Lazy: importing metalsurfer.optimization pulls torch via _deps.
+        from .optimization import batch_static
+
         results = batch_static(conformers, ts_model)
         energies = [e for e, _f in results]
     elif calculator is not None:

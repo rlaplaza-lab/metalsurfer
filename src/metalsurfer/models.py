@@ -607,11 +607,9 @@ def _committed_step_results(
 ) -> list[ScreeningResult]:
     """Placements folded into the coverage slab by one saturation step.
 
-    ``committed_results`` is the explicit record of what was committed.
-    When it is empty and ``n_added`` is not 0, the step falls back to
-    ``[best_result]`` if that placement bound (negative E_ads), mirroring
-    legacy single-winner steps. ``n_added == 0`` is always an unbound final
-    step and never invents a winner from the pool best.
+    Explicit ``committed_results`` win when present. Empty with ``n_added != 0``
+    falls back to ``[best_result]`` if it binds (sequential). ``n_added == 0``
+    is an unbound final step and never invents a winner from the pool best.
     """
     if n_added == 0:
         return []
@@ -633,11 +631,9 @@ class SaturationStepResult:
     all_results: list[ScreeningResult]
     bo_transfer_enabled: bool = False
     transfer: BOTransferInfo | None = None
-    # Placements folded into the slab this step (1 for sequential; >1 for
-    # n-tuplet); 0 for an unbound final step. Defaults keep sequential behavior.
+    # Placements folded this step (1 sequential; >1 n-tuplet; 0 unbound final).
     n_added: int = 1
-    # Explicit multi-winner commit record; empty with n_added != 0 means the
-    # sequential single-winner interpretation of *best_result*
+    # Empty with n_added != 0 → sequential interpretation of best_result
     # (see :func:`_committed_step_results`).
     committed_results: list[ScreeningResult] = field(default_factory=list)
 
@@ -882,11 +878,9 @@ class MultiMolSaturationStepResult:
     per_molecule_budgets: dict[str, int]
     bo_transfer_enabled: bool = False
     transfer_by_molecule: dict[str, BOTransferInfo] = field(default_factory=dict)
-    # Placements folded into the slab this step (1 for sequential; >1 for
-    # n-tuplet); 0 for an unbound final step. Defaults keep sequential behavior.
+    # Placements folded this step (1 sequential; >1 n-tuplet; 0 unbound final).
     n_added: int = 1
-    # Explicit multi-winner commit record; empty with n_added != 0 means the
-    # sequential single-winner interpretation of *best_result*
+    # Empty with n_added != 0 → sequential interpretation of best_result
     # (see :func:`_committed_step_results`).
     committed_results: list[ScreeningResult] = field(default_factory=list)
 

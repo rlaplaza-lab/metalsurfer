@@ -293,7 +293,7 @@ Placement generation
     **Type:** ``bool`` · **Default:** ``True``
 
     Clamp the effective placement target to the enumerable spec capacity
-    (``estimate_placement_capacity``) so fill cannot request more successes
+    (``estimate_placement_spec_capacity``) so fill cannot request more successes
     than occupancy-pruned enumeration can supply.
 
 ``n_jobs``
@@ -817,14 +817,14 @@ loop behavior and I/O only.
 ``saturation_max_steps``
    **Type:** ``int | None`` · **Default:** ``None``
 
-   Optional hard cap on saturation loop depth. ``None`` runs until adsorption is
-   unfavorable or no valid placements remain.
+   Optional hard cap on saturation loop depth. ``None`` runs until a step
+   commits nothing, adsorption is unfavorable, or no valid placements remain.
 
 ``saturation_molecules_per_step``
    **Type:** ``int`` · **Default:** ``1``
 
    Number of placements committed per saturation step. The default ``1`` runs
-   legacy sequential coverage (one molecule folded into the slab per step).
+   sequential coverage (one molecule folded into the slab per step).
    Larger values enable n-tuplet mode: each step screens the per-molecule
    pools as usual, then greedily commits up to this many mutually compatible
    winners (sorted by :math:`E_\mathrm{ads}`, tie-broken by placement id and
@@ -837,10 +837,11 @@ loop behavior and I/O only.
    per-unit identity survives in ``placement_id``, ``molecule``,
    descriptor columns, per-unit ``distance``, and the extra
    ``committed_molecule`` column emitted only for multi-winner steps). A step
-   stops the run when its committed tuplet does not bind; partial tuplets are
-   allowed when fewer clear binders exist. ``num_placements`` keeps its
-   meaning as the per-molecule screening-pool size and is divided by this
-   value after workload autotuning.
+   that commits nothing (no mutually clear binders, emptied pack, or a
+   non-binding committed tuplet) stops the run as an unbound final step;
+   partial tuplets are allowed when fewer clear binders exist.
+   ``num_placements`` keeps its meaning as the per-molecule screening-pool
+   size and is divided by this value after workload autotuning.
 
 Reproducibility, strictness, and I/O
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

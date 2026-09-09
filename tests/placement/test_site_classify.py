@@ -541,7 +541,13 @@ def test_delaunay_bridge_fallback_uses_top_layer_not_bulk():
     )
     local_tree = KDTree(positions)
 
-    result = _classify_delaunay_vertices_batch(ctx, vertices, positions, local_tree)
+    result = _classify_delaunay_vertices_batch(
+        ctx,
+        vertices,
+        positions,
+        local_tree,
+        pore_threshold=2.5,
+    )
     site_type, site_indices = result[0]
     assert site_type == "hollow"
     # The reclassified hollow must reference only top-layer atoms.

@@ -572,9 +572,10 @@ BO saturation
 ``saturation_bo``): same saturation loop with Bayesian placement selection
 and optional cross-step transfer (see above).
 
-Stop conditions: best ``E_ads ≥ 0`` (for tuplet steps, the shared tuplet
-total); no valid placements after topology guard; ``saturation_max_steps``
-(default unlimited).
+Stop conditions: no placements committed this step (unbound final, including
+n-tuplet empty pack / ``no_binders``); best committed ``E_ads ≥ 0`` (for tuplet
+steps, the shared tuplet total); no valid placements after topology guard;
+``saturation_max_steps`` (default unlimited).
 
 Compare structures to **post-adatom** substrate files when adatoms were
 deposited during prep. Symmetry reduction is dropped once the *substrate
@@ -678,8 +679,9 @@ Design heuristics
 
 - Many placements, not one pose: binding energy is the best of a filtered
   sample.
-- Saturation stops when the next adsorption is endothermic
-  (``E_ads ≥ 0``), not at an explicit coverage fraction.
+- Saturation stops when a step commits nothing, when the next adsorption is
+  endothermic (``E_ads ≥ 0``), or at ``saturation_max_steps`` — not at an
+  explicit coverage fraction.
 - Rigid substrate by default during adsorption (prep ``FixAtoms``);
   ``relax_top_layer=True`` is a material-aware shortcut distinct from the
   site-enumeration top-layer mask.
