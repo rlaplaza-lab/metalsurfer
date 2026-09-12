@@ -91,6 +91,35 @@ class TestLoadMoleculesCaching:
         )
         assert molecules == ["water"]
 
+    def test_corrupt_saturation_summary_does_not_crash(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        monkeypatch.chdir(tmp_path)
+        csv_path = tmp_path / "smiles.csv"
+        csv_path.write_text("O,water\n")
+
+        results_dir = tmp_path / "results_manual"
+        results_dir.mkdir()
+        (results_dir / "saturation_summary.csv").write_text(
+            'a,b\n"unterminated,water\n'
+        )
+
+        with caplog.at_level(logging.WARNING, logger="metalsurfer.workflow.shared"):
+            molecules, smiles, status = load_molecules(
+                str(csv_path),
+                skip_existing=False,
+                skip_saturation_file=True,
+                surface_type="manual",
+            )
+
+        assert molecules == ["water"]
+        assert smiles == ["O"]
+        assert status == "ok"
+        assert any(
+            "Could not read existing summary" in record.getMessage()
+            for record in caplog.records
+        )
+
     def test_no_summary_file_loads_all(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         csv_path = tmp_path / "smiles.csv"

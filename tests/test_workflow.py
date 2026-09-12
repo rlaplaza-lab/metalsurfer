@@ -638,6 +638,207 @@ class TestProcessMolecule:
         assert outcome.ml_records[0].is_penalty_label is False
 
 
+@pytest.mark.parametrize("clamp_enabled", [True, False])
+def test_bo_batches_reuse_upfront_capacity_for_clamping(monkeypatch, clamp_enabled):
+    from metalsurfer.workflow import core as core_mod
+
+    slab = SlabContainer(make_slab())
+    refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
+    config = AdsorptionConfig(
+        bo=BOConfig(initial_random=1, batch_size=1, total_budget=1),
+        num_placements=2,
+        num_conformers=1,
+        seed=7,
+        placement_fill_clamp_to_capacity=clamp_enabled,
+    )
+    specs = [
+        PlacementSpec(
+            conformer_index=0,
+            orientation_type="round",
+            face_flip=False,
+            en_atom_index=None,
+            site_index=0,
+            site_type="atop",
+            tilt_deg=0.0,
+            azimuth_deg=0.0,
+            azimuth_in_plane_deg=0.0,
+            z_fraction=0.5,
+            placement_index=0,
+        ),
+        PlacementSpec(
+            conformer_index=0,
+            orientation_type="round",
+            face_flip=False,
+            en_atom_index=None,
+            site_index=1,
+            site_type="atop",
+            tilt_deg=0.0,
+            azimuth_deg=90.0,
+            azimuth_in_plane_deg=0.0,
+            z_fraction=0.5,
+            placement_index=1,
+        ),
+    ]
+    bo_capacity_calls = []
+    batch_capacity_calls = []
+    materialize_capacities = []
+
+    def estimate_bo_capacity(*_args, **_kwargs):
+        bo_capacity_calls.append(1)
+        return 2
+
+    def estimate_batch_capacity(*_args, **_kwargs):
+        batch_capacity_calls.append(1)
+        return 99
+
+    def materialize_all(*, specs, **_kwargs):
+        combined = []
+        placement_ids = []
+        descriptors = []
+        for spec in specs:
+            combined.append(make_water().copy())
+            placement_ids.append(spec.placement_index)
+            descriptors.append(
+                make_placement_descriptor(placement_id=spec.placement_index)
+            )
+        return combined, placement_ids, descriptors, []
+
+    def optimize_all(all_combined, placement_ids, placement_descriptors, **_kwargs):
+        return (
+            [
+                make_screening_result(
+                    placement_id=placement_id,
+                    atoms=atoms,
+                    placement_descriptor=descriptor,
+                )
+                for atoms, placement_id, descriptor in zip(
+                    all_combined, placement_ids, placement_descriptors, strict=True
+                )
+            ],
+            [],
+            0,
+        )
+
+    original_materialize = core_mod.materialize_specs
+
+    def record_materialize(*args, **kwargs):
+        materialize_capacities.append(kwargs.get("capacity"))
+        return original_materialize(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.shared.create_conformers_from_smiles",
+        MagicMock(return_value=([Atoms("H")], [0.0])),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.bayesian.estimate_placement_spec_capacity",
+        estimate_bo_capacity,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.placement_fill.estimate_placement_spec_capacity",
+        estimate_batch_capacity,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.bayesian.enumerate_placement_specs",
+        lambda *_args, **_kwargs: specs,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.bayesian.build_spec_features_geometry_aware",
+        lambda *_args, **_kwargs: (
+            pd.DataFrame(
+                [
+                    {"x": 0.0, "y": 0.0, "z": 1.0},
+                    {"x": 1.0, "y": 0.0, "z": 1.0},
+                ]
+            ),
+            [0, 1],
+        ),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.placement_fill._materialize_spec_placements",
+        materialize_all,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.core._optimize_and_evaluate_placements",
+        optimize_all,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.shared.filter_results",
+        lambda results, **_kwargs: results,
+    )
+    monkeypatch.setattr(core_mod, "materialize_specs", record_materialize)
+
+    outcome = process_molecule_bayesian(
+        "O",
+        "water",
+        slab,
+        MagicMock(),
+        refs,
+        ts_model=MagicMock(),
+        config=config,
+        skip_workload_autotune=True,
+    )
+
+    assert outcome.results is not None
+    assert len(outcome.results) == 2
+    assert bo_capacity_calls == [1]
+    assert batch_capacity_calls == []
+    assert materialize_capacities == [2, 2]
+
+
+def test_fill_materialized_placements_estimates_capacity_once(monkeypatch):
+    from metalsurfer.workflow import placement_fill as fill_mod
+
+    slab = make_slab()
+    water = make_water()
+    calls = []
+
+    def estimate_capacity(*_args, **_kwargs):
+        calls.append(1)
+        return 2
+
+    def enumerate_one(*_args, **_kwargs):
+        return [
+            PlacementSpec(
+                conformer_index=0,
+                orientation_type="round",
+                face_flip=False,
+                en_atom_index=None,
+                site_index=0,
+                site_type="atop",
+                tilt_deg=0.0,
+                azimuth_deg=0.0,
+                azimuth_in_plane_deg=0.0,
+                z_fraction=0.5,
+                placement_index=0,
+            )
+        ]
+
+    def materialize_one(**_kwargs):
+        return [water.copy()], [0], [], []
+
+    monkeypatch.setattr(fill_mod, "estimate_placement_spec_capacity", estimate_capacity)
+    monkeypatch.setattr(fill_mod, "enumerate_placement_specs", enumerate_one)
+    monkeypatch.setattr(fill_mod, "_materialize_spec_placements", materialize_one)
+
+    result = fill_mod.fill_materialized_placements(
+        conformers=[water],
+        slab_for_sites=slab,
+        config=AdsorptionConfig(
+            material_type="slab",
+            num_placements=10,
+            placement_retry_enabled=False,
+        ),
+        smiles="O",
+        site_context=None,
+        slab_atoms=slab,
+        calculator=None,
+    )
+
+    assert calls == [1]
+    assert len(result.combined) == 1
+    assert result.n_attempts == 1
+
+
 # ---------------------------------------------------------------------------
 # format_failure_summary
 # ---------------------------------------------------------------------------

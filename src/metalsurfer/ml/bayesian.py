@@ -1823,9 +1823,10 @@ def splice_exploration_picks(
     if frac <= 0.0 or not chosen:
         return list(chosen)
     blocked = set(evaluated_indices or ())
+    chosen_set = set(chosen)
     explore_n = int(np.ceil(len(chosen) * frac))
     available = [
-        i for i in range(int(pool_size)) if i not in blocked and i not in set(chosen)
+        i for i in range(int(pool_size)) if i not in blocked and i not in chosen_set
     ]
     if not available:
         return list(chosen)

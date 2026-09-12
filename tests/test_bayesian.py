@@ -29,6 +29,7 @@ from metalsurfer.ml.bayesian import (
     select_candidates,
     select_candidates_batch_diverse,
     select_initial_bo_indices,
+    splice_exploration_picks,
     train_surrogate,
 )
 from metalsurfer.ml.features import FEATURE_NAMES, extract_features
@@ -452,6 +453,112 @@ class TestInitialSampling:
         picked = select_initial_bo_indices(X, 4, sampling="stratified", random_state=3)
         conformers = X.iloc[picked]["conformer_index"].astype(int).tolist()
         assert len(set(conformers)) == 4
+
+
+class TestExplorationSplicing:
+    def test_excludes_evaluated_and_chosen_indices(self):
+        rng = np.random.RandomState(3)
+        chosen = [0, 2, 4]
+
+        result = splice_exploration_picks(
+            rng,
+            chosen,
+            pool_size=8,
+            evaluated_indices={1, 3},
+            exploration_fraction=1.0,
+        )
+
+        assert result[0] == 0
+        assert len(result) == len(chosen)
+        assert len(set(result)) == len(result)
+        assert set(result[1:]).isdisjoint({0, 1, 2, 3, 4})
+
+    def test_duplicate_chosen_indices_are_excluded_from_exploration(self):
+        rng = np.random.RandomState(4)
+        chosen = [0, 0, 1, 2]
+
+        result = splice_exploration_picks(
+            rng,
+            chosen,
+            pool_size=8,
+            evaluated_indices={3},
+            exploration_fraction=1.0,
+        )
+
+        assert result[0] == 0
+        assert len(set(result)) == len(result)
+        assert set(result[1:]).isdisjoint({0, 1, 2, 3})
+        assert chosen == [0, 0, 1, 2]
+
+    def test_spliced_count_uses_ceiling_and_preserves_prefix(self):
+        rng = np.random.RandomState(5)
+        chosen = [0, 1, 2, 3, 4]
+
+        result = splice_exploration_picks(
+            rng,
+            chosen,
+            pool_size=10,
+            exploration_fraction=0.2,
+        )
+
+        assert result[:4] == chosen[:4]
+        assert len(result[4:]) == 1
+        assert set(result[4:]).isdisjoint(chosen)
+
+    def test_full_exploration_clamps_to_one_acquisition_pick(self):
+        rng = np.random.RandomState(6)
+        chosen = [0, 1, 2, 3, 4]
+
+        result = splice_exploration_picks(
+            rng,
+            chosen,
+            pool_size=10,
+            exploration_fraction=1.0,
+        )
+
+        assert result[:1] == chosen[:1]
+        assert len(result[1:]) == 4
+        assert set(result[1:]).isdisjoint(chosen)
+
+    def test_zero_fraction_and_empty_chosen_return_copies(self):
+        rng = np.random.RandomState(7)
+        chosen = [1, 2]
+
+        result = splice_exploration_picks(
+            rng,
+            chosen,
+            pool_size=6,
+            exploration_fraction=0.0,
+        )
+        empty_chosen = []
+        empty_result = splice_exploration_picks(
+            rng,
+            empty_chosen,
+            pool_size=6,
+            exploration_fraction=0.5,
+        )
+
+        assert result == chosen
+        assert result is not chosen
+        chosen.append(3)
+        assert result == [1, 2]
+        assert empty_result == empty_chosen
+        assert empty_result is not empty_chosen
+
+    def test_fully_blocked_pool_returns_copy(self):
+        rng = np.random.RandomState(8)
+        chosen = [0, 1]
+
+        result = splice_exploration_picks(
+            rng,
+            chosen,
+            pool_size=2,
+            evaluated_indices={0, 1},
+            exploration_fraction=1.0,
+        )
+
+        assert result == chosen
+        assert result is not chosen
 
 
 # ---------------------------------------------------------------------------

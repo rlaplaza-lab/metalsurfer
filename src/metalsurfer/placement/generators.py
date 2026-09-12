@@ -126,7 +126,11 @@ def generate_placements_from_specs(
         return []
 
     placement_ref = slab_for_sites if slab_for_sites is not None else slab
-    pose_cache = build_pose_batch_cache(placement_ref, conformers, config)
+    pose_cache = None
+    if materialization_cache is None or any(
+        materialization_cache.get(int(spec.placement_index)) is None for spec in specs
+    ):
+        pose_cache = build_pose_batch_cache(placement_ref, conformers, config)
 
     def _one(
         spec: PlacementSpec,

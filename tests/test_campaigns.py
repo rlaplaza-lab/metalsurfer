@@ -1,5 +1,7 @@
 """Unit tests for campaign facade symbols and result contracts."""
 
+import logging
+
 import pytest
 
 from metalsurfer import (
@@ -37,6 +39,39 @@ def _patch_binding_bootstrap(monkeypatch, slab_container, ref=None):
             t_ref_s=0.0,
             slab=slab_container,
         ),
+    )
+
+
+def _patch_saturation_screening(monkeypatch, slab_container, processed):
+    from metalsurfer.workflow.shared import ScreeningRunBootstrap
+    from tests.conftest import DummyReferenceEnergies, NoopDatasetLogger, make_water
+
+    ref = DummyReferenceEnergies(constant_energy=-5.0)
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation._bootstrap_screening_run",
+        lambda slab, *_args, **_kwargs: ScreeningRunBootstrap(
+            calculator=object(),
+            ts_model=None,
+            ref=ref,
+            t_ref_s=0.0,
+            slab=slab,
+        ),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.create_conformers_from_smiles",
+        lambda *_args, **_kwargs: ([make_water()], [0.0]),
+    )
+
+    def fake_process(_smi, mol, *_args, **_kwargs):
+        processed.append(mol)
+        return MoleculeScreenOutcome(results=[])
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.process_molecule", fake_process
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.DatasetLogger", NoopDatasetLogger
     )
 
 
@@ -397,6 +432,89 @@ def test_run_adsorption_warns_when_all_skipped(monkeypatch):
     assert campaign.n_molecules == 0
     assert "No molecules processed" in campaign.format_summary(
         results_dir="results_skip_all"
+    )
+
+
+def test_run_saturation_skip_existing_inline_list(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from metalsurfer.surface_prep import SlabContainer
+    from tests.conftest import make_slab
+
+    monkeypatch.chdir(tmp_path)
+    surface_type = "skip_saturation_inline"
+    results_dir = tmp_path / f"results_{surface_type}"
+    results_dir.mkdir(parents=True)
+    pd.DataFrame({"molecules": ["water_CO2"]}).to_csv(
+        results_dir / "saturation_summary.csv", index=False
+    )
+
+    processed = []
+    slab_container = SlabContainer(make_slab())
+    _patch_saturation_screening(monkeypatch, slab_container, processed)
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.setup_directories",
+        lambda surface_types, **kwargs: None,
+    )
+
+    campaign = run_saturation(
+        slab=slab_container,
+        molecules=[
+            ("O", "water_CO2"),
+            ("O", "water"),
+            ("C", "CO2"),
+            ("CCO", "ethanol"),
+        ],
+        config=AdsorptionConfig(seed=1),
+        surface_type=surface_type,
+        skip_existing=True,
+        save_results=False,
+        write_settings=False,
+    )
+
+    assert processed == ["water", "CO2", "ethanol"]
+    assert campaign.runs == []
+
+
+def test_run_saturation_logs_when_all_skipped(tmp_path, monkeypatch, caplog):
+    import pandas as pd
+
+    from metalsurfer.surface_prep import SlabContainer
+    from tests.conftest import make_slab
+
+    monkeypatch.chdir(tmp_path)
+    surface_type = "skip_saturation_all"
+    results_dir = tmp_path / f"results_{surface_type}"
+    results_dir.mkdir(parents=True)
+    pd.DataFrame({"molecules": ["water", "ethanol"]}).to_csv(
+        results_dir / "saturation_summary.csv", index=False
+    )
+
+    processed = []
+    slab_container = SlabContainer(make_slab())
+    _patch_saturation_screening(monkeypatch, slab_container, processed)
+    monkeypatch.setattr(
+        "metalsurfer.campaigns.setup_directories",
+        lambda surface_types, **kwargs: None,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="metalsurfer.workflow.saturation"):
+        campaign = run_saturation(
+            slab=slab_container,
+            molecules=[("O", "water"), ("CCO", "ethanol")],
+            config=AdsorptionConfig(seed=1),
+            surface_type=surface_type,
+            skip_existing=True,
+            save_results=False,
+            write_settings=False,
+        )
+
+    assert processed == []
+    assert campaign.runs == []
+    assert any(
+        "all already listed" in record.getMessage()
+        and "saturation_summary.csv" in record.getMessage()
+        for record in caplog.records
     )
 
 

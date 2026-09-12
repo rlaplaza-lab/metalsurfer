@@ -571,6 +571,7 @@ def process_molecule_bayesian(
             materialization_cache=materialization_cache,
             saturation_reuse=saturation_reuse,
             surface_prefix_atoms=surface_prefix_atoms,
+            capacity=max_enumerated_specs,
         )
 
         # Pool was pre-materialized for features; eval wraps cache hits only.

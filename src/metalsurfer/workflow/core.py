@@ -337,6 +337,7 @@ def _evaluate_placement_batch(
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
     saturation_reuse: bool = False,
     surface_prefix_atoms: int | None = None,
+    capacity: int | None = None,
 ) -> tuple[list[ScreeningResult], list[PlacementFailureEvent]]:
     """Run placement wrap + optimization + validation for a batch of specs.
 
@@ -359,6 +360,7 @@ def _evaluate_placement_batch(
         slab_for_sites=slab_for_sites,
         materialization_cache=materialization_cache,
         clamp_log_label=" (BO)",
+        capacity=capacity,
     )
     all_combined = fill.combined
     placement_ids = fill.placement_ids

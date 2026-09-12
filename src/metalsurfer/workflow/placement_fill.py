@@ -144,6 +144,7 @@ def materialize_specs(
     slab_for_sites: Atoms | None = None,
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
     clamp_log_label: str = "",
+    capacity: int | None = None,
 ) -> MaterializeFillResult:
     """Materialize *specs* once and keep up to *n_target* successes."""
     if n_target <= 0 or not specs:
@@ -158,6 +159,7 @@ def materialize_specs(
         site_context=site_context,
         slab_atoms=slab_atoms,
         log_label=clamp_log_label,
+        capacity=capacity,
     )
     if n_target <= 0:
         return MaterializeFillResult([], [], [], [], n_attempts=0)

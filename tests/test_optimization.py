@@ -1609,9 +1609,19 @@ def test_optimize_and_evaluate_skips_preclear_when_saturation_reuse(monkeypatch)
     from .conftest import make_placement_descriptor
 
     calls: list[dict] = []
+    evaluation_calls: list[dict] = []
 
     def _fake_clear(*_a, **kwargs):
         calls.append(dict(kwargs))
+
+    def _fake_evaluate(**kwargs):
+        evaluation_calls.append(dict(kwargs))
+        return None, shared_mod.PlacementFailureEvent(
+            placement_id=kwargs["placement_id"],
+            stage="optimization",
+            reason="optimizer_returned_none",
+            descriptor=kwargs["descriptor"],
+        )
 
     monkeypatch.setattr(shared_mod, "clear_autobatcher_cache", _fake_clear)
     monkeypatch.setattr(
@@ -1619,6 +1629,7 @@ def test_optimize_and_evaluate_skips_preclear_when_saturation_reuse(monkeypatch)
         "optimize_adsorbate_slab_batched",
         lambda *a, **k: [None],
     )
+    monkeypatch.setattr(shared_mod, "_evaluate_optimized_candidate", _fake_evaluate)
 
     slab = make_slab()
     combined = [slab.copy()]
@@ -1633,10 +1644,11 @@ def test_optimize_and_evaluate_skips_preclear_when_saturation_reuse(monkeypatch)
         config=config,
         energies=(-1.0, -1.0),
         molecule_name="water",
-        surface_symbols=["Pt"],
+        surface_prefix_atoms=len(slab),
         saturation_reuse=True,
     )
     assert calls == []
+    assert evaluation_calls[-1]["surface_prefix_atoms"] == len(slab)
 
     shared_mod._optimize_and_evaluate_placements(
         combined,
@@ -1647,9 +1659,13 @@ def test_optimize_and_evaluate_skips_preclear_when_saturation_reuse(monkeypatch)
         config=config,
         energies=(-1.0, -1.0),
         molecule_name="water",
-        surface_symbols=["Pt"],
+        surface_prefix_atoms=len(slab),
         saturation_reuse=False,
     )
     assert len(calls) == 1
     assert "max_n_atoms_threshold" in calls[0]
     assert calls[0].get("drain_cuda") in (None, False)
+    assert [call["surface_prefix_atoms"] for call in evaluation_calls] == [
+        len(slab),
+        len(slab),
+    ]

@@ -268,14 +268,206 @@ def test_load_molecules_skip_saturation_file(workdir):
     results_dir.mkdir(exist_ok=True)
     summary = pd.DataFrame({"molecule": ["water"], "n_molecules_at_saturation": [3]})
     summary.to_csv(results_dir / "saturation_summary.csv", index=False)
-    molecules, smiles, _ = load_molecules(
+    molecules, smiles, status = load_molecules(
         str(csv_path),
         skip_existing=False,
         skip_saturation_file=True,
         surface_type="manual",
     )
-    assert "water" not in molecules
-    assert "ethanol" in molecules
+    assert molecules == ["ethanol"]
+    assert smiles == ["CCO"]
+    assert status == "ok"
+
+
+def test_load_molecules_skip_saturation_file_plural_opaque_label(workdir):
+    csv_path = workdir / "smiles.csv"
+    csv_path.write_text(
+        "O,water_CO2\nO,water\nC,CO2\nO,Water_CO2\nO,water_CO2_extra\nCCO,ethanol\n"
+    )
+    results_dir = workdir / "results_manual"
+    results_dir.mkdir(exist_ok=True)
+    pd.DataFrame({"molecules": ["water_CO2"]}).to_csv(
+        results_dir / "saturation_summary.csv", index=False
+    )
+
+    molecules, smiles, status = load_molecules(
+        str(csv_path),
+        skip_existing=True,
+        skip_saturation_file=True,
+        surface_type="manual",
+    )
+
+    assert molecules == ["water", "CO2", "Water_CO2", "water_CO2_extra", "ethanol"]
+    assert smiles == ["O", "C", "O", "O", "CCO"]
+    assert status == "ok"
+
+
+def test_load_molecules_skip_saturation_file_prefers_plural_column(workdir):
+    csv_path = workdir / "smiles.csv"
+    csv_path.write_text("O,water_CO2\nO,water\nCCO,ethanol\n")
+    results_dir = workdir / "results_manual"
+    results_dir.mkdir(exist_ok=True)
+    pd.DataFrame({"molecules": ["water_CO2"], "molecule": ["water"]}).to_csv(
+        results_dir / "saturation_summary.csv", index=False
+    )
+
+    molecules, smiles, status = load_molecules(
+        str(csv_path),
+        skip_existing=True,
+        skip_saturation_file=True,
+        surface_type="manual",
+    )
+
+    assert molecules == ["water", "ethanol"]
+    assert smiles == ["O", "CCO"]
+    assert status == "ok"
+
+
+def test_load_molecules_skip_existing_ignores_plural_binding_summary(workdir):
+    csv_path = workdir / "smiles.csv"
+    csv_path.write_text("O,water\nCCO,ethanol\n")
+    results_dir = workdir / "results_manual"
+    results_dir.mkdir(exist_ok=True)
+    pd.DataFrame({"molecules": ["water"]}).to_csv(
+        results_dir / "adsorption_energies_detailed.csv", index=False
+    )
+
+    molecules, smiles, status = load_molecules(
+        str(csv_path), skip_existing=True, surface_type="manual"
+    )
+
+    assert molecules == ["water", "ethanol"]
+    assert smiles == ["O", "CCO"]
+    assert status == "ok"
+
+
+def test_load_molecules_skip_saturation_file_unknown_schema_fails_open(workdir):
+    csv_path = workdir / "smiles.csv"
+    csv_path.write_text("O,water\nCCO,ethanol\n")
+    results_dir = workdir / "results_manual"
+    results_dir.mkdir(exist_ok=True)
+    pd.DataFrame({"other": ["water"]}).to_csv(
+        results_dir / "saturation_summary.csv", index=False
+    )
+
+    molecules, smiles, status = load_molecules(
+        str(csv_path),
+        skip_existing=True,
+        skip_saturation_file=True,
+        surface_type="manual",
+    )
+
+    assert molecules == ["water", "ethanol"]
+    assert smiles == ["O", "CCO"]
+    assert status == "ok"
+
+
+def test_load_molecules_empty_input_with_skip_returns_empty_file(workdir):
+    csv_path = workdir / "smiles.csv"
+    csv_path.write_text("")
+    results_dir = workdir / "results_manual"
+    results_dir.mkdir(exist_ok=True)
+    pd.DataFrame({"molecules": ["water"]}).to_csv(
+        results_dir / "saturation_summary.csv", index=False
+    )
+
+    molecules, smiles, status = load_molecules(
+        str(csv_path),
+        skip_existing=True,
+        skip_saturation_file=True,
+        surface_type="manual",
+    )
+
+    assert molecules == []
+    assert smiles == []
+    assert status == "empty_file"
+
+
+def test_load_molecules_skip_saturation_file_all_skipped(workdir):
+    csv_path = workdir / "smiles.csv"
+    csv_path.write_text("O,water\nCCO,ethanol\n")
+    results_dir = workdir / "results_manual"
+    results_dir.mkdir(exist_ok=True)
+    pd.DataFrame({"molecules": ["water", "ethanol"]}).to_csv(
+        results_dir / "saturation_summary.csv", index=False
+    )
+
+    molecules, smiles, status = load_molecules(
+        str(csv_path),
+        skip_existing=True,
+        skip_saturation_file=True,
+        surface_type="manual",
+    )
+
+    assert molecules == []
+    assert smiles == []
+    assert status == "all_skipped"
+
+
+def test_load_molecules_skip_saturation_file_no_matches_keeps_order(workdir):
+    csv_path = workdir / "smiles.csv"
+    csv_path.write_text("O,water\nCCO,ethanol\n")
+    results_dir = workdir / "results_manual"
+    results_dir.mkdir(exist_ok=True)
+    pd.DataFrame({"molecules": ["methanol"]}).to_csv(
+        results_dir / "saturation_summary.csv", index=False
+    )
+
+    molecules, smiles, status = load_molecules(
+        str(csv_path),
+        skip_existing=True,
+        skip_saturation_file=True,
+        surface_type="manual",
+    )
+
+    assert molecules == ["water", "ethanol"]
+    assert smiles == ["O", "CCO"]
+    assert status == "ok"
+
+
+def test_load_molecules_without_skip_flags_ignores_summary(workdir):
+    csv_path = workdir / "smiles.csv"
+    csv_path.write_text("O,water\nCCO,ethanol\n")
+    results_dir = workdir / "results_manual"
+    results_dir.mkdir(exist_ok=True)
+    pd.DataFrame({"molecules": ["water"]}).to_csv(
+        results_dir / "saturation_summary.csv", index=False
+    )
+
+    molecules, smiles, status = load_molecules(
+        str(csv_path),
+        skip_existing=False,
+        skip_saturation_file=False,
+        surface_type="manual",
+    )
+
+    assert molecules == ["water", "ethanol"]
+    assert smiles == ["O", "CCO"]
+    assert status == "ok"
+
+
+def test_load_molecules_malformed_saturation_summary_warns(workdir, caplog):
+    csv_path = workdir / "smiles.csv"
+    csv_path.write_text("O,water\n")
+    results_dir = workdir / "results_manual"
+    results_dir.mkdir(exist_ok=True)
+    (results_dir / "saturation_summary.csv").write_text('a,b\n"unterminated,water\n')
+
+    with caplog.at_level(logging.WARNING, logger="metalsurfer.workflow.shared"):
+        molecules, smiles, status = load_molecules(
+            str(csv_path),
+            skip_existing=False,
+            skip_saturation_file=True,
+            surface_type="manual",
+        )
+
+    assert molecules == ["water"]
+    assert smiles == ["O"]
+    assert status == "ok"
+    assert any(
+        "Could not read existing summary" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------

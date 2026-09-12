@@ -1137,15 +1137,20 @@ def _select_molecules_for_processing(
 
     if skip_existing or skip_saturation_file:
         existing_molecules: set[str] = set()
+        summary_columns: tuple[str, ...]
         if skip_saturation_file:
             summary = f"{results_dir}/saturation_summary.csv"
+            summary_columns = ("molecules", "molecule")
         else:
             summary = f"{results_dir}/adsorption_energies_detailed.csv"
+            summary_columns = ("molecule",)
         if os.path.exists(summary):
             try:
                 existing_df = pd.read_csv(summary)
-                if "molecule" in existing_df.columns:
-                    existing_molecules = set(existing_df["molecule"].values)
+                for column in summary_columns:
+                    if column in existing_df.columns:
+                        existing_molecules = set(existing_df[column].values)
+                        break
             except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
                 logger.warning("Could not read existing summary %s: %s", summary, e)
 
