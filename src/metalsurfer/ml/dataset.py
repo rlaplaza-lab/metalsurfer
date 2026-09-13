@@ -118,6 +118,31 @@ class DatasetLogger:
             f"({detail}). Pass allow_mixed_context=True to override."
         )
 
+    def _validate_pending_record_contexts(self) -> None:
+        """Ensure pending records match this logger's computation context."""
+        current_hash = self.context.settings_hash()
+        mismatches = sorted(
+            {
+                record.context.settings_hash()
+                for record in self._records
+                if record.context.settings_hash() != current_hash
+            }
+        )
+        if not mismatches:
+            return
+        detail = f"context_hash records={mismatches!r} logger={current_hash!r}"
+        if self.allow_mixed_context:
+            logger.warning(
+                "Flushing mixed computation context records to %s (%s)",
+                self.csv_path,
+                detail,
+            )
+            return
+        raise ValueError(
+            f"Refusing to flush to {self.csv_path}: computation context mismatch "
+            f"({detail}). Pass allow_mixed_context=True to override."
+        )
+
     @property
     def csv_path(self) -> str:
         """Path to the dataset CSV file."""
@@ -195,6 +220,7 @@ class DatasetLogger:
             return self.csv_path
 
         os.makedirs(self.output_dir, exist_ok=True)
+        self._validate_pending_record_contexts()
         include_provenance = bool(
             self._config.export_placement_provenance if self._config else False
         )

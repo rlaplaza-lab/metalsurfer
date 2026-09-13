@@ -589,6 +589,29 @@ def test_geom_pbc_is_the_single_source_of_cell_frame_helpers():
     )
 
 
+@pytest.mark.parametrize(
+    ("delta", "expected"),
+    [
+        (0.5, -0.5),
+        (-0.5, -0.5),
+        (1.5, -0.5),
+        (-1.5, -0.5),
+        (0.0, 0.0),
+        (0.25, 0.25),
+    ],
+)
+def test_minimum_image_fractional_delta_half_integers(delta, expected):
+    from metalsurfer._geom_pbc import minimum_image_fractional_delta
+
+    folded = minimum_image_fractional_delta(
+        np.array([delta, 0.0, 0.0]),
+        pbc=(True, True, True),
+    )
+    assert folded[0] == pytest.approx(expected)
+    assert folded[1] == pytest.approx(0.0)
+    assert folded[2] == pytest.approx(0.0)
+
+
 def test_geom_pbc_imports_without_placement_or_scipy():
     """``_geom_pbc`` must stay light so ``symmetry`` can import it at module scope.
 

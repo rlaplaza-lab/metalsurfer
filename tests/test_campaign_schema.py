@@ -161,6 +161,30 @@ def test_parse_campaign_rejects_wrong_length_miller_indices():
         )
 
 
+@pytest.mark.parametrize("tuple_key", ["miller_indices", "supercell"])
+def test_parse_campaign_rejects_fractional_geometry_tuples(tuple_key):
+    with pytest.raises(
+        ValueError, match=rf"substrate\.{tuple_key}\[0\].*exact integer"
+    ):
+        parse_campaign_dict(
+            {
+                **_VALID_BASE,
+                "substrate": {"bulk_id": "mp-30", tuple_key: [1.9, 1.0, 1.0]},
+            }
+        )
+
+
+@pytest.mark.parametrize("tuple_key", ["miller_indices", "supercell"])
+def test_parse_campaign_accepts_integral_float_geometry_tuples(tuple_key):
+    doc = parse_campaign_dict(
+        {
+            **_VALID_BASE,
+            "substrate": {"bulk_id": "mp-30", tuple_key: [1.0, 1.0, 1.0]},
+        }
+    )
+    assert doc.substrate[tuple_key] == (1, 1, 1)
+
+
 def test_parse_campaign_accepts_nested_bo_config():
     doc = parse_campaign_dict(
         {

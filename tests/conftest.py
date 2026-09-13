@@ -439,7 +439,7 @@ def mic_delta(
         return np.asarray(dvec, dtype=float)
     d = np.asarray(dvec, dtype=float)
     cell_arr = np.asarray(cell, dtype=float)
-    return d - np.round(d @ np.linalg.inv(cell_arr)) @ cell_arr
+    return d - np.floor(d @ np.linalg.inv(cell_arr) + 0.5) @ cell_arr
 
 
 def pair_distance(
@@ -484,7 +484,7 @@ def assert_no_intramolecular_clashes(adsorbate: Atoms, slab: Atoms) -> None:
         for j in range(i + 1, len(pos)):
             dvec = pos[j] - pos[i]
             if np.any(pbc):
-                dvec = dvec - np.round(dvec @ np.linalg.inv(cell)) @ cell
+                dvec = dvec - np.floor(dvec @ np.linalg.inv(cell) + 0.5) @ cell
             d = float(np.linalg.norm(dvec))
             r_sum = float(covalent_radii[atomic_numbers[syms[i]]]) + float(
                 covalent_radii[atomic_numbers[syms[j]]]

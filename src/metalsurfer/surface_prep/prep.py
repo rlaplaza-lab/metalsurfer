@@ -78,6 +78,9 @@ def relax_substrate(
     Knobs mirror :class:`~metalsurfer.AdsorptionConfig` ``slab_relaxation_*``
     fields. Explicit arguments override *config* when provided.
 
+    After a non-``none`` relaxation, ``finalized`` is cleared because geometry
+    changed; call :func:`finalize_substrate` again before campaign APIs.
+
     Parameters
     ----------
     slab
@@ -117,6 +120,7 @@ def relax_substrate(
         steps=steps,
         context=context,
     )
+    container.finalized = False
     return container
 
 

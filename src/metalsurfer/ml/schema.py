@@ -640,7 +640,8 @@ class PlacementRecord:
         """Reconstruct a PlacementRecord from a flattened dict (e.g. CSV row).
 
         Accepts schema 3.0 ``initial_*`` provenance columns and ``ctx_*`` context
-        columns. Lean rows without provenance use safe defaults.
+        columns. Lean rows without ``ctx_*`` may only reconstruct a default
+        :class:`ComputationContext` when ``context_hash`` matches that default.
         Geometry is inflated via :meth:`PlacementDescriptor.from_row`.
 
         Parameters
@@ -648,56 +649,88 @@ class PlacementRecord:
         row
             Flat dictionary representing a placement record.
         """
+        schema_version = row.get("schema_version")
+        if not _is_missing(schema_version) and str(schema_version) != SCHEMA_VERSION:
+            raise ValueError(
+                f"Unsupported schema_version {schema_version!r}; "
+                f"expected {SCHEMA_VERSION!r}"
+            )
 
         def _ctx_value(name: str, default: Any) -> Any:
             return _with_default(row.get(f"ctx_{name}"), default)
 
-        ctx = ComputationContext(
-            model_name=str(_ctx_value("model_name", "uma-s-1p2")),
-            task_name=str(_ctx_value("task_name", "oc25")),
-            fmax=float(_ctx_value("fmax", 0.05)),
-            stage1_steps=int(_ctx_value("stage1_steps", 50)),
-            stage2_steps=int(_ctx_value("stage2_steps", 150)),
-            device=str(_ctx_value("device", "cuda")),
-            seed=int(_ctx_value("seed", 42)),
-            placement_z_range=_parse_float_pair(
-                _ctx_value("placement_z_range", [0.7, 1.25]),
-                default=(0.7, 1.25),
-            ),
-            placement_z_scale_by_covalent_radius=_parse_bool(
-                _ctx_value("placement_z_scale_by_covalent_radius", True),
-                default=True,
-            ),
-            min_initial_distance=float(
-                _ctx_value(
-                    "min_initial_distance", MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
-                )
-            ),
-            min_contact_ratio=float(
-                _ctx_value("min_contact_ratio", MIN_CONTACT_RATIO_DEFAULT)
-            ),
-            top_layer_tolerance=float(
-                _ctx_value("top_layer_tolerance", DEFAULT_TOP_LAYER_TOLERANCE)
-            ),
-            symmetry_tolerance=float(
-                _ctx_value("symmetry_tolerance", DEFAULT_SYMMETRY_TOLERANCE)
-            ),
-            site_equivalence_tolerance=float(
-                _ctx_value(
-                    "site_equivalence_tolerance", DEFAULT_SITE_EQUIVALENCE_TOLERANCE
-                )
-            ),
-            hollow_site_dedup_tolerance=float(
-                _ctx_value(
-                    "hollow_site_dedup_tolerance", DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
-                )
-            ),
-            planar_z_variance_threshold=float(
-                _ctx_value(
-                    "planar_z_variance_threshold", DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
-                )
-            ),
+        has_ctx_columns = any(
+            isinstance(key, str) and key.startswith("ctx_") for key in row
         )
+        if has_ctx_columns:
+            ctx = ComputationContext(
+                model_name=str(_ctx_value("model_name", "uma-s-1p2")),
+                task_name=str(_ctx_value("task_name", "oc25")),
+                fmax=float(_ctx_value("fmax", 0.05)),
+                stage1_steps=int(_ctx_value("stage1_steps", 50)),
+                stage2_steps=int(_ctx_value("stage2_steps", 150)),
+                device=str(_ctx_value("device", "cuda")),
+                seed=int(_ctx_value("seed", 42)),
+                placement_z_range=_parse_float_pair(
+                    _ctx_value("placement_z_range", [0.7, 1.25]),
+                    default=(0.7, 1.25),
+                ),
+                placement_z_scale_by_covalent_radius=_parse_bool(
+                    _ctx_value("placement_z_scale_by_covalent_radius", True),
+                    default=True,
+                ),
+                min_initial_distance=float(
+                    _ctx_value(
+                        "min_initial_distance", MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
+                    )
+                ),
+                min_contact_ratio=float(
+                    _ctx_value("min_contact_ratio", MIN_CONTACT_RATIO_DEFAULT)
+                ),
+                top_layer_tolerance=float(
+                    _ctx_value("top_layer_tolerance", DEFAULT_TOP_LAYER_TOLERANCE)
+                ),
+                symmetry_tolerance=float(
+                    _ctx_value("symmetry_tolerance", DEFAULT_SYMMETRY_TOLERANCE)
+                ),
+                site_equivalence_tolerance=float(
+                    _ctx_value(
+                        "site_equivalence_tolerance", DEFAULT_SITE_EQUIVALENCE_TOLERANCE
+                    )
+                ),
+                hollow_site_dedup_tolerance=float(
+                    _ctx_value(
+                        "hollow_site_dedup_tolerance",
+                        DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
+                    )
+                ),
+                planar_z_variance_threshold=float(
+                    _ctx_value(
+                        "planar_z_variance_threshold",
+                        DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
+                    )
+                ),
+            )
+            row_hash = row.get("context_hash")
+            if not _is_missing(row_hash):
+                reconstructed = ctx.settings_hash()
+                if str(row_hash) != reconstructed:
+                    raise ValueError(
+                        "context_hash does not match reconstructed ComputationContext "
+                        f"(row={row_hash!r}, reconstructed={reconstructed!r})"
+                    )
+        else:
+            ctx = ComputationContext()
+            row_hash = row.get("context_hash")
+            if not _is_missing(row_hash):
+                default_hash = ctx.settings_hash()
+                if str(row_hash) != default_hash:
+                    raise ValueError(
+                        "Lean CSV row cannot reconstruct ComputationContext: "
+                        f"context_hash={row_hash!r} does not match default "
+                        f"{default_hash!r}. Export with include_provenance/"
+                        "export_placement_provenance=True to preserve ctx_* columns."
+                    )
 
         placement_id = int(row["placement_id"])
         return cls(

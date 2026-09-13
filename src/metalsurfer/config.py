@@ -139,13 +139,13 @@ def fold_bo_config(config_data: dict[str, Any]) -> BOConfig:
 
 
 def _check_positive(name: str, value: float) -> None:
-    if value <= 0:
-        raise ValueError(f"{name} must be positive, got {value}")
+    if not isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be positive, got {value!r}")
 
 
 def _check_non_negative(name: str, value: float) -> None:
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative, got {value}")
+    if not isfinite(value) or value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value!r}")
 
 
 def _check_positive_int(name: str, value: int) -> None:
@@ -539,6 +539,11 @@ def _validate_bo(root: "AdsorptionConfig") -> None:
 def _validate_io(root: "AdsorptionConfig") -> None:
     _check_positive_int("vasp_nsw", root.vasp_nsw)
     _check_positive_int("vasp_encut", root.vasp_encut)
+    _check_positive("vasp_ediff", root.vasp_ediff)
+    if not isfinite(root.vasp_ediffg) or root.vasp_ediffg == 0:
+        raise ValueError(
+            f"vasp_ediffg must be finite and nonzero, got {root.vasp_ediffg!r}"
+        )
     if len(root.vasp_kpoints) != 3:
         raise ValueError(
             f"vasp_kpoints must be a 3-tuple, got length {len(root.vasp_kpoints)}"
@@ -807,9 +812,13 @@ class AdsorptionConfig:
                 "connectivity_multiplier must be a positive number, "
                 f"got {self.connectivity_multiplier!r}"
             )
-        if self.connectivity_multiplier <= 0:
+        if (
+            not isfinite(self.connectivity_multiplier)
+            or self.connectivity_multiplier <= 0
+        ):
             raise ValueError(
-                f"connectivity_multiplier must be positive, got {self.connectivity_multiplier}"
+                "connectivity_multiplier must be positive, "
+                f"got {self.connectivity_multiplier!r}"
             )
 
         if not self.model_name:

@@ -515,6 +515,23 @@ def test_dedup_threshold_non_negative(field):
         AdsorptionConfig(**{field: -0.1})
 
 
+@pytest.mark.parametrize(
+    "field",
+    ["fmax", "min_initial_distance", "vacuum_box_size", "connectivity_multiplier"],
+)
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_positive_float_rejected(field, bad):
+    with pytest.raises(ValueError, match=f"{field}.*positive"):
+        AdsorptionConfig(**{field: bad})
+
+
+@pytest.mark.parametrize("field", ["energy_dedup_threshold", "rmsd_dedup_threshold"])
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_dedup_threshold_rejected(field, bad):
+    with pytest.raises(ValueError, match=f"{field}.*non-negative"):
+        AdsorptionConfig(**{field: bad})
+
+
 # ---------------------------------------------------------------------------
 # range tuple checks
 # ---------------------------------------------------------------------------
@@ -585,8 +602,32 @@ def test_invalid_connectivity_multiplier_rejected(multiplier):
 
 
 # ---------------------------------------------------------------------------
-# VASP kpoints
+# VASP IO tolerances / kpoints
 # ---------------------------------------------------------------------------
+
+
+def test_vasp_ediff_defaults_positive():
+    assert AdsorptionConfig().vasp_ediff == 1e-6
+
+
+def test_vasp_ediffg_default_force_threshold_accepted():
+    assert AdsorptionConfig().vasp_ediffg == -0.02
+
+
+@pytest.mark.parametrize("bad", [0.0, -1e-6, float("nan"), float("inf")])
+def test_vasp_ediff_invalid_rejected(bad):
+    with pytest.raises(ValueError, match="vasp_ediff.*positive"):
+        AdsorptionConfig(vasp_ediff=bad)
+
+
+@pytest.mark.parametrize("bad", [0.0, float("nan"), float("inf"), float("-inf")])
+def test_vasp_ediffg_invalid_rejected(bad):
+    with pytest.raises(ValueError, match="vasp_ediffg.*finite and nonzero"):
+        AdsorptionConfig(vasp_ediffg=bad)
+
+
+def test_vasp_ediffg_positive_energy_threshold_accepted():
+    assert AdsorptionConfig(vasp_ediffg=1e-3).vasp_ediffg == 1e-3
 
 
 def test_invalid_kpoints_length():

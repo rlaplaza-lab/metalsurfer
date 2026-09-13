@@ -510,9 +510,20 @@ class TestDatasetLogger:
             ds1.flush()
 
             ds2 = DatasetLogger(tmpdir, config=AdsorptionConfig(model_name="uma-s-1p1"))
-            ds2.add_record(make_placement_record(1))
+            mismatched = make_placement_record(1)
+            mismatched.context = ComputationContext.from_config(
+                AdsorptionConfig(model_name="uma-s-1p1")
+            )
+            ds2.add_record(mismatched)
             with pytest.raises(ValueError, match="computation context mismatch"):
                 ds2.flush()
+
+    def test_flush_rejects_record_context_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ds = DatasetLogger(tmpdir, config=AdsorptionConfig(model_name="uma-s-1p1"))
+            ds.add_record(make_placement_record(0))
+            with pytest.raises(ValueError, match="computation context mismatch"):
+                ds.flush()
 
     def test_flush_allow_mixed_context(self, caplog):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -525,12 +536,28 @@ class TestDatasetLogger:
                 config=AdsorptionConfig(model_name="uma-s-1p1"),
                 allow_mixed_context=True,
             )
-            ds2.add_record(make_placement_record(1))
+            mismatched = make_placement_record(1)
+            mismatched.context = ComputationContext.from_config(
+                AdsorptionConfig(model_name="uma-s-1p1")
+            )
+            ds2.add_record(mismatched)
             with caplog.at_level(logging.WARNING, logger="metalsurfer.ml.dataset"):
                 ds2.flush()
             assert "mixed computation context" in caplog.text
             df = pd.read_csv(ds2.csv_path)
             assert len(df) == 2
+
+    def test_flush_allow_mixed_record_context(self, caplog):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ds = DatasetLogger(
+                tmpdir,
+                config=AdsorptionConfig(model_name="uma-s-1p1"),
+                allow_mixed_context=True,
+            )
+            ds.add_record(make_placement_record(0))
+            with caplog.at_level(logging.WARNING, logger="metalsurfer.ml.dataset"):
+                ds.flush()
+            assert "mixed computation context records" in caplog.text
 
 
 class TestLoadDataset:
@@ -915,4 +942,27 @@ class TestAcquisitionMinimization:
 
 def test_from_flat_dict_rejects_corrupt_payload():
     with pytest.raises(KeyError, match="placement_id"):
-        PlacementRecord.from_flat_dict({"schema_version": "not-a-real-record"})
+        PlacementRecord.from_flat_dict({"schema_version": SCHEMA_VERSION})
+
+
+def test_from_flat_dict_rejects_unknown_schema_version():
+    r = make_placement_record(0)
+    flat = r.to_flat_dict(include_provenance=True)
+    flat["schema_version"] = "2.0"
+    with pytest.raises(ValueError, match="Unsupported schema_version"):
+        PlacementRecord.from_flat_dict(flat)
+
+
+def test_from_flat_dict_rejects_lean_nondefault_context_hash():
+    r = make_placement_record(0)
+    flat = r.to_flat_dict(include_provenance=False)
+    flat["context_hash"] = "deadbeefcafe"
+    with pytest.raises(ValueError, match="Lean CSV row cannot reconstruct"):
+        PlacementRecord.from_flat_dict(flat)
+
+
+def test_from_flat_dict_accepts_lean_default_context_hash():
+    r = make_placement_record(0)
+    flat = r.to_flat_dict(include_provenance=False)
+    r2 = PlacementRecord.from_flat_dict(flat)
+    assert r2.context.settings_hash() == ComputationContext().settings_hash()

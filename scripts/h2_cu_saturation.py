@@ -20,8 +20,8 @@ def main():
     # Same surface creation as ethane_ethene_acetylene_cu_binding_energy.py (seed=42)
     config = AdsorptionConfig(
         material_type="slab",
-        model_name="uma-s-1p1",
-        task_name="oc20",
+        model_name="uma-s-1p2",
+        task_name="oc25",
         seed=42,
         num_conformers=1,  # H2 has only one geometry
         num_placements=250,

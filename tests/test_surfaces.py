@@ -664,13 +664,14 @@ class TestDepositAdatoms:
         ):
             deposit_adatoms(slab, "Sn", coverage_fraction=bad_fraction)
 
-    def test_zero_coverage_returns_unmodified(self):
+    def test_zero_coverage_applies_constraints_without_adatoms(self):
         slab = self._layered_slab()
         n_before = len(slab.atoms)
         syms_before = slab.atoms.get_chemical_symbols()
         result = deposit_adatoms(slab, "Sn", coverage_fraction=0.0)
         assert len(result.atoms) == n_before
         assert result.atoms.get_chemical_symbols() == syms_before
+        assert result.finalized is False
         from ase.constraints import FixAtoms
 
         assert any(isinstance(c, FixAtoms) for c in result.atoms.constraints)

@@ -266,6 +266,36 @@ def test_finalize_substrate_applies_pbc_and_constraints():
     assert list(base.get_pbc()) == [True, True, True]
 
 
+def test_relax_substrate_clears_finalized(monkeypatch):
+    from metalsurfer.surface_prep import finalize_substrate, relax_substrate
+
+    finalized = finalize_substrate(
+        make_slab(),
+        AdsorptionConfig(material_type="slab"),
+        align=False,
+        relax_top_layer=False,
+    )
+    assert finalized.finalized is True
+
+    monkeypatch.setattr(
+        "metalsurfer.surface_prep.prep._relax_slab_structure",
+        lambda atoms, *args, **kwargs: atoms.copy(),
+    )
+    relaxed = relax_substrate(
+        finalized,
+        calculator=object(),
+        config=AdsorptionConfig(slab_relaxation_mode="ionic_only"),
+    )
+    assert relaxed.finalized is False
+
+    unchanged = relax_substrate(
+        finalized,
+        calculator=object(),
+        config=AdsorptionConfig(slab_relaxation_mode="none"),
+    )
+    assert unchanged.finalized is True
+
+
 def test_prepare_substrate_multi_element_alloy_requires_host(monkeypatch):
     alloy_slab = make_slab(n_layers=1)
     syms = alloy_slab.get_chemical_symbols()

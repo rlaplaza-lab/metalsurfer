@@ -103,7 +103,7 @@ def minimum_image_fractional_delta(
         delta = delta.copy()
     for dim in range(3):
         if bool(pbc[dim]):
-            delta[..., dim] -= np.round(delta[..., dim])
+            delta[..., dim] -= np.floor(delta[..., dim] + 0.5)
     return delta
 
 

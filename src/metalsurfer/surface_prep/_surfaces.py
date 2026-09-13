@@ -1017,7 +1017,10 @@ def deposit_adatoms(
         )
 
     if coverage_fraction == 0.0:
-        logger.info("Coverage_fraction=0; returning unmodified slab")
+        logger.info(
+            "Coverage_fraction=0; no adatoms added; re-applying surface constraints "
+            "and clearing finalized"
+        )
         frozen = apply_surface_constraints(
             slab.atoms.copy(),
             material_type=config.material_type,

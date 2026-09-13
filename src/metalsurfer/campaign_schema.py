@@ -97,7 +97,19 @@ def _normalize_substrate(raw: Any) -> dict[str, Any]:
             value = substrate[tuple_key]
             if not isinstance(value, list) or len(value) != 3:
                 raise ValueError(f"substrate.{tuple_key} must be a 3-element list")
-            substrate[tuple_key] = tuple(int(v) for v in value)
+            ints: list[int] = []
+            for i, v in enumerate(value):
+                if isinstance(v, bool) or not isinstance(v, (int, float)):
+                    raise ValueError(
+                        f"substrate.{tuple_key}[{i}] must be an integer, got {v!r}"
+                    )
+                if isinstance(v, float) and v != int(v):
+                    raise ValueError(
+                        f"substrate.{tuple_key}[{i}] must be an exact integer, "
+                        f"got {v!r}"
+                    )
+                ints.append(int(v))
+            substrate[tuple_key] = tuple(ints)
     if "slab" in substrate and substrate["slab"] is not None:
         slab_value = substrate["slab"]
         if not isinstance(slab_value, (Atoms, SlabContainer)):
