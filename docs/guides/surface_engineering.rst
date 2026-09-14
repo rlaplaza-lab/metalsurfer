@@ -171,7 +171,7 @@ Energy-ranked variant selection
        coverage_fraction=0.20,
        calculator=calculator,
        config=config,
-       relaxation_mode="ionic_only",  # none, ionic_only; full/cell_only need stress
+       relaxation_mode="ionic_only",
    )
 
    slab = relax_substrate(slab, calculator, config, relaxation_mode="ionic_only")
@@ -190,9 +190,8 @@ Relaxation presets for slab preparation
 - ``"cell_only"``: relax cell with ionic coordinates constrained (requires stress).
 - ``"full"``: relax both ionic coordinates and cell (requires stress).
 
-Default UMA ``uma-s-1p2`` / ``oc25`` does not expose stress; use
-``"ionic_only"`` (or ``"none"``) with that stack. ``"cell_only"`` / ``"full"``
-need a stress-capable model (for example older ``oc20`` heads).
+Default UMA ``oc25`` does not expose stress; use ``"ionic_only"`` (or
+``"none"``) unless you switch to a stress-capable model.
 
 Set defaults once on :class:`~metalsurfer.AdsorptionConfig` or pass explicit
 ``slab_relaxation_*`` / ``adatom_relaxation_*`` kwargs to
@@ -201,7 +200,7 @@ Set defaults once on :class:`~metalsurfer.AdsorptionConfig` or pass explicit
 .. code-block:: python
 
    config = AdsorptionConfig(
-       slab_relaxation_mode="ionic_only",  # default; full/cell_only need stress (not oc25)
+       slab_relaxation_mode="ionic_only",
        slab_relaxation_optimizer="lbfgs",  # lbfgs, bfgs, fire
        slab_relaxation_fmax=0.03,          # optional, falls back to config.fmax
        slab_relaxation_steps=250,
@@ -219,9 +218,7 @@ The ``calculator`` argument is **optional** for both
 :func:`~metalsurfer.surface_prep.prepare_substrate` loads a calculator
 automatically when any relaxation stage needs it.
 
-Use separate relaxation presets for bulk slab creation vs adatom deposition
-when you want a longer ionic equilibration of the clean surface but a shorter
-ionic pass after adding adatoms:
+Use separate relaxation presets for bulk slab creation vs adatom deposition:
 
 .. code-block:: python
 

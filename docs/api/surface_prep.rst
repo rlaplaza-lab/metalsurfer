@@ -226,13 +226,10 @@ Modes
 - ``"cell_only"`` — relax cell with ionic coordinates constrained (requires stress).
 - ``"full"`` — relax both ionic coordinates and cell (requires stress).
 
-Default UMA ``uma-s-1p2`` / ``oc25`` does not expose stress; prefer
-``"ionic_only"``. Use ``"full"`` / ``"cell_only"`` only with a stress-capable
-model.
+Default UMA ``oc25`` does not expose stress; use ``"ionic_only"`` (or
+``"none"``) unless you switch to a stress-capable model.
 
-Example: ionic-only equilibration of the clean slab (default UMA ``oc25`` has
-no stress; use ``"full"`` / ``"cell_only"`` only with a stress-capable model),
-then ionic-only relaxation after adatom deposition:
+Example: equilibrate the clean slab, then relax after adatom deposition:
 
 .. code-block:: python
 

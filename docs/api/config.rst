@@ -92,9 +92,8 @@ Material and substrate
    Controls ASE/MLIP relaxation during :func:`~metalsurfer.surface_prep.prepare_substrate`.
    ``"ionic_only"`` equilibrates substrate ionic positions before campaigns (default);
    ``"none"`` skips prep relaxation (literature slabs, hand-built clusters);
-   ``"cell_only"`` / ``"full"`` allow cell degrees of freedom and require a
-   stress-capable model (default UMA ``oc25`` does not expose stress). See
-   :doc:`../api/surface_prep`.
+   ``"cell_only"`` / ``"full"`` allow cell degrees of freedom but require stress
+   (default UMA ``oc25`` does not). See :doc:`../api/surface_prep`.
 
 ``slab_relaxation_optimizer``
    **Type:** ``Literal["lbfgs", "bfgs", "fire"]`` · **Default:** ``"lbfgs"``
