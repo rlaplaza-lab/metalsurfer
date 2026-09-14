@@ -122,19 +122,30 @@ CI parity
 | ``pytest -m quick`` + coverage   | ``test-quick``                           |
 | ``pytest -m dependency_behavior``| ``test-dependency-behavior``             |
 | ``pytest -m "cpu and mlip"``     | ``test-mlip-cpu`` (skipped if unset)     |
-| ``cd docs && make html``         | ``docs``                                 |
+| ``cd docs && make html``         | ``docs`` (Sphinx ``-W --keep-going``,    |
+|                                  | ``sphinx-lint``, linkcheck)              |
 | ``pytest -m gpu``                | local only                               |
 +----------------------------------+------------------------------------------+
 
 Documentation
 -------------
 
-Install docs extras, then build HTML (Sphinx + Furo)::
+Install docs extras, then build HTML (Sphinx + Furo). ``make html`` defaults to
+the same ``-W --keep-going`` flags as CI and Read the Docs
+(``fail_on_warning: true``)::
 
    pip install -e ".[docs]"
-   cd docs && make html
+   cd docs
+   make html
+   sphinx-lint .
+   sphinx-build -b linkcheck -W --keep-going . _build/linkcheck
 
-Config field drift is also gated by ``pytest -m docs`` (part of the quick suite).
+Keep ``docs/requirements.txt`` in lockstep with the ``[docs]`` extra in
+``pyproject.toml`` (RTD installs the requirements file; a docs test asserts
+they match).
+
+Config / public-API / YAML key drift is gated by ``pytest -m docs`` (part of
+the quick suite).
 
 Fixing failures
 ---------------

@@ -160,7 +160,15 @@ jobs:
           pip install --upgrade pip
           pip install -e ".[docs]"
 
+      - name: Lint RST with sphinx-lint
+        run: sphinx-lint docs/
+
       - name: Build Sphinx HTML
         run: |
           cd docs
           sphinx-build -b html -W --keep-going . _build/html
+
+      - name: Sphinx linkcheck
+        run: |
+          cd docs
+          sphinx-build -b linkcheck -W --keep-going . _build/linkcheck

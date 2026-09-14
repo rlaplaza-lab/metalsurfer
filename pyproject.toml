@@ -53,6 +53,7 @@ docs = [
     "furo",
     "sphinx-autodoc-typehints",
     "sphinx-copybutton",
+    "sphinx-lint",
 ]
 
 [tool.setuptools.packages.find]

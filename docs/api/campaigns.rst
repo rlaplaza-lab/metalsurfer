@@ -88,7 +88,31 @@ Same ``config`` / ``surface_type`` defaults as :func:`~metalsurfer.run_saturatio
 
 .. autofunction:: metalsurfer.run_saturation_bo
 
+Placement helpers
+-----------------
+
+Public entry points for enumerating placement specs and materializing a single
+pose from a :class:`~metalsurfer.models.PlacementSpec`. See
+:doc:`../guides/architecture` for the placement pipeline.
+
+.. autofunction:: metalsurfer.enumerate_placement_specs
+
+.. autofunction:: metalsurfer.generate_placement_from_spec
+
 Results directories
 -------------------
 
 .. autofunction:: metalsurfer.results_dir_for
+
+Logging
+-------
+
+.. autofunction:: metalsurfer.configure_logging
+
+Calculator cell size
+--------------------
+
+Periodic cells must meet a minimum *c* length for calculator compatibility.
+
+.. autodata:: metalsurfer.MIN_CALCULATOR_CELL_C_ANG
+   :annotation:

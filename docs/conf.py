@@ -95,3 +95,17 @@ html_theme_options = {
 # -- General -------------------------------------------------------------------
 
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+
+# -- Linkcheck -----------------------------------------------------------------
+# Badge / CDN hosts are flaky in CI; still fail on broken in-docs and real refs.
+
+linkcheck_ignore = [
+    r"https://img\.shields\.io/.*",
+    r"https://opensource\.org/licenses/MIT",
+    # GitHub blob URLs are often rate-limited from CI runners.
+    r"https://github\.com/rlaplaza-lab/metalsurfer/blob/.*",
+]
+
+linkcheck_retries = 3
+linkcheck_timeout = 30
+linkcheck_workers = 4
