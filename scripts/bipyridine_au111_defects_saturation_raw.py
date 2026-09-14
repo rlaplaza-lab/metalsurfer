@@ -36,7 +36,8 @@ def main():
         stage2_steps=500,
         # Enforce min in-plane separation for auto-resize (default 8 Å).
         min_pbc_image_separation=10.0,
-        slab_relaxation_mode="full",
+        # UMA oc25 does not expose stress; full cell+ionic prep fails.
+        slab_relaxation_mode="ionic_only",
         slab_relaxation_optimizer="lbfgs",
         slab_relaxation_steps=250,
         autobatcher_max_memory_padding=0.8,

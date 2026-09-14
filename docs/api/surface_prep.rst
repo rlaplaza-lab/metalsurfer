@@ -223,16 +223,21 @@ Modes
 
 - ``"none"`` — no relaxation.
 - ``"ionic_only"`` — relax atomic positions with fixed cell (default).
-- ``"cell_only"`` — relax cell with ionic coordinates constrained.
-- ``"full"`` — relax both ionic coordinates and cell.
+- ``"cell_only"`` — relax cell with ionic coordinates constrained (requires stress).
+- ``"full"`` — relax both ionic coordinates and cell (requires stress).
 
-Example: fully equilibrate the clean slab once, then ionic-only relaxation
-after adatom deposition:
+Default UMA ``uma-s-1p2`` / ``oc25`` does not expose stress; prefer
+``"ionic_only"``. Use ``"full"`` / ``"cell_only"`` only with a stress-capable
+model.
+
+Example: ionic-only equilibration of the clean slab (default UMA ``oc25`` has
+no stress; use ``"full"`` / ``"cell_only"`` only with a stress-capable model),
+then ionic-only relaxation after adatom deposition:
 
 .. code-block:: python
 
    config = AdsorptionConfig(
-       slab_relaxation_mode="full",
+       slab_relaxation_mode="ionic_only",
        slab_relaxation_steps=250,
    )
    slab = prepare_substrate(
