@@ -75,6 +75,8 @@ from .site_voronoi import (
 
 logger = logging.getLogger(__name__)
 
+_EMPTY_ATOM_INDICES: tuple[int, ...] = ()
+
 
 def _merge_dedup_site_arrays(
     vertices: np.ndarray,
@@ -97,12 +99,14 @@ def _merge_dedup_site_arrays(
     n_old = len(vertices)
     n_new = len(new_vertices)
     old_atoms = (
-        list(atom_indices) if atom_indices is not None else [() for _ in range(n_old)]
+        list(atom_indices)
+        if atom_indices is not None
+        else [_EMPTY_ATOM_INDICES for _ in range(n_old)]
     )
     new_atoms = (
         list(new_atom_indices)
         if new_atom_indices is not None
-        else [() for _ in range(n_new)]
+        else [_EMPTY_ATOM_INDICES for _ in range(n_new)]
     )
     if n_new == 0:
         return vertices, nn_dists, source_hints, old_atoms
@@ -254,7 +258,7 @@ def _apply_site_mask(
     atoms = (
         list(atom_indices)
         if atom_indices is not None
-        else [() for _ in range(len(vertices))]
+        else [_EMPTY_ATOM_INDICES for _ in range(len(vertices))]
     )
     kept = np.nonzero(mask)[0]
     return (
@@ -291,7 +295,7 @@ def _inject_atop_sites(
     atoms = (
         list(atom_indices)
         if atom_indices is not None
-        else [() for _ in range(len(vertices))]
+        else [_EMPTY_ATOM_INDICES for _ in range(len(vertices))]
     )
     if material_type in ("slab", "nanoparticle") and has_topology_atop:
         return vertices, nn_dists, source_hints, atoms
@@ -612,7 +616,9 @@ def _enumerate_unified_sites(
             symbols=symbols,
         )
     source_hints = ["voronoi"] * len(vertices)
-    atom_indices: list[tuple[int, ...]] = [() for _ in range(len(vertices))]
+    atom_indices: list[tuple[int, ...]] = [
+        _EMPTY_ATOM_INDICES for _ in range(len(vertices))
+    ]
 
     local_tree = KDTree(positions)
 
