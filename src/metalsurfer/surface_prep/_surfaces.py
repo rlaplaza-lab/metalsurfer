@@ -739,6 +739,8 @@ def _relax_slab_structure(
 
     try:
         dyn.run(fmax=fmax, steps=steps)
+    except DependencyMissingError:
+        raise
     except (RuntimeError, ValueError) as exc:
         raise OptimizationError(
             f"{context} relaxation failed in mode={mode!r}: {exc}"

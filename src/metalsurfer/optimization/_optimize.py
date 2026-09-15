@@ -319,6 +319,8 @@ def estimate_parallel_relaxation_capacity(
             padding,
         )
         return n_systems
+    except DependencyMissingError:
+        raise
     except _deps._CAPACITY_PROBE_ERRORS as exc:
         logger.warning(
             "Parallel capacity probe failed (%s); using capacity=%d (not cached)",

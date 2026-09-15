@@ -1022,6 +1022,28 @@ def test_duplicate_removal():
     assert len(filtered) == 1
 
 
+def test_duplicate_removal_rejects_mixed_cells():
+    """COM binning / MIC RMSD share one cell; mixed cells are a contract error."""
+    slab = make_slab(n_layers=1)
+    combined1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    combined2 = combined1.copy()
+    cell2 = np.asarray(combined2.get_cell(), dtype=float).copy()
+    cell2[0, 0] *= 1.25
+    combined2.set_cell(cell2, scale_atoms=False)
+
+    results = [
+        _sr(combined1, -1.0, 0),
+        _sr(combined2, -1.01, 1),
+    ]
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+    )
+    with pytest.raises(ValueError, match="homogeneous cell"):
+        filter_results(results, slab=slab, config=config)
+
+
 def test_duplicate_removal_tracks_removed_duplicates():
     slab = make_slab(n_layers=1)
     combined1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)

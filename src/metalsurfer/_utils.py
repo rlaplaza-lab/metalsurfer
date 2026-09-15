@@ -12,11 +12,19 @@ CELL_DET_EPS: float = 1e-12
 def is_finite_number(value: object) -> bool:
     """Return True if *value* converts to a finite float.
 
+    Accepted types are ``int``, ``float``, ``str``, and NumPy integer /
+    floating scalars. ``bool`` and ``np.bool_`` are rejected (``bool`` is an
+    ``int`` subclass). ``Decimal`` / ``Fraction`` are out of scope for the
+    CSV/JSON callers and return False.
+
     Parameters
     ----------
     value
         Value to test for finite float conversion.
     """
+    # bool is an int subclass; reject before the numeric isinstance check.
+    if isinstance(value, (bool, np.bool_)):
+        return False
     if not isinstance(value, (int, float, str, np.floating, np.integer)):
         return False
     try:

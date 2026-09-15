@@ -11,11 +11,15 @@ from metalsurfer.ml.features import (
     placement_pose_from_features,
 )
 from metalsurfer.ml.schema import PlacementRecord
-from metalsurfer.models import PlacementSpec
+from metalsurfer.models import PlacementPose, PlacementSpec
 from metalsurfer.placement import (
     enumerate_placement_specs,
     generate_placement_from_spec,
     generate_placement_from_spec_with_reason,
+)
+from metalsurfer.placement._constants import (
+    _FRAME_REF_ALIGNMENT_DOT_THRESHOLD,
+    _LATERAL_OFFSET_REF_SWITCH_DOT,
 )
 from metalsurfer.placement._material import material_aware_pbc
 from metalsurfer.placement.geometry import (
@@ -23,6 +27,8 @@ from metalsurfer.placement.geometry import (
     check_initial_contact_quality,
 )
 from metalsurfer.placement.pose import (
+    _apply_lateral_offset,
+    _PlacementContext,
     _validate_posed_adsorbate,
     generate_placement_from_pose,
 )
@@ -541,3 +547,56 @@ def test_resolve_surface_ref_no_site_nanoparticle_uses_radial_com(caplog):
     assert abs(ref - float(np.max(positions[:, 2]))) > 0.5
     assert is_local is False
     assert "without a site" in caplog.text
+
+
+def test_apply_lateral_offset_near_x_normal_stays_finite():
+    """Lateral recovery uses a looser (0.9) ref-switch than site-frame (0.95).
+
+    A normal nearly aligned with +x must still produce a finite in-plane offset
+    rather than a near-zero cross product / NaN basis.
+    """
+    assert _LATERAL_OFFSET_REF_SWITCH_DOT < _FRAME_REF_ALIGNMENT_DOT_THRESHOLD
+
+    # Dot with [1,0,0] ≈ 0.92: between the two thresholds.
+    n_hat = np.array([0.92, 0.0, np.sqrt(1.0 - 0.92**2)], dtype=float)
+    assert abs(float(np.dot(n_hat, [1.0, 0.0, 0.0]))) > _LATERAL_OFFSET_REF_SWITCH_DOT
+    assert (
+        abs(float(np.dot(n_hat, [1.0, 0.0, 0.0]))) < _FRAME_REF_ALIGNMENT_DOT_THRESHOLD
+    )
+
+    pose = PlacementPose(
+        conformer_index=0,
+        site_index=0,
+        site_type=None,
+        placement_index=0,
+        quat_w=1.0,
+        quat_x=0.0,
+        quat_y=0.0,
+        quat_z=0.0,
+        x_abs=0.0,
+        y_abs=0.0,
+        z_fraction=0.5,
+        z_abs=0.0,
+    )
+    ctx = _PlacementContext(
+        pose=pose,
+        site=None,
+        mat_type="nanoparticle",
+        surface_ref=0.0,
+        is_local_ref=False,
+        source="test",
+        canonical_pos=np.zeros((1, 3)),
+        use_sites=False,
+        rotated_pos=np.zeros((1, 3)),
+        normal=n_hat,
+    )
+    slab = Atoms("Cu", positions=[[0.0, 0.0, 0.0]])
+    shifted = _apply_lateral_offset(
+        np.array([0.0, 0.0, 0.0], dtype=float),
+        dx=0.5,
+        dy=0.25,
+        ctx=ctx,
+        slab=slab,
+    )
+    assert np.isfinite(shifted).all()
+    assert float(np.linalg.norm(shifted)) > 0.1

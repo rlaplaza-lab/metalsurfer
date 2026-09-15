@@ -24,17 +24,16 @@ from ._constants import (
     _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE,
     _SITE_Z_OFFSET_FROM_SURFACE_RADIUS,
 )
+from .site_coords import _mean_covalent_radius
 from .site_enumeration import _get_site_surface_radii
 from .site_types import Site
 
 
 def _mean_adsorbate_covalent_radius(mol_symbols: list[str]) -> float:
     """Mean covalent radius of adsorbate symbols, or the adsorbate fallback."""
-    radii = [geom._get_covalent_radius(s) for s in mol_symbols]
-    valid = [r for r in radii if r is not None]
-    if not valid:
-        return float(_ADSORBATE_COVALENT_RADIUS_FALLBACK)
-    return float(np.mean(valid))
+    return _mean_covalent_radius(
+        mol_symbols, fallback=_ADSORBATE_COVALENT_RADIUS_FALLBACK
+    )
 
 
 def _rdkit_chem():

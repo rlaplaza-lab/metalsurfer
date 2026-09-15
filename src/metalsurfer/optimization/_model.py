@@ -107,6 +107,8 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
             model = cast(Any, FairChemModel)(
                 model=model_name, device=dev, task_name=task_name
             )
+    except DependencyMissingError:
+        raise
     except Exception as exc:
         _raise_fairchem_load_error(exc, model_name)
     logger.info("TorchSim model created successfully")

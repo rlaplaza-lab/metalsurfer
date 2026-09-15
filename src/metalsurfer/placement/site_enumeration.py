@@ -46,17 +46,19 @@ from .site_coords import (
     _derive_voronoi_distance_window,
     _frac_to_cart,
     _height_along_slab_normal,
+    _mean_covalent_radius,
     _minimum_image_fractional_delta,
     _pbc_merge_pair_set,
     _periodic_image_offsets,
+    _pore_threshold_from_mean_radius,
     _project_to_slab_plane,
     _shift_along_slab_normal,
     _slab_normal,
     _slab_plane_projectors,
+    _top_layer_tolerance_from_mean_radius,
     _union_find_cluster,
     _wrap_cartesian,
     _wrap_fractional,
-    derive_pore_threshold,
     top_layer_mask_by_normal,
 )
 from .site_types import Site
@@ -486,10 +488,14 @@ def _enumerate_unified_sites(
         )
 
     symbols = atoms.get_chemical_symbols()
-    if top_layer_tolerance is None:
-        top_layer_tolerance = _derive_top_layer_tolerance(symbols)
-    if pore_threshold is None:
-        pore_threshold = derive_pore_threshold(symbols)
+    if top_layer_tolerance is None or pore_threshold is None:
+        # One all-symbols mean for top-layer depth and pore threshold; Voronoi
+        # window may use a top-layer subset and is derived separately.
+        mean_radius = _mean_covalent_radius(symbols)
+        if top_layer_tolerance is None:
+            top_layer_tolerance = _top_layer_tolerance_from_mean_radius(mean_radius)
+        if pore_threshold is None:
+            pore_threshold = _pore_threshold_from_mean_radius(mean_radius)
     z_var_threshold = (
         float(planar_z_variance_threshold)
         if planar_z_variance_threshold is not None
@@ -720,7 +726,8 @@ def _enumerate_unified_sites(
     )
 
     if cell_has_volume(cell):
-        # One batched fractional conversion instead of an ``inv(cell)`` per site.
+        # Keep deterministic raw_unclustered order for dissociative hash/dedup;
+        # clustering re-sorts by Cartesian xyz + site_type.
         all_xyz = np.asarray([s.xyz for s in sites], dtype=float).reshape(-1, 3)
         all_frac = _wrap_fractional(_cart_to_frac(all_xyz, cell), pbc_for_voronoi)
 
@@ -1144,10 +1151,10 @@ def _get_site_surface_radii(
         top_mask = top_layer_mask_by_normal(positions, cell, float(top_depth))
         indices = tuple(int(i) for i in np.nonzero(top_mask)[0])
 
-    radii = [_get_covalent_radius(symbols[int(i)]) for i in indices]
-    radii = [r for r in radii if r is not None]
-    if not radii:
-        site_symbols = [symbols[int(i)] for i in indices]
+    site_symbols = [symbols[int(i)] for i in indices]
+    radii = [_get_covalent_radius(s) for s in site_symbols]
+    valid = [r for r in radii if r is not None]
+    if not valid:
         logger.debug(
             "No positive covalent radii for site surface symbols %r (indices %r); "
             "using mean surface (framework) fallback %.3f Å",
@@ -1156,7 +1163,7 @@ def _get_site_surface_radii(
             _SURFACE_COVALENT_RADIUS_FALLBACK,
         )
         return float(_SURFACE_COVALENT_RADIUS_FALLBACK)
-    return float(np.mean(radii))
+    return float(np.mean(valid))
 
 
 def _compute_site_z_base(
@@ -1183,10 +1190,8 @@ def _compute_site_z_base(
 
     if r_surface is None:
         r_surface = _get_site_surface_radii(slab, site)
-    mol_radii = [_get_covalent_radius(s) for s in mol_symbols]
-    mol_radii = [r for r in mol_radii if r is not None]
-    r_mol = (
-        float(np.mean(mol_radii)) if mol_radii else _ADSORBATE_COVALENT_RADIUS_FALLBACK
+    r_mol = _mean_covalent_radius(
+        mol_symbols, fallback=_ADSORBATE_COVALENT_RADIUS_FALLBACK
     )
     r_sum = r_mol + r_surface
 

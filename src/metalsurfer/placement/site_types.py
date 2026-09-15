@@ -4,6 +4,8 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
+from ._constants import _VECTOR_NORM_EPS
+
 __all__ = [
     "Site",
     "with_symmetry",
@@ -33,7 +35,7 @@ class Site:
         )
         normal = np.asarray(self.normal, dtype=float).reshape(3).copy()
         nrm = float(np.linalg.norm(normal))
-        if nrm > 1e-12:
+        if nrm > _VECTOR_NORM_EPS:
             normal /= nrm
         object.__setattr__(self, "normal", normal)
         object.__setattr__(

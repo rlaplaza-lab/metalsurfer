@@ -223,8 +223,31 @@ _POLICY_PRIOR_TILT_WEIGHT_PER_DEG: float = 0.02
 _POLICY_PRIOR_Z_FRACTION_TARGET: float = 0.5
 _POLICY_PRIOR_Z_FRACTION_WEIGHT: float = 2.0
 
+# Porous site sampling: prefer open pores near the front of the stratified draw.
+_POROUS_SITE_INDEX_WEIGHT: float = 1e-3
+# Working-set size for pore-only site lists before stratified sampling.
+_PORE_SITE_CAP_NUM_PLACEMENTS_DEFAULT: int = 20
+_PORE_SITE_CAP_MULTIPLIER: int = 20
+_PORE_SITE_CAP_FLOOR: int = 80
+
 # Discrete XY jitter attempts when clash descent is disabled.
 _DISTANCE_RECOVERY_XY_ATTEMPTS: int = 4
+# Deterministic mixers for XY recovery RNG (seed ^ placement ^ site).
+_XY_RECOVERY_SEED_MIXER: int = 1_000_003
+_XY_RECOVERY_PLACEMENT_MIXER: int = 97
+_XY_RECOVERY_SITE_MIXER: int = 1_009
+
+# Lateral-offset in-plane basis: switch Cartesian ref when nearly parallel to
+# the site normal. Intentionally looser than
+# ``_FRAME_REF_ALIGNMENT_DOT_THRESHOLD`` (0.95) used by
+# ``compute_surface_site_frame`` — recovery only needs a non-degenerate basis,
+# not a high-quality frame.
+_LATERAL_OFFSET_REF_SWITCH_DOT: float = 0.9
+
+# Round Cartesian positions to this many decimals before hashing (Å).
+# Matches the precision used for dissociative / occupancy position digests.
+_XYZ_HASH_DECIMALS: int = 6
+
 # Packmol-style rigid-body clash descent (recovery + n-tuplet).
 _CLASH_DESCENT_MAXITER: int = 40
 _CLASH_DESCENT_AZIMUTH_BOUND_DEG: float = 20.0

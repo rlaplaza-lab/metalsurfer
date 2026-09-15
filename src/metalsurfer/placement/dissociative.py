@@ -24,6 +24,7 @@ from ._constants import (
     _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
     _VECTOR_NORM_EPS,
+    _XYZ_HASH_DECIMALS,
 )
 from ._material import material_aware_pbc
 from .occupancy import (
@@ -39,6 +40,7 @@ from .pose import (
 from .site_context import SiteContext
 from .site_coords import (
     _deduplicate_points,
+    _mean_covalent_radius,
     _periodic_image_offsets,
     _slab_normal,
     _slab_plane_projectors,
@@ -94,7 +96,7 @@ def _site_outward_normal(
 
 
 def _xyz_array_hash(positions: np.ndarray | None) -> str:
-    """Stable short hash of an ``(n, 3)`` position array (rounded to 1e-6 Å)."""
+    """Stable short hash of an ``(n, 3)`` position array (rounded Å decimals)."""
     if positions is None:
         return "none"
     arr = np.asarray(positions, dtype=float)
@@ -102,7 +104,7 @@ def _xyz_array_hash(positions: np.ndarray | None) -> str:
         return "none"
     if arr.ndim == 1:
         arr = arr.reshape(1, 3)
-    rounded = np.round(arr, 6)
+    rounded = np.round(arr, _XYZ_HASH_DECIMALS)
     return hashlib.sha256(rounded.tobytes()).hexdigest()[:32]
 
 
@@ -353,13 +355,9 @@ def _compute_dissociative_site_pairs(
             float(config.top_layer_tolerance),
         )
         radius_indices = list(np.nonzero(top_mask)[0])
-    top_radii = [
-        r
-        for i in radius_indices
-        if (r := geom._get_covalent_radius(symbols[int(i)])) is not None
-    ]
-    mean_top_radius = (
-        float(np.mean(top_radii)) if top_radii else _SURFACE_COVALENT_RADIUS_FALLBACK
+    top_radii_symbols = [symbols[int(i)] for i in radius_indices]
+    mean_top_radius = _mean_covalent_radius(
+        top_radii_symbols, fallback=_SURFACE_COVALENT_RADIUS_FALLBACK
     )
 
     site_3d = site_xyz
@@ -368,6 +366,7 @@ def _compute_dissociative_site_pairs(
     else:
         _site_query = np.asarray(site_3d, dtype=np.float64)
         _nn_tree = KDTree(_site_query)
+        # SciPy KDTree.query may mutate / view inputs; pass a list copy.
         nn_d, _ = _nn_tree.query(_site_query.tolist(), k=2)
         # len(site_3d) >= 2 (early-return above), so query(..., k=2) is 2-D.
         mean_nn_sep = float(np.mean(np.asarray(nn_d, dtype=float)[:, 1]))

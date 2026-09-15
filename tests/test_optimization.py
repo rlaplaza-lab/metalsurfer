@@ -1602,6 +1602,88 @@ def test_get_inflight_autobatcher_returns_pair_when_unavailable(monkeypatch):
     _a, _b = result
 
 
+def test_get_inflight_autobatcher_propagates_dependency_missing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """DependencyMissingError must not be swallowed as a null batcher pair."""
+    from metalsurfer.exceptions import DependencyMissingError
+    from metalsurfer.optimization import _cache, _deps
+
+    _cache._AUTOBATCHER_CACHE.clear()
+    monkeypatch.setattr(_deps, "ts", object())
+
+    def _raise_dep(*_a, **_k):
+        raise DependencyMissingError("torch-sim", "InFlightAutoBatcher")
+
+    monkeypatch.setattr(_deps, "InFlightAutoBatcher", _raise_dep)
+    with pytest.raises(DependencyMissingError, match="InFlightAutoBatcher"):
+        _cache._get_inflight_autobatcher(object(), 100)
+    _cache._AUTOBATCHER_CACHE.clear()
+
+
+def test_estimate_parallel_relaxation_capacity_propagates_dependency_missing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """DependencyMissingError must not fall through to the capacity fallback."""
+    from metalsurfer.exceptions import DependencyMissingError
+
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
+    monkeypatch.setattr(_deps, "ts", object())
+    monkeypatch.setattr(_deps, "ts_constraints", object())
+    monkeypatch.setattr(
+        _optimize,
+        "_make_state_with_frozen_constraint",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            DependencyMissingError("torch-sim", "capacity_probe")
+        ),
+    )
+    monkeypatch.setattr(
+        _deps,
+        "calculate_memory_scalers",
+        lambda *args, **kwargs: [100.0],
+    )
+    config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
+    atoms = _make_atoms_with_cell()
+    with pytest.raises(DependencyMissingError, match="capacity_probe"):
+        _optimize.estimate_parallel_relaxation_capacity(
+            ts_model=object(),
+            representative_atoms=atoms,
+            config=config,
+            frozen_indices=[],
+        )
+
+
+def test_setup_torchsim_model_propagates_dependency_missing_from_load(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A DependencyMissingError during FairChem load must not become RuntimeError."""
+    import sys
+    import types
+
+    from metalsurfer.exceptions import DependencyMissingError
+    from metalsurfer.optimization import _model
+
+    monkeypatch.setattr(_deps, "ts", object())
+    monkeypatch.setattr(_deps, "torch", MagicMock())
+    monkeypatch.setattr(_model, "_resolve_device", lambda d: "cpu")
+    monkeypatch.setattr(_model, "_ensure_torch_checkpoint_safe_globals", lambda: None)
+
+    class _FakeFairChem:
+        def __init__(self, *args, **kwargs):
+            raise DependencyMissingError("fairchem", "FairChemModel")
+
+    fake_mod = types.ModuleType("torch_sim.models.fairchem")
+    fake_mod.FairChemModel = _FakeFairChem
+    monkeypatch.setitem(sys.modules, "torch_sim.models.fairchem", fake_mod)
+    fake_models = types.ModuleType("torch_sim.models")
+    fake_models.fairchem = fake_mod
+    monkeypatch.setitem(sys.modules, "torch_sim.models", fake_models)
+    monkeypatch.setitem(sys.modules, "torch_sim", types.ModuleType("torch_sim"))
+
+    with pytest.raises(DependencyMissingError, match="FairChemModel"):
+        _model.setup_torchsim_model(model_name="uma-s-1p2", device="cpu")
+
+
 def test_optimize_and_evaluate_skips_preclear_when_saturation_reuse(monkeypatch):
     """Reuse path must not wipe the autobatcher cache before each BO batch."""
     from metalsurfer.workflow import shared as shared_mod

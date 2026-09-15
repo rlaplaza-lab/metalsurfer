@@ -3,6 +3,9 @@
 import json
 from typing import Any
 
+# Case-insensitive missing tokens after strip; empty string is always missing.
+_MISSING_TOKENS = frozenset({"", "nan", "none", "null", "n/a"})
+
 
 def is_missing(value: Any) -> bool:
     """Check whether a CSV cell value represents a missing entry.
@@ -14,8 +17,8 @@ def is_missing(value: Any) -> bool:
     """
     if value is None:
         return True
-    text = str(value).strip()
-    return text in {"", "nan", "none", "None"}
+    text = str(value).strip().lower()
+    return text in _MISSING_TOKENS
 
 
 def with_default(value: Any, default: Any) -> Any:
@@ -92,11 +95,17 @@ def parse_float_pair(value: Any, default: tuple[float, float]) -> tuple[float, f
     if is_missing(value):
         return default
     if isinstance(value, (list, tuple)) and len(value) == 2:
-        return float(value[0]), float(value[1])
+        try:
+            return float(value[0]), float(value[1])
+        except (TypeError, ValueError):
+            return default
     text = str(value).strip().strip("[]()")
     parts = [p.strip() for p in text.split(",") if p.strip()]
     if len(parts) == 2:
-        return float(parts[0]), float(parts[1])
+        try:
+            return float(parts[0]), float(parts[1])
+        except ValueError:
+            return default
     return default
 
 

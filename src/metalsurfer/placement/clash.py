@@ -47,24 +47,34 @@ def clash_bounds_for_adsorbate(
     *,
     z_window: float | None = None,
     footprint_radius: float | None = None,
+    moving_radii: np.ndarray | None = None,
 ) -> tuple[tuple[float, float], tuple[float, float], float]:
     """Return ``(x_range, y_range, dz_bound)`` scaled by footprint / height window.
 
     Zero-width XY ranges stay disabled (height-only recovery).
+    When *footprint_radius* is missing or near-zero, prefer *moving_radii* (mean)
+    over recomputing atom radii; fall back to the adsorbate mean-radius default
+    for empty single-atom / unknown-radius cases.
     """
     min_sep = float(config.min_adsorbate_separation)
     r_char = float(footprint_radius) if footprint_radius is not None else 0.0
     if r_char <= _DISTANCE_ZERO_EPS:
-        radii = atom_radii_for_symbols(
-            list(adsorbate.get_chemical_symbols()),
-            min_separation=min_sep,
-            use_vdw=False,
+        moving = (
+            np.asarray(moving_radii, dtype=float) if moving_radii is not None else None
         )
-        r_char = (
-            float(np.mean(radii))
-            if radii.size
-            else max(min_sep / 2.0, _ADSORBATE_COVALENT_RADIUS_FALLBACK)
-        )
+        if moving is not None and moving.size:
+            r_char = float(np.mean(moving))
+        else:
+            radii = atom_radii_for_symbols(
+                list(adsorbate.get_chemical_symbols()),
+                min_separation=min_sep,
+                use_vdw=False,
+            )
+            r_char = (
+                float(np.mean(radii))
+                if radii.size
+                else max(min_sep / 2.0, _ADSORBATE_COVALENT_RADIUS_FALLBACK)
+            )
 
     lat = float(_CLASH_LATERAL_FOOTPRINT_SCALE) * r_char
     x_lo, x_hi = (float(v) for v in config.placement_x_range)

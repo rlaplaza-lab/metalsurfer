@@ -16,8 +16,12 @@ from . import geometry as geom
 from ._constants import (
     _DISTANCE_RECOVERY_XY_ATTEMPTS,
     _DISTANCE_ZERO_EPS,
+    _LATERAL_OFFSET_REF_SWITCH_DOT,
     _PARALLEL_Z_MIN_HI_MARGIN,
     _VECTOR_NORM_EPS,
+    _XY_RECOVERY_PLACEMENT_MIXER,
+    _XY_RECOVERY_SEED_MIXER,
+    _XY_RECOVERY_SITE_MIXER,
     RECOVERABLE_DISTANCE_REASONS,
 )
 from ._material import material_aware_pbc, material_type_for_placement
@@ -645,9 +649,9 @@ def _xy_recovery_offsets(
     if abs(x_hi - x_lo) < _DISTANCE_ZERO_EPS and abs(y_hi - y_lo) < _DISTANCE_ZERO_EPS:
         return []
     rng = random.Random(
-        (int(config.seed) * 1_000_003)
-        ^ (int(placement_index) * 97)
-        ^ (int(site_index) * 1_009)
+        (int(config.seed) * _XY_RECOVERY_SEED_MIXER)
+        ^ (int(placement_index) * _XY_RECOVERY_PLACEMENT_MIXER)
+        ^ (int(site_index) * _XY_RECOVERY_SITE_MIXER)
     )
     return [
         (rng.uniform(x_lo, x_hi), rng.uniform(y_lo, y_hi))
@@ -668,7 +672,7 @@ def _apply_lateral_offset(
     n_hat = _placement_normal(ctx, slab)
     # Build an orthonormal in-plane basis from Cartesian dx/dy.
     ref = np.array([1.0, 0.0, 0.0], dtype=float)
-    if abs(float(np.dot(ref, n_hat))) > 0.9:
+    if abs(float(np.dot(ref, n_hat))) > _LATERAL_OFFSET_REF_SWITCH_DOT:
         ref = np.array([0.0, 1.0, 0.0], dtype=float)
     u = np.cross(n_hat, ref)
     u = u / float(np.linalg.norm(u))
@@ -875,6 +879,7 @@ def _try_clash_descent_recovery(
         config,
         z_window=z_window,
         footprint_radius=footprint,
+        moving_radii=moving_r,
     )
     site_frame = geom.compute_surface_site_frame(_placement_normal(ctx, slab))
     new_pos, az_delta, ok = resolve_rigid_clash(

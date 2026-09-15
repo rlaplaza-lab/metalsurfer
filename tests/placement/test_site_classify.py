@@ -607,3 +607,31 @@ def test_build_classification_context_builds_images_once_porous(monkeypatch):
     dists_ref, _ = KDTree(images_ref).query(vertices, k=min(k_class, len(images_ref)))
     class_dists_ref = np.atleast_2d(np.asarray(dists_ref, dtype=float))
     assert np.allclose(ctx.class_dists, class_dists_ref)
+
+
+def test_periodic_local_normals_builds_images_when_omitted():
+    """Defensive fallback: omitted images/image_idx still builds via site_coords."""
+    from metalsurfer.placement import site_classify as sc
+
+    rng = np.random.default_rng(1)
+    cell = np.diag([6.0, 6.0, 6.0])
+    pbc = np.array([True, True, True])
+    positions = rng.uniform(0, 6, size=(24, 3))
+    local_tree = KDTree(positions)
+    vertices = positions[:4] + 0.02
+    k = min(_NORMAL_K_NEIGHBOURS, len(positions))
+
+    normals = sc._periodic_local_normals(
+        vertices,
+        positions,
+        local_tree,
+        cell=cell,
+        pbc=pbc,
+        k=k,
+        images=None,
+        image_idx=None,
+    )
+    assert normals.shape == (len(vertices), 3)
+    assert np.isfinite(normals).all()
+    norms = np.linalg.norm(normals, axis=1)
+    assert np.all(norms > 0.5)

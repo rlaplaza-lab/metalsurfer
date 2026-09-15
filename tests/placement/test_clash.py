@@ -1,6 +1,7 @@
 """Unit tests for Packmol-style overlap penalty and rigid-body clash descent."""
 
 import numpy as np
+import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
@@ -208,6 +209,35 @@ def test_clash_bounds_scale_with_molecule_size():
     assert clash_bounds_for_adsorbate(
         water, pinned, z_window=2.0, footprint_radius=r_w
     )[0] == (0.0, 0.0)
+
+
+def test_clash_bounds_uses_supplied_moving_radii_for_zero_footprint(monkeypatch):
+    """Zero-footprint path must reuse moving_radii instead of recomputing."""
+    from metalsurfer.placement import clash as clash_mod
+    from metalsurfer.placement.clash import clash_bounds_for_adsorbate
+
+    mono = Atoms("O", positions=[[0.0, 0.0, 0.0]])
+    cfg = AdsorptionConfig(placement_x_range=(-0.5, 0.5), placement_y_range=(-0.5, 0.5))
+    supplied = np.array([1.25], dtype=float)
+    calls: list[int] = []
+    orig = clash_mod.atom_radii_for_symbols
+
+    def counting(*a, **k):
+        calls.append(1)
+        return orig(*a, **k)
+
+    monkeypatch.setattr(clash_mod, "atom_radii_for_symbols", counting)
+    x_range, y_range, dz = clash_bounds_for_adsorbate(
+        mono,
+        cfg,
+        z_window=None,
+        footprint_radius=0.0,
+        moving_radii=supplied,
+    )
+    assert calls == []
+    assert x_range[1] == pytest.approx(1.25)
+    assert y_range[1] == pytest.approx(1.25)
+    assert dz == pytest.approx(1.25)
 
 
 def test_tuplet_clash_rescue_floor_scales_with_radii():

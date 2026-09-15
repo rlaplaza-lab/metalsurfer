@@ -670,6 +670,14 @@ def _deduplicate_by_energy_and_rmsd(
     deduplicated: list[ScreeningResult] = []
 
     ref_cell = np.asarray(sorted_results[0].atoms.get_cell(), dtype=float)
+    # COM binning and MIC RMSD share one cell; mixed-cell inputs are undefined.
+    for entry in sorted_results[1:]:
+        other = np.asarray(entry.atoms.get_cell(), dtype=float)
+        if other.shape != ref_cell.shape or not np.allclose(other, ref_cell):
+            raise ValueError(
+                "filter_results deduplication requires a homogeneous cell; "
+                "got mixed cells across ScreeningResult.atoms"
+            )
     pbc = _pbc_for_cell(material_type, ref_cell)
     bin_size = float(rmsd_dedup_threshold) if rmsd_dedup_threshold > 0.0 else 0.1
 

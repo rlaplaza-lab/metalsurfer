@@ -270,10 +270,21 @@ def _deduplicate_points(
 # ---------------------------------------------------------------------------
 
 
-def _mean_covalent_radius(symbols: list[str]) -> float:
+def _mean_covalent_radius(
+    symbols: list[str],
+    *,
+    fallback: float | None = None,
+) -> float:
+    """Mean of positive covalent radii for *symbols*.
+
+    When no tabulated positive radii exist, return *fallback* if provided;
+    otherwise raise ``ValueError`` (Voronoi window derivation has no safe default).
+    """
     radii = [_get_covalent_radius(s) for s in symbols]
     valid = [r for r in radii if r is not None]
     if not valid:
+        if fallback is not None:
+            return float(fallback)
         raise ValueError(
             f"No positive covalent radii for symbols {symbols!r}; "
             "cannot derive Voronoi distance window"
@@ -307,9 +318,8 @@ def _derive_voronoi_distance_window(
     return float(probe_radius), float(max(max_distance, probe_radius))
 
 
-def _derive_top_layer_tolerance(symbols: list[str]) -> float:
-    """Covalent-radius-derived top-layer depth, capped for FCC-like slabs."""
-    mean_radius = _mean_covalent_radius(symbols)
+def _top_layer_tolerance_from_mean_radius(mean_radius: float) -> float:
+    """Covalent-radius-derived top-layer depth from a precomputed mean radius."""
     return float(
         min(
             max(
@@ -321,6 +331,19 @@ def _derive_top_layer_tolerance(symbols: list[str]) -> float:
     )
 
 
+def _derive_top_layer_tolerance(symbols: list[str]) -> float:
+    """Covalent-radius-derived top-layer depth, capped for FCC-like slabs."""
+    return _top_layer_tolerance_from_mean_radius(_mean_covalent_radius(symbols))
+
+
+def _pore_threshold_from_mean_radius(mean_radius: float) -> float:
+    """Pore classification threshold from a precomputed mean covalent radius."""
+    return max(
+        _PORE_THRESHOLD_MIN_ANGSTROM,
+        _PORE_THRESHOLD_COVALENT_SCALE * mean_radius,
+    )
+
+
 def derive_pore_threshold(symbols: list[str]) -> float:
     """Return pore classification threshold from mean covalent radius.
 
@@ -329,7 +352,4 @@ def derive_pore_threshold(symbols: list[str]) -> float:
     symbols
         List of element symbols.
     """
-    mean_radius = _mean_covalent_radius(symbols)
-    return max(
-        _PORE_THRESHOLD_MIN_ANGSTROM, _PORE_THRESHOLD_COVALENT_SCALE * mean_radius
-    )
+    return _pore_threshold_from_mean_radius(_mean_covalent_radius(symbols))

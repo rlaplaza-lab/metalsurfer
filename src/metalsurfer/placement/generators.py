@@ -18,6 +18,12 @@ from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
 from . import geometry as geom
 from . import policy
+from ._constants import (
+    _PORE_SITE_CAP_FLOOR,
+    _PORE_SITE_CAP_MULTIPLIER,
+    _PORE_SITE_CAP_NUM_PLACEMENTS_DEFAULT,
+    _POROUS_SITE_INDEX_WEIGHT,
+)
 from ._material import material_aware_pbc
 from .dissociative import (
     _generate_dissociative_placement_from_spec,
@@ -289,7 +295,14 @@ def _spec_grid_info(
                     pore_indices.sort(
                         key=lambda i: -float(unique_sites[i].nn_distance or 0.0)
                     )
-                    pore_cap = max(int(config.num_placements or 20) * 20, 80)
+                    pore_cap = max(
+                        int(
+                            config.num_placements
+                            or _PORE_SITE_CAP_NUM_PLACEMENTS_DEFAULT
+                        )
+                        * _PORE_SITE_CAP_MULTIPLIER,
+                        _PORE_SITE_CAP_FLOOR,
+                    )
                     site_indices = pore_indices[:pore_cap]
     else:
         site_indices = []
@@ -421,7 +434,9 @@ def enumerate_placement_specs(
         seed=eff_seed,
         preferred_site_types=("pore",) if config.material_type == "porous" else (),
         # Quality-sorted pore lists: keep open pores near the front of the draw.
-        site_index_weight=1e-3 if config.material_type == "porous" else 0.0,
+        site_index_weight=(
+            _POROUS_SITE_INDEX_WEIGHT if config.material_type == "porous" else 0.0
+        ),
         conformer_energies=conformer_energies,
         conformer_weighting=config.conformer_weighting,
         boltzmann_temperature=config.boltzmann_temperature,

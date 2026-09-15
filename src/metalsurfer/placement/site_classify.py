@@ -95,7 +95,8 @@ def _periodic_local_normals(
 
     *images* / *image_idx* may be supplied from a shared build (so the normals
     path reuses the same periodic-image KDTree as the classifier). When omitted,
-    they are built here from ``local_tree``.
+    they are built here via :func:`_build_periodic_images`. Production callers
+    (``_build_classification_context``) always supply both when PBC is active.
     """
     if len(vertices) == 0:
         return np.empty((0, 3), dtype=float)

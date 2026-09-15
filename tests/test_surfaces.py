@@ -507,6 +507,29 @@ def test_relax_slab_structure_restores_caller_constraints():
     assert list(relaxed.get_pbc()) == [True, True, False]
 
 
+def test_relax_slab_structure_propagates_dependency_missing():
+    """DependencyMissingError from the optimizer must not become OptimizationError."""
+    from metalsurfer.exceptions import DependencyMissingError
+
+    class _DepCalc:
+        def get_potential_energy(self, atoms, **kwargs):
+            return 0.0
+
+        def get_forces(self, atoms, **kwargs):
+            raise DependencyMissingError("torch-sim", "TorchSimCalculator.calculate")
+
+    slab = make_slab(nx=2, ny=2, n_layers=1)
+    with pytest.raises(DependencyMissingError, match="TorchSimCalculator"):
+        _relax_slab_structure(
+            slab,
+            _DepCalc(),
+            mode="ionic_only",
+            optimizer_name="fire",
+            fmax=0.1,
+            steps=1,
+        )
+
+
 # ---------------------------------------------------------------------------
 # deposit_adatoms
 # ---------------------------------------------------------------------------

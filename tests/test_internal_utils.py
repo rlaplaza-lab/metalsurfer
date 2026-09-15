@@ -4,6 +4,9 @@ These raise coverage on small helper modules and lock their behaviour so
 refactors cannot silently change parsing/validation semantics.
 """
 
+from decimal import Decimal
+from fractions import Fraction
+
 import numpy as np
 import pytest
 
@@ -40,25 +43,41 @@ def test_is_finite_number_rejects_non_numeric_and_non_finite():
     assert is_finite_number(np.nan) is False
 
 
+def test_is_finite_number_rejects_bool_and_decimal_fraction():
+    """bool is an int subclass; Decimal/Fraction are out of CSV/JSON scope."""
+    assert is_finite_number(True) is False
+    assert is_finite_number(False) is False
+    assert is_finite_number(np.bool_(True)) is False
+    assert is_finite_number(Decimal("1.5")) is False
+    assert is_finite_number(Fraction(3, 2)) is False
+
+
 def test_is_missing_and_with_default():
     assert is_missing(None) is True
     assert is_missing("nan") is True
+    assert is_missing("NaN") is True
+    assert is_missing("NULL") is True
+    assert is_missing("N/A") is True
+    assert is_missing("None") is True
     assert is_missing(0) is False
     assert is_missing("") is True
     assert with_default(None, 7) == 7
     assert with_default("nan", 7) == 7
+    assert with_default("NaN", 7) == 7
     assert with_default(3, 7) == 3
 
 
 def test_float_or_falls_back_to_default_on_missing():
     assert float_or(None, 1.5) == 1.5
     assert float_or("nan", 1.5) == 1.5
+    assert float_or("NaN", 1.5) == 1.5
     assert float_or("2.5", 1.5) == 2.5
 
 
 def test_int_or_none_parses_or_returns_none():
     assert int_or_none(None) is None
     assert int_or_none("nan") is None
+    assert int_or_none("NaN") is None
     assert int_or_none("42") == 42
     assert int_or_none(42) == 42
     assert int_or_none(3.9) == 3
@@ -92,6 +111,8 @@ def test_parse_float_pair_covers_all_branches():
     assert parse_float_pair("[3.0, 4.0]", (0.0, 0.0)) == (3.0, 4.0)
     assert parse_float_pair("garbage", (9.0, 9.0)) == (9.0, 9.0)
     assert parse_float_pair("1.0", (9.0, 9.0)) == (9.0, 9.0)
+    assert parse_float_pair("1.0, foo", (9.0, 9.0)) == (9.0, 9.0)
+    assert parse_float_pair(("1.0", "bar"), (9.0, 9.0)) == (9.0, 9.0)
 
 
 def test_parse_fragment_positions_covers_all_branches():

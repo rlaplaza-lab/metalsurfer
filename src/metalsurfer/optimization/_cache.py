@@ -37,6 +37,7 @@ import threading
 from typing import Any
 
 from ..config import AdsorptionConfig
+from ..exceptions import DependencyMissingError
 from . import _deps
 from ._validation import _device_is_cuda, _device_key
 
@@ -278,6 +279,8 @@ def _get_inflight_autobatcher(
                 return existing, key
             _AUTOBATCHER_CACHE[key] = ab
         return ab, key
+    except DependencyMissingError:
+        raise
     except RuntimeError as exc:
         logger.warning(
             "Failed to create InFlightAutoBatcher (%s): %s",
