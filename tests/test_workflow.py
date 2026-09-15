@@ -928,6 +928,8 @@ class TestFormatFailureSummary:
             out,
             [
                 "  Stage: validation",
+                "  Candidate specs: 40",
+                "  Valid pool: 30",
                 "  BO evaluated: 12",
                 "  BO valid results: 0",
             ],
@@ -1032,6 +1034,12 @@ class TestLoadMolecules:
         assert molecules == []
         assert smiles == []
         assert status == "empty_file"
+
+    def test_duplicate_names_raise(self, workdir):
+        csv_path = workdir / "smiles.csv"
+        csv_path.write_text("C,methane\nCC,methane\n")
+        with pytest.raises(ValueError, match="duplicate name"):
+            load_molecules(str(csv_path), skip_existing=False)
 
 
 # ---------------------------------------------------------------------------

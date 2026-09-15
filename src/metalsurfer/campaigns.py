@@ -333,14 +333,13 @@ def _save_benchmark_dataset_if_requested(
 ) -> None:
     if not config.save_benchmark_dataset:
         return
-    flattened = [
-        run
-        for sr in results
-        if isinstance(sr, SaturationRunResult)
-        for run in sr.to_flattened_runs()
-    ]
+    flattened = [run for sr in results for run in sr.to_flattened_runs()]
     if flattened:
         save_summary_results(flattened, surface_type=surface_type, config=config)
+    else:
+        logger.warning(
+            "save_benchmark_dataset=True but no flattened screening runs to write"
+        )
 
 
 def _run_saturation_campaign(
@@ -389,10 +388,13 @@ def _run_saturation_campaign(
             mode=mode,
             n_molecules=len(runs),
             molecules=[
-                run.molecules[0]
-                if isinstance(run, MultiMolSaturationRunResult)
-                else run.molecule
+                name
                 for run in runs
+                for name in (
+                    run.molecules
+                    if isinstance(run, MultiMolSaturationRunResult)
+                    else [run.molecule]
+                )
             ],
         )
         if run_metadata:

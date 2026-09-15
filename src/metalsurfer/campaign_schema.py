@@ -9,6 +9,7 @@ from typing import Any, Literal
 import yaml
 from ase import Atoms
 
+from ._utils import require_unique_molecule_names
 from .config import AdsorptionConfig, fold_bo_config
 from .result_paths import results_dir_for
 from .surface_prep import SlabContainer
@@ -83,6 +84,7 @@ def _parse_molecules(raw: Any) -> list[tuple[str, str]]:
         if not isinstance(name, str) or not name.strip():
             raise ValueError(f"molecules[{index}].name must be a non-empty string")
         pairs.append((smiles.strip(), name.strip()))
+    require_unique_molecule_names([name for _, name in pairs])
     return pairs
 
 

@@ -9,6 +9,8 @@ import numpy as np
 from metalsurfer.ml.schema import ComputationContext, PlacementRecord
 from metalsurfer.models import (
     BOTransferInfo,
+    MultiMolSaturationRunResult,
+    MultiMolSaturationStepResult,
     PlacementDescriptor,
     SaturationRunResult,
     SaturationStepResult,
@@ -232,4 +234,56 @@ def make_saturation_run(
         steps=list(steps),
         n_molecules_at_saturation=n_molecules_at_saturation,
         final_slab_atoms=final_slab_atoms,
+    )
+
+
+def make_multi_mol_saturation_run(
+    *,
+    molecules: list[str] | None = None,
+    steps: list[MultiMolSaturationStepResult] | None = None,
+    n_molecules_at_saturation: int | None = None,
+    final_slab_atoms=None,
+    molecule_counts: dict[str, int] | None = None,
+    winning_molecule: str | None = None,
+    energy_adsorption: float = -1.0,
+) -> MultiMolSaturationRunResult:
+    """Build a MultiMolSaturationRunResult with one step by default."""
+    from .conftest import make_placement_descriptor, make_screening_result, make_slab
+
+    molecules = list(molecules) if molecules is not None else ["water"]
+    winner = winning_molecule or molecules[0]
+    if steps is None:
+        best = make_screening_result(
+            molecule=winner,
+            placement_id=0,
+            energy_adsorption=energy_adsorption,
+            distance=2.5,
+            placement_descriptor=make_placement_descriptor(placement_id=0),
+        )
+        steps = [
+            MultiMolSaturationStepResult(
+                step=1,
+                winning_molecule=winner,
+                n_molecules_on_slab=0,
+                best_result=best,
+                per_molecule_results={
+                    name: [best] if name == winner else [] for name in molecules
+                },
+                per_molecule_budgets={name: 100 for name in molecules},
+                bo_transfer_enabled=False,
+            )
+        ]
+    if n_molecules_at_saturation is None:
+        n_molecules_at_saturation = len(steps)
+    if final_slab_atoms is None:
+        final_slab_atoms = make_slab()
+    if molecule_counts is None:
+        molecule_counts = {name: 0 for name in molecules}
+        molecule_counts[winner] = n_molecules_at_saturation
+    return MultiMolSaturationRunResult(
+        molecules=molecules,
+        steps=list(steps),
+        n_molecules_at_saturation=n_molecules_at_saturation,
+        final_slab_atoms=final_slab_atoms,
+        molecule_counts=molecule_counts,
     )

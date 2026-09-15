@@ -1318,9 +1318,17 @@ def generate_placement_from_pose(
 
     adsorbate = conformers[pose.conformer_index].copy()
     symbols = adsorbate.get_chemical_symbols()
-    canonical_pos = geom.compute_canonical_molecular_frame(
-        adsorbate.get_positions(), symbols=symbols
+    cached_frame = (
+        pose_cache.frames.get(int(pose.conformer_index))
+        if pose_cache is not None
+        else None
     )
+    if cached_frame is not None:
+        canonical_pos, _shape = cached_frame
+    else:
+        canonical_pos = geom.compute_canonical_molecular_frame(
+            adsorbate.get_positions(), symbols=symbols
+        )
 
     ctx = _context_from_pose(
         pose,

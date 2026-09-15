@@ -18,10 +18,10 @@ from metalsurfer.config import AdsorptionConfig
 from metalsurfer.models import (
     MultiMolSaturationRunResult,
     SaturationRunResult,
-    SaturationStepResult,
 )
 from metalsurfer.workflow.shared import MoleculeScreenOutcome
 from tests.conftest import make_screening_result, make_slab
+from tests.factories import make_multi_mol_saturation_run, make_saturation_run
 
 
 def _patch_binding_bootstrap(monkeypatch, slab_container, ref=None):
@@ -191,32 +191,21 @@ def test_run_saturation_passes_config_to_save_saturation_results(monkeypatch):
     assert captured["n_results"] == 1
 
 
-def test_run_saturation_save_benchmark_dataset(monkeypatch):
+@pytest.mark.parametrize(
+    ("multi_mol", "expected_label"),
+    [(False, "demo_step_001"), (True, "demo_other_step_001")],
+)
+def test_run_saturation_save_benchmark_dataset(monkeypatch, multi_mol, expected_label):
     captured: dict[str, object] = {}
 
     def fake_save_summary(run_results, surface_type="manual", config=None):
         captured["summary_runs"] = run_results
         captured["surface_type"] = surface_type
 
-    placement = make_screening_result(energy_adsorption=-1.0)
-
     def fake_screening(**_kwargs):
-        return [
-            SaturationRunResult(
-                molecule="demo",
-                steps=[
-                    SaturationStepResult(
-                        step=1,
-                        molecule="demo",
-                        n_molecules_on_slab=1,
-                        best_result=placement,
-                        all_results=[placement],
-                    )
-                ],
-                n_molecules_at_saturation=1,
-                final_slab_atoms=make_slab(),
-            )
-        ]
+        if multi_mol:
+            return [make_multi_mol_saturation_run(molecules=["demo", "other"])]
+        return [make_saturation_run(molecule="demo")]
 
     monkeypatch.setattr(
         "metalsurfer.campaigns.save_summary_results",
@@ -248,9 +237,7 @@ def test_run_saturation_save_benchmark_dataset(monkeypatch):
     assert captured["surface_type"] == "st_bench"
     flattened = captured["summary_runs"]
     assert len(flattened) == 1
-    assert flattened[0].molecule == "demo_step_001"
-    rows = flattened[0].to_rows()
-    assert rows[0]["molecule"] == "demo_step_001"
+    assert flattened[0].molecule == expected_label
 
 
 def test_run_saturation_write_settings_persists_json(tmp_path, monkeypatch):
@@ -268,14 +255,7 @@ def test_run_saturation_write_settings_persists_json(tmp_path, monkeypatch):
                 t_ref_s=1.0,
                 t_total_s=3.5,
             )
-        return [
-            SaturationRunResult(
-                molecule="demo",
-                steps=[],
-                n_molecules_at_saturation=0,
-                final_slab_atoms=make_slab(),
-            )
-        ]
+        return [make_multi_mol_saturation_run(molecules=["demo", "other"])]
 
     monkeypatch.setattr(
         "metalsurfer.campaigns.run_saturation_screening",
@@ -306,6 +286,7 @@ def test_run_saturation_write_settings_persists_json(tmp_path, monkeypatch):
     with open(path) as f:
         meta = json.load(f)
     assert meta["input"]["n_molecules"] == 2
+    assert meta["molecules"] == ["demo", "other"]
     assert meta["results"]["total_configurations"] == 7
     assert meta["timing"]["reference_energies_s"] == pytest.approx(1.0)
     assert meta["timing"]["total_wall_clock_s"] == pytest.approx(3.5)
@@ -662,6 +643,112 @@ def test_bootstrap_screening_run_validates_substrate_before_model(monkeypatch):
             AdsorptionConfig(),
         )
     assert model_called["value"] is False
+
+
+def test_bootstrap_screening_run_reuses_torchsim_calculator(monkeypatch):
+    """Reuse TorchSimCalculator when setup identity matches config."""
+    from metalsurfer.optimization import TorchSimCalculator
+    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.workflow.shared import _bootstrap_screening_run
+    from tests.conftest import make_slab
+
+    config = AdsorptionConfig(model_name="uma-s-1p1", device="cpu", task_name="oc20")
+    fake_model = object()
+    calc = TorchSimCalculator(
+        fake_model,
+        model_name=config.model_name,
+        device=config.device,
+        task_name=config.task_name,
+    )
+
+    slab = SlabContainer(make_slab())
+    slab.atoms.calc = calc
+    slab.finalized = True
+
+    setup_called = {"value": False}
+
+    def fake_setup(*_args, **_kwargs):
+        setup_called["value"] = True
+        return object(), object()
+
+    def fake_ref(*_args, **_kwargs):
+        from metalsurfer.models import ReferenceEnergies
+
+        return ReferenceEnergies(slab_energy=0.0)
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.shared.setup_single_model",
+        fake_setup,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.shared.accept_substrate_for_api",
+        lambda s, config=None: s,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.reference.calculate_reference_energies",
+        fake_ref,
+    )
+
+    bootstrap = _bootstrap_screening_run(slab, [("C", "demo")], config)
+    assert setup_called["value"] is False
+    assert bootstrap.calculator is calc
+    assert bootstrap.ts_model is fake_model
+
+
+def test_bootstrap_screening_run_reloads_on_model_mismatch(monkeypatch):
+    """Do not reuse a calculator built for a different model/device/task."""
+    from metalsurfer.optimization import TorchSimCalculator
+    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.workflow.shared import _bootstrap_screening_run
+    from tests.conftest import make_slab
+
+    attached = TorchSimCalculator(
+        object(),
+        model_name="uma-s-1p1",
+        device="cpu",
+        task_name="oc20",
+    )
+    slab = SlabContainer(make_slab())
+    slab.atoms.calc = attached
+    slab.finalized = True
+
+    fresh_calc = object()
+    fresh_model = object()
+    setup_called = {"value": False}
+
+    def fake_setup(model_name, device, task_name="oc25"):
+        setup_called["value"] = True
+        assert model_name == "uma-s-1p2"
+        assert device == "cpu"
+        assert task_name == "oc25"
+        return fresh_calc, fresh_model
+
+    def fake_ref(*_args, **_kwargs):
+        from metalsurfer.models import ReferenceEnergies
+
+        return ReferenceEnergies(slab_energy=0.0)
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.shared.setup_single_model",
+        fake_setup,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.shared.accept_substrate_for_api",
+        lambda s, config=None: s,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.reference.calculate_reference_energies",
+        fake_ref,
+    )
+
+    bootstrap = _bootstrap_screening_run(
+        slab,
+        [("C", "demo")],
+        AdsorptionConfig(model_name="uma-s-1p2", device="cpu", task_name="oc25"),
+    )
+    assert setup_called["value"] is True
+    assert bootstrap.calculator is fresh_calc
+    assert bootstrap.ts_model is fresh_model
 
 
 def test_write_settings_alone_writes_timing_metadata(tmp_path, monkeypatch):

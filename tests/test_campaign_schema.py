@@ -120,6 +120,10 @@ def test_parse_campaign_rejects_missing_or_empty_surface_type(bad):
         "water",
         [{"name": "no-smiles"}],
         [{"smiles": "C", "name": ""}],
+        [
+            {"smiles": "C", "name": "methane"},
+            {"smiles": "CC", "name": "methane"},
+        ],
     ],
 )
 def test_parse_campaign_rejects_invalid_molecules(molecules_raw):

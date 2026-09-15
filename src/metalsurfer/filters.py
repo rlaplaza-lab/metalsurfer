@@ -141,11 +141,8 @@ def _mol_from_smiles(smiles: str):
         return None
 
 
-def _bond_counts_from_smiles(smiles: str) -> Counter | None:
-    """Derive bond counts from an RDKit molecule (reference connectivity)."""
-    mol = _mol_from_smiles(smiles)
-    if mol is None:
-        return None
+def _bond_counts_from_mol(mol) -> Counter:
+    """Derive bond counts from an already-parsed RDKit molecule."""
     bonds: Counter = Counter()
     for bond in mol.GetBonds():
         s1 = bond.GetBeginAtom().GetSymbol()
@@ -154,15 +151,25 @@ def _bond_counts_from_smiles(smiles: str) -> Counter | None:
     return bonds
 
 
+def _bond_counts_from_smiles(smiles: str) -> Counter | None:
+    """Derive bond counts from an RDKit molecule (reference connectivity)."""
+    mol = _mol_from_smiles(smiles)
+    if mol is None:
+        return None
+    return _bond_counts_from_mol(mol)
+
+
+def _formula_from_mol(mol) -> Counter:
+    """Return the molecular formula as a Counter of element symbols."""
+    return Counter(atom.GetSymbol() for atom in mol.GetAtoms())
+
+
 def _formula_from_smiles(smiles: str) -> Counter | None:
     """Return the molecular formula as a Counter of element symbols."""
     mol = _mol_from_smiles(smiles)
     if mol is None:
         return None
-    formula: Counter = Counter()
-    for atom in mol.GetAtoms():
-        formula[atom.GetSymbol()] += 1
-    return formula
+    return _formula_from_mol(mol)
 
 
 def _formula_from_atoms(
@@ -171,12 +178,10 @@ def _formula_from_atoms(
 ) -> Counter:
     """Return elemental composition of non-surface atoms."""
     syms = atoms.get_chemical_symbols()
-    formula: Counter = Counter()
-    for s in syms:
-        if surface_symbols is not None and s in surface_symbols:
-            continue
-        formula[s] += 1
-    return formula
+    if surface_symbols is None:
+        return Counter(syms)
+    surface = set(surface_symbols)
+    return Counter(s for s in syms if s not in surface)
 
 
 def _coordination_fingerprint_from_dist(
@@ -197,13 +202,8 @@ def _coordination_fingerprint_from_dist(
     return fingerprint
 
 
-def _coordination_fingerprint_from_smiles(
-    smiles: str,
-) -> dict[str, list[int]] | None:
-    """Per-element sorted coordination numbers from the SMILES graph."""
-    mol = _mol_from_smiles(smiles)
-    if mol is None:
-        return None
+def _coordination_fingerprint_from_mol(mol) -> dict[str, list[int]]:
+    """Per-element sorted coordination numbers from an RDKit mol graph."""
     fingerprint: dict[str, list[int]] = {}
     for atom in mol.GetAtoms():
         s = atom.GetSymbol()
@@ -212,6 +212,16 @@ def _coordination_fingerprint_from_smiles(
     for key in fingerprint:
         fingerprint[key].sort()
     return fingerprint
+
+
+def _coordination_fingerprint_from_smiles(
+    smiles: str,
+) -> dict[str, list[int]] | None:
+    """Per-element sorted coordination numbers from the SMILES graph."""
+    mol = _mol_from_smiles(smiles)
+    if mol is None:
+        return None
+    return _coordination_fingerprint_from_mol(mol)
 
 
 def _connected_components_from_coords(
@@ -359,7 +369,16 @@ def check_decomposition(
             "pip install rdkit",
         )
 
-    ref_formula = _formula_from_smiles(reference_smiles)
+    ref_mol = _mol_from_smiles(reference_smiles)
+    if ref_mol is not None:
+        ref_formula = _formula_from_mol(ref_mol)
+        ref_bonds = _bond_counts_from_mol(ref_mol)
+        ref_coord = _coordination_fingerprint_from_mol(ref_mol)
+    else:
+        ref_formula = None
+        ref_bonds = None
+        ref_coord = None
+
     if ref_formula is not None:
         actual_formula = _formula_from_atoms(atoms, surface_symbols=surface_symbols)
         if actual_formula != ref_formula:
@@ -369,7 +388,6 @@ def check_decomposition(
                 f"got {dict(actual_formula)}",
             )
 
-    ref_bonds = _bond_counts_from_smiles(reference_smiles)
     if ref_bonds is not None:
         actual_bonds = _bond_counts_from_dist(syms, dist_matrix, threshold)
         if actual_bonds != ref_bonds:
@@ -379,7 +397,6 @@ def check_decomposition(
                 f"got {dict(actual_bonds)}",
             )
 
-    ref_coord = _coordination_fingerprint_from_smiles(reference_smiles)
     if ref_coord is not None:
         actual_coord = _coordination_fingerprint_from_dist(syms, dist_matrix, threshold)
         if actual_coord != ref_coord:

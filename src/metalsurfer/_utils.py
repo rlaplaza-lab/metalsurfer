@@ -1,5 +1,6 @@
 """Internal utilities shared across metalsurfer sub-packages."""
 
+from collections.abc import Sequence
 from math import isfinite
 
 import numpy as np
@@ -7,6 +8,29 @@ import numpy as np
 # Cells with |det| below this are treated as degenerate (no usable volume), so
 # periodic distance conventions are disabled rather than producing garbage.
 CELL_DET_EPS: float = 1e-12
+
+
+def require_unique_molecule_names(
+    names: Sequence[str], *, context: str = "molecules"
+) -> None:
+    """Raise ``ValueError`` if *names* contains a duplicate after stripping.
+
+    Parameters
+    ----------
+    names
+        Molecule labels to check.
+    context
+        Prefix for the error message (for example ``molecules``).
+    """
+    seen: dict[str, int] = {}
+    for index, name in enumerate(names):
+        key = name.strip()
+        if key in seen:
+            raise ValueError(
+                f"{context} contains duplicate name {name.strip()!r} "
+                f"(first at index {seen[key]}, again at index {index})"
+            )
+        seen[key] = index
 
 
 def is_finite_number(value: object) -> bool:

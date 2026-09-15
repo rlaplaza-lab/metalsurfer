@@ -20,12 +20,14 @@ from metalsurfer.models import (
 from metalsurfer.reporting import ConformerFailure
 
 from .conftest import (
+    assert_lines_contain,
     make_h2,
     make_placement_descriptor,
     make_slab,
     make_water,
     place_molecule_on_slab,
 )
+from .factories import make_multi_mol_saturation_run, make_saturation_run
 
 
 def test_reference_energies():
@@ -244,6 +246,20 @@ def test_saturation_step_result():
     )
 
 
+def test_multi_mol_saturation_step_to_detail_row():
+    run = make_multi_mol_saturation_run(molecules=["water", "ethanol"])
+    row = run.steps[0].to_detail_row(
+        results_dir="results_test",
+        molecules_label="water_ethanol",
+    )
+    assert row["molecules"] == "water_ethanol"
+    assert row["winning_molecule"] == "water"
+    assert row["step"] == 1
+    assert row["step_structure_path"].endswith(
+        "water_ethanol_saturation/step_001_best_slab.xyz"
+    )
+
+
 def test_saturation_step_result_n_added_defaults_and_committed():
     """Legacy steps default to one committed placement; unbound steps to none."""
     slab = make_slab()
@@ -367,19 +383,7 @@ def test_saturation_run_result():
 
 
 def test_saturation_campaign_result_format_completion():
-    step = SaturationStepResult(
-        step=1,
-        molecule="water",
-        n_molecules_on_slab=0,
-        best_result=None,
-        all_results=[],
-    )
-    run = SaturationRunResult(
-        molecule="water",
-        steps=[step],
-        n_molecules_at_saturation=1,
-        final_slab_atoms=make_slab(),
-    )
+    run = make_saturation_run(molecule="water")
     campaign = SaturationCampaignResult(
         mode="non_bo",
         surface_type="water",
@@ -402,8 +406,15 @@ def test_saturation_campaign_result_format_completion():
         results_dir="results_multi",
         write_vasp_inputs=True,
     )
-    assert "Multi saturation complete:" in multi_text
-    assert "Molecules at saturation: 2" in multi_text
+    assert_lines_contain(
+        multi_text,
+        [
+            "Multi saturation complete:",
+            "  Total molecules at saturation (sum across runs): 2",
+            "  Total steps (sum across runs): 2",
+            "  water: 1 molecule(s) at saturation (1 step(s))",
+        ],
+    )
     assert "(XYZ, POSCAR, CSV)" in multi_text
 
 

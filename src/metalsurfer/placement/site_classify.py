@@ -191,13 +191,18 @@ def _build_classification_context(
 
     pbc_arr = np.asarray(pbc, dtype=bool)
     use_periodic = n_verts > 0 and bool(np.any(pbc_arr)) and cell_has_volume(cell)
+    # Slab+Delaunay ignores images for normals/classification; skip the build.
+    need_periodic_images = use_periodic and not (
+        material_type == "slab" and delaunay is not None
+    )
 
     # One periodic image KDTree for normals and the Voronoi classifier
     # (k_class <= k_max so nearest-k over the shared set stays correct).
     images = None
     image_tree = None
     idx_img = None
-    if use_periodic:
+    dists_img = None
+    if need_periodic_images:
         d0, _ = local_tree.query(vertices, k=k_max)
         d0_arr = np.asarray(d0, dtype=float)
         if d0_arr.ndim == 1:

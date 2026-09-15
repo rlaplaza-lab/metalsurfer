@@ -74,6 +74,7 @@ from .factories import (
     REF_A_B,
     REF_CONSTANT,
     REF_WATER_CO2,
+    make_multi_mol_saturation_run,
     make_saturation_run,
     make_saturation_step,
 )
@@ -452,6 +453,30 @@ def test_load_molecules_malformed_saturation_summary_warns(workdir, caplog):
     results_dir = workdir / "results_manual"
     results_dir.mkdir(exist_ok=True)
     (results_dir / "saturation_summary.csv").write_text('a,b\n"unterminated,water\n')
+
+    with caplog.at_level(logging.WARNING, logger="metalsurfer.workflow.shared"):
+        molecules, smiles, status = load_molecules(
+            str(csv_path),
+            skip_existing=False,
+            skip_saturation_file=True,
+            surface_type="manual",
+        )
+
+    assert molecules == ["water"]
+    assert smiles == ["O"]
+    assert status == "ok"
+    assert any(
+        "Could not read existing summary" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_load_molecules_unreadable_saturation_summary_warns(workdir, caplog):
+    csv_path = workdir / "smiles.csv"
+    csv_path.write_text("O,water\n")
+    results_dir = workdir / "results_manual"
+    results_dir.mkdir(exist_ok=True)
+    (results_dir / "saturation_summary.csv").mkdir()
 
     with caplog.at_level(logging.WARNING, logger="metalsurfer.workflow.shared"):
         molecules, smiles, status = load_molecules(
@@ -1701,6 +1726,20 @@ def test_save_saturation_results_dispatches_multi_mol(workdir):
         out
         / "xyz_structures/water_saturation/step_001_placements/water/conformer_000.xyz"
     ).exists()
+
+
+def test_save_saturation_results_persists_mixed_sequence(workdir):
+    single = make_saturation_run(molecule="water")
+    multi = make_multi_mol_saturation_run(molecules=["ethanol", "methanol"])
+    setup_directories(["mixed_sat_save"])
+    save_saturation_results([multi, single], surface_type="mixed_sat_save")
+    summary = pd.read_csv(workdir / "results_mixed_sat_save" / "saturation_summary.csv")
+    labels: set[str] = set()
+    for col in ("molecule", "molecules"):
+        if col in summary.columns:
+            labels.update(summary[col].dropna().astype(str))
+    assert "water" in labels
+    assert _saturation_molecule_label(["ethanol", "methanol"]) in labels
 
 
 # ---------------------------------------------------------------------------

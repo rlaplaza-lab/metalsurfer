@@ -2,7 +2,6 @@
 
 import csv
 import logging
-import os
 import time
 from collections import Counter
 from dataclasses import dataclass, field, replace
@@ -15,6 +14,7 @@ from ase.neighborlist import primitive_neighbor_list
 
 from .._logging import log_context, warn_once
 from .._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
+from .._utils import require_unique_molecule_names
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
 from ..conformers import create_conformers_from_smiles
 from ..exceptions import OptimizationError
@@ -28,6 +28,7 @@ from ..models import (
     ScreeningResult,
 )
 from ..optimization import (
+    TorchSimCalculator,
     clear_autobatcher_cache,
     estimate_parallel_relaxation_capacity,
     optimize_adsorbate_slab_batched,
@@ -809,9 +810,16 @@ def _bootstrap_screening_run(
     from .reference import calculate_reference_energies
 
     slab_container = accept_substrate_for_api(slab, config=config)
-    calculator, ts_model = setup_single_model(
-        config.model_name, config.device, task_name=config.task_name
-    )
+    existing_calc = slab_container.atoms.calc
+    if isinstance(existing_calc, TorchSimCalculator) and existing_calc.matches_setup(
+        config.model_name, config.device, config.task_name
+    ):
+        calculator = existing_calc
+        ts_model = existing_calc._model
+    else:
+        calculator, ts_model = setup_single_model(
+            config.model_name, config.device, task_name=config.task_name
+        )
     molecule_names = [name for _, name in molecule_pairs]
     smiles_list = [smiles for smiles, _ in molecule_pairs]
     t_ref_start = time.perf_counter()
@@ -1037,6 +1045,7 @@ def _read_molecules_csv(csv_file: str) -> tuple[list[str], list[str]]:
             continue
         all_smiles.append(smiles)
         all_molecules.append(name)
+    require_unique_molecule_names(all_molecules)
     return all_smiles, all_molecules
 
 
@@ -1121,6 +1130,7 @@ def _normalize_molecule_pairs(
                 "molecule list input must contain only (smiles: str, molecule_name: str) tuples"
             )
         normalized.append((smiles, molecule_name))
+    require_unique_molecule_names([name for _, name in normalized])
     return normalized
 
 
@@ -1144,15 +1154,21 @@ def _select_molecules_for_processing(
         else:
             summary = f"{results_dir}/adsorption_energies_detailed.csv"
             summary_columns = ("molecule",)
-        if os.path.exists(summary):
-            try:
-                existing_df = pd.read_csv(summary)
-                for column in summary_columns:
-                    if column in existing_df.columns:
-                        existing_molecules = set(existing_df[column].values)
-                        break
-            except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
-                logger.warning("Could not read existing summary %s: %s", summary, e)
+        try:
+            existing_df = pd.read_csv(summary)
+            for column in summary_columns:
+                if column in existing_df.columns:
+                    existing_molecules = set(existing_df[column].values)
+                    break
+        except FileNotFoundError:
+            pass
+        except (
+            OSError,
+            UnicodeDecodeError,
+            pd.errors.EmptyDataError,
+            pd.errors.ParserError,
+        ) as e:
+            logger.warning("Could not read existing summary %s: %s", summary, e)
 
         molecules = []
         smiles = []

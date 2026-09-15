@@ -514,11 +514,29 @@ def test_torchsim_calculator_extracts_energy_forces_stress(
     assert abs(calc.results["energy"] - (-42.5)) < 1e-6
     assert calc.results["forces"].shape == (6, 3)
     np.testing.assert_allclose(calc.results["stress"], [0.1, 0.1, 0.1, 0, 0, 0])
-    assert calc._atoms_changed(atoms) is False
+    assert calc._geometry_hash_if_changed(atoms) == (False, calc._last_positions_hash)
     # geometry edit invalidates cache
     edited = atoms.copy()
     edited.positions[0] += 0.5
-    assert calc._atoms_changed(edited) is True
+    changed, _ = calc._geometry_hash_if_changed(edited)
+    assert changed is True
+
+
+def test_torchsim_calculator_matches_setup_identity(monkeypatch: pytest.MonkeyPatch):
+    calc = TorchSimCalculator(
+        object(), model_name="uma-s-1p1", device="cpu", task_name="oc20"
+    )
+    assert calc.matches_setup("uma-s-1p1", "cpu", "oc20")
+    assert not calc.matches_setup("uma-s-1p2", "cpu", "oc20")
+    assert not calc.matches_setup("uma-s-1p1", "cpu", "oc25")
+    # Unknown provenance must not be reused.
+    assert not TorchSimCalculator(object()).matches_setup("uma-s-1p1", "cpu", "oc20")
+    # CUDA request that resolves to CPU still matches a CPU-built calculator.
+    monkeypatch.setattr(
+        "metalsurfer.optimization._model._resolve_device",
+        lambda device: "cpu" if str(device).startswith("cuda") else device,
+    )
+    assert calc.matches_setup("uma-s-1p1", "cuda", "oc20")
 
 
 def test_torchsim_calculator_non_finite_energy_raises(monkeypatch: pytest.MonkeyPatch):

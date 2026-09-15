@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, assert_never
@@ -148,6 +149,8 @@ def format_failure_summary_text(failure_summary: FailureSummary) -> str:
         lines.append("  Passed validation: 0")
         _append_validation_failure_lines(lines, failure_summary.validation_failures)
     elif isinstance(failure_summary, BOValidationFailure):
+        lines.append(f"  Candidate specs: {failure_summary.n_candidate_specs}")
+        lines.append(f"  Valid pool: {failure_summary.n_valid_pool}")
         lines.append(f"  BO evaluated: {failure_summary.n_evaluated}")
         lines.append(f"  BO valid results: {failure_summary.n_valid_results}")
     elif isinstance(failure_summary, FilterFailure):
@@ -205,6 +208,9 @@ def format_saturation_completion(
     n_steps: int,
     results_dir: str,
     write_vasp_inputs: bool = False,
+    extra_lines: Sequence[str] = (),
+    molecules_at_saturation_label: str = "Molecules at saturation",
+    steps_label: str = "Total steps",
 ) -> str:
     """Format a saturation-run completion message.
 
@@ -220,13 +226,20 @@ def format_saturation_completion(
         Path to the results directory.
     write_vasp_inputs
         Whether POSCAR outputs are included.
+    extra_lines
+        Optional additional indented lines inserted before the results path.
+    molecules_at_saturation_label
+        Label for the adsorbate-count line.
+    steps_label
+        Label for the step-count line.
     """
     suffix = results_output_suffix(write_vasp_inputs=write_vasp_inputs)
     return "\n".join(
         [
             f"{label} complete:",
-            f"  Molecules at saturation: {n_molecules_at_saturation}",
-            f"  Total steps: {n_steps}",
+            f"  {molecules_at_saturation_label}: {n_molecules_at_saturation}",
+            f"  {steps_label}: {n_steps}",
+            *extra_lines,
             f"  Results saved to {Path(results_dir).as_posix()}/{suffix}",
         ]
     )

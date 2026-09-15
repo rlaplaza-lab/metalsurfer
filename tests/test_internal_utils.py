@@ -19,7 +19,12 @@ from metalsurfer._csv_coerce import (
     parse_fragment_positions,
     with_default,
 )
-from metalsurfer._utils import is_finite_number
+from metalsurfer._utils import is_finite_number, require_unique_molecule_names
+
+
+def test_require_unique_molecule_names_rejects_duplicates():
+    with pytest.raises(ValueError, match="duplicate name 'methane'"):
+        require_unique_molecule_names(["methane", "ethane", "methane"])
 
 
 def test_is_finite_number_accepts_finite_numeric():

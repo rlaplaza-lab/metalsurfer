@@ -68,18 +68,17 @@ class DatasetLogger:
         self._csv_columns: list[str] | None = None
         self._disk_state_loaded = False
         self._legacy_context_warned = False
+        self._disk_context_hashes: set[str] | None = None
+        self._disk_schema_versions: set[str] | None = None
 
     def _validate_context_compatibility(self) -> None:
         """Ensure append rows match existing CSV context_hash / schema_version."""
         if not os.path.exists(self.csv_path):
             return
         current_hash = self.context.settings_hash()
-        usecols: list[str] = []
-        if "context_hash" in (self._csv_columns or []):
-            usecols.append("context_hash")
-        if "schema_version" in (self._csv_columns or []):
-            usecols.append("schema_version")
-        if not usecols:
+        has_context = "context_hash" in (self._csv_columns or [])
+        has_schema = "schema_version" in (self._csv_columns or [])
+        if not has_context and not has_schema:
             if not self._legacy_context_warned:
                 logger.warning(
                     "Appending to %s without context_hash column; cannot verify "
@@ -88,21 +87,22 @@ class DatasetLogger:
                 )
                 self._legacy_context_warned = True
             return
-        existing = pd.read_csv(self.csv_path, usecols=usecols)
+
+        disk_hashes = self._disk_context_hashes
+        disk_versions = self._disk_schema_versions
         mismatches: list[str] = []
-        if "context_hash" in existing.columns:
-            disk_hashes = set(existing["context_hash"].astype(str).unique())
-            if disk_hashes != {current_hash}:
-                mismatches.append(
-                    f"context_hash disk={sorted(disk_hashes)!r} new={current_hash!r}"
-                )
-        if "schema_version" in existing.columns:
-            disk_versions = set(existing["schema_version"].astype(str).unique())
-            if disk_versions != {SCHEMA_VERSION}:
-                mismatches.append(
-                    f"schema_version disk={sorted(disk_versions)!r} "
-                    f"new={SCHEMA_VERSION!r}"
-                )
+        if has_context and disk_hashes is not None and disk_hashes != {current_hash}:
+            mismatches.append(
+                f"context_hash disk={sorted(disk_hashes)!r} new={current_hash!r}"
+            )
+        if (
+            has_schema
+            and disk_versions is not None
+            and disk_versions != {SCHEMA_VERSION}
+        ):
+            mismatches.append(
+                f"schema_version disk={sorted(disk_versions)!r} new={SCHEMA_VERSION!r}"
+            )
         if not mismatches:
             return
         detail = "; ".join(mismatches)
@@ -121,16 +121,14 @@ class DatasetLogger:
     def _validate_pending_record_contexts(self) -> None:
         """Ensure pending records match this logger's computation context."""
         current_hash = self.context.settings_hash()
-        mismatches = sorted(
-            {
-                record.context.settings_hash()
-                for record in self._records
-                if record.context.settings_hash() != current_hash
-            }
-        )
+        mismatches: set[str] = set()
+        for record in self._records:
+            record_hash = record.context.settings_hash()
+            if record_hash != current_hash:
+                mismatches.add(record_hash)
         if not mismatches:
             return
-        detail = f"context_hash records={mismatches!r} logger={current_hash!r}"
+        detail = f"context_hash records={sorted(mismatches)!r} logger={current_hash!r}"
         if self.allow_mixed_context:
             logger.warning(
                 "Flushing mixed computation context records to %s (%s)",
@@ -233,13 +231,24 @@ class DatasetLogger:
 
         if not self._disk_state_loaded:
             if os.path.exists(self.csv_path):
-                hash_col = pd.read_csv(self.csv_path, usecols=["record_hash"])[
-                    "record_hash"
-                ].astype(str)
-                # Row count includes duplicate hashes already present on disk.
-                self._row_count = int(len(hash_col))
-                self._seen_hashes = set(hash_col)
                 self._csv_columns = list(pd.read_csv(self.csv_path, nrows=0).columns)
+                usecols = ["record_hash"]
+                if "context_hash" in self._csv_columns:
+                    usecols.append("context_hash")
+                if "schema_version" in self._csv_columns:
+                    usecols.append("schema_version")
+                existing = pd.read_csv(self.csv_path, usecols=usecols)
+                # Row count includes duplicate hashes already present on disk.
+                self._row_count = int(len(existing))
+                self._seen_hashes = set(existing["record_hash"].astype(str))
+                if "context_hash" in existing.columns:
+                    self._disk_context_hashes = set(
+                        existing["context_hash"].astype(str).unique()
+                    )
+                if "schema_version" in existing.columns:
+                    self._disk_schema_versions = set(
+                        existing["schema_version"].astype(str).unique()
+                    )
             self._disk_state_loaded = True
 
         if self._csv_columns is not None:

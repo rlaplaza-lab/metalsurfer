@@ -10,6 +10,7 @@ from ase import Atoms
 from ase.constraints import FixAtoms
 from ase.filters import UnitCellFilter
 from ase.optimize import BFGS, FIRE, LBFGS
+from scipy.spatial.distance import pdist
 
 from .._numeric_defaults import DEFAULT_TOP_LAYER_TOLERANCE, MIN_CALCULATOR_CELL_C_ANG
 from ..config import (
@@ -755,6 +756,44 @@ def _relax_slab_structure(
     return relaxed
 
 
+def _rank_alloy_variants(
+    variants: list[Atoms],
+    *,
+    calculator,
+) -> tuple[float, Atoms | None]:
+    """Pick the lowest-energy alloy variant; batch via TorchSim when available."""
+    best_energy = float("inf")
+    best_atoms: Atoms | None = None
+    ts_model = getattr(calculator, "_model", None) if calculator is not None else None
+    if ts_model is not None and variants:
+        # Lazy: importing metalsurfer.optimization pulls torch via _deps.
+        from ..optimization import batch_static
+
+        try:
+            results = batch_static(variants, ts_model, require_energy=False)
+        except (RuntimeError, MemoryError, OSError, DependencyMissingError) as exc:
+            logger.warning("Batched alloy variant scoring failed: %s", exc)
+        else:
+            for v, (energy, _forces) in enumerate(results):
+                if energy is None or not np.isfinite(energy):
+                    logger.warning("Variant %d failed: non-finite energy %s", v, energy)
+                    continue
+                if energy < best_energy:
+                    best_energy = float(energy)
+                    best_atoms = variants[v].copy()
+            return best_energy, best_atoms
+
+    for v, variant in enumerate(variants):
+        best_energy, best_atoms = _consider_variant(
+            variant,
+            calculator=calculator,
+            best_energy=best_energy,
+            best_atoms=best_atoms,
+            context=f"Variant {v}",
+        )
+    return best_energy, best_atoms
+
+
 def substitute_alloy(
     slab: SlabContainer | Atoms,
     host_symbol: str,
@@ -834,7 +873,6 @@ def substitute_alloy(
         return SlabContainer(base)
 
     rng = np.random.RandomState(seed)
-    best_energy = float("inf")
     best_atoms = None
 
     top_host_indices: list[int] = []
@@ -869,7 +907,8 @@ def substitute_alloy(
             len(subsurface_host_indices),
         )
 
-    for v in range(n_variants):
+    variants: list[Atoms] = []
+    for _v in range(n_variants):
         if enforce_top_layer_fraction:
             top_choice = (
                 rng.choice(top_host_indices, size=n_top_replace, replace=False)
@@ -893,14 +932,9 @@ def substitute_alloy(
         for i in replace_idx:
             syms[i] = guest_symbol
         variant.set_chemical_symbols(syms)
+        variants.append(variant)
 
-        best_energy, best_atoms = _consider_variant(
-            variant,
-            calculator=calculator,
-            best_energy=best_energy,
-            best_atoms=best_atoms,
-            context=f"Variant {v}",
-        )
+    best_energy, best_atoms = _rank_alloy_variants(variants, calculator=calculator)
 
     if best_atoms is None:
         raise GeometryValidationError(
@@ -1191,9 +1225,7 @@ def _molecule_diameter(conformers: list[Atoms]) -> float:
         pos = conf.get_positions()
         if len(pos) < 2:
             continue
-        diffs = pos[:, None, :] - pos[None, :, :]
-        dists_sq = np.sum(diffs**2, axis=-1)
-        max_dist = max(max_dist, float(np.sqrt(np.max(dists_sq))))
+        max_dist = max(max_dist, float(np.max(pdist(pos))))
     return max_dist
 
 

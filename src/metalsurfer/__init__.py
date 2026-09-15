@@ -1,11 +1,22 @@
-"""Package root: lazy exports for core campaign and placement APIs."""
+"""Package root: lazy exports for campaign, placement, and path APIs.
+
+Core types and helpers (config, models, exceptions, logging) are imported
+eagerly on purpose.
+"""
 
 __version__ = "0.7.1"
 
 import importlib
 
-from . import _logging  # noqa: F401
-from .config import AdsorptionConfig, BOConfig, BOTransferConfig
+from ._logging import configure_logging
+from .config import (
+    AdsorptionConfig,
+    BOConfig,
+    BOTransferConfig,
+    bo_eval_schedule,
+    fold_bo_config,
+    resolved_bo_eval_budget,
+)
 from .exceptions import (
     DependencyMissingError,
     GeometryValidationError,
@@ -64,8 +75,6 @@ __all__ = [
 ]
 
 _LAZY_MODULES = {
-    "_logging": {"configure_logging"},
-    "config": {"resolved_bo_eval_budget", "bo_eval_schedule", "fold_bo_config"},
     "surface_prep": {
         "prepare_substrate",
         "finalize_substrate",

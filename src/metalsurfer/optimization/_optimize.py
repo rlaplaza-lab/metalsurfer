@@ -38,6 +38,7 @@ from ._validation import (
     _parallel_capacity_cache_key,
     _positions_cell_hash,
     _resolve_autobatcher_max_atoms_to_try,
+    _resolve_device,
     _resolve_model_device,
     _resolve_ts_optimizer,
     _validate_model_pbc,
@@ -69,7 +70,13 @@ def setup_single_model(  # pragma: no cover - requires MLIP stack / GPU
         ``uma-m-1p1`` models.
     """
     ts_model = setup_torchsim_model(model_name, device, task_name=task_name)
-    calculator = TorchSimCalculator(ts_model)
+    resolved_device = _resolve_device(device) or device
+    calculator = TorchSimCalculator(
+        ts_model,
+        model_name=model_name,
+        device=resolved_device,
+        task_name=task_name,
+    )
     return calculator, ts_model
 
 
@@ -449,7 +456,17 @@ def _split_forces_by_system(
                 "Batched forces do not align with the per-atom system index: "
                 f"forces shape {forces_np.shape}, system_idx length {idx_np.shape[0]}."
             )
-        per_system = [forces_np[idx_np == k] for k in range(n_systems)]
+        idx_int = idx_np.astype(np.intp, copy=False)
+        if idx_int.size and (int(idx_int.min()) < 0 or int(idx_int.max()) >= n_systems):
+            raise RuntimeError(
+                "Batched forces system_idx out of range: "
+                f"expected ids in [0, {n_systems}), got "
+                f"[{int(idx_int.min())}, {int(idx_int.max())}]."
+            )
+        counts = np.bincount(idx_int, minlength=n_systems)
+        order = np.argsort(idx_int, kind="mergesort")
+        per_system = np.split(forces_np[order], np.cumsum(counts)[:-1])
+        per_system = list(per_system)
 
     for k, (got, expected) in enumerate(zip(per_system, atom_counts, strict=True)):
         if got.shape != (expected, 3):
@@ -458,6 +475,36 @@ def _split_forces_by_system(
                 f"{k} has {got.shape[0]} force rows but {expected} atoms."
             )
     return per_system
+
+
+def _batch_energies_to_numpy(energies) -> np.ndarray | None:
+    """Pull batched or per-system energies to a 1-D float64 array.
+
+    Accepts a single tensor (one device→CPU transfer) or a sequence of
+    per-system tensors/scalars (as used by some TorchSim fakes/backends).
+    """
+    if energies is None:
+        return None
+    detach = getattr(energies, "detach", None)
+    if callable(detach):
+        try:
+            return np.asarray(energies.detach().cpu().numpy(), dtype=float).reshape(-1)
+        except (TypeError, ValueError, AttributeError, RuntimeError):
+            return None
+    try:
+        out: list[float] = []
+        for e in energies:
+            if e is None:
+                out.append(float("nan"))
+                continue
+            detach_e = getattr(e, "detach", None)
+            if callable(detach_e):
+                out.append(float(e.detach().cpu().numpy().squeeze()))
+            else:
+                out.append(float(np.asarray(e).squeeze()))
+        return np.asarray(out, dtype=float)
+    except (TypeError, ValueError, AttributeError, RuntimeError):
+        return None
 
 
 def _forces_for_optimized_systems(
@@ -488,15 +535,11 @@ def _forces_for_optimized_systems(
         n_systems,
     )
     survivor_idx: list[int] = []
-    if energies is not None:
+    energy_arr = _batch_energies_to_numpy(energies)
+    if energy_arr is not None:
         for i in range(n_systems):
-            if i < len(energies):
-                try:
-                    ev = float(energies[i].detach().cpu().numpy().squeeze())
-                except (TypeError, ValueError, AttributeError, RuntimeError):
-                    ev = float("nan")
-                if np.isfinite(ev):
-                    survivor_idx.append(i)
+            if i < len(energy_arr) and np.isfinite(energy_arr[i]):
+                survivor_idx.append(i)
     else:
         survivor_idx = list(range(n_systems))
     if not survivor_idx:
@@ -789,12 +832,13 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             init_fn, step_fn = _deps.OPTIM_REGISTRY[optimizer]
 
             def _build_optim_state_iter():
+                # Outer capture in _optimize_inflight_from_iterator already
+                # wraps load_states; avoid nested per-system stream swaps.
                 for atoms in combined_atoms_list:
-                    with torchsim_output_capture():
-                        sim = _make_state_with_frozen_constraint(
-                            atoms, frozen_indices, ts_model, model_device
-                        )
-                        yield init_fn(model=ts_model, state=sim)
+                    sim = _make_state_with_frozen_constraint(
+                        atoms, frozen_indices, ts_model, model_device
+                    )
+                    yield init_fn(model=ts_model, state=sim)
 
             def _run_optimize(autobatcher, systems_iter):
                 return _optimize_inflight_from_iterator(
@@ -865,11 +909,12 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
                 "inputs positionally and cannot be realigned."
             )
         forces_list = _forces_for_optimized_systems(batch, energies, result, ts_model)
+        energy_arr = _batch_energies_to_numpy(energies)
         out: list[Atoms | None] = []
         for i, atoms in enumerate(result):
             energy_val: float | None = None
-            if energies is not None and i < len(energies):
-                energy_val = float(energies[i].detach().cpu().numpy().squeeze())
+            if energy_arr is not None and i < len(energy_arr):
+                energy_val = float(energy_arr[i])
             if energy_val is None or not np.isfinite(energy_val):
                 logger.warning(
                     "Batched optimisation system %d returned non-finite energy %s; "

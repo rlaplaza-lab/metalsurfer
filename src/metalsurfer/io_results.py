@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import shutil
 from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -329,7 +330,12 @@ def _merge_preserving_existing_molecules(
             "Could not read existing %s (%s); it will be replaced", path.name, exc
         )
         return new_df
-    if key_col not in existing.columns or key_col not in new_df.columns:
+    if key_col not in new_df.columns:
+        return new_df
+    if key_col not in existing.columns:
+        other_key = "molecules" if key_col == "molecule" else "molecule"
+        if other_key in existing.columns:
+            return pd.concat([existing, new_df], ignore_index=True)
         logger.warning(
             "Existing %s has no %r column; it will be replaced", path.name, key_col
         )
@@ -680,8 +686,8 @@ def save_saturation_results(
 ) -> None:
     """Write saturation CSV summaries and per-step structures.
 
-    When the first entry is a :class:`MultiMolSaturationRunResult`, delegates to
-    :func:`save_multi_mol_saturation_results` (only the first element is saved).
+    Single-molecule and multi-molecule entries are partitioned and all of them
+    are persisted. Unrecognized types are skipped with a warning.
 
     If ``config.saturation_save_all_placements`` is true (default), also writes
     ``saturation_placements_detailed.csv`` and, for each step, every structure in
@@ -704,15 +710,28 @@ def save_saturation_results(
         logger.warning("No saturation results to save")
         return
 
-    if isinstance(saturation_results[0], MultiMolSaturationRunResult):
+    singles: list[SaturationRunResult] = []
+    multis: list[MultiMolSaturationRunResult] = []
+    n_unknown = 0
+    for item in saturation_results:
+        if isinstance(item, MultiMolSaturationRunResult):
+            multis.append(item)
+        elif isinstance(item, SaturationRunResult):
+            singles.append(item)
+        else:
+            n_unknown += 1
+    if n_unknown:
+        logger.warning("Skipping %d unrecognized saturation result(s)", n_unknown)
+
+    for multi in multis:
         save_multi_mol_saturation_results(
-            saturation_results[0],
-            surface_type=surface_type,
-            config=config,
+            multi, surface_type=surface_type, config=config
         )
+
+    if not singles:
         return
 
-    single_results = cast(list[SaturationRunResult], list(saturation_results))
+    single_results = singles
     if len(single_results) > 1:
         logger.warning(
             "Save_saturation_results received %d single-molecule results; "
@@ -1016,7 +1035,13 @@ def _write_saturation_step_xyz(best: ScreeningResult, mol_dir: str, step: int) -
     best_atoms_copy = best.atoms.copy()
     best_atoms_copy.calc = None
     best_atoms_copy.info.pop("adsorbate_info", None)
-    _write_clean_xyz(best_atoms_copy, paths["step_structure_path"])
-    _write_clean_xyz(best_atoms_copy, paths["step_structure_energy_path"])
+    primary = paths["step_structure_path"]
+    energy_path = paths["step_structure_energy_path"]
+    _write_clean_xyz(best_atoms_copy, primary)
+    Path(energy_path).unlink(missing_ok=True)
+    try:
+        os.link(primary, energy_path)
+    except OSError:
+        shutil.copyfile(primary, energy_path)
     adsorbate = best.atoms[best.slab_size :].copy()
     _write_clean_xyz(adsorbate, paths["step_adsorbate_path"])

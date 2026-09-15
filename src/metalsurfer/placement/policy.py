@@ -4,7 +4,7 @@ import itertools
 import logging
 import math
 import random
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -353,7 +353,7 @@ def _stratified_sample(
             by_site: dict[int, list[PlacementSpec]] = defaultdict(list)
             for spec in bucket:
                 by_site[int(spec.site_index)].append(spec)
-            ranked_by_site: dict[int, list[PlacementSpec]] = {}
+            ranked_by_site: dict[int, deque[PlacementSpec]] = {}
             for si, site_specs in by_site.items():
                 site_ranks = list(range(len(site_specs)))
                 rng.shuffle(site_ranks)
@@ -366,7 +366,7 @@ def _stratified_sample(
                     ),
                 )
                 # Best first for round-robin.
-                ranked_by_site[si] = [spec for spec, _ in ordered]
+                ranked_by_site[si] = deque(spec for spec, _ in ordered)
             site_order = sorted(ranked_by_site.keys())
             best_first: list[PlacementSpec] = []
             while True:
@@ -374,7 +374,7 @@ def _stratified_sample(
                 for si in site_order:
                     site_bucket = ranked_by_site[si]
                     if site_bucket:
-                        best_first.append(site_bucket.pop(0))
+                        best_first.append(site_bucket.popleft())
                         progressed = True
                 if not progressed:
                     break

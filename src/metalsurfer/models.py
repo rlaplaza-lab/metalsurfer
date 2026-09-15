@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, assert_never, cast
 
 import numpy as np
 from ase import Atoms
@@ -575,6 +575,36 @@ def _saturation_step_structure_paths(
     }
 
 
+def _saturation_detail_row(
+    *,
+    best: ScreeningResult,
+    step: int,
+    n_molecules_on_slab: int,
+    bo_transfer_enabled: bool,
+    transfer_info: BOTransferInfo,
+    results_dir: str | Path,
+    mol_dir_label: str,
+    context_row: Mapping[str, Any] | None,
+    include_provenance: bool,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one saturation detail CSV row from a winning placement."""
+    mol_dir = saturation_xyz_dir(results_dir, mol_dir_label)
+    row = best.to_row(
+        context_row=context_row,
+        include_provenance=include_provenance,
+    ) | {
+        "step": step,
+        "n_molecules_on_slab": n_molecules_on_slab,
+        "bo_transfer_enabled": bo_transfer_enabled,
+        **transfer_info.to_saturation_columns(),
+        **_saturation_step_structure_paths(mol_dir, step, best.energy_adsorption),
+    }
+    if extra:
+        row.update(dict(extra))
+    return row
+
+
 def _placement_rows_for_results(
     results: Sequence[ScreeningResult],
     *,
@@ -664,31 +694,19 @@ class SaturationStepResult:
         include_provenance
             If True, include pre-relax provenance columns.
         """
-        best = self.best_result
-        mol_dir = saturation_xyz_dir(results_dir, saturation_molecule)
         info = self.transfer if self.transfer is not None else BOTransferInfo()
-        row: dict[str, Any] = {
-            "molecule": saturation_molecule,
-            "step": self.step,
-            "n_molecules_on_slab": self.n_molecules_on_slab,
-            "bo_transfer_enabled": self.bo_transfer_enabled,
-            **info.to_saturation_columns(),
-            "placement_id": best.placement_id,
-            "energy_adslab": best.energy_adslab,
-            "energy_slab": best.energy_slab,
-            "energy_adsorbate": best.energy_adsorbate,
-            "energy_adsorption": best.energy_adsorption,
-            "distance": best.distance,
-            **_saturation_step_structure_paths(
-                mol_dir, self.step, best.energy_adsorption
-            ),
-        }
-        row.update(
-            best.placement_descriptor.to_row(include_provenance=include_provenance)
+        return _saturation_detail_row(
+            best=self.best_result,
+            step=self.step,
+            n_molecules_on_slab=self.n_molecules_on_slab,
+            bo_transfer_enabled=self.bo_transfer_enabled,
+            transfer_info=info,
+            results_dir=results_dir,
+            mol_dir_label=saturation_molecule,
+            context_row=context_row,
+            include_provenance=include_provenance,
+            extra={"molecule": saturation_molecule},
         )
-        if context_row:
-            row.update(dict(context_row))
-        return row
 
     def to_rows(
         self,
@@ -911,24 +929,23 @@ class MultiMolSaturationStepResult:
         include_provenance
             If True, include pre-relax provenance columns.
         """
-        best = self.best_result
-        mol_dir = saturation_xyz_dir(results_dir, molecules_label)
         info = self.transfer_by_molecule.get(self.winning_molecule, BOTransferInfo())
-        return best.to_row(
+        return _saturation_detail_row(
+            best=self.best_result,
+            step=self.step,
+            n_molecules_on_slab=self.n_molecules_on_slab,
+            bo_transfer_enabled=self.bo_transfer_enabled,
+            transfer_info=info,
+            results_dir=results_dir,
+            mol_dir_label=molecules_label,
             context_row=context_row,
             include_provenance=include_provenance,
-        ) | {
-            "molecules": molecules_label,
-            "winning_molecule": self.winning_molecule,
-            "step": self.step,
-            "n_molecules_on_slab": self.n_molecules_on_slab,
-            "per_molecule_budgets": str(self.per_molecule_budgets),
-            "bo_transfer_enabled": self.bo_transfer_enabled,
-            **info.to_saturation_columns(),
-            **_saturation_step_structure_paths(
-                mol_dir, self.step, best.energy_adsorption
-            ),
-        }
+            extra={
+                "molecules": molecules_label,
+                "winning_molecule": self.winning_molecule,
+                "per_molecule_budgets": str(self.per_molecule_budgets),
+            },
+        )
 
     def to_rows(
         self,
@@ -1001,6 +1018,46 @@ class MultiMolSaturationRunResult:
     final_slab_atoms: Atoms
     molecule_counts: dict[str, int] = field(default_factory=dict)
 
+    def to_flattened_runs(self) -> list[ScreeningRunResult]:
+        """Flatten all saturation steps into screening-like run results."""
+        label = "_".join(self.molecules)
+        flattened_runs: list[ScreeningRunResult] = []
+        for step_result in self.steps:
+            step_name = f"{label}_step_{step_result.step:03d}"
+            step_results = [
+                result
+                for group in step_result.per_molecule_results.values()
+                for result in group
+            ]
+            if not step_results:
+                continue
+            flattened_runs.append(
+                ScreeningRunResult(
+                    molecule=step_name,
+                    results=step_results,
+                    summary=build_molecule_summary(step_name, step_results),
+                )
+            )
+        return flattened_runs
+
+
+def _saturation_run_breakdown_line(
+    run: SaturationRunResult | MultiMolSaturationRunResult,
+) -> str:
+    if isinstance(run, MultiMolSaturationRunResult):
+        name = "_".join(run.molecules)
+        counts = f"; counts={run.molecule_counts}" if run.molecule_counts else ""
+        return (
+            f"  {name}: {run.n_molecules_at_saturation} molecule(s) at saturation "
+            f"({len(run.steps)} step(s)){counts}"
+        )
+    if isinstance(run, SaturationRunResult):
+        return (
+            f"  {run.molecule}: {run.n_molecules_at_saturation} molecule(s) at saturation "
+            f"({len(run.steps)} step(s))"
+        )
+    assert_never(run)
+
 
 @dataclass
 class SaturationCampaignResult:
@@ -1067,6 +1124,11 @@ class SaturationCampaignResult:
             n_steps=total_steps,
             results_dir=results_dir,
             write_vasp_inputs=write_vasp_inputs,
+            extra_lines=[_saturation_run_breakdown_line(run) for run in self.runs],
+            molecules_at_saturation_label=(
+                "Total molecules at saturation (sum across runs)"
+            ),
+            steps_label="Total steps (sum across runs)",
         )
         if self.failure_summary:
             text = f"{text}\n\n{self.format_failure_summary()}"

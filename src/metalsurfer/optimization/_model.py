@@ -10,7 +10,12 @@ from ase import Atoms
 from .._logging import torchsim_output_capture
 from ..exceptions import DependencyMissingError
 from . import _deps
-from ._validation import _positions_cell_hash, _resolve_device, _validate_model_pbc
+from ._validation import (
+    _device_key,
+    _positions_cell_hash,
+    _resolve_device,
+    _validate_model_pbc,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,22 +131,51 @@ class TorchSimCalculator:
     during ASE optimization loops) are detected correctly.
     """
 
-    def __init__(self, ts_model: Any) -> None:
+    def __init__(
+        self,
+        ts_model: Any,
+        *,
+        model_name: str | None = None,
+        device: str | None = None,
+        task_name: str | None = None,
+    ) -> None:
         """Wrap a TorchSim model (e.g. FairChemModel) for ASE compatibility.
 
         Parameters
         ----------
         ts_model
             TorchSim model instance.
+        model_name
+            FairChem checkpoint name used to build *ts_model*, if known.
+        device
+            Resolved device string used at construction, if known.
+        task_name
+            FairChem task head used at construction, if known.
         """
         self._model = ts_model
+        self._model_name = model_name
+        self._device = device
+        self._task_name = task_name
         self.results: dict[str, Any] = {}
         self._last_positions_hash: int | None = None
+
+    def matches_setup(self, model_name: str, device: str, task_name: str) -> bool:
+        """Return whether this calculator was built for the given setup args."""
+        if self._model is None or self._model_name is None or self._task_name is None:
+            return False
+        if self._model_name != model_name or self._task_name != task_name:
+            return False
+        resolved = _resolve_device(device)
+        if resolved is None or self._device is None:
+            return False
+        return _device_key(self._device) == _device_key(resolved)
 
     def calculate(
         self,
         atoms: Atoms | None = None,
         properties: list[str] | None = None,
+        *,
+        positions_hash: int | None = None,
     ) -> None:
         """Run single-point calculation via ``ts.static()``.
 
@@ -151,6 +185,9 @@ class TorchSimCalculator:
             ASE Atoms object.
         properties
             List of requested properties (e.g. ["energy", "forces"]).
+        positions_hash
+            Optional precomputed geometry hash; skips a second hash when the
+            caller already computed one for cache invalidation.
         """
         if atoms is None:
             return
@@ -187,13 +224,20 @@ class TorchSimCalculator:
         if "stress" in properties and "stress" in out and out["stress"] is not None:
             s = out["stress"].detach().cpu().numpy()
             self.results["stress"] = _voigt_6(s.squeeze())
-        self._last_positions_hash = _positions_cell_hash(atoms)
+        self._last_positions_hash = (
+            positions_hash
+            if positions_hash is not None
+            else _positions_cell_hash(atoms)
+        )
 
-    def _atoms_changed(self, atoms) -> bool:
-        """Check whether positions/cell/species changed since the last calculation."""
-        if atoms is None or self._last_positions_hash is None:
-            return True
-        return _positions_cell_hash(atoms) != self._last_positions_hash
+    def _geometry_hash_if_changed(self, atoms) -> tuple[bool, int | None]:
+        """Return ``(changed, hash)`` for *atoms* relative to the last calculate."""
+        if atoms is None:
+            return True, None
+        current = _positions_cell_hash(atoms)
+        if self._last_positions_hash is None or current != self._last_positions_hash:
+            return True, current
+        return False, current
 
     def get_potential_energy(self, atoms=None, force_consistent=False):
         """Return energy in eV.
@@ -208,10 +252,12 @@ class TorchSimCalculator:
             Accepted for ASE compatibility but ignored.
         """
         _ = force_consistent
-        if atoms is not None and (
-            self._atoms_changed(atoms) or "energy" not in self.results
-        ):
-            self.calculate(atoms, ["energy", "forces"])
+        if atoms is not None:
+            changed, positions_hash = self._geometry_hash_if_changed(atoms)
+            if changed or "energy" not in self.results:
+                self.calculate(
+                    atoms, ["energy", "forces"], positions_hash=positions_hash
+                )
         energy = self.results.get("energy")
         if energy is None or not np.isfinite(energy):
             raise RuntimeError(
@@ -228,10 +274,12 @@ class TorchSimCalculator:
         atoms
             ASE Atoms object.
         """
-        if atoms is not None and (
-            self._atoms_changed(atoms) or "forces" not in self.results
-        ):
-            self.calculate(atoms, ["energy", "forces"])
+        if atoms is not None:
+            changed, positions_hash = self._geometry_hash_if_changed(atoms)
+            if changed or "forces" not in self.results:
+                self.calculate(
+                    atoms, ["energy", "forces"], positions_hash=positions_hash
+                )
         forces = self.results.get("forces")
         if forces is None:
             n = len(atoms) if atoms is not None else 0
@@ -249,10 +297,14 @@ class TorchSimCalculator:
         atoms
             ASE Atoms object.
         """
-        if atoms is not None and (
-            self._atoms_changed(atoms) or "stress" not in self.results
-        ):
-            self.calculate(atoms, ["energy", "forces", "stress"])
+        if atoms is not None:
+            changed, positions_hash = self._geometry_hash_if_changed(atoms)
+            if changed or "stress" not in self.results:
+                self.calculate(
+                    atoms,
+                    ["energy", "forces", "stress"],
+                    positions_hash=positions_hash,
+                )
         stress = self.results.get("stress")
         if stress is None:
             raise RuntimeError(

@@ -860,6 +860,13 @@ def test_bo_eval_schedule():
     ]
 
 
+@pytest.mark.parametrize("fn", [resolved_bo_eval_budget, bo_eval_schedule])
+def test_bo_eval_helpers_require_resolved_batch_fields(fn):
+    config = AdsorptionConfig(bo=BOConfig())
+    with pytest.raises(ValueError, match="resolved_bo_eval_budget requires"):
+        fn(config)
+
+
 @pytest.mark.parametrize(
     ("kwargs", "error_match"),
     [

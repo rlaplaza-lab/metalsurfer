@@ -124,8 +124,13 @@ def _sites_clearance_and_vertex_mask(
     cell: np.ndarray,
     pbc: list[bool],
     min_separation: float,
+    need_mic_vecs: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return ``(vertex_mask, min_3d_dists, mic_vecs)`` for sites×existing."""
+    """Return ``(vertex_mask, min_3d_dists, mic_vecs)`` for sites×existing.
+
+    When *need_mic_vecs* is False (distances-only callers), skip the ``n×m×3``
+    MIC vector allocation and return an empty ``(n, 0, 3)`` placeholder.
+    """
     n = len(sites)
     if n == 0:
         return (
@@ -144,7 +149,13 @@ def _sites_clearance_and_vertex_mask(
 
     site_xyz = np.asarray([s.xyz for s in sites], dtype=float)
     cell_arr = np.asarray(cell, dtype=float)
-    mic_vecs, dists = geom._mol_slab_pairwise_mic(site_xyz, existing_arr, cell_arr, pbc)
+    if need_mic_vecs:
+        mic_vecs, dists = geom._mol_slab_pairwise_mic(
+            site_xyz, existing_arr, cell_arr, pbc
+        )
+    else:
+        dists = geom._mol_slab_pairwise_distances(site_xyz, existing_arr, cell_arr, pbc)
+        mic_vecs = np.zeros((n, 0, 3), dtype=float)
     min_dists = np.min(dists, axis=1)
     return min_dists >= float(min_separation), min_dists, mic_vecs
 
@@ -197,6 +208,7 @@ def site_footprint_clearances(
         cell=cell,
         pbc=pbc,
         min_separation=0.0,
+        need_mic_vecs=True,
     )
     return _footprint_clearances_from_mic(
         sites, mic_vecs, existing_radii, incoming_radius

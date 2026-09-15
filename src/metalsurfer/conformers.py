@@ -31,9 +31,10 @@ def create_conformers_from_smiles(
 ) -> tuple[list[Atoms], list[float]] | None:
     """Generate 3-D conformers for *smiles* via RDKit, optionally score them.
 
-    When *ts_model* is provided, all conformers are scored in a single batched
-    ``ts.static()`` call instead of one-by-one through the calculator. This is
-    significantly faster on GPU.
+    When *ts_model* is provided (or ``calculator._model`` for a TorchSim
+    calculator), all conformers are scored in a single batched ``ts.static()``
+    call instead of one-by-one through the calculator. This is significantly
+    faster on GPU.
 
     Returns ``(conformers, energies)`` or ``None`` on failure.
 
@@ -91,27 +92,25 @@ def create_conformers_from_smiles(
                 "MMFF did not converge for conformer %d of %s", conf_id, smiles
             )
 
+    symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
     conformers: list[Atoms] = []
-
     for conf_id in conf_ids:
         conf = mol.GetConformer(conf_id)
-        positions = []
-        symbols = []
-        for atom in mol.GetAtoms():
-            pos = conf.GetAtomPosition(atom.GetIdx())
-            positions.append([pos.x, pos.y, pos.z])
-            symbols.append(atom.GetSymbol())
-
-        atoms = Atoms(symbols=symbols, positions=np.array(positions))
+        positions = np.asarray(conf.GetPositions(), dtype=float)
+        atoms = Atoms(symbols=symbols, positions=positions)
         atoms.cell = [config.vacuum_box_size] * 3
         atoms.set_pbc([False, False, False])
         conformers.append(atoms)
 
-    if ts_model is not None and len(conformers) > 0:
+    score_model = ts_model
+    if score_model is None and calculator is not None:
+        score_model = getattr(calculator, "_model", None)
+
+    if score_model is not None and len(conformers) > 0:
         # Lazy: importing metalsurfer.optimization pulls torch via _deps.
         from .optimization import batch_static
 
-        results = batch_static(conformers, ts_model)
+        results = batch_static(conformers, score_model)
         energies = [e for e, _f in results]
     elif calculator is not None:
         energies = []
@@ -158,21 +157,29 @@ def remove_duplicate_conformers(
     sorted_indices = np.argsort(energies)
     sorted_conformers = [conformers[i] for i in sorted_indices]
     sorted_energies = [energies[i] for i in sorted_indices]
+    centered = [
+        np.asarray(c.get_positions(), dtype=float) - np.mean(c.get_positions(), axis=0)
+        for c in sorted_conformers
+    ]
 
     unique_conformers: list[Atoms] = []
     unique_energies: list[float] = []
+    unique_centered: list[np.ndarray] = []
 
-    for conformer, energy in zip(sorted_conformers, sorted_energies, strict=True):
+    for conformer, energy, centered_pos in zip(
+        sorted_conformers, sorted_energies, centered, strict=True
+    ):
         is_duplicate = False
-        for uc, ue in zip(unique_conformers, unique_energies, strict=True):
+        for uc_centered, ue in zip(unique_centered, unique_energies, strict=True):
             if abs(energy - ue) < energy_threshold:
-                rmsd = _kabsch_rmsd(conformer.get_positions(), uc.get_positions())
+                rmsd = _kabsch_rmsd(centered_pos, uc_centered, centered=True)
                 if rmsd < distance_threshold:
                     is_duplicate = True
                     break
         if not is_duplicate:
             unique_conformers.append(conformer)
             unique_energies.append(energy)
+            unique_centered.append(centered_pos)
 
     logger.info(
         "Removed %d duplicate conformers (%d/%d remaining)",
@@ -183,17 +190,23 @@ def remove_duplicate_conformers(
     return unique_conformers, unique_energies
 
 
-def _kabsch_rmsd(pos_a: np.ndarray, pos_b: np.ndarray) -> float:
+def _kabsch_rmsd(
+    pos_a: np.ndarray, pos_b: np.ndarray, *, centered: bool = False
+) -> float:
     """RMSD after optimal Kabsch rotation, so orientation-equivalent conformers match.
 
-    Both point sets are centred on their centroids, then ``pos_a`` is rotated by the
-    optimal rotation (SVD of the cross-covariance) before measuring RMSD against
-    ``pos_b``. Returns ``inf`` when the atom counts disagree.
+    Both point sets are centred on their centroids (unless *centered* is True),
+    then ``pos_a`` is rotated by the optimal rotation (SVD of the
+    cross-covariance) before measuring RMSD against ``pos_b``. Returns ``inf``
+    when the atom counts disagree.
     """
     if np.asarray(pos_a).shape != np.asarray(pos_b).shape:
         return float("inf")
-    a = np.asarray(pos_a, dtype=float) - np.mean(pos_a, axis=0)
-    b = np.asarray(pos_b, dtype=float) - np.mean(pos_b, axis=0)
+    a = np.asarray(pos_a, dtype=float)
+    b = np.asarray(pos_b, dtype=float)
+    if not centered:
+        a = a - np.mean(a, axis=0)
+        b = b - np.mean(b, axis=0)
     H = a.T @ b
     U, _S, Vt = np.linalg.svd(H)
     d = 1.0 if float(np.linalg.det(Vt.T @ U.T)) >= 0.0 else -1.0

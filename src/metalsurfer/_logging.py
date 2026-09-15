@@ -127,7 +127,7 @@ class _LogStreamToLogger(io.TextIOBase):
         self._level = level
         self._rate_limit_s = float(carriage_return_rate_limit_s)
 
-        self._pending: str = ""
+        self._pending_parts: list[str] = []
         self._last_cr_text: str = ""
         self._last_emit_t: float = time.monotonic()
         self._last_emit_msg: str = ""
@@ -137,6 +137,12 @@ class _LogStreamToLogger(io.TextIOBase):
 
     def isatty(self) -> bool:  # pragma: no cover
         return False
+
+    def _pending_text(self) -> str:
+        return "".join(self._pending_parts)
+
+    def _clear_pending(self) -> None:
+        self._pending_parts.clear()
 
     def _maybe_emit_cr_snapshot(self, snapshot: str) -> None:
         msg = snapshot.strip()
@@ -152,8 +158,8 @@ class _LogStreamToLogger(io.TextIOBase):
             self._last_cr_text = ""
 
     def _emit_final_line(self) -> None:
-        msg = self._pending.strip()
-        self._pending = ""
+        msg = self._pending_text().strip()
+        self._clear_pending()
         if msg:
             self._logger.log(self._level, msg)
             self._last_emit_t = time.monotonic()
@@ -162,7 +168,7 @@ class _LogStreamToLogger(io.TextIOBase):
 
     def flush(self) -> None:
         # Emit any trailing content at context exit.
-        if self._pending.strip():
+        if self._pending_text().strip():
             self._emit_final_line()
             return
         if self._last_cr_text.strip():
@@ -187,29 +193,38 @@ class _LogStreamToLogger(io.TextIOBase):
         if not isinstance(s, str):
             s = str(s)
 
-        for ch in s:
+        i = 0
+        n = len(s)
+        while i < n:
+            ch = s[i]
             if ch == "\n":
-                if self._pending:
+                if self._pending_parts:
                     self._emit_final_line()
                 else:
                     if self._last_cr_text.strip():
                         self._logger.log(self._level, self._last_cr_text.strip())
                         self._last_cr_text = ""
+                i += 1
                 continue
 
             if ch == "\r":
-                snapshot = self._pending
-                self._pending = ""
+                snapshot = self._pending_text()
+                self._clear_pending()
                 if snapshot.strip():
                     self._last_cr_text = snapshot.strip()
                     self._maybe_emit_cr_snapshot(snapshot)
                 else:
                     self._last_cr_text = ""
+                i += 1
                 continue
 
-            self._pending += ch
+            j = i + 1
+            while j < n and s[j] not in "\n\r":
+                j += 1
+            self._pending_parts.append(s[i:j])
+            i = j
 
-        return len(s)
+        return n
 
 
 def _parse_level(level_name: str, default: int) -> int:
@@ -340,6 +355,11 @@ def torchsim_output_capture(
     - stdout is mapped to INFO, stderr is mapped to WARNING.
     - stdout updates using carriage return (``\r``) are rate-limited so we
       don't emit thousands of near-identical log lines.
+    - This context swaps process-global ``sys.stdout`` / ``sys.stderr``. Nested
+      captures are safe (inner restores the outer streams), but overlapping
+      concurrent uses from multiple threads are not: serialize TorchSim work
+      that needs capture. Autobatcher/capacity cache locks in
+      :mod:`metalsurfer.optimization._cache` do not protect this swap.
 
     Parameters
     ----------

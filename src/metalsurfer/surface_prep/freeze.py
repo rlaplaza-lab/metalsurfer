@@ -265,12 +265,11 @@ def max_frozen_substrate_displacement(
             f"reference slab has {len(ref_pos)} atoms, expected at least "
             f"{slab_size} (slab_size)"
         )
-    max_disp = 0.0
-    for idx in frozen_indices:
-        if idx >= slab_size:
-            continue
-        max_disp = max(max_disp, float(np.linalg.norm(opt_pos[idx] - ref_pos[idx])))
-    return max_disp
+    kept = [idx for idx in frozen_indices if idx < slab_size]
+    if not kept:
+        return 0.0
+    deltas = opt_pos[kept] - ref_pos[kept]
+    return float(np.linalg.norm(deltas, axis=1).max())
 
 
 def check_frozen_substrate_displacement(

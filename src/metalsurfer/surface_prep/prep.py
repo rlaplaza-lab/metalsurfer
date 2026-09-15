@@ -431,7 +431,7 @@ def prepare_substrate(
     elif material_type == "nanoparticle":
         slab_container.atoms = _anchor_atoms_bottom(slab_container.atoms)
 
-    return finalize_substrate(
+    finalized = finalize_substrate(
         slab_container,
         cfg,
         align=False,
@@ -440,6 +440,10 @@ def prepare_substrate(
         freeze_symbols=freeze_symbols,
         top_layer_tolerance=top_layer_tolerance,
     )
+    if calculator is not None:
+        # finalize copies atoms and drops calc; reattach for campaign reuse.
+        finalized.atoms.calc = calculator
+    return finalized
 
 
 def resize_substrate_for_molecule(

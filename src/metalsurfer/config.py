@@ -580,14 +580,11 @@ def bo_eval_schedule(config: "AdsorptionConfig") -> list[int]:
     config
         Adsorption configuration with resolved BO fields.
     """
-    if config.bo.initial_random is None or config.bo.batch_size is None:
-        raise ValueError(
-            "bo_eval_schedule requires bo.initial_random and bo.batch_size "
-            "to be resolved (not None)"
-        )
+    budget = resolved_bo_eval_budget(config)
+    assert config.bo.initial_random is not None
+    assert config.bo.batch_size is not None
     initial = int(config.bo.initial_random)
     batch = int(config.bo.batch_size)
-    budget = resolved_bo_eval_budget(config)
     schedule = [initial]
     current = initial
     while current < budget:

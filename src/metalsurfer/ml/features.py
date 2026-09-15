@@ -176,16 +176,15 @@ def extract_features_from_dataset(
     if len(df) == 0:
         raise ValueError("Dataset is empty; cannot extract training features")
 
-    working = df.copy()
     required_geometry_cols = tuple(FEATURE_ABS_COLUMNS.values()) + ("conformer_index",)
-    missing = [col for col in required_geometry_cols if col not in working.columns]
+    missing = [col for col in required_geometry_cols if col not in df.columns]
     if missing:
         missing_csv = ", ".join(missing)
         raise ValueError(
             "Dataset must contain strict geometric feature columns: "
             f"{missing_csv} missing"
         )
-    missing_quat = [col for col in _QUAT_FEATURE_NAMES if col not in working.columns]
+    missing_quat = [col for col in _QUAT_FEATURE_NAMES if col not in df.columns]
     if missing_quat:
         missing_csv = ", ".join(missing_quat)
         raise ValueError(
@@ -193,35 +192,27 @@ def extract_features_from_dataset(
         )
 
     strict_cols = list(required_geometry_cols) + list(_QUAT_FEATURE_NAMES)
-    for col in strict_cols:
-        working[col] = pd.to_numeric(working[col], errors="coerce")
-    if working[strict_cols].isna().any().any():
-        raise ValueError(
-            "Dataset contains missing/invalid values in strict feature columns "
-            f"({', '.join(strict_cols)})"
-        )
-    values = working[strict_cols].to_numpy(dtype=float)
+    values = (
+        df.loc[:, strict_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
     if not np.all(np.isfinite(values)):
         raise ValueError(
-            "Dataset contains non-finite values in strict feature columns "
-            f"({', '.join(strict_cols)})"
+            "Dataset contains missing/invalid/non-finite values in strict "
+            f"feature columns ({', '.join(strict_cols)})"
         )
 
-    quat_values = normalize_quaternions(
-        working[list(_QUAT_FEATURE_NAMES)].to_numpy(dtype=float)
-    )
-
+    n_abs = len(FEATURE_ABS_COLUMNS)
+    quat_values = normalize_quaternions(values[:, n_abs + 1 :])
     X = pd.DataFrame(
         {
-            **{
-                name: working[abs_name].astype(float)
-                for name, abs_name in FEATURE_ABS_COLUMNS.items()
-            },
-            "conformer_index": working["conformer_index"].astype(float),
-            "quat_w": quat_values[:, 0].astype(float),
-            "quat_x": quat_values[:, 1].astype(float),
-            "quat_y": quat_values[:, 2].astype(float),
-            "quat_z": quat_values[:, 3].astype(float),
+            **{name: values[:, i] for i, name in enumerate(FEATURE_ABS_COLUMNS)},
+            "conformer_index": values[:, n_abs],
+            "quat_w": quat_values[:, 0],
+            "quat_x": quat_values[:, 1],
+            "quat_y": quat_values[:, 2],
+            "quat_z": quat_values[:, 3],
         },
         columns=FEATURE_NAMES,
     )

@@ -253,19 +253,21 @@ def _spec_grid_info(
             site_indices = list(range(len(unique_sites)))
             clearances = np.full(len(unique_sites), np.inf, dtype=float)
         else:
+            need_footprint = (
+                config.occupancy_use_footprint
+                and r_in is not None
+                and existing_radii is not None
+            )
             vertex_mask, min_dists, mic_vecs = _sites_clearance_and_vertex_mask(
                 unique_sites,
                 existing_ads_pos,
                 cell=cell_arr,
                 pbc=pbc,
                 min_separation=float(config.min_adsorbate_separation),
+                need_mic_vecs=need_footprint,
             )
             site_indices = [i for i, keep in enumerate(vertex_mask) if keep]
-            if (
-                config.occupancy_use_footprint
-                and r_in is not None
-                and existing_radii is not None
-            ):
+            if need_footprint:
                 clearances = _footprint_clearances_from_mic(
                     unique_sites, mic_vecs, existing_radii, float(r_in)
                 )
