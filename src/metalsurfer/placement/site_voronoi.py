@@ -202,6 +202,7 @@ def _voronoi_sites(
         max_distance,
         cell=cell,
         pbc=pbc,
+        n_origin=len(positions),
     )
     return enriched_verts, enriched_dists
 
@@ -232,7 +233,7 @@ def _generate_slab_topology_sites(
     cell: np.ndarray,
     pbc: np.ndarray,
     top_atom_indices: np.ndarray,
-    local_tree: KDTree,
+    accessibility_tree: KDTree,
     site_height: float,
     probe_radius: float,
     max_distance: float,
@@ -240,7 +241,8 @@ def _generate_slab_topology_sites(
     """Generate slab atop/bridge/hollow candidates from the top layer.
 
     Candidates are created in an orientation-aware way and wrapped back into the
-    reference cell on periodic axes.
+    reference cell on periodic axes. *accessibility_tree* must be MIC-aware
+    under PBC (see :func:`site_enumeration._periodic_accessibility_tree`).
     """
     empty_vertices = np.empty((0, 3), dtype=float)
     empty_dists = np.empty(0, dtype=float)
@@ -263,7 +265,7 @@ def _generate_slab_topology_sites(
         pts = np.asarray(points, dtype=float)
         if np.any(pbc):
             pts = _wrap_cartesian(pts, cell, pbc)
-        dists, _ = local_tree.query(pts, k=1)
+        dists, _ = accessibility_tree.query(pts, k=1)
         for p, d_nn in zip(pts, np.asarray(dists).ravel(), strict=True):
             d_val = float(d_nn)
             if probe_radius <= d_val <= max_distance:
@@ -373,17 +375,24 @@ def _enrich_along_ridges(
     *,
     cell: np.ndarray,
     pbc: np.ndarray,
+    n_origin: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Subdivide long admissible Voronoi edges and re-check accessibility."""
     n_kept = len(vertices)
     if n_kept < 2:
         return vertices, nn_dists
 
-    k_support = min(_SITE_CLASSIFICATION_NEIGHBOURS, len(extended_positions))
+    n_ext = len(extended_positions)
+    if n_origin is None:
+        n_origin = n_ext
+
+    k_support = min(_SITE_CLASSIFICATION_NEIGHBOURS, n_ext)
     _, support_indices = framework_tree.query(vertices, k=k_support)
     if np.ndim(support_indices) == 1:
         support_indices = np.asarray(support_indices).reshape(-1, 1)
-    support_sets = [set(int(j) for j in row) for row in np.asarray(support_indices)]
+    support_sets = [
+        {int(j) % n_origin for j in row} for row in np.asarray(support_indices)
+    ]
 
     median_nn = float(np.median(nn_dists)) if len(nn_dists) else float(probe_radius)
     target_spacing = _ENRICHMENT_SPACING_BETA * median_nn

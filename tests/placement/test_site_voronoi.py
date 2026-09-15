@@ -276,6 +276,7 @@ def test_voronoi_enrichment_uses_ridge_vertices(monkeypatch):
         *,
         cell,
         pbc,
+        n_origin=None,
     ):
         captured["ridge_vertices"] = ridge_vertices
         return vertices, nn_dists
@@ -604,3 +605,62 @@ def test_expand_top_layer_ab_images_matches_projection():
             for li in range(len(top_xy)):
                 ref_xy.append(top_xy[li] + off_2d)
     assert np.allclose(exp_xy, np.asarray(ref_xy), atol=1e-12, rtol=0)
+
+
+def test_enrich_along_ridges_origin_id_support_intersection(monkeypatch):
+    """Same origin atom via different periodic images must share a support set."""
+    monkeypatch.setattr(site_voronoi_module, "_SITE_CLASSIFICATION_NEIGHBOURS", 1)
+
+    n_origin = 2
+    origin = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+        ],
+        dtype=float,
+    )
+    cell_a = np.array([8.0, 0.0, 0.0])
+    extended = np.vstack([origin, origin + cell_a])
+    vertices = np.array(
+        [
+            [0.1, 0.0, 1.0],
+            [8.1, 0.0, 1.0],
+        ],
+        dtype=float,
+    )
+    nn_dists = np.array([1.0, 1.0], dtype=float)
+    ridge_vertices = [[0, 1]]
+    raw_to_kept = {0: 0, 1: 1}
+    tree = KDTree(extended)
+    cell = np.diag([24.0, 20.0, 20.0])
+    pbc = np.array([True, False, False], dtype=bool)
+
+    out_raw, _ = _enrich_along_ridges(
+        vertices,
+        nn_dists,
+        ridge_vertices,
+        raw_to_kept,
+        extended,
+        tree,
+        probe_radius=0.0,
+        max_distance=100.0,
+        cell=cell,
+        pbc=pbc,
+        n_origin=len(extended),
+    )
+    assert len(out_raw) == len(vertices)
+
+    out_norm, _ = _enrich_along_ridges(
+        vertices,
+        nn_dists,
+        ridge_vertices,
+        raw_to_kept,
+        extended,
+        tree,
+        probe_radius=0.0,
+        max_distance=100.0,
+        cell=cell,
+        pbc=pbc,
+        n_origin=n_origin,
+    )
+    assert len(out_norm) > len(vertices)

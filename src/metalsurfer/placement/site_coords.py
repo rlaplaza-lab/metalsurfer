@@ -74,7 +74,6 @@ __all__ = [
     "_deduplicate_points",
     "_derive_top_layer_tolerance",
     "_derive_voronoi_distance_window",
-    "_filter_non_duplicate_candidates",
     "_keep_mask_from_clusters",
     "_mean_covalent_radius",
     "_pbc_merge_pair_set",
@@ -148,21 +147,6 @@ def top_layer_mask_by_normal(
         terrace = (heights >= terrace_top - tol) & (heights <= terrace_top + tol)
         return primary | terrace
     return primary
-
-
-def _filter_non_duplicate_candidates(
-    candidates: np.ndarray,
-    existing: np.ndarray,
-    tolerance: float,
-) -> np.ndarray:
-    """Boolean mask: True where *candidates* are not within *tolerance* of *existing*."""
-    if len(existing) == 0:
-        return np.ones(len(candidates), dtype=bool)
-    if len(candidates) == 0:
-        return np.ones(0, dtype=bool)
-    tree = KDTree(existing)
-    dists, _ = tree.query(np.asarray(candidates, dtype=float), k=1)
-    return np.asarray(dists, dtype=float).ravel() >= tolerance
 
 
 # ---------------------------------------------------------------------------

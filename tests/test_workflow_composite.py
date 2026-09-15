@@ -5,9 +5,11 @@ import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
-from metalsurfer.models import ScreeningResult
+from metalsurfer.models import PlacementDescriptor, ScreeningResult
 from metalsurfer.placement.geometry import calculate_min_distance
+from metalsurfer.placement.site_coords import _slab_normal
 from metalsurfer.workflow.composite import (
+    _apply_suffix_to_result,
     _per_unit_surface_distances,
     build_composite_candidate,
     evaluate_composite_commit,
@@ -306,6 +308,41 @@ def test_pack_tuplet_adsorbates_keeps_unit1_and_separates_unit2():
             calculate_min_distance(s0, s1, slab.get_cell(), use_pbc=True, pbc=SLAB_PBC)
             >= 1.5 - 1e-3
         )
+
+
+def test_apply_suffix_to_result_recomputes_z_offset():
+    """Suffix rewrite must keep z_offset consistent with COM and surface_ref."""
+    from dataclasses import replace
+
+    slab = make_slab()
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    n_hat = _slab_normal(cell)
+    surface_ref = 5.0
+    original_z_offset = 2.5
+    winner = _winner(slab, pid=0, e_ads=-1.0, x_shift=5.0, z_offset=3.0)
+    stale_desc = make_placement_descriptor(
+        placement_id=0,
+        z_offset=original_z_offset,
+        surface_ref_z_abs=surface_ref,
+        z_abs=surface_ref + original_z_offset,
+    )
+    winner = replace(winner, placement_descriptor=stale_desc)
+    suffix = np.asarray(winner.atoms.get_positions()[winner.slab_size :], dtype=float)
+    new_suffix = suffix + 1.5 * n_hat
+    updated = _apply_suffix_to_result(winner, new_suffix, slab_atoms=slab)
+    desc = updated.placement_descriptor
+    com = np.mean(new_suffix, axis=0)
+    expected_z_offset = float(np.dot(com, n_hat) - surface_ref)
+    assert desc.surface_ref_z_abs == pytest.approx(surface_ref)
+    assert desc.z_offset == pytest.approx(expected_z_offset)
+    assert abs(desc.z_offset - original_z_offset) > 0.5
+    assert float(np.dot(com, n_hat)) == pytest.approx(surface_ref + desc.z_offset)
+
+    row = desc.to_row(include_provenance=True)
+    assert row["initial_z_offset"] == pytest.approx(expected_z_offset)
+    restored = PlacementDescriptor.from_row(row, placement_index=0)
+    assert restored.z_offset == pytest.approx(expected_z_offset)
+    assert restored.surface_ref_z_abs == pytest.approx(surface_ref)
 
 
 # ---------------------------------------------------------------------------

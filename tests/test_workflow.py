@@ -84,6 +84,27 @@ def test_placement_spec_key_distinguishes_azimuth_in_plane():
     )
 
 
+def test_placement_spec_key_distinguishes_site_type():
+    base = dict(
+        conformer_index=0,
+        orientation_type="round",
+        face_flip=False,
+        en_atom_index=None,
+        site_index=0,
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+    atop = PlacementSpec(**base, site_type="atop")
+    bridge = PlacementSpec(**base, site_type="bridge")
+    assert placement_spec_key(atop) != placement_spec_key(bridge)
+    assert placement_spec_key(atop) == placement_spec_key(
+        PlacementSpec(**base, site_type="atop")
+    )
+
+
 # ---------------------------------------------------------------------------
 # _validate_geometry
 # ---------------------------------------------------------------------------

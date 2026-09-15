@@ -17,7 +17,6 @@ from ._constants import (
     _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     _DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     _DEFAULT_SYMMETRY_TOLERANCE,
-    _KD_RADIUS_SEARCH_PADDING,
     _NORMAL_K_NEIGHBOURS,
     _PARALLEL_Z_MIN_HI_MARGIN,
     _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
@@ -45,7 +44,6 @@ from .site_coords import (
     _deduplicate_points,
     _derive_top_layer_tolerance,
     _derive_voronoi_distance_window,
-    _filter_non_duplicate_candidates,
     _frac_to_cart,
     _height_along_slab_normal,
     _minimum_image_fractional_delta,
@@ -121,9 +119,11 @@ def _median_nn_or_fallback(
         cell_arr = np.asarray(cell, dtype=float)
         if cell_has_volume(cell_arr) and np.any(pbc_arr):
             margin = float(np.max(np.linalg.norm(cell_arr[pbc_arr], axis=1)))
-            ext = _build_periodic_images(pts, cell_arr, pbc_arr, margin=margin)
+            offsets = _periodic_image_offsets(cell_arr, pbc_arr, margin)
+            ext = np.vstack([pts + off for off in offsets])
             tree = KDTree(ext)
-            dists, idxs = tree.query(pts, k=min(len(ext), 2))
+            k = min(len(ext), len(offsets) + 1)
+            dists, idxs = tree.query(pts, k=k)
             dists = np.atleast_2d(np.asarray(dists, dtype=float))
             idxs = np.atleast_2d(np.asarray(idxs))
             n = len(pts)
@@ -326,30 +326,23 @@ def _inject_atop_sites(
     candidate_dist_arr = d_nn_all[keep_acc]
     candidate_sources = ["atop_injected"] * int(np.count_nonzero(keep_acc))
 
-    keep_new = _filter_non_duplicate_candidates(
-        candidate_arr, vertices, _VORONOI_DEDUP_TOLERANCE
+    n_existing = len(vertices)
+    vertices, nn_dists, source_hints = _merge_dedup_site_arrays(
+        vertices,
+        nn_dists,
+        source_hints,
+        candidate_arr,
+        candidate_dist_arr,
+        candidate_sources,
+        cell=cell,
+        pbc=pbc,
     )
-    candidate_arr = candidate_arr[keep_new]
-    candidate_dist_arr = candidate_dist_arr[keep_new]
-    candidate_sources = [candidate_sources[i] for i in np.nonzero(keep_new)[0]]
-    if len(candidate_arr) > 0:
-        n_existing = len(vertices)
-        vertices, nn_dists, source_hints = _merge_dedup_site_arrays(
-            vertices,
-            nn_dists,
-            source_hints,
-            candidate_arr,
-            candidate_dist_arr,
-            candidate_sources,
-            cell=cell,
-            pbc=pbc,
-        )
-        n_injected = len(vertices) - n_existing
-        logger.debug(
-            "Injected %d atop candidate sites (%d total sites)",
-            max(n_injected, 0),
-            len(vertices),
-        )
+    n_injected = len(vertices) - n_existing
+    logger.debug(
+        "Injected %d atop candidate sites (%d total sites)",
+        max(n_injected, 0),
+        len(vertices),
+    )
 
     return vertices, nn_dists, source_hints
 
@@ -916,7 +909,8 @@ def _cluster_equivalent_sites(
     coords = np.array([_get_xyz(s) for s in sorted_sites])
     heights = _height_along_slab_normal(coords, cell)
     pbc_slab = np.asarray(material_aware_pbc(mat_type), dtype=bool)
-    image_offsets = _periodic_image_offsets(cell, pbc_slab, tolerance)
+    r_search = float(np.hypot(tolerance, z_tol))
+    image_offsets = _periodic_image_offsets(cell, pbc_slab, r_search)
     # Hoist loop-invariant quantities out of the per-pair closure: the slab
     # normal and the inverse cell (otherwise ``_cart_to_frac`` recomputes
     # ``np.linalg.inv(cell)`` on every pair).
@@ -937,7 +931,6 @@ def _cluster_equivalent_sites(
         dz = abs(float(heights[a]) - float(heights[b]))
         return dxy < tolerance and dz < z_tol
 
-    r_search = tolerance * _KD_RADIUS_SEARCH_PADDING
     reps = _cluster_with_metric(
         n,
         coords,

@@ -171,6 +171,8 @@ def _apply_suffix_to_result(
     quat_x = desc.quat_x
     quat_y = desc.quat_y
     quat_z = desc.quat_z
+    cell = np.asarray(slab_atoms.get_cell(), dtype=float)
+    n_hat = _slab_normal(cell)
     if (
         az_delta is not None
         and quat_w is not None
@@ -178,12 +180,15 @@ def _apply_suffix_to_result(
         and quat_y is not None
         and quat_z is not None
     ):
-        normal = _slab_normal(np.asarray(slab_atoms.get_cell(), dtype=float))
         quat_w, quat_x, quat_y, quat_z = compose_quaternion_with_azimuth(
             (quat_w, quat_x, quat_y, quat_z),
             az_delta,
-            normal,
+            n_hat,
         )
+    surface_ref = (
+        float(desc.surface_ref_z_abs) if desc.surface_ref_z_abs is not None else 0.0
+    )
+    z_offset = float(np.dot(com, n_hat) - surface_ref)
     new_desc = replace(
         desc,
         x=float(com[0]),
@@ -191,6 +196,7 @@ def _apply_suffix_to_result(
         x_abs=float(com[0]),
         y_abs=float(com[1]),
         z_abs=float(com[2]),
+        z_offset=z_offset,
         quat_w=quat_w,
         quat_x=quat_x,
         quat_y=quat_y,

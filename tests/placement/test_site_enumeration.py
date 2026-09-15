@@ -318,13 +318,15 @@ def test_topology_bridges_keep_distinct_pbc_midpoints():
     cell = np.diag([4.0, 4.0, 20.0])
     pbc = np.array([True, True, False], dtype=bool)
     top_idx = np.arange(4, dtype=int)
-    local_tree = KDTree(positions)
+    from metalsurfer.placement.site_enumeration import _periodic_accessibility_tree
+
+    access_tree = _periodic_accessibility_tree(positions, cell, pbc, max_distance=5.0)
     verts, _dists, sources, _tri, *_rest = _generate_slab_topology_sites(
         positions,
         cell,
         pbc,
         top_idx,
-        local_tree,
+        access_tree,
         site_height=0.5,
         probe_radius=1.0,
         max_distance=5.0,
@@ -718,3 +720,189 @@ def test_cluster_equivalent_sites_orders_by_slab_normal_height():
 
     # The output must already be in slab-normal-height order.
     assert clustered == sorted(clustered, key=slab_key)
+
+
+def test_median_nn_or_fallback_elongated_cell_avoids_self_image():
+    """k=len(offsets)+1 must recover true NN; naive k=2 leaks self-images."""
+    from ase.geometry import find_mic
+
+    from metalsurfer.placement._constants import (
+        _ATOP_INJECTION_HEIGHT_FACTOR,
+        _SURFACE_COVALENT_RADIUS_FALLBACK,
+        _VORONOI_MAX_DISTANCE_COVALENT_SCALE,
+    )
+    from metalsurfer.placement.site_enumeration import _median_nn_or_fallback
+
+    def reference_median_nn(points, cell, pbc):
+        nn = []
+        for i in range(len(points)):
+            _, dists = find_mic(points - points[i], cell, pbc=pbc)
+            dists = np.asarray(dists, dtype=float)
+            dists[i] = np.inf
+            nn.append(float(np.min(dists)))
+        return float(np.median(nn))
+
+    pbc = np.array([True, True, False], dtype=bool)
+    elong_cell = np.diag([3.0, 20.0, 30.0])
+    elong_points = np.array([[0.0, 0.0, 5.0], [0.0, 10.0, 5.0]], dtype=float)
+    got = _median_nn_or_fallback(
+        np.empty(0, dtype=float),
+        reference_positions=elong_points,
+        cell=elong_cell,
+        pbc=pbc,
+    )
+    expected = reference_median_nn(elong_points, elong_cell, pbc)
+    assert abs(got - expected) < 1e-9
+    assert abs(got - 10.0) < 1e-9, f"self-image leaked into median NN: {got}"
+    fallback = _VORONOI_MAX_DISTANCE_COVALENT_SCALE * _SURFACE_COVALENT_RADIUS_FALLBACK
+    assert abs(got - fallback) > 1.0
+    assert abs(_ATOP_INJECTION_HEIGHT_FACTOR * got - 8.0) < 1e-9
+
+
+def test_cluster_equivalent_sites_anisotropic_slab_metric_bound():
+    """Pairs that pass dxy/dz but exceed 1.5*tol Cartesian must still merge."""
+    from metalsurfer.placement.site_enumeration import _cluster_equivalent_sites
+
+    cell = np.diag([10.0, 10.0, 20.0])
+    tol = 0.05
+    z_tol = 0.5
+    site_a = _make_site(
+        [1.0, 1.0, 5.0],
+        site_type="atop",
+        material_type="slab",
+        env_fingerprint=(("Cu",), "atop"),
+    )
+    site_b = _make_site(
+        [1.04, 1.0, 5.10],
+        site_type="atop",
+        material_type="slab",
+        env_fingerprint=(("Cu",), "atop"),
+    )
+    cart = float(np.linalg.norm(np.asarray(site_b.xyz) - np.asarray(site_a.xyz)))
+    assert cart > 1.5 * tol
+    assert cart < float(np.hypot(tol, z_tol))
+    unique = _cluster_equivalent_sites(
+        [site_a, site_b], cell, tolerance=tol, z_abs_tolerance=z_tol
+    )
+    assert len(unique) == 1
+
+    site_far = _make_site(
+        [1.04, 1.0, 5.60],
+        site_type="atop",
+        material_type="slab",
+        env_fingerprint=(("Cu",), "atop"),
+    )
+    cart_far = float(np.linalg.norm(np.asarray(site_far.xyz) - np.asarray(site_a.xyz)))
+    assert cart_far > float(np.hypot(tol, z_tol))
+    unique_far = _cluster_equivalent_sites(
+        [site_a, site_far], cell, tolerance=tol, z_abs_tolerance=z_tol
+    )
+    assert len(unique_far) == 2
+
+
+def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
+    """PBC-aware merge alone collapses boundary-duplicate atop injections."""
+    from metalsurfer.placement._constants import _ATOP_INJECTION_HEIGHT_FACTOR
+    from metalsurfer.placement.site_enumeration import (
+        _inject_atop_sites,
+        _periodic_accessibility_tree,
+    )
+
+    positions = np.array(
+        [
+            [0.05, 1.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [0.05, 3.0, 0.0],
+            [2.0, 3.0, 0.0],
+        ],
+        dtype=float,
+    )
+    cell = np.diag([4.0, 4.0, 20.0])
+    pbc = np.array([True, True, False], dtype=bool)
+    median_nn = 2.0
+    site_z = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
+    existing = np.array([[3.98, 1.0, site_z]], dtype=float)
+    existing_dists = np.array([site_z], dtype=float)
+    existing_sources = ["voronoi"]
+    access = _periodic_accessibility_tree(positions, cell, pbc, max_distance=5.0)
+    verts, _dists, _sources = _inject_atop_sites(
+        existing,
+        existing_dists,
+        existing_sources,
+        positions=positions,
+        cell=cell,
+        pbc=pbc,
+        material_type="slab",
+        local_tree=KDTree(positions),
+        accessibility_tree=access,
+        median_nn=median_nn,
+        slab_top_atom_indices=np.arange(4, dtype=int),
+        slab_has_topology_atop=False,
+        probe_radius=0.5,
+        max_site_distance=5.0,
+    )
+    near_atom0 = [
+        v
+        for v in verts
+        if abs(float(v[1]) - 1.0) < 0.05
+        and (abs(float(v[0]) % 4.0) < 0.15 or abs(float(v[0]) % 4.0 - 4.0) < 0.15)
+    ]
+    assert len(near_atom0) == 1
+
+
+def test_topology_boundary_candidate_retained_with_accessibility_tree():
+    """PBC-aware accessibility_tree keeps a boundary candidate a plain tree drops."""
+    from metalsurfer.placement.site_enumeration import _periodic_accessibility_tree
+    from metalsurfer.placement.site_voronoi import _generate_slab_topology_sites
+
+    positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 2.0, 0.0],
+        ],
+        dtype=float,
+    )
+    cell = np.diag([4.0, 4.0, 20.0])
+    pbc = np.array([True, True, False], dtype=bool)
+    top_idx = np.arange(2, dtype=int)
+    site_height = 0.5
+    probe_radius = 0.3
+    max_distance = 1.0
+
+    plain = KDTree(positions)
+    access = _periodic_accessibility_tree(positions, cell, pbc, max_distance)
+
+    boundary_pt = np.array([[3.95, 0.0, site_height]], dtype=float)
+    d_plain = float(np.asarray(plain.query(boundary_pt, k=1)[0]).ravel()[0])
+    d_access = float(np.asarray(access.query(boundary_pt, k=1)[0]).ravel()[0])
+    assert d_plain > max_distance
+    assert probe_radius <= d_access <= max_distance
+
+    verts_plain, _, sources_plain, *_ = _generate_slab_topology_sites(
+        positions,
+        cell,
+        pbc,
+        top_idx,
+        plain,
+        site_height=site_height,
+        probe_radius=probe_radius,
+        max_distance=max_distance,
+    )
+    verts_access, _, sources_access, *_ = _generate_slab_topology_sites(
+        positions,
+        cell,
+        pbc,
+        top_idx,
+        access,
+        site_height=site_height,
+        probe_radius=probe_radius,
+        max_distance=max_distance,
+    )
+    assert len(verts_access) >= len(verts_plain)
+    assert sum(s == "topology_atop" for s in sources_access) >= sum(
+        s == "topology_atop" for s in sources_plain
+    )
+    assert any(
+        abs(float(v[0]) % 4.0) < 0.2 or abs(float(v[0]) % 4.0 - 4.0) < 0.2
+        for v in verts_access
+    )
