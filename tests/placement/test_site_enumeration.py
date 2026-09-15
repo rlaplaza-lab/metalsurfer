@@ -727,6 +727,19 @@ def test_issue6_ni55_and_ni13_expose_atop_bridge_hollow():
         assert atop_nn
         assert abs(float(np.median(atop_nn)) - height) < 0.35, name
 
+        # Site.normal must match the support-atom lift direction (not a tilted
+        # k-NN centroid), otherwise pose slides laterally off the topology site.
+        for s in sites:
+            idx = [int(i) for i in s.slab_indices if 0 <= int(i) < len(pos)]
+            assert idx, name
+            lift = np.asarray(s.xyz, dtype=float) - np.mean(pos[idx], axis=0)
+            nrm = float(np.linalg.norm(lift))
+            assert nrm > 1e-8, name
+            lift_hat = lift / nrm
+            n_hat = np.asarray(s.normal, dtype=float)
+            n_hat = n_hat / float(np.linalg.norm(n_hat))
+            assert float(np.dot(n_hat, lift_hat)) > 0.999, name
+
 
 def test_issue6_nonempty_voronoi_must_not_zero_out_np_atops(monkeypatch):
     """NP enumeration must not call Voronoi (topology-only path)."""

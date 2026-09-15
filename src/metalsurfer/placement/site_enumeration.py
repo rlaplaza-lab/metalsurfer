@@ -208,7 +208,8 @@ def _delaunay_classify_inputs(
     if site_classification_method == "delaunay" and material_type != "slab":
         logger.warning(
             "site_classification_method='delaunay' is slab-only; "
-            "falling back to distance-ratio classification for material_type=%r",
+            "keeping topology labels (nanoparticle) or distance-ratio "
+            "(porous) for material_type=%r",
             material_type,
         )
     if material_type != "slab" or site_classification_method not in (

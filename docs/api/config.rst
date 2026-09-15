@@ -165,9 +165,9 @@ Site detection
     **Type:** ``bool`` · **Default:** ``True``
 
     Enable geodesic ridge subdivision to add denser candidate sites on irregular
-    surfaces. Effective for ``material_type="porous"`` and ``"nanoparticle"``,
-    and for rough/non-planar slabs; a no-op for **planar** slabs (the coplanar
-    top layer has no 3D Voronoi diagram, so ridge subdivision is skipped).
+    surfaces. Effective for ``material_type="porous"`` and rough/non-planar slabs;
+    a no-op for **planar** slabs and **nanoparticles** (both skip Voronoi and use
+    topology generators instead).
 
 ``voronoi_auto_widen``
    **Type:** ``bool`` · **Default:** ``True``
@@ -182,10 +182,11 @@ Site detection
 
    Algorithm for labeling sites as atop, bridge, or hollow.
    ``"auto"`` uses Delaunay triangulation of the slab top layer (recommended for
-   catalysis-style sampling) and distance-ratio labeling for nanoparticles and
-   porous materials. ``"distance_ratio"`` always uses six-neighbour distance
-   ratios. ``"delaunay"`` triangulates the slab top layer (slabs only; falls back
-   for other material types).
+   catalysis-style sampling). Nanoparticles keep hull+NN topology labels;
+   porous materials use distance-ratio on Voronoi vertices.
+   ``"distance_ratio"`` always uses six-neighbour distance ratios (topology
+   labels still win on nanoparticles). ``"delaunay"`` triangulates the slab top
+   layer (slabs only; falls back for other material types).
 
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)

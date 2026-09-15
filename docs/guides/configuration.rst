@@ -141,9 +141,9 @@ Placement success levers
   unless you need stricter starts (they reduce yield).
 
 Site classification defaults to ``site_classification_method="auto"``: Delaunay
-for slabs (catalysis-style atop/bridge/hollow catalogs) and distance-ratio for
-nanoparticles and porous materials. Explicit ``"distance_ratio"`` on slabs is
-honored for A/B comparisons.
+for slabs (catalysis-style atop/bridge/hollow catalogs), hull+NN topology labels
+for nanoparticles, and distance-ratio for porous Voronoi vertices. Explicit
+``"distance_ratio"`` on slabs is honored for A/B comparisons.
 
 Bayesian optimization budget
 ----------------------------

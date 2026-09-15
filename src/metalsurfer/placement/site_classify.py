@@ -436,10 +436,23 @@ def _classify_vertices(
             tuple(sorted(symbols[j] for j in nearest_idx if j < len(symbols))),
             site_type,
         )
+        # NP topology vertices are lifted along the support-atom centroid
+        # direction; keep that as Site.normal so pose does not slide off-axis
+        # when a k-NN centroid normal tilts relative to the coordinating atoms.
+        normal = ctx.normals[i]
+        if material_type == "nanoparticle" and nearest_idx:
+            support = [int(j) for j in nearest_idx if 0 <= int(j) < len(positions)]
+            if support:
+                lift = np.asarray(vertices[i], dtype=float) - np.mean(
+                    positions[support], axis=0
+                )
+                nrm = float(np.linalg.norm(lift))
+                if nrm >= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+                    normal = lift / nrm
         sites.append(
             Site(
                 xyz=vertices[i].copy(),
-                normal=ctx.normals[i],
+                normal=normal,
                 site_type=site_type,
                 slab_indices=tuple(int(j) for j in nearest_idx),
                 material_type=material_type,

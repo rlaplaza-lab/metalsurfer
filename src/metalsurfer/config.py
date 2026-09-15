@@ -677,9 +677,9 @@ class AdsorptionConfig:
     # accessibility window and drive the one-shot widen retry.
     voronoi_probe_radius: float | None = None
     voronoi_max_site_distance: float | None = None
-    # Ridge enrichment of Voronoi vertices. Porous / nanoparticle / rough slabs:
-    # a planar slab top layer has no 3D Voronoi diagram, so planar-slab sites
-    # come entirely from the topology generator and this flag is a no-op there.
+    # Ridge enrichment of Voronoi vertices. Porous / rough slabs only:
+    # planar slabs and nanoparticles skip Voronoi (topology generators), so
+    # this flag is a no-op there.
     voronoi_site_enrichment: bool = True
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"

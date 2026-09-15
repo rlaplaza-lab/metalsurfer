@@ -111,6 +111,36 @@ def _committed_ranking_energy(
     )
 
 
+def _step_ranking_snapshot(
+    *,
+    committed: Sequence[ScreeningResult],
+    pool_best: ScreeningResult,
+    activity_by_molecule: Mapping[str, float],
+    temperature: float,
+    pressure: float,
+) -> tuple[float, float, str]:
+    """Return ``(Ω, E_ads, label)`` matching the stop-condition ranking.
+
+    Committed steps use :func:`_committed_ranking_energy` (``Ω`` or
+    ``Ω_tuplet``). Empty commits report the pool-best single-unit ``Ω``.
+    """
+    if committed:
+        omega = _committed_ranking_energy(
+            committed,
+            activity_by_molecule=activity_by_molecule,
+            temperature=temperature,
+            pressure=pressure,
+        )
+        e_ads = float(committed[0].energy_adsorption)
+        label = "Ω_tuplet" if len(committed) > 1 else "Ω"
+        return omega, e_ads, label
+    return (
+        _omega(pool_best, activity_by_molecule, temperature, pressure),
+        float(pool_best.energy_adsorption),
+        "Ω",
+    )
+
+
 def _slab_after_saturation_step(
     atoms: Atoms, config: AdsorptionConfig
 ) -> SlabContainer:
@@ -630,7 +660,7 @@ def _saturation_should_stop(
     config: AdsorptionConfig,
     log_prefix: str,
 ) -> bool:
-    """Stop when the step commits nothing, ranking energy is non-negative, or max steps.
+    """Stop when the step commits nothing, Ω is non-negative, or max steps.
 
     Empty commit is always terminal. For bound steps, ``best_energy`` is the
     committed winner's (or tuplet's) Ω.
@@ -644,7 +674,7 @@ def _saturation_should_stop(
         return True
     if best_energy >= 0:
         logger.info(
-            "%s: slab saturated at step %d (ranking energy >= 0)",
+            "%s: slab saturated at step %d (Ω >= 0)",
             log_prefix,
             step,
         )
@@ -1039,12 +1069,40 @@ def _run_single_molecule_saturation(
                     config=config,
                 )
             )
-        logger.info(
-            "Step %d: best E_ads = %.4f eV (placement %d)",
-            step,
-            outcome.best.energy_adsorption,
-            outcome.best.placement_id,
+        omega, e_ads, label = _step_ranking_snapshot(
+            committed=outcome.committed,
+            pool_best=outcome.best,
+            activity_by_molecule=activity_by_molecule,
+            temperature=temperature,
+            pressure=pressure,
         )
+        if len(outcome.committed) > 1:
+            logger.info(
+                "Step %d: %s = %.4f eV (E_ads = %.4f eV, %d units)",
+                step,
+                label,
+                omega,
+                e_ads,
+                len(outcome.committed),
+            )
+        elif outcome.committed:
+            logger.info(
+                "Step %d: %s = %.4f eV (E_ads = %.4f eV, placement %d)",
+                step,
+                label,
+                omega,
+                e_ads,
+                outcome.committed[0].placement_id,
+            )
+        else:
+            logger.info(
+                "Step %d: no commit (%s = %.4f eV, E_ads = %.4f eV, placement %d)",
+                step,
+                label,
+                omega,
+                e_ads,
+                outcome.best.placement_id,
+            )
 
     final_atoms = _run_saturation_steps(
         config=config,
@@ -1271,9 +1329,10 @@ def _run_multi_molecule_saturation(
                     key=_omega_sort_key(activity_by_molecule, temperature, pressure),
                 )
                 logger.info(
-                    "Step %d | %s: best E_ads = %.4f eV (%d results)",
+                    "Step %d | %s: best Ω = %.4f eV (E_ads = %.4f eV, %d results)",
                     step,
                     mol,
+                    _omega(best_mol, activity_by_molecule, temperature, pressure),
                     best_mol.energy_adsorption,
                     len(resolved),
                 )
@@ -1388,12 +1447,41 @@ def _run_multi_molecule_saturation(
                 )
             )
 
-        logger.info(
-            "Step %d: winner = %s, E_ads = %.4f eV",
-            step,
-            winning_molecule,
-            outcome.best.energy_adsorption,
+        omega, e_ads, label = _step_ranking_snapshot(
+            committed=committed,
+            pool_best=outcome.best,
+            activity_by_molecule=activity_by_molecule,
+            temperature=temperature,
+            pressure=pressure,
         )
+        if len(committed) > 1:
+            logger.info(
+                "Step %d: winners = %s, %s = %.4f eV (E_ads = %.4f eV, %d units)",
+                step,
+                ",".join(placement.molecule for placement in committed),
+                label,
+                omega,
+                e_ads,
+                len(committed),
+            )
+        elif committed:
+            logger.info(
+                "Step %d: winner = %s, %s = %.4f eV (E_ads = %.4f eV)",
+                step,
+                winning_molecule,
+                label,
+                omega,
+                e_ads,
+            )
+        else:
+            logger.info(
+                "Step %d: no commit (best = %s, %s = %.4f eV, E_ads = %.4f eV)",
+                step,
+                winning_molecule,
+                label,
+                omega,
+                e_ads,
+            )
 
     final_atoms = _run_saturation_steps(
         config=config,
