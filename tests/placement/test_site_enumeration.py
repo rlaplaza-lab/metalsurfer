@@ -644,21 +644,149 @@ def test_fcc100_site_type_ratios_and_coordination_numbers():
 
 
 def test_atop_injection_runs_when_voronoi_empty_nanoparticle(monkeypatch):
-    """1.1: a zero-Voronoi nanoparticle must still get atop sites from the net."""
+    """NP path does not need Voronoi; topology alone yields atops."""
     from metalsurfer.placement import site_enumeration as enum_mod
+
+    def _fail(*_a, **_k):
+        raise AssertionError("Voronoi must not run for nanoparticles")
+
+    monkeypatch.setattr(enum_mod, "_voronoi_sites", _fail)
+    struct = make_nanoparticle()
+    sites = get_unified_sites(struct, material_type="nanoparticle", enrich=False)
+    assert len(sites) > 0
+    assert any(s.site_type == "atop" for s in sites)
+    assert any(s.site_source == "topology_atop" for s in sites)
+
+
+def test_atop_injection_safety_net_when_np_topology_empty(monkeypatch):
+    """When hull topology fails, metal–metal atop injection still runs."""
+    from metalsurfer.placement import site_enumeration as enum_mod
+    from metalsurfer.placement.site_np import _NPTopologyResult
 
     monkeypatch.setattr(
         enum_mod,
-        "_voronoi_sites",
-        lambda *a, **k: (
+        "_generate_nanoparticle_topology_sites",
+        lambda *a, **k: _NPTopologyResult(
             np.empty((0, 3), dtype=float),
-            np.empty((0,), dtype=float),
+            np.empty(0, dtype=float),
+            [],
+            [],
         ),
     )
     struct = make_nanoparticle()
     sites = get_unified_sites(struct, material_type="nanoparticle", enrich=False)
     assert len(sites) > 0
     assert any(s.site_source == "atop_injected" for s in sites)
+    assert any(s.site_type == "atop" for s in sites)
+
+
+def test_issue6_ni55_and_ni13_expose_atop_bridge_hollow():
+    """Issue #6: NPs must expose atop/bridge/hollow outside the convex hull."""
+    from collections import Counter
+
+    from ase.cluster import Icosahedron, Octahedron
+    from scipy.spatial import ConvexHull
+
+    from metalsurfer.placement._constants import (
+        _ATOP_INJECTION_HEIGHT_FACTOR,
+        _VORONOI_PROBE_RADIUS_COVALENT_SCALE,
+    )
+    from metalsurfer.placement.site_coords import _mean_covalent_radius
+    from metalsurfer.placement.site_enumeration import _median_nn_or_fallback
+    from metalsurfer.placement.site_np import _outside_convex_hull_mask
+
+    for name, atoms in (
+        ("Ni55", Octahedron("Ni", 5, 2)),
+        ("Ni13", Icosahedron("Ni", 2)),
+    ):
+        sites = get_unified_sites(atoms, material_type="nanoparticle")
+        counts = Counter(s.site_type for s in sites)
+        assert counts.get("atop", 0) > 0, name
+        assert counts.get("bridge", 0) > 0, name
+        assert counts.get("hollow", 0) > 0, name
+        assert any(s.site_source == "topology_atop" for s in sites), name
+
+        pos = np.asarray(atoms.get_positions(), dtype=float)
+        hull = ConvexHull(pos)
+        xyz = np.asarray([s.xyz for s in sites], dtype=float)
+        assert np.all(_outside_convex_hull_mask(xyz, hull)), name
+
+        metal_nn = _median_nn_or_fallback(
+            np.empty(0, dtype=float),
+            reference_positions=pos,
+            cell=np.asarray(atoms.get_cell(), dtype=float),
+            pbc=np.array([False, False, False], dtype=bool),
+        )
+        height = _ATOP_INJECTION_HEIGHT_FACTOR * metal_nn
+        probe = _VORONOI_PROBE_RADIUS_COVALENT_SCALE * _mean_covalent_radius(
+            list(atoms.get_chemical_symbols())
+        )
+        assert height >= probe, f"{name}: height={height:.3f} probe={probe:.3f}"
+
+        atop_nn = [float(s.nn_distance) for s in sites if s.site_type == "atop"]
+        assert atop_nn
+        assert abs(float(np.median(atop_nn)) - height) < 0.35, name
+
+
+def test_issue6_nonempty_voronoi_must_not_zero_out_np_atops(monkeypatch):
+    """NP enumeration must not call Voronoi (topology-only path)."""
+    from ase.cluster import Octahedron
+
+    from metalsurfer.placement import site_enumeration as enum_mod
+
+    def _fail(*_a, **_k):
+        raise AssertionError("Voronoi must not run for nanoparticles")
+
+    monkeypatch.setattr(enum_mod, "_voronoi_sites", _fail)
+    sites = get_unified_sites(Octahedron("Ni", 5, 2), material_type="nanoparticle")
+    assert any(
+        s.site_type == "atop" and s.site_source == "topology_atop" for s in sites
+    )
+    assert not any(s.site_source == "atop_injected" for s in sites)
+
+
+def test_nanoparticle_asymmetric_cluster_still_has_typed_sites():
+    """Lopsided convex NPs use hull-facet normals, not COM-radial only."""
+    from collections import Counter
+
+    from ase.cluster import Octahedron
+    from scipy.spatial import ConvexHull
+
+    from metalsurfer.placement.site_np import _outside_convex_hull_mask
+
+    atoms = Octahedron("Ni", 5, 2)
+    pos = atoms.get_positions()
+    # Stretch one axis and shift a corner atom so the particle is asymmetric.
+    pos[:, 0] *= 1.35
+    pos[np.argmax(pos[:, 0]), 0] += 1.2
+    atoms.set_positions(pos)
+
+    sites = get_unified_sites(atoms, material_type="nanoparticle")
+    counts = Counter(s.site_type for s in sites)
+    assert counts.get("atop", 0) > 0
+    assert counts.get("bridge", 0) > 0
+    assert counts.get("hollow", 0) > 0
+    hull = ConvexHull(atoms.get_positions())
+    xyz = np.asarray([s.xyz for s in sites], dtype=float)
+    assert np.all(_outside_convex_hull_mask(xyz, hull))
+    # Atop normals should agree with the local hull outward direction.
+    for s in sites:
+        if s.site_type != "atop":
+            continue
+        assert float(np.linalg.norm(s.normal)) > 0.5
+        assert float(np.dot(s.normal, s.xyz - atoms.get_positions().mean(0))) > 0.0
+
+
+def test_issue6_ni111_slab_counts_unchanged():
+    """Issue #6 control: Ni(111) 4×4 still yields textbook 16/48/32."""
+    from collections import Counter
+
+    slab = fcc111("Ni", size=(4, 4, 4), vacuum=12.0)
+    sites = get_unified_sites(slab, material_type="slab")
+    counts = Counter(s.site_type for s in sites)
+    assert counts.get("atop", 0) == 16
+    assert counts.get("bridge", 0) == 48
+    assert counts.get("hollow", 0) == 32
 
 
 def test_atop_injection_runs_when_voronoi_and_topology_empty_slab(monkeypatch):
@@ -825,7 +953,7 @@ def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
     existing_dists = np.array([site_z], dtype=float)
     existing_sources = ["voronoi"]
     access = _periodic_accessibility_tree(positions, cell, pbc, max_distance=5.0)
-    verts, _dists, _sources = _inject_atop_sites(
+    verts, _dists, _sources, _atoms = _inject_atop_sites(
         existing,
         existing_dists,
         existing_sources,
@@ -837,7 +965,7 @@ def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
         accessibility_tree=access,
         median_nn=median_nn,
         slab_top_atom_indices=np.arange(4, dtype=int),
-        slab_has_topology_atop=False,
+        has_topology_atop=False,
         probe_radius=0.5,
         max_site_distance=5.0,
     )

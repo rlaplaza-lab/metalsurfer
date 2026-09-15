@@ -24,6 +24,8 @@ from metalsurfer.placement.geometry import calculate_min_distance
 
 from .conftest import assert_no_intramolecular_clashes, make_slab
 
+pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
+
 pytestmark = pytest.mark.integration
 
 
@@ -68,10 +70,6 @@ def _assert_physical_placement(adsorbate, slab, *, material_type: str = "slab") 
 
 
 class TestConformerDeterminism:
-    @pytest.fixture(autouse=True)
-    def _require_rdkit(self):
-        pytest.importorskip("rdkit")
-
     @pytest.mark.parametrize("smiles", ["O", "CCO", "CC(=O)O", "c1ccccc1"])
     def test_same_seed_same_conformers(self, smiles):
         cfg = AdsorptionConfig(num_conformers=5, seed=42)
@@ -93,10 +91,6 @@ class TestConformerDeterminism:
 
 
 class TestPlacementDeterminism:
-    @pytest.fixture(autouse=True)
-    def _require_rdkit(self):
-        pytest.importorskip("rdkit")
-
     def _run_placements(self, seed, n=20):
         """Generate n placements with the given seed and return positions."""
         slab = make_slab()
@@ -151,10 +145,6 @@ class TestPlacementDeterminism:
 
 
 class TestEndToEndDeterminism:
-    @pytest.fixture(autouse=True)
-    def _require_rdkit(self):
-        pytest.importorskip("rdkit")
-
     def _pipeline(self, seed, *, assert_physics: bool = False):
         """Run conformer generation + placement (+ optional physics gates)."""
         slab = make_slab()

@@ -773,14 +773,33 @@ Saturation
 
 Saturation behavior is enabled by calling :func:`~metalsurfer.run_saturation` or
 :func:`~metalsurfer.run_saturation_bo`. Fields prefixed with ``saturation_`` tune
-loop behavior and I/O only.
+loop behavior, reservoir ranking, and I/O.
 
 ``multi_molecule_saturation``
    **Type:** ``bool`` · **Default:** ``False``
 
-   When ``True`` and multiple molecules are loaded, each saturation step runs
-   competitive adsorption: all adsorbates compete and the best overall
-   :math:`E_\mathrm{ads}` wins the step.
+   Competitive adsorption: all loaded adsorbates compete each step; lowest
+   :math:`\Omega` wins.
+
+``saturation_temperature``
+   **Type:** ``float`` · **Default:** ``298.15`` (K)
+
+   Reservoir T for
+   :math:`\Omega = E_\mathrm{ads} - k_B T \ln(a_i p / p^\circ)`.
+   Not ``boltzmann_temperature``. Stored energies stay electronic
+   :math:`E_\mathrm{ads}`.
+
+``saturation_pressure``
+   **Type:** ``float`` · **Default:** ``1.0`` (bar)
+
+   Reservoir pressure (:math:`p^\circ = 1` bar). If activities already encode
+   :math:`p_i / p^\circ`, leave at ``1.0``.
+
+``saturation_activities``
+   **Type:** ``tuple[float, ...] | None`` · **Default:** ``None``
+
+   Dimensionless activities parallel to the molecule list (``None`` → all
+   :math:`a_i = 1`). Length checked at saturation start.
 
 ``saturation_save_all_placements``
    **Type:** ``bool`` · **Default:** ``True``
@@ -817,31 +836,18 @@ loop behavior and I/O only.
 ``saturation_max_steps``
    **Type:** ``int | None`` · **Default:** ``None``
 
-   Optional hard cap on saturation loop depth. ``None`` runs until a step
-   commits nothing, adsorption is unfavorable, or no valid placements remain.
+   Hard cap on loop depth. ``None`` runs until empty commit,
+   :math:`\Omega \ge 0`, or no valid placements.
 
 ``saturation_molecules_per_step``
    **Type:** ``int`` · **Default:** ``1``
 
-   Number of placements committed per saturation step. The default ``1`` runs
-   sequential coverage (one molecule folded into the slab per step).
-   Larger values enable n-tuplet mode: each step screens the per-molecule
-   pools as usual, then greedily commits up to this many mutually compatible
-   winners (sorted by :math:`E_\mathrm{ads}`, tie-broken by placement id and
-   molecule name) subject to pairwise ``min_adsorbate_separation`` clearance
-   (with optional near-miss clash descent when ``placement_clash_descent`` is
-   on), sequentially packs units 2..n against the frozen best binder, and
-   relaxes ONE composite candidate covering all winners. Each committed
-   detail row carries the full tuplet :math:`E_\mathrm{ads}`
-   (``E(composite) - E_slab - Σ E_mol``, shared across the step's rows;
-   per-unit identity survives in ``placement_id``, ``molecule``,
-   descriptor columns, per-unit ``distance``, and the extra
-   ``committed_molecule`` column emitted only for multi-winner steps). A step
-   that commits nothing (no mutually clear binders, emptied pack, or a
-   non-binding committed tuplet) stops the run as an unbound final step;
-   partial tuplets are allowed when fewer clear binders exist.
-   ``num_placements`` keeps its meaning as the per-molecule screening-pool
-   size and is divided by this value after workload autotuning.
+   Placements committed per step (``1`` = sequential). Larger values enable
+   n-tuplet mode: greedily pick up to this many clear winners by
+   :math:`\Omega`, pack, and relax one composite. Committed rows share tuplet
+   :math:`E_\mathrm{ads}`; stop uses :math:`\Omega_\mathrm{tuplet}`. Empty
+   commits are unbound finals. ``num_placements`` remains the per-molecule
+   pool size (divided by this value after autotuning).
 
 Reproducibility, strictness, and I/O
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

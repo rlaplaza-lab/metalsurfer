@@ -273,7 +273,12 @@ Material strategies:
      - Planar: topology atop/bridge/hollow only. Rough: topology + Voronoi
        enrichment on the top-layer band
    * - nanoparticle
-     - Full-framework Voronoi; outward normals; no PBC images
+     - Convex-hull + NN-graph topology only (atop / bridge / 3- and 4-fold
+       hollow). Voronoi is skipped. Hull-facet normals lift sites on both
+       symmetric and lopsided convex clusters. Cluster symmetry wraps
+       transformed fractional coordinates in the padded box but does not
+       MIC-fold site–site deltas. Non-crystallographic groups (e.g. Ih) map
+       to the nearest crystallographic subgroup spglib can return.
    * - porous
      - 3×3×3 images; pore sites when the framework spans the cell
 
@@ -283,13 +288,14 @@ Key knobs: ``voronoi_probe_radius``, ``voronoi_max_site_distance``,
 (``auto`` / ``distance_ratio`` / ``delaunay``), ``voronoi_auto_widen``.
 
 **Intentional asymmetries** (not unfinished ports): hybrid topology +
-Delaunay on slabs (pure Voronoi floods GPU with weak candidates); global
-``surface_ref`` along the slab normal for height; dissociative hollow pairs
-on slabs (rejected for porous; NP uses outward-normal Voronoi pairs);
+Delaunay on slabs (pure Voronoi floods GPU with weak candidates); hull +
+NN-graph topology on nanoparticles (Voronoi voids are not adsorption sites);
+global ``surface_ref`` along the slab normal for height; dissociative hollow
+pairs on slabs (rejected for porous; NP uses outward-normal site pairs);
 parallel-z floors for slab/NP aromatics (skipped for porous); no atop
-injection / dissociative for porous. NP/porous ``surface_ref`` is the
-Voronoi vertex projected onto the local site normal (same axis as
-placement and ``z_offset`` recovery).
+injection / dissociative for porous. Nanoparticle ``surface_ref`` is the
+coordinating metal atoms projected onto the site normal (topology vertices
+are already lifted); porous keeps the site-vertex projection.
 
 
 Placement
@@ -343,7 +349,8 @@ Enumeration / materialization
   normal so the **closest adsorbate atom** (not the COM) lands at
   ``surface_ref + z_offset`` (clearance-aware lift after orientation).
   Porous frameworks skip the lift (confined pores have opposing walls).
-  For NP/porous, ``surface_ref`` is ``dot(site.xyz, n_site)``.
+  Nanoparticle ``surface_ref`` uses coordinating metal atoms along the site
+  normal; porous uses ``dot(site.xyz, n_site)``.
 - **Distance recovery** (default on): ``too_close`` / ``too_far`` try one
   analytic height nudge, then chemistry-scaled clash descent when
   ``placement_clash_descent`` is on (discrete XY only when clash is off).
@@ -557,25 +564,23 @@ geometry-aware features (see above).
 Sequential saturation
 ~~~~~~~~~~~~~~~~~~~~~
 ``saturation``): screen → optional topology guard → commit best
-``E_ads < 0`` → refresh slab → repeat until endothermic or no placements.
-``multi_molecule_saturation=True``: all molecules compete each step;
-budgets from occupancy-aware complexity; lowest ``E_ads`` wins.
-``saturation_molecules_per_step > 1`` (n-tuplet mode): each step greedily
-commits up to that many mutually clear winners at once and relaxes a single
-composite candidate (``workflow/composite.py``); committed rows share the full
-tuplet ``E_ads``, with per-unit identity in ``committed_molecule`` /
-descriptor columns. Runnable demo combining both modes:
-``examples/water_oh_rutile_saturation.py`` (water vs OH⁻ on rutile TiO₂(110)).
+``Ω < 0`` → refresh slab → repeat until unbound or no placements.
+``Ω = E_ads − k_B T ln(a_i p / p°)`` (SATP defaults recover ``E_ads``; see
+:doc:`configuration`). ``multi_molecule_saturation=True``: all molecules
+compete each step; lowest ``Ω`` wins. ``saturation_molecules_per_step > 1``:
+greedily commit up to *n* clear winners via one composite
+(``workflow/composite.py``); stop uses ``Ω_tuplet``. Demo:
+``examples/water_oh_rutile_saturation.py``.
 
 BO saturation
 ~~~~~~~~~~~~~
-``saturation_bo``): same saturation loop with Bayesian placement selection
-and optional cross-step transfer (see above).
+``saturation_bo``): same loop with BO placement selection and optional
+transfer. Reservoir ``Ω`` ranking is on the shared commit/stop path;
+``observed_y`` stays electronic ``E_ads``.
 
-Stop conditions: no placements committed this step (unbound final, including
-n-tuplet empty pack / ``no_binders``); best committed ``E_ads ≥ 0`` (for tuplet
-steps, the shared tuplet total); no valid placements after topology guard;
-``saturation_max_steps`` (default unlimited).
+Stop conditions: empty commit (including n-tuplet ``no_binders``); committed
+``Ω ≥ 0`` (``Ω_tuplet`` for multi-winner steps); no valid placements;
+``saturation_max_steps``.
 
 Compare structures to **post-adatom** substrate files when adatoms were
 deposited during prep. Symmetry reduction is dropped once the *substrate

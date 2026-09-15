@@ -426,7 +426,10 @@ def run_saturation(
     skip_existing: bool = True,
     run_metadata_out: dict[str, Any] | None = None,
 ) -> SaturationCampaignResult:
-    """Sequential saturation (non-BO) until best E_ads ≥ 0 or no valid placements.
+    """Sequential saturation (non-BO) until ranking energy Ω ≥ 0 or no valid placements.
+
+    Optional ``saturation_temperature`` / ``saturation_pressure`` /
+    ``saturation_activities`` set Ω (SATP defaults recover electronic E_ads).
 
     Parameters
     ----------
@@ -482,6 +485,9 @@ def run_saturation_bo(
     run_metadata_out: dict[str, Any] | None = None,
 ) -> SaturationCampaignResult:
     """Run saturation with BO-guided placement selection.
+
+    Reservoir Ω ranking applies on the shared commit/stop path; surrogate
+    labels remain electronic ``E_ads``.
 
     Parameters
     ----------

@@ -158,9 +158,11 @@ def _resolve_surface_ref(
     """Return *(surface_ref, is_local_ref)* for z-offset calculations.
 
     For slabs the reference is the topmost height along the slab normal so that
-    z_offset is the gap above the surface layer.  For nanoparticles and porous
-    materials the reference is the Voronoi vertex projected onto the local site
-    normal (matching placement along that normal).
+    z_offset is the gap above the surface layer.  For nanoparticles with known
+    coordinating atoms, the reference is those metal atoms projected onto the
+    site normal (topology sites sit above the metal; stacking z_offset on the
+    site vertex would double-count).  Porous / legacy sites without indices use
+    the site vertex projection (Voronoi voids are already in free volume).
 
     When *rough_slab_local_z* is True and the slab is non-planar, use the
     site's own height along the normal instead of the global maximum.  This
@@ -197,9 +199,15 @@ def _resolve_surface_ref(
         site_xyz = np.asarray(site.xyz, dtype=float)
         site_normal = np.asarray(site.normal, dtype=float)
         nrm = float(np.linalg.norm(site_normal))
-        if nrm > _VECTOR_NORM_EPS:
-            return float(np.dot(site_xyz, site_normal / nrm)), True
-        return float(site_xyz[2]), True
+        if nrm <= _VECTOR_NORM_EPS:
+            return float(site_xyz[2]), True
+        n_hat = site_normal / nrm
+        if mat_type == "nanoparticle" and site.slab_indices:
+            positions = np.asarray(slab.get_positions(), dtype=float)
+            idx = [int(i) for i in site.slab_indices if 0 <= int(i) < len(positions)]
+            if idx:
+                return float(np.mean(positions[idx] @ n_hat)), True
+        return float(np.dot(site_xyz, n_hat)), True
     # No site and no site normal: the Cartesian z-max is arbitrary for radially
     # symmetric nanoparticles/porous clusters and corrupts the recovered z
     # offset. Prefer a slab-normal height (planar systems) or, failing that, the
@@ -361,6 +369,14 @@ def _pose_from_spec(
         # Intended height of the closest atom; COM sits higher by *lift*.
         target_h = float(surface_ref + z_offset + lift)
         placement_center = base + (target_h - base_h) * n_hat
+    elif mat_type == "nanoparticle":
+        # Same absolute-height convention as slabs: surface_ref is the metal
+        # under the site; topology vertices only supply lateral position.
+        lift = _clearance_lift_along_normal(rotated_pos, normal) if apply_lift else 0.0
+        base = np.asarray(site.xyz, dtype=float)
+        base_h = float(np.dot(base, normal))
+        target_h = float(surface_ref + z_offset + lift)
+        placement_center = base + (target_h - base_h) * normal
     else:
         lift = _clearance_lift_along_normal(rotated_pos, normal) if apply_lift else 0.0
         placement_center = (

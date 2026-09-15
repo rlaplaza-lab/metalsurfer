@@ -1134,8 +1134,9 @@ def test_optimize_slab_cuda_streams_states_via_inflight_iterator(
 
 
 class TestTorchSimCalculator:
-    pytestmark = MLIP_CPU_MARKS
     """Unit tests with mocked model."""
+
+    pytestmark = MLIP_CPU_MARKS
 
     def test_calculator_interface_with_mock_model(self):
         """TorchSimCalculator returns energy/forces via ts.static() with mock."""
@@ -1248,8 +1249,9 @@ class TestTorchSimCalculatorDeps:
 
 
 class TestSetupSingleModel:
-    pytestmark = MLIP_CPU_MARKS
     """Integration tests with real FairChemModel."""
+
+    pytestmark = MLIP_CPU_MARKS
 
     def test_setup_single_model_returns_calculator_and_model(self):
         """setup_single_model returns (calculator, ts_model) tuple."""

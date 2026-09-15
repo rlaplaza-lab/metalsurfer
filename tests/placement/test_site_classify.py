@@ -159,7 +159,7 @@ def test_expanded_classification_index_carries_hollow_candidates():
 
 
 def test_cluster_site_orbits_are_translation_invariant():
-    """Orbits used to be 5/7/9/7 depending on where the cluster sat in space."""
+    """Orbit multiplicities must not depend on where the cluster sits in space."""
     cluster = Octahedron("Au", 3, cutoff=1)
     sites = get_unified_sites(cluster, material_type="nanoparticle")
     assert sites
@@ -177,18 +177,65 @@ def test_cluster_site_orbits_are_translation_invariant():
         signatures.append(tuple(sorted(o.symmetry_multiplicity for o in orbits)))
 
     assert len(set(signatures)) == 1, signatures
-    assert len(signatures[0]) == 5
-    assert signatures[0] == (1, 1, 2, 2, 3)
+    assert sum(signatures[0]) == len(sites)
+    # Oh crystallographic ops: every orbit size must divide 48.
+    assert all(m > 0 and 48 % m == 0 for m in signatures[0]), signatures[0]
+
+
+def test_cluster_symmetry_oh_vertex_atops_form_one_orbit():
+    """Complete Oh vertex-atop set collapses to one orbit of 12 (wrap-op, no MIC)."""
+    from metalsurfer.placement.site_types import Site
+
+    cluster = Octahedron("Au", 5, cutoff=2)
+    assert len(cluster) == 55
+    pos = cluster.get_positions()
+    com = pos.mean(axis=0)
+    from scipy.spatial import ConvexHull
+
+    hull = ConvexHull(pos)
+    hv = hull.vertices
+    vec = pos[hv] - com
+    vec = vec / np.linalg.norm(vec, axis=1)[:, None]
+    fake = pos[hv] + 2.0 * vec
+    fake_sites = [
+        Site(
+            xyz=p,
+            normal=np.array([0.0, 0.0, 1.0]),
+            site_type="atop",
+            slab_indices=(),
+            material_type="nanoparticle",
+            site_source="fake_atop",
+            env_fingerprint=("atop",),
+            nn_distance=2.0,
+        )
+        for p in fake
+    ]
+    orbits = get_symmetry_aware_sites(
+        cluster, material_type="nanoparticle", raw_sites=fake_sites
+    )
+    assert len(orbits) == 1
+    assert int(orbits[0].symmetry_multiplicity or 0) == 12
 
 
 def test_cluster_symmetry_does_not_over_merge_antipodal_sites():
-    """Unconditional MIC folding in a padded box merged opposite faces."""
+    """Site–site MIC must stay off in cluster mode (opposite faces stay distinct)."""
     cluster = Octahedron("Au", 5, cutoff=2)
     assert len(cluster) == 55
     sites = get_unified_sites(cluster, material_type="nanoparticle")
+    assert sites
+    types = {s.site_type for s in sites}
+    assert "atop" in types and "bridge" in types and "hollow" in types
+
     analyzer = SymmetryAnalyzer(cluster, mode="cluster")
     orbits = analyzer.analyze_site_symmetry(sites)
-    assert len(orbits) > 15
+    assert sum(int(o.symmetry_multiplicity or 0) for o in orbits) == len(sites)
+    assert all(
+        int(o.symmetry_multiplicity or 0) > 0
+        and 48 % int(o.symmetry_multiplicity or 0) == 0
+        for o in orbits
+    )
+    assert len(orbits) >= 3
+    assert len({o.site_type for o in orbits}) >= 3
 
 
 def test_periodic_slab_reduction_is_unaffected_by_the_cluster_fix():

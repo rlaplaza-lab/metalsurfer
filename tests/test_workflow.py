@@ -1092,6 +1092,9 @@ class TestSaveSummaryResults:
 
     def test_empty_results_no_crash(self, workdir):
         save_summary_results([], surface_type="empty")
+        assert not (
+            workdir / "results_empty" / "adsorption_energies_detailed.csv"
+        ).exists()
 
     def test_detailed_csv_includes_placement_descriptor_columns(self, workdir):
         """Lean detailed CSV keeps pose features; provenance needs the knob."""

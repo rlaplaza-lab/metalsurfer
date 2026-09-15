@@ -20,9 +20,8 @@ from tests.conftest import (
 pytestmark = GPU_MLIP_MARKS
 
 
-def test_run_adsorption_water_on_cu111(tmp_path, monkeypatch):
+def test_run_adsorption_water_on_cu111(workdir):
     """Campaign-level e2e: prepare_substrate → run_adsorption for water/Cu."""
-    monkeypatch.chdir(tmp_path)
     num_placements = 8
     config = AdsorptionConfig(
         material_type="slab",
@@ -114,14 +113,13 @@ def test_run_adsorption_water_on_cu111(tmp_path, monkeypatch):
 
     assert len(site_ids) >= 2, f"Expected multi-site coverage, got {site_ids}"
 
-    results_dir = tmp_path / "results_water_cu_slab"
+    results_dir = workdir / "results_water_cu_slab"
     assert (results_dir / "adsorption_energies_detailed.csv").is_file()
     assert (results_dir / "run_metadata.json").is_file()
 
 
-def test_water_cu_run_twice_reproducible(tmp_path, monkeypatch):
+def test_water_cu_run_twice_reproducible(workdir):
     """Same seed twice → E_ads within GPU noise (atol 1e-2 eV)."""
-    monkeypatch.chdir(tmp_path)
     num_placements = 4
     config = AdsorptionConfig(
         material_type="slab",

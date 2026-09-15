@@ -383,6 +383,9 @@ several placements simultaneously (n-tuplet mode):
        seed=42,
        multi_molecule_saturation=True,
        saturation_molecules_per_step=2,
+       saturation_temperature=423.15,
+       saturation_pressure=1.0,
+       saturation_activities=(1.0, 1.0e-3),
    )
    campaign = run_saturation(
        slab=slab,
@@ -391,8 +394,9 @@ several placements simultaneously (n-tuplet mode):
        surface_type="water_oh_rutile_saturation",
    )
 
-A complete runnable version — water and hydroxide competing on a rutile
-TiO₂(110) slab built with ASE — lives at
+Optional reservoir fields rank/stop on ``Ω = E_ads − k_B T ln(a_i p / p°)``
+(SATP defaults when omitted); same knobs for n-tuplet and
+:func:`~metalsurfer.run_saturation_bo`. Full demo:
 ``examples/water_oh_rutile_saturation.py``.
 
 Important saturation behaviors:

@@ -253,6 +253,10 @@ class _StubHarness:
             lambda smiles, *_a, **_k: _conformers_for_smiles(smiles),
         )
         monkeypatch.setattr(
+            "metalsurfer.workflow.saturation.create_conformers_from_smiles",
+            lambda smiles, *_a, **_k: _conformers_for_smiles(smiles),
+        )
+        monkeypatch.setattr(
             "metalsurfer.workflow.shared.resolve_site_context_for_sampling",
             resolve_sites_ci_fast,
         )
@@ -503,7 +507,7 @@ _MATRIX_CASES = (
     ids=["slab_water", "slab_h2", "np_water", "porous_water"],
 )
 def test_run_adsorption_substrate_matrix(
-    tmp_path,
+    workdir,
     monkeypatch,
     material_type,
     smiles,
@@ -513,7 +517,6 @@ def test_run_adsorption_substrate_matrix(
     dissociative,
     min_success_rate,
 ):
-    monkeypatch.chdir(tmp_path)
     slab = _substrate(material_type)
     harness = _StubHarness(slab, molecule_name=mol_name)
     harness.apply(monkeypatch)
@@ -557,7 +560,7 @@ def test_run_adsorption_substrate_matrix(
         assert r.energy_adsorption == pytest.approx(
             E_ADS_BINDING, abs=E_ADS_IDENTITY_TOL
         )
-    _assert_binding_artifacts(tmp_path / f"results_{surface_type}")
+    _assert_binding_artifacts(workdir / f"results_{surface_type}")
 
 
 # ---------------------------------------------------------------------------
@@ -566,9 +569,8 @@ def test_run_adsorption_substrate_matrix(
 
 
 @pytest.mark.parametrize("material_type", ["slab", "nanoparticle", "porous"])
-def test_run_saturation_substrate_matrix(tmp_path, monkeypatch, material_type):
+def test_run_saturation_substrate_matrix(workdir, monkeypatch, material_type):
     """Rec 2c: stubbed saturation advances and keeps finite E_ads on np/porous."""
-    monkeypatch.chdir(tmp_path)
     slab = _substrate(material_type)
     harness = _StubHarness(slab, saturation_schedule=True)
     harness.apply(monkeypatch)
@@ -601,16 +603,15 @@ def test_run_saturation_substrate_matrix(tmp_path, monkeypatch, material_type):
     )
     assert run.steps[-1].best_result.energy_adsorption >= 0.0
     assert run.steps[-1].best_result.slab_size >= run.steps[0].best_result.slab_size
-    _assert_saturation_artifacts(tmp_path / f"results_{surface_type}")
+    _assert_saturation_artifacts(workdir / f"results_{surface_type}")
 
 
 @pytest.mark.parametrize("material_type", ["slab", "nanoparticle", "porous"])
 @pytest.mark.parametrize("slab_relaxation_mode", ["ionic_only", "full"])
 def test_run_adsorption_relaxation_modes(
-    tmp_path, monkeypatch, material_type, slab_relaxation_mode
+    workdir, monkeypatch, material_type, slab_relaxation_mode
 ):
     """Rec 2f: non-default substrate relaxation modes complete with survivors."""
-    monkeypatch.chdir(tmp_path)
     slab = _substrate(material_type)
     harness = _StubHarness(slab, molecule_name=MOL_NAME)
     harness.apply(monkeypatch)
@@ -638,9 +639,8 @@ def test_run_adsorption_relaxation_modes(
         )
 
 
-def test_run_adsorption_rejects_crushed_geometries(tmp_path, monkeypatch):
+def test_run_adsorption_rejects_crushed_geometries(workdir, monkeypatch):
     """Critical: overlapping post-relax geometries must not become survivors."""
-    monkeypatch.chdir(tmp_path)
     slab = _substrate("slab")
     harness = _StubHarness(slab)
     harness.apply(monkeypatch)
@@ -690,7 +690,6 @@ def test_run_adsorption_rejects_crushed_geometries(tmp_path, monkeypatch):
 
 
 def _stubbed_campaign(
-    tmp_path,
     monkeypatch,
     *,
     api_fn,
@@ -698,7 +697,6 @@ def _stubbed_campaign(
     surface_type: str,
     saturation_schedule: bool = False,
 ):
-    monkeypatch.chdir(tmp_path)
     slab = _substrate("slab")
     harness = _StubHarness(slab, saturation_schedule=saturation_schedule)
     harness.apply(monkeypatch)
@@ -716,7 +714,7 @@ def _stubbed_campaign(
 def _assert_binding_api_campaign(
     campaign,
     config: AdsorptionConfig,
-    tmp_path: Path,
+    workdir: Path,
     surface_type: str,
     *,
     mode: str,
@@ -747,12 +745,12 @@ def _assert_binding_api_campaign(
         assert r.energy_adsorption == pytest.approx(
             E_ADS_BINDING, abs=E_ADS_IDENTITY_TOL
         )
-    _assert_binding_artifacts(tmp_path / f"results_{surface_type}")
+    _assert_binding_artifacts(workdir / f"results_{surface_type}")
 
 
 def _assert_saturation_api_campaign(
     campaign,
-    tmp_path: Path,
+    workdir: Path,
     surface_type: str,
     *,
     mode: str,
@@ -775,15 +773,14 @@ def _assert_saturation_api_campaign(
     )
     if require_nonbinding_later_step and len(run.steps) >= 2:
         assert run.steps[-1].best_result.energy_adsorption >= 0.0
-    _assert_saturation_artifacts(tmp_path / f"results_{surface_type}")
+    _assert_saturation_artifacts(workdir / f"results_{surface_type}")
 
 
 class TestRunModeApiE2E:
-    def test_run_adsorption_bo(self, tmp_path, monkeypatch):
+    def test_run_adsorption_bo(self, workdir, monkeypatch):
         surface_type = "e2e_adsorption_bo"
         config = _bo_config()
         campaign = _stubbed_campaign(
-            tmp_path,
             monkeypatch,
             api_fn=run_adsorption_bo,
             config=config,
@@ -792,18 +789,17 @@ class TestRunModeApiE2E:
         _assert_binding_api_campaign(
             campaign,
             config,
-            tmp_path,
+            workdir,
             surface_type,
             mode="bo",
             min_success_rate=1.0,
             min_absolute=2,
         )
 
-    def test_run_saturation(self, tmp_path, monkeypatch):
+    def test_run_saturation(self, workdir, monkeypatch):
         surface_type = "e2e_saturation"
         config = _tiny_config(saturation_max_steps=2)
         campaign = _stubbed_campaign(
-            tmp_path,
             monkeypatch,
             api_fn=run_saturation,
             config=config,
@@ -812,17 +808,16 @@ class TestRunModeApiE2E:
         )
         _assert_saturation_api_campaign(
             campaign,
-            tmp_path,
+            workdir,
             surface_type,
             mode="non_bo",
             require_nonbinding_later_step=True,
         )
 
-    def test_run_saturation_bo(self, tmp_path, monkeypatch):
+    def test_run_saturation_bo(self, workdir, monkeypatch):
         surface_type = "e2e_saturation_bo"
         config = _bo_config(saturation_max_steps=2)
         campaign = _stubbed_campaign(
-            tmp_path,
             monkeypatch,
             api_fn=run_saturation_bo,
             config=config,
@@ -831,7 +826,7 @@ class TestRunModeApiE2E:
         )
         _assert_saturation_api_campaign(
             campaign,
-            tmp_path,
+            workdir,
             surface_type,
             mode="bo",
         )
@@ -843,14 +838,12 @@ class TestRunModeApiE2E:
 
 
 def _stubbed_process_molecule_bayesian(
-    tmp_path,
     monkeypatch,
     *,
     config: AdsorptionConfig,
     bo_step_memory_in=None,
 ):
     """Drive a single-molecule BO run with the MLIP boundary stubbed."""
-    monkeypatch.chdir(tmp_path)
     slab = _substrate("slab")
     harness = _StubHarness(slab)
     harness.apply(monkeypatch)
@@ -870,7 +863,7 @@ def _stubbed_process_molecule_bayesian(
     )
 
 
-def test_process_molecule_bayesian_transfer_cumulative_refit(tmp_path, monkeypatch):
+def test_process_molecule_bayesian_transfer_cumulative_refit(workdir, monkeypatch):
     """Rec 3b: cumulative_refit transfer runs and records a positive weight share."""
     config = _bo_config(
         initial_random=4,
@@ -878,15 +871,12 @@ def test_process_molecule_bayesian_transfer_cumulative_refit(tmp_path, monkeypat
         total_budget=2,
         transfer=BOTransferConfig(mode="cumulative_refit"),
     )
-    _slab, first = _stubbed_process_molecule_bayesian(
-        tmp_path, monkeypatch, config=config
-    )
+    _slab, first = _stubbed_process_molecule_bayesian(monkeypatch, config=config)
     assert first.bo_memory is not None
     assert len(first.bo_memory.observed_X_rows) > 0
     assert len(first.bo_memory.observed_y) > 0
 
     _slab, second = _stubbed_process_molecule_bayesian(
-        tmp_path,
         monkeypatch,
         config=config,
         bo_step_memory_in=first.bo_memory,
@@ -895,7 +885,7 @@ def test_process_molecule_bayesian_transfer_cumulative_refit(tmp_path, monkeypat
     assert second.transfer_info.transfer_weight_share > 0
 
 
-def test_process_molecule_bayesian_transfer_weighted(tmp_path, monkeypatch):
+def test_process_molecule_bayesian_transfer_weighted(workdir, monkeypatch):
     """Rec 3c: weighted transfer branch runs at the workflow level."""
     config = _bo_config(
         initial_random=4,
@@ -903,13 +893,10 @@ def test_process_molecule_bayesian_transfer_weighted(tmp_path, monkeypatch):
         total_budget=2,
         transfer=BOTransferConfig(mode="weighted"),
     )
-    _slab, first = _stubbed_process_molecule_bayesian(
-        tmp_path, monkeypatch, config=config
-    )
+    _slab, first = _stubbed_process_molecule_bayesian(monkeypatch, config=config)
     assert first.bo_memory is not None
 
     _slab, second = _stubbed_process_molecule_bayesian(
-        tmp_path,
         monkeypatch,
         config=config,
         bo_step_memory_in=first.bo_memory,
@@ -926,13 +913,11 @@ def test_process_molecule_bayesian_transfer_weighted(tmp_path, monkeypatch):
     ],
 )
 def test_process_molecule_bayesian_nondefault_bo_branches(
-    tmp_path, monkeypatch, extra_config
+    workdir, monkeypatch, extra_config
 ):
     """Rec 3c: non-default initial_sampling / surrogate complete with survivors."""
     config = _bo_config(**extra_config)
-    _slab, outcome = _stubbed_process_molecule_bayesian(
-        tmp_path, monkeypatch, config=config
-    )
+    _slab, outcome = _stubbed_process_molecule_bayesian(monkeypatch, config=config)
     assert len(outcome.results) >= 1
     for r in outcome.results:
         assert np.isfinite(r.energy_adsorption)
@@ -956,9 +941,8 @@ _YAML_CASES = (
     ids=[c[2] for c in _YAML_CASES],
 )
 def test_run_campaign_yaml_run_mode(
-    tmp_path, monkeypatch, yaml_name, surface_type, campaign_kind
+    workdir, monkeypatch, yaml_name, surface_type, campaign_kind
 ):
-    monkeypatch.chdir(tmp_path)
     slab = _substrate("slab")
     harness = _StubHarness(
         slab,
@@ -974,7 +958,7 @@ def test_run_campaign_yaml_run_mode(
     doc = load_campaign_yaml(FIXTURES / yaml_name)
     run_campaign(doc, skip_existing=False)
 
-    results_dir = tmp_path / f"results_{surface_type}"
+    results_dir = workdir / f"results_{surface_type}"
     assert results_dir.is_dir(), f"Expected results dir for {campaign_kind}"
     assert (results_dir / "run_metadata.json").is_file()
     if campaign_kind.startswith("saturation"):

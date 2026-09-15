@@ -40,7 +40,8 @@ YAML is a convenience dispatch layer, not a full substitute for the Python
   rutile TiO₂(110) under ``examples/``).
 - **Molecules are inline only.** A non-empty list of ``{smiles, name}``
   entries. YAML does not accept a molecules CSV path (the Python ``run_*``
-  APIs do).
+  APIs do). Reservoir fields (``saturation_temperature`` /
+  ``saturation_pressure`` / ``saturation_activities``) go under ``config:``.
 - **``run_campaign`` kwargs are minimal.** Only ``skip_existing`` is exposed.
   Not available from YAML / ``run_campaign``: ``system_name``,
   ``save_results``, ``write_settings``, ``run_metadata_out``,

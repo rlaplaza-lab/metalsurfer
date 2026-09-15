@@ -8,6 +8,7 @@ from collections import defaultdict, deque
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from .._numeric_defaults import K_B_EV_PER_K
 from ..models import PlacementSpec
 from ._constants import (
     _AZIMUTH,
@@ -24,9 +25,6 @@ from ._constants import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Boltzmann constant in eV/K (conformer energies are in eV).
-_K_B_EV_PER_K: float = 8.617e-5
 
 
 def _unravel_product_index(flat: int, shape: tuple[int, ...]) -> tuple[int, ...]:
@@ -173,7 +171,7 @@ def _boltzmann_weights(
         # Degenerate (all equal, e.g. unscored conformers): uniform is exact.
         return None
 
-    kt = _K_B_EV_PER_K * temperature
+    kt = K_B_EV_PER_K * temperature
     weights = [0.0] * len(energies)
     for i, energy in finite:
         # Exponent is <= 0 by construction, so exp() cannot overflow.

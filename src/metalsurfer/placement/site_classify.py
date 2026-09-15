@@ -233,7 +233,7 @@ def _build_classification_context(
 
     if n_verts > 0 and delaunay is None:
         # MIC neighbours when PBC is on (porous / slab distance_ratio).
-        if use_periodic and idx_img is not None:
+        if use_periodic and idx_img is not None and dists_img is not None:
             k_slice = min(k_class, idx_img.shape[1])
             class_dists = dists_img[:, :k_slice]
             class_idx = idx_img[:, :k_slice] % len(positions)
@@ -359,6 +359,14 @@ def _classify_delaunay_vertices_batch(
     return list(zip(site_types, site_indices, strict=True))
 
 
+_TOPOLOGY_SOURCE_TO_TYPE = {
+    "topology_atop": "atop",
+    "topology_bridge": "bridge",
+    "topology_hollow": "hollow",
+    "atop_injected": "atop",
+}
+
+
 def _classify_vertices(
     ctx: _ClassificationContext,
     vertices: np.ndarray,
@@ -369,54 +377,78 @@ def _classify_vertices(
     material_type: str,
     pore_threshold: float,
     source_hints: list[str] | None,
+    atom_indices: list[tuple[int, ...]] | None = None,
 ) -> list[Site]:
-    if ctx.delaunay is not None:
-        classifications = _classify_delaunay_vertices_batch(
-            ctx,
-            vertices,
-            positions,
-            local_tree,
-            pore_threshold=pore_threshold,
-        )
-    else:
-        if ctx.class_dists is None or ctx.class_idx is None:
-            raise ValueError(
-                "ctx.class_dists and ctx.class_idx must be set for Voronoi classification"
+    n = len(vertices)
+    hints = list(source_hints) if source_hints is not None else ["voronoi"] * n
+    provided_atoms = (
+        list(atom_indices) if atom_indices is not None else [() for _ in range(n)]
+    )
+
+    # Keep topology / injected labels when distance-ratio would otherwise run.
+    # Slabs with Delaunay still use nearest-candidate typing for topology_*;
+    # only ``atop_injected`` is forced there.
+    classifications: list[tuple[str, tuple[int, ...]] | None] = [None] * n
+    for i, hint in enumerate(hints):
+        if hint not in _TOPOLOGY_SOURCE_TO_TYPE:
+            continue
+        if ctx.delaunay is not None and hint != "atop_injected":
+            continue
+        site_type = _TOPOLOGY_SOURCE_TO_TYPE[hint]
+        atoms_i = tuple(int(j) for j in provided_atoms[i])
+        if not atoms_i:
+            n_keep = {"atop": 1, "bridge": 2, "hollow": 3}[site_type]
+            n_keep = min(n_keep, len(positions))
+            if n_keep and ctx.class_idx is not None:
+                atoms_i = tuple(
+                    int(j) for j in np.asarray(ctx.class_idx[i]).ravel()[:n_keep]
+                )
+            elif n_keep:
+                _, idx = local_tree.query(vertices[i].reshape(1, 3), k=n_keep)
+                atoms_i = tuple(int(j) for j in np.atleast_1d(idx).ravel())
+        classifications[i] = (site_type, atoms_i)
+
+    need = [i for i, c in enumerate(classifications) if c is None]
+    if need:
+        if ctx.delaunay is not None:
+            delaunay_all = _classify_delaunay_vertices_batch(
+                ctx, vertices, positions, local_tree, pore_threshold=pore_threshold
             )
-        classifications = [
-            _classify_voronoi_site_from_neighbors(
-                ctx.class_dists[i],
-                ctx.class_idx[i],
-                pore_threshold=pore_threshold,
-            )
-            for i in range(len(vertices))
-        ]
+            for i in need:
+                classifications[i] = delaunay_all[i]
+        else:
+            if ctx.class_dists is None or ctx.class_idx is None:
+                raise ValueError(
+                    "ctx.class_dists and ctx.class_idx must be set for Voronoi classification"
+                )
+            for i in need:
+                classifications[i] = _classify_voronoi_site_from_neighbors(
+                    ctx.class_dists[i],
+                    ctx.class_idx[i],
+                    pore_threshold=pore_threshold,
+                )
 
     sites: list[Site] = []
-    for i, (site_type, nearest_idx) in enumerate(classifications):
+    for i, classified in enumerate(classifications):
+        assert classified is not None
+        site_type, nearest_idx = classified
         env_fingerprint = (
             tuple(sorted(symbols[j] for j in nearest_idx if j < len(symbols))),
             site_type,
         )
-        hollow_order: int | None = None
-        if site_type == "hollow" and nearest_idx:
-            hollow_order = len(nearest_idx)
-        normal = ctx.normals[i]
         sites.append(
             Site(
                 xyz=vertices[i].copy(),
-                normal=normal,
+                normal=ctx.normals[i],
                 site_type=site_type,
                 slab_indices=tuple(int(j) for j in nearest_idx),
                 material_type=material_type,
-                site_source=(
-                    source_hints[i]
-                    if source_hints is not None and i < len(source_hints)
-                    else "voronoi"
-                ),
+                site_source=hints[i],
                 env_fingerprint=env_fingerprint,
                 nn_distance=float(nn_dists[i]),
-                hollow_order=hollow_order,
+                hollow_order=(
+                    len(nearest_idx) if site_type == "hollow" and nearest_idx else None
+                ),
             )
         )
     return sites
@@ -435,6 +467,7 @@ def _build_site_records(
     pbc: np.ndarray,
     source_hints: list[str] | None = None,
     delaunay: _DelaunayClassifyInputs | None = None,
+    atom_indices: list[tuple[int, ...]] | None = None,
 ) -> list[Site]:
     ctx = _build_classification_context(
         vertices,
@@ -455,4 +488,5 @@ def _build_site_records(
         material_type,
         pore_threshold,
         source_hints,
+        atom_indices=atom_indices,
     )

@@ -207,27 +207,23 @@ skip this, since it would be redundant.)
 
 ### 3.2 Nanoparticle
 
-A nanoparticle is a finite cluster with no periodicity. Its sites come
-primarily from the 3D Voronoi diagram of all its atoms: the vertices of that
-diagram are the pockets and kinks where a molecule could sit. Optionally
-(`voronoi_site_enrichment`) long Voronoi *ridges* are subdivided and re-checked,
-so a narrow channel between atoms gets more than one candidate instead of one.
+A nanoparticle is a finite cluster with no periodicity. Sites come from
+**convex-hull + nearest-neighbour topology** (the slab analogue for a closed
+surface): atoms on the hull skin become atops, NN edges become bridges, and
+chordless 3-/4-cycles become hollows. Candidates are lifted along **hull-facet
+normals**, so the same path works for highly symmetric and lopsided convex
+clusters. Voronoi is skipped — its voids are not adsorption sites on a metal
+NP.
 
-Two nanoparticle-specific steps:
-
-- **Outward-normal filter.** A Voronoi vertex is kept only if its outward
-  direction (from the cluster centre toward the vertex) agrees with the local
-  surface normal. Interior vertices pointing into the cluster are discarded.
-- **Atop-injection safety net.** For every surface atom whose local outward
-  normal points away from the cluster centre, a candidate is lifted along that
-  normal and gated by the window. This guarantees every exposed atom has an
-  atop option even if the Voronoi diagram missed it.
+If the hull cannot be built (or topology yields no atop), a single
+**atop-injection** pass lifts candidates above hull-skin atoms along the same
+facet normals and gates them with the accessibility window.
 
 ### 3.3 Porous
 
 A porous framework (a MOF/COF) is fully 3D periodic, so its Voronoi vertices
-fill the void space. As with nanoparticles, vertices are the primary source
-plus optional ridge enrichment. Pores versus walls are distinguished by the
+fill the void space. Vertices are the primary source plus optional ridge
+enrichment. Pores versus walls are distinguished by the
 nearest-atom distance: a vertex whose nearest framework atom is farther than a
 covalent-radius-based threshold is a `pore` (free volume); a closer one is a
 `hollow`. Open pores — those with a *larger* nearest-atom distance — are
@@ -425,9 +421,9 @@ Three ways to grow the coverage, set on `AdsorptionConfig`:
 - **n-tuplet steps** (`saturation_molecules_per_step > 1`). Instead of one
   placement per step, up to *n* winners are committed simultaneously: pools
   are screened exactly as above, then winners are greedily picked by ascending
-  E_ads (ties broken deterministically), keeping only pairs whose adsorbates
-  stay at least `min_adsorbate_separation` apart under periodicity — or,
-  when `placement_clash_descent` is on, near-miss clashes that a bounded
+  Ω (ties broken deterministically), keeping only pairs whose
+  adsorbates stay at least `min_adsorbate_separation` apart under periodicity —
+  or, when `placement_clash_descent` is on, near-miss clashes that a bounded
   rigid-body slide can clear. Units 2..n are then sequentially packed against
   the frozen best binder before ONE composite structure is relaxed; if that
   composite fails validation, the step retries with the best winner alone
@@ -437,11 +433,19 @@ Three ways to grow the coverage, set on `AdsorptionConfig`:
   per-unit distance, and an extra `committed_molecule` CSV column emitted only
   for multi-winner steps.
 
-All three modes stop under the same rules: when a step commits nothing
-(unbound final step — including n-tuplet `no_binders` / emptied pack even if
-the screening pool still has a negative E_ads candidate), when the step's
-best committed E_ads is ≥ 0, when no valid placements remain after screening /
-topology guard, or when `saturation_max_steps` is reached.
+**Reservoir ranking.** Pick and stop use
+`Ω = E_ads − k_B T ln(a_i · p / p°)` with optional
+`saturation_temperature` (K), `saturation_pressure` (bar), and
+`saturation_activities` (list parallel to molecules). SATP defaults
+(`T = 298.15 K`, `p = p° = 1 bar`, `a_i = 1`) recover `Ω = E_ads`.
+n-tuplet stop uses `Ω_tuplet = E_ads_tuplet − k_B T Σ ln(a_i p / p°)`.
+Stored `energy_adsorption` / BO `observed_y` stay electronic. If activities
+already encode `p_i / p°`, leave pressure at 1 bar. Not
+`boltzmann_temperature` (conformer prior only).
+
+All three modes stop when a step commits nothing (including n-tuplet
+`no_binders` / emptied pack), committed Ω (or Ω_tuplet) ≥ 0, no valid
+placements remain, or `saturation_max_steps` is reached.
 
 ## 7. Dissociative placement
 

@@ -33,10 +33,12 @@ _real_import = builtins.__import__
 @contextmanager
 def _reload_with_missing(module, missing: dict[str, object]):
     """Temporarily hide optional deps, reload module, then restore cleanly."""
-    with patch.dict(sys.modules, missing):
+    try:
+        with patch.dict(sys.modules, missing):
+            importlib.reload(module)
+            yield module
+    finally:
         importlib.reload(module)
-        yield module
-    importlib.reload(module)
 
 
 # ---------------------------------------------------------------------------

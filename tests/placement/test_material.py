@@ -152,7 +152,7 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
     assert len(visited_sites) >= 2, (
         f"{material_type}: expected multi-site coverage, got {sorted(visited_sites)}"
     )
-    d_hi = 4.0 if material_type == "porous" else 3.8
+    d_hi = 4.0 if material_type == "porous" else 4.5
     for _spec, adsorbate_i, desc in results:
         ok, dist, reason = check_initial_placement_distance(
             adsorbate_i,
@@ -162,7 +162,7 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
         )
         assert ok, f"{material_type} placement failed contact gate: {reason}"
         # Lower floor is gated by `assert ok`; only the per-material upper band is checked.
-        # Measured worst case ≈3.66 (NP) / 3.32 (porous) across the generated set.
+        # NP uses metal-anchored absolute height (covalent-scaled z_range up to ~4.3 Å).
         assert dist <= d_hi, (
             f"{material_type} adsorbate–surface distance out of band: {dist:.3f}"
         )
@@ -219,17 +219,28 @@ def test_local_site_material_placement_center_matches_site_geometry(
         site = unique_sites[spec.site_index]
         n_hat = np.asarray(site.normal, dtype=float)
         n_hat = n_hat / float(np.linalg.norm(n_hat))
-        expected = (
-            np.asarray(site.xyz, dtype=float) + float(descriptor.z_offset) * n_hat
-        )
+        surface_ref, is_local = _resolve_surface_ref(site, structure, material_type)
+        assert is_local
+        base = np.asarray(site.xyz, dtype=float)
+        if material_type == "nanoparticle":
+            # Absolute height above coordinating metals; site supplies lateral pos.
+            target_h = float(surface_ref) + float(descriptor.z_offset)
+            expected = base + (target_h - float(np.dot(base, n_hat))) * n_hat
+            if site.slab_indices:
+                metal = np.mean(
+                    structure.get_positions()[list(site.slab_indices)], axis=0
+                )
+                assert surface_ref == pytest.approx(
+                    float(np.dot(metal, n_hat)), abs=1e-9
+                )
+        else:
+            expected = base + float(descriptor.z_offset) * n_hat
+            assert surface_ref == pytest.approx(float(np.dot(base, n_hat)), abs=1e-9)
         got = np.array(
             [descriptor.x_abs, descriptor.y_abs, descriptor.z_abs], dtype=float
         )
         np.testing.assert_allclose(got, expected, atol=1e-9)
 
-        surface_ref, is_local = _resolve_surface_ref(site, structure, material_type)
-        assert is_local
-        assert surface_ref == pytest.approx(float(np.dot(site.xyz, n_hat)), abs=1e-9)
         assert descriptor.surface_ref_z_abs == pytest.approx(surface_ref, abs=1e-9)
         assert float(np.dot(got, n_hat)) == pytest.approx(
             float(descriptor.surface_ref_z_abs) + float(descriptor.z_offset),

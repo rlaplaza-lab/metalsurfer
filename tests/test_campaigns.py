@@ -240,11 +240,10 @@ def test_run_saturation_save_benchmark_dataset(monkeypatch, multi_mol, expected_
     assert flattened[0].molecule == expected_label
 
 
-def test_run_saturation_write_settings_persists_json(tmp_path, monkeypatch):
+def test_run_saturation_write_settings_persists_json(workdir, monkeypatch):
     """write_settings=True must call write_run_metadata_from_out, not pass a dict."""
     import json
 
-    monkeypatch.chdir(tmp_path)
     run_metadata: dict[str, float] = {}
 
     def fake_screening(*, run_metadata_out=None, **_kwargs):
@@ -281,7 +280,7 @@ def test_run_saturation_write_settings_persists_json(tmp_path, monkeypatch):
     )
     assert isinstance(campaign, SaturationCampaignResult)
 
-    path = tmp_path / "results_st_meta" / "run_metadata.json"
+    path = workdir / "results_st_meta" / "run_metadata.json"
     assert path.exists()
     with open(path) as f:
         meta = json.load(f)
@@ -292,13 +291,12 @@ def test_run_saturation_write_settings_persists_json(tmp_path, monkeypatch):
     assert meta["timing"]["total_wall_clock_s"] == pytest.approx(3.5)
 
 
-def test_run_adsorption_csv_path_unified_with_inline(tmp_path, monkeypatch):
+def test_run_adsorption_csv_path_unified_with_inline(workdir, monkeypatch):
     """CSV input uses the same binding path as in-memory lists."""
     from metalsurfer.surface_prep import SlabContainer
     from tests.conftest import make_slab
 
-    monkeypatch.chdir(tmp_path)
-    csv_path = tmp_path / "demo.csv"
+    csv_path = workdir / "demo.csv"
     csv_path.write_text("C,demo\n")
 
     placement = make_screening_result(molecule="demo", energy_adsorption=-1.0)
@@ -349,15 +347,14 @@ def test_run_adsorption_csv_path_unified_with_inline(tmp_path, monkeypatch):
     assert len(saved_summary["run_results"]) == 1
 
 
-def test_run_adsorption_skip_existing_inline_list(tmp_path, monkeypatch):
+def test_run_adsorption_skip_existing_inline_list(workdir, monkeypatch):
     """In-memory molecule lists honor skip_existing via summary CSV."""
     import pandas as pd
 
     from metalsurfer.surface_prep import SlabContainer
     from tests.conftest import make_slab
 
-    monkeypatch.chdir(tmp_path)
-    results_dir = tmp_path / "results_skip_inline"
+    results_dir = workdir / "results_skip_inline"
     results_dir.mkdir(parents=True)
     pd.DataFrame({"molecule": ["water"]}).to_csv(
         results_dir / "adsorption_energies_detailed.csv",
@@ -416,15 +413,14 @@ def test_run_adsorption_warns_when_all_skipped(monkeypatch):
     )
 
 
-def test_run_saturation_skip_existing_inline_list(tmp_path, monkeypatch):
+def test_run_saturation_skip_existing_inline_list(workdir, monkeypatch):
     import pandas as pd
 
     from metalsurfer.surface_prep import SlabContainer
     from tests.conftest import make_slab
 
-    monkeypatch.chdir(tmp_path)
     surface_type = "skip_saturation_inline"
-    results_dir = tmp_path / f"results_{surface_type}"
+    results_dir = workdir / f"results_{surface_type}"
     results_dir.mkdir(parents=True)
     pd.DataFrame({"molecules": ["water_CO2"]}).to_csv(
         results_dir / "saturation_summary.csv", index=False
@@ -457,15 +453,14 @@ def test_run_saturation_skip_existing_inline_list(tmp_path, monkeypatch):
     assert campaign.runs == []
 
 
-def test_run_saturation_logs_when_all_skipped(tmp_path, monkeypatch, caplog):
+def test_run_saturation_logs_when_all_skipped(workdir, monkeypatch, caplog):
     import pandas as pd
 
     from metalsurfer.surface_prep import SlabContainer
     from tests.conftest import make_slab
 
-    monkeypatch.chdir(tmp_path)
     surface_type = "skip_saturation_all"
-    results_dir = tmp_path / f"results_{surface_type}"
+    results_dir = workdir / f"results_{surface_type}"
     results_dir.mkdir(parents=True)
     pd.DataFrame({"molecules": ["water", "ethanol"]}).to_csv(
         results_dir / "saturation_summary.csv", index=False
@@ -516,9 +511,7 @@ def test_run_adsorption_warns_when_input_empty(monkeypatch):
     assert campaign.n_molecules == 0
 
 
-def test_run_saturation_write_settings_includes_campaign_metadata(
-    monkeypatch, tmp_path
-):
+def test_run_saturation_write_settings_includes_campaign_metadata(monkeypatch):
     captured: dict[str, object] = {}
 
     def fake_write_settings(surface_type, config, **run_info):
@@ -565,13 +558,12 @@ def test_run_saturation_write_settings_includes_campaign_metadata(
     assert run_info["molecules"] == ["demo"]
 
 
-def test_run_adsorption_save_results_false_skips_disk_writes(tmp_path, monkeypatch):
+def test_run_adsorption_save_results_false_skips_disk_writes(workdir, monkeypatch):
     """save_results=False skips structure and summary writes for CSV input."""
     from metalsurfer.surface_prep import SlabContainer
     from tests.conftest import make_slab
 
-    monkeypatch.chdir(tmp_path)
-    csv_path = tmp_path / "demo.csv"
+    csv_path = workdir / "demo.csv"
     csv_path.write_text("C,demo\n")
 
     placement = make_screening_result(molecule="demo", energy_adsorption=-1.0)
@@ -751,14 +743,13 @@ def test_bootstrap_screening_run_reloads_on_model_mismatch(monkeypatch):
     assert bootstrap.ts_model is fresh_model
 
 
-def test_write_settings_alone_writes_timing_metadata(tmp_path, monkeypatch):
+def test_write_settings_alone_writes_timing_metadata(workdir, monkeypatch):
     """write_settings=True (default) also persists timing into run_metadata.json."""
     import json
 
     from metalsurfer.surface_prep import SlabContainer
     from tests.conftest import make_slab
 
-    monkeypatch.chdir(tmp_path)
     placement = make_screening_result(molecule="demo", energy_adsorption=-1.0)
     slab_container = SlabContainer(make_slab())
 
@@ -793,7 +784,7 @@ def test_write_settings_alone_writes_timing_metadata(tmp_path, monkeypatch):
         write_settings=True,
     )
 
-    path = tmp_path / "results_meta_or" / "run_metadata.json"
+    path = workdir / "results_meta_or" / "run_metadata.json"
     assert path.exists()
     with open(path) as f:
         meta = json.load(f)

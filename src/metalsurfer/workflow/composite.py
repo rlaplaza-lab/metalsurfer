@@ -32,12 +32,13 @@ holds on every row. Per-unit information survives in ``molecule``,
 """
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 
 import numpy as np
 from ase import Atoms
 
+from .._numeric_defaults import STANDARD_PRESSURE_BAR, STANDARD_TEMPERATURE_K
 from ..config import AdsorptionConfig
 from ..models import ScreeningResult
 from ..optimization import optimize_adsorbate_slab_batched
@@ -58,7 +59,7 @@ from ..placement.occupancy import _positions_mutually_clear, incoming_inplane_ra
 from ..placement.site_coords import _slab_normal
 from ..surface_prep import apply_material_pbc
 from ..surface_prep.freeze import check_frozen_substrate_displacement
-from .shared import _validate_geometry
+from .shared import _validate_geometry, adsorption_ranking_energy
 
 logger = logging.getLogger(__name__)
 
@@ -257,39 +258,41 @@ def select_tuplet_winners(
     max_winners: int,
     config: AdsorptionConfig | None = None,
     slab_atoms: Atoms | None = None,
+    activity_by_molecule: Mapping[str, float] | None = None,
+    temperature: float | None = None,
+    pressure: float | None = None,
 ) -> list[ScreeningResult]:
     """Greedily pick up to *max_winners* mutually clear binders from *candidates*.
 
-    Deterministic: candidates are ordered by ``(energy_adsorption,
-    placement_id, molecule)``; each candidate is accepted iff it binds
-    (negative E_ads) and is mutually clear from every already-accepted winner
-    under MIC. When ``config.placement_clash_descent`` is on and *slab_atoms*
-    is provided, near-miss clashes (min distance at or above a covalent-scaled
-    stacked-atom floor) are rescued by a bounded rigid-body slide instead of
-    being skipped.
-
-    Parameters
-    ----------
-    candidates
-        Screening pool across all molecules of the step (single-adsorbate
-        results computed against the current coverage slab).
-    cell
-        Unit cell matrix of the current slab.
-    pbc
-        Material-aware periodicity flags.
-    min_separation
-        Minimum adsorbate-atom to adsorbate-atom distance in Å
-        (``AdsorptionConfig.min_adsorbate_separation``).
-    max_winners
-        Tuplet size cap (``saturation_molecules_per_step``).
-    config
-        Optional config enabling clash-descent near-miss rescue.
-    slab_atoms
-        Current coverage slab (required for near-miss rescue fixed cloud).
+    Ordered by ``(Ω, placement_id, molecule)`` where
+    ``Ω = E_ads − k_B T ln(a p / p°)``. Accept while Ω < 0 and clear under MIC;
+    optional clash-descent rescue when configured.
     """
+    if temperature is None:
+        temperature = (
+            float(config.saturation_temperature)
+            if config is not None
+            else STANDARD_TEMPERATURE_K
+        )
+    if pressure is None:
+        pressure = (
+            float(config.saturation_pressure)
+            if config is not None
+            else STANDARD_PRESSURE_BAR
+        )
+    activities = activity_by_molecule or {}
+
+    def _omega(result: ScreeningResult) -> float:
+        return adsorption_ranking_energy(
+            result.energy_adsorption,
+            activities.get(result.molecule, 1.0),
+            temperature,
+            pressure,
+        )
+
     ordered = sorted(
         candidates,
-        key=lambda r: (r.energy_adsorption, r.placement_id, r.molecule),
+        key=lambda r: (_omega(r), r.placement_id, r.molecule),
     )
     accepted: list[ScreeningResult] = []
     accepted_suffixes: list[np.ndarray] = []
@@ -303,8 +306,7 @@ def select_tuplet_winners(
     for candidate in ordered:
         if len(accepted) >= max_winners:
             break
-        # Sorted ascending by E_ads: the first non-binder ends the sweep.
-        if candidate.energy_adsorption >= 0:
+        if _omega(candidate) >= 0:
             break
         suffix = _suffix_positions(candidate)
         clear = all(

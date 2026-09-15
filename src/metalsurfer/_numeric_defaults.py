@@ -37,3 +37,7 @@ ACQUISITION_XI_DEFAULT: float = 1e-6
 ACQUISITION_SIGMA_FLOOR: float = 1e-9
 RESIDUAL_SIGMA_DISTANCE_TEMPER: float = 0.25
 DEFAULT_TRANSFER_EXPLORATION_FRACTION: float = 0.2
+# Boltzmann (eV/K) and IUPAC SATP reservoir defaults for saturation Ω ranking.
+K_B_EV_PER_K: float = 8.617e-5
+STANDARD_TEMPERATURE_K: float = 298.15
+STANDARD_PRESSURE_BAR: float = 1.0  # p° in Ω = E_ads − k_B T ln(a · p / p°)

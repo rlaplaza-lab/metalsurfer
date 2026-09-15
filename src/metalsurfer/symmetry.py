@@ -159,12 +159,15 @@ class SymmetryAnalyzer:
         return self._operations_frac
 
     def _symmetry_pbc(self) -> np.ndarray:
-        """Per-axis periodicity used for wrapping and minimum-image folding.
+        """Per-axis periodicity used for **site–site** minimum-image folding.
 
         Periodic mode hands spglib a genuine 3D lattice, so all three axes fold.
         Cluster mode builds a *padded box* around a finite object: that box has
-        no periodicity at all, and folding across it would merge antipodal sites
-        of any cluster wider than roughly twice the padding margin.
+        no physical periodicity, and MIC-folding site–site deltas across it
+        would merge antipodal sites of any cluster wider than roughly twice the
+        padding margin. Transformed fractional coordinates after a symop are
+        wrapped separately via :meth:`_wrap_frac` so origin-centred point-group
+        ops still map sites onto each other.
         """
         if self._mode == "periodic":
             return np.array([True, True, True], dtype=bool)
@@ -189,10 +192,16 @@ class SymmetryAnalyzer:
         return cart_to_frac(arr, self._lattice)
 
     def _wrap_frac(self, frac: np.ndarray) -> np.ndarray:
-        pbc = self._symmetry_pbc()
-        if not np.any(pbc):
-            return frac
-        return wrap_fractional(frac, pbc)
+        """Wrap fractional coordinates after a symmetry operation.
+
+        Periodic mode wraps on the true lattice. Cluster mode wraps into the
+        padded orthorhombic box so spglib rotations about the box origin land
+        back on partner sites; site–site deltas still use
+        :meth:`_symmetry_pbc` (no MIC) so unrelated antipodes are not merged.
+        """
+        if self._mode == "periodic":
+            return wrap_fractional(frac, self._symmetry_pbc())
+        return wrap_fractional(frac, np.array([True, True, True], dtype=bool))
 
     def _apply_frac_symop(
         self, frac_row: np.ndarray, R: np.ndarray, t: np.ndarray

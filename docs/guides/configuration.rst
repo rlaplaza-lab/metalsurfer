@@ -202,13 +202,14 @@ Key fields:
   for large placement counts
 - ``saturation_max_steps`` — hard cap on coverage steps (default unlimited);
   a step that commits nothing also stops the run (unbound final)
-- ``multi_molecule_saturation`` — competitive saturation when multiple SMILES are loaded:
-  every molecule is screened each step and the best binder advances the slab
-- ``saturation_molecules_per_step`` (default ``1``) — commit up to this many mutually
-  clear winners per step in one composite relaxation (n-tuplet mode); committed rows
-  share the tuplet E_ads and a ``committed_molecule`` CSV column identifies each unit;
-  empty n-tuplet commits (no clear binders) stop as unbound finals even if the pool
-  still contains a negative E_ads candidate
+- ``multi_molecule_saturation`` — competitive saturation: all molecules screened each
+  step; lowest ``Ω`` advances the slab
+- ``saturation_molecules_per_step`` (default ``1``) — n-tuplet: commit up to this many
+  clear winners per step in one composite; empty commits stop as unbound finals
+- ``saturation_temperature`` / ``saturation_pressure`` / ``saturation_activities`` —
+  reservoir ranking ``Ω = E_ads − k_B T ln(a_i p / p°)`` (SATP defaults
+  ``298.15`` K / ``1`` bar / all ``a_i = 1``). Not ``boltzmann_temperature``. If
+  activities already encode ``p_i / p°``, leave pressure at 1
 - ``bo.transfer.*`` — cross-step BO memory in ``run_saturation_bo`` (see
   :doc:`../api/config` — Bayesian optimization)
 

@@ -61,6 +61,8 @@ class _DissociativeSitePair:
     normal1: np.ndarray
     xyz2: np.ndarray
     normal2: np.ndarray
+    indices1: tuple[int, ...] = ()
+    indices2: tuple[int, ...] = ()
 
 
 _DISSOCIATIVE_PAIR_CACHE_MAX_ENTRIES = 16
@@ -447,6 +449,8 @@ def _compute_dissociative_site_pairs(
                 normal1=normal_i,
                 xyz2=xyz2,
                 normal2=normal_j,
+                indices1=tuple(int(k) for k in site_entries[i].slab_indices),
+                indices2=tuple(int(k) for k in site_entries[j].slab_indices),
             )
         )
     return pairs
@@ -559,9 +563,9 @@ def _place_dissociative_two_sites(
 ) -> tuple[Atoms, PlacementDescriptor] | None:
     """Place a diatomic at two sites with a shared height offset.
 
-    On slabs, ``height_override`` is the gap above the top-layer surface
-    reference (same convention as molecular placement). Hollow Voronoi
-    vertices often sit above the metal, so stacking the offset on
+    On slabs and nanoparticles, ``height_override`` is the gap above the metal
+    surface reference (same convention as molecular placement). Topology /
+    hollow vertices often sit above the metal, so stacking the offset on
     ``site.xyz`` would overshoot the desorption gate. On nanoparticles,
     both fragments share one offset direction so pair spacing is preserved.
     """
@@ -607,9 +611,28 @@ def _place_dissociative_two_sites(
         pos2 = base2 + (target_h - float(np.dot(base2, n_hat))) * n_hat
         h_surface = float(surface_ref)
         site_reference_frame = "local_site" if is_local_ref else "global_top_layer"
+    elif config.material_type == "nanoparticle":
+        n_sum = np.asarray(n1, dtype=float) + np.asarray(n2, dtype=float)
+        n_norm = float(np.linalg.norm(n_sum))
+        n_hat = n_sum / (n_norm + _VECTOR_NORM_EPS) if n_norm > _VECTOR_NORM_EPS else n1
+
+        def _metal_height(site: Site) -> float:
+            if site.slab_indices:
+                idx = [int(i) for i in site.slab_indices if 0 <= int(i) < len(ref_pos)]
+                if idx:
+                    return float(np.mean(np.asarray(ref_pos[idx], dtype=float) @ n_hat))
+            return float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
+
+        h1 = _metal_height(site1)
+        h2 = _metal_height(site2)
+        # Per-site metal height keeps the in-plane pair vector (shared target
+        # height would shear H–H when the two vertices sit at different altitudes).
+        pos1 = base1 + (h1 + z_offset - float(np.dot(base1, n_hat))) * n_hat
+        pos2 = base2 + (h2 + z_offset - float(np.dot(base2, n_hat))) * n_hat
+        h_surface = 0.5 * (h1 + h2)
+        site_reference_frame = "local_site"
     else:
-        # Nanoparticle / porous: offset both fragments along a shared normal so
-        # divergent local site normals do not laterally expand the H–H spacing.
+        # Porous: Voronoi voids are already in free volume; offset from the vertex.
         n_sum = np.asarray(n1, dtype=float) + np.asarray(n2, dtype=float)
         n_norm = float(np.linalg.norm(n_sum))
         n_hat = n_sum / (n_norm + _VECTOR_NORM_EPS) if n_norm > _VECTOR_NORM_EPS else n1
@@ -714,15 +737,14 @@ def _generate_dissociative_placement_from_spec(
         xyz=np.asarray(site_pair.xyz1, dtype=float),
         normal=np.asarray(site_pair.normal1, dtype=float),
         site_type="hollow",
-        slab_indices=(),
+        slab_indices=tuple(site_pair.indices1),
         material_type=config.material_type,
         site_source="dissociative_hollow_pair",
         env_fingerprint=((), "hollow"),
     )
     syms = adsorbate.get_chemical_symbols()
-    # site_a / site_b have empty slab_indices, so the surface radius is the
-    # top-layer radius. Fetch it once and reuse for both z-base helpers.
-    r_surface = _get_site_surface_radii(sites_slab, None)
+    # Prefer pair-stored metal indices for surface radius; fall back to top-layer.
+    r_surface = _get_site_surface_radii(sites_slab, site_a)
     z_lo, z_hi = _compute_site_z_base(
         config, sites_slab, site_a, syms, r_surface=r_surface
     )
@@ -735,7 +757,7 @@ def _generate_dissociative_placement_from_spec(
         xyz=np.asarray(site_pair.xyz2, dtype=float),
         normal=np.asarray(site_pair.normal2, dtype=float),
         site_type="hollow",
-        slab_indices=(),
+        slab_indices=tuple(site_pair.indices2),
         material_type=config.material_type,
         site_source="dissociative_hollow_pair",
         env_fingerprint=((), "hollow"),

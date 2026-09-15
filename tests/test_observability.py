@@ -45,13 +45,12 @@ from .conftest import make_slab, make_water, place_molecule_on_slab
 
 
 class TestLoadMoleculesCaching:
-    def test_reads_csv_once_with_skip_existing(self, tmp_path, monkeypatch):
+    def test_reads_csv_once_with_skip_existing(self, workdir):
         """Ensure the summary CSV is read at most once, not per molecule."""
-        monkeypatch.chdir(tmp_path)
-        csv_path = tmp_path / "smiles.csv"
+        csv_path = workdir / "smiles.csv"
         csv_path.write_text("O,water\nCCO,ethanol\nCO,methanol\n")
 
-        results_dir = tmp_path / "results_manual"
+        results_dir = workdir / "results_manual"
         results_dir.mkdir()
         summary = pd.DataFrame(
             {
@@ -73,12 +72,11 @@ class TestLoadMoleculesCaching:
         assert set(molecules) == {"ethanol", "methanol"}
         assert len(smiles) == 2
 
-    def test_corrupt_summary_does_not_crash(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        csv_path = tmp_path / "smiles.csv"
+    def test_corrupt_summary_does_not_crash(self, workdir):
+        csv_path = workdir / "smiles.csv"
         csv_path.write_text("O,water\n")
 
-        results_dir = tmp_path / "results_manual"
+        results_dir = workdir / "results_manual"
         results_dir.mkdir()
         (results_dir / "adsorption_energies_detailed.csv").write_text(
             "garbage\nnot,a,csv\n"
@@ -91,14 +89,11 @@ class TestLoadMoleculesCaching:
         )
         assert molecules == ["water"]
 
-    def test_corrupt_saturation_summary_does_not_crash(
-        self, tmp_path, monkeypatch, caplog
-    ):
-        monkeypatch.chdir(tmp_path)
-        csv_path = tmp_path / "smiles.csv"
+    def test_corrupt_saturation_summary_does_not_crash(self, workdir, caplog):
+        csv_path = workdir / "smiles.csv"
         csv_path.write_text("O,water\n")
 
-        results_dir = tmp_path / "results_manual"
+        results_dir = workdir / "results_manual"
         results_dir.mkdir()
         (results_dir / "saturation_summary.csv").write_text(
             'a,b\n"unterminated,water\n'
@@ -120,9 +115,8 @@ class TestLoadMoleculesCaching:
             for record in caplog.records
         )
 
-    def test_no_summary_file_loads_all(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        csv_path = tmp_path / "smiles.csv"
+    def test_no_summary_file_loads_all(self, workdir):
+        csv_path = workdir / "smiles.csv"
         csv_path.write_text("O,water\nCCO,ethanol\n")
 
         molecules, _, _ = load_molecules(
@@ -139,8 +133,7 @@ class TestLoadMoleculesCaching:
 
 
 class TestRunMetadata:
-    def test_writes_valid_json(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
+    def test_writes_valid_json(self, workdir):
         config = AdsorptionConfig(seed=123)
 
         write_run_metadata(
@@ -153,7 +146,7 @@ class TestRunMetadata:
             t_total_s=5.0,
         )
 
-        path = tmp_path / "results_test" / "run_metadata.json"
+        path = workdir / "results_test" / "run_metadata.json"
         assert path.exists()
 
         with open(path) as f:
@@ -167,11 +160,10 @@ class TestRunMetadata:
         assert meta["timing"]["total_wall_clock_s"] == pytest.approx(5.0)
         assert "timestamp" in meta
 
-    def test_write_settings_and_metadata_merge(self, tmp_path, monkeypatch):
+    def test_write_settings_and_metadata_merge(self, workdir):
         """write_run_settings and write_run_metadata merge into one file."""
         from metalsurfer.io_results import write_run_settings
 
-        monkeypatch.chdir(tmp_path)
         config = AdsorptionConfig(seed=7)
 
         write_run_settings(
@@ -191,7 +183,7 @@ class TestRunMetadata:
             t_total_s=4.0,
         )
 
-        with open(tmp_path / "results_merge_test" / "run_metadata.json") as f:
+        with open(workdir / "results_merge_test" / "run_metadata.json") as f:
             meta = json.load(f)
 
         assert meta["campaign"] == "multi_molecule_binding"
@@ -200,8 +192,7 @@ class TestRunMetadata:
         assert meta["timing"]["total_wall_clock_s"] == pytest.approx(4.0)
         assert meta["config"]["seed"] == 7
 
-    def test_metadata_contains_throughput(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
+    def test_metadata_contains_throughput(self, workdir):
         config = AdsorptionConfig()
         write_run_metadata(
             surface_type="bench",
@@ -213,15 +204,14 @@ class TestRunMetadata:
             t_total_s=20.0,
         )
 
-        with open(tmp_path / "results_bench" / "run_metadata.json") as f:
+        with open(workdir / "results_bench" / "run_metadata.json") as f:
             meta = json.load(f)
 
         assert meta["timing"]["molecules_per_second"] == pytest.approx(0.5)
         assert meta["timing"]["configs_per_second"] == pytest.approx(2.5)
 
-    def test_config_excludes_callable_placement_filter(self, tmp_path, monkeypatch):
+    def test_config_excludes_callable_placement_filter(self, workdir):
         """placement_filter (callable) is omitted from JSON, not stringified."""
-        monkeypatch.chdir(tmp_path)
         config = AdsorptionConfig(seed=42, placement_filter=lambda s: True)
 
         write_run_metadata(
@@ -234,7 +224,7 @@ class TestRunMetadata:
             t_total_s=1.0,
         )
 
-        with open(tmp_path / "results_test" / "run_metadata.json") as f:
+        with open(workdir / "results_test" / "run_metadata.json") as f:
             meta = json.load(f)
 
         config_json = json.dumps(meta["config"])

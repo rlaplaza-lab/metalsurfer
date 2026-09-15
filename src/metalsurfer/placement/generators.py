@@ -268,6 +268,7 @@ def _spec_grid_info(
             )
             site_indices = [i for i, keep in enumerate(vertex_mask) if keep]
             if need_footprint:
+                assert existing_radii is not None and r_in is not None
                 clearances = _footprint_clearances_from_mic(
                     unique_sites, mic_vecs, existing_radii, float(r_in)
                 )

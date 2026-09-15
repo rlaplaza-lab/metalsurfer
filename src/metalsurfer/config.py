@@ -20,6 +20,8 @@ from ._numeric_defaults import (
     MIN_CONTACT_RATIO_DEFAULT,
     MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
     OCCUPANCY_FOOTPRINT_SCALE_DEFAULT,
+    STANDARD_PRESSURE_BAR,
+    STANDARD_TEMPERATURE_K,
 )
 from .models import PlacementSpec
 
@@ -186,6 +188,44 @@ def _check_choice(name: str, value: str, *, allowed: tuple[str, ...]) -> None:
         quoted = ", ".join(repr(item) for item in allowed[:-1])
         message = f"{quoted}, or {allowed[-1]!r}" if quoted else repr(allowed[-1])
         raise ValueError(f"{name} must be {message}, got {value!r}")
+
+
+def _validate_saturation_activities(root: "AdsorptionConfig") -> None:
+    """Coerce and validate ``saturation_activities`` (length vs molecules later)."""
+    raw = root.saturation_activities
+    if raw is None:
+        return
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, (list, tuple)):
+        raise ValueError(
+            "saturation_activities must be a sequence of positive floats or None, "
+            f"got {type(raw).__name__}"
+        )
+    if len(raw) == 0:
+        raise ValueError("saturation_activities must be non-empty when provided")
+    activities: list[float] = []
+    for i, value in enumerate(raw):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"saturation_activities[{i}] must be a positive number, got {value!r}"
+            )
+        if not isfinite(float(value)) or float(value) <= 0:
+            raise ValueError(
+                f"saturation_activities[{i}] must be positive, got {value!r}"
+            )
+        activities.append(float(value))
+    root.saturation_activities = tuple(activities)
+
+
+def _validate_saturation_reservoir(root: "AdsorptionConfig") -> None:
+    """Validate reservoir T/p (bool rejected; positivity via ``_check_positive``)."""
+    for name, value in (
+        ("saturation_temperature", root.saturation_temperature),
+        ("saturation_pressure", root.saturation_pressure),
+    ):
+        if isinstance(value, bool):
+            raise ValueError(f"{name} must be a positive number, got {value!r}")
+        _check_positive(name, value)
+    _validate_saturation_activities(root)
 
 
 def _check_unit_interval(
@@ -716,11 +756,13 @@ class AdsorptionConfig:
     export_placement_provenance: bool = False
     saturation_discard_topology_rearrangements: bool = True
     saturation_max_steps: int | None = None
-    # Placements committed per saturation step. ``1`` is legacy sequential
-    # coverage; larger values enable n-tuplet mode, where each step greedily
-    # commits several mutually clear winners via ONE composite relaxation.
-    # Committed rows carry the full tuplet E_ads (see workflow/composite.py).
+    # 1 = sequential; >1 = n-tuplet composite commit per step.
     saturation_molecules_per_step: int = 1
+    # Reservoir T/p/a for Ω = E_ads − k_B T ln(a_i p / p°). SATP defaults.
+    # Not boltzmann_temperature. None activities → all a_i = 1.
+    saturation_temperature: float = STANDARD_TEMPERATURE_K
+    saturation_pressure: float = STANDARD_PRESSURE_BAR
+    saturation_activities: tuple[float, ...] | None = None
     skip_topology_check: bool = False
     enable_dissociative_placement: bool = False
     skip_desorption_check: bool = False
@@ -791,6 +833,8 @@ class AdsorptionConfig:
         ]
         for nn_name, nn_value in non_negative_fields:
             _check_non_negative(nn_name, nn_value)
+
+        _validate_saturation_reservoir(self)
 
         _check_choice(
             "conformer_weighting",

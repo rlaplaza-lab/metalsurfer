@@ -13,6 +13,11 @@ import pytest
 from ase import Atoms
 from ase.io import read
 
+from metalsurfer._numeric_defaults import (
+    K_B_EV_PER_K,
+    STANDARD_PRESSURE_BAR,
+    STANDARD_TEMPERATURE_K,
+)
 from metalsurfer.config import AdsorptionConfig, BOConfig, BOTransferConfig
 from metalsurfer.io_results import (
     _saturation_molecule_label,
@@ -56,6 +61,9 @@ from metalsurfer.workflow.shared import (
     MoleculeScreenOutcome,
     ScreeningRunBootstrap,
     _build_surface_reference_slab,
+    adsorption_ranking_energy,
+    resolve_saturation_activities,
+    tuplet_ranking_energy,
 )
 
 from .conftest import (
@@ -1090,6 +1098,149 @@ def test_multi_mol_saturation_picks_best_across_molecules(monkeypatch):
     assert isinstance(result, MultiMolSaturationRunResult)
     assert len(result.steps) == 2
     assert result.steps[0].winning_molecule == "CO2"
+
+
+def test_adsorption_ranking_energy_satp_and_scaling():
+    e_ads = -1.0
+    assert adsorption_ranking_energy(
+        e_ads, 1.0, STANDARD_TEMPERATURE_K, STANDARD_PRESSURE_BAR
+    ) == pytest.approx(e_ads)
+    omega = adsorption_ranking_energy(
+        e_ads, 10.0, STANDARD_TEMPERATURE_K, STANDARD_PRESSURE_BAR
+    )
+    assert omega == pytest.approx(
+        e_ads - K_B_EV_PER_K * STANDARD_TEMPERATURE_K * np.log(10.0)
+    )
+    assert adsorption_ranking_energy(
+        e_ads, 1.0, STANDARD_TEMPERATURE_K, 10.0
+    ) == pytest.approx(omega)
+    assert tuplet_ranking_energy(
+        -2.0, ["A", "B"], {"A": 10.0, "B": 1.0}, STANDARD_TEMPERATURE_K, 1.0
+    ) == pytest.approx(-2.0 - K_B_EV_PER_K * STANDARD_TEMPERATURE_K * np.log(10.0))
+
+
+def test_resolve_saturation_activities_none_and_mismatch():
+    assert resolve_saturation_activities(["A", "B"], None) == {"A": 1.0, "B": 1.0}
+    with pytest.raises(ValueError, match="length 1 does not match"):
+        resolve_saturation_activities(["A", "B"], (1.0,))
+
+
+@pytest.mark.parametrize("bo_enabled", [False, True])
+def test_multi_mol_activity_flips_winner(monkeypatch, bo_enabled):
+    """High activity can beat a slightly better electronic E_ads (non-BO and BO)."""
+    slab = SlabContainer(make_slab())
+    config = _mock_saturation_config(
+        multi_molecule_saturation=True,
+        saturation_activities=(100.0, 1.0),
+        saturation_max_steps=1,
+        bo=BOConfig(transfer=BOTransferConfig(enabled=False)),
+    )
+    ref = DummyReferenceEnergies(REF_WATER_CO2)
+    schedule = _make_schedule_process({"water": [-0.5], "CO2": [-0.6]})
+
+    def _bo_process(_smi, mol, current_slab, *_args, **_kwargs):
+        outcome = schedule(_smi, mol, current_slab)
+        e_ads = outcome.results[0].energy_adsorption
+        return MoleculeScreenOutcome(
+            results=outcome.results,
+            bo_memory=BOStepMemory(
+                observed_X_rows=[{"x": 0.0}],
+                observed_y=[e_ads],
+                best_energy=e_ads,
+            ),
+            transfer_info=BOTransferInfo(),
+        )
+
+    patch_kw = {
+        "molecules": ["water", "CO2"],
+        "smiles_list": ["O", "O=C=O"],
+        "ref": ref,
+    }
+    if bo_enabled:
+        patch_kw["process_molecule_bayesian"] = _bo_process
+    else:
+        patch_kw["process_molecule"] = schedule
+    _patch_multi_mol_saturation_mocks(monkeypatch, **patch_kw)
+
+    out = run_saturation_screening(
+        slab,
+        molecules="unused.csv",
+        config=config,
+        surface_type="multi_mol_activity_flip",
+        skip_existing=False,
+        bo_enabled=bo_enabled,
+    )
+    assert out[0].steps[0].winning_molecule == "water"
+    assert out[0].steps[0].best_result.energy_adsorption == pytest.approx(-0.5)
+
+
+def test_multi_mol_pressure_and_activity_stop(monkeypatch):
+    """High p can bind endothermic E_ads; tiny a unbinds exothermic E_ads."""
+    slab = SlabContainer(make_slab())
+    ref = DummyReferenceEnergies(REF_WATER_CO2)
+
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["water", "CO2"],
+        smiles_list=["O", "O=C=O"],
+        ref=ref,
+        process_molecule=_make_schedule_process({"water": [0.05], "CO2": [0.02]}),
+    )
+    out = run_saturation_screening(
+        slab,
+        molecules="unused.csv",
+        config=_mock_saturation_config(
+            multi_molecule_saturation=True,
+            saturation_pressure=100.0,
+            saturation_max_steps=1,
+        ),
+        surface_type="multi_mol_pressure_bind",
+        skip_existing=False,
+    )
+    assert out[0].steps[0].winning_molecule == "CO2"
+    assert out[0].n_molecules_at_saturation == 1
+
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["A", "B"],
+        smiles_list=["sa", "sb"],
+        ref=DummyReferenceEnergies(REF_A_B),
+        process_molecule=_make_schedule_process({"A": [-0.05], "B": [-0.04]}),
+    )
+    out = run_saturation_screening(
+        slab,
+        molecules="unused.csv",
+        config=_mock_saturation_config(
+            multi_molecule_saturation=True,
+            saturation_activities=(1.0e-10, 1.0e-10),
+        ),
+        surface_type="multi_mol_tiny_activity",
+        skip_existing=False,
+    )
+    assert out[0].steps[0].n_added == 0
+    assert out[0].n_molecules_at_saturation == 0
+
+
+def test_saturation_activities_length_mismatch_raises(monkeypatch):
+    slab = SlabContainer(make_slab())
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["water", "CO2"],
+        smiles_list=["O", "O=C=O"],
+        ref=DummyReferenceEnergies(REF_WATER_CO2),
+        process_molecule=_make_schedule_process({"water": [-0.5], "CO2": [-0.6]}),
+    )
+    with pytest.raises(ValueError, match="saturation_activities length"):
+        run_saturation_screening(
+            slab,
+            molecules="unused.csv",
+            config=_mock_saturation_config(
+                multi_molecule_saturation=True,
+                saturation_activities=(1.0,),
+            ),
+            surface_type="multi_mol_activity_len",
+            skip_existing=False,
+        )
 
 
 def test_multi_mol_saturation_terminates_on_positive_eads(monkeypatch):

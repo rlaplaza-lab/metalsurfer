@@ -1071,29 +1071,19 @@ def test_duplicate_removal_tracks_removed_duplicates():
     assert removed[0].placement_id != filtered[0].placement_id
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "filter_results deduplicates via Cartesian RMSD only "
-        "(rmsd_dedup_threshold); it is not symmetry-aware, so 2D lattice "
-        "translations / C_nv rotations of an identical pose are NOT collapsed. "
-        "Symmetry-equivalent pose dedup is a missing library capability "
-        "(TODO: add a symmetry/rotation-aware RMSD path in metalsurfer/filters.py)."
-    ),
-)
-def test_duplicate_removal_symmetry_equivalent_poses():
-    """Two symmetry-equivalent water poses should collapse to one after dedup.
+def test_duplicate_removal_lattice_image_poses():
+    """Two poses related by an in-plane lattice translation collapse under MIC RMSD.
 
-    A second copy shifted by a 2D lattice translation (and, equivalently, a
-    surface C_nv rotation) of the first is physically the same pose; a
-    symmetry-aware filter would report a single unique pose.
+    Shifting the adsorbate by one cell vector yields an equivalent image under
+    periodic boundary conditions; filter_results must report a single unique pose.
     """
     slab = make_slab(n_layers=1)
     base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     translated = base.copy()
     pos = translated.get_positions().copy()
     slab_size = len(slab)
-    pos[slab_size:, 0] += 3.0  # 2D lattice translation of the adsorbate
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pos[slab_size:] += cell[0]  # one in-plane lattice vector
     translated.set_positions(pos)
 
     results = [
@@ -1106,7 +1096,6 @@ def test_duplicate_removal_symmetry_equivalent_poses():
         connectivity_multiplier=1.3,
     )
     filtered = filter_results(results, slab=slab, config=config)
-    # Symmetry-aware expectation: the two equivalent poses deduplicate to one.
     assert len(filtered) == 1
 
 

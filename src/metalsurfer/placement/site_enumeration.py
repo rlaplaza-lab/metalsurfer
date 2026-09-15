@@ -17,11 +17,11 @@ from ._constants import (
     _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     _DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     _DEFAULT_SYMMETRY_TOLERANCE,
-    _NORMAL_K_NEIGHBOURS,
     _PARALLEL_Z_MIN_HI_MARGIN,
     _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
     _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
+    _SURFACE_NORMAL_FALLBACK_NORM_EPS,
     _VORONOI_AUTO_WIDEN_MAX_SCALE,
     _VORONOI_AUTO_WIDEN_PROBE_SCALE,
     _VORONOI_DEDUP_TOLERANCE,
@@ -35,7 +35,6 @@ from ._material import (
 from .geometry import _get_covalent_radius
 from .site_classify import (
     _build_site_records,
-    _compute_local_normals_batch,
     _DelaunayClassifyInputs,
 )
 from .site_coords import (
@@ -61,6 +60,12 @@ from .site_coords import (
     _wrap_fractional,
     top_layer_mask_by_normal,
 )
+from .site_np import (
+    _convex_hull_surface_mask,
+    _generate_nanoparticle_topology_sites,
+    _surface_atom_normals,
+    _try_convex_hull,
+)
 from .site_types import Site
 from .site_voronoi import (
     _build_delaunay_classification_index,
@@ -81,18 +86,40 @@ def _merge_dedup_site_arrays(
     *,
     cell: np.ndarray,
     pbc: np.ndarray | list[bool],
-) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Append *new_* site arrays and deduplicate against the combined set."""
-    if len(new_vertices) == 0:
-        return vertices, nn_dists, source_hints
-    if len(vertices) == 0:
-        return new_vertices, new_dists, list(new_sources)
+    atom_indices: list[tuple[int, ...]] | None = None,
+    new_atom_indices: list[tuple[int, ...]] | None = None,
+) -> tuple[np.ndarray, np.ndarray, list[str], list[tuple[int, ...]]]:
+    """Append *new_* site arrays and deduplicate against the combined set.
+
+    Optional *atom_indices* / *new_atom_indices* stay aligned with the kept
+    vertices (empty tuples when a side did not supply indices).
+    """
+    n_old = len(vertices)
+    n_new = len(new_vertices)
+    old_atoms = (
+        list(atom_indices) if atom_indices is not None else [() for _ in range(n_old)]
+    )
+    new_atoms = (
+        list(new_atom_indices)
+        if new_atom_indices is not None
+        else [() for _ in range(n_new)]
+    )
+    if n_new == 0:
+        return vertices, nn_dists, source_hints, old_atoms
+    if n_old == 0:
+        return new_vertices, new_dists, list(new_sources), new_atoms
     combined = np.vstack([vertices, new_vertices])
     combined_dists = np.concatenate([nn_dists, new_dists])
     combined_sources = source_hints + list(new_sources)
+    combined_atoms = old_atoms + new_atoms
     keep = _deduplicate_points(combined, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc)
     kept_idx = np.nonzero(keep)[0]
-    return combined[keep], combined_dists[keep], [combined_sources[i] for i in kept_idx]
+    return (
+        combined[keep],
+        combined_dists[keep],
+        [combined_sources[i] for i in kept_idx],
+        [combined_atoms[i] for i in kept_idx],
+    )
 
 
 def _median_nn_or_fallback(
@@ -221,10 +248,21 @@ def _apply_site_mask(
     nn_dists: np.ndarray,
     source_hints: list[str],
     mask: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    atom_indices: list[tuple[int, ...]] | None = None,
+) -> tuple[np.ndarray, np.ndarray, list[str], list[tuple[int, ...]]]:
     """Keep only vertices selected by boolean *mask* (index arrays stay aligned)."""
+    atoms = (
+        list(atom_indices)
+        if atom_indices is not None
+        else [() for _ in range(len(vertices))]
+    )
     kept = np.nonzero(mask)[0]
-    return vertices[mask], nn_dists[mask], [source_hints[i] for i in kept]
+    return (
+        vertices[mask],
+        nn_dists[mask],
+        [source_hints[i] for i in kept],
+        [atoms[i] for i in kept],
+    )
 
 
 def _inject_atop_sites(
@@ -240,35 +278,35 @@ def _inject_atop_sites(
     accessibility_tree: KDTree | None,
     median_nn: float | None,
     slab_top_atom_indices: np.ndarray | None,
-    slab_has_topology_atop: bool,
+    has_topology_atop: bool,
     probe_radius: float,
     max_site_distance: float,
-) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Atop injection safety net for nanoparticles, and slabs lacking topology atop.
+    atom_indices: list[tuple[int, ...]] | None = None,
+) -> tuple[np.ndarray, np.ndarray, list[str], list[tuple[int, ...]]]:
+    """Inject atop when topology did not already produce any.
 
-    Atop sites are derived purely from *positions* (top atoms / outward normals),
-    so they can be built even when *vertices* is empty — see the early-return
-    bypass fix in ``_enumerate_unified_sites``.
-
-    *accessibility_tree* (PBC-aware) is preferred for the distance gate whenever
-    periodic boundaries are active: the plain *local_tree* reports in-cell
-    distances, which are inflated for candidates near an a/b boundary.
-    *median_nn*, when provided, must be the value used for the topology
-    generator's ``site_height`` so both atop sources share one height.
+    Uses the same height as the topology generator when *median_nn* is supplied.
+    *accessibility_tree* (PBC-aware) gates distances under periodic boundaries.
     """
-    if material_type == "slab" and slab_has_topology_atop:
-        return vertices, nn_dists, source_hints
+    atoms = (
+        list(atom_indices)
+        if atom_indices is not None
+        else [() for _ in range(len(vertices))]
+    )
+    if material_type in ("slab", "nanoparticle") and has_topology_atop:
+        return vertices, nn_dists, source_hints, atoms
     if material_type not in ("slab", "nanoparticle"):
-        return vertices, nn_dists, source_hints
+        return vertices, nn_dists, source_hints, atoms
 
     if median_nn is None:
+        ref = (
+            positions[slab_top_atom_indices]
+            if material_type == "slab" and slab_top_atom_indices is not None
+            else positions
+        )
         median_nn = _median_nn_or_fallback(
-            nn_dists,
-            reference_positions=(
-                positions[slab_top_atom_indices]
-                if slab_top_atom_indices is not None
-                else positions
-            ),
+            nn_dists if material_type == "slab" else np.empty(0, dtype=float),
+            reference_positions=ref,
             cell=cell,
             pbc=pbc,
         )
@@ -276,21 +314,23 @@ def _inject_atop_sites(
 
     if material_type == "slab":
         if slab_top_atom_indices is None:
-            return vertices, nn_dists, source_hints
-        top_atom_indices = slab_top_atom_indices
-        atom_normals: np.ndarray | None = None
+            return vertices, nn_dists, source_hints, atoms
+        top_atom_indices = np.asarray(slab_top_atom_indices, dtype=int)
+        atom_normals = None
     else:
-        com = np.mean(positions, axis=0)
-        k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
-        _, norm_idx_all = local_tree.query(positions, k=k_norm)
-        if np.ndim(norm_idx_all) == 1:
-            norm_idx_all = np.asarray(norm_idx_all, dtype=int).reshape(-1, 1)
-        atom_normals = _compute_local_normals_batch(positions, positions, norm_idx_all)
-        outward_dots = np.einsum("ij,ij->i", atom_normals, positions - com)
-        top_atom_indices = np.nonzero(outward_dots > 0.0)[0].astype(int)
+        hull = _try_convex_hull(positions)
+        if hull is None:
+            return vertices, nn_dists, source_hints, atoms
+        top_atom_indices = np.nonzero(_convex_hull_surface_mask(positions, hull=hull))[
+            0
+        ].astype(int)
+        if len(top_atom_indices) == 0:
+            return vertices, nn_dists, source_hints, atoms
+        atom_normals = _surface_atom_normals(positions, top_atom_indices, hull)
 
     candidate_verts: list[np.ndarray] = []
-    for ai in top_atom_indices:
+    candidate_atom_ids: list[int] = []
+    for li, ai in enumerate(top_atom_indices):
         atom_pos = positions[int(ai)]
         if material_type == "slab":
             candidate = _shift_along_slab_normal(
@@ -299,19 +339,18 @@ def _inject_atop_sites(
             if np.any(pbc):
                 candidate = _wrap_cartesian(candidate.reshape(1, 3), cell, pbc)[0]
         else:
-            if atom_normals is None:
-                raise ValueError(
-                    "atom_normals must be set for nanoparticle atop injection"
-                )
-            candidate = atom_pos + atop_height * atom_normals[int(ai)]
+            assert atom_normals is not None
+            n_hat = atom_normals[li]
+            if float(np.linalg.norm(n_hat)) < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+                continue
+            candidate = atom_pos + atop_height * n_hat
         candidate_verts.append(candidate)
+        candidate_atom_ids.append(int(ai))
 
     if not candidate_verts:
-        return vertices, nn_dists, source_hints
+        return vertices, nn_dists, source_hints, atoms
 
     candidate_arr = np.asarray(candidate_verts, dtype=float)
-    # Gate through the PBC-aware tree when available (see docstring); the plain
-    # in-cell tree would inflate d_nn for candidates near periodic boundaries.
     gate_tree = (
         accessibility_tree
         if accessibility_tree is not None and np.any(pbc)
@@ -322,14 +361,16 @@ def _inject_atop_sites(
         d_nn_all <= float(max_site_distance)
     )
     if not np.any(keep_acc):
-        return vertices, nn_dists, source_hints
+        return vertices, nn_dists, source_hints, atoms
 
     candidate_arr = candidate_arr[keep_acc]
     candidate_dist_arr = d_nn_all[keep_acc]
-    candidate_sources = ["atop_injected"] * int(np.count_nonzero(keep_acc))
+    kept_atom_ids = [candidate_atom_ids[i] for i in np.nonzero(keep_acc)[0]]
+    candidate_sources = ["atop_injected"] * len(candidate_arr)
+    candidate_atoms = [(ai,) for ai in kept_atom_ids]
 
     n_existing = len(vertices)
-    vertices, nn_dists, source_hints = _merge_dedup_site_arrays(
+    vertices, nn_dists, source_hints, atoms = _merge_dedup_site_arrays(
         vertices,
         nn_dists,
         source_hints,
@@ -338,6 +379,8 @@ def _inject_atop_sites(
         candidate_sources,
         cell=cell,
         pbc=pbc,
+        atom_indices=atoms,
+        new_atom_indices=candidate_atoms,
     )
     n_injected = len(vertices) - n_existing
     logger.debug(
@@ -346,7 +389,7 @@ def _inject_atop_sites(
         len(vertices),
     )
 
-    return vertices, nn_dists, source_hints
+    return vertices, nn_dists, source_hints, atoms
 
 
 def get_unified_sites(
@@ -376,9 +419,12 @@ def get_unified_sites(
       ``auto_widen`` **remain active** on slabs — they drive the
       topology accessibility window and the empty-result retry. Only ``enrich``
       (``voronoi_site_enrichment``) has no effect on planar slabs.
-    - **porous** / **nanoparticle**: Voronoi vertices are the primary source,
-      with optional ridge enrichment, plus an atop-injection safety net for
-      nanoparticles.
+    - **nanoparticle**: convex-hull + nearest-neighbour topology only
+      (atop / bridge / 3- and 4-fold hollow). Voronoi is skipped (same idea as
+      planar slabs). Topology labels are kept; distance-ratio is not applied.
+      If the hull cannot be built, a single atop-injection pass is the fallback.
+    - **porous**: Voronoi vertices are the primary source, with optional ridge
+      enrichment.
     - rotated slabs are handled using the slab normal rather than Cartesian z
 
     Parameters
@@ -550,7 +596,9 @@ def _enumerate_unified_sites(
                 "gate accessibility; site enrichment does not apply."
             )
 
-    if slab_skip_voronoi:
+    # Nanoparticles use hull topology only (planar-slab analogue: skip Voronoi).
+    skip_voronoi = bool(slab_skip_voronoi) or material_type == "nanoparticle"
+    if skip_voronoi:
         vertices = np.empty((0, 3), dtype=float)
         nn_dists = np.empty(0, dtype=float)
     else:
@@ -564,10 +612,11 @@ def _enumerate_unified_sites(
             symbols=symbols,
         )
     source_hints = ["voronoi"] * len(vertices)
+    atom_indices: list[tuple[int, ...]] = [() for _ in range(len(vertices))]
 
     local_tree = KDTree(positions)
 
-    slab_has_topology_atop = False
+    has_topology_atop = False
     topology_primary_delaunay = None
     topology_expanded_xy: np.ndarray | None = None
     topology_expanded_origin: list[int] | None = None
@@ -577,7 +626,7 @@ def _enumerate_unified_sites(
     # generator and the atop-injection gate (a plain in-cell KDTree inflates
     # d_nn near a/b boundaries and silently drops valid sites).
     accessibility_tree: KDTree | None = None
-    slab_median_nn: float | None = None
+    topology_median_nn: float | None = None
     if material_type == "slab":
         accessibility_tree = _periodic_accessibility_tree(
             positions,
@@ -594,7 +643,7 @@ def _enumerate_unified_sites(
             cell=cell,
             pbc=pbc_for_voronoi,
         )
-        slab_median_nn = float(median_nn)
+        topology_median_nn = float(median_nn)
         site_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
         (
             topo_vertices,
@@ -614,9 +663,9 @@ def _enumerate_unified_sites(
             float(probe_radius),
             float(max_site_distance),
         )
-        slab_has_topology_atop = any(s == "topology_atop" for s in topo_sources)
+        has_topology_atop = any(s == "topology_atop" for s in topo_sources)
         if len(topo_vertices) > 0:
-            vertices, nn_dists, source_hints = _merge_dedup_site_arrays(
+            vertices, nn_dists, source_hints, atom_indices = _merge_dedup_site_arrays(
                 vertices,
                 nn_dists,
                 source_hints,
@@ -625,12 +674,42 @@ def _enumerate_unified_sites(
                 topo_sources,
                 cell=cell,
                 pbc=pbc_for_voronoi,
+                atom_indices=atom_indices,
             )
 
+    # Nanoparticle: hull topology only (Voronoi already skipped above).
+    if material_type == "nanoparticle":
+        metal_nn = _median_nn_or_fallback(
+            np.empty(0, dtype=float),
+            reference_positions=positions,
+            cell=cell,
+            pbc=pbc_for_voronoi,
+        )
+        topology_median_nn = float(metal_nn)
+        site_height = _ATOP_INJECTION_HEIGHT_FACTOR * metal_nn
+        (
+            topo_vertices,
+            topo_dists,
+            topo_sources,
+            topo_atoms,
+        ) = _generate_nanoparticle_topology_sites(
+            positions,
+            local_tree,
+            site_height,
+            float(probe_radius),
+            float(max_site_distance),
+            metal_nn=metal_nn,
+            cell=cell,
+            pbc=pbc_for_voronoi,
+        )
+        has_topology_atop = any(s == "topology_atop" for s in topo_sources)
+        vertices = topo_vertices
+        nn_dists = topo_dists
+        source_hints = list(topo_sources)
+        atom_indices = list(topo_atoms)
+
     if len(vertices) == 0 and material_type not in ("slab", "nanoparticle"):
-        # Slabs and nanoparticles fall through to the atop-injection safety net
-        # below even when the Voronoi/topology passes produced nothing, so only
-        # give up immediately for other material types.
+        # Slabs/NPs still try atop injection below.
         logger.warning(
             "No accessible sites for %d-atom structure (probe_radius=%s, max_distance=%s, material_type=%r)",
             len(atoms),
@@ -650,25 +729,11 @@ def _enumerate_unified_sites(
         )
         h_min = h_surface - max(float(top_layer_tolerance), nn_margin)
         keep_mask = _height_along_slab_normal(vertices, cell) >= h_min
-        vertices, nn_dists, source_hints = _apply_site_mask(
-            vertices, nn_dists, source_hints, keep_mask
+        vertices, nn_dists, source_hints, atom_indices = _apply_site_mask(
+            vertices, nn_dists, source_hints, keep_mask, atom_indices
         )
 
-    if material_type == "nanoparticle" and len(vertices) > 0:
-        com = np.mean(positions, axis=0)
-        k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
-        _, norm_idx = local_tree.query(vertices, k=k_norm)
-        if np.ndim(norm_idx) == 1:
-            norm_idx = np.asarray(norm_idx, dtype=int).reshape(-1, 1)
-        normals = _compute_local_normals_batch(vertices, positions, norm_idx)
-        outward = np.einsum("ij,ij->i", normals, vertices - com) > 0.0
-        vertices, nn_dists, source_hints = _apply_site_mask(
-            vertices, nn_dists, source_hints, outward
-        )
-
-    # Atop injection safety net for nanoparticles; for slabs only when topology
-    # did not already produce atop candidates.
-    vertices, nn_dists, source_hints = _inject_atop_sites(
+    vertices, nn_dists, source_hints, atom_indices = _inject_atop_sites(
         vertices,
         nn_dists,
         source_hints,
@@ -678,16 +743,17 @@ def _enumerate_unified_sites(
         material_type=material_type,
         local_tree=local_tree,
         accessibility_tree=accessibility_tree,
-        median_nn=slab_median_nn,
+        median_nn=topology_median_nn,
         slab_top_atom_indices=slab_top_atom_indices,
-        slab_has_topology_atop=slab_has_topology_atop,
+        has_topology_atop=has_topology_atop,
         probe_radius=probe_radius,
         max_site_distance=max_site_distance,
+        atom_indices=atom_indices,
     )
 
     if len(vertices) == 0:
         logger.warning(
-            "No accessible sites after atop-injection safety net for %d-atom "
+            "No accessible sites after atop injection for %d-atom "
             "structure (probe_radius=%s, max_distance=%s, material_type=%r)",
             len(atoms),
             f"{probe_radius:.2f}" if probe_radius is not None else "auto",
@@ -723,6 +789,7 @@ def _enumerate_unified_sites(
         source_hints=source_hints,
         pbc=pbc_for_voronoi,
         delaunay=delaunay_inputs,
+        atom_indices=atom_indices,
     )
 
     if cell_has_volume(cell):

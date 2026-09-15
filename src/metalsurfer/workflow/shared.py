@@ -2,8 +2,10 @@
 
 import csv
 import logging
+import math
 import time
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -13,7 +15,11 @@ from ase import Atoms
 from ase.neighborlist import primitive_neighbor_list
 
 from .._logging import log_context, warn_once
-from .._numeric_defaults import MIN_CALCULATOR_CELL_C_ANG
+from .._numeric_defaults import (
+    K_B_EV_PER_K,
+    MIN_CALCULATOR_CELL_C_ANG,
+    STANDARD_PRESSURE_BAR,
+)
 from .._utils import require_unique_molecule_names
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
 from ..conformers import create_conformers_from_smiles
@@ -58,6 +64,58 @@ from ..surface_prep.freeze import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def adsorption_ranking_energy(
+    e_ads: float,
+    activity: float,
+    temperature: float,
+    pressure: float,
+) -> float:
+    """Ω = E_ads − k_B T ln(a · p / p°) used for saturation ranking/stop."""
+    return float(e_ads) - (
+        K_B_EV_PER_K
+        * float(temperature)
+        * math.log(float(activity) * float(pressure) / STANDARD_PRESSURE_BAR)
+    )
+
+
+def resolve_saturation_activities(
+    molecule_names: Sequence[str],
+    activities: Sequence[float] | None,
+) -> dict[str, float]:
+    """Zip molecule names to activities; ``None`` → all a_i = 1."""
+    if activities is None:
+        return {name: 1.0 for name in molecule_names}
+    if len(activities) != len(molecule_names):
+        raise ValueError(
+            "saturation_activities length "
+            f"{len(activities)} does not match molecule count "
+            f"{len(molecule_names)} ({list(molecule_names)})"
+        )
+    return {
+        name: float(activity)
+        for name, activity in zip(molecule_names, activities, strict=True)
+    }
+
+
+def tuplet_ranking_energy(
+    e_ads_tuplet: float,
+    molecule_names: Sequence[str],
+    activity_by_molecule: Mapping[str, float],
+    temperature: float,
+    pressure: float,
+) -> float:
+    """Ω_tuplet = E_ads_tuplet − k_B T Σ ln(a_i p / p°)."""
+    shift = sum(
+        math.log(
+            float(activity_by_molecule.get(name, 1.0))
+            * float(pressure)
+            / STANDARD_PRESSURE_BAR
+        )
+        for name in molecule_names
+    )
+    return float(e_ads_tuplet) - K_B_EV_PER_K * float(temperature) * shift
 
 
 @dataclass

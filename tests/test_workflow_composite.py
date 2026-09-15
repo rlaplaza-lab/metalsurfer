@@ -136,6 +136,36 @@ class TestBuildCompositeCandidate:
 
 
 class TestSelectTupletWinners:
+    def test_activity_prefers_weaker_eads_binder(self):
+        slab = make_slab()
+        weak = _winner(slab, pid=0, e_ads=-0.5, x_shift=2.5, molecule="water")
+        strong = _winner(slab, pid=1, e_ads=-0.6, x_shift=6.5, molecule="co2")
+        winners = select_tuplet_winners(
+            [weak, strong],
+            cell=slab.get_cell(),
+            pbc=SLAB_PBC,
+            min_separation=1.5,
+            max_winners=1,
+            activity_by_molecule={"water": 100.0, "co2": 1.0},
+            temperature=298.15,
+            pressure=1.0,
+        )
+        assert [w.molecule for w in winners] == ["water"]
+
+    def test_tiny_activity_rejects_exothermic(self):
+        slab = make_slab()
+        winners = select_tuplet_winners(
+            [_winner(slab, pid=0, e_ads=-0.05, molecule="water")],
+            cell=slab.get_cell(),
+            pbc=SLAB_PBC,
+            min_separation=1.5,
+            max_winners=1,
+            activity_by_molecule={"water": 1.0e-10},
+            temperature=298.15,
+            pressure=1.0,
+        )
+        assert winners == []
+
     def test_accepts_clear_binders_up_to_cap(self):
         slab = make_slab()
         candidates = [

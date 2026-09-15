@@ -119,6 +119,9 @@ def test_default_config():
         config.planar_z_variance_threshold
         == numeric_defaults.DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
     )
+    assert config.saturation_temperature == numeric_defaults.STANDARD_TEMPERATURE_K
+    assert config.saturation_pressure == numeric_defaults.STANDARD_PRESSURE_BAR
+    assert config.saturation_activities is None
 
 
 def test_placement_retry_oversample_max_rejects_below_one():
@@ -459,6 +462,8 @@ def test_negative_int_rejected(field):
         "max_adsorption_energy",
         "vacuum_box_size",
         "boltzmann_temperature",
+        "saturation_temperature",
+        "saturation_pressure",
         "max_closest_approach",
         "contact_distance_threshold",
         "symmetry_tolerance",
@@ -485,11 +490,37 @@ def test_zero_positive_float_rejected(field):
         "site_equivalence_tolerance",
         "hollow_site_dedup_tolerance",
         "voronoi_probe_radius",
+        "saturation_temperature",
+        "saturation_pressure",
+        "boltzmann_temperature",
     ],
 )
 def test_negative_float_rejected(field):
     with pytest.raises(ValueError, match=f"{field}.*positive"):
         AdsorptionConfig(**{field: -0.1})
+
+
+def test_saturation_activities_coerce_list_and_reject_invalid():
+    cfg = AdsorptionConfig(saturation_activities=[1.0, 2.5])
+    assert cfg.saturation_activities == (1.0, 2.5)
+
+    with pytest.raises(ValueError, match="non-empty"):
+        AdsorptionConfig(saturation_activities=())
+    with pytest.raises(ValueError, match="positive"):
+        AdsorptionConfig(saturation_activities=(1.0, 0.0))
+    with pytest.raises(ValueError, match="positive"):
+        AdsorptionConfig(saturation_activities=(1.0, -0.5))
+    with pytest.raises(ValueError, match="positive number"):
+        AdsorptionConfig(saturation_activities=(1.0, True))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="sequence"):
+        AdsorptionConfig(saturation_activities="1.0")  # type: ignore[arg-type]
+
+
+def test_saturation_temperature_pressure_reject_bool():
+    with pytest.raises(ValueError, match="saturation_temperature"):
+        AdsorptionConfig(saturation_temperature=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="saturation_pressure"):
+        AdsorptionConfig(saturation_pressure=True)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
