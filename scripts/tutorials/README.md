@@ -95,7 +95,9 @@ Copy a file into your DFT workflow, or in Python:
 ```python
 from ase.io import read, write
 
-atoms = read("results_water_oh_pt4_ph14/xyz_structures/hydroxide_saturation/step_001_Eads_-1.7933.xyz")
+atoms = read(
+    "results_water_oh_pt4_ph14/xyz_structures/hydroxide_saturation/step_001_Eads_-1.7933.xyz"
+)
 write("for_dft/POSCAR", atoms, format="vasp")
 ```
 
@@ -109,10 +111,13 @@ By default the tutorial only keeps the best pose per step
 including worse binding energies — set:
 
 ```python
-saturation_save_all_placements=True,
+make_config(
+    ...,
+    saturation_save_all_placements=True,
+)
 ```
 
-inside ``make_config``, then re-run. You will get:
+then re-run. You will get:
 
 - ``saturation_placements_detailed.csv`` — every valid placement with ``E_ads``,
   molecule name, and step number. Sort by energy to see winners and runners-up.  
