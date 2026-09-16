@@ -87,6 +87,7 @@ module = [
     "metalsurfer.placement.site_coords",
     "metalsurfer.placement.site_voronoi",
     "metalsurfer.placement.site_classify",
+    "metalsurfer.placement.site_np",
 ]
 disable_error_code = ["misc", "has-type", "union-attr", "arg-type", "attr-defined"]
 
