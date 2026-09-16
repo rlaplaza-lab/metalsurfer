@@ -191,9 +191,12 @@ def _build_periodic_images(
     cell: np.ndarray,
     pbc: np.ndarray,
     margin: float = 0.0,
+    *,
+    offsets: list[np.ndarray] | None = None,
 ) -> np.ndarray:
     """Return extended positions including enough periodic images for *margin*."""
-    offsets = _periodic_image_offsets(cell, pbc, margin)
+    if offsets is None:
+        offsets = _periodic_image_offsets(cell, pbc, margin)
     return np.vstack([positions + off for off in offsets])
 
 
@@ -245,23 +248,25 @@ def _deduplicate_points(
     *,
     cell: np.ndarray | None = None,
     pbc: np.ndarray | None = None,
+    image_offsets: list[np.ndarray] | None = None,
 ) -> np.ndarray:
     """Return a boolean keep-mask that removes near-duplicate points.
 
     When *cell* and *pbc* are provided, periodic duplicates across the unit-cell
-    boundary are also merged.
+    boundary are also merged. Pass *image_offsets* to reuse a precomputed
+    offset list for the same ``(cell, pbc, tolerance)`` margin.
     """
     pts = np.asarray(points, dtype=float)
     n = len(pts)
     if n == 0:
         return np.ones(0, dtype=bool)
 
-    image_offsets: list[np.ndarray] | None = None
-    if cell is not None and pbc is not None and np.any(pbc):
-        image_offsets = _periodic_image_offsets(
+    offsets = image_offsets
+    if offsets is None and cell is not None and pbc is not None and np.any(pbc):
+        offsets = _periodic_image_offsets(
             np.asarray(cell, dtype=float), np.asarray(pbc, dtype=bool), tolerance
         )
-    merge_set = _pbc_merge_pair_set(pts, tolerance, image_offsets=image_offsets)
+    merge_set = _pbc_merge_pair_set(pts, tolerance, image_offsets=offsets)
     return _keep_mask_from_clusters(n, merge_set)
 
 

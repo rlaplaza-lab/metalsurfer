@@ -28,6 +28,7 @@ from .site_coords import (
     _derive_voronoi_distance_window,
     _frac_to_cart,
     _minimum_image_fractional_delta,
+    _periodic_image_offsets,
     _project_to_slab_plane,
     _slab_normal,
     _slab_plane_projectors,
@@ -139,7 +140,10 @@ def _voronoi_sites(
         pbc = np.zeros(3, dtype=bool)
 
     extension_margin = float(max_distance) + _VORONOI_DEDUP_TOLERANCE
-    extended = _build_periodic_images(positions, cell, pbc, margin=extension_margin)
+    image_offsets = _periodic_image_offsets(cell, pbc, extension_margin)
+    extended = _build_periodic_images(
+        positions, cell, pbc, margin=extension_margin, offsets=image_offsets
+    )
 
     try:
         vor = Voronoi(extended)
@@ -151,7 +155,8 @@ def _voronoi_sites(
     if len(raw_vertices) == 0:
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
 
-    wrapped_vertices = _wrap_cartesian(raw_vertices, cell, pbc)
+    inv_cell = np.linalg.inv(cell) if np.any(pbc) else None
+    wrapped_vertices = _wrap_cartesian(raw_vertices, cell, pbc, inv_cell=inv_cell)
 
     # Accessibility and returned nn distances must use wrapped (in-cell) sites:
     # raw vertices just outside the cell can have different framework distances.
@@ -169,8 +174,17 @@ def _voronoi_sites(
 
     # Keep wrapped vertices; PBC dedup merges images. Do not filter on unwrapped
     # fractional coords (values just outside [0, 1) still wrap to valid sites).
+    dedup_offsets = (
+        _periodic_image_offsets(cell, pbc, _VORONOI_DEDUP_TOLERANCE)
+        if np.any(pbc)
+        else None
+    )
     keep = _deduplicate_points(
-        wrapped_vertices, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
+        wrapped_vertices,
+        _VORONOI_DEDUP_TOLERANCE,
+        cell=cell,
+        pbc=pbc,
+        image_offsets=dedup_offsets,
     )
     vertices = wrapped_vertices[keep]
     nn_dists = nn_dists[keep]
@@ -203,6 +217,8 @@ def _voronoi_sites(
         cell=cell,
         pbc=pbc,
         n_origin=len(positions),
+        inv_cell=inv_cell,
+        dedup_offsets=dedup_offsets,
     )
     return enriched_verts, enriched_dists
 
@@ -237,12 +253,21 @@ def _generate_slab_topology_sites(
     site_height: float,
     probe_radius: float,
     max_distance: float,
+    *,
+    primary_delaunay: Delaunay | None = None,
+    exp2d: np.ndarray | None = None,
+    expanded_origin_local_index: list[int] | None = None,
+    exp_tri: Delaunay | None = None,
+    reuse_delaunay: bool = False,
 ) -> _SlabTopologyResult:
     """Generate slab atop/bridge/hollow candidates from the top layer.
 
     Candidates are created in an orientation-aware way and wrapped back into the
     reference cell on periodic axes. *accessibility_tree* must be MIC-aware
     under PBC (see :func:`site_enumeration._periodic_accessibility_tree`).
+
+    When *reuse_delaunay* is True, the provided primary/expanded Delaunay objects
+    are reused (planar auto-widen) instead of rebuilding Qhull.
     """
     empty_vertices = np.empty((0, 3), dtype=float)
     empty_dists = np.empty(0, dtype=float)
@@ -256,7 +281,7 @@ def _generate_slab_topology_sites(
     top_positions = positions[top_atom_indices]
 
     candidates: list[np.ndarray] = []
-    candidate_dists: list[float] = []
+    candidate_dists: list[np.ndarray] = []
     candidate_sources: list[str] = []
 
     def _add_candidates_batch(points: np.ndarray, source: str) -> None:
@@ -266,12 +291,13 @@ def _generate_slab_topology_sites(
         if np.any(pbc):
             pts = _wrap_cartesian(pts, cell, pbc)
         dists, _ = accessibility_tree.query(pts, k=1)
-        for p, d_nn in zip(pts, np.asarray(dists).ravel(), strict=True):
-            d_val = float(d_nn)
-            if probe_radius <= d_val <= max_distance:
-                candidates.append(np.asarray(p, dtype=float))
-                candidate_dists.append(d_val)
-                candidate_sources.append(source)
+        dists = np.asarray(dists, dtype=float).ravel()
+        keep = (probe_radius <= dists) & (dists <= max_distance)
+        if not np.any(keep):
+            return
+        candidates.append(pts[keep])
+        candidate_dists.append(dists[keep])
+        candidate_sources.extend([source] * int(np.count_nonzero(keep)))
 
     # Single exit: assemble the (deduplicated) result from everything gathered.
     def _finalize() -> _SlabTopologyResult:
@@ -285,8 +311,8 @@ def _generate_slab_topology_sites(
                 expanded_origin_local_index,
                 exp_tri,
             )
-        cand_arr = np.asarray(candidates, dtype=float)
-        cand_dist = np.asarray(candidate_dists, dtype=float)
+        cand_arr = np.vstack(candidates)
+        cand_dist = np.concatenate(candidate_dists)
         keep = _deduplicate_points(
             cand_arr, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
         )
@@ -306,38 +332,54 @@ def _generate_slab_topology_sites(
     _add_candidates_batch(atop_positions, "topology_atop")
 
     top_positions_2d = _project_to_slab_plane(top_positions, cell)
-    primary_delaunay: Delaunay | None = None
-    if len(top_positions_2d) >= 3:
-        try:
-            primary_delaunay = Delaunay(top_positions_2d)
-        except (QhullError, ValueError, RuntimeError):
-            primary_delaunay = None
-
-    exp2d: np.ndarray | None = None
-    expanded_origin_local_index: list[int] | None = None
-    exp_tri: Delaunay | None = None
-
-    # Need 2D triangulation for bridge/hollow candidates.
     if len(top_positions) < 2:
+        if not reuse_delaunay:
+            primary_delaunay = None
+            exp2d = None
+            expanded_origin_local_index = None
+            exp_tri = None
         return _finalize()
 
-    exp2d, expanded_origin_local_index, exp3d = _expand_top_layer_ab_images(
-        top_positions_2d,
-        cell=cell,
-        pbc=pbc,
-        top_positions_3d=top_positions,
-    )
-    if exp3d is None:
-        raise ValueError("3D image expansion failed for top-layer sites")
-    if len(exp2d) >= 3:
-        try:
-            exp_tri = Delaunay(exp2d)
-        except (QhullError, ValueError, RuntimeError):
-            exp_tri = None
+    if not reuse_delaunay:
+        primary_delaunay = None
+        if len(top_positions_2d) >= 3:
+            try:
+                primary_delaunay = Delaunay(top_positions_2d)
+            except (QhullError, ValueError, RuntimeError):
+                primary_delaunay = None
+
+        exp2d, expanded_origin_local_index, exp3d = _expand_top_layer_ab_images(
+            top_positions_2d,
+            cell=cell,
+            pbc=pbc,
+            top_positions_3d=top_positions,
+        )
+        if exp3d is None:
+            raise ValueError("3D image expansion failed for top-layer sites")
+        exp_tri = None
+        if len(exp2d) >= 3:
+            try:
+                exp_tri = Delaunay(exp2d)
+            except (QhullError, ValueError, RuntimeError):
+                exp_tri = None
+    else:
+        # Reuse Qhull; only rebuild image expansion for 3D lift coordinates.
+        if exp2d is None or expanded_origin_local_index is None:
+            raise ValueError("reuse_delaunay requires exp2d and origin indices")
+        _, _, exp3d = _expand_top_layer_ab_images(
+            top_positions_2d,
+            cell=cell,
+            pbc=pbc,
+            top_positions_3d=top_positions,
+        )
+        if exp3d is None:
+            raise ValueError("3D image expansion failed for top-layer sites")
 
     if exp_tri is not None:
         bridge_points: list[np.ndarray] = []
         hollow_points: list[np.ndarray] = []
+        if expanded_origin_local_index is None:
+            raise ValueError("expanded origin indices required for bridge/hollow")
         for kind, _ids, pt in _iter_unique_simplex_sites(
             exp_tri.simplices, expanded_origin_local_index, exp3d
         ):
@@ -376,6 +418,8 @@ def _enrich_along_ridges(
     cell: np.ndarray,
     pbc: np.ndarray,
     n_origin: int | None = None,
+    inv_cell: np.ndarray | None = None,
+    dedup_offsets: list[np.ndarray] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Subdivide long admissible Voronoi edges and re-check accessibility."""
     n_kept = len(vertices)
@@ -421,6 +465,8 @@ def _enrich_along_ridges(
         return vertices, nn_dists
 
     candidate_pts: list[np.ndarray] = []
+    if np.any(pbc) and inv_cell is None:
+        inv_cell = np.linalg.inv(cell)
 
     for k0, k1 in sorted(edges):
         if not support_sets[k0] & support_sets[k1]:
@@ -428,8 +474,8 @@ def _enrich_along_ridges(
 
         v0, v1 = vertices[k0], vertices[k1]
         if np.any(pbc):
-            f0 = _cart_to_frac(v0.reshape(1, 3), cell)[0]
-            f1 = _cart_to_frac(v1.reshape(1, 3), cell)[0]
+            f0 = _cart_to_frac(v0.reshape(1, 3), cell, inv_cell=inv_cell)[0]
+            f1 = _cart_to_frac(v1.reshape(1, 3), cell, inv_cell=inv_cell)[0]
             df = _minimum_image_fractional_delta((f1 - f0).reshape(1, 3), pbc)[0]
             edge_vec = _frac_to_cart(df.reshape(1, 3), cell)[0]
         else:
@@ -449,7 +495,9 @@ def _enrich_along_ridges(
             t = s / (n_subdivisions + 1)
             candidate = v0 + t * edge_vec
             if np.any(pbc):
-                candidate = _wrap_cartesian(candidate.reshape(1, 3), cell, pbc)[0]
+                candidate = _wrap_cartesian(
+                    candidate.reshape(1, 3), cell, pbc, inv_cell=inv_cell
+                )[0]
             candidate_pts.append(candidate)
 
     if not candidate_pts:
@@ -466,7 +514,13 @@ def _enrich_along_ridges(
 
     all_verts = np.vstack([vertices, new_verts])
     all_dists = np.concatenate([nn_dists, new_dists])
-    keep = _deduplicate_points(all_verts, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc)
+    keep = _deduplicate_points(
+        all_verts,
+        _VORONOI_DEDUP_TOLERANCE,
+        cell=cell,
+        pbc=pbc,
+        image_offsets=dedup_offsets,
+    )
     return all_verts[keep], all_dists[keep]
 
 

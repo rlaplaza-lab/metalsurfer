@@ -354,14 +354,21 @@ class SymmetryAnalyzer:
         frac_pts = self._cart_to_frac(np.asarray(cart_pts, dtype=float))
         type_index = {name: k for k, name in enumerate(dict.fromkeys(site_types))}
         type_codes = np.array([type_index[s] for s in site_types], dtype=int)
-        same_type = type_codes[:, None] == type_codes[None, :]
-        np.fill_diagonal(same_type, False)
         tol = self.symmetry_tolerance
         merge_pairs: list[tuple[int, int]] = []
-        for R, t in frac_ops:
-            dist = self._pairwise_symop_distances(frac_pts, R, t, bool(planar))
-            for i, j in np.argwhere((dist < tol) & same_type):
-                merge_pairs.append((int(i), int(j)))
+        # Block-diagonal by site_type: each type pays n_t×n_t, not full n×n.
+        for type_code in range(len(type_index)):
+            idx = np.nonzero(type_codes == type_code)[0]
+            if len(idx) < 2:
+                continue
+            sub_frac = frac_pts[idx]
+            for R, t in frac_ops:
+                dist = self._pairwise_symop_distances(sub_frac, R, t, bool(planar))
+                np.fill_diagonal(dist, np.inf)
+                for li, lj in np.argwhere(dist < tol):
+                    i = int(idx[int(li)])
+                    j = int(idx[int(lj)])
+                    merge_pairs.append((i, j))
 
         components = union_find_cluster(n, merge_pairs)
         orbits = [sorted(comp) for comp in sorted(components, key=min)]

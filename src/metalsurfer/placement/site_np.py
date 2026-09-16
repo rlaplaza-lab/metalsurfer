@@ -188,21 +188,14 @@ def _generate_nanoparticle_topology_sites(
             edges.append((i, j) if i < j else (j, i))
         edges = sorted(set(edges))
 
-    candidates: list[np.ndarray] = []
-    candidate_dists: list[float] = []
-    candidate_sources: list[str] = []
-    candidate_atoms: list[tuple[int, ...]] = []
+    pending_pts: list[np.ndarray] = []
+    pending_sources: list[str] = []
+    pending_atoms: list[tuple[int, ...]] = []
 
     def _add(point: np.ndarray, source: str, atoms: tuple[int, ...]) -> None:
-        dist, _ = accessibility_tree.query(
-            np.asarray(point, dtype=float).reshape(1, 3), k=1
-        )
-        d_nn = float(np.asarray(dist, dtype=float).ravel()[0])
-        if float(probe_radius) <= d_nn <= float(max_distance):
-            candidates.append(np.asarray(point, dtype=float))
-            candidate_dists.append(d_nn)
-            candidate_sources.append(source)
-            candidate_atoms.append(atoms)
+        pending_pts.append(np.asarray(point, dtype=float))
+        pending_sources.append(source)
+        pending_atoms.append(atoms)
 
     height = float(site_height)
     for i, ai in enumerate(surf_idx):
@@ -273,11 +266,20 @@ def _generate_nanoparticle_topology_sites(
                     tuple(local_to_global[m] for m in ordered),
                 )
 
-    if not candidates:
+    if not pending_pts:
         return empty
 
-    cand_arr = np.asarray(candidates, dtype=float)
-    cand_dist = np.asarray(candidate_dists, dtype=float)
+    cand_arr = np.asarray(pending_pts, dtype=float)
+    dists, _ = accessibility_tree.query(cand_arr, k=1)
+    dists = np.asarray(dists, dtype=float).ravel()
+    keep_acc = (float(probe_radius) <= dists) & (dists <= float(max_distance))
+    if not np.any(keep_acc):
+        return empty
+    kept_acc = np.nonzero(keep_acc)[0]
+    cand_arr = cand_arr[keep_acc]
+    cand_dist = dists[keep_acc]
+    candidate_sources = [pending_sources[i] for i in kept_acc]
+    candidate_atoms = [pending_atoms[i] for i in kept_acc]
     keep = _deduplicate_points(cand_arr, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc)
     kept = np.nonzero(keep)[0]
     return _NPTopologyResult(

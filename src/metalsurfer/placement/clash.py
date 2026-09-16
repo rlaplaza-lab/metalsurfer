@@ -248,7 +248,7 @@ def _overlap_penalty_and_pos_grad(
     return f, grad
 
 
-def _max_pair_violation(
+def _overlap_f_and_max_violation(
     moving_pos: np.ndarray,
     moving_radii: np.ndarray,
     fixed_pos: np.ndarray,
@@ -257,17 +257,20 @@ def _max_pair_violation(
     cell: np.ndarray,
     pbc: list[bool],
     min_separation: float | None,
-) -> float:
-    """Largest positive (threshold - distance) over pairs; 0 if clear."""
+) -> tuple[float, float]:
+    """Return ``(overlap_penalty_f, max_pair_violation)`` from one MIC."""
     mov = np.asarray(moving_pos, dtype=float)
     fix = np.asarray(fixed_pos, dtype=float)
     if mov.size == 0 or fix.size == 0:
-        return 0.0
+        return 0.0, 0.0
     r_m = np.asarray(moving_radii, dtype=float).reshape(-1)
     r_f = np.asarray(fixed_radii, dtype=float).reshape(-1)
     _, dists = geom._mol_slab_pairwise_mic(mov, fix, cell, pbc)
     thresh = _pair_thresholds(r_m, r_f, min_separation)
-    return float(np.max(np.maximum(0.0, thresh - dists)))
+    overlap = np.maximum(0.0, thresh * thresh - dists * dists)
+    f = float(np.sum(overlap * overlap))
+    viol = float(np.max(np.maximum(0.0, thresh - dists)))
+    return f, viol
 
 
 def _apply_rigid_state(
@@ -351,6 +354,7 @@ def resolve_rigid_clash(
     include_substrate_min_sep: bool = False,
     use_vdw_moving: bool = False,
     bounds: tuple[tuple[float, float], tuple[float, float], float] | None = None,
+    moving_radii: np.ndarray | None = None,
 ) -> tuple[np.ndarray, float | None, bool]:
     """Bounded L-BFGS-B rigid-body descent to clear overlaps with *fixed* atoms.
 
@@ -365,11 +369,14 @@ def resolve_rigid_clash(
     if nrm > _VECTOR_NORM_EPS:
         normal = normal / nrm
 
-    moving_radii = atom_radii_for_symbols(
-        list(adsorbate.get_chemical_symbols()),
-        min_separation=float(config.min_adsorbate_separation),
-        use_vdw=use_vdw_moving,
-    )
+    if moving_radii is None:
+        moving_radii = atom_radii_for_symbols(
+            list(adsorbate.get_chemical_symbols()),
+            min_separation=float(config.min_adsorbate_separation),
+            use_vdw=use_vdw_moving,
+        )
+    else:
+        moving_radii = np.asarray(moving_radii, dtype=float).reshape(-1)
     min_sep = (
         float(config.min_adsorbate_separation) if include_substrate_min_sep else None
     )
@@ -422,8 +429,7 @@ def resolve_rigid_clash(
     )
     best_state = np.asarray(result.x, dtype=float)
     best_pos = _apply_rigid_state(base_pos, origin_arr, frame, normal, best_state)
-    f_best = float(result.fun)
-    viol = _max_pair_violation(
+    f_best, viol = _overlap_f_and_max_violation(
         best_pos,
         moving_radii,
         fix,

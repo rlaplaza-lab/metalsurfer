@@ -214,7 +214,6 @@ def _get_dissociative_site_pairs(
     slab_for_sites: Atoms | None = None,
     existing_adsorbate_positions: np.ndarray | None = None,
     *,
-    existing_radii: np.ndarray | None = None,
     raw_sites: list[Site] | None = None,
     site_context: SiteContext | None = None,
 ) -> list[_DissociativeSitePair]:
@@ -223,7 +222,8 @@ def _get_dissociative_site_pairs(
     Catalogs are cached in a process-local store keyed by substrate geometry,
     dissociative-relevant config, the hollow-site XYZ set actually used (so
     ``site_context`` / ``raw_sites`` cannot poison the clean-slab entry), and
-    an occupancy-position hash when coverage is active.
+    an occupancy-position hash when coverage is active. Occupancy uses
+    vertex-only clearance (no footprint radii).
     """
     if config.material_type not in ("slab", "nanoparticle"):
         return []
@@ -276,7 +276,6 @@ def _get_dissociative_site_pairs(
         config,
         slab_for_sites=slab_for_sites,
         existing_adsorbate_positions=existing_adsorbate_positions,
-        existing_radii=existing_radii,
         raw_sites=raw_sites,
         site_context=site_context,
         pre_resolved_sites=pre_resolved,
@@ -296,7 +295,6 @@ def _compute_dissociative_site_pairs(
     slab_for_sites: Atoms | None = None,
     existing_adsorbate_positions: np.ndarray | None = None,
     *,
-    existing_radii: np.ndarray | None = None,
     raw_sites: list[Site] | None = None,
     site_context: SiteContext | None = None,
     pre_resolved_sites: list[Site] | None = None,
@@ -706,7 +704,7 @@ def _generate_dissociative_placement_from_spec(
         return None, "not_dissociable_diatomic"
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
-    existing_ads_pos, existing_radii = existing_adsorbate_cloud(
+    existing_ads_pos, _ = existing_adsorbate_cloud(
         sites_slab,
         slab,
         min_separation=float(config.min_adsorbate_separation),
@@ -717,7 +715,6 @@ def _generate_dissociative_placement_from_spec(
         config,
         slab_for_sites=slab_for_sites,
         existing_adsorbate_positions=existing_ads_pos,
-        existing_radii=existing_radii,
         site_context=site_context,
     )
     if not pairs:

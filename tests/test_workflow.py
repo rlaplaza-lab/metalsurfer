@@ -992,6 +992,44 @@ def test_fill_materialized_placements_estimates_capacity_once(monkeypatch):
     assert result.n_attempts == 1
 
 
+def test_fill_computes_spec_grid_info_once(monkeypatch):
+    """Estimate + enumerate share one _spec_grid_info within a fill (no retry)."""
+    from metalsurfer.workflow import placement_fill as fill_mod
+
+    slab = make_slab()
+    water = make_water()
+    grid_calls = {"n": 0}
+    real_grid = fill_mod._spec_grid_info
+
+    def counting_grid(*args, **kwargs):
+        grid_calls["n"] += 1
+        return real_grid(*args, **kwargs)
+
+    def materialize_one(**_kwargs):
+        return [water.copy()], [0], [], []
+
+    monkeypatch.setattr(fill_mod, "_spec_grid_info", counting_grid)
+    monkeypatch.setattr(fill_mod, "_materialize_spec_placements", materialize_one)
+
+    result = fill_mod.fill_materialized_placements(
+        conformers=[water],
+        slab_for_sites=slab,
+        config=AdsorptionConfig(
+            material_type="slab",
+            num_placements=2,
+            placement_retry_enabled=False,
+            placement_fill_clamp_to_capacity=False,
+        ),
+        smiles="O",
+        site_context=None,
+        slab_atoms=slab,
+        calculator=None,
+    )
+
+    assert grid_calls["n"] == 1
+    assert result.n_attempts >= 1
+
+
 # ---------------------------------------------------------------------------
 # format_failure_summary
 # ---------------------------------------------------------------------------

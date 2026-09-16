@@ -277,6 +277,8 @@ def test_voronoi_enrichment_uses_ridge_vertices(monkeypatch):
         cell,
         pbc,
         n_origin=None,
+        inv_cell=None,
+        dedup_offsets=None,
     ):
         captured["ridge_vertices"] = ridge_vertices
         return vertices, nn_dists
@@ -664,3 +666,57 @@ def test_enrich_along_ridges_origin_id_support_intersection(monkeypatch):
         n_origin=n_origin,
     )
     assert len(out_norm) > len(vertices)
+
+
+def test_planar_slab_qhull_counts():
+    """Planar slab success path: 2 Delaunay, 0 Voronoi."""
+    import metalsurfer.placement.site_voronoi as sv
+
+    counts = {"Delaunay": 0, "Voronoi": 0}
+    real_d = sv.Delaunay
+    real_v = sv.Voronoi
+
+    class CountingDelaunay(real_d):
+        def __init__(self, *args, **kwargs):
+            counts["Delaunay"] += 1
+            super().__init__(*args, **kwargs)
+
+    def counting_voronoi(*args, **kwargs):
+        counts["Voronoi"] += 1
+        return real_v(*args, **kwargs)
+
+    from metalsurfer.placement.site_enumeration import get_unified_sites
+
+    slab = fcc111("Pt", (3, 3, 4), vacuum=10.0)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sv, "Delaunay", CountingDelaunay)
+        mp.setattr(sv, "Voronoi", counting_voronoi)
+        sites = get_unified_sites(slab, material_type="slab", auto_widen=False)
+    assert len(sites) > 0
+    assert counts["Voronoi"] == 0
+    assert counts["Delaunay"] == 2
+
+
+def test_np_success_path_one_convex_hull():
+    """NP topology success path builds ConvexHull once (no injection double-build)."""
+    from ase.cluster import Icosahedron
+
+    import metalsurfer.placement.site_np as snp
+    from metalsurfer.placement.site_enumeration import get_unified_sites
+
+    counts = {"hull": 0}
+    real = snp.ConvexHull
+
+    class CountingHull(real):
+        def __init__(self, *args, **kwargs):
+            counts["hull"] += 1
+            super().__init__(*args, **kwargs)
+
+    np_atoms = Icosahedron("Cu", noshells=2)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(snp, "ConvexHull", CountingHull)
+        sites = get_unified_sites(
+            np_atoms, material_type="nanoparticle", auto_widen=False
+        )
+    assert len(sites) > 0
+    assert counts["hull"] == 1

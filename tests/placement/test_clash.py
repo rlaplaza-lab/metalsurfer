@@ -247,3 +247,56 @@ def test_tuplet_clash_rescue_floor_scales_with_radii():
     floor_oo = tuplet_clash_rescue_floor(["O"], ["O"], min_separation=1.5)
     assert floor_oo > floor_hh
     assert floor_oo <= 1.5
+
+
+def test_resolve_rigid_clash_final_coords_use_one_mic(monkeypatch):
+    """After L-BFGS, Packmol f and max violation share one MIC on final coords."""
+    import metalsurfer.placement.clash as clash_mod
+
+    config = AdsorptionConfig(
+        material_type="slab",
+        seed=0,
+        placement_x_range=(-1.5, 1.5),
+        placement_y_range=(-1.5, 1.5),
+        min_adsorbate_separation=1.5,
+    )
+    water = make_water()
+    pos = water.get_positions().copy()
+    pos -= np.mean(pos, axis=0)
+    fixed = pos + np.array([1.2, 0.0, 0.0])
+    moving = water.copy()
+    moving.set_positions(pos)
+    fixed_radii = atom_radii_for_symbols(
+        list(water.get_chemical_symbols()),
+        min_separation=config.min_adsorbate_separation,
+    )
+    frame = compute_surface_site_frame(np.array([0.0, 0.0, 1.0]))
+    cell = np.eye(3) * 20.0
+    pbc = [False, False, False]
+
+    final_mic_calls = {"n": 0}
+    real_combo = clash_mod._overlap_f_and_max_violation
+
+    def counting_combo(*args, **kwargs):
+        final_mic_calls["n"] += 1
+        return real_combo(*args, **kwargs)
+
+    monkeypatch.setattr(clash_mod, "_overlap_f_and_max_violation", counting_combo)
+
+    resolve_rigid_clash(
+        moving,
+        fixed,
+        fixed_radii,
+        origin=np.zeros(3),
+        site_frame=frame,
+        cell=cell,
+        pbc=pbc,
+        config=config,
+        include_substrate_min_sep=True,
+        moving_radii=atom_radii_for_symbols(
+            list(moving.get_chemical_symbols()),
+            min_separation=config.min_adsorbate_separation,
+        ),
+    )
+    # Exactly one combined f+viol evaluation on the final coordinates.
+    assert final_mic_calls["n"] == 1

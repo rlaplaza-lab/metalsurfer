@@ -1,5 +1,6 @@
 """Batch placement-spec builder policies."""
 
+import itertools
 import math
 
 import numpy as np
@@ -21,6 +22,10 @@ from metalsurfer.placement._constants import (
     _Z_FRACTIONS,
 )
 from metalsurfer.placement.policy import (
+    _TILT_PARALLEL,
+    _flat_aromatic_parallel_total,
+    _parallel_aip_values,
+    _unravel_parallel_flat,
     build_batch_placement_specs,
     max_batch_placement_specs,
 )
@@ -505,3 +510,120 @@ def test_policy_prior_prefers_mild_tilt_and_mid_z():
     assert mean_zf == pytest.approx(0.48888888888888893, abs=1e-9), (
         f"expected mid-z bias golden, got mean zf {mean_zf:.4f}"
     )
+
+
+def test_flat_aromatic_indexed_sampling_matches_seed_without_filter():
+    """Unfiltered flat-aromatic specs stay seed-identical under indexed unravel."""
+    specs_a = build_batch_placement_specs(
+        n_conformers=2,
+        site_indices=[0, 1, 2],
+        site_type_for_index=_site_type_atop,
+        shape="flat",
+        n_binders=2,
+        flat_aromatic=True,
+        parallel_fraction=0.5,
+        n_desired=24,
+        filter_spec=None,
+        seed=TEST_SEED,
+    )
+    specs_b = build_batch_placement_specs(
+        n_conformers=2,
+        site_indices=[0, 1, 2],
+        site_type_for_index=_site_type_atop,
+        shape="flat",
+        n_binders=2,
+        flat_aromatic=True,
+        parallel_fraction=0.5,
+        n_desired=24,
+        filter_spec=None,
+        seed=TEST_SEED,
+    )
+    assert len(specs_a) == len(specs_b) == 24
+
+    def _key(s: PlacementSpec) -> tuple:
+        return (
+            s.conformer_index,
+            s.orientation_type,
+            s.face_flip,
+            s.en_atom_index,
+            s.site_index,
+            s.tilt_deg,
+            s.azimuth_deg,
+            s.azimuth_in_plane_deg,
+            s.z_fraction,
+        )
+
+    assert [_key(s) for s in specs_a] == [_key(s) for s in specs_b]
+
+
+def test_parallel_flat_unravel_matches_product_order():
+    """Indexed parallel decode matches itertools.product × aip nesting."""
+    n_conf, n_sites = 2, 3
+    sites = list(range(n_sites))
+
+    def product_unweighted():
+        for ci, ff, tl, azv, zfv, si in itertools.product(
+            range(n_conf),
+            [False, True],
+            _TILT_PARALLEL,
+            _AZIMUTH,
+            _Z_FRACTIONS,
+            sites,
+        ):
+            for aip in _parallel_aip_values(tl):
+                yield (
+                    ci,
+                    ff,
+                    float(tl),
+                    float(azv),
+                    float(zfv),
+                    float(aip),
+                    si,
+                )
+
+    def product_weighted():
+        for ff, tl, azv, zfv, si, ci in itertools.product(
+            [False, True],
+            _TILT_PARALLEL,
+            _AZIMUTH,
+            _Z_FRACTIONS,
+            sites,
+            range(n_conf),
+        ):
+            for aip in _parallel_aip_values(tl):
+                yield (
+                    ci,
+                    ff,
+                    float(tl),
+                    float(azv),
+                    float(zfv),
+                    float(aip),
+                    si,
+                )
+
+    n = _flat_aromatic_parallel_total(n_conformers=n_conf, n_sites=n_sites)
+    unweighted = list(product_unweighted())
+    weighted = list(product_weighted())
+    assert len(unweighted) == n == len(weighted)
+    for flat, expected in enumerate(unweighted):
+        assert (
+            _unravel_parallel_flat(
+                flat,
+                n_conformers=n_conf,
+                n_sites=n_sites,
+                site_list=sites,
+                conformer_fastest=False,
+            )
+            == expected
+        )
+    for flat, expected in enumerate(weighted):
+        assert (
+            _unravel_parallel_flat(
+                flat,
+                n_conformers=n_conf,
+                n_sites=n_sites,
+                site_list=sites,
+                conformer_fastest=True,
+            )
+            == expected
+        )

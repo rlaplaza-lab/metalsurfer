@@ -10,6 +10,8 @@ from ase import Atoms
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
 from ..placement.generators import (
+    _spec_grid_info,
+    _SpecGridInfo,
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
 )
@@ -56,6 +58,7 @@ def _estimate_capacity_int(
     smiles: str,
     site_context: SiteContext | None,
     slab_atoms: Atoms,
+    grid_info: _SpecGridInfo | None = None,
 ) -> int:
     return max(
         0,
@@ -66,6 +69,7 @@ def _estimate_capacity_int(
             smiles,
             site_context=site_context,
             full_slab=slab_atoms,
+            grid_info=grid_info,
         ),
     )
 
@@ -208,6 +212,16 @@ def fill_materialized_placements(
     if n_target is None:
         raise ValueError("num_placements must be set before materializing placements")
 
+    # Occupancy/shape/dissociative inputs are unchanged across estimate + enumerate
+    # rounds within one fill; compute once and share.
+    grid_info = _spec_grid_info(
+        conformers,
+        slab_for_sites,
+        config,
+        smiles,
+        site_context,
+        full_slab=slab_atoms,
+    )
     capacity_int = _estimate_capacity_int(
         conformers=conformers,
         slab_for_sites=slab_for_sites,
@@ -215,6 +229,7 @@ def fill_materialized_placements(
         smiles=smiles,
         site_context=site_context,
         slab_atoms=slab_atoms,
+        grid_info=grid_info,
     )
     effective_target = _clamp_target_to_capacity(
         n_target=n_target,
@@ -264,6 +279,7 @@ def fill_materialized_placements(
             seed=seed,
             full_slab=slab_atoms,
             conformer_energies=conformer_energies,
+            grid_info=grid_info,
         )
         if not specs:
             return

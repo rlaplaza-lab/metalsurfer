@@ -48,6 +48,96 @@ def _parallel_aip_values(tilt: float) -> tuple[float, ...]:
     return (0.0,) if float(tilt) == 0.0 else _AZIMUTH_IN_PLANE
 
 
+def _parallel_tilt_aip_counts() -> list[int]:
+    """Return in-plane azimuth counts for each parallel tilt."""
+    return [len(_parallel_aip_values(tl)) for tl in _TILT_PARALLEL]
+
+
+def _flat_aromatic_parallel_total(*, n_conformers: int, n_sites: int) -> int:
+    """Return parallel flat-aromatic combo count (product×aip generator)."""
+    n_aips = _parallel_tilt_aip_counts()
+    return n_conformers * 2 * len(_AZIMUTH) * len(_Z_FRACTIONS) * n_sites * sum(n_aips)
+
+
+def _unravel_parallel_flat(
+    flat: int,
+    *,
+    n_conformers: int,
+    n_sites: int,
+    site_list: list[int],
+    conformer_fastest: bool,
+) -> tuple[int, bool, float, float, float, float, int]:
+    """Decode parallel flat index to ``(ci, ff, tilt, az, zf, aip, site)``.
+
+    Unweighted order matches
+    ``product(ci, ff, tilt, az, zf, si)`` then ``aip`` (aip fastest).
+    Weighted order matches
+    ``product(ff, tilt, az, zf, si, ci)`` then ``aip``.
+    """
+    n_aips = _parallel_tilt_aip_counts()
+    n_az = len(_AZIMUTH)
+    n_z = len(_Z_FRACTIONS)
+    n_ff = 2
+    per_tilt = [n_az * n_z * n_sites * na for na in n_aips]
+    block_tilt_sum = sum(per_tilt)
+    rem = int(flat)
+    if conformer_fastest:
+        block_ff = block_tilt_sum * n_conformers
+        ff_i = rem // block_ff
+        rem %= block_ff
+        tl_i = 0
+        for i, chunk_base in enumerate(per_tilt):
+            chunk = chunk_base * n_conformers
+            if rem < chunk:
+                tl_i = i
+                break
+            rem -= chunk
+        na = n_aips[tl_i]
+        block_az = n_z * n_sites * n_conformers * na
+        az_i = rem // block_az
+        rem %= block_az
+        block_z = n_sites * n_conformers * na
+        z_i = rem // block_z
+        rem %= block_z
+        block_si = n_conformers * na
+        si_i = rem // block_si
+        rem %= block_si
+        ci = rem // na
+        aip_i = rem % na
+    else:
+        block_ci = n_ff * block_tilt_sum
+        ci = rem // block_ci
+        rem %= block_ci
+        ff_i = rem // block_tilt_sum
+        rem %= block_tilt_sum
+        tl_i = 0
+        for i, chunk in enumerate(per_tilt):
+            if rem < chunk:
+                tl_i = i
+                break
+            rem -= chunk
+        na = n_aips[tl_i]
+        block_az = n_z * n_sites * na
+        az_i = rem // block_az
+        rem %= block_az
+        block_z = n_sites * na
+        z_i = rem // block_z
+        rem %= block_z
+        si_i = rem // na
+        aip_i = rem % na
+    tl = float(_TILT_PARALLEL[tl_i])
+    aips = _parallel_aip_values(tl)
+    return (
+        int(ci),
+        bool(ff_i),
+        tl,
+        float(_AZIMUTH[az_i]),
+        float(_Z_FRACTIONS[z_i]),
+        float(aips[aip_i]),
+        int(site_list[si_i]),
+    )
+
+
 def _flat_aromatic_branch_capacities(
     *,
     n_conformers: int,
@@ -61,10 +151,7 @@ def _flat_aromatic_branch_capacities(
     branches (including the ``_parallel_aip_values`` collapse), so budget
     estimates cannot silently drift from the builder.
     """
-    tilt_aip_pairs = sum(len(_parallel_aip_values(tl)) for tl in _TILT_PARALLEL)
-    parallel = (
-        n_conformers * 2 * tilt_aip_pairs * len(_AZIMUTH) * len(_Z_FRACTIONS) * n_sites
-    )
+    parallel = _flat_aromatic_parallel_total(n_conformers=n_conformers, n_sites=n_sites)
     en_down = (
         n_conformers
         * max(n_binders, 1)
@@ -559,94 +646,91 @@ def build_batch_placement_specs(
         n_par = max(0, min(n_par, n_desired))
         n_en = n_desired - n_par
 
-        # These two branches cap the working set early (``*_cap`` below), so the
-        # conformer axis must vary fastest under weighting: with it outermost an
-        # early cap would truncate the working set to the first conformer(s) and
-        # leave the proportional allocation nothing to allocate over.
-        parallel_axes: Iterable[tuple[Any, ...]]
-        if conformer_weights is None:
-            parallel_axes = (
-                (ci, ff, tl, azv, zfv, aip, si)
-                for ci, ff, tl, azv, zfv, si in itertools.product(
-                    range(n_conformers),
-                    [False, True],
-                    _TILT_PARALLEL,
-                    _AZIMUTH,
-                    _Z_FRACTIONS,
-                    normalized_sites,
-                )
-                for aip in _parallel_aip_values(tl)
-            )
-        else:
-            parallel_axes = (
-                (ci, ff, tl, azv, zfv, aip, si)
-                for ff, tl, azv, zfv, si, ci in itertools.product(
-                    [False, True],
-                    _TILT_PARALLEL,
-                    _AZIMUTH,
-                    _Z_FRACTIONS,
-                    normalized_sites,
-                    range(n_conformers),
-                )
-                for aip in _parallel_aip_values(tl)
-            )
-        parallel_items = (
-            _fields(
-                conformer_index=ci,
-                orientation_type="parallel",
-                face_flip=ff,
-                site_index=si,
-                tilt_deg=tl,
-                azimuth_deg=azv,
-                azimuth_in_plane_deg=aip,
-                z_fraction=zfv,
-            )
-            for ci, ff, tl, azv, zfv, aip, si in parallel_axes
+        # Flat indices preserve former product order so unfiltered early-cap
+        # prefixes stay bit-identical (unlike the random-flat else-branch).
+        site_list = list(normalized_sites)
+        n_sites = len(site_list)
+        conformer_fastest = conformer_weights is not None
+        n_par_total = _flat_aromatic_parallel_total(
+            n_conformers=n_conformers, n_sites=n_sites
         )
-
-        en_down_axes: Iterable[tuple[Any, ...]]
-        if conformer_weights is None:
-            en_down_axes = itertools.product(
-                range(n_conformers),
-                range(max(n_binders, 1)),
-                _TILT_FULL,
-                _AZIMUTH,
-                _Z_FRACTIONS,
-                normalized_sites,
-            )
-        else:
-            en_down_axes = (
-                (ci, ei, tl, azv, zfv, si)
-                for ei, tl, azv, zfv, si, ci in itertools.product(
-                    range(max(n_binders, 1)),
-                    _TILT_FULL,
-                    _AZIMUTH,
-                    _Z_FRACTIONS,
-                    normalized_sites,
-                    range(n_conformers),
-                )
-            )
-        en_down_items = (
-            _fields(
-                conformer_index=ci,
-                orientation_type="EN-down",
-                en_atom_index=ei if n_binders > 1 else None,
-                site_index=si,
-                tilt_deg=tl,
-                azimuth_deg=azv,
-                z_fraction=zfv,
-            )
-            for ci, ei, tl, azv, zfv, si in en_down_axes
+        n_bind = max(n_binders, 1)
+        n_en_total = (
+            n_conformers
+            * n_bind
+            * len(_TILT_FULL)
+            * len(_AZIMUTH)
+            * len(_Z_FRACTIONS)
+            * n_sites
         )
-
-        # Size each working set for full n_desired so a filtered-out branch can
-        # be topped up from the other side's surplus.
         shared_cap = min(
             _GRID_BUILD_CAP,
             max(n_desired * _EARLY_CAP_WORKING_SET_MULTIPLIER, n_desired),
         )
-        par_pool = _collect(parallel_items, cap=shared_cap)
-        en_pool = _collect(en_down_items, cap=shared_cap)
+
+        def _par_items():
+            for flat in range(n_par_total):
+                ci, ff, tl, azv, zfv, aip, si = _unravel_parallel_flat(
+                    flat,
+                    n_conformers=n_conformers,
+                    n_sites=n_sites,
+                    site_list=site_list,
+                    conformer_fastest=conformer_fastest,
+                )
+                yield _fields(
+                    conformer_index=ci,
+                    orientation_type="parallel",
+                    face_flip=ff,
+                    site_index=si,
+                    tilt_deg=tl,
+                    azimuth_deg=azv,
+                    azimuth_in_plane_deg=aip,
+                    z_fraction=zfv,
+                )
+
+        # Under weighting, conformer varies fastest so early-cap cannot collapse
+        # the working set onto the first conformer(s).
+        en_shape = (
+            (
+                n_bind,
+                len(_TILT_FULL),
+                len(_AZIMUTH),
+                len(_Z_FRACTIONS),
+                n_sites,
+                n_conformers,
+            )
+            if conformer_fastest
+            else (
+                n_conformers,
+                n_bind,
+                len(_TILT_FULL),
+                len(_AZIMUTH),
+                len(_Z_FRACTIONS),
+                n_sites,
+            )
+        )
+
+        def _en_items():
+            for flat in range(n_en_total):
+                coords = _unravel_product_index(flat, en_shape)
+                if conformer_fastest:
+                    ei, tl_i, az_i, z_i, si_i, ci = coords
+                else:
+                    ci, ei, tl_i, az_i, z_i, si_i = coords
+                yield _fields(
+                    conformer_index=ci,
+                    orientation_type="EN-down",
+                    en_atom_index=ei if n_binders > 1 else None,
+                    site_index=site_list[si_i],
+                    tilt_deg=_TILT_FULL[tl_i],
+                    azimuth_deg=_AZIMUTH[az_i],
+                    z_fraction=_Z_FRACTIONS[z_i],
+                )
+
+        # Size each working set for full n_desired so a filtered-out branch can
+        # be topped up from the other side's surplus.
+        par_pool = _collect(_par_items(), cap=shared_cap)
+        en_pool = _collect(_en_items(), cap=shared_cap)
 
         n_par_take = min(n_par, len(par_pool))
         n_en_take = min(n_en, len(en_pool))

@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 from ase import Atoms
@@ -76,6 +77,17 @@ from .site_voronoi import (
 logger = logging.getLogger(__name__)
 
 _EMPTY_ATOM_INDICES: tuple[int, ...] = ()
+
+
+@dataclass
+class _PlanarWidenScratch:
+    """Topology Qhull objects retained for planar-slab auto-widen reuse."""
+
+    planar_skip_voronoi: bool = False
+    primary_delaunay: Delaunay | None = None
+    exp_xy: np.ndarray | None = None
+    exp_origin: list[int] | None = None
+    exp_tri: Delaunay | None = None
 
 
 def _merge_dedup_site_arrays(
@@ -492,11 +504,15 @@ def get_unified_sites(
         Site classification method (``"auto"``, ``"delaunay"``, etc.).
     auto_widen
         When True and the first pass finds no sites, retry once with a widened
-        probe / max-distance window.
+        probe / max-distance window. Planar slabs reuse the first-pass
+        Delaunay triangulations and only re-gate accessibility. Porous /
+        non-planar paths rebuild Voronoi (extension margin depends on
+        ``max_site_distance``), so the empty-result retry roughly doubles cost.
     planar_z_variance_threshold
         Max top-layer height variance (Å²) for classifying a slab as planar.
         ``None`` uses the library default.
     """
+    scratch = _PlanarWidenScratch()
     sites = _enumerate_unified_sites(
         atoms,
         probe_radius=probe_radius,
@@ -507,6 +523,7 @@ def get_unified_sites(
         enrich=enrich,
         site_classification_method=site_classification_method,
         planar_z_variance_threshold=planar_z_variance_threshold,
+        _widen_scratch=scratch,
     )
     if sites or not auto_widen:
         return sites
@@ -532,6 +549,9 @@ def get_unified_sites(
         eff_probe,
         eff_max,
     )
+    reuse = (
+        scratch if scratch.planar_skip_voronoi and scratch.exp_tri is not None else None
+    )
     return _enumerate_unified_sites(
         atoms,
         probe_radius=wide_probe,
@@ -542,6 +562,7 @@ def get_unified_sites(
         enrich=enrich,
         site_classification_method=site_classification_method,
         planar_z_variance_threshold=planar_z_variance_threshold,
+        _reuse_topology=reuse,
     )
 
 
@@ -555,6 +576,9 @@ def _enumerate_unified_sites(
     enrich: bool = True,
     site_classification_method: str = "auto",
     planar_z_variance_threshold: float | None = None,
+    *,
+    _widen_scratch: _PlanarWidenScratch | None = None,
+    _reuse_topology: _PlanarWidenScratch | None = None,
 ) -> list[Site]:
     """Core site enumeration (single pass, no auto-widen)."""
     if len(atoms) == 0:
@@ -709,7 +733,22 @@ def _enumerate_unified_sites(
             site_height,
             float(probe_radius),
             float(max_site_distance),
+            primary_delaunay=(
+                _reuse_topology.primary_delaunay if _reuse_topology else None
+            ),
+            exp2d=_reuse_topology.exp_xy if _reuse_topology else None,
+            expanded_origin_local_index=(
+                _reuse_topology.exp_origin if _reuse_topology else None
+            ),
+            exp_tri=_reuse_topology.exp_tri if _reuse_topology else None,
+            reuse_delaunay=_reuse_topology is not None,
         )
+        if _widen_scratch is not None:
+            _widen_scratch.planar_skip_voronoi = bool(slab_skip_voronoi)
+            _widen_scratch.primary_delaunay = topology_primary_delaunay
+            _widen_scratch.exp_xy = topology_expanded_xy
+            _widen_scratch.exp_origin = topology_expanded_origin
+            _widen_scratch.exp_tri = topology_expanded_tri
         has_topology_atop = any(s == "topology_atop" for s in topo_sources)
         if len(topo_vertices) > 0:
             vertices, nn_dists, source_hints, atom_indices = _merge_dedup_site_arrays(
@@ -1032,9 +1071,6 @@ def _cluster_equivalent_sites(
     pbc_slab = np.asarray(material_aware_pbc(mat_type), dtype=bool)
     r_search = float(np.hypot(tolerance, z_tol))
     image_offsets = _periodic_image_offsets(cell, pbc_slab, r_search)
-    # Hoist loop-invariant quantities out of the per-pair closure: the slab
-    # normal and the inverse cell (otherwise ``_cart_to_frac`` recomputes
-    # ``np.linalg.inv(cell)`` on every pair).
     n_hat = _slab_normal(cell)
     inv_cell = np.linalg.inv(cell)
 
@@ -1160,11 +1196,18 @@ def get_symmetry_aware_sites(
         return []
 
     sym_mode = "cluster" if material_type == "nanoparticle" else "periodic"
-    planar_for_symmetry = (material_type == "slab") and _is_top_layer_planar(
-        slab,
-        top_layer_tolerance,
-        z_var_threshold,
-    )
+    planar_for_symmetry = False
+    if material_type == "slab":
+        positions = slab.get_positions()
+        cell = np.asarray(slab.get_cell(), dtype=float)
+        top_mask = top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
+        planar_for_symmetry = _top_layer_is_planar_from_arrays(
+            positions,
+            cell,
+            float(top_layer_tolerance),
+            z_var_threshold,
+            top_mask=top_mask,
+        )
 
     symmetry_analyzer = SymmetryAnalyzer(
         slab,
@@ -1221,6 +1264,8 @@ def _is_top_layer_planar(
     slab: Atoms,
     top_layer_tolerance: float = _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
     z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
+    *,
+    top_mask: np.ndarray | None = None,
 ) -> bool:
     """Check whether the topmost atomic layer is approximately flat."""
     return _top_layer_is_planar_from_arrays(
@@ -1228,6 +1273,7 @@ def _is_top_layer_planar(
         np.asarray(slab.get_cell(), dtype=float),
         top_layer_tolerance,
         z_variance_threshold,
+        top_mask=top_mask,
     )
 
 
@@ -1250,6 +1296,8 @@ def _bounding_box_cell(
 def _get_site_surface_radii(
     slab: Atoms,
     site: Site | None = None,
+    *,
+    top_indices: np.ndarray | list[int] | tuple[int, ...] | None = None,
 ) -> float:
     """Mean covalent radius of framework atoms nearest to the placement site."""
     positions = slab.get_positions()
@@ -1261,9 +1309,12 @@ def _get_site_surface_radii(
         indices = tuple(int(i) for i in site.slab_indices)
 
     if indices is None:
-        top_depth = _derive_top_layer_tolerance(symbols)
-        top_mask = top_layer_mask_by_normal(positions, cell, float(top_depth))
-        indices = tuple(int(i) for i in np.nonzero(top_mask)[0])
+        if top_indices is not None:
+            indices = tuple(int(i) for i in top_indices)
+        else:
+            top_depth = _derive_top_layer_tolerance(symbols)
+            top_mask = top_layer_mask_by_normal(positions, cell, float(top_depth))
+            indices = tuple(int(i) for i in np.nonzero(top_mask)[0])
 
     site_symbols = [symbols[int(i)] for i in indices]
     radii = [_get_covalent_radius(s) for s in site_symbols]

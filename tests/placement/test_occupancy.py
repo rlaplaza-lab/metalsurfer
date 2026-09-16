@@ -77,6 +77,7 @@ def _enumerate_from(
         seed=None,
         full_slab=None,
         conformer_energies=None,
+        grid_info=None,
     ):
         return make_specs(n_desired, filter_spec)
 

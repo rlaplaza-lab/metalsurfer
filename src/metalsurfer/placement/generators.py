@@ -327,7 +327,6 @@ def _spec_grid_info(
                 config,
                 slab_for_sites=slab,
                 existing_adsorbate_positions=existing_ads_pos,
-                existing_radii=existing_radii,
                 site_context=_ctx,
             )
         )
@@ -356,6 +355,7 @@ def enumerate_placement_specs(
     seed: int | None = None,
     full_slab: Atoms | None = None,
     conformer_energies: list[float] | None = None,
+    grid_info: _SpecGridInfo | None = None,
 ) -> list[PlacementSpec]:
     """Enumerate placement specs for diverse sampling.
 
@@ -386,12 +386,14 @@ def enumerate_placement_specs(
         Optional full slab including pre-adsorbed atoms.
     conformer_energies
         Optional conformer energies for Boltzmann weighting.
+    grid_info
+        Optional precomputed :class:`_SpecGridInfo` (shared with estimate).
     """
     if not conformers:
         return []
 
     eff_seed = config.seed if seed is None else seed
-    info = _spec_grid_info(
+    info = grid_info or _spec_grid_info(
         conformers, slab, config, smiles, site_context, full_slab=full_slab
     )
     unique_sites = info.unique_sites
@@ -453,6 +455,7 @@ def estimate_placement_spec_capacity(
     smiles: str | None,
     site_context: SiteContext | None = None,
     full_slab: Atoms | None = None,
+    grid_info: _SpecGridInfo | None = None,
 ) -> int:
     """Estimate total enumerated specs for current conformers/site grid.
 
@@ -470,10 +473,12 @@ def estimate_placement_spec_capacity(
         Optional precomputed site context.
     full_slab
         Optional full slab including pre-adsorbed atoms.
+    grid_info
+        Optional precomputed :class:`_SpecGridInfo` (shared with enumerate).
     """
     if not conformers:
         return 0
-    info = _spec_grid_info(
+    info = grid_info or _spec_grid_info(
         conformers, slab, config, smiles, site_context, full_slab=full_slab
     )
     if info.is_dissociative:

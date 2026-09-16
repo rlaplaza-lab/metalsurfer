@@ -17,7 +17,12 @@ import numpy as np
 from ._numeric_defaults import SURFACE_NORMAL_FALLBACK_NORM_EPS
 
 
-def cart_to_frac(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
+def cart_to_frac(
+    points: np.ndarray,
+    cell: np.ndarray,
+    *,
+    inv_cell: np.ndarray | None = None,
+) -> np.ndarray:
     """Convert Cartesian row-vectors to fractional coordinates for ASE cells.
 
     Parameters
@@ -26,10 +31,16 @@ def cart_to_frac(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
         Cartesian coordinates, shape (..., 3).
     cell
         3x3 cell matrix with lattice vectors as rows.
+    inv_cell
+        Optional precomputed ``inv(cell)``; when provided, skips the invert.
     """
     arr = np.asarray(points, dtype=float)
-    inv_cell = np.linalg.inv(cell)
-    return arr @ inv_cell
+    inv = (
+        np.asarray(inv_cell, dtype=float)
+        if inv_cell is not None
+        else np.linalg.inv(cell)
+    )
+    return arr @ inv
 
 
 def frac_to_cart(points_frac: np.ndarray, cell: np.ndarray) -> np.ndarray:
@@ -62,7 +73,13 @@ def wrap_fractional(frac: np.ndarray, pbc: np.ndarray) -> np.ndarray:
     return wrapped
 
 
-def wrap_cartesian(points: np.ndarray, cell: np.ndarray, pbc: np.ndarray) -> np.ndarray:
+def wrap_cartesian(
+    points: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    *,
+    inv_cell: np.ndarray | None = None,
+) -> np.ndarray:
     """Wrap Cartesian points into the reference cell along periodic axes.
 
     Parameters
@@ -73,10 +90,12 @@ def wrap_cartesian(points: np.ndarray, cell: np.ndarray, pbc: np.ndarray) -> np.
         3x3 cell matrix.
     pbc
         Boolean periodic-boundary flags for each axis.
+    inv_cell
+        Optional precomputed ``inv(cell)`` shared with :func:`cart_to_frac`.
     """
     if not np.any(pbc):
         return np.asarray(points, dtype=float).copy()
-    frac = cart_to_frac(points, cell)
+    frac = cart_to_frac(points, cell, inv_cell=inv_cell)
     return frac_to_cart(wrap_fractional(frac, pbc), cell)
 
 

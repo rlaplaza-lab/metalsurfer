@@ -30,11 +30,14 @@ from metalsurfer.placement.pose import (
     _apply_lateral_offset,
     _PlacementContext,
     _validate_posed_adsorbate,
+    build_pose_batch_cache,
     generate_placement_from_pose,
 )
 from metalsurfer.placement.site_context import (
     _get_unique_sites_for_specs,
 )
+from metalsurfer.placement.site_coords import _derive_top_layer_tolerance
+from metalsurfer.placement.site_enumeration import _get_site_surface_radii
 
 from ..conftest import (
     adsorption_config_factory,
@@ -600,3 +603,15 @@ def test_apply_lateral_offset_near_x_normal_stays_finite():
     )
     assert np.isfinite(shifted).all()
     assert float(np.linalg.norm(shifted)) > 0.1
+
+
+def test_pose_batch_cache_surface_radii_use_derived_top_depth():
+    """Cached top-layer radii must match ``_get_site_surface_radii``, not planarity tol."""
+    slab = make_slab()
+    config = AdsorptionConfig(material_type="slab")
+    derived = float(_derive_top_layer_tolerance(list(slab.get_chemical_symbols())))
+    assert derived != float(config.top_layer_tolerance)
+    cache = build_pose_batch_cache(slab, [], config)
+    assert cache.r_surface_top_layer == pytest.approx(
+        _get_site_surface_radii(slab, None)
+    )
