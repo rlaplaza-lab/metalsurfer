@@ -658,6 +658,23 @@ def test_voigt_6_mapping():
 # -- _model fairchem helpers + dependency-missing guards --------------------
 
 
+def test_ensure_scipy_sph_harm_noop_when_present(monkeypatch: pytest.MonkeyPatch):
+    sentinel = object()
+    monkeypatch.setattr(_model.sp_special, "sph_harm", sentinel, raising=False)
+    _model._ensure_scipy_sph_harm()
+    assert _model.sp_special.sph_harm is sentinel
+
+
+def test_ensure_scipy_sph_harm_wraps_sph_harm_y(monkeypatch: pytest.MonkeyPatch):
+    def fake_sph_harm_y(n, m, theta, phi):
+        return (n, m, theta, phi)
+
+    monkeypatch.setattr(_model.sp_special, "sph_harm", None, raising=False)
+    monkeypatch.setattr(_model.sp_special, "sph_harm_y", fake_sph_harm_y, raising=False)
+    _model._ensure_scipy_sph_harm()
+    assert _model.sp_special.sph_harm(1, 2, 0.3, 0.4) == (2, 1, 0.4, 0.3)
+
+
 def test_ensure_torch_checkpoint_safe_globals_noop_without_torch(
     monkeypatch: pytest.MonkeyPatch,
 ):

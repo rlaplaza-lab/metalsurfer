@@ -399,6 +399,12 @@ Optional reservoir fields rank/stop on ``Ω = E_ads − k_B T ln(a_i p / p°)``
 :func:`~metalsurfer.run_saturation_bo`. Full demo:
 ``examples/water_oh_rutile_saturation.py``.
 
+A CPU-friendly undergraduate tutorial (Pt₄ tetrahedron; water and OH⁻
+competing from pH 7–14 via ``saturation_activities``) lives at
+``scripts/tutorials/water_oh_pt4_saturation.py``::
+
+   python scripts/tutorials/water_oh_pt4_saturation.py
+
 Important saturation behaviors:
 
 - Prep equilibrates the substrate before campaigns; adsorption respects ASE

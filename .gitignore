@@ -67,6 +67,7 @@ results*/
 examples/*/
 probe_*/
 *.xyz
+!scripts/tutorials/*.xyz
 benchmark_bo_results_*.csv
 bo_benchmark_report/
 

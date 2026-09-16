@@ -5,6 +5,7 @@ import logging
 from typing import Any, NoReturn, cast
 
 import numpy as np
+import scipy.special as sp_special
 from ase import Atoms
 
 from .._logging import torchsim_output_capture
@@ -18,6 +19,28 @@ from ._validation import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_scipy_sph_harm() -> None:
+    """Restore ``scipy.special.sph_harm`` for FairChem on SciPy 1.17+.
+
+    FairChem still does ``from scipy.special import sph_harm`` during
+    ``setup_imports``. SciPy 1.17 removed that name in favor of ``sph_harm_y``.
+    """
+    if getattr(sp_special, "sph_harm", None) is not None:
+        return
+    sph_harm_y = getattr(sp_special, "sph_harm_y", None)
+    if sph_harm_y is None:
+        return
+
+    def _legacy_sph_harm(
+        m: Any, n: Any, theta: Any, phi: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        # Legacy sph_harm(m, n, theta_azim, phi_polar) vs
+        # sph_harm_y(n, m, theta_polar, phi_azim).
+        return sph_harm_y(n, m, phi, theta)
+
+    sp_special.sph_harm = _legacy_sph_harm  # type: ignore[attr-defined]
 
 
 def _ensure_torch_checkpoint_safe_globals() -> None:
@@ -104,6 +127,7 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
         raise ValueError("device must be set for TorchSim model initialization")
     device = resolved_device
     _ensure_torch_checkpoint_safe_globals()
+    _ensure_scipy_sph_harm()
     logger.info("Initializing TorchSim FairChemModel (%s) on %s", model_name, device)
     torch = _deps.torch
     dev = torch.device(device)
