@@ -40,7 +40,7 @@ def _ensure_scipy_sph_harm() -> None:
         # sph_harm_y(n, m, theta_polar, phi_azim).
         return sph_harm_y(n, m, phi, theta)
 
-    sp_special.sph_harm = _legacy_sph_harm  # type: ignore[attr-defined]
+    cast(Any, sp_special).sph_harm = _legacy_sph_harm
 
 
 def _ensure_torch_checkpoint_safe_globals() -> None:
