@@ -67,9 +67,15 @@ def _omega(
     temperature: float,
     pressure: float,
 ) -> float:
+    try:
+        activity = activity_by_molecule[result.molecule]
+    except KeyError as exc:
+        raise KeyError(
+            f"missing saturation activity for molecule {result.molecule!r}"
+        ) from exc
     return adsorption_ranking_energy(
         result.energy_adsorption,
-        activity_by_molecule.get(result.molecule, 1.0),
+        activity,
         temperature,
         pressure,
     )
@@ -395,6 +401,30 @@ def _commit_n_tuplet(
             )
 
     step_log_prefix = f"{log_prefix}step {step} | "
+    temperature = config.saturation_temperature
+    pressure = config.saturation_pressure
+
+    def _bound_or_none(
+        rewritten: list[ScreeningResult],
+    ) -> list[ScreeningResult] | None:
+        """Keep a rewrite only when Ω (or Ω_tuplet) is strictly negative."""
+        ranking = _committed_ranking_energy(
+            rewritten,
+            activity_by_molecule=activity_by_molecule,
+            temperature=temperature,
+            pressure=pressure,
+        )
+        if ranking < 0:
+            return rewritten
+        label = "Ω_tuplet" if len(rewritten) > 1 else "Ω"
+        logger.info(
+            "%scomposite %s = %.4f eV >= 0; not committing",
+            step_log_prefix,
+            label,
+            ranking,
+        )
+        return None
+
     rewritten, failure = evaluate_composite_commit(
         winners=packed,
         slab_atoms=slab_atoms,
@@ -406,19 +436,32 @@ def _commit_n_tuplet(
         log_prefix=step_log_prefix,
     )
     if rewritten:
-        return rewritten, "committed"
-    if len(packed) == 1 and packed[0].placement_id == original_best.placement_id:
+        bound = _bound_or_none(rewritten)
+        if bound is not None:
+            return bound, "committed"
+        # Unbound tuplet: fall through to single-winner retry when possible.
+        failure = "unbound_ranking_energy"
+        if len(packed) == 1:
+            return [], "no_binders"
+    elif len(packed) == 1 and packed[0].placement_id == original_best.placement_id:
         logger.warning(
             "%scomposite validation failed (%s); committing nothing",
             step_log_prefix,
             failure,
         )
         return [], "failed"
-    logger.warning(
-        "%scomposite validation failed (%s); retrying with best winner alone",
-        step_log_prefix,
-        failure,
-    )
+    else:
+        logger.warning(
+            "%scomposite validation failed (%s); retrying with best winner alone",
+            step_log_prefix,
+            failure,
+        )
+
+    if failure == "unbound_ranking_energy":
+        logger.info(
+            "%sunbound tuplet; retrying with best winner alone",
+            step_log_prefix,
+        )
     rewritten, failure = evaluate_composite_commit(
         winners=[original_best],
         slab_atoms=slab_atoms,
@@ -429,14 +472,17 @@ def _commit_n_tuplet(
         topology_check=topology_check,
         log_prefix=step_log_prefix,
     )
-    if not rewritten:
-        logger.warning(
-            "%ssingle-winner retry failed (%s); committing nothing",
-            step_log_prefix,
-            failure,
-        )
-        return [], "failed"
-    return rewritten, "committed"
+    if rewritten:
+        bound = _bound_or_none(rewritten)
+        if bound is not None:
+            return bound, "committed"
+        return [], "no_binders"
+    logger.warning(
+        "%ssingle-winner retry failed (%s); committing nothing",
+        step_log_prefix,
+        failure,
+    )
+    return [], "failed"
 
 
 def _saturation_adsorbate_topology_ok(

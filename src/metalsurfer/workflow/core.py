@@ -299,19 +299,31 @@ def process_molecule(
 
         t_mol_total = time.perf_counter() - t_mol_start
 
-        logger.info(
-            "%d unique configs, E_ads [%.4f, %.4f] eV | "
-            "timing: conformers=%.2fs placement=%.2fs opt=%.2fs "
-            "filter=%.2fs total=%.2fs",
-            len(results),
-            min(r.energy_adsorption for r in results),
-            max(r.energy_adsorption for r in results),
-            t_conformers,
-            t_placement,
-            t_optimization,
-            t_filtering,
-            t_mol_total,
-        )
+        if results:
+            logger.info(
+                "%d unique configs, E_ads [%.4f, %.4f] eV | "
+                "timing: conformers=%.2fs placement=%.2fs opt=%.2fs "
+                "filter=%.2fs total=%.2fs",
+                len(results),
+                min(r.energy_adsorption for r in results),
+                max(r.energy_adsorption for r in results),
+                t_conformers,
+                t_placement,
+                t_optimization,
+                t_filtering,
+                t_mol_total,
+            )
+        else:
+            logger.info(
+                "0 unique configs after filtering | "
+                "timing: conformers=%.2fs placement=%.2fs opt=%.2fs "
+                "filter=%.2fs total=%.2fs",
+                t_conformers,
+                t_placement,
+                t_optimization,
+                t_filtering,
+                t_mol_total,
+            )
 
         return MoleculeScreenOutcome(
             results=results,

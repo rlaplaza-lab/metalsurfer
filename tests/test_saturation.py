@@ -2526,6 +2526,53 @@ def test_run_saturation_screening_n_tuplet_single_molecule_path(monkeypatch, wor
     assert len(out[0].final_slab_atoms) == base_n + 2 * len(make_water())
 
 
+def test_n_tuplet_unbound_composite_retries_single_winner(monkeypatch, workdir):
+    """Ω_tuplet ≥ 0 after composite must not fold; retry the best single winner.
+
+    Individual screening energies are binding (Ω < 0). The composite E_ads of
+    both together is unbound, so the step should fall back to committing only
+    the best single placement when that unit still binds alone.
+    """
+    slab = make_slab()
+    base_n = len(slab)
+    # Clear binders on opposite sides so both pass mutual-clearance selection.
+    process = _pool_process({"A": [(-0.6, 2.5)], "B": [(-0.5, 7.0)]})
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["A", "B"],
+        smiles_list=["OA", "OB"],
+        ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
+        process_molecule=process,
+    )
+    # Multi-mol default E_slab=-100, energy_adsorbate=-10 each:
+    #   tuplet:  e_ads = -115 - (-100) - (-20) = +5  → Ω_tuplet ≥ 0
+    #   single:  e_ads = -115 - (-100) - (-10) = -5  → Ω < 0
+    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-115.0)
+
+    out = run_saturation_screening(
+        SlabContainer(slab),
+        molecules=[("OA", "A"), ("OB", "B")],
+        config=_mock_saturation_config(
+            multi_molecule_saturation=True,
+            saturation_molecules_per_step=2,
+            saturation_max_steps=1,
+        ),
+        surface_type="tuplet_unbound_retry",
+        skip_existing=False,
+    )
+
+    assert len(out) == 1
+    run = out[0]
+    assert len(run.steps) == 1
+    step = run.steps[0]
+    assert step.n_added == 1
+    assert len(step.committed_results) == 1
+    assert step.committed_results[0].molecule == "A"
+    assert step.committed_results[0].energy_adsorption == pytest.approx(-5.0)
+    assert run.n_molecules_at_saturation == 1
+    assert len(run.final_slab_atoms) == base_n + len(make_water())
+
+
 def test_n_tuplet_no_binders_stops_despite_negative_pool_best(monkeypatch, workdir):
     """Empty n-tuplet commit is terminal even when the pool still binds.
 

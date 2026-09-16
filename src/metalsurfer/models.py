@@ -883,7 +883,7 @@ def merge_bo_step_memories(
 class MultiMolSaturationStepResult:
     """Result of one step in a multi-molecule saturation run.
 
-    All molecules compete at each step; the winner (lowest E_ads) advances
+    All molecules compete at each step; the winner (lowest Ω) advances
     the slab state. Per-molecule results and placement budgets are stored
     for analysis.
     """

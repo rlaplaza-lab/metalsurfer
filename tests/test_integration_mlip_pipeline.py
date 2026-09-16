@@ -266,9 +266,12 @@ def _assert_h2_ru(results: list[ScreeningResult], num_placements: int) -> None:
 
 
 def _assert_h2_pt13(results: list[ScreeningResult], num_placements: int) -> None:
-    min_ok = max(2, int(math.ceil(0.4 * num_placements)))
-    assert len(results) >= min_ok, (
-        f"Expected >= {min_ok}/{num_placements} valid placements, got {len(results)}"
+    # Hollow-only dissociative pairing on an icosahedron is highly symmetric:
+    # several initial hollow pairs often relax to one unique chemisorbed pose
+    # after RMSD dedup. Require at least one survivor with the physics band.
+    assert len(results) >= 1, (
+        f"Expected >= 1/{num_placements} unique placements after hollow-pair "
+        f"screening, got {len(results)}"
     )
 
     e_ads = np.array([r.energy_adsorption for r in results])
@@ -293,6 +296,7 @@ def _assert_h2_pt13(results: list[ScreeningResult], num_placements: int) -> None
         )
         assert r.placement_descriptor is not None
         assert r.placement_descriptor.orientation_type == "dissociative"
+        assert r.placement_descriptor.site_type == "hollow"
         assert 1.5 <= r.distance <= 2.2, (
             f"Adsorbate–surface distance should be chemisorption (1.5–2.2 Å), "
             f"got {r.distance:.2f}"

@@ -685,8 +685,8 @@ Design heuristics
 - Many placements, not one pose: binding energy is the best of a filtered
   sample.
 - Saturation stops when a step commits nothing, when the next adsorption is
-  endothermic (``E_ads ≥ 0``), or at ``saturation_max_steps`` — not at an
-  explicit coverage fraction.
+  unbound (``Ω ≥ 0``, or ``Ω_tuplet ≥ 0`` for multi-winner steps), or at
+  ``saturation_max_steps`` — not at an explicit coverage fraction.
 - Rigid substrate by default during adsorption (prep ``FixAtoms``);
   ``relax_top_layer=True`` is a material-aware shortcut distinct from the
   site-enumeration top-layer mask.

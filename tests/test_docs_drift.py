@@ -111,3 +111,14 @@ def test_yaml_campaign_root_keys_match_schema():
     assert documented == schema_keys, (
         f"YAML guide keys {sorted(documented)} != schema {sorted(schema_keys)}"
     )
+
+
+@pytest.mark.docs
+def test_package_version_matches_pyproject():
+    """pyproject.toml version and metalsurfer.__version__ must stay in sync."""
+    data = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))
+    pyproject_version = data["project"]["version"]
+    assert metalsurfer.__version__ == pyproject_version, (
+        f"__version__={metalsurfer.__version__!r} != "
+        f"pyproject.toml version={pyproject_version!r}"
+    )

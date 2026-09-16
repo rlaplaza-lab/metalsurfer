@@ -485,12 +485,8 @@ def _surface_aligned_rotation(
                 R_total = R
     else:
         rotated, _, best_R = _principal_axis_rotation(pos, normal)
-        if rotated is not None:
-            pos = rotated
-            R_total = best_R
-        else:
-            pos = np.asarray(ads_pos, dtype=float).copy() - com
-            R_total = np.eye(3)
+        pos = rotated
+        R_total = best_R
     return pos, R_total
 
 
@@ -515,7 +511,7 @@ def _rotation_with_tilt(
 def _principal_axis_rotation(
     adsorbate_positions: np.ndarray,
     normal_vector: np.ndarray,
-) -> tuple[np.ndarray | None, float, np.ndarray]:
+) -> tuple[np.ndarray, float, np.ndarray]:
     """Rotate the adsorbate around its principal axes to maximise clearance.
 
     Returns centred-at-origin positions (no surface_z offset), the best

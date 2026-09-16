@@ -991,6 +991,50 @@ def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
     assert len(near_atom0) == 1
 
 
+def test_merge_dedup_freezes_existing_unique_sites():
+    """An injected midpoint near two old sites must not collapse them.
+
+    Global union-find on the combined set would transitively merge A≈M≈B into
+    one representative; freeze-existing merge keeps both A and B and drops M.
+    """
+    from metalsurfer.placement._constants import _VORONOI_DEDUP_TOLERANCE
+    from metalsurfer.placement.site_enumeration import _merge_dedup_site_arrays
+
+    tol = _VORONOI_DEDUP_TOLERANCE
+    # A and B farther than tol; M within tol of both.
+    existing = np.array(
+        [
+            [0.0, 0.0, 1.0],
+            [1.5 * tol, 0.0, 1.0],
+        ],
+        dtype=float,
+    )
+    assert float(np.linalg.norm(existing[1] - existing[0])) > tol
+    midpoint = 0.5 * (existing[0] + existing[1])
+    assert float(np.linalg.norm(midpoint - existing[0])) < tol
+    assert float(np.linalg.norm(midpoint - existing[1])) < tol
+
+    cell = np.diag([10.0, 10.0, 20.0])
+    pbc = np.array([True, True, False], dtype=bool)
+    verts, dists, sources, atoms = _merge_dedup_site_arrays(
+        existing,
+        np.array([1.0, 1.0], dtype=float),
+        ["voronoi", "voronoi"],
+        midpoint.reshape(1, 3),
+        np.array([1.0], dtype=float),
+        ["atop_injected"],
+        cell=cell,
+        pbc=pbc,
+        atom_indices=[(0,), (1,)],
+        new_atom_indices=[(2,)],
+    )
+    assert len(verts) == 2
+    np.testing.assert_allclose(verts, existing)
+    assert sources == ["voronoi", "voronoi"]
+    assert atoms == [(0,), (1,)]
+    assert len(dists) == 2
+
+
 def test_topology_boundary_candidate_retained_with_accessibility_tree():
     """PBC-aware accessibility_tree keeps a boundary candidate a plain tree drops."""
     from metalsurfer.placement.site_enumeration import _periodic_accessibility_tree

@@ -480,6 +480,9 @@ def process_molecule_bayesian(
     all_results: list[ScreeningResult] = []
     observed_X_rows: list[dict[str, float]] = []
     observed_y: list[float] = []
+    # Maps placement_id → index in observed_* for valid batch hits so a later
+    # filter rejection can replace (not double-append) the y label.
+    observed_result_index_by_pid: dict[int, int] = {}
     bo_negative_records: list[PlacementRecord] = []
     total_evaluated = 0
     best_energy = float("inf")
@@ -515,7 +518,29 @@ def process_molecule_bayesian(
             return float(overrides[stage])
         return float(config.bo.failure_penalty_default)
 
-    def _append_penalty_observation(record, stage: str, reason: str) -> None:
+    def _recompute_best_from_observations() -> None:
+        nonlocal best_energy, best_X_row
+        best_energy = float("inf")
+        best_X_row = None
+        for features, y in zip(observed_X_rows, observed_y, strict=True):
+            if y < best_energy:
+                best_energy = float(y)
+                best_X_row = dict(features)
+
+    def _append_penalty_observation(
+        record,
+        stage: str,
+        reason: str,
+        *,
+        replace_pid: int | None = None,
+    ) -> None:
+        """Record a failure penalty; optionally replace a prior valid label.
+
+        When *replace_pid* matches a previously appended valid observation,
+        overwrite that row instead of appending a second contradictory y for
+        the same features (post-filter rejects of otherwise-valid poses).
+        """
+        nonlocal best_energy, best_X_row
         penalty = _failure_penalty(stage, reason)
         record.converged = False
         record.failure_stage = stage
@@ -523,8 +548,20 @@ def process_molecule_bayesian(
         record.is_penalty_label = True
         record.label_source = "bo_failure_penalty"
         record.energy_adsorption = penalty
-        observed_X_rows.append(extract_features(record))
-        observed_y.append(penalty)
+        features = extract_features(record)
+        idx = (
+            observed_result_index_by_pid.get(replace_pid)
+            if replace_pid is not None
+            else None
+        )
+        if idx is not None and replace_pid is not None:
+            observed_X_rows[idx] = features
+            observed_y[idx] = penalty
+            observed_result_index_by_pid.pop(replace_pid, None)
+            _recompute_best_from_observations()
+        else:
+            observed_X_rows.append(features)
+            observed_y.append(penalty)
         bo_negative_records.append(record)
 
     def _unevaluated() -> list[int]:
@@ -589,6 +626,7 @@ def process_molecule_bayesian(
                 config=config,
             )
             features = extract_features(record)
+            observed_result_index_by_pid[r.placement_id] = len(observed_X_rows)
             observed_X_rows.append(features)
             observed_y.append(r.energy_adsorption)
             if r.energy_adsorption < best_energy:
@@ -770,7 +808,12 @@ def process_molecule_bayesian(
                     surface_id=surface_type,
                     config=config,
                 )
-                _append_penalty_observation(record, event.stage, event.reason)
+                _append_penalty_observation(
+                    record,
+                    event.stage,
+                    event.reason,
+                    replace_pid=event.placement_id,
+                )
 
     if bo_duplicate_results:
         logger.info(

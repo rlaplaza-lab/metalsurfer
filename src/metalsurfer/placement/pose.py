@@ -944,7 +944,12 @@ def _try_clash_descent_recovery(
         material_type=ctx.mat_type,
         slab_scratch=slab_scratch,
     )
-    return (new_ctx, None) if last_reason is None else (ctx, last_reason)
+    if last_reason is None:
+        return new_ctx, None
+    # Restore adsorbate coordinates to the pre-descent context; otherwise the
+    # Atoms object retains new_pos while we return the original ctx.
+    _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, work_center)
+    return ctx, last_reason
 
 
 def _clash_recovery_fixed_cloud(

@@ -407,8 +407,8 @@ def test_decomposition_no_smiles_reference():
     assert "no SMILES" in reason
 
 
-def test_decomposition_unparseable_smiles_falls_back_to_connectivity_only(caplog):
-    """Unparseable reference SMILES must not reject every intact structure."""
+def test_decomposition_unparseable_smiles_fails_closed():
+    """Unparseable reference SMILES must reject rather than skip fingerprint checks."""
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, make_water())
     ok, reason = check_decomposition(
@@ -417,8 +417,7 @@ def test_decomposition_unparseable_smiles_falls_back_to_connectivity_only(caplog
         surface_symbols=["Ru"],
         connectivity_multiplier=1.3,
     )
-    assert "Could not parse reference SMILES" in caplog.text
-    assert ok
+    assert not ok
     assert "unparseable" in reason.lower()
 
 

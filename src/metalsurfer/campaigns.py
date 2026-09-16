@@ -381,21 +381,22 @@ def _run_saturation_campaign(
             runs, surface_type=surface_type, config=config
         )
     if write_settings:
+        molecule_names = [
+            name
+            for run in runs
+            for name in (
+                run.molecules
+                if isinstance(run, MultiMolSaturationRunResult)
+                else [run.molecule]
+            )
+        ]
         write_run_settings(
             surface_type,
             config,
             campaign="saturation",
             mode=mode,
-            n_molecules=len(runs),
-            molecules=[
-                name
-                for run in runs
-                for name in (
-                    run.molecules
-                    if isinstance(run, MultiMolSaturationRunResult)
-                    else [run.molecule]
-                )
-            ],
+            n_molecules=len(molecule_names),
+            molecules=molecule_names,
         )
         if run_metadata:
             write_run_metadata_from_out(

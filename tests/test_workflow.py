@@ -658,6 +658,138 @@ class TestProcessMolecule:
         assert outcome.ml_records[0].label_source == "deduplicated_duplicate"
         assert outcome.ml_records[0].is_penalty_label is False
 
+    def test_bo_filter_reject_replaces_prior_observation_not_double_label(self):
+        """Post-filter rejects must replace the valid y, not append a second label.
+
+        Saturation BO transfer trains on ``bo_memory.observed_y``; a pose that
+        was first recorded as a real E_ads and then rejected as a non-duplicate
+        must contribute exactly one (penalty) observation.
+        """
+        slab = SlabContainer(make_slab())
+        refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
+        config = AdsorptionConfig(
+            bo=BOConfig(initial_random=2, batch_size=2, total_budget=1),
+            num_placements=2,
+            num_conformers=1,
+            seed=7,
+        )
+        specs = [
+            PlacementSpec(
+                conformer_index=0,
+                orientation_type="round",
+                face_flip=False,
+                en_atom_index=None,
+                site_index=-1,
+                site_type=None,
+                tilt_deg=0.0,
+                azimuth_deg=0.0,
+                azimuth_in_plane_deg=0.0,
+                z_fraction=0.5,
+                placement_index=0,
+            ),
+            PlacementSpec(
+                conformer_index=0,
+                orientation_type="round",
+                face_flip=False,
+                en_atom_index=None,
+                site_index=-1,
+                site_type=None,
+                tilt_deg=15.0,
+                azimuth_deg=0.0,
+                azimuth_in_plane_deg=0.0,
+                z_fraction=0.5,
+                placement_index=1,
+            ),
+        ]
+        kept = make_screening_result(
+            molecule="water",
+            placement_id=0,
+            energy_slab=-200.0,
+            energy_adsorbate=-10.0,
+            energy_adsorption=-1.0,
+            atoms=place_molecule_on_slab(make_slab(), make_water()),
+            slab_size=len(make_slab()),
+            distance=2.0,
+            placement_descriptor=make_placement_descriptor(placement_id=0),
+        )
+        rejected = make_screening_result(
+            molecule="water",
+            placement_id=1,
+            energy_slab=-200.0,
+            energy_adsorbate=-10.0,
+            energy_adsorption=-0.8,
+            atoms=place_molecule_on_slab(make_slab(), make_water(), x_shift=7.0),
+            slab_size=len(make_slab()),
+            distance=2.0,
+            placement_descriptor=make_placement_descriptor(
+                placement_id=1, tilt_deg=15.0
+            ),
+        )
+        filter_penalty = float(config.bo.failure_penalty_overrides["filter"])
+
+        def _mock_filter(results, **kwargs):
+            # Non-duplicate reject of placement 1 (no entry in duplicate_results_out).
+            return [results[0]]
+
+        with (
+            patch(
+                "metalsurfer.workflow.shared.create_conformers_from_smiles",
+                MagicMock(return_value=([Atoms("H")], [0.0])),
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian.estimate_placement_spec_capacity",
+                MagicMock(return_value=2),
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian.enumerate_placement_specs",
+                MagicMock(return_value=specs),
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian._evaluate_placement_batch",
+                MagicMock(return_value=([kept, rejected], [])),
+            ),
+            patch(
+                "metalsurfer.workflow.shared.filter_results",
+                side_effect=_mock_filter,
+            ),
+            patch(
+                "metalsurfer.workflow.bayesian.build_spec_features_geometry_aware",
+                return_value=(
+                    pd.DataFrame(
+                        [
+                            {"x": 0.0, "y": 0.0, "z": 7.0},
+                            {"x": 1.0, "y": 0.0, "z": 7.0},
+                        ]
+                    ),
+                    [0, 1],
+                ),
+            ),
+        ):
+            outcome = process_molecule_bayesian(
+                "O",
+                "water",
+                slab,
+                MagicMock(),
+                refs,
+                ts_model=MagicMock(),
+                config=config,
+            )
+
+        assert outcome.results is not None
+        assert len(outcome.results) == 1
+        assert outcome.bo_memory is not None
+        # One row for kept (-1.0) + one replaced penalty for rejected — not three.
+        assert len(outcome.bo_memory.observed_y) == 2
+        assert outcome.bo_memory.observed_y.count(-0.8) == 0
+        assert filter_penalty in outcome.bo_memory.observed_y
+        assert -1.0 in outcome.bo_memory.observed_y
+        penalty_records = [
+            r for r in outcome.ml_records if r.label_source == "bo_failure_penalty"
+        ]
+        assert len(penalty_records) == 1
+        assert penalty_records[0].placement_id == 1
+        assert penalty_records[0].failure_stage == "filter"
+
 
 @pytest.mark.parametrize("clamp_enabled", [True, False])
 def test_bo_batches_reuse_upfront_capacity_for_clamping(monkeypatch, clamp_enabled):

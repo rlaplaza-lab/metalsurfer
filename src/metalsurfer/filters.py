@@ -407,13 +407,10 @@ def check_decomposition(
             )
 
     if ref_formula is None and ref_bonds is None and ref_coord is None:
-        logger.warning(
-            "Could not parse reference SMILES %r for decomposition check; "
-            "falling back to connectivity-only screening",
-            reference_smiles,
-        )
-        return True, (
-            "connectivity intact (SMILES unparseable; skipped formula/bond/coord checks)"
+        return (
+            False,
+            f"unparseable reference SMILES {reference_smiles!r}; "
+            "cannot verify formula/bond/coordination fingerprint",
         )
 
     return True, "connectivity intact"

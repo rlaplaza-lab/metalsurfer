@@ -36,9 +36,10 @@ from metalsurfer.surface_prep import prepare_substrate
 # A relaxed best pose at or below this distance means ethene made a true
 # chemisorption contact (physisorption sits around 3+ Å).
 CHEMISORPTION_CONTACT_ANG = 2.6
-# Best-E_ads band (uma-s-1p2 + oc25 QC): observed best ≈ +0.283 eV (stable).
+# Best-E_ads band (uma-s-1p2 + oc25 QC): observed best ≈ +0.20 eV after
+# hollow-aware NP site catalogs (previously ≈ +0.28 eV).
 E_ADS_CEILING_EV = 0.33
-E_ADS_FLOOR_EV = 0.22
+E_ADS_FLOOR_EV = 0.15
 
 
 def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> None:

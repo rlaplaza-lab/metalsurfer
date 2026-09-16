@@ -280,12 +280,21 @@ def select_tuplet_winners(
             if config is not None
             else STANDARD_PRESSURE_BAR
         )
-    activities = activity_by_molecule or {}
+    activities = activity_by_molecule
 
     def _omega(result: ScreeningResult) -> float:
+        if activities is None:
+            activity = 1.0
+        else:
+            try:
+                activity = activities[result.molecule]
+            except KeyError as exc:
+                raise KeyError(
+                    f"missing saturation activity for molecule {result.molecule!r}"
+                ) from exc
         return adsorption_ranking_energy(
             result.energy_adsorption,
-            activities.get(result.molecule, 1.0),
+            activity,
             temperature,
             pressure,
         )

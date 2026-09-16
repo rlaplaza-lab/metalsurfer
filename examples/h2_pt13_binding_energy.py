@@ -79,9 +79,11 @@ def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> 
         raise SystemExit(1)
 
     results = campaign.run_results[0].results
-    if len(results) < 3:
+    # Hollow-only dissociative pairing on an icosahedron is highly symmetric;
+    # several initial pairs often collapse under RMSD dedup.
+    if len(results) < 2:
         print(
-            f"Expected >= 3 valid H2 placements, got {len(results)}.",
+            f"Expected >= 2 unique H2 placements, got {len(results)}.",
             file=sys.stderr,
         )
         print(campaign.format_summary(results_dir=results_dir), file=sys.stderr)

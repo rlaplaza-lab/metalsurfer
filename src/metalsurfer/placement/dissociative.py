@@ -140,7 +140,12 @@ def _dissociative_pair_cache_key(
 def _filter_hollow_pore_sites(
     sites: Sequence[Site], *, material_type: str
 ) -> list[Site]:
-    if material_type != "slab":
+    """Keep hollow/pore sites for dissociative pairing on slabs and nanoparticles.
+
+    Porous (and any other type) passes through unchanged: dissociative placement
+    is rejected upstream for unsupported materials.
+    """
+    if material_type not in ("slab", "nanoparticle"):
         return list(sites)
     return [s for s in sites if s.site_type in ("hollow", "pore")]
 
@@ -157,17 +162,11 @@ def _resolve_dissociative_site_entries(
     """Resolve hollow/pore site list before occupancy pruning."""
     used_hollow_helper = False
     if raw_sites is not None:
-        site_entries = _filter_hollow_pore_sites(
-            raw_sites, material_type=config.material_type
-        )
+        site_entries = list(raw_sites)
     elif site_context is not None and site_context.raw_unclustered is not None:
-        site_entries = _filter_hollow_pore_sites(
-            site_context.raw_unclustered, material_type=config.material_type
-        )
+        site_entries = list(site_context.raw_unclustered)
     elif site_context is not None and site_context.sites:
-        site_entries = _filter_hollow_pore_sites(
-            site_context.sites, material_type=config.material_type
-        )
+        site_entries = list(site_context.sites)
     elif config.material_type == "slab":
         site_entries = get_hollow_sites_for_adatoms(
             sites_slab,
@@ -191,21 +190,21 @@ def _resolve_dissociative_site_entries(
             site_classification_method=config.site_classification_method,
         )
 
-    if (
-        config.material_type == "slab"
-        and not used_hollow_helper
-        and len(site_entries) >= 2
-    ):
-        site_xyz = np.array(
-            [np.asarray(s.xyz, dtype=float) for s in site_entries], dtype=float
+    if not used_hollow_helper:
+        site_entries = _filter_hollow_pore_sites(
+            site_entries, material_type=config.material_type
         )
-        keep = _deduplicate_points(
-            site_xyz,
-            config.hollow_site_dedup_tolerance,
-            cell=cell_arr,
-            pbc=np.asarray(pbc_xy, dtype=bool),
-        )
-        site_entries = [site_entries[i] for i in np.nonzero(keep)[0]]
+        if config.material_type in ("slab", "nanoparticle") and len(site_entries) >= 2:
+            site_xyz = np.array(
+                [np.asarray(s.xyz, dtype=float) for s in site_entries], dtype=float
+            )
+            keep = _deduplicate_points(
+                site_xyz,
+                config.hollow_site_dedup_tolerance,
+                cell=cell_arr,
+                pbc=np.asarray(pbc_xy, dtype=bool),
+            )
+            site_entries = [site_entries[i] for i in np.nonzero(keep)[0]]
     return site_entries
 
 
@@ -386,6 +385,10 @@ def _compute_dissociative_site_pairs(
             _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM,
         )
     )
+    # Hollow-only NP catalogs can have mean NN just above the global cap
+    # (large-metal icosahedra). Keep nearest neighbors of the pairing set
+    # eligible without widening beyond that local spacing.
+    max_adjacent_sep = max(max_adjacent_sep, mean_nn_sep)
 
     if config.material_type == "slab":
         pair_distances = _periodic_site_pair_candidates(
@@ -611,7 +614,8 @@ def _place_dissociative_two_sites(
         pos2 = base2 + (target_h - float(np.dot(base2, n_hat))) * n_hat
         h_surface = float(surface_ref)
         site_reference_frame = "local_site" if is_local_ref else "global_top_layer"
-    elif config.material_type == "nanoparticle":
+    else:
+        # Nanoparticle only (porous rejected upstream).
         n_sum = np.asarray(n1, dtype=float) + np.asarray(n2, dtype=float)
         n_norm = float(np.linalg.norm(n_sum))
         n_hat = n_sum / (n_norm + _VECTOR_NORM_EPS) if n_norm > _VECTOR_NORM_EPS else n1
@@ -630,15 +634,6 @@ def _place_dissociative_two_sites(
         pos1 = base1 + (h1 + z_offset - float(np.dot(base1, n_hat))) * n_hat
         pos2 = base2 + (h2 + z_offset - float(np.dot(base2, n_hat))) * n_hat
         h_surface = 0.5 * (h1 + h2)
-        site_reference_frame = "local_site"
-    else:
-        # Porous: Voronoi voids are already in free volume; offset from the vertex.
-        n_sum = np.asarray(n1, dtype=float) + np.asarray(n2, dtype=float)
-        n_norm = float(np.linalg.norm(n_sum))
-        n_hat = n_sum / (n_norm + _VECTOR_NORM_EPS) if n_norm > _VECTOR_NORM_EPS else n1
-        pos1 = base1 + z_offset * n_hat
-        pos2 = base2 + z_offset * n_hat
-        h_surface = 0.5 * (float(np.dot(base1, n_hat)) + float(np.dot(base2, n_hat)))
         site_reference_frame = "local_site"
 
     symbols = adsorbate.get_chemical_symbols()

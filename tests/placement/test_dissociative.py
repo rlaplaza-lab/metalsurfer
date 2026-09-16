@@ -218,6 +218,17 @@ def test_dissociative_placement_supported_for_nanoparticle():
     )
     pairs = _get_dissociative_site_pairs(nanoparticle, config)
     assert pairs, "Au₁₃ fixture must expose dissociative site pairs"
+    # Pair catalog must come from hollow/pore sites only (not atop/bridge).
+    hollow_sites = [
+        s
+        for s in get_unified_sites(nanoparticle, material_type="nanoparticle")
+        if s.site_type in ("hollow", "pore")
+    ]
+    assert hollow_sites, "NP fixture must expose hollow sites"
+    hollow_xyz = {tuple(np.round(s.xyz, 6)) for s in hollow_sites}
+    for pair in pairs:
+        assert tuple(np.round(pair.xyz1, 6)) in hollow_xyz
+        assert tuple(np.round(pair.xyz2, 6)) in hollow_xyz
     h2 = make_h2()
     spec = dissoc_placement_spec()
 
@@ -232,6 +243,7 @@ def test_dissociative_placement_supported_for_nanoparticle():
     assert descriptor.orientation_type == "dissociative"
     assert descriptor.site_source is not None
     assert "dissociative" in str(descriptor.site_source)
+    assert descriptor.site_type == "hollow"
     assert descriptor.surface_ref_z_abs is not None
     hh = float(
         np.linalg.norm(
@@ -250,6 +262,41 @@ def test_dissociative_placement_supported_for_nanoparticle():
     assert ok, (min_d, dist_reason)
     # Lower floor is gated by `assert ok`; only the slack upper tail is checked.
     assert min_d <= descriptor.z_offset + 0.8
+
+
+def test_np_dissociative_pairs_ignore_atop_and_bridge_in_mixed_catalog():
+    """A mixed raw catalog must not produce atop–atop or atop–hollow pairs."""
+    from metalsurfer.placement.dissociative import _resolve_dissociative_site_entries
+
+    nanoparticle = make_nanoparticle()
+    config = AdsorptionConfig(
+        material_type="nanoparticle",
+        enable_dissociative_placement=True,
+        skip_topology_check=True,
+    )
+    all_sites = get_unified_sites(nanoparticle, material_type="nanoparticle")
+    types = {s.site_type for s in all_sites}
+    assert "atop" in types or "bridge" in types
+    assert "hollow" in types
+
+    cell = np.asarray(nanoparticle.get_cell(), dtype=float)
+    pbc_xy = [False, False, False]
+    filtered = _resolve_dissociative_site_entries(
+        nanoparticle,
+        config,
+        raw_sites=all_sites,
+        cell_arr=cell,
+        pbc_xy=pbc_xy,
+    )
+    assert filtered
+    assert all(s.site_type in ("hollow", "pore") for s in filtered)
+
+    pairs = _get_dissociative_site_pairs(nanoparticle, config, raw_sites=all_sites)
+    assert pairs, "hollow subset must still yield dissociative pairs"
+    hollow_xyz = {tuple(np.round(s.xyz, 6)) for s in filtered}
+    for pair in pairs:
+        assert tuple(np.round(pair.xyz1, 6)) in hollow_xyz
+        assert tuple(np.round(pair.xyz2, 6)) in hollow_xyz
 
 
 def test_dissociative_wrap_pair_cartesian_separation_matches_mic():

@@ -107,14 +107,15 @@ def tuplet_ranking_energy(
     pressure: float,
 ) -> float:
     """Ω_tuplet = E_ads_tuplet − k_B T Σ ln(a_i p / p°)."""
-    shift = sum(
-        math.log(
-            float(activity_by_molecule.get(name, 1.0))
-            * float(pressure)
-            / STANDARD_PRESSURE_BAR
-        )
-        for name in molecule_names
-    )
+    shift = 0.0
+    for name in molecule_names:
+        try:
+            activity = float(activity_by_molecule[name])
+        except KeyError as exc:
+            raise KeyError(
+                f"missing saturation activity for molecule {name!r}"
+            ) from exc
+        shift += math.log(activity * float(pressure) / STANDARD_PRESSURE_BAR)
     return float(e_ads_tuplet) - K_B_EV_PER_K * float(temperature) * shift
 
 
@@ -865,6 +866,8 @@ def _bootstrap_screening_run(
     config: AdsorptionConfig,
 ) -> ScreeningRunBootstrap:
     """Validate substrate, load MLIP, and compute reference energies."""
+    # Inline import: workflow.reference imports ``_prepare_atoms_for_calculator``
+    # from this module (circular).
     from .reference import calculate_reference_energies
 
     slab_container = accept_substrate_for_api(slab, config=config)
