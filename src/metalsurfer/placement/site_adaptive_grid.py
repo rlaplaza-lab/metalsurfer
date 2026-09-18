@@ -511,7 +511,7 @@ def _nms(
         for j in query_ball(vertices[ii], max(r_i, hard)):
             if j == ii:
                 continue
-            same = g_i is None or int(groups[j]) == g_i
+            same = groups is None or int(groups[j]) == g_i
             if same:
                 if _pair_within_radius(vertices[ii], vertices[j], r_i, cell, pbc):
                     suppressed[j] = True
@@ -711,6 +711,7 @@ def _bin_prethin(
         return vertices, nn
     h = max(float(bin_size), 1e-6)
     sc = _scores(nn, probe=probe, max_d=max_d, median_nn=median_nn)
+    keys: np.ndarray
     if np.any(pbc) and cell_has_volume(cell):
         frac = _cart_to_frac(vertices, cell)
         spacings = np.linalg.norm(cell, axis=1)
