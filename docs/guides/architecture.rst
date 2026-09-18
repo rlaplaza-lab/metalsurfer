@@ -213,10 +213,9 @@ Implementation: ``placement/site_*`` plus ``placement/site_plugins/``
 (enumeration entry: ``get_unified_sites``).
 
 Candidate generation is dispatched through a plugin selected by
-``site_generator`` (``auto`` / ``topology`` / ``voronoi``; internal
-``adaptive_grid`` via the factory / ``get_unified_sites`` only). Shared prep
-(PBC, probe window) and post (atop injection, classification, sort) stay in
-the enumerator; plugins only emit raw candidate batches.
+``site_generator`` (``auto`` / ``topology`` / ``voronoi`` / ``adaptive_grid``).
+Shared prep (PBC, probe window) and post (atop injection, classification, sort)
+stay in the enumerator; plugins only emit raw candidate batches.
 
 .. list-table::
    :header-rows: 1
@@ -234,14 +233,15 @@ the enumerator; plugins only emit raw candidate batches.
    * - ``voronoi``
      - slab, porous
      - Free-volume Voronoi (+ ridge enrich). On slabs skips topology (A/B)
-   * - ``adaptive_grid`` (internal)
+   * - ``adaptive_grid``
      - all
-     - Atom-centred Cartesian shells for every material (porous uses
-       voxelled seeds, same near-atom scoring—not pore centres) with
-       iterative refinement in the shared probe/max window. Optional
-       adsorbate geometry scales sampling density only. Not in
-       ``AdsorptionConfig`` / YAML; call
-       ``get_unified_sites(..., site_generator="adaptive_grid")``.
+     - Atom-centred Cartesian shells around every atom with accessibility,
+       exposure filtering (slab half-space only), and iterative NMS toward the
+       near-atom shell—not pore centres. Density is set by optional shared
+       adsorbate scale, floored against framework median nearest-neighbour
+       spacing (per-chunk work budget; no hard site-count cap). Downstream
+       classify / cluster / spglib / placement use the shared path. Selectable
+       via ``AdsorptionConfig`` / YAML; **not** chosen by ``auto``.
 
 Generation is **orientation-aware**: top-layer detection, Voronoi filtering,
 topology candidates, and local normals use the slab normal (``a × b``) and
@@ -325,8 +325,8 @@ Material strategies:
    * - porous
      - 3×3×3 images; pore sites when the framework spans the cell
 
-Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi``;
-internal ``adaptive_grid`` via ``get_unified_sites``),
+Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi`` /
+``adaptive_grid``),
 ``voronoi_probe_radius``, ``voronoi_max_site_distance``,
 ``top_layer_tolerance``, ``symmetry_tolerance``,
 ``site_equivalence_tolerance``, ``site_classification_method``
@@ -340,10 +340,10 @@ pairs on slabs (rejected for porous; NP uses outward-normal site pairs);
 parallel-z floors for slab/NP aromatics (skipped for porous); no atop
 injection / dissociative for porous. Nanoparticle ``surface_ref`` is the
 coordinating metal atoms projected onto the site normal (topology vertices
-are already lifted); porous keeps the site-vertex projection. Internal
+are already lifted); porous keeps the site-vertex projection.
 ``adaptive_grid`` registers in ``placement/site_plugins/`` with the same
-candidate-batch contract (all materials; not config-exposed). Future
-plugins (e.g. rolling-probe) would follow the same pattern.
+candidate-batch contract (all materials; config-selectable, not chosen by
+``auto``). Future plugins (e.g. rolling-probe) would follow the same pattern.
 
 
 Placement
@@ -392,9 +392,9 @@ Enumeration / materialization
   complexity/budget). Optional ``placement_filter``;
   ``adaptive_parallel_fraction`` (default on).
   ``generate_placements_from_specs`` materializes a list of specs (optionally
-  threaded); ``resolve_materialize_workers`` maps joblib-style ``n_jobs`` /
-  ``placement_materialize_workers`` to a concrete thread-pool size. Both are
-  exported from ``metalsurfer.placement.generators`` for advanced callers.
+  threaded); ``resolve_materialize_workers`` (in ``placement._parallel``,
+  re-exported from ``generators``) maps joblib-style ``n_jobs`` /
+  ``placement_materialize_workers`` to a concrete thread-pool size.
 - Slab / nanoparticle anchor: ``site.xyz`` offset along the slab or site
   normal so the **closest adsorbate atom** (not the COM) lands at
   ``surface_ref + z_offset`` (clearance-aware lift after orientation).

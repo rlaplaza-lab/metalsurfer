@@ -28,6 +28,7 @@ from ._material import (
     validate_material_type,
 )
 from .geometry import _get_covalent_radius
+from .site_adaptive_grid import dedupe_adaptive_sites_within_type
 from .site_classify import (
     _build_site_records,
     _DelaunayClassifyInputs,
@@ -294,18 +295,17 @@ def get_unified_sites(
     """Return adsorption/placement sites for *atoms*.
 
     Candidates come from a plugin selected by *site_generator*
-    (``auto`` / ``topology`` / ``voronoi``, plus internal ``adaptive_grid``).
+    (``auto`` / ``topology`` / ``voronoi`` / ``adaptive_grid``).
     With ``auto``, slabs and nanoparticles use topology; porous frameworks
-    use Voronoi. ``adaptive_grid`` is an internal A/B plugin (all materials)
-    and is not selectable via ``AdsorptionConfig``.
+    use Voronoi. ``adaptive_grid`` works on all materials but is not selected
+    by ``auto``.
 
     - **slab** (topology): Delaunay atop/bridge/hollow; planar top layers skip
       Voronoi; rough slabs merge Voronoi enrichment.
     - **nanoparticle** (topology): hull + NN only.
     - **porous** (voronoi): free-volume vertices with optional ridge enrichment.
-    - **adaptive_grid** (internal): atom-centred Cartesian grid with iterative
-      refinement; *grid_spacing_scale* (min adsorbate size) sizes one shared
-      catalog. CPU-bound shell / refine stages honour joblib-style *n_jobs*.
+    - **adaptive_grid**: atom-centred Cartesian shells with exposure filtering
+      and iterative refinement for every material type.
 
     Parameters
     ----------
@@ -333,19 +333,17 @@ def get_unified_sites(
         ``None`` uses the library default.
     site_generator
         ``"auto"`` (material default), ``"topology"``, ``"voronoi"``, or
-        internal ``"adaptive_grid"``.
+        ``"adaptive_grid"``.
     adsorbate
-        Optional representative conformer. If *grid_spacing_scale* is omitted,
-        ``adaptive_grid`` derives spacing from this molecule; ignored by
-        topology / Voronoi. Prefer *grid_spacing_scale* (min over competing
-        adsorbates) so one shared catalog scales to many molecules.
+        Optional representative conformer. Used only by ``adaptive_grid`` when
+        *grid_spacing_scale* is omitted; ignored by topology and Voronoi.
     grid_spacing_scale
         Shared adaptive-grid spacing length (Å). Typically
         :func:`~metalsurfer.placement.site_adaptive_grid.min_adsorbate_grid_scale`
-        over competing adsorbates. Overrides *adsorbate* when both are set.
+        across competing molecules; ignored by topology / Voronoi.
     n_jobs
         Joblib-style CPU workers for ``adaptive_grid`` shell/refine stages
-        (default ``-2`` = all CPUs but one). Ignored by other plugins.
+        (default ``-2``).
     """
     scratch = _PlanarWidenScratch()
     sites = _enumerate_unified_sites(
@@ -590,6 +588,16 @@ def _enumerate_unified_sites(
         atom_indices=atom_indices,
     )
 
+    if sites and source_hints and any(h == "adaptive_grid" for h in source_hints):
+        sites = dedupe_adaptive_sites_within_type(
+            sites,
+            cell=cell,
+            pbc=pbc_for_voronoi,
+            median_nn=float(batch.topology_median_nn or 0.0),
+            probe_radius=float(probe_radius),
+            max_site_distance=float(max_site_distance),
+        )
+
     if cell_has_volume(cell):
         # Deterministic fractional-xyz order for stable site_index / raw catalog.
         all_xyz = np.asarray([s.xyz for s in sites], dtype=float).reshape(-1, 3)
@@ -648,7 +656,8 @@ def get_hollow_sites_for_adatoms(
     site_classification_method
         Site classification method (``"auto"``, ``"delaunay"``, etc.).
     site_generator
-        Site generator plugin (``"auto"``, ``"topology"``, ``"voronoi"``).
+        Site generator plugin (``"auto"``, ``"topology"``, ``"voronoi"``,
+        ``"adaptive_grid"``).
     site_equivalence_tolerance
         Fingerprint-aware clustering tolerance (Å).
     auto_widen

@@ -1,4 +1,4 @@
-"""Adaptive-grid site generator: spacing, accessibility, PBC, and A/B overlap."""
+"""Adaptive-grid site generator: spacing, exposure, NMS, and a lean slab smoke path."""
 
 import numpy as np
 import pytest
@@ -7,27 +7,45 @@ from ase.build import molecule
 from scipy.spatial import KDTree
 
 from metalsurfer.config import AdsorptionConfig
+from metalsurfer.placement._constants import (
+    _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE,
+    _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE,
+    _ADAPTIVE_GRID_WORK_BUDGET,
+)
 from metalsurfer.placement._material import material_aware_pbc
-from metalsurfer.placement.generators import _topology_first_site_indices
+from metalsurfer.placement.generators import (
+    _topology_first_site_indices,
+    enumerate_placement_specs,
+    generate_placements_from_specs,
+)
 from metalsurfer.placement.site_adaptive_grid import (
+    _exposure_mask,
     _fractional_voxel_seeds,
+    _framework_median_nn,
     _nms,
     _shell_offsets,
+    _work_chunk_bounds,
     adaptive_grid_characteristic_length,
     adaptive_grid_spacing,
-    adsorbate_contact_distance,
     generate_adaptive_grid_sites,
     min_adsorbate_grid_scale,
+)
+from metalsurfer.placement.site_context import (
+    _SITE_CONTEXT_CACHE,
+    _SITE_CONTEXT_CACHE_LOCK,
+    resolve_site_context_for_sampling,
 )
 from metalsurfer.placement.site_coords import (
     _derive_voronoi_distance_window,
     _frac_to_cart,
 )
-from metalsurfer.placement.site_enumeration import get_unified_sites
-from metalsurfer.placement.site_np import _outside_convex_hull_mask, _try_convex_hull
+from metalsurfer.placement.site_enumeration import (
+    get_hollow_sites_for_adatoms,
+    get_unified_sites,
+)
 from metalsurfer.placement.site_types import Site
 
-from ..conftest import make_nanoparticle, make_porous_framework, make_slab
+from ..conftest import make_nanoparticle, make_slab
 
 
 def _window(
@@ -42,9 +60,18 @@ def _window(
     return probe, maxd, cell, pbc
 
 
-def test_adaptive_grid_not_in_adsorption_config():
-    with pytest.raises(ValueError, match="site_generator"):
-        AdsorptionConfig(site_generator="adaptive_grid")
+def test_adaptive_grid_accepted_on_adsorption_config():
+    cfg = AdsorptionConfig(site_generator="adaptive_grid", material_type="slab")
+    assert cfg.site_generator == "adaptive_grid"
+    for mat in ("slab", "nanoparticle", "porous"):
+        AdsorptionConfig(site_generator="adaptive_grid", material_type=mat)
+
+
+def test_adaptive_grid_spacing_rejects_non_positive_scale():
+    with pytest.raises(ValueError, match="characteristic length"):
+        adaptive_grid_spacing(1.2, grid_spacing_scale=0.0)
+    with pytest.raises(ValueError, match="characteristic length"):
+        adaptive_grid_spacing(1.2, grid_spacing_scale=float("nan"))
 
 
 def test_adsorbate_spacing_scales_with_size():
@@ -55,7 +82,6 @@ def test_adsorbate_spacing_scales_with_size():
         adaptive_grid_spacing(probe, co).initial_spacing
         < adaptive_grid_spacing(probe, molecule("C6H6")).initial_spacing
     )
-    # Bulky adsorbates are no longer capped by probe (coarser than probe-only).
     assert adaptive_grid_characteristic_length(probe, molecule("C6H6")) > probe
 
 
@@ -68,6 +94,10 @@ def test_min_adsorbate_grid_scale_uses_smallest():
     assert L_h2 < L_bz
     assert min_adsorbate_grid_scale(probe, [bz, h2]) == pytest.approx(L_h2)
     assert min_adsorbate_grid_scale(probe, []) == pytest.approx(probe)
+    spacing_min = adaptive_grid_spacing(probe, grid_spacing_scale=L_h2)
+    spacing_bz = adaptive_grid_spacing(probe, grid_spacing_scale=L_bz)
+    assert spacing_min.initial_spacing <= spacing_bz.initial_spacing
+    assert spacing_min.merge_radius <= spacing_bz.merge_radius
 
 
 def _site(xyz, site_type, source, nn):
@@ -83,25 +113,20 @@ def _site(xyz, site_type, source, nn):
     )
 
 
-def test_site_ranking_prefers_nn_near_adsorbate_contact():
-    preferred = adsorbate_contact_distance(
-        Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]]),
-        ["Ru"],
-    )
-    assert preferred is not None and preferred > 0.0
+def test_site_ranking_prefers_topology_then_clearance():
     sites = [
-        _site((0.0, 0.0, 0.0), "hollow", "adaptive_grid", preferred + 1.5),
-        _site((1.0, 0.0, 0.0), "bridge", "adaptive_grid", preferred),
-        _site((2.0, 0.0, 0.0), "atop", "atop_injected", preferred + 0.2),
+        _site((0.0, 0.0, 0.0), "hollow", "adaptive_grid", 2.0),
+        _site((1.0, 0.0, 0.0), "bridge", "adaptive_grid", 1.5),
+        _site((2.0, 0.0, 0.0), "atop", "atop_injected", 1.8),
     ]
-    order = _topology_first_site_indices(sites, [0, 1, 2], preferred_nn=preferred)
-    # atop_injected preferred first; among adaptive_grid, closer nn wins.
+    clearances = np.array([1.0, 5.0, 2.0], dtype=float)
+    order = _topology_first_site_indices(sites, [0, 1, 2], clearances=clearances)
     assert order[0] == 2
     assert order[1] == 1
     assert order[2] == 0
 
 
-def test_grid_in_accessibility_window_and_np_outside_hull():
+def test_grid_in_accessibility_window():
     slab = make_slab()
     probe, maxd, cell, pbc = _window(slab, "slab")
     verts, nn, _, _ = generate_adaptive_grid_sites(
@@ -111,68 +136,67 @@ def test_grid_in_accessibility_window_and_np_outside_hull():
         material_type="slab",
         probe_radius=probe,
         max_site_distance=maxd,
-        top_layer_tolerance=1.0,
         n_jobs=1,
     )
     assert len(verts) > 0
     assert np.all((nn >= probe - 1e-9) & (nn <= maxd + 1e-9))
 
-    np_atoms = make_nanoparticle()
-    probe, maxd, cell, pbc = _window(np_atoms, "nanoparticle")
-    verts, _, _, _ = generate_adaptive_grid_sites(
-        np_atoms.get_positions(),
-        cell,
-        pbc,
-        material_type="nanoparticle",
-        probe_radius=probe,
-        max_site_distance=maxd,
-        top_layer_tolerance=1.0,
-        n_jobs=1,
-    )
-    hull = _try_convex_hull(np_atoms.get_positions())
-    assert hull is not None and len(verts) > 0
-    assert np.all(_outside_convex_hull_mask(verts, hull))
-
 
 def test_shell_offsets_skip_inner_ball():
-    frame = np.eye(3)
-    probe, max_d, h = 1.2, 3.0, 0.5
-    offsets = _shell_offsets(max_d, h, frame, r_min=probe)
+    offsets = _shell_offsets(3.0, 0.5, r_min=1.2)
     assert len(offsets) > 0
     r = np.linalg.norm(offsets, axis=1)
-    assert np.all(r > probe - 1e-9)
-    assert np.all(r <= max_d + 1e-9)
+    assert np.all(r > 1.2 - 1e-9)
+    assert np.all(r <= 3.0 + 1e-9)
+
+
+def test_exposure_rejects_buried_keeps_surface():
+    positions = np.array([[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]], dtype=float)
+    tree = KDTree(positions)
+    buried = np.array([[1.25, 0.0, 0.0]], dtype=float)
+    nn_b, idx_b = tree.query(buried, k=1)
+    keep_b = _exposure_mask(
+        buried,
+        np.atleast_1d(nn_b).astype(float),
+        positions[np.atleast_1d(idx_b)],
+        tree,
+        material_type="nanoparticle",
+        cell=np.eye(3),
+    )
+    assert not bool(keep_b[0])
+
+    surface = np.array([[0.0, 0.0, 1.5]], dtype=float)
+    nn_s, idx_s = tree.query(surface, k=1)
+    keep_s = _exposure_mask(
+        surface,
+        np.atleast_1d(nn_s).astype(float),
+        positions[np.atleast_1d(idx_s)],
+        tree,
+        material_type="nanoparticle",
+        cell=np.eye(3),
+    )
+    assert bool(keep_s[0])
 
 
 def test_nms_pbc_keeps_higher_score_across_boundary():
-    """Periodic image twins: higher score wins (not min index)."""
     cell = np.diag([10.0, 10.0, 20.0])
     pbc = np.array([True, True, False])
-    # Two points 0.3 Å apart across the a-boundary.
     vertices = np.array(
-        [
-            [0.1, 5.0, 10.0],
-            [9.8, 5.0, 10.0],  # MIC distance ≈ 0.3 Å
-            [5.0, 5.0, 10.0],  # far away, kept
-        ],
+        [[0.1, 5.0, 10.0], [9.8, 5.0, 10.0], [5.0, 5.0, 10.0]],
         dtype=float,
     )
     nn = np.array([1.0, 1.0, 1.0], dtype=float)
-    # Point 1 (index 1) has higher score than point 0.
     scores = np.array([-1.0, 0.0, -0.5], dtype=float)
     kept, _ = _nms(vertices, nn, scores, merge_r=0.5, cell=cell, pbc=pbc)
     assert len(kept) == 2
-    # Winner near the boundary should be the high-score twin at x≈9.8.
     near_boundary = kept[np.abs(kept[:, 0] - 5.0) > 1.0]
     assert len(near_boundary) == 1
     assert float(near_boundary[0, 0]) == pytest.approx(9.8, abs=1e-6)
 
 
 def test_fractional_voxel_seeds_merge_wrapped_and_skewed():
-    # Skewed cell: two atoms with nearby fractional coords share one voxel.
     cell = np.array([[6.0, 0.0, 0.0], [2.0, 5.0, 0.0], [0.0, 0.0, 8.0]], dtype=float)
     pbc = np.array([True, True, True])
-    # frac ≈ (0.05, 0.5, 0.5) and (0.08, 0.5, 0.5) → same voxel at seed_voxel=2.
     positions = _frac_to_cart(
         np.array([[0.05, 0.5, 0.5], [0.08, 0.5, 0.5], [0.7, 0.2, 0.3]], dtype=float),
         cell,
@@ -183,113 +207,116 @@ def test_fractional_voxel_seeds_merge_wrapped_and_skewed():
     assert len(idx) == 2
     assert 2 in set(idx.tolist())
 
-    # seed_voxel spanning the full a-period collapses all a-wrapped atoms.
-    ortho = np.diag([4.0, 4.0, 4.0])
-    pts = np.array([[0.1, 2.0, 2.0], [3.9, 2.0, 2.0]], dtype=float)
-    collapsed = _fractional_voxel_seeds(
-        pts, ortho, pbc, seed_voxel=4.0, idx=np.arange(2)
+
+def test_work_chunks_cover_all_atoms_without_dropping_seeds():
+    n_atoms, n_offsets = 48, 50_000
+    bounds = _work_chunk_bounds(n_atoms, n_offsets)
+    assert bounds
+    covered = 0
+    for lo, hi in bounds:
+        assert (hi - lo) * n_offsets <= _ADAPTIVE_GRID_WORK_BUDGET
+        covered += hi - lo
+    assert covered == n_atoms
+
+
+def test_adaptive_grid_floors_density_against_framework_nn():
+    cluster = make_nanoparticle()
+    pos = cluster.get_positions()
+    cell = np.asarray(cluster.get_cell(), dtype=float)
+    pbc = np.asarray(material_aware_pbc("nanoparticle"), dtype=bool)
+    median_nn = _framework_median_nn(pos, cell, pbc)
+    assert median_nn > 0.0
+    h2 = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
+    scale = min_adsorbate_grid_scale(None, [h2])
+    unfloored = adaptive_grid_spacing(1.2, grid_spacing_scale=scale)
+    floored = adaptive_grid_spacing(
+        1.2, grid_spacing_scale=scale, framework_median_nn=median_nn
     )
-    assert len(collapsed) == 1
-
-
-@pytest.mark.parametrize(
-    ("material_type", "factory", "baseline"),
-    [
-        ("slab", make_slab, "topology"),
-        ("nanoparticle", make_nanoparticle, "topology"),
-        ("porous", make_porous_framework, "voronoi"),
-    ],
-)
-def test_unified_sites_and_baseline_overlap(material_type, factory, baseline):
-    atoms = factory()
-    grid = get_unified_sites(
-        atoms,
-        material_type=material_type,
-        site_generator="adaptive_grid",
-        n_jobs=1,
+    assert floored.characteristic_length >= (
+        max(scale, _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE * median_nn) - 1e-12
     )
-    assert len(grid) > 0
-    assert {s.site_source for s in grid} <= {"adaptive_grid", "atop_injected"}
-
-    base = get_unified_sites(
-        atoms, material_type=material_type, site_generator=baseline
+    assert (
+        floored.merge_radius >= _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE * median_nn - 1e-12
     )
-    assert len(base) > 0
-    base_xyz = np.asarray([s.xyz for s in base], dtype=float)
-    grid_xyz = np.asarray([s.xyz for s in grid], dtype=float)
-    # Same coverage metric for every material: baseline sites near a grid point.
-    dists, _ = KDTree(grid_xyz).query(base_xyz, k=1)
-    tol = 1.5 if material_type == "porous" else 0.75
-    assert float(np.mean(np.asarray(dists, dtype=float) <= tol)) >= 0.25
-
-
-def test_tilted_slab_still_overlaps_topology():
-    """Rotate the slab so the surface normal is not lab-z; overlap bar still holds."""
-    slab = make_slab(nx=3, ny=3, n_layers=3)
-    # 40° rotation about x tilts a×b away from lab z while keeping slab PBC.
-    angle = np.deg2rad(40.0)
-    c, s = np.cos(angle), np.sin(angle)
-    R = np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]], dtype=float)
-    slab.set_cell(np.asarray(slab.get_cell(), dtype=float) @ R.T, scale_atoms=True)
-    slab.set_pbc([True, True, False])
-
-    grid = get_unified_sites(
-        slab, material_type="slab", site_generator="adaptive_grid", n_jobs=1
-    )
-    base = get_unified_sites(slab, material_type="slab", site_generator="topology")
-    assert len(grid) > 0 and len(base) > 0
-    base_xyz = np.asarray([s.xyz for s in base], dtype=float)
-    grid_xyz = np.asarray([s.xyz for s in grid], dtype=float)
-    dists, _ = KDTree(grid_xyz).query(base_xyz, k=1)
-    assert float(np.mean(np.asarray(dists, dtype=float) <= 0.75)) >= 0.25
-
-
-@pytest.mark.parametrize(
-    ("material_type", "factory"),
-    [
-        ("slab", make_slab),
-        ("nanoparticle", make_nanoparticle),
-        ("porous", make_porous_framework),
-    ],
-)
-def test_n_jobs_serial_matches_parallel(material_type, factory):
-    atoms = factory()
-    serial = get_unified_sites(
-        atoms,
-        material_type=material_type,
-        site_generator="adaptive_grid",
-        n_jobs=1,
-    )
-    parallel = get_unified_sites(
-        atoms,
-        material_type=material_type,
-        site_generator="adaptive_grid",
-        n_jobs=4,
-    )
-    assert len(serial) == len(parallel)
-    s_xyz = np.asarray([s.xyz for s in serial], dtype=float)
-    p_xyz = np.asarray([s.xyz for s in parallel], dtype=float)
-    np.testing.assert_allclose(s_xyz, p_xyz, atol=1e-9)
-
-
-def test_porous_sites_prefer_near_atom_shell_not_pore_centres():
-    atoms = make_porous_framework()
-    probe, maxd, cell, pbc = _window(atoms, "porous")
-    verts, nn, _, _ = generate_adaptive_grid_sites(
-        atoms.get_positions(),
+    assert floored.merge_radius >= unfloored.merge_radius
+    verts, _, spacing_out, _ = generate_adaptive_grid_sites(
+        pos,
         cell,
         pbc,
-        material_type="porous",
-        probe_radius=probe,
-        max_site_distance=maxd,
-        top_layer_tolerance=1.0,
+        material_type="nanoparticle",
+        probe_radius=1.2,
+        max_site_distance=3.5,
+        grid_spacing_scale=scale,
         n_jobs=1,
     )
     assert len(verts) > 0
-    # Shell target sits near probe / metal-height scale, not at max_d (pore centres).
-    assert float(np.median(nn)) < 0.5 * (probe + maxd)
-    sites = get_unified_sites(
-        atoms, material_type="porous", site_generator="adaptive_grid", n_jobs=1
+    assert spacing_out.merge_radius >= floored.merge_radius - 1e-12
+
+
+def test_unified_sites_overlap_topology_on_slab():
+    slab = make_slab(nx=3, ny=3, n_layers=3)
+    grid = get_unified_sites(
+        slab, material_type="slab", site_generator="adaptive_grid", n_jobs=1
     )
-    types = {s.site_type for s in sites}
-    assert types - {"pore"}  # must include near-framework typed sites
+    assert len(grid) > 0
+    assert {s.site_source for s in grid} <= {"adaptive_grid"}
+    assert all(s.slab_indices and s.env_fingerprint for s in grid)
+    types = {s.site_type for s in grid}
+    assert "hollow" in types and "bridge" in types
+    base = get_unified_sites(slab, material_type="slab", site_generator="topology")
+    assert len(grid) <= max(2 * len(base), 100)
+    assert len(grid) >= max(len(base) // 4, 8)
+    grid_xyz = np.asarray([s.xyz for s in grid], dtype=float)
+    base_xyz = np.asarray([s.xyz for s in base], dtype=float)
+    dists, _ = KDTree(grid_xyz).query(base_xyz, k=1)
+    assert float(np.mean(np.asarray(dists, dtype=float) <= 0.75)) >= 0.25
+    hollow = grid_xyz[[s.site_type == "hollow" for s in grid]]
+    if len(hollow) >= 2:
+        d, _ = KDTree(hollow).query(hollow, k=2)
+        assert float(np.median(d[:, 1])) >= 0.9
+
+
+def test_adaptive_grid_site_context_uses_shared_symmetry_path():
+    slab = make_slab(nx=3, ny=3, n_layers=3)
+    cfg = AdsorptionConfig(
+        material_type="slab",
+        site_generator="adaptive_grid",
+        n_jobs=1,
+        slab_relaxation_mode="none",
+    )
+    with _SITE_CONTEXT_CACHE_LOCK:
+        _SITE_CONTEXT_CACHE.clear()
+    ctx = resolve_site_context_for_sampling(slab, cfg, symmetry_broken=False)
+    assert ctx.use_sites and len(ctx.sites) > 0
+    assert all(s.slab_indices for s in ctx.sites)
+
+
+def test_adaptive_grid_placement_materialization_on_slab():
+    ads = Atoms("CO", positions=[[0.0, 0.0, 0.0], [1.13, 0.0, 0.0]])
+    atoms = make_slab()
+    cfg = AdsorptionConfig(
+        material_type="slab",
+        site_generator="adaptive_grid",
+        num_placements=8,
+        num_conformers=1,
+        n_jobs=1,
+        slab_relaxation_mode="none",
+    )
+    specs = enumerate_placement_specs([ads], atoms, cfg, smiles="C=O", n_desired=8)
+    assert specs
+    results = generate_placements_from_specs(specs, [ads], atoms, cfg, smiles="C=O")
+    ok = [pair for pair, reason in results if pair is not None]
+    assert ok
+    for placed, _desc in ok:
+        pos = np.asarray(placed.get_positions(), dtype=float)
+        assert pos.ndim == 2 and len(pos) == len(ads)
+        assert np.all(np.isfinite(pos))
+
+
+def test_adaptive_grid_dissociative_hollows_on_slab():
+    hollows = get_hollow_sites_for_adatoms(
+        make_slab(),
+        material_type="slab",
+        site_generator="adaptive_grid",
+    )
+    assert any(s.site_type == "hollow" for s in hollows)

@@ -46,10 +46,7 @@ from .pose import (
     _PoseBatchCache,
     build_pose_batch_cache,
 )
-from .site_adaptive_grid import (
-    adsorbate_contact_distance,
-    resolve_adaptive_grid_spacing_scale,
-)
+from .site_adaptive_grid import min_adsorbate_grid_scale
 from .site_context import (
     SiteContext,
     site_context_for_sampling,
@@ -163,25 +160,20 @@ def _topology_first_site_indices(
     indices: list[int],
     *,
     clearances: np.ndarray | None = None,
-    preferred_nn: float | None = None,
 ) -> list[int]:
-    """Order *indices*: topology first, then nn near preferred, then clearance."""
+    """Order *indices*: topology first, then clearance."""
 
-    def _rank(i: int) -> tuple[int, float, float, int]:
+    def _rank(i: int) -> tuple[int, float, int]:
         site = sites[i]
         src = str(site.site_source)
         prefer = 0 if src.startswith("topology") or src == "atop_injected" else 1
-        nn_pen = 0.0
-        if preferred_nn is not None and preferred_nn > 0.0:
-            nn = site.nn_distance
-            nn_pen = abs(float(nn) - float(preferred_nn)) if nn is not None else 1e6
         # Larger clearance first → negate for ascending sort.
         clear = (
             -float(clearances[i])
             if clearances is not None and i < len(clearances)
             else 0.0
         )
-        return (prefer, nn_pen, clear, i)
+        return (prefer, clear, i)
 
     return sorted(indices, key=_rank)
 
@@ -201,13 +193,9 @@ def _spec_grid_info(
         and _is_dissociable_diatomic(conformers[0])
     )
     grid_scale = None
-    preferred_nn = None
     if str(config.site_generator) == "adaptive_grid" and conformers:
-        grid_scale = resolve_adaptive_grid_spacing_scale(
+        grid_scale = min_adsorbate_grid_scale(
             config.voronoi_probe_radius, [conformers[0]]
-        )
-        preferred_nn = adsorbate_contact_distance(
-            conformers[0], list(slab.get_chemical_symbols())
         )
     _ctx = site_context_for_sampling(
         slab, config, site_context, grid_spacing_scale=grid_scale
@@ -268,11 +256,12 @@ def _spec_grid_info(
                 unique_sites,
                 site_indices,
                 clearances=clearances,
-                preferred_nn=preferred_nn,
             )
             if config.material_type == "porous":
                 # Free-volume pores dominate adsorption in frameworks; wall sites
                 # (atop/bridge/hollow) are usually clash-prone under VDW gates.
+                # adaptive_grid near-atom shells are rarely typed ``pore``, so this
+                # is a no-op when the catalog has no pore sites.
                 pore_indices = [
                     i for i in site_indices if str(unique_sites[i].site_type) == "pore"
                 ]
@@ -408,6 +397,7 @@ def enumerate_placement_specs(
     if config.adaptive_parallel_fraction and info.flat_aromatic:
         parallel_fraction = _estimate_parallel_fraction(info.symbols, smiles)
 
+    prefer_pores = config.material_type == "porous"
     return policy.build_batch_placement_specs(
         n_conformers=len(conformers),
         site_indices=info.site_indices,
@@ -421,11 +411,9 @@ def enumerate_placement_specs(
         dissociative=info.is_dissociative,
         n_hollow_pairs=info.n_hollow_pairs,
         seed=eff_seed,
-        preferred_site_types=("pore",) if config.material_type == "porous" else (),
+        preferred_site_types=("pore",) if prefer_pores else (),
         # Quality-sorted pore lists: keep open pores near the front of the draw.
-        site_index_weight=(
-            _POROUS_SITE_INDEX_WEIGHT if config.material_type == "porous" else 0.0
-        ),
+        site_index_weight=(_POROUS_SITE_INDEX_WEIGHT if prefer_pores else 0.0),
         conformer_energies=conformer_energies,
         conformer_weighting=config.conformer_weighting,
         boltzmann_temperature=config.boltzmann_temperature,
@@ -658,17 +646,10 @@ def generate_placement_from_spec_with_reason(
             site_context=site_context,
         )
 
-    grid_scale = None
-    if str(config.site_generator) == "adaptive_grid" and conformers:
-        grid_scale = resolve_adaptive_grid_spacing_scale(
-            config.voronoi_probe_radius,
-            [conformers[spec.conformer_index]],
-        )
     resolved_ctx = site_context_for_sampling(
         slab_for_sites if slab_for_sites is not None else slab,
         config,
         site_context,
-        grid_spacing_scale=grid_scale,
     )
 
     adsorbate = conformers[spec.conformer_index].copy()

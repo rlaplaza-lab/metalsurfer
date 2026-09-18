@@ -20,7 +20,7 @@ from ..conftest import make_nanoparticle, make_porous_framework, make_slab
 
 def test_registry_matches_config_options():
     assert SITE_GENERATORS == ("topology", "voronoi", "adaptive_grid")
-    assert PUBLIC_SITE_GENERATORS == ("topology", "voronoi")
+    assert PUBLIC_SITE_GENERATORS == ("topology", "voronoi", "adaptive_grid")
     assert SITE_GENERATOR_OPTIONS == ("auto",) + PUBLIC_SITE_GENERATORS
 
 

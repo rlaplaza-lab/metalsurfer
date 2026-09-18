@@ -39,6 +39,7 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 # Python demos (camphor last: GPU-heavy). Bipyridine is intentionally omitted.
 PYTHON_EXAMPLES=(
   examples/ethene_pt12_binding_energy.py
+  examples/ethene_ru55_binding_energy.py
   examples/ethene_ru_slab_binding_energy.py
   examples/h2_ru_slab_binding_energy.py
   examples/h2_pt13_binding_energy.py
@@ -50,6 +51,7 @@ PYTHON_EXAMPLES=(
 # Must match each example's surface_type / results_dir (not the script basename).
 declare -A PYTHON_RESULTS=(
   [examples/ethene_pt12_binding_energy.py]=results_ethene_pt12
+  [examples/ethene_ru55_binding_energy.py]=results_ethene_ru55
   [examples/ethene_ru_slab_binding_energy.py]=results_ethene_ru_slab
   [examples/h2_ru_slab_binding_energy.py]=results_h2_ru_slab
   [examples/h2_pt13_binding_energy.py]=results_h2_pt13

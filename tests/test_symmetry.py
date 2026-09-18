@@ -689,3 +689,27 @@ def test_empty_and_single_atom_site_lists():
     slab = fcc111("Cu", size=(2, 2, 2), vacuum=5.0)
     analyzer = SymmetryAnalyzer(slab, mode="auto")
     assert analyzer.analyze_site_symmetry([]) == []
+
+
+def test_adaptive_grid_nanoparticle_symmetry_is_fast_and_reduces():
+    """adaptive_grid NP enumeration finishes quickly with framework-floored catalogs."""
+    import time
+
+    from ase.cluster import Icosahedron
+
+    from metalsurfer.placement.site_enumeration import get_unified_sites
+
+    cluster = Icosahedron("Pt", noshells=2)
+    cluster.set_cell([30.0, 30.0, 30.0])
+    cluster.center()
+    cluster.pbc = False
+    start = time.perf_counter()
+    sites = get_unified_sites(
+        cluster,
+        material_type="nanoparticle",
+        site_generator="adaptive_grid",
+        n_jobs=1,
+    )
+    elapsed = time.perf_counter() - start
+    assert len(sites) >= 5
+    assert elapsed < 5.0, f"adaptive_grid NP enumeration took {elapsed:.2f}s"

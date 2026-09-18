@@ -13,6 +13,7 @@ import numpy as np
 import spglib
 import spglib.error as _spglib_error_module
 from ase import Atoms
+from threadpoolctl import threadpool_limits
 
 from ._geom_pbc import (
     cart_to_frac,
@@ -30,6 +31,9 @@ if TYPE_CHECKING:
 # Opt into the new spglib error handling (raises SpglibError instead of
 # returning None) and suppress the DeprecationWarning it would emit otherwise.
 _spglib_error_module.OLD_ERROR_HANDLING = False
+
+# Cap peak RAM for the chunked matcher: one float64 (chunk × n × 3) buffer.
+_SYMMETRY_PAIR_CHUNK_BYTES = 16 * 1024 * 1024
 
 SymmetryMode = Literal["auto", "periodic", "cluster"]
 
@@ -347,59 +351,69 @@ class SymmetryAnalyzer:
             zs = np.array([float(s.z) for s in sites], dtype=float)
             planar = bool(zs.size > 0 and float(np.ptp(zs)) < self.symmetry_tolerance)
 
-        sorted_sites = sorted(sites, key=self._site_sort_key)
-        frac_ops = self._frac_ops_from_dataset()
-        n = len(sorted_sites)
-        cart_pts = [self._site_3d_cart(s) for s in sorted_sites]
-        site_types = [str(s.site_type) for s in sorted_sites]
+        # Cap BLAS/OpenMP workers: after PyTorch/CUDA init, threaded norms on
+        # orbit distance buffers can deadlock or thrash.
+        with threadpool_limits(limits=1):
+            sorted_sites = sorted(sites, key=self._site_sort_key)
+            frac_ops = self._frac_ops_from_dataset()
+            n = len(sorted_sites)
+            cart_pts = [self._site_3d_cart(s) for s in sorted_sites]
+            site_types = [str(s.site_type) for s in sorted_sites]
 
-        frac_pts = self._cart_to_frac(np.asarray(cart_pts, dtype=float))
-        type_index = {name: k for k, name in enumerate(dict.fromkeys(site_types))}
-        type_codes = np.array([type_index[s] for s in site_types], dtype=int)
-        tol = self.symmetry_tolerance
-        merge_pairs: list[tuple[int, int]] = []
-        # Block-diagonal by site_type: each type pays n_t×n_t, not full n×n.
-        for type_code in range(len(type_index)):
-            idx = np.nonzero(type_codes == type_code)[0]
-            if len(idx) < 2:
-                continue
-            sub_frac = frac_pts[idx]
-            for R, t in frac_ops:
-                dist = self._pairwise_symop_distances(sub_frac, R, t, bool(planar))
-                np.fill_diagonal(dist, np.inf)
-                for li, lj in np.argwhere(dist < tol):
-                    i = int(idx[int(li)])
-                    j = int(idx[int(lj)])
-                    merge_pairs.append((i, j))
+            frac_pts = self._cart_to_frac(np.asarray(cart_pts, dtype=float))
+            type_index = {name: k for k, name in enumerate(dict.fromkeys(site_types))}
+            type_codes = np.array([type_index[s] for s in site_types], dtype=int)
+            merge_pairs: list[tuple[int, int]] = []
+            # Block-diagonal by site_type; chunked MIC pairs avoid a full n×n×3.
+            for type_code in range(len(type_index)):
+                idx = np.nonzero(type_codes == type_code)[0]
+                if len(idx) < 2:
+                    continue
+                sub_frac = frac_pts[idx]
+                for R, t in frac_ops:
+                    for li, lj in self._symop_match_pairs(sub_frac, R, t, bool(planar)):
+                        merge_pairs.append((int(idx[int(li)]), int(idx[int(lj)])))
 
-        components = union_find_cluster(n, merge_pairs)
-        orbits = [sorted(comp) for comp in sorted(components, key=min)]
-        self._verify_site_orbits(frac_pts, frac_ops, planar, orbits)
-        return self._build_orbit_output(sorted_sites, orbits)
+            components = union_find_cluster(n, merge_pairs)
+            orbits = [sorted(comp) for comp in sorted(components, key=min)]
+            self._verify_site_orbits(frac_pts, frac_ops, planar, orbits)
+            return self._build_orbit_output(sorted_sites, orbits)
 
-    def _pairwise_symop_distances(
+    def _symop_match_pairs(
         self,
         frac_pts: np.ndarray,
         R: np.ndarray,
         t: np.ndarray,
         planar: bool,
-    ) -> np.ndarray:
-        """``dist[i, j]`` = distance from ``op(site_i)`` to ``site_j``.
+    ) -> list[tuple[int, int]]:
+        """Local ``(i, j)`` pairs where ``op(site_i)`` lands on ``site_j`` within tol.
 
-        Vectorised equivalent of looping ``_site_distance_under_symop`` over all
-        ``(i, j)``. Only one ``n×n×3`` buffer is materialised per operation; the
-        full ``m×n×n×3`` stack is never built (~484 MB at a 6×6 slab).
+        Row-chunked so peak RAM stays near :data:`_SYMMETRY_PAIR_CHUNK_BYTES`.
         """
+        n = int(len(frac_pts))
+        if n < 2:
+            return []
+        tol = self.symmetry_tolerance
+        per_col = n * 3 * 8
+        chunk = max(1, min(n, _SYMMETRY_PAIR_CHUNK_BYTES // max(per_col, 1)))
         transformed = self._wrap_frac(frac_pts @ R.T + t)
-        delta = transformed[:, None, :] - frac_pts[None, :, :]
-        # ``delta`` is a freshly allocated n×n×3 temporary, so fold it in place:
-        # the copying form would transiently double this buffer (~40 MB at a 6×6 slab).
-        delta = minimum_image_fractional_delta(delta, self._symmetry_pbc(), copy=False)
-        sep = frac_to_cart(delta, self._lattice)
-        if planar:
-            n_hat = self._slab_normal()
-            sep = sep - (sep @ n_hat)[..., None] * n_hat
-        return np.linalg.norm(sep, axis=-1)
+        pairs: list[tuple[int, int]] = []
+        pbc = self._symmetry_pbc()
+        n_hat = self._slab_normal() if planar else None
+        for i0 in range(0, n, chunk):
+            i1 = min(n, i0 + chunk)
+            delta = transformed[i0:i1, None, :] - frac_pts[None, :, :]
+            delta = minimum_image_fractional_delta(delta, pbc, copy=False)
+            sep = frac_to_cart(delta, self._lattice)
+            if n_hat is not None:
+                sep = sep - (sep @ n_hat)[..., None] * n_hat
+            dist = np.sqrt(np.sum(sep * sep, axis=-1))
+            for local_row, i in enumerate(range(i0, i1)):
+                dist[local_row, i] = np.inf
+            li, lj = np.nonzero(dist < tol)
+            for a, b in zip(li.tolist(), lj.tolist(), strict=True):
+                pairs.append((i0 + int(a), int(b)))
+        return pairs
 
     def detect_symmetry_breaking(
         self,

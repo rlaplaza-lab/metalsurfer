@@ -73,7 +73,15 @@ module = ["yaml"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["fairchem.*", "torch_sim.*", "torch.*", "sklearn.*", "joblib.*"]
+module = [
+    "fairchem.*",
+    "torch_sim.*",
+    "torch.*",
+    "sklearn.*",
+    "joblib.*",
+    "threadpoolctl",
+    "threadpoolctl.*",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -89,6 +97,7 @@ module = [
     "metalsurfer.placement.site_classify",
     "metalsurfer.placement.site_np",
     "metalsurfer.placement.site_adaptive_grid",
+    "metalsurfer.placement._parallel",
     "metalsurfer.placement.site_plugins",
     "metalsurfer.placement.site_plugins.base",
     "metalsurfer.placement.site_plugins.helpers",

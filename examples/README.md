@@ -8,6 +8,7 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 | Script | Description |
 |--------|-------------|
 | `ethene_pt12_binding_energy.py` | Ethene on a Pt₁₂ nanoparticle (`material_type="nanoparticle"`) |
+| `ethene_ru55_binding_energy.py` | Ethene on an ASE Ru₅₅ icosahedron (`material_type="nanoparticle"`) |
 | `h2_pt13_binding_energy.py` | H₂ dissociative adsorption on an ASE Pt₁₃ icosahedron (UMA prep-relaxed) |
 | `co2_mof_binding_energy.py` | CO₂ in a MOF (porous; `prepare_substrate`) |
 | `ethene_ru_slab_binding_energy.py` | Ethene on Ru(0001) (`prepare_substrate`) |
