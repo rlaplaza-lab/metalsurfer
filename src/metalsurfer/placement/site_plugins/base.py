@@ -83,6 +83,8 @@ class SiteGenerationContext:
     planar_z_variance_threshold: float
     adsorbate: Atoms | None = None
     grid_spacing_scale: float | None = None
+    adaptive_grid_spacing: float | None = None
+    adaptive_grid_refine_levels: int = 0
     n_jobs: int = -2
     side_policy: Literal["all", "positive", "negative", "external"] = "positive"
 

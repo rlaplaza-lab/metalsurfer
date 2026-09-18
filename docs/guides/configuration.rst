@@ -150,10 +150,12 @@ slab/NP, Voronoi for porous). Set ``site_generator="topology"``,
 ``"voronoi"``, or ``"adaptive_grid"`` explicitly for A/B comparisons;
 incompatible ``site_generator`` / ``material_type`` pairs are rejected.
 ``adaptive_grid`` works on all three material types but is never selected by
-``auto``. Density follows optional shared adsorbate ``grid_spacing_scale``,
-floored against framework median nearest-neighbour spacing (there is no hard
-site-count cap). ``side_policy`` (default ``"positive"``) selects which slab
-face / exposure half-space adaptive-grid keeps.
+``auto``. Density is an exposed coarse Cartesian shell increment
+(``adaptive_grid_spacing``, default ``0.70`` Å) plus optional refine halvings
+(``adaptive_grid_refine_levels``, default ``0``). NMS merge radius tracks that
+spacing and floors against framework median nearest-neighbour distance (no
+hard site-count cap). ``side_policy`` (default ``"positive"``) selects which
+slab face / exposure half-space adaptive-grid keeps.
 
 Site uniqueness and sampling
 ----------------------------
@@ -166,8 +168,12 @@ After candidates are classified into ``Site`` records, uniqueness is shared:
   same pocket merge. Used by molecular placement, dissociative hollow pairs,
   and adatom hollow selection.
 - ``symmetry_tolerance`` (default 0.1 Å) — optional spglib orbit reduction on
-  the **clustered** catalog for molecular sampling only (skipped when substrate
-  symmetry is broken). Dissociative / adatoms keep the full clustered lattice.
+  the **clustered** catalog for molecular sampling on a **clean** substrate
+  with a single placement per step. Expansion back to the full clustered
+  lattice happens when substrate symmetry is broken, when an adsorbate suffix
+  is present, or when ``saturation_molecules_per_step`` > 1. Occupied
+  vertices are then dropped by occupancy (``min_adsorbate_separation``).
+  Dissociative / adatoms keep the full clustered lattice.
 - ``hollow_site_dedup_tolerance`` — retained for config / ML-schema
   compatibility; not applied as a separate hollow merge.
 

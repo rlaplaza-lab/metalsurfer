@@ -2,10 +2,12 @@
 
 Occupancy compares **site vertices** (Voronoi / topology ``Site.xyz``) to
 **existing adsorbate atom positions**.  A site is kept when its vertex is at
-least ``min_separation`` from every existing adsorbate atom (MIC).  An optional
-incoming in-plane molecular **footprint** disk is used only to *rank* surviving
-sites (larger lateral clearance first), never as a second reject mask — fill
-and clash recovery handle residual packing.
+least ``min_separation`` from every existing adsorbate atom (MIC).  Under
+coverage the sampling catalog is the full clustered lattice (orbit reduction
+is dropped first); this module only excludes occupied vertices.  An optional
+incoming in-plane molecular **footprint** disk is used only to *rank*
+surviving sites (larger lateral clearance first), never as a second reject
+mask — fill and clash recovery handle residual packing.
 """
 
 from __future__ import annotations

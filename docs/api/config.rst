@@ -211,6 +211,21 @@ Site detection
    ``"negative"`` the opposite face; ``"all"`` both faces; ``"external"`` keeps
    outward-pointing sites on non-slab shapes (and both faces on slabs).
 
+``adaptive_grid_spacing``
+   **Type:** ``float`` · **Default:** ``0.70`` (Å)
+
+   Absolute Cartesian shell increment for ``site_generator="adaptive_grid"``.
+   Coarse default keeps catalog sizes near topology / Voronoi; lower for denser
+   A/B sampling. Merge radius tracks this spacing and floors on framework
+   median nearest-neighbour distance.
+
+``adaptive_grid_refine_levels``
+   **Type:** ``int`` · **Default:** ``0``
+
+   Number of basin-preserving refine halvings after the coarse shell
+   (``0`` = coarse grid only). Larger values densify locally around surviving
+   basins without a hard site-count cap.
+
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)
 

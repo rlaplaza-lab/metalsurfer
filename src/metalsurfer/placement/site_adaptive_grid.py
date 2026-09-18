@@ -4,9 +4,10 @@ One PBC-aware pipeline for every material: shells around all atoms, atom-aware
 clearance, support-environment identity, exposure/side policy, basin-preserving
 refinement, and environment-aware basin clustering — not free-volume centres.
 
-Spacing may be driven by a shared ``grid_spacing_scale`` (resolution only).
-Site identity comes from support atoms, local normals, and clearance basins;
-adsorbate size must not redefine the substrate surface.
+Spacing is the exposed absolute ``adaptive_grid_spacing`` (Å) with optional
+refine halvings; a framework-NN floor on the NMS merge radius keeps metal
+catalogs from exploding. Site identity comes from support atoms, local normals,
+and clearance basins — adsorbate size must not redefine the substrate surface.
 
 Classify / cluster / symmetry / placement use the shared enumerator path —
 this module returns candidate vertices plus support indices / clearances /
@@ -30,6 +31,8 @@ from ._constants import (
     _ADAPTIVE_GRID_BASIN_MIN_JACCARD,
     _ADAPTIVE_GRID_BASIN_MIN_NORMAL_COSINE,
     _ADAPTIVE_GRID_BIN_PRETHIN,
+    _ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS,
+    _ADAPTIVE_GRID_DEFAULT_SPACING,
     _ADAPTIVE_GRID_EXPOSURE_N_STEPS,
     _ADAPTIVE_GRID_EXPOSURE_STEP,
     _ADAPTIVE_GRID_EXTENT_EPS,
@@ -66,7 +69,6 @@ from .geometry import (
 )
 from .occupancy import incoming_inplane_radius
 from .site_coords import (
-    _build_periodic_images,
     _cart_to_frac,
     _deduplicate_points,
     _mean_covalent_radius,
@@ -123,46 +125,24 @@ class AdaptiveGridResult:
     support_distances: list[tuple[float, ...]]
 
 
-def _accessibility_tree(
-    positions: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-    max_distance: float,
-) -> KDTree:
-    """KDTree over periodic images for candidate-to-framework distance gating."""
-    if not np.any(pbc) or not cell_has_volume(cell):
-        return KDTree(positions)
-    margin = float(max_distance) + _VORONOI_DEDUP_TOLERANCE
-    return KDTree(_build_periodic_images(positions, cell, pbc, margin=margin))
-
-
 def _framework_median_nn(
     positions: np.ndarray, cell: np.ndarray, pbc: np.ndarray
 ) -> float:
     """MIC median nearest-neighbour spacing of framework atoms."""
+    # Deferred: site_plugins.__init__ imports AdaptiveGridGenerator → this module.
+    from .site_plugins.helpers import median_nn_or_fallback
+
     pts = np.asarray(positions, dtype=float)
     if len(pts) < 2:
         return 0.0
-    pbc_arr = np.asarray(pbc, dtype=bool)
-    cell_arr = np.asarray(cell, dtype=float)
-    if cell_has_volume(cell_arr) and np.any(pbc_arr):
-        margin = float(np.max(np.linalg.norm(cell_arr[pbc_arr], axis=1)))
-        offsets = _periodic_image_offsets(cell_arr, pbc_arr, margin)
-        ext = np.vstack([pts + off for off in offsets])
-        tree = KDTree(ext)
-        k = min(len(ext), len(offsets) + 1)
-        dists, idxs = tree.query(pts, k=k)
-        dists = np.atleast_2d(np.asarray(dists, dtype=float))
-        idxs = np.atleast_2d(np.asarray(idxs))
-        n = len(pts)
-        valid = (idxs % n) != np.arange(n)[:, None]
-        nn = np.where(valid, dists, np.inf).min(axis=1)
-        finite = nn[np.isfinite(nn)]
-        if len(finite) > 0:
-            return float(np.median(finite))
-    tree = KDTree(pts)
-    nn_d, _ = tree.query(pts, k=2)
-    return float(np.median(np.asarray(nn_d, dtype=float)[:, 1]))
+    return float(
+        median_nn_or_fallback(
+            np.empty(0, dtype=float),
+            reference_positions=pts,
+            cell=cell,
+            pbc=pbc,
+        )
+    )
 
 
 def _framework_radii_from_symbols(symbols: Sequence[str]) -> np.ndarray:
@@ -247,37 +227,53 @@ def adaptive_grid_spacing(
 ) -> AdaptiveGridSpacing:
     """Return coarse/fine spacing and refine depth for the adaptive grid.
 
-    Characteristic length is ``max(adsorbate_or_probe_L, c * framework_median_nn)``
-    when a framework NN is available, so tiny adsorbates cannot request a denser
-    shell than the surface lattice resolves. Identity of basins is independent
-    of this scale.
+    Prefer *initial_spacing* (absolute shell increment in Å) when set — this is
+    the production path via ``AdsorptionConfig.adaptive_grid_spacing``. When
+    omitted, fall back to a coarse default (``_ADAPTIVE_GRID_DEFAULT_SPACING``)
+    or the legacy adsorbate/probe scale path when *grid_spacing_scale* /
+    *adsorbate* is provided.
+
+    Basin identity is independent of this resolution.
     """
-    if grid_spacing_scale is not None:
-        L = float(grid_spacing_scale)
-    else:
-        L = adaptive_grid_characteristic_length(probe_radius, adsorbate)
-    if not np.isfinite(L) or L <= 0.0:
-        raise ValueError(
-            f"adaptive_grid characteristic length must be finite and > 0, got {L!r}"
-        )
     nn = float(framework_median_nn) if framework_median_nn is not None else 0.0
-    if np.isfinite(nn) and nn > 0.0:
-        L = max(L, _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE * nn)
-    h0 = (
-        float(initial_spacing)
-        if initial_spacing is not None
-        else float(
+    levels = (
+        max(0, int(max_levels))
+        if max_levels is not None
+        else int(_ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS)
+    )
+
+    if initial_spacing is not None:
+        h0 = float(initial_spacing)
+        if not np.isfinite(h0) or h0 <= 0.0:
+            raise ValueError(
+                f"adaptive_grid initial_spacing must be finite and > 0, got {h0!r}"
+            )
+        L = h0
+    elif grid_spacing_scale is not None or adsorbate is not None:
+        if grid_spacing_scale is not None:
+            L = float(grid_spacing_scale)
+        else:
+            L = adaptive_grid_characteristic_length(probe_radius, adsorbate)
+        if not np.isfinite(L) or L <= 0.0:
+            raise ValueError(
+                f"adaptive_grid characteristic length must be finite and > 0, got {L!r}"
+            )
+        if np.isfinite(nn) and nn > 0.0:
+            L = max(L, _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE * nn)
+        h0 = float(
             np.clip(
                 _ADAPTIVE_GRID_SPACING_SCALE * L,
                 _ADAPTIVE_GRID_H_MIN,
                 _ADAPTIVE_GRID_H_MAX,
             )
         )
-    )
+        if max_levels is None:
+            levels = int(_ADAPTIVE_GRID_MAX_LEVELS)
+    else:
+        h0 = float(_ADAPTIVE_GRID_DEFAULT_SPACING)
+        L = h0
+
     h_target = max(_ADAPTIVE_GRID_FINE_SCALE * L, _ADAPTIVE_GRID_H_MIN * 0.5)
-    levels = max(
-        0, int(max_levels) if max_levels is not None else _ADAPTIVE_GRID_MAX_LEVELS
-    )
     h_fine = h0
     for _ in range(levels):
         if h_fine <= h_target:
@@ -568,6 +564,19 @@ def _clearance_at(
     return float(c[0])
 
 
+def _batch_clearances(
+    points: np.ndarray,
+    tree: KDTree,
+    framework_radii: np.ndarray,
+    n_atoms: int,
+) -> np.ndarray:
+    """Atom-aware clearances for a batch of points (shape ``(N,)``)."""
+    if len(points) == 0:
+        return np.empty(0, dtype=float)
+    _, clearances, _ = _clearance_query(points, tree, framework_radii, n_atoms)
+    return clearances
+
+
 def _tangential_stationarity(
     vertex: np.ndarray,
     normal: np.ndarray,
@@ -588,6 +597,35 @@ def _tangential_stationarity(
         )
         gradients.append((plus - minus) / (2.0 * float(step)))
     return float(np.linalg.norm(gradients))
+
+
+def _batch_tangential_stationarity(
+    vertices: np.ndarray,
+    normals: np.ndarray,
+    tree: KDTree,
+    framework_radii: np.ndarray,
+    n_atoms: int,
+    step: float = _ADAPTIVE_GRID_STATIONARITY_STEP,
+) -> np.ndarray:
+    """Batched finite-difference ||grad_parallel clearance|| for each vertex."""
+    n = len(vertices)
+    if n == 0:
+        return np.empty(0, dtype=float)
+    # Two tangent directions × ±step → 4 sample points per vertex.
+    samples = np.empty((n, 4, 3), dtype=float)
+    for i in range(n):
+        basis = tangent_basis_from_normal(normals[i])
+        samples[i, 0] = vertices[i] + float(step) * basis[0]
+        samples[i, 1] = vertices[i] - float(step) * basis[0]
+        samples[i, 2] = vertices[i] + float(step) * basis[1]
+        samples[i, 3] = vertices[i] - float(step) * basis[1]
+    clear = _batch_clearances(
+        samples.reshape(-1, 3), tree, framework_radii, n_atoms
+    ).reshape(n, 4)
+    inv_2h = 1.0 / (2.0 * float(step))
+    g0 = (clear[:, 0] - clear[:, 1]) * inv_2h
+    g1 = (clear[:, 2] - clear[:, 3]) * inv_2h
+    return np.sqrt(g0 * g0 + g1 * g1)
 
 
 def _support_balance(support_distances: np.ndarray) -> float:
@@ -648,18 +686,48 @@ def _ray_exposed(
     tolerance: float = 1e-8,
 ) -> bool:
     """Return True if clearance is non-decreasing along a short ray on *normal*."""
-    previous = _clearance_at(vertex, tree, framework_radii, n_atoms)
-    for k in range(1, int(n_steps) + 1):
-        current = _clearance_at(
-            vertex + float(k) * float(step) * normal,
-            tree,
-            framework_radii,
-            n_atoms,
-        )
-        if current < previous - tolerance:
-            return False
-        previous = current
-    return True
+    mask = _ray_exposure_mask(
+        np.asarray(vertex, dtype=float).reshape(1, 3),
+        np.asarray(normal, dtype=float).reshape(1, 3),
+        tree,
+        framework_radii,
+        n_atoms,
+        step=step,
+        n_steps=n_steps,
+        tolerance=tolerance,
+    )
+    return bool(mask[0])
+
+
+def _ray_exposure_mask(
+    vertices: np.ndarray,
+    normals: np.ndarray,
+    tree: KDTree,
+    framework_radii: np.ndarray,
+    n_atoms: int,
+    *,
+    step: float = _ADAPTIVE_GRID_EXPOSURE_STEP,
+    n_steps: int = _ADAPTIVE_GRID_EXPOSURE_N_STEPS,
+    tolerance: float = 1e-8,
+) -> np.ndarray:
+    """Vectorized ray exposure: clearance non-decreasing along each local normal."""
+    n = len(vertices)
+    if n == 0:
+        return np.ones(0, dtype=bool)
+    n_steps_i = int(n_steps)
+    steps = np.arange(0, n_steps_i + 1, dtype=float)
+    # (n, n_steps+1, 3): vertex + k * step * normal
+    pts = (
+        np.asarray(vertices, dtype=float)[:, None, :]
+        + steps[None, :, None]
+        * float(step)
+        * np.asarray(normals, dtype=float)[:, None, :]
+    )
+    clear = _batch_clearances(
+        pts.reshape(-1, 3), tree, framework_radii, n_atoms
+    ).reshape(n, n_steps_i + 1)
+    diffs = clear[:, 1:] - clear[:, :-1]
+    return np.all(diffs >= -float(tolerance), axis=1)
 
 
 def _side_policy_mask(
@@ -714,18 +782,12 @@ def _exposure_mask(
     n = len(vertices)
     if n == 0:
         return np.ones(0, dtype=bool)
-    keep = np.array(
-        [
-            _ray_exposed(
-                vertices[i],
-                normals[i],
-                tree,
-                framework_radii,
-                n_atoms,
-            )
-            for i in range(n)
-        ],
-        dtype=bool,
+    keep = _ray_exposure_mask(
+        vertices,
+        normals,
+        tree,
+        framework_radii,
+        n_atoms,
     )
     keep &= _side_policy_mask(
         normals,
@@ -1041,21 +1103,25 @@ def _annotate_candidates(
     supports, shifts, dists, _ = _support_environment(
         vertices, positions, framework_radii, tree, cell, pbc
     )
-    out: list[CandidateSite] = []
+    normals = np.empty((len(vertices), 3), dtype=float)
     for i, vert in enumerate(vertices):
         supp_pos = _support_positions_for_candidate(
             supports[i], shifts[i], positions, cell
         )
-        normal = _local_surface_normal(vert, supp_pos, dists[i])
-        score = _candidate_score(
-            float(clearances[i]),
-            normal,
-            vert,
-            dists[i],
-            target_clearance=target_clearance,
-            tree=tree,
-            framework_radii=framework_radii,
-            n_atoms=n_atoms,
+        normals[i] = _local_surface_normal(vert, supp_pos, dists[i])
+    grads = _batch_tangential_stationarity(
+        vertices, normals, tree, framework_radii, n_atoms
+    )
+    w_c = float(_ADAPTIVE_GRID_SCORE_W_CLEARANCE)
+    w_g = float(_ADAPTIVE_GRID_SCORE_W_GRADIENT)
+    w_b = float(_ADAPTIVE_GRID_SCORE_W_BALANCE)
+    out: list[CandidateSite] = []
+    for i, vert in enumerate(vertices):
+        balance = _support_balance(dists[i])
+        score = (
+            -w_c * abs(float(clearances[i]) - float(target_clearance))
+            - w_g * float(grads[i])
+            + w_b * balance
         )
         out.append(
             CandidateSite(
@@ -1064,11 +1130,73 @@ def _annotate_candidates(
                 support_indices=supports[i],
                 support_image_shifts=shifts[i],
                 support_distances=tuple(float(d) for d in dists[i]),
-                normal=normal,
+                normal=normals[i].copy(),
                 score=float(score),
             )
         )
     return out
+
+
+def _thin_point_cloud(
+    vertices: np.ndarray,
+    scores: np.ndarray,
+    *,
+    merge_radius: float,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Bin-prethin (if large) then one NMS pass at *merge_radius* (grid resolution)."""
+    if len(vertices) <= 1:
+        return vertices, scores
+    verts = np.asarray(vertices, dtype=float)
+    sc = np.asarray(scores, dtype=float)
+    if len(verts) > _ADAPTIVE_GRID_BIN_PRETHIN:
+        verts, sc = _bin_prethin(
+            verts,
+            sc,
+            bin_size=merge_radius,
+            cell=cell,
+            pbc=pbc,
+        )
+    kept, _ = _nms(
+        verts,
+        np.zeros(len(verts), dtype=float),
+        sc,
+        merge_r=merge_radius,
+        cell=cell,
+        pbc=pbc,
+    )
+    if len(kept) == len(verts):
+        return verts, sc
+    tree_v = KDTree(verts)
+    idx = np.asarray([int(tree_v.query(pt, k=1)[1]) for pt in kept], dtype=int)
+    return kept, sc[idx]
+
+
+def _thin_candidates(
+    candidates: list[CandidateSite],
+    *,
+    merge_radius: float,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+) -> list[CandidateSite]:
+    """NMS at *merge_radius* so refine unions stay at grid resolution."""
+    if len(candidates) <= 1:
+        return list(candidates)
+    verts = np.asarray([c.position for c in candidates], dtype=float)
+    scores = np.asarray([c.score for c in candidates], dtype=float)
+    kept_verts, _ = _thin_point_cloud(
+        verts,
+        scores,
+        merge_radius=merge_radius,
+        cell=cell,
+        pbc=pbc,
+    )
+    if len(kept_verts) == len(candidates):
+        return candidates
+    tree_v = KDTree(verts)
+    kept_idx = sorted({int(tree_v.query(pt, k=1)[1]) for pt in kept_verts})
+    return [candidates[i] for i in kept_idx]
 
 
 def _candidates_to_arrays(
@@ -1273,7 +1401,10 @@ def generate_adaptive_grid_sites(
         max_levels=max_levels,
         framework_median_nn=median_nn,
     )
-    tree = _accessibility_tree(
+    # Deferred: site_plugins.__init__ imports AdaptiveGridGenerator → this module.
+    from .site_plugins.helpers import periodic_accessibility_tree
+
+    tree = periodic_accessibility_tree(
         positions, cell, pbc, float(max_site_distance) + float(np.max(framework_radii))
     )
     empty = AdaptiveGridResult(
@@ -1317,6 +1448,15 @@ def generate_adaptive_grid_sites(
     )
     if len(vertices) == 0:
         return empty
+
+    # Resolution-matched NMS (merge_radius from the exposed spacing knob).
+    vertices, clearances = _thin_point_cloud(
+        vertices,
+        clearances,
+        merge_radius=spacing.merge_radius,
+        cell=cell,
+        pbc=pbc,
+    )
 
     target_c = _shell_target_clearance(min_clearance, max_clearance, median_nn)
     candidates = _annotate_candidates(
@@ -1465,6 +1605,12 @@ def generate_adaptive_grid_sites(
             pbc=pbc,
             target_clearance=target_c,
         )
+        all_candidates = _thin_candidates(
+            all_candidates,
+            merge_radius=spacing.merge_radius,
+            cell=cell,
+            pbc=pbc,
+        )
 
         new_frontier: list[CandidateSite] = []
         for c in child_cands:
@@ -1479,20 +1625,12 @@ def generate_adaptive_grid_sites(
     if not all_candidates:
         return empty
 
-    if len(all_candidates) > _ADAPTIVE_GRID_BIN_PRETHIN:
-        v, _ = _bin_prethin(
-            np.asarray([c.position for c in all_candidates], dtype=float),
-            np.asarray([c.score for c in all_candidates], dtype=float),
-            bin_size=spacing.merge_radius,
-            cell=cell,
-            pbc=pbc,
-        )
-        tree_v = KDTree(np.asarray([c.position for c in all_candidates], dtype=float))
-        kept_idx = []
-        for pt in v:
-            j = int(tree_v.query(pt, k=1)[1])
-            kept_idx.append(j)
-        all_candidates = [all_candidates[i] for i in sorted(set(kept_idx))]
+    all_candidates = _thin_candidates(
+        all_candidates,
+        merge_radius=spacing.merge_radius,
+        cell=cell,
+        pbc=pbc,
+    )
 
     clustered = _cluster_basins(
         all_candidates,

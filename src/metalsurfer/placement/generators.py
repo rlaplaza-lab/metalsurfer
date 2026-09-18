@@ -46,7 +46,6 @@ from .pose import (
     _PoseBatchCache,
     build_pose_batch_cache,
 )
-from .site_adaptive_grid import min_adsorbate_grid_scale
 from .site_context import (
     SiteContext,
     site_context_for_sampling,
@@ -161,7 +160,12 @@ def _topology_first_site_indices(
     *,
     clearances: np.ndarray | None = None,
 ) -> list[int]:
-    """Order *indices*: topology first, then clearance."""
+    """Order *indices*: topology / atop-injected sources first, then clearance.
+
+    Homogeneous catalogs (e.g. pure ``adaptive_grid``) ignore the source key
+    and sort only by footprint clearance. This is sampling policy, not a
+    uniqueness pass.
+    """
 
     def _rank(i: int) -> tuple[int, float, int]:
         site = sites[i]
@@ -192,14 +196,7 @@ def _spec_grid_info(
         and config.material_type in ("slab", "nanoparticle")
         and _is_dissociable_diatomic(conformers[0])
     )
-    grid_scale = None
-    if str(config.site_generator) == "adaptive_grid" and conformers:
-        grid_scale = min_adsorbate_grid_scale(
-            config.voronoi_probe_radius, [conformers[0]]
-        )
-    _ctx = site_context_for_sampling(
-        slab, config, site_context, grid_spacing_scale=grid_scale
-    )
+    _ctx = site_context_for_sampling(slab, config, site_context, full_slab=full_slab)
     unique_sites = _ctx.sites
     use_sites = _ctx.use_sites
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
@@ -261,7 +258,8 @@ def _spec_grid_info(
                 # Free-volume pores dominate adsorption in frameworks; wall sites
                 # (atop/bridge/hollow) are usually clash-prone under VDW gates.
                 # adaptive_grid near-atom shells are rarely typed ``pore``, so this
-                # is a no-op when the catalog has no pore sites.
+                # is intentionally a no-op for that material-agnostic catalog
+                # (wall-near starts are valid; desorption into the void is ok).
                 pore_indices = [
                     i for i in site_indices if str(unique_sites[i].site_type) == "pore"
                 ]
@@ -650,6 +648,7 @@ def generate_placement_from_spec_with_reason(
         slab_for_sites if slab_for_sites is not None else slab,
         config,
         site_context,
+        full_slab=slab,
     )
 
     adsorbate = conformers[spec.conformer_index].copy()

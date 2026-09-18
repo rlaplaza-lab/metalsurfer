@@ -7,11 +7,19 @@ from ase import Atoms
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.ml.features import extract_features
 from metalsurfer.ml.schema import PlacementRecord
-from metalsurfer.placement.generators import _spec_grid_info
+from metalsurfer.placement.generators import (
+    _spec_grid_info,
+    enumerate_placement_specs,
+    estimate_placement_spec_capacity,
+    generate_placement_from_spec,
+    generate_placements_from_specs,
+)
 from metalsurfer.placement.site_context import (
     _SITE_CONTEXT_CACHE,
     _get_unique_sites_for_specs,
     resolve_site_context_for_sampling,
+    site_context_for_occupied_surface,
+    skip_symmetry_for_sampling,
 )
 from metalsurfer.placement.site_enumeration import get_hollow_sites_for_adatoms
 from metalsurfer.workflow import shared as workflow_shared
@@ -310,3 +318,184 @@ def test_symmetry_aware_context_preserves_clustered_sites():
     assert ctx.clustered_sites is not None
     assert ctx.source == "symmetry_aware"
     assert len(ctx.clustered_sites) > len(ctx.sites)
+
+
+def test_skip_symmetry_for_sampling_when_adsorbate_suffix_present():
+    slab = make_slab(nx=2, ny=2)
+    covered = slab.copy() + Atoms("H", positions=[[1.0, 1.0, 8.0]])
+    assert (
+        skip_symmetry_for_sampling(
+            symmetry_broken=False, slab_for_sites=slab, full_slab=slab
+        )
+        is False
+    )
+    assert (
+        skip_symmetry_for_sampling(
+            symmetry_broken=False, slab_for_sites=slab, full_slab=covered
+        )
+        is True
+    )
+    assert (
+        skip_symmetry_for_sampling(
+            symmetry_broken=True, slab_for_sites=slab, full_slab=slab
+        )
+        is True
+    )
+
+
+def test_occupied_surface_samples_full_lattice_and_drops_occupied_sites():
+    """After adsorption, sample every clustered site except occupied vertices."""
+    slab = make_slab(nx=2, ny=2)
+    config = AdsorptionConfig(material_type="slab", seed=0)
+    reduced = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    assert reduced.clustered_sites is not None
+    assert reduced.source == "symmetry_aware"
+    assert len(reduced.clustered_sites) > len(reduced.sites)
+
+    occupied = reduced.clustered_sites[0]
+    ads = Atoms("H", positions=[occupied.xyz + np.array([0.0, 0.0, 0.2])])
+    full = slab.copy() + ads
+
+    expanded = site_context_for_occupied_surface(reduced)
+    assert expanded.source == "clustered_under_coverage"
+    assert [_site_xyz_type_key(s) for s in expanded.sites] == [
+        _site_xyz_type_key(s) for s in reduced.clustered_sites
+    ]
+    assert site_context_for_occupied_surface(expanded) is expanded
+
+    info = _spec_grid_info(
+        [make_water()], slab, config, "O", site_context=reduced, full_slab=full
+    )
+    assert [_site_xyz_type_key(s) for s in info.unique_sites] == [
+        _site_xyz_type_key(s) for s in reduced.clustered_sites
+    ]
+    kept_keys = {_site_xyz_type_key(info.unique_sites[i]) for i in info.site_indices}
+    occupied_key = _site_xyz_type_key(occupied)
+    assert occupied_key not in kept_keys
+    reduced_keys = {_site_xyz_type_key(s) for s in reduced.sites}
+    assert kept_keys - reduced_keys, (
+        "coverage sampling must include unoccupied orbit copies "
+        "that symmetry reduction dropped"
+    )
+
+    specs = enumerate_placement_specs(
+        [make_water()],
+        slab,
+        config,
+        "O",
+        n_desired=32,
+        site_context=reduced,
+        full_slab=full,
+    )
+    assert specs
+    wide = [s for s in specs if s.site_index >= len(reduced.sites)]
+    assert wide, "enumerated specs must index into the clustered lattice"
+    placed = generate_placement_from_spec(
+        wide[0],
+        [make_water()],
+        full,
+        config,
+        "O",
+        site_context=reduced,
+        slab_for_sites=slab,
+    )
+    assert placed is not None
+
+
+def test_n_tuplet_config_samples_full_lattice_on_clean_slab():
+    """Co-adsorption needs distinct orbit copies before anything is adsorbed."""
+    slab = make_slab(nx=2, ny=2)
+    reduced = resolve_site_context_for_sampling(
+        slab, AdsorptionConfig(material_type="slab"), symmetry_broken=False
+    )
+    assert reduced.clustered_sites is not None
+    assert len(reduced.clustered_sites) > len(reduced.sites)
+    tuplet_cfg = AdsorptionConfig(
+        material_type="slab", seed=0, saturation_molecules_per_step=2
+    )
+    assert (
+        skip_symmetry_for_sampling(
+            symmetry_broken=False,
+            slab_for_sites=slab,
+            full_slab=slab,
+            config=tuplet_cfg,
+        )
+        is True
+    )
+    info = _spec_grid_info([make_water()], slab, tuplet_cfg, "O", site_context=reduced)
+    assert [_site_xyz_type_key(s) for s in info.unique_sites] == [
+        _site_xyz_type_key(s) for s in reduced.clustered_sites
+    ]
+    type_counts: dict[str, int] = {}
+    for i in info.site_indices:
+        key = str(info.unique_sites[i].site_type)
+        type_counts[key] = type_counts.get(key, 0) + 1
+    assert max(type_counts.values()) > 1
+
+
+def test_multi_molecule_coverage_shares_pruned_clustered_catalog():
+    """Competing adsorbates see the same expanded lattice minus occupied vertices."""
+    slab = make_slab(nx=2, ny=2)
+    config = AdsorptionConfig(material_type="slab", seed=0)
+    reduced = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    assert reduced.clustered_sites is not None
+    occupied = reduced.clustered_sites[0]
+    full = slab.copy() + Atoms(
+        "H", positions=[occupied.xyz + np.array([0.0, 0.0, 0.2])]
+    )
+    water = make_water()
+    oh = Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.96, 0.0, 0.0]])
+    occupied_key = _site_xyz_type_key(occupied)
+    kept = []
+    for mol in (water, oh):
+        info = _spec_grid_info(
+            [mol], slab, config, None, site_context=reduced, full_slab=full
+        )
+        assert [_site_xyz_type_key(s) for s in info.unique_sites] == [
+            _site_xyz_type_key(s) for s in reduced.clustered_sites
+        ]
+        keys = {_site_xyz_type_key(info.unique_sites[i]) for i in info.site_indices}
+        assert occupied_key not in keys
+        kept.append(keys)
+    assert kept[0] == kept[1]
+
+
+def test_bo_pool_capacity_matches_clustered_catalog_under_coverage():
+    """BO enumerate/materialize must use the expanded catalog, not orbit reps."""
+    slab = make_slab(nx=2, ny=2)
+    config = AdsorptionConfig(material_type="slab", seed=0)
+    reduced = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    clustered = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
+    assert reduced.clustered_sites is not None
+    occupied = reduced.clustered_sites[0]
+    full = slab.copy() + Atoms(
+        "H", positions=[occupied.xyz + np.array([0.0, 0.0, 0.2])]
+    )
+    water = [make_water()]
+    cap_from_reduced = estimate_placement_spec_capacity(
+        water, slab, config, "O", site_context=reduced, full_slab=full
+    )
+    cap_from_clustered = estimate_placement_spec_capacity(
+        water, slab, config, "O", site_context=clustered, full_slab=full
+    )
+    assert cap_from_reduced == cap_from_clustered
+    cap_clean = estimate_placement_spec_capacity(
+        water, slab, config, "O", site_context=reduced
+    )
+    assert cap_from_reduced != cap_clean
+
+    specs = enumerate_placement_specs(
+        water, slab, config, "O", n_desired=24, site_context=reduced, full_slab=full
+    )
+    assert specs
+    generated = generate_placements_from_specs(
+        specs,
+        water,
+        full,
+        config,
+        smiles="O",
+        site_context=reduced,
+        slab_for_sites=slab,
+    )
+    assert any(result is not None for result, _reason in generated)
+    assert any(spec.site_index >= len(reduced.sites) for spec in specs)

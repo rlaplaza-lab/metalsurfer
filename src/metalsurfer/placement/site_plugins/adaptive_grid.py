@@ -4,20 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..site_adaptive_grid import (
-    _SOURCE_HINT,
-    adaptive_grid_characteristic_length,
-    generate_adaptive_grid_sites,
-)
+from .._constants import _ADAPTIVE_GRID_DEFAULT_SPACING
+from ..site_adaptive_grid import _SOURCE_HINT, generate_adaptive_grid_sites
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
 from .helpers import median_nn_or_fallback
 
 
 class AdaptiveGridGenerator:
-    """Atom-centred adaptive grid with iterative near-atom shell refinement.
+    """Atom-centred adaptive grid with optional iterative shell refinement.
 
-    Not selected by ``auto``. Emits the same :class:`SiteCandidateBatch`
-    contract as topology / Voronoi; classify builds fingerprints and frames.
+    Not selected by ``auto``. Density is set by absolute
+    ``adaptive_grid_spacing`` (Å) and ``adaptive_grid_refine_levels`` on the
+    generation context / ``AdsorptionConfig``. Emits the same
+    :class:`SiteCandidateBatch` contract as topology / Voronoi; classify builds
+    fingerprints and frames.
     """
 
     name = "adaptive_grid"
@@ -31,11 +31,12 @@ class AdaptiveGridGenerator:
         """Enumerate adaptive-grid candidates for *ctx*."""
         del reuse
         positions, cell, pbc = ctx.positions, ctx.cell, ctx.pbc
-        scale = ctx.grid_spacing_scale
-        if scale is None and ctx.adsorbate is not None:
-            scale = adaptive_grid_characteristic_length(
-                float(ctx.probe_radius), ctx.adsorbate
-            )
+        spacing = (
+            float(ctx.adaptive_grid_spacing)
+            if ctx.adaptive_grid_spacing is not None
+            else float(_ADAPTIVE_GRID_DEFAULT_SPACING)
+        )
+        levels = int(ctx.adaptive_grid_refine_levels)
 
         result = generate_adaptive_grid_sites(
             positions,
@@ -44,7 +45,8 @@ class AdaptiveGridGenerator:
             material_type=ctx.material_type,
             probe_radius=float(ctx.probe_radius),
             max_site_distance=float(ctx.max_site_distance),
-            grid_spacing_scale=scale,
+            initial_spacing=spacing,
+            max_levels=levels,
             n_jobs=int(ctx.n_jobs),
             symbols=list(ctx.symbols),
             side_policy=ctx.side_policy,

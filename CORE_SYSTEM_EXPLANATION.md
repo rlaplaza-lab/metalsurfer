@@ -169,7 +169,10 @@ it is a pore.
 Which *points* are proposed is controlled by `site_generator` (default
 `auto`): slabs and nanoparticles use the **topology** plugin; porous
 frameworks use **Voronoi**. Explicit `topology` / `voronoi` override that
-mapping when the pair is compatible with `material_type`.
+mapping when the pair is compatible with `material_type`. Opt-in
+`adaptive_grid` uses the same classify → cluster → symmetry path on all
+materials; density is `adaptive_grid_spacing` (Å) plus
+`adaptive_grid_refine_levels` (default coarse shell only).
 
 ### 3.1 Slab
 
@@ -258,11 +261,16 @@ Regardless of material type, three things happen to the raw candidate set:
   catalog (not the raw unclustered list) while the *substrate* still matches
   the clean reference's space group and symmetry operations. Orbits are blocked
   by classified `site_type` only — again origin-blind. Adsorbates alone do not
-  latch this off: saturation strips the adsorbate suffix before the check. Once
-  the substrate geometry itself breaks that fingerprint (reconstruction, strong
-  ionic motion, analysis failure), the code falls back to the clustered
-  (non-symmetry-reduced) set so asymmetric arrangements are explored. Molecular
-  placement samples the symmetry-reduced set when available.
+  latch the saturation `symmetry_broken` flag: saturation strips the adsorbate
+  suffix before that substrate check. Once anything is adsorbed, or when
+  n-tuplet co-adsorption will place more than one molecule in the same step,
+  molecular sampling expands to the clustered (non-symmetry-reduced) lattice
+  and occupancy-prunes occupied vertices. Substrate reconstruction, strong ionic
+  motion, or analysis failure also skip orbit reduction. Multi-molecule
+  ``adaptive_grid`` saturation shares that catalog; other generators reuse the
+  per-geometry cache. BO transfer uses geometry features and occupancy COM
+  anchors, not site indices. Dissociative pairs already read the clustered
+  catalog.
 - **One-shot auto-widen.** If the very first accessibility window finds no sites
   at all, the code retries once with a wider window (tighter probe radius and a
   larger max distance, scaled by the covalent-radius-derived defaults) before

@@ -237,11 +237,12 @@ stay in the enumerator; plugins only emit raw candidate batches.
      - all
      - Atom-centred Cartesian shells around every atom with accessibility,
        exposure filtering (slab half-space only), and iterative NMS toward the
-       near-atom shell—not pore centres. Density is set by optional shared
-       adsorbate scale, floored against framework median nearest-neighbour
-       spacing (per-chunk work budget; no hard site-count cap). Downstream
-       classify / cluster / spglib / placement use the shared path. Selectable
-       via ``AdsorptionConfig`` / YAML; **not** chosen by ``auto``.
+       near-atom shell—not pore centres. Density is the exposed
+       ``adaptive_grid_spacing`` (Å, coarse default) and
+       ``adaptive_grid_refine_levels``; merge floors on framework median NN
+       (per-chunk work budget; no hard site-count cap). Downstream classify /
+       cluster / spglib / placement use the shared path. Selectable via
+       ``AdsorptionConfig`` / YAML; **not** chosen by ``auto``.
 
 Generation is **orientation-aware**: top-layer detection, Voronoi filtering,
 topology candidates, and local normals use the slab normal (``a × b``) and
@@ -271,14 +272,14 @@ Pipeline:
    ``normal``, ``site_type``, ``slab_indices``, ``env_fingerprint``,
    ``site_source``, ``material_type`` (dict adapters only at the symmetry
    boundary).
-9. Candidate-merge via periodic ``_deduplicate_points`` inside generators
-   (fixed ~0.1 Å vertex merge; when Voronoi is appended to topology, existing
-   topology points stay frozen). Catalog uniqueness is then
+9. Uniqueness is four layers: (1) plugin-internal wrap / NMS / basin
+   clustering; (2) enumerator vertex merge via periodic
+   ``_deduplicate_points`` (~0.1 Å; when Voronoi is appended to topology,
+   existing topology points stay frozen); (3) catalog
    ``_cluster_equivalent_sites`` (``site_equivalence_tolerance``, fingerprint +
-   MIC). Clustering keys on geometry + ``env_fingerprint``
-   (support symbols, distance bins, side label), **not** ``site_source`` or
-   classified ``site_type``, so topology / Voronoi / atop-injected sites in
-   the same pocket merge.
+   MIC — keys on geometry + ``env_fingerprint``, **not** ``site_source`` or
+   classified ``site_type``); (4) optional spglib orbit reduction in
+   ``get_symmetry_aware_sites`` on the clustered catalog.
 10. Final list sorted by fractional coordinates for deterministic
     ``site_index``. Topology Delaunay is shared with classification when
     available (one triangulation per slab pass).
@@ -290,19 +291,29 @@ fingerprint + Voronoi / site-generator config (+ ``symmetry_broken`` for
 resolved contexts) backs ``resolve_site_context_for_sampling``, which:
 
 1. Reuses unique-sites context when present, then applies symmetry.
-2. Uses clustered sites if symmetry is broken (typical after substrate
-   reconstruction or ionic motion under coverage; adsorbates alone do not
-   trigger this).
+2. Uses clustered sites if symmetry is broken (substrate reconstruction or
+   ionic motion). Adsorbates are stripped before that fingerprint check, so
+   they do not latch ``symmetry_broken``.
 3. Otherwise tries ``get_symmetry_aware_sites`` on the **clustered** catalog
    (orbits blocked by ``site_type`` only — origin-blind); falls back to the
    clustered unique-site set on failure/empty.
 
+Once the full slab has an adsorbate suffix, or when
+``saturation_molecules_per_step`` > 1 (n-tuplet co-adsorption), sampling
+expands to ``clustered_sites`` (``site_context_for_occupied_surface`` /
+``site_context_for_sampling``) even if the substrate space group is
+unchanged. Occupancy then drops vertices within
+``min_adsorbate_separation`` of existing adsorbate atoms.
+``adaptive_grid`` multi-molecule steps share one catalog; other generators
+reuse the per-geometry cache. BO features are geometry, not ``site_index``.
+
 ``SiteContext.sites`` is the molecular sampling catalog (clustered, then
-optionally symmetry-reduced). ``clustered_sites`` is always the geometric
-clustering result (full lattice) used by dissociative pairs and adatom hollow
+optionally symmetry-reduced on a **clean** substrate; full clustered lattice
+under coverage). ``clustered_sites`` is always the geometric clustering
+result (full lattice) used by dissociative pairs and adatom hollow
 selection. Generators / pose that omit an explicit context call
-``site_context_for_sampling``, which resolves the same symmetry-aware path as
-production screening. ``hollow_site_dedup_tolerance`` is schema-compat only;
+``site_context_for_sampling``, which resolves the same path as production
+screening. ``hollow_site_dedup_tolerance`` is schema-compat only;
 hollow uniqueness is ``site_equivalence_tolerance``.
 
 Material strategies:
@@ -361,10 +372,13 @@ same-element adatoms from being treated as substrate.
 
 Occupancy pruning
 ~~~~~~~~~~~~~~~~~
-``available_site_indices`` into the full ``SiteContext.sites`` catalog (MIC
+``available_site_indices`` into the sampling ``SiteContext.sites`` catalog (MIC
 distance from each site vertex to existing adsorbate atoms ≥
 ``min_adsorbate_separation``) without remapping indices—replay/BO keep stable
-``site_index`` values. When ``occupancy_use_footprint`` is enabled, survivors
+``site_index`` values. Under coverage that catalog is the full clustered
+lattice (orbit reduction is dropped), so unoccupied equivalent copies remain
+sampleable while occupied vertices are excluded. When
+``occupancy_use_footprint`` is enabled, survivors
 are ranked by lateral footprint clearance (incoming disk scaled by
 ``occupancy_footprint_scale``) rather than pruned by a second reject mask;
 topology-sourced sites still come first in ranking (sampling policy, not a
@@ -634,10 +648,11 @@ Stop conditions: empty commit (including n-tuplet ``no_binders``); committed
 ``saturation_max_steps``.
 
 Compare structures to **post-adatom** substrate files when adatoms were
-deposited during prep. Symmetry reduction is dropped once the *substrate
-prefix* space group / operation fingerprint differs from the clean
-reference (adsorbate atoms are stripped before that check; their presence
-alone does not latch ``symmetry_broken``).
+deposited during prep. The saturation ``symmetry_broken`` latch still follows
+the *substrate prefix* space group / operation fingerprint vs the clean
+reference (adsorbate atoms are stripped before that check). Independently,
+once an adsorbate suffix is present, molecular sampling uses the full
+clustered lattice and occupancy-prunes occupied vertices.
 
 
 Typed data model
@@ -741,9 +756,10 @@ Design heuristics
 - Rigid substrate by default during adsorption (prep ``FixAtoms``);
   ``relax_top_layer=True`` is a material-aware shortcut distinct from the
   site-enumeration top-layer mask.
-- Symmetry accelerates clean-slab site catalogs until the substrate
-  fingerprint vs the clean reference breaks (not merely because adsorbates
-  are present).
+- Symmetry accelerates clean-slab site catalogs. After the first adsorbate,
+  when n-tuplet co-adsorption will place more than one molecule, or once the
+  substrate fingerprint vs the clean reference breaks, sampling uses the
+  full clustered lattice and occupancy-prunes occupied sites.
 - GPU-first TorchSim + optional BO transfer for deep coverage.
 - Layered topology guards; prefer ``enable_dissociative_placement=True``
   with ``skip_topology_check=True`` for fragmented H₂-like adsorbates.

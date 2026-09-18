@@ -475,6 +475,16 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
         root.side_policy,
         allowed=SIDE_POLICY_OPTIONS,
     )
+    _check_positive("adaptive_grid_spacing", root.adaptive_grid_spacing)
+    if (
+        not isinstance(root.adaptive_grid_refine_levels, int)
+        or isinstance(root.adaptive_grid_refine_levels, bool)
+        or root.adaptive_grid_refine_levels < 0
+    ):
+        raise ValueError(
+            "adaptive_grid_refine_levels must be a non-negative int, "
+            f"got {root.adaptive_grid_refine_levels!r}"
+        )
     if root.site_generator != "auto":
         allowed = _SITE_GENERATOR_ALLOWED_MATERIALS[root.site_generator]
         if root.material_type not in allowed:
@@ -758,6 +768,11 @@ class AdsorptionConfig:
     site_generator: Literal["auto", "topology", "voronoi", "adaptive_grid"] = "auto"
     # Slab face / exposure policy (adaptive_grid; default top face).
     side_policy: Literal["all", "positive", "negative", "external"] = "positive"
+    # Absolute shell increment (Å) for ``adaptive_grid``. Coarse default keeps
+    # catalog sizes comparable to topology / Voronoi; lower for denser A/B.
+    adaptive_grid_spacing: float = 0.70
+    # Refine halvings after the coarse shell (0 = coarse grid only).
+    adaptive_grid_refine_levels: int = 0
     # Conformer prior for placement-spec selection.
     # ``"uniform"`` keeps the conformer-agnostic stratified draw (ignores
     # conformer energies). ``"boltzmann"`` (default) allocates spec slots per

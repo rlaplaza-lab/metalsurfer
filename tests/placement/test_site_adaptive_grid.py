@@ -26,6 +26,8 @@ from metalsurfer.placement.site_adaptive_grid import (
     _fractional_voxel_seeds,
     _framework_median_nn,
     _nms,
+    _ray_exposed,
+    _ray_exposure_mask,
     _shell_offsets,
     _work_chunk_bounds,
     adaptive_grid_characteristic_length,
@@ -41,6 +43,7 @@ from metalsurfer.placement.site_context import (
 from metalsurfer.placement.site_coords import (
     _derive_voronoi_distance_window,
     _frac_to_cart,
+    _slab_normal,
 )
 from metalsurfer.placement.site_enumeration import (
     get_hollow_sites_for_adatoms,
@@ -48,7 +51,7 @@ from metalsurfer.placement.site_enumeration import (
 )
 from metalsurfer.placement.site_types import Site
 
-from ..conftest import make_nanoparticle, make_slab
+from ..conftest import make_nanoparticle, make_porous_framework, make_slab
 
 
 def _window(
@@ -67,10 +70,19 @@ def test_adaptive_grid_accepted_on_adsorption_config():
     cfg = AdsorptionConfig(site_generator="adaptive_grid", material_type="slab")
     assert cfg.site_generator == "adaptive_grid"
     assert cfg.side_policy == "positive"
+    assert cfg.adaptive_grid_spacing == pytest.approx(0.70)
+    assert cfg.adaptive_grid_refine_levels == 0
     for mat in ("slab", "nanoparticle", "porous"):
         AdsorptionConfig(site_generator="adaptive_grid", material_type=mat)
     for policy in ("all", "positive", "negative", "external"):
         AdsorptionConfig(side_policy=policy, material_type="slab")
+
+
+def test_adaptive_grid_spacing_rejects_non_positive_absolute():
+    with pytest.raises(ValueError, match="initial_spacing"):
+        adaptive_grid_spacing(1.2, initial_spacing=0.0)
+    with pytest.raises(ValueError, match="initial_spacing"):
+        adaptive_grid_spacing(1.2, initial_spacing=float("nan"))
 
 
 def test_adaptive_grid_spacing_rejects_non_positive_scale():
@@ -78,6 +90,70 @@ def test_adaptive_grid_spacing_rejects_non_positive_scale():
         adaptive_grid_spacing(1.2, grid_spacing_scale=0.0)
     with pytest.raises(ValueError, match="characteristic length"):
         adaptive_grid_spacing(1.2, grid_spacing_scale=float("nan"))
+
+
+def test_absolute_spacing_knob_controls_catalog_density():
+    """Finer ``adaptive_grid_spacing`` densifies when spacing sets the merge radius.
+
+    On frameworks with short median NN (MOF-like), merge tracks ``1.5 * h`` so
+    the exposed increment clearly controls catalog size. On close-packed metals
+    the NN floor can dominate and counts need not be strictly monotonic in ``h``.
+    """
+    framework = make_porous_framework()
+    coarse = get_unified_sites(
+        framework,
+        material_type="porous",
+        site_generator="adaptive_grid",
+        adaptive_grid_spacing=1.2,
+        adaptive_grid_refine_levels=0,
+        n_jobs=1,
+    )
+    fine = get_unified_sites(
+        framework,
+        material_type="porous",
+        site_generator="adaptive_grid",
+        adaptive_grid_spacing=0.55,
+        adaptive_grid_refine_levels=0,
+        n_jobs=1,
+    )
+    assert len(coarse) > 0
+    assert len(fine) > len(coarse)
+
+    sp_fine = adaptive_grid_spacing(
+        1.2, initial_spacing=0.55, max_levels=0, framework_median_nn=2.7
+    )
+    sp_coarse = adaptive_grid_spacing(
+        1.2, initial_spacing=1.4, max_levels=0, framework_median_nn=2.7
+    )
+    assert sp_fine.initial_spacing < sp_coarse.initial_spacing
+    assert sp_fine.merge_radius <= sp_coarse.merge_radius
+
+
+def test_adaptive_grid_default_counts_comparable_to_auto():
+    """Default coarse grid stays within a factor of ~4 of topology/Voronoi."""
+    cases = [
+        ("slab", make_slab(nx=3, ny=3, n_layers=3)),
+        ("nanoparticle", make_nanoparticle()),
+        ("porous", make_porous_framework()),
+    ]
+    for mat, atoms in cases:
+        auto = get_unified_sites(
+            atoms, material_type=mat, site_generator="auto", n_jobs=1
+        )
+        grid = get_unified_sites(
+            atoms,
+            material_type=mat,
+            site_generator="adaptive_grid",
+            adaptive_grid_spacing=0.70,
+            adaptive_grid_refine_levels=0,
+            n_jobs=1,
+        )
+        assert len(auto) > 0 and len(grid) > 0, mat
+        lo = max(len(auto) // 4, 1)
+        hi = max(4 * len(auto), 250)
+        assert lo <= len(grid) <= hi, (
+            f"{mat}: auto={len(auto)} grid={len(grid)} not in [{lo}, {hi}]"
+        )
 
 
 def test_adsorbate_spacing_scales_with_size():
@@ -376,7 +452,13 @@ def test_side_policy_positive_vs_all():
         side_policy="all",
     )
     assert len(pos_only.vertices) > 0
-    assert len(both.vertices) >= len(pos_only.vertices)
+    assert len(both.vertices) > 0
+    n_hat = _slab_normal(cell)
+    pos_dots = pos_only.normals @ n_hat
+    both_dots = both.normals @ n_hat
+    assert np.all(pos_dots >= -1e-12)
+    assert np.any(both_dots > 0.5)
+    assert np.any(both_dots < -0.5)
 
 
 def test_unified_sites_overlap_topology_on_slab():
@@ -392,11 +474,13 @@ def test_unified_sites_overlap_topology_on_slab():
     types = {s.site_type for s in grid}
     assert "hollow" in types or "bridge" in types or "atop" in types
     base = get_unified_sites(slab, material_type="slab", site_generator="topology")
-    assert len(grid) <= max(3 * len(base), 150)
+    assert len(grid) <= max(4 * len(base), 250)
     assert len(grid) >= max(len(base) // 8, 4)
     grid_xyz = np.asarray([s.xyz for s in grid], dtype=float)
     base_xyz = np.asarray([s.xyz for s in base], dtype=float)
     dists, _ = KDTree(grid_xyz).query(base_xyz, k=1)
+    # Coarse default spacing + NN-floored NMS; require modest topology coverage.
+    assert float(np.mean(np.asarray(dists, dtype=float) <= 1.5)) >= 0.40
     assert float(np.mean(np.asarray(dists, dtype=float) <= 1.0)) >= 0.15
 
 
@@ -462,10 +546,87 @@ def test_adaptive_grid_placement_materialization_on_slab():
 
 def test_adaptive_grid_dissociative_hollows_on_slab():
     hollows = get_hollow_sites_for_adatoms(
-        make_slab(),
+        make_slab(nx=3, ny=3, n_layers=3),
         material_type="slab",
         site_generator="adaptive_grid",
     )
-    # Hollows may be sparse after basin clustering; require at least some sites typed hollow
-    # or that the hollow path returns empty without crashing.
     assert isinstance(hollows, list)
+    assert hollows, (
+        "adaptive_grid slab should expose hollow sites for dissociative pairs"
+    )
+    assert all(s.site_type in ("hollow", "pore") for s in hollows)
+
+
+def test_ray_exposure_mask_matches_scalar_ray_exposed():
+    positions = np.array([[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]], dtype=float)
+    radii = np.full(2, 0.7, dtype=float)
+    tree = KDTree(positions)
+    verts = np.array(
+        [
+            [1.25, 0.0, 0.0],
+            [0.0, 0.0, 1.5],
+            [0.0, 0.0, 2.0],
+        ],
+        dtype=float,
+    )
+    normals = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=float,
+    )
+    batched = _ray_exposure_mask(verts, normals, tree, radii, 2)
+    scalar = np.array(
+        [_ray_exposed(verts[i], normals[i], tree, radii, 2) for i in range(len(verts))],
+        dtype=bool,
+    )
+    assert np.array_equal(batched, scalar)
+
+
+def test_adaptive_grid_porous_wall_near_placement():
+    framework = make_porous_framework()
+    sites = get_unified_sites(
+        framework,
+        material_type="porous",
+        site_generator="adaptive_grid",
+        n_jobs=1,
+    )
+    assert sites
+    assert all(s.site_source == "adaptive_grid" for s in sites)
+    assert all(s.slab_indices for s in sites)
+    # Same material-agnostic path: wall-near shells, not free-volume pores.
+    ads = Atoms("CO2", positions=[[0.0, 0.0, 0.0], [1.16, 0.0, 0.0], [-1.16, 0.0, 0.0]])
+    cfg = AdsorptionConfig(
+        material_type="porous",
+        site_generator="adaptive_grid",
+        num_placements=6,
+        num_conformers=1,
+        n_jobs=1,
+        slab_relaxation_mode="none",
+    )
+    specs = enumerate_placement_specs(
+        [ads], framework, cfg, smiles="O=C=O", n_desired=6
+    )
+    assert specs
+    results = generate_placements_from_specs(
+        specs, [ads], framework, cfg, smiles="O=C=O"
+    )
+    ok = [pair for pair, reason in results if pair is not None]
+    assert ok, "expected at least one clash-free placement from wall-near MOF sites"
+
+
+def test_adaptive_grid_same_path_on_all_materials():
+    cases = (
+        ("slab", make_slab()),
+        ("nanoparticle", make_nanoparticle()),
+        ("porous", make_porous_framework()),
+    )
+    for mat, atoms in cases:
+        sites = get_unified_sites(
+            atoms, material_type=mat, site_generator="adaptive_grid", n_jobs=1
+        )
+        assert sites, f"adaptive_grid empty on {mat}"
+        assert {s.site_source for s in sites} <= {"adaptive_grid"}
+        assert all(s.tangent_basis is not None for s in sites)

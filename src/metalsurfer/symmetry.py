@@ -13,6 +13,7 @@ import numpy as np
 import spglib
 import spglib.error as _spglib_error_module
 from ase import Atoms
+from scipy.spatial import KDTree
 from threadpoolctl import threadpool_limits
 
 from ._geom_pbc import (
@@ -32,8 +33,10 @@ if TYPE_CHECKING:
 # returning None) and suppress the DeprecationWarning it would emit otherwise.
 _spglib_error_module.OLD_ERROR_HANDLING = False
 
-# Cap peak RAM for the chunked matcher: one float64 (chunk × n × 3) buffer.
+# Cap peak RAM for the chunked matcher fallback: one float64 (chunk × n × 3) buffer.
 _SYMMETRY_PAIR_CHUNK_BYTES = 16 * 1024 * 1024
+# Prefer KDTree orbit matching once catalogs exceed this size.
+_SYMMETRY_KDTREE_MIN_SITES = 32
 
 SymmetryMode = Literal["auto", "periodic", "cluster"]
 
@@ -388,8 +391,91 @@ class SymmetryAnalyzer:
     ) -> list[tuple[int, int]]:
         """Local ``(i, j)`` pairs where ``op(site_i)`` lands on ``site_j`` within tol.
 
-        Row-chunked so peak RAM stays near :data:`_SYMMETRY_PAIR_CHUNK_BYTES`.
+        Dense catalogs use KDTree nearest-neighbour queries (O(n log n) per
+        symop). Small catalogs keep a row-chunked dense matcher so peak RAM
+        stays near :data:`_SYMMETRY_PAIR_CHUNK_BYTES`.
         """
+        n = int(len(frac_pts))
+        if n < 2:
+            return []
+        if n >= _SYMMETRY_KDTREE_MIN_SITES:
+            return self._symop_match_pairs_kdtree(frac_pts, R, t, planar)
+        return self._symop_match_pairs_dense(frac_pts, R, t, planar)
+
+    def _symop_match_pairs_kdtree(
+        self,
+        frac_pts: np.ndarray,
+        R: np.ndarray,
+        t: np.ndarray,
+        planar: bool,
+    ) -> list[tuple[int, int]]:
+        """KDTree matching of transformed sites onto the catalog."""
+        n = int(len(frac_pts))
+        tol = float(self.symmetry_tolerance)
+        transformed = self._wrap_frac(frac_pts @ R.T + t)
+        pbc = self._symmetry_pbc()
+        n_hat = self._slab_normal() if planar else None
+
+        cart_ref = frac_to_cart(frac_pts, self._lattice)
+        cart_query = frac_to_cart(transformed, self._lattice)
+        if n_hat is not None:
+            cart_ref = cart_ref - (cart_ref @ n_hat)[..., None] * n_hat
+            cart_query = cart_query - (cart_query @ n_hat)[..., None] * n_hat
+
+        if np.any(pbc) and cell_has_volume(self._lattice):
+            # Expand reference by ±1 lattice images on periodic axes so
+            # query_ball covers MIC neighbours within *tol* without an n×n matrix.
+            cell = np.asarray(self._lattice, dtype=float)
+            offsets = [np.zeros(3, dtype=float)]
+            for dim in range(3):
+                if bool(pbc[dim]):
+                    offsets.extend([cell[dim], -cell[dim]])
+            # Two-axis combinations (corners) when two+ axes are periodic.
+            axes = [d for d in range(3) if bool(pbc[d])]
+            if len(axes) >= 2:
+                for i, a in enumerate(axes):
+                    for b in axes[i + 1 :]:
+                        for sa in (-1, 1):
+                            for sb in (-1, 1):
+                                offsets.append(sa * cell[a] + sb * cell[b])
+            expanded = np.vstack([cart_ref + off for off in offsets])
+            tree = KDTree(expanded)
+            hits = tree.query_ball_point(cart_query, r=tol)
+            pairs: list[tuple[int, int]] = []
+            for i, js in enumerate(hits):
+                seen: set[int] = set()
+                for h in js:
+                    j = int(h) % n
+                    if j == i or j in seen:
+                        continue
+                    seen.add(j)
+                    d_frac = minimum_image_fractional_delta(
+                        transformed[i] - frac_pts[j], pbc, copy=True
+                    )
+                    sep = frac_to_cart(d_frac, self._lattice)
+                    if n_hat is not None:
+                        sep = sep - float(np.dot(sep, n_hat)) * n_hat
+                    if float(np.linalg.norm(sep)) < tol:
+                        pairs.append((i, j))
+            return pairs
+
+        tree = KDTree(cart_ref)
+        hits = tree.query_ball_point(cart_query, r=tol)
+        pairs = []
+        for i, js in enumerate(hits):
+            for j in js:
+                if int(j) != i:
+                    pairs.append((i, int(j)))
+        return pairs
+
+    def _symop_match_pairs_dense(
+        self,
+        frac_pts: np.ndarray,
+        R: np.ndarray,
+        t: np.ndarray,
+        planar: bool,
+    ) -> list[tuple[int, int]]:
+        """Row-chunked dense MIC matcher for small catalogs."""
         n = int(len(frac_pts))
         if n < 2:
             return []

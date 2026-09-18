@@ -692,11 +692,17 @@ def test_empty_and_single_atom_site_lists():
 
 
 def test_adaptive_grid_nanoparticle_symmetry_is_fast_and_reduces():
-    """adaptive_grid NP enumeration finishes with a bounded framework-floored catalog."""
+    """adaptive_grid NP catalog + symmetry prune finish quickly on Pt13."""
     import time
 
     from ase.cluster import Icosahedron
 
+    from metalsurfer.config import AdsorptionConfig
+    from metalsurfer.placement.site_context import (
+        _SITE_CONTEXT_CACHE,
+        _SITE_CONTEXT_CACHE_LOCK,
+        resolve_site_context_for_sampling,
+    )
     from metalsurfer.placement.site_enumeration import get_unified_sites
 
     cluster = Icosahedron("Pt", noshells=2)
@@ -712,6 +718,24 @@ def test_adaptive_grid_nanoparticle_symmetry_is_fast_and_reduces():
         probe_radius=1.2,
         max_site_distance=3.0,
     )
-    elapsed = time.perf_counter() - start
+    enum_elapsed = time.perf_counter() - start
     assert len(sites) >= 5
-    assert elapsed < 30.0, f"adaptive_grid NP enumeration took {elapsed:.2f}s"
+    assert enum_elapsed < 30.0, f"adaptive_grid NP enumeration took {enum_elapsed:.2f}s"
+
+    cfg = AdsorptionConfig(
+        material_type="nanoparticle",
+        site_generator="adaptive_grid",
+        n_jobs=1,
+        slab_relaxation_mode="none",
+        voronoi_probe_radius=1.2,
+        voronoi_max_site_distance=3.0,
+    )
+    with _SITE_CONTEXT_CACHE_LOCK:
+        _SITE_CONTEXT_CACHE.clear()
+    t1 = time.perf_counter()
+    ctx = resolve_site_context_for_sampling(cluster, cfg, symmetry_broken=False)
+    sym_elapsed = time.perf_counter() - t1
+    assert ctx.use_sites and len(ctx.sites) > 0
+    assert len(ctx.sites) <= len(sites)
+    assert len(ctx.sites) < len(sites) or len(sites) < 20
+    assert sym_elapsed < 15.0, f"adaptive_grid NP symmetry took {sym_elapsed:.2f}s"

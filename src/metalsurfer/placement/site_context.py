@@ -24,14 +24,20 @@ from .site_types import Site
 logger = logging.getLogger(__name__)
 
 
+# Sampling catalog used once adsorbates occupy the surface (full clustered lattice).
+_CLUSTERED_UNDER_COVERAGE_SOURCE = "clustered_under_coverage"
+
+
 @dataclass
 class SiteContext:
     """Cached site catalog for a substrate geometry.
 
     ``sites`` is the catalog used for molecular placement sampling (clustered,
-    then optionally symmetry-reduced). ``clustered_sites`` is always the
-    fingerprint-aware geometric clustering result (full translational lattice).
-    ``raw_unclustered`` is the pre-clustering ``get_unified_sites`` output.
+    then optionally symmetry-reduced on a clean substrate). Under coverage
+    ``site_context_for_sampling`` expands ``sites`` to ``clustered_sites``.
+    ``clustered_sites`` is always the fingerprint-aware geometric clustering
+    result (full translational lattice). ``raw_unclustered`` is the
+    pre-clustering ``get_unified_sites`` output.
     """
 
     sites: list[Site]
@@ -75,8 +81,9 @@ def _unique_sites_cache_key(
     not ``slab.get_pbc()``, so calculator-boundary PBC (e.g. ``[T,T,T]``) and
     material PBC (e.g. ``[T,T,F]`` for slabs) share one cache entry.
 
-    For ``adaptive_grid``, optional *grid_spacing_scale* (shared min adsorbate
-    size) is part of the key so one catalog is reused across competing molecules.
+    For ``adaptive_grid``, spacing knobs (``adaptive_grid_spacing``,
+    ``adaptive_grid_refine_levels``, optional legacy *grid_spacing_scale*)
+    are part of the key.
     """
     pos_bytes = slab.get_positions().tobytes()
     cell_bytes = np.asarray(slab.get_cell()).tobytes()
@@ -102,7 +109,13 @@ def _unique_sites_cache_key(
     )
     scale_bytes = b""
     if str(config.site_generator) == "adaptive_grid":
-        scale_bytes = b"\x00gss\x00" + _pack_optional_float(grid_spacing_scale)
+        scale_bytes = (
+            b"\x00ags\x00"
+            + struct.pack("<d", float(config.adaptive_grid_spacing))
+            + struct.pack("<i", int(config.adaptive_grid_refine_levels))
+            + b"\x00gss\x00"
+            + _pack_optional_float(grid_spacing_scale)
+        )
     return hashlib.sha256(
         pos_bytes + cell_bytes + pbc_bytes + numbers_bytes + cfg_bytes + scale_bytes
     ).hexdigest()
@@ -148,9 +161,9 @@ def resolve_site_context_for_sampling(
     and orbit reduction compose. Dissociative / adatom paths should use
     ``clustered_sites`` (full lattice), not ``sites`` after symmetry reduction.
 
-    Skipped when *symmetry_broken*. For ``adaptive_grid``, optional
-    *grid_spacing_scale* (shared min adsorbate size) sizes the catalog once for
-    competing molecules.
+    Skipped when *symmetry_broken*. For ``adaptive_grid``, catalog density
+    follows ``config.adaptive_grid_spacing`` (optional legacy
+    *grid_spacing_scale* remains in the cache key).
 
     Parameters
     ----------
@@ -241,6 +254,46 @@ def resolve_site_context_for_sampling(
     return _store_site_context_cache(cache_key, result)
 
 
+def skip_symmetry_for_sampling(
+    *,
+    symmetry_broken: bool,
+    slab_for_sites: Atoms,
+    full_slab: Atoms | None,
+    config: AdsorptionConfig | None = None,
+) -> bool:
+    """Whether molecular sampling should skip orbit reduction.
+
+    True when the substrate is already C1, when *full_slab* has an adsorbate
+    suffix, or when *config.saturation_molecules_per_step* > 1 (n-tuplet
+    co-adsorption needs distinct translational copies). Occupied vertices are
+    dropped later by occupancy pruning.
+    """
+    if config is not None and int(config.saturation_molecules_per_step) > 1:
+        return True
+    if symmetry_broken:
+        return True
+    return full_slab is not None and len(full_slab) > len(slab_for_sites)
+
+
+def site_context_for_occupied_surface(ctx: SiteContext) -> SiteContext:
+    """Expand a symmetry-reduced sampling catalog to the clustered lattice."""
+    clustered = ctx.clustered_sites
+    if ctx.source != "symmetry_aware" or not ctx.use_sites or not clustered:
+        return ctx
+    logger.debug(
+        "Sampling %d clustered sites (symmetry-reduced catalog had %d)",
+        len(clustered),
+        len(ctx.sites),
+    )
+    return SiteContext(
+        sites=list(clustered),
+        use_sites=True,
+        source=_CLUSTERED_UNDER_COVERAGE_SOURCE,
+        raw_unclustered=ctx.raw_unclustered,
+        clustered_sites=clustered,
+    )
+
+
 def site_context_for_sampling(
     slab: Atoms,
     config: AdsorptionConfig,
@@ -248,20 +301,32 @@ def site_context_for_sampling(
     *,
     symmetry_broken: bool = False,
     grid_spacing_scale: float | None = None,
+    full_slab: Atoms | None = None,
 ) -> SiteContext:
     """Return *site_context* or resolve the symmetry-aware sampling catalog.
 
     Used by generators / pose when callers omit an explicit context so the
-    ``site_index`` catalog matches production screening.
+    ``site_index`` catalog matches production screening. Expands a
+    symmetry-reduced catalog to ``clustered_sites`` under coverage or n-tuplet.
     """
-    if site_context is not None:
-        return site_context
-    return resolve_site_context_for_sampling(
-        slab,
-        config,
+    skip = skip_symmetry_for_sampling(
         symmetry_broken=symmetry_broken,
-        grid_spacing_scale=grid_spacing_scale,
+        slab_for_sites=slab,
+        full_slab=full_slab,
+        config=config,
     )
+    if site_context is not None:
+        ctx = site_context
+    else:
+        ctx = resolve_site_context_for_sampling(
+            slab,
+            config,
+            symmetry_broken=skip,
+            grid_spacing_scale=grid_spacing_scale,
+        )
+    if skip:
+        ctx = site_context_for_occupied_surface(ctx)
+    return ctx
 
 
 def _get_unique_sites_for_specs(
@@ -313,6 +378,8 @@ def _get_unique_sites_for_specs(
         planar_z_variance_threshold=config.planar_z_variance_threshold,
         site_generator=config.site_generator,
         grid_spacing_scale=grid_spacing_scale,
+        adaptive_grid_spacing=float(config.adaptive_grid_spacing),
+        adaptive_grid_refine_levels=int(config.adaptive_grid_refine_levels),
         n_jobs=int(config.n_jobs),
         side_policy=config.side_policy,
     )

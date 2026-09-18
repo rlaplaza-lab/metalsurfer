@@ -290,6 +290,8 @@ def get_unified_sites(
     site_generator: str = "auto",
     adsorbate: Atoms | None = None,
     grid_spacing_scale: float | None = None,
+    adaptive_grid_spacing: float | None = None,
+    adaptive_grid_refine_levels: int = 0,
     n_jobs: int = -2,
     side_policy: str = "positive",
 ) -> list[Site]:
@@ -306,7 +308,8 @@ def get_unified_sites(
     - **nanoparticle** (topology): hull + NN only.
     - **porous** (voronoi): free-volume vertices with optional ridge enrichment.
     - **adaptive_grid**: atom-centred Cartesian shells with exposure filtering
-      and iterative refinement for every material type.
+      for every material type. Density is the absolute
+      ``adaptive_grid_spacing`` (Å) and ``adaptive_grid_refine_levels``.
 
     Parameters
     ----------
@@ -336,12 +339,14 @@ def get_unified_sites(
         ``"auto"`` (material default), ``"topology"``, ``"voronoi"``, or
         ``"adaptive_grid"``.
     adsorbate
-        Optional representative conformer. Used only by ``adaptive_grid`` when
-        *grid_spacing_scale* is omitted; ignored by topology and Voronoi.
+        Optional representative conformer (legacy scale path only).
     grid_spacing_scale
-        Shared adaptive-grid spacing length (Å). Typically
-        :func:`~metalsurfer.placement.site_adaptive_grid.min_adsorbate_grid_scale`
-        across competing molecules; ignored by topology / Voronoi.
+        Legacy characteristic length for adaptive_grid when absolute spacing is
+        omitted; ignored when ``adaptive_grid_spacing`` is set.
+    adaptive_grid_spacing
+        Absolute shell increment in Å (``AdsorptionConfig.adaptive_grid_spacing``).
+    adaptive_grid_refine_levels
+        Number of refine halvings (0 = coarse shell only).
     n_jobs
         Joblib-style CPU workers for ``adaptive_grid`` shell/refine stages
         (default ``-2``).
@@ -360,6 +365,8 @@ def get_unified_sites(
         site_generator=site_generator,
         adsorbate=adsorbate,
         grid_spacing_scale=grid_spacing_scale,
+        adaptive_grid_spacing=adaptive_grid_spacing,
+        adaptive_grid_refine_levels=adaptive_grid_refine_levels,
         n_jobs=n_jobs,
         side_policy=side_policy,
         _widen_scratch=scratch,
@@ -404,6 +411,8 @@ def get_unified_sites(
         site_generator=site_generator,
         adsorbate=adsorbate,
         grid_spacing_scale=grid_spacing_scale,
+        adaptive_grid_spacing=adaptive_grid_spacing,
+        adaptive_grid_refine_levels=adaptive_grid_refine_levels,
         n_jobs=n_jobs,
         side_policy=side_policy,
         _reuse_topology=reuse,
@@ -424,6 +433,8 @@ def _enumerate_unified_sites(
     *,
     adsorbate: Atoms | None = None,
     grid_spacing_scale: float | None = None,
+    adaptive_grid_spacing: float | None = None,
+    adaptive_grid_refine_levels: int = 0,
     n_jobs: int = -2,
     side_policy: str = "positive",
     _widen_scratch: _PlanarWidenScratch | None = None,
@@ -498,6 +509,8 @@ def _enumerate_unified_sites(
         planar_z_variance_threshold=float(z_var_threshold),
         adsorbate=adsorbate,
         grid_spacing_scale=grid_spacing_scale,
+        adaptive_grid_spacing=adaptive_grid_spacing,
+        adaptive_grid_refine_levels=int(adaptive_grid_refine_levels),
         n_jobs=int(n_jobs),
         side_policy=side_policy,
     )
@@ -517,6 +530,8 @@ def _enumerate_unified_sites(
     nn_dists = batch.nn_dists
     source_hints = list(batch.source_hints)
     atom_indices = list(batch.atom_indices)
+    normals = batch.normals
+    clearances = batch.clearances
     local_tree = KDTree(positions)
 
     if batch.apply_slab_height_mask and len(vertices) > 0:
@@ -532,6 +547,10 @@ def _enumerate_unified_sites(
         vertices, nn_dists, source_hints, atom_indices = _apply_site_mask(
             vertices, nn_dists, source_hints, keep_mask, atom_indices
         )
+        if normals is not None:
+            normals = np.asarray(normals, dtype=float)[keep_mask]
+        if clearances is not None:
+            clearances = np.asarray(clearances, dtype=float)[keep_mask]
 
     if batch.inject_atop:
         vertices, nn_dists, source_hints, atom_indices = _inject_atop_sites(
@@ -551,6 +570,11 @@ def _enumerate_unified_sites(
             max_site_distance=float(max_site_distance),
             atom_indices=atom_indices,
         )
+        # Atop injection can change catalog length; drop enrichment if misaligned.
+        if normals is not None and len(normals) != len(vertices):
+            normals = None
+        if clearances is not None and len(clearances) != len(vertices):
+            clearances = None
 
     if len(vertices) == 0:
         logger.warning(
@@ -598,8 +622,8 @@ def _enumerate_unified_sites(
         pbc=pbc_for_voronoi,
         delaunay=delaunay_inputs,
         atom_indices=atom_indices,
-        normals=batch.normals,
-        clearances=batch.clearances,
+        normals=normals,
+        clearances=clearances,
     )
 
     if cell_has_volume(cell):

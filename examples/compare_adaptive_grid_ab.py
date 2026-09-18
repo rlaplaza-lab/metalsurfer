@@ -41,9 +41,6 @@ from metalsurfer import (
     run_adsorption_bo,
 )
 from metalsurfer.placement._parallel import resolve_materialize_workers
-from metalsurfer.placement.site_adaptive_grid import (
-    adaptive_grid_characteristic_length,
-)
 from metalsurfer.placement.site_context import (
     _SITE_CONTEXT_CACHE,
     _SITE_CONTEXT_CACHE_LOCK,
@@ -124,7 +121,8 @@ def _bench_sites(
     material_type: str,
     plugin: str,
     repeats: int = 3,
-    grid_spacing_scale=None,
+    adaptive_grid_spacing: float | None = None,
+    adaptive_grid_refine_levels: int = 0,
     n_jobs: int = _DEFAULT_N_JOBS,
 ):
     times = []
@@ -135,7 +133,8 @@ def _bench_sites(
             atoms,
             material_type=material_type,
             site_generator=plugin,
-            grid_spacing_scale=grid_spacing_scale,
+            adaptive_grid_spacing=adaptive_grid_spacing,
+            adaptive_grid_refine_levels=adaptive_grid_refine_levels,
             n_jobs=n_jobs,
         )
         times.append(time.perf_counter() - t0)
@@ -188,27 +187,28 @@ def run_site_ab(n_jobs: int = _DEFAULT_N_JOBS) -> None:
     mof = read(cif)
     cases.append(("RUBTAK01 MOF", "porous", "voronoi", mof, 1.5))
 
-    h2 = Atoms("H2", positions=[[0, 0, 0], [0.74, 0, 0]])
-
     rows = []
     for label, mat, baseline, atoms, tol in cases:
         print(f"\n--- {label} ({mat}) ---")
         base = _bench_sites(atoms, mat, baseline, n_jobs=n_jobs)
+        # Default coarse adaptive_grid_spacing from AdsorptionConfig (0.70 Å).
         grid = _bench_sites(atoms, mat, "adaptive_grid", n_jobs=n_jobs)
-        grid_h2 = None
+        grid_fine = None
         if mat == "slab" and "tilted" not in label and "stepped" not in label:
-            h2_scale = adaptive_grid_characteristic_length(1.2, h2)
-            grid_h2 = _bench_sites(
+            grid_fine = _bench_sites(
                 atoms,
                 mat,
                 "adaptive_grid",
-                grid_spacing_scale=h2_scale,
+                adaptive_grid_spacing=0.50,
+                adaptive_grid_refine_levels=0,
                 n_jobs=n_jobs,
             )
 
         if mat == "porous":
             hit = _overlap(grid["xyz"], base["xyz"], tol)
             hit_label = f"grid→{baseline}@{tol}Å"
+            # adaptive_grid is wall-near shells (not free-volume pores); overlap
+            # with Voronoi centres is optional context, not a pass/fail gate.
         else:
             hit = _overlap(base["xyz"], grid["xyz"], tol)
             hit_label = f"{baseline}→grid@{tol}Å"
@@ -224,10 +224,10 @@ def run_site_ab(n_jobs: int = _DEFAULT_N_JOBS) -> None:
             f"t={grid['t_mean'] * 1e3:7.1f}±{grid['t_std'] * 1e3:5.1f} ms  "
             f"nn_med={grid['nn_med']:.2f}  types={grid['types']}"
         )
-        if grid_h2 is not None:
+        if grid_fine is not None:
             print(
-                f"  {'adap+H2':12s}  n={grid_h2['n']:4d}  "
-                f"t={grid_h2['t_mean'] * 1e3:7.1f}±{grid_h2['t_std'] * 1e3:5.1f} ms"
+                f"  {'adap@0.50Å':12s}  n={grid_fine['n']:4d}  "
+                f"t={grid_fine['t_mean'] * 1e3:7.1f}±{grid_fine['t_std'] * 1e3:5.1f} ms"
             )
         print(f"  overlap {hit_label}: {hit * 100:.1f}%")
         print(
@@ -299,38 +299,13 @@ def _run_campaign(
 ):
     _clear_site_cache()
     atoms = _as_atoms(slab)
-    grid_scale = None
-    if str(config.site_generator) == "adaptive_grid" and molecules:
-        mol_name = str(molecules[0][1]).upper()
-        if mol_name == "H2":
-            ads = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
-        elif mol_name == "CO2":
-            ads = Atoms(
-                "CO2",
-                positions=[[0.0, 0.0, 0.0], [1.16, 0.0, 0.0], [-1.16, 0.0, 0.0]],
-            )
-        elif mol_name == "ETHENE":
-            ads = Atoms(
-                "C2H4",
-                positions=[
-                    [0.0, 0.0, 0.0],
-                    [1.33, 0.0, 0.0],
-                    [-0.5, 0.9, 0.0],
-                    [-0.5, -0.9, 0.0],
-                    [1.83, 0.9, 0.0],
-                    [1.83, -0.9, 0.0],
-                ],
-            )
-        else:
-            ads = None
-        if ads is not None:
-            grid_scale = adaptive_grid_characteristic_length(1.2, ads)
     n_sites = len(
         get_unified_sites(
             atoms,
             material_type=config.material_type,
             site_generator=config.site_generator,
-            grid_spacing_scale=grid_scale,
+            adaptive_grid_spacing=float(config.adaptive_grid_spacing),
+            adaptive_grid_refine_levels=int(config.adaptive_grid_refine_levels),
             n_jobs=config.n_jobs,
         )
     )

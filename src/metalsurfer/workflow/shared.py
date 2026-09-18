@@ -47,8 +47,12 @@ from ..placement.generators import (
     generate_placement_from_spec_with_reason,
     generate_placements_from_specs,
 )
-from ..placement.site_adaptive_grid import min_adsorbate_grid_scale
-from ..placement.site_context import SiteContext, resolve_site_context_for_sampling
+from ..placement.site_context import (
+    SiteContext,
+    resolve_site_context_for_sampling,
+    site_context_for_occupied_surface,
+    skip_symmetry_for_sampling,
+)
 from ..placement.site_enumeration import _compute_site_z_base
 from ..reporting import (
     ConformerFailure,
@@ -847,22 +851,19 @@ def resolve_saturation_step_workload_config(
     bo_enabled
         Whether Bayesian optimisation is enabled.
     grid_spacing_scale
-        Optional shared adaptive-grid spacing for competing molecules.
+        Unused for adaptive_grid density (spacing comes from
+        ``config.adaptive_grid_spacing``); retained for call-site compatibility.
     """
-    grid_scale = grid_spacing_scale
-    if (
-        grid_scale is None
-        and conformers
-        and str(config.site_generator) == "adaptive_grid"
-    ):
-        grid_scale = min_adsorbate_grid_scale(
-            config.voronoi_probe_radius, [conformers[0]]
-        )
     site_context = resolve_site_context_for_sampling(
         slab_for_sites,
         config,
-        symmetry_broken=symmetry_broken,
-        grid_spacing_scale=grid_scale,
+        symmetry_broken=skip_symmetry_for_sampling(
+            symmetry_broken=symmetry_broken,
+            slab_for_sites=slab_for_sites,
+            full_slab=slab_atoms,
+            config=config,
+        ),
+        grid_spacing_scale=grid_spacing_scale,
     )
     freeze_ref = (
         base_slab_for_frozen if base_slab_for_frozen is not None else slab_atoms
@@ -1050,22 +1051,21 @@ def _prepare_molecule_screening(
     slab_for_sites = substrate_ref.slab_for_sites
     effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
 
-    grid_scale = grid_spacing_scale
-    if (
-        grid_scale is None
-        and conformers
-        and str(config.site_generator) == "adaptive_grid"
-    ):
-        grid_scale = min_adsorbate_grid_scale(
-            config.voronoi_probe_radius, [conformers[0]]
-        )
+    skip_orbits = skip_symmetry_for_sampling(
+        symmetry_broken=symmetry_broken,
+        slab_for_sites=slab_for_sites,
+        full_slab=slab.atoms,
+        config=config,
+    )
     if site_context is None:
         site_context = resolve_site_context_for_sampling(
             slab_for_sites,
             config,
-            symmetry_broken=symmetry_broken,
-            grid_spacing_scale=grid_scale,
+            symmetry_broken=skip_orbits,
+            grid_spacing_scale=grid_spacing_scale,
         )
+    if skip_orbits:
+        site_context = site_context_for_occupied_surface(site_context)
 
     if skip_workload_autotune or not needs_workload_autotune(config, bo=bo_enabled):
         resolved = config
