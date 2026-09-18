@@ -51,6 +51,8 @@ class SiteGenerationContext:
     enrich: bool
     planar_z_variance_threshold: float
     adsorbate: Atoms | None = None
+    grid_spacing_scale: float | None = None
+    n_jobs: int = -2
 
 
 @dataclass

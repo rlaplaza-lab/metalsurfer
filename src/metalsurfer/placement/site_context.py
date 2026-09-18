@@ -63,12 +63,20 @@ def _no_sites_context(
     )
 
 
-def _unique_sites_cache_key(slab: Atoms, config: AdsorptionConfig) -> str:
+def _unique_sites_cache_key(
+    slab: Atoms,
+    config: AdsorptionConfig,
+    *,
+    grid_spacing_scale: float | None = None,
+) -> str:
     """Geometry + chemistry + Voronoi config key (pre-symmetry).
 
     PBC is keyed on :func:`material_aware_pbc` (what enumeration actually uses),
     not ``slab.get_pbc()``, so calculator-boundary PBC (e.g. ``[T,T,T]``) and
     material PBC (e.g. ``[T,T,F]`` for slabs) share one cache entry.
+
+    For ``adaptive_grid``, optional *grid_spacing_scale* (shared min adsorbate
+    size) is part of the key so one catalog is reused across competing molecules.
     """
     pos_bytes = slab.get_positions().tobytes()
     cell_bytes = np.asarray(slab.get_cell()).tobytes()
@@ -90,15 +98,22 @@ def _unique_sites_cache_key(slab: Atoms, config: AdsorptionConfig) -> str:
         + b"\x00"
         + config.material_type.encode()
     )
+    scale_bytes = b""
+    if str(config.site_generator) == "adaptive_grid":
+        scale_bytes = b"\x00gss\x00" + _pack_optional_float(grid_spacing_scale)
     return hashlib.sha256(
-        pos_bytes + cell_bytes + pbc_bytes + numbers_bytes + cfg_bytes
+        pos_bytes + cell_bytes + pbc_bytes + numbers_bytes + cfg_bytes + scale_bytes
     ).hexdigest()
 
 
 def _site_context_cache_key(
-    slab: Atoms, config: AdsorptionConfig, *, symmetry_broken: bool
+    slab: Atoms,
+    config: AdsorptionConfig,
+    *,
+    symmetry_broken: bool,
+    grid_spacing_scale: float | None = None,
 ) -> str:
-    base = _unique_sites_cache_key(slab, config)
+    base = _unique_sites_cache_key(slab, config, grid_spacing_scale=grid_spacing_scale)
     return hashlib.sha256(
         (
             base
@@ -123,6 +138,7 @@ def resolve_site_context_for_sampling(
     config: AdsorptionConfig,
     *,
     symmetry_broken: bool,
+    grid_spacing_scale: float | None = None,
 ) -> SiteContext:
     """Return clustered sites, then optional spglib orbit reduction unless *symmetry_broken*.
 
@@ -138,9 +154,15 @@ def resolve_site_context_for_sampling(
         :class:`~metalsurfer.config.AdsorptionConfig` with placement settings.
     symmetry_broken
         If True, skip symmetry reduction.
+    grid_spacing_scale
+        Shared adaptive-grid spacing length (Å), typically the minimum
+        adsorbate characteristic length across competing molecules.
     """
     cache_key = _site_context_cache_key(
-        slab_atoms, config, symmetry_broken=symmetry_broken
+        slab_atoms,
+        config,
+        symmetry_broken=symmetry_broken,
+        grid_spacing_scale=grid_spacing_scale,
     )
 
     with _SITE_CONTEXT_CACHE_LOCK:
@@ -149,7 +171,9 @@ def resolve_site_context_for_sampling(
         return cached
 
     # Reuses unique-sites entry in the same cache (key without |sym=).
-    _core_ctx = _get_unique_sites_for_specs(slab_atoms, config)
+    _core_ctx = _get_unique_sites_for_specs(
+        slab_atoms, config, grid_spacing_scale=grid_spacing_scale
+    )
     core_sites = _core_ctx.sites
     use_sites = _core_ctx.use_sites
     raw_unclustered = _core_ctx.raw_unclustered
@@ -218,6 +242,7 @@ def site_context_for_sampling(
     site_context: SiteContext | None = None,
     *,
     symmetry_broken: bool = False,
+    grid_spacing_scale: float | None = None,
 ) -> SiteContext:
     """Return *site_context* or resolve the symmetry-aware sampling catalog.
 
@@ -227,13 +252,18 @@ def site_context_for_sampling(
     if site_context is not None:
         return site_context
     return resolve_site_context_for_sampling(
-        slab, config, symmetry_broken=symmetry_broken
+        slab,
+        config,
+        symmetry_broken=symmetry_broken,
+        grid_spacing_scale=grid_spacing_scale,
     )
 
 
 def _get_unique_sites_for_specs(
     slab: Atoms,
     config: AdsorptionConfig,
+    *,
+    grid_spacing_scale: float | None = None,
 ) -> SiteContext:
     """Get unique non-identical sites using unified site detection.
 
@@ -245,7 +275,9 @@ def _get_unique_sites_for_specs(
     :data:`_SITE_CONTEXT_CACHE`. Both ``sites`` and ``clustered_sites`` are the
     geometric clustering result (no spglib).
     """
-    cache_key = _unique_sites_cache_key(slab, config)
+    cache_key = _unique_sites_cache_key(
+        slab, config, grid_spacing_scale=grid_spacing_scale
+    )
     with _SITE_CONTEXT_CACHE_LOCK:
         cached = _SITE_CONTEXT_CACHE.get(cache_key)
     if cached is not None:
@@ -275,6 +307,12 @@ def _get_unique_sites_for_specs(
         auto_widen=config.voronoi_auto_widen,
         planar_z_variance_threshold=config.planar_z_variance_threshold,
         site_generator=config.site_generator,
+        n_jobs=config.n_jobs,
+        grid_spacing_scale=(
+            grid_spacing_scale
+            if str(config.site_generator) == "adaptive_grid"
+            else None
+        ),
     )
     if not raw_sites:
         logger.warning(

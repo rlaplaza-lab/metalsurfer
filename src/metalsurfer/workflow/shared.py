@@ -47,6 +47,7 @@ from ..placement.generators import (
     generate_placement_from_spec_with_reason,
     generate_placements_from_specs,
 )
+from ..placement.site_adaptive_grid import resolve_adaptive_grid_spacing_scale
 from ..placement.site_context import SiteContext, resolve_site_context_for_sampling
 from ..placement.site_enumeration import _compute_site_z_base
 from ..reporting import (
@@ -821,6 +822,7 @@ def resolve_saturation_step_workload_config(
     base_slab_for_frozen: Atoms | None,
     symmetry_broken: bool,
     bo_enabled: bool,
+    grid_spacing_scale: float | None = None,
 ) -> AdsorptionConfig:
     """Resolve placement budget before multi-molecule budget splitting.
 
@@ -845,10 +847,20 @@ def resolve_saturation_step_workload_config(
     bo_enabled
         Whether Bayesian optimisation is enabled.
     """
+    grid_scale = grid_spacing_scale
+    if (
+        grid_scale is None
+        and conformers
+        and str(config.site_generator) == "adaptive_grid"
+    ):
+        grid_scale = resolve_adaptive_grid_spacing_scale(
+            config.voronoi_probe_radius, [conformers[0]]
+        )
     site_context = resolve_site_context_for_sampling(
         slab_for_sites,
         config,
         symmetry_broken=symmetry_broken,
+        grid_spacing_scale=grid_scale,
     )
     freeze_ref = (
         base_slab_for_frozen if base_slab_for_frozen is not None else slab_atoms
@@ -983,6 +995,8 @@ def _prepare_molecule_screening(
     conformers: list[Atoms] | None = None,
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
+    grid_spacing_scale: float | None = None,
+    site_context: SiteContext | None = None,
 ) -> tuple[MoleculeScreeningContext | None, FailureSummary | None]:
     """Shared preamble for standard and BO molecule screening.
 
@@ -1034,11 +1048,22 @@ def _prepare_molecule_screening(
     slab_for_sites = substrate_ref.slab_for_sites
     effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
 
-    site_context = resolve_site_context_for_sampling(
-        slab_for_sites,
-        config,
-        symmetry_broken=symmetry_broken,
-    )
+    if site_context is None:
+        scale = grid_spacing_scale
+        if (
+            scale is None
+            and conformers
+            and str(config.site_generator) == "adaptive_grid"
+        ):
+            scale = resolve_adaptive_grid_spacing_scale(
+                config.voronoi_probe_radius, [conformers[0]]
+            )
+        site_context = resolve_site_context_for_sampling(
+            slab_for_sites,
+            config,
+            symmetry_broken=symmetry_broken,
+            grid_spacing_scale=scale,
+        )
 
     if skip_workload_autotune or not needs_workload_autotune(config, bo=bo_enabled):
         resolved = config

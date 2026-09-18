@@ -59,6 +59,8 @@ def process_molecule(
     conformers: list[Atoms] | None = None,
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
+    grid_spacing_scale: float | None = None,
+    site_context: SiteContext | None = None,
 ) -> MoleculeScreenOutcome:
     """Run the full placement-optimise-validate pipeline for one molecule.
 
@@ -131,6 +133,8 @@ def process_molecule(
             conformers=conformers,
             conformer_energies=conformer_energies,
             skip_workload_autotune=skip_workload_autotune,
+            grid_spacing_scale=grid_spacing_scale,
+            site_context=site_context,
         )
         if ctx is None:
             assert early_failure is not None
