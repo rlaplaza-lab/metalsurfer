@@ -193,9 +193,20 @@ def run_site_ab(n_jobs: int = _DEFAULT_N_JOBS) -> None:
         base = _bench_sites(atoms, mat, baseline, n_jobs=n_jobs)
         # Default coarse adaptive_grid_spacing from AdsorptionConfig (0.70 Å).
         grid = _bench_sites(atoms, mat, "adaptive_grid", n_jobs=n_jobs)
-        grid_fine = None
+        grid_dense = None
+        # On metals the NN merge floor often dominates ``1.5 * h``, so a finer
+        # absolute spacing need not increase catalog size. Refine levels do.
         if mat == "slab" and "tilted" not in label and "stepped" not in label:
-            grid_fine = _bench_sites(
+            grid_dense = _bench_sites(
+                atoms,
+                mat,
+                "adaptive_grid",
+                adaptive_grid_spacing=0.70,
+                adaptive_grid_refine_levels=1,
+                n_jobs=n_jobs,
+            )
+        elif mat == "porous":
+            grid_dense = _bench_sites(
                 atoms,
                 mat,
                 "adaptive_grid",
@@ -224,10 +235,11 @@ def run_site_ab(n_jobs: int = _DEFAULT_N_JOBS) -> None:
             f"t={grid['t_mean'] * 1e3:7.1f}±{grid['t_std'] * 1e3:5.1f} ms  "
             f"nn_med={grid['nn_med']:.2f}  types={grid['types']}"
         )
-        if grid_fine is not None:
+        if grid_dense is not None:
+            denser_label = "adap+refine1" if mat == "slab" else "adap@0.50Å"
             print(
-                f"  {'adap@0.50Å':12s}  n={grid_fine['n']:4d}  "
-                f"t={grid_fine['t_mean'] * 1e3:7.1f}±{grid_fine['t_std'] * 1e3:5.1f} ms"
+                f"  {denser_label:12s}  n={grid_dense['n']:4d}  "
+                f"t={grid_dense['t_mean'] * 1e3:7.1f}±{grid_dense['t_std'] * 1e3:5.1f} ms"
             )
         print(f"  overlap {hit_label}: {hit * 100:.1f}%")
         print(
