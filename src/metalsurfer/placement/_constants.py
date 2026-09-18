@@ -291,22 +291,30 @@ _ADAPTIVE_GRID_MAX_LEVELS: int = 2
 # Near-zero molecular extents (flat thickness, single-atom footprint) skip this.
 _ADAPTIVE_GRID_EXTENT_EPS: float = 0.05
 # NMS merge radius: max(nms_scale * h_fine, nms_length_scale * L).
-# Kept modest so bridge/hollow midpoints on dense metals (~1–1.5 Å apart) are
-# not forced into a single survivor before type-aware NMS runs.
-_ADAPTIVE_GRID_NMS_SCALE: float = 1.2
-_ADAPTIVE_GRID_NMS_LENGTH_SCALE: float = 0.35
+# Within a coordination class this sets same-type spacing; cross-type peaks in
+# the same ball are kept (same-class-only suppression).
+_ADAPTIVE_GRID_NMS_SCALE: float = 1.5
+_ADAPTIVE_GRID_NMS_LENGTH_SCALE: float = 0.5
 # Soft per-chunk work budget: each shell/refine chunk keeps
 # n_seeds × n_offsets ≤ this (all atoms are still seeded).
 _ADAPTIVE_GRID_WORK_BUDGET: int = 250_000
-# Floor merge radius as a fraction of framework median NN (blocks tiny-adsorbate
-# scales from packing sites denser than the surface lattice resolves).
-# 0.25 × ~2.55 Å Cu NN ≈ 0.64 Å — below typical bridge–hollow spacing.
-_ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE: float = 0.25
+# Floor merge radius as a fraction of framework median NN (bridge-safe base;
+# class-specific scales below widen atop/hollow packing without merging bridges).
+_ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE: float = 0.35
+# Same-class NMS merge as a fraction of framework median NN. Tuned so fcc(111)
+# keeps adjacent bridges (~0.5·NN) and fcc+hcp hollows (~NN/√3) while killing
+# the dense junk lattice that inflated catalogs to O(10³) sites.
+_ADAPTIVE_GRID_NMS_ATOP_NN_SCALE: float = 0.55
+_ADAPTIVE_GRID_NMS_BRIDGE_NN_SCALE: float = 0.35
+_ADAPTIVE_GRID_NMS_HOLLOW_NN_SCALE: float = 0.50
+# Absolute cross-class floor (Å). Disabled: bridge/hollow peaks on dense metals
+# sit ~0.5 Å apart in the adaptive cloud; a positive floor kills bridges.
+# Final within-type dedup after classification removes same-label near-duplicates.
+_ADAPTIVE_GRID_NMS_HARD_FLOOR: float = 0.0
 # Floor characteristic length the same way before deriving h0 / refine depth.
 _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE: float = 0.25
 # Neighbours within this factor of the nearest-atom distance count toward
-# provisional coordination (1=atop-like, 2=bridge-like, 3+=hollow-like) so NMS
-# does not let one site type suppress another in the same patch.
+# provisional coordination (1/2/3+).
 _ADAPTIVE_GRID_COORD_NN_FACTOR: float = 1.15
 # Bin-prethin before NMS when the coarse cloud exceeds this many points.
 _ADAPTIVE_GRID_BIN_PRETHIN: int = 8_000

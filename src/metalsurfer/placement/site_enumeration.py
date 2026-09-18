@@ -28,6 +28,7 @@ from ._material import (
     validate_material_type,
 )
 from .geometry import _get_covalent_radius
+from .site_adaptive_grid import dedupe_adaptive_sites_within_type
 from .site_classify import (
     _build_site_records,
     _DelaunayClassifyInputs,
@@ -586,6 +587,20 @@ def _enumerate_unified_sites(
         delaunay=delaunay_inputs,
         atom_indices=atom_indices,
     )
+
+    if (
+        sites
+        and source_hints
+        and any(h == "adaptive_grid" for h in source_hints)
+    ):
+        sites = dedupe_adaptive_sites_within_type(
+            sites,
+            cell=cell,
+            pbc=pbc_for_voronoi,
+            median_nn=float(batch.topology_median_nn or 0.0),
+            probe_radius=float(probe_radius),
+            max_site_distance=float(max_site_distance),
+        )
 
     if cell_has_volume(cell):
         # Deterministic fractional-xyz order for stable site_index / raw catalog.

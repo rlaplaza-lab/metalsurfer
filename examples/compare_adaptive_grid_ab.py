@@ -547,7 +547,7 @@ def run_e2e(
         )
         print(f"\n[camphor/Cu111 BO] run site_generator={plugin!r} ...")
         try:
-            from camphor_cu111_binding_energy import (  # type: ignore
+            from camphor_cu111_binding_energy import (  # type: ignore[import-not-found]
                 CAMPHOR_SMILES,
                 prepare_campaign_slab,
             )

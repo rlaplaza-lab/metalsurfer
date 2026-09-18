@@ -282,24 +282,23 @@ def test_nms_pbc_keeps_higher_score_across_boundary():
 
 
 def test_adaptive_grid_retains_bridge_and_hollow_on_slab():
-    """Coordination-aware NMS must keep bridge- and hollow-like sites together."""
+    """Same-class NMS + within-type dedup keep bridges/hollows near topology density."""
     slab = make_slab(nx=3, ny=3, n_layers=3)
     sites = get_unified_sites(
         slab, material_type="slab", site_generator="adaptive_grid", n_jobs=1
     )
+    topo = get_unified_sites(
+        slab, material_type="slab", site_generator="topology", n_jobs=1
+    )
     types = {s.site_type for s in sites}
     assert "hollow" in types
     assert "bridge" in types
-    spacing = adaptive_grid_spacing(
-        1.2,
-        framework_median_nn=_framework_median_nn(
-            slab.get_positions(),
-            np.asarray(slab.get_cell(), dtype=float),
-            np.asarray(material_aware_pbc("slab"), dtype=bool),
-        ),
-    )
-    # Merge floor should sit below typical metal bridge–hollow spacing (~1 Å).
-    assert spacing.merge_radius < 0.85
+    assert len(sites) <= max(2 * len(topo), 100)
+    assert len(sites) >= max(len(topo) // 4, 8)
+    xyz = np.asarray([s.xyz for s in sites if s.site_type == "hollow"], dtype=float)
+    if len(xyz) >= 2:
+        d, _ = KDTree(xyz).query(xyz, k=2)
+        assert float(np.median(d[:, 1])) >= 0.9
 
 
 def test_fractional_voxel_seeds_merge_wrapped_and_skewed():

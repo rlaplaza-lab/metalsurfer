@@ -40,7 +40,11 @@ from ._constants import (
     _ADAPTIVE_GRID_H_MIN,
     _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE,
     _ADAPTIVE_GRID_MAX_LEVELS,
+    _ADAPTIVE_GRID_NMS_ATOP_NN_SCALE,
+    _ADAPTIVE_GRID_NMS_BRIDGE_NN_SCALE,
     _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE,
+    _ADAPTIVE_GRID_NMS_HARD_FLOOR,
+    _ADAPTIVE_GRID_NMS_HOLLOW_NN_SCALE,
     _ADAPTIVE_GRID_NMS_LENGTH_SCALE,
     _ADAPTIVE_GRID_NMS_SCALE,
     _ADAPTIVE_GRID_SPACING_SCALE,
@@ -385,19 +389,83 @@ def _local_max_mask(
     radius: float,
     cell: np.ndarray,
     pbc: np.ndarray,
+    groups: np.ndarray | None = None,
+    radii: np.ndarray | None = None,
+    hard_floor: float = 0.0,
 ) -> np.ndarray:
+    """Keep local score maxima; same-class compete, plus hard-floor cross-class."""
     n = len(points)
     if n <= 1:
         return np.ones(n, dtype=bool)
-    offsets = _image_offsets_for_radius(cell, pbc, radius)
-    pairs = _pbc_merge_pair_set(points, float(radius), image_offsets=offsets)
+    pair_r = float(radius)
+    if radii is not None and len(radii):
+        pair_r = max(pair_r, float(np.max(radii)))
+    pair_r = max(pair_r, float(hard_floor))
+    offsets = _image_offsets_for_radius(cell, pbc, pair_r)
+    pairs = _pbc_merge_pair_set(points, float(pair_r), image_offsets=offsets)
     keep = np.ones(n, dtype=bool)
+    hard = float(hard_floor)
     for i, j in pairs:
+        same = groups is None or int(groups[i]) == int(groups[j])
+        if same:
+            r_ij = (
+                float(min(radii[i], radii[j]))
+                if radii is not None
+                else float(radius)
+            )
+            if not _pair_within_radius(points[i], points[j], r_ij, cell, pbc):
+                continue
+        elif hard <= 0.0 or not _pair_within_radius(
+            points[i], points[j], hard, cell, pbc
+        ):
+            continue
         if scores[i] < scores[j] - 1e-12:
             keep[i] = False
         elif scores[j] < scores[i] - 1e-12:
             keep[j] = False
     return keep
+
+
+def _pair_within_radius(
+    a: np.ndarray,
+    b: np.ndarray,
+    radius: float,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+) -> bool:
+    """Return True if *a* and *b* are within *radius* under material PBC."""
+    delta = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    if np.any(pbc_arr) and cell_has_volume(cell):
+        frac = delta @ np.linalg.inv(cell)
+        frac = frac - np.round(frac) * pbc_arr.astype(float)
+        delta = frac @ cell
+    return float(np.linalg.norm(delta)) <= float(radius) + 1e-12
+
+
+def _class_merge_radii(
+    groups: np.ndarray,
+    *,
+    base_merge: float,
+    median_nn: float,
+) -> np.ndarray:
+    """Per-point same-class merge radii (atop / bridge / hollow / pore scales)."""
+    # Index 0 unused; 1=atop, 2=bridge, 3=hollow, 4=pore (pore uses hollow scale).
+    scales = (
+        0.0,
+        float(_ADAPTIVE_GRID_NMS_ATOP_NN_SCALE),
+        float(_ADAPTIVE_GRID_NMS_BRIDGE_NN_SCALE),
+        float(_ADAPTIVE_GRID_NMS_HOLLOW_NN_SCALE),
+        float(_ADAPTIVE_GRID_NMS_HOLLOW_NN_SCALE),
+    )
+    nn = float(median_nn) if np.isfinite(median_nn) and median_nn > 0.0 else 0.0
+    out = np.empty(len(groups), dtype=float)
+    base = float(base_merge)
+    for i, g in enumerate(groups):
+        gi = int(g)
+        scale = scales[gi] if 1 <= gi < len(scales) else scales[3]
+        out[i] = max(base, scale * nn) if nn > 0.0 else base
+    return out
 
 
 def _nms(
@@ -407,23 +475,30 @@ def _nms(
     merge_r: float,
     cell: np.ndarray,
     pbc: np.ndarray,
+    groups: np.ndarray | None = None,
+    radii: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Greedy NMS; same-class merge plus absolute hard-floor cross-class dedup."""
     if len(vertices) == 0:
         return vertices, nn
-    offsets = _image_offsets_for_radius(cell, pbc, merge_r)
+    if radii is None:
+        radii = np.full(len(vertices), float(merge_r), dtype=float)
+    hard = float(_ADAPTIVE_GRID_NMS_HARD_FLOOR)
+    max_r = float(max(float(merge_r), float(np.max(radii)), hard))
+    offsets = _image_offsets_for_radius(cell, pbc, max_r)
     if offsets is None:
         tree = KDTree(vertices)
 
-        def query_ball(pt: np.ndarray) -> list[int]:
-            return tree.query_ball_point(pt, r=float(merge_r))
+        def query_ball(pt: np.ndarray, r: float) -> list[int]:
+            return tree.query_ball_point(pt, r=float(r))
 
     else:
         n = len(vertices)
         expanded = np.vstack([vertices + off for off in offsets])
         tree = KDTree(expanded)
 
-        def query_ball(pt: np.ndarray) -> list[int]:
-            hits = tree.query_ball_point(pt, r=float(merge_r))
+        def query_ball(pt: np.ndarray, r: float) -> list[int]:
+            hits = tree.query_ball_point(pt, r=float(r))
             return list({int(h) % n for h in hits})
 
     suppressed = np.zeros(len(vertices), dtype=bool)
@@ -433,24 +508,29 @@ def _nms(
         if suppressed[ii]:
             continue
         accepted.append(ii)
-        for j in query_ball(vertices[ii]):
-            if j != ii:
+        g_i = int(groups[ii]) if groups is not None else None
+        r_i = float(radii[ii])
+        for j in query_ball(vertices[ii], max(r_i, hard)):
+            if j == ii:
+                continue
+            same = g_i is None or int(groups[j]) == g_i
+            if same:
+                if _pair_within_radius(vertices[ii], vertices[j], r_i, cell, pbc):
+                    suppressed[j] = True
+            elif hard > 0.0 and _pair_within_radius(
+                vertices[ii], vertices[j], hard, cell, pbc
+            ):
                 suppressed[j] = True
     idx = np.asarray(accepted, dtype=int)
     return vertices[idx], nn[idx]
 
 
-def _provisional_coordination(
+def _provisional_coordination_count(
     vertices: np.ndarray,
     tree: KDTree,
     nn: np.ndarray,
 ) -> np.ndarray:
-    """Map each candidate to 1 / 2 / 3+ coordinating framework neighbours.
-
-    Neighbours within ``_ADAPTIVE_GRID_COORD_NN_FACTOR * nn`` count. Used only to
-    partition NMS so atop-, bridge-, and hollow-like peaks do not suppress each
-    other when they sit inside one merge ball.
-    """
+    """1 / 2 / 3+ coordinating neighbours within ``COORD_NN_FACTOR * nn``."""
     n = len(vertices)
     if n == 0:
         return np.empty(0, dtype=int)
@@ -466,24 +546,43 @@ def _provisional_coordination(
     return np.clip(counts, 1, 3)
 
 
-def _thin_group(
+def _nms_pass(
     vertices: np.ndarray,
     nn: np.ndarray,
     scores: np.ndarray,
+    groups: np.ndarray,
     *,
-    neighbour_r: float,
     merge_r: float,
+    median_nn: float,
+    neighbour_r: float,
     cell: np.ndarray,
     pbc: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Local-max + NMS for one provisional-coordination cohort."""
-    if len(vertices) == 0:
-        return vertices, nn
-    mask = _local_max_mask(vertices, scores, neighbour_r, cell, pbc)
+    """One local-max + same-class NMS pass."""
+    radii = _class_merge_radii(groups, base_merge=merge_r, median_nn=median_nn)
+    local_r = np.maximum(radii, float(_ADAPTIVE_GRID_NMS_HARD_FLOOR))
+    mask = _local_max_mask(
+        vertices,
+        scores,
+        max(float(neighbour_r), float(_ADAPTIVE_GRID_NMS_HARD_FLOOR)),
+        cell,
+        pbc,
+        groups=groups,
+        radii=local_r,
+        hard_floor=float(_ADAPTIVE_GRID_NMS_HARD_FLOOR),
+    )
     if not np.any(mask):
         mask = np.ones(len(vertices), dtype=bool)
-    vertices, nn, scores = vertices[mask], nn[mask], scores[mask]
-    return _nms(vertices, nn, scores, merge_r, cell, pbc)
+    vertices, nn, scores, groups, radii = (
+        vertices[mask],
+        nn[mask],
+        scores[mask],
+        groups[mask],
+        radii[mask],
+    )
+    return _nms(
+        vertices, nn, scores, merge_r, cell, pbc, groups=groups, radii=radii
+    )
 
 
 def _thin(
@@ -499,6 +598,11 @@ def _thin(
     pbc: np.ndarray,
     tree: KDTree,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Same-class NMS by provisional coordination (1/2/3+).
+
+    Cross-type peaks may sit close; :func:`dedupe_adaptive_sites_within_type`
+    removes same-label near-duplicates after shared classification.
+    """
     if len(vertices) == 0:
         return vertices, nn
     if len(vertices) > _ADAPTIVE_GRID_BIN_PRETHIN:
@@ -513,26 +617,86 @@ def _thin(
             pbc=pbc,
         )
     sc = _scores(nn, probe=probe, max_d=max_d, median_nn=median_nn)
-    groups = _provisional_coordination(vertices, tree, nn)
-    parts_v: list[np.ndarray] = []
-    parts_nn: list[np.ndarray] = []
-    for g in sorted(int(x) for x in np.unique(groups)):
-        mask = groups == g
-        v_g, nn_g = _thin_group(
-            vertices[mask],
-            nn[mask],
-            sc[mask],
-            neighbour_r=neighbour_r,
-            merge_r=merge_r,
-            cell=cell,
-            pbc=pbc,
+    groups = _provisional_coordination_count(vertices, tree, nn)
+    return _nms_pass(
+        vertices,
+        nn,
+        sc,
+        groups,
+        merge_r=merge_r,
+        median_nn=median_nn,
+        neighbour_r=neighbour_r,
+        cell=cell,
+        pbc=pbc,
+    )
+
+
+def dedupe_adaptive_sites_within_type(
+    sites: list,
+    *,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    median_nn: float,
+    probe_radius: float,
+    max_site_distance: float,
+) -> list:
+    """Greedy within-type NMS after shared classification (adaptive_grid only).
+
+    Bridge and hollow peaks often sit ~0.5 Å apart in the adaptive cloud; once
+    both label as hollow they look like duplicates. Deduping *after* typing
+    with class-specific radii collapses those without killing true bridges.
+    """
+    if len(sites) < 2:
+        return list(sites)
+    scales = {
+        "atop": float(_ADAPTIVE_GRID_NMS_ATOP_NN_SCALE),
+        "bridge": float(_ADAPTIVE_GRID_NMS_BRIDGE_NN_SCALE),
+        "hollow": float(_ADAPTIVE_GRID_NMS_HOLLOW_NN_SCALE),
+        "pore": float(_ADAPTIVE_GRID_NMS_HOLLOW_NN_SCALE),
+        "envelope": float(_ADAPTIVE_GRID_NMS_HOLLOW_NN_SCALE),
+    }
+    nn_med = float(median_nn) if np.isfinite(median_nn) and median_nn > 0.0 else 0.0
+    target = _shell_target(float(probe_radius), float(max_site_distance), nn_med)
+    by_type: dict[str, list[int]] = {}
+    for i, s in enumerate(sites):
+        by_type.setdefault(str(s.site_type), []).append(i)
+    keep_mask = np.zeros(len(sites), dtype=bool)
+    cell_arr = np.asarray(cell, dtype=float)
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    for stype, idxs in by_type.items():
+        if len(idxs) == 1:
+            keep_mask[idxs[0]] = True
+            continue
+        scale = scales.get(stype, float(_ADAPTIVE_GRID_NMS_HOLLOW_NN_SCALE))
+        merge_r = max(0.35, scale * nn_med) if nn_med > 0.0 else 0.5
+        xyz = np.asarray([sites[i].xyz for i in idxs], dtype=float)
+        nn_vals = np.asarray(
+            [
+                float(sites[i].nn_distance)
+                if sites[i].nn_distance is not None
+                else target
+                for i in idxs
+            ],
+            dtype=float,
         )
-        if len(v_g):
-            parts_v.append(v_g)
-            parts_nn.append(nn_g)
-    if not parts_v:
-        return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
-    return np.vstack(parts_v), np.concatenate(parts_nn)
+        scores = -np.abs(nn_vals - target)
+        groups = np.ones(len(idxs), dtype=int)
+        radii = np.full(len(idxs), float(merge_r), dtype=float)
+        v_keep, _ = _nms(
+            xyz,
+            nn_vals,
+            scores,
+            float(merge_r),
+            cell_arr,
+            pbc_arr,
+            groups=groups,
+            radii=radii,
+        )
+        tree = KDTree(xyz)
+        for pt in v_keep:
+            j = int(tree.query(pt, k=1)[1])
+            keep_mask[idxs[j]] = True
+    return [s for i, s in enumerate(sites) if keep_mask[i]]
 
 
 def _bin_prethin(

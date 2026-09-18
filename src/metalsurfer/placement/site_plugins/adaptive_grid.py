@@ -12,7 +12,7 @@ from ..site_adaptive_grid import (
     adaptive_grid_characteristic_length,
     generate_adaptive_grid_sites,
 )
-from ..site_coords import top_layer_mask_by_normal
+from ..site_coords import _height_along_slab_normal, top_layer_mask_by_normal
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
 from .helpers import median_nn_or_fallback
 
@@ -59,15 +59,19 @@ class AdaptiveGridGenerator:
         if len(vertices) == 0:
             return empty_candidate_batch()
 
-        # Top-layer indices only for Delaunay classification on slabs — no height
-        # mask and no atop injection (exposure + NMS already cover surface sites).
+        # Drop interlayer / subsurface candidates. Use the top-atom plane (not
+        # site-nn margins): adaptive nn distances are shell radii ~2 Å and would
+        # otherwise keep sites between Cu layers.
         slab_top = None
         if material_type == "slab":
-            slab_top = np.nonzero(
-                top_layer_mask_by_normal(
-                    positions, cell, float(ctx.top_layer_tolerance)
-                )
-            )[0]
+            tol = float(ctx.top_layer_tolerance)
+            slab_top = np.nonzero(top_layer_mask_by_normal(positions, cell, tol))[0]
+            h_surface = float(np.max(_height_along_slab_normal(positions, cell)))
+            keep = _height_along_slab_normal(vertices, cell) >= h_surface - 0.25
+            vertices = vertices[keep]
+            nn_dists = nn_dists[keep]
+            if len(vertices) == 0:
+                return empty_candidate_batch()
 
         return SiteCandidateBatch(
             vertices=vertices,
