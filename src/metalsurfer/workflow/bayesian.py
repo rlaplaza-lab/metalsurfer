@@ -39,6 +39,7 @@ from ..placement.generators import (
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
 )
+from ..placement.site_context import SiteContext
 from ..reporting import (
     BOPlacementFailure,
     BOValidationFailure,
@@ -301,6 +302,8 @@ def process_molecule_bayesian(
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
     saturation_reuse: bool = False,
+    grid_spacing_scale: float | None = None,
+    site_context: SiteContext | None = None,
 ) -> MoleculeScreenOutcome:
     """Bayesian-optimisation-guided placement screening for one molecule.
 
@@ -382,6 +385,8 @@ def process_molecule_bayesian(
         conformers=conformers,
         conformer_energies=conformer_energies,
         skip_workload_autotune=skip_workload_autotune,
+        grid_spacing_scale=grid_spacing_scale,
+        site_context=site_context,
     )
     if ctx is None:
         assert early_failure is not None

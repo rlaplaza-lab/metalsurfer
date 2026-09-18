@@ -844,7 +844,8 @@ class AdsorptionConfig:
     # Global CPU-parallelism knob (joblib convention): ``1`` is serial, positive
     # values use that many workers, ``-1`` uses all CPUs, ``-2`` uses all but
     # one. Woven through every CPU-parallel stage: placement materialization
-    # threads and BO surrogate forest training / per-tree uncertainty prediction.
+    # threads, adaptive-grid site enumeration, and BO surrogate forest training
+    # / per-tree uncertainty prediction.
     n_jobs: int = -2
     # Placement-materialization thread-pool size override (joblib-style);
     # ``None`` inherits the global :attr:`n_jobs`.

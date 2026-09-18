@@ -288,6 +288,8 @@ def get_unified_sites(
     planar_z_variance_threshold: float | None = None,
     site_generator: str = "auto",
     adsorbate: Atoms | None = None,
+    grid_spacing_scale: float | None = None,
+    n_jobs: int = -2,
 ) -> list[Site]:
     """Return adsorption/placement sites for *atoms*.
 
@@ -302,7 +304,8 @@ def get_unified_sites(
     - **nanoparticle** (topology): hull + NN only.
     - **porous** (voronoi): free-volume vertices with optional ridge enrichment.
     - **adaptive_grid** (internal): atom-centred Cartesian grid with iterative
-      refinement; optional *adsorbate* scales grid increments only.
+      refinement; *grid_spacing_scale* (min adsorbate size) sizes one shared
+      catalog. CPU-bound shell / refine stages honour joblib-style *n_jobs*.
 
     Parameters
     ----------
@@ -332,9 +335,17 @@ def get_unified_sites(
         ``"auto"`` (material default), ``"topology"``, ``"voronoi"``, or
         internal ``"adaptive_grid"``.
     adsorbate
-        Optional representative conformer. Used only by ``adaptive_grid`` to
-        scale grid spacing from molecular footprint / thickness / covalent
-        radius; ignored by topology and Voronoi.
+        Optional representative conformer. If *grid_spacing_scale* is omitted,
+        ``adaptive_grid`` derives spacing from this molecule; ignored by
+        topology / Voronoi. Prefer *grid_spacing_scale* (min over competing
+        adsorbates) so one shared catalog scales to many molecules.
+    grid_spacing_scale
+        Shared adaptive-grid spacing length (Å). Typically
+        :func:`~metalsurfer.placement.site_adaptive_grid.min_adsorbate_grid_scale`
+        over competing adsorbates. Overrides *adsorbate* when both are set.
+    n_jobs
+        Joblib-style CPU workers for ``adaptive_grid`` shell/refine stages
+        (default ``-2`` = all CPUs but one). Ignored by other plugins.
     """
     scratch = _PlanarWidenScratch()
     sites = _enumerate_unified_sites(
@@ -349,6 +360,8 @@ def get_unified_sites(
         planar_z_variance_threshold=planar_z_variance_threshold,
         site_generator=site_generator,
         adsorbate=adsorbate,
+        grid_spacing_scale=grid_spacing_scale,
+        n_jobs=n_jobs,
         _widen_scratch=scratch,
     )
     if sites or not auto_widen:
@@ -390,6 +403,8 @@ def get_unified_sites(
         planar_z_variance_threshold=planar_z_variance_threshold,
         site_generator=site_generator,
         adsorbate=adsorbate,
+        grid_spacing_scale=grid_spacing_scale,
+        n_jobs=n_jobs,
         _reuse_topology=reuse,
     )
 
@@ -407,6 +422,8 @@ def _enumerate_unified_sites(
     site_generator: str = "auto",
     *,
     adsorbate: Atoms | None = None,
+    grid_spacing_scale: float | None = None,
+    n_jobs: int = -2,
     _widen_scratch: _PlanarWidenScratch | None = None,
     _reuse_topology: _PlanarWidenScratch | None = None,
 ) -> list[Site]:
@@ -478,6 +495,8 @@ def _enumerate_unified_sites(
         enrich=bool(enrich),
         planar_z_variance_threshold=float(z_var_threshold),
         adsorbate=adsorbate,
+        grid_spacing_scale=grid_spacing_scale,
+        n_jobs=int(n_jobs),
     )
     batch = plugin.generate(ctx, reuse=_reuse_topology)
 

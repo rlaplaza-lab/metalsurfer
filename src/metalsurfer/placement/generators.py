@@ -6,7 +6,6 @@ and ``site_context`` — import those modules directly in tests.
 """
 
 import logging
-import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -25,6 +24,7 @@ from ._constants import (
     _POROUS_SITE_INDEX_WEIGHT,
 )
 from ._material import material_aware_pbc
+from ._parallel import resolve_materialize_workers
 from .dissociative import (
     _generate_dissociative_placement_from_spec,
     _get_dissociative_site_pairs,
@@ -46,6 +46,10 @@ from .pose import (
     _PoseBatchCache,
     build_pose_batch_cache,
 )
+from .site_adaptive_grid import (
+    adsorbate_contact_distance,
+    resolve_adaptive_grid_spacing_scale,
+)
 from .site_context import (
     SiteContext,
     site_context_for_sampling,
@@ -53,41 +57,6 @@ from .site_context import (
 from .site_types import Site
 
 logger = logging.getLogger(__name__)
-
-
-def resolve_materialize_workers(
-    n_jobs: int,
-    *,
-    n_tasks: int | None = None,
-    cpu_count: int | None = None,
-) -> int:
-    """Resolve joblib-style ``n_jobs`` to a concrete thread-pool size.
-
-    ``1`` is serial, ``>1`` is that many workers, ``-1`` uses all CPUs, and
-    values ``< -1`` use ``max(1, cpu_count + 1 + n_jobs)`` (so ``-2`` is all
-    but one CPU). When ``n_tasks`` is set, the result is capped at ``n_tasks``.
-
-    Parameters
-    ----------
-    n_jobs
-        Number of parallel workers (joblib convention).
-    n_tasks
-        Optional cap on workers based on task count.
-    cpu_count
-        Optional CPU count override.
-    """
-    if n_jobs == 0:
-        raise ValueError("n_jobs must be != 0")
-    cpus = cpu_count if cpu_count is not None else (os.cpu_count() or 1)
-    cpus = max(int(cpus), 1)
-    if n_jobs < 0:
-        workers = cpus + 1 + int(n_jobs) if n_jobs < -1 else cpus
-        workers = max(1, workers)
-    else:
-        workers = max(1, int(n_jobs))
-    if n_tasks is not None:
-        workers = min(workers, max(1, int(n_tasks)))
-    return workers
 
 
 def generate_placements_from_specs(
@@ -194,20 +163,25 @@ def _topology_first_site_indices(
     indices: list[int],
     *,
     clearances: np.ndarray | None = None,
+    preferred_nn: float | None = None,
 ) -> list[int]:
-    """Order *indices*: topology-sourced first, then larger clearance, then index."""
+    """Order *indices*: topology first, then nn near preferred, then clearance."""
 
-    def _rank(i: int) -> tuple[int, float, int]:
+    def _rank(i: int) -> tuple[int, float, float, int]:
         site = sites[i]
         src = str(site.site_source)
         prefer = 0 if src.startswith("topology") or src == "atop_injected" else 1
+        nn_pen = 0.0
+        if preferred_nn is not None and preferred_nn > 0.0:
+            nn = site.nn_distance
+            nn_pen = abs(float(nn) - float(preferred_nn)) if nn is not None else 1e6
         # Larger clearance first → negate for ascending sort.
         clear = (
             -float(clearances[i])
             if clearances is not None and i < len(clearances)
             else 0.0
         )
-        return (prefer, clear, i)
+        return (prefer, nn_pen, clear, i)
 
     return sorted(indices, key=_rank)
 
@@ -226,7 +200,18 @@ def _spec_grid_info(
         and config.material_type in ("slab", "nanoparticle")
         and _is_dissociable_diatomic(conformers[0])
     )
-    _ctx = site_context_for_sampling(slab, config, site_context)
+    grid_scale = None
+    preferred_nn = None
+    if str(config.site_generator) == "adaptive_grid" and conformers:
+        grid_scale = resolve_adaptive_grid_spacing_scale(
+            config.voronoi_probe_radius, [conformers[0]]
+        )
+        preferred_nn = adsorbate_contact_distance(
+            conformers[0], list(slab.get_chemical_symbols())
+        )
+    _ctx = site_context_for_sampling(
+        slab, config, site_context, grid_spacing_scale=grid_scale
+    )
     unique_sites = _ctx.sites
     use_sites = _ctx.use_sites
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
@@ -280,7 +265,10 @@ def _spec_grid_info(
             use_sites = False
         else:
             site_indices = _topology_first_site_indices(
-                unique_sites, site_indices, clearances=clearances
+                unique_sites,
+                site_indices,
+                clearances=clearances,
+                preferred_nn=preferred_nn,
             )
             if config.material_type == "porous":
                 # Free-volume pores dominate adsorption in frameworks; wall sites
@@ -670,10 +658,17 @@ def generate_placement_from_spec_with_reason(
             site_context=site_context,
         )
 
+    grid_scale = None
+    if str(config.site_generator) == "adaptive_grid" and conformers:
+        grid_scale = resolve_adaptive_grid_spacing_scale(
+            config.voronoi_probe_radius,
+            [conformers[spec.conformer_index]],
+        )
     resolved_ctx = site_context_for_sampling(
         slab_for_sites if slab_for_sites is not None else slab,
         config,
         site_context,
+        grid_spacing_scale=grid_scale,
     )
 
     adsorbate = conformers[spec.conformer_index].copy()

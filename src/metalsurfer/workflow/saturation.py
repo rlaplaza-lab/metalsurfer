@@ -34,6 +34,8 @@ from ..placement.generators import (
     distribute_placement_budget,
     estimate_conformer_count,
 )
+from ..placement.site_adaptive_grid import resolve_adaptive_grid_spacing_scale
+from ..placement.site_context import resolve_site_context_for_sampling
 from ..reporting import FailureSummary
 from ..result_paths import results_dir_for
 from ..surface_prep import SlabContainer, apply_material_pbc
@@ -648,6 +650,8 @@ def _screen_saturation_molecule(
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
     occupancy_placement_X: list[dict[str, float]] | None = None,
+    grid_spacing_scale: float | None = None,
+    site_context=None,
 ) -> tuple[
     list[ScreeningResult], BOTransferInfo, BOStepMemory | None, list[PlacementRecord]
 ]:
@@ -664,6 +668,8 @@ def _screen_saturation_molecule(
         "conformer_energies": conformer_energies,
         "skip_workload_autotune": skip_workload_autotune,
         "saturation_reuse": True,
+        "grid_spacing_scale": grid_spacing_scale,
+        "site_context": site_context,
     }
     if bo_enabled:
         kwargs["bo_step_memory_in"] = (
@@ -1278,6 +1284,12 @@ def _run_multi_molecule_saturation(
         ref_step = preamble.ref_step
 
         slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
+        step_grid_scale = None
+        if str(config.site_generator) == "adaptive_grid":
+            step_grid_scale = resolve_adaptive_grid_spacing_scale(
+                config.voronoi_probe_radius,
+                [conformer_cache[m][0][0] for m in active_molecules],
+            )
         if needs_workload_autotune(config, bo=bo_enabled):
             largest_conformers, _ = conformer_cache[largest_mol]
             step_config = _scale_budget_for_tuplet(
@@ -1291,6 +1303,7 @@ def _run_multi_molecule_saturation(
                     base_slab_for_frozen=base_slab,
                     symmetry_broken=symmetry_broken,
                     bo_enabled=bo_enabled,
+                    grid_spacing_scale=step_grid_scale,
                 )
             )
             config = step_config
@@ -1318,6 +1331,16 @@ def _run_multi_molecule_saturation(
         per_molecule_results: dict[str, list[ScreeningResult]] = {}
         per_molecule_bo_transfer: dict[str, BOTransferInfo] = {}
         new_bo_memory_raw: dict[str, BOStepMemory | None] = {}
+
+        shared_grid_scale = step_grid_scale
+        shared_site_context = None
+        if shared_grid_scale is not None:
+            shared_site_context = resolve_site_context_for_sampling(
+                slab_for_sites,
+                step_config,
+                symmetry_broken=symmetry_broken,
+                grid_spacing_scale=shared_grid_scale,
+            )
 
         for mol in active_molecules:
             if mol not in budgets:
@@ -1361,6 +1384,8 @@ def _run_multi_molecule_saturation(
                     conformer_energies=conformer_cache[mol][1],
                     skip_workload_autotune=True,
                     occupancy_placement_X=committed_placement_X or None,
+                    grid_spacing_scale=shared_grid_scale,
+                    site_context=shared_site_context,
                 )
             )
             for record in ml_records:

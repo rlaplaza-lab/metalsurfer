@@ -7,7 +7,11 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 
-from ..site_adaptive_grid import _SOURCE_HINT, generate_adaptive_grid_sites
+from ..site_adaptive_grid import (
+    _SOURCE_HINT,
+    adaptive_grid_characteristic_length,
+    generate_adaptive_grid_sites,
+)
 from ..site_coords import top_layer_mask_by_normal
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
 from .helpers import median_nn_or_fallback
@@ -44,6 +48,11 @@ class AdaptiveGridGenerator:
         positions, cell, pbc = ctx.positions, ctx.cell, ctx.pbc
         material_type = ctx.material_type
         adsorbate = ctx.adsorbate if isinstance(ctx.adsorbate, Atoms) else None
+        scale = ctx.grid_spacing_scale
+        if scale is None and adsorbate is not None:
+            scale = adaptive_grid_characteristic_length(
+                float(ctx.probe_radius), adsorbate
+            )
 
         vertices, nn_dists, _, accessibility_tree = generate_adaptive_grid_sites(
             positions,
@@ -53,9 +62,10 @@ class AdaptiveGridGenerator:
             probe_radius=float(ctx.probe_radius),
             max_site_distance=float(ctx.max_site_distance),
             top_layer_tolerance=float(ctx.top_layer_tolerance),
-            adsorbate=adsorbate,
+            grid_spacing_scale=scale,
             initial_spacing=self._initial_spacing,
             max_levels=self._max_levels,
+            n_jobs=int(ctx.n_jobs),
         )
 
         if len(vertices) == 0 and material_type == "porous":
