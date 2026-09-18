@@ -371,9 +371,7 @@ class SymmetryAnalyzer:
                     continue
                 sub_frac = frac_pts[idx]
                 for R, t in frac_ops:
-                    for li, lj in self._symop_match_pairs(
-                        sub_frac, R, t, bool(planar)
-                    ):
+                    for li, lj in self._symop_match_pairs(sub_frac, R, t, bool(planar)):
                         merge_pairs.append((int(idx[int(li)]), int(idx[int(lj)])))
 
             components = union_find_cluster(n, merge_pairs)

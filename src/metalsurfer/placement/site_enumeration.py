@@ -588,11 +588,7 @@ def _enumerate_unified_sites(
         atom_indices=atom_indices,
     )
 
-    if (
-        sites
-        and source_hints
-        and any(h == "adaptive_grid" for h in source_hints)
-    ):
+    if sites and source_hints and any(h == "adaptive_grid" for h in source_hints):
         sites = dedupe_adaptive_sites_within_type(
             sites,
             cell=cell,

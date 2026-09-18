@@ -409,9 +409,7 @@ def _local_max_mask(
         same = groups is None or int(groups[i]) == int(groups[j])
         if same:
             r_ij = (
-                float(min(radii[i], radii[j]))
-                if radii is not None
-                else float(radius)
+                float(min(radii[i], radii[j])) if radii is not None else float(radius)
             )
             if not _pair_within_radius(points[i], points[j], r_ij, cell, pbc):
                 continue
@@ -580,9 +578,7 @@ def _nms_pass(
         groups[mask],
         radii[mask],
     )
-    return _nms(
-        vertices, nn, scores, merge_r, cell, pbc, groups=groups, radii=radii
-    )
+    return _nms(vertices, nn, scores, merge_r, cell, pbc, groups=groups, radii=radii)
 
 
 def _thin(
