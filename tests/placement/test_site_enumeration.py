@@ -175,13 +175,13 @@ def test_cluster_equivalent_sites_reduces_or_keeps_sites_per_material():
                     [1.0, 1.0, 5.0],
                     site_type="atop",
                     material_type="slab",
-                    env_fingerprint=(("Ni",), "atop"),
+                    env_fingerprint=(("Ni",), (), 0),
                 ),
                 _make_site(
                     [1.0, 1.0, 5.0],
                     site_type="atop",
                     material_type="slab",
-                    env_fingerprint=(("Pt",), "atop"),
+                    env_fingerprint=(("Pt",), (), 0),
                 ),
             ],
             2,
@@ -192,13 +192,13 @@ def test_cluster_equivalent_sites_reduces_or_keeps_sites_per_material():
                     [1.0, 1.0, 5.0],
                     site_type="atop",
                     material_type="slab",
-                    env_fingerprint=(("Ru",), "atop"),
+                    env_fingerprint=(("Ru",), (), 0),
                 ),
                 _make_site(
                     [1.001, 1.001, 5.0],
                     site_type="atop",
                     material_type="slab",
-                    env_fingerprint=(("Ru",), "atop"),
+                    env_fingerprint=(("Ru",), (), 0),
                 ),
             ],
             1,
@@ -357,13 +357,13 @@ def test_cluster_equivalent_sites_cartesian_tolerance_scales_with_cell():
         [1.0, 1.0, 5.0],
         site_type="atop",
         material_type="slab",
-        env_fingerprint=(("Ru",), "atop"),
+        env_fingerprint=(("Ru",), (), 0),
     )
     site_b = _make_site(
         [1.04, 1.0, 5.0],
         site_type="atop",
         material_type="slab",
-        env_fingerprint=(("Ru",), "atop"),
+        env_fingerprint=(("Ru",), (), 0),
     )
     for a_len in (8.1, 16.2):
         cell = np.array([[a_len, 0.0, 0.0], [0.0, a_len, 0.0], [0.0, 0.0, 20.0]])
@@ -401,13 +401,13 @@ def test_cluster_equivalent_sites_tilted_slab_uses_in_plane_distance():
         base.copy(),
         site_type="atop",
         material_type="slab",
-        env_fingerprint=(("Cu",), "atop"),
+        env_fingerprint=(("Cu",), (), 0),
     )
     site_b = _make_site(
         other.copy(),
         site_type="atop",
         material_type="slab",
-        env_fingerprint=(("Cu",), "atop"),
+        env_fingerprint=(("Cu",), (), 0),
     )
     unique = _cluster_equivalent_sites(
         [site_a, site_b], cell, tolerance=0.35, z_abs_tolerance=0.2
@@ -421,7 +421,7 @@ def test_cluster_equivalent_sites_tilted_slab_uses_in_plane_distance():
         near.copy(),
         site_type="atop",
         material_type="slab",
-        env_fingerprint=(("Cu",), "atop"),
+        env_fingerprint=(("Cu",), (), 0),
     )
     unique_near = _cluster_equivalent_sites(
         [site_a, site_near], cell, tolerance=0.35, z_abs_tolerance=0.2
@@ -921,13 +921,13 @@ def test_cluster_equivalent_sites_anisotropic_slab_metric_bound():
         [1.0, 1.0, 5.0],
         site_type="atop",
         material_type="slab",
-        env_fingerprint=(("Cu",), "atop"),
+        env_fingerprint=(("Cu",), (), 0),
     )
     site_b = _make_site(
         [1.04, 1.0, 5.10],
         site_type="atop",
         material_type="slab",
-        env_fingerprint=(("Cu",), "atop"),
+        env_fingerprint=(("Cu",), (), 0),
     )
     cart = float(np.linalg.norm(np.asarray(site_b.xyz) - np.asarray(site_a.xyz)))
     assert cart > 1.5 * tol
@@ -941,7 +941,7 @@ def test_cluster_equivalent_sites_anisotropic_slab_metric_bound():
         [1.04, 1.0, 5.60],
         site_type="atop",
         material_type="slab",
-        env_fingerprint=(("Cu",), "atop"),
+        env_fingerprint=(("Cu",), (), 0),
     )
     cart_far = float(np.linalg.norm(np.asarray(site_far.xyz) - np.asarray(site_a.xyz)))
     assert cart_far > float(np.hypot(tol, z_tol))

@@ -203,12 +203,21 @@ Site detection
    construction. Explicit ``"voronoi"`` on a slab skips topology (A/B path;
    planar cells may rely on atop injection).
 
+``side_policy``
+   **Type:** ``Literal["all", "positive", "negative", "external"]`` · **Default:** ``"positive"``
+
+   Slab-face / exposure filter for ``adaptive_grid`` (and shared site plumbing).
+   ``"positive"`` keeps the outward / top face (default catalysis behaviour);
+   ``"negative"`` the opposite face; ``"all"`` both faces; ``"external"`` keeps
+   outward-pointing sites on non-slab shapes (and both faces on slabs).
+
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)
 
    Tolerance for merging geometrically near-duplicate sites after initial
-   detection (MIC-aware, fingerprint-aware clustering on support-atom symbols +
-   classified ``site_type``). Origin tags (``site_source``) do not participate.
+   detection (MIC-aware, fingerprint-aware clustering on support-atom symbols,
+   optional distance bins, and side label — not classified ``site_type``).
+   Origin tags (``site_source``) do not participate.
    This is the uniqueness metric shared by molecular placement, dissociative
    hollow pairs, and adatom hollow selection. Spglib symmetry reduction is a
    separate later pass controlled by ``symmetry_tolerance`` (molecular sampling

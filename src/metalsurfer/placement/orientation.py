@@ -195,9 +195,14 @@ def _finish_orientation(
     spec: PlacementSpec,
     *,
     R_base: np.ndarray,
+    tangent_basis: np.ndarray | None = None,
 ) -> OrientedAdsorbate:
     rotated_pos, R_tilt = geom._rotation_with_tilt(
-        base_pos, normal, spec.tilt_deg, spec.azimuth_deg
+        base_pos,
+        normal,
+        spec.tilt_deg,
+        spec.azimuth_deg,
+        tangent_basis=tangent_basis,
     )
     R_total = R_tilt @ R_base
     quat = geom.rotation_matrix_to_quaternion(R_total)
@@ -212,6 +217,7 @@ def _orient_parallel(
     *,
     normal: np.ndarray,
     spec: PlacementSpec,
+    tangent_basis: np.ndarray | None = None,
 ) -> OrientedAdsorbate:
     base_pos, R_base = geom._flat_orientation_from_principal_axis(
         canonical_pos,
@@ -219,7 +225,9 @@ def _orient_parallel(
         azimuth_in_plane_deg=spec.azimuth_in_plane_deg,
         face_flip=spec.face_flip,
     )
-    return _finish_orientation(base_pos, normal, spec, R_base=R_base)
+    return _finish_orientation(
+        base_pos, normal, spec, R_base=R_base, tangent_basis=tangent_basis
+    )
 
 
 def _orient_binder_aligned(
@@ -228,6 +236,7 @@ def _orient_binder_aligned(
     normal: np.ndarray,
     symbols: list[str],
     spec: PlacementSpec,
+    tangent_basis: np.ndarray | None = None,
 ) -> OrientedAdsorbate:
     base_pos, R_base = geom._surface_aligned_rotation(
         canonical_pos,
@@ -235,7 +244,9 @@ def _orient_binder_aligned(
         symbols,
         en_binder_index=spec.en_atom_index,
     )
-    return _finish_orientation(base_pos, normal, spec, R_base=R_base)
+    return _finish_orientation(
+        base_pos, normal, spec, R_base=R_base, tangent_basis=tangent_basis
+    )
 
 
 def orient_from_spec(
@@ -244,6 +255,7 @@ def orient_from_spec(
     normal: np.ndarray,
     symbols: list[str],
     spec: PlacementSpec,
+    tangent_basis: np.ndarray | None = None,
 ) -> OrientedAdsorbate:
     """Select parallel vs binder-aligned orientation from *spec.orientation_type*.
 
@@ -257,9 +269,20 @@ def orient_from_spec(
         Chemical symbols of the adsorbate atoms.
     spec
         :class:`~metalsurfer.models.PlacementSpec` defining the orientation.
+    tangent_basis
+        Optional site ``(2, 3)`` tangent frame for azimuth zero.
     """
     if spec.orientation_type == "parallel":
-        return _orient_parallel(canonical_pos, normal=normal, spec=spec)
+        return _orient_parallel(
+            canonical_pos,
+            normal=normal,
+            spec=spec,
+            tangent_basis=tangent_basis,
+        )
     return _orient_binder_aligned(
-        canonical_pos, normal=normal, symbols=symbols, spec=spec
+        canonical_pos,
+        normal=normal,
+        symbols=symbols,
+        spec=spec,
+        tangent_basis=tangent_basis,
     )

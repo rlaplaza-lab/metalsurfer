@@ -289,6 +289,7 @@ SITE_GENERATOR_OPTIONS: tuple[str, ...] = (
     "voronoi",
     "adaptive_grid",
 )
+SIDE_POLICY_OPTIONS: tuple[str, ...] = ("all", "positive", "negative", "external")
 
 # Explicit plugins incompatible with certain materials (mirrors site_plugins).
 _SITE_GENERATOR_ALLOWED_MATERIALS: dict[str, frozenset[str]] = {
@@ -468,6 +469,11 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
         "site_generator",
         root.site_generator,
         allowed=SITE_GENERATOR_OPTIONS,
+    )
+    _check_choice(
+        "side_policy",
+        root.side_policy,
+        allowed=SIDE_POLICY_OPTIONS,
     )
     if root.site_generator != "auto":
         allowed = _SITE_GENERATOR_ALLOWED_MATERIALS[root.site_generator]
@@ -750,6 +756,8 @@ class AdsorptionConfig:
     # Site candidate generator. ``auto`` → topology (slab/NP) or Voronoi (porous).
     # ``adaptive_grid`` is selectable on all materials but never chosen by ``auto``.
     site_generator: Literal["auto", "topology", "voronoi", "adaptive_grid"] = "auto"
+    # Slab face / exposure policy (adaptive_grid; default top face).
+    side_policy: Literal["all", "positive", "negative", "external"] = "positive"
     # Conformer prior for placement-spec selection.
     # ``"uniform"`` keeps the conformer-agnostic stratified draw (ignores
     # conformer energies). ``"boltzmann"`` (default) allocates spec slots per

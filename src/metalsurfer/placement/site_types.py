@@ -14,7 +14,11 @@ __all__ = [
 
 @dataclass(frozen=True, eq=False)
 class Site:
-    """One adsorption site (Voronoi / topology / hollow)."""
+    """One adsorption site from any generator plugin.
+
+    ``env_fingerprint`` is ``(support_symbols, distance_bins, side_label)``.
+    ``tangent_basis`` is always set by shared classify for pose/orientation.
+    """
 
     xyz: np.ndarray
     normal: np.ndarray
@@ -27,6 +31,8 @@ class Site:
     hollow_order: int | None = None
     symmetry_multiplicity: int | None = None
     symmetry_equivalent_sites: tuple | None = None
+    clearance: float | None = None
+    tangent_basis: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         """Coerce array and sequence fields after initialization."""
@@ -47,6 +53,9 @@ class Site:
                 "symmetry_equivalent_sites",
                 tuple(self.symmetry_equivalent_sites),
             )
+        if self.tangent_basis is not None:
+            tb = np.asarray(self.tangent_basis, dtype=float).reshape(2, 3).copy()
+            object.__setattr__(self, "tangent_basis", tb)
 
     @property
     def xy(self) -> np.ndarray:

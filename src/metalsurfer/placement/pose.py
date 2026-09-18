@@ -398,7 +398,11 @@ def _pose_from_spec(
     )
 
     oriented = orient_from_spec(
-        canonical_pos, normal=normal, symbols=symbols, spec=spec
+        canonical_pos,
+        normal=normal,
+        symbols=symbols,
+        spec=spec,
+        tangent_basis=site.tangent_basis if site is not None else None,
     )
     rotated_pos = oriented.rotated_pos
     quat = oriented.quat
@@ -972,7 +976,8 @@ def _try_clash_descent_recovery(
         moving_radii=moving_r,
     )
     site_frame = geom.compute_surface_site_frame(
-        _placement_normal(ctx, slab, pose_cache=pose_cache)
+        _placement_normal(ctx, slab, pose_cache=pose_cache),
+        tangent_basis=ctx.site.tangent_basis if ctx.site is not None else None,
     )
     new_pos, az_delta, ok = resolve_rigid_clash(
         adsorbate,

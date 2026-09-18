@@ -290,9 +290,7 @@ _ADAPTIVE_GRID_H_MAX: float = 1.5
 _ADAPTIVE_GRID_MAX_LEVELS: int = 2
 # Near-zero molecular extents (flat thickness, single-atom footprint) skip this.
 _ADAPTIVE_GRID_EXTENT_EPS: float = 0.05
-# NMS merge radius: max(nms_scale * h_fine, nms_length_scale * L).
-# Within a coordination class this sets same-type spacing; cross-type peaks in
-# the same ball are kept (same-class-only suppression).
+# NMS / basin merge radius: max(nms_scale * h_fine, nms_length_scale * L).
 _ADAPTIVE_GRID_NMS_SCALE: float = 1.5
 _ADAPTIVE_GRID_NMS_LENGTH_SCALE: float = 0.5
 # Soft per-chunk work budget: each shell/refine chunk keeps
@@ -300,18 +298,30 @@ _ADAPTIVE_GRID_NMS_LENGTH_SCALE: float = 0.5
 _ADAPTIVE_GRID_WORK_BUDGET: int = 250_000
 # Floor merge radius as a fraction of framework median NN.
 _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE: float = 0.35
-# Same-class NMS merge as a fraction of framework median NN.
-_ADAPTIVE_GRID_NMS_ATOP_NN_SCALE: float = 0.55
-_ADAPTIVE_GRID_NMS_BRIDGE_NN_SCALE: float = 0.35
-_ADAPTIVE_GRID_NMS_HOLLOW_NN_SCALE: float = 0.50
-# Cross-class absolute floor (Å). 0 keeps bridge/hollow coexistence; typed
-# post-classify dedup removes same-label near-duplicates.
-_ADAPTIVE_GRID_NMS_HARD_FLOOR: float = 0.0
 # Floor characteristic length before deriving h0 / refine depth.
 _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE: float = 0.25
-# Neighbours within this factor of nn count toward provisional coordination.
-_ADAPTIVE_GRID_COORD_NN_FACTOR: float = 1.15
 # Bin-prethin before NMS when the coarse cloud exceeds this many points.
 _ADAPTIVE_GRID_BIN_PRETHIN: int = 8_000
 # Exposure probe step along the outward unit vector (Å).
 _ADAPTIVE_GRID_EXPOSURE_STEP: float = 0.25
+# Multi-step ray exposure along the local normal.
+_ADAPTIVE_GRID_EXPOSURE_N_STEPS: int = 4
+# Support-shell threshold on effective (radius-subtracted) distance (Å).
+_ADAPTIVE_GRID_SUPPORT_DELTA: float = 0.35
+_ADAPTIVE_GRID_MAX_SUPPORT: int = 8
+# Basin clustering: Jaccard / normal / clearance compatibility.
+_ADAPTIVE_GRID_BASIN_MIN_JACCARD: float = 0.5
+_ADAPTIVE_GRID_BASIN_MIN_NORMAL_COSINE: float = 0.7
+_ADAPTIVE_GRID_BASIN_CLEARANCE_TOL: float = 0.5
+# Local merge radius as a fraction of support-pair median length.
+_ADAPTIVE_GRID_LOCAL_MERGE_SCALE: float = 0.45
+# Stationarity score weights (clearance target + tangential gradient).
+_ADAPTIVE_GRID_SCORE_W_CLEARANCE: float = 1.0
+_ADAPTIVE_GRID_SCORE_W_GRADIENT: float = 0.5
+_ADAPTIVE_GRID_SCORE_W_BALANCE: float = 0.25
+_ADAPTIVE_GRID_STATIONARITY_STEP: float = 0.15
+# Basin refine convergence tolerances.
+_ADAPTIVE_GRID_REFINE_POS_TOL: float = 0.05
+_ADAPTIVE_GRID_REFINE_SCORE_TOL: float = 0.02
+# Fingerprint distance quantization (Å) for shared site env fingerprints.
+_SITE_ENV_FP_DIST_BIN: float = 0.25

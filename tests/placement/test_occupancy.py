@@ -159,15 +159,17 @@ def _run_fill(fill_mod: object, config: AdsorptionConfig, *, slab: Atoms | None 
 
 
 def test_env_fingerprint_present_in_unified_sites():
-    """Sites should carry an env_fingerprint after Phase 1."""
+    """Sites carry a shared env_fingerprint after classify."""
     sites = get_unified_sites(make_slab(), material_type="slab")
     assert len(sites) > 0
     for s in sites:
         fp = s.env_fingerprint
-        assert isinstance(fp, tuple) and len(fp) == 2
-        # First element is a tuple of element symbols, second is site_type
+        assert isinstance(fp, tuple) and len(fp) == 3
         assert isinstance(fp[0], tuple)
-        assert isinstance(fp[1], str)
+        assert isinstance(fp[1], tuple)
+        assert isinstance(fp[2], int)
+        assert s.tangent_basis is not None
+        assert np.asarray(s.tangent_basis).shape == (2, 3)
 
 
 def test_filter_sites_by_occupancy_drops_near_adsorbate():
@@ -276,7 +278,7 @@ def test_footprint_ranks_without_pruning():
             slab_indices=(idx,),
             material_type="slab",
             site_source="topology",
-            env_fingerprint=((), "atop"),
+            env_fingerprint=((), (), 0),
         )
 
     near, far = _site([0.0, 0.0, 0.0], 0), _site([10.0, 0.0, 0.0], 1)
@@ -474,7 +476,7 @@ def test_place_dissociative_two_sites_matches_spec_path():
         slab_indices=(),
         material_type="slab",
         site_source="test",
-        env_fingerprint=((), "hollow"),
+        env_fingerprint=((), (), 0),
     )
     z_lo, z_hi = _compute_site_z_base(config, slab, hollow, ["H", "H"])
     z_lo += _site_type_z_offset(slab, hollow, "hollow")
@@ -487,7 +489,7 @@ def test_place_dissociative_two_sites_matches_spec_path():
         slab_indices=(),
         material_type="slab",
         site_source="dissociative_hollow_pair",
-        env_fingerprint=((), "hollow"),
+        env_fingerprint=((), (), 0),
     )
     site_b = Site(
         xyz=pair.xyz2,
@@ -496,7 +498,7 @@ def test_place_dissociative_two_sites_matches_spec_path():
         slab_indices=(),
         material_type="slab",
         site_source="dissociative_hollow_pair",
-        env_fingerprint=((), "hollow"),
+        env_fingerprint=((), (), 0),
     )
     via_place = _place_dissociative_two_sites(
         h2,

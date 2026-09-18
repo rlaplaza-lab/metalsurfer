@@ -152,8 +152,8 @@ incompatible ``site_generator`` / ``material_type`` pairs are rejected.
 ``adaptive_grid`` works on all three material types but is never selected by
 ``auto``. Density follows optional shared adsorbate ``grid_spacing_scale``,
 floored against framework median nearest-neighbour spacing (there is no hard
-site-count cap). Orbit reduction runs during adaptive-grid enumeration;
-``site_context`` therefore skips a second spglib pass for that generator.
+site-count cap). ``side_policy`` (default ``"positive"``) selects which slab
+face / exposure half-space adaptive-grid keeps.
 
 Site uniqueness and sampling
 ----------------------------
@@ -161,9 +161,10 @@ Site uniqueness and sampling
 After candidates are classified into ``Site`` records, uniqueness is shared:
 
 - ``site_equivalence_tolerance`` (default 0.05 Å) — fingerprint-aware clustering
-  (geometry + support symbols + ``site_type``). Ignores ``site_source``, so
-  topology / Voronoi / injected atops in the same pocket merge. Used by
-  molecular placement, dissociative hollow pairs, and adatom hollow selection.
+  (geometry + support symbols + distance bins + side). Ignores ``site_source``
+  and classified ``site_type``, so topology / Voronoi / injected atops in the
+  same pocket merge. Used by molecular placement, dissociative hollow pairs,
+  and adatom hollow selection.
 - ``symmetry_tolerance`` (default 0.1 Å) — optional spglib orbit reduction on
   the **clustered** catalog for molecular sampling only (skipped when substrate
   symmetry is broken). Dissociative / adatoms keep the full clustered lattice.

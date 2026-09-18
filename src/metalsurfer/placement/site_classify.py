@@ -1,5 +1,6 @@
 """Local surface normals and site record construction."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -12,11 +13,14 @@ from ._constants import (
     _KD_RADIUS_SEARCH_PADDING,
     _NORMAL_K_NEIGHBOURS,
     _SITE_CLASSIFICATION_NEIGHBOURS,
+    _SITE_ENV_FP_DIST_BIN,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
 )
+from .geometry import tangent_basis_from_normal
 from .site_coords import (
     _build_periodic_images,
+    _minimum_image_cartesian_delta,
     _project_to_slab_plane,
     _slab_normal,
 )
@@ -367,6 +371,103 @@ _TOPOLOGY_SOURCE_TO_TYPE = {
 }
 
 
+def site_env_fingerprint(
+    support_indices: Sequence[int],
+    symbols: Sequence[str],
+    support_distances: Sequence[float] | None = None,
+    *,
+    side_label: int = 0,
+    dist_bin: float = _SITE_ENV_FP_DIST_BIN,
+) -> tuple[tuple[str, ...], tuple[int, ...], int]:
+    """Shared environment fingerprint: chemistry, distance bins, side.
+
+    ``site_type`` is intentionally excluded — identity is the local support
+    environment, not the classified label.
+    """
+    numbers = tuple(
+        sorted(
+            str(symbols[int(i)]) for i in support_indices if 0 <= int(i) < len(symbols)
+        )
+    )
+    if support_distances is None:
+        dist_bins: tuple[int, ...] = ()
+    else:
+        dist_bins = tuple(
+            int(round(float(d) / float(dist_bin)))
+            for d in sorted(float(x) for x in support_distances)
+        )
+    return (numbers, dist_bins, int(side_label))
+
+
+def _side_label_from_normal(
+    normal: np.ndarray,
+    *,
+    material_type: str,
+    cell: np.ndarray,
+) -> int:
+    if material_type == "slab" and cell_has_volume(cell):
+        return 1 if float(np.dot(normal, _slab_normal(cell))) >= 0.0 else -1
+    return 0
+
+
+def _support_mic_distances(
+    vertex: np.ndarray,
+    positions: np.ndarray,
+    support: Sequence[int],
+    cell: np.ndarray,
+    pbc: np.ndarray,
+) -> tuple[float, ...]:
+    """Centre-to-centre MIC distances from *vertex* to each support atom."""
+    if not support:
+        return ()
+    vert = np.asarray(vertex, dtype=float)
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    use_mic = bool(np.any(pbc_arr)) and cell_has_volume(cell)
+    out: list[float] = []
+    for j in support:
+        delta = np.asarray(positions[int(j)], dtype=float) - vert
+        if use_mic:
+            delta = _minimum_image_cartesian_delta(delta, cell, pbc_arr)
+        out.append(float(np.linalg.norm(delta)))
+    return tuple(out)
+
+
+def _normal_from_support(
+    vertex: np.ndarray,
+    positions: np.ndarray,
+    support: Sequence[int],
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    fallback: np.ndarray,
+) -> np.ndarray:
+    """Return the unit normal from vertex minus MIC-aware support centroid."""
+    if not support:
+        return np.asarray(fallback, dtype=float)
+    vert = np.asarray(vertex, dtype=float)
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    use_mic = bool(np.any(pbc_arr)) and cell_has_volume(cell)
+    pts = []
+    for j in support:
+        delta = np.asarray(positions[int(j)], dtype=float) - vert
+        if use_mic:
+            delta = _minimum_image_cartesian_delta(delta, cell, pbc_arr)
+        pts.append(vert + delta)
+    centroid = np.mean(np.asarray(pts, dtype=float), axis=0)
+    lift = vert - centroid
+    nrm = float(np.linalg.norm(lift))
+    if nrm < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+        return np.asarray(fallback, dtype=float)
+    return lift / nrm
+
+
+def _site_type_from_support_count(n_support: int) -> str:
+    if n_support <= 1:
+        return "atop"
+    if n_support == 2:
+        return "bridge"
+    return "hollow"
+
+
 def _classify_vertices(
     ctx: _ClassificationContext,
     vertices: np.ndarray,
@@ -378,35 +479,44 @@ def _classify_vertices(
     pore_threshold: float,
     source_hints: list[str] | None,
     atom_indices: list[tuple[int, ...]] | None = None,
+    *,
+    cell: np.ndarray,
+    normals: np.ndarray | None = None,
+    clearances: np.ndarray | None = None,
 ) -> list[Site]:
     n = len(vertices)
     hints = list(source_hints) if source_hints is not None else ["voronoi"] * n
     provided_atoms = (
         list(atom_indices) if atom_indices is not None else [() for _ in range(n)]
     )
+    pbc = np.asarray(ctx.pbc, dtype=bool)
 
-    # Keep topology / injected labels when distance-ratio would otherwise run.
-    # Slabs with Delaunay still use nearest-candidate typing for topology_*;
-    # only ``atop_injected`` is forced there.
+    # 1) topology_* / atop_injected  2) non-empty support  3) Delaunay / distance-ratio
     classifications: list[tuple[str, tuple[int, ...]] | None] = [None] * n
     for i, hint in enumerate(hints):
-        if hint not in _TOPOLOGY_SOURCE_TO_TYPE:
+        if hint in _TOPOLOGY_SOURCE_TO_TYPE:
+            if ctx.delaunay is not None and hint != "atop_injected":
+                continue
+            site_type = _TOPOLOGY_SOURCE_TO_TYPE[hint]
+            atoms_i = tuple(int(j) for j in provided_atoms[i])
+            if not atoms_i:
+                n_keep = {"atop": 1, "bridge": 2, "hollow": 3}[site_type]
+                n_keep = min(n_keep, len(positions))
+                if n_keep and ctx.class_idx is not None:
+                    atoms_i = tuple(
+                        int(j) for j in np.asarray(ctx.class_idx[i]).ravel()[:n_keep]
+                    )
+                elif n_keep:
+                    _, idx = local_tree.query(vertices[i].reshape(1, 3), k=n_keep)
+                    atoms_i = tuple(int(j) for j in np.atleast_1d(idx).ravel())
+            classifications[i] = (site_type, atoms_i)
             continue
-        if ctx.delaunay is not None and hint != "atop_injected":
-            continue
-        site_type = _TOPOLOGY_SOURCE_TO_TYPE[hint]
-        atoms_i = tuple(int(j) for j in provided_atoms[i])
-        if not atoms_i:
-            n_keep = {"atop": 1, "bridge": 2, "hollow": 3}[site_type]
-            n_keep = min(n_keep, len(positions))
-            if n_keep and ctx.class_idx is not None:
-                atoms_i = tuple(
-                    int(j) for j in np.asarray(ctx.class_idx[i]).ravel()[:n_keep]
-                )
-            elif n_keep:
-                _, idx = local_tree.query(vertices[i].reshape(1, 3), k=n_keep)
-                atoms_i = tuple(int(j) for j in np.atleast_1d(idx).ravel())
-        classifications[i] = (site_type, atoms_i)
+        if provided_atoms[i]:
+            atoms_i = tuple(int(j) for j in provided_atoms[i])
+            classifications[i] = (
+                _site_type_from_support_count(len(atoms_i)),
+                atoms_i,
+            )
 
     need = [i for i, c in enumerate(classifications) if c is None]
     if need:
@@ -432,36 +542,43 @@ def _classify_vertices(
     for i, classified in enumerate(classifications):
         assert classified is not None
         site_type, nearest_idx = classified
-        env_fingerprint = (
-            tuple(sorted(symbols[j] for j in nearest_idx if j < len(symbols))),
-            site_type,
-        )
-        # NP topology vertices are lifted along the support-atom centroid
-        # direction; keep that as Site.normal so pose does not slide off-axis
-        # when a k-NN centroid normal tilts relative to the coordinating atoms.
-        normal = ctx.normals[i]
-        if material_type == "nanoparticle" and nearest_idx:
-            support = [int(j) for j in nearest_idx if 0 <= int(j) < len(positions)]
-            if support:
-                lift = np.asarray(vertices[i], dtype=float) - np.mean(
-                    positions[support], axis=0
-                )
-                nrm = float(np.linalg.norm(lift))
-                if nrm >= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
-                    normal = lift / nrm
+        support = tuple(int(j) for j in nearest_idx if 0 <= int(j) < len(positions))
+
+        if normals is not None:
+            normal = np.asarray(normals[i], dtype=float)
+        elif material_type == "slab":
+            normal = np.asarray(ctx.normals[i], dtype=float)
+        elif support:
+            normal = _normal_from_support(
+                vertices[i],
+                positions,
+                support,
+                cell,
+                pbc,
+                fallback=ctx.normals[i],
+            )
+        else:
+            normal = np.asarray(ctx.normals[i], dtype=float)
+
+        dists = _support_mic_distances(vertices[i], positions, support, cell, pbc)
+        side = _side_label_from_normal(normal, material_type=material_type, cell=cell)
+        env_fingerprint = site_env_fingerprint(support, symbols, dists, side_label=side)
+        clearance = float(clearances[i]) if clearances is not None else None
         sites.append(
             Site(
                 xyz=vertices[i].copy(),
                 normal=normal,
                 site_type=site_type,
-                slab_indices=tuple(int(j) for j in nearest_idx),
+                slab_indices=support,
                 material_type=material_type,
                 site_source=hints[i],
                 env_fingerprint=env_fingerprint,
                 nn_distance=float(nn_dists[i]),
                 hollow_order=(
-                    len(nearest_idx) if site_type == "hollow" and nearest_idx else None
+                    len(support) if site_type == "hollow" and support else None
                 ),
+                clearance=clearance,
+                tangent_basis=tangent_basis_from_normal(normal),
             )
         )
     return sites
@@ -481,6 +598,8 @@ def _build_site_records(
     source_hints: list[str] | None = None,
     delaunay: _DelaunayClassifyInputs | None = None,
     atom_indices: list[tuple[int, ...]] | None = None,
+    normals: np.ndarray | None = None,
+    clearances: np.ndarray | None = None,
 ) -> list[Site]:
     ctx = _build_classification_context(
         vertices,
@@ -502,4 +621,7 @@ def _build_site_records(
         pore_threshold,
         source_hints,
         atom_indices=atom_indices,
+        cell=cell,
+        normals=normals,
+        clearances=clearances,
     )

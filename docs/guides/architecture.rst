@@ -276,8 +276,9 @@ Pipeline:
    topology points stay frozen). Catalog uniqueness is then
    ``_cluster_equivalent_sites`` (``site_equivalence_tolerance``, fingerprint +
    MIC). Clustering keys on geometry + ``env_fingerprint``
-   (support symbols + classified ``site_type``), **not** ``site_source``, so
-   topology / Voronoi / atop-injected sites in the same pocket merge.
+   (support symbols, distance bins, side label), **not** ``site_source`` or
+   classified ``site_type``, so topology / Voronoi / atop-injected sites in
+   the same pocket merge.
 10. Final list sorted by fractional coordinates for deterministic
     ``site_index``. Topology Delaunay is shared with classification when
     available (one triangulation per slab pass).

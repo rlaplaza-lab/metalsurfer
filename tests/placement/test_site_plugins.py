@@ -72,3 +72,70 @@ def test_auto_matches_explicit_plugin(material_type, explicit, factory):
     )
     assert len(auto) == len(named) > 0
     assert [s.site_type for s in auto] == [s.site_type for s in named]
+
+
+def test_all_plugins_share_batch_and_site_contract():
+    """Every plugin emits SiteCandidateBatch; enumerator yields placement-ready Sites."""
+    from dataclasses import fields
+
+    import numpy as np
+
+    from metalsurfer.placement.site_plugins.base import (
+        SiteCandidateBatch,
+        SiteGenerationContext,
+    )
+    from metalsurfer.placement.site_types import Site
+
+    core = {"vertices", "nn_dists", "source_hints", "atom_indices"}
+    enrich = {"normals", "clearances"}
+    names = {f.name for f in fields(SiteCandidateBatch)}
+    assert core <= names
+    assert enrich <= names
+    assert "env_fingerprints" not in names
+
+    slab = make_slab(nx=2, ny=2, n_layers=2)
+    pos = slab.get_positions()
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = np.array([True, True, False])
+    ctx = SiteGenerationContext(
+        positions=pos,
+        cell=cell,
+        pbc=pbc,
+        symbols=list(slab.get_chemical_symbols()),
+        material_type="slab",
+        probe_radius=1.2,
+        max_site_distance=3.5,
+        top_layer_tolerance=1.0,
+        enrich=True,
+        planar_z_variance_threshold=0.1,
+        n_jobs=1,
+    )
+    for name in ("topology", "voronoi", "adaptive_grid"):
+        batch = resolve_site_generator(name, "slab").generate(ctx)
+        assert isinstance(batch, SiteCandidateBatch)
+        n = len(batch.vertices)
+        assert len(batch.nn_dists) == n
+        assert len(batch.source_hints) == n
+        assert len(batch.atom_indices) == n
+        if batch.normals is not None:
+            assert len(batch.normals) == n
+        if batch.clearances is not None:
+            assert len(batch.clearances) == n
+
+        sites = get_unified_sites(
+            slab,
+            material_type="slab",
+            site_generator=name,
+            n_jobs=1,
+            probe_radius=1.2,
+            max_site_distance=3.5,
+        )
+        assert sites
+        assert all(isinstance(s, Site) for s in sites)
+        for s in sites:
+            assert s.xyz.shape == (3,)
+            assert s.normal.shape == (3,)
+            assert len(s.env_fingerprint) == 3
+            assert s.site_type
+            assert s.tangent_basis is not None
+            assert np.asarray(s.tangent_basis).shape == (2, 3)

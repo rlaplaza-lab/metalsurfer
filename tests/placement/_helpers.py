@@ -174,12 +174,11 @@ def _make_site(
     material_type="slab",
     env_fingerprint=None,
 ):
-    # Default env_fingerprint is `(("Ru",), site_type)`; manual sites needing a
-    # different element/fingerprint MUST pass `env_fingerprint` explicitly.
+    # Default env_fingerprint: (support_symbols, dist_bins, side_label).
     if normal is None:
         normal = np.array([0.0, 0.0, 1.0])
     if env_fingerprint is None:
-        env_fingerprint = (("Ru",), site_type)
+        env_fingerprint = (("Ru",), (), 0)
     return Site(
         xyz=np.asarray(xyz, dtype=float),
         normal=np.asarray(normal, dtype=float),

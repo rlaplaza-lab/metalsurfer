@@ -740,7 +740,7 @@ def _generate_dissociative_placement_from_spec(
         slab_indices=tuple(site_pair.indices1),
         material_type=config.material_type,
         site_source="dissociative_hollow_pair",
-        env_fingerprint=((), "hollow"),
+        env_fingerprint=((), (), 0),
     )
     syms = adsorbate.get_chemical_symbols()
     # Prefer pair-stored metal indices for surface radius; fall back to top-layer.
@@ -760,7 +760,7 @@ def _generate_dissociative_placement_from_spec(
         slab_indices=tuple(site_pair.indices2),
         material_type=config.material_type,
         site_source="dissociative_hollow_pair",
-        env_fingerprint=((), "hollow"),
+        env_fingerprint=((), (), 0),
     )
     placed = _place_dissociative_two_sites(
         adsorbate,

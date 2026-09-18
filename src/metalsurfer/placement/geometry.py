@@ -209,21 +209,38 @@ def _safe_normalize(v: np.ndarray) -> np.ndarray:
     return v / nrm if nrm > _VECTOR_NORM_EPS else np.zeros_like(v)
 
 
-def compute_surface_site_frame(normal: np.ndarray) -> np.ndarray:
+def compute_surface_site_frame(
+    normal: np.ndarray,
+    *,
+    tangent_basis: np.ndarray | None = None,
+) -> np.ndarray:
     """Return deterministic orthonormal frame whose z-axis is surface normal.
 
     Parameters
     ----------
     normal
         Surface normal vector (3-element).
+    tangent_basis
+        Optional ``(2, 3)`` orthonormal tangent vectors ``(t1, t2)``. When
+        provided, ``t1`` defines the site-frame x-axis (azimuth zero).
     """
     z_axis = _safe_normalize(np.asarray(normal, dtype=float))
+    if tangent_basis is not None:
+        tb = np.asarray(tangent_basis, dtype=float).reshape(2, 3)
+        x_axis = _safe_normalize(tb[0] - np.dot(tb[0], z_axis) * z_axis)
+        y_axis = _safe_normalize(np.cross(z_axis, x_axis))
+        return np.column_stack((x_axis, y_axis, z_axis))
     ref = np.array([1.0, 0.0, 0.0], dtype=float)
     if abs(np.dot(ref, z_axis)) > _FRAME_REF_ALIGNMENT_DOT_THRESHOLD:
         ref = np.array([0.0, 1.0, 0.0], dtype=float)
     x_axis = _safe_normalize(ref - np.dot(ref, z_axis) * z_axis)
     y_axis = np.cross(z_axis, x_axis)
     return np.column_stack((x_axis, y_axis, z_axis))
+
+
+def tangent_basis_from_normal(normal: np.ndarray) -> np.ndarray:
+    """Return ``(2, 3)`` orthonormal tangent vectors for *normal*."""
+    return compute_surface_site_frame(normal)[:, :2].T
 
 
 @functools.cache
@@ -491,14 +508,19 @@ def _surface_aligned_rotation(
 
 
 def _rotation_with_tilt(
-    pos: np.ndarray, normal: np.ndarray, tilt_deg: float, azimuth_deg: float
+    pos: np.ndarray,
+    normal: np.ndarray,
+    tilt_deg: float,
+    azimuth_deg: float,
+    *,
+    tangent_basis: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Apply tilt and azimuth to positions (centred at origin). Returns ``(rotated_positions, R)``.
 
     *R* is the full rotation matrix ``frame @ R_az @ R_tilt @ frame.T`` mapping
     the centred input onto *rotated_positions*.
     """
-    frame = compute_surface_site_frame(normal)
+    frame = compute_surface_site_frame(normal, tangent_basis=tangent_basis)
     pos_local = (frame.T @ np.asarray(pos, dtype=float).T).T
     R_tilt = _rotation_around_axis(np.array([1.0, 0.0, 0.0]), tilt_deg)
     R_az = _rotation_around_axis(np.array([0.0, 0.0, 1.0]), azimuth_deg)

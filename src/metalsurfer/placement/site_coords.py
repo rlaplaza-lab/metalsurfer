@@ -19,6 +19,9 @@ from .._geom_pbc import (
     height_along_slab_normal as _height_along_slab_normal,
 )
 from .._geom_pbc import (
+    minimum_image_cartesian_delta as _minimum_image_cartesian_delta,
+)
+from .._geom_pbc import (
     minimum_image_fractional_delta as _minimum_image_fractional_delta,
 )
 from .._geom_pbc import (
@@ -61,6 +64,7 @@ __all__ = [
     "_cart_to_frac",
     "_frac_to_cart",
     "_height_along_slab_normal",
+    "_minimum_image_cartesian_delta",
     "_minimum_image_fractional_delta",
     "_project_to_slab_plane",
     "_reciprocal_plane_spacings",

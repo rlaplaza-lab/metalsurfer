@@ -54,7 +54,7 @@ def test_dissociative_z_offset_uses_radius_derived_range():
         slab_indices=(),
         material_type="slab",
         site_source="test",
-        env_fingerprint=((), "hollow"),
+        env_fingerprint=((), (), 0),
     )
     z_lo, z_hi = _compute_site_z_base(
         config, slab, hollow_site, h2.get_chemical_symbols()
@@ -575,7 +575,7 @@ def test_dissociative_pair_cache_ignores_site_context_calls():
         slab_indices=(0,),
         material_type="slab",
         site_source="test",
-        env_fingerprint=((), "hollow"),
+        env_fingerprint=((), (), 0),
     )
     ctx = SiteContext(
         sites=[lonely],

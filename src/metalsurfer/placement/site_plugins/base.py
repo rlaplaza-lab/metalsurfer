@@ -8,7 +8,7 @@ Registered plugins: ``topology`` (slab Delaunay hybrid / NP hull),
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
 
@@ -37,27 +37,15 @@ _AUTO_DEFAULTS: dict[str, str] = {
 
 
 @dataclass
-class SiteGenerationContext:
-    """Shared geometry / window inputs prepared by the enumerator."""
-
-    positions: np.ndarray
-    cell: np.ndarray
-    pbc: np.ndarray
-    symbols: list[str]
-    material_type: str
-    probe_radius: float
-    max_site_distance: float
-    top_layer_tolerance: float
-    enrich: bool
-    planar_z_variance_threshold: float
-    adsorbate: Atoms | None = None
-    grid_spacing_scale: float | None = None
-    n_jobs: int = -2
-
-
-@dataclass
 class SiteCandidateBatch:
-    """Raw candidate sites from a plugin before shared post-processing."""
+    """Raw candidate sites from a plugin before shared post-processing.
+
+    Core: ``vertices``, ``nn_dists`` (centre-to-centre), ``source_hints``,
+    ``atom_indices``. Optional enrichment: ``normals``, ``clearances``.
+    Fingerprints and tangent frames are built in shared classify.
+    Topology-only Delaunay / reuse fields stay unused by Voronoi and
+    adaptive_grid.
+    """
 
     vertices: np.ndarray
     nn_dists: np.ndarray
@@ -75,6 +63,28 @@ class SiteCandidateBatch:
     topology_expanded_tri: Delaunay | None = None
     reuse: Any = None
     early_empty: bool = False
+    normals: np.ndarray | None = None
+    clearances: np.ndarray | None = None
+
+
+@dataclass
+class SiteGenerationContext:
+    """Shared geometry / window inputs prepared by the enumerator."""
+
+    positions: np.ndarray
+    cell: np.ndarray
+    pbc: np.ndarray
+    symbols: list[str]
+    material_type: str
+    probe_radius: float
+    max_site_distance: float
+    top_layer_tolerance: float
+    enrich: bool
+    planar_z_variance_threshold: float
+    adsorbate: Atoms | None = None
+    grid_spacing_scale: float | None = None
+    n_jobs: int = -2
+    side_policy: Literal["all", "positive", "negative", "external"] = "positive"
 
 
 def empty_candidate_batch(*, early_empty: bool = False) -> SiteCandidateBatch:

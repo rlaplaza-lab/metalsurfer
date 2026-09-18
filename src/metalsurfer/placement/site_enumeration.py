@@ -28,8 +28,8 @@ from ._material import (
     validate_material_type,
 )
 from .geometry import _get_covalent_radius
-from .site_adaptive_grid import dedupe_adaptive_sites_within_type
 from .site_classify import (
+    _TOPOLOGY_SOURCE_TO_TYPE,
     _build_site_records,
     _DelaunayClassifyInputs,
 )
@@ -291,6 +291,7 @@ def get_unified_sites(
     adsorbate: Atoms | None = None,
     grid_spacing_scale: float | None = None,
     n_jobs: int = -2,
+    side_policy: str = "positive",
 ) -> list[Site]:
     """Return adsorption/placement sites for *atoms*.
 
@@ -360,6 +361,7 @@ def get_unified_sites(
         adsorbate=adsorbate,
         grid_spacing_scale=grid_spacing_scale,
         n_jobs=n_jobs,
+        side_policy=side_policy,
         _widen_scratch=scratch,
     )
     if sites or not auto_widen:
@@ -403,6 +405,7 @@ def get_unified_sites(
         adsorbate=adsorbate,
         grid_spacing_scale=grid_spacing_scale,
         n_jobs=n_jobs,
+        side_policy=side_policy,
         _reuse_topology=reuse,
     )
 
@@ -422,6 +425,7 @@ def _enumerate_unified_sites(
     adsorbate: Atoms | None = None,
     grid_spacing_scale: float | None = None,
     n_jobs: int = -2,
+    side_policy: str = "positive",
     _widen_scratch: _PlanarWidenScratch | None = None,
     _reuse_topology: _PlanarWidenScratch | None = None,
 ) -> list[Site]:
@@ -495,6 +499,7 @@ def _enumerate_unified_sites(
         adsorbate=adsorbate,
         grid_spacing_scale=grid_spacing_scale,
         n_jobs=int(n_jobs),
+        side_policy=side_policy,
     )
     batch = plugin.generate(ctx, reuse=_reuse_topology)
 
@@ -558,20 +563,27 @@ def _enumerate_unified_sites(
         )
         return []
 
-    # ``auto`` / ``delaunay`` use Delaunay on slabs; ``distance_ratio`` is honored
-    # literally (opt-in A/B). Default config ``auto`` preserves catalysis sampling.
-    delaunay_inputs = _delaunay_classify_inputs(
-        positions,
-        cell,
-        pbc_for_voronoi,
-        material_type=material_type,
-        site_classification_method=site_classification_method,
-        slab_top_atom_indices=batch.slab_top_atom_indices,
-        topology_primary_delaunay=batch.topology_primary_delaunay,
-        expanded_xy=batch.topology_expanded_xy,
-        expanded_origin=batch.topology_expanded_origin,
-        expanded_tri=batch.topology_expanded_tri,
+    # Topology defers to Delaunay when available; plugins that already attach
+    # support atoms (e.g. adaptive_grid) skip the Delaunay build.
+    topology_needs_delaunay = any(
+        h in _TOPOLOGY_SOURCE_TO_TYPE and h != "atop_injected" for h in source_hints
     )
+    supports_complete = bool(atom_indices) and all(atom_indices)
+    if topology_needs_delaunay or not supports_complete:
+        delaunay_inputs = _delaunay_classify_inputs(
+            positions,
+            cell,
+            pbc_for_voronoi,
+            material_type=material_type,
+            site_classification_method=site_classification_method,
+            slab_top_atom_indices=batch.slab_top_atom_indices,
+            topology_primary_delaunay=batch.topology_primary_delaunay,
+            expanded_xy=batch.topology_expanded_xy,
+            expanded_origin=batch.topology_expanded_origin,
+            expanded_tri=batch.topology_expanded_tri,
+        )
+    else:
+        delaunay_inputs = None
 
     sites = _build_site_records(
         vertices,
@@ -586,17 +598,9 @@ def _enumerate_unified_sites(
         pbc=pbc_for_voronoi,
         delaunay=delaunay_inputs,
         atom_indices=atom_indices,
+        normals=batch.normals,
+        clearances=batch.clearances,
     )
-
-    if sites and source_hints and any(h == "adaptive_grid" for h in source_hints):
-        sites = dedupe_adaptive_sites_within_type(
-            sites,
-            cell=cell,
-            pbc=pbc_for_voronoi,
-            median_nn=float(batch.topology_median_nn or 0.0),
-            probe_radius=float(probe_radius),
-            max_site_distance=float(max_site_distance),
-        )
 
     if cell_has_volume(cell):
         # Deterministic fractional-xyz order for stable site_index / raw catalog.
@@ -631,6 +635,7 @@ def get_hollow_sites_for_adatoms(
     site_equivalence_tolerance: float = _DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     auto_widen: bool = True,
     planar_z_variance_threshold: float | None = None,
+    side_policy: str = "positive",
 ) -> list[Site]:
     """Return hollow/pore sites for adatom placement from the clustered catalog.
 
@@ -664,6 +669,8 @@ def get_hollow_sites_for_adatoms(
         Retry once with a wider accessibility window if the first pass is empty.
     planar_z_variance_threshold
         Max top-layer height variance (Å²) for planar classification.
+    side_policy
+        Slab face / exposure policy for ``adaptive_grid`` (default ``positive``).
     """
     raw = get_unified_sites(
         slab,
@@ -676,6 +683,7 @@ def get_hollow_sites_for_adatoms(
         site_generator=site_generator,
         auto_widen=auto_widen,
         planar_z_variance_threshold=planar_z_variance_threshold,
+        side_policy=side_policy,
     )
     if not raw:
         return []
@@ -695,10 +703,7 @@ def get_hollow_sites_for_adatoms(
 
 def _env_fingerprint(site: Site) -> tuple:
     """Return the local-environment fingerprint of *site*."""
-    fp = site.env_fingerprint
-    if fp is not None:
-        return tuple(fp)
-    return (str(site.site_type),)
+    return tuple(site.env_fingerprint)
 
 
 def _cluster_with_metric(
@@ -874,6 +879,7 @@ def get_symmetry_aware_sites(
     raw_sites: list[Site] | None = None,
     planar_z_variance_threshold: float | None = None,
     site_generator: str = "auto",
+    side_policy: str = "positive",
 ) -> list[Site]:
     """Return symmetry-reduced adsorption sites using spglib.
 
@@ -911,6 +917,8 @@ def get_symmetry_aware_sites(
         ``None`` uses the library default.
     site_generator
         Site generator plugin (``"auto"``, ``"topology"``, ``"voronoi"``).
+    side_policy
+        Slab face / exposure policy for ``adaptive_grid`` (default ``positive``).
     """
     validate_material_type(material_type)
 
@@ -937,6 +945,7 @@ def get_symmetry_aware_sites(
             site_classification_method=site_classification_method,
             planar_z_variance_threshold=z_var_threshold,
             site_generator=site_generator,
+            side_policy=side_policy,
         )
     if not site_list:
         return []

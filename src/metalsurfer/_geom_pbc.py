@@ -12,6 +12,8 @@ All routines use the ASE row-vector cell convention: ``r_cart = r_frac @ cell``,
 with ``cell[0]``/``cell[1]``/``cell[2]`` the lattice vectors a/b/c as rows.
 """
 
+from itertools import product
+
 import numpy as np
 
 from ._numeric_defaults import SURFACE_NORMAL_FALLBACK_NORM_EPS
@@ -124,6 +126,62 @@ def minimum_image_fractional_delta(
         if bool(pbc[dim]):
             delta[..., dim] -= np.floor(delta[..., dim] + 0.5)
     return delta
+
+
+def minimum_image_cartesian_delta(
+    delta: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    *,
+    inv_cell: np.ndarray | None = None,
+) -> np.ndarray:
+    """Return the shortest Cartesian image of *delta* under triclinic PBC.
+
+    Fractional rounding alone is not guaranteed for general skewed cells.
+    This searches the rounded image and its neighboring lattice translations
+    on each periodic axis (``{-1,0,1}`` corrections) and returns the shortest
+    Cartesian vector.
+
+    Parameters
+    ----------
+    delta
+        Cartesian displacement, shape ``(3,)`` or ``(..., 3)``.
+    cell
+        3x3 cell matrix with lattice vectors as rows.
+    pbc
+        Boolean periodic-boundary flags for each axis.
+    inv_cell
+        Optional precomputed ``inv(cell)``.
+    """
+    arr = np.asarray(delta, dtype=float)
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    cell_arr = np.asarray(cell, dtype=float)
+    if not np.any(pbc_arr):
+        return arr.copy()
+
+    inv = (
+        np.asarray(inv_cell, dtype=float)
+        if inv_cell is not None
+        else np.linalg.inv(cell_arr)
+    )
+    single = arr.ndim == 1
+    flat = arr.reshape(-1, 3)
+    out = np.empty_like(flat)
+
+    options = [(-1, 0, 1) if bool(p) else (0,) for p in pbc_arr]
+    corrections = np.asarray(list(product(*options)), dtype=float)
+
+    for i, d in enumerate(flat):
+        frac = d @ inv
+        base = np.zeros(3, dtype=float)
+        base[pbc_arr] = np.rint(frac[pbc_arr])
+        shifts = (frac - (base + corrections)) @ cell_arr
+        norms_sq = np.einsum("ij,ij->i", shifts, shifts)
+        out[i] = shifts[int(np.argmin(norms_sq))]
+
+    if single:
+        return out[0]
+    return out.reshape(arr.shape)
 
 
 def reciprocal_plane_spacings(cell: np.ndarray) -> np.ndarray:

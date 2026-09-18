@@ -16,7 +16,10 @@ from metalsurfer.placement import (
     get_unified_sites,
 )
 from metalsurfer.placement._constants import _NORMAL_K_NEIGHBOURS
-from metalsurfer.placement.site_classify import _compute_local_normals_batch
+from metalsurfer.placement.site_classify import (
+    _compute_local_normals_batch,
+    site_env_fingerprint,
+)
 from metalsurfer.placement.site_context import _get_unique_sites_for_specs
 from metalsurfer.placement.site_coords import top_layer_mask_by_normal
 from metalsurfer.symmetry import SymmetryAnalyzer
@@ -37,6 +40,15 @@ _TRANSLATIONS = [
     np.array([-10.0, 0.0, 0.0]),
     np.array([100.0, -50.0, 7.0]),
 ]
+
+
+def test_site_env_fingerprint_schema_excludes_site_type():
+    fp = site_env_fingerprint((0, 1), ["Cu", "Cu"], (2.55, 2.50), side_label=1)
+    assert fp[0] == ("Cu", "Cu")
+    assert fp[1] == (10, 10)  # 2.5 / 0.25
+    assert fp[2] == 1
+    # Chemistry-only path (no distances) still has three fields.
+    assert site_env_fingerprint((0,), ["Pt"], side_label=0) == (("Pt",), (), 0)
 
 
 def _reference_orbits(analyzer, sites, planar):
@@ -205,7 +217,7 @@ def test_cluster_symmetry_oh_vertex_atops_form_one_orbit():
             slab_indices=(),
             material_type="nanoparticle",
             site_source="fake_atop",
-            env_fingerprint=("atop",),
+            env_fingerprint=((), (), 0),
             nn_distance=2.0,
         )
         for p in fake

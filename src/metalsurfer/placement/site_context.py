@@ -96,6 +96,8 @@ def _unique_sites_cache_key(
         + b"\x00"
         + str(config.site_generator).encode()
         + b"\x00"
+        + str(config.side_policy).encode()
+        + b"\x00"
         + config.material_type.encode()
     )
     scale_bytes = b""
@@ -312,6 +314,7 @@ def _get_unique_sites_for_specs(
         site_generator=config.site_generator,
         grid_spacing_scale=grid_spacing_scale,
         n_jobs=int(config.n_jobs),
+        side_policy=config.side_policy,
     )
     if not raw_sites:
         logger.warning(
