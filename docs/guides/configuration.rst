@@ -146,9 +146,14 @@ for nanoparticles, and distance-ratio for porous Voronoi vertices. Explicit
 ``"distance_ratio"`` on slabs is honored for A/B comparisons.
 
 Site candidate generation defaults to ``site_generator="auto"`` (topology for
-slab/NP, Voronoi for porous). Set ``site_generator="topology"`` or
-``"voronoi"`` explicitly for A/B comparisons; incompatible
-``site_generator`` / ``material_type`` pairs are rejected.
+slab/NP, Voronoi for porous). Set ``site_generator="topology"``,
+``"voronoi"``, or ``"adaptive_grid"`` explicitly for A/B comparisons;
+incompatible ``site_generator`` / ``material_type`` pairs are rejected.
+``adaptive_grid`` works on all three material types but is never selected by
+``auto``. Density follows optional shared adsorbate ``grid_spacing_scale``,
+floored against framework median nearest-neighbour spacing (there is no hard
+site-count cap). Orbit reduction runs during adaptive-grid enumeration;
+``site_context`` therefore skips a second spglib pass for that generator.
 
 Site uniqueness and sampling
 ----------------------------

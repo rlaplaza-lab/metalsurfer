@@ -283,12 +283,18 @@ def _check_finite_nonneg(name: str, value: float) -> None:
 CONFORMER_WEIGHTING_OPTIONS: tuple[str, ...] = ("uniform", "boltzmann")
 MATERIAL_TYPE_OPTIONS: tuple[str, ...] = ("slab", "nanoparticle", "porous")
 SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("auto", "distance_ratio", "delaunay")
-SITE_GENERATOR_OPTIONS: tuple[str, ...] = ("auto", "topology", "voronoi")
+SITE_GENERATOR_OPTIONS: tuple[str, ...] = (
+    "auto",
+    "topology",
+    "voronoi",
+    "adaptive_grid",
+)
 
 # Explicit plugins incompatible with certain materials (mirrors site_plugins).
 _SITE_GENERATOR_ALLOWED_MATERIALS: dict[str, frozenset[str]] = {
     "topology": frozenset({"slab", "nanoparticle"}),
     "voronoi": frozenset({"slab", "porous"}),
+    "adaptive_grid": frozenset({"slab", "nanoparticle", "porous"}),
 }
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
 BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = (
@@ -742,7 +748,8 @@ class AdsorptionConfig:
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
     # Site candidate generator. ``auto`` → topology (slab/NP) or Voronoi (porous).
-    site_generator: Literal["auto", "topology", "voronoi"] = "auto"
+    # ``adaptive_grid`` is selectable on all materials but never chosen by ``auto``.
+    site_generator: Literal["auto", "topology", "voronoi", "adaptive_grid"] = "auto"
     # Conformer prior for placement-spec selection.
     # ``"uniform"`` keeps the conformer-agnostic stratified draw (ignores
     # conformer energies). ``"boltzmann"`` (default) allocates spec slots per

@@ -140,11 +140,15 @@ def resolve_site_context_for_sampling(
     symmetry_broken: bool,
     grid_spacing_scale: float | None = None,
 ) -> SiteContext:
-    """Return clustered sites, then optional spglib orbit reduction unless *symmetry_broken*.
+    """Return clustered sites, then optional spglib orbit reduction.
 
     Symmetry reduction runs on the **clustered** catalog so geometric uniqueness
     and orbit reduction compose. Dissociative / adatom paths should use
     ``clustered_sites`` (full lattice), not ``sites`` after symmetry reduction.
+
+    Skipped when *symmetry_broken*. For ``adaptive_grid``, optional
+    *grid_spacing_scale* (shared min adsorbate size) sizes the catalog once for
+    competing molecules.
 
     Parameters
     ----------
@@ -155,8 +159,7 @@ def resolve_site_context_for_sampling(
     symmetry_broken
         If True, skip symmetry reduction.
     grid_spacing_scale
-        Shared adaptive-grid spacing length (Å), typically the minimum
-        adsorbate characteristic length across competing molecules.
+        Optional shared adaptive-grid spacing length (Å).
     """
     cache_key = _site_context_cache_key(
         slab_atoms,
@@ -307,12 +310,8 @@ def _get_unique_sites_for_specs(
         auto_widen=config.voronoi_auto_widen,
         planar_z_variance_threshold=config.planar_z_variance_threshold,
         site_generator=config.site_generator,
-        n_jobs=config.n_jobs,
-        grid_spacing_scale=(
-            grid_spacing_scale
-            if str(config.site_generator) == "adaptive_grid"
-            else None
-        ),
+        grid_spacing_scale=grid_spacing_scale,
+        n_jobs=int(config.n_jobs),
     )
     if not raw_sites:
         logger.warning(

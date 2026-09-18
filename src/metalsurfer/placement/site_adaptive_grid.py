@@ -1,17 +1,22 @@
 """Atom-centred adaptive Cartesian grid for adsorption-site candidates.
 
-All materials use the same pipeline: shells around seed atoms, accessibility
-filtering, iterative refinement, and thinning toward a near-atom adsorption
-shell (not free-volume / pore centres).
+One PBC-aware pipeline for every material: shells around all atoms, accessibility
+window, exposure filter (plus slab half-space), iterative refinement, and NMS
+toward the near-atom adsorption shell — not free-volume / pore centres.
 
 Spacing may be driven by a shared ``grid_spacing_scale`` (typically the
 **minimum** adsorbate characteristic length across competing molecules) so one
-catalog serves every adsorbate. Per-adsorbate clearance and ranking happen at
-placement time, not by regenerating sites.
+catalog serves every adsorbate. Framework median NN floors that scale and the
+NMS merge radius so tiny adsorbates cannot pack denser than the surface lattice
+resolves.
+
+Classify / cluster / symmetry / placement use the shared enumerator path —
+this module only produces candidate vertices.
 
 CPU-parallel stages (seed shells and refine stencils) honour joblib-style
 ``n_jobs`` via :func:`~metalsurfer.placement._parallel.resolve_materialize_workers`
-and a thread pool; greedy PBC NMS stays serial.
+and a thread pool; greedy PBC NMS stays serial. Work is streamed in chunks so
+``n_seeds × n_offsets`` never exceeds ``_ADAPTIVE_GRID_WORK_BUDGET`` per chunk.
 """
 
 from __future__ import annotations
@@ -26,18 +31,23 @@ from scipy.spatial import KDTree
 
 from .._utils import cell_has_volume
 from ._constants import (
+    _ADAPTIVE_GRID_BIN_PRETHIN,
+    _ADAPTIVE_GRID_COORD_NN_FACTOR,
+    _ADAPTIVE_GRID_EXPOSURE_STEP,
     _ADAPTIVE_GRID_EXTENT_EPS,
     _ADAPTIVE_GRID_FINE_SCALE,
     _ADAPTIVE_GRID_H_MAX,
     _ADAPTIVE_GRID_H_MIN,
-    _ADAPTIVE_GRID_MAX_CANDIDATES,
+    _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE,
     _ADAPTIVE_GRID_MAX_LEVELS,
+    _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE,
     _ADAPTIVE_GRID_NMS_LENGTH_SCALE,
     _ADAPTIVE_GRID_NMS_SCALE,
     _ADAPTIVE_GRID_SPACING_SCALE,
+    _ADAPTIVE_GRID_WORK_BUDGET,
     _ADSORBATE_COVALENT_RADIUS_FALLBACK,
     _ATOP_INJECTION_HEIGHT_FACTOR,
-    _SURFACE_COVALENT_RADIUS_FALLBACK,
+    _VECTOR_NORM_EPS,
     _VORONOI_DEDUP_TOLERANCE,
 )
 from ._parallel import resolve_materialize_workers
@@ -52,16 +62,9 @@ from .site_coords import (
     _periodic_image_offsets,
     _slab_normal,
     _wrap_cartesian,
-    top_layer_mask_by_normal,
-)
-from .site_np import (
-    _convex_hull_surface_mask,
-    _outside_convex_hull_mask,
-    _try_convex_hull,
 )
 
 _SOURCE_HINT = "adaptive_grid"
-# Default matches AdsorptionConfig.n_jobs (all CPUs but one).
 _DEFAULT_N_JOBS = -2
 
 
@@ -158,62 +161,23 @@ def adaptive_grid_characteristic_length(
 
 
 def min_adsorbate_grid_scale(
-    probe_radius: float,
+    probe_radius: float | None,
     adsorbates: Sequence[Atoms | None],
 ) -> float:
     """Return the minimum characteristic length across *adsorbates*.
 
     Used to size one shared adaptive-grid catalog for competing molecules:
     the smallest footprint drives the densest sampling that still covers all
-    species. Empty / missing adsorbates are skipped; falls back to *probe_radius*.
+    species. Empty / missing adsorbates are skipped; falls back to *probe_radius*
+    (or ``1.0`` when *probe_radius* is ``None``).
     """
+    probe = float(probe_radius) if probe_radius is not None else 1.0
     scales = [
-        adaptive_grid_characteristic_length(probe_radius, ads)
+        adaptive_grid_characteristic_length(probe, ads)
         for ads in adsorbates
         if ads is not None and len(ads) > 0
     ]
-    return float(min(scales)) if scales else float(probe_radius)
-
-
-def adsorbate_contact_distance(
-    adsorbate: Atoms | None,
-    surface_symbols: Sequence[str] | None = None,
-) -> float | None:
-    """Mean covalent contact distance (surface + adsorbate), or None.
-
-    Used at placement time to rank shared adaptive-grid sites toward each
-    molecule's preferred clearance; not applied during shared catalog generation.
-    """
-    if adsorbate is None or len(adsorbate) == 0:
-        return None
-    r_ads = float(
-        _mean_covalent_radius(
-            list(adsorbate.get_chemical_symbols()),
-            fallback=_ADSORBATE_COVALENT_RADIUS_FALLBACK,
-        )
-    )
-    if surface_symbols:
-        r_surf = float(
-            _mean_covalent_radius(
-                list(surface_symbols),
-                fallback=_SURFACE_COVALENT_RADIUS_FALLBACK,
-            )
-        )
-    else:
-        r_surf = float(_SURFACE_COVALENT_RADIUS_FALLBACK)
-    return float(r_surf + r_ads)
-
-
-def resolve_adaptive_grid_spacing_scale(
-    probe_radius: float | None,
-    adsorbates: Sequence[Atoms | None],
-) -> float:
-    """Min characteristic length across *adsorbates* (shared catalog scale).
-
-    *probe_radius* is the fallback when no adsorbates are provided.
-    """
-    probe = float(probe_radius) if probe_radius is not None else 1.0
-    return min_adsorbate_grid_scale(probe, adsorbates)
+    return float(min(scales)) if scales else probe
 
 
 def adaptive_grid_spacing(
@@ -223,12 +187,26 @@ def adaptive_grid_spacing(
     grid_spacing_scale: float | None = None,
     initial_spacing: float | None = None,
     max_levels: int | None = None,
+    framework_median_nn: float | None = None,
 ) -> AdaptiveGridSpacing:
-    """Return coarse/fine spacing and refine depth for the adaptive grid."""
+    """Return coarse/fine spacing and refine depth for the adaptive grid.
+
+    Characteristic length is ``max(adsorbate_or_probe_L, c * framework_median_nn)``
+    when a framework NN is available, so tiny adsorbates cannot request a denser
+    shell than the surface lattice resolves. The same floor applies to the NMS
+    merge radius.
+    """
     if grid_spacing_scale is not None:
         L = float(grid_spacing_scale)
     else:
         L = adaptive_grid_characteristic_length(probe_radius, adsorbate)
+    if not np.isfinite(L) or L <= 0.0:
+        raise ValueError(
+            f"adaptive_grid characteristic length must be finite and > 0, got {L!r}"
+        )
+    nn = float(framework_median_nn) if framework_median_nn is not None else 0.0
+    if np.isfinite(nn) and nn > 0.0:
+        L = max(L, _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE * nn)
     h0 = (
         float(initial_spacing)
         if initial_spacing is not None
@@ -249,80 +227,20 @@ def adaptive_grid_spacing(
         if h_fine <= h_target:
             break
         h_fine *= 0.5
+    merge = max(
+        _ADAPTIVE_GRID_NMS_SCALE * h_fine,
+        _ADAPTIVE_GRID_NMS_LENGTH_SCALE * L,
+        _VORONOI_DEDUP_TOLERANCE,
+    )
+    if np.isfinite(nn) and nn > 0.0:
+        merge = max(merge, _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE * nn)
     return AdaptiveGridSpacing(
         characteristic_length=float(L),
         initial_spacing=float(h0),
         fine_spacing=float(h_fine),
         max_levels=levels,
-        merge_radius=float(
-            max(
-                _ADAPTIVE_GRID_NMS_SCALE * h_fine,
-                _ADAPTIVE_GRID_NMS_LENGTH_SCALE * L,
-                _VORONOI_DEDUP_TOLERANCE,
-            )
-        ),
+        merge_radius=float(merge),
     )
-
-
-def _orthonormal_frame(cell: np.ndarray, material_type: str) -> np.ndarray:
-    """Return 3x3 orthonormal basis (rows) for shell offsets.
-
-    Slab: in-plane â, n̂×â, surface normal. Porous: QR of the cell. Nanoparticle:
-    lab Cartesian identity (no preferred lattice frame).
-    """
-    if material_type == "nanoparticle":
-        return np.eye(3, dtype=float)
-    cell = np.asarray(cell, dtype=float)
-    if material_type == "slab":
-        n_hat = _slab_normal(cell)
-        a = np.asarray(cell[0], dtype=float)
-        a_proj = a - np.dot(a, n_hat) * n_hat
-        norm_a = float(np.linalg.norm(a_proj))
-        if norm_a < 1e-12:
-            trial = np.array([1.0, 0.0, 0.0])
-            if abs(np.dot(trial, n_hat)) > 0.9:
-                trial = np.array([0.0, 1.0, 0.0])
-            a_proj = trial - np.dot(trial, n_hat) * n_hat
-            norm_a = float(np.linalg.norm(a_proj))
-        a_hat = a_proj / max(norm_a, 1e-12)
-        b_hat = np.cross(n_hat, a_hat)
-        return np.vstack([a_hat, b_hat, n_hat])
-    # Porous / other: orthonormalize cell rows via QR.
-    q, _ = np.linalg.qr(cell.T)
-    basis = q.T
-    # Ensure right-handed orientation.
-    if np.linalg.det(basis) < 0.0:
-        basis = basis.copy()
-        basis[2] *= -1.0
-    return basis
-
-
-def _seed_indices(
-    positions: np.ndarray,
-    cell: np.ndarray,
-    material_type: str,
-    top_layer_tolerance: float,
-    pbc: np.ndarray,
-    *,
-    seed_voxel: float | None = None,
-) -> np.ndarray:
-    """Seed atoms: slab top layer, NP hull skin, else all (optionally voxelled)."""
-    n = len(positions)
-    if material_type == "slab":
-        idx = np.nonzero(
-            top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
-        )[0]
-        return idx if len(idx) else np.arange(n, dtype=int)
-    if material_type == "nanoparticle":
-        hull = _try_convex_hull(positions)
-        if hull is None:
-            return np.arange(n, dtype=int)
-        idx = np.nonzero(_convex_hull_surface_mask(positions, hull=hull))[0]
-        return idx if len(idx) else np.arange(n, dtype=int)
-    idx = np.arange(n, dtype=int)
-    if seed_voxel is not None and seed_voxel > 0.0 and n > 1:
-        idx = _fractional_voxel_seeds(positions, cell, pbc, float(seed_voxel), idx)
-    return idx
 
 
 def _fractional_voxel_seeds(
@@ -332,7 +250,7 @@ def _fractional_voxel_seeds(
     seed_voxel: float,
     idx: np.ndarray,
 ) -> np.ndarray:
-    """One seed per fractional voxel; wrap periodic axes into ``[0, 1)``."""
+    """One seed per fractional (or Cartesian) voxel."""
     pts = positions[idx]
     if not cell_has_volume(cell):
         keys = np.floor(pts / float(seed_voxel)).astype(np.int64)
@@ -340,7 +258,6 @@ def _fractional_voxel_seeds(
         return np.sort(idx[keep])
     frac = _cart_to_frac(pts, cell)
     spacings = np.linalg.norm(cell, axis=1)
-    # Voxel size in fractional units along each lattice vector.
     dfrac = np.maximum(float(seed_voxel) / np.maximum(spacings, 1e-12), 1e-9)
     keys = np.empty_like(frac, dtype=np.int64)
     pbc_arr = np.asarray(pbc, dtype=bool)
@@ -366,14 +283,8 @@ def _wrap_dedup(points: np.ndarray, cell: np.ndarray, pbc: np.ndarray) -> np.nda
     ]
 
 
-def _shell_offsets(
-    radius: float,
-    spacing: float,
-    frame: np.ndarray,
-    *,
-    r_min: float = 0.0,
-) -> np.ndarray:
-    """Cartesian shell offsets in *frame*; skip the inaccessible inner ball."""
+def _shell_offsets(radius: float, spacing: float, *, r_min: float = 0.0) -> np.ndarray:
+    """Lab-frame Cartesian shell offsets; skip the inaccessible inner ball."""
     h = float(spacing)
     if h <= 0.0 or radius <= 0.0:
         return np.empty((0, 3), dtype=float)
@@ -383,11 +294,7 @@ def _shell_offsets(
     local = np.column_stack([xx.ravel(), yy.ravel(), zz.ravel()])
     r = np.linalg.norm(local, axis=1)
     keep = (r > max(float(r_min), 1e-12)) & (r <= float(radius) + 1e-9)
-    local = local[keep]
-    if len(local) == 0:
-        return np.empty((0, 3), dtype=float)
-    # frame rows are orthonormal basis vectors → local @ frame.
-    return local @ np.asarray(frame, dtype=float)
+    return local[keep]
 
 
 def _filter_accessible(
@@ -395,16 +302,46 @@ def _filter_accessible(
     tree: KDTree,
     probe: float,
     max_d: float,
-    hull=None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Keep points in the probe/max window; return vertices, nn, nearest-image xyz."""
     if len(vertices) == 0:
-        return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
-    nn, _ = tree.query(vertices, k=1)
+        empty = np.empty((0, 3), dtype=float)
+        return empty, np.empty(0, dtype=float), empty
+    nn, idx = tree.query(vertices, k=1)
     nn = np.asarray(nn, dtype=float).ravel()
+    idx = np.asarray(idx, dtype=int).ravel()
     keep = (nn >= probe) & (nn <= max_d)
-    if hull is not None:
-        keep &= _outside_convex_hull_mask(vertices, hull)
-    return vertices[keep], nn[keep]
+    data = np.asarray(tree.data, dtype=float)
+    return vertices[keep], nn[keep], data[idx[keep]]
+
+
+def _exposure_mask(
+    vertices: np.ndarray,
+    nn: np.ndarray,
+    nearest: np.ndarray,
+    tree: KDTree,
+    *,
+    material_type: str,
+    cell: np.ndarray,
+    step: float = _ADAPTIVE_GRID_EXPOSURE_STEP,
+) -> np.ndarray:
+    """Keep points that walk into void (and, for slabs, the top half-space)."""
+    n = len(vertices)
+    if n == 0:
+        return np.ones(0, dtype=bool)
+    delta = vertices - nearest
+    norms = np.linalg.norm(delta, axis=1)
+    keep = norms > _VECTOR_NORM_EPS
+    uhat = np.zeros_like(delta)
+    uhat[keep] = delta[keep] / norms[keep, None]
+    stepped = vertices + float(step) * uhat
+    nn_step, _ = tree.query(stepped, k=1)
+    nn_step = np.asarray(nn_step, dtype=float).ravel()
+    keep &= nn_step >= nn - 1e-9
+    if material_type == "slab" and cell_has_volume(cell):
+        n_hat = _slab_normal(cell)
+        keep &= np.einsum("ij,j->i", uhat, n_hat) >= -1e-12
+    return keep
 
 
 def _shell_target(
@@ -503,6 +440,101 @@ def _nms(
     return vertices[idx], nn[idx]
 
 
+def _provisional_coordination(
+    vertices: np.ndarray,
+    tree: KDTree,
+    nn: np.ndarray,
+) -> np.ndarray:
+    """Map each candidate to 1 / 2 / 3+ coordinating framework neighbours.
+
+    Neighbours within ``_ADAPTIVE_GRID_COORD_NN_FACTOR * nn`` count. Used only to
+    partition NMS so atop-, bridge-, and hollow-like peaks do not suppress each
+    other when they sit inside one merge ball.
+    """
+    n = len(vertices)
+    if n == 0:
+        return np.empty(0, dtype=int)
+    k = min(4, len(np.asarray(tree.data)))
+    if k <= 1:
+        return np.ones(n, dtype=int)
+    dists, _ = tree.query(vertices, k=k)
+    dists = np.atleast_2d(np.asarray(dists, dtype=float))
+    thresh = np.asarray(nn, dtype=float).reshape(-1, 1) * float(
+        _ADAPTIVE_GRID_COORD_NN_FACTOR
+    )
+    counts = np.sum(dists <= thresh, axis=1).astype(int)
+    return np.clip(counts, 1, 3)
+
+
+def _thin_group(
+    vertices: np.ndarray,
+    nn: np.ndarray,
+    scores: np.ndarray,
+    *,
+    neighbour_r: float,
+    merge_r: float,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Local-max + NMS for one provisional-coordination cohort."""
+    if len(vertices) == 0:
+        return vertices, nn
+    mask = _local_max_mask(vertices, scores, neighbour_r, cell, pbc)
+    if not np.any(mask):
+        mask = np.ones(len(vertices), dtype=bool)
+    vertices, nn, scores = vertices[mask], nn[mask], scores[mask]
+    return _nms(vertices, nn, scores, merge_r, cell, pbc)
+
+
+def _thin(
+    vertices: np.ndarray,
+    nn: np.ndarray,
+    *,
+    probe: float,
+    max_d: float,
+    median_nn: float,
+    neighbour_r: float,
+    merge_r: float,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    tree: KDTree,
+) -> tuple[np.ndarray, np.ndarray]:
+    if len(vertices) == 0:
+        return vertices, nn
+    if len(vertices) > _ADAPTIVE_GRID_BIN_PRETHIN:
+        vertices, nn = _bin_prethin(
+            vertices,
+            nn,
+            probe=probe,
+            max_d=max_d,
+            median_nn=median_nn,
+            bin_size=max(merge_r, neighbour_r),
+            cell=cell,
+            pbc=pbc,
+        )
+    sc = _scores(nn, probe=probe, max_d=max_d, median_nn=median_nn)
+    groups = _provisional_coordination(vertices, tree, nn)
+    parts_v: list[np.ndarray] = []
+    parts_nn: list[np.ndarray] = []
+    for g in sorted(int(x) for x in np.unique(groups)):
+        mask = groups == g
+        v_g, nn_g = _thin_group(
+            vertices[mask],
+            nn[mask],
+            sc[mask],
+            neighbour_r=neighbour_r,
+            merge_r=merge_r,
+            cell=cell,
+            pbc=pbc,
+        )
+        if len(v_g):
+            parts_v.append(v_g)
+            parts_nn.append(nn_g)
+    if not parts_v:
+        return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
+    return np.vstack(parts_v), np.concatenate(parts_nn)
+
+
 def _bin_prethin(
     vertices: np.ndarray,
     nn: np.ndarray,
@@ -518,13 +550,7 @@ def _bin_prethin(
     if len(vertices) == 0:
         return vertices, nn
     h = max(float(bin_size), 1e-6)
-    sc = _scores(
-        nn,
-        probe=probe,
-        max_d=max_d,
-        median_nn=median_nn,
-    )
-    keys: np.ndarray
+    sc = _scores(nn, probe=probe, max_d=max_d, median_nn=median_nn)
     if np.any(pbc) and cell_has_volume(cell):
         frac = _cart_to_frac(vertices, cell)
         spacings = np.linalg.norm(cell, axis=1)
@@ -541,7 +567,6 @@ def _bin_prethin(
                 keys[:, dim] = np.floor(f / dfrac[dim]).astype(np.int64)
     else:
         keys = np.floor(vertices / h).astype(np.int64)
-    # Stable: first occurrence of each unique key after sorting by score desc.
     order = np.argsort(-sc, kind="mergesort")
     keys_sorted = keys[order]
     _, first = np.unique(keys_sorted, axis=0, return_index=True)
@@ -550,76 +575,15 @@ def _bin_prethin(
     return vertices[keep], nn[keep]
 
 
-def _thin(
-    vertices: np.ndarray,
-    nn: np.ndarray,
-    *,
-    probe: float,
-    max_d: float,
-    median_nn: float,
-    neighbour_r: float,
-    merge_r: float,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-    cap: int | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    if len(vertices) == 0:
-        return vertices, nn
-    # Dense frameworks can leave 1e5+ accessible points; hash-bin before NMS.
-    if len(vertices) > 2 * _ADAPTIVE_GRID_MAX_CANDIDATES:
-        vertices, nn = _bin_prethin(
-            vertices,
-            nn,
-            probe=probe,
-            max_d=max_d,
-            median_nn=median_nn,
-            bin_size=max(merge_r, neighbour_r),
-            cell=cell,
-            pbc=pbc,
-        )
-    sc = _scores(
-        nn,
-        probe=probe,
-        max_d=max_d,
-        median_nn=median_nn,
-    )
-    mask = _local_max_mask(vertices, sc, neighbour_r, cell, pbc)
-    if not np.any(mask):
-        mask = np.ones(len(vertices), dtype=bool)
-    vertices, nn = vertices[mask], nn[mask]
-    sc = _scores(
-        nn,
-        probe=probe,
-        max_d=max_d,
-        median_nn=median_nn,
-    )
-    vertices, nn = _nms(vertices, nn, sc, merge_r, cell, pbc)
-    if cap is not None and len(vertices) > cap:
-        sc = _scores(
-            nn,
-            probe=probe,
-            max_d=max_d,
-            median_nn=median_nn,
-        )
-        order = np.argsort(-sc)[:cap]
-        order.sort()
-        vertices, nn = vertices[order], nn[order]
-    return vertices, nn
-
-
-def _chunk_bounds(n: int, n_chunks: int) -> list[tuple[int, int]]:
-    n_chunks = max(1, min(int(n_chunks), max(1, n)))
-    sizes = [n // n_chunks] * n_chunks
-    for i in range(n % n_chunks):
-        sizes[i] += 1
-    bounds: list[tuple[int, int]] = []
-    start = 0
-    for size in sizes:
-        if size <= 0:
-            continue
-        bounds.append((start, start + size))
-        start += size
-    return bounds or [(0, n)]
+def _work_chunk_bounds(n_seeds: int, n_offsets: int) -> list[tuple[int, int]]:
+    """Split seeds so each chunk's cartesian product stays under the work budget."""
+    if n_seeds <= 0:
+        return []
+    max_seeds = max(1, _ADAPTIVE_GRID_WORK_BUDGET // max(1, int(n_offsets)))
+    return [
+        (start, min(start + max_seeds, n_seeds))
+        for start in range(0, n_seeds, max_seeds)
+    ]
 
 
 def _seed_chunk_candidates(
@@ -628,12 +592,20 @@ def _seed_chunk_candidates(
     tree: KDTree,
     probe: float,
     max_d: float,
-    hull,
+    *,
+    material_type: str,
+    cell: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     if len(seeds) == 0 or len(offsets) == 0:
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
     pts = (seeds[:, None, :] + offsets[None, :, :]).reshape(-1, 3)
-    return _filter_accessible(pts, tree, probe, max_d, hull=hull)
+    verts, nn, nearest = _filter_accessible(pts, tree, probe, max_d)
+    if len(verts) == 0:
+        return verts, nn
+    keep = _exposure_mask(
+        verts, nn, nearest, tree, material_type=material_type, cell=cell
+    )
+    return verts[keep], nn[keep]
 
 
 def _parallel_shell_filter(
@@ -642,27 +614,37 @@ def _parallel_shell_filter(
     tree: KDTree,
     probe: float,
     max_d: float,
-    hull,
+    *,
+    material_type: str,
+    cell: np.ndarray,
     n_jobs: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Build centre+offset candidates and filter; thread over centre chunks."""
+    """Build centre+offset candidates and filter; chunk by work budget, thread over chunks."""
     n = len(centres)
     if n == 0 or len(offsets) == 0:
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
-    n_workers = resolve_materialize_workers(n_jobs, n_tasks=n)
-    if n_workers == 1 or n == 1:
-        return _seed_chunk_candidates(centres, offsets, tree, probe, max_d, hull)
-
-    bounds = _chunk_bounds(n, n_workers)
-    if len(bounds) == 1:
-        return _seed_chunk_candidates(centres, offsets, tree, probe, max_d, hull)
+    bounds = _work_chunk_bounds(n, len(offsets))
+    if not bounds:
+        return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
 
     def _one(bound: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
         lo, hi = bound
-        return _seed_chunk_candidates(centres[lo:hi], offsets, tree, probe, max_d, hull)
+        return _seed_chunk_candidates(
+            centres[lo:hi],
+            offsets,
+            tree,
+            probe,
+            max_d,
+            material_type=material_type,
+            cell=cell,
+        )
 
-    with ThreadPoolExecutor(max_workers=len(bounds)) as pool:
-        parts = list(pool.map(_one, bounds))
+    n_workers = resolve_materialize_workers(n_jobs, n_tasks=len(bounds))
+    if n_workers == 1 or len(bounds) == 1:
+        parts = [_one(b) for b in bounds]
+    else:
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            parts = list(pool.map(_one, bounds))
     verts = [p[0] for p in parts if len(p[0])]
     dists = [p[1] for p in parts if len(p[1])]
     if not verts:
@@ -678,7 +660,6 @@ def generate_adaptive_grid_sites(
     material_type: str,
     probe_radius: float,
     max_site_distance: float,
-    top_layer_tolerance: float,
     adsorbate: Atoms | None = None,
     grid_spacing_scale: float | None = None,
     initial_spacing: float | None = None,
@@ -689,18 +670,21 @@ def generate_adaptive_grid_sites(
 
     *grid_spacing_scale* sizes the shared catalog (min adsorbate scale across
     competing molecules). *adsorbate* is only used when *grid_spacing_scale*
-    is omitted (direct/API tests).
+    is omitted (direct/API tests). Every framework atom is a seed; shell work
+    is streamed in RAM-capped chunks.
     """
     positions = np.asarray(positions, dtype=float)
     cell = np.asarray(cell, dtype=float)
     pbc = np.asarray(pbc, dtype=bool)
     probe, max_d = float(probe_radius), float(max_site_distance)
+    median_nn = _framework_median_nn(positions, cell, pbc)
     spacing = adaptive_grid_spacing(
         probe,
         adsorbate,
         grid_spacing_scale=grid_spacing_scale,
         initial_spacing=initial_spacing,
         max_levels=max_levels,
+        framework_median_nn=median_nn,
     )
     tree = _accessibility_tree(positions, cell, pbc, max_d)
     empty = (
@@ -712,44 +696,32 @@ def generate_adaptive_grid_sites(
     if len(positions) == 0:
         return empty
 
-    # Dense frameworks: one seed per voxel keeps shells near atoms without
-    # exploding candidate count (same atom-centred recipe as slab/NP).
-    seed_voxel = None
-    if material_type == "porous":
-        # Coarser than slab/NP: MOF walls radiate many overlapping shells.
-        seed_voxel = max(
-            spacing.initial_spacing,
-            spacing.characteristic_length,
-            float(max_d),
-        )
-    seeds = positions[
-        _seed_indices(
-            positions,
-            cell,
-            material_type,
-            float(top_layer_tolerance),
-            pbc,
-            seed_voxel=seed_voxel,
-        )
-    ]
-    frame = _orthonormal_frame(cell, material_type)
-    offsets = _shell_offsets(max_d, spacing.initial_spacing, frame, r_min=probe)
-    if len(offsets) == 0 or len(seeds) == 0:
+    offsets = _shell_offsets(max_d, spacing.initial_spacing, r_min=probe)
+    if len(offsets) == 0:
         return empty
 
-    hull = _try_convex_hull(positions) if material_type == "nanoparticle" else None
     raw_verts, raw_nn = _parallel_shell_filter(
-        seeds, offsets, tree, probe, max_d, hull, n_jobs
+        positions,
+        offsets,
+        tree,
+        probe,
+        max_d,
+        material_type=material_type,
+        cell=cell,
+        n_jobs=n_jobs,
     )
     vertices = _wrap_dedup(raw_verts, cell, pbc)
     if len(vertices) == 0:
         return empty
-    # Re-query nn after wrap so distances stay consistent with wrapped coords.
-    vertices, nn = _filter_accessible(vertices, tree, probe, max_d, hull=hull)
+    vertices, nn, nearest = _filter_accessible(vertices, tree, probe, max_d)
     if len(vertices) == 0:
         return empty
-
-    median_nn = _framework_median_nn(positions, cell, pbc)
+    keep = _exposure_mask(
+        vertices, nn, nearest, tree, material_type=material_type, cell=cell
+    )
+    vertices, nn = vertices[keep], nn[keep]
+    if len(vertices) == 0:
+        return empty
 
     h = spacing.initial_spacing
     h_target = max(
@@ -769,10 +741,10 @@ def generate_adaptive_grid_sites(
             merge_r=max(0.5 * h, spacing.merge_radius),
             cell=cell,
             pbc=pbc,
+            tree=tree,
         )
         h2 = 0.5 * h
-        # Half-spacing stencil in the same local frame (27 neighbours).
-        stencil_local = np.array(
+        stencil = np.array(
             [
                 [dx, dy, dz]
                 for dx in (-h2, 0.0, h2)
@@ -781,12 +753,24 @@ def generate_adaptive_grid_sites(
             ],
             dtype=float,
         )
-        stencil = stencil_local @ frame
         raw_verts, _ = _parallel_shell_filter(
-            parents, stencil, tree, probe, max_d, hull, n_jobs
+            parents,
+            stencil,
+            tree,
+            probe,
+            max_d,
+            material_type=material_type,
+            cell=cell,
+            n_jobs=n_jobs,
         )
         vertices = _wrap_dedup(raw_verts, cell, pbc)
-        vertices, nn = _filter_accessible(vertices, tree, probe, max_d, hull=hull)
+        vertices, nn, nearest = _filter_accessible(vertices, tree, probe, max_d)
+        if len(vertices) == 0:
+            break
+        keep = _exposure_mask(
+            vertices, nn, nearest, tree, material_type=material_type, cell=cell
+        )
+        vertices, nn = vertices[keep], nn[keep]
         h = h2
 
     if len(vertices) == 0:
@@ -802,6 +786,6 @@ def generate_adaptive_grid_sites(
         merge_r=spacing.merge_radius,
         cell=cell,
         pbc=pbc,
-        cap=_ADAPTIVE_GRID_MAX_CANDIDATES,
+        tree=tree,
     )
     return vertices, nn, spacing, tree

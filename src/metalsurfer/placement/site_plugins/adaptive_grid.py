@@ -1,4 +1,4 @@
-"""Adaptive Cartesian-grid site plugin (internal A/B, all material types)."""
+"""Adaptive Cartesian-grid site plugin (all material types)."""
 
 from __future__ import annotations
 
@@ -22,20 +22,11 @@ _EMPTY: tuple[int, ...] = ()
 class AdaptiveGridGenerator:
     """Atom-centred adaptive grid with iterative near-atom shell refinement.
 
-    Not selected by ``auto`` and not on ``AdsorptionConfig``; use
+    Not selected by ``auto``. Select via ``AdsorptionConfig.site_generator`` or
     ``get_unified_sites(..., site_generator="adaptive_grid")``.
     """
 
     name = "adaptive_grid"
-
-    def __init__(
-        self,
-        *,
-        initial_spacing: float | None = None,
-        max_levels: int | None = None,
-    ) -> None:
-        self._initial_spacing = initial_spacing
-        self._max_levels = max_levels
 
     def generate(
         self,
@@ -61,42 +52,35 @@ class AdaptiveGridGenerator:
             material_type=material_type,
             probe_radius=float(ctx.probe_radius),
             max_site_distance=float(ctx.max_site_distance),
-            top_layer_tolerance=float(ctx.top_layer_tolerance),
             grid_spacing_scale=scale,
-            initial_spacing=self._initial_spacing,
-            max_levels=self._max_levels,
             n_jobs=int(ctx.n_jobs),
         )
 
-        if len(vertices) == 0 and material_type == "porous":
-            return empty_candidate_batch(early_empty=True)
+        if len(vertices) == 0:
+            return empty_candidate_batch()
 
+        # Top-layer indices only for Delaunay classification on slabs — no height
+        # mask and no atop injection (exposure + NMS already cover surface sites).
         slab_top = None
-        apply_height = False
-        inject_atop = material_type in ("slab", "nanoparticle")
         if material_type == "slab":
             slab_top = np.nonzero(
                 top_layer_mask_by_normal(
                     positions, cell, float(ctx.top_layer_tolerance)
                 )
             )[0]
-            apply_height = True
-            ref = positions[slab_top] if len(slab_top) else positions
-        else:
-            ref = positions
 
         return SiteCandidateBatch(
             vertices=vertices,
             nn_dists=nn_dists,
             source_hints=[_SOURCE_HINT] * len(vertices),
             atom_indices=[_EMPTY] * len(vertices),
-            inject_atop=inject_atop,
-            apply_slab_height_mask=apply_height,
+            inject_atop=False,
+            apply_slab_height_mask=False,
             slab_top_atom_indices=slab_top,
             accessibility_tree=accessibility_tree,
             topology_median_nn=float(
                 median_nn_or_fallback(
-                    nn_dists, reference_positions=ref, cell=cell, pbc=pbc
+                    nn_dists, reference_positions=positions, cell=cell, pbc=pbc
                 )
             ),
         )

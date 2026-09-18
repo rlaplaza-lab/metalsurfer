@@ -1,7 +1,7 @@
 """Site generator plugins for adsorption-site enumeration.
 
 ``auto`` resolves by material (slab/NP → topology, porous → voronoi).
-Internal ``adaptive_grid`` is factory-resolvable but not config-exposed.
+``adaptive_grid`` is selectable on all materials but not chosen by ``auto``.
 """
 
 from .adaptive_grid import AdaptiveGridGenerator

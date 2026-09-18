@@ -89,6 +89,7 @@ module = [
     "metalsurfer.placement.site_classify",
     "metalsurfer.placement.site_np",
     "metalsurfer.placement.site_adaptive_grid",
+    "metalsurfer.placement._parallel",
     "metalsurfer.placement.site_plugins",
     "metalsurfer.placement.site_plugins.base",
     "metalsurfer.placement.site_plugins.helpers",

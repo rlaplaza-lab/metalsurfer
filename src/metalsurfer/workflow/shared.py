@@ -47,7 +47,7 @@ from ..placement.generators import (
     generate_placement_from_spec_with_reason,
     generate_placements_from_specs,
 )
-from ..placement.site_adaptive_grid import resolve_adaptive_grid_spacing_scale
+from ..placement.site_adaptive_grid import min_adsorbate_grid_scale
 from ..placement.site_context import SiteContext, resolve_site_context_for_sampling
 from ..placement.site_enumeration import _compute_site_z_base
 from ..reporting import (
@@ -846,6 +846,8 @@ def resolve_saturation_step_workload_config(
         Whether symmetry is broken.
     bo_enabled
         Whether Bayesian optimisation is enabled.
+    grid_spacing_scale
+        Optional shared adaptive-grid spacing for competing molecules.
     """
     grid_scale = grid_spacing_scale
     if (
@@ -853,7 +855,7 @@ def resolve_saturation_step_workload_config(
         and conformers
         and str(config.site_generator) == "adaptive_grid"
     ):
-        grid_scale = resolve_adaptive_grid_spacing_scale(
+        grid_scale = min_adsorbate_grid_scale(
             config.voronoi_probe_radius, [conformers[0]]
         )
     site_context = resolve_site_context_for_sampling(
@@ -1048,21 +1050,21 @@ def _prepare_molecule_screening(
     slab_for_sites = substrate_ref.slab_for_sites
     effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
 
+    grid_scale = grid_spacing_scale
+    if (
+        grid_scale is None
+        and conformers
+        and str(config.site_generator) == "adaptive_grid"
+    ):
+        grid_scale = min_adsorbate_grid_scale(
+            config.voronoi_probe_radius, [conformers[0]]
+        )
     if site_context is None:
-        scale = grid_spacing_scale
-        if (
-            scale is None
-            and conformers
-            and str(config.site_generator) == "adaptive_grid"
-        ):
-            scale = resolve_adaptive_grid_spacing_scale(
-                config.voronoi_probe_radius, [conformers[0]]
-            )
         site_context = resolve_site_context_for_sampling(
             slab_for_sites,
             config,
             symmetry_broken=symmetry_broken,
-            grid_spacing_scale=scale,
+            grid_spacing_scale=grid_scale,
         )
 
     if skip_workload_autotune or not needs_workload_autotune(config, bo=bo_enabled):

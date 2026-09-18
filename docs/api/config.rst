@@ -193,12 +193,13 @@ Site detection
    layer (slabs only; falls back for other material types).
 
 ``site_generator``
-   **Type:** ``Literal["auto", "topology", "voronoi"]`` · **Default:** ``"auto"``
+   **Type:** ``Literal["auto", "topology", "voronoi", "adaptive_grid"]`` · **Default:** ``"auto"``
 
    Plugin that enumerates raw adsorption-site candidates before classification.
    ``"auto"`` picks topology for slabs and nanoparticles, and Voronoi for porous
    frameworks. Explicit ``"topology"`` is allowed for ``slab`` / ``nanoparticle``;
-   ``"voronoi"`` for ``slab`` / ``porous``. Incompatible pairs raise at config
+   ``"voronoi"`` for ``slab`` / ``porous``; ``"adaptive_grid"`` for all three
+   materials (never chosen by ``auto``). Incompatible pairs raise at config
    construction. Explicit ``"voronoi"`` on a slab skips topology (A/B path;
    planar cells may rely on atop injection).
 

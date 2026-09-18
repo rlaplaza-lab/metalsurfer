@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""A/B adaptive_grid vs topology/voronoi on example substrates (+ optional e2e).
+"""A/B adaptive_grid vs topology/voronoi (auto) on example substrates (+ optional e2e).
 
-Internal plugin is not on AdsorptionConfig; this script temporarily widens
-SITE_GENERATOR_OPTIONS for campaign runs. Site-generation timing always runs
-under the default joblib-style ``n_jobs=-2`` path; pass --e2e for slim binding
-demos (GPU / MLIP) that report full E_ads distributions.
+Site-generation timing and e2e demos honour ``--n-jobs`` (default ``1``;
+prefer ``--n-jobs 1`` on small GPUs to avoid thread/CUDA contention).
+
+Run (conda env metalsurfer)::
+
+  conda activate metalsurfer
+  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+  python examples/compare_adaptive_grid_ab.py --n-jobs 1
+  python examples/compare_adaptive_grid_ab.py --e2e --num-placements 6 --n-jobs 1
 """
 
 from __future__ import annotations
@@ -23,17 +28,17 @@ from ase.cluster import Icosahedron
 from ase.io import read
 from scipy.spatial import KDTree
 
-# Ensure local src is preferred when not using an editable install.
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, os.path.join(_ROOT, "src"))
 
-import metalsurfer.config as config_mod
 from metalsurfer import (
     AdsorptionConfig,
+    BOConfig,
     configure_logging,
     results_dir_for,
     run_adsorption,
+    run_adsorption_bo,
 )
 from metalsurfer.placement._parallel import resolve_materialize_workers
 from metalsurfer.placement.site_adaptive_grid import (
@@ -46,19 +51,8 @@ from metalsurfer.placement.site_context import (
 from metalsurfer.placement.site_enumeration import get_unified_sites
 from metalsurfer.surface_prep import prepare_substrate
 
-_DEFAULT_N_JOBS = -2
-
-
-def _enable_adaptive_grid_config() -> None:
-    """Allow AdsorptionConfig(site_generator='adaptive_grid') for this process."""
-    if "adaptive_grid" not in config_mod.SITE_GENERATOR_OPTIONS:
-        config_mod.SITE_GENERATOR_OPTIONS = (
-            *config_mod.SITE_GENERATOR_OPTIONS,
-            "adaptive_grid",
-        )
-    config_mod._SITE_GENERATOR_ALLOWED_MATERIALS["adaptive_grid"] = frozenset(
-        {"slab", "nanoparticle", "porous"}
-    )
+_DEFAULT_N_JOBS = 1
+_RU_FCC_LATTICE_CONSTANT = 2.71 * (2.0**0.5)
 
 
 def _clear_site_cache() -> None:
@@ -74,8 +68,15 @@ def _pt13():
     return atoms
 
 
+def _ru55():
+    atoms = Icosahedron("Ru", noshells=3, latticeconstant=_RU_FCC_LATTICE_CONSTANT)
+    atoms.set_cell([40.0, 40.0, 40.0])
+    atoms.center()
+    atoms.pbc = False
+    return atoms
+
+
 def _tilted_ru_slab():
-    """Ru(0001)-like slab with surface normal tilted off lab-z."""
     from ase.build import hcp0001
 
     slab = hcp0001("Ru", size=(3, 3, 3), vacuum=12.0)
@@ -83,6 +84,37 @@ def _tilted_ru_slab():
     c, s = np.cos(angle), np.sin(angle)
     R = np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]], dtype=float)
     slab.set_cell(np.asarray(slab.get_cell(), dtype=float) @ R.T, scale_atoms=True)
+    slab.pbc = True
+    return slab
+
+
+def _stepped_ru_slab():
+    from ase.build import hcp0001
+
+    slab = hcp0001("Ru", size=(4, 4, 4), vacuum=12.0)
+    pos = slab.get_positions()
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    # Drop half the top layer along a to create a step.
+    z = pos[:, 2]
+    z_max = float(np.max(z))
+    top = z > z_max - 0.8
+    frac_a = (pos @ np.linalg.inv(cell).T)[:, 0]
+    keep = ~(top & (frac_a > 0.5))
+    slab = slab[keep]
+    slab.set_pbc([True, True, False])
+    return slab
+
+
+def _camphor_cu111_slab():
+    """Load paper Cu(111) slab if cached; else build a modest Cu(111) fallback."""
+    xyz = Path(_ROOT) / "examples" / "camphor_cu111" / "dft_reference_slab.xyz"
+    if xyz.exists():
+        atoms = read(str(xyz))
+        atoms.pbc = True
+        return atoms
+    from ase.build import fcc111
+
+    slab = fcc111("Cu", size=(6, 4, 4), vacuum=12.0, orthogonal=True)
     slab.pbc = True
     return slab
 
@@ -109,9 +141,9 @@ def _bench_sites(
         times.append(time.perf_counter() - t0)
     assert sites is not None
     xyz = np.asarray([s.xyz for s in sites], dtype=float)
-    types = {s.site_type: 0 for s in sites}
+    types: dict[str, int] = {}
     for s in sites:
-        types[s.site_type] += 1
+        types[s.site_type] = types.get(s.site_type, 0) + 1
     nn = np.asarray(
         [s.nn_distance for s in sites if s.nn_distance is not None], dtype=float
     )
@@ -140,15 +172,17 @@ def run_site_ab(n_jobs: int = _DEFAULT_N_JOBS) -> None:
     )
     print("=" * 72)
 
-    cases = []
-
     from ase.build import hcp0001
 
+    cases = []
     slab = hcp0001("Ru", size=(3, 3, 3), vacuum=12.0)
     slab.pbc = True
     cases.append(("Ru(0001) 3x3x3", "slab", "topology", slab, 0.75))
     cases.append(("Ru(0001) tilted", "slab", "topology", _tilted_ru_slab(), 0.75))
+    cases.append(("Ru(0001) stepped", "slab", "topology", _stepped_ru_slab(), 0.75))
     cases.append(("Pt13 icosahedron", "nanoparticle", "topology", _pt13(), 0.75))
+    cases.append(("Ru55 icosahedron", "nanoparticle", "topology", _ru55(), 0.75))
+    cases.append(("camphor Cu(111)", "slab", "topology", _camphor_cu111_slab(), 0.75))
 
     cif = os.path.join(_ROOT, "examples", "mof_structures", "RUBTAK01.cif")
     mof = read(cif)
@@ -162,7 +196,7 @@ def run_site_ab(n_jobs: int = _DEFAULT_N_JOBS) -> None:
         base = _bench_sites(atoms, mat, baseline, n_jobs=n_jobs)
         grid = _bench_sites(atoms, mat, "adaptive_grid", n_jobs=n_jobs)
         grid_h2 = None
-        if mat == "slab" and "tilted" not in label:
+        if mat == "slab" and "tilted" not in label and "stepped" not in label:
             h2_scale = adaptive_grid_characteristic_length(1.2, h2)
             grid_h2 = _bench_sites(
                 atoms,
@@ -248,7 +282,6 @@ def _ascii_hist(energies: list[float], bins: int = 8) -> str:
 
 
 def _as_atoms(slab) -> Atoms:
-    """Unwrap :class:`~metalsurfer.surface_prep.SlabContainer` if needed."""
     if isinstance(slab, Atoms):
         return slab
     return slab.atoms
@@ -261,12 +294,13 @@ def _run_campaign(
     molecules,
     surface_type: str,
     system_name: str,
+    *,
+    bo: bool = False,
 ):
     _clear_site_cache()
     atoms = _as_atoms(slab)
     grid_scale = None
     if str(config.site_generator) == "adaptive_grid" and molecules:
-        # Shared catalog scale from the campaign molecule (min of one).
         mol_name = str(molecules[0][1]).upper()
         if mol_name == "H2":
             ads = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
@@ -274,6 +308,18 @@ def _run_campaign(
             ads = Atoms(
                 "CO2",
                 positions=[[0.0, 0.0, 0.0], [1.16, 0.0, 0.0], [-1.16, 0.0, 0.0]],
+            )
+        elif mol_name == "ETHENE":
+            ads = Atoms(
+                "C2H4",
+                positions=[
+                    [0.0, 0.0, 0.0],
+                    [1.33, 0.0, 0.0],
+                    [-0.5, 0.9, 0.0],
+                    [-0.5, -0.9, 0.0],
+                    [1.83, 0.9, 0.0],
+                    [1.83, -0.9, 0.0],
+                ],
             )
         else:
             ads = None
@@ -290,14 +336,24 @@ def _run_campaign(
     )
     results_dir = str(results_dir_for(f"{surface_type}_{config.site_generator}"))
     t0 = time.perf_counter()
-    campaign = run_adsorption(
-        slab=slab,
-        molecules=molecules,
-        config=config,
-        surface_type=f"{surface_type}_{config.site_generator}",
-        system_name=system_name,
-        skip_existing=False,
-    )
+    if bo:
+        campaign = run_adsorption_bo(
+            slab=slab,
+            molecules=molecules,
+            config=config,
+            surface_type=f"{surface_type}_{config.site_generator}",
+            system_name=system_name,
+            skip_existing=False,
+        )
+    else:
+        campaign = run_adsorption(
+            slab=slab,
+            molecules=molecules,
+            config=config,
+            surface_type=f"{surface_type}_{config.site_generator}",
+            system_name=system_name,
+            skip_existing=False,
+        )
     elapsed = time.perf_counter() - t0
     energies: list[float] = []
     if campaign.run_results:
@@ -324,11 +380,15 @@ def _run_campaign(
     }
 
 
-def run_e2e(num_placements: int, csv_path: Path | None = None) -> None:
+def run_e2e(
+    num_placements: int,
+    csv_path: Path | None = None,
+    *,
+    n_jobs: int = 1,
+) -> None:
     print("\n" + "=" * 72)
-    print(f"End-to-end demos (num_placements={num_placements})")
+    print(f"End-to-end demos (num_placements={num_placements}, n_jobs={n_jobs})")
     print("=" * 72)
-    _enable_adaptive_grid_config()
     configure_logging(default_level="WARNING")
 
     results = []
@@ -340,7 +400,7 @@ def run_e2e(num_placements: int, csv_path: Path | None = None) -> None:
             seed=42,
             num_conformers=1,
             num_placements=num_placements,
-            n_jobs=_DEFAULT_N_JOBS,
+            n_jobs=n_jobs,
             autobatcher_max_memory_padding=0.8,
             autobatcher_max_memory_scaler=500,
             autobatcher_max_atoms_to_try=5000,
@@ -375,7 +435,7 @@ def run_e2e(num_placements: int, csv_path: Path | None = None) -> None:
             seed=42,
             num_conformers=1,
             num_placements=num_placements,
-            n_jobs=_DEFAULT_N_JOBS,
+            n_jobs=n_jobs,
             autobatcher_max_memory_padding=0.8,
             autobatcher_max_memory_scaler=500,
             autobatcher_max_atoms_to_try=5000,
@@ -411,7 +471,7 @@ def run_e2e(num_placements: int, csv_path: Path | None = None) -> None:
             seed=42,
             num_conformers=1,
             num_placements=max(3, num_placements // 2),
-            n_jobs=_DEFAULT_N_JOBS,
+            n_jobs=n_jobs,
             autobatcher_max_memory_padding=0.8,
             autobatcher_max_memory_scaler=500,
             autobatcher_max_atoms_to_try=5000,
@@ -435,6 +495,81 @@ def run_e2e(num_placements: int, csv_path: Path | None = None) -> None:
             )
         )
 
+    for plugin in ("auto", "adaptive_grid"):
+        cfg = AdsorptionConfig(
+            material_type="nanoparticle",
+            site_generator=plugin,
+            seed=42,
+            num_conformers=1,
+            num_placements=num_placements,
+            n_jobs=n_jobs,
+            autobatcher_max_memory_padding=0.8,
+            autobatcher_max_memory_scaler=500,
+            autobatcher_max_atoms_to_try=5000,
+            slab_relaxation_mode="none",
+            stage2_steps=200,
+        )
+        print(f"\n[ethene/Ru55] run site_generator={plugin!r} ...")
+        cluster = prepare_substrate(
+            slab=_ru55(),
+            config=cfg,
+            results_dir=str(results_dir_for(f"ab_ethene_ru55_{plugin}")),
+        )
+        results.append(
+            _run_campaign(
+                "ethene/Ru55",
+                cfg,
+                cluster,
+                [("C=C", "ethene")],
+                "ab_ethene_ru55",
+                "Ru_55",
+            )
+        )
+
+    # Slim camphor BO (reduced budget — full 25-batch twice is too heavy).
+    for plugin in ("auto", "adaptive_grid"):
+        cfg = AdsorptionConfig(
+            material_type="slab",
+            site_generator=plugin,
+            seed=42,
+            num_conformers=1,
+            n_jobs=n_jobs,
+            autobatcher_max_memory_padding=0.8,
+            autobatcher_max_memory_scaler=500,
+            autobatcher_max_atoms_to_try=5000,
+            slab_relaxation_mode="none",
+            placement_z_range=(2.0, 3.5),
+            placement_z_scale_by_covalent_radius=False,
+            binding_distance_threshold=5.0,
+            top_layer_tolerance=2.1,
+            stage2_steps=200,
+            bo=BOConfig(total_budget=8, acquisition="ei"),
+        )
+        print(f"\n[camphor/Cu111 BO] run site_generator={plugin!r} ...")
+        try:
+            from camphor_cu111_binding_energy import (  # type: ignore
+                CAMPHOR_SMILES,
+                prepare_campaign_slab,
+            )
+
+            slab = prepare_campaign_slab(
+                cfg, results_directory=str(results_dir_for(f"ab_camphor_{plugin}"))
+            )
+        except Exception as exc:
+            print(f"  skipping camphor (could not load paper slab: {exc})")
+            continue
+        results.append(
+            _run_campaign(
+                "camphor/Cu111",
+                cfg,
+                slab,
+                [(CAMPHOR_SMILES, "camphor")],
+                "ab_camphor",
+                "Cu_111",
+                bo=True,
+            )
+        )
+
     print("\n" + "=" * 72)
     print(
         f"{'system':14s} {'plugin':14s} {'t_s':>8s} {'n_sites':>8s} "
@@ -452,7 +587,8 @@ def run_e2e(num_placements: int, csv_path: Path | None = None) -> None:
         print(f"  E_ads histogram ({r['name']} / {r['plugin']}):")
         print(_ascii_hist(r["energies"]))
 
-    out = csv_path or Path(_ROOT) / "examples" / "adaptive_grid_ab_eads.csv"
+    out = csv_path or Path(results_dir_for("adaptive_grid_ab")) / "eads.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", newline="") as fh:
         writer = csv.DictWriter(
             fh,
@@ -512,18 +648,21 @@ def main() -> int:
         "--n-jobs",
         type=int,
         default=_DEFAULT_N_JOBS,
-        help="Joblib-style n_jobs for site enumeration (default -2)",
+        help="Joblib-style n_jobs for site enumeration (default 1)",
     )
     parser.add_argument(
         "--csv",
         type=Path,
         default=None,
-        help="Optional path for e2e E_ads summary CSV",
+        help="Optional path for e2e E_ads summary CSV "
+        "(default: results_adaptive_grid_ab/eads.csv)",
     )
     args = parser.parse_args()
     run_site_ab(n_jobs=args.n_jobs)
     if args.e2e:
-        run_e2e(args.num_placements, csv_path=args.csv)
+        # Allow importing sibling example helpers (camphor slab loader).
+        sys.path.insert(0, os.path.join(_ROOT, "examples"))
+        run_e2e(args.num_placements, csv_path=args.csv, n_jobs=args.n_jobs)
     return 0
 
 

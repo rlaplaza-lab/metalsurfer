@@ -1,4 +1,4 @@
-"""Shared joblib-style worker-count resolution for CPU-parallel placement stages."""
+"""Joblib-style worker resolution for threaded placement / site stages."""
 
 from __future__ import annotations
 

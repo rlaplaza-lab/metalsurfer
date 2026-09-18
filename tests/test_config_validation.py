@@ -253,8 +253,8 @@ def test_site_generator_auto_default_and_invalid():
     assert cfg.site_generator == "topology"
     with pytest.raises(ValueError, match="site_generator"):
         AdsorptionConfig(site_generator="invalid")
-    with pytest.raises(ValueError, match="site_generator"):
-        AdsorptionConfig(site_generator="adaptive_grid")
+    cfg_ag = AdsorptionConfig(site_generator="adaptive_grid", material_type="porous")
+    assert cfg_ag.site_generator == "adaptive_grid"
     with pytest.raises(ValueError, match="incompatible"):
         AdsorptionConfig(site_generator="topology", material_type="porous")
     with pytest.raises(ValueError, match="incompatible"):

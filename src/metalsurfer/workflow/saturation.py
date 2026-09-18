@@ -34,7 +34,7 @@ from ..placement.generators import (
     distribute_placement_budget,
     estimate_conformer_count,
 )
-from ..placement.site_adaptive_grid import resolve_adaptive_grid_spacing_scale
+from ..placement.site_adaptive_grid import min_adsorbate_grid_scale
 from ..placement.site_context import resolve_site_context_for_sampling
 from ..reporting import FailureSummary
 from ..result_paths import results_dir_for
@@ -651,7 +651,7 @@ def _screen_saturation_molecule(
     skip_workload_autotune: bool = False,
     occupancy_placement_X: list[dict[str, float]] | None = None,
     grid_spacing_scale: float | None = None,
-    site_context=None,
+    site_context: object | None = None,
 ) -> tuple[
     list[ScreeningResult], BOTransferInfo, BOStepMemory | None, list[PlacementRecord]
 ]:
@@ -1286,7 +1286,7 @@ def _run_multi_molecule_saturation(
         slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
         step_grid_scale = None
         if str(config.site_generator) == "adaptive_grid":
-            step_grid_scale = resolve_adaptive_grid_spacing_scale(
+            step_grid_scale = min_adsorbate_grid_scale(
                 config.voronoi_probe_radius,
                 [conformer_cache[m][0][0] for m in active_molecules],
             )
