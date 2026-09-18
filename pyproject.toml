@@ -42,10 +42,10 @@ dev = [
     "pytest",
     "pytest-cov",
     "coverage",
-    "ruff",
-    "mypy",
+    "ruff>=0.16.8,<0.17",
+    "mypy>=2.3.1,<2.4",
     "pandas-stubs",
-    "scipy-stubs",
+    "scipy-stubs>=1.18,<1.19",
     "types-PyYAML",
 ]
 docs = [
@@ -88,6 +88,12 @@ module = [
     "metalsurfer.placement.site_voronoi",
     "metalsurfer.placement.site_classify",
     "metalsurfer.placement.site_np",
+    "metalsurfer.placement.site_plugins",
+    "metalsurfer.placement.site_plugins.base",
+    "metalsurfer.placement.site_plugins.helpers",
+    "metalsurfer.placement.site_plugins.topology_np",
+    "metalsurfer.placement.site_plugins.topology_slab",
+    "metalsurfer.placement.site_plugins.voronoi",
 ]
 disable_error_code = ["misc", "has-type", "union-attr", "arg-type", "attr-defined"]
 
