@@ -7,13 +7,21 @@ from ase import Atoms
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.ml.features import extract_features
 from metalsurfer.ml.schema import PlacementRecord
-from metalsurfer.placement.site_context import _SITE_CONTEXT_CACHE
+from metalsurfer.placement.generators import _spec_grid_info
+from metalsurfer.placement.site_context import (
+    _SITE_CONTEXT_CACHE,
+    _get_unique_sites_for_specs,
+    resolve_site_context_for_sampling,
+)
+from metalsurfer.placement.site_enumeration import get_hollow_sites_for_adatoms
 from metalsurfer.workflow import shared as workflow_shared
 
 from ..conftest import (
     adsorption_config_factory,
+    make_nanoparticle,
     make_placement_descriptor,
     make_slab,
+    make_water,
     water_conformers,
 )
 from ._helpers import (
@@ -62,6 +70,21 @@ def test_unique_sites_cache_key_uses_material_aware_pbc_not_ase_pbc():
     np_config = AdsorptionConfig(material_type="nanoparticle")
     assert _unique_sites_cache_key(slab_mat, config) != _unique_sites_cache_key(
         slab_mat, np_config
+    )
+
+
+def test_unique_sites_cache_key_includes_site_generator():
+    from metalsurfer.placement.site_context import _unique_sites_cache_key
+
+    slab = make_slab(nx=2, ny=2)
+    auto = AdsorptionConfig(material_type="slab", site_generator="auto")
+    topology = AdsorptionConfig(material_type="slab", site_generator="topology")
+    voronoi = AdsorptionConfig(material_type="slab", site_generator="voronoi")
+    assert _unique_sites_cache_key(slab, auto) != _unique_sites_cache_key(
+        slab, topology
+    )
+    assert _unique_sites_cache_key(slab, topology) != _unique_sites_cache_key(
+        slab, voronoi
     )
 
 
@@ -233,3 +256,57 @@ def test_tilted_slab_site_xy_frac_uses_full_3d_projection():
     assert descriptor.site_xy_frac_a == pytest.approx(float(expected[0]), abs=1e-9)
     assert descriptor.site_xy_frac_b == pytest.approx(float(expected[1]), abs=1e-9)
     assert descriptor.placement_mode_resolved == "sites"
+
+
+def _site_xyz_type_key(site) -> tuple:
+    xyz = np.asarray(site.xyz, dtype=float)
+    return (
+        round(float(xyz[0]), 6),
+        round(float(xyz[1]), 6),
+        round(float(xyz[2]), 6),
+        str(site.site_type),
+    )
+
+
+def test_hollow_sites_match_clustered_catalog_slab_and_np():
+    """Adatom hollows are the hollow/pore subset of clustered unique sites."""
+    for material_type, structure in (
+        ("slab", make_slab(nx=3, ny=3)),
+        ("nanoparticle", make_nanoparticle()),
+    ):
+        config = AdsorptionConfig(material_type=material_type)
+        core = _get_unique_sites_for_specs(structure, config)
+        assert core.clustered_sites is not None
+        expected = {
+            _site_xyz_type_key(s)
+            for s in core.clustered_sites
+            if s.site_type in ("hollow", "pore")
+        }
+        hollows = get_hollow_sites_for_adatoms(
+            structure,
+            material_type=material_type,
+            site_equivalence_tolerance=config.site_equivalence_tolerance,
+        )
+        assert {_site_xyz_type_key(s) for s in hollows} == expected
+
+
+def test_enumerate_without_context_matches_resolved_sampling_catalog():
+    """Omitting site_context must still sample the symmetry-aware catalog."""
+    slab = make_slab(nx=2, ny=2)
+    config = AdsorptionConfig(material_type="slab", seed=0)
+    resolved = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    assert resolved.use_sites and resolved.sites
+    info = _spec_grid_info([make_water()], slab, config, "O", site_context=None)
+    assert [_site_xyz_type_key(s) for s in info.unique_sites] == [
+        _site_xyz_type_key(s) for s in resolved.sites
+    ]
+
+
+def test_symmetry_aware_context_preserves_clustered_sites():
+    """Sampling sites shrink under symmetry; clustered_sites stay full."""
+    slab = make_slab(nx=3, ny=3)
+    config = AdsorptionConfig(material_type="slab")
+    ctx = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    assert ctx.clustered_sites is not None
+    assert ctx.source == "symmetry_aware"
+    assert len(ctx.clustered_sites) > len(ctx.sites)

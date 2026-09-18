@@ -211,9 +211,11 @@ When each stage runs
 ~~~~~~~~~~~~~~~~~~~~
 
 - **Bulk creation** (``bulk_id=...``): ``slab_relaxation_*`` is passed to
-  :func:`~metalsurfer.surface_prep.create_slab_from_bulk`.
+  :func:`~metalsurfer.surface_prep.create_slab_from_bulk` (clean slab, before
+  alloy/adatom stages).
 - **Loaded substrate** (``slab=...`` or ``slab_file=...``): ``slab_relaxation_*``
-  runs via :func:`~metalsurfer.surface_prep.relax_substrate` before
+  runs via :func:`~metalsurfer.surface_prep.relax_substrate` on the **clean**
+  loaded structure, before alloy/adatom stages and
   :func:`~metalsurfer.surface_prep.finalize_substrate`.
 - **Adatom deposition**: ``adatom_relaxation_*`` is passed to
   :func:`~metalsurfer.surface_prep.deposit_adatoms`.

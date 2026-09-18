@@ -106,13 +106,15 @@ def create_conformers_from_smiles(
     if score_model is None and calculator is not None:
         score_model = getattr(calculator, "_model", None)
 
-    if score_model is not None and len(conformers) > 0:
+    # Lone atoms have no GNN edges; reference.py uses UMA atom_refs for E_mol.
+    score_single_atom = bool(conformers) and len(conformers[0]) == 1
+    if score_model is not None and conformers and not score_single_atom:
         # Lazy: importing metalsurfer.optimization pulls torch via _deps.
         from .optimization import batch_static
 
         results = batch_static(conformers, score_model)
         energies = [e for e, _f in results]
-    elif calculator is not None:
+    elif calculator is not None and not score_single_atom:
         energies = []
         for atoms in conformers:
             atoms.calc = calculator

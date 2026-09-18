@@ -48,7 +48,7 @@ from .pose import (
 )
 from .site_context import (
     SiteContext,
-    _get_unique_sites_for_specs,
+    site_context_for_sampling,
 )
 from .site_types import Site
 
@@ -226,11 +226,7 @@ def _spec_grid_info(
         and config.material_type in ("slab", "nanoparticle")
         and _is_dissociable_diatomic(conformers[0])
     )
-    _ctx = (
-        site_context
-        if site_context is not None
-        else _get_unique_sites_for_specs(slab, config)
-    )
+    _ctx = site_context_for_sampling(slab, config, site_context)
     unique_sites = _ctx.sites
     use_sites = _ctx.use_sites
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
@@ -674,12 +670,10 @@ def generate_placement_from_spec_with_reason(
             site_context=site_context,
         )
 
-    resolved_ctx = (
-        site_context
-        if site_context is not None
-        else _get_unique_sites_for_specs(
-            slab_for_sites if slab_for_sites is not None else slab, config
-        )
+    resolved_ctx = site_context_for_sampling(
+        slab_for_sites if slab_for_sites is not None else slab,
+        config,
+        site_context,
     )
 
     adsorbate = conformers[spec.conformer_index].copy()

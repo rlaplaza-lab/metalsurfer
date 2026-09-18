@@ -149,12 +149,28 @@ def test_parse_campaign_saturation_reservoir_yaml_round_trip():
                 "saturation_temperature": 423.15,
                 "saturation_pressure": 10.0,
                 "saturation_activities": [1.0, 1.0e-3],
+                "saturation_omega_shift": 0.05,
             },
         }
     )
     assert doc.config.saturation_temperature == pytest.approx(423.15)
     assert doc.config.saturation_pressure == pytest.approx(10.0)
     assert doc.config.saturation_activities == (1.0, 1.0e-3)
+    assert doc.config.saturation_omega_shift == pytest.approx(0.05)
+
+
+def test_parse_campaign_coerces_saturation_omega_shift_sequence():
+    doc = parse_campaign_dict(
+        {
+            **_VALID_BASE,
+            "molecules": [
+                {"smiles": "O", "name": "water"},
+                {"smiles": "O=C=O", "name": "CO2"},
+            ],
+            "config": {"saturation_omega_shift": [0.05, 0.0]},
+        }
+    )
+    assert doc.config.saturation_omega_shift == (0.05, 0.0)
 
 
 def test_parse_campaign_rejects_non_mapping_config():

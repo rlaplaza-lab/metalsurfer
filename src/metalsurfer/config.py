@@ -216,6 +216,43 @@ def _validate_saturation_activities(root: "AdsorptionConfig") -> None:
     root.saturation_activities = tuple(activities)
 
 
+def _validate_saturation_omega_shift(root: "AdsorptionConfig") -> None:
+    """Coerce scalar or per-species Ω shift (eV); length vs molecules later."""
+    raw = root.saturation_omega_shift
+    if raw is None:
+        return
+    if isinstance(raw, bool):
+        raise ValueError(
+            f"saturation_omega_shift must be a finite number or sequence, got {raw!r}"
+        )
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+        if not isfinite(value):
+            raise ValueError(f"saturation_omega_shift must be finite, got {raw!r}")
+        root.saturation_omega_shift = value
+        return
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, (list, tuple)):
+        raise ValueError(
+            "saturation_omega_shift must be a finite number, a sequence of "
+            f"finite numbers, or None, got {type(raw).__name__}"
+        )
+    if len(raw) == 0:
+        raise ValueError("saturation_omega_shift must be non-empty when provided")
+    shifts: list[float] = []
+    for i, item in enumerate(raw):
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise ValueError(
+                f"saturation_omega_shift[{i}] must be a finite number, got {item!r}"
+            )
+        value = float(item)
+        if not isfinite(value):
+            raise ValueError(
+                f"saturation_omega_shift[{i}] must be finite, got {item!r}"
+            )
+        shifts.append(value)
+    root.saturation_omega_shift = tuple(shifts)
+
+
 def _validate_saturation_reservoir(root: "AdsorptionConfig") -> None:
     """Validate reservoir T/p (bool rejected; positivity via ``_check_positive``)."""
     for name, value in (
@@ -226,6 +263,7 @@ def _validate_saturation_reservoir(root: "AdsorptionConfig") -> None:
             raise ValueError(f"{name} must be a positive number, got {value!r}")
         _check_positive(name, value)
     _validate_saturation_activities(root)
+    _validate_saturation_omega_shift(root)
 
 
 def _check_unit_interval(
@@ -245,6 +283,13 @@ def _check_finite_nonneg(name: str, value: float) -> None:
 CONFORMER_WEIGHTING_OPTIONS: tuple[str, ...] = ("uniform", "boltzmann")
 MATERIAL_TYPE_OPTIONS: tuple[str, ...] = ("slab", "nanoparticle", "porous")
 SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("auto", "distance_ratio", "delaunay")
+SITE_GENERATOR_OPTIONS: tuple[str, ...] = ("auto", "topology", "voronoi")
+
+# Explicit plugins incompatible with certain materials (mirrors site_plugins).
+_SITE_GENERATOR_ALLOWED_MATERIALS: dict[str, frozenset[str]] = {
+    "topology": frozenset({"slab", "nanoparticle"}),
+    "voronoi": frozenset({"slab", "porous"}),
+}
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
 BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = (
     "random",
@@ -413,6 +458,19 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
         root.site_classification_method,
         allowed=SITE_CLASSIFICATION_OPTIONS,
     )
+    _check_choice(
+        "site_generator",
+        root.site_generator,
+        allowed=SITE_GENERATOR_OPTIONS,
+    )
+    if root.site_generator != "auto":
+        allowed = _SITE_GENERATOR_ALLOWED_MATERIALS[root.site_generator]
+        if root.material_type not in allowed:
+            raise ValueError(
+                f"site_generator={root.site_generator!r} is incompatible with "
+                f"material_type={root.material_type!r}; allowed materials: "
+                f"{sorted(allowed)}"
+            )
 
 
 def _validate_relaxation(root: "AdsorptionConfig") -> None:
@@ -683,6 +741,8 @@ class AdsorptionConfig:
     voronoi_site_enrichment: bool = True
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
+    # Site candidate generator. ``auto`` → topology (slab/NP) or Voronoi (porous).
+    site_generator: Literal["auto", "topology", "voronoi"] = "auto"
     # Conformer prior for placement-spec selection.
     # ``"uniform"`` keeps the conformer-agnostic stratified draw (ignores
     # conformer energies). ``"boltzmann"`` (default) allocates spec slots per
@@ -701,6 +761,8 @@ class AdsorptionConfig:
     top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE
     symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
     site_equivalence_tolerance: float = DEFAULT_SITE_EQUIVALENCE_TOLERANCE
+    # Retained for config / ML-schema compatibility; hollow uniqueness uses
+    # site_equivalence_tolerance via _cluster_equivalent_sites.
     hollow_site_dedup_tolerance: float = DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
     planar_z_variance_threshold: float = DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
     rough_slab_local_z: bool = True
@@ -760,9 +822,11 @@ class AdsorptionConfig:
     saturation_molecules_per_step: int = 1
     # Reservoir T/p/a for Ω = E_ads − k_B T ln(a_i p / p°). SATP defaults.
     # Not boltzmann_temperature. None activities → all a_i = 1.
+    # saturation_omega_shift: Ω' = Ω − δ (eV); scalar broadcasts or per-species.
     saturation_temperature: float = STANDARD_TEMPERATURE_K
     saturation_pressure: float = STANDARD_PRESSURE_BAR
     saturation_activities: tuple[float, ...] | None = None
+    saturation_omega_shift: float | tuple[float, ...] | None = None
     skip_topology_check: bool = False
     enable_dissociative_placement: bool = False
     skip_desorption_check: bool = False

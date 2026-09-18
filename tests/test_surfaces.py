@@ -1,5 +1,6 @@
 """Tests for surface creation, alloy substitution, and adatom deposition."""
 
+import logging
 import os
 import sys
 import tempfile
@@ -442,9 +443,10 @@ class TestSubstituteAlloy:
         )
         monkeypatch.setattr(
             "metalsurfer.surface_prep._surfaces._consider_variant",
-            lambda variant, calculator, best_energy, best_atoms, context: (
+            lambda variant, calculator, best_energy, best_atoms, context, **_kwargs: (
                 -1.0,
                 variant.copy(),
+                None,
             ),
         )
         with (
@@ -464,6 +466,70 @@ class TestSubstituteAlloy:
                 n_variants=1,
                 results_dir=tmpdir,
             )
+
+    def test_ranking_preserves_batch_failure_cause(self, monkeypatch):
+        slab = self._ru_slab()
+        batch_err = RuntimeError("batch OOM")
+
+        class _AlwaysFailCalc:
+            def get_potential_energy(self, atoms=None, force_consistent=False):
+                _ = atoms, force_consistent
+                raise RuntimeError("variant energy failed")
+
+            _model = object()
+
+        def _failing_batch(*_args, **_kwargs):
+            raise batch_err
+
+        monkeypatch.setattr(
+            "metalsurfer.optimization.batch_static",
+            _failing_batch,
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            pytest.raises(GeometryValidationError, match="batch OOM") as exc_info,
+        ):
+            substitute_alloy(
+                slab,
+                "Ru",
+                "Cu",
+                guest_fraction=0.5,
+                relax=False,
+                calculator=_AlwaysFailCalc(),
+                n_variants=2,
+                results_dir=tmpdir,
+            )
+        assert exc_info.value.__cause__ is batch_err
+
+    def test_ranking_falls_through_when_batch_energies_invalid(self, monkeypatch):
+        slab = self._ru_slab()
+
+        class _GoodCalc:
+            def get_potential_energy(self, atoms=None, force_consistent=False):
+                _ = atoms, force_consistent
+                return -3.5
+
+            _model = object()
+
+        def _all_none_batch(variants, *_args, **_kwargs):
+            return [(None, None) for _ in variants]
+
+        monkeypatch.setattr(
+            "metalsurfer.optimization.batch_static",
+            _all_none_batch,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = substitute_alloy(
+                slab,
+                "Ru",
+                "Cu",
+                guest_fraction=0.5,
+                relax=False,
+                calculator=_GoodCalc(),
+                n_variants=2,
+                results_dir=tmpdir,
+            )
+        assert result.atoms.get_chemical_symbols().count("Cu") > 0
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +626,23 @@ class TestDepositAdatoms:
         assert len(result.atoms) > n_before
         new_positions = result.atoms.get_positions()[n_before:]
         assert all(z > z_max for z in new_positions[:, 2])
+
+    def test_logs_without_energy_when_no_calculator(self, caplog):
+        slab = self._layered_slab()
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            caplog.at_level(logging.INFO, logger="metalsurfer.surface_prep._surfaces"),
+        ):
+            deposit_adatoms(
+                slab,
+                "Sn",
+                coverage_fraction=0.2,
+                config=self._NO_RELAX_CFG,
+                results_dir=tmpdir,
+            )
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("without energy ranking" in m for m in messages)
+        assert not any("E=inf" in m for m in messages)
 
     def test_deterministic_with_same_seed(self):
         slab1 = self._layered_slab()
@@ -1133,8 +1216,8 @@ def test_deposit_adatoms_height_follows_tilted_slab_normal(tmp_path):
     hollow_sites = get_hollow_sites_for_adatoms(
         atoms,
         top_layer_tolerance=config.top_layer_tolerance,
-        dedup_tolerance=config.hollow_site_dedup_tolerance,
         material_type=config.material_type,
+        site_equivalence_tolerance=config.site_equivalence_tolerance,
     )
     expected_targets = []
     for site in hollow_sites:

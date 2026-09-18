@@ -34,13 +34,15 @@ from metalsurfer.placement.pose import (
 )
 from metalsurfer.placement.site_context import (
     SiteContext,
-    _get_unique_sites_for_specs,
+    site_context_for_sampling,
 )
 from metalsurfer.placement.site_enumeration import (
     _cluster_equivalent_sites,
     _compute_site_z_base,
     _get_site_surface_radii,
-    _is_top_layer_planar,
+)
+from metalsurfer.placement.site_plugins.helpers import (
+    is_top_layer_planar as _is_top_layer_planar,
 )
 
 from ..conftest import (
@@ -201,7 +203,8 @@ def test_local_site_material_placement_center_matches_site_geometry(
         placement_distance_recovery=False,
     )
     conformers = water_conformers()
-    site_ctx = _get_unique_sites_for_specs(structure, config)
+    # Match production sampling catalog (clustered ± symmetry), not unique-only.
+    site_ctx = site_context_for_sampling(structure, config, None)
     unique_sites, use_sites = site_ctx.sites, site_ctx.use_sites
     assert use_sites and len(unique_sites) > 0
 

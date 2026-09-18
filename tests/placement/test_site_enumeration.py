@@ -89,8 +89,10 @@ def test_site_enumeration_exports_wrap_cartesian_for_atop_injection():
 def test_get_unified_sites_slab_atop_injection_wraps_under_pbc(monkeypatch):
     """Atop injection must call _wrap_cartesian and emit atop_injected sites."""
     from metalsurfer.placement import site_enumeration as enum_mod
+    from metalsurfer.placement.site_plugins import topology_slab as topo_mod
+    from metalsurfer.placement.site_voronoi import _generate_slab_topology_sites
 
-    real_topo = enum_mod._generate_slab_topology_sites
+    real_topo = _generate_slab_topology_sites
     real_wrap = enum_mod._wrap_cartesian
     wrap_calls: list[int] = []
 
@@ -115,7 +117,7 @@ def test_get_unified_sites_slab_atop_injection_wraps_under_pbc(monkeypatch):
         wrap_calls.append(len(np.asarray(points)))
         return real_wrap(points, cell, pbc)
 
-    monkeypatch.setattr(enum_mod, "_generate_slab_topology_sites", _topo_without_atop)
+    monkeypatch.setattr(topo_mod, "_generate_slab_topology_sites", _topo_without_atop)
     monkeypatch.setattr(enum_mod, "_wrap_cartesian", _counting_wrap)
     slab = make_slab()
     assert bool(np.any(slab.get_pbc()))
@@ -245,7 +247,9 @@ def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
 
 
 def test_is_top_layer_planar_true_for_three_coplanar_atoms():
-    from metalsurfer.placement.site_enumeration import _is_top_layer_planar
+    from metalsurfer.placement.site_plugins.helpers import (
+        is_top_layer_planar as _is_top_layer_planar,
+    )
 
     atoms = Atoms(
         "Cu3",
@@ -318,7 +322,9 @@ def test_topology_bridges_keep_distinct_pbc_midpoints():
     cell = np.diag([4.0, 4.0, 20.0])
     pbc = np.array([True, True, False], dtype=bool)
     top_idx = np.arange(4, dtype=int)
-    from metalsurfer.placement.site_enumeration import _periodic_accessibility_tree
+    from metalsurfer.placement.site_plugins.helpers import (
+        periodic_accessibility_tree as _periodic_accessibility_tree,
+    )
 
     access_tree = _periodic_accessibility_tree(positions, cell, pbc, max_distance=5.0)
     verts, _dists, sources, _tri, *_rest = _generate_slab_topology_sites(
@@ -645,12 +651,12 @@ def test_fcc100_site_type_ratios_and_coordination_numbers():
 
 def test_atop_injection_runs_when_voronoi_empty_nanoparticle(monkeypatch):
     """NP path does not need Voronoi; topology alone yields atops."""
-    from metalsurfer.placement import site_enumeration as enum_mod
+    import metalsurfer.placement.site_voronoi as voronoi_mod
 
     def _fail(*_a, **_k):
         raise AssertionError("Voronoi must not run for nanoparticles")
 
-    monkeypatch.setattr(enum_mod, "_voronoi_sites", _fail)
+    monkeypatch.setattr(voronoi_mod, "_voronoi_sites", _fail)
     struct = make_nanoparticle()
     sites = get_unified_sites(struct, material_type="nanoparticle", enrich=False)
     assert len(sites) > 0
@@ -660,11 +666,11 @@ def test_atop_injection_runs_when_voronoi_empty_nanoparticle(monkeypatch):
 
 def test_atop_injection_safety_net_when_np_topology_empty(monkeypatch):
     """When hull topology fails, metal–metal atop injection still runs."""
-    from metalsurfer.placement import site_enumeration as enum_mod
     from metalsurfer.placement.site_np import _NPTopologyResult
+    from metalsurfer.placement.site_plugins import topology_np as np_mod
 
     monkeypatch.setattr(
-        enum_mod,
+        np_mod,
         "_generate_nanoparticle_topology_sites",
         lambda *a, **k: _NPTopologyResult(
             np.empty((0, 3), dtype=float),
@@ -692,8 +698,10 @@ def test_issue6_ni55_and_ni13_expose_atop_bridge_hollow():
         _VORONOI_PROBE_RADIUS_COVALENT_SCALE,
     )
     from metalsurfer.placement.site_coords import _mean_covalent_radius
-    from metalsurfer.placement.site_enumeration import _median_nn_or_fallback
     from metalsurfer.placement.site_np import _outside_convex_hull_mask
+    from metalsurfer.placement.site_plugins.helpers import (
+        median_nn_or_fallback as _median_nn_or_fallback,
+    )
 
     for name, atoms in (
         ("Ni55", Octahedron("Ni", 5, 2)),
@@ -745,12 +753,12 @@ def test_issue6_nonempty_voronoi_must_not_zero_out_np_atops(monkeypatch):
     """NP enumeration must not call Voronoi (topology-only path)."""
     from ase.cluster import Octahedron
 
-    from metalsurfer.placement import site_enumeration as enum_mod
+    import metalsurfer.placement.site_voronoi as voronoi_mod
 
     def _fail(*_a, **_k):
         raise AssertionError("Voronoi must not run for nanoparticles")
 
-    monkeypatch.setattr(enum_mod, "_voronoi_sites", _fail)
+    monkeypatch.setattr(voronoi_mod, "_voronoi_sites", _fail)
     sites = get_unified_sites(Octahedron("Ni", 5, 2), material_type="nanoparticle")
     assert any(
         s.site_type == "atop" and s.site_source == "topology_atop" for s in sites
@@ -804,10 +812,10 @@ def test_issue6_ni111_slab_counts_unchanged():
 
 def test_atop_injection_runs_when_voronoi_and_topology_empty_slab(monkeypatch):
     """1.1: planar slab with no Voronoi vertices and no topology still gets atop."""
-    from metalsurfer.placement import site_enumeration as enum_mod
+    from metalsurfer.placement.site_plugins import topology_slab as topo_mod
 
     monkeypatch.setattr(
-        enum_mod,
+        topo_mod,
         "_voronoi_sites",
         lambda *a, **k: (
             np.empty((0, 3), dtype=float),
@@ -815,7 +823,7 @@ def test_atop_injection_runs_when_voronoi_and_topology_empty_slab(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        enum_mod,
+        topo_mod,
         "_generate_slab_topology_sites",
         lambda *a, **k: (
             np.empty((0, 3), dtype=float),
@@ -872,7 +880,9 @@ def test_median_nn_or_fallback_elongated_cell_avoids_self_image():
         _SURFACE_COVALENT_RADIUS_FALLBACK,
         _VORONOI_MAX_DISTANCE_COVALENT_SCALE,
     )
-    from metalsurfer.placement.site_enumeration import _median_nn_or_fallback
+    from metalsurfer.placement.site_plugins.helpers import (
+        median_nn_or_fallback as _median_nn_or_fallback,
+    )
 
     def reference_median_nn(points, cell, pbc):
         nn = []
@@ -944,9 +954,9 @@ def test_cluster_equivalent_sites_anisotropic_slab_metric_bound():
 def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
     """PBC-aware merge alone collapses boundary-duplicate atop injections."""
     from metalsurfer.placement._constants import _ATOP_INJECTION_HEIGHT_FACTOR
-    from metalsurfer.placement.site_enumeration import (
-        _inject_atop_sites,
-        _periodic_accessibility_tree,
+    from metalsurfer.placement.site_enumeration import _inject_atop_sites
+    from metalsurfer.placement.site_plugins.helpers import (
+        periodic_accessibility_tree as _periodic_accessibility_tree,
     )
 
     positions = np.array(
@@ -998,7 +1008,9 @@ def test_merge_dedup_freezes_existing_unique_sites():
     one representative; freeze-existing merge keeps both A and B and drops M.
     """
     from metalsurfer.placement._constants import _VORONOI_DEDUP_TOLERANCE
-    from metalsurfer.placement.site_enumeration import _merge_dedup_site_arrays
+    from metalsurfer.placement.site_plugins.helpers import (
+        merge_dedup_site_arrays as _merge_dedup_site_arrays,
+    )
 
     tol = _VORONOI_DEDUP_TOLERANCE
     # A and B farther than tol; M within tol of both.
@@ -1037,7 +1049,9 @@ def test_merge_dedup_freezes_existing_unique_sites():
 
 def test_topology_boundary_candidate_retained_with_accessibility_tree():
     """PBC-aware accessibility_tree keeps a boundary candidate a plain tree drops."""
-    from metalsurfer.placement.site_enumeration import _periodic_accessibility_tree
+    from metalsurfer.placement.site_plugins.helpers import (
+        periodic_accessibility_tree as _periodic_accessibility_tree,
+    )
     from metalsurfer.placement.site_voronoi import _generate_slab_topology_sites
 
     positions = np.array(

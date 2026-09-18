@@ -39,7 +39,6 @@ from .pose import (
 )
 from .site_context import SiteContext
 from .site_coords import (
-    _deduplicate_points,
     _mean_covalent_radius,
     _periodic_image_offsets,
     _slab_normal,
@@ -47,6 +46,7 @@ from .site_coords import (
     top_layer_mask_by_normal,
 )
 from .site_enumeration import (
+    _cluster_equivalent_sites,
     _compute_site_z_base,
     _get_site_surface_radii,
     get_hollow_sites_for_adatoms,
@@ -120,7 +120,7 @@ def _dissociative_pair_cache_key(
         slab_for_sites.get_atomic_numbers(), dtype=np.int32
     ).tobytes()
     cfg_bytes = (
-        struct.pack("<d", float(config.hollow_site_dedup_tolerance))
+        struct.pack("<d", float(config.site_equivalence_tolerance))
         + _pack_optional_float(config.voronoi_probe_radius)
         + _pack_optional_float(config.voronoi_max_site_distance)
         + _pack_optional_float(config.top_layer_tolerance)
@@ -128,6 +128,8 @@ def _dissociative_pair_cache_key(
         + struct.pack("<?", bool(config.voronoi_site_enrichment))
         + struct.pack("<?", bool(config.voronoi_auto_widen))
         + str(config.site_classification_method).encode()
+        + b"\x00"
+        + str(config.site_generator).encode()
         + b"\x00"
         + config.material_type.encode()
         + struct.pack("<d", float(config.min_adsorbate_separation))
@@ -157,28 +159,44 @@ def _resolve_dissociative_site_entries(
     raw_sites: list[Site] | None = None,
     site_context: SiteContext | None = None,
     cell_arr: np.ndarray,
-    pbc_xy: list[bool],
 ) -> list[Site]:
-    """Resolve hollow/pore site list before occupancy pruning."""
-    used_hollow_helper = False
+    """Resolve hollow/pore sites from the clustered (non-symmetry) catalog.
+
+    Prefers ``site_context.clustered_sites`` so pairs see the full translational
+    lattice. Explicit *raw_sites* (or ``raw_unclustered`` when
+    ``clustered_sites`` is missing) are clustered with
+    ``site_equivalence_tolerance`` before the hollow/pore filter.
+    """
     if raw_sites is not None:
-        site_entries = list(raw_sites)
+        site_entries = _cluster_equivalent_sites(
+            list(raw_sites),
+            cell_arr,
+            tolerance=config.site_equivalence_tolerance,
+        )
+    elif site_context is not None and site_context.clustered_sites is not None:
+        site_entries = list(site_context.clustered_sites)
     elif site_context is not None and site_context.raw_unclustered is not None:
-        site_entries = list(site_context.raw_unclustered)
+        site_entries = _cluster_equivalent_sites(
+            list(site_context.raw_unclustered),
+            cell_arr,
+            tolerance=config.site_equivalence_tolerance,
+        )
     elif site_context is not None and site_context.sites:
         site_entries = list(site_context.sites)
     elif config.material_type == "slab":
-        site_entries = get_hollow_sites_for_adatoms(
+        return get_hollow_sites_for_adatoms(
             sites_slab,
             top_layer_tolerance=config.top_layer_tolerance,
-            dedup_tolerance=config.hollow_site_dedup_tolerance,
             material_type=config.material_type,
             probe_radius=config.voronoi_probe_radius,
             max_site_distance=config.voronoi_max_site_distance,
             enrich=config.voronoi_site_enrichment,
             site_classification_method=config.site_classification_method,
+            site_generator=config.site_generator,
+            site_equivalence_tolerance=config.site_equivalence_tolerance,
+            auto_widen=config.voronoi_auto_widen,
+            planar_z_variance_threshold=config.planar_z_variance_threshold,
         )
-        used_hollow_helper = True
     else:
         site_entries = get_unified_sites(
             sites_slab,
@@ -188,24 +206,17 @@ def _resolve_dissociative_site_entries(
             max_site_distance=config.voronoi_max_site_distance,
             enrich=config.voronoi_site_enrichment,
             site_classification_method=config.site_classification_method,
+            site_generator=config.site_generator,
+            auto_widen=config.voronoi_auto_widen,
+            planar_z_variance_threshold=config.planar_z_variance_threshold,
+        )
+        site_entries = _cluster_equivalent_sites(
+            site_entries,
+            cell_arr,
+            tolerance=config.site_equivalence_tolerance,
         )
 
-    if not used_hollow_helper:
-        site_entries = _filter_hollow_pore_sites(
-            site_entries, material_type=config.material_type
-        )
-        if config.material_type in ("slab", "nanoparticle") and len(site_entries) >= 2:
-            site_xyz = np.array(
-                [np.asarray(s.xyz, dtype=float) for s in site_entries], dtype=float
-            )
-            keep = _deduplicate_points(
-                site_xyz,
-                config.hollow_site_dedup_tolerance,
-                cell=cell_arr,
-                pbc=np.asarray(pbc_xy, dtype=bool),
-            )
-            site_entries = [site_entries[i] for i in np.nonzero(keep)[0]]
-    return site_entries
+    return _filter_hollow_pore_sites(site_entries, material_type=config.material_type)
 
 
 def _get_dissociative_site_pairs(
@@ -230,7 +241,6 @@ def _get_dissociative_site_pairs(
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(config.material_type)
 
     # Clean-slab path keeps sites_tag="default" so we can look up before the
     # expensive hollow-site discovery. Context/raw paths hash the resolved XYZ
@@ -243,7 +253,6 @@ def _get_dissociative_site_pairs(
             raw_sites=raw_sites,
             site_context=site_context,
             cell_arr=cell_arr,
-            pbc_xy=pbc,
         )
         if len(pre_resolved) < 2:
             return []
@@ -317,7 +326,6 @@ def _compute_dissociative_site_pairs(
             raw_sites=raw_sites,
             site_context=site_context,
             cell_arr=cell_arr,
-            pbc_xy=pbc,
         )
     if len(site_entries) < 2:
         return []

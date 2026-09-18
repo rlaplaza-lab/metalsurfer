@@ -624,26 +624,27 @@ def _consider_variant(
     best_atoms: Atoms | None,
     context: str,
     keep_last_without_calculator: bool = False,
-) -> tuple[float, Atoms | None]:
+) -> tuple[float, Atoms | None, BaseException | None]:
     """Update best variant when *candidate* is better (or first without calculator)."""
     if calculator is None:
         # No energy ranking available. By default keep the first variant so the
         # result is deterministic regardless of seed; ``deposit_adatoms`` opts into
         # last-wins so its (seed-dependent) placement differs across runs.
         if best_atoms is None or keep_last_without_calculator:
-            return best_energy, candidate.copy()
-        return best_energy, best_atoms
+            return best_energy, candidate.copy(), None
+        return best_energy, best_atoms, None
     try:
         candidate.calc = calculator
         energy = float(candidate.get_potential_energy())
         if energy < best_energy:
-            return energy, candidate.copy()
+            return energy, candidate.copy(), None
     except (OptimizationError, DependencyMissingError, GeometryValidationError):
         raise
     except (RuntimeError, ValueError) as exc:
         if context:
             logger.warning("%s failed: %s", context, exc)
-    return best_energy, best_atoms
+        return best_energy, best_atoms, exc
+    return best_energy, best_atoms, None
 
 
 def _save_reference_slab_artifacts(
@@ -760,10 +761,11 @@ def _rank_alloy_variants(
     variants: list[Atoms],
     *,
     calculator,
-) -> tuple[float, Atoms | None]:
+) -> tuple[float, Atoms | None, BaseException | None]:
     """Pick the lowest-energy alloy variant; batch via TorchSim when available."""
     best_energy = float("inf")
     best_atoms: Atoms | None = None
+    ranking_failure: BaseException | None = None
     ts_model = getattr(calculator, "_model", None) if calculator is not None else None
     if ts_model is not None and variants:
         # Lazy: importing metalsurfer.optimization pulls torch via _deps.
@@ -773,6 +775,7 @@ def _rank_alloy_variants(
             results = batch_static(variants, ts_model, require_energy=False)
         except (RuntimeError, MemoryError, OSError, DependencyMissingError) as exc:
             logger.warning("Batched alloy variant scoring failed: %s", exc)
+            ranking_failure = exc
         else:
             for v, (energy, _forces) in enumerate(results):
                 if energy is None or not np.isfinite(energy):
@@ -781,17 +784,22 @@ def _rank_alloy_variants(
                 if energy < best_energy:
                     best_energy = float(energy)
                     best_atoms = variants[v].copy()
-            return best_energy, best_atoms
+            if best_atoms is not None:
+                return best_energy, best_atoms, None
 
     for v, variant in enumerate(variants):
-        best_energy, best_atoms = _consider_variant(
+        best_energy, best_atoms, err = _consider_variant(
             variant,
             calculator=calculator,
             best_energy=best_energy,
             best_atoms=best_atoms,
             context=f"Variant {v}",
         )
-    return best_energy, best_atoms
+        if ranking_failure is None and err is not None:
+            ranking_failure = err
+    if best_atoms is not None:
+        return best_energy, best_atoms, None
+    return best_energy, best_atoms, ranking_failure
 
 
 def substitute_alloy(
@@ -934,12 +942,17 @@ def substitute_alloy(
         variant.set_chemical_symbols(syms)
         variants.append(variant)
 
-    best_energy, best_atoms = _rank_alloy_variants(variants, calculator=calculator)
+    best_energy, best_atoms, ranking_failure = _rank_alloy_variants(
+        variants, calculator=calculator
+    )
 
     if best_atoms is None:
-        raise GeometryValidationError(
-            "Failed to generate any valid alloy slab variants"
-        )
+        message = "Failed to generate any valid alloy slab variants"
+        if ranking_failure is not None:
+            raise GeometryValidationError(
+                f"{message}: {ranking_failure}"
+            ) from ranking_failure
+        raise GeometryValidationError(message)
 
     if relax and calculator is not None:
         try:
@@ -998,8 +1011,10 @@ def deposit_adatoms(
 ) -> SlabContainer:
     """Place *adatom_symbol* atoms at hollow sites above the top layer.
 
-    Candidate hollow/pore sites come from unified site detection. Placement
-    height is ``site.xyz + site.normal * adsorption_height`` (normal-aware).
+    Candidate hollow/pore sites come from the clustered unique-site catalog
+    (same ``site_equivalence_tolerance`` path as molecular placement; not a
+    separate hollow dedup). Placement height is
+    ``site.xyz + site.normal * adsorption_height`` (normal-aware).
     *coverage_fraction* of the available sites are filled. The lowest-energy
     variant is kept. Optional relaxation presets can be applied to each
     generated adatom variant before energy ranking.
@@ -1088,8 +1103,15 @@ def deposit_adatoms(
     candidate_sites = get_hollow_sites_for_adatoms(
         base,
         top_layer_tolerance=top_tol,
-        dedup_tolerance=config.hollow_site_dedup_tolerance,
         material_type=config.material_type,
+        probe_radius=config.voronoi_probe_radius,
+        max_site_distance=config.voronoi_max_site_distance,
+        enrich=config.voronoi_site_enrichment,
+        site_classification_method=config.site_classification_method,
+        site_generator=config.site_generator,
+        site_equivalence_tolerance=config.site_equivalence_tolerance,
+        auto_widen=config.voronoi_auto_widen,
+        planar_z_variance_threshold=config.planar_z_variance_threshold,
     )
 
     if not candidate_sites:
@@ -1175,7 +1197,7 @@ def deposit_adatoms(
                 steps=steps,
                 context=f"deposit_adatoms variant {v}",
             )
-        best_energy, best_atoms = _consider_variant(
+        best_energy, best_atoms, _ = _consider_variant(
             candidate,
             calculator=calculator,
             best_energy=best_energy,
@@ -1197,12 +1219,19 @@ def deposit_adatoms(
         stem=f"clean_slab_{label}",
         write_vasp=config.write_vasp_inputs,
     )
-    logger.info(
-        "Created adatom-deposited slab (%s, %.0f%%): E=%.4f eV",
-        adatom_symbol,
-        coverage_fraction * 100,
-        best_energy,
-    )
+    if np.isfinite(best_energy):
+        logger.info(
+            "Created adatom-deposited slab (%s, %.0f%%): E=%.4f eV",
+            adatom_symbol,
+            coverage_fraction * 100,
+            best_energy,
+        )
+    else:
+        logger.info(
+            "Created adatom-deposited slab (%s, %.0f%%) without energy ranking",
+            adatom_symbol,
+            coverage_fraction * 100,
+        )
 
     # Base-slab FixAtoms indices become stale after atoms are appended; refresh
     # so adatoms are frozen with the rest of the substrate (default freeze-all).

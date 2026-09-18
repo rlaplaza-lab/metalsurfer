@@ -145,6 +145,29 @@ for slabs (catalysis-style atop/bridge/hollow catalogs), hull+NN topology labels
 for nanoparticles, and distance-ratio for porous Voronoi vertices. Explicit
 ``"distance_ratio"`` on slabs is honored for A/B comparisons.
 
+Site candidate generation defaults to ``site_generator="auto"`` (topology for
+slab/NP, Voronoi for porous). Set ``site_generator="topology"`` or
+``"voronoi"`` explicitly for A/B comparisons; incompatible
+``site_generator`` / ``material_type`` pairs are rejected.
+
+Site uniqueness and sampling
+----------------------------
+
+After candidates are classified into ``Site`` records, uniqueness is shared:
+
+- ``site_equivalence_tolerance`` (default 0.05 Å) — fingerprint-aware clustering
+  (geometry + support symbols + ``site_type``). Ignores ``site_source``, so
+  topology / Voronoi / injected atops in the same pocket merge. Used by
+  molecular placement, dissociative hollow pairs, and adatom hollow selection.
+- ``symmetry_tolerance`` (default 0.1 Å) — optional spglib orbit reduction on
+  the **clustered** catalog for molecular sampling only (skipped when substrate
+  symmetry is broken). Dissociative / adatoms keep the full clustered lattice.
+- ``hollow_site_dedup_tolerance`` — retained for config / ML-schema
+  compatibility; not applied as a separate hollow merge.
+
+Omit ``site_context`` on enumerate/materialize and the same
+``resolve_site_context_for_sampling`` path is used as production screening.
+
 Bayesian optimization budget
 ----------------------------
 
@@ -206,9 +229,12 @@ Key fields:
   step; lowest ``Ω`` advances the slab
 - ``saturation_molecules_per_step`` (default ``1``) — n-tuplet: commit up to this many
   clear winners per step in one composite; empty commits stop as unbound finals
-- ``saturation_temperature`` / ``saturation_pressure`` / ``saturation_activities`` —
+- ``saturation_temperature`` / ``saturation_pressure`` / ``saturation_activities`` /
+  ``saturation_omega_shift`` —
   reservoir ranking ``Ω = E_ads − k_B T ln(a_i p / p°)`` (SATP defaults
-  ``298.15`` K / ``1`` bar / all ``a_i = 1``). Not ``boltzmann_temperature``. If
+  ``298.15`` K / ``1`` bar / all ``a_i = 1``). ``saturation_omega_shift`` is a
+  scalar or per-species offset in eV subtracted from ``Ω``. Not
+  ``boltzmann_temperature``. If
   activities already encode ``p_i / p°``, leave pressure at 1
 - ``bo.transfer.*`` — cross-step BO memory in ``run_saturation_bo`` (see
   :doc:`../api/config` — Bayesian optimization)

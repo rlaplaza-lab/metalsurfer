@@ -1125,6 +1125,40 @@ def test_resolve_saturation_activities_none_and_mismatch():
         resolve_saturation_activities(["A", "B"], (1.0,))
 
 
+def test_resolve_saturation_omega_shift_folds_into_activity():
+    names = ["A", "B"]
+    delta = 0.1
+    shifted = resolve_saturation_activities(
+        names,
+        None,
+        omega_shifts=delta,
+        temperature=STANDARD_TEMPERATURE_K,
+    )
+    for name in names:
+        assert adsorption_ranking_energy(
+            -1.0, shifted[name], STANDARD_TEMPERATURE_K, STANDARD_PRESSURE_BAR
+        ) == pytest.approx(
+            adsorption_ranking_energy(
+                -1.0, 1.0, STANDARD_TEMPERATURE_K, STANDARD_PRESSURE_BAR
+            )
+            - delta
+        )
+    per_mol = resolve_saturation_activities(
+        names,
+        (1.0, 1.0),
+        omega_shifts=(0.1, 0.0),
+        temperature=STANDARD_TEMPERATURE_K,
+    )
+    assert adsorption_ranking_energy(
+        0.05, per_mol["A"], STANDARD_TEMPERATURE_K, STANDARD_PRESSURE_BAR
+    ) == pytest.approx(-0.05)
+    assert adsorption_ranking_energy(
+        0.05, per_mol["B"], STANDARD_TEMPERATURE_K, STANDARD_PRESSURE_BAR
+    ) == pytest.approx(0.05)
+    with pytest.raises(ValueError, match="saturation_omega_shift length"):
+        resolve_saturation_activities(names, None, omega_shifts=(0.1,))
+
+
 @pytest.mark.parametrize("bo_enabled", [False, True])
 def test_multi_mol_activity_flips_winner(monkeypatch, bo_enabled):
     """High activity can beat a slightly better electronic E_ads (non-BO and BO)."""
@@ -1241,6 +1275,49 @@ def test_saturation_activities_length_mismatch_raises(monkeypatch):
             surface_type="multi_mol_activity_len",
             skip_existing=False,
         )
+
+
+def test_saturation_omega_shift_commits_slightly_positive_eads(monkeypatch):
+    slab = SlabContainer(make_slab())
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["water", "CO2"],
+        smiles_list=["O", "O=C=O"],
+        ref=DummyReferenceEnergies(REF_WATER_CO2),
+        process_molecule=_make_schedule_process({"water": [0.05], "CO2": [0.08]}),
+    )
+    unbound = run_saturation_screening(
+        slab,
+        molecules="unused.csv",
+        config=_mock_saturation_config(
+            multi_molecule_saturation=True,
+            saturation_max_steps=1,
+        ),
+        surface_type="omega_shift_unbound",
+        skip_existing=False,
+    )
+    assert unbound[0].steps[0].n_added == 0
+
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["water", "CO2"],
+        smiles_list=["O", "O=C=O"],
+        ref=DummyReferenceEnergies(REF_WATER_CO2),
+        process_molecule=_make_schedule_process({"water": [0.05], "CO2": [0.08]}),
+    )
+    bound = run_saturation_screening(
+        slab,
+        molecules="unused.csv",
+        config=_mock_saturation_config(
+            multi_molecule_saturation=True,
+            saturation_omega_shift=0.1,
+            saturation_max_steps=1,
+        ),
+        surface_type="omega_shift_bound",
+        skip_existing=False,
+    )
+    assert bound[0].steps[0].n_added == 1
+    assert bound[0].steps[0].winning_molecule == "water"
 
 
 def test_multi_mol_saturation_terminates_on_positive_eads(monkeypatch):

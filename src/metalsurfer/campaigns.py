@@ -430,7 +430,8 @@ def run_saturation(
     """Sequential saturation (non-BO) until ranking energy Ω ≥ 0 or no valid placements.
 
     Optional ``saturation_temperature`` / ``saturation_pressure`` /
-    ``saturation_activities`` set Ω (SATP defaults recover electronic E_ads).
+    ``saturation_activities`` / ``saturation_omega_shift`` set Ω
+    (SATP defaults recover electronic E_ads).
 
     Parameters
     ----------

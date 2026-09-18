@@ -38,7 +38,7 @@ from .orientation import (
     _site_type_z_offset,
     orient_from_spec,
 )
-from .site_context import SiteContext, _get_unique_sites_for_specs
+from .site_context import SiteContext, site_context_for_sampling
 from .site_coords import (
     _derive_top_layer_tolerance,
     _slab_normal,
@@ -49,8 +49,12 @@ from .site_enumeration import (
     _compute_site_z_base,
     _get_site_surface_radii,
     _height_along_slab_normal,
-    _is_top_layer_planar,
-    _top_layer_is_planar_from_arrays,
+)
+from .site_plugins.helpers import (
+    is_top_layer_planar as _is_top_layer_planar,
+)
+from .site_plugins.helpers import (
+    top_layer_is_planar_from_arrays as _top_layer_is_planar_from_arrays,
 )
 from .site_types import Site
 
@@ -314,11 +318,7 @@ def _pose_from_spec(
     normal = np.array([0.0, 0.0, 1.0])
 
     reference = slab_for_sites if slab_for_sites is not None else slab
-    ctx = (
-        site_context
-        if site_context is not None
-        else _get_unique_sites_for_specs(reference, config)
-    )
+    ctx = site_context_for_sampling(reference, config, site_context)
     if not ctx.use_sites or len(ctx.sites) == 0:
         logger.debug(
             "No sites available for spec placement_index=%d",
@@ -501,11 +501,7 @@ def _context_from_pose(
     rotated_pos = (geom.quaternion_to_rotation_matrix(quat) @ canonical_pos.T).T
 
     reference = slab_for_sites if slab_for_sites is not None else slab
-    ctx = (
-        site_context
-        if site_context is not None
-        else _get_unique_sites_for_specs(reference, config)
-    )
+    ctx = site_context_for_sampling(reference, config, site_context)
     site = None
     if ctx.use_sites and 0 <= pose.site_index < len(ctx.sites):
         site = ctx.sites[pose.site_index]

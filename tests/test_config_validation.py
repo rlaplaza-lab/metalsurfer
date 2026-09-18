@@ -122,6 +122,7 @@ def test_default_config():
     assert config.saturation_temperature == numeric_defaults.STANDARD_TEMPERATURE_K
     assert config.saturation_pressure == numeric_defaults.STANDARD_PRESSURE_BAR
     assert config.saturation_activities is None
+    assert config.saturation_omega_shift is None
 
 
 def test_placement_retry_oversample_max_rejects_below_one():
@@ -244,6 +245,18 @@ def test_site_classification_method_auto_default_and_invalid():
     assert c.site_classification_method == "auto"
     with pytest.raises(ValueError, match="site_classification_method"):
         AdsorptionConfig(site_classification_method="invalid")
+
+
+def test_site_generator_auto_default_and_invalid():
+    assert AdsorptionConfig().site_generator == "auto"
+    cfg = AdsorptionConfig(site_generator="topology", material_type="slab")
+    assert cfg.site_generator == "topology"
+    with pytest.raises(ValueError, match="site_generator"):
+        AdsorptionConfig(site_generator="invalid")
+    with pytest.raises(ValueError, match="incompatible"):
+        AdsorptionConfig(site_generator="topology", material_type="porous")
+    with pytest.raises(ValueError, match="incompatible"):
+        AdsorptionConfig(site_generator="voronoi", material_type="nanoparticle")
 
 
 @pytest.mark.parametrize("material_type", ["invalid", "bulk", "molecule"])
@@ -514,6 +527,27 @@ def test_saturation_activities_coerce_list_and_reject_invalid():
         AdsorptionConfig(saturation_activities=(1.0, True))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="sequence"):
         AdsorptionConfig(saturation_activities="1.0")  # type: ignore[arg-type]
+
+
+def test_saturation_omega_shift_coerce_scalar_sequence_and_reject_invalid():
+    assert AdsorptionConfig(saturation_omega_shift=0.05).saturation_omega_shift == 0.05
+    assert AdsorptionConfig(saturation_omega_shift=-0.1).saturation_omega_shift == -0.1
+    assert AdsorptionConfig(saturation_omega_shift=0.0).saturation_omega_shift == 0.0
+    cfg = AdsorptionConfig(saturation_omega_shift=[0.05, 0.0])
+    assert cfg.saturation_omega_shift == (0.05, 0.0)
+
+    with pytest.raises(ValueError, match="non-empty"):
+        AdsorptionConfig(saturation_omega_shift=())
+    with pytest.raises(ValueError, match="finite"):
+        AdsorptionConfig(saturation_omega_shift=float("nan"))
+    with pytest.raises(ValueError, match="finite"):
+        AdsorptionConfig(saturation_omega_shift=(0.1, float("inf")))
+    with pytest.raises(ValueError, match="finite number"):
+        AdsorptionConfig(saturation_omega_shift=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="finite number"):
+        AdsorptionConfig(saturation_omega_shift=(0.1, True))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="finite number"):
+        AdsorptionConfig(saturation_omega_shift="0.1")  # type: ignore[arg-type]
 
 
 def test_saturation_temperature_pressure_reject_bool():

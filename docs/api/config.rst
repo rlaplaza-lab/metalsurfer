@@ -61,8 +61,12 @@ Material and substrate
 ``symmetry_tolerance``
    **Type:** ``float`` · **Default:** ``0.1`` (Å)
 
-   Cartesian tolerance for symmetry detection when deduplicating symmetrically
-   equivalent adsorption sites.
+   Cartesian / MIC tolerance for spglib site-orbit reduction after geometric
+   clustering. Applied to the clustered catalog for molecular sampling only
+   (orbits blocked by classified ``site_type``; ``site_source`` is ignored).
+   Dissociative pairs and adatom hollows use the clustered set without this
+   pass. When substrate symmetry is broken, sampling falls back to the clustered
+   catalog.
 
 ``planar_z_variance_threshold``
    **Type:** ``float`` · **Default:** ``0.01`` (Å²)
@@ -188,18 +192,33 @@ Site detection
    labels still win on nanoparticles). ``"delaunay"`` triangulates the slab top
    layer (slabs only; falls back for other material types).
 
+``site_generator``
+   **Type:** ``Literal["auto", "topology", "voronoi"]`` · **Default:** ``"auto"``
+
+   Plugin that enumerates raw adsorption-site candidates before classification.
+   ``"auto"`` picks topology for slabs and nanoparticles, and Voronoi for porous
+   frameworks. Explicit ``"topology"`` is allowed for ``slab`` / ``nanoparticle``;
+   ``"voronoi"`` for ``slab`` / ``porous``. Incompatible pairs raise at config
+   construction. Explicit ``"voronoi"`` on a slab skips topology (A/B path;
+   planar cells may rely on atop injection).
+
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)
 
-   Cartesian tolerance for merging geometrically near-duplicate sites after
-   initial detection (MIC-aware clustering). Spglib symmetry reduction is a
-   separate later pass controlled by ``symmetry_tolerance``.
+   Tolerance for merging geometrically near-duplicate sites after initial
+   detection (MIC-aware, fingerprint-aware clustering on support-atom symbols +
+   classified ``site_type``). Origin tags (``site_source``) do not participate.
+   This is the uniqueness metric shared by molecular placement, dissociative
+   hollow pairs, and adatom hollow selection. Spglib symmetry reduction is a
+   separate later pass controlled by ``symmetry_tolerance`` (molecular sampling
+   only).
 
 ``hollow_site_dedup_tolerance``
    **Type:** ``float`` · **Default:** ``0.1`` (Å)
 
-   Distance tolerance for deduplicating hollow sites that map to the same
-   three-fold coordination pocket.
+   Retained for config / ML-schema compatibility. Hollow uniqueness uses
+   ``site_equivalence_tolerance`` via the same clustering as the rest of site
+   detection; this field is not applied as a separate spatial merge.
 
 Placement generation
 ~~~~~~~~~~~~~~~~~~~~
@@ -801,6 +820,15 @@ loop behavior, reservoir ranking, and I/O.
 
    Dimensionless activities parallel to the molecule list (``None`` → all
    :math:`a_i = 1`). Length checked at saturation start.
+
+``saturation_omega_shift``
+   **Type:** ``float | tuple[float, ...] | None`` · **Default:** ``None``
+
+   Per-species ranking offset :math:`\delta` (eV). Ranking uses
+   :math:`\Omega' = \Omega - \delta` so a slightly positive :math:`\Omega`
+   can still commit. A scalar broadcasts; a sequence is parallel to the
+   molecule list (length checked at saturation start). ``None`` / ``0``
+   leave ranking unchanged.
 
 ``saturation_save_all_placements``
    **Type:** ``bool`` · **Default:** ``True``

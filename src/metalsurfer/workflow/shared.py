@@ -19,6 +19,7 @@ from .._numeric_defaults import (
     K_B_EV_PER_K,
     MIN_CALCULATOR_CELL_C_ANG,
     STANDARD_PRESSURE_BAR,
+    STANDARD_TEMPERATURE_K,
 )
 from .._utils import require_unique_molecule_names
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
@@ -80,22 +81,68 @@ def adsorption_ranking_energy(
     )
 
 
+def _broadcast_omega_shifts(
+    molecule_names: Sequence[str],
+    omega_shifts: float | Sequence[float] | None,
+) -> dict[str, float]:
+    """Map a scalar or per-species Ω shift (eV) onto molecule names."""
+    if omega_shifts is None:
+        return {name: 0.0 for name in molecule_names}
+    if isinstance(omega_shifts, bool):
+        raise ValueError(
+            "saturation_omega_shift must be a finite number or sequence, "
+            f"got {omega_shifts!r}"
+        )
+    if isinstance(omega_shifts, (int, float)):
+        value = float(omega_shifts)
+        return {name: value for name in molecule_names}
+    if len(omega_shifts) != len(molecule_names):
+        raise ValueError(
+            "saturation_omega_shift length "
+            f"{len(omega_shifts)} does not match molecule count "
+            f"{len(molecule_names)} ({list(molecule_names)})"
+        )
+    return {
+        name: float(shift)
+        for name, shift in zip(molecule_names, omega_shifts, strict=True)
+    }
+
+
 def resolve_saturation_activities(
     molecule_names: Sequence[str],
     activities: Sequence[float] | None,
+    omega_shifts: float | Sequence[float] | None = None,
+    temperature: float | None = None,
 ) -> dict[str, float]:
-    """Zip molecule names to activities; ``None`` → all a_i = 1."""
+    """Zip molecule names to activities; ``None`` → all a_i = 1.
+
+    Non-zero ``omega_shifts`` (eV) fold into effective activities
+    ``a_eff = a * exp(δ / kT)`` so ranking Ω becomes Ω − δ.
+    """
     if activities is None:
-        return {name: 1.0 for name in molecule_names}
-    if len(activities) != len(molecule_names):
+        resolved = {name: 1.0 for name in molecule_names}
+    elif len(activities) != len(molecule_names):
         raise ValueError(
             "saturation_activities length "
             f"{len(activities)} does not match molecule count "
             f"{len(molecule_names)} ({list(molecule_names)})"
         )
+    else:
+        resolved = {
+            name: float(activity)
+            for name, activity in zip(molecule_names, activities, strict=True)
+        }
+    if omega_shifts is None:
+        return resolved
+    shifts = _broadcast_omega_shifts(molecule_names, omega_shifts)
+    if not any(shifts.values()):
+        return resolved
+    kT = K_B_EV_PER_K * float(
+        STANDARD_TEMPERATURE_K if temperature is None else temperature
+    )
     return {
-        name: float(activity)
-        for name, activity in zip(molecule_names, activities, strict=True)
+        name: activity * math.exp(shifts[name] / kT)
+        for name, activity in resolved.items()
     }
 
 

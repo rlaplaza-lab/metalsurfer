@@ -229,6 +229,7 @@ class _StubHarness:
                     use_sites=True,
                     source=ctx.source,
                     raw_unclustered=ctx.raw_unclustered,
+                    clustered_sites=ctx.clustered_sites,
                 )
             return ctx
 

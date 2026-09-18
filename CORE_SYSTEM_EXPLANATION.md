@@ -166,13 +166,18 @@ atop; if the nearest two are about equally close, it is a bridge; if the nearest
 three or four are equal, it is a hollow; if the nearest atom is unusually far,
 it is a pore.
 
+Which *points* are proposed is controlled by `site_generator` (default
+`auto`): slabs and nanoparticles use the **topology** plugin; porous
+frameworks use **Voronoi**. Explicit `topology` / `voronoi` override that
+mapping when the pair is compatible with `material_type`.
+
 ### 3.1 Slab
 
 A slab top layer is a set of atoms lying in roughly one plane. Because that
 layer is *coplanar*, it has no genuine 3D Voronoi diagram (the maths would
-collapse to a flat plane), so the code never attempts one there. Instead the
-slab uses a *topology generator* that reads the top layer — including its ±1
-periodic images along the two surface directions — and explicitly constructs:
+collapse to a flat plane), so the default topology plugin never attempts one
+there. Instead it reads the top layer — including its ±1 periodic images
+along the two surface directions — and explicitly constructs:
 
 - **atop** candidates, one above each top-layer atom (lifted by a fraction of
   the median surface spacing);
@@ -186,8 +191,9 @@ atom sits between `voronoi_probe_radius` and `voronoi_max_site_distance`. These
 two knobs are scaled by the surface's covalent radii unless overridden, and
 they remain active on slabs — they simply drive the topology accessibility
 window rather than a Voronoi pass. (Ridge *enrichment*,
-`voronoi_site_enrichment`, does nothing on a planar slab; that knob only matters
-for nanoparticles and porous frameworks.)
+`voronoi_site_enrichment`, does nothing on a planar slab or on nanoparticles;
+that knob only matters for porous frameworks and rough/non-planar slabs that
+run Voronoi.)
 
 Two extra slab behaviours:
 
@@ -238,25 +244,40 @@ skipped there.
 Regardless of material type, three things happen to the raw candidate set:
 
 - **Clustering** merges near-duplicate points into one representative per
-  `site_equivalence_tolerance`. The comparison respects periodicity (periodic
-  images are folded back) and, for slabs, also checks that two candidates are at
-  the same height, so a point one layer down is not merged with the surface one.
-  This step is geometric only; it does not use spglib.
+  `site_equivalence_tolerance`. Sites merge only when they are spatially close
+  *and* share the same `env_fingerprint` (sorted support-atom symbols +
+  classified `site_type`). `site_source` (topology / Voronoi / atop injection)
+  is ignored, so two generators that land in the same pocket collapse to one
+  representative. Periodicity is respected (images folded back); slabs also
+  require matching height along the surface normal. This step is geometric
+  only; it does not use spglib. Dissociative pairs and adatom hollow placement
+  use this **clustered** catalog (hollow/pore subset) so they see the full
+  translational lattice.
 - **Symmetry reduction** uses spglib to collapse symmetry-equivalent sites into
-  one representative each, reducing wasted work. It runs on the raw unclustered
-  catalog while the *substrate* still matches the clean reference's space group
-  and symmetry operations. Adsorbates alone do not latch this off: saturation
-  strips the adsorbate suffix before the check. Once the substrate geometry
-  itself breaks that fingerprint (reconstruction, strong ionic motion, analysis
-  failure), the code falls back to the clustered (non-symmetry-reduced) set so
-  asymmetric arrangements are explored.
+  one representative each, reducing wasted work. It runs on the **clustered**
+  catalog (not the raw unclustered list) while the *substrate* still matches
+  the clean reference's space group and symmetry operations. Orbits are blocked
+  by classified `site_type` only — again origin-blind. Adsorbates alone do not
+  latch this off: saturation strips the adsorbate suffix before the check. Once
+  the substrate geometry itself breaks that fingerprint (reconstruction, strong
+  ionic motion, analysis failure), the code falls back to the clustered
+  (non-symmetry-reduced) set so asymmetric arrangements are explored. Molecular
+  placement samples the symmetry-reduced set when available.
 - **One-shot auto-widen.** If the very first accessibility window finds no sites
   at all, the code retries once with a wider window (tighter probe radius and a
   larger max distance, scaled by the covalent-radius-derived defaults) before
   giving up. This is `voronoi_auto_widen`.
 
-Site detection results are cached per substrate geometry and relevant Voronoi
-settings, so repeating the same material does not recompute them.
+Before those catalog steps, plugins may merge candidate *vertices* with a fixed
+0.1 Å spatial tolerance (and, when Voronoi enrichment is appended to topology,
+existing topology points stay frozen). That is generation-time housekeeping;
+catalog uniqueness afterward is always `site_equivalence_tolerance` (+ optional
+`symmetry_tolerance` for molecular sampling). The legacy
+`hollow_site_dedup_tolerance` config field is retained for schema compatibility
+only and is not applied as a separate hollow merge.
+
+Site detection results are cached per substrate geometry and relevant site /
+Voronoi settings, so repeating the same material does not recompute them.
 
 ## 4. How a placement is built from a site
 
@@ -435,9 +456,11 @@ Three ways to grow the coverage, set on `AdsorptionConfig`:
 
 **Reservoir ranking.** Pick and stop use
 `Ω = E_ads − k_B T ln(a_i · p / p°)` with optional
-`saturation_temperature` (K), `saturation_pressure` (bar), and
-`saturation_activities` (list parallel to molecules). SATP defaults
-(`T = 298.15 K`, `p = p° = 1 bar`, `a_i = 1`) recover `Ω = E_ads`.
+`saturation_temperature` (K), `saturation_pressure` (bar),
+`saturation_activities` (list parallel to molecules), and
+`saturation_omega_shift` (eV scalar or per-species sequence subtracted
+from Ω). SATP defaults
+(`T = 298.15 K`, `p = p° = 1 bar`, `a_i = 1`, `δ = 0`) recover `Ω = E_ads`.
 n-tuplet stop uses `Ω_tuplet = E_ads_tuplet − k_B T Σ ln(a_i p / p°)`.
 Stored `energy_adsorption` / BO `observed_y` stay electronic. If activities
 already encode `p_i / p°`, leave pressure at 1 bar. Not

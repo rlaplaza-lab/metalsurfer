@@ -17,6 +17,7 @@ from metalsurfer.placement import (
 from metalsurfer.placement.dissociative import (
     _dissociative_pair_cache_key,
     _get_dissociative_site_pairs,
+    _resolve_dissociative_site_entries,
 )
 from metalsurfer.placement.site_enumeration import (
     _compute_site_z_base,
@@ -266,8 +267,6 @@ def test_dissociative_placement_supported_for_nanoparticle():
 
 def test_np_dissociative_pairs_ignore_atop_and_bridge_in_mixed_catalog():
     """A mixed raw catalog must not produce atop–atop or atop–hollow pairs."""
-    from metalsurfer.placement.dissociative import _resolve_dissociative_site_entries
-
     nanoparticle = make_nanoparticle()
     config = AdsorptionConfig(
         material_type="nanoparticle",
@@ -280,13 +279,11 @@ def test_np_dissociative_pairs_ignore_atop_and_bridge_in_mixed_catalog():
     assert "hollow" in types
 
     cell = np.asarray(nanoparticle.get_cell(), dtype=float)
-    pbc_xy = [False, False, False]
     filtered = _resolve_dissociative_site_entries(
         nanoparticle,
         config,
         raw_sites=all_sites,
         cell_arr=cell,
-        pbc_xy=pbc_xy,
     )
     assert filtered
     assert all(s.site_type in ("hollow", "pore") for s in filtered)
@@ -585,6 +582,7 @@ def test_dissociative_pair_cache_ignores_site_context_calls():
         use_sites=True,
         source="test",
         raw_unclustered=[lonely],
+        clustered_sites=[lonely],
     )
     empty = _get_dissociative_site_pairs(slab, config, site_context=ctx)
     assert empty == []
@@ -611,6 +609,7 @@ def test_dissociative_pair_cache_hits_with_site_context_and_occupancy(monkeypatc
         use_sites=True,
         source=core.source,
         raw_unclustered=core.raw_unclustered,
+        clustered_sites=core.clustered_sites,
     )
     occ = np.array([[0.5, 0.5, 8.0]], dtype=float)
 
@@ -640,3 +639,57 @@ def test_dissociative_pair_cache_hits_with_site_context_and_occupancy(monkeypatc
     )
     assert calls["n"] == 1
     assert len(_DISSOCIATIVE_PAIR_CACHE) > n_cached
+
+
+def test_dissociative_uses_clustered_not_raw_near_duplicates():
+    """Near-duplicate raw hollows must not inflate the dissociative catalog."""
+    from metalsurfer.placement.site_context import (
+        SiteContext,
+        _get_unique_sites_for_specs,
+    )
+
+    slab = make_slab(nx=3, ny=3)
+    config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
+    core = _get_unique_sites_for_specs(slab, config)
+    assert core.clustered_sites
+    hollows = [s for s in core.clustered_sites if s.site_type in ("hollow", "pore")]
+    assert len(hollows) >= 2
+    base = hollows[0]
+    twin = Site(
+        xyz=np.asarray(base.xyz, dtype=float) + np.array([0.02, 0.0, 0.0]),
+        normal=np.asarray(base.normal, dtype=float).copy(),
+        site_type=base.site_type,
+        slab_indices=base.slab_indices,
+        material_type=base.material_type,
+        site_source=base.site_source,
+        env_fingerprint=base.env_fingerprint,
+    )
+    inflated_raw = list(core.raw_unclustered or []) + [twin]
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    n_clustered = len(
+        _resolve_dissociative_site_entries(
+            slab, config, site_context=core, cell_arr=cell
+        )
+    )
+    # Explicit raw list clusters near-duplicates before the hollow filter.
+    n_raw = len(
+        _resolve_dissociative_site_entries(
+            slab, config, raw_sites=inflated_raw, cell_arr=cell
+        )
+    )
+    assert n_raw == n_clustered
+    # Hand-built context with only raw_unclustered still clusters, not sampling sites.
+    n_legacy = len(
+        _resolve_dissociative_site_entries(
+            slab,
+            config,
+            site_context=SiteContext(
+                sites=core.sites,
+                use_sites=True,
+                source=core.source,
+                raw_unclustered=inflated_raw,
+            ),
+            cell_arr=cell,
+        )
+    )
+    assert n_legacy == n_clustered

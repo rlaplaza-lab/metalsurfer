@@ -41,7 +41,8 @@ YAML is a convenience dispatch layer, not a full substitute for the Python
 - **Molecules are inline only.** A non-empty list of ``{smiles, name}``
   entries. YAML does not accept a molecules CSV path (the Python ``run_*``
   APIs do). Reservoir fields (``saturation_temperature`` /
-  ``saturation_pressure`` / ``saturation_activities``) go under ``config:``.
+  ``saturation_pressure`` / ``saturation_activities`` /
+  ``saturation_omega_shift``) go under ``config:``.
 - **``run_campaign`` kwargs are minimal.** Only ``skip_existing`` is exposed.
   Not available from YAML / ``run_campaign``: ``system_name``,
   ``save_results``, ``write_settings``, ``run_metadata_out``,
@@ -69,6 +70,8 @@ Key                Required
 ``substrate``      Yes — exactly one of ``bulk_id``, ``slab_file``, or ``slab``
 ``molecules``      Yes — non-empty list of ``{smiles, name}``
 ``config``         No — maps to :class:`~metalsurfer.AdsorptionConfig` fields
+                   (including ``site_generator``, Voronoi window knobs,
+                   fingerprint clustering, and reservoir / Ω-shift settings)
 ================== ============================================================
 
 ``campaign`` selects the runner:

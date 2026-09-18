@@ -1,4 +1,4 @@
-"""Cached Voronoi site context for placement sampling."""
+"""Cached site context for placement sampling."""
 
 import hashlib
 import logging
@@ -18,6 +18,7 @@ from .site_enumeration import (
     get_symmetry_aware_sites,
     get_unified_sites,
 )
+from .site_plugins import resolved_site_generator_name
 from .site_types import Site
 
 logger = logging.getLogger(__name__)
@@ -25,13 +26,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SiteContext:
-    """Cached result of Voronoi site detection for a given slab geometry."""
+    """Cached site catalog for a substrate geometry.
+
+    ``sites`` is the catalog used for molecular placement sampling (clustered,
+    then optionally symmetry-reduced). ``clustered_sites`` is always the
+    fingerprint-aware geometric clustering result (full translational lattice).
+    ``raw_unclustered`` is the pre-clustering ``get_unified_sites`` output.
+    """
 
     sites: list[Site]
     use_sites: bool
     source: str
-    # Pre-clustering output of :func:`get_unified_sites` (same as used for clustering).
     raw_unclustered: list[Site] | None = None
+    clustered_sites: list[Site] | None = None
 
 
 # Bounded FIFO cache for unique-sites (pre-symmetry) and resolved site contexts.
@@ -45,12 +52,14 @@ _SITE_CONTEXT_CACHE_LOCK = threading.Lock()
 def _no_sites_context(
     *,
     raw_unclustered: list[Site] | None = None,
+    clustered_sites: list[Site] | None = None,
 ) -> SiteContext:
     return SiteContext(
         sites=[],
         use_sites=False,
         source="no_sites",
         raw_unclustered=raw_unclustered,
+        clustered_sites=clustered_sites,
     )
 
 
@@ -76,6 +85,8 @@ def _unique_sites_cache_key(slab: Atoms, config: AdsorptionConfig) -> str:
         + struct.pack("<?", bool(config.voronoi_site_enrichment))
         + struct.pack("<?", bool(config.voronoi_auto_widen))
         + str(config.site_classification_method).encode()
+        + b"\x00"
+        + str(config.site_generator).encode()
         + b"\x00"
         + config.material_type.encode()
     )
@@ -113,7 +124,11 @@ def resolve_site_context_for_sampling(
     *,
     symmetry_broken: bool,
 ) -> SiteContext:
-    """Return clustered Voronoi sites, then optional spglib orbit reduction unless *symmetry_broken*.
+    """Return clustered sites, then optional spglib orbit reduction unless *symmetry_broken*.
+
+    Symmetry reduction runs on the **clustered** catalog so geometric uniqueness
+    and orbit reduction compose. Dissociative / adatom paths should use
+    ``clustered_sites`` (full lattice), not ``sites`` after symmetry reduction.
 
     Parameters
     ----------
@@ -138,16 +153,18 @@ def resolve_site_context_for_sampling(
     core_sites = _core_ctx.sites
     use_sites = _core_ctx.use_sites
     raw_unclustered = _core_ctx.raw_unclustered
+    clustered_sites = _core_ctx.clustered_sites
 
     if not use_sites or not core_sites:
         result = _core_ctx
     elif symmetry_broken:
-        logger.debug("Site context: symmetry broken, using clustered Voronoi set")
+        logger.debug("Site context: symmetry broken, using clustered site set")
         result = SiteContext(
             sites=core_sites,
             use_sites=True,
-            source="voronoi",
+            source=_core_ctx.source,
             raw_unclustered=raw_unclustered,
+            clustered_sites=clustered_sites,
         )
     else:
         try:
@@ -160,12 +177,13 @@ def resolve_site_context_for_sampling(
                 max_site_distance=config.voronoi_max_site_distance,
                 enrich=config.voronoi_site_enrichment,
                 site_classification_method=config.site_classification_method,
-                raw_sites=raw_unclustered,
+                raw_sites=core_sites,
                 planar_z_variance_threshold=config.planar_z_variance_threshold,
+                site_generator=config.site_generator,
             )
         except SymmetryAnalysisError as exc:
             logger.warning(
-                "Symmetry site reduction failed; using clustered Voronoi sites (%s)",
+                "Symmetry site reduction failed; using clustered sites (%s)",
                 exc,
             )
             symmetry_aware_sites = []
@@ -179,31 +197,53 @@ def resolve_site_context_for_sampling(
                 use_sites=True,
                 source="symmetry_aware",
                 raw_unclustered=raw_unclustered,
+                clustered_sites=clustered_sites,
             )
         else:
-            logger.debug("Using clustered Voronoi sites (no symmetry-reduced set)")
+            logger.debug("Using clustered sites (no symmetry-reduced set)")
             result = SiteContext(
                 sites=core_sites,
                 use_sites=True,
-                source="voronoi",
+                source=_core_ctx.source,
                 raw_unclustered=raw_unclustered,
+                clustered_sites=clustered_sites,
             )
 
     return _store_site_context_cache(cache_key, result)
+
+
+def site_context_for_sampling(
+    slab: Atoms,
+    config: AdsorptionConfig,
+    site_context: SiteContext | None = None,
+    *,
+    symmetry_broken: bool = False,
+) -> SiteContext:
+    """Return *site_context* or resolve the symmetry-aware sampling catalog.
+
+    Used by generators / pose when callers omit an explicit context so the
+    ``site_index`` catalog matches production screening.
+    """
+    if site_context is not None:
+        return site_context
+    return resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=symmetry_broken
+    )
 
 
 def _get_unique_sites_for_specs(
     slab: Atoms,
     config: AdsorptionConfig,
 ) -> SiteContext:
-    """Get unique non-identical sites using unified Voronoi detection.
+    """Get unique non-identical sites using unified site detection.
 
     Works for slabs, nanoparticles, and porous materials.
     Returns ``SiteContext(sites=[], use_sites=False, source="no_sites")`` when
     site detection yields nothing.
 
     Cached under the geometry key (no ``|sym=`` suffix) in the shared
-    :data:`_SITE_CONTEXT_CACHE`.
+    :data:`_SITE_CONTEXT_CACHE`. Both ``sites`` and ``clustered_sites`` are the
+    geometric clustering result (no spglib).
     """
     cache_key = _unique_sites_cache_key(slab, config)
     with _SITE_CONTEXT_CACHE_LOCK:
@@ -234,10 +274,11 @@ def _get_unique_sites_for_specs(
         site_classification_method=config.site_classification_method,
         auto_widen=config.voronoi_auto_widen,
         planar_z_variance_threshold=config.planar_z_variance_threshold,
+        site_generator=config.site_generator,
     )
     if not raw_sites:
         logger.warning(
-            "Unified Voronoi site detection found no sites for %d-atom structure "
+            "Unified site detection found no sites for %d-atom structure "
             "(probe_radius=%s, max_distance=%s, material_type=%r)",
             len(slab),
             f"{probe_radius:.2f}" if probe_radius is not None else "auto",
@@ -266,13 +307,16 @@ def _get_unique_sites_for_specs(
             _no_sites_context(raw_unclustered=raw_sites),
         )
 
-    source = str(unique_sites[0].site_source)
+    plugin_source = resolved_site_generator_name(
+        config.site_generator, config.material_type
+    )
     return _store_site_context_cache(
         cache_key,
         SiteContext(
             sites=unique_sites,
             use_sites=True,
-            source=source,
+            source=plugin_source,
             raw_unclustered=raw_sites,
+            clustered_sites=unique_sites,
         ),
     )

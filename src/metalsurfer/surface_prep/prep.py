@@ -36,6 +36,19 @@ __all__ = [
 ]
 
 
+def _matching_attached_calculator(
+    source: SlabContainer | Atoms,
+    cfg: AdsorptionConfig,
+) -> optimization.TorchSimCalculator | None:
+    atoms = source.atoms if isinstance(source, SlabContainer) else source
+    calc = atoms.calc
+    if isinstance(calc, optimization.TorchSimCalculator) and calc.matches_setup(
+        cfg.model_name, cfg.device, cfg.task_name
+    ):
+        return calc
+    return None
+
+
 def _anchor_atoms_bottom(atoms: Atoms) -> Atoms:
     """Translate *atoms* so the lowest atom sits at z = 0."""
     result = atoms.copy()
@@ -338,8 +351,8 @@ def prepare_substrate(
         or slab_relax_mode != "none"
     )
 
-    calculator = None
-    if needs_calculator:
+    calculator = _matching_attached_calculator(slab, cfg) if slab is not None else None
+    if needs_calculator and calculator is None:
         calculator, _ = optimization.setup_single_model(
             cfg.model_name, cfg.device, task_name=cfg.task_name
         )
@@ -378,6 +391,18 @@ def prepare_substrate(
             relaxation_steps=slab_relaxation_steps,
         )
 
+    if from_loaded and slab_relax_mode != "none":
+        slab_container = relax_substrate(
+            slab_container,
+            calculator,
+            cfg,
+            relaxation_mode=slab_relaxation_mode,
+            relaxation_optimizer=slab_relaxation_optimizer,
+            relaxation_fmax=slab_relaxation_fmax,
+            relaxation_steps=slab_relaxation_steps,
+            context="prepare_substrate",
+        )
+
     if alloy_guest and alloy_fraction > 0:
         host = alloy_host
         if host is None:
@@ -412,18 +437,6 @@ def prepare_substrate(
             relaxation_optimizer=adatom_relaxation_optimizer,
             relaxation_fmax=adatom_relaxation_fmax,
             relaxation_steps=adatom_relaxation_steps,
-        )
-
-    if from_loaded and slab_relax_mode != "none":
-        slab_container = relax_substrate(
-            slab_container,
-            calculator,
-            cfg,
-            relaxation_mode=slab_relaxation_mode,
-            relaxation_optimizer=slab_relaxation_optimizer,
-            relaxation_fmax=slab_relaxation_fmax,
-            relaxation_steps=slab_relaxation_steps,
-            context="prepare_substrate",
         )
 
     if material_type == "slab" and should_align:

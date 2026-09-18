@@ -253,3 +253,102 @@ class TestCalculateReferenceEnergies:
             "Failed to optimise any conformers for water" in rec.getMessage()
             for rec in caplog.records
         )
+
+
+class _StubPredictor:
+    def __init__(self, atom_refs: dict):
+        self.atom_refs = atom_refs
+
+
+class _StubModel:
+    def __init__(self, atom_refs: dict):
+        self.predictor = _StubPredictor(atom_refs)
+
+
+def test_lookup_atom_ref_list_nested_alias_and_miss():
+    oc20 = {"oc20": [0.0, -0.16, 0.03]}
+    assert reference._lookup_atom_ref(oc20, "oc20", 1) == pytest.approx(-0.16)
+    assert reference._lookup_atom_ref(oc20, "oc25", 1) == pytest.approx(-0.16)
+    assert reference._lookup_atom_ref(
+        {"oc20_elem_refs": [0.0, -0.16]}, "oc20_elem_refs", 1
+    ) == pytest.approx(-0.16)
+    omol = {"omol": {1: {0: -13.4, 1: -12.0}}}
+    assert reference._lookup_atom_ref(omol, "omol", 1, 0) == pytest.approx(-13.4)
+    assert reference._lookup_atom_ref(omol, "omol", 1, 1) == pytest.approx(-12.0)
+    assert reference._lookup_atom_ref(None, "oc20", 1) is None
+    assert reference._lookup_atom_ref(oc20, "oc20", 8) is None
+    assert reference._lookup_atom_ref({}, "omat", 1) is None
+
+
+class TestSingleAtomUmaRefs:
+    def test_uses_atom_refs_and_skips_optimize(self, monkeypatch):
+        slab = SlabContainer(make_slab())
+        calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))
+        opt_calls: list[int] = []
+        _patch_reference_helpers(
+            monkeypatch,
+            conformers=([_make_atoms(1)], [0.0]),
+            opt_results=[],
+        )
+        monkeypatch.setattr(
+            reference,
+            "optimize_isolated_molecules_batched",
+            lambda *_a, **_k: opt_calls.append(1) or [],
+        )
+        skin = -7.2
+        refs = {"oc20": [0.0] * 8 + [skin]}
+        result = reference.calculate_reference_energies(
+            slab,
+            calc,
+            ["oxygen"],
+            ["[O]"],
+            ts_model=_StubModel(refs),
+            config=AdsorptionConfig(),
+        )
+        assert opt_calls == []
+        assert result.molecule_energies["oxygen"] == pytest.approx(skin)
+        assert result.conformer_packs["oxygen"][1] == [pytest.approx(skin)]
+
+    def test_missing_refs_skip_optimize_and_omit(self, monkeypatch):
+        slab = SlabContainer(make_slab())
+        calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))
+        opt_calls: list[int] = []
+        _patch_reference_helpers(
+            monkeypatch,
+            conformers=([_make_atoms(1)], [0.0]),
+            opt_results=[],
+        )
+        monkeypatch.setattr(
+            reference,
+            "optimize_isolated_molecules_batched",
+            lambda *_a, **_k: opt_calls.append(1) or [],
+        )
+        result = reference.calculate_reference_energies(
+            slab,
+            calc,
+            ["oxygen"],
+            ["[O]"],
+            ts_model=object(),
+            config=AdsorptionConfig(fail_on_conformer_failure=False),
+        )
+        assert opt_calls == []
+        assert "oxygen" not in result.molecule_energies
+        assert "oxygen" not in result.conformer_packs
+
+    def test_missing_refs_raise_when_strict(self, monkeypatch):
+        slab = SlabContainer(make_slab())
+        calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))
+        _patch_reference_helpers(
+            monkeypatch,
+            conformers=([_make_atoms(1)], [0.0]),
+            opt_results=[],
+        )
+        with pytest.raises(OptimizationError, match="isolated-atom"):
+            reference.calculate_reference_energies(
+                slab,
+                calc,
+                ["oxygen"],
+                ["[O]"],
+                ts_model=object(),
+                config=AdsorptionConfig(fail_on_missing_reference=True),
+            )

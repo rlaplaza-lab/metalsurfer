@@ -330,11 +330,13 @@ class SymmetryAnalyzer:
         """Group equivalent adsorption sites using spglib operations and union-find.
 
         Returned sites carry multiplicity and equivalent-site coordinates.
+        Grouping is blocked by classified ``site_type`` only; ``site_source``
+        (topology / Voronoi / atop injection) does not affect orbits.
 
         Parameters
         ----------
         sites
-            List of adsorption sites to analyze.
+            List of adsorption sites to analyze (typically the clustered catalog).
         planar
             When true, ignore differences along the slab normal.
         """

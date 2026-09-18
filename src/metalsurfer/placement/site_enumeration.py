@@ -2,7 +2,6 @@
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
 
 import numpy as np
 from ase import Atoms
@@ -13,20 +12,15 @@ from ..symmetry import SymmetryAnalyzer
 from ._constants import (
     _ADSORBATE_COVALENT_RADIUS_FALLBACK,
     _ATOP_INJECTION_HEIGHT_FACTOR,
-    _BOUNDING_BOX_CELL_PAD_ANGSTROM,
-    _DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
     _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     _DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     _DEFAULT_SYMMETRY_TOLERANCE,
     _PARALLEL_Z_MIN_HI_MARGIN,
-    _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
     _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
     _VORONOI_AUTO_WIDEN_MAX_SCALE,
     _VORONOI_AUTO_WIDEN_PROBE_SCALE,
-    _VORONOI_DEDUP_TOLERANCE,
-    _VORONOI_MAX_DISTANCE_COVALENT_SCALE,
 )
 from ._material import (
     material_aware_pbc,
@@ -39,9 +33,7 @@ from .site_classify import (
     _DelaunayClassifyInputs,
 )
 from .site_coords import (
-    _build_periodic_images,
     _cart_to_frac,
-    _deduplicate_points,
     _derive_top_layer_tolerance,
     _derive_voronoi_distance_window,
     _frac_to_cart,
@@ -63,184 +55,39 @@ from .site_coords import (
 )
 from .site_np import (
     _convex_hull_surface_mask,
-    _generate_nanoparticle_topology_sites,
     _surface_atom_normals,
     _try_convex_hull,
+)
+from .site_plugins import (
+    SiteGenerationContext,
+    resolve_site_generator,
+)
+from .site_plugins.helpers import (
+    PlanarWidenScratch as _PlanarWidenScratch,
+)
+from .site_plugins.helpers import (
+    apply_site_mask as _apply_site_mask,
+)
+from .site_plugins.helpers import (
+    bounding_box_cell as _bounding_box_cell,
+)
+from .site_plugins.helpers import (
+    median_nn_or_fallback as _median_nn_or_fallback,
+)
+from .site_plugins.helpers import (
+    merge_dedup_site_arrays as _merge_dedup_site_arrays,
+)
+from .site_plugins.helpers import (
+    top_layer_is_planar_from_arrays as _top_layer_is_planar_from_arrays,
 )
 from .site_types import Site
 from .site_voronoi import (
     _build_delaunay_classification_index,
-    _generate_slab_topology_sites,
-    _voronoi_sites,
 )
 
 logger = logging.getLogger(__name__)
 
 _EMPTY_ATOM_INDICES: tuple[int, ...] = ()
-
-
-@dataclass
-class _PlanarWidenScratch:
-    """Topology Qhull objects retained for planar-slab auto-widen reuse."""
-
-    planar_skip_voronoi: bool = False
-    primary_delaunay: Delaunay | None = None
-    exp_xy: np.ndarray | None = None
-    exp_origin: list[int] | None = None
-    exp_tri: Delaunay | None = None
-
-
-def _merge_dedup_site_arrays(
-    vertices: np.ndarray,
-    nn_dists: np.ndarray,
-    source_hints: list[str],
-    new_vertices: np.ndarray,
-    new_dists: np.ndarray,
-    new_sources: list[str],
-    *,
-    cell: np.ndarray,
-    pbc: np.ndarray | list[bool],
-    atom_indices: list[tuple[int, ...]] | None = None,
-    new_atom_indices: list[tuple[int, ...]] | None = None,
-) -> tuple[np.ndarray, np.ndarray, list[str], list[tuple[int, ...]]]:
-    """Append *new_* sites without collapsing already-unique existing sites.
-
-    The existing unique set is frozen: new points are first deduplicated among
-    themselves, then dropped when within ``_VORONOI_DEDUP_TOLERANCE`` of any
-    existing point (PBC-aware). A new midpoint near two old sites therefore
-    cannot merge those old representatives into one.
-    """
-    n_old = len(vertices)
-    n_new = len(new_vertices)
-    old_atoms = (
-        list(atom_indices)
-        if atom_indices is not None
-        else [_EMPTY_ATOM_INDICES for _ in range(n_old)]
-    )
-    new_atoms = (
-        list(new_atom_indices)
-        if new_atom_indices is not None
-        else [_EMPTY_ATOM_INDICES for _ in range(n_new)]
-    )
-    if n_new == 0:
-        return vertices, nn_dists, source_hints, old_atoms
-    if n_old == 0:
-        keep_new = _deduplicate_points(
-            new_vertices, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
-        )
-        kept = np.nonzero(keep_new)[0]
-        return (
-            new_vertices[keep_new],
-            new_dists[keep_new],
-            [new_sources[i] for i in kept],
-            [new_atoms[i] for i in kept],
-        )
-
-    keep_new = _deduplicate_points(
-        new_vertices, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc
-    )
-    cand_verts = new_vertices[keep_new]
-    cand_dists = new_dists[keep_new]
-    kept_new_idx = np.nonzero(keep_new)[0]
-    cand_sources = [new_sources[i] for i in kept_new_idx]
-    cand_atoms = [new_atoms[i] for i in kept_new_idx]
-    if len(cand_verts) == 0:
-        return vertices, nn_dists, source_hints, old_atoms
-
-    pbc_arr = np.asarray(pbc, dtype=bool)
-    cell_arr = np.asarray(cell, dtype=float)
-    image_offsets = None
-    if np.any(pbc_arr):
-        image_offsets = _periodic_image_offsets(
-            cell_arr, pbc_arr, _VORONOI_DEDUP_TOLERANCE
-        )
-    # Pair set across old+new; drop a candidate if it merges with any old site.
-    combined = np.vstack([vertices, cand_verts])
-    merge_set = _pbc_merge_pair_set(
-        combined, _VORONOI_DEDUP_TOLERANCE, image_offsets=image_offsets
-    )
-    collide = np.zeros(len(cand_verts), dtype=bool)
-    for a, b in merge_set:
-        if a < n_old <= b:
-            collide[b - n_old] = True
-        elif b < n_old <= a:
-            collide[a - n_old] = True
-    accept = ~collide
-    if not np.any(accept):
-        return vertices, nn_dists, source_hints, old_atoms
-
-    accepted_idx = np.nonzero(accept)[0]
-    return (
-        np.vstack([vertices, cand_verts[accept]]),
-        np.concatenate([nn_dists, cand_dists[accept]]),
-        source_hints + [cand_sources[i] for i in accepted_idx],
-        old_atoms + [cand_atoms[i] for i in accepted_idx],
-    )
-
-
-def _median_nn_or_fallback(
-    nn_dists: np.ndarray,
-    *,
-    reference_positions: np.ndarray | None = None,
-    cell: np.ndarray | None = None,
-    pbc: np.ndarray | None = None,
-) -> float:
-    """Median nearest-neighbour distance, or top-layer / covalent fallback.
-
-    When *nn_dists* is empty (e.g. planar slabs that skip Voronoi), prefer the
-    median MIC nearest-neighbour spacing of *reference_positions* (typically the
-    top layer) over a fixed covalent-scale constant.
-    """
-    if len(nn_dists) > 0:
-        return float(np.median(nn_dists))
-    if (
-        reference_positions is not None
-        and len(reference_positions) >= 2
-        and cell is not None
-        and pbc is not None
-    ):
-        pts = np.asarray(reference_positions, dtype=float)
-        pbc_arr = np.asarray(pbc, dtype=bool)
-        cell_arr = np.asarray(cell, dtype=float)
-        if cell_has_volume(cell_arr) and np.any(pbc_arr):
-            margin = float(np.max(np.linalg.norm(cell_arr[pbc_arr], axis=1)))
-            offsets = _periodic_image_offsets(cell_arr, pbc_arr, margin)
-            ext = np.vstack([pts + off for off in offsets])
-            tree = KDTree(ext)
-            k = min(len(ext), len(offsets) + 1)
-            dists, idxs = tree.query(pts, k=k)
-            dists = np.atleast_2d(np.asarray(dists, dtype=float))
-            idxs = np.atleast_2d(np.asarray(idxs))
-            n = len(pts)
-            valid = (idxs % n) != np.arange(n)[:, None]
-            nn = np.where(valid, dists, np.inf).min(axis=1)
-            finite = nn[np.isfinite(nn)]
-            if len(finite) > 0:
-                return float(np.median(finite))
-        else:
-            tree = KDTree(pts)
-            nn_d, _ = tree.query(pts, k=2)
-            return float(np.median(np.asarray(nn_d, dtype=float)[:, 1]))
-    return _VORONOI_MAX_DISTANCE_COVALENT_SCALE * _SURFACE_COVALENT_RADIUS_FALLBACK
-
-
-def _periodic_accessibility_tree(
-    positions: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-    max_distance: float,
-) -> KDTree:
-    """KDTree over periodic images, for candidate-to-framework distance gating.
-
-    A plain ``KDTree(positions)`` reports the *in-cell* nearest-neighbour
-    distance, which overestimates the true minimum-image distance for
-    candidates near an a/b boundary. The image margin covers ``max_distance``
-    so any candidate that would pass the accessibility window is found.
-    """
-    if not np.any(pbc) or not cell_has_volume(cell):
-        return KDTree(positions)
-    margin = float(max_distance) + _VORONOI_DEDUP_TOLERANCE
-    return KDTree(_build_periodic_images(positions, cell, pbc, margin=margin))
 
 
 def _delaunay_classify_inputs(
@@ -250,7 +97,7 @@ def _delaunay_classify_inputs(
     *,
     material_type: str,
     site_classification_method: str,
-    slab_top_atom_indices: np.ndarray,
+    slab_top_atom_indices: np.ndarray | None,
     topology_primary_delaunay: Delaunay | None,
     expanded_xy: np.ndarray | None = None,
     expanded_origin: list[int] | None = None,
@@ -297,28 +144,6 @@ def _delaunay_classify_inputs(
         top_positions_2d,
         slab_top_atom_indices,
         class_index,
-    )
-
-
-def _apply_site_mask(
-    vertices: np.ndarray,
-    nn_dists: np.ndarray,
-    source_hints: list[str],
-    mask: np.ndarray,
-    atom_indices: list[tuple[int, ...]] | None = None,
-) -> tuple[np.ndarray, np.ndarray, list[str], list[tuple[int, ...]]]:
-    """Keep only vertices selected by boolean *mask* (index arrays stay aligned)."""
-    atoms = (
-        list(atom_indices)
-        if atom_indices is not None
-        else [_EMPTY_ATOM_INDICES for _ in range(len(vertices))]
-    )
-    kept = np.nonzero(mask)[0]
-    return (
-        vertices[mask],
-        nn_dists[mask],
-        [source_hints[i] for i in kept],
-        [atoms[i] for i in kept],
     )
 
 
@@ -461,35 +286,25 @@ def get_unified_sites(
     *,
     auto_widen: bool = True,
     planar_z_variance_threshold: float | None = None,
+    site_generator: str = "auto",
 ) -> list[Site]:
     """Return adsorption/placement sites for *atoms*.
 
-    Per-material behaviour
-    ----------------------
-    - **slab**: sites come from the topology generator
-      (:func:`_generate_slab_topology_sites`), which enumerates atop, bridge and
-      hollow candidates from the top layer including its ±1 a/b periodic images.
-      A flat top layer is coplanar, so Qhull cannot build a 3D Voronoi diagram
-      from it (``QH6154 initial simplex is flat``); the Voronoi pass is therefore
-      skipped explicitly for planar slabs rather than being attempted and
-      swallowed. ``voronoi_probe_radius``, ``voronoi_max_site_distance`` and
-      ``auto_widen`` **remain active** on slabs — they drive the
-      topology accessibility window and the empty-result retry. Only ``enrich``
-      (``voronoi_site_enrichment``) has no effect on planar slabs.
-    - **nanoparticle**: convex-hull + nearest-neighbour topology only
-      (atop / bridge / 3- and 4-fold hollow). Voronoi is skipped (same idea as
-      planar slabs). Topology labels are kept; distance-ratio is not applied.
-      If the hull cannot be built, a single atop-injection pass is the fallback.
-    - **porous**: Voronoi vertices are the primary source, with optional ridge
-      enrichment.
-    - rotated slabs are handled using the slab normal rather than Cartesian z
+    Candidates come from a plugin selected by *site_generator*
+    (``auto`` / ``topology`` / ``voronoi``). With ``auto``, slabs and
+    nanoparticles use topology; porous frameworks use Voronoi.
+
+    - **slab** (topology): Delaunay atop/bridge/hollow; planar top layers skip
+      Voronoi; rough slabs merge Voronoi enrichment.
+    - **nanoparticle** (topology): hull + NN only.
+    - **porous** (voronoi): free-volume vertices with optional ridge enrichment.
 
     Parameters
     ----------
     atoms
         :class:`~ase.Atoms` structure to detect sites on.
     probe_radius
-        Voronoi probe radius (auto-derived if None).
+        Accessibility probe radius (auto-derived if None).
     max_site_distance
         Maximum site-to-atom distance (auto-derived if None).
     top_layer_tolerance
@@ -504,13 +319,12 @@ def get_unified_sites(
         Site classification method (``"auto"``, ``"delaunay"``, etc.).
     auto_widen
         When True and the first pass finds no sites, retry once with a widened
-        probe / max-distance window. Planar slabs reuse the first-pass
-        Delaunay triangulations and only re-gate accessibility. Porous /
-        non-planar paths rebuild Voronoi (extension margin depends on
-        ``max_site_distance``), so the empty-result retry roughly doubles cost.
+        probe / max-distance window.
     planar_z_variance_threshold
         Max top-layer height variance (Å²) for classifying a slab as planar.
         ``None`` uses the library default.
+    site_generator
+        ``"auto"`` (material default), ``"topology"``, or ``"voronoi"``.
     """
     scratch = _PlanarWidenScratch()
     sites = _enumerate_unified_sites(
@@ -523,6 +337,7 @@ def get_unified_sites(
         enrich=enrich,
         site_classification_method=site_classification_method,
         planar_z_variance_threshold=planar_z_variance_threshold,
+        site_generator=site_generator,
         _widen_scratch=scratch,
     )
     if sites or not auto_widen:
@@ -562,6 +377,7 @@ def get_unified_sites(
         enrich=enrich,
         site_classification_method=site_classification_method,
         planar_z_variance_threshold=planar_z_variance_threshold,
+        site_generator=site_generator,
         _reuse_topology=reuse,
     )
 
@@ -576,6 +392,7 @@ def _enumerate_unified_sites(
     enrich: bool = True,
     site_classification_method: str = "auto",
     planar_z_variance_threshold: float | None = None,
+    site_generator: str = "auto",
     *,
     _widen_scratch: _PlanarWidenScratch | None = None,
     _reuse_topology: _PlanarWidenScratch | None = None,
@@ -588,6 +405,7 @@ def _enumerate_unified_sites(
             "material_type must be explicitly specified: 'slab', 'nanoparticle', or 'porous'"
         )
     validate_material_type(material_type)
+    plugin = resolve_site_generator(site_generator, material_type)
 
     positions = atoms.get_positions()
     cell = np.asarray(atoms.get_cell(), dtype=float)
@@ -635,177 +453,37 @@ def _enumerate_unified_sites(
             derived_max if max_site_distance is None else max_site_distance
         )
 
-    voronoi_positions = positions
-    slab_top_atom_indices: np.ndarray | None = None
-    slab_skip_voronoi = False
-    if material_type == "slab":
-        # Compute once; reused for Voronoi crop, topology, and atop injection.
-        slab_top_mask = top_layer_mask_by_normal(
-            positions, cell, float(top_layer_tolerance)
-        )
-        slab_top_atom_indices = np.nonzero(slab_top_mask)[0]
-        top_only = positions[slab_top_mask]
-        if len(top_only) >= 4:
-            voronoi_positions = top_only
-        # A coplanar top layer has no 3D Voronoi diagram: Qhull raises
-        # "QH6154 initial simplex is flat" and the generator returns zero
-        # vertices. Skip it explicitly instead of raising-and-swallowing.
-        slab_skip_voronoi = _top_layer_is_planar_from_arrays(
-            positions,
-            cell,
-            float(top_layer_tolerance),
-            z_var_threshold,
-            top_mask=slab_top_mask,
-        )
-        if slab_skip_voronoi:
-            logger.info(
-                "Slab top layer is planar; skipping Voronoi vertex generation. "
-                "Slab sites come from the topology generator "
-                "(atop/bridge/hollow). probe_radius/max_site_distance still "
-                "gate accessibility; site enrichment does not apply."
-            )
+    ctx = SiteGenerationContext(
+        positions=positions,
+        cell=cell,
+        pbc=pbc_for_voronoi,
+        symbols=list(symbols),
+        material_type=material_type,
+        probe_radius=float(probe_radius),
+        max_site_distance=float(max_site_distance),
+        top_layer_tolerance=float(top_layer_tolerance),
+        enrich=bool(enrich),
+        planar_z_variance_threshold=float(z_var_threshold),
+    )
+    batch = plugin.generate(ctx, reuse=_reuse_topology)
 
-    # Nanoparticles use hull topology only (planar-slab analogue: skip Voronoi).
-    skip_voronoi = bool(slab_skip_voronoi) or material_type == "nanoparticle"
-    if skip_voronoi:
-        vertices = np.empty((0, 3), dtype=float)
-        nn_dists = np.empty(0, dtype=float)
-    else:
-        vertices, nn_dists = _voronoi_sites(
-            voronoi_positions,
-            cell,
-            pbc_for_voronoi,
-            probe_radius=probe_radius,
-            max_distance=max_site_distance,
-            enrich=enrich,
-            symbols=symbols,
-        )
-    source_hints = ["voronoi"] * len(vertices)
-    atom_indices: list[tuple[int, ...]] = [
-        _EMPTY_ATOM_INDICES for _ in range(len(vertices))
-    ]
+    if _widen_scratch is not None and isinstance(batch.reuse, _PlanarWidenScratch):
+        _widen_scratch.planar_skip_voronoi = batch.reuse.planar_skip_voronoi
+        _widen_scratch.primary_delaunay = batch.reuse.primary_delaunay
+        _widen_scratch.exp_xy = batch.reuse.exp_xy
+        _widen_scratch.exp_origin = batch.reuse.exp_origin
+        _widen_scratch.exp_tri = batch.reuse.exp_tri
 
-    local_tree = KDTree(positions)
-
-    has_topology_atop = False
-    topology_primary_delaunay = None
-    topology_expanded_xy: np.ndarray | None = None
-    topology_expanded_origin: list[int] | None = None
-    topology_expanded_tri = None
-
-    # PBC-aware candidate-to-framework distance tree; shared by the topology
-    # generator and the atop-injection gate (a plain in-cell KDTree inflates
-    # d_nn near a/b boundaries and silently drops valid sites).
-    accessibility_tree: KDTree | None = None
-    topology_median_nn: float | None = None
-    if material_type == "slab":
-        accessibility_tree = _periodic_accessibility_tree(
-            positions,
-            cell,
-            pbc_for_voronoi,
-            float(max_site_distance),
-        )
-
-    # Slab-specific topology enrichment becomes part of the default generator.
-    if material_type == "slab" and slab_top_atom_indices is not None:
-        median_nn = _median_nn_or_fallback(
-            nn_dists,
-            reference_positions=positions[slab_top_atom_indices],
-            cell=cell,
-            pbc=pbc_for_voronoi,
-        )
-        topology_median_nn = float(median_nn)
-        site_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
-        (
-            topo_vertices,
-            topo_dists,
-            topo_sources,
-            topology_primary_delaunay,
-            topology_expanded_xy,
-            topology_expanded_origin,
-            topology_expanded_tri,
-        ) = _generate_slab_topology_sites(
-            positions,
-            cell,
-            pbc_for_voronoi,
-            slab_top_atom_indices,
-            accessibility_tree,
-            site_height,
-            float(probe_radius),
-            float(max_site_distance),
-            primary_delaunay=(
-                _reuse_topology.primary_delaunay if _reuse_topology else None
-            ),
-            exp2d=_reuse_topology.exp_xy if _reuse_topology else None,
-            expanded_origin_local_index=(
-                _reuse_topology.exp_origin if _reuse_topology else None
-            ),
-            exp_tri=_reuse_topology.exp_tri if _reuse_topology else None,
-            reuse_delaunay=_reuse_topology is not None,
-        )
-        if _widen_scratch is not None:
-            _widen_scratch.planar_skip_voronoi = bool(slab_skip_voronoi)
-            _widen_scratch.primary_delaunay = topology_primary_delaunay
-            _widen_scratch.exp_xy = topology_expanded_xy
-            _widen_scratch.exp_origin = topology_expanded_origin
-            _widen_scratch.exp_tri = topology_expanded_tri
-        has_topology_atop = any(s == "topology_atop" for s in topo_sources)
-        if len(topo_vertices) > 0:
-            vertices, nn_dists, source_hints, atom_indices = _merge_dedup_site_arrays(
-                vertices,
-                nn_dists,
-                source_hints,
-                topo_vertices,
-                topo_dists,
-                topo_sources,
-                cell=cell,
-                pbc=pbc_for_voronoi,
-                atom_indices=atom_indices,
-            )
-
-    # Nanoparticle: hull topology only (Voronoi already skipped above).
-    if material_type == "nanoparticle":
-        metal_nn = _median_nn_or_fallback(
-            np.empty(0, dtype=float),
-            reference_positions=positions,
-            cell=cell,
-            pbc=pbc_for_voronoi,
-        )
-        topology_median_nn = float(metal_nn)
-        site_height = _ATOP_INJECTION_HEIGHT_FACTOR * metal_nn
-        (
-            topo_vertices,
-            topo_dists,
-            topo_sources,
-            topo_atoms,
-        ) = _generate_nanoparticle_topology_sites(
-            positions,
-            local_tree,
-            site_height,
-            float(probe_radius),
-            float(max_site_distance),
-            metal_nn=metal_nn,
-            cell=cell,
-            pbc=pbc_for_voronoi,
-        )
-        has_topology_atop = any(s == "topology_atop" for s in topo_sources)
-        vertices = topo_vertices
-        nn_dists = topo_dists
-        source_hints = list(topo_sources)
-        atom_indices = list(topo_atoms)
-
-    if len(vertices) == 0 and material_type not in ("slab", "nanoparticle"):
-        # Slabs/NPs still try atop injection below.
-        logger.warning(
-            "No accessible sites for %d-atom structure (probe_radius=%s, max_distance=%s, material_type=%r)",
-            len(atoms),
-            f"{probe_radius:.2f}" if probe_radius is not None else "auto",
-            f"{max_site_distance:.2f}" if max_site_distance is not None else "auto",
-            material_type,
-        )
+    if batch.early_empty:
         return []
 
-    if material_type == "slab":
+    vertices = batch.vertices
+    nn_dists = batch.nn_dists
+    source_hints = list(batch.source_hints)
+    atom_indices = list(batch.atom_indices)
+    local_tree = KDTree(positions)
+
+    if batch.apply_slab_height_mask and len(vertices) > 0:
         heights = _height_along_slab_normal(positions, cell)
         h_surface = float(np.max(heights))
         nn_margin = (
@@ -819,23 +497,24 @@ def _enumerate_unified_sites(
             vertices, nn_dists, source_hints, keep_mask, atom_indices
         )
 
-    vertices, nn_dists, source_hints, atom_indices = _inject_atop_sites(
-        vertices,
-        nn_dists,
-        source_hints,
-        positions=positions,
-        cell=cell,
-        pbc=pbc_for_voronoi,
-        material_type=material_type,
-        local_tree=local_tree,
-        accessibility_tree=accessibility_tree,
-        median_nn=topology_median_nn,
-        slab_top_atom_indices=slab_top_atom_indices,
-        has_topology_atop=has_topology_atop,
-        probe_radius=probe_radius,
-        max_site_distance=max_site_distance,
-        atom_indices=atom_indices,
-    )
+    if batch.inject_atop:
+        vertices, nn_dists, source_hints, atom_indices = _inject_atop_sites(
+            vertices,
+            nn_dists,
+            source_hints,
+            positions=positions,
+            cell=cell,
+            pbc=pbc_for_voronoi,
+            material_type=material_type,
+            local_tree=local_tree,
+            accessibility_tree=batch.accessibility_tree,
+            median_nn=batch.topology_median_nn,
+            slab_top_atom_indices=batch.slab_top_atom_indices,
+            has_topology_atop=batch.has_topology_atop,
+            probe_radius=float(probe_radius),
+            max_site_distance=float(max_site_distance),
+            atom_indices=atom_indices,
+        )
 
     if len(vertices) == 0:
         logger.warning(
@@ -856,11 +535,11 @@ def _enumerate_unified_sites(
         pbc_for_voronoi,
         material_type=material_type,
         site_classification_method=site_classification_method,
-        slab_top_atom_indices=slab_top_atom_indices,
-        topology_primary_delaunay=topology_primary_delaunay,
-        expanded_xy=topology_expanded_xy,
-        expanded_origin=topology_expanded_origin,
-        expanded_tri=topology_expanded_tri,
+        slab_top_atom_indices=batch.slab_top_atom_indices,
+        topology_primary_delaunay=batch.topology_primary_delaunay,
+        expanded_xy=batch.topology_expanded_xy,
+        expanded_origin=batch.topology_expanded_origin,
+        expanded_tri=batch.topology_expanded_tri,
     )
 
     sites = _build_site_records(
@@ -879,8 +558,7 @@ def _enumerate_unified_sites(
     )
 
     if cell_has_volume(cell):
-        # Keep deterministic raw_unclustered order for dissociative hash/dedup;
-        # clustering re-sorts by Cartesian xyz + site_type.
+        # Deterministic fractional-xyz order for stable site_index / raw catalog.
         all_xyz = np.asarray([s.xyz for s in sites], dtype=float).reshape(-1, 3)
         all_frac = _wrap_fractional(_cart_to_frac(all_xyz, cell), pbc_for_voronoi)
 
@@ -899,23 +577,24 @@ def _enumerate_unified_sites(
     return sites
 
 
-# ---------------------------------------------------------------------------
-# Hollow sites for adatom / dissociative placement
-# ---------------------------------------------------------------------------
-
-
 def get_hollow_sites_for_adatoms(
     slab: Atoms,
     top_layer_tolerance: float | None = None,
-    dedup_tolerance: float = _DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
     *,
     material_type: str,
     probe_radius: float | None = None,
     max_site_distance: float | None = None,
     enrich: bool = True,
     site_classification_method: str = "auto",
+    site_generator: str = "auto",
+    site_equivalence_tolerance: float = _DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
+    auto_widen: bool = True,
+    planar_z_variance_threshold: float | None = None,
 ) -> list[Site]:
-    """Return hollow/pore sites for adatom placement, deduplicated.
+    """Return hollow/pore sites for adatom placement from the clustered catalog.
+
+    Uniqueness uses :func:`_cluster_equivalent_sites` with
+    *site_equivalence_tolerance* (same metric as molecular placement).
 
     Parameters
     ----------
@@ -923,8 +602,6 @@ def get_hollow_sites_for_adatoms(
         :class:`~ase.Atoms` substrate.
     top_layer_tolerance
         Height tolerance for the top layer (auto-derived if None).
-    dedup_tolerance
-        Spatial tolerance for deduplication.
     material_type
         ``"slab"``, ``"nanoparticle"``, or ``"porous"``. Required so that the
         PBC semantics always match the caller's intent (same as
@@ -937,6 +614,14 @@ def get_hollow_sites_for_adatoms(
         Whether to enrich Voronoi ridge candidates.
     site_classification_method
         Site classification method (``"auto"``, ``"delaunay"``, etc.).
+    site_generator
+        Site generator plugin (``"auto"``, ``"topology"``, ``"voronoi"``).
+    site_equivalence_tolerance
+        Fingerprint-aware clustering tolerance (Å).
+    auto_widen
+        Retry once with a wider accessibility window if the first pass is empty.
+    planar_z_variance_threshold
+        Max top-layer height variance (Å²) for planar classification.
     """
     raw = get_unified_sites(
         slab,
@@ -946,15 +631,19 @@ def get_hollow_sites_for_adatoms(
         material_type=material_type,
         enrich=enrich,
         site_classification_method=site_classification_method,
+        site_generator=site_generator,
+        auto_widen=auto_widen,
+        planar_z_variance_threshold=planar_z_variance_threshold,
     )
-    hollow_sites = [s for s in raw if s.site_type in ("hollow", "pore")]
-    if not hollow_sites:
+    if not raw:
         return []
     cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = np.asarray(material_aware_pbc(material_type), dtype=bool)
-    hollow_xyz = np.array([s.xyz for s in hollow_sites], dtype=float)
-    keep = _deduplicate_points(hollow_xyz, dedup_tolerance, cell=cell, pbc=pbc)
-    return [hollow_sites[i] for i in np.nonzero(keep)[0]]
+    clustered = _cluster_equivalent_sites(
+        raw,
+        cell,
+        tolerance=site_equivalence_tolerance,
+    )
+    return [s for s in clustered if s.site_type in ("hollow", "pore")]
 
 
 # ---------------------------------------------------------------------------
@@ -1002,7 +691,12 @@ def _cluster_equivalent_sites(
     tolerance: float = _DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     z_abs_tolerance: float | None = None,
 ) -> list[Site]:
-    """Group equivalent sites; return unique representatives."""
+    """Group equivalent sites; return unique representatives.
+
+    Merges only when spatially close (material-aware metric) and
+    ``env_fingerprint`` matches. ``site_source`` is ignored so topology,
+    Voronoi, and atop-injected candidates in the same pocket collapse.
+    """
     if not sites:
         return []
 
@@ -1137,8 +831,14 @@ def get_symmetry_aware_sites(
     site_classification_method: str = "auto",
     raw_sites: list[Site] | None = None,
     planar_z_variance_threshold: float | None = None,
+    site_generator: str = "auto",
 ) -> list[Site]:
     """Return symmetry-reduced adsorption sites using spglib.
+
+    Production sampling passes the **clustered** catalog via *raw_sites*
+    (see :func:`~metalsurfer.placement.site_context.resolve_site_context_for_sampling`).
+    Orbits are blocked by classified ``site_type`` only; ``site_source`` does
+    not participate.
 
     Parameters
     ----------
@@ -1162,10 +862,13 @@ def get_symmetry_aware_sites(
     site_classification_method
         Site classification method (``"auto"``, ``"delaunay"``, etc.).
     raw_sites
-        Optional pre-computed raw site list.
+        Optional pre-computed site list (typically the clustered catalog).
+        When omitted, sites are enumerated via :func:`get_unified_sites`.
     planar_z_variance_threshold
         Max top-layer height variance (Å²) for planar classification.
         ``None`` uses the library default.
+    site_generator
+        Site generator plugin (``"auto"``, ``"topology"``, ``"voronoi"``).
     """
     validate_material_type(material_type)
 
@@ -1191,6 +894,7 @@ def get_symmetry_aware_sites(
             enrich=enrich,
             site_classification_method=site_classification_method,
             planar_z_variance_threshold=z_var_threshold,
+            site_generator=site_generator,
         )
     if not site_list:
         return []
@@ -1218,74 +922,6 @@ def get_symmetry_aware_sites(
         site_list,
         planar=planar_for_symmetry,
     )
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _top_layer_is_planar_from_arrays(
-    positions: np.ndarray,
-    cell: np.ndarray,
-    top_layer_tolerance: float = _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
-    z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
-    *,
-    top_mask: np.ndarray | None = None,
-) -> bool:
-    """Check whether the topmost atomic layer of *positions* is approximately flat.
-
-    The fit is done in an orientation-aware slab coordinate system rather than
-    assuming the slab normal is Cartesian z. *top_mask* (from
-    :func:`top_layer_mask_by_normal`) may be supplied when the caller already
-    computed it, avoiding a redundant height scan.
-    """
-    positions = np.asarray(positions, dtype=float)
-    cell = np.asarray(cell, dtype=float)
-    if top_mask is None:
-        top_mask = top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
-    top_indices = np.nonzero(top_mask)[0]
-    if len(top_indices) == 0:
-        return False
-    top_pos = positions[top_indices]
-    h = _height_along_slab_normal(top_pos, cell)
-    if len(top_indices) < 3:
-        return float(np.var(h)) < z_variance_threshold
-    xy = _project_to_slab_plane(top_pos, cell)
-    A = np.column_stack([xy[:, 0], xy[:, 1], np.ones(len(xy))])
-    coeffs, _residuals, rank, _ = np.linalg.lstsq(A, h, rcond=None)
-    if rank < 3:
-        return float(np.var(h)) < z_variance_threshold
-    h_pred = A @ coeffs
-    return float(np.var(h - h_pred)) < z_variance_threshold
-
-
-def _is_top_layer_planar(
-    slab: Atoms,
-    top_layer_tolerance: float = _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
-    z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
-    *,
-    top_mask: np.ndarray | None = None,
-) -> bool:
-    """Check whether the topmost atomic layer is approximately flat."""
-    return _top_layer_is_planar_from_arrays(
-        slab.get_positions(),
-        np.asarray(slab.get_cell(), dtype=float),
-        top_layer_tolerance,
-        z_variance_threshold,
-        top_mask=top_mask,
-    )
-
-
-def _bounding_box_cell(
-    positions: np.ndarray,
-    pad: float = _BOUNDING_BOX_CELL_PAD_ANGSTROM,
-) -> np.ndarray:
-    """Orthorhombic cell spanning atomic positions plus padding."""
-    lo = positions.min(axis=0)
-    hi = positions.max(axis=0)
-    span = np.maximum(hi - lo + pad, pad)
-    return np.diag(span)
 
 
 # ---------------------------------------------------------------------------

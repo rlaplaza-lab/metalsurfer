@@ -1577,7 +1577,8 @@ def run_saturation_screening(
         In-memory ``(smiles, name)`` list/tuple or path to a two-column CSV.
     config
         Adsorption configuration. Optional ``saturation_temperature`` /
-        ``saturation_pressure`` / ``saturation_activities`` shift ranking via Ω.
+        ``saturation_pressure`` / ``saturation_activities`` /
+        ``saturation_omega_shift`` shift ranking via Ω.
     surface_type
         Surface type label.
     skip_existing
@@ -1631,7 +1632,10 @@ def run_saturation_screening(
         smiles_list = [smiles for smiles, _ in molecule_pairs]
         molecule_names = [name for _, name in molecule_pairs]
         activity_by_molecule = resolve_saturation_activities(
-            molecule_names, config.saturation_activities
+            molecule_names,
+            config.saturation_activities,
+            omega_shifts=config.saturation_omega_shift,
+            temperature=config.saturation_temperature,
         )
         base_slab = slab.atoms.copy()
         results_dir = results_dir_for(surface_type).as_posix()

@@ -3,6 +3,7 @@
 import pytest
 
 from metalsurfer.config import AdsorptionConfig
+from metalsurfer.optimization import TorchSimCalculator
 from metalsurfer.surface_prep import SlabContainer, prepare_substrate
 
 from .conftest import make_slab
@@ -62,6 +63,39 @@ def _patch_prepare_substrate(
             relax,
         )
     return captured, fake_calc
+
+
+def _slab_with_calc(
+    *,
+    model_name: str = "uma-s-1p1",
+    device: str = "cpu",
+    task_name: str = "oc20",
+) -> tuple[SlabContainer, TorchSimCalculator]:
+    calc = TorchSimCalculator(
+        object(),
+        model_name=model_name,
+        device=device,
+        task_name=task_name,
+    )
+    slab = SlabContainer(make_slab(symbol="Ru"))
+    slab.atoms.calc = calc
+    return slab, calc
+
+
+def _patch_setup(monkeypatch, return_value=None) -> dict:
+    if return_value is None:
+        return_value = (object(), None)
+    called = {"value": False}
+
+    def _fake_setup(*_args, **_kwargs):
+        called["value"] = True
+        return return_value
+
+    monkeypatch.setattr(
+        "metalsurfer.optimization.setup_single_model",
+        _fake_setup,
+    )
+    return called
 
 
 def test_prepare_substrate_passes_slab_relaxation_options(monkeypatch):
@@ -311,7 +345,7 @@ def test_prepare_substrate_multi_element_alloy_requires_host(monkeypatch):
             slab=SlabContainer(alloy_slab),
             alloy_guest="Au",
             alloy_fraction=0.25,
-            config=AdsorptionConfig(device="cpu"),
+            config=AdsorptionConfig(device="cpu", slab_relaxation_mode="none"),
         )
 
 
@@ -366,3 +400,104 @@ def test_prepare_substrate_single_element_alloy_infers_host(monkeypatch):
     )
 
     assert captured["host_symbol"] == "Ru"
+
+
+def test_prepare_substrate_relaxes_loaded_slab_before_mods(monkeypatch):
+    order: list[str] = []
+    base = SlabContainer(make_slab(symbol="Ru"))
+
+    def _fake_relax(slab, calculator, config=None, **kwargs):
+        order.append("relax")
+        return slab
+
+    def _fake_alloy(slab, host_symbol, guest_symbol, guest_fraction, **kwargs):
+        order.append("alloy")
+        return slab
+
+    def _fake_deposit(slab, adatom_symbol, coverage_fraction, **kwargs):
+        order.append("deposit")
+        return slab
+
+    _patch_prepare_substrate(
+        monkeypatch,
+        alloy=_fake_alloy,
+        deposit=_fake_deposit,
+        relax=_fake_relax,
+    )
+
+    prepare_substrate(
+        slab=base,
+        alloy_host="Ru",
+        alloy_guest="Cu",
+        alloy_fraction=0.25,
+        adatom_symbol="Sn",
+        adatom_coverage=0.1,
+        config=AdsorptionConfig(device="cpu"),
+        slab_relaxation_mode="ionic_only",
+    )
+
+    assert order == ["relax", "alloy", "deposit"]
+
+
+def test_prepare_substrate_reuses_matching_torchsim_calculator(monkeypatch):
+    config = AdsorptionConfig(model_name="uma-s-1p1", device="cpu", task_name="oc20")
+    base, calc = _slab_with_calc(
+        model_name=config.model_name,
+        device=config.device,
+        task_name=config.task_name,
+    )
+    setup_called = _patch_setup(monkeypatch)
+    monkeypatch.setattr(
+        "metalsurfer.surface_prep.prep.relax_substrate",
+        lambda slab, *args, **kwargs: slab,
+    )
+
+    result = prepare_substrate(
+        slab=base,
+        config=config,
+        slab_relaxation_mode="ionic_only",
+    )
+
+    assert setup_called["value"] is False
+    assert result.atoms.calc is calc
+
+
+def test_prepare_substrate_reloads_on_calculator_mismatch(monkeypatch):
+    base, _attached = _slab_with_calc(
+        model_name="uma-s-1p1", device="cpu", task_name="oc20"
+    )
+    fresh_calc = object()
+    setup_called = _patch_setup(monkeypatch, return_value=(fresh_calc, None))
+    monkeypatch.setattr(
+        "metalsurfer.surface_prep.prep.relax_substrate",
+        lambda slab, *args, **kwargs: slab,
+    )
+
+    result = prepare_substrate(
+        slab=base,
+        config=AdsorptionConfig(model_name="uma-s-1p2", device="cpu", task_name="oc20"),
+        slab_relaxation_mode="ionic_only",
+    )
+
+    assert setup_called["value"] is True
+    assert result.atoms.calc is fresh_calc
+
+
+def test_prepare_substrate_preserves_calc_when_relaxation_none(monkeypatch):
+    config = AdsorptionConfig(
+        model_name="uma-s-1p1",
+        device="cpu",
+        task_name="oc20",
+        slab_relaxation_mode="none",
+    )
+    base, calc = _slab_with_calc(
+        model_name=config.model_name,
+        device=config.device,
+        task_name=config.task_name,
+    )
+    setup_called = _patch_setup(monkeypatch)
+
+    result = prepare_substrate(slab=base, config=config)
+
+    assert setup_called["value"] is False
+    assert result.atoms.calc is calc

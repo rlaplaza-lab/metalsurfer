@@ -264,7 +264,7 @@ def _generate_slab_topology_sites(
 
     Candidates are created in an orientation-aware way and wrapped back into the
     reference cell on periodic axes. *accessibility_tree* must be MIC-aware
-    under PBC (see :func:`site_enumeration._periodic_accessibility_tree`).
+    under PBC (see :func:`metalsurfer.placement.site_plugins.helpers.periodic_accessibility_tree`).
 
     When *reuse_delaunay* is True, the provided primary/expanded Delaunay objects
     are reused (planar auto-widen) instead of rebuilding Qhull.
