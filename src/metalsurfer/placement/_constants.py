@@ -278,3 +278,20 @@ _TUPLET_CLASH_RESCUE_COVALENT_SCALE: float = 0.5
 # One-shot Voronoi accessibility widen when the first window finds no sites.
 _VORONOI_AUTO_WIDEN_PROBE_SCALE: float = 0.8
 _VORONOI_AUTO_WIDEN_MAX_SCALE: float = 1.25
+
+# ---------------------------------------------------------------------------
+# Adaptive-grid site generator (internal A/B plugin)
+# ---------------------------------------------------------------------------
+# Coarse spacing h0 = clip(c_h * L, h_min, h_max); refine while h > c_fine * L.
+_ADAPTIVE_GRID_SPACING_SCALE: float = 0.45
+_ADAPTIVE_GRID_FINE_SCALE: float = 0.25
+_ADAPTIVE_GRID_H_MIN: float = 0.35
+_ADAPTIVE_GRID_H_MAX: float = 1.5
+_ADAPTIVE_GRID_MAX_LEVELS: int = 2
+# Near-zero molecular extents (flat thickness, single-atom footprint) skip this.
+_ADAPTIVE_GRID_EXTENT_EPS: float = 0.05
+# NMS merge radius: max(nms_scale * h_fine, nms_length_scale * L).
+_ADAPTIVE_GRID_NMS_SCALE: float = 1.5
+_ADAPTIVE_GRID_NMS_LENGTH_SCALE: float = 0.5
+# Hard cap on final candidates before enumerator post-processing.
+_ADAPTIVE_GRID_MAX_CANDIDATES: int = 512

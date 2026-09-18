@@ -1,9 +1,12 @@
 """Site generator plugins for adsorption-site enumeration.
 
 ``auto`` resolves by material (slab/NP → topology, porous → voronoi).
+Internal ``adaptive_grid`` is factory-resolvable but not config-exposed.
 """
 
+from .adaptive_grid import AdaptiveGridGenerator
 from .base import (
+    PUBLIC_SITE_GENERATORS,
     SITE_GENERATORS,
     SiteCandidateBatch,
     SiteGenerationContext,
@@ -16,7 +19,9 @@ from .topology_slab import TopologySlabGenerator
 from .voronoi import VoronoiGenerator
 
 __all__ = [
+    "PUBLIC_SITE_GENERATORS",
     "SITE_GENERATORS",
+    "AdaptiveGridGenerator",
     "SiteCandidateBatch",
     "SiteGenerationContext",
     "SiteGenerator",
@@ -36,4 +41,6 @@ def resolve_site_generator(name: str, material_type: str) -> SiteGenerator:
         if material_type == "slab":
             return TopologySlabGenerator()
         return TopologyNPGenerator()
+    if resolved == "adaptive_grid":
+        return AdaptiveGridGenerator()
     return VoronoiGenerator()

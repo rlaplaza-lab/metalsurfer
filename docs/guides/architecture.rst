@@ -213,7 +213,8 @@ Implementation: ``placement/site_*`` plus ``placement/site_plugins/``
 (enumeration entry: ``get_unified_sites``).
 
 Candidate generation is dispatched through a plugin selected by
-``site_generator`` (``auto`` / ``topology`` / ``voronoi``). Shared prep
+``site_generator`` (``auto`` / ``topology`` / ``voronoi``; internal
+``adaptive_grid`` via the factory / ``get_unified_sites`` only). Shared prep
 (PBC, probe window) and post (atop injection, classification, sort) stay in
 the enumerator; plugins only emit raw candidate batches.
 
@@ -233,6 +234,14 @@ the enumerator; plugins only emit raw candidate batches.
    * - ``voronoi``
      - slab, porous
      - Free-volume Voronoi (+ ridge enrich). On slabs skips topology (A/B)
+   * - ``adaptive_grid`` (internal)
+     - all
+     - Atom-centred Cartesian shells for every material (porous uses
+       voxelled seeds, same near-atom scoring—not pore centres) with
+       iterative refinement in the shared probe/max window. Optional
+       adsorbate geometry scales sampling density only. Not in
+       ``AdsorptionConfig`` / YAML; call
+       ``get_unified_sites(..., site_generator="adaptive_grid")``.
 
 Generation is **orientation-aware**: top-layer detection, Voronoi filtering,
 topology candidates, and local normals use the slab normal (``a × b``) and
@@ -316,7 +325,8 @@ Material strategies:
    * - porous
      - 3×3×3 images; pore sites when the framework spans the cell
 
-Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi``),
+Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi``;
+internal ``adaptive_grid`` via ``get_unified_sites``),
 ``voronoi_probe_radius``, ``voronoi_max_site_distance``,
 ``top_layer_tolerance``, ``symmetry_tolerance``,
 ``site_equivalence_tolerance``, ``site_classification_method``
@@ -330,9 +340,10 @@ pairs on slabs (rejected for porous; NP uses outward-normal site pairs);
 parallel-z floors for slab/NP aromatics (skipped for porous); no atop
 injection / dissociative for porous. Nanoparticle ``surface_ref`` is the
 coordinating metal atoms projected onto the site normal (topology vertices
-are already lifted); porous keeps the site-vertex projection. Future plugins
-(e.g. rolling-probe, adaptive-grid) would register in
-``placement/site_plugins/`` with the same candidate-batch contract.
+are already lifted); porous keeps the site-vertex projection. Internal
+``adaptive_grid`` registers in ``placement/site_plugins/`` with the same
+candidate-batch contract (all materials; not config-exposed). Future
+plugins (e.g. rolling-probe) would follow the same pattern.
 
 
 Placement

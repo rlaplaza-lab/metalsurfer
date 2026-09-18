@@ -88,9 +88,11 @@ module = [
     "metalsurfer.placement.site_voronoi",
     "metalsurfer.placement.site_classify",
     "metalsurfer.placement.site_np",
+    "metalsurfer.placement.site_adaptive_grid",
     "metalsurfer.placement.site_plugins",
     "metalsurfer.placement.site_plugins.base",
     "metalsurfer.placement.site_plugins.helpers",
+    "metalsurfer.placement.site_plugins.adaptive_grid",
     "metalsurfer.placement.site_plugins.topology_np",
     "metalsurfer.placement.site_plugins.topology_slab",
     "metalsurfer.placement.site_plugins.voronoi",
@@ -124,7 +126,7 @@ convention = "numpy"
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/**/*.py" = ["E402", "D"]
-"examples/**/*.py" = ["D"]
+"examples/**/*.py" = ["D", "E402"]
 "tests/**/*.py" = ["D"]
 
 [tool.ruff.format]

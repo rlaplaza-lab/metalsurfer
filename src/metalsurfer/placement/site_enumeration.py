@@ -287,17 +287,22 @@ def get_unified_sites(
     auto_widen: bool = True,
     planar_z_variance_threshold: float | None = None,
     site_generator: str = "auto",
+    adsorbate: Atoms | None = None,
 ) -> list[Site]:
     """Return adsorption/placement sites for *atoms*.
 
     Candidates come from a plugin selected by *site_generator*
-    (``auto`` / ``topology`` / ``voronoi``). With ``auto``, slabs and
-    nanoparticles use topology; porous frameworks use Voronoi.
+    (``auto`` / ``topology`` / ``voronoi``, plus internal ``adaptive_grid``).
+    With ``auto``, slabs and nanoparticles use topology; porous frameworks
+    use Voronoi. ``adaptive_grid`` is an internal A/B plugin (all materials)
+    and is not selectable via ``AdsorptionConfig``.
 
     - **slab** (topology): Delaunay atop/bridge/hollow; planar top layers skip
       Voronoi; rough slabs merge Voronoi enrichment.
     - **nanoparticle** (topology): hull + NN only.
     - **porous** (voronoi): free-volume vertices with optional ridge enrichment.
+    - **adaptive_grid** (internal): atom-centred Cartesian grid with iterative
+      refinement; optional *adsorbate* scales grid increments only.
 
     Parameters
     ----------
@@ -324,7 +329,12 @@ def get_unified_sites(
         Max top-layer height variance (Å²) for classifying a slab as planar.
         ``None`` uses the library default.
     site_generator
-        ``"auto"`` (material default), ``"topology"``, or ``"voronoi"``.
+        ``"auto"`` (material default), ``"topology"``, ``"voronoi"``, or
+        internal ``"adaptive_grid"``.
+    adsorbate
+        Optional representative conformer. Used only by ``adaptive_grid`` to
+        scale grid spacing from molecular footprint / thickness / covalent
+        radius; ignored by topology and Voronoi.
     """
     scratch = _PlanarWidenScratch()
     sites = _enumerate_unified_sites(
@@ -338,6 +348,7 @@ def get_unified_sites(
         site_classification_method=site_classification_method,
         planar_z_variance_threshold=planar_z_variance_threshold,
         site_generator=site_generator,
+        adsorbate=adsorbate,
         _widen_scratch=scratch,
     )
     if sites or not auto_widen:
@@ -378,6 +389,7 @@ def get_unified_sites(
         site_classification_method=site_classification_method,
         planar_z_variance_threshold=planar_z_variance_threshold,
         site_generator=site_generator,
+        adsorbate=adsorbate,
         _reuse_topology=reuse,
     )
 
@@ -394,6 +406,7 @@ def _enumerate_unified_sites(
     planar_z_variance_threshold: float | None = None,
     site_generator: str = "auto",
     *,
+    adsorbate: Atoms | None = None,
     _widen_scratch: _PlanarWidenScratch | None = None,
     _reuse_topology: _PlanarWidenScratch | None = None,
 ) -> list[Site]:
@@ -464,6 +477,7 @@ def _enumerate_unified_sites(
         top_layer_tolerance=float(top_layer_tolerance),
         enrich=bool(enrich),
         planar_z_variance_threshold=float(z_var_threshold),
+        adsorbate=adsorbate,
     )
     batch = plugin.generate(ctx, reuse=_reuse_topology)
 

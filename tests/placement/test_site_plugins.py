@@ -5,10 +5,12 @@ import pytest
 from metalsurfer.config import SITE_GENERATOR_OPTIONS
 from metalsurfer.placement.site_enumeration import get_unified_sites
 from metalsurfer.placement.site_plugins import (
+    PUBLIC_SITE_GENERATORS,
     SITE_GENERATORS,
     resolve_site_generator,
     resolved_site_generator_name,
 )
+from metalsurfer.placement.site_plugins.adaptive_grid import AdaptiveGridGenerator
 from metalsurfer.placement.site_plugins.topology_np import TopologyNPGenerator
 from metalsurfer.placement.site_plugins.topology_slab import TopologySlabGenerator
 from metalsurfer.placement.site_plugins.voronoi import VoronoiGenerator
@@ -17,14 +19,16 @@ from ..conftest import make_nanoparticle, make_porous_framework, make_slab
 
 
 def test_registry_matches_config_options():
-    assert SITE_GENERATORS == ("topology", "voronoi")
-    assert SITE_GENERATOR_OPTIONS == ("auto",) + SITE_GENERATORS
+    assert SITE_GENERATORS == ("topology", "voronoi", "adaptive_grid")
+    assert PUBLIC_SITE_GENERATORS == ("topology", "voronoi")
+    assert SITE_GENERATOR_OPTIONS == ("auto",) + PUBLIC_SITE_GENERATORS
 
 
 def test_auto_defaults_by_material():
     assert resolved_site_generator_name("auto", "slab") == "topology"
     assert resolved_site_generator_name("auto", "nanoparticle") == "topology"
     assert resolved_site_generator_name("auto", "porous") == "voronoi"
+    assert resolved_site_generator_name("adaptive_grid", "slab") == "adaptive_grid"
 
 
 @pytest.mark.parametrize(
@@ -34,6 +38,9 @@ def test_auto_defaults_by_material():
         ("topology", "nanoparticle", TopologyNPGenerator),
         ("voronoi", "porous", VoronoiGenerator),
         ("voronoi", "slab", VoronoiGenerator),
+        ("adaptive_grid", "slab", AdaptiveGridGenerator),
+        ("adaptive_grid", "nanoparticle", AdaptiveGridGenerator),
+        ("adaptive_grid", "porous", AdaptiveGridGenerator),
     ],
 )
 def test_resolve_plugin(name, material_type, cls):

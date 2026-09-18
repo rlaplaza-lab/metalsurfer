@@ -1,7 +1,8 @@
 """Site generator plugin contract, registry helpers, and name resolution.
 
-Registered plugins: ``topology`` (slab Delaunay hybrid / NP hull) and
-``voronoi`` (free-volume vertices).
+Registered plugins: ``topology`` (slab Delaunay hybrid / NP hull),
+``voronoi`` (free-volume vertices), and internal ``adaptive_grid``
+(atom-centred Cartesian grid with iterative refinement; all materials).
 """
 
 from __future__ import annotations
@@ -14,13 +15,18 @@ import numpy as np
 from .._material import validate_material_type
 
 if TYPE_CHECKING:
+    from ase import Atoms
     from scipy.spatial import Delaunay, KDTree
 
-SITE_GENERATORS: tuple[str, ...] = ("topology", "voronoi")
+# All factory-resolvable plugin ids (including internal A/B plugins).
+SITE_GENERATORS: tuple[str, ...] = ("topology", "voronoi", "adaptive_grid")
+# Plugins selectable via AdsorptionConfig / YAML (excludes internal A/B).
+PUBLIC_SITE_GENERATORS: tuple[str, ...] = ("topology", "voronoi")
 
 _PLUGIN_ALLOWED_MATERIALS: dict[str, frozenset[str]] = {
     "topology": frozenset({"slab", "nanoparticle"}),
     "voronoi": frozenset({"slab", "porous"}),
+    "adaptive_grid": frozenset({"slab", "nanoparticle", "porous"}),
 }
 
 _AUTO_DEFAULTS: dict[str, str] = {
@@ -44,6 +50,7 @@ class SiteGenerationContext:
     top_layer_tolerance: float
     enrich: bool
     planar_z_variance_threshold: float
+    adsorbate: Atoms | None = None
 
 
 @dataclass
