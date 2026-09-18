@@ -70,6 +70,9 @@ probe_*/
 !scripts/tutorials/*.xyz
 benchmark_bo_results_*.csv
 bo_benchmark_report/
+# Adaptive-grid vs auto A/B outputs (examples/compare_adaptive_grid_ab.py stays)
+results_adaptive_grid_ab/
+examples/adaptive_grid_ab_*.csv
 
 # Virtual environments
 .env
