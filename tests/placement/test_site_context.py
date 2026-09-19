@@ -499,3 +499,190 @@ def test_bo_pool_capacity_matches_clustered_catalog_under_coverage():
     )
     assert any(result is not None for result, _reason in generated)
     assert any(spec.site_index >= len(reduced.sites) for spec in specs)
+
+
+def test_unique_sites_context_stores_plugin_vertices():
+    _SITE_CONTEXT_CACHE.clear()
+    slab = make_slab(nx=2, ny=2)
+    config = AdsorptionConfig(material_type="slab")
+    ctx = _get_unique_sites_for_specs(slab, config)
+    assert ctx.use_sites
+    assert ctx.plugin_vertices is not None
+    assert ctx.plugin_vertices.ndim == 2
+    assert ctx.plugin_vertices.shape[1] == 3
+    assert len(ctx.plugin_vertices) > 0
+    assert ctx.clustered_sites is not None
+    assert len(ctx.clustered_sites) > 0
+
+
+def test_debug_write_sites_writes_plugin_and_final_overlays(tmp_path, monkeypatch):
+    from ase.io import read
+
+    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.workflow.shared import _prepare_molecule_screening
+
+    from ..conftest import DummyReferenceEnergies
+
+    _SITE_CONTEXT_CACHE.clear()
+    monkeypatch.chdir(tmp_path)
+    surface_type = "debug_sites_test"
+    slab_atoms = make_slab(nx=4, ny=4)
+    water = make_water()
+    config = AdsorptionConfig(
+        material_type="slab",
+        debug_write_sites=True,
+        num_placements=2,
+        num_conformers=1,
+    )
+    ctx, failure = _prepare_molecule_screening(
+        smiles="O",
+        molecule_name="water",
+        slab=SlabContainer(slab_atoms),
+        calculator=None,
+        reference_energies=DummyReferenceEnergies(
+            molecule_energies={"water": -10.0},
+            conformer_packs={"water": ([water], [0.0])},
+        ),
+        ts_model=None,
+        config=config,
+        skip_workload_autotune=True,
+        surface_type=surface_type,
+    )
+    assert failure is None
+    assert ctx is not None
+    assert ctx.site_context is not None
+
+    xyz_dir = tmp_path / f"results_{surface_type}" / "xyz_structures"
+    plugin_path = xyz_dir / "sites_plugin.xyz"
+    final_path = xyz_dir / "sites_final.xyz"
+    assert plugin_path.exists()
+    assert final_path.exists()
+
+    n_sub = len(ctx.slab_for_sites)
+    plugin_verts = ctx.site_context.plugin_vertices
+    clustered = ctx.site_context.clustered_sites or []
+    assert plugin_verts is not None
+
+    plugin_atoms = read(str(plugin_path))
+    final_atoms = read(str(final_path))
+    assert len(plugin_atoms) == n_sub + len(plugin_verts)
+    assert len(final_atoms) == n_sub + len(clustered)
+    assert np.all(plugin_atoms.get_atomic_numbers()[n_sub:] == 0)
+    assert np.all(final_atoms.get_atomic_numbers()[n_sub:] == 0)
+
+
+def test_debug_write_sites_step_suffix_from_prepare(tmp_path, monkeypatch):
+    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.workflow.shared import _prepare_molecule_screening
+
+    from ..conftest import DummyReferenceEnergies
+
+    _SITE_CONTEXT_CACHE.clear()
+    monkeypatch.chdir(tmp_path)
+    surface_type = "debug_sites_step"
+    water = make_water()
+    config = AdsorptionConfig(
+        material_type="slab",
+        debug_write_sites=True,
+        num_placements=2,
+        num_conformers=1,
+    )
+    ctx, failure = _prepare_molecule_screening(
+        smiles="O",
+        molecule_name="water",
+        slab=SlabContainer(make_slab(nx=4, ny=4)),
+        calculator=None,
+        reference_energies=DummyReferenceEnergies(
+            molecule_energies={"water": -10.0},
+            conformer_packs={"water": ([water], [0.0])},
+        ),
+        ts_model=None,
+        config=config,
+        skip_workload_autotune=True,
+        surface_type=surface_type,
+        debug_sites_step=3,
+    )
+    assert failure is None
+    assert ctx is not None
+    xyz_dir = tmp_path / f"results_{surface_type}" / "xyz_structures"
+    assert (xyz_dir / "sites_plugin_step003.xyz").exists()
+    assert (xyz_dir / "sites_final_step003.xyz").exists()
+    assert not (xyz_dir / "sites_plugin.xyz").exists()
+
+
+def test_debug_write_sites_skips_when_site_context_pre_supplied(tmp_path, monkeypatch):
+    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.workflow.shared import _prepare_molecule_screening
+
+    from ..conftest import DummyReferenceEnergies
+
+    _SITE_CONTEXT_CACHE.clear()
+    monkeypatch.chdir(tmp_path)
+    surface_type = "debug_sites_presupplied"
+    water = make_water()
+    slab = make_slab(nx=4, ny=4)
+    config = AdsorptionConfig(
+        material_type="slab",
+        debug_write_sites=True,
+        num_placements=2,
+        num_conformers=1,
+    )
+    pre = _get_unique_sites_for_specs(slab, config)
+    ctx, failure = _prepare_molecule_screening(
+        smiles="O",
+        molecule_name="water",
+        slab=SlabContainer(slab),
+        calculator=None,
+        reference_energies=DummyReferenceEnergies(
+            molecule_energies={"water": -10.0},
+            conformer_packs={"water": ([water], [0.0])},
+        ),
+        ts_model=None,
+        config=config,
+        skip_workload_autotune=True,
+        surface_type=surface_type,
+        site_context=pre,
+        debug_sites_step=1,
+    )
+    assert failure is None
+    assert ctx is not None
+    xyz_dir = tmp_path / f"results_{surface_type}" / "xyz_structures"
+    assert not (xyz_dir / "sites_plugin_step001.xyz").exists()
+    assert not (xyz_dir / "sites_plugin.xyz").exists()
+
+
+def test_debug_write_sites_off_writes_nothing(tmp_path, monkeypatch):
+    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.workflow.shared import _prepare_molecule_screening
+
+    from ..conftest import DummyReferenceEnergies
+
+    _SITE_CONTEXT_CACHE.clear()
+    monkeypatch.chdir(tmp_path)
+    surface_type = "debug_sites_off"
+    config = AdsorptionConfig(
+        material_type="slab",
+        debug_write_sites=False,
+        num_placements=2,
+        num_conformers=1,
+    )
+    water = make_water()
+    ctx, failure = _prepare_molecule_screening(
+        smiles="O",
+        molecule_name="water",
+        slab=SlabContainer(make_slab(nx=4, ny=4)),
+        calculator=None,
+        reference_energies=DummyReferenceEnergies(
+            molecule_energies={"water": -10.0},
+            conformer_packs={"water": ([water], [0.0])},
+        ),
+        ts_model=None,
+        config=config,
+        skip_workload_autotune=True,
+        surface_type=surface_type,
+    )
+    assert failure is None
+    assert ctx is not None
+    xyz_dir = tmp_path / f"results_{surface_type}" / "xyz_structures"
+    assert not (xyz_dir / "sites_plugin.xyz").exists()
+    assert not (xyz_dir / "sites_final.xyz").exists()

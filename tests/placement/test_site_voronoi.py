@@ -322,7 +322,7 @@ def test_voronoi_auto_widen_retries_when_first_window_empty(monkeypatch):
     def fake_enumerate(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
-            return []
+            return [], np.empty((0, 3), dtype=float)
         return real(*args, **kwargs)
 
     monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
@@ -340,7 +340,7 @@ def test_voronoi_auto_widen_disabled_skips_retry(monkeypatch):
 
     def fake_enumerate(*args, **kwargs):
         calls["n"] += 1
-        return []
+        return [], np.empty((0, 3), dtype=float)
 
     monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
     ctx = _get_unique_sites_for_specs(slab, AdsorptionConfig(voronoi_auto_widen=False))

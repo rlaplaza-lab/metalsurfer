@@ -227,6 +227,7 @@ def test_valid_custom_config():
         ("placement_z_scale_by_covalent_radius", True, False),
         ("export_placement_provenance", False, True),
         ("voronoi_site_enrichment", True, False),
+        ("debug_write_sites", False, True),
     ],
 )
 def test_bool_config_default_and_override(field, default, override):

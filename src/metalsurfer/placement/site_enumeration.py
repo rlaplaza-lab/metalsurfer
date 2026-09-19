@@ -347,8 +347,49 @@ def get_unified_sites(
     side_policy
         Slab face / exposure policy for ``adaptive_grid`` (default ``positive``).
     """
+    sites, _ = _get_unified_sites_with_plugin_vertices(
+        atoms,
+        probe_radius=probe_radius,
+        max_site_distance=max_site_distance,
+        top_layer_tolerance=top_layer_tolerance,
+        material_type=material_type,
+        pore_threshold=pore_threshold,
+        enrich=enrich,
+        site_classification_method=site_classification_method,
+        auto_widen=auto_widen,
+        planar_z_variance_threshold=planar_z_variance_threshold,
+        site_generator=site_generator,
+        adaptive_grid_spacing=adaptive_grid_spacing,
+        adaptive_grid_refine_levels=adaptive_grid_refine_levels,
+        adaptive_grid_nms_framework_scale=adaptive_grid_nms_framework_scale,
+        n_jobs=n_jobs,
+        side_policy=side_policy,
+    )
+    return sites
+
+
+def _get_unified_sites_with_plugin_vertices(
+    atoms: Atoms,
+    probe_radius: float | None = None,
+    max_site_distance: float | None = None,
+    top_layer_tolerance: float | None = None,
+    material_type: str | None = None,
+    pore_threshold: float | None = None,
+    enrich: bool = True,
+    site_classification_method: str = "auto",
+    *,
+    auto_widen: bool = True,
+    planar_z_variance_threshold: float | None = None,
+    site_generator: str = "auto",
+    adaptive_grid_spacing: float | None = None,
+    adaptive_grid_refine_levels: int = 0,
+    adaptive_grid_nms_framework_scale: float | None = None,
+    n_jobs: int = -2,
+    side_policy: str = "positive",
+) -> tuple[list[Site], np.ndarray]:
+    """Like :func:`get_unified_sites`, also returning raw plugin vertices."""
     scratch = _PlanarWidenScratch()
-    sites = _enumerate_unified_sites(
+    sites, plugin_vertices = _enumerate_unified_sites(
         atoms,
         probe_radius=probe_radius,
         max_site_distance=max_site_distance,
@@ -367,7 +408,7 @@ def get_unified_sites(
         _widen_scratch=scratch,
     )
     if sites or not auto_widen:
-        return sites
+        return sites, plugin_vertices
 
     positions = atoms.get_positions()
     symbols = list(atoms.get_chemical_symbols())
@@ -432,8 +473,12 @@ def _enumerate_unified_sites(
     side_policy: str = "positive",
     _widen_scratch: _PlanarWidenScratch | None = None,
     _reuse_topology: _PlanarWidenScratch | None = None,
-) -> list[Site]:
-    """Core site enumeration (single pass, no auto-widen)."""
+) -> tuple[list[Site], np.ndarray]:
+    """Core site enumeration (single pass, no auto-widen).
+
+    Returns ``(sites, plugin_vertices)`` where *plugin_vertices* is a copy of
+    ``batch.vertices`` from the selected plugin before shared post-processing.
+    """
     if len(atoms) == 0:
         raise ValueError("atoms must contain at least one atom")
     if material_type is None:
@@ -515,8 +560,10 @@ def _enumerate_unified_sites(
         _widen_scratch.exp_origin = batch.reuse.exp_origin
         _widen_scratch.exp_tri = batch.reuse.exp_tri
 
+    plugin_vertices = np.asarray(batch.vertices, dtype=float).reshape(-1, 3).copy()
+
     if batch.early_empty:
-        return []
+        return [], plugin_vertices
 
     vertices = batch.vertices
     nn_dists = batch.nn_dists
@@ -584,7 +631,7 @@ def _enumerate_unified_sites(
             f"{max_site_distance:.2f}" if max_site_distance is not None else "auto",
             material_type,
         )
-        return []
+        return [], plugin_vertices
 
     # Topology defers to Delaunay when available; plugins that already attach
     # support atoms (e.g. adaptive_grid) skip the Delaunay build.
@@ -642,7 +689,7 @@ def _enumerate_unified_sites(
         order = sorted(range(len(sites)), key=_site_frac_key)
         sites = [sites[i] for i in order]
 
-    return sites
+    return sites, plugin_vertices
 
 
 def get_hollow_sites_for_adatoms(

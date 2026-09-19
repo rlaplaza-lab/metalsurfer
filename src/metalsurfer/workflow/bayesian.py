@@ -303,6 +303,7 @@ def process_molecule_bayesian(
     skip_workload_autotune: bool = False,
     saturation_reuse: bool = False,
     site_context: SiteContext | None = None,
+    debug_sites_step: int | None = None,
 ) -> MoleculeScreenOutcome:
     """Bayesian-optimisation-guided placement screening for one molecule.
 
@@ -346,6 +347,10 @@ def process_molecule_bayesian(
     saturation_reuse
         Reuse the slab+adsorbate autobatcher across acquisition batches
         (default False; saturation callers pass True).
+    site_context
+        Pre-resolved site catalog (optional).
+    debug_sites_step
+        Saturation step index for ``debug_write_sites`` filenames (optional).
     """
     if reference_smiles is None:
         reference_smiles = smiles
@@ -385,6 +390,8 @@ def process_molecule_bayesian(
         conformer_energies=conformer_energies,
         skip_workload_autotune=skip_workload_autotune,
         site_context=site_context,
+        surface_type=surface_type,
+        debug_sites_step=debug_sites_step,
     )
     if ctx is None:
         assert early_failure is not None

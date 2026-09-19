@@ -245,6 +245,8 @@ Key fields:
   guard on the full adsorbate pool before each step advance
 - ``saturation_save_all_placements`` (default ``True``) — disk-heavy; set ``False``
   for large placement counts
+- ``debug_write_sites`` — dump ``sites_plugin_stepNNN.xyz`` /
+  ``sites_final_stepNNN.xyz`` once per coverage step under ``xyz_structures/``
 - ``saturation_max_steps`` — hard cap on coverage steps (default unlimited);
   a step that commits nothing also stops the run (unbound final)
 - ``multi_molecule_saturation`` — competitive saturation: all molecules screened each

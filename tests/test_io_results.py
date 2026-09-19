@@ -12,6 +12,7 @@ from metalsurfer.io_results import (
     _merge_preserving_existing_molecules,
     _write_clean_xyz,
     _write_run_metadata_file,
+    _write_site_overlay_xyz,
 )
 
 
@@ -126,5 +127,51 @@ def test_write_clean_xyz_drops_stale_adsorbate_info(tmp_path):
     assert not adsorbate_warnings
 
     assert out.exists()
+    read_back = read(str(out))
+    assert len(read_back) == len(slab)
+
+
+def test_write_site_overlay_xyz_appends_z0_markers(tmp_path):
+    import numpy as np
+
+    slab = fcc111("Cu", size=(2, 2, 2), a=3.6, vacuum=5.0)
+    n_slab = len(slab)
+    markers = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=float)
+    out = tmp_path / "sites.xyz"
+    _write_site_overlay_xyz(slab, markers, out)
+
+    read_back = read(str(out))
+    assert len(read_back) == n_slab + 2
+    numbers = read_back.get_atomic_numbers()
+    assert np.all(numbers[n_slab:] == 0)
+    np.testing.assert_allclose(read_back.get_positions()[n_slab:], markers)
+    np.testing.assert_allclose(read_back.cell, slab.cell)
+
+
+def test_write_debug_site_overlays_step_suffix(tmp_path):
+    import numpy as np
+
+    from metalsurfer.io_results import _write_debug_site_overlays
+
+    slab = fcc111("Cu", size=(2, 2, 2), a=3.6, vacuum=5.0)
+    markers = np.array([[1.0, 2.0, 3.0]], dtype=float)
+    _write_debug_site_overlays(
+        slab,
+        plugin_xyz=markers,
+        final_xyz=markers,
+        xyz_dir=tmp_path,
+        step=2,
+    )
+    assert (tmp_path / "sites_plugin_step002.xyz").exists()
+    assert (tmp_path / "sites_final_step002.xyz").exists()
+    assert not (tmp_path / "sites_plugin.xyz").exists()
+
+
+def test_write_site_overlay_xyz_empty_positions_writes_substrate_only(tmp_path):
+    import numpy as np
+
+    slab = fcc111("Cu", size=(2, 2, 2), a=3.6, vacuum=5.0)
+    out = tmp_path / "empty_sites.xyz"
+    _write_site_overlay_xyz(slab, np.empty((0, 3), dtype=float), out)
     read_back = read(str(out))
     assert len(read_back) == len(slab)

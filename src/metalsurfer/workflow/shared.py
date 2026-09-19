@@ -26,6 +26,7 @@ from ..config import AdsorptionConfig, resolved_bo_eval_budget
 from ..conformers import create_conformers_from_smiles
 from ..exceptions import OptimizationError
 from ..filters import _adsorbate_surface_min_distance, filter_results
+from ..io_results import _write_debug_site_overlays
 from ..ml.schema import PlacementRecord
 from ..models import (
     BOStepMemory,
@@ -70,6 +71,44 @@ from ..surface_prep.freeze import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _dump_debug_sites_if_enabled(
+    slab: Atoms,
+    site_context: SiteContext,
+    config: AdsorptionConfig,
+    surface_type: str,
+    *,
+    step: int | None = None,
+) -> None:
+    """Write plugin/final site overlays when ``debug_write_sites`` is set."""
+    if not config.debug_write_sites:
+        return
+    plugin_xyz = (
+        np.asarray(site_context.plugin_vertices, dtype=float).reshape(-1, 3)
+        if site_context.plugin_vertices is not None
+        else np.empty((0, 3), dtype=float)
+    )
+    final_sites = site_context.clustered_sites or []
+    final_xyz = (
+        np.asarray([s.xyz for s in final_sites], dtype=float).reshape(-1, 3)
+        if final_sites
+        else np.empty((0, 3), dtype=float)
+    )
+    xyz_dir = results_dir_for(surface_type) / "xyz_structures"
+    _write_debug_site_overlays(
+        slab,
+        plugin_xyz=plugin_xyz,
+        final_xyz=final_xyz,
+        xyz_dir=xyz_dir,
+        step=step,
+    )
+    logger.info(
+        "Wrote site debug XYZ (%d plugin, %d final) to %s",
+        len(plugin_xyz),
+        len(final_xyz),
+        xyz_dir,
+    )
 
 
 def adsorption_ranking_energy(
@@ -994,6 +1033,8 @@ def _prepare_molecule_screening(
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
     site_context: SiteContext | None = None,
+    surface_type: str = "manual",
+    debug_sites_step: int | None = None,
 ) -> tuple[MoleculeScreeningContext | None, FailureSummary | None]:
     """Shared preamble for standard and BO molecule screening.
 
@@ -1051,11 +1092,22 @@ def _prepare_molecule_screening(
         full_slab=slab.atoms,
         config=config,
     )
+    resolved_sites_here = site_context is None
     if site_context is None:
         site_context = resolve_site_context_for_sampling(
             slab_for_sites,
             config,
             symmetry_broken=skip_orbits,
+        )
+    # Binding resolves here; saturation multi-mol dumps once per step at the
+    # shared resolve site so we do not rewrite the same overlays per molecule.
+    if resolved_sites_here:
+        _dump_debug_sites_if_enabled(
+            slab_for_sites,
+            site_context,
+            config,
+            surface_type,
+            step=debug_sites_step,
         )
     if skip_orbits:
         site_context = site_context_for_occupied_surface(site_context)

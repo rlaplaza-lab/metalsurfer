@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 import pandas as pd
 from ase import Atoms
 
@@ -1021,6 +1022,42 @@ def _write_clean_xyz(atoms: Atoms, filename: str) -> None:
     # it with a UserWarning anyway, so remove it here to keep output clean.
     atoms_copy.info.pop("adsorbate_info", None)
     atoms_copy.write(filename, format="extxyz")
+
+
+def _write_site_overlay_xyz(
+    slab: Atoms,
+    positions: np.ndarray | Sequence[Sequence[float]],
+    filename: str | Path,
+) -> None:
+    """Write *slab* with atomic-number-0 markers at *positions* as extxyz."""
+    overlay = slab.copy()
+    overlay.calc = None
+    overlay.info.pop("adsorbate_info", None)
+    coords = np.asarray(positions, dtype=float).reshape(-1, 3)
+    if len(coords) > 0:
+        overlay.extend(
+            Atoms(numbers=np.zeros(len(coords), dtype=int), positions=coords)
+        )
+    _write_clean_xyz(overlay, str(filename))
+
+
+def _write_debug_site_overlays(
+    slab: Atoms,
+    *,
+    plugin_xyz: np.ndarray | Sequence[Sequence[float]],
+    final_xyz: np.ndarray | Sequence[Sequence[float]],
+    xyz_dir: Path | str,
+    step: int | None = None,
+) -> None:
+    """Write ``sites_plugin*.xyz`` / ``sites_final*.xyz`` overlays under *xyz_dir*.
+
+    Binding uses unsuffixed names; saturation passes *step* for
+    ``_stepNNN`` suffixes so each coverage step keeps its own dump.
+    """
+    suffix = f"_step{int(step):03d}" if step is not None else ""
+    out = Path(xyz_dir)
+    _write_site_overlay_xyz(slab, plugin_xyz, out / f"sites_plugin{suffix}.xyz")
+    _write_site_overlay_xyz(slab, final_xyz, out / f"sites_final{suffix}.xyz")
 
 
 def _saturation_molecule_label(molecules: Sequence[str]) -> str:
