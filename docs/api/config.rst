@@ -226,6 +226,13 @@ Site detection
    (``0`` = coarse grid only). Larger values densify locally around surviving
    basins without a hard site-count cap.
 
+``adaptive_grid_nms_framework_scale``
+   **Type:** ``float`` · **Default:** ``0.50``
+
+   Floor on the adaptive-grid NMS merge radius as a fraction of framework
+   median nearest-neighbour distance. Lower values allow denser catalogs;
+   higher values keep metal catalogs closer to topology site counts.
+
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)
 

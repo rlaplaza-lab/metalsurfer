@@ -369,6 +369,8 @@ _TOPOLOGY_SOURCE_TO_TYPE = {
     "topology_hollow": "hollow",
     "atop_injected": "atop",
 }
+# Only these sources may derive site_type from support-atom count.
+_SUPPORT_COUNT_TYPED_SOURCES = frozenset({"adaptive_grid"})
 
 
 def site_env_fingerprint(
@@ -491,11 +493,15 @@ def _classify_vertices(
     )
     pbc = np.asarray(ctx.pbc, dtype=bool)
 
-    # 1) topology_* / atop_injected  2) non-empty support  3) Delaunay / distance-ratio
     classifications: list[tuple[str, tuple[int, ...]] | None] = [None] * n
     for i, hint in enumerate(hints):
         if hint in _TOPOLOGY_SOURCE_TO_TYPE:
-            if ctx.delaunay is not None and hint != "atop_injected":
+            # Defer to Delaunay when supports are empty (Voronoi enrich on slabs).
+            if (
+                ctx.delaunay is not None
+                and hint != "atop_injected"
+                and not provided_atoms[i]
+            ):
                 continue
             site_type = _TOPOLOGY_SOURCE_TO_TYPE[hint]
             atoms_i = tuple(int(j) for j in provided_atoms[i])
@@ -511,7 +517,7 @@ def _classify_vertices(
                     atoms_i = tuple(int(j) for j in np.atleast_1d(idx).ravel())
             classifications[i] = (site_type, atoms_i)
             continue
-        if provided_atoms[i]:
+        if hint in _SUPPORT_COUNT_TYPED_SOURCES and provided_atoms[i]:
             atoms_i = tuple(int(j) for j in provided_atoms[i])
             classifications[i] = (
                 _site_type_from_support_count(len(atoms_i)),
@@ -563,7 +569,8 @@ def _classify_vertices(
         dists = _support_mic_distances(vertices[i], positions, support, cell, pbc)
         side = _side_label_from_normal(normal, material_type=material_type, cell=cell)
         env_fingerprint = site_env_fingerprint(support, symbols, dists, side_label=side)
-        clearance = float(clearances[i]) if clearances is not None else None
+        nn_distance = float(nn_dists[i])
+        clearance = nn_distance if clearances is None else float(clearances[i])
         sites.append(
             Site(
                 xyz=vertices[i].copy(),
@@ -573,7 +580,7 @@ def _classify_vertices(
                 material_type=material_type,
                 site_source=hints[i],
                 env_fingerprint=env_fingerprint,
-                nn_distance=float(nn_dists[i]),
+                nn_distance=nn_distance,
                 hollow_order=(
                     len(support) if site_type == "hollow" and support else None
                 ),

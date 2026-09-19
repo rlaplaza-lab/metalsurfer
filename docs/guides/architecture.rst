@@ -342,7 +342,10 @@ Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi`` /
 ``voronoi_probe_radius``, ``voronoi_max_site_distance``,
 ``top_layer_tolerance``, ``symmetry_tolerance``,
 ``site_equivalence_tolerance``, ``site_classification_method``
-(``auto`` / ``distance_ratio`` / ``delaunay``), ``voronoi_auto_widen``.
+(``auto`` / ``distance_ratio`` / ``delaunay``), ``voronoi_auto_widen``,
+``adaptive_grid_spacing``, ``adaptive_grid_refine_levels``,
+``adaptive_grid_nms_framework_scale``, ``side_policy``, ``n_jobs``.
+See :doc:`configuration` for which knobs apply to which plugin.
 
 **Intentional asymmetries** (not unfinished ports): hybrid topology +
 Delaunay on slabs (pure Voronoi floods GPU with weak candidates); hull +

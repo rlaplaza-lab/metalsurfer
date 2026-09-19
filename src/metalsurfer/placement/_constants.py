@@ -300,10 +300,8 @@ _ADAPTIVE_GRID_NMS_LENGTH_SCALE: float = 0.5
 # Soft per-chunk work budget: each shell/refine chunk keeps
 # n_seeds × n_offsets ≤ this (all atoms are still seeded).
 _ADAPTIVE_GRID_WORK_BUDGET: int = 250_000
-# Floor merge radius as a fraction of framework median NN.
-# ~0.65 keeps metal NP catalogs near topology counts while MOF (short NN)
-# stays resolution-limited by the exposed ``adaptive_grid_spacing`` knob.
-_ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE: float = 0.65
+# Floor merge radius as a fraction of framework median NN (adaptive_grid default).
+_ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE: float = 0.50
 # Floor characteristic length before deriving h0 / refine depth (legacy scale path).
 _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE: float = 0.25
 # Bin-prethin before NMS when the coarse cloud exceeds this many points.

@@ -224,6 +224,7 @@ def adaptive_grid_spacing(
     initial_spacing: float | None = None,
     max_levels: int | None = None,
     framework_median_nn: float | None = None,
+    nms_framework_scale: float | None = None,
 ) -> AdaptiveGridSpacing:
     """Return coarse/fine spacing and refine depth for the adaptive grid.
 
@@ -241,6 +242,15 @@ def adaptive_grid_spacing(
         if max_levels is not None
         else int(_ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS)
     )
+    nms_scale = (
+        float(nms_framework_scale)
+        if nms_framework_scale is not None
+        else float(_ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE)
+    )
+    if not np.isfinite(nms_scale) or nms_scale <= 0.0:
+        raise ValueError(
+            f"nms_framework_scale must be finite and > 0, got {nms_scale!r}"
+        )
 
     if initial_spacing is not None:
         h0 = float(initial_spacing)
@@ -285,7 +295,7 @@ def adaptive_grid_spacing(
         _VORONOI_DEDUP_TOLERANCE,
     )
     if np.isfinite(nn) and nn > 0.0:
-        merge = max(merge, _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE * nn)
+        merge = max(merge, nms_scale * nn)
     return AdaptiveGridSpacing(
         characteristic_length=float(L),
         initial_spacing=float(h0),
@@ -1360,6 +1370,7 @@ def generate_adaptive_grid_sites(
     framework_radii: np.ndarray | None = None,
     symbols: Sequence[str] | None = None,
     side_policy: SidePolicy = "positive",
+    nms_framework_scale: float | None = None,
 ) -> AdaptiveGridResult:
     """Enumerate adaptive-grid candidates with support / clearance metadata.
 
@@ -1400,6 +1411,7 @@ def generate_adaptive_grid_sites(
         initial_spacing=initial_spacing,
         max_levels=max_levels,
         framework_median_nn=median_nn,
+        nms_framework_scale=nms_framework_scale,
     )
     # Deferred: site_plugins.__init__ imports AdaptiveGridGenerator → this module.
     from .site_plugins.helpers import periodic_accessibility_tree

@@ -81,6 +81,7 @@ class TopologySlabGenerator:
                 max_distance=max_site_distance,
                 enrich=enrich,
                 symbols=symbols,
+                n_jobs=int(ctx.n_jobs),
             )
         source_hints = ["voronoi"] * len(vertices)
         atom_indices: list[tuple[int, ...]] = [
@@ -105,6 +106,7 @@ class TopologySlabGenerator:
             topo_vertices,
             topo_dists,
             topo_sources,
+            topo_atoms,
             topology_primary_delaunay,
             topology_expanded_xy,
             topology_expanded_origin,
@@ -147,6 +149,7 @@ class TopologySlabGenerator:
                 cell=cell,
                 pbc=pbc,
                 atom_indices=atom_indices,
+                new_atom_indices=topo_atoms,
             )
 
         return SiteCandidateBatch(

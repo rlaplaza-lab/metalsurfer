@@ -27,8 +27,8 @@ from ..conftest import (
 TEST_SEED = 0
 
 _GOLDEN_SLAB_UNIFIED_SITE_COUNT = 126
-
-_GOLDEN_SLAB_SITE_TYPE_MULTISET = {"atop": 16, "bridge": 78, "hollow": 32}
+# Topology-owned typing (Delaunay no longer rewrites topology_* labels).
+_GOLDEN_SLAB_SITE_TYPE_MULTISET = {"atop": 16, "bridge": 48, "hollow": 62}
 
 _LOCAL_SITE_MATERIAL_PARAMS = [
     ("nanoparticle", make_nanoparticle, 20, (1.5, 2.5), 20),

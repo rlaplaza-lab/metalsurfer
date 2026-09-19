@@ -1327,18 +1327,16 @@ def _run_multi_molecule_saturation(
         per_molecule_bo_transfer: dict[str, BOTransferInfo] = {}
         new_bo_memory_raw: dict[str, BOStepMemory | None] = {}
 
-        shared_site_context = None
-        if str(step_config.site_generator) == "adaptive_grid":
-            shared_site_context = resolve_site_context_for_sampling(
-                slab_for_sites,
-                step_config,
-                symmetry_broken=skip_symmetry_for_sampling(
-                    symmetry_broken=symmetry_broken,
-                    slab_for_sites=slab_for_sites,
-                    full_slab=slab.atoms,
-                    config=step_config,
-                ),
-            )
+        shared_site_context = resolve_site_context_for_sampling(
+            slab_for_sites,
+            step_config,
+            symmetry_broken=skip_symmetry_for_sampling(
+                symmetry_broken=symmetry_broken,
+                slab_for_sites=slab_for_sites,
+                full_slab=slab.atoms,
+                config=step_config,
+            ),
+        )
 
         for mol in active_molecules:
             if mol not in budgets:

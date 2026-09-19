@@ -24,6 +24,12 @@ from ._numeric_defaults import (
     STANDARD_TEMPERATURE_K,
 )
 from .models import PlacementSpec
+from .site_plugin_ids import (
+    PLUGIN_ALLOWED_MATERIALS as _SITE_GENERATOR_ALLOWED_MATERIALS,
+)
+from .site_plugin_ids import (
+    PUBLIC_SITE_GENERATORS as _PUBLIC_SITE_GENERATORS,
+)
 
 
 def _default_bo_failure_penalty_overrides() -> dict[str, float]:
@@ -283,20 +289,8 @@ def _check_finite_nonneg(name: str, value: float) -> None:
 CONFORMER_WEIGHTING_OPTIONS: tuple[str, ...] = ("uniform", "boltzmann")
 MATERIAL_TYPE_OPTIONS: tuple[str, ...] = ("slab", "nanoparticle", "porous")
 SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("auto", "distance_ratio", "delaunay")
-SITE_GENERATOR_OPTIONS: tuple[str, ...] = (
-    "auto",
-    "topology",
-    "voronoi",
-    "adaptive_grid",
-)
+SITE_GENERATOR_OPTIONS: tuple[str, ...] = ("auto",) + _PUBLIC_SITE_GENERATORS
 SIDE_POLICY_OPTIONS: tuple[str, ...] = ("all", "positive", "negative", "external")
-
-# Explicit plugins incompatible with certain materials (mirrors site_plugins).
-_SITE_GENERATOR_ALLOWED_MATERIALS: dict[str, frozenset[str]] = {
-    "topology": frozenset({"slab", "nanoparticle"}),
-    "voronoi": frozenset({"slab", "porous"}),
-    "adaptive_grid": frozenset({"slab", "nanoparticle", "porous"}),
-}
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
 BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = (
     "random",
@@ -485,6 +479,9 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
             "adaptive_grid_refine_levels must be a non-negative int, "
             f"got {root.adaptive_grid_refine_levels!r}"
         )
+    _check_positive(
+        "adaptive_grid_nms_framework_scale", root.adaptive_grid_nms_framework_scale
+    )
     if root.site_generator != "auto":
         allowed = _SITE_GENERATOR_ALLOWED_MATERIALS[root.site_generator]
         if root.material_type not in allowed:
@@ -773,6 +770,8 @@ class AdsorptionConfig:
     adaptive_grid_spacing: float = 0.70
     # Refine halvings after the coarse shell (0 = coarse grid only).
     adaptive_grid_refine_levels: int = 0
+    # Floor NMS merge radius as a fraction of framework median NN (adaptive_grid).
+    adaptive_grid_nms_framework_scale: float = 0.50
     # Conformer prior for placement-spec selection.
     # ``"uniform"`` keeps the conformer-agnostic stratified draw (ignores
     # conformer energies). ``"boltzmann"`` (default) allocates spec slots per

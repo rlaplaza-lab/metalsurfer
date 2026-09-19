@@ -123,6 +123,8 @@ def _bench_sites(
     repeats: int = 3,
     adaptive_grid_spacing: float | None = None,
     adaptive_grid_refine_levels: int = 0,
+    adaptive_grid_nms_framework_scale: float | None = None,
+    enrich: bool = True,
     n_jobs: int = _DEFAULT_N_JOBS,
 ):
     times = []
@@ -135,6 +137,8 @@ def _bench_sites(
             site_generator=plugin,
             adaptive_grid_spacing=adaptive_grid_spacing,
             adaptive_grid_refine_levels=adaptive_grid_refine_levels,
+            adaptive_grid_nms_framework_scale=adaptive_grid_nms_framework_scale,
+            enrich=enrich,
             n_jobs=n_jobs,
         )
         times.append(time.perf_counter() - t0)
@@ -241,6 +245,12 @@ def run_site_ab(n_jobs: int = _DEFAULT_N_JOBS) -> None:
                 f"  {denser_label:12s}  n={grid_dense['n']:4d}  "
                 f"t={grid_dense['t_mean'] * 1e3:7.1f}±{grid_dense['t_std'] * 1e3:5.1f} ms"
             )
+        if mat == "porous":
+            vor_plain = _bench_sites(atoms, mat, "voronoi", enrich=False, n_jobs=n_jobs)
+            print(
+                f"  {'voronoi-noen':12s}  n={vor_plain['n']:4d}  "
+                f"t={vor_plain['t_mean'] * 1e3:7.1f}±{vor_plain['t_std'] * 1e3:5.1f} ms"
+            )
         print(f"  overlap {hit_label}: {hit * 100:.1f}%")
         print(
             f"  speed vs baseline: {speed:.2f}x "
@@ -258,6 +268,44 @@ def run_site_ab(n_jobs: int = _DEFAULT_N_JOBS) -> None:
             f"{label:22s} {base['n']:6d} {grid['n']:6d} "
             f"{base['t_mean'] * 1e3:7.1f}ms {grid['t_mean'] * 1e3:7.1f}ms "
             f"{speed:5.2f}x {hit * 100:6.1f}%"
+        )
+
+    # Knob sweep on flat Ru + MOF (spacing / refine / NMS floor).
+    print("\n" + "=" * 72)
+    print("Adaptive-grid knob sweep (Ru flat + RUBTAK01)")
+    print("=" * 72)
+    ru = hcp0001("Ru", size=(3, 3, 3), vacuum=12.0)
+    ru.pbc = True
+    for spacing in (0.50, 0.70):
+        for refine in (0, 1):
+            for nms in (0.50, 0.65):
+                r = _bench_sites(
+                    ru,
+                    "slab",
+                    "adaptive_grid",
+                    adaptive_grid_spacing=spacing,
+                    adaptive_grid_refine_levels=refine,
+                    adaptive_grid_nms_framework_scale=nms,
+                    n_jobs=n_jobs,
+                    repeats=2,
+                )
+                print(
+                    f"  Ru spacing={spacing:.2f} refine={refine} nms={nms:.2f} "
+                    f"→ n={r['n']:4d}  t={r['t_mean'] * 1e3:6.1f} ms"
+                )
+    for spacing in (0.50, 0.70):
+        r = _bench_sites(
+            mof,
+            "porous",
+            "adaptive_grid",
+            adaptive_grid_spacing=spacing,
+            adaptive_grid_refine_levels=0,
+            n_jobs=n_jobs,
+            repeats=2,
+        )
+        print(
+            f"  MOF spacing={spacing:.2f} refine=0 "
+            f"→ n={r['n']:4d}  t={r['t_mean'] * 1e3:6.1f} ms"
         )
 
 
@@ -318,6 +366,9 @@ def _run_campaign(
             site_generator=config.site_generator,
             adaptive_grid_spacing=float(config.adaptive_grid_spacing),
             adaptive_grid_refine_levels=int(config.adaptive_grid_refine_levels),
+            adaptive_grid_nms_framework_scale=float(
+                config.adaptive_grid_nms_framework_scale
+            ),
             n_jobs=config.n_jobs,
         )
     )

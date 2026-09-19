@@ -113,6 +113,7 @@ def _unique_sites_cache_key(
             b"\x00ags\x00"
             + struct.pack("<d", float(config.adaptive_grid_spacing))
             + struct.pack("<i", int(config.adaptive_grid_refine_levels))
+            + struct.pack("<d", float(config.adaptive_grid_nms_framework_scale))
             + b"\x00gss\x00"
             + _pack_optional_float(grid_spacing_scale)
         )
@@ -380,6 +381,9 @@ def _get_unique_sites_for_specs(
         grid_spacing_scale=grid_spacing_scale,
         adaptive_grid_spacing=float(config.adaptive_grid_spacing),
         adaptive_grid_refine_levels=int(config.adaptive_grid_refine_levels),
+        adaptive_grid_nms_framework_scale=float(
+            config.adaptive_grid_nms_framework_scale
+        ),
         n_jobs=int(config.n_jobs),
         side_policy=config.side_policy,
     )

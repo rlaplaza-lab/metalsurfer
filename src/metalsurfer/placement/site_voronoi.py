@@ -1,7 +1,8 @@
 """Voronoi site generation, topology candidates, ridge enrichment, and classification."""
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
 
 import numpy as np
@@ -21,6 +22,7 @@ from ._constants import (
     _SITE_CLASSIFICATION_NEIGHBOURS,
     _VORONOI_DEDUP_TOLERANCE,
 )
+from ._parallel import resolve_materialize_workers
 from .site_coords import (
     _build_periodic_images,
     _cart_to_frac,
@@ -121,6 +123,7 @@ def _voronoi_sites(
     enrich: bool = True,
     *,
     symbols: list[str],
+    n_jobs: int = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Voronoi vertices accessible for adsorption, optionally enriched."""
     if len(positions) < 4:
@@ -219,6 +222,7 @@ def _voronoi_sites(
         n_origin=len(positions),
         inv_cell=inv_cell,
         dedup_offsets=dedup_offsets,
+        n_jobs=n_jobs,
     )
     return enriched_verts, enriched_dists
 
@@ -231,6 +235,7 @@ def _voronoi_sites(
 class _SlabTopologyResult(NamedTuple):
     """Output of :func:`_generate_slab_topology_sites`.
 
+    *atom_indices* are primary-cell support atoms for each kept vertex.
     *exp_xy* / *exp_origin* / *exp_tri* are the ±1 a/b expanded scratchpad
     (for classification reuse), or ``None`` when unavailable.
     """
@@ -238,6 +243,7 @@ class _SlabTopologyResult(NamedTuple):
     vertices: np.ndarray
     nn_dists: np.ndarray
     sources: list[str]
+    atom_indices: list[tuple[int, ...]]
     primary_delaunay: Delaunay | None
     exp_xy: np.ndarray | None
     exp_origin: list[int] | None
@@ -271,9 +277,10 @@ def _generate_slab_topology_sites(
     """
     empty_vertices = np.empty((0, 3), dtype=float)
     empty_dists = np.empty(0, dtype=float)
+    empty_atoms: list[tuple[int, ...]] = []
     if len(top_atom_indices) == 0:
         return _SlabTopologyResult(
-            empty_vertices, empty_dists, [], None, None, None, None
+            empty_vertices, empty_dists, [], empty_atoms, None, None, None, None
         )
 
     n_hat = _slab_normal(cell)
@@ -283,8 +290,13 @@ def _generate_slab_topology_sites(
     candidates: list[np.ndarray] = []
     candidate_dists: list[np.ndarray] = []
     candidate_sources: list[str] = []
+    candidate_atoms: list[tuple[int, ...]] = []
 
-    def _add_candidates_batch(points: np.ndarray, source: str) -> None:
+    def _add_candidates_batch(
+        points: np.ndarray,
+        source: str,
+        atom_ids: list[tuple[int, ...]],
+    ) -> None:
         if len(points) == 0:
             return
         pts = np.asarray(points, dtype=float)
@@ -295,9 +307,11 @@ def _generate_slab_topology_sites(
         keep = (probe_radius <= dists) & (dists <= max_distance)
         if not np.any(keep):
             return
+        kept = np.nonzero(keep)[0]
         candidates.append(pts[keep])
         candidate_dists.append(dists[keep])
-        candidate_sources.extend([source] * int(np.count_nonzero(keep)))
+        candidate_sources.extend([source] * len(kept))
+        candidate_atoms.extend(atom_ids[i] for i in kept)
 
     # Single exit: assemble the (deduplicated) result from everything gathered.
     def _finalize() -> _SlabTopologyResult:
@@ -306,6 +320,7 @@ def _generate_slab_topology_sites(
                 empty_vertices,
                 empty_dists,
                 [],
+                empty_atoms,
                 primary_delaunay,
                 exp2d,
                 expanded_origin_local_index,
@@ -321,6 +336,7 @@ def _generate_slab_topology_sites(
             cand_arr[keep],
             cand_dist[keep],
             [candidate_sources[i] for i in kept_idx],
+            [candidate_atoms[i] for i in kept_idx],
             primary_delaunay,
             exp2d,
             expanded_origin_local_index,
@@ -329,7 +345,8 @@ def _generate_slab_topology_sites(
 
     # Atop candidates: always useful and cheap.
     atop_positions = top_positions + float(site_height) * n_hat
-    _add_candidates_batch(atop_positions, "topology_atop")
+    atop_atoms = [(int(ai),) for ai in top_atom_indices]
+    _add_candidates_batch(atop_positions, "topology_atop", atop_atoms)
 
     top_positions_2d = _project_to_slab_plane(top_positions, cell)
     if len(top_positions) < 2:
@@ -377,24 +394,33 @@ def _generate_slab_topology_sites(
 
     if exp_tri is not None:
         bridge_points: list[np.ndarray] = []
+        bridge_atoms: list[tuple[int, ...]] = []
         hollow_points: list[np.ndarray] = []
+        hollow_atoms: list[tuple[int, ...]] = []
         if expanded_origin_local_index is None:
             raise ValueError("expanded origin indices required for bridge/hollow")
-        for kind, _ids, pt in _iter_unique_simplex_sites(
+        for kind, ids, pt in _iter_unique_simplex_sites(
             exp_tri.simplices, expanded_origin_local_index, exp3d
         ):
             lifted = pt + float(site_height) * n_hat
+            global_ids = tuple(int(top_atom_indices[i]) for i in ids)
             if kind == "bridge":
                 bridge_points.append(lifted)
+                bridge_atoms.append(global_ids)
             else:
                 hollow_points.append(lifted)
+                hollow_atoms.append(global_ids)
         if bridge_points:
             _add_candidates_batch(
-                np.asarray(bridge_points, dtype=float), "topology_bridge"
+                np.asarray(bridge_points, dtype=float),
+                "topology_bridge",
+                bridge_atoms,
             )
         if hollow_points:
             _add_candidates_batch(
-                np.asarray(hollow_points, dtype=float), "topology_hollow"
+                np.asarray(hollow_points, dtype=float),
+                "topology_hollow",
+                hollow_atoms,
             )
 
     return _finalize()
@@ -403,6 +429,52 @@ def _generate_slab_topology_sites(
 # ---------------------------------------------------------------------------
 # Ridge-based geodesic enrichment
 # ---------------------------------------------------------------------------
+
+
+def _enrich_edge_candidates(
+    edge_chunk: Sequence[tuple[int, int]],
+    *,
+    vertices: np.ndarray,
+    support_sets: list[set[int]],
+    target_spacing: float,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    inv_cell: np.ndarray | None,
+) -> list[np.ndarray]:
+    """Subdivide a chunk of Voronoi edges into enrichment sample points."""
+    candidate_pts: list[np.ndarray] = []
+    for k0, k1 in edge_chunk:
+        if not support_sets[k0] & support_sets[k1]:
+            continue
+
+        v0, v1 = vertices[k0], vertices[k1]
+        if np.any(pbc):
+            f0 = _cart_to_frac(v0.reshape(1, 3), cell, inv_cell=inv_cell)[0]
+            f1 = _cart_to_frac(v1.reshape(1, 3), cell, inv_cell=inv_cell)[0]
+            df = _minimum_image_fractional_delta((f1 - f0).reshape(1, 3), pbc)[0]
+            edge_vec = _frac_to_cart(df.reshape(1, 3), cell)[0]
+        else:
+            edge_vec = v1 - v0
+
+        edge_len = float(np.linalg.norm(edge_vec))
+        if edge_len <= target_spacing:
+            continue
+
+        n_subdivisions = min(
+            int(edge_len / target_spacing), _ENRICHMENT_MAX_SUBDIVISIONS
+        )
+        if n_subdivisions < 1:
+            continue
+
+        for s in range(1, n_subdivisions + 1):
+            t = s / (n_subdivisions + 1)
+            candidate = v0 + t * edge_vec
+            if np.any(pbc):
+                candidate = _wrap_cartesian(
+                    candidate.reshape(1, 3), cell, pbc, inv_cell=inv_cell
+                )[0]
+            candidate_pts.append(candidate)
+    return candidate_pts
 
 
 def _enrich_along_ridges(
@@ -420,6 +492,7 @@ def _enrich_along_ridges(
     n_origin: int | None = None,
     inv_cell: np.ndarray | None = None,
     dedup_offsets: list[np.ndarray] | None = None,
+    n_jobs: int = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Subdivide long admissible Voronoi edges and re-check accessibility."""
     n_kept = len(vertices)
@@ -464,41 +537,41 @@ def _enrich_along_ridges(
     if not edges:
         return vertices, nn_dists
 
-    candidate_pts: list[np.ndarray] = []
     if np.any(pbc) and inv_cell is None:
         inv_cell = np.linalg.inv(cell)
 
-    for k0, k1 in sorted(edges):
-        if not support_sets[k0] & support_sets[k1]:
-            continue
-
-        v0, v1 = vertices[k0], vertices[k1]
-        if np.any(pbc):
-            f0 = _cart_to_frac(v0.reshape(1, 3), cell, inv_cell=inv_cell)[0]
-            f1 = _cart_to_frac(v1.reshape(1, 3), cell, inv_cell=inv_cell)[0]
-            df = _minimum_image_fractional_delta((f1 - f0).reshape(1, 3), pbc)[0]
-            edge_vec = _frac_to_cart(df.reshape(1, 3), cell)[0]
-        else:
-            edge_vec = v1 - v0
-
-        edge_len = float(np.linalg.norm(edge_vec))
-        if edge_len <= target_spacing:
-            continue
-
-        n_subdivisions = min(
-            int(edge_len / target_spacing), _ENRICHMENT_MAX_SUBDIVISIONS
+    edge_list = sorted(edges)
+    n_workers = resolve_materialize_workers(n_jobs, n_tasks=len(edge_list))
+    if n_workers <= 1 or len(edge_list) < 32:
+        candidate_pts = _enrich_edge_candidates(
+            edge_list,
+            vertices=vertices,
+            support_sets=support_sets,
+            target_spacing=target_spacing,
+            cell=cell,
+            pbc=pbc,
+            inv_cell=inv_cell,
         )
-        if n_subdivisions < 1:
-            continue
-
-        for s in range(1, n_subdivisions + 1):
-            t = s / (n_subdivisions + 1)
-            candidate = v0 + t * edge_vec
-            if np.any(pbc):
-                candidate = _wrap_cartesian(
-                    candidate.reshape(1, 3), cell, pbc, inv_cell=inv_cell
-                )[0]
-            candidate_pts.append(candidate)
+    else:
+        chunk = max(1, (len(edge_list) + n_workers - 1) // n_workers)
+        chunks = [edge_list[i : i + chunk] for i in range(0, len(edge_list), chunk)]
+        candidate_pts = []
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = [
+                pool.submit(
+                    _enrich_edge_candidates,
+                    ch,
+                    vertices=vertices,
+                    support_sets=support_sets,
+                    target_spacing=target_spacing,
+                    cell=cell,
+                    pbc=pbc,
+                    inv_cell=inv_cell,
+                )
+                for ch in chunks
+            ]
+            for fut in futures:
+                candidate_pts.extend(fut.result())
 
     if not candidate_pts:
         return vertices, nn_dists
