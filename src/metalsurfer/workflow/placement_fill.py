@@ -252,12 +252,15 @@ def fill_materialized_placements(
     descriptors: list[PlacementDescriptor] = []
     failures: list[PlacementFailureEvent] = []
     failed_keys: set[tuple] = set()
+    failed_site_indices: set[int] = set()
     last_spec_by_index: dict[int, PlacementSpec] = {}
     next_placement_index = 0
     attempts_used = 0
 
     def _filter_failed(spec: PlacementSpec) -> bool:
         if placement_spec_key(spec) in failed_keys:
+            return False
+        if int(spec.site_index) in failed_site_indices:
             return False
         if config.placement_filter is not None:
             return bool(config.placement_filter(spec))
@@ -306,6 +309,7 @@ def fill_materialized_placements(
             failed_spec = last_spec_by_index.get(fail.placement_id)
             if failed_spec is not None:
                 failed_keys.add(placement_spec_key(failed_spec))
+                failed_site_indices.add(int(failed_spec.site_index))
         failures.extend(new_failures)
 
         take = min(effective_target - len(combined), len(new_combined))

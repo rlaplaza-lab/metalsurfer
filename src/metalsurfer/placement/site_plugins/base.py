@@ -12,39 +12,39 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
 
+from ...site_plugin_ids import (
+    AUTO_SITE_GENERATOR_DEFAULTS,
+    PLUGIN_ALLOWED_MATERIALS,
+    PUBLIC_SITE_GENERATORS,
+    SITE_GENERATORS,
+)
 from .._material import validate_material_type
 
 if TYPE_CHECKING:
     from ase import Atoms
     from scipy.spatial import Delaunay, KDTree
 
-# All factory-resolvable plugin ids.
-SITE_GENERATORS: tuple[str, ...] = ("topology", "voronoi", "adaptive_grid")
-# Plugins selectable via AdsorptionConfig / YAML.
-PUBLIC_SITE_GENERATORS: tuple[str, ...] = ("topology", "voronoi", "adaptive_grid")
-
-_PLUGIN_ALLOWED_MATERIALS: dict[str, frozenset[str]] = {
-    "topology": frozenset({"slab", "nanoparticle"}),
-    "voronoi": frozenset({"slab", "porous"}),
-    "adaptive_grid": frozenset({"slab", "nanoparticle", "porous"}),
-}
-
-_AUTO_DEFAULTS: dict[str, str] = {
-    "slab": "topology",
-    "nanoparticle": "topology",
-    "porous": "voronoi",
-}
+# Re-export registry constants for plugin callers / tests.
+__all__ = [
+    "PLUGIN_ALLOWED_MATERIALS",
+    "PUBLIC_SITE_GENERATORS",
+    "SITE_GENERATORS",
+    "SiteCandidateBatch",
+    "SiteGenerationContext",
+    "SiteGenerator",
+    "empty_candidate_batch",
+    "resolved_site_generator_name",
+    "slice_candidate_arrays",
+]
 
 
 @dataclass
 class SiteCandidateBatch:
     """Raw candidate sites from a plugin before shared post-processing.
 
-    Core: ``vertices``, ``nn_dists`` (centre-to-centre), ``source_hints``,
-    ``atom_indices``. Optional enrichment: ``normals``, ``clearances``.
-    Fingerprints and tangent frames are built in shared classify.
-    Topology-only Delaunay / reuse fields stay unused by Voronoi and
-    adaptive_grid.
+    Core: ``vertices``, ``nn_dists``, ``source_hints``, ``atom_indices``.
+    Optional enrichment: ``normals``, ``clearances``. Fingerprints and
+    tangent frames are built in shared classify.
     """
 
     vertices: np.ndarray
@@ -85,6 +85,7 @@ class SiteGenerationContext:
     grid_spacing_scale: float | None = None
     adaptive_grid_spacing: float | None = None
     adaptive_grid_refine_levels: int = 0
+    adaptive_grid_nms_framework_scale: float | None = None
     n_jobs: int = -2
     side_policy: Literal["all", "positive", "negative", "external"] = "positive"
 
@@ -119,13 +120,13 @@ def resolved_site_generator_name(name: str, material_type: str) -> str:
     """Resolve ``auto`` / explicit name to a registered plugin id (never ``auto``)."""
     validate_material_type(material_type)
     if name == "auto":
-        return _AUTO_DEFAULTS[material_type]
+        return AUTO_SITE_GENERATOR_DEFAULTS[material_type]
     if name not in SITE_GENERATORS:
         raise ValueError(
             f"Unknown site_generator {name!r}; "
             f"expected one of {('auto',) + SITE_GENERATORS}"
         )
-    allowed = _PLUGIN_ALLOWED_MATERIALS[name]
+    allowed = PLUGIN_ALLOWED_MATERIALS[name]
     if material_type not in allowed:
         raise ValueError(
             f"site_generator={name!r} is incompatible with "
@@ -133,3 +134,37 @@ def resolved_site_generator_name(name: str, material_type: str) -> str:
             f"{sorted(allowed)}"
         )
     return name
+
+
+def slice_candidate_arrays(
+    vertices: np.ndarray,
+    nn_dists: np.ndarray,
+    source_hints: list[str],
+    atom_indices: list[tuple[int, ...]],
+    keep_mask: np.ndarray,
+    *,
+    normals: np.ndarray | None = None,
+    clearances: np.ndarray | None = None,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    list[str],
+    list[tuple[int, ...]],
+    np.ndarray | None,
+    np.ndarray | None,
+]:
+    """Slice core batch arrays and optional enrichment by *keep_mask*."""
+    mask = np.asarray(keep_mask, dtype=bool)
+    kept = np.nonzero(mask)[0]
+    out_normals = None if normals is None else np.asarray(normals, dtype=float)[mask]
+    out_clearances = (
+        None if clearances is None else np.asarray(clearances, dtype=float)[mask]
+    )
+    return (
+        np.asarray(vertices, dtype=float)[mask],
+        np.asarray(nn_dists, dtype=float)[mask],
+        [source_hints[i] for i in kept],
+        [atom_indices[i] for i in kept],
+        out_normals,
+        out_clearances,
+    )

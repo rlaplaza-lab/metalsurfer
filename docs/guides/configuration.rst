@@ -153,9 +153,20 @@ incompatible ``site_generator`` / ``material_type`` pairs are rejected.
 ``auto``. Density is an exposed coarse Cartesian shell increment
 (``adaptive_grid_spacing``, default ``0.70`` Å) plus optional refine halvings
 (``adaptive_grid_refine_levels``, default ``0``). NMS merge radius tracks that
-spacing and floors against framework median nearest-neighbour distance (no
-hard site-count cap). ``side_policy`` (default ``"positive"``) selects which
-slab face / exposure half-space adaptive-grid keeps.
+spacing and floors against framework median nearest-neighbour distance via
+``adaptive_grid_nms_framework_scale`` (default ``0.50``; no hard site-count
+cap). ``side_policy`` (default ``"positive"``) selects which slab face /
+exposure half-space adaptive-grid keeps.
+
+Plugin knobs: ``voronoi_*``, ``side_policy``, ``adaptive_grid_*``, and ``n_jobs``
+(adaptive_grid shells and Voronoi ridge enrich). Shared post-process:
+``site_classification_method``, ``site_equivalence_tolerance``,
+``symmetry_tolerance``.
+
+Keep ``site_generator="auto"`` for production. Opt into ``adaptive_grid`` for
+denser near-atom metal sampling; keep Voronoi (``auto``) for MOF pore centres.
+Keep ``voronoi_site_enrichment=True``. Avoid ``adaptive_grid_spacing`` below
+``0.70`` on MOFs.
 
 Site uniqueness and sampling
 ----------------------------

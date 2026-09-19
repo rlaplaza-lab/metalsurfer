@@ -98,19 +98,25 @@ def test_get_unified_sites_slab_atop_injection_wraps_under_pbc(monkeypatch):
 
     def _topo_without_atop(*args, **kwargs):
         result = real_topo(*args, **kwargs)
-        # Topology returns (verts, dists, sources, primary_tri, exp_xy, exp_origin, exp_tri).
-        verts, dists, sources = result[0], result[1], result[2]
-        rest = result[3:]
+        # Topology returns (verts, dists, sources, atom_indices, tri, exp...).
+        verts, dists, sources, atoms = result[0], result[1], result[2], result[3]
+        rest = result[4:]
         keep = [i for i, src in enumerate(sources) if src != "topology_atop"]
         if not keep:
             empty = (
                 np.zeros((0, 3), dtype=float),
                 np.zeros(0, dtype=float),
                 [],
+                [],
             )
             return (*empty, *rest) if rest else empty
         idx = np.asarray(keep, dtype=int)
-        trimmed = (verts[idx], dists[idx], [sources[i] for i in keep])
+        trimmed = (
+            verts[idx],
+            dists[idx],
+            [sources[i] for i in keep],
+            [atoms[i] for i in keep],
+        )
         return (*trimmed, *rest) if rest else trimmed
 
     def _counting_wrap(points, cell, pbc):
@@ -625,8 +631,10 @@ def test_fcc100_site_type_ratios_and_coordination_numbers():
     """fcc100 keeps atop/bridge/hollow with CN 1/2/3.
 
     The library reports fcc100 hollows as 3-fold (``hollow_order == 3``), not
-    4-fold, so CN(hollow) == 3 here. We assert the robust count ratios and the
-    per-type coordination numbers exposed via ``slab_indices``.
+    4-fold: each square is two Delaunay triangles, so hollow count is
+    ``4 * n_top`` under topology-owned typing (two triangles × two
+    periodic images of the square lattice). We assert the count ratios and
+    the per-type coordination numbers exposed via ``slab_indices``.
     """
     slab = fcc100("Cu", (3, 3, 4), vacuum=10.0)
     positions = np.asarray(slab.get_positions(), dtype=float)
@@ -638,7 +646,8 @@ def test_fcc100_site_type_ratios_and_coordination_numbers():
         t: [s for s in sites if s.site_type == t] for t in ("atop", "bridge", "hollow")
     }
     assert len(by_type["atop"]) == n_top
-    assert len(by_type["hollow"]) == 2 * n_top
+    assert len(by_type["bridge"]) == 3 * n_top
+    assert len(by_type["hollow"]) == 4 * n_top
 
     for s in sites:
         if s.site_type == "atop":
@@ -828,6 +837,7 @@ def test_atop_injection_runs_when_voronoi_and_topology_empty_slab(monkeypatch):
         lambda *a, **k: (
             np.empty((0, 3), dtype=float),
             np.empty((0,), dtype=float),
+            [],
             [],
             None,
             None,

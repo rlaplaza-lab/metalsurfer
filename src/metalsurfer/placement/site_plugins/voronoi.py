@@ -72,6 +72,7 @@ class VoronoiGenerator:
             max_distance=max_site_distance,
             enrich=ctx.enrich,
             symbols=ctx.symbols,
+            n_jobs=int(ctx.n_jobs),
         )
         source_hints = ["voronoi"] * len(vertices)
         atom_indices: list[tuple[int, ...]] = [

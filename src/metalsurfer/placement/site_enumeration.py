@@ -62,12 +62,10 @@ from .site_np import (
 from .site_plugins import (
     SiteGenerationContext,
     resolve_site_generator,
+    slice_candidate_arrays,
 )
 from .site_plugins.helpers import (
     PlanarWidenScratch as _PlanarWidenScratch,
-)
-from .site_plugins.helpers import (
-    apply_site_mask as _apply_site_mask,
 )
 from .site_plugins.helpers import (
     bounding_box_cell as _bounding_box_cell,
@@ -292,6 +290,7 @@ def get_unified_sites(
     grid_spacing_scale: float | None = None,
     adaptive_grid_spacing: float | None = None,
     adaptive_grid_refine_levels: int = 0,
+    adaptive_grid_nms_framework_scale: float | None = None,
     n_jobs: int = -2,
     side_policy: str = "positive",
 ) -> list[Site]:
@@ -347,9 +346,11 @@ def get_unified_sites(
         Absolute shell increment in Å (``AdsorptionConfig.adaptive_grid_spacing``).
     adaptive_grid_refine_levels
         Number of refine halvings (0 = coarse shell only).
+    adaptive_grid_nms_framework_scale
+        Floor NMS merge radius as a fraction of framework median NN.
     n_jobs
-        Joblib-style CPU workers for ``adaptive_grid`` shell/refine stages
-        (default ``-2``).
+        Joblib-style CPU workers for ``adaptive_grid`` shell/refine and Voronoi
+        ridge enrichment (default ``-2``).
     """
     scratch = _PlanarWidenScratch()
     sites = _enumerate_unified_sites(
@@ -367,6 +368,7 @@ def get_unified_sites(
         grid_spacing_scale=grid_spacing_scale,
         adaptive_grid_spacing=adaptive_grid_spacing,
         adaptive_grid_refine_levels=adaptive_grid_refine_levels,
+        adaptive_grid_nms_framework_scale=adaptive_grid_nms_framework_scale,
         n_jobs=n_jobs,
         side_policy=side_policy,
         _widen_scratch=scratch,
@@ -413,6 +415,7 @@ def get_unified_sites(
         grid_spacing_scale=grid_spacing_scale,
         adaptive_grid_spacing=adaptive_grid_spacing,
         adaptive_grid_refine_levels=adaptive_grid_refine_levels,
+        adaptive_grid_nms_framework_scale=adaptive_grid_nms_framework_scale,
         n_jobs=n_jobs,
         side_policy=side_policy,
         _reuse_topology=reuse,
@@ -435,6 +438,7 @@ def _enumerate_unified_sites(
     grid_spacing_scale: float | None = None,
     adaptive_grid_spacing: float | None = None,
     adaptive_grid_refine_levels: int = 0,
+    adaptive_grid_nms_framework_scale: float | None = None,
     n_jobs: int = -2,
     side_policy: str = "positive",
     _widen_scratch: _PlanarWidenScratch | None = None,
@@ -511,6 +515,7 @@ def _enumerate_unified_sites(
         grid_spacing_scale=grid_spacing_scale,
         adaptive_grid_spacing=adaptive_grid_spacing,
         adaptive_grid_refine_levels=int(adaptive_grid_refine_levels),
+        adaptive_grid_nms_framework_scale=adaptive_grid_nms_framework_scale,
         n_jobs=int(n_jobs),
         side_policy=side_policy,
     )
@@ -544,13 +549,22 @@ def _enumerate_unified_sites(
         )
         h_min = h_surface - max(float(top_layer_tolerance), nn_margin)
         keep_mask = _height_along_slab_normal(vertices, cell) >= h_min
-        vertices, nn_dists, source_hints, atom_indices = _apply_site_mask(
-            vertices, nn_dists, source_hints, keep_mask, atom_indices
+        (
+            vertices,
+            nn_dists,
+            source_hints,
+            atom_indices,
+            normals,
+            clearances,
+        ) = slice_candidate_arrays(
+            vertices,
+            nn_dists,
+            source_hints,
+            atom_indices,
+            keep_mask,
+            normals=normals,
+            clearances=clearances,
         )
-        if normals is not None:
-            normals = np.asarray(normals, dtype=float)[keep_mask]
-        if clearances is not None:
-            clearances = np.asarray(clearances, dtype=float)[keep_mask]
 
     if batch.inject_atop:
         vertices, nn_dists, source_hints, atom_indices = _inject_atop_sites(
@@ -570,11 +584,9 @@ def _enumerate_unified_sites(
             max_site_distance=float(max_site_distance),
             atom_indices=atom_indices,
         )
-        # Atop injection can change catalog length; drop enrichment if misaligned.
-        if normals is not None and len(normals) != len(vertices):
-            normals = None
-        if clearances is not None and len(clearances) != len(vertices):
-            clearances = None
+        # Injection invalidates per-site enrichment arrays.
+        normals = None
+        clearances = None
 
     if len(vertices) == 0:
         logger.warning(

@@ -72,10 +72,13 @@ def test_adaptive_grid_accepted_on_adsorption_config():
     assert cfg.side_policy == "positive"
     assert cfg.adaptive_grid_spacing == pytest.approx(0.70)
     assert cfg.adaptive_grid_refine_levels == 0
+    assert cfg.adaptive_grid_nms_framework_scale == pytest.approx(0.50)
     for mat in ("slab", "nanoparticle", "porous"):
         AdsorptionConfig(site_generator="adaptive_grid", material_type=mat)
     for policy in ("all", "positive", "negative", "external"):
         AdsorptionConfig(side_policy=policy, material_type="slab")
+    with pytest.raises(ValueError, match="adaptive_grid_nms_framework_scale"):
+        AdsorptionConfig(adaptive_grid_nms_framework_scale=0.0)
 
 
 def test_adaptive_grid_spacing_rejects_non_positive_absolute():
@@ -130,7 +133,7 @@ def test_absolute_spacing_knob_controls_catalog_density():
 
 
 def test_adaptive_grid_default_counts_comparable_to_auto():
-    """Default coarse grid stays within a factor of ~4 of topology/Voronoi."""
+    """Default coarse grid stays within ~8× of topology/Voronoi catalog size."""
     cases = [
         ("slab", make_slab(nx=3, ny=3, n_layers=3)),
         ("nanoparticle", make_nanoparticle()),
@@ -150,7 +153,7 @@ def test_adaptive_grid_default_counts_comparable_to_auto():
         )
         assert len(auto) > 0 and len(grid) > 0, mat
         lo = max(len(auto) // 4, 1)
-        hi = max(4 * len(auto), 250)
+        hi = max(8 * len(auto), 500)
         assert lo <= len(grid) <= hi, (
             f"{mat}: auto={len(auto)} grid={len(grid)} not in [{lo}, {hi}]"
         )

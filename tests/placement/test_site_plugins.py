@@ -1,8 +1,16 @@
 """Site generator plugin registry and resolution."""
 
-import pytest
+from dataclasses import fields
 
-from metalsurfer.config import SITE_GENERATOR_OPTIONS
+import numpy as np
+import pytest
+from ase.build import molecule
+
+from metalsurfer.config import SITE_GENERATOR_OPTIONS, AdsorptionConfig
+from metalsurfer.placement.generators import (
+    enumerate_placement_specs,
+    generate_placements_from_specs,
+)
 from metalsurfer.placement.site_enumeration import get_unified_sites
 from metalsurfer.placement.site_plugins import (
     PUBLIC_SITE_GENERATORS,
@@ -11,9 +19,14 @@ from metalsurfer.placement.site_plugins import (
     resolved_site_generator_name,
 )
 from metalsurfer.placement.site_plugins.adaptive_grid import AdaptiveGridGenerator
+from metalsurfer.placement.site_plugins.base import (
+    SiteCandidateBatch,
+    SiteGenerationContext,
+)
 from metalsurfer.placement.site_plugins.topology_np import TopologyNPGenerator
 from metalsurfer.placement.site_plugins.topology_slab import TopologySlabGenerator
 from metalsurfer.placement.site_plugins.voronoi import VoronoiGenerator
+from metalsurfer.placement.site_types import Site
 
 from ..conftest import make_nanoparticle, make_porous_framework, make_slab
 
@@ -76,16 +89,6 @@ def test_auto_matches_explicit_plugin(material_type, explicit, factory):
 
 def test_all_plugins_share_batch_and_site_contract():
     """Every plugin emits SiteCandidateBatch; enumerator yields placement-ready Sites."""
-    from dataclasses import fields
-
-    import numpy as np
-
-    from metalsurfer.placement.site_plugins.base import (
-        SiteCandidateBatch,
-        SiteGenerationContext,
-    )
-    from metalsurfer.placement.site_types import Site
-
     core = {"vertices", "nn_dists", "source_hints", "atom_indices"}
     enrich = {"normals", "clearances"}
     names = {f.name for f in fields(SiteCandidateBatch)}
@@ -139,3 +142,96 @@ def test_all_plugins_share_batch_and_site_contract():
             assert s.site_type
             assert s.tangent_basis is not None
             assert np.asarray(s.tangent_basis).shape == (2, 3)
+            assert s.clearance is not None
+
+
+def test_slab_topology_emits_nonempty_supports():
+    slab = make_slab(nx=3, ny=3, n_layers=2)
+    ctx = SiteGenerationContext(
+        positions=slab.get_positions(),
+        cell=np.asarray(slab.get_cell(), dtype=float),
+        pbc=np.array([True, True, False]),
+        symbols=list(slab.get_chemical_symbols()),
+        material_type="slab",
+        probe_radius=1.2,
+        max_site_distance=3.5,
+        top_layer_tolerance=1.0,
+        enrich=False,
+        planar_z_variance_threshold=0.1,
+        n_jobs=1,
+    )
+    batch = resolve_site_generator("topology", "slab").generate(ctx)
+    assert any(h.startswith("topology_") for h in batch.source_hints)
+    for hint, atoms in zip(batch.source_hints, batch.atom_indices, strict=True):
+        if hint.startswith("topology_"):
+            assert atoms
+    sites = get_unified_sites(
+        slab, material_type="slab", site_generator="topology", n_jobs=1
+    )
+    assert all(s.slab_indices for s in sites)
+
+
+def test_voronoi_porous_keeps_empty_supports_and_pores():
+    atoms = make_porous_framework()
+    ctx = SiteGenerationContext(
+        positions=atoms.get_positions(),
+        cell=np.asarray(atoms.get_cell(), dtype=float),
+        pbc=np.array([True, True, True]),
+        symbols=list(atoms.get_chemical_symbols()),
+        material_type="porous",
+        probe_radius=1.5,
+        max_site_distance=4.0,
+        top_layer_tolerance=1.0,
+        enrich=True,
+        planar_z_variance_threshold=0.1,
+        n_jobs=1,
+    )
+    batch = resolve_site_generator("voronoi", "porous").generate(ctx)
+    assert batch.atom_indices and all(len(a) == 0 for a in batch.atom_indices)
+    sites = get_unified_sites(
+        atoms, material_type="porous", site_generator="voronoi", n_jobs=1
+    )
+    assert any(s.site_type == "pore" for s in sites)
+
+
+@pytest.mark.parametrize(
+    ("material_type", "plugin", "factory"),
+    [
+        ("slab", "topology", make_slab),
+        ("slab", "adaptive_grid", make_slab),
+        ("nanoparticle", "topology", make_nanoparticle),
+        ("nanoparticle", "adaptive_grid", make_nanoparticle),
+        ("porous", "voronoi", make_porous_framework),
+        ("porous", "adaptive_grid", make_porous_framework),
+    ],
+)
+def test_plugins_materialize_clash_free(material_type, plugin, factory):
+    atoms = factory()
+    cfg = AdsorptionConfig(
+        material_type=material_type,
+        site_generator=plugin,
+        seed=0,
+        num_conformers=1,
+        num_placements=8,
+        n_jobs=1,
+        slab_relaxation_mode="none",
+    )
+    ads = molecule("H2")
+    specs = enumerate_placement_specs([ads], atoms, cfg, "H2", n_desired=8, seed=0)
+    assert specs
+    results = generate_placements_from_specs(specs, [ads], atoms, cfg, smiles="H2")
+    assert any(pair is not None for pair, _reason in results)
+
+
+def test_voronoi_ridge_enrich_n_jobs_deterministic():
+    atoms = make_porous_framework()
+    serial = get_unified_sites(
+        atoms, material_type="porous", site_generator="voronoi", enrich=True, n_jobs=1
+    )
+    parallel = get_unified_sites(
+        atoms, material_type="porous", site_generator="voronoi", enrich=True, n_jobs=2
+    )
+    assert len(serial) == len(parallel) > 0
+    assert sorted(tuple(np.round(s.xyz, 6)) for s in serial) == sorted(
+        tuple(np.round(s.xyz, 6)) for s in parallel
+    )

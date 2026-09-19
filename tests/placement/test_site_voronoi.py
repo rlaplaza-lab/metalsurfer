@@ -279,6 +279,7 @@ def test_voronoi_enrichment_uses_ridge_vertices(monkeypatch):
         n_origin=None,
         inv_cell=None,
         dedup_offsets=None,
+        n_jobs=1,
     ):
         captured["ridge_vertices"] = ridge_vertices
         return vertices, nn_dists

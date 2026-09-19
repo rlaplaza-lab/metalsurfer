@@ -194,28 +194,6 @@ def periodic_accessibility_tree(
     return KDTree(_build_periodic_images(positions, cell, pbc, margin=margin))
 
 
-def apply_site_mask(
-    vertices: np.ndarray,
-    nn_dists: np.ndarray,
-    source_hints: list[str],
-    mask: np.ndarray,
-    atom_indices: list[tuple[int, ...]] | None = None,
-) -> tuple[np.ndarray, np.ndarray, list[str], list[tuple[int, ...]]]:
-    """Keep only vertices selected by boolean *mask* (index arrays stay aligned)."""
-    atoms = (
-        list(atom_indices)
-        if atom_indices is not None
-        else [_EMPTY_ATOM_INDICES for _ in range(len(vertices))]
-    )
-    kept = np.nonzero(mask)[0]
-    return (
-        vertices[mask],
-        nn_dists[mask],
-        [source_hints[i] for i in kept],
-        [atoms[i] for i in kept],
-    )
-
-
 def top_layer_is_planar_from_arrays(
     positions: np.ndarray,
     cell: np.ndarray,

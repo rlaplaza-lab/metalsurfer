@@ -50,6 +50,7 @@ class AdaptiveGridGenerator:
             n_jobs=int(ctx.n_jobs),
             symbols=list(ctx.symbols),
             side_policy=ctx.side_policy,
+            nms_framework_scale=ctx.adaptive_grid_nms_framework_scale,
         )
 
         if len(result.vertices) == 0:
