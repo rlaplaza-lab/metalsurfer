@@ -9,7 +9,6 @@ from ._numeric_defaults import (
     CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
     CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     DEFAULT_FMAX,
-    DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
     DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     DEFAULT_SEED,
     DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
@@ -28,7 +27,7 @@ from .site_plugin_ids import (
     PLUGIN_ALLOWED_MATERIALS as _SITE_GENERATOR_ALLOWED_MATERIALS,
 )
 from .site_plugin_ids import (
-    PUBLIC_SITE_GENERATORS as _PUBLIC_SITE_GENERATORS,
+    SITE_GENERATORS as _SITE_GENERATORS,
 )
 
 
@@ -289,7 +288,7 @@ def _check_finite_nonneg(name: str, value: float) -> None:
 CONFORMER_WEIGHTING_OPTIONS: tuple[str, ...] = ("uniform", "boltzmann")
 MATERIAL_TYPE_OPTIONS: tuple[str, ...] = ("slab", "nanoparticle", "porous")
 SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("auto", "distance_ratio", "delaunay")
-SITE_GENERATOR_OPTIONS: tuple[str, ...] = ("auto",) + _PUBLIC_SITE_GENERATORS
+SITE_GENERATOR_OPTIONS: tuple[str, ...] = ("auto",) + _SITE_GENERATORS
 SIDE_POLICY_OPTIONS: tuple[str, ...] = ("all", "positive", "negative", "external")
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
 BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = (
@@ -366,7 +365,6 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
         ("top_layer_tolerance", root.top_layer_tolerance),
         ("symmetry_tolerance", root.symmetry_tolerance),
         ("site_equivalence_tolerance", root.site_equivalence_tolerance),
-        ("hollow_site_dedup_tolerance", root.hollow_site_dedup_tolerance),
         ("planar_z_variance_threshold", root.planar_z_variance_threshold),
     ):
         _check_positive(pos_name, pos_value)
@@ -790,9 +788,6 @@ class AdsorptionConfig:
     top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE
     symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
     site_equivalence_tolerance: float = DEFAULT_SITE_EQUIVALENCE_TOLERANCE
-    # Retained for config / ML-schema compatibility; hollow uniqueness uses
-    # site_equivalence_tolerance via _cluster_equivalent_sites.
-    hollow_site_dedup_tolerance: float = DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
     planar_z_variance_threshold: float = DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
     rough_slab_local_z: bool = True
     min_interatomic_distance: float = 0.5

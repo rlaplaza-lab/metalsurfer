@@ -141,22 +141,22 @@ Placement success levers
   unless you need stricter starts (they reduce yield).
 
 Site classification defaults to ``site_classification_method="auto"``: Delaunay
-for slabs (catalysis-style atop/bridge/hollow catalogs), hull+NN topology labels
-for nanoparticles, and distance-ratio for porous Voronoi vertices. Explicit
-``"distance_ratio"`` on slabs is honored for A/B comparisons.
+for slabs (catalysis-style atop/bridge/hollow catalogs), hull + nearest-neighbour
+topology labels for nanoparticles, and distance-ratio for porous Voronoi
+vertices. Explicit ``"distance_ratio"`` on slabs is honored for A/B comparisons.
 
 Site candidate generation defaults to ``site_generator="auto"`` (topology for
 slab/NP, Voronoi for porous). Set ``site_generator="topology"``,
 ``"voronoi"``, or ``"adaptive_grid"`` explicitly for A/B comparisons;
 incompatible ``site_generator`` / ``material_type`` pairs are rejected.
 ``adaptive_grid`` works on all three material types but is never selected by
-``auto``. Density is an exposed coarse Cartesian shell increment
-(``adaptive_grid_spacing``, default ``0.70`` Å) plus optional refine halvings
-(``adaptive_grid_refine_levels``, default ``0``). NMS merge radius tracks that
-spacing and floors against framework median nearest-neighbour distance via
-``adaptive_grid_nms_framework_scale`` (default ``0.50``; no hard site-count
-cap). ``side_policy`` (default ``"positive"``) selects which slab face /
-exposure half-space adaptive-grid keeps.
+``auto``. It is an opt-in Cartesian grid with spacing in Å
+(``adaptive_grid_spacing``, default ``0.70``). Optional refine halvings
+(``adaptive_grid_refine_levels``, default ``0``) densify locally;
+``adaptive_grid_nms_framework_scale`` (default ``0.50``) floors how close
+neighbouring grid points may sit relative to the framework atom spacing.
+``side_policy`` (default ``"positive"``) selects which slab face / exposure
+half-space adaptive-grid keeps.
 
 Plugin knobs: ``voronoi_*``, ``side_policy``, ``adaptive_grid_*``, and ``n_jobs``
 (adaptive_grid shells and Voronoi ridge enrich). Shared post-process:
@@ -173,20 +173,19 @@ Site uniqueness and sampling
 
 After candidates are classified into ``Site`` records, uniqueness is shared:
 
-- ``site_equivalence_tolerance`` (default 0.05 Å) — fingerprint-aware clustering
-  (geometry + support symbols + distance bins + side). Ignores ``site_source``
+- ``site_equivalence_tolerance`` (default 0.05 Å) — merge sites that are both
+  spatially close and share the same local environment fingerprint
+  (support-atom symbols + distance bins + side label). Ignores ``site_source``
   and classified ``site_type``, so topology / Voronoi / injected atops in the
   same pocket merge. Used by molecular placement, dissociative hollow pairs,
   and adatom hollow selection.
-- ``symmetry_tolerance`` (default 0.1 Å) — optional spglib orbit reduction on
-  the **clustered** catalog for molecular sampling on a **clean** substrate
-  with a single placement per step. Expansion back to the full clustered
-  lattice happens when substrate symmetry is broken, when an adsorbate suffix
-  is present, or when ``saturation_molecules_per_step`` > 1. Occupied
-  vertices are then dropped by occupancy (``min_adsorbate_separation``).
-  Dissociative / adatoms keep the full clustered lattice.
-- ``hollow_site_dedup_tolerance`` — retained for config / ML-schema
-  compatibility; not applied as a separate hollow merge.
+- ``symmetry_tolerance`` (default 0.1 Å) — optional spglib pass that keeps one
+  representative of each crystallographically equivalent site on a **clean**
+  substrate with a single placement per step. Once molecules are on the
+  surface, or when ``saturation_molecules_per_step`` > 1, sampling uses the
+  full clustered list again and drops occupied spots
+  (``min_adsorbate_separation``). Dissociative / adatoms always keep the full
+  clustered list.
 
 Omit ``site_context`` on enumerate/materialize and the same
 ``resolve_site_context_for_sampling`` path is used as production screening.

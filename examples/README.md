@@ -17,6 +17,9 @@ production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 | `bipyridine_au111_defects_saturation_raw.py` | HPC-scale saturation on defected Au(111) (1000 placements; not a quick demo) |
 | `camphor_cu111_binding_energy.py` | (1S)-camphor on Cu(111) vs Järvi et al. BOSS benchmark (BO, 15GB GPU) |
 
+`compare_adaptive_grid_ab.py` is an optional A/B comparison script (not part of
+the official runner and not a quick demo).
+
 ### YAML campaigns
 
 Demo-scale YAML documents (same physics as the small Python demos). Schema and

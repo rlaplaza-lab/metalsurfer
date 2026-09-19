@@ -61,12 +61,13 @@ Material and substrate
 ``symmetry_tolerance``
    **Type:** ``float`` · **Default:** ``0.1`` (Å)
 
-   Cartesian / MIC tolerance for spglib site-orbit reduction after geometric
-   clustering. Applied to the clustered catalog for molecular sampling only
-   (orbits blocked by classified ``site_type``; ``site_source`` is ignored).
-   Dissociative pairs and adatom hollows use the clustered set without this
-   pass. When substrate symmetry is broken, sampling falls back to the clustered
-   catalog.
+   Distance tolerance for the optional spglib pass that keeps one
+   representative of each crystallographically equivalent site after geometric
+   clustering. Applied to the clustered list for molecular sampling only
+   (different classified ``site_type`` values stay separate; ``site_source`` is
+   ignored). Dissociative pairs and adatom hollows use the clustered set without
+   this pass. When substrate symmetry is broken, sampling falls back to the
+   clustered list.
 
 ``planar_z_variance_threshold``
    **Type:** ``float`` · **Default:** ``0.01`` (Å²)
@@ -214,43 +215,36 @@ Site detection
 ``adaptive_grid_spacing``
    **Type:** ``float`` · **Default:** ``0.70`` (Å)
 
-   Absolute Cartesian shell increment for ``site_generator="adaptive_grid"``.
+   Absolute Cartesian grid spacing for ``site_generator="adaptive_grid"``.
    Coarse default keeps catalog sizes near topology / Voronoi; lower for denser
-   A/B sampling. Merge radius tracks this spacing and floors on framework
-   median nearest-neighbour distance.
+   A/B sampling. Density is controlled by this spacing (merge radius tracks it
+   and floors on framework median nearest-neighbour distance).
 
 ``adaptive_grid_refine_levels``
    **Type:** ``int`` · **Default:** ``0``
 
-   Number of basin-preserving refine halvings after the coarse shell
+   Number of optional refine halvings after the coarse grid
    (``0`` = coarse grid only). Larger values densify locally around surviving
    basins without a hard site-count cap.
 
 ``adaptive_grid_nms_framework_scale``
    **Type:** ``float`` · **Default:** ``0.50``
 
-   Floor on the adaptive-grid NMS merge radius as a fraction of framework
-   median nearest-neighbour distance. Lower values allow denser catalogs;
-   higher values keep metal catalogs closer to topology site counts.
+   Floor on how close neighbouring adaptive-grid points may sit, as a fraction
+   of framework median nearest-neighbour distance. Lower values allow denser
+   catalogs; higher values keep metal catalogs closer to topology site counts.
 
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)
 
    Tolerance for merging geometrically near-duplicate sites after initial
-   detection (MIC-aware, fingerprint-aware clustering on support-atom symbols,
-   optional distance bins, and side label — not classified ``site_type``).
-   Origin tags (``site_source``) do not participate.
+   detection (shortest-periodic-distance aware; fingerprint-aware clustering on
+   support-atom symbols, distance bins, and side label — not classified
+   ``site_type``). Origin tags (``site_source``) do not participate.
    This is the uniqueness metric shared by molecular placement, dissociative
    hollow pairs, and adatom hollow selection. Spglib symmetry reduction is a
    separate later pass controlled by ``symmetry_tolerance`` (molecular sampling
    only).
-
-``hollow_site_dedup_tolerance``
-   **Type:** ``float`` · **Default:** ``0.1`` (Å)
-
-   Retained for config / ML-schema compatibility. Hollow uniqueness uses
-   ``site_equivalence_tolerance`` via the same clustering as the rest of site
-   detection; this field is not applied as a separate spatial merge.
 
 Placement generation
 ~~~~~~~~~~~~~~~~~~~~

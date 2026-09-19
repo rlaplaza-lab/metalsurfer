@@ -12,9 +12,6 @@ _CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM = (
 _CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM = (
     _numeric_defaults.CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
 )
-_DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE = (
-    _numeric_defaults.DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
-)
 _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD = (
     _numeric_defaults.DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
 )
@@ -280,20 +277,14 @@ _VORONOI_AUTO_WIDEN_PROBE_SCALE: float = 0.8
 _VORONOI_AUTO_WIDEN_MAX_SCALE: float = 1.25
 
 # ---------------------------------------------------------------------------
-# Adaptive-grid site generator (internal A/B plugin)
+# Adaptive-grid site generator
 # ---------------------------------------------------------------------------
 # Default coarse shell increment (Å). Exposed as AdsorptionConfig.adaptive_grid_spacing.
 _ADAPTIVE_GRID_DEFAULT_SPACING: float = 0.70
 # Default refine depth (0 = coarse shell only). Exposed as adaptive_grid_refine_levels.
 _ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS: int = 0
-# Legacy scale path: h0 = clip(c_h * L, h_min, h_max) when no absolute spacing is set.
-_ADAPTIVE_GRID_SPACING_SCALE: float = 0.45
 _ADAPTIVE_GRID_FINE_SCALE: float = 0.25
 _ADAPTIVE_GRID_H_MIN: float = 0.35
-_ADAPTIVE_GRID_H_MAX: float = 1.5
-_ADAPTIVE_GRID_MAX_LEVELS: int = 2
-# Near-zero molecular extents (flat thickness, single-atom footprint) skip this.
-_ADAPTIVE_GRID_EXTENT_EPS: float = 0.05
 # NMS / basin merge radius: max(nms_scale * h_fine, nms_length_scale * L).
 _ADAPTIVE_GRID_NMS_SCALE: float = 1.5
 _ADAPTIVE_GRID_NMS_LENGTH_SCALE: float = 0.5
@@ -302,8 +293,6 @@ _ADAPTIVE_GRID_NMS_LENGTH_SCALE: float = 0.5
 _ADAPTIVE_GRID_WORK_BUDGET: int = 250_000
 # Floor merge radius as a fraction of framework median NN (adaptive_grid default).
 _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE: float = 0.50
-# Floor characteristic length before deriving h0 / refine depth (legacy scale path).
-_ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE: float = 0.25
 # Bin-prethin before NMS when the coarse cloud exceeds this many points.
 _ADAPTIVE_GRID_BIN_PRETHIN: int = 8_000
 # Exposure probe step along the outward unit vector (Å).

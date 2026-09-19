@@ -72,9 +72,11 @@ flowchart LR
 Step by step, for a single molecule:
 
 1. **Prepare the substrate.** The material — a slab, a nanoparticle, or a porous
-   framework — is cleaned up and, optionally, lightly relaxed. This is the
-   *bare* surface. All site finding reads this bare surface, never the
-   already-covered one.
+   framework — is cleaned up and, optionally, lightly relaxed. Site *finding*
+   always looks at the bare substrate atoms (where the surface geometry lives).
+   Once molecules are already on the surface, *sampling* still uses that same
+   site list: every remaining equivalent copy of a site is considered, and
+   spots already occupied by an adsorbate are skipped.
 2. **Compute reference energies.** The energy of the bare slab (`E_slab`) and of
    the free molecule (`E_molecule`) are calculated so that every later
    `E_ads` can be formed by subtraction. The same reference step also caches
@@ -145,10 +147,11 @@ Everything in this section is organised by `material_type`. That one field
 uses, which site sources run, and which heuristics apply. Behind the scenes each
 type maps to a periodicity: slabs are periodic in the two surface directions and
 open in the third; nanoparticles are fully non-periodic; porous frameworks are
-periodic in all three directions. Distance math, filters, MIC, and site
-symmetry use that material-aware PBC (`material_aware_pbc`), not whatever
-flags the ASE Atoms carry after the calculator promotes slabs to full 3D
-periodicity. Stored results restore material PBC via `apply_material_pbc`.
+periodic in all three directions. Distance math, filters, shortest periodic
+distances, and site symmetry use that material-aware periodicity
+(`material_aware_pbc`), not whatever flags the ASE Atoms carry after the
+calculator promotes slabs to full 3D periodicity. Stored results restore
+material periodicity via `apply_material_pbc`.
 
 A *site* is always a point in space plus a local *outward normal* (the direction
 away from the material) and a *site type*. The site types are:
@@ -170,17 +173,17 @@ Which *points* are proposed is controlled by `site_generator` (default
 `auto`): slabs and nanoparticles use the **topology** plugin; porous
 frameworks use **Voronoi**. Explicit `topology` / `voronoi` override that
 mapping when the pair is compatible with `material_type`. Opt-in
-`adaptive_grid` uses the same classify → cluster → symmetry path on all
-materials; density is `adaptive_grid_spacing` (Å) plus
-`adaptive_grid_refine_levels` (default coarse shell only).
+`adaptive_grid` lays a Cartesian grid around every atom (spacing in Å via
+`adaptive_grid_spacing`) and then follows the same classify → cluster →
+symmetry path on all materials. It is never chosen by `auto`.
 
 ### 3.1 Slab
 
 A slab top layer is a set of atoms lying in roughly one plane. Because that
-layer is *coplanar*, it has no genuine 3D Voronoi diagram (the maths would
-collapse to a flat plane), so the default topology plugin never attempts one
-there. Instead it reads the top layer — including its ±1 periodic images
-along the two surface directions — and explicitly constructs:
+layer is *coplanar*, a 3D Voronoi diagram would collapse to a flat plane, so
+the default topology plugin never attempts one there. Instead it reads the top
+layer — including its ±1 periodic images along the two surface directions —
+and explicitly constructs:
 
 - **atop** candidates, one above each top-layer atom (lifted by a fraction of
   the median surface spacing);
@@ -203,11 +206,10 @@ Two extra slab behaviours:
 - A **height mask** keeps only candidates at or above the surface layer, so a
   site that ended up behind a step edge is dropped.
 - When `site_classification_method` is `auto` (the default) or `delaunay`, the
-  code builds a Delaunay triangulation of the top layer and re-classifies each
-  candidate as atop / bridge / hollow against that triangulation. This makes
-  cross-periodic-boundary bridges and hollows classifiable that a plain
-  distance ratio would mislabel. `distance_ratio` uses the raw
-  nearest-neighbour distance rules instead.
+  code triangulates the top layer and re-classifies each candidate as atop /
+  bridge / hollow against that mesh. This makes cross-periodic-boundary
+  bridges and hollows classifiable that a plain distance ratio would mislabel.
+  `distance_ratio` uses the raw nearest-neighbour distance rules instead.
 
 If the topology generator produced no atop site, a small **atop-injection**
 safety net lifts a candidate above each top-layer atom along the surface normal
@@ -216,13 +218,13 @@ skip this, since it would be redundant.)
 
 ### 3.2 Nanoparticle
 
-A nanoparticle is a finite cluster with no periodicity. Sites come from
-**convex-hull + nearest-neighbour topology** (the slab analogue for a closed
-surface): atoms on the hull skin become atops, NN edges become bridges, and
-chordless 3-/4-cycles become hollows. Candidates are lifted along **hull-facet
-normals**, so the same path works for highly symmetric and lopsided convex
-clusters. Voronoi is skipped — its voids are not adsorption sites on a metal
-NP.
+A nanoparticle is a finite cluster with no periodicity. Sites come from the
+**convex hull plus nearest-neighbour edges** (the slab analogue for a closed
+surface): atoms on the hull skin become atops, nearest-neighbour edges become
+bridges, and chordless 3-/4-cycles become hollows. Candidates are lifted along
+**hull-facet normals**, so the same path works for highly symmetric and
+lopsided convex clusters. Voronoi is skipped — its voids are not adsorption
+sites on a metal nanoparticle.
 
 If the hull cannot be built (or topology yields no atop), a single
 **atop-injection** pass lifts candidates above hull-skin atoms along the same
@@ -246,31 +248,29 @@ skipped there.
 
 Regardless of material type, three things happen to the raw candidate set:
 
-- **Clustering** merges near-duplicate points into one representative per
+- **Clustering** merges near-duplicate points into one representative within
   `site_equivalence_tolerance`. Sites merge only when they are spatially close
-  *and* share the same `env_fingerprint` (sorted support-atom symbols +
-  classified `site_type`). `site_source` (topology / Voronoi / atop injection)
-  is ignored, so two generators that land in the same pocket collapse to one
-  representative. Periodicity is respected (images folded back); slabs also
-  require matching height along the surface normal. This step is geometric
-  only; it does not use spglib. Dissociative pairs and adatom hollow placement
-  use this **clustered** catalog (hollow/pore subset) so they see the full
-  translational lattice.
-- **Symmetry reduction** uses spglib to collapse symmetry-equivalent sites into
-  one representative each, reducing wasted work. It runs on the **clustered**
-  catalog (not the raw unclustered list) while the *substrate* still matches
-  the clean reference's space group and symmetry operations. Orbits are blocked
-  by classified `site_type` only — again origin-blind. Adsorbates alone do not
-  latch the saturation `symmetry_broken` flag: saturation strips the adsorbate
-  suffix before that substrate check. Once anything is adsorbed, or when
-  n-tuplet co-adsorption will place more than one molecule in the same step,
-  molecular sampling expands to the clustered (non-symmetry-reduced) lattice
-  and occupancy-prunes occupied vertices. Substrate reconstruction, strong ionic
-  motion, or analysis failure also skip orbit reduction. Multi-molecule
-  ``adaptive_grid`` saturation shares that catalog; other generators reuse the
-  per-geometry cache. BO transfer uses geometry features and occupancy COM
-  anchors, not site indices. Dissociative pairs already read the clustered
-  catalog.
+  *and* share the same `env_fingerprint`: sorted support-atom symbols, binned
+  distances to those support atoms, and a side label (which face of a slab).
+  Classified `site_type` (atop / bridge / hollow / …) is **not** part of that
+  fingerprint. Which plugin proposed the point (`site_source`) is also ignored,
+  so two generators that land in the same pocket collapse to one representative.
+  Periodicity is respected (images folded back); slabs also require matching
+  height along the surface normal. Dissociative pairs and adatom hollow
+  placement use this full clustered list (hollow/pore subset) so they see every
+  translational copy.
+- **Symmetry reduction** uses spglib to keep one representative of each
+  crystallographically equivalent site, cutting wasted work on a clean bare
+  substrate. It runs after clustering. Sites of different classified
+  `site_type` are not collapsed into each other. Adsorbates alone do not count
+  as “broken symmetry”: saturation strips the adsorbate suffix before that
+  check. Once anything is adsorbed, or when more than one molecule will be
+  placed in the same step (`saturation_molecules_per_step` > 1), sampling uses
+  the full clustered list again and drops occupied spots. Substrate
+  reconstruction, strong ionic motion, or a failed symmetry analysis also skip
+  the reduction. Multi-molecule `adaptive_grid` saturation shares one catalog;
+  other generators reuse the per-geometry cache. Bayesian transfer uses
+  geometry features, not site indices.
 - **One-shot auto-widen.** If the very first accessibility window finds no sites
   at all, the code retries once with a wider window (tighter probe radius and a
   larger max distance, scaled by the covalent-radius-derived defaults) before
@@ -279,10 +279,8 @@ Regardless of material type, three things happen to the raw candidate set:
 Before those catalog steps, plugins may merge candidate *vertices* with a fixed
 0.1 Å spatial tolerance (and, when Voronoi enrichment is appended to topology,
 existing topology points stay frozen). That is generation-time housekeeping;
-catalog uniqueness afterward is always `site_equivalence_tolerance` (+ optional
-`symmetry_tolerance` for molecular sampling). The legacy
-`hollow_site_dedup_tolerance` config field is retained for schema compatibility
-only and is not applied as a separate hollow merge.
+afterward uniqueness is always `site_equivalence_tolerance` (plus optional
+`symmetry_tolerance` when symmetry reduction runs for molecular sampling).
 
 Site detection results are cached per substrate geometry and relevant site /
 Voronoi settings, so repeating the same material does not recompute them.
@@ -402,12 +400,13 @@ When molecules are already on the surface (saturation, or any retry round), the
 pipeline prunes sites that are *occupied*.
 
 **Occupancy pruning** keeps sites whose vertex is at least
-`min_adsorbate_separation` from every existing adsorbate atom (MIC under
-periodicity). When `occupancy_use_footprint` is on (default), surviving sites
-are ranked by lateral footprint clearance (incoming in-plane disk scaled by
-`occupancy_footprint_scale`) so open sites are tried first — footprint is a
-sort key, not a second reject mask. Topology-sourced sites still come first.
-For porous frameworks open pore sites are still preferred after that ranking.
+`min_adsorbate_separation` from every existing adsorbate atom (shortest
+periodic distance under periodicity). When `occupancy_use_footprint` is on
+(default), surviving sites are ranked by lateral footprint clearance (incoming
+in-plane disk scaled by `occupancy_footprint_scale`) so open sites are tried
+first — footprint is a sort key, not a second reject mask. Topology-sourced
+sites still come first. For porous frameworks open pore sites are still
+preferred after that ranking.
 
 If occupancy pruning removes *all* sites under coverage (vertex mask empty),
 the capacity for that step is empty. The code does **not** fall back to

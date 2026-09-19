@@ -6,10 +6,8 @@ Kept free of ``config`` / ``generators`` imports so ``AdsorptionConfig`` and
 
 from __future__ import annotations
 
-# All factory-resolvable plugin ids.
+# Registered plugins (also the AdsorptionConfig / YAML selectable set).
 SITE_GENERATORS: tuple[str, ...] = ("topology", "voronoi", "adaptive_grid")
-# Plugins selectable via AdsorptionConfig / YAML.
-PUBLIC_SITE_GENERATORS: tuple[str, ...] = ("topology", "voronoi", "adaptive_grid")
 
 # Material allowlist per plugin id (single source of truth for config validation).
 PLUGIN_ALLOWED_MATERIALS: dict[str, frozenset[str]] = {

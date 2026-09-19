@@ -246,9 +246,10 @@ def _n_at_saturation_from_steps(
 ) -> int:
     """Total adsorbates folded onto the slab: sum of per-step ``n_added``.
 
-    Bound steps contribute one placement each in legacy mode (n-tuplet steps
-    contribute several); an unbound final step contributes zero, so the total
-    always equals the number of adsorbates on the returned final slab.
+    Bound steps contribute one placement each in one-molecule-per-step mode
+    (n-tuplet steps contribute several); an unbound final step contributes zero,
+    so the total always equals the number of adsorbates on the returned final
+    slab.
     """
     return sum(step.n_added for step in steps)
 
@@ -652,7 +653,6 @@ def _screen_saturation_molecule(
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
     occupancy_placement_X: list[dict[str, float]] | None = None,
-    grid_spacing_scale: float | None = None,
     site_context: object | None = None,
 ) -> tuple[
     list[ScreeningResult], BOTransferInfo, BOStepMemory | None, list[PlacementRecord]
@@ -670,7 +670,6 @@ def _screen_saturation_molecule(
         "conformer_energies": conformer_energies,
         "skip_workload_autotune": skip_workload_autotune,
         "saturation_reuse": True,
-        "grid_spacing_scale": grid_spacing_scale,
         "site_context": site_context,
     }
     if bo_enabled:
@@ -839,7 +838,7 @@ class _StepScreenOutcome:
     """Result of one saturation step's screening phase.
 
     ``committed`` lists the placements folded into the coverage slab this step
-    (one element in legacy sequential mode; several for n-tuplet steps).
+    (one element in one-molecule-per-step mode; several for n-tuplet steps).
     """
 
     best: ScreeningResult

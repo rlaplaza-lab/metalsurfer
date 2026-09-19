@@ -7,7 +7,6 @@
 from .adaptive_grid import AdaptiveGridGenerator
 from .base import (
     PLUGIN_ALLOWED_MATERIALS,
-    PUBLIC_SITE_GENERATORS,
     SITE_GENERATORS,
     SiteCandidateBatch,
     SiteGenerationContext,
@@ -22,7 +21,6 @@ from .voronoi import VoronoiGenerator
 
 __all__ = [
     "PLUGIN_ALLOWED_MATERIALS",
-    "PUBLIC_SITE_GENERATORS",
     "SITE_GENERATORS",
     "AdaptiveGridGenerator",
     "SiteCandidateBatch",

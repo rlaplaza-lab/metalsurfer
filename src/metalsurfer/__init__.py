@@ -4,7 +4,7 @@ Core types and helpers (config, models, exceptions, logging) are imported
 eagerly on purpose.
 """
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 import importlib
 

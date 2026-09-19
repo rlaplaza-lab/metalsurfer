@@ -826,7 +826,6 @@ def resolve_saturation_step_workload_config(
     base_slab_for_frozen: Atoms | None,
     symmetry_broken: bool,
     bo_enabled: bool,
-    grid_spacing_scale: float | None = None,
 ) -> AdsorptionConfig:
     """Resolve placement budget before multi-molecule budget splitting.
 
@@ -850,9 +849,6 @@ def resolve_saturation_step_workload_config(
         Whether symmetry is broken.
     bo_enabled
         Whether Bayesian optimisation is enabled.
-    grid_spacing_scale
-        Unused for adaptive_grid density (spacing comes from
-        ``config.adaptive_grid_spacing``); retained for call-site compatibility.
     """
     site_context = resolve_site_context_for_sampling(
         slab_for_sites,
@@ -863,7 +859,6 @@ def resolve_saturation_step_workload_config(
             full_slab=slab_atoms,
             config=config,
         ),
-        grid_spacing_scale=grid_spacing_scale,
     )
     freeze_ref = (
         base_slab_for_frozen if base_slab_for_frozen is not None else slab_atoms
@@ -998,7 +993,6 @@ def _prepare_molecule_screening(
     conformers: list[Atoms] | None = None,
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
-    grid_spacing_scale: float | None = None,
     site_context: SiteContext | None = None,
 ) -> tuple[MoleculeScreeningContext | None, FailureSummary | None]:
     """Shared preamble for standard and BO molecule screening.
@@ -1062,7 +1056,6 @@ def _prepare_molecule_screening(
             slab_for_sites,
             config,
             symmetry_broken=skip_orbits,
-            grid_spacing_scale=grid_spacing_scale,
         )
     if skip_orbits:
         site_context = site_context_for_occupied_surface(site_context)

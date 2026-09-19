@@ -213,9 +213,7 @@ class _StubHarness:
                 slab=self.slab,
             )
 
-        def resolve_sites_ci_fast(
-            slab_atoms, config, *, symmetry_broken: bool, grid_spacing_scale=None
-        ):
+        def resolve_sites_ci_fast(slab_atoms, config, *, symmetry_broken: bool):
             # Keep real Voronoi clustering; skip orbit reduction (pathological on
             # hand-built / large porous fixtures in CI). Cap site count so BO /
             # enumeration stay fast with large porous cells.
@@ -223,7 +221,6 @@ class _StubHarness:
                 slab_atoms,
                 config,
                 symmetry_broken=True,
-                grid_spacing_scale=grid_spacing_scale,
             )
             max_sites = 32
             if ctx.use_sites and len(ctx.sites) > max_sites:

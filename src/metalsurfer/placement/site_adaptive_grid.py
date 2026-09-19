@@ -22,7 +22,6 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 import numpy as np
-from ase import Atoms
 from scipy.spatial import KDTree
 
 from .._utils import cell_has_volume
@@ -35,13 +34,9 @@ from ._constants import (
     _ADAPTIVE_GRID_DEFAULT_SPACING,
     _ADAPTIVE_GRID_EXPOSURE_N_STEPS,
     _ADAPTIVE_GRID_EXPOSURE_STEP,
-    _ADAPTIVE_GRID_EXTENT_EPS,
     _ADAPTIVE_GRID_FINE_SCALE,
-    _ADAPTIVE_GRID_H_MAX,
     _ADAPTIVE_GRID_H_MIN,
-    _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE,
     _ADAPTIVE_GRID_LOCAL_MERGE_SCALE,
-    _ADAPTIVE_GRID_MAX_LEVELS,
     _ADAPTIVE_GRID_MAX_SUPPORT,
     _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE,
     _ADAPTIVE_GRID_NMS_LENGTH_SCALE,
@@ -51,11 +46,9 @@ from ._constants import (
     _ADAPTIVE_GRID_SCORE_W_BALANCE,
     _ADAPTIVE_GRID_SCORE_W_CLEARANCE,
     _ADAPTIVE_GRID_SCORE_W_GRADIENT,
-    _ADAPTIVE_GRID_SPACING_SCALE,
     _ADAPTIVE_GRID_STATIONARITY_STEP,
     _ADAPTIVE_GRID_SUPPORT_DELTA,
     _ADAPTIVE_GRID_WORK_BUDGET,
-    _ADSORBATE_COVALENT_RADIUS_FALLBACK,
     _ATOP_INJECTION_HEIGHT_FACTOR,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
     _VECTOR_NORM_EPS,
@@ -63,15 +56,12 @@ from ._constants import (
 )
 from ._parallel import resolve_materialize_workers
 from .geometry import (
-    _classify_molecule_shape,
     _get_covalent_radius,
     tangent_basis_from_normal,
 )
-from .occupancy import incoming_inplane_radius
 from .site_coords import (
     _cart_to_frac,
     _deduplicate_points,
-    _mean_covalent_radius,
     _minimum_image_cartesian_delta,
     _pbc_merge_pair_set,
     _periodic_image_offsets,
@@ -102,7 +92,7 @@ class CandidateSite:
 
 @dataclass(frozen=True)
 class AdaptiveGridSpacing:
-    """Adsorbate- or probe-derived grid increments (resolution only)."""
+    """Absolute shell spacing and derived refine / merge radii."""
 
     characteristic_length: float
     initial_spacing: float
@@ -122,7 +112,6 @@ class AdaptiveGridResult:
     normals: np.ndarray
     spacing: AdaptiveGridSpacing
     accessibility_tree: KDTree
-    support_distances: list[tuple[float, ...]]
 
 
 def _framework_median_nn(
@@ -158,69 +147,8 @@ def _framework_radii_from_symbols(symbols: Sequence[str]) -> np.ndarray:
     return np.asarray(radii, dtype=float)
 
 
-def adaptive_grid_characteristic_length(
-    probe_radius: float,
-    adsorbate: Atoms | None = None,
-) -> float:
-    """Molecule size scale for grid density (resolution only).
-
-    Without an adsorbate, returns *probe_radius*. With an adsorbate, uses
-    in-plane footprint / thickness / covalent radius (not capped by probe).
-    """
-    probe = float(probe_radius)
-    if adsorbate is None or len(adsorbate) == 0:
-        return probe
-    eps = _ADAPTIVE_GRID_EXTENT_EPS
-    footprint = float(incoming_inplane_radius(adsorbate, footprint_scale=1.0))
-    pos = np.asarray(adsorbate.get_positions(), dtype=float)
-    thickness = 0.0
-    if len(pos) >= 2:
-        centered = pos - np.mean(pos, axis=0)
-        shape, _, eigenvecs = _classify_molecule_shape(centered)
-        axis = eigenvecs[:, 2] if shape == "flat" else eigenvecs[:, 0]
-        along = centered @ axis
-        thickness = float(np.max(along) - np.min(along))
-    r_cov = float(
-        _mean_covalent_radius(
-            list(adsorbate.get_chemical_symbols()),
-            fallback=_ADSORBATE_COVALENT_RADIUS_FALLBACK,
-        )
-    )
-    if footprint > eps:
-        length = footprint
-    elif thickness > eps:
-        length = thickness
-    elif r_cov > eps:
-        length = r_cov
-    else:
-        length = probe
-    return float(max(length, eps))
-
-
-def min_adsorbate_grid_scale(
-    probe_radius: float | None,
-    adsorbates: Sequence[Atoms | None],
-) -> float:
-    """Return the minimum characteristic length across *adsorbates*.
-
-    Used to size one shared adaptive-grid catalog for competing molecules:
-    the smallest footprint drives the densest sampling. Empty / missing
-    adsorbates are skipped; falls back to *probe_radius* (or ``1.0``).
-    """
-    probe = float(probe_radius) if probe_radius is not None else 1.0
-    scales = [
-        adaptive_grid_characteristic_length(probe, ads)
-        for ads in adsorbates
-        if ads is not None and len(ads) > 0
-    ]
-    return float(min(scales)) if scales else probe
-
-
 def adaptive_grid_spacing(
-    probe_radius: float,
-    adsorbate: Atoms | None = None,
     *,
-    grid_spacing_scale: float | None = None,
     initial_spacing: float | None = None,
     max_levels: int | None = None,
     framework_median_nn: float | None = None,
@@ -228,13 +156,9 @@ def adaptive_grid_spacing(
 ) -> AdaptiveGridSpacing:
     """Return coarse/fine spacing and refine depth for the adaptive grid.
 
-    Prefer *initial_spacing* (absolute shell increment in Å) when set — this is
-    the production path via ``AdsorptionConfig.adaptive_grid_spacing``. When
-    omitted, fall back to a coarse default (``_ADAPTIVE_GRID_DEFAULT_SPACING``)
-    or the legacy adsorbate/probe scale path when *grid_spacing_scale* /
-    *adsorbate* is provided.
-
-    Basin identity is independent of this resolution.
+    *initial_spacing* is the absolute shell increment in Å
+    (``AdsorptionConfig.adaptive_grid_spacing``). When omitted, the module
+    default is used. Basin identity is independent of this resolution.
     """
     nn = float(framework_median_nn) if framework_median_nn is not None else 0.0
     levels = (
@@ -252,36 +176,16 @@ def adaptive_grid_spacing(
             f"nms_framework_scale must be finite and > 0, got {nms_scale!r}"
         )
 
-    if initial_spacing is not None:
-        h0 = float(initial_spacing)
-        if not np.isfinite(h0) or h0 <= 0.0:
-            raise ValueError(
-                f"adaptive_grid initial_spacing must be finite and > 0, got {h0!r}"
-            )
-        L = h0
-    elif grid_spacing_scale is not None or adsorbate is not None:
-        if grid_spacing_scale is not None:
-            L = float(grid_spacing_scale)
-        else:
-            L = adaptive_grid_characteristic_length(probe_radius, adsorbate)
-        if not np.isfinite(L) or L <= 0.0:
-            raise ValueError(
-                f"adaptive_grid characteristic length must be finite and > 0, got {L!r}"
-            )
-        if np.isfinite(nn) and nn > 0.0:
-            L = max(L, _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE * nn)
-        h0 = float(
-            np.clip(
-                _ADAPTIVE_GRID_SPACING_SCALE * L,
-                _ADAPTIVE_GRID_H_MIN,
-                _ADAPTIVE_GRID_H_MAX,
-            )
+    h0 = (
+        float(initial_spacing)
+        if initial_spacing is not None
+        else float(_ADAPTIVE_GRID_DEFAULT_SPACING)
+    )
+    if not np.isfinite(h0) or h0 <= 0.0:
+        raise ValueError(
+            f"adaptive_grid initial_spacing must be finite and > 0, got {h0!r}"
         )
-        if max_levels is None:
-            levels = int(_ADAPTIVE_GRID_MAX_LEVELS)
-    else:
-        h0 = float(_ADAPTIVE_GRID_DEFAULT_SPACING)
-        L = h0
+    L = h0
 
     h_target = max(_ADAPTIVE_GRID_FINE_SCALE * L, _ADAPTIVE_GRID_H_MIN * 0.5)
     h_fine = h0
@@ -322,27 +226,6 @@ def _fractional_bin_keys(
         else:
             keys[:, dim] = np.floor(f / dfrac[dim]).astype(np.int64)
     return keys
-
-
-def _fractional_voxel_seeds(
-    positions: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-    seed_voxel: float,
-    idx: np.ndarray,
-) -> np.ndarray:
-    """One seed per fractional (or Cartesian) voxel."""
-    pts = positions[idx]
-    if not cell_has_volume(cell):
-        keys = np.floor(pts / float(seed_voxel)).astype(np.int64)
-        _, keep = np.unique(keys, axis=0, return_index=True)
-        return np.sort(idx[keep])
-    frac = _cart_to_frac(pts, cell)
-    spacings = np.linalg.norm(cell, axis=1)
-    dfrac = np.maximum(float(seed_voxel) / np.maximum(spacings, 1e-12), 1e-9)
-    keys = _fractional_bin_keys(frac, dfrac, pbc)
-    _, keep = np.unique(keys, axis=0, return_index=True)
-    return np.sort(idx[keep])
 
 
 def _wrap_dedup(points: np.ndarray, cell: np.ndarray, pbc: np.ndarray) -> np.ndarray:
@@ -559,21 +442,6 @@ def _support_positions_for_candidate(
     return np.asarray(out, dtype=float)
 
 
-def _clearance_at(
-    point: np.ndarray,
-    tree: KDTree,
-    framework_radii: np.ndarray,
-    n_atoms: int,
-) -> float:
-    _, c, _ = _clearance_query(
-        np.asarray(point, dtype=float).reshape(1, 3),
-        tree,
-        framework_radii,
-        n_atoms,
-    )
-    return float(c[0])
-
-
 def _batch_clearances(
     points: np.ndarray,
     tree: KDTree,
@@ -585,28 +453,6 @@ def _batch_clearances(
         return np.empty(0, dtype=float)
     _, clearances, _ = _clearance_query(points, tree, framework_radii, n_atoms)
     return clearances
-
-
-def _tangential_stationarity(
-    vertex: np.ndarray,
-    normal: np.ndarray,
-    tree: KDTree,
-    framework_radii: np.ndarray,
-    n_atoms: int,
-    step: float = _ADAPTIVE_GRID_STATIONARITY_STEP,
-) -> float:
-    """Finite-difference ||grad_parallel clearance|| magnitude."""
-    basis = tangent_basis_from_normal(normal)
-    gradients = []
-    for tangent in basis:
-        plus = _clearance_at(
-            vertex + float(step) * tangent, tree, framework_radii, n_atoms
-        )
-        minus = _clearance_at(
-            vertex - float(step) * tangent, tree, framework_radii, n_atoms
-        )
-        gradients.append((plus - minus) / (2.0 * float(step)))
-    return float(np.linalg.norm(gradients))
 
 
 def _batch_tangential_stationarity(
@@ -658,55 +504,6 @@ def _shell_target_clearance(
     else:
         target = 0.5 * (float(min_clearance) + float(max_clearance))
     return float(np.clip(target, min_clearance, max_clearance))
-
-
-def _candidate_score(
-    clearance: float,
-    normal: np.ndarray,
-    vertex: np.ndarray,
-    support_distances: np.ndarray,
-    *,
-    target_clearance: float,
-    tree: KDTree,
-    framework_radii: np.ndarray,
-    n_atoms: int,
-) -> float:
-    """Stationarity-aware score: clearance match + low tangential gradient."""
-    w_c = float(_ADAPTIVE_GRID_SCORE_W_CLEARANCE)
-    w_g = float(_ADAPTIVE_GRID_SCORE_W_GRADIENT)
-    w_b = float(_ADAPTIVE_GRID_SCORE_W_BALANCE)
-    grad = _tangential_stationarity(vertex, normal, tree, framework_radii, n_atoms)
-    balance = _support_balance(support_distances)
-    return (
-        -w_c * abs(float(clearance) - float(target_clearance))
-        - w_g * grad
-        + w_b * balance
-    )
-
-
-def _ray_exposed(
-    vertex: np.ndarray,
-    normal: np.ndarray,
-    tree: KDTree,
-    framework_radii: np.ndarray,
-    n_atoms: int,
-    *,
-    step: float = _ADAPTIVE_GRID_EXPOSURE_STEP,
-    n_steps: int = _ADAPTIVE_GRID_EXPOSURE_N_STEPS,
-    tolerance: float = 1e-8,
-) -> bool:
-    """Return True if clearance is non-decreasing along a short ray on *normal*."""
-    mask = _ray_exposure_mask(
-        np.asarray(vertex, dtype=float).reshape(1, 3),
-        np.asarray(normal, dtype=float).reshape(1, 3),
-        tree,
-        framework_radii,
-        n_atoms,
-        step=step,
-        n_steps=n_steps,
-        tolerance=tolerance,
-    )
-    return bool(mask[0])
 
 
 def _ray_exposure_mask(
@@ -1362,8 +1159,6 @@ def generate_adaptive_grid_sites(
     material_type: str,
     probe_radius: float,
     max_site_distance: float,
-    adsorbate: Atoms | None = None,
-    grid_spacing_scale: float | None = None,
     initial_spacing: float | None = None,
     max_levels: int | None = None,
     n_jobs: int = _DEFAULT_N_JOBS,
@@ -1375,8 +1170,8 @@ def generate_adaptive_grid_sites(
     """Enumerate adaptive-grid candidates with support / clearance metadata.
 
     *probe_radius* / *max_site_distance* map onto the clearance window
-    (element-dependent surface). *grid_spacing_scale* sizes sampling density
-    only and does not redefine basin identity.
+    (element-dependent surface). *initial_spacing* is the absolute shell
+    increment in Å.
     """
     positions = np.asarray(positions, dtype=float)
     cell = np.asarray(cell, dtype=float)
@@ -1405,9 +1200,6 @@ def generate_adaptive_grid_sites(
 
     median_nn = _framework_median_nn(positions, cell, pbc)
     spacing = adaptive_grid_spacing(
-        float(probe_radius),
-        adsorbate,
-        grid_spacing_scale=grid_spacing_scale,
         initial_spacing=initial_spacing,
         max_levels=max_levels,
         framework_median_nn=median_nn,
@@ -1427,7 +1219,6 @@ def generate_adaptive_grid_sites(
         normals=np.empty((0, 3), dtype=float),
         spacing=spacing,
         accessibility_tree=tree,
-        support_distances=[],
     )
     if n_atoms == 0:
         return empty
@@ -1662,5 +1453,4 @@ def generate_adaptive_grid_sites(
         normals=normals,
         spacing=spacing,
         accessibility_tree=tree,
-        support_distances=[c.support_distances for c in clustered],
     )

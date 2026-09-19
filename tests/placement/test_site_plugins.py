@@ -13,7 +13,6 @@ from metalsurfer.placement.generators import (
 )
 from metalsurfer.placement.site_enumeration import get_unified_sites
 from metalsurfer.placement.site_plugins import (
-    PUBLIC_SITE_GENERATORS,
     SITE_GENERATORS,
     resolve_site_generator,
     resolved_site_generator_name,
@@ -33,8 +32,7 @@ from ..conftest import make_nanoparticle, make_porous_framework, make_slab
 
 def test_registry_matches_config_options():
     assert SITE_GENERATORS == ("topology", "voronoi", "adaptive_grid")
-    assert PUBLIC_SITE_GENERATORS == ("topology", "voronoi", "adaptive_grid")
-    assert SITE_GENERATOR_OPTIONS == ("auto",) + PUBLIC_SITE_GENERATORS
+    assert SITE_GENERATOR_OPTIONS == ("auto",) + SITE_GENERATORS
 
 
 def test_auto_defaults_by_material():

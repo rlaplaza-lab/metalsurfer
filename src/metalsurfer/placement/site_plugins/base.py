@@ -15,19 +15,16 @@ import numpy as np
 from ...site_plugin_ids import (
     AUTO_SITE_GENERATOR_DEFAULTS,
     PLUGIN_ALLOWED_MATERIALS,
-    PUBLIC_SITE_GENERATORS,
     SITE_GENERATORS,
 )
 from .._material import validate_material_type
 
 if TYPE_CHECKING:
-    from ase import Atoms
     from scipy.spatial import Delaunay, KDTree
 
 # Re-export registry constants for plugin callers / tests.
 __all__ = [
     "PLUGIN_ALLOWED_MATERIALS",
-    "PUBLIC_SITE_GENERATORS",
     "SITE_GENERATORS",
     "SiteCandidateBatch",
     "SiteGenerationContext",
@@ -81,8 +78,6 @@ class SiteGenerationContext:
     top_layer_tolerance: float
     enrich: bool
     planar_z_variance_threshold: float
-    adsorbate: Atoms | None = None
-    grid_spacing_scale: float | None = None
     adaptive_grid_spacing: float | None = None
     adaptive_grid_refine_levels: int = 0
     adaptive_grid_nms_framework_scale: float | None = None

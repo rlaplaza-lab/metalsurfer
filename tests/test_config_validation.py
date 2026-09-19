@@ -112,10 +112,6 @@ def test_default_config():
         == numeric_defaults.DEFAULT_SITE_EQUIVALENCE_TOLERANCE
     )
     assert (
-        config.hollow_site_dedup_tolerance
-        == numeric_defaults.DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
-    )
-    assert (
         config.planar_z_variance_threshold
         == numeric_defaults.DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
     )
@@ -177,7 +173,6 @@ def test_numeric_defaults_single_source_of_truth():
     assert ctx.min_contact_ratio == cfg.min_contact_ratio
     assert ctx.symmetry_tolerance == cfg.symmetry_tolerance
     assert ctx.site_equivalence_tolerance == cfg.site_equivalence_tolerance
-    assert ctx.hollow_site_dedup_tolerance == cfg.hollow_site_dedup_tolerance
     assert ctx.planar_z_variance_threshold == cfg.planar_z_variance_threshold
 
     analyzer = SymmetryAnalyzer(make_slab())
@@ -483,7 +478,6 @@ def test_negative_int_rejected(field):
         "contact_distance_threshold",
         "symmetry_tolerance",
         "site_equivalence_tolerance",
-        "hollow_site_dedup_tolerance",
         "voronoi_probe_radius",
     ],
 )
@@ -503,7 +497,6 @@ def test_zero_positive_float_rejected(field):
         "contact_distance_threshold",
         "symmetry_tolerance",
         "site_equivalence_tolerance",
-        "hollow_site_dedup_tolerance",
         "voronoi_probe_radius",
         "saturation_temperature",
         "saturation_pressure",

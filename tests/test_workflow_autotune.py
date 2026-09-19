@@ -111,11 +111,8 @@ def test_resolve_saturation_step_workload_config_resolves_before_split(monkeypat
     sentinel_site_context = object()
     recorded: dict[str, object] = {}
 
-    def _fake_site_context(
-        slab_for_sites, config, *, symmetry_broken, grid_spacing_scale=None
-    ):
+    def _fake_site_context(slab_for_sites, config, *, symmetry_broken):
         recorded["symmetry_broken"] = symmetry_broken
-        recorded["grid_spacing_scale"] = grid_spacing_scale
         return sentinel_site_context
 
     def _fake_representative(

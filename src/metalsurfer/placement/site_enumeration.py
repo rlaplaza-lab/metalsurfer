@@ -286,8 +286,6 @@ def get_unified_sites(
     auto_widen: bool = True,
     planar_z_variance_threshold: float | None = None,
     site_generator: str = "auto",
-    adsorbate: Atoms | None = None,
-    grid_spacing_scale: float | None = None,
     adaptive_grid_spacing: float | None = None,
     adaptive_grid_refine_levels: int = 0,
     adaptive_grid_nms_framework_scale: float | None = None,
@@ -337,11 +335,6 @@ def get_unified_sites(
     site_generator
         ``"auto"`` (material default), ``"topology"``, ``"voronoi"``, or
         ``"adaptive_grid"``.
-    adsorbate
-        Optional representative conformer (legacy scale path only).
-    grid_spacing_scale
-        Legacy characteristic length for adaptive_grid when absolute spacing is
-        omitted; ignored when ``adaptive_grid_spacing`` is set.
     adaptive_grid_spacing
         Absolute shell increment in Å (``AdsorptionConfig.adaptive_grid_spacing``).
     adaptive_grid_refine_levels
@@ -351,6 +344,8 @@ def get_unified_sites(
     n_jobs
         Joblib-style CPU workers for ``adaptive_grid`` shell/refine and Voronoi
         ridge enrichment (default ``-2``).
+    side_policy
+        Slab face / exposure policy for ``adaptive_grid`` (default ``positive``).
     """
     scratch = _PlanarWidenScratch()
     sites = _enumerate_unified_sites(
@@ -364,8 +359,6 @@ def get_unified_sites(
         site_classification_method=site_classification_method,
         planar_z_variance_threshold=planar_z_variance_threshold,
         site_generator=site_generator,
-        adsorbate=adsorbate,
-        grid_spacing_scale=grid_spacing_scale,
         adaptive_grid_spacing=adaptive_grid_spacing,
         adaptive_grid_refine_levels=adaptive_grid_refine_levels,
         adaptive_grid_nms_framework_scale=adaptive_grid_nms_framework_scale,
@@ -411,8 +404,6 @@ def get_unified_sites(
         site_classification_method=site_classification_method,
         planar_z_variance_threshold=planar_z_variance_threshold,
         site_generator=site_generator,
-        adsorbate=adsorbate,
-        grid_spacing_scale=grid_spacing_scale,
         adaptive_grid_spacing=adaptive_grid_spacing,
         adaptive_grid_refine_levels=adaptive_grid_refine_levels,
         adaptive_grid_nms_framework_scale=adaptive_grid_nms_framework_scale,
@@ -434,8 +425,6 @@ def _enumerate_unified_sites(
     planar_z_variance_threshold: float | None = None,
     site_generator: str = "auto",
     *,
-    adsorbate: Atoms | None = None,
-    grid_spacing_scale: float | None = None,
     adaptive_grid_spacing: float | None = None,
     adaptive_grid_refine_levels: int = 0,
     adaptive_grid_nms_framework_scale: float | None = None,
@@ -511,8 +500,6 @@ def _enumerate_unified_sites(
         top_layer_tolerance=float(top_layer_tolerance),
         enrich=bool(enrich),
         planar_z_variance_threshold=float(z_var_threshold),
-        adsorbate=adsorbate,
-        grid_spacing_scale=grid_spacing_scale,
         adaptive_grid_spacing=adaptive_grid_spacing,
         adaptive_grid_refine_levels=int(adaptive_grid_refine_levels),
         adaptive_grid_nms_framework_scale=adaptive_grid_nms_framework_scale,
@@ -952,7 +939,8 @@ def get_symmetry_aware_sites(
         Max top-layer height variance (Å²) for planar classification.
         ``None`` uses the library default.
     site_generator
-        Site generator plugin (``"auto"``, ``"topology"``, ``"voronoi"``).
+        Site generator plugin (``"auto"``, ``"topology"``, ``"voronoi"``,
+        ``"adaptive_grid"``).
     side_policy
         Slab face / exposure policy for ``adaptive_grid`` (default ``positive``).
     """

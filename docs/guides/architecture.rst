@@ -184,38 +184,41 @@ Module layout
    ├── result_paths.py       # canonical results_{surface_type}/ path helpers
    ├── reporting.py          # typed FailureSummary formatting helpers
    ├── models.py             # typed result dataclasses
+   ├── site_plugin_ids.py    # site_generator name ↔ material_type matrix
    ├── optimization/         # MLIP setup, batched relaxation (TorchSim / FairChem)
    ├── surface_prep/         # prepare_substrate, freeze, …
    ├── symmetry.py           # spglib-based symmetry analysis
    ├── ml/                   # BO surrogates, dataset, features (schema 3.0)
    ├── placement/            # site_* + generators / pose / policy
-    └── workflow/             # orchestration by run mode
-        ├── core.py           # standard per-molecule screening
-        ├── bayesian.py       # BO-guided per-molecule screening
-        ├── saturation.py     # sequential / multi-mol saturation
-        ├── composite.py      # n-tuplet winners + composite commit
-        ├── placement_fill.py # one-shot oversample + optional diversity retry
-        ├── reference.py      # reference energy preparation
-        └── shared.py         # bootstrap, outcomes, validation, autotune
+   └── workflow/             # orchestration by run mode
+       ├── core.py           # standard per-molecule screening
+       ├── bayesian.py       # BO-guided per-molecule screening
+       ├── saturation.py     # sequential / multi-mol saturation
+       ├── composite.py      # n-tuplet winners + composite commit
+       ├── placement_fill.py # one-shot oversample + optional diversity retry
+       ├── reference.py      # reference energy preparation
+       └── shared.py         # bootstrap, outcomes, validation, autotune
 
 ``placement/`` internals: ``site_types``, ``site_coords``, ``site_voronoi``,
-``site_classify``, ``site_enumeration``, ``site_plugins``, ``site_context``,
-``occupancy``, ``policy``, ``orientation``, ``pose`` (materialize + validate),
-``dissociative``, ``geometry``, ``_material``; public orchestration in
-``generators.py``. Site APIs are imported from ``site_enumeration`` /
-``site_coords`` (also re-exported from ``metalsurfer.placement``).
+``site_classify``, ``site_enumeration``, ``site_adaptive_grid``,
+``site_plugins``, ``site_context``, ``occupancy``, ``policy``, ``orientation``,
+``pose`` (materialize + validate), ``dissociative``, ``geometry``,
+``_material``; public orchestration in ``generators.py``. Site APIs are
+imported from ``site_enumeration`` / ``site_coords`` (also re-exported from
+``metalsurfer.placement``).
 
 
 Site detection
 --------------
 
 Implementation: ``placement/site_*`` plus ``placement/site_plugins/``
-(enumeration entry: ``get_unified_sites``).
+(entry point: ``get_unified_sites``). Plugin names live in
+``site_plugin_ids.py``.
 
-Candidate generation is dispatched through a plugin selected by
-``site_generator`` (``auto`` / ``topology`` / ``voronoi`` / ``adaptive_grid``).
-Shared prep (PBC, probe window) and post (atop injection, classification, sort)
-stay in the enumerator; plugins only emit raw candidate batches.
+Which points get proposed depends on ``site_generator``
+(``auto`` / ``topology`` / ``voronoi`` / ``adaptive_grid``). Shared prep
+(periodicity, probe window) and post-steps (atop injection, classification,
+sort) stay in the enumerator; plugins only emit raw candidate batches.
 
 .. list-table::
    :header-rows: 1
@@ -229,24 +232,23 @@ stay in the enumerator; plugins only emit raw candidate batches.
      - slab/NP → topology; porous → voronoi
    * - ``topology``
      - slab, nanoparticle
-     - Slab: Delaunay hybrid (Voronoi enrich when rough). NP: hull + NN
+     - Slab: atop/bridge/hollow from the top-layer mesh (Voronoi enrich when
+       the surface is rough). NP: convex hull + nearest-neighbour edges
    * - ``voronoi``
      - slab, porous
-     - Free-volume Voronoi (+ ridge enrich). On slabs skips topology (A/B)
+     - Free-volume Voronoi vertices (+ optional ridge enrich). On slabs skips
+       topology (A/B path)
    * - ``adaptive_grid``
      - all
-     - Atom-centred Cartesian shells around every atom with accessibility,
-       exposure filtering (slab half-space only), and iterative NMS toward the
-       near-atom shell—not pore centres. Density is the exposed
-       ``adaptive_grid_spacing`` (Å, coarse default) and
-       ``adaptive_grid_refine_levels``; merge floors on framework median NN
-       (per-chunk work budget; no hard site-count cap). Downstream classify /
-       cluster / spglib / placement use the shared path. Selectable via
-       ``AdsorptionConfig`` / YAML; **not** chosen by ``auto``.
+     - Opt-in Cartesian grid around every atom (spacing in Å). Keeps only
+       accessible, exposed points near atoms — not pore centres. Density is
+       ``adaptive_grid_spacing``; optional refine halvings via
+       ``adaptive_grid_refine_levels``. Same classify / cluster / symmetry /
+       placement path afterward. Selectable in config / YAML; **not** chosen
+       by ``auto``.
 
-Generation is **orientation-aware**: top-layer detection, Voronoi filtering,
-topology candidates, and local normals use the slab normal (``a × b``) and
-slab-plane projectors—not Cartesian ``z``.
+Generation follows the slab normal (``a × b``) and the surface plane — not
+Cartesian ``z``.
 
 Pipeline:
 
@@ -257,64 +259,56 @@ Pipeline:
    (``_derive_voronoi_distance_window``). Slabs use **top-layer** atoms along
    the slab normal; NP/porous use mean radii over all atoms.
 4. Plugin ``generate`` → candidate batch. Topology slab: planar top layer
-   skips Voronoi; rough slabs merge Voronoi enrichment. Topology NP: hull
-   only. Voronoi: free-volume vertices.
+   skips Voronoi; rough slabs merge Voronoi enrichment. Topology NP: hull +
+   nearest-neighbour edges. Voronoi: free-volume vertices.
 5. Vertices filtered to the primary cell within
    ``[voronoi_probe_radius, voronoi_max_site_distance]``.
 6. Optional ridge enrichment (``voronoi_site_enrichment``). On planar slabs
    the topology path does not use ridge enrichment; the flag matters for
    porous frameworks, rough/non-planar slabs, and explicit Voronoi.
-7. Typing: distance ratios on six nearest neighbours, or **Delaunay**
-   nearest-candidate classify (precomputed atop/bridge/hollow XY KDTree) when
-   ``site_classification_method`` is ``delaunay`` / ``auto`` on slabs.
-   Hollows may carry ``hollow_order`` (3- or 4-fold).
-8. ``Site`` records: typed dataclass objects with ``xyz``, local
-   ``normal``, ``site_type``, ``slab_indices``, ``env_fingerprint``,
-   ``site_source``, ``material_type`` (dict adapters only at the symmetry
-   boundary).
-9. Uniqueness is four layers: (1) plugin-internal wrap / NMS / basin
-   clustering; (2) enumerator vertex merge via periodic
-   ``_deduplicate_points`` (~0.1 Å; when Voronoi is appended to topology,
-   existing topology points stay frozen); (3) catalog
-   ``_cluster_equivalent_sites`` (``site_equivalence_tolerance``, fingerprint +
-   MIC — keys on geometry + ``env_fingerprint``, **not** ``site_source`` or
-   classified ``site_type``); (4) optional spglib orbit reduction in
-   ``get_symmetry_aware_sites`` on the clustered catalog.
+7. Typing: distance ratios on six nearest neighbours, or top-layer mesh
+   classify (``delaunay`` / ``auto`` on slabs) that labels candidates as
+   atop / bridge / hollow. Hollows may carry ``hollow_order`` (3- or 4-fold).
+8. ``Site`` records: ``xyz``, local ``normal``, ``site_type``,
+   ``slab_indices``, ``env_fingerprint``, ``site_source``, ``material_type``.
+9. Uniqueness in layers: (1) plugin-internal wrap / near-duplicate thinning;
+   (2) enumerator vertex merge (~0.1 Å; when Voronoi is appended to topology,
+   existing topology points stay frozen); (3) catalog clustering with
+   ``site_equivalence_tolerance`` — sites merge when close **and** they share
+   the same ``env_fingerprint`` (support-atom symbols + distance bins + side
+   label; **not** ``site_source`` or classified ``site_type``); (4) optional
+   spglib symmetry reduction on the clustered list for molecular sampling on a
+   clean substrate.
 10. Final list sorted by fractional coordinates for deterministic
-    ``site_index``. Topology Delaunay is shared with classification when
-    available (one triangulation per slab pass).
+    ``site_index``.
 
-``_get_unique_sites_for_specs`` returns a ``SiteContext`` (``sites``,
-``use_sites``, ``source`` = resolved plugin name, ``raw_unclustered``,
-``clustered_sites``). A single bounded **FIFO** cache keyed by geometry
-fingerprint + Voronoi / site-generator config (+ ``symmetry_broken`` for
-resolved contexts) backs ``resolve_site_context_for_sampling``, which:
+``_get_unique_sites_for_specs`` returns a ``SiteContext`` with the sampling
+catalog (``sites``), the full clustered list (``clustered_sites``), and the
+resolved plugin name. A small bounded cache (keyed by geometry fingerprint +
+site / Voronoi settings) backs ``resolve_site_context_for_sampling``, which:
 
 1. Reuses unique-sites context when present, then applies symmetry.
-2. Uses clustered sites if symmetry is broken (substrate reconstruction or
-   ionic motion). Adsorbates are stripped before that fingerprint check, so
-   they do not latch ``symmetry_broken``.
-3. Otherwise tries ``get_symmetry_aware_sites`` on the **clustered** catalog
-   (orbits blocked by ``site_type`` only — origin-blind); falls back to the
-   clustered unique-site set on failure/empty.
+2. Uses the full clustered list if substrate symmetry is broken
+   (reconstruction or ionic motion). Adsorbates are stripped before that
+   check, so they do not latch ``symmetry_broken``.
+3. Otherwise tries spglib symmetry reduction on the clustered list (different
+   ``site_type`` values stay separate); falls back to the clustered set on
+   failure/empty.
 
 Once the full slab has an adsorbate suffix, or when
-``saturation_molecules_per_step`` > 1 (n-tuplet co-adsorption), sampling
-expands to ``clustered_sites`` (``site_context_for_occupied_surface`` /
-``site_context_for_sampling``) even if the substrate space group is
-unchanged. Occupancy then drops vertices within
-``min_adsorbate_separation`` of existing adsorbate atoms.
+``saturation_molecules_per_step`` > 1, sampling expands to the full clustered
+list even if the substrate space group is unchanged. Occupancy then drops
+vertices within ``min_adsorbate_separation`` of existing adsorbate atoms.
 ``adaptive_grid`` multi-molecule steps share one catalog; other generators
 reuse the per-geometry cache. BO features are geometry, not ``site_index``.
 
-``SiteContext.sites`` is the molecular sampling catalog (clustered, then
-optionally symmetry-reduced on a **clean** substrate; full clustered lattice
-under coverage). ``clustered_sites`` is always the geometric clustering
-result (full lattice) used by dissociative pairs and adatom hollow
-selection. Generators / pose that omit an explicit context call
-``site_context_for_sampling``, which resolves the same path as production
-screening. ``hollow_site_dedup_tolerance`` is schema-compat only;
-hollow uniqueness is ``site_equivalence_tolerance``.
+``SiteContext.sites`` is what molecular sampling draws from (clustered, then
+optionally symmetry-reduced on a **clean** substrate; full clustered list under
+coverage). ``clustered_sites`` is always the geometric clustering result used
+by dissociative pairs and adatom hollow selection. Generators / pose that omit
+an explicit context call ``site_context_for_sampling``, which resolves the same
+path as production screening. Site uniqueness is ``site_equivalence_tolerance``
+only.
 
 Material strategies:
 
@@ -328,12 +322,13 @@ Material strategies:
      - Planar: topology atop/bridge/hollow only. Rough: topology + Voronoi
        enrichment on the top-layer band
    * - nanoparticle
-     - Convex-hull + NN-graph topology only (atop / bridge / 3- and 4-fold
-       hollow). Voronoi is skipped. Hull-facet normals lift sites on both
-       symmetric and lopsided convex clusters. Cluster symmetry wraps
-       transformed fractional coordinates in the padded box but does not
-       MIC-fold site–site deltas. Non-crystallographic groups (e.g. Ih) map
-       to the nearest crystallographic subgroup spglib can return.
+     - Convex-hull + nearest-neighbour topology only (atop / bridge / 3- and
+       4-fold hollow). Voronoi is skipped. Hull-facet normals lift sites on
+       both symmetric and lopsided convex clusters. Cluster symmetry wraps
+       transformed fractional coordinates in the padded box but does not fold
+       site–site deltas through periodic images. Non-crystallographic groups
+       (e.g. Ih) map to the nearest crystallographic subgroup spglib can
+       return.
    * - porous
      - 3×3×3 images; pore sites when the framework spans the cell
 
@@ -347,11 +342,11 @@ Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi`` /
 ``adaptive_grid_nms_framework_scale``, ``side_policy``, ``n_jobs``.
 See :doc:`configuration` for which knobs apply to which plugin.
 
-**Intentional asymmetries** (not unfinished ports): hybrid topology +
-Delaunay on slabs (pure Voronoi floods GPU with weak candidates); hull +
-NN-graph topology on nanoparticles (Voronoi voids are not adsorption sites);
-global ``surface_ref`` along the slab normal for height; dissociative hollow
-pairs on slabs (rejected for porous; NP uses outward-normal site pairs);
+**Intentional asymmetries** (not unfinished ports): top-layer mesh + topology
+on slabs (pure Voronoi floods the batch with weak candidates); hull +
+nearest-neighbour topology on nanoparticles (Voronoi voids are not adsorption
+sites); global ``surface_ref`` along the slab normal for height; dissociative
+hollow pairs on slabs (rejected for porous; NP uses outward-normal site pairs);
 parallel-z floors for slab/NP aromatics (skipped for porous); no atop
 injection / dissociative for porous. Nanoparticle ``surface_ref`` is the
 coordinating metal atoms projected onto the site normal (topology vertices
@@ -375,11 +370,11 @@ same-element adatoms from being treated as substrate.
 
 Occupancy pruning
 ~~~~~~~~~~~~~~~~~
-``available_site_indices`` into the sampling ``SiteContext.sites`` catalog (MIC
-distance from each site vertex to existing adsorbate atoms ≥
-``min_adsorbate_separation``) without remapping indices—replay/BO keep stable
-``site_index`` values. Under coverage that catalog is the full clustered
-lattice (orbit reduction is dropped), so unoccupied equivalent copies remain
+``available_site_indices`` into the sampling ``SiteContext.sites`` catalog
+(shortest periodic distance from each site vertex to existing adsorbate atoms
+≥ ``min_adsorbate_separation``) without remapping indices—replay/BO keep stable
+``site_index`` values. Under coverage that catalog is the full clustered list
+(symmetry reduction is dropped), so unoccupied equivalent copies remain
 sampleable while occupied vertices are excluded. When
 ``occupancy_use_footprint`` is enabled, survivors
 are ranked by lateral footprint clearance (incoming disk scaled by

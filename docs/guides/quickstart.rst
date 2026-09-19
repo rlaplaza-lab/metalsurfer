@@ -60,12 +60,14 @@ Then build HTML locally with::
 Runnable Examples
 -----------------
 
-Seven demos under ``examples/`` cover nanoparticle, porous, slab, dissociative
-H₂ (slab and cluster), competitive saturation, and Bayesian workflows:
+Demos under ``examples/`` cover nanoparticle (including Ru₅₅), porous, slab,
+dissociative H₂ (slab and cluster), competitive saturation, and Bayesian
+workflows:
 
 .. code-block:: bash
 
    python examples/ethene_pt12_binding_energy.py
+   python examples/ethene_ru55_binding_energy.py
    python examples/h2_pt13_binding_energy.py
    python examples/co2_mof_binding_energy.py
    python examples/ethene_ru_slab_binding_energy.py

@@ -3,14 +3,12 @@
 import numpy as np
 import pytest
 from ase import Atoms
-from ase.build import molecule
 from ase.geometry import find_mic
 from scipy.spatial import KDTree
 
 from metalsurfer._geom_pbc import minimum_image_cartesian_delta
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.placement._constants import (
-    _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE,
     _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE,
     _ADAPTIVE_GRID_WORK_BUDGET,
 )
@@ -23,17 +21,12 @@ from metalsurfer.placement.generators import (
 from metalsurfer.placement.site_adaptive_grid import (
     _exposure_mask,
     _fractional_bin_keys,
-    _fractional_voxel_seeds,
     _framework_median_nn,
     _nms,
-    _ray_exposed,
-    _ray_exposure_mask,
     _shell_offsets,
     _work_chunk_bounds,
-    adaptive_grid_characteristic_length,
     adaptive_grid_spacing,
     generate_adaptive_grid_sites,
-    min_adsorbate_grid_scale,
 )
 from metalsurfer.placement.site_context import (
     _SITE_CONTEXT_CACHE,
@@ -42,7 +35,6 @@ from metalsurfer.placement.site_context import (
 )
 from metalsurfer.placement.site_coords import (
     _derive_voronoi_distance_window,
-    _frac_to_cart,
     _slab_normal,
 )
 from metalsurfer.placement.site_enumeration import (
@@ -83,16 +75,9 @@ def test_adaptive_grid_accepted_on_adsorption_config():
 
 def test_adaptive_grid_spacing_rejects_non_positive_absolute():
     with pytest.raises(ValueError, match="initial_spacing"):
-        adaptive_grid_spacing(1.2, initial_spacing=0.0)
+        adaptive_grid_spacing(initial_spacing=0.0)
     with pytest.raises(ValueError, match="initial_spacing"):
-        adaptive_grid_spacing(1.2, initial_spacing=float("nan"))
-
-
-def test_adaptive_grid_spacing_rejects_non_positive_scale():
-    with pytest.raises(ValueError, match="characteristic length"):
-        adaptive_grid_spacing(1.2, grid_spacing_scale=0.0)
-    with pytest.raises(ValueError, match="characteristic length"):
-        adaptive_grid_spacing(1.2, grid_spacing_scale=float("nan"))
+        adaptive_grid_spacing(initial_spacing=float("nan"))
 
 
 def test_absolute_spacing_knob_controls_catalog_density():
@@ -123,10 +108,10 @@ def test_absolute_spacing_knob_controls_catalog_density():
     assert len(fine) > len(coarse)
 
     sp_fine = adaptive_grid_spacing(
-        1.2, initial_spacing=0.55, max_levels=0, framework_median_nn=2.7
+        initial_spacing=0.55, max_levels=0, framework_median_nn=2.7
     )
     sp_coarse = adaptive_grid_spacing(
-        1.2, initial_spacing=1.4, max_levels=0, framework_median_nn=2.7
+        initial_spacing=1.4, max_levels=0, framework_median_nn=2.7
     )
     assert sp_fine.initial_spacing < sp_coarse.initial_spacing
     assert sp_fine.merge_radius <= sp_coarse.merge_radius
@@ -157,32 +142,6 @@ def test_adaptive_grid_default_counts_comparable_to_auto():
         assert lo <= len(grid) <= hi, (
             f"{mat}: auto={len(auto)} grid={len(grid)} not in [{lo}, {hi}]"
         )
-
-
-def test_adsorbate_spacing_scales_with_size():
-    probe, _, _, _ = _window(make_slab(), "slab")
-    co = Atoms("CO", positions=[[0.0, 0.0, 0.0], [1.13, 0.0, 0.0]])
-    assert adaptive_grid_characteristic_length(probe) == pytest.approx(probe)
-    assert (
-        adaptive_grid_spacing(probe, co).initial_spacing
-        < adaptive_grid_spacing(probe, molecule("C6H6")).initial_spacing
-    )
-    assert adaptive_grid_characteristic_length(probe, molecule("C6H6")) > probe
-
-
-def test_min_adsorbate_grid_scale_uses_smallest():
-    probe = 1.2
-    h2 = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
-    bz = molecule("C6H6")
-    L_h2 = adaptive_grid_characteristic_length(probe, h2)
-    L_bz = adaptive_grid_characteristic_length(probe, bz)
-    assert L_h2 < L_bz
-    assert min_adsorbate_grid_scale(probe, [bz, h2]) == pytest.approx(L_h2)
-    assert min_adsorbate_grid_scale(probe, []) == pytest.approx(probe)
-    spacing_min = adaptive_grid_spacing(probe, grid_spacing_scale=L_h2)
-    spacing_bz = adaptive_grid_spacing(probe, grid_spacing_scale=L_bz)
-    assert spacing_min.initial_spacing <= spacing_bz.initial_spacing
-    assert spacing_min.merge_radius <= spacing_bz.merge_radius
 
 
 def _site(xyz, site_type, source, nn):
@@ -331,20 +290,6 @@ def test_nms_uses_min_radius_symmetrically():
     assert len(kept2) == 1
 
 
-def test_fractional_voxel_seeds_merge_wrapped_and_skewed():
-    cell = np.array([[6.0, 0.0, 0.0], [2.0, 5.0, 0.0], [0.0, 0.0, 8.0]], dtype=float)
-    pbc = np.array([True, True, True])
-    positions = _frac_to_cart(
-        np.array([[0.05, 0.5, 0.5], [0.08, 0.5, 0.5], [0.7, 0.2, 0.3]], dtype=float),
-        cell,
-    )
-    idx = _fractional_voxel_seeds(
-        positions, cell, pbc, seed_voxel=2.0, idx=np.arange(3)
-    )
-    assert len(idx) == 2
-    assert 2 in set(idx.tolist())
-
-
 def test_fractional_bin_keys_equal_width():
     frac = np.array([[0.0, 0.0, 0.0], [0.99, 0.5, 0.5]], dtype=float)
     dfrac = np.array([0.3, 0.3, 0.3])
@@ -396,15 +341,8 @@ def test_adaptive_grid_floors_density_against_framework_nn():
     pbc = np.asarray(material_aware_pbc("nanoparticle"), dtype=bool)
     median_nn = _framework_median_nn(pos, cell, pbc)
     assert median_nn > 0.0
-    h2 = Atoms("H2", positions=[[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]])
-    scale = min_adsorbate_grid_scale(None, [h2])
-    unfloored = adaptive_grid_spacing(1.2, grid_spacing_scale=scale)
-    floored = adaptive_grid_spacing(
-        1.2, grid_spacing_scale=scale, framework_median_nn=median_nn
-    )
-    assert floored.characteristic_length >= (
-        max(scale, _ADAPTIVE_GRID_LENGTH_FRAMEWORK_SCALE * median_nn) - 1e-12
-    )
+    unfloored = adaptive_grid_spacing(initial_spacing=0.70)
+    floored = adaptive_grid_spacing(initial_spacing=0.70, framework_median_nn=median_nn)
     assert (
         floored.merge_radius >= _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE * median_nn - 1e-12
     )
@@ -416,7 +354,7 @@ def test_adaptive_grid_floors_density_against_framework_nn():
         material_type="nanoparticle",
         probe_radius=1.2,
         max_site_distance=3.5,
-        grid_spacing_scale=scale,
+        initial_spacing=0.70,
         n_jobs=1,
         symbols=list(cluster.get_chemical_symbols()),
     )
@@ -558,34 +496,6 @@ def test_adaptive_grid_dissociative_hollows_on_slab():
         "adaptive_grid slab should expose hollow sites for dissociative pairs"
     )
     assert all(s.site_type in ("hollow", "pore") for s in hollows)
-
-
-def test_ray_exposure_mask_matches_scalar_ray_exposed():
-    positions = np.array([[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]], dtype=float)
-    radii = np.full(2, 0.7, dtype=float)
-    tree = KDTree(positions)
-    verts = np.array(
-        [
-            [1.25, 0.0, 0.0],
-            [0.0, 0.0, 1.5],
-            [0.0, 0.0, 2.0],
-        ],
-        dtype=float,
-    )
-    normals = np.array(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=float,
-    )
-    batched = _ray_exposure_mask(verts, normals, tree, radii, 2)
-    scalar = np.array(
-        [_ray_exposed(verts[i], normals[i], tree, radii, 2) for i in range(len(verts))],
-        dtype=bool,
-    )
-    assert np.array_equal(batched, scalar)
 
 
 def test_adaptive_grid_porous_wall_near_placement():

@@ -68,10 +68,6 @@ def test_computation_context_defaults_match_numeric_defaults():
         == numeric_defaults.DEFAULT_SITE_EQUIVALENCE_TOLERANCE
     )
     assert (
-        ctx.hollow_site_dedup_tolerance
-        == numeric_defaults.DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
-    )
-    assert (
         ctx.planar_z_variance_threshold
         == numeric_defaults.DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
     )
@@ -838,7 +834,6 @@ class TestRecordReplay:
         cfg = AdsorptionConfig(
             symmetry_tolerance=0.2,
             site_equivalence_tolerance=0.06,
-            hollow_site_dedup_tolerance=0.3,
             planar_z_variance_threshold=0.04,
         )
         r.context = ComputationContext.from_config(cfg)
@@ -848,9 +843,6 @@ class TestRecordReplay:
         assert config.seed == r.context.seed
         assert config.symmetry_tolerance == r.context.symmetry_tolerance
         assert config.site_equivalence_tolerance == r.context.site_equivalence_tolerance
-        assert (
-            config.hollow_site_dedup_tolerance == r.context.hollow_site_dedup_tolerance
-        )
         assert (
             config.planar_z_variance_threshold == r.context.planar_z_variance_threshold
         )
@@ -966,3 +958,12 @@ def test_from_flat_dict_accepts_lean_default_context_hash():
     flat = r.to_flat_dict(include_provenance=False)
     r2 = PlacementRecord.from_flat_dict(flat)
     assert r2.context.settings_hash() == ComputationContext().settings_hash()
+
+
+def test_from_flat_dict_ignores_legacy_hollow_site_dedup_tolerance():
+    r = make_placement_record(0)
+    flat = r.to_flat_dict(include_provenance=True)
+    flat["ctx_hollow_site_dedup_tolerance"] = 0.99
+    r2 = PlacementRecord.from_flat_dict(flat)
+    assert "hollow_site_dedup_tolerance" not in r2.context.to_dict()
+    assert r2.context.settings_hash() == r.context.settings_hash()

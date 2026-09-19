@@ -196,7 +196,7 @@ def _resolve_surface_ref(
     z_offset is the gap above the surface layer.  For nanoparticles with known
     coordinating atoms, the reference is those metal atoms projected onto the
     site normal (topology sites sit above the metal; stacking z_offset on the
-    site vertex would double-count).  Porous / legacy sites without indices use
+    site vertex would double-count).  Porous sites without indices use
     the site vertex projection (Voronoi voids are already in free volume).
 
     When *rough_slab_local_z* is True and the slab is non-planar, use the

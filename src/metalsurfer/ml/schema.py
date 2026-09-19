@@ -24,7 +24,6 @@ from .._csv_coerce import (
 )
 from .._numeric_defaults import (
     DEFAULT_FMAX,
-    DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
     DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     DEFAULT_SEED,
     DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
@@ -210,7 +209,6 @@ class ComputationContext:
     top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE
     symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
     site_equivalence_tolerance: float = DEFAULT_SITE_EQUIVALENCE_TOLERANCE
-    hollow_site_dedup_tolerance: float = DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE
     planar_z_variance_threshold: float = DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
 
     @classmethod
@@ -241,7 +239,6 @@ class ComputationContext:
             top_layer_tolerance=config.top_layer_tolerance,
             symmetry_tolerance=config.symmetry_tolerance,
             site_equivalence_tolerance=config.site_equivalence_tolerance,
-            hollow_site_dedup_tolerance=config.hollow_site_dedup_tolerance,
             planar_z_variance_threshold=config.planar_z_variance_threshold,
         )
 
@@ -280,7 +277,6 @@ class ComputationContext:
         cfg.top_layer_tolerance = self.top_layer_tolerance
         cfg.symmetry_tolerance = self.symmetry_tolerance
         cfg.site_equivalence_tolerance = self.site_equivalence_tolerance
-        cfg.hollow_site_dedup_tolerance = self.hollow_site_dedup_tolerance
         cfg.planar_z_variance_threshold = self.planar_z_variance_threshold
         return cfg
 
@@ -698,12 +694,7 @@ class PlacementRecord:
                         "site_equivalence_tolerance", DEFAULT_SITE_EQUIVALENCE_TOLERANCE
                     )
                 ),
-                hollow_site_dedup_tolerance=float(
-                    _ctx_value(
-                        "hollow_site_dedup_tolerance",
-                        DEFAULT_HOLLOW_SITE_DEDUP_TOLERANCE,
-                    )
-                ),
+                # Legacy CSV column ctx_hollow_site_dedup_tolerance is ignored.
                 planar_z_variance_threshold=float(
                     _ctx_value(
                         "planar_z_variance_threshold",

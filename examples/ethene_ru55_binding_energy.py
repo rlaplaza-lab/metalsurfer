@@ -6,8 +6,9 @@ Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, to
 Uses ``ase.cluster.Icosahedron("Ru", noshells=3, latticeconstant=...)`` (55 atoms).
 ASE cannot guess Ru's lattice constant (hcp), so we pass the FCC-equivalent
 ``a ≈ 3.83 Å`` that matches Ru hcp nearest-neighbour spacing (~2.71 Å).
-UMA ionic prep relaxes the cluster, then ethene is placed with the cluster
-frozen during adsorption (default prep ``FixAtoms``).
+Keep the input cluster geometry (``slab_relaxation_mode="none"``): ionic prep
+can distort the icosahedron and yield unbound ethene under UMA. The whole
+cluster is frozen during adsorption (default prep ``FixAtoms``).
 
 Run (conda env metalsurfer)::
 
@@ -34,8 +35,9 @@ from metalsurfer.surface_prep import prepare_substrate
 # A relaxed best pose at or below this distance means ethene made a true
 # chemisorption contact (physisorption sits around 3+ Å).
 CHEMISORPTION_CONTACT_ANG = 2.6
-# Provisional best-E_ads band (uma-s-1p2 + oc25); e2e A/B on prep-frozen Ru₅₅
-# saw best ≈ −4.81 (auto) / −5.00 (adaptive_grid) at 6 placements.
+# Provisional best-E_ads band (uma-s-1p2 + oc25) on the ASE icosahedron with
+# slab_relaxation_mode="none" and prep-frozen Ru₅₅; e2e A/B saw best ≈ −4.81
+# (auto) / −5.00 (adaptive_grid) at 6 placements.
 E_ADS_CEILING_EV = -4.20
 E_ADS_FLOOR_EV = -6.00
 
@@ -110,7 +112,7 @@ def main() -> int:
         autobatcher_max_memory_padding=0.8,
         autobatcher_max_memory_scaler=500,
         autobatcher_max_atoms_to_try=5000,
-        slab_relaxation_mode="ionic_only",
+        slab_relaxation_mode="none",
         stage2_steps=500,
     )
 
