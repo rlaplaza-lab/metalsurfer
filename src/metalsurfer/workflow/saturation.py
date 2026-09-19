@@ -54,6 +54,7 @@ from .shared import (
     _bootstrap_screening_run,
     _build_surface_reference_slab,
     _compute_slab_energy,
+    _dump_debug_sites_if_enabled,
     _normalize_molecules_input,
     adsorption_ranking_energy,
     needs_workload_autotune,
@@ -654,6 +655,7 @@ def _screen_saturation_molecule(
     skip_workload_autotune: bool = False,
     occupancy_placement_X: list[dict[str, float]] | None = None,
     site_context: object | None = None,
+    debug_sites_step: int | None = None,
 ) -> tuple[
     list[ScreeningResult], BOTransferInfo, BOStepMemory | None, list[PlacementRecord]
 ]:
@@ -671,6 +673,7 @@ def _screen_saturation_molecule(
         "skip_workload_autotune": skip_workload_autotune,
         "saturation_reuse": True,
         "site_context": site_context,
+        "debug_sites_step": debug_sites_step,
     }
     if bo_enabled:
         kwargs["bo_step_memory_in"] = (
@@ -1032,6 +1035,7 @@ def _run_single_molecule_saturation(
                 conformer_energies=cached_conformer_energies,
                 skip_workload_autotune=True,
                 occupancy_placement_X=committed_placement_X or None,
+                debug_sites_step=step,
             )
         )
         for record in ml_records:
@@ -1335,6 +1339,13 @@ def _run_multi_molecule_saturation(
                 full_slab=slab.atoms,
                 config=step_config,
             ),
+        )
+        _dump_debug_sites_if_enabled(
+            slab_for_sites,
+            shared_site_context,
+            step_config,
+            surface_type,
+            step=step,
         )
 
         for mol in active_molecules:

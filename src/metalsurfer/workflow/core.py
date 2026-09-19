@@ -60,6 +60,7 @@ def process_molecule(
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
     site_context: SiteContext | None = None,
+    debug_sites_step: int | None = None,
 ) -> MoleculeScreenOutcome:
     """Run the full placement-optimise-validate pipeline for one molecule.
 
@@ -97,6 +98,10 @@ def process_molecule(
         Energies aligned with conformers (optional).
     skip_workload_autotune
         Whether to skip workload autotuning.
+    site_context
+        Pre-resolved site catalog (optional).
+    debug_sites_step
+        Saturation step index for ``debug_write_sites`` filenames (optional).
     """
     if reference_smiles is None:
         reference_smiles = smiles
@@ -133,6 +138,8 @@ def process_molecule(
             conformer_energies=conformer_energies,
             skip_workload_autotune=skip_workload_autotune,
             site_context=site_context,
+            surface_type=surface_type,
+            debug_sites_step=debug_sites_step,
         )
         if ctx is None:
             assert early_failure is not None

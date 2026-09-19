@@ -857,6 +857,8 @@ class AdsorptionConfig:
     fail_on_missing_reference: bool = False
     fail_on_conformer_failure: bool = False
     debug_write_initial_placements: bool = False
+    # Write sites_plugin.xyz / sites_final.xyz overlays (Z=0 markers on substrate).
+    debug_write_sites: bool = False
     # When True and the first one-shot pass is short with failed-spec keys,
     # run one diversity round that re-enumerates excluding those keys.
     placement_retry_enabled: bool = True

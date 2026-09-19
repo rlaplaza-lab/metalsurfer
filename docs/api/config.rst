@@ -930,6 +930,14 @@ Reproducibility, strictness, and I/O
    Write ``initial_*.xyz`` files of pre-relaxation placements alongside optimized
    structures under ``xyz_structures/``.
 
+``debug_write_sites``
+   **Type:** ``bool`` · **Default:** ``False``
+
+   Write site overlays under ``xyz_structures/`` with atomic-number-0 markers on
+   the substrate: ``sites_plugin.xyz`` (raw plugin vertices) and
+   ``sites_final.xyz`` (fingerprint-clustered catalog). Saturation writes one
+   pair per step as ``sites_plugin_stepNNN.xyz`` / ``sites_final_stepNNN.xyz``.
+
 ``write_vasp_inputs``
    **Type:** ``bool`` · **Default:** ``False``
 

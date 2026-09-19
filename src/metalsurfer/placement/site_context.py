@@ -15,8 +15,8 @@ from ._cache_key import _pack_optional_float
 from ._material import material_aware_pbc, validate_material_type
 from .site_enumeration import (
     _cluster_equivalent_sites,
+    _get_unified_sites_with_plugin_vertices,
     get_symmetry_aware_sites,
-    get_unified_sites,
 )
 from .site_plugins import resolved_site_generator_name
 from .site_types import Site
@@ -37,7 +37,8 @@ class SiteContext:
     ``site_context_for_sampling`` expands ``sites`` to ``clustered_sites``.
     ``clustered_sites`` is always the fingerprint-aware geometric clustering
     result (full translational lattice). ``raw_unclustered`` is the
-    pre-clustering ``get_unified_sites`` output.
+    pre-clustering ``get_unified_sites`` output. ``plugin_vertices`` is the
+    raw plugin candidate coordinates before shared post-processing.
     """
 
     sites: list[Site]
@@ -45,6 +46,7 @@ class SiteContext:
     source: str
     raw_unclustered: list[Site] | None = None
     clustered_sites: list[Site] | None = None
+    plugin_vertices: np.ndarray | None = None
 
 
 # Bounded FIFO cache for unique-sites (pre-symmetry) and resolved site contexts.
@@ -59,6 +61,7 @@ def _no_sites_context(
     *,
     raw_unclustered: list[Site] | None = None,
     clustered_sites: list[Site] | None = None,
+    plugin_vertices: np.ndarray | None = None,
 ) -> SiteContext:
     return SiteContext(
         sites=[],
@@ -66,6 +69,7 @@ def _no_sites_context(
         source="no_sites",
         raw_unclustered=raw_unclustered,
         clustered_sites=clustered_sites,
+        plugin_vertices=plugin_vertices,
     )
 
 
@@ -185,6 +189,7 @@ def resolve_site_context_for_sampling(
     use_sites = _core_ctx.use_sites
     raw_unclustered = _core_ctx.raw_unclustered
     clustered_sites = _core_ctx.clustered_sites
+    plugin_vertices = _core_ctx.plugin_vertices
 
     if not use_sites or not core_sites:
         result = _core_ctx
@@ -196,6 +201,7 @@ def resolve_site_context_for_sampling(
             source=_core_ctx.source,
             raw_unclustered=raw_unclustered,
             clustered_sites=clustered_sites,
+            plugin_vertices=plugin_vertices,
         )
     else:
         try:
@@ -229,6 +235,7 @@ def resolve_site_context_for_sampling(
                 source="symmetry_aware",
                 raw_unclustered=raw_unclustered,
                 clustered_sites=clustered_sites,
+                plugin_vertices=plugin_vertices,
             )
         else:
             logger.debug("Using clustered sites (no symmetry-reduced set)")
@@ -238,6 +245,7 @@ def resolve_site_context_for_sampling(
                 source=_core_ctx.source,
                 raw_unclustered=raw_unclustered,
                 clustered_sites=clustered_sites,
+                plugin_vertices=plugin_vertices,
             )
 
     return _store_site_context_cache(cache_key, result)
@@ -280,6 +288,7 @@ def site_context_for_occupied_surface(ctx: SiteContext) -> SiteContext:
         source=_CLUSTERED_UNDER_COVERAGE_SOURCE,
         raw_unclustered=ctx.raw_unclustered,
         clustered_sites=clustered,
+        plugin_vertices=ctx.plugin_vertices,
     )
 
 
@@ -349,7 +358,7 @@ def _get_unique_sites_for_specs(
         )
         return _store_site_context_cache(cache_key, _no_sites_context())
 
-    raw_sites = get_unified_sites(
+    raw_sites, plugin_vertices = _get_unified_sites_with_plugin_vertices(
         slab,
         probe_radius=probe_radius,
         max_site_distance=max_site_dist,
@@ -377,7 +386,10 @@ def _get_unique_sites_for_specs(
             f"{max_site_dist:.2f}" if max_site_dist is not None else "auto",
             mat_type,
         )
-        return _store_site_context_cache(cache_key, _no_sites_context())
+        return _store_site_context_cache(
+            cache_key,
+            _no_sites_context(plugin_vertices=plugin_vertices),
+        )
 
     cell = np.array(slab.get_cell())
     unique_sites = _cluster_equivalent_sites(
@@ -396,7 +408,10 @@ def _get_unique_sites_for_specs(
         )
         return _store_site_context_cache(
             cache_key,
-            _no_sites_context(raw_unclustered=raw_sites),
+            _no_sites_context(
+                raw_unclustered=raw_sites,
+                plugin_vertices=plugin_vertices,
+            ),
         )
 
     plugin_source = resolved_site_generator_name(
@@ -410,5 +425,6 @@ def _get_unique_sites_for_specs(
             source=plugin_source,
             raw_unclustered=raw_sites,
             clustered_sites=unique_sites,
+            plugin_vertices=plugin_vertices,
         ),
     )

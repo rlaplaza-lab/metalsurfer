@@ -691,7 +691,9 @@ Root: ``results_{surface_type}/`` (see :func:`~metalsurfer.results_dir_for`).
 - ``saturation_placements_detailed.csv`` and ``step_{NNN}_placements/`` when
   ``saturation_save_all_placements=True`` (default).
 - ``ml_dataset.csv`` / ``ml_dataset_metadata.json`` — ``DatasetLogger``.
-- ``xyz_structures/``, optional ``vasp_inputs/``, ``run_metadata.json``.
+- ``xyz_structures/`` (including optional ``sites_plugin*.xyz`` /
+  ``sites_final*.xyz`` when ``debug_write_sites=True``; saturation uses
+  ``_stepNNN`` suffixes), optional ``vasp_inputs/``, ``run_metadata.json``.
 
 Writers and CSV row builders share path layout via :mod:`metalsurfer.result_paths`
 (``molecule_all_xyz_dir``, ``saturation_xyz_dir``, …). Result-object export
