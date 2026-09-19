@@ -1,13 +1,15 @@
 """Atom-centred adaptive Cartesian grid for adsorption-site candidates.
 
 One PBC-aware pipeline for every material: shells around all atoms, atom-aware
-clearance, support-environment identity, exposure/side policy, basin-preserving
-refinement, and environment-aware basin clustering — not free-volume centres.
+clearance, exposure/side policy, one representative per support key snapped to
+a target clearance above the support centroid, and a ``merge_radius`` NMS so
+the catalog does not oversample. This is wall-near sampling — not free-volume
+/ pore-centre enumeration.
 
 Spacing is the exposed absolute ``adaptive_grid_spacing`` (Å) with optional
-refine halvings; a framework-NN floor on the NMS merge radius keeps metal
-catalogs from exploding. Site identity comes from support atoms, local normals,
-and clearance basins — adsorbate size must not redefine the substrate surface.
+refine halvings; ``merge_radius`` tracks spacing and floors on framework
+median NN. Site identity comes from support atoms, local normals, and
+clearance — adsorbate size must not redefine the substrate surface.
 
 Classify / cluster / symmetry / placement use the shared enumerator path —
 this module returns candidate vertices plus support indices / clearances /
@@ -26,9 +28,6 @@ from scipy.spatial import KDTree
 
 from .._utils import cell_has_volume
 from ._constants import (
-    _ADAPTIVE_GRID_BASIN_CLEARANCE_TOL,
-    _ADAPTIVE_GRID_BASIN_MIN_JACCARD,
-    _ADAPTIVE_GRID_BASIN_MIN_NORMAL_COSINE,
     _ADAPTIVE_GRID_BIN_PRETHIN,
     _ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS,
     _ADAPTIVE_GRID_DEFAULT_SPACING,
@@ -36,11 +35,11 @@ from ._constants import (
     _ADAPTIVE_GRID_EXPOSURE_STEP,
     _ADAPTIVE_GRID_FINE_SCALE,
     _ADAPTIVE_GRID_H_MIN,
-    _ADAPTIVE_GRID_LOCAL_MERGE_SCALE,
     _ADAPTIVE_GRID_MAX_SUPPORT,
     _ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE,
     _ADAPTIVE_GRID_NMS_LENGTH_SCALE,
     _ADAPTIVE_GRID_NMS_SCALE,
+    _ADAPTIVE_GRID_PRETHIN_BIN,
     _ADAPTIVE_GRID_REFINE_POS_TOL,
     _ADAPTIVE_GRID_REFINE_SCORE_TOL,
     _ADAPTIVE_GRID_SCORE_W_BALANCE,
@@ -63,7 +62,6 @@ from .site_coords import (
     _cart_to_frac,
     _deduplicate_points,
     _minimum_image_cartesian_delta,
-    _pbc_merge_pair_set,
     _periodic_image_offsets,
     _slab_normal,
     _wrap_cartesian,
@@ -158,7 +156,7 @@ def adaptive_grid_spacing(
 
     *initial_spacing* is the absolute shell increment in Å
     (``AdsorptionConfig.adaptive_grid_spacing``). When omitted, the module
-    default is used. Basin identity is independent of this resolution.
+    default is used.
     """
     nn = float(framework_median_nn) if framework_median_nn is not None else 0.0
     levels = (
@@ -384,6 +382,7 @@ def _support_environment(
             if key not in seen or d_i < seen[key]:
                 seen[key] = float(d_i)
         items = sorted(seen.items(), key=lambda kv: (kv[1], kv[0][0], kv[0][1]))
+        items = items[:max_support]
         support_sets.append(tuple(int(k[0]) for k, _ in items))
         support_shifts.append(tuple(k[1] for k, _ in items))
         support_dists.append(np.asarray([v for _, v in items], dtype=float))
@@ -749,136 +748,154 @@ def _support_key(
     return frozenset(zip(indices, shifts, strict=True))
 
 
-def _same_site_environment(
-    support_i: frozenset[tuple[int, tuple[int, int, int]]],
-    support_j: frozenset[tuple[int, tuple[int, int, int]]],
-    normal_i: np.ndarray,
-    normal_j: np.ndarray,
-    clearance_i: float,
-    clearance_j: float,
-    *,
-    min_jaccard: float = _ADAPTIVE_GRID_BASIN_MIN_JACCARD,
-    min_normal_cosine: float = _ADAPTIVE_GRID_BASIN_MIN_NORMAL_COSINE,
-    clearance_tol: float = _ADAPTIVE_GRID_BASIN_CLEARANCE_TOL,
-) -> bool:
-    union = support_i | support_j
-    if not union:
-        return False
-    jaccard = len(support_i & support_j) / len(union)
-    normal_similarity = abs(float(np.dot(normal_i, normal_j)))
-    return (
-        jaccard >= float(min_jaccard)
-        and normal_similarity >= float(min_normal_cosine)
-        and abs(float(clearance_i) - float(clearance_j)) <= float(clearance_tol)
-    )
-
-
-def _local_merge_radius(
-    support_indices: tuple[int, ...],
-    support_shifts: tuple[tuple[int, int, int], ...],
-    positions: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-    *,
-    fallback: float,
-) -> float:
-    """Merge radius from median support–support spacing; global fallback."""
-    supp = _support_positions_for_candidate(
-        support_indices, support_shifts, positions, cell
-    )
-    if len(supp) < 2:
-        return float(fallback)
-    dists = []
-    for i in range(len(supp)):
-        for j in range(i + 1, len(supp)):
-            dists.append(_mic_distance(supp[i], supp[j], cell, pbc))
-    if not dists:
-        return float(fallback)
-    return float(
-        max(
-            float(fallback) * 0.5,
-            _ADAPTIVE_GRID_LOCAL_MERGE_SCALE * float(np.median(dists)),
-        )
-    )
-
-
-def _cluster_basins(
+def _merge_by_radius(
     candidates: list[CandidateSite],
     *,
-    positions: np.ndarray,
     cell: np.ndarray,
     pbc: np.ndarray,
-    base_merge: float,
+    merge_radius: float,
 ) -> list[CandidateSite]:
-    """Select one representative per environment-compatible basin."""
-    n = len(candidates)
-    if n == 0:
+    """Isotropic NMS at *merge_radius*; assign basin_id in score order."""
+    if not candidates:
         return []
-    if n == 1:
+    if len(candidates) == 1:
         return [replace(candidates[0], basin_id=0)]
 
     verts = np.asarray([c.position for c in candidates], dtype=float)
     scores = np.asarray([c.score for c in candidates], dtype=float)
-    keys = [_support_key(c.support_indices, c.support_image_shifts) for c in candidates]
-    radii = np.asarray(
-        [
-            _local_merge_radius(
-                c.support_indices,
-                c.support_image_shifts,
-                positions,
-                cell,
-                pbc,
-                fallback=base_merge,
-            )
-            for c in candidates
-        ],
-        dtype=float,
+    kept_verts, _ = _nms(
+        verts,
+        np.zeros(len(verts), dtype=float),
+        scores,
+        merge_r=float(merge_radius),
+        cell=cell,
+        pbc=pbc,
     )
-    max_r = float(np.max(radii))
-    offsets = _image_offsets_for_radius(cell, pbc, max_r)
-    pairs = _pbc_merge_pair_set(verts, max_r, image_offsets=offsets)
-
-    parent = list(range(n))
-
-    def find(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    def union(i: int, j: int) -> None:
-        ri, rj = find(i), find(j)
-        if ri != rj:
-            parent[rj] = ri
-
-    for i, j in pairs:
-        r_ij = float(min(radii[i], radii[j]))
-        if not _pair_within_radius(verts[i], verts[j], r_ij, cell, pbc):
-            continue
-        if _same_site_environment(
-            keys[i],
-            keys[j],
-            candidates[i].normal,
-            candidates[j].normal,
-            candidates[i].clearance,
-            candidates[j].clearance,
-        ):
-            union(i, j)
-
-    components: dict[int, list[int]] = {}
-    for i in range(n):
-        components.setdefault(find(i), []).append(i)
-
-    order = _nms_rank_order(verts, scores, cell, pbc)
-    rank = {int(i): r for r, i in enumerate(order)}
-    out: list[CandidateSite] = []
-    for basin_id, members in enumerate(sorted(components.values(), key=min)):
-        best = min(members, key=lambda i: rank[i])
-        out.append(replace(candidates[best], basin_id=basin_id))
+    tree_v = KDTree(verts)
+    kept_idx = list(dict.fromkeys(int(tree_v.query(pt, k=1)[1]) for pt in kept_verts))
+    out = [candidates[i] for i in kept_idx]
     rep_verts = np.asarray([c.position for c in out], dtype=float)
     rep_scores = np.asarray([c.score for c in out], dtype=float)
     rep_order = _nms_rank_order(rep_verts, rep_scores, cell, pbc)
-    return [out[int(i)] for i in rep_order]
+    return [replace(out[int(i)], basin_id=b) for b, i in enumerate(rep_order)]
+
+
+def _best_per_support_key(
+    candidates: list[CandidateSite],
+) -> list[CandidateSite]:
+    """Keep the highest-score candidate for each support environment."""
+    best: dict[frozenset[tuple[int, tuple[int, int, int]]], CandidateSite] = {}
+    for c in candidates:
+        key = _support_key(c.support_indices, c.support_image_shifts)
+        prev = best.get(key)
+        if prev is None or float(c.score) > float(prev.score):
+            best[key] = c
+    return list(best.values())
+
+
+def _height_for_target_clearance(
+    support_positions: np.ndarray,
+    support_radii: np.ndarray,
+    normal: np.ndarray,
+    target_clearance: float,
+) -> float:
+    """Height along *normal* so atom-aware clearance ≈ *target_clearance*."""
+    supp = np.asarray(support_positions, dtype=float)
+    if len(supp) == 0:
+        return float(target_clearance)
+    n_hat = np.asarray(normal, dtype=float)
+    nrm = float(np.linalg.norm(n_hat))
+    if nrm < _VECTOR_NORM_EPS:
+        return float(target_clearance)
+    n_hat = n_hat / nrm
+    centroid = np.mean(supp, axis=0)
+    radii = np.asarray(support_radii, dtype=float)
+    r_eff = float(np.mean(radii)) if len(radii) else 0.0
+    lat2 = 0.0
+    for p in supp:
+        d = p - centroid
+        d_perp = d - float(np.dot(d, n_hat)) * n_hat
+        lat2 = max(lat2, float(np.dot(d_perp, d_perp)))
+    need = float(target_clearance) + r_eff
+    need2 = need * need
+    if need2 > lat2:
+        return float(np.sqrt(need2 - lat2))
+    return max(need, float(target_clearance), _VECTOR_NORM_EPS)
+
+
+def _lateral_snap_candidates(
+    candidates: list[CandidateSite],
+    *,
+    positions: np.ndarray,
+    framework_radii: np.ndarray,
+    tree: KDTree,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    target_clearance: float,
+) -> list[CandidateSite]:
+    """Snap each candidate to support-centroid at atom-aware *target_clearance*."""
+    if not candidates:
+        return []
+    n_atoms = len(positions)
+    out: list[CandidateSite] = []
+    for c in candidates:
+        supp = _support_positions_for_candidate(
+            c.support_indices, c.support_image_shifts, positions, cell
+        )
+        if len(supp) == 0:
+            continue
+        normal = np.asarray(c.normal, dtype=float)
+        nrm = float(np.linalg.norm(normal))
+        if nrm < _VECTOR_NORM_EPS:
+            continue
+        n_hat = normal / nrm
+        idxs = list(c.support_indices)
+        radii = np.asarray(framework_radii[idxs], dtype=float)
+        height = _height_for_target_clearance(
+            supp, radii, n_hat, float(target_clearance)
+        )
+        centroid = np.mean(supp, axis=0)
+        snapped = centroid + height * n_hat
+        if np.any(pbc) and cell_has_volume(cell):
+            snapped = _wrap_cartesian(snapped.reshape(1, 3), cell, pbc)[0]
+        _, clearance, _ = _clearance_query(
+            snapped.reshape(1, 3), tree, framework_radii, n_atoms
+        )
+        if float(clearance[0]) < 0.0:
+            continue
+        out.append(
+            replace(
+                c,
+                position=np.asarray(snapped, dtype=float).copy(),
+                clearance=float(clearance[0]),
+            )
+        )
+    return out
+
+
+def _finalize_candidates(
+    candidates: list[CandidateSite],
+    *,
+    positions: np.ndarray,
+    framework_radii: np.ndarray,
+    tree: KDTree,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    merge_radius: float,
+    target_clearance: float,
+) -> list[CandidateSite]:
+    """One site per support key, snap to target clearance, then merge_radius NMS."""
+    unique = _best_per_support_key(candidates)
+    snapped = _lateral_snap_candidates(
+        unique,
+        positions=positions,
+        framework_radii=framework_radii,
+        tree=tree,
+        cell=cell,
+        pbc=pbc,
+        target_clearance=target_clearance,
+    )
+    return _merge_by_radius(snapped, cell=cell, pbc=pbc, merge_radius=merge_radius)
 
 
 def _work_chunk_bounds(n_seeds: int, n_offsets: int) -> list[tuple[int, int]]:
@@ -942,68 +959,6 @@ def _annotate_candidates(
             )
         )
     return out
-
-
-def _thin_point_cloud(
-    vertices: np.ndarray,
-    scores: np.ndarray,
-    *,
-    merge_radius: float,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Bin-prethin (if large) then one NMS pass at *merge_radius* (grid resolution)."""
-    if len(vertices) <= 1:
-        return vertices, scores
-    verts = np.asarray(vertices, dtype=float)
-    sc = np.asarray(scores, dtype=float)
-    if len(verts) > _ADAPTIVE_GRID_BIN_PRETHIN:
-        verts, sc = _bin_prethin(
-            verts,
-            sc,
-            bin_size=merge_radius,
-            cell=cell,
-            pbc=pbc,
-        )
-    kept, _ = _nms(
-        verts,
-        np.zeros(len(verts), dtype=float),
-        sc,
-        merge_r=merge_radius,
-        cell=cell,
-        pbc=pbc,
-    )
-    if len(kept) == len(verts):
-        return verts, sc
-    tree_v = KDTree(verts)
-    idx = np.asarray([int(tree_v.query(pt, k=1)[1]) for pt in kept], dtype=int)
-    return kept, sc[idx]
-
-
-def _thin_candidates(
-    candidates: list[CandidateSite],
-    *,
-    merge_radius: float,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-) -> list[CandidateSite]:
-    """NMS at *merge_radius* so refine unions stay at grid resolution."""
-    if len(candidates) <= 1:
-        return list(candidates)
-    verts = np.asarray([c.position for c in candidates], dtype=float)
-    scores = np.asarray([c.score for c in candidates], dtype=float)
-    kept_verts, _ = _thin_point_cloud(
-        verts,
-        scores,
-        merge_radius=merge_radius,
-        cell=cell,
-        pbc=pbc,
-    )
-    if len(kept_verts) == len(candidates):
-        return candidates
-    tree_v = KDTree(verts)
-    kept_idx = sorted({int(tree_v.query(pt, k=1)[1]) for pt in kept_verts})
-    return [candidates[i] for i in kept_idx]
 
 
 def _candidates_to_arrays(
@@ -1252,14 +1207,15 @@ def generate_adaptive_grid_sites(
     if len(vertices) == 0:
         return empty
 
-    # Resolution-matched NMS (merge_radius from the exposed spacing knob).
-    vertices, clearances = _thin_point_cloud(
-        vertices,
-        clearances,
-        merge_radius=spacing.merge_radius,
-        cell=cell,
-        pbc=pbc,
-    )
+    # Optional bin prethin for huge clouds, then annotate.
+    if len(vertices) > _ADAPTIVE_GRID_BIN_PRETHIN:
+        vertices, clearances = _bin_prethin(
+            vertices,
+            clearances,
+            bin_size=float(_ADAPTIVE_GRID_PRETHIN_BIN),
+            cell=cell,
+            pbc=pbc,
+        )
 
     target_c = _shell_target_clearance(min_clearance, max_clearance, median_nn)
     candidates = _annotate_candidates(
@@ -1302,24 +1258,22 @@ def generate_adaptive_grid_sites(
     for _ in range(spacing.max_levels):
         if not frontier or h <= h_target:
             break
-        f_verts = np.asarray([c.position for c in frontier], dtype=float)
-        f_scores = np.asarray([c.score for c in frontier], dtype=float)
+        frontier_reps = _merge_by_radius(
+            frontier,
+            cell=cell,
+            pbc=pbc,
+            merge_radius=spacing.merge_radius,
+        )
+        f_verts = np.asarray([c.position for c in frontier_reps], dtype=float)
+        f_scores = np.asarray([c.score for c in frontier_reps], dtype=float)
         if len(f_verts) > _ADAPTIVE_GRID_BIN_PRETHIN:
             f_verts, f_scores = _bin_prethin(
                 f_verts,
                 f_scores,
-                bin_size=max(spacing.merge_radius, 0.5 * h),
+                bin_size=float(_ADAPTIVE_GRID_PRETHIN_BIN),
                 cell=cell,
                 pbc=pbc,
             )
-        f_verts, _ = _nms(
-            f_verts,
-            np.zeros(len(f_verts), dtype=float),
-            f_scores,
-            merge_r=max(0.5 * h, spacing.merge_radius),
-            cell=cell,
-            pbc=pbc,
-        )
         if len(f_verts) == 0:
             break
 
@@ -1408,11 +1362,11 @@ def generate_adaptive_grid_sites(
             pbc=pbc,
             target_clearance=target_c,
         )
-        all_candidates = _thin_candidates(
+        all_candidates = _merge_by_radius(
             all_candidates,
-            merge_radius=spacing.merge_radius,
             cell=cell,
             pbc=pbc,
+            merge_radius=spacing.merge_radius,
         )
 
         new_frontier: list[CandidateSite] = []
@@ -1428,20 +1382,18 @@ def generate_adaptive_grid_sites(
     if not all_candidates:
         return empty
 
-    all_candidates = _thin_candidates(
-        all_candidates,
-        merge_radius=spacing.merge_radius,
-        cell=cell,
-        pbc=pbc,
-    )
-
-    clustered = _cluster_basins(
+    clustered = _finalize_candidates(
         all_candidates,
         positions=positions,
+        framework_radii=framework_radii,
+        tree=tree,
         cell=cell,
         pbc=pbc,
-        base_merge=spacing.merge_radius,
+        merge_radius=spacing.merge_radius,
+        target_clearance=target_c,
     )
+    if not clustered:
+        return empty
     verts, nn_dists, clears, atoms, normals = _candidates_to_arrays(
         clustered, tree=tree
     )

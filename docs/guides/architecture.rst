@@ -240,12 +240,14 @@ sort) stay in the enumerator; plugins only emit raw candidate batches.
        topology (A/B path)
    * - ``adaptive_grid``
      - all
-     - Opt-in Cartesian grid around every atom (spacing in Å). Keeps only
-       accessible, exposed points near atoms — not pore centres. Density is
-       ``adaptive_grid_spacing``; optional refine halvings via
-       ``adaptive_grid_refine_levels``. Same classify / cluster / symmetry /
-       placement path afterward. Selectable in config / YAML; **not** chosen
-       by ``auto``.
+     - Opt-in near-atom Cartesian grid (spacing in Å). Shells around framework
+       atoms with clearance + exposure filters — wall-near, not pore centres.
+       One representative per support key, snapped to a target clearance above
+       the support centroid, then a modest ``merge_radius`` NMS.
+       Sampling increment is ``adaptive_grid_spacing``; optional refine
+       halvings via ``adaptive_grid_refine_levels``. Same classify / cluster /
+       symmetry / placement path afterward. Selectable in config / YAML;
+       **not** chosen by ``auto``.
 
 Generation follows the slab normal (``a × b``) and the surface plane — not
 Cartesian ``z``.

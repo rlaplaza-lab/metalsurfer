@@ -150,13 +150,16 @@ slab/NP, Voronoi for porous). Set ``site_generator="topology"``,
 ``"voronoi"``, or ``"adaptive_grid"`` explicitly for A/B comparisons;
 incompatible ``site_generator`` / ``material_type`` pairs are rejected.
 ``adaptive_grid`` works on all three material types but is never selected by
-``auto``. It is an opt-in Cartesian grid with spacing in Å
-(``adaptive_grid_spacing``, default ``0.70``). Optional refine halvings
-(``adaptive_grid_refine_levels``, default ``0``) densify locally;
-``adaptive_grid_nms_framework_scale`` (default ``0.50``) floors how close
-neighbouring grid points may sit relative to the framework atom spacing.
-``side_policy`` (default ``"positive"``) selects which slab face / exposure
-half-space adaptive-grid keeps.
+``auto``. It is an opt-in near-atom Cartesian grid with spacing in Å
+(``adaptive_grid_spacing``, default ``0.70``): shells around framework atoms,
+clearance + exposure filters (wall-near, not pore centres), one representative
+per support key snapped to a target clearance above the support centroid, and
+a modest ``merge_radius`` NMS so the catalog does not oversample. Optional
+refine halvings (``adaptive_grid_refine_levels``, default ``0``) densify
+locally. ``adaptive_grid_nms_framework_scale`` (default ``0.25``) floors
+``merge_radius`` on framework median NN. ``side_policy`` (default
+``"positive"``) selects which slab face / exposure half-space adaptive-grid
+keeps.
 
 Plugin knobs: ``voronoi_*``, ``side_policy``, ``adaptive_grid_*``, and ``n_jobs``
 (adaptive_grid shells and Voronoi ridge enrich). Shared post-process:

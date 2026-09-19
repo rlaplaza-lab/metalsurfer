@@ -215,10 +215,10 @@ Site detection
 ``adaptive_grid_spacing``
    **Type:** ``float`` · **Default:** ``0.70`` (Å)
 
-   Absolute Cartesian grid spacing for ``site_generator="adaptive_grid"``.
-   Coarse default keeps catalog sizes near topology / Voronoi; lower for denser
-   A/B sampling. Density is controlled by this spacing (merge radius tracks it
-   and floors on framework median nearest-neighbour distance).
+   Absolute Cartesian shell spacing for ``site_generator="adaptive_grid"``.
+   Near-atom sampling only (not pore centres). Catalog density is bounded by
+   the computed ``merge_radius`` (tracks spacing; floors on framework median
+   nearest-neighbour distance).
 
 ``adaptive_grid_refine_levels``
    **Type:** ``int`` · **Default:** ``0``
@@ -228,11 +228,11 @@ Site detection
    basins without a hard site-count cap.
 
 ``adaptive_grid_nms_framework_scale``
-   **Type:** ``float`` · **Default:** ``0.50``
+   **Type:** ``float`` · **Default:** ``0.25``
 
-   Floor on how close neighbouring adaptive-grid points may sit, as a fraction
-   of framework median nearest-neighbour distance. Lower values allow denser
-   catalogs; higher values keep metal catalogs closer to topology site counts.
+   Floor on the computed ``merge_radius`` as a fraction of framework median
+   nearest-neighbour distance. After support-key collapse and target-clearance
+   snap, that radius only removes near-coincident leftovers.
 
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)

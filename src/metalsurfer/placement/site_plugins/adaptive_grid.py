@@ -13,9 +13,10 @@ from .helpers import median_nn_or_fallback
 class AdaptiveGridGenerator:
     """Atom-centred adaptive grid with optional iterative shell refinement.
 
-    Not selected by ``auto``. Density is set by absolute
-    ``adaptive_grid_spacing`` (Å) and ``adaptive_grid_refine_levels`` on the
-    generation context / ``AdsorptionConfig``. Emits the same
+    Not selected by ``auto``. Near-atom shells (not pore centres); density set
+    by ``adaptive_grid_spacing`` / ``merge_radius`` and optional
+    ``adaptive_grid_refine_levels``. Final catalog: one site per support key
+    at a target clearance, then NMS. Emits the same
     :class:`SiteCandidateBatch` contract as topology / Voronoi; classify builds
     fingerprints and frames.
     """

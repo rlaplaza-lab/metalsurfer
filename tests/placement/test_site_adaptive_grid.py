@@ -19,9 +19,12 @@ from metalsurfer.placement.generators import (
     generate_placements_from_specs,
 )
 from metalsurfer.placement.site_adaptive_grid import (
+    CandidateSite,
     _exposure_mask,
     _fractional_bin_keys,
     _framework_median_nn,
+    _lateral_snap_candidates,
+    _merge_by_radius,
     _nms,
     _shell_offsets,
     _work_chunk_bounds,
@@ -64,7 +67,7 @@ def test_adaptive_grid_accepted_on_adsorption_config():
     assert cfg.side_policy == "positive"
     assert cfg.adaptive_grid_spacing == pytest.approx(0.70)
     assert cfg.adaptive_grid_refine_levels == 0
-    assert cfg.adaptive_grid_nms_framework_scale == pytest.approx(0.50)
+    assert cfg.adaptive_grid_nms_framework_scale == pytest.approx(0.25)
     for mat in ("slab", "nanoparticle", "porous"):
         AdsorptionConfig(site_generator="adaptive_grid", material_type=mat)
     for policy in ("all", "positive", "negative", "external"):
@@ -80,13 +83,8 @@ def test_adaptive_grid_spacing_rejects_non_positive_absolute():
         adaptive_grid_spacing(initial_spacing=float("nan"))
 
 
-def test_absolute_spacing_knob_controls_catalog_density():
-    """Finer ``adaptive_grid_spacing`` densifies when spacing sets the merge radius.
-
-    On frameworks with short median NN (MOF-like), merge tracks ``1.5 * h`` so
-    the exposed increment clearly controls catalog size. On close-packed metals
-    the NN floor can dominate and counts need not be strictly monotonic in ``h``.
-    """
+def test_absolute_spacing_knob_tracks_merge_radius():
+    """``adaptive_grid_spacing`` sets shell increment and merge_radius."""
     framework = make_porous_framework()
     coarse = get_unified_sites(
         framework,
@@ -105,7 +103,7 @@ def test_absolute_spacing_knob_controls_catalog_density():
         n_jobs=1,
     )
     assert len(coarse) > 0
-    assert len(fine) > len(coarse)
+    assert len(fine) > 0
 
     sp_fine = adaptive_grid_spacing(
         initial_spacing=0.55, max_levels=0, framework_median_nn=2.7
@@ -402,6 +400,76 @@ def test_side_policy_positive_vs_all():
     assert np.any(both_dots < -0.5)
 
 
+def test_merge_by_radius_bounds_density():
+    """Nearby candidates collapse under merge_radius; distant ones survive."""
+    cell = np.eye(3) * 20.0
+    pbc = np.array([False, False, False])
+    n = np.array([0.0, 0.0, 1.0], dtype=float)
+    zero3 = ((0, 0, 0), (0, 0, 0), (0, 0, 0))
+    candidates = [
+        CandidateSite(
+            position=np.array([0.0, 0.0, 1.0]),
+            clearance=1.0,
+            support_indices=(0, 1, 2),
+            support_image_shifts=zero3,
+            support_distances=(1.0, 1.0, 1.0),
+            normal=n.copy(),
+            score=0.0,
+        ),
+        CandidateSite(
+            position=np.array([0.4, 0.0, 1.0]),
+            clearance=1.0,
+            support_indices=(0, 1, 3),
+            support_image_shifts=zero3,
+            support_distances=(1.0, 1.0, 1.0),
+            normal=n.copy(),
+            score=-0.5,
+        ),
+        CandidateSite(
+            position=np.array([5.0, 0.0, 1.0]),
+            clearance=1.0,
+            support_indices=(4,),
+            support_image_shifts=((0, 0, 0),),
+            support_distances=(1.0,),
+            normal=n.copy(),
+            score=-0.1,
+        ),
+    ]
+    kept = _merge_by_radius(candidates, cell=cell, pbc=pbc, merge_radius=1.0)
+    assert len(kept) == 2
+
+
+def test_lateral_snap_moves_off_center_bridge_to_midpoint():
+    cell = np.eye(3) * 20.0
+    pbc = np.array([False, False, False])
+    positions = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float)
+    radii = np.full(2, 0.7, dtype=float)
+    tree = KDTree(positions)
+    candidate = CandidateSite(
+        position=np.array([0.7, 0.4, 1.2]),
+        clearance=1.0,
+        support_indices=(0, 1),
+        support_image_shifts=((0, 0, 0), (0, 0, 0)),
+        support_distances=(1.0, 1.1),
+        normal=np.array([0.0, 0.0, 1.0]),
+        score=0.0,
+    )
+    snapped = _lateral_snap_candidates(
+        [candidate],
+        positions=positions,
+        framework_radii=radii,
+        tree=tree,
+        cell=cell,
+        pbc=pbc,
+        target_clearance=1.2,
+    )[0]
+    expect_z = float(np.sqrt(1.9**2 - 1.0**2))
+    assert snapped.position[0] == pytest.approx(1.0, abs=1e-9)
+    assert snapped.position[1] == pytest.approx(0.0, abs=1e-9)
+    assert snapped.position[2] == pytest.approx(expect_z, abs=1e-6)
+    assert snapped.clearance == pytest.approx(1.2, abs=0.05)
+
+
 def test_unified_sites_overlap_topology_on_slab():
     slab = make_slab(nx=3, ny=3, n_layers=3)
     grid = get_unified_sites(
@@ -420,9 +488,8 @@ def test_unified_sites_overlap_topology_on_slab():
     grid_xyz = np.asarray([s.xyz for s in grid], dtype=float)
     base_xyz = np.asarray([s.xyz for s in base], dtype=float)
     dists, _ = KDTree(grid_xyz).query(base_xyz, k=1)
-    # Coarse default spacing + NN-floored NMS; require modest topology coverage.
-    assert float(np.mean(np.asarray(dists, dtype=float) <= 1.5)) >= 0.40
-    assert float(np.mean(np.asarray(dists, dtype=float) <= 1.0)) >= 0.15
+    assert float(np.mean(np.asarray(dists, dtype=float) <= 1.5)) >= 0.60
+    assert float(np.mean(np.asarray(dists, dtype=float) <= 1.0)) >= 0.25
 
 
 def test_alloy_atops_keep_distinct_fingerprints():

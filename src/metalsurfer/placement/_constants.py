@@ -285,16 +285,18 @@ _ADAPTIVE_GRID_DEFAULT_SPACING: float = 0.70
 _ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS: int = 0
 _ADAPTIVE_GRID_FINE_SCALE: float = 0.25
 _ADAPTIVE_GRID_H_MIN: float = 0.35
-# NMS / basin merge radius: max(nms_scale * h_fine, nms_length_scale * L).
-_ADAPTIVE_GRID_NMS_SCALE: float = 1.5
+# NMS merge radius: max(nms_scale * h_fine, nms_length_scale * L).
+_ADAPTIVE_GRID_NMS_SCALE: float = 0.75
 _ADAPTIVE_GRID_NMS_LENGTH_SCALE: float = 0.5
 # Soft per-chunk work budget: each shell/refine chunk keeps
 # n_seeds × n_offsets ≤ this (all atoms are still seeded).
 _ADAPTIVE_GRID_WORK_BUDGET: int = 250_000
 # Floor merge radius as a fraction of framework median NN (adaptive_grid default).
-_ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE: float = 0.50
-# Bin-prethin before NMS when the coarse cloud exceeds this many points.
+_ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE: float = 0.25
+# Bin-prethin when the coarse cloud exceeds this many points.
 _ADAPTIVE_GRID_BIN_PRETHIN: int = 8_000
+# Bin size (Å) for optional large-cloud prethin.
+_ADAPTIVE_GRID_PRETHIN_BIN: float = 0.25
 # Exposure probe step along the outward unit vector (Å).
 _ADAPTIVE_GRID_EXPOSURE_STEP: float = 0.25
 # Multi-step ray exposure along the local normal.
@@ -302,12 +304,6 @@ _ADAPTIVE_GRID_EXPOSURE_N_STEPS: int = 4
 # Support-shell threshold on effective (radius-subtracted) distance (Å).
 _ADAPTIVE_GRID_SUPPORT_DELTA: float = 0.35
 _ADAPTIVE_GRID_MAX_SUPPORT: int = 8
-# Basin clustering: Jaccard / normal / clearance compatibility.
-_ADAPTIVE_GRID_BASIN_MIN_JACCARD: float = 0.5
-_ADAPTIVE_GRID_BASIN_MIN_NORMAL_COSINE: float = 0.7
-_ADAPTIVE_GRID_BASIN_CLEARANCE_TOL: float = 0.5
-# Local merge radius as a fraction of support-pair median length.
-_ADAPTIVE_GRID_LOCAL_MERGE_SCALE: float = 0.45
 # Stationarity score weights (clearance target + tangential gradient).
 _ADAPTIVE_GRID_SCORE_W_CLEARANCE: float = 1.0
 _ADAPTIVE_GRID_SCORE_W_GRADIENT: float = 0.5

@@ -763,13 +763,13 @@ class AdsorptionConfig:
     site_generator: Literal["auto", "topology", "voronoi", "adaptive_grid"] = "auto"
     # Slab face / exposure policy (adaptive_grid; default top face).
     side_policy: Literal["all", "positive", "negative", "external"] = "positive"
-    # Absolute shell increment (Å) for ``adaptive_grid``. Coarse default keeps
-    # catalog sizes comparable to topology / Voronoi; lower for denser A/B.
+    # Absolute shell increment (Å) for ``adaptive_grid``. Near-atom sampling;
+    # catalog density bounded by merge_radius (NN-floored).
     adaptive_grid_spacing: float = 0.70
     # Refine halvings after the coarse shell (0 = coarse grid only).
     adaptive_grid_refine_levels: int = 0
-    # Floor NMS merge radius as a fraction of framework median NN (adaptive_grid).
-    adaptive_grid_nms_framework_scale: float = 0.50
+    # Floor on computed merge_radius as a fraction of framework median NN.
+    adaptive_grid_nms_framework_scale: float = 0.25
     # Conformer prior for placement-spec selection.
     # ``"uniform"`` keeps the conformer-agnostic stratified draw (ignores
     # conformer energies). ``"boltzmann"`` (default) allocates spec slots per
