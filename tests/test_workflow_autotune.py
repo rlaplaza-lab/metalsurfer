@@ -6,6 +6,7 @@ import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig, BOConfig
+from metalsurfer.optimization._cache import ParallelCapacity
 from metalsurfer.workflow import shared as shared_mod
 from metalsurfer.workflow.shared import (
     needs_workload_autotune,
@@ -47,7 +48,7 @@ def test_resolve_workload_config_fills_all_fields_from_probed_capacity(monkeypat
 
     def _fake_capacity(ts_model, representative_atoms, config, *, frozen_indices):
         capacity_calls.append((len(representative_atoms), tuple(frozen_indices)))
-        return 7
+        return ParallelCapacity(n_systems=7, max_memory_scaler=700.0)
 
     monkeypatch.setattr(
         shared_mod, "estimate_parallel_relaxation_capacity", _fake_capacity
@@ -66,16 +67,18 @@ def test_resolve_workload_config_fills_all_fields_from_probed_capacity(monkeypat
     assert resolved.num_placements == 7
     assert resolved.bo.initial_random == 7
     assert resolved.bo.batch_size == 7
+    assert resolved.autobatcher_max_memory_scaler == 700.0
     # The input config must stay untouched (functional update).
     assert config.num_placements is None
     assert config.bo.initial_random is None
+    assert config.autobatcher_max_memory_scaler is None
 
 
 def test_resolve_workload_config_fills_only_missing_fields(monkeypatch):
     monkeypatch.setattr(
         shared_mod,
         "estimate_parallel_relaxation_capacity",
-        lambda *a, **k: 9,
+        lambda *a, **k: ParallelCapacity(n_systems=9, max_memory_scaler=90.0),
     )
     config = AdsorptionConfig(
         material_type="slab",
@@ -92,6 +95,30 @@ def test_resolve_workload_config_fills_only_missing_fields(monkeypatch):
     assert resolved.num_placements == 3  # kept
     assert resolved.bo.initial_random == 5  # kept
     assert resolved.bo.batch_size == 9  # filled
+    assert resolved.autobatcher_max_memory_scaler == 90.0
+
+
+def test_resolve_workload_config_keeps_explicit_scaler(monkeypatch):
+    monkeypatch.setattr(
+        shared_mod,
+        "estimate_parallel_relaxation_capacity",
+        lambda *a, **k: ParallelCapacity(n_systems=9, max_memory_scaler=90.0),
+    )
+    config = AdsorptionConfig(
+        material_type="slab",
+        autobatcher_max_memory_scaler=500.0,
+        bo=BOConfig(batch_size=None),
+    )
+    resolved = resolve_workload_config(
+        config,
+        ts_model=object(),
+        representative_atoms=_REPRESENTATIVE,
+        frozen_indices=[],
+        bo_enabled=True,
+    )
+    assert resolved.num_placements == 9
+    assert resolved.autobatcher_max_memory_scaler == 500.0
+    assert resolved.bo.batch_size == 9
 
 
 def test_resolve_workload_config_noop_returns_input_unchanged():
@@ -131,7 +158,7 @@ def test_resolve_saturation_step_workload_config_resolves_before_split(monkeypat
     monkeypatch.setattr(
         shared_mod,
         "estimate_parallel_relaxation_capacity",
-        lambda *a, **k: 11,
+        lambda *a, **k: ParallelCapacity(n_systems=11, max_memory_scaler=110.0),
     )
 
     water = Atoms("H2O", positions=[[0.0, 0.0, 0.0], [0.9, 0.0, 0.0], [0.0, 0.9, 0.0]])
@@ -151,3 +178,4 @@ def test_resolve_saturation_step_workload_config_resolves_before_split(monkeypat
     assert recorded["smiles"] == "O"
     assert recorded["site_context_is_sentinel"] is True
     assert resolved.num_placements == 11
+    assert resolved.autobatcher_max_memory_scaler == 110.0

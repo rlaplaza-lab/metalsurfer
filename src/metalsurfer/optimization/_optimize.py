@@ -9,6 +9,7 @@ and :mod:`._cache` and is unit-tested on CPU.
 import gc
 import logging
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -21,6 +22,7 @@ from ..exceptions import DependencyMissingError
 from ..surface_prep.freeze import frozen_indices_from_constraints
 from . import _deps
 from ._cache import (
+    ParallelCapacity,
     _get_inflight_autobatcher,
     _maybe_clear_cuda_cache,
     capacity_cache_get,
@@ -142,7 +144,8 @@ def _run_optimize_with_oom_retry(
     Retryable failures are CUDA OOM and TorchSim's batcher capacity refusal
     (``ValueError`` "...greater than max_metric..."), raised when incoming
     systems outgrow the capacity probed by the current — often cached/reused —
-    autobatcher.
+    autobatcher. The retry rebuilds without ``autobatcher_max_memory_scaler``
+    so TorchSim can re-probe the actual systems.
 
     The retried attempt gets freshly built systems: a failed CUDA attempt may
     leave mutated / NaN state behind, and holding the originals would also keep
@@ -170,14 +173,15 @@ def _run_optimize_with_oom_retry(
     _maybe_clear_cuda_cache(ts_model)
     logger.warning(
         "GPU capacity failure during %s (%s); dropped autobatcher cache "
-        "entry, rebuilding systems and retrying once",
+        "entry, cleared memory scaler, rebuilding systems and retrying once",
         context,
         type(retry_exc).__name__,
     )
+    retry_config = replace(config, autobatcher_max_memory_scaler=None)
     ab, _ = _get_inflight_autobatcher(
         ts_model,
         max_n_atoms,
-        config=config,
+        config=retry_config,
         saturation_reuse=False,
         max_atoms_to_try=resolved_max_atoms_to_try,
     )
@@ -237,10 +241,12 @@ def estimate_parallel_relaxation_capacity(
     config: AdsorptionConfig,
     *,
     frozen_indices: list[int],
-) -> int:
+) -> ParallelCapacity:
     """Estimate how many slab+adsorbate relaxations can run in parallel on GPU.
 
-    Mirrors TorchSim ``InFlightAutoBatcher`` memory probing. Returns at least 1.
+    Mirrors TorchSim ``InFlightAutoBatcher`` memory probing. ``n_systems`` is
+    at least 1. ``max_memory_scaler`` is set when a metric is available so
+    later autobatcher construction can skip a second GPU probe.
 
     Parameters
     ----------
@@ -261,7 +267,7 @@ def estimate_parallel_relaxation_capacity(
     if cached_capacity is not None:
         return cached_capacity
 
-    fallback = 1
+    fallback = ParallelCapacity(n_systems=1)
     uses_explicit_scaler = config.autobatcher_max_memory_scaler is not None
     if (
         _deps.ts is None
@@ -272,7 +278,7 @@ def estimate_parallel_relaxation_capacity(
     ):
         logger.warning(
             "TorchSim unavailable; using parallel relaxation capacity=%d",
-            fallback,
+            fallback.n_systems,
         )
         return fallback
 
@@ -292,7 +298,9 @@ def estimate_parallel_relaxation_capacity(
             )
 
         memory_scales_with = "n_atoms"
-        first_metric = _deps.calculate_memory_scalers(state, memory_scales_with)[0]
+        first_metric = float(
+            _deps.calculate_memory_scalers(state, memory_scales_with)[0]
+        )
         padding = config.autobatcher_max_memory_padding
 
         if first_metric <= 0 or not np.isfinite(first_metric):
@@ -305,7 +313,8 @@ def estimate_parallel_relaxation_capacity(
                 1,
                 int(config.autobatcher_max_memory_scaler * padding // first_metric),
             )
-        else:  # pragma: no cover - requires MLIP stack / GPU
+            scaler = float(config.autobatcher_max_memory_scaler)
+        else:
             resolved_max_atoms_to_try, _ = _resolve_autobatcher_max_atoms_to_try(
                 max_n_atoms=max_n_atoms,
                 n_systems=1,
@@ -317,22 +326,26 @@ def estimate_parallel_relaxation_capacity(
                 max_atoms=resolved_max_atoms_to_try,
             )
             n_systems = max(1, int(probed * padding))
+            scaler = float(n_systems) * first_metric
 
-        capacity_cache_set(cache_key, n_systems)
+        capacity = ParallelCapacity(n_systems=n_systems, max_memory_scaler=scaler)
+        capacity_cache_set(cache_key, capacity)
         logger.info(
-            "Probed parallel relaxation capacity=%d (max_n_atoms=%d, padding=%.2f)",
+            "Probed parallel relaxation capacity=%d (max_n_atoms=%d, "
+            "padding=%.2f, scaler=%.3g)",
             n_systems,
             max_n_atoms,
             padding,
+            scaler,
         )
-        return n_systems
+        return capacity
     except DependencyMissingError:
         raise
     except _deps._CAPACITY_PROBE_ERRORS as exc:
         logger.warning(
             "Parallel capacity probe failed (%s); using capacity=%d (not cached)",
             exc,
-            fallback,
+            fallback.n_systems,
         )
         return fallback
 

@@ -533,8 +533,11 @@ Relaxation and MLIP
 ``autobatcher_max_memory_scaler``
    **Type:** ``float | None`` · **Default:** ``None``
 
-   Optional override for TorchSim memory scaler. When set, also influences
-   autotuned ``num_placements`` and BO batch sizes.
+   Optional override for TorchSim memory scaler. When set, TorchSim skips GPU
+   memory estimation and autotuned ``num_placements`` / BO batch sizes are
+   derived from it. When ``None``, workload autotune writes the probed scaler
+   onto the resolved config so later BO batches and saturation steps reuse it
+   instead of re-estimating.
 
 ``autobatcher_max_atoms_to_try``
    **Type:** ``int | None`` · **Default:** ``None``

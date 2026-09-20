@@ -548,18 +548,21 @@ is used on CPU.
    * - ``optimize_adsorbate_slab_batched`` + ``InFlightAutoBatcher``
      - Stream placements; pack N relaxations per inflight wave
    * - ``estimate_parallel_relaxation_capacity``
-     - Memory probe / scalers
+     - One GPU memory probe; returns parallel width plus ``max_memory_scaler``
    * - ``resolve_workload_config``
-     - Autotune ``num_placements`` / BO batches
+     - Autotune ``num_placements`` / BO batches and write the probed scaler
    * - ``resolve_saturation_step_workload_config``
-     - Re-probe as the slab grows
+     - Resolve once; later steps reuse the written-back scaler
    * - ``stage1_steps`` + ``stage2_steps``
      - Two-stage FIRE/LBFGS budget (default FIRE)
    * - ``saturation_reuse`` / ``saturation_autobatcher_reuse``
-     - Amortize probes on deep coverage
+     - Reuse the batcher when the slab grows slightly (default 32 atoms / 10%)
 
 Leaving ``num_placements`` (and BO batch fields) as ``None`` is intentional:
-the library sizes parallel work to GPU memory. Large explicit
+the library sizes parallel work to GPU memory and fills
+``autobatcher_max_memory_scaler`` from that probe so later BO batches and
+saturation steps skip TorchSim re-estimation. Larger adsorbed systems pack
+fewer inflight relaxations against the same scaler. Large explicit
 ``num_placements`` values are safe on small GPUs because only the active
 inflight batch holds CUDA geometry tensors.
 

@@ -313,13 +313,14 @@ def test_clear_autobatcher_cache_full_preserves_capacity(
     _cache._PARALLEL_CAPACITY_CACHE.clear()
     fake = object()
     _cache._AUTOBATCHER_CACHE[("k",)] = fake
-    _cache._PARALLEL_CAPACITY_CACHE[("k",)] = 1
+    _cache._PARALLEL_CAPACITY_CACHE[("k",)] = _cache.ParallelCapacity(n_systems=1)
     torch_stub = MagicMock()
     torch_stub.cuda.is_available.return_value = False
     monkeypatch.setattr(_deps, "torch", torch_stub)
     _cache.clear_autobatcher_cache()
     assert _cache._AUTOBATCHER_CACHE == {}
-    assert _cache._PARALLEL_CAPACITY_CACHE == {("k",): 1}
+    expected = {("k",): _cache.ParallelCapacity(n_systems=1)}
+    assert expected == _cache._PARALLEL_CAPACITY_CACHE
     _cache._PARALLEL_CAPACITY_CACHE.clear()
 
 
@@ -329,7 +330,7 @@ def test_clear_autobatcher_cache_clear_capacity_wipes_both(
     _cache._AUTOBATCHER_CACHE.clear()
     _cache._PARALLEL_CAPACITY_CACHE.clear()
     _cache._AUTOBATCHER_CACHE[("k",)] = object()
-    _cache._PARALLEL_CAPACITY_CACHE[("k",)] = 1
+    _cache._PARALLEL_CAPACITY_CACHE[("k",)] = _cache.ParallelCapacity(n_systems=1)
     torch_stub = MagicMock()
     torch_stub.cuda.is_available.return_value = False
     monkeypatch.setattr(_deps, "torch", torch_stub)
@@ -346,7 +347,7 @@ def test_clear_autobatcher_cache_threshold_eviction(monkeypatch: pytest.MonkeyPa
     large = (id(model), "cpu", "n_atoms", 0.5, 50_000, None, 100_000)
     _cache._AUTOBATCHER_CACHE[small] = object()
     _cache._AUTOBATCHER_CACHE[large] = object()
-    _cache._PARALLEL_CAPACITY_CACHE[small] = 7
+    _cache._PARALLEL_CAPACITY_CACHE[small] = _cache.ParallelCapacity(n_systems=7)
     torch_stub = MagicMock()
     torch_stub.cuda.is_available.return_value = False
     monkeypatch.setattr(_deps, "torch", torch_stub)
@@ -354,7 +355,8 @@ def test_clear_autobatcher_cache_threshold_eviction(monkeypatch: pytest.MonkeyPa
     assert small not in _cache._AUTOBATCHER_CACHE
     assert large in _cache._AUTOBATCHER_CACHE
     # threshold eviction never touches the capacity cache
-    assert dict(_cache._PARALLEL_CAPACITY_CACHE) == {small: 7}
+    expected = {small: _cache.ParallelCapacity(n_systems=7)}
+    assert expected == dict(_cache._PARALLEL_CAPACITY_CACHE)
     _cache._AUTOBATCHER_CACHE.clear()
     _cache._PARALLEL_CAPACITY_CACHE.clear()
 
@@ -363,8 +365,8 @@ def test_capacity_cache_helpers_round_trip():
     _cache._PARALLEL_CAPACITY_CACHE.clear()
     key = ("model", "cpu", 100)
     assert _cache.capacity_cache_get(key) is None
-    _cache.capacity_cache_set(key, 12)
-    assert _cache.capacity_cache_get(key) == 12
+    _cache.capacity_cache_set(key, _cache.ParallelCapacity(n_systems=12))
+    assert _cache.capacity_cache_get(key) == _cache.ParallelCapacity(n_systems=12)
     _cache._PARALLEL_CAPACITY_CACHE.clear()
 
 
@@ -398,7 +400,9 @@ def test_cache_helpers_are_thread_safe(
             barrier.wait(timeout=5)
             for i in range(12):
                 _cache._get_inflight_autobatcher(models[idx], 100)
-                _cache.capacity_cache_set((idx, i), i)
+                _cache.capacity_cache_set(
+                    (idx, i), _cache.ParallelCapacity(n_systems=i)
+                )
                 _cache.capacity_cache_get((idx, i))
                 if i % 5 == 4:
                     barrier.wait(timeout=5)
@@ -1426,6 +1430,65 @@ def test_get_inflight_autobatcher_uses_explicit_probe_cap(stub_autobatcher):
     assert int(key[6]) == 7_000
 
 
+def test_get_inflight_autobatcher_scaler_ignores_probe_cap(stub_autobatcher):
+    """Known scaler must share one batcher across BO-sized probe caps."""
+    model = type("MockModel", (), {"device": "cpu"})()
+    config = AdsorptionConfig(device="cpu", autobatcher_max_memory_scaler=500.0)
+    ab1, key1 = _cache._get_inflight_autobatcher(
+        model,
+        100,
+        config=config,
+        max_atoms_to_try=5_000,
+    )
+    ab2, key2 = _cache._get_inflight_autobatcher(
+        model,
+        100,
+        config=config,
+        max_atoms_to_try=20_000,
+    )
+    assert ab1 is not None
+    assert ab2 is ab1
+    assert key1 == key2
+    assert key1 is not None
+    assert int(key1[6]) == 0
+
+
+def test_run_optimize_with_oom_retry_rebuilds_without_scaler(monkeypatch):
+    seen_scalers: list[float | None] = []
+
+    def _fake_get(ts_model, max_n_atoms, *, config, saturation_reuse, max_atoms_to_try):
+        seen_scalers.append(config.autobatcher_max_memory_scaler)
+        return object(), ("k",)
+
+    monkeypatch.setattr(_optimize, "_get_inflight_autobatcher", _fake_get)
+    monkeypatch.setattr(_optimize, "pop_autobatcher", lambda _k: None)
+    monkeypatch.setattr(_optimize, "_maybe_clear_cuda_cache", lambda _m: None)
+
+    calls = {"n": 0}
+
+    def _run_optimize(_ab, _systems):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("State metric=12 is greater than max_metric 10")
+        return "ok"
+
+    config = AdsorptionConfig(autobatcher_max_memory_scaler=500.0)
+    result = _optimize._run_optimize_with_oom_retry(
+        _run_optimize,
+        build_systems=lambda: [object()],
+        initial_autobatcher=object(),
+        ts_model=object(),
+        max_n_atoms=10,
+        config=config,
+        cache_key=("k",),
+        resolved_max_atoms_to_try=1000,
+        context="test",
+    )
+    assert result == "ok"
+    assert seen_scalers == [None]
+    assert config.autobatcher_max_memory_scaler == 500.0
+
+
 def test_estimate_parallel_relaxation_capacity_fallback_without_torchsim(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -1441,7 +1504,8 @@ def test_estimate_parallel_relaxation_capacity_fallback_without_torchsim(
         config=config,
         frozen_indices=[],
     )
-    assert capacity == 1
+    assert capacity.n_systems == 1
+    assert capacity.max_memory_scaler is None
     cache_key = _validation._parallel_capacity_cache_key(
         ts_model, len(atoms), config, frozen_indices=[]
     )
@@ -1473,7 +1537,8 @@ def test_estimate_parallel_relaxation_capacity_runtime_error_falls_back(
         config=config,
         frozen_indices=[],
     )
-    assert capacity == 1
+    assert capacity.n_systems == 1
+    assert capacity.max_memory_scaler is None
     cache_key = _validation._parallel_capacity_cache_key(
         ts_model, len(atoms), config, frozen_indices=[]
     )
@@ -1534,7 +1599,42 @@ def test_estimate_parallel_relaxation_capacity_uses_memory_scaler(
         config=config,
         frozen_indices=[],
     )
-    assert capacity == 6
+    assert capacity.n_systems == 6
+    assert capacity.max_memory_scaler == 1200.0
+
+
+def test_estimate_parallel_relaxation_capacity_records_probed_scaler(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
+    monkeypatch.setattr(_deps, "ts", object())
+    monkeypatch.setattr(_deps, "ts_constraints", object())
+    monkeypatch.setattr(_deps, "determine_max_batch_size", lambda *_a, **_k: 10)
+    monkeypatch.setattr(
+        _optimize,
+        "_make_state_with_frozen_constraint",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        _deps,
+        "calculate_memory_scalers",
+        lambda state, memory_scales_with: [100.0],
+    )
+    config = AdsorptionConfig(autobatcher_max_memory_padding=0.5)
+    atoms = _make_atoms_with_cell()
+    ts_model = object()
+    capacity = _optimize.estimate_parallel_relaxation_capacity(
+        ts_model=ts_model,
+        representative_atoms=atoms,
+        config=config,
+        frozen_indices=[],
+    )
+    assert capacity.n_systems == 5
+    assert capacity.max_memory_scaler == 500.0
+    cache_key = _validation._parallel_capacity_cache_key(
+        ts_model, len(atoms), config, frozen_indices=[]
+    )
+    assert _cache.capacity_cache_get(cache_key) == capacity
 
 
 def test_resolve_autobatcher_max_atoms_to_try_is_conservative_vs_estimate():

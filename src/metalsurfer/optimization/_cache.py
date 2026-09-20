@@ -34,6 +34,7 @@ import contextlib
 import gc
 import logging
 import threading
+from dataclasses import dataclass
 from typing import Any
 
 from ..config import AdsorptionConfig
@@ -45,7 +46,20 @@ logger = logging.getLogger(__name__)
 
 _CACHE_LOCK = threading.RLock()
 _AUTOBATCHER_CACHE: dict[tuple, Any] = {}
-_PARALLEL_CAPACITY_CACHE: dict[tuple, int] = {}
+_PARALLEL_CAPACITY_CACHE: dict[tuple, "ParallelCapacity"] = {}
+
+
+@dataclass(frozen=True)
+class ParallelCapacity:
+    """GPU parallel width from a memory probe, plus the matching TorchSim scaler.
+
+    ``max_memory_scaler`` is ``None`` when the probe fell back without a metric
+    (missing TorchSim / failed probe). Callers must not invent a scaler then.
+    """
+
+    n_systems: int
+    max_memory_scaler: float | None = None
+
 
 # Fallback growth bounds when a saturation autobatcher is reused for a slightly
 # larger neighbour. Overridable via AdsorptionConfig.
@@ -53,7 +67,7 @@ _SATURATION_REUSE_GROWTH_ATOMS = 32
 _SATURATION_REUSE_GROWTH_FRACTION = 0.1
 
 
-def capacity_cache_get(cache_key: tuple) -> int | None:
+def capacity_cache_get(cache_key: tuple) -> ParallelCapacity | None:
     """Return the cached parallel-relaxation capacity for *cache_key*, if any.
 
     Parameters
@@ -65,18 +79,18 @@ def capacity_cache_get(cache_key: tuple) -> int | None:
         return _PARALLEL_CAPACITY_CACHE.get(cache_key)
 
 
-def capacity_cache_set(cache_key: tuple, n_systems: int) -> None:
+def capacity_cache_set(cache_key: tuple, capacity: ParallelCapacity) -> None:
     """Store the probed parallel-relaxation capacity for *cache_key*.
 
     Parameters
     ----------
     cache_key
         Cache key.
-    n_systems
-        Number of systems that can run in parallel.
+    capacity
+        Probed parallel width and optional TorchSim memory scaler.
     """
     with _CACHE_LOCK:
-        _PARALLEL_CAPACITY_CACHE[cache_key] = n_systems
+        _PARALLEL_CAPACITY_CACHE[cache_key] = capacity
 
 
 def pop_autobatcher(cache_key: tuple) -> Any:
@@ -106,10 +120,11 @@ def clear_autobatcher_cache(
 
     The parallel-capacity cache is *not* cleared by default. Autobatchers hold
     GPU tensors and are cheap to rebuild, so evicting them is the point of this
-    function; the capacity cache in contrast holds a handful of ``int``s keyed
-    on model identity + device + tuning parameters + ``max_n_atoms``, and each
-    entry costs a full GPU memory probe to recompute. It must survive across
-    molecules and BO batches, otherwise the probe is repeated per unit of work.
+    function; the capacity cache in contrast holds a handful of
+    :class:`ParallelCapacity` values keyed on model identity + device + tuning
+    parameters + ``max_n_atoms``, and each entry costs a full GPU memory probe
+    to recompute. It must survive across molecules and BO batches, otherwise
+    the probe is repeated per unit of work.
     Pass ``clear_capacity=True`` at a model/substrate boundary (e.g. when
     swapping ``ts_model``), where the estimate is no longer valid or no longer
     needed. It is ignored when *max_n_atoms_threshold* is set.
@@ -203,6 +218,11 @@ def _get_inflight_autobatcher(
         max_memory_scaler = config.autobatcher_max_memory_scaler
     try:
         dev = getattr(ts_model, "device", None)
+        # Probe-cap is unused once a scaler is known; keep the key stable across
+        # BO batches whose n_systems (and thus max_atoms_to_try) differ.
+        keyed_max_atoms_to_try = (
+            0 if max_memory_scaler is not None else int(max_atoms_to_try)
+        )
         key = (
             id(ts_model),
             _device_key(dev),
@@ -210,7 +230,7 @@ def _get_inflight_autobatcher(
             float(max_memory_padding),
             int(max_n_atoms),
             max_memory_scaler,
-            int(max_atoms_to_try),
+            keyed_max_atoms_to_try,
         )
         with _CACHE_LOCK:
             cached = _AUTOBATCHER_CACHE.get(key)
@@ -268,8 +288,8 @@ def _get_inflight_autobatcher(
         }
         if max_memory_scaler is not None:
             kwargs["max_memory_scaler"] = max_memory_scaler
-        # Constructed outside the lock: building an InFlightAutoBatcher can run a
-        # GPU memory probe, which must not block other threads' cache lookups.
+        # Constructed outside the lock: without a scaler, first load_states can
+        # GPU-probe, which must not block other threads' cache lookups.
         ab: Any = _deps.InFlightAutoBatcher(ts_model, **kwargs)
         with _CACHE_LOCK:
             # A concurrent caller may have inserted the same key meanwhile; prefer

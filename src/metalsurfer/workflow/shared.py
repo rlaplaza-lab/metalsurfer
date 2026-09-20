@@ -819,16 +819,22 @@ def resolve_workload_config(
         config,
         frozen_indices=frozen_indices,
     )
+    n_systems = capacity.n_systems
 
     updates: dict[str, Any] = {}
     bo_updates: dict[str, Any] = {}
     if config.num_placements is None:
-        updates["num_placements"] = capacity
+        updates["num_placements"] = n_systems
+    if (
+        config.autobatcher_max_memory_scaler is None
+        and capacity.max_memory_scaler is not None
+    ):
+        updates["autobatcher_max_memory_scaler"] = capacity.max_memory_scaler
     if bo_enabled:
         if config.bo.initial_random is None:
-            bo_updates["initial_random"] = capacity
+            bo_updates["initial_random"] = n_systems
         if config.bo.batch_size is None:
-            bo_updates["batch_size"] = capacity
+            bo_updates["batch_size"] = n_systems
 
     resolved_bo = replace(config.bo, **bo_updates) if bo_updates else config.bo
     resolved = replace(config, bo=resolved_bo, **updates)
@@ -837,19 +843,21 @@ def resolve_workload_config(
         eval_budget = resolved_bo_eval_budget(resolved)
         logger.info(
             "Autotuned workload: parallel=%d, num_placements=%d, "
-            "bo_initial=%d, bo_batch=%d, bo_batches=%d (eval_budget=%d)",
-            capacity,
+            "bo_initial=%d, bo_batch=%d, bo_batches=%d (eval_budget=%d, scaler=%s)",
+            n_systems,
             resolved.num_placements,
             resolved.bo.initial_random,
             resolved.bo.batch_size,
             resolved.bo.total_budget,
             eval_budget,
+            resolved.autobatcher_max_memory_scaler,
         )
     else:
         logger.info(
-            "Autotuned workload: parallel=%d, num_placements=%d",
-            capacity,
+            "Autotuned workload: parallel=%d, num_placements=%d, scaler=%s",
+            n_systems,
             resolved.num_placements,
+            resolved.autobatcher_max_memory_scaler,
         )
     return resolved
 
