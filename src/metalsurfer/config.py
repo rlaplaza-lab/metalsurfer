@@ -761,7 +761,7 @@ class AdsorptionConfig:
     # Site candidate generator. ``auto`` → topology (slab/NP) or Voronoi (porous).
     # ``adaptive_grid`` is selectable on all materials but never chosen by ``auto``.
     site_generator: Literal["auto", "topology", "voronoi", "adaptive_grid"] = "auto"
-    # Slab face / exposure policy (adaptive_grid; default top face).
+    # Face / exposure policy for adaptive_grid only (PBC-geometry face filter).
     side_policy: Literal["all", "positive", "negative", "external"] = "positive"
     # Absolute shell increment (Å) for ``adaptive_grid``. Near-atom sampling;
     # catalog density bounded by merge_radius (NN-floored). Keep 0.70 unless

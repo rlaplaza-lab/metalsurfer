@@ -488,9 +488,8 @@ def _classify_vertices(
 ) -> list[Site]:
     n = len(vertices)
     hints = list(source_hints) if source_hints is not None else ["voronoi"] * n
-    provided_atoms = (
-        list(atom_indices) if atom_indices is not None else [() for _ in range(n)]
-    )
+    has_plugin_atoms = atom_indices is not None
+    provided_atoms = list(atom_indices) if has_plugin_atoms else [() for _ in range(n)]
     pbc = np.asarray(ctx.pbc, dtype=bool)
 
     classifications: list[tuple[str, tuple[int, ...]] | None] = [None] * n
@@ -548,7 +547,12 @@ def _classify_vertices(
     for i, classified in enumerate(classifications):
         assert classified is not None
         site_type, nearest_idx = classified
-        support = tuple(int(j) for j in nearest_idx if 0 <= int(j) < len(positions))
+        # Plugin atom_indices win for fingerprints (including empty pore
+        # supports). Without a plugin list, use classifier neighbours.
+        if has_plugin_atoms:
+            support = tuple(int(j) for j in provided_atoms[i])
+        else:
+            support = tuple(int(j) for j in nearest_idx)
 
         if normals is not None:
             normal = np.asarray(normals[i], dtype=float)

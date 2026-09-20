@@ -71,10 +71,10 @@ from .site_coords import (
     _deduplicate_points,
     _minimum_image_cartesian_delta,
     _periodic_image_offsets,
-    _slab_normal,
     _wrap_cartesian,
     _wrap_fractional,
 )
+from .site_plugins.helpers import median_nn_or_fallback, periodic_accessibility_tree
 
 _SOURCE_HINT = "adaptive_grid"
 _DEFAULT_N_JOBS = -2
@@ -124,9 +124,6 @@ def _framework_median_nn(
     positions: np.ndarray, cell: np.ndarray, pbc: np.ndarray
 ) -> float:
     """MIC median nearest-neighbour spacing of framework atoms."""
-    # Deferred: site_plugins.__init__ imports AdaptiveGridGenerator → this module.
-    from .site_plugins.helpers import median_nn_or_fallback
-
     pts = np.asarray(positions, dtype=float)
     if len(pts) < 2:
         return 0.0
@@ -650,29 +647,49 @@ def _ray_exposure_mask(
 def _side_policy_mask(
     normals: np.ndarray,
     *,
-    material_type: str,
     cell: np.ndarray,
+    pbc: np.ndarray,
     side_policy: SidePolicy,
     vertices: np.ndarray | None = None,
     positions: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Apply slab face / external exposure policy to candidate normals."""
+    """Apply face / exposure policy from PBC geometry (not material labels).
+
+    - Exactly one non-periodic axis (slab-like): ``a×b``-style face filter for
+      ``positive`` / ``negative``.
+    - No PBC (finite cluster): COM outward for ``external``.
+    - Fully 3D-periodic: no face filter (wall-near shells on all sides).
+    """
+    if side_policy not in ("all", "positive", "negative", "external"):
+        raise ValueError(f"Unknown side_policy {side_policy!r}")
     n = len(normals)
     if n == 0:
         return np.ones(0, dtype=bool)
     keep = np.ones(n, dtype=bool)
-    if material_type == "slab" and cell_has_volume(cell):
-        n_hat = _slab_normal(cell)
+    pbc_arr = np.asarray(pbc, dtype=bool).reshape(3)
+    n_periodic = int(np.count_nonzero(pbc_arr))
+
+    if n_periodic == 2 and cell_has_volume(cell):
+        periodic_axes = [i for i in range(3) if bool(pbc_arr[i])]
+        n_hat = np.cross(
+            np.asarray(cell[periodic_axes[0]], dtype=float),
+            np.asarray(cell[periodic_axes[1]], dtype=float),
+        )
+        nrm = float(np.linalg.norm(n_hat))
+        if nrm <= _VECTOR_NORM_EPS:
+            return keep
+        n_hat = n_hat / nrm
         dots = np.einsum("ij,j->i", normals, n_hat)
         if side_policy == "positive":
             keep &= dots >= -1e-12
         elif side_policy == "negative":
             keep &= dots <= 1e-12
-        elif side_policy in ("all", "external"):
-            pass
-        else:
-            raise ValueError(f"Unknown side_policy {side_policy!r}")
-    elif side_policy == "external" and vertices is not None and positions is not None:
+    elif (
+        n_periodic == 0
+        and side_policy == "external"
+        and vertices is not None
+        and positions is not None
+    ):
         com = np.mean(np.asarray(positions, dtype=float), axis=0)
         outward = np.asarray(vertices, dtype=float) - com
         norms = np.linalg.norm(outward, axis=1)
@@ -690,8 +707,8 @@ def _exposure_mask(
     framework_radii: np.ndarray,
     n_atoms: int,
     *,
-    material_type: str,
     cell: np.ndarray,
+    pbc: np.ndarray,
     side_policy: SidePolicy = "positive",
     positions: np.ndarray | None = None,
 ) -> np.ndarray:
@@ -708,8 +725,8 @@ def _exposure_mask(
     )
     keep &= _side_policy_mask(
         normals,
-        material_type=material_type,
         cell=cell,
+        pbc=pbc,
         side_policy=side_policy,
         vertices=vertices,
         positions=positions,
@@ -1127,8 +1144,8 @@ def _seed_chunk_candidates(
     min_clearance: float,
     max_clearance: float,
     *,
-    material_type: str,
     cell: np.ndarray,
+    pbc: np.ndarray,
     side_policy: SidePolicy,
     positions: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -1153,8 +1170,8 @@ def _seed_chunk_candidates(
         tree,
         framework_radii,
         n_atoms,
-        material_type=material_type,
         cell=cell,
+        pbc=pbc,
         side_policy=side_policy,
         positions=positions,
     )
@@ -1170,8 +1187,8 @@ def _parallel_shell_filter(
     min_clearance: float,
     max_clearance: float,
     *,
-    material_type: str,
     cell: np.ndarray,
+    pbc: np.ndarray,
     side_policy: SidePolicy,
     positions: np.ndarray,
     n_jobs: int,
@@ -1194,8 +1211,8 @@ def _parallel_shell_filter(
             n_atoms,
             min_clearance,
             max_clearance,
-            material_type=material_type,
             cell=cell,
+            pbc=pbc,
             side_policy=side_policy,
             positions=positions,
         )
@@ -1239,7 +1256,6 @@ def generate_adaptive_grid_sites(
     cell: np.ndarray,
     pbc: np.ndarray,
     *,
-    material_type: str,
     probe_radius: float,
     max_site_distance: float,
     initial_spacing: float | None = None,
@@ -1254,7 +1270,8 @@ def generate_adaptive_grid_sites(
 
     *probe_radius* / *max_site_distance* map onto the clearance window
     (element-dependent surface). *initial_spacing* is the absolute shell
-    increment in Å.
+    increment in Å. Face / exposure policy uses *pbc* geometry, not material
+    labels.
     """
     positions = np.asarray(positions, dtype=float)
     cell = np.asarray(cell, dtype=float)
@@ -1288,9 +1305,6 @@ def generate_adaptive_grid_sites(
         framework_median_nn=median_nn,
         nms_framework_scale=nms_framework_scale,
     )
-    # Deferred: site_plugins.__init__ imports AdaptiveGridGenerator → this module.
-    from .site_plugins.helpers import periodic_accessibility_tree
-
     tree = periodic_accessibility_tree(
         positions, cell, pbc, float(max_site_distance) + float(np.max(framework_radii))
     )
@@ -1320,8 +1334,8 @@ def generate_adaptive_grid_sites(
         n_atoms,
         min_clearance,
         max_clearance,
-        material_type=material_type,
         cell=cell,
+        pbc=pbc,
         side_policy=side_policy,
         positions=positions,
         n_jobs=n_jobs,
@@ -1363,8 +1377,8 @@ def generate_adaptive_grid_sites(
         tree,
         framework_radii,
         n_atoms,
-        material_type=material_type,
         cell=cell,
+        pbc=pbc,
         side_policy=side_policy,
         positions=positions,
     )
@@ -1423,8 +1437,8 @@ def generate_adaptive_grid_sites(
             n_atoms,
             min_clearance,
             max_clearance,
-            material_type=material_type,
             cell=cell,
+            pbc=pbc,
             side_policy=side_policy,
             positions=positions,
             n_jobs=n_jobs,
@@ -1457,8 +1471,8 @@ def generate_adaptive_grid_sites(
             tree,
             framework_radii,
             n_atoms,
-            material_type=material_type,
             cell=cell,
+            pbc=pbc,
             side_policy=side_policy,
             positions=positions,
         )

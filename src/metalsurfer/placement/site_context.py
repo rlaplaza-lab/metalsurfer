@@ -85,7 +85,7 @@ def _unique_sites_cache_key(
 
     For ``adaptive_grid``, spacing knobs (``adaptive_grid_spacing``,
     ``adaptive_grid_refine_levels``, ``adaptive_grid_nms_framework_scale``)
-    are part of the key.
+    and ``side_policy`` are part of the key.
     """
     pos_bytes = slab.get_positions().tobytes()
     cell_bytes = np.asarray(slab.get_cell()).tobytes()
@@ -105,14 +105,14 @@ def _unique_sites_cache_key(
         + b"\x00"
         + str(config.site_generator).encode()
         + b"\x00"
-        + str(config.side_policy).encode()
-        + b"\x00"
         + config.material_type.encode()
     )
     scale_bytes = b""
     if str(config.site_generator) == "adaptive_grid":
         scale_bytes = (
             b"\x00ags\x00"
+            + str(config.side_policy).encode()
+            + b"\x00"
             + struct.pack("<d", float(config.adaptive_grid_spacing))
             + struct.pack("<i", int(config.adaptive_grid_refine_levels))
             + struct.pack("<d", float(config.adaptive_grid_nms_framework_scale))

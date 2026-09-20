@@ -240,13 +240,16 @@ sort) stay in the enumerator; plugins only emit raw candidate batches.
        topology (A/B path)
    * - ``adaptive_grid``
      - all
-     - Opt-in near-atom Cartesian grid (spacing in Å). Shells around framework
-       atoms with clearance + exposure filters — wall-near, not pore centres.
-       One representative per support key, snapped to a target clearance above
-       the support centroid, then a modest ``merge_radius`` NMS.
-       Sampling increment is ``adaptive_grid_spacing``; optional refine
-       halvings via ``adaptive_grid_refine_levels``. Same classify / cluster /
-       symmetry / placement path afterward. Selectable in config / YAML;
+     - Opt-in near-atom Cartesian grid (spacing in Å). **One PBC/clearance
+       path** for every material: shells around framework atoms with clearance
+       + exposure filters — wall-near, not pore centres. Face / exposure policy
+       comes from PBC geometry (not material labels). One representative per
+       support key, snapped to a lateral pocket anchor at a target clearance,
+       then a modest ``merge_radius`` NMS. Does not set topology-only
+       ``inject_atop`` / height-mask flags. Sampling increment is
+       ``adaptive_grid_spacing``; optional refine halvings via
+       ``adaptive_grid_refine_levels``. Same classify / cluster / symmetry /
+       placement path afterward. Selectable in config / YAML;
        **not** chosen by ``auto``.
 
 Generation follows the slab normal (``a × b``) and the surface plane — not
@@ -354,12 +357,14 @@ Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi`` /
        planar slabs skip Voronoi. Window: ``voronoi_probe_radius`` /
        ``voronoi_max_site_distance`` / ``voronoi_auto_widen``
    * - topology (NP)
-     - Serial hull + NN graph (``n_jobs`` is a no-op). Same accessibility window
+     - Serial hull + NN graph (``n_jobs`` is a no-op by design). Same accessibility window
    * - voronoi
-     - Ridge enrich via ``n_jobs`` when ``voronoi_site_enrichment=True``
+     - Ridge enrich via ``n_jobs`` when ``voronoi_site_enrichment=True``; emits
+       wall-near support atoms for fingerprints (pores keep empty supports)
    * - adaptive_grid
      - Shell / refine chunks via ``n_jobs``; density via ``adaptive_grid_*`` and
-       ``side_policy``
+       ``side_policy`` (PBC-geometry face filter). No material_type branches,
+       no atop inject / height mask
 
 See :doc:`configuration` for the full knob-by-plugin table.
 
@@ -373,8 +378,10 @@ injection / dissociative for porous. Nanoparticle ``surface_ref`` is the
 coordinating metal atoms projected onto the site normal (topology vertices
 are already lifted); porous keeps the site-vertex projection.
 ``adaptive_grid`` registers in ``placement/site_plugins/`` with the same
-candidate-batch contract (all materials; config-selectable, not chosen by
-``auto``). Future plugins (e.g. rolling-probe) would follow the same pattern.
+candidate-batch contract and a **single** generation path for all materials
+(config-selectable, not chosen by ``auto``). Topology / Voronoi keep
+system-specific heuristics; adaptive_grid does not. Future plugins
+(e.g. rolling-probe) would follow the same batch contract.
 
 
 Placement

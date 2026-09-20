@@ -87,7 +87,7 @@ def test_voronoi_nn_distances_match_periodic_image_query_for_porous():
     cell = np.asarray(porous.get_cell())
     pbc = np.asarray(porous.get_pbc(), dtype=bool)
 
-    vertices, nn_dists = _voronoi_sites(
+    vertices, nn_dists, _atoms = _voronoi_sites(
         positions,
         cell,
         pbc,
@@ -121,7 +121,7 @@ def test_voronoi_keeps_vertices_that_wrap_into_cell():
     cell = np.asarray(porous.get_cell(), dtype=float)
     pbc = np.asarray(porous.get_pbc(), dtype=bool)
 
-    vertices, _ = _voronoi_sites(
+    vertices, _, _ = _voronoi_sites(
         positions,
         cell,
         pbc,
@@ -170,7 +170,7 @@ def test_voronoi_enrichment_increases_site_count_on_porous():
     cell = np.asarray(porous.get_cell())
     pbc = np.asarray(porous.get_pbc(), dtype=bool)
 
-    vertices_base, _ = _voronoi_sites(
+    vertices_base, _, _ = _voronoi_sites(
         positions,
         cell,
         pbc,
@@ -179,7 +179,7 @@ def test_voronoi_enrichment_increases_site_count_on_porous():
         enrich=False,
         symbols=list(porous.get_chemical_symbols()),
     )
-    vertices_enriched, _ = _voronoi_sites(
+    vertices_enriched, _, _ = _voronoi_sites(
         positions,
         cell,
         pbc,

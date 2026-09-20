@@ -14,8 +14,6 @@ from .helpers import candidate_enrichment_frames, periodic_accessibility_tree
 
 logger = logging.getLogger(__name__)
 
-_EMPTY_ATOM_INDICES: tuple[int, ...] = ()
-
 
 class VoronoiGenerator:
     """Voronoi vertices with optional ridge enrichment.
@@ -64,7 +62,7 @@ class VoronoiGenerator:
             apply_slab_height_mask = True
             inject_atop = True
 
-        vertices, nn_dists = _voronoi_sites(
+        vertices, nn_dists, local_atoms = _voronoi_sites(
             voronoi_positions,
             cell,
             pbc,
@@ -75,9 +73,14 @@ class VoronoiGenerator:
             n_jobs=int(ctx.n_jobs),
         )
         source_hints = ["voronoi"] * len(vertices)
-        atom_indices: list[tuple[int, ...]] = [
-            _EMPTY_ATOM_INDICES for _ in range(len(vertices))
-        ]
+        if len(voronoi_positions) != len(positions):
+            assert slab_top_atom_indices is not None
+            remap = np.asarray(slab_top_atom_indices, dtype=int)
+            atom_indices = [
+                tuple(int(remap[j]) for j in atoms) for atoms in local_atoms
+            ]
+        else:
+            atom_indices = list(local_atoms)
 
         if len(vertices) == 0 and material_type == "porous":
             logger.warning(

@@ -35,6 +35,7 @@ from .site_coords import (
     _slab_normal,
     _slab_plane_projectors,
     _wrap_cartesian,
+    derive_pore_threshold,
 )
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,45 @@ def _iter_unique_simplex_sites(
         yield "hollow", local_ids, centroid
 
 
+def _empty_voronoi_result() -> tuple[np.ndarray, np.ndarray, list[tuple[int, ...]]]:
+    """Empty vertices / nn distances / support-atom tuples."""
+    return (
+        np.empty((0, 3), dtype=float),
+        np.empty(0, dtype=float),
+        [],
+    )
+
+
+def _voronoi_primary_supports(
+    vertices: np.ndarray,
+    framework_tree: KDTree,
+    *,
+    n_origin: int,
+    pore_threshold: float,
+) -> list[tuple[int, ...]]:
+    """Primary-cell support atoms per vertex (empty for pore centres)."""
+    n = len(vertices)
+    if n == 0 or n_origin <= 0:
+        return []
+    k = min(_SITE_CLASSIFICATION_NEIGHBOURS, n_origin)
+    dists, idx = framework_tree.query(vertices, k=k)
+    dists_arr = np.asarray(dists, dtype=float)
+    idx_arr = np.asarray(idx, dtype=int)
+    if dists_arr.ndim == 1:
+        dists_arr = dists_arr.reshape(-1, 1)
+        idx_arr = idx_arr.reshape(-1, 1)
+    out: list[tuple[int, ...]] = []
+    for i in range(n):
+        primary = np.asarray(idx_arr[i], dtype=int) % int(n_origin)
+        _site_type, support = _classify_voronoi_site_from_neighbors(
+            dists_arr[i],
+            primary,
+            pore_threshold=pore_threshold,
+        )
+        out.append(tuple(int(j) for j in support))
+    return out
+
+
 def _voronoi_sites(
     positions: np.ndarray,
     cell: np.ndarray,
@@ -124,10 +164,15 @@ def _voronoi_sites(
     *,
     symbols: list[str],
     n_jobs: int = 1,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Voronoi vertices accessible for adsorption, optionally enriched."""
+) -> tuple[np.ndarray, np.ndarray, list[tuple[int, ...]]]:
+    """Voronoi vertices accessible for adsorption, optionally enriched.
+
+    Returns ``(vertices, nn_dists, atom_indices)``. Wall-near vertices carry
+    primary-cell support atoms for fingerprints; pore centres keep empty
+    supports so distance-ratio typing can still label them ``pore``.
+    """
     if len(positions) < 4:
-        return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
+        return _empty_voronoi_result()
 
     if probe_radius is None or max_distance is None:
         derived_probe, derived_max = _derive_voronoi_distance_window(
@@ -152,11 +197,11 @@ def _voronoi_sites(
         vor = Voronoi(extended)
     except (QhullError, ValueError, RuntimeError) as exc:
         logger.debug("Voronoi computation failed (%s); returning no vertices", exc)
-        return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
+        return _empty_voronoi_result()
 
     raw_vertices = np.asarray(vor.vertices, dtype=float)
     if len(raw_vertices) == 0:
-        return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
+        return _empty_voronoi_result()
 
     inv_cell = np.linalg.inv(cell) if np.any(pbc) else None
     wrapped_vertices = _wrap_cartesian(raw_vertices, cell, pbc, inv_cell=inv_cell)
@@ -173,7 +218,7 @@ def _voronoi_sites(
     raw_accessible_indices = np.nonzero(accessible)[0]
 
     if len(wrapped_vertices) == 0:
-        return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
+        return _empty_voronoi_result()
 
     # Keep wrapped vertices; PBC dedup merges images. Do not filter on unwrapped
     # fractional coords (values just outside [0, 1) still wrap to valid sites).
@@ -193,38 +238,44 @@ def _voronoi_sites(
     nn_dists = nn_dists[keep]
 
     if len(vertices) == 0:
-        return np.empty((0, 3), dtype=float), np.empty(0, dtype=float)
+        return _empty_voronoi_result()
 
-    if not enrich or len(vertices) < 2:
-        return vertices, nn_dists
+    n_origin = len(positions)
+    if enrich and len(vertices) >= 2:
+        kept_tree = KDTree(vertices)
+        raw_to_kept: dict[int, int] = {}
+        accessible_wrapped = wrapped_vertices
+        dist_to_kept, idx_to_kept = kept_tree.query(accessible_wrapped, k=1)
+        for raw_idx, d, kept_idx in zip(
+            raw_accessible_indices, dist_to_kept, idx_to_kept, strict=False
+        ):
+            if float(d) <= _VORONOI_DEDUP_TOLERANCE:
+                raw_to_kept[int(raw_idx)] = int(kept_idx)
 
-    kept_tree = KDTree(vertices)
-    raw_to_kept: dict[int, int] = {}
-    accessible_wrapped = wrapped_vertices
-    dist_to_kept, idx_to_kept = kept_tree.query(accessible_wrapped, k=1)
-    for raw_idx, d, kept_idx in zip(
-        raw_accessible_indices, dist_to_kept, idx_to_kept, strict=False
-    ):
-        if float(d) <= _VORONOI_DEDUP_TOLERANCE:
-            raw_to_kept[int(raw_idx)] = int(kept_idx)
+        vertices, nn_dists = _enrich_along_ridges(
+            vertices,
+            nn_dists,
+            vor.ridge_vertices,
+            raw_to_kept,
+            extended,
+            tree,
+            probe_radius,
+            max_distance,
+            cell=cell,
+            pbc=pbc,
+            n_origin=n_origin,
+            inv_cell=inv_cell,
+            dedup_offsets=dedup_offsets,
+            n_jobs=n_jobs,
+        )
 
-    enriched_verts, enriched_dists = _enrich_along_ridges(
+    atom_indices = _voronoi_primary_supports(
         vertices,
-        nn_dists,
-        vor.ridge_vertices,
-        raw_to_kept,
-        extended,
         tree,
-        probe_radius,
-        max_distance,
-        cell=cell,
-        pbc=pbc,
-        n_origin=len(positions),
-        inv_cell=inv_cell,
-        dedup_offsets=dedup_offsets,
-        n_jobs=n_jobs,
+        n_origin=n_origin,
+        pore_threshold=derive_pore_threshold(list(symbols)),
     )
-    return enriched_verts, enriched_dists
+    return vertices, nn_dists, atom_indices
 
 
 # ---------------------------------------------------------------------------
@@ -616,7 +667,7 @@ def _classify_voronoi_site_from_neighbors(
     if d1 < _DISTANCE_ZERO_EPS:
         return "atop", (int(idx[0]),)
     if d1 > pore_threshold:
-        return "pore", tuple(int(i) for i in idx)
+        return "pore", ()
     if len(dists) >= 2 and dists[1] / d1 > _ATOP_RATIO:
         return "atop", (int(idx[0]),)
     if len(dists) >= 3 and all(
