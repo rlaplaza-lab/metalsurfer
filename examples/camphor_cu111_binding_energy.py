@@ -9,13 +9,15 @@ paper's Cu(111) slab (192 Cu from NOMAD; bottom 2 layers frozen). MLIP energies 
 compared qualitatively to the paper's eight DFT minima (not absolute eV).
 
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
+
+Run (conda env metalsurfer)::
+
+  conda activate metalsurfer
+  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+  python examples/camphor_cu111_binding_energy.py
 
 Uses the paper's 192-atom Cu(111) slab from NOMAD and a 25-batch BO budget to search
 for placements comparable to the eight published DFT minima.
-
-If you hit CUDA OOM on a 15GB GPU, try:
-  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/camphor_cu111_binding_energy.py
 """
 
 from __future__ import annotations

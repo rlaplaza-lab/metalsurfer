@@ -71,6 +71,9 @@ from .site_plugins.helpers import (
     bounding_box_cell as _bounding_box_cell,
 )
 from .site_plugins.helpers import (
+    candidate_enrichment_frames as _candidate_enrichment_frames,
+)
+from .site_plugins.helpers import (
     median_nn_or_fallback as _median_nn_or_fallback,
 )
 from .site_plugins.helpers import (
@@ -163,11 +166,22 @@ def _inject_atop_sites(
     probe_radius: float,
     max_site_distance: float,
     atom_indices: list[tuple[int, ...]] | None = None,
-) -> tuple[np.ndarray, np.ndarray, list[str], list[tuple[int, ...]]]:
+    normals: np.ndarray | None = None,
+    clearances: np.ndarray | None = None,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    list[str],
+    list[tuple[int, ...]],
+    np.ndarray | None,
+    np.ndarray | None,
+]:
     """Inject atop when topology did not already produce any.
 
     Uses the same height as the topology generator when *median_nn* is supplied.
     *accessibility_tree* (PBC-aware) gates distances under periodic boundaries.
+    When *normals* / *clearances* are supplied, frames for injected atops are
+    appended so enrichment stays aligned with the merged catalog.
     """
     atoms = (
         list(atom_indices)
@@ -175,9 +189,9 @@ def _inject_atop_sites(
         else [_EMPTY_ATOM_INDICES for _ in range(len(vertices))]
     )
     if material_type in ("slab", "nanoparticle") and has_topology_atop:
-        return vertices, nn_dists, source_hints, atoms
+        return vertices, nn_dists, source_hints, atoms, normals, clearances
     if material_type not in ("slab", "nanoparticle"):
-        return vertices, nn_dists, source_hints, atoms
+        return vertices, nn_dists, source_hints, atoms, normals, clearances
 
     if median_nn is None:
         ref = (
@@ -195,22 +209,23 @@ def _inject_atop_sites(
 
     if material_type == "slab":
         if slab_top_atom_indices is None:
-            return vertices, nn_dists, source_hints, atoms
+            return vertices, nn_dists, source_hints, atoms, normals, clearances
         top_atom_indices = np.asarray(slab_top_atom_indices, dtype=int)
         atom_normals = None
     else:
         hull = _try_convex_hull(positions)
         if hull is None:
-            return vertices, nn_dists, source_hints, atoms
+            return vertices, nn_dists, source_hints, atoms, normals, clearances
         top_atom_indices = np.nonzero(_convex_hull_surface_mask(positions, hull=hull))[
             0
         ].astype(int)
         if len(top_atom_indices) == 0:
-            return vertices, nn_dists, source_hints, atoms
+            return vertices, nn_dists, source_hints, atoms, normals, clearances
         atom_normals = _surface_atom_normals(positions, top_atom_indices, hull)
 
     candidate_verts: list[np.ndarray] = []
     candidate_atom_ids: list[int] = []
+    candidate_normal_list: list[np.ndarray] = []
     for li, ai in enumerate(top_atom_indices):
         atom_pos = positions[int(ai)]
         if material_type == "slab":
@@ -219,6 +234,7 @@ def _inject_atop_sites(
             )[0]
             if np.any(pbc):
                 candidate = _wrap_cartesian(candidate.reshape(1, 3), cell, pbc)[0]
+            n_hat = _slab_normal(cell)
         else:
             assert atom_normals is not None
             n_hat = atom_normals[li]
@@ -227,9 +243,10 @@ def _inject_atop_sites(
             candidate = atom_pos + atop_height * n_hat
         candidate_verts.append(candidate)
         candidate_atom_ids.append(int(ai))
+        candidate_normal_list.append(np.asarray(n_hat, dtype=float))
 
     if not candidate_verts:
-        return vertices, nn_dists, source_hints, atoms
+        return vertices, nn_dists, source_hints, atoms, normals, clearances
 
     candidate_arr = np.asarray(candidate_verts, dtype=float)
     gate_tree = (
@@ -242,26 +259,49 @@ def _inject_atop_sites(
         d_nn_all <= float(max_site_distance)
     )
     if not np.any(keep_acc):
-        return vertices, nn_dists, source_hints, atoms
+        return vertices, nn_dists, source_hints, atoms, normals, clearances
 
     candidate_arr = candidate_arr[keep_acc]
     candidate_dist_arr = d_nn_all[keep_acc]
     kept_atom_ids = [candidate_atom_ids[i] for i in np.nonzero(keep_acc)[0]]
     candidate_sources = ["atop_injected"] * len(candidate_arr)
     candidate_atoms = [(ai,) for ai in kept_atom_ids]
+    candidate_normals = np.asarray(
+        [candidate_normal_list[i] for i in np.nonzero(keep_acc)[0]], dtype=float
+    )
+    candidate_clearances = candidate_dist_arr.copy()
+
+    # Align existing enrichment length before merge; rebuild if missing/mismatched.
+    if normals is None or clearances is None or len(normals) != len(vertices):
+        normals, clearances = _candidate_enrichment_frames(
+            vertices,
+            nn_dists,
+            atoms,
+            positions=positions,
+            cell=cell,
+            pbc=pbc,
+            material_type=material_type,
+            accessibility_tree=accessibility_tree,
+        )
 
     n_existing = len(vertices)
-    vertices, nn_dists, source_hints, atoms = _merge_dedup_site_arrays(
-        vertices,
-        nn_dists,
-        source_hints,
-        candidate_arr,
-        candidate_dist_arr,
-        candidate_sources,
-        cell=cell,
-        pbc=pbc,
-        atom_indices=atoms,
-        new_atom_indices=candidate_atoms,
+    vertices, nn_dists, source_hints, atoms, normals, clearances = (
+        _merge_dedup_site_arrays(
+            vertices,
+            nn_dists,
+            source_hints,
+            candidate_arr,
+            candidate_dist_arr,
+            candidate_sources,
+            cell=cell,
+            pbc=pbc,
+            atom_indices=atoms,
+            new_atom_indices=candidate_atoms,
+            normals=normals,
+            clearances=clearances,
+            new_normals=candidate_normals,
+            new_clearances=candidate_clearances,
+        )
     )
     n_injected = len(vertices) - n_existing
     logger.debug(
@@ -270,7 +310,7 @@ def _inject_atop_sites(
         len(vertices),
     )
 
-    return vertices, nn_dists, source_hints, atoms
+    return vertices, nn_dists, source_hints, atoms, normals, clearances
 
 
 def get_unified_sites(
@@ -601,7 +641,14 @@ def _enumerate_unified_sites(
         )
 
     if batch.inject_atop:
-        vertices, nn_dists, source_hints, atom_indices = _inject_atop_sites(
+        (
+            vertices,
+            nn_dists,
+            source_hints,
+            atom_indices,
+            normals,
+            clearances,
+        ) = _inject_atop_sites(
             vertices,
             nn_dists,
             source_hints,
@@ -617,10 +664,9 @@ def _enumerate_unified_sites(
             probe_radius=float(probe_radius),
             max_site_distance=float(max_site_distance),
             atom_indices=atom_indices,
+            normals=normals,
+            clearances=clearances,
         )
-        # Injection invalidates per-site enrichment arrays.
-        normals = None
-        clearances = None
 
     if len(vertices) == 0:
         logger.warning(
@@ -706,6 +752,10 @@ def get_hollow_sites_for_adatoms(
     auto_widen: bool = True,
     planar_z_variance_threshold: float | None = None,
     side_policy: str = "positive",
+    adaptive_grid_spacing: float | None = None,
+    adaptive_grid_refine_levels: int = 0,
+    adaptive_grid_nms_framework_scale: float | None = None,
+    n_jobs: int = -2,
 ) -> list[Site]:
     """Return hollow/pore sites for adatom placement from the clustered catalog.
 
@@ -741,6 +791,15 @@ def get_hollow_sites_for_adatoms(
         Max top-layer height variance (Å²) for planar classification.
     side_policy
         Slab face / exposure policy for ``adaptive_grid`` (default ``positive``).
+    adaptive_grid_spacing
+        Absolute shell increment (Å) for ``adaptive_grid``.
+    adaptive_grid_refine_levels
+        Refine halvings after the coarse shell for ``adaptive_grid``.
+    adaptive_grid_nms_framework_scale
+        Floor on ``merge_radius`` as a fraction of framework median NN.
+    n_jobs
+        Joblib-style parallelism for plugins that use it (Voronoi ridge enrich,
+        adaptive_grid shells).
     """
     raw = get_unified_sites(
         slab,
@@ -754,6 +813,10 @@ def get_hollow_sites_for_adatoms(
         auto_widen=auto_widen,
         planar_z_variance_threshold=planar_z_variance_threshold,
         side_policy=side_policy,
+        adaptive_grid_spacing=adaptive_grid_spacing,
+        adaptive_grid_refine_levels=adaptive_grid_refine_levels,
+        adaptive_grid_nms_framework_scale=adaptive_grid_nms_framework_scale,
+        n_jobs=n_jobs,
     )
     if not raw:
         return []
@@ -950,6 +1013,10 @@ def get_symmetry_aware_sites(
     planar_z_variance_threshold: float | None = None,
     site_generator: str = "auto",
     side_policy: str = "positive",
+    adaptive_grid_spacing: float | None = None,
+    adaptive_grid_refine_levels: int = 0,
+    adaptive_grid_nms_framework_scale: float | None = None,
+    n_jobs: int = -2,
 ) -> list[Site]:
     """Return symmetry-reduced adsorption sites using spglib.
 
@@ -990,6 +1057,14 @@ def get_symmetry_aware_sites(
         ``"adaptive_grid"``).
     side_policy
         Slab face / exposure policy for ``adaptive_grid`` (default ``positive``).
+    adaptive_grid_spacing
+        Absolute shell increment (Å) for ``adaptive_grid``.
+    adaptive_grid_refine_levels
+        Refine halvings after the coarse shell for ``adaptive_grid``.
+    adaptive_grid_nms_framework_scale
+        Floor on ``merge_radius`` as a fraction of framework median NN.
+    n_jobs
+        Joblib-style parallelism for plugins that use it.
     """
     validate_material_type(material_type)
 
@@ -1017,6 +1092,10 @@ def get_symmetry_aware_sites(
             planar_z_variance_threshold=z_var_threshold,
             site_generator=site_generator,
             side_policy=side_policy,
+            adaptive_grid_spacing=adaptive_grid_spacing,
+            adaptive_grid_refine_levels=adaptive_grid_refine_levels,
+            adaptive_grid_nms_framework_scale=adaptive_grid_nms_framework_scale,
+            n_jobs=n_jobs,
         )
     if not site_list:
         return []

@@ -5,11 +5,14 @@ This example loads a real MOF structure from a CIF file and computes CO2 adsorpt
 energy using metalsurfer.
 
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e ".[mlip]"
 
-If you hit CUDA OOM on a 15GB GPU, try:
-  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/co2_mof_binding_energy.py
-or reduce num_placements (e.g. 25).
+Run (conda env metalsurfer)::
+
+  conda activate metalsurfer
+  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+  python examples/co2_mof_binding_energy.py
+
+If you hit CUDA OOM on a 15GB GPU, reduce ``num_placements`` (e.g. 25).
 
 Uses RUBTAK01 MOF structure from:
 https://github.com/bafgreat/mofstructure/blob/main/tests/test_data/RUBTAK01.cif

@@ -14,6 +14,7 @@ from .._constants import (
     _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
+    _SURFACE_NORMAL_FALLBACK_NORM_EPS,
     _VORONOI_DEDUP_TOLERANCE,
     _VORONOI_MAX_DISTANCE_COVALENT_SCALE,
 )
@@ -21,9 +22,11 @@ from ..site_coords import (
     _build_periodic_images,
     _deduplicate_points,
     _height_along_slab_normal,
+    _minimum_image_cartesian_delta,
     _pbc_merge_pair_set,
     _periodic_image_offsets,
     _project_to_slab_plane,
+    _slab_normal,
     top_layer_mask_by_normal,
 )
 
@@ -41,6 +44,21 @@ class PlanarWidenScratch:
     exp_tri: Delaunay | None = None
 
 
+def _slice_optional_enrichment(
+    arr: np.ndarray | None,
+    mask_or_idx: np.ndarray | slice,
+    *,
+    n_expected: int,
+) -> np.ndarray | None:
+    """Slice an optional enrichment array by a boolean mask, index list, or slice."""
+    if arr is None:
+        return None
+    values = np.asarray(arr)
+    if len(values) != n_expected:
+        return None
+    return values[mask_or_idx]
+
+
 def merge_dedup_site_arrays(
     vertices: np.ndarray,
     nn_dists: np.ndarray,
@@ -53,13 +71,28 @@ def merge_dedup_site_arrays(
     pbc: np.ndarray | list[bool],
     atom_indices: list[tuple[int, ...]] | None = None,
     new_atom_indices: list[tuple[int, ...]] | None = None,
-) -> tuple[np.ndarray, np.ndarray, list[str], list[tuple[int, ...]]]:
+    normals: np.ndarray | None = None,
+    clearances: np.ndarray | None = None,
+    new_normals: np.ndarray | None = None,
+    new_clearances: np.ndarray | None = None,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    list[str],
+    list[tuple[int, ...]],
+    np.ndarray | None,
+    np.ndarray | None,
+]:
     """Append *new_* sites without collapsing already-unique existing sites.
 
     The existing unique set is frozen: new points are first deduplicated among
     themselves, then dropped when within ``_VORONOI_DEDUP_TOLERANCE`` of any
     existing point (PBC-aware). A new midpoint near two old sites therefore
     cannot merge those old representatives into one.
+
+    Optional *normals* / *clearances* (and matching ``new_*`` arrays) are
+    preserved for kept sites. A channel that is missing or length-mismatched
+    on either side is dropped (returned as ``None``).
     """
     n_old = len(vertices)
     n_new = len(new_vertices)
@@ -73,19 +106,96 @@ def merge_dedup_site_arrays(
         if new_atom_indices is not None
         else [_EMPTY_ATOM_INDICES for _ in range(n_new)]
     )
+
+    def _combine_channel(
+        old: np.ndarray | None,
+        new: np.ndarray | None,
+        *,
+        n_old_expected: int,
+        n_new_expected: int,
+        new_mask: np.ndarray | None,
+        stack: bool,
+    ) -> np.ndarray | None:
+        """Preserve enrichment when channels align; drop on length/presence mismatch."""
+        if old is None and new is None:
+            return None
+        if n_old_expected == 0:
+            if new is None or len(np.asarray(new)) != n_new_expected:
+                return None
+            return _slice_optional_enrichment(
+                new,
+                new_mask if new_mask is not None else np.s_[:],
+                n_expected=n_new_expected,
+            )
+        if n_new_expected == 0 or new_mask is None or not np.any(new_mask):
+            if old is None or len(np.asarray(old)) != n_old_expected:
+                return None
+            return np.asarray(old)
+        if old is None or new is None:
+            return None
+        if (
+            len(np.asarray(old)) != n_old_expected
+            or len(np.asarray(new)) != n_new_expected
+        ):
+            return None
+        new_kept = np.asarray(new)[new_mask]
+        if stack:
+            return np.vstack([np.asarray(old), new_kept])
+        return np.concatenate([np.asarray(old), new_kept])
+
+    def _old_enrichment() -> tuple[np.ndarray | None, np.ndarray | None]:
+        return (
+            _combine_channel(
+                normals,
+                None,
+                n_old_expected=n_old,
+                n_new_expected=0,
+                new_mask=None,
+                stack=True,
+            ),
+            _combine_channel(
+                clearances,
+                None,
+                n_old_expected=n_old,
+                n_new_expected=0,
+                new_mask=None,
+                stack=False,
+            ),
+        )
+
     if n_new == 0:
-        return vertices, nn_dists, source_hints, old_atoms
+        out_n, out_c = _old_enrichment()
+        return vertices, nn_dists, source_hints, old_atoms, out_n, out_c
+
     pbc_arr = np.asarray(pbc, dtype=bool)
     if n_old == 0:
         keep_new = _deduplicate_points(
             new_vertices, _VORONOI_DEDUP_TOLERANCE, cell=cell, pbc=pbc_arr
         )
         kept = np.nonzero(keep_new)[0]
+        out_n = _combine_channel(
+            None,
+            new_normals,
+            n_old_expected=0,
+            n_new_expected=n_new,
+            new_mask=keep_new,
+            stack=True,
+        )
+        out_c = _combine_channel(
+            None,
+            new_clearances,
+            n_old_expected=0,
+            n_new_expected=n_new,
+            new_mask=keep_new,
+            stack=False,
+        )
         return (
             new_vertices[keep_new],
             new_dists[keep_new],
             [new_sources[i] for i in kept],
             [new_atoms[i] for i in kept],
+            out_n,
+            out_c,
         )
 
     keep_new = _deduplicate_points(
@@ -97,7 +207,8 @@ def merge_dedup_site_arrays(
     cand_sources = [new_sources[i] for i in kept_new_idx]
     cand_atoms = [new_atoms[i] for i in kept_new_idx]
     if len(cand_verts) == 0:
-        return vertices, nn_dists, source_hints, old_atoms
+        out_n, out_c = _old_enrichment()
+        return vertices, nn_dists, source_hints, old_atoms, out_n, out_c
 
     cell_arr = np.asarray(cell, dtype=float)
     image_offsets = None
@@ -118,15 +229,104 @@ def merge_dedup_site_arrays(
             collide[a - n_old] = True
     accept = ~collide
     if not np.any(accept):
-        return vertices, nn_dists, source_hints, old_atoms
+        out_n, out_c = _old_enrichment()
+        return vertices, nn_dists, source_hints, old_atoms, out_n, out_c
 
     accepted_idx = np.nonzero(accept)[0]
+    keep_and_accept = np.zeros(n_new, dtype=bool)
+    keep_and_accept[kept_new_idx[accept]] = True
+    out_n = _combine_channel(
+        normals,
+        new_normals,
+        n_old_expected=n_old,
+        n_new_expected=n_new,
+        new_mask=keep_and_accept,
+        stack=True,
+    )
+    out_c = _combine_channel(
+        clearances,
+        new_clearances,
+        n_old_expected=n_old,
+        n_new_expected=n_new,
+        new_mask=keep_and_accept,
+        stack=False,
+    )
     return (
         np.vstack([vertices, cand_verts[accept]]),
         np.concatenate([nn_dists, cand_dists[accept]]),
         source_hints + [cand_sources[i] for i in accepted_idx],
         old_atoms + [cand_atoms[i] for i in accepted_idx],
+        out_n,
+        out_c,
     )
+
+
+def candidate_enrichment_frames(
+    vertices: np.ndarray,
+    nn_dists: np.ndarray,
+    atom_indices: list[tuple[int, ...]],
+    *,
+    positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    material_type: str,
+    accessibility_tree: KDTree | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(normals, clearances)`` aligned with *vertices*.
+
+    Clearances copy accessibility-gated centre-to-centre ``nn_dists``. Normals
+    prefer support-centroid lift when ``atom_indices`` are nonempty; otherwise
+    slabs use the cell slab normal and other materials use the direction from
+    the nearest framework atom.
+    """
+    verts = np.asarray(vertices, dtype=float).reshape(-1, 3)
+    dists = np.asarray(nn_dists, dtype=float).reshape(-1)
+    n = len(verts)
+    clearances = dists.copy()
+    if n == 0:
+        return np.empty((0, 3), dtype=float), clearances
+
+    cell_arr = np.asarray(cell, dtype=float)
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    pos = np.asarray(positions, dtype=float)
+    use_mic = bool(np.any(pbc_arr)) and cell_has_volume(cell_arr)
+    slab_n = _slab_normal(cell_arr) if material_type == "slab" else None
+    gate = accessibility_tree if accessibility_tree is not None else KDTree(pos)
+
+    normals = np.zeros((n, 3), dtype=float)
+    for i, vert in enumerate(verts):
+        support = (
+            tuple(int(j) for j in atom_indices[i]) if i < len(atom_indices) else ()
+        )
+        if support:
+            pts = []
+            for j in support:
+                delta = pos[int(j)] - vert
+                if use_mic:
+                    delta = _minimum_image_cartesian_delta(delta, cell_arr, pbc_arr)
+                pts.append(vert + delta)
+            centroid = np.mean(np.asarray(pts, dtype=float), axis=0)
+            lift = vert - centroid
+            nrm = float(np.linalg.norm(lift))
+            if nrm >= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+                normals[i] = lift / nrm
+                continue
+        if slab_n is not None:
+            normals[i] = slab_n
+            continue
+        _, nn_idx = gate.query(vert.reshape(1, 3), k=1)
+        nearest = pos[int(np.asarray(nn_idx).ravel()[0]) % len(pos)]
+        delta = vert - nearest
+        if use_mic:
+            delta = _minimum_image_cartesian_delta(delta, cell_arr, pbc_arr)
+        nrm = float(np.linalg.norm(delta))
+        if nrm >= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+            normals[i] = delta / nrm
+        elif slab_n is not None:
+            normals[i] = slab_n
+        else:
+            normals[i] = np.array([0.0, 0.0, 1.0], dtype=float)
+    return normals, clearances
 
 
 def median_nn_or_fallback(

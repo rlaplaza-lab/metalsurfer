@@ -308,6 +308,10 @@ _ADAPTIVE_GRID_MAX_SUPPORT: int = 8
 _ADAPTIVE_GRID_SCORE_W_CLEARANCE: float = 1.0
 _ADAPTIVE_GRID_SCORE_W_GRADIENT: float = 0.5
 _ADAPTIVE_GRID_SCORE_W_BALANCE: float = 0.25
+# Lateral edge-length balance for multi-atom supports (bridge/hollow).
+_ADAPTIVE_GRID_SCORE_W_EDGE: float = 0.50
+# Reject triangle circumcenters farther than this × mean edge from the centroid.
+_ADAPTIVE_GRID_CIRCUMCENTER_MAX_CENTROID_SCALE: float = 0.35
 _ADAPTIVE_GRID_STATIONARITY_STEP: float = 0.15
 # Basin refine convergence tolerances.
 _ADAPTIVE_GRID_REFINE_POS_TOL: float = 0.05

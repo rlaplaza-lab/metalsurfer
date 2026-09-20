@@ -118,10 +118,8 @@ def test_all_plugins_share_batch_and_site_contract():
         assert len(batch.nn_dists) == n
         assert len(batch.source_hints) == n
         assert len(batch.atom_indices) == n
-        if batch.normals is not None:
-            assert len(batch.normals) == n
-        if batch.clearances is not None:
-            assert len(batch.clearances) == n
+        assert batch.normals is not None and len(batch.normals) == n
+        assert batch.clearances is not None and len(batch.clearances) == n
 
         sites = get_unified_sites(
             slab,
@@ -233,3 +231,104 @@ def test_voronoi_ridge_enrich_n_jobs_deterministic():
     assert sorted(tuple(np.round(s.xyz, 6)) for s in serial) == sorted(
         tuple(np.round(s.xyz, 6)) for s in parallel
     )
+
+
+@pytest.mark.parametrize(
+    ("material_type", "plugin", "factory"),
+    [
+        ("slab", "topology", make_slab),
+        ("slab", "adaptive_grid", make_slab),
+        ("nanoparticle", "topology", make_nanoparticle),
+        ("nanoparticle", "adaptive_grid", make_nanoparticle),
+        ("porous", "voronoi", make_porous_framework),
+        ("porous", "adaptive_grid", make_porous_framework),
+    ],
+)
+def test_plugins_n_tuplet_expands_and_materializes(material_type, plugin, factory):
+    """n-tuplet sampling expands to the clustered lattice and place ≥2 clash-free."""
+    from metalsurfer.placement.site_context import (
+        resolve_site_context_for_sampling,
+        site_context_for_sampling,
+        skip_symmetry_for_sampling,
+    )
+
+    atoms = factory()
+    cfg = AdsorptionConfig(
+        material_type=material_type,
+        site_generator=plugin,
+        seed=0,
+        num_conformers=1,
+        num_placements=8,
+        n_jobs=1,
+        slab_relaxation_mode="none",
+        saturation_molecules_per_step=2,
+    )
+    assert (
+        skip_symmetry_for_sampling(
+            symmetry_broken=False,
+            slab_for_sites=atoms,
+            full_slab=atoms,
+            config=cfg,
+        )
+        is True
+    )
+    reduced = resolve_site_context_for_sampling(atoms, cfg, symmetry_broken=False)
+    sampling = site_context_for_sampling(atoms, cfg, reduced)
+    assert sampling.clustered_sites is not None
+    assert len(sampling.sites) == len(sampling.clustered_sites)
+    assert len(sampling.sites) >= 2
+
+    ads = molecule("H2")
+    specs = enumerate_placement_specs(
+        [ads], atoms, cfg, "H2", n_desired=8, seed=0, site_context=sampling
+    )
+    assert len(specs) >= 2
+    site_indices = {s.site_index for s in specs if s.site_index is not None}
+    assert len(site_indices) >= 2
+    results = generate_placements_from_specs(
+        specs, [ads], atoms, cfg, smiles="H2", site_context=sampling
+    )
+    ok = [pair for pair, _reason in results if pair is not None]
+    assert len(ok) >= 2
+
+
+@pytest.mark.parametrize(
+    ("material_type", "plugin", "factory"),
+    [
+        ("slab", "topology", make_slab),
+        ("slab", "adaptive_grid", make_slab),
+        ("nanoparticle", "topology", make_nanoparticle),
+        ("nanoparticle", "adaptive_grid", make_nanoparticle),
+        ("porous", "voronoi", make_porous_framework),
+        ("porous", "adaptive_grid", make_porous_framework),
+    ],
+)
+def test_plugins_multimol_share_catalog_materialize(material_type, plugin, factory):
+    """Two molecules share one SiteContext and both materialize clash-free."""
+    from metalsurfer.placement.site_context import resolve_site_context_for_sampling
+
+    atoms = factory()
+    cfg = AdsorptionConfig(
+        material_type=material_type,
+        site_generator=plugin,
+        seed=0,
+        num_conformers=1,
+        num_placements=6,
+        n_jobs=1,
+        slab_relaxation_mode="none",
+        multi_molecule_saturation=True,
+    )
+    shared = resolve_site_context_for_sampling(atoms, cfg, symmetry_broken=False)
+    assert shared.sites
+
+    h2 = molecule("H2")
+    co = molecule("CO")
+    for ads, smiles in ((h2, "H2"), (co, "CO")):
+        specs = enumerate_placement_specs(
+            [ads], atoms, cfg, smiles, n_desired=6, seed=0, site_context=shared
+        )
+        assert specs
+        results = generate_placements_from_specs(
+            specs, [ads], atoms, cfg, smiles=smiles, site_context=shared
+        )
+        assert any(pair is not None for pair, _reason in results)

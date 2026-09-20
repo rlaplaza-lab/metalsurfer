@@ -2,7 +2,12 @@
 """Compute H2 adsorption on Ru(0001) with dissociative initial placements.
 
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e ".[mlip]"
+
+Run (conda env metalsurfer)::
+
+  conda activate metalsurfer
+  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+  python examples/h2_ru_slab_binding_energy.py
 
 ``enable_dissociative_placement=True`` enables dissociative hollow-site pair
 placements on the periodic slab. ``skip_topology_check=True`` disables
@@ -16,9 +21,7 @@ Uses a modest placement count because many dissociative trials desorb on this su
 Initial z heights use default ``placement_z_range`` scale factors on
 ``(r_adsorbate + r_surface)`` (see :class:`~metalsurfer.AdsorptionConfig`).
 
-If you hit CUDA OOM on a 15GB GPU, try:
-  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/h2_ru_slab_binding_energy.py
-or reduce num_placements (e.g. 25).
+If you hit CUDA OOM on a 15GB GPU, try reducing ``num_placements`` (e.g. 25).
 """
 
 from __future__ import annotations

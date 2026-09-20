@@ -234,6 +234,13 @@ Site detection
    nearest-neighbour distance. After support-key collapse and target-clearance
    snap, that radius only removes near-coincident leftovers.
 
+   Expert map (which knobs apply where): shared accessibility window
+   (``voronoi_probe_radius`` / ``voronoi_max_site_distance`` /
+   ``voronoi_auto_widen``) for **all** plugins; ``voronoi_site_enrichment`` for
+   Voronoi and rough topology slabs; ``adaptive_grid_*`` + ``side_policy`` for
+   ``adaptive_grid``; ``n_jobs`` for adaptive_grid shells and Voronoi ridge
+   enrich (topology NP is serial). See :doc:`/guides/configuration`.
+
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)
 

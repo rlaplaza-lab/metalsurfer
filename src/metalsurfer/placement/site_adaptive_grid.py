@@ -2,9 +2,15 @@
 
 One PBC-aware pipeline for every material: shells around all atoms, atom-aware
 clearance, exposure/side policy, one representative per support key snapped to
-a target clearance above the support centroid, and a ``merge_radius`` NMS so
+a target clearance above a lateral support anchor, and a ``merge_radius`` NMS so
 the catalog does not oversample. This is wall-near sampling — not free-volume
 / pore-centre enumeration.
+
+Lateral anchors are material-agnostic: single atom → atom; pair → midpoint;
+triangle → circumcenter when it stays near the pocket (else centroid); larger
+supports → centroid. Scoring rewards balanced multi-atom supports so hollow-
+like pockets win NMS basins against denser near-atom shells without raising
+catalog density.
 
 Spacing is the exposed absolute ``adaptive_grid_spacing`` (Å) with optional
 refine halvings; ``merge_radius`` tracks spacing and floors on framework
@@ -29,6 +35,7 @@ from scipy.spatial import KDTree
 from .._utils import cell_has_volume
 from ._constants import (
     _ADAPTIVE_GRID_BIN_PRETHIN,
+    _ADAPTIVE_GRID_CIRCUMCENTER_MAX_CENTROID_SCALE,
     _ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS,
     _ADAPTIVE_GRID_DEFAULT_SPACING,
     _ADAPTIVE_GRID_EXPOSURE_N_STEPS,
@@ -44,6 +51,7 @@ from ._constants import (
     _ADAPTIVE_GRID_REFINE_SCORE_TOL,
     _ADAPTIVE_GRID_SCORE_W_BALANCE,
     _ADAPTIVE_GRID_SCORE_W_CLEARANCE,
+    _ADAPTIVE_GRID_SCORE_W_EDGE,
     _ADAPTIVE_GRID_SCORE_W_GRADIENT,
     _ADAPTIVE_GRID_STATIONARITY_STEP,
     _ADAPTIVE_GRID_SUPPORT_DELTA,
@@ -492,6 +500,109 @@ def _support_balance(support_distances: np.ndarray) -> float:
     return float(1.0 / (1.0 + spread))
 
 
+def _pairwise_edge_lengths(points: np.ndarray) -> np.ndarray:
+    """All unique pairwise distances among *points* (shape ``(n, 3)``)."""
+    pts = np.asarray(points, dtype=float).reshape(-1, 3)
+    n = len(pts)
+    if n < 2:
+        return np.empty(0, dtype=float)
+    i, j = np.triu_indices(n, k=1)
+    return np.linalg.norm(pts[j] - pts[i], axis=1)
+
+
+def _support_edge_balance(support_positions: np.ndarray) -> float:
+    """Higher when lateral support edges have similar lengths (equilateral pocket)."""
+    edges = _pairwise_edge_lengths(support_positions)
+    if len(edges) == 0:
+        return 0.0
+    mean = float(np.mean(edges))
+    if mean < _VECTOR_NORM_EPS:
+        return 0.0
+    cv = float(np.std(edges) / mean)
+    return float(1.0 / (1.0 + cv))
+
+
+def _triangle_circumcenter(
+    a: np.ndarray, b: np.ndarray, c: np.ndarray
+) -> np.ndarray | None:
+    """Circumcenter of triangle *a*/*b*/*c*, or ``None`` if nearly collinear."""
+    ab = np.asarray(b, dtype=float) - np.asarray(a, dtype=float)
+    ac = np.asarray(c, dtype=float) - np.asarray(a, dtype=float)
+    cross = np.cross(ab, ac)
+    cross2 = float(np.dot(cross, cross))
+    if cross2 < _VECTOR_NORM_EPS**2:
+        return None
+    ab2 = float(np.dot(ab, ab))
+    ac2 = float(np.dot(ac, ac))
+    return np.asarray(a, dtype=float) + (
+        ab2 * np.cross(ac, cross) - ac2 * np.cross(ab, cross)
+    ) / (2.0 * cross2)
+
+
+def _support_lateral_anchor(
+    support_positions: np.ndarray,
+    normal: np.ndarray,
+) -> np.ndarray:
+    """Lateral pocket anchor before clearance lift along *normal*.
+
+    Atop → atom; bridge → midpoint; hollow triangle → circumcenter when it
+    stays near the pocket (else centroid); larger supports → centroid. No
+    lattice or element assumptions. The result is projected into the plane
+    through the support centroid with *normal* so lift stays orthogonal.
+    """
+    supp = np.asarray(support_positions, dtype=float).reshape(-1, 3)
+    n = len(supp)
+    if n == 0:
+        return np.zeros(3, dtype=float)
+    if n == 1:
+        return supp[0].copy()
+    if n == 2:
+        anchor = 0.5 * (supp[0] + supp[1])
+    else:
+        centroid = np.mean(supp, axis=0)
+        anchor = centroid
+        if n == 3:
+            cc = _triangle_circumcenter(supp[0], supp[1], supp[2])
+            if cc is not None:
+                edges = _pairwise_edge_lengths(supp)
+                mean_edge = float(np.mean(edges)) if len(edges) else 0.0
+                max_off = float(_ADAPTIVE_GRID_CIRCUMCENTER_MAX_CENTROID_SCALE) * max(
+                    mean_edge, _VECTOR_NORM_EPS
+                )
+                if float(np.linalg.norm(cc - centroid)) <= max_off:
+                    anchor = np.asarray(cc, dtype=float)
+    n_hat = np.asarray(normal, dtype=float)
+    nrm = float(np.linalg.norm(n_hat))
+    if n >= 2 and nrm >= _VECTOR_NORM_EPS:
+        n_hat = n_hat / nrm
+        plane_origin = np.mean(supp, axis=0)
+        anchor = anchor - float(np.dot(anchor - plane_origin, n_hat)) * n_hat
+    return np.asarray(anchor, dtype=float)
+
+
+def _candidate_geometry_score(
+    *,
+    clearance: float,
+    target_clearance: float,
+    gradient: float,
+    support_distances: np.ndarray | Sequence[float],
+    support_positions: np.ndarray,
+) -> float:
+    """Stationarity + radial/lateral balance score for a support pocket."""
+    w_c = float(_ADAPTIVE_GRID_SCORE_W_CLEARANCE)
+    w_g = float(_ADAPTIVE_GRID_SCORE_W_GRADIENT)
+    w_b = float(_ADAPTIVE_GRID_SCORE_W_BALANCE)
+    w_e = float(_ADAPTIVE_GRID_SCORE_W_EDGE)
+    n_supp = len(np.asarray(support_positions).reshape(-1, 3))
+    edge_scale = 0.0 if n_supp < 2 else (0.5 if n_supp == 2 else 1.0)
+    return (
+        -w_c * abs(float(clearance) - float(target_clearance))
+        - w_g * float(gradient)
+        + w_b * _support_balance(np.asarray(support_distances, dtype=float))
+        + w_e * edge_scale * _support_edge_balance(support_positions)
+    )
+
+
 def _shell_target_clearance(
     min_clearance: float,
     max_clearance: float,
@@ -798,6 +909,8 @@ def _height_for_target_clearance(
     support_radii: np.ndarray,
     normal: np.ndarray,
     target_clearance: float,
+    *,
+    anchor: np.ndarray | None = None,
 ) -> float:
     """Height along *normal* so atom-aware clearance ≈ *target_clearance*."""
     supp = np.asarray(support_positions, dtype=float)
@@ -808,12 +921,14 @@ def _height_for_target_clearance(
     if nrm < _VECTOR_NORM_EPS:
         return float(target_clearance)
     n_hat = n_hat / nrm
-    centroid = np.mean(supp, axis=0)
+    origin = (
+        np.asarray(anchor, dtype=float) if anchor is not None else np.mean(supp, axis=0)
+    )
     radii = np.asarray(support_radii, dtype=float)
     r_eff = float(np.mean(radii)) if len(radii) else 0.0
     lat2 = 0.0
     for p in supp:
-        d = p - centroid
+        d = p - origin
         d_perp = d - float(np.dot(d, n_hat)) * n_hat
         lat2 = max(lat2, float(np.dot(d_perp, d_perp)))
     need = float(target_clearance) + r_eff
@@ -833,7 +948,7 @@ def _lateral_snap_candidates(
     pbc: np.ndarray,
     target_clearance: float,
 ) -> list[CandidateSite]:
-    """Snap each candidate to support-centroid at atom-aware *target_clearance*."""
+    """Snap each candidate to its support lateral anchor at *target_clearance*."""
     if not candidates:
         return []
     n_atoms = len(positions)
@@ -851,11 +966,15 @@ def _lateral_snap_candidates(
         n_hat = normal / nrm
         idxs = list(c.support_indices)
         radii = np.asarray(framework_radii[idxs], dtype=float)
+        anchor = _support_lateral_anchor(supp, n_hat)
         height = _height_for_target_clearance(
-            supp, radii, n_hat, float(target_clearance)
+            supp,
+            radii,
+            n_hat,
+            float(target_clearance),
+            anchor=anchor,
         )
-        centroid = np.mean(supp, axis=0)
-        snapped = centroid + height * n_hat
+        snapped = anchor + height * n_hat
         if np.any(pbc) and cell_has_volume(cell):
             snapped = _wrap_cartesian(snapped.reshape(1, 3), cell, pbc)[0]
         _, clearance, _ = _clearance_query(
@@ -863,11 +982,19 @@ def _lateral_snap_candidates(
         )
         if float(clearance[0]) < 0.0:
             continue
+        score = _candidate_geometry_score(
+            clearance=float(clearance[0]),
+            target_clearance=float(target_clearance),
+            gradient=0.0,
+            support_distances=c.support_distances,
+            support_positions=supp,
+        )
         out.append(
             replace(
                 c,
                 position=np.asarray(snapped, dtype=float).copy(),
                 clearance=float(clearance[0]),
+                score=float(score),
             )
         )
     return out
@@ -936,16 +1063,17 @@ def _annotate_candidates(
     grads = _batch_tangential_stationarity(
         vertices, normals, tree, framework_radii, n_atoms
     )
-    w_c = float(_ADAPTIVE_GRID_SCORE_W_CLEARANCE)
-    w_g = float(_ADAPTIVE_GRID_SCORE_W_GRADIENT)
-    w_b = float(_ADAPTIVE_GRID_SCORE_W_BALANCE)
     out: list[CandidateSite] = []
     for i, vert in enumerate(vertices):
-        balance = _support_balance(dists[i])
-        score = (
-            -w_c * abs(float(clearances[i]) - float(target_clearance))
-            - w_g * float(grads[i])
-            + w_b * balance
+        supp_pos = _support_positions_for_candidate(
+            supports[i], shifts[i], positions, cell
+        )
+        score = _candidate_geometry_score(
+            clearance=float(clearances[i]),
+            target_clearance=float(target_clearance),
+            gradient=float(grads[i]),
+            support_distances=dists[i],
+            support_positions=supp_pos,
         )
         out.append(
             CandidateSite(

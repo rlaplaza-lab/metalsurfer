@@ -342,7 +342,26 @@ Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi`` /
 (``auto`` / ``distance_ratio`` / ``delaunay``), ``voronoi_auto_widen``,
 ``adaptive_grid_spacing``, ``adaptive_grid_refine_levels``,
 ``adaptive_grid_nms_framework_scale``, ``side_policy``, ``n_jobs``.
-See :doc:`configuration` for which knobs apply to which plugin.
+
+.. list-table:: Plugin parallelism and enrichment knobs
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Plugin
+     - Uses ``n_jobs`` / notable knobs
+   * - topology (slab)
+     - Ridge enrich on **rough** slabs via ``n_jobs`` + ``voronoi_site_enrichment``;
+       planar slabs skip Voronoi. Window: ``voronoi_probe_radius`` /
+       ``voronoi_max_site_distance`` / ``voronoi_auto_widen``
+   * - topology (NP)
+     - Serial hull + NN graph (``n_jobs`` is a no-op). Same accessibility window
+   * - voronoi
+     - Ridge enrich via ``n_jobs`` when ``voronoi_site_enrichment=True``
+   * - adaptive_grid
+     - Shell / refine chunks via ``n_jobs``; density via ``adaptive_grid_*`` and
+       ``side_policy``
+
+See :doc:`configuration` for the full knob-by-plugin table.
 
 **Intentional asymmetries** (not unfinished ports): top-layer mesh + topology
 on slabs (pure Voronoi floods the batch with weak candidates); hull +

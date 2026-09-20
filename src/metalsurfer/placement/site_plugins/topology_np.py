@@ -10,7 +10,7 @@ from scipy.spatial import KDTree
 from .._constants import _ATOP_INJECTION_HEIGHT_FACTOR
 from ..site_np import _generate_nanoparticle_topology_sites
 from .base import SiteCandidateBatch, SiteGenerationContext
-from .helpers import median_nn_or_fallback
+from .helpers import candidate_enrichment_frames, median_nn_or_fallback
 
 
 class TopologyNPGenerator:
@@ -54,12 +54,25 @@ class TopologyNPGenerator:
             pbc=pbc,
         )
         has_topology_atop = any(s == "topology_atop" for s in topo_sources)
+        atom_indices = list(topo_atoms)
+        normals, clearances = candidate_enrichment_frames(
+            topo_vertices,
+            topo_dists,
+            atom_indices,
+            positions=positions,
+            cell=cell,
+            pbc=pbc,
+            material_type="nanoparticle",
+            accessibility_tree=local_tree,
+        )
         return SiteCandidateBatch(
             vertices=topo_vertices,
             nn_dists=topo_dists,
             source_hints=list(topo_sources),
-            atom_indices=list(topo_atoms),
+            atom_indices=atom_indices,
             inject_atop=True,
             has_topology_atop=has_topology_atop,
             topology_median_nn=topology_median_nn,
+            normals=normals,
+            clearances=clearances,
         )
