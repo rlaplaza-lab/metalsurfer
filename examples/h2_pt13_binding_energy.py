@@ -2,7 +2,12 @@
 """Compute H2 dissociative adsorption on an ASE Pt₁₃ icosahedron.
 
 Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e ".[mlip]"
+
+Run (conda env metalsurfer)::
+
+  conda activate metalsurfer
+  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+  python examples/h2_pt13_binding_energy.py
 
 Uses ``ase.cluster.Icosahedron("Pt", noshells=2)`` (13 atoms), UMA ionic prep
 relaxation, then frozen-cluster dissociative hollow-pair placements. Under
@@ -13,9 +18,6 @@ thermodynamics after the same protocol.
 
 ``enable_dissociative_placement=True`` and ``skip_topology_check=True`` match
 the H₂/Ru(0001) demo.
-
-If you hit CUDA OOM on a 15GB GPU, try:
-  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/h2_pt13_binding_energy.py
 """
 
 from __future__ import annotations

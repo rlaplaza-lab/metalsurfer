@@ -986,7 +986,7 @@ def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
     existing_dists = np.array([site_z], dtype=float)
     existing_sources = ["voronoi"]
     access = _periodic_accessibility_tree(positions, cell, pbc, max_distance=5.0)
-    verts, _dists, _sources, _atoms = _inject_atop_sites(
+    verts, _dists, _sources, _atoms, _normals, _clearances = _inject_atop_sites(
         existing,
         existing_dists,
         existing_sources,
@@ -1038,7 +1038,7 @@ def test_merge_dedup_freezes_existing_unique_sites():
 
     cell = np.diag([10.0, 10.0, 20.0])
     pbc = np.array([True, True, False], dtype=bool)
-    verts, dists, sources, atoms = _merge_dedup_site_arrays(
+    verts, dists, sources, atoms, _normals, _clearances = _merge_dedup_site_arrays(
         existing,
         np.array([1.0, 1.0], dtype=float),
         ["voronoi", "voronoi"],

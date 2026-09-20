@@ -4,12 +4,20 @@
 Site-generation timing and e2e demos honour ``--n-jobs`` (default ``1``;
 prefer ``--n-jobs 1`` on small GPUs to avoid thread/CUDA contention).
 
+Default conclusions (keep ``site_generator="auto"``; adaptive_grid opt-in only):
+topology/Voronoi stay the production defaults; adaptive_grid is slower to build
+and did not beat ``auto`` on best E_ads for H₂/Ru, CO₂/MOF, or slim
+camphor/Cu(111) BO. Keep ``adaptive_grid_spacing=0.70``, refine ``0``,
+NMS framework scale ``0.25``, and ``voronoi_site_enrichment=True``.
+
 Run (conda env metalsurfer)::
 
   conda activate metalsurfer
   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
   python examples/compare_adaptive_grid_ab.py --n-jobs 1
   python examples/compare_adaptive_grid_ab.py --e2e --num-placements 6 --n-jobs 1
+  # Re-run GPU demos without repeating the CPU catalog sweep:
+  python examples/compare_adaptive_grid_ab.py --e2e --skip-site-ab --num-placements 6 --n-jobs 1
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import shutil
 import statistics
 import sys
 import time
@@ -278,7 +287,7 @@ def run_site_ab(n_jobs: int = _DEFAULT_N_JOBS) -> None:
     ru.pbc = True
     for spacing in (0.50, 0.70):
         for refine in (0, 1):
-            for nms in (0.50, 0.65):
+            for nms in (0.25, 0.50, 0.65):
                 r = _bench_sites(
                     ru,
                     "slab",
@@ -307,6 +316,43 @@ def run_site_ab(n_jobs: int = _DEFAULT_N_JOBS) -> None:
             f"  MOF spacing={spacing:.2f} refine=0 "
             f"→ n={r['n']:4d}  t={r['t_mean'] * 1e3:6.1f} ms"
         )
+
+    # Auto-plugin knobs that matter for production defaults.
+    print("\n" + "=" * 72)
+    print("Auto-plugin knob sweep (Voronoi enrich + rough-slab topology)")
+    print("=" * 72)
+    for enrich in (True, False):
+        r = _bench_sites(
+            mof,
+            "porous",
+            "voronoi",
+            enrich=enrich,
+            n_jobs=n_jobs,
+            repeats=2,
+        )
+        label = "enrich" if enrich else "no-enrich"
+        print(
+            f"  MOF voronoi {label:9s} → n={r['n']:4d}  "
+            f"t={r['t_mean'] * 1e3:6.1f} ms  types={r['types']}"
+        )
+    for label, atoms in (
+        ("Ru tilted", _tilted_ru_slab()),
+        ("Ru stepped", _stepped_ru_slab()),
+    ):
+        for enrich in (True, False):
+            r = _bench_sites(
+                atoms,
+                "slab",
+                "topology",
+                enrich=enrich,
+                n_jobs=n_jobs,
+                repeats=2,
+            )
+            tag = "enrich" if enrich else "no-enrich"
+            print(
+                f"  {label:10s} topology {tag:9s} → n={r['n']:4d}  "
+                f"t={r['t_mean'] * 1e3:6.1f} ms  types={r['types']}"
+            )
 
 
 def _eads_stats(energies: list[float]) -> dict[str, float]:
@@ -347,6 +393,15 @@ def _as_atoms(slab) -> Atoms:
     return slab.atoms
 
 
+def _fresh_results_dir(name: str) -> str:
+    """Return *name*'s results path after deleting any previous run artifacts."""
+    path = Path(results_dir_for(name))
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
 def _run_campaign(
     name: str,
     config: AdsorptionConfig,
@@ -372,7 +427,7 @@ def _run_campaign(
             n_jobs=config.n_jobs,
         )
     )
-    results_dir = str(results_dir_for(f"{surface_type}_{config.site_generator}"))
+    results_dir = _fresh_results_dir(f"{surface_type}_{config.site_generator}")
     t0 = time.perf_counter()
     if bo:
         campaign = run_adsorption_bo(
@@ -453,7 +508,7 @@ def run_e2e(
             miller_indices=(0, 0, 1),
             supercell=(2, 2, 1),
             config=cfg,
-            results_dir=str(results_dir_for(f"ab_h2_ru_{plugin}")),
+            results_dir=_fresh_results_dir(f"ab_h2_ru_{plugin}"),
         )
         results.append(
             _run_campaign(
@@ -486,7 +541,7 @@ def run_e2e(
         cluster = prepare_substrate(
             slab=_pt13(),
             config=cfg,
-            results_dir=str(results_dir_for(f"ab_h2_pt13_{plugin}")),
+            results_dir=_fresh_results_dir(f"ab_h2_pt13_{plugin}"),
         )
         results.append(
             _run_campaign(
@@ -519,7 +574,7 @@ def run_e2e(
         mof = prepare_substrate(
             slab=mof_atoms,
             config=cfg,
-            results_dir=str(results_dir_for(f"ab_co2_mof_{plugin}")),
+            results_dir=_fresh_results_dir(f"ab_co2_mof_{plugin}"),
             align=False,
         )
         results.append(
@@ -551,7 +606,7 @@ def run_e2e(
         cluster = prepare_substrate(
             slab=_ru55(),
             config=cfg,
-            results_dir=str(results_dir_for(f"ab_ethene_ru55_{plugin}")),
+            results_dir=_fresh_results_dir(f"ab_ethene_ru55_{plugin}"),
         )
         results.append(
             _run_campaign(
@@ -591,7 +646,7 @@ def run_e2e(
             )
 
             slab = prepare_campaign_slab(
-                cfg, results_directory=str(results_dir_for(f"ab_camphor_{plugin}"))
+                cfg, results_directory=_fresh_results_dir(f"ab_camphor_{plugin}")
             )
         except Exception as exc:
             print(f"  skipping camphor (could not load paper slab: {exc})")
@@ -677,6 +732,11 @@ def main() -> int:
         help="Run slim binding demos (GPU/MLIP) for auto vs adaptive_grid",
     )
     parser.add_argument(
+        "--skip-site-ab",
+        action="store_true",
+        help="Skip the CPU site-catalog A/B (useful when re-running --e2e only)",
+    )
+    parser.add_argument(
         "--num-placements",
         type=int,
         default=12,
@@ -696,7 +756,8 @@ def main() -> int:
         "(default: results_adaptive_grid_ab/eads.csv)",
     )
     args = parser.parse_args()
-    run_site_ab(n_jobs=args.n_jobs)
+    if not args.skip_site_ab:
+        run_site_ab(n_jobs=args.n_jobs)
     if args.e2e:
         # Allow importing sibling example helpers (camphor slab loader).
         sys.path.insert(0, os.path.join(_ROOT, "examples"))

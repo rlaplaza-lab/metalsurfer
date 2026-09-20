@@ -10,7 +10,7 @@ import numpy as np
 from ..site_coords import top_layer_mask_by_normal
 from ..site_voronoi import _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
-from .helpers import periodic_accessibility_tree
+from .helpers import candidate_enrichment_frames, periodic_accessibility_tree
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,24 @@ class VoronoiGenerator:
             )
             return empty_candidate_batch(early_empty=True)
 
+        if accessibility_tree is None:
+            accessibility_tree = periodic_accessibility_tree(
+                positions,
+                cell,
+                pbc,
+                float(max_site_distance),
+            )
+        normals, clearances = candidate_enrichment_frames(
+            vertices,
+            nn_dists,
+            atom_indices,
+            positions=positions,
+            cell=cell,
+            pbc=pbc,
+            material_type=material_type,
+            accessibility_tree=accessibility_tree,
+        )
+
         return SiteCandidateBatch(
             vertices=vertices,
             nn_dists=nn_dists,
@@ -100,4 +118,6 @@ class VoronoiGenerator:
             apply_slab_height_mask=apply_slab_height_mask,
             slab_top_atom_indices=slab_top_atom_indices,
             accessibility_tree=accessibility_tree,
+            normals=normals,
+            clearances=clearances,
         )

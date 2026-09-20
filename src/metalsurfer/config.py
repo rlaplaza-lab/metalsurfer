@@ -764,11 +764,13 @@ class AdsorptionConfig:
     # Slab face / exposure policy (adaptive_grid; default top face).
     side_policy: Literal["all", "positive", "negative", "external"] = "positive"
     # Absolute shell increment (Å) for ``adaptive_grid``. Near-atom sampling;
-    # catalog density bounded by merge_radius (NN-floored).
+    # catalog density bounded by merge_radius (NN-floored). Keep 0.70 unless
+    # A/B shows a clear win; avoid values below 0.70 on MOFs.
     adaptive_grid_spacing: float = 0.70
     # Refine halvings after the coarse shell (0 = coarse grid only).
     adaptive_grid_refine_levels: int = 0
     # Floor on computed merge_radius as a fraction of framework median NN.
+    # 0.25 preserves flat-metal catalogs; larger floors over-merge.
     adaptive_grid_nms_framework_scale: float = 0.25
     # Conformer prior for placement-spec selection.
     # ``"uniform"`` keeps the conformer-agnostic stratified draw (ignores

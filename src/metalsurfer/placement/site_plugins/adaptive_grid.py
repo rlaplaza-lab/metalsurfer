@@ -16,9 +16,11 @@ class AdaptiveGridGenerator:
     Not selected by ``auto``. Near-atom shells (not pore centres); density set
     by ``adaptive_grid_spacing`` / ``merge_radius`` and optional
     ``adaptive_grid_refine_levels``. Final catalog: one site per support key
-    at a target clearance, then NMS. Emits the same
-    :class:`SiteCandidateBatch` contract as topology / Voronoi; classify builds
-    fingerprints and frames.
+    snapped to a lateral pocket anchor (midpoint / circumcenter / centroid)
+    at a target clearance, then NMS — balanced multi-atom pockets are scored
+    so hollow-like sites win basins without densifying the catalog. Emits the
+    same :class:`SiteCandidateBatch` contract as topology / Voronoi; classify
+    builds fingerprints and frames.
     """
 
     name = "adaptive_grid"

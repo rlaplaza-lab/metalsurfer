@@ -13,6 +13,7 @@ from ..site_voronoi import _generate_slab_topology_sites, _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext
 from .helpers import (
     PlanarWidenScratch,
+    candidate_enrichment_frames,
     median_nn_or_fallback,
     merge_dedup_site_arrays,
     periodic_accessibility_tree,
@@ -139,18 +140,31 @@ class TopologySlabGenerator:
         )
         has_topology_atop = any(s == "topology_atop" for s in topo_sources)
         if len(topo_vertices) > 0:
-            vertices, nn_dists, source_hints, atom_indices = merge_dedup_site_arrays(
-                vertices,
-                nn_dists,
-                source_hints,
-                topo_vertices,
-                topo_dists,
-                topo_sources,
-                cell=cell,
-                pbc=pbc,
-                atom_indices=atom_indices,
-                new_atom_indices=topo_atoms,
+            vertices, nn_dists, source_hints, atom_indices, _, _ = (
+                merge_dedup_site_arrays(
+                    vertices,
+                    nn_dists,
+                    source_hints,
+                    topo_vertices,
+                    topo_dists,
+                    topo_sources,
+                    cell=cell,
+                    pbc=pbc,
+                    atom_indices=atom_indices,
+                    new_atom_indices=topo_atoms,
+                )
             )
+
+        normals, clearances = candidate_enrichment_frames(
+            vertices,
+            nn_dists,
+            atom_indices,
+            positions=positions,
+            cell=cell,
+            pbc=pbc,
+            material_type="slab",
+            accessibility_tree=accessibility_tree,
+        )
 
         return SiteCandidateBatch(
             vertices=vertices,
@@ -168,4 +182,6 @@ class TopologySlabGenerator:
             topology_expanded_origin=topology_expanded_origin,
             topology_expanded_tri=topology_expanded_tri,
             reuse=scratch,
+            normals=normals,
+            clearances=clearances,
         )

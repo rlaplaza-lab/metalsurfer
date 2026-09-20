@@ -27,6 +27,9 @@ from metalsurfer.placement.site_adaptive_grid import (
     _merge_by_radius,
     _nms,
     _shell_offsets,
+    _support_edge_balance,
+    _support_lateral_anchor,
+    _triangle_circumcenter,
     _work_chunk_bounds,
     adaptive_grid_spacing,
     generate_adaptive_grid_sites,
@@ -470,6 +473,75 @@ def test_lateral_snap_moves_off_center_bridge_to_midpoint():
     assert snapped.clearance == pytest.approx(1.2, abs=0.05)
 
 
+def test_triangle_circumcenter_and_edge_balance_are_lattice_agnostic():
+    equilateral = np.array(
+        [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, np.sqrt(3.0), 0.0]], dtype=float
+    )
+    cc = _triangle_circumcenter(equilateral[0], equilateral[1], equilateral[2])
+    assert cc is not None
+    np.testing.assert_allclose(cc, [1.0, np.sqrt(3.0) / 3.0, 0.0], atol=1e-9)
+    assert _support_edge_balance(equilateral) == pytest.approx(1.0, abs=1e-9)
+
+    # Obtuse triangle: circumcenter far from centroid → anchor falls back.
+    obtuse = np.array([[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.2, 0.3, 0.0]], dtype=float)
+    normal = np.array([0.0, 0.0, 1.0])
+    anchor = _support_lateral_anchor(obtuse, normal)
+    centroid = np.mean(obtuse, axis=0)
+    np.testing.assert_allclose(anchor, centroid, atol=1e-12)
+
+
+def test_lateral_snap_hollow_uses_equilateral_circumcenter():
+    cell = np.eye(3) * 20.0
+    pbc = np.array([False, False, False])
+    positions = np.array(
+        [[0.0, 0.0, 0.0], [2.55, 0.0, 0.0], [1.275, 2.208, 0.0]], dtype=float
+    )
+    radii = np.full(3, 0.7, dtype=float)
+    tree = KDTree(positions)
+    candidate = CandidateSite(
+        position=np.array([1.0, 0.5, 1.5]),
+        clearance=1.0,
+        support_indices=(0, 1, 2),
+        support_image_shifts=((0, 0, 0), (0, 0, 0), (0, 0, 0)),
+        support_distances=(1.0, 1.0, 1.0),
+        normal=np.array([0.0, 0.0, 1.0]),
+        score=0.0,
+    )
+    snapped = _lateral_snap_candidates(
+        [candidate],
+        positions=positions,
+        framework_radii=radii,
+        tree=tree,
+        cell=cell,
+        pbc=pbc,
+        target_clearance=1.2,
+    )[0]
+    expect_xy = _support_lateral_anchor(positions, np.array([0.0, 0.0, 1.0]))
+    assert snapped.position[0] == pytest.approx(float(expect_xy[0]), abs=1e-6)
+    assert snapped.position[1] == pytest.approx(float(expect_xy[1]), abs=1e-6)
+    assert snapped.position[2] > 0.5
+    # Balanced hollow should outrank a nearby atop after snap rescoring.
+    atop = CandidateSite(
+        position=np.array([0.0, 0.0, 1.5]),
+        clearance=1.2,
+        support_indices=(0,),
+        support_image_shifts=((0, 0, 0),),
+        support_distances=(1.2,),
+        normal=np.array([0.0, 0.0, 1.0]),
+        score=0.0,
+    )
+    snapped_atop = _lateral_snap_candidates(
+        [atop],
+        positions=positions,
+        framework_radii=radii,
+        tree=tree,
+        cell=cell,
+        pbc=pbc,
+        target_clearance=1.2,
+    )[0]
+    assert snapped.score > snapped_atop.score
+
+
 def test_unified_sites_overlap_topology_on_slab():
     slab = make_slab(nx=3, ny=3, n_layers=3)
     grid = get_unified_sites(
@@ -490,6 +562,14 @@ def test_unified_sites_overlap_topology_on_slab():
     dists, _ = KDTree(grid_xyz).query(base_xyz, k=1)
     assert float(np.mean(np.asarray(dists, dtype=float) <= 1.5)) >= 0.60
     assert float(np.mean(np.asarray(dists, dtype=float) <= 1.0)) >= 0.25
+    # Hollow pockets from topology should land near adaptive-grid sites
+    # (circumcenter/centroid snap), without requiring denser catalogs.
+    topo_hollows = [s for s in base if s.site_type == "hollow"]
+    if topo_hollows:
+        h_xyz = np.asarray([s.xyz for s in topo_hollows], dtype=float)
+        h_dists, _ = KDTree(grid_xyz).query(h_xyz, k=1)
+        assert float(np.mean(np.asarray(h_dists, dtype=float) <= 1.25)) >= 0.50
+        assert any(len(s.slab_indices) >= 3 for s in grid)
 
 
 def test_alloy_atops_keep_distinct_fingerprints():
