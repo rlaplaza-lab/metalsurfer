@@ -167,7 +167,7 @@ def test_slab_topology_emits_nonempty_supports():
     assert all(s.slab_indices for s in sites)
 
 
-def test_voronoi_porous_keeps_empty_supports_and_pores():
+def test_voronoi_porous_emits_wall_supports_and_pores():
     atoms = make_porous_framework()
     ctx = SiteGenerationContext(
         positions=atoms.get_positions(),
@@ -183,11 +183,53 @@ def test_voronoi_porous_keeps_empty_supports_and_pores():
         n_jobs=1,
     )
     batch = resolve_site_generator("voronoi", "porous").generate(ctx)
-    assert batch.atom_indices and all(len(a) == 0 for a in batch.atom_indices)
+    assert len(batch.atom_indices) == len(batch.vertices)
     sites = get_unified_sites(
         atoms, material_type="porous", site_generator="voronoi", n_jobs=1
     )
     assert any(s.site_type == "pore" for s in sites)
+    wall = [s for s in sites if s.site_type != "pore"]
+    assert wall, "expected at least one wall-near Voronoi site"
+    assert all(s.slab_indices for s in wall)
+    pores = [s for s in sites if s.site_type == "pore"]
+    assert pores
+    assert any(len(s.slab_indices) == 0 for s in pores)
+
+
+@pytest.mark.parametrize(
+    "material_type",
+    ["slab", "nanoparticle", "porous"],
+)
+def test_adaptive_grid_skips_topology_safety_nets(material_type):
+    """adaptive_grid never sets inject_atop / height-mask (any material)."""
+    factory = {
+        "slab": make_slab,
+        "nanoparticle": make_nanoparticle,
+        "porous": make_porous_framework,
+    }[material_type]
+    atoms = factory()
+    pos = atoms.get_positions()
+    cell = np.asarray(atoms.get_cell(), dtype=float)
+    pbc = np.asarray(atoms.get_pbc(), dtype=bool)
+    ctx = SiteGenerationContext(
+        positions=pos,
+        cell=cell,
+        pbc=pbc,
+        symbols=list(atoms.get_chemical_symbols()),
+        material_type=material_type,
+        probe_radius=1.2,
+        max_site_distance=3.5,
+        top_layer_tolerance=1.0,
+        enrich=False,
+        planar_z_variance_threshold=0.1,
+        adaptive_grid_spacing=0.70,
+        n_jobs=1,
+    )
+    batch = resolve_site_generator("adaptive_grid", material_type).generate(ctx)
+    assert batch.inject_atop is False
+    assert batch.apply_slab_height_mask is False
+    assert batch.slab_top_atom_indices is None
+    assert len(batch.vertices) == len(batch.atom_indices)
 
 
 @pytest.mark.parametrize(

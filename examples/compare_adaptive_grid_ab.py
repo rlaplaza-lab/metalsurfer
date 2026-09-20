@@ -5,10 +5,12 @@ Site-generation timing and e2e demos honour ``--n-jobs`` (default ``1``;
 prefer ``--n-jobs 1`` on small GPUs to avoid thread/CUDA contention).
 
 Default conclusions (keep ``site_generator="auto"``; adaptive_grid opt-in only):
-topology/Voronoi stay the production defaults; adaptive_grid is slower to build
+topology/Voronoi stay the production defaults with system-specific heuristics;
+adaptive_grid is one PBC/clearance path for every material, slower to build,
 and did not beat ``auto`` on best E_ads for H₂/Ru, CO₂/MOF, or slim
-camphor/Cu(111) BO. Keep ``adaptive_grid_spacing=0.70``, refine ``0``,
-NMS framework scale ``0.25``, and ``voronoi_site_enrichment=True``.
+camphor/Cu(111) BO (marginal wins on H₂/Pt₁₃ / ethene/Ru₅₅ in slim e2e only).
+Keep ``adaptive_grid_spacing=0.70``, refine ``0``, NMS framework scale ``0.25``,
+and ``voronoi_site_enrichment=True``.
 
 Run (conda env metalsurfer)::
 

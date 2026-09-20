@@ -13,14 +13,17 @@ from .helpers import median_nn_or_fallback
 class AdaptiveGridGenerator:
     """Atom-centred adaptive grid with optional iterative shell refinement.
 
+    One PBC/clearance path for every material (slab, nanoparticle, porous).
     Not selected by ``auto``. Near-atom shells (not pore centres); density set
     by ``adaptive_grid_spacing`` / ``merge_radius`` and optional
     ``adaptive_grid_refine_levels``. Final catalog: one site per support key
     snapped to a lateral pocket anchor (midpoint / circumcenter / centroid)
     at a target clearance, then NMS — balanced multi-atom pockets are scored
-    so hollow-like sites win basins without densifying the catalog. Emits the
-    same :class:`SiteCandidateBatch` contract as topology / Voronoi; classify
-    builds fingerprints and frames.
+    so hollow-like sites win basins without densifying the catalog.
+
+    Does **not** set ``inject_atop`` or slab height-mask flags (those stay on
+    topology). Emits the same :class:`SiteCandidateBatch` contract as topology
+    / Voronoi; classify builds fingerprints and frames.
     """
 
     name = "adaptive_grid"
@@ -45,7 +48,6 @@ class AdaptiveGridGenerator:
             positions,
             cell,
             pbc,
-            material_type=ctx.material_type,
             probe_radius=float(ctx.probe_radius),
             max_site_distance=float(ctx.max_site_distance),
             initial_spacing=spacing,

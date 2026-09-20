@@ -207,10 +207,12 @@ Site detection
 ``side_policy``
    **Type:** ``Literal["all", "positive", "negative", "external"]`` · **Default:** ``"positive"``
 
-   Slab-face / exposure filter for ``adaptive_grid`` (and shared site plumbing).
-   ``"positive"`` keeps the outward / top face (default catalysis behaviour);
-   ``"negative"`` the opposite face; ``"all"`` both faces; ``"external"`` keeps
-   outward-pointing sites on non-slab shapes (and both faces on slabs).
+   Face / exposure filter for ``adaptive_grid`` only (also keyed in the site
+   cache when that plugin is selected). Interpreted from **PBC geometry**, not
+   material labels: with exactly one non-periodic axis, ``"positive"`` /
+   ``"negative"`` keep one face along the vacuum normal; ``"all"`` / fully
+   3D-periodic cells skip the face filter; ``"external"`` on finite (no-PBC)
+   clusters keeps outward-pointing sites. Topology / Voronoi ignore this knob.
 
 ``adaptive_grid_spacing``
    **Type:** ``float`` · **Default:** ``0.70`` (Å)

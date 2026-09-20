@@ -11,6 +11,7 @@ from collections import Counter
 import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
+from scipy.spatial import KDTree
 
 from .._numeric_defaults import DEFAULT_TOP_LAYER_TOLERANCE
 from ..exceptions import GeometryValidationError
@@ -81,7 +82,8 @@ def identify_relaxable_surface_indices(
     - **nanoparticle:** outermost shell (within *tolerance* of the maximum
       distance from the centre of mass).
     - **porous:** framework atoms on pore walls — closest neighbour of each
-      pore-classified Voronoi void site.
+      pore-classified Voronoi void site (queried from the site position when
+      the catalog keeps empty pore supports).
 
     Parameters
     ----------
@@ -122,14 +124,21 @@ def identify_relaxable_surface_indices(
         pore_threshold=float(pore_threshold),
         enrich=False,
     )
+    # Pore sites may keep empty slab_indices (fingerprint contract); fall back
+    # to the nearest framework atom so wall atoms remain identifiable.
+    tree: KDTree | None = None
     boundary: set[int] = set()
     for site in sites:
         if site.site_type != "pore":
             continue
         raw_indices = site.slab_indices
-        if not raw_indices:
-            continue
-        idx = int(raw_indices[0])
+        if raw_indices:
+            idx = int(raw_indices[0])
+        else:
+            if tree is None:
+                tree = KDTree(positions)
+            _, nn = tree.query(np.asarray(site.xyz, dtype=float).reshape(3), k=1)
+            idx = int(nn)
         if 0 <= idx < n_atoms:
             boundary.add(idx)
 

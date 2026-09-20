@@ -206,7 +206,8 @@ def fill_materialized_placements(
 
     Pool size is ``min(capacity, n_target * placement_retry_oversample_max)``.
     When ``placement_retry_enabled`` and the first pass is short, one diversity
-    round re-enumerates excluding exact failed-spec keys.
+    round re-enumerates excluding exact failed-spec keys, failed ``site_index``
+    values, and sites whose ``env_fingerprint`` matched a failed placement.
     """
     n_target = config.num_placements
     if n_target is None:
@@ -253,14 +254,24 @@ def fill_materialized_placements(
     failures: list[PlacementFailureEvent] = []
     failed_keys: set[tuple] = set()
     failed_site_indices: set[int] = set()
+    failed_env_fingerprints: set[tuple] = set()
     last_spec_by_index: dict[int, PlacementSpec] = {}
     next_placement_index = 0
     attempts_used = 0
+    sampling_sites = list(site_context.sites) if site_context is not None else []
+
+    def _site_env_fp(site_index: int) -> tuple | None:
+        if 0 <= int(site_index) < len(sampling_sites):
+            return tuple(sampling_sites[int(site_index)].env_fingerprint)
+        return None
 
     def _filter_failed(spec: PlacementSpec) -> bool:
         if placement_spec_key(spec) in failed_keys:
             return False
         if int(spec.site_index) in failed_site_indices:
+            return False
+        fp = _site_env_fp(int(spec.site_index))
+        if fp is not None and fp in failed_env_fingerprints:
             return False
         if config.placement_filter is not None:
             return bool(config.placement_filter(spec))
@@ -310,6 +321,9 @@ def fill_materialized_placements(
             if failed_spec is not None:
                 failed_keys.add(placement_spec_key(failed_spec))
                 failed_site_indices.add(int(failed_spec.site_index))
+                fp = _site_env_fp(int(failed_spec.site_index))
+                if fp is not None:
+                    failed_env_fingerprints.add(fp)
         failures.extend(new_failures)
 
         take = min(effective_target - len(combined), len(new_combined))

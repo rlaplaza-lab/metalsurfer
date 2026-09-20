@@ -22,8 +22,6 @@ from .helpers import (
 
 logger = logging.getLogger(__name__)
 
-_EMPTY_ATOM_INDICES: tuple[int, ...] = ()
-
 
 class TopologySlabGenerator:
     """Hybrid slab generator (topology + Voronoi when the top layer is rough)."""
@@ -73,8 +71,10 @@ class TopologySlabGenerator:
             )
             vertices = np.empty((0, 3), dtype=float)
             nn_dists = np.empty(0, dtype=float)
+            source_hints: list[str] = []
+            atom_indices: list[tuple[int, ...]] = []
         else:
-            vertices, nn_dists = _voronoi_sites(
+            vertices, nn_dists, local_atoms = _voronoi_sites(
                 voronoi_positions,
                 cell,
                 pbc,
@@ -84,10 +84,14 @@ class TopologySlabGenerator:
                 symbols=symbols,
                 n_jobs=int(ctx.n_jobs),
             )
-        source_hints = ["voronoi"] * len(vertices)
-        atom_indices: list[tuple[int, ...]] = [
-            _EMPTY_ATOM_INDICES for _ in range(len(vertices))
-        ]
+            source_hints = ["voronoi"] * len(vertices)
+            if len(voronoi_positions) != len(positions):
+                remap = np.asarray(slab_top_atom_indices, dtype=int)
+                atom_indices = [
+                    tuple(int(remap[j]) for j in atoms) for atoms in local_atoms
+                ]
+            else:
+                atom_indices = list(local_atoms)
 
         accessibility_tree = periodic_accessibility_tree(
             positions,

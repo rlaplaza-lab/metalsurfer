@@ -96,6 +96,31 @@ def test_unique_sites_cache_key_includes_site_generator():
     )
 
 
+def test_side_policy_cache_key_only_for_adaptive_grid():
+    """side_policy splits the cache for adaptive_grid, not for topology."""
+    from metalsurfer.placement.site_context import _unique_sites_cache_key
+
+    slab = make_slab(nx=2, ny=2)
+    topo_pos = AdsorptionConfig(
+        material_type="slab", site_generator="topology", side_policy="positive"
+    )
+    topo_all = AdsorptionConfig(
+        material_type="slab", site_generator="topology", side_policy="all"
+    )
+    assert _unique_sites_cache_key(slab, topo_pos) == _unique_sites_cache_key(
+        slab, topo_all
+    )
+    ag_pos = AdsorptionConfig(
+        material_type="slab", site_generator="adaptive_grid", side_policy="positive"
+    )
+    ag_all = AdsorptionConfig(
+        material_type="slab", site_generator="adaptive_grid", side_policy="all"
+    )
+    assert _unique_sites_cache_key(slab, ag_pos) != _unique_sites_cache_key(
+        slab, ag_all
+    )
+
+
 def test_extract_features_depends_only_on_absolute_geometry():
     record = PlacementRecord.from_descriptor(
         make_placement_descriptor(
