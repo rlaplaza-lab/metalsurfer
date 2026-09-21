@@ -149,26 +149,37 @@ vertices. Explicit ``"distance_ratio"`` on slabs is honored for A/B comparisons.
 
 Site candidate generation defaults to ``site_generator="auto"`` (topology for
 slab/NP, Voronoi for porous). Set ``site_generator="topology"``,
-``"voronoi"``, or ``"adaptive_grid"`` explicitly for A/B comparisons;
-incompatible ``site_generator`` / ``material_type`` pairs are rejected.
-``adaptive_grid`` works on all three material types but is never selected by
-``auto``. It is one **material-agnostic** PBC/clearance path (same shells →
+``"voronoi"``, ``"adaptive_grid"``, or ``"rolling_probe"`` explicitly for A/B
+comparisons; incompatible ``site_generator`` / ``material_type`` pairs are
+rejected. ``adaptive_grid`` and ``rolling_probe`` work on all three material
+types but are never selected by ``auto``.
+
+``adaptive_grid`` is one **material-agnostic** PBC/clearance path (same shells →
 exposure → support-key snap → NMS on every system type): spacing in Å
 (``adaptive_grid_spacing``, default ``0.70``), clearance + ray-exposure filters
 (wall-near, not pore centres), one representative per support key snapped to a
 lateral pocket anchor at a target clearance, and a modest ``merge_radius`` NMS.
 Optional refine halvings (``adaptive_grid_refine_levels``, default ``0``)
 densify locally. ``adaptive_grid_nms_framework_scale`` (default ``0.25``) floors
-``merge_radius`` on framework median NN. ``side_policy`` (default
-``"positive"``) applies face / exposure half-spaces from **PBC geometry**
-(unique vacuum axis → face filter; finite cluster ``external`` → COM outward;
-3D-periodic → no face filter) — not from material labels. Topology / Voronoi
-keep system-specific heuristics (atop inject, height mask, MOF pore typing);
-adaptive_grid does **not** copy those safety nets.
+``merge_radius`` on framework median NN.
+
+``rolling_probe`` is an opt-in wall-near Connolly / SAS path: probe contacts
+tangent to one, two, or three framework spheres (atop / bridge / hollow) with
+geometric supports retained. It covers slab faces, NP exterior, and MOF
+**pore walls** (not Voronoi pore centres). Catalog density matches default
+``adaptive_grid`` NMS (spacing ``0.70``); there is no public spacing knob.
+
+``side_policy`` (default ``"positive"``) applies face / exposure half-spaces from
+**PBC geometry** for ``adaptive_grid`` and ``rolling_probe`` (unique vacuum axis
+→ face filter; finite cluster ``external`` → COM outward; 3D-periodic → no face
+filter). On ``rolling_probe``, the shared default ``positive`` remaps to
+``all`` (porous) or ``external`` (nanoparticle). Topology / Voronoi keep
+system-specific heuristics (atop inject, height mask, MOF pore typing);
+adaptive_grid / rolling_probe do **not** copy those safety nets.
 
 Plugin knobs: ``voronoi_*``, ``side_policy``, ``adaptive_grid_*``, and ``n_jobs``
-(adaptive_grid shells and Voronoi ridge enrich). Shared post-process:
-``site_classification_method``, ``site_equivalence_tolerance``,
+(adaptive_grid shells, rolling_probe contacts, and Voronoi ridge enrich). Shared
+post-process: ``site_classification_method``, ``site_equivalence_tolerance``,
 ``symmetry_tolerance``.
 
 .. list-table:: Which site-generator knobs apply where
@@ -183,28 +194,28 @@ Plugin knobs: ``voronoi_*``, ``side_policy``, ``adaptive_grid_*``, and ``n_jobs`
      - Topology slab (planarity + top-layer band); slab height mask / symmetry planar flag
    * - ``voronoi_site_enrichment``
      - Voronoi (porous / explicit slab); topology slab when the top layer is rough (planar topology and NP skip Voronoi → no-op)
-   * - ``adaptive_grid_spacing``, ``adaptive_grid_refine_levels``, ``adaptive_grid_nms_framework_scale``, ``side_policy``
-     - ``adaptive_grid`` only (``side_policy`` is packed into the site-cache key only for ``adaptive_grid``)
+   * - ``adaptive_grid_spacing``, ``adaptive_grid_refine_levels``, ``adaptive_grid_nms_framework_scale``
+     - ``adaptive_grid`` only
+   * - ``side_policy``
+     - ``adaptive_grid`` and ``rolling_probe`` (packed into the site-cache key for those plugins)
    * - ``n_jobs``
-     - ``adaptive_grid`` shells / refine; Voronoi ridge enrich (and rough topology-slab enrich). Topology NP is serial (hull + NN graph) by design
+     - ``adaptive_grid`` shells / refine; ``rolling_probe`` contacts; Voronoi ridge enrich (and rough topology-slab enrich). Topology NP is serial (hull + NN graph) by design
    * - ``site_classification_method``, ``site_equivalence_tolerance``, ``symmetry_tolerance``
      - Shared post-process after every plugin
 
-Keep ``site_generator="auto"`` for production. Opt into ``adaptive_grid`` for
-wall-near near-atom sampling on any material when you want that uniform path;
-keep Voronoi (``auto``) for MOF **pore centres** — adaptive_grid is wall-near,
-not pore centres. Keep ``voronoi_site_enrichment=True``. Avoid
-``adaptive_grid_spacing`` below ``0.70`` on MOFs.
+Keep ``site_generator="auto"`` for production. Opt into ``adaptive_grid`` or
+``rolling_probe`` for wall-near near-atom sampling on any material when you want
+that uniform path; keep Voronoi (``auto``) for MOF **pore centres**. Keep
+``voronoi_site_enrichment=True``. Avoid ``adaptive_grid_spacing`` below
+``0.70`` on MOFs.
 
-Default conclusions from the site A/B + slim GPU binding demos
+Default conclusions from the site A/B + GPU-full binding demos
 (``examples/compare_adaptive_grid_ab.py``; H₂/Ru, H₂/Pt₁₃, CO₂/MOF,
-ethene/Ru₅₅, slim camphor/Cu(111) BO):
+ethene/Ru₅₅, camphor/Cu(111) BO):
 
-- Keep ``auto`` (topology for slab/NP, Voronoi for porous). Adaptive-grid
-  catalogs are typically 20–250× slower to build. On best E_ads, ``auto``
-  tied or won for H₂/Ru, CO₂/MOF, and camphor/Cu(111); adaptive_grid was
-  only marginally better on H₂/Pt₁₃ and ethene/Ru₅₅ in the slim e2e — not
-  enough to change production defaults.
+- Keep ``auto`` (topology for slab/NP, Voronoi for porous) as the production
+  default. ``adaptive_grid`` and ``rolling_probe`` give comparable best E_ads
+  on metals / MOF walls; neither replaces Voronoi for pore-centre screening.
 - Keep one global adaptive_grid default set: ``adaptive_grid_spacing=0.70``,
   ``adaptive_grid_refine_levels=0``, ``adaptive_grid_nms_framework_scale=0.25``,
   ``side_policy="positive"``. Finer spacing or refine>0 inflate MOF/metal
@@ -212,9 +223,9 @@ ethene/Ru₅₅, slim camphor/Cu(111) BO):
   catalogs.
 - Keep ``voronoi_site_enrichment=True``: on RUBTAK01 enrich roughly doubles
   non-pore sites at nearly the same wall time while preserving pore count.
-- Set ``site_generator="adaptive_grid"`` only when you explicitly want the
-  uniform wall-near path (e.g. stepped/rough slabs where topology is sparse).
-  Do **not** use it for MOF pore-centre screening.
+- Set ``site_generator="adaptive_grid"`` or ``"rolling_probe"`` only when you
+  explicitly want a uniform wall-near path (e.g. stepped/rough slabs or MOF
+  pore **walls**). Do **not** use either for MOF pore-centre screening.
 
 Site uniqueness and sampling
 ----------------------------

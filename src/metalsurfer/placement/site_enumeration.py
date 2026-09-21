@@ -335,10 +335,10 @@ def get_unified_sites(
     """Return adsorption/placement sites for *atoms*.
 
     Candidates come from a plugin selected by *site_generator*
-    (``auto`` / ``topology`` / ``voronoi`` / ``adaptive_grid``).
+    (``auto`` / ``topology`` / ``voronoi`` / ``adaptive_grid`` / ``rolling_probe``).
     With ``auto``, slabs and nanoparticles use topology; porous frameworks
-    use Voronoi. ``adaptive_grid`` works on all materials but is not selected
-    by ``auto``.
+    use Voronoi. ``adaptive_grid`` and ``rolling_probe`` work on all materials
+    but are not selected by ``auto``.
 
     - **slab** (topology): Delaunay atop/bridge/hollow; planar top layers skip
       Voronoi; rough slabs merge Voronoi enrichment.
@@ -347,6 +347,8 @@ def get_unified_sites(
     - **adaptive_grid**: atom-centred Cartesian shells with exposure filtering
       for every material type. Density is the absolute
       ``adaptive_grid_spacing`` (Å) and ``adaptive_grid_refine_levels``.
+    - **rolling_probe**: Connolly / SAS 1/2/3-sphere contacts (wall-near,
+      including MOF pore walls; not pore centres).
 
     Parameters
     ----------

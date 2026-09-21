@@ -174,8 +174,11 @@ Which *points* are proposed is controlled by `site_generator` (default
 frameworks use **Voronoi**. Explicit `topology` / `voronoi` override that
 mapping when the pair is compatible with `material_type`. Opt-in
 `adaptive_grid` lays a Cartesian grid around every atom (spacing in Å via
-`adaptive_grid_spacing`) and then follows the same classify → cluster →
-symmetry path on all materials. It is never chosen by `auto`.
+`adaptive_grid_spacing`); opt-in `rolling_probe` places Connolly / SAS
+contacts tangent to one, two, or three framework spheres (atop / bridge /
+hollow, including MOF pore walls). Both wall-near plugins then follow the
+same classify → cluster → symmetry path on all materials and are never chosen
+by `auto`.
 
 ### 3.1 Slab
 

@@ -194,25 +194,28 @@ Site detection
    layer (slabs only; falls back for other material types).
 
 ``site_generator``
-   **Type:** ``Literal["auto", "topology", "voronoi", "adaptive_grid"]`` · **Default:** ``"auto"``
+   **Type:** ``Literal["auto", "topology", "voronoi", "adaptive_grid", "rolling_probe"]`` · **Default:** ``"auto"``
 
    Plugin that enumerates raw adsorption-site candidates before classification.
    ``"auto"`` picks topology for slabs and nanoparticles, and Voronoi for porous
    frameworks. Explicit ``"topology"`` is allowed for ``slab`` / ``nanoparticle``;
-   ``"voronoi"`` for ``slab`` / ``porous``; ``"adaptive_grid"`` for all three
-   materials (never chosen by ``auto``). Incompatible pairs raise at config
-   construction. Explicit ``"voronoi"`` on a slab skips topology (A/B path;
-   planar cells may rely on atop injection).
+   ``"voronoi"`` for ``slab`` / ``porous``; ``"adaptive_grid"`` and
+   ``"rolling_probe"`` for all three materials (never chosen by ``auto``).
+   Incompatible pairs raise at config construction. Explicit ``"voronoi"`` on a
+   slab skips topology (A/B path; planar cells may rely on atop injection).
 
 ``side_policy``
    **Type:** ``Literal["all", "positive", "negative", "external"]`` · **Default:** ``"positive"``
 
-   Face / exposure filter for ``adaptive_grid`` only (also keyed in the site
-   cache when that plugin is selected). Interpreted from **PBC geometry**, not
-   material labels: with exactly one non-periodic axis, ``"positive"`` /
-   ``"negative"`` keep one face along the vacuum normal; ``"all"`` / fully
-   3D-periodic cells skip the face filter; ``"external"`` on finite (no-PBC)
-   clusters keeps outward-pointing sites. Topology / Voronoi ignore this knob.
+   Face / exposure filter for ``adaptive_grid`` and ``rolling_probe`` (also keyed
+   in the site cache when those plugins are selected). Interpreted from **PBC
+   geometry**, not material labels: with exactly one non-periodic axis,
+   ``"positive"`` / ``"negative"`` keep one face along the vacuum normal;
+   ``"all"`` / fully 3D-periodic cells skip the face filter; ``"external"`` on
+   finite (no-PBC) clusters keeps outward-pointing sites. For
+   ``rolling_probe``, the shared default ``"positive"`` remaps to ``"all"`` on
+   porous frameworks and ``"external"`` on nanoparticles. Topology / Voronoi
+   ignore this knob.
 
 ``adaptive_grid_spacing``
    **Type:** ``float`` · **Default:** ``0.70`` (Å)
@@ -239,9 +242,10 @@ Site detection
    Expert map (which knobs apply where): shared accessibility window
    (``voronoi_probe_radius`` / ``voronoi_max_site_distance`` /
    ``voronoi_auto_widen``) for **all** plugins; ``voronoi_site_enrichment`` for
-   Voronoi and rough topology slabs; ``adaptive_grid_*`` + ``side_policy`` for
-   ``adaptive_grid``; ``n_jobs`` for adaptive_grid shells and Voronoi ridge
-   enrich (topology NP is serial). See :doc:`/guides/configuration`.
+   Voronoi and rough topology slabs; ``adaptive_grid_*`` for ``adaptive_grid``;
+   ``side_policy`` for ``adaptive_grid`` and ``rolling_probe``; ``n_jobs`` for
+   adaptive_grid shells, rolling_probe contacts, and Voronoi ridge enrich
+   (topology NP is serial). See :doc:`/guides/configuration`.
 
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)

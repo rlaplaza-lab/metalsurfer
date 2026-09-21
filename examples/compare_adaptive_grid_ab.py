@@ -1,25 +1,22 @@
 #!/usr/bin/env python3
-"""A/B adaptive_grid vs topology/voronoi (auto) on example substrates (+ optional e2e).
+"""A/B site generators: auto vs adaptive_grid vs rolling_probe (+ optional e2e).
 
-Site-generation timing and e2e demos honour ``--n-jobs`` (default ``1``;
-prefer ``--n-jobs 1`` on small GPUs to avoid thread/CUDA contention).
+Site-generation timing and e2e demos honour ``--n-jobs`` (default ``1``).
+E2e defaults: ``num_placements=None`` (GPU autotune / one full batch),
+``fmax=0.05``, ``stage2_steps=200``, camphor ``bo.total_budget=5`` with
+autotuned initial/batch sizes. Best E_ads is compared to ``--baseline-csv``.
 
-Default conclusions (keep ``site_generator="auto"``; adaptive_grid opt-in only):
-topology/Voronoi stay the production defaults with system-specific heuristics;
-adaptive_grid is one PBC/clearance path for every material, slower to build,
-and did not beat ``auto`` on best E_ads for H₂/Ru, CO₂/MOF, or slim
-camphor/Cu(111) BO (marginal wins on H₂/Pt₁₃ / ethene/Ru₅₅ in slim e2e only).
-Keep ``adaptive_grid_spacing=0.70``, refine ``0``, NMS framework scale ``0.25``,
-and ``voronoi_site_enrichment=True``.
+Keep ``site_generator="auto"`` for production; ``adaptive_grid`` and
+``rolling_probe`` are wall-near opt-ins (not MOF pore centres).
 
 Run (conda env metalsurfer)::
 
   conda activate metalsurfer
   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
   python examples/compare_adaptive_grid_ab.py --n-jobs 1
-  python examples/compare_adaptive_grid_ab.py --e2e --num-placements 6 --n-jobs 1
-  # Re-run GPU demos without repeating the CPU catalog sweep:
-  python examples/compare_adaptive_grid_ab.py --e2e --skip-site-ab --num-placements 6 --n-jobs 1
+  python examples/compare_adaptive_grid_ab.py --e2e --skip-site-ab --n-jobs 1 \\
+      --csv results_adaptive_grid_ab/eads_gpu_full.csv \\
+      --baseline-csv results_adaptive_grid_ab/eads_baseline_v1.csv
 """
 
 from __future__ import annotations
@@ -475,34 +472,100 @@ def _run_campaign(
     }
 
 
+def _load_baseline_best(path: Path | None) -> dict[tuple[str, str], float]:
+    """Map (system, plugin) → best_eads from a prior CSV (empty if missing)."""
+    out: dict[tuple[str, str], float] = {}
+    if path is None or not path.is_file():
+        return out
+    with path.open(newline="") as fh:
+        for row in csv.DictReader(fh):
+            try:
+                best = float(row["best_eads"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if np.isfinite(best):
+                out[(row["system"], row["plugin"])] = best
+    return out
+
+
+def _e2e_common_kwargs(
+    *,
+    plugin: str,
+    material_type: str,
+    n_jobs: int,
+    num_placements: int | None,
+    fmax: float,
+    stage2_steps: int,
+    memory_padding: float,
+) -> dict:
+    """Shared AdsorptionConfig fields for GPU-full single-batch e2e demos."""
+    return {
+        "material_type": material_type,
+        "site_generator": plugin,
+        "seed": 42,
+        "num_conformers": 1,
+        "num_placements": num_placements,  # None → GPU autotune (one full batch)
+        "n_jobs": n_jobs,
+        "fmax": float(fmax),
+        "stage2_steps": int(stage2_steps),
+        "slab_relaxation_mode": "none",
+        # Fill the GPU; do not pin an artificial scaler / atom cap.
+        "autobatcher_max_memory_padding": float(memory_padding),
+        "autobatcher_max_memory_scaler": None,
+        "autobatcher_max_atoms_to_try": None,
+    }
+
+
+_E2E_PLUGINS = ("auto", "adaptive_grid", "rolling_probe")
+
+
 def run_e2e(
-    num_placements: int,
+    num_placements: int | None = None,
     csv_path: Path | None = None,
     *,
     n_jobs: int = 1,
+    fmax: float = 0.05,
+    stage2_steps: int = 200,
+    bo_budget: int = 5,
+    memory_padding: float = 0.8,
+    baseline_csv: Path | None = None,
 ) -> None:
+    """GPU binding demos: auto vs adaptive_grid vs rolling_probe.
+
+    When *num_placements* is ``None``, workload autotune sets it to the probed
+    single-batch GPU capacity. Relaxations use *fmax* / *stage2_steps*.
+    Camphor BO uses *bo_budget* acquisition rounds with auto initial/batch sizes.
+    """
+    place_label = "auto(GPU)" if num_placements is None else str(num_placements)
     print("\n" + "=" * 72)
-    print(f"End-to-end demos (num_placements={num_placements}, n_jobs={n_jobs})")
+    print(
+        f"End-to-end demos (num_placements={place_label}, fmax={fmax}, "
+        f"stage2_steps={stage2_steps}, bo_budget={bo_budget}, "
+        f"memory_padding={memory_padding}, n_jobs={n_jobs})"
+    )
     print("=" * 72)
     configure_logging(default_level="WARNING")
+    baseline = _load_baseline_best(baseline_csv)
+    if baseline:
+        print(f"Loaded {len(baseline)} baseline best-E_ads rows from {baseline_csv}")
+    else:
+        print("No baseline CSV loaded (regression checks skipped).")
 
     results = []
 
-    for plugin in ("auto", "adaptive_grid"):
+    for plugin in _E2E_PLUGINS:
         cfg = AdsorptionConfig(
-            material_type="slab",
-            site_generator=plugin,
-            seed=42,
-            num_conformers=1,
-            num_placements=num_placements,
-            n_jobs=n_jobs,
-            autobatcher_max_memory_padding=0.8,
-            autobatcher_max_memory_scaler=500,
-            autobatcher_max_atoms_to_try=5000,
+            **_e2e_common_kwargs(
+                plugin=plugin,
+                material_type="slab",
+                n_jobs=n_jobs,
+                num_placements=num_placements,
+                fmax=fmax,
+                stage2_steps=stage2_steps,
+                memory_padding=memory_padding,
+            ),
             enable_dissociative_placement=True,
             skip_topology_check=True,
-            stage2_steps=200,
-            slab_relaxation_mode="none",
         )
         print(f"\n[H2/Ru] preparing substrate + run site_generator={plugin!r} ...")
         slab = prepare_substrate(
@@ -523,21 +586,19 @@ def run_e2e(
             )
         )
 
-    for plugin in ("auto", "adaptive_grid"):
+    for plugin in _E2E_PLUGINS:
         cfg = AdsorptionConfig(
-            material_type="nanoparticle",
-            site_generator=plugin,
-            seed=42,
-            num_conformers=1,
-            num_placements=num_placements,
-            n_jobs=n_jobs,
-            autobatcher_max_memory_padding=0.8,
-            autobatcher_max_memory_scaler=500,
-            autobatcher_max_atoms_to_try=5000,
-            slab_relaxation_mode="none",
+            **_e2e_common_kwargs(
+                plugin=plugin,
+                material_type="nanoparticle",
+                n_jobs=n_jobs,
+                num_placements=num_placements,
+                fmax=fmax,
+                stage2_steps=stage2_steps,
+                memory_padding=memory_padding,
+            ),
             enable_dissociative_placement=True,
             skip_topology_check=True,
-            stage2_steps=200,
         )
         print(f"\n[H2/Pt13] run site_generator={plugin!r} ...")
         cluster = prepare_substrate(
@@ -558,19 +619,17 @@ def run_e2e(
 
     cif = os.path.join(_ROOT, "examples", "mof_structures", "RUBTAK01.cif")
     mof_atoms = read(cif)
-    for plugin in ("auto", "adaptive_grid"):
+    for plugin in _E2E_PLUGINS:
         cfg = AdsorptionConfig(
-            material_type="porous",
-            site_generator=plugin,
-            slab_relaxation_mode="none",
-            seed=42,
-            num_conformers=1,
-            num_placements=max(3, num_placements // 2),
-            n_jobs=n_jobs,
-            autobatcher_max_memory_padding=0.8,
-            autobatcher_max_memory_scaler=500,
-            autobatcher_max_atoms_to_try=5000,
-            stage2_steps=200,
+            **_e2e_common_kwargs(
+                plugin=plugin,
+                material_type="porous",
+                n_jobs=n_jobs,
+                num_placements=num_placements,
+                fmax=fmax,
+                stage2_steps=stage2_steps,
+                memory_padding=memory_padding,
+            ),
         )
         print(f"\n[CO2/MOF] run site_generator={plugin!r} ...")
         mof = prepare_substrate(
@@ -590,19 +649,17 @@ def run_e2e(
             )
         )
 
-    for plugin in ("auto", "adaptive_grid"):
+    for plugin in _E2E_PLUGINS:
         cfg = AdsorptionConfig(
-            material_type="nanoparticle",
-            site_generator=plugin,
-            seed=42,
-            num_conformers=1,
-            num_placements=num_placements,
-            n_jobs=n_jobs,
-            autobatcher_max_memory_padding=0.8,
-            autobatcher_max_memory_scaler=500,
-            autobatcher_max_atoms_to_try=5000,
-            slab_relaxation_mode="none",
-            stage2_steps=200,
+            **_e2e_common_kwargs(
+                plugin=plugin,
+                material_type="nanoparticle",
+                n_jobs=n_jobs,
+                num_placements=num_placements,
+                fmax=fmax,
+                stage2_steps=stage2_steps,
+                memory_padding=memory_padding,
+            ),
         )
         print(f"\n[ethene/Ru55] run site_generator={plugin!r} ...")
         cluster = prepare_substrate(
@@ -621,24 +678,29 @@ def run_e2e(
             )
         )
 
-    # Slim camphor BO (reduced budget — full 25-batch twice is too heavy).
-    for plugin in ("auto", "adaptive_grid"):
+    # Camphor BO: fewer acquisition rounds, GPU-sized initial/batch.
+    for plugin in _E2E_PLUGINS:
         cfg = AdsorptionConfig(
-            material_type="slab",
-            site_generator=plugin,
-            seed=42,
-            num_conformers=1,
-            n_jobs=n_jobs,
-            autobatcher_max_memory_padding=0.8,
-            autobatcher_max_memory_scaler=500,
-            autobatcher_max_atoms_to_try=5000,
-            slab_relaxation_mode="none",
+            **_e2e_common_kwargs(
+                plugin=plugin,
+                material_type="slab",
+                n_jobs=n_jobs,
+                num_placements=num_placements,
+                fmax=fmax,
+                stage2_steps=stage2_steps,
+                memory_padding=memory_padding,
+            ),
             placement_z_range=(2.0, 3.5),
             placement_z_scale_by_covalent_radius=False,
             binding_distance_threshold=5.0,
             top_layer_tolerance=2.1,
-            stage2_steps=200,
-            bo=BOConfig(total_budget=8, acquisition="ei"),
+            bo=BOConfig(
+                total_budget=int(bo_budget),
+                acquisition="ei",
+                # None → autotune to one full GPU batch each.
+                initial_random=None,
+                batch_size=None,
+            ),
         )
         print(f"\n[camphor/Cu111 BO] run site_generator={plugin!r} ...")
         try:
@@ -668,19 +730,45 @@ def run_e2e(
     print("\n" + "=" * 72)
     print(
         f"{'system':14s} {'plugin':14s} {'t_s':>8s} {'n_sites':>8s} "
-        f"{'n_valid':>8s} {'best':>9s} {'med':>9s} {'mean':>9s} {'std':>8s}"
+        f"{'n_valid':>8s} {'best':>9s} {'med':>9s} {'base':>9s} {'Δbest':>9s}"
     )
+    regressions: list[str] = []
     for r in results:
         e = r["best_eads"]
         st = r["stats"]
         e_s = f"{e:9.4f}" if e is not None and np.isfinite(e) else f"{'n/a':>9s}"
+        base = baseline.get((r["name"], r["plugin"]))
+        if base is not None and np.isfinite(base):
+            base_s = f"{base:9.4f}"
+            if e is not None and np.isfinite(e):
+                delta = float(e) - float(base)
+                # More positive Δ = worse (less bound). Flag if worse by >1 meV.
+                delta_s = f"{delta:+9.4f}"
+                if delta > 0.001:
+                    regressions.append(
+                        f"{r['name']}/{r['plugin']}: best {e:.4f} vs baseline "
+                        f"{base:.4f} (Δ={delta:+.4f} eV)"
+                    )
+            else:
+                delta_s = f"{'n/a':>9s}"
+        else:
+            base_s = f"{'n/a':>9s}"
+            delta_s = f"{'n/a':>9s}"
         print(
             f"{r['name']:14s} {r['plugin']:14s} {r['elapsed_s']:8.1f} "
             f"{r['n_sites']:8d} {r['n_valid']:8d} {e_s} "
-            f"{st['median']:9.4f} {st['mean']:9.4f} {st['std']:8.4f}"
+            f"{st['median']:9.4f} {base_s} {delta_s}"
         )
         print(f"  E_ads histogram ({r['name']} / {r['plugin']}):")
         print(_ascii_hist(r["energies"]))
+
+    if regressions:
+        print("\n" + "=" * 72)
+        print(f"REGRESSIONS vs baseline ({len(regressions)}):")
+        for line in regressions:
+            print(f"  ! {line}")
+    elif baseline:
+        print("\nNo best-E_ads regressions vs baseline (> +1 meV).")
 
     out = csv_path or Path(results_dir_for("adaptive_grid_ab")) / "eads.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -701,11 +789,25 @@ def run_e2e(
                 "eads_p75",
                 "eads_max",
                 "eads_std",
+                "baseline_best",
+                "delta_best",
             ],
         )
         writer.writeheader()
         for r in results:
             st = r["stats"]
+            base = baseline.get((r["name"], r["plugin"]))
+            e = r["best_eads"]
+            delta = (
+                float(e) - float(base)
+                if (
+                    e is not None
+                    and base is not None
+                    and np.isfinite(e)
+                    and np.isfinite(base)
+                )
+                else ""
+            )
             writer.writerow(
                 {
                     "system": r["name"],
@@ -721,6 +823,8 @@ def run_e2e(
                     "eads_p75": st["p75"],
                     "eads_max": st["max"],
                     "eads_std": st["std"],
+                    "baseline_best": base if base is not None else "",
+                    "delta_best": delta,
                 }
             )
     print(f"\nWrote E_ads summary CSV → {out}")
@@ -731,7 +835,7 @@ def main() -> int:
     parser.add_argument(
         "--e2e",
         action="store_true",
-        help="Run slim binding demos (GPU/MLIP) for auto vs adaptive_grid",
+        help="Run binding demos (GPU/MLIP) for auto vs adaptive_grid vs rolling_probe",
     )
     parser.add_argument(
         "--skip-site-ab",
@@ -741,8 +845,32 @@ def main() -> int:
     parser.add_argument(
         "--num-placements",
         type=int,
-        default=12,
-        help="Placements per e2e campaign (default 12)",
+        default=None,
+        help="Placements per e2e campaign (default: None = GPU autotune / one full batch)",
+    )
+    parser.add_argument(
+        "--fmax",
+        type=float,
+        default=0.05,
+        help="Force convergence for placement relaxations (default 0.05)",
+    )
+    parser.add_argument(
+        "--stage2-steps",
+        type=int,
+        default=200,
+        help="Max optimizer steps for placement relaxations (default 200)",
+    )
+    parser.add_argument(
+        "--bo-budget",
+        type=int,
+        default=5,
+        help="BO acquisition rounds for camphor (default 5); initial/batch autotuned",
+    )
+    parser.add_argument(
+        "--memory-padding",
+        type=float,
+        default=0.8,
+        help="Autobatcher memory padding fraction (default 0.8)",
     )
     parser.add_argument(
         "--n-jobs",
@@ -754,8 +882,14 @@ def main() -> int:
         "--csv",
         type=Path,
         default=None,
-        help="Optional path for e2e E_ads summary CSV "
+        help="Output path for e2e E_ads summary CSV "
         "(default: results_adaptive_grid_ab/eads.csv)",
+    )
+    parser.add_argument(
+        "--baseline-csv",
+        type=Path,
+        default=Path(_ROOT) / "results_adaptive_grid_ab" / "eads_side_by_side.csv",
+        help="Prior E_ads CSV for best-energy regression checks",
     )
     args = parser.parse_args()
     if not args.skip_site_ab:
@@ -763,7 +897,16 @@ def main() -> int:
     if args.e2e:
         # Allow importing sibling example helpers (camphor slab loader).
         sys.path.insert(0, os.path.join(_ROOT, "examples"))
-        run_e2e(args.num_placements, csv_path=args.csv, n_jobs=args.n_jobs)
+        run_e2e(
+            args.num_placements,
+            csv_path=args.csv,
+            n_jobs=args.n_jobs,
+            fmax=args.fmax,
+            stage2_steps=args.stage2_steps,
+            bo_budget=args.bo_budget,
+            memory_padding=args.memory_padding,
+            baseline_csv=args.baseline_csv,
+        )
     return 0
 
 

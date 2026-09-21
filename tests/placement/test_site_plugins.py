@@ -22,6 +22,7 @@ from metalsurfer.placement.site_plugins.base import (
     SiteCandidateBatch,
     SiteGenerationContext,
 )
+from metalsurfer.placement.site_plugins.rolling_probe import RollingProbeGenerator
 from metalsurfer.placement.site_plugins.topology_np import TopologyNPGenerator
 from metalsurfer.placement.site_plugins.topology_slab import TopologySlabGenerator
 from metalsurfer.placement.site_plugins.voronoi import VoronoiGenerator
@@ -31,7 +32,12 @@ from ..conftest import make_nanoparticle, make_porous_framework, make_slab
 
 
 def test_registry_matches_config_options():
-    assert SITE_GENERATORS == ("topology", "voronoi", "adaptive_grid")
+    assert SITE_GENERATORS == (
+        "topology",
+        "voronoi",
+        "adaptive_grid",
+        "rolling_probe",
+    )
     assert SITE_GENERATOR_OPTIONS == ("auto",) + SITE_GENERATORS
 
 
@@ -40,6 +46,7 @@ def test_auto_defaults_by_material():
     assert resolved_site_generator_name("auto", "nanoparticle") == "topology"
     assert resolved_site_generator_name("auto", "porous") == "voronoi"
     assert resolved_site_generator_name("adaptive_grid", "slab") == "adaptive_grid"
+    assert resolved_site_generator_name("rolling_probe", "slab") == "rolling_probe"
 
 
 @pytest.mark.parametrize(
@@ -52,6 +59,9 @@ def test_auto_defaults_by_material():
         ("adaptive_grid", "slab", AdaptiveGridGenerator),
         ("adaptive_grid", "nanoparticle", AdaptiveGridGenerator),
         ("adaptive_grid", "porous", AdaptiveGridGenerator),
+        ("rolling_probe", "slab", RollingProbeGenerator),
+        ("rolling_probe", "nanoparticle", RollingProbeGenerator),
+        ("rolling_probe", "porous", RollingProbeGenerator),
     ],
 )
 def test_resolve_plugin(name, material_type, cls):
@@ -60,7 +70,7 @@ def test_resolve_plugin(name, material_type, cls):
 
 def test_unknown_and_incompatible_raise():
     with pytest.raises(ValueError, match="Unknown site_generator"):
-        resolve_site_generator("rolling_probe", "slab")
+        resolve_site_generator("not_a_real_plugin", "slab")
     with pytest.raises(ValueError, match="incompatible"):
         resolve_site_generator("topology", "porous")
     with pytest.raises(ValueError, match="incompatible"):
@@ -111,7 +121,7 @@ def test_all_plugins_share_batch_and_site_contract():
         planar_z_variance_threshold=0.1,
         n_jobs=1,
     )
-    for name in ("topology", "voronoi", "adaptive_grid"):
+    for name in ("topology", "voronoi", "adaptive_grid", "rolling_probe"):
         batch = resolve_site_generator(name, "slab").generate(ctx)
         assert isinstance(batch, SiteCandidateBatch)
         n = len(batch.vertices)
