@@ -215,6 +215,7 @@ ethene/Ru₅₅, slim camphor/Cu(111) BO):
 - Set ``site_generator="adaptive_grid"`` only when you explicitly want the
   uniform wall-near path (e.g. stepped/rough slabs where topology is sparse).
   Do **not** use it for MOF pore-centre screening.
+
 Site uniqueness and sampling
 ----------------------------
 
