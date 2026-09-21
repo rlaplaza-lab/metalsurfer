@@ -20,6 +20,8 @@ class RollingProbeGenerator:
     """
 
     name = "rolling_probe"
+    widens_distance_window = False
+    uses_structure_pbc = True
 
     def generate(
         self,
@@ -35,7 +37,6 @@ class RollingProbeGenerator:
             positions,
             cell,
             pbc,
-            material_type=ctx.material_type,
             probe_radius=float(ctx.probe_radius),
             max_site_distance=float(ctx.max_site_distance),
             n_jobs=int(ctx.n_jobs),

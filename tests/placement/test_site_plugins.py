@@ -24,8 +24,7 @@ from metalsurfer.placement.site_plugins.base import (
     SiteGenerationContext,
 )
 from metalsurfer.placement.site_plugins.rolling_probe import RollingProbeGenerator
-from metalsurfer.placement.site_plugins.topology_np import TopologyNPGenerator
-from metalsurfer.placement.site_plugins.topology_slab import TopologySlabGenerator
+from metalsurfer.placement.site_plugins.topology import TopologyGenerator
 from metalsurfer.placement.site_plugins.voronoi import VoronoiGenerator
 from metalsurfer.placement.site_types import Site
 
@@ -54,8 +53,8 @@ def test_auto_defaults_by_material():
 @pytest.mark.parametrize(
     ("name", "material_type", "cls"),
     [
-        ("auto", "slab", TopologySlabGenerator),
-        ("topology", "nanoparticle", TopologyNPGenerator),
+        ("auto", "slab", TopologyGenerator),
+        ("topology", "nanoparticle", TopologyGenerator),
         ("voronoi", "porous", VoronoiGenerator),
         ("voronoi", "slab", VoronoiGenerator),
         ("adaptive_grid", "slab", AdaptiveGridGenerator),
@@ -68,6 +67,65 @@ def test_auto_defaults_by_material():
 )
 def test_resolve_plugin(name, material_type, cls):
     assert isinstance(resolve_site_generator(name, material_type), cls)
+
+
+def test_widens_distance_window_flags():
+    assert resolve_site_generator("topology", "slab").widens_distance_window is True
+    assert resolve_site_generator("voronoi", "porous").widens_distance_window is True
+    assert (
+        resolve_site_generator("adaptive_grid", "slab").widens_distance_window is False
+    )
+    assert (
+        resolve_site_generator("rolling_probe", "slab").widens_distance_window is False
+    )
+
+
+@pytest.mark.parametrize("site_generator", ["adaptive_grid", "rolling_probe"])
+def test_empty_opt_in_plugins_skip_auto_widen(monkeypatch, site_generator):
+    """Adaptive grid / rolling probe do not retry with a widened distance window."""
+    import metalsurfer.placement.site_enumeration as site_enumeration
+
+    slab = make_slab()
+    calls = {"n": 0}
+
+    def fake_enumerate(*args, **kwargs):
+        calls["n"] += 1
+        return [], np.empty((0, 3), dtype=float)
+
+    monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
+    sites = site_enumeration.get_unified_sites(
+        slab,
+        material_type="slab",
+        site_generator=site_generator,
+        auto_widen=True,
+    )
+    assert calls["n"] == 1
+    assert sites == []
+
+
+def test_empty_voronoi_still_auto_widens(monkeypatch):
+    """Voronoi (and topology) still take one widened retry when the first pass is empty."""
+    import metalsurfer.placement.site_enumeration as site_enumeration
+
+    slab = make_slab()
+    calls = {"n": 0}
+    real = site_enumeration._enumerate_unified_sites
+
+    def fake_enumerate(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return [], np.empty((0, 3), dtype=float)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
+    sites = site_enumeration.get_unified_sites(
+        slab,
+        material_type="slab",
+        site_generator="voronoi",
+        auto_widen=True,
+    )
+    assert calls["n"] == 2
+    assert len(sites) > 0
 
 
 def test_unknown_and_incompatible_raise():
@@ -105,6 +163,8 @@ def test_all_plugins_share_batch_and_site_contract():
     assert core <= names
     assert enrich <= names
     assert "env_fingerprints" not in names
+    assert "inject_atop" not in names
+    assert "apply_slab_height_mask" not in names
 
     slab = make_slab(nx=2, ny=2, n_layers=2)
     pos = slab.get_positions()
@@ -290,9 +350,8 @@ def test_adaptive_grid_skips_topology_safety_nets(material_type):
         n_jobs=1,
     )
     batch = resolve_site_generator("adaptive_grid", material_type).generate(ctx)
-    assert batch.inject_atop is False
-    assert batch.apply_slab_height_mask is False
-    assert batch.slab_top_atom_indices is None
+    assert "inject_atop" not in SiteCandidateBatch.__dataclass_fields__
+    assert "apply_slab_height_mask" not in SiteCandidateBatch.__dataclass_fields__
     assert len(batch.vertices) == len(batch.atom_indices)
 
 
@@ -439,7 +498,7 @@ def test_wall_near_sites_have_supports_and_support_plane_xyz(
         n_hat = n_hat / nrm
         support_h = float(np.max(pos[list(s.slab_indices)] @ n_hat))
         site_h = float(np.dot(np.asarray(s.xyz, dtype=float), n_hat))
-        assert site_h == pytest.approx(support_h, abs=0.25)
+        assert site_h == pytest.approx(support_h, abs=1e-6)
     for s in pores:
         assert s.nn_distance is not None and float(s.nn_distance) > 1.0
 
@@ -511,7 +570,7 @@ def test_porous_wall_near_plugins_materialize_with_contact_solve(plugin):
         site, pos, n_hat, reduce="max", fallback=float(pose_ctx.surface_ref)
     )
     site_h = float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
-    assert site_h == pytest.approx(support_h, abs=0.25)
+    assert site_h == pytest.approx(support_h, abs=1e-6)
     atom_h = (
         pose_ctx.rotated_pos
         + np.array([pose_ctx.pose.x_abs, pose_ctx.pose.y_abs, pose_ctx.pose.z_abs])

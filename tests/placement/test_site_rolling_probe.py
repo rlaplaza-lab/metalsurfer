@@ -220,6 +220,21 @@ def test_rolling_probe_same_path_on_all_materials(material_type, factory):
     assert all(s.tangent_basis is not None for s in sites)
 
 
+def test_rolling_probe_follows_structure_pbc_like_adaptive_grid():
+    """Rolling probe and adaptive grid share PBC-driven side-policy remapping."""
+    from metalsurfer.placement.site_adaptive_grid import resolve_side_policy_for_pbc
+
+    assert resolve_side_policy_for_pbc([True, True, True], "positive") == "all"
+    porous = make_porous_framework()
+    assert all(porous.get_pbc())
+    sites = get_unified_sites(
+        porous, material_type="porous", site_generator="rolling_probe", n_jobs=1
+    )
+    assert sites
+    assert all(s.kind in ("wall", "void") for s in sites)
+    assert all(s.site_type != "pore" or s.kind == "void" for s in sites)
+
+
 def test_rolling_probe_site_context_uses_shared_symmetry_path():
     slab = make_slab(nx=3, ny=3, n_layers=3)
     cfg = AdsorptionConfig(

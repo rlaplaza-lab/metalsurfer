@@ -8,6 +8,7 @@ from typing import Literal
 
 import numpy as np
 from ase import Atoms
+from ase.geometry import find_mic
 
 from .._utils import cell_has_volume
 from .._utils import is_finite_number as _is_finite_number
@@ -15,8 +16,11 @@ from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
 from . import geometry as geom
 from ._constants import (
+    _CONTACT_CLEARANCE_PAD_ANGSTROM,
+    _CONTACT_SHELL_MARGIN_ANGSTROM,
     _DISTANCE_RECOVERY_XY_ATTEMPTS,
     _DISTANCE_ZERO_EPS,
+    _HEIGHT_INTERVAL_BISECT_STEPS,
     _LATERAL_OFFSET_REF_SWITCH_DOT,
     _PARALLEL_Z_MIN_HI_MARGIN,
     _RECOVERY_INPLANE_PENETRATION_DOT,
@@ -84,6 +88,9 @@ class _PlacementContext:
     z_base_lo: float = 0.0
     z_base_hi: float = 0.0
     shape: str = "round"
+    com_lo: float | None = None
+    com_nominal: float | None = None
+    com_hi: float | None = None
 
 
 @dataclass
@@ -141,6 +148,25 @@ def _com_height_from_z_fraction(
     if z <= 0.5:
         return float(lo + (z / 0.5) * (nominal - lo))
     return float(nominal + ((z - 0.5) / 0.5) * (hi - nominal))
+
+
+def _z_fraction_from_com_height(
+    com_h: float, lo: float, nominal: float, hi: float
+) -> float:
+    """Inverse of :func:`_com_height_from_z_fraction` (``0.5`` at *nominal*)."""
+    h = float(com_h)
+    lo_f, nom_f, hi_f = float(lo), float(nominal), float(hi)
+    if abs(hi_f - lo_f) <= _DISTANCE_ZERO_EPS:
+        return 0.5
+    if h <= nom_f:
+        span = nom_f - lo_f
+        if span <= _DISTANCE_ZERO_EPS:
+            return 0.5
+        return float(max(0.0, min(0.5, 0.5 * (h - lo_f) / span)))
+    span = hi_f - nom_f
+    if span <= _DISTANCE_ZERO_EPS:
+        return 0.5
+    return float(max(0.5, min(1.0, 0.5 + 0.5 * (h - nom_f) / span)))
 
 
 def build_pose_batch_cache(
@@ -338,7 +364,7 @@ def _pairwise_contact_com_height(
     )
     # Pad so reconstructed MIC distances clear ``dists < allowed`` under
     # quaternion / wrap float noise (not a chemistry slack).
-    return float(h_needed) + 1e-6
+    return float(h_needed) + _CONTACT_CLEARANCE_PAD_ANGSTROM
 
 
 def _pair_min_distance_at_com_height(
@@ -386,6 +412,222 @@ def _count_contact_atoms_at_com_height(
     return int(np.sum(np.any(dists <= float(contact_threshold), axis=1)))
 
 
+def _pair_worst_penetration_at_com_height(
+    rotated_pos: np.ndarray,
+    symbols: list[str],
+    *,
+    site_xyz: np.ndarray,
+    place_normal: np.ndarray,
+    slab_positions: np.ndarray,
+    slab_symbols: list[str],
+    cell: np.ndarray,
+    pbc: list[bool],
+    config: AdsorptionConfig,
+    r_surface: float,
+    com_h: float,
+) -> float:
+    """Worst pair penetration (Å) at *com_h*; ≤0 means fully cleared."""
+    n_hat = _placement_normal_hat(place_normal)
+    base = np.asarray(site_xyz, dtype=float)
+    base_h = float(np.dot(base, n_hat))
+    center = base + (float(com_h) - base_h) * n_hat
+    mol = np.asarray(rotated_pos, dtype=float) + center
+    mic_vecs, _ = geom._mol_slab_pairwise_mic(mol, slab_positions, cell, pbc)
+    if mic_vecs.size == 0:
+        return 0.0
+    dists = np.linalg.norm(mic_vecs, axis=2)
+    worst = 0.0
+    for i, sym_m in enumerate(symbols):
+        for j, sym_s in enumerate(slab_symbols):
+            allowed = geom.min_pair_clearance_angstrom(
+                sym_m,
+                sym_s,
+                min_distance=float(config.min_initial_distance),
+                min_contact_ratio=float(config.min_contact_ratio),
+                reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
+                vdw_overlap_scale=float(config.vdw_overlap_scale),
+                r_surface_fallback=float(r_surface),
+            )
+            short = float(allowed) - float(dists[i, j])
+            if short > worst:
+                worst = short
+    return float(worst)
+
+
+def _void_height_interval_analytic(
+    rotated_pos: np.ndarray,
+    symbols: list[str],
+    *,
+    site_xyz: np.ndarray,
+    place_normal: np.ndarray,
+    slab_positions: np.ndarray,
+    slab_symbols: list[str],
+    cell: np.ndarray,
+    pbc: list[bool],
+    config: AdsorptionConfig,
+    r_surface: float,
+    diversity: float,
+) -> tuple[float, float, float]:
+    """Return ``(com_lo, com_nominal, com_hi)`` for a void site.
+
+    Nominal is the void centre when it clears; otherwise the nearest cleared
+    height inside ``[centre ± ½·diversity]``. Bounds expand from the nominal
+    by bisection. If nothing clears, collapse to the least-penetrating height.
+    """
+    n_hat = _placement_normal_hat(place_normal)
+    base = np.asarray(site_xyz, dtype=float)
+    base_h = float(np.dot(base, n_hat))
+    half = 0.5 * float(diversity)
+    probe_lo = base_h - half
+    probe_hi = base_h + half
+
+    def _pen(h: float) -> float:
+        return _pair_worst_penetration_at_com_height(
+            rotated_pos,
+            symbols,
+            site_xyz=base,
+            place_normal=place_normal,
+            slab_positions=slab_positions,
+            slab_symbols=slab_symbols,
+            cell=cell,
+            pbc=pbc,
+            config=config,
+            r_surface=r_surface,
+            com_h=float(h),
+        )
+
+    centre_pen = _pen(base_h)
+    if centre_pen <= 0.0:
+        com_nominal = base_h
+    else:
+        # Nearest cleared height to the centre via bisection on each side.
+        # Non-monotonic windows fall back to the least-penetrating of the
+        # probed edge / mid samples (no fixed 21-point grid).
+        def _nearest_cleared(edge: float) -> float | None:
+            if _pen(edge) > 0.0:
+                return None
+            lo_b, hi_b = (edge, base_h) if edge < base_h else (base_h, edge)
+            # lo_b cleared (or is edge), hi_b may penetrate; find cleared bound nearest centre.
+            for _ in range(_HEIGHT_INTERVAL_BISECT_STEPS):
+                mid = 0.5 * (lo_b + hi_b)
+                if edge < base_h:
+                    # search in [edge, centre]: want highest cleared
+                    if _pen(mid) <= 0.0:
+                        lo_b = mid
+                    else:
+                        hi_b = mid
+                else:
+                    # search in [centre, edge]: want lowest cleared
+                    if _pen(mid) <= 0.0:
+                        hi_b = mid
+                    else:
+                        lo_b = mid
+            return float(lo_b if edge < base_h else hi_b)
+
+        candidates = [
+            h
+            for h in (_nearest_cleared(probe_lo), _nearest_cleared(probe_hi))
+            if h is not None
+        ]
+        if candidates:
+            com_nominal = float(min(candidates, key=lambda h: abs(h - base_h)))
+        else:
+            mid = 0.5 * (probe_lo + probe_hi)
+            samples = (probe_lo, mid, probe_hi, base_h)
+            pens = [_pen(h) for h in samples]
+            best = min(pens)
+            picks = [
+                h
+                for h, p in zip(samples, pens, strict=True)
+                if abs(p - best) <= _DISTANCE_ZERO_EPS
+            ]
+            h_pick = float(min(picks, key=lambda h: abs(h - base_h)))
+            return h_pick, h_pick, h_pick
+
+    def _bisect_edge(toward_lo: bool) -> float:
+        lo_b, hi_b = (probe_lo, com_nominal) if toward_lo else (com_nominal, probe_hi)
+        if _pen(lo_b if toward_lo else hi_b) <= 0.0:
+            return float(lo_b if toward_lo else hi_b)
+        # Find the farthest cleared edge from nominal by binary search.
+        for _ in range(_HEIGHT_INTERVAL_BISECT_STEPS):
+            mid = 0.5 * (lo_b + hi_b)
+            if _pen(mid) <= 0.0:
+                if toward_lo:
+                    hi_b = mid
+                else:
+                    lo_b = mid
+            else:
+                if toward_lo:
+                    lo_b = mid
+                else:
+                    hi_b = mid
+        return float(hi_b if toward_lo else lo_b)
+
+    com_lo = _bisect_edge(True)
+    com_hi = _bisect_edge(False)
+    return float(com_lo), float(com_nominal), float(com_hi)
+
+
+def _contact_shell_indices(
+    site_xyz: np.ndarray,
+    *,
+    rotated_pos: np.ndarray,
+    symbols: list[str],
+    slab_positions: np.ndarray,
+    slab_symbols: list[str],
+    config: AdsorptionConfig,
+    r_surface: float,
+    cell: np.ndarray,
+    pbc: list[bool],
+    place_normal: np.ndarray,
+) -> np.ndarray:
+    """Return substrate indices that can affect contact along *place_normal*.
+
+    Membership is a cylinder around the site: lateral (MIC) distance ≤
+    molecule extent + max pair gate. That keeps atoms along the approach
+    column (needed on porous walls) while dropping far in-plane spectators.
+    """
+    n_slab = len(slab_positions)
+    if n_slab == 0:
+        return np.empty(0, dtype=int)
+    mol_extent = float(
+        np.max(np.linalg.norm(np.asarray(rotated_pos, dtype=float), axis=1))
+    )
+    max_gate = 0.0
+    for sym_m in symbols:
+        for sym_s in slab_symbols:
+            gate = geom.min_pair_clearance_angstrom(
+                sym_m,
+                sym_s,
+                min_distance=float(config.min_initial_distance),
+                min_contact_ratio=float(config.min_contact_ratio),
+                reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
+                vdw_overlap_scale=float(config.vdw_overlap_scale),
+                r_surface_fallback=float(r_surface),
+            )
+            if gate > max_gate:
+                max_gate = float(gate)
+    radius = mol_extent + max_gate + _CONTACT_SHELL_MARGIN_ANGSTROM
+    base = np.asarray(site_xyz, dtype=float).reshape(3)
+    slab_pos = np.asarray(slab_positions, dtype=float)
+    pbc_flags = [bool(x) for x in pbc]
+    n_hat = _placement_normal_hat(place_normal)
+
+    if any(pbc_flags):
+        deltas = slab_pos - base
+        mic_vecs, _dists = find_mic(
+            deltas, np.asarray(cell, dtype=float), pbc=pbc_flags
+        )
+        mic = np.asarray(mic_vecs, dtype=float)
+        lat = mic - np.outer(mic @ n_hat, n_hat)
+    else:
+        deltas = slab_pos - base
+        lat = deltas - np.outer(deltas @ n_hat, n_hat)
+    lat_d = np.linalg.norm(lat, axis=1)
+
+    return np.asarray(np.nonzero(lat_d <= radius)[0], dtype=int)
+
+
 def _feasible_height_interval(
     rotated_pos: np.ndarray,
     symbols: list[str],
@@ -403,87 +645,59 @@ def _feasible_height_interval(
 ) -> _HeightInterval | None:
     """Feasible COM height interval along *place_normal* for one rigid pose.
 
-    Wall-near (``site_type != "pore"``): nominal is the pairwise contact solve;
+    Wall (``site.kind == "wall"``): nominal is the pairwise contact solve;
     lower bound is that height; upper bound is limited by
     ``max_initial_distance`` / ``max_closest_approach`` when configured.
 
-    Pore: nominal is the void-centre height; the interval is the largest span
-    of the probe window ``[centre ± ½·diversity]`` that still clears the pair
-    gate. If nothing clears, the interval collapses to the least-penetrating
-    sample on that same probe grid (never a legacy offset outside the window).
+    Void: nominal is the void-centre height when it clears; otherwise the
+    nearest cleared height inside ``[centre ± ½·diversity]``. Bounds expand
+    from the nominal by bisection on pair penetration.
     """
-    n_hat = _placement_normal_hat(place_normal)
     base = np.asarray(site.xyz, dtype=float)
-    base_h = float(np.dot(base, n_hat))
     diversity = max(float(z_base_hi - z_base_lo), _PARALLEL_Z_MIN_HI_MARGIN)
-    is_pore = site.site_type == "pore"
+    is_void = site.kind == "void"
 
-    if is_pore:
-        com_nominal = base_h
-        half = 0.5 * diversity
-        probe_lo = com_nominal - half
-        probe_hi = com_nominal + half
-        n_probe = 21
-        cleared_mask = np.zeros(n_probe, dtype=bool)
-        deficits = np.full(n_probe, np.inf)
-        heights = np.linspace(probe_lo, probe_hi, n_probe)
-        for k, h in enumerate(heights):
-            center = base + (float(h) - base_h) * n_hat
-            mol = np.asarray(rotated_pos, dtype=float) + center
-            mic_vecs, _ = geom._mol_slab_pairwise_mic(mol, slab_positions, cell, pbc)
-            if mic_vecs.size == 0:
-                cleared_mask[k] = True
-                deficits[k] = 0.0
-                continue
-            dists = np.linalg.norm(mic_vecs, axis=2)
-            worst = 0.0
-            for i, sym_m in enumerate(symbols):
-                for j, sym_s in enumerate(slab_symbols):
-                    allowed = geom.min_pair_clearance_angstrom(
-                        sym_m,
-                        sym_s,
-                        min_distance=float(config.min_initial_distance),
-                        min_contact_ratio=float(config.min_contact_ratio),
-                        reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
-                        vdw_overlap_scale=float(config.vdw_overlap_scale),
-                        r_surface_fallback=float(r_surface),
-                    )
-                    short = float(allowed) - float(dists[i, j])
-                    if short > worst:
-                        worst = short
-            cleared_mask[k] = worst <= 0.0
-            deficits[k] = worst
-        if not np.any(cleared_mask):
-            best_def = float(np.min(deficits))
-            cands = np.nonzero(np.abs(deficits - best_def) <= 1e-9)[0]
-            centre_i = int(np.argmin(np.abs(heights - base_h)))
-            pick = int(cands[np.argmin(np.abs(cands - centre_i))])
-            h_pick = float(heights[pick])
-            com_lo = h_pick
-            com_nominal = h_pick
-            com_hi = h_pick
-        else:
-            mid_i = int(np.argmin(np.abs(heights - com_nominal)))
-            if not cleared_mask[mid_i]:
-                cleared_idx = np.nonzero(cleared_mask)[0]
-                mid_i = int(cleared_idx[np.argmin(np.abs(cleared_idx - mid_i))])
-                com_nominal = float(heights[mid_i])
-            lo_i = mid_i
-            while lo_i > 0 and cleared_mask[lo_i - 1]:
-                lo_i -= 1
-            hi_i = mid_i
-            while hi_i + 1 < n_probe and cleared_mask[hi_i + 1]:
-                hi_i += 1
-            com_lo = float(heights[lo_i])
-            com_hi = float(heights[hi_i])
+    shell_idx = _contact_shell_indices(
+        base,
+        rotated_pos=rotated_pos,
+        symbols=symbols,
+        slab_positions=slab_positions,
+        slab_symbols=slab_symbols,
+        config=config,
+        r_surface=r_surface,
+        cell=cell,
+        pbc=pbc,
+        place_normal=place_normal,
+    )
+    if shell_idx.size > 0:
+        shell_pos = np.asarray(slab_positions, dtype=float)[shell_idx]
+        shell_syms = [slab_symbols[int(i)] for i in shell_idx]
+    else:
+        shell_pos = slab_positions
+        shell_syms = slab_symbols
+
+    if is_void:
+        com_lo, com_nominal, com_hi = _void_height_interval_analytic(
+            rotated_pos,
+            symbols,
+            site_xyz=base,
+            place_normal=place_normal,
+            slab_positions=shell_pos,
+            slab_symbols=shell_syms,
+            cell=cell,
+            pbc=pbc,
+            config=config,
+            r_surface=r_surface,
+            diversity=diversity,
+        )
     else:
         com_nominal = _pairwise_contact_com_height(
             rotated_pos,
             symbols,
             site_xyz=base,
             place_normal=place_normal,
-            slab_positions=slab_positions,
-            slab_symbols=slab_symbols,
+            slab_positions=shell_pos,
+            slab_symbols=shell_syms,
             cell=cell,
             pbc=pbc,
             config=config,
@@ -494,7 +708,7 @@ def _feasible_height_interval(
             rotated_pos,
             site_xyz=base,
             place_normal=place_normal,
-            slab_positions=slab_positions,
+            slab_positions=shell_pos,
             cell=cell,
             pbc=pbc,
             com_h=com_nominal,
@@ -506,8 +720,6 @@ def _feasible_height_interval(
             upper_targets.append(float(config.max_closest_approach))
         if upper_targets:
             target = min(upper_targets)
-            # Raising along the normal ≈ increases min distance 1:1 when the
-            # closest pair is normal-aligned; clamp the diversity window.
             slack = max(0.0, float(target) - float(actual))
             com_hi = com_nominal + min(slack, 0.5 * diversity)
         else:
@@ -618,7 +830,7 @@ def _resolve_surface_ref(
             return float(_height_along_slab_normal(site_xyz, cell_arr)), True
         n_hat = site_normal / nrm
         vertex_h = float(np.dot(site_xyz, n_hat))
-        if site.site_type == "pore" or not site.slab_indices:
+        if site.kind == "void":
             return vertex_h, True
         return (
             _height_above_supports(site, pos, n_hat, reduce="max", fallback=vertex_h),
@@ -722,11 +934,7 @@ def _pose_from_spec(
     )
 
     flat_aromatic = _is_flat_aromatic(shape, smiles, symbols)
-    if (
-        flat_aromatic
-        and spec.orientation_type == "parallel"
-        and site.site_type != "pore"
-    ):
+    if flat_aromatic and spec.orientation_type == "parallel" and site.kind != "void":
         z_floor, z_lo_shrink, z_hi_shrink = _parallel_z_adjustments(
             ref_slab, site, symbols, r_surface=r_surface
         )
@@ -809,7 +1017,7 @@ def _pose_from_spec(
     com_h = _com_height_from_z_fraction(
         zf, interval.com_lo, interval.com_nominal, interval.com_hi
     )
-    if site.site_type != "pore":
+    if site.kind != "void":
         com_h = max(
             com_h,
             _com_floor_on_support_plane(rotated_pos, place_normal, base_h),
@@ -862,6 +1070,9 @@ def _pose_from_spec(
             z_base_hi=float(ctx_z_hi),
             normal=np.asarray(place_normal, dtype=float),
             shape=shape,
+            com_lo=float(interval.com_lo),
+            com_nominal=float(interval.com_nominal),
+            com_hi=float(interval.com_hi),
         ),
         None,
     )
@@ -1085,11 +1296,26 @@ def _analytic_height_recovery(
 ) -> tuple[np.ndarray, float] | None:
     """One signed height nudge along the placement normal; None if nothing to fix."""
     pose = ctx.pose
-    zf = float(pose.z_fraction)
     z_abs = _require_pose_z_abs(pose)
     origin = np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float)
-    z_span = float(ctx.z_base_hi - ctx.z_base_lo)
-    if z_span <= _DISTANCE_ZERO_EPS:
+    com_lo = ctx.com_lo
+    com_nominal = ctx.com_nominal
+    com_hi = ctx.com_hi
+    if com_lo is None or com_nominal is None or com_hi is None:
+        # Replay / synthetic contexts without a cached interval: build a
+        # symmetric window around the posed COM so nudges and z_fraction
+        # remain inverses of each other.
+        z_span = float(ctx.z_base_hi - ctx.z_base_lo)
+        if z_span <= _DISTANCE_ZERO_EPS:
+            return None
+        com_h0 = float(
+            np.dot(origin, _placement_normal(ctx, slab, pose_cache=pose_cache))
+        )
+        half = 0.5 * z_span
+        com_lo = com_h0 - half
+        com_nominal = com_h0
+        com_hi = com_h0 + half
+    if float(com_hi) + _DISTANCE_ZERO_EPS < float(com_lo):
         return None
 
     actual, max_pen = _contact_penetration(
@@ -1100,20 +1326,20 @@ def _analytic_height_recovery(
         slab_scratch=slab_scratch,
         slab_for_sites=slab_for_sites,
     )
-    # Pore sites: nudge toward the void centre when too close. Wall-near: raise
-    # away from the support plane. Keyed on site_type, not material_type.
-    is_pore = ctx.site is not None and ctx.site.site_type == "pore"
+    # Void sites: nudge toward the free-volume centre when too close. Wall:
+    # raise away from the support plane. Keyed on site.kind, not material_type.
+    is_void = ctx.site is not None and ctx.site.kind == "void"
     if height_mode == "too_close":
         if max_pen <= _DISTANCE_ZERO_EPS:
             return None
-        signed = -max_pen if is_pore else max_pen
+        signed = -max_pen if is_void else max_pen
     elif height_mode == "contact_distance_too_large":
         # Same physics as too_far: molecule is outside the contact window.
         target = float(config.max_closest_approach)
         excess = actual - target
         if excess <= _DISTANCE_ZERO_EPS:
             return None
-        signed = excess if is_pore else -excess
+        signed = excess if is_void else -excess
     else:
         max_d = config.max_initial_distance
         if max_d is None:
@@ -1123,19 +1349,22 @@ def _analytic_height_recovery(
                 excess = actual - target
                 if excess <= _DISTANCE_ZERO_EPS:
                     return None
-                signed = excess if is_pore else -excess
+                signed = excess if is_void else -excess
             else:
                 return None
         else:
             excess = actual - float(max_d)
             if excess <= _DISTANCE_ZERO_EPS:
                 return None
-            signed = excess if is_pore else -excess
+            signed = excess if is_void else -excess
 
     n_hat = _placement_normal(ctx, slab, pose_cache=pose_cache)
-    # Clamp the nudge into the feasible recovery window via z_fraction.
-    new_zf = float(min(1.0, max(0.0, zf + signed / z_span)))
-    clipped_center = origin + float((new_zf - zf) * z_span) * n_hat
+    com_h = float(np.dot(origin, n_hat))
+    new_com_h = float(min(float(com_hi), max(float(com_lo), com_h + float(signed))))
+    clipped_center = origin + (new_com_h - com_h) * n_hat
+    new_zf = _z_fraction_from_com_height(
+        new_com_h, float(com_lo), float(com_nominal), float(com_hi)
+    )
     return clipped_center, new_zf
 
 
@@ -1229,7 +1458,7 @@ def _recover_distance_failure(
     mostly in-plane). Huge normal penetration fails cheaply before Packmol
     clash. Remaining recoverable failures use clash descent when enabled;
     otherwise discrete XY jitter. Pore sites invert the height nudge toward
-    the free-volume centre (``site_type == "pore"``), not ``material_type``.
+    the free-volume centre (``site.kind == "void"``), not ``material_type``.
     """
     if fail_reason not in RECOVERABLE_DISTANCE_REASONS:
         return ctx, fail_reason

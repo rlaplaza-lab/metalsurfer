@@ -347,6 +347,18 @@ _ROLLING_PROBE_CLASH_TOL: float = 1e-4
 # Skip pair/triplet work when no exposed atop and coordination is high and
 # no contact-range neighbour remains (true bulk interior).
 _ROLLING_PROBE_BURY_CN: int = 10
-# Shorter ray exposure inside porous frameworks so opposite pore walls do not
-# reject valid wall-near chemisorption contacts.
+# Shorter ray exposure under full 3D PBC so opposite walls do not reject
+# valid wall-near chemisorption contacts.
 _ROLLING_PROBE_POROUS_EXPOSURE_N_STEPS: int = 2
+
+# Outward-normal probe: step = max(scale * probe_radius, floor) in Å.
+_OUTWARD_NORMAL_STEP_PROBE_SCALE: float = 0.2
+_OUTWARD_NORMAL_STEP_FLOOR_ANGSTROM: float = 0.15
+# Extra lateral margin (Å) on the contact cylinder beyond molecule extent + pair gate.
+_CONTACT_SHELL_MARGIN_ANGSTROM: float = 0.5
+# Float pad so reconstructed MIC distances clear ``dists < allowed``.
+_CONTACT_CLEARANCE_PAD_ANGSTROM: float = 1e-6
+# Bisection steps for void height bounds (2^-24 of the window).
+_HEIGHT_INTERVAL_BISECT_STEPS: int = 24
+# Fraction of a capped site list reserved for wall sites when voids exist.
+_SITE_CAP_WALL_RESERVE_FRACTION: float = 0.25

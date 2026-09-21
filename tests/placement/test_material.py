@@ -332,6 +332,11 @@ def test_local_site_distance_recovery_height_direction(
         z_base_lo=0.5,
         z_base_hi=3.5,
         normal=n_hat,
+        # Interval around the posed COM so recovery can move either way and
+        # z_fraction round-trips the nudged height.
+        com_lo=float(np.dot(center, n_hat)) - 1.5,
+        com_nominal=float(np.dot(center, n_hat)),
+        com_hi=float(np.dot(center, n_hat)) + 1.5,
     )
 
     # Inject a measured violation so direction is tested without relying on

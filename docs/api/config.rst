@@ -177,10 +177,11 @@ Site detection
 ``voronoi_auto_widen``
    **Type:** ``bool`` · **Default:** ``True``
 
-   When the first Voronoi accessibility window finds no sites, retry detection
-   **once** with a wider window (probe × 0.8, max × 1.25). Set ``False`` for strict
-   A/B comparisons of explicit ``voronoi_probe_radius`` /
-   ``voronoi_max_site_distance`` values.
+   When the first accessibility window finds no sites, retry detection **once**
+   with a wider window (probe × 0.8, max × 1.25) for plugins that opt in
+   (topology and Voronoi). Adaptive grid and rolling probe skip that retry.
+   Set ``False`` for strict A/B comparisons of explicit
+   ``voronoi_probe_radius`` / ``voronoi_max_site_distance`` values.
 
 ``site_classification_method``
    **Type:** ``Literal["auto", "distance_ratio", "delaunay"]`` · **Default:** ``"auto"``
@@ -212,10 +213,10 @@ Site detection
    geometry**, not material labels: with exactly one non-periodic axis,
    ``"positive"`` / ``"negative"`` keep one face along the vacuum normal;
    ``"all"`` / fully 3D-periodic cells skip the face filter; ``"external"`` on
-   finite (no-PBC) clusters keeps outward-pointing sites. For
-   ``rolling_probe``, the shared default ``"positive"`` remaps to ``"all"`` on
-   porous frameworks and ``"external"`` on nanoparticles. Topology / Voronoi
-   ignore this knob.
+   finite (no-PBC) clusters keeps outward-pointing sites. The shared default
+   ``"positive"`` remaps from the structure PBC mask (two periodic axes keep
+   the vacuum face; no PBC → ``"external"``; one or three periodic axes →
+   ``"all"``). Topology / Voronoi ignore this knob.
 
 ``adaptive_grid_spacing``
    **Type:** ``float`` · **Default:** ``0.70`` (Å)
@@ -240,12 +241,13 @@ Site detection
    snap, that radius only removes near-coincident leftovers.
 
    Expert map (which knobs apply where): shared accessibility window
-   (``voronoi_probe_radius`` / ``voronoi_max_site_distance`` /
-   ``voronoi_auto_widen``) for **all** plugins; ``voronoi_site_enrichment`` for
-   Voronoi and rough topology slabs; ``adaptive_grid_*`` for ``adaptive_grid``;
-   ``side_policy`` for ``adaptive_grid`` and ``rolling_probe``; ``n_jobs`` for
-   adaptive_grid shells, rolling_probe contacts, and Voronoi ridge enrich
-   (topology NP is serial). See :doc:`/guides/configuration`.
+   (``voronoi_probe_radius`` / ``voronoi_max_site_distance``) for **all**
+   plugins; ``voronoi_auto_widen`` for topology / Voronoi only;
+   ``voronoi_site_enrichment`` for Voronoi and rough topology slabs;
+   ``adaptive_grid_*`` for ``adaptive_grid``; ``side_policy`` for
+   ``adaptive_grid`` and ``rolling_probe``; ``n_jobs`` for adaptive_grid
+   shells, rolling_probe contacts, and Voronoi ridge enrich (topology NP is
+   serial). See :doc:`/guides/configuration`.
 
 ``site_equivalence_tolerance``
    **Type:** ``float`` · **Default:** ``0.05`` (Å)
@@ -601,11 +603,12 @@ Post-relaxation validation
 ``enable_dissociative_placement``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Preferred gate for dissociative hollow/site-pair initial placements of
-   homonuclear diatomics on slabs and nanoparticles (e.g. H₂ → 2H). Pair with
-   ``skip_topology_check=True`` when fragmented post-relax states must pass
-   connectivity filters. Descriptor ``fragment_positions`` support replay but
-   are omitted from BO feature vectors.
+   Preferred gate for dissociative wall hollow/bridge site-pair initial
+   placements of homonuclear diatomics on any material (e.g. H₂ → 2H). Void /
+   pore sites are never paired. Pair with ``skip_topology_check=True`` when
+   fragmented post-relax states must pass connectivity filters. Descriptor
+   ``fragment_positions`` support replay but are omitted from BO feature
+   vectors.
 
 ``skip_topology_check``
    **Type:** ``bool`` · **Default:** ``False``

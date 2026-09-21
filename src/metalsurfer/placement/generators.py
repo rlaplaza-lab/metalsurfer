@@ -22,6 +22,7 @@ from ._constants import (
     _PORE_SITE_CAP_MULTIPLIER,
     _PORE_SITE_CAP_NUM_PLACEMENTS_DEFAULT,
     _POROUS_SITE_INDEX_WEIGHT,
+    _SITE_CAP_WALL_RESERVE_FRACTION,
 )
 from ._material import material_aware_pbc
 from ._parallel import resolve_materialize_workers
@@ -157,32 +158,60 @@ class _SpecGridInfo:
     allows_conformer_site: Callable[[int, int], bool] | None = None
 
 
-def _topology_first_site_indices(
+def _site_rank_key(
+    site: Site,
+    index: int,
+    *,
+    clearance: float,
+) -> tuple[int, int, float, int]:
+    """Sort key: void before wall, then coordination, then larger clearance."""
+    kind_rank = 0 if site.kind == "void" else 1
+    coord = {"hollow": 0, "bridge": 1, "atop": 2, "pore": 0}.get(str(site.site_type), 3)
+    clear = -float(clearance)
+    return (kind_rank, coord, clear, int(index))
+
+
+def _rank_site_indices(
     sites: list[Site],
     indices: list[int],
     *,
     clearances: np.ndarray | None = None,
 ) -> list[int]:
-    """Order *indices*: topology / atop-injected sources first, then clearance.
+    """Order *indices* by kind, coordination, and clearance (not site_source)."""
 
-    Homogeneous catalogs (e.g. pure ``adaptive_grid``) ignore the source key
-    and sort only by footprint clearance. This is sampling policy, not a
-    uniqueness pass.
-    """
-
-    def _rank(i: int) -> tuple[int, float, int]:
-        site = sites[i]
-        src = str(site.site_source)
-        prefer = 0 if src.startswith("topology") or src == "atop_injected" else 1
-        # Larger clearance first → negate for ascending sort.
+    def _rank(i: int) -> tuple[int, int, float, int]:
         clear = (
-            -float(clearances[i])
+            float(clearances[i])
             if clearances is not None and i < len(clearances)
-            else 0.0
+            else (
+                float(sites[i].nn_distance) if sites[i].nn_distance is not None else 0.0
+            )
         )
-        return (prefer, clear, i)
+        return _site_rank_key(sites[i], i, clearance=clear)
 
     return sorted(indices, key=_rank)
+
+
+def _cap_ranked_site_indices(
+    sites: list[Site],
+    ranked: list[int],
+    *,
+    cap: int,
+) -> list[int]:
+    """Apply *cap* while reserving the last quarter for wall sites when present."""
+    if len(ranked) <= cap:
+        return list(ranked)
+    wall = [i for i in ranked if sites[i].kind == "wall"]
+    void = [i for i in ranked if sites[i].kind != "wall"]
+    if not wall or not void:
+        return ranked[:cap]
+    wall_reserve = max(1, int(cap * _SITE_CAP_WALL_RESERVE_FRACTION))
+    void_slots = cap - wall_reserve
+    kept_void = void[:void_slots]
+    kept_wall = wall[:wall_reserve]
+    # Preserve relative rank order among the kept set.
+    kept = set(kept_void) | set(kept_wall)
+    return [i for i in ranked if i in kept]
 
 
 def _spec_grid_info(
@@ -196,7 +225,7 @@ def _spec_grid_info(
     """Build enumerate/estimate inputs; footprint views leave SiteContext untouched."""
     is_dissociative = (
         config.enable_dissociative_placement
-        and config.material_type in ("slab", "nanoparticle")
+        and config.material_type in ("slab", "nanoparticle", "porous")
         and _is_dissociable_diatomic(conformers[0])
     )
     _ctx = site_context_for_sampling(slab, config, site_context, full_slab=full_slab)
@@ -291,29 +320,23 @@ def _spec_grid_info(
             use_sites = False
             allows_conformer_site = None
         else:
-            site_indices = _topology_first_site_indices(
+            site_indices = _rank_site_indices(
                 unique_sites,
                 site_indices,
                 clearances=clearances,
             )
-            if config.material_type == "porous":
-                # Draw preference only — shared SiteContext.sites is unchanged.
-                pore_indices = [
-                    i for i in site_indices if str(unique_sites[i].site_type) == "pore"
-                ]
-                if pore_indices:
-                    pore_indices.sort(
-                        key=lambda i: -float(unique_sites[i].nn_distance or 0.0)
-                    )
-                    pore_cap = max(
-                        int(
-                            config.num_placements
-                            or _PORE_SITE_CAP_NUM_PLACEMENTS_DEFAULT
-                        )
-                        * _PORE_SITE_CAP_MULTIPLIER,
-                        _PORE_SITE_CAP_FLOOR,
-                    )
-                    site_indices = pore_indices[:pore_cap]
+            has_void = any(unique_sites[i].kind == "void" for i in site_indices)
+            if has_void:
+                pore_cap = max(
+                    int(config.num_placements or _PORE_SITE_CAP_NUM_PLACEMENTS_DEFAULT)
+                    * _PORE_SITE_CAP_MULTIPLIER,
+                    _PORE_SITE_CAP_FLOOR,
+                )
+                site_indices = _cap_ranked_site_indices(
+                    unique_sites,
+                    site_indices,
+                    cap=pore_cap,
+                )
     else:
         site_indices = []
         use_sites = False
@@ -360,6 +383,16 @@ def _site_type_for_grid(info: _SpecGridInfo, site_idx: int) -> str | None:
     if not info.use_sites or site_idx < 0 or site_idx >= len(sites):
         return None
     return str(sites[site_idx].site_type)
+
+
+def _site_is_void_for_grid(info: _SpecGridInfo, site_idx: int) -> bool:
+    """Whether the catalog site at *site_idx* is a void (full ``z_fraction`` axis)."""
+    if info.is_dissociative:
+        return False
+    sites = info.unique_sites
+    if not info.use_sites or site_idx < 0 or site_idx >= len(sites):
+        return False
+    return sites[site_idx].kind == "void"
 
 
 def enumerate_placement_specs(
@@ -425,7 +458,11 @@ def enumerate_placement_specs(
     if config.adaptive_parallel_fraction and info.flat_aromatic:
         parallel_fraction = _estimate_parallel_fraction(info.symbols, smiles)
 
-    prefer_pores = config.material_type == "porous"
+    prefer_pores = (
+        any(info.unique_sites[i].kind == "void" for i in info.site_indices)
+        if info.use_sites and info.site_indices
+        else False
+    )
     return policy.build_batch_placement_specs(
         n_conformers=len(conformers),
         site_indices=info.site_indices,
@@ -440,12 +477,13 @@ def enumerate_placement_specs(
         n_hollow_pairs=info.n_hollow_pairs,
         seed=eff_seed,
         preferred_site_types=("pore",) if prefer_pores else (),
-        # Quality-sorted pore lists: keep open pores near the front of the draw.
+        # Quality-sorted void lists: keep open pores near the front of the draw.
         site_index_weight=(_POROUS_SITE_INDEX_WEIGHT if prefer_pores else 0.0),
         conformer_energies=conformer_energies,
         conformer_weighting=config.conformer_weighting,
         boltzmann_temperature=config.boltzmann_temperature,
         allows_conformer_site=info.allows_conformer_site,
+        site_is_void_for_index=lambda site_idx: _site_is_void_for_grid(info, site_idx),
     )
 
 
@@ -496,6 +534,7 @@ def estimate_placement_spec_capacity(
         dissociative=info.is_dissociative,
         n_hollow_pairs=info.n_hollow_pairs,
         site_type_for_index=lambda site_idx: _site_type_for_grid(info, site_idx),
+        site_is_void_for_index=lambda site_idx: _site_is_void_for_grid(info, site_idx),
     )
 
 

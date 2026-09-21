@@ -53,9 +53,9 @@ def _parallel_tilt_aip_counts() -> list[int]:
     return [len(_parallel_aip_values(tl)) for tl in _TILT_PARALLEL]
 
 
-def _kept_z_count(site_type: str | None) -> int:
-    """Kept ``z_fraction`` samples: wall-near drops values below 0.5."""
-    if site_type in (None, "pore"):
+def _kept_z_count(site_type: str | None, *, is_void: bool = False) -> int:
+    """Kept ``z_fraction`` samples: wall sites drop values below 0.5."""
+    if is_void or site_type == "pore":
         return len(_Z_FRACTIONS)
     return sum(1 for z in _Z_FRACTIONS if float(z) >= 0.5)
 
@@ -63,12 +63,24 @@ def _kept_z_count(site_type: str | None) -> int:
 def _kept_z_total(
     site_indices: list[int],
     site_type_for_index: Callable[[int], str | None] | None,
+    *,
+    site_is_void_for_index: Callable[[int], bool] | None = None,
 ) -> int:
     """Sum of kept ``z_fraction`` samples over *site_indices*."""
     indices = site_indices if site_indices else [-1]
-    if site_type_for_index is None:
+    if site_type_for_index is None and site_is_void_for_index is None:
         return len(indices) * len(_Z_FRACTIONS)
-    return sum(_kept_z_count(site_type_for_index(int(i))) for i in indices)
+    return sum(
+        _kept_z_count(
+            None if site_type_for_index is None else site_type_for_index(int(i)),
+            is_void=(
+                False
+                if site_is_void_for_index is None
+                else bool(site_is_void_for_index(int(i)))
+            ),
+        )
+        for i in indices
+    )
 
 
 def _flat_aromatic_parallel_total(*, n_conformers: int, n_sites: int) -> int:
@@ -189,6 +201,7 @@ def max_batch_placement_specs(
     dissociative: bool = False,
     n_hollow_pairs: int = 0,
     site_type_for_index: Callable[[int], str | None] | None = None,
+    site_is_void_for_index: Callable[[int], bool] | None = None,
 ) -> int:
     """Closed-form count of policy-grid specs (per-branch clamp at ``_GRID_BUILD_CAP``).
 
@@ -211,10 +224,16 @@ def max_batch_placement_specs(
     n_hollow_pairs
         Number of hollow site pairs for dissociative placement.
     site_type_for_index
-        When set, wall-near sites count only ``z_fraction >= 0.5``. Omitted,
+        When set, wall sites count only ``z_fraction >= 0.5``. Omitted,
         the count is the full grid (an upper bound).
+    site_is_void_for_index
+        When set, void sites keep the full ``z_fraction`` axis (matches pose).
     """
-    z_total = _kept_z_total(site_indices, site_type_for_index)
+    z_total = _kept_z_total(
+        site_indices,
+        site_type_for_index,
+        site_is_void_for_index=site_is_void_for_index,
+    )
 
     if dissociative:
         if n_hollow_pairs <= 0:
@@ -537,6 +556,7 @@ def build_batch_placement_specs(
     conformer_weighting: str = "uniform",
     boltzmann_temperature: float = 300.0,
     allows_conformer_site: Callable[[int, int], bool] | None = None,
+    site_is_void_for_index: Callable[[int], bool] | None = None,
 ) -> list[PlacementSpec]:
     """BO candidate ``PlacementSpec`` list: full Cartesian grid (capped), then stratified subsample to *n_desired* (*seed*).
 
@@ -580,14 +600,21 @@ def build_batch_placement_specs(
             )
         )
 
+    def _is_void_site(site_idx: int) -> bool:
+        if site_is_void_for_index is not None:
+            return bool(site_is_void_for_index(int(site_idx)))
+        return site_type_for_index(int(site_idx)) == "pore"
+
     def _same_height_wall_duplicate(fields: dict[str, Any]) -> bool:
-        """Return whether a wall-near fraction below 0.5 repeats the contact COM."""
+        """Return whether a wall fraction below 0.5 repeats the contact COM."""
         if str(fields.get("orientation_type")) == "dissociative":
             return False
         if float(fields["z_fraction"]) >= 0.5:
             return False
         site_type = site_type_for_index(int(fields["site_index"]))
-        return site_type not in (None, "pore")
+        if site_type is None:
+            return False
+        return not _is_void_site(int(fields["site_index"]))
 
     def _collect(
         items: Iterable[dict[str, Any]],

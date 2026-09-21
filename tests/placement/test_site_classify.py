@@ -18,6 +18,7 @@ from metalsurfer.placement import (
 from metalsurfer.placement._constants import _NORMAL_K_NEIGHBOURS
 from metalsurfer.placement.site_classify import (
     _compute_local_normals_batch,
+    _outward_normal_or_none,
     site_env_fingerprint,
 )
 from metalsurfer.placement.site_context import _get_unique_sites_for_specs
@@ -694,3 +695,56 @@ def test_periodic_local_normals_builds_images_when_omitted():
     assert np.isfinite(normals).all()
     norms = np.linalg.norm(normals, axis=1)
     assert np.all(norms > 0.5)
+
+
+def test_outward_normal_flips_inward_and_drops_buried():
+    """Inward normals flip; buried points with no opening are dropped."""
+    # Surface triangle plus a subsurface atom so the centroid sits below.
+    positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.5, 0.866, 0.0],
+            [0.5, 0.289, -2.0],
+        ],
+        dtype=float,
+    )
+    tree = KDTree(positions)
+    xyz = np.array([0.5, 0.289, 0.0], dtype=float)
+    flipped = _outward_normal_or_none(
+        xyz,
+        np.array([0.0, 0.0, -1.0]),
+        tree,
+        positions,
+        probe_radius=0.8,
+    )
+    assert flipped is not None
+    assert float(flipped[2]) > 0.0
+
+    kept = _outward_normal_or_none(
+        xyz,
+        np.array([0.0, 0.0, 1.0]),
+        tree,
+        positions,
+        probe_radius=0.8,
+    )
+    assert kept is not None
+    assert float(kept[2]) > 0.0
+
+    # Centre of a filled cube: stepping any direction stays inside the cloud.
+    cube = np.array(
+        [[x, y, z] for x in (0.0, 1.0) for y in (0.0, 1.0) for z in (0.0, 1.0)],
+        dtype=float,
+    )
+    buried = np.array([0.5, 0.5, 0.5], dtype=float)
+    cube_tree = KDTree(cube)
+    assert (
+        _outward_normal_or_none(
+            buried,
+            np.array([0.0, 0.0, 1.0]),
+            cube_tree,
+            cube,
+            probe_radius=0.2,
+        )
+        is None
+    )

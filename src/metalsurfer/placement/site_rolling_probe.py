@@ -54,6 +54,7 @@ from .site_adaptive_grid import (
     _side_policy_mask,
     _support_positions_for_candidate,
     adaptive_grid_spacing,
+    resolve_side_policy_for_pbc,
 )
 from .site_coords import (
     _minimum_image_cartesian_delta,
@@ -500,23 +501,23 @@ def _finalize_rolling_contacts(
     return _merge_by_radius(unique, cell=cell, pbc=pbc, merge_radius=merge_radius)
 
 
-def _exposure_for_material(
+def _exposure_for_pbc(
     vertices: np.ndarray,
     normals: np.ndarray,
     tree: KDTree,
     framework_radii: np.ndarray,
     n_atoms: int,
     *,
-    material_type: str,
     cell: np.ndarray,
     pbc: np.ndarray,
     side_policy: SidePolicy,
     positions: np.ndarray,
 ) -> np.ndarray:
-    """Ray exposure + side policy; shorter rays inside porous frameworks."""
+    """Ray exposure + side policy; shorter rays under full 3D PBC."""
+    n_periodic = int(np.count_nonzero(np.asarray(pbc, dtype=bool).reshape(3)))
     n_steps = (
         int(_ROLLING_PROBE_POROUS_EXPOSURE_N_STEPS)
-        if material_type == "porous"
+        if n_periodic == 3
         else int(_ADAPTIVE_GRID_EXPOSURE_N_STEPS)
     )
     keep = _ray_exposure_mask(
@@ -539,32 +540,11 @@ def _exposure_for_material(
     return keep
 
 
-def _resolve_side_policy(
-    material_type: str,
-    side_policy: SidePolicy | Literal["all", "positive", "negative", "external"],
-) -> SidePolicy:
-    """Remap the shared config default ``positive`` on non-slab materials."""
-    if material_type == "porous" and side_policy == "positive":
-        return "all"
-    if material_type == "nanoparticle" and side_policy == "positive":
-        return "external"
-    if side_policy == "all":
-        return "all"
-    if side_policy == "positive":
-        return "positive"
-    if side_policy == "negative":
-        return "negative"
-    if side_policy == "external":
-        return "external"
-    raise ValueError(f"Unknown side_policy {side_policy!r}")
-
-
 def generate_rolling_probe_sites(
     positions: np.ndarray,
     cell: np.ndarray,
     pbc: np.ndarray,
     *,
-    material_type: str,
     probe_radius: float,
     max_site_distance: float,
     n_jobs: int = _DEFAULT_N_JOBS,
@@ -579,13 +559,14 @@ def generate_rolling_probe_sites(
     *probe_radius* / *max_site_distance* map onto the clearance window
     (element-dependent surface), matching every other site plugin. Catalog
     density uses the same NMS floor as default ``adaptive_grid`` (spacing
-    ``0.70`` Å).
+    ``0.70`` Å). Face / exposure policy follows *pbc* geometry, not material
+    labels.
     """
     positions = np.asarray(positions, dtype=float)
     cell = np.asarray(cell, dtype=float)
     pbc = np.asarray(pbc, dtype=bool)
     n_atoms = len(positions)
-    side_policy = _resolve_side_policy(material_type, side_policy)
+    side_policy = resolve_side_policy_for_pbc(pbc, side_policy)
     if framework_radii is None:
         if symbols is not None and len(symbols) == n_atoms:
             framework_radii = _framework_radii_from_symbols(symbols)
@@ -687,13 +668,12 @@ def generate_rolling_probe_sites(
         return empty
 
     verts, _nn, _clears, _, normals = _candidates_to_arrays(candidates, tree=tree)
-    keep = _exposure_for_material(
+    keep = _exposure_for_pbc(
         verts,
         normals,
         tree,
         framework_radii,
         n_atoms,
-        material_type=material_type,
         cell=cell,
         pbc=pbc,
         side_policy=side_policy,

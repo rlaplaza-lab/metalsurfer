@@ -11,14 +11,12 @@ from .._utils import cell_has_volume
 from ..symmetry import SymmetryAnalyzer
 from ._constants import (
     _ADSORBATE_COVALENT_RADIUS_FALLBACK,
-    _ATOP_INJECTION_HEIGHT_FACTOR,
     _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     _DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
     _DEFAULT_SYMMETRY_TOLERANCE,
     _PARALLEL_Z_MIN_HI_MARGIN,
     _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
-    _SURFACE_NORMAL_FALLBACK_NORM_EPS,
     _VORONOI_AUTO_WIDEN_MAX_SCALE,
     _VORONOI_AUTO_WIDEN_PROBE_SCALE,
 )
@@ -45,39 +43,22 @@ from .site_coords import (
     _periodic_image_offsets,
     _pore_threshold_from_mean_radius,
     _project_to_slab_plane,
-    _shift_along_slab_normal,
     _slab_normal,
     _slab_plane_projectors,
     _top_layer_tolerance_from_mean_radius,
     _union_find_cluster,
-    _wrap_cartesian,
     _wrap_fractional,
     top_layer_mask_by_normal,
-)
-from .site_np import (
-    _convex_hull_surface_mask,
-    _surface_atom_normals,
-    _try_convex_hull,
 )
 from .site_plugins import (
     SiteGenerationContext,
     resolve_site_generator,
-    slice_candidate_arrays,
 )
 from .site_plugins.helpers import (
     PlanarWidenScratch as _PlanarWidenScratch,
 )
 from .site_plugins.helpers import (
     bounding_box_cell as _bounding_box_cell,
-)
-from .site_plugins.helpers import (
-    candidate_enrichment_frames as _candidate_enrichment_frames,
-)
-from .site_plugins.helpers import (
-    median_nn_or_fallback as _median_nn_or_fallback,
-)
-from .site_plugins.helpers import (
-    merge_dedup_site_arrays as _merge_dedup_site_arrays,
 )
 from .site_plugins.helpers import (
     top_layer_is_planar_from_arrays as _top_layer_is_planar_from_arrays,
@@ -147,177 +128,6 @@ def _delaunay_classify_inputs(
         slab_top_atom_indices,
         class_index,
     )
-
-
-def _inject_atop_sites(
-    vertices: np.ndarray,
-    nn_dists: np.ndarray,
-    source_hints: list[str],
-    *,
-    positions: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-    material_type: str,
-    local_tree: KDTree,
-    accessibility_tree: KDTree | None,
-    median_nn: float | None,
-    slab_top_atom_indices: np.ndarray | None,
-    has_topology_atop: bool,
-    probe_radius: float,
-    max_site_distance: float,
-    atom_indices: list[tuple[int, ...]] | None = None,
-    normals: np.ndarray | None = None,
-    clearances: np.ndarray | None = None,
-) -> tuple[
-    np.ndarray,
-    np.ndarray,
-    list[str],
-    list[tuple[int, ...]],
-    np.ndarray | None,
-    np.ndarray | None,
-]:
-    """Inject atop when topology did not already produce any.
-
-    Uses the same height as the topology generator when *median_nn* is supplied.
-    *accessibility_tree* (PBC-aware) gates distances under periodic boundaries.
-    When *normals* / *clearances* are supplied, frames for injected atops are
-    appended so enrichment stays aligned with the merged catalog.
-    """
-    atoms = (
-        list(atom_indices)
-        if atom_indices is not None
-        else [_EMPTY_ATOM_INDICES for _ in range(len(vertices))]
-    )
-    if material_type in ("slab", "nanoparticle") and has_topology_atop:
-        return vertices, nn_dists, source_hints, atoms, normals, clearances
-    if material_type not in ("slab", "nanoparticle"):
-        return vertices, nn_dists, source_hints, atoms, normals, clearances
-
-    if median_nn is None:
-        ref = (
-            positions[slab_top_atom_indices]
-            if material_type == "slab" and slab_top_atom_indices is not None
-            else positions
-        )
-        median_nn = _median_nn_or_fallback(
-            nn_dists if material_type == "slab" else np.empty(0, dtype=float),
-            reference_positions=ref,
-            cell=cell,
-            pbc=pbc,
-        )
-    atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
-
-    if material_type == "slab":
-        if slab_top_atom_indices is None:
-            return vertices, nn_dists, source_hints, atoms, normals, clearances
-        top_atom_indices = np.asarray(slab_top_atom_indices, dtype=int)
-        atom_normals = None
-    else:
-        hull = _try_convex_hull(positions)
-        if hull is None:
-            return vertices, nn_dists, source_hints, atoms, normals, clearances
-        top_atom_indices = np.nonzero(_convex_hull_surface_mask(positions, hull=hull))[
-            0
-        ].astype(int)
-        if len(top_atom_indices) == 0:
-            return vertices, nn_dists, source_hints, atoms, normals, clearances
-        atom_normals = _surface_atom_normals(positions, top_atom_indices, hull)
-
-    candidate_verts: list[np.ndarray] = []
-    candidate_probes: list[np.ndarray] = []
-    candidate_atom_ids: list[int] = []
-    candidate_normal_list: list[np.ndarray] = []
-    for li, ai in enumerate(top_atom_indices):
-        atom_pos = positions[int(ai)]
-        if material_type == "slab":
-            probe = _shift_along_slab_normal(atom_pos.reshape(1, 3), cell, atop_height)[
-                0
-            ]
-            if np.any(pbc):
-                probe = _wrap_cartesian(probe.reshape(1, 3), cell, pbc)[0]
-            n_hat = _slab_normal(cell)
-            anchor = atom_pos
-            if np.any(pbc):
-                anchor = _wrap_cartesian(atom_pos.reshape(1, 3), cell, pbc)[0]
-        else:
-            assert atom_normals is not None
-            n_hat = atom_normals[li]
-            if float(np.linalg.norm(n_hat)) < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
-                continue
-            probe = atom_pos + atop_height * n_hat
-            anchor = atom_pos
-        candidate_verts.append(anchor)
-        candidate_probes.append(probe)
-        candidate_atom_ids.append(int(ai))
-        candidate_normal_list.append(np.asarray(n_hat, dtype=float))
-
-    if not candidate_verts:
-        return vertices, nn_dists, source_hints, atoms, normals, clearances
-
-    candidate_arr = np.asarray(candidate_verts, dtype=float)
-    probe_arr = np.asarray(candidate_probes, dtype=float)
-    gate_tree = (
-        accessibility_tree
-        if accessibility_tree is not None and np.any(pbc)
-        else local_tree
-    )
-    d_nn_all = np.asarray(gate_tree.query(probe_arr, k=1)[0], dtype=float).ravel()
-    keep_acc = (d_nn_all >= float(probe_radius)) & (
-        d_nn_all <= float(max_site_distance)
-    )
-    if not np.any(keep_acc):
-        return vertices, nn_dists, source_hints, atoms, normals, clearances
-
-    candidate_arr = candidate_arr[keep_acc]
-    candidate_dist_arr = d_nn_all[keep_acc]
-    kept_atom_ids = [candidate_atom_ids[i] for i in np.nonzero(keep_acc)[0]]
-    candidate_sources = ["atop_injected"] * len(candidate_arr)
-    candidate_atoms = [(ai,) for ai in kept_atom_ids]
-    candidate_normals = np.asarray(
-        [candidate_normal_list[i] for i in np.nonzero(keep_acc)[0]], dtype=float
-    )
-    candidate_clearances = candidate_dist_arr.copy()
-
-    # Align existing enrichment length before merge; rebuild if missing/mismatched.
-    if normals is None or clearances is None or len(normals) != len(vertices):
-        normals, clearances = _candidate_enrichment_frames(
-            vertices,
-            nn_dists,
-            atoms,
-            positions=positions,
-            cell=cell,
-            pbc=pbc,
-            material_type=material_type,
-            accessibility_tree=accessibility_tree,
-        )
-
-    n_existing = len(vertices)
-    vertices, nn_dists, source_hints, atoms, normals, clearances = (
-        _merge_dedup_site_arrays(
-            vertices,
-            nn_dists,
-            source_hints,
-            candidate_arr,
-            candidate_dist_arr,
-            candidate_sources,
-            cell=cell,
-            pbc=pbc,
-            atom_indices=atoms,
-            new_atom_indices=candidate_atoms,
-            normals=normals,
-            clearances=clearances,
-            new_normals=candidate_normals,
-            new_clearances=candidate_clearances,
-        )
-    )
-    n_injected = len(vertices) - n_existing
-    logger.debug(
-        "Injected %d atop candidate sites (%d total sites)",
-        max(n_injected, 0),
-        len(vertices),
-    )
-
-    return vertices, nn_dists, source_hints, atoms, normals, clearances
 
 
 def get_unified_sites(
@@ -461,11 +271,15 @@ def _get_unified_sites_with_plugin_vertices(
     if sites or not auto_widen:
         return sites, plugin_vertices
 
+    # Caller (_enumerate_unified_sites) already validates material_type.
+    assert material_type is not None
+    plugin = resolve_site_generator(site_generator, material_type)
+    if not plugin.widens_distance_window:
+        return sites, plugin_vertices
+
     positions = atoms.get_positions()
     symbols = list(atoms.get_chemical_symbols())
     cell = np.asarray(atoms.get_cell(), dtype=float)
-    # Caller (_enumerate_unified_sites) already validates material_type.
-    assert material_type is not None
     pbc = np.asarray(material_aware_pbc(material_type), dtype=bool)
     derived_probe, derived_max = _derive_voronoi_distance_window(
         positions, symbols, pbc, cell
@@ -475,8 +289,9 @@ def _get_unified_sites_with_plugin_vertices(
     wide_probe = float(eff_probe * _VORONOI_AUTO_WIDEN_PROBE_SCALE)
     wide_max = float(max(eff_max * _VORONOI_AUTO_WIDEN_MAX_SCALE, wide_probe))
     logger.info(
-        "Voronoi auto-widen: retrying site detection with probe=%.3f max=%.3f "
+        "%s auto-widen: retrying site detection with probe=%.3f max=%.3f "
         "(was probe=%.3f max=%.3f)",
+        plugin.name,
         wide_probe,
         wide_max,
         eff_probe,
@@ -542,15 +357,29 @@ def _enumerate_unified_sites(
     positions = atoms.get_positions()
     cell = np.asarray(atoms.get_cell(), dtype=float)
     atoms_pbc = np.asarray(atoms.get_pbc(), dtype=bool)
-    pbc_for_voronoi = np.asarray(material_aware_pbc(material_type), dtype=bool)
-    if not np.array_equal(atoms_pbc, pbc_for_voronoi):
-        logger.debug(
-            "Using material_aware_pbc(%r)=%s for site enumeration "
-            "(atoms.get_pbc() was %s)",
-            material_type,
-            pbc_for_voronoi.tolist(),
-            atoms_pbc.tolist(),
-        )
+    material_pbc = np.asarray(material_aware_pbc(material_type), dtype=bool)
+    # Wall-near plugins follow the structure PBC mask; topology / Voronoi keep
+    # the material convention so mis-set Atoms.pbc cannot flood those paths.
+    if plugin.uses_structure_pbc:
+        pbc_for_sites = atoms_pbc.copy()
+        if not np.array_equal(atoms_pbc, material_pbc):
+            logger.debug(
+                "site_generator=%r using structure pbc=%s (material_aware_pbc(%r)=%s)",
+                plugin.name,
+                pbc_for_sites.tolist(),
+                material_type,
+                material_pbc.tolist(),
+            )
+    else:
+        pbc_for_sites = material_pbc.copy()
+        if not np.array_equal(atoms_pbc, material_pbc):
+            logger.debug(
+                "Using material_aware_pbc(%r)=%s for site enumeration "
+                "(atoms.get_pbc() was %s)",
+                material_type,
+                material_pbc.tolist(),
+                atoms_pbc.tolist(),
+            )
 
     symbols = atoms.get_chemical_symbols()
     if top_layer_tolerance is None or pore_threshold is None:
@@ -569,16 +398,16 @@ def _enumerate_unified_sites(
 
     if not cell_has_volume(cell):
         cell = _bounding_box_cell(positions)
-        if np.any(pbc_for_voronoi):
+        if np.any(pbc_for_sites):
             logger.warning(
                 "Input cell is degenerate while PBC is enabled; using a padded "
                 "bounding-box cell with PBC disabled for site enumeration"
             )
-            pbc_for_voronoi[:] = False
+            pbc_for_sites[:] = False
 
     if probe_radius is None or max_site_distance is None:
         derived_probe, derived_max = _derive_voronoi_distance_window(
-            positions, symbols, pbc_for_voronoi, cell
+            positions, symbols, pbc_for_sites, cell
         )
         probe_radius = derived_probe if probe_radius is None else probe_radius
         max_site_distance = (
@@ -588,7 +417,7 @@ def _enumerate_unified_sites(
     ctx = SiteGenerationContext(
         positions=positions,
         cell=cell,
-        pbc=pbc_for_voronoi,
+        pbc=pbc_for_sites,
         symbols=list(symbols),
         material_type=material_type,
         probe_radius=float(probe_radius),
@@ -624,64 +453,9 @@ def _enumerate_unified_sites(
     clearances = batch.clearances
     local_tree = KDTree(positions)
 
-    if batch.apply_slab_height_mask and len(vertices) > 0:
-        heights = _height_along_slab_normal(positions, cell)
-        h_surface = float(np.max(heights))
-        nn_margin = (
-            float(np.median(nn_dists))
-            if len(nn_dists) > 0
-            else float(top_layer_tolerance)
-        )
-        h_min = h_surface - max(float(top_layer_tolerance), nn_margin)
-        keep_mask = _height_along_slab_normal(vertices, cell) >= h_min
-        (
-            vertices,
-            nn_dists,
-            source_hints,
-            atom_indices,
-            normals,
-            clearances,
-        ) = slice_candidate_arrays(
-            vertices,
-            nn_dists,
-            source_hints,
-            atom_indices,
-            keep_mask,
-            normals=normals,
-            clearances=clearances,
-        )
-
-    if batch.inject_atop:
-        (
-            vertices,
-            nn_dists,
-            source_hints,
-            atom_indices,
-            normals,
-            clearances,
-        ) = _inject_atop_sites(
-            vertices,
-            nn_dists,
-            source_hints,
-            positions=positions,
-            cell=cell,
-            pbc=pbc_for_voronoi,
-            material_type=material_type,
-            local_tree=local_tree,
-            accessibility_tree=batch.accessibility_tree,
-            median_nn=batch.topology_median_nn,
-            slab_top_atom_indices=batch.slab_top_atom_indices,
-            has_topology_atop=batch.has_topology_atop,
-            probe_radius=float(probe_radius),
-            max_site_distance=float(max_site_distance),
-            atom_indices=atom_indices,
-            normals=normals,
-            clearances=clearances,
-        )
-
     if len(vertices) == 0:
         logger.warning(
-            "No accessible sites after atop injection for %d-atom "
+            "No accessible sites for %d-atom "
             "structure (probe_radius=%s, max_distance=%s, material_type=%r)",
             len(atoms),
             f"{probe_radius:.2f}" if probe_radius is not None else "auto",
@@ -700,7 +474,7 @@ def _enumerate_unified_sites(
         delaunay_inputs = _delaunay_classify_inputs(
             positions,
             cell,
-            pbc_for_voronoi,
+            pbc_for_sites,
             material_type=material_type,
             site_classification_method=site_classification_method,
             slab_top_atom_indices=batch.slab_top_atom_indices,
@@ -722,16 +496,17 @@ def _enumerate_unified_sites(
         pore_threshold,
         cell=cell,
         source_hints=source_hints,
-        pbc=pbc_for_voronoi,
+        pbc=pbc_for_sites,
         delaunay=delaunay_inputs,
         atom_indices=atom_indices,
         normals=normals,
         clearances=clearances,
+        probe_radius=float(probe_radius) if probe_radius is not None else None,
     )
     if cell_has_volume(cell):
         # Deterministic fractional-xyz order for stable site_index / raw catalog.
         all_xyz = np.asarray([s.xyz for s in sites], dtype=float).reshape(-1, 3)
-        all_frac = _wrap_fractional(_cart_to_frac(all_xyz, cell), pbc_for_voronoi)
+        all_frac = _wrap_fractional(_cart_to_frac(all_xyz, cell), pbc_for_sites)
 
         def _site_frac_key(i: int) -> tuple:
             frac = all_frac[i]
@@ -884,7 +659,7 @@ def _cluster_equivalent_sites(
 ) -> list[Site]:
     """Group equivalent sites; return unique representatives.
 
-    Merges only when spatially close (material-aware metric) and
+    Merges only when spatially close (PBC-aware metric) and
     ``env_fingerprint`` matches. ``site_source`` is ignored so topology,
     Voronoi, and atop-injected candidates in the same pocket collapse.
     """
@@ -893,6 +668,8 @@ def _cluster_equivalent_sites(
 
     n = len(sites)
     mat_type = material_type_for_placement(sites[0], when_no_site="slab")
+    pbc = np.asarray(material_aware_pbc(mat_type), dtype=bool)
+    n_periodic = int(np.count_nonzero(pbc))
 
     def _get_xyz(s: Site) -> np.ndarray:
         return np.asarray(s.xyz, dtype=float)
@@ -909,9 +686,9 @@ def _cluster_equivalent_sites(
     order = sorted(range(n), key=lambda i: _sort_key(sites[i]))
     sorted_sites = [sites[i] for i in order]
     fps = [_env_fingerprint(s) for s in sorted_sites]
+    coords = np.array([_get_xyz(s) for s in sorted_sites])
 
-    if mat_type == "nanoparticle" or not cell_has_volume(cell):
-        coords = np.array([_get_xyz(s) for s in sorted_sites])
+    if n_periodic == 0 or not cell_has_volume(cell):
         reps = _cluster_with_metric(
             n,
             coords,
@@ -922,10 +699,8 @@ def _cluster_equivalent_sites(
         result = [sorted_sites[i] for i in reps]
         return sorted(result, key=_sort_key)
 
-    if mat_type == "porous":
-        coords = np.array([_get_xyz(s) for s in sorted_sites])
-        pbc_full = np.asarray(material_aware_pbc(mat_type), dtype=bool)
-        image_offsets = _periodic_image_offsets(cell, pbc_full, tolerance)
+    if n_periodic == 3:
+        image_offsets = _periodic_image_offsets(cell, pbc, tolerance)
         reps = _cluster_with_metric(
             n,
             coords,
@@ -935,27 +710,24 @@ def _cluster_equivalent_sites(
         )
         result = [sorted_sites[i] for i in reps]
 
-        # Prefer open pore sites (larger nn_distance) so early caps / stratified
-        # samples are less likely to start inside framework walls.
-        def _porous_priority(s: Site) -> tuple:
+        def _void_priority(s: Site) -> tuple:
             xyz = _get_xyz(s)
             nn = float(s.nn_distance) if s.nn_distance is not None else -1.0
-            pore_rank = 0 if s.site_type == "pore" else 1
-            return (pore_rank, -nn, float(xyz[0]), float(xyz[1]), float(xyz[2]))
+            void_rank = 0 if s.kind == "void" else 1
+            return (void_rank, -nn, float(xyz[0]), float(xyz[1]), float(xyz[2]))
 
-        return sorted(result, key=_porous_priority)
+        return sorted(result, key=_void_priority)
 
+    # One (or two) periodic axes: in-plane MIC + height tolerance (slab path).
     z_tol = (
         z_abs_tolerance
         if z_abs_tolerance is not None
         else _SLAB_Z_ABS_TOLERANCE_DEFAULT_ANGSTROM
     )
     pinv_ab_T, _ = _slab_plane_projectors(cell)
-    coords = np.array([_get_xyz(s) for s in sorted_sites])
     heights = _height_along_slab_normal(coords, cell)
-    pbc_slab = np.asarray(material_aware_pbc(mat_type), dtype=bool)
     r_search = float(np.hypot(tolerance, z_tol))
-    image_offsets = _periodic_image_offsets(cell, pbc_slab, r_search)
+    image_offsets = _periodic_image_offsets(cell, pbc, r_search)
     n_hat = _slab_normal(cell)
     inv_cell = np.linalg.inv(cell)
 
@@ -964,10 +736,9 @@ def _cluster_equivalent_sites(
         xyz_b = coords[b]
         delta_frac = _minimum_image_fractional_delta(
             (xyz_b - xyz_a).reshape(1, 3) @ inv_cell,
-            pbc_slab,
+            pbc,
         )[0]
         delta_cart = _frac_to_cart(delta_frac.reshape(1, 3), cell)[0]
-        # In-plane distance: drop the component along the slab normal.
         delta_plane = delta_cart - float(np.dot(delta_cart, n_hat)) * n_hat
         dxy = float(np.linalg.norm(delta_plane))
         dz = abs(float(heights[a]) - float(heights[b]))
@@ -983,8 +754,6 @@ def _cluster_equivalent_sites(
     )
     result = [sorted_sites[i] for i in reps]
 
-    # Batched heights for the representatives (one slab-normal + projection
-    # instead of a cross product and matrix inverse per site).
     rep_xyz = np.asarray([_get_xyz(s) for s in result], dtype=float).reshape(-1, 3)
     rep_heights = _height_along_slab_normal(rep_xyz, cell)
 
@@ -992,8 +761,6 @@ def _cluster_equivalent_sites(
         xyz = rep_xyz[i]
         frac2 = xyz @ pinv_ab_T
         frac2 = frac2 - np.floor(frac2)
-        # Use the height along the slab normal (not Cartesian z) so the ordered
-        # representatives follow the surface, not an arbitrary tilted-z ordering.
         h = float(rep_heights[i])
         return np.array([float(frac2[0]), float(frac2[1]), h])
 

@@ -10,8 +10,11 @@ from scipy.spatial import KDTree
 from .._utils import cell_has_volume
 from ._constants import (
     _DELAUNAY_BRIDGE_THRESHOLD_FRACTION,
+    _DISTANCE_ZERO_EPS,
     _KD_RADIUS_SEARCH_PADDING,
     _NORMAL_K_NEIGHBOURS,
+    _OUTWARD_NORMAL_STEP_FLOOR_ANGSTROM,
+    _OUTWARD_NORMAL_STEP_PROBE_SCALE,
     _SITE_CLASSIFICATION_NEIGHBOURS,
     _SITE_ENV_FP_DIST_BIN,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
@@ -25,7 +28,7 @@ from .site_coords import (
     _slab_normal,
     project_anchor_to_support_plane,
 )
-from .site_types import Site
+from .site_types import Site, site_kind_from_type_and_supports
 from .site_voronoi import (
     _classify_voronoi_site_from_neighbors,
 )
@@ -471,6 +474,62 @@ def _site_type_from_support_count(n_support: int) -> str:
     return "hollow"
 
 
+def _nearest_framework_clearance(
+    point: np.ndarray,
+    framework_tree: KDTree,
+) -> float:
+    """Distance from *point* to the nearest framework atom in *framework_tree*."""
+    d, _ = framework_tree.query(np.asarray(point, dtype=float).reshape(1, 3), k=1)
+    return float(np.atleast_1d(d)[0])
+
+
+def _outward_normal_or_none(
+    xyz: np.ndarray,
+    normal: np.ndarray,
+    framework_tree: KDTree,
+    positions: np.ndarray,
+    *,
+    probe_radius: float | None,
+) -> np.ndarray | None:
+    """Return an outward unit normal, or ``None`` when the site is buried.
+
+    Steps a short probe along ±*normal*. Prefer the direction that increases
+    clearance more. When both steps leave the nuclear plane equally (typical
+    for wall anchors), use the side whose neighbourhood has atoms behind the
+    site (negative mean projection). Drop when neither direction opens space.
+    """
+    n = np.asarray(normal, dtype=float).reshape(3)
+    nrm = float(np.linalg.norm(n))
+    if nrm <= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+        return None
+    n_hat = n / nrm
+    step = _OUTWARD_NORMAL_STEP_FLOOR_ANGSTROM
+    if probe_radius is not None and float(probe_radius) > 0.0:
+        step = max(
+            _OUTWARD_NORMAL_STEP_PROBE_SCALE * float(probe_radius),
+            _OUTWARD_NORMAL_STEP_FLOOR_ANGSTROM,
+        )
+    base = np.asarray(xyz, dtype=float).reshape(3)
+    c0 = _nearest_framework_clearance(base, framework_tree)
+    c_fwd = _nearest_framework_clearance(base + step * n_hat, framework_tree)
+    c_back = _nearest_framework_clearance(base - step * n_hat, framework_tree)
+    eps = _DISTANCE_ZERO_EPS
+    if c_fwd > c_back + eps and c_fwd > c0 + eps:
+        return n_hat
+    if c_back > c_fwd + eps and c_back > c0 + eps:
+        return -n_hat
+    # Planar wall anchors: ±step clear equally. Orient away from the
+    # framework centroid (surface sites point outward; buried stay dropped).
+    if c_fwd > c0 + eps or c_back > c0 + eps:
+        com = np.mean(np.asarray(positions, dtype=float), axis=0)
+        away = base - com
+        away_nrm = float(np.linalg.norm(away))
+        if away_nrm <= eps or float(np.dot(n_hat, away / away_nrm)) >= 0.0:
+            return n_hat
+        return -n_hat
+    return None
+
+
 def _classify_vertices(
     ctx: _ClassificationContext,
     vertices: np.ndarray,
@@ -486,6 +545,7 @@ def _classify_vertices(
     cell: np.ndarray,
     normals: np.ndarray | None = None,
     clearances: np.ndarray | None = None,
+    probe_radius: float | None = None,
 ) -> list[Site]:
     n = len(vertices)
     hints = list(source_hints) if source_hints is not None else ["voronoi"] * n
@@ -573,18 +633,31 @@ def _classify_vertices(
             normal = np.asarray(ctx.normals[i], dtype=float)
 
         xyz = np.asarray(vertices[i], dtype=float).copy()
+        support_idx: np.ndarray | None = None
         if site_type != "pore" and support:
             idx = np.asarray(support, dtype=int)
             n_pos = len(positions)
-            idx = idx[(idx >= 0) & (idx < n_pos)]
-            if idx.size > 0:
-                xyz = project_anchor_to_support_plane(xyz, normal, positions[idx])
+            support_idx = idx[(idx >= 0) & (idx < n_pos)]
+            if support_idx.size > 0:
+                xyz = project_anchor_to_support_plane(
+                    xyz, normal, positions[support_idx]
+                )
+
+        outward = _outward_normal_or_none(
+            xyz, normal, local_tree, positions, probe_radius=probe_radius
+        )
+        if outward is None:
+            continue
+        normal = outward
+        if support_idx is not None and support_idx.size > 0:
+            xyz = project_anchor_to_support_plane(xyz, normal, positions[support_idx])
 
         dists = _support_mic_distances(xyz, positions, support, cell, pbc)
         side = _side_label_from_normal(normal, material_type=material_type, cell=cell)
         env_fingerprint = site_env_fingerprint(support, symbols, dists, side_label=side)
         nn_distance = float(nn_dists[i])
         clearance = nn_distance if clearances is None else float(clearances[i])
+        kind = site_kind_from_type_and_supports(site_type, support)
         sites.append(
             Site(
                 xyz=xyz,
@@ -600,6 +673,7 @@ def _classify_vertices(
                 ),
                 clearance=clearance,
                 tangent_basis=tangent_basis_from_normal(normal),
+                kind=kind,
             )
         )
     return sites
@@ -627,7 +701,7 @@ def project_sites_to_support_plane(
     n_pos = len(pos)
     out: list[Site] = []
     for site in sites:
-        if site.site_type == "pore" or not site.slab_indices:
+        if site.kind == "void" or not site.slab_indices:
             out.append(site)
             continue
         idx = np.asarray(site.slab_indices, dtype=int)
@@ -669,6 +743,7 @@ def _build_site_records(
     atom_indices: list[tuple[int, ...]] | None = None,
     normals: np.ndarray | None = None,
     clearances: np.ndarray | None = None,
+    probe_radius: float | None = None,
 ) -> list[Site]:
     ctx = _build_classification_context(
         vertices,
@@ -693,4 +768,5 @@ def _build_site_records(
         cell=cell,
         normals=normals,
         clearances=clearances,
+        probe_radius=probe_radius,
     )

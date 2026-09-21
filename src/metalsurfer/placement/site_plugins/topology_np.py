@@ -10,13 +10,19 @@ from scipy.spatial import KDTree
 from .._constants import _ATOP_INJECTION_HEIGHT_FACTOR
 from ..site_np import _generate_nanoparticle_topology_sites
 from .base import SiteCandidateBatch, SiteGenerationContext
-from .helpers import candidate_enrichment_frames, median_nn_or_fallback
+from .helpers import (
+    candidate_enrichment_frames,
+    inject_atop_sites,
+    median_nn_or_fallback,
+)
 
 
 class TopologyNPGenerator:
     """Hull + nearest-neighbour topology for finite metal clusters."""
 
     name = "topology"
+    widens_distance_window = True
+    uses_structure_pbc = False
 
     def generate(
         self,
@@ -65,12 +71,37 @@ class TopologyNPGenerator:
             material_type="nanoparticle",
             accessibility_tree=local_tree,
         )
+        (
+            topo_vertices,
+            topo_dists,
+            topo_sources,
+            atom_indices,
+            normals,
+            clearances,
+        ) = inject_atop_sites(
+            topo_vertices,
+            topo_dists,
+            list(topo_sources),
+            positions=positions,
+            cell=cell,
+            pbc=pbc,
+            material_type="nanoparticle",
+            local_tree=local_tree,
+            accessibility_tree=local_tree,
+            median_nn=topology_median_nn,
+            slab_top_atom_indices=None,
+            has_topology_atop=has_topology_atop,
+            probe_radius=float(ctx.probe_radius),
+            max_site_distance=float(ctx.max_site_distance),
+            atom_indices=atom_indices,
+            normals=normals,
+            clearances=clearances,
+        )
         return SiteCandidateBatch(
             vertices=topo_vertices,
             nn_dists=topo_dists,
             source_hints=list(topo_sources),
             atom_indices=atom_indices,
-            inject_atop=True,
             has_topology_atop=has_topology_atop,
             topology_median_nn=topology_median_nn,
             normals=normals,

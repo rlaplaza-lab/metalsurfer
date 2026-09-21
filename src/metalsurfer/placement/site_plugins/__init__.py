@@ -17,6 +17,7 @@ from .base import (
     slice_candidate_arrays,
 )
 from .rolling_probe import RollingProbeGenerator
+from .topology import TopologyGenerator
 from .topology_np import TopologyNPGenerator
 from .topology_slab import TopologySlabGenerator
 from .voronoi import VoronoiGenerator
@@ -29,6 +30,7 @@ __all__ = [
     "SiteCandidateBatch",
     "SiteGenerationContext",
     "SiteGenerator",
+    "TopologyGenerator",
     "TopologyNPGenerator",
     "TopologySlabGenerator",
     "VoronoiGenerator",
@@ -38,22 +40,16 @@ __all__ = [
     "slice_candidate_arrays",
 ]
 
-# Explicit (resolved_name, material_type) → generator class.
-_SITE_GENERATOR_FACTORY: dict[tuple[str, str], type] = {
-    ("topology", "slab"): TopologySlabGenerator,
-    ("topology", "nanoparticle"): TopologyNPGenerator,
-    ("voronoi", "slab"): VoronoiGenerator,
-    ("voronoi", "porous"): VoronoiGenerator,
-    ("adaptive_grid", "slab"): AdaptiveGridGenerator,
-    ("adaptive_grid", "nanoparticle"): AdaptiveGridGenerator,
-    ("adaptive_grid", "porous"): AdaptiveGridGenerator,
-    ("rolling_probe", "slab"): RollingProbeGenerator,
-    ("rolling_probe", "nanoparticle"): RollingProbeGenerator,
-    ("rolling_probe", "porous"): RollingProbeGenerator,
+# One entry per plugin id; material allowlists live in site_plugin_ids.
+_SITE_GENERATOR_FACTORY: dict[str, type] = {
+    "topology": TopologyGenerator,
+    "voronoi": VoronoiGenerator,
+    "adaptive_grid": AdaptiveGridGenerator,
+    "rolling_probe": RollingProbeGenerator,
 }
 
 
 def resolve_site_generator(name: str, material_type: str) -> SiteGenerator:
     """Return the plugin for *name* and *material_type*."""
     resolved = resolved_site_generator_name(name, material_type)
-    return _SITE_GENERATOR_FACTORY[(resolved, material_type)]()
+    return _SITE_GENERATOR_FACTORY[resolved]()

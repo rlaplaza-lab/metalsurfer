@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 import numpy as np
+from scipy.spatial import KDTree
 
 from .._constants import _ATOP_INJECTION_HEIGHT_FACTOR
 from ..site_coords import top_layer_mask_by_normal
@@ -13,7 +14,9 @@ from ..site_voronoi import _generate_slab_topology_sites, _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext
 from .helpers import (
     PlanarWidenScratch,
+    apply_slab_height_mask,
     candidate_enrichment_frames,
+    inject_atop_sites,
     median_nn_or_fallback,
     merge_dedup_site_arrays,
     periodic_accessibility_tree,
@@ -27,6 +30,8 @@ class TopologySlabGenerator:
     """Hybrid slab generator (topology + Voronoi when the top layer is rough)."""
 
     name = "topology"
+    widens_distance_window = True
+    uses_structure_pbc = False
 
     def generate(
         self,
@@ -170,14 +175,58 @@ class TopologySlabGenerator:
             accessibility_tree=accessibility_tree,
         )
 
+        (
+            vertices,
+            nn_dists,
+            source_hints,
+            atom_indices,
+            normals,
+            clearances,
+        ) = apply_slab_height_mask(
+            vertices,
+            nn_dists,
+            source_hints,
+            atom_indices,
+            positions=positions,
+            cell=cell,
+            top_layer_tolerance=float(top_layer_tolerance),
+            normals=normals,
+            clearances=clearances,
+        )
+        local_tree = KDTree(positions)
+        (
+            vertices,
+            nn_dists,
+            source_hints,
+            atom_indices,
+            normals,
+            clearances,
+        ) = inject_atop_sites(
+            vertices,
+            nn_dists,
+            source_hints,
+            positions=positions,
+            cell=cell,
+            pbc=pbc,
+            material_type="slab",
+            local_tree=local_tree,
+            accessibility_tree=accessibility_tree,
+            median_nn=topology_median_nn,
+            slab_top_atom_indices=slab_top_atom_indices,
+            has_topology_atop=has_topology_atop,
+            probe_radius=float(probe_radius),
+            max_site_distance=float(max_site_distance),
+            atom_indices=atom_indices,
+            normals=normals,
+            clearances=clearances,
+        )
+
         return SiteCandidateBatch(
             vertices=vertices,
             nn_dists=nn_dists,
             source_hints=source_hints,
             atom_indices=atom_indices,
-            inject_atop=True,
             has_topology_atop=has_topology_atop,
-            apply_slab_height_mask=True,
             slab_top_atom_indices=slab_top_atom_indices,
             accessibility_tree=accessibility_tree,
             topology_median_nn=topology_median_nn,

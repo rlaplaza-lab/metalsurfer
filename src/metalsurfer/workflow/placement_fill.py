@@ -2,7 +2,7 @@
 
 import logging
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from ase import Atoms
@@ -52,23 +52,29 @@ def placement_spec_key(
 
 def _pose_family_key(
     spec: PlacementSpec,
-) -> tuple[int, str, int, float, bool, int | None]:
-    """Conformer + orientation family at a site (height / azimuth free)."""
+) -> tuple[int, str, int, float, float, float, bool, int | None]:
+    """Rigid pose family matching the height-interval cache key (azimuth included)."""
     return (
         int(spec.conformer_index),
         str(spec.orientation_type),
         int(spec.site_index),
         float(spec.tilt_deg),
+        float(spec.azimuth_deg),
+        float(spec.azimuth_in_plane_deg),
         bool(spec.face_flip),
         spec.en_atom_index,
     )
 
 
-def _same_height_key(spec: PlacementSpec) -> tuple:
+def _same_height_key(
+    spec: PlacementSpec,
+    *,
+    is_void: bool | None = None,
+) -> tuple:
     """Identity of specs that place at the same COM.
 
-    On wall-near sites every ``z_fraction <= 0.5`` is the contact height.
-    Fractions above 0.5, and every pore or dissociative fraction, stay distinct.
+    On wall sites every ``z_fraction <= 0.5`` is the contact height.
+    Fractions above 0.5, and every void or dissociative fraction, stay distinct.
     """
     family = (
         int(spec.conformer_index),
@@ -81,19 +87,29 @@ def _same_height_key(spec: PlacementSpec) -> tuple:
         spec.en_atom_index,
     )
     zf = float(spec.z_fraction)
-    if spec.orientation_type == "dissociative" or spec.site_type == "pore":
+    void = bool(is_void) if is_void is not None else False
+    if is_void is None and spec.site_type == "pore":
+        void = True
+    if spec.orientation_type == "dissociative" or void:
         return (*family, zf)
     if zf <= 0.5:
         return (*family, "contact")
     return (*family, zf)
 
 
-def _dedupe_same_height_specs(specs: list[PlacementSpec]) -> list[PlacementSpec]:
+def _dedupe_same_height_specs(
+    specs: list[PlacementSpec],
+    *,
+    site_is_void: Callable[[int], bool] | None = None,
+) -> list[PlacementSpec]:
     """Keep one spec per collapsed height, preferring ``z_fraction`` nearest 0.5."""
     best: dict[tuple, int] = {}
     order: list[tuple] = []
     for i, spec in enumerate(specs):
-        key = _same_height_key(spec)
+        is_void = (
+            None if site_is_void is None else bool(site_is_void(int(spec.site_index)))
+        )
+        key = _same_height_key(spec, is_void=is_void)
         prev = best.get(key)
         if prev is None:
             best[key] = i
@@ -114,8 +130,14 @@ class _RetryBans:
     crowded_conformer_sites: set[tuple[int, int]] = field(default_factory=set)
     # orientation/tilt families banned when the pose cannot contact at any height
     contact_families: set[tuple] = field(default_factory=set)
-    # wall-near contact height (z_fraction <= 0.5) and other identical COMs
+    # wall contact height (z_fraction <= 0.5) and other identical COMs
     same_height_keys: set[tuple] = field(default_factory=set)
+    site_is_void: Callable[[int], bool] | None = None
+
+    def _void_for(self, spec: PlacementSpec) -> bool | None:
+        if self.site_is_void is None:
+            return None
+        return bool(self.site_is_void(int(spec.site_index)))
 
     def record(self, spec: PlacementSpec, reason: str) -> None:
         self.failed_keys.add(placement_spec_key(spec))
@@ -128,7 +150,9 @@ class _RetryBans:
             self.contact_families.add(_pose_family_key(spec))
             return
         if reason in ("too_close", "vdw_overlap"):
-            self.same_height_keys.add(_same_height_key(spec))
+            self.same_height_keys.add(
+                _same_height_key(spec, is_void=self._void_for(spec))
+            )
 
     def allows(self, spec: PlacementSpec) -> bool:
         if placement_spec_key(spec) in self.failed_keys:
@@ -140,7 +164,10 @@ class _RetryBans:
             return False
         if _pose_family_key(spec) in self.contact_families:
             return False
-        return _same_height_key(spec) not in self.same_height_keys
+        return (
+            _same_height_key(spec, is_void=self._void_for(spec))
+            not in self.same_height_keys
+        )
 
 
 def _filter_pool_by_bans(
@@ -422,7 +449,15 @@ def fill_materialized_placements(
     placement_ids: list[int] = []
     descriptors: list[PlacementDescriptor] = []
     failures: list[PlacementFailureEvent] = []
-    bans = _RetryBans()
+
+    def _site_is_void(site_idx: int) -> bool:
+        if site_context is None or not site_context.sites:
+            return False
+        if site_idx < 0 or site_idx >= len(site_context.sites):
+            return False
+        return site_context.sites[site_idx].kind == "void"
+
+    bans = _RetryBans(site_is_void=_site_is_void)
     last_spec_by_index: dict[int, PlacementSpec] = {}
     next_placement_index = 0
     attempts_used = 0
@@ -453,7 +488,7 @@ def fill_materialized_placements(
             conformer_energies=conformer_energies,
             grid_info=grid_info,
         )
-        specs = _dedupe_same_height_specs(specs)
+        specs = _dedupe_same_height_specs(specs, site_is_void=_site_is_void)
         for spec in specs:
             spec.placement_index = next_placement_index
             next_placement_index += 1

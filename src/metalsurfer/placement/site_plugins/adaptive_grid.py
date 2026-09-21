@@ -22,12 +22,14 @@ class AdaptiveGridGenerator:
     at a target clearance, then NMS — balanced multi-atom pockets are scored
     so hollow-like sites win basins without densifying the catalog.
 
-    Does **not** set ``inject_atop`` or slab height-mask flags (those stay on
-    topology). Emits the same :class:`SiteCandidateBatch` contract as topology
+    Does **not** apply atop injection or slab height masking (those stay on
+    topology / Voronoi slab). Emits the same :class:`SiteCandidateBatch` contract as topology
     / Voronoi; classify builds fingerprints and frames.
     """
 
     name = "adaptive_grid"
+    widens_distance_window = False
+    uses_structure_pbc = True
 
     def generate(
         self,

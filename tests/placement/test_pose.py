@@ -28,9 +28,13 @@ from metalsurfer.placement.geometry import (
 )
 from metalsurfer.placement.pose import (
     _apply_lateral_offset,
+    _com_height_from_z_fraction,
+    _contact_shell_indices,
     _feasible_height_interval,
+    _pairwise_contact_com_height,
     _PlacementContext,
     _validate_posed_adsorbate,
+    _z_fraction_from_com_height,
     build_pose_batch_cache,
     generate_placement_from_pose,
 )
@@ -45,6 +49,7 @@ from metalsurfer.surface_prep import apply_surface_constraints
 from ..conftest import (
     adsorption_config_factory,
     make_ethanol,
+    make_porous_framework,
     make_slab,
     make_water,
     place_adsorbate_above_slab,
@@ -746,8 +751,8 @@ def test_pairwise_contact_raises_com_when_non_binder_is_closest():
     assert ok, reason
 
 
-def test_pore_height_fallback_stays_on_probe_grid(monkeypatch):
-    """A fully clashing pore interval stays inside the probe window."""
+def test_void_clashing_interval_stays_inside_window(monkeypatch):
+    """A fully clashing void interval collapses inside the diversity window."""
     monkeypatch.setattr(
         "metalsurfer.placement.pose.geom.min_pair_clearance_angstrom",
         lambda *_args, **_kwargs: 1.0e6,
@@ -756,6 +761,7 @@ def test_pore_height_fallback_stays_on_probe_grid(monkeypatch):
         xyz=np.array([0.0, 0.0, 5.0]),
         normal=np.array([0.0, 0.0, 1.0]),
         site_type="pore",
+        kind="void",
         slab_indices=(),
         material_type="porous",
         site_source="test",
@@ -782,8 +788,138 @@ def test_pore_height_fallback_stays_on_probe_grid(monkeypatch):
     assert interval.com_hi <= base_h + half + 1e-6
     assert interval.com_lo == pytest.approx(interval.com_nominal)
     assert interval.com_hi == pytest.approx(interval.com_nominal)
-    assert interval.com_nominal == pytest.approx(base_h - half)
-    assert interval.com_nominal != pytest.approx(0.0)
+
+
+def test_void_clear_centre_stays_at_centre(monkeypatch):
+    """A void centre that already clears keeps nominal at the void vertex."""
+    monkeypatch.setattr(
+        "metalsurfer.placement.pose.geom.min_pair_clearance_angstrom",
+        lambda *_args, **_kwargs: 0.5,
+    )
+    site = Site(
+        xyz=np.array([0.0, 0.0, 5.0]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_type="pore",
+        kind="void",
+        slab_indices=(),
+        material_type="porous",
+        site_source="test",
+        env_fingerprint=(("C",), (0,), 0),
+    )
+    # Framework atoms far from the void centre along the normal.
+    interval = _feasible_height_interval(
+        np.zeros((1, 3), dtype=float),
+        ["H"],
+        site=site,
+        place_normal=np.array([0.0, 0.0, 1.0]),
+        slab_positions=np.array([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]], dtype=float),
+        slab_symbols=["C", "C"],
+        cell=np.eye(3) * 20.0,
+        pbc=[True, True, True],
+        config=AdsorptionConfig(material_type="porous", seed=0),
+        r_surface=0.7,
+        z_base_lo=-2.0,
+        z_base_hi=2.0,
+    )
+    assert interval is not None
+    assert interval.com_nominal == pytest.approx(5.0, abs=1e-9)
+    assert interval.com_lo <= interval.com_nominal
+    assert interval.com_hi >= interval.com_nominal
+
+
+def test_z_fraction_com_height_round_trip():
+    """Inverse then forward recovers COM height within 1e-9."""
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        lo = float(rng.uniform(-2.0, 2.0))
+        hi = lo + float(rng.uniform(0.0, 3.0))
+        nominal = float(rng.uniform(lo, hi)) if hi > lo else lo
+        zf = float(rng.uniform(0.0, 1.0))
+        h = _com_height_from_z_fraction(zf, lo, nominal, hi)
+        zf2 = _z_fraction_from_com_height(h, lo, nominal, hi)
+        h2 = _com_height_from_z_fraction(zf2, lo, nominal, hi)
+        assert h2 == pytest.approx(h, abs=1e-9)
+
+
+def test_z_fraction_from_com_height_point_interval():
+    assert _z_fraction_from_com_height(1.0, 1.0, 1.0, 1.0) == 0.5
+
+
+def test_analytic_height_recovery_z_fraction_replays_nudged_com(monkeypatch):
+    """Recovered z_fraction maps back to the clamped COM height."""
+    from metalsurfer.placement import pose as pose_mod
+    from metalsurfer.placement.pose import _analytic_height_recovery
+
+    n_hat = np.array([0.0, 0.0, 1.0], dtype=float)
+    origin = np.array([1.0, 2.0, 5.0], dtype=float)
+    com_lo, com_nominal, com_hi = 4.5, 5.0, 6.0
+    pose = PlacementPose(
+        conformer_index=0,
+        site_index=0,
+        site_type="atop",
+        placement_index=0,
+        quat_w=1.0,
+        quat_x=0.0,
+        quat_y=0.0,
+        quat_z=0.0,
+        x_abs=float(origin[0]),
+        y_abs=float(origin[1]),
+        z_abs=float(origin[2]),
+        z_fraction=0.5,
+    )
+    ctx = _PlacementContext(
+        pose=pose,
+        site=Site(
+            xyz=np.array([1.0, 2.0, 4.0]),
+            normal=n_hat,
+            site_type="atop",
+            slab_indices=(0,),
+            material_type="slab",
+            site_source="test",
+            env_fingerprint=(("Ru",), (0,), 1),
+        ),
+        mat_type="slab",
+        surface_ref=4.0,
+        is_local_ref=True,
+        source="test",
+        canonical_pos=np.zeros((1, 3)),
+        use_sites=True,
+        rotated_pos=np.zeros((1, 3)),
+        normal=n_hat,
+        z_base_lo=0.5,
+        z_base_hi=2.0,
+        com_lo=com_lo,
+        com_nominal=com_nominal,
+        com_hi=com_hi,
+    )
+    slab = Atoms("H", positions=[[1.0, 2.0, 4.0]], cell=[10, 10, 10], pbc=True)
+    ads = Atoms("H", positions=[origin.copy()])
+
+    class _Cfg:
+        min_initial_distance = 1.0
+        min_contact_ratio = 1.0
+        reject_vdw_overlaps = False
+        vdw_overlap_scale = 1.0
+        max_initial_distance = None
+        strict_initial_placement = False
+        max_closest_approach = 2.0
+
+    monkeypatch.setattr(pose_mod, "_contact_penetration", lambda *_a, **_k: (0.5, 0.3))
+    out = _analytic_height_recovery(
+        ctx,
+        ads,
+        slab,
+        _Cfg(),  # type: ignore[arg-type]
+        "too_close",
+        slab_for_sites=slab,
+        slab_scratch=None,
+    )
+    assert out is not None
+    center, new_zf = out
+    expected_h = min(com_hi, max(com_lo, float(origin[2]) + 0.3))
+    assert float(center[2]) == pytest.approx(expected_h, abs=1e-9)
+    replay_h = _com_height_from_z_fraction(new_zf, com_lo, com_nominal, com_hi)
+    assert replay_h == pytest.approx(expected_h, abs=1e-9)
 
 
 def test_z_fraction_offsets_com_around_pairwise_contact():
@@ -1013,3 +1149,166 @@ def test_pose_does_not_expand_symmetry_reduced_catalog():
         slab_for_sites=slab,
     )
     assert ok is not None
+
+
+def _shell_vs_full_nominal(
+    *,
+    slab: Atoms,
+    site,
+    rotated_pos: np.ndarray,
+    symbols: list[str],
+    config: AdsorptionConfig,
+) -> tuple[float, float]:
+    positions = slab.get_positions()
+    slab_syms = list(slab.get_chemical_symbols())
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = material_aware_pbc(config.material_type)
+    r_surface = _get_site_surface_radii(slab, site)
+    shell_idx = _contact_shell_indices(
+        site.xyz,
+        rotated_pos=rotated_pos,
+        symbols=symbols,
+        slab_positions=positions,
+        slab_symbols=slab_syms,
+        config=config,
+        r_surface=r_surface,
+        cell=cell,
+        pbc=pbc,
+        place_normal=site.normal,
+    )
+    shell_pos = positions[shell_idx]
+    shell_syms = [slab_syms[int(i)] for i in shell_idx]
+    kwargs = dict(
+        rotated_pos=rotated_pos,
+        symbols=symbols,
+        site_xyz=site.xyz,
+        place_normal=site.normal,
+        cell=cell,
+        pbc=pbc,
+        config=config,
+        r_surface=r_surface,
+    )
+    shell_h = _pairwise_contact_com_height(
+        **kwargs, slab_positions=shell_pos, slab_symbols=shell_syms
+    )
+    full_h = _pairwise_contact_com_height(
+        **kwargs, slab_positions=positions, slab_symbols=slab_syms
+    )
+    return float(shell_h), float(full_h)
+
+
+def test_contact_shell_matches_full_slab_nominal():
+    """Local shell contact nominal agrees with all-pairs within 1e-6 Å."""
+    from ase.build import molecule
+
+    slab = make_slab(nx=3, ny=3)
+    config = AdsorptionConfig(material_type="slab")
+    ctx = _get_unique_sites_for_specs(slab, config)
+    site = next(s for s in ctx.sites if s.kind == "wall" and s.slab_indices)
+    h2 = molecule("H2")
+    h2_pos = h2.get_positions() - h2.get_center_of_mass()
+    co2 = molecule("CO2")
+    co2_pos = co2.get_positions() - co2.get_center_of_mass()
+
+    for rotated, symbols in (
+        (h2_pos, list(h2.get_chemical_symbols())),
+        (co2_pos, list(co2.get_chemical_symbols())),
+    ):
+        shell_h, full_h = _shell_vs_full_nominal(
+            slab=slab,
+            site=site,
+            rotated_pos=rotated,
+            symbols=symbols,
+            config=config,
+        )
+        assert shell_h == pytest.approx(full_h, abs=1e-6)
+
+    porous = make_porous_framework()
+    pconfig = AdsorptionConfig(material_type="porous")
+    pctx = _get_unique_sites_for_specs(porous, pconfig)
+    psite = next(s for s in pctx.sites if s.kind == "wall" and s.slab_indices)
+    shell_h, full_h = _shell_vs_full_nominal(
+        slab=porous,
+        site=psite,
+        rotated_pos=h2_pos,
+        symbols=list(h2.get_chemical_symbols()),
+        config=pconfig,
+    )
+    assert shell_h == pytest.approx(full_h, abs=1e-6)
+
+
+def test_contact_shell_ignores_far_atoms_and_uses_near_ones():
+    """An atom inside the ball is selected; one far outside is not."""
+    from ase.build import molecule
+
+    config = AdsorptionConfig(material_type="slab")
+    site_xyz = np.array([0.0, 0.0, 0.0])
+    h = molecule("H")
+    rotated = h.get_positions() - h.get_center_of_mass()
+    symbols = ["H"]
+    positions = np.array(
+        [
+            [0.0, 0.0, -2.0],
+            [50.0, 50.0, -2.0],
+        ],
+        dtype=float,
+    )
+    slab_syms = ["Pt", "Pt"]
+    idx = _contact_shell_indices(
+        site_xyz,
+        rotated_pos=rotated,
+        symbols=symbols,
+        slab_positions=positions,
+        slab_symbols=slab_syms,
+        config=config,
+        r_surface=1.3,
+        cell=np.eye(3) * 80.0,
+        pbc=[False, False, False],
+        place_normal=np.array([0.0, 0.0, 1.0]),
+    )
+    assert 0 in set(int(i) for i in idx)
+    assert 1 not in set(int(i) for i in idx)
+
+    # Closer substrate atom raises the pairwise contact height.
+    near = Atoms(
+        "Pt2",
+        positions=[[0.0, 0.0, -2.5], [0.0, 0.0, -2.0]],
+        cell=[40, 40, 40],
+        pbc=False,
+    )
+    closer = Atoms(
+        "Pt3",
+        positions=[[0.0, 0.0, -2.5], [0.0, 0.0, -2.0], [0.0, 0.0, -1.2]],
+        cell=[40, 40, 40],
+        pbc=False,
+    )
+    cell = np.eye(3) * 40.0
+    pbc = [False, False, False]
+    site = Site(
+        xyz=site_xyz,
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_type="atop",
+        kind="wall",
+        slab_indices=(0,),
+        material_type="slab",
+        site_source="test",
+        env_fingerprint=((), (), 0),
+    )
+
+    def _h(slab_atoms: Atoms) -> float:
+        return float(
+            _pairwise_contact_com_height(
+                rotated,
+                symbols,
+                site_xyz=site.xyz,
+                place_normal=site.normal,
+                slab_positions=slab_atoms.get_positions(),
+                slab_symbols=list(slab_atoms.get_chemical_symbols()),
+                cell=cell,
+                pbc=pbc,
+                config=config,
+                r_surface=1.3,
+            )
+        )
+
+    assert abs(_h(closer) - _h(near)) > 1e-4

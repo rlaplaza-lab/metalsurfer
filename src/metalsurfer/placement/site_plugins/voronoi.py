@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 import numpy as np
+from scipy.spatial import KDTree
 
 from ..site_coords import (
     project_vertices_to_support_plane,
@@ -13,7 +14,12 @@ from ..site_coords import (
 )
 from ..site_voronoi import _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
-from .helpers import candidate_enrichment_frames, periodic_accessibility_tree
+from .helpers import (
+    apply_slab_height_mask,
+    candidate_enrichment_frames,
+    inject_atop_sites,
+    periodic_accessibility_tree,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +32,8 @@ class VoronoiGenerator:
     """
 
     name = "voronoi"
+    widens_distance_window = True
+    uses_structure_pbc = False
 
     def generate(
         self,
@@ -45,8 +53,7 @@ class VoronoiGenerator:
         voronoi_positions = positions
         slab_top_atom_indices: np.ndarray | None = None
         accessibility_tree = None
-        apply_slab_height_mask = False
-        inject_atop = False
+        do_slab_post = False
 
         if material_type == "slab":
             slab_top_mask = top_layer_mask_by_normal(
@@ -62,8 +69,7 @@ class VoronoiGenerator:
                 pbc,
                 float(max_site_distance),
             )
-            apply_slab_height_mask = True
-            inject_atop = True
+            do_slab_post = True
 
         vertices, nn_dists, local_atoms = _voronoi_sites(
             voronoi_positions,
@@ -117,14 +123,59 @@ class VoronoiGenerator:
             vertices, normals, atom_indices, positions
         )
 
+        if do_slab_post:
+            (
+                vertices,
+                nn_dists,
+                source_hints,
+                atom_indices,
+                normals,
+                clearances,
+            ) = apply_slab_height_mask(
+                vertices,
+                nn_dists,
+                source_hints,
+                atom_indices,
+                positions=positions,
+                cell=cell,
+                top_layer_tolerance=float(ctx.top_layer_tolerance),
+                normals=normals,
+                clearances=clearances,
+            )
+            local_tree = KDTree(positions)
+            (
+                vertices,
+                nn_dists,
+                source_hints,
+                atom_indices,
+                normals,
+                clearances,
+            ) = inject_atop_sites(
+                vertices,
+                nn_dists,
+                source_hints,
+                positions=positions,
+                cell=cell,
+                pbc=pbc,
+                material_type="slab",
+                local_tree=local_tree,
+                accessibility_tree=accessibility_tree,
+                median_nn=None,
+                slab_top_atom_indices=slab_top_atom_indices,
+                has_topology_atop=False,
+                probe_radius=float(probe_radius),
+                max_site_distance=float(max_site_distance),
+                atom_indices=atom_indices,
+                normals=normals,
+                clearances=clearances,
+            )
+
         return SiteCandidateBatch(
             vertices=vertices,
             nn_dists=nn_dists,
             source_hints=source_hints,
             atom_indices=atom_indices,
-            inject_atop=inject_atop,
             has_topology_atop=False,
-            apply_slab_height_mask=apply_slab_height_mask,
             slab_top_atom_indices=slab_top_atom_indices,
             accessibility_tree=accessibility_tree,
             normals=normals,

@@ -61,14 +61,14 @@ For homonuclear diatomics that may dissociate on slabs or nanoparticles:
        seed=42,
    )
 
-- ``enable_dissociative_placement=True`` — gate for hollow-site pair
-  (or nanoparticle site-pair) initial placements
+- ``enable_dissociative_placement=True`` — gate for wall hollow/bridge site-pair
+  initial placements on any material (void / pore sites are never paired)
 - ``skip_topology_check=True`` — disables post-relaxation connectivity /
   decomposition checks so fragmented adsorbates are retained
 
 Both flags are independent: dissociative placement requires
 ``enable_dissociative_placement``; topology skip only affects post-relax
-filters.
+filters. Default remains ``enable_dissociative_placement=False``.
 
 Reference energy remains the **isolated molecule**; positive :math:`E_\mathrm{ads}`
 is possible when the relaxed state is dissociated.
@@ -126,9 +126,11 @@ Placement success levers
   height. Use ``placement_clash_descent=False``
   with ``(0.0, 0.0)`` XY ranges for height-only recovery, or
   ``placement_distance_recovery=False`` to disable.
-- **Site window** — ``voronoi_auto_widen=True`` retries once with a wider Voronoi
-  accessibility window when the first pass finds no sites; pair with explicit
-  ``voronoi_probe_radius`` / ``voronoi_max_site_distance`` when comparing windows.
+- **Site window** — ``voronoi_auto_widen=True`` retries once with a wider
+  probe/max accessibility window when the first pass finds no sites, but only
+  for plugins that opt in (topology and Voronoi). Adaptive grid and rolling
+  probe skip that retry. Pair with explicit ``voronoi_probe_radius`` /
+  ``voronoi_max_site_distance`` when comparing windows.
 - **Fill** — one-shot oversample (``placement_retry_oversample_max``) requests
   ``min(capacity, num_placements * oversample)`` specs, materializes in chunks
   of about ``num_placements``, and stops early once full. Family / overlap
@@ -174,11 +176,12 @@ geometric supports retained. It covers slab faces, NP exterior, and MOF
 
 ``side_policy`` (default ``"positive"``) applies face / exposure half-spaces from
 **PBC geometry** for ``adaptive_grid`` and ``rolling_probe`` (unique vacuum axis
-→ face filter; finite cluster ``external`` → COM outward; 3D-periodic → no face
-filter). On ``rolling_probe``, the shared default ``positive`` remaps to
-``all`` (porous) or ``external`` (nanoparticle). Topology / Voronoi keep
-system-specific heuristics (atop inject, height mask, MOF pore typing);
-adaptive_grid / rolling_probe do **not** copy those safety nets.
+→ face filter; finite cluster → COM outward; 3D-periodic → no face filter).
+The shared default ``positive`` remaps from the structure PBC mask (two
+periodic axes keep the vacuum face; no PBC → ``external``; one or three
+periodic axes → ``all``). Topology / Voronoi keep system-specific heuristics
+(atop inject, height mask, MOF pore typing); adaptive_grid / rolling_probe do
+**not** copy those safety nets.
 
 Plugin knobs: ``voronoi_*``, ``side_policy``, ``adaptive_grid_*``, and ``n_jobs``
 (adaptive_grid shells, rolling_probe contacts, and Voronoi ridge enrich). Shared
@@ -192,7 +195,7 @@ post-process: ``site_classification_method``, ``site_equivalence_tolerance``,
    * - Knob group
      - Applies to
    * - Shared window: ``voronoi_probe_radius``, ``voronoi_max_site_distance``, ``voronoi_auto_widen``
-     - All plugins (accessibility window / one-shot widen retry)
+     - Accessibility window for all plugins; one-shot widen retry for topology / Voronoi only
    * - ``top_layer_tolerance``, ``planar_z_variance_threshold``
      - Topology slab (planarity + top-layer band); slab height mask / symmetry planar flag
    * - ``voronoi_site_enrichment``
@@ -239,8 +242,8 @@ After candidates are classified into ``Site`` records, uniqueness is shared:
   spatially close and share the same local environment fingerprint
   (support-atom symbols + distance bins + side label). Ignores ``site_source``
   and classified ``site_type``, so topology / Voronoi / injected atops in the
-  same pocket merge. Used by molecular placement, dissociative hollow pairs,
-  and adatom hollow selection.
+  same pocket merge. Used by molecular placement, dissociative wall hollow /
+  bridge pairs, and adatom hollow selection.
 - ``symmetry_tolerance`` (default 0.1 Å) — optional spglib pass that keeps one
   representative of each crystallographically equivalent site on a **clean**
   substrate with a single placement per step. Once molecules are on the

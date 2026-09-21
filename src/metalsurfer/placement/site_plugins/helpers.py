@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -10,6 +11,7 @@ from scipy.spatial import Delaunay, KDTree
 
 from ..._utils import cell_has_volume
 from .._constants import (
+    _ATOP_INJECTION_HEIGHT_FACTOR,
     _BOUNDING_BOX_CELL_PAD_ANGSTROM,
     _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
@@ -26,11 +28,21 @@ from ..site_coords import (
     _pbc_merge_pair_set,
     _periodic_image_offsets,
     _project_to_slab_plane,
+    _shift_along_slab_normal,
     _slab_normal,
+    _wrap_cartesian,
     top_layer_mask_by_normal,
 )
+from ..site_np import (
+    _convex_hull_surface_mask,
+    _surface_atom_normals,
+    _try_convex_hull,
+)
+from .base import slice_candidate_arrays
 
 _EMPTY_ATOM_INDICES: tuple[int, ...] = ()
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -463,3 +475,213 @@ def bounding_box_cell(
     hi = positions.max(axis=0)
     span = np.maximum(hi - lo + pad, pad)
     return np.diag(span)
+
+
+def apply_slab_height_mask(
+    vertices: np.ndarray,
+    nn_dists: np.ndarray,
+    source_hints: list[str],
+    atom_indices: list[tuple[int, ...]],
+    *,
+    positions: np.ndarray,
+    cell: np.ndarray,
+    top_layer_tolerance: float,
+    normals: np.ndarray | None = None,
+    clearances: np.ndarray | None = None,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    list[str],
+    list[tuple[int, ...]],
+    np.ndarray | None,
+    np.ndarray | None,
+]:
+    """Drop candidates below the top-layer height band along the slab normal."""
+    if len(vertices) == 0:
+        return vertices, nn_dists, source_hints, atom_indices, normals, clearances
+    heights = _height_along_slab_normal(positions, cell)
+    h_surface = float(np.max(heights))
+    nn_margin = (
+        float(np.median(nn_dists)) if len(nn_dists) > 0 else float(top_layer_tolerance)
+    )
+    h_min = h_surface - max(float(top_layer_tolerance), nn_margin)
+    keep_mask = _height_along_slab_normal(vertices, cell) >= h_min
+    return slice_candidate_arrays(
+        vertices,
+        nn_dists,
+        source_hints,
+        atom_indices,
+        keep_mask,
+        normals=normals,
+        clearances=clearances,
+    )
+
+
+def inject_atop_sites(
+    vertices: np.ndarray,
+    nn_dists: np.ndarray,
+    source_hints: list[str],
+    *,
+    positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    material_type: str,
+    local_tree: KDTree,
+    accessibility_tree: KDTree | None,
+    median_nn: float | None,
+    slab_top_atom_indices: np.ndarray | None,
+    has_topology_atop: bool,
+    probe_radius: float,
+    max_site_distance: float,
+    atom_indices: list[tuple[int, ...]] | None = None,
+    normals: np.ndarray | None = None,
+    clearances: np.ndarray | None = None,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    list[str],
+    list[tuple[int, ...]],
+    np.ndarray | None,
+    np.ndarray | None,
+]:
+    """Inject atop when topology did not already produce any.
+
+    Uses the same height as the topology generator when *median_nn* is supplied.
+    *accessibility_tree* (PBC-aware) gates distances under periodic boundaries.
+    When *normals* / *clearances* are supplied, frames for injected atops are
+    appended so enrichment stays aligned with the merged catalog.
+    """
+    atoms = (
+        list(atom_indices)
+        if atom_indices is not None
+        else [_EMPTY_ATOM_INDICES for _ in range(len(vertices))]
+    )
+    if material_type in ("slab", "nanoparticle") and has_topology_atop:
+        return vertices, nn_dists, source_hints, atoms, normals, clearances
+    if material_type not in ("slab", "nanoparticle"):
+        return vertices, nn_dists, source_hints, atoms, normals, clearances
+
+    if median_nn is None:
+        ref = (
+            positions[slab_top_atom_indices]
+            if material_type == "slab" and slab_top_atom_indices is not None
+            else positions
+        )
+        median_nn = median_nn_or_fallback(
+            nn_dists if material_type == "slab" else np.empty(0, dtype=float),
+            reference_positions=ref,
+            cell=cell,
+            pbc=pbc,
+        )
+    atop_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
+
+    if material_type == "slab":
+        if slab_top_atom_indices is None:
+            return vertices, nn_dists, source_hints, atoms, normals, clearances
+        top_atom_indices = np.asarray(slab_top_atom_indices, dtype=int)
+        atom_normals = None
+    else:
+        hull = _try_convex_hull(positions)
+        if hull is None:
+            return vertices, nn_dists, source_hints, atoms, normals, clearances
+        top_atom_indices = np.nonzero(_convex_hull_surface_mask(positions, hull=hull))[
+            0
+        ].astype(int)
+        if len(top_atom_indices) == 0:
+            return vertices, nn_dists, source_hints, atoms, normals, clearances
+        atom_normals = _surface_atom_normals(positions, top_atom_indices, hull)
+
+    candidate_verts: list[np.ndarray] = []
+    candidate_probes: list[np.ndarray] = []
+    candidate_atom_ids: list[int] = []
+    candidate_normal_list: list[np.ndarray] = []
+    for li, ai in enumerate(top_atom_indices):
+        atom_pos = positions[int(ai)]
+        if material_type == "slab":
+            probe = _shift_along_slab_normal(atom_pos.reshape(1, 3), cell, atop_height)[
+                0
+            ]
+            if np.any(pbc):
+                probe = _wrap_cartesian(probe.reshape(1, 3), cell, pbc)[0]
+            n_hat = _slab_normal(cell)
+            anchor = atom_pos
+            if np.any(pbc):
+                anchor = _wrap_cartesian(atom_pos.reshape(1, 3), cell, pbc)[0]
+        else:
+            assert atom_normals is not None
+            n_hat = atom_normals[li]
+            if float(np.linalg.norm(n_hat)) < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+                continue
+            probe = atom_pos + atop_height * n_hat
+            anchor = atom_pos
+        candidate_verts.append(anchor)
+        candidate_probes.append(probe)
+        candidate_atom_ids.append(int(ai))
+        candidate_normal_list.append(np.asarray(n_hat, dtype=float))
+
+    if not candidate_verts:
+        return vertices, nn_dists, source_hints, atoms, normals, clearances
+
+    candidate_arr = np.asarray(candidate_verts, dtype=float)
+    probe_arr = np.asarray(candidate_probes, dtype=float)
+    gate_tree = (
+        accessibility_tree
+        if accessibility_tree is not None and np.any(pbc)
+        else local_tree
+    )
+    d_nn_all = np.asarray(gate_tree.query(probe_arr, k=1)[0], dtype=float).ravel()
+    keep_acc = (d_nn_all >= float(probe_radius)) & (
+        d_nn_all <= float(max_site_distance)
+    )
+    if not np.any(keep_acc):
+        return vertices, nn_dists, source_hints, atoms, normals, clearances
+
+    candidate_arr = candidate_arr[keep_acc]
+    candidate_dist_arr = d_nn_all[keep_acc]
+    kept_atom_ids = [candidate_atom_ids[i] for i in np.nonzero(keep_acc)[0]]
+    candidate_sources = ["atop_injected"] * len(candidate_arr)
+    candidate_atoms = [(ai,) for ai in kept_atom_ids]
+    candidate_normals = np.asarray(
+        [candidate_normal_list[i] for i in np.nonzero(keep_acc)[0]], dtype=float
+    )
+    candidate_clearances = candidate_dist_arr.copy()
+
+    if normals is None or clearances is None or len(normals) != len(vertices):
+        normals, clearances = candidate_enrichment_frames(
+            vertices,
+            nn_dists,
+            atoms,
+            positions=positions,
+            cell=cell,
+            pbc=pbc,
+            material_type=material_type,
+            accessibility_tree=accessibility_tree,
+        )
+
+    n_existing = len(vertices)
+    vertices, nn_dists, source_hints, atoms, normals, clearances = (
+        merge_dedup_site_arrays(
+            vertices,
+            nn_dists,
+            source_hints,
+            candidate_arr,
+            candidate_dist_arr,
+            candidate_sources,
+            cell=cell,
+            pbc=pbc,
+            atom_indices=atoms,
+            new_atom_indices=candidate_atoms,
+            normals=normals,
+            clearances=clearances,
+            new_normals=candidate_normals,
+            new_clearances=candidate_clearances,
+        )
+    )
+    n_injected = len(vertices) - n_existing
+    logger.debug(
+        "Injected %d atop candidate sites (%d total sites)",
+        max(n_injected, 0),
+        len(vertices),
+    )
+
+    return vertices, nn_dists, source_hints, atoms, normals, clearances

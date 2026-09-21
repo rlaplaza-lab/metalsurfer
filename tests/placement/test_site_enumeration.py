@@ -91,7 +91,7 @@ def test_slab_catalog_xyz_is_support_plane_anchor():
             assert float(np.linalg.norm(n_hat)) == pytest.approx(1.0, abs=1e-6)
             support_h = float(np.max(pos[list(s.slab_indices)] @ n_hat))
             site_h = float(np.dot(np.asarray(s.xyz, dtype=float), n_hat))
-            assert site_h == pytest.approx(support_h, abs=0.25)
+            assert site_h == pytest.approx(support_h, abs=1e-6)
             assert s.clearance is not None and float(s.clearance) > 0.05
 
 
@@ -142,27 +142,27 @@ def test_project_sites_to_support_plane_helper():
 
 def test_site_enumeration_exports_wrap_cartesian_for_atop_injection():
     """Atop injection under PBC uses _wrap_cartesian from site_coords."""
-    from metalsurfer.placement import site_enumeration as enum_mod
     from metalsurfer.placement.site_coords import _wrap_cartesian as wrap_ref
+    from metalsurfer.placement.site_plugins import helpers as helpers_mod
 
-    assert enum_mod._wrap_cartesian is wrap_ref
+    assert helpers_mod._wrap_cartesian is wrap_ref
     slab = make_slab()
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = np.asarray(slab.get_pbc(), dtype=bool)
     pts = slab.get_positions()[:1] + np.array([[0.1, 0.1, 0.5]])
-    wrapped = enum_mod._wrap_cartesian(pts, cell, pbc)
+    wrapped = helpers_mod._wrap_cartesian(pts, cell, pbc)
     assert wrapped.shape == pts.shape
     assert len(get_unified_sites(slab, material_type="slab")) > 0
 
 
 def test_get_unified_sites_slab_atop_injection_wraps_under_pbc(monkeypatch):
     """Atop injection must call _wrap_cartesian and emit atop_injected sites."""
-    from metalsurfer.placement import site_enumeration as enum_mod
+    from metalsurfer.placement.site_plugins import helpers as helpers_mod
     from metalsurfer.placement.site_plugins import topology_slab as topo_mod
     from metalsurfer.placement.site_voronoi import _generate_slab_topology_sites
 
     real_topo = _generate_slab_topology_sites
-    real_wrap = enum_mod._wrap_cartesian
+    real_wrap = helpers_mod._wrap_cartesian
     wrap_calls: list[int] = []
 
     def _topo_without_atop(*args, **kwargs):
@@ -193,7 +193,7 @@ def test_get_unified_sites_slab_atop_injection_wraps_under_pbc(monkeypatch):
         return real_wrap(points, cell, pbc)
 
     monkeypatch.setattr(topo_mod, "_generate_slab_topology_sites", _topo_without_atop)
-    monkeypatch.setattr(enum_mod, "_wrap_cartesian", _counting_wrap)
+    monkeypatch.setattr(helpers_mod, "_wrap_cartesian", _counting_wrap)
     slab = make_slab()
     assert bool(np.any(slab.get_pbc()))
     sites = get_unified_sites(slab, material_type="slab")
@@ -1038,7 +1038,9 @@ def test_cluster_equivalent_sites_anisotropic_slab_metric_bound():
 def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
     """PBC-aware merge alone collapses boundary-duplicate atop injections."""
     from metalsurfer.placement._constants import _ATOP_INJECTION_HEIGHT_FACTOR
-    from metalsurfer.placement.site_enumeration import _inject_atop_sites
+    from metalsurfer.placement.site_plugins.helpers import (
+        inject_atop_sites,
+    )
     from metalsurfer.placement.site_plugins.helpers import (
         periodic_accessibility_tree as _periodic_accessibility_tree,
     )
@@ -1061,7 +1063,7 @@ def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
     existing_dists = np.array([site_z], dtype=float)
     existing_sources = ["voronoi"]
     access = _periodic_accessibility_tree(positions, cell, pbc, max_distance=5.0)
-    verts, _dists, _sources, _atoms, _normals, _clearances = _inject_atop_sites(
+    verts, _dists, _sources, _atoms, _normals, _clearances = inject_atop_sites(
         existing,
         existing_dists,
         existing_sources,

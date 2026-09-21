@@ -645,6 +645,31 @@ def _ray_exposure_mask(
     return np.all(diffs >= -float(tolerance), axis=1)
 
 
+def resolve_side_policy_for_pbc(
+    pbc: np.ndarray,
+    side_policy: SidePolicy,
+) -> SidePolicy:
+    """Map the shared config default ``positive`` onto PBC geometry.
+
+    Explicit ``all`` / ``negative`` / ``external`` are left unchanged. The
+    default ``positive`` means:
+
+    - two periodic axes (slab-like): keep the vacuum-face half-space
+    - no periodic axes (cluster): COM-outward ``external``
+    - one or three periodic axes: ``all`` (no single vacuum face)
+    """
+    if side_policy not in ("all", "positive", "negative", "external"):
+        raise ValueError(f"Unknown side_policy {side_policy!r}")
+    if side_policy != "positive":
+        return side_policy
+    n_periodic = int(np.count_nonzero(np.asarray(pbc, dtype=bool).reshape(3)))
+    if n_periodic == 2:
+        return "positive"
+    if n_periodic == 0:
+        return "external"
+    return "all"
+
+
 def _side_policy_mask(
     normals: np.ndarray,
     *,
@@ -1281,6 +1306,7 @@ def generate_adaptive_grid_sites(
     positions = np.asarray(positions, dtype=float)
     cell = np.asarray(cell, dtype=float)
     pbc = np.asarray(pbc, dtype=bool)
+    side_policy = resolve_side_policy_for_pbc(pbc, side_policy)
     n_atoms = len(positions)
     if framework_radii is None:
         if symbols is not None and len(symbols) == n_atoms:

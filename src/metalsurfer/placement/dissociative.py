@@ -141,17 +141,14 @@ def _dissociative_pair_cache_key(
     ).hexdigest()
 
 
-def _filter_hollow_pore_sites(
-    sites: Sequence[Site], *, material_type: str
-) -> list[Site]:
-    """Keep hollow/pore sites for dissociative pairing on slabs and nanoparticles.
+def _filter_hollow_pore_sites(sites: Sequence[Site]) -> list[Site]:
+    """Keep wall hollow/bridge sites for dissociative pairing.
 
-    Porous (and any other type) passes through unchanged: dissociative placement
-    is rejected upstream for unsupported materials.
+    Void sites are never dissociation anchors.
     """
-    if material_type not in ("slab", "nanoparticle"):
-        return list(sites)
-    return [s for s in sites if s.site_type in ("hollow", "pore")]
+    return [
+        s for s in sites if s.kind == "wall" and s.site_type in ("hollow", "bridge")
+    ]
 
 
 def _resolve_dissociative_site_entries(
@@ -218,7 +215,7 @@ def _resolve_dissociative_site_entries(
             tolerance=config.site_equivalence_tolerance,
         )
 
-    return _filter_hollow_pore_sites(site_entries, material_type=config.material_type)
+    return _filter_hollow_pore_sites(site_entries)
 
 
 def _get_dissociative_site_pairs(
@@ -238,7 +235,7 @@ def _get_dissociative_site_pairs(
     an occupancy-position hash when coverage is active. Occupancy uses
     vertex-only clearance (no footprint radii).
     """
-    if config.material_type not in ("slab", "nanoparticle"):
+    if config.material_type not in ("slab", "nanoparticle", "porous"):
         return []
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
@@ -311,12 +308,13 @@ def _compute_dissociative_site_pairs(
     pre_resolved_sites: list[Site] | None = None,
 ) -> list[_DissociativeSitePair]:
     """Return outward-oriented site pairs for dissociative diatomic placement."""
-    if config.material_type not in ("slab", "nanoparticle"):
+    if config.material_type not in ("slab", "nanoparticle", "porous"):
         return []
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(config.material_type)
+    # Structure PBC mask: MIC when any axis is periodic, open distances otherwise.
+    pbc = [bool(x) for x in np.asarray(slab.get_pbc(), dtype=bool).tolist()]
     slab_normal = _slab_normal(cell_arr)
 
     if pre_resolved_sites is not None:
@@ -355,7 +353,7 @@ def _compute_dissociative_site_pairs(
 
     symbols = sites_slab.get_chemical_symbols()
     top_positions = sites_slab.get_positions()
-    if config.material_type == "nanoparticle":
+    if not np.any(pbc):
         radius_indices = list(range(len(top_positions)))
     else:
         top_mask = top_layer_mask_by_normal(
@@ -364,20 +362,26 @@ def _compute_dissociative_site_pairs(
             float(config.top_layer_tolerance),
         )
         radius_indices = list(np.nonzero(top_mask)[0])
+        if not radius_indices:
+            radius_indices = list(range(len(top_positions)))
     top_radii_symbols = [symbols[int(i)] for i in radius_indices]
     mean_top_radius = _mean_covalent_radius(
         top_radii_symbols, fallback=_SURFACE_COVALENT_RADIUS_FALLBACK
     )
 
     site_3d = site_xyz
-    if config.material_type == "slab":
-        mean_nn_sep = _mean_nn_separation_mic(site_3d, cell_arr, pbc)
+    # Spacing scale from hollows when ≥2 exist so nearby bridges do not
+    # collapse mean NN and wipe the pairing window.
+    scale_entries = [s for s in site_entries if s.site_type == "hollow"]
+    if len(scale_entries) < 2:
+        scale_entries = list(site_entries)
+    scale_xyz = np.asarray([s.xyz for s in scale_entries], dtype=float)
+    if np.any(pbc):
+        mean_nn_sep = _mean_nn_separation_mic(scale_xyz, cell_arr, pbc)
     else:
-        _site_query = np.asarray(site_3d, dtype=np.float64)
+        _site_query = np.asarray(scale_xyz, dtype=np.float64)
         _nn_tree = KDTree(_site_query)
-        # SciPy KDTree.query may mutate / view inputs; pass a list copy.
         nn_d, _ = _nn_tree.query(_site_query.tolist(), k=2)
-        # len(site_3d) >= 2 (early-return above), so query(..., k=2) is 2-D.
         mean_nn_sep = float(np.mean(np.asarray(nn_d, dtype=float)[:, 1]))
 
     atomic_constraint = _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE * (
@@ -398,7 +402,7 @@ def _compute_dissociative_site_pairs(
     # eligible without widening beyond that local spacing.
     max_adjacent_sep = max(max_adjacent_sep, mean_nn_sep)
 
-    if config.material_type == "slab":
+    if np.any(pbc):
         pair_distances = _periodic_site_pair_candidates(
             site_3d, cell_arr, pbc, max_adjacent_sep
         )
@@ -420,7 +424,7 @@ def _compute_dissociative_site_pairs(
         n_hat = n_hat / n_norm
     sorted_pairs = sorted(pair_distances.items())
     mic_deltas: np.ndarray | None = None
-    if config.material_type == "slab" and sorted_pairs:
+    if bool(pbc[0] or pbc[1]) and not bool(pbc[2]) and sorted_pairs:
         # One vectorized call instead of per-pair ``find_mic`` invocations
         # (each of which Minkowski-reduces the cell again).
         raw_deltas = np.asarray(
@@ -688,7 +692,7 @@ def _generate_dissociative_placement_from_spec(
     site_context: SiteContext | None = None,
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
     """Place homonuclear-diatomic fragments at two surface sites."""
-    if config.material_type not in ("slab", "nanoparticle"):
+    if config.material_type not in ("slab", "nanoparticle", "porous"):
         return None, f"dissociative_not_supported_for_{config.material_type}"
 
     if not _is_dissociable_diatomic(adsorbate):

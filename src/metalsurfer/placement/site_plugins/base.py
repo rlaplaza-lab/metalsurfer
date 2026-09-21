@@ -50,9 +50,7 @@ class SiteCandidateBatch:
     nn_dists: np.ndarray
     source_hints: list[str]
     atom_indices: list[tuple[int, ...]]
-    inject_atop: bool = False
     has_topology_atop: bool = False
-    apply_slab_height_mask: bool = False
     slab_top_atom_indices: np.ndarray | None = None
     accessibility_tree: KDTree | None = None
     topology_median_nn: float | None = None
@@ -102,6 +100,8 @@ class SiteGenerator(Protocol):
     """Plugin that enumerates raw adsorption-site candidates."""
 
     name: str
+    widens_distance_window: bool
+    uses_structure_pbc: bool
 
     def generate(
         self,

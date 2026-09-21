@@ -14,7 +14,7 @@ from metalsurfer.placement._constants import (
 )
 from metalsurfer.placement._material import material_aware_pbc
 from metalsurfer.placement.generators import (
-    _topology_first_site_indices,
+    _rank_site_indices,
     enumerate_placement_specs,
     generate_placements_from_specs,
 )
@@ -145,12 +145,12 @@ def test_adaptive_grid_default_counts_comparable_to_auto():
         )
 
 
-def _site(xyz, site_type, source, nn):
+def _site(xyz, site_type, source, nn, *, supports=(0,)):
     return Site(
         xyz=np.asarray(xyz, dtype=float),
         normal=np.array([0.0, 0.0, 1.0]),
         site_type=site_type,
-        slab_indices=(),
+        slab_indices=supports,
         material_type="slab",
         site_source=source,
         env_fingerprint=((), (), 0),
@@ -158,17 +158,30 @@ def _site(xyz, site_type, source, nn):
     )
 
 
-def test_site_ranking_prefers_topology_then_clearance():
+def test_site_ranking_prefers_coordination_then_clearance():
     sites = [
-        _site((0.0, 0.0, 0.0), "hollow", "adaptive_grid", 2.0),
-        _site((1.0, 0.0, 0.0), "bridge", "adaptive_grid", 1.5),
-        _site((2.0, 0.0, 0.0), "atop", "atop_injected", 1.8),
+        _site((0.0, 0.0, 0.0), "hollow", "adaptive_grid", 2.0, supports=(0, 1, 2)),
+        _site((1.0, 0.0, 0.0), "bridge", "topology_bridge", 1.5, supports=(0, 1)),
+        _site((2.0, 0.0, 0.0), "atop", "atop_injected", 1.8, supports=(0,)),
+        _site((3.0, 0.0, 0.0), "hollow", "topology_hollow", 2.0, supports=(1, 2, 3)),
     ]
-    clearances = np.array([1.0, 5.0, 2.0], dtype=float)
-    order = _topology_first_site_indices(sites, [0, 1, 2], clearances=clearances)
-    assert order[0] == 2
-    assert order[1] == 1
-    assert order[2] == 0
+    # Same coordination: larger clearance first, independent of site_source.
+    clearances = np.array([1.0, 5.0, 2.0, 4.0], dtype=float)
+    order = _rank_site_indices(sites, [0, 1, 2, 3], clearances=clearances)
+    assert order[0] == 3  # hollow, clearance 4
+    assert order[1] == 0  # hollow, clearance 1
+    assert order[2] == 1  # bridge
+    assert order[3] == 2  # atop
+
+
+def test_site_ranking_void_before_wall():
+    sites = [
+        _site((0.0, 0.0, 0.0), "hollow", "adaptive_grid", 2.0, supports=(0, 1, 2)),
+        _site((1.0, 0.0, 0.0), "pore", "voronoi", 3.0, supports=()),
+    ]
+    order = _rank_site_indices(sites, [0, 1], clearances=np.array([1.0, 1.0]))
+    assert order[0] == 1
+    assert order[1] == 0
 
 
 def test_grid_in_accessibility_window():
@@ -686,3 +699,47 @@ def test_adaptive_grid_same_path_on_all_materials():
         assert sites, f"adaptive_grid empty on {mat}"
         assert {s.site_source for s in sites} <= {"adaptive_grid"}
         assert all(s.tangent_basis is not None for s in sites)
+
+
+def test_resolve_side_policy_follows_pbc_not_material_label():
+    from metalsurfer.placement.site_adaptive_grid import resolve_side_policy_for_pbc
+
+    assert resolve_side_policy_for_pbc([True, True, False], "positive") == "positive"
+    assert resolve_side_policy_for_pbc([False, False, False], "positive") == "external"
+    assert resolve_side_policy_for_pbc([True, True, True], "positive") == "all"
+    assert resolve_side_policy_for_pbc([True, False, False], "positive") == "all"
+    assert resolve_side_policy_for_pbc([True, True, True], "negative") == "negative"
+    assert resolve_side_policy_for_pbc([False, False, False], "all") == "all"
+
+
+@pytest.mark.parametrize("plugin", ["adaptive_grid", "rolling_probe"])
+def test_wall_near_plugins_follow_structure_pbc(plugin):
+    """Wall-near plugins use atoms.get_pbc(), not material_aware_pbc alone."""
+    slab = make_slab()
+    ttf = get_unified_sites(slab, material_type="slab", site_generator=plugin, n_jobs=1)
+    ttt = slab.copy()
+    ttt.set_pbc([True, True, True])
+    both_faces = get_unified_sites(
+        ttt, material_type="slab", site_generator=plugin, n_jobs=1
+    )
+    assert ttf and both_faces
+    # Full 3D PBC remaps default positive → all, so both vacuum faces survive.
+    assert len(both_faces) >= len(ttf)
+
+
+@pytest.mark.parametrize("plugin", ["adaptive_grid", "rolling_probe"])
+def test_wall_near_cluster_pbc_keeps_outward_sites(plugin):
+    """No-PBC structures remap positive → external (COM outward)."""
+    np_atoms = make_nanoparticle()
+    assert not any(np_atoms.get_pbc())
+    sites = get_unified_sites(
+        np_atoms, material_type="nanoparticle", site_generator=plugin, n_jobs=1
+    )
+    assert sites
+    com = np_atoms.get_positions().mean(axis=0)
+    for s in sites:
+        away = np.asarray(s.xyz, dtype=float) - com
+        nrm = float(np.linalg.norm(away))
+        if nrm < 1e-8:
+            continue
+        assert float(np.dot(s.normal, away / nrm)) >= -1e-6

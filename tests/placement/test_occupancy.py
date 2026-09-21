@@ -905,6 +905,98 @@ def test_fill_retry_bans_pose_family_after_too_close(monkeypatch):
     assert (0, 1, 0.5) in seen_specs[1]
 
 
+def test_fill_retry_bans_azimuth_family_after_insufficient_contact(monkeypatch):
+    """insufficient_contact bans one azimuth; a sibling azimuth may redraw."""
+    from metalsurfer.placement.site_context import SiteContext
+    from metalsurfer.placement.site_types import Site
+    from metalsurfer.workflow import placement_fill as fill_mod
+    from metalsurfer.workflow.shared import PlacementFailureEvent
+
+    sites = [
+        Site(
+            xyz=np.array([0.0, 0.0, 5.0]),
+            normal=np.array([0.0, 0.0, 1.0]),
+            site_type="atop",
+            slab_indices=(0,),
+            material_type="slab",
+            site_source="test",
+            env_fingerprint=(("Ru",), (0,), 1),
+        ),
+    ]
+    ctx = SiteContext(sites=sites, use_sites=True, source="test")
+    seen_azimuths: list[list[float]] = []
+    round_id = {"n": 0}
+
+    def make_specs(n_desired, filter_spec):
+        round_id["n"] += 1
+        if round_id["n"] == 1:
+            specs = [
+                _round_atop_placement_spec(
+                    0, site_index=0, azimuth_deg=0.0, z_fraction=0.5
+                )
+            ]
+        else:
+            specs = [
+                _round_atop_placement_spec(
+                    0, site_index=0, azimuth_deg=0.0, z_fraction=0.5
+                ),
+                _round_atop_placement_spec(
+                    0, site_index=0, azimuth_deg=90.0, z_fraction=0.5
+                ),
+            ]
+        filtered = _filter_specs(specs, filter_spec)
+        seen_azimuths.append([float(s.azimuth_deg) for s in filtered])
+        return filtered[:n_desired]
+
+    def fake_materialize(**kwargs):
+        specs = kwargs["specs"]
+        if round_id["n"] == 1:
+            return (
+                [],
+                [],
+                [],
+                [
+                    PlacementFailureEvent(
+                        placement_id=spec.placement_index,
+                        stage="generation",
+                        reason="insufficient_contact_atoms",
+                        descriptor=None,
+                    )
+                    for spec in specs
+                ],
+            )
+        return _materialize_all_succeed()(specs=specs)
+
+    _patch_fill(
+        monkeypatch,
+        fill_mod,
+        enumerate_fn=_enumerate_from(make_specs),
+        materialize_fn=fake_materialize,
+    )
+    slab = make_slab()
+    result = fill_mod.fill_materialized_placements(
+        conformers=[make_water()],
+        slab_for_sites=slab,
+        config=AdsorptionConfig(
+            material_type="slab",
+            num_placements=1,
+            placement_retry_enabled=True,
+            placement_retry_oversample_max=2.0,
+            seed=0,
+            placement_fill_clamp_to_capacity=False,
+        ),
+        smiles="O",
+        site_context=ctx,
+        slab_atoms=slab,
+        calculator=None,
+    )
+    assert len(result.combined) == 1
+    assert result.n_attempts == 2
+    assert seen_azimuths[0] == [0.0]
+    assert 0.0 not in seen_azimuths[1]
+    assert 90.0 in seen_azimuths[1]
+
+
 def test_fill_retry_bans_site_on_adsorbate_overlap(monkeypatch):
     """adsorbate_overlap bans (conformer, site) on retry, not every conformer."""
     from metalsurfer.placement.site_context import SiteContext

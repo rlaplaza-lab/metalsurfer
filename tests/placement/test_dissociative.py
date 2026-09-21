@@ -218,13 +218,13 @@ def test_dissociative_placement_supported_for_nanoparticle():
     )
     pairs = _get_dissociative_site_pairs(nanoparticle, config)
     assert pairs, "Au₁₃ fixture must expose dissociative site pairs"
-    # Pair catalog must come from hollow/pore sites only (not atop/bridge).
+    # Pair catalog must come from wall hollow/bridge sites only (not atop/void).
     hollow_sites = [
         s
         for s in get_unified_sites(nanoparticle, material_type="nanoparticle")
-        if s.site_type in ("hollow", "pore")
+        if s.site_type in ("hollow", "bridge") and s.kind == "wall"
     ]
-    assert hollow_sites, "NP fixture must expose hollow sites"
+    assert hollow_sites, "NP fixture must expose hollow/bridge sites"
     hollow_xyz = {tuple(np.round(s.xyz, 6)) for s in hollow_sites}
     for pair in pairs:
         assert tuple(np.round(pair.xyz1, 6)) in hollow_xyz
@@ -286,7 +286,10 @@ def test_np_dissociative_pairs_ignore_atop_and_bridge_in_mixed_catalog():
         cell_arr=cell,
     )
     assert filtered
-    assert all(s.site_type in ("hollow", "pore") for s in filtered)
+    assert all(
+        s.site_type in ("hollow", "bridge") and s.kind == "wall" for s in filtered
+    )
+    assert all(s.site_type != "atop" for s in filtered)
 
     pairs = _get_dissociative_site_pairs(nanoparticle, config, raw_sites=all_sites)
     assert pairs, "hollow subset must still yield dissociative pairs"
@@ -413,24 +416,80 @@ def test_dissociative_placement_on_slab_separates_and_clears_surface():
     )
 
 
-def test_dissociative_placement_rejected_for_porous_material_type():
+def test_porous_wall_hollows_pair_when_dissociative_enabled():
+    """With the flag on, wall hollows on a porous cell form pairs; pores do not."""
+    from metalsurfer.placement.dissociative import _filter_hollow_pore_sites
+    from metalsurfer.placement.site_context import SiteContext
+
     porous = make_porous_framework()
     config = AdsorptionConfig(
         material_type="porous",
+        enable_dissociative_placement=True,
         skip_topology_check=True,
-        num_placements=1,
     )
-    h2 = make_h2()
-    spec = dissoc_placement_spec()
+    wall_a = Site(
+        xyz=np.array([2.0, 2.0, 5.0]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_type="hollow",
+        kind="wall",
+        slab_indices=(0, 1, 2),
+        material_type="porous",
+        site_source="test",
+        env_fingerprint=((), (), 0),
+        nn_distance=2.5,
+    )
+    wall_b = Site(
+        xyz=np.array([4.0, 2.0, 5.0]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_type="hollow",
+        kind="wall",
+        slab_indices=(3, 4, 5),
+        material_type="porous",
+        site_source="test",
+        env_fingerprint=((), (), 0),
+        nn_distance=2.5,
+    )
+    pore_a = Site(
+        xyz=np.array([6.0, 6.0, 6.0]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_type="pore",
+        kind="void",
+        slab_indices=(),
+        material_type="porous",
+        site_source="test",
+        env_fingerprint=((), (), 0),
+        nn_distance=4.0,
+    )
+    pore_b = Site(
+        xyz=np.array([8.0, 6.0, 6.0]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_type="pore",
+        kind="void",
+        slab_indices=(),
+        material_type="porous",
+        site_source="test",
+        env_fingerprint=((), (), 0),
+        nn_distance=4.0,
+    )
+    filtered = _filter_hollow_pore_sites([wall_a, wall_b, pore_a, pore_b])
+    assert filtered == [wall_a, wall_b]
 
-    result, reason = generate_placement_from_spec_with_reason(
-        spec,
-        [h2],
-        porous,
-        config,
+    ctx = SiteContext(
+        sites=[wall_a, wall_b, pore_a, pore_b],
+        use_sites=True,
+        source="test",
+        clustered_sites=[wall_a, wall_b, pore_a, pore_b],
     )
-    assert result is None
-    assert reason == "dissociative_not_supported_for_porous"
+    pairs = _get_dissociative_site_pairs(porous, config, site_context=ctx)
+    assert len(pairs) >= 1
+
+    pore_only = SiteContext(
+        sites=[pore_a, pore_b],
+        use_sites=True,
+        source="test",
+        clustered_sites=[pore_a, pore_b],
+    )
+    assert _get_dissociative_site_pairs(porous, config, site_context=pore_only) == []
 
 
 def test_dissociative_fragment_positions_round_trip():

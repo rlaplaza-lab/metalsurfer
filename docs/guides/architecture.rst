@@ -218,9 +218,12 @@ Implementation: ``placement/site_*`` plus ``placement/site_plugins/``
 
 Which points get proposed depends on ``site_generator``
 (``auto`` / ``topology`` / ``voronoi`` / ``adaptive_grid`` / ``rolling_probe``).
-Shared prep (periodicity, probe window) and post-steps (atop injection,
-classification, sort) stay in the enumerator; plugins only emit raw candidate
-batches.
+Shared prep (periodicity, probe window) and post-steps (classification,
+outward-normal check, catalog clustering / sort) stay in the enumerator.
+Plugins emit candidate batches; topology and Voronoi own atop injection and
+the slab height mask themselves. Catalog ``Site.xyz`` is the unlifted
+anchor (support-plane projection for wall sites, void centre for pores).
+The only adsorbate lift is the contact solve in pose.
 
 .. list-table::
    :header-rows: 1
@@ -247,8 +250,8 @@ batches.
        + exposure filters — wall-near, not pore centres. Face / exposure policy
        comes from PBC geometry (not material labels). One representative per
        support key, snapped to a lateral pocket anchor at a target clearance,
-       then a modest ``merge_radius`` NMS. Does not set topology-only
-       ``inject_atop`` / height-mask flags. Sampling increment is
+       then a modest ``merge_radius`` NMS. Does not inject atops or apply the
+       slab height mask (those stay in topology / Voronoi). Sampling increment is
        ``adaptive_grid_spacing``; optional refine halvings via
        ``adaptive_grid_refine_levels``. Same classify / cluster / symmetry /
        placement path afterward. Selectable in config / YAML;
@@ -260,7 +263,8 @@ batches.
        retained. Covers slab faces, NP exterior, and MOF **pore walls** (not
        free-volume pore centres). Catalog density matches default
        ``adaptive_grid`` NMS. Uses ``side_policy`` (default ``positive`` remaps
-       to ``all`` / ``external`` on porous / NP). Selectable in config / YAML;
+       from the structure PBC mask: slab-like → vacuum face, cluster →
+       ``external``, 3D-periodic → ``all``). Selectable in config / YAML;
        **not** chosen by ``auto``.
 
 Generation follows the slab normal (``a × b``) and the surface plane — not
@@ -285,18 +289,24 @@ Pipeline:
 7. Typing: distance ratios on six nearest neighbours, or top-layer mesh
    classify (``delaunay`` / ``auto`` on slabs) that labels candidates as
    atop / bridge / hollow. Hollows may carry ``hollow_order`` (3- or 4-fold).
-8. ``Site`` records: ``xyz``, local ``normal``, ``site_type``,
-   ``slab_indices``, ``env_fingerprint``, ``site_source``, ``material_type``.
+8. ``Site`` records: ``xyz``, local ``normal``, ``kind`` (``wall`` /
+   ``void``), ``site_type``, ``slab_indices``, ``env_fingerprint``,
+   ``site_source``, ``material_type``. Placement switches on ``kind``;
+   ``site_type`` stays for stratified sampling and CSV provenance.
 9. Uniqueness in layers: (1) plugin-internal wrap / near-duplicate thinning;
    (2) enumerator vertex merge (~0.1 Å; when Voronoi is appended to topology,
    existing topology points stay frozen); (3) catalog clustering with
    ``site_equivalence_tolerance`` — sites merge when close **and** they share
    the same ``env_fingerprint`` (support-atom symbols + distance bins + side
-   label; **not** ``site_source`` or classified ``site_type``); (4) optional
+   label; **not** ``site_source`` or classified ``site_type``); clustering
+   metric follows the material PBC mask (open / slab-plane / full MIC);
+   (4) optional
    spglib symmetry reduction on the clustered list for molecular sampling on a
    clean substrate.
 10. Final list sorted by fractional coordinates for deterministic
-    ``site_index``.
+    ``site_index``. Sampling rank prefers voids, then hollow / bridge / atop,
+    then larger clearance; a capped list reserves room for wall sites when
+    both kinds exist.
 
 ``_get_unique_sites_for_specs`` returns a ``SiteContext`` with the sampling
 catalog (``sites``), the full clustered list (``clustered_sites``), and the
@@ -378,28 +388,26 @@ Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi`` /
        no atop inject / height mask
    * - rolling_probe
      - Contact enumeration via ``n_jobs``; ``side_policy`` (PBC-geometry face
-       filter; default remaps on porous / NP). Wall-near only; no public
-       spacing knob (shares default adaptive_grid NMS density)
+       filter; default remaps from the structure PBC mask). Wall-near only; no
+       public spacing knob (shares default adaptive_grid NMS density)
 
 See :doc:`configuration` for the full knob-by-plugin table.
 
 **Intentional asymmetries** (not unfinished ports): top-layer mesh + topology
 on slabs (pure Voronoi floods the batch with weak candidates); hull +
 nearest-neighbour topology on nanoparticles (Voronoi voids are not adsorption
-sites); dissociative hollow pairs on slabs (rejected for porous; NP uses
-outward-normal site pairs); parallel-z floors on wall-near sites (skipped
-for pores); no atop injection /
-dissociative for porous. Catalog ``Site.xyz`` is the support-plane anchor
-(plugin lift/snap is probe-only; adaptive grid, rolling probe, and Voronoi
-wall-near vertices are projected with the shared support-plane helper before
-classify, which projects again before fingerprints); pore / free-volume
-vertices stay at the void centre.
-``surface_ref`` is always the local site frame (max support height along
-``site.normal``; pores use the void vertex). ``adaptive_grid`` and
-``rolling_probe`` register in ``placement/site_plugins/`` with the same
-candidate-batch contract and a **single** generation path for all materials
-(config-selectable, not chosen by ``auto``). Topology / Voronoi keep
-system-specific heuristics; the wall-near opt-in plugins do not.
+sites); distance-window auto-widen for topology / Voronoi only (adaptive grid
+and rolling probe skip it); dissociative wall hollow/bridge pairs on any
+material when the flag is on (void sites are never dissociation anchors).
+Catalog ``Site.xyz`` is the unlifted support-plane or void-centre anchor
+(plugin lift/snap is probe-only; classify projects wall anchors onto the
+support plane and flips or drops inward normals). ``surface_ref`` is always
+the local site frame (max support height along ``site.normal``; voids use
+the void vertex). ``adaptive_grid`` and ``rolling_probe`` register in
+``placement/site_plugins/`` with the same candidate-batch contract and a
+**single** generation path for all materials (config-selectable, not chosen
+by ``auto``). Topology / Voronoi keep system-specific heuristics; the
+wall-near opt-in plugins do not.
 
 
 Placement
@@ -423,11 +431,11 @@ without remapping indices—replay/BO keep stable ``site_index`` values.
 Under coverage that catalog is the full clustered list (symmetry reduction
 is dropped), so unoccupied equivalent copies remain sampleable while
 occupied columns are excluded. When ``occupancy_use_footprint`` is enabled,
-survivors are ranked by lateral footprint clearance (incoming disk scaled by
-``occupancy_footprint_scale``) rather than pruned by a second reject mask;
-topology-sourced sites still come first in ranking (sampling policy, not a
-separate uniqueness pass). Dissociative pairing reads
-``SiteContext.clustered_sites`` (hollow/pore subset) and shares occupancy
+survivors are ranked by kind, coordination, and clearance (incoming disk
+scaled by ``occupancy_footprint_scale``) rather than pruned by a second reject
+mask; voids and higher-coordination sites come first when clearances tie
+(sampling policy, not a separate uniqueness pass). Dissociative pairing reads
+``SiteContext.clustered_sites`` (wall hollow/bridge subset) and shares occupancy
 helpers in ``placement/occupancy.py``. Empty available sites yield no specs (no
 random-XY fallback). Multi-molecule saturation recomputes
 ``estimate_conformer_count`` (conformer count) each step and skips zero-capacity
@@ -439,9 +447,9 @@ Enumeration / materialization
 - ``policy.py`` — Cartesian product over conformers × sites × orientation
   knobs; **stratified** subsample by ``site_type`` to ``n_desired`` (seeded),
 - Soft priors preferring milder tilt and mid ``z_fraction``.
-  Topology-sourced sites are ordered first on slabs. Porous frameworks
-  restrict enumeration to open ``pore`` sites (nn-distance sorted) when any
-  exist, and soft-prior draws prefer those earlier indices. Under coverage,
+  Sites are ranked by ``kind``, coordination, and clearance before the
+  stratified draw. Soft-prior draws prefer earlier indices (voids first when
+  present). Under coverage,
   a per-molecule footprint view drops ``(conformer, site)`` pairs that do
   not clear existing adsorbates without rewriting the shared
   ``SiteContext.sites`` catalog (competitive saturation reuses one frame).
@@ -459,10 +467,11 @@ Enumeration / materialization
   ``placement_materialize_workers`` to a concrete thread-pool size.
 - After orientation, a **feasible height interval** along the site normal is
   solved once per rigid pose family (cached on the per-screen pose batch).
-  Wall-near: pairwise contact-solved COM is the lower bound / nominal;
+  Wall sites: pairwise contact-solved COM is the lower bound / nominal;
   ``z_fraction`` ≤ ``0.5`` clips to contact and values above explore toward
-  the upper gate. Pores: nominal is the void centre; the interval is the
-  cleared span containing it. Empty intervals fail as ``infeasible_pose``;
+  the upper gate. Void sites: nominal is the free-volume centre (or nearest
+  cleared height); the interval is the cleared span containing it. Empty
+  intervals fail as ``infeasible_pose``;
   failed multi-contact at nominal fails as ``insufficient_contact_atoms``.
   ``surface_ref`` is always local (support plane or void vertex).
 - **Distance recovery** (default on): residual ``too_close`` / ``too_far`` /
@@ -471,16 +480,19 @@ Enumeration / materialization
   the normal; mostly in-plane clashes skip height; huge normal penetration
   fails before Packmol. Then chemistry-scaled clash descent when
   ``placement_clash_descent`` is on (discrete XY only when clash is off).
-  ``adsorbate_overlap`` skips height. Pore sites (``site_type == "pore"``)
+  ``adsorbate_overlap`` skips height. Void sites (``kind == "void"``)
   invert the height nudge toward the free-volume centre — not
   ``material_type``.
-- **Voronoi auto-widen** (default on): one wider probe/max retry when the
-  first window finds no sites.
-- **Dissociative** (``dissociative.py`` / ``_place_dissociative_two_sites``): homonuclear
-  diatomics when ``enable_dissociative_placement=True``. Keep
+- **Distance-window auto-widen** (default on): topology and Voronoi retry once
+  with a wider probe/max when the first window finds no sites; adaptive grid
+  and rolling probe skip that retry.
+- **Dissociative** (``dissociative.py`` / ``_place_dissociative_two_sites``):
+  homonuclear diatomics when ``enable_dissociative_placement=True``. Keep
   ``skip_topology_check=True`` to disable post-relax connectivity checks for
-  fragments. Fragments share one lift direction (averaged site normals) so
-  pair spacing is preserved; each site keeps a local support-plane height.
+  fragments. Pairs wall hollows and bridges on any material using the
+  structure PBC mask; void sites are never dissociation anchors. Fragments
+  share one lift direction (averaged site normals) so pair spacing is
+  preserved; each site keeps a local support-plane height.
   Descriptor COM + identity quaternion feed ML;
   ``fragment_positions`` are replay-only.
 - ``_materialize_spec_placements`` — failures become
