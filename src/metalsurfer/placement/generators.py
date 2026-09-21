@@ -180,13 +180,11 @@ def _rank_site_indices(
     """Order *indices* by kind, coordination, and clearance (not site_source)."""
 
     def _rank(i: int) -> tuple[int, int, float, int]:
-        clear = (
-            float(clearances[i])
-            if clearances is not None and i < len(clearances)
-            else (
-                float(sites[i].nn_distance) if sites[i].nn_distance is not None else 0.0
-            )
-        )
+        if clearances is not None and i < len(clearances):
+            clear = float(clearances[i])
+        else:
+            nn_distance = sites[i].nn_distance
+            clear = float(nn_distance) if nn_distance is not None else 0.0
         return _site_rank_key(sites[i], i, clearance=clear)
 
     return sorted(indices, key=_rank)

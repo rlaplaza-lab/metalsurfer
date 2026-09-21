@@ -109,6 +109,8 @@ class VoronoiGenerator:
                 pbc,
                 float(max_site_distance),
             )
+        normals: np.ndarray | None
+        clearances: np.ndarray | None
         normals, clearances = candidate_enrichment_frames(
             vertices,
             nn_dists,

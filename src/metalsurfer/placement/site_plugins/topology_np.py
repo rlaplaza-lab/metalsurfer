@@ -61,6 +61,8 @@ class TopologyNPGenerator:
         )
         has_topology_atop = any(s == "topology_atop" for s in topo_sources)
         atom_indices = list(topo_atoms)
+        normals: np.ndarray | None
+        clearances: np.ndarray | None
         normals, clearances = candidate_enrichment_frames(
             topo_vertices,
             topo_dists,

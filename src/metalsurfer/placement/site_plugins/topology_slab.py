@@ -164,6 +164,8 @@ class TopologySlabGenerator:
                 )
             )
 
+        normals: np.ndarray | None
+        clearances: np.ndarray | None
         normals, clearances = candidate_enrichment_frames(
             vertices,
             nn_dists,
