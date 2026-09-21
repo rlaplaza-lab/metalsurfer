@@ -336,3 +336,21 @@ _ADAPTIVE_GRID_REFINE_POS_TOL: float = 0.05
 _ADAPTIVE_GRID_REFINE_SCORE_TOL: float = 0.02
 # Fingerprint distance quantization (Å) for shared site env fingerprints.
 _SITE_ENV_FP_DIST_BIN: float = 0.25
+
+# ---------------------------------------------------------------------------
+# Rolling-probe site generator (wall-near Connolly / SAS contacts)
+# ---------------------------------------------------------------------------
+# Max local neighbours considered per atom for pair / triplet contacts.
+_ROLLING_PROBE_NEIGHBOR_K: int = 14
+# Fibonacci-sphere samples for order-1 (atop) contacts.
+_ROLLING_PROBE_ATOP_SAMPLES: int = 14
+# Samples on the two-sphere tangent circle for order-2 (bridge) contacts.
+_ROLLING_PROBE_BRIDGE_SAMPLES: int = 8
+# Clash tolerance on expanded-sphere contacts (Å).
+_ROLLING_PROBE_CLASH_TOL: float = 1e-4
+# Skip pair/triplet work when no exposed atop and coordination is high and
+# no contact-range neighbour remains (true bulk interior).
+_ROLLING_PROBE_BURY_CN: int = 10
+# Shorter ray exposure inside porous frameworks so opposite pore walls do not
+# reject valid wall-near chemisorption contacts.
+_ROLLING_PROBE_POROUS_EXPOSURE_N_STEPS: int = 2

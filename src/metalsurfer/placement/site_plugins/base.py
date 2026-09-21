@@ -1,7 +1,7 @@
 """Site generator plugin contract, registry helpers, and name resolution.
 
 Registered plugins: ``topology`` (slab Delaunay hybrid / NP hull),
-``voronoi`` (free-volume vertices), and ``adaptive_grid``
+``voronoi`` (free-volume vertices), ``adaptive_grid``, and ``rolling_probe``
 (atom-centred Cartesian grid with iterative refinement; all materials).
 """
 

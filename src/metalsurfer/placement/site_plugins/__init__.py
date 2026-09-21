@@ -1,7 +1,8 @@
 """Site generator plugins for adsorption-site enumeration.
 
 ``auto`` resolves by material (slab/NP → topology, porous → voronoi).
-``adaptive_grid`` is selectable on all materials but not chosen by ``auto``.
+``adaptive_grid`` and ``rolling_probe`` are selectable on all materials but
+not chosen by ``auto``.
 """
 
 from .adaptive_grid import AdaptiveGridGenerator
@@ -15,6 +16,7 @@ from .base import (
     resolved_site_generator_name,
     slice_candidate_arrays,
 )
+from .rolling_probe import RollingProbeGenerator
 from .topology_np import TopologyNPGenerator
 from .topology_slab import TopologySlabGenerator
 from .voronoi import VoronoiGenerator
@@ -23,6 +25,7 @@ __all__ = [
     "PLUGIN_ALLOWED_MATERIALS",
     "SITE_GENERATORS",
     "AdaptiveGridGenerator",
+    "RollingProbeGenerator",
     "SiteCandidateBatch",
     "SiteGenerationContext",
     "SiteGenerator",
@@ -44,6 +47,9 @@ _SITE_GENERATOR_FACTORY: dict[tuple[str, str], type] = {
     ("adaptive_grid", "slab"): AdaptiveGridGenerator,
     ("adaptive_grid", "nanoparticle"): AdaptiveGridGenerator,
     ("adaptive_grid", "porous"): AdaptiveGridGenerator,
+    ("rolling_probe", "slab"): RollingProbeGenerator,
+    ("rolling_probe", "nanoparticle"): RollingProbeGenerator,
+    ("rolling_probe", "porous"): RollingProbeGenerator,
 }
 
 

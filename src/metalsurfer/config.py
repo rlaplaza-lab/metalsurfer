@@ -759,9 +759,12 @@ class AdsorptionConfig:
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
     # Site candidate generator. ``auto`` → topology (slab/NP) or Voronoi (porous).
-    # ``adaptive_grid`` is selectable on all materials but never chosen by ``auto``.
-    site_generator: Literal["auto", "topology", "voronoi", "adaptive_grid"] = "auto"
-    # Face / exposure policy for adaptive_grid only (PBC-geometry face filter).
+    # ``adaptive_grid`` / ``rolling_probe`` are selectable on all materials but
+    # never chosen by ``auto``.
+    site_generator: Literal[
+        "auto", "topology", "voronoi", "adaptive_grid", "rolling_probe"
+    ] = "auto"
+    # Face / exposure policy for adaptive_grid / rolling_probe (PBC-geometry face filter).
     side_policy: Literal["all", "positive", "negative", "external"] = "positive"
     # Absolute shell increment (Å) for ``adaptive_grid``. Near-atom sampling;
     # catalog density bounded by merge_radius (NN-floored). Keep 0.70 unless

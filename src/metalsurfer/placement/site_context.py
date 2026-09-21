@@ -117,6 +117,8 @@ def _unique_sites_cache_key(
             + struct.pack("<i", int(config.adaptive_grid_refine_levels))
             + struct.pack("<d", float(config.adaptive_grid_nms_framework_scale))
         )
+    elif str(config.site_generator) == "rolling_probe":
+        scale_bytes = b"\x00rps\x00" + str(config.side_policy).encode() + b"\x00"
     return hashlib.sha256(
         pos_bytes + cell_bytes + pbc_bytes + numbers_bytes + cfg_bytes + scale_bytes
     ).hexdigest()

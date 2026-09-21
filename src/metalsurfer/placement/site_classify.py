@@ -370,7 +370,7 @@ _TOPOLOGY_SOURCE_TO_TYPE = {
     "atop_injected": "atop",
 }
 # Only these sources may derive site_type from support-atom count.
-_SUPPORT_COUNT_TYPED_SOURCES = frozenset({"adaptive_grid"})
+_SUPPORT_COUNT_TYPED_SOURCES = frozenset({"adaptive_grid", "rolling_probe"})
 
 
 def site_env_fingerprint(

@@ -201,10 +201,10 @@ Module layout
 
 ``placement/`` internals: ``site_types``, ``site_coords``, ``site_voronoi``,
 ``site_classify``, ``site_enumeration``, ``site_adaptive_grid``,
-``site_plugins``, ``site_context``, ``occupancy``, ``policy``, ``orientation``,
-``pose`` (materialize + validate), ``dissociative``, ``geometry``,
-``_material``; public orchestration in ``generators.py``. Site APIs are
-imported from ``site_enumeration`` / ``site_coords`` (also re-exported from
+``site_rolling_probe``, ``site_plugins``, ``site_context``, ``occupancy``,
+``policy``, ``orientation``, ``pose`` (materialize + validate), ``dissociative``,
+``geometry``, ``_material``; public orchestration in ``generators.py``. Site APIs
+are imported from ``site_enumeration`` / ``site_coords`` (also re-exported from
 ``metalsurfer.placement``).
 
 
@@ -213,12 +213,14 @@ Site detection
 
 Implementation: ``placement/site_*`` plus ``placement/site_plugins/``
 (entry point: ``get_unified_sites``). Plugin names live in
-``site_plugin_ids.py``.
+``site_plugin_ids.py``. Core algorithms include ``site_adaptive_grid`` and
+``site_rolling_probe``.
 
 Which points get proposed depends on ``site_generator``
-(``auto`` / ``topology`` / ``voronoi`` / ``adaptive_grid``). Shared prep
-(periodicity, probe window) and post-steps (atop injection, classification,
-sort) stay in the enumerator; plugins only emit raw candidate batches.
+(``auto`` / ``topology`` / ``voronoi`` / ``adaptive_grid`` / ``rolling_probe``).
+Shared prep (periodicity, probe window) and post-steps (atop injection,
+classification, sort) stay in the enumerator; plugins only emit raw candidate
+batches.
 
 .. list-table::
    :header-rows: 1
@@ -250,6 +252,15 @@ sort) stay in the enumerator; plugins only emit raw candidate batches.
        ``adaptive_grid_spacing``; optional refine halvings via
        ``adaptive_grid_refine_levels``. Same classify / cluster / symmetry /
        placement path afterward. Selectable in config / YAML;
+       **not** chosen by ``auto``.
+   * - ``rolling_probe``
+     - all
+     - Opt-in Connolly / SAS wall-near contacts (probe tangent to 1/2/3
+       framework spheres → atop / bridge / hollow). Geometric supports are
+       retained. Covers slab faces, NP exterior, and MOF **pore walls** (not
+       free-volume pore centres). Catalog density matches default
+       ``adaptive_grid`` NMS. Uses ``side_policy`` (default ``positive`` remaps
+       to ``all`` / ``external`` on porous / NP). Selectable in config / YAML;
        **not** chosen by ``auto``.
 
 Generation follows the slab normal (``a × b``) and the surface plane — not
@@ -338,7 +349,7 @@ Material strategies:
      - 3×3×3 images; pore sites when the framework spans the cell
 
 Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi`` /
-``adaptive_grid``),
+``adaptive_grid`` / ``rolling_probe``),
 ``voronoi_probe_radius``, ``voronoi_max_site_distance``,
 ``top_layer_tolerance``, ``symmetry_tolerance``,
 ``site_equivalence_tolerance``, ``site_classification_method``
@@ -365,6 +376,10 @@ Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi`` /
      - Shell / refine chunks via ``n_jobs``; density via ``adaptive_grid_*`` and
        ``side_policy`` (PBC-geometry face filter). No material_type branches,
        no atop inject / height mask
+   * - rolling_probe
+     - Contact enumeration via ``n_jobs``; ``side_policy`` (PBC-geometry face
+       filter; default remaps on porous / NP). Wall-near only; no public
+       spacing knob (shares default adaptive_grid NMS density)
 
 See :doc:`configuration` for the full knob-by-plugin table.
 
@@ -377,11 +392,10 @@ parallel-z floors for slab/NP aromatics (skipped for porous); no atop
 injection / dissociative for porous. Nanoparticle ``surface_ref`` is the
 coordinating metal atoms projected onto the site normal (topology vertices
 are already lifted); porous keeps the site-vertex projection.
-``adaptive_grid`` registers in ``placement/site_plugins/`` with the same
-candidate-batch contract and a **single** generation path for all materials
-(config-selectable, not chosen by ``auto``). Topology / Voronoi keep
-system-specific heuristics; adaptive_grid does not. Future plugins
-(e.g. rolling-probe) would follow the same batch contract.
+``adaptive_grid`` and ``rolling_probe`` register in ``placement/site_plugins/``
+with the same candidate-batch contract and a **single** generation path for all
+materials (config-selectable, not chosen by ``auto``). Topology / Voronoi keep
+system-specific heuristics; the wall-near opt-in plugins do not.
 
 
 Placement
