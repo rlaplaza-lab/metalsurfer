@@ -296,9 +296,25 @@ def _pairwise_contact_com_height(
         j_near = int(np.argmin(lateral[i_low]))
         gate = _allowed(symbols[i_low], slab_symbols[j_near])
         h_needed = base_h + gate - float(rel_h[i_low])
+    # 3D pair gates in a hollow can sit atoms below the nuclear plane; keep
+    # every atom on the vacuum side of the support-plane anchor.
+    h_needed = max(
+        float(h_needed),
+        _com_floor_on_support_plane(rotated, n_hat, base_h),
+    )
     # Pad so reconstructed MIC distances clear ``dists < allowed`` under
     # quaternion / wrap float noise (not a chemistry slack).
     return float(h_needed) + 1e-6
+
+
+def _com_floor_on_support_plane(
+    rotated_pos: np.ndarray,
+    n_hat: np.ndarray,
+    base_h: float,
+) -> float:
+    """COM height that places the lowest adsorbate atom on the support plane."""
+    rel_h = np.asarray(rotated_pos, dtype=float) @ np.asarray(n_hat, dtype=float)
+    return float(base_h - np.min(rel_h))
 
 
 def _resolve_surface_ref(
@@ -591,6 +607,12 @@ def _pose_from_spec(
         )
         delta = (zf - 0.5) * diversity_window
         com_h = float(com_contact) + delta
+        # Low z_fraction is a signed offset around contact, but must not push
+        # atoms through the support plane (hollow 3D gates leave little slack).
+        com_h = max(
+            com_h,
+            _com_floor_on_support_plane(rotated_pos, place_normal, base_h),
+        )
         placement_center = base + (com_h - base_h) * place_normal
         contact_gap = float(com_contact) - float(contact_ref)
         # Recovery window centred on the solved contact COM gap.
