@@ -469,20 +469,30 @@ def test_slab_enrichment_flag_does_not_warn_from_site_context(caplog):
 
 
 def test_porous_classification_uses_periodic_neighbours_near_cell_face():
-    """Near-face porous sites must type from MIC k-NN, not in-cell distances."""
+    """Near-face probes type from MIC k-NN, not in-cell distances.
+
+    Classification runs on plugin probe vertices. Catalog ``Site.xyz`` is
+    later unlifted for wall-near sites, so this check uses the probe batch
+    (and pore catalog xyz, which stays at the void centre).
+    """
     from metalsurfer.placement.site_classify import _build_classification_context
     from metalsurfer.placement.site_coords import derive_pore_threshold
-    from metalsurfer.placement.site_enumeration import get_unified_sites
+    from metalsurfer.placement.site_enumeration import (
+        _get_unified_sites_with_plugin_vertices,
+    )
 
     porous = make_porous_framework()
-    sites = get_unified_sites(porous, material_type="porous")
+    sites, plugin_vertices = _get_unified_sites_with_plugin_vertices(
+        porous, material_type="porous"
+    )
     assert sites, "porous fixture must expose sites"
+    vertices = np.asarray(plugin_vertices, dtype=float).reshape(-1, 3)
+    assert len(vertices) > 0
 
     positions = porous.get_positions()
     cell = np.asarray(porous.get_cell(), dtype=float)
     pbc = np.asarray(porous.get_pbc(), dtype=bool)
     local_tree = KDTree(positions)
-    vertices = np.asarray([s.xyz for s in sites], dtype=float)
     k_class = min(_SITE_CLASSIFICATION_NEIGHBOURS, len(positions))
 
     ctx = _build_classification_context(
@@ -505,10 +515,25 @@ def test_porous_classification_uses_periodic_neighbours_near_cell_face():
     assert np.any(
         ~np.isclose(plain_dists, ctx.class_dists, atol=1e-6)
         | (plain_idx != ctx.class_idx)
-    ), "expected at least one near-face site where in-cell k-NN differs from MIC"
+    ), "expected at least one near-face probe where in-cell k-NN differs from MIC"
 
+    pores = [s for s in sites if s.site_type == "pore"]
+    assert pores, "porous fixture must keep free-volume pores"
+    pore_xyz = np.asarray([s.xyz for s in pores], dtype=float)
+    ctx_pores = _build_classification_context(
+        pore_xyz,
+        positions,
+        local_tree,
+        material_type="porous",
+        cell=cell,
+        pbc=pbc,
+        delaunay=None,
+    )
+    assert ctx_pores.class_dists is not None and ctx_pores.class_idx is not None
     pore_threshold = derive_pore_threshold(list(porous.get_chemical_symbols()))
-    for site, d_ref, i_ref in zip(sites, ctx.class_dists, ctx.class_idx, strict=True):
+    for site, d_ref, i_ref in zip(
+        pores, ctx_pores.class_dists, ctx_pores.class_idx, strict=True
+    ):
         expected_type, expected_idx = _classify_voronoi_site_from_neighbors(
             d_ref, i_ref, pore_threshold=pore_threshold
         )

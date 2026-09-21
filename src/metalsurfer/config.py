@@ -804,10 +804,11 @@ class AdsorptionConfig:
     # other. The placement gate enforces at least this value (never the looser
     # covalent-sum default).
     min_adsorbate_separation: float = MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM
-    # Under coverage, prune sites whose vertex is closer than
-    # ``min_adsorbate_separation`` to existing adsorbates. When
-    # ``occupancy_use_footprint`` is on, rank survivors by lateral footprint
-    # clearance (not a second reject mask) so open sites are tried first.
+    # Under coverage, prune sites whose in-plane MIC distance from the catalog
+    # anchor (``Site.xyz``) to existing adsorbates is closer than
+    # ``min_adsorbate_separation``. When ``occupancy_use_footprint`` is on, rank
+    # survivors by lateral footprint clearance (not a second reject mask) so
+    # open sites are tried first.
     occupancy_use_footprint: bool = True
     # Scale on the incoming in-plane footprint radius (COM-centred, thickness
     # axis removed). Values in ``(0, 2]``; used only for ranking under coverage.
@@ -861,11 +862,12 @@ class AdsorptionConfig:
     # Write sites_plugin.xyz / sites_final.xyz overlays (Z=0 markers on substrate).
     debug_write_sites: bool = False
     # When True and the first one-shot pass is short with failed-spec keys,
-    # run one diversity round that re-enumerates excluding those keys and any
-    # site_index that failed with adsorbate_overlap (not env_fingerprint).
+    # run one diversity round excluding those keys, adsorbate_overlap sites,
+    # low-z families after too_close/vdw_overlap, and high-z after too_far
+    # (not env_fingerprint — clean metals share fingerprints across copies).
     placement_retry_enabled: bool = True
     # Cap on specs requested for one-shot fill as a multiple of the target count.
-    placement_retry_oversample_max: float = 6.0
+    placement_retry_oversample_max: float = 2.0
     # When True, clamp the fill target to the enumerable spec capacity so fill
     # cannot request more successes than occupancy-aware enumeration can supply.
     placement_fill_clamp_to_capacity: bool = True

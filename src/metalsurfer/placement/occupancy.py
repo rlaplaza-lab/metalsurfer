@@ -1,13 +1,14 @@
 """Occupancy helpers for packing-aware site selection under coverage.
 
-Occupancy compares **site vertices** (Voronoi / topology ``Site.xyz``) to
-**existing adsorbate atom positions**.  A site is kept when its vertex is at
-least ``min_separation`` from every existing adsorbate atom (MIC).  Under
-coverage the sampling catalog is the full clustered lattice (orbit reduction
-is dropped first); this module only excludes occupied vertices.  An optional
-incoming in-plane molecular **footprint** disk is used only to *rank*
-surviving sites (larger lateral clearance first), never as a second reject
-mask — fill and clash recovery handle residual packing.
+Occupancy compares **in-plane** MIC distances from catalog ``Site.xyz``
+(support-plane anchors; pores keep void centres) to existing adsorbate atom
+positions.  A site is kept when its lateral clearance to every existing
+adsorbate atom is at least ``min_separation``.  Under coverage the sampling
+catalog is the full clustered lattice (orbit reduction is dropped first);
+this module only excludes occupied anchors.  An optional incoming in-plane
+molecular **footprint** disk is used only to *rank* surviving sites (larger
+lateral clearance first), never as a second reject mask — fill and clash
+recovery handle residual packing.
 """
 
 from __future__ import annotations
@@ -128,10 +129,12 @@ def _sites_clearance_and_vertex_mask(
     min_separation: float,
     need_mic_vecs: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return ``(vertex_mask, min_3d_dists, mic_vecs)`` for sites×existing.
+    """Return ``(vertex_mask, min_inplane_dists, mic_vecs)`` for sites×existing.
 
-    When *need_mic_vecs* is False (distances-only callers), skip the ``n×m×3``
-    MIC vector allocation and return an empty ``(n, 0, 3)`` placeholder.
+    Reject uses in-plane MIC (``||mic - (mic·n)n||``) against each site normal
+    so unlifted support-plane anchors still mark columns under adsorbates as
+    occupied. When *need_mic_vecs* is False the returned mic placeholder is
+    empty ``(n, 0, 3)`` but the mask still uses in-plane distances.
     """
     n = len(sites)
     if n == 0:
@@ -151,14 +154,13 @@ def _sites_clearance_and_vertex_mask(
 
     site_xyz = np.asarray([s.xyz for s in sites], dtype=float)
     cell_arr = np.asarray(cell, dtype=float)
-    if need_mic_vecs:
-        mic_vecs, dists = geom._mol_slab_pairwise_mic(
-            site_xyz, existing_arr, cell_arr, pbc
-        )
-    else:
-        dists = geom._mol_slab_pairwise_distances(site_xyz, existing_arr, cell_arr, pbc)
+    mic_vecs, _ = geom._mol_slab_pairwise_mic(site_xyz, existing_arr, cell_arr, pbc)
+    normals = np.asarray([s.normal for s in sites], dtype=float)
+    dots = np.einsum("sjd,sd->sj", mic_vecs, normals)
+    perp = mic_vecs - dots[:, :, None] * normals[:, None, :]
+    min_dists = np.min(np.linalg.norm(perp, axis=2), axis=1)
+    if not need_mic_vecs:
         mic_vecs = np.zeros((n, 0, 3), dtype=float)
-    min_dists = np.min(dists, axis=1)
     return min_dists >= float(min_separation), min_dists, mic_vecs
 
 
@@ -225,9 +227,9 @@ def available_site_indices(
     pbc: list[bool],
     min_separation: float,
 ) -> list[int]:
-    """Original indices into *sites* that pass vertex occupancy (or all if empty).
+    """Original indices into *sites* that pass in-plane occupancy (or all if empty).
 
-    Empty vertex mask means zero capacity. Rank survivors with
+    Empty mask means zero capacity. Rank survivors with
     :func:`site_footprint_clearances` when footprint ordering is desired.
     """
     if existing_positions is None or np.asarray(existing_positions).size == 0:
@@ -286,7 +288,7 @@ def filter_sites_by_occupancy(
     pbc: list[bool],
     min_separation: float,
 ) -> list[Site]:
-    """Keep sites that pass vertex occupancy (order preserved)."""
+    """Keep sites that pass in-plane occupancy (order preserved)."""
     keep = available_site_indices(
         sites,
         existing_positions,

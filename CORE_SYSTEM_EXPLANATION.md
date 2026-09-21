@@ -189,10 +189,16 @@ layer — including its ±1 periodic images along the two surface directions —
 and explicitly constructs:
 
 - **atop** candidates, one above each top-layer atom (lifted by a fraction of
-  the median surface spacing);
+  the median surface spacing for accessibility gating, then projected back to
+  the support plane for the catalog);
 - **bridge** candidates, at the midpoint of every top-layer edge (so cross-cell
   edges are not missed);
 - **hollow** candidates, at the centroid of every top-layer triangle.
+
+Plugin lift / clearance snap is probe-only: after classify, wall-near
+``Site.xyz`` is the support-plane anchor; pore / free-volume vertices stay at
+the void centre. Normals keep the pre-projection outward direction.
+`clearance` / `nn_distance` retain accessibility probe metadata.
 
 After the topology candidates are built, an *accessibility window* still
 gates them: a candidate is kept only if its distance to the nearest framework
@@ -244,8 +250,9 @@ covalent-radius-based threshold is a `pore` (free volume); a closer one is a
 preferred, because they are less likely to clash with the walls.
 
 Porous frameworks do **not** use atop injection (covalent radii do not define a
-unique "up" inside a confined void), and the contact-solved height in §4 is
-skipped there.
+unique "up" inside a confined void). Free-volume ``pore`` sites skip the
+contact-solved height in §4; wall-near porous sites use the same pairwise
+solver as slabs and nanoparticles.
 
 ### 3.4 Shared behaviour across all three types
 
@@ -323,25 +330,26 @@ scale between those based on how many binders sit on the ring.
 
 ### 4.2 Height / z-offset
 
-After orientation, height is **contact-solved** on slabs and nanoparticles
-(porous frameworks keep a fractional window without contact-solve).
+After orientation, height is **contact-solved** on slabs, nanoparticles, and
+wall-near porous sites (free-volume ``pore`` sites keep a fractional window
+without contact-solve).
 
-1. Pick a **contact atom** from the orientation family: for binder-aligned
-   (EN-down / round / vertical) the binder (`en_atom_index` or a binding-atom
-   candidate); for parallel, the atom closest to the surface along the normal.
-2. Set that atom’s height to the same pair-clearance floor used by validation
-   (``max(min_initial_distance, covalent_sum * min_contact_ratio)``, and the
-   VDW-sum floor when `reject_vdw_overlaps` is on) plus a small slack, with the
-   usual site-type offset (hollow slightly closer than atop, clamped so it
-   cannot breach the floor). If another atom would still sit below its own
-   gate, raise the COM just enough to clear it.
+1. Fix the lateral seed at the catalog ``Site.xyz`` (support-plane anchor) and
+   the oriented molecule frame.
+2. Solve the smallest COM height along the site normal such that **every**
+   nearby adsorbate–substrate atom pair meets the same clearance gate used by
+   validation (``max(min_initial_distance, covalent_sum * min_contact_ratio)``,
+   plus the VDW-sum floor when `reject_vdw_overlaps` is on). A 1e-6 Å pad
+   keeps rigid poses off the ``dists < allowed`` edge under MIC wrap noise.
 3. Interpret ``z_fraction`` as a **signed offset around that contact** spanning
    the covalent-scaled ``placement_z_range`` window, so mid-window ``0.5`` is
    the contact pose and ``0.1`` / ``0.9`` remain diversity — not an independent
    guess of absolute height.
 
-Inside confined pores the local normal is not a unique "away" direction, so
-contact-solve is skipped there.
+Site-type priors (hollow closer than atop) are sampling-only and are **not**
+stacked into the height law; three-support hollows already sit closer via the
+pairwise gate. Inside free-volume pores the local normal is not a unique
+"away" direction, so contact-solve is skipped there.
 
 ### 4.3 Validation and distance recovery
 
@@ -404,16 +412,16 @@ Two further behaviours:
 When molecules are already on the surface (saturation, or any retry round), the
 pipeline prunes sites that are *occupied*.
 
-**Occupancy pruning** keeps sites whose vertex is at least
-`min_adsorbate_separation` from every existing adsorbate atom (shortest
-periodic distance under periodicity). When `occupancy_use_footprint` is on
+**Occupancy pruning** keeps sites whose **in-plane** MIC distance from the
+catalog anchor (`Site.xyz`) to every existing adsorbate atom is at least
+`min_adsorbate_separation`. When `occupancy_use_footprint` is on
 (default), surviving sites are ranked by lateral footprint clearance (incoming
 in-plane disk scaled by `occupancy_footprint_scale`) so open sites are tried
 first — footprint is a sort key, not a second reject mask. Topology-sourced
 sites still come first. For porous frameworks open pore sites are still
 preferred after that ranking.
 
-If occupancy pruning removes *all* sites under coverage (vertex mask empty),
+If occupancy pruning removes *all* sites under coverage (mask empty),
 the capacity for that step is empty. The code does **not** fall back to
 random (x, y) scatter guesses — it simply reports zero available sites and moves
 on. This avoids packing molecules on top of each other inside a filled region.
@@ -429,14 +437,16 @@ get close to `num_placements` valid structures:
 - **Capacity clamp** (`placement_fill_clamp_to_capacity`, default `True`). The
   success target is clamped to the enumerable spec capacity, so fill cannot
   request more successes than occupancy-aware enumeration can supply.
-- **Oversample** (`placement_retry_oversample_max`, default 6.0). One pass
+- **Oversample** (`placement_retry_oversample_max`, default 2.0). One pass
   requests up to `num_placements * oversample` specs (capped by capacity when
   clamping is on), then **materializes in chunks** of about `num_placements`
   and stops early once the target is met.
 - **Optional diversity retry** (`placement_retry_enabled`, default `True`). If
   the first pass is short and at least one spec failed materialization, one
-  extra round re-enumerates excluding those exact failed-spec keys and any
-  `site_index` that failed with `adsorbate_overlap`. Pose failures
+  extra round re-enumerates excluding those exact failed-spec keys, any
+  `site_index` that failed with `adsorbate_overlap`, low `z_fraction` siblings
+  after `too_close` / `vdw_overlap`, high `z_fraction` after `too_far`, and
+  orientation families after insufficient-contact failures. Pose failures
   (`too_close`, etc.) do **not** ban other sites that share an
   `env_fingerprint` — on a clean metal every atop can share one fingerprint.
 

@@ -3,7 +3,7 @@
 import logging
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ase import Atoms
 
@@ -48,6 +48,69 @@ def placement_spec_key(
         bool(spec.face_flip),
         spec.en_atom_index,
     )
+
+
+def _pose_family_key(
+    spec: PlacementSpec,
+) -> tuple[int, str, int, float, bool, int | None]:
+    """Conformer + orientation family at a site (height / azimuth free)."""
+    return (
+        int(spec.conformer_index),
+        str(spec.orientation_type),
+        int(spec.site_index),
+        float(spec.tilt_deg),
+        bool(spec.face_flip),
+        spec.en_atom_index,
+    )
+
+
+@dataclass
+class _RetryBans:
+    """Reason-aware exclusions for the optional diversity retry round."""
+
+    failed_keys: set[tuple] = field(default_factory=set)
+    crowded_site_indices: set[int] = field(default_factory=set)
+    # (conformer, orientation, site, tilt, face_flip, en) → max banned low zf
+    low_z_families: dict[tuple, float] = field(default_factory=dict)
+    # site_index → min banned high zf
+    high_z_sites: dict[int, float] = field(default_factory=dict)
+    # orientation/tilt families banned for insufficient contact
+    contact_families: set[tuple] = field(default_factory=set)
+
+    def record(self, spec: PlacementSpec, reason: str) -> None:
+        self.failed_keys.add(placement_spec_key(spec))
+        if reason == "adsorbate_overlap":
+            self.crowded_site_indices.add(int(spec.site_index))
+            return
+        if reason in ("too_close", "vdw_overlap"):
+            fam = _pose_family_key(spec)
+            zf = float(spec.z_fraction)
+            prev = self.low_z_families.get(fam)
+            self.low_z_families[fam] = zf if prev is None else max(prev, zf)
+            return
+        if reason in ("too_far", "contact_distance_too_large"):
+            site = int(spec.site_index)
+            zf = float(spec.z_fraction)
+            prev = self.high_z_sites.get(site)
+            self.high_z_sites[site] = zf if prev is None else min(prev, zf)
+            return
+        if reason.startswith("insufficient_contact"):
+            self.contact_families.add(_pose_family_key(spec))
+
+    def allows(self, spec: PlacementSpec) -> bool:
+        if placement_spec_key(spec) in self.failed_keys:
+            return False
+        if int(spec.site_index) in self.crowded_site_indices:
+            return False
+        fam = _pose_family_key(spec)
+        if fam in self.contact_families:
+            return False
+        zf = float(spec.z_fraction)
+        low_ceil = self.low_z_families.get(fam)
+        if low_ceil is not None and zf <= float(low_ceil):
+            return False
+        high_floor = self.high_z_sites.get(int(spec.site_index))
+        return high_floor is None or zf < float(high_floor)
 
 
 def _estimate_capacity_int(
@@ -206,8 +269,7 @@ def _materialize_pool_in_chunks(
     placement_ids: list[int],
     descriptors: list[PlacementDescriptor],
     failures: list[PlacementFailureEvent],
-    failed_keys: set[tuple],
-    crowded_site_indices: set[int],
+    bans: _RetryBans,
     last_spec_by_index: dict[int, PlacementSpec],
 ) -> None:
     """Materialize *specs* in chunks of ~*n_target*; stop once the target is met."""
@@ -233,11 +295,7 @@ def _materialize_pool_in_chunks(
         for fail in new_failures:
             failed_spec = last_spec_by_index.get(fail.placement_id)
             if failed_spec is not None:
-                failed_keys.add(placement_spec_key(failed_spec))
-                # Only ban the vertex for packing clashes; pose failures keep
-                # other heights/tilts and same-fingerprint copies eligible.
-                if fail.reason == "adsorbate_overlap":
-                    crowded_site_indices.add(int(failed_spec.site_index))
+                bans.record(failed_spec, str(fail.reason or ""))
         failures.extend(new_failures)
 
         take = min(n_target - len(combined), len(new_combined))
@@ -263,10 +321,12 @@ def fill_materialized_placements(
     Pool size is ``min(capacity, n_target * placement_retry_oversample_max)``.
     Specs are materialized in chunks of about ``n_target`` and stop early once
     enough successes exist. When ``placement_retry_enabled`` and the first pass
-    is short, one diversity round re-enumerates excluding exact failed-spec keys
-    and ``site_index`` values that failed with ``adsorbate_overlap`` (not
-    ``env_fingerprint`` — clean metals share fingerprints across translational
-    copies).
+    is short, one diversity round re-enumerates excluding exact failed-spec keys,
+    ``site_index`` values that failed with ``adsorbate_overlap``, low
+    ``z_fraction`` siblings after ``too_close`` / ``vdw_overlap``, high
+    ``z_fraction`` after ``too_far``, and orientation families after
+    insufficient-contact failures (not ``env_fingerprint`` — clean metals share
+    fingerprints across translational copies).
     """
     n_target = config.num_placements
     if n_target is None:
@@ -311,16 +371,13 @@ def fill_materialized_placements(
     placement_ids: list[int] = []
     descriptors: list[PlacementDescriptor] = []
     failures: list[PlacementFailureEvent] = []
-    failed_keys: set[tuple] = set()
-    crowded_site_indices: set[int] = set()
+    bans = _RetryBans()
     last_spec_by_index: dict[int, PlacementSpec] = {}
     next_placement_index = 0
     attempts_used = 0
 
     def _filter_failed(spec: PlacementSpec) -> bool:
-        if placement_spec_key(spec) in failed_keys:
-            return False
-        if int(spec.site_index) in crowded_site_indices:
+        if not bans.allows(spec):
             return False
         if config.placement_filter is not None:
             return bool(config.placement_filter(spec))
@@ -378,15 +435,14 @@ def fill_materialized_placements(
             placement_ids=placement_ids,
             descriptors=descriptors,
             failures=failures,
-            failed_keys=failed_keys,
-            crowded_site_indices=crowded_site_indices,
+            bans=bans,
             last_spec_by_index=last_spec_by_index,
         )
 
     _run_chunks(pool)
 
     remaining = effective_target - len(combined)
-    if remaining > 0 and config.placement_retry_enabled and failed_keys:
+    if remaining > 0 and config.placement_retry_enabled and bans.failed_keys:
         retry_capacity = (
             max(0, capacity_int - len(combined))
             if config.placement_fill_clamp_to_capacity

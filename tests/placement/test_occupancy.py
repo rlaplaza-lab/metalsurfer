@@ -380,14 +380,12 @@ def test_overlap_recovery_rescues_lateral_clash():
 
 
 def test_clearance_aware_height_raises_protruding_pose():
-    """Contact-solved height places the binder at the covalent gate (zf=0.5)."""
-    from metalsurfer.placement.orientation import _site_type_z_offset
+    """Pairwise contact-solve clears the gate for a tilted protruding chain."""
+    from metalsurfer.placement.geometry import check_initial_placement_distance
     from metalsurfer.placement.pose import (
         _contact_atom_index,
-        _contact_gap_angstrom,
         _pose_from_spec,
     )
-    from metalsurfer.placement.site_enumeration import _get_site_surface_radii
 
     slab = make_slab()
     config = AdsorptionConfig(
@@ -433,22 +431,27 @@ def test_clearance_aware_height_raises_protruding_pose():
         en_atom_index=spec.en_atom_index,
     )
     assert contact_idx == 0  # oxygen binder
-    r_surface = _get_site_surface_radii(slab, ctx.site)
-    site_offset = float(
-        _site_type_z_offset(slab, ctx.site, spec.site_type or "", r_surface=r_surface)
+    ads = chain.copy()
+    ads.set_positions(
+        ctx.rotated_pos
+        + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs], dtype=float)
     )
-    contact_gap = _contact_gap_angstrom(
-        config,
-        contact_symbol="O",
-        r_surface=float(r_surface),
-        site_type_offset=site_offset,
+    ok, _dist, reason = check_initial_placement_distance(
+        ads,
+        slab,
+        min_distance=config.min_initial_distance,
+        min_contact_ratio=config.min_contact_ratio,
+        material_type="slab",
     )
-    atom_heights = (
-        ctx.rotated_pos + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs])
-    ) @ n_hat
-    contact_h = float(atom_heights[contact_idx])
-    # Mid-window: contact atom at/above surface_ref + contact_gap.
-    assert contact_h >= ctx.surface_ref + contact_gap - 1e-6
+    assert ok, reason
+    # Protruding C atoms sit above the binder along the site normal.
+    atom_heights = ads.get_positions() @ n_hat
+    assert (
+        float(np.min(atom_heights))
+        == pytest.approx(float(atom_heights[contact_idx]), abs=0.05)
+        or float(atom_heights[contact_idx]) <= float(np.min(atom_heights)) + 0.05
+    )
+    assert float(np.max(atom_heights)) > float(atom_heights[contact_idx]) + 0.2
 
 
 def test_place_dissociative_two_sites_matches_spec_path():
@@ -521,7 +524,7 @@ def test_place_dissociative_two_sites_matches_spec_path():
 
 
 def test_packing_yield_improves_with_occupancy_prune():
-    """Vertex occupancy under coverage drops near-site capacity vs bare slab."""
+    """In-plane occupancy under coverage drops near-site capacity vs bare slab."""
     from metalsurfer.placement.occupancy import (
         available_site_indices,
         existing_adsorbate_cloud,
@@ -556,7 +559,7 @@ def test_packing_yield_improves_with_occupancy_prune():
         i for i, s in enumerate(ctx.sites) if np.allclose(s.xyz, site.xyz)
     )
     assert occupied_idx not in covered
-    # Footprint ranking still scores the occupied vertex worse than survivors.
+    # Footprint ranking still scores the occupied anchor worse than survivors.
     clearances = site_footprint_clearances(
         ctx.sites,
         existing_pos,
@@ -566,6 +569,31 @@ def test_packing_yield_improves_with_occupancy_prune():
         incoming_radius=incoming_inplane_radius(make_water(), footprint_scale=0.85),
     )
     assert float(np.max(clearances[covered])) > float(clearances[occupied_idx])
+
+
+def test_inplane_occupancy_rejects_overhead_adsorbate():
+    """Adsorbate ~2 Å above an unlifted anchor still occupies that column."""
+    from metalsurfer.placement.occupancy import available_site_indices
+
+    slab = make_slab()
+    sites = get_unified_sites(slab, material_type="slab")
+    site = next(s for s in sites if s.slab_indices)
+    # Contact-height adsorbate: 3D distance to metal-plane anchor is ~2 Å, so a
+    # 3D gate would miss it; in-plane MIC must still reject the column.
+    existing = np.asarray(site.xyz, dtype=float) + np.array([0.0, 0.0, 2.0])
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = [True, True, False]
+    covered = available_site_indices(
+        sites, existing.reshape(1, 3), cell=cell, pbc=pbc, min_separation=1.5
+    )
+    occupied_idx = next(i for i, s in enumerate(sites) if np.allclose(s.xyz, site.xyz))
+    assert occupied_idx not in covered
+    # Laterally far site at the same height stays available.
+    far = next(
+        s for s in sites if float(np.linalg.norm(s.xyz[:2] - site.xyz[:2])) > 3.0
+    )
+    far_idx = next(i for i, s in enumerate(sites) if np.allclose(s.xyz, far.xyz))
+    assert far_idx in covered
 
 
 def test_fill_oversamples_to_meet_num_placements(monkeypatch):
@@ -752,6 +780,91 @@ def test_fill_retry_keeps_same_fingerprint_on_too_close(monkeypatch):
     # Same fingerprint remains eligible after a pose failure.
     assert 1 in seen_site_indices[1]
     assert 2 in seen_site_indices[1]
+
+
+def test_fill_retry_excludes_low_z_fraction_after_too_close(monkeypatch):
+    """too_close bans that family's z_fraction and below; higher zf still draws."""
+    from metalsurfer.placement.site_context import SiteContext
+    from metalsurfer.placement.site_types import Site
+    from metalsurfer.workflow import placement_fill as fill_mod
+    from metalsurfer.workflow.shared import PlacementFailureEvent
+
+    sites = [
+        Site(
+            xyz=np.array([0.0, 0.0, 5.0]),
+            normal=np.array([0.0, 0.0, 1.0]),
+            site_type="atop",
+            slab_indices=(0,),
+            material_type="slab",
+            site_source="test",
+            env_fingerprint=(("Ru",), (0,), 1),
+        ),
+    ]
+    ctx = SiteContext(sites=sites, use_sites=True, source="test")
+    seen_z: list[list[float]] = []
+    round_id = {"n": 0}
+
+    def make_specs(n_desired, filter_spec):
+        round_id["n"] += 1
+        if round_id["n"] == 1:
+            specs = [_round_atop_placement_spec(0, site_index=0, z_fraction=0.3)]
+        else:
+            specs = [
+                _round_atop_placement_spec(0, site_index=0, z_fraction=0.3),
+                _round_atop_placement_spec(1, site_index=0, z_fraction=0.7),
+            ]
+        filtered = _filter_specs(specs, filter_spec)
+        seen_z.append([float(s.z_fraction) for s in filtered])
+        return filtered[:n_desired]
+
+    def fake_materialize(**kwargs):
+        specs = kwargs["specs"]
+        if round_id["n"] == 1:
+            return (
+                [],
+                [],
+                [],
+                [
+                    PlacementFailureEvent(
+                        placement_id=spec.placement_index,
+                        stage="generation",
+                        reason="too_close",
+                        descriptor=None,
+                    )
+                    for spec in specs
+                ],
+            )
+        return _materialize_all_succeed()(specs=specs)
+
+    _patch_fill(
+        monkeypatch,
+        fill_mod,
+        enumerate_fn=_enumerate_from(make_specs),
+        materialize_fn=fake_materialize,
+    )
+    slab = make_slab()
+    result = fill_mod.fill_materialized_placements(
+        conformers=[make_water()],
+        slab_for_sites=slab,
+        config=AdsorptionConfig(
+            material_type="slab",
+            num_placements=1,
+            placement_retry_enabled=True,
+            placement_retry_oversample_max=2.0,
+            seed=0,
+            placement_fill_clamp_to_capacity=False,
+        ),
+        smiles="O",
+        site_context=ctx,
+        slab_atoms=slab,
+        calculator=None,
+    )
+    assert len(result.combined) == 1
+    assert result.n_attempts == 2
+    assert 0.3 in seen_z[0]
+    # Retry drops the failed low z_fraction but keeps a higher sibling.
+    assert 0.3 not in seen_z[1]
+    assert 0.7 in seen_z[1]
 
 
 def test_fill_retry_bans_site_on_adsorbate_overlap(monkeypatch):

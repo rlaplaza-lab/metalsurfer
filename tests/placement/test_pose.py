@@ -619,11 +619,10 @@ def test_pose_batch_cache_surface_radii_use_derived_top_depth():
 
 
 def test_water_en_down_contact_atom_is_oxygen():
-    """EN-down water places the O binder at the covalent contact gate (zf=0.5)."""
-    from metalsurfer.placement.orientation import _site_type_z_offset
+    """EN-down water places O at/above the pairwise contact gate (zf=0.5)."""
+    from metalsurfer.placement.geometry import min_pair_clearance_angstrom
     from metalsurfer.placement.pose import (
         _contact_atom_index,
-        _contact_gap_angstrom,
         _height_above_supports,
         _pose_from_spec,
     )
@@ -667,14 +666,19 @@ def test_water_en_down_contact_atom_is_oxygen():
     )
     assert contact_idx == o_idx
     r_surface = _get_site_surface_radii(slab, site)
-    site_offset = float(
-        _site_type_z_offset(slab, site, spec.site_type or "", r_surface=r_surface)
+    surface_symbol = (
+        slab.get_chemical_symbols()[int(site.slab_indices[0])]
+        if site.slab_indices
+        else None
     )
-    contact_gap = _contact_gap_angstrom(
-        config,
-        contact_symbol="O",
-        r_surface=float(r_surface),
-        site_type_offset=site_offset,
+    gate = min_pair_clearance_angstrom(
+        "O",
+        surface_symbol,
+        min_distance=float(config.min_initial_distance),
+        min_contact_ratio=float(config.min_contact_ratio),
+        reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
+        vdw_overlap_scale=float(config.vdw_overlap_scale),
+        r_surface_fallback=float(r_surface),
     )
     contact_ref = _height_above_supports(
         site,
@@ -686,17 +690,103 @@ def test_water_en_down_contact_atom_is_oxygen():
     atom_h = (
         ctx.rotated_pos + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs])
     ) @ n_hat
-    # Oxygen at/above the support-atom contact gate; H must not dig below O.
-    assert float(atom_h[o_idx]) >= contact_ref + contact_gap - 1e-5
+    # Oxygen clears the pairwise gate; H must not dig below O.
+    assert float(atom_h[o_idx]) >= contact_ref + gate - 0.05
     h_idxs = [i for i, s in enumerate(symbols) if s == "H"]
     for hi in h_idxs:
         assert float(atom_h[hi]) >= float(atom_h[o_idx]) - 0.5
 
 
+def test_pairwise_contact_raises_com_when_non_binder_is_closest():
+    """Tilted molecule: pairwise 1D raises COM so a low H clears the gate."""
+    from metalsurfer.placement.geometry import check_initial_placement_distance
+    from metalsurfer.placement.pose import _pose_from_spec
+
+    slab = make_slab()
+    # Linear-ish OH with H sticking below O along -z before orientation.
+    mol = Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, -0.96]])
+    mol.center()
+    config = AdsorptionConfig(material_type="slab", seed=0)
+    ctx_sites = _get_unique_sites_for_specs(slab, config)
+    site_index = next(
+        (i for i, s in enumerate(ctx_sites.sites) if s.site_type == "atop"),
+        0,
+    )
+    site = ctx_sites.sites[site_index]
+    o_idx = 0
+    spec = PlacementSpec(
+        conformer_index=0,
+        orientation_type="EN-down",
+        face_flip=False,
+        en_atom_index=o_idx,
+        site_index=site_index,
+        site_type=str(site.site_type),
+        tilt_deg=45.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+    ctx, fail = _pose_from_spec(mol, spec, slab, config, "O", site_context=ctx_sites)
+    assert fail is None and ctx is not None
+    ads = mol.copy()
+    ads.set_positions(
+        ctx.rotated_pos
+        + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs], dtype=float)
+    )
+    ok, _dist, reason = check_initial_placement_distance(
+        ads,
+        slab,
+        min_distance=config.min_initial_distance,
+        min_contact_ratio=config.min_contact_ratio,
+        material_type="slab",
+    )
+    assert ok, reason
+
+
+def test_z_fraction_offsets_com_around_pairwise_contact():
+    """Distinct z_fraction values change COM height around the contact solve."""
+    from metalsurfer.placement.pose import _pose_from_spec
+
+    slab = make_slab()
+    water = make_water()
+    config = AdsorptionConfig(material_type="slab", seed=0)
+    ctx_sites = _get_unique_sites_for_specs(slab, config)
+    site_index = next(
+        (i for i, s in enumerate(ctx_sites.sites) if s.site_type == "atop"),
+        0,
+    )
+    site = ctx_sites.sites[site_index]
+    o_idx = list(water.get_chemical_symbols()).index("O")
+    heights = []
+    for zf in (0.1, 0.5, 0.9):
+        spec = PlacementSpec(
+            conformer_index=0,
+            orientation_type="EN-down",
+            face_flip=False,
+            en_atom_index=o_idx,
+            site_index=site_index,
+            site_type=str(site.site_type),
+            tilt_deg=0.0,
+            azimuth_deg=0.0,
+            azimuth_in_plane_deg=0.0,
+            z_fraction=zf,
+            placement_index=0,
+        )
+        ctx, fail = _pose_from_spec(
+            water, spec, slab, config, "O", site_context=ctx_sites
+        )
+        assert fail is None and ctx is not None
+        n_hat = np.asarray(ctx.normal, dtype=float)
+        com = np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs], dtype=float)
+        heights.append(float(np.dot(com, n_hat)))
+    assert heights[0] < heights[1] < heights[2]
+
+
 def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
-    """Any plugin lift in site.xyz must not stack on pair-clearance contact."""
+    """Catalog xyz is the support-plane anchor; contact ignores bogus lift."""
+    from metalsurfer.placement.geometry import min_pair_clearance_angstrom
     from metalsurfer.placement.pose import (
-        _contact_gap_angstrom,
         _framework_plane_height,
         _height_above_supports,
         _pose_from_spec,
@@ -764,27 +854,30 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
         reduce="max",
         fallback=float(ctx.surface_ref),
     )
-    # Topology lift puts the site vertex above the supports.
+    # Catalog identity is the support-plane anchor (plugin lift is probe-only).
     site_h = float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
-    assert site_h > support_h + 0.2
-    # Local surface_ref and contact share the framework plane (never site.xyz).
+    assert site_h == pytest.approx(support_h, abs=0.15)
+    # Local surface_ref and contact share the framework plane (never a lift).
     assert ctx.is_local_ref
     assert float(ctx.surface_ref) == pytest.approx(support_h, abs=1e-9)
     r_surface = _get_site_surface_radii(slab, site)
-    contact_gap = _contact_gap_angstrom(
-        config,
-        contact_symbol="O",
-        r_surface=float(r_surface),
-        surface_symbol=slab.get_chemical_symbols()[int(site.slab_indices[0])],
+    surface_symbol = slab.get_chemical_symbols()[int(site.slab_indices[0])]
+    gate = min_pair_clearance_angstrom(
+        "O",
+        surface_symbol,
+        min_distance=float(config.min_initial_distance),
+        min_contact_ratio=float(config.min_contact_ratio),
+        reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
+        vdw_overlap_scale=float(config.vdw_overlap_scale),
+        r_surface_fallback=float(r_surface),
     )
     atom_h = (
         ctx.rotated_pos + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs])
     ) @ n_hat
-    # Contact is near support + gap, not the lifted site vertex + gap.
-    assert float(atom_h[o_idx]) == pytest.approx(support_h + contact_gap, abs=0.15)
-    assert float(atom_h[o_idx]) < site_h + contact_gap - 0.2
+    # Contact clears the pairwise gate above the support plane.
+    assert float(atom_h[o_idx]) >= support_h + gate - 0.15
 
-    # Plugin-agnostic: the same support plane is used for every site_source label.
+    # Plugin-agnostic: a wrongly lifted vertex still uses the support plane.
     for source in (
         "topology_hollow",
         "voronoi",

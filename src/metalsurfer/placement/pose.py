@@ -15,7 +15,6 @@ from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
 from . import geometry as geom
 from ._constants import (
-    _CONTACT_HEIGHT_SLACK_ANGSTROM,
     _DISTANCE_RECOVERY_XY_ATTEMPTS,
     _DISTANCE_ZERO_EPS,
     _LATERAL_OFFSET_REF_SWITCH_DOT,
@@ -39,7 +38,6 @@ from .occupancy import incoming_inplane_radius
 from .orientation import (
     _is_flat_aromatic,
     _parallel_z_adjustments,
-    _site_type_z_offset,
     orient_from_spec,
 )
 from .site_context import SiteContext, site_context_for_sampling
@@ -232,73 +230,75 @@ def _height_above_supports(
     return float(fallback) if fw is None else fw
 
 
-def _contact_gap_angstrom(
-    config: AdsorptionConfig,
-    *,
-    contact_symbol: str,
-    r_surface: float,
-    site_type_offset: float = 0.0,
-    surface_symbol: str | None = None,
-) -> float:
-    """Contact-atom height above ``surface_ref`` for mid-window poses.
-
-    Starts from :func:`geometry.min_pair_clearance_angstrom` (same covalent /
-    optional-VDW floor as validation). Adds ``_CONTACT_HEIGHT_SLACK_ANGSTROM``
-    and the site-type prior; hollow/bridge priors may pull closer but never
-    below the pair-clearance floor. The floor uses the next representable float
-    above the gate so rigid-body placement cannot undershoot
-    ``dists < allowed`` via float noise.
-    """
-    gate = geom.min_pair_clearance_angstrom(
-        contact_symbol,
-        surface_symbol,
-        min_distance=float(config.min_initial_distance),
-        min_contact_ratio=float(config.min_contact_ratio),
-        reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
-        vdw_overlap_scale=float(config.vdw_overlap_scale),
-        r_surface_fallback=float(r_surface),
-    )
-    target = gate + float(site_type_offset) + _CONTACT_HEIGHT_SLACK_ANGSTROM
-    floor = float(np.nextafter(gate, np.inf))
-    return float(max(floor, target))
-
-
-def _com_height_for_contact(
+def _pairwise_contact_com_height(
     rotated_pos: np.ndarray,
-    normal: np.ndarray,
-    *,
-    contact_index: int,
-    target_atom_height: float,
-    surface_ref: float,
-    config: AdsorptionConfig,
     symbols: list[str],
+    *,
+    site_xyz: np.ndarray,
+    place_normal: np.ndarray,
+    slab_positions: np.ndarray,
+    slab_symbols: list[str],
+    cell: np.ndarray,
+    pbc: list[bool],
+    config: AdsorptionConfig,
     r_surface: float,
-    surface_symbol: str | None = None,
 ) -> float:
-    """COM height along *normal* so *contact_index* sits at *target_atom_height*.
+    """Smallest COM height along *place_normal* clearing every mol–slab pair.
 
-    If another atom would still sit below its own pair-clearance gate, raise the
-    COM just enough to clear that atom (binder may end slightly high).
+    Lateral seed is *site_xyz*; orientation is fixed in *rotated_pos* (COM-
+    centred). Uses the same pair gate as validation (covalent / optional VDW).
+    Height is solved from MIC vectors at the support-plane seed so PBC images
+    and non-Cartesian normals stay consistent.
     """
-    n_hat = _placement_normal_hat(normal)
-    heights = np.asarray(rotated_pos, dtype=float) @ n_hat
-    h_contact = float(heights[int(contact_index)])
-    com_h = float(target_atom_height) - h_contact
-    if heights.size <= 1:
-        return com_h
-    closest_i = int(np.argmin(heights))
-    if closest_i == int(contact_index):
-        return com_h
-    closest_abs = com_h + float(heights[closest_i])
-    min_closest = float(surface_ref) + _contact_gap_angstrom(
-        config,
-        contact_symbol=symbols[closest_i],
-        r_surface=float(r_surface),
-        surface_symbol=surface_symbol,
-    )
-    if closest_abs < min_closest:
-        com_h += min_closest - closest_abs
-    return com_h
+    n_hat = _placement_normal_hat(place_normal)
+    base = np.asarray(site_xyz, dtype=float)
+    base_h = float(np.dot(base, n_hat))
+    rotated = np.asarray(rotated_pos, dtype=float)
+    slab_pos = np.asarray(slab_positions, dtype=float)
+    if len(slab_pos) == 0 or len(rotated) == 0:
+        return base_h
+
+    def _allowed(sym_m: str, sym_s: str | None) -> float:
+        return geom.min_pair_clearance_angstrom(
+            sym_m,
+            sym_s,
+            min_distance=float(config.min_initial_distance),
+            min_contact_ratio=float(config.min_contact_ratio),
+            reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
+            vdw_overlap_scale=float(config.vdw_overlap_scale),
+            r_surface_fallback=float(r_surface),
+        )
+
+    mol_seed = rotated + base
+    mic_vecs, _ = geom._mol_slab_pairwise_mic(mol_seed, slab_pos, cell, pbc)
+    mic_n = np.einsum("ijd,d->ij", mic_vecs, n_hat)
+    perp = mic_vecs - mic_n[:, :, None] * n_hat.reshape(1, 1, 3)
+    lateral = np.linalg.norm(perp, axis=2)
+
+    h_needed = float("-inf")
+    for i, sym_m in enumerate(symbols):
+        for j, sym_s in enumerate(slab_symbols):
+            allowed = _allowed(sym_m, sym_s)
+            lat = float(lateral[i, j])
+            if lat >= allowed:
+                continue
+            # Raising COM by Δh adds Δh to every mic·n (same lattice image).
+            vertical = float(np.sqrt(max(0.0, allowed * allowed - lat * lat)))
+            h_pair = base_h + vertical - float(mic_n[i, j])
+            if h_pair > h_needed:
+                h_needed = h_pair
+
+    if not np.isfinite(h_needed):
+        # Every pair already clears laterally; sit the lowest atom at its
+        # nearest-support gate so the pose is still a contact, not a hover.
+        rel_h = rotated @ n_hat
+        i_low = int(np.argmin(rel_h))
+        j_near = int(np.argmin(lateral[i_low]))
+        gate = _allowed(symbols[i_low], slab_symbols[j_near])
+        h_needed = base_h + gate - float(rel_h[i_low])
+    # Pad so reconstructed MIC distances clear ``dists < allowed`` under
+    # quaternion / wrap float noise (not a chemistry slack).
+    return float(h_needed) + 1e-6
 
 
 def _resolve_surface_ref(
@@ -486,11 +486,6 @@ def _pose_from_spec(
     z_base_lo, z_base_hi = _compute_site_z_base(
         config, ref_slab, site, symbols, r_surface=r_surface
     )
-    site_type_offset = 0.0
-    if spec.site_type:
-        site_type_offset = float(
-            _site_type_z_offset(ref_slab, site, spec.site_type, r_surface=r_surface)
-        )
 
     flat_aromatic = _is_flat_aromatic(shape, smiles, symbols)
     if flat_aromatic and spec.orientation_type == "parallel" and mat_type != "porous":
@@ -555,38 +550,25 @@ def _pose_from_spec(
 
     base = np.asarray(site.xyz, dtype=float)
     base_h = float(np.dot(base, place_normal))
+    # Free-volume pores: fractional window without contact-solve. Wall-near
+    # porous sites (rolling_probe / adaptive_grid) use the pairwise solver.
+    use_contact_solve = site.site_type != "pore"
 
-    if mat_type == "porous":
-        # Confined pores: keep fractional window without contact-solve.
-        z_offset = (z_base_lo + site_type_offset) + zf * diversity_window
+    if not use_contact_solve:
+        z_offset = z_base_lo + zf * diversity_window
         placement_center = base + float(z_offset) * place_normal
-        ctx_z_lo = float(z_base_lo + site_type_offset)
+        ctx_z_lo = float(z_base_lo)
         ctx_z_hi = ctx_z_lo + diversity_window
     else:
-        # Mid-window (zf=0.5) → contact atom at pair-clearance + slack / site prior.
-        contact_idx = _contact_atom_index(
-            rotated_pos,
-            place_normal,
-            symbols,
-            orientation_type=spec.orientation_type,
-            en_atom_index=spec.en_atom_index,
-        )
-        surface_symbol = (
-            ref_slab.get_chemical_symbols()[int(site.slab_indices[0])]
-            if site.slab_indices
-            else None
-        )
-        contact_gap = _contact_gap_angstrom(
-            config,
-            contact_symbol=symbols[contact_idx],
-            r_surface=float(r_surface),
-            site_type_offset=site_type_offset,
-            surface_symbol=surface_symbol,
-        )
         pos_for_support = (
             pose_cache.positions
             if pose_cache is not None and pose_cache.positions is not None
             else np.asarray(ref_slab.get_positions(), dtype=float)
+        )
+        cell_arr = (
+            pose_cache.cell
+            if pose_cache is not None and pose_cache.cell is not None
+            else np.asarray(ref_slab.get_cell(), dtype=float)
         )
         contact_ref = _height_above_supports(
             site,
@@ -595,21 +577,23 @@ def _pose_from_spec(
             reduce="max",
             fallback=float(surface_ref),
         )
-        delta = (zf - 0.5) * diversity_window
-        target_atom_h = float(contact_ref) + contact_gap + delta
-        com_h = _com_height_for_contact(
+        com_contact = _pairwise_contact_com_height(
             rotated_pos,
-            place_normal,
-            contact_index=contact_idx,
-            target_atom_height=target_atom_h,
-            surface_ref=float(contact_ref),
+            symbols,
+            site_xyz=base,
+            place_normal=place_normal,
+            slab_positions=pos_for_support,
+            slab_symbols=list(ref_slab.get_chemical_symbols()),
+            cell=cell_arr,
+            pbc=material_aware_pbc(mat_type),
             config=config,
-            symbols=symbols,
             r_surface=float(r_surface),
-            surface_symbol=surface_symbol,
         )
+        delta = (zf - 0.5) * diversity_window
+        com_h = float(com_contact) + delta
         placement_center = base + (com_h - base_h) * place_normal
-        # Recovery window centred on the contact gap (same span as diversity).
+        contact_gap = float(com_contact) - float(contact_ref)
+        # Recovery window centred on the solved contact COM gap.
         ctx_z_lo = contact_gap - 0.5 * diversity_window
         ctx_z_hi = contact_gap + 0.5 * diversity_window
 

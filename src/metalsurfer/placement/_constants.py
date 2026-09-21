@@ -35,10 +35,6 @@ RECOVERABLE_DISTANCE_REASONS = frozenset(
     }
 )
 
-# Slack (Å) above the pair-clearance gate so mid-window poses clear
-# ``dists < allowed`` without sitting on the boundary.
-_CONTACT_HEIGHT_SLACK_ANGSTROM: float = 0.05
-
 # Skip Packmol clash when normal-direction penetration exceeds this multiple of
 # the remaining height window (molecule clearly through the surface).
 _RECOVERY_NORMAL_PENETRATION_WINDOW_FACTOR: float = 2.0

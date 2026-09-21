@@ -133,8 +133,10 @@ Placement success levers
   ``min(capacity, num_placements * oversample)`` specs, materializes in chunks
   of about ``num_placements``, and stops early once full. When
   ``placement_retry_enabled``, the first pass is short, and materialization
-  recorded failures, one diversity round excludes failed-spec keys and
-  ``adsorbate_overlap`` site indices (not shared ``env_fingerprint``). Per-spec
+  recorded failures, one diversity round excludes failed-spec keys,
+  ``adsorbate_overlap`` site indices, low ``z_fraction`` after ``too_close`` /
+  ``vdw_overlap``, and high ``z_fraction`` after ``too_far`` (not shared
+  ``env_fingerprint``). Per-spec
   materialization runs in a thread pool sized by ``placement_materialize_workers``
   (joblib-style; ``None`` inherits ``n_jobs``, which defaults to ``-2`` = all
   but one CPU). BO eval batches wrap the

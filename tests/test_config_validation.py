@@ -88,7 +88,7 @@ def test_default_config():
     assert config.voronoi_auto_widen is True
     assert config.placement_x_range == (-0.5, 0.5)
     assert config.placement_y_range == (-0.5, 0.5)
-    assert config.placement_retry_oversample_max == 6.0
+    assert config.placement_retry_oversample_max == 2.0
     assert config.placement_retry_enabled is True
     assert config.placement_fill_clamp_to_capacity is True
     assert config.placement_materialize_workers is None

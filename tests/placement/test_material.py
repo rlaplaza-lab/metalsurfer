@@ -120,10 +120,10 @@ def test_slab_placements_are_above_surface_reference():
             adsorbate, slab, material_type="slab"
         )
         assert ok, reason
-        # Min pair distance tracks the contact atom; z_offset is COM height
-        # above surface_ref. Contact sits at/near the COM along the approach
-        # (binder-down: contact below COM). Flyaways have dist ≫ z_offset.
-        assert dist <= float(descriptor.z_offset) + 0.5
+        # z_offset is COM height above surface_ref; min pair distance is 3D and
+        # can exceed the normal COM height when contact is lateral (bridge).
+        # Flyaways still have dist ≫ contact scale.
+        assert dist <= max(float(descriptor.z_offset) + 1.5, 3.0)
 
 
 @pytest.mark.parametrize(

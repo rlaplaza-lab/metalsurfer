@@ -71,6 +71,72 @@ def test_get_unified_sites_slab_nanoparticle_porous_have_expected_metadata():
             assert np.linalg.norm(np.asarray(site.normal)) > 0.5
 
 
+def test_slab_catalog_xyz_is_support_plane_anchor():
+    """Wall-near Site.xyz sits in the coordinating-atom plane after unlift."""
+    from ase.build import fcc111
+
+    slab = fcc111("Pt", size=(3, 3, 3), vacuum=10.0, periodic=True)
+    sites = get_unified_sites(slab, material_type="slab")
+    assert any(s.site_type == "atop" for s in sites)
+    pos = np.asarray(slab.get_positions(), dtype=float)
+    for s in sites:
+        assert str(s.site_type) != "pore"
+        assert s.slab_indices
+        n_hat = np.asarray(s.normal, dtype=float)
+        n_hat = n_hat / float(np.linalg.norm(n_hat))
+        assert float(np.linalg.norm(n_hat)) == pytest.approx(1.0, abs=1e-6)
+        support_h = float(np.max(pos[list(s.slab_indices)] @ n_hat))
+        site_h = float(np.dot(np.asarray(s.xyz, dtype=float), n_hat))
+        assert site_h == pytest.approx(support_h, abs=0.15)
+        # Probe metadata still records accessibility clearance above the plane.
+        assert s.clearance is not None and float(s.clearance) > 0.3
+
+
+def test_porous_pore_xyz_stays_in_free_volume():
+    """Pore catalog vertices remain void centres (not projected to walls)."""
+    sites = get_unified_sites(make_porous_framework(), material_type="porous")
+    pores = [s for s in sites if str(s.site_type) == "pore"]
+    assert pores
+    for s in pores:
+        assert s.nn_distance is not None and float(s.nn_distance) > 1.0
+
+
+def test_project_sites_to_support_plane_helper():
+    """Helper projects wall-near sites; pores / empty supports unchanged."""
+    from metalsurfer.placement.site_classify import project_sites_to_support_plane
+
+    positions = np.array(
+        [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 1.7, 0.0]], dtype=float
+    )
+    symbols = ["Cu", "Cu", "Cu"]
+    cell = np.diag([10.0, 10.0, 20.0])
+    pbc = np.array([True, True, False], dtype=bool)
+    n = np.array([0.0, 0.0, 1.0])
+    lifted = _make_site(
+        [1.0, 0.85, 1.5],
+        site_type="hollow",
+        material_type="slab",
+        slab_indices=(0, 1, 2),
+        normal=n,
+        env_fingerprint=(("Cu", "Cu", "Cu"), (4, 4, 4), 1),
+    )
+    pore = _make_site(
+        [5.0, 5.0, 8.0],
+        site_type="pore",
+        material_type="porous",
+        slab_indices=(),
+        normal=n,
+        env_fingerprint=((), (), 0),
+    )
+    out = project_sites_to_support_plane(
+        [lifted, pore], positions, symbols, cell=cell, pbc=pbc
+    )
+    assert out[0].xyz[2] == pytest.approx(0.0, abs=1e-9)
+    assert out[0].xyz[0] == pytest.approx(1.0, abs=1e-9)
+    np.testing.assert_allclose(out[0].normal, n)
+    np.testing.assert_allclose(out[1].xyz, pore.xyz)
+
+
 def test_site_enumeration_exports_wrap_cartesian_for_atop_injection():
     """Atop injection under PBC uses _wrap_cartesian from site_coords."""
     from metalsurfer.placement import site_enumeration as enum_mod
@@ -696,7 +762,7 @@ def test_atop_injection_safety_net_when_np_topology_empty(monkeypatch):
 
 
 def test_issue6_ni55_and_ni13_expose_atop_bridge_hollow():
-    """Issue #6: NPs must expose atop/bridge/hollow outside the convex hull."""
+    """Issue #6: NPs expose typed sites with outward normals (xyz is support-plane)."""
     from collections import Counter
 
     from ase.cluster import Icosahedron, Octahedron
@@ -725,8 +791,7 @@ def test_issue6_ni55_and_ni13_expose_atop_bridge_hollow():
 
         pos = np.asarray(atoms.get_positions(), dtype=float)
         hull = ConvexHull(pos)
-        xyz = np.asarray([s.xyz for s in sites], dtype=float)
-        assert np.all(_outside_convex_hull_mask(xyz, hull)), name
+        com = np.mean(pos, axis=0)
 
         metal_nn = _median_nn_or_fallback(
             np.empty(0, dtype=float),
@@ -740,22 +805,25 @@ def test_issue6_ni55_and_ni13_expose_atop_bridge_hollow():
         )
         assert height >= probe, f"{name}: height={height:.3f} probe={probe:.3f}"
 
+        # Probe clearance metadata still records the accessibility lift height.
         atop_nn = [float(s.nn_distance) for s in sites if s.site_type == "atop"]
         assert atop_nn
         assert abs(float(np.median(atop_nn)) - height) < 0.35, name
 
-        # Site.normal must match the support-atom lift direction (not a tilted
-        # k-NN centroid), otherwise pose slides laterally off the topology site.
+        # Catalog xyz is the support-plane anchor; probe along normal exits hull.
         for s in sites:
             idx = [int(i) for i in s.slab_indices if 0 <= int(i) < len(pos)]
             assert idx, name
-            lift = np.asarray(s.xyz, dtype=float) - np.mean(pos[idx], axis=0)
-            nrm = float(np.linalg.norm(lift))
-            assert nrm > 1e-8, name
-            lift_hat = lift / nrm
             n_hat = np.asarray(s.normal, dtype=float)
             n_hat = n_hat / float(np.linalg.norm(n_hat))
-            assert float(np.dot(n_hat, lift_hat)) > 0.999, name
+            assert float(np.linalg.norm(n_hat)) == pytest.approx(1.0, abs=1e-6)
+            # Outward: normal points away from the particle COM.
+            assert float(np.dot(n_hat, np.asarray(s.xyz, dtype=float) - com)) > 0.0, (
+                name
+            )
+            eps = float(s.clearance) if s.clearance is not None else height
+            probe_xyz = np.asarray(s.xyz, dtype=float) + max(eps, 0.1) * n_hat
+            assert _outside_convex_hull_mask(probe_xyz.reshape(1, 3), hull)[0], name
 
 
 def test_issue6_nonempty_voronoi_must_not_zero_out_np_atops(monkeypatch):
@@ -797,14 +865,17 @@ def test_nanoparticle_asymmetric_cluster_still_has_typed_sites():
     assert counts.get("bridge", 0) > 0
     assert counts.get("hollow", 0) > 0
     hull = ConvexHull(atoms.get_positions())
-    xyz = np.asarray([s.xyz for s in sites], dtype=float)
-    assert np.all(_outside_convex_hull_mask(xyz, hull))
-    # Atop normals should agree with the local hull outward direction.
+    com = atoms.get_positions().mean(0)
+    # Catalog anchors sit on the support plane; probe along normal exits hull.
     for s in sites:
-        if s.site_type != "atop":
-            continue
-        assert float(np.linalg.norm(s.normal)) > 0.5
-        assert float(np.dot(s.normal, s.xyz - atoms.get_positions().mean(0))) > 0.0
+        n_hat = np.asarray(s.normal, dtype=float)
+        n_hat = n_hat / float(np.linalg.norm(n_hat))
+        assert float(np.linalg.norm(n_hat)) > 0.5
+        if s.site_type == "atop":
+            assert float(np.dot(n_hat, s.xyz - com)) > 0.0
+        eps = float(s.clearance) if s.clearance is not None else 0.5
+        probe_xyz = np.asarray(s.xyz, dtype=float) + max(eps, 0.1) * n_hat
+        assert _outside_convex_hull_mask(probe_xyz.reshape(1, 3), hull)[0]
 
 
 def test_issue6_ni111_slab_counts_unchanged():

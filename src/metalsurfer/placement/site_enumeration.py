@@ -32,6 +32,7 @@ from .site_classify import (
     _TOPOLOGY_SOURCE_TO_TYPE,
     _build_site_records,
     _DelaunayClassifyInputs,
+    project_sites_to_support_plane,
 )
 from .site_coords import (
     _cart_to_frac,
@@ -720,6 +721,15 @@ def _enumerate_unified_sites(
         atom_indices=atom_indices,
         normals=normals,
         clearances=clearances,
+    )
+    # Plugins lift/snap for accessibility; catalog identity is the support-
+    # plane anchor (pores / empty supports keep free-volume vertices).
+    sites = project_sites_to_support_plane(
+        sites,
+        positions,
+        symbols,
+        cell=cell,
+        pbc=pbc_for_voronoi,
     )
 
     if cell_has_volume(cell):

@@ -631,7 +631,9 @@ def _place_dissociative_two_sites(
     def _plane_h(site: Site) -> float:
         vertex_h = float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
         # Local / NP: vertex if supports empty. Planar slab: shared global ref.
-        fallback = vertex_h if is_local_ref or surface_ref is None else float(surface_ref)
+        fallback = (
+            vertex_h if is_local_ref or surface_ref is None else float(surface_ref)
+        )
         return _height_above_supports(
             site, ref_pos, n_hat, reduce=reduce, fallback=fallback
         )

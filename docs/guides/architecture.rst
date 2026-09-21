@@ -389,9 +389,11 @@ nearest-neighbour topology on nanoparticles (Voronoi voids are not adsorption
 sites); global ``surface_ref`` along the slab normal for height; dissociative
 hollow pairs on slabs (rejected for porous; NP uses outward-normal site pairs);
 parallel-z floors for slab/NP aromatics (skipped for porous); no atop
-injection / dissociative for porous. Nanoparticle ``surface_ref`` is the
-coordinating metal atoms projected onto the site normal (topology vertices
-are already lifted); porous keeps the site-vertex projection.
+injection / dissociative for porous. Catalog ``Site.xyz`` is the support-plane
+anchor (plugin lift/snap is probe-only); pore / free-volume vertices stay at
+the void centre. Nanoparticle ``surface_ref`` is the coordinating metal atoms
+projected onto the site normal; porous wall-near sites use the same
+support-plane rule, while pores keep the site-vertex projection.
 ``adaptive_grid`` and ``rolling_probe`` register in ``placement/site_plugins/``
 with the same candidate-batch contract and a **single** generation path for all
 materials (config-selectable, not chosen by ``auto``). Topology / Voronoi keep
@@ -413,13 +415,13 @@ same-element adatoms from being treated as substrate.
 Occupancy pruning
 ~~~~~~~~~~~~~~~~~
 ``available_site_indices`` into the sampling ``SiteContext.sites`` catalog
-(shortest periodic distance from each site vertex to existing adsorbate atoms
-≥ ``min_adsorbate_separation``) without remapping indices—replay/BO keep stable
-``site_index`` values. Under coverage that catalog is the full clustered list
-(symmetry reduction is dropped), so unoccupied equivalent copies remain
-sampleable while occupied vertices are excluded. When
-``occupancy_use_footprint`` is enabled, survivors
-are ranked by lateral footprint clearance (incoming disk scaled by
+(shortest **in-plane** MIC distance from each catalog anchor to existing
+adsorbate atoms ≥ ``min_adsorbate_separation``, using each site's normal)
+without remapping indices—replay/BO keep stable ``site_index`` values.
+Under coverage that catalog is the full clustered list (symmetry reduction
+is dropped), so unoccupied equivalent copies remain sampleable while
+occupied columns are excluded. When ``occupancy_use_footprint`` is enabled,
+survivors are ranked by lateral footprint clearance (incoming disk scaled by
 ``occupancy_footprint_scale``) rather than pruned by a second reject mask;
 topology-sourced sites still come first in ranking (sampling policy, not a
 separate uniqueness pass). Dissociative pairing reads
@@ -483,8 +485,11 @@ placement_retry_oversample_max)`` specs, materializes them in chunks of about
 ``num_placements`` (threaded via ``placement_materialize_workers``), and stops
 early once the target is met. When ``placement_retry_enabled``, the first pass
 is short, and at least one spec failed materialization, one diversity round
-re-enumerates excluding those exact failed-spec keys and any ``site_index``
-that failed with ``adsorbate_overlap`` (not ``env_fingerprint``). BO eval
+re-enumerates excluding those exact failed-spec keys plus reason-aware bans:
+``adsorbate_overlap`` bans ``site_index``; ``too_close`` / ``vdw_overlap``
+exclude low ``z_fraction`` on that site/orientation/conformer; ``too_far`` /
+``contact_distance_too_large`` exclude high ``z_fraction``;
+``insufficient_contact_*`` excludes the orientation family. BO eval
 batches wrap pre-materialized cache hits (no generation backfill); the
 geometry-valid pool is built once when features are extracted.
 

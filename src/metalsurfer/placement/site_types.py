@@ -16,8 +16,11 @@ __all__ = [
 class Site:
     """One adsorption site from any generator plugin.
 
+    ``xyz`` is the catalog identity: support-plane anchor for wall-near sites
+    (plugin lift/snap is probe-only) or free-volume centre for pores.
     ``env_fingerprint`` is ``(support_symbols, distance_bins, side_label)``.
     ``tangent_basis`` is always set by shared classify for pose/orientation.
+    ``clearance`` / ``nn_distance`` retain accessibility probe metadata.
     """
 
     xyz: np.ndarray

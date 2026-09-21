@@ -1,7 +1,7 @@
 """Local surface normals and site record construction."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import NamedTuple
 
 import numpy as np
@@ -593,6 +593,53 @@ def _classify_vertices(
             )
         )
     return sites
+
+
+def project_sites_to_support_plane(
+    sites: Sequence[Site],
+    positions: np.ndarray,
+    symbols: Sequence[str],
+    *,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+) -> list[Site]:
+    """Project wall-near site vertices onto the coordinating-atom plane.
+
+    Plugins may lift / snap candidates for accessibility gating; the stored
+    catalog identity is the in-plane anchor. Pore / empty-support sites keep
+    their free-volume vertex. Normals and tangent frames stay as classified
+    (pre-projection); ``clearance`` / ``nn_distance`` stay probe metadata.
+    Fingerprint distance bins are recomputed from the unlifted xyz.
+    """
+    pos = np.asarray(positions, dtype=float)
+    cell_arr = np.asarray(cell, dtype=float)
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    n_pos = len(pos)
+    out: list[Site] = []
+    for site in sites:
+        if site.site_type == "pore" or not site.slab_indices:
+            out.append(site)
+            continue
+        idx = np.asarray(site.slab_indices, dtype=int)
+        idx = idx[(idx >= 0) & (idx < n_pos)]
+        if idx.size == 0:
+            out.append(site)
+            continue
+        n_hat = np.asarray(site.normal, dtype=float)
+        support_h = float(np.max(pos[idx] @ n_hat))
+        vert = np.asarray(site.xyz, dtype=float)
+        new_xyz = vert - (float(np.dot(vert, n_hat)) - support_h) * n_hat
+        dists = _support_mic_distances(
+            new_xyz, pos, site.slab_indices, cell_arr, pbc_arr
+        )
+        fp = site_env_fingerprint(
+            site.slab_indices,
+            symbols,
+            dists,
+            side_label=int(site.env_fingerprint[2]),
+        )
+        out.append(replace(site, xyz=new_xyz, env_fingerprint=fp))
+    return out
 
 
 def _build_site_records(

@@ -338,12 +338,14 @@ Placement generation
 
    When the first one-shot fill pass is short of ``num_placements`` and at
    least one spec failed materialization, run one diversity round that
-   re-enumerates excluding those exact failed-spec keys and any
-   ``site_index`` that failed with ``adsorbate_overlap`` (pose failures do
-   not ban sibling sites that share an ``env_fingerprint``).
+   re-enumerates excluding those exact failed-spec keys, ``site_index``
+   values that failed with ``adsorbate_overlap``, low ``z_fraction`` after
+   ``too_close`` / ``vdw_overlap``, high ``z_fraction`` after ``too_far``,
+   and orientation families after insufficient-contact failures (pose
+   failures do not ban sibling sites that share an ``env_fingerprint``).
 
 ``placement_retry_oversample_max``
-    **Type:** ``float`` · **Default:** ``6.0`` · **Valid range:** ``>= 1.0``
+    **Type:** ``float`` · **Default:** ``2.0`` · **Valid range:** ``>= 1.0``
 
     Cap on specs requested for one-shot fill as a multiple of the placement
     target (``min(capacity, num_placements * oversample)`` when capacity
@@ -394,13 +396,13 @@ Initial placement validation
     Minimum adsorbate–adsorbate separation enforced under coverage (saturation).
     Rejects placements that would pack a new adsorbate on top of an already
     adsorbed one; corresponds to the ``adsorbate_overlap`` failure reason when
-    violated. Also used as the vertex occupancy floor and as the Packmol-style
+    violated. Also used as the in-plane occupancy floor and as the Packmol-style
     pair floor in clash descent / n-tuplet packing.
 
 ``occupancy_use_footprint``
    **Type:** ``bool`` · **Default:** ``True``
 
-   After the site-vertex occupancy gate, rank survivors by lateral footprint
+   After the in-plane occupancy gate, rank survivors by lateral footprint
    clearance (incoming in-plane disk vs existing atom covalent radii). Does
    not prune sites; fill and clash recovery handle residual packing.
 
