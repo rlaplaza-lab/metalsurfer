@@ -9,7 +9,8 @@ fully periodic porous framework, or non-periodic cluster—after optional prep
 with :func:`~metalsurfer.surface_prep.prepare_substrate` (equilibration, PBC,
 ASE ``FixAtoms``). Supply adsorbates as SMILES; the library builds conformers,
 finds adsorption sites (``site_generator="auto"``: topology for slab/NP,
-Voronoi for porous; material-aware via
+Voronoi for porous; opt-in ``adaptive_grid`` / ``rolling_probe`` for
+wall-near sampling; material-aware via
 :attr:`~metalsurfer.AdsorptionConfig.material_type`), deposits candidates with
 orientation/height sampling, relaxes with an MLIP, validates geometry, and
 ranks by adsorption energy. The four ``run_*`` campaign APIs orchestrate

@@ -190,6 +190,27 @@ def _contact_atom_index(
     return int(np.argmin(heights))
 
 
+def _contact_support_ref(
+    site: Site,
+    *,
+    surface_ref: float,
+    place_normal: np.ndarray,
+    positions: np.ndarray,
+) -> float:
+    """Height of coordinating atoms for contact clearance (not a lifted site vertex).
+
+    Topology sites sit above their supports; measuring pair clearance from the
+    site vertex double-counts that lift on rough / puckered slabs (e.g. rutile
+    bridging oxygens). Fall back to ``surface_ref`` when supports are unknown.
+    """
+    if site.slab_indices:
+        idx = np.asarray(site.slab_indices, dtype=int)
+        if idx.size > 0:
+            n_hat = _placement_normal_hat(place_normal)
+            return float(np.max(np.asarray(positions, dtype=float)[idx] @ n_hat))
+    return float(surface_ref)
+
+
 def _contact_gap_angstrom(
     config: AdsorptionConfig,
     *,
@@ -519,9 +540,7 @@ def _pose_from_spec(
         ctx_z_lo = float(z_base_lo + site_type_offset)
         ctx_z_hi = ctx_z_lo + diversity_window
     else:
-        # Contact-solved height: mid-window (zf=0.5) places the contact atom at
-        # the pair-clearance gate (+ slack / site prior); z_fraction is a signed
-        # offset around that contact.
+        # Mid-window (zf=0.5) → contact atom at pair-clearance + slack / site prior.
         contact_idx = _contact_atom_index(
             rotated_pos,
             place_normal,
@@ -541,14 +560,25 @@ def _pose_from_spec(
             site_type_offset=site_type_offset,
             surface_symbol=surface_symbol,
         )
+        pos_for_support = (
+            pose_cache.positions
+            if pose_cache is not None and pose_cache.positions is not None
+            else np.asarray(ref_slab.get_positions(), dtype=float)
+        )
+        contact_ref = _contact_support_ref(
+            site,
+            surface_ref=float(surface_ref),
+            place_normal=place_normal,
+            positions=pos_for_support,
+        )
         delta = (zf - 0.5) * diversity_window
-        target_atom_h = float(surface_ref) + contact_gap + delta
+        target_atom_h = float(contact_ref) + contact_gap + delta
         com_h = _com_height_for_contact(
             rotated_pos,
             place_normal,
             contact_index=contact_idx,
             target_atom_height=target_atom_h,
-            surface_ref=float(surface_ref),
+            surface_ref=float(contact_ref),
             config=config,
             symbols=symbols,
             r_surface=float(r_surface),
@@ -1022,7 +1052,7 @@ def _recover_distance_failure(
         normal=n_hat,
     )
 
-    # Molecule clearly through the surface: skip expensive clash descent.
+    # Deep normal penetration: skip clash descent.
     if (
         fail_reason == "too_close"
         and z_span > _DISTANCE_ZERO_EPS
@@ -1032,7 +1062,7 @@ def _recover_distance_failure(
         return ctx, "too_close"
 
     try_height = fail_reason in height_reasons
-    # Lateral clashes (step edges, pore walls, neighbors) need clash/XY, not height.
+    # Mostly in-plane penetration → clash/XY, not height nudge.
     if (
         try_height
         and fail_reason in ("too_close", "vdw_overlap")
@@ -1515,9 +1545,7 @@ def _finalize_placement(
         np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float),
     )
 
-    # Build the slab-side scratch once and share it between the first
-    # validation and any distance-recovery candidates (the slab does not
-    # change while only the adsorbate moves).
+    # Share slab scratch across first validation and any recovery attempts.
     exclude_n = _saturation_exclude_count(slab, slab_for_sites)
     slab_scratch = _build_slab_distance_scratch(slab, exclude_n, ctx.mat_type)
 

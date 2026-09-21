@@ -1,8 +1,9 @@
 """Site generator plugin contract, registry helpers, and name resolution.
 
 Registered plugins: ``topology`` (slab Delaunay hybrid / NP hull),
-``voronoi`` (free-volume vertices), ``adaptive_grid``, and ``rolling_probe``
-(atom-centred Cartesian grid with iterative refinement; all materials).
+``voronoi`` (free-volume vertices), ``adaptive_grid`` (atom-centred Cartesian
+shells), and ``rolling_probe`` (Connolly / SAS contacts). Both wall-near
+plugins are selectable on all materials but never chosen by ``auto``.
 """
 
 from __future__ import annotations

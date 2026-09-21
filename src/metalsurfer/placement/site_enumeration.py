@@ -375,8 +375,8 @@ def get_unified_sites(
         Max top-layer height variance (Å²) for classifying a slab as planar.
         ``None`` uses the library default.
     site_generator
-        ``"auto"`` (material default), ``"topology"``, ``"voronoi"``, or
-        ``"adaptive_grid"``.
+        ``"auto"`` (material default), ``"topology"``, ``"voronoi"``,
+        ``"adaptive_grid"``, or ``"rolling_probe"``.
     adaptive_grid_spacing
         Absolute shell increment in Å (``AdsorptionConfig.adaptive_grid_spacing``).
     adaptive_grid_refine_levels
@@ -384,10 +384,12 @@ def get_unified_sites(
     adaptive_grid_nms_framework_scale
         Floor NMS merge radius as a fraction of framework median NN.
     n_jobs
-        Joblib-style CPU workers for ``adaptive_grid`` shell/refine and Voronoi
-        ridge enrichment (default ``-2``).
+        Joblib-style CPU workers for ``adaptive_grid`` shell/refine,
+        ``rolling_probe`` contacts, and Voronoi ridge enrichment
+        (default ``-2``).
     side_policy
-        Slab face / exposure policy for ``adaptive_grid`` (default ``positive``).
+        Face / exposure policy for ``adaptive_grid`` and ``rolling_probe``
+        (default ``positive``).
     """
     sites, _ = _get_unified_sites_with_plugin_vertices(
         atoms,
@@ -784,7 +786,7 @@ def get_hollow_sites_for_adatoms(
         Site classification method (``"auto"``, ``"delaunay"``, etc.).
     site_generator
         Site generator plugin (``"auto"``, ``"topology"``, ``"voronoi"``,
-        ``"adaptive_grid"``).
+        ``"adaptive_grid"``, ``"rolling_probe"``).
     site_equivalence_tolerance
         Fingerprint-aware clustering tolerance (Å).
     auto_widen
@@ -792,7 +794,8 @@ def get_hollow_sites_for_adatoms(
     planar_z_variance_threshold
         Max top-layer height variance (Å²) for planar classification.
     side_policy
-        Slab face / exposure policy for ``adaptive_grid`` (default ``positive``).
+        Face / exposure policy for ``adaptive_grid`` and ``rolling_probe``
+        (default ``positive``).
     adaptive_grid_spacing
         Absolute shell increment (Å) for ``adaptive_grid``.
     adaptive_grid_refine_levels
@@ -801,7 +804,7 @@ def get_hollow_sites_for_adatoms(
         Floor on ``merge_radius`` as a fraction of framework median NN.
     n_jobs
         Joblib-style parallelism for plugins that use it (Voronoi ridge enrich,
-        adaptive_grid shells).
+        adaptive_grid shells, rolling_probe contacts).
     """
     raw = get_unified_sites(
         slab,
@@ -1056,9 +1059,10 @@ def get_symmetry_aware_sites(
         ``None`` uses the library default.
     site_generator
         Site generator plugin (``"auto"``, ``"topology"``, ``"voronoi"``,
-        ``"adaptive_grid"``).
+        ``"adaptive_grid"``, ``"rolling_probe"``).
     side_policy
-        Slab face / exposure policy for ``adaptive_grid`` (default ``positive``).
+        Face / exposure policy for ``adaptive_grid`` and ``rolling_probe``
+        (default ``positive``).
     adaptive_grid_spacing
         Absolute shell increment (Å) for ``adaptive_grid``.
     adaptive_grid_refine_levels

@@ -38,6 +38,7 @@ from metalsurfer.placement.site_context import (
 )
 from metalsurfer.placement.site_coords import _derive_top_layer_tolerance
 from metalsurfer.placement.site_enumeration import _get_site_surface_radii
+from metalsurfer.surface_prep import apply_surface_constraints
 
 from ..conftest import (
     adsorption_config_factory,
@@ -623,6 +624,7 @@ def test_water_en_down_contact_atom_is_oxygen():
     from metalsurfer.placement.pose import (
         _contact_atom_index,
         _contact_gap_angstrom,
+        _contact_support_ref,
         _pose_from_spec,
     )
     from metalsurfer.placement.site_enumeration import _get_site_surface_radii
@@ -674,14 +676,102 @@ def test_water_en_down_contact_atom_is_oxygen():
         r_surface=float(r_surface),
         site_type_offset=site_offset,
     )
+    contact_ref = _contact_support_ref(
+        site,
+        surface_ref=float(ctx.surface_ref),
+        place_normal=n_hat,
+        positions=slab.get_positions(),
+    )
     atom_h = (
         ctx.rotated_pos + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs])
     ) @ n_hat
-    # Oxygen at/above the contact gate; hydrogens must not dig below their gate.
-    assert float(atom_h[o_idx]) >= ctx.surface_ref + contact_gap - 1e-5
+    # Oxygen at/above the support-atom contact gate; H must not dig below O.
+    assert float(atom_h[o_idx]) >= contact_ref + contact_gap - 1e-5
     h_idxs = [i for i, s in enumerate(symbols) if s == "H"]
     for hi in h_idxs:
         assert float(atom_h[hi]) >= float(atom_h[o_idx]) - 0.5
+
+
+def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
+    """Puckered slabs: pair clearance is measured from supports, not topology lift."""
+    from metalsurfer.placement.pose import (
+        _contact_gap_angstrom,
+        _contact_support_ref,
+        _pose_from_spec,
+    )
+    from metalsurfer.placement.site_enumeration import _get_site_surface_radii
+
+    # Two-height top layer (bridging O above metal) so local_z uses site.xyz.
+    a = 2.7
+    positions = []
+    symbols = []
+    for ix in range(3):
+        for iy in range(3):
+            positions.append([ix * a, iy * a, 0.0])
+            symbols.append("Ti")
+            positions.append([ix * a + 0.5 * a, iy * a + 0.5 * a, 1.2])
+            symbols.append("O")
+    slab = Atoms(
+        symbols=symbols,
+        positions=positions,
+        cell=[3 * a, 3 * a, 20.0],
+        pbc=[True, True, False],
+    )
+    slab = apply_surface_constraints(slab)
+    config = AdsorptionConfig(
+        material_type="slab",
+        seed=0,
+        rough_slab_local_z=True,
+        planar_z_variance_threshold=0.01,
+    )
+    ctx_sites = _get_unique_sites_for_specs(slab, config)
+    assert ctx_sites.use_sites and ctx_sites.sites
+    site_index = next(
+        (i for i, s in enumerate(ctx_sites.sites) if s.slab_indices),
+        0,
+    )
+    site = ctx_sites.sites[site_index]
+    assert site.slab_indices
+    water = make_water()
+    o_idx = list(water.get_chemical_symbols()).index("O")
+    spec = PlacementSpec(
+        conformer_index=0,
+        orientation_type="EN-down",
+        face_flip=False,
+        en_atom_index=o_idx,
+        site_index=site_index,
+        site_type=str(site.site_type),
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+    ctx, fail = _pose_from_spec(water, spec, slab, config, "O", site_context=ctx_sites)
+    assert fail is None and ctx is not None
+    n_hat = np.asarray(ctx.normal, dtype=float)
+    support_h = _contact_support_ref(
+        site,
+        surface_ref=float(ctx.surface_ref),
+        place_normal=n_hat,
+        positions=slab.get_positions(),
+    )
+    # Topology lift puts the site vertex above the supports.
+    site_h = float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
+    assert site_h > support_h + 0.2
+    r_surface = _get_site_surface_radii(slab, site)
+    contact_gap = _contact_gap_angstrom(
+        config,
+        contact_symbol="O",
+        r_surface=float(r_surface),
+        surface_symbol=slab.get_chemical_symbols()[int(site.slab_indices[0])],
+    )
+    atom_h = (
+        ctx.rotated_pos + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs])
+    ) @ n_hat
+    # Contact is near support + gap, not the lifted site vertex + gap.
+    assert float(atom_h[o_idx]) == pytest.approx(support_h + contact_gap, abs=0.15)
+    assert float(atom_h[o_idx]) < site_h + contact_gap - 0.2
 
 
 def test_pose_does_not_expand_symmetry_reduced_catalog():

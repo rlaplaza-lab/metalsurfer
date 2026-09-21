@@ -171,14 +171,28 @@ def main() -> int:
         print("Non-finite or empty committed E_ads rows found.", file=sys.stderr)
         return 1
 
-    # Best-E_ads band (uma-s-1p2 + oc25 QC): first committed step ≈ −3.23 eV.
+    # Best single-molecule E_ads band (uma-s-1p2 + oc25 QC): ≈ −3.23 eV.
+    # Use per-molecule screening results — committed tuplet E_ads is a shared
+    # composite (~sum of units), not a per-adsorbate figure.
     e_ads_ceiling_ev = -3.00
     e_ads_floor_ev = -3.40
     first_bound = next((s for s in result.steps if s.n_added > 0), None)
     if first_bound is None:
         print("No committed saturation step found.", file=sys.stderr)
         return 1
-    best_first = min(u.energy_adsorption for u in first_bound.committed())
+    screened = [
+        r.energy_adsorption
+        for group in first_bound.per_molecule_results.values()
+        for r in group
+        if np.isfinite(r.energy_adsorption)
+    ]
+    if not screened:
+        print(
+            "No finite per-molecule screening E_ads on first bound step.",
+            file=sys.stderr,
+        )
+        return 1
+    best_first = min(screened)
     if best_first >= e_ads_ceiling_ev:
         print(
             f"Expected strong first-step binding "
@@ -197,6 +211,7 @@ def main() -> int:
 
     print(
         f"\nResults written under {results_dir} "
+        f"(first-step best screened E_ads = {best_first:.4f} eV).\n"
         "(saturation_details.csv includes a committed_molecule column for "
         "multi-winner steps)."
     )

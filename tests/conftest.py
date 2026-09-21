@@ -165,6 +165,9 @@ class NoopDatasetLogger:
     def add_results(self, *_args, **_kwargs) -> None:
         pass
 
+    def add_record(self, *_args, **_kwargs) -> None:
+        pass
+
     def flush(self) -> None:
         pass
 

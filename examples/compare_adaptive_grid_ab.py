@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
 """A/B site generators: auto vs adaptive_grid vs rolling_probe (+ optional e2e).
 
-Site-generation timing and e2e demos honour ``--n-jobs`` (default ``1``).
-E2e defaults: ``num_placements=None`` (GPU autotune / one full batch),
-``fmax=0.05``, ``stage2_steps=200``, camphor ``bo.total_budget=5`` with
-autotuned initial/batch sizes. Best E_ads is compared to ``--baseline-csv``.
-
-Keep ``site_generator="auto"`` for production; ``adaptive_grid`` and
-``rolling_probe`` are wall-near opt-ins (not MOF pore centres).
+Not part of the official example runner. Production defaults and A/B conclusions:
+docs/guides/configuration.rst (site-generator section).
 
 Run (conda env metalsurfer)::
 

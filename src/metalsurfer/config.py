@@ -758,22 +758,18 @@ class AdsorptionConfig:
     voronoi_site_enrichment: bool = True
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
-    # Site candidate generator. ``auto`` → topology (slab/NP) or Voronoi (porous).
-    # ``adaptive_grid`` / ``rolling_probe`` are selectable on all materials but
-    # never chosen by ``auto``.
+    # ``auto`` → topology (slab/NP) or Voronoi (porous). ``adaptive_grid`` /
+    # ``rolling_probe`` are selectable on all materials but never chosen by ``auto``.
     site_generator: Literal[
         "auto", "topology", "voronoi", "adaptive_grid", "rolling_probe"
     ] = "auto"
-    # Face / exposure policy for adaptive_grid / rolling_probe (PBC-geometry face filter).
+    # Face / exposure policy for adaptive_grid / rolling_probe (PBC geometry).
     side_policy: Literal["all", "positive", "negative", "external"] = "positive"
-    # Absolute shell increment (Å) for ``adaptive_grid``. Near-atom sampling;
-    # catalog density bounded by merge_radius (NN-floored). Keep 0.70 unless
-    # A/B shows a clear win; avoid values below 0.70 on MOFs.
+    # Absolute shell increment (Å) for ``adaptive_grid`` (wall-near, not pores).
     adaptive_grid_spacing: float = 0.70
     # Refine halvings after the coarse shell (0 = coarse grid only).
     adaptive_grid_refine_levels: int = 0
-    # Floor on computed merge_radius as a fraction of framework median NN.
-    # 0.25 preserves flat-metal catalogs; larger floors over-merge.
+    # Floor on merge_radius as a fraction of framework median NN.
     adaptive_grid_nms_framework_scale: float = 0.25
     # Conformer prior for placement-spec selection.
     # ``"uniform"`` keeps the conformer-agnostic stratified draw (ignores
