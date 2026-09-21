@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..site_coords import project_vertices_to_support_plane
 from ..site_rolling_probe import _SOURCE_HINT, generate_rolling_probe_sites
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
 from .helpers import median_nn_or_fallback
@@ -45,8 +46,14 @@ class RollingProbeGenerator:
         if len(result.vertices) == 0:
             return empty_candidate_batch()
 
+        vertices = project_vertices_to_support_plane(
+            result.vertices,
+            result.normals,
+            list(result.atom_indices),
+            positions,
+        )
         return SiteCandidateBatch(
-            vertices=result.vertices,
+            vertices=vertices,
             nn_dists=result.nn_dists,
             source_hints=[_SOURCE_HINT] * len(result.vertices),
             atom_indices=list(result.atom_indices),

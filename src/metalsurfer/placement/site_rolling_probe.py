@@ -55,7 +55,11 @@ from .site_adaptive_grid import (
     _support_positions_for_candidate,
     adaptive_grid_spacing,
 )
-from .site_coords import _minimum_image_cartesian_delta, _wrap_cartesian
+from .site_coords import (
+    _minimum_image_cartesian_delta,
+    _wrap_cartesian,
+    project_anchor_to_support_plane,
+)
 from .site_plugins.helpers import periodic_accessibility_tree
 
 _SOURCE_HINT = "rolling_probe"
@@ -307,11 +311,14 @@ def _atom_contacts(
             collected.append(_Contact(position=pt.copy(), support_images=(self_img,)))
 
     nbrs: list[tuple[int, int, np.ndarray]] = []
-    for d, img, base in keep_nb:
-        cutoff = float(framework_radii[atom_i] + framework_radii[base] + 2.0 * skin)
-        if d > cutoff + 1e-6:
+    for dist_i, img_i, base_i in keep_nb:
+        dist_f = float(dist_i)
+        img_n = int(img_i)
+        base_n = int(base_i)
+        cutoff = float(framework_radii[atom_i] + framework_radii[base_n] + 2.0 * skin)
+        if dist_f > cutoff + 1e-6:
             continue
-        nbrs.append((img, base, tree_data[img].copy()))
+        nbrs.append((img_n, base_n, np.asarray(tree_data[img_n], dtype=float).copy()))
 
     # Skip pair/triplet work only when nothing is exposed, CN is high, and
     # there are no contact-range neighbours (true bulk).
@@ -453,9 +460,18 @@ def _contacts_to_candidates(
             support_distances=dists_t,
             support_positions=supp_pos,
         )
+        anchor = project_anchor_to_support_plane(vert, normal, supp_pos)
+        nrm = float(np.linalg.norm(np.asarray(normal, dtype=float)))
+        if (
+            nrm > _VECTOR_NORM_EPS
+            and len(supp_pos) > 0
+            and np.any(pbc)
+            and cell_has_volume(cell)
+        ):
+            anchor = _wrap_cartesian(anchor.reshape(1, 3), cell, pbc)[0]
         out.append(
             CandidateSite(
-                position=np.asarray(vert, dtype=float).copy(),
+                position=np.asarray(anchor, dtype=float).copy(),
                 clearance=clearance,
                 support_indices=bases_t,
                 support_image_shifts=shifts_t,

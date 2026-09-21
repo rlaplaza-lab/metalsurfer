@@ -87,13 +87,10 @@ def test_check_desorption_nanoparticle_and_porous():
     assert np_sites
     water_near_np = make_water()
     site0 = np_sites[0]
-    if site0.slab_indices:
-        anchor = np.mean(nanoparticle.get_positions()[list(site0.slab_indices)], axis=0)
-    else:
-        anchor = np.asarray(site0.xyz, dtype=float)
-    direction = np.asarray(site0.xyz, dtype=float) - np.asarray(anchor, dtype=float)
-    n_hat = direction / float(np.linalg.norm(direction))
-    center_np = np.asarray(anchor, dtype=float) + 1.5 * n_hat
+    anchor = np.asarray(site0.xyz, dtype=float)
+    n_hat = np.asarray(site0.normal, dtype=float)
+    n_hat = n_hat / float(np.linalg.norm(n_hat))
+    center_np = anchor + 1.5 * n_hat
     wpos = water_near_np.get_positions().copy()
     wpos -= np.mean(wpos, axis=0)
     wpos += center_np
@@ -116,8 +113,7 @@ def test_check_desorption_nanoparticle_and_porous():
         use_pbc=True,
         pbc=list(nanoparticle.get_pbc()),
     )
-    # Water COM at metal-anchor + 1.5 Å along site lift; closest approach is
-    # fixture-determined (H pointing inward).
+    # Water COM at the catalog anchor + 1.5 Å along the site normal.
     assert 0.8 <= float(dist_np_near) <= 2.0
 
     water_near = make_water()

@@ -6,6 +6,7 @@ from typing import Any
 
 from .._constants import _ADAPTIVE_GRID_DEFAULT_SPACING
 from ..site_adaptive_grid import _SOURCE_HINT, generate_adaptive_grid_sites
+from ..site_coords import project_vertices_to_support_plane
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
 from .helpers import median_nn_or_fallback
 
@@ -61,8 +62,14 @@ class AdaptiveGridGenerator:
         if len(result.vertices) == 0:
             return empty_candidate_batch()
 
+        vertices = project_vertices_to_support_plane(
+            result.vertices,
+            result.normals,
+            list(result.atom_indices),
+            positions,
+        )
         return SiteCandidateBatch(
-            vertices=result.vertices,
+            vertices=vertices,
             nn_dists=result.nn_dists,
             source_hints=[_SOURCE_HINT] * len(result.vertices),
             atom_indices=list(result.atom_indices),

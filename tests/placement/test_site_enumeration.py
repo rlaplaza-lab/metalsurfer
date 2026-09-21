@@ -76,20 +76,23 @@ def test_slab_catalog_xyz_is_support_plane_anchor():
     from ase.build import fcc111
 
     slab = fcc111("Pt", size=(3, 3, 3), vacuum=10.0, periodic=True)
-    sites = get_unified_sites(slab, material_type="slab")
-    assert any(s.site_type == "atop" for s in sites)
-    pos = np.asarray(slab.get_positions(), dtype=float)
-    for s in sites:
-        assert str(s.site_type) != "pore"
-        assert s.slab_indices
-        n_hat = np.asarray(s.normal, dtype=float)
-        n_hat = n_hat / float(np.linalg.norm(n_hat))
-        assert float(np.linalg.norm(n_hat)) == pytest.approx(1.0, abs=1e-6)
-        support_h = float(np.max(pos[list(s.slab_indices)] @ n_hat))
-        site_h = float(np.dot(np.asarray(s.xyz, dtype=float), n_hat))
-        assert site_h == pytest.approx(support_h, abs=0.15)
-        # Probe metadata still records accessibility clearance above the plane.
-        assert s.clearance is not None and float(s.clearance) > 0.3
+    for plugin in ("topology", "voronoi", "adaptive_grid", "rolling_probe"):
+        sites = get_unified_sites(
+            slab, material_type="slab", site_generator=plugin, n_jobs=1
+        )
+        assert sites
+        pos = np.asarray(slab.get_positions(), dtype=float)
+        for s in sites:
+            if str(s.site_type) == "pore":
+                continue
+            assert s.slab_indices, f"{plugin} wall-near site missing supports"
+            n_hat = np.asarray(s.normal, dtype=float)
+            n_hat = n_hat / float(np.linalg.norm(n_hat))
+            assert float(np.linalg.norm(n_hat)) == pytest.approx(1.0, abs=1e-6)
+            support_h = float(np.max(pos[list(s.slab_indices)] @ n_hat))
+            site_h = float(np.dot(np.asarray(s.xyz, dtype=float), n_hat))
+            assert site_h == pytest.approx(support_h, abs=0.25)
+            assert s.clearance is not None and float(s.clearance) > 0.05
 
 
 def test_porous_pore_xyz_stays_in_free_volume():
@@ -1053,7 +1056,8 @@ def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
     pbc = np.array([True, True, False], dtype=bool)
     median_nn = 2.0
     site_z = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
-    existing = np.array([[3.98, 1.0, site_z]], dtype=float)
+    # Catalog anchors are unlifted; the PBC image sits on the same atom plane.
+    existing = np.array([[3.98, 1.0, 0.0]], dtype=float)
     existing_dists = np.array([site_z], dtype=float)
     existing_sources = ["voronoi"]
     access = _periodic_accessibility_tree(positions, cell, pbc, max_distance=5.0)

@@ -53,6 +53,24 @@ def _parallel_tilt_aip_counts() -> list[int]:
     return [len(_parallel_aip_values(tl)) for tl in _TILT_PARALLEL]
 
 
+def _kept_z_count(site_type: str | None) -> int:
+    """Kept ``z_fraction`` samples: wall-near drops values below 0.5."""
+    if site_type in (None, "pore"):
+        return len(_Z_FRACTIONS)
+    return sum(1 for z in _Z_FRACTIONS if float(z) >= 0.5)
+
+
+def _kept_z_total(
+    site_indices: list[int],
+    site_type_for_index: Callable[[int], str | None] | None,
+) -> int:
+    """Sum of kept ``z_fraction`` samples over *site_indices*."""
+    indices = site_indices if site_indices else [-1]
+    if site_type_for_index is None:
+        return len(indices) * len(_Z_FRACTIONS)
+    return sum(_kept_z_count(site_type_for_index(int(i))) for i in indices)
+
+
 def _flat_aromatic_parallel_total(*, n_conformers: int, n_sites: int) -> int:
     """Return parallel flat-aromatic combo count (product×aip generator)."""
     n_aips = _parallel_tilt_aip_counts()
@@ -141,24 +159,23 @@ def _unravel_parallel_flat(
 def _flat_aromatic_branch_capacities(
     *,
     n_conformers: int,
-    n_sites: int,
     n_binders: int,
+    z_total: int,
 ) -> tuple[int, int]:
     """Uncapped ``(parallel, EN-down)`` flat-aromatic grid sizes.
 
-    Derived from exactly the axis products
-    :func:`build_batch_placement_specs` enumerates in its flat-aromatic
-    branches (including the ``_parallel_aip_values`` collapse), so budget
-    estimates cannot silently drift from the builder.
+    *z_total* is the sum of kept ``z_fraction`` samples over sites (wall-near
+    fractions below 0.5 are omitted). The parallel in-plane collapse matches
+    :func:`_parallel_aip_values`.
     """
-    parallel = _flat_aromatic_parallel_total(n_conformers=n_conformers, n_sites=n_sites)
+    n_aips = _parallel_tilt_aip_counts()
+    parallel = n_conformers * 2 * len(_AZIMUTH) * int(z_total) * sum(n_aips)
     en_down = (
         n_conformers
         * max(n_binders, 1)
         * len(_TILT_FULL)
         * len(_AZIMUTH)
-        * len(_Z_FRACTIONS)
-        * n_sites
+        * int(z_total)
     )
     return parallel, en_down
 
@@ -171,6 +188,7 @@ def max_batch_placement_specs(
     flat_aromatic: bool,
     dissociative: bool = False,
     n_hollow_pairs: int = 0,
+    site_type_for_index: Callable[[int], str | None] | None = None,
 ) -> int:
     """Closed-form count of policy-grid specs (per-branch clamp at ``_GRID_BUILD_CAP``).
 
@@ -192,8 +210,11 @@ def max_batch_placement_specs(
         Whether dissociative placement is enabled.
     n_hollow_pairs
         Number of hollow site pairs for dissociative placement.
+    site_type_for_index
+        When set, wall-near sites count only ``z_fraction >= 0.5``. Omitted,
+        the count is the full grid (an upper bound).
     """
-    n_sites = max(len(site_indices), 1)
+    z_total = _kept_z_total(site_indices, site_type_for_index)
 
     if dissociative:
         if n_hollow_pairs <= 0:
@@ -202,12 +223,12 @@ def max_batch_placement_specs(
 
     if flat_aromatic:
         parallel, en_down = _flat_aromatic_branch_capacities(
-            n_conformers=n_conformers, n_sites=n_sites, n_binders=n_binders
+            n_conformers=n_conformers, n_binders=n_binders, z_total=z_total
         )
         return min(parallel, _GRID_BUILD_CAP) + min(en_down, _GRID_BUILD_CAP)
 
     return min(
-        n_conformers * len(_TILT_FULL) * len(_AZIMUTH) * len(_Z_FRACTIONS) * n_sites,
+        n_conformers * len(_TILT_FULL) * len(_AZIMUTH) * z_total,
         _GRID_BUILD_CAP,
     )
 
@@ -515,6 +536,7 @@ def build_batch_placement_specs(
     conformer_energies: list[float] | None = None,
     conformer_weighting: str = "uniform",
     boltzmann_temperature: float = 300.0,
+    allows_conformer_site: Callable[[int, int], bool] | None = None,
 ) -> list[PlacementSpec]:
     """BO candidate ``PlacementSpec`` list: full Cartesian grid (capped), then stratified subsample to *n_desired* (*seed*).
 
@@ -525,44 +547,9 @@ def build_batch_placement_specs(
     energies cannot support weighting. The dissociative branch pins
     ``conformer_index=0``, so it is never weighted.
 
-    Parameters
-    ----------
-    n_conformers
-        Number of conformers.
-    site_indices
-        List of available site indices.
-    site_type_for_index
-        Callable mapping site index to site type string.
-    shape
-        Molecule shape classification.
-    n_binders
-        Number of binding atoms.
-    flat_aromatic
-        Whether the molecule is flat and aromatic.
-    parallel_fraction
-        Fraction of placements to orient parallel.
-    n_desired
-        Target number of specs in the returned list.
-    filter_spec
-        Optional callable to filter generated specs.
-    dissociative
-        Whether dissociative placement is enabled.
-    n_hollow_pairs
-        Number of hollow site pairs for dissociative placement.
-    seed
-        Random seed for deterministic subsampling.
-    preferred_site_types
-        Site types to prioritize in stratified sampling.
-    z_fraction_target
-        Preferred z-fraction for prior ordering.
-    site_index_weight
-        Weight for site-index prior penalty.
-    conformer_energies
-        Optional list of conformer energies (eV).
-    conformer_weighting
-        Conformer weighting scheme (``"uniform"`` or ``"boltzmann"``).
-    boltzmann_temperature
-        Temperature for Boltzmann weighting (K).
+    *allows_conformer_site*, when set, drops ``(conformer_index, site_index)``
+    pairs whose footprint does not fit under coverage (per-molecule view of
+    a shared site frame).
     """
     normalized_sites = site_indices if site_indices else [-1]
     conformer_weights = (
@@ -584,15 +571,37 @@ def build_batch_placement_specs(
     def _fields(**overrides: Any) -> dict[str, Any]:
         return {**base_fields, **overrides}
 
+    def _pair_ok(fields: dict[str, Any]) -> bool:
+        if allows_conformer_site is None:
+            return True
+        return bool(
+            allows_conformer_site(
+                int(fields["conformer_index"]), int(fields["site_index"])
+            )
+        )
+
+    def _same_height_wall_duplicate(fields: dict[str, Any]) -> bool:
+        """Return whether a wall-near fraction below 0.5 repeats the contact COM."""
+        if str(fields.get("orientation_type")) == "dissociative":
+            return False
+        if float(fields["z_fraction"]) >= 0.5:
+            return False
+        site_type = site_type_for_index(int(fields["site_index"]))
+        return site_type not in (None, "pore")
+
     def _collect(
         items: Iterable[dict[str, Any]],
         cap: int,
     ) -> list[PlacementSpec]:
-        """Collect specs from *items* until *cap*, applying ``filter_spec`` when set."""
+        """Collect specs from *items* until *cap*, applying filters when set."""
         out: list[PlacementSpec] = []
         for fields in items:
             if len(out) >= cap:
                 break
+            if _same_height_wall_duplicate(fields):
+                continue
+            if not _pair_ok(fields):
+                continue
             spec = PlacementSpec(
                 **fields,
                 site_type=site_type_for_index(int(fields["site_index"])),

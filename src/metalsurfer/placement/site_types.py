@@ -62,12 +62,12 @@ class Site:
 
     @property
     def xy(self) -> np.ndarray:
-        """Cartesian xy of the site vertex."""
+        """Cartesian xy of the catalog anchor (support plane or pore centre)."""
         return self.xyz[:2].copy()
 
     @property
     def z(self) -> float:
-        """Cartesian z of the site vertex."""
+        """Cartesian z of the catalog anchor (support plane or pore centre)."""
         return float(self.xyz[2])
 
 

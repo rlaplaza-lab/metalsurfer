@@ -344,16 +344,26 @@ def _generate_slab_topology_sites(
     candidate_atoms: list[tuple[int, ...]] = []
 
     def _add_candidates_batch(
-        points: np.ndarray,
+        anchors: np.ndarray,
         source: str,
         atom_ids: list[tuple[int, ...]],
+        *,
+        probe_points: np.ndarray | None = None,
     ) -> None:
-        if len(points) == 0:
+        """Gate accessibility on *probe_points*; store *anchors* as catalog xyz.
+
+        *site_height* lift is probe-only. Catalog identity is the support-plane
+        (or simplex) anchor so placement lifts once in the contact solve.
+        """
+        if len(anchors) == 0:
             return
-        pts = np.asarray(points, dtype=float)
+        pts = np.asarray(anchors, dtype=float)
         if np.any(pbc):
             pts = _wrap_cartesian(pts, cell, pbc)
-        dists, _ = accessibility_tree.query(pts, k=1)
+        probe = pts if probe_points is None else np.asarray(probe_points, dtype=float)
+        if probe_points is not None and np.any(pbc):
+            probe = _wrap_cartesian(probe, cell, pbc)
+        dists, _ = accessibility_tree.query(probe, k=1)
         dists = np.asarray(dists, dtype=float).ravel()
         keep = (probe_radius <= dists) & (dists <= max_distance)
         if not np.any(keep):
@@ -394,10 +404,12 @@ def _generate_slab_topology_sites(
             exp_tri,
         )
 
-    # Atop candidates: always useful and cheap.
-    atop_positions = top_positions + float(site_height) * n_hat
+    # Atop: catalog = atom positions; probe at site_height along the slab normal.
     atop_atoms = [(int(ai),) for ai in top_atom_indices]
-    _add_candidates_batch(atop_positions, "topology_atop", atop_atoms)
+    atop_probe = top_positions + float(site_height) * n_hat
+    _add_candidates_batch(
+        top_positions, "topology_atop", atop_atoms, probe_points=atop_probe
+    )
 
     top_positions_2d = _project_to_slab_plane(top_positions, cell)
     if len(top_positions) < 2:
@@ -453,25 +465,29 @@ def _generate_slab_topology_sites(
         for kind, ids, pt in _iter_unique_simplex_sites(
             exp_tri.simplices, expanded_origin_local_index, exp3d
         ):
-            lifted = pt + float(site_height) * n_hat
+            # Catalog = simplex point on the support plane; lift is probe-only.
             global_ids = tuple(int(top_atom_indices[i]) for i in ids)
             if kind == "bridge":
-                bridge_points.append(lifted)
+                bridge_points.append(np.asarray(pt, dtype=float))
                 bridge_atoms.append(global_ids)
             else:
-                hollow_points.append(lifted)
+                hollow_points.append(np.asarray(pt, dtype=float))
                 hollow_atoms.append(global_ids)
         if bridge_points:
+            bridge_arr = np.asarray(bridge_points, dtype=float)
             _add_candidates_batch(
-                np.asarray(bridge_points, dtype=float),
+                bridge_arr,
                 "topology_bridge",
                 bridge_atoms,
+                probe_points=bridge_arr + float(site_height) * n_hat,
             )
         if hollow_points:
+            hollow_arr = np.asarray(hollow_points, dtype=float)
             _add_candidates_batch(
-                np.asarray(hollow_points, dtype=float),
+                hollow_arr,
                 "topology_hollow",
                 hollow_atoms,
+                probe_points=hollow_arr + float(site_height) * n_hat,
             )
 
     return _finalize()

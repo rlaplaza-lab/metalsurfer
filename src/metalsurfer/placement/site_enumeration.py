@@ -32,7 +32,6 @@ from .site_classify import (
     _TOPOLOGY_SOURCE_TO_TYPE,
     _build_site_records,
     _DelaunayClassifyInputs,
-    project_sites_to_support_plane,
 )
 from .site_coords import (
     _cart_to_frac,
@@ -225,24 +224,30 @@ def _inject_atop_sites(
         atom_normals = _surface_atom_normals(positions, top_atom_indices, hull)
 
     candidate_verts: list[np.ndarray] = []
+    candidate_probes: list[np.ndarray] = []
     candidate_atom_ids: list[int] = []
     candidate_normal_list: list[np.ndarray] = []
     for li, ai in enumerate(top_atom_indices):
         atom_pos = positions[int(ai)]
         if material_type == "slab":
-            candidate = _shift_along_slab_normal(
-                atom_pos.reshape(1, 3), cell, atop_height
-            )[0]
+            probe = _shift_along_slab_normal(atom_pos.reshape(1, 3), cell, atop_height)[
+                0
+            ]
             if np.any(pbc):
-                candidate = _wrap_cartesian(candidate.reshape(1, 3), cell, pbc)[0]
+                probe = _wrap_cartesian(probe.reshape(1, 3), cell, pbc)[0]
             n_hat = _slab_normal(cell)
+            anchor = atom_pos
+            if np.any(pbc):
+                anchor = _wrap_cartesian(atom_pos.reshape(1, 3), cell, pbc)[0]
         else:
             assert atom_normals is not None
             n_hat = atom_normals[li]
             if float(np.linalg.norm(n_hat)) < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
                 continue
-            candidate = atom_pos + atop_height * n_hat
-        candidate_verts.append(candidate)
+            probe = atom_pos + atop_height * n_hat
+            anchor = atom_pos
+        candidate_verts.append(anchor)
+        candidate_probes.append(probe)
         candidate_atom_ids.append(int(ai))
         candidate_normal_list.append(np.asarray(n_hat, dtype=float))
 
@@ -250,12 +255,13 @@ def _inject_atop_sites(
         return vertices, nn_dists, source_hints, atoms, normals, clearances
 
     candidate_arr = np.asarray(candidate_verts, dtype=float)
+    probe_arr = np.asarray(candidate_probes, dtype=float)
     gate_tree = (
         accessibility_tree
         if accessibility_tree is not None and np.any(pbc)
         else local_tree
     )
-    d_nn_all = np.asarray(gate_tree.query(candidate_arr, k=1)[0], dtype=float).ravel()
+    d_nn_all = np.asarray(gate_tree.query(probe_arr, k=1)[0], dtype=float).ravel()
     keep_acc = (d_nn_all >= float(probe_radius)) & (
         d_nn_all <= float(max_site_distance)
     )
@@ -722,16 +728,6 @@ def _enumerate_unified_sites(
         normals=normals,
         clearances=clearances,
     )
-    # Plugins lift/snap for accessibility; catalog identity is the support-
-    # plane anchor (pores / empty supports keep free-volume vertices).
-    sites = project_sites_to_support_plane(
-        sites,
-        positions,
-        symbols,
-        cell=cell,
-        pbc=pbc_for_voronoi,
-    )
-
     if cell_has_volume(cell):
         # Deterministic fractional-xyz order for stable site_index / raw catalog.
         all_xyz = np.asarray([s.xyz for s in sites], dtype=float).reshape(-1, 3)

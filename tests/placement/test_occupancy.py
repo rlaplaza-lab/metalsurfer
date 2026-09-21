@@ -237,7 +237,7 @@ def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distanc
     )
     assert ctx.use_sites and ctx.sites
     site = ctx.sites[0]
-    # Place an adsorbate atom ~2 A from the site vertex.
+    # Place an adsorbate atom ~2 A from the catalog anchor.
     ads = Atoms("H", positions=[site.xyz + np.array([2.0, 0.0, 0.0])])
     full = slab.copy() + ads
 
@@ -571,16 +571,24 @@ def test_packing_yield_improves_with_occupancy_prune():
     assert float(np.max(clearances[covered])) > float(clearances[occupied_idx])
 
 
-def test_inplane_occupancy_rejects_overhead_adsorbate():
-    """Adsorbate ~2 Å above an unlifted anchor still occupies that column."""
+@pytest.mark.parametrize(
+    "plugin",
+    ["topology", "voronoi", "adaptive_grid", "rolling_probe"],
+)
+def test_inplane_occupancy_rejects_overhead_adsorbate(plugin):
+    """Adsorbate above an unlifted anchor along the site normal still occupies it."""
     from metalsurfer.placement.occupancy import available_site_indices
 
     slab = make_slab()
-    sites = get_unified_sites(slab, material_type="slab")
+    sites = get_unified_sites(
+        slab, material_type="slab", site_generator=plugin, n_jobs=1
+    )
     site = next(s for s in sites if s.slab_indices)
-    # Contact-height adsorbate: 3D distance to metal-plane anchor is ~2 Å, so a
+    n_hat = np.asarray(site.normal, dtype=float)
+    n_hat = n_hat / float(np.linalg.norm(n_hat))
+    # Contact-height adsorbate along the site normal: 3D distance is ~2 Å, so a
     # 3D gate would miss it; in-plane MIC must still reject the column.
-    existing = np.asarray(site.xyz, dtype=float) + np.array([0.0, 0.0, 2.0])
+    existing = np.asarray(site.xyz, dtype=float) + 2.0 * n_hat
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = [True, True, False]
     covered = available_site_indices(
@@ -588,10 +596,21 @@ def test_inplane_occupancy_rejects_overhead_adsorbate():
     )
     occupied_idx = next(i for i, s in enumerate(sites) if np.allclose(s.xyz, site.xyz))
     assert occupied_idx not in covered
-    # Laterally far site at the same height stays available.
+    # Laterally far site stays available.
     far = next(
-        s for s in sites if float(np.linalg.norm(s.xyz[:2] - site.xyz[:2])) > 3.0
+        (
+            s
+            for s in sites
+            if float(
+                np.linalg.norm(
+                    (s.xyz - site.xyz) - np.dot(s.xyz - site.xyz, n_hat) * n_hat
+                )
+            )
+            > 3.0
+        ),
+        None,
     )
+    assert far is not None
     far_idx = next(i for i, s in enumerate(sites) if np.allclose(s.xyz, far.xyz))
     assert far_idx in covered
 
@@ -782,8 +801,8 @@ def test_fill_retry_keeps_same_fingerprint_on_too_close(monkeypatch):
     assert 2 in seen_site_indices[1]
 
 
-def test_fill_retry_excludes_low_z_fraction_after_too_close(monkeypatch):
-    """too_close bans that family's z_fraction and below; higher zf still draws."""
+def test_fill_retry_bans_pose_family_after_too_close(monkeypatch):
+    """too_close bans same-height z fractions; a higher fraction may redraw."""
     from metalsurfer.placement.site_context import SiteContext
     from metalsurfer.placement.site_types import Site
     from metalsurfer.workflow import placement_fill as fill_mod
@@ -799,9 +818,18 @@ def test_fill_retry_excludes_low_z_fraction_after_too_close(monkeypatch):
             site_source="test",
             env_fingerprint=(("Ru",), (0,), 1),
         ),
+        Site(
+            xyz=np.array([2.0, 0.0, 5.0]),
+            normal=np.array([0.0, 0.0, 1.0]),
+            site_type="atop",
+            slab_indices=(1,),
+            material_type="slab",
+            site_source="test",
+            env_fingerprint=(("Ru",), (0,), 1),
+        ),
     ]
     ctx = SiteContext(sites=sites, use_sites=True, source="test")
-    seen_z: list[list[float]] = []
+    seen_specs: list[list[tuple[int, int, float]]] = []
     round_id = {"n": 0}
 
     def make_specs(n_desired, filter_spec):
@@ -810,11 +838,18 @@ def test_fill_retry_excludes_low_z_fraction_after_too_close(monkeypatch):
             specs = [_round_atop_placement_spec(0, site_index=0, z_fraction=0.3)]
         else:
             specs = [
+                _round_atop_placement_spec(0, site_index=0, z_fraction=0.1),
                 _round_atop_placement_spec(0, site_index=0, z_fraction=0.3),
-                _round_atop_placement_spec(1, site_index=0, z_fraction=0.7),
+                _round_atop_placement_spec(0, site_index=0, z_fraction=0.7),
+                _round_atop_placement_spec(0, site_index=1, z_fraction=0.5),
             ]
         filtered = _filter_specs(specs, filter_spec)
-        seen_z.append([float(s.z_fraction) for s in filtered])
+        seen_specs.append(
+            [
+                (int(s.conformer_index), int(s.site_index), float(s.z_fraction))
+                for s in filtered
+            ]
+        )
         return filtered[:n_desired]
 
     def fake_materialize(**kwargs):
@@ -861,14 +896,17 @@ def test_fill_retry_excludes_low_z_fraction_after_too_close(monkeypatch):
     )
     assert len(result.combined) == 1
     assert result.n_attempts == 2
-    assert 0.3 in seen_z[0]
-    # Retry drops the failed low z_fraction but keeps a higher sibling.
-    assert 0.3 not in seen_z[1]
-    assert 0.7 in seen_z[1]
+    assert (0, 0, 0.3) in seen_specs[0]
+    # Contact-height siblings (z <= 0.5) of the failed pose are dropped.
+    # A higher fraction and a different site may redraw.
+    assert (0, 0, 0.1) not in seen_specs[1]
+    assert (0, 0, 0.3) not in seen_specs[1]
+    assert (0, 0, 0.7) in seen_specs[1]
+    assert (0, 1, 0.5) in seen_specs[1]
 
 
 def test_fill_retry_bans_site_on_adsorbate_overlap(monkeypatch):
-    """adsorbate_overlap bans that site_index on retry, not the fingerprint family."""
+    """adsorbate_overlap bans (conformer, site) on retry, not every conformer."""
     from metalsurfer.placement.site_context import SiteContext
     from metalsurfer.placement.site_types import Site
     from metalsurfer.workflow import placement_fill as fill_mod
@@ -896,7 +934,7 @@ def test_fill_retry_bans_site_on_adsorbate_overlap(monkeypatch):
         ),
     ]
     ctx = SiteContext(sites=sites, use_sites=True, source="test")
-    seen_site_indices: list[list[int]] = []
+    seen_pairs: list[list[tuple[int, int]]] = []
     round_id = {"n": 0}
 
     def make_specs(n_desired, filter_spec):
@@ -904,12 +942,14 @@ def test_fill_retry_bans_site_on_adsorbate_overlap(monkeypatch):
         if round_id["n"] == 1:
             specs = [_round_atop_placement_spec(0, site_index=0)]
         else:
+            # Same site, different conformer must remain eligible; other site too.
             specs = [
                 _round_atop_placement_spec(0, site_index=0),
-                _round_atop_placement_spec(1, site_index=1),
+                _round_atop_placement_spec(1, site_index=0),
+                _round_atop_placement_spec(0, site_index=1),
             ]
         filtered = _filter_specs(specs, filter_spec)
-        seen_site_indices.append([s.site_index for s in filtered])
+        seen_pairs.append([(s.conformer_index, s.site_index) for s in filtered])
         return filtered[:n_desired]
 
     def fake_materialize(**kwargs):
@@ -939,7 +979,7 @@ def test_fill_retry_bans_site_on_adsorbate_overlap(monkeypatch):
     )
     slab = make_slab()
     result = fill_mod.fill_materialized_placements(
-        conformers=[make_water()],
+        conformers=[make_water(), make_water()],
         slab_for_sites=slab,
         config=AdsorptionConfig(
             material_type="slab",
@@ -956,9 +996,9 @@ def test_fill_retry_bans_site_on_adsorbate_overlap(monkeypatch):
     )
     assert len(result.combined) == 1
     assert result.n_attempts == 2
-    assert seen_site_indices[0] == [0]
-    assert 0 not in seen_site_indices[1]
-    assert 1 in seen_site_indices[1]
+    assert seen_pairs[0] == [(0, 0)]
+    assert (0, 0) not in seen_pairs[1]
+    assert (1, 0) in seen_pairs[1] or (0, 1) in seen_pairs[1]
 
 
 def test_fill_chunked_stops_early(monkeypatch):

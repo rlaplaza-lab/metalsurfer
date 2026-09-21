@@ -54,9 +54,9 @@ Material and substrate
 ``rough_slab_local_z``
    **Type:** ``bool`` · **Default:** ``True``
 
-   When ``True``, rough (non-planar) slabs use a per-site local *z* reference instead
-   of global ``max(z)`` when depositing adsorbates. Improves height sampling on
-   stepped or adatom-decorated surfaces.
+   Accepted for YAML compatibility. Placement height always uses the local
+   site frame (support-plane height along ``site.normal``); this flag no
+   longer switches between local and global ``max(z)`` references.
 
 ``symmetry_tolerance``
    **Type:** ``float`` · **Default:** ``0.1`` (Å)

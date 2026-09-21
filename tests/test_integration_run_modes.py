@@ -392,10 +392,13 @@ def _assert_survivor_physics(
                 f"z_abs={desc.z_abs:.3f} below surface_ref_z_abs={desc.surface_ref_z_abs:.3f}"
             )
         else:
-            # Local-normal materials: COM height along the site normal equals
-            # surface_ref + z_offset (contact-solved for NP).
+            # Wall-near COM sits above the support plane. Pore COM stays
+            # near the void centre, so z_offset can be slightly negative.
             assert desc.z_offset is not None
-            assert float(desc.z_offset) > 0.0
+            if desc.site_type == "pore":
+                assert abs(float(desc.z_offset)) < 3.0
+            else:
+                assert float(desc.z_offset) > 0.0
 
     if dissociative:
         assert desc.orientation_type == "dissociative"

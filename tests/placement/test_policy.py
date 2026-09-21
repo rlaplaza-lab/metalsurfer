@@ -54,6 +54,7 @@ def test_max_batch_specs_matches_build_batch_uncapped(
         site_indices=site_indices,
         n_binders=n_binders,
         flat_aromatic=flat_aromatic,
+        site_type_for_index=_site_type_atop,
     )
     actual = build_batch_placement_specs(
         n_conformers=n_conformers,
@@ -222,6 +223,42 @@ def test_max_batch_specs_dissociative_equals_pairs_times_z_fractions():
         n_hollow_pairs=n_hollow_pairs,
     )
     assert count == n_hollow_pairs * len(_Z_FRACTIONS)
+
+
+def test_wall_near_grid_collapses_contact_z_fractions():
+    """Wall-near z < 0.5 repeats the contact COM; pores keep every fraction."""
+    wall = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=[0],
+        site_type_for_index=_site_type_atop,
+        shape="round",
+        n_binders=1,
+        flat_aromatic=False,
+        parallel_fraction=0.0,
+        n_desired=10**6,
+        seed=TEST_SEED,
+    )
+    wall_z = {float(s.z_fraction) for s in wall}
+    assert wall_z
+    assert wall_z <= {0.5, 0.7, 0.9}
+    assert 0.5 in wall_z
+
+    def _pore(_index: int) -> str:
+        return "pore"
+
+    pores = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=[0],
+        site_type_for_index=_pore,
+        shape="round",
+        n_binders=1,
+        flat_aromatic=False,
+        parallel_fraction=0.0,
+        n_desired=10**6,
+        seed=TEST_SEED,
+    )
+    pore_z = {float(s.z_fraction) for s in pores}
+    assert pore_z == set(_Z_FRACTIONS)
 
 
 def test_build_batch_specs_flat_aromatic_generates_both_orientation_types():

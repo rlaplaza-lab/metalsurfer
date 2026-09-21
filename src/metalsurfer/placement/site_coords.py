@@ -50,6 +50,7 @@ from ._constants import (
     _PORE_THRESHOLD_COVALENT_SCALE,
     _PORE_THRESHOLD_MIN_ANGSTROM,
     _STEP_TERRACE_MAX_GAP_ANGSTROM,
+    _SURFACE_NORMAL_FALLBACK_NORM_EPS,
     _TOP_LAYER_DEPTH_COVALENT_SCALE,
     _TOP_LAYER_DEPTH_MAX_ANGSTROM,
     _TOP_LAYER_DEPTH_MIN_ANGSTROM,
@@ -272,6 +273,56 @@ def _deduplicate_points(
         )
     merge_set = _pbc_merge_pair_set(pts, tolerance, image_offsets=offsets)
     return _keep_mask_from_clusters(n, merge_set)
+
+
+def project_anchor_to_support_plane(
+    xyz: np.ndarray,
+    normal: np.ndarray,
+    support_positions: np.ndarray,
+) -> np.ndarray:
+    """Drop *xyz* onto the max-support plane along *normal*.
+
+    Empty supports and a degenerate normal leave *xyz* unchanged.
+    """
+    vert = np.asarray(xyz, dtype=float).reshape(3).copy()
+    supp = np.asarray(support_positions, dtype=float).reshape(-1, 3)
+    if len(supp) == 0:
+        return vert
+    n_hat = np.asarray(normal, dtype=float).reshape(3)
+    nrm = float(np.linalg.norm(n_hat))
+    if nrm <= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+        return vert
+    n_unit = np.asarray(n_hat / nrm, dtype=float)
+    support_h = float(np.max(supp @ n_unit))
+    delta = float(np.dot(vert, n_unit)) - support_h
+    return np.asarray(vert - delta * n_unit, dtype=float)
+
+
+def project_vertices_to_support_plane(
+    vertices: np.ndarray,
+    normals: np.ndarray | None,
+    atom_indices: list[tuple[int, ...]] | None,
+    positions: np.ndarray,
+) -> np.ndarray:
+    """Project supported vertices onto their support plane.
+
+    Empty supports (pore centres) are left unchanged.
+    """
+    verts = np.asarray(vertices, dtype=float).copy()
+    if normals is None or atom_indices is None or len(verts) == 0:
+        return verts
+    normals_arr = np.asarray(normals, dtype=float)
+    pos = np.asarray(positions, dtype=float)
+    n_pos = len(pos)
+    for i, support in enumerate(atom_indices):
+        if not support:
+            continue
+        idx = np.asarray(support, dtype=int)
+        idx = idx[(idx >= 0) & (idx < n_pos)]
+        if idx.size == 0:
+            continue
+        verts[i] = project_anchor_to_support_plane(verts[i], normals_arr[i], pos[idx])
+    return verts
 
 
 # ---------------------------------------------------------------------------

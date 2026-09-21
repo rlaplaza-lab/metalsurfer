@@ -17,6 +17,7 @@ from metalsurfer.placement import (
     generate_placement_from_spec,
 )
 from metalsurfer.placement.site_types import Site
+from metalsurfer.site_plugin_ids import PLUGIN_ALLOWED_MATERIALS
 
 from ..conftest import (
     make_nanoparticle,
@@ -34,6 +35,22 @@ _LOCAL_SITE_MATERIAL_PARAMS = [
     ("nanoparticle", make_nanoparticle, 20, (1.5, 2.5), 20),
     ("porous", make_porous_framework, 12, (1.5, 3.0), 12),
 ]
+
+_MATERIAL_FACTORIES = {
+    "slab": make_slab,
+    "nanoparticle": make_nanoparticle,
+    "porous": make_porous_framework,
+}
+
+# Every allowed (material_type, plugin, factory) pair from PLUGIN_ALLOWED_MATERIALS.
+PLUGIN_MATERIAL_CASES = [
+    (mat, plugin, _MATERIAL_FACTORIES[mat])
+    for plugin, mats in PLUGIN_ALLOWED_MATERIALS.items()
+    for mat in sorted(mats)
+]
+
+# Wall-near plugins that emit hollows usable for dissociative pairing on slabs.
+SLAB_HOLLOW_PLUGINS = ("topology", "adaptive_grid", "rolling_probe")
 
 
 def _first_successful_placement(conformers, slab, config, smiles, n_desired=20):

@@ -386,17 +386,19 @@ See :doc:`configuration` for the full knob-by-plugin table.
 **Intentional asymmetries** (not unfinished ports): top-layer mesh + topology
 on slabs (pure Voronoi floods the batch with weak candidates); hull +
 nearest-neighbour topology on nanoparticles (Voronoi voids are not adsorption
-sites); global ``surface_ref`` along the slab normal for height; dissociative
-hollow pairs on slabs (rejected for porous; NP uses outward-normal site pairs);
-parallel-z floors for slab/NP aromatics (skipped for porous); no atop
-injection / dissociative for porous. Catalog ``Site.xyz`` is the support-plane
-anchor (plugin lift/snap is probe-only); pore / free-volume vertices stay at
-the void centre. Nanoparticle ``surface_ref`` is the coordinating metal atoms
-projected onto the site normal; porous wall-near sites use the same
-support-plane rule, while pores keep the site-vertex projection.
-``adaptive_grid`` and ``rolling_probe`` register in ``placement/site_plugins/``
-with the same candidate-batch contract and a **single** generation path for all
-materials (config-selectable, not chosen by ``auto``). Topology / Voronoi keep
+sites); dissociative hollow pairs on slabs (rejected for porous; NP uses
+outward-normal site pairs); parallel-z floors on wall-near sites (skipped
+for pores); no atop injection /
+dissociative for porous. Catalog ``Site.xyz`` is the support-plane anchor
+(plugin lift/snap is probe-only; adaptive grid, rolling probe, and Voronoi
+wall-near vertices are projected with the shared support-plane helper before
+classify, which projects again before fingerprints); pore / free-volume
+vertices stay at the void centre.
+``surface_ref`` is always the local site frame (max support height along
+``site.normal``; pores use the void vertex). ``adaptive_grid`` and
+``rolling_probe`` register in ``placement/site_plugins/`` with the same
+candidate-batch contract and a **single** generation path for all materials
+(config-selectable, not chosen by ``auto``). Topology / Voronoi keep
 system-specific heuristics; the wall-near opt-in plugins do not.
 
 
@@ -439,7 +441,10 @@ Enumeration / materialization
 - Soft priors preferring milder tilt and mid ``z_fraction``.
   Topology-sourced sites are ordered first on slabs. Porous frameworks
   restrict enumeration to open ``pore`` sites (nn-distance sorted) when any
-  exist, and soft-prior draws prefer those earlier indices.
+  exist, and soft-prior draws prefer those earlier indices. Under coverage,
+  a per-molecule footprint view drops ``(conformer, site)`` pairs that do
+  not clear existing adsorbates without rewriting the shared
+  ``SiteContext.sites`` catalog (competitive saturation reuses one frame).
 - ``orientation.py`` — aromatic heuristics plus ``orient_from_spec`` used by
   pose. Dissociative two-site placement uses ``_place_dissociative_two_sites``
   / ``_generate_dissociative_placement_from_spec`` in ``dissociative.py``.
@@ -452,29 +457,32 @@ Enumeration / materialization
   threaded); ``resolve_materialize_workers`` (in ``placement._parallel``,
   re-exported from ``generators``) maps joblib-style ``n_jobs`` /
   ``placement_materialize_workers`` to a concrete thread-pool size.
-- Slab / nanoparticle anchor: after orientation, **contact-solved** height
-  places a contact atom (binder for EN-down / round; closest atom for
-  parallel) at the pair-clearance gate used by validation (covalent, plus
-  VDW when ``reject_vdw_overlaps``); ``z_fraction`` is a signed offset around
-  that contact. Porous frameworks keep a fractional window without
-  contact-solve. Nanoparticle ``surface_ref`` uses coordinating metal atoms
-  along the site normal; porous uses ``dot(site.xyz, n_site)``.
-- **Distance recovery** (default on): ``too_close`` / ``too_far`` /
+- After orientation, a **feasible height interval** along the site normal is
+  solved once per rigid pose family (cached on the per-screen pose batch).
+  Wall-near: pairwise contact-solved COM is the lower bound / nominal;
+  ``z_fraction`` ≤ ``0.5`` clips to contact and values above explore toward
+  the upper gate. Pores: nominal is the void centre; the interval is the
+  cleared span containing it. Empty intervals fail as ``infeasible_pose``;
+  failed multi-contact at nominal fails as ``insufficient_contact_atoms``.
+  ``surface_ref`` is always local (support plane or void vertex).
+- **Distance recovery** (default on): residual ``too_close`` / ``too_far`` /
   ``contact_distance_too_large`` / ``vdw_overlap`` try one analytic height
-  nudge when the worst penetration is along the normal; mostly in-plane
-  clashes skip height; huge normal penetration fails before Packmol. Then
-  chemistry-scaled clash descent when ``placement_clash_descent`` is on
-  (discrete XY only when clash is off). ``adsorbate_overlap`` skips height.
-  Porous recovery is inverted (shrink toward the free-volume site when too
-  close or VDW-overlapping; push out when too far).
+  nudge clamped into the feasible window when the worst penetration is along
+  the normal; mostly in-plane clashes skip height; huge normal penetration
+  fails before Packmol. Then chemistry-scaled clash descent when
+  ``placement_clash_descent`` is on (discrete XY only when clash is off).
+  ``adsorbate_overlap`` skips height. Pore sites (``site_type == "pore"``)
+  invert the height nudge toward the free-volume centre — not
+  ``material_type``.
 - **Voronoi auto-widen** (default on): one wider probe/max retry when the
   first window finds no sites.
 - **Dissociative** (``dissociative.py`` / ``_place_dissociative_two_sites``): homonuclear
   diatomics when ``enable_dissociative_placement=True``. Keep
   ``skip_topology_check=True`` to disable post-relax connectivity checks for
-  fragments. On NP/non-slab materials, both fragments share one offset
-  direction so pair spacing is preserved. Descriptor COM + identity
-  quaternion feed ML; ``fragment_positions`` are replay-only.
+  fragments. Fragments share one lift direction (averaged site normals) so
+  pair spacing is preserved; each site keeps a local support-plane height.
+  Descriptor COM + identity quaternion feed ML;
+  ``fragment_positions`` are replay-only.
 - ``_materialize_spec_placements`` — failures become
   ``PlacementFailureEvent`` (BO negatives when enabled).
 
@@ -483,13 +491,13 @@ Placement fill
 One-shot fill enumerates ``min(capacity, num_placements *
 placement_retry_oversample_max)`` specs, materializes them in chunks of about
 ``num_placements`` (threaded via ``placement_materialize_workers``), and stops
-early once the target is met. When ``placement_retry_enabled``, the first pass
+early once the target is met. Family / overlap bans apply to the rest of the
+current pool between chunks. When ``placement_retry_enabled``, the first pass
 is short, and at least one spec failed materialization, one diversity round
 re-enumerates excluding those exact failed-spec keys plus reason-aware bans:
-``adsorbate_overlap`` bans ``site_index``; ``too_close`` / ``vdw_overlap``
-exclude low ``z_fraction`` on that site/orientation/conformer; ``too_far`` /
-``contact_distance_too_large`` exclude high ``z_fraction``;
-``insufficient_contact_*`` excludes the orientation family. BO eval
+``adsorbate_overlap`` bans ``(conformer_index, site_index)``;
+``insufficient_contact_*`` / ``infeasible_pose`` exclude the orientation
+family. Height is clipped into the feasible interval (not redrawn). BO eval
 batches wrap pre-materialized cache hits (no generation backfill); the
 geometry-valid pool is built once when features are extracted.
 

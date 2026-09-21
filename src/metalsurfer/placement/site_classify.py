@@ -23,6 +23,7 @@ from .site_coords import (
     _minimum_image_cartesian_delta,
     _project_to_slab_plane,
     _slab_normal,
+    project_anchor_to_support_plane,
 )
 from .site_types import Site
 from .site_voronoi import (
@@ -547,9 +548,10 @@ def _classify_vertices(
     for i, classified in enumerate(classifications):
         assert classified is not None
         site_type, nearest_idx = classified
-        # Plugin atom_indices win for fingerprints (including empty pore
-        # supports). Without a plugin list, use classifier neighbours.
-        if has_plugin_atoms:
+        support: tuple[int, ...]
+        if site_type == "pore":
+            support = ()
+        elif has_plugin_atoms:
             support = tuple(int(j) for j in provided_atoms[i])
         else:
             support = tuple(int(j) for j in nearest_idx)
@@ -570,14 +572,22 @@ def _classify_vertices(
         else:
             normal = np.asarray(ctx.normals[i], dtype=float)
 
-        dists = _support_mic_distances(vertices[i], positions, support, cell, pbc)
+        xyz = np.asarray(vertices[i], dtype=float).copy()
+        if site_type != "pore" and support:
+            idx = np.asarray(support, dtype=int)
+            n_pos = len(positions)
+            idx = idx[(idx >= 0) & (idx < n_pos)]
+            if idx.size > 0:
+                xyz = project_anchor_to_support_plane(xyz, normal, positions[idx])
+
+        dists = _support_mic_distances(xyz, positions, support, cell, pbc)
         side = _side_label_from_normal(normal, material_type=material_type, cell=cell)
         env_fingerprint = site_env_fingerprint(support, symbols, dists, side_label=side)
         nn_distance = float(nn_dists[i])
         clearance = nn_distance if clearances is None else float(clearances[i])
         sites.append(
             Site(
-                xyz=vertices[i].copy(),
+                xyz=xyz,
                 normal=normal,
                 site_type=site_type,
                 slab_indices=support,
@@ -605,11 +615,11 @@ def project_sites_to_support_plane(
 ) -> list[Site]:
     """Project wall-near site vertices onto the coordinating-atom plane.
 
-    Plugins may lift / snap candidates for accessibility gating; the stored
-    catalog identity is the in-plane anchor. Pore / empty-support sites keep
-    their free-volume vertex. Normals and tangent frames stay as classified
-    (pre-projection); ``clearance`` / ``nn_distance`` stay probe metadata.
-    Fingerprint distance bins are recomputed from the unlifted xyz.
+    Prefer the in-classify projection (fingerprints already use unlifted xyz).
+    This helper remains for tests and callers that build :class:`Site` records
+    without going through :func:`_classify_vertices`. Pore / empty-support
+    sites keep their free-volume vertex. Normals and tangent frames stay as
+    classified; ``clearance`` / ``nn_distance`` stay probe metadata.
     """
     pos = np.asarray(positions, dtype=float)
     cell_arr = np.asarray(cell, dtype=float)
@@ -626,9 +636,10 @@ def project_sites_to_support_plane(
             out.append(site)
             continue
         n_hat = np.asarray(site.normal, dtype=float)
-        support_h = float(np.max(pos[idx] @ n_hat))
-        vert = np.asarray(site.xyz, dtype=float)
-        new_xyz = vert - (float(np.dot(vert, n_hat)) - support_h) * n_hat
+        if float(np.linalg.norm(n_hat)) <= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+            out.append(site)
+            continue
+        new_xyz = project_anchor_to_support_plane(site.xyz, n_hat, pos[idx])
         dists = _support_mic_distances(
             new_xyz, pos, site.slab_indices, cell_arr, pbc_arr
         )

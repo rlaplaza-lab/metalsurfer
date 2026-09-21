@@ -32,7 +32,7 @@ from .dissociative import (
 )
 from .occupancy import (
     _footprint_clearances_from_mic,
-    _sites_clearance_and_vertex_mask,
+    _sites_clearance_and_anchor_mask,
     existing_adsorbate_cloud,
     incoming_inplane_radius,
 )
@@ -152,6 +152,9 @@ class _SpecGridInfo:
     n_binders: int
     flat_aromatic: bool
     n_hollow_pairs: int
+    # Per-molecule view: which (conformer_index, site_index) pairs fit under
+    # coverage. Does not mutate the shared SiteContext catalog.
+    allows_conformer_site: Callable[[int, int], bool] | None = None
 
 
 def _topology_first_site_indices(
@@ -190,7 +193,7 @@ def _spec_grid_info(
     site_context: SiteContext | None,
     full_slab: Atoms | None = None,
 ) -> _SpecGridInfo:
-    """Compute the spec-enumeration inputs once for both enumerate and estimate."""
+    """Build enumerate/estimate inputs; footprint views leave SiteContext untouched."""
     is_dissociative = (
         config.enable_dissociative_placement
         and config.material_type in ("slab", "nanoparticle")
@@ -207,12 +210,14 @@ def _spec_grid_info(
         min_separation=float(config.min_adsorbate_separation),
     )
 
-    r_in: float | None = None
-    if config.occupancy_use_footprint and conformers:
-        r_in = incoming_inplane_radius(
-            conformers[0],
-            footprint_scale=float(config.occupancy_footprint_scale),
-        )
+    footprint_scale = float(config.occupancy_footprint_scale)
+    conf_radii = [
+        incoming_inplane_radius(conf, footprint_scale=footprint_scale)
+        for conf in conformers
+    ]
+    # (ci, si) pairs allowed by this molecule's footprint under coverage.
+    allowed_pairs: set[tuple[int, int]] | None = None
+    allows_conformer_site: Callable[[int, int], bool] | None = None
 
     if use_sites and unique_sites:
         if existing_ads_pos is None or np.asarray(existing_ads_pos).size == 0:
@@ -221,10 +226,10 @@ def _spec_grid_info(
         else:
             need_footprint = (
                 config.occupancy_use_footprint
-                and r_in is not None
                 and existing_radii is not None
+                and any(r > 0.0 for r in conf_radii)
             )
-            vertex_mask, min_dists, mic_vecs = _sites_clearance_and_vertex_mask(
+            anchor_mask, min_dists, mic_vecs = _sites_clearance_and_anchor_mask(
                 unique_sites,
                 existing_ads_pos,
                 cell=cell_arr,
@@ -232,13 +237,49 @@ def _spec_grid_info(
                 min_separation=float(config.min_adsorbate_separation),
                 need_mic_vecs=need_footprint,
             )
-            site_indices = [i for i, keep in enumerate(vertex_mask) if keep]
+            anchor_ok = {i for i, keep in enumerate(anchor_mask) if keep}
             if need_footprint:
-                assert existing_radii is not None and r_in is not None
-                clearances = _footprint_clearances_from_mic(
-                    unique_sites, mic_vecs, existing_radii, float(r_in)
-                )
+                assert existing_radii is not None
+                # Per-conformer footprint clearances on the shared MIC grid.
+                per_conf_clear: list[np.ndarray] = []
+                for r_in in conf_radii:
+                    if float(r_in) <= 0.0:
+                        # Point footprint: fall back to anchor clearance.
+                        per_conf_clear.append(min_dists.copy())
+                    else:
+                        per_conf_clear.append(
+                            _footprint_clearances_from_mic(
+                                unique_sites,
+                                mic_vecs,
+                                existing_radii,
+                                float(r_in),
+                            )
+                        )
+                # Site stays if any conformer disk clears (clearance >= 0).
+                site_indices = []
+                allowed_pairs = set()
+                rank_clear = np.full(len(unique_sites), -np.inf, dtype=float)
+                for si in sorted(anchor_ok):
+                    fitted = False
+                    best = -np.inf
+                    for ci, clear_arr in enumerate(per_conf_clear):
+                        c = float(clear_arr[si])
+                        if c >= 0.0:
+                            allowed_pairs.add((ci, si))
+                            fitted = True
+                            if c > best:
+                                best = c
+                    if fitted:
+                        site_indices.append(si)
+                        rank_clear[si] = best
+                clearances = rank_clear
+                _allowed_pairs = allowed_pairs
+
+                def allows_conformer_site(ci: int, si: int) -> bool:
+                    return (int(ci), int(si)) in _allowed_pairs
+
             else:
+                site_indices = sorted(anchor_ok)
                 clearances = min_dists
         if not site_indices:
             logger.warning(
@@ -248,6 +289,7 @@ def _spec_grid_info(
             )
             site_indices = []
             use_sites = False
+            allows_conformer_site = None
         else:
             site_indices = _topology_first_site_indices(
                 unique_sites,
@@ -255,17 +297,11 @@ def _spec_grid_info(
                 clearances=clearances,
             )
             if config.material_type == "porous":
-                # Free-volume pores dominate adsorption in frameworks; wall sites
-                # (atop/bridge/hollow) are usually clash-prone under VDW gates.
-                # adaptive_grid near-atom shells are rarely typed ``pore``, so this
-                # is intentionally a no-op for that material-agnostic catalog
-                # (wall-near starts are valid; desorption into the void is ok).
+                # Draw preference only — shared SiteContext.sites is unchanged.
                 pore_indices = [
                     i for i in site_indices if str(unique_sites[i].site_type) == "pore"
                 ]
                 if pore_indices:
-                    # Prefer open pores (larger nn_distance); keep a working set
-                    # large enough for diversity but biased toward free volume.
                     pore_indices.sort(
                         key=lambda i: -float(unique_sites[i].nn_distance or 0.0)
                     )
@@ -312,7 +348,18 @@ def _spec_grid_info(
         n_binders=len(binders),
         flat_aromatic=flat_aromatic,
         n_hollow_pairs=n_hollow_pairs,
+        allows_conformer_site=allows_conformer_site,
     )
+
+
+def _site_type_for_grid(info: _SpecGridInfo, site_idx: int) -> str | None:
+    """Site type for a grid index, or ``None`` when the catalog has no site."""
+    if info.is_dissociative:
+        return "hollow"
+    sites = info.unique_sites
+    if not info.use_sites or site_idx < 0 or site_idx >= len(sites):
+        return None
+    return str(sites[site_idx].site_type)
 
 
 def enumerate_placement_specs(
@@ -367,29 +414,12 @@ def enumerate_placement_specs(
     info = grid_info or _spec_grid_info(
         conformers, slab, config, smiles, site_context, full_slab=full_slab
     )
-    unique_sites = info.unique_sites
-    use_sites = info.use_sites
-
     if info.is_dissociative:
         if info.n_hollow_pairs < 1:
             return []
     elif not info.site_indices:
         # Occupancy pruned all sites (empty list) — do not fall back to random XY.
         return []
-
-    def site_type_for(site_idx: int) -> str | None:
-        """Return the site type string for a given site index.
-
-        Parameters
-        ----------
-        site_idx
-            Index into the unique sites list.
-        """
-        if info.is_dissociative:
-            return "hollow"
-        if not use_sites or site_idx < 0 or site_idx >= len(unique_sites):
-            return None
-        return str(unique_sites[site_idx].site_type)
 
     parallel_fraction = config.flat_aromatic_parallel_fraction
     if config.adaptive_parallel_fraction and info.flat_aromatic:
@@ -399,7 +429,7 @@ def enumerate_placement_specs(
     return policy.build_batch_placement_specs(
         n_conformers=len(conformers),
         site_indices=info.site_indices,
-        site_type_for_index=site_type_for,
+        site_type_for_index=lambda site_idx: _site_type_for_grid(info, site_idx),
         shape=info.shape,
         n_binders=info.n_binders,
         flat_aromatic=info.flat_aromatic,
@@ -415,6 +445,7 @@ def enumerate_placement_specs(
         conformer_energies=conformer_energies,
         conformer_weighting=config.conformer_weighting,
         boltzmann_temperature=config.boltzmann_temperature,
+        allows_conformer_site=info.allows_conformer_site,
     )
 
 
@@ -456,6 +487,7 @@ def estimate_placement_spec_capacity(
             return 0
     elif not info.site_indices:
         return 0
+
     return policy.max_batch_placement_specs(
         n_conformers=len(conformers),
         site_indices=info.site_indices,
@@ -463,6 +495,7 @@ def estimate_placement_spec_capacity(
         flat_aromatic=info.flat_aromatic,
         dissociative=info.is_dissociative,
         n_hollow_pairs=info.n_hollow_pairs,
+        site_type_for_index=lambda site_idx: _site_type_for_grid(info, site_idx),
     )
 
 

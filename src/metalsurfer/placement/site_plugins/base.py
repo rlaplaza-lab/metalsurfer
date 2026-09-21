@@ -40,9 +40,10 @@ __all__ = [
 class SiteCandidateBatch:
     """Raw candidate sites from a plugin before shared post-processing.
 
-    Core: ``vertices``, ``nn_dists``, ``source_hints``, ``atom_indices``.
-    Optional enrichment: ``normals``, ``clearances``. Fingerprints and
-    tangent frames are built in shared classify.
+    Core: ``vertices`` (catalog anchors — support-plane or void centre),
+    ``nn_dists``, ``source_hints``, ``atom_indices``. Optional enrichment:
+    ``normals``, ``clearances`` (probe metadata; lift/snap is not stored in
+    ``vertices``). Fingerprints and tangent frames are built in shared classify.
     """
 
     vertices: np.ndarray

@@ -28,6 +28,7 @@ from metalsurfer.placement.geometry import (
 )
 from metalsurfer.placement.pose import (
     _apply_lateral_offset,
+    _feasible_height_interval,
     _PlacementContext,
     _validate_posed_adsorbate,
     build_pose_batch_cache,
@@ -38,6 +39,7 @@ from metalsurfer.placement.site_context import (
 )
 from metalsurfer.placement.site_coords import _derive_top_layer_tolerance
 from metalsurfer.placement.site_enumeration import _get_site_surface_radii
+from metalsurfer.placement.site_types import Site
 from metalsurfer.surface_prep import apply_surface_constraints
 
 from ..conftest import (
@@ -744,8 +746,48 @@ def test_pairwise_contact_raises_com_when_non_binder_is_closest():
     assert ok, reason
 
 
+def test_pore_height_fallback_stays_on_probe_grid(monkeypatch):
+    """A fully clashing pore interval stays inside the probe window."""
+    monkeypatch.setattr(
+        "metalsurfer.placement.pose.geom.min_pair_clearance_angstrom",
+        lambda *_args, **_kwargs: 1.0e6,
+    )
+    site = Site(
+        xyz=np.array([0.0, 0.0, 5.0]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_type="pore",
+        slab_indices=(),
+        material_type="porous",
+        site_source="test",
+        env_fingerprint=(("C",), (0,), 0),
+    )
+    interval = _feasible_height_interval(
+        np.zeros((1, 3), dtype=float),
+        ["H"],
+        site=site,
+        place_normal=np.array([0.0, 0.0, 1.0]),
+        slab_positions=np.array([[0.0, 0.0, 5.0], [1.5, 0.0, 5.0]], dtype=float),
+        slab_symbols=["C", "C"],
+        cell=np.eye(3) * 20.0,
+        pbc=[True, True, True],
+        config=AdsorptionConfig(material_type="porous", seed=0),
+        r_surface=0.7,
+        z_base_lo=-5.0,
+        z_base_hi=2.0,
+    )
+    assert interval is not None
+    base_h = 5.0
+    half = 0.5 * (2.0 - (-5.0))
+    assert interval.com_lo >= base_h - half - 1e-6
+    assert interval.com_hi <= base_h + half + 1e-6
+    assert interval.com_lo == pytest.approx(interval.com_nominal)
+    assert interval.com_hi == pytest.approx(interval.com_nominal)
+    assert interval.com_nominal == pytest.approx(base_h - half)
+    assert interval.com_nominal != pytest.approx(0.0)
+
+
 def test_z_fraction_offsets_com_around_pairwise_contact():
-    """Distinct z_fraction values change COM height around the contact solve."""
+    """z_fraction ≤ 0.5 clips to contact; values above explore the upper window."""
     from metalsurfer.placement.pose import _pose_from_spec
 
     slab = make_slab()
@@ -780,7 +822,9 @@ def test_z_fraction_offsets_com_around_pairwise_contact():
         n_hat = np.asarray(ctx.normal, dtype=float)
         com = np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs], dtype=float)
         heights.append(float(np.dot(com, n_hat)))
-    assert heights[0] < heights[1] < heights[2]
+    # Wall-near lower bound is the contact solve: low z_fraction clips to it.
+    assert heights[0] == pytest.approx(heights[1], abs=1e-9)
+    assert heights[2] > heights[1]
 
 
 def test_contact_height_uses_support_atoms_not_lifted_site_vertex():

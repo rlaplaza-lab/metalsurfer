@@ -291,6 +291,7 @@ def candidate_enrichment_frames(
     pos = np.asarray(positions, dtype=float)
     use_mic = bool(np.any(pbc_arr)) and cell_has_volume(cell_arr)
     slab_n = _slab_normal(cell_arr) if material_type == "slab" else None
+    com = None if slab_n is not None else np.mean(pos, axis=0)
     gate = accessibility_tree if accessibility_tree is not None else KDTree(pos)
 
     normals = np.zeros((n, 3), dtype=float)
@@ -311,6 +312,13 @@ def candidate_enrichment_frames(
             if nrm >= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
                 normals[i] = lift / nrm
                 continue
+            # Anchor already lies on the support plane (no probe lift).
+            if com is not None:
+                outward = centroid - com
+                on = float(np.linalg.norm(outward))
+                if on >= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+                    normals[i] = outward / on
+                    continue
         if slab_n is not None:
             normals[i] = slab_n
             continue

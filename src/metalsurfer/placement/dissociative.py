@@ -5,7 +5,6 @@ import struct
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
 
 import numpy as np
 from ase import Atoms
@@ -36,6 +35,7 @@ from .orientation import _site_type_z_offset
 from .pose import (
     _descriptor_from_placement,
     _height_above_supports,
+    _placement_normal_hat,
     _resolve_surface_ref,
     _validate_posed_adsorbate,
 )
@@ -605,50 +605,25 @@ def _place_dissociative_two_sites(
     base1 = np.asarray(site1.xyz, dtype=float)
     base2 = np.asarray(site2.xyz, dtype=float)
 
-    if config.material_type == "slab":
-        n_hat = np.asarray(slab_normal, dtype=float)
-        n_hat = n_hat / (float(np.linalg.norm(n_hat)) + _VECTOR_NORM_EPS)
-        surface_ref, is_local_ref = _resolve_surface_ref(
-            site1,
-            sites_slab,
-            "slab",
-            rough_slab_local_z=config.rough_slab_local_z,
-            top_layer_tolerance=config.top_layer_tolerance,
-            planar_z_variance_threshold=config.planar_z_variance_threshold,
-        )
-        reduce: Literal["max", "mean"] = "max"
-        site_reference_frame = "local_site" if is_local_ref else "global_top_layer"
-    else:
-        # Nanoparticle only (porous rejected upstream).
-        n_sum = np.asarray(n1, dtype=float) + np.asarray(n2, dtype=float)
-        n_norm = float(np.linalg.norm(n_sum))
-        n_hat = n_sum / (n_norm + _VECTOR_NORM_EPS) if n_norm > _VECTOR_NORM_EPS else n1
-        surface_ref = None
-        is_local_ref = True
-        reduce = "mean"
-        site_reference_frame = "local_site"
+    # Shared lift direction preserves the in-plane pair vector; local heights
+    # come from each site's support plane along that direction.
+    n_sum = np.asarray(n1, dtype=float) + np.asarray(n2, dtype=float)
+    n_norm = float(np.linalg.norm(n_sum))
+    n_hat = n_sum / n_norm if n_norm > _VECTOR_NORM_EPS else _placement_normal_hat(n1)
+    surface_ref1, _ = _resolve_surface_ref(site1, sites_slab, config.material_type)
+    surface_ref2, _ = _resolve_surface_ref(site2, sites_slab, config.material_type)
+    site_reference_frame = "local_site"
 
-    def _plane_h(site: Site) -> float:
-        vertex_h = float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
-        # Local / NP: vertex if supports empty. Planar slab: shared global ref.
-        fallback = (
-            vertex_h if is_local_ref or surface_ref is None else float(surface_ref)
-        )
+    def _plane_h(site: Site, surface_ref: float) -> float:
         return _height_above_supports(
-            site, ref_pos, n_hat, reduce=reduce, fallback=fallback
+            site, ref_pos, n_hat, reduce="max", fallback=float(surface_ref)
         )
 
-    # Per-site plane keeps the in-plane pair vector (shared absolute height
-    # would shear H–H when the two vertices sit at different altitudes).
-    h1 = _plane_h(site1)
-    h2 = _plane_h(site2)
+    h1 = _plane_h(site1, surface_ref1)
+    h2 = _plane_h(site2, surface_ref2)
     pos1 = base1 + (h1 + z_offset - float(np.dot(base1, n_hat))) * n_hat
     pos2 = base2 + (h2 + z_offset - float(np.dot(base2, n_hat))) * n_hat
-    h_surface = (
-        float(surface_ref)
-        if surface_ref is not None and not is_local_ref
-        else 0.5 * (h1 + h2)
-    )
+    h_surface = 0.5 * (h1 + h2)
 
     symbols = adsorbate.get_chemical_symbols()
     result = Atoms(symbols=symbols, positions=[pos1, pos2])

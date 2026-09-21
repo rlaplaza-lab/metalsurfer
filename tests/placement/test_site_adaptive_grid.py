@@ -462,10 +462,10 @@ def test_lateral_snap_moves_off_center_bridge_to_midpoint():
         pbc=pbc,
         target_clearance=1.2,
     )[0]
-    expect_z = float(np.sqrt(1.9**2 - 1.0**2))
     assert snapped.position[0] == pytest.approx(1.0, abs=1e-9)
     assert snapped.position[1] == pytest.approx(0.0, abs=1e-9)
-    assert snapped.position[2] == pytest.approx(expect_z, abs=1e-6)
+    # Catalog xyz is the support-plane anchor; clearance is the lifted probe.
+    assert snapped.position[2] == pytest.approx(0.0, abs=1e-6)
     assert snapped.clearance == pytest.approx(1.2, abs=0.05)
 
 
@@ -515,7 +515,7 @@ def test_lateral_snap_hollow_uses_equilateral_circumcenter():
     expect_xy = _support_lateral_anchor(positions, np.array([0.0, 0.0, 1.0]))
     assert snapped.position[0] == pytest.approx(float(expect_xy[0]), abs=1e-6)
     assert snapped.position[1] == pytest.approx(float(expect_xy[1]), abs=1e-6)
-    assert snapped.position[2] > 0.5
+    assert snapped.position[2] == pytest.approx(0.0, abs=1e-6)
     # Balanced hollow should outrank a nearby atop after snap rescoring.
     atop = CandidateSite(
         position=np.array([0.0, 0.0, 1.5]),

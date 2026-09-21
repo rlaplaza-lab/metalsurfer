@@ -131,12 +131,13 @@ Placement success levers
   ``voronoi_probe_radius`` / ``voronoi_max_site_distance`` when comparing windows.
 - **Fill** — one-shot oversample (``placement_retry_oversample_max``) requests
   ``min(capacity, num_placements * oversample)`` specs, materializes in chunks
-  of about ``num_placements``, and stops early once full. When
-  ``placement_retry_enabled``, the first pass is short, and materialization
-  recorded failures, one diversity round excludes failed-spec keys,
-  ``adsorbate_overlap`` site indices, low ``z_fraction`` after ``too_close`` /
-  ``vdw_overlap``, and high ``z_fraction`` after ``too_far`` (not shared
-  ``env_fingerprint``). Per-spec
+  of about ``num_placements``, and stops early once full. Family / overlap
+  bans apply within the pool between chunks. When ``placement_retry_enabled``,
+  the first pass is short, and materialization recorded failures, one
+  diversity round excludes failed-spec keys, ``(conformer, site)`` after
+  ``adsorbate_overlap``, and orientation families after
+  ``insufficient_contact_*`` / ``infeasible_pose`` (height is clipped into the
+  feasible interval, not redrawn). Per-spec
   materialization runs in a thread pool sized by ``placement_materialize_workers``
   (joblib-style; ``None`` inherits ``n_jobs``, which defaults to ``-2`` = all
   but one CPU). BO eval batches wrap the

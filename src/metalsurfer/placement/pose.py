@@ -53,9 +53,6 @@ from .site_enumeration import (
     _height_along_slab_normal,
 )
 from .site_plugins.helpers import (
-    is_top_layer_planar as _is_top_layer_planar,
-)
-from .site_plugins.helpers import (
     top_layer_is_planar_from_arrays as _top_layer_is_planar_from_arrays,
 )
 from .site_types import Site
@@ -99,14 +96,51 @@ class _PoseBatchCache:
     # batch and reused for z-offset scaling when a spec's site has no explicit
     # slab_indices. Read-only across worker threads.
     r_surface_top_layer: float | None = None
-    # Global surface reference (max height along the slab normal); a pure
-    # function of the substrate, so computed once per batch instead of per pose.
+    # Legacy global strip (unused for height; kept for callers that still fill it).
     global_surface_ref: float | None = None
     cell: np.ndarray | None = None
     n_hat: np.ndarray | None = None
     positions: np.ndarray | None = None
     # conformer_index -> (canonical_pos, shape)
     frames: dict[int, tuple[np.ndarray, str]] = dataclasses.field(default_factory=dict)
+    # Per-screen height intervals keyed by pose family (not shared across molecules).
+    height_intervals: dict[tuple, "_HeightInterval"] = dataclasses.field(
+        default_factory=dict
+    )
+
+
+@dataclass(frozen=True)
+class _HeightInterval:
+    """Feasible COM height along the placement normal for one rigid pose family."""
+
+    com_lo: float
+    com_nominal: float
+    com_hi: float
+    contact_atoms_ok: bool
+
+
+def _height_interval_family_key(spec: PlacementSpec) -> tuple:
+    """Cache key shared by sibling ``z_fraction`` values of one rigid pose."""
+    return (
+        int(spec.conformer_index),
+        str(spec.orientation_type),
+        int(spec.site_index),
+        float(spec.tilt_deg),
+        float(spec.azimuth_deg),
+        float(spec.azimuth_in_plane_deg),
+        bool(spec.face_flip),
+        spec.en_atom_index,
+    )
+
+
+def _com_height_from_z_fraction(
+    zf: float, lo: float, nominal: float, hi: float
+) -> float:
+    """Map unit ``z_fraction`` onto *[lo, hi]* with ``0.5`` at *nominal*."""
+    z = float(zf)
+    if z <= 0.5:
+        return float(lo + (z / 0.5) * (nominal - lo))
+    return float(nominal + ((z - 0.5) / 0.5) * (hi - nominal))
 
 
 def build_pose_batch_cache(
@@ -307,6 +341,222 @@ def _pairwise_contact_com_height(
     return float(h_needed) + 1e-6
 
 
+def _pair_min_distance_at_com_height(
+    rotated_pos: np.ndarray,
+    *,
+    site_xyz: np.ndarray,
+    place_normal: np.ndarray,
+    slab_positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: list[bool],
+    com_h: float,
+) -> float:
+    """Minimum mol–slab MIC distance with COM at *com_h* along *place_normal*."""
+    n_hat = _placement_normal_hat(place_normal)
+    base = np.asarray(site_xyz, dtype=float)
+    base_h = float(np.dot(base, n_hat))
+    center = base + (float(com_h) - base_h) * n_hat
+    mol = np.asarray(rotated_pos, dtype=float) + center
+    dists = geom._mol_slab_pairwise_distances(mol, slab_positions, cell, pbc)
+    if dists.size == 0:
+        return float("inf")
+    return float(np.min(dists))
+
+
+def _count_contact_atoms_at_com_height(
+    rotated_pos: np.ndarray,
+    *,
+    site_xyz: np.ndarray,
+    place_normal: np.ndarray,
+    slab_positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: list[bool],
+    com_h: float,
+    contact_threshold: float,
+) -> int:
+    """Count adsorbate atoms within *contact_threshold* of any slab atom."""
+    n_hat = _placement_normal_hat(place_normal)
+    base = np.asarray(site_xyz, dtype=float)
+    base_h = float(np.dot(base, n_hat))
+    center = base + (float(com_h) - base_h) * n_hat
+    mol = np.asarray(rotated_pos, dtype=float) + center
+    dists = geom._mol_slab_pairwise_distances(mol, slab_positions, cell, pbc)
+    if dists.size == 0:
+        return 0
+    return int(np.sum(np.any(dists <= float(contact_threshold), axis=1)))
+
+
+def _feasible_height_interval(
+    rotated_pos: np.ndarray,
+    symbols: list[str],
+    *,
+    site: Site,
+    place_normal: np.ndarray,
+    slab_positions: np.ndarray,
+    slab_symbols: list[str],
+    cell: np.ndarray,
+    pbc: list[bool],
+    config: AdsorptionConfig,
+    r_surface: float,
+    z_base_lo: float,
+    z_base_hi: float,
+) -> _HeightInterval | None:
+    """Feasible COM height interval along *place_normal* for one rigid pose.
+
+    Wall-near (``site_type != "pore"``): nominal is the pairwise contact solve;
+    lower bound is that height; upper bound is limited by
+    ``max_initial_distance`` / ``max_closest_approach`` when configured.
+
+    Pore: nominal is the void-centre height; the interval is the largest span
+    of the probe window ``[centre ± ½·diversity]`` that still clears the pair
+    gate. If nothing clears, the interval collapses to the least-penetrating
+    sample on that same probe grid (never a legacy offset outside the window).
+    """
+    n_hat = _placement_normal_hat(place_normal)
+    base = np.asarray(site.xyz, dtype=float)
+    base_h = float(np.dot(base, n_hat))
+    diversity = max(float(z_base_hi - z_base_lo), _PARALLEL_Z_MIN_HI_MARGIN)
+    is_pore = site.site_type == "pore"
+
+    if is_pore:
+        com_nominal = base_h
+        half = 0.5 * diversity
+        probe_lo = com_nominal - half
+        probe_hi = com_nominal + half
+        n_probe = 21
+        cleared_mask = np.zeros(n_probe, dtype=bool)
+        deficits = np.full(n_probe, np.inf)
+        heights = np.linspace(probe_lo, probe_hi, n_probe)
+        for k, h in enumerate(heights):
+            center = base + (float(h) - base_h) * n_hat
+            mol = np.asarray(rotated_pos, dtype=float) + center
+            mic_vecs, _ = geom._mol_slab_pairwise_mic(mol, slab_positions, cell, pbc)
+            if mic_vecs.size == 0:
+                cleared_mask[k] = True
+                deficits[k] = 0.0
+                continue
+            dists = np.linalg.norm(mic_vecs, axis=2)
+            worst = 0.0
+            for i, sym_m in enumerate(symbols):
+                for j, sym_s in enumerate(slab_symbols):
+                    allowed = geom.min_pair_clearance_angstrom(
+                        sym_m,
+                        sym_s,
+                        min_distance=float(config.min_initial_distance),
+                        min_contact_ratio=float(config.min_contact_ratio),
+                        reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
+                        vdw_overlap_scale=float(config.vdw_overlap_scale),
+                        r_surface_fallback=float(r_surface),
+                    )
+                    short = float(allowed) - float(dists[i, j])
+                    if short > worst:
+                        worst = short
+            cleared_mask[k] = worst <= 0.0
+            deficits[k] = worst
+        if not np.any(cleared_mask):
+            best_def = float(np.min(deficits))
+            cands = np.nonzero(np.abs(deficits - best_def) <= 1e-9)[0]
+            centre_i = int(np.argmin(np.abs(heights - base_h)))
+            pick = int(cands[np.argmin(np.abs(cands - centre_i))])
+            h_pick = float(heights[pick])
+            com_lo = h_pick
+            com_nominal = h_pick
+            com_hi = h_pick
+        else:
+            mid_i = int(np.argmin(np.abs(heights - com_nominal)))
+            if not cleared_mask[mid_i]:
+                cleared_idx = np.nonzero(cleared_mask)[0]
+                mid_i = int(cleared_idx[np.argmin(np.abs(cleared_idx - mid_i))])
+                com_nominal = float(heights[mid_i])
+            lo_i = mid_i
+            while lo_i > 0 and cleared_mask[lo_i - 1]:
+                lo_i -= 1
+            hi_i = mid_i
+            while hi_i + 1 < n_probe and cleared_mask[hi_i + 1]:
+                hi_i += 1
+            com_lo = float(heights[lo_i])
+            com_hi = float(heights[hi_i])
+    else:
+        com_nominal = _pairwise_contact_com_height(
+            rotated_pos,
+            symbols,
+            site_xyz=base,
+            place_normal=place_normal,
+            slab_positions=slab_positions,
+            slab_symbols=slab_symbols,
+            cell=cell,
+            pbc=pbc,
+            config=config,
+            r_surface=r_surface,
+        )
+        com_lo = float(com_nominal)
+        actual = _pair_min_distance_at_com_height(
+            rotated_pos,
+            site_xyz=base,
+            place_normal=place_normal,
+            slab_positions=slab_positions,
+            cell=cell,
+            pbc=pbc,
+            com_h=com_nominal,
+        )
+        upper_targets: list[float] = []
+        if config.max_initial_distance is not None:
+            upper_targets.append(float(config.max_initial_distance))
+        if config.strict_initial_placement:
+            upper_targets.append(float(config.max_closest_approach))
+        if upper_targets:
+            target = min(upper_targets)
+            # Raising along the normal ≈ increases min distance 1:1 when the
+            # closest pair is normal-aligned; clamp the diversity window.
+            slack = max(0.0, float(target) - float(actual))
+            com_hi = com_nominal + min(slack, 0.5 * diversity)
+        else:
+            com_hi = com_nominal + 0.5 * diversity
+
+    if com_hi + _DISTANCE_ZERO_EPS < com_lo:
+        return None
+
+    min_contacts = int(config.min_contact_atoms)
+    if config.require_multiple_contact:
+        min_contacts = max(2, min_contacts)
+    need_contact_check = bool(
+        config.strict_initial_placement or config.require_multiple_contact
+    )
+    if need_contact_check:
+        n_contact = _count_contact_atoms_at_com_height(
+            rotated_pos,
+            site_xyz=base,
+            place_normal=place_normal,
+            slab_positions=slab_positions,
+            cell=cell,
+            pbc=pbc,
+            com_h=com_nominal,
+            contact_threshold=float(config.contact_distance_threshold),
+        )
+        contact_ok = n_contact >= min_contacts
+        if config.strict_initial_placement:
+            actual_nom = _pair_min_distance_at_com_height(
+                rotated_pos,
+                site_xyz=base,
+                place_normal=place_normal,
+                slab_positions=slab_positions,
+                cell=cell,
+                pbc=pbc,
+                com_h=com_nominal,
+            )
+            if actual_nom > float(config.max_closest_approach):
+                contact_ok = False
+    else:
+        contact_ok = True
+
+    return _HeightInterval(
+        com_lo=float(com_lo),
+        com_nominal=float(com_nominal),
+        com_hi=float(max(com_hi, com_lo)),
+        contact_atoms_ok=contact_ok,
+    )
+
+
 def _com_floor_on_support_plane(
     rotated_pos: np.ndarray,
     n_hat: np.ndarray,
@@ -332,18 +582,23 @@ def _resolve_surface_ref(
 ) -> tuple[float, bool]:
     """Return *(surface_ref, is_local_ref)* for height / z-offset calculations.
 
-    When supports are known, ``surface_ref`` is the coordinating-atom plane —
-    never a plugin-lifted ``site.xyz`` (topology / clearance snap / free volume).
+    Placement always uses the **site frame**: ``surface_ref`` is the
+    coordinating-atom plane along ``site.normal`` (max of supports), or the
+    site vertex for pores / empty supports. Never a plugin-lifted ``site.xyz``.
+    ``is_local_ref`` is always ``True`` when a site is present.
 
-    - **Planar slab:** global max height along the slab normal.
-    - **Rough slab** (``rough_slab_local_z``): local support plane (site vertex
-      only if supports are empty).
-    - **Nanoparticle:** mean support height (site vertex if empty).
-    - **Porous:** site vertex (voids are already free volume).
-
-    *top_layer_planar* / *global_surface_ref* / *cell* / *positions* are batch
-    cache hooks that skip repeated ASE / planarity work.
+    *rough_slab_local_z* / planarity / *global_surface_ref* are accepted for
+    call-site compatibility but ignored — height is local for every material.
+    Slab-cell ``+z`` is only the fallback when *site* is ``None`` or the site
+    normal is degenerate.
     """
+    del (
+        rough_slab_local_z,
+        top_layer_tolerance,
+        planar_z_variance_threshold,
+        top_layer_planar,
+        global_surface_ref,
+    )
     cell_arr = (
         np.asarray(cell, dtype=float)
         if cell is not None
@@ -354,59 +609,22 @@ def _resolve_surface_ref(
         if positions is not None
         else np.asarray(slab.get_positions(), dtype=float)
     )
-    if mat_type == "slab":
-        if rough_slab_local_z and site is not None:
-            if top_layer_planar is None:
-                if (
-                    top_layer_tolerance is not None
-                    and planar_z_variance_threshold is not None
-                ):
-                    is_planar = _is_top_layer_planar(
-                        slab,
-                        float(top_layer_tolerance),
-                        float(planar_z_variance_threshold),
-                    )
-                elif top_layer_tolerance is not None:
-                    is_planar = _is_top_layer_planar(slab, float(top_layer_tolerance))
-                elif planar_z_variance_threshold is not None:
-                    is_planar = _is_top_layer_planar(
-                        slab,
-                        z_variance_threshold=float(planar_z_variance_threshold),
-                    )
-                else:
-                    is_planar = _is_top_layer_planar(slab)
-            else:
-                is_planar = top_layer_planar
-            if not is_planar:
-                n_hat = _slab_normal(cell_arr)
-                vertex_h = float(_height_along_slab_normal(site.xyz, cell_arr))
-                return (
-                    _height_above_supports(
-                        site, pos, n_hat, reduce="max", fallback=vertex_h
-                    ),
-                    True,
-                )
-        if global_surface_ref is not None:
-            return float(global_surface_ref), False
-        return float(np.max(_height_along_slab_normal(pos, cell_arr))), False
     if site is not None:
         site_xyz = np.asarray(site.xyz, dtype=float)
         site_normal = np.asarray(site.normal, dtype=float)
         nrm = float(np.linalg.norm(site_normal))
         if nrm <= _VECTOR_NORM_EPS:
-            return float(site_xyz[2]), True
+            # Degenerate site normal: fall back to slab-cell height of the vertex.
+            return float(_height_along_slab_normal(site_xyz, cell_arr)), True
         n_hat = site_normal / nrm
         vertex_h = float(np.dot(site_xyz, n_hat))
-        if mat_type == "nanoparticle":
-            return (
-                _height_above_supports(
-                    site, pos, n_hat, reduce="mean", fallback=vertex_h
-                ),
-                True,
-            )
-        return vertex_h, True
-    # No site: Cartesian z-max is arbitrary for radial clusters. Prefer slab-normal
-    # height when the cell has volume; else radial distance from COM.
+        if site.site_type == "pore" or not site.slab_indices:
+            return vertex_h, True
+        return (
+            _height_above_supports(site, pos, n_hat, reduce="max", fallback=vertex_h),
+            True,
+        )
+    # No site: Cartesian / radial fallback (stale site_index is the usual cause).
     if cell_has_volume(cell_arr):
         return (
             float(np.max(_height_along_slab_normal(pos, cell_arr))),
@@ -504,7 +722,11 @@ def _pose_from_spec(
     )
 
     flat_aromatic = _is_flat_aromatic(shape, smiles, symbols)
-    if flat_aromatic and spec.orientation_type == "parallel" and mat_type != "porous":
+    if (
+        flat_aromatic
+        and spec.orientation_type == "parallel"
+        and site.site_type != "pore"
+    ):
         z_floor, z_lo_shrink, z_hi_shrink = _parallel_z_adjustments(
             ref_slab, site, symbols, r_surface=r_surface
         )
@@ -515,27 +737,11 @@ def _pose_from_spec(
         )
 
     zf = float(spec.z_fraction)
-    diversity_window = float(z_base_hi - z_base_lo)
-    if diversity_window < _PARALLEL_Z_MIN_HI_MARGIN:
-        diversity_window = _PARALLEL_Z_MIN_HI_MARGIN
 
-    # Framework plane when supports are known; site vertex only for pores /
-    # empty-support sites.
     surface_ref, is_local_ref = _resolve_surface_ref(
         site,
         ref_slab,
         mat_type,
-        rough_slab_local_z=config.rough_slab_local_z,
-        top_layer_tolerance=config.top_layer_tolerance,
-        planar_z_variance_threshold=config.planar_z_variance_threshold,
-        top_layer_planar=(
-            pose_cache.top_layer_planar if pose_cache is not None else None
-        ),
-        global_surface_ref=(
-            pose_cache.global_surface_ref
-            if pose_cache is not None and mat_type == "slab"
-            else None
-        ),
         cell=pose_cache.cell if pose_cache is not None else None,
         positions=pose_cache.positions if pose_cache is not None else None,
     )
@@ -550,53 +756,39 @@ def _pose_from_spec(
     rotated_pos = oriented.rotated_pos
     quat = oriented.quat
 
-    # Resolve the placement normal (slab uses cell normal; NP/pore use site normal).
-    if mat_type == "slab":
-        if pose_cache is not None and pose_cache.cell is not None:
-            cell = pose_cache.cell
-            n_hat = (
-                pose_cache.n_hat if pose_cache.n_hat is not None else _slab_normal(cell)
-            )
+    place_normal = _placement_normal_hat(normal)
+    if float(np.linalg.norm(np.asarray(site.normal, dtype=float))) <= _VECTOR_NORM_EPS:
+        if pose_cache is not None and pose_cache.n_hat is not None:
+            place_normal = _placement_normal_hat(pose_cache.n_hat)
         else:
-            cell = np.asarray(ref_slab.get_cell(), dtype=float)
-            n_hat = _slab_normal(cell)
-        place_normal = n_hat
-    else:
-        place_normal = _placement_normal_hat(normal)
+            cell = (
+                pose_cache.cell
+                if pose_cache is not None and pose_cache.cell is not None
+                else np.asarray(ref_slab.get_cell(), dtype=float)
+            )
+            place_normal = _placement_normal_hat(_slab_normal(cell))
 
     base = np.asarray(site.xyz, dtype=float)
     base_h = float(np.dot(base, place_normal))
-    # Free-volume pores: fractional window without contact-solve. Wall-near
-    # porous sites (rolling_probe / adaptive_grid) use the pairwise solver.
-    use_contact_solve = site.site_type != "pore"
-
-    if not use_contact_solve:
-        z_offset = z_base_lo + zf * diversity_window
-        placement_center = base + float(z_offset) * place_normal
-        ctx_z_lo = float(z_base_lo)
-        ctx_z_hi = ctx_z_lo + diversity_window
-    else:
-        pos_for_support = (
-            pose_cache.positions
-            if pose_cache is not None and pose_cache.positions is not None
-            else np.asarray(ref_slab.get_positions(), dtype=float)
-        )
-        cell_arr = (
-            pose_cache.cell
-            if pose_cache is not None and pose_cache.cell is not None
-            else np.asarray(ref_slab.get_cell(), dtype=float)
-        )
-        contact_ref = _height_above_supports(
-            site,
-            pos_for_support,
-            place_normal,
-            reduce="max",
-            fallback=float(surface_ref),
-        )
-        com_contact = _pairwise_contact_com_height(
+    pos_for_support = (
+        pose_cache.positions
+        if pose_cache is not None and pose_cache.positions is not None
+        else np.asarray(ref_slab.get_positions(), dtype=float)
+    )
+    cell_arr = (
+        pose_cache.cell
+        if pose_cache is not None and pose_cache.cell is not None
+        else np.asarray(ref_slab.get_cell(), dtype=float)
+    )
+    family_key = _height_interval_family_key(spec)
+    interval: _HeightInterval | None = None
+    if pose_cache is not None:
+        interval = pose_cache.height_intervals.get(family_key)
+    if interval is None:
+        interval = _feasible_height_interval(
             rotated_pos,
             symbols,
-            site_xyz=base,
+            site=site,
             place_normal=place_normal,
             slab_positions=pos_for_support,
             slab_symbols=list(ref_slab.get_chemical_symbols()),
@@ -604,20 +796,36 @@ def _pose_from_spec(
             pbc=material_aware_pbc(mat_type),
             config=config,
             r_surface=float(r_surface),
+            z_base_lo=float(z_base_lo),
+            z_base_hi=float(z_base_hi),
         )
-        delta = (zf - 0.5) * diversity_window
-        com_h = float(com_contact) + delta
-        # Low z_fraction is a signed offset around contact, but must not push
-        # atoms through the support plane (hollow 3D gates leave little slack).
+        if pose_cache is not None and interval is not None:
+            pose_cache.height_intervals[family_key] = interval
+    if interval is None:
+        return None, "infeasible_pose"
+    if not interval.contact_atoms_ok:
+        return None, "insufficient_contact_atoms"
+
+    com_h = _com_height_from_z_fraction(
+        zf, interval.com_lo, interval.com_nominal, interval.com_hi
+    )
+    if site.site_type != "pore":
         com_h = max(
             com_h,
             _com_floor_on_support_plane(rotated_pos, place_normal, base_h),
         )
-        placement_center = base + (com_h - base_h) * place_normal
-        contact_gap = float(com_contact) - float(contact_ref)
-        # Recovery window centred on the solved contact COM gap.
-        ctx_z_lo = contact_gap - 0.5 * diversity_window
-        ctx_z_hi = contact_gap + 0.5 * diversity_window
+    placement_center = base + (com_h - base_h) * place_normal
+    contact_ref = _height_above_supports(
+        site,
+        pos_for_support,
+        place_normal,
+        reduce="max",
+        fallback=float(surface_ref),
+    )
+    ctx_z_lo = float(interval.com_lo) - float(contact_ref)
+    ctx_z_hi = float(interval.com_hi) - float(contact_ref)
+    if ctx_z_hi < ctx_z_lo:
+        ctx_z_hi = ctx_z_lo
 
     pose = PlacementPose(
         conformer_index=spec.conformer_index,
@@ -652,9 +860,7 @@ def _pose_from_spec(
             rotated_pos=rotated_pos,
             z_base_lo=float(ctx_z_lo),
             z_base_hi=float(ctx_z_hi),
-            normal=np.asarray(
-                place_normal if mat_type != "porous" else normal, dtype=float
-            ),
+            normal=np.asarray(place_normal, dtype=float),
             shape=shape,
         ),
         None,
@@ -696,17 +902,6 @@ def _context_from_pose(
         site,
         reference,
         mat_type,
-        rough_slab_local_z=config.rough_slab_local_z,
-        top_layer_tolerance=config.top_layer_tolerance,
-        planar_z_variance_threshold=config.planar_z_variance_threshold,
-        top_layer_planar=(
-            pose_cache.top_layer_planar if pose_cache is not None else None
-        ),
-        global_surface_ref=(
-            pose_cache.global_surface_ref
-            if pose_cache is not None and mat_type == "slab"
-            else None
-        ),
         cell=pose_cache.cell if pose_cache is not None else None,
         positions=pose_cache.positions if pose_cache is not None else None,
     )
@@ -754,44 +949,28 @@ def _recover_z_offset(
     """Recover COM height above the surface reference from absolute placement.
 
     Returned ``z_offset`` is the adsorbate COM displacement above
-    *surface_ref* (along the slab/site normal).  It includes any clearance
-    lift applied at placement time, so ``surface_ref + z_offset`` reconstructs
-    the COM height along that normal — not the closest-atom gap.
-
-    For slabs this is ``dot(placement, n_slab) - surface_ref``.  For
-    nanoparticle / pore sites it is ``dot(placement, n_site) - surface_ref``
-    when the site normal is usable (``surface_ref`` is the coordinating-atom
-    plane when supports are known, else the site vertex on that normal).
+    *surface_ref* along the placement normal (site frame). It includes any
+    clearance lift applied at placement time, so ``surface_ref + z_offset``
+    reconstructs the COM height along that normal — not the closest-atom gap.
     """
+    del slab, pose_cache  # height is always along ctx.normal / site frame
     pose = ctx.pose
-    site = ctx.site
     placement = np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float)
-    if ctx.mat_type == "slab" and slab is not None:
-        if pose_cache is not None and pose_cache.n_hat is not None:
-            n_hat = pose_cache.n_hat
-        else:
-            cell = np.asarray(slab.get_cell(), dtype=float)
-            n_hat = _slab_normal(cell)
-        return float(np.dot(placement, n_hat) - ctx.surface_ref)
-    if site is not None:
-        site_normal = np.asarray(site.normal, dtype=float)
-        nrm = float(np.linalg.norm(site_normal))
-        if nrm > _VECTOR_NORM_EPS:
-            return float(np.dot(placement, site_normal / nrm) - ctx.surface_ref)
-    return float(z_abs - ctx.surface_ref)
+    n_hat = _placement_normal_hat(ctx.normal)
+    return float(np.dot(placement, n_hat) - ctx.surface_ref)
 
 
 def _saturation_exclude_count(
     slab: Atoms,
     slab_for_sites: Atoms | None,
 ) -> int | None:
-    """Return substrate atom count for saturation exclude, else None."""
+    """Prefix length of substrate atoms when *slab* has pre-adsorbed suffix."""
     if slab_for_sites is None:
         return None
-    n_sub = len(slab_for_sites)
-    if n_sub < len(slab):
-        return n_sub
-    return None
+    n = len(slab_for_sites)
+    if n >= len(slab):
+        return None
+    return n
 
 
 def _placement_normal(
@@ -799,16 +978,13 @@ def _placement_normal(
     slab: Atoms,
     pose_cache: _PoseBatchCache | None = None,
 ) -> np.ndarray:
-    """Return unit normal used for height/lateral recovery."""
-    if ctx.mat_type == "slab":
-        if pose_cache is not None and pose_cache.n_hat is not None:
-            return pose_cache.n_hat
-        return _slab_normal(np.asarray(slab.get_cell(), dtype=float))
-    normal = np.asarray(ctx.normal, dtype=float)
-    nrm = float(np.linalg.norm(normal))
-    if nrm > _VECTOR_NORM_EPS:
-        return normal / nrm
-    return np.array([0.0, 0.0, 1.0], dtype=float)
+    """Return unit normal used for height/lateral recovery (site frame)."""
+    del pose_cache
+    n_hat = _placement_normal_hat(ctx.normal)
+    if float(np.linalg.norm(np.asarray(ctx.normal, dtype=float))) > _VECTOR_NORM_EPS:
+        return n_hat
+    # Degenerate stored normal: fall back to slab-cell +z.
+    return _placement_normal_hat(_slab_normal(np.asarray(slab.get_cell(), dtype=float)))
 
 
 def _contact_penetration(
@@ -924,19 +1100,20 @@ def _analytic_height_recovery(
         slab_scratch=slab_scratch,
         slab_for_sites=slab_for_sites,
     )
-    porous = ctx.mat_type == "porous"
+    # Pore sites: nudge toward the void centre when too close. Wall-near: raise
+    # away from the support plane. Keyed on site_type, not material_type.
+    is_pore = ctx.site is not None and ctx.site.site_type == "pore"
     if height_mode == "too_close":
         if max_pen <= _DISTANCE_ZERO_EPS:
             return None
-        # Porous: shrink toward free-volume center; slabs/NPs: raise away.
-        signed = -max_pen if porous else max_pen
+        signed = -max_pen if is_pore else max_pen
     elif height_mode == "contact_distance_too_large":
-        # Same physics as too_far: molecule is above the contact window.
+        # Same physics as too_far: molecule is outside the contact window.
         target = float(config.max_closest_approach)
         excess = actual - target
         if excess <= _DISTANCE_ZERO_EPS:
             return None
-        signed = excess if porous else -excess
+        signed = excess if is_pore else -excess
     else:
         max_d = config.max_initial_distance
         if max_d is None:
@@ -946,19 +1123,20 @@ def _analytic_height_recovery(
                 excess = actual - target
                 if excess <= _DISTANCE_ZERO_EPS:
                     return None
-                signed = excess if porous else -excess
+                signed = excess if is_pore else -excess
             else:
                 return None
         else:
             excess = actual - float(max_d)
             if excess <= _DISTANCE_ZERO_EPS:
                 return None
-            signed = excess if porous else -excess
+            signed = excess if is_pore else -excess
 
     n_hat = _placement_normal(ctx, slab, pose_cache=pose_cache)
-    new_center = origin + float(signed) * n_hat
+    # Clamp the nudge into the feasible recovery window via z_fraction.
     new_zf = float(min(1.0, max(0.0, zf + signed / z_span)))
-    return new_center, new_zf
+    clipped_center = origin + float((new_zf - zf) * z_span) * n_hat
+    return clipped_center, new_zf
 
 
 def _xy_recovery_offsets(
@@ -1050,8 +1228,8 @@ def _recover_distance_failure(
     try a single height shift first (skipped when the worst penetration is
     mostly in-plane). Huge normal penetration fails cheaply before Packmol
     clash. Remaining recoverable failures use clash descent when enabled;
-    otherwise discrete XY jitter. Porous frameworks invert the height nudge
-    toward the free-volume site centre.
+    otherwise discrete XY jitter. Pore sites invert the height nudge toward
+    the free-volume centre (``site_type == "pore"``), not ``material_type``.
     """
     if fail_reason not in RECOVERABLE_DISTANCE_REASONS:
         return ctx, fail_reason
@@ -1515,8 +1693,8 @@ def _descriptor_from_placement(
 ) -> PlacementDescriptor:
     """Build a PlacementDescriptor from resolved pose/geometry fields.
 
-    *z_offset* is the COM height above *surface_ref* (contact-solved on
-    slabs/NPs; fractional window on porous).
+    *z_offset* is the COM height above *surface_ref* (pairwise contact-solved
+    for wall-near sites; fractional window for free-volume pores).
     """
     return PlacementDescriptor(
         conformer_index=pose.conformer_index,
@@ -1638,7 +1816,11 @@ def _finalize_placement(
         shape=ctx.shape,
         slab_indices=slab_indices,
         site_source=site_source,
-        site_reference_frame=("local_site" if ctx.is_local_ref else "global_top_layer"),
+        site_reference_frame=(
+            "local_site"
+            if ctx.is_local_ref or ctx.site is not None
+            else "global_top_layer"
+        ),
         site_xy_frac_a=float(xy_frac[0]),
         site_xy_frac_b=float(xy_frac[1]),
         z_abs=z_abs,

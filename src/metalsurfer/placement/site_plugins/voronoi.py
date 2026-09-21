@@ -7,7 +7,10 @@ from typing import Any
 
 import numpy as np
 
-from ..site_coords import top_layer_mask_by_normal
+from ..site_coords import (
+    project_vertices_to_support_plane,
+    top_layer_mask_by_normal,
+)
 from ..site_voronoi import _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
 from .helpers import candidate_enrichment_frames, periodic_accessibility_tree
@@ -109,6 +112,9 @@ class VoronoiGenerator:
             pbc=pbc,
             material_type=material_type,
             accessibility_tree=accessibility_tree,
+        )
+        vertices = project_vertices_to_support_plane(
+            vertices, normals, atom_indices, positions
         )
 
         return SiteCandidateBatch(

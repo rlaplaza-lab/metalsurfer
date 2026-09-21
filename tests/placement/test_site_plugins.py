@@ -7,6 +7,7 @@ import pytest
 from ase.build import molecule
 
 from metalsurfer.config import SITE_GENERATOR_OPTIONS, AdsorptionConfig
+from metalsurfer.models import PlacementSpec
 from metalsurfer.placement.generators import (
     enumerate_placement_specs,
     generate_placements_from_specs,
@@ -29,6 +30,7 @@ from metalsurfer.placement.site_plugins.voronoi import VoronoiGenerator
 from metalsurfer.placement.site_types import Site
 
 from ..conftest import make_nanoparticle, make_porous_framework, make_slab
+from ._helpers import PLUGIN_MATERIAL_CASES, SLAB_HOLLOW_PLUGINS
 
 
 def test_registry_matches_config_options():
@@ -177,6 +179,58 @@ def test_slab_topology_emits_nonempty_supports():
     assert all(s.slab_indices for s in sites)
 
 
+def _support_plane_lifts(batch, positions: np.ndarray) -> list[float]:
+    """Height of each supported vertex above its max-support plane."""
+    assert batch.normals is not None
+    lifts: list[float] = []
+    pos = np.asarray(positions, dtype=float)
+    for i, support in enumerate(batch.atom_indices):
+        if not support:
+            continue
+        idx = np.asarray(support, dtype=int)
+        n_hat = np.asarray(batch.normals[i], dtype=float)
+        nrm = float(np.linalg.norm(n_hat))
+        if nrm < 1e-8:
+            continue
+        n_hat = n_hat / nrm
+        support_h = float(np.max(pos[idx] @ n_hat))
+        lifts.append(float(np.dot(batch.vertices[i], n_hat) - support_h))
+    return lifts
+
+
+@pytest.mark.parametrize(
+    ("plugin", "material_type", "factory"),
+    [
+        ("adaptive_grid", "slab", make_slab),
+        ("rolling_probe", "slab", make_slab),
+        ("voronoi", "porous", make_porous_framework),
+    ],
+)
+def test_wall_plugins_emit_unlifted_anchors(plugin, material_type, factory):
+    atoms = factory()
+    pos = np.asarray(atoms.get_positions(), dtype=float)
+    ctx = SiteGenerationContext(
+        positions=pos,
+        cell=np.asarray(atoms.get_cell(), dtype=float),
+        pbc=np.asarray(atoms.get_pbc(), dtype=bool),
+        symbols=list(atoms.get_chemical_symbols()),
+        material_type=material_type,
+        probe_radius=1.2,
+        max_site_distance=3.5,
+        top_layer_tolerance=1.0,
+        enrich=True,
+        planar_z_variance_threshold=0.1,
+        adaptive_grid_spacing=0.70,
+        n_jobs=1,
+    )
+    batch = resolve_site_generator(plugin, material_type).generate(ctx)
+    lifts = _support_plane_lifts(batch, pos)
+    assert lifts, f"{plugin} emitted no supported anchors"
+    assert max(lifts) <= 1e-5
+    if plugin == "voronoi":
+        assert any(len(support) == 0 for support in batch.atom_indices)
+
+
 def test_voronoi_porous_emits_wall_supports_and_pores():
     atoms = make_porous_framework()
     ctx = SiteGenerationContext(
@@ -242,17 +296,7 @@ def test_adaptive_grid_skips_topology_safety_nets(material_type):
     assert len(batch.vertices) == len(batch.atom_indices)
 
 
-@pytest.mark.parametrize(
-    ("material_type", "plugin", "factory"),
-    [
-        ("slab", "topology", make_slab),
-        ("slab", "adaptive_grid", make_slab),
-        ("nanoparticle", "topology", make_nanoparticle),
-        ("nanoparticle", "adaptive_grid", make_nanoparticle),
-        ("porous", "voronoi", make_porous_framework),
-        ("porous", "adaptive_grid", make_porous_framework),
-    ],
-)
+@pytest.mark.parametrize(("material_type", "plugin", "factory"), PLUGIN_MATERIAL_CASES)
 def test_plugins_materialize_clash_free(material_type, plugin, factory):
     atoms = factory()
     cfg = AdsorptionConfig(
@@ -285,17 +329,7 @@ def test_voronoi_ridge_enrich_n_jobs_deterministic():
     )
 
 
-@pytest.mark.parametrize(
-    ("material_type", "plugin", "factory"),
-    [
-        ("slab", "topology", make_slab),
-        ("slab", "adaptive_grid", make_slab),
-        ("nanoparticle", "topology", make_nanoparticle),
-        ("nanoparticle", "adaptive_grid", make_nanoparticle),
-        ("porous", "voronoi", make_porous_framework),
-        ("porous", "adaptive_grid", make_porous_framework),
-    ],
-)
+@pytest.mark.parametrize(("material_type", "plugin", "factory"), PLUGIN_MATERIAL_CASES)
 def test_plugins_n_tuplet_expands_and_materializes(material_type, plugin, factory):
     """n-tuplet sampling expands to the clustered lattice and place ≥2 clash-free."""
     from metalsurfer.placement.site_context import (
@@ -344,17 +378,7 @@ def test_plugins_n_tuplet_expands_and_materializes(material_type, plugin, factor
     assert len(ok) >= 2
 
 
-@pytest.mark.parametrize(
-    ("material_type", "plugin", "factory"),
-    [
-        ("slab", "topology", make_slab),
-        ("slab", "adaptive_grid", make_slab),
-        ("nanoparticle", "topology", make_nanoparticle),
-        ("nanoparticle", "adaptive_grid", make_nanoparticle),
-        ("porous", "voronoi", make_porous_framework),
-        ("porous", "adaptive_grid", make_porous_framework),
-    ],
-)
+@pytest.mark.parametrize(("material_type", "plugin", "factory"), PLUGIN_MATERIAL_CASES)
 def test_plugins_multimol_share_catalog_materialize(material_type, plugin, factory):
     """Two molecules share one SiteContext and both materialize clash-free."""
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
@@ -384,3 +408,113 @@ def test_plugins_multimol_share_catalog_materialize(material_type, plugin, facto
             specs, [ads], atoms, cfg, smiles=smiles, site_context=shared
         )
         assert any(pair is not None for pair, _reason in results)
+
+
+@pytest.mark.parametrize(("material_type", "plugin", "factory"), PLUGIN_MATERIAL_CASES)
+def test_wall_near_sites_have_supports_and_support_plane_xyz(
+    material_type, plugin, factory
+):
+    """Wall-near catalog xyz sits on the coordinating-atom plane; pores stay voids."""
+    atoms = factory()
+    sites = get_unified_sites(
+        atoms, material_type=material_type, site_generator=plugin, n_jobs=1
+    )
+    assert sites
+    pos = np.asarray(atoms.get_positions(), dtype=float)
+    wall = [s for s in sites if str(s.site_type) != "pore"]
+    pores = [s for s in sites if str(s.site_type) == "pore"]
+    if plugin in ("adaptive_grid", "rolling_probe"):
+        assert wall, f"{plugin} on {material_type} must emit wall-near sites"
+        assert not pores, (
+            f"{plugin} catalogs are wall-near only, got {len(pores)} pores"
+        )
+    for s in wall:
+        assert s.slab_indices, (
+            f"{plugin}/{material_type} wall-near site missing supports "
+            f"(type={s.site_type!r})"
+        )
+        n_hat = np.asarray(s.normal, dtype=float)
+        nrm = float(np.linalg.norm(n_hat))
+        assert nrm > 0.5
+        n_hat = n_hat / nrm
+        support_h = float(np.max(pos[list(s.slab_indices)] @ n_hat))
+        site_h = float(np.dot(np.asarray(s.xyz, dtype=float), n_hat))
+        assert site_h == pytest.approx(support_h, abs=0.25)
+    for s in pores:
+        assert s.nn_distance is not None and float(s.nn_distance) > 1.0
+
+
+@pytest.mark.parametrize("plugin", SLAB_HOLLOW_PLUGINS)
+def test_slab_plugins_emit_hollows_for_dissociative(plugin):
+    from metalsurfer.placement.site_enumeration import get_hollow_sites_for_adatoms
+
+    hollows = get_hollow_sites_for_adatoms(
+        make_slab(nx=3, ny=3, n_layers=3),
+        material_type="slab",
+        site_generator=plugin,
+        n_jobs=1,
+    )
+    assert hollows
+    assert all(s.site_type in ("hollow", "pore") for s in hollows)
+    assert all(s.slab_indices for s in hollows if s.site_type == "hollow")
+
+
+@pytest.mark.parametrize("plugin", ["adaptive_grid", "rolling_probe"])
+def test_porous_wall_near_plugins_materialize_with_contact_solve(plugin):
+    """MOF wall-near catalogs contact-solve; they are not pore fractional windows."""
+    from metalsurfer.placement.pose import _height_above_supports, _pose_from_spec
+    from metalsurfer.placement.site_context import resolve_site_context_for_sampling
+
+    atoms = make_porous_framework()
+    cfg = AdsorptionConfig(
+        material_type="porous",
+        site_generator=plugin,
+        seed=0,
+        num_conformers=1,
+        num_placements=8,
+        n_jobs=1,
+        slab_relaxation_mode="none",
+    )
+    ctx = resolve_site_context_for_sampling(atoms, cfg, symmetry_broken=False)
+    wall_idx = next(
+        (
+            i
+            for i, s in enumerate(ctx.sites)
+            if s.site_type != "pore" and s.slab_indices
+        ),
+        None,
+    )
+    assert wall_idx is not None, f"{plugin} MOF catalog has no wall-near sites"
+    site = ctx.sites[wall_idx]
+    assert site.site_type != "pore"
+    ads = molecule("H2O")
+    o_idx = list(ads.get_chemical_symbols()).index("O")
+    spec = PlacementSpec(
+        conformer_index=0,
+        orientation_type="EN-down",
+        face_flip=False,
+        en_atom_index=o_idx,
+        site_index=wall_idx,
+        site_type=str(site.site_type),
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+    pose_ctx, fail = _pose_from_spec(ads, spec, atoms, cfg, "O", site_context=ctx)
+    assert fail is None and pose_ctx is not None
+    n_hat = np.asarray(pose_ctx.normal, dtype=float)
+    n_hat = n_hat / float(np.linalg.norm(n_hat))
+    pos = np.asarray(atoms.get_positions(), dtype=float)
+    support_h = _height_above_supports(
+        site, pos, n_hat, reduce="max", fallback=float(pose_ctx.surface_ref)
+    )
+    site_h = float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
+    assert site_h == pytest.approx(support_h, abs=0.25)
+    atom_h = (
+        pose_ctx.rotated_pos
+        + np.array([pose_ctx.pose.x_abs, pose_ctx.pose.y_abs, pose_ctx.pose.z_abs])
+    ) @ n_hat
+    # Contact-solve places the binder at/above the support plane (not a pore hover).
+    assert float(np.min(atom_h)) >= support_h - 0.05

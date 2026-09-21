@@ -189,11 +189,22 @@ def _generate_nanoparticle_topology_sites(
         edges = sorted(set(edges))
 
     pending_pts: list[np.ndarray] = []
+    pending_probes: list[np.ndarray] = []
     pending_sources: list[str] = []
     pending_atoms: list[tuple[int, ...]] = []
 
-    def _add(point: np.ndarray, source: str, atoms: tuple[int, ...]) -> None:
-        pending_pts.append(np.asarray(point, dtype=float))
+    def _add(
+        anchor: np.ndarray,
+        source: str,
+        atoms: tuple[int, ...],
+        *,
+        probe: np.ndarray | None = None,
+    ) -> None:
+        """Store support-plane *anchor*; accessibility uses *probe* (lifted)."""
+        pending_pts.append(np.asarray(anchor, dtype=float))
+        pending_probes.append(
+            np.asarray(anchor if probe is None else probe, dtype=float)
+        )
         pending_sources.append(source)
         pending_atoms.append(atoms)
 
@@ -202,7 +213,13 @@ def _generate_nanoparticle_topology_sites(
         n_hat = atom_out[i]
         if float(np.linalg.norm(n_hat)) < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
             continue
-        _add(positions[int(ai)] + height * n_hat, "topology_atop", (int(ai),))
+        atom_pos = positions[int(ai)]
+        _add(
+            atom_pos,
+            "topology_atop",
+            (int(ai),),
+            probe=atom_pos + height * n_hat,
+        )
 
     for i, j in edges:
         n_hat = _normalize_rows((atom_out[i] + atom_out[j]).reshape(1, 3))[0]
@@ -210,9 +227,10 @@ def _generate_nanoparticle_topology_sites(
             n_hat = atom_out[i]
         mid = 0.5 * (surf_pos[i] + surf_pos[j])
         _add(
-            mid + height * n_hat,
+            mid,
             "topology_bridge",
             (local_to_global[i], local_to_global[j]),
+            probe=mid + height * n_hat,
         )
 
     seen_tris: set[tuple[int, ...]] = set()
@@ -230,9 +248,10 @@ def _generate_nanoparticle_topology_sites(
                 continue
             n_hat = _flip_outward(n_hat / nrm, centroid - com)
             _add(
-                centroid + height * n_hat,
+                centroid,
                 "topology_hollow",
                 tuple(local_to_global[m] for m in tri),
+                probe=centroid + height * n_hat,
             )
 
     seen_quads: set[tuple[int, ...]] = set()
@@ -261,16 +280,18 @@ def _generate_nanoparticle_topology_sites(
                     continue
                 n_hat = _flip_outward(n_hat / nrm, centroid - com)
                 _add(
-                    centroid + height * n_hat,
+                    centroid,
                     "topology_hollow",
                     tuple(local_to_global[m] for m in ordered),
+                    probe=centroid + height * n_hat,
                 )
 
     if not pending_pts:
         return empty
 
     cand_arr = np.asarray(pending_pts, dtype=float)
-    dists, _ = accessibility_tree.query(cand_arr, k=1)
+    probe_arr = np.asarray(pending_probes, dtype=float)
+    dists, _ = accessibility_tree.query(probe_arr, k=1)
     dists = np.asarray(dists, dtype=float).ravel()
     keep_acc = (float(probe_radius) <= dists) & (dists <= float(max_distance))
     if not np.any(keep_acc):

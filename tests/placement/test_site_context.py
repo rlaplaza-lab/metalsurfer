@@ -96,8 +96,8 @@ def test_unique_sites_cache_key_includes_site_generator():
     )
 
 
-def test_side_policy_cache_key_only_for_adaptive_grid():
-    """side_policy splits the cache for adaptive_grid, not for topology."""
+def test_side_policy_cache_key_for_wall_near_plugins():
+    """side_policy splits the cache for adaptive_grid and rolling_probe, not topology."""
     from metalsurfer.placement.site_context import _unique_sites_cache_key
 
     slab = make_slab(nx=2, ny=2)
@@ -110,15 +110,16 @@ def test_side_policy_cache_key_only_for_adaptive_grid():
     assert _unique_sites_cache_key(slab, topo_pos) == _unique_sites_cache_key(
         slab, topo_all
     )
-    ag_pos = AdsorptionConfig(
-        material_type="slab", site_generator="adaptive_grid", side_policy="positive"
-    )
-    ag_all = AdsorptionConfig(
-        material_type="slab", site_generator="adaptive_grid", side_policy="all"
-    )
-    assert _unique_sites_cache_key(slab, ag_pos) != _unique_sites_cache_key(
-        slab, ag_all
-    )
+    for plugin in ("adaptive_grid", "rolling_probe"):
+        pos = AdsorptionConfig(
+            material_type="slab", site_generator=plugin, side_policy="positive"
+        )
+        all_sides = AdsorptionConfig(
+            material_type="slab", site_generator=plugin, side_policy="all"
+        )
+        assert _unique_sites_cache_key(slab, pos) != _unique_sites_cache_key(
+            slab, all_sides
+        )
 
 
 def test_extract_features_depends_only_on_absolute_geometry():
@@ -333,6 +334,37 @@ def test_enumerate_without_context_matches_resolved_sampling_catalog():
     assert [_site_xyz_type_key(s) for s in info.unique_sites] == [
         _site_xyz_type_key(s) for s in resolved.sites
     ]
+
+
+def test_shared_site_frame_across_molecules_keeps_site_index():
+    """Competitive saturation: one catalog; per-pack footprint views differ."""
+    slab = make_slab(nx=2, ny=2)
+    config = AdsorptionConfig(material_type="slab", seed=0)
+    shared = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    assert shared.use_sites and len(shared.sites) >= 2
+
+    water_pack = [make_water(), make_water()]
+    # Second "molecule": same water geometry scaled up in-plane → larger disk.
+    big = make_water()
+    big_pos = big.get_positions().copy()
+    com = big_pos.mean(axis=0)
+    big_pos = com + 3.0 * (big_pos - com)
+    big.set_positions(big_pos)
+    big_pack = [big, big.copy()]
+
+    info_w = _spec_grid_info(water_pack, slab, config, "O", site_context=shared)
+    info_b = _spec_grid_info(big_pack, slab, config, "O", site_context=shared)
+    # Shared frame: identical site_index catalog identity.
+    assert [_site_xyz_type_key(s) for s in info_w.unique_sites] == [
+        _site_xyz_type_key(s) for s in shared.sites
+    ]
+    assert [_site_xyz_type_key(s) for s in info_b.unique_sites] == [
+        _site_xyz_type_key(s) for s in shared.sites
+    ]
+    # Bare slab: no footprint bans yet; both packs see all sites.
+    assert info_w.site_indices == info_b.site_indices
+    assert info_w.allows_conformer_site is None
+    assert info_b.allows_conformer_site is None
 
 
 def test_symmetry_aware_context_preserves_clustered_sites():

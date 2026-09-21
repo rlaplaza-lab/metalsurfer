@@ -41,9 +41,6 @@ from metalsurfer.placement.site_enumeration import (
     _compute_site_z_base,
     _get_site_surface_radii,
 )
-from metalsurfer.placement.site_plugins.helpers import (
-    is_top_layer_planar as _is_top_layer_planar,
-)
 
 from ..conftest import (
     adsorption_config_factory,
@@ -238,12 +235,10 @@ def test_local_site_material_placement_center_matches_site_geometry(
             target_h = float(surface_ref) + float(descriptor.z_offset)
             expected = base + (target_h - float(np.dot(base, n_hat))) * n_hat
             if site.slab_indices:
-                metal = np.mean(
-                    structure.get_positions()[list(site.slab_indices)], axis=0
+                metal_h = float(
+                    np.max(structure.get_positions()[list(site.slab_indices)] @ n_hat)
                 )
-                assert surface_ref == pytest.approx(
-                    float(np.dot(metal, n_hat)), abs=1e-9
-                )
+                assert surface_ref == pytest.approx(metal_h, abs=1e-9)
         else:
             expected = base + float(descriptor.z_offset) * n_hat
             assert surface_ref == pytest.approx(float(np.dot(base, n_hat)), abs=1e-9)
@@ -298,7 +293,7 @@ def test_porous_clustered_sites_prefer_pores_first():
 def test_local_site_distance_recovery_height_direction(
     material_type, fail_reason, expect_raise, monkeypatch
 ):
-    """NP raises on too_close / lowers on too_far; porous inverts that."""
+    """Wall-near raises on too_close / lowers on too_far; pores invert that."""
     structure = (
         make_nanoparticle()
         if material_type == "nanoparticle"
@@ -307,7 +302,11 @@ def test_local_site_distance_recovery_height_direction(
     water = make_water()
     pos = water.get_positions().copy()
     pos -= pos.mean(axis=0)
-    site = get_unified_sites(structure, material_type=material_type)[0]
+    sites = get_unified_sites(structure, material_type=material_type)
+    if material_type == "porous":
+        site = next(s for s in sites if s.site_type == "pore")
+    else:
+        site = sites[0]
     n_hat = np.asarray(site.normal, dtype=float)
     n_hat = n_hat / float(np.linalg.norm(n_hat))
     surface_ref, _ = _resolve_surface_ref(site, structure, material_type)
@@ -342,11 +341,19 @@ def test_local_site_distance_recovery_height_direction(
             "metalsurfer.placement.pose._contact_penetration",
             lambda *a, **k: (0.5, 1.0),
         )
+        monkeypatch.setattr(
+            "metalsurfer.placement.pose._contact_penetration_detail",
+            lambda *a, **k: (0.5, 1.0, 1.0),
+        )
         max_initial = None
     else:
         monkeypatch.setattr(
             "metalsurfer.placement.pose._contact_penetration",
             lambda *a, **k: (5.0, 0.0),
+        )
+        monkeypatch.setattr(
+            "metalsurfer.placement.pose._contact_penetration_detail",
+            lambda *a, **k: (5.0, 0.0, 1.0),
         )
         max_initial = 3.0
     monkeypatch.setattr(
@@ -382,7 +389,7 @@ def test_local_site_distance_recovery_height_direction(
 
 
 def test_resolve_surface_ref_rough_slab():
-    """On a rough slab, local z uses the coordinating-atom plane, not site.xyz."""
+    """Surface ref is always the local support-plane height along the site normal."""
     # Build a stepped slab: two terraces at different z
     positions = []
     for ix in range(3):
@@ -407,35 +414,26 @@ def test_resolve_surface_ref_rough_slab():
         slab_indices=(lower_support,),
     )
 
-    # Wide top-layer window so both terraces enter the planarity check.
-    ref_low, is_local = _resolve_surface_ref(
-        site_low,
-        slab,
-        "slab",
-        rough_slab_local_z=True,
-        top_layer_tolerance=3.0,
-        planar_z_variance_threshold=0.01,
-    )
+    ref_low, is_local = _resolve_surface_ref(site_low, slab, "slab")
     assert is_local is True
     assert ref_low == pytest.approx(2.7, abs=1e-9)
     # Must not use the pre-lifted site vertex as the surface reference.
     assert ref_low < float(site_low.xyz[2]) - 0.5
 
-    # Without rough_slab_local_z: always global max
-    ref_global, is_local_g = _resolve_surface_ref(
+    # rough_slab_local_z is ignored: still local support plane, not global max.
+    ref_flag, is_local_g = _resolve_surface_ref(
         site_low,
         slab,
         "slab",
         rough_slab_local_z=False,
     )
-    assert ref_global == float(np.max(slab.get_positions()[:, 2]))
-    assert not is_local_g
+    assert ref_flag == pytest.approx(2.7, abs=1e-9)
+    assert is_local_g is True
 
 
 def test_resolve_surface_ref_uses_config_planarity_tolerance():
-    """top_layer_tolerance must change planarity and therefore local vs global ref."""
-    # Flat upper terrace at ~0.9 Å; lower atoms at z=0. Narrow (0.5) sees only
-    # the flat top → planar/global. Wide (1.2) includes both → non-planar/local.
+    """Placement height is always local; planarity no longer switches the frame."""
+    # Flat upper terrace at ~0.9 Å; lower atoms at z=0.
     positions = [
         [0.0, 0.0, 0.0],
         [2.5, 0.0, 0.0],
@@ -453,31 +451,25 @@ def test_resolve_surface_ref_uses_config_planarity_tolerance():
     # Support on the upper terrace; site vertex lifted above it (plugin-style).
     site = _make_site([1.25, 1.0, 1.4], slab_indices=(3,))
 
-    assert _is_top_layer_planar(slab, top_layer_tolerance=0.5) is True
-    assert _is_top_layer_planar(slab, top_layer_tolerance=1.2) is False
-
-    ref_narrow, local_narrow = _resolve_surface_ref(
+    ref_a, local_a = _resolve_surface_ref(
         site,
         slab,
         "slab",
         rough_slab_local_z=True,
         top_layer_tolerance=0.5,
     )
-    ref_wide, local_wide = _resolve_surface_ref(
+    ref_b, local_b = _resolve_surface_ref(
         site,
         slab,
         "slab",
         rough_slab_local_z=True,
         top_layer_tolerance=1.2,
     )
-    assert local_narrow is False
-    assert local_wide is True
+    assert local_a is True and local_b is True
     # Local mode: framework support height, never the lifted site vertex.
-    assert ref_wide == pytest.approx(0.85, abs=1e-9)
-    assert ref_wide < float(site.xyz[2]) - 0.3
-    # Modes must differ by a clear margin (narrow=global max z=1.05,
-    # wide=local support z=0.85).
-    assert abs(ref_narrow - ref_wide) > 0.1
+    assert ref_a == pytest.approx(0.85, abs=1e-9)
+    assert ref_b == pytest.approx(0.85, abs=1e-9)
+    assert ref_a < float(site.xyz[2]) - 0.3
 
 
 def test_resolve_surface_ref_ignores_lifted_site_vertex_for_all_materials():
@@ -509,7 +501,7 @@ def test_resolve_surface_ref_ignores_lifted_site_vertex_for_all_materials():
         slab_indices=(0, 1, 2),
         material_type="nanoparticle",
     )
-    fw = _framework_plane_height(site, positions, n_hat, reduce="mean")
+    fw = _framework_plane_height(site, positions, n_hat, reduce="max")
     assert fw == pytest.approx(0.0, abs=1e-9)
     ref, is_local = _resolve_surface_ref(site, slab, "nanoparticle")
     assert is_local
@@ -560,7 +552,10 @@ def test_generate_placement_from_pose_respects_slab_for_sites():
     )
     assert result is not None
     _, descriptor = result
-    assert descriptor.surface_ref_z_abs == pytest.approx(slab_top)
+    # Local site frame: support-plane height of the coordinating atom, not the
+    # global slab top (pre-adsorbates on the covered slab are irrelevant).
+    support_h = float(slab.get_positions()[0, 2])
+    assert descriptor.surface_ref_z_abs == pytest.approx(support_h)
 
 
 def test_compute_site_z_base_multiplicative_from_covalent_radii():
@@ -702,6 +697,9 @@ def test_saturation_placement_height_uses_reference_slab():
         slab_top + reference_descriptor.z_offset
     )
 
+    # Local site frame: support indices still resolve to substrate atoms even
+    # when the covered slab is passed without slab_for_sites (global max z is
+    # no longer used for surface_ref).
     full_slab_result = generate_placement_from_spec(
         spec,
         [adsorbate],
@@ -711,9 +709,7 @@ def test_saturation_placement_height_uses_reference_slab():
     )
     assert full_slab_result is not None
     _, full_slab_descriptor = full_slab_result
-    assert full_slab_descriptor.surface_ref_z_abs == pytest.approx(
-        existing_adsorbate_top
-    )
+    assert full_slab_descriptor.surface_ref_z_abs == pytest.approx(slab_top)
 
 
 def test_saturation_placement_without_site_context_uses_reference_slab():

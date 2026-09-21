@@ -73,6 +73,7 @@ from .site_coords import (
     _periodic_image_offsets,
     _wrap_cartesian,
     _wrap_fractional,
+    project_anchor_to_support_plane,
 )
 from .site_plugins.helpers import median_nn_or_fallback, periodic_accessibility_tree
 
@@ -991,6 +992,7 @@ def _lateral_snap_candidates(
             float(target_clearance),
             anchor=anchor,
         )
+        anchor = project_anchor_to_support_plane(anchor, n_hat, supp)
         snapped = anchor + height * n_hat
         if np.any(pbc) and cell_has_volume(cell):
             snapped = _wrap_cartesian(snapped.reshape(1, 3), cell, pbc)[0]
@@ -1006,10 +1008,13 @@ def _lateral_snap_candidates(
             support_distances=c.support_distances,
             support_positions=supp,
         )
+        anchor_out = np.asarray(anchor, dtype=float).copy()
+        if np.any(pbc) and cell_has_volume(cell):
+            anchor_out = _wrap_cartesian(anchor_out.reshape(1, 3), cell, pbc)[0]
         out.append(
             replace(
                 c,
-                position=np.asarray(snapped, dtype=float).copy(),
+                position=anchor_out,
                 clearance=float(clearance[0]),
                 score=float(score),
             )

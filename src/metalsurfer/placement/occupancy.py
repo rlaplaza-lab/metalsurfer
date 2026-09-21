@@ -120,7 +120,7 @@ def _normalize_existing_positions(existing: np.ndarray) -> np.ndarray:
     return arr
 
 
-def _sites_clearance_and_vertex_mask(
+def _sites_clearance_and_anchor_mask(
     sites: Sequence[Site],
     existing: np.ndarray,
     *,
@@ -129,7 +129,7 @@ def _sites_clearance_and_vertex_mask(
     min_separation: float,
     need_mic_vecs: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return ``(vertex_mask, min_inplane_dists, mic_vecs)`` for sites×existing.
+    """Return ``(anchor_mask, min_inplane_dists, mic_vecs)`` for sites×existing.
 
     Reject uses in-plane MIC (``||mic - (mic·n)n||``) against each site normal
     so unlifted support-plane anchors still mark columns under adsorbates as
@@ -206,7 +206,7 @@ def site_footprint_clearances(
     ):
         return np.full(n, np.inf, dtype=float)
 
-    _vertex_mask, _min_dists, mic_vecs = _sites_clearance_and_vertex_mask(
+    _anchor_mask, _min_dists, mic_vecs = _sites_clearance_and_anchor_mask(
         sites,
         existing_positions,
         cell=cell,
@@ -235,14 +235,14 @@ def available_site_indices(
     if existing_positions is None or np.asarray(existing_positions).size == 0:
         return list(range(len(sites)))
 
-    vertex_mask, _min_dists, _mic_vecs = _sites_clearance_and_vertex_mask(
+    anchor_mask, _min_dists, _mic_vecs = _sites_clearance_and_anchor_mask(
         sites,
         existing_positions,
         cell=cell,
         pbc=pbc,
         min_separation=min_separation,
     )
-    return [i for i, keep in enumerate(vertex_mask) if keep]
+    return [i for i, keep in enumerate(anchor_mask) if keep]
 
 
 def _positions_mutually_clear(

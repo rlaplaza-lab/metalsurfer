@@ -64,53 +64,97 @@ def _pose_family_key(
     )
 
 
+def _same_height_key(spec: PlacementSpec) -> tuple:
+    """Identity of specs that place at the same COM.
+
+    On wall-near sites every ``z_fraction <= 0.5`` is the contact height.
+    Fractions above 0.5, and every pore or dissociative fraction, stay distinct.
+    """
+    family = (
+        int(spec.conformer_index),
+        str(spec.orientation_type),
+        int(spec.site_index),
+        float(spec.tilt_deg),
+        float(spec.azimuth_deg),
+        float(spec.azimuth_in_plane_deg),
+        bool(spec.face_flip),
+        spec.en_atom_index,
+    )
+    zf = float(spec.z_fraction)
+    if spec.orientation_type == "dissociative" or spec.site_type == "pore":
+        return (*family, zf)
+    if zf <= 0.5:
+        return (*family, "contact")
+    return (*family, zf)
+
+
+def _dedupe_same_height_specs(specs: list[PlacementSpec]) -> list[PlacementSpec]:
+    """Keep one spec per collapsed height, preferring ``z_fraction`` nearest 0.5."""
+    best: dict[tuple, int] = {}
+    order: list[tuple] = []
+    for i, spec in enumerate(specs):
+        key = _same_height_key(spec)
+        prev = best.get(key)
+        if prev is None:
+            best[key] = i
+            order.append(key)
+            continue
+        prev_spec = specs[prev]
+        if abs(float(spec.z_fraction) - 0.5) < abs(float(prev_spec.z_fraction) - 0.5):
+            best[key] = i
+    return [specs[best[key]] for key in order]
+
+
 @dataclass
 class _RetryBans:
-    """Reason-aware exclusions for the optional diversity retry round."""
+    """Reason-aware exclusions for one fill call (never written to SiteContext)."""
 
     failed_keys: set[tuple] = field(default_factory=set)
-    crowded_site_indices: set[int] = field(default_factory=set)
-    # (conformer, orientation, site, tilt, face_flip, en) → max banned low zf
-    low_z_families: dict[tuple, float] = field(default_factory=dict)
-    # site_index → min banned high zf
-    high_z_sites: dict[int, float] = field(default_factory=dict)
-    # orientation/tilt families banned for insufficient contact
+    # (conformer_index, site_index) after adsorbate_overlap
+    crowded_conformer_sites: set[tuple[int, int]] = field(default_factory=set)
+    # orientation/tilt families banned when the pose cannot contact at any height
     contact_families: set[tuple] = field(default_factory=set)
+    # wall-near contact height (z_fraction <= 0.5) and other identical COMs
+    same_height_keys: set[tuple] = field(default_factory=set)
 
     def record(self, spec: PlacementSpec, reason: str) -> None:
         self.failed_keys.add(placement_spec_key(spec))
         if reason == "adsorbate_overlap":
-            self.crowded_site_indices.add(int(spec.site_index))
+            self.crowded_conformer_sites.add(
+                (int(spec.conformer_index), int(spec.site_index))
+            )
+            return
+        if reason.startswith("insufficient_contact") or reason == "infeasible_pose":
+            self.contact_families.add(_pose_family_key(spec))
             return
         if reason in ("too_close", "vdw_overlap"):
-            fam = _pose_family_key(spec)
-            zf = float(spec.z_fraction)
-            prev = self.low_z_families.get(fam)
-            self.low_z_families[fam] = zf if prev is None else max(prev, zf)
-            return
-        if reason in ("too_far", "contact_distance_too_large"):
-            site = int(spec.site_index)
-            zf = float(spec.z_fraction)
-            prev = self.high_z_sites.get(site)
-            self.high_z_sites[site] = zf if prev is None else min(prev, zf)
-            return
-        if reason.startswith("insufficient_contact"):
-            self.contact_families.add(_pose_family_key(spec))
+            self.same_height_keys.add(_same_height_key(spec))
 
     def allows(self, spec: PlacementSpec) -> bool:
         if placement_spec_key(spec) in self.failed_keys:
             return False
-        if int(spec.site_index) in self.crowded_site_indices:
+        if (
+            int(spec.conformer_index),
+            int(spec.site_index),
+        ) in self.crowded_conformer_sites:
             return False
-        fam = _pose_family_key(spec)
-        if fam in self.contact_families:
+        if _pose_family_key(spec) in self.contact_families:
             return False
-        zf = float(spec.z_fraction)
-        low_ceil = self.low_z_families.get(fam)
-        if low_ceil is not None and zf <= float(low_ceil):
-            return False
-        high_floor = self.high_z_sites.get(int(spec.site_index))
-        return high_floor is None or zf < float(high_floor)
+        return _same_height_key(spec) not in self.same_height_keys
+
+
+def _filter_pool_by_bans(
+    specs: list[PlacementSpec], bans: _RetryBans
+) -> list[PlacementSpec]:
+    """Drop specs already banned (applied between chunks of the same pool)."""
+    if (
+        not bans.failed_keys
+        and not bans.crowded_conformer_sites
+        and not bans.contact_families
+        and not bans.same_height_keys
+    ):
+        return specs
+    return [s for s in specs if bans.allows(s)]
 
 
 def _estimate_capacity_int(
@@ -272,14 +316,18 @@ def _materialize_pool_in_chunks(
     bans: _RetryBans,
     last_spec_by_index: dict[int, PlacementSpec],
 ) -> None:
-    """Materialize *specs* in chunks of ~*n_target*; stop once the target is met."""
+    """Materialize *specs* in chunks of ~*n_target*; stop once the target is met.
+
+    After each chunk, remaining specs are filtered by *bans* so orientation and
+    overlap failures skip siblings in the same pool without a second enumerate.
+    """
     if n_target <= 0 or not specs:
         return
+    remaining = list(specs)
     chunk_size = max(1, int(n_target))
-    for start in range(0, len(specs), chunk_size):
-        if len(combined) >= n_target:
-            break
-        chunk = specs[start : start + chunk_size]
+    while remaining and len(combined) < n_target:
+        chunk = remaining[:chunk_size]
+        remaining = remaining[chunk_size:]
         new_combined, new_ids, new_descriptors, new_failures = (
             _materialize_spec_placements(
                 specs=chunk,
@@ -304,6 +352,8 @@ def _materialize_pool_in_chunks(
             placement_ids.extend(new_ids[:take])
             descriptors.extend(new_descriptors[:take])
 
+        remaining = _filter_pool_by_bans(remaining, bans)
+
 
 def fill_materialized_placements(
     *,
@@ -320,13 +370,14 @@ def fill_materialized_placements(
 
     Pool size is ``min(capacity, n_target * placement_retry_oversample_max)``.
     Specs are materialized in chunks of about ``n_target`` and stop early once
-    enough successes exist. When ``placement_retry_enabled`` and the first pass
-    is short, one diversity round re-enumerates excluding exact failed-spec keys,
-    ``site_index`` values that failed with ``adsorbate_overlap``, low
-    ``z_fraction`` siblings after ``too_close`` / ``vdw_overlap``, high
-    ``z_fraction`` after ``too_far``, and orientation families after
-    insufficient-contact failures (not ``env_fingerprint`` — clean metals share
-    fingerprints across translational copies).
+    enough successes exist. Family / overlap bans apply within the pool between
+    chunks. When ``placement_retry_enabled``, the first pass is short, and at
+    least one spec failed materialization, one diversity round re-enumerates
+    excluding those exact failed-spec keys, ``(conformer, site)`` pairs that
+    failed with ``adsorbate_overlap``, orientation families after
+    ``insufficient_contact_*`` / ``infeasible_pose``, and same-height
+    ``z_fraction`` siblings after ``too_close`` / ``vdw_overlap`` (wall-near
+    fractions at or below 0.5 share the contact COM; higher fractions stay).
     """
     n_target = config.num_placements
     if n_target is None:
@@ -402,6 +453,7 @@ def fill_materialized_placements(
             conformer_energies=conformer_energies,
             grid_info=grid_info,
         )
+        specs = _dedupe_same_height_specs(specs)
         for spec in specs:
             spec.placement_index = next_placement_index
             next_placement_index += 1
