@@ -415,13 +415,15 @@ def test_occupied_surface_samples_full_lattice_and_drops_occupied_sites():
     assert specs
     wide = [s for s in specs if s.site_index >= len(reduced.sites)]
     assert wide, "enumerated specs must index into the clustered lattice"
+    # Pose indexes the sampling catalog as-is; pass the expanded lattice.
+    sampling = site_context_for_occupied_surface(reduced)
     placed = generate_placement_from_spec(
         wide[0],
         [make_water()],
         full,
         config,
         "O",
-        site_context=reduced,
+        site_context=sampling,
         slab_for_sites=slab,
     )
     assert placed is not None

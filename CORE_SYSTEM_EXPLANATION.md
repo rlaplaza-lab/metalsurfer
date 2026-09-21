@@ -241,7 +241,7 @@ covalent-radius-based threshold is a `pore` (free volume); a closer one is a
 preferred, because they are less likely to clash with the walls.
 
 Porous frameworks do **not** use atop injection (covalent radii do not define a
-unique "up" inside a confined void), and the clearance lift described in §4 is
+unique "up" inside a confined void), and the contact-solved height in §4 is
 skipped there.
 
 ### 3.4 Shared behaviour across all three types
@@ -320,24 +320,25 @@ scale between those based on how many binders sit on the ring.
 
 ### 4.2 Height / z-offset
 
-The baseline height window is `placement_z_range` (a low and high fraction),
-scaled by the sum of the molecule's and the surface's covalent radii when
-`placement_z_scale_by_covalent_radius` is on (the default). So a bigger molecule
-or a bigger surface atom gets a proportionally larger gap — the numbers stay
-physically sensible across chemistries.
+After orientation, height is **contact-solved** on slabs and nanoparticles
+(porous frameworks keep a fractional window without contact-solve).
 
-On top of that, each site type gets a small fixed offset from the surface: atop
-sits highest, bridge slightly lower, hollow and pore lower still, envelope in
-between. For parallel flat aromatics the window is shrunk toward the surface so
-the ring sits close to (but not inside) the material.
+1. Pick a **contact atom** from the orientation family: for binder-aligned
+   (EN-down / round / vertical) the binder (`en_atom_index` or a binding-atom
+   candidate); for parallel, the atom closest to the surface along the normal.
+2. Set that atom’s height to the same pair-clearance floor used by validation
+   (``max(min_initial_distance, covalent_sum * min_contact_ratio)``, and the
+   VDW-sum floor when `reject_vdw_overlaps` is on) plus a small slack, with the
+   usual site-type offset (hollow slightly closer than atop, clamped so it
+   cannot breach the floor). If another atom would still sit below its own
+   gate, raise the COM just enough to clear it.
+3. Interpret ``z_fraction`` as a **signed offset around that contact** spanning
+   the covalent-scaled ``placement_z_range`` window, so mid-window ``0.5`` is
+   the contact pose and ``0.1`` / ``0.9`` remain diversity — not an independent
+   guess of absolute height.
 
-Then comes **clearance-aware lift** (slabs and nanoparticles, not porous). After
-the molecule is oriented, its centre of mass may hang a fingertip below the
-intended height — an alkyl chain or a hydrogen poking toward the surface. The
-code lifts the whole molecule so that the *closest atom* — not the centre — sits
-at the target height. This is what prevents alkyl or hydrogen atoms from digging
-into the surface. Inside confined pores the local normal is not a single
-well-defined "away" direction, so this lift is skipped.
+Inside confined pores the local normal is not a unique "away" direction, so
+contact-solve is skipped there.
 
 ### 4.3 Validation and distance recovery
 
@@ -349,14 +350,15 @@ van-der-Waals clashes are also rejected.
 
 If a placement fails these checks, the code can **recover automatically**
 (`placement_distance_recovery`, on by default). It applies **one** analytic
-height nudge (raise for `too_close`, lower for `too_far`; inside porous
-frameworks it moves toward the free-volume site centre instead), then — when
-`placement_clash_descent` is on — a Packmol-style rigid-body clash descent
-whose lateral/`dz` bounds scale with the molecule footprint and the height
-window. Discrete in-plane offsets within `placement_x_range` /
-`placement_y_range` remain as a cheap fallback when clash is off or leaves a
-recoverable failure. Only `too_close`, `too_far`, `adsorbate_overlap`, and
-(for porous) `vdw_overlap` are recoverable; other failures are final.
+height nudge when the failure is along the surface normal (`too_close`,
+`too_far`, `contact_distance_too_large`, `vdw_overlap`; inside porous
+frameworks it moves toward the free-volume site centre instead). Mostly
+in-plane penetrations skip the height nudge. Huge normal penetration (molecule
+clearly through the surface) fails cheaply before Packmol clash. When
+`placement_clash_descent` is on, a Packmol-style rigid-body clash descent
+follows, with discrete in-plane offsets as a cheap fallback. Only `too_close`,
+`too_far`, `contact_distance_too_large`, `vdw_overlap`, and `adsorbate_overlap`
+are recoverable; other failures are final.
 
 ## 5. Sampling many placements
 
@@ -426,11 +428,14 @@ get close to `num_placements` valid structures:
   request more successes than occupancy-aware enumeration can supply.
 - **Oversample** (`placement_retry_oversample_max`, default 6.0). One pass
   requests up to `num_placements * oversample` specs (capped by capacity when
-  clamping is on), materializes them, and keeps up to the target.
+  clamping is on), then **materializes in chunks** of about `num_placements`
+  and stops early once the target is met.
 - **Optional diversity retry** (`placement_retry_enabled`, default `True`). If
   the first pass is short and at least one spec failed materialization, one
-  extra round re-enumerates excluding those exact failed-spec keys (no site
-  blocking or unfiltered fallback).
+  extra round re-enumerates excluding those exact failed-spec keys and any
+  `site_index` that failed with `adsorbate_overlap`. Pose failures
+  (`too_close`, etc.) do **not** ban other sites that share an
+  `env_fingerprint` — on a clean metal every atop can share one fingerprint.
 
 ### 6.1 Saturation run modes
 

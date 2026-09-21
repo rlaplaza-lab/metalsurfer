@@ -436,18 +436,21 @@ Enumeration / materialization
   threaded); ``resolve_materialize_workers`` (in ``placement._parallel``,
   re-exported from ``generators``) maps joblib-style ``n_jobs`` /
   ``placement_materialize_workers`` to a concrete thread-pool size.
-- Slab / nanoparticle anchor: ``site.xyz`` offset along the slab or site
-  normal so the **closest adsorbate atom** (not the COM) lands at
-  ``surface_ref + z_offset`` (clearance-aware lift after orientation).
-  Porous frameworks skip the lift (confined pores have opposing walls).
-  Nanoparticle ``surface_ref`` uses coordinating metal atoms along the site
-  normal; porous uses ``dot(site.xyz, n_site)``.
-- **Distance recovery** (default on): ``too_close`` / ``too_far`` try one
-  analytic height nudge, then chemistry-scaled clash descent when
-  ``placement_clash_descent`` is on (discrete XY only when clash is off).
-  ``adsorbate_overlap`` and non-porous ``vdw_overlap`` skip height. Porous
-  recovery is inverted (shrink toward the free-volume site when too close or
-  VDW-overlapping; push out when too far).
+- Slab / nanoparticle anchor: after orientation, **contact-solved** height
+  places a contact atom (binder for EN-down / round; closest atom for
+  parallel) at the pair-clearance gate used by validation (covalent, plus
+  VDW when ``reject_vdw_overlaps``); ``z_fraction`` is a signed offset around
+  that contact. Porous frameworks keep a fractional window without
+  contact-solve. Nanoparticle ``surface_ref`` uses coordinating metal atoms
+  along the site normal; porous uses ``dot(site.xyz, n_site)``.
+- **Distance recovery** (default on): ``too_close`` / ``too_far`` /
+  ``contact_distance_too_large`` / ``vdw_overlap`` try one analytic height
+  nudge when the worst penetration is along the normal; mostly in-plane
+  clashes skip height; huge normal penetration fails before Packmol. Then
+  chemistry-scaled clash descent when ``placement_clash_descent`` is on
+  (discrete XY only when clash is off). ``adsorbate_overlap`` skips height.
+  Porous recovery is inverted (shrink toward the free-volume site when too
+  close or VDW-overlapping; push out when too far).
 - **Voronoi auto-widen** (default on): one wider probe/max retry when the
   first window finds no sites.
 - **Dissociative** (``dissociative.py`` / ``_place_dissociative_two_sites``): homonuclear
@@ -462,11 +465,12 @@ Enumeration / materialization
 Placement fill
 ~~~~~~~~~~~~~~
 One-shot fill enumerates ``min(capacity, num_placements *
-placement_retry_oversample_max)`` specs, materializes them (threaded via
-``placement_materialize_workers``), and keeps up to ``num_placements``
-successes. When ``placement_retry_enabled``, the first pass is short, and at least
-one spec failed materialization, one diversity round re-enumerates
-excluding those exact failed-spec keys. BO eval
+placement_retry_oversample_max)`` specs, materializes them in chunks of about
+``num_placements`` (threaded via ``placement_materialize_workers``), and stops
+early once the target is met. When ``placement_retry_enabled``, the first pass
+is short, and at least one spec failed materialization, one diversity round
+re-enumerates excluding those exact failed-spec keys and any ``site_index``
+that failed with ``adsorbate_overlap`` (not ``env_fingerprint``). BO eval
 batches wrap pre-materialized cache hits (no generation backfill); the
 geometry-valid pool is built once when features are extracted.
 

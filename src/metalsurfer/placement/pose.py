@@ -14,10 +14,13 @@ from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
 from . import geometry as geom
 from ._constants import (
+    _CONTACT_HEIGHT_SLACK_ANGSTROM,
     _DISTANCE_RECOVERY_XY_ATTEMPTS,
     _DISTANCE_ZERO_EPS,
     _LATERAL_OFFSET_REF_SWITCH_DOT,
     _PARALLEL_Z_MIN_HI_MARGIN,
+    _RECOVERY_INPLANE_PENETRATION_DOT,
+    _RECOVERY_NORMAL_PENETRATION_WINDOW_FACTOR,
     _VECTOR_NORM_EPS,
     _XY_RECOVERY_PLACEMENT_MIXER,
     _XY_RECOVERY_SEED_MIXER,
@@ -155,26 +158,105 @@ def build_pose_batch_cache(
     return cache
 
 
-def _clearance_lift_along_normal(
-    rotated_pos: np.ndarray,
-    normal: np.ndarray,
-) -> float:
-    """Return how far to lift the COM so the closest atom sits at the intended height.
-
-    ``rotated_pos`` must be COM-centred. Atoms with negative projection on *normal*
-    protrude toward the surface; the lift equals ``max(0, -min(r · n))`` so that
-    ``z_offset`` / ``z_fraction`` refer to the closest adsorbate atom rather than
-    the molecular COM.
-    """
-    n = np.asarray(normal, dtype=float)
+def _placement_normal_hat(normal: np.ndarray) -> np.ndarray:
+    """Return the unit vector along *normal*, or +z when degenerate."""
+    n = np.asarray(normal, dtype=float).reshape(3)
     nrm = float(np.linalg.norm(n))
     if nrm <= _VECTOR_NORM_EPS:
-        return 0.0
-    n_hat = n / nrm
+        return np.array([0.0, 0.0, 1.0], dtype=float)
+    return n / nrm
+
+
+def _contact_atom_index(
+    rotated_pos: np.ndarray,
+    normal: np.ndarray,
+    symbols: list[str],
+    *,
+    orientation_type: str | None,
+    en_atom_index: int | None,
+) -> int:
+    """Atom whose height defines covalent contact for the orientation family."""
+    n_hat = _placement_normal_hat(normal)
     heights = np.asarray(rotated_pos, dtype=float) @ n_hat
-    if heights.size == 0:
-        return 0.0
-    return float(max(0.0, -float(np.min(heights))))
+    # Parallel / face-down: closest atom (often H on a ring).
+    if orientation_type == "parallel":
+        return int(np.argmin(heights))
+    # Binder-aligned (EN-down / round / vertical): prefer the binder.
+    if en_atom_index is not None and 0 <= int(en_atom_index) < len(symbols):
+        return int(en_atom_index)
+    binders = geom._binding_atom_candidates(symbols)
+    if binders:
+        return int(min(binders, key=lambda i: float(heights[i])))
+    return int(np.argmin(heights))
+
+
+def _contact_gap_angstrom(
+    config: AdsorptionConfig,
+    *,
+    contact_symbol: str,
+    r_surface: float,
+    site_type_offset: float = 0.0,
+    surface_symbol: str | None = None,
+) -> float:
+    """Contact-atom height above ``surface_ref`` for mid-window poses.
+
+    Starts from :func:`geometry.min_pair_clearance_angstrom` (same covalent /
+    optional-VDW floor as validation). Adds ``_CONTACT_HEIGHT_SLACK_ANGSTROM``
+    and the site-type prior; hollow/bridge priors may pull closer but never
+    below the pair-clearance floor. The floor uses the next representable float
+    above the gate so rigid-body placement cannot undershoot
+    ``dists < allowed`` via float noise.
+    """
+    gate = geom.min_pair_clearance_angstrom(
+        contact_symbol,
+        surface_symbol,
+        min_distance=float(config.min_initial_distance),
+        min_contact_ratio=float(config.min_contact_ratio),
+        reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
+        vdw_overlap_scale=float(config.vdw_overlap_scale),
+        r_surface_fallback=float(r_surface),
+    )
+    target = gate + float(site_type_offset) + _CONTACT_HEIGHT_SLACK_ANGSTROM
+    floor = float(np.nextafter(gate, np.inf))
+    return float(max(floor, target))
+
+
+def _com_height_for_contact(
+    rotated_pos: np.ndarray,
+    normal: np.ndarray,
+    *,
+    contact_index: int,
+    target_atom_height: float,
+    surface_ref: float,
+    config: AdsorptionConfig,
+    symbols: list[str],
+    r_surface: float,
+    surface_symbol: str | None = None,
+) -> float:
+    """COM height along *normal* so *contact_index* sits at *target_atom_height*.
+
+    If another atom would still sit below its own pair-clearance gate, raise the
+    COM just enough to clear that atom (binder may end slightly high).
+    """
+    n_hat = _placement_normal_hat(normal)
+    heights = np.asarray(rotated_pos, dtype=float) @ n_hat
+    h_contact = float(heights[int(contact_index)])
+    com_h = float(target_atom_height) - h_contact
+    if heights.size <= 1:
+        return com_h
+    closest_i = int(np.argmin(heights))
+    if closest_i == int(contact_index):
+        return com_h
+    closest_abs = com_h + float(heights[closest_i])
+    min_closest = float(surface_ref) + _contact_gap_angstrom(
+        config,
+        contact_symbol=symbols[closest_i],
+        r_surface=float(r_surface),
+        surface_symbol=surface_symbol,
+    )
+    if closest_abs < min_closest:
+        com_h += min_closest - closest_abs
+    return com_h
 
 
 def _resolve_surface_ref(
@@ -318,7 +400,12 @@ def _pose_from_spec(
     normal = np.array([0.0, 0.0, 1.0])
 
     reference = slab_for_sites if slab_for_sites is not None else slab
-    ctx = site_context_for_sampling(reference, config, site_context, full_slab=slab)
+    # Use the caller-provided catalog as-is so site_index stays stable.
+    # Resolve (and possibly expand under coverage) only when omitted (public API).
+    if site_context is not None:
+        ctx = site_context
+    else:
+        ctx = site_context_for_sampling(reference, config, None, full_slab=slab)
     if not ctx.use_sites or len(ctx.sites) == 0:
         logger.debug(
             "No sites available for spec placement_index=%d",
@@ -356,12 +443,11 @@ def _pose_from_spec(
     z_base_lo, z_base_hi = _compute_site_z_base(
         config, ref_slab, site, symbols, r_surface=r_surface
     )
+    site_type_offset = 0.0
     if spec.site_type:
-        offset = _site_type_z_offset(
-            ref_slab, site, spec.site_type, r_surface=r_surface
+        site_type_offset = float(
+            _site_type_z_offset(ref_slab, site, spec.site_type, r_surface=r_surface)
         )
-        z_base_lo += offset
-        z_base_hi += offset
 
     flat_aromatic = _is_flat_aromatic(shape, smiles, symbols)
     if flat_aromatic and spec.orientation_type == "parallel" and mat_type != "porous":
@@ -375,7 +461,9 @@ def _pose_from_spec(
         )
 
     zf = float(spec.z_fraction)
-    z_offset = z_base_lo + zf * (z_base_hi - z_base_lo)
+    diversity_window = float(z_base_hi - z_base_lo)
+    if diversity_window < _PARALLEL_Z_MIN_HI_MARGIN:
+        diversity_window = _PARALLEL_Z_MIN_HI_MARGIN
 
     # Slab: top-layer z (Voronoi vertex z can sit between layers). NP/pore: local vertex.
     surface_ref, is_local_ref = _resolve_surface_ref(
@@ -407,13 +495,7 @@ def _pose_from_spec(
     rotated_pos = oriented.rotated_pos
     quat = oriented.quat
 
-    # Clearance-aware lift: place so the closest atom (not the COM) sits at
-    # z_offset. Skipped for porous frameworks — local normals are not a unique
-    # "away from wall" direction inside confined pores.
-    # Descriptor z_offset recovered later is still COM height above surface_ref
-    # (includes this lift).
-    apply_lift = mat_type != "porous"
-
+    # Resolve the placement normal (slab uses cell normal; NP/pore use site normal).
     if mat_type == "slab":
         if pose_cache is not None and pose_cache.cell is not None:
             cell = pose_cache.cell
@@ -423,25 +505,59 @@ def _pose_from_spec(
         else:
             cell = np.asarray(ref_slab.get_cell(), dtype=float)
             n_hat = _slab_normal(cell)
-        lift = _clearance_lift_along_normal(rotated_pos, n_hat) if apply_lift else 0.0
-        base = np.asarray(site.xyz, dtype=float)
-        base_h = float(np.dot(base, n_hat))
-        # Intended height of the closest atom; COM sits higher by *lift*.
-        target_h = float(surface_ref + z_offset + lift)
-        placement_center = base + (target_h - base_h) * n_hat
-    elif mat_type == "nanoparticle":
-        # Same absolute-height convention as slabs: surface_ref is the metal
-        # under the site; topology vertices only supply lateral position.
-        lift = _clearance_lift_along_normal(rotated_pos, normal) if apply_lift else 0.0
-        base = np.asarray(site.xyz, dtype=float)
-        base_h = float(np.dot(base, normal))
-        target_h = float(surface_ref + z_offset + lift)
-        placement_center = base + (target_h - base_h) * normal
+        place_normal = n_hat
     else:
-        lift = _clearance_lift_along_normal(rotated_pos, normal) if apply_lift else 0.0
-        placement_center = (
-            np.asarray(site.xyz, dtype=float) + float(z_offset + lift) * normal
+        place_normal = _placement_normal_hat(normal)
+
+    base = np.asarray(site.xyz, dtype=float)
+    base_h = float(np.dot(base, place_normal))
+
+    if mat_type == "porous":
+        # Confined pores: keep fractional window without contact-solve.
+        z_offset = (z_base_lo + site_type_offset) + zf * diversity_window
+        placement_center = base + float(z_offset) * place_normal
+        ctx_z_lo = float(z_base_lo + site_type_offset)
+        ctx_z_hi = ctx_z_lo + diversity_window
+    else:
+        # Contact-solved height: mid-window (zf=0.5) places the contact atom at
+        # the pair-clearance gate (+ slack / site prior); z_fraction is a signed
+        # offset around that contact.
+        contact_idx = _contact_atom_index(
+            rotated_pos,
+            place_normal,
+            symbols,
+            orientation_type=spec.orientation_type,
+            en_atom_index=spec.en_atom_index,
         )
+        surface_symbol = (
+            ref_slab.get_chemical_symbols()[int(site.slab_indices[0])]
+            if site.slab_indices
+            else None
+        )
+        contact_gap = _contact_gap_angstrom(
+            config,
+            contact_symbol=symbols[contact_idx],
+            r_surface=float(r_surface),
+            site_type_offset=site_type_offset,
+            surface_symbol=surface_symbol,
+        )
+        delta = (zf - 0.5) * diversity_window
+        target_atom_h = float(surface_ref) + contact_gap + delta
+        com_h = _com_height_for_contact(
+            rotated_pos,
+            place_normal,
+            contact_index=contact_idx,
+            target_atom_height=target_atom_h,
+            surface_ref=float(surface_ref),
+            config=config,
+            symbols=symbols,
+            r_surface=float(r_surface),
+            surface_symbol=surface_symbol,
+        )
+        placement_center = base + (com_h - base_h) * place_normal
+        # Recovery window centred on the contact gap (same span as diversity).
+        ctx_z_lo = contact_gap - 0.5 * diversity_window
+        ctx_z_hi = contact_gap + 0.5 * diversity_window
 
     pose = PlacementPose(
         conformer_index=spec.conformer_index,
@@ -474,9 +590,11 @@ def _pose_from_spec(
             canonical_pos=canonical_pos,
             use_sites=True,
             rotated_pos=rotated_pos,
-            z_base_lo=float(z_base_lo),
-            z_base_hi=float(z_base_hi),
-            normal=np.asarray(normal, dtype=float),
+            z_base_lo=float(ctx_z_lo),
+            z_base_hi=float(ctx_z_hi),
+            normal=np.asarray(
+                place_normal if mat_type != "porous" else normal, dtype=float
+            ),
             shape=shape,
         ),
         None,
@@ -505,7 +623,11 @@ def _context_from_pose(
     rotated_pos = (geom.quaternion_to_rotation_matrix(quat) @ canonical_pos.T).T
 
     reference = slab_for_sites if slab_for_sites is not None else slab
-    ctx = site_context_for_sampling(reference, config, site_context, full_slab=slab)
+    # Replay must use the same catalog the original placement indexed into.
+    if site_context is not None:
+        ctx = site_context
+    else:
+        ctx = site_context_for_sampling(reference, config, None, full_slab=slab)
     site = None
     if ctx.use_sites and 0 <= pose.site_index < len(ctx.sites):
         site = ctx.sites[pose.site_index]
@@ -639,8 +761,34 @@ def _contact_penetration(
     slab_for_sites: Atoms | None,
 ) -> tuple[float, float]:
     """Return ``(actual_min_distance, max_pair_penetration)`` vs the substrate gate."""
+    actual_min, max_pen, _dot = _contact_penetration_detail(
+        adsorbate,
+        slab,
+        config,
+        material_type=material_type,
+        slab_scratch=slab_scratch,
+        slab_for_sites=slab_for_sites,
+        normal=None,
+    )
+    return actual_min, max_pen
+
+
+def _contact_penetration_detail(
+    adsorbate: Atoms,
+    slab: Atoms,
+    config: AdsorptionConfig,
+    *,
+    material_type: str,
+    slab_scratch: geom._SlabDistanceScratch | None,
+    slab_for_sites: Atoms | None,
+    normal: np.ndarray | None,
+) -> tuple[float, float, float]:
+    """Return ``(actual_min, max_penetration, |n·pair_dir|)`` for the worst pair.
+
+    ``|n·pair_dir|`` is 1.0 when *normal* is omitted or no penetrating pair exists.
+    """
     exclude_n = _saturation_exclude_count(slab, slab_for_sites)
-    _mol_pos, _slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
+    mol_pos, slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
         geom._mol_slab_contact_arrays(
             adsorbate,
             slab,
@@ -650,7 +798,7 @@ def _contact_penetration(
         )
     )
     if dists.size == 0:
-        return float("inf"), 0.0
+        return float("inf"), 0.0, 1.0
     actual_min = float(np.min(dists))
     mol_r = np.array(
         [
@@ -672,7 +820,20 @@ def _contact_penetration(
     allowed = (mol_r[:, None] + slab_r[None, :]) * float(config.min_contact_ratio)
     np.maximum(allowed, float(config.min_initial_distance), out=allowed)
     np.nan_to_num(allowed, nan=float(config.min_initial_distance), copy=False)
-    return actual_min, float(np.max(np.maximum(0.0, allowed - dists)))
+    penetration = np.maximum(0.0, allowed - dists)
+    max_pen = float(np.max(penetration))
+    if max_pen <= _DISTANCE_ZERO_EPS or normal is None:
+        return actual_min, max_pen, 1.0
+    mi, si = np.unravel_index(int(np.argmax(penetration)), penetration.shape)
+    pair_vec = np.asarray(slab_pos[si], dtype=float) - np.asarray(
+        mol_pos[mi], dtype=float
+    )
+    pair_nrm = float(np.linalg.norm(pair_vec))
+    if pair_nrm <= _VECTOR_NORM_EPS:
+        return actual_min, max_pen, 1.0
+    n_hat = _placement_normal_hat(normal)
+    abs_dot = abs(float(np.dot(pair_vec / pair_nrm, n_hat)))
+    return actual_min, max_pen, abs_dot
 
 
 def _analytic_height_recovery(
@@ -709,14 +870,30 @@ def _analytic_height_recovery(
             return None
         # Porous: shrink toward free-volume center; slabs/NPs: raise away.
         signed = -max_pen if porous else max_pen
-    else:
-        max_d = config.max_initial_distance
-        if max_d is None:
-            return None
-        excess = actual - float(max_d)
+    elif height_mode == "contact_distance_too_large":
+        # Same physics as too_far: molecule is above the contact window.
+        target = float(config.max_closest_approach)
+        excess = actual - target
         if excess <= _DISTANCE_ZERO_EPS:
             return None
         signed = excess if porous else -excess
+    else:
+        max_d = config.max_initial_distance
+        if max_d is None:
+            # Fall back to contact window when no hard max_initial_distance.
+            if height_mode == "too_far" and config.strict_initial_placement:
+                target = float(config.max_closest_approach)
+                excess = actual - target
+                if excess <= _DISTANCE_ZERO_EPS:
+                    return None
+                signed = excess if porous else -excess
+            else:
+                return None
+        else:
+            excess = actual - float(max_d)
+            if excess <= _DISTANCE_ZERO_EPS:
+                return None
+            signed = excess if porous else -excess
 
     n_hat = _placement_normal(ctx, slab, pose_cache=pose_cache)
     new_center = origin + float(signed) * n_hat
@@ -809,28 +986,62 @@ def _recover_distance_failure(
 ) -> tuple[_PlacementContext, str | None]:
     """One analytic height nudge, then clash descent (or XY if clash is off).
 
-    ``too_close`` / ``too_far`` try a single height shift first. Remaining
-    recoverable failures use Packmol-style clash descent when enabled; otherwise
-    discrete XY jitter within ``placement_x/y_range``. For porous frameworks,
-    ``vdw_overlap`` is treated like ``too_close`` (shrink toward free volume).
+    ``too_close`` / ``too_far`` / ``contact_distance_too_large`` / ``vdw_overlap``
+    try a single height shift first (skipped when the worst penetration is
+    mostly in-plane). Huge normal penetration fails cheaply before Packmol
+    clash. Remaining recoverable failures use clash descent when enabled;
+    otherwise discrete XY jitter. Porous frameworks invert the height nudge
+    toward the free-volume site centre.
     """
     if fail_reason not in RECOVERABLE_DISTANCE_REASONS:
         return ctx, fail_reason
-    height_reasons: tuple[str, ...] = ("too_close", "too_far")
-    if ctx.mat_type == "porous":
-        height_reasons = ("too_close", "too_far", "vdw_overlap")
-    height_mode = fail_reason
-    if fail_reason == "vdw_overlap" and ctx.mat_type == "porous":
-        height_mode = "too_close"
+    height_reasons: tuple[str, ...] = (
+        "too_close",
+        "too_far",
+        "contact_distance_too_large",
+        "vdw_overlap",
+    )
+    height_mode = "too_close" if fail_reason == "vdw_overlap" else fail_reason
 
     pose = ctx.pose
     origin = np.array([pose.x_abs, pose.y_abs, _require_pose_z_abs(pose)], dtype=float)
     work_zf = float(pose.z_fraction)
     work_center = origin.copy()
     last_reason: str | None = fail_reason
+    n_hat = _placement_normal(ctx, slab, pose_cache=pose_cache)
+    z_span = float(ctx.z_base_hi - ctx.z_base_lo)
 
-    if fail_reason in height_reasons:
-        _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, origin)
+    _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, origin)
+    _actual, max_pen, abs_dot = _contact_penetration_detail(
+        adsorbate,
+        slab,
+        config,
+        material_type=ctx.mat_type,
+        slab_scratch=slab_scratch,
+        slab_for_sites=slab_for_sites,
+        normal=n_hat,
+    )
+
+    # Molecule clearly through the surface: skip expensive clash descent.
+    if (
+        fail_reason == "too_close"
+        and z_span > _DISTANCE_ZERO_EPS
+        and max_pen > _RECOVERY_NORMAL_PENETRATION_WINDOW_FACTOR * z_span
+        and abs_dot >= _RECOVERY_INPLANE_PENETRATION_DOT
+    ):
+        return ctx, "too_close"
+
+    try_height = fail_reason in height_reasons
+    # Lateral clashes (step edges, pore walls, neighbors) need clash/XY, not height.
+    if (
+        try_height
+        and fail_reason in ("too_close", "vdw_overlap")
+        and max_pen > _DISTANCE_ZERO_EPS
+        and abs_dot < _RECOVERY_INPLANE_PENETRATION_DOT
+    ):
+        try_height = False
+
+    if try_height:
         height_shift = _analytic_height_recovery(
             ctx,
             adsorbate,
@@ -1244,7 +1455,8 @@ def _descriptor_from_placement(
 ) -> PlacementDescriptor:
     """Build a PlacementDescriptor from resolved pose/geometry fields.
 
-    *z_offset* is the COM height above *surface_ref* (includes clearance lift).
+    *z_offset* is the COM height above *surface_ref* (contact-solved on
+    slabs/NPs; fractional window on porous).
     """
     return PlacementDescriptor(
         conformer_index=pose.conformer_index,
@@ -1341,7 +1553,7 @@ def _finalize_placement(
         else:
             return None, fail_reason
 
-    # COM height above surface_ref (includes clearance lift applied at pose time).
+    # COM height above surface_ref (contact-solved / fractional window at pose).
     z_offset = _recover_z_offset(ctx, z_abs, slab, pose_cache=pose_cache)
     slab_indices: tuple[int, ...] | None = None
     if ctx.site is not None:

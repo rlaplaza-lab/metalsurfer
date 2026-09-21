@@ -270,6 +270,52 @@ def _get_vdw_radius(symbol: str) -> float | None:
     return float(cov * _VDW_RADIUS_FROM_COVALENT_SCALE)
 
 
+def min_pair_clearance_angstrom(
+    mol_symbol: str,
+    slab_symbol: str | None,
+    *,
+    min_distance: float,
+    min_contact_ratio: float,
+    reject_vdw_overlaps: bool = False,
+    vdw_overlap_scale: float = 1.0,
+    r_surface_fallback: float | None = None,
+) -> float:
+    """Minimum allowed separation for one mol–slab atom pair.
+
+    Matches the covalent floor used by :func:`check_initial_placement_distance`
+    (``max(min_distance, covalent_sum * min_contact_ratio)``). When
+    ``reject_vdw_overlaps`` is set, also requires the VDW-sum floor used by
+    :func:`detect_vdw_overlaps` (tabulated VDW, with the same covalent-scale
+    fallback for missing entries).
+    """
+    r_mol = _get_covalent_radius(mol_symbol)
+    r_slab = _get_covalent_radius(slab_symbol) if slab_symbol else None
+    if r_slab is None and r_surface_fallback is not None:
+        r_slab = float(r_surface_fallback)
+
+    if r_mol is not None and r_slab is not None:
+        gate = max(
+            float(min_distance),
+            (float(r_mol) + float(r_slab)) * float(min_contact_ratio),
+        )
+    else:
+        gate = float(min_distance)
+
+    if reject_vdw_overlaps:
+        r_vdw_m = _get_vdw_radius(mol_symbol)
+        r_vdw_s = _get_vdw_radius(slab_symbol) if slab_symbol else None
+        if r_vdw_m is None and r_mol is not None:
+            r_vdw_m = float(r_mol) * _VDW_RADIUS_FROM_COVALENT_SCALE
+        if r_vdw_s is None and r_slab is not None:
+            r_vdw_s = float(r_slab) * _VDW_RADIUS_FROM_COVALENT_SCALE
+        if r_vdw_m is not None and r_vdw_s is not None:
+            gate = max(
+                gate,
+                (float(r_vdw_m) + float(r_vdw_s)) * float(vdw_overlap_scale),
+            )
+    return float(gate)
+
+
 def _mol_slab_pairwise_mic(
     mol_pos: np.ndarray,
     slab_pos: np.ndarray,

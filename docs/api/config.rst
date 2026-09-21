@@ -292,13 +292,13 @@ Placement generation
 ``placement_distance_recovery``
    **Type:** ``bool`` · **Default:** ``True``
 
-   After ``too_close`` / ``too_far``, apply one analytic height nudge within the
-   placement *z* window, then optionally run ``placement_clash_descent``.
-   ``adsorbate_overlap`` and non-porous ``vdw_overlap`` skip height; porous
-   ``vdw_overlap`` uses the same height-then-clash path as ``too_close``.
-   When clash descent is off, discrete XY offsets within
-   ``placement_x_range`` / ``placement_y_range`` are used. Set ``False`` for
-   binary accept/reject.
+   After ``too_close`` / ``too_far`` / ``contact_distance_too_large`` /
+   ``vdw_overlap``, apply one analytic height nudge within the placement *z*
+   window when penetration is along the surface normal (mostly in-plane
+   clashes skip height), then optionally run ``placement_clash_descent``.
+   ``adsorbate_overlap`` skips height. When clash descent is off, discrete XY
+   offsets within ``placement_x_range`` / ``placement_y_range`` are used. Set
+   ``False`` for binary accept/reject.
 
 ``placement_clash_descent``
    **Type:** ``bool`` · **Default:** ``True``
@@ -334,15 +334,17 @@ Placement generation
 
    When the first one-shot fill pass is short of ``num_placements`` and at
    least one spec failed materialization, run one diversity round that
-   re-enumerates excluding those exact failed-spec keys (no site blocking or
-   unfiltered fallback).
+   re-enumerates excluding those exact failed-spec keys and any
+   ``site_index`` that failed with ``adsorbate_overlap`` (pose failures do
+   not ban sibling sites that share an ``env_fingerprint``).
 
 ``placement_retry_oversample_max``
     **Type:** ``float`` · **Default:** ``6.0`` · **Valid range:** ``>= 1.0``
 
     Cap on specs requested for one-shot fill as a multiple of the placement
     target (``min(capacity, num_placements * oversample)`` when capacity
-    clamping is on).
+    clamping is on). Specs are materialized in chunks of about
+    ``num_placements`` and stop early once the target is met.
 
 ``placement_fill_clamp_to_capacity``
     **Type:** ``bool`` · **Default:** ``True``

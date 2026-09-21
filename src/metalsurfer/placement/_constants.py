@@ -26,8 +26,26 @@ _MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM = (
 _SURFACE_NORMAL_FALLBACK_NORM_EPS = _numeric_defaults.SURFACE_NORMAL_FALLBACK_NORM_EPS
 
 RECOVERABLE_DISTANCE_REASONS = frozenset(
-    {"adsorbate_overlap", "too_close", "too_far", "vdw_overlap"}
+    {
+        "adsorbate_overlap",
+        "too_close",
+        "too_far",
+        "vdw_overlap",
+        "contact_distance_too_large",
+    }
 )
+
+# Slack (Å) above the pair-clearance gate so mid-window poses clear
+# ``dists < allowed`` without sitting on the boundary.
+_CONTACT_HEIGHT_SLACK_ANGSTROM: float = 0.05
+
+# Skip Packmol clash when normal-direction penetration exceeds this multiple of
+# the remaining height window (molecule clearly through the surface).
+_RECOVERY_NORMAL_PENETRATION_WINDOW_FACTOR: float = 2.0
+
+# Dot-product threshold: max pair penetration is "mostly in-plane" when the
+# unit vector from mol to slab has |n · dir| below this (skip height nudge).
+_RECOVERY_INPLANE_PENETRATION_DOT: float = 0.5
 
 
 # Mean covalent radius of element sets from ASE data.

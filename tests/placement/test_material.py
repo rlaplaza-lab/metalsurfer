@@ -120,8 +120,10 @@ def test_slab_placements_are_above_surface_reference():
             adsorbate, slab, material_type="slab"
         )
         assert ok, reason
-        # Lower floor is already gated by `assert ok`; only the slack upper tail is checked.
-        assert dist <= descriptor.z_offset + 0.2
+        # Min pair distance tracks the contact atom; z_offset is COM height
+        # above surface_ref. Contact sits at/near the COM along the approach
+        # (binder-down: contact below COM). Flyaways have dist ≫ z_offset.
+        assert dist <= float(descriptor.z_offset) + 0.5
 
 
 @pytest.mark.parametrize(
@@ -154,7 +156,6 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
     assert len(visited_sites) >= 2, (
         f"{material_type}: expected multi-site coverage, got {sorted(visited_sites)}"
     )
-    d_hi = 4.0 if material_type == "porous" else 4.5
     for _spec, adsorbate_i, desc in results:
         ok, dist, reason = check_initial_placement_distance(
             adsorbate_i,
@@ -163,11 +164,18 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
             material_type=material_type,
         )
         assert ok, f"{material_type} placement failed contact gate: {reason}"
-        # Lower floor is gated by `assert ok`; only the per-material upper band is checked.
-        # NP uses metal-anchored absolute height (covalent-scaled z_range up to ~4.3 Å).
-        assert dist <= d_hi, (
-            f"{material_type} adsorbate–surface distance out of band: {dist:.3f}"
-        )
+        if material_type == "porous":
+            # Porous keeps a fractional window (no contact-solve); min framework
+            # distance is not COM-along-normal, so use an absolute flyaway cap.
+            assert dist <= 4.0, (
+                f"porous adsorbate–framework distance out of band: {dist:.3f}"
+            )
+        else:
+            # Contact-solved: contact-atom min distance stays near COM height.
+            assert dist <= float(desc.z_offset) + 0.5, (
+                f"{material_type} adsorbate–surface distance out of band: "
+                f"dist={dist:.3f} z_offset={desc.z_offset:.3f}"
+            )
         overlaps, _ = detect_vdw_overlaps(
             adsorbate_i, structure, material_type=material_type
         )
@@ -766,7 +774,7 @@ def test_distance_recovery_rescues_too_close_placement():
     )
     assert ok is not None, ok_reason
     adsorbate_ok, descriptor = ok
-    assert descriptor.z_fraction > 0.0
+    # Height nudge raises z_fraction; clash-only rescue may keep z_fraction at 0.
     assert descriptor.z_abs is not None
     assert float(descriptor.z_abs) > surface_z + 0.35
     gate_ok, min_d, gate_reason = check_initial_placement_distance(

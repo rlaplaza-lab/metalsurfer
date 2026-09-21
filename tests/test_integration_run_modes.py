@@ -393,7 +393,7 @@ def _assert_survivor_physics(
             )
         else:
             # Local-normal materials: COM height along the site normal equals
-            # surface_ref + z_offset (clearance lift included for NP).
+            # surface_ref + z_offset (contact-solved for NP).
             assert desc.z_offset is not None
             assert float(desc.z_offset) > 0.0
 

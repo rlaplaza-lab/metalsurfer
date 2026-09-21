@@ -644,13 +644,7 @@ def generate_placement_from_spec_with_reason(
             site_context=site_context,
         )
 
-    resolved_ctx = site_context_for_sampling(
-        slab_for_sites if slab_for_sites is not None else slab,
-        config,
-        site_context,
-        full_slab=slab,
-    )
-
+    # Pass the catalog through unchanged. Pose resolves only when omitted.
     adsorbate = conformers[spec.conformer_index].copy()
 
     placement_ctx, pose_fail = _pose_from_spec(
@@ -659,7 +653,7 @@ def generate_placement_from_spec_with_reason(
         slab,
         config,
         smiles,
-        site_context=resolved_ctx,
+        site_context=site_context,
         slab_for_sites=slab_for_sites,
         pose_cache=pose_cache,
     )

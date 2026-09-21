@@ -615,3 +615,126 @@ def test_pose_batch_cache_surface_radii_use_derived_top_depth():
     assert cache.r_surface_top_layer == pytest.approx(
         _get_site_surface_radii(slab, None)
     )
+
+
+def test_water_en_down_contact_atom_is_oxygen():
+    """EN-down water places the O binder at the covalent contact gate (zf=0.5)."""
+    from metalsurfer.placement.orientation import _site_type_z_offset
+    from metalsurfer.placement.pose import (
+        _contact_atom_index,
+        _contact_gap_angstrom,
+        _pose_from_spec,
+    )
+    from metalsurfer.placement.site_enumeration import _get_site_surface_radii
+
+    slab = make_slab()
+    water = make_water()
+    config = AdsorptionConfig(material_type="slab", seed=0)
+    ctx_sites = _get_unique_sites_for_specs(slab, config)
+    assert ctx_sites.use_sites and ctx_sites.sites
+    # Prefer an atop site when available.
+    site_index = next(
+        (i for i, s in enumerate(ctx_sites.sites) if s.site_type == "atop"),
+        0,
+    )
+    site = ctx_sites.sites[site_index]
+    symbols = list(water.get_chemical_symbols())
+    o_idx = symbols.index("O")
+    spec = PlacementSpec(
+        conformer_index=0,
+        orientation_type="EN-down",
+        face_flip=False,
+        en_atom_index=o_idx,
+        site_index=site_index,
+        site_type=str(site.site_type),
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+    ctx, fail = _pose_from_spec(water, spec, slab, config, "O", site_context=ctx_sites)
+    assert fail is None and ctx is not None
+    n_hat = np.asarray(ctx.normal, dtype=float)
+    contact_idx = _contact_atom_index(
+        ctx.rotated_pos,
+        n_hat,
+        symbols,
+        orientation_type=spec.orientation_type,
+        en_atom_index=spec.en_atom_index,
+    )
+    assert contact_idx == o_idx
+    r_surface = _get_site_surface_radii(slab, site)
+    site_offset = float(
+        _site_type_z_offset(slab, site, spec.site_type or "", r_surface=r_surface)
+    )
+    contact_gap = _contact_gap_angstrom(
+        config,
+        contact_symbol="O",
+        r_surface=float(r_surface),
+        site_type_offset=site_offset,
+    )
+    atom_h = (
+        ctx.rotated_pos + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs])
+    ) @ n_hat
+    # Oxygen at/above the contact gate; hydrogens must not dig below their gate.
+    assert float(atom_h[o_idx]) >= ctx.surface_ref + contact_gap - 1e-5
+    h_idxs = [i for i, s in enumerate(symbols) if s == "H"]
+    for hi in h_idxs:
+        assert float(atom_h[hi]) >= float(atom_h[o_idx]) - 0.5
+
+
+def test_pose_does_not_expand_symmetry_reduced_catalog():
+    """Passed SiteContext is indexed as-is even when full_slab has adsorbates."""
+    from metalsurfer.placement.site_context import (
+        resolve_site_context_for_sampling,
+        site_context_for_occupied_surface,
+    )
+
+    slab = make_slab(nx=2, ny=2)
+    config = AdsorptionConfig(material_type="slab", seed=0)
+    reduced = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    assert reduced.clustered_sites is not None
+    assert len(reduced.clustered_sites) > len(reduced.sites)
+    ads = Atoms(
+        "H",
+        positions=[reduced.clustered_sites[0].xyz + np.array([0.0, 0.0, 0.2])],
+    )
+    full = slab.copy() + ads
+    wide_index = len(reduced.sites)  # valid only on the clustered catalog
+    assert wide_index < len(reduced.clustered_sites)
+    spec = PlacementSpec(
+        conformer_index=0,
+        orientation_type="round",
+        face_flip=False,
+        en_atom_index=None,
+        site_index=wide_index,
+        site_type="atop",
+        tilt_deg=0.0,
+        azimuth_deg=0.0,
+        azimuth_in_plane_deg=0.0,
+        z_fraction=0.5,
+        placement_index=0,
+    )
+    _bad, reason = generate_placement_from_spec_with_reason(
+        spec,
+        [make_water()],
+        full,
+        config,
+        smiles="O",
+        site_context=reduced,
+        slab_for_sites=slab,
+    )
+    assert _bad is None
+    assert reason == "invalid_site_index"
+    sampling = site_context_for_occupied_surface(reduced)
+    ok = generate_placement_from_spec(
+        spec,
+        [make_water()],
+        full,
+        config,
+        smiles="O",
+        site_context=sampling,
+        slab_for_sites=slab,
+    )
+    assert ok is not None

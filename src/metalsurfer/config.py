@@ -862,7 +862,8 @@ class AdsorptionConfig:
     # Write sites_plugin.xyz / sites_final.xyz overlays (Z=0 markers on substrate).
     debug_write_sites: bool = False
     # When True and the first one-shot pass is short with failed-spec keys,
-    # run one diversity round that re-enumerates excluding those keys.
+    # run one diversity round that re-enumerates excluding those keys and any
+    # site_index that failed with adsorbate_overlap (not env_fingerprint).
     placement_retry_enabled: bool = True
     # Cap on specs requested for one-shot fill as a multiple of the target count.
     placement_retry_oversample_max: float = 6.0

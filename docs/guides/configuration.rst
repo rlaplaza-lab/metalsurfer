@@ -117,22 +117,24 @@ Placement success levers
   from binder/ring chemistry; set ``False`` and tune
   ``flat_aromatic_parallel_fraction`` for a fixed mix.
 - **Distance recovery** — ``placement_distance_recovery=True`` applies one
-  analytic height nudge, then (when ``placement_clash_descent=True``) a
-  chemistry-scaled Packmol-style rigid-body clash descent. When clash descent
-  is off, discrete in-plane offsets within ``placement_x_range`` /
-  ``placement_y_range`` are used instead. ``adsorbate_overlap`` and non-porous
-  ``vdw_overlap`` skip height; porous ``vdw_overlap`` uses the same
-  height-then-clash path as ``too_close``. Use ``placement_clash_descent=False``
+  analytic height nudge for normal-direction failures (``too_close``,
+  ``too_far``, ``contact_distance_too_large``, ``vdw_overlap``), skips height
+  for mostly in-plane penetration, and cheap-fails huge normal penetration
+  before Packmol. When ``placement_clash_descent=True``, a chemistry-scaled
+  rigid-body clash descent follows; otherwise discrete XY offsets within
+  ``placement_x_range`` / ``placement_y_range``. ``adsorbate_overlap`` skips
+  height. Use ``placement_clash_descent=False``
   with ``(0.0, 0.0)`` XY ranges for height-only recovery, or
   ``placement_distance_recovery=False`` to disable.
 - **Site window** — ``voronoi_auto_widen=True`` retries once with a wider Voronoi
   accessibility window when the first pass finds no sites; pair with explicit
   ``voronoi_probe_radius`` / ``voronoi_max_site_distance`` when comparing windows.
 - **Fill** — one-shot oversample (``placement_retry_oversample_max``) requests
-  ``min(capacity, num_placements * oversample)`` specs, materializes once, and
-  keeps up to ``num_placements``. When ``placement_retry_enabled``, the first
-  pass is short, and materialization recorded failed-spec keys, one diversity
-  round excludes those keys. Per-spec
+  ``min(capacity, num_placements * oversample)`` specs, materializes in chunks
+  of about ``num_placements``, and stops early once full. When
+  ``placement_retry_enabled``, the first pass is short, and materialization
+  recorded failures, one diversity round excludes failed-spec keys and
+  ``adsorbate_overlap`` site indices (not shared ``env_fingerprint``). Per-spec
   materialization runs in a thread pool sized by ``placement_materialize_workers``
   (joblib-style; ``None`` inherits ``n_jobs``, which defaults to ``-2`` = all
   but one CPU). BO eval batches wrap the
@@ -213,9 +215,6 @@ ethene/Ru₅₅, slim camphor/Cu(111) BO):
 - Set ``site_generator="adaptive_grid"`` only when you explicitly want the
   uniform wall-near path (e.g. stepped/rough slabs where topology is sparse).
   Do **not** use it for MOF pore-centre screening.
-- Placement diversity retries also skip sites whose ``env_fingerprint`` matched
-  a failed materialization (in addition to failed ``site_index`` / spec keys).
-
 Site uniqueness and sampling
 ----------------------------
 

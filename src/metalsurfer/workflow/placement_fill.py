@@ -191,6 +191,62 @@ def materialize_specs(
     )
 
 
+def _materialize_pool_in_chunks(
+    *,
+    specs: list[PlacementSpec],
+    n_target: int,
+    conformers: list[Atoms],
+    slab_atoms: Atoms,
+    calculator,
+    config: AdsorptionConfig,
+    smiles: str,
+    site_context: SiteContext | None,
+    slab_for_sites: Atoms,
+    combined: list[Atoms],
+    placement_ids: list[int],
+    descriptors: list[PlacementDescriptor],
+    failures: list[PlacementFailureEvent],
+    failed_keys: set[tuple],
+    crowded_site_indices: set[int],
+    last_spec_by_index: dict[int, PlacementSpec],
+) -> None:
+    """Materialize *specs* in chunks of ~*n_target*; stop once the target is met."""
+    if n_target <= 0 or not specs:
+        return
+    chunk_size = max(1, int(n_target))
+    for start in range(0, len(specs), chunk_size):
+        if len(combined) >= n_target:
+            break
+        chunk = specs[start : start + chunk_size]
+        new_combined, new_ids, new_descriptors, new_failures = (
+            _materialize_spec_placements(
+                specs=chunk,
+                conformers=conformers,
+                slab_atoms=slab_atoms,
+                calculator=calculator,
+                config=config,
+                smiles=smiles,
+                site_context=site_context,
+                slab_for_sites=slab_for_sites,
+            )
+        )
+        for fail in new_failures:
+            failed_spec = last_spec_by_index.get(fail.placement_id)
+            if failed_spec is not None:
+                failed_keys.add(placement_spec_key(failed_spec))
+                # Only ban the vertex for packing clashes; pose failures keep
+                # other heights/tilts and same-fingerprint copies eligible.
+                if fail.reason == "adsorbate_overlap":
+                    crowded_site_indices.add(int(failed_spec.site_index))
+        failures.extend(new_failures)
+
+        take = min(n_target - len(combined), len(new_combined))
+        if take:
+            combined.extend(new_combined[:take])
+            placement_ids.extend(new_ids[:take])
+            descriptors.extend(new_descriptors[:take])
+
+
 def fill_materialized_placements(
     *,
     conformers: list[Atoms],
@@ -202,12 +258,15 @@ def fill_materialized_placements(
     calculator,
     conformer_energies: list[float] | None = None,
 ) -> MaterializeFillResult:
-    """Enumerate an oversized pool once, materialize, and take up to ``n_target``.
+    """Enumerate an oversized pool once, materialize in chunks, take ``n_target``.
 
     Pool size is ``min(capacity, n_target * placement_retry_oversample_max)``.
-    When ``placement_retry_enabled`` and the first pass is short, one diversity
-    round re-enumerates excluding exact failed-spec keys, failed ``site_index``
-    values, and sites whose ``env_fingerprint`` matched a failed placement.
+    Specs are materialized in chunks of about ``n_target`` and stop early once
+    enough successes exist. When ``placement_retry_enabled`` and the first pass
+    is short, one diversity round re-enumerates excluding exact failed-spec keys
+    and ``site_index`` values that failed with ``adsorbate_overlap`` (not
+    ``env_fingerprint`` — clean metals share fingerprints across translational
+    copies).
     """
     n_target = config.num_placements
     if n_target is None:
@@ -253,35 +312,26 @@ def fill_materialized_placements(
     descriptors: list[PlacementDescriptor] = []
     failures: list[PlacementFailureEvent] = []
     failed_keys: set[tuple] = set()
-    failed_site_indices: set[int] = set()
-    failed_env_fingerprints: set[tuple] = set()
+    crowded_site_indices: set[int] = set()
     last_spec_by_index: dict[int, PlacementSpec] = {}
     next_placement_index = 0
     attempts_used = 0
-    sampling_sites = list(site_context.sites) if site_context is not None else []
-
-    def _site_env_fp(site_index: int) -> tuple | None:
-        if 0 <= int(site_index) < len(sampling_sites):
-            return tuple(sampling_sites[int(site_index)].env_fingerprint)
-        return None
 
     def _filter_failed(spec: PlacementSpec) -> bool:
         if placement_spec_key(spec) in failed_keys:
             return False
-        if int(spec.site_index) in failed_site_indices:
-            return False
-        fp = _site_env_fp(int(spec.site_index))
-        if fp is not None and fp in failed_env_fingerprints:
+        if int(spec.site_index) in crowded_site_indices:
             return False
         if config.placement_filter is not None:
             return bool(config.placement_filter(spec))
         return True
 
-    def _run_round(*, n_request: int, seed: int, exclude_failed: bool) -> None:
-        nonlocal next_placement_index, attempts_used
-        if n_request <= 0 or len(combined) >= effective_target:
-            return
-
+    def _enumerate_and_index(
+        *, n_request: int, seed: int, exclude_failed: bool
+    ) -> list[PlacementSpec]:
+        nonlocal next_placement_index
+        if n_request <= 0:
+            return []
         specs = enumerate_placement_specs(
             conformers,
             slab_for_sites,
@@ -295,50 +345,45 @@ def fill_materialized_placements(
             conformer_energies=conformer_energies,
             grid_info=grid_info,
         )
-        if not specs:
-            return
-
         for spec in specs:
             spec.placement_index = next_placement_index
             next_placement_index += 1
             last_spec_by_index[spec.placement_index] = spec
+        return specs
 
-        attempts_used += 1
-        new_combined, new_ids, new_descriptors, new_failures = (
-            _materialize_spec_placements(
-                specs=specs,
-                conformers=conformers,
-                slab_atoms=slab_atoms,
-                calculator=calculator,
-                config=config,
-                smiles=smiles,
-                site_context=site_context,
-                slab_for_sites=slab_for_sites,
-            )
-        )
-        for fail in new_failures:
-            failed_spec = last_spec_by_index.get(fail.placement_id)
-            if failed_spec is not None:
-                failed_keys.add(placement_spec_key(failed_spec))
-                failed_site_indices.add(int(failed_spec.site_index))
-                fp = _site_env_fp(int(failed_spec.site_index))
-                if fp is not None:
-                    failed_env_fingerprints.add(fp)
-        failures.extend(new_failures)
-
-        take = min(effective_target - len(combined), len(new_combined))
-        if take:
-            combined.extend(new_combined[:take])
-            placement_ids.extend(new_ids[:take])
-            descriptors.extend(new_descriptors[:take])
-
-    _run_round(
+    pool = _enumerate_and_index(
         n_request=_pool_request_count(
             effective_target, oversample_max, capacity=pool_capacity
         ),
         seed=config.seed,
         exclude_failed=False,
     )
+
+    def _run_chunks(specs: list[PlacementSpec]) -> None:
+        nonlocal attempts_used
+        if not specs:
+            return
+        attempts_used += 1
+        _materialize_pool_in_chunks(
+            specs=specs,
+            n_target=effective_target,
+            conformers=conformers,
+            slab_atoms=slab_atoms,
+            calculator=calculator,
+            config=config,
+            smiles=smiles,
+            site_context=site_context,
+            slab_for_sites=slab_for_sites,
+            combined=combined,
+            placement_ids=placement_ids,
+            descriptors=descriptors,
+            failures=failures,
+            failed_keys=failed_keys,
+            crowded_site_indices=crowded_site_indices,
+            last_spec_by_index=last_spec_by_index,
+        )
+
+    _run_chunks(pool)
 
     remaining = effective_target - len(combined)
     if remaining > 0 and config.placement_retry_enabled and failed_keys:
@@ -347,12 +392,14 @@ def fill_materialized_placements(
             if config.placement_fill_clamp_to_capacity
             else None
         )
-        _run_round(
-            n_request=_pool_request_count(
-                remaining, oversample_max, capacity=retry_capacity
-            ),
-            seed=config.seed + 1,
-            exclude_failed=True,
+        _run_chunks(
+            _enumerate_and_index(
+                n_request=_pool_request_count(
+                    remaining, oversample_max, capacity=retry_capacity
+                ),
+                seed=config.seed + 1,
+                exclude_failed=True,
+            )
         )
 
     return MaterializeFillResult(
