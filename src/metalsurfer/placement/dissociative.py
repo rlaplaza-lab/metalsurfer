@@ -5,6 +5,7 @@ import struct
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 from ase import Atoms
@@ -34,6 +35,7 @@ from .occupancy import (
 from .orientation import _site_type_z_offset
 from .pose import (
     _descriptor_from_placement,
+    _height_above_supports,
     _resolve_surface_ref,
     _validate_posed_adsorbate,
 )
@@ -572,11 +574,10 @@ def _place_dissociative_two_sites(
 ) -> tuple[Atoms, PlacementDescriptor] | None:
     """Place a diatomic at two sites with a shared height offset.
 
-    On slabs and nanoparticles, ``height_override`` is the gap above the metal
-    surface reference (same convention as molecular placement). Topology /
-    hollow vertices often sit above the metal, so stacking the offset on
-    ``site.xyz`` would overshoot the desorption gate. On nanoparticles,
-    both fragments share one offset direction so pair spacing is preserved.
+    ``height_override`` is the gap above each site's coordinating-atom plane
+    (same ``_height_above_supports`` rule as molecular contact). Plugin-lifted
+    ``site.xyz`` is never the clearance baseline. Nanoparticle fragments share
+    one offset direction so pair spacing is preserved.
     """
     if len(sites) != 2 or len(adsorbate) != 2:
         return None
@@ -615,32 +616,37 @@ def _place_dissociative_two_sites(
             top_layer_tolerance=config.top_layer_tolerance,
             planar_z_variance_threshold=config.planar_z_variance_threshold,
         )
-        target_h = float(surface_ref + z_offset)
-        pos1 = base1 + (target_h - float(np.dot(base1, n_hat))) * n_hat
-        pos2 = base2 + (target_h - float(np.dot(base2, n_hat))) * n_hat
-        h_surface = float(surface_ref)
+        reduce: Literal["max", "mean"] = "max"
         site_reference_frame = "local_site" if is_local_ref else "global_top_layer"
     else:
         # Nanoparticle only (porous rejected upstream).
         n_sum = np.asarray(n1, dtype=float) + np.asarray(n2, dtype=float)
         n_norm = float(np.linalg.norm(n_sum))
         n_hat = n_sum / (n_norm + _VECTOR_NORM_EPS) if n_norm > _VECTOR_NORM_EPS else n1
-
-        def _metal_height(site: Site) -> float:
-            if site.slab_indices:
-                idx = [int(i) for i in site.slab_indices if 0 <= int(i) < len(ref_pos)]
-                if idx:
-                    return float(np.mean(np.asarray(ref_pos[idx], dtype=float) @ n_hat))
-            return float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
-
-        h1 = _metal_height(site1)
-        h2 = _metal_height(site2)
-        # Per-site metal height keeps the in-plane pair vector (shared target
-        # height would shear H–H when the two vertices sit at different altitudes).
-        pos1 = base1 + (h1 + z_offset - float(np.dot(base1, n_hat))) * n_hat
-        pos2 = base2 + (h2 + z_offset - float(np.dot(base2, n_hat))) * n_hat
-        h_surface = 0.5 * (h1 + h2)
+        surface_ref = None
+        is_local_ref = True
+        reduce = "mean"
         site_reference_frame = "local_site"
+
+    def _plane_h(site: Site) -> float:
+        vertex_h = float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
+        # Local / NP: vertex if supports empty. Planar slab: shared global ref.
+        fallback = vertex_h if is_local_ref or surface_ref is None else float(surface_ref)
+        return _height_above_supports(
+            site, ref_pos, n_hat, reduce=reduce, fallback=fallback
+        )
+
+    # Per-site plane keeps the in-plane pair vector (shared absolute height
+    # would shear H–H when the two vertices sit at different altitudes).
+    h1 = _plane_h(site1)
+    h2 = _plane_h(site2)
+    pos1 = base1 + (h1 + z_offset - float(np.dot(base1, n_hat))) * n_hat
+    pos2 = base2 + (h2 + z_offset - float(np.dot(base2, n_hat))) * n_hat
+    h_surface = (
+        float(surface_ref)
+        if surface_ref is not None and not is_local_ref
+        else 0.5 * (h1 + h2)
+    )
 
     symbols = adsorbate.get_chemical_symbols()
     result = Atoms(symbols=symbols, positions=[pos1, pos2])

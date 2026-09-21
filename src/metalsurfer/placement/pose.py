@@ -4,6 +4,7 @@ import dataclasses
 import logging
 import random
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 from ase import Atoms
@@ -190,25 +191,45 @@ def _contact_atom_index(
     return int(np.argmin(heights))
 
 
-def _contact_support_ref(
+def _framework_plane_height(
     site: Site,
-    *,
-    surface_ref: float,
-    place_normal: np.ndarray,
     positions: np.ndarray,
-) -> float:
-    """Height of coordinating atoms for contact clearance (not a lifted site vertex).
+    n_hat: np.ndarray,
+    *,
+    reduce: Literal["max", "mean"] = "max",
+) -> float | None:
+    """Height of coordinating framework atoms along *n_hat*, or ``None``.
 
-    Topology sites sit above their supports; measuring pair clearance from the
-    site vertex double-counts that lift on rough / puckered slabs (e.g. rutile
-    bridging oxygens). Fall back to ``surface_ref`` when supports are unknown.
+    Site vertices from any plugin may already sit above their supports
+    (topology lift, clearance snap, free-volume). Clearance and height
+    offsets must use this plane so lift is applied once.
+
+    ``"max"`` clears every support (contact); ``"mean"`` is the NP shell ref.
     """
-    if site.slab_indices:
-        idx = np.asarray(site.slab_indices, dtype=int)
-        if idx.size > 0:
-            n_hat = _placement_normal_hat(place_normal)
-            return float(np.max(np.asarray(positions, dtype=float)[idx] @ n_hat))
-    return float(surface_ref)
+    if not site.slab_indices:
+        return None
+    idx = np.asarray(site.slab_indices, dtype=int)
+    n_pos = len(positions)
+    idx = idx[(idx >= 0) & (idx < n_pos)]
+    if idx.size == 0:
+        return None
+    heights = np.asarray(positions, dtype=float)[idx] @ _placement_normal_hat(n_hat)
+    if reduce == "mean":
+        return float(np.mean(heights))
+    return float(np.max(heights))
+
+
+def _height_above_supports(
+    site: Site,
+    positions: np.ndarray,
+    n_hat: np.ndarray,
+    *,
+    reduce: Literal["max", "mean"] = "max",
+    fallback: float,
+) -> float:
+    """Support-plane height along *n_hat*, or *fallback* when supports are empty."""
+    fw = _framework_plane_height(site, positions, n_hat, reduce=reduce)
+    return float(fallback) if fw is None else fw
 
 
 def _contact_gap_angstrom(
@@ -293,26 +314,19 @@ def _resolve_surface_ref(
     cell: np.ndarray | None = None,
     positions: np.ndarray | None = None,
 ) -> tuple[float, bool]:
-    """Return *(surface_ref, is_local_ref)* for z-offset calculations.
+    """Return *(surface_ref, is_local_ref)* for height / z-offset calculations.
 
-    For slabs the reference is the topmost height along the slab normal so that
-    z_offset is the gap above the surface layer.  For nanoparticles with known
-    coordinating atoms, the reference is those metal atoms projected onto the
-    site normal (topology sites sit above the metal; stacking z_offset on the
-    site vertex would double-count).  Porous sites without indices use
-    the site vertex projection (Voronoi voids are already in free volume).
+    When supports are known, ``surface_ref`` is the coordinating-atom plane —
+    never a plugin-lifted ``site.xyz`` (topology / clearance snap / free volume).
 
-    When *rough_slab_local_z* is True and the slab is non-planar, use the
-    site's own height along the normal instead of the global maximum.  This
-    prevents step-edge sites from getting excessive z offsets.
+    - **Planar slab:** global max height along the slab normal.
+    - **Rough slab** (``rough_slab_local_z``): local support plane (site vertex
+      only if supports are empty).
+    - **Nanoparticle:** mean support height (site vertex if empty).
+    - **Porous:** site vertex (voids are already free volume).
 
-    Pass the same *top_layer_tolerance* / *planar_z_variance_threshold* used for
-    site enumeration so planarity decisions stay consistent.
-
-    *top_layer_planar* skips the per-placement lstsq when provided by a batch cache.
-    *global_surface_ref* (batch-cached max height along the slab normal) skips
-    the per-placement height recomputation for the non-local slab reference.
-    *cell* / *positions* skip repeated ASE getters when provided by a batch cache.
+    *top_layer_planar* / *global_surface_ref* / *cell* / *positions* are batch
+    cache hooks that skip repeated ASE / planarity work.
     """
     cell_arr = (
         np.asarray(cell, dtype=float)
@@ -348,7 +362,14 @@ def _resolve_surface_ref(
             else:
                 is_planar = top_layer_planar
             if not is_planar:
-                return float(_height_along_slab_normal(site.xyz, cell_arr)), True
+                n_hat = _slab_normal(cell_arr)
+                vertex_h = float(_height_along_slab_normal(site.xyz, cell_arr))
+                return (
+                    _height_above_supports(
+                        site, pos, n_hat, reduce="max", fallback=vertex_h
+                    ),
+                    True,
+                )
         if global_surface_ref is not None:
             return float(global_surface_ref), False
         return float(np.max(_height_along_slab_normal(pos, cell_arr))), False
@@ -359,16 +380,17 @@ def _resolve_surface_ref(
         if nrm <= _VECTOR_NORM_EPS:
             return float(site_xyz[2]), True
         n_hat = site_normal / nrm
-        if mat_type == "nanoparticle" and site.slab_indices:
-            idx = [int(i) for i in site.slab_indices if 0 <= int(i) < len(pos)]
-            if idx:
-                return float(np.mean(pos[idx] @ n_hat)), True
-        return float(np.dot(site_xyz, n_hat)), True
-    # No site and no site normal: the Cartesian z-max is arbitrary for radially
-    # symmetric nanoparticles/porous clusters and corrupts the recovered z
-    # offset. Prefer a slab-normal height (planar systems) or, failing that, the
-    # radial distance from the center of mass (clusters) which tracks the outer
-    # shell for any orientation.
+        vertex_h = float(np.dot(site_xyz, n_hat))
+        if mat_type == "nanoparticle":
+            return (
+                _height_above_supports(
+                    site, pos, n_hat, reduce="mean", fallback=vertex_h
+                ),
+                True,
+            )
+        return vertex_h, True
+    # No site: Cartesian z-max is arbitrary for radial clusters. Prefer slab-normal
+    # height when the cell has volume; else radial distance from COM.
     if cell_has_volume(cell_arr):
         return (
             float(np.max(_height_along_slab_normal(pos, cell_arr))),
@@ -486,7 +508,8 @@ def _pose_from_spec(
     if diversity_window < _PARALLEL_Z_MIN_HI_MARGIN:
         diversity_window = _PARALLEL_Z_MIN_HI_MARGIN
 
-    # Slab: top-layer z (Voronoi vertex z can sit between layers). NP/pore: local vertex.
+    # Framework plane when supports are known; site vertex only for pores /
+    # empty-support sites.
     surface_ref, is_local_ref = _resolve_surface_ref(
         site,
         ref_slab,
@@ -565,11 +588,12 @@ def _pose_from_spec(
             if pose_cache is not None and pose_cache.positions is not None
             else np.asarray(ref_slab.get_positions(), dtype=float)
         )
-        contact_ref = _contact_support_ref(
+        contact_ref = _height_above_supports(
             site,
-            surface_ref=float(surface_ref),
-            place_normal=place_normal,
-            positions=pos_for_support,
+            pos_for_support,
+            place_normal,
+            reduce="max",
+            fallback=float(surface_ref),
         )
         delta = (zf - 0.5) * diversity_window
         target_atom_h = float(contact_ref) + contact_gap + delta
@@ -730,8 +754,8 @@ def _recover_z_offset(
 
     For slabs this is ``dot(placement, n_slab) - surface_ref``.  For
     nanoparticle / pore sites it is ``dot(placement, n_site) - surface_ref``
-    when the site normal is usable (``surface_ref`` is the site projected onto
-    the same normal).
+    when the site normal is usable (``surface_ref`` is the coordinating-atom
+    plane when supports are known, else the site vertex on that normal).
     """
     pose = ctx.pose
     site = ctx.site

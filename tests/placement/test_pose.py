@@ -624,7 +624,7 @@ def test_water_en_down_contact_atom_is_oxygen():
     from metalsurfer.placement.pose import (
         _contact_atom_index,
         _contact_gap_angstrom,
-        _contact_support_ref,
+        _height_above_supports,
         _pose_from_spec,
     )
     from metalsurfer.placement.site_enumeration import _get_site_surface_radii
@@ -676,11 +676,12 @@ def test_water_en_down_contact_atom_is_oxygen():
         r_surface=float(r_surface),
         site_type_offset=site_offset,
     )
-    contact_ref = _contact_support_ref(
+    contact_ref = _height_above_supports(
         site,
-        surface_ref=float(ctx.surface_ref),
-        place_normal=n_hat,
-        positions=slab.get_positions(),
+        slab.get_positions(),
+        n_hat,
+        reduce="max",
+        fallback=float(ctx.surface_ref),
     )
     atom_h = (
         ctx.rotated_pos + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs])
@@ -693,15 +694,18 @@ def test_water_en_down_contact_atom_is_oxygen():
 
 
 def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
-    """Puckered slabs: pair clearance is measured from supports, not topology lift."""
+    """Any plugin lift in site.xyz must not stack on pair-clearance contact."""
     from metalsurfer.placement.pose import (
         _contact_gap_angstrom,
-        _contact_support_ref,
+        _framework_plane_height,
+        _height_above_supports,
         _pose_from_spec,
+        _resolve_surface_ref,
     )
     from metalsurfer.placement.site_enumeration import _get_site_surface_radii
+    from metalsurfer.placement.site_types import Site
 
-    # Two-height top layer (bridging O above metal) so local_z uses site.xyz.
+    # Two-height top layer (bridging O above metal).
     a = 2.7
     positions = []
     symbols = []
@@ -722,6 +726,8 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
         material_type="slab",
         seed=0,
         rough_slab_local_z=True,
+        # Include both Ti and O in the top-layer window → non-planar local ref.
+        top_layer_tolerance=1.5,
         planar_z_variance_threshold=0.01,
     )
     ctx_sites = _get_unique_sites_for_specs(slab, config)
@@ -750,15 +756,20 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
     ctx, fail = _pose_from_spec(water, spec, slab, config, "O", site_context=ctx_sites)
     assert fail is None and ctx is not None
     n_hat = np.asarray(ctx.normal, dtype=float)
-    support_h = _contact_support_ref(
+    pos = np.asarray(slab.get_positions(), dtype=float)
+    support_h = _height_above_supports(
         site,
-        surface_ref=float(ctx.surface_ref),
-        place_normal=n_hat,
-        positions=slab.get_positions(),
+        pos,
+        n_hat,
+        reduce="max",
+        fallback=float(ctx.surface_ref),
     )
     # Topology lift puts the site vertex above the supports.
     site_h = float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
     assert site_h > support_h + 0.2
+    # Local surface_ref and contact share the framework plane (never site.xyz).
+    assert ctx.is_local_ref
+    assert float(ctx.surface_ref) == pytest.approx(support_h, abs=1e-9)
     r_surface = _get_site_surface_radii(slab, site)
     contact_gap = _contact_gap_angstrom(
         config,
@@ -772,6 +783,43 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
     # Contact is near support + gap, not the lifted site vertex + gap.
     assert float(atom_h[o_idx]) == pytest.approx(support_h + contact_gap, abs=0.15)
     assert float(atom_h[o_idx]) < site_h + contact_gap - 0.2
+
+    # Plugin-agnostic: the same support plane is used for every site_source label.
+    for source in (
+        "topology_hollow",
+        "voronoi",
+        "adaptive_grid",
+        "rolling_probe",
+        "injected_atop",
+    ):
+        lifted = Site(
+            xyz=np.asarray(site.xyz, dtype=float) + 2.0 * n_hat,
+            normal=np.asarray(site.normal, dtype=float),
+            site_type=site.site_type,
+            slab_indices=tuple(site.slab_indices),
+            material_type="slab",
+            site_source=source,
+            env_fingerprint=site.env_fingerprint,
+        )
+        fw = _framework_plane_height(lifted, pos, n_hat, reduce="max")
+        ref, local = _resolve_surface_ref(
+            lifted,
+            slab,
+            "slab",
+            rough_slab_local_z=True,
+            top_layer_tolerance=1.5,
+            planar_z_variance_threshold=0.01,
+        )
+        assert local
+        assert fw == pytest.approx(support_h, abs=1e-9)
+        assert ref == pytest.approx(support_h, abs=1e-9)
+        assert _height_above_supports(
+            lifted,
+            pos,
+            n_hat,
+            reduce="max",
+            fallback=ref,
+        ) == pytest.approx(support_h, abs=1e-9)
 
 
 def test_pose_does_not_expand_symmetry_reduced_catalog():

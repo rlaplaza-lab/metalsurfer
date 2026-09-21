@@ -382,7 +382,7 @@ def test_local_site_distance_recovery_height_direction(
 
 
 def test_resolve_surface_ref_rough_slab():
-    """On a rough slab, local z should be used when rough_slab_local_z=True."""
+    """On a rough slab, local z uses the coordinating-atom plane, not site.xyz."""
     # Build a stepped slab: two terraces at different z
     positions = []
     for ix in range(3):
@@ -399,17 +399,27 @@ def test_resolve_surface_ref_rough_slab():
         pbc=[True, True, True],
     )
 
-    site_low = _make_site([0.0, 0.0, 2.7])
+    # Lower-terrace support (atom at z=2.7); site vertex is artificially lifted.
+    lower_support = 1  # first (ix=0,iy=0) upper of the z=2.7 layer
+    assert float(slab.positions[lower_support][2]) == pytest.approx(2.7)
+    site_low = _make_site(
+        [0.0, 0.0, 3.5],
+        slab_indices=(lower_support,),
+    )
 
-    # With rough_slab_local_z=True and non-planar slab: use site z
+    # Wide top-layer window so both terraces enter the planarity check.
     ref_low, is_local = _resolve_surface_ref(
         site_low,
         slab,
         "slab",
         rough_slab_local_z=True,
+        top_layer_tolerance=3.0,
+        planar_z_variance_threshold=0.01,
     )
-    # The slab is non-planar so this should return the site's own z
-    # (or global max if planar check says it's still planar)
+    assert is_local is True
+    assert ref_low == pytest.approx(2.7, abs=1e-9)
+    # Must not use the pre-lifted site vertex as the surface reference.
+    assert ref_low < float(site_low.xyz[2]) - 0.5
 
     # Without rough_slab_local_z: always global max
     ref_global, is_local_g = _resolve_surface_ref(
@@ -440,7 +450,8 @@ def test_resolve_surface_ref_uses_config_planarity_tolerance():
         cell=[5.0, 5.0, 20.0],
         pbc=[True, True, False],
     )
-    site = _make_site([1.25, 1.0, 0.85])
+    # Support on the upper terrace; site vertex lifted above it (plugin-style).
+    site = _make_site([1.25, 1.0, 1.4], slab_indices=(3,))
 
     assert _is_top_layer_planar(slab, top_layer_tolerance=0.5) is True
     assert _is_top_layer_planar(slab, top_layer_tolerance=1.2) is False
@@ -461,10 +472,61 @@ def test_resolve_surface_ref_uses_config_planarity_tolerance():
     )
     assert local_narrow is False
     assert local_wide is True
-    assert ref_wide == pytest.approx(float(site.xyz[2]), abs=1e-9)
+    # Local mode: framework support height, never the lifted site vertex.
+    assert ref_wide == pytest.approx(0.85, abs=1e-9)
+    assert ref_wide < float(site.xyz[2]) - 0.3
     # Modes must differ by a clear margin (narrow=global max z=1.05,
-    # wide=local site z=0.85), not merely outside a rounding window.
+    # wide=local support z=0.85).
     assert abs(ref_narrow - ref_wide) > 0.1
+
+
+def test_resolve_surface_ref_ignores_lifted_site_vertex_for_all_materials():
+    """Supports beat site.xyz for NP surface_ref and rough-slab local ref."""
+    from metalsurfer.placement.pose import _framework_plane_height
+
+    # Nanoparticle-like: site vertex already clearance-snapped above metals.
+    positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [1.0, 1.7, 0.0],
+            [1.0, 0.6, 1.5],
+        ],
+        dtype=float,
+    )
+    slab = Atoms(
+        symbols=["Pt"] * len(positions),
+        positions=positions,
+        cell=[8.0, 8.0, 8.0],
+        pbc=False,
+    )
+    n_hat = np.array([0.0, 0.0, 1.0], dtype=float)
+    site = _make_site(
+        [1.0, 0.6, 3.0],
+        site_type="hollow",
+        source="adaptive_grid",
+        normal=n_hat,
+        slab_indices=(0, 1, 2),
+        material_type="nanoparticle",
+    )
+    fw = _framework_plane_height(site, positions, n_hat, reduce="mean")
+    assert fw == pytest.approx(0.0, abs=1e-9)
+    ref, is_local = _resolve_surface_ref(site, slab, "nanoparticle")
+    assert is_local
+    assert ref == pytest.approx(fw, abs=1e-9)
+    assert ref < float(site.xyz[2]) - 1.0
+
+    # Empty supports: fall back to site vertex (pores / unknown).
+    pore = _make_site(
+        [1.0, 0.6, 3.0],
+        site_type="pore",
+        source="voronoi",
+        normal=n_hat,
+        slab_indices=(),
+        material_type="porous",
+    )
+    ref_pore, _ = _resolve_surface_ref(pore, slab, "porous")
+    assert ref_pore == pytest.approx(float(np.dot(pore.xyz, n_hat)), abs=1e-9)
 
 
 def test_generate_placement_from_pose_respects_slab_for_sites():
