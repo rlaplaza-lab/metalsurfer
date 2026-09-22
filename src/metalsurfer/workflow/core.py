@@ -178,7 +178,6 @@ def process_molecule(
         n_placement_attempts = fill.n_attempts
         t_placement = time.perf_counter() - t0
 
-        # Log retry info if applicable
         if config.placement_retry_enabled and n_placement_attempts > 1:
             logger.info(
                 "Placement generation: %d attempts, %d/%d valid placements (%.2fs)",

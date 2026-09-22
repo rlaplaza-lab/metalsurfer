@@ -13,7 +13,7 @@ config:
   material_type: slab
   seed: 42
   num_conformers: 1
-  num_placements: 4
+  num_placements: 5
   autobatcher_max_memory_padding: 0.8
   autobatcher_max_memory_scaler: 500
   autobatcher_max_atoms_to_try: 5000

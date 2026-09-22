@@ -67,7 +67,7 @@ def _slice_optional_enrichment(
         return None
     values = np.asarray(arr)
     if len(values) != n_expected:
-        return None
+        raise ValueError(f"enrichment length {len(values)} != expected {n_expected}")
     return values[mask_or_idx]
 
 

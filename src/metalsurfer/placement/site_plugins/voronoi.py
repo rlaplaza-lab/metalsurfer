@@ -42,7 +42,7 @@ class VoronoiGenerator:
         reuse: Any = None,
     ) -> SiteCandidateBatch:
         """Enumerate Voronoi free-volume candidates for *ctx*."""
-        del reuse  # rebuild on auto-widen (extension margin depends on max)
+        _ = reuse  # no Qhull reuse
         positions = ctx.positions
         cell = ctx.cell
         pbc = ctx.pbc

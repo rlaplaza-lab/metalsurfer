@@ -726,9 +726,7 @@ class AdsorptionConfig:
     """
 
     model_name: str = "uma-s-1p2"
-    # UMA/FairChem task head for energy/force evaluation. ``"oc25"`` targets
-    # (electro)catalysis and requires ``*-1p2`` checkpoints; use ``"oc20"``
-    # with ``uma-s-1p1`` / ``uma-m-1p1``.
+    # UMA/FairChem task head: ``"oc25"`` needs ``*-1p2``; ``"oc20"`` with ``*-1p1``.
     task_name: str = "oc25"
     num_conformers: int = 10
     num_placements: int | None = None
@@ -742,24 +740,17 @@ class AdsorptionConfig:
     placement_z_range: tuple[float, float] = (0.7, 1.25)
     placement_z_scale_by_covalent_radius: bool = True
     placement_distance_recovery: bool = True
-    # Packmol-style rigid-body overlap descent during distance recovery and
-    # n-tuplet near-miss / pre-relax packing. When False, recovery falls back
-    # to discrete XY jitter only and n-tuplet keeps hard mutual-clearance skips.
+    # Rigid-body clash descent in recovery / n-tuplet packing; False → XY jitter only.
     placement_clash_descent: bool = True
     material_type: Literal["slab", "nanoparticle", "porous"] = "slab"
-    # ``voronoi_probe_radius`` / ``voronoi_max_site_distance`` / ``voronoi_auto_widen``
-    # apply to *every* material type: on slabs they gate the topology generator's
-    # accessibility window and drive the one-shot widen retry.
+    # Probe / max-distance / auto-widen apply to every material type.
     voronoi_probe_radius: float | None = None
     voronoi_max_site_distance: float | None = None
-    # Ridge enrichment of Voronoi vertices. Porous / rough slabs only:
-    # planar slabs and nanoparticles skip Voronoi (topology generators), so
-    # this flag is a no-op there.
+    # Ridge enrichment; no-op on planar slabs / nanoparticles (skip Voronoi).
     voronoi_site_enrichment: bool = True
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
-    # ``auto`` → topology (slab/NP) or Voronoi (porous). ``adaptive_grid`` /
-    # ``rolling_probe`` are selectable on all materials but never chosen by ``auto``.
+    # ``auto`` → topology (slab/NP) or Voronoi (porous); never chosen by auto: adaptive_grid / rolling_probe.
     site_generator: Literal[
         "auto", "topology", "voronoi", "adaptive_grid", "rolling_probe"
     ] = "auto"
@@ -771,12 +762,7 @@ class AdsorptionConfig:
     adaptive_grid_refine_levels: int = 0
     # Floor on merge_radius as a fraction of framework median NN.
     adaptive_grid_nms_framework_scale: float = 0.25
-    # Conformer prior for placement-spec selection.
-    # ``"uniform"`` keeps the conformer-agnostic stratified draw (ignores
-    # conformer energies). ``"boltzmann"`` (default) allocates spec slots per
-    # conformer in proportion to ``exp(-(E_i - E_min) / (k_B * T))`` using the
-    # conformer energies produced during conformer generation. Requires those
-    # energies to be available; falls back to uniform otherwise.
+    # Conformer prior: ``"boltzmann"`` weights by energy; ``"uniform"`` ignores energies.
     conformer_weighting: Literal["uniform", "boltzmann"] = "boltzmann"
     placement_filter: Callable[[PlacementSpec], bool] | None = field(
         default=None, repr=False
@@ -790,28 +776,17 @@ class AdsorptionConfig:
     symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
     site_equivalence_tolerance: float = DEFAULT_SITE_EQUIVALENCE_TOLERANCE
     planar_z_variance_threshold: float = DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
-    rough_slab_local_z: bool = True
     min_interatomic_distance: float = 0.5
     max_force_convergence: float = 0.05
     binding_distance_threshold: float = 4.0
     strict_initial_placement: bool = False
     reject_vdw_overlaps: bool = False
     vdw_overlap_scale: float = 1.0
-    # Minimum gap between a newly placed adsorbate and any pre-adsorbed molecule
-    # during saturation. Distinct from ``min_initial_distance`` (adsorbate vs
-    # substrate). Kept low by default so a single molecule on a bare slab is not
-    # affected; raise it to stop saturation packing adsorbates on top of each
-    # other. The placement gate enforces at least this value (never the looser
-    # covalent-sum default).
+    # Gap to pre-adsorbed molecules (not substrate); distinct from min_initial_distance.
     min_adsorbate_separation: float = MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM
-    # Under coverage, prune sites whose in-plane MIC distance from the catalog
-    # anchor (``Site.xyz``) to existing adsorbates is closer than
-    # ``min_adsorbate_separation``. When ``occupancy_use_footprint`` is on, rank
-    # survivors by lateral footprint clearance (not a second reject mask) so
-    # open sites are tried first.
+    # Under coverage, prune occupied anchors; footprint ranks survivors only.
     occupancy_use_footprint: bool = True
-    # Scale on the incoming in-plane footprint radius (COM-centred, thickness
-    # axis removed). Values in ``(0, 2]``; used only for ranking under coverage.
+    # Scale on incoming in-plane footprint radius; ranking under coverage only.
     occupancy_footprint_scale: float = OCCUPANCY_FOOTPRINT_SCALE_DEFAULT
     max_closest_approach: float = CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
     min_contact_atoms: int = 1
@@ -822,11 +797,7 @@ class AdsorptionConfig:
     rmsd_dedup_threshold: float = 0.1
     connectivity_multiplier: float = 1.3
     seed: int = DEFAULT_SEED
-    # Weighting temperature (K) for ``conformer_weighting="boltzmann"``. This is
-    # NOT a stochastic pre-filter: it only sets how sharply the deterministic
-    # per-conformer spec allocation is skewed toward low-energy conformers.
-    # Higher values flatten the prior toward uniform; lower values concentrate
-    # specs on the lowest-energy conformers. Ignored when weighting is uniform.
+    # Weighting T (K) for boltzmann prior only — NOT a stochastic pre-filter.
     boltzmann_temperature: float = 300.0
     min_pbc_image_separation: float = 8.0
     vacuum_box_size: float = 20.0
@@ -839,15 +810,13 @@ class AdsorptionConfig:
     multi_molecule_saturation: bool = False
     saturation_save_all_placements: bool = True
     save_benchmark_dataset: bool = False
-    # When False (default), CSV exports keep ML feature geometry + labels only.
-    # When True, also write initial_* placement provenance and full ctx_* settings.
+    # False: ML features + labels only; True: also initial_* / ctx_* provenance.
     export_placement_provenance: bool = False
     saturation_discard_topology_rearrangements: bool = True
     saturation_max_steps: int | None = None
     # 1 = sequential; >1 = n-tuplet composite commit per step.
     saturation_molecules_per_step: int = 1
-    # Reservoir T/p/a for Ω = E_ads − k_B T ln(a_i p / p°). SATP defaults.
-    # Not boltzmann_temperature. None activities → all a_i = 1.
+    # Reservoir T/p/a for Ω. Not boltzmann_temperature. None activities → a_i = 1.
     # saturation_omega_shift: Ω' = Ω − δ (eV); scalar broadcasts or per-species.
     saturation_temperature: float = STANDARD_TEMPERATURE_K
     saturation_pressure: float = STANDARD_PRESSURE_BAR
@@ -861,24 +830,15 @@ class AdsorptionConfig:
     debug_write_initial_placements: bool = False
     # Write sites_plugin.xyz / sites_final.xyz overlays (Z=0 markers on substrate).
     debug_write_sites: bool = False
-    # When True and the first one-shot pass is short with failed-spec keys,
-    # run one diversity round excluding those keys, adsorbate_overlap sites,
-    # low-z families after too_close/vdw_overlap, and high-z after too_far
-    # (not env_fingerprint — clean metals share fingerprints across copies).
+    # One diversity retry excluding failed-spec keys / overlap sites / bad-z families.
     placement_retry_enabled: bool = True
     # Cap on specs requested for one-shot fill as a multiple of the target count.
     placement_retry_oversample_max: float = 2.0
-    # When True, clamp the fill target to the enumerable spec capacity so fill
-    # cannot request more successes than occupancy-aware enumeration can supply.
+    # Clamp fill target to enumerable spec capacity when True.
     placement_fill_clamp_to_capacity: bool = True
-    # Global CPU-parallelism knob (joblib convention): ``1`` is serial, positive
-    # values use that many workers, ``-1`` uses all CPUs, ``-2`` uses all but
-    # one. Woven through every CPU-parallel stage: placement materialization
-    # threads, adaptive-grid site enumeration, and BO surrogate forest training
-    # / per-tree uncertainty prediction.
+    # Global CPU parallelism (joblib): 1 serial, -1 all CPUs, -2 all but one.
     n_jobs: int = -2
-    # Placement-materialization thread-pool size override (joblib-style);
-    # ``None`` inherits the global :attr:`n_jobs`.
+    # Placement-materialization thread-pool override; None inherits n_jobs.
     placement_materialize_workers: int | None = None
     optimize_isolated_sequentially: bool = False
     ts_optimizer: Literal["fire", "lbfgs", "bfgs"] = "fire"

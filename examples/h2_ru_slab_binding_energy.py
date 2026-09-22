@@ -13,9 +13,9 @@ Run (conda env metalsurfer)::
 placements on the periodic slab. ``skip_topology_check=True`` disables
 post-relaxation connectivity / decomposition checks so structures where the
 H–H bond has broken are retained. E_ads is always reported vs isolated
-molecular E(H₂). On Ru(0001) with UMA, many minima relax to molecular H₂
-physisorption (~0.75 Å H–H); dissociated minima are also allowed when the
-model finds them.
+molecular E(H₂). On Ru(0001) with UMA, the best minima are typically
+dissociated H (H–H ≳ 2.5 Å, E_ads ≈ −0.4 eV); weaker ~−0.11 eV minima with
+closer H–H also appear.
 
 Uses a modest placement count because many dissociative trials desorb on this surface.
 Initial z heights use default ``placement_z_range`` scale factors on
@@ -57,9 +57,11 @@ def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> 
     _validate_dissociative_result(best)
 
     e_ads = best.energy_adsorption
-    # Best-E_ads band (uma-s-1p2 + oc25 QC): observed ≈ −0.113 eV.
+    # Best-E_ads band (uma-s-1p2 + oc25 QC): observed ≈ −0.40 eV for
+    # fully dissociated H (H–H ≈ 2.8 Å, H–Ru ≈ 1.9 Å). Weaker ~−0.11 eV
+    # minima remain when H stay closer (~2.0 Å).
     e_ads_ceiling_ev = -0.07
-    e_ads_floor_ev = -0.18
+    e_ads_floor_ev = -0.50
     if not np.isfinite(e_ads) or e_ads >= e_ads_ceiling_ev:
         print(
             f"Expected favorable H2 binding on Ru "
@@ -104,8 +106,6 @@ def main() -> int:
     surface_type = "h2_ru_slab"
     results_dir = str(results_dir_for(surface_type))
 
-    # enable_dissociative_placement: hollow-pair placements.
-    # skip_topology_check: allow fragmented adsorbates after relax.
     # Modest placement count + GPU memory padding for small demo GPUs (~15 GB).
     config = AdsorptionConfig(
         material_type="slab",

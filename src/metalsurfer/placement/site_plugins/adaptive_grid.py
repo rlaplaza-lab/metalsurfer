@@ -38,7 +38,7 @@ class AdaptiveGridGenerator:
         reuse: Any = None,
     ) -> SiteCandidateBatch:
         """Enumerate adaptive-grid candidates for *ctx*."""
-        del reuse
+        _ = reuse
         positions, cell, pbc = ctx.positions, ctx.cell, ctx.pbc
         spacing = (
             float(ctx.adaptive_grid_spacing)

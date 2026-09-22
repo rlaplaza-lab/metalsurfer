@@ -31,7 +31,7 @@ class TopologyNPGenerator:
         reuse: Any = None,
     ) -> SiteCandidateBatch:
         """Enumerate hull topology candidates for *ctx*."""
-        del reuse  # NP topology has no auto-widen Qhull reuse.
+        _ = reuse  # no Qhull reuse
         positions = ctx.positions
         cell = ctx.cell
         pbc = ctx.pbc

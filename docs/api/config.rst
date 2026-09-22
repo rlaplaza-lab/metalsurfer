@@ -51,13 +51,6 @@ Material and substrate
    adsorption (distinct from the stepped site-discovery mask). Larger values
    (e.g. ``≈2.1`` Å) free multiple Cu(111) layers on thin multi-layer slabs.
 
-``rough_slab_local_z``
-   **Type:** ``bool`` · **Default:** ``True``
-
-   Accepted for YAML compatibility. Placement height always uses the local
-   site frame (support-plane height along ``site.normal``); this flag no
-   longer switches between local and global ``max(z)`` references.
-
 ``symmetry_tolerance``
    **Type:** ``float`` · **Default:** ``0.1`` (Å)
 

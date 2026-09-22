@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import shutil
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -55,9 +56,7 @@ from metalsurfer import (
 )
 from metalsurfer.surface_prep import prepare_substrate
 
-# ---------------------------------------------------------------------------
 # Tutorial knobs (edit these first)
-# ---------------------------------------------------------------------------
 
 # Directory containing this script and optional cluster .xyz files.
 TUTORIAL_DIR = Path(__file__).resolve().parent
@@ -197,53 +196,36 @@ def ranking_energy(e_ads: float, activity: float) -> float:
 def make_config(ph: float) -> AdsorptionConfig:
     """Return an ``AdsorptionConfig`` sized for CPU competitive saturation."""
     return AdsorptionConfig(
-        # --- Substrate type -------------------------------------------------
-        # Tells placement code we have a finite cluster, not a periodic slab.
         material_type="nanoparticle",
-        # --- MLIP model -----------------------------------------------------
         # FairChem UMA checkpoint + matching task head. Pair must stay matched:
         # uma-s-1p2 ↔ oc25 (library default when installed), uma-s-1p1 ↔ oc20.
         model_name="uma-s-1p1",
         task_name="oc20",
-        # Torch device for energies/forces. This tutorial defaults to CPU.
         device=DEVICE,
-        # --- Reproducibility & search budget --------------------------------
-        # Fixed seed for conformer and placement sampling.
         seed=42,
-        # One RDKit geometry per adsorbate is enough for this tiny demo.
         num_conformers=1,
-        # How many initial placements to relax per molecule per step.
         num_placements=12,
-        # --- Relaxation lengths (keep stage2 ≥ ~50 on CPU or filters reject) -
+        # Keep stage2 ≥ ~50 on CPU or filters reject.
         stage1_steps=50,
         stage2_steps=80,
-        # Steps when relaxing isolated water/OH reference conformers.
         reference_optimization_steps=50,
         # Batched isolated opts target CUDA; sequential is safer on CPU.
         optimize_isolated_sequentially=True,
-        # --- Substrate prep (before saturation) -----------------------------
         # Ionic MLIP relaxation of the hand-built or loaded Pt₄ geometry.
         # Use "none" only if your .xyz is already equilibrated and must not move.
         slab_relaxation_mode="ionic_only",
         # Post-relax force gate (eV/Å). Slightly looser than default 0.05 so
         # short CPU runs still keep chemisorbed poses.
         max_force_convergence=0.15,
-        # --- Competitive saturation -----------------------------------------
-        # Water and OH⁻ compete each step; lowest Ω wins (see saturation_activities).
         multi_molecule_saturation=True,
-        # Commit one adsorbate per step (easier to read than n-tuplet mode).
         saturation_molecules_per_step=1,
-        # Hard cap on coverage steps for this demo.
         saturation_max_steps=2,
-        # Skip writing every placement to disk (faster, less clutter).
         saturation_save_all_placements=False,
-        # --- Reservoir ranking Ω = E_ads − k_B T ln(a p / p°) --------------
-        # Temperature and pressure in the Ω formula (SATP defaults in library).
         saturation_temperature=TEMPERATURE_K,
         saturation_pressure=STANDARD_PRESSURE_BAR,
         # (a_water, a_hydroxide) for this pH; order matches MOLECULES above.
         saturation_activities=activities_for_ph(ph),
-        # --- Validation (tiny clusters often trip connectivity guards) --------
+        # Tiny clusters often trip connectivity guards.
         skip_topology_check=True,
         saturation_discard_topology_rearrangements=False,
     )
@@ -252,6 +234,15 @@ def make_config(ph: float) -> AdsorptionConfig:
 def surface_type_for_ph(ph: float) -> str:
     """Results directory label: results_water_oh_pt4_ph{N}/."""
     return f"water_oh_pt4_ph{int(ph)}"
+
+
+def _clear_tutorial_results() -> None:
+    """Remove prior tutorial outputs so context hashes cannot clash across runs."""
+    targets = [Path(results_dir_for("water_oh_pt4"))]
+    targets.extend(Path(results_dir_for(surface_type_for_ph(ph))) for ph in PH_VALUES)
+    for path in targets:
+        if path.is_dir():
+            shutil.rmtree(path)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -365,6 +356,8 @@ def main(argv: list[str] | None = None) -> int:
 
     cluster_source = cluster_xyz or "built-in tetrahedron"
     logger.info("Loading Pt₄ cluster from %s", cluster_source)
+
+    _clear_tutorial_results()
 
     # Prep once with ionic MLIP relaxation. On a 4-atom tetrahedron every Pt is
     # "surface", so relax_top_layer=True would leave nothing frozen and prep

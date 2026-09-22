@@ -153,8 +153,6 @@ class _SpecGridInfo:
     n_binders: int
     flat_aromatic: bool
     n_hollow_pairs: int
-    # Per-molecule view: which (conformer_index, site_index) pairs fit under
-    # coverage. Does not mutate the shared SiteContext catalog.
     allows_conformer_site: Callable[[int, int], bool] | None = None
 
 
@@ -207,7 +205,6 @@ def _cap_ranked_site_indices(
     void_slots = cap - wall_reserve
     kept_void = void[:void_slots]
     kept_wall = wall[:wall_reserve]
-    # Preserve relative rank order among the kept set.
     kept = set(kept_void) | set(kept_wall)
     return [i for i in ranked if i in kept]
 
@@ -242,7 +239,6 @@ def _spec_grid_info(
         incoming_inplane_radius(conf, footprint_scale=footprint_scale)
         for conf in conformers
     ]
-    # (ci, si) pairs allowed by this molecule's footprint under coverage.
     allowed_pairs: set[tuple[int, int]] | None = None
     allows_conformer_site: Callable[[int, int], bool] | None = None
 
@@ -475,7 +471,6 @@ def enumerate_placement_specs(
         n_hollow_pairs=info.n_hollow_pairs,
         seed=eff_seed,
         preferred_site_types=("pore",) if prefer_pores else (),
-        # Quality-sorted void lists: keep open pores near the front of the draw.
         site_index_weight=(_POROUS_SITE_INDEX_WEIGHT if prefer_pores else 0.0),
         conformer_energies=conformer_energies,
         conformer_weighting=config.conformer_weighting,
@@ -723,7 +718,6 @@ def generate_placement_from_spec_with_reason(
             site_context=resolved_ctx,
         )
 
-    # Pass the catalog through unchanged. Pose resolves only when omitted.
     adsorbate = conformers[spec.conformer_index].copy()
 
     placement_ctx, pose_fail = _pose_from_spec(

@@ -239,7 +239,6 @@ def build_config(*, device: str) -> AdsorptionConfig:
         device=device,
         stage2_steps=500,
         # Clearance-aware height: nearest adsorbate atom sits in this window.
-        # (Older COM-centered demos used ~4–7 Å; that now starts desorbed.)
         placement_z_range=(2.0, 3.5),
         placement_z_scale_by_covalent_radius=False,
         # Bulky physisorption can sit slightly past the default 4 Å chemisorption gate.

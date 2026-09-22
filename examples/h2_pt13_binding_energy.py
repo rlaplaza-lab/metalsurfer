@@ -11,8 +11,8 @@ Run (conda env metalsurfer)::
 
 Uses ``ase.cluster.Icosahedron("Pt", noshells=2)`` (13 atoms), UMA ionic prep
 relaxation, then frozen-cluster dissociative hollow-pair placements. Under
-``uma-s-1p2`` / ``oc25`` this yields chemisorbed dissociated H (H–Pt ≈ 1.8 Å,
-H–H ≈ 2.2 Å) with favorable E_ads ≈ −1.1 eV — unlike the hand-built Pt₁₂ toy
+``uma-s-1p2`` / ``oc25`` this yields chemisorbed dissociated H (H–Pt ≈ 1.7 Å,
+H–H ≈ 2.3 Å) with favorable E_ads ≈ −1.5 eV — unlike the hand-built Pt₁₂ toy
 used by the ethene nanoparticle demo, which is too strained for reliable H₂
 thermodynamics after the same protocol.
 
@@ -37,9 +37,11 @@ from metalsurfer import (
 )
 from metalsurfer.surface_prep import prepare_substrate
 
-# Best-E_ads band (uma-s-1p2 + oc25): observed ≈ −1.128 eV on prep-relaxed Pt₁₃.
+# Best-E_ads band (uma-s-1p2 + oc25): observed ≈ −1.52 eV for dissociated H
+# on prep-relaxed Pt₁₃ (H–H ≈ 2.3 Å, H–Pt ≈ 1.7 Å); weaker ~−1.13 eV minima
+# remain on nearby hollow pairs.
 E_ADS_CEILING_EV = -1.00
-E_ADS_FLOOR_EV = -1.25
+E_ADS_FLOOR_EV = -1.65
 CHEMISORPTION_CONTACT_ANG = 2.2
 
 

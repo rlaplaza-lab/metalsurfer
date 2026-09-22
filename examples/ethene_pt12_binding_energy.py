@@ -37,7 +37,7 @@ from metalsurfer.surface_prep import prepare_substrate
 # chemisorption contact (physisorption sits around 3+ Å).
 CHEMISORPTION_CONTACT_ANG = 2.6
 # Best-E_ads band (uma-s-1p2 + oc25 QC): observed best ≈ +0.20 eV after
-# hollow-aware NP site catalogs (previously ≈ +0.28 eV).
+# hollow-aware NP site catalogs.
 E_ADS_CEILING_EV = 0.33
 E_ADS_FLOOR_EV = 0.15
 

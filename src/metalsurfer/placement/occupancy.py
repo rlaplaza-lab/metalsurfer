@@ -1,14 +1,7 @@
 """Occupancy helpers for packing-aware site selection under coverage.
 
-Occupancy compares **in-plane** MIC distances from catalog ``Site.xyz``
-(support-plane anchors; pores keep void centres) to existing adsorbate atom
-positions.  A site is kept when its lateral clearance to every existing
-adsorbate atom is at least ``min_separation``.  Under coverage the sampling
-catalog is the full clustered lattice (orbit reduction is dropped first);
-this module only excludes occupied anchors.  An optional incoming in-plane
-molecular **footprint** disk is used only to *rank* surviving sites (larger
-lateral clearance first), never as a second reject mask — fill and clash
-recovery handle residual packing.
+Prunes catalog anchors closer than ``min_separation`` (in-plane MIC) to existing
+adsorbates; optional footprint radius only ranks survivors, never rejects.
 """
 
 from __future__ import annotations

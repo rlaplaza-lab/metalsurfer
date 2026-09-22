@@ -972,8 +972,7 @@ def _run_single_molecule_saturation(
     steps: list[SaturationStepResult] = []
     bo_state = _BoMemoryState()
     committed_placement_X: list[dict[str, float]] = []
-    # SMILES of every adsorbate unit folded onto the slab so far (one per
-    # committed placement); the screened candidate adds *smiles* on top.
+    # SMILES per committed adsorbate unit already on the slab.
     units_on_slab: list[str] = []
 
     def screen_step(
@@ -1506,8 +1505,7 @@ def _run_multi_molecule_saturation(
                 committed_results=committed,
             )
         )
-        # Fold every committed winner (one per sequential step; several per
-        # n-tuplet step) into the coverage bookkeeping.
+
         for molecule_name, count in Counter(
             placement.molecule for placement in committed
         ).items():

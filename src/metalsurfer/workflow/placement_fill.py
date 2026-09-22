@@ -410,8 +410,6 @@ def fill_materialized_placements(
     if n_target is None:
         raise ValueError("num_placements must be set before materializing placements")
 
-    # Occupancy/shape/dissociative inputs are unchanged across estimate + enumerate
-    # rounds within one fill; compute once and share.
     grid_info = _spec_grid_info(
         conformers,
         slab_for_sites,

@@ -198,7 +198,6 @@ def run_site_ab(n_jobs: int = _DEFAULT_N_JOBS) -> None:
     for label, mat, baseline, atoms, tol in cases:
         print(f"\n--- {label} ({mat}) ---")
         base = _bench_sites(atoms, mat, baseline, n_jobs=n_jobs)
-        # Default coarse adaptive_grid_spacing from AdsorptionConfig (0.70 Å).
         grid = _bench_sites(atoms, mat, "adaptive_grid", n_jobs=n_jobs)
         grid_dense = None
         # On metals the NN merge floor often dominates ``1.5 * h``, so a finer

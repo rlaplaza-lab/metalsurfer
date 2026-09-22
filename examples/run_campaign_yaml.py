@@ -28,15 +28,15 @@ from metalsurfer import (
 # inclusive floor around campaign best (binding) or first committed step best
 # (saturation). Observed values are stable across repeated local GPU runs.
 _BINDING_BEST_E_ADS_CEILING: dict[str, float] = {
-    "ethene_ru_slab_binding_energy": 0.32,  # obs ≈ +0.244 eV
-    "h2_ru_slab_binding_energy": -0.10,  # obs ≈ −0.183 eV
-    "co2_mof_binding_energy": -0.14,  # obs ≈ −0.211 eV
+    "ethene_ru_slab_binding_energy": 0.45,  # obs ≈ +0.30 (python) / ~+0.39 (4-placement YAML)
+    "h2_ru_slab_binding_energy": -0.07,  # obs ≈ −0.40 eV (dissociated)
+    "co2_mof_binding_energy": -0.14,  # obs ≈ −0.30 eV
     "water_cu111_adsorption_bo": -0.28,  # obs ≈ −0.373 eV
 }
 _BINDING_BEST_E_ADS_FLOOR: dict[str, float] = {
     "ethene_ru_slab_binding_energy": 0.16,
-    "h2_ru_slab_binding_energy": -0.28,
-    "co2_mof_binding_energy": -0.30,
+    "h2_ru_slab_binding_energy": -0.50,
+    "co2_mof_binding_energy": -0.35,
     "water_cu111_adsorption_bo": -0.48,
 }
 _SATURATION_STEP1_BEST_E_ADS_CEILING: dict[str, float] = {

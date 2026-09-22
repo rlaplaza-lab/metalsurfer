@@ -271,7 +271,6 @@ def _get_unified_sites_with_plugin_vertices(
     if sites or not auto_widen:
         return sites, plugin_vertices
 
-    # Caller (_enumerate_unified_sites) already validates material_type.
     assert material_type is not None
     plugin = resolve_site_generator(site_generator, material_type)
     if not plugin.widens_distance_window:
@@ -615,11 +614,6 @@ def get_hollow_sites_for_adatoms(
     return [s for s in clustered if s.site_type in ("hollow", "pore")]
 
 
-# ---------------------------------------------------------------------------
-# Environment-aware site clustering
-# ---------------------------------------------------------------------------
-
-
 def _env_fingerprint(site: Site) -> tuple:
     """Return the local-environment fingerprint of *site*."""
     return tuple(site.env_fingerprint)
@@ -635,7 +629,6 @@ def _cluster_with_metric(
     pair_filter: Callable[[int, int], bool] | None = None,
 ) -> list[int]:
     """KDTree query_pairs + union-find; one representative index per cluster."""
-    # Shared PBC-aware pair extraction (same primitive as _deduplicate_points).
     candidates = _pbc_merge_pair_set(coords, kdtree_radius, image_offsets=image_offsets)
 
     merge_set: set[tuple[int, int]] = set()
@@ -772,11 +765,6 @@ def _cluster_equivalent_sites(
     return [result[i] for i in order_by_slab]
 
 
-# ---------------------------------------------------------------------------
-# Symmetry-aware site reduction
-# ---------------------------------------------------------------------------
-
-
 def get_symmetry_aware_sites(
     slab: Atoms,
     top_layer_tolerance: float | None = None,
@@ -902,11 +890,6 @@ def get_symmetry_aware_sites(
         site_list,
         planar=planar_for_symmetry,
     )
-
-
-# ---------------------------------------------------------------------------
-# Z-base range computation (used by generators.py)
-# ---------------------------------------------------------------------------
 
 
 def _get_site_surface_radii(

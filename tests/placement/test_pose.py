@@ -995,7 +995,6 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
     config = AdsorptionConfig(
         material_type="slab",
         seed=0,
-        rough_slab_local_z=True,
         # Include both Ti and O in the top-layer window → non-planar local ref.
         top_layer_tolerance=1.5,
         planar_z_variance_threshold=0.01,
@@ -1079,9 +1078,6 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
             lifted,
             slab,
             "slab",
-            rough_slab_local_z=True,
-            top_layer_tolerance=1.5,
-            planar_z_variance_threshold=0.01,
         )
         assert local
         assert fw == pytest.approx(support_h, abs=1e-9)

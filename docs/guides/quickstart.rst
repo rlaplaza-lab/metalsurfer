@@ -11,10 +11,12 @@ ASE ``FixAtoms``). Supply adsorbates as SMILES; the library builds conformers,
 finds adsorption sites (``site_generator="auto"``: topology for slab/NP,
 Voronoi for porous; opt-in ``adaptive_grid`` / ``rolling_probe`` for
 wall-near sampling; material-aware via
-:attr:`~metalsurfer.AdsorptionConfig.material_type`), deposits candidates with
-orientation/height sampling, relaxes with an MLIP, validates geometry, and
-ranks by adsorption energy. The four ``run_*`` campaign APIs orchestrate
-screening, Bayesian placement search, or sequential saturation on that pipeline.
+:attr:`~metalsurfer.AdsorptionConfig.material_type`). Catalog anchors are
+unlifted (``Site.kind`` ``wall`` / ``void``); placement height is solved in
+the local site frame. Candidates are deposited with orientation/height
+sampling, relaxed with an MLIP, validated, and ranked by adsorption energy.
+The four ``run_*`` campaign APIs orchestrate screening, Bayesian placement
+search, or sequential saturation on that pipeline.
 
 
 Installation
@@ -237,7 +239,7 @@ Dissociative H₂ on a slab
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Set ``enable_dissociative_placement=True`` for
-hollow-site pair placements and ``skip_topology_check=True`` to skip post-relax
+wall hollow/bridge pair placements and ``skip_topology_check=True`` to skip post-relax
 connectivity checks; E_ads still uses molecular E(H₂):
 
 .. code-block:: python

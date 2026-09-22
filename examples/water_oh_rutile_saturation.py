@@ -128,14 +128,13 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    # Adsorbate atoms on the final slab must match what the steps committed.
-    # All winners of one step share a single composite structure, so count its
-    # adsorbate suffix once per bound step.
+
     n_adsorbate_expected = len(result.final_slab_atoms) - len(slab.atoms)
     n_adsorbate_committed = 0
     for step_result in result.steps:
         units = step_result.committed()
         if units:
+            # Tuplet winners share one composite; count the suffix once per bound step.
             n_adsorbate_committed += len(units[0].atoms) - units[0].slab_size
     if n_adsorbate_expected != n_adsorbate_committed:
         print(

@@ -490,7 +490,6 @@ def _stratified_sample(
                         z_fraction_target=z_fraction_target,
                     ),
                 )
-                # Best first for round-robin.
                 ranked_by_site[si] = deque(spec for spec, _ in ordered)
             site_order = sorted(ranked_by_site.keys())
             best_first: list[PlacementSpec] = []
@@ -520,7 +519,6 @@ def _stratified_sample(
         buckets[key] = list(reversed(best_first))
 
     selected: list[PlacementSpec] = []
-    # Round-robin across buckets until n_desired (preferred keys first each pass).
     while len(selected) < n_desired:
         progressed = False
         for key in keys:

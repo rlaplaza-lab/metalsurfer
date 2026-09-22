@@ -425,13 +425,8 @@ def test_resolve_surface_ref_rough_slab():
     # Must not use the pre-lifted site vertex as the surface reference.
     assert ref_low < float(site_low.xyz[2]) - 0.5
 
-    # rough_slab_local_z is ignored: still local support plane, not global max.
-    ref_flag, is_local_g = _resolve_surface_ref(
-        site_low,
-        slab,
-        "slab",
-        rough_slab_local_z=False,
-    )
+    # Still local support plane, not global max.
+    ref_flag, is_local_g = _resolve_surface_ref(site_low, slab, "slab")
     assert ref_flag == pytest.approx(2.7, abs=1e-9)
     assert is_local_g is True
 
@@ -456,20 +451,8 @@ def test_resolve_surface_ref_uses_config_planarity_tolerance():
     # Support on the upper terrace; site vertex lifted above it (plugin-style).
     site = _make_site([1.25, 1.0, 1.4], slab_indices=(3,))
 
-    ref_a, local_a = _resolve_surface_ref(
-        site,
-        slab,
-        "slab",
-        rough_slab_local_z=True,
-        top_layer_tolerance=0.5,
-    )
-    ref_b, local_b = _resolve_surface_ref(
-        site,
-        slab,
-        "slab",
-        rough_slab_local_z=True,
-        top_layer_tolerance=1.2,
-    )
+    ref_a, local_a = _resolve_surface_ref(site, slab, "slab")
+    ref_b, local_b = _resolve_surface_ref(site, slab, "slab")
     assert local_a is True and local_b is True
     # Local mode: framework support height, never the lifted site vertex.
     assert ref_a == pytest.approx(0.85, abs=1e-9)
@@ -539,7 +522,6 @@ def test_generate_placement_from_pose_respects_slab_for_sites():
     site_context = SiteContext(sites=[site], use_sites=True, source="test")
     config = AdsorptionConfig(
         material_type="slab",
-        rough_slab_local_z=False,
         placement_z_range=(2.0, 3.0),
         placement_z_scale_by_covalent_radius=False,
     )
@@ -668,7 +650,6 @@ def test_saturation_placement_height_uses_reference_slab():
 
     config = AdsorptionConfig(
         device="cpu",
-        rough_slab_local_z=False,
         placement_z_range=(2.0, 3.0),
         placement_z_scale_by_covalent_radius=False,
     )
@@ -748,7 +729,6 @@ def test_saturation_placement_without_site_context_uses_reference_slab():
 
     config = AdsorptionConfig(
         device="cpu",
-        rough_slab_local_z=False,
         placement_z_range=(2.0, 3.0),
         placement_z_scale_by_covalent_radius=False,
     )

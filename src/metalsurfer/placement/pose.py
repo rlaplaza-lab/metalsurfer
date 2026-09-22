@@ -56,9 +56,6 @@ from .site_enumeration import (
     _get_site_surface_radii,
     _height_along_slab_normal,
 )
-from .site_plugins.helpers import (
-    top_layer_is_planar_from_arrays as _top_layer_is_planar_from_arrays,
-)
 from .site_types import Site
 
 logger = logging.getLogger(__name__)
@@ -97,20 +94,13 @@ class _PlacementContext:
 class _PoseBatchCache:
     """Per-batch invariants shared across placements on the same substrate."""
 
-    top_layer_planar: bool | None = None
     pinv_ab_T: np.ndarray | None = None
-    # Mean covalent radius of the bare substrate top layer; computed once per
-    # batch and reused for z-offset scaling when a spec's site has no explicit
-    # slab_indices. Read-only across worker threads.
+    # Mean top-layer covalent radius for z-offset when site has no slab_indices.
     r_surface_top_layer: float | None = None
-    # Legacy global strip (unused for height; kept for callers that still fill it).
-    global_surface_ref: float | None = None
     cell: np.ndarray | None = None
     n_hat: np.ndarray | None = None
     positions: np.ndarray | None = None
-    # conformer_index -> (canonical_pos, shape)
     frames: dict[int, tuple[np.ndarray, str]] = dataclasses.field(default_factory=dict)
-    # Per-screen height intervals keyed by pose family (not shared across molecules).
     height_intervals: dict[tuple, "_HeightInterval"] = dataclasses.field(
         default_factory=dict
     )
@@ -174,7 +164,8 @@ def build_pose_batch_cache(
     conformers: list[Atoms],
     config: AdsorptionConfig,
 ) -> _PoseBatchCache:
-    """Precompute slab planarity, plane projectors, and per-conformer frames."""
+    """Precompute plane projectors, top-layer radius, and per-conformer frames."""
+    _ = config
     cache = _PoseBatchCache()
     cell = np.asarray(slab.get_cell(), dtype=float)
     positions = np.asarray(slab.get_positions(), dtype=float)
@@ -183,19 +174,8 @@ def build_pose_batch_cache(
     cache.n_hat = _slab_normal(cell)
     cache.positions = positions
     cache.pinv_ab_T, _ = _slab_plane_projectors(cell)
-    top_tol = float(config.top_layer_tolerance)
-    top_mask = top_layer_mask_by_normal(positions, cell, top_tol)
-    cache.top_layer_planar = bool(
-        _top_layer_is_planar_from_arrays(
-            positions,
-            cell,
-            top_tol,
-            float(config.planar_z_variance_threshold),
-            top_mask=top_mask,
-        )
-    )
-    # Radii use the element-derived top depth (same as _get_site_surface_radii
-    # without top_indices), not config.top_layer_tolerance used for planarity.
+    # Element-derived top depth (same as _get_site_surface_radii without
+    # top_indices), not config.top_layer_tolerance.
     radii_indices = np.nonzero(
         top_layer_mask_by_normal(
             positions, cell, float(_derive_top_layer_tolerance(symbols))
@@ -204,10 +184,6 @@ def build_pose_batch_cache(
     cache.r_surface_top_layer = _get_site_surface_radii(
         slab, None, top_indices=radii_indices
     )
-    if config.material_type == "slab":
-        cache.global_surface_ref = float(
-            np.max(_height_along_slab_normal(positions, cell))
-        )
     for i, conf in enumerate(conformers):
         ads_pos = conf.get_positions()
         symbols = conf.get_chemical_symbols()
@@ -784,11 +760,6 @@ def _resolve_surface_ref(
     slab: Atoms,
     mat_type: str,
     *,
-    rough_slab_local_z: bool = False,
-    top_layer_tolerance: float | None = None,
-    planar_z_variance_threshold: float | None = None,
-    top_layer_planar: bool | None = None,
-    global_surface_ref: float | None = None,
     cell: np.ndarray | None = None,
     positions: np.ndarray | None = None,
 ) -> tuple[float, bool]:
@@ -798,19 +769,9 @@ def _resolve_surface_ref(
     coordinating-atom plane along ``site.normal`` (max of supports), or the
     site vertex for pores / empty supports. Never a plugin-lifted ``site.xyz``.
     ``is_local_ref`` is always ``True`` when a site is present.
-
-    *rough_slab_local_z* / planarity / *global_surface_ref* are accepted for
-    call-site compatibility but ignored — height is local for every material.
     Slab-cell ``+z`` is only the fallback when *site* is ``None`` or the site
     normal is degenerate.
     """
-    del (
-        rough_slab_local_z,
-        top_layer_tolerance,
-        planar_z_variance_threshold,
-        top_layer_planar,
-        global_surface_ref,
-    )
     cell_arr = (
         np.asarray(cell, dtype=float)
         if cell is not None
@@ -889,8 +850,6 @@ def _pose_from_spec(
     normal = np.array([0.0, 0.0, 1.0])
 
     reference = slab_for_sites if slab_for_sites is not None else slab
-    # Use the caller-provided catalog as-is so site_index stays stable.
-    # Resolve (and possibly expand under coverage) only when omitted (public API).
     if site_context is not None:
         ctx = site_context
     else:
@@ -919,9 +878,6 @@ def _pose_from_spec(
 
     ref_slab = reference
 
-    # Fetch the surface radius once per pose. Per-site radii (non-empty
-    # slab_indices) still need a per-spec fetch; the top-layer radius is taken
-    # from the batch cache when available, else computed once here.
     if site.slab_indices:
         r_surface = _get_site_surface_radii(ref_slab, site)
     elif pose_cache is not None and pose_cache.r_surface_top_layer is not None:
@@ -1100,7 +1056,6 @@ def _context_from_pose(
     rotated_pos = (geom.quaternion_to_rotation_matrix(quat) @ canonical_pos.T).T
 
     reference = slab_for_sites if slab_for_sites is not None else slab
-    # Replay must use the same catalog the original placement indexed into.
     if site_context is not None:
         ctx = site_context
     else:
@@ -1154,8 +1109,6 @@ def _context_from_pose(
 def _recover_z_offset(
     ctx: _PlacementContext,
     z_abs: float,
-    slab: Atoms | None = None,
-    pose_cache: _PoseBatchCache | None = None,
 ) -> float:
     """Recover COM height above the surface reference from absolute placement.
 
@@ -1164,7 +1117,6 @@ def _recover_z_offset(
     clearance lift applied at placement time, so ``surface_ref + z_offset``
     reconstructs the COM height along that normal — not the closest-atom gap.
     """
-    del slab, pose_cache  # height is always along ctx.normal / site frame
     pose = ctx.pose
     placement = np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float)
     n_hat = _placement_normal_hat(ctx.normal)
@@ -1187,10 +1139,8 @@ def _saturation_exclude_count(
 def _placement_normal(
     ctx: _PlacementContext,
     slab: Atoms,
-    pose_cache: _PoseBatchCache | None = None,
 ) -> np.ndarray:
     """Return unit normal used for height/lateral recovery (site frame)."""
-    del pose_cache
     n_hat = _placement_normal_hat(ctx.normal)
     if float(np.linalg.norm(np.asarray(ctx.normal, dtype=float))) > _VECTOR_NORM_EPS:
         return n_hat
@@ -1292,7 +1242,6 @@ def _analytic_height_recovery(
     *,
     slab_for_sites: Atoms | None,
     slab_scratch: geom._SlabDistanceScratch | None,
-    pose_cache: _PoseBatchCache | None = None,
 ) -> tuple[np.ndarray, float] | None:
     """One signed height nudge along the placement normal; None if nothing to fix."""
     pose = ctx.pose
@@ -1308,9 +1257,7 @@ def _analytic_height_recovery(
         z_span = float(ctx.z_base_hi - ctx.z_base_lo)
         if z_span <= _DISTANCE_ZERO_EPS:
             return None
-        com_h0 = float(
-            np.dot(origin, _placement_normal(ctx, slab, pose_cache=pose_cache))
-        )
+        com_h0 = float(np.dot(origin, _placement_normal(ctx, slab)))
         half = 0.5 * z_span
         com_lo = com_h0 - half
         com_nominal = com_h0
@@ -1334,7 +1281,6 @@ def _analytic_height_recovery(
             return None
         signed = -max_pen if is_void else max_pen
     elif height_mode == "contact_distance_too_large":
-        # Same physics as too_far: molecule is outside the contact window.
         target = float(config.max_closest_approach)
         excess = actual - target
         if excess <= _DISTANCE_ZERO_EPS:
@@ -1358,7 +1304,7 @@ def _analytic_height_recovery(
                 return None
             signed = excess if is_void else -excess
 
-    n_hat = _placement_normal(ctx, slab, pose_cache=pose_cache)
+    n_hat = _placement_normal(ctx, slab)
     com_h = float(np.dot(origin, n_hat))
     new_com_h = float(min(float(com_hi), max(float(com_lo), com_h + float(signed))))
     clipped_center = origin + (new_com_h - com_h) * n_hat
@@ -1400,7 +1346,7 @@ def _apply_lateral_offset(
     pose_cache: _PoseBatchCache | None = None,
 ) -> np.ndarray:
     """Apply a lateral recovery offset in the plane perpendicular to the site/slab normal."""
-    n_hat = _placement_normal(ctx, slab, pose_cache=pose_cache)
+    n_hat = _placement_normal(ctx, slab)
     # Build an orthonormal in-plane basis from Cartesian dx/dy.
     ref = np.array([1.0, 0.0, 0.0], dtype=float)
     if abs(float(np.dot(ref, n_hat))) > _LATERAL_OFFSET_REF_SWITCH_DOT:
@@ -1475,7 +1421,7 @@ def _recover_distance_failure(
     work_zf = float(pose.z_fraction)
     work_center = origin.copy()
     last_reason: str | None = fail_reason
-    n_hat = _placement_normal(ctx, slab, pose_cache=pose_cache)
+    n_hat = _placement_normal(ctx, slab)
     z_span = float(ctx.z_base_hi - ctx.z_base_lo)
 
     _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, origin)
@@ -1517,7 +1463,6 @@ def _recover_distance_failure(
             height_mode,
             slab_for_sites=slab_for_sites,
             slab_scratch=slab_scratch,
-            pose_cache=pose_cache,
         )
         if height_shift is not None:
             work_center, work_zf = height_shift
@@ -1559,7 +1504,6 @@ def _recover_distance_failure(
             work_zf=work_zf,
             slab_for_sites=slab_for_sites,
             slab_scratch=slab_scratch,
-            pose_cache=pose_cache,
         )
         if last_reason is None:
             return ctx_out, None
@@ -1615,7 +1559,6 @@ def _try_clash_descent_recovery(
     work_zf: float,
     slab_for_sites: Atoms | None,
     slab_scratch: geom._SlabDistanceScratch | None,
-    pose_cache: _PoseBatchCache | None = None,
 ) -> tuple[_PlacementContext, str | None]:
     """Attempt bounded rigid-body clash descent; return updated ctx or last reason."""
     if slab_scratch is None:
@@ -1654,7 +1597,7 @@ def _try_clash_descent_recovery(
         moving_radii=moving_r,
     )
     site_frame = geom.compute_surface_site_frame(
-        _placement_normal(ctx, slab, pose_cache=pose_cache),
+        _placement_normal(ctx, slab),
         tangent_basis=ctx.site.tangent_basis if ctx.site is not None else None,
     )
     new_pos, az_delta, ok = resolve_rigid_clash(
@@ -1682,7 +1625,7 @@ def _try_clash_descent_recovery(
     quat_w, quat_x, quat_y, quat_z = compose_quaternion_with_azimuth(
         (pose.quat_w, pose.quat_x, pose.quat_y, pose.quat_z),
         az_delta,
-        _placement_normal(ctx, slab, pose_cache=pose_cache),
+        _placement_normal(ctx, slab),
     )
     new_pose = dataclasses.replace(
         pose,
@@ -1706,8 +1649,7 @@ def _try_clash_descent_recovery(
     )
     if last_reason is None:
         return new_ctx, None
-    # Restore adsorbate coordinates to the pre-descent context; otherwise the
-    # Atoms object retains new_pos while we return the original ctx.
+    # restore adsorbate coords
     _set_adsorbate_at_center(adsorbate, ctx.rotated_pos, work_center)
     return ctx, last_reason
 
@@ -2019,7 +1961,7 @@ def _finalize_placement(
             return None, fail_reason
 
     # COM height above surface_ref (contact-solved / fractional window at pose).
-    z_offset = _recover_z_offset(ctx, z_abs, slab, pose_cache=pose_cache)
+    z_offset = _recover_z_offset(ctx, z_abs)
     slab_indices: tuple[int, ...] | None = None
     if ctx.site is not None:
         slab_indices = ctx.site.slab_indices
@@ -2046,9 +1988,7 @@ def _finalize_placement(
         slab_indices=slab_indices,
         site_source=site_source,
         site_reference_frame=(
-            "local_site"
-            if ctx.is_local_ref or ctx.site is not None
-            else "global_top_layer"
+            "local_site" if ctx.site is not None else "global_top_layer"
         ),
         site_xy_frac_a=float(xy_frac[0]),
         site_xy_frac_b=float(xy_frac[1]),

@@ -30,7 +30,7 @@ class RollingProbeGenerator:
         reuse: Any = None,
     ) -> SiteCandidateBatch:
         """Enumerate rolling-probe candidates for *ctx*."""
-        del reuse
+        _ = reuse
         positions, cell, pbc = ctx.positions, ctx.cell, ctx.pbc
 
         result = generate_rolling_probe_sites(

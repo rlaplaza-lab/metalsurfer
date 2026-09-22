@@ -687,21 +687,14 @@ def project_sites_to_support_plane(
     cell: np.ndarray,
     pbc: np.ndarray,
 ) -> list[Site]:
-    """Project wall-near site vertices onto the coordinating-atom plane.
-
-    Prefer the in-classify projection (fingerprints already use unlifted xyz).
-    This helper remains for tests and callers that build :class:`Site` records
-    without going through :func:`_classify_vertices`. Pore / empty-support
-    sites keep their free-volume vertex. Normals and tangent frames stay as
-    classified; ``clearance`` / ``nn_distance`` stay probe metadata.
-    """
+    """Project wall-near site vertices onto the coordinating-atom support plane."""
     pos = np.asarray(positions, dtype=float)
     cell_arr = np.asarray(cell, dtype=float)
     pbc_arr = np.asarray(pbc, dtype=bool)
     n_pos = len(pos)
     out: list[Site] = []
     for site in sites:
-        if site.kind == "void" or not site.slab_indices:
+        if site.kind == "void":
             out.append(site)
             continue
         idx = np.asarray(site.slab_indices, dtype=int)
