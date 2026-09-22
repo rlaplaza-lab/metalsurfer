@@ -59,9 +59,10 @@ def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> 
     e_ads = best.energy_adsorption
     # Best-E_ads band (uma-s-1p2 + oc25 QC): observed ≈ −0.40 eV for
     # fully dissociated H (H–H ≈ 2.8 Å, H–Ru ≈ 1.9 Å). Weaker ~−0.11 eV
-    # minima remain when H stay closer (~2.0 Å).
-    e_ads_ceiling_ev = -0.07
-    e_ads_floor_ev = -0.50
+    # minima remain when H stay closer (~2.0 Å); the lock requires the
+    # dissociated basin.
+    e_ads_ceiling_ev = -0.30
+    e_ads_floor_ev = -0.48
     if not np.isfinite(e_ads) or e_ads >= e_ads_ceiling_ev:
         print(
             f"Expected favorable H2 binding on Ru "

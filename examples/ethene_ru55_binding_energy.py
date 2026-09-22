@@ -36,9 +36,9 @@ from metalsurfer.surface_prep import prepare_substrate
 # chemisorption contact (physisorption sits around 3+ Å).
 CHEMISORPTION_CONTACT_ANG = 2.6
 # Best-E_ads band (uma-s-1p2 + oc25) on ASE Ru₅₅ with slab_relaxation_mode="none"
-# and prep-frozen cluster; e2e A/B ≈ −4.81 (auto) / −5.00 (adaptive_grid).
-E_ADS_CEILING_EV = -4.20
-E_ADS_FLOOR_EV = -6.00
+# and prep-frozen cluster; release QC ≈ −5.10 eV.
+E_ADS_CEILING_EV = -4.80
+E_ADS_FLOOR_EV = -5.50
 
 # FCC-equivalent a so NN ≈ Ru hcp a (~2.71 Å): a_fcc = a_hcp * sqrt(2).
 _RU_FCC_LATTICE_CONSTANT = 2.71 * (2.0**0.5)

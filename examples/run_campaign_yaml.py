@@ -28,22 +28,22 @@ from metalsurfer import (
 # inclusive floor around campaign best (binding) or first committed step best
 # (saturation). Observed values are stable across repeated local GPU runs.
 _BINDING_BEST_E_ADS_CEILING: dict[str, float] = {
-    "ethene_ru_slab_binding_energy": 0.38,  # obs ≈ +0.300 eV (ionic prep)
-    "h2_ru_slab_binding_energy": -0.07,  # obs ≈ −0.40 eV (dissociated)
-    "co2_mof_binding_energy": -0.14,  # obs ≈ −0.30 eV
-    "water_cu111_adsorption_bo": -0.28,  # obs ≈ −0.373 eV
+    "ethene_ru_slab_binding_energy": 0.34,  # obs ≈ +0.300 eV (ionic prep)
+    "h2_ru_slab_binding_energy": -0.30,  # obs ≈ −0.40 eV (dissociated)
+    "co2_mof_binding_energy": -0.25,  # obs ≈ −0.301 eV
+    "water_cu111_adsorption_bo": -0.38,  # obs ≈ −0.450 eV
 }
 _BINDING_BEST_E_ADS_FLOOR: dict[str, float] = {
-    "ethene_ru_slab_binding_energy": 0.22,
-    "h2_ru_slab_binding_energy": -0.50,
-    "co2_mof_binding_energy": -0.35,
-    "water_cu111_adsorption_bo": -0.48,
+    "ethene_ru_slab_binding_energy": 0.26,
+    "h2_ru_slab_binding_energy": -0.48,
+    "co2_mof_binding_energy": -0.34,
+    "water_cu111_adsorption_bo": -0.50,
 }
 _SATURATION_STEP1_BEST_E_ADS_CEILING: dict[str, float] = {
-    "ethane_cu_saturation": -0.45,  # obs ≈ −0.513 eV
+    "ethane_cu_saturation": -0.48,  # obs ≈ −0.518 eV
 }
 _SATURATION_STEP1_BEST_E_ADS_FLOOR: dict[str, float] = {
-    "ethane_cu_saturation": -0.60,
+    "ethane_cu_saturation": -0.56,
 }
 
 

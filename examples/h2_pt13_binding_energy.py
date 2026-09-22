@@ -39,9 +39,9 @@ from metalsurfer.surface_prep import prepare_substrate
 
 # Best-E_ads band (uma-s-1p2 + oc25): observed ≈ −1.52 eV for dissociated H
 # on prep-relaxed Pt₁₃ (H–H ≈ 2.3 Å, H–Pt ≈ 1.7 Å); weaker ~−1.13 eV minima
-# remain on nearby hollow pairs.
-E_ADS_CEILING_EV = -1.00
-E_ADS_FLOOR_EV = -1.65
+# remain on nearby hollow pairs — the lock requires the tighter basin.
+E_ADS_CEILING_EV = -1.40
+E_ADS_FLOOR_EV = -1.60
 CHEMISORPTION_CONTACT_ANG = 2.2
 
 

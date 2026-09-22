@@ -173,8 +173,8 @@ def main() -> int:
     # Best single-molecule E_ads band (uma-s-1p2 + oc25 QC): ≈ −3.23 eV.
     # Use per-molecule screening results — committed tuplet E_ads is a shared
     # composite (~sum of units), not a per-adsorbate figure.
-    e_ads_ceiling_ev = -3.00
-    e_ads_floor_ev = -3.40
+    e_ads_ceiling_ev = -3.10
+    e_ads_floor_ev = -3.35
     first_bound = next((s for s in result.steps if s.n_added > 0), None)
     if first_bound is None:
         print("No committed saturation step found.", file=sys.stderr)
