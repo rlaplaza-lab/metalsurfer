@@ -20,6 +20,7 @@ from tests.conftest import (
 pytestmark = GPU_MLIP_MARKS
 
 
+@pytest.mark.gpu_smoke
 def test_run_adsorption_water_on_cu111(workdir):
     """Campaign-level e2e: prepare_substrate → run_adsorption for water/Cu."""
     num_placements = 8

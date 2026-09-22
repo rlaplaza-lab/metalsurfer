@@ -30,7 +30,12 @@ from tests.conftest import (
 
 pytestmark = GPU_MLIP_MARKS
 
-_MLIP_CASE_IDS = ("ethene_ru", "h2_ru", "h2_pt13", "co2_mof")
+_MLIP_CASE_IDS = (
+    pytest.param("ethene_ru", marks=pytest.mark.gpu_smoke),
+    "h2_ru",
+    "h2_pt13",
+    "co2_mof",
+)
 
 
 def _pt13_icosahedron():

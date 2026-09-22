@@ -965,6 +965,7 @@ class TestTransferTolerance:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.gpu_smoke
 @gpu_mlip_test
 def test_bayesian_two_generations_on_defect_surface(tmp_path):
     """BO smoke test for two generations on an adatom-defect surface.

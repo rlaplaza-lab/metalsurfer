@@ -84,5 +84,8 @@ ENV/
 # Sphinx documentation build
 docs/_build/
 
+# Kaggle CI: rendered runner embeds HF_TOKEN; never commit
+.github/scripts/kaggle_gpu_runner.py
+
 # Agent scratch / plans (Kilo)
 .kilo/

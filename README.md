@@ -115,12 +115,13 @@ Omit `num_placements` in production to autotune to GPU parallel capacity. See [`
 ```bash
 pip install -e ".[mlip,dev]"
 ./scripts/run_all_tests.sh             # quick + cpu + gpu
+METALSURFER_GPU_MODE=smoke ./scripts/run_gpu_tests.sh  # short GPU subset
 ruff check . && ruff format --check . && mypy src/metalsurfer
 python -m pytest tests/ -m quick \
   --cov=src/metalsurfer --cov-report=term-missing --tb=short -v
 ```
 
-CI parity, coverage gates, and contributor test markers: [development guide](https://metalsurfer.readthedocs.io/en/latest/guides/development.html). Mental model: [`CORE_SYSTEM_EXPLANATION.md`](CORE_SYSTEM_EXPLANATION.md). Full mechanics: [architecture guide](https://metalsurfer.readthedocs.io/en/latest/guides/architecture.html).
+CI parity (including Kaggle GPU), coverage gates, and contributor test markers: [development guide](https://metalsurfer.readthedocs.io/en/latest/guides/development.html). Mental model: [`CORE_SYSTEM_EXPLANATION.md`](CORE_SYSTEM_EXPLANATION.md). Full mechanics: [architecture guide](https://metalsurfer.readthedocs.io/en/latest/guides/architecture.html).
 
 ---
 

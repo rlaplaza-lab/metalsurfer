@@ -104,11 +104,14 @@ Three suites (``quick`` / ``cpu`` / ``gpu`` are applied automatically in
    python -m pytest tests/ -m cpu --tb=short -v                           # full CPU
    python -m pytest tests/ -m gpu --tb=short -v                           # CUDA + [mlip]
    ./scripts/run_gpu_tests.sh                                             # GPU, VRAM-safe
+   METALSURFER_GPU_MODE=smoke ./scripts/run_gpu_tests.sh                  # short GPU subset
    ./scripts/run_all_tests.sh                                             # all three phases
 
 CPU MLIP tests (``cpu and mlip``) need ``pip install -e ".[mlip]"`` and a
 HuggingFace token for the gated UMA model. CI runs them in ``test-mlip-cpu``
-when ``HF_TOKEN`` is set. GPU tests are local-only (no CUDA runners in Actions).
+when ``HF_TOKEN`` is set. GPU tests run locally via ``./scripts/run_gpu_tests.sh``
+(or ``METALSURFER_GPU_MODE=smoke`` for the short subset) and on Kaggle via the
+``kaggle-gpu.yml`` workflow (``KAGGLE_API_TOKEN`` + ``HF_TOKEN`` secrets).
 
 CI parity
 ---------
@@ -124,8 +127,21 @@ CI parity
 | ``pytest -m "cpu and mlip"``     | ``test-mlip-cpu`` (skipped if unset)     |
 | ``cd docs && make html``         | ``docs`` (Sphinx ``-W --keep-going``,    |
 |                                  | ``sphinx-lint``, linkcheck)              |
-| ``pytest -m gpu``                | local only                               |
+| ``./scripts/run_gpu_tests.sh``   | ``kaggle-gpu`` (Kaggle T4; smoke weekly, |
+| ``METALSURFER_GPU_MODE=smoke``   | full via ``workflow_dispatch``)          |
 +----------------------------------+------------------------------------------+
+
+Kaggle GPU CI
+-------------
+
+The ``Kaggle GPU tests`` workflow uploads a private source dataset
+(``rlaplaza/metalsurfercisrc``), launches a private T4 script kernel, and
+scrapes the log. Defaults:
+
+- **smoke** (cron + dispatch default): ``gpu_smoke`` via ``run_gpu_tests.sh``
+- **full** (manual): entire GPU suite with VRAM-isolated phases
+
+Requires repository secrets ``KAGGLE_API_TOKEN`` and ``HF_TOKEN`` (gated UMA).
 
 Documentation
 -------------

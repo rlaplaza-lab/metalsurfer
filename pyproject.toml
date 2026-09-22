@@ -135,6 +135,7 @@ convention = "numpy"
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/**/*.py" = ["E402", "D"]
+".github/scripts/**/*.py" = ["D"]
 "examples/**/*.py" = ["D", "E402"]
 "tests/**/*.py" = ["D"]
 
