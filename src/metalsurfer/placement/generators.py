@@ -704,6 +704,15 @@ def generate_placement_from_spec_with_reason(
         return None, "invalid_conformer_index"
 
     if spec.orientation_type == "dissociative":
+        # Same catalog enumerate indexes: clustered lattice via sampling
+        # context, not the adatom-hollow shortcut used when context is omitted.
+        reference = slab_for_sites if slab_for_sites is not None else slab
+        resolved_ctx = site_context_for_sampling(
+            reference,
+            config,
+            site_context,
+            full_slab=slab if slab_for_sites is not None else None,
+        )
         adsorbate = conformers[spec.conformer_index].copy()
         return _generate_dissociative_placement_from_spec(
             adsorbate,
@@ -711,7 +720,7 @@ def generate_placement_from_spec_with_reason(
             slab,
             config,
             slab_for_sites=slab_for_sites,
-            site_context=site_context,
+            site_context=resolved_ctx,
         )
 
     # Pass the catalog through unchanged. Pose resolves only when omitted.

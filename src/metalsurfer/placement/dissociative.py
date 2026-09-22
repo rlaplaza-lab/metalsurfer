@@ -159,12 +159,12 @@ def _resolve_dissociative_site_entries(
     site_context: SiteContext | None = None,
     cell_arr: np.ndarray,
 ) -> list[Site]:
-    """Resolve hollow/pore sites from the clustered (non-symmetry) catalog.
+    """Resolve wall hollow/bridge sites from the clustered (non-symmetry) catalog.
 
     Prefers ``site_context.clustered_sites`` so pairs see the full translational
     lattice. Explicit *raw_sites* (or ``raw_unclustered`` when
     ``clustered_sites`` is missing) are clustered with
-    ``site_equivalence_tolerance`` before the hollow/pore filter.
+    ``site_equivalence_tolerance`` before the wall hollow/bridge filter.
     """
     if raw_sites is not None:
         site_entries = _cluster_equivalent_sites(

@@ -22,6 +22,7 @@ from metalsurfer.placement.dissociative import (
     _get_dissociative_site_pairs,
     _resolve_dissociative_site_entries,
 )
+from metalsurfer.placement.site_context import site_context_for_sampling
 from metalsurfer.placement.site_enumeration import (
     _compute_site_z_base,
 )
@@ -250,7 +251,12 @@ def test_dissociative_placement_supported_for_nanoparticle():
             placed.get_positions()[1] - placed.get_positions()[0],
         )
     )
-    pair = pairs[descriptor.site_index % len(pairs)]
+    placed_pairs = _get_dissociative_site_pairs(
+        nanoparticle,
+        config,
+        site_context=site_context_for_sampling(nanoparticle, config, None),
+    )
+    pair = placed_pairs[int(descriptor.site_index)]
     pair_sep = float(np.linalg.norm(np.asarray(pair.xyz1) - np.asarray(pair.xyz2)))
     assert hh == pytest.approx(pair_sep, abs=1e-9), (
         f"H–H separation {hh:.3f} should track pair spacing {pair_sep:.3f}"
@@ -307,7 +313,9 @@ def test_dissociative_wrap_pair_cartesian_separation_matches_mic():
     slab = fcc111("Pt", (3, 3, 3), vacuum=10.0)
     slab.set_pbc([True, True, False])
     config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
-    pairs = _get_dissociative_site_pairs(slab, config)
+    # Public generate indexes the sampling catalog, not the adatom-hollow shortcut.
+    ctx = site_context_for_sampling(slab, config, None)
+    pairs = _get_dissociative_site_pairs(slab, config, site_context=ctx)
     assert pairs, "Pt 3x3 must expose dissociative hollow pairs"
 
     cell = np.asarray(slab.get_cell(), dtype=float)
@@ -357,7 +365,8 @@ def test_dissociative_placement_on_slab_separates_and_clears_surface():
 
     slab = make_slab()
     config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
-    pairs = _get_dissociative_site_pairs(slab, config)
+    ctx = site_context_for_sampling(slab, config, None)
+    pairs = _get_dissociative_site_pairs(slab, config, site_context=ctx)
     assert pairs, "fixture slab must expose hollow pairs for dissociative placement"
     h2 = make_h2()
     spec = dissoc_placement_spec()
@@ -371,7 +380,7 @@ def test_dissociative_placement_on_slab_separates_and_clears_surface():
     cell = np.asarray(slab.get_cell(), dtype=float)
     _, hh_dists = find_mic((pos[1] - pos[0]).reshape(1, 3), cell)
     hh = float(hh_dists[0])
-    pair = pairs[descriptor.site_index % len(pairs)]
+    pair = pairs[int(descriptor.site_index)]
     _, pair_dists = find_mic(
         (np.asarray(pair.xyz1) - np.asarray(pair.xyz2)).reshape(1, 3), cell
     )

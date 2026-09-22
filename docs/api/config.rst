@@ -73,7 +73,9 @@ Material and substrate
    **Type:** ``float`` · **Default:** ``0.01`` (Å²)
 
    Maximum *z* variance of top-layer atoms for classifying a slab surface as planar.
-   Surfaces above this threshold trigger rough-slab placement behavior.
+   Above this threshold the topology plugin treats the slab as rough and merges
+   Voronoi enrichment; planar slabs skip Voronoi. Placement height stays in the
+   local site frame either way.
 
 ``min_pbc_image_separation``
    **Type:** ``float`` · **Default:** ``8.0`` (Å)
@@ -347,17 +349,17 @@ Placement generation
    failures do not ban sibling sites that share an ``env_fingerprint``).
 
 ``placement_retry_oversample_max``
-    **Type:** ``float`` · **Default:** ``2.0`` · **Valid range:** ``>= 1.0``
+   **Type:** ``float`` · **Default:** ``2.0`` · **Valid range:** ``>= 1.0``
 
-    Cap on specs requested for one-shot fill as a multiple of the placement
-    target (``min(capacity, num_placements * oversample)`` when capacity
-    clamping is on). Specs are materialized in chunks of about
-    ``num_placements`` and stop early once the target is met.
+   Cap on specs requested for one-shot fill as a multiple of the placement
+   target (``min(capacity, num_placements * oversample)`` when capacity
+   clamping is on). Specs are materialized in chunks of about
+   ``num_placements`` and stop early once the target is met.
 
 ``placement_fill_clamp_to_capacity``
-    **Type:** ``bool`` · **Default:** ``True``
+   **Type:** ``bool`` · **Default:** ``True``
 
-    Clamp the effective placement target to the enumerable spec capacity
+   Clamp the effective placement target to the enumerable spec capacity
     (``estimate_placement_spec_capacity``) so fill cannot request more successes
     than occupancy-pruned enumeration can supply.
 
