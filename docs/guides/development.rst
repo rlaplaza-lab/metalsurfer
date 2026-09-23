@@ -136,8 +136,8 @@ Kaggle GPU CI
 -------------
 
 The ``Kaggle GPU tests`` workflow uploads a private source dataset
-(``rlaplaza/metalsurfercisrc``), launches a private T4 script kernel, and
-scrapes the log. Defaults:
+(configured via repository variables, not hardcoded here), launches a private
+T4 script kernel, and scrapes the log. Defaults:
 
 - **smoke** (cron + dispatch default): ``gpu_smoke`` via ``run_gpu_tests.sh``
 - **full** (manual): entire GPU suite with VRAM-isolated phases
