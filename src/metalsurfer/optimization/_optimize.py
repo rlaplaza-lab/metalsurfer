@@ -144,8 +144,9 @@ def _run_optimize_with_oom_retry(
     Retryable failures are CUDA OOM and TorchSim's batcher capacity refusal
     (``ValueError`` "...greater than max_metric..."), raised when incoming
     systems outgrow the capacity probed by the current — often cached/reused —
-    autobatcher. The retry rebuilds without ``autobatcher_max_memory_scaler``
-    so TorchSim can re-probe the actual systems.
+    autobatcher. The retry rebuilds with an explicit ``autobatcher_max_memory_scaler``
+    of ``max_n_atoms`` so single-system batches are always admissible (see the
+    comment at the retry site for why the probe alone cannot be trusted).
 
     The retried attempt gets freshly built systems: a failed CUDA attempt may
     leave mutated / NaN state behind, and holding the originals would also keep
@@ -177,7 +178,17 @@ def _run_optimize_with_oom_retry(
         context,
         type(retry_exc).__name__,
     )
-    retry_config = replace(config, autobatcher_max_memory_scaler=None)
+    # TorchSim's auto-probe sets max_memory_scaler = n_systems * metric * 0.8,
+    # which is BELOW the metric of a single system when only one system fits
+    # (e.g. 1 * 866 * 0.8 = 692.8 < 866): the probe's safety margin excludes
+    # the very batch it just proved fits, and _get_next_states then hard-fails
+    # with "greater than max_metric". A scaler-free re-probe reproduces the
+    # same value, so the retry pins an explicit scaler of max_n_atoms: with
+    # the n_atoms metric every state (<= max_n_atoms) then fits into a
+    # one-system batch, which the probe demonstrated is within VRAM.
+    retry_config = replace(
+        config, autobatcher_max_memory_scaler=float(max(1, max_n_atoms))
+    )
     ab, _ = _get_inflight_autobatcher(
         ts_model,
         max_n_atoms,

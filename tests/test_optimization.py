@@ -1485,7 +1485,9 @@ def test_run_optimize_with_oom_retry_rebuilds_without_scaler(monkeypatch):
         context="test",
     )
     assert result == "ok"
-    assert seen_scalers == [None]
+    # Retry pins an explicit scaler at max_n_atoms so single-system batches
+    # are admissible (torch-sim's auto-probe margin can undercut one system).
+    assert seen_scalers == [10]
     assert config.autobatcher_max_memory_scaler == 500.0
 
 

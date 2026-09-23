@@ -128,7 +128,8 @@ CI parity
 | ``cd docs && make html``         | ``docs`` (Sphinx ``-W --keep-going``,    |
 |                                  | ``sphinx-lint``, linkcheck)              |
 | ``./scripts/run_gpu_tests.sh``   | ``kaggle-gpu`` (Kaggle T4; smoke weekly, |
-| ``METALSURFER_GPU_MODE=smoke``   | full via ``workflow_dispatch``)          |
+| ``METALSURFER_GPU_MODE=smoke``   | full/examples manual dispatch)           |
+| ``./scripts/run_all_examples.sh``| ``kaggle-gpu`` mode=examples (manual)    |
 +----------------------------------+------------------------------------------+
 
 Kaggle GPU CI
@@ -140,6 +141,7 @@ scrapes the log. Defaults:
 
 - **smoke** (cron + dispatch default): ``gpu_smoke`` via ``run_gpu_tests.sh``
 - **full** (manual): entire GPU suite with VRAM-isolated phases
+- **examples** (manual): ``scripts/run_all_examples.sh`` (bipyridine omitted)
 
 Requires repository secrets ``KAGGLE_API_TOKEN`` and ``HF_TOKEN`` (gated UMA).
 

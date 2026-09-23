@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Kaggle kernel entry point for metalsurfer GPU CI (rendered by kaggle-gpu.yml)."""
+"""Kaggle kernel entry point for metalsurfer GPU CI (rendered by kaggle-gpu.yml).
+
+Modes (__GPU_MODE__):
+  smoke   -- gpu_smoke test subset (~7 min)
+  full    -- full GPU test suite via run_gpu_tests.sh (~90 min)
+  examples -- run_all_examples.sh (bipyridine omitted; ~60 min on T4)
+"""
 
 from __future__ import annotations
 
@@ -50,7 +56,7 @@ def _log_kaggle_inputs() -> None:
 
 
 def _conda_exe() -> str | None:
-    """Return a usable conda executable, or ``None`` when conda is unavailable."""
+    """Return a usable conda executable, or None when conda is unavailable."""
     for candidate in (
         os.environ.get("CONDA_EXE", ""),
         "/opt/conda/bin/conda",
@@ -190,13 +196,13 @@ def _numpy_requirement() -> str:
 
 def _install_numpy(py: list[str], pip: list[str]) -> None:
     """Install project NumPy before torch (Kaggle base image ships 2.0.x)."""
-    del py  # unused; kept for call-site symmetry with other install helpers
+    del py
     spec = _numpy_requirement()
     run([*pip, "install", "--no-cache-dir", spec])
 
 
 def _install_torch_stack(py: list[str], pip: list[str]) -> None:
-    """Install CUDA torch on Kaggle where cu124 wheels may be 2.4–2.6 only."""
+    """Install CUDA torch on Kaggle where cu124 wheels may be 2.4--2.6 only."""
     del py
     attempts = (
         [
@@ -230,7 +236,14 @@ def _install_torch_stack(py: list[str], pip: list[str]) -> None:
 
 
 def _install_metalsurfer_mlip(py: list[str], pip: list[str]) -> None:
-    """Install metalsurfer[mlip,dev]; torch is already installed from the CUDA index."""
+    """Install metalsurfer[mlip,dev]; torch is already installed from the CUDA index.
+
+    IMPORTANT: pip install -e .[mlip,dev] --no-deps only installs the package
+    entry point; all dependencies (including torch-sim-atomistic, fairchem-core,
+    e3nn, etc.) must be installed explicitly from the combined dependency list.
+    The filter must only strip bare torch (the package itself), never
+    torch-sim-atomistic or other torch-* packages.
+    """
     del py
     data = tomllib.loads((WORKDIR / "pyproject.toml").read_text(encoding="utf-8"))
     deps = list(data["project"]["dependencies"])
@@ -241,11 +254,29 @@ def _install_metalsurfer_mlip(py: list[str], pip: list[str]) -> None:
         dep
         for dep in deps
         if not any(dep.startswith(prefix) for prefix in skip_prefixes)
-        and not dep.startswith("torch")
+        # Drop bare 'torch' but keep torch-sim-atomistic, torch>=..., torch== ...
+        and dep.strip().rstrip(",;") != "torch"
     ]
 
     run([*pip, "install", "--no-cache-dir", "-e", ".[mlip,dev]", "--no-deps"])
     run([*pip, "install", "--no-cache-dir", *install_deps])
+    # FairChem, e3nn, metatensor may pull CPU torch from PyPI as a transitive
+    # dep; force-reinstall from the CUDA index so the GPU build wins.
+    # Pin <2.13 to match _install_torch_stack: torch 2.13 breaks FairChem's
+    # UMA lazy init (model weights stay on CPU while indices land on cuda:0).
+    run(
+        [
+            *pip,
+            "install",
+            "--force-reinstall",
+            "--no-cache-dir",
+            "torch<2.13",
+            "--index-url",
+            PYTORCH_CUDA_INDEX,
+            "--extra-index-url",
+            PYPI_INDEX,
+        ]
+    )
 
 
 def _assert_numpy_version(py: list[str]) -> None:
@@ -274,6 +305,48 @@ def _assert_numpy_version(py: list[str]) -> None:
             ),
         ]
     )
+
+
+def _shadow_broken_system_pkg_resources(py: list[str], pip: list[str]) -> None:
+    """Shadow the Ubuntu system pkg_resources with a working pip-installed one.
+
+    The system pkg_resources at /usr/lib/python3/dist-packages/ predates
+    Python 3.12: it references ``pkgutil.ImpImporter`` (removed in 3.12)
+    and ``FileFinder.find_module`` (removed in 3.12), so importing it
+    crashes torchtnt and every other transitive pkg_resources consumer.
+
+    setuptools >= 81 no longer ships pkg_resources, so after all installs
+    we force-reinstall ``setuptools<81`` into /usr/local/.../dist-packages,
+    which precedes /usr/lib/python3/dist-packages in sys.path.  The healthy
+    pkg_resources then shadows the broken system copy for every process,
+    with no import-order tricks.
+    """
+    result = subprocess.run(
+        [*py, "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    pip_site = Path(result.stdout.strip())
+    if not pip_site.is_dir():
+        log(f"WARNING: pip site-packages not found at {pip_site}")
+        return
+    log(f"pip site-packages: {pip_site}")
+
+    system_pkg_resources = Path("/usr/lib/python3/dist-packages/pkg_resources")
+    if not system_pkg_resources.is_dir():
+        log("System pkg_resources not found; no shadowing needed")
+        return
+
+    # setuptools 80.9.0 is the last release shipping pkg_resources.
+    run([*pip, "install", "--no-cache-dir", "--force-reinstall", "setuptools<81"])
+    # Drop the .pth stub from earlier iterations if present.
+    for legacy in (
+        pip_site / "_0_impimporter_patch.pth",
+        pip_site / "sitecustomize.py",
+    ):
+        legacy.unlink(missing_ok=True)
+    log(f"Shadowed {system_pkg_resources} with pkg_resources from setuptools<81")
 
 
 def _assert_cuda_usable(py: list[str]) -> None:
@@ -308,7 +381,6 @@ def _configure_hf_auth(env: dict[str, str]) -> None:
         )
     env["HF_TOKEN"] = token
     env["HUGGING_FACE_HUB_TOKEN"] = token
-    # Avoid printing the token; huggingface_hub reads the env vars above.
 
 
 def _resolve_python_bin(py: list[str]) -> str:
@@ -362,23 +434,29 @@ def main() -> int:
         py = _resolve_python()
         pip = [*py, "-m", "pip"]
         run([*pip, "install", "--upgrade", "pip"])
+        run([*pip, "install", "--upgrade", "setuptools"])
         _install_numpy(py, pip)
         _install_torch_stack(py, pip)
         log("Installing metalsurfer[mlip,dev] for GPU suite")
         _install_metalsurfer_mlip(py, pip)
+        # After all installs (torch pins setuptools<82 which no longer ships
+        # pkg_resources): shadow the Python-3.12-incompatible system
+        # pkg_resources with a healthy pip-installed one.
+        _shadow_broken_system_pkg_resources(py, pip)
         _assert_numpy_version(py)
         _assert_cuda_usable(py)
 
         env = os.environ.copy()
         env.setdefault("PYTHONUNBUFFERED", "1")
         env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-        # Kernel already owns the GPU; skip nvidia-smi process cleanup.
         env["METALSURFER_CLEAR_GPU_PYTHON"] = "0"
         _configure_hf_auth(env)
 
         mode = (GPU_MODE or "smoke").strip().lower()
-        if mode not in ("smoke", "full"):
-            raise SystemExit(f"Unsupported GPU_MODE={mode!r}; expected smoke or full")
+        if mode not in ("smoke", "full", "examples"):
+            raise SystemExit(
+                f"Unsupported GPU_MODE={mode!r}; expected smoke, full, or examples"
+            )
 
         marker_override = (PYTEST_MARKER or "").strip()
         if marker_override:
@@ -398,9 +476,16 @@ def main() -> int:
             ]
             log("+ " + " ".join(pytest_cmd))
             returncode, oom_lines = _run_streaming(pytest_cmd, env)
+        elif mode == "examples":
+            script = WORKDIR / "scripts" / "run_all_examples.sh"
+            if not script.is_file():
+                raise FileNotFoundError(f"Missing examples runner: {script}")
+            python_bin = _resolve_python_bin(py)
+            cmd = ["bash", str(script), python_bin]
+            log("+ " + " ".join(cmd))
+            returncode, oom_lines = _run_streaming(cmd, env)
         else:
             env["METALSURFER_GPU_MODE"] = mode
-            # Prefer the phased VRAM-isolated runner for both modes.
             script = WORKDIR / "scripts" / "run_gpu_tests.sh"
             if not script.is_file():
                 raise FileNotFoundError(f"Missing GPU runner script: {script}")

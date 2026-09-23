@@ -4,7 +4,8 @@ name: Kaggle GPU tests
 # FairChem/UMA weights need HF_TOKEN (injected into the kernel runner).
 #
 # mode=smoke (default): gpu_smoke subset via scripts/run_gpu_tests.sh — weekly cron.
-# mode=full: entire GPU suite (manual only; burns Kaggle GPU quota).
+# mode=full: entire GPU test suite (manual only; burns Kaggle GPU quota).
+# mode=examples: run_all_examples.sh (manual; heavy, T4 ~60 min; bipyridine omitted).
 
 on:
   workflow_dispatch:
@@ -16,23 +17,24 @@ on:
         type: string
       mode:
         description: >
-          smoke = short GPU smoke (default); full = entire CUDA suite.
-          Prefer smoke unless debugging GPU regressions.
+          smoke = short GPU smoke (default); full = entire CUDA suite;
+          examples = run_all_examples.sh. Prefer smoke unless debugging regressions.
         required: false
         default: smoke
         type: choice
         options:
           - smoke
           - full
+          - examples
       marker:
         description: >
           Optional pytest marker override (bypasses run_gpu_tests.sh).
-          Leave empty to use METALSURFER_GPU_MODE smoke|full via the script.
+          Leave empty to use METALSURFER_GPU_MODE smoke/full via the script.
         required: false
         default: ""
         type: string
   schedule:
-    # Weekly smoke only (UTC Sunday). Full suite stays manual.
+    # Weekly smoke only (UTC Sunday). Full and examples stay manual.
     - cron: "0 6 * * 0"
 
 concurrency:
@@ -58,6 +60,10 @@ jobs:
           echo "ref=${REF}" >> "$GITHUB_OUTPUT"
           echo "mode=${MODE}" >> "$GITHUB_OUTPUT"
           echo "marker=${MARKER}" >> "$GITHUB_OUTPUT"
+          # Unique kernel slug per mode: concurrent smoke/full/examples runs
+          # would otherwise collide on the same kernel (status polling and
+          # log downloads always see the latest pushed version).
+          echo "slug-suffix=${MODE}" >> "$GITHUB_OUTPUT"
           echo "Resolved ref=${REF} mode=${MODE} marker=${MARKER:-<script default>}"
 
       - name: Checkout repository
@@ -144,8 +150,9 @@ jobs:
       - name: Run tests on Kaggle GPU
         run: |
           python -m pip install --upgrade kaggle
-          # Smoke: 1h kernel cap; full: 3h (still below Kaggle session limits).
-          if [ "${{ steps.cfg.outputs.mode }}" = "full" ]; then
+          if [ "${{ steps.cfg.outputs.mode }}" = "examples" ]; then
+            TIMEOUT=10800
+          elif [ "${{ steps.cfg.outputs.mode }}" = "full" ]; then
             TIMEOUT=10800
           else
             TIMEOUT=3600
@@ -154,6 +161,7 @@ jobs:
             --code-file .github/scripts/kaggle_gpu_runner.py \
             --machine-shape NvidiaTeslaT4 \
             --fetch-seconds 15 \
+            --slug-suffix "${{ steps.cfg.outputs.slug-suffix }}" \
             --timeout-seconds "${TIMEOUT}"
 
       - name: Dump Kaggle kernel log on failure
@@ -162,4 +170,5 @@ jobs:
         run: |
           python -m pip install --upgrade kaggle
           python .github/scripts/setup_kaggle_auth.py --require-existing
-          python .github/scripts/dump_kaggle_kernel_log.py "metalsurfergpuci" /tmp/kaggle-log
+          python .github/scripts/dump_kaggle_kernel_log.py \
+            "metalsurfergpuci-${{ steps.cfg.outputs.slug-suffix }}" /tmp/kaggle-log

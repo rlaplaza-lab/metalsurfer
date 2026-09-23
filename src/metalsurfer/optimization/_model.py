@@ -85,6 +85,44 @@ def _raise_fairchem_load_error(exc: Exception, model_name: str) -> NoReturn:
     raise RuntimeError(_fairchem_load_failure_message(error_msg, model_name)) from exc
 
 
+def _premove_fairchem_predictor_to_device(model: Any, dev: Any) -> None:
+    """Pre-move the FairChem predictor weights to ``dev`` before first predict.
+
+    fairchem-core >= 2.20 changed ``MLIPPredictUnit._lazy_init`` to run the
+    MOLE merge (``prepare_for_inference``) *before* ``move_to_device``. The
+    merge performs embedding lookups with batch indices; when torch-sim
+    hands over CUDA-resident batches (torch-sim-atomistic >= 0.6 behavior)
+    while the model weights are still on CPU, the first predict call dies
+    with "Expected all tensors to be on the same device". Moving the model
+    to the target device right after construction closes that window on
+    every fairchem version: on 2.11 the pre-move is redundant but harmless
+    (``move_to_device`` runs again in ``_lazy_init``), and on >= 2.20 it is
+    the difference between the merge working and crashing.
+    """
+    try:
+        predictor = getattr(model, "predictor", None)
+        target = getattr(predictor, "device", None)
+        inner = getattr(predictor, "model", None)
+        if predictor is None or target is None or inner is None:
+            return
+        # ``dev`` may be torch.device("cuda") while the predictor resolves to
+        # "cuda:0"; treat any cuda target as the intended device.
+        if str(target) != str(dev) and not str(target).startswith("cuda"):
+            return
+        inner.to(target)
+        # Task normalizers / element references live outside ``model``.
+        tasks = getattr(predictor, "tasks", None) or {}
+        for task in tasks.values():
+            for sub in (
+                getattr(task, "normalizer", None),
+                getattr(task, "element_references", None),
+            ):
+                if sub is not None:
+                    sub.to(target)
+    except (AttributeError, TypeError, RuntimeError) as exc:
+        logger.debug("FairChem predictor pre-move skipped: %s", exc)
+
+
 def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
     model_name: str = "uma-s-1p2",
     device: str = "cuda",
@@ -136,6 +174,7 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
             model = cast(Any, FairChemModel)(
                 model=model_name, device=dev, task_name=task_name
             )
+            _premove_fairchem_predictor_to_device(model, dev)
     except DependencyMissingError:
         raise
     except Exception as exc:

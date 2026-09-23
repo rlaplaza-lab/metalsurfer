@@ -136,6 +136,10 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install pytest
+          # Constrain setuptools to the <82 range metalsurfer requires so that
+          # torch's setuptools>=77.0.3 dep does not pull a version that later
+          # conflicts with fairchem-core / torchtnt resolution.
+          pip install "setuptools<82"
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[mlip]"
           pip install torch --index-url https://download.pytorch.org/whl/cpu --force-reinstall --no-deps
