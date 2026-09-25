@@ -384,8 +384,11 @@ Initial placement validation
 ``min_initial_distance``
     **Type:** ``float`` · **Default:** ``1.5`` (Å)
 
-    Minimum adsorbate–surface separation at placement time. Rejects structures
-    starting too close before relaxation.
+    Absolute floor (Å) on the closest adsorbate–surface pair. The distance
+    gate uses the larger of this value and ``covalent_sum * min_contact_ratio``.
+    Typical C/N/O–metal pairs are limited by the ratio. This floor is what
+    limits light atoms (H) and pairs with an unknown covalent radius. It is
+    not used by the stricter contact-quality checks.
 
 ``min_adsorbate_separation``
     **Type:** ``float`` · **Default:** ``1.5`` (Å)
@@ -412,9 +415,10 @@ Initial placement validation
 ``min_contact_ratio``
    **Type:** ``float`` · **Default:** ``0.8`` · **Valid range:** ``[0.5, 1.2]``
 
-   Lower bound on initial contact distance as a fraction of
-   ``(r_molecule + r_surface)``. Prevents covalent-overlap starts while allowing
-   reasonable approach distances.
+   Chemistry-scaled floor on the closest adsorbate–surface pair, as a fraction
+   of ``(r_molecule + r_surface)``. The distance gate uses the larger of this
+   and ``min_initial_distance``. Typical C/N/O–metal pairs are limited here;
+   light atoms (H) are limited by the absolute floor.
 
 ``max_initial_distance``
    **Type:** ``float | None`` · **Default:** ``None`` (Å)
@@ -425,49 +429,51 @@ Initial placement validation
 ``strict_initial_placement``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Enable contact-quality pre-relaxation checks (closest approach, contacting-atom
-   count). This is independent of van der Waals overlap rejection; use
-   ``reject_vdw_overlaps`` for VDW.
-
+   Turn on the contact-quality gate. Order: (1) closest pair no farther than
+   ``max_closest_approach``, (2) at least ``min_contact_atoms`` atoms within
+   ``contact_distance_threshold``, (3) with ``require_multiple_contact``, those
+   contact distances must not spread too much. Independent of van der Waals
+   rejection; use ``reject_vdw_overlaps`` for that.
 ``reject_vdw_overlaps``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Reject placements with van der Waals overlaps (stricter than covalent-radius
-   checks). Independent of ``strict_initial_placement``.
+   Also reject van der Waals overlaps (stricter than the covalent floor).
+   Independent of ``strict_initial_placement``.
 
 ``vdw_overlap_scale``
    **Type:** ``float`` · **Default:** ``1.0``
 
-   Scale factor applied to summed VDW radii when testing overlaps. Values ``> 1``
+   Scale on summed VDW radii when ``reject_vdw_overlaps`` is on. Values ``> 1``
    are stricter; ``< 1`` more lenient.
 
 ``max_closest_approach``
-    **Type:** ``float`` · **Default:** ``3.0`` (Å)
+   **Type:** ``float`` · **Default:** ``3.0`` (Å)
 
-   Maximum allowed closest-approach distance (Å) between the adsorbate and the
-   substrate when ``strict_initial_placement`` or ``require_multiple_contact`` is
-   enabled. Rejects placements whose nearest contact is farther than this
-   threshold. Distinct from ``contact_distance_threshold``, which only counts
-   contacting atoms.
+   Cap on the closest adsorbate–surface distance when contact quality is on.
+   Rejects starts that are still too far from the surface. Distinct from
+   ``contact_distance_threshold`` (which only counts contacting atoms) and from
+   ``min_contact_ratio`` (always-on covalent floor).
 
 ``min_contact_atoms``
    **Type:** ``int`` · **Default:** ``1``
 
-   Minimum number of molecule atoms within ``contact_distance_threshold`` of the
-   surface required to accept an initial placement under strict contact checks.
+   Minimum molecule atoms within ``contact_distance_threshold`` of the surface
+   under contact-quality checks.
 
 ``contact_distance_threshold``
    **Type:** ``float`` · **Default:** ``2.5`` (Å)
 
-   Distance cutoff for counting molecule atoms as surface-contacting during initial
-   validation.
+   Distance cutoff for counting surface-contacting atoms. Must sit between
+   ``min_initial_distance`` and ``max_closest_approach`` when a contact-quality
+   flag is on.
 
 ``require_multiple_contact``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Require at least ``max(2, min_contact_atoms)`` contacting atoms and reject
-   high contact-distance variance among those contacts. Useful for bidentate or
-   flat adsorbates.
+   Same contact-quality gate as ``strict_initial_placement``, but require at
+   least ``max(2, min_contact_atoms)`` contacting atoms and reject a large
+   spread among those contact distances. Useful for bidentate or flat
+   adsorbates.
 
 Relaxation and MLIP
 ~~~~~~~~~~~~~~~~~~~

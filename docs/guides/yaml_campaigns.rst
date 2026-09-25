@@ -26,35 +26,21 @@ default for :func:`~metalsurfer.run_campaign` is ``skip_existing=True``.
 Limitations
 -----------
 
-YAML is a convenience dispatch layer, not a full substitute for the Python
-``run_*`` APIs.
+YAML covers the same four run modes, with these limits:
 
-- **No package CLI.** Load and run via the Python API
-  (:func:`~metalsurfer.load_campaign_yaml` and
-  :func:`~metalsurfer.run_campaign`) or the demo runner
+- No package CLI — load with :func:`~metalsurfer.load_campaign_yaml` and
+  :func:`~metalsurfer.run_campaign`, or run
   ``examples/run_campaign_yaml.py``.
-- **Substrate sources from a YAML file.** Practical choices are ``bulk_id`` or
-  ``slab_file``. Inline ASE ``Atoms`` (``slab=``) cannot be expressed in a
-  standalone YAML file. Hand-built nanoparticles, downloaded NOMAD slabs, and
-  ASE-constructed oxides need the Python API (for example Pt₁₂, camphor, and
-  rutile TiO₂(110) under ``examples/``).
-- **Molecules are inline only.** A non-empty list of ``{smiles, name}``
-  entries. YAML does not accept a molecules CSV path (the Python ``run_*``
-  APIs do). Reservoir fields (``saturation_temperature`` /
-  ``saturation_pressure`` / ``saturation_activities`` /
-  ``saturation_omega_shift``) go under ``config:``.
-- **``run_campaign`` kwargs are minimal.** Only ``skip_existing`` is exposed.
-  Not available from YAML / ``run_campaign``: ``system_name``,
-  ``save_results``, ``write_settings``, ``run_metadata_out``,
-  ``process_kwargs``.
-- **No post-run validation hooks.** Python demos can assert on E_ads or
-  placement provenance; YAML runs stop at campaign results.
-- **Same runtime requirements.** Still needs the MLIP stack (and typically a
-  GPU).
+- Substrate from file only — use ``bulk_id`` or ``slab_file``. Hand-built
+  clusters and custom ASE structures need the Python API.
+- Molecules are an inline ``{smiles, name}`` list — no CSV path.
+- Only ``skip_existing`` is available as a ``run_campaign`` option.
+- No post-run validation hooks — results stop at the campaign return value.
+- Still needs the MLIP stack (and usually a GPU).
 
-Prefer ``prepare_substrate`` + ``run_*`` when you need custom ASE
-construction, CSV molecule libraries, extra campaign kwargs, or result
-validation. See :doc:`quickstart` and the Python scripts under ``examples/``.
+For custom ASE construction, molecule CSVs, or result checks, use
+``prepare_substrate`` + ``run_*`` instead. See :doc:`quickstart` and
+``examples/``.
 
 Document structure
 ------------------

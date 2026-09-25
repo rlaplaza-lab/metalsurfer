@@ -4,19 +4,22 @@ Quick Start
 Core idea
 ---------
 
-Metalsurfer is substrate-agnostic: pass any ASE ``Atoms`` object—periodic slab,
-fully periodic porous framework, or non-periodic cluster—after optional prep
-with :func:`~metalsurfer.surface_prep.prepare_substrate` (equilibration, PBC,
-ASE ``FixAtoms``). Supply adsorbates as SMILES; the library builds conformers,
-finds adsorption sites (``site_generator="auto"``: topology for slab/NP,
-Voronoi for porous; opt-in ``adaptive_grid`` / ``rolling_probe`` for
-wall-near sampling; material-aware via
-:attr:`~metalsurfer.AdsorptionConfig.material_type`). Catalog anchors are
-unlifted (``Site.kind`` ``wall`` / ``void``); placement height is solved in
-the local site frame. Candidates are deposited with orientation/height
-sampling, relaxed with an MLIP, validated, and ranked by adsorption energy.
-The four ``run_*`` campaign APIs orchestrate screening, Bayesian placement
-search, or sequential saturation on that pipeline.
+Give Metalsurfer a material structure (slab, nanoparticle, or porous
+framework) and one or more molecules as SMILES. Prep equilibrates and freezes
+the substrate; the library places conformers, relaxes them with an MLIP, and
+ranks by adsorption energy.
+
+Four campaign functions cover the usual workflows:
+
+- :func:`~metalsurfer.run_adsorption` — standard screening
+- :func:`~metalsurfer.run_adsorption_bo` — Bayesian placement search
+- :func:`~metalsurfer.run_saturation` — sequential coverage
+- :func:`~metalsurfer.run_saturation_bo` — Bayesian saturation
+
+Set ``material_type`` on :class:`~metalsurfer.AdsorptionConfig` to match the
+substrate (``slab``, ``nanoparticle``, or ``porous``).
+``surface_type`` on ``run_*`` is only the results folder name
+(``results_{surface_type}/``).
 
 
 Installation
@@ -146,27 +149,15 @@ By default, ``skip_existing=True`` skips molecules already listed in
 ``adsorption_energies_detailed.csv`` (in-memory lists and CSV paths). Official
 demos pass ``skip_existing=False`` so re-runs always compute.
 
-``surface_type`` is only the output folder name (``results_{surface_type}/``);
-physics come from ``AdsorptionConfig.material_type`` and the prepared substrate.
-
-Use :func:`~metalsurfer.run_adsorption_bo` for Bayesian placement search.
-BO mode is selected by the entry point (or YAML ``campaign``; see
-:doc:`yaml_campaigns`); config only holds BO hyperparameters.
-
-Campaign APIs accept plain ASE ``Atoms`` or :class:`~metalsurfer.surface_prep.SlabContainer`,
-but the structure must be **campaign-ready** before the call: **equilibrated ionic
-positions** (from prep unless ``slab_relaxation_mode="none"``), PBC matching
-``AdsorptionConfig.material_type``, adequate cell/vacuum, and (typically) ASE
-``FixAtoms`` from prep. Define :class:`~metalsurfer.AdsorptionConfig` first,
-build the substrate with ASE, then pass it to
-:func:`~metalsurfer.surface_prep.prepare_substrate` via ``slab=``. Layout
-conventions are described in :doc:`surface_engineering`.
+Campaign APIs accept plain ASE ``Atoms`` or
+:class:`~metalsurfer.surface_prep.SlabContainer`. Prepare the structure first
+with :func:`~metalsurfer.surface_prep.prepare_substrate` (or
+``slab_relaxation_mode="none"`` for a published geometry). Layout conventions:
+:doc:`surface_engineering`.
 
 Prefer ``write_settings=True`` (default) so campaigns write ``run_metadata.json``.
-Set ``write_settings=False`` to suppress it.
 
-YAML campaigns (structure, limitations, and demo files under ``examples/``):
-:doc:`yaml_campaigns`.
+YAML campaigns: :doc:`yaml_campaigns`.
 
 Slab
 ~~~~~
@@ -290,9 +281,8 @@ For step-by-step bulk, alloy, and adatom workflows see :doc:`surface_engineering
 Bayesian Screening
 ------------------
 
-Bayesian mode keeps the same physical pipeline and output types, but
-replaces sampled placement evaluation with surrogate-guided candidate
-selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
+Same physical pipeline as standard screening, but placements are chosen by a
+surrogate. Use :func:`~metalsurfer.run_adsorption_bo`:
 
 .. code-block:: python
 
@@ -318,13 +308,8 @@ selection.  Use :func:`~metalsurfer.run_adsorption_bo`:
        surface_type="Ru0001_bo",
    )
 
-BO knobs live on :class:`~metalsurfer.AdsorptionConfig` as nested
-``config.bo`` / ``config.bo.transfer`` (:class:`~metalsurfer.BOConfig`,
-:class:`~metalsurfer.BOTransferConfig`); see
-:doc:`configuration` (budget math and recipes) and
-:doc:`../api/config` (full field reference — Bayesian optimization).
-Remember ``bo.total_budget`` is acquisition batches; after sizes resolve, call
-:func:`~metalsurfer.config.resolved_bo_eval_budget` for the total evaluation count.
+BO knobs live under ``config.bo`` / ``config.bo.transfer``. Budget math and
+recipes: :doc:`configuration`. Field reference: :doc:`../api/config`.
 
 Sequential Saturation
 ---------------------
@@ -411,21 +396,15 @@ competing from pH 7–14 via ``saturation_activities``) lives at
 
    python scripts/tutorials/water_oh_pt4_saturation.py
 
-Important saturation behaviors:
+Saturation settings and BO transfer: :doc:`configuration` and
+:doc:`../api/config`. Resize the in-plane cell during prep when the adsorbate
+is large. BO-guided coverage:
+:func:`~metalsurfer.run_saturation_bo` or YAML ``campaign: saturation_bo``.
 
-- Prep equilibrates the substrate before campaigns; adsorption respects ASE
-  ``FixAtoms`` from prep. See :doc:`surface_engineering` and
-  :doc:`configuration`.
-- Resize in-plane supercells during prep
-  (``auto_resize_substrate_for_molecule``) before calling campaign APIs.
-- Use :func:`~metalsurfer.run_saturation_bo` (or YAML ``campaign: saturation_bo``;
-  see :doc:`yaml_campaigns`) for BO-guided saturation.
-- Saturation-specific config fields (``saturation_*``, ``multi_molecule_saturation``,
-  ``bo.transfer.*``): :doc:`configuration` and :doc:`../api/config`.
-- When printing completion summaries, pass
-  ``write_vasp_inputs=config.write_vasp_inputs`` to
-  :meth:`~metalsurfer.SaturationCampaignResult.format_completion`.
+When printing completion summaries, pass
+``write_vasp_inputs=config.write_vasp_inputs`` to
+:meth:`~metalsurfer.SaturationCampaignResult.format_completion`.
 
-A full defected-surface saturation example (fixed substrate, adatom prep) lives
-under ``examples/bipyridine_au111_defects_saturation_raw.py``; see also
-:doc:`surface_engineering`.
+Defected-surface example:
+``examples/bipyridine_au111_defects_saturation_raw.py`` (see also
+:doc:`surface_engineering`).

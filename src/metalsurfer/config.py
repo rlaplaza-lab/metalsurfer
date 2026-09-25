@@ -328,6 +328,37 @@ SLAB_RELAXATION_OPTIMIZER_OPTIONS: tuple[SLAB_RELAXATION_OPTIMIZER, ...] = (
 )
 
 
+def _validate_strict_contact_window(root: "AdsorptionConfig") -> None:
+    """Require a non-empty band when a stricter contact check is on.
+
+    Either ``strict_initial_placement`` or ``require_multiple_contact`` turns
+    the contact-quality gate on. Pairs closer than ``min_initial_distance`` are
+    already rejected by the distance gate, so the count cutoff and the
+    closest-approach cap must sit at or above that floor. The count cutoff
+    must also sit at or below the cap: an atom counted as "in contact" cannot
+    be farther than "close enough".
+
+    The admissible band is ``min_initial_distance <= contact_distance_threshold
+    <= max_closest_approach``.
+    """
+    if not (root.strict_initial_placement or root.require_multiple_contact):
+        return
+    floor = float(root.min_initial_distance)
+    count_cutoff = float(root.contact_distance_threshold)
+    closest_cap = float(root.max_closest_approach)
+    if floor <= count_cutoff <= closest_cap:
+        return
+    raise ValueError(
+        "When strict_initial_placement or require_multiple_contact is enabled, "
+        "require min_initial_distance <= contact_distance_threshold "
+        "<= max_closest_approach "
+        "(empty admissible contact window otherwise); "
+        f"got min_initial_distance={root.min_initial_distance}, "
+        f"contact_distance_threshold={root.contact_distance_threshold}, "
+        f"max_closest_approach={root.max_closest_approach}"
+    )
+
+
 def _validate_placement(root: "AdsorptionConfig") -> None:
     _check_positive("max_closest_approach", root.max_closest_approach)
     _check_positive_int("min_contact_atoms", root.min_contact_atoms)
@@ -393,23 +424,7 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
             "min_initial_distance must be <= max_initial_distance, "
             f"got min={root.min_initial_distance}, max={root.max_initial_distance}"
         )
-    if root.strict_initial_placement or root.require_multiple_contact:
-        floor = float(root.min_initial_distance)
-        max_approach = float(root.max_closest_approach)
-        contact_thresh = float(root.contact_distance_threshold)
-        if (
-            max_approach < floor
-            or contact_thresh < floor
-            or max_approach < contact_thresh
-        ):
-            raise ValueError(
-                "When strict_initial_placement or require_multiple_contact is enabled, "
-                "require max_closest_approach >= contact_distance_threshold >= "
-                "min_initial_distance (empty admissible contact window otherwise); "
-                f"got max_closest_approach={root.max_closest_approach}, "
-                f"contact_distance_threshold={root.contact_distance_threshold}, "
-                f"min_initial_distance={root.min_initial_distance}"
-            )
+    _validate_strict_contact_window(root)
     if not 0.0 <= root.flat_aromatic_parallel_fraction <= 1.0:
         raise ValueError(
             "flat_aromatic_parallel_fraction must be in [0.0, 1.0], "
@@ -769,6 +784,9 @@ class AdsorptionConfig:
     )
     flat_aromatic_parallel_fraction: float = 0.5
     adaptive_parallel_fraction: bool = True
+    # Absolute Å floor. The distance gate uses the larger of this and
+    # covalent_sum * min_contact_ratio. The ratio wins for typical C/N/O–metal
+    # pairs; this floor wins for light atoms (H) and unknown radii.
     min_initial_distance: float = MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
     min_contact_ratio: float = MIN_CONTACT_RATIO_DEFAULT
     max_initial_distance: float | None = None

@@ -391,7 +391,44 @@ Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi`` /
        filter; default remaps from the structure PBC mask). Wall-near only; no
        public spacing knob (shares default adaptive_grid NMS density)
 
-See :doc:`configuration` for the full knob-by-plugin table.
+.. list-table:: Which site-generator knobs apply where
+   :header-rows: 1
+   :widths: 36 64
+
+   * - Knob group
+     - Applies to
+   * - Shared window: ``voronoi_probe_radius``, ``voronoi_max_site_distance``, ``voronoi_auto_widen``
+     - Accessibility window for all plugins; one-shot widen retry for topology / Voronoi only
+   * - ``top_layer_tolerance``, ``planar_z_variance_threshold``
+     - Topology slab (planarity + top-layer band); slab height mask / symmetry planar flag
+   * - ``voronoi_site_enrichment``
+     - Voronoi (porous / explicit slab); topology slab when the top layer is rough (planar topology and NP skip Voronoi → no-op)
+   * - ``adaptive_grid_spacing``, ``adaptive_grid_refine_levels``, ``adaptive_grid_nms_framework_scale``
+     - ``adaptive_grid`` only
+   * - ``side_policy``
+     - ``adaptive_grid`` and ``rolling_probe`` (packed into the site-cache key for those plugins)
+   * - ``n_jobs``
+     - ``adaptive_grid`` shells / refine; ``rolling_probe`` contacts; Voronoi ridge enrich (and rough topology-slab enrich). Topology NP is serial (hull + NN graph) by design
+   * - ``site_classification_method``, ``site_equivalence_tolerance``, ``symmetry_tolerance``
+     - Shared post-process after every plugin
+
+Default conclusions from the site A/B + GPU-full binding demos
+(``examples/compare_adaptive_grid_ab.py``; H₂/Ru, H₂/Pt₁₃, CO₂/MOF,
+ethene/Ru₅₅, camphor/Cu(111) BO):
+
+- Keep ``auto`` (topology for slab/NP, Voronoi for porous) as the production
+  default. ``adaptive_grid`` and ``rolling_probe`` give comparable best E_ads
+  on metals / MOF walls; neither replaces Voronoi for pore-centre screening.
+- Keep one global adaptive_grid default set: ``adaptive_grid_spacing=0.70``,
+  ``adaptive_grid_refine_levels=0``, ``adaptive_grid_nms_framework_scale=0.25``,
+  ``side_policy="positive"``. Finer spacing or refine>0 inflate MOF/metal
+  wall-near counts and wall time; larger NMS floors over-merge flat metal
+  catalogs.
+- Keep ``voronoi_site_enrichment=True``: on RUBTAK01 enrich roughly doubles
+  non-pore sites at nearly the same wall time while preserving pore count.
+- Set ``site_generator="adaptive_grid"`` or ``"rolling_probe"`` only when you
+  explicitly want a uniform wall-near path (e.g. stepped/rough slabs or MOF
+  pore **walls**). Do **not** use either for MOF pore-centre screening.
 
 **Intentional asymmetries** (not unfinished ports): top-layer mesh + topology
 on slabs (pure Voronoi floods the batch with weak candidates); hull +
@@ -523,11 +560,12 @@ geometry-valid pool is built once when features are extracted.
 Initial geometry validation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-1. Covalent distance — ``min_initial_distance``, ``max_initial_distance``,
-   ``min_contact_ratio``.
-2. VDW — ``reject_vdw_overlaps``, ``vdw_overlap_scale``.
-3. Contact quality — ``strict_initial_placement``, ``max_closest_approach``,
-   ``min_contact_atoms``, ``require_multiple_contact``, …
+Always: covalent floor
+``max(min_initial_distance, covalent_sum * min_contact_ratio)``, optional
+``max_initial_distance``, then optional VDW when ``reject_vdw_overlaps``.
+Under coverage: adsorbate–adsorbate separation. Contact quality only when
+``strict_initial_placement`` or ``require_multiple_contact`` (closest approach,
+contact count, then variance). User-facing summary: :doc:`configuration`.
 
 Under saturation, substrate contact uses ``exclude_slab_atoms``;
 pre-adsorbed atoms use ``check_adsorbate_separation``. Typed failure

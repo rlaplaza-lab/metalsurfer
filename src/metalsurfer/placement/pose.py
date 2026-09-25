@@ -1788,6 +1788,15 @@ def _validate_posed_adsorbate(
 ) -> str | None:
     """Run distance, adsorbate-separation, and optional contact-quality checks.
 
+    Order:
+
+    1. Always: covalent floor ``max(min_initial_distance, covalent_sum *
+       min_contact_ratio)``, optional ``max_initial_distance``, then optional
+       van der Waals overlap when ``reject_vdw_overlaps`` is set.
+    2. Under coverage: adsorbate–adsorbate separation.
+    3. Only when ``strict_initial_placement`` or ``require_multiple_contact``:
+       contact quality (closest approach, contact count, then variance).
+
     Returns a failure reason token, or ``None`` when the placement is accepted.
     *material_type* defaults to ``config.material_type``; callers with a resolved
     placement context should pass ``ctx.mat_type``.

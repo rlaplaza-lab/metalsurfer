@@ -25,33 +25,23 @@ and PBC but do not rewrite constraints or resize the cell.
 Campaign-ready substrates
 -------------------------
 
-Import all prep helpers from :mod:`metalsurfer.surface_prep` (see
-:doc:`Substrate preparation <../api/surface_prep>`). Before ``run_adsorption``, ``run_saturation``, or
-related APIs, the substrate should be **campaign-ready**: prepared with
-:func:`~metalsurfer.surface_prep.prepare_substrate` (or equivalent step-by-step
-helpers). Prep equilibrates ions, applies PBC, attaches constraints, and validates.
-The entry points re-validate PBC, vacuum, and cell geometry (and warn if ``FixAtoms``
-are missing), but they do **not** re-equilibrate ions or re-anchor the slab — those
-are prep outputs you are responsible for.
+Before ``run_*``, prepare the substrate with
+:func:`~metalsurfer.surface_prep.prepare_substrate` (helpers:
+:mod:`metalsurfer.surface_prep`, :doc:`../api/surface_prep`). Prep
+equilibrates ions, sets PBC, attaches freeze constraints, and validates.
+Campaign APIs check geometry again but do not re-relax or re-freeze.
 
-A campaign-ready substrate therefore has:
+A prepared substrate has:
 
-- **Equilibrated ionic positions** — ``prepare_substrate`` relaxes the substrate by
-  default (``slab_relaxation_mode="ionic_only"``); campaign APIs assume this
-  optimized reference for ``E(slab)`` and ``E_ads``. Use
-  ``slab_relaxation_mode="none"`` only for experimental geometries that must not move.
-- PBC matching ``AdsorptionConfig.material_type`` (``[T,T,F]`` for slabs,
-  ``[T,T,T]`` for porous frameworks, ``[F,F,F]`` for nanoparticles)
-- For ``material_type="slab"``, a bottom-anchored layout (``min(z) ≈ 0``) produced
-  by prep — the entry points expect prep's z-alignment rather than re-imposing it
-- ASE ``FixAtoms`` (attached by ``prepare_substrate``; default freezes the entire
-  substrate; ``relax_top_layer=True`` is a material-aware shortcut)
-- Sufficient in-plane image separation for your adsorbates (use
-  :func:`~metalsurfer.surface_prep.resize_substrate_for_molecule` after
-  conformer generation when needed)
-
-:func:`~metalsurfer.surface_prep.prepare_substrate` is the recommended
-one-call path: equilibrate ions, apply PBC, attach constraints, validate.
+- Equilibrated ions (default ``slab_relaxation_mode="ionic_only"``), or
+  ``"none"`` when a published geometry must not move
+- PBC matching ``material_type`` (slab ``[T,T,F]``, porous ``[T,T,T]``,
+  nanoparticle ``[F,F,F]``)
+- For slabs, bottom-anchored layout (``min(z) ≈ 0``)
+- ASE ``FixAtoms`` (default: freeze the whole substrate;
+  ``relax_top_layer=True`` frees a surface band)
+- Enough in-plane cell for the adsorbate (see
+  :func:`~metalsurfer.surface_prep.resize_substrate_for_molecule` when needed)
 
 
 One-Call Preparation

@@ -12,13 +12,12 @@ Pass any ASE `Atoms` structure after optional prep with `prepare_substrate`, sup
 
 ## Features
 
-- **Substrate-agnostic** — periodic slabs, non-periodic clusters, and fully periodic porous frameworks
-- **MLIP relaxation** — TorchSim/FairChem-backed optimization (UMA default `model_name="uma-s-1p2"`, `task_name="oc25"`)
-- **Orientation-aware placement** — `site_generator="auto"` picks topology (slab/NP) or Voronoi (porous); opt-in `adaptive_grid` / `rolling_probe` for wall-near sampling; shared fingerprint clustering and optional symmetry reduction (`AdsorptionConfig.material_type`); clash-descent salvage and footprint occupancy ranking on by default
-- **Four campaign modes** — standard screening, Bayesian screening, sequential saturation, and BO saturation; with competitive multi-molecule and multi-placement-per-step (n-tuplet) coverage modes
-- **Bayesian pose search** — 8-D features (`x,y,z`, conformer index, quaternion) drive surrogate-guided placement
-- **Surface prep** — equilibration, PBC, alloy/adatom modifiers, and ASE `FixAtoms` via `prepare_substrate`
-- **Reproducible workflows** — seeded conformer and placement sampling; structured CSV/XYZ output
+- **Substrate-agnostic** — slabs, nanoparticles, and porous frameworks
+- **MLIP relaxation** — TorchSim / FairChem UMA (default `uma-s-1p2` / `oc25`)
+- **Automatic sites** — topology on metals, Voronoi in pores; optional near-atom generators
+- **Four campaign modes** — screening, Bayesian screening, saturation, and BO saturation
+- **Surface prep** — equilibration, alloys, adatoms, and freeze constraints
+- **Reproducible output** — seeded sampling; CSV and XYZ results
 
 ## Install
 

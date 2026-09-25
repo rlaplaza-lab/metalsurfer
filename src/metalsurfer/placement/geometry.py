@@ -1015,9 +1015,11 @@ def check_initial_placement_distance(
             ],
             dtype=float,
         )
+    # Larger of the absolute floor and the chemistry-scaled floor. Light pairs
+    # (H, unknown radii) are limited by min_distance; heavier pairs by
+    # covalent_sum * min_contact_ratio.
     allowed = (mol_r[:, None] + slab_r[None, :]) * float(min_contact_ratio)
     np.maximum(allowed, float(min_distance), out=allowed)
-    # Unknown radii: fall back to flat min_distance for that pair.
     np.nan_to_num(allowed, nan=float(min_distance), copy=False)
     if np.any(dists < allowed):
         return False, actual_min, "too_close"
@@ -1141,28 +1143,23 @@ def check_initial_contact_quality(
     material_type: str = "slab",
     pairwise_distances: np.ndarray | None = None,
 ) -> tuple[bool, str]:
-    """Contact-quality gate for initial placements; returns (ok, reason_token).
+    """Return contact-quality gate result as ``(ok, reason_token)``.
 
-    Parameters
-    ----------
-    molecule_atoms
-        Adsorbate :class:`~ase.Atoms` object.
-    slab
-        Substrate :class:`~ase.Atoms` object.
-    strict_initial_placement
-        Whether to enforce strict placement checks.
-    require_multiple_contact
-        Whether to require multiple contacting atoms.
-    max_closest_approach
-        Maximum allowed closest approach distance (Å).
-    min_contact_atoms
-        Minimum number of atoms that must make contact.
-    contact_distance_threshold
-        Distance threshold for contact counting (Å).
-    exclude_slab_atoms
-        Number of substrate atoms to exclude from checks.
-    material_type
-        Material type for PBC flags.
+    Off unless ``strict_initial_placement`` or ``require_multiple_contact`` is
+    set. Either flag runs the same first two checks; only the multi-contact
+    flag adds the third:
+
+    1. Closest adsorbate–surface pair no farther than ``max_closest_approach``
+       (``contact_distance_too_large``).
+    2. At least ``min_contact_atoms`` molecule atoms within
+       ``contact_distance_threshold`` (``insufficient_contact_atoms``).
+       ``require_multiple_contact`` raises that count to at least 2.
+    3. When ``require_multiple_contact`` and more than one atom counts, those
+       contact distances must not spread by more than
+       ``_CONTACT_ATOM_VARIANCE_MAX`` (``contact_distance_variance_too_high``).
+
+    This gate does not apply ``min_initial_distance`` or ``min_contact_ratio``.
+    Those already ran in :func:`check_initial_placement_distance`.
     """
     if not strict_initial_placement and not require_multiple_contact:
         return True, "strict_placement_checks_disabled"
@@ -1182,16 +1179,18 @@ def check_initial_contact_quality(
     contact_dist = float(metrics["contact_distance"])
     num_contacting = int(metrics["num_contacting_atoms"])
 
+    # 1. Nearest pair must actually reach the surface.
     if contact_dist > max_closest_approach:
         return False, "contact_distance_too_large"
 
-    min_contacts = int(min_contact_atoms)
+    # 2. Enough molecule atoms inside the counting cutoff.
+    required_contacts = int(min_contact_atoms)
     if require_multiple_contact:
-        min_contacts = max(2, min_contacts)
-
-    if num_contacting < min_contacts:
+        required_contacts = max(2, required_contacts)
+    if num_contacting < required_contacts:
         return False, "insufficient_contact_atoms"
 
+    # 3. Multi-contact only: those touches should be a similar distance apart.
     if require_multiple_contact and num_contacting > 1:
         contact_atom_var = float(metrics["contact_atom_variance"])
         if contact_atom_var > _CONTACT_ATOM_VARIANCE_MAX:
