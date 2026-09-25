@@ -57,9 +57,10 @@ def _is_flat_aromatic(
 ) -> bool:
     """Check whether the adsorbate is flat with aromatic EN atoms (parallel-placement candidate).
 
-    With SMILES, requires RDKit aromatic rings plus electronegative or charged
-    binders. Without SMILES, any flat molecule that has binder candidates
-    qualifies (no aromatic-ring check is possible from symbols alone).
+    With SMILES, requires RDKit aromatic rings plus binders (electronegative
+    elements, formal charges, or exclusive ``[atom:map]`` tags). Without
+    SMILES, any flat molecule that has binder candidates qualifies
+    (no aromatic-ring check is possible from symbols alone).
     """
     if shape != "flat":
         return False
@@ -78,43 +79,84 @@ def _smiles_aromatic_binder_info(smiles: str) -> tuple[bool, int] | None:
         return None
     symbols = [a.GetSymbol() for a in mol.GetAtoms()]
     n_aromatic = sum(1 for a in mol.GetAtoms() if a.GetIsAromatic())
-    marked = _smiles_marked_heavy_indices(smiles) or ()
-    has_en = bool(geom._binding_atom_candidates(symbols, marked))
+    has_en = bool(_adsorbate_binder_indices(symbols, smiles))
     return bool(n_aromatic > 0 and has_en), n_aromatic
 
 
 @lru_cache(maxsize=256)
-def _smiles_marked_heavy_indices(smiles: str) -> tuple[int, ...] | None:
-    """Return indices of formally charged or ``[atom:map]``-tagged atoms.
+def _smiles_tag_charge_indices(
+    smiles: str,
+) -> tuple[tuple[int, ...], tuple[int, ...]] | None:
+    """Return ``(tagged_indices, charged_indices)`` for the heavy-atom SMILES.
 
-    A heavy atom counts as *marked* when it carries a nonzero formal charge
-    (e.g. ``[CH2+]``) or an RDKit atom-map number (e.g. ``[C:1]``). Map
-    numbers therefore let users condition sampling: tag the atoms that should
-    act as EN-down contact points.
-
-    Parsed exactly as written (no ``Chem.AddHs`` pass); RDKit preserves
-    heavy-atom order, charges, and map numbers through ``AddHs``, so these
-    indices address every conformer atom list built by
-    ``create_conformers_from_smiles`` directly. ``None`` marks a failed parse
-    so callers fall back to element-only binders.
+    *tagged* atoms have a nonzero RDKit atom-map number (``[C:1]``);
+    *charged* atoms have a nonzero formal charge (``[CH2+]``, ``[C-]``).
+    An atom can appear in both. Parsed without ``Chem.AddHs``; RDKit
+    preserves heavy-atom order, charges, and map numbers through ``AddHs``,
+    so these indices address conformers from
+    ``create_conformers_from_smiles``. ``None`` marks a failed parse.
     """
     Chem = _rdkit_chem()
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
-    return tuple(
-        a.GetIdx()
-        for a in mol.GetAtoms()
-        if a.GetFormalCharge() != 0 or a.GetAtomMapNum() != 0
-    )
+    tagged: list[int] = []
+    charged: list[int] = []
+    for a in mol.GetAtoms():
+        idx = a.GetIdx()
+        if a.GetAtomMapNum() != 0:
+            tagged.append(idx)
+        if a.GetFormalCharge() != 0:
+            charged.append(idx)
+    return tuple(tagged), tuple(charged)
+
+
+def _adsorbate_binder_indices(
+    symbols: list[str],
+    smiles: str | None,
+) -> list[int]:
+    """Return the resolved EN-down binder pool for *symbols* / *smiles*.
+
+    When the SMILES has one or more ``[atom:map]`` tags (``:1``, ``:2``, …),
+    those tagged atoms are the *exclusive* binder set — element-based EN
+    atoms and untagged formal charges are ignored so sampling focuses on
+    experimentally known contact points. Without tags, binders are the
+    electronegative elements (O, N, S, halogens) union formally charged
+    atoms. Without SMILES, only element-based binders are used.
+    """
+    if smiles is None:
+        return geom._binding_atom_candidates(symbols)
+    info = _smiles_tag_charge_indices(smiles)
+    if info is None:
+        return geom._binding_atom_candidates(symbols)
+    tagged, charged = info
+    if tagged:
+        return geom._binding_atom_candidates(symbols, tagged, exclusive=True)
+    return geom._binding_atom_candidates(symbols, charged)
 
 
 def _marked_binder_indices(smiles: str | None) -> tuple[int, ...]:
-    """Charged / SMILES-tagged atom conformer indices, or an empty tuple."""
+    """SMILES indices passed into geometry for EN-down (tags or charges).
+
+    When tags are present they are returned alone (exclusive mode); otherwise
+    charged-atom indices. Empty when there is no SMILES or parse fails.
+    Prefer :func:`_adsorbate_binder_indices` for the full resolved binder list.
+    """
     if smiles is None:
         return ()
-    info = _smiles_marked_heavy_indices(smiles)
-    return info if info is not None else ()
+    info = _smiles_tag_charge_indices(smiles)
+    if info is None:
+        return ()
+    tagged, charged = info
+    return tagged if tagged else charged
+
+
+def _exclusive_marked_binders(smiles: str | None) -> bool:
+    """Return whether EN-down should use tagged atoms exclusively."""
+    if smiles is None:
+        return False
+    info = _smiles_tag_charge_indices(smiles)
+    return bool(info is not None and info[0])
 
 
 def _is_flat_aromatic_with_en(smiles: str) -> bool:
@@ -190,11 +232,10 @@ def _estimate_parallel_fraction(
     - multiple binders: ratio of binders to ring atoms selects 0.8 / 0.5 / 0.3
 
     Without SMILES, ring size falls back to the carbon-atom count, so the same
-    molecule can score differently than with SMILES marked atoms (formal
-    charges and ``[atom:map]`` tags).
+    molecule can score differently than with SMILES binders (formal charges
+    and exclusive ``[atom:map]`` tags).
     """
-    marked = _marked_binder_indices(smiles)
-    binders = geom._binding_atom_candidates(symbols, marked)
+    binders = _adsorbate_binder_indices(symbols, smiles)
     n_binders = len(binders)
     if n_binders == 0:
         return _PARALLEL_FRACTION_NO_BINDERS
@@ -275,6 +316,7 @@ def _orient_binder_aligned(
     symbols: list[str],
     spec: PlacementSpec,
     marked_indices: Sequence[int] = (),
+    exclusive_marked: bool = False,
     tangent_basis: np.ndarray | None = None,
 ) -> OrientedAdsorbate:
     base_pos, R_base = geom._surface_aligned_rotation(
@@ -283,6 +325,7 @@ def _orient_binder_aligned(
         symbols,
         en_binder_index=spec.en_atom_index,
         marked_indices=marked_indices,
+        exclusive_marked=exclusive_marked,
     )
     return _finish_orientation(
         base_pos, normal, spec, R_base=R_base, tangent_basis=tangent_basis
@@ -296,6 +339,7 @@ def orient_from_spec(
     symbols: list[str],
     spec: PlacementSpec,
     marked_indices: Sequence[int] = (),
+    exclusive_marked: bool = False,
     tangent_basis: np.ndarray | None = None,
 ) -> OrientedAdsorbate:
     """Select parallel vs binder-aligned orientation from *spec.orientation_type*.
@@ -311,8 +355,11 @@ def orient_from_spec(
     spec
         :class:`~metalsurfer.models.PlacementSpec` defining the orientation.
     marked_indices
-        Conformer indices of formally charged or ``[atom:map]``-tagged atoms
-        (from the heavy-atom SMILES graph) to treat as binder candidates.
+        Conformer indices of tagged (or, without tags, charged) atoms from
+        the heavy-atom SMILES graph.
+    exclusive_marked
+        When True, only *marked_indices* are EN-down binders (``[atom:map]``
+        tags present). When False, they merge with electronegative elements.
     tangent_basis
         Optional site ``(2, 3)`` tangent frame for azimuth zero.
     """
@@ -330,5 +377,6 @@ def orient_from_spec(
         symbols=symbols,
         spec=spec,
         marked_indices=marked,
+        exclusive_marked=exclusive_marked,
         tangent_basis=tangent_basis,
     )

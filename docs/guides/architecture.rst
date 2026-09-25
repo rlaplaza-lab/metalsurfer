@@ -455,11 +455,12 @@ Enumeration / materialization
   ``SiteContext.sites`` catalog (competitive saturation reuses one frame).
 - ``orientation.py`` — aromatic heuristics plus ``orient_from_spec`` used by
   pose. EN-down binder candidates are the electronegative elements (O, N, S,
-  halogens) **plus marked atoms taken from the heavy-atom SMILES graph** —
-  formally charged atoms (``[CH2+]``) and ``[atom:map]``-tagged atoms
-  (``[C:1]``). RDKit heavy-atom order addresses conformer indices directly,
-  so charged carbocations and user-tagged atoms count as contact points, and
-  tagging is a sampling-conditioning knob. Dissociative two-site
+  halogens) union formally charged atoms (``[CH2+]``, ``[C-]``), **unless**
+  the SMILES carries ``[atom:map]`` tags (``[C:1]``, ``[N:2]``, …): tags are
+  then the *exclusive* binder set so sampling can focus on experimentally
+  known contact points (policy round-robins those tagged binders on the
+  EN-down axis). RDKit heavy-atom order addresses conformer indices
+  directly. Dissociative two-site
   placement uses ``_place_dissociative_two_sites``
   / ``_generate_dissociative_placement_from_spec`` in ``dissociative.py``.
   Molecular / adatom placement goes through

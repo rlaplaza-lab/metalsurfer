@@ -9,10 +9,12 @@ from metalsurfer.placement import (
     enumerate_placement_specs,
 )
 from metalsurfer.placement.orientation import (
+    _adsorbate_binder_indices,
     _estimate_parallel_fraction,
+    _exclusive_marked_binders,
     _is_flat_aromatic_with_en,
     _marked_binder_indices,
-    _smiles_marked_heavy_indices,
+    _smiles_tag_charge_indices,
 )
 
 from ..conftest import (
@@ -73,7 +75,7 @@ def test_estimate_parallel_fraction(symbols, smiles, expected):
 
 
 def test_marked_binder_indices_from_smiles():
-    """Charged and ``[atom:map]``-tagged atoms become binder candidates."""
+    """Charged atoms (no tags) and tags populate the marked-index channel."""
     assert _marked_binder_indices(None) == ()
     # Benzyl cation: charge on the benzylic carbon (heavy idx 5).
     assert _marked_binder_indices("c1ccc(C[CH2+])cc1") == (5,)
@@ -83,14 +85,33 @@ def test_marked_binder_indices_from_smiles():
     assert _marked_binder_indices("not a smiles") == ()
 
 
-def test_atom_map_tags_count_as_binder_candidates():
-    """``[atom:map]`` tags condition sampling: tagged atoms become binders."""
+def test_atom_map_tags_are_exclusive_binders():
+    """``[atom:map]`` tags override EN/charge binders for EN-down sampling."""
     # Toluene with the methyl carbon tagged: map 1 on heavy idx 5.
     assert _marked_binder_indices("c1ccc(C[CH3:1])cc1") == (5,)
-    # Charges and tags merge; heavy idx 1 (tag) + idx 3 (charge).
-    assert _marked_binder_indices("O[CH2:1]C[CH2+]") == (1, 3)
+    assert _exclusive_marked_binders("c1ccc(C[CH3:1])cc1") is True
+    # Tag present → exclusive: charge at idx 3 is ignored; only the tag.
+    assert _smiles_tag_charge_indices("O[CH2:1]C[CH2+]") == ((1,), (3,))
+    assert _marked_binder_indices("O[CH2:1]C[CH2+]") == (1,)
+    assert _adsorbate_binder_indices(["O", "C", "C", "C"], "O[CH2:1]C[CH2+]") == [1]
+    # Without tags, charge merges with EN elements.
+    assert _adsorbate_binder_indices(["O", "C", "C", "C"], "OCC[CH2+]") == [0, 3]
     # Toluene without a tag: element-only (no binders).
     assert _marked_binder_indices("c1ccc(C)cc1") == ()
+    assert _exclusive_marked_binders("c1ccc(C)cc1") is False
+
+
+def test_tagged_phenol_excludes_oxygen_from_en_down_pool():
+    """Tagging the methyl of *p*-cresol drops the phenol O from EN-down."""
+    # Oc1ccc(C)cc1 with methyl tagged — heavy: O=0, … methyl C ≈ 6
+    smiles = "Oc1ccc(C[CH3:1])cc1"
+    from rdkit import Chem
+
+    mol = Chem.MolFromSmiles(smiles)
+    symbols = [a.GetSymbol() for a in mol.GetAtoms()]
+    binders = _adsorbate_binder_indices(symbols, smiles)
+    assert binders == [6]  # tagged methyl only
+    assert "O" not in [symbols[i] for i in binders]
 
 
 def test_charged_carbocation_counts_as_binder_for_parallel_fraction():
@@ -134,13 +155,12 @@ def test_marked_indices_address_conformer_atoms():
     )
     assert result is not None
     conformers, _ = result
-    marked = _smiles_marked_heavy_indices(smiles)
-    assert marked == (5,)
+    tagged, charged = _smiles_tag_charge_indices(smiles)
+    assert tagged == ()
+    assert charged == (5,)
     for conformer in conformers:
         symbols = list(conformer.get_chemical_symbols())
-        # The marked heavy atom must be a carbon in the conformer, and every
-        # marked index must be a valid conformer atom index.
-        for idx in marked:
+        for idx in charged:
             assert 0 <= idx < len(symbols)
             assert symbols[idx] == "C"
 
@@ -154,11 +174,12 @@ def test_tagged_indices_address_conformer_atoms():
     )
     assert result is not None
     conformers, _ = result
-    marked = _smiles_marked_heavy_indices(smiles)
-    assert marked == (5,)
+    tagged, charged = _smiles_tag_charge_indices(smiles)
+    assert tagged == (5,)
+    assert charged == ()
     for conformer in conformers:
         symbols = list(conformer.get_chemical_symbols())
-        for idx in marked:
+        for idx in tagged:
             assert 0 <= idx < len(symbols)
             assert symbols[idx] == "C"
 
@@ -267,6 +288,7 @@ def _run_merged_binder_end_to_end(
 
     # Binder-list index semantics per *binder_map*: the resolved binder
     # points along −normal.
+    exclusive = _exclusive_marked_binders(smiles)
     canonical = conformers[0].get_positions()
     canonical = canonical - canonical.mean(axis=0)
     normal = np.array([0.0, 0.0, 1.0])
@@ -277,6 +299,7 @@ def _run_merged_binder_end_to_end(
             symbols,
             en_binder_index=ei,
             marked_indices=marked,
+            exclusive_marked=exclusive,
         )
         binder_dir = pos[atom_idx] - pos.mean(axis=0)
         binder_dir /= np.linalg.norm(binder_dir)
@@ -297,6 +320,7 @@ def _run_merged_binder_end_to_end(
         orientation_type=en_spec.orientation_type,
         en_atom_index=en_spec.en_atom_index,
         marked_indices=marked,
+        exclusive_marked=exclusive,
     )
     assert resolved == contact_atom_idx
 

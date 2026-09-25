@@ -70,6 +70,13 @@ def test_binding_atom_candidates_merges_marked_indices():
     assert _binding_atom_candidates(["O", "C", "C", "N"], [0, 2]) == [0, 2, 3]
 
 
+def test_binding_atom_candidates_exclusive_uses_only_marked():
+    """exclusive=True drops element-based EN atoms (tag-conditioned sampling)."""
+    assert _binding_atom_candidates(["O", "C", "N"], [1], exclusive=True) == [1]
+    assert _binding_atom_candidates(["O", "C", "N"], [0, 2], exclusive=True) == [0, 2]
+    assert _binding_atom_candidates(["O", "C"], (), exclusive=True) == []
+
+
 def test_binding_atom_candidates_drops_out_of_range_marked_indices():
     symbols = ["C", "C"]
     assert _binding_atom_candidates(symbols, [5, -1]) == []

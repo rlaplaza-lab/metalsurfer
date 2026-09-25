@@ -41,6 +41,7 @@ from .clash import (
 )
 from .occupancy import incoming_inplane_radius
 from .orientation import (
+    _exclusive_marked_binders,
     _is_flat_aromatic,
     _marked_binder_indices,
     _parallel_z_adjustments,
@@ -212,6 +213,7 @@ def _contact_atom_index(
     orientation_type: str | None,
     en_atom_index: int | None,
     marked_indices: Sequence[int] = (),
+    exclusive_marked: bool = False,
 ) -> int:
     """Atom whose height defines covalent contact for the orientation family."""
     n_hat = _placement_normal_hat(normal)
@@ -223,7 +225,9 @@ def _contact_atom_index(
     # *en_atom_index* is an index into the merged binder list (policy
     # semantics), not a raw atom index; resolve it the same way
     # :func:`geom._surface_aligned_rotation` does.
-    binders = geom._binding_atom_candidates(symbols, marked_indices)
+    binders = geom._binding_atom_candidates(
+        symbols, marked_indices, exclusive=exclusive_marked
+    )
     if en_atom_index is not None and binders and 0 <= int(en_atom_index) < len(binders):
         return int(binders[int(en_atom_index)])
     if binders:
@@ -917,12 +921,14 @@ def _pose_from_spec(
     )
 
     marked = _marked_binder_indices(smiles)
+    exclusive = _exclusive_marked_binders(smiles)
     oriented = orient_from_spec(
         canonical_pos,
         normal=normal,
         symbols=symbols,
         spec=spec,
         marked_indices=marked,
+        exclusive_marked=exclusive,
         tangent_basis=site.tangent_basis if site is not None else None,
     )
     rotated_pos = oriented.rotated_pos

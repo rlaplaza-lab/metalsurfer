@@ -38,9 +38,9 @@ from .occupancy import (
     incoming_inplane_radius,
 )
 from .orientation import (
+    _adsorbate_binder_indices,
     _estimate_parallel_fraction,
     _is_flat_aromatic,
-    _marked_binder_indices,
 )
 from .pose import (
     _finalize_placement,
@@ -340,7 +340,7 @@ def _spec_grid_info(
     ads_pos = conf0_pos - np.mean(conf0_pos, axis=0)
     shape, _, _ = geom._classify_molecule_shape(ads_pos)
     symbols = conformers[0].get_chemical_symbols()
-    binders = geom._binding_atom_candidates(symbols, _marked_binder_indices(smiles))
+    binders = _adsorbate_binder_indices(symbols, smiles)
     flat_aromatic = _is_flat_aromatic(shape, smiles, symbols)
 
     n_hollow_pairs = 0
