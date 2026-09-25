@@ -1,5 +1,6 @@
 """Aromatic heuristics, parallel fraction, and adsorbate orientation."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -56,9 +57,9 @@ def _is_flat_aromatic(
 ) -> bool:
     """Check whether the adsorbate is flat with aromatic EN atoms (parallel-placement candidate).
 
-    With SMILES, requires RDKit aromatic rings plus electronegative binders.
-    Without SMILES, any flat molecule that has binder candidates qualifies
-    (no aromatic-ring check is possible from symbols alone).
+    With SMILES, requires RDKit aromatic rings plus electronegative or charged
+    binders. Without SMILES, any flat molecule that has binder candidates
+    qualifies (no aromatic-ring check is possible from symbols alone).
     """
     if shape != "flat":
         return False
@@ -77,8 +78,43 @@ def _smiles_aromatic_binder_info(smiles: str) -> tuple[bool, int] | None:
         return None
     symbols = [a.GetSymbol() for a in mol.GetAtoms()]
     n_aromatic = sum(1 for a in mol.GetAtoms() if a.GetIsAromatic())
-    has_en = bool(geom._binding_atom_candidates(symbols))
+    marked = _smiles_marked_heavy_indices(smiles) or ()
+    has_en = bool(geom._binding_atom_candidates(symbols, marked))
     return bool(n_aromatic > 0 and has_en), n_aromatic
+
+
+@lru_cache(maxsize=256)
+def _smiles_marked_heavy_indices(smiles: str) -> tuple[int, ...] | None:
+    """Return indices of formally charged or ``[atom:map]``-tagged atoms.
+
+    A heavy atom counts as *marked* when it carries a nonzero formal charge
+    (e.g. ``[CH2+]``) or an RDKit atom-map number (e.g. ``[C:1]``). Map
+    numbers therefore let users condition sampling: tag the atoms that should
+    act as EN-down contact points.
+
+    Parsed exactly as written (no ``Chem.AddHs`` pass); RDKit preserves
+    heavy-atom order, charges, and map numbers through ``AddHs``, so these
+    indices address every conformer atom list built by
+    ``create_conformers_from_smiles`` directly. ``None`` marks a failed parse
+    so callers fall back to element-only binders.
+    """
+    Chem = _rdkit_chem()
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    return tuple(
+        a.GetIdx()
+        for a in mol.GetAtoms()
+        if a.GetFormalCharge() != 0 or a.GetAtomMapNum() != 0
+    )
+
+
+def _marked_binder_indices(smiles: str | None) -> tuple[int, ...]:
+    """Charged / SMILES-tagged atom conformer indices, or an empty tuple."""
+    if smiles is None:
+        return ()
+    info = _smiles_marked_heavy_indices(smiles)
+    return info if info is not None else ()
 
 
 def _is_flat_aromatic_with_en(smiles: str) -> bool:
@@ -154,9 +190,11 @@ def _estimate_parallel_fraction(
     - multiple binders: ratio of binders to ring atoms selects 0.8 / 0.5 / 0.3
 
     Without SMILES, ring size falls back to the carbon-atom count, so the same
-    molecule can score differently than with SMILES aromatic atoms.
+    molecule can score differently than with SMILES marked atoms (formal
+    charges and ``[atom:map]`` tags).
     """
-    binders = geom._binding_atom_candidates(symbols)
+    marked = _marked_binder_indices(smiles)
+    binders = geom._binding_atom_candidates(symbols, marked)
     n_binders = len(binders)
     if n_binders == 0:
         return _PARALLEL_FRACTION_NO_BINDERS
@@ -236,6 +274,7 @@ def _orient_binder_aligned(
     normal: np.ndarray,
     symbols: list[str],
     spec: PlacementSpec,
+    marked_indices: Sequence[int] = (),
     tangent_basis: np.ndarray | None = None,
 ) -> OrientedAdsorbate:
     base_pos, R_base = geom._surface_aligned_rotation(
@@ -243,6 +282,7 @@ def _orient_binder_aligned(
         normal,
         symbols,
         en_binder_index=spec.en_atom_index,
+        marked_indices=marked_indices,
     )
     return _finish_orientation(
         base_pos, normal, spec, R_base=R_base, tangent_basis=tangent_basis
@@ -255,6 +295,7 @@ def orient_from_spec(
     normal: np.ndarray,
     symbols: list[str],
     spec: PlacementSpec,
+    marked_indices: Sequence[int] = (),
     tangent_basis: np.ndarray | None = None,
 ) -> OrientedAdsorbate:
     """Select parallel vs binder-aligned orientation from *spec.orientation_type*.
@@ -269,9 +310,13 @@ def orient_from_spec(
         Chemical symbols of the adsorbate atoms.
     spec
         :class:`~metalsurfer.models.PlacementSpec` defining the orientation.
+    marked_indices
+        Conformer indices of formally charged or ``[atom:map]``-tagged atoms
+        (from the heavy-atom SMILES graph) to treat as binder candidates.
     tangent_basis
         Optional site ``(2, 3)`` tangent frame for azimuth zero.
     """
+    marked = tuple(marked_indices) if marked_indices is not None else ()
     if spec.orientation_type == "parallel":
         return _orient_parallel(
             canonical_pos,
@@ -284,5 +329,6 @@ def orient_from_spec(
         normal=normal,
         symbols=symbols,
         spec=spec,
+        marked_indices=marked,
         tangent_basis=tangent_basis,
     )

@@ -2,6 +2,7 @@
 
 import functools
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -397,10 +398,23 @@ def _rotation_to_align_vector_to_target(
     return _rodrigues(axis, dot, np.sqrt(max(0.0, 1.0 - dot * dot)))
 
 
-def _binding_atom_candidates(symbols: list[str]) -> list[int]:
-    """Return indices of atoms likely to bind (O, N, S, halogens)."""
+def _binding_atom_candidates(
+    symbols: list[str],
+    marked_indices: Sequence[int] = (),
+) -> list[int]:
+    """Return indices of atoms likely to bind: O, N, S, halogens, or marked.
+
+    *marked_indices* are conformer indices of formally charged or
+    ``[atom:map]``-tagged atoms taken from the heavy-atom SMILES graph
+    (``Chem.AddHs`` appends Hs, so heavy-atom indices address the conformer
+    atom list directly). Out-of-range entries are dropped. The union is
+    returned in ascending index order so binder-list indices stay
+    deterministic across modules.
+    """
     binders = {"O", "N", "S", "F", "Cl", "Br", "I"}
-    return [i for i, s in enumerate(symbols) if s in binders]
+    n = len(symbols)
+    extra = {int(i) for i in marked_indices if 0 <= int(i) < n}
+    return sorted({i for i, s in enumerate(symbols) if s in binders} | extra)
 
 
 def _compute_inertia_tensor(
@@ -502,13 +516,15 @@ def _surface_aligned_rotation(
     normal: np.ndarray,
     symbols: list[str] | None = None,
     en_binder_index: int | None = None,
+    marked_indices: Sequence[int] = (),
 ) -> tuple[np.ndarray, np.ndarray]:
     """Rotate adsorbate so a binding vector points toward surface. Returns ``(centred_positions, R)``.
 
     When *en_binder_index* is provided and valid, use that index into the filtered
-    electronegative-atom list from :func:`_binding_atom_candidates`, not a raw
-    atom index.  Otherwise select the binder with highest dot product toward the
-    surface normal.
+    binder list from :func:`_binding_atom_candidates` (electronegative elements
+    plus *marked_indices* — charged / ``[atom:map]``-tagged SMILES atoms), not
+    a raw atom index. Otherwise select the binder with highest dot product
+    toward the surface normal.
 
     *R* maps the centred input onto *centred_positions*.
     """
@@ -521,7 +537,7 @@ def _surface_aligned_rotation(
     )
 
     R_total = np.eye(3)
-    binders = _binding_atom_candidates(symbols) if symbols else []
+    binders = _binding_atom_candidates(symbols, marked_indices) if symbols else []
     if binders:
         if binder_idx is not None and binder_idx in range(len(binders)):
             i = binders[binder_idx]

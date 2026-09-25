@@ -115,7 +115,13 @@ Placement success levers
 
 - **Orientation mix** — ``adaptive_parallel_fraction=True`` picks parallel vs EN-down
   from binder/ring chemistry; set ``False`` and tune
-  ``flat_aromatic_parallel_fraction`` for a fixed mix.
+  ``flat_aromatic_parallel_fraction`` for a fixed mix. EN-down binders are the
+  electronegative elements (O, N, S, halogens) plus *marked* SMILES atoms:
+  formally charged atoms (``[CH2+]``) and ``[atom:map]``-tagged atoms
+  (``[C:1]``). Tagging is a sampling-conditioning knob — write the molecule's
+  SMILES with ``[C:1]`` on atoms that should act as EN-down contact points and
+  those atoms join the binder pool (changing orientation mix and EN-down grid
+  size) even when they are not intrinsically electronegative.
 - **Distance recovery** — ``placement_distance_recovery=True`` applies one
   analytic height nudge for normal-direction failures (``too_close``,
   ``too_far``, ``contact_distance_too_large``, ``vdw_overlap``), skips height

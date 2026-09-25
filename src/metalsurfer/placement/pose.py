@@ -3,6 +3,7 @@
 import dataclasses
 import logging
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -41,6 +42,7 @@ from .clash import (
 from .occupancy import incoming_inplane_radius
 from .orientation import (
     _is_flat_aromatic,
+    _marked_binder_indices,
     _parallel_z_adjustments,
     orient_from_spec,
 )
@@ -209,6 +211,7 @@ def _contact_atom_index(
     *,
     orientation_type: str | None,
     en_atom_index: int | None,
+    marked_indices: Sequence[int] = (),
 ) -> int:
     """Atom whose height defines covalent contact for the orientation family."""
     n_hat = _placement_normal_hat(normal)
@@ -217,9 +220,12 @@ def _contact_atom_index(
     if orientation_type == "parallel":
         return int(np.argmin(heights))
     # Binder-aligned (EN-down / round / vertical): prefer the binder.
-    if en_atom_index is not None and 0 <= int(en_atom_index) < len(symbols):
-        return int(en_atom_index)
-    binders = geom._binding_atom_candidates(symbols)
+    # *en_atom_index* is an index into the merged binder list (policy
+    # semantics), not a raw atom index; resolve it the same way
+    # :func:`geom._surface_aligned_rotation` does.
+    binders = geom._binding_atom_candidates(symbols, marked_indices)
+    if en_atom_index is not None and binders and 0 <= int(en_atom_index) < len(binders):
+        return int(binders[int(en_atom_index)])
     if binders:
         return int(min(binders, key=lambda i: float(heights[i])))
     return int(np.argmin(heights))
@@ -910,11 +916,13 @@ def _pose_from_spec(
         positions=pose_cache.positions if pose_cache is not None else None,
     )
 
+    marked = _marked_binder_indices(smiles)
     oriented = orient_from_spec(
         canonical_pos,
         normal=normal,
         symbols=symbols,
         spec=spec,
+        marked_indices=marked,
         tangent_basis=site.tangent_basis if site is not None else None,
     )
     rotated_pos = oriented.rotated_pos

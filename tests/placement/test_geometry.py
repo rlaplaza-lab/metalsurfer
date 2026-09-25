@@ -15,6 +15,7 @@ from metalsurfer.placement import (
     material_aware_pbc,
 )
 from metalsurfer.placement.geometry import (
+    _binding_atom_candidates,
     _classify_molecule_shape,
     calculate_contact_quality,
     check_adsorbate_separation,
@@ -57,6 +58,24 @@ def test_classify_molecule_shape_linear_flat_round():
         ).get_positions()
     )
     assert shape_ch4 == "round"
+
+
+def test_binding_atom_candidates_merges_marked_indices():
+    symbols = ["C", "C", "H", "H"]
+    # No EN element: empty without marked atoms.
+    assert _binding_atom_candidates(symbols) == []
+    # Marked indices (charged / [atom:map] tags) are merged in and sorted.
+    assert _binding_atom_candidates(symbols, [1, 3]) == [1, 3]
+    # EN + marked union, deduplicated, ascending.
+    assert _binding_atom_candidates(["O", "C", "C", "N"], [0, 2]) == [0, 2, 3]
+
+
+def test_binding_atom_candidates_drops_out_of_range_marked_indices():
+    symbols = ["C", "C"]
+    assert _binding_atom_candidates(symbols, [5, -1]) == []
+    assert _binding_atom_candidates(symbols, [1]) == [1]
+    # Empty marked input leaves element-only behavior unchanged.
+    assert _binding_atom_candidates(["C", "O"], ()) == [1]
 
 
 def test_calculate_min_distance_mic_wraps_periodic_boundary():

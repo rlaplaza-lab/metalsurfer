@@ -11,6 +11,8 @@ from metalsurfer.placement import (
 from metalsurfer.placement.orientation import (
     _estimate_parallel_fraction,
     _is_flat_aromatic_with_en,
+    _marked_binder_indices,
+    _smiles_marked_heavy_indices,
 )
 
 from ..conftest import (
@@ -68,6 +70,235 @@ def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
 def test_estimate_parallel_fraction(symbols, smiles, expected):
     frac = _estimate_parallel_fraction(symbols, smiles=smiles)
     assert frac == expected
+
+
+def test_marked_binder_indices_from_smiles():
+    """Charged and ``[atom:map]``-tagged atoms become binder candidates."""
+    assert _marked_binder_indices(None) == ()
+    # Benzyl cation: charge on the benzylic carbon (heavy idx 5).
+    assert _marked_binder_indices("c1ccc(C[CH2+])cc1") == (5,)
+    # Neutral molecule: no marked binders.
+    assert _marked_binder_indices("c1ccccc1O") == ()
+    # Failed parse falls back to no marked binders.
+    assert _marked_binder_indices("not a smiles") == ()
+
+
+def test_atom_map_tags_count_as_binder_candidates():
+    """``[atom:map]`` tags condition sampling: tagged atoms become binders."""
+    # Toluene with the methyl carbon tagged: map 1 on heavy idx 5.
+    assert _marked_binder_indices("c1ccc(C[CH3:1])cc1") == (5,)
+    # Charges and tags merge; heavy idx 1 (tag) + idx 3 (charge).
+    assert _marked_binder_indices("O[CH2:1]C[CH2+]") == (1, 3)
+    # Toluene without a tag: element-only (no binders).
+    assert _marked_binder_indices("c1ccc(C)cc1") == ()
+
+
+def test_charged_carbocation_counts_as_binder_for_parallel_fraction():
+    """Charged atoms raise the binder count for π-stacking estimation.
+
+    Tropylium ([CH+]1C=CC=CC=C1) has one formal charge and no EN element:
+    element-only binders would score 0.8 (no binders); with the SMILES
+    charge the single binder scores 0.3. Symbols include Hs (as conformers
+    do) so the SMILES-derived count is the only source of binders.
+    """
+    symbols = ["C"] * 7 + ["H"] * 6
+    assert _estimate_parallel_fraction(symbols, None) == 0.8
+    assert _estimate_parallel_fraction(symbols, "[CH+]1C=CC=CC=C1") == 0.3
+
+
+def test_atom_map_tag_counts_as_binder_for_parallel_fraction():
+    """A ``[C:1]`` tag acts like a binder for π-stacking estimation.
+
+    Tagged toluene has one binder (the methyl carbon, heavy idx 5) and no
+    EN element; without the tag the same molecule has no binders.
+    """
+    symbols = ["C"] * 7 + ["H"] * 8
+    assert _estimate_parallel_fraction(symbols, "Cc1ccccc1") == 0.8
+    assert _estimate_parallel_fraction(symbols, "[CH3:1]c1ccccc1") == 0.3
+
+
+def test_flat_aromatic_charged_ring_counts_as_en_for_parallel_detection():
+    """A charged aromatic ring heteroatom satisfies the EN gate (pyrylium)."""
+    # Pyrylium: aromatic O+ ring — flat_aromatic even without a neutral binder.
+    assert _is_flat_aromatic_with_en("c1cc[o+]cc1") is True
+    # Neutral benzene stays excluded.
+    assert _is_flat_aromatic_with_en("c1ccccc1") is False
+
+
+def test_marked_indices_address_conformer_atoms():
+    """Heavy-atom SMILES indices address conformer atom lists after AddHs."""
+    pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
+    smiles = "c1ccc(C[CH2+])cc1"
+    result = create_conformers_from_smiles(
+        smiles, config=AdsorptionConfig(num_conformers=2, seed=0)
+    )
+    assert result is not None
+    conformers, _ = result
+    marked = _smiles_marked_heavy_indices(smiles)
+    assert marked == (5,)
+    for conformer in conformers:
+        symbols = list(conformer.get_chemical_symbols())
+        # The marked heavy atom must be a carbon in the conformer, and every
+        # marked index must be a valid conformer atom index.
+        for idx in marked:
+            assert 0 <= idx < len(symbols)
+            assert symbols[idx] == "C"
+
+
+def test_tagged_indices_address_conformer_atoms():
+    """``[atom:map]`` tag indices survive conformer generation (AddHs)."""
+    pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
+    smiles = "c1ccc(C[CH3:1])cc1"
+    result = create_conformers_from_smiles(
+        smiles, config=AdsorptionConfig(num_conformers=2, seed=0)
+    )
+    assert result is not None
+    conformers, _ = result
+    marked = _smiles_marked_heavy_indices(smiles)
+    assert marked == (5,)
+    for conformer in conformers:
+        symbols = list(conformer.get_chemical_symbols())
+        for idx in marked:
+            assert 0 <= idx < len(symbols)
+            assert symbols[idx] == "C"
+
+
+def test_en_down_specs_cover_charged_binder_end_to_end():
+    """EN-down enumeration treats the charged atom as a contact point.
+
+    Hydroxybenzyl cation has two merged binders: the phenol O (heavy idx 0)
+    and the charged benzylic C (heavy idx 6). Policy emits ``en_atom_index``
+    over the merged binder list, so binder-list index 1 is the charged
+    carbon; materialization orients that binder toward the surface.
+    """
+    _run_merged_binder_end_to_end(
+        smiles="Oc1ccc(C[CH2+])cc1",
+        marked_expected=(6,),
+        binder_map={0: 0, 1: 6},
+        contact_atom_idx=6,
+    )
+
+
+def test_en_down_specs_cover_tagged_binder_end_to_end():
+    """EN-down enumeration treats ``[C:1]``-tagged atoms as contact points.
+
+    Toluene has no EN element; tagging the methyl carbon (heavy idx 5) makes
+    it the sole binder, so EN-down specs orient that tagged atom toward the
+    surface — a sampling-conditioning knob for user-designated binders.
+    """
+    _run_merged_binder_end_to_end(
+        smiles="c1ccc(C[CH3:1])cc1",
+        marked_expected=(5,),
+        binder_map={0: 5},
+        contact_atom_idx=5,
+    )
+
+
+def _run_merged_binder_end_to_end(
+    *,
+    smiles: str,
+    marked_expected: tuple[int, ...],
+    binder_map: dict[int, int],
+    contact_atom_idx: int,
+) -> None:
+    pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
+    from metalsurfer.placement.generators import _spec_grid_info
+    from metalsurfer.placement.geometry import _surface_aligned_rotation
+    from metalsurfer.placement.pose import _contact_atom_index, _pose_from_spec
+    from metalsurfer.placement.site_context import _get_unique_sites_for_specs
+
+    slab = make_slab()
+    config = AdsorptionConfig(
+        material_type="slab",
+        num_placements=24,
+        placement_z_range=(2.0, 3.0),
+        flat_aromatic_parallel_fraction=0.5,
+    )
+    result = create_conformers_from_smiles(
+        smiles, config=AdsorptionConfig(num_conformers=2, seed=0)
+    )
+    assert result is not None
+    conformers, _ = result
+    symbols = list(conformers[0].get_chemical_symbols())
+    marked = _marked_binder_indices(smiles)
+    assert marked == marked_expected
+
+    ctx = _get_unique_sites_for_specs(slab, config)
+    assert ctx.use_sites and ctx.sites
+
+    # The binder pool merges the EN element and the SMILES marks.
+    info = _spec_grid_info(conformers, slab, config, smiles, ctx)
+    assert info.n_binders == len(binder_map)
+
+    specs = enumerate_placement_specs(
+        conformers, slab, config, smiles, n_desired=24, site_context=ctx
+    )
+    en_specs = [s for s in specs if s.orientation_type == "EN-down"]
+    assert en_specs, "marked molecule must enumerate EN-down specs"
+    # Policy emits binder-list indices only when there is more than one
+    # binder (None otherwise); sampled indices stay within the merged pool.
+    multi_binder = len(binder_map) > 1
+    sampled = {s.en_atom_index for s in en_specs}
+    assert sampled <= (set(binder_map) if multi_binder else {None})
+
+    # Every binder-list index is reachable: filter (applied during pool
+    # collection) selecting one index yields EN-down specs for it. The
+    # single-binder policy emits None instead of index 0.
+    marked_ei = next(ei for ei, atom in binder_map.items() if atom == contact_atom_idx)
+    en_marked: list = []
+    for ei in binder_map:
+        target = ei if multi_binder else None
+        filtered = enumerate_placement_specs(
+            conformers,
+            slab,
+            config,
+            smiles,
+            n_desired=8,
+            site_context=ctx,
+            filter_spec=lambda s, t=target: (
+                s.orientation_type != "EN-down" or s.en_atom_index == t
+            ),
+        )
+        en_filtered = [s for s in filtered if s.orientation_type == "EN-down"]
+        assert en_filtered
+        assert all(s.en_atom_index == target for s in en_filtered)
+        if ei == marked_ei:
+            en_marked = en_filtered
+
+    # Binder-list index semantics per *binder_map*: the resolved binder
+    # points along −normal.
+    canonical = conformers[0].get_positions()
+    canonical = canonical - canonical.mean(axis=0)
+    normal = np.array([0.0, 0.0, 1.0])
+    for ei, atom_idx in binder_map.items():
+        pos, _R = _surface_aligned_rotation(
+            canonical,
+            normal,
+            symbols,
+            en_binder_index=ei,
+            marked_indices=marked,
+        )
+        binder_dir = pos[atom_idx] - pos.mean(axis=0)
+        binder_dir /= np.linalg.norm(binder_dir)
+        assert float(np.dot(binder_dir, normal)) == pytest.approx(-1.0, abs=1e-9)
+
+    # A marked-binder pose materializes and its contact atom is the expected
+    # heavy atom.
+    en_spec = en_marked[0]
+    conformer = conformers[en_spec.conformer_index].copy()
+    pctx, fail = _pose_from_spec(
+        conformer, en_spec, slab, config, smiles, site_context=ctx
+    )
+    assert fail is None and pctx is not None
+    resolved = _contact_atom_index(
+        pctx.rotated_pos,
+        np.asarray(pctx.normal, dtype=float),
+        symbols,
+        orientation_type=en_spec.orientation_type,
+        en_atom_index=en_spec.en_atom_index,
+        marked_indices=marked,
+    )
+    assert resolved == contact_atom_idx
 
 
 def test_principal_axis_rotation_flat_hexagon_stays_near_flat():

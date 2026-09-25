@@ -454,7 +454,13 @@ Enumeration / materialization
   not clear existing adsorbates without rewriting the shared
   ``SiteContext.sites`` catalog (competitive saturation reuses one frame).
 - ``orientation.py`` — aromatic heuristics plus ``orient_from_spec`` used by
-  pose. Dissociative two-site placement uses ``_place_dissociative_two_sites``
+  pose. EN-down binder candidates are the electronegative elements (O, N, S,
+  halogens) **plus marked atoms taken from the heavy-atom SMILES graph** —
+  formally charged atoms (``[CH2+]``) and ``[atom:map]``-tagged atoms
+  (``[C:1]``). RDKit heavy-atom order addresses conformer indices directly,
+  so charged carbocations and user-tagged atoms count as contact points, and
+  tagging is a sampling-conditioning knob. Dissociative two-site
+  placement uses ``_place_dissociative_two_sites``
   / ``_generate_dissociative_placement_from_spec`` in ``dissociative.py``.
   Molecular / adatom placement goes through
   ``_pose_from_spec`` + validation/descriptor build in ``pose.py``.

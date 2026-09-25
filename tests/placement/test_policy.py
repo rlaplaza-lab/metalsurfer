@@ -19,6 +19,7 @@ from metalsurfer.placement import (
 from metalsurfer.placement._constants import (
     _AZIMUTH,
     _AZIMUTH_IN_PLANE,
+    _TILT_FULL,
     _Z_FRACTIONS,
 )
 from metalsurfer.placement.policy import (
@@ -344,6 +345,31 @@ def test_build_batch_specs_tops_up_when_one_branch_filtered():
     )
     assert len(specs) == n_desired
     assert {s.orientation_type for s in specs} == {"EN-down"}
+
+
+def test_flat_aromatic_binder_count_scales_en_down_capacity():
+    """Charged atoms raise n_binders, so the EN-down capacity grows."""
+    n_conformers, n_sites = 1, 2
+    base = max_batch_placement_specs(
+        n_conformers=n_conformers,
+        site_indices=list(range(n_sites)),
+        n_binders=1,
+        flat_aromatic=True,
+        site_type_for_index=_site_type_atop,
+    )
+    with_charge = max_batch_placement_specs(
+        n_conformers=n_conformers,
+        site_indices=list(range(n_sites)),
+        n_binders=2,
+        flat_aromatic=True,
+        site_type_for_index=_site_type_atop,
+    )
+    assert with_charge > base
+    # The EN-down axis grows linearly with the binder count while the
+    # parallel axis is binder-independent: the delta is one binder block.
+    z_total = n_sites * 3  # wall sites keep z_fraction >= 0.5 (3 of 5 values)
+    en_delta = n_conformers * len(_TILT_FULL) * len(_AZIMUTH) * z_total
+    assert with_charge - base == en_delta
 
 
 def test_build_batch_specs_filter_spec_reduces_count():
