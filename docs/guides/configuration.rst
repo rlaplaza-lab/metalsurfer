@@ -87,32 +87,38 @@ want near-atom sampling on stepped surfaces or MOF **pore walls**. Keep
 How a starting pose is accepted
 -------------------------------
 
-**Default (leave it).** A start is rejected when any adsorbate–surface atom
-pair is closer than
-``max(min_initial_distance, covalent_sum * min_contact_ratio)``
-(1.5 Å and 0.8). The absolute floor limits light atoms (H) and unknown radii;
-the ratio scales with atom size. Near-misses are nudged automatically
-(``placement_distance_recovery=True``: height, then a small rigid move, then
-in-plane shifts). Set that flag to ``False`` for accept-or-reject only.
+A candidate is placed over a site and kept when every adsorbate–surface pair
+clears a covalent floor: the larger of ``min_initial_distance`` (1.5 Å) and
+``covalent_sum * min_contact_ratio`` (default ratio 0.8). The 1.5 Å floor
+is what limits hydrogen and atoms with an unknown radius. The ratio grows
+with the atoms involved, so it is the limit for typical C, N, O, and metal
+pairs. A start that only just misses that window is moved into it
+(``placement_distance_recovery=True``): first along the surface normal, then
+by a small rigid shift.
 
-**Naming trap.** ``min_contact_ratio`` (0.8, unitless, always on) is not
-``max_closest_approach`` (3.0 Å). The second number applies only when a
-stricter check below is on. ``max_initial_distance`` (default unset) is the
-optional “do not start too far” ceiling on the same always-on check.
+Knobs worth changing:
 
-**Stricter starts (both off by default).**
+- **Packing.** Raise ``min_contact_ratio`` or ``min_initial_distance`` when
+  starts are still overlapping. Lower them when bulky adsorbates are thrown
+  out before they can relax.
+- **Starts that sit too high.** Set ``max_initial_distance`` (Å) to reject
+  poses that begin farther from the surface than that.
+- **Van der Waals clashes.** ``reject_vdw_overlaps=True`` adds a second
+  reject on tabulated van der Waals radii. ``vdw_overlap_scale`` (default
+  1.0) multiplies those radii; values above 1 leave a larger gap.
+- **How the molecule touches.** ``strict_initial_placement=True`` requires
+  the closest pair within ``max_closest_approach`` (3.0 Å) and at least
+  ``min_contact_atoms`` atoms inside ``contact_distance_threshold`` (2.5 Å).
+  ``require_multiple_contact=True`` asks for two or more of those contacts
+  at similar distances, which suits flat or chelating adsorbates.
+- **Drawn pose, unchanged.** ``placement_distance_recovery=False`` keeps or
+  drops the pose exactly as sampled.
+- **Which atoms face the surface.** Leave
+  ``adaptive_parallel_fraction=True`` so flat aromatics mix parallel poses
+  with binder-down poses. A SMILES atom-map tag (``[O:1]``) restricts the
+  binder-down atoms to the tagged set.
 
-- ``reject_vdw_overlaps=True`` — also reject van der Waals overlaps
-  (``vdw_overlap_scale``, 1.0 = tabulated radii).
-- ``strict_initial_placement`` or ``require_multiple_contact`` — require a
-  good contact pattern: closest pair no farther than ``max_closest_approach``,
-  at least ``min_contact_atoms`` atoms within ``contact_distance_threshold``.
-
-These cut how many poses survive. Field details: :doc:`../api/config`.
-
-**Orientation and fill.** Leave ``adaptive_parallel_fraction=True``. SMILES
-atom-map tags (``[O:1]``) limit which atoms point at the surface. Leave the
-fill/retry defaults; they only exist to reach ``num_placements``.
+Field details: :doc:`../api/config`.
 
 How long a Bayesian search runs
 -------------------------------
@@ -151,26 +157,97 @@ rejected)::
 
 Call :func:`~metalsurfer.run_adsorption_bo` or
 :func:`~metalsurfer.run_saturation_bo` (or YAML ``campaign: adsorption_bo`` /
-``saturation_bo``). See :doc:`yaml_campaigns` and :doc:`../api/campaigns`.
+``saturation_bo``). A saturation run repeats that budget on every coverage
+step. How those steps reuse earlier placements is below. See
+:doc:`yaml_campaigns` and :doc:`../api/campaigns`.
 
 Covering a surface
 ------------------
 
 Call :func:`~metalsurfer.run_saturation` or
-:func:`~metalsurfer.run_saturation_bo`. Settings people usually change:
+:func:`~metalsurfer.run_saturation_bo`. Each step screens the current slab,
+commits the placements that still bind, appends them to the slab, and
+repeats. Ranking and the stop use the reservoir score
 
-- ``multi_molecule_saturation=True`` — several molecules compete each step;
-  the lowest reservoir score advances the surface.
-- ``saturation_molecules_per_step`` — commit up to this many winners per step
-  (default ``1``).
-- ``saturation_temperature`` / ``saturation_pressure`` /
-  ``saturation_activities`` — rank and stop with
-  ``Ω = E_ads − k_B T ln(a_i p / p°)`` (defaults: 298.15 K, 1 bar, all
-  activities 1). Separate from ``boltzmann_temperature``.
-- ``saturation_save_all_placements=False`` — less disk use on large runs.
-- ``saturation_max_steps`` — hard cap on coverage steps (default unlimited).
+.. math::
 
-Competitive water + OH⁻ on rutile TiO₂(110):
+   \Omega = E_\mathrm{ads} - k_B T \ln(a_i p / p^\circ)
+
+with defaults 298.15 K, 1 bar, and activity 1, so :math:`\Omega` matches
+:math:`E_\mathrm{ads}` until the reservoir changes. A step commits while
+:math:`\Omega < 0`. It stops when the best remaining placement is at or above
+zero, the pool is empty, or ``saturation_max_steps`` is reached. Written
+energies stay :math:`E_\mathrm{ads}`.
+
+**One adsorbate after another.** With ``multi_molecule_saturation=False``
+(the default), each molecule in the list covers the surface on its own, in
+order.
+
+**Molecules competing.** ``multi_molecule_saturation=True`` screens every
+adsorbate on the same slab each step and advances the one with the lowest
+:math:`\Omega`.
+
+**n-tuplet mode.** ``saturation_molecules_per_step`` (default ``1``) is how
+many placements one step may commit together. Screening still builds a pool
+of single placements. Above 1, the step keeps up to that many winners that
+clear one another, packs them, and relaxes the set as one structure. Use it
+when the adsorbates bind as a pair or a small cluster, or when several copies
+of one molecule should relax together. Every committed row stores that shared
+composite adsorption energy. The stop uses :math:`\Omega_\mathrm{tuplet}`:
+the same reservoir expression with the composite :math:`E_\mathrm{ads}` and
+one :math:`\ln(a_i p / p^\circ)` term per member. If the set does not bind,
+the step tries the single best placement on its own. Once
+``num_placements`` is known it is divided by the tuplet size. The Bayesian
+evaluation budget above stays as you set it.
+
+**How Bayesian search uses earlier placements.**
+:func:`~metalsurfer.run_saturation_bo` ranks with :math:`\Omega` and trains
+the surrogate on :math:`E_\mathrm{ads}`. Failed poses enter as penalties when
+``bo.include_failure_negatives`` is on (the default). ``bo.transfer`` is on
+by default, so the next coverage step starts from evaluations already made
+for that molecule:
+
+- The last ``bo.transfer.prior_step_window`` steps are reused (default 2).
+  Set it to ``None`` to keep the full history. Older steps inside that
+  window count less (``bo.transfer.recency_lengthscale``).
+- Evaluations whose pose sits near a molecule already on the slab are
+  downweighted (``bo.transfer.occupancy_lengthscale``), so those earlier
+  energies pull the surrogate less once the site is occupied.
+- Each molecule keeps its own history. When the transferred model fits the
+  current step worse than a fit on that step alone, transfer turns off for
+  the rest of the step.
+
+Leave ``bo.transfer.mode="weighted"``. ``"cumulative_refit"`` retrains on the
+pooled history when every retained step should enter the fit, still
+downweighted near occupied sites. ``bo.transfer.enabled=False`` fits each
+step on the poses evaluated in that step. New poses must also clear
+adsorbates already on the slab (``min_adsorbate_separation``, default
+1.5 Å).
+
+**Moving the stop line.** Coverage ends at :math:`\Omega \ge 0`.
+``saturation_omega_shift`` (:math:`\delta`, eV) ranks and stops on
+:math:`\Omega' = \Omega - \delta` and leaves the stored
+:math:`E_\mathrm{ads}` unchanged.
+
+- A positive :math:`\delta` continues the run past the default cutoff. With
+  ``saturation_omega_shift=0.15`` a placement still commits while
+  :math:`\Omega` is below +0.15 eV.
+- A negative :math:`\delta` stops the run while adsorption is still
+  favorable. With ``saturation_omega_shift=-0.10`` the step stops once the
+  best :math:`\Omega` is −0.10 eV or higher.
+- One number applies to every molecule. A sequence follows the molecule
+  list, so one species can keep adsorbing after another has stopped.
+
+Change ``saturation_temperature``, ``saturation_pressure``, and
+``saturation_activities`` when the reservoir itself is different (higher
+temperature, pressure, or activity makes :math:`\Omega` more negative). Use
+the shift when you want a fixed energy offset on an otherwise unchanged
+reservoir. ``None`` or ``0`` leaves the zero threshold in place.
+
+**Disk.** ``saturation_save_all_placements=False`` keeps the committed
+structure each step and skips the full placement dump.
+
+Competitive water + OH⁻ on rutile TiO₂(110), including activities:
 ``examples/water_oh_rutile_saturation.py``.
 
 Which energy model?
