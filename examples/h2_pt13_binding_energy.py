@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
-"""Compute H2 dissociative adsorption on an ASE Pt₁₃ icosahedron.
-
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-
-Run (conda env metalsurfer)::
-
-  conda activate metalsurfer
-  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-  python examples/h2_pt13_binding_energy.py
+"""H₂ dissociative adsorption on an ASE Pt₁₃ icosahedron.
 
 Uses ``ase.cluster.Icosahedron("Pt", noshells=2)`` (13 atoms), UMA ionic prep
 relaxation, then frozen-cluster dissociative hollow-pair placements. Under
-``uma-s-1p2`` / ``oc25`` this yields chemisorbed dissociated H (H–Pt ≈ 1.7 Å,
-H–H ≈ 2.3 Å) with favorable E_ads ≈ −1.5 eV — unlike the hand-built Pt₁₂ toy
-used by the ethene nanoparticle demo, which is too strained for reliable H₂
-thermodynamics after the same protocol.
+``uma-s-1p2`` / ``oc25`` this yields chemisorbed dissociated H with favorable
+E_ads ≈ −1.5 eV — unlike the hand-built Pt₁₂ toy used by the ethene
+nanoparticle demo, which is too strained for reliable H₂ thermodynamics.
 
 ``enable_dissociative_placement=True`` and ``skip_topology_check=True`` match
 the H₂/Ru(0001) demo.
+
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 from __future__ import annotations
@@ -121,16 +114,10 @@ def main() -> int:
 
     config = AdsorptionConfig(
         material_type="nanoparticle",
-        seed=42,
         num_conformers=1,
         num_placements=10,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
-        slab_relaxation_mode="ionic_only",
         enable_dissociative_placement=True,
         skip_topology_check=True,
-        stage2_steps=500,
     )
 
     nanocluster = prepare_substrate(
@@ -145,7 +132,6 @@ def main() -> int:
         config=config,
         surface_type=surface_type,
         system_name="Pt_13",
-        skip_existing=False,
     )
 
     print()

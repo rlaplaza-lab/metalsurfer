@@ -146,8 +146,8 @@ You can also pass a CSV path instead of an in-memory list (same outputs; optiona
    ))
 
 By default, ``skip_existing=True`` skips molecules already listed in
-``adsorption_energies_detailed.csv`` (in-memory lists and CSV paths). Official
-demos pass ``skip_existing=False`` so re-runs always compute.
+``adsorption_energies_detailed.csv`` (in-memory lists and CSV paths). Delete
+the results directory or pass ``skip_existing=False`` to force a fresh run.
 
 Campaign APIs accept plain ASE ``Atoms`` or
 :class:`~metalsurfer.surface_prep.SlabContainer`. Prepare the structure first

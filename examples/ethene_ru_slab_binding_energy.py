@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""Compute the binding (adsorption) energy of ethene on Ru(0001) slab.
+"""Binding energy of ethene on Ru(0001) from Materials Project ``mp-33``.
 
-This example creates a Ru(0001) slab and computes ethene adsorption energy using metalsurfer.
-
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e ".[mlip]"
-
-Uses modest settings for quick demonstration (similar to test suite).
-
-Note: absolute E_ads depends on the substrate source. This demo builds the slab
-from the Materials Project entry ``mp-33`` (DFT-relaxed lattice constant);
-under UMA ``oc25`` the best surviving pose lands right around E_ads ≈ 0 eV —
-a chemisorbed di-σ configuration (C≈2.0 Å above the surface, C=C stretched)
+Absolute E_ads depends on the substrate source. Under UMA ``oc25`` the best
+surviving pose lands near E_ads ≈ 0 eV — a chemisorbed di-σ configuration
 whose exact sign tracks the lattice constant. The demo therefore validates
 that a chemisorption-contact pose survives relaxation rather than a strictly
 negative E_ads.
+
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 from __future__ import annotations
@@ -87,16 +80,9 @@ def main() -> int:
     surface_type = "ethene_ru_slab"
     results_dir = str(results_dir_for(surface_type))
 
-    # Modest placement count + GPU memory padding for small demo GPUs (~15 GB).
     config = AdsorptionConfig(
-        material_type="slab",
-        seed=42,
         num_conformers=3,
         num_placements=5,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
-        stage2_steps=500,
     )
 
     slab = prepare_substrate(
@@ -113,7 +99,6 @@ def main() -> int:
         config=config,
         surface_type=surface_type,
         system_name="Ru_0001",
-        skip_existing=False,
     )
 
     print()

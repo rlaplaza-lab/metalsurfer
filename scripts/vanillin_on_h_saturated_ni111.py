@@ -4,8 +4,7 @@
 Loads the saturated slab from H2 saturation run (e.g. scripts/h2_ni111_saturation.py)
 and runs vanillin adsorption using envelope placement for the non-planar H-covered surface.
 
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 
 Prerequisites:
   - Run scripts/h2_ni111_saturation.py first to generate the saturated slab
@@ -52,19 +51,10 @@ def main():
     saturated_atoms = read(saturated_xyz)
 
     config = AdsorptionConfig(
-        material_type="slab",
         model_name="uma-m-1p1",
         task_name="oc20",
-        seed=42,
-        num_conformers=10,
         num_placements=250,
-        autobatcher_max_memory_padding=0.8,
-        device="cuda",
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        stage1_steps=50,
-        stage2_steps=500,
-        top_layer_tolerance=2.0,  # Include top metal + H in top layer for envelope
+        top_layer_tolerance=2.0,
     )
 
     slab = prepare_substrate(

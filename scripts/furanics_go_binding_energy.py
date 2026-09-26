@@ -8,8 +8,7 @@ Loaded from https://github.com/fxcoudert/citable-data. Top GO layer is relaxed.
 
 Uses BO pipeline: ~300 MLIP evaluations (100 initial random + 2 acquisition batches
 of 100); ``num_placements=250`` caps the placement pool per batch.
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 import logging
@@ -88,26 +87,11 @@ def main() -> int:
     results_dir = f"results_{results_subdir}"
 
     config = AdsorptionConfig(
-        material_type="slab",
-        slab_relaxation_mode="none",  # keep published GO geometry
+        slab_relaxation_mode="none",
         model_name="uma-s-1p1",
         task_name="oc20",
-        seed=42,
-        num_conformers=10,
         num_placements=250,
-        autobatcher_max_memory_padding=0.8,
-        device="cuda",
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        stage1_steps=50,
-        stage2_steps=500,
-        debug_write_initial_placements=False,
-        # total_budget = acquisition batches after initial (not total evals).
-        bo=BOConfig(
-            initial_random=100,
-            batch_size=100,
-            total_budget=2,  # 100 initial + 2×100 ≈ 300 evaluations
-        ),
+        bo=BOConfig(initial_random=100, batch_size=100, total_budget=2),
     )
 
     slab = _load_go_slab("random/R1")

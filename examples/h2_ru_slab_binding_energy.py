@@ -1,27 +1,12 @@
 #!/usr/bin/env python3
-"""Compute H2 adsorption on Ru(0001) with dissociative initial placements.
+"""H₂ adsorption on Ru(0001) with dissociative initial placements.
 
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
+``enable_dissociative_placement=True`` enables hollow-site pair placements.
+``skip_topology_check=True`` keeps structures where the H–H bond has broken.
+E_ads is always reported vs isolated molecular E(H₂). On Ru(0001) with UMA,
+the best minima are typically dissociated H (H–H ≳ 2.5 Å, E_ads ≈ −0.4 eV).
 
-Run (conda env metalsurfer)::
-
-  conda activate metalsurfer
-  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-  python examples/h2_ru_slab_binding_energy.py
-
-``enable_dissociative_placement=True`` enables dissociative hollow-site pair
-placements on the periodic slab. ``skip_topology_check=True`` disables
-post-relaxation connectivity / decomposition checks so structures where the
-H–H bond has broken are retained. E_ads is always reported vs isolated
-molecular E(H₂). On Ru(0001) with UMA, the best minima are typically
-dissociated H (H–H ≳ 2.5 Å, E_ads ≈ −0.4 eV); weaker ~−0.11 eV minima with
-closer H–H also appear.
-
-Uses a modest placement count because many dissociative trials desorb on this surface.
-Initial z heights use default ``placement_z_range`` scale factors on
-``(r_adsorbate + r_surface)`` (see :class:`~metalsurfer.AdsorptionConfig`).
-
-If you hit CUDA OOM on a 15GB GPU, try reducing ``num_placements`` (e.g. 25).
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 from __future__ import annotations
@@ -107,18 +92,12 @@ def main() -> int:
     surface_type = "h2_ru_slab"
     results_dir = str(results_dir_for(surface_type))
 
-    # Modest placement count + GPU memory padding for small demo GPUs (~15 GB).
+    # Modest placement count: many dissociative trials desorb on this surface.
     config = AdsorptionConfig(
-        material_type="slab",
-        seed=42,
         num_conformers=1,
         num_placements=10,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
         enable_dissociative_placement=True,
         skip_topology_check=True,
-        stage2_steps=500,
     )
 
     slab = prepare_substrate(
@@ -135,7 +114,6 @@ def main() -> int:
         config=config,
         surface_type=surface_type,
         system_name="Ru_0001",
-        skip_existing=False,
     )
 
     print()

@@ -14,14 +14,16 @@ Requires the MLIP stack (``pip install -e ".[mlip]"``). From the project root::
    from metalsurfer import load_campaign_yaml, run_campaign
 
    document = load_campaign_yaml("examples/ethene_ru_slab_binding_energy.yaml")
-   result = run_campaign(document, skip_existing=False)
+   result = run_campaign(document)
 
 Or use the demo runner::
 
    python examples/run_campaign_yaml.py examples/ethene_ru_slab_binding_energy.yaml
 
-Official demos pass ``skip_existing=False`` so re-runs always compute. The
-default for :func:`~metalsurfer.run_campaign` is ``skip_existing=True``.
+The default for :func:`~metalsurfer.run_campaign` is ``skip_existing=True``
+(skip molecules already listed in result CSVs). Pass ``skip_existing=False``
+or delete the results directory to force a fresh run. The demo runner
+``examples/run_campaign_yaml.py`` also locks best E_ads to a QC band.
 
 Limitations
 -----------
@@ -35,7 +37,8 @@ YAML covers the same four run modes, with these limits:
   clusters and custom ASE structures need the Python API.
 - Molecules are an inline ``{smiles, name}`` list — no CSV path.
 - Only ``skip_existing`` is available as a ``run_campaign`` option.
-- No post-run validation hooks — results stop at the campaign return value.
+- The YAML API itself has no post-run validation hooks; the demo runner
+  ``examples/run_campaign_yaml.py`` adds best-E_ads locks for known demos.
 - Still needs the MLIP stack (and usually a GPU).
 
 For custom ASE construction, molecule CSVs, or result checks, use
@@ -98,11 +101,9 @@ Demo examples
 -------------
 
 Demo-scale YAML files live under ``examples/`` (run from the project root).
-They keep library optimizer defaults (``stage1_steps`` / ``stage2_steps``)
-so force-convergence filters can pass, skip prep equilibration with
-``slab_relaxation_mode: none``, and use small ``num_placements`` for speed.
-Restore default prep relaxation and omit ``num_placements`` for
-production-quality energies. Production templates: ``scripts/campaigns/``.
+They rely on library defaults and use small ``num_placements`` for speed.
+Omit ``num_placements`` for production-quality GPU-autotuned budgets.
+Production templates: ``scripts/campaigns/``.
 Schema smoke fixtures (tiny steps, not intended as physics demos):
 ``tests/fixtures/campaigns/``.
 

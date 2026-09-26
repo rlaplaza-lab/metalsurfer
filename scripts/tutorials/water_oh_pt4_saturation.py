@@ -197,35 +197,21 @@ def make_config(ph: float) -> AdsorptionConfig:
     """Return an ``AdsorptionConfig`` sized for CPU competitive saturation."""
     return AdsorptionConfig(
         material_type="nanoparticle",
-        # FairChem UMA checkpoint + matching task head. Pair must stay matched:
-        # uma-s-1p2 ↔ oc25 (library default when installed), uma-s-1p1 ↔ oc20.
         model_name="uma-s-1p1",
         task_name="oc20",
         device=DEVICE,
-        seed=42,
         num_conformers=1,
         num_placements=12,
-        # Keep stage2 ≥ ~50 on CPU or filters reject.
-        stage1_steps=50,
         stage2_steps=80,
         reference_optimization_steps=50,
-        # Batched isolated opts target CUDA; sequential is safer on CPU.
         optimize_isolated_sequentially=True,
-        # Ionic MLIP relaxation of the hand-built or loaded Pt₄ geometry.
-        # Use "none" only if your .xyz is already equilibrated and must not move.
-        slab_relaxation_mode="ionic_only",
-        # Post-relax force gate (eV/Å). Slightly looser than default 0.05 so
-        # short CPU runs still keep chemisorbed poses.
         max_force_convergence=0.15,
         multi_molecule_saturation=True,
-        saturation_molecules_per_step=1,
         saturation_max_steps=2,
         saturation_save_all_placements=False,
         saturation_temperature=TEMPERATURE_K,
         saturation_pressure=STANDARD_PRESSURE_BAR,
-        # (a_water, a_hydroxide) for this pH; order matches MOLECULES above.
         saturation_activities=activities_for_ph(ph),
-        # Tiny clusters often trip connectivity guards.
         skip_topology_check=True,
         saturation_discard_topology_rearrangements=False,
     )
@@ -386,7 +372,6 @@ def main(argv: list[str] | None = None) -> int:
             molecules=MOLECULES,
             config=config,
             surface_type=surface_type,
-            skip_existing=False,
         )
         if not campaign.runs:
             print(f"pH {ph:g}: no saturation runs produced.", file=sys.stderr)

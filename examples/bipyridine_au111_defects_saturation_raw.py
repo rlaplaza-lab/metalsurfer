@@ -9,11 +9,7 @@ Demonstrates:
   before adatoms).
 - High-placement, non-BO saturation for benchmark datasets.
 
-Requires: ``pip install -e ".[mlip]"`` and a CUDA-capable GPU for practical runtimes.
-
-Run from the project root::
-
-    python examples/bipyridine_au111_defects_saturation_raw.py
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 
 The same workflow lives under ``scripts/`` for HPC batch submission.
 """
@@ -37,23 +33,12 @@ logger = logging.getLogger(__name__)
 
 def main():
     config = AdsorptionConfig(
-        material_type="slab",
-        model_name="uma-s-1p2",
-        task_name="oc25",
-        seed=42,
         num_conformers=20,
         num_placements=1000,
-        device="cuda",
-        fmax=0.05,
         stage1_steps=80,
-        stage2_steps=500,
         min_pbc_image_separation=10.0,
         slab_relaxation_mode="full",
-        slab_relaxation_optimizer="lbfgs",
         slab_relaxation_steps=250,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=650,
-        debug_write_initial_placements=True,
         save_benchmark_dataset=True,
     )
 
@@ -74,7 +59,6 @@ def main():
         molecules=[(BIPYRIDINE_SMILES, "bipyridine")],
         config=config,
         surface_type=SURFACE_TYPE,
-        skip_existing=False,
     )
 
     if not campaign.runs:

@@ -5,18 +5,9 @@ substrate:
   bulk_id: mp-33
   miller_indices: [0, 0, 1]
   supercell: [2, 2, 1]
-  # Match the Python demo: ionic prep (default). ``none`` leaves the ASE-cut
-  # mp-33 slab ~0.08 eV higher in best E_ads for the same topology placements.
 molecules:
   - smiles: C=C
     name: ethene
 config:
-  material_type: slab
-  seed: 42
   num_conformers: 1
   num_placements: 5
-  autobatcher_max_memory_padding: 0.8
-  autobatcher_max_memory_scaler: 500
-  autobatcher_max_atoms_to_try: 5000
-  stage1_steps: 50
-  stage2_steps: 500

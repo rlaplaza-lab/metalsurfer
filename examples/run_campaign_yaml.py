@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run a metalsurfer campaign YAML document.
 
-Requires: metalsurfer with MLIP stack (``pip install -e ".[mlip]"``).
-Run from the project root so relative ``slab_file`` paths resolve.
+Requires: ``pip install -e ".[mlip]"``. Run from the project root so relative
+``slab_file`` paths resolve.
 
 Usage::
 
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 from metalsurfer import (
@@ -45,24 +44,6 @@ _SATURATION_STEP1_BEST_E_ADS_CEILING: dict[str, float] = {
 _SATURATION_STEP1_BEST_E_ADS_FLOOR: dict[str, float] = {
     "ethane_cu_saturation": -0.56,
 }
-
-
-def _resolve_device(requested: str) -> str:
-    if requested != "cuda":
-        return requested
-    try:
-        import torch
-    except ImportError:
-        print("torch not installed; falling back to device=cpu", file=sys.stderr)
-        return "cpu"
-    if torch.cuda.is_available():
-        return "cuda"
-    print(
-        "CUDA not available; falling back to device=cpu "
-        "(set config.device explicitly in YAML to silence this).",
-        file=sys.stderr,
-    )
-    return "cpu"
 
 
 def _validate_best_e_ads_lock(yaml_stem: str, result: object) -> None:
@@ -130,25 +111,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to a campaign YAML file",
     )
     parser.add_argument(
-        "--skip-existing",
+        "--force",
         action="store_true",
-        help="Skip molecules already listed in result CSVs (default: always recompute)",
-    )
-    parser.add_argument(
-        "--device",
-        choices=("cuda", "cpu"),
-        default=None,
-        help="Override config.device (default: YAML value, with CUDA→CPU fallback)",
+        help="Recompute even when result CSVs already list the molecules",
     )
     args = parser.parse_args(argv)
 
     configure_logging(default_level="INFO")
     document = load_campaign_yaml(args.yaml_path)
-    device = _resolve_device(args.device or document.config.device)
-    if device != document.config.device:
-        document = replace(document, config=replace(document.config, device=device))
-
-    result = run_campaign(document, skip_existing=args.skip_existing)
+    result = run_campaign(document, skip_existing=not args.force)
 
     print()
     if hasattr(result, "format_summary"):

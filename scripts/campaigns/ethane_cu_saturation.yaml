@@ -9,17 +9,4 @@ molecules:
   - smiles: CC
     name: ethane
 config:
-  material_type: slab
-  model_name: uma-s-1p2
-  task_name: oc25
-  seed: 42
-  num_conformers: 10
   num_placements: 250
-  autobatcher_max_memory_padding: 0.8
-  autobatcher_max_memory_scaler: 500
-  autobatcher_max_atoms_to_try: 5000
-  device: cuda
-  skip_topology_check: false
-  skip_desorption_check: false
-  stage1_steps: 50
-  stage2_steps: 500

@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""Compute the binding (adsorption) energy of ethene on an ASE Ru₅₅ icosahedron.
-
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
+"""Binding energy of ethene on an ASE Ru₅₅ icosahedron.
 
 Uses ``ase.cluster.Icosahedron("Ru", noshells=3, latticeconstant=...)`` (55 atoms).
 ASE cannot guess Ru's lattice constant (hcp), so we pass the FCC-equivalent
 ``a ≈ 3.83 Å`` that matches Ru hcp nearest-neighbour spacing (~2.71 Å).
 Keep the input cluster geometry (``slab_relaxation_mode="none"``): ionic prep
-can distort the icosahedron and yield unbound ethene under UMA. The whole
-cluster is frozen during adsorption (default prep ``FixAtoms``).
+can distort the icosahedron and yield unbound ethene under UMA.
 
-Run (conda env metalsurfer)::
-
-  conda activate metalsurfer
-  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-  python examples/ethene_ru55_binding_energy.py
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 from __future__ import annotations
@@ -104,15 +97,10 @@ def main() -> int:
 
     config = AdsorptionConfig(
         material_type="nanoparticle",
-        seed=42,
         num_conformers=3,
         num_placements=25,
         n_jobs=1,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
         slab_relaxation_mode="none",
-        stage2_steps=500,
     )
 
     nanocluster = prepare_substrate(
@@ -127,7 +115,6 @@ def main() -> int:
         config=config,
         surface_type=surface_type,
         system_name="Ru_55",
-        skip_existing=False,
     )
 
     print()

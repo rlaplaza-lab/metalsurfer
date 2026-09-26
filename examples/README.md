@@ -1,9 +1,9 @@
 # Examples
 
-Runnable demos from the project root (after `pip install -e ".[mlip]"`). Each script
-defines `AdsorptionConfig` first, then calls `prepare_substrate` from
-`metalsurfer.surface_prep` before the campaign API. These are small-N demos;
-production/HPC campaigns live under `scripts/` as standalone copy-paste workflows.
+Runnable demos from the project root (after `pip install -e ".[mlip]"`). Each
+script builds a substrate, sets only the knobs that define that run, then calls
+`run_adsorption` / `run_saturation`. Library defaults cover the rest.
+Production/HPC campaigns live under `scripts/` as standalone copy-paste workflows.
 
 | Script | Description |
 |--------|-------------|
@@ -46,28 +46,34 @@ All demo configs use the default MLIP stack (UMA `uma-s-1p2`, task head
 Run any of the above with `python examples/run_campaign_yaml.py <file>`
 (`load_campaign_yaml` → `run_campaign`).
 
-Demos set explicit small `num_placements` for quick runs and pass
-`skip_existing=False` so re-runs always compute. Results directories use
+Demos set explicit small `num_placements` for quick runs. Results directories use
 `results_dir_for(surface_type)` (`results_{surface_type}/`). For production
 screening, omit `num_placements` (and `bo.initial_random` / `bo.batch_size`) to
-autotune to GPU
-parallel capacity via TorchSim memory probing at workflow start. For saturation
-with Bayesian placement search, use `run_saturation_bo`.
+autotune to GPU parallel capacity via TorchSim memory probing at workflow start.
+For saturation with Bayesian placement search, use `run_saturation_bo`.
 
-Most binding demos validate favorable molecular E_ads before exit. The Pt₁₂
-and ethene/Ru(0001) demos instead validate a chemisorption contact on the best
-pose: under rigid substrates / MP lattice constants UMA can place the best
-surviving pose right around E_ads ≈ 0 eV. The H₂/Ru(0001) and H₂/Pt₁₃ demos
-set `enable_dissociative_placement=True` for hollow-site pair placements and
-`skip_topology_check=True` so fragmented post-relax states pass connectivity
-checks; H₂/Pt₁₃ additionally requires favorable E_ads and chemisorption contact
-on a UMA-prep-relaxed ASE icosahedron.
+Most binding demos lock best E_ads to a QC band before exit (secondary test
+suite). The Pt₁₂ and ethene/Ru(0001) demos instead validate a chemisorption
+contact on the best pose: under rigid substrates / MP lattice constants UMA can
+place the best surviving pose right around E_ads ≈ 0 eV. The H₂/Ru(0001) and
+H₂/Pt₁₃ demos set `enable_dissociative_placement=True` for hollow-site pair
+placements and `skip_topology_check=True` so fragmented post-relax states pass
+connectivity checks; H₂/Pt₁₃ additionally requires favorable E_ads and
+chemisorption contact on a UMA-prep-relaxed ASE icosahedron.
 
-`prepare_substrate` equilibrates substrate ionic positions by default (`slab_relaxation_mode="ionic_only"`) and freezes the entire substrate during adsorption by default (prep-only ASE `FixAtoms` — not campaign kwargs). `relax_top_layer=True` leaves a material-aware surface band free (slab: simple height band within `top_layer_tolerance`; nanoparticle outer shell; porous pore boundary). Omitting freeze constraints is allowed (campaigns warn; substrate stays fully mobile). See the [surface engineering guide](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html). Loaded experimental or saturation slabs use `slab_relaxation_mode="none"` (e.g. `co2_mof`, `camphor_cu111`, `scripts/furanics_go*_binding_energy.py`, `scripts/vanillin_on_h_saturated_ni111.py` for the loaded slab).
+`prepare_substrate` equilibrates substrate ionic positions by default
+(`slab_relaxation_mode="ionic_only"`) and freezes the entire substrate during
+adsorption by default (prep-only ASE `FixAtoms` — not campaign kwargs).
+`relax_top_layer=True` leaves a material-aware surface band free. Loaded
+experimental or saturation slabs use `slab_relaxation_mode="none"` (e.g.
+`co2_mof`, `camphor_cu111`, `scripts/furanics_go*_binding_energy.py`,
+`scripts/vanillin_on_h_saturated_ni111.py` for the loaded slab). See the
+[surface engineering guide](https://metalsurfer.readthedocs.io/en/latest/guides/surface_engineering.html).
 
-The bipyridine workflow uses `prepare_substrate` with `adatom_relaxation_mode="ionic_only"`.
-During saturation, compare relaxed structures to `clean_slab_Au20_*` in the results
-directory (post-adatom substrate), not `clean_slab_*` from before adatom deposition.
+The bipyridine workflow uses `prepare_substrate` with
+`adatom_relaxation_mode="ionic_only"`. During saturation, compare relaxed
+structures to `clean_slab_Au20_*` in the results directory (post-adatom
+substrate), not `clean_slab_*` from before adatom deposition.
 
 ### Camphor / Cu(111)
 
@@ -80,7 +86,7 @@ MLIP energies are compared qualitatively to the paper's DFT landscape (not absol
 Uses `slab_relaxation_mode="none"` so the NOMAD reference slab is not re-equilibrated at prep, and `relax_top_layer=True` with `top_layer_tolerance≈2.1` Å so the top two Cu layers can move while the bottom half stays `FixAtoms`-frozen.
 
 ```bash
-PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/camphor_cu111_binding_energy.py
+python examples/camphor_cu111_binding_energy.py
 python examples/camphor_cu111_binding_energy.py --compare-geometries  # RMSD vs NOMAD DFT
 python examples/camphor_cu111_binding_energy.py --compare-geometries --export-overlays  # figure XYZ pairs
 ```

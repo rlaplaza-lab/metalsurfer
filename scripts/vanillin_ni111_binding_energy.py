@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Compute the binding (adsorption) energy of vanillin on Ni(111) from mp-23 using metalsurfer.
 
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
@@ -16,19 +15,9 @@ def main() -> int:
     results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
-        material_type="slab",
         model_name="uma-m-1p1",
         task_name="oc20",
-        seed=42,
-        num_conformers=10,
         num_placements=250,
-        autobatcher_max_memory_padding=0.8,
-        device="cuda",
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        stage1_steps=50,
-        stage2_steps=500,
-        debug_write_initial_placements=True,
     )
 
     # Create Ni(111) slab from Materials Project mp-23 (3×3 in-plane for PBC separation).

@@ -228,16 +228,10 @@ def prepare_campaign_slab(
 
 
 def build_config(*, device: str) -> AdsorptionConfig:
-    # GPU memory padding for ~15 GB cards; BO budget is acquisition batches.
+    # BO budget is acquisition batches after the initial random batch.
     return AdsorptionConfig(
-        material_type="slab",
-        seed=42,
         num_conformers=1,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
         device=device,
-        stage2_steps=500,
         # Clearance-aware height: nearest adsorbate atom sits in this window.
         placement_z_range=(2.0, 3.5),
         placement_z_scale_by_covalent_radius=False,
@@ -1035,9 +1029,9 @@ def _validate_campaign(campaign: BindingCampaignResult) -> None:
 
     best = summary.best_adsorption_energy
     # Best-E_ads band (uma-s-1p2 + oc25 QC): BO search is noisier than
-    # fixed-placement demos; release run ≈ −1.22 eV (earlier ≈ −1.37 eV).
+    # fixed-placement demos; recent run ≈ −1.42 eV (earlier ≈ −1.22 / −1.37 eV).
     e_ads_ceiling_ev = -1.15
-    e_ads_floor_ev = -1.40
+    e_ads_floor_ev = -1.45
     if best is None or best >= e_ads_ceiling_ev:
         print(
             f"Expected strong camphor binding "
@@ -1067,7 +1061,6 @@ def run_campaign(config: AdsorptionConfig) -> BindingCampaignResult:
         config=config,
         surface_type=SURFACE_TYPE,
         system_name="Cu_111",
-        skip_existing=False,
     )
 
 

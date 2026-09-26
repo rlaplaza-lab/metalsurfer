@@ -2,10 +2,8 @@
 """Ethane saturation on RuCu2 alloy (Ru host, 2/3 Cu) from mp-33 using metalsurfer.
 
 Adds ethane molecules one at a time until best E_ads >= 0 (slab saturated).
-Uses same surface creation pipeline as ethane_ethene_acetylene_rucu2_binding_energy.py (seed=42).
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
-On-disk output follows ``AdsorptionConfig`` (README, saturation section).
+
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 from metalsurfer import AdsorptionConfig, configure_logging, run_saturation
@@ -17,22 +15,10 @@ def main():
     surface_type = "ethane_rucu2_saturation"
     results_dir = f"results_{surface_type}"
 
-    # Same surface creation as ethane_ethene_acetylene_rucu2_binding_energy.py (seed=42)
     config = AdsorptionConfig(
-        material_type="slab",
         model_name="uma-s-1p1",
         task_name="oc20",
-        seed=42,
-        num_conformers=10,
         num_placements=250,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
-        device="cuda",
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        stage1_steps=50,
-        stage2_steps=500,
     )
 
     slab = prepare_substrate(
@@ -52,7 +38,6 @@ def main():
         molecules=[("CC", "ethane")],
         config=config,
         surface_type=surface_type,
-        skip_existing=False,
     )
 
     print()

@@ -28,27 +28,10 @@ logger = logging.getLogger(__name__)
 
 def main():
     config = AdsorptionConfig(
-        material_type="slab",
-        model_name="uma-s-1p2",
-        task_name="oc25",
-        seed=42,
         num_conformers=20,
         num_placements=1000,
-        device="cuda",
-        fmax=0.05,
         stage1_steps=80,
-        stage2_steps=500,
-        # Default 8 A keeps the 3x3 Ag(111) cell valid for iMes (~14.5 A);
-        # 10 A forced a (2,2,1) resize (~1100 Ag) that exceeded autobatcher max_metric.
-        min_pbc_image_separation=8.0,
-        # UMA oc25 does not expose stress; full cell+ionic prep fails.
-        slab_relaxation_mode="ionic_only",
-        slab_relaxation_optimizer="lbfgs",
         slab_relaxation_steps=250,
-        autobatcher_max_memory_padding=0.8,
-        # Must exceed slab+n_adsorbates (step 3 hit 422 atoms with two prior iMes).
-        autobatcher_max_memory_scaler=800,
-        debug_write_initial_placements=True,
         save_benchmark_dataset=True,
     )
 
@@ -77,7 +60,6 @@ def main():
         molecules=[(IMES_NHC_SMILES, "imes_nhc")],
         config=config,
         surface_type=SURFACE_TYPE,
-        skip_existing=False,
     )
 
     if not campaign.runs:

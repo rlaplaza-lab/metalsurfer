@@ -12,13 +12,5 @@ molecules:
 config:
   material_type: porous
   slab_relaxation_mode: none
-  seed: 42
   num_conformers: 1
   num_placements: 4
-  autobatcher_max_memory_padding: 0.8
-  autobatcher_max_memory_scaler: 500
-  autobatcher_max_atoms_to_try: 5000
-# Optimizer steps match library defaults so placements reach force convergence
-# (5-10 step demo settings reject every placement on force validation).
-  stage1_steps: 50
-  stage2_steps: 150

@@ -24,25 +24,11 @@ logger = logging.getLogger(__name__)
 
 def main():
     config = AdsorptionConfig(
-        material_type="slab",
-        model_name="uma-s-1p2",
-        task_name="oc25",
-        seed=42,
         num_conformers=20,
         num_placements=1000,
-        device="cuda",
-        fmax=0.05,
         stage1_steps=80,
-        stage2_steps=500,
-        # Enforce min in-plane separation for auto-resize (default 8 Å).
         min_pbc_image_separation=10.0,
-        # UMA oc25 does not expose stress; full cell+ionic prep fails.
-        slab_relaxation_mode="ionic_only",
-        slab_relaxation_optimizer="lbfgs",
         slab_relaxation_steps=250,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=650,
-        debug_write_initial_placements=True,
         save_benchmark_dataset=True,
     )
 
@@ -64,7 +50,6 @@ def main():
         molecules=[(BIPYRIDINE_SMILES, "bipyridine")],
         config=config,
         surface_type=SURFACE_TYPE,
-        skip_existing=False,
     )
 
     if not campaign.runs:

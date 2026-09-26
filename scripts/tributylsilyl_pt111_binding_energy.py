@@ -7,8 +7,7 @@ The anion is a convenient way to get H-free M–C₃ starting points; use this r
 relaxed slab+adsorbate geometries (XYZ / trajectories). Do not treat printed E_ads or
 reference isolated-molecule energies as physical for a neutral process.
 
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
@@ -21,20 +20,8 @@ def main() -> int:
     results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
-        material_type="slab",
-        model_name="uma-s-1p2",
-        seed=42,
-        num_conformers=10,
         num_placements=250,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
-        device="cuda",
         min_contact_ratio=0.5,
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        stage1_steps=50,
-        stage2_steps=500,
     )
 
     slab = prepare_substrate(

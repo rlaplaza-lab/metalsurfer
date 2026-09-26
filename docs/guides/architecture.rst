@@ -51,7 +51,8 @@ With ``save_results=True`` (default):
 
 ``skip_existing=True`` (default) skips molecules already in
 ``adsorption_energies_detailed.csv`` (binding) or ``saturation_summary.csv``
-(saturation). Official demos pass ``skip_existing=False``.
+(saturation). Delete the results directory or pass ``skip_existing=False``
+to force a fresh run.
 
 2. Surface preparation
 ~~~~~~~~~~~~~~~~~~~~~~

@@ -1,20 +1,11 @@
 #!/usr/bin/env python3
-"""Compute the binding (adsorption) energy of H2 on Ni(111) from mp-23 using metalsurfer.
+"""Binding energy of H2 on Ni(111) from mp-23.
 
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
+``enable_dissociative_placement=True`` enables hollow-site pair placements;
+``skip_topology_check=True`` keeps fragmented post-relax adsorbates.
+Pins ``uma-m-1p1`` / ``oc20`` (not the library default).
 
-``enable_dissociative_placement=True`` enables dissociative hollow-site pair
-placements; ``skip_topology_check=True`` skips post-relax connectivity checks
-(E_ads still vs isolated molecular E(H₂)).
-
-Rerun note: ``skip_existing=True`` by default skips molecules already in
-``adsorption_energies_detailed.csv``; delete ``results_h2_ni111/`` or pass
-``skip_existing=False`` to force a fresh run.
-
-If you hit CUDA OOM on a 15GB GPU, try:
-  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python scripts/h2_ni111_binding_energy.py
-or reduce num_placements (e.g. 25).
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 from metalsurfer import AdsorptionConfig, configure_logging, run_adsorption
@@ -27,21 +18,12 @@ def main() -> int:
     results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
-        material_type="slab",
         model_name="uma-m-1p1",
         task_name="oc20",
-        seed=42,
         num_conformers=1,
         num_placements=250,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
-        device="cuda",
         enable_dissociative_placement=True,
-        skip_topology_check=True,  # allow fragmented adsorbates after relax
-        skip_desorption_check=False,
-        stage1_steps=50,
-        stage2_steps=500,
+        skip_topology_check=True,
     )
 
     slab = prepare_substrate(

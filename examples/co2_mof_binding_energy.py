@@ -1,20 +1,12 @@
 #!/usr/bin/env python3
-"""Compute the binding (adsorption) energy of CO2 in a MOF periodic cell.
+"""Binding energy of CO₂ in a MOF periodic cell (RUBTAK01).
 
-This example loads a real MOF structure from a CIF file and computes CO2 adsorption
-energy using metalsurfer.
+Loads the experimental CIF and keeps the published framework geometry
+(``slab_relaxation_mode="none"``).
 
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 
-Run (conda env metalsurfer)::
-
-  conda activate metalsurfer
-  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-  python examples/co2_mof_binding_energy.py
-
-If you hit CUDA OOM on a 15GB GPU, reduce ``num_placements`` (e.g. 25).
-
-Uses RUBTAK01 MOF structure from:
+CIF source:
 https://github.com/bafgreat/mofstructure/blob/main/tests/test_data/RUBTAK01.cif
 """
 
@@ -68,6 +60,7 @@ def _validate_campaign(campaign: BindingCampaignResult, *, results_dir: str) -> 
             "floor for CO₂ in this MOF (unexpectedly strong vs QC).",
             file=sys.stderr,
         )
+        print(campaign.format_summary(results_dir=results_dir), file=sys.stderr)
         raise SystemExit(1)
 
 
@@ -86,22 +79,11 @@ def main() -> int:
 
     mof_atoms = read(cif_path)
 
-    print(f"Successfully loaded MOF structure from {cif_path}")
-    print(f"MOF formula: {mof_atoms.get_chemical_formula()}")
-    print(f"MOF has {len(mof_atoms)} atoms")
-    print(f"MOF cell: {mof_atoms.cell}")
-
-    # Modest placement count + GPU memory padding for small demo GPUs (~15 GB).
     config = AdsorptionConfig(
         material_type="porous",
         slab_relaxation_mode="none",  # keep experimental CIF framework geometry
-        seed=42,
         num_conformers=1,
         num_placements=5,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
-        stage2_steps=500,
     )
 
     mof_slab = prepare_substrate(
@@ -117,7 +99,6 @@ def main() -> int:
         config=config,
         surface_type=surface_type,
         system_name="MOF_cell",
-        skip_existing=False,
     )
 
     print()

@@ -16,13 +16,9 @@ not an electrochemical cycle. No pH / activity scan: for a single adsorbate
 that only shifts Ω uniformly and does not change site order or the
 sequential-versus-tuplet comparison at fixed coverage.
 
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc,
-torch) and rdkit. Run from project root::
+Requires: ``pip install -e ".[mlip]"``. Run from the project root::
 
-    pip install -e . && pip install -e ".[mlip]"
     python scripts/oh_pt111_ntuple_saturation.py
-
-On-disk output follows ``AdsorptionConfig`` (README, saturation section).
 """
 
 from __future__ import annotations
@@ -47,23 +43,10 @@ SITE_ORDER = ("atop", "bridge", "hollow")
 
 
 def make_base_config() -> AdsorptionConfig:
-    """Shared CUDA saturation knobs (same family as other scripts/ runs)."""
+    """Shared saturation knobs for the isolated / sequential / n-tuplet runs."""
     return AdsorptionConfig(
-        material_type="slab",
-        model_name="uma-s-1p2",
-        task_name="oc25",
-        seed=42,
         num_conformers=1,
         num_placements=250,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
-        device="cuda",
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        enable_dissociative_placement=False,
-        stage1_steps=50,
-        stage2_steps=500,
     )
 
 
@@ -215,7 +198,6 @@ def run_campaign(
         molecules=MOLECULES,
         config=config,
         surface_type=surface_type,
-        skip_existing=False,
     )
     print()
     if not campaign.runs:

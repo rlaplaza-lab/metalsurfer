@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""Compute the binding (adsorption) energy of ethene on a small Pt nanocluster (12 atoms).
+"""Binding energy of ethene on a hand-built Pt₁₂ nanocluster.
 
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e ".[mlip]"
+The cluster keeps its input geometry during ``prepare_substrate``
+(``slab_relaxation_mode="none"``): unrestricted ionic prep can distort small
+hand-built nanoparticles. The whole cluster is frozen during adsorption
+(default prep ``FixAtoms``); under that rigid-cluster approximation UMA places
+the best surviving pose near E_ads ≈ 0 eV — a chemisorbed C–Pt contact whose
+missing cluster-relaxation energy offsets the bond. The demo therefore
+validates the chemisorption contact rather than a strictly negative E_ads.
 
-The hand-built Pt₁₂ cluster keeps its input geometry during ``prepare_substrate``
-(``slab_relaxation_mode="none"``): unrestricted ionic prep relaxation can distort
-small hand-built nanoparticles and yield unreliable adsorption energies. The whole
-cluster is also frozen during adsorption (default prep ``FixAtoms``); under that
-rigid-cluster approximation UMA places the best surviving pose right at
-E_ads ≈ 0 eV — a chemisorbed C–Pt contact (~2.1 Å, C=C stretched to ~1.4 Å) whose
-missing cluster-relaxation energy offsets the bond. The demo therefore validates
-the chemisorption contact rather than a strictly negative E_ads.
-
-If you hit CUDA OOM on a 15GB GPU, try:
-  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python examples/ethene_pt12_binding_energy.py
-or reduce num_placements (e.g. 25).
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 from __future__ import annotations
@@ -111,18 +105,12 @@ def main() -> int:
         pbc=False,
     )
 
-    # Modest placement count + GPU memory padding for small demo GPUs (~15 GB).
     # Prefer enough samples that at least one chemisorbed ethene pose survives.
     config = AdsorptionConfig(
         material_type="nanoparticle",
-        seed=42,
         num_conformers=3,
         num_placements=25,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
         slab_relaxation_mode="none",
-        stage2_steps=500,
     )
 
     nanocluster = prepare_substrate(
@@ -137,7 +125,6 @@ def main() -> int:
         config=config,
         surface_type=surface_type,
         system_name="Pt_12",
-        skip_existing=False,
     )
 
     print()

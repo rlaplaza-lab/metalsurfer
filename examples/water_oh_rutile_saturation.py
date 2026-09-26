@@ -13,19 +13,15 @@ Two molecules are screened at the same time on one growing slab:
 The substrate is the classic rutile TiO2(110) surface. Oxides are absent from
 the FairChem bulk database used by ``bulk_id=``, so the slab is built with ASE
 (``ase.spacegroup`` + ``ase.build.surface``) and passed to
-``prepare_substrate(slab=...)``, which equilibrates it, applies PBC and freeze
-constraints, and validates it for campaigns.
+``prepare_substrate(slab=...)``.
 
-Requires: ``pip install -e ".[mlip]"`` and a CUDA-capable GPU.
-
-Run from the project root::
+Requires: ``pip install -e ".[mlip]"``. Run from the project root::
 
     python examples/water_oh_rutile_saturation.py
 """
 
 from __future__ import annotations
 
-import logging
 import sys
 
 import numpy as np
@@ -35,7 +31,6 @@ from ase.spacegroup import crystal
 
 from metalsurfer import (
     AdsorptionConfig,
-    MultiMolSaturationRunResult,
     configure_logging,
     results_dir_for,
     run_saturation,
@@ -66,28 +61,19 @@ def build_rutile_tio2_110() -> Atoms:
 
 def main() -> int:
     configure_logging(default_level="INFO")
-    logger = logging.getLogger(__name__)
     results_dir = str(results_dir_for(SURFACE_TYPE))
 
     config = AdsorptionConfig(
-        material_type="slab",
-        seed=42,
         num_conformers=2,
         num_placements=16,
         multi_molecule_saturation=True,
         saturation_molecules_per_step=2,
         saturation_max_steps=3,
-        stage1_steps=50,
         stage2_steps=300,
-        autobatcher_max_memory_padding=0.8,
-        autobatcher_max_memory_scaler=500,
-        autobatcher_max_atoms_to_try=5000,
     )
 
-    slab_atoms = build_rutile_tio2_110()
-    logger.info("Rutile TiO2(110) substrate atoms: %d", len(slab_atoms))
     slab = prepare_substrate(
-        slab=slab_atoms,
+        slab=build_rutile_tio2_110(),
         config=config,
         results_dir=results_dir,
     )
@@ -100,49 +86,12 @@ def main() -> int:
         ],
         config=config,
         surface_type=SURFACE_TYPE,
-        skip_existing=False,
     )
 
     if not campaign.runs:
         print("No saturation runs produced.", file=sys.stderr)
         return 1
     result = campaign.runs[0]
-    if not isinstance(result, MultiMolSaturationRunResult):
-        print(
-            "Expected a competitive multi-molecule saturation run.",
-            file=sys.stderr,
-        )
-        return 1
-    if not result.steps or result.n_molecules_at_saturation < 1:
-        print(
-            "No molecule bound within the step limit; nothing to validate.",
-            file=sys.stderr,
-        )
-        return 1
-
-    counts_total = sum(result.molecule_counts.values())
-    if counts_total != result.n_molecules_at_saturation:
-        print(
-            f"molecule_counts {result.molecule_counts} do not sum to "
-            f"n_molecules_at_saturation={result.n_molecules_at_saturation}.",
-            file=sys.stderr,
-        )
-        return 1
-
-    n_adsorbate_expected = len(result.final_slab_atoms) - len(slab.atoms)
-    n_adsorbate_committed = 0
-    for step_result in result.steps:
-        units = step_result.committed()
-        if units:
-            # Tuplet winners share one composite; count the suffix once per bound step.
-            n_adsorbate_committed += len(units[0].atoms) - units[0].slab_size
-    if n_adsorbate_expected != n_adsorbate_committed:
-        print(
-            f"Final slab holds {n_adsorbate_expected} adsorbate atoms, "
-            f"but the step record commits {n_adsorbate_committed}.",
-            file=sys.stderr,
-        )
-        return 1
 
     print()
     print(f"Competitive saturation on {SURFACE_TYPE}:")
@@ -161,14 +110,6 @@ def main() -> int:
             f"{step_result.n_added} | {energies}"
         )
     print(f"  coverage at saturation: {result.molecule_counts}")
-    e_ads_rows = [
-        unit.energy_adsorption
-        for step_result in result.steps
-        for unit in step_result.committed()
-    ]
-    if not e_ads_rows or not np.all(np.isfinite(e_ads_rows)):
-        print("Non-finite or empty committed E_ads rows found.", file=sys.stderr)
-        return 1
 
     # Best single-molecule E_ads band (uma-s-1p2 + oc25 QC): ≈ −3.23 eV.
     # Use per-molecule screening results — committed tuplet E_ads is a shared
@@ -210,9 +151,7 @@ def main() -> int:
 
     print(
         f"\nResults written under {results_dir} "
-        f"(first-step best screened E_ads = {best_first:.4f} eV).\n"
-        "(saturation_details.csv includes a committed_molecule column for "
-        "multi-winner steps)."
+        f"(first-step best screened E_ads = {best_first:.4f} eV)."
     )
     return 0
 

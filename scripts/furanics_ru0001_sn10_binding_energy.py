@@ -6,8 +6,7 @@ Molecules: HMF, BHMF, BHMTHF, 5-MF, MFA, DMF, MTHFA, DMTHF.
 Uses metalsurfer prepare_substrate to create Sn-covered Ru(0001) surface.
 BO pipeline: ~300 MLIP evaluations (100 initial random + 2 acquisition batches
 of 100); ``num_placements=250`` caps the placement pool per batch.
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 from metalsurfer import AdsorptionConfig, BOConfig, configure_logging, run_adsorption_bo
@@ -33,26 +32,11 @@ def main() -> int:
     results_dir = f"results_{results_subdir}"
 
     config = AdsorptionConfig(
-        material_type="slab",
         model_name="uma-s-1p1",
         task_name="oc20",
-        seed=42,
-        num_conformers=10,
         num_placements=250,
-        autobatcher_max_memory_padding=0.8,
-        device="cuda",
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        stage1_steps=50,
-        stage2_steps=500,
-        debug_write_initial_placements=False,
-        top_layer_tolerance=2.0,  # Include top Ru + Sn in top layer for placement
-        # total_budget = acquisition batches after initial (not total evals).
-        bo=BOConfig(
-            initial_random=100,
-            batch_size=100,
-            total_budget=2,  # 100 initial + 2×100 ≈ 300 evaluations
-        ),
+        top_layer_tolerance=2.0,
+        bo=BOConfig(initial_random=100, batch_size=100, total_budget=2),
     )
 
     # Create Ru(0001) slab from Materials Project mp-33.

@@ -2,9 +2,7 @@
 """Systematically adsorb vanillin on Ni(111) until saturation using metalsurfer.
 
 Adds vanillin molecules one at a time to the slab; stops when best E_ads >= 0 (slab saturated).
-Requires: metalsurfer with MLIP stack (torch-sim-atomistic, fairchem-data-oc, torch) and rdkit.
-Run from project root: pip install -e . && pip install -e ".[mlip]"
-On-disk output follows ``AdsorptionConfig`` (README, saturation section).
+Requires: ``pip install -e ".[mlip]"``. Run from the project root.
 """
 
 from metalsurfer import AdsorptionConfig, configure_logging, run_saturation
@@ -18,17 +16,9 @@ def main():
 
     # Create Ni(111) slab from Materials Project mp-23.
     config = AdsorptionConfig(
-        material_type="slab",
         model_name="uma-m-1p1",
         task_name="oc20",
-        seed=42,
-        num_conformers=10,
         num_placements=250,
-        device="cuda",  # use "cpu" if no GPU
-        skip_topology_check=False,
-        skip_desorption_check=False,
-        stage1_steps=50,
-        stage2_steps=500,
     )
 
     slab = prepare_substrate(
@@ -45,7 +35,6 @@ def main():
         molecules=[(smiles, "vanillin")],
         config=config,
         surface_type=surface_type,
-        skip_existing=False,
     )
 
     print()
