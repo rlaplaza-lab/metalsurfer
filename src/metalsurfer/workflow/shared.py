@@ -6,7 +6,7 @@ import math
 import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -27,7 +27,6 @@ from ..conformers import create_conformers_from_smiles
 from ..exceptions import OptimizationError
 from ..filters import _adsorbate_surface_min_distance, filter_results
 from ..io_results import _write_debug_site_overlays
-from ..ml.schema import PlacementRecord
 from ..models import (
     BOStepMemory,
     BOTransferInfo,
@@ -226,7 +225,6 @@ class MoleculeScreenOutcome:
 
     results: list[ScreeningResult]
     failure_summary: FailureSummary | None = None
-    ml_records: list[PlacementRecord] = field(default_factory=list)
     bo_memory: BOStepMemory | None = None
     transfer_info: BOTransferInfo | None = None
 
@@ -576,12 +574,9 @@ def _filter_and_label_duplicates(
     slab_atoms: Atoms,
     reference_smiles: str | None,
     config: AdsorptionConfig,
-    smiles: str,
-    surface_type: str,
-    ml_records: list[PlacementRecord],
     surface_prefix_atoms: int | None = None,
 ) -> tuple[list[ScreeningResult], list[ScreeningResult], float]:
-    """Filter results and append labeled duplicate ML records.
+    """Filter results and return the duplicate list separately.
 
     Returns ``(filtered, duplicates, t_filtering)``.
     """
@@ -597,16 +592,6 @@ def _filter_and_label_duplicates(
     )
     t_filtering = time.perf_counter() - t0
 
-    for dup in duplicates:
-        record = PlacementRecord.from_screening_result(
-            dup,
-            smiles=smiles,
-            surface_id=surface_type,
-            config=config,
-        )
-        record.label_source = "deduplicated_duplicate"
-        ml_records.append(record)
-
     return filtered, duplicates, t_filtering
 
 
@@ -616,12 +601,9 @@ def _finalize_screen_results(
     slab_atoms: Atoms,
     reference_smiles: str | None,
     config: AdsorptionConfig,
-    smiles: str,
-    surface_type: str,
-    ml_records: list[PlacementRecord],
     surface_prefix_atoms: int | None = None,
 ) -> tuple[list[ScreeningResult], float, FilterFailure | None]:
-    """Filter results, record dedup ML labels, and set filter-stage failure summary.
+    """Filter results and set filter-stage failure summary.
 
     Returns ``(filtered_results, t_filtering, filter_failure_or_None)``.
     """
@@ -631,9 +613,6 @@ def _finalize_screen_results(
         slab_atoms=slab_atoms,
         reference_smiles=reference_smiles,
         config=config,
-        smiles=smiles,
-        surface_type=surface_type,
-        ml_records=ml_records,
         surface_prefix_atoms=surface_prefix_atoms,
     )
 

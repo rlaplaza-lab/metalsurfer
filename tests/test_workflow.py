@@ -554,14 +554,18 @@ class TestProcessMolecule:
             )
         assert outcome.results is not None
         assert len(outcome.results) == 1
-        assert len(outcome.ml_records) == 1
-        assert outcome.ml_records[0].is_penalty_label is True
-        assert outcome.ml_records[0].failure_stage == "validation"
-        assert outcome.ml_records[0].energy_adsorption == pytest.approx(
-            config.bo.failure_penalty_overrides["validation"]
+        assert outcome.bo_memory is not None
+        assert config.bo.failure_penalty_overrides["validation"] in (
+            outcome.bo_memory.observed_y
+        )
+        assert (
+            outcome.bo_memory.observed_y.count(
+                config.bo.failure_penalty_overrides["validation"]
+            )
+            == 1
         )
 
-    def test_bo_deduplicated_results_are_tracked_for_ml(self):
+    def test_bo_deduplicated_results_are_filtered_out(self):
         slab = SlabContainer(make_slab())
         refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
         config = AdsorptionConfig(
@@ -653,10 +657,7 @@ class TestProcessMolecule:
 
         assert outcome.results is not None
         assert len(outcome.results) == 1
-        assert len(outcome.ml_records) == 1
-        assert outcome.ml_records[0].placement_id == 1
-        assert outcome.ml_records[0].label_source == "deduplicated_duplicate"
-        assert outcome.ml_records[0].is_penalty_label is False
+        assert outcome.results[0].placement_id == 0
 
     def test_bo_filter_reject_replaces_prior_observation_not_double_label(self):
         """Post-filter rejects must replace the valid y, not append a second label.
@@ -783,12 +784,6 @@ class TestProcessMolecule:
         assert outcome.bo_memory.observed_y.count(-0.8) == 0
         assert filter_penalty in outcome.bo_memory.observed_y
         assert -1.0 in outcome.bo_memory.observed_y
-        penalty_records = [
-            r for r in outcome.ml_records if r.label_source == "bo_failure_penalty"
-        ]
-        assert len(penalty_records) == 1
-        assert penalty_records[0].placement_id == 1
-        assert penalty_records[0].failure_stage == "filter"
 
 
 @pytest.mark.parametrize("clamp_enabled", [True, False])

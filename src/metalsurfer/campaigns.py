@@ -20,7 +20,6 @@ from .io_results import (
     write_run_metadata_from_out,
     write_run_settings,
 )
-from .ml.dataset import DatasetLogger
 from .models import (
     BindingCampaignResult,
     MoleculeCampaignSummary,
@@ -125,11 +124,6 @@ def _run_binding_campaign(
     run_results = []
     summaries = []
     failure_summaries: dict[str, FailureSummary] = {}
-    ds_logger = DatasetLogger(
-        str(results_dir_for(surface_type)),
-        config=config,
-        surface_id=surface_type,
-    )
 
     for smiles, molecule_name in molecule_pairs:
         outcome = process_fn(
@@ -148,8 +142,6 @@ def _run_binding_campaign(
         if outcome.failure_summary:
             failure_summaries[molecule_name] = outcome.failure_summary
         summaries.append(_summarize_molecule(molecule_name, results))
-        for record in outcome.ml_records:
-            ds_logger.add_record(record)
         if not results:
             continue
         if save_results:
@@ -162,9 +154,6 @@ def _run_binding_campaign(
                 write_csv=False,
             )
         run_results.append(screening_run_result(molecule_name, results))
-        ds_logger.add_results(results, smiles=smiles, surface_id=surface_type)
-
-    ds_logger.flush()
 
     if save_results and run_results:
         save_summary_results(run_results, surface_type=surface_type, config=config)

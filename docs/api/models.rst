@@ -126,7 +126,3 @@ compatibility.
    :members:
    :undoc-members:
 
-.. autoclass:: metalsurfer.ml.DatasetLogger
-   :members:
-   :undoc-members:
-

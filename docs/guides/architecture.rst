@@ -45,7 +45,7 @@ label only).
 With ``save_results=True`` (default):
 
 - **Binding** — ``save_single_molecule_results`` per molecule,
-  ``save_summary_results`` for campaign CSVs, ML rows via ``DatasetLogger``.
+  ``save_summary_results`` for campaign CSVs.
 - **Saturation** — ``save_saturation_results``; optional flatten to
   ``adsorption_energies_detailed.csv`` when ``save_benchmark_dataset=True``.
 
@@ -80,8 +80,8 @@ Import from :mod:`metalsurfer.workflow` (not the package root):
 - ``process_molecule`` / ``process_molecule_bayesian`` — require an
   :class:`~metalsurfer.AdsorptionConfig` and return
   :class:`~metalsurfer.workflow.MoleculeScreenOutcome` (``results``,
-  optional stage-typed ``failure_summary``, ``ml_records``, optional BO
-  memory / transfer). Campaign-level
+  optional stage-typed ``failure_summary``, optional BO memory / transfer).
+  Campaign-level
   :class:`~metalsurfer.SaturationCampaignResult` stores ``failure_summary``
   keyed by molecule name (``dict[str, FailureSummary]``).
 - :func:`~metalsurfer.workflow.run_saturation_screening` (pass
@@ -810,7 +810,6 @@ Root: ``results_{surface_type}/`` (see :func:`~metalsurfer.results_dir_for`).
 - ``saturation_summary.csv`` / ``saturation_details.csv`` — saturation.
 - ``saturation_placements_detailed.csv`` and ``step_{NNN}_placements/`` when
   ``saturation_save_all_placements=True`` (default).
-- ``ml_dataset.csv`` / ``ml_dataset_metadata.json`` — ``DatasetLogger``.
 - ``xyz_structures/`` (including optional ``sites_plugin*.xyz`` /
   ``sites_final*.xyz`` when ``debug_write_sites=True``; saturation uses
   ``_stepNNN`` suffixes), optional ``vasp_inputs/``, ``run_metadata.json``.
@@ -824,10 +823,9 @@ result classes so scripts need not import internal I/O helpers.
 Dataset logging and ML
 ----------------------
 
-``DatasetLogger`` appends ``PlacementRecord`` rows during binding and
-saturation. Feature schema: eight numeric columns — the initial-pose
-replay ingredients (absolute COM ``x``/``y``/``z`` from ``x_abs``/``y_abs``/
-``z_abs``, ``conformer_index``, unit quaternion). CSV exports are **lean by
+Feature schema: eight numeric columns — the initial-pose replay ingredients
+(absolute COM ``x``/``y``/``z`` from ``x_abs``/``y_abs``/``z_abs``,
+``conformer_index``, unit quaternion). Campaign CSV exports are **lean by
 default** (features + energies/labels + ``context_hash``). Set
 ``export_placement_provenance=True`` to also write ``initial_*`` pre-relax
 provenance (site, orientation, ``initial_fragment_positions``, …) and full
@@ -836,7 +834,7 @@ started, not the relaxed geometry (relaxed structures remain in XYZ/POSCAR;
 ``distance`` / energies are post-relax).
 
 Utilities: ``extract_features``, ``placement_pose_from_features``,
-``load_dataset``, ``PlacementRecord.to_placement_descriptor`` /
+``PlacementRecord.to_placement_descriptor`` /
 ``to_config``. Schema versioning in ``ml/schema.py`` (``SCHEMA_VERSION``
 **3.0**). Shared numerics in ``_numeric_defaults.py``.
 Loaders still accept legacy unprefixed provenance columns from schema ≤2.3.

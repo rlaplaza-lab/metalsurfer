@@ -44,7 +44,7 @@ def _patch_binding_bootstrap(monkeypatch, slab_container, ref=None):
 
 def _patch_saturation_screening(monkeypatch, slab_container, processed):
     from metalsurfer.workflow.shared import ScreeningRunBootstrap
-    from tests.conftest import DummyReferenceEnergies, NoopDatasetLogger, make_water
+    from tests.conftest import DummyReferenceEnergies, make_water
 
     ref = DummyReferenceEnergies(constant_energy=-5.0)
 
@@ -69,9 +69,6 @@ def _patch_saturation_screening(monkeypatch, slab_container, processed):
 
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation.process_molecule", fake_process
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", NoopDatasetLogger
     )
 
 
@@ -324,10 +321,6 @@ def test_run_adsorption_csv_path_unified_with_inline(workdir, monkeypatch):
         "metalsurfer.campaigns.setup_directories",
         lambda surface_types, **kwargs: None,
     )
-    monkeypatch.setattr(
-        "metalsurfer.campaigns.DatasetLogger.flush",
-        lambda self: None,
-    )
 
     campaign = run_adsorption(
         slab=slab_container,
@@ -373,10 +366,6 @@ def test_run_adsorption_skip_existing_inline_list(workdir, monkeypatch):
     monkeypatch.setattr(
         "metalsurfer.campaigns.setup_directories",
         lambda surface_types, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.campaigns.DatasetLogger.flush",
-        lambda self: None,
     )
 
     campaign = run_adsorption(
@@ -587,10 +576,6 @@ def test_run_adsorption_save_results_false_skips_disk_writes(workdir, monkeypatc
         "metalsurfer.campaigns.setup_directories",
         lambda surface_types, **kwargs: None,
     )
-    monkeypatch.setattr(
-        "metalsurfer.campaigns.DatasetLogger.flush",
-        lambda self: None,
-    )
 
     campaign = run_adsorption(
         slab=slab_container,
@@ -769,10 +754,6 @@ def test_write_settings_alone_writes_timing_metadata(workdir, monkeypatch):
     monkeypatch.setattr(
         "metalsurfer.campaigns.setup_directories",
         lambda surface_types, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.campaigns.DatasetLogger.flush",
-        lambda self: None,
     )
 
     run_adsorption(

@@ -156,22 +156,6 @@ def assert_paths_exist(base: Path, relpaths: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-class NoopDatasetLogger:
-    """Patches DatasetLogger in screening/saturation tests."""
-
-    def __init__(self, *_args, **_kwargs) -> None:
-        pass
-
-    def add_results(self, *_args, **_kwargs) -> None:
-        pass
-
-    def add_record(self, *_args, **_kwargs) -> None:
-        pass
-
-    def flush(self) -> None:
-        pass
-
-
 class DummyReferenceEnergies:
     """Minimal reference energies object for screening/saturation mocks."""
 

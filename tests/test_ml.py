@@ -1,9 +1,4 @@
-"""Tests for metalsurfer.ml dataset, features, schema, and surrogate builders."""
-
-import json
-import logging
-import os
-import tempfile
+"""Tests for metalsurfer.ml features, schema, and surrogate builders."""
 
 import numpy as np
 import pandas as pd
@@ -18,19 +13,12 @@ from metalsurfer.ml import (
     ComputationContext as PublicComputationContext,
 )
 from metalsurfer.ml import (
-    DatasetLogger as PublicDatasetLogger,
-)
-from metalsurfer.ml import (
     PlacementRecord as PublicPlacementRecord,
 )
 from metalsurfer.ml import (
     extract_features as public_extract_features,
 )
-from metalsurfer.ml import (
-    load_dataset as public_load_dataset,
-)
 from metalsurfer.ml.bayesian import ei_scores, lcb_scores, pi_scores
-from metalsurfer.ml.dataset import DatasetLogger, load_dataset
 from metalsurfer.ml.features import (
     extract_features,
     extract_features_from_dataset,
@@ -47,12 +35,14 @@ def test_schema_version_is_3_0():
 
 
 def test_ml_package_exports_expanded_surface():
-    """Public ml package re-exports dataset/schema/features helpers."""
+    """Public ml package re-exports schema/features helpers."""
     assert PublicComputationContext is ComputationContext
     assert PublicPlacementRecord is PlacementRecord
-    assert PublicDatasetLogger is DatasetLogger
-    assert public_load_dataset is load_dataset
     assert public_extract_features is extract_features
+
+
+def _records_dataframe(records: list[PlacementRecord]) -> pd.DataFrame:
+    return pd.DataFrame([r.to_flat_dict() for r in records])
 
 
 def test_computation_context_defaults_match_numeric_defaults():
@@ -334,252 +324,6 @@ class TestPlacementRecord:
         assert record.energy_adsorption == pytest.approx(-0.5)
 
 
-# ── Dataset tests ──
-
-
-class TestDatasetLogger:
-    def test_flush_empty_is_noop_returning_csv_path(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir)
-            path = ds.flush()  # no records: must not create any file
-            assert path == ds.csv_path
-            assert not os.path.exists(path)
-
-    def test_add_result_and_add_results_log_screening_results(self):
-        from tests.conftest import make_screening_result
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir, surface_id="cu111")
-            record = ds.add_result(
-                make_screening_result(molecule="water", placement_id=7), smiles="O"
-            )
-            assert isinstance(record, PlacementRecord)
-            assert record.record_hash()
-
-            results = [make_screening_result(placement_id=i) for i in range(4)]
-            assert ds.add_results(results, smiles="O", surface_id="s1") == 4
-
-            assert ds.flush() == ds.csv_path
-            df = pd.read_csv(ds.csv_path)
-            assert len(df) == 5
-            # Per-call surface_id overrides flow into the stored rows.
-            surface_ids = set(df["surface_id"])
-            assert surface_ids == {"cu111", "s1"}
-            assert (df["smiles"] == "O").all()
-
-    def test_flush_metadata_counts_duplicate_csv_rows(self):
-        """total_records should count CSV rows even when hashes are duplicated on disk."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir)
-            ds.add_record(make_placement_record(0))
-            ds.flush()
-            # Corrupt on-disk CSV by duplicating the data row (same record_hash).
-            path = ds.csv_path
-            with open(path) as f:
-                lines = f.readlines()
-            assert len(lines) == 2  # header + 1 row
-            with open(path, "a") as f:
-                f.write(lines[1])
-            with open(path) as f:
-                assert sum(1 for _ in f) - 1 == 2
-
-            ds2 = DatasetLogger(tmpdir)
-            ds2.add_record(make_placement_record(1))
-            ds2.flush()
-            with open(ds2.metadata_path) as f:
-                meta = json.load(f)
-            # Unique hashes would report 2; row count must report 3.
-            assert meta["total_records"] == 3
-            assert len(pd.read_csv(ds2.csv_path)) == 3
-
-    def test_flush_creates_csv(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir)
-            ds.add_record(make_placement_record(0))
-            ds.add_record(make_placement_record(1))
-            path = ds.flush()
-            assert os.path.exists(path)
-            df = pd.read_csv(path)
-            assert len(df) == 2
-
-    def test_flush_appends(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds1 = DatasetLogger(tmpdir)
-            ds1.add_record(make_placement_record(0))
-            ds1.flush()
-
-            ds2 = DatasetLogger(tmpdir)
-            ds2.add_record(make_placement_record(1))
-            ds2.flush()
-
-            df = pd.read_csv(ds2.csv_path)
-            assert len(df) == 2
-
-    def test_flush_deduplicates(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds1 = DatasetLogger(tmpdir)
-            ds1.add_record(make_placement_record(0))
-            ds1.flush()
-
-            ds2 = DatasetLogger(tmpdir)
-            ds2.add_record(make_placement_record(0))  # same record
-            ds2.flush()
-
-            df = pd.read_csv(ds2.csv_path)
-            assert len(df) == 1
-
-    def test_metadata_written(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir, surface_id="test")
-            ds.add_record(make_placement_record())
-            ds.flush()
-            assert os.path.exists(ds.metadata_path)
-            with open(ds.metadata_path) as f:
-                meta = json.load(f)
-            assert meta["schema_version"] == SCHEMA_VERSION
-            assert meta["export_placement_provenance"] is False
-
-    def test_flush_lean_by_default(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir, config=AdsorptionConfig())
-            ds.add_record(make_placement_record(0))
-            ds.flush()
-            df = pd.read_csv(ds.csv_path)
-            assert "x_abs" in df.columns
-            assert "energy_adsorption" in df.columns
-            assert "initial_tilt_deg" not in df.columns
-            assert "ctx_model_name" not in df.columns
-
-    def test_flush_rich_when_provenance_enabled(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = AdsorptionConfig(export_placement_provenance=True)
-            ds = DatasetLogger(tmpdir, config=cfg)
-            ds.add_record(make_placement_record(0))
-            ds.flush()
-            df = pd.read_csv(ds.csv_path)
-            assert "initial_tilt_deg" in df.columns
-            assert "initial_site_type" in df.columns
-            assert "ctx_model_name" in df.columns
-            with open(ds.metadata_path) as f:
-                meta = json.load(f)
-            assert meta["export_placement_provenance"] is True
-
-    def test_flush_rejects_provenance_schema_mismatch(self):
-        """Lean↔provenance append must abort before corrupting the CSV."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            lean = DatasetLogger(tmpdir, config=AdsorptionConfig())
-            lean.add_record(make_placement_record(0))
-            lean.flush()
-            with open(lean.csv_path, encoding="utf-8") as f:
-                before = f.read()
-
-            rich = DatasetLogger(
-                tmpdir, config=AdsorptionConfig(export_placement_provenance=True)
-            )
-            rich.add_record(make_placement_record(1))
-            with pytest.raises(ValueError, match="column schema mismatch"):
-                rich.flush()
-            with open(lean.csv_path, encoding="utf-8") as f:
-                assert f.read() == before
-
-            # Opposite direction: provenance file, lean append.
-            with tempfile.TemporaryDirectory() as tmpdir2:
-                rich2 = DatasetLogger(
-                    tmpdir2, config=AdsorptionConfig(export_placement_provenance=True)
-                )
-                rich2.add_record(make_placement_record(0))
-                rich2.flush()
-                with open(rich2.csv_path, encoding="utf-8") as f:
-                    before2 = f.read()
-
-                lean2 = DatasetLogger(tmpdir2, config=AdsorptionConfig())
-                lean2.add_record(make_placement_record(1))
-                with pytest.raises(ValueError, match="column schema mismatch"):
-                    lean2.flush()
-                with open(rich2.csv_path, encoding="utf-8") as f:
-                    assert f.read() == before2
-
-    def test_flush_rejects_mixed_context_hash(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds1 = DatasetLogger(tmpdir, config=AdsorptionConfig(model_name="uma-s-1p2"))
-            ds1.add_record(make_placement_record(0))
-            ds1.flush()
-
-            ds2 = DatasetLogger(tmpdir, config=AdsorptionConfig(model_name="uma-s-1p1"))
-            mismatched = make_placement_record(1)
-            mismatched.context = ComputationContext.from_config(
-                AdsorptionConfig(model_name="uma-s-1p1")
-            )
-            ds2.add_record(mismatched)
-            with pytest.raises(ValueError, match="computation context mismatch"):
-                ds2.flush()
-
-    def test_flush_rejects_record_context_mismatch(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir, config=AdsorptionConfig(model_name="uma-s-1p1"))
-            ds.add_record(make_placement_record(0))
-            with pytest.raises(ValueError, match="computation context mismatch"):
-                ds.flush()
-
-    def test_flush_allow_mixed_context(self, caplog):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds1 = DatasetLogger(tmpdir, config=AdsorptionConfig(model_name="uma-s-1p2"))
-            ds1.add_record(make_placement_record(0))
-            ds1.flush()
-
-            ds2 = DatasetLogger(
-                tmpdir,
-                config=AdsorptionConfig(model_name="uma-s-1p1"),
-                allow_mixed_context=True,
-            )
-            mismatched = make_placement_record(1)
-            mismatched.context = ComputationContext.from_config(
-                AdsorptionConfig(model_name="uma-s-1p1")
-            )
-            ds2.add_record(mismatched)
-            with caplog.at_level(logging.WARNING, logger="metalsurfer.ml.dataset"):
-                ds2.flush()
-            assert "mixed computation context" in caplog.text
-            df = pd.read_csv(ds2.csv_path)
-            assert len(df) == 2
-
-    def test_flush_allow_mixed_record_context(self, caplog):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(
-                tmpdir,
-                config=AdsorptionConfig(model_name="uma-s-1p1"),
-                allow_mixed_context=True,
-            )
-            ds.add_record(make_placement_record(0))
-            with caplog.at_level(logging.WARNING, logger="metalsurfer.ml.dataset"):
-                ds.flush()
-            assert "mixed computation context records" in caplog.text
-
-
-class TestLoadDataset:
-    def test_load_from_dir(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir)
-            ds.add_record(make_placement_record(0))
-            ds.flush()
-            df = load_dataset(tmpdir)
-            assert isinstance(df, pd.DataFrame)
-            assert len(df) == 1
-
-    def test_load_as_records(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir)
-            ds.add_record(make_placement_record(0))
-            ds.flush()
-            records = load_dataset(tmpdir, as_records=True)
-            assert isinstance(records, list)
-            assert isinstance(records[0], PlacementRecord)
-
-    def test_load_missing_raises(self):
-        with pytest.raises(FileNotFoundError, match="Dataset not found:"):
-            load_dataset("/nonexistent/path")
-
-
 # ── Feature tests ──
 
 
@@ -690,21 +434,16 @@ class TestFeatureExtraction:
 
     def test_extract_from_dataset(self):
         records = make_random_placement_records(20, variant="ml")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir)
-            for r in records:
-                ds.add_record(r)
-            ds.flush()
-            df = load_dataset(tmpdir)
-            X, y = extract_features_from_dataset(df)
-            assert X.shape[0] == 20
-            assert X.shape[1] == 8
-            assert len(y) == 20
-            assert "x" in X.columns
-            assert "y" in X.columns
-            assert "z" in X.columns
-            assert "face_flip" not in X.columns
-            assert "z_fraction" not in X.columns
+        df = _records_dataframe(records)
+        X, y = extract_features_from_dataset(df)
+        assert X.shape[0] == 20
+        assert X.shape[1] == 8
+        assert len(y) == 20
+        assert "x" in X.columns
+        assert "y" in X.columns
+        assert "z" in X.columns
+        assert "face_flip" not in X.columns
+        assert "z_fraction" not in X.columns
 
     def test_extract_features_uses_absolute_geometry_only(self):
         r = make_placement_record()
@@ -722,47 +461,31 @@ class TestFeatureExtraction:
 
     def test_extract_from_dataset_requires_absolute_geometry_columns(self):
         records = make_random_placement_records(4, variant="ml")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir)
-            for r in records:
-                ds.add_record(r)
-            ds.flush()
-            df = load_dataset(tmpdir)
-            df = df.drop(columns=["x_abs", "y_abs", "z_abs"])
-            with pytest.raises(ValueError, match="strict geometric feature columns"):
-                extract_features_from_dataset(df)
+        df = _records_dataframe(records).drop(columns=["x_abs", "y_abs", "z_abs"])
+        with pytest.raises(ValueError, match="strict geometric feature columns"):
+            extract_features_from_dataset(df)
 
     def test_extract_from_dataset_rejects_empty_or_nonfinite_targets(self):
         records = make_random_placement_records(3, variant="ml")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir)
-            for r in records:
-                ds.add_record(r)
-            ds.flush()
-            df = load_dataset(tmpdir)
-            empty = df.iloc[0:0].copy()
-            with pytest.raises(ValueError, match="empty"):
-                extract_features_from_dataset(empty)
-            bad = df.copy()
-            bad.loc[0, "energy_adsorption"] = float("nan")
-            with pytest.raises(ValueError, match="non-finite"):
-                extract_features_from_dataset(bad)
-            bad2 = df.copy()
-            bad2.loc[1, "energy_adsorption"] = float("inf")
-            with pytest.raises(ValueError, match="non-finite"):
-                extract_features_from_dataset(bad2)
+        df = _records_dataframe(records)
+        empty = df.iloc[0:0].copy()
+        with pytest.raises(ValueError, match="empty"):
+            extract_features_from_dataset(empty)
+        bad = df.copy()
+        bad.loc[0, "energy_adsorption"] = float("nan")
+        with pytest.raises(ValueError, match="non-finite"):
+            extract_features_from_dataset(bad)
+        bad2 = df.copy()
+        bad2.loc[1, "energy_adsorption"] = float("inf")
+        with pytest.raises(ValueError, match="non-finite"):
+            extract_features_from_dataset(bad2)
 
     def test_extract_from_dataset_rejects_nonfinite_quaternion(self):
         records = make_random_placement_records(3, variant="ml")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ds = DatasetLogger(tmpdir)
-            for r in records:
-                ds.add_record(r)
-            ds.flush()
-            df = load_dataset(tmpdir)
-            df.loc[0, "quat_w"] = float("nan")
-            with pytest.raises(ValueError, match="strict feature columns"):
-                extract_features_from_dataset(df)
+        df = _records_dataframe(records)
+        df.loc[0, "quat_w"] = float("nan")
+        with pytest.raises(ValueError, match="strict feature columns"):
+            extract_features_from_dataset(df)
 
     def test_extract_features_raises_on_none_quaternion(self):
         r = make_placement_record()

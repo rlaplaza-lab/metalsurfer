@@ -356,7 +356,6 @@ def process_molecule_bayesian(
         reference_smiles = smiles
 
     failure_summary: FailureSummary | None = None
-    ml_records: list[PlacementRecord] = []
     transfer_info = BOTransferInfo()
     bo_memory: BOStepMemory | None = None
 
@@ -364,7 +363,6 @@ def process_molecule_bayesian(
         return MoleculeScreenOutcome(
             results=results,
             failure_summary=failure_summary,
-            ml_records=ml_records,
             bo_memory=bo_memory,
             transfer_info=transfer_info,
         )
@@ -493,7 +491,6 @@ def process_molecule_bayesian(
     # Maps placement_id → index in observed_* for valid batch hits so a later
     # filter rejection can replace (not double-append) the y label.
     observed_result_index_by_pid: dict[int, int] = {}
-    bo_negative_records: list[PlacementRecord] = []
     total_evaluated = 0
     best_energy = float("inf")
     best_X_row: dict[str, float] | None = None
@@ -503,11 +500,6 @@ def process_molecule_bayesian(
 
     def _flush_bo_outputs() -> None:
         nonlocal bo_memory
-        # Penalty observations live in bo_memory regardless of how this call
-        # ends, so they must reach ml_records on every path — including
-        # validation/filter bail-outs — to keep the dataset trail in sync with
-        # what the surrogate actually trained on.
-        ml_records.extend(bo_negative_records)
         bo_memory = BOStepMemory(
             observed_X_rows=[dict(r) for r in observed_X_rows],
             observed_y=[float(v) for v in observed_y],
@@ -572,7 +564,6 @@ def process_molecule_bayesian(
         else:
             observed_X_rows.append(features)
             observed_y.append(penalty)
-        bo_negative_records.append(record)
 
     def _unevaluated() -> list[int]:
         return [
@@ -783,9 +774,6 @@ def process_molecule_bayesian(
         slab_atoms=slab.atoms,
         reference_smiles=reference_smiles,
         config=config,
-        smiles=smiles,
-        surface_type=surface_type,
-        ml_records=bo_negative_records,
         surface_prefix_atoms=surface_prefix_atoms,
     )
     duplicate_result_ids = {id(result) for result in bo_duplicate_results}
@@ -827,7 +815,7 @@ def process_molecule_bayesian(
 
     if bo_duplicate_results:
         logger.info(
-            "BO post-filter deduplicated %d results (tracked for ML/BO)",
+            "BO post-filter deduplicated %d results",
             len(bo_duplicate_results),
         )
 

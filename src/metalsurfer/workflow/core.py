@@ -8,7 +8,6 @@ from ase import Atoms
 from .._logging import log_context
 from ..config import AdsorptionConfig
 from ..io_results import _write_clean_xyz
-from ..ml.schema import PlacementRecord
 from ..models import (
     PlacementDescriptor,
     ReferenceEnergies,
@@ -106,8 +105,6 @@ def process_molecule(
     if reference_smiles is None:
         reference_smiles = smiles
 
-    ml_records: list[PlacementRecord] = []
-
     with log_context(
         molecule=molecule_name,
         surface_type=surface_type,
@@ -146,7 +143,6 @@ def process_molecule(
             return MoleculeScreenOutcome(
                 results=[],
                 failure_summary=early_failure,
-                ml_records=ml_records,
             )
 
         slab = ctx.slab
@@ -225,7 +221,6 @@ def process_molecule(
                         n_placement_attempts if config.placement_retry_enabled else None
                     ),
                 ),
-                ml_records=ml_records,
             )
 
         surface_prefix_atoms = len(slab_for_sites)
@@ -291,7 +286,6 @@ def process_molecule(
             return MoleculeScreenOutcome(
                 results=[],
                 failure_summary=failure,
-                ml_records=ml_records,
             )
 
         results, t_filtering, filter_failure = _finalize_screen_results(
@@ -299,9 +293,6 @@ def process_molecule(
             slab_atoms=slab.atoms,
             reference_smiles=reference_smiles,
             config=config,
-            smiles=smiles,
-            surface_type=surface_type,
-            ml_records=ml_records,
             surface_prefix_atoms=surface_prefix_atoms,
         )
 
@@ -336,7 +327,6 @@ def process_molecule(
         return MoleculeScreenOutcome(
             results=results,
             failure_summary=filter_failure,
-            ml_records=ml_records,
         )
 
 

@@ -160,7 +160,8 @@ def extract_features_from_dataset(
     Parameters
     ----------
     df : DataFrame
-        Dataset loaded via :func:`load_dataset`.
+        Placement rows with absolute geometry columns (for example a campaign
+        detailed CSV).
     target_column : str
         Column name for the regression target.
 

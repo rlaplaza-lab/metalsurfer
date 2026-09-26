@@ -68,7 +68,6 @@ from metalsurfer.workflow.shared import (
 
 from .conftest import (
     DummyReferenceEnergies,
-    NoopDatasetLogger,
     assert_paths_exist,
     gpu_mlip_test,
     make_h2,
@@ -158,14 +157,6 @@ def _make_bootstrap_mock(
     )
 
 
-@pytest.fixture(autouse=True)
-def _noop_dataset_logger(monkeypatch):
-    """Avoid DatasetLogger side effects across saturation unit tests."""
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", NoopDatasetLogger
-    )
-
-
 def _patch_single_mol_saturation_mocks(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -188,9 +179,6 @@ def _patch_single_mol_saturation_mocks(
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation._compute_slab_energy",
         lambda *_a, **_kw: slab_energy,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger", NoopDatasetLogger
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation.create_conformers_from_smiles",
@@ -239,10 +227,6 @@ def _patch_multi_mol_saturation_mocks(
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation._compute_slab_energy",
         lambda *_a, **_kw: slab_energy,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.DatasetLogger",
-        NoopDatasetLogger,
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation.create_conformers_from_smiles",

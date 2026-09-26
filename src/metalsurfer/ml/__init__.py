@@ -1,12 +1,11 @@
-"""Placement-record dataset, features, and BO surrogate estimators.
+"""Placement-record schema, features, and BO surrogate estimators.
 
 The sklearn-backed ``regression`` module is imported lazily via
 :func:`__getattr__` so ``import metalsurfer`` does not pay for sklearn up front.
-The lightweight, sklearn-free helpers (``dataset``, ``features``, ``schema``) are
-imported eagerly because other modules depend on them at import time.
+The lightweight, sklearn-free helpers (``features``, ``schema``) are imported
+eagerly because other modules depend on them at import time.
 """
 
-from .dataset import DatasetLogger, load_dataset
 from .features import (
     FEATURE_ABS_COLUMNS,
     FEATURE_NAMES,
@@ -18,13 +17,11 @@ from .schema import ComputationContext, PlacementRecord
 
 __all__ = [
     "ComputationContext",
-    "DatasetLogger",
     "FEATURE_ABS_COLUMNS",
     "FEATURE_NAMES",
     "PlacementRecord",
     "extract_features",
     "extract_features_from_dataset",
-    "load_dataset",
     "placement_pose_from_features",
     "regression",
 ]

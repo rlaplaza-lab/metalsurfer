@@ -13,7 +13,6 @@ from .._logging import log_context
 from ..config import AdsorptionConfig
 from ..conformers import create_conformers_from_smiles
 from ..filters import adsorbate_connected_components
-from ..ml.dataset import DatasetLogger
 from ..ml.features import extract_features
 from ..ml.schema import PlacementRecord
 from ..models import (
@@ -656,9 +655,7 @@ def _screen_saturation_molecule(
     occupancy_placement_X: list[dict[str, float]] | None = None,
     site_context: object | None = None,
     debug_sites_step: int | None = None,
-) -> tuple[
-    list[ScreeningResult], BOTransferInfo, BOStepMemory | None, list[PlacementRecord]
-]:
+) -> tuple[list[ScreeningResult], BOTransferInfo, BOStepMemory | None]:
     """Run one molecule's place/opt/filter for a saturation step."""
     kwargs: dict[str, Any] = {
         "ts_model": ts_model,
@@ -705,7 +702,7 @@ def _screen_saturation_molecule(
         reference_unit_smiles=reference_unit_smiles,
         config=config,
     )
-    return filtered, transfer_info, new_memory, list(outcome.ml_records)
+    return filtered, transfer_info, new_memory
 
 
 def _saturation_should_stop(
@@ -943,7 +940,6 @@ def _run_single_molecule_saturation(
     config: AdsorptionConfig,
     surface_type: str,
     failure_summary_out: dict[str, FailureSummary] | None,
-    ds_logger: DatasetLogger,
     process_fn: Callable[..., MoleculeScreenOutcome],
     bo_enabled: bool,
     activity_by_molecule: Mapping[str, float],
@@ -1012,33 +1008,29 @@ def _run_single_molecule_saturation(
                     bo_enabled=bo_enabled,
                 )
             )
-        mol_results, transfer_info, new_memory, ml_records = (
-            _screen_saturation_molecule(
-                smiles=smiles,
-                molecule_name=molecule,
-                current_slab=slab,
-                calculator=calculator,
-                ref_step=preamble.ref_step,
-                ts_model=ts_model,
-                config=config,
-                surface_type=surface_type,
-                base_slab=base_slab,
-                E_slab=preamble.E_slab,
-                failure_summary_out=failure_summary_out,
-                symmetry_broken=symmetry_broken,
-                process_fn=process_fn,
-                bo_enabled=bo_enabled,
-                bo_state=bo_state if bo_enabled else None,
-                reference_unit_smiles=[*units_on_slab, smiles],
-                conformers=cached_conformers,
-                conformer_energies=cached_conformer_energies,
-                skip_workload_autotune=True,
-                occupancy_placement_X=committed_placement_X or None,
-                debug_sites_step=step,
-            )
+        mol_results, transfer_info, new_memory = _screen_saturation_molecule(
+            smiles=smiles,
+            molecule_name=molecule,
+            current_slab=slab,
+            calculator=calculator,
+            ref_step=preamble.ref_step,
+            ts_model=ts_model,
+            config=config,
+            surface_type=surface_type,
+            base_slab=base_slab,
+            E_slab=preamble.E_slab,
+            failure_summary_out=failure_summary_out,
+            symmetry_broken=symmetry_broken,
+            process_fn=process_fn,
+            bo_enabled=bo_enabled,
+            bo_state=bo_state if bo_enabled else None,
+            reference_unit_smiles=[*units_on_slab, smiles],
+            conformers=cached_conformers,
+            conformer_energies=cached_conformer_energies,
+            skip_workload_autotune=True,
+            occupancy_placement_X=committed_placement_X or None,
+            debug_sites_step=step,
         )
-        for record in ml_records:
-            ds_logger.add_record(record)
         if bo_enabled:
             _commit_bo_memory_state(bo_state, new_memory, config=config)
 
@@ -1111,9 +1103,6 @@ def _run_single_molecule_saturation(
                 n_added=len(outcome.committed),
                 committed_results=outcome.committed,
             )
-        )
-        ds_logger.add_results(
-            payload.mol_results, smiles=smiles, surface_id=surface_type
         )
         for placement in outcome.committed:
             units_on_slab.append(smiles)
@@ -1199,7 +1188,6 @@ def _run_multi_molecule_saturation(
     config: AdsorptionConfig,
     surface_type: str,
     failure_summary_out: dict[str, FailureSummary] | None,
-    ds_logger: DatasetLogger,
     *,
     process_fn: Callable[..., MoleculeScreenOutcome],
     bo_enabled: bool,
@@ -1362,43 +1350,38 @@ def _run_multi_molecule_saturation(
             smi = active_smiles[mol]
             mol_config = replace(step_config, num_placements=budgets[mol])
 
-            resolved, transfer_info, new_memory, ml_records = (
-                _screen_saturation_molecule(
-                    smiles=smi,
-                    molecule_name=mol,
-                    current_slab=slab,
-                    calculator=calculator,
-                    ref_step=ref_step,
-                    ts_model=ts_model,
-                    config=mol_config,
-                    surface_type=surface_type,
-                    base_slab=base_slab,
-                    E_slab=E_slab,
-                    failure_summary_out=failure_summary_out,
-                    symmetry_broken=symmetry_broken,
-                    process_fn=process_fn,
-                    bo_enabled=bo_enabled,
-                    bo_state=bo_states[mol] if bo_enabled else None,
-                    reference_unit_smiles=_reference_smiles_units_multi_molecule(
-                        active_molecules,
-                        active_smiles,
-                        molecule_counts,
-                        mol,
-                    ),
-                    conformers=conformer_cache[mol][0],
-                    conformer_energies=conformer_cache[mol][1],
-                    skip_workload_autotune=True,
-                    occupancy_placement_X=committed_placement_X or None,
-                    site_context=shared_site_context,
-                )
+            resolved, transfer_info, new_memory = _screen_saturation_molecule(
+                smiles=smi,
+                molecule_name=mol,
+                current_slab=slab,
+                calculator=calculator,
+                ref_step=ref_step,
+                ts_model=ts_model,
+                config=mol_config,
+                surface_type=surface_type,
+                base_slab=base_slab,
+                E_slab=E_slab,
+                failure_summary_out=failure_summary_out,
+                symmetry_broken=symmetry_broken,
+                process_fn=process_fn,
+                bo_enabled=bo_enabled,
+                bo_state=bo_states[mol] if bo_enabled else None,
+                reference_unit_smiles=_reference_smiles_units_multi_molecule(
+                    active_molecules,
+                    active_smiles,
+                    molecule_counts,
+                    mol,
+                ),
+                conformers=conformer_cache[mol][0],
+                conformer_energies=conformer_cache[mol][1],
+                skip_workload_autotune=True,
+                occupancy_placement_X=committed_placement_X or None,
+                site_context=shared_site_context,
             )
-            for record in ml_records:
-                ds_logger.add_record(record)
             per_molecule_bo_transfer[mol] = transfer_info
             new_bo_memory_raw[mol] = new_memory
             per_molecule_results[mol] = resolved
             if resolved:
-                ds_logger.add_results(resolved, smiles=smi, surface_id=surface_type)
                 best_mol = min(
                     resolved,
                     key=_omega_sort_key(activity_by_molecule, temperature, pressure),
@@ -1666,8 +1649,6 @@ def run_saturation_screening(
             temperature=config.saturation_temperature,
         )
         base_slab = slab.atoms.copy()
-        results_dir = results_dir_for(surface_type).as_posix()
-        ds_logger = DatasetLogger(results_dir, config=config, surface_id=surface_type)
         process_fn = process_molecule_bayesian if bo_enabled else process_molecule
 
         if config.multi_molecule_saturation and len(molecule_names) > 1:
@@ -1685,12 +1666,10 @@ def run_saturation_screening(
                 config=config,
                 surface_type=surface_type,
                 failure_summary_out=failure_summary_out,
-                ds_logger=ds_logger,
                 process_fn=process_fn,
                 bo_enabled=bo_enabled,
                 activity_by_molecule=activity_by_molecule,
             )
-            ds_logger.flush()
             t_run_total = time.perf_counter() - t_run_start
             total_steps = len(multi_result.steps)
             total_configs = sum(
@@ -1739,15 +1718,12 @@ def run_saturation_screening(
                 config=config,
                 surface_type=surface_type,
                 failure_summary_out=failure_summary_out,
-                ds_logger=ds_logger,
                 process_fn=process_fn,
                 bo_enabled=bo_enabled,
                 activity_by_molecule=activity_by_molecule,
             )
             if run_result is not None:
                 all_saturation_results.append(run_result)
-
-        ds_logger.flush()
 
     t_run_total = time.perf_counter() - t_run_start
     total_steps = sum(len(sr.steps) for sr in all_saturation_results)

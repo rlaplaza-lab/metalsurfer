@@ -896,13 +896,13 @@ loop behavior, reservoir ranking, and I/O.
 ``export_placement_provenance``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Control richness of ``ml_dataset.csv`` and detailed result CSVs. Default lean
-   rows keep identity, the eight ML feature columns (absolute initial pose +
-   ``conformer_index`` + quaternion), energies, and ``context_hash``. Set
-   ``True`` to also write ``initial_*`` pre-relax placement provenance (site,
-   orientation, fragment positions, …) and full ``ctx_*`` computation settings.
-   These provenance fields describe the **initial** placement, not the relaxed
-   geometry (relaxed structures remain in XYZ/POSCAR).
+   Control richness of detailed result CSVs. Default lean rows keep identity,
+   the eight ML feature columns (absolute initial pose + ``conformer_index`` +
+   quaternion), energies, and ``context_hash``. Set ``True`` to also write
+   ``initial_*`` pre-relax placement provenance (site, orientation, fragment
+   positions, …) and full ``ctx_*`` computation settings. These provenance
+   fields describe the **initial** placement, not the relaxed geometry
+   (relaxed structures remain in XYZ/POSCAR).
 
 ``saturation_discard_topology_rearrangements``
    **Type:** ``bool`` · **Default:** ``True``
