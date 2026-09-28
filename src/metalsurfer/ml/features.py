@@ -226,8 +226,3 @@ def extract_features_from_dataset(
 
     logger.info("Extracted %d features from %d records", X.shape[1], len(X))
     return X, y
-
-
-def get_feature_names() -> list[str]:
-    """Return the ordered list of feature names produced by extract_features."""
-    return FEATURE_NAMES.copy()

@@ -146,6 +146,7 @@ class TestSlabZAlignment:
             supercell=(1, 1, 1),
             results_dir=str(tmp_path),
             relaxation_mode="none",
+            config=AdsorptionConfig(),
         )
         assert float(np.min(slab.atoms.get_positions()[:, 2])) == pytest.approx(0.0)
 
@@ -182,6 +183,7 @@ class TestSlabZAlignment:
                 miller_indices=(1, 1, 1),
                 supercell=(1, 1, 1),
                 results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
 
     def test_create_slab_from_bulk_missing_src_id_raises(self, monkeypatch, tmp_path):
@@ -220,6 +222,7 @@ class TestSlabZAlignment:
                 miller_indices=(1, 1, 0),
                 supercell=(1, 1, 1),
                 results_dir=str(tmp_path),
+                config=AdsorptionConfig(),
             )
 
     def test_create_slab_from_bulk_relaxation_requires_calculator(self, monkeypatch):
@@ -260,6 +263,7 @@ class TestSlabZAlignment:
                 supercell=(1, 1, 1),
                 results_dir=tmpdir,
                 relaxation_mode="full",
+                config=AdsorptionConfig(),
             )
 
 
@@ -276,7 +280,12 @@ class TestSubstituteAlloy:
         slab = self._ru_slab()
         with tempfile.TemporaryDirectory() as tmpdir:
             result = substitute_alloy(
-                slab, "Ru", "Cu", guest_fraction=0.0, results_dir=tmpdir
+                slab,
+                "Ru",
+                "Cu",
+                guest_fraction=0.0,
+                results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
         syms = result.atoms.get_chemical_symbols()
         assert all(s == "Ru" for s in syms)
@@ -285,7 +294,12 @@ class TestSubstituteAlloy:
         slab = self._ru_slab()
         with tempfile.TemporaryDirectory() as tmpdir:
             result = substitute_alloy(
-                slab, "Ru", "Cu", guest_fraction=1.0, results_dir=tmpdir
+                slab,
+                "Ru",
+                "Cu",
+                guest_fraction=1.0,
+                results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
         syms = result.atoms.get_chemical_symbols()
         assert all(s == "Cu" for s in syms)
@@ -295,7 +309,12 @@ class TestSubstituteAlloy:
         n_total = len(slab.atoms)
         with tempfile.TemporaryDirectory() as tmpdir:
             result = substitute_alloy(
-                slab, "Ru", "Cu", guest_fraction=0.25, results_dir=tmpdir
+                slab,
+                "Ru",
+                "Cu",
+                guest_fraction=0.25,
+                results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
         syms = result.atoms.get_chemical_symbols()
         n_cu = syms.count("Cu")
@@ -307,10 +326,22 @@ class TestSubstituteAlloy:
         slab2 = self._ru_slab()
         with tempfile.TemporaryDirectory() as tmpdir:
             r1 = substitute_alloy(
-                slab1, "Ru", "Cu", guest_fraction=0.33, seed=123, results_dir=tmpdir
+                slab1,
+                "Ru",
+                "Cu",
+                guest_fraction=0.33,
+                seed=123,
+                results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
             r2 = substitute_alloy(
-                slab2, "Ru", "Cu", guest_fraction=0.33, seed=123, results_dir=tmpdir
+                slab2,
+                "Ru",
+                "Cu",
+                guest_fraction=0.33,
+                seed=123,
+                results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
         assert r1.atoms.get_chemical_symbols() == r2.atoms.get_chemical_symbols()
 
@@ -319,10 +350,22 @@ class TestSubstituteAlloy:
         slab2 = self._ru_slab()
         with tempfile.TemporaryDirectory() as tmpdir:
             r1 = substitute_alloy(
-                slab1, "Ru", "Cu", guest_fraction=0.33, seed=1, results_dir=tmpdir
+                slab1,
+                "Ru",
+                "Cu",
+                guest_fraction=0.33,
+                seed=1,
+                results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
             r2 = substitute_alloy(
-                slab2, "Ru", "Cu", guest_fraction=0.33, seed=999, results_dir=tmpdir
+                slab2,
+                "Ru",
+                "Cu",
+                guest_fraction=0.33,
+                seed=999,
+                results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
         assert r1.atoms.get_chemical_symbols() != r2.atoms.get_chemical_symbols()
 
@@ -335,14 +378,27 @@ class TestSubstituteAlloy:
                 slab1, "Ru", "Cu", guest_fraction=0.33, config=cfg, results_dir=tmpdir
             )
             r2 = substitute_alloy(
-                slab2, "Ru", "Cu", guest_fraction=0.33, seed=77, results_dir=tmpdir
+                slab2,
+                "Ru",
+                "Cu",
+                guest_fraction=0.33,
+                seed=77,
+                results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
         assert r1.atoms.get_chemical_symbols() == r2.atoms.get_chemical_symbols()
 
     def test_writes_output_files(self):
         slab = self._ru_slab()
         with tempfile.TemporaryDirectory() as tmpdir:
-            substitute_alloy(slab, "Ru", "Cu", guest_fraction=0.5, results_dir=tmpdir)
+            substitute_alloy(
+                slab,
+                "Ru",
+                "Cu",
+                guest_fraction=0.5,
+                results_dir=tmpdir,
+                config=AdsorptionConfig(),
+            )
             assert os.path.exists(os.path.join(tmpdir, "clean_Ru_Cu_50_slab.xyz"))
             assert not os.path.exists(
                 os.path.join(tmpdir, "clean_Ru_Cu_50_slab_POSCAR")
@@ -367,7 +423,12 @@ class TestSubstituteAlloy:
         with tempfile.TemporaryDirectory() as tmpdir:
             # Trying to replace "Ru" atoms in a pure Cu slab → 0 replacements
             result = substitute_alloy(
-                slab, "Ru", "Sn", guest_fraction=0.5, results_dir=tmpdir
+                slab,
+                "Ru",
+                "Sn",
+                guest_fraction=0.5,
+                results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
             # guest_fraction of 0 host atoms = 0 replacements → returns base
             assert all(s == "Cu" for s in result.atoms.get_chemical_symbols())
@@ -376,7 +437,9 @@ class TestSubstituteAlloy:
     def test_out_of_range_fraction_raises(self, bad_fraction):
         slab = self._ru_slab()
         with pytest.raises(ValueError, match="guest_fraction must be between 0 and 1"):
-            substitute_alloy(slab, "Ru", "Cu", guest_fraction=bad_fraction)
+            substitute_alloy(
+                slab, "Ru", "Cu", guest_fraction=bad_fraction, config=AdsorptionConfig()
+            )
 
     def test_accepts_plain_atoms_input(self):
         atoms = make_slab(symbol="Ru")
@@ -388,6 +451,7 @@ class TestSubstituteAlloy:
                 guest_fraction=0.25,
                 seed=42,
                 results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
         assert isinstance(result, SlabContainer)
         assert result.atoms.get_chemical_symbols().count("Cu") > 0
@@ -421,6 +485,7 @@ class TestSubstituteAlloy:
                 relax=True,
                 calculator=_FakeCalculator(),
                 results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
 
     def test_wraps_non_optimization_runtime_error(self, monkeypatch):
@@ -465,6 +530,7 @@ class TestSubstituteAlloy:
                 calculator=calc,
                 n_variants=1,
                 results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
 
     def test_ranking_preserves_batch_failure_cause(self, monkeypatch):
@@ -498,6 +564,7 @@ class TestSubstituteAlloy:
                 calculator=_AlwaysFailCalc(),
                 n_variants=2,
                 results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
         assert exc_info.value.__cause__ is batch_err
 
@@ -528,6 +595,7 @@ class TestSubstituteAlloy:
                 calculator=_GoodCalc(),
                 n_variants=2,
                 results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
         assert result.atoms.get_chemical_symbols().count("Cu") > 0
 
@@ -768,13 +836,17 @@ class TestDepositAdatoms:
         with pytest.raises(
             ValueError, match="coverage_fraction must be between 0 and 1"
         ):
-            deposit_adatoms(slab, "Sn", coverage_fraction=bad_fraction)
+            deposit_adatoms(
+                slab, "Sn", coverage_fraction=bad_fraction, config=AdsorptionConfig()
+            )
 
     def test_zero_coverage_applies_constraints_without_adatoms(self):
         slab = self._layered_slab()
         n_before = len(slab.atoms)
         syms_before = slab.atoms.get_chemical_symbols()
-        result = deposit_adatoms(slab, "Sn", coverage_fraction=0.0)
+        result = deposit_adatoms(
+            slab, "Sn", coverage_fraction=0.0, config=AdsorptionConfig()
+        )
         assert len(result.atoms) == n_before
         assert result.atoms.get_chemical_symbols() == syms_before
         assert result.finalized is False
@@ -832,7 +904,13 @@ class TestDepositAdatoms:
     def test_relaxation_mode_requires_calculator(self):
         slab = self._layered_slab()
         with pytest.raises(ValueError, match="requires a calculator"):
-            deposit_adatoms(slab, "Sn", coverage_fraction=0.2, relaxation_mode="full")
+            deposit_adatoms(
+                slab,
+                "Sn",
+                coverage_fraction=0.2,
+                relaxation_mode="full",
+                config=AdsorptionConfig(),
+            )
 
     def test_relaxation_invoked_for_variants(self, monkeypatch):
         slab = self._layered_slab()
@@ -874,6 +952,7 @@ class TestDepositAdatoms:
                 n_variants=3,
                 relaxation_mode="full",
                 relaxation_steps=12,
+                config=AdsorptionConfig(),
             )
         assert len(calls) == 3
         assert all(mode == "full" for mode, _, _ in calls)
@@ -893,7 +972,13 @@ class TestCombinedModifiers:
         n_original = len(slab.atoms)
         with tempfile.TemporaryDirectory() as tmpdir:
             alloyed = substitute_alloy(
-                slab, "Ru", "Cu", guest_fraction=0.25, seed=42, results_dir=tmpdir
+                slab,
+                "Ru",
+                "Cu",
+                guest_fraction=0.25,
+                seed=42,
+                results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
             n_cu = alloyed.atoms.get_chemical_symbols().count("Cu")
             assert n_cu > 0
@@ -906,6 +991,7 @@ class TestCombinedModifiers:
                 seed=42,
                 relaxation_mode="none",
                 results_dir=tmpdir,
+                config=AdsorptionConfig(),
             )
             assert len(decorated.atoms) > n_original
             syms = set(decorated.atoms.get_chemical_symbols())

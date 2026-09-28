@@ -6,6 +6,7 @@ Units: Å, degrees, eV, eV/Å (forces).
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
+from dataclasses import fields as dataclass_fields
 from typing import Any
 
 import numpy as np
@@ -18,9 +19,6 @@ from .._csv_coerce import (
 )
 from .._csv_coerce import (
     parse_float_pair as _parse_float_pair,
-)
-from .._csv_coerce import (
-    with_default as _with_default,
 )
 from .._numeric_defaults import (
     DEFAULT_FMAX,
@@ -35,9 +33,11 @@ from .._numeric_defaults import (
 from .._utils import is_finite_number as _is_finite_number
 from ..config import AdsorptionConfig
 from ..models import (
+    INITIAL_PROVENANCE_COLUMN_MAP,
     PlacementDescriptor,
     PlacementSpec,
     ScreeningResult,
+    _require_row_value,
 )
 from ..placement.geometry import normalize_quaternion
 
@@ -49,7 +49,7 @@ def _require_descriptor_pose(
 ) -> tuple[float, float, float, float, float, float, float, float]:
     """Return (quat_w/x/y/z, x_abs, y_abs, surface_ref_z_abs, z_abs).
 
-    Missing quaternion or absolute XY is an error — never invent identity/zeros.
+    Missing pose fields raise — never invent identity or zeros.
     """
     if (
         descriptor.quat_w is None
@@ -66,16 +66,12 @@ def _require_descriptor_pose(
             "PlacementDescriptor absolute Cartesian coordinates "
             "(x_abs, y_abs) are required; no zero fallback"
         )
-    surface_ref_z_abs = (
-        float(descriptor.surface_ref_z_abs)
-        if descriptor.surface_ref_z_abs is not None
-        else 0.0
-    )
-    z_abs = (
-        float(descriptor.z_abs)
-        if descriptor.z_abs is not None
-        else surface_ref_z_abs + float(descriptor.z_offset)
-    )
+    if descriptor.surface_ref_z_abs is None:
+        raise ValueError(
+            "PlacementDescriptor.surface_ref_z_abs is required; no zero fallback"
+        )
+    if descriptor.z_abs is None:
+        raise ValueError("PlacementDescriptor.z_abs is required; no zero fallback")
     return (
         float(descriptor.quat_w),
         float(descriptor.quat_x),
@@ -83,8 +79,8 @@ def _require_descriptor_pose(
         float(descriptor.quat_z),
         float(descriptor.x_abs),
         float(descriptor.y_abs),
-        surface_ref_z_abs,
-        z_abs,
+        float(descriptor.surface_ref_z_abs),
+        float(descriptor.z_abs),
     )
 
 
@@ -635,10 +631,10 @@ class PlacementRecord:
     def from_flat_dict(cls, row: dict[str, Any]) -> "PlacementRecord":
         """Reconstruct a PlacementRecord from a flattened dict (e.g. CSV row).
 
-        Accepts schema 3.0 ``initial_*`` provenance columns and ``ctx_*`` context
-        columns. Lean rows without ``ctx_*`` may only reconstruct a default
-        :class:`ComputationContext` when ``context_hash`` matches that default.
-        Geometry is inflated via :meth:`PlacementDescriptor.from_row`.
+        Lean rows (no ``ctx_*`` / ``initial_*``) require pose, energies, and
+        identity columns; ``context_hash`` must match a default
+        :class:`ComputationContext` when present. Rich rows require the full
+        ``ctx_*`` and ``initial_*`` sets.
 
         Parameters
         ----------
@@ -652,54 +648,62 @@ class PlacementRecord:
                 f"expected {SCHEMA_VERSION!r}"
             )
 
-        def _ctx_value(name: str, default: Any) -> Any:
-            return _with_default(row.get(f"ctx_{name}"), default)
-
         has_ctx_columns = any(
             isinstance(key, str) and key.startswith("ctx_") for key in row
         )
-        if has_ctx_columns:
+        has_initial_columns = any(
+            isinstance(key, str) and key.startswith("initial_") for key in row
+        )
+        rich = has_ctx_columns or has_initial_columns
+
+        ctx_field_names = tuple(f.name for f in dataclass_fields(ComputationContext))
+        if rich:
+            missing_ctx = [
+                f"ctx_{name}" for name in ctx_field_names if f"ctx_{name}" not in row
+            ]
+            missing_initial = [
+                col for col in INITIAL_PROVENANCE_COLUMN_MAP.values() if col not in row
+            ]
+            if missing_ctx or missing_initial:
+                parts = []
+                if missing_ctx:
+                    parts.append("ctx_*: " + ", ".join(sorted(missing_ctx)))
+                if missing_initial:
+                    parts.append("initial_*: " + ", ".join(sorted(missing_initial)))
+                raise ValueError("Rich CSV row incomplete; missing " + "; ".join(parts))
             ctx = ComputationContext(
-                model_name=str(_ctx_value("model_name", "uma-s-1p2")),
-                task_name=str(_ctx_value("task_name", "oc25")),
-                fmax=float(_ctx_value("fmax", 0.05)),
-                stage1_steps=int(_ctx_value("stage1_steps", 50)),
-                stage2_steps=int(_ctx_value("stage2_steps", 150)),
-                device=str(_ctx_value("device", "cuda")),
-                seed=int(_ctx_value("seed", 42)),
+                model_name=str(_require_row_value(row, "ctx_model_name")),
+                task_name=str(_require_row_value(row, "ctx_task_name")),
+                fmax=float(_require_row_value(row, "ctx_fmax")),
+                stage1_steps=int(_require_row_value(row, "ctx_stage1_steps")),
+                stage2_steps=int(_require_row_value(row, "ctx_stage2_steps")),
+                device=str(_require_row_value(row, "ctx_device")),
+                seed=int(_require_row_value(row, "ctx_seed")),
                 placement_z_range=_parse_float_pair(
-                    _ctx_value("placement_z_range", [0.7, 1.25]),
+                    _require_row_value(row, "ctx_placement_z_range"),
                     default=(0.7, 1.25),
                 ),
                 placement_z_scale_by_covalent_radius=_parse_bool(
-                    _ctx_value("placement_z_scale_by_covalent_radius", True),
+                    _require_row_value(row, "ctx_placement_z_scale_by_covalent_radius"),
                     default=True,
                 ),
                 min_initial_distance=float(
-                    _ctx_value(
-                        "min_initial_distance", MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
-                    )
+                    _require_row_value(row, "ctx_min_initial_distance")
                 ),
                 min_contact_ratio=float(
-                    _ctx_value("min_contact_ratio", MIN_CONTACT_RATIO_DEFAULT)
+                    _require_row_value(row, "ctx_min_contact_ratio")
                 ),
                 top_layer_tolerance=float(
-                    _ctx_value("top_layer_tolerance", DEFAULT_TOP_LAYER_TOLERANCE)
+                    _require_row_value(row, "ctx_top_layer_tolerance")
                 ),
                 symmetry_tolerance=float(
-                    _ctx_value("symmetry_tolerance", DEFAULT_SYMMETRY_TOLERANCE)
+                    _require_row_value(row, "ctx_symmetry_tolerance")
                 ),
                 site_equivalence_tolerance=float(
-                    _ctx_value(
-                        "site_equivalence_tolerance", DEFAULT_SITE_EQUIVALENCE_TOLERANCE
-                    )
+                    _require_row_value(row, "ctx_site_equivalence_tolerance")
                 ),
-                # Legacy CSV column ctx_hollow_site_dedup_tolerance is ignored.
                 planar_z_variance_threshold=float(
-                    _ctx_value(
-                        "planar_z_variance_threshold",
-                        DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
-                    )
+                    _require_row_value(row, "ctx_planar_z_variance_threshold")
                 ),
             )
             row_hash = row.get("context_hash")
@@ -723,32 +727,34 @@ class PlacementRecord:
                         "export_placement_provenance=True to preserve ctx_* columns."
                     )
 
-        placement_id = int(row["placement_id"])
+        placement_id = int(_require_row_value(row, "placement_id"))
+        converged_raw = _require_row_value(row, "converged")
         return cls(
-            molecule=str(row["molecule"]),
-            smiles=str(row.get("smiles", "")),
-            surface_id=str(row.get("surface_id", "")),
+            molecule=str(_require_row_value(row, "molecule")),
+            smiles=str(_require_row_value(row, "smiles")),
+            surface_id=str(_require_row_value(row, "surface_id")),
             placement_id=placement_id,
             descriptor=PlacementDescriptor.from_row(row, placement_index=placement_id),
-            energy_adsorption=float(row.get("energy_adsorption", 0.0)),
-            energy_adslab=float(row.get("energy_adslab", 0.0)),
-            energy_slab=float(row.get("energy_slab", 0.0)),
-            energy_adsorbate=float(row.get("energy_adsorbate", 0.0)),
-            distance=float(row.get("distance", 0.0)),
-            converged=_parse_bool(row.get("converged", True), default=True),
+            energy_adsorption=float(_require_row_value(row, "energy_adsorption")),
+            energy_adslab=float(_require_row_value(row, "energy_adslab")),
+            energy_slab=float(_require_row_value(row, "energy_slab")),
+            energy_adsorbate=float(_require_row_value(row, "energy_adsorbate")),
+            distance=float(_require_row_value(row, "distance")),
+            converged=_parse_bool(converged_raw, default=True),
             failure_stage=(
-                str(row.get("failure_stage"))
-                if not _is_missing(row.get("failure_stage"))
+                str(row["failure_stage"])
+                if "failure_stage" in row and not _is_missing(row.get("failure_stage"))
                 else None
             ),
             failure_reason=(
-                str(row.get("failure_reason"))
-                if not _is_missing(row.get("failure_reason"))
+                str(row["failure_reason"])
+                if "failure_reason" in row
+                and not _is_missing(row.get("failure_reason"))
                 else None
             ),
             is_penalty_label=_parse_bool(
-                row.get("is_penalty_label", False), default=False
+                _require_row_value(row, "is_penalty_label"), default=False
             ),
-            label_source=str(row.get("label_source", "observed")),
+            label_source=str(_require_row_value(row, "label_source")),
             context=ctx,
         )

@@ -113,10 +113,12 @@ ML helpers
 ``PlacementRecord`` (in :mod:`metalsurfer.ml.schema`) stores geometry as a
 nested :class:`~metalsurfer.models.PlacementDescriptor` plus energies,
 labels, and :class:`~metalsurfer.ml.schema.ComputationContext`. Absolute
-Cartesian pose (``x_abs`` / ``y_abs`` / ``z_abs``) and quaternion components
-are required — missing values raise rather than inventing identity or zeros.
-CSV ``to_flat_dict`` / ``from_flat_dict`` keep a flat column layout for
-compatibility.
+Cartesian pose (``x_abs`` / ``y_abs`` / ``z_abs`` / ``surface_ref_z_abs``)
+and quaternion components are required — missing values raise rather than
+inventing identity or zeros. Energies, ``distance``, ``smiles``,
+``surface_id``, and ``converged`` are required on load. Lean CSV rows omit
+``ctx_*`` and ``initial_*``; a partial ``ctx_*`` or ``initial_*`` set raises.
+CSV ``to_flat_dict`` / ``from_flat_dict`` use a flat column layout.
 
 .. autoclass:: metalsurfer.ml.schema.PlacementRecord
    :members:

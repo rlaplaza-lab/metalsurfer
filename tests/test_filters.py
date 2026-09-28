@@ -1467,7 +1467,7 @@ def test_filter_pipeline_catches_atom_loss():
 
 def test_filter_pipeline_empty_input():
     slab = make_slab(n_layers=1)
-    filtered = filter_results([], slab=slab)
+    filtered = filter_results([], slab=slab, config=AdsorptionConfig())
     assert filtered == []
 
 

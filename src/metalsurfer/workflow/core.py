@@ -31,7 +31,6 @@ from .shared import (
     PlacementFailureEvent,
     _failure_reason_counts,
     _finalize_screen_results,
-    _generation_failure_histogram,
     _optimize_and_evaluate_placements,
     _prepare_molecule_screening,
     _summarize_failure_events,
@@ -214,8 +213,8 @@ def process_molecule(
                         0 if config.num_placements is None else config.num_placements
                     ),
                     n_initial_placements=0,
-                    generation_failures=_generation_failure_histogram(
-                        placement_failure_events
+                    generation_failures=_failure_reason_counts(
+                        placement_failure_events, stage="generation"
                     ),
                     n_retry_attempts=(
                         n_placement_attempts if config.placement_retry_enabled else None

@@ -71,7 +71,9 @@ Settings people mix up
 - Bayesian mode is chosen by calling ``run_*_bo`` (or YAML ``campaign: *_bo``),
   not by a config flag such as ``bo_enabled``.
 - CSV exports are lean by default. Set ``export_placement_provenance=True``
-  for full placement and settings columns.
+  for full placement and settings columns. Reloading a lean row requires
+  pose, energies, and identity columns; a partial ``ctx_*`` /
+  ``initial_*`` set raises.
 
 Where molecules sit
 -------------------

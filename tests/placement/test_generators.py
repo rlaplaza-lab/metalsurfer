@@ -400,6 +400,7 @@ def test_deposit_adatoms_then_generate_placement_from_spec():
         coverage_fraction=0.15,
         seed=7,
         relaxation_mode="none",
+        config=AdsorptionConfig(),
     )
     config = AdsorptionConfig(
         material_type="slab",

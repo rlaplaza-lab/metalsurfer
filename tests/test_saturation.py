@@ -40,7 +40,7 @@ from metalsurfer.placement import (
 )
 from metalsurfer.placement.generators import (
     estimate_conformer_count,
-    estimate_placement_capacity,
+    estimate_placement_spec_capacity,
 )
 from metalsurfer.surface_prep import (
     SlabContainer,
@@ -495,7 +495,7 @@ def test_load_molecules_unreadable_saturation_summary_warns(workdir, caplog):
 def test_save_saturation_results_empty_list_returns_early(workdir):
     """save_saturation_results with empty list returns without writing."""
     setup_directories(["empty_test"])
-    save_saturation_results([], surface_type="empty_test")
+    save_saturation_results([], surface_type="empty_test", config=AdsorptionConfig())
     assert not (workdir / "results_empty_test" / "saturation_summary.csv").exists()
 
 
@@ -510,7 +510,9 @@ def test_save_saturation_results_warns_on_multiple_single_results(workdir, caplo
     )
     setup_directories(["multi_single_test"])
     with caplog.at_level(logging.WARNING, logger="metalsurfer.io_results"):
-        save_saturation_results([sr, sr], surface_type="multi_single_test")
+        save_saturation_results(
+            [sr, sr], surface_type="multi_single_test", config=AdsorptionConfig()
+        )
     assert any(
         re.search(r"received 2 single-molecule", r.message) for r in caplog.records
     )
@@ -560,7 +562,9 @@ def test_save_saturation_results_writes_csv_and_xyz(workdir):
         final_slab_atoms=combined.copy(),
     )
     setup_directories(["saturation_test"])
-    save_saturation_results([sr], surface_type="saturation_test")
+    save_saturation_results(
+        [sr], surface_type="saturation_test", config=AdsorptionConfig()
+    )
     output_dir = workdir / "results_saturation_test"
     summary_path = output_dir / "saturation_summary.csv"
     details_path = output_dir / "saturation_details.csv"
@@ -1002,29 +1006,29 @@ def test_distribute_placement_budget_edge_cases(complexities, total, expected):
 
 
 # ---------------------------------------------------------------------------
-# Multi-molecule saturation: estimate_placement_capacity
+# Multi-molecule saturation: estimate_placement_spec_capacity
 # ---------------------------------------------------------------------------
 
 
-def test_estimate_placement_capacity_positive():
+def test_estimate_placement_spec_capacity_positive():
     """Capacity score must be >= 1.0 for any valid molecule."""
     slab = make_slab()
     # minimal linear molecule (CO-like)
     linear = Atoms("CO", positions=[[0.0, 0.0, 0.0], [1.13, 0.0, 0.0]])
     config = AdsorptionConfig(num_conformers=1, num_placements=50)
-    score = estimate_placement_capacity([linear], slab, config, smiles="[C-]#[O+]")
+    score = estimate_placement_spec_capacity([linear], slab, config, smiles="[C-]#[O+]")
     assert score >= 1.0
 
 
-def test_estimate_placement_capacity_more_conformers_higher_score():
+def test_estimate_placement_spec_capacity_more_conformers_higher_score():
     """More conformers always give a higher capacity score (n_conformers is a direct multiplier)."""
     slab = make_slab()
     config = AdsorptionConfig(num_conformers=3, num_placements=50)
 
     mol = make_h2()
 
-    score_one = estimate_placement_capacity([mol], slab, config, smiles="[H][H]")
-    score_three = estimate_placement_capacity(
+    score_one = estimate_placement_spec_capacity([mol], slab, config, smiles="[H][H]")
+    score_three = estimate_placement_spec_capacity(
         [mol, mol, mol], slab, config, smiles="[H][H]"
     )
 
@@ -1824,7 +1828,9 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
     )
 
     setup_directories(["multi_mol_io_test"])
-    save_multi_mol_saturation_results(result, surface_type="multi_mol_io_test")
+    save_multi_mol_saturation_results(
+        result, surface_type="multi_mol_io_test", config=AdsorptionConfig()
+    )
 
     output_dir = workdir / "results_multi_mol_io_test"
     summary_path = output_dir / "saturation_summary.csv"
@@ -1895,7 +1901,9 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
         final_slab_atoms=other_atoms.copy(),
         molecule_counts={"ethanol": 1, "methanol": 0},
     )
-    save_multi_mol_saturation_results(other, surface_type="multi_mol_io_test")
+    save_multi_mol_saturation_results(
+        other, surface_type="multi_mol_io_test", config=AdsorptionConfig()
+    )
     summary_after = pd.read_csv(summary_path)
     labels = set(summary_after["molecules"].astype(str))
     assert mol_label in labels
@@ -1933,7 +1941,9 @@ def test_save_saturation_results_dispatches_multi_mol(workdir):
         molecule_counts={"water": 1},
     )
     setup_directories(["saturation_dispatch_mm"])
-    save_saturation_results([result], surface_type="saturation_dispatch_mm")
+    save_saturation_results(
+        [result], surface_type="saturation_dispatch_mm", config=AdsorptionConfig()
+    )
     out = workdir / "results_saturation_dispatch_mm"
     assert (out / "saturation_summary.csv").exists()
     assert (
@@ -1946,7 +1956,9 @@ def test_save_saturation_results_persists_mixed_sequence(workdir):
     single = make_saturation_run(molecule="water")
     multi = make_multi_mol_saturation_run(molecules=["ethanol", "methanol"])
     setup_directories(["mixed_sat_save"])
-    save_saturation_results([multi, single], surface_type="mixed_sat_save")
+    save_saturation_results(
+        [multi, single], surface_type="mixed_sat_save", config=AdsorptionConfig()
+    )
     summary = pd.read_csv(workdir / "results_mixed_sat_save" / "saturation_summary.csv")
     labels: set[str] = set()
     for col in ("molecule", "molecules"):
@@ -2930,7 +2942,9 @@ def test_save_multi_mol_saturation_details_one_row_per_tuplet_winner(workdir):
     )
 
     setup_directories(["tuplet_io_test"])
-    save_multi_mol_saturation_results(result, surface_type="tuplet_io_test")
+    save_multi_mol_saturation_results(
+        result, surface_type="tuplet_io_test", config=AdsorptionConfig()
+    )
 
     details_df = pd.read_csv(
         workdir / "results_tuplet_io_test" / "saturation_details.csv"
@@ -2992,7 +3006,9 @@ def test_save_saturation_details_one_row_per_tuplet_winner_single_path(workdir):
     )
 
     setup_directories(["tuplet_io_single_test"])
-    save_saturation_results([run], surface_type="tuplet_io_single_test")
+    save_saturation_results(
+        [run], surface_type="tuplet_io_single_test", config=AdsorptionConfig()
+    )
 
     details_df = pd.read_csv(
         workdir / "results_tuplet_io_single_test" / "saturation_details.csv"

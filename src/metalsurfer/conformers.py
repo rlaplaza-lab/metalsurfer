@@ -26,7 +26,8 @@ except (ImportError, AttributeError):
 def create_conformers_from_smiles(
     smiles: str,
     calculator=None,
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
     ts_model=None,
 ) -> tuple[list[Atoms], list[float]] | None:
     """Generate 3-D conformers for *smiles* via RDKit, optionally score them.
@@ -55,8 +56,6 @@ def create_conformers_from_smiles(
             "create_conformers_from_smiles",
             "Install it with: pip install rdkit",
         )
-    if config is None:
-        config = AdsorptionConfig()
 
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:

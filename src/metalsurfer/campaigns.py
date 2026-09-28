@@ -36,7 +36,11 @@ from .workflow import (
     process_molecule_bayesian,
     run_saturation_screening,
 )
-from .workflow.shared import _bootstrap_screening_run, _normalize_molecules_input
+from .workflow.shared import (
+    _bootstrap_screening_run,
+    _normalize_molecules_input,
+    empty_molecule_input_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,21 +84,11 @@ def _run_binding_campaign(
         surface_type=surface_type,
     )
     if not molecule_pairs:
-        if load_status == "all_skipped":
-            detailed_csv = (
-                results_dir_for(surface_type) / "adsorption_energies_detailed.csv"
-            )
-            msg = (
-                f"No molecules to process: all inputs already listed in {detailed_csv}. "
-                "Set skip_existing=False or remove that CSV to rerun."
-            )
-            logger.warning(msg)
-            warnings.warn(msg, stacklevel=3)
-        elif load_status == "empty_file":
-            msg = (
-                "No molecules to process: input file empty or no valid rows. "
-                "Expected CSV columns smiles and name."
-            )
+        listed_csv = (
+            results_dir_for(surface_type) / "adsorption_energies_detailed.csv"
+        ).as_posix()
+        msg = empty_molecule_input_message(load_status, listed_csv=listed_csv)
+        if msg is not None:
             logger.warning(msg)
             warnings.warn(msg, stacklevel=3)
         return BindingCampaignResult(
@@ -409,7 +403,7 @@ def run_saturation(
     *,
     slab: SlabContainer | Atoms,
     molecules: list[tuple[str, str]] | str,
-    config: AdsorptionConfig | None = None,
+    config: AdsorptionConfig,
     surface_type: str = "manual",
     save_results: bool = True,
     write_settings: bool = True,
@@ -449,8 +443,6 @@ def run_saturation(
     When ``config.save_benchmark_dataset`` is true, also writes
     ``adsorption_energies_detailed.csv`` from flattened step placements.
     """
-    if config is None:
-        config = AdsorptionConfig()
     return _run_saturation_campaign(
         slab=slab,
         molecules=molecules,
@@ -468,7 +460,7 @@ def run_saturation_bo(
     *,
     slab: SlabContainer | Atoms,
     molecules: list[tuple[str, str]] | str,
-    config: AdsorptionConfig | None = None,
+    config: AdsorptionConfig,
     surface_type: str = "manual",
     save_results: bool = True,
     write_settings: bool = True,
@@ -499,8 +491,6 @@ def run_saturation_bo(
     run_metadata_out
         Optional dict populated with timing and count metadata.
     """
-    if config is None:
-        config = AdsorptionConfig()
     return _run_saturation_campaign(
         slab=slab,
         molecules=molecules,

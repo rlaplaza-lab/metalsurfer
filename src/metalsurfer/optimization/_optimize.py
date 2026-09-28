@@ -30,7 +30,11 @@ from ._cache import (
     clear_autobatcher_cache,
     pop_autobatcher,
 )
-from ._model import TorchSimCalculator, setup_torchsim_model
+from ._model import (
+    TorchSimCalculator,
+    _unpack_static_energy_forces,
+    setup_torchsim_model,
+)
 from ._validation import (
     _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
     _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
@@ -365,7 +369,6 @@ def batch_static(
     atoms_list: list[Atoms],
     ts_model,
     *,
-    zero_fallback: bool = False,
     validate_pbc: bool = True,
     require_energy: bool = True,
 ) -> list[tuple[float, np.ndarray | None]]:
@@ -375,11 +378,11 @@ def batch_static(
     Much faster than calling ``ts.static`` once per system because the model
     forward pass is fused across all systems.
 
-    Missing forces yield ``None`` unless *zero_fallback* is True. When
-    *validate_pbc* is False, the per-system PBC check is skipped (callers that
-    already validated the inputs can pass False for a hot path). When
-    *require_energy* is False, a missing energy is tolerated (substituted with
-    ``NaN``) — used by force-recovery paths that only need forces.
+    Missing forces yield ``None``. When *validate_pbc* is False, the per-system
+    PBC check is skipped (callers that already validated the inputs can pass
+    False for a hot path). When *require_energy* is False, a missing energy is
+    tolerated (substituted with ``NaN``) — used by force-recovery paths that
+    only need forces.
 
     Parameters
     ----------
@@ -387,8 +390,6 @@ def batch_static(
         List of ASE Atoms objects.
     ts_model
         TorchSim model instance.
-    zero_fallback
-        Replace missing forces with zeros when True, else ``None``.
     validate_pbc
         Validate per-system PBC before running the model.
     require_energy
@@ -414,24 +415,8 @@ def batch_static(
             f"expected {len(atoms_list)}, got {len(result_list)}."
         )
     out: list[tuple[float, np.ndarray | None]] = []
-    for atoms, res in zip(atoms_list, result_list, strict=True):
-        e = res.get("potential_energy")
-        f = res.get("forces")
-        if e is None:
-            if require_energy:
-                raise RuntimeError(
-                    "ML model returned no energy (out['potential_energy'] is None). "
-                    "Check GPU memory and model output."
-                )
-            energy = float("nan")
-        else:
-            energy = float(e.detach().cpu().numpy().squeeze())
-        forces = (
-            f.detach().cpu().numpy()
-            if f is not None
-            else (np.zeros((len(atoms), 3)) if zero_fallback else None)
-        )
-        out.append((energy, forces))
+    for _atoms, res in zip(atoms_list, result_list, strict=True):
+        out.append(_unpack_static_energy_forces(res, require_energy=require_energy))
     return out
 
 
@@ -574,7 +559,6 @@ def _forces_for_optimized_systems(
         recovered = batch_static(
             survivor_atoms,
             ts_model,
-            zero_fallback=False,
             validate_pbc=False,
             require_energy=False,
         )
@@ -582,7 +566,7 @@ def _forces_for_optimized_systems(
         logger.warning("ts.static force recovery failed", exc_info=True)
         return [None] * n_systems
 
-    per_system = [None if forces is None else forces for _energy, forces in recovered]
+    per_system = [forces for _energy, forces in recovered]
     if len(per_system) != len(survivor_idx):
         return [None] * n_systems
 
@@ -723,7 +707,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
     combined_atoms_list: list[Atoms],
     slab: Atoms,
     ts_model,
-    config: AdsorptionConfig | None = None,
+    config: AdsorptionConfig,
     base_slab_for_frozen: Atoms | None = None,
     saturation_reuse: bool = False,
 ) -> list[Atoms | None]:
@@ -765,9 +749,6 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
     saturation_reuse
         Whether to reuse autobatcher estimates across saturation steps.
     """
-    if config is None:
-        config = AdsorptionConfig()
-
     if not combined_atoms_list:
         return []
 

@@ -410,7 +410,8 @@ def process_molecule_bayesian(
     if config.bo.batch_size is None:
         raise ValueError("config.bo.batch_size must be set for Bayesian screening")
     num_placements = config.num_placements
-    assert num_placements is not None
+    if num_placements is None:
+        raise ValueError("config.num_placements must be set for Bayesian screening")
     bo_eval_budget = resolved_bo_eval_budget(config)
 
     max_enumerated_specs = estimate_placement_spec_capacity(
@@ -426,7 +427,13 @@ def process_molecule_bayesian(
     else:
         pool_size = max_enumerated_specs
         if pool_size <= 0:
-            pool_size = max(bo_eval_budget * 5, num_placements)
+            logger.warning(
+                "No enumerated placement capacity for BO (max_enumerated_specs=%d)",
+                max_enumerated_specs,
+            )
+            return _bail_outcome(
+                BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0)
+            )
     all_specs = enumerate_placement_specs(
         conformers,
         slab_for_sites,
@@ -556,10 +563,11 @@ def process_molecule_bayesian(
             if replace_pid is not None
             else None
         )
-        if idx is not None and replace_pid is not None:
+        if idx is not None:
             observed_X_rows[idx] = features
             observed_y[idx] = penalty
-            observed_result_index_by_pid.pop(replace_pid, None)
+            if replace_pid is not None:
+                observed_result_index_by_pid.pop(replace_pid, None)
             _recompute_best_from_observations()
         else:
             observed_X_rows.append(features)

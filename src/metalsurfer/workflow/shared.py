@@ -189,6 +189,19 @@ def resolve_saturation_activities(
     }
 
 
+def require_saturation_activity(
+    molecule_name: str,
+    activity_by_molecule: Mapping[str, float],
+) -> float:
+    """Return the activity for *molecule_name*, or raise a clear ``KeyError``."""
+    try:
+        return float(activity_by_molecule[molecule_name])
+    except KeyError as exc:
+        raise KeyError(
+            f"missing saturation activity for molecule {molecule_name!r}"
+        ) from exc
+
+
 def tuplet_ranking_energy(
     e_ads_tuplet: float,
     molecule_names: Sequence[str],
@@ -199,12 +212,7 @@ def tuplet_ranking_energy(
     """Ω_tuplet = E_ads_tuplet − k_B T Σ ln(a_i p / p°)."""
     shift = 0.0
     for name in molecule_names:
-        try:
-            activity = float(activity_by_molecule[name])
-        except KeyError as exc:
-            raise KeyError(
-                f"missing saturation activity for molecule {name!r}"
-            ) from exc
+        activity = require_saturation_activity(name, activity_by_molecule)
         shift += math.log(activity * float(pressure) / STANDARD_PRESSURE_BAR)
     return float(e_ads_tuplet) - K_B_EV_PER_K * float(temperature) * shift
 
@@ -243,13 +251,6 @@ def _summarize_failure_events(
         for k, n in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     )
     logger.warning("%s failures (%d): %s", label, len(events), summary)
-
-
-def _generation_failure_histogram(
-    events: list[PlacementFailureEvent],
-) -> dict[str, int]:
-    """Count generation-stage failures by reason token."""
-    return _failure_reason_counts(events, stage="generation")
 
 
 def _failure_reason_counts(
@@ -1003,6 +1004,20 @@ class MoleculeScreeningContext:
     conformer_energies: list[float] | None = None
 
 
+def _missing_molecule_reference(
+    molecule_name: str,
+    config: AdsorptionConfig,
+) -> ReferenceFailure:
+    """Return a soft reference failure, or raise when configured to fail hard."""
+    logger.error("Missing reference energy for %s", molecule_name)
+    if config.fail_on_missing_reference:
+        raise ValueError(
+            f"No reference energy for {molecule_name}; cannot continue with "
+            "fail_on_missing_reference=True"
+        )
+    return ReferenceFailure(reason=f"missing reference energy for {molecule_name}")
+
+
 def _prepare_molecule_screening(
     *,
     smiles: str,
@@ -1034,10 +1049,7 @@ def _prepare_molecule_screening(
     )
     E_mol = reference_energies.get_molecule_energy(molecule_name)
     if E_mol is None:
-        logger.error("Missing reference energy for %s", molecule_name)
-        return None, ReferenceFailure(
-            reason=f"missing reference energy for {molecule_name}"
-        )
+        return None, _missing_molecule_reference(molecule_name, config)
 
     t0 = time.perf_counter()
     if conformers is None:
@@ -1142,6 +1154,25 @@ def _prepare_molecule_screening(
         ),
         None,
     )
+
+
+def empty_molecule_input_message(
+    load_status: str,
+    *,
+    listed_csv: str,
+) -> str | None:
+    """Human-readable message when molecule loading yields an empty worklist."""
+    if load_status == "all_skipped":
+        return (
+            f"No molecules to process: all inputs already listed in {listed_csv}. "
+            "Set skip_existing=False or remove that CSV to rerun."
+        )
+    if load_status == "empty_file":
+        return (
+            "No molecules to process: input file empty or no valid rows. "
+            "Expected CSV columns smiles and name."
+        )
+    return None
 
 
 def _normalize_molecules_input(

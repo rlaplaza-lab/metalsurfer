@@ -54,9 +54,12 @@ from .shared import (
     _build_surface_reference_slab,
     _compute_slab_energy,
     _dump_debug_sites_if_enabled,
+    _missing_molecule_reference,
     _normalize_molecules_input,
     adsorption_ranking_energy,
+    empty_molecule_input_message,
     needs_workload_autotune,
+    require_saturation_activity,
     resolve_saturation_activities,
     resolve_saturation_step_workload_config,
     tuplet_ranking_energy,
@@ -71,12 +74,7 @@ def _omega(
     temperature: float,
     pressure: float,
 ) -> float:
-    try:
-        activity = activity_by_molecule[result.molecule]
-    except KeyError as exc:
-        raise KeyError(
-            f"missing saturation activity for molecule {result.molecule!r}"
-        ) from exc
+    activity = require_saturation_activity(result.molecule, activity_by_molecule)
     return adsorption_ranking_energy(
         result.energy_adsorption,
         activity,
@@ -655,7 +653,7 @@ def _screen_saturation_molecule(
     occupancy_placement_X: list[dict[str, float]] | None = None,
     site_context: object | None = None,
     debug_sites_step: int | None = None,
-) -> tuple[list[ScreeningResult], BOTransferInfo, BOStepMemory | None]:
+) -> tuple[list[ScreeningResult], BOTransferInfo | None, BOStepMemory | None]:
     """Run one molecule's place/opt/filter for a saturation step."""
     kwargs: dict[str, Any] = {
         "ts_model": ts_model,
@@ -687,10 +685,14 @@ def _screen_saturation_molecule(
         **kwargs,
     )
     if bo_enabled:
-        transfer_info = outcome.transfer_info or BOTransferInfo()
+        if outcome.transfer_info is None:
+            raise RuntimeError(
+                f"Bayesian screening for {molecule_name!r} returned no transfer_info"
+            )
+        transfer_info = outcome.transfer_info
         new_memory = outcome.bo_memory
     else:
-        transfer_info = BOTransferInfo()
+        transfer_info = None
         new_memory = None
 
     if failure_summary_out is not None and outcome.failure_summary:
@@ -820,7 +822,7 @@ class _SingleStepPayload:
     """Per-step bookkeeping for single-molecule saturation."""
 
     mol_results: list[ScreeningResult]
-    transfer_info: BOTransferInfo
+    transfer_info: BOTransferInfo | None
 
 
 @dataclass(frozen=True)
@@ -830,7 +832,7 @@ class _MultiStepPayload:
     winning_molecule: str
     per_molecule_results: dict[str, list[ScreeningResult]]
     budgets: dict[str, int]
-    transfer_by_molecule: dict[str, BOTransferInfo]
+    transfer_by_molecule: dict[str, BOTransferInfo | None]
 
 
 @dataclass(frozen=True)
@@ -976,17 +978,7 @@ def _run_single_molecule_saturation(
         preamble: _SaturationStepPreamble,
         slab: SlabContainer,
     ) -> _StepScreenOutcome | None:
-        """Screen placements for one saturation step.
-
-        Parameters
-        ----------
-        step
-            Current step number (1-based).
-        preamble
-            Precomputed slab energy and symmetry state.
-        slab
-            Current slab container.
-        """
+        """Screen placements for one saturation step."""
         nonlocal config
         symmetry_broken = preamble.symmetry_broken
         if needs_workload_autotune(config, bo=bo_enabled):
@@ -1078,17 +1070,7 @@ def _run_single_molecule_saturation(
         )
 
     def record_step(step: int, n_on_slab: int, outcome: _StepScreenOutcome) -> None:
-        """Record the results of one saturation step.
-
-        Parameters
-        ----------
-        step
-            Current step number (1-based).
-        n_on_slab
-            Adsorbate units already folded onto the slab before this step.
-        outcome
-            Screening outcome to record.
-        """
+        """Record the results of one saturation step."""
         payload = outcome.payload
         assert isinstance(payload, _SingleStepPayload)
         steps.append(
@@ -1258,17 +1240,7 @@ def _run_multi_molecule_saturation(
         preamble: _SaturationStepPreamble,
         slab: SlabContainer,
     ) -> _StepScreenOutcome | None:
-        """Screen placements for one multi-molecule saturation step.
-
-        Parameters
-        ----------
-        step
-            Current step number (1-based).
-        preamble
-            Precomputed slab energy and symmetry state.
-        slab
-            Current slab container.
-        """
+        """Screen placements for one multi-molecule saturation step."""
         nonlocal config
         symmetry_broken = preamble.symmetry_broken
 
@@ -1314,7 +1286,7 @@ def _run_multi_molecule_saturation(
         )
 
         per_molecule_results: dict[str, list[ScreeningResult]] = {}
-        per_molecule_bo_transfer: dict[str, BOTransferInfo] = {}
+        per_molecule_bo_transfer: dict[str, BOTransferInfo | None] = {}
         new_bo_memory_raw: dict[str, BOStepMemory | None] = {}
 
         shared_site_context = resolve_site_context_for_sampling(
@@ -1338,7 +1310,7 @@ def _run_multi_molecule_saturation(
         for mol in active_molecules:
             if mol not in budgets:
                 per_molecule_results[mol] = []
-                per_molecule_bo_transfer[mol] = BOTransferInfo()
+                per_molecule_bo_transfer[mol] = None
                 new_bo_memory_raw[mol] = None
                 logger.warning(
                     "Step %d | %s: omitted from placement budget "
@@ -1458,17 +1430,7 @@ def _run_multi_molecule_saturation(
         )
 
     def record_step(step: int, n_on_slab: int, outcome: _StepScreenOutcome) -> None:
-        """Record the results of one multi-molecule saturation step.
-
-        Parameters
-        ----------
-        step
-            Current step number (1-based).
-        n_on_slab
-            Adsorbate units already folded onto the slab before this step.
-        outcome
-            Screening outcome to record.
-        """
+        """Record the results of one multi-molecule saturation step."""
         payload = outcome.payload
         assert isinstance(payload, _MultiStepPayload)
         winning_molecule = payload.winning_molecule
@@ -1570,7 +1532,7 @@ def _run_multi_molecule_saturation(
 def run_saturation_screening(
     slab: SlabContainer | Atoms,
     molecules: list[tuple[str, str]] | tuple[str, str] | str,
-    config: AdsorptionConfig | None = None,
+    config: AdsorptionConfig,
     surface_type: str = "manual",
     skip_existing: bool = True,
     failure_summary_out: dict[str, FailureSummary] | None = None,
@@ -1608,9 +1570,6 @@ def run_saturation_screening(
     With ``saturation_molecules_per_step > 1``, greedily commit up to that many
     clear winners per step via one composite (see ``workflow/composite.py``).
     """
-    if config is None:
-        config = AdsorptionConfig()
-
     t_run_start = time.perf_counter()
 
     with log_context(surface_type=surface_type, seed=config.seed):
@@ -1621,17 +1580,12 @@ def run_saturation_screening(
             skip_saturation_file=skip_existing,
         )
         if not molecule_pairs:
-            if load_status == "all_skipped":
-                summary_csv = (
-                    results_dir_for(surface_type) / "saturation_summary.csv"
-                ).as_posix()
-                logger.warning(
-                    "No molecules to process: all already listed in %s. "
-                    "Set skip_existing=False or remove that CSV to rerun",
-                    summary_csv,
-                )
-            elif load_status == "empty_file":
-                logger.warning("No molecules to process: file empty or no valid rows")
+            listed_csv = (
+                results_dir_for(surface_type) / "saturation_summary.csv"
+            ).as_posix()
+            msg = empty_molecule_input_message(load_status, listed_csv=listed_csv)
+            if msg is not None:
+                logger.warning(msg)
             return []
 
         bootstrap = _bootstrap_screening_run(slab, molecule_pairs, config)
@@ -1701,10 +1655,7 @@ def run_saturation_screening(
         for smi, mol in zip(smiles_list, molecule_names, strict=True):
             E_mol = ref.get_molecule_energy(mol)
             if E_mol is None:
-                if config.fail_on_missing_reference:
-                    raise ValueError(
-                        f"No reference energy for {mol}; cannot continue with fail_on_missing_reference=True"
-                    )
+                _missing_molecule_reference(mol, config)
                 logger.warning("Skipping %s: no reference energy", mol)
                 continue
 

@@ -12,9 +12,6 @@ import numpy as np
 from ase import Atoms
 
 from ._csv_coerce import (
-    float_or as _row_float_or,
-)
-from ._csv_coerce import (
     int_or_none as _row_int_or_none,
 )
 from ._csv_coerce import (
@@ -25,9 +22,6 @@ from ._csv_coerce import (
 )
 from ._csv_coerce import (
     parse_fragment_positions as _row_parse_fragment_positions,
-)
-from ._csv_coerce import (
-    with_default as _row_with_default,
 )
 from .reporting import (
     FailureSummary,
@@ -174,12 +168,15 @@ def provenance_export_fields(values: Mapping[str, Any]) -> dict[str, Any]:
     return row
 
 
-def _provenance_value_from_row(row: Mapping[str, Any], attr: str, default: Any) -> Any:
-    """Resolve a provenance field from its ``initial_*`` CSV column."""
-    export_name = INITIAL_PROVENANCE_COLUMN_MAP.get(attr, attr)
-    if export_name in row and not _row_is_missing(row.get(export_name)):
-        return row.get(export_name)
-    return default
+def _require_row_value(row: Mapping[str, Any], key: str) -> Any:
+    """Return a required CSV cell; missing or blank raises ``ValueError``."""
+    if key not in row or _row_is_missing(row.get(key)):
+        raise ValueError(f"missing required column {key!r}")
+    return row[key]
+
+
+def _row_has_initial_columns(row: Mapping[str, Any]) -> bool:
+    return any(isinstance(key, str) and key.startswith("initial_") for key in row)
 
 
 @dataclass
@@ -241,29 +238,35 @@ class PlacementDescriptor:
         include_provenance
             If True, include pre-relax provenance columns.
         """
-        x_abs = self.x_abs if self.x_abs is not None else self.x
-        y_abs = self.y_abs if self.y_abs is not None else self.y
-        surface_ref_z_abs = (
-            self.surface_ref_z_abs if self.surface_ref_z_abs is not None else 0.0
-        )
-        z_abs = (
-            self.z_abs if self.z_abs is not None else surface_ref_z_abs + self.z_offset
-        )
+        if (
+            self.x_abs is None
+            or self.y_abs is None
+            or self.z_abs is None
+            or self.surface_ref_z_abs is None
+            or self.quat_w is None
+            or self.quat_x is None
+            or self.quat_y is None
+            or self.quat_z is None
+        ):
+            raise ValueError(
+                "PlacementDescriptor.to_row requires absolute pose "
+                "(x_abs/y_abs/z_abs/surface_ref_z_abs) and quaternion components"
+            )
         row: dict[str, Any] = {
             "conformer_index": self.conformer_index,
-            "x_abs": x_abs,
-            "y_abs": y_abs,
-            "z_abs": z_abs,
-            "quat_w": _row_float_or(self.quat_w, 1.0),
-            "quat_x": _row_float_or(self.quat_x, 0.0),
-            "quat_y": _row_float_or(self.quat_y, 0.0),
-            "quat_z": _row_float_or(self.quat_z, 0.0),
+            "x_abs": self.x_abs,
+            "y_abs": self.y_abs,
+            "z_abs": self.z_abs,
+            "surface_ref_z_abs": self.surface_ref_z_abs,
+            "quat_w": float(self.quat_w),
+            "quat_x": float(self.quat_x),
+            "quat_y": float(self.quat_y),
+            "quat_z": float(self.quat_z),
         }
         if include_provenance:
             prov_vals = {
                 attr: getattr(self, attr) for attr in INITIAL_PROVENANCE_COLUMN_MAP
             }
-            prov_vals["surface_ref_z_abs"] = surface_ref_z_abs
             row.update(provenance_export_fields(prov_vals))
         return row
 
@@ -276,6 +279,9 @@ class PlacementDescriptor:
     ) -> PlacementDescriptor:
         """Inflate a descriptor from lean or rich (``initial_*``) flat CSV/dict rows.
 
+        Lean rows require pose feature columns only. Rich rows (any ``initial_*``)
+        require the full ``initial_*`` provenance set.
+
         Parameters
         ----------
         row
@@ -283,70 +289,128 @@ class PlacementDescriptor:
         placement_index
             Optional placement index to override the row value.
         """
-        slab_indices_raw = _provenance_value_from_row(row, "slab_indices", None)
+        conformer_index = int(_require_row_value(row, "conformer_index"))
+        x_abs = float(_require_row_value(row, "x_abs"))
+        y_abs = float(_require_row_value(row, "y_abs"))
+        z_abs = float(_require_row_value(row, "z_abs"))
+        surface_ref_z_abs = float(_require_row_value(row, "surface_ref_z_abs"))
+        quat_w = float(_require_row_value(row, "quat_w"))
+        quat_x = float(_require_row_value(row, "quat_x"))
+        quat_y = float(_require_row_value(row, "quat_y"))
+        quat_z = float(_require_row_value(row, "quat_z"))
+        if placement_index is not None:
+            pid = int(placement_index)
+        elif "placement_id" in row and not _row_is_missing(row.get("placement_id")):
+            pid = int(row["placement_id"])
+        elif "placement_index" in row and not _row_is_missing(
+            row.get("placement_index")
+        ):
+            pid = int(row["placement_index"])
+        else:
+            raise ValueError(
+                "PlacementDescriptor.from_row requires placement_index=... "
+                "or a 'placement_id'/'placement_index' column"
+            )
+
+        if not _row_has_initial_columns(row):
+            return cls(
+                conformer_index=conformer_index,
+                orientation_type="round",
+                face_flip=False,
+                en_atom_index=None,
+                site_index=-1,
+                site_type=None,
+                tilt_deg=0.0,
+                azimuth_deg=0.0,
+                azimuth_in_plane_deg=0.0,
+                z_fraction=0.5,
+                placement_index=pid,
+                x=0.0,
+                y=0.0,
+                z_offset=0.0,
+                x_abs=x_abs,
+                y_abs=y_abs,
+                surface_ref_z_abs=surface_ref_z_abs,
+                z_abs=z_abs,
+                shape="round",
+                slab_indices=None,
+                placement_mode_resolved="no_sites",
+                site_source="no_sites",
+                site_reference_frame="global_top_layer",
+                site_xy_frac_a=0.0,
+                site_xy_frac_b=0.0,
+                quat_w=quat_w,
+                quat_x=quat_x,
+                quat_y=quat_y,
+                quat_z=quat_z,
+                fragment_positions=None,
+            )
+
+        missing_initial = [
+            col for col in INITIAL_PROVENANCE_COLUMN_MAP.values() if col not in row
+        ]
+        if missing_initial:
+            raise ValueError(
+                "Rich CSV row missing initial_* provenance columns: "
+                + ", ".join(sorted(missing_initial))
+            )
+
+        def _initial(attr: str) -> Any:
+            return row[INITIAL_PROVENANCE_COLUMN_MAP[attr]]
+
+        slab_indices_raw = _initial("slab_indices")
         slab_indices = None
-        if slab_indices_raw and not _row_is_missing(slab_indices_raw):
+        if not _row_is_missing(slab_indices_raw):
             slab_indices = tuple(int(x) for x in str(slab_indices_raw).split(","))
 
-        z_offset = float(
-            _provenance_value_from_row(
-                row, "z_offset", _row_float_or(row.get("z"), 0.0)
-            )
-        )
-        surface_ref_z_abs = float(
-            _provenance_value_from_row(row, "surface_ref_z_abs", 0.0)
-        )
-        pid = (
-            int(placement_index)
-            if placement_index is not None
-            else int(_row_with_default(row.get("placement_id"), -1))
-        )
+        site_type_raw = _initial("site_type")
+        site_type = None if _row_is_missing(site_type_raw) else str(site_type_raw)
 
-        def _prov(attr: str, default: Any) -> Any:
-            return _provenance_value_from_row(row, attr, default)
-
-        conformer_index_raw = row.get("conformer_index")
-        if _row_is_missing(conformer_index_raw) or conformer_index_raw is None:
-            raise ValueError(
-                "PlacementDescriptor.from_row requires a 'conformer_index' column"
-            )
         return cls(
-            conformer_index=int(conformer_index_raw),
+            conformer_index=conformer_index,
             orientation_type=cast(
                 Literal["parallel", "EN-down", "vertical", "round", "dissociative"],
-                _prov("orientation_type", "round"),
+                str(_require_row_value(row, "initial_orientation_type")),
             ),
-            face_flip=_row_parse_bool(_prov("face_flip", False), default=False),
-            en_atom_index=_row_int_or_none(_prov("en_atom_index", None)),
-            site_index=int(_prov("site_index", -1)),
-            site_type=_prov("site_type", None),
-            tilt_deg=float(_prov("tilt_deg", 0.0)),
-            azimuth_deg=float(_prov("azimuth_deg", 0.0)),
-            azimuth_in_plane_deg=float(_prov("azimuth_in_plane_deg", 0.0)),
-            z_fraction=float(_prov("z_fraction", 0.5)),
+            face_flip=_row_parse_bool(
+                _require_row_value(row, "initial_face_flip"), default=False
+            ),
+            en_atom_index=_row_int_or_none(_initial("en_atom_index")),
+            site_index=int(_require_row_value(row, "initial_site_index")),
+            site_type=site_type,
+            tilt_deg=float(_require_row_value(row, "initial_tilt_deg")),
+            azimuth_deg=float(_require_row_value(row, "initial_azimuth_deg")),
+            azimuth_in_plane_deg=float(
+                _require_row_value(row, "initial_azimuth_in_plane_deg")
+            ),
+            z_fraction=float(_require_row_value(row, "initial_z_fraction")),
             placement_index=pid,
-            x=float(_prov("x", 0.0)),
-            y=float(_prov("y", 0.0)),
-            z_offset=z_offset,
-            x_abs=_row_float_or(row.get("x_abs"), 0.0),
-            y_abs=_row_float_or(row.get("y_abs"), 0.0),
-            surface_ref_z_abs=surface_ref_z_abs,
-            z_abs=float(
-                _row_with_default(row.get("z_abs"), surface_ref_z_abs + z_offset)
+            x=float(_require_row_value(row, "initial_x")),
+            y=float(_require_row_value(row, "initial_y")),
+            z_offset=float(_require_row_value(row, "initial_z_offset")),
+            x_abs=x_abs,
+            y_abs=y_abs,
+            surface_ref_z_abs=float(
+                _require_row_value(row, "initial_surface_ref_z_abs")
             ),
-            shape=str(_prov("shape", "round")),
+            z_abs=z_abs,
+            shape=str(_require_row_value(row, "initial_shape")),
             slab_indices=slab_indices,
-            placement_mode_resolved=str(_prov("placement_mode_resolved", "no_sites")),
-            site_source=str(_prov("site_source", "no_sites")),
-            site_reference_frame=str(_prov("site_reference_frame", "global_top_layer")),
-            site_xy_frac_a=float(_prov("site_xy_frac_a", 0.0)),
-            site_xy_frac_b=float(_prov("site_xy_frac_b", 0.0)),
-            quat_w=_row_float_or(row.get("quat_w"), 1.0),
-            quat_x=_row_float_or(row.get("quat_x"), 0.0),
-            quat_y=_row_float_or(row.get("quat_y"), 0.0),
-            quat_z=_row_float_or(row.get("quat_z"), 0.0),
+            placement_mode_resolved=str(
+                _require_row_value(row, "initial_placement_mode_resolved")
+            ),
+            site_source=str(_require_row_value(row, "initial_site_source")),
+            site_reference_frame=str(
+                _require_row_value(row, "initial_site_reference_frame")
+            ),
+            site_xy_frac_a=float(_require_row_value(row, "initial_site_xy_frac_a")),
+            site_xy_frac_b=float(_require_row_value(row, "initial_site_xy_frac_b")),
+            quat_w=quat_w,
+            quat_x=quat_x,
+            quat_y=quat_y,
+            quat_z=quat_z,
             fragment_positions=_row_parse_fragment_positions(
-                _prov("fragment_positions", None)
+                _initial("fragment_positions")
             ),
         )
 
@@ -549,6 +613,24 @@ class BOTransferInfo:
         }
 
 
+def _require_step_transfer(
+    bo_transfer_enabled: bool,
+    transfer: BOTransferInfo | None,
+    *,
+    screened: bool = True,
+) -> BOTransferInfo:
+    """Return transfer info for CSV export.
+
+    When BO transfer is enabled and the molecule was screened, missing info is
+    an error. Unscreened molecules (empty result lists) export zeroed columns.
+    """
+    if transfer is not None:
+        return transfer
+    if bo_transfer_enabled and screened:
+        raise ValueError("bo_transfer_enabled is True but transfer info is missing")
+    return BOTransferInfo()
+
+
 def _saturation_step_eads_xyz_name(step: int, energy_adsorption: float) -> str:
     return f"step_{step:03d}_Eads_{energy_adsorption:.4f}.xyz"
 
@@ -694,7 +776,7 @@ class SaturationStepResult:
         include_provenance
             If True, include pre-relax provenance columns.
         """
-        info = self.transfer if self.transfer is not None else BOTransferInfo()
+        info = _require_step_transfer(self.bo_transfer_enabled, self.transfer)
         return _saturation_detail_row(
             best=self.best_result,
             step=self.step,
@@ -895,7 +977,7 @@ class MultiMolSaturationStepResult:
     per_molecule_results: dict[str, list[ScreeningResult]]
     per_molecule_budgets: dict[str, int]
     bo_transfer_enabled: bool = False
-    transfer_by_molecule: dict[str, BOTransferInfo] = field(default_factory=dict)
+    transfer_by_molecule: dict[str, BOTransferInfo | None] = field(default_factory=dict)
     # Placements folded this step (1 sequential; >1 n-tuplet; 0 unbound final).
     n_added: int = 1
     # Empty with n_added != 0 → sequential interpretation of best_result
@@ -929,7 +1011,10 @@ class MultiMolSaturationStepResult:
         include_provenance
             If True, include pre-relax provenance columns.
         """
-        info = self.transfer_by_molecule.get(self.winning_molecule, BOTransferInfo())
+        info = _require_step_transfer(
+            self.bo_transfer_enabled,
+            self.transfer_by_molecule.get(self.winning_molecule),
+        )
         return _saturation_detail_row(
             best=self.best_result,
             step=self.step,
@@ -981,7 +1066,11 @@ class MultiMolSaturationStepResult:
         )
         rows: list[dict[str, Any]] = []
         for pmol, res_list in self.per_molecule_results.items():
-            info = self.transfer_by_molecule.get(pmol, BOTransferInfo())
+            info = _require_step_transfer(
+                self.bo_transfer_enabled,
+                self.transfer_by_molecule.get(pmol),
+                screened=bool(res_list),
+            )
             rows.extend(
                 _placement_rows_for_results(
                     res_list,

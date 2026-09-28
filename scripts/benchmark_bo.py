@@ -45,7 +45,7 @@ from metalsurfer.ml.bayesian import (
     splice_exploration_picks,
     train_surrogate,
 )
-from metalsurfer.ml.features import extract_features_from_dataset, get_feature_names
+from metalsurfer.ml.features import FEATURE_NAMES, extract_features_from_dataset
 from metalsurfer.models import BOStepMemory, windowed_bo_step_memories
 
 configure_logging(default_level="INFO")
@@ -434,7 +434,7 @@ def load_pool(data_dir: str, *, step: int) -> tuple[pd.DataFrame, pd.Series]:
         raise ValueError(f"No rows for step {step} in {path}")
     _validate_pool_geometry(df, path=path, step=step)
     X, y = extract_features_from_dataset(df, target_column="energy_adsorption")
-    expected = get_feature_names()
+    expected = list(FEATURE_NAMES)
     if list(X.columns) != expected:
         raise ValueError(
             f"Feature columns {list(X.columns)} != production BO features {expected}"

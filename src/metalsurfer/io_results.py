@@ -193,7 +193,8 @@ def save_molecule_results(
     results: list[ScreeningResult],
     surface_type: str = "manual",
     system_name: str | None = None,
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
 ) -> None:
     """Write XYZ and VASP input files for each result.
 
@@ -210,9 +211,6 @@ def save_molecule_results(
     config
         Adsorption configuration.
     """
-    if config is None:
-        config = AdsorptionConfig()
-
     results_dir = results_dir_for(surface_type)
     xyz_dir = molecule_all_xyz_dir(results_dir, molecule_name)
     mol_xyz_dir = molecule_adsorbate_only_dir(results_dir, molecule_name)
@@ -257,8 +255,8 @@ def save_single_molecule_results(
     results: list[ScreeningResult],
     surface_type: str = "manual",
     system_name: str | None = None,
-    config: AdsorptionConfig | None = None,
     *,
+    config: AdsorptionConfig,
     write_csv: bool = True,
 ) -> None:
     """Write XYZ, POSCAR, and CSV for a single molecule's screening results.
@@ -285,8 +283,6 @@ def save_single_molecule_results(
     write_csv
         Whether to write the detailed and summary CSV files.
     """
-    if config is None:
-        config = AdsorptionConfig()
     if not results:
         logger.warning("No results to save for %s", molecule_name)
         return
@@ -356,7 +352,8 @@ def _merge_preserving_existing_molecules(
 def save_summary_results(
     run_results: list[ScreeningRunResult],
     surface_type: str = "manual",
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
 ) -> None:
     """Write detailed and summary CSV files from typed run results.
 
@@ -378,13 +375,9 @@ def save_summary_results(
         Adsorption configuration.
     """
     results_dir = results_dir_for(surface_type)
-    include_provenance = bool(config.export_placement_provenance if config else False)
-    context_row = (
-        config_to_context_row(config, include_provenance=include_provenance)
-        if config
-        else {}
-    )
-    write_vasp = config.write_vasp_inputs if config else False
+    include_provenance = bool(config.export_placement_provenance)
+    context_row = config_to_context_row(config, include_provenance=include_provenance)
+    write_vasp = config.write_vasp_inputs
     all_rows: list[dict[str, Any]] = []
     for rr in run_results:
         for row in rr.to_rows(
@@ -683,7 +676,8 @@ def _collect_saturation_csv_rows(
 def save_saturation_results(
     saturation_results: Sequence[SaturationRunResult | MultiMolSaturationRunResult],
     surface_type: str = "manual",
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
 ) -> None:
     """Write saturation CSV summaries and per-step structures.
 
@@ -704,9 +698,6 @@ def save_saturation_results(
     config
         Adsorption configuration.
     """
-    if config is None:
-        config = AdsorptionConfig()
-
     if not saturation_results:
         logger.warning("No saturation results to save")
         return
@@ -806,7 +797,8 @@ def save_saturation_results(
 def save_multi_mol_saturation_results(
     result: MultiMolSaturationRunResult,
     surface_type: str = "manual",
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
 ) -> None:
     """Write CSV summaries and per-step structures for a multi-molecule saturation run.
 
@@ -827,9 +819,6 @@ def save_multi_mol_saturation_results(
     config
         Adsorption configuration.
     """
-    if config is None:
-        config = AdsorptionConfig()
-
     write_vasp = config.write_vasp_inputs
     results_dir, vasp_base = _saturation_results_dirs(
         surface_type, write_vasp=write_vasp

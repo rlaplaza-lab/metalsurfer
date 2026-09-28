@@ -989,6 +989,7 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         seed=42,
         results_dir=str(tmp_path),
         relaxation_mode="none",
+        config=AdsorptionConfig(),
     )
 
     n_placements = 8

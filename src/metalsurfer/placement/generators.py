@@ -532,9 +532,6 @@ def estimate_placement_spec_capacity(
     )
 
 
-estimate_placement_capacity = estimate_placement_spec_capacity
-
-
 def estimate_conformer_count(conformers: list[Atoms]) -> float:
     """Conformer count for budget distribution.
 
@@ -752,7 +749,6 @@ __all__ = [
     "distribute_placement_budget",
     "enumerate_placement_specs",
     "estimate_conformer_count",
-    "estimate_placement_capacity",
     "estimate_placement_spec_capacity",
     "generate_placement_from_spec",
     "generate_placement_from_spec_with_reason",

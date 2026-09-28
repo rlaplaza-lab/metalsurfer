@@ -200,20 +200,20 @@ def test_filter_sites_by_occupancy_drops_near_adsorbate():
 
 
 def test_estimate_complexity_shrinks_under_coverage():
-    from metalsurfer.placement.generators import estimate_placement_capacity
+    from metalsurfer.placement.generators import estimate_placement_spec_capacity
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
     slab = make_slab()
     config = AdsorptionConfig(material_type="slab", seed=0)
     ctx = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
-    clean = estimate_placement_capacity(
+    clean = estimate_placement_spec_capacity(
         [make_water()], slab, config, "O", site_context=ctx
     )
     # Block nearly all sites by placing a dense adsorbate cloud near every site.
     ads_pos = np.vstack([s.xyz + np.array([0.0, 0.0, 0.2]) for s in ctx.sites])
     ads = Atoms(["H"] * len(ads_pos), positions=ads_pos)
     full = slab.copy() + ads
-    covered = estimate_placement_capacity(
+    covered = estimate_placement_spec_capacity(
         [make_water()],
         slab,
         config,
@@ -228,7 +228,7 @@ def test_estimate_complexity_shrinks_under_coverage():
 
 def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distance():
     """Site pruning must honour min_adsorbate_separation when defaults diverge."""
-    from metalsurfer.placement.generators import estimate_placement_capacity
+    from metalsurfer.placement.generators import estimate_placement_spec_capacity
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
     slab = make_slab()
@@ -253,10 +253,10 @@ def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distanc
         min_initial_distance=1.5,
         min_adsorbate_separation=3.0,
     )
-    score_loose = estimate_placement_capacity(
+    score_loose = estimate_placement_spec_capacity(
         [make_water()], slab, loose, "O", site_context=ctx, full_slab=full
     )
-    score_strict = estimate_placement_capacity(
+    score_strict = estimate_placement_spec_capacity(
         [make_water()], slab, strict, "O", site_context=ctx, full_slab=full
     )
     assert score_strict < score_loose

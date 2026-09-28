@@ -7,6 +7,7 @@ import pytest
 from ase import Atoms
 from ase.constraints import FixAtoms
 
+from metalsurfer.config import AdsorptionConfig
 from metalsurfer.surface_prep import (
     apply_surface_constraints,
     check_frozen_substrate_displacement,
@@ -275,6 +276,7 @@ def test_deposit_adatoms_refreshes_fixatoms_for_new_atoms(tmp_path):
         seed=42,
         results_dir=str(tmp_path),
         relaxation_mode="none",
+        config=AdsorptionConfig(),
     )
     n_total = len(deposited.atoms)
     assert n_total > n_base

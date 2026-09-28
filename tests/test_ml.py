@@ -20,9 +20,9 @@ from metalsurfer.ml import (
 )
 from metalsurfer.ml.bayesian import ei_scores, lcb_scores, pi_scores
 from metalsurfer.ml.features import (
+    FEATURE_NAMES,
     extract_features,
     extract_features_from_dataset,
-    get_feature_names,
 )
 from metalsurfer.ml.regression import _build_estimator
 from metalsurfer.ml.schema import SCHEMA_VERSION, ComputationContext, PlacementRecord
@@ -494,7 +494,7 @@ class TestFeatureExtraction:
             extract_features(r)
 
     def test_feature_names_consistent(self):
-        names = get_feature_names()
+        names = list(FEATURE_NAMES)
         r = make_placement_record()
         features = extract_features(r)
         assert list(features.keys()) == names
@@ -656,7 +656,7 @@ class TestAcquisitionMinimization:
 
 
 def test_from_flat_dict_rejects_corrupt_payload():
-    with pytest.raises(KeyError, match="placement_id"):
+    with pytest.raises(ValueError, match="placement_id"):
         PlacementRecord.from_flat_dict({"schema_version": SCHEMA_VERSION})
 
 
@@ -683,10 +683,9 @@ def test_from_flat_dict_accepts_lean_default_context_hash():
     assert r2.context.settings_hash() == ComputationContext().settings_hash()
 
 
-def test_from_flat_dict_ignores_legacy_hollow_site_dedup_tolerance():
+def test_from_flat_dict_rejects_incomplete_ctx_columns():
     r = make_placement_record(0)
     flat = r.to_flat_dict(include_provenance=True)
-    flat["ctx_hollow_site_dedup_tolerance"] = 0.99
-    r2 = PlacementRecord.from_flat_dict(flat)
-    assert "hollow_site_dedup_tolerance" not in r2.context.to_dict()
-    assert r2.context.settings_hash() == r.context.settings_hash()
+    del flat["ctx_model_name"]
+    with pytest.raises(ValueError, match="Rich CSV row incomplete"):
+        PlacementRecord.from_flat_dict(flat)

@@ -954,16 +954,3 @@ class AdsorptionConfig:
         _check_positive_int(
             "saturation_molecules_per_step", self.saturation_molecules_per_step
         )
-
-
-def resolve_adsorption_config(
-    config: AdsorptionConfig | None,
-) -> AdsorptionConfig:
-    """Return ``config`` or a default :class:`AdsorptionConfig` when ``None``.
-
-    Parameters
-    ----------
-    config
-        Adsorption configuration, or None to use defaults.
-    """
-    return config if config is not None else AdsorptionConfig()

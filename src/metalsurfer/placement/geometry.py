@@ -40,6 +40,7 @@ from ._constants import (
     _ROTATION_ALIGN_AXIS_SWITCH_DOT,
     _ROTATION_ALIGN_DOT_ANTIPARALLEL,
     _ROTATION_ALIGN_DOT_PARALLEL,
+    _SURFACE_COVALENT_RADIUS_FALLBACK,
     _VDW_RADIUS_FROM_COVALENT_SCALE,
     _VECTOR_NORM_EPS,
 )
@@ -251,6 +252,19 @@ def _get_covalent_radius(symbol: str) -> float | None:
         return None
     r = float(ase_covalent_radii[z])
     return r if r > 0.0 else None
+
+
+def framework_radii_from_symbols(symbols: Sequence[str]) -> np.ndarray:
+    """Per-atom covalent radii with the shared surface fallback for missing tables."""
+    radii = []
+    for sym in symbols:
+        r = _get_covalent_radius(str(sym))
+        radii.append(
+            float(r)
+            if r is not None and r > 0.0
+            else float(_SURFACE_COVALENT_RADIUS_FALLBACK)
+        )
+    return np.asarray(radii, dtype=float)
 
 
 @functools.cache

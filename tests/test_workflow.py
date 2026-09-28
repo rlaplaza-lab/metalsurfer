@@ -1241,7 +1241,7 @@ class TestSaveSummaryResults:
             e_ads_best=-2.0,
         )
         rr = ScreeningRunResult(molecule="water", results=results, summary=summary)
-        save_summary_results([rr], surface_type="test")
+        save_summary_results([rr], surface_type="test", config=AdsorptionConfig())
         detailed = workdir / "results_test" / "adsorption_energies_detailed.csv"
         summary_path = workdir / "results_test" / "adsorption_energy_summary.csv"
         assert detailed.exists()
@@ -1256,7 +1256,7 @@ class TestSaveSummaryResults:
         assert "conformer_000.xyz" in detail_df.iloc[0]["xyz_path"]
 
     def test_empty_results_no_crash(self, workdir):
-        save_summary_results([], surface_type="empty")
+        save_summary_results([], surface_type="empty", config=AdsorptionConfig())
         assert not (
             workdir / "results_empty" / "adsorption_energies_detailed.csv"
         ).exists()
@@ -1289,7 +1289,7 @@ class TestSaveSummaryResults:
             results=results,
             summary=build_molecule_summary("water", results),
         )
-        save_summary_results([rr], surface_type="test")
+        save_summary_results([rr], surface_type="test", config=AdsorptionConfig())
         detail_df = pd.read_csv(
             workdir / "results_test" / "adsorption_energies_detailed.csv"
         )
@@ -1335,7 +1335,9 @@ class TestSaveSingleMoleculeResults:
                 placement_descriptor=make_placement_descriptor(placement_id=0),
             ),
         ]
-        save_single_molecule_results("water", results, surface_type="single_test")
+        save_single_molecule_results(
+            "water", results, surface_type="single_test", config=AdsorptionConfig()
+        )
         xyz_path = (
             workdir / "results_single_test/xyz_structures/water_all/conformer_000.xyz"
         )
@@ -1389,6 +1391,7 @@ class TestSaveSingleMoleculeResults:
             results,
             surface_type="no_csv_test",
             write_csv=False,
+            config=AdsorptionConfig(),
         )
         xyz_path = (
             workdir / "results_no_csv_test/xyz_structures/water_all/conformer_000.xyz"
@@ -1426,10 +1429,18 @@ class TestSaveSingleMoleculeResults:
         st = "campaign_test"
         config = AdsorptionConfig()
         save_single_molecule_results(
-            "water", water_results, surface_type=st, write_csv=False
+            "water",
+            water_results,
+            surface_type=st,
+            write_csv=False,
+            config=config,
         )
         save_single_molecule_results(
-            "other", other_results, surface_type=st, write_csv=False
+            "other",
+            other_results,
+            surface_type=st,
+            write_csv=False,
+            config=config,
         )
         combined = [
             screening_run_result("water", water_results),
@@ -1445,7 +1456,9 @@ class TestSaveSingleMoleculeResults:
         assert set(sdf["molecule"]) == {"water", "other"}
 
     def test_empty_results_no_crash(self, workdir):
-        save_single_molecule_results("water", [], surface_type="empty")
+        save_single_molecule_results(
+            "water", [], surface_type="empty", config=AdsorptionConfig()
+        )
         assert not (workdir / "results_empty/adsorption_energies_detailed.csv").exists()
 
 
@@ -1466,7 +1479,9 @@ class TestSaveMoleculeResults:
             distance=2.5,
             placement_descriptor=make_placement_descriptor(placement_id=0),
         )
-        save_molecule_results("water", [entry], surface_type="test")
+        save_molecule_results(
+            "water", [entry], surface_type="test", config=AdsorptionConfig()
+        )
         xyz_path = workdir / "results_test/xyz_structures/water_all/conformer_000.xyz"
         vasp_path = workdir / "results_test/vasp_inputs/water_all/conformer_000"
         assert xyz_path.exists()
