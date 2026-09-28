@@ -1104,16 +1104,3 @@ def test_negative_seed_rejected():
 def test_bool_field_rejects_non_bool_string():
     with pytest.raises(ValueError, match="skip_topology_check must be a bool"):
         AdsorptionConfig(skip_topology_check="yes")
-
-
-def test_resolve_adsorption_config_passthrough_and_default():
-    from metalsurfer.config import resolve_adsorption_config
-
-    # None -> a fresh default config.
-    resolved = resolve_adsorption_config(None)
-    assert isinstance(resolved, AdsorptionConfig)
-    assert resolved == AdsorptionConfig()
-
-    # A provided config is returned as the same object (no copy).
-    custom = AdsorptionConfig(material_type="porous", num_conformers=2)
-    assert resolve_adsorption_config(custom) is custom

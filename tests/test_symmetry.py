@@ -9,6 +9,7 @@ import spglib
 from ase import Atoms
 from ase.build import bulk, fcc111, graphene
 
+from metalsurfer.config import AdsorptionConfig
 from metalsurfer.placement import get_symmetry_aware_sites, get_unified_sites
 from metalsurfer.surface_prep import create_slab_from_atoms
 from metalsurfer.symmetry import SymmetryAnalysisError, SymmetryAnalyzer
@@ -697,7 +698,6 @@ def test_adaptive_grid_nanoparticle_symmetry_is_fast_and_reduces():
 
     from ase.cluster import Icosahedron
 
-    from metalsurfer.config import AdsorptionConfig
     from metalsurfer.placement.site_context import (
         _SITE_CONTEXT_CACHE,
         _SITE_CONTEXT_CACHE_LOCK,

@@ -763,9 +763,9 @@ def filter_results(
     results: list[ScreeningResult],
     slab: Atoms,
     reference_smiles: str | None = None,
-    config: AdsorptionConfig | None = None,
-    duplicate_results_out: list[ScreeningResult] | None = None,
     *,
+    config: AdsorptionConfig,
+    duplicate_results_out: list[ScreeningResult] | None = None,
     surface_prefix_atoms: int | None = None,
 ) -> list[ScreeningResult]:
     """Apply decomposition, desorption and duplicate filters in sequence.
@@ -798,9 +798,6 @@ def filter_results(
         Bare-substrate atom count for desorption. When unset, the full coverage
         prefix ``len(slab)`` is treated as the surface.
     """
-    if config is None:
-        config = AdsorptionConfig()
-
     if not results:
         return results
 

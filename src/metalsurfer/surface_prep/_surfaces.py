@@ -17,7 +17,6 @@ from ..config import (
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
     AdsorptionConfig,
-    resolve_adsorption_config,
 )
 from ..exceptions import (
     DependencyMissingError,
@@ -269,7 +268,7 @@ def validate_substrate(
     slab: Atoms,
     *,
     material_type: str,
-    config: AdsorptionConfig | None = None,
+    config: AdsorptionConfig,
     conformers: list[Atoms] | None = None,
     require_bottom_anchor: bool = True,
 ) -> None:
@@ -295,7 +294,6 @@ def validate_substrate(
     require_bottom_anchor
         Whether to enforce bottom-anchored geometry.
     """
-    cfg = resolve_adsorption_config(config)
     pos = slab.get_positions()
     if len(pos) == 0:
         raise GeometryValidationError("Substrate has no atoms")
@@ -365,11 +363,11 @@ def validate_substrate(
     if material_type == "nanoparticle" and abs(cell_det) > _CELL_DET_EPS:
         margins = _vacuum_margins_ang(slab)
         min_margin = float(np.min(margins))
-        if min_margin < cfg.min_pbc_image_separation:
+        if min_margin < config.min_pbc_image_separation:
             raise GeometryValidationError(
                 f"Nanoparticle simulation cell is too tight "
                 f"(minimum vacuum margin {min_margin:.1f} A along a lattice "
-                f"direction; need at least {cfg.min_pbc_image_separation:.1f} A). "
+                f"direction; need at least {config.min_pbc_image_separation:.1f} A). "
                 "Build a larger orthorhombic cell around the cluster before "
                 "calling campaign APIs."
             )
@@ -380,7 +378,7 @@ def validate_substrate(
         validate_substrate_conformer_sizing(
             slab,
             conformers=conformers,
-            config=cfg,
+            config=config,
         )
 
 
@@ -388,7 +386,7 @@ def validate_substrate_conformer_sizing(
     slab: Atoms,
     *,
     conformers: list[Atoms],
-    config: AdsorptionConfig | None = None,
+    config: AdsorptionConfig,
 ) -> None:
     """Ensure in-plane image separation is adequate for *conformers*.
 
@@ -401,13 +399,12 @@ def validate_substrate_conformer_sizing(
     config
         Adsorption configuration.
     """
-    cfg = resolve_adsorption_config(config)
     cell = np.array(slab.get_cell(), dtype=float)
     diameter = _molecule_diameter(conformers)
     nx, ny = compute_minimum_supercell(
         cell,
         diameter,
-        cfg.min_pbc_image_separation,
+        config.min_pbc_image_separation,
     )
     if nx > 1 or ny > 1:
         raise GeometryValidationError(
@@ -468,7 +465,8 @@ def create_slab_from_bulk(
     supercell: tuple = (2, 2, 1),
     results_dir: str = "results",
     calculator=None,
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
     relaxation_mode: SLAB_RELAXATION_MODE | None = None,
     relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER | None = None,
     relaxation_fmax: float | None = None,
@@ -491,7 +489,7 @@ def create_slab_from_bulk(
     calculator:
         Optional calculator used when slab relaxation is requested.
     config:
-        Optional adsorption config. Used for relaxation defaults.
+        Adsorption configuration.
     relaxation_mode:
         One of ``"none"``, ``"ionic_only"``, ``"cell_only"``, or ``"full"``.
     relaxation_optimizer:
@@ -572,12 +570,11 @@ def create_slab_from_bulk(
 
     slab.atoms = ensure_slab_z_alignment(slab.atoms)
 
-    cfg = resolve_adsorption_config(config)
     _save_reference_slab_artifacts(
         slab.atoms,
         results_dir=results_dir,
         stem="clean_slab",
-        write_vasp=cfg.write_vasp_inputs,
+        write_vasp=config.write_vasp_inputs,
     )
     logger.info("Saved clean slab reference files to %s", results_dir)
 
@@ -667,7 +664,7 @@ def _save_reference_slab_artifacts(
 
 
 def _resolve_slab_relaxation_settings(
-    config: AdsorptionConfig | None,
+    config: AdsorptionConfig,
     *,
     relaxation_mode: SLAB_RELAXATION_MODE | None = None,
     relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER | None = None,
@@ -675,20 +672,23 @@ def _resolve_slab_relaxation_settings(
     relaxation_steps: int | None = None,
 ) -> tuple[SLAB_RELAXATION_MODE, SLAB_RELAXATION_OPTIMIZER, float, int]:
     """Resolve per-call slab relaxation settings with config fallbacks."""
-    cfg = config or AdsorptionConfig()
-    mode = relaxation_mode if relaxation_mode is not None else cfg.slab_relaxation_mode
+    mode = (
+        relaxation_mode if relaxation_mode is not None else config.slab_relaxation_mode
+    )
     opt = (
         relaxation_optimizer
         if relaxation_optimizer is not None
-        else cfg.slab_relaxation_optimizer
+        else config.slab_relaxation_optimizer
     )
     fmax = (
         relaxation_fmax
         if relaxation_fmax is not None
-        else (cfg.slab_relaxation_fmax or cfg.fmax)
+        else (config.slab_relaxation_fmax or config.fmax)
     )
     steps = (
-        relaxation_steps if relaxation_steps is not None else cfg.slab_relaxation_steps
+        relaxation_steps
+        if relaxation_steps is not None
+        else config.slab_relaxation_steps
     )
     return mode, opt, fmax, steps
 
@@ -813,7 +813,8 @@ def substitute_alloy(
     relax: bool = True,
     enforce_top_layer_fraction: bool = False,
     top_layer_tolerance: float | None = None,
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
     results_dir: str = "results",
 ) -> SlabContainer:
     """Randomly replace *guest_fraction* of *host_symbol* atoms with *guest_symbol*.
@@ -854,9 +855,6 @@ def substitute_alloy(
     results_dir
         Directory for output files.
     """
-    if config is None:
-        config = AdsorptionConfig()
-
     slab = coerce_slab_container(slab)
 
     if not 0.0 <= guest_fraction <= 1.0:
@@ -1003,7 +1001,8 @@ def deposit_adatoms(
     min_adatom_separation: float | None = None,
     seed: int | None = None,
     results_dir: str = "results",
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
     relaxation_mode: SLAB_RELAXATION_MODE | None = None,
     relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER | None = None,
     relaxation_fmax: float | None = None,
@@ -1050,8 +1049,6 @@ def deposit_adatoms(
     relaxation_steps
         Maximum relaxation steps.
     """
-    if config is None:
-        config = AdsorptionConfig()
     mode, opt_name, fmax, steps = _resolve_slab_relaxation_settings(
         config,
         relaxation_mode=relaxation_mode,

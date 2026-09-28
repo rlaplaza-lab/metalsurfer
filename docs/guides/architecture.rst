@@ -837,7 +837,8 @@ Utilities: ``extract_features``, ``placement_pose_from_features``,
 ``PlacementRecord.to_placement_descriptor`` /
 ``to_config``. Schema versioning in ``ml/schema.py`` (``SCHEMA_VERSION``
 **3.0**). Shared numerics in ``_numeric_defaults.py``.
-Loaders still accept legacy unprefixed provenance columns from schema ≤2.3.
+Lean reload requires pose, energies, and identity columns; rich reload
+requires the full ``ctx_*`` and ``initial_*`` sets.
 
 
 Comparison with AdsorbML and BOSS

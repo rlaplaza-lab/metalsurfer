@@ -149,7 +149,7 @@ class TestMissingTorchSim:
             combined = slab.copy()
             with pytest.raises(DependencyMissingError, match="torch-sim"):
                 omod.optimize_adsorbate_slab_batched(
-                    [combined], slab, ts_model=MagicMock()
+                    [combined], slab, ts_model=MagicMock(), config=AdsorptionConfig()
                 )
 
     def test_autobatcher_returns_none_when_unavailable(self):
@@ -195,7 +195,9 @@ class TestCreateSlabFromBulkImportErrors:
             pytest.raises(DependencyMissingError, match="setuptools"),
         ):
             create_slab_from_bulk(
-                "mp-23", results_dir=str(tmp_path / "results_test_dep")
+                "mp-23",
+                results_dir=str(tmp_path / "results_test_dep"),
+                config=AdsorptionConfig(),
             )
 
     def test_raises_fairchem_data_oc_hint_when_fairchem_missing(self, tmp_path):
@@ -209,7 +211,9 @@ class TestCreateSlabFromBulkImportErrors:
             pytest.raises(DependencyMissingError, match="fairchem-data-oc"),
         ):
             create_slab_from_bulk(
-                "mp-23", results_dir=str(tmp_path / "results_test_dep")
+                "mp-23",
+                results_dir=str(tmp_path / "results_test_dep"),
+                config=AdsorptionConfig(),
             )
 
 

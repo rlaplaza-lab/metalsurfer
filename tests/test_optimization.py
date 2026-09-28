@@ -812,7 +812,9 @@ def test_optimize_slab_raises_without_torchsim(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(_deps, "ts_constraints", None)
     slab = _make_atoms_with_cell()
     with pytest.raises(DependencyMissingError, match="torch-sim-atomistic"):
-        _optimize.optimize_adsorbate_slab_batched([slab], slab, ts_model=MagicMock())
+        _optimize.optimize_adsorbate_slab_batched(
+            [slab], slab, ts_model=MagicMock(), config=AdsorptionConfig()
+        )
 
 
 def test_optimize_slab_raises_on_batch_size_mismatch(monkeypatch: pytest.MonkeyPatch):

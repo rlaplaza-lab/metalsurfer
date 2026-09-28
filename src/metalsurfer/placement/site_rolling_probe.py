@@ -37,7 +37,7 @@ from ._constants import (
     _VECTOR_NORM_EPS,
 )
 from ._parallel import resolve_materialize_workers
-from .geometry import _get_covalent_radius
+from .geometry import framework_radii_from_symbols
 from .site_adaptive_grid import (
     AdaptiveGridResult,
     AdaptiveGridSpacing,
@@ -73,19 +73,6 @@ class _Contact:
 
     position: np.ndarray
     support_images: tuple[int, ...]
-
-
-def _framework_radii_from_symbols(symbols: Sequence[str]) -> np.ndarray:
-    """Per-atom covalent radii with a shared fallback for missing tables."""
-    radii = []
-    for sym in symbols:
-        r = _get_covalent_radius(str(sym))
-        radii.append(
-            float(r)
-            if r is not None and r > 0.0
-            else float(_SURFACE_COVALENT_RADIUS_FALLBACK)
-        )
-    return np.asarray(radii, dtype=float)
 
 
 def _fibonacci_sphere(n: int) -> np.ndarray:
@@ -569,7 +556,7 @@ def generate_rolling_probe_sites(
     side_policy = resolve_side_policy_for_pbc(pbc, side_policy)
     if framework_radii is None:
         if symbols is not None and len(symbols) == n_atoms:
-            framework_radii = _framework_radii_from_symbols(symbols)
+            framework_radii = framework_radii_from_symbols(symbols)
         else:
             framework_radii = np.full(
                 n_atoms, float(_SURFACE_COVALENT_RADIUS_FALLBACK), dtype=float

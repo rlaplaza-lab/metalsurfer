@@ -53,7 +53,6 @@ SurrogateType = Literal[
     "gaussian_process",
     "ensemble",
 ]
-TreeSurrogateType = Literal["random_forest", "extra_trees"]
 TransferCapableSurrogateType = Literal[
     "random_forest",
     "extra_trees",
@@ -62,7 +61,7 @@ TransferCapableSurrogateType = Literal[
     "ensemble",
 ]
 DEFAULT_ENSEMBLE_MEMBERS: tuple[
-    TreeSurrogateType | Literal["ridge", "gaussian_process"], ...
+    TreeSurrogateKind | Literal["ridge", "gaussian_process"], ...
 ] = (
     "random_forest",
     "extra_trees",

@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import pickle
 from typing import Any, NoReturn, cast
 
 import numpy as np
@@ -19,6 +20,33 @@ from ._validation import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _unpack_static_energy_forces(
+    res: dict[str, Any],
+    *,
+    require_energy: bool = True,
+    require_finite_energy: bool = False,
+) -> tuple[float, np.ndarray | None]:
+    """Unpack ``potential_energy`` / ``forces`` from one ``ts.static`` result dict."""
+    energy_t = res.get("potential_energy")
+    forces_t = res.get("forces")
+    if energy_t is None:
+        if require_energy:
+            raise RuntimeError(
+                "ML model returned no energy (out['potential_energy'] is None). "
+                "Check GPU memory and model output."
+            )
+        energy = float("nan")
+    else:
+        energy = float(energy_t.detach().cpu().numpy().squeeze())
+        if require_finite_energy and not np.isfinite(energy):
+            raise RuntimeError(
+                f"ML model returned non-finite energy: {energy}. "
+                "Check GPU stability and model output."
+            )
+    forces = forces_t.detach().cpu().numpy() if forces_t is not None else None
+    return energy, forces
 
 
 def _ensure_scipy_sph_harm() -> None:
@@ -177,7 +205,14 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
             _premove_fairchem_predictor_to_device(model, dev)
     except DependencyMissingError:
         raise
-    except Exception as exc:
+    except (
+        ImportError,
+        OSError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        pickle.UnpicklingError,
+    ) as exc:
         _raise_fairchem_load_error(exc, model_name)
     logger.info("TorchSim model created successfully")
     return model
@@ -267,23 +302,12 @@ class TorchSimCalculator:
         with torchsim_output_capture():
             result_list = ts.static(system=atoms, model=self._model)
         out = result_list[0]
-        energy = out.get("potential_energy")
-        forces = out.get("forces")
-        if energy is None:
-            raise RuntimeError(
-                "ML model returned no energy (out['potential_energy'] is None). "
-                "This may indicate GPU memory issues, model output format changes, "
-                "or first-run initialization failure on HPC."
-            )
-        e_val = float(energy.detach().cpu().numpy().squeeze())
-        if not np.isfinite(e_val):
-            raise RuntimeError(
-                f"ML model returned non-finite energy: {e_val}. "
-                "Check GPU stability and model output."
-            )
+        e_val, forces = _unpack_static_energy_forces(
+            out, require_energy=True, require_finite_energy=True
+        )
         self.results["energy"] = e_val
         if forces is not None:
-            self.results["forces"] = forces.detach().cpu().numpy()
+            self.results["forces"] = forces
         if "stress" in properties and "stress" in out and out["stress"] is not None:
             s = out["stress"].detach().cpu().numpy()
             self.results["stress"] = _voigt_6(s.squeeze())

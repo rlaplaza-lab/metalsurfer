@@ -728,8 +728,10 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
 ``bo.candidate_pool_size``
    **Type:** ``int | None`` · **Default:** ``None``
 
-   Optional cap on the number of unexecuted placement specs considered during each
-   acquisition step.
+   Cap on the number of unexecuted placement specs considered during each
+   acquisition step. When ``None``, the enumerated placement capacity is used.
+   If that capacity is ``<= 0``, the BO step fails with an empty-pool outcome
+   instead of inventing a synthetic pool size.
 
 ``bo.include_failure_negatives``
    **Type:** ``bool`` · **Default:** ``True``
@@ -940,8 +942,10 @@ Reproducibility, strictness, and I/O
 ``fail_on_missing_reference``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Raise instead of skipping a molecule when an isolated reference energy calculation
-   fails.
+   Raise instead of skipping a molecule when an isolated reference energy is
+   missing. Binding and saturation share this rule in the shared screening
+   prepare path (``ValueError`` when ``True``, soft ``ReferenceFailure`` /
+   skip when ``False``).
 
 ``fail_on_conformer_failure``
    **Type:** ``bool`` · **Default:** ``False``

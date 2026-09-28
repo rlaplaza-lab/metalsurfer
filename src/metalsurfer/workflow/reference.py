@@ -83,7 +83,8 @@ def calculate_reference_energies(
     molecules: list[str],
     smiles_list: list[str],
     ts_model=None,
-    config: AdsorptionConfig | None = None,
+    *,
+    config: AdsorptionConfig,
 ) -> ReferenceEnergies:
     """Compute clean-slab and isolated-molecule energies.
 
@@ -102,9 +103,6 @@ def calculate_reference_energies(
     config
         Adsorption configuration.
     """
-    if config is None:
-        config = AdsorptionConfig()
-
     slab_copy = slab.atoms.copy()
     _prepare_atoms_for_calculator(slab_copy, label="reference slab")
     slab_copy.calc = calculator

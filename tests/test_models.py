@@ -590,34 +590,42 @@ class TestPlacementDescriptorRow:
         ):
             assert getattr(restored, attr) == pytest.approx(getattr(desc, attr)), attr
 
-    def test_from_row_handles_missing_columns(self):
-        """Missing optional columns fall back to sane defaults without raising."""
-        row = {"conformer_index": 0, "x": 1.0, "y": 2.0}
-        desc = PlacementDescriptor.from_row(row)
-        assert desc.conformer_index == 0
-        assert desc.orientation_type == "round"
-        assert desc.site_index == -1
-        assert desc.z_fraction == 0.5
-        assert desc.face_flip is False
+    def test_from_row_rejects_incomplete_lean_row(self):
+        """Lean rows missing pose columns fail loud instead of inventing values."""
+        with pytest.raises(ValueError, match="x_abs"):
+            PlacementDescriptor.from_row(
+                {"conformer_index": 0, "x": 1.0, "y": 2.0},
+                placement_index=0,
+            )
 
     def test_from_row_rejects_missing_conformer_index(self):
         """A missing required conformer_index raises a clear error, not KeyError."""
         with pytest.raises(ValueError, match="conformer_index"):
-            PlacementDescriptor.from_row({"x": 1.0})
+            PlacementDescriptor.from_row({"x": 1.0}, placement_index=0)
 
     def test_from_row_handles_nan_string_cells(self):
-        # Provenance fields arrive as ``initial_*`` columns; values may be
-        # "nan" strings or empty cells when read back from CSV.
-        row = {
-            "conformer_index": "0",
-            "initial_en_atom_index": "nan",
-            "initial_x": "1.5",
-            "initial_face_flip": "false",
-            "initial_site_index": "",
-        }
-        desc = PlacementDescriptor.from_row(row)
-        assert desc.conformer_index == 0
-        assert desc.en_atom_index is None
-        assert desc.x == pytest.approx(1.5)
-        assert desc.face_flip is False
-        assert desc.site_index == -1
+        # Rich rows may carry "nan"/empty optional provenance cells from CSV.
+        desc = make_placement_descriptor(
+            placement_id=0,
+            en_atom_index=None,
+            site_type=None,
+            site_xy_frac_a=None,
+            site_xy_frac_b=None,
+            slab_indices=None,
+            fragment_positions=None,
+        )
+        row = desc.to_row(include_provenance=True)
+        row["initial_en_atom_index"] = "nan"
+        row["initial_site_type"] = ""
+        row["initial_site_xy_frac_a"] = "nan"
+        row["initial_site_xy_frac_b"] = ""
+        row["initial_slab_indices"] = "nan"
+        row["initial_fragment_positions"] = ""
+        restored = PlacementDescriptor.from_row(row, placement_index=0)
+        assert restored.conformer_index == 0
+        assert restored.en_atom_index is None
+        assert restored.site_type is None
+        assert restored.site_xy_frac_a is None
+        assert restored.site_xy_frac_b is None
+        assert restored.slab_indices is None
+        assert restored.fragment_positions is None

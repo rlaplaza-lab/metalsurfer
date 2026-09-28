@@ -60,6 +60,34 @@ def int_or_none(value: Any) -> int | None:
     return int(value)
 
 
+def float_or_none(value: Any) -> float | None:
+    """Coerce a CSV cell to float, returning None when missing.
+
+    Parameters
+    ----------
+    value
+        Cell value to coerce.
+    """
+    if is_missing(value):
+        return None
+    return float(value)
+
+
+def require_key(row: Any, key: str) -> Any:
+    """Return a required CSV cell by key presence only (empty strings allowed).
+
+    Parameters
+    ----------
+    row
+        Mapping-like CSV/dict row.
+    key
+        Column name that must be present.
+    """
+    if key not in row:
+        raise ValueError(f"missing required column {key!r}")
+    return row[key]
+
+
 def parse_bool(value: Any, default: bool = False) -> bool:
     """Parse a CSV cell as a boolean.
 

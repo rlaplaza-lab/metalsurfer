@@ -477,7 +477,7 @@ def test_run_saturation_logs_when_all_skipped(workdir, monkeypatch, caplog):
     assert processed == []
     assert campaign.runs == []
     assert any(
-        "all already listed" in record.getMessage()
+        "all inputs already listed" in record.getMessage()
         and "saturation_summary.csv" in record.getMessage()
         for record in caplog.records
     )
