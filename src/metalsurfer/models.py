@@ -12,6 +12,9 @@ import numpy as np
 from ase import Atoms
 
 from ._csv_coerce import (
+    float_or_none as _row_float_or_none,
+)
+from ._csv_coerce import (
     int_or_none as _row_int_or_none,
 )
 from ._csv_coerce import (
@@ -403,8 +406,8 @@ class PlacementDescriptor:
             site_reference_frame=str(
                 _require_row_value(row, "initial_site_reference_frame")
             ),
-            site_xy_frac_a=float(_require_row_value(row, "initial_site_xy_frac_a")),
-            site_xy_frac_b=float(_require_row_value(row, "initial_site_xy_frac_b")),
+            site_xy_frac_a=_row_float_or_none(_initial("site_xy_frac_a")),
+            site_xy_frac_b=_row_float_or_none(_initial("site_xy_frac_b")),
             quat_w=quat_w,
             quat_x=quat_x,
             quat_y=quat_y,

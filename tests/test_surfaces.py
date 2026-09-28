@@ -1114,7 +1114,9 @@ class TestComputeMinimumSupercell:
 class TestValidateSubstrate:
     def test_accepts_prepared_slab(self):
         atoms = make_slab()
-        validate_substrate(atoms, material_type="slab")
+        validate_substrate(
+            atoms, material_type="slab", config=AdsorptionConfig(material_type="slab")
+        )
 
     def test_rejects_misaligned_slab(self):
         atoms = make_slab()
@@ -1122,13 +1124,21 @@ class TestValidateSubstrate:
         pos[:, 2] += 2.0
         atoms.set_positions(pos, apply_constraint=False)
         with pytest.raises(GeometryValidationError, match="bottom-anchored"):
-            validate_substrate(atoms, material_type="slab")
+            validate_substrate(
+                atoms,
+                material_type="slab",
+                config=AdsorptionConfig(material_type="slab"),
+            )
 
     def test_rejects_wrong_pbc(self):
         atoms = make_slab()
         atoms.set_pbc([True, True, True])
         with pytest.raises(GeometryValidationError, match="PBC"):
-            validate_substrate(atoms, material_type="slab")
+            validate_substrate(
+                atoms,
+                material_type="slab",
+                config=AdsorptionConfig(material_type="slab"),
+            )
 
     def test_rejects_small_image_separation(self):
         atoms = Atoms(
@@ -1145,6 +1155,7 @@ class TestValidateSubstrate:
             validate_substrate(
                 atoms,
                 material_type="slab",
+                config=AdsorptionConfig(material_type="slab"),
                 conformers=[mol],
             )
 
@@ -1157,7 +1168,11 @@ class TestValidateSubstrate:
         )
         atoms = apply_surface_constraints(atoms)
         with pytest.raises(GeometryValidationError, match="degenerate"):
-            validate_substrate(atoms, material_type="slab")
+            validate_substrate(
+                atoms,
+                material_type="slab",
+                config=AdsorptionConfig(material_type="slab"),
+            )
 
     def test_accepts_nanoparticle_with_vacuum_box(self):
         atoms = Atoms(
@@ -1166,7 +1181,11 @@ class TestValidateSubstrate:
             cell=[20, 20, 20],
             pbc=[False, False, False],
         )
-        validate_substrate(atoms, material_type="nanoparticle")
+        validate_substrate(
+            atoms,
+            material_type="nanoparticle",
+            config=AdsorptionConfig(material_type="nanoparticle"),
+        )
 
     def test_accepts_nanoparticle_not_bottom_anchored(self):
         atoms = Atoms(
@@ -1175,7 +1194,11 @@ class TestValidateSubstrate:
             cell=[20, 20, 20],
             pbc=[False, False, False],
         )
-        validate_substrate(atoms, material_type="nanoparticle")
+        validate_substrate(
+            atoms,
+            material_type="nanoparticle",
+            config=AdsorptionConfig(material_type="nanoparticle"),
+        )
 
     def test_rejects_nanoparticle_with_tight_box(self):
         atoms = Atoms(
@@ -1185,7 +1208,11 @@ class TestValidateSubstrate:
             pbc=[False, False, False],
         )
         with pytest.raises(GeometryValidationError, match="too tight"):
-            validate_substrate(atoms, material_type="nanoparticle")
+            validate_substrate(
+                atoms,
+                material_type="nanoparticle",
+                config=AdsorptionConfig(material_type="nanoparticle"),
+            )
 
 
 class TestAutoResizeSlabForMolecule:

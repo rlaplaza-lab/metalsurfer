@@ -20,6 +20,9 @@ from .._csv_coerce import (
 from .._csv_coerce import (
     parse_float_pair as _parse_float_pair,
 )
+from .._csv_coerce import (
+    require_key as _require_row_key,
+)
 from .._numeric_defaults import (
     DEFAULT_FMAX,
     DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
@@ -730,9 +733,9 @@ class PlacementRecord:
         placement_id = int(_require_row_value(row, "placement_id"))
         converged_raw = _require_row_value(row, "converged")
         return cls(
-            molecule=str(_require_row_value(row, "molecule")),
-            smiles=str(_require_row_value(row, "smiles")),
-            surface_id=str(_require_row_value(row, "surface_id")),
+            molecule=str(_require_row_key(row, "molecule") or ""),
+            smiles=str(_require_row_key(row, "smiles") or ""),
+            surface_id=str(_require_row_key(row, "surface_id") or ""),
             placement_id=placement_id,
             descriptor=PlacementDescriptor.from_row(row, placement_index=placement_id),
             energy_adsorption=float(_require_row_value(row, "energy_adsorption")),
