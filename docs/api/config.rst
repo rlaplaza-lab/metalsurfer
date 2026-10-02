@@ -923,12 +923,15 @@ loop behavior, reservoir ranking, and I/O.
 ``saturation_molecules_per_step``
    **Type:** ``int`` · **Default:** ``1``
 
-   Placements committed per step (``1`` = sequential). Larger values enable
-   n-tuplet mode: greedily pick up to this many clear winners by
-   :math:`\Omega`, pack, and relax one composite. Committed rows share tuplet
-   :math:`E_\mathrm{ads}`; stop uses :math:`\Omega_\mathrm{tuplet}`. Empty
-   commits are unbound finals. ``num_placements`` remains the per-molecule
-   pool size (divided by this value after autotuning).
+   Adsorbates placed per step (``1`` = sequential). Larger values enable
+   n-tuplet mode: each trial is one exact-*n* clash-free config, TorchSim
+   relaxes all members together, and the step commits the best binding pack
+   (no single-adsorbate screen, no partial / single-winner fallback).
+   Committed rows store per-molecule :math:`E_\mathrm{ads}`
+   (:math:`E_\mathrm{ads,total}/n`); stop uses
+   :math:`\Omega_\mathrm{tuplet}`. Empty commits are unbound finals.
+   After autotuning, ``num_placements``, ``bo.initial_random``, and
+   ``bo.batch_size`` are divided by this value (joint-config counts).
 
 Reproducibility, strictness, and I/O
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

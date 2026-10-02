@@ -1,4 +1,12 @@
-"""Joint n-adsorbate screening for n-tuplet saturation steps."""
+"""Joint n-adsorbate screening for n-tuplet saturation steps.
+
+Each trial is an exact-*n* clash-free config: CPU placement builds packs,
+TorchSim relaxes all *n* adsorbates together, and the step commits the best
+binding pack (no single-adsorbate screen / single-winner fallback). Stored
+``energy_adsorption`` is per molecule (``E_ads_total / n``); ranking uses
+``Ω_tuplet``. BO (homogeneous path) proposes joint configs from the
+single-site surrogate and records shared ``Ω/n`` labels.
+"""
 
 from __future__ import annotations
 

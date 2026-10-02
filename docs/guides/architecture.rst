@@ -195,7 +195,8 @@ Module layout
        ├── core.py           # standard per-molecule screening
        ├── bayesian.py       # BO-guided per-molecule screening
        ├── saturation.py     # sequential / multi-mol saturation
-       ├── composite.py      # n-tuplet winners + composite commit
+       ├── joint_tuplet.py   # exact-n joint config screen + joint BO
+       ├── composite.py      # pack / batch-relax joint n-adsorbate configs
        ├── placement_fill.py # one-shot oversample + optional diversity retry
        ├── reference.py      # reference energy preparation
        └── shared.py         # bootstrap, outcomes, validation, autotune
@@ -751,19 +752,21 @@ Sequential saturation
 ``Ω = E_ads − k_B T ln(a_i p / p°)`` (SATP defaults recover ``E_ads``; see
 :doc:`configuration`). ``multi_molecule_saturation=True``: all molecules
 compete each step; lowest ``Ω`` wins. ``saturation_molecules_per_step > 1``:
-greedily commit up to *n* clear winners via one composite
-(``workflow/composite.py``); stop uses ``Ω_tuplet``. Demo:
+screen exact-*n* joint configs (CPU place, TorchSim relax all *n* together;
+``workflow/joint_tuplet.py``); commit the best binding pack; stop uses
+``Ω_tuplet`` with per-molecule stored ``E_ads``. Demo:
 ``examples/water_oh_rutile_saturation.py``.
 
 BO saturation
 ~~~~~~~~~~~~~
 ``saturation_bo``): same loop with BO placement selection and optional
 transfer. Reservoir ``Ω`` ranking is on the shared commit/stop path;
-``observed_y`` stays electronic ``E_ads``.
+``observed_y`` stays electronic ``E_ads`` (``Ω/n`` labels in joint n-tuplet
+BO).
 
-Stop conditions: empty commit (including n-tuplet ``no_binders``); committed
-``Ω ≥ 0`` (``Ω_tuplet`` for multi-winner steps); no valid placements;
-``saturation_max_steps``.
+Stop conditions: empty commit (including n-tuplet with no valid joint
+config); committed ``Ω ≥ 0`` (``Ω_tuplet`` for multi-winner steps); no valid
+placements; ``saturation_max_steps``.
 
 Compare structures to **post-adatom** substrate files when adatoms were
 deposited during prep. The saturation ``symmetry_broken`` latch still follows

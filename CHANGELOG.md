@@ -28,3 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus joint BO placement bias.
 - `assemble_quota_joint_configs` / `evaluate_composite_batch` helpers in
   `workflow.composite`.
+- `scripts/co_pt111_ntuplet_phases.py`: independent one-step high-*n* joint
+  searches on the Gunasooriya & Saeys CO/Pt(111) coverage cells (site
+  histograms and gap to the literature bridge:top ratio).
+
+### Removed
+
+- `scripts/co_pt111_ordered_coverages.py` (hand-seeded literature registries;
+  superseded by the n-tuplet phase-discovery script above).

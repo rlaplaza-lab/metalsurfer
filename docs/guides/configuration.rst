@@ -190,17 +190,19 @@ adsorbate on the same slab each step and advances the one with the lowest
 :math:`\Omega`.
 
 **n-tuplet mode.** ``saturation_molecules_per_step`` (default ``1``) is how
-many placements one step may commit together. Screening still builds a pool
-of single placements. Above 1, the step keeps up to that many winners that
-clear one another, packs them, and relaxes the set as one structure. Use it
-when the adsorbates bind as a pair or a small cluster, or when several copies
-of one molecule should relax together. Every committed row stores that shared
-composite adsorption energy. The stop uses :math:`\Omega_\mathrm{tuplet}`:
-the same reservoir expression with the composite :math:`E_\mathrm{ads}` and
-one :math:`\ln(a_i p / p^\circ)` term per member. If the set does not bind,
-the step tries the single best placement on its own. Once
-``num_placements`` is known it is divided by the tuplet size. The Bayesian
-evaluation budget above stays as you set it.
+many adsorbates one step places together. Above 1, each trial is one initial
+structure with exactly that many adsorbates: CPU placement builds clash-free
+packs (``num_placements`` joint configs), TorchSim relaxes every pack with all
+members together, and the step commits the best binding config. There is no
+single-adsorbate MLIP screen and no partial-tuplet or single-winner fallback.
+Stored ``energy_adsorption`` is **per molecule**
+(:math:`E_\mathrm{ads,total}/n`); composite totals stay on
+``energy_adslab`` / ``energy_adsorbate``. The stop uses
+:math:`\Omega_\mathrm{tuplet}` (equivalently :math:`\Omega/n` at default
+reservoir conditions). Once ``num_placements`` is known it is divided by the
+tuplet size, as are ``bo.initial_random`` and ``bo.batch_size`` (each eval is
+an *n*-body relax). With BO on a single adsorbate, acquisition still scores
+single-site features but labels use :math:`\Omega/n` from each joint eval.
 
 **How Bayesian search uses earlier placements.**
 :func:`~metalsurfer.run_saturation_bo` ranks with :math:`\Omega` and trains

@@ -832,7 +832,7 @@ class AdsorptionConfig:
     export_placement_provenance: bool = False
     saturation_discard_topology_rearrangements: bool = True
     saturation_max_steps: int | None = None
-    # 1 = sequential; >1 = n-tuplet composite commit per step.
+    # 1 = sequential; >1 = joint n-tuplet (exact-n configs relaxed together).
     saturation_molecules_per_step: int = 1
     # Reservoir T/p/a for Ω. Not boltzmann_temperature. None activities → a_i = 1.
     # saturation_omega_shift: Ω' = Ω − δ (eV); scalar broadcasts or per-species.

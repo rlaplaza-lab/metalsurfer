@@ -420,7 +420,12 @@ class PlacementDescriptor:
 
 @dataclass
 class ScreeningResult:
-    """Single validated placement after optimisation and filtering."""
+    """Single validated placement after optimisation and filtering.
+
+    For joint n-tuplet configs, ``energy_adslab`` / ``energy_adsorbate`` are
+    composite totals and ``energy_adsorption`` is per molecule
+    (``E_ads_total / n``); see ``workflow/composite.py``.
+    """
 
     molecule: str
     placement_id: int  # Same as placement_descriptor.placement_index
@@ -648,8 +653,8 @@ def _saturation_step_structure_paths(
     For n-tuplet steps (``n_added > 1``) these files hold the shared relaxed
     composite: ``*_best_slab.xyz`` is substrate + all committed units and
     ``*_adsorbate.xyz`` is the concatenated adsorbate pool (see
-    ``workflow/composite.py`` for the tuplet representation; per-winner
-    identity lives in the detail-CSV rows).
+    ``workflow/joint_tuplet.py`` / ``workflow/composite.py``; per-unit identity
+    and per-molecule ``energy_adsorption`` live in the detail-CSV rows).
     """
     return {
         "step_structure_path": str(mol_dir / f"step_{step:03d}_best_slab.xyz"),

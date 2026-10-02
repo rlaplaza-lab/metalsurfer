@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""OH n-tuplet saturation on Pt(111), in the spirit of CO/Pt(111) coverage series.
+"""OH n-tuplet saturation on Pt(111).
 
-Gunasooriya and Saeys (ACS Catal. 2018, 8, 10225) rank ordered CO cells from
-isolated molecules to high coverage by the energy of the whole structure,
-including lateral interactions. Metalsurfer cannot enumerate those supercells;
-this script shows the part it can do on one fixed FairChem Pt(111) cell:
+Companion to ``scripts/co_pt111_ntuplet_phases.py``, which searches ordered CO
+cells at fixed coverage with high-*n* joint configs (Gunasooriya & Saeys,
+ACS Catal. 2018). This script uses one fixed FairChem Pt(111) cell and shows
+the saturation-side comparison for hydroxyl:
 
 - isolated OH site preference (atop / bridge / hollow, pre-relax labels)
 - sequential coverage growth (differential E_ads, one OH per step)
-- n-tuplet commits (``saturation_molecules_per_step=3``): several winners
-  packed and relaxed as one composite so lateral interactions enter E_ads
+- n-tuplet commits (``saturation_molecules_per_step=3``): exact-3 joint
+  configs relaxed together so lateral interactions enter E_ads (per-molecule
+  stored energy is ``E_ads_total / 3``)
 
 OH is the hydroxyl radical (SMILES ``[OH]``). Energies are versus gas-phase OH,
 not an electrochemical cycle. No pH / activity scan: for a single adsorbate
@@ -147,14 +148,18 @@ def sequential_integral_to_n(run: SaturationRunResult, n_oh: int) -> float | Non
 
 
 def first_tuplet_energy_at_n(run: SaturationRunResult, n_oh: int) -> float | None:
-    """Tuplet E_ads from the first step that reaches exactly *n_oh* OH."""
+    """Composite E_ads_total from the first step that reaches exactly *n_oh* OH.
+
+    Committed rows store per-molecule ``E_ads_total / n``; this returns the
+    sum so the value is comparable to the sequential integral.
+    """
     for step_result in run.steps:
         committed = step_result.committed()
         if not committed:
             continue
         n_after = step_result.n_molecules_on_slab + len(committed)
         if n_after == n_oh and len(committed) == n_oh:
-            return committed[0].energy_adsorption
+            return sum(unit.energy_adsorption for unit in committed)
     return None
 
 
@@ -162,7 +167,7 @@ def print_one_third_ml_comparison(
     sequential: SaturationRunResult,
     ntuple3: SaturationRunResult,
 ) -> None:
-    """Integral of first three sequential steps vs 3-tuplet E_ads at 1/3 ML."""
+    """Integral of first three sequential steps vs 3-tuplet E_ads_total at 1/3 ML."""
     print()
     print("1/3 ML comparison (3 OH on 9 Pt)")
     seq_sum = sequential_integral_to_n(sequential, 3)
@@ -174,7 +179,7 @@ def print_one_third_ml_comparison(
     if tuplet is None:
         print("  n-tuplet: did not commit a 3-OH composite on step 1.")
     else:
-        print(f"  3-tuplet composite E_ads:                    {tuplet:+.4f} eV")
+        print(f"  3-tuplet composite E_ads_total:              {tuplet:+.4f} eV")
     if seq_sum is not None and tuplet is not None:
         print(
             f"  difference (tuplet − sequential integral):  {tuplet - seq_sum:+.4f} eV"
@@ -280,7 +285,8 @@ def main() -> int:
     print(
         "Note: initial site types are pre-relax placement labels; inspect "
         "xyz under results_oh_pt111_*/ for post-relax geometry. The 3-tuplet "
-        "is a greedy packing + joint relaxation, not an asserted (√3×√3) cell."
+        "screens exact-3 joint configs (CPU place, TorchSim relax together), "
+        "not an asserted (√3×√3) cell."
     )
     return 0
 

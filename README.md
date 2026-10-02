@@ -103,7 +103,7 @@ Runnable scripts in [`examples/`](examples/) (requires `pip install -e ".[mlip]"
 | [`examples/co2_mof_binding_energy.py`](examples/co2_mof_binding_energy.py) | `porous` | CO₂ in a MOF (RUBTAK01) |
 | [`examples/ethene_ru_slab_binding_energy.py`](examples/ethene_ru_slab_binding_energy.py) | `slab` | Ethene on Ru(0001) |
 | [`examples/h2_ru_slab_binding_energy.py`](examples/h2_ru_slab_binding_energy.py) | `slab` | H₂ dissociative adsorption (`enable_dissociative_placement` + `skip_topology_check`) |
-| [`examples/water_oh_rutile_saturation.py`](examples/water_oh_rutile_saturation.py) | `slab` | Water + OH⁻ competing on rutile TiO₂(110) (multi-molecule + n-tuplet saturation) |
+| [`examples/water_oh_rutile_saturation.py`](examples/water_oh_rutile_saturation.py) | `slab` | Water + OH⁻ competing on rutile TiO₂(110) (multi-molecule + joint n-tuplet saturation) |
 | [`examples/camphor_cu111_binding_energy.py`](examples/camphor_cu111_binding_energy.py) | `slab` | Bayesian placement search on literature Cu(111) slab |
 | [`examples/bipyridine_au111_defects_saturation_raw.py`](examples/bipyridine_au111_defects_saturation_raw.py) | `slab` | HPC-scale saturation demo (also under `scripts/`) |
 

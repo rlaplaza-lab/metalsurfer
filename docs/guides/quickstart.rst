@@ -364,8 +364,8 @@ Running two molecules at once
 By default molecules saturate the surface
 one after another (sequential mode). Set ``multi_molecule_saturation=True``
 and supply several molecules to make them compete at every step; optionally
-combine it with ``saturation_molecules_per_step > 1`` so each step can commit
-several placements simultaneously (n-tuplet mode):
+combine it with ``saturation_molecules_per_step > 1`` so each step screens
+exact-*n* joint configs (all *n* adsorbates relaxed together; n-tuplet mode):
 
 .. code-block:: python
 

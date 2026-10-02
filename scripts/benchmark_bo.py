@@ -15,10 +15,12 @@ number of pool lookups.
 
 Usage:
   python scripts/benchmark_bo.py
+  python scripts/benchmark_bo.py --data-dir results_bipyridine_au111_defects_saturation_raw
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 from pathlib import Path
@@ -51,9 +53,9 @@ from metalsurfer.models import BOStepMemory, windowed_bo_step_memories
 configure_logging(default_level="INFO")
 logger = logging.getLogger(__name__)
 
-DEFAULT_DATA_DIR = "examples/results_bipyridine_au111_defects_saturation_raw"
+DEFAULT_DATA_DIR = "results_bipyridine_au111_defects_saturation_raw"
 DEFAULT_SEEDS = 10
-DEFAULT_REPORT_DIR = "bo_benchmark_report"
+DEFAULT_REPORT_DIR = "bo_benchmark_report/uma-s-1p2"
 
 REQUIRED_COLUMNS = (
     "step",
@@ -161,8 +163,6 @@ ANYTIME_HORIZONS = (20, 30, 50)
 AURC_HORIZON = 50
 EVALS_TO_EPS = 0.05  # eV; first time best ≤ oracle + eps
 REGRET_TIE_TOL = 1e-6
-# Late saturation steps: budget covers most of the filtered pool.
-SECONDARY_TRANSFER_STEPS = frozenset({9, 10})
 
 
 def _cfg() -> AdsorptionConfig:
@@ -212,6 +212,13 @@ SURROGATE = _CFG.bo.surrogate  # type: ignore[assignment]
 ACQUISITION = _CFG.bo.acquisition  # type: ignore[assignment]
 KAPPA = float(_CFG.bo.ucb_kappa)
 EVAL_BUDGET = resolved_bo_eval_budget(_REPLAY)
+
+
+def _is_secondary_pool(n_pool: int) -> bool:
+    """A step is secondary when the replay budget covers the whole filtered pool."""
+    return n_pool <= EVAL_BUDGET
+
+
 _t = _CFG.bo.transfer
 TRANSFER_KWARGS = {
     "weight_cap": _t.weight_cap,
@@ -570,9 +577,8 @@ def _run_replay(
     acquisition: str = ACQUISITION,
     kappa: float = KAPPA,
     prior: BOStepMemory | None = None,
-    anchor: BOStepMemory | None = None,
+    prior_placement_X: list[dict[str, float]] | None = None,
     transfer: bool = False,
-    use_exploration: bool = False,
     transfer_kwargs: dict[str, float | int] | None = None,
     max_evals: int | None = None,
 ) -> SearchRunResult:
@@ -642,20 +648,20 @@ def _run_replay(
             chosen = rng.choice(uneval, size=batch, replace=False).tolist()
         else:
             model = None
+            explore_this_round = False
             if mode == "transfer":
                 X_cur = pd.DataFrame(obs_X)
                 y_cur = np.asarray(obs_y, dtype=float)
-                use_prior = (
+                # Match workflow.bayesian._build_round_surrogate: explore only
+                # while weighted transfer is eligible and not trust-disabled.
+                can_try_transfer = (
                     transfer
                     and prior is not None
                     and len(prior.observed_X_rows) > 0
                     and not transfer_disabled
                     and len(X_cur) >= int(xfer_kw["min_step_observations"])
                 )
-                if use_prior:
-                    placement = (
-                        anchor.best_X_row if anchor and anchor.best_X_row else None
-                    )
+                if can_try_transfer:
                     tr = build_transfer_surrogate(
                         X_cur,
                         y_cur,
@@ -674,7 +680,7 @@ def _run_replay(
                         proximity_lengthscale=float(xfer_kw["proximity_lengthscale"]),
                         prior_step_ages=prior.step_ages,
                         recency_lengthscale=float(xfer_kw["recency_lengthscale"]),
-                        prior_placement_X=placement,
+                        prior_placement_X=prior_placement_X or None,
                         occupancy_lengthscale=float(xfer_kw["occupancy_lengthscale"]),
                         occupancy_floor=float(xfer_kw["occupancy_floor"]),
                     )
@@ -684,6 +690,7 @@ def _run_replay(
                     if tr.transfer_weight_share > 0:
                         weight_shares.append(tr.transfer_weight_share)
                     model = tr.surrogate
+                explore_this_round = can_try_transfer and not transfer_disabled
                 if model is None:
                     model = train_surrogate(
                         X_cur,
@@ -713,7 +720,7 @@ def _run_replay(
                 f_best=best if np.isfinite(best) else None,
                 n_jobs=int(config.n_jobs),
             )
-            if use_exploration:
+            if explore_this_round:
                 chosen = _inject_exploration(
                     rng,
                     chosen,
@@ -808,7 +815,6 @@ def _run_bo(
     kappa: float = KAPPA,
     max_evals: int | None = None,
 ) -> SearchRunResult:
-    # Match live screening: no forced random exploration without transfer.
     return _run_replay(
         X,
         y,
@@ -818,7 +824,6 @@ def _run_bo(
         surrogate=surrogate,
         acquisition=acquisition,
         kappa=kappa,
-        use_exploration=False,
         max_evals=max_evals,
     )
 
@@ -867,7 +872,7 @@ def _run_bo_transfer(
     seed: int,
     *,
     prior: BOStepMemory | None,
-    anchor: BOStepMemory | None,
+    prior_placement_X: list[dict[str, float]] | None,
     transfer: bool,
     config: AdsorptionConfig = _REPLAY,
     surrogate: str = SURROGATE,
@@ -881,9 +886,8 @@ def _run_bo_transfer(
         config,
         mode="transfer",
         prior=prior,
-        anchor=anchor,
+        prior_placement_X=prior_placement_X,
         transfer=transfer,
-        use_exploration=True,
         surrogate=surrogate,
         acquisition=acquisition,
         kappa=kappa,
@@ -1102,7 +1106,7 @@ def run_transfer(
 
     for seed in range(seeds):
         memories: list[BOStepMemory] = []
-        prior_anchor: BOStepMemory | None = None
+        committed_placement_X: list[dict[str, float]] = []
         for step in steps:
             X, y = load_pool(data_dir, step=step)
             pool_sizes[step] = len(X)
@@ -1114,17 +1118,18 @@ def run_transfer(
                 else None
             )
             bl, bl_mem, _ = _run_bo_transfer(
-                X, y, rs, prior=None, anchor=None, transfer=False
+                X, y, rs, prior=None, prior_placement_X=None, transfer=False
             )
             tr, tr_mem, share = _run_bo_transfer(
                 X,
                 y,
                 rs,
                 prior=prior,
-                anchor=prior_anchor,
+                prior_placement_X=list(committed_placement_X),
                 transfer=step >= 2,
             )
-            prior_anchor = tr_mem
+            if tr_mem.best_X_row:
+                committed_placement_X.append(dict(tr_mem.best_X_row))
             memories.append(tr_mem)
             if step in transfer_steps:
                 detail_rows.append(
@@ -1162,7 +1167,7 @@ def run_transfer(
             "transfer_regret_at_100": float(np.mean(tr)) - oracle,
             "baseline_aurc_50": _mean_aurc(bl_curves, oracle),
             "transfer_aurc_50": _mean_aurc(tr_curves, oracle),
-            "secondary_small_pool": int(step in SECONDARY_TRANSFER_STEPS),
+            "secondary_small_pool": int(_is_secondary_pool(pool_sizes.get(step, 0))),
         }
         for ep in ANYTIME_HORIZONS:
             bl_ep = [_curve_at(c, ep) for c in bl_curves]
@@ -1416,7 +1421,8 @@ def write_report(
         "`bo.initial_random` / `bo.batch_size` to parallel capacity.",
         "- Primary decision metrics are **anytime** (regret@20/30/50, AURC@50); "
         "regret@100 is a ceiling/sanity check only.",
-        "- Steps 9–10 have small pools relative to budget (secondary).",
+        "- A step is secondary when its filtered pool is no larger than the "
+        "replay budget.",
         "",
     ]
 
@@ -1628,8 +1634,17 @@ def run_benchmark(
     )
 
 
-def main() -> int:
-    run_benchmark(DEFAULT_DATA_DIR, seeds=DEFAULT_SEEDS, report_dir=DEFAULT_REPORT_DIR)
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Offline replay of metalsurfer BO defaults on a saturation pool.",
+    )
+    parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
+    parser.add_argument("--seeds", type=int, default=DEFAULT_SEEDS)
+    parser.add_argument("--report-dir", default=DEFAULT_REPORT_DIR)
+    args = parser.parse_args(argv)
+    if args.seeds < 1:
+        parser.error("--seeds must be a positive integer")
+    run_benchmark(args.data_dir, seeds=args.seeds, report_dir=args.report_dir)
     return 0
 
 

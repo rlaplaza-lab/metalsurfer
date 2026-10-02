@@ -3,7 +3,11 @@
 Runnable demos from the project root (after `pip install -e ".[mlip]"`). Each
 script builds a substrate, sets only the knobs that define that run, then calls
 `run_adsorption` / `run_saturation`. Library defaults cover the rest.
-Production/HPC campaigns live under `scripts/` as standalone copy-paste workflows.
+Production/HPC campaigns live under `scripts/` as standalone copy-paste
+workflows (for example `scripts/co_pt111_ntuplet_phases.py` for fixed-coverage
+CO/Pt(111) joint n-tuplet searches, and
+`scripts/oh_pt111_ntuple_saturation.py` for sequential vs 3-tuplet OH on one
+Pt(111) cell).
 
 | Script | Description |
 |--------|-------------|
@@ -13,7 +17,7 @@ Production/HPC campaigns live under `scripts/` as standalone copy-paste workflow
 | `co2_mof_binding_energy.py` | CO₂ in a MOF (porous; `prepare_substrate`) |
 | `ethene_ru_slab_binding_energy.py` | Ethene on Ru(0001) (`prepare_substrate`) |
 | `h2_ru_slab_binding_energy.py` | H₂ dissociative adsorption on Ru(0001) (`enable_dissociative_placement=True`; usually also `skip_topology_check=True`) |
-| `water_oh_rutile_saturation.py` | Water + OH⁻ competing on rutile TiO₂(110): `multi_molecule_saturation=True` + n-tuplet steps (`saturation_molecules_per_step=2`); ASE-built oxide slab via `prepare_substrate(slab=...)` |
+| `water_oh_rutile_saturation.py` | Water + OH⁻ competing on rutile TiO₂(110): `multi_molecule_saturation=True` + joint n-tuplet steps (`saturation_molecules_per_step=2`, exact-2 configs relaxed together); ASE-built oxide slab via `prepare_substrate(slab=...)` |
 | `bipyridine_au111_defects_saturation_raw.py` | HPC-scale saturation on defected Au(111) (1000 placements; not a quick demo) |
 | `camphor_cu111_binding_energy.py` | (1S)-camphor on Cu(111) vs Järvi et al. BOSS benchmark (BO, 15GB GPU) |
 

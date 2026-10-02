@@ -484,14 +484,15 @@ Three ways to grow the coverage, set on `AdsorptionConfig`:
 `saturation_omega_shift` (eV scalar or per-species sequence subtracted
 from Ω). SATP defaults
 (`T = 298.15 K`, `p = p° = 1 bar`, `a_i = 1`, `δ = 0`) recover `Ω = E_ads`.
-n-tuplet stop uses `Ω_tuplet = E_ads_tuplet − k_B T Σ ln(a_i p / p°)`.
-Stored `energy_adsorption` / BO `observed_y` stay electronic. If activities
-already encode `p_i / p°`, leave pressure at 1 bar. Not
-`boltzmann_temperature` (conformer prior only).
+n-tuplet stop uses `Ω_tuplet = E_ads_tuplet − k_B T Σ ln(a_i p / p°)`
+(with stored `energy_adsorption = E_ads_tuplet / n`). BO `observed_y` stays
+electronic `E_ads` in sequential mode and uses `Ω/n` labels under joint
+n-tuplet BO. If activities already encode `p_i / p°`, leave pressure at 1 bar.
+Not `boltzmann_temperature` (conformer prior only).
 
-All three modes stop when a step commits nothing (including n-tuplet
-`no_binders` / emptied pack), committed Ω (or Ω_tuplet) ≥ 0, no valid
-placements remain, or `saturation_max_steps` is reached.
+All three modes stop when a step commits nothing (including n-tuplet with no
+valid joint config), committed Ω (or Ω_tuplet) ≥ 0, no valid placements
+remain, or `saturation_max_steps` is reached.
 
 ## 7. Dissociative placement
 
