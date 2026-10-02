@@ -189,14 +189,14 @@ def _normalize_pair_floors(
     """Broadcast a scalar / per-fixed floor array, or return ``None``."""
     if pair_floors is None:
         return None
-    if np.isscalar(pair_floors):
-        return np.full(n_fixed, float(pair_floors), dtype=float)
-    floors = np.asarray(pair_floors, dtype=float).reshape(-1)
-    if floors.shape[0] != n_fixed:
-        raise ValueError(
-            f"pair_floors length ({floors.shape[0]}) must match n_fixed ({n_fixed})"
-        )
-    return floors
+    if isinstance(pair_floors, np.ndarray):
+        floors = np.asarray(pair_floors, dtype=float).reshape(-1)
+        if floors.shape[0] != n_fixed:
+            raise ValueError(
+                f"pair_floors length ({floors.shape[0]}) must match n_fixed ({n_fixed})"
+            )
+        return floors
+    return np.full(n_fixed, float(pair_floors), dtype=float)
 
 
 def _pair_thresholds(

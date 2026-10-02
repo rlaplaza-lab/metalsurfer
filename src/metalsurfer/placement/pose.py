@@ -1600,7 +1600,7 @@ def _try_clash_descent_recovery(
         min_adsorbate_separation=float(config.min_adsorbate_separation),
         neighbor_cutoff=cutoff,
     )
-    if fixed_pos is None:
+    if fixed_pos is None or fixed_radii is None or fixed_floors is None:
         return ctx, fail_reason
 
     bounds = clash_bounds_for_adsorbate(
