@@ -219,7 +219,6 @@ _CONTACT_QUALITY_COVALENT_SUM_SCALE: float = 1.35
 # Max variance of contact distances when requiring multi-atom contact (Å²).
 _CONTACT_ATOM_VARIANCE_MAX: float = 0.5
 _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM: float = 2.0
-_ADSORBATE_SEPARATION_COVALENT_SUM_SCALE: float = 1.0
 
 # ---------------------------------------------------------------------------
 # Policy and generator grids

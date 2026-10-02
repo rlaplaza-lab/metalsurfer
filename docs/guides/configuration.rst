@@ -198,7 +198,8 @@ members together, and the step commits the best binding config. There is no
 single-adsorbate MLIP screen and no partial-tuplet or single-winner fallback.
 Overlapping packs are rejected when ``placement_clash_descent`` is off;
 otherwise near-misses are rescued by clash descent (substrate contacts use
-radius sums; packed adsorbates use ``min_adsorbate_separation``). Stored
+radius sums; packed adsorbates use ``connectivity_multiplier`` on the radius
+sum, then re-checked with the shared disconnect gate). Stored
 ``energy_adsorption`` is **per molecule**
 (:math:`E_\mathrm{ads,total}/n`); composite totals stay on
 ``energy_adslab`` / ``energy_adsorbate``. The stop uses
@@ -223,19 +224,21 @@ evaluations already made for that molecule:
 - The last ``bo.transfer.prior_step_window`` steps are reused (default 2).
   Set it to ``None`` to keep the full history. Older steps inside that
   window count less (``bo.transfer.recency_lengthscale``).
-- Evaluations whose pose sits near a molecule already on the slab are
-  downweighted (``bo.transfer.occupancy_lengthscale``), so those earlier
-  energies pull the surrogate less once the site is occupied.
+- Candidates near a molecule already on the slab get larger predictive
+  ``sigma`` (connectivity covalent-sum ratio vs ``connectivity_multiplier``),
+  so EI/LCB sample the interaction shell without discarding earlier
+  clean-surface energies.
 - Each molecule keeps its own history. When the transferred model fits the
   current step worse than a fit on that step alone, transfer turns off for
   the rest of the step.
 
 Leave ``bo.transfer.mode="weighted"``. ``"cumulative_refit"`` retrains on the
-pooled history when every retained step should enter the fit, still
-downweighted near occupied sites. ``bo.transfer.enabled=False`` fits each
-step on the poses evaluated in that step. New poses must also clear
-adsorbates already on the slab (``min_adsorbate_separation``, default
-1.5 Å).
+pooled history when every retained step should enter the fit.
+``bo.transfer.enabled=False`` fits each step on the poses evaluated in that
+step. New poses must stay disconnected from adsorbates already on the slab
+(``connectivity_multiplier``, default 1.3 — lenient enough for lateral
+contacts outside the covalent shell; in-plane site clearance uses
+``min_adsorbate_separation``, default 1.5 Å).
 
 **Moving the stop line.** Coverage ends at :math:`\Omega \ge 0`.
 ``saturation_omega_shift`` (:math:`\delta`, eV) ranks and stops on

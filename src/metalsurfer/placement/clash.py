@@ -36,32 +36,39 @@ __all__ = [
     "clash_bounds_for_adsorbate",
     "compose_quaternion_with_azimuth",
     "overlap_penalty",
-    "pair_floors_for_fixed_cloud",
+    "pair_scales_for_fixed_cloud",
     "resolve_rigid_clash",
     "tuplet_clash_rescue_floor",
 ]
 
 
-def pair_floors_for_fixed_cloud(
+def pair_scales_for_fixed_cloud(
     n_fixed: int,
     *,
     n_substrate: int,
-    adsorbate_separation: float,
+    adsorbate_scale: float,
 ) -> np.ndarray:
-    """Per-fixed-atom separation floors for a coverage slab + packed units.
+    """Per-fixed-atom clearance scales for coverage slab + packed units.
 
-    Bare-substrate atoms (prefix ``[:n_substrate]``) use radius-sum contact only
-    (floor 0). Pre-adsorbed and already-packed adsorbate atoms use
-    ``adsorbate_separation`` so thresholds become ``max(r_i + r_j, sep)``.
+    Clash thresholds are ``scale_j * (r_i + r_j)``. Bare-substrate atoms
+    (prefix ``[:n_substrate]``) use scale ``1`` (covalent radius sum). Pre-adsorbed
+    and packed adsorbate atoms use *adsorbate_scale* (typically
+    ``connectivity_multiplier``) so clash descent aims at the same gap as
+    :func:`~metalsurfer.filters.adsorbates_mutually_disconnected`.
     """
+    if n_fixed < 0:
+        raise ValueError(f"n_fixed must be non-negative, got {n_fixed}")
     if n_substrate < 0 or n_substrate > n_fixed:
         raise ValueError(
             f"n_substrate ({n_substrate}) must be in [0, {n_fixed}] (n_fixed)"
         )
-    floors = np.zeros(int(n_fixed), dtype=float)
+    scale = float(adsorbate_scale)
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError(f"adsorbate_scale must be positive and finite, got {scale!r}")
+    scales = np.ones(int(n_fixed), dtype=float)
     if n_substrate < n_fixed:
-        floors[int(n_substrate) :] = float(adsorbate_separation)
-    return floors
+        scales[int(n_substrate) :] = scale
+    return scales
 
 
 def clash_bounds_for_adsorbate(
@@ -126,18 +133,16 @@ def tuplet_clash_rescue_floor(
 ) -> float:
     """Skip n-tuplet rescue when atoms are closer than this (stacked nuclei).
 
-    Floor is ``scale * min(covalent_i + covalent_j)`` over symbol pairs, never
-    above ``min_separation`` so a configured packing gap still governs.
+    Floor is ``scale * min(covalent_i + covalent_j)`` over symbol pairs.
+    *min_separation* is only the unknown-radius fallback for
+    :func:`atom_radii_for_symbols`.
     """
     mov_r = atom_radii_for_symbols(moving_symbols, min_separation=min_separation)
     fix_r = atom_radii_for_symbols(fixed_symbols, min_separation=min_separation)
     if mov_r.size == 0 or fix_r.size == 0:
         return float(_TUPLET_CLASH_RESCUE_COVALENT_SCALE) * float(min_separation)
     pair_min = float(np.min(mov_r[:, None] + fix_r[None, :]))
-    return min(
-        float(min_separation),
-        float(_TUPLET_CLASH_RESCUE_COVALENT_SCALE) * pair_min,
-    )
+    return float(_TUPLET_CLASH_RESCUE_COVALENT_SCALE) * pair_min
 
 
 def atom_radii_for_symbols(
@@ -182,37 +187,40 @@ def compose_quaternion_with_azimuth(
     return float(q_new[0]), float(q_new[1]), float(q_new[2]), float(q_new[3])
 
 
-def _normalize_pair_floors(
-    pair_floors: np.ndarray | float | None,
+def _normalize_pair_scales(
+    pair_scales: np.ndarray | float | None,
     n_fixed: int,
 ) -> np.ndarray | None:
-    """Broadcast a scalar / per-fixed floor array, or return ``None``."""
-    if pair_floors is None:
+    """Broadcast a scalar / per-fixed scale array, or return ``None``."""
+    if pair_scales is None:
         return None
-    if isinstance(pair_floors, np.ndarray):
-        floors = np.asarray(pair_floors, dtype=float).reshape(-1)
-        if floors.shape[0] != n_fixed:
+    if isinstance(pair_scales, np.ndarray):
+        scales = np.asarray(pair_scales, dtype=float).reshape(-1)
+        if scales.shape[0] != n_fixed:
             raise ValueError(
-                f"pair_floors length ({floors.shape[0]}) must match n_fixed ({n_fixed})"
+                f"pair_scales length ({scales.shape[0]}) must match n_fixed ({n_fixed})"
             )
-        return floors
-    return np.full(n_fixed, float(pair_floors), dtype=float)
+        return scales
+    scale = float(pair_scales)
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError(f"pair_scales must be positive and finite, got {scale!r}")
+    return np.full(n_fixed, scale, dtype=float)
 
 
 def _pair_thresholds(
     moving_radii: np.ndarray,
     fixed_radii: np.ndarray,
-    pair_floors: np.ndarray | None,
+    pair_scales: np.ndarray | None,
 ) -> np.ndarray:
     """Pairwise separation thresholds ``(n_moving, n_fixed)``.
 
-    *pair_floors* is per fixed atom. Column *j* uses
-    ``max(r_i + r_j, pair_floors[j])`` when floors are set; otherwise the
-    covalent / supplied radius sum alone.
+    Base gap is ``r_i + r_j``. When *pair_scales* is set, column *j* uses
+    ``pair_scales[j] * (r_i + r_j)`` (substrate scale 1; adsorbate scale
+    ``connectivity_multiplier``).
     """
     thresh = moving_radii[:, None] + fixed_radii[None, :]
-    if pair_floors is not None:
-        thresh = np.maximum(thresh, pair_floors[None, :])
+    if pair_scales is not None:
+        thresh = thresh * pair_scales[None, :]
     return thresh
 
 
@@ -224,13 +232,12 @@ def overlap_penalty(
     *,
     cell: np.ndarray,
     pbc: list[bool],
-    pair_floors: np.ndarray | float | None = None,
+    pair_scales: np.ndarray | float | None = None,
 ) -> float:
     """Packmol distance-term merit: sum of squared positive overlaps.
 
     ``f = sum_ij [max(0, thresh_ij^2 - d_ij^2)]^2`` with
-    ``thresh_ij = r_i + r_j`` or ``max(r_i + r_j, pair_floors[j])`` when
-    *pair_floors* is set (scalar or per-fixed-atom array).
+    ``thresh_ij = scale_j * (r_i + r_j)`` (scale defaults to 1).
 
     Parameters
     ----------
@@ -246,9 +253,8 @@ def overlap_penalty(
         Unit cell matrix.
     pbc
         Periodic boundary flags.
-    pair_floors
-        Optional hard floor(s) on pairwise separation (Å), broadcast per
-        fixed atom.
+    pair_scales
+        Optional per-fixed-atom (or scalar) multiplier on ``r_i + r_j``.
     """
     f, _grad = _overlap_penalty_and_pos_grad(
         moving_pos,
@@ -257,7 +263,7 @@ def overlap_penalty(
         fixed_radii,
         cell=cell,
         pbc=pbc,
-        pair_floors=pair_floors,
+        pair_scales=pair_scales,
     )
     return f
 
@@ -270,7 +276,7 @@ def _overlap_penalty_and_pos_grad(
     *,
     cell: np.ndarray,
     pbc: list[bool],
-    pair_floors: np.ndarray | float | None,
+    pair_scales: np.ndarray | float | None,
 ) -> tuple[float, np.ndarray]:
     """Return ``(f, df/dp)`` with ``df/dp`` shape ``(n_moving, 3)``."""
     mov = np.asarray(moving_pos, dtype=float)
@@ -285,9 +291,9 @@ def _overlap_penalty_and_pos_grad(
             f"moving {r_m.shape[0]} vs {mov.shape[0]}, "
             f"fixed {r_f.shape[0]} vs {fix.shape[0]}"
         )
-    floors = _normalize_pair_floors(pair_floors, fix.shape[0])
+    scales = _normalize_pair_scales(pair_scales, fix.shape[0])
     mic_vecs, dists = geom._mol_slab_pairwise_mic(mov, fix, cell, pbc)
-    thresh = _pair_thresholds(r_m, r_f, floors)
+    thresh = _pair_thresholds(r_m, r_f, scales)
     overlap = np.maximum(0.0, thresh * thresh - dists * dists)
     f = float(np.sum(overlap * overlap))
     # df/dp_i = sum_j -4 * o_ij * mic_vec_ij  for overlapping pairs.
@@ -304,7 +310,7 @@ def _overlap_f_and_max_violation(
     *,
     cell: np.ndarray,
     pbc: list[bool],
-    pair_floors: np.ndarray | float | None,
+    pair_scales: np.ndarray | float | None,
 ) -> tuple[float, float]:
     """Return ``(overlap_penalty_f, max_pair_violation)`` from one MIC."""
     mov = np.asarray(moving_pos, dtype=float)
@@ -313,9 +319,9 @@ def _overlap_f_and_max_violation(
         return 0.0, 0.0
     r_m = np.asarray(moving_radii, dtype=float).reshape(-1)
     r_f = np.asarray(fixed_radii, dtype=float).reshape(-1)
-    floors = _normalize_pair_floors(pair_floors, fix.shape[0])
+    scales = _normalize_pair_scales(pair_scales, fix.shape[0])
     _, dists = geom._mol_slab_pairwise_mic(mov, fix, cell, pbc)
-    thresh = _pair_thresholds(r_m, r_f, floors)
+    thresh = _pair_thresholds(r_m, r_f, scales)
     overlap = np.maximum(0.0, thresh * thresh - dists * dists)
     f = float(np.sum(overlap * overlap))
     viol = float(np.max(np.maximum(0.0, thresh - dists)))
@@ -356,7 +362,7 @@ def _rigid_state_objective_and_jac(
     fixed_radii: np.ndarray,
     cell: np.ndarray,
     pbc: list[bool],
-    pair_floors: np.ndarray | float | None,
+    pair_scales: np.ndarray | float | None,
 ) -> tuple[float, np.ndarray]:
     """Value and analytic Jacobian of the Packmol merit wrt rigid state."""
     pos = _apply_rigid_state(base_pos, origin, site_frame, normal, state)
@@ -367,7 +373,7 @@ def _rigid_state_objective_and_jac(
         fixed_radii,
         cell=cell,
         pbc=pbc,
-        pair_floors=pair_floors,
+        pair_scales=pair_scales,
     )
     # d(pos)/d(local translation k) equals the k-th site-frame basis vector.
     jac = np.zeros(4, dtype=float)
@@ -400,7 +406,7 @@ def resolve_rigid_clash(
     pbc: list[bool],
     config: AdsorptionConfig,
     rotate_azimuth: bool = True,
-    fixed_pair_floors: np.ndarray | float | None = None,
+    fixed_pair_scales: np.ndarray | float | None = None,
     use_vdw_moving: bool = False,
     bounds: tuple[tuple[float, float], tuple[float, float], float] | None = None,
     moving_radii: np.ndarray | None = None,
@@ -410,10 +416,10 @@ def resolve_rigid_clash(
     State is ``[dx, dy, dz, d_az_deg]`` in the local site frame. Bounds default to
     :func:`clash_bounds_for_adsorbate`, or pass ``(x_range, y_range, dz_bound)``.
 
-    *fixed_pair_floors* is a scalar or per-fixed-atom array. Bare-substrate
-    contacts omit the floor (radius sum); pre-adsorbed / packed adsorbate
-    atoms typically use ``config.min_adsorbate_separation`` (see
-    :func:`pair_floors_for_fixed_cloud`).
+    *fixed_pair_scales* multiplies ``r_i + r_j`` per fixed atom (scalar or array).
+    Use :func:`pair_scales_for_fixed_cloud` so adsorbate columns match
+    ``connectivity_multiplier`` while substrate columns stay at scale ``1``.
+    ``None`` leaves thresholds at the covalent radius sum.
     """
     base_pos = np.asarray(adsorbate.get_positions(), dtype=float)
     origin_arr = np.asarray(origin, dtype=float).reshape(3)
@@ -433,7 +439,7 @@ def resolve_rigid_clash(
         moving_radii = np.asarray(moving_radii, dtype=float).reshape(-1)
     fix = np.asarray(fixed_pos, dtype=float)
     fix_r = np.asarray(fixed_radii, dtype=float).reshape(-1)
-    floors = _normalize_pair_floors(fixed_pair_floors, fix.shape[0])
+    scales = _normalize_pair_scales(fixed_pair_scales, fix.shape[0])
 
     f0 = overlap_penalty(
         base_pos,
@@ -442,7 +448,7 @@ def resolve_rigid_clash(
         fix_r,
         cell=cell,
         pbc=pbc,
-        pair_floors=floors,
+        pair_scales=scales,
     )
     if f0 <= _CLASH_DESCENT_SUCCESS_F:
         return base_pos.copy(), 0.0 if rotate_azimuth else None, True
@@ -468,7 +474,7 @@ def resolve_rigid_clash(
             fixed_radii=fix_r,
             cell=cell,
             pbc=pbc,
-            pair_floors=floors,
+            pair_scales=scales,
         )
 
     result = minimize(
@@ -488,7 +494,7 @@ def resolve_rigid_clash(
         fix_r,
         cell=cell,
         pbc=pbc,
-        pair_floors=floors,
+        pair_scales=scales,
     )
     ok = f_best <= _CLASH_DESCENT_SUCCESS_F or viol <= float(
         _CLASH_DESCENT_SUCCESS_VIOLATION_ANGSTROM

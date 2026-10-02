@@ -21,7 +21,6 @@ from metalsurfer.ml.bayesian import (
     lcb_scores,
     matern_length_scale_for_n_features,
     predict_with_uncertainty,
-    prior_placement_downweight,
     prior_proximity_weights,
     prior_recency_weights,
     prior_similarity_to_current,
@@ -812,41 +811,6 @@ class TestTransferSmoke:
         weights = prior_recency_weights([0, 1, 2], lengthscale=1.0)
         assert weights[0] > weights[1] > weights[2]
 
-    def test_prior_placement_downweight_prefers_far_sites(self):
-        # Same z+quat; lateral COM ~5 Å apart must prefer the far site.
-        priors = _feature_frame(
-            [
-                _feature_row(x=0.05, z=2.0),
-                _feature_row(x=5.0, z=2.0),
-                _feature_row(x=2.0, y=1.0, z=2.0),
-            ]
-        )
-        placement = _feature_frame([_feature_row(x=0.0, z=2.0)])
-        weights = prior_placement_downweight(
-            priors, placement, lengthscale=1.0, floor=0.0
-        )
-        assert weights[0] < weights[1]
-
-    def test_prior_placement_downweight_uses_all_committed_rows(self):
-        placements = _feature_frame(
-            [
-                _feature_row(x=0.0, z=2.0),
-                _feature_row(x=10.0, z=2.0),
-            ]
-        )
-        probes = _feature_frame(
-            [
-                _feature_row(x=0.05, z=2.0),
-                _feature_row(x=10.05, z=2.0),
-                _feature_row(x=5.0, y=5.0, z=2.0),
-            ]
-        )
-        weights = prior_placement_downweight(
-            probes, placements, lengthscale=1.0, floor=0.0
-        )
-        assert weights[0] < weights[2]
-        assert weights[1] < weights[2]
-
     def test_prior_similarity_to_current_prefers_nearby(self):
         X, _ = _make_synthetic_training_data(5)
         current = X.iloc[[0, 1]].copy()
@@ -867,25 +831,6 @@ class TestTransferSmoke:
         near_w = prior_proximity_weights(near, X.iloc[[0]], lengthscale=0.02, floor=0.0)
         far_w = prior_proximity_weights(far, X.iloc[:1], lengthscale=10.0, floor=0.0)
         assert near_w[0] < far_w[0]
-
-    def test_occupancy_fallback_downweights_clustered_priors(self):
-        """Fallback occupancy is 1 - proximity(exclude_self), matching build_transfer."""
-        clustered = _feature_frame(
-            [
-                _feature_row(x=0.0, z=2.0),
-                _feature_row(x=0.1, z=2.0),
-                _feature_row(x=10.0, z=2.0),
-            ]
-        )
-        # prior_placement_X is None → invert proximity to other prior rows.
-        occupancy = np.maximum(
-            0.0,
-            1.0
-            - prior_proximity_weights(clustered, clustered, lengthscale=1.0, floor=0.0),
-        )
-        assert occupancy[0] < occupancy[2]
-        assert occupancy[1] < occupancy[2]
-        assert occupancy[2] > occupancy[0] + 0.3
 
     def test_transfer_similarity_ignores_conformer_index_vs_translation(self):
         """Same pose, Δconformer must not look as far as a multi-Å translation."""
@@ -1300,43 +1245,15 @@ def test_cumulative_refit_transfer_weight_share_from_weights():
     assert share == pytest.approx(0.35, abs=1e-6)
 
 
-def test_cumulative_refit_occupancy_downweights_near_committed_com():
-    """Committed occupancy anchors reduce prior weight near that COM."""
-    X_prior = _feature_frame(
-        [
-            _feature_row(x=0.0, z=2.0),
-            _feature_row(x=5.0, z=2.0),
-        ]
-    )
-    y_prior = np.array([0.0, 1.0])
-    X_current = _feature_frame(
-        [
-            _feature_row(x=2.5, z=2.0),
-            _feature_row(x=2.6, z=2.0),
-        ]
-    )
-    y_current = np.array([0.5, 0.6])
-    _, _, w_base = cumulative_refit_training_set(
-        X_prior,
-        y_prior,
-        X_current,
-        y_current,
-        weight_cap=0.35,
-        proximity_lengthscale=2.0,
-    )
-    _, _, w_occ = cumulative_refit_training_set(
-        X_prior,
-        y_prior,
-        X_current,
-        y_current,
-        weight_cap=0.35,
-        proximity_lengthscale=2.0,
-        occupancy_placement_X=[_feature_row(x=0.0, z=2.0)],
-        occupancy_lengthscale=1.0,
-        occupancy_floor=0.0,
-    )
-    # Near the occupied COM the prior mass should drop relative to the far site.
-    assert w_occ[0] / max(w_occ[1], 1e-12) < w_base[0] / max(w_base[1], 1e-12)
+def test_occupancy_sigma_scale_peaks_at_bond_cutoff():
+    """Just outside the bond cutoff doubles sigma; far away leaves it alone."""
+    from metalsurfer.filters import occupancy_sigma_scale
+
+    m = 1.3
+    assert occupancy_sigma_scale(m, m) == pytest.approx(2.0)
+    assert occupancy_sigma_scale(2.0 * m, m) == pytest.approx(1.0)
+    assert occupancy_sigma_scale(4.0 * m, m) == pytest.approx(1.0)
+    assert occupancy_sigma_scale(float("inf"), m) == pytest.approx(1.0)
 
 
 def test_cumulative_refit_oof_gate_uses_baseline_on_bad_round():
@@ -1381,7 +1298,6 @@ def test_cumulative_refit_oof_gate_uses_baseline_on_bad_round():
         transfer_memory=memory,
         state=state,
         config=config,
-        occupancy_placement_X=None,
     )
     assert transfer_active
     assert not state.disabled

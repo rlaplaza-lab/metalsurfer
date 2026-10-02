@@ -6,6 +6,10 @@
 :func:`adsorbate_connected_components` splits the adsorbate region into bonded
 fragments; saturation uses it for topology checks before best-slab selection
 when ``saturation_discard_topology_rearrangements`` is enabled.
+:func:`adsorbates_mutually_disconnected` is the same bond rule between two
+adsorbate clouds (placement / n-tuplet / clash recovery clearance).
+:func:`min_interadsorbate_covalent_ratio` / :func:`occupancy_sigma_scale`
+inflate BO predictive ``sigma`` beside occupied adsorbates using that rule.
 :func:`check_decomposition` is used by :func:`filter_results`.
 """
 
@@ -284,6 +288,99 @@ def adsorbate_connected_components(
         material_type=material_type,
     )
     return [ads[mask] for mask in masks]
+
+
+def adsorbates_mutually_disconnected(
+    a: Atoms,
+    b: Atoms,
+    connectivity_multiplier: float,
+    *,
+    material_type: str = "slab",
+    cell: np.ndarray | None = None,
+) -> bool:
+    """Return whether *a* and *b* share no covalent bond under *multiplier*.
+
+    Concatenates both clouds and runs the same connected-component rule as
+    :func:`adsorbate_connected_components`. Empty either side is disconnected.
+    *cell* overrides ``a.get_cell()`` for MIC (use the substrate cell when
+    fragments carry a vacuum box).
+    """
+    if len(a) == 0 or len(b) == 0:
+        return True
+
+    n_a = len(a)
+    coords = np.vstack(
+        [
+            np.asarray(a.get_positions(), dtype=float),
+            np.asarray(b.get_positions(), dtype=float),
+        ]
+    )
+    syms = np.asarray(
+        list(a.get_chemical_symbols()) + list(b.get_chemical_symbols()),
+        dtype=object,
+    )
+    cell_arr = np.asarray(
+        a.get_cell() if cell is None else cell,
+        dtype=float,
+    )
+    frame = Atoms(symbols=list(syms), positions=coords, cell=cell_arr)
+    masks = _connected_components_from_coords(
+        coords,
+        syms,
+        frame,
+        connectivity_multiplier,
+        material_type=material_type,
+    )
+    return all(not (np.any(mask[:n_a]) and np.any(mask[n_a:])) for mask in masks)
+
+
+def min_interadsorbate_covalent_ratio(
+    a: Atoms,
+    b: Atoms,
+    *,
+    material_type: str = "slab",
+    cell: np.ndarray | None = None,
+) -> float:
+    """Minimum ``d_ij / (r_i + r_j)`` between atoms of *a* and *b* (MIC).
+
+    Returns ``inf`` when either cloud is empty. Radii are ASE covalent radii
+    (same table as :func:`_covalent_threshold_matrix`).
+    """
+    if len(a) == 0 or len(b) == 0:
+        return float("inf")
+
+    cell_arr = np.asarray(
+        a.get_cell() if cell is None else cell,
+        dtype=float,
+    )
+    pbc = _pbc_for_cell(material_type, cell_arr)
+    dists = _mol_slab_pairwise_distances(
+        np.asarray(a.get_positions(), dtype=float),
+        np.asarray(b.get_positions(), dtype=float),
+        cell_arr,
+        pbc,
+    )
+    z_a = np.array([atomic_numbers[s] for s in a.get_chemical_symbols()])
+    z_b = np.array([atomic_numbers[s] for s in b.get_chemical_symbols()])
+    r_sum = covalent_radii[z_a][:, None] + covalent_radii[z_b][None, :]
+    return float(np.min(dists / r_sum))
+
+
+def occupancy_sigma_scale(
+    covalent_ratio: float,
+    connectivity_multiplier: float,
+) -> float:
+    """Sigma inflation beside occupied adsorbates: ``min(2, max(1, 2 m / s))``.
+
+    *covalent_ratio* is :func:`min_interadsorbate_covalent_ratio`. Legal poses
+    have ``s > connectivity_multiplier``; just outside the bond cutoff the
+    factor is 2, and it returns to 1 once ``s`` reaches twice the multiplier.
+    """
+    s = float(covalent_ratio)
+    m = float(connectivity_multiplier)
+    if not np.isfinite(s) or s <= 0.0 or m <= 0.0:
+        return 1.0
+    return float(min(2.0, max(1.0, 2.0 * m / s)))
 
 
 def _is_molecule_connected_from_dist(

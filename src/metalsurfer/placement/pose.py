@@ -1591,16 +1591,17 @@ def _try_clash_descent_recovery(
         use_vdw=use_vdw,
     )
     cutoff = 2.0 * float(np.max(moving_r) if moving_r.size else footprint) + z_window
-    fixed_pos, fixed_radii, fixed_floors = _clash_recovery_fixed_cloud(
+    fixed_pos, fixed_radii, fixed_scales = _clash_recovery_fixed_cloud(
         slab,
         slab_scratch,
         ads_com=np.asarray(work_center, dtype=float),
         use_vdw=use_vdw,
         min_initial_distance=float(config.min_initial_distance),
         min_adsorbate_separation=float(config.min_adsorbate_separation),
+        connectivity_multiplier=float(config.connectivity_multiplier),
         neighbor_cutoff=cutoff,
     )
-    if fixed_pos is None or fixed_radii is None or fixed_floors is None:
+    if fixed_pos is None or fixed_radii is None or fixed_scales is None:
         return ctx, fail_reason
 
     bounds = clash_bounds_for_adsorbate(
@@ -1623,7 +1624,7 @@ def _try_clash_descent_recovery(
         cell=slab_scratch.cell,
         pbc=slab_scratch.pbc,
         config=config,
-        fixed_pair_floors=fixed_floors,
+        fixed_pair_scales=fixed_scales,
         use_vdw_moving=use_vdw,
         bounds=bounds,
         moving_radii=moving_r,
@@ -1676,17 +1677,22 @@ def _clash_recovery_fixed_cloud(
     use_vdw: bool,
     min_initial_distance: float,
     min_adsorbate_separation: float,
+    connectivity_multiplier: float,
     neighbor_cutoff: float,
 ) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     """Nearby substrate / pre-adsorbate atoms for clash recovery.
 
-    Returns ``(positions, radii, pair_floors)``. Substrate atoms use floor 0
-    (radius-sum contact); pre-adsorbed atoms use ``min_adsorbate_separation``.
+    Returns ``(positions, radii, pair_scales)``. Substrate neighbors use scale
+    ``1``; pre-adsorbed atoms use *connectivity_multiplier* so clash descent
+    matches :func:`~metalsurfer.filters.adsorbates_mutually_disconnected`.
+    *min_adsorbate_separation* is the unknown-radius fallback for pre-adsorbed
+    atoms.
     """
     fixed_chunks: list[np.ndarray] = []
     radius_chunks: list[np.ndarray] = []
-    floor_chunks: list[np.ndarray] = []
+    scale_chunks: list[np.ndarray] = []
     cutoff = float(neighbor_cutoff)
+    ads_scale = float(connectivity_multiplier)
 
     def _nearby_mask(positions: np.ndarray) -> np.ndarray:
         if positions.size == 0:
@@ -1703,7 +1709,7 @@ def _clash_recovery_fixed_cloud(
     if np.any(near):
         n_near = int(np.count_nonzero(near))
         fixed_chunks.append(slab_scratch.slab_pos[near])
-        floor_chunks.append(np.zeros(n_near, dtype=float))
+        scale_chunks.append(np.ones(n_near, dtype=float))
         if use_vdw and slab_scratch.slab_vdw_r is not None:
             radius_chunks.append(np.asarray(slab_scratch.slab_vdw_r, dtype=float)[near])
         elif slab_scratch.slab_cov_r is not None:
@@ -1723,9 +1729,7 @@ def _clash_recovery_fixed_cloud(
         if np.any(near_pre):
             n_pre = int(np.count_nonzero(near_pre))
             fixed_chunks.append(slab_scratch.pre_ads_pos[near_pre])
-            floor_chunks.append(
-                np.full(n_pre, float(min_adsorbate_separation), dtype=float)
-            )
+            scale_chunks.append(np.full(n_pre, ads_scale, dtype=float))
             exclude_n = len(slab_scratch.slab_pos)
             pre_syms = list(slab.get_chemical_symbols()[exclude_n:])
             pre_syms_near = [
@@ -1744,7 +1748,7 @@ def _clash_recovery_fixed_cloud(
     fixed_radii = np.concatenate(radius_chunks)
     floor = min_adsorbate_separation / 2.0
     fixed_radii = np.where(np.isfinite(fixed_radii), fixed_radii, floor)
-    return np.vstack(fixed_chunks), fixed_radii, np.concatenate(floor_chunks)
+    return np.vstack(fixed_chunks), fixed_radii, np.concatenate(scale_chunks)
 
 
 def _build_slab_distance_scratch(
@@ -1804,7 +1808,8 @@ def _validate_posed_adsorbate(
     1. Always: covalent floor ``max(min_initial_distance, covalent_sum *
        min_contact_ratio)``, optional ``max_initial_distance``, then optional
        van der Waals overlap when ``reject_vdw_overlaps`` is set.
-    2. Under coverage: adsorbate–adsorbate separation.
+    2. Under coverage: adsorbate–adsorbate disconnection via the shared
+       connectivity rule (``connectivity_multiplier``).
     3. Only when ``strict_initial_placement`` or ``require_multiple_contact``:
        contact quality (closest approach, contact count, then variance).
 
@@ -1846,21 +1851,21 @@ def _validate_posed_adsorbate(
     if not ok:
         return dist_reason
 
-    if exclude_n is not None:
-        pre_ads = (
-            slab_scratch.pre_ads_pos
-            if slab_scratch.pre_ads_pos is not None
-            else np.asarray(slab.get_positions()[exclude_n:], dtype=float)
-        )
-        sep_ok, _ = geom.check_adsorbate_separation(
-            adsorbate,
-            pre_ads,
-            min_separation=config.min_adsorbate_separation,
-            cell=np.asarray(slab.get_cell(), dtype=float),
-            pbc=material_aware_pbc(mat_type),
-        )
-        if not sep_ok:
-            return "adsorbate_overlap"
+    if exclude_n is not None and exclude_n < len(slab):
+        pre_ads = slab[exclude_n:]
+        if len(pre_ads) > 0:
+            # Lazy import: filters imports placement.geometry; avoid cycle when
+            # placement loads pose while filters is still initializing.
+            from ..filters import adsorbates_mutually_disconnected
+
+            if not adsorbates_mutually_disconnected(
+                adsorbate,
+                pre_ads,
+                float(config.connectivity_multiplier),
+                material_type=mat_type,
+                cell=np.asarray(slab.get_cell(), dtype=float),
+            ):
+                return "adsorbate_overlap"
 
     if config.strict_initial_placement or config.require_multiple_contact:
         contact_ok, contact_reason = geom.check_initial_contact_quality(

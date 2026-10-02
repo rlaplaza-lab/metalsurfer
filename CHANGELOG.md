@@ -21,9 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bo.batch_size` by *n* (each eval is an n-body relax).
 - Single-molecule BO in n-tuplet mode proposes joint configs from the
   single-site surrogate and records shared Ω/n labels per member site.
-- Clash descent uses per-fixed-atom pair floors (substrate: radius sum;
-  pre-adsorbed / packed adsorbates: `min_adsorbate_separation`). Exact
-  n-tuplet packing rejects overlapping packs when clash descent is off.
+- Clash descent uses per-fixed-atom clearance scales (substrate: covalent
+  radius sum; pre-adsorbed / packed adsorbates: `connectivity_multiplier` on
+  the radius sum) and re-checks packs with the shared adsorbate disconnect
+  gate. Exact n-tuplet packing rejects overlapping packs when clash descent
+  is off.
 - Competitive multi-molecule n-tuplet enumerates every species composition
   of size *n* and ranks packs by Ω_tuplet; joint BO with that combination
   raises.

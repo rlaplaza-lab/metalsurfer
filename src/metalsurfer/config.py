@@ -58,8 +58,6 @@ class BOTransferConfig:
     proximity_floor: float = 0.0
     prior_step_window: int | None = 2
     recency_lengthscale: float = 4.0
-    occupancy_lengthscale: float = 1.0
-    occupancy_floor: float = 0.0
 
 
 @dataclass
@@ -577,11 +575,6 @@ def _validate_bo_transfer(transfer: BOTransferConfig) -> None:
         "bo.transfer.recency_lengthscale",
         transfer.recency_lengthscale,
     )
-    _check_positive(
-        "bo.transfer.occupancy_lengthscale",
-        transfer.occupancy_lengthscale,
-    )
-    _check_unit_interval("bo.transfer.occupancy_floor", transfer.occupancy_floor)
     _check_unit_interval(
         "bo.transfer.weight_cap", transfer.weight_cap, exclusive_upper=True
     )
@@ -800,7 +793,7 @@ class AdsorptionConfig:
     strict_initial_placement: bool = False
     reject_vdw_overlaps: bool = False
     vdw_overlap_scale: float = 1.0
-    # Gap to pre-adsorbed molecules (not substrate); distinct from min_initial_distance.
+    # In-plane site occupancy clearance (not adsorbate–adsorbate bonding).
     min_adsorbate_separation: float = MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM
     # Under coverage, prune occupied anchors; footprint ranks survivors only.
     occupancy_use_footprint: bool = True
@@ -813,6 +806,8 @@ class AdsorptionConfig:
     max_adsorption_energy: float = 5.0
     energy_dedup_threshold: float = 0.05
     rmsd_dedup_threshold: float = 0.1
+    # Bond cutoff d ≤ m·(ri+rj). Lenient default keeps lateral contacts legal;
+    # shared gate for placement / packing / clash / BO sigma. Not site occupancy.
     connectivity_multiplier: float = 1.3
     seed: int = DEFAULT_SEED
     # Weighting T (K) for boltzmann prior only — NOT a stochastic pre-filter.

@@ -367,9 +367,10 @@ frameworks it moves toward the free-volume site centre instead). Mostly
 in-plane penetrations skip the height nudge. Huge normal penetration (molecule
 clearly through the surface) fails cheaply before Packmol clash. When
 `placement_clash_descent` is on, a Packmol-style rigid-body clash descent
-follows, with discrete in-plane offsets as a cheap fallback. Substrate contacts
-use covalent radius sums; pre-adsorbed adsorbates use
-`max(radius sum, min_adsorbate_separation)`. Only `too_close`,
+follows, with discrete in-plane offsets as a cheap fallback. Clash contacts
+use covalent radius sums for substrate and pre-adsorbed atoms alike;
+adsorbate–adsorbate bonding is rejected separately by the connectivity
+multiplier (`adsorbate_overlap`). Only `too_close`,
 `too_far`, `contact_distance_too_large`, `vdw_overlap`, and `adsorbate_overlap`
 are recoverable; other failures are final.
 
@@ -473,8 +474,9 @@ Three ways to grow the coverage, set on `AdsorptionConfig`:
   best binding config (all *n* units folded onto the slab). There is no
   single-adsorbate relaxation pass and no partial-tuplet or single-winner
   fallback. Overlapping packs are rejected when clash descent is off;
-  otherwise near-misses are rescued with the same substrate / adsorbate pair
-  floors as pose recovery. Stored `energy_adsorption` is **per molecule**
+  otherwise near-misses are rescued with the same substrate / adsorbate
+  connectivity scales as pose recovery (`connectivity_multiplier` on
+  adsorbate–adsorbate pairs). Stored `energy_adsorption` is **per molecule**
   (`E_ads_total / n`); composite totals remain on `energy_adslab` /
   `energy_adsorbate`. Stop and ranking use Ω_tuplet (equivalently Ω/n at
   default reservoir conditions). With BO enabled on a single adsorbate,

@@ -15,7 +15,6 @@ from ase.geometry import find_mic
 
 from .._utils import cell_has_volume
 from ._constants import (
-    _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE,
     _BINDER_ALIGNMENT_TARGET_DOT,
     _BINDER_VECTOR_MIN_NORM,
     _CONTACT_ATOM_VARIANCE_MAX,
@@ -1059,89 +1058,6 @@ def check_initial_placement_distance(
             return False, actual_min, "vdw_overlap"
 
     return True, actual_min, None
-
-
-def check_adsorbate_separation(
-    new_adsorbate: Atoms,
-    pre_adsorbed_positions: np.ndarray,
-    min_separation: float | None = None,
-    cell: np.ndarray | None = None,
-    pbc: list[bool] | None = None,
-) -> tuple[bool, float]:
-    """Check separation between new adsorbate and pre-adsorbed atoms.
-
-    Used in saturation mode where slab already contains previously placed
-    adsorbates. Ensures new placements don't collide with existing ones.
-
-    Parameters
-    ----------
-    new_adsorbate
-        Atoms object representing new molecule to place.
-    pre_adsorbed_positions
-        (N, 3) array of pre-adsorbed atom positions.
-    min_separation
-        Minimum allowed distance (\u00c5) between atoms.
-    cell
-        Unit cell (required if pbc is used).
-    pbc
-        Periodic boundary conditions [x, y, z]. When *cell* has non-zero volume
-        (a periodic substrate), *pbc* must be provided explicitly; passing
-        ``pbc=None`` with a volumed cell raises :class:`ValueError`.
-
-    Returns
-    -------
-    tuple[bool, float]
-        (ok, min_distance) where ok is True if separation is adequate.
-    """
-    if len(pre_adsorbed_positions) == 0:
-        return True, float("inf")
-
-    if pbc is None and cell is not None and cell_has_volume(cell):
-        raise ValueError(
-            "pbc must be provided when cell is periodic; "
-            "pass slab/cluster/porous flags explicitly"
-        )
-
-    new_pos = new_adsorbate.get_positions()
-    if (
-        pbc is not None
-        and any(pbc)
-        and not (cell is not None and cell_has_volume(cell))
-    ):
-        raise ValueError(
-            "cell with non-zero volume must be provided when pbc is requested; "
-            "pass slab/cluster/porous cell explicitly"
-        )
-    if pbc is not None and cell is not None and cell_has_volume(cell):
-        cell_arr, pbc_list = np.asarray(cell, dtype=float), list(pbc)
-    else:
-        cell_arr, pbc_list = np.eye(3), [False, False, False]
-    dmat = _mol_slab_pairwise_distances(
-        new_pos, pre_adsorbed_positions, cell_arr, pbc_list
-    )
-    min_dist = float(np.min(dmat)) if dmat.size else float("inf")
-
-    cov_r: list[float] = [
-        r
-        for s in new_adsorbate.get_chemical_symbols()
-        if (r := _get_covalent_radius(s)) is not None
-    ]
-    if min_separation is None:
-        ref_radius = (
-            float(np.mean(cov_r))
-            if cov_r
-            else _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM / 2.0
-        )
-        min_separation = _ADSORBATE_SEPARATION_COVALENT_SUM_SCALE * (2.0 * ref_radius)
-    elif cov_r:
-        # Chemistry-aware floor from the new adsorbate's mean covalent radius
-        # (pre-adsorbed symbols are not passed in). Never a silent Å hard floor.
-        pair_floor = float(_ADSORBATE_SEPARATION_COVALENT_SUM_SCALE) * (
-            2.0 * float(np.mean(cov_r))
-        )
-        min_separation = max(float(min_separation), pair_floor)
-    ok = min_dist >= float(min_separation)
-    return ok, min_dist
 
 
 def check_initial_contact_quality(

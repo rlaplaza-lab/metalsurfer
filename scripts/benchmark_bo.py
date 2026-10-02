@@ -231,8 +231,6 @@ TRANSFER_KWARGS = {
     "proximity_lengthscale": _t.proximity_lengthscale,
     "proximity_floor": _t.proximity_floor,
     "recency_lengthscale": _t.recency_lengthscale,
-    "occupancy_lengthscale": _t.occupancy_lengthscale,
-    "occupancy_floor": _t.occupancy_floor,
 }
 TRANSFER_WINDOW = _t.prior_step_window
 
@@ -680,9 +678,6 @@ def _run_replay(
                         proximity_lengthscale=float(xfer_kw["proximity_lengthscale"]),
                         prior_step_ages=prior.step_ages,
                         recency_lengthscale=float(xfer_kw["recency_lengthscale"]),
-                        prior_placement_X=prior_placement_X or None,
-                        occupancy_lengthscale=float(xfer_kw["occupancy_lengthscale"]),
-                        occupancy_floor=float(xfer_kw["occupancy_floor"]),
                     )
                     transfer_bad_rounds = tr.transfer_bad_rounds
                     if tr.transfer_disabled:
@@ -840,8 +835,6 @@ def _transfer_kwargs_from_config(config: AdsorptionConfig) -> dict[str, float | 
         "proximity_lengthscale": config.bo.transfer.proximity_lengthscale,
         "proximity_floor": config.bo.transfer.proximity_floor,
         "recency_lengthscale": config.bo.transfer.recency_lengthscale,
-        "occupancy_lengthscale": config.bo.transfer.occupancy_lengthscale,
-        "occupancy_floor": config.bo.transfer.occupancy_floor,
     }
 
 
@@ -1406,8 +1399,7 @@ def write_report(
         f"Default BO: `{cfg.bo.surrogate}` / `{cfg.bo.acquisition}` (κ={cfg.bo.ucb_kappa}), "
         f"init=`{cfg.bo.initial_sampling}`",
         f"Transfer: `{cfg.bo.transfer.mode}`, window={cfg.bo.transfer.prior_step_window}, "
-        f"recency_ls={cfg.bo.transfer.recency_lengthscale}, "
-        f"occupancy_ls={cfg.bo.transfer.occupancy_lengthscale}",
+        f"recency_ls={cfg.bo.transfer.recency_lengthscale}",
         f"Replay budget: {EVAL_BUDGET} lookups "
         f"({_REPLAY.bo.initial_random} init + {_REPLAY.bo.total_budget}×"
         f"{_REPLAY.bo.batch_size}); exploration only when transfer is active "

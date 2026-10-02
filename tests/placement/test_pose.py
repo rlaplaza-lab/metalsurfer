@@ -202,16 +202,17 @@ def test_saturation_finalize_rejects_adsorbate_overlap():
 
 
 def test_validate_posed_adsorbate_uses_material_pbc(monkeypatch):
-    """Separation check uses material PBC, not calculator-promoted 3D PBC."""
+    """Disconnect check uses the substrate cell for MIC under coverage."""
     captured = {}
 
-    def _fake_separation(ads, pre, *, cell, pbc=None, **kwargs):
-        captured["pbc"] = list(pbc)
-        return True, 99.0
+    def _fake_disconnected(ads, pre, multiplier, *, material_type="slab", cell=None):
+        captured["material_type"] = material_type
+        captured["cell"] = cell
+        return True
 
     monkeypatch.setattr(
-        "metalsurfer.placement.pose.geom.check_adsorbate_separation",
-        _fake_separation,
+        "metalsurfer.filters.adsorbates_mutually_disconnected",
+        _fake_disconnected,
     )
 
     slab = make_slab()
@@ -221,7 +222,9 @@ def test_validate_posed_adsorbate_uses_material_pbc(monkeypatch):
     covered = slab + water
     config = AdsorptionConfig()
     _validate_posed_adsorbate(water, covered, config, slab_for_sites=slab)
-    assert captured["pbc"] == material_aware_pbc("slab")
+    assert captured["material_type"] == "slab"
+    assert captured["cell"] is not None
+    np.testing.assert_allclose(captured["cell"], slab.get_cell())
 
 
 def test_strict_initial_placement_e2e_reason():

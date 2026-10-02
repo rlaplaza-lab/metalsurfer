@@ -34,7 +34,7 @@ from ..placement.clash import (
     atom_radii_for_symbols,
     clash_bounds_for_adsorbate,
     compose_quaternion_with_azimuth,
-    pair_floors_for_fixed_cloud,
+    pair_scales_for_fixed_cloud,
     resolve_rigid_clash,
     tuplet_clash_rescue_floor,
 )
@@ -43,7 +43,7 @@ from ..placement.geometry import (
     calculate_min_distance,
     compute_surface_site_frame,
 )
-from ..placement.occupancy import _positions_mutually_clear, incoming_inplane_radius
+from ..placement.occupancy import incoming_inplane_radius, results_mutually_clear
 from ..placement.site_coords import _slab_normal
 from ..surface_prep import apply_material_pbc
 from ..surface_prep.freeze import check_frozen_substrate_displacement
@@ -106,21 +106,24 @@ def _fixed_cloud_from_coverage_and_results(
     *,
     min_separation: float,
     n_substrate: int,
+    adsorbate_scale: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Coverage slab atoms plus already-accepted adsorbate suffixes.
 
-    Returns ``(positions, radii, pair_floors)``. Bare-substrate atoms use floor
-    0; pre-adsorbed coverage and packed suffixes use ``min_separation``.
+    Returns ``(positions, radii, pair_scales)``. Substrate columns use scale
+    ``1``; pre-adsorbed and packed adsorbate columns use *adsorbate_scale*
+    (``connectivity_multiplier``). *min_separation* is the unknown-radius
+    fallback.
     """
     fixed_pos = np.asarray(slab_atoms.get_positions(), dtype=float)
     fixed_radii = atom_radii_for_symbols(
         list(slab_atoms.get_chemical_symbols()),
         min_separation=float(min_separation),
     )
-    floors = pair_floors_for_fixed_cloud(
+    scales = pair_scales_for_fixed_cloud(
         len(fixed_pos),
         n_substrate=int(n_substrate),
-        adsorbate_separation=float(min_separation),
+        adsorbate_scale=float(adsorbate_scale),
     )
     for other, prev in zip(suffixes, results, strict=True):
         fixed_pos = np.vstack([fixed_pos, other])
@@ -134,13 +137,13 @@ def _fixed_cloud_from_coverage_and_results(
                 ),
             ]
         )
-        floors = np.concatenate(
+        scales = np.concatenate(
             [
-                floors,
-                np.full(len(other), float(min_separation), dtype=float),
+                scales,
+                np.full(len(other), float(adsorbate_scale), dtype=float),
             ]
         )
-    return fixed_pos, fixed_radii, floors
+    return fixed_pos, fixed_radii, scales
 
 
 def _min_dist_to_suffixes(
@@ -216,7 +219,7 @@ def _try_rescue_suffix(
     candidate: ScreeningResult,
     fixed_pos: np.ndarray,
     fixed_radii: np.ndarray,
-    fixed_floors: np.ndarray,
+    fixed_scales: np.ndarray,
     *,
     slab_atoms: Atoms,
     cell: np.ndarray,
@@ -246,7 +249,7 @@ def _try_rescue_suffix(
         cell=cell,
         pbc=pbc,
         config=config,
-        fixed_pair_floors=fixed_floors,
+        fixed_pair_scales=fixed_scales,
         bounds=bounds,
     )
     if not ok:
@@ -266,13 +269,14 @@ def pack_exact_tuplet(
     """Pack *winners* into one exact-length tuplet or return ``None``.
 
     Unit 1 stays at its screened pose. Each later unit must either be mutually
-    clear under ``min_adsorbate_separation`` against the packed set, or (when
-    ``placement_clash_descent`` is on) be rescued by rigid-body descent against
-    the coverage slab + packed units. Overlap with clash descent off, or a
-    failed rescue, rejects the whole pack. Partial packs are never returned.
+    disconnected under ``connectivity_multiplier`` against the packed set, or
+    (when ``placement_clash_descent`` is on) be rescued by rigid-body descent
+    against the coverage slab + packed units and then re-validated with the same
+    connectivity rule. Overlap with clash descent off, or a failed rescue /
+    post-rescue bond, rejects the whole pack. Partial packs are never returned.
 
     *n_substrate* is the bare-substrate atom count used for per-atom clash
-    floors (defaults to ``len(slab_atoms)`` when the coverage frame is bare).
+    scales (defaults to ``len(slab_atoms)`` when the coverage frame is bare).
     """
     if not winners:
         return None
@@ -289,6 +293,7 @@ def pack_exact_tuplet(
     cell = np.asarray(slab_atoms.get_cell(), dtype=float)
     pbc = material_aware_pbc(config.material_type)
     min_sep = float(config.min_adsorbate_separation)
+    adsorbate_scale = float(config.connectivity_multiplier)
     clash_on = bool(config.placement_clash_descent)
 
     packed: list[ScreeningResult] = [winners[0]]
@@ -297,14 +302,14 @@ def pack_exact_tuplet(
     for winner in winners[1:]:
         suffix = _suffix_positions(winner)
         clear = all(
-            _positions_mutually_clear(
-                suffix,
-                other,
+            results_mutually_clear(
+                winner.atoms[winner.slab_size :],
+                prev.atoms[prev.slab_size :],
                 cell=cell,
-                pbc=pbc,
-                min_separation=min_sep,
+                material_type=config.material_type,
+                connectivity_multiplier=adsorbate_scale,
             )
-            for other in packed_suffixes
+            for prev in packed
         )
         if clear:
             packed.append(winner)
@@ -335,24 +340,47 @@ def pack_exact_tuplet(
         ):
             return None
 
-        fixed_pos, fixed_radii, fixed_floors = _fixed_cloud_from_coverage_and_results(
+        fixed_pos, fixed_radii, fixed_scales = _fixed_cloud_from_coverage_and_results(
             slab_atoms,
             packed,
             packed_suffixes,
             min_separation=min_sep,
             n_substrate=substrate_n,
+            adsorbate_scale=adsorbate_scale,
         )
         rescued = _try_rescue_suffix(
             winner,
             fixed_pos,
             fixed_radii,
-            fixed_floors,
+            fixed_scales,
             slab_atoms=slab_atoms,
             cell=cell,
             pbc=pbc,
             config=config,
         )
         if rescued is None:
+            return None
+        # Clash success can land on the equality boundary of the bond cutoff;
+        # re-check with the shared disconnect predicate as the SSOT gate.
+        still_clear = all(
+            results_mutually_clear(
+                rescued.atoms[rescued.slab_size :],
+                prev.atoms[prev.slab_size :],
+                cell=cell,
+                material_type=config.material_type,
+                connectivity_multiplier=adsorbate_scale,
+            )
+            for prev in packed
+        )
+        if still_clear and substrate_n < len(slab_atoms):
+            still_clear = results_mutually_clear(
+                rescued.atoms[rescued.slab_size :],
+                slab_atoms[substrate_n:],
+                cell=cell,
+                material_type=config.material_type,
+                connectivity_multiplier=adsorbate_scale,
+            )
+        if not still_clear:
             return None
         packed.append(rescued)
         packed_suffixes.append(_suffix_positions(rescued))

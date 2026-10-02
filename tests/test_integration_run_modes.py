@@ -33,13 +33,13 @@ from metalsurfer.config import (
     BOTransferConfig,
     resolved_bo_eval_budget,
 )
+from metalsurfer.filters import adsorbates_mutually_disconnected
 from metalsurfer.models import (
     BindingCampaignResult,
     ReferenceEnergies,
     SaturationCampaignResult,
 )
 from metalsurfer.placement import check_initial_placement_distance
-from metalsurfer.placement.geometry import check_adsorbate_separation
 from metalsurfer.placement.site_context import (
     SiteContext,
     resolve_site_context_for_sampling,
@@ -342,13 +342,14 @@ def _assert_survivor_physics(
         f"survivor fails placement distance gate: min_d={min_d:.3f} reason={reason}"
     )
     if n_substrate < len(slab_part):
-        sep_ok, sep_d = check_adsorbate_separation(
+        pre = slab_part[n_substrate:]
+        assert adsorbates_mutually_disconnected(
             ads,
-            np.asarray(slab_part.get_positions()[n_substrate:], dtype=float),
+            pre,
+            1.3,
+            material_type=material_type,
             cell=np.asarray(slab_part.get_cell(), dtype=float),
-            pbc=list(slab_part.get_pbc()),
-        )
-        assert sep_ok, f"survivor overlaps a co-adsorbate: min_d={sep_d:.3f}"
+        ), "survivor overlaps a co-adsorbate under connectivity"
     # result.distance and the gate share MIC semantics on identical inputs:
     # without co-adsorbates the two computations must agree to float noise;
     # saturation slabs exclude co-adsorbates differently per side, so allow a

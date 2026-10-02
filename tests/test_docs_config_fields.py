@@ -128,8 +128,10 @@ def test_documented_defaults_match_simple_scalars():
 def _field_doc_block(field_name: str) -> tuple[str, str] | None:
     """Return (type_line, default_line) for a documented AdsorptionConfig field."""
     text = _CONFIG_RST.read_text(encoding="utf-8").splitlines()
+    header = f"``{field_name}``"
     for i, line in enumerate(text):
-        if f"``{field_name}``" not in line or "**Type:**" in line:
+        # Field sections are a lone ``name`` header, not inline mentions.
+        if line.strip() != header:
             continue
         type_line = default_line = ""
         for j in range(i + 1, min(len(text), i + 8)):

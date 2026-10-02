@@ -3,12 +3,14 @@
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.data import atomic_numbers, covalent_radii
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.placement import geometry as geom
 from metalsurfer.placement.clash import (
     atom_radii_for_symbols,
     overlap_penalty,
+    pair_scales_for_fixed_cloud,
     resolve_rigid_clash,
 )
 from metalsurfer.placement.geometry import compute_surface_site_frame
@@ -23,7 +25,7 @@ def test_overlap_penalty_zero_when_clear():
     r_f = np.array([0.7], dtype=float)
     cell = np.eye(3) * 20.0
     pbc = [False, False, False]
-    f = overlap_penalty(moving, r_m, fixed, r_f, cell=cell, pbc=pbc, pair_floors=1.5)
+    f = overlap_penalty(moving, r_m, fixed, r_f, cell=cell, pbc=pbc, pair_scales=1.3)
     assert f == 0.0
 
 
@@ -68,6 +70,21 @@ def test_overlap_penalty_c1_smooth_across_threshold():
     assert f_at(d0 - 0.1) > 0.0
 
 
+def test_overlap_penalty_respects_pair_scales():
+    """Adsorbate-scale columns inflate the clearance threshold."""
+    moving = np.array([[0.0, 0.0, 0.0]], dtype=float)
+    fixed = np.array([[1.5, 0.0, 0.0]], dtype=float)
+    r_m = np.array([0.7], dtype=float)
+    r_f = np.array([0.7], dtype=float)
+    cell = np.eye(3) * 20.0
+    pbc = [False, False, False]
+    assert overlap_penalty(moving, r_m, fixed, r_f, cell=cell, pbc=pbc) == 0.0
+    assert (
+        overlap_penalty(moving, r_m, fixed, r_f, cell=cell, pbc=pbc, pair_scales=1.3)
+        > 0.0
+    )
+
+
 def test_resolve_rigid_clash_separates_near_overlap():
     config = AdsorptionConfig(
         material_type="slab",
@@ -75,6 +92,7 @@ def test_resolve_rigid_clash_separates_near_overlap():
         placement_x_range=(-1.5, 1.5),
         placement_y_range=(-1.5, 1.5),
         min_adsorbate_separation=1.5,
+        connectivity_multiplier=1.3,
         placement_clash_descent=True,
     )
     water = make_water()
@@ -95,6 +113,7 @@ def test_resolve_rigid_clash_separates_near_overlap():
     frame = compute_surface_site_frame(np.array([0.0, 0.0, 1.0]))
     cell = np.eye(3) * 20.0
     pbc = [False, False, False]
+    scale = float(config.connectivity_multiplier)
 
     new_pos, az, ok = resolve_rigid_clash(
         moving,
@@ -105,7 +124,7 @@ def test_resolve_rigid_clash_separates_near_overlap():
         cell=cell,
         pbc=pbc,
         config=config,
-        fixed_pair_floors=config.min_adsorbate_separation,
+        fixed_pair_scales=scale,
     )
     assert ok
     assert az is not None
@@ -113,7 +132,8 @@ def test_resolve_rigid_clash_separates_near_overlap():
     min_d = geom.calculate_min_distance(
         new_pos, fixed_pos, cell, use_pbc=False, pbc=pbc
     )
-    assert min_d >= config.min_adsorbate_separation - 1e-3
+    r_o = float(covalent_radii[atomic_numbers["O"]])
+    assert min_d >= scale * 2.0 * r_o - 1e-3
 
 
 def test_resolve_rigid_clash_fails_when_stacked():
@@ -123,6 +143,7 @@ def test_resolve_rigid_clash_fails_when_stacked():
         placement_x_range=(-0.5, 0.5),
         placement_y_range=(-0.5, 0.5),
         min_adsorbate_separation=1.5,
+        connectivity_multiplier=1.3,
     )
     a = Atoms("O", positions=[[0.0, 0.0, 0.0]])
     fixed = np.array([[0.1, 0.0, 0.0]], dtype=float)
@@ -139,7 +160,7 @@ def test_resolve_rigid_clash_fails_when_stacked():
         cell=cell,
         pbc=pbc,
         config=config,
-        fixed_pair_floors=config.min_adsorbate_separation,
+        fixed_pair_scales=float(config.connectivity_multiplier),
     )
     assert not ok
 
@@ -151,6 +172,7 @@ def test_resolve_rigid_clash_deterministic():
         placement_x_range=(-1.5, 1.5),
         placement_y_range=(-1.5, 1.5),
         min_adsorbate_separation=1.5,
+        connectivity_multiplier=1.3,
     )
     water = make_water()
     pos = water.get_positions().copy()
@@ -173,7 +195,7 @@ def test_resolve_rigid_clash_deterministic():
         cell=cell,
         pbc=pbc,
         config=config,
-        fixed_pair_floors=config.min_adsorbate_separation,
+        fixed_pair_scales=float(config.connectivity_multiplier),
     )
     p1, a1, ok1 = resolve_rigid_clash(moving, **kwargs)
     p2, a2, ok2 = resolve_rigid_clash(moving, **kwargs)
@@ -240,11 +262,9 @@ def test_clash_bounds_uses_supplied_moving_radii_for_zero_footprint(monkeypatch)
     assert dz == pytest.approx(1.25)
 
 
-def test_pair_floors_for_fixed_cloud_splits_substrate_and_adsorbate():
-    from metalsurfer.placement.clash import pair_floors_for_fixed_cloud
-
-    floors = pair_floors_for_fixed_cloud(5, n_substrate=3, adsorbate_separation=1.5)
-    np.testing.assert_allclose(floors, [0.0, 0.0, 0.0, 1.5, 1.5])
+def test_pair_scales_for_fixed_cloud_substrate_vs_adsorbate():
+    scales = pair_scales_for_fixed_cloud(5, n_substrate=3, adsorbate_scale=1.3)
+    np.testing.assert_allclose(scales, [1.0, 1.0, 1.0, 1.3, 1.3])
 
 
 def test_tuplet_clash_rescue_floor_scales_with_radii():
@@ -253,7 +273,8 @@ def test_tuplet_clash_rescue_floor_scales_with_radii():
     floor_hh = tuplet_clash_rescue_floor(["H"], ["H"], min_separation=1.5)
     floor_oo = tuplet_clash_rescue_floor(["O"], ["O"], min_separation=1.5)
     assert floor_oo > floor_hh
-    assert floor_oo <= 1.5
+    r_o = float(covalent_radii[atomic_numbers["O"]])
+    assert floor_oo == pytest.approx(0.5 * 2.0 * r_o)
 
 
 def test_resolve_rigid_clash_final_coords_use_one_mic(monkeypatch):
@@ -266,6 +287,7 @@ def test_resolve_rigid_clash_final_coords_use_one_mic(monkeypatch):
         placement_x_range=(-1.5, 1.5),
         placement_y_range=(-1.5, 1.5),
         min_adsorbate_separation=1.5,
+        connectivity_multiplier=1.3,
     )
     water = make_water()
     pos = water.get_positions().copy()
@@ -299,7 +321,7 @@ def test_resolve_rigid_clash_final_coords_use_one_mic(monkeypatch):
         cell=cell,
         pbc=pbc,
         config=config,
-        fixed_pair_floors=config.min_adsorbate_separation,
+        fixed_pair_scales=float(config.connectivity_multiplier),
         moving_radii=atom_radii_for_symbols(
             list(moving.get_chemical_symbols()),
             min_separation=config.min_adsorbate_separation,

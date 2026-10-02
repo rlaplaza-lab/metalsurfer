@@ -9,16 +9,15 @@ from metalsurfer._numeric_defaults import (
     CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
 )
+from metalsurfer.filters import adsorbates_mutually_disconnected
 from metalsurfer.placement import (
     calculate_min_distance,
     check_initial_placement_distance,
-    material_aware_pbc,
 )
 from metalsurfer.placement.geometry import (
     _binding_atom_candidates,
     _classify_molecule_shape,
     calculate_contact_quality,
-    check_adsorbate_separation,
     check_initial_contact_quality,
     detect_vdw_overlaps,
 )
@@ -265,57 +264,56 @@ def test_calculate_contact_quality_detects_good_contact():
     assert metrics["contact_ratio"] > 0.0, "Should have contact ratio"
 
 
-def test_adsorbate_separation_accepts_well_separated():
-    """check_adsorbate_separation should accept well-separated adsorbates."""
+def test_adsorbates_mutually_disconnected_accepts_well_separated():
+    """Well-separated clouds share no covalent component."""
     slab = make_slab()
     water = make_water().copy()
-
-    # Place water
     pos = water.get_positions()
     pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 2.0
     pos[:, 0] += 5.0
     pos[:, 1] += 5.0
     water.set_positions(pos)
-    water.set_cell(slab.get_cell())
-    water.set_pbc(slab.get_pbc())
 
-    # Pre-adsorbed positions far away
-    pre_ads = np.array([[0.0, 0.0, 5.0]])
-
-    ok, dist = check_adsorbate_separation(
+    other = Atoms("O", positions=[[0.0, 0.0, 5.0]])
+    assert adsorbates_mutually_disconnected(
         water,
-        pre_ads,
-        min_separation=2.0,
+        other,
+        1.3,
+        material_type="slab",
         cell=slab.get_cell(),
-        pbc=material_aware_pbc("slab"),
     )
-    assert ok, "Should accept well-separated adsorbates"
-    assert dist > 7.0
 
 
-def test_adsorbate_separation_rejects_close_atoms():
-    """check_adsorbate_separation should reject too-close adsorbates."""
-    slab = make_slab()
-    water = make_water().copy()
+def test_adsorbates_mutually_disconnected_rejects_bonded_pair():
+    """A C–C contact inside the connectivity cutoff merges the clouds."""
+    from ase.data import atomic_numbers, covalent_radii
 
-    # Place water
-    pos = water.get_positions()
-    pos[:, 2] += float(np.max(slab.get_positions()[:, 2])) + 2.0
-    water.set_positions(pos)
-    water.set_cell(slab.get_cell())
-    water.set_pbc(slab.get_pbc())
-
-    # Pre-adsorbed positions very close
-    pre_ads = np.array([[0.0, 0.0, 5.0]])
-
-    ok, dist = check_adsorbate_separation(
-        water,
-        pre_ads,
-        min_separation=5.0,
-        cell=slab.get_cell(),
-        pbc=material_aware_pbc("slab"),
+    r_c = float(covalent_radii[atomic_numbers["C"]])
+    # Midway between 1.5 Å and the default C–C bond cutoff (~1.98 Å).
+    sep = 1.7
+    assert sep < 1.3 * (2.0 * r_c)
+    a = Atoms("C", positions=[[0.0, 0.0, 0.0]])
+    b = Atoms("C", positions=[[sep, 0.0, 0.0]])
+    cell = np.eye(3) * 20.0
+    assert not adsorbates_mutually_disconnected(
+        a, b, 1.3, material_type="nanoparticle", cell=cell
     )
-    assert not ok, "Should reject too-close adsorbates"
+
+
+def test_adsorbates_mutually_disconnected_accepts_h_h_outside_cutoff():
+    """H–H just outside the connectivity cutoff stays disconnected."""
+    from ase.data import atomic_numbers, covalent_radii
+
+    r_h = float(covalent_radii[atomic_numbers["H"]])
+    cutoff = 1.3 * (2.0 * r_h)
+    sep = cutoff + 0.05
+    assert sep < 1.5
+    a = Atoms("H", positions=[[0.0, 0.0, 0.0]])
+    b = Atoms("H", positions=[[sep, 0.0, 0.0]])
+    cell = np.eye(3) * 20.0
+    assert adsorbates_mutually_disconnected(
+        a, b, 1.3, material_type="nanoparticle", cell=cell
+    )
 
 
 def test_check_initial_placement_distance_empty_geometry():
@@ -350,33 +348,6 @@ def test_min_distance_floor_rejects_close_o_cu():
     assert not ok
     assert reason == "too_close"
     assert dist == pytest.approx(height, abs=1e-9)
-
-
-def test_check_adsorbate_separation_requires_cell_when_pbc_requested():
-    mol = make_water()
-    pre = np.array([[0.0, 0.0, 0.0]])
-    with pytest.raises(ValueError, match="cell"):
-        check_adsorbate_separation(mol, pre, pbc=[True, True, False])
-
-
-def test_check_adsorbate_separation_requires_pbc_when_cell_periodic():
-    slab = make_slab()
-    mol = make_water()
-    pre = np.array([[0.0, 0.0, 5.0]])
-    with pytest.raises(ValueError, match="pbc must be provided"):
-        check_adsorbate_separation(mol, pre, cell=slab.get_cell(), pbc=None)
-
-
-def test_check_adsorbate_separation_explicit_false_pbc_uses_nonperiodic():
-    slab = make_slab()
-    mol = make_water()
-    pre = np.array([[0.0, 0.0, 5.0]])
-    ok, dist = check_adsorbate_separation(
-        mol, pre, cell=slab.get_cell(), pbc=[False, False, False]
-    )
-    assert ok
-    expected = calculate_min_distance(mol.get_positions(), pre, use_pbc=False)
-    assert dist == pytest.approx(expected)
 
 
 def test_calculate_min_distance_left_handed_cell_uses_abs_det():

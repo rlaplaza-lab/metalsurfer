@@ -5,8 +5,8 @@ import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
+from metalsurfer.filters import adsorbates_mutually_disconnected
 from metalsurfer.models import PlacementDescriptor, ScreeningResult
-from metalsurfer.placement.geometry import calculate_min_distance
 from metalsurfer.placement.site_coords import _slab_normal
 from metalsurfer.workflow.composite import (
     _apply_suffix_to_result,
@@ -149,11 +149,12 @@ class TestPackExactTuplet:
         packed = pack_exact_tuplet(winners, slab, config)
         assert packed is not None
         assert [w.placement_id for w in packed] == [0, 1]
-        s0 = packed[0].atoms.get_positions()[packed[0].slab_size :]
-        s1 = packed[1].atoms.get_positions()[packed[1].slab_size :]
-        assert (
-            calculate_min_distance(s0, s1, slab.get_cell(), use_pbc=True, pbc=SLAB_PBC)
-            >= 1.5 - 1e-3
+        assert adsorbates_mutually_disconnected(
+            packed[0].atoms[packed[0].slab_size :],
+            packed[1].atoms[packed[1].slab_size :],
+            float(config.connectivity_multiplier),
+            material_type="slab",
+            cell=slab.get_cell(),
         )
 
     def test_overlapping_pair_rejected_when_clash_descent_off(self):
@@ -171,8 +172,8 @@ class TestPackExactTuplet:
 
     def test_near_miss_rescued_when_clash_descent_on(self):
         slab = make_slab()
-        # COM Δx=2.2 Å → min atom distance ~1.26 Å: below min_separation=1.5
-        # but above rescue floor (0.5 Å).
+        # COM Δx=2.2 Å → min atom distance ~1.26 Å: bonded under connectivity
+        # but above the rescue floor, so clash descent can separate them.
         winners = [
             _winner(slab, pid=0, e_ads=-1.0, x_shift=5.0),
             _winner(slab, pid=1, e_ads=-0.9, x_shift=7.2),
@@ -187,11 +188,12 @@ class TestPackExactTuplet:
         packed = pack_exact_tuplet(winners, slab, config)
         assert packed is not None
         assert [w.placement_id for w in packed] == [0, 1]
-        s0 = packed[0].atoms.get_positions()[packed[0].slab_size :]
-        s1 = packed[1].atoms.get_positions()[packed[1].slab_size :]
-        assert (
-            calculate_min_distance(s0, s1, slab.get_cell(), use_pbc=True, pbc=SLAB_PBC)
-            >= 1.5 - 1e-3
+        assert adsorbates_mutually_disconnected(
+            packed[0].atoms[packed[0].slab_size :],
+            packed[1].atoms[packed[1].slab_size :],
+            float(config.connectivity_multiplier),
+            material_type="slab",
+            cell=slab.get_cell(),
         )
 
     def test_anchor_pose_unchanged_on_clear_or_rescue(self):

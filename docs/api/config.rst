@@ -307,8 +307,9 @@ Placement generation
    Bounded Packmol-style rigid-body overlap descent during distance recovery
    and n-tuplet near-miss / pre-relax packing. Bounds scale with molecule
    footprint and the height window. Substrate contacts use covalent radius
-   sums; pre-adsorbed / packed adsorbate contacts use
-   ``max(radius sum, min_adsorbate_separation)``. When ``False``, recovery
+   sums (scale ``1``); pre-adsorbed / packed adsorbate contacts use
+   ``connectivity_multiplier`` on the radius sum so clash descent matches the
+   shared adsorbate–adsorbate disconnect gate. When ``False``, recovery
    falls back to discrete XY jitter only and n-tuplet rejects overlapping
    packs (no hard-skip alternate path). Disabled entirely when
    ``placement_distance_recovery`` is ``False`` for the recovery path.
@@ -395,11 +396,11 @@ Initial placement validation
 ``min_adsorbate_separation``
     **Type:** ``float`` · **Default:** ``1.5`` (Å)
 
-    Minimum adsorbate–adsorbate separation enforced under coverage (saturation).
-    Rejects placements that would pack a new adsorbate on top of an already
-    adsorbed one; corresponds to the ``adsorbate_overlap`` failure reason when
-    violated. Also used as the in-plane occupancy floor and as the Packmol-style
-    pair floor in clash descent / n-tuplet packing.
+    In-plane occupancy clearance (Å): catalog site anchors closer than this
+    (MIC, normal-projected) to existing adsorbate atoms are dropped under
+    coverage. Also the unknown-radius fallback for clash atom radii
+    (``min_separation / 2``). Adsorbate–adsorbate bonding is gated by
+    ``connectivity_multiplier`` instead (``adsorbate_overlap``).
 
 ``occupancy_use_footprint``
    **Type:** ``bool`` · **Default:** ``True``
@@ -625,8 +626,16 @@ Post-relaxation validation
 ``connectivity_multiplier``
    **Type:** ``float`` · **Default:** ``1.3``
 
-   Covalent-radius multiplier used in connectivity analysis when testing
-   whether the adsorbate remains intact after relaxation.
+   Covalent-radius multiplier for bond detection
+   (``d_ij ≤ multiplier × (r_i + r_j)``). The default is intentionally
+   lenient so stabilizing lateral contacts outside the covalent shell remain
+   allowed. Used to keep adsorbates intact after relaxation, to reject
+   cross-molecule bonds at placement / n-tuplet packing / clash recovery
+   (``adsorbate_overlap``; single source of truth via
+   :func:`~metalsurfer.filters.adsorbates_mutually_disconnected`), and to
+   inflate BO predictive ``sigma`` beside committed adsorbates (factor
+   returns to 1 once the closest covalent-sum ratio reaches twice this
+   value). In-plane site occupancy still uses ``min_adsorbate_separation``.
 
 ``max_adsorption_energy``
    **Type:** ``float`` · **Default:** ``5.0`` (eV)
@@ -830,17 +839,6 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
 
    Exponential decay vs step age within the transfer window (``0`` = most recent
    prior step).
-
-``bo.transfer.occupancy_lengthscale``
-   **Type:** ``float`` · **Default:** ``1.0``
-
-   Downweight prior rows near the previous step's winning placement site to reduce
-   redundant re-exploration.
-
-``bo.transfer.occupancy_floor``
-   **Type:** ``float`` · **Default:** ``0.0``
-
-   Minimum transfer modifier at the executed placement site after occupancy decay.
 
 Saturation
 ~~~~~~~~~~

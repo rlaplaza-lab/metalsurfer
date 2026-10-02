@@ -565,13 +565,14 @@ Initial geometry validation
 Always: covalent floor
 ``max(min_initial_distance, covalent_sum * min_contact_ratio)``, optional
 ``max_initial_distance``, then optional VDW when ``reject_vdw_overlaps``.
-Under coverage: adsorbate–adsorbate separation. Contact quality only when
+Under coverage: adsorbate–adsorbate disconnection via
+``connectivity_multiplier``. Contact quality only when
 ``strict_initial_placement`` or ``require_multiple_contact`` (closest approach,
 contact count, then variance). User-facing summary: :doc:`configuration`.
 
 Under saturation, substrate contact uses ``exclude_slab_atoms``;
-pre-adsorbed atoms use ``check_adsorbate_separation``. Typed failure
-reasons include ``too_close``, ``too_far``, ``vdw_overlap``,
+pre-adsorbed atoms use :func:`~metalsurfer.filters.adsorbates_mutually_disconnected`.
+Typed failure reasons include ``too_close``, ``too_far``, ``vdw_overlap``,
 ``adsorbate_overlap``, …
 
 

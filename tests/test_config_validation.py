@@ -883,8 +883,6 @@ def test_bo_defaults():
     assert c.bo.transfer.proximity_floor == 0.0
     assert c.bo.transfer.prior_step_window == 2
     assert c.bo.transfer.recency_lengthscale == 4.0
-    assert c.bo.transfer.occupancy_lengthscale == 1.0
-    assert c.bo.transfer.occupancy_floor == 0.0
 
 
 def test_resolved_bo_eval_budget():
@@ -967,14 +965,6 @@ def test_bo_eval_helpers_require_resolved_batch_fields(fn):
         (
             {"bo": BOConfig(transfer=BOTransferConfig(recency_lengthscale=-1.0))},
             "bo.transfer.recency_lengthscale",
-        ),
-        (
-            {"bo": BOConfig(transfer=BOTransferConfig(occupancy_lengthscale=-1.0))},
-            "bo.transfer.occupancy_lengthscale",
-        ),
-        (
-            {"bo": BOConfig(transfer=BOTransferConfig(occupancy_floor=1.5))},
-            "bo.transfer.occupancy_floor",
         ),
         (
             {"bo": BOConfig(transfer=BOTransferConfig(min_similarity=-0.1))},

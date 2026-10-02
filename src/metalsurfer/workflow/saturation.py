@@ -13,8 +13,6 @@ from .._logging import log_context
 from ..config import AdsorptionConfig
 from ..conformers import create_conformers_from_smiles
 from ..filters import adsorbate_connected_components
-from ..ml.features import extract_features
-from ..ml.schema import PlacementRecord
 from ..models import (
     BOStepMemory,
     BOTransferInfo,
@@ -491,23 +489,6 @@ def _saturation_step_preamble(
     return _SaturationStepPreamble(symmetry_broken, E_slab, ref_step)
 
 
-def _committed_placement_features(
-    result: ScreeningResult,
-    *,
-    smiles: str,
-    surface_id: str,
-    config: AdsorptionConfig,
-) -> dict[str, float]:
-    """Feature row for a placement that was committed onto the slab."""
-    record = PlacementRecord.from_screening_result(
-        result,
-        smiles=smiles,
-        surface_id=surface_id,
-        config=config,
-    )
-    return extract_features(record)
-
-
 def _screen_saturation_molecule(
     *,
     smiles: str,
@@ -529,7 +510,6 @@ def _screen_saturation_molecule(
     conformers: list[Atoms] | None = None,
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
-    occupancy_placement_X: list[dict[str, float]] | None = None,
     site_context: object | None = None,
     debug_sites_step: int | None = None,
 ) -> tuple[list[ScreeningResult], BOTransferInfo | None, BOStepMemory | None]:
@@ -553,7 +533,6 @@ def _screen_saturation_molecule(
         kwargs["bo_step_memory_in"] = (
             _bo_transfer_memory_in(config, bo_state) if bo_state is not None else None
         )
-        kwargs["occupancy_placement_X"] = occupancy_placement_X
 
     outcome = process_fn(
         smiles,
@@ -809,7 +788,6 @@ def _run_single_molecule_saturation(
     current_slab = SlabContainer(base_slab.copy())
     steps: list[SaturationStepResult] = []
     bo_state = _BoMemoryState()
-    committed_placement_X: list[dict[str, float]] = []
     # SMILES per committed adsorbate unit already on the slab.
     units_on_slab: list[str] = []
 
@@ -866,7 +844,6 @@ def _run_single_molecule_saturation(
                     bo_step_memory_in=_bo_transfer_memory_in(config, bo_state)
                     if bo_state is not None
                     else None,
-                    occupancy_placement_X=committed_placement_X or None,
                     conformers=cached_conformers,
                     conformer_energies=cached_conformer_energies,
                     skip_workload_autotune=True,
@@ -933,7 +910,6 @@ def _run_single_molecule_saturation(
                 conformers=cached_conformers,
                 conformer_energies=cached_conformer_energies,
                 skip_workload_autotune=True,
-                occupancy_placement_X=committed_placement_X or None,
                 debug_sites_step=step,
             )
             if bo_enabled:
@@ -984,16 +960,8 @@ def _run_single_molecule_saturation(
                 committed_results=outcome.committed,
             )
         )
-        for placement in outcome.committed:
+        for _placement in outcome.committed:
             units_on_slab.append(smiles)
-            committed_placement_X.append(
-                _committed_placement_features(
-                    placement,
-                    smiles=smiles,
-                    surface_id=surface_type,
-                    config=config,
-                )
-            )
         omega, e_ads, label = _step_ranking_snapshot(
             committed=outcome.committed,
             pool_best=outcome.best,
@@ -1137,7 +1105,6 @@ def _run_multi_molecule_saturation(
     bo_states: dict[str, _BoMemoryState] = {
         mol: _BoMemoryState() for mol in active_molecules
     }
-    committed_placement_X: list[dict[str, float]] = []
 
     def screen_step(
         step: int,
@@ -1315,7 +1282,6 @@ def _run_multi_molecule_saturation(
                 conformers=conformer_cache[mol][0],
                 conformer_energies=conformer_cache[mol][1],
                 skip_workload_autotune=True,
-                occupancy_placement_X=committed_placement_X or None,
                 site_context=shared_site_context,
             )
             per_molecule_bo_transfer[mol] = transfer_info
@@ -1405,16 +1371,6 @@ def _run_multi_molecule_saturation(
             placement.molecule for placement in committed
         ).items():
             molecule_counts[molecule_name] += count
-        for placement in committed:
-            winning_smiles = active_smiles[placement.molecule]
-            committed_placement_X.append(
-                _committed_placement_features(
-                    placement,
-                    smiles=winning_smiles,
-                    surface_id=surface_type,
-                    config=config,
-                )
-            )
 
         omega, e_ads, label = _step_ranking_snapshot(
             committed=committed,

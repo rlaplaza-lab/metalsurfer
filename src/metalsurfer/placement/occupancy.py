@@ -238,38 +238,25 @@ def available_site_indices(
     return [i for i, keep in enumerate(anchor_mask) if keep]
 
 
-def _positions_mutually_clear(
-    a_pos: np.ndarray,
-    b_pos: np.ndarray,
-    *,
-    cell: np.ndarray,
-    pbc: list[bool],
-    min_separation: float,
-) -> bool:
-    """Return whether every pair of positions is at least *min_separation* apart (MIC)."""
-    a_arr = _normalize_existing_positions(a_pos)
-    b_arr = _normalize_existing_positions(b_pos)
-    if a_arr.size == 0 or b_arr.size == 0:
-        return True
-    dists = geom._mol_slab_pairwise_distances(a_arr, b_arr, cell, pbc)
-    return bool(np.min(dists) >= float(min_separation))
-
-
 def results_mutually_clear(
     a_atoms_suffix: Atoms,
     b_atoms_suffix: Atoms,
     *,
     cell: np.ndarray,
-    pbc: list[bool],
-    min_separation: float,
+    material_type: str,
+    connectivity_multiplier: float,
 ) -> bool:
-    """Whether two adsorbate fragments can coexist on one slab (MIC)."""
-    return _positions_mutually_clear(
-        np.asarray(a_atoms_suffix.get_positions(), dtype=float),
-        np.asarray(b_atoms_suffix.get_positions(), dtype=float),
+    """Whether two adsorbate fragments share no covalent bond (MIC)."""
+    # Lazy import: filters imports placement.geometry; a top-level import here
+    # cycles when ``filters`` is loaded before the placement package finishes.
+    from ..filters import adsorbates_mutually_disconnected
+
+    return adsorbates_mutually_disconnected(
+        a_atoms_suffix,
+        b_atoms_suffix,
+        connectivity_multiplier,
+        material_type=material_type,
         cell=cell,
-        pbc=pbc,
-        min_separation=min_separation,
     )
 
 

@@ -20,6 +20,10 @@ from ase import Atoms
 from sklearn.preprocessing import StandardScaler
 
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
+from ..filters import (
+    min_interadsorbate_covalent_ratio,
+    occupancy_sigma_scale,
+)
 from ..ml.bayesian import (
     build_spec_features_geometry_aware,
     score_and_select,
@@ -596,7 +600,6 @@ def process_joint_tuplet_bayesian(
     slab_energy_override: float | None = None,
     symmetry_broken: bool = False,
     bo_step_memory_in: BOStepMemory | None = None,
-    occupancy_placement_X: list[dict[str, float]] | None = None,
     conformers: list[Atoms] | None = None,
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
@@ -826,13 +829,36 @@ def process_joint_tuplet_bayesian(
                 transfer_memory=bo_step_memory_in,
                 state=transfer_state,
                 config=config,
-                occupancy_placement_X=occupancy_placement_X,
             )
             batch_size = min(config.bo.batch_size, len(unevaluated))
             acquisition = config.bo.acquisition
             f_best = best_energy if np.isfinite(best_energy) else None
             if acquisition in ("ei", "pi") and f_best is None:
                 acquisition = "lcb"
+            surface_prefix = len(slab_for_sites)
+            occupied = (
+                slab.atoms[surface_prefix:]
+                if len(slab.atoms) > surface_prefix
+                else Atoms()
+            )
+            cell_arr = np.asarray(slab.atoms.get_cell(), dtype=float)
+            sigma_scale = np.ones(len(candidate_features), dtype=float)
+            if len(occupied) > 0:
+                for pool_i, spec_i in enumerate(valid_spec_indices):
+                    spec = all_specs[spec_i]
+                    cached = materialization_cache.get(int(spec.placement_index))
+                    if cached is None:
+                        continue
+                    ads, _desc = cached
+                    ratio = min_interadsorbate_covalent_ratio(
+                        ads,
+                        occupied,
+                        material_type=config.material_type,
+                        cell=cell_arr,
+                    )
+                    sigma_scale[pool_i] = occupancy_sigma_scale(
+                        ratio, float(config.connectivity_multiplier)
+                    )
             next_anchors = score_and_select(
                 surrogate,
                 candidate_features,
@@ -843,6 +869,7 @@ def process_joint_tuplet_bayesian(
                 f_best=f_best,
                 scaled_features=scaled_candidate_features,
                 n_jobs=config.n_jobs,
+                sigma_scale=sigma_scale,
             )
             if transfer_active and config.bo.transfer.exploration_fraction > 0:
                 next_anchors = splice_exploration_picks(

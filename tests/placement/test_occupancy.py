@@ -1507,35 +1507,48 @@ def test_results_mutually_clear_accepts_separated_fragments():
         _water_suffix_at(3.0),
         _water_suffix_at(7.0),
         cell=slab.get_cell(),
-        pbc=material_aware_pbc("slab"),
-        min_separation=2.0,
+        material_type="slab",
+        connectivity_multiplier=1.3,
     )
     assert clear
 
 
 def test_results_mutually_clear_rejects_overlapping_fragments():
-    """Two fragments at the same site clash below any sane min_separation."""
+    """Two fragments at the same site share a connected component."""
     slab = make_slab()
     clear = results_mutually_clear(
         _water_suffix_at(5.0),
         _water_suffix_at(5.2),
         cell=slab.get_cell(),
-        pbc=material_aware_pbc("slab"),
-        min_separation=2.0,
+        material_type="slab",
+        connectivity_multiplier=1.3,
     )
     assert not clear
 
 
-def test_results_mutually_clear_honours_boundary_equality():
-    """Distance exactly at min_separation counts as clear (>= semantics)."""
+def test_results_mutually_clear_honours_connectivity_boundary():
+    """Just outside the H–H cutoff is clear; just inside is not."""
+    from ase.data import atomic_numbers, covalent_radii
+
     slab = make_slab()
+    r_h = float(covalent_radii[atomic_numbers["H"]])
+    cutoff = 1.3 * (2.0 * r_h)
     a = Atoms("H", positions=[[10.0, 5.4, 5.7]])
-    b = Atoms("H", positions=[[12.0, 5.4, 5.7]])
+    b_ok = Atoms("H", positions=[[10.0 + cutoff + 0.05, 5.4, 5.7]])
+    b_bad = Atoms("H", positions=[[10.0 + cutoff - 0.05, 5.4, 5.7]])
     assert results_mutually_clear(
-        a, b, cell=slab.get_cell(), pbc=material_aware_pbc("slab"), min_separation=2.0
+        a,
+        b_ok,
+        cell=slab.get_cell(),
+        material_type="slab",
+        connectivity_multiplier=1.3,
     )
     assert not results_mutually_clear(
-        a, b, cell=slab.get_cell(), pbc=material_aware_pbc("slab"), min_separation=2.01
+        a,
+        b_bad,
+        cell=slab.get_cell(),
+        material_type="slab",
+        connectivity_multiplier=1.3,
     )
 
 
@@ -1543,12 +1556,12 @@ def test_results_mutually_clear_wraps_periodic_images():
     """A fragment near +x edge clashes with its -x periodic image."""
     slab = make_slab()
     cell = np.asarray(slab.get_cell(), dtype=float)
-    near_edge = Atoms("H", positions=[[cell[0][0] - 0.5, 5.4, 5.7]])
-    other_side = Atoms("H", positions=[[0.5, 5.4, 5.7]])
+    near_edge = Atoms("H", positions=[[cell[0][0] - 0.2, 5.4, 5.7]])
+    other_side = Atoms("H", positions=[[0.2, 5.4, 5.7]])
     assert not results_mutually_clear(
         near_edge,
         other_side,
         cell=slab.get_cell(),
-        pbc=material_aware_pbc("slab"),
-        min_separation=2.0,
+        material_type="slab",
+        connectivity_multiplier=1.3,
     )

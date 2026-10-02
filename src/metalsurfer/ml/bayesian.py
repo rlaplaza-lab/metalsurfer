@@ -579,22 +579,6 @@ def _align_to_columns(df: pd.DataFrame, ref: pd.DataFrame) -> pd.DataFrame:
     return df.reindex(columns=ref.columns, fill_value=0.0)
 
 
-def _placement_feature_frame(
-    placement_X: pd.DataFrame | list[dict[str, float]] | dict[str, float] | None,
-    ref: pd.DataFrame,
-) -> pd.DataFrame:
-    """Coerce occupancy / placement anchors to a DataFrame aligned to *ref*."""
-    if placement_X is None:
-        return pd.DataFrame(columns=ref.columns)
-    if isinstance(placement_X, pd.DataFrame):
-        frame = placement_X.copy()
-    elif isinstance(placement_X, dict):
-        frame = pd.DataFrame([placement_X])
-    else:
-        frame = pd.DataFrame(placement_X)
-    return _align_to_columns(frame, ref)
-
-
 def prior_similarity_to_current(
     X_prior: pd.DataFrame,
     X_current: pd.DataFrame,
@@ -643,36 +627,6 @@ def prior_recency_weights(
     return np.exp(-ages / float(lengthscale))
 
 
-def prior_placement_downweight(
-    X_prior: pd.DataFrame,
-    placement_X: pd.DataFrame,
-    *,
-    lengthscale: float,
-    floor: float = 0.0,
-) -> np.ndarray:
-    """Reduce transfer weight for prior rows near executed placement sites.
-
-    Parameters
-    ----------
-    X_prior
-        Prior feature matrix.
-    placement_X
-        Feature rows of committed (on-slab) placements; all rows are used as
-        occupancy anchors.
-    lengthscale
-        Length scale for the exponential distance kernel.
-    floor
-        Minimum downweight value.
-    """
-    if len(X_prior) == 0:
-        return np.array([], dtype=float)
-    if len(placement_X) == 0:
-        return np.ones(len(X_prior), dtype=float)
-    min_dist = _min_feature_distances(X_prior, placement_X)
-    near = np.exp(-min_dist / float(lengthscale))
-    return np.maximum(floor, 1.0 - near)
-
-
 def prior_proximity_weights(
     X_prior: pd.DataFrame,
     X_anchor: pd.DataFrame,
@@ -710,18 +664,12 @@ def cumulative_refit_training_set(
     weight_cap: float,
     proximity_lengthscale: float,
     proximity_floor: float = 0.0,
-    occupancy_placement_X: (
-        pd.DataFrame | list[dict[str, float]] | dict[str, float] | None
-    ) = None,
-    occupancy_lengthscale: float | None = None,
-    occupancy_floor: float = 0.0,
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     """Assemble the cumulative-refit training set as ``(X, y, sample_weight)``.
 
     Rows are ordered prior-first, then current. Current observations get weight
-    1.0; prior observations are proximity-to-current × occupancy-downweight,
-    then renormalised so their total mass is ``weight_cap`` of the combined mass.
-    Empty ``occupancy_placement_X`` leaves the occupancy factor at 1.0.
+    1.0; prior observations are proximity-to-current, then renormalised so their
+    total mass is ``weight_cap`` of the combined mass.
 
     This returns the features, targets and weights together on purpose. The
     previous API returned only the weight vector, leaving the caller to
@@ -746,14 +694,6 @@ def cumulative_refit_training_set(
         Length scale for proximity-based weighting toward current observations.
     proximity_floor
         Minimum proximity weight value.
-    occupancy_placement_X
-        Feature rows of committed (on-slab) placements used to downweight priors
-        near occupied sites. ``None`` / empty leaves occupancy at 1.0.
-    occupancy_lengthscale
-        Length scale for occupancy downweighting; defaults to
-        ``proximity_lengthscale``.
-    occupancy_floor
-        Minimum occupancy downweight value.
     """
     if len(X_prior) != len(y_prior):
         raise ValueError(
@@ -776,28 +716,12 @@ def cumulative_refit_training_set(
         lengthscale=proximity_lengthscale,
         floor=proximity_floor,
     )
-    placement_df = _placement_feature_frame(occupancy_placement_X, X_current)
-    if len(placement_df) == 0:
-        occupancy = np.ones(n_prior, dtype=float)
-    else:
-        occ_ls = (
-            float(proximity_lengthscale)
-            if occupancy_lengthscale is None
-            else float(occupancy_lengthscale)
-        )
-        occupancy = prior_placement_downweight(
-            X_prior,
-            placement_df,
-            lengthscale=occ_ls,
-            floor=occupancy_floor,
-        )
-    modifiers = prox * occupancy
-    total_mod = float(np.sum(modifiers))
+    total_mod = float(np.sum(prox))
     prior_weights: np.ndarray = np.zeros(n_prior, dtype=float)
     if total_mod > 0.0:
         max_transfer_weight = n_current * weight_cap / max(1.0 - weight_cap, 1e-8)
         prior_weights = np.asarray(
-            modifiers / max(total_mod, 1e-8) * max_transfer_weight, dtype=float
+            prox / max(total_mod, 1e-8) * max_transfer_weight, dtype=float
         )
 
     X_combined = pd.concat([X_prior, X_current], ignore_index=True)
@@ -952,11 +876,6 @@ def build_transfer_surrogate(
     proximity_lengthscale: float | None = None,
     prior_step_ages: list[int] | None = None,
     recency_lengthscale: float | None = None,
-    prior_placement_X: (
-        pd.DataFrame | list[dict[str, float]] | dict[str, float] | None
-    ) = None,
-    occupancy_lengthscale: float | None = None,
-    occupancy_floor: float = 0.0,
     n_jobs: int = -1,
 ) -> TransferSurrogateResult:
     """Train baseline or transfer-weighted surrogate with production trust gating.
@@ -993,17 +912,11 @@ def build_transfer_surrogate(
     trust_patience
         Maximum allowed consecutive bad rounds before disabling transfer.
     proximity_lengthscale
-        Length scale for proximity weighting (also default for occupancy).
+        Unused alias kept for call-site compatibility; similarity drives gating.
     prior_step_ages
         Ages of prior observations for recency decay.
     recency_lengthscale
         Length scale for recency decay.
-    prior_placement_X
-        Features of previously executed placements.
-    occupancy_lengthscale
-        Length scale for occupancy-based downweighting.
-    occupancy_floor
-        Minimum occupancy weight value.
     n_jobs
         CPU workers forwarded to every surrogate fit (joblib convention).
     """
@@ -1050,16 +963,8 @@ def build_transfer_surrogate(
             ", ".join(sorted(_X_prev_raw_columns - _X_current_columns)),
             ", ".join(sorted(_X_current_columns - _X_prev_raw_columns)),
         )
-    prox_lengthscale = (
-        float(similarity_lengthscale)
-        if proximity_lengthscale is None
-        else float(proximity_lengthscale)
-    )
-    occ_lengthscale = (
-        prox_lengthscale
-        if occupancy_lengthscale is None
-        else float(occupancy_lengthscale)
-    )
+    # proximity_lengthscale is accepted for API stability; similarity gates rows.
+    _ = proximity_lengthscale
     recency_ls = (
         float(similarity_lengthscale)
         if recency_lengthscale is None
@@ -1093,27 +998,7 @@ def build_transfer_surrogate(
         if step_ages_arr is not None and len(step_ages_arr) == len(X_prev)
         else np.ones(len(X_prev), dtype=float)
     )
-    placement_df = _placement_feature_frame(prior_placement_X, X_current)
-    if len(placement_df) > 0:
-        occupancy = prior_placement_downweight(
-            X_prev,
-            placement_df,
-            lengthscale=occ_lengthscale,
-            floor=occupancy_floor,
-        )
-    elif len(X_prev) <= 1:
-        occupancy = np.ones(len(X_prev), dtype=float)
-    else:
-        # No occupancy anchors: invert self-proximity so clustered priors
-        # are down-weighted (distinct from cumulative_refit upweighting).
-        prox = prior_proximity_weights(
-            X_prev,
-            X_prev,
-            lengthscale=occ_lengthscale,
-            floor=0.0,
-        )
-        occupancy = np.maximum(occupancy_floor, 1.0 - prox)
-    modifiers = recency * occupancy
+    modifiers = recency
     if float(np.sum(modifiers)) <= 0.0:
         return _no_transfer(_fit_baseline(), transfer_bad_rounds)
 
@@ -1738,6 +1623,7 @@ def score_and_select(
     f_best: float | None = None,
     scaled_features: np.ndarray | None = None,
     n_jobs: int | None = None,
+    sigma_scale: np.ndarray | None = None,
 ) -> list[int]:
     """Score candidates with the given acquisition and select the top batch.
 
@@ -1770,8 +1656,20 @@ def score_and_select(
     n_jobs
         CPU workers for per-tree uncertainty prediction (joblib convention);
         forwarded to :func:`predict_with_uncertainty`.
+    sigma_scale
+        Optional per-candidate multiplier on predictive ``sigma`` (e.g.
+        occupancy inflation near committed adsorbates). Must match the number
+        of candidate rows when set.
     """
     mu, sigma = predict_with_uncertainty(model, candidate_features, n_jobs=n_jobs)
+    if sigma_scale is not None:
+        scale = np.asarray(sigma_scale, dtype=float).ravel()
+        if scale.shape[0] != sigma.shape[0]:
+            raise ValueError(
+                f"sigma_scale length ({scale.shape[0]}) must match "
+                f"candidates ({sigma.shape[0]})"
+            )
+        sigma = sigma * scale
     if acquisition == "lcb":
         scores = lcb_scores(mu, sigma, kappa=kappa)
         return select_candidates_batch_diverse(

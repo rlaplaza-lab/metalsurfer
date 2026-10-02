@@ -14,6 +14,10 @@ from ..config import (
     AdsorptionConfig,
     resolved_bo_eval_budget,
 )
+from ..filters import (
+    min_interadsorbate_covalent_ratio,
+    occupancy_sigma_scale,
+)
 from ..ml.bayesian import (
     TransferCapableSurrogateType,
     _align_to_columns,
@@ -116,9 +120,8 @@ def _fit_cumulative_refit_round(
     transfer_memory: BOStepMemory,
     state: _TransferRoundState,
     config: AdsorptionConfig,
-    occupancy_placement_X: list[dict[str, float]] | None,
 ) -> Any:
-    """Fit one cumulative_refit round with occupancy weights and OOF trust gate."""
+    """Fit one cumulative_refit round with proximity weights and OOF trust gate."""
     transfer = config.bo.transfer
     X_prior = _align_to_columns(
         pd.DataFrame(transfer_memory.observed_X_rows), X_current
@@ -132,9 +135,6 @@ def _fit_cumulative_refit_round(
         weight_cap=transfer.weight_cap,
         proximity_lengthscale=transfer.proximity_lengthscale,
         proximity_floor=transfer.proximity_floor,
-        occupancy_placement_X=occupancy_placement_X,
-        occupancy_lengthscale=transfer.occupancy_lengthscale,
-        occupancy_floor=transfer.occupancy_floor,
     )
     n_prior = len(X_prior)
     prior_weights = np.asarray(refit_weights[:n_prior], dtype=float)
@@ -195,14 +195,13 @@ def _build_round_surrogate(
     transfer_memory: BOStepMemory | None,
     state: _TransferRoundState,
     config: AdsorptionConfig,
-    occupancy_placement_X: list[dict[str, float]] | None,
 ) -> tuple[Any, bool]:
     """Fit one acquisition round's surrogate with optional cross-step transfer.
 
     Supports both transfer modes (``weighted`` incremental trust gating and
-    ``cumulative_refit`` proximity×occupancy-weighted refits with the same OOF
-    MAE trust gate) and falls back to a plain current-observation fit whenever
-    transfer is unavailable or disabled.
+    ``cumulative_refit`` proximity-weighted refits with the same OOF MAE trust
+    gate) and falls back to a plain current-observation fit whenever transfer
+    is unavailable or disabled.
 
     Returns ``(surrogate, transfer_active)`` where *transfer_active* is true
     whenever transfer is eligible and not fully disabled. That flag drives
@@ -237,7 +236,6 @@ def _build_round_surrogate(
             transfer_memory=transfer_memory,
             state=state,
             config=config,
-            occupancy_placement_X=occupancy_placement_X,
         )
     elif can_try_weighted and transfer_memory is not None:
         transfer_result = build_transfer_surrogate(
@@ -258,9 +256,6 @@ def _build_round_surrogate(
             proximity_lengthscale=transfer.proximity_lengthscale,
             prior_step_ages=transfer_memory.step_ages,
             recency_lengthscale=transfer.recency_lengthscale,
-            prior_placement_X=occupancy_placement_X,
-            occupancy_lengthscale=transfer.occupancy_lengthscale,
-            occupancy_floor=transfer.occupancy_floor,
         )
         state.weight_share = transfer_result.transfer_weight_share
         state.last_mae_delta = transfer_result.transfer_mae_delta
@@ -297,7 +292,6 @@ def process_molecule_bayesian(
     slab_energy_override: float | None = None,
     symmetry_broken: bool = False,
     bo_step_memory_in: BOStepMemory | None = None,
-    occupancy_placement_X: list[dict[str, float]] | None = None,
     conformers: list[Atoms] | None = None,
     conformer_energies: list[float] | None = None,
     skip_workload_autotune: bool = False,
@@ -335,9 +329,6 @@ def process_molecule_bayesian(
         Whether symmetry is broken.
     bo_step_memory_in
         Prior BO step memory for transfer learning.
-    occupancy_placement_X
-        Feature rows of placements already committed on the slab; used as
-        occupancy anchors for transfer down-weighting.
     conformers
         Pre-generated conformers (optional).
     conformer_energies
@@ -709,7 +700,6 @@ def process_molecule_bayesian(
                 transfer_memory=bo_step_memory_in,
                 state=transfer_state,
                 config=config,
-                occupancy_placement_X=occupancy_placement_X,
             )
 
             batch_size = min(config.bo.batch_size, len(unevaluated))
@@ -722,6 +712,29 @@ def process_molecule_bayesian(
                     acquisition,
                 )
                 acquisition = "lcb"
+            occupied = (
+                slab.atoms[surface_prefix_atoms:]
+                if len(slab.atoms) > surface_prefix_atoms
+                else Atoms()
+            )
+            cell_arr = np.asarray(slab.atoms.get_cell(), dtype=float)
+            sigma_scale = np.ones(len(candidate_features), dtype=float)
+            if len(occupied) > 0:
+                for pool_i, spec_i in enumerate(valid_spec_indices):
+                    spec = all_specs[spec_i]
+                    cached = materialization_cache.get(int(spec.placement_index))
+                    if cached is None:
+                        continue
+                    ads, _desc = cached
+                    ratio = min_interadsorbate_covalent_ratio(
+                        ads,
+                        occupied,
+                        material_type=config.material_type,
+                        cell=cell_arr,
+                    )
+                    sigma_scale[pool_i] = occupancy_sigma_scale(
+                        ratio, float(config.connectivity_multiplier)
+                    )
             next_positions = score_and_select(
                 surrogate,
                 candidate_features,
@@ -732,6 +745,7 @@ def process_molecule_bayesian(
                 f_best=f_best,
                 scaled_features=scaled_candidate_features,
                 n_jobs=config.n_jobs,
+                sigma_scale=sigma_scale,
             )
             # Random exploration only while transfer learning is active.
             # Pure BO screening keeps the full acquisition batch.
