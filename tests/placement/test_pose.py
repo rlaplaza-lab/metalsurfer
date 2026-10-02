@@ -211,7 +211,7 @@ def test_validate_posed_adsorbate_uses_material_pbc(monkeypatch):
         return True
 
     monkeypatch.setattr(
-        "metalsurfer.filters.adsorbates_mutually_disconnected",
+        "metalsurfer.placement.pose.adsorbates_mutually_disconnected",
         _fake_disconnected,
     )
 

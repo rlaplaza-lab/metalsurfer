@@ -6,7 +6,7 @@ script builds a substrate, sets only the knobs that define that run, then calls
 Production/HPC campaigns live under `scripts/` as standalone copy-paste
 workflows (for example `scripts/co_pt111_ntuplet_phases.py` for fixed-coverage
 CO/Pt(111) joint n-tuplet searches, and
-`scripts/oh_pt111_ntuple_saturation.py` for sequential vs 3-tuplet OH on one
+`scripts/oh_pt111_ntuplet_saturation.py` for sequential vs 3-tuplet OH on one
 Pt(111) cell).
 
 | Script | Description |

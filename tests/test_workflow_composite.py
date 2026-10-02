@@ -25,8 +25,6 @@ from .conftest import (
     place_molecule_on_slab,
 )
 
-SLAB_PBC = [True, True, False]
-
 
 def _winner(
     slab: Atoms,
@@ -399,7 +397,7 @@ class TestEvaluateCompositeCommit:
         assert rewritten == []
         assert "topology rearrangement guard" in failure
 
-    def test_energy_cap_applies_to_tuplet_total(self, monkeypatch):
+    def test_energy_cap_applies_per_molecule(self, monkeypatch):
         # Per-molecule E_ads = (1000 + 220) / 2 >> default cap of 5 eV.
         _, _, rewritten, failure = _evaluate_two_clear_winners(
             monkeypatch, energy=1000.0

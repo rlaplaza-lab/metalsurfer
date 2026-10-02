@@ -19,7 +19,7 @@ sequential-versus-tuplet comparison at fixed coverage.
 
 Requires: ``pip install -e ".[mlip]"``. Run from the project root::
 
-    python scripts/oh_pt111_ntuple_saturation.py
+    python scripts/oh_pt111_ntuplet_saturation.py
 """
 
 from __future__ import annotations

@@ -347,8 +347,8 @@ def pack_exact_tuplet(
         )
         if rescued is None:
             return None
-        # Clash success can land on the equality boundary of the bond cutoff;
-        # re-check with the shared disconnect predicate as the SSOT gate.
+        # Clash success can sit on the bond-cutoff boundary; recheck with the
+        # shared adsorbate disconnect predicate.
         still_clear = all(
             adsorbates_mutually_disconnected(
                 rescued.atoms[rescued.slab_size :],

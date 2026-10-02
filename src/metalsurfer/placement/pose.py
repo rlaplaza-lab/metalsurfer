@@ -14,6 +14,7 @@ from ase.geometry import find_mic
 from .._utils import cell_has_volume
 from .._utils import is_finite_number as _is_finite_number
 from ..config import AdsorptionConfig
+from ..filters import adsorbates_mutually_disconnected
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
 from . import geometry as geom
 from ._constants import (
@@ -1841,19 +1842,14 @@ def _validate_posed_adsorbate(
 
     if exclude_n is not None and exclude_n < len(slab):
         pre_ads = slab[exclude_n:]
-        if len(pre_ads) > 0:
-            # Lazy import: filters imports placement.geometry; avoid cycle when
-            # placement loads pose while filters is still initializing.
-            from ..filters import adsorbates_mutually_disconnected
-
-            if not adsorbates_mutually_disconnected(
-                adsorbate,
-                pre_ads,
-                float(config.connectivity_multiplier),
-                material_type=mat_type,
-                cell=np.asarray(slab.get_cell(), dtype=float),
-            ):
-                return "adsorbate_overlap"
+        if len(pre_ads) > 0 and not adsorbates_mutually_disconnected(
+            adsorbate,
+            pre_ads,
+            float(config.connectivity_multiplier),
+            material_type=mat_type,
+            cell=np.asarray(slab.get_cell(), dtype=float),
+        ):
+            return "adsorbate_overlap"
 
     if config.strict_initial_placement or config.require_multiple_contact:
         contact_ok, contact_reason = geom.check_initial_contact_quality(

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ranking for single-unit and joint commits shares one helper
   (``joint_config_ranking_energy``); BO occupancy sigma inflation is shared
   between sequential and joint BO loops.
+- ``scripts/oh_pt111_ntuple_saturation.py`` renamed to
+  ``scripts/oh_pt111_ntuplet_saturation.py`` (matches n-tuplet naming).
 
 ### Removed
 

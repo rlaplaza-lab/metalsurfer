@@ -12,6 +12,7 @@ from metalsurfer.placement.clash import (
     overlap_penalty,
     pair_scales_for_fixed_cloud,
     resolve_rigid_clash,
+    tuplet_clash_rescue_floor,
 )
 from metalsurfer.placement.geometry import compute_surface_site_frame
 
@@ -266,8 +267,6 @@ def test_pair_scales_for_fixed_cloud_substrate_vs_adsorbate():
 
 
 def test_tuplet_clash_rescue_floor_scales_with_radii():
-    from metalsurfer.placement.clash import tuplet_clash_rescue_floor
-
     floor_hh = tuplet_clash_rescue_floor(["H"], ["H"])
     floor_oo = tuplet_clash_rescue_floor(["O"], ["O"])
     assert floor_oo > floor_hh

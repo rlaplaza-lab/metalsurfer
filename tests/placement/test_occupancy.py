@@ -1463,7 +1463,7 @@ def test_initial_placement_distance_packs_free_rejects_blocked_each_material(
     for _spec, adsorbate, _desc in _generate_placements(
         water_conformers(), structure, config, smiles="O", n_desired=8
     ):
-        ok_free, _, reason_free = check_initial_placement_distance(
+        ok_free, _, _ = check_initial_placement_distance(
             adsorbate, structure, material_type=material_type
         )
         if ok_free:
