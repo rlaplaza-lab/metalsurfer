@@ -247,7 +247,7 @@ def test_generate_placements_from_specs_builds_pose_cache_once_for_misses(
         build_calls.append((args, kwargs))
         return pose_cache
 
-    def fake_generate(spec, _conformers, passed_slab, passed_config, **kwargs):
+    def fake_generate(spec, _conformers, passed_slab, _passed_config, **kwargs):
         generate_calls[spec.placement_index] = (
             passed_slab,
             kwargs.get("slab_for_sites"),

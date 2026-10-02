@@ -2630,7 +2630,7 @@ def test_run_saturation_screening_n_tuplet_single_molecule_path(monkeypatch, wor
     assert len(out[0].final_slab_atoms) == base_n + 2 * len(make_water())
 
 
-def test_n_tuplet_unbound_composite_retries_single_winner(monkeypatch, workdir):
+def test_n_tuplet_unbound_composite_commits_nothing(monkeypatch, workdir):
     """Ω_tuplet ≥ 0 after joint relax commits nothing (no single-winner fallback)."""
     slab = make_slab()
     base_n = len(slab)

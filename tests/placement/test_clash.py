@@ -108,7 +108,6 @@ def test_resolve_rigid_clash_separates_near_overlap():
     fixed_pos = fixed_atoms.get_positions()
     fixed_radii = atom_radii_for_symbols(
         list(fixed_atoms.get_chemical_symbols()),
-        min_separation=config.min_adsorbate_separation,
     )
     frame = compute_surface_site_frame(np.array([0.0, 0.0, 1.0]))
     cell = np.eye(3) * 20.0
@@ -182,7 +181,6 @@ def test_resolve_rigid_clash_deterministic():
     moving.set_positions(pos)
     fixed_radii = atom_radii_for_symbols(
         list(water.get_chemical_symbols()),
-        min_separation=config.min_adsorbate_separation,
     )
     frame = compute_surface_site_frame(np.array([0.0, 0.0, 1.0]))
     cell = np.eye(3) * 20.0
@@ -270,11 +268,16 @@ def test_pair_scales_for_fixed_cloud_substrate_vs_adsorbate():
 def test_tuplet_clash_rescue_floor_scales_with_radii():
     from metalsurfer.placement.clash import tuplet_clash_rescue_floor
 
-    floor_hh = tuplet_clash_rescue_floor(["H"], ["H"], min_separation=1.5)
-    floor_oo = tuplet_clash_rescue_floor(["O"], ["O"], min_separation=1.5)
+    floor_hh = tuplet_clash_rescue_floor(["H"], ["H"])
+    floor_oo = tuplet_clash_rescue_floor(["O"], ["O"])
     assert floor_oo > floor_hh
     r_o = float(covalent_radii[atomic_numbers["O"]])
     assert floor_oo == pytest.approx(0.5 * 2.0 * r_o)
+
+
+def test_atom_radii_for_symbols_fails_loud_on_unknown_symbol():
+    with pytest.raises(ValueError, match="no positive covalent radius.*Xx"):
+        atom_radii_for_symbols(["C", "Xx"])
 
 
 def test_resolve_rigid_clash_final_coords_use_one_mic(monkeypatch):
@@ -297,7 +300,6 @@ def test_resolve_rigid_clash_final_coords_use_one_mic(monkeypatch):
     moving.set_positions(pos)
     fixed_radii = atom_radii_for_symbols(
         list(water.get_chemical_symbols()),
-        min_separation=config.min_adsorbate_separation,
     )
     frame = compute_surface_site_frame(np.array([0.0, 0.0, 1.0]))
     cell = np.eye(3) * 20.0
@@ -324,7 +326,6 @@ def test_resolve_rigid_clash_final_coords_use_one_mic(monkeypatch):
         fixed_pair_scales=float(config.connectivity_multiplier),
         moving_radii=atom_radii_for_symbols(
             list(moving.get_chemical_symbols()),
-            min_separation=config.min_adsorbate_separation,
         ),
     )
     # Exactly one combined f+viol evaluation on the final coordinates.

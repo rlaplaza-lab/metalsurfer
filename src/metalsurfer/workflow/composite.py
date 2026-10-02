@@ -27,6 +27,7 @@ import numpy as np
 from ase import Atoms
 
 from ..config import AdsorptionConfig
+from ..filters import adsorbates_mutually_disconnected
 from ..models import ScreeningResult
 from ..optimization import optimize_adsorbate_slab_batched
 from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
@@ -43,7 +44,7 @@ from ..placement.geometry import (
     calculate_min_distance,
     compute_surface_site_frame,
 )
-from ..placement.occupancy import incoming_inplane_radius, results_mutually_clear
+from ..placement.occupancy import incoming_inplane_radius
 from ..placement.site_coords import _slab_normal
 from ..surface_prep import apply_material_pbc
 from ..surface_prep.freeze import check_frozen_substrate_displacement
@@ -104,7 +105,6 @@ def _fixed_cloud_from_coverage_and_results(
     results: Sequence[ScreeningResult],
     suffixes: Sequence[np.ndarray],
     *,
-    min_separation: float,
     n_substrate: int,
     adsorbate_scale: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -112,14 +112,10 @@ def _fixed_cloud_from_coverage_and_results(
 
     Returns ``(positions, radii, pair_scales)``. Substrate columns use scale
     ``1``; pre-adsorbed and packed adsorbate columns use *adsorbate_scale*
-    (``connectivity_multiplier``). *min_separation* is the unknown-radius
-    fallback.
+    (``connectivity_multiplier``).
     """
     fixed_pos = np.asarray(slab_atoms.get_positions(), dtype=float)
-    fixed_radii = atom_radii_for_symbols(
-        list(slab_atoms.get_chemical_symbols()),
-        min_separation=float(min_separation),
-    )
+    fixed_radii = atom_radii_for_symbols(list(slab_atoms.get_chemical_symbols()))
     scales = pair_scales_for_fixed_cloud(
         len(fixed_pos),
         n_substrate=int(n_substrate),
@@ -131,10 +127,7 @@ def _fixed_cloud_from_coverage_and_results(
         fixed_radii = np.concatenate(
             [
                 fixed_radii,
-                atom_radii_for_symbols(
-                    prev_syms,
-                    min_separation=float(min_separation),
-                ),
+                atom_radii_for_symbols(prev_syms),
             ]
         )
         scales = np.concatenate(
@@ -292,7 +285,6 @@ def pack_exact_tuplet(
 
     cell = np.asarray(slab_atoms.get_cell(), dtype=float)
     pbc = material_aware_pbc(config.material_type)
-    min_sep = float(config.min_adsorbate_separation)
     adsorbate_scale = float(config.connectivity_multiplier)
     clash_on = bool(config.placement_clash_descent)
 
@@ -302,12 +294,12 @@ def pack_exact_tuplet(
     for winner in winners[1:]:
         suffix = _suffix_positions(winner)
         clear = all(
-            results_mutually_clear(
+            adsorbates_mutually_disconnected(
                 winner.atoms[winner.slab_size :],
                 prev.atoms[prev.slab_size :],
-                cell=cell,
+                adsorbate_scale,
                 material_type=config.material_type,
-                connectivity_multiplier=adsorbate_scale,
+                cell=cell,
             )
             for prev in packed
         )
@@ -329,11 +321,7 @@ def pack_exact_tuplet(
             pre_ads = np.asarray(slab_atoms.get_positions()[substrate_n:], dtype=float)
             if pre_ads.size:
                 clearance_targets.append(pre_ads)
-        rescue_floor = tuplet_clash_rescue_floor(
-            cand_syms,
-            fixed_syms,
-            min_separation=min_sep,
-        )
+        rescue_floor = tuplet_clash_rescue_floor(cand_syms, fixed_syms)
         if (
             _min_dist_to_suffixes(suffix, clearance_targets, cell=cell, pbc=pbc)
             < rescue_floor
@@ -344,7 +332,6 @@ def pack_exact_tuplet(
             slab_atoms,
             packed,
             packed_suffixes,
-            min_separation=min_sep,
             n_substrate=substrate_n,
             adsorbate_scale=adsorbate_scale,
         )
@@ -363,22 +350,22 @@ def pack_exact_tuplet(
         # Clash success can land on the equality boundary of the bond cutoff;
         # re-check with the shared disconnect predicate as the SSOT gate.
         still_clear = all(
-            results_mutually_clear(
+            adsorbates_mutually_disconnected(
                 rescued.atoms[rescued.slab_size :],
                 prev.atoms[prev.slab_size :],
-                cell=cell,
+                adsorbate_scale,
                 material_type=config.material_type,
-                connectivity_multiplier=adsorbate_scale,
+                cell=cell,
             )
             for prev in packed
         )
         if still_clear and substrate_n < len(slab_atoms):
-            still_clear = results_mutually_clear(
+            still_clear = adsorbates_mutually_disconnected(
                 rescued.atoms[rescued.slab_size :],
                 slab_atoms[substrate_n:],
-                cell=cell,
+                adsorbate_scale,
                 material_type=config.material_type,
-                connectivity_multiplier=adsorbate_scale,
+                cell=cell,
             )
         if not still_clear:
             return None

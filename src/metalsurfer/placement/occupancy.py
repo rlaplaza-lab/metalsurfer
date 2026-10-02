@@ -45,8 +45,6 @@ def existing_adsorbate_positions(
 def existing_adsorbate_cloud(
     slab_for_sites: Atoms,
     full_slab: Atoms | None,
-    *,
-    min_separation: float,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """Existing adsorbate positions and covalent radii, or ``(None, None)``.
 
@@ -56,15 +54,13 @@ def existing_adsorbate_cloud(
         Bare substrate used for site detection.
     full_slab
         Full system that may include pre-adsorbed atoms.
-    min_separation
-        Fallback floor for unknown covalent radii (``dtol/2`` analogue).
     """
     pos = existing_adsorbate_positions(slab_for_sites, full_slab)
     if pos is None or full_slab is None:
         return None, None
     n_sub = len(slab_for_sites)
     symbols = list(full_slab.get_chemical_symbols()[n_sub:])
-    radii = atom_radii_for_symbols(symbols, min_separation=float(min_separation))
+    radii = atom_radii_for_symbols(symbols)
     return pos, radii
 
 
@@ -236,28 +232,6 @@ def available_site_indices(
         min_separation=min_separation,
     )
     return [i for i, keep in enumerate(anchor_mask) if keep]
-
-
-def results_mutually_clear(
-    a_atoms_suffix: Atoms,
-    b_atoms_suffix: Atoms,
-    *,
-    cell: np.ndarray,
-    material_type: str,
-    connectivity_multiplier: float,
-) -> bool:
-    """Whether two adsorbate fragments share no covalent bond (MIC)."""
-    # Lazy import: filters imports placement.geometry; a top-level import here
-    # cycles when ``filters`` is loaded before the placement package finishes.
-    from ..filters import adsorbates_mutually_disconnected
-
-    return adsorbates_mutually_disconnected(
-        a_atoms_suffix,
-        b_atoms_suffix,
-        connectivity_multiplier,
-        material_type=material_type,
-        cell=cell,
-    )
 
 
 def filter_sites_by_occupancy(

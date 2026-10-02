@@ -303,10 +303,22 @@ def _assert_survivor_physics(
 ) -> None:
     """Critical physics gates for campaign survivors (stubbed or real MLIP)."""
     assert np.isfinite(result.energy_adsorption)
-    assert result.energy_adsorption == pytest.approx(
-        result.energy_adslab - result.energy_slab - result.energy_adsorbate,
-        abs=E_ADS_IDENTITY_TOL,
+    # Single-molecule rows: E_ads == E_adslab - E_slab - E_mol.
+    # Joint n-tuplet rows store per-molecule E_ads, so the identity is n×E_ads.
+    residual = result.energy_adslab - result.energy_slab - result.energy_adsorbate
+    n_units = (
+        int(round(residual / result.energy_adsorption))
+        if result.energy_adsorption
+        else 1
     )
+    if abs(result.energy_adsorption) < E_ADS_IDENTITY_TOL:
+        assert residual == pytest.approx(0.0, abs=E_ADS_IDENTITY_TOL)
+    else:
+        assert n_units >= 1
+        assert residual == pytest.approx(
+            result.energy_adsorption * n_units,
+            abs=E_ADS_IDENTITY_TOL,
+        )
     d_lo, d_hi = _distance_window(material_type)
     assert d_lo <= result.distance <= d_hi, (
         f"Survivor must remain adsorbed ({d_lo}–{d_hi} Å), got {result.distance:.2f}"
@@ -325,8 +337,8 @@ def _assert_survivor_physics(
 
     # Same covalent-contact gate used at placement time (production path).
     # Saturation slabs carry co-adsorbates: production excludes them from the
-    # substrate gate (``exclude_slab_atoms``) and validates them with the looser
-    # adsorbate-separation gate instead, so mirror that split here.
+    # substrate gate (``exclude_slab_atoms``) and validates them with the
+    # adsorbate–adsorbate disconnect gate instead, so mirror that split here.
     n_substrate = (
         int(base_slab_size) if base_slab_size is not None else int(result.slab_size)
     )

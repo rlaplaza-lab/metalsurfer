@@ -384,6 +384,7 @@ def test_cache_helpers_are_thread_safe(
     monkeypatch: pytest.MonkeyPatch, stub_autobatcher
 ):
     """Concurrent get/clear must not raise and must leave a consistent cache."""
+    _ = stub_autobatcher
     import threading
 
     torch_stub = MagicMock()
@@ -839,6 +840,7 @@ def test_optimize_slab_raises_on_batch_size_mismatch(monkeypatch: pytest.MonkeyP
 
         @staticmethod
         def generate_force_convergence_fn(force_tol, include_cell_forces):
+            _ = (force_tol, include_cell_forces)
             return object()
 
         @staticmethod
@@ -906,6 +908,7 @@ def test_optimize_slab_rebuilds_states_after_cuda_oom(monkeypatch: pytest.Monkey
 
         @staticmethod
         def generate_force_convergence_fn(force_tol, include_cell_forces):
+            _ = (force_tol, include_cell_forces)
             return object()
 
         def optimize(self, **kwargs):
@@ -978,6 +981,7 @@ def test_optimize_slab_retries_after_batcher_capacity_error(
 
         @staticmethod
         def generate_force_convergence_fn(force_tol, include_cell_forces):
+            _ = (force_tol, include_cell_forces)
             return object()
 
         def optimize(self, **kwargs):
@@ -1111,6 +1115,7 @@ def test_optimize_slab_cuda_streams_states_via_inflight_iterator(
 
         @staticmethod
         def generate_force_convergence_fn(force_tol, include_cell_forces):
+            _ = (force_tol, include_cell_forces)
             return lambda state, last_energy: True
 
         @staticmethod
@@ -1359,6 +1364,7 @@ def test_get_inflight_autobatcher_saturation_reuses_small_growth(stub_autobatche
     eviction (``key[4] < max_n_atoms``) keeps — not evicts — the reused
     batcher for subsequent steps of the same size.
     """
+    _ = stub_autobatcher
     model = type("MockModel", (), {"device": "cpu"})()
     config = AdsorptionConfig(
         device="cpu",
@@ -1399,6 +1405,7 @@ def test_get_inflight_autobatcher_saturation_reuses_small_growth(stub_autobatche
 
 def test_get_inflight_autobatcher_non_saturation_uses_exact_size_key(stub_autobatcher):
     """Non-saturation mode should not reuse different max_n_atoms keys."""
+    _ = stub_autobatcher
     model = type("MockModel", (), {"device": "cpu"})()
     config = AdsorptionConfig(device="cpu")
     ab1, key1 = _cache._get_inflight_autobatcher(
@@ -1420,6 +1427,7 @@ def test_get_inflight_autobatcher_non_saturation_uses_exact_size_key(stub_autoba
 
 
 def test_get_inflight_autobatcher_uses_explicit_probe_cap(stub_autobatcher):
+    _ = stub_autobatcher
     model = type("MockModel", (), {"device": "cpu"})()
     config = AdsorptionConfig(device="cpu", autobatcher_max_atoms_to_try=123_456)
     _, key = _cache._get_inflight_autobatcher(
@@ -1434,6 +1442,7 @@ def test_get_inflight_autobatcher_uses_explicit_probe_cap(stub_autobatcher):
 
 def test_get_inflight_autobatcher_scaler_ignores_probe_cap(stub_autobatcher):
     """Known scaler must share one batcher across BO-sized probe caps."""
+    _ = stub_autobatcher
     model = type("MockModel", (), {"device": "cpu"})()
     config = AdsorptionConfig(device="cpu", autobatcher_max_memory_scaler=500.0)
     ab1, key1 = _cache._get_inflight_autobatcher(

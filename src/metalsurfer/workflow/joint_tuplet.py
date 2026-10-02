@@ -20,10 +20,6 @@ from ase import Atoms
 from sklearn.preprocessing import StandardScaler
 
 from ..config import AdsorptionConfig, resolved_bo_eval_budget
-from ..filters import (
-    min_interadsorbate_covalent_ratio,
-    occupancy_sigma_scale,
-)
 from ..ml.bayesian import (
     build_spec_features_geometry_aware,
     score_and_select,
@@ -46,7 +42,12 @@ from ..placement.generators import (
 from ..placement.site_context import SiteContext, site_context_for_sampling
 from ..reporting import BOPlacementFailure, FailureSummary, PlacementFailure
 from ..surface_prep import SlabContainer
-from .bayesian import _build_round_surrogate, _TransferRoundState, bo_exploration_rng
+from .bayesian import (
+    _build_round_surrogate,
+    _occupancy_sigma_scales,
+    _TransferRoundState,
+    bo_exploration_rng,
+)
 from .composite import (
     assemble_joint_config_groups,
     assemble_quota_joint_configs,
@@ -58,7 +59,7 @@ from .shared import (
     _build_surface_reference_slab,
     _prepare_molecule_screening,
     adsorption_ranking_energy,
-    tuplet_ranking_energy,
+    joint_config_ranking_energy,
 )
 
 __all__ = [
@@ -84,33 +85,6 @@ class JointTupletScreenOutcome:
     failure_summary: FailureSummary | None = None
     bo_memory: BOStepMemory | None = None
     transfer_info: BOTransferInfo | None = None
-
-
-def joint_config_ranking_energy(
-    group: Sequence[ScreeningResult],
-    *,
-    activity_by_molecule: Mapping[str, float],
-    temperature: float,
-    pressure: float,
-) -> float:
-    """Ω (single unit) or Ω_tuplet (joint config) for ranking commits."""
-    if not group:
-        return 0.0
-    if len(group) == 1:
-        row = group[0]
-        return adsorption_ranking_energy(
-            row.energy_adsorption,
-            activity_by_molecule[row.molecule],
-            temperature,
-            pressure,
-        )
-    return tuplet_ranking_energy(
-        float(group[0].energy_adsorption) * len(group),
-        [row.molecule for row in group],
-        activity_by_molecule,
-        temperature,
-        pressure,
-    )
 
 
 def joint_winning_molecule_label(group: Sequence[ScreeningResult]) -> str:
@@ -842,23 +816,16 @@ def process_joint_tuplet_bayesian(
                 else Atoms()
             )
             cell_arr = np.asarray(slab.atoms.get_cell(), dtype=float)
-            sigma_scale = np.ones(len(candidate_features), dtype=float)
-            if len(occupied) > 0:
-                for pool_i, spec_i in enumerate(valid_spec_indices):
-                    spec = all_specs[spec_i]
-                    cached = materialization_cache.get(int(spec.placement_index))
-                    if cached is None:
-                        continue
-                    ads, _desc = cached
-                    ratio = min_interadsorbate_covalent_ratio(
-                        ads,
-                        occupied,
-                        material_type=config.material_type,
-                        cell=cell_arr,
-                    )
-                    sigma_scale[pool_i] = occupancy_sigma_scale(
-                        ratio, float(config.connectivity_multiplier)
-                    )
+            sigma_scale = _occupancy_sigma_scales(
+                candidate_features=candidate_features,
+                valid_spec_indices=valid_spec_indices,
+                all_specs=all_specs,
+                materialization_cache=materialization_cache,
+                occupied=occupied,
+                material_type=config.material_type,
+                cell=cell_arr,
+                connectivity_multiplier=float(config.connectivity_multiplier),
+            )
             next_anchors = score_and_select(
                 surrogate,
                 candidate_features,

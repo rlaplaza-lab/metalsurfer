@@ -16,6 +16,7 @@ inflate BO predictive ``sigma`` beside occupied adsorbates using that rule.
 import logging
 import time
 from collections import Counter
+from collections.abc import Sequence
 
 import numpy as np
 from ase import Atoms
@@ -30,7 +31,11 @@ from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
 from .models import ScreeningResult
 from .placement._material import material_aware_pbc
-from .placement.geometry import _mol_slab_pairwise_distances, calculate_min_distance
+from .placement.clash import atom_radii_for_symbols
+from .placement.geometry import (
+    _mol_slab_pairwise_distances,
+    calculate_min_distance,
+)
 
 try:
     from rdkit import Chem
@@ -79,6 +84,21 @@ def _covalent_threshold_matrix(syms: np.ndarray, multiplier: float) -> np.ndarra
     z = np.array([atomic_numbers[s] for s in syms])
     r_cov = covalent_radii[z]
     return multiplier * (r_cov[:, None] + r_cov[None, :])
+
+
+def _lateral_covalent_radii(symbols: Sequence[str]) -> np.ndarray:
+    """Per-atom covalent radii for adsorbate–adsorbate lateral clearance.
+
+    Delegates to :func:`placement.clash.atom_radii_for_symbols` (same table as
+    clash descent); missing tabulated radii raise.
+    """
+    return atom_radii_for_symbols(symbols, use_vdw=False)
+
+
+def _lateral_threshold_matrix(syms: np.ndarray, multiplier: float) -> np.ndarray:
+    """Bond cutoff matrix for adsorbate–adsorbate lateral clearance."""
+    r_cov = _lateral_covalent_radii(list(syms))
+    return float(multiplier) * (r_cov[:, None] + r_cov[None, :])
 
 
 def _nonsurface_distance_and_threshold(
@@ -301,7 +321,8 @@ def adsorbates_mutually_disconnected(
     """Return whether *a* and *b* share no covalent bond under *multiplier*.
 
     Concatenates both clouds and runs the same connected-component rule as
-    :func:`adsorbate_connected_components`. Empty either side is disconnected.
+    :func:`adsorbate_connected_components`, but with clash-aligned covalent
+    radii (missing table entries raise). Empty either side is disconnected.
     *cell* overrides ``a.get_cell()`` for MIC (use the substrate cell when
     fragments carry a vacuum box).
     """
@@ -324,14 +345,18 @@ def adsorbates_mutually_disconnected(
         dtype=float,
     )
     frame = Atoms(symbols=list(syms), positions=coords, cell=cell_arr)
-    masks = _connected_components_from_coords(
-        coords,
-        syms,
-        frame,
-        connectivity_multiplier,
-        material_type=material_type,
-    )
-    return all(not (np.any(mask[:n_a]) and np.any(mask[n_a:])) for mask in masks)
+    if len(coords) <= 1:
+        return True
+    dist_matrix = _mic_pairwise_distances(coords, frame, material_type=material_type)
+    threshold = _lateral_threshold_matrix(syms, connectivity_multiplier)
+    bonded = dist_matrix <= threshold
+    np.fill_diagonal(bonded, False)
+    n_components, labels = connected_components(bonded, directed=False)
+    for label in range(n_components):
+        mask = labels == label
+        if np.any(mask[:n_a]) and np.any(mask[n_a:]):
+            return False
+    return True
 
 
 def min_interadsorbate_covalent_ratio(
@@ -343,8 +368,8 @@ def min_interadsorbate_covalent_ratio(
 ) -> float:
     """Minimum ``d_ij / (r_i + r_j)`` between atoms of *a* and *b* (MIC).
 
-    Returns ``inf`` when either cloud is empty. Radii are ASE covalent radii
-    (same table as :func:`_covalent_threshold_matrix`).
+    Returns ``inf`` when either cloud is empty. Radii match clash / placement
+    via :func:`_lateral_covalent_radii` (missing symbols raise).
     """
     if len(a) == 0 or len(b) == 0:
         return float("inf")
@@ -360,9 +385,9 @@ def min_interadsorbate_covalent_ratio(
         cell_arr,
         pbc,
     )
-    z_a = np.array([atomic_numbers[s] for s in a.get_chemical_symbols()])
-    z_b = np.array([atomic_numbers[s] for s in b.get_chemical_symbols()])
-    r_sum = covalent_radii[z_a][:, None] + covalent_radii[z_b][None, :]
+    r_a = _lateral_covalent_radii(list(a.get_chemical_symbols()))
+    r_b = _lateral_covalent_radii(list(b.get_chemical_symbols()))
+    r_sum = r_a[:, None] + r_b[None, :]
     return float(np.min(dists / r_sum))
 
 
@@ -375,11 +400,17 @@ def occupancy_sigma_scale(
     *covalent_ratio* is :func:`min_interadsorbate_covalent_ratio`. Legal poses
     have ``s > connectivity_multiplier``; just outside the bond cutoff the
     factor is 2, and it returns to 1 once ``s`` reaches twice the multiplier.
+    Non-finite *covalent_ratio* (empty cloud) yields 1. Zero or negative
+    ratio / multiplier raise.
     """
     s = float(covalent_ratio)
     m = float(connectivity_multiplier)
-    if not np.isfinite(s) or s <= 0.0 or m <= 0.0:
+    if not np.isfinite(s):
         return 1.0
+    if s <= 0.0:
+        raise ValueError(f"covalent_ratio must be positive, got {s!r}")
+    if m <= 0.0:
+        raise ValueError(f"connectivity_multiplier must be positive, got {m!r}")
     return float(min(2.0, max(1.0, 2.0 * m / s)))
 
 

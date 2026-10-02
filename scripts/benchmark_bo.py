@@ -512,11 +512,6 @@ def _evals_to_eps(
     return float("nan")
 
 
-def _mean_curve_metric(curves: list[list[float]], oracle: float, *, ep: int) -> float:
-    vals = [_curve_at(c, ep) - oracle for c in curves if c]
-    return float(np.mean(vals)) if vals else float("nan")
-
-
 def _mean_aurc(curves: list[list[float]], oracle: float) -> float:
     vals = [_aurc(c, oracle) for c in curves if c]
     return float(np.mean(vals)) if vals else float("nan")
@@ -575,7 +570,6 @@ def _run_replay(
     acquisition: str = ACQUISITION,
     kappa: float = KAPPA,
     prior: BOStepMemory | None = None,
-    prior_placement_X: list[dict[str, float]] | None = None,
     transfer: bool = False,
     transfer_kwargs: dict[str, float | int] | None = None,
     max_evals: int | None = None,
@@ -865,7 +859,6 @@ def _run_bo_transfer(
     seed: int,
     *,
     prior: BOStepMemory | None,
-    prior_placement_X: list[dict[str, float]] | None,
     transfer: bool,
     config: AdsorptionConfig = _REPLAY,
     surrogate: str = SURROGATE,
@@ -879,7 +872,6 @@ def _run_bo_transfer(
         config,
         mode="transfer",
         prior=prior,
-        prior_placement_X=prior_placement_X,
         transfer=transfer,
         surrogate=surrogate,
         acquisition=acquisition,
@@ -1099,7 +1091,6 @@ def run_transfer(
 
     for seed in range(seeds):
         memories: list[BOStepMemory] = []
-        committed_placement_X: list[dict[str, float]] = []
         for step in steps:
             X, y = load_pool(data_dir, step=step)
             pool_sizes[step] = len(X)
@@ -1110,19 +1101,14 @@ def run_transfer(
                 if step >= 2
                 else None
             )
-            bl, bl_mem, _ = _run_bo_transfer(
-                X, y, rs, prior=None, prior_placement_X=None, transfer=False
-            )
+            bl, _, _ = _run_bo_transfer(X, y, rs, prior=None, transfer=False)
             tr, tr_mem, share = _run_bo_transfer(
                 X,
                 y,
                 rs,
                 prior=prior,
-                prior_placement_X=list(committed_placement_X),
                 transfer=step >= 2,
             )
-            if tr_mem.best_X_row:
-                committed_placement_X.append(dict(tr_mem.best_X_row))
             memories.append(tr_mem)
             if step in transfer_steps:
                 detail_rows.append(
@@ -1383,7 +1369,6 @@ def write_report(
     seeds: int,
     screening_report: pd.DataFrame,
     screening_curves: pd.DataFrame,
-    transfer_curves: pd.DataFrame,
     transfer_summary: pd.DataFrame,
     arch_curves: pd.DataFrame,
     batch_curves: pd.DataFrame,
@@ -1617,7 +1602,6 @@ def run_benchmark(
         seeds=seeds,
         screening_report=screening_report_df,
         screening_curves=screening_curves_df,
-        transfer_curves=transfer_curves_df,
         transfer_summary=transfer_summary_df,
         arch_curves=arch_df,
         batch_curves=batch_df,

@@ -1587,17 +1587,16 @@ def _try_clash_descent_recovery(
     )
     moving_r = atom_radii_for_symbols(
         list(adsorbate.get_chemical_symbols()),
-        min_separation=float(config.min_adsorbate_separation),
         use_vdw=use_vdw,
     )
-    cutoff = 2.0 * float(np.max(moving_r) if moving_r.size else footprint) + z_window
+    if moving_r.size == 0:
+        raise ValueError("clash recovery requires a non-empty adsorbate")
+    cutoff = 2.0 * float(np.max(moving_r)) + z_window
     fixed_pos, fixed_radii, fixed_scales = _clash_recovery_fixed_cloud(
         slab,
         slab_scratch,
         ads_com=np.asarray(work_center, dtype=float),
         use_vdw=use_vdw,
-        min_initial_distance=float(config.min_initial_distance),
-        min_adsorbate_separation=float(config.min_adsorbate_separation),
         connectivity_multiplier=float(config.connectivity_multiplier),
         neighbor_cutoff=cutoff,
     )
@@ -1675,8 +1674,6 @@ def _clash_recovery_fixed_cloud(
     *,
     ads_com: np.ndarray,
     use_vdw: bool,
-    min_initial_distance: float,
-    min_adsorbate_separation: float,
     connectivity_multiplier: float,
     neighbor_cutoff: float,
 ) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
@@ -1685,8 +1682,6 @@ def _clash_recovery_fixed_cloud(
     Returns ``(positions, radii, pair_scales)``. Substrate neighbors use scale
     ``1``; pre-adsorbed atoms use *connectivity_multiplier* so clash descent
     matches :func:`~metalsurfer.filters.adsorbates_mutually_disconnected`.
-    *min_adsorbate_separation* is the unknown-radius fallback for pre-adsorbed
-    atoms.
     """
     fixed_chunks: list[np.ndarray] = []
     radius_chunks: list[np.ndarray] = []
@@ -1718,11 +1713,7 @@ def _clash_recovery_fixed_cloud(
             syms = [
                 s for s, keep in zip(slab_scratch.slab_syms, near, strict=True) if keep
             ]
-            radius_chunks.append(
-                atom_radii_for_symbols(
-                    syms, min_separation=min_initial_distance, use_vdw=use_vdw
-                )
-            )
+            radius_chunks.append(atom_radii_for_symbols(syms, use_vdw=use_vdw))
 
     if slab_scratch.pre_ads_pos is not None and slab_scratch.pre_ads_pos.size:
         near_pre = _nearby_mask(slab_scratch.pre_ads_pos)
@@ -1735,19 +1726,16 @@ def _clash_recovery_fixed_cloud(
             pre_syms_near = [
                 s for s, keep in zip(pre_syms, near_pre, strict=True) if keep
             ]
-            radius_chunks.append(
-                atom_radii_for_symbols(
-                    pre_syms_near,
-                    min_separation=min_adsorbate_separation,
-                    use_vdw=use_vdw,
-                )
-            )
+            radius_chunks.append(atom_radii_for_symbols(pre_syms_near, use_vdw=use_vdw))
 
     if not fixed_chunks:
         return None, None, None
     fixed_radii = np.concatenate(radius_chunks)
-    floor = min_adsorbate_separation / 2.0
-    fixed_radii = np.where(np.isfinite(fixed_radii), fixed_radii, floor)
+    if not np.all(np.isfinite(fixed_radii)):
+        raise ValueError(
+            "clash recovery fixed cloud has non-finite radii; substrate or "
+            "pre-adsorbate symbols are missing tabulated covalent/VdW radii"
+        )
     return np.vstack(fixed_chunks), fixed_radii, np.concatenate(scale_chunks)
 
 
@@ -1801,7 +1789,7 @@ def _validate_posed_adsorbate(
     material_type: str | None = None,
     slab_scratch: geom._SlabDistanceScratch | None = None,
 ) -> str | None:
-    """Run distance, adsorbate-separation, and optional contact-quality checks.
+    """Run distance, adsorbate–adsorbate disconnect, and optional contact-quality checks.
 
     Order:
 

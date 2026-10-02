@@ -124,6 +124,7 @@ class TestSlabZAlignment:
 
             @staticmethod
             def from_bulk_get_specific_millers(bulk, specific_millers):
+                _ = (bulk, specific_millers)
                 atoms = fcc111("Al", size=(2, 2, 2), vacuum=8.0)
                 slab = types.SimpleNamespace()
                 slab.atoms = atoms
@@ -161,6 +162,7 @@ class TestSlabZAlignment:
         class _FakeSlab:
             @staticmethod
             def from_bulk_get_specific_millers(bulk, specific_millers):
+                _ = (bulk, specific_millers)
                 return []
 
         core.Bulk = _FakeBulk
@@ -203,6 +205,7 @@ class TestSlabZAlignment:
         class _FakeSlab:
             @staticmethod
             def from_bulk_get_specific_millers(bulk, specific_millers):
+                _ = (bulk, specific_millers)
                 raise AssertionError("must not be called after a src-id mismatch")
 
         core.Bulk = _FakeBulk
@@ -240,6 +243,7 @@ class TestSlabZAlignment:
         class _FakeSlab:
             @staticmethod
             def from_bulk_get_specific_millers(bulk, specific_millers):
+                _ = (bulk, specific_millers)
                 return [_FakeSlabObj()]
 
         core.Bulk = _FakeBulk

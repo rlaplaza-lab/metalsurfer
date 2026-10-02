@@ -7,6 +7,7 @@ import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
+from metalsurfer.filters import adsorbates_mutually_disconnected
 from metalsurfer.models import PlacementPose, PlacementSpec
 from metalsurfer.placement import (
     check_initial_placement_distance,
@@ -16,7 +17,6 @@ from metalsurfer.placement import (
 from metalsurfer.placement.dissociative import _get_dissociative_site_pairs
 from metalsurfer.placement.occupancy import (
     filter_sites_by_occupancy,
-    results_mutually_clear,
 )
 from metalsurfer.placement.pose import (
     _finalize_placement,
@@ -545,9 +545,7 @@ def test_packing_yield_improves_with_occupancy_prune():
     full = slab.copy() + pre
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = [True, True, False]
-    existing_pos, existing_radii = existing_adsorbate_cloud(
-        slab, full, min_separation=1.5
-    )
+    existing_pos, existing_radii = existing_adsorbate_cloud(slab, full)
     bare = available_site_indices(
         ctx.sites, None, cell=cell, pbc=pbc, min_separation=1.5
     )
@@ -1487,7 +1485,7 @@ def test_initial_placement_distance_packs_free_rejects_blocked_each_material(
 
 
 # ---------------------------------------------------------------------------
-# results_mutually_clear: n-tuplet pairwise adsorbate clearance
+# adsorbates_mutually_disconnected: n-tuplet pairwise adsorbate clearance
 # ---------------------------------------------------------------------------
 
 
@@ -1500,33 +1498,33 @@ def _water_suffix_at(x_shift: float) -> Atoms:
     return mol
 
 
-def test_results_mutually_clear_accepts_separated_fragments():
+def test_adsorbates_mutually_disconnected_accepts_separated_fragments():
     """Fragments several Å apart under the slab MIC are mutually clear."""
     slab = make_slab()
-    clear = results_mutually_clear(
+    clear = adsorbates_mutually_disconnected(
         _water_suffix_at(3.0),
         _water_suffix_at(7.0),
-        cell=slab.get_cell(),
+        1.3,
         material_type="slab",
-        connectivity_multiplier=1.3,
+        cell=slab.get_cell(),
     )
     assert clear
 
 
-def test_results_mutually_clear_rejects_overlapping_fragments():
+def test_adsorbates_mutually_disconnected_rejects_overlapping_fragments():
     """Two fragments at the same site share a connected component."""
     slab = make_slab()
-    clear = results_mutually_clear(
+    clear = adsorbates_mutually_disconnected(
         _water_suffix_at(5.0),
         _water_suffix_at(5.2),
-        cell=slab.get_cell(),
+        1.3,
         material_type="slab",
-        connectivity_multiplier=1.3,
+        cell=slab.get_cell(),
     )
     assert not clear
 
 
-def test_results_mutually_clear_honours_connectivity_boundary():
+def test_adsorbates_mutually_disconnected_honours_connectivity_boundary():
     """Just outside the H–H cutoff is clear; just inside is not."""
     from ase.data import atomic_numbers, covalent_radii
 
@@ -1536,32 +1534,32 @@ def test_results_mutually_clear_honours_connectivity_boundary():
     a = Atoms("H", positions=[[10.0, 5.4, 5.7]])
     b_ok = Atoms("H", positions=[[10.0 + cutoff + 0.05, 5.4, 5.7]])
     b_bad = Atoms("H", positions=[[10.0 + cutoff - 0.05, 5.4, 5.7]])
-    assert results_mutually_clear(
+    assert adsorbates_mutually_disconnected(
         a,
         b_ok,
-        cell=slab.get_cell(),
+        1.3,
         material_type="slab",
-        connectivity_multiplier=1.3,
+        cell=slab.get_cell(),
     )
-    assert not results_mutually_clear(
+    assert not adsorbates_mutually_disconnected(
         a,
         b_bad,
-        cell=slab.get_cell(),
+        1.3,
         material_type="slab",
-        connectivity_multiplier=1.3,
+        cell=slab.get_cell(),
     )
 
 
-def test_results_mutually_clear_wraps_periodic_images():
+def test_adsorbates_mutually_disconnected_wraps_periodic_images():
     """A fragment near +x edge clashes with its -x periodic image."""
     slab = make_slab()
     cell = np.asarray(slab.get_cell(), dtype=float)
     near_edge = Atoms("H", positions=[[cell[0][0] - 0.2, 5.4, 5.7]])
     other_side = Atoms("H", positions=[[0.2, 5.4, 5.7]])
-    assert not results_mutually_clear(
+    assert not adsorbates_mutually_disconnected(
         near_edge,
         other_side,
-        cell=slab.get_cell(),
+        1.3,
         material_type="slab",
-        connectivity_multiplier=1.3,
+        cell=slab.get_cell(),
     )

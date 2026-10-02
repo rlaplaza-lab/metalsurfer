@@ -57,11 +57,11 @@ from .shared import (
     _normalize_molecules_input,
     adsorption_ranking_energy,
     empty_molecule_input_message,
+    joint_config_ranking_energy,
     needs_workload_autotune,
     require_saturation_activity,
     resolve_saturation_activities,
     resolve_saturation_step_workload_config,
-    tuplet_ranking_energy,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,28 +97,6 @@ def _omega_sort_key(
     return key
 
 
-def _committed_ranking_energy(
-    committed: Sequence[ScreeningResult],
-    *,
-    activity_by_molecule: Mapping[str, float],
-    temperature: float,
-    pressure: float,
-) -> float:
-    """Ranking energy for a commit: single-unit Ω or shared Ω_tuplet."""
-    if not committed:
-        return 0.0
-    if len(committed) == 1:
-        return _omega(committed[0], activity_by_molecule, temperature, pressure)
-    e_ads_total = float(committed[0].energy_adsorption) * len(committed)
-    return tuplet_ranking_energy(
-        e_ads_total,
-        [row.molecule for row in committed],
-        activity_by_molecule,
-        temperature,
-        pressure,
-    )
-
-
 def _step_ranking_snapshot(
     *,
     committed: Sequence[ScreeningResult],
@@ -129,11 +107,11 @@ def _step_ranking_snapshot(
 ) -> tuple[float, float, str]:
     """Return ``(Ω, E_ads, label)`` matching the stop-condition ranking.
 
-    Committed steps use :func:`_committed_ranking_energy` (``Ω`` or
+    Committed steps use :func:`joint_config_ranking_energy` (``Ω`` or
     ``Ω_tuplet``). Empty commits report the pool-best single-unit ``Ω``.
     """
     if committed:
-        omega = _committed_ranking_energy(
+        omega = joint_config_ranking_energy(
             committed,
             activity_by_molecule=activity_by_molecule,
             temperature=temperature,
@@ -732,7 +710,7 @@ def _run_saturation_steps(
             current_slab = _slab_after_saturation_step(placement.atoms, config)
         n_on_slab += len(outcome.committed)
 
-        ranking_energy = _committed_ranking_energy(
+        ranking_energy = joint_config_ranking_energy(
             outcome.committed,
             activity_by_molecule=activity_by_molecule,
             temperature=temperature,

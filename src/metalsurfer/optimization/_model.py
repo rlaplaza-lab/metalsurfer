@@ -62,7 +62,7 @@ def _ensure_scipy_sph_harm() -> None:
         return
 
     def _legacy_sph_harm(
-        m: Any, n: Any, theta: Any, phi: Any, *args: Any, **kwargs: Any
+        m: Any, n: Any, theta: Any, phi: Any, *_args: Any, **_kwargs: Any
     ) -> Any:
         # Legacy sph_harm(m, n, theta_azim, phi_polar) vs
         # sph_harm_y(n, m, theta_polar, phi_azim).

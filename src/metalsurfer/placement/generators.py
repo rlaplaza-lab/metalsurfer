@@ -232,7 +232,6 @@ def _spec_grid_info(
     existing_ads_pos, existing_radii = existing_adsorbate_cloud(
         slab,
         full_slab,
-        min_separation=float(config.min_adsorbate_separation),
     )
 
     footprint_scale = float(config.occupancy_footprint_scale)

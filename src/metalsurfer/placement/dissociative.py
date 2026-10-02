@@ -702,7 +702,6 @@ def _generate_dissociative_placement_from_spec(
     existing_ads_pos, _ = existing_adsorbate_cloud(
         sites_slab,
         slab,
-        min_separation=float(config.min_adsorbate_separation),
     )
 
     pairs = _get_dissociative_site_pairs(

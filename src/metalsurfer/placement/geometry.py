@@ -56,7 +56,7 @@ class _SlabDistanceScratch:
     repeated distance checks during height/XY recovery do not re-slice the ASE
     ``Atoms`` object or recompute the slab-side MIC geometry. *pre_ads_pos* is
     the slab slice *excluded* from the mol↔slab contact check (used by the
-    separate adsorbate-separation check during saturation).
+    adsorbate–adsorbate disconnect gate under coverage).
     """
 
     slab_pos: np.ndarray

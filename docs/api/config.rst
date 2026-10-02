@@ -398,9 +398,10 @@ Initial placement validation
 
     In-plane occupancy clearance (Å): catalog site anchors closer than this
     (MIC, normal-projected) to existing adsorbate atoms are dropped under
-    coverage. Also the unknown-radius fallback for clash atom radii
-    (``min_separation / 2``). Adsorbate–adsorbate bonding is gated by
-    ``connectivity_multiplier`` instead (``adsorbate_overlap``).
+    coverage. Adsorbate–adsorbate bonding is gated by
+    ``connectivity_multiplier`` instead (``adsorbate_overlap``). Clash and
+    disconnect paths require tabulated covalent radii and fail loud when a
+    symbol has none.
 
 ``occupancy_use_footprint``
    **Type:** ``bool`` · **Default:** ``True``

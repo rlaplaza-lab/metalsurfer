@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Independent high-n joint searches for CO/Pt(111) ordered coverages.
 
-Asks whether n-tuplet mode (exact-n joint configs, metalsurfer >= 0.9.4) can
+Asks whether n-tuplet mode (exact-n joint configs, metalsurfer >= 0.9.5) can
 recover the coverage-dependent bridge:top sequence of Gunasooriya & Saeys
 (ACS Catal. 2018) without seeding the literature registries.
 

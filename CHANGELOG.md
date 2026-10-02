@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-10-02
+
+### Changed
+
+- Adsorbate–adsorbate disconnect, clash radii, and BO occupancy-sigma ratios
+  share one covalent-radius lookup and **fail loud** when a tabulated radius
+  is missing (no silent ``min_adsorbate_separation / 2`` floor).
+- Ranking for single-unit and joint commits shares one helper
+  (``joint_config_ranking_energy``); BO occupancy sigma inflation is shared
+  between sequential and joint BO loops.
+
+### Removed
+
+- `placement.occupancy.results_mutually_clear` (call
+  ``filters.adsorbates_mutually_disconnected`` directly).
+
 ## [0.9.4] - 2026-10-02
 
 ### Changed
@@ -44,3 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `scripts/co_pt111_ordered_coverages.py` (hand-seeded literature registries;
   superseded by the n-tuplet phase-discovery script above).
+- `BOTransferConfig.occupancy_lengthscale` / `occupancy_floor` (BO sigma
+  inflation beside occupied adsorbates now uses the shared connectivity
+  covalent-sum ratio vs ``connectivity_multiplier``).
+- `placement.geometry.check_adsorbate_separation` (adsorbate–adsorbate
+  legality is ``filters.adsorbates_mutually_disconnected``).

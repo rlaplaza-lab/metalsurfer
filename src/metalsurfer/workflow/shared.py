@@ -217,6 +217,38 @@ def tuplet_ranking_energy(
     return float(e_ads_tuplet) - K_B_EV_PER_K * float(temperature) * shift
 
 
+def joint_config_ranking_energy(
+    group: Sequence[ScreeningResult],
+    *,
+    activity_by_molecule: Mapping[str, float],
+    temperature: float,
+    pressure: float,
+) -> float:
+    """Ω (single unit) or Ω_tuplet (joint config) for ranking commits.
+
+    Joint rows store per-molecule ``energy_adsorption``; the tuplet total is
+    ``n * energy_adsorption``. Missing activities raise the same clear
+    ``KeyError`` as :func:`require_saturation_activity`.
+    """
+    if not group:
+        return 0.0
+    if len(group) == 1:
+        row = group[0]
+        return adsorption_ranking_energy(
+            row.energy_adsorption,
+            require_saturation_activity(row.molecule, activity_by_molecule),
+            temperature,
+            pressure,
+        )
+    return tuplet_ranking_energy(
+        float(group[0].energy_adsorption) * len(group),
+        [row.molecule for row in group],
+        activity_by_molecule,
+        temperature,
+        pressure,
+    )
+
+
 @dataclass
 class PlacementFailureEvent:
     """Structured explanation for a failed placement candidate."""

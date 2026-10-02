@@ -17,7 +17,6 @@ from scipy.optimize import minimize
 from ..config import AdsorptionConfig
 from . import geometry as geom
 from ._constants import (
-    _ADSORBATE_COVALENT_RADIUS_FALLBACK,
     _CLASH_AZIMUTH_DELTA_EPS_DEG,
     _CLASH_DESCENT_AZIMUTH_BOUND_DEG,
     _CLASH_DESCENT_MAXITER,
@@ -71,6 +70,35 @@ def pair_scales_for_fixed_cloud(
     return scales
 
 
+def atom_radii_for_symbols(
+    symbols: Sequence[str],
+    *,
+    use_vdw: bool = False,
+) -> np.ndarray:
+    """Per-atom radii (Å) from ASE tables; missing entries raise.
+
+    Parameters
+    ----------
+    symbols
+        Chemical symbols.
+    use_vdw
+        If True, prefer van der Waals radii; otherwise covalent.
+    """
+    out = np.empty(len(symbols), dtype=float)
+    missing: list[str] = []
+    for i, sym in enumerate(symbols):
+        r = geom._get_vdw_radius(sym) if use_vdw else geom._get_covalent_radius(sym)
+        if r is None:
+            missing.append(str(sym))
+            continue
+        out[i] = float(r)
+    if missing:
+        kind = "van der Waals" if use_vdw else "covalent"
+        uniq = ", ".join(sorted(set(missing)))
+        raise ValueError(f"no positive {kind} radius for symbol(s): {uniq}")
+    return out
+
+
 def clash_bounds_for_adsorbate(
     adsorbate: Atoms,
     config: AdsorptionConfig,
@@ -83,10 +111,8 @@ def clash_bounds_for_adsorbate(
 
     Zero-width XY ranges stay disabled (height-only recovery).
     When *footprint_radius* is missing or near-zero, prefer *moving_radii* (mean)
-    over recomputing atom radii; fall back to the adsorbate mean-radius default
-    for empty single-atom / unknown-radius cases.
+    over recomputing atom radii.
     """
-    min_sep = float(config.min_adsorbate_separation)
     r_char = float(footprint_radius) if footprint_radius is not None else 0.0
     if r_char <= _DISTANCE_ZERO_EPS:
         moving = (
@@ -97,14 +123,13 @@ def clash_bounds_for_adsorbate(
         else:
             radii = atom_radii_for_symbols(
                 list(adsorbate.get_chemical_symbols()),
-                min_separation=min_sep,
                 use_vdw=False,
             )
-            r_char = (
-                float(np.mean(radii))
-                if radii.size
-                else max(min_sep / 2.0, _ADSORBATE_COVALENT_RADIUS_FALLBACK)
-            )
+            if radii.size == 0:
+                raise ValueError(
+                    "clash_bounds_for_adsorbate requires a non-empty adsorbate"
+                )
+            r_char = float(np.mean(radii))
 
     lat = float(_CLASH_LATERAL_FOOTPRINT_SCALE) * r_char
     x_lo, x_hi = (float(v) for v in config.placement_x_range)
@@ -128,46 +153,19 @@ def clash_bounds_for_adsorbate(
 def tuplet_clash_rescue_floor(
     moving_symbols: Sequence[str],
     fixed_symbols: Sequence[str],
-    *,
-    min_separation: float,
 ) -> float:
     """Skip n-tuplet rescue when atoms are closer than this (stacked nuclei).
 
     Floor is ``scale * min(covalent_i + covalent_j)`` over symbol pairs.
-    *min_separation* is only the unknown-radius fallback for
-    :func:`atom_radii_for_symbols`.
     """
-    mov_r = atom_radii_for_symbols(moving_symbols, min_separation=min_separation)
-    fix_r = atom_radii_for_symbols(fixed_symbols, min_separation=min_separation)
-    if mov_r.size == 0 or fix_r.size == 0:
-        return float(_TUPLET_CLASH_RESCUE_COVALENT_SCALE) * float(min_separation)
+    if not moving_symbols or not fixed_symbols:
+        raise ValueError(
+            "tuplet_clash_rescue_floor requires non-empty moving and fixed symbols"
+        )
+    mov_r = atom_radii_for_symbols(moving_symbols)
+    fix_r = atom_radii_for_symbols(fixed_symbols)
     pair_min = float(np.min(mov_r[:, None] + fix_r[None, :]))
     return float(_TUPLET_CLASH_RESCUE_COVALENT_SCALE) * pair_min
-
-
-def atom_radii_for_symbols(
-    symbols: Sequence[str],
-    *,
-    min_separation: float,
-    use_vdw: bool = False,
-) -> np.ndarray:
-    """Per-atom radii (Å); unknown symbols fall back to ``min_separation / 2``.
-
-    Parameters
-    ----------
-    symbols
-        Chemical symbols.
-    min_separation
-        Floor used when a tabulated radius is missing (Packmol ``dtol/2``).
-    use_vdw
-        If True, prefer van der Waals radii; otherwise covalent.
-    """
-    floor = float(min_separation) / 2.0
-    out = np.empty(len(symbols), dtype=float)
-    for i, sym in enumerate(symbols):
-        r = geom._get_vdw_radius(sym) if use_vdw else geom._get_covalent_radius(sym)
-        out[i] = float(r) if r is not None else floor
-    return out
 
 
 def compose_quaternion_with_azimuth(
@@ -432,7 +430,6 @@ def resolve_rigid_clash(
     if moving_radii is None:
         moving_radii = atom_radii_for_symbols(
             list(adsorbate.get_chemical_symbols()),
-            min_separation=float(config.min_adsorbate_separation),
             use_vdw=use_vdw_moving,
         )
     else:
