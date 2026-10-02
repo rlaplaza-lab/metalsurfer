@@ -306,10 +306,12 @@ Placement generation
 
    Bounded Packmol-style rigid-body overlap descent during distance recovery
    and n-tuplet near-miss / pre-relax packing. Bounds scale with molecule
-   footprint and the height window. When ``False``, recovery falls back to
-   discrete XY jitter only and n-tuplet keeps hard mutual-clearance skips.
-   Disabled entirely when ``placement_distance_recovery`` is ``False`` for the
-   recovery path.
+   footprint and the height window. Substrate contacts use covalent radius
+   sums; pre-adsorbed / packed adsorbate contacts use
+   ``max(radius sum, min_adsorbate_separation)``. When ``False``, recovery
+   falls back to discrete XY jitter only and n-tuplet rejects overlapping
+   packs (no hard-skip alternate path). Disabled entirely when
+   ``placement_distance_recovery`` is ``False`` for the recovery path.
 
 ``flat_aromatic_parallel_fraction``
    **Type:** ``float`` · **Default:** ``0.5``
@@ -927,7 +929,10 @@ loop behavior, reservoir ranking, and I/O.
    n-tuplet mode: each trial is one exact-*n* clash-free config, TorchSim
    relaxes all members together, and the step commits the best binding pack
    (no single-adsorbate screen, no partial / single-winner fallback).
-   Committed rows store per-molecule :math:`E_\mathrm{ads}`
+   Overlapping packs are rejected when ``placement_clash_descent`` is off.
+   With ``multi_molecule_saturation``, every species composition of size *n*
+   is screened and ranked by :math:`\Omega_\mathrm{tuplet}` (joint BO is
+   single-species only). Committed rows store per-molecule :math:`E_\mathrm{ads}`
    (:math:`E_\mathrm{ads,total}/n`); stop uses
    :math:`\Omega_\mathrm{tuplet}`. Empty commits are unbound finals.
    After autotuning, ``num_placements``, ``bo.initial_random``, and

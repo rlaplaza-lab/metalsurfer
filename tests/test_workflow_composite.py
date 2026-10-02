@@ -13,8 +13,7 @@ from metalsurfer.workflow.composite import (
     _per_unit_surface_distances,
     build_composite_candidate,
     evaluate_composite_commit,
-    pack_tuplet_adsorbates,
-    select_tuplet_winners,
+    pack_exact_tuplet,
 )
 
 from .conftest import (
@@ -131,137 +130,50 @@ class TestBuildCompositeCandidate:
 
 
 # ---------------------------------------------------------------------------
-# select_tuplet_winners
+# pack_exact_tuplet
 # ---------------------------------------------------------------------------
 
 
-class TestSelectTupletWinners:
-    def test_activity_prefers_weaker_eads_binder(self):
+class TestPackExactTuplet:
+    def test_clear_pair_kept_unchanged(self):
         slab = make_slab()
-        weak = _winner(slab, pid=0, e_ads=-0.5, x_shift=2.5, molecule="water")
-        strong = _winner(slab, pid=1, e_ads=-0.6, x_shift=6.5, molecule="co2")
-        winners = select_tuplet_winners(
-            [weak, strong],
-            cell=slab.get_cell(),
-            pbc=SLAB_PBC,
-            min_separation=1.5,
-            max_winners=1,
-            activity_by_molecule={"water": 100.0, "co2": 1.0},
-            temperature=298.15,
-            pressure=1.0,
-        )
-        assert [w.molecule for w in winners] == ["water"]
-
-    def test_tiny_activity_rejects_exothermic(self):
-        slab = make_slab()
-        winners = select_tuplet_winners(
-            [_winner(slab, pid=0, e_ads=-0.05, molecule="water")],
-            cell=slab.get_cell(),
-            pbc=SLAB_PBC,
-            min_separation=1.5,
-            max_winners=1,
-            activity_by_molecule={"water": 1.0e-10},
-            temperature=298.15,
-            pressure=1.0,
-        )
-        assert winners == []
-
-    def test_accepts_clear_binders_up_to_cap(self):
-        slab = make_slab()
-        candidates = [
-            _winner(slab, pid=i, e_ads=-0.6 + 0.1 * i, x_shift=x)
-            for i, x in enumerate((2.5, 6.0, 9.5))
+        winners = [
+            _winner(slab, pid=0, e_ads=-1.0, x_shift=2.5),
+            _winner(slab, pid=1, e_ads=-0.9, x_shift=6.5),
         ]
-        winners = select_tuplet_winners(
-            candidates,
-            cell=slab.get_cell(),
-            pbc=SLAB_PBC,
-            min_separation=1.5,
-            max_winners=3,
+        config = AdsorptionConfig(
+            material_type="slab",
+            placement_clash_descent=True,
+            min_adsorbate_separation=1.5,
         )
-        assert [w.placement_id for w in winners] == [0, 1, 2]
+        packed = pack_exact_tuplet(winners, slab, config)
+        assert packed is not None
+        assert [w.placement_id for w in packed] == [0, 1]
+        s0 = packed[0].atoms.get_positions()[packed[0].slab_size :]
+        s1 = packed[1].atoms.get_positions()[packed[1].slab_size :]
+        assert (
+            calculate_min_distance(s0, s1, slab.get_cell(), use_pbc=True, pbc=SLAB_PBC)
+            >= 1.5 - 1e-3
+        )
 
-    def test_rejects_clashing_second_winner(self):
+    def test_overlapping_pair_rejected_when_clash_descent_off(self):
         slab = make_slab()
-        candidates = [
+        winners = [
             _winner(slab, pid=0, e_ads=-1.0, x_shift=5.0),
             _winner(slab, pid=1, e_ads=-0.9, x_shift=5.1),
-            _winner(slab, pid=2, e_ads=-0.8, x_shift=8.0),
         ]
-        winners = select_tuplet_winners(
-            candidates,
-            cell=slab.get_cell(),
-            pbc=SLAB_PBC,
-            min_separation=1.5,
-            max_winners=3,
+        config = AdsorptionConfig(
+            material_type="slab",
+            placement_clash_descent=False,
+            min_adsorbate_separation=1.5,
         )
-        # The clashing pid=1 is skipped; the clear pid=2 fills the tuplet.
-        assert [w.placement_id for w in winners] == [0, 2]
-
-    def test_non_binders_never_committed_even_with_free_slots(self):
-        slab = make_slab()
-        candidates = [_winner(slab, pid=0, e_ads=-0.2), _winner(slab, pid=1, e_ads=0.3)]
-        winners = select_tuplet_winners(
-            candidates,
-            cell=slab.get_cell(),
-            pbc=SLAB_PBC,
-            min_separation=1.5,
-            max_winners=2,
-        )
-        assert [w.placement_id for w in winners] == [0]
-
-    def test_tie_broken_by_placement_id_then_molecule(self):
-        slab = make_slab()
-        tie_a = _winner(slab, pid=7, e_ads=-1.0, x_shift=2.5, molecule="water")
-        tie_b = _winner(slab, pid=2, e_ads=-1.0, x_shift=6.5, molecule="water")
-        winners = select_tuplet_winners(
-            [tie_a, tie_b],
-            cell=slab.get_cell(),
-            pbc=SLAB_PBC,
-            min_separation=1.5,
-            max_winners=2,
-        )
-        assert [w.placement_id for w in winners] == [2, 7]
-
-        same_pid_co2 = _winner(slab, pid=3, e_ads=-1.0, x_shift=2.5, molecule="co2")
-        same_pid_air = _winner(slab, pid=3, e_ads=-1.0, x_shift=6.5, molecule="air")
-        by_name = select_tuplet_winners(
-            [same_pid_co2, same_pid_air],
-            cell=slab.get_cell(),
-            pbc=SLAB_PBC,
-            min_separation=1.5,
-            max_winners=2,
-        )
-        assert [w.molecule for w in by_name] == ["air", "co2"]
-
-    def test_max_winners_cutoff_keeps_lowest_energy(self):
-        slab = make_slab()
-        # 2x2 grid keeps every pair ~4.5 A apart (waters clash below ~2 A
-        # atom-to-atom); energies descend with pid so the cap keeps [3, 2].
-        candidates = [
-            _winner(
-                slab,
-                pid=i,
-                e_ads=-1.0 - i,
-                x_shift=2.5 + 4.5 * (i % 2),
-                y_shift=2.5 + 4.5 * (i // 2),
-            )
-            for i in range(4)
-        ]
-        winners = select_tuplet_winners(
-            candidates,
-            cell=slab.get_cell(),
-            pbc=SLAB_PBC,
-            min_separation=1.5,
-            max_winners=2,
-        )
-        assert [w.placement_id for w in winners] == [3, 2]
+        assert pack_exact_tuplet(winners, slab, config) is None
 
     def test_near_miss_rescued_when_clash_descent_on(self):
         slab = make_slab()
         # COM Δx=2.2 Å → min atom distance ~1.26 Å: below min_separation=1.5
         # but above rescue floor (0.5 Å).
-        candidates = [
+        winners = [
             _winner(slab, pid=0, e_ads=-1.0, x_shift=5.0),
             _winner(slab, pid=1, e_ads=-0.9, x_shift=7.2),
         ]
@@ -272,71 +184,47 @@ class TestSelectTupletWinners:
             placement_y_range=(-1.5, 1.5),
             min_adsorbate_separation=1.5,
         )
-        winners = select_tuplet_winners(
-            candidates,
-            cell=slab.get_cell(),
-            pbc=SLAB_PBC,
-            min_separation=1.5,
-            max_winners=2,
-            config=config,
-            slab_atoms=slab,
-        )
-        assert [w.placement_id for w in winners] == [0, 1]
-        s0 = winners[0].atoms.get_positions()[winners[0].slab_size :]
-        s1 = winners[1].atoms.get_positions()[winners[1].slab_size :]
-        assert (
-            calculate_min_distance(s0, s1, slab.get_cell(), use_pbc=True, pbc=SLAB_PBC)
-            >= 1.5 - 1e-3
-        )
-
-    def test_near_miss_skipped_when_clash_descent_off(self):
-        slab = make_slab()
-        candidates = [
-            _winner(slab, pid=0, e_ads=-1.0, x_shift=5.0),
-            _winner(slab, pid=1, e_ads=-0.9, x_shift=7.2),
-            _winner(slab, pid=2, e_ads=-0.8, x_shift=9.5),
-        ]
-        config = AdsorptionConfig(
-            material_type="slab",
-            placement_clash_descent=False,
-            min_adsorbate_separation=1.5,
-        )
-        winners = select_tuplet_winners(
-            candidates,
-            cell=slab.get_cell(),
-            pbc=SLAB_PBC,
-            min_separation=1.5,
-            max_winners=3,
-            config=config,
-            slab_atoms=slab,
-        )
-        assert [w.placement_id for w in winners] == [0, 2]
-
-
-def test_pack_tuplet_adsorbates_keeps_unit1_and_separates_unit2():
-    slab = make_slab()
-    # Clear but VdW-tight pair (~1.6 Å) that still passes min_separation=1.5.
-    w1 = _winner(slab, pid=0, e_ads=-1.0, x_shift=5.0)
-    w2 = _winner(slab, pid=1, e_ads=-0.9, x_shift=6.55)
-    config = AdsorptionConfig(
-        material_type="slab",
-        placement_clash_descent=True,
-        placement_x_range=(-1.5, 1.5),
-        placement_y_range=(-1.5, 1.5),
-        min_adsorbate_separation=1.5,
-    )
-    com1_before = np.mean(w1.atoms.get_positions()[w1.slab_size :], axis=0)
-    packed = pack_tuplet_adsorbates([w1, w2], slab, config)
-    assert len(packed) >= 1
-    assert packed[0].placement_id == 0
-    com1_after = np.mean(packed[0].atoms.get_positions()[packed[0].slab_size :], axis=0)
-    assert np.linalg.norm(com1_after - com1_before) < 0.41
-    if len(packed) == 2:
+        packed = pack_exact_tuplet(winners, slab, config)
+        assert packed is not None
+        assert [w.placement_id for w in packed] == [0, 1]
         s0 = packed[0].atoms.get_positions()[packed[0].slab_size :]
         s1 = packed[1].atoms.get_positions()[packed[1].slab_size :]
         assert (
             calculate_min_distance(s0, s1, slab.get_cell(), use_pbc=True, pbc=SLAB_PBC)
             >= 1.5 - 1e-3
+        )
+
+    def test_anchor_pose_unchanged_on_clear_or_rescue(self):
+        slab = make_slab()
+        w1 = _winner(slab, pid=0, e_ads=-1.0, x_shift=5.0)
+        w2 = _winner(slab, pid=1, e_ads=-0.9, x_shift=6.55)
+        config = AdsorptionConfig(
+            material_type="slab",
+            placement_clash_descent=True,
+            placement_x_range=(-1.5, 1.5),
+            placement_y_range=(-1.5, 1.5),
+            min_adsorbate_separation=1.5,
+        )
+        com1_before = np.mean(w1.atoms.get_positions()[w1.slab_size :], axis=0)
+        packed = pack_exact_tuplet([w1, w2], slab, config)
+        assert packed is not None
+        assert packed[0].placement_id == 0
+        com1_after = np.mean(
+            packed[0].atoms.get_positions()[packed[0].slab_size :], axis=0
+        )
+        assert np.linalg.norm(com1_after - com1_before) < 0.41
+
+    def test_single_winner_returned_unchanged(self):
+        slab = make_slab()
+        w = _winner(slab, pid=0, e_ads=-1.0)
+        packed = pack_exact_tuplet([w], slab, AdsorptionConfig(material_type="slab"))
+        assert packed is not None
+        assert packed[0] is w
+
+    def test_empty_winners_returns_none(self):
+        assert (
+            pack_exact_tuplet([], make_slab(), AdsorptionConfig(material_type="slab"))
+            is None
         )
 
 

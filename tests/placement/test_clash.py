@@ -23,7 +23,7 @@ def test_overlap_penalty_zero_when_clear():
     r_f = np.array([0.7], dtype=float)
     cell = np.eye(3) * 20.0
     pbc = [False, False, False]
-    f = overlap_penalty(moving, r_m, fixed, r_f, cell=cell, pbc=pbc, min_separation=1.5)
+    f = overlap_penalty(moving, r_m, fixed, r_f, cell=cell, pbc=pbc, pair_floors=1.5)
     assert f == 0.0
 
 
@@ -105,7 +105,7 @@ def test_resolve_rigid_clash_separates_near_overlap():
         cell=cell,
         pbc=pbc,
         config=config,
-        include_substrate_min_sep=True,
+        fixed_pair_floors=config.min_adsorbate_separation,
     )
     assert ok
     assert az is not None
@@ -139,7 +139,7 @@ def test_resolve_rigid_clash_fails_when_stacked():
         cell=cell,
         pbc=pbc,
         config=config,
-        include_substrate_min_sep=True,
+        fixed_pair_floors=config.min_adsorbate_separation,
     )
     assert not ok
 
@@ -173,7 +173,7 @@ def test_resolve_rigid_clash_deterministic():
         cell=cell,
         pbc=pbc,
         config=config,
-        include_substrate_min_sep=True,
+        fixed_pair_floors=config.min_adsorbate_separation,
     )
     p1, a1, ok1 = resolve_rigid_clash(moving, **kwargs)
     p2, a2, ok2 = resolve_rigid_clash(moving, **kwargs)
@@ -240,6 +240,13 @@ def test_clash_bounds_uses_supplied_moving_radii_for_zero_footprint(monkeypatch)
     assert dz == pytest.approx(1.25)
 
 
+def test_pair_floors_for_fixed_cloud_splits_substrate_and_adsorbate():
+    from metalsurfer.placement.clash import pair_floors_for_fixed_cloud
+
+    floors = pair_floors_for_fixed_cloud(5, n_substrate=3, adsorbate_separation=1.5)
+    np.testing.assert_allclose(floors, [0.0, 0.0, 0.0, 1.5, 1.5])
+
+
 def test_tuplet_clash_rescue_floor_scales_with_radii():
     from metalsurfer.placement.clash import tuplet_clash_rescue_floor
 
@@ -292,7 +299,7 @@ def test_resolve_rigid_clash_final_coords_use_one_mic(monkeypatch):
         cell=cell,
         pbc=pbc,
         config=config,
-        include_substrate_min_sep=True,
+        fixed_pair_floors=config.min_adsorbate_separation,
         moving_radii=atom_radii_for_symbols(
             list(moving.get_chemical_symbols()),
             min_separation=config.min_adsorbate_separation,

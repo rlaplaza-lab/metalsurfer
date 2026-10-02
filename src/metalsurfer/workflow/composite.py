@@ -6,9 +6,6 @@ via TorchSim. Placement-only CPU work builds mutually clear packs
 (:func:`pack_exact_tuplet`, :func:`assemble_joint_config_groups`); relaxation
 and validation run in batch (:func:`evaluate_composite_batch`).
 
-Legacy helpers :func:`select_tuplet_winners` and :func:`pack_tuplet_adsorbates`
-remain for tests and greedy packing from pre-built pose stubs.
-
 INVARIANT (substrate-prefix contract): adsorbate atoms come strictly AFTER the
 substrate prefix in every composite. Freeze constraints, desorption checks,
 decomposition filters, symmetry analysis, and
@@ -29,7 +26,6 @@ from dataclasses import replace
 import numpy as np
 from ase import Atoms
 
-from .._numeric_defaults import STANDARD_PRESSURE_BAR, STANDARD_TEMPERATURE_K
 from ..config import AdsorptionConfig
 from ..models import ScreeningResult
 from ..optimization import optimize_adsorbate_slab_batched
@@ -38,6 +34,7 @@ from ..placement.clash import (
     atom_radii_for_symbols,
     clash_bounds_for_adsorbate,
     compose_quaternion_with_azimuth,
+    pair_floors_for_fixed_cloud,
     resolve_rigid_clash,
     tuplet_clash_rescue_floor,
 )
@@ -50,7 +47,7 @@ from ..placement.occupancy import _positions_mutually_clear, incoming_inplane_ra
 from ..placement.site_coords import _slab_normal
 from ..surface_prep import apply_material_pbc
 from ..surface_prep.freeze import check_frozen_substrate_displacement
-from .shared import _validate_geometry, adsorption_ranking_energy
+from .shared import _validate_geometry
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +58,6 @@ __all__ = [
     "evaluate_composite_batch",
     "evaluate_composite_commit",
     "pack_exact_tuplet",
-    "pack_tuplet_adsorbates",
-    "select_tuplet_winners",
 ]
 
 
@@ -110,12 +105,22 @@ def _fixed_cloud_from_coverage_and_results(
     suffixes: Sequence[np.ndarray],
     *,
     min_separation: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Coverage slab atoms plus already-accepted adsorbate suffixes."""
+    n_substrate: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Coverage slab atoms plus already-accepted adsorbate suffixes.
+
+    Returns ``(positions, radii, pair_floors)``. Bare-substrate atoms use floor
+    0; pre-adsorbed coverage and packed suffixes use ``min_separation``.
+    """
     fixed_pos = np.asarray(slab_atoms.get_positions(), dtype=float)
     fixed_radii = atom_radii_for_symbols(
         list(slab_atoms.get_chemical_symbols()),
         min_separation=float(min_separation),
+    )
+    floors = pair_floors_for_fixed_cloud(
+        len(fixed_pos),
+        n_substrate=int(n_substrate),
+        adsorbate_separation=float(min_separation),
     )
     for other, prev in zip(suffixes, results, strict=True):
         fixed_pos = np.vstack([fixed_pos, other])
@@ -129,7 +134,13 @@ def _fixed_cloud_from_coverage_and_results(
                 ),
             ]
         )
-    return fixed_pos, fixed_radii
+        floors = np.concatenate(
+            [
+                floors,
+                np.full(len(other), float(min_separation), dtype=float),
+            ]
+        )
+    return fixed_pos, fixed_radii, floors
 
 
 def _min_dist_to_suffixes(
@@ -205,6 +216,7 @@ def _try_rescue_suffix(
     candidate: ScreeningResult,
     fixed_pos: np.ndarray,
     fixed_radii: np.ndarray,
+    fixed_floors: np.ndarray,
     *,
     slab_atoms: Atoms,
     cell: np.ndarray,
@@ -234,7 +246,7 @@ def _try_rescue_suffix(
         cell=cell,
         pbc=pbc,
         config=config,
-        include_substrate_min_sep=True,
+        fixed_pair_floors=fixed_floors,
         bounds=bounds,
     )
     if not ok:
@@ -244,205 +256,107 @@ def _try_rescue_suffix(
     )
 
 
-def select_tuplet_winners(
-    candidates: Sequence[ScreeningResult],
-    *,
-    cell: np.ndarray,
-    pbc: list[bool],
-    min_separation: float,
-    max_winners: int,
-    config: AdsorptionConfig | None = None,
-    slab_atoms: Atoms | None = None,
-    activity_by_molecule: Mapping[str, float] | None = None,
-    temperature: float | None = None,
-    pressure: float | None = None,
-) -> list[ScreeningResult]:
-    """Greedily pick up to *max_winners* mutually clear binders from *candidates*.
-
-    Ordered by ``(Ω, placement_id, molecule)`` where
-    ``Ω = E_ads − k_B T ln(a p / p°)``. Accept while Ω < 0 and clear under MIC;
-    optional clash-descent rescue when configured.
-    """
-    if temperature is None:
-        temperature = (
-            float(config.saturation_temperature)
-            if config is not None
-            else STANDARD_TEMPERATURE_K
-        )
-    if pressure is None:
-        pressure = (
-            float(config.saturation_pressure)
-            if config is not None
-            else STANDARD_PRESSURE_BAR
-        )
-    activities = activity_by_molecule
-
-    def _omega(result: ScreeningResult) -> float:
-        if activities is None:
-            activity = 1.0
-        else:
-            try:
-                activity = activities[result.molecule]
-            except KeyError as exc:
-                raise KeyError(
-                    f"missing saturation activity for molecule {result.molecule!r}"
-                ) from exc
-        return adsorption_ranking_energy(
-            result.energy_adsorption,
-            activity,
-            temperature,
-            pressure,
-        )
-
-    ordered = sorted(
-        candidates,
-        key=lambda r: (_omega(r), r.placement_id, r.molecule),
-    )
-    accepted: list[ScreeningResult] = []
-    accepted_suffixes: list[np.ndarray] = []
-    clash_on = (
-        config is not None
-        and bool(config.placement_clash_descent)
-        and slab_atoms is not None
-    )
-    cell_arr = np.asarray(cell, dtype=float)
-
-    for candidate in ordered:
-        if len(accepted) >= max_winners:
-            break
-        if _omega(candidate) >= 0:
-            break
-        suffix = _suffix_positions(candidate)
-        clear = all(
-            _positions_mutually_clear(
-                suffix,
-                other,
-                cell=cell_arr,
-                pbc=pbc,
-                min_separation=min_separation,
-            )
-            for other in accepted_suffixes
-        )
-        if clear:
-            accepted.append(candidate)
-            accepted_suffixes.append(suffix)
-            continue
-
-        if not clash_on or not accepted_suffixes:
-            continue
-        assert config is not None and slab_atoms is not None
-
-        min_d = _min_dist_to_suffixes(suffix, accepted_suffixes, cell=cell_arr, pbc=pbc)
-        cand_syms = list(candidate.atoms.get_chemical_symbols()[candidate.slab_size :])
-        fixed_syms: list[str] = []
-        for prev in accepted:
-            fixed_syms.extend(list(prev.atoms.get_chemical_symbols()[prev.slab_size :]))
-        rescue_floor = tuplet_clash_rescue_floor(
-            cand_syms,
-            fixed_syms,
-            min_separation=float(min_separation),
-        )
-        if min_d < rescue_floor:
-            continue
-
-        fixed_pos, fixed_radii = _fixed_cloud_from_coverage_and_results(
-            slab_atoms,
-            accepted,
-            accepted_suffixes,
-            min_separation=float(min_separation),
-        )
-
-        rescued = _try_rescue_suffix(
-            candidate,
-            fixed_pos,
-            fixed_radii,
-            slab_atoms=slab_atoms,
-            cell=cell_arr,
-            pbc=pbc,
-            config=config,
-        )
-        if rescued is None:
-            continue
-        accepted.append(rescued)
-        accepted_suffixes.append(_suffix_positions(rescued))
-    return accepted
-
-
-def pack_tuplet_adsorbates(
+def pack_exact_tuplet(
     winners: Sequence[ScreeningResult],
     slab_atoms: Atoms,
     config: AdsorptionConfig,
-) -> list[ScreeningResult]:
-    """Sequentially clash-pack units 2..n against frozen unit 1 + coverage.
+    *,
+    n_substrate: int | None = None,
+) -> list[ScreeningResult] | None:
+    """Pack *winners* into one exact-length tuplet or return ``None``.
 
-    Unit 1 stays at its screened/rescued pose. Units that fail descent are
-    dropped (partial tuplet). When ``placement_clash_descent`` is False, returns
-    *winners* unchanged.
+    Unit 1 stays at its screened pose. Each later unit must either be mutually
+    clear under ``min_adsorbate_separation`` against the packed set, or (when
+    ``placement_clash_descent`` is on) be rescued by rigid-body descent against
+    the coverage slab + packed units. Overlap with clash descent off, or a
+    failed rescue, rejects the whole pack. Partial packs are never returned.
 
-    Parameters
-    ----------
-    winners
-        Mutually clear (or rescued) binders from :func:`select_tuplet_winners`.
-    slab_atoms
-        Current coverage slab.
-    config
-        Adsorption configuration.
+    *n_substrate* is the bare-substrate atom count used for per-atom clash
+    floors (defaults to ``len(slab_atoms)`` when the coverage frame is bare).
     """
     if not winners:
-        return []
-    if not config.placement_clash_descent or len(winners) == 1:
-        return list(winners)
+        return None
+    if len(winners) == 1:
+        return [winners[0]]
+
+    substrate_n = len(slab_atoms) if n_substrate is None else int(n_substrate)
+    if substrate_n < 0 or substrate_n > len(slab_atoms):
+        raise ValueError(
+            f"n_substrate ({substrate_n}) must be in [0, {len(slab_atoms)}] "
+            "(coverage slab length)"
+        )
 
     cell = np.asarray(slab_atoms.get_cell(), dtype=float)
     pbc = material_aware_pbc(config.material_type)
+    min_sep = float(config.min_adsorbate_separation)
+    clash_on = bool(config.placement_clash_descent)
+
     packed: list[ScreeningResult] = [winners[0]]
     packed_suffixes: list[np.ndarray] = [_suffix_positions(winners[0])]
 
     for winner in winners[1:]:
-        fixed_pos, fixed_radii = _fixed_cloud_from_coverage_and_results(
+        suffix = _suffix_positions(winner)
+        clear = all(
+            _positions_mutually_clear(
+                suffix,
+                other,
+                cell=cell,
+                pbc=pbc,
+                min_separation=min_sep,
+            )
+            for other in packed_suffixes
+        )
+        if clear:
+            packed.append(winner)
+            packed_suffixes.append(suffix)
+            continue
+
+        if not clash_on:
+            return None
+
+        cand_syms = list(winner.atoms.get_chemical_symbols()[winner.slab_size :])
+        fixed_syms: list[str] = []
+        for prev in packed:
+            fixed_syms.extend(list(prev.atoms.get_chemical_symbols()[prev.slab_size :]))
+        clearance_targets: list[np.ndarray] = list(packed_suffixes)
+        if substrate_n < len(slab_atoms):
+            fixed_syms.extend(list(slab_atoms.get_chemical_symbols()[substrate_n:]))
+            pre_ads = np.asarray(slab_atoms.get_positions()[substrate_n:], dtype=float)
+            if pre_ads.size:
+                clearance_targets.append(pre_ads)
+        rescue_floor = tuplet_clash_rescue_floor(
+            cand_syms,
+            fixed_syms,
+            min_separation=min_sep,
+        )
+        if (
+            _min_dist_to_suffixes(suffix, clearance_targets, cell=cell, pbc=pbc)
+            < rescue_floor
+        ):
+            return None
+
+        fixed_pos, fixed_radii, fixed_floors = _fixed_cloud_from_coverage_and_results(
             slab_atoms,
             packed,
             packed_suffixes,
-            min_separation=float(config.min_adsorbate_separation),
+            min_separation=min_sep,
+            n_substrate=substrate_n,
         )
         rescued = _try_rescue_suffix(
             winner,
             fixed_pos,
             fixed_radii,
+            fixed_floors,
             slab_atoms=slab_atoms,
             cell=cell,
             pbc=pbc,
             config=config,
         )
         if rescued is None:
-            logger.info(
-                "n-tuplet pack: dropping unit %s (placement_id=%s); clash descent failed",
-                winner.molecule,
-                winner.placement_id,
-            )
-            continue
+            return None
         packed.append(rescued)
         packed_suffixes.append(_suffix_positions(rescued))
-    return packed
 
-
-def pack_exact_tuplet(
-    winners: Sequence[ScreeningResult],
-    slab_atoms: Atoms,
-    config: AdsorptionConfig,
-) -> list[ScreeningResult] | None:
-    """Pack *winners* into one exact-length tuplet or return ``None``.
-
-    Unlike :func:`pack_tuplet_adsorbates`, partial packs are rejected (no
-    dropping units 2..n). A single winner is returned unchanged.
-    """
-    if not winners:
-        return None
-    if len(winners) == 1:
-        return [winners[0]]
-    packed = pack_tuplet_adsorbates(winners, slab_atoms, config)
-    if len(packed) != len(winners):
-        return None
     return packed
 
 
@@ -454,6 +368,7 @@ def assemble_joint_config_groups(
     slab_atoms: Atoms,
     config: AdsorptionConfig,
     rng: np.random.Generator,
+    n_substrate: int | None = None,
 ) -> list[list[ScreeningResult]]:
     """Build up to *n_configs* disjoint groups of exactly *n_per_config* poses.
 
@@ -470,7 +385,9 @@ def assemble_joint_config_groups(
         scan = 0
         while scan < len(remaining) and len(group) < n_per_config:
             trial = group + [remaining[scan]]
-            packed = pack_exact_tuplet(trial, slab_atoms, config)
+            packed = pack_exact_tuplet(
+                trial, slab_atoms, config, n_substrate=n_substrate
+            )
             if packed is not None:
                 group = packed
                 remaining.pop(scan)
@@ -490,6 +407,7 @@ def assemble_quota_joint_configs(
     slab_atoms: Atoms,
     config: AdsorptionConfig,
     rng: np.random.Generator,
+    n_substrate: int | None = None,
 ) -> list[list[ScreeningResult]]:
     """Build joint configs with exact per-species slot counts from *quotas*."""
     n_total = sum(int(q) for q in quotas.values())
@@ -514,7 +432,9 @@ def assemble_quota_joint_configs(
             found = False
             while scan < len(remaining[mol]):
                 trial = group + [remaining[mol][scan]]
-                packed = pack_exact_tuplet(trial, slab_atoms, config)
+                packed = pack_exact_tuplet(
+                    trial, slab_atoms, config, n_substrate=n_substrate
+                )
                 if packed is not None:
                     group = packed
                     taken.append((mol, remaining[mol].pop(scan)))

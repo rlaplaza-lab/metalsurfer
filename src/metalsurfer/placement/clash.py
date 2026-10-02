@@ -36,9 +36,32 @@ __all__ = [
     "clash_bounds_for_adsorbate",
     "compose_quaternion_with_azimuth",
     "overlap_penalty",
+    "pair_floors_for_fixed_cloud",
     "resolve_rigid_clash",
     "tuplet_clash_rescue_floor",
 ]
+
+
+def pair_floors_for_fixed_cloud(
+    n_fixed: int,
+    *,
+    n_substrate: int,
+    adsorbate_separation: float,
+) -> np.ndarray:
+    """Per-fixed-atom separation floors for a coverage slab + packed units.
+
+    Bare-substrate atoms (prefix ``[:n_substrate]``) use radius-sum contact only
+    (floor 0). Pre-adsorbed and already-packed adsorbate atoms use
+    ``adsorbate_separation`` so thresholds become ``max(r_i + r_j, sep)``.
+    """
+    if n_substrate < 0 or n_substrate > n_fixed:
+        raise ValueError(
+            f"n_substrate ({n_substrate}) must be in [0, {n_fixed}] (n_fixed)"
+        )
+    floors = np.zeros(int(n_fixed), dtype=float)
+    if n_substrate < n_fixed:
+        floors[int(n_substrate) :] = float(adsorbate_separation)
+    return floors
 
 
 def clash_bounds_for_adsorbate(
@@ -159,15 +182,37 @@ def compose_quaternion_with_azimuth(
     return float(q_new[0]), float(q_new[1]), float(q_new[2]), float(q_new[3])
 
 
+def _normalize_pair_floors(
+    pair_floors: np.ndarray | float | None,
+    n_fixed: int,
+) -> np.ndarray | None:
+    """Broadcast a scalar / per-fixed floor array, or return ``None``."""
+    if pair_floors is None:
+        return None
+    if np.isscalar(pair_floors):
+        return np.full(n_fixed, float(pair_floors), dtype=float)
+    floors = np.asarray(pair_floors, dtype=float).reshape(-1)
+    if floors.shape[0] != n_fixed:
+        raise ValueError(
+            f"pair_floors length ({floors.shape[0]}) must match n_fixed ({n_fixed})"
+        )
+    return floors
+
+
 def _pair_thresholds(
     moving_radii: np.ndarray,
     fixed_radii: np.ndarray,
-    min_separation: float | None,
+    pair_floors: np.ndarray | None,
 ) -> np.ndarray:
-    """Pairwise separation thresholds ``(n_moving, n_fixed)``."""
+    """Pairwise separation thresholds ``(n_moving, n_fixed)``.
+
+    *pair_floors* is per fixed atom. Column *j* uses
+    ``max(r_i + r_j, pair_floors[j])`` when floors are set; otherwise the
+    covalent / supplied radius sum alone.
+    """
     thresh = moving_radii[:, None] + fixed_radii[None, :]
-    if min_separation is not None:
-        thresh = np.maximum(thresh, float(min_separation))
+    if pair_floors is not None:
+        thresh = np.maximum(thresh, pair_floors[None, :])
     return thresh
 
 
@@ -179,12 +224,13 @@ def overlap_penalty(
     *,
     cell: np.ndarray,
     pbc: list[bool],
-    min_separation: float | None = None,
+    pair_floors: np.ndarray | float | None = None,
 ) -> float:
     """Packmol distance-term merit: sum of squared positive overlaps.
 
-    ``f = sum_ij [max(0, (r_i + r_j)^2 - d_ij^2)]^2``. When *min_separation*
-    is set, each pair threshold is ``max(r_i + r_j, min_separation)``.
+    ``f = sum_ij [max(0, thresh_ij^2 - d_ij^2)]^2`` with
+    ``thresh_ij = r_i + r_j`` or ``max(r_i + r_j, pair_floors[j])`` when
+    *pair_floors* is set (scalar or per-fixed-atom array).
 
     Parameters
     ----------
@@ -200,8 +246,9 @@ def overlap_penalty(
         Unit cell matrix.
     pbc
         Periodic boundary flags.
-    min_separation
-        Optional hard floor on pairwise separation (Å).
+    pair_floors
+        Optional hard floor(s) on pairwise separation (Å), broadcast per
+        fixed atom.
     """
     f, _grad = _overlap_penalty_and_pos_grad(
         moving_pos,
@@ -210,7 +257,7 @@ def overlap_penalty(
         fixed_radii,
         cell=cell,
         pbc=pbc,
-        min_separation=min_separation,
+        pair_floors=pair_floors,
     )
     return f
 
@@ -223,7 +270,7 @@ def _overlap_penalty_and_pos_grad(
     *,
     cell: np.ndarray,
     pbc: list[bool],
-    min_separation: float | None,
+    pair_floors: np.ndarray | float | None,
 ) -> tuple[float, np.ndarray]:
     """Return ``(f, df/dp)`` with ``df/dp`` shape ``(n_moving, 3)``."""
     mov = np.asarray(moving_pos, dtype=float)
@@ -238,8 +285,9 @@ def _overlap_penalty_and_pos_grad(
             f"moving {r_m.shape[0]} vs {mov.shape[0]}, "
             f"fixed {r_f.shape[0]} vs {fix.shape[0]}"
         )
+    floors = _normalize_pair_floors(pair_floors, fix.shape[0])
     mic_vecs, dists = geom._mol_slab_pairwise_mic(mov, fix, cell, pbc)
-    thresh = _pair_thresholds(r_m, r_f, min_separation)
+    thresh = _pair_thresholds(r_m, r_f, floors)
     overlap = np.maximum(0.0, thresh * thresh - dists * dists)
     f = float(np.sum(overlap * overlap))
     # df/dp_i = sum_j -4 * o_ij * mic_vec_ij  for overlapping pairs.
@@ -256,7 +304,7 @@ def _overlap_f_and_max_violation(
     *,
     cell: np.ndarray,
     pbc: list[bool],
-    min_separation: float | None,
+    pair_floors: np.ndarray | float | None,
 ) -> tuple[float, float]:
     """Return ``(overlap_penalty_f, max_pair_violation)`` from one MIC."""
     mov = np.asarray(moving_pos, dtype=float)
@@ -265,8 +313,9 @@ def _overlap_f_and_max_violation(
         return 0.0, 0.0
     r_m = np.asarray(moving_radii, dtype=float).reshape(-1)
     r_f = np.asarray(fixed_radii, dtype=float).reshape(-1)
+    floors = _normalize_pair_floors(pair_floors, fix.shape[0])
     _, dists = geom._mol_slab_pairwise_mic(mov, fix, cell, pbc)
-    thresh = _pair_thresholds(r_m, r_f, min_separation)
+    thresh = _pair_thresholds(r_m, r_f, floors)
     overlap = np.maximum(0.0, thresh * thresh - dists * dists)
     f = float(np.sum(overlap * overlap))
     viol = float(np.max(np.maximum(0.0, thresh - dists)))
@@ -307,7 +356,7 @@ def _rigid_state_objective_and_jac(
     fixed_radii: np.ndarray,
     cell: np.ndarray,
     pbc: list[bool],
-    min_separation: float | None,
+    pair_floors: np.ndarray | float | None,
 ) -> tuple[float, np.ndarray]:
     """Value and analytic Jacobian of the Packmol merit wrt rigid state."""
     pos = _apply_rigid_state(base_pos, origin, site_frame, normal, state)
@@ -318,7 +367,7 @@ def _rigid_state_objective_and_jac(
         fixed_radii,
         cell=cell,
         pbc=pbc,
-        min_separation=min_separation,
+        pair_floors=pair_floors,
     )
     # d(pos)/d(local translation k) equals the k-th site-frame basis vector.
     jac = np.zeros(4, dtype=float)
@@ -351,7 +400,7 @@ def resolve_rigid_clash(
     pbc: list[bool],
     config: AdsorptionConfig,
     rotate_azimuth: bool = True,
-    include_substrate_min_sep: bool = False,
+    fixed_pair_floors: np.ndarray | float | None = None,
     use_vdw_moving: bool = False,
     bounds: tuple[tuple[float, float], tuple[float, float], float] | None = None,
     moving_radii: np.ndarray | None = None,
@@ -360,6 +409,11 @@ def resolve_rigid_clash(
 
     State is ``[dx, dy, dz, d_az_deg]`` in the local site frame. Bounds default to
     :func:`clash_bounds_for_adsorbate`, or pass ``(x_range, y_range, dz_bound)``.
+
+    *fixed_pair_floors* is a scalar or per-fixed-atom array. Bare-substrate
+    contacts omit the floor (radius sum); pre-adsorbed / packed adsorbate
+    atoms typically use ``config.min_adsorbate_separation`` (see
+    :func:`pair_floors_for_fixed_cloud`).
     """
     base_pos = np.asarray(adsorbate.get_positions(), dtype=float)
     origin_arr = np.asarray(origin, dtype=float).reshape(3)
@@ -377,11 +431,9 @@ def resolve_rigid_clash(
         )
     else:
         moving_radii = np.asarray(moving_radii, dtype=float).reshape(-1)
-    min_sep = (
-        float(config.min_adsorbate_separation) if include_substrate_min_sep else None
-    )
     fix = np.asarray(fixed_pos, dtype=float)
     fix_r = np.asarray(fixed_radii, dtype=float).reshape(-1)
+    floors = _normalize_pair_floors(fixed_pair_floors, fix.shape[0])
 
     f0 = overlap_penalty(
         base_pos,
@@ -390,7 +442,7 @@ def resolve_rigid_clash(
         fix_r,
         cell=cell,
         pbc=pbc,
-        min_separation=min_sep,
+        pair_floors=floors,
     )
     if f0 <= _CLASH_DESCENT_SUCCESS_F:
         return base_pos.copy(), 0.0 if rotate_azimuth else None, True
@@ -416,7 +468,7 @@ def resolve_rigid_clash(
             fixed_radii=fix_r,
             cell=cell,
             pbc=pbc,
-            min_separation=min_sep,
+            pair_floors=floors,
         )
 
     result = minimize(
@@ -436,7 +488,7 @@ def resolve_rigid_clash(
         fix_r,
         cell=cell,
         pbc=pbc,
-        min_separation=min_sep,
+        pair_floors=floors,
     )
     ok = f_best <= _CLASH_DESCENT_SUCCESS_F or viol <= float(
         _CLASH_DESCENT_SUCCESS_VIOLATION_ANGSTROM

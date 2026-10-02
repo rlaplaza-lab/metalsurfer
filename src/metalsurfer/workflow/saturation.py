@@ -44,6 +44,7 @@ from .bayesian import process_molecule_bayesian
 from .core import process_molecule
 from .joint_tuplet import (
     commit_best_joint_config,
+    joint_winning_molecule_label,
     process_joint_tuplet_bayesian,
     screen_joint_tuplet_homogeneous,
     screen_joint_tuplet_multi,
@@ -1073,6 +1074,12 @@ def _run_multi_molecule_saturation(
     activity_by_molecule: Mapping[str, float],
 ) -> MultiMolSaturationRunResult:
     """Run a competitive multi-molecule saturation loop."""
+    if bo_enabled and int(config.saturation_molecules_per_step) > 1:
+        raise ValueError(
+            "Joint n-tuplet Bayesian screening is single-species only; "
+            "multi_molecule_saturation with saturation_molecules_per_step > 1 "
+            "cannot use bo_enabled=True"
+        )
     temperature = config.saturation_temperature
     pressure = config.saturation_pressure
     conformer_cache: dict[str, tuple[list[Atoms], list[float]]] = {}
@@ -1221,7 +1228,6 @@ def _run_multi_molecule_saturation(
                 active_molecules=active_molecules,
                 active_smiles=active_smiles,
                 conformer_cache=conformer_cache,
-                budgets=budgets,
                 current_slab=slab,
                 calculator=calculator,
                 ref_step=ref_step,
@@ -1253,11 +1259,16 @@ def _run_multi_molecule_saturation(
                 pressure=pressure,
             )
             assert best_overall is not None
+            winning_label = (
+                joint_winning_molecule_label(committed)
+                if committed
+                else best_overall.molecule
+            )
             return _StepScreenOutcome(
                 best=best_overall,
                 committed=committed,
                 payload=_MultiStepPayload(
-                    winning_molecule=best_overall.molecule,
+                    winning_molecule=winning_label,
                     per_molecule_results=per_molecule_results,
                     budgets=dict(budgets),
                     transfer_by_molecule=per_molecule_bo_transfer,
@@ -1585,11 +1596,6 @@ def run_saturation_screening(
                     t_total_s=t_run_total,
                 )
             return [multi_result]
-
-        if config.multi_molecule_saturation and len(molecule_names) == 1:
-            logger.warning(
-                "Multi_molecule_saturation=True but only one molecule provided; falling back to standard single-molecule saturation"
-            )
 
         all_saturation_results: list[SaturationRunResult] = []
         for smi, mol in zip(smiles_list, molecule_names, strict=True):

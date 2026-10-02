@@ -187,7 +187,8 @@ order.
 
 **Molecules competing.** ``multi_molecule_saturation=True`` screens every
 adsorbate on the same slab each step and advances the one with the lowest
-:math:`\Omega`.
+:math:`\Omega`. With one molecule in the list the flag is ignored and the
+single-molecule loop runs.
 
 **n-tuplet mode.** ``saturation_molecules_per_step`` (default ``1``) is how
 many adsorbates one step places together. Above 1, each trial is one initial
@@ -195,7 +196,10 @@ structure with exactly that many adsorbates: CPU placement builds clash-free
 packs (``num_placements`` joint configs), TorchSim relaxes every pack with all
 members together, and the step commits the best binding config. There is no
 single-adsorbate MLIP screen and no partial-tuplet or single-winner fallback.
-Stored ``energy_adsorption`` is **per molecule**
+Overlapping packs are rejected when ``placement_clash_descent`` is off;
+otherwise near-misses are rescued by clash descent (substrate contacts use
+radius sums; packed adsorbates use ``min_adsorbate_separation``). Stored
+``energy_adsorption`` is **per molecule**
 (:math:`E_\mathrm{ads,total}/n`); composite totals stay on
 ``energy_adslab`` / ``energy_adsorbate``. The stop uses
 :math:`\Omega_\mathrm{tuplet}` (equivalently :math:`\Omega/n` at default
@@ -203,13 +207,18 @@ reservoir conditions). Once ``num_placements`` is known it is divided by the
 tuplet size, as are ``bo.initial_random`` and ``bo.batch_size`` (each eval is
 an *n*-body relax). With BO on a single adsorbate, acquisition still scores
 single-site features but labels use :math:`\Omega/n` from each joint eval.
+Competitive multi-molecule n-tuplet enumerates every species composition of
+size *n*, splits the joint-config budget equally across compositions, and
+ranks packs by :math:`\Omega_\mathrm{tuplet}`; joint BO is single-species only
+and raises if combined with ``multi_molecule_saturation``.
 
 **How Bayesian search uses earlier placements.**
-:func:`~metalsurfer.run_saturation_bo` ranks with :math:`\Omega` and trains
-the surrogate on :math:`E_\mathrm{ads}`. Failed poses enter as penalties when
-``bo.include_failure_negatives`` is on (the default). ``bo.transfer`` is on
-by default, so the next coverage step starts from evaluations already made
-for that molecule:
+:func:`~metalsurfer.run_saturation_bo` ranks with :math:`\Omega`. Sequential
+saturation trains the surrogate on electronic :math:`E_\mathrm{ads}`; joint
+n-tuplet BO (single adsorbate) labels with :math:`\Omega/n`. Failed poses enter
+as penalties when ``bo.include_failure_negatives`` is on (the default).
+``bo.transfer`` is on by default, so the next coverage step starts from
+evaluations already made for that molecule:
 
 - The last ``bo.transfer.prior_step_window`` steps are reused (default 2).
   Set it to ``None`` to keep the full history. Older steps inside that

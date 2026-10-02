@@ -362,18 +362,10 @@ def _group_packs(
     if n <= 0:
         return []
     if len(all_results) % n != 0:
-        # Fallback: group by shared per-molecule E_ads + atom count.
-        buckets: dict[tuple[float, int], list[ScreeningResult]] = {}
-        for row in all_results:
-            key = (round(float(row.energy_adsorption), 8), len(row.atoms))
-            buckets.setdefault(key, []).append(row)
-        packs: list[list[ScreeningResult]] = []
-        for group in buckets.values():
-            for i in range(0, len(group), n):
-                chunk = group[i : i + n]
-                if len(chunk) == n:
-                    packs.append(chunk)
-        return packs
+        raise ValueError(
+            f"flattened n-tuplet results length ({len(all_results)}) is not "
+            f"divisible by n={n}; expected complete joint packs only"
+        )
     return [all_results[i : i + n] for i in range(0, len(all_results), n)]
 
 

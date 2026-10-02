@@ -1591,7 +1591,7 @@ def _try_clash_descent_recovery(
         use_vdw=use_vdw,
     )
     cutoff = 2.0 * float(np.max(moving_r) if moving_r.size else footprint) + z_window
-    fixed_pos, fixed_radii = _clash_recovery_fixed_cloud(
+    fixed_pos, fixed_radii, fixed_floors = _clash_recovery_fixed_cloud(
         slab,
         slab_scratch,
         ads_com=np.asarray(work_center, dtype=float),
@@ -1600,7 +1600,7 @@ def _try_clash_descent_recovery(
         min_adsorbate_separation=float(config.min_adsorbate_separation),
         neighbor_cutoff=cutoff,
     )
-    if fixed_pos is None or fixed_radii is None:
+    if fixed_pos is None:
         return ctx, fail_reason
 
     bounds = clash_bounds_for_adsorbate(
@@ -1623,7 +1623,7 @@ def _try_clash_descent_recovery(
         cell=slab_scratch.cell,
         pbc=slab_scratch.pbc,
         config=config,
-        include_substrate_min_sep=(fail_reason == "adsorbate_overlap"),
+        fixed_pair_floors=fixed_floors,
         use_vdw_moving=use_vdw,
         bounds=bounds,
         moving_radii=moving_r,
@@ -1677,10 +1677,15 @@ def _clash_recovery_fixed_cloud(
     min_initial_distance: float,
     min_adsorbate_separation: float,
     neighbor_cutoff: float,
-) -> tuple[np.ndarray | None, np.ndarray | None]:
-    """Nearby substrate / pre-adsorbate atoms for clash recovery."""
+) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+    """Nearby substrate / pre-adsorbate atoms for clash recovery.
+
+    Returns ``(positions, radii, pair_floors)``. Substrate atoms use floor 0
+    (radius-sum contact); pre-adsorbed atoms use ``min_adsorbate_separation``.
+    """
     fixed_chunks: list[np.ndarray] = []
     radius_chunks: list[np.ndarray] = []
+    floor_chunks: list[np.ndarray] = []
     cutoff = float(neighbor_cutoff)
 
     def _nearby_mask(positions: np.ndarray) -> np.ndarray:
@@ -1696,7 +1701,9 @@ def _clash_recovery_fixed_cloud(
 
     near = _nearby_mask(slab_scratch.slab_pos)
     if np.any(near):
+        n_near = int(np.count_nonzero(near))
         fixed_chunks.append(slab_scratch.slab_pos[near])
+        floor_chunks.append(np.zeros(n_near, dtype=float))
         if use_vdw and slab_scratch.slab_vdw_r is not None:
             radius_chunks.append(np.asarray(slab_scratch.slab_vdw_r, dtype=float)[near])
         elif slab_scratch.slab_cov_r is not None:
@@ -1714,7 +1721,11 @@ def _clash_recovery_fixed_cloud(
     if slab_scratch.pre_ads_pos is not None and slab_scratch.pre_ads_pos.size:
         near_pre = _nearby_mask(slab_scratch.pre_ads_pos)
         if np.any(near_pre):
+            n_pre = int(np.count_nonzero(near_pre))
             fixed_chunks.append(slab_scratch.pre_ads_pos[near_pre])
+            floor_chunks.append(
+                np.full(n_pre, float(min_adsorbate_separation), dtype=float)
+            )
             exclude_n = len(slab_scratch.slab_pos)
             pre_syms = list(slab.get_chemical_symbols()[exclude_n:])
             pre_syms_near = [
@@ -1729,11 +1740,11 @@ def _clash_recovery_fixed_cloud(
             )
 
     if not fixed_chunks:
-        return None, None
+        return None, None, None
     fixed_radii = np.concatenate(radius_chunks)
     floor = min_adsorbate_separation / 2.0
     fixed_radii = np.where(np.isfinite(fixed_radii), fixed_radii, floor)
-    return np.vstack(fixed_chunks), fixed_radii
+    return np.vstack(fixed_chunks), fixed_radii, np.concatenate(floor_chunks)
 
 
 def _build_slab_distance_scratch(

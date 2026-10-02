@@ -36,7 +36,6 @@ from ..models import (
     ScreeningResult,
 )
 from ..placement.generators import (
-    distribute_placement_budget,
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
 )
@@ -61,7 +60,9 @@ from .shared import (
 __all__ = [
     "JointTupletScreenOutcome",
     "commit_best_joint_config",
+    "enumerate_tuplet_compositions",
     "joint_config_ranking_energy",
+    "joint_winning_molecule_label",
     "process_joint_tuplet_bayesian",
     "screen_joint_tuplet_homogeneous",
     "screen_joint_tuplet_multi",
@@ -106,6 +107,62 @@ def joint_config_ranking_energy(
         temperature,
         pressure,
     )
+
+
+def joint_winning_molecule_label(group: Sequence[ScreeningResult]) -> str:
+    """Species label for a committed joint pack (``A`` or ``A+B`` in pack order)."""
+    if not group:
+        raise ValueError("joint winning label requires a non-empty group")
+    if len(group) == 1:
+        return group[0].molecule
+    return "+".join(row.molecule for row in group)
+
+
+def enumerate_tuplet_compositions(
+    molecules: Sequence[str],
+    n: int,
+) -> list[dict[str, int]]:
+    """All non-negative integer count maps with ``sum(counts) == n``.
+
+    Molecule order is preserved from *molecules*. Empty *molecules* yields
+    ``[{}]`` only when *n* is 0.
+    """
+    names = list(molecules)
+    if n < 0:
+        raise ValueError(f"n must be non-negative, got {n}")
+    if not names:
+        return [{}] if n == 0 else []
+    if len(names) == 1:
+        return [{names[0]: int(n)}]
+
+    compositions: list[dict[str, int]] = []
+
+    def _recurse(remaining: int, index: int, current: dict[str, int]) -> None:
+        if index == len(names) - 1:
+            current[names[index]] = remaining
+            compositions.append(dict(current))
+            return
+        for count in range(remaining + 1):
+            current[names[index]] = count
+            _recurse(remaining - count, index + 1, current)
+
+    _recurse(int(n), 0, {})
+    return compositions
+
+
+def _equal_split_budget(total: int, n_parts: int) -> list[int]:
+    """Largest-remainder equal split; requires ``total >= n_parts``."""
+    if n_parts <= 0:
+        raise ValueError(f"n_parts must be positive, got {n_parts}")
+    if total < n_parts:
+        raise ValueError(
+            f"joint-config budget ({total}) is smaller than the number of "
+            f"compositions ({n_parts}); raise num_placements or lower "
+            "saturation_molecules_per_step"
+        )
+    base = total // n_parts
+    rem = total % n_parts
+    return [base + (1 if i < rem else 0) for i in range(n_parts)]
 
 
 def commit_best_joint_config(
@@ -330,6 +387,7 @@ def screen_joint_tuplet_homogeneous(
         slab_atoms=current_slab.atoms,
         config=config,
         rng=np.random.default_rng(seed),
+        n_substrate=len(base_slab),
     )
     return _relax_groups(
         groups,
@@ -348,7 +406,6 @@ def screen_joint_tuplet_multi(
     active_molecules: Sequence[str],
     active_smiles: Mapping[str, str],
     conformer_cache: Mapping[str, tuple[list[Atoms], list[float]]],
-    budgets: Mapping[str, int],
     current_slab: SlabContainer,
     calculator,
     ref_step: ReferenceEnergies,
@@ -360,19 +417,33 @@ def screen_joint_tuplet_multi(
     topology_check: TopologyCheck | None = None,
     log_prefix: str = "",
 ) -> JointTupletScreenOutcome:
-    """Joint screening for competitive multi-molecule n-tuplet steps."""
+    """Joint screening over every species composition of size *n*.
+
+    Each exact-*n* count map across *active_molecules* receives an equal share
+    of ``num_placements``. Pose pools are sized from the slots each species
+    fills across those shares (homogeneous oversample). Valid packs from every
+    composition are ranked together by ``Ω_tuplet``.
+    """
     n = config.saturation_molecules_per_step
     n_configs = config.num_placements
     if n_configs is None:
         raise ValueError("num_placements must be set")
 
-    quotas = distribute_placement_budget(
-        {mol: float(len(conformer_cache[mol][0])) for mol in active_molecules},
-        n,
-    )
+    compositions = enumerate_tuplet_compositions(active_molecules, n)
+    if not compositions:
+        return JointTupletScreenOutcome(valid_configs=[], flat_results=[])
+
+    per_comp_budgets = _equal_split_budget(int(n_configs), len(compositions))
+    oversample = float(config.placement_retry_oversample_max)
+    slots_by_mol: dict[str, int] = {mol: 0 for mol in active_molecules}
+    for quotas, n_share in zip(compositions, per_comp_budgets, strict=True):
+        for mol, count in quotas.items():
+            slots_by_mol[mol] += int(count) * int(n_share)
+
     pools: dict[str, list[ScreeningResult]] = {}
     for mol in active_molecules:
-        if budgets.get(mol, 0) <= 0:
+        slots = slots_by_mol.get(mol, 0)
+        if slots <= 0:
             pools[mol] = []
             continue
         E_mol = ref_step.get_molecule_energy(mol)
@@ -380,6 +451,7 @@ def screen_joint_tuplet_multi(
             pools[mol] = []
             continue
         confs, conf_energies = conformer_cache[mol]
+        pool_size = max(1, int(math.ceil(slots * oversample)))
         pools[mol] = _materialize_pose_pool(
             smiles=active_smiles[mol],
             molecule_name=mol,
@@ -392,17 +464,24 @@ def screen_joint_tuplet_multi(
             site_context=site_context,
             E_slab=E_slab,
             E_mol=E_mol,
-            pool_size=max(budgets[mol], n * 2),
+            pool_size=pool_size,
         )
 
-    groups = assemble_quota_joint_configs(
-        pools,
-        quotas=quotas,
-        n_configs=n_configs,
-        slab_atoms=current_slab.atoms,
-        config=config,
-        rng=np.random.default_rng(config.seed),
-    )
+    groups: list[list[ScreeningResult]] = []
+    rng = np.random.default_rng(config.seed)
+    for quotas, n_share in zip(compositions, per_comp_budgets, strict=True):
+        active_quotas = {mol: int(c) for mol, c in quotas.items() if int(c) > 0}
+        groups.extend(
+            assemble_quota_joint_configs(
+                pools,
+                quotas=active_quotas,
+                n_configs=n_share,
+                slab_atoms=current_slab.atoms,
+                config=config,
+                rng=rng,
+                n_substrate=len(base_slab),
+            )
+        )
     return _relax_groups(
         groups,
         slab_atoms=current_slab.atoms,
@@ -433,6 +512,7 @@ def _assemble_bo_joint_groups_from_specs(
     E_mol: float,
     n_per_config: int,
     rng: np.random.RandomState,
+    n_substrate: int,
 ) -> list[list[ScreeningResult]]:
     """Build one joint group per anchor index (greedy companions)."""
     slab_size = len(slab.atoms)
@@ -481,7 +561,12 @@ def _assemble_bo_joint_groups_from_specs(
             if stub is None:
                 scan += 1
                 continue
-            packed = pack_exact_tuplet(group + [stub], slab.atoms, config)
+            packed = pack_exact_tuplet(
+                group + [stub],
+                slab.atoms,
+                config,
+                n_substrate=n_substrate,
+            )
             if packed is None:
                 scan += 1
                 continue
@@ -690,6 +775,7 @@ def process_joint_tuplet_bayesian(
             E_mol=E_mol,
             n_per_config=n,
             rng=rng,
+            n_substrate=len(base_slab),
         )
         evaluated_anchors.update(fresh)
         total_evaluated += len(fresh)

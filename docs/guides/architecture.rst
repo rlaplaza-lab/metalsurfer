@@ -754,15 +754,17 @@ Sequential saturation
 compete each step; lowest ``Ω`` wins. ``saturation_molecules_per_step > 1``:
 screen exact-*n* joint configs (CPU place, TorchSim relax all *n* together;
 ``workflow/joint_tuplet.py``); commit the best binding pack; stop uses
-``Ω_tuplet`` with per-molecule stored ``E_ads``. Demo:
-``examples/water_oh_rutile_saturation.py``.
+``Ω_tuplet`` with per-molecule stored ``E_ads``. Competitive multi-molecule
+n-tuplet enumerates every species composition of size *n* and ranks packs by
+``Ω_tuplet``. Demo: ``examples/water_oh_rutile_saturation.py``.
 
 BO saturation
 ~~~~~~~~~~~~~
 ``saturation_bo``): same loop with BO placement selection and optional
 transfer. Reservoir ``Ω`` ranking is on the shared commit/stop path;
-``observed_y`` stays electronic ``E_ads`` (``Ω/n`` labels in joint n-tuplet
-BO).
+sequential ``observed_y`` is electronic ``E_ads``, while joint n-tuplet BO
+(single adsorbate) labels with ``Ω/n``. Competitive multi-molecule n-tuplet
+raises if BO is requested.
 
 Stop conditions: empty commit (including n-tuplet with no valid joint
 config); committed ``Ω ≥ 0`` (``Ω_tuplet`` for multi-winner steps); no valid

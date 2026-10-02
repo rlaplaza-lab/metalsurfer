@@ -1397,8 +1397,8 @@ def test_multi_mol_saturation_step_result_structure(monkeypatch):
     assert isinstance(result.molecule_counts, dict)
 
 
-def test_multi_mol_saturation_single_molecule_fallback(monkeypatch, caplog):
-    """When multi_molecule_saturation=True but only 1 molecule, falls back gracefully."""
+def test_multi_mol_saturation_single_molecule_uses_standard_loop(monkeypatch, caplog):
+    """With one molecule, multi_molecule_saturation routes to the single-molecule loop."""
     slab = SlabContainer(make_slab())
     config = _mock_saturation_config(multi_molecule_saturation=True)
 
@@ -1430,7 +1430,7 @@ def test_multi_mol_saturation_single_molecule_fallback(monkeypatch, caplog):
 
     assert len(out) == 1
     assert isinstance(out[0], SaturationRunResult)
-    assert any("falling back" in rec.getMessage().lower() for rec in caplog.records)
+    assert not any("falling back" in rec.getMessage().lower() for rec in caplog.records)
 
 
 def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
@@ -2549,6 +2549,7 @@ def test_run_saturation_screening_n_tuplet_commits_two_winners_per_step(
     assert step.n_added == 2
     assert len(step.committed_results) == 2
     assert {r.molecule for r in step.committed_results} == {"A", "B"}
+    assert step.winning_molecule == "A+B"
     assert run.n_molecules_at_saturation == 2
     assert run.molecule_counts == {"A": 1, "B": 1}
     # Max-steps guarantee: final slab holds exactly sum(n_added) adsorbates.
@@ -3024,6 +3025,51 @@ def test_single_mol_n_tuplet_divides_autotuned_budget(monkeypatch):
 
     assert received_configs == [max(1, 11 // 2)]
     assert out[0].steps[0].n_added == 2
+
+
+def test_enumerate_tuplet_compositions_two_species_n2():
+    from metalsurfer.workflow.joint_tuplet import enumerate_tuplet_compositions
+
+    comps = enumerate_tuplet_compositions(["water", "OH"], 2)
+    assert comps == [
+        {"water": 0, "OH": 2},
+        {"water": 1, "OH": 1},
+        {"water": 2, "OH": 0},
+    ]
+
+
+def test_joint_winning_molecule_label_pack_order():
+    from metalsurfer.workflow.joint_tuplet import joint_winning_molecule_label
+
+    slab = make_slab()
+    group = _make_joint_config(slab, [("OH", 0, 2.5), ("water", 1, 7.0)])
+    assert joint_winning_molecule_label(group) == "OH+water"
+    assert joint_winning_molecule_label(group[:1]) == "OH"
+
+
+def test_multi_mol_n_tuplet_rejects_bo_enabled(monkeypatch, workdir):
+    """Competitive n-tuplet + BO is unsupported (joint BO is single-species)."""
+    slab = make_slab()
+    _patch_multi_mol_saturation_mocks(
+        monkeypatch,
+        molecules=["A", "B"],
+        smiles_list=["OA", "OB"],
+        ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
+        process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
+    )
+    with pytest.raises(ValueError, match="single-species only"):
+        run_saturation_screening(
+            SlabContainer(slab),
+            molecules=[("OA", "A"), ("OB", "B")],
+            config=_mock_saturation_config(
+                multi_molecule_saturation=True,
+                saturation_molecules_per_step=2,
+                saturation_max_steps=1,
+            ),
+            surface_type="tuplet_multi_bo_error",
+            skip_existing=False,
+            bo_enabled=True,
+        )
 
 
 def _steps_for_counting():
