@@ -49,6 +49,7 @@ from metalsurfer.surface_prep import (
 )
 from metalsurfer.symmetry import SymmetryAnalysisError
 from metalsurfer.workflow import load_molecules, run_saturation_screening
+from metalsurfer.workflow.joint_tuplet import JointTupletScreenOutcome
 from metalsurfer.workflow.saturation import (
     _filter_saturation_topology_results,
     _n_at_saturation_from_steps,
@@ -2436,70 +2437,98 @@ def test_single_mol_saturation_resolves_workload_config_once(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _pool_process(pools: dict[str, list[tuple[float, float]]]):
-    """process_molecule double returning a fixed multi-candidate pool per call.
+def _make_joint_config(
+    slab: Atoms,
+    members: list[tuple[str, int, float]],
+    *,
+    e_ads_per_mol: float = -5.0,
+    energy_slab: float = -100.0,
+    e_mol_ref: float = -10.0,
+):
+    """Build one relaxed joint config (``members``: molecule, pid, x_shift)."""
+    atoms = slab.copy()
+    for _mol, _pid, x_shift in members:
+        placed = place_molecule_on_slab(slab, make_water(), x_shift=x_shift)
+        if len(atoms) == len(slab):
+            atoms = placed
+        else:
+            atoms += placed[len(slab) :]
+    n = len(members)
+    e_mol_sum = e_mol_ref * n
+    e_adslab = energy_slab + e_mol_sum + e_ads_per_mol * n
+    return [
+        make_screening_result(
+            molecule=mol,
+            placement_id=pid,
+            energy_adsorption=e_ads_per_mol,
+            energy_slab=energy_slab,
+            energy_adsorbate=e_mol_sum,
+            energy_adslab=e_adslab,
+            atoms=atoms.copy(),
+            slab_size=len(slab),
+            distance=2.5,
+            placement_descriptor=make_placement_descriptor(placement_id=pid),
+        )
+        for mol, pid, _x in members
+    ]
 
-    Each pool entry is ``(energy_adsorption, x_shift)``; results are laid out
-    on a y-grid row so entries with distinct x_shift are mutually clear while
-    near-identical x_shifts clash.
-    """
 
-    def _fake(_smi, mol, current_slab, *_args, **_kwargs):
-        results = [
-            make_screening_result(
-                molecule=mol,
-                placement_id=i,
-                energy_adsorption=e_ads,
-                atoms=place_molecule_on_slab(
-                    current_slab.atoms, make_water(), x_shift=x_shift
-                ),
-                slab_size=len(current_slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=i),
-            )
-            for i, (e_ads, x_shift) in enumerate(pools[mol])
-        ]
-        return MoleculeScreenOutcome(results=results)
-
-    return _fake
-
-
-def _patch_identity_tuplet_relaxation(monkeypatch, *, composite_energy: float):
-    """No-op composite relaxation with a fixed total energy and zero forces."""
-
-    def _fake_optimize(combined_atoms_list, *_args, **_kwargs):
-        from .conftest import mock_calculator
-
-        relaxed = []
-        for atoms in combined_atoms_list:
-            copy = atoms.copy()
-            copy.calc = mock_calculator(energy=composite_energy, n_atoms=len(atoms))
-            relaxed.append(copy)
-        return relaxed
+def _patch_joint_multi_screen(
+    monkeypatch: pytest.MonkeyPatch,
+    valid_configs: list[list],
+) -> None:
+    def _fake(**_kwargs):
+        flat = [row for group in valid_configs for row in group]
+        return JointTupletScreenOutcome(
+            valid_configs=[list(g) for g in valid_configs],
+            flat_results=flat,
+        )
 
     monkeypatch.setattr(
-        "metalsurfer.workflow.composite.optimize_adsorbate_slab_batched",
-        _fake_optimize,
+        "metalsurfer.workflow.saturation.screen_joint_tuplet_multi",
+        _fake,
+    )
+
+
+def _patch_joint_homogeneous_screen(
+    monkeypatch: pytest.MonkeyPatch,
+    valid_configs: list[list],
+    *,
+    config_probe: list[int] | None = None,
+) -> None:
+    def _fake(**kwargs):
+        if config_probe is not None:
+            config_probe.append(kwargs["config"].num_placements)
+        flat = [row for group in valid_configs for row in group]
+        return JointTupletScreenOutcome(
+            valid_configs=[list(g) for g in valid_configs],
+            flat_results=flat,
+        )
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.screen_joint_tuplet_homogeneous",
+        _fake,
     )
 
 
 def test_run_saturation_screening_n_tuplet_commits_two_winners_per_step(
     monkeypatch, workdir
 ):
-    """n=2 multi-molecule saturation commits two clear winners per step."""
+    """n=2 multi-molecule saturation commits one joint config per step."""
     slab = make_slab()
     base_n = len(slab)
-    # One clear binder per molecule on opposite sides of the slab: both join
-    # the step-1 tuplet. The non-binding entry never reaches selection.
-    process = _pool_process({"A": [(-0.6, 2.5), (0.5, 2.6)], "B": [(-0.5, 7.0)]})
+    group = _make_joint_config(
+        slab,
+        [("A", 0, 2.5), ("B", 0, 7.0)],
+    )
     _patch_multi_mol_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["OA", "OB"],
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
-        process_molecule=process,
+        process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-130.0)
+    _patch_joint_multi_screen(monkeypatch, [group])
 
     out = run_saturation_screening(
         SlabContainer(slab),
@@ -2524,12 +2553,12 @@ def test_run_saturation_screening_n_tuplet_commits_two_winners_per_step(
     assert run.molecule_counts == {"A": 1, "B": 1}
     # Max-steps guarantee: final slab holds exactly sum(n_added) adsorbates.
     assert len(run.final_slab_atoms) == base_n + 2 * len(make_water())
-    # Option A accounting: both rows share the tuplet totals; identity holds.
+    # Per-molecule E_ads with shared composite totals on every row.
     first, second = step.committed_results
     for row in (first, second):
-        assert row.energy_adsorption == pytest.approx(-10.0)
+        assert row.energy_adsorption == pytest.approx(-5.0)
         assert row.energy_adslab - row.energy_slab - row.energy_adsorbate == (
-            pytest.approx(row.energy_adsorption)
+            pytest.approx(row.energy_adsorption * 2)
         )
     assert first.distance > 0 and second.distance > 0
 
@@ -2537,17 +2566,16 @@ def test_run_saturation_screening_n_tuplet_commits_two_winners_per_step(
 def test_run_saturation_screening_n_tuplet_rejects_clashing_second_winner(
     monkeypatch, workdir
 ):
-    """Two binders at the same site yield a partial (single-winner) tuplet."""
+    """Without an exact n=2 joint config the step commits nothing."""
     slab = make_slab()
-    process = _pool_process({"A": [(-0.6, 5.0)], "B": [(-0.5, 5.15)]})
     _patch_multi_mol_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["OA", "OB"],
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
-        process_molecule=process,
+        process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-130.0)
+    _patch_joint_multi_screen(monkeypatch, [])
 
     out = run_saturation_screening(
         SlabContainer(slab),
@@ -2561,26 +2589,26 @@ def test_run_saturation_screening_n_tuplet_rejects_clashing_second_winner(
         skip_existing=False,
     )
 
-    step = out[0].steps[0]
-    assert step.n_added == 1
-    assert len(step.committed_results) == 1
-    assert step.committed_results[0].molecule == "A"
-    assert out[0].n_molecules_at_saturation == 1
+    assert out[0].steps == []
+    assert out[0].n_molecules_at_saturation == 0
 
 
 def test_run_saturation_screening_n_tuplet_single_molecule_path(monkeypatch, workdir):
     """The sequential single-molecule loop also commits n>1 copies per step."""
     slab = make_slab()
     base_n = len(slab)
-    process = _pool_process({"water": [(-0.6, 2.5), (-0.4, 7.0)]})
+    group = _make_joint_config(
+        slab,
+        [("water", 0, 2.5), ("water", 1, 7.0)],
+    )
     _patch_single_mol_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
-        process_molecule=process,
+        process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-130.0)
+    _patch_joint_homogeneous_screen(monkeypatch, [group])
 
     out = run_saturation_screening(
         SlabContainer(slab),
@@ -2602,27 +2630,22 @@ def test_run_saturation_screening_n_tuplet_single_molecule_path(monkeypatch, wor
 
 
 def test_n_tuplet_unbound_composite_retries_single_winner(monkeypatch, workdir):
-    """Ω_tuplet ≥ 0 after composite must not fold; retry the best single winner.
-
-    Individual screening energies are binding (Ω < 0). The composite E_ads of
-    both together is unbound, so the step should fall back to committing only
-    the best single placement when that unit still binds alone.
-    """
+    """Ω_tuplet ≥ 0 after joint relax commits nothing (no single-winner fallback)."""
     slab = make_slab()
     base_n = len(slab)
-    # Clear binders on opposite sides so both pass mutual-clearance selection.
-    process = _pool_process({"A": [(-0.6, 2.5)], "B": [(-0.5, 7.0)]})
+    group = _make_joint_config(
+        slab,
+        [("A", 0, 2.5), ("B", 0, 7.0)],
+        e_ads_per_mol=2.5,
+    )
     _patch_multi_mol_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["OA", "OB"],
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
-        process_molecule=process,
+        process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    # Multi-mol default E_slab=-100, energy_adsorbate=-10 each:
-    #   tuplet:  e_ads = -115 - (-100) - (-20) = +5  → Ω_tuplet ≥ 0
-    #   single:  e_ads = -115 - (-100) - (-10) = -5  → Ω < 0
-    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-115.0)
+    _patch_joint_multi_screen(monkeypatch, [group])
 
     out = run_saturation_screening(
         SlabContainer(slab),
@@ -2640,12 +2663,10 @@ def test_n_tuplet_unbound_composite_retries_single_winner(monkeypatch, workdir):
     run = out[0]
     assert len(run.steps) == 1
     step = run.steps[0]
-    assert step.n_added == 1
-    assert len(step.committed_results) == 1
-    assert step.committed_results[0].molecule == "A"
-    assert step.committed_results[0].energy_adsorption == pytest.approx(-5.0)
-    assert run.n_molecules_at_saturation == 1
-    assert len(run.final_slab_atoms) == base_n + len(make_water())
+    assert step.n_added == 0
+    assert step.committed_results == []
+    assert run.n_molecules_at_saturation == 0
+    assert len(run.final_slab_atoms) == base_n
 
 
 def test_n_tuplet_no_binders_stops_despite_negative_pool_best(monkeypatch, workdir):
@@ -2657,21 +2678,27 @@ def test_n_tuplet_no_binders_stops_despite_negative_pool_best(monkeypatch, workd
     slab = make_slab()
     base_n = len(slab)
     screen_calls = {"n": 0}
+    group = _make_joint_config(
+        slab,
+        [("water", 0, 2.5), ("water", 1, 7.0)],
+        e_ads_per_mol=0.5,
+    )
 
-    def _counting_process(*args, **kwargs):
+    def _counting_joint(**kwargs):
         screen_calls["n"] += 1
-        return _pool_process({"water": [(-0.6, 2.5), (-0.4, 7.0)]})(*args, **kwargs)
+        flat = [row for row in group]
+        return JointTupletScreenOutcome(valid_configs=[group], flat_results=flat)
 
     _patch_single_mol_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
-        process_molecule=_counting_process,
+        process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
     monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.select_tuplet_winners",
-        lambda *args, **kwargs: [],
+        "metalsurfer.workflow.saturation.screen_joint_tuplet_homogeneous",
+        _counting_joint,
     )
 
     out = run_saturation_screening(
@@ -2693,121 +2720,76 @@ def test_n_tuplet_no_binders_stops_despite_negative_pool_best(monkeypatch, workd
     assert step.n_added == 0
     assert step.committed_results == []
     assert step.committed() == []
-    assert step.best_result.energy_adsorption < 0
+    assert step.best_result.energy_adsorption == pytest.approx(0.5)
     assert run.n_molecules_at_saturation == 0
     assert len(run.final_slab_atoms) == base_n
 
 
 def test_saturation_bo_n_tuplet_keeps_single_site_memory_labels(monkeypatch, workdir):
-    """BO + n-tuplet: memory stays single-site; occupancy grows by n_added.
-
-    Screening energies feed BOStepMemory; the shared tuplet E_ads is only on
-    committed rows / the stop criterion. Occupancy anchors passed into the next
-    BO call equal the number of committed winners.
-    """
+    """BO + joint n-tuplet stores Ω/n per site in BO memory."""
     slab = make_slab()
-    single_site_energies = [-0.6, -0.45]
+    bo_labels = [-0.3, -0.225]
     occupancy_seen: list[int] = []
-    prior_y_seen: list[list[float]] = []
     call_count = {"n": 0}
 
-    def _fake_process_molecule_bayesian(
-        _smi,
-        mol,
-        current_slab,
-        *_args,
-        occupancy_placement_X=None,
-        bo_step_memory_in=None,
-        **_kwargs,
-    ):
+    def _fake_joint_bo(*_args, **kwargs):
         call_count["n"] += 1
         occupancy_seen.append(
-            0 if occupancy_placement_X is None else len(occupancy_placement_X)
+            0
+            if kwargs.get("occupancy_placement_X") is None
+            else len(kwargs["occupancy_placement_X"])
         )
-        if bo_step_memory_in is not None:
-            prior_y_seen.append(list(bo_step_memory_in.observed_y))
-        results = [
-            make_screening_result(
-                molecule=mol,
-                placement_id=i,
-                energy_adsorption=e_ads,
-                atoms=place_molecule_on_slab(
-                    current_slab.atoms, make_water(), x_shift=x_shift
+        if call_count["n"] > 1:
+            return JointTupletScreenOutcome(
+                valid_configs=[],
+                flat_results=[],
+                bo_memory=BOStepMemory(
+                    observed_X_rows=[{"x": 3.0}],
+                    observed_y=[0.5],
+                    best_energy=0.5,
                 ),
-                slab_size=len(current_slab.atoms),
-                distance=2.5,
-                placement_descriptor=make_placement_descriptor(
-                    placement_id=i,
-                    x_abs=float(x_shift),
-                    y_abs=0.0,
-                    z_abs=8.0,
-                    quat_w=1.0,
-                    quat_x=0.0,
-                    quat_y=0.0,
-                    quat_z=0.0,
-                ),
-            )
-            for i, (e_ads, x_shift) in enumerate(
-                zip(single_site_energies, (2.5, 7.0), strict=True)
-            )
-        ]
-        if call_count["n"] > 2:
-            # Both molecules already screened once; unbind so the run stops.
-            results = [
-                make_screening_result(
-                    molecule=mol,
-                    placement_id=99,
-                    energy_adsorption=0.5,
-                    atoms=place_molecule_on_slab(
-                        current_slab.atoms, make_water(), x_shift=3.0
-                    ),
-                    slab_size=len(current_slab.atoms),
-                    distance=2.5,
-                    placement_descriptor=make_placement_descriptor(placement_id=99),
-                )
-            ]
-            memory = BOStepMemory(
-                observed_X_rows=[{"x": 3.0}],
-                observed_y=[0.5],
-                best_energy=0.5,
-            )
-            return MoleculeScreenOutcome(
-                results=results,
-                bo_memory=memory,
                 transfer_info=BOTransferInfo(),
             )
-
-        memory = BOStepMemory(
-            observed_X_rows=[
-                {"x": 2.5, "y": 0.0, "z": 8.0},
-                {"x": 7.0, "y": 0.0, "z": 8.0},
-            ],
-            observed_y=list(single_site_energies),
-            best_energy=min(single_site_energies),
+        group = _make_joint_config(
+            slab,
+            [("water", 0, 2.5), ("water", 1, 7.0)],
+            e_ads_per_mol=-0.3,
         )
-        return MoleculeScreenOutcome(
-            results=results,
-            bo_memory=memory,
+        return JointTupletScreenOutcome(
+            valid_configs=[group],
+            flat_results=list(group),
+            bo_memory=BOStepMemory(
+                observed_X_rows=[{"x": 2.5}, {"x": 7.0}],
+                observed_y=list(bo_labels),
+                best_energy=min(bo_labels),
+            ),
             transfer_info=BOTransferInfo(),
         )
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_single_mol_saturation_mocks(
         monkeypatch,
-        molecules=["A", "B"],
-        smiles_list=["OA", "OB"],
+        molecule="water",
+        smiles="O",
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
-        process_molecule_bayesian=_fake_process_molecule_bayesian,
+        process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-130.0)
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.process_joint_tuplet_bayesian",
+        _fake_joint_bo,
+    )
 
     out = run_saturation_screening(
         SlabContainer(slab),
-        molecules=[("OA", "A"), ("OB", "B")],
+        molecules=[("O", "water")],
         config=_mock_saturation_config(
-            multi_molecule_saturation=True,
             saturation_molecules_per_step=2,
             saturation_max_steps=2,
-            bo=BOConfig(transfer=BOTransferConfig(enabled=True)),
+            bo=BOConfig(
+                initial_random=4,
+                batch_size=2,
+                total_budget=1,
+                transfer=BOTransferConfig(enabled=True),
+            ),
         ),
         surface_type="tuplet_bo_memory",
         skip_existing=False,
@@ -2815,23 +2797,11 @@ def test_saturation_bo_n_tuplet_keeps_single_site_memory_labels(monkeypatch, wor
     )
 
     assert len(out) == 1
-    run = out[0]
-    assert len(run.steps) >= 1
-    step1 = run.steps[0]
+    step1 = out[0].steps[0]
     assert step1.n_added == 2
-    # Shared tuplet total, not the pre-composite single-site energies.
-    assert step1.best_result.energy_adsorption == pytest.approx(-10.0)
-    for row in step1.committed_results:
-        assert row.energy_adsorption == pytest.approx(-10.0)
-        assert row.energy_adsorption not in single_site_energies
-    # First screening saw empty occupancy; after the tuplet commit the next
-    # screening receives two occupancy anchors.
+    assert step1.best_result.energy_adsorption == pytest.approx(-0.3)
     assert occupancy_seen[0] == 0
     assert any(n == 2 for n in occupancy_seen[1:])
-    # Transfer priors carry pre-composite single-site labels, never tuplet totals.
-    assert prior_y_seen
-    assert all(ys == single_site_energies for ys in prior_y_seen)
-    assert all(-10.0 not in ys for ys in prior_y_seen)
 
 
 def test_run_saturation_screening_n_tuplet_composite_failure_stops_run(
@@ -2839,22 +2809,15 @@ def test_run_saturation_screening_n_tuplet_composite_failure_stops_run(
 ):
     """When composite validation fails outright the run stops with zero steps."""
 
-    def _always_fail(**_kwargs):
-        return [], "boom"
-
     slab = make_slab()
-    process = _pool_process({"A": [(-0.6, 2.5)], "B": [(-0.5, 7.0)]})
     _patch_multi_mol_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["OA", "OB"],
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
-        process_molecule=process,
+        process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.evaluate_composite_commit",
-        lambda **kw: _always_fail(),
-    )
+    _patch_joint_multi_screen(monkeypatch, [])
 
     out = run_saturation_screening(
         SlabContainer(slab),
@@ -3029,34 +2992,22 @@ def test_single_mol_n_tuplet_divides_autotuned_budget(monkeypatch):
     def _fake_resolve(config, **_kwargs):
         return dc_replace(config, num_placements=11)
 
-    def _fake_process(_smi, mol, current_slab, *_args, **kwargs):
-        received_configs.append(kwargs["config"].num_placements)
-        return MoleculeScreenOutcome(
-            results=[
-                make_screening_result(
-                    molecule=mol,
-                    placement_id=0,
-                    energy_adsorption=-0.5,
-                    atoms=place_molecule_on_slab(current_slab.atoms, make_water()),
-                    slab_size=len(bare),
-                    distance=2.5,
-                    placement_descriptor=make_placement_descriptor(placement_id=0),
-                )
-            ]
-        )
-
+    group = _make_joint_config(
+        bare,
+        [("water", 0, 2.5), ("water", 1, 7.0)],
+    )
     _patch_single_mol_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
-        process_molecule=_fake_process,
+        process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation.resolve_saturation_step_workload_config",
         _fake_resolve,
     )
-    _patch_identity_tuplet_relaxation(monkeypatch, composite_energy=-130.0)
+    _patch_joint_homogeneous_screen(monkeypatch, [group], config_probe=received_configs)
 
     out = run_saturation_screening(
         slab,
@@ -3072,7 +3023,7 @@ def test_single_mol_n_tuplet_divides_autotuned_budget(monkeypatch):
     )
 
     assert received_configs == [max(1, 11 // 2)]
-    assert out[0].steps[0].n_added == 1
+    assert out[0].steps[0].n_added == 2
 
 
 def _steps_for_counting():

@@ -411,7 +411,7 @@ def _evaluate_two_clear_winners(
 
 class TestEvaluateCompositeCommit:
     def test_success_shares_composite_and_full_tuplet_energies(self, monkeypatch):
-        # E(tuplet) = -230; sum(E_mol) = -20 -> E_ads = -230 + 200 + 20 = -10.
+        # E(tuplet) = -230; sum(E_mol) = -20 -> E_ads total = -10, per mol = -5.
         _, winners, rewritten, failure = _evaluate_two_clear_winners(
             monkeypatch, energy=-230.0
         )
@@ -423,9 +423,9 @@ class TestEvaluateCompositeCommit:
             assert row.energy_adslab == pytest.approx(-230.0)
             assert row.energy_slab == pytest.approx(E_SLAB)
             assert row.energy_adsorbate == pytest.approx(-20.0)
-            assert row.energy_adsorption == pytest.approx(-10.0)
+            assert row.energy_adsorption == pytest.approx(-5.0)
             assert row.energy_adslab - row.energy_slab - row.energy_adsorbate == (
-                pytest.approx(row.energy_adsorption)
+                pytest.approx(row.energy_adsorption * 2)
             )
             assert row.slab_size == len(make_slab())
             assert len(row.atoms) == len(make_slab()) + 2 * len(make_water())
@@ -510,12 +510,12 @@ class TestEvaluateCompositeCommit:
         assert "topology rearrangement guard" in failure
 
     def test_energy_cap_applies_to_tuplet_total(self, monkeypatch):
-        # E_ads = 1000 + 220 = 1220 eV >> default cap of 5 eV.
+        # Per-molecule E_ads = (1000 + 220) / 2 >> default cap of 5 eV.
         _, _, rewritten, failure = _evaluate_two_clear_winners(
             monkeypatch, energy=1000.0
         )
         assert rewritten == []
-        assert "E_ads too high" in failure
+        assert "E_ads per molecule too high" in failure
 
     def test_empty_winners_short_circuits(self, monkeypatch):
         rewritten, failure = evaluate_composite_commit(

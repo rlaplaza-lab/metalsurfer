@@ -464,20 +464,18 @@ Three ways to grow the coverage, set on `AdsorptionConfig`:
   binder advances the surface. Each molecule keeps its own BO memory chain in
   `run_saturation_bo`. A real example running water and hydroxide together on
   rutile TiO₂(110) lives at `examples/water_oh_rutile_saturation.py`.
-- **n-tuplet steps** (`saturation_molecules_per_step > 1`). Instead of one
-  placement per step, up to *n* winners are committed simultaneously: pools
-  are screened exactly as above, then winners are greedily picked by ascending
-  Ω (ties broken deterministically), keeping only pairs whose
-  adsorbates stay at least `min_adsorbate_separation` apart under periodicity —
-  or, when `placement_clash_descent` is on, near-miss clashes that a bounded
-  rigid-body slide can clear. Units 2..n are then sequentially packed against
-  the frozen best binder before ONE composite structure is relaxed; if that
-  composite fails validation, the step retries with the best winner alone
-  before giving up. Every committed row carries the full tuplet E_ads
-  (`E(composite) - E_slab - sum of molecular references`), with per-unit
-  identity preserved via `placement_id`, molecule name, descriptor columns,
-  per-unit distance, and an extra `committed_molecule` CSV column emitted only
-  for multi-winner steps.
+- **n-tuplet steps** (`saturation_molecules_per_step > 1`). Each screening
+  trial is one initial structure with exactly *n* adsorbates: CPU placement
+  builds many clash-free packs (`num_placements` joint configs), TorchSim
+  relaxes every pack with all *n* units together, and the step commits the
+  best binding config (all *n* units folded onto the slab). There is no
+  single-adsorbate relaxation pass and no partial-tuplet or single-winner
+  fallback. Stored `energy_adsorption` is **per molecule**
+  (`E_ads_total / n`); composite totals remain on `energy_adslab` /
+  `energy_adsorbate`. Stop and ranking use Ω_tuplet (equivalently Ω/n at
+  default reservoir conditions). With BO enabled on a single adsorbate,
+  acquisition still scores single-site features but labels use Ω/n from each
+  joint eval.
 
 **Reservoir ranking.** Pick and stop use
 `Ω = E_ads − k_B T ln(a_i · p / p°)` with optional

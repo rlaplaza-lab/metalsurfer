@@ -113,7 +113,9 @@ def _nn_pairs(xy: np.ndarray, cell: np.ndarray) -> list[tuple[int, int, float]]:
     return pairs
 
 
-def _bridge_midpoint(xy: np.ndarray, cell: np.ndarray, i: int, j: int) -> tuple[float, float]:
+def _bridge_midpoint(
+    xy: np.ndarray, cell: np.ndarray, i: int, j: int
+) -> tuple[float, float]:
     mid = xy[i] + 0.5 * _mic_delta(xy[i], xy[j], cell)
     return float(mid[0]), float(mid[1])
 
@@ -152,17 +154,38 @@ def build_sqrt3() -> Atoms:
 
 def build_c42() -> Atoms:
     """c(4×2) orthogonal cell: 8 surface Pt."""
-    return fcc111("Pt", size=(4, 2, N_LAYERS), a=A_PT, vacuum=VACUUM, orthogonal=True, periodic=True)
+    return fcc111(
+        "Pt",
+        size=(4, 2, N_LAYERS),
+        a=A_PT,
+        vacuum=VACUUM,
+        orthogonal=True,
+        periodic=True,
+    )
 
 
 def build_csqrt3x5() -> Atoms:
     """c(√3×5)rect: 10 surface Pt (5×2 orthogonal)."""
-    return fcc111("Pt", size=(5, 2, N_LAYERS), a=A_PT, vacuum=VACUUM, orthogonal=True, periodic=True)
+    return fcc111(
+        "Pt",
+        size=(5, 2, N_LAYERS),
+        a=A_PT,
+        vacuum=VACUUM,
+        orthogonal=True,
+        periodic=True,
+    )
 
 
 def build_csqrt3x3() -> Atoms:
     """c(√3×3)rect: 6 surface Pt (3×2 orthogonal)."""
-    return fcc111("Pt", size=(3, 2, N_LAYERS), a=A_PT, vacuum=VACUUM, orthogonal=True, periodic=True)
+    return fcc111(
+        "Pt",
+        size=(3, 2, N_LAYERS),
+        a=A_PT,
+        vacuum=VACUUM,
+        orthogonal=True,
+        periodic=True,
+    )
 
 
 def _mic_delta3(a: np.ndarray, b: np.ndarray, cell: np.ndarray) -> np.ndarray:
@@ -226,7 +249,11 @@ def _verify_registry(label: str, atoms: Atoms, case: OrderedCase) -> None:
     n_surf = _n_surface(atoms)
     if n_surf != case.n_surface:
         raise RuntimeError(f"{label}: surface Pt {n_surf} != expected {case.n_surface}")
-    if (n_a, n_b, n_h) != (case.expected_atop, case.expected_bridge, case.expected_hollow):
+    if (n_a, n_b, n_h) != (
+        case.expected_atop,
+        case.expected_bridge,
+        case.expected_hollow,
+    ):
         raise RuntimeError(
             f"{label}: sites atop/bridge/hollow = {n_a}/{n_b}/{n_h}, "
             f"expected {case.expected_atop}/{case.expected_bridge}/{case.expected_hollow}"
@@ -241,7 +268,9 @@ def _single_point(calculator, atoms: Atoms) -> float:
     return float(calculator.results["energy"])
 
 
-def _relax_adsorbates_free(calculator, atoms: Atoms, fmax: float = 0.05, steps: int = 200) -> Atoms:
+def _relax_adsorbates_free(
+    calculator, atoms: Atoms, fmax: float = 0.05, steps: int = 200
+) -> Atoms:
     """Freeze all Pt; relax CO freely."""
     out = atoms.copy()
     symbols = np.array(out.get_chemical_symbols())
@@ -346,9 +375,7 @@ def place_ordered(label: str) -> Atoms:
         xy = _sorted_top_xy(slab)
         cell = slab.cell.array
         assert len(xy) == 6, len(xy)
-        sites = [
-            ("atop", (float(xy[i, 0]), float(xy[i, 1])), 1.85) for i in (0, 2, 4)
-        ]
+        sites = [("atop", (float(xy[i, 0]), float(xy[i, 1])), 1.85) for i in (0, 2, 4)]
         sites.append(("bridge", _bridge_midpoint(xy, cell, 1, 3), 1.55))
         return _place_from_sites(slab, sites)
     if label == "csqrt3x3_all_atop":
@@ -368,12 +395,28 @@ LITERATURE_CASES = [
     OrderedCase("p3x3_bridge", 1 / 9, 9, 1, "p(3×3) bridge", "bridge×1", 0, 1),
     OrderedCase("p3x3_hollow", 1 / 9, 9, 1, "p(3×3) hollow", "hollow×1", 0, 0, 1),
     OrderedCase("sqrt3_atop", 1 / 3, 3, 1, "(√3×√3)R30° atop", "atop×1", 1, 0),
-    OrderedCase("c42_2top2bridge", 0.5, 8, 4, "c(4×2) 2 atop + 2 bridge", "B:T=2:2", 2, 2),
     OrderedCase(
-        "csqrt3x5_4top2bridge", 0.6, 10, 6, "c(√3×5)rect 4 atop + 2 bridge", "B:T=2:4", 4, 2
+        "c42_2top2bridge", 0.5, 8, 4, "c(4×2) 2 atop + 2 bridge", "B:T=2:2", 2, 2
     ),
     OrderedCase(
-        "csqrt3x3_3top1bridge", 2 / 3, 6, 4, "c(√3×3)rect 3 atop + 1 bridge", "B:T=1:3", 3, 1
+        "csqrt3x5_4top2bridge",
+        0.6,
+        10,
+        6,
+        "c(√3×5)rect 4 atop + 2 bridge",
+        "B:T=2:4",
+        4,
+        2,
+    ),
+    OrderedCase(
+        "csqrt3x3_3top1bridge",
+        2 / 3,
+        6,
+        4,
+        "c(√3×3)rect 3 atop + 1 bridge",
+        "B:T=1:3",
+        3,
+        1,
     ),
 ]
 
@@ -412,7 +455,9 @@ def _row(
     }
 
 
-def _slab_energy_cache(calculator, adslab0: Atoms, n_surface: int, cache: dict[str, float]) -> float:
+def _slab_energy_cache(
+    calculator, adslab0: Atoms, n_surface: int, cache: dict[str, float]
+) -> float:
     symbols = np.array(adslab0.get_chemical_symbols())
     slab = adslab0[symbols == "Pt"]
     slab.set_pbc(True)
@@ -460,7 +505,11 @@ def run_seeded_relaxations(calculator) -> list[dict[str, object]]:
             f"  constrained:  E_ads/CO = {e_held / case.n_co:+.4f} eV   "
             f"sites {_bridge_top_string(n_a, n_b, n_h)}"
         )
-        if (n_a, n_b, n_h) != (case.expected_atop, case.expected_bridge, case.expected_hollow):
+        if (n_a, n_b, n_h) != (
+            case.expected_atop,
+            case.expected_bridge,
+            case.expected_hollow,
+        ):
             raise RuntimeError(
                 f"{case.label} constrained relaxation left the registry: "
                 f"{n_a}/{n_b}/{n_h}"
@@ -481,7 +530,11 @@ def run_seeded_relaxations(calculator) -> list[dict[str, object]]:
             f"  constrained:  E_ads/CO = {e_held / case.n_co:+.4f} eV   "
             f"sites {_bridge_top_string(n_a, n_b, n_h)}"
         )
-        if (n_a, n_b, n_h) != (case.expected_atop, case.expected_bridge, case.expected_hollow):
+        if (n_a, n_b, n_h) != (
+            case.expected_atop,
+            case.expected_bridge,
+            case.expected_hollow,
+        ):
             raise RuntimeError(
                 f"{case.label} constrained relaxation left the registry: "
                 f"{n_a}/{n_b}/{n_h}"
@@ -522,11 +575,15 @@ def run_unbiased_screens() -> list[dict[str, object]]:
             print(f"  no results for {label}")
             continue
         run = campaign.run_results[0]
-        best = min(run.results, key=lambda r: r.energy_adsorption) if run.results else None
+        best = (
+            min(run.results, key=lambda r: r.energy_adsorption) if run.results else None
+        )
         if best is None:
             print(f"  empty pool for {label}")
             continue
-        print(f"  best E_ads = {best.energy_adsorption:+.4f} eV  (n={len(run.results)})")
+        print(
+            f"  best E_ads = {best.energy_adsorption:+.4f} eV  (n={len(run.results)})"
+        )
         rows.append(
             {
                 "series": "screen",
@@ -563,7 +620,7 @@ def main() -> int:
     else:
         try:
             rows.extend(run_unbiased_screens())
-        except Exception as exc:  # noqa: BLE001 — keep ordered results if screen fails
+        except Exception as exc:
             print(f"unbiased screens failed: {exc}")
 
     out_csv = RESULTS / "ordered_coverages.csv"
@@ -576,7 +633,11 @@ def main() -> int:
         "task": "oc25",
         "a_pt": A_PT,
         "n_layers": N_LAYERS,
-        "protocols": ["ordered=free", "constrained=FixedLine_C_z", "alternative=constrained"],
+        "protocols": [
+            "ordered=free",
+            "constrained=FixedLine_C_z",
+            "alternative=constrained",
+        ],
     }
     (RESULTS / "run_metadata.json").write_text(json.dumps(meta, indent=2))
     print(f"\nwrote {out_csv}")
