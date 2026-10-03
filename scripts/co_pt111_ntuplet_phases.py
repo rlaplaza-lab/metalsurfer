@@ -12,6 +12,14 @@ Each job is one coverage, one cell, one step:
 * c(√3×5)rect — 10 surface Pt, n=6, θ=0.6, target B:T=1:2
 * c(√3×3)rect — 6 surface Pt, n=4, θ=2/3, target B:T=1:3
 
+Protocol (same knobs on every cell for a consistent full-grid rerun):
+
+* 1600 joint configs per cell (first pass at 400 left c(√3×5) with only
+  7 valid packs; denser n=6 needs more attempts)
+* ``min_adsorbate_separation=1.2`` Å and placement oversample 3× so
+  clash packing can assemble crowded CO packs
+* Pt frozen, BO off, seed fixed
+
 Optional ``--large-cell`` repeats the same θ/n points on an 8×6 orthogonal
 cell (48 surface Pt) that is not the LEED box. Submit that only after the
 matched-cell gap to the literature ratio is small (~0.1 eV/CO).
@@ -52,7 +60,11 @@ from metalsurfer.models import ScreeningResult
 from metalsurfer.surface_prep import prepare_substrate
 
 RESULTS_ROOT = Path("results_co_pt111_ntuplet")
-NUM_JOINT_CONFIGS = 400
+NUM_JOINT_CONFIGS = 1600
+# Slightly below the library default (1.5 Å): CO is small and high-θ packs
+# otherwise fail clash clearance before TorchSim ever runs.
+MIN_ADSORBATE_SEPARATION = 1.2
+PLACEMENT_OVERSAMPLE = 3.0
 CO_SMILES = "[C-]#[O+]"
 CO_NAME = "CO"
 TOP_K_HOLLOW = 20
@@ -540,8 +552,10 @@ def run_job(
         saturation_save_all_placements=True,
         slab_relaxation_mode="none",
         min_pbc_image_separation=2.0,
+        min_adsorbate_separation=MIN_ADSORBATE_SEPARATION,
+        placement_retry_oversample_max=PLACEMENT_OVERSAMPLE,
         stage1_steps=50,
-        stage2_steps=100,
+        stage2_steps=150,
         seed=42,
     )
 
@@ -585,9 +599,12 @@ def run_job(
         "n_layers": N_LAYERS,
         "n_co": job.n_co,
         "num_placements": num_placements,
+        "min_adsorbate_separation": MIN_ADSORBATE_SEPARATION,
+        "placement_retry_oversample_max": PLACEMENT_OVERSAMPLE,
         "n_valid_packs": summary["n_valid_packs"],
         "metalsurfer_results_dir": results_dir,
         "protocol": "one-step exact-n joint tuplet on bare slab",
+        "campaign": "v2_1600_joint_sep1.2",
     }
     (out / "run_metadata.json").write_text(json.dumps(meta, indent=2) + "\n")
     print(
