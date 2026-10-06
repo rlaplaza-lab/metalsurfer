@@ -864,6 +864,8 @@ def _run_bo_transfer(
     surrogate: str = SURROGATE,
     acquisition: str = ACQUISITION,
     kappa: float = KAPPA,
+    transfer_kwargs: dict[str, float | int] | None = None,
+    max_evals: int | None = None,
 ) -> tuple[SearchRunResult, BOStepMemory, float]:
     result = _run_replay(
         X,
@@ -876,8 +878,12 @@ def _run_bo_transfer(
         surrogate=surrogate,
         acquisition=acquisition,
         kappa=kappa,
-        transfer_kwargs=_transfer_kwargs_from_config(config),
-        max_evals=EVAL_BUDGET,
+        transfer_kwargs=(
+            transfer_kwargs
+            if transfer_kwargs is not None
+            else _transfer_kwargs_from_config(config)
+        ),
+        max_evals=max_evals if max_evals is not None else EVAL_BUDGET,
     )
     assert result.memory is not None
     return result, result.memory, result.transfer_weight_share_mean

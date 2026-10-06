@@ -859,7 +859,7 @@ def test_bo_defaults():
     assert c.bo.batch_size is None
     assert c.bo.total_budget == 18
     assert c.bo.ucb_kappa == 1.96
-    assert c.bo.acquisition == "ei"
+    assert c.bo.acquisition == "pi"
     assert c.bo.surrogate == "gradient_boost"
     assert c.bo.candidate_pool_size is None
     assert c.bo.include_failure_negatives is True

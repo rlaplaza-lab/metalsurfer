@@ -702,7 +702,7 @@ Bayesian screening and transfer
 
 Finite ``PlacementSpec`` pool → initial batch (``bo.initial_sampling``,
 default ``spread_xyz``) → geometry-aware features → surrogate → acquisition
-(LCB / EI / PI; default EI) until ``bo.total_budget`` acquisition rounds
+(LCB / EI / PI; default PI) until ``bo.total_budget`` acquisition rounds
 after the initial batch.
 
 Surrogates (``bo.surrogate``): ``random_forest``, ``extra_trees``,

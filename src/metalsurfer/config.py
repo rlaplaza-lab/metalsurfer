@@ -71,7 +71,7 @@ class BOConfig:
     batch_size: int | None = None
     total_budget: int = 18
     ucb_kappa: float = 1.96
-    acquisition: Literal["lcb", "ei", "pi"] = "ei"
+    acquisition: Literal["lcb", "ei", "pi"] = "pi"
     surrogate: Literal[
         "random_forest",
         "extra_trees",

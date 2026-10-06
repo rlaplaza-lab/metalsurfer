@@ -916,7 +916,7 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
     """BO smoke test for two generations on an adatom-defect surface.
 
     Generation 1: bo.initial_random placements at random.
-    Generation 2: bo.batch_size placements selected by acquisition (default EI;
+    Generation 2: bo.batch_size placements selected by acquisition (default PI;
     falls back to LCB until a finite best E_ads exists).
     """
     from metalsurfer.optimization import setup_single_model

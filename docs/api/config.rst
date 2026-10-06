@@ -714,13 +714,14 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
    **Type:** ``float`` · **Default:** ``1.96``
 
    Exploration parameter for **LCB** acquisition only (``bo.acquisition="lcb"``).
-   Ignored for the default ``"ei"`` and for ``"pi"``.
+   Ignored for ``"ei"`` and for the default ``"pi"``.
 
 ``bo.acquisition``
-   **Type:** ``Literal["lcb", "ei", "pi"]`` · **Default:** ``"ei"``
+   **Type:** ``Literal["lcb", "ei", "pi"]`` · **Default:** ``"pi"``
 
    Acquisition function: lower confidence bound, expected improvement, or probability
-   of improvement.
+   of improvement. Default ``"pi"`` is from an offline bipyridine-pool sweep
+   (AURC@50 vs ``"ei"``).
 
 ``bo.surrogate``
    **Type:** ``Literal["random_forest", "extra_trees", "gradient_boost", "ridge", "gaussian_process", "ensemble"]`` · **Default:** ``"gradient_boost"``

@@ -291,7 +291,7 @@ surrogate. Use :func:`~metalsurfer.run_adsorption_bo`:
    config = AdsorptionConfig(
        material_type="slab",
        seed=42,
-       # Defaults: gradient_boost surrogate, EI acquisition, autotuned batch sizes
+       # Defaults: gradient_boost surrogate, PI acquisition, autotuned batch sizes
    )
 
    slab = prepare_substrate(
