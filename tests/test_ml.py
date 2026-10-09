@@ -1,5 +1,7 @@
 """Tests for metalsurfer.ml features, schema, and surrogate builders."""
 
+from dataclasses import fields as dataclass_fields
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -25,7 +27,12 @@ from metalsurfer.ml.features import (
     extract_features_from_dataset,
 )
 from metalsurfer.ml.regression import _build_estimator
-from metalsurfer.ml.schema import SCHEMA_VERSION, ComputationContext, PlacementRecord
+from metalsurfer.ml.schema import (
+    _CONTEXT_FIELDS,
+    SCHEMA_VERSION,
+    ComputationContext,
+    PlacementRecord,
+)
 from metalsurfer.models import PlacementDescriptor, ScreeningResult
 from tests.factories import make_placement_record, make_random_placement_records
 
@@ -67,6 +74,14 @@ def test_computation_context_defaults_match_numeric_defaults():
 
 
 class TestComputationContext:
+    def test_context_fields_match_dataclass(self):
+        assert tuple(f.name for f in dataclass_fields(ComputationContext)) == tuple(
+            spec.name for spec in _CONTEXT_FIELDS
+        )
+
+    def test_default_settings_hash_pinned(self):
+        assert ComputationContext().settings_hash() == "9f4b7815878a"
+
     def test_from_config(self):
         config = AdsorptionConfig(model_name="test-model", fmax=0.03, seed=123)
         ctx = ComputationContext.from_config(config)
@@ -101,6 +116,25 @@ class TestComputationContext:
         assert d["fmax"] == 0.02
         assert d["seed"] == 99
         assert isinstance(d["placement_z_range"], list)
+
+    def test_nondefault_rich_csv_context_roundtrip(self):
+        ctx = ComputationContext(
+            model_name="other",
+            fmax=0.02,
+            stage1_steps=7,
+            placement_z_range=(0.4, 1.1),
+            placement_z_scale_by_covalent_radius=False,
+        )
+        r = make_placement_record(0)
+        r.context = ctx
+        flat = r.to_flat_dict(include_provenance=True)
+        r2 = PlacementRecord.from_flat_dict(flat)
+        assert r2.context.settings_hash() == ctx.settings_hash()
+        assert r2.context.model_name == "other"
+        assert r2.context.fmax == 0.02
+        assert r2.context.stage1_steps == 7
+        assert r2.context.placement_z_range == (0.4, 1.1)
+        assert r2.context.placement_z_scale_by_covalent_radius is False
 
 
 class TestPlacementRecord:

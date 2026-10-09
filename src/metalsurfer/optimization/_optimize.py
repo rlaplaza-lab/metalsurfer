@@ -9,7 +9,7 @@ and :mod:`._cache` and is unit-tested on CPU.
 import gc
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -51,6 +51,60 @@ from ._validation import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _AutobatcherSetup:
+    autobatcher: Any
+    cache_key: tuple | None
+    max_n_atoms: int
+    resolved_max_atoms_to_try: int
+    cap_source: str
+
+
+def _setup_inflight_autobatcher(
+    systems: Sequence[Atoms],
+    ts_model,
+    config: AdsorptionConfig,
+    *,
+    log_prefix: str,
+    fetch: bool,
+    saturation_reuse: bool = False,
+) -> _AutobatcherSetup:
+    """Resolve probe cap, log it, and optionally fetch an InFlightAutoBatcher."""
+    max_n_atoms = max(len(a) for a in systems)
+    resolved_max_atoms_to_try, cap_source = _resolve_autobatcher_max_atoms_to_try(
+        max_n_atoms=max_n_atoms,
+        n_systems=len(systems),
+        config=config,
+    )
+    logger.info(
+        "%s cap=%d (source=%s, max_n_atoms=%d, n_systems=%d, multiplier=%.2f, bucket=%d)",
+        log_prefix,
+        resolved_max_atoms_to_try,
+        cap_source,
+        max_n_atoms,
+        len(systems),
+        _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
+        _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
+    )
+    ab: Any = None
+    cache_key: tuple | None = None
+    if fetch:
+        ab, cache_key = _get_inflight_autobatcher(
+            ts_model,
+            max_n_atoms,
+            config=config,
+            saturation_reuse=saturation_reuse,
+            max_atoms_to_try=resolved_max_atoms_to_try,
+        )
+    return _AutobatcherSetup(
+        autobatcher=ab,
+        cache_key=cache_key,
+        max_n_atoms=max_n_atoms,
+        resolved_max_atoms_to_try=resolved_max_atoms_to_try,
+        cap_source=cap_source,
+    )
 
 
 def setup_single_model(  # pragma: no cover - requires MLIP stack / GPU
@@ -632,29 +686,17 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
         if not config.optimize_isolated_sequentially and _device_is_cuda(
             getattr(ts_model, "device", None) or "cpu"
         ):
-            max_n_atoms = max(len(a) for a in conformers)
-            resolved_max_atoms_to_try, cap_source = (
-                _resolve_autobatcher_max_atoms_to_try(
-                    max_n_atoms=max_n_atoms,
-                    n_systems=len(conformers),
-                    config=config,
-                )
-            )
-            logger.info(
-                "Isolated autobatcher probe cap=%d (source=%s, max_n_atoms=%d, n_systems=%d, multiplier=%.2f, bucket=%d)",
-                resolved_max_atoms_to_try,
-                cap_source,
-                max_n_atoms,
-                len(conformers),
-                _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
-                _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
-            )
-            ab, cache_key = _get_inflight_autobatcher(
+            setup = _setup_inflight_autobatcher(
+                conformers,
                 ts_model,
-                max_n_atoms,
-                config=config,
-                max_atoms_to_try=resolved_max_atoms_to_try,
+                config,
+                log_prefix="Isolated autobatcher probe",
+                fetch=True,
             )
+            ab = setup.autobatcher
+            cache_key = setup.cache_key
+            max_n_atoms = setup.max_n_atoms
+            resolved_max_atoms_to_try = setup.resolved_max_atoms_to_try
 
         def _run_optimize(autobatcher, systems):
             with torchsim_output_capture():
@@ -800,32 +842,22 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         )
 
     try:
-        max_n_atoms = max(len(a) for a in combined_atoms_list)
-        resolved_max_atoms_to_try, cap_source = _resolve_autobatcher_max_atoms_to_try(
-            max_n_atoms=max_n_atoms,
-            n_systems=len(combined_atoms_list),
-            config=config,
-        )
-        logger.info(
-            "Autobatcher probe cap=%d (source=%s, max_n_atoms=%d, n_systems=%d, multiplier=%.2f, bucket=%d)",
-            resolved_max_atoms_to_try,
-            cap_source,
-            max_n_atoms,
-            len(combined_atoms_list),
-            _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
-            _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
-        )
         use_saturation_reuse = saturation_reuse and config.saturation_autobatcher_reuse
         # TorchSim memory probing is CUDA-only; CPU uses a single sequential batch.
         use_autobatcher = _device_is_cuda(model_device)
+        setup = _setup_inflight_autobatcher(
+            combined_atoms_list,
+            ts_model,
+            config,
+            log_prefix="Autobatcher probe",
+            fetch=use_autobatcher,
+            saturation_reuse=use_saturation_reuse,
+        )
+        max_n_atoms = setup.max_n_atoms
+        resolved_max_atoms_to_try = setup.resolved_max_atoms_to_try
+        ab = setup.autobatcher
+        cache_key = setup.cache_key
         if use_autobatcher:
-            ab, cache_key = _get_inflight_autobatcher(
-                ts_model,
-                max_n_atoms,
-                config=config,
-                saturation_reuse=use_saturation_reuse,
-                max_atoms_to_try=resolved_max_atoms_to_try,
-            )
             if ab is None:
                 raise RuntimeError("Could not create autobatcher")
             if _deps.OPTIM_REGISTRY is None:

@@ -343,26 +343,26 @@ def test_local_site_distance_recovery_height_direction(
     # accidental geometry at the site.
     if fail_reason == "too_close":
         monkeypatch.setattr(
-            "metalsurfer.placement.pose._contact_penetration",
+            "metalsurfer.placement.pose.recovery._contact_penetration",
             lambda *a, **k: (0.5, 1.0),
         )
         monkeypatch.setattr(
-            "metalsurfer.placement.pose._contact_penetration_detail",
+            "metalsurfer.placement.pose.recovery._contact_penetration_detail",
             lambda *a, **k: (0.5, 1.0, 1.0),
         )
         max_initial = None
     else:
         monkeypatch.setattr(
-            "metalsurfer.placement.pose._contact_penetration",
+            "metalsurfer.placement.pose.recovery._contact_penetration",
             lambda *a, **k: (5.0, 0.0),
         )
         monkeypatch.setattr(
-            "metalsurfer.placement.pose._contact_penetration_detail",
+            "metalsurfer.placement.pose.recovery._contact_penetration_detail",
             lambda *a, **k: (5.0, 0.0, 1.0),
         )
         max_initial = 3.0
     monkeypatch.setattr(
-        "metalsurfer.placement.pose._validate_posed_adsorbate",
+        "metalsurfer.placement.pose.recovery._validate_posed_adsorbate",
         lambda *args, **kwargs: None,
     )
     config = AdsorptionConfig(

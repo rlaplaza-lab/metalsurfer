@@ -1,5 +1,8 @@
 """Orchestration helpers for campaign-ready substrate preparation."""
 
+from dataclasses import dataclass
+from typing import TypedDict
+
 import ase.io
 import numpy as np
 from ase import Atoms
@@ -33,6 +36,29 @@ __all__ = [
     "relax_substrate",
     "resize_substrate_for_molecule",
 ]
+
+
+class _RelaxationCallKwargs(TypedDict):
+    relaxation_mode: SLAB_RELAXATION_MODE | None
+    relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER | None
+    relaxation_fmax: float | None
+    relaxation_steps: int | None
+
+
+@dataclass(frozen=True)
+class _RelaxationOverrides:
+    mode: SLAB_RELAXATION_MODE | None = None
+    optimizer: SLAB_RELAXATION_OPTIMIZER | None = None
+    fmax: float | None = None
+    steps: int | None = None
+
+    def as_kwargs(self) -> _RelaxationCallKwargs:
+        return {
+            "relaxation_mode": self.mode,
+            "relaxation_optimizer": self.optimizer,
+            "relaxation_fmax": self.fmax,
+            "relaxation_steps": self.steps,
+        }
 
 
 def _matching_attached_calculator(
@@ -334,12 +360,21 @@ def prepare_substrate(
     should_align = align if align is not None else material_type == "slab"
     from_loaded = slab is not None or slab_file is not None
 
+    slab_relax = _RelaxationOverrides(
+        mode=slab_relaxation_mode,
+        optimizer=slab_relaxation_optimizer,
+        fmax=slab_relaxation_fmax,
+        steps=slab_relaxation_steps,
+    )
+    adatom_relax = _RelaxationOverrides(
+        mode=adatom_relaxation_mode,
+        optimizer=adatom_relaxation_optimizer,
+        fmax=adatom_relaxation_fmax,
+        steps=adatom_relaxation_steps,
+    )
+
     slab_relax_mode, _, _, _ = _resolve_slab_relaxation_settings(
-        config,
-        relaxation_mode=slab_relaxation_mode,
-        relaxation_optimizer=slab_relaxation_optimizer,
-        relaxation_fmax=slab_relaxation_fmax,
-        relaxation_steps=slab_relaxation_steps,
+        config, **slab_relax.as_kwargs()
     )
     needs_calculator = (
         (alloy_guest and alloy_fraction > 0)
@@ -383,10 +418,7 @@ def prepare_substrate(
             results_dir=results_dir,
             calculator=calculator,
             config=config,
-            relaxation_mode=slab_relaxation_mode,
-            relaxation_optimizer=slab_relaxation_optimizer,
-            relaxation_fmax=slab_relaxation_fmax,
-            relaxation_steps=slab_relaxation_steps,
+            **slab_relax.as_kwargs(),
         )
 
     if from_loaded and slab_relax_mode != "none":
@@ -394,11 +426,8 @@ def prepare_substrate(
             slab_container,
             calculator,
             config,
-            relaxation_mode=slab_relaxation_mode,
-            relaxation_optimizer=slab_relaxation_optimizer,
-            relaxation_fmax=slab_relaxation_fmax,
-            relaxation_steps=slab_relaxation_steps,
             context="prepare_substrate",
+            **slab_relax.as_kwargs(),
         )
 
     if alloy_guest and alloy_fraction > 0:
@@ -431,10 +460,7 @@ def prepare_substrate(
             calculator=calculator,
             config=config,
             results_dir=results_dir,
-            relaxation_mode=adatom_relaxation_mode,
-            relaxation_optimizer=adatom_relaxation_optimizer,
-            relaxation_fmax=adatom_relaxation_fmax,
-            relaxation_steps=adatom_relaxation_steps,
+            **adatom_relax.as_kwargs(),
         )
 
     if material_type == "slab" and should_align:

@@ -289,6 +289,72 @@ def test_resolve_autobatcher_max_atoms_to_try_buckets():
     assert a == b == 10_000
 
 
+# -- _setup_inflight_autobatcher --------------------------------------------
+
+
+def test_setup_inflight_autobatcher_fetch_false_skips_get(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls: list[object] = []
+
+    def _fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object(), ("key",)
+
+    monkeypatch.setattr(_optimize, "_get_inflight_autobatcher", _fake_get)
+    systems = [Atoms("H"), Atoms("H2")]
+    config = AdsorptionConfig(autobatcher_max_atoms_to_try=12_345)
+    setup = _optimize._setup_inflight_autobatcher(
+        systems,
+        ts_model=object(),
+        config=config,
+        log_prefix="Autobatcher probe",
+        fetch=False,
+        saturation_reuse=True,
+    )
+    assert calls == []
+    assert setup.autobatcher is None
+    assert setup.cache_key is None
+    assert setup.max_n_atoms == 2
+    assert setup.resolved_max_atoms_to_try == 12_345
+    assert setup.cap_source == "config_override"
+
+
+def test_setup_inflight_autobatcher_fetch_true_passes_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls: list[tuple] = []
+    fake_ab = object()
+    fake_key = ("cache",)
+
+    def _fake_get(ts_model, max_n_atoms, **kwargs):
+        calls.append((ts_model, max_n_atoms, kwargs))
+        return fake_ab, fake_key
+
+    monkeypatch.setattr(_optimize, "_get_inflight_autobatcher", _fake_get)
+    systems = [Atoms("H"), Atoms("Cu2")]
+    config = AdsorptionConfig(autobatcher_max_atoms_to_try=9_999)
+    ts_model = object()
+    setup = _optimize._setup_inflight_autobatcher(
+        systems,
+        ts_model=ts_model,
+        config=config,
+        log_prefix="Isolated autobatcher probe",
+        fetch=True,
+        saturation_reuse=True,
+    )
+    assert len(calls) == 1
+    assert calls[0][0] is ts_model
+    assert calls[0][1] == 2
+    assert calls[0][2]["config"] is config
+    assert calls[0][2]["saturation_reuse"] is True
+    assert calls[0][2]["max_atoms_to_try"] == 9_999
+    assert setup.autobatcher is fake_ab
+    assert setup.cache_key is fake_key
+    assert setup.max_n_atoms == 2
+    assert setup.resolved_max_atoms_to_try == 9_999
+
+
 # -- _parallel_capacity_cache_key -------------------------------------------
 
 
