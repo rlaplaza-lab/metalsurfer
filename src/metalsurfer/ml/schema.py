@@ -7,7 +7,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from dataclasses import fields as dataclass_fields
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -45,6 +45,45 @@ from ..models import (
 from ..placement.geometry import normalize_quaternion
 
 SCHEMA_VERSION = "3.0"
+
+
+@dataclass(frozen=True)
+class _ContextField:
+    name: str
+    kind: Literal["str", "int", "float", "bool", "float_pair"]
+
+
+# Order matches ComputationContext fields; settings_hash depends on it.
+_CONTEXT_FIELDS: tuple[_ContextField, ...] = (
+    _ContextField("model_name", "str"),
+    _ContextField("task_name", "str"),
+    _ContextField("fmax", "float"),
+    _ContextField("stage1_steps", "int"),
+    _ContextField("stage2_steps", "int"),
+    _ContextField("device", "str"),
+    _ContextField("seed", "int"),
+    _ContextField("placement_z_range", "float_pair"),
+    _ContextField("placement_z_scale_by_covalent_radius", "bool"),
+    _ContextField("min_initial_distance", "float"),
+    _ContextField("min_contact_ratio", "float"),
+    _ContextField("top_layer_tolerance", "float"),
+    _ContextField("symmetry_tolerance", "float"),
+    _ContextField("site_equivalence_tolerance", "float"),
+    _ContextField("planar_z_variance_threshold", "float"),
+)
+
+
+def _parse_context_field(spec: _ContextField, value: Any) -> Any:
+    """Coerce a required CSV ``ctx_*`` cell into a ComputationContext field value."""
+    if spec.kind == "str":
+        return str(value)
+    if spec.kind == "int":
+        return int(value)
+    if spec.kind == "float":
+        return float(value)
+    if spec.kind == "bool":
+        return _parse_bool(value, default=True)
+    return _parse_float_pair(value, default=(0.7, 1.25))
 
 
 def _require_descriptor_pose(
@@ -224,21 +263,7 @@ class ComputationContext:
         ComputationContext
         """
         return cls(
-            model_name=config.model_name,
-            task_name=config.task_name,
-            fmax=config.fmax,
-            stage1_steps=config.stage1_steps,
-            stage2_steps=config.stage2_steps,
-            device=config.device,
-            seed=config.seed,
-            placement_z_range=config.placement_z_range,
-            placement_z_scale_by_covalent_radius=config.placement_z_scale_by_covalent_radius,
-            min_initial_distance=config.min_initial_distance,
-            min_contact_ratio=config.min_contact_ratio,
-            top_layer_tolerance=config.top_layer_tolerance,
-            symmetry_tolerance=config.symmetry_tolerance,
-            site_equivalence_tolerance=config.site_equivalence_tolerance,
-            planar_z_variance_threshold=config.planar_z_variance_threshold,
+            **{spec.name: getattr(config, spec.name) for spec in _CONTEXT_FIELDS}
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -260,23 +285,8 @@ class ComputationContext:
     def to_config(self) -> AdsorptionConfig:
         """Build an AdsorptionConfig matching this computation context."""
         cfg = AdsorptionConfig()
-        cfg.model_name = self.model_name
-        cfg.task_name = self.task_name
-        cfg.fmax = self.fmax
-        cfg.stage1_steps = self.stage1_steps
-        cfg.stage2_steps = self.stage2_steps
-        cfg.device = self.device
-        cfg.seed = self.seed
-        cfg.placement_z_range = self.placement_z_range
-        cfg.placement_z_scale_by_covalent_radius = (
-            self.placement_z_scale_by_covalent_radius
-        )
-        cfg.min_initial_distance = self.min_initial_distance
-        cfg.min_contact_ratio = self.min_contact_ratio
-        cfg.top_layer_tolerance = self.top_layer_tolerance
-        cfg.symmetry_tolerance = self.symmetry_tolerance
-        cfg.site_equivalence_tolerance = self.site_equivalence_tolerance
-        cfg.planar_z_variance_threshold = self.planar_z_variance_threshold
+        for spec in _CONTEXT_FIELDS:
+            setattr(cfg, spec.name, getattr(self, spec.name))
         return cfg
 
 
@@ -675,39 +685,12 @@ class PlacementRecord:
                     parts.append("initial_*: " + ", ".join(sorted(missing_initial)))
                 raise ValueError("Rich CSV row incomplete; missing " + "; ".join(parts))
             ctx = ComputationContext(
-                model_name=str(_require_row_value(row, "ctx_model_name")),
-                task_name=str(_require_row_value(row, "ctx_task_name")),
-                fmax=float(_require_row_value(row, "ctx_fmax")),
-                stage1_steps=int(_require_row_value(row, "ctx_stage1_steps")),
-                stage2_steps=int(_require_row_value(row, "ctx_stage2_steps")),
-                device=str(_require_row_value(row, "ctx_device")),
-                seed=int(_require_row_value(row, "ctx_seed")),
-                placement_z_range=_parse_float_pair(
-                    _require_row_value(row, "ctx_placement_z_range"),
-                    default=(0.7, 1.25),
-                ),
-                placement_z_scale_by_covalent_radius=_parse_bool(
-                    _require_row_value(row, "ctx_placement_z_scale_by_covalent_radius"),
-                    default=True,
-                ),
-                min_initial_distance=float(
-                    _require_row_value(row, "ctx_min_initial_distance")
-                ),
-                min_contact_ratio=float(
-                    _require_row_value(row, "ctx_min_contact_ratio")
-                ),
-                top_layer_tolerance=float(
-                    _require_row_value(row, "ctx_top_layer_tolerance")
-                ),
-                symmetry_tolerance=float(
-                    _require_row_value(row, "ctx_symmetry_tolerance")
-                ),
-                site_equivalence_tolerance=float(
-                    _require_row_value(row, "ctx_site_equivalence_tolerance")
-                ),
-                planar_z_variance_threshold=float(
-                    _require_row_value(row, "ctx_planar_z_variance_threshold")
-                ),
+                **{
+                    spec.name: _parse_context_field(
+                        spec, _require_row_value(row, f"ctx_{spec.name}")
+                    )
+                    for spec in _CONTEXT_FIELDS
+                }
             )
             row_hash = row.get("context_hash")
             if not _is_missing(row_hash):

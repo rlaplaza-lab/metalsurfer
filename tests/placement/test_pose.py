@@ -211,7 +211,7 @@ def test_validate_posed_adsorbate_uses_material_pbc(monkeypatch):
         return True
 
     monkeypatch.setattr(
-        "metalsurfer.placement.pose.adsorbates_mutually_disconnected",
+        "metalsurfer.placement.pose.checks.adsorbates_mutually_disconnected",
         _fake_disconnected,
     )
 
@@ -850,8 +850,8 @@ def test_z_fraction_from_com_height_point_interval():
 
 def test_analytic_height_recovery_z_fraction_replays_nudged_com(monkeypatch):
     """Recovered z_fraction maps back to the clamped COM height."""
-    from metalsurfer.placement import pose as pose_mod
     from metalsurfer.placement.pose import _analytic_height_recovery
+    from metalsurfer.placement.pose import recovery as recovery_mod
 
     n_hat = np.array([0.0, 0.0, 1.0], dtype=float)
     origin = np.array([1.0, 2.0, 5.0], dtype=float)
@@ -907,7 +907,9 @@ def test_analytic_height_recovery_z_fraction_replays_nudged_com(monkeypatch):
         strict_initial_placement = False
         max_closest_approach = 2.0
 
-    monkeypatch.setattr(pose_mod, "_contact_penetration", lambda *_a, **_k: (0.5, 0.3))
+    monkeypatch.setattr(
+        recovery_mod, "_contact_penetration", lambda *_a, **_k: (0.5, 0.3)
+    )
     out = _analytic_height_recovery(
         ctx,
         ads,

@@ -261,7 +261,7 @@ class TestSurrogate:
 
     def test_ridge_skips_oof_when_in_sample_above_floor(self, monkeypatch):
         """Ridge with usable in-sample residual should not run KFold OOF."""
-        from metalsurfer.ml import bayesian as bayesian_mod
+        from metalsurfer.ml.bayesian import surrogate as bayesian_mod
 
         called = {"oof": False}
 
@@ -287,7 +287,7 @@ class TestSurrogate:
         """An interpolating learner has in-sample RMSE ~= 0, so OOF must kick in."""
         from sklearn.tree import DecisionTreeRegressor
 
-        from metalsurfer.ml import bayesian as bayesian_mod
+        from metalsurfer.ml.bayesian import surrogate as bayesian_mod
 
         X, y = _make_synthetic_training_data(40)
         pipeline = Pipeline(
