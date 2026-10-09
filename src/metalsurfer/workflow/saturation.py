@@ -5,7 +5,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from ase import Atoms
 
@@ -41,6 +41,7 @@ from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian
 from .core import process_molecule
 from .joint_tuplet import (
+    JointTupletScreenOutcome,
     commit_best_joint_config,
     joint_winning_molecule_label,
     process_joint_tuplet_bayesian,
@@ -315,6 +316,160 @@ def _scale_budget_for_tuplet(config: AdsorptionConfig) -> AdsorptionConfig:
         scaled,
     )
     return replace(config, num_placements=scaled, bo=scaled_bo)
+
+
+def _resolve_step_workload_config(
+    config: AdsorptionConfig,
+    *,
+    bo_enabled: bool,
+    ts_model: object,
+    conformers: list[Atoms] | None,
+    slab_atoms: Atoms,
+    slab_for_sites: Atoms,
+    smiles: str,
+    base_slab_for_frozen: Atoms,
+    symmetry_broken: bool,
+) -> AdsorptionConfig:
+    """Autotune and scale the step workload, or return *config* unchanged."""
+    if not needs_workload_autotune(config, bo=bo_enabled):
+        return config
+    if conformers is None:
+        raise ValueError("conformers required to resolve saturation workload config")
+    return _scale_budget_for_tuplet(
+        resolve_saturation_step_workload_config(
+            config,
+            ts_model=ts_model,
+            conformers=conformers,
+            slab_atoms=slab_atoms,
+            slab_for_sites=slab_for_sites,
+            smiles=smiles,
+            base_slab_for_frozen=base_slab_for_frozen,
+            symmetry_broken=symmetry_broken,
+            bo_enabled=bo_enabled,
+        )
+    )
+
+
+def _commit_joint_step(
+    joint_out: JointTupletScreenOutcome,
+    *,
+    activity_by_molecule: Mapping[str, float],
+    temperature: float,
+    pressure: float,
+) -> tuple[ScreeningResult, list[ScreeningResult]] | None:
+    """Return ``(pool_best, committed)`` for a joint screen, or ``None`` if empty."""
+    if not joint_out.valid_configs:
+        return None
+    best, committed = commit_best_joint_config(
+        joint_out.valid_configs,
+        activity_by_molecule=activity_by_molecule,
+        temperature=temperature,
+        pressure=pressure,
+    )
+    assert best is not None
+    return best, committed
+
+
+def _commit_sequential_step(
+    results: Sequence[ScreeningResult],
+    *,
+    activity_by_molecule: Mapping[str, float],
+    temperature: float,
+    pressure: float,
+) -> tuple[ScreeningResult, list[ScreeningResult]]:
+    """Pick the Ω-best sequential row and commit it when it binds."""
+    best = min(
+        results,
+        key=_omega_sort_key(activity_by_molecule, temperature, pressure),
+    )
+    return _resolve_step_commit(
+        pool_best=best,
+        activity_by_molecule=activity_by_molecule,
+        temperature=temperature,
+        pressure=pressure,
+    )
+
+
+def _log_step_ranking(
+    *,
+    step: int,
+    committed: Sequence[ScreeningResult],
+    pool_best: ScreeningResult,
+    activity_by_molecule: Mapping[str, float],
+    temperature: float,
+    pressure: float,
+    style: Literal["single", "multi"],
+    winning_molecule: str | None = None,
+) -> None:
+    """Log the stop-condition Ω / Ω_tuplet snapshot for one saturation step."""
+    omega, e_ads, label = _step_ranking_snapshot(
+        committed=committed,
+        pool_best=pool_best,
+        activity_by_molecule=activity_by_molecule,
+        temperature=temperature,
+        pressure=pressure,
+    )
+    if style == "single":
+        if len(committed) > 1:
+            logger.info(
+                "Step %d: %s = %.4f eV (E_ads = %.4f eV, %d units)",
+                step,
+                label,
+                omega,
+                e_ads,
+                len(committed),
+            )
+        elif committed:
+            logger.info(
+                "Step %d: %s = %.4f eV (E_ads = %.4f eV, placement %d)",
+                step,
+                label,
+                omega,
+                e_ads,
+                committed[0].placement_id,
+            )
+        else:
+            logger.info(
+                "Step %d: no commit (%s = %.4f eV, E_ads = %.4f eV, placement %d)",
+                step,
+                label,
+                omega,
+                e_ads,
+                pool_best.placement_id,
+            )
+    elif style == "multi":
+        if winning_molecule is None:
+            raise ValueError("winning_molecule is required for multi ranking logs")
+        if len(committed) > 1:
+            logger.info(
+                "Step %d: winners = %s, %s = %.4f eV (E_ads = %.4f eV, %d units)",
+                step,
+                ",".join(placement.molecule for placement in committed),
+                label,
+                omega,
+                e_ads,
+                len(committed),
+            )
+        elif committed:
+            logger.info(
+                "Step %d: winner = %s, %s = %.4f eV (E_ads = %.4f eV)",
+                step,
+                winning_molecule,
+                label,
+                omega,
+                e_ads,
+            )
+        else:
+            logger.info(
+                "Step %d: no commit (best = %s, %s = %.4f eV, E_ads = %.4f eV)",
+                step,
+                winning_molecule,
+                label,
+                omega,
+                e_ads,
+            )
+    else:
+        raise ValueError(f"unknown ranking log style: {style!r}")
 
 
 def _saturation_adsorbate_topology_ok(
@@ -778,23 +933,17 @@ def _run_single_molecule_saturation(
         nonlocal config
         symmetry_broken = preamble.symmetry_broken
         if needs_workload_autotune(config, bo=bo_enabled):
-            if cached_conformers is None:
-                raise ValueError(
-                    "conformers required to resolve saturation workload config"
-                )
             slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
-            config = _scale_budget_for_tuplet(
-                resolve_saturation_step_workload_config(
-                    config,
-                    ts_model=ts_model,
-                    conformers=cached_conformers,
-                    slab_atoms=slab.atoms,
-                    slab_for_sites=slab_for_sites,
-                    smiles=smiles,
-                    base_slab_for_frozen=base_slab,
-                    symmetry_broken=symmetry_broken,
-                    bo_enabled=bo_enabled,
-                )
+            config = _resolve_step_workload_config(
+                config,
+                bo_enabled=bo_enabled,
+                ts_model=ts_model,
+                conformers=cached_conformers,
+                slab_atoms=slab.atoms,
+                slab_for_sites=slab_for_sites,
+                smiles=smiles,
+                base_slab_for_frozen=base_slab,
+                symmetry_broken=symmetry_broken,
             )
         n_tuplet = config.saturation_molecules_per_step > 1
         transfer_info: BOTransferInfo | None = None
@@ -852,20 +1001,20 @@ def _run_single_molecule_saturation(
                     debug_sites_step=step,
                     log_prefix=f"Saturation for {molecule} | step {step} | ",
                 )
-            if not joint_out.valid_configs:
+            committed_pair = _commit_joint_step(
+                joint_out,
+                activity_by_molecule=activity_by_molecule,
+                temperature=temperature,
+                pressure=pressure,
+            )
+            if committed_pair is None:
                 logger.warning(
                     "Step %d: no valid joint configs for %s; stopping saturation",
                     step,
                     molecule,
                 )
                 return None
-            best, committed = commit_best_joint_config(
-                joint_out.valid_configs,
-                activity_by_molecule=activity_by_molecule,
-                temperature=temperature,
-                pressure=pressure,
-            )
-            assert best is not None
+            best, committed = committed_pair
             mol_results = joint_out.flat_results
         else:
             mol_results, transfer_info, new_memory = _screen_saturation_molecule(
@@ -902,12 +1051,8 @@ def _run_single_molecule_saturation(
                 )
                 return None
 
-            best = min(
+            best, committed = _commit_sequential_step(
                 mol_results,
-                key=_omega_sort_key(activity_by_molecule, temperature, pressure),
-            )
-            best, committed = _resolve_step_commit(
-                pool_best=best,
                 activity_by_molecule=activity_by_molecule,
                 temperature=temperature,
                 pressure=pressure,
@@ -940,40 +1085,15 @@ def _run_single_molecule_saturation(
         )
         for _placement in outcome.committed:
             units_on_slab.append(smiles)
-        omega, e_ads, label = _step_ranking_snapshot(
+        _log_step_ranking(
+            step=step,
             committed=outcome.committed,
             pool_best=outcome.best,
             activity_by_molecule=activity_by_molecule,
             temperature=temperature,
             pressure=pressure,
+            style="single",
         )
-        if len(outcome.committed) > 1:
-            logger.info(
-                "Step %d: %s = %.4f eV (E_ads = %.4f eV, %d units)",
-                step,
-                label,
-                omega,
-                e_ads,
-                len(outcome.committed),
-            )
-        elif outcome.committed:
-            logger.info(
-                "Step %d: %s = %.4f eV (E_ads = %.4f eV, placement %d)",
-                step,
-                label,
-                omega,
-                e_ads,
-                outcome.committed[0].placement_id,
-            )
-        else:
-            logger.info(
-                "Step %d: no commit (%s = %.4f eV, E_ads = %.4f eV, placement %d)",
-                step,
-                label,
-                omega,
-                e_ads,
-                outcome.best.placement_id,
-            )
 
     final_atoms = _run_saturation_steps(
         config=config,
@@ -1097,24 +1217,19 @@ def _run_multi_molecule_saturation(
         ref_step = preamble.ref_step
 
         slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
-        if needs_workload_autotune(config, bo=bo_enabled):
-            largest_conformers, _ = conformer_cache[largest_mol]
-            step_config = _scale_budget_for_tuplet(
-                resolve_saturation_step_workload_config(
-                    config,
-                    ts_model=ts_model,
-                    conformers=largest_conformers,
-                    slab_atoms=slab.atoms,
-                    slab_for_sites=slab_for_sites,
-                    smiles=active_smiles[largest_mol],
-                    base_slab_for_frozen=base_slab,
-                    symmetry_broken=symmetry_broken,
-                    bo_enabled=bo_enabled,
-                )
-            )
-            config = step_config
-        else:
-            step_config = config
+        largest_conformers, _ = conformer_cache[largest_mol]
+        step_config = _resolve_step_workload_config(
+            config,
+            bo_enabled=bo_enabled,
+            ts_model=ts_model,
+            conformers=largest_conformers,
+            slab_atoms=slab.atoms,
+            slab_for_sites=slab_for_sites,
+            smiles=active_smiles[largest_mol],
+            base_slab_for_frozen=base_slab,
+            symmetry_broken=symmetry_broken,
+        )
+        config = step_config
 
         step_complexities: dict[str, float] = {}
         for mol in active_molecules:
@@ -1191,19 +1306,19 @@ def _run_multi_molecule_saturation(
             )
             for row in joint_out.flat_results:
                 per_molecule_results[row.molecule].append(row)
-            if not joint_out.valid_configs:
+            committed_pair = _commit_joint_step(
+                joint_out,
+                activity_by_molecule=activity_by_molecule,
+                temperature=temperature,
+                pressure=pressure,
+            )
+            if committed_pair is None:
                 logger.warning(
                     "Multi-mol saturation step %d: no valid joint configs; stopping",
                     step,
                 )
                 return None
-            best_overall, committed = commit_best_joint_config(
-                joint_out.valid_configs,
-                activity_by_molecule=activity_by_molecule,
-                temperature=temperature,
-                pressure=pressure,
-            )
-            assert best_overall is not None
+            best_overall, committed = committed_pair
             winning_label = (
                 joint_winning_molecule_label(committed)
                 if committed
@@ -1302,12 +1417,8 @@ def _run_multi_molecule_saturation(
         all_results_flat = [
             r for results in per_molecule_results.values() for r in results
         ]
-        best_overall = min(
+        best_overall, committed = _commit_sequential_step(
             all_results_flat,
-            key=_omega_sort_key(activity_by_molecule, temperature, pressure),
-        )
-        best_overall, committed = _resolve_step_commit(
-            pool_best=best_overall,
             activity_by_molecule=activity_by_molecule,
             temperature=temperature,
             pressure=pressure,
@@ -1350,41 +1461,16 @@ def _run_multi_molecule_saturation(
         ).items():
             molecule_counts[molecule_name] += count
 
-        omega, e_ads, label = _step_ranking_snapshot(
+        _log_step_ranking(
+            step=step,
             committed=committed,
             pool_best=outcome.best,
             activity_by_molecule=activity_by_molecule,
             temperature=temperature,
             pressure=pressure,
+            style="multi",
+            winning_molecule=winning_molecule,
         )
-        if len(committed) > 1:
-            logger.info(
-                "Step %d: winners = %s, %s = %.4f eV (E_ads = %.4f eV, %d units)",
-                step,
-                ",".join(placement.molecule for placement in committed),
-                label,
-                omega,
-                e_ads,
-                len(committed),
-            )
-        elif committed:
-            logger.info(
-                "Step %d: winner = %s, %s = %.4f eV (E_ads = %.4f eV)",
-                step,
-                winning_molecule,
-                label,
-                omega,
-                e_ads,
-            )
-        else:
-            logger.info(
-                "Step %d: no commit (best = %s, %s = %.4f eV, E_ads = %.4f eV)",
-                step,
-                winning_molecule,
-                label,
-                omega,
-                e_ads,
-            )
 
     final_atoms = _run_saturation_steps(
         config=config,

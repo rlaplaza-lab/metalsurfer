@@ -13,19 +13,14 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from typing import Literal
 
 import numpy as np
-import pandas as pd
 from ase import Atoms
 from sklearn.preprocessing import StandardScaler
 
-from ..config import AdsorptionConfig, resolved_bo_eval_budget
-from ..ml.bayesian import (
-    build_spec_features_geometry_aware,
-    score_and_select,
-    select_initial_bo_indices,
-    splice_exploration_picks,
-)
+from ..config import AdsorptionConfig
+from ..ml.bayesian import build_spec_features_geometry_aware
 from ..ml.features import extract_features
 from ..ml.schema import PlacementRecord
 from ..models import (
@@ -43,10 +38,10 @@ from ..placement.site_context import SiteContext, site_context_for_sampling
 from ..reporting import BOPlacementFailure, FailureSummary, PlacementFailure
 from ..surface_prep import SlabContainer
 from .bayesian import (
-    _build_round_surrogate,
-    _occupancy_sigma_scales,
+    _BOAcquisitionState,
     _TransferRoundState,
     bo_exploration_rng,
+    run_bo_acquisition_loop,
 )
 from .composite import (
     assemble_joint_config_groups,
@@ -316,13 +311,9 @@ def screen_joint_tuplet_homogeneous(
     log_prefix: str = "",
 ) -> JointTupletScreenOutcome:
     """CPU placement + batched joint relaxation for one adsorbate species."""
-    n = config.saturation_molecules_per_step
-    n_configs = config.num_placements
-    if n_configs is None:
+    if config.num_placements is None:
         raise ValueError("num_placements must be set")
-
-    E_mol = ref_step.get_molecule_energy(molecule_name)
-    if E_mol is None:
+    if ref_step.get_molecule_energy(molecule_name) is None:
         raise ValueError(f"missing reference energy for {molecule_name!r}")
 
     slab_for_sites = _build_surface_reference_slab(current_slab.atoms, base_slab)
@@ -333,49 +324,26 @@ def screen_joint_tuplet_homogeneous(
         symmetry_broken=symmetry_broken,
         full_slab=current_slab.atoms,
     )
-    poses = _materialize_pose_pool(
-        smiles=smiles,
-        molecule_name=molecule_name,
-        slab=current_slab,
-        base_slab=base_slab,
+    assembly_seed = (
+        config.seed if debug_sites_step is None else config.seed + debug_sites_step
+    )
+    return screen_joint_tuplet_multi(
+        active_molecules=[molecule_name],
+        active_smiles={molecule_name: smiles},
+        conformer_cache={molecule_name: (conformers, conformer_energies)},
+        current_slab=current_slab,
         calculator=calculator,
-        conformers=conformers,
-        conformer_energies=conformer_energies,
-        config=config,
-        site_context=ctx,
-        E_slab=E_slab,
-        E_mol=E_mol,
-        pool_size=_pool_size_for_joint_screen(config),
-    )
-    if not poses:
-        return JointTupletScreenOutcome(
-            valid_configs=[],
-            flat_results=[],
-            failure_summary=PlacementFailure(
-                n_placements_attempted=n_configs,
-                n_initial_placements=0,
-            ),
-        )
-
-    seed = config.seed if debug_sites_step is None else config.seed + debug_sites_step
-    groups = assemble_joint_config_groups(
-        poses,
-        n_per_config=n,
-        n_configs=n_configs,
-        slab_atoms=current_slab.atoms,
-        config=config,
-        rng=np.random.default_rng(seed),
-        n_substrate=len(base_slab),
-    )
-    return _relax_groups(
-        groups,
-        slab_atoms=current_slab.atoms,
-        base_slab=base_slab,
+        ref_step=ref_step,
         ts_model=ts_model,
         config=config,
+        base_slab=base_slab,
         E_slab=E_slab,
+        site_context=ctx,
         topology_check=topology_check,
         log_prefix=log_prefix,
+        assembly_seed=assembly_seed,
+        empty_pool_failure=True,
+        assemble="exact",
     )
 
 
@@ -383,7 +351,7 @@ def screen_joint_tuplet_multi(
     *,
     active_molecules: Sequence[str],
     active_smiles: Mapping[str, str],
-    conformer_cache: Mapping[str, tuple[list[Atoms], list[float]]],
+    conformer_cache: Mapping[str, tuple[list[Atoms], list[float] | None]],
     current_slab: SlabContainer,
     calculator,
     ref_step: ReferenceEnergies,
@@ -394,6 +362,9 @@ def screen_joint_tuplet_multi(
     site_context: SiteContext,
     topology_check: TopologyCheck | None = None,
     log_prefix: str = "",
+    assembly_seed: int | None = None,
+    empty_pool_failure: bool = False,
+    assemble: Literal["quota", "exact"] = "quota",
 ) -> JointTupletScreenOutcome:
     """Joint screening over every species composition of size *n*.
 
@@ -401,6 +372,9 @@ def screen_joint_tuplet_multi(
     of ``num_placements``. Pose pools are sized from the slots each species
     fills across those shares (homogeneous oversample). Valid packs from every
     composition are ranked together by ``Ω_tuplet``.
+
+    ``assemble="exact"`` uses :func:`assemble_joint_config_groups` (homogeneous
+    path). Mixed campaigns keep the default ``"quota"`` assembler.
     """
     n = config.saturation_molecules_per_step
     n_configs = config.num_placements
@@ -445,21 +419,49 @@ def screen_joint_tuplet_multi(
             pool_size=pool_size,
         )
 
-    groups: list[list[ScreeningResult]] = []
-    rng = np.random.default_rng(config.seed)
-    for quotas, n_share in zip(compositions, per_comp_budgets, strict=True):
-        active_quotas = {mol: int(c) for mol, c in quotas.items() if int(c) > 0}
-        groups.extend(
-            assemble_quota_joint_configs(
-                pools,
-                quotas=active_quotas,
-                n_configs=n_share,
-                slab_atoms=current_slab.atoms,
-                config=config,
-                rng=rng,
-                n_substrate=len(base_slab),
-            )
+    if empty_pool_failure and all(not pools.get(mol) for mol in active_molecules):
+        return JointTupletScreenOutcome(
+            valid_configs=[],
+            flat_results=[],
+            failure_summary=PlacementFailure(
+                n_placements_attempted=n_configs,
+                n_initial_placements=0,
+            ),
         )
+
+    seed = config.seed if assembly_seed is None else assembly_seed
+    rng = np.random.default_rng(seed)
+
+    if assemble == "exact":
+        if len(active_molecules) != 1:
+            raise ValueError(
+                'assemble="exact" requires exactly one active molecule, '
+                f"got {list(active_molecules)!r}"
+            )
+        groups = assemble_joint_config_groups(
+            pools[active_molecules[0]],
+            n_per_config=n,
+            n_configs=n_configs,
+            slab_atoms=current_slab.atoms,
+            config=config,
+            rng=rng,
+            n_substrate=len(base_slab),
+        )
+    else:
+        groups = []
+        for quotas, n_share in zip(compositions, per_comp_budgets, strict=True):
+            active_quotas = {mol: int(c) for mol, c in quotas.items() if int(c) > 0}
+            groups.extend(
+                assemble_quota_joint_configs(
+                    pools,
+                    quotas=active_quotas,
+                    n_configs=n_share,
+                    slab_atoms=current_slab.atoms,
+                    config=config,
+                    rng=rng,
+                    n_substrate=len(base_slab),
+                )
+            )
     return _relax_groups(
         groups,
         slab_atoms=current_slab.atoms,
@@ -694,20 +696,13 @@ def process_joint_tuplet_bayesian(
     scaled_candidate_features = StandardScaler().fit_transform(
         candidate_features.to_numpy(dtype=float)
     )
-    evaluated_anchors: set[int] = set()
     valid_configs: list[list[ScreeningResult]] = []
-    observed_X_rows: list[dict[str, float]] = []
-    observed_y: list[float] = []
-    best_energy = float("inf")
-    best_X_row: dict[str, float] | None = None
     rng = bo_exploration_rng(config.seed, len(slab.atoms), molecule=molecule_name)
     transfer_state = _TransferRoundState()
-    bo_eval_budget = resolved_bo_eval_budget(config)
-    total_evaluated = 0
+    acq_state = _BOAcquisitionState()
     base_slab = effective_base_slab_for_frozen or slab.atoms
 
     def _record_group(group: Sequence[ScreeningResult]) -> None:
-        nonlocal best_energy, best_X_row
         label = joint_config_ranking_energy(
             group,
             activity_by_molecule=activity_by_molecule,
@@ -724,15 +719,14 @@ def process_joint_tuplet_bayesian(
                     config=config,
                 )
             )
-            observed_X_rows.append(features)
-            observed_y.append(label)
-            if label < best_energy:
-                best_energy = label
-                best_X_row = dict(features)
+            acq_state.observed_X_rows.append(features)
+            acq_state.observed_y.append(label)
+            if label < acq_state.best_energy:
+                acq_state.best_energy = label
+                acq_state.best_X_row = dict(features)
 
     def _eval_anchor_batch(anchor_positions: list[int]) -> None:
-        nonlocal total_evaluated
-        fresh = [p for p in anchor_positions if p not in evaluated_anchors]
+        fresh = [p for p in anchor_positions if p not in acq_state.evaluated]
         if not fresh:
             return
         groups = _assemble_bo_joint_groups_from_specs(
@@ -754,8 +748,8 @@ def process_joint_tuplet_bayesian(
             rng=rng,
             n_substrate=len(base_slab),
         )
-        evaluated_anchors.update(fresh)
-        total_evaluated += len(fresh)
+        acq_state.evaluated.update(fresh)
+        acq_state.total_evaluated += len(fresh)
         if not groups:
             return
         for group in evaluate_composite_batch(
@@ -771,85 +765,23 @@ def process_joint_tuplet_bayesian(
             valid_configs.append(group)
             _record_group(group)
 
-    n_initial = min(config.bo.initial_random, len(valid_spec_indices))
-    initial_seed = int(
-        bo_exploration_rng(
-            config.seed, len(slab.atoms), molecule=molecule_name
-        ).randint(0, 2**31 - 1)
+    run_bo_acquisition_loop(
+        config=config,
+        candidate_features=candidate_features,
+        scaled_candidate_features=scaled_candidate_features,
+        n_pool=len(valid_spec_indices),
+        molecule_name=molecule_name,
+        slab_atoms=slab.atoms,
+        slab_for_sites=slab_for_sites,
+        all_specs=all_specs,
+        valid_spec_indices=valid_spec_indices,
+        materialization_cache=materialization_cache,
+        bo_step_memory_in=bo_step_memory_in,
+        transfer_state=transfer_state,
+        state=acq_state,
+        evaluate_batch=_eval_anchor_batch,
+        rng=rng,
     )
-    _eval_anchor_batch(
-        select_initial_bo_indices(
-            candidate_features,
-            n_initial,
-            sampling=config.bo.initial_sampling,
-            random_state=initial_seed,
-        )
-    )
-
-    batches_run = 0
-    while batches_run < config.bo.total_budget and total_evaluated < bo_eval_budget:
-        unevaluated = [
-            p for p in range(len(valid_spec_indices)) if p not in evaluated_anchors
-        ]
-        if not unevaluated:
-            break
-        if len(observed_X_rows) < 3:
-            n_extra = min(config.bo.batch_size, len(unevaluated))
-            next_anchors = rng.choice(unevaluated, size=n_extra, replace=False).tolist()
-        else:
-            surrogate, transfer_active = _build_round_surrogate(
-                X_current=pd.DataFrame(observed_X_rows),
-                y_current=np.array(observed_y),
-                transfer_memory=bo_step_memory_in,
-                state=transfer_state,
-                config=config,
-            )
-            batch_size = min(config.bo.batch_size, len(unevaluated))
-            acquisition = config.bo.acquisition
-            f_best = best_energy if np.isfinite(best_energy) else None
-            if acquisition in ("ei", "pi") and f_best is None:
-                acquisition = "lcb"
-            surface_prefix = len(slab_for_sites)
-            occupied = (
-                slab.atoms[surface_prefix:]
-                if len(slab.atoms) > surface_prefix
-                else Atoms()
-            )
-            cell_arr = np.asarray(slab.atoms.get_cell(), dtype=float)
-            sigma_scale = _occupancy_sigma_scales(
-                candidate_features=candidate_features,
-                valid_spec_indices=valid_spec_indices,
-                all_specs=all_specs,
-                materialization_cache=materialization_cache,
-                occupied=occupied,
-                material_type=config.material_type,
-                cell=cell_arr,
-                connectivity_multiplier=float(config.connectivity_multiplier),
-            )
-            next_anchors = score_and_select(
-                surrogate,
-                candidate_features,
-                batch_size=batch_size,
-                kappa=config.bo.ucb_kappa,
-                evaluated_indices=evaluated_anchors,
-                acquisition=acquisition,
-                f_best=f_best,
-                scaled_features=scaled_candidate_features,
-                n_jobs=config.n_jobs,
-                sigma_scale=sigma_scale,
-            )
-            if transfer_active and config.bo.transfer.exploration_fraction > 0:
-                next_anchors = splice_exploration_picks(
-                    rng,
-                    next_anchors,
-                    pool_size=len(valid_spec_indices),
-                    evaluated_indices=evaluated_anchors,
-                    exploration_fraction=config.bo.transfer.exploration_fraction,
-                )
-        if not next_anchors:
-            break
-        _eval_anchor_batch(next_anchors)
-        batches_run += 1
 
     transfer_info = BOTransferInfo(
         transfer_used=bool(transfer_state.used_rounds > 0),
@@ -862,10 +794,14 @@ def process_joint_tuplet_bayesian(
         valid_configs=valid_configs,
         flat_results=_flatten_configs(valid_configs),
         bo_memory=BOStepMemory(
-            observed_X_rows=[dict(r) for r in observed_X_rows],
-            observed_y=[float(v) for v in observed_y],
-            best_energy=best_energy if np.isfinite(best_energy) else None,
-            best_X_row=dict(best_X_row) if best_X_row is not None else None,
+            observed_X_rows=[dict(r) for r in acq_state.observed_X_rows],
+            observed_y=[float(v) for v in acq_state.observed_y],
+            best_energy=(
+                acq_state.best_energy if np.isfinite(acq_state.best_energy) else None
+            ),
+            best_X_row=(
+                dict(acq_state.best_X_row) if acq_state.best_X_row is not None else None
+            ),
         ),
         transfer_info=transfer_info,
     )
