@@ -1247,13 +1247,33 @@ def test_cumulative_refit_transfer_weight_share_from_weights():
 
 def test_occupancy_sigma_scale_peaks_at_bond_cutoff():
     """Just outside the bond cutoff doubles sigma; far away leaves it alone."""
-    from metalsurfer.filters import occupancy_sigma_scale
+    from metalsurfer.filters import _OCCUPANCY_SIGMA_SHELL_SCALE, occupancy_sigma_scale
 
     m = 1.3
-    assert occupancy_sigma_scale(m, m) == pytest.approx(2.0)
-    assert occupancy_sigma_scale(2.0 * m, m) == pytest.approx(1.0)
-    assert occupancy_sigma_scale(4.0 * m, m) == pytest.approx(1.0)
+    shell = float(_OCCUPANCY_SIGMA_SHELL_SCALE)
+    assert occupancy_sigma_scale(m, m) == pytest.approx(shell)
+    assert occupancy_sigma_scale(shell * m, m) == pytest.approx(1.0)
+    assert occupancy_sigma_scale(2.0 * shell * m, m) == pytest.approx(1.0)
     assert occupancy_sigma_scale(float("inf"), m) == pytest.approx(1.0)
+
+
+def test_occupancy_sigma_scales_requires_materialized_pose_under_coverage():
+    """Missing cache under coverage must not silently score as far away."""
+    from types import SimpleNamespace
+
+    from metalsurfer.workflow.bayesian import _occupancy_sigma_scales
+
+    with pytest.raises(ValueError, match="materialized geometry"):
+        _occupancy_sigma_scales(
+            candidate_features=pd.DataFrame([{"x": 0.0}]),
+            valid_spec_indices=[0],
+            all_specs=[SimpleNamespace(placement_index=7)],
+            materialization_cache={},
+            occupied=Atoms("H", positions=[[0.0, 0.0, 0.0]]),
+            material_type="slab",
+            cell=np.eye(3) * 20.0,
+            connectivity_multiplier=1.3,
+        )
 
 
 def test_cumulative_refit_oof_gate_uses_baseline_on_bad_round():

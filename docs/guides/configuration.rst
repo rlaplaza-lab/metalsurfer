@@ -225,9 +225,9 @@ evaluations already made for that molecule:
   Set it to ``None`` to keep the full history. Older steps inside that
   window count less (``bo.transfer.recency_lengthscale``).
 - Candidates near a molecule already on the slab get larger predictive
-  ``sigma`` (connectivity covalent-sum ratio vs ``connectivity_multiplier``),
-  so EI/LCB sample the interaction shell without discarding earlier
-  clean-surface energies.
+  ``sigma`` from the same ``connectivity_multiplier`` clash cutoff used by
+  placement and n-tuplet packing, so EI/LCB sample the legal interaction
+  shell without evaluating doomed overlaps.
 - Each molecule keeps its own history. When the transferred model fits the
   current step worse than a fit on that step alone, transfer turns off for
   the rest of the step.

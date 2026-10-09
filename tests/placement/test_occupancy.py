@@ -7,13 +7,18 @@ import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
-from metalsurfer.filters import adsorbates_mutually_disconnected
+from metalsurfer.filters import (
+    _OCCUPANCY_SIGMA_SHELL_SCALE,
+    adsorbates_mutually_disconnected,
+    interadsorbate_clearance,
+)
 from metalsurfer.models import PlacementPose, PlacementSpec
 from metalsurfer.placement import (
     check_initial_placement_distance,
     get_unified_sites,
     material_aware_pbc,
 )
+from metalsurfer.placement.clash import atom_radii_for_symbols
 from metalsurfer.placement.dissociative import _get_dissociative_site_pairs
 from metalsurfer.placement.occupancy import (
     filter_sites_by_occupancy,
@@ -21,12 +26,14 @@ from metalsurfer.placement.occupancy import (
 from metalsurfer.placement.pose import (
     _finalize_placement,
     _PlacementContext,
+    _validate_posed_adsorbate,
 )
 from metalsurfer.placement.site_context import _get_unique_sites_for_specs
 from metalsurfer.placement.site_enumeration import (
     _compute_site_z_base,
 )
 from metalsurfer.placement.site_types import Site
+from metalsurfer.workflow.composite import pack_exact_tuplet
 from metalsurfer.workflow.shared import PlacementFailureEvent
 
 from ..conftest import (
@@ -34,6 +41,7 @@ from ..conftest import (
     make_nanoparticle,
     make_placement_descriptor,
     make_porous_framework,
+    make_screening_result,
     make_slab,
     make_water,
     water_conformers,
@@ -1563,3 +1571,100 @@ def test_adsorbates_mutually_disconnected_wraps_periodic_images():
         material_type="slab",
         cell=slab.get_cell(),
     )
+
+
+def _monoatomic_pair(
+    symbol: str,
+    separation: float,
+    *,
+    cell: np.ndarray,
+) -> tuple[Atoms, Atoms]:
+    a = Atoms(symbol, positions=[[0.0, 0.0, 0.0]], cell=cell)
+    b = Atoms(symbol, positions=[[float(separation), 0.0, 0.0]], cell=cell)
+    return a, b
+
+
+@pytest.mark.parametrize("symbol", ["H", "C"])
+@pytest.mark.parametrize("multiplier", [1.3, 1.1])
+def test_interadsorbate_clearance_lockstep_with_clash_cutoff(symbol, multiplier):
+    """Clash bit and sigma shell share one covalent-sum ratio vs multiplier."""
+    cell = np.eye(3) * 20.0
+    r = float(atom_radii_for_symbols([symbol])[0])
+    cutoff = float(multiplier) * (2.0 * r)
+    shell = float(_OCCUPANCY_SIGMA_SHELL_SCALE)
+
+    a, b_at = _monoatomic_pair(symbol, cutoff, cell=cell)
+    ratio, disconnected, sigma = interadsorbate_clearance(
+        a, b_at, multiplier, material_type="nanoparticle", cell=cell
+    )
+    assert ratio == pytest.approx(multiplier)
+    assert disconnected is False
+    assert sigma == pytest.approx(shell)
+
+    a, b_out = _monoatomic_pair(symbol, cutoff + 0.05, cell=cell)
+    ratio, disconnected, sigma = interadsorbate_clearance(
+        a, b_out, multiplier, material_type="nanoparticle", cell=cell
+    )
+    assert disconnected is True
+    assert 1.0 < sigma < shell
+
+    a, b_far = _monoatomic_pair(symbol, shell * cutoff, cell=cell)
+    ratio, disconnected, sigma = interadsorbate_clearance(
+        a, b_far, multiplier, material_type="nanoparticle", cell=cell
+    )
+    assert disconnected is True
+    assert ratio == pytest.approx(shell * multiplier)
+    assert sigma == pytest.approx(1.0)
+
+
+def _h_above_slab(slab: Atoms, *, x: float, z_offset: float = 2.0) -> Atoms:
+    z_top = float(np.max(slab.get_positions()[:, 2]))
+    return Atoms("H", positions=[[float(x), 5.4, z_top + float(z_offset)]])
+
+
+def test_pose_validation_and_pack_agree_with_clearance_helper():
+    """Pose validation and n-tuplet packing match the shared clash decision."""
+    slab = make_slab()
+    multiplier = 1.3
+    cutoff = multiplier * (2.0 * float(atom_radii_for_symbols(["H"])[0]))
+    x0 = 5.0
+    prior = _h_above_slab(slab, x=x0)
+    clash_ads = _h_above_slab(slab, x=x0 + cutoff)
+    shell_ads = _h_above_slab(slab, x=x0 + cutoff + 0.05)
+    covered = slab + prior
+    config = AdsorptionConfig(
+        material_type="slab",
+        connectivity_multiplier=multiplier,
+        placement_clash_descent=False,
+    )
+    assert (
+        _validate_posed_adsorbate(clash_ads, covered, config, slab_for_sites=slab)
+        == "adsorbate_overlap"
+    )
+    assert (
+        _validate_posed_adsorbate(shell_ads, covered, config, slab_for_sites=slab)
+        != "adsorbate_overlap"
+    )
+
+    def _h_winner(x: float, pid: int):
+        combined = slab + _h_above_slab(slab, x=x)
+        combined.set_cell(slab.get_cell())
+        combined.set_pbc(slab.get_pbc())
+        return make_screening_result(
+            molecule="H",
+            placement_id=pid,
+            energy_adsorption=-1.0,
+            atoms=combined,
+            slab_size=len(slab),
+            placement_descriptor=make_placement_descriptor(placement_id=pid),
+        )
+
+    assert (
+        pack_exact_tuplet([_h_winner(x0, 0), _h_winner(x0 + cutoff, 1)], slab, config)
+        is None
+    )
+    packed = pack_exact_tuplet(
+        [_h_winner(x0, 0), _h_winner(x0 + cutoff + 0.05, 1)], slab, config
+    )
+    assert packed is not None
+    assert [w.placement_id for w in packed] == [0, 1]

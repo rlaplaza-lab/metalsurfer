@@ -807,7 +807,7 @@ class AdsorptionConfig:
     energy_dedup_threshold: float = 0.05
     rmsd_dedup_threshold: float = 0.1
     # Bond cutoff d ≤ m·(ri+rj). Lenient default keeps lateral contacts legal;
-    # shared gate for placement / packing / clash / BO sigma. Not site occupancy.
+    # clash / BO occupancy-sigma gate (filters.interadsorbate_clearance).
     connectivity_multiplier: float = 1.3
     seed: int = DEFAULT_SEED
     # Weighting T (K) for boltzmann prior only — NOT a stochastic pre-filter.

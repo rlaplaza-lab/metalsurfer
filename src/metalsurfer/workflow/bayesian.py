@@ -15,10 +15,7 @@ from ..config import (
     AdsorptionConfig,
     resolved_bo_eval_budget,
 )
-from ..filters import (
-    min_interadsorbate_covalent_ratio,
-    occupancy_sigma_scale,
-)
+from ..filters import interadsorbate_clearance
 from ..ml.bayesian import (
     TransferCapableSurrogateType,
     _align_to_columns,
@@ -81,19 +78,22 @@ def _occupancy_sigma_scales(
         return sigma_scale
     for pool_i, spec_i in enumerate(valid_spec_indices):
         spec = all_specs[spec_i]
-        cached = materialization_cache.get(int(spec.placement_index))
+        placement_index = int(spec.placement_index)
+        cached = materialization_cache.get(placement_index)
         if cached is None:
-            continue
+            raise ValueError(
+                "occupancy sigma requires materialized geometry for "
+                f"placement_index={placement_index} when the slab is occupied"
+            )
         ads, _desc = cached
-        ratio = min_interadsorbate_covalent_ratio(
+        _, _, scale = interadsorbate_clearance(
             ads,
             occupied,
+            float(connectivity_multiplier),
             material_type=material_type,
             cell=cell,
         )
-        sigma_scale[pool_i] = occupancy_sigma_scale(
-            ratio, float(connectivity_multiplier)
-        )
+        sigma_scale[pool_i] = scale
     return sigma_scale
 
 

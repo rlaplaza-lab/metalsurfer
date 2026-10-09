@@ -6,10 +6,8 @@
 :func:`adsorbate_connected_components` splits the adsorbate region into bonded
 fragments; saturation uses it for topology checks before best-slab selection
 when ``saturation_discard_topology_rearrangements`` is enabled.
-:func:`adsorbates_mutually_disconnected` is the same bond rule between two
-adsorbate clouds (placement / n-tuplet / clash recovery clearance).
-:func:`min_interadsorbate_covalent_ratio` / :func:`occupancy_sigma_scale`
-inflate BO predictive ``sigma`` beside occupied adsorbates using that rule.
+:func:`interadsorbate_clearance` is the adsorbate–adsorbate clash /
+BO occupancy-sigma decision (placement, n-tuplet packing, clash recovery).
 :func:`check_decomposition` is used by :func:`filter_results`.
 """
 
@@ -36,6 +34,9 @@ from .placement.geometry import (
     _mol_slab_pairwise_distances,
     calculate_min_distance,
 )
+
+# Peak sigma scale and outer shell edge (multiples of connectivity_multiplier).
+_OCCUPANCY_SIGMA_SHELL_SCALE: float = 2.0
 
 try:
     from rdkit import Chem
@@ -93,12 +94,6 @@ def _lateral_covalent_radii(symbols: Sequence[str]) -> np.ndarray:
     clash descent); missing tabulated radii raise.
     """
     return atom_radii_for_symbols(symbols, use_vdw=False)
-
-
-def _lateral_threshold_matrix(syms: np.ndarray, multiplier: float) -> np.ndarray:
-    """Bond cutoff matrix for adsorbate–adsorbate lateral clearance."""
-    r_cov = _lateral_covalent_radii(list(syms))
-    return float(multiplier) * (r_cov[:, None] + r_cov[None, :])
 
 
 def _nonsurface_distance_and_threshold(
@@ -310,55 +305,6 @@ def adsorbate_connected_components(
     return [ads[mask] for mask in masks]
 
 
-def adsorbates_mutually_disconnected(
-    a: Atoms,
-    b: Atoms,
-    connectivity_multiplier: float,
-    *,
-    material_type: str = "slab",
-    cell: np.ndarray | None = None,
-) -> bool:
-    """Return whether *a* and *b* share no covalent bond under *multiplier*.
-
-    Concatenates both clouds and runs the same connected-component rule as
-    :func:`adsorbate_connected_components`, but with clash-aligned covalent
-    radii (missing table entries raise). Empty either side is disconnected.
-    *cell* overrides ``a.get_cell()`` for MIC (use the substrate cell when
-    fragments carry a vacuum box).
-    """
-    if len(a) == 0 or len(b) == 0:
-        return True
-
-    n_a = len(a)
-    coords = np.vstack(
-        [
-            np.asarray(a.get_positions(), dtype=float),
-            np.asarray(b.get_positions(), dtype=float),
-        ]
-    )
-    syms = np.asarray(
-        list(a.get_chemical_symbols()) + list(b.get_chemical_symbols()),
-        dtype=object,
-    )
-    cell_arr = np.asarray(
-        a.get_cell() if cell is None else cell,
-        dtype=float,
-    )
-    frame = Atoms(symbols=list(syms), positions=coords, cell=cell_arr)
-    if len(coords) <= 1:
-        return True
-    dist_matrix = _mic_pairwise_distances(coords, frame, material_type=material_type)
-    threshold = _lateral_threshold_matrix(syms, connectivity_multiplier)
-    bonded = dist_matrix <= threshold
-    np.fill_diagonal(bonded, False)
-    n_components, labels = connected_components(bonded, directed=False)
-    for label in range(n_components):
-        mask = labels == label
-        if np.any(mask[:n_a]) and np.any(mask[n_a:]):
-            return False
-    return True
-
-
 def min_interadsorbate_covalent_ratio(
     a: Atoms,
     b: Atoms,
@@ -395,23 +341,70 @@ def occupancy_sigma_scale(
     covalent_ratio: float,
     connectivity_multiplier: float,
 ) -> float:
-    """Sigma inflation beside occupied adsorbates: ``min(2, max(1, 2 m / s))``.
+    """Sigma inflation beside occupied adsorbates: ``min(shell, max(1, shell·m/s))``.
 
-    *covalent_ratio* is :func:`min_interadsorbate_covalent_ratio`. Legal poses
-    have ``s > connectivity_multiplier``; just outside the bond cutoff the
-    factor is 2, and it returns to 1 once ``s`` reaches twice the multiplier.
-    Non-finite *covalent_ratio* (empty cloud) yields 1. Zero or negative
-    ratio / multiplier raise.
+    *covalent_ratio* is :func:`min_interadsorbate_covalent_ratio`. Scale peaks
+    at ``_OCCUPANCY_SIGMA_SHELL_SCALE`` on the clash boundary and returns to 1
+    once ``s`` reaches that many times *connectivity_multiplier*. Non-finite
+    *s* (empty cloud) yields 1; non-positive *s* (coincident) yields the peak.
     """
     s = float(covalent_ratio)
     m = float(connectivity_multiplier)
+    if m <= 0.0:
+        raise ValueError(f"connectivity_multiplier must be positive, got {m!r}")
+    shell = float(_OCCUPANCY_SIGMA_SHELL_SCALE)
     if not np.isfinite(s):
         return 1.0
     if s <= 0.0:
-        raise ValueError(f"covalent_ratio must be positive, got {s!r}")
-    if m <= 0.0:
-        raise ValueError(f"connectivity_multiplier must be positive, got {m!r}")
-    return float(min(2.0, max(1.0, 2.0 * m / s)))
+        return shell
+    return float(min(shell, max(1.0, shell * m / s)))
+
+
+def interadsorbate_clearance(
+    a: Atoms,
+    b: Atoms,
+    connectivity_multiplier: float,
+    *,
+    material_type: str = "slab",
+    cell: np.ndarray | None = None,
+) -> tuple[float, bool, float]:
+    """Return ``(ratio, disconnected, sigma_scale)`` for two adsorbate clouds.
+
+    Shared clash / BO occupancy-sigma decision. *ratio* is
+    :func:`min_interadsorbate_covalent_ratio`; disconnected when
+    ``ratio > connectivity_multiplier`` (empty either side → ``inf`` → clear).
+    *cell* overrides ``a.get_cell()`` for MIC.
+    """
+    ratio = min_interadsorbate_covalent_ratio(
+        a,
+        b,
+        material_type=material_type,
+        cell=cell,
+    )
+    m = float(connectivity_multiplier)
+    return ratio, ratio > m, occupancy_sigma_scale(ratio, m)
+
+
+def adsorbates_mutually_disconnected(
+    a: Atoms,
+    b: Atoms,
+    connectivity_multiplier: float,
+    *,
+    material_type: str = "slab",
+    cell: np.ndarray | None = None,
+) -> bool:
+    """Return whether *a* and *b* share no covalent bond under *multiplier*.
+
+    See :func:`interadsorbate_clearance`. Empty either side is disconnected.
+    *cell* overrides ``a.get_cell()`` for MIC.
+    """
+    return interadsorbate_clearance(
+        a,
+        b,
+        connectivity_multiplier,
+        material_type=material_type,
+        cell=cell,
+    )[1]
 
 
 def _is_molecule_connected_from_dist(

@@ -630,13 +630,12 @@ Post-relaxation validation
    Covalent-radius multiplier for bond detection
    (``d_ij ≤ multiplier × (r_i + r_j)``). The default is intentionally
    lenient so stabilizing lateral contacts outside the covalent shell remain
-   allowed. Used to keep adsorbates intact after relaxation, to reject
-   cross-molecule bonds at placement / n-tuplet packing / clash recovery
-   (``adsorbate_overlap``; single source of truth via
-   :func:`~metalsurfer.filters.adsorbates_mutually_disconnected`), and to
-   inflate BO predictive ``sigma`` beside committed adsorbates (factor
-   returns to 1 once the closest covalent-sum ratio reaches twice this
-   value). In-plane site occupancy still uses ``min_adsorbate_separation``.
+   allowed. Keeps adsorbates intact after relaxation, and is the adsorbate–
+   adsorbate clash / BO occupancy-sigma cutoff via
+   :func:`~metalsurfer.filters.interadsorbate_clearance` (placement, n-tuplet
+   packing, clash recovery, sequential / joint BO). Predictive ``sigma``
+   peaks just outside this cutoff and returns to 1 at twice the value.
+   In-plane site occupancy still uses ``min_adsorbate_separation``.
 
 ``max_adsorption_energy``
    **Type:** ``float`` · **Default:** ``5.0`` (eV)
