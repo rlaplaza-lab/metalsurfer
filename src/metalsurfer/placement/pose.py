@@ -354,6 +354,20 @@ def _pairwise_contact_com_height(
     return float(h_needed) + _CONTACT_CLEARANCE_PAD_ANGSTROM
 
 
+def _mol_positions_at_com_height(
+    rotated_pos: np.ndarray,
+    *,
+    site_xyz: np.ndarray,
+    place_normal: np.ndarray,
+    com_h: float,
+) -> np.ndarray:
+    """Translate *rotated_pos* so the COM sits at *com_h* along *place_normal*."""
+    n_hat = _placement_normal_hat(place_normal)
+    base = np.asarray(site_xyz, dtype=float)
+    center = base + (float(com_h) - float(np.dot(base, n_hat))) * n_hat
+    return np.asarray(rotated_pos, dtype=float) + center
+
+
 def _pair_min_distance_at_com_height(
     rotated_pos: np.ndarray,
     *,
@@ -365,11 +379,9 @@ def _pair_min_distance_at_com_height(
     com_h: float,
 ) -> float:
     """Minimum mol–slab MIC distance with COM at *com_h* along *place_normal*."""
-    n_hat = _placement_normal_hat(place_normal)
-    base = np.asarray(site_xyz, dtype=float)
-    base_h = float(np.dot(base, n_hat))
-    center = base + (float(com_h) - base_h) * n_hat
-    mol = np.asarray(rotated_pos, dtype=float) + center
+    mol = _mol_positions_at_com_height(
+        rotated_pos, site_xyz=site_xyz, place_normal=place_normal, com_h=com_h
+    )
     dists = geom._mol_slab_pairwise_distances(mol, slab_positions, cell, pbc)
     if dists.size == 0:
         return float("inf")
@@ -388,11 +400,9 @@ def _count_contact_atoms_at_com_height(
     contact_threshold: float,
 ) -> int:
     """Count adsorbate atoms within *contact_threshold* of any slab atom."""
-    n_hat = _placement_normal_hat(place_normal)
-    base = np.asarray(site_xyz, dtype=float)
-    base_h = float(np.dot(base, n_hat))
-    center = base + (float(com_h) - base_h) * n_hat
-    mol = np.asarray(rotated_pos, dtype=float) + center
+    mol = _mol_positions_at_com_height(
+        rotated_pos, site_xyz=site_xyz, place_normal=place_normal, com_h=com_h
+    )
     dists = geom._mol_slab_pairwise_distances(mol, slab_positions, cell, pbc)
     if dists.size == 0:
         return 0
@@ -414,11 +424,9 @@ def _pair_worst_penetration_at_com_height(
     com_h: float,
 ) -> float:
     """Worst pair penetration (Å) at *com_h*; ≤0 means fully cleared."""
-    n_hat = _placement_normal_hat(place_normal)
-    base = np.asarray(site_xyz, dtype=float)
-    base_h = float(np.dot(base, n_hat))
-    center = base + (float(com_h) - base_h) * n_hat
-    mol = np.asarray(rotated_pos, dtype=float) + center
+    mol = _mol_positions_at_com_height(
+        rotated_pos, site_xyz=site_xyz, place_normal=place_normal, com_h=com_h
+    )
     mic_vecs, _ = geom._mol_slab_pairwise_mic(mol, slab_positions, cell, pbc)
     if mic_vecs.size == 0:
         return 0.0
@@ -1212,23 +1220,11 @@ def _contact_penetration_detail(
     if dists.size == 0:
         return float("inf"), 0.0, 1.0
     actual_min = float(np.min(dists))
-    mol_r = np.array(
-        [
-            r if (r := geom._get_covalent_radius(s)) is not None else np.nan
-            for s in mol_syms
-        ],
-        dtype=float,
-    )
+    mol_r = geom.radii_array(mol_syms, kind="covalent")
     if slab_scratch is not None and slab_scratch.slab_cov_r is not None:
         slab_r = np.asarray(slab_scratch.slab_cov_r, dtype=float)
     else:
-        slab_r = np.array(
-            [
-                r if (r := geom._get_covalent_radius(s)) is not None else np.nan
-                for s in slab_syms
-            ],
-            dtype=float,
-        )
+        slab_r = geom.radii_array(slab_syms, kind="covalent")
     allowed = (mol_r[:, None] + slab_r[None, :]) * float(config.min_contact_ratio)
     np.maximum(allowed, float(config.min_initial_distance), out=allowed)
     np.nan_to_num(allowed, nan=float(config.min_initial_distance), copy=False)
@@ -1756,20 +1752,8 @@ def _build_slab_distance_scratch(
         pre_ads_pos = None
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = material_aware_pbc(mat_type)
-    slab_cov_r = np.array(
-        [
-            r if (r := geom._get_covalent_radius(s)) is not None else np.nan
-            for s in slab_syms
-        ],
-        dtype=float,
-    )
-    slab_vdw_r = np.array(
-        [
-            r if (r := geom._get_vdw_radius(s)) is not None else np.nan
-            for s in slab_syms
-        ],
-        dtype=float,
-    )
+    slab_cov_r = geom.radii_array(slab_syms, kind="covalent")
+    slab_vdw_r = geom.radii_array(slab_syms, kind="vdw")
     return geom._SlabDistanceScratch(
         slab_pos=slab_pos,
         cell=cell,

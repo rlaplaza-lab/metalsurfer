@@ -14,6 +14,7 @@ from metalsurfer._numeric_defaults import ACQUISITION_SIGMA_FLOOR
 from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.ml.bayesian import (
     EnsembleRegressor,
+    _capped_prior_weights,
     build_spec_features_geometry_aware,
     build_transfer_surrogate,
     cumulative_refit_training_set,
@@ -1064,6 +1065,15 @@ def test_cumulative_refit_training_set_aligns_weights_with_rows():
     # Prior rows are decayed, and their total mass honours weight_cap.
     assert np.all(w[:4] < 1.0)
     assert float(w[:4].sum() / w.sum()) == pytest.approx(0.35, abs=1e-6)
+
+
+def test_capped_prior_weights_honours_weight_cap():
+    raw = np.array([1.0, 2.0, 3.0], dtype=float)
+    for weight_cap in (0.35, 0.5, 1.0 - 1e-12):
+        prior = _capped_prior_weights(raw, n_current=4, weight_cap=weight_cap)
+        share = float(prior.sum() / (prior.sum() + 4.0))
+        assert share == pytest.approx(weight_cap, abs=1e-6)
+        np.testing.assert_allclose(prior / prior.sum(), raw / raw.sum())
 
 
 def test_cumulative_refit_training_set_rejects_length_mismatch():

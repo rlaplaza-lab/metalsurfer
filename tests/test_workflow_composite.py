@@ -12,7 +12,7 @@ from metalsurfer.workflow.composite import (
     _apply_suffix_to_result,
     _per_unit_surface_distances,
     build_composite_candidate,
-    evaluate_composite_commit,
+    evaluate_composite_batch,
     pack_exact_tuplet,
 )
 
@@ -264,7 +264,7 @@ def test_apply_suffix_to_result_recomputes_z_offset():
 
 
 # ---------------------------------------------------------------------------
-# evaluate_composite_commit
+# evaluate_composite_batch
 # ---------------------------------------------------------------------------
 
 E_SLAB = -200.0
@@ -285,8 +285,8 @@ def _evaluate_two_clear_winners(
     ]
     if energy is not None:
         _identity_relaxation(monkeypatch, energy=energy)
-    rewritten, failure = evaluate_composite_commit(
-        winners=winners,
+    valid = evaluate_composite_batch(
+        [winners],
         slab_atoms=slab,
         base_slab=slab.copy(),
         ts_model=None,
@@ -294,16 +294,15 @@ def _evaluate_two_clear_winners(
         E_slab=E_SLAB,
         **kwargs,
     )
-    return slab, winners, rewritten, failure
+    return slab, winners, valid
 
 
-class TestEvaluateCompositeCommit:
+class TestEvaluateCompositeBatch:
     def test_success_shares_composite_and_full_tuplet_energies(self, monkeypatch):
         # E(tuplet) = -230; sum(E_mol) = -20 -> E_ads total = -10, per mol = -5.
-        _, winners, rewritten, failure = _evaluate_two_clear_winners(
-            monkeypatch, energy=-230.0
-        )
-        assert failure == ""
+        _, winners, valid = _evaluate_two_clear_winners(monkeypatch, energy=-230.0)
+        assert len(valid) == 1
+        rewritten = valid[0]
         assert len(rewritten) == 2
 
         first, second = rewritten
@@ -337,9 +336,8 @@ class TestEvaluateCompositeCommit:
             "metalsurfer.workflow.composite.optimize_adsorbate_slab_batched",
             lambda *_a, **_kw: [None],
         )
-        _, _, rewritten, failure = _evaluate_two_clear_winners(monkeypatch, energy=None)
-        assert rewritten == []
-        assert failure == "optimizer_returned_none"
+        _, _, valid = _evaluate_two_clear_winners(monkeypatch, energy=None)
+        assert valid == []
 
     def test_desorbed_unit_rejects_whole_composite(self, monkeypatch):
         slab = make_slab()
@@ -348,17 +346,15 @@ class TestEvaluateCompositeCommit:
             _winner(slab, pid=1, e_ads=-0.8, x_shift=7.0, z_offset=50.0),
         ]
         _identity_relaxation(monkeypatch, energy=-230.0)
-        rewritten, failure = evaluate_composite_commit(
-            winners=winners,
+        valid = evaluate_composite_batch(
+            [winners],
             slab_atoms=slab,
             base_slab=slab.copy(),
             ts_model=None,
             config=AdsorptionConfig(),
             E_slab=E_SLAB,
         )
-        assert rewritten == []
-        assert "desorbed" in failure
-        assert "water" in failure
+        assert valid == []
 
     def test_frozen_substrate_drift_rejects_composite(self, monkeypatch):
         n_substrate = len(make_slab())
@@ -381,12 +377,11 @@ class TestEvaluateCompositeCommit:
             "metalsurfer.workflow.composite.optimize_adsorbate_slab_batched",
             _drifting_optimize,
         )
-        _, _, rewritten, failure = _evaluate_two_clear_winners(monkeypatch, energy=None)
-        assert rewritten == []
-        assert "frozen substrate drift" in failure
+        _, _, valid = _evaluate_two_clear_winners(monkeypatch, energy=None)
+        assert valid == []
 
     def test_topology_guard_failure_is_reported(self, monkeypatch):
-        _, _, rewritten, failure = _evaluate_two_clear_winners(
+        _, _, valid = _evaluate_two_clear_winners(
             monkeypatch,
             energy=-230.0,
             topology_check=lambda _atoms, names: (
@@ -394,28 +389,23 @@ class TestEvaluateCompositeCommit:
                 f"expected {len(names)} units, found 1",
             ),
         )
-        assert rewritten == []
-        assert "topology rearrangement guard" in failure
+        assert valid == []
 
     def test_energy_cap_applies_per_molecule(self, monkeypatch):
         # Per-molecule E_ads = (1000 + 220) / 2 >> default cap of 5 eV.
-        _, _, rewritten, failure = _evaluate_two_clear_winners(
-            monkeypatch, energy=1000.0
-        )
-        assert rewritten == []
-        assert "E_ads per molecule too high" in failure
+        _, _, valid = _evaluate_two_clear_winners(monkeypatch, energy=1000.0)
+        assert valid == []
 
-    def test_empty_winners_short_circuits(self, monkeypatch):
-        rewritten, failure = evaluate_composite_commit(
-            winners=[],
+    def test_empty_groups_short_circuits(self, monkeypatch):
+        valid = evaluate_composite_batch(
+            [],
             slab_atoms=make_slab(),
             base_slab=make_slab(),
             ts_model=None,
             config=AdsorptionConfig(),
             E_slab=E_SLAB,
         )
-        assert rewritten == []
-        assert failure == "no winners"
+        assert valid == []
 
     def test_desorption_ignores_prior_adsorbates_in_coverage_prefix(self, monkeypatch):
         """A unit far from metal but near a prior organic must still fail desorption."""
@@ -469,13 +459,12 @@ class TestEvaluateCompositeCommit:
             "metalsurfer.workflow.composite.optimize_adsorbate_slab_batched",
             _fake_optimize,
         )
-        rewritten, failure = evaluate_composite_commit(
-            winners=[winner],
+        valid = evaluate_composite_batch(
+            [[winner]],
             slab_atoms=coverage,
             base_slab=bare,
             ts_model=None,
             config=AdsorptionConfig(binding_distance_threshold=4.0),
             E_slab=E_SLAB,
         )
-        assert rewritten == []
-        assert "desorbed" in failure
+        assert valid == []

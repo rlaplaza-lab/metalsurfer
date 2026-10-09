@@ -284,6 +284,17 @@ def _get_vdw_radius(symbol: str) -> float | None:
     return float(cov * _VDW_RADIUS_FROM_COVALENT_SCALE)
 
 
+def radii_array(
+    symbols: Sequence[str], *, kind: Literal["covalent", "vdw"]
+) -> np.ndarray:
+    """Per-symbol radii; missing table entries are NaN."""
+    getter = _get_covalent_radius if kind == "covalent" else _get_vdw_radius
+    return np.array(
+        [r if (r := getter(s)) is not None else np.nan for s in symbols],
+        dtype=float,
+    )
+
+
 def min_pair_clearance_angstrom(
     mol_symbol: str,
     slab_symbol: str | None,
@@ -806,17 +817,11 @@ def detect_vdw_overlaps(
 
     # Unknown radii become NaN so they propagate to a NaN vdw_sum; the
     # subsequent ``> 0`` comparison is False for NaN, excluding those pairs.
-    mol_radii = np.array(
-        [r if (r := _get_vdw_radius(s)) is not None else np.nan for s in mol_syms],
-        dtype=float,
-    )
+    mol_radii = radii_array(mol_syms, kind="vdw")
     if slab_scratch is not None and slab_scratch.slab_vdw_r is not None:
         slab_radii = np.asarray(slab_scratch.slab_vdw_r, dtype=float)
     else:
-        slab_radii = np.array(
-            [r if (r := _get_vdw_radius(s)) is not None else np.nan for s in slab_syms],
-            dtype=float,
-        )
+        slab_radii = radii_array(slab_syms, kind="vdw")
     vdw_sum = vdw_scale * (mol_radii[:, None] + slab_radii[None, :])
     overlap_amount = vdw_sum - dists
     with np.errstate(invalid="ignore"):
@@ -1012,22 +1017,13 @@ def check_initial_placement_distance(
 
     actual_min = float(np.min(dists))
 
-    mol_r = np.array(
-        [r if (r := _get_covalent_radius(s)) is not None else np.nan for s in mol_syms],
-        dtype=float,
-    )
+    mol_r = radii_array(mol_syms, kind="covalent")
     # Reuse precomputed slab covalent radii from the scratch when available
     # (otherwise recompute, as before).
     if slab_scratch is not None and slab_scratch.slab_cov_r is not None:
         slab_r = np.asarray(slab_scratch.slab_cov_r, dtype=float)
     else:
-        slab_r = np.array(
-            [
-                r if (r := _get_covalent_radius(s)) is not None else np.nan
-                for s in slab_syms
-            ],
-            dtype=float,
-        )
+        slab_r = radii_array(slab_syms, kind="covalent")
     # Larger of the absolute floor and the chemistry-scaled floor. Light pairs
     # (H, unknown radii) are limited by min_distance; heavier pairs by
     # covalent_sum * min_contact_ratio.

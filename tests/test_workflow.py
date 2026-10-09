@@ -491,17 +491,7 @@ class TestProcessMolecule:
                 placement_index=0,
             )
         ]
-        success = make_screening_result(
-            molecule="water",
-            placement_id=0,
-            energy_slab=-200.0,
-            energy_adsorbate=-10.0,
-            energy_adsorption=-1.0,
-            atoms=place_molecule_on_slab(make_slab(), make_water()),
-            slab_size=len(make_slab()),
-            distance=2.0,
-            placement_descriptor=make_placement_descriptor(placement_id=0),
-        )
+        success = make_screening_result(distance=2.0)
         mock_conformers = MagicMock(return_value=([Atoms("H")], [0.0]))
         mock_capacity = MagicMock(return_value=1)
         mock_specs = MagicMock(return_value=specs)
@@ -589,27 +579,11 @@ class TestProcessMolecule:
                 placement_index=0,
             )
         ]
-        unique = make_screening_result(
-            molecule="water",
-            placement_id=0,
-            energy_slab=-200.0,
-            energy_adsorbate=-10.0,
-            energy_adsorption=-1.0,
-            atoms=place_molecule_on_slab(make_slab(), make_water()),
-            slab_size=len(make_slab()),
-            distance=2.0,
-            placement_descriptor=make_placement_descriptor(placement_id=0),
-        )
+        unique = make_screening_result(distance=2.0)
         duplicate = make_screening_result(
-            molecule="water",
             placement_id=1,
-            energy_slab=-200.0,
-            energy_adsorbate=-10.0,
             energy_adsorption=-1.01,
-            atoms=place_molecule_on_slab(make_slab(), make_water()),
-            slab_size=len(make_slab()),
             distance=2.0,
-            placement_descriptor=make_placement_descriptor(placement_id=1),
         )
 
         mock_conformers = MagicMock(return_value=([Atoms("H")], [0.0]))
@@ -702,25 +676,11 @@ class TestProcessMolecule:
                 placement_index=1,
             ),
         ]
-        kept = make_screening_result(
-            molecule="water",
-            placement_id=0,
-            energy_slab=-200.0,
-            energy_adsorbate=-10.0,
-            energy_adsorption=-1.0,
-            atoms=place_molecule_on_slab(make_slab(), make_water()),
-            slab_size=len(make_slab()),
-            distance=2.0,
-            placement_descriptor=make_placement_descriptor(placement_id=0),
-        )
+        kept = make_screening_result(distance=2.0)
         rejected = make_screening_result(
-            molecule="water",
             placement_id=1,
-            energy_slab=-200.0,
-            energy_adsorbate=-10.0,
             energy_adsorption=-0.8,
             atoms=place_molecule_on_slab(make_slab(), make_water(), x_shift=7.0),
-            slab_size=len(make_slab()),
             distance=2.0,
             placement_descriptor=make_placement_descriptor(
                 placement_id=1, tilt_deg=15.0

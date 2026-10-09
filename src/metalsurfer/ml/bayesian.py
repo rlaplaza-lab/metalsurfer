@@ -266,6 +266,32 @@ _RESIDUAL_OOF_MIN_SAMPLES = 4
 _RESIDUAL_OOF_MAX_FOLDS = 3
 
 
+def _median_nn_lengthscale(points: np.ndarray, *, use_kdtree: bool = False) -> float:
+    """Median 1-NN separation; ``1.0`` if fewer than two rows."""
+    arr = np.asarray(points, dtype=float)
+    if len(arr) < 2:
+        return 1.0
+    if use_kdtree:
+        query = np.asarray(arr, dtype=np.float64)
+        nn_dist = np.asarray(cast(Any, KDTree(query)).query(query, k=2)[0])[:, 1]
+    else:
+        nn_dist, _ = NearestNeighbors(n_neighbors=2).fit(arr).kneighbors(arr)
+        nn_dist = nn_dist[:, 1]
+    return max(float(np.median(nn_dist)), _RESIDUAL_STD_FLOOR)
+
+
+def _capped_prior_weights(
+    raw: np.ndarray, *, n_current: int, weight_cap: float
+) -> np.ndarray:
+    """Scale *raw* so prior mass is ``weight_cap`` of prior + ``n_current``."""
+    raw_arr = np.asarray(raw, dtype=float)
+    total = float(np.sum(raw_arr))
+    if total <= 0.0:
+        return np.zeros(len(raw_arr), dtype=float)
+    scale = n_current * weight_cap / max(1.0 - weight_cap, 1e-8)
+    return raw_arr * (scale / total)
+
+
 def _format_residual_std(pipeline: Pipeline) -> str:
     """Render the attached residual std for logging, or "n/a" when skipped."""
     value = getattr(pipeline.named_steps["regressor"], "bo_residual_std_", None)
@@ -359,13 +385,7 @@ def _attach_residual_uncertainty(
     regressor.bo_X_train_scaled_ = np.asarray(
         sigma_scaler.transform(X_arr), dtype=float
     )
-    if len(regressor.bo_X_train_scaled_) >= 2:
-        nn = NearestNeighbors(n_neighbors=2).fit(regressor.bo_X_train_scaled_)
-        nn_dist, _ = nn.kneighbors(regressor.bo_X_train_scaled_)
-        lengthscale = float(np.median(nn_dist[:, 1]))
-        regressor.bo_lengthscale_ = max(lengthscale, _RESIDUAL_STD_FLOOR)
-    else:
-        regressor.bo_lengthscale_ = 1.0
+    regressor.bo_lengthscale_ = _median_nn_lengthscale(regressor.bo_X_train_scaled_)
 
 
 def _sigma_from_residual(
@@ -396,13 +416,7 @@ def _sigma_from_residual(
     d = cdist(X_e, X_train_arr).min(axis=1)
     lengthscale = getattr(regressor, "bo_lengthscale_", None)
     if lengthscale is None or not np.isfinite(lengthscale) or lengthscale <= 0:
-        if len(X_train_arr) >= 2:
-            nn = NearestNeighbors(n_neighbors=2).fit(X_train_arr)
-            nn_dist, _ = nn.kneighbors(X_train_arr)
-            lengthscale = float(np.median(nn_dist[:, 1]))
-            lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
-        else:
-            lengthscale = 1.0
+        lengthscale = _median_nn_lengthscale(X_train_arr)
     else:
         lengthscale = float(lengthscale)
     # Mild distance tempering; cap prevents EI from ignoring the mean.
@@ -719,9 +733,8 @@ def cumulative_refit_training_set(
     total_mod = float(np.sum(prox))
     prior_weights: np.ndarray = np.zeros(n_prior, dtype=float)
     if total_mod > 0.0:
-        max_transfer_weight = n_current * weight_cap / max(1.0 - weight_cap, 1e-8)
-        prior_weights = np.asarray(
-            prox / max(total_mod, 1e-8) * max_transfer_weight, dtype=float
+        prior_weights = _capped_prior_weights(
+            prox, n_current=n_current, weight_cap=weight_cap
         )
 
     X_combined = pd.concat([X_prior, X_current], ignore_index=True)
@@ -1003,10 +1016,9 @@ def build_transfer_surrogate(
         return _no_transfer(_fit_baseline(), transfer_bad_rounds)
 
     n_current = len(X_current)
-    max_transfer_weight = n_current * weight_cap / max(1.0 - weight_cap, 1e-8)
-    transfer_weights = similarity * modifiers
-    transfer_weights = transfer_weights / max(float(np.sum(transfer_weights)), 1e-8)
-    transfer_weights = transfer_weights * max_transfer_weight
+    transfer_weights = _capped_prior_weights(
+        similarity * modifiers, n_current=n_current, weight_cap=weight_cap
+    )
     transfer_weight_share = float(
         np.sum(transfer_weights) / (np.sum(transfer_weights) + float(n_current))
     )
@@ -1469,18 +1481,7 @@ def select_candidates_batch_diverse(
             )
     else:
         scaled = StandardScaler().fit_transform(matrix)
-    # Lengthscale from the median nearest-neighbour separation, estimated with a
-    # KDTree (k=2) instead of a full N x N cdist matrix — avoids the ~234 MB
-    # allocation at the real pool size of 3840 while giving an identical value.
-    avail_positions = scaled[available]
-    if len(available) >= 2:
-        _query = np.asarray(avail_positions, dtype=np.float64)
-        tree = KDTree(_query)
-        nn_dist = np.asarray(cast(Any, tree).query(_query, k=2)[0])[:, 1]
-        lengthscale = float(np.median(nn_dist))
-        lengthscale = max(lengthscale, _RESIDUAL_STD_FLOOR)
-    else:
-        lengthscale = 1.0
+    lengthscale = _median_nn_lengthscale(scaled[available], use_kdtree=True)
     finite = s[np.isfinite(s)]
     strength = float(np.std(finite)) if finite.size > 1 else 1.0
     strength = max(strength, 1e-3)

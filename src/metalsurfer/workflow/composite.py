@@ -57,7 +57,6 @@ __all__ = [
     "assemble_quota_joint_configs",
     "build_composite_candidate",
     "evaluate_composite_batch",
-    "evaluate_composite_commit",
     "pack_exact_tuplet",
 ]
 
@@ -691,49 +690,3 @@ def evaluate_composite_batch(
         if rewritten:
             valid.append(rewritten)
     return valid
-
-
-def evaluate_composite_commit(
-    *,
-    winners: Sequence[ScreeningResult],
-    slab_atoms: Atoms,
-    base_slab: Atoms,
-    ts_model: object,
-    config: AdsorptionConfig,
-    E_slab: float,
-    topology_check: Callable[[Atoms, list[str]], tuple[bool, str]] | None = None,
-    log_prefix: str = "",
-) -> tuple[list[ScreeningResult], str]:
-    """Relax and validate one composite; map results back onto per-unit rows.
-
-    Validation mirrors ``_evaluate_optimized_candidate`` but for an n-tuplet:
-
-    - frozen-substrate drift against the bare-substrate prefix;
-    - geometry sanity via ``_validate_geometry``;
-    - PER-UNIT desorption check;
-    - optional connectivity-only topology guard;
-    - ``max_adsorption_energy`` cap applied to per-molecule E_ads.
-    """
-    if not winners:
-        return [], "no winners"
-    composite = build_composite_candidate(
-        slab_atoms, [w.atoms[w.slab_size :] for w in winners]
-    )
-    optimized = optimize_adsorbate_slab_batched(
-        [composite],
-        slab_atoms,
-        ts_model,
-        config=config,
-        base_slab_for_frozen=base_slab,
-        saturation_reuse=True,
-    )
-    return _finalize_relaxed_composite(
-        winners,
-        optimized[0],
-        slab_atoms=slab_atoms,
-        base_slab=base_slab,
-        config=config,
-        E_slab=E_slab,
-        topology_check=topology_check,
-        log_prefix=log_prefix,
-    )

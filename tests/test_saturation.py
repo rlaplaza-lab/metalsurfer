@@ -140,8 +140,6 @@ def _make_schedule_process(
 
 def _make_bootstrap_mock(
     *,
-    molecule: str,
-    smiles: str,
     ref: DummyReferenceEnergies,
     slab: SlabContainer | Atoms | None = None,
 ) -> ScreeningRunBootstrap:
@@ -158,85 +156,53 @@ def _make_bootstrap_mock(
     )
 
 
-def _patch_single_mol_saturation_mocks(
+def _patch_saturation_mocks(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    molecule: str,
-    smiles: str,
     ref: DummyReferenceEnergies,
-    process_molecule: Callable[..., list],
-    slab_energy: float = -10.0,
-) -> None:
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._normalize_molecules_input",
-        lambda *_a, **_kw: ([(smiles, molecule)], "ok", "<inline-molecules>"),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._bootstrap_screening_run",
-        lambda slab, *_a, **_kw: _make_bootstrap_mock(
-            molecule=molecule, smiles=smiles, ref=ref, slab=slab
-        ),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation._compute_slab_energy",
-        lambda *_a, **_kw: slab_energy,
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.create_conformers_from_smiles",
-        lambda *_a, **_kw: ([make_water()], [0.0]),
-    )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.process_molecule", process_molecule
-    )
-
-
-def _patch_multi_mol_saturation_mocks(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    molecules: list[str],
-    smiles_list: list[str],
-    ref: DummyReferenceEnergies,
+    molecule: str | None = None,
+    smiles: str | None = None,
+    molecules: list[str] | None = None,
+    smiles_list: list[str] | None = None,
     process_molecule: Callable[..., list] | None = None,
     process_molecule_bayesian: Callable[..., list] | None = None,
-    slab_energy: float = -100.0,
+    slab_energy: float | None = None,
     budget_fn: Callable[[dict[str, float], int], dict[str, int]] | None = None,
 ) -> None:
-    """Shared monkeypatches for competitive multi-molecule saturation tests."""
-    if (process_molecule is None) == (process_molecule_bayesian is None):
-        raise ValueError(
-            "pass exactly one of process_molecule or process_molecule_bayesian"
-        )
+    """Monkeypatch saturation I/O; pass molecule/smiles or molecules/smiles_list."""
+    multi = molecules is not None
+    if multi:
+        if (process_molecule is None) == (process_molecule_bayesian is None):
+            raise ValueError(
+                "pass exactly one of process_molecule or process_molecule_bayesian"
+            )
+        pairs = list(zip(smiles_list, molecules, strict=True))
+        energy = -100.0 if slab_energy is None else slab_energy
+    else:
+        pairs = [(smiles, molecule)]
+        energy = -10.0 if slab_energy is None else slab_energy
 
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation._normalize_molecules_input",
-        lambda *_a, **_kw: (
-            list(zip(smiles_list, molecules, strict=True)),
-            "ok",
-            "<inline-molecules>",
-        ),
+        lambda *_a, **_kw: (pairs, "ok", "<inline-molecules>"),
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation._bootstrap_screening_run",
-        lambda slab, *_a, **_kw: ScreeningRunBootstrap(
-            calculator=object(),
-            ts_model=None,
-            ref=ref,
-            t_ref_s=0.0,
-            slab=slab if isinstance(slab, SlabContainer) else SlabContainer(slab),
-        ),
+        lambda slab, *_a, **_kw: _make_bootstrap_mock(ref=ref, slab=slab),
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation._compute_slab_energy",
-        lambda *_a, **_kw: slab_energy,
+        lambda *_a, **_kw: energy,
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.saturation.create_conformers_from_smiles",
         lambda *_a, **_kw: ([make_water()], [0.0]),
     )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.distribute_placement_budget",
-        budget_fn or _uniform_placement_budget,
-    )
+    if multi:
+        monkeypatch.setattr(
+            "metalsurfer.workflow.saturation.distribute_placement_budget",
+            budget_fn or _uniform_placement_budget,
+        )
     if process_molecule is not None:
         monkeypatch.setattr(
             "metalsurfer.workflow.saturation.process_molecule",
@@ -882,7 +848,7 @@ def test_run_saturation_screening_symmetry_none_falls_back_to_c1(monkeypatch, ca
         e_ads = -0.3 if step_idx == 1 else 0.2
         return _result_for_step(mol, current_slab, e_ads)
 
-    _patch_single_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
@@ -1067,7 +1033,7 @@ def test_multi_mol_saturation_picks_best_across_molecules(monkeypatch):
 
     fake_process = _make_schedule_process({"water": [-0.5, 0.1], "CO2": [-1.2, 0.1]})
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["water", "CO2"],
         smiles_list=["O", "O=C=O"],
@@ -1184,7 +1150,7 @@ def test_multi_mol_activity_flips_winner(monkeypatch, bo_enabled):
         patch_kw["process_molecule_bayesian"] = _bo_process
     else:
         patch_kw["process_molecule"] = schedule
-    _patch_multi_mol_saturation_mocks(monkeypatch, **patch_kw)
+    _patch_saturation_mocks(monkeypatch, **patch_kw)
 
     out = run_saturation_screening(
         slab,
@@ -1203,7 +1169,7 @@ def test_multi_mol_pressure_and_activity_stop(monkeypatch):
     slab = SlabContainer(make_slab())
     ref = DummyReferenceEnergies(REF_WATER_CO2)
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["water", "CO2"],
         smiles_list=["O", "O=C=O"],
@@ -1224,7 +1190,7 @@ def test_multi_mol_pressure_and_activity_stop(monkeypatch):
     assert out[0].steps[0].winning_molecule == "CO2"
     assert out[0].n_molecules_at_saturation == 1
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["sa", "sb"],
@@ -1247,7 +1213,7 @@ def test_multi_mol_pressure_and_activity_stop(monkeypatch):
 
 def test_saturation_activities_length_mismatch_raises(monkeypatch):
     slab = SlabContainer(make_slab())
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["water", "CO2"],
         smiles_list=["O", "O=C=O"],
@@ -1269,7 +1235,7 @@ def test_saturation_activities_length_mismatch_raises(monkeypatch):
 
 def test_saturation_omega_shift_commits_slightly_positive_eads(monkeypatch):
     slab = SlabContainer(make_slab())
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["water", "CO2"],
         smiles_list=["O", "O=C=O"],
@@ -1288,7 +1254,7 @@ def test_saturation_omega_shift_commits_slightly_positive_eads(monkeypatch):
     )
     assert unbound[0].steps[0].n_added == 0
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["water", "CO2"],
         smiles_list=["O", "O=C=O"],
@@ -1319,7 +1285,7 @@ def test_multi_mol_saturation_terminates_on_positive_eads(monkeypatch):
 
     fake_process = _make_schedule_process({"A": [0.5], "B": [0.5]})
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["smiles_a", "smiles_b"],
@@ -1369,7 +1335,7 @@ def test_multi_mol_saturation_step_result_structure(monkeypatch):
             ]
         )
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["mol1", "mol2"],
         smiles_list=["s1", "s2"],
@@ -1411,7 +1377,7 @@ def test_multi_mol_saturation_single_molecule_uses_standard_loop(monkeypatch, ca
         e_ads = -0.5 if call_count[0] == 1 else 0.1
         return _result_for_step(mol, current_slab, e_ads)
 
-    _patch_single_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
@@ -1470,7 +1436,7 @@ def test_multi_mol_saturation_molecule_counts_tracked(monkeypatch):
             ]
         )
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["sa", "sb"],
@@ -1530,7 +1496,7 @@ def test_multi_mol_saturation_molecule_counts_omit_unbound_final_step(monkeypatc
             ]
         )
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["sa", "sb"],
@@ -1615,7 +1581,7 @@ def test_multi_mol_saturation_bo_uses_independent_memory_per_adsorbate(monkeypat
             transfer_info=BOTransferInfo(),
         )
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["water", "CO2"],
         smiles_list=["O", "O=C=O"],
@@ -1678,7 +1644,7 @@ def test_multi_mol_saturation_bo_rejects_shared_memory_objects(monkeypatch):
             transfer_info=BOTransferInfo(),
         )
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["sa", "sb"],
@@ -2157,7 +2123,7 @@ def test_saturation_step2_selects_intact_not_rearranged(monkeypatch):
             ]
         )
 
-    _patch_single_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
@@ -2242,7 +2208,7 @@ def test_multi_mol_saturation_topology_guard_step2(monkeypatch):
             )
         return _result_for_step(mol, current_slab, -0.2)
 
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["water", "CO2"],
         smiles_list=["O", "O=C=O"],
@@ -2350,7 +2316,7 @@ def test_saturation_topology_guard_all_filtered_stops(monkeypatch, caplog):
             ]
         )
 
-    _patch_single_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
@@ -2403,7 +2369,7 @@ def test_single_mol_saturation_resolves_workload_config_once(monkeypatch):
             ]
         )
 
-    _patch_single_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
@@ -2473,27 +2439,11 @@ def _make_joint_config(
     ]
 
 
-def _patch_joint_multi_screen(
-    monkeypatch: pytest.MonkeyPatch,
-    valid_configs: list[list],
-) -> None:
-    def _fake(**_kwargs):
-        flat = [row for group in valid_configs for row in group]
-        return JointTupletScreenOutcome(
-            valid_configs=[list(g) for g in valid_configs],
-            flat_results=flat,
-        )
-
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.screen_joint_tuplet_multi",
-        _fake,
-    )
-
-
-def _patch_joint_homogeneous_screen(
+def _patch_joint_screen(
     monkeypatch: pytest.MonkeyPatch,
     valid_configs: list[list],
     *,
+    homogeneous: bool = False,
     config_probe: list[int] | None = None,
 ) -> None:
     def _fake(**kwargs):
@@ -2505,10 +2455,12 @@ def _patch_joint_homogeneous_screen(
             flat_results=flat,
         )
 
-    monkeypatch.setattr(
-        "metalsurfer.workflow.saturation.screen_joint_tuplet_homogeneous",
-        _fake,
+    name = (
+        "screen_joint_tuplet_homogeneous"
+        if homogeneous
+        else "screen_joint_tuplet_multi"
     )
+    monkeypatch.setattr(f"metalsurfer.workflow.saturation.{name}", _fake)
 
 
 def test_run_saturation_screening_n_tuplet_commits_two_winners_per_step(
@@ -2521,14 +2473,14 @@ def test_run_saturation_screening_n_tuplet_commits_two_winners_per_step(
         slab,
         [("A", 0, 2.5), ("B", 0, 7.0)],
     )
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["OA", "OB"],
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
         process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    _patch_joint_multi_screen(monkeypatch, [group])
+    _patch_joint_screen(monkeypatch, [group])
 
     out = run_saturation_screening(
         SlabContainer(slab),
@@ -2569,14 +2521,14 @@ def test_run_saturation_screening_n_tuplet_rejects_clashing_second_winner(
 ):
     """Without an exact n=2 joint config the step commits nothing."""
     slab = make_slab()
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["OA", "OB"],
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
         process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    _patch_joint_multi_screen(monkeypatch, [])
+    _patch_joint_screen(monkeypatch, [])
 
     out = run_saturation_screening(
         SlabContainer(slab),
@@ -2602,14 +2554,14 @@ def test_run_saturation_screening_n_tuplet_single_molecule_path(monkeypatch, wor
         slab,
         [("water", 0, 2.5), ("water", 1, 7.0)],
     )
-    _patch_single_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
         process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    _patch_joint_homogeneous_screen(monkeypatch, [group])
+    _patch_joint_screen(monkeypatch, [group], homogeneous=True)
 
     out = run_saturation_screening(
         SlabContainer(slab),
@@ -2639,14 +2591,14 @@ def test_n_tuplet_unbound_composite_commits_nothing(monkeypatch, workdir):
         [("A", 0, 2.5), ("B", 0, 7.0)],
         e_ads_per_mol=2.5,
     )
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["OA", "OB"],
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
         process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    _patch_joint_multi_screen(monkeypatch, [group])
+    _patch_joint_screen(monkeypatch, [group])
 
     out = run_saturation_screening(
         SlabContainer(slab),
@@ -2690,7 +2642,7 @@ def test_n_tuplet_no_binders_stops_despite_negative_pool_best(monkeypatch, workd
         flat = [row for row in group]
         return JointTupletScreenOutcome(valid_configs=[group], flat_results=flat)
 
-    _patch_single_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
@@ -2761,7 +2713,7 @@ def test_saturation_bo_n_tuplet_keeps_single_site_memory_labels(monkeypatch, wor
             transfer_info=BOTransferInfo(),
         )
 
-    _patch_single_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
@@ -2804,14 +2756,14 @@ def test_run_saturation_screening_n_tuplet_composite_failure_stops_run(
     """When composite validation fails outright the run stops with zero steps."""
 
     slab = make_slab()
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["OA", "OB"],
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
         process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    _patch_joint_multi_screen(monkeypatch, [])
+    _patch_joint_screen(monkeypatch, [])
 
     out = run_saturation_screening(
         SlabContainer(slab),
@@ -2990,7 +2942,7 @@ def test_single_mol_n_tuplet_divides_autotuned_budget(monkeypatch):
         bare,
         [("water", 0, 2.5), ("water", 1, 7.0)],
     )
-    _patch_single_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecule="water",
         smiles="O",
@@ -3001,7 +2953,9 @@ def test_single_mol_n_tuplet_divides_autotuned_budget(monkeypatch):
         "metalsurfer.workflow.saturation.resolve_saturation_step_workload_config",
         _fake_resolve,
     )
-    _patch_joint_homogeneous_screen(monkeypatch, [group], config_probe=received_configs)
+    _patch_joint_screen(
+        monkeypatch, [group], homogeneous=True, config_probe=received_configs
+    )
 
     out = run_saturation_screening(
         slab,
@@ -3043,7 +2997,7 @@ def test_joint_winning_molecule_label_pack_order():
 def test_multi_mol_n_tuplet_rejects_bo_enabled(monkeypatch, workdir):
     """Competitive n-tuplet + BO is unsupported (joint BO is single-species)."""
     slab = make_slab()
-    _patch_multi_mol_saturation_mocks(
+    _patch_saturation_mocks(
         monkeypatch,
         molecules=["A", "B"],
         smiles_list=["OA", "OB"],
