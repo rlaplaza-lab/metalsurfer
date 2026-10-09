@@ -2445,14 +2445,21 @@ def _patch_joint_screen(
     *,
     homogeneous: bool = False,
     config_probe: list[int] | None = None,
+    slots_by_molecule: dict[str, int] | None = None,
 ) -> None:
     def _fake(**kwargs):
         if config_probe is not None:
             config_probe.append(kwargs["config"].num_placements)
         flat = [row for group in valid_configs for row in group]
+        slots = slots_by_molecule
+        if slots is None and not homogeneous and flat:
+            slots = {}
+            for row in flat:
+                slots[row.molecule] = slots.get(row.molecule, 0) + 1
         return JointTupletScreenOutcome(
             valid_configs=[list(g) for g in valid_configs],
             flat_results=flat,
+            slots_by_molecule=slots,
         )
 
     name = (
@@ -2582,8 +2589,10 @@ def test_run_saturation_screening_n_tuplet_single_molecule_path(monkeypatch, wor
     assert len(out[0].final_slab_atoms) == base_n + 2 * len(make_water())
 
 
-def test_n_tuplet_unbound_composite_commits_nothing(monkeypatch, workdir):
+def test_n_tuplet_unbound_composite_commits_nothing(monkeypatch, workdir, caplog):
     """Ω_tuplet ≥ 0 after joint relax commits nothing (no single-winner fallback)."""
+    import logging
+
     slab = make_slab()
     base_n = len(slab)
     group = _make_joint_config(
@@ -2598,19 +2607,24 @@ def test_n_tuplet_unbound_composite_commits_nothing(monkeypatch, workdir):
         ref=DummyReferenceEnergies(constant_energy=REF_CONSTANT),
         process_molecule=lambda *_a, **_kw: MoleculeScreenOutcome(results=[]),
     )
-    _patch_joint_screen(monkeypatch, [group])
-
-    out = run_saturation_screening(
-        SlabContainer(slab),
-        molecules=[("OA", "A"), ("OB", "B")],
-        config=_mock_saturation_config(
-            multi_molecule_saturation=True,
-            saturation_molecules_per_step=2,
-            saturation_max_steps=1,
-        ),
-        surface_type="tuplet_unbound_retry",
-        skip_existing=False,
+    _patch_joint_screen(
+        monkeypatch,
+        [group],
+        slots_by_molecule={"A": 2, "B": 2},
     )
+
+    with caplog.at_level(logging.INFO, logger="metalsurfer.workflow.saturation"):
+        out = run_saturation_screening(
+            SlabContainer(slab),
+            molecules=[("OA", "A"), ("OB", "B")],
+            config=_mock_saturation_config(
+                multi_molecule_saturation=True,
+                saturation_molecules_per_step=2,
+                saturation_max_steps=1,
+            ),
+            surface_type="tuplet_unbound_retry",
+            skip_existing=False,
+        )
 
     assert len(out) == 1
     run = out[0]
@@ -2618,8 +2632,11 @@ def test_n_tuplet_unbound_composite_commits_nothing(monkeypatch, workdir):
     step = run.steps[0]
     assert step.n_added == 0
     assert step.committed_results == []
+    assert step.winning_molecule == "A+B"
+    assert step.per_molecule_budgets == {"A": 2, "B": 2}
     assert run.n_molecules_at_saturation == 0
     assert len(run.final_slab_atoms) == base_n
+    assert any("Ω_tuplet" in rec.message for rec in caplog.records)
 
 
 def test_n_tuplet_no_binders_stops_despite_negative_pool_best(monkeypatch, workdir):

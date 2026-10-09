@@ -39,6 +39,8 @@ from ..reporting import BOPlacementFailure, FailureSummary, PlacementFailure
 from ..surface_prep import SlabContainer
 from .bayesian import (
     _BOAcquisitionState,
+    _occupancy_sigma_scales,
+    _pack_bo_outputs,
     _TransferRoundState,
     bo_exploration_rng,
     run_bo_acquisition_loop,
@@ -80,6 +82,7 @@ class JointTupletScreenOutcome:
     failure_summary: FailureSummary | None = None
     bo_memory: BOStepMemory | None = None
     transfer_info: BOTransferInfo | None = None
+    slots_by_molecule: dict[str, int] | None = None
 
 
 def joint_winning_molecule_label(group: Sequence[ScreeningResult]) -> str:
@@ -123,19 +126,50 @@ def enumerate_tuplet_compositions(
     return compositions
 
 
+def _composition_funding_order(
+    compositions: Sequence[Mapping[str, int]],
+    molecules: Sequence[str],
+) -> list[int]:
+    """Return indices with each species' pure pack first, then mixed packs."""
+    names = list(molecules)
+    pure_indices: list[int] = []
+    for mol in names:
+        for i, counts in enumerate(compositions):
+            if int(counts.get(mol, 0)) > 0 and all(
+                int(counts.get(other, 0)) == 0 for other in names if other != mol
+            ):
+                pure_indices.append(i)
+                break
+    pure_set = set(pure_indices)
+    mixed_indices = [i for i in range(len(compositions)) if i not in pure_set]
+    return pure_indices + mixed_indices
+
+
 def _equal_split_budget(total: int, n_parts: int) -> list[int]:
-    """Largest-remainder equal split; requires ``total >= n_parts``."""
+    """Largest-remainder equal split; zero shares allowed when ``total < n_parts``."""
     if n_parts <= 0:
         raise ValueError(f"n_parts must be positive, got {n_parts}")
+    if total < 0:
+        raise ValueError(f"total must be non-negative, got {total}")
     if total < n_parts:
-        raise ValueError(
-            f"joint-config budget ({total}) is smaller than the number of "
-            f"compositions ({n_parts}); raise num_placements or lower "
-            "saturation_molecules_per_step"
-        )
+        return [1 if i < total else 0 for i in range(n_parts)]
     base = total // n_parts
     rem = total % n_parts
     return [base + (1 if i < rem else 0) for i in range(n_parts)]
+
+
+def _composition_budgets(
+    compositions: Sequence[Mapping[str, int]],
+    molecules: Sequence[str],
+    n_configs: int,
+) -> list[int]:
+    """Per-composition joint-config shares; pures funded before mixtures."""
+    order = _composition_funding_order(compositions, molecules)
+    shares_in_order = _equal_split_budget(int(n_configs), len(compositions))
+    budgets = [0] * len(compositions)
+    for share_i, comp_i in enumerate(order):
+        budgets[comp_i] = shares_in_order[share_i]
+    return budgets
 
 
 def commit_best_joint_config(
@@ -144,14 +178,15 @@ def commit_best_joint_config(
     activity_by_molecule: Mapping[str, float],
     temperature: float,
     pressure: float,
-) -> tuple[ScreeningResult | None, list[ScreeningResult]]:
-    """Return ``(pool_best, committed)`` for the best binding joint config.
+) -> tuple[ScreeningResult | None, list[ScreeningResult], list[ScreeningResult]]:
+    """Return ``(pool_best, committed, ranked_group)`` for the best joint config.
 
-    ``committed`` is empty when no config binds (Ω ≥ 0). ``pool_best`` is the
-    best-ranked unit among all valid configs (for step bookkeeping).
+    ``committed`` is empty when no config binds (Ω ≥ 0). ``ranked_group`` is
+    always the Ω-best pack (for logging unbound steps). ``pool_best`` is the
+    best-ranked unit in that pack (for step bookkeeping).
     """
     if not valid_configs:
-        return None, []
+        return None, [], []
 
     def _rank(group: Sequence[ScreeningResult]) -> float:
         return joint_config_ranking_energy(
@@ -162,7 +197,7 @@ def commit_best_joint_config(
         )
 
     ordered = sorted(valid_configs, key=_rank)
-    best_group = ordered[0]
+    best_group = list(ordered[0])
     pool_best = min(
         best_group,
         key=lambda r: (
@@ -177,8 +212,8 @@ def commit_best_joint_config(
         ),
     )
     if _rank(best_group) >= 0:
-        return pool_best, []
-    return pool_best, list(best_group)
+        return pool_best, [], best_group
+    return pool_best, best_group, best_group
 
 
 def _unrelaxed_pose_stub(
@@ -254,16 +289,6 @@ def _flatten_configs(
     return [row for group in configs for row in group]
 
 
-def _pool_size_for_joint_screen(config: AdsorptionConfig) -> int:
-    n_configs = config.num_placements
-    if n_configs is None:
-        raise ValueError("num_placements must be set for joint tuplet screening")
-    n = config.saturation_molecules_per_step
-    return max(
-        1, int(math.ceil(n_configs * n * float(config.placement_retry_oversample_max)))
-    )
-
-
 def _relax_groups(
     groups: Sequence[Sequence[ScreeningResult]],
     *,
@@ -274,6 +299,7 @@ def _relax_groups(
     E_slab: float,
     topology_check: TopologyCheck | None,
     log_prefix: str,
+    slots_by_molecule: dict[str, int] | None = None,
 ) -> JointTupletScreenOutcome:
     valid = evaluate_composite_batch(
         groups,
@@ -288,6 +314,7 @@ def _relax_groups(
     return JointTupletScreenOutcome(
         valid_configs=valid,
         flat_results=_flatten_configs(valid),
+        slots_by_molecule=slots_by_molecule,
     )
 
 
@@ -385,10 +412,14 @@ def screen_joint_tuplet_multi(
     if not compositions:
         return JointTupletScreenOutcome(valid_configs=[], flat_results=[])
 
-    per_comp_budgets = _equal_split_budget(int(n_configs), len(compositions))
+    per_comp_budgets = _composition_budgets(
+        compositions, active_molecules, int(n_configs)
+    )
     oversample = float(config.placement_retry_oversample_max)
     slots_by_mol: dict[str, int] = {mol: 0 for mol in active_molecules}
     for quotas, n_share in zip(compositions, per_comp_budgets, strict=True):
+        if n_share <= 0:
+            continue
         for mol, count in quotas.items():
             slots_by_mol[mol] += int(count) * int(n_share)
 
@@ -427,6 +458,7 @@ def screen_joint_tuplet_multi(
                 n_placements_attempted=n_configs,
                 n_initial_placements=0,
             ),
+            slots_by_molecule=dict(slots_by_mol),
         )
 
     seed = config.seed if assembly_seed is None else assembly_seed
@@ -450,6 +482,8 @@ def screen_joint_tuplet_multi(
     else:
         groups = []
         for quotas, n_share in zip(compositions, per_comp_budgets, strict=True):
+            if n_share <= 0:
+                continue
             active_quotas = {mol: int(c) for mol, c in quotas.items() if int(c) > 0}
             groups.extend(
                 assemble_quota_joint_configs(
@@ -471,6 +505,7 @@ def screen_joint_tuplet_multi(
         E_slab=E_slab,
         topology_check=topology_check,
         log_prefix=log_prefix,
+        slots_by_molecule=dict(slots_by_mol),
     )
 
 
@@ -493,11 +528,18 @@ def _assemble_bo_joint_groups_from_specs(
     n_per_config: int,
     rng: np.random.RandomState,
     n_substrate: int,
-) -> list[list[ScreeningResult]]:
-    """Build one joint group per anchor index (greedy companions)."""
+    blocked: set[int] | None = None,
+) -> tuple[list[list[ScreeningResult]], list[set[int]]]:
+    """Build one joint group per anchor (forward companion scan).
+
+    Returns ``(groups, pool_index_sets)`` aligned by successful pack. Incomplete
+    packs release their tentative companions so later anchors can use them.
+    *blocked* pool indices are never chosen as companions.
+    """
     slab_size = len(slab.atoms)
     groups: list[list[ScreeningResult]] = []
-    used_pool: set[int] = set()
+    pool_index_sets: list[set[int]] = []
+    committed: set[int] = set(blocked or ())
 
     def _stub_from_pool(pool_pos: int) -> ScreeningResult | None:
         fill = materialize_specs(
@@ -525,14 +567,18 @@ def _assemble_bo_joint_groups_from_specs(
         )
 
     for anchor_pos in anchor_indices:
-        if anchor_pos in used_pool:
+        if anchor_pos in committed:
             continue
         anchor = _stub_from_pool(anchor_pos)
         if anchor is None:
             continue
         group: list[ScreeningResult] = [anchor]
-        used_pool.add(anchor_pos)
-        candidates = [p for p in range(len(valid_spec_indices)) if p not in used_pool]
+        tentative: set[int] = {anchor_pos}
+        candidates = [
+            p
+            for p in range(len(valid_spec_indices))
+            if p not in committed and p not in tentative
+        ]
         rng.shuffle(candidates)
         scan = 0
         while len(group) < n_per_config and scan < len(candidates):
@@ -551,15 +597,13 @@ def _assemble_bo_joint_groups_from_specs(
                 scan += 1
                 continue
             group = packed
-            used_pool.add(pos)
-            candidates = [
-                p for p in range(len(valid_spec_indices)) if p not in used_pool
-            ]
-            rng.shuffle(candidates)
-            scan = 0
+            tentative.add(pos)
+            scan += 1
         if len(group) == n_per_config:
             groups.append(group)
-    return groups
+            pool_index_sets.append(set(tentative))
+            committed.update(tentative)
+    return groups, pool_index_sets
 
 
 def process_joint_tuplet_bayesian(
@@ -619,6 +663,7 @@ def process_joint_tuplet_bayesian(
     slab_for_sites = ctx.slab_for_sites
     effective_base_slab_for_frozen = ctx.effective_base_slab_for_frozen
     conformers = ctx.conformers
+    conformer_energies = ctx.conformer_energies
     site_context = ctx.site_context
     config = ctx.config
     E_slab = ctx.E_slab
@@ -701,6 +746,20 @@ def process_joint_tuplet_bayesian(
     transfer_state = _TransferRoundState()
     acq_state = _BOAcquisitionState()
     base_slab = effective_base_slab_for_frozen or slab.atoms
+    surface_prefix = len(slab_for_sites)
+    occupied = (
+        slab.atoms[surface_prefix:] if len(slab.atoms) > surface_prefix else Atoms()
+    )
+    sigma_scale = _occupancy_sigma_scales(
+        candidate_features=candidate_features,
+        valid_spec_indices=valid_spec_indices,
+        all_specs=all_specs,
+        materialization_cache=materialization_cache,
+        occupied=occupied,
+        material_type=config.material_type,
+        cell=np.asarray(slab.atoms.get_cell(), dtype=float),
+        connectivity_multiplier=float(config.connectivity_multiplier),
+    )
 
     def _record_group(group: Sequence[ScreeningResult]) -> None:
         label = joint_config_ranking_energy(
@@ -724,12 +783,13 @@ def process_joint_tuplet_bayesian(
             if label < acq_state.best_energy:
                 acq_state.best_energy = label
                 acq_state.best_X_row = dict(features)
+        acq_state.n_independent_trials += 1
 
     def _eval_anchor_batch(anchor_positions: list[int]) -> None:
         fresh = [p for p in anchor_positions if p not in acq_state.evaluated]
         if not fresh:
             return
-        groups = _assemble_bo_joint_groups_from_specs(
+        groups, pool_sets = _assemble_bo_joint_groups_from_specs(
             fresh,
             all_specs=all_specs,
             valid_spec_indices=valid_spec_indices,
@@ -747,8 +807,11 @@ def process_joint_tuplet_bayesian(
             n_per_config=n,
             rng=rng,
             n_substrate=len(base_slab),
+            blocked=acq_state.evaluated,
         )
         acq_state.evaluated.update(fresh)
+        for pool_set in pool_sets:
+            acq_state.evaluated.update(pool_set)
         acq_state.total_evaluated += len(fresh)
         if not groups:
             return
@@ -772,36 +835,18 @@ def process_joint_tuplet_bayesian(
         n_pool=len(valid_spec_indices),
         molecule_name=molecule_name,
         slab_atoms=slab.atoms,
-        slab_for_sites=slab_for_sites,
-        all_specs=all_specs,
-        valid_spec_indices=valid_spec_indices,
-        materialization_cache=materialization_cache,
         bo_step_memory_in=bo_step_memory_in,
         transfer_state=transfer_state,
         state=acq_state,
         evaluate_batch=_eval_anchor_batch,
+        sigma_scale=sigma_scale,
         rng=rng,
     )
 
-    transfer_info = BOTransferInfo(
-        transfer_used=bool(transfer_state.used_rounds > 0),
-        transfer_disabled_reason=transfer_state.disabled_reason,
-        transfer_bad_rounds=int(transfer_state.bad_rounds),
-        transfer_last_mae_delta=transfer_state.last_mae_delta,
-        transfer_weight_share=float(transfer_state.weight_share),
-    )
+    bo_memory, transfer_info = _pack_bo_outputs(acq_state, transfer_state)
     return JointTupletScreenOutcome(
         valid_configs=valid_configs,
         flat_results=_flatten_configs(valid_configs),
-        bo_memory=BOStepMemory(
-            observed_X_rows=[dict(r) for r in acq_state.observed_X_rows],
-            observed_y=[float(v) for v in acq_state.observed_y],
-            best_energy=(
-                acq_state.best_energy if np.isfinite(acq_state.best_energy) else None
-            ),
-            best_X_row=(
-                dict(acq_state.best_X_row) if acq_state.best_X_row is not None else None
-            ),
-        ),
+        bo_memory=bo_memory,
         transfer_info=transfer_info,
     )

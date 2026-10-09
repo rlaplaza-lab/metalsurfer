@@ -11,7 +11,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from metalsurfer._numeric_defaults import ACQUISITION_SIGMA_FLOOR
-from metalsurfer.config import AdsorptionConfig, BOConfig
+from metalsurfer.config import AdsorptionConfig, BOConfig, BOTransferConfig
 from metalsurfer.ml.bayesian import (
     EnsembleRegressor,
     _capped_prior_weights,
@@ -43,6 +43,12 @@ from metalsurfer.models import (
 from metalsurfer.placement import (
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
+)
+from metalsurfer.workflow.bayesian import (
+    _BOAcquisitionState,
+    _build_round_surrogate,
+    _TransferRoundState,
+    run_bo_acquisition_loop,
 )
 from tests.factories import make_random_placement_records
 
@@ -1288,12 +1294,6 @@ def test_occupancy_sigma_scales_requires_materialized_pose_under_coverage():
 
 def test_cumulative_refit_oof_gate_uses_baseline_on_bad_round():
     """Failing OOF gate returns baseline this round without disabling yet."""
-    from metalsurfer.config import BOConfig, BOTransferConfig
-    from metalsurfer.workflow.bayesian import (
-        _build_round_surrogate,
-        _TransferRoundState,
-    )
-
     rng = np.random.default_rng(0)
     n = 12
     X_current = _feature_frame([_feature_row(x=float(i), z=2.0) for i in range(n)])
@@ -1345,3 +1345,63 @@ def test_cumulative_refit_oof_gate_uses_baseline_on_bad_round():
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_acquisition_loop_warmup_uses_independent_trials(monkeypatch):
+    """Surrogate warmup waits for three independent trials, not three label rows."""
+    n_pool = 8
+    features = pd.DataFrame(
+        [_feature_row(x=float(i), y=0.0, z=2.0) for i in range(n_pool)]
+    )
+    scaled = StandardScaler().fit_transform(features.to_numpy(dtype=float))
+    config = AdsorptionConfig(
+        seed=1,
+        num_placements=n_pool,
+        bo=BOConfig(initial_random=1, batch_size=1, total_budget=3, acquisition="lcb"),
+    )
+    state = _BOAcquisitionState()
+    transfer_state = _TransferRoundState()
+    model_batches: list[int] = []
+
+    def _eval(positions: list[int]) -> None:
+        for p in positions:
+            if p in state.evaluated:
+                continue
+            state.evaluated.add(p)
+            state.total_evaluated += 1
+            for _ in range(3):
+                state.observed_X_rows.append(_feature_row(x=float(p)))
+                state.observed_y.append(-1.0)
+            state.n_independent_trials += 1
+            state.best_energy = -1.0
+            state.best_X_row = dict(state.observed_X_rows[-1])
+
+    def _fake_score_and_select(*_a, **_k):
+        model_batches.append(1)
+        unevaluated = [p for p in range(n_pool) if p not in state.evaluated]
+        return unevaluated[:1]
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.bayesian.score_and_select",
+        _fake_score_and_select,
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.bayesian._build_round_surrogate",
+        lambda **_k: (object(), False),
+    )
+
+    run_bo_acquisition_loop(
+        config=config,
+        candidate_features=features,
+        scaled_candidate_features=scaled,
+        n_pool=n_pool,
+        molecule_name="water",
+        slab_atoms=Atoms("Cu", positions=[[0, 0, 0]]),
+        bo_step_memory_in=None,
+        transfer_state=transfer_state,
+        state=state,
+        evaluate_batch=_eval,
+    )
+    assert state.n_independent_trials >= 3
+    assert model_batches
+    assert len(state.observed_y) >= 9

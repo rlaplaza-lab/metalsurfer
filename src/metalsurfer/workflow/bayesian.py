@@ -318,6 +318,9 @@ class _BOAcquisitionState:
     ``total_evaluated`` counts pool indices consumed by the evaluate callback,
     not rows in ``observed_y`` (joint packs write *n* labels per anchor;
     failure penalties add rows without consuming indices).
+
+    ``n_independent_trials`` gates surrogate warmup: one per single-site
+    observation row (including failure penalties) or one per joint pack.
     """
 
     observed_X_rows: list[dict[str, float]] = field(default_factory=list)
@@ -326,6 +329,28 @@ class _BOAcquisitionState:
     best_X_row: dict[str, float] | None = None
     evaluated: set[int] = field(default_factory=set)
     total_evaluated: int = 0
+    n_independent_trials: int = 0
+
+
+def _pack_bo_outputs(
+    state: _BOAcquisitionState,
+    transfer_state: _TransferRoundState,
+) -> tuple[BOStepMemory, BOTransferInfo]:
+    """Build step memory and transfer diagnostics from acquisition bookkeeping."""
+    memory = BOStepMemory(
+        observed_X_rows=[dict(r) for r in state.observed_X_rows],
+        observed_y=[float(v) for v in state.observed_y],
+        best_energy=(state.best_energy if np.isfinite(state.best_energy) else None),
+        best_X_row=(dict(state.best_X_row) if state.best_X_row is not None else None),
+    )
+    info = BOTransferInfo(
+        transfer_used=transfer_state.used_rounds > 0,
+        transfer_disabled_reason=transfer_state.disabled_reason,
+        transfer_bad_rounds=int(transfer_state.bad_rounds),
+        transfer_last_mae_delta=transfer_state.last_mae_delta,
+        transfer_weight_share=float(transfer_state.weight_share),
+    )
+    return memory, info
 
 
 def run_bo_acquisition_loop(
@@ -336,14 +361,11 @@ def run_bo_acquisition_loop(
     n_pool: int,
     molecule_name: str,
     slab_atoms: Atoms,
-    slab_for_sites: Atoms,
-    all_specs: Sequence[Any],
-    valid_spec_indices: Sequence[int],
-    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]],
     bo_step_memory_in: BOStepMemory | None,
     transfer_state: _TransferRoundState,
     state: _BOAcquisitionState,
     evaluate_batch: Callable[[list[int]], None],
+    sigma_scale: np.ndarray | None = None,
     log_acquisition_fallback: bool = False,
     log_empty_selection: bool = False,
     rng: np.random.RandomState | None = None,
@@ -351,7 +373,8 @@ def run_bo_acquisition_loop(
     """Select pool indices; *evaluate_batch* owns labels and eval counts.
 
     Pass a shared *rng* when the callback also draws from the exploration
-    stream (joint companion assembly).
+    stream (joint companion assembly). Pass a precomputed *sigma_scale* when
+    occupancy inflation is fixed for the screening call.
     """
     if config.bo.initial_random is None or config.bo.batch_size is None:
         raise ValueError("bo.initial_random and bo.batch_size required for acquisition")
@@ -375,14 +398,13 @@ def run_bo_acquisition_loop(
     evaluate_batch(initial_positions)
 
     batches_run = 0
-    surface_prefix = len(slab_for_sites)
     while (
         batches_run < config.bo.total_budget and state.total_evaluated < bo_eval_budget
     ):
         unevaluated = [p for p in range(n_pool) if p not in state.evaluated]
         if not unevaluated:
             break
-        if len(state.observed_y) < 3:
+        if state.n_independent_trials < 3:
             n_extra = min(config.bo.batch_size, len(unevaluated))
             next_positions = rng.choice(
                 unevaluated, size=n_extra, replace=False
@@ -405,22 +427,6 @@ def run_bo_acquisition_loop(
                         acquisition,
                     )
                 acquisition = "lcb"
-            occupied = (
-                slab_atoms[surface_prefix:]
-                if len(slab_atoms) > surface_prefix
-                else Atoms()
-            )
-            cell_arr = np.asarray(slab_atoms.get_cell(), dtype=float)
-            sigma_scale = _occupancy_sigma_scales(
-                candidate_features=candidate_features,
-                valid_spec_indices=valid_spec_indices,
-                all_specs=all_specs,
-                materialization_cache=materialization_cache,
-                occupied=occupied,
-                material_type=config.material_type,
-                cell=cell_arr,
-                connectivity_multiplier=float(config.connectivity_multiplier),
-            )
             next_positions = score_and_select(
                 surrogate,
                 candidate_features,
@@ -662,24 +668,25 @@ def process_molecule_bayesian(
     bo_failure_events: list[PlacementFailureEvent] = []
     transfer_state = _TransferRoundState()
     acq_state = _BOAcquisitionState()
+    occupied = (
+        slab.atoms[surface_prefix_atoms:]
+        if len(slab.atoms) > surface_prefix_atoms
+        else Atoms()
+    )
+    sigma_scale = _occupancy_sigma_scales(
+        candidate_features=candidate_features,
+        valid_spec_indices=valid_spec_indices,
+        all_specs=all_specs,
+        materialization_cache=materialization_cache,
+        occupied=occupied,
+        material_type=config.material_type,
+        cell=np.asarray(slab.atoms.get_cell(), dtype=float),
+        connectivity_multiplier=float(config.connectivity_multiplier),
+    )
 
     def _flush_bo_outputs() -> None:
-        nonlocal bo_memory
-        bo_memory = BOStepMemory(
-            observed_X_rows=[dict(r) for r in acq_state.observed_X_rows],
-            observed_y=[float(v) for v in acq_state.observed_y],
-            best_energy=(
-                acq_state.best_energy if np.isfinite(acq_state.best_energy) else None
-            ),
-            best_X_row=(
-                dict(acq_state.best_X_row) if acq_state.best_X_row is not None else None
-            ),
-        )
-        transfer_info.transfer_used = bool(transfer_state.used_rounds > 0)
-        transfer_info.transfer_disabled_reason = transfer_state.disabled_reason
-        transfer_info.transfer_bad_rounds = int(transfer_state.bad_rounds)
-        transfer_info.transfer_last_mae_delta = transfer_state.last_mae_delta
-        transfer_info.transfer_weight_share = float(transfer_state.weight_share)
+        nonlocal bo_memory, transfer_info
+        bo_memory, transfer_info = _pack_bo_outputs(acq_state, transfer_state)
 
     def _failure_penalty(stage: str, reason: str) -> float:
         overrides = config.bo.failure_penalty_overrides
@@ -734,6 +741,7 @@ def process_molecule_bayesian(
         else:
             acq_state.observed_X_rows.append(features)
             acq_state.observed_y.append(penalty)
+            acq_state.n_independent_trials += 1
 
     def _run_batch(pool_positions: list[int]) -> None:
         batch_specs = [all_specs[valid_spec_indices[p]] for p in pool_positions]
@@ -778,6 +786,7 @@ def process_molecule_bayesian(
             )
             acq_state.observed_X_rows.append(features)
             acq_state.observed_y.append(r.energy_adsorption)
+            acq_state.n_independent_trials += 1
             if r.energy_adsorption < acq_state.best_energy:
                 acq_state.best_energy = r.energy_adsorption
                 acq_state.best_X_row = dict(features)
@@ -831,14 +840,11 @@ def process_molecule_bayesian(
         n_pool=len(valid_spec_indices),
         molecule_name=molecule_name,
         slab_atoms=slab.atoms,
-        slab_for_sites=slab_for_sites,
-        all_specs=all_specs,
-        valid_spec_indices=valid_spec_indices,
-        materialization_cache=materialization_cache,
         bo_step_memory_in=bo_step_memory_in,
         transfer_state=transfer_state,
         state=acq_state,
         evaluate_batch=_run_batch,
+        sigma_scale=sigma_scale,
         log_acquisition_fallback=True,
         log_empty_selection=True,
     )

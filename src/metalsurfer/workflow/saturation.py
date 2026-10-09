@@ -105,22 +105,26 @@ def _step_ranking_snapshot(
     activity_by_molecule: Mapping[str, float],
     temperature: float,
     pressure: float,
+    ranked_group: Sequence[ScreeningResult] | None = None,
 ) -> tuple[float, float, str]:
     """Return ``(Ω, E_ads, label)`` matching the stop-condition ranking.
 
-    Committed steps use :func:`joint_config_ranking_energy` (``Ω`` or
-    ``Ω_tuplet``). Empty commits report the pool-best single-unit ``Ω``.
+    Prefer *committed*; on an empty commit use *ranked_group* (refused pack)
+    so unbound joint steps still report ``Ω_tuplet``.
     """
-    if committed:
+    group = committed or ranked_group
+    if group:
         omega = joint_config_ranking_energy(
-            committed,
+            group,
             activity_by_molecule=activity_by_molecule,
             temperature=temperature,
             pressure=pressure,
         )
-        e_ads = float(committed[0].energy_adsorption)
-        label = "Ω_tuplet" if len(committed) > 1 else "Ω"
-        return omega, e_ads, label
+        return (
+            omega,
+            float(group[0].energy_adsorption),
+            "Ω_tuplet" if len(group) > 1 else "Ω",
+        )
     return (
         _omega(pool_best, activity_by_molecule, temperature, pressure),
         float(pool_best.energy_adsorption),
@@ -356,18 +360,18 @@ def _commit_joint_step(
     activity_by_molecule: Mapping[str, float],
     temperature: float,
     pressure: float,
-) -> tuple[ScreeningResult, list[ScreeningResult]] | None:
-    """Return ``(pool_best, committed)`` for a joint screen, or ``None`` if empty."""
+) -> tuple[ScreeningResult, list[ScreeningResult], list[ScreeningResult]] | None:
+    """Return ``(pool_best, committed, ranked_group)``, or ``None`` if empty."""
     if not joint_out.valid_configs:
         return None
-    best, committed = commit_best_joint_config(
+    best, committed, ranked_group = commit_best_joint_config(
         joint_out.valid_configs,
         activity_by_molecule=activity_by_molecule,
         temperature=temperature,
         pressure=pressure,
     )
     assert best is not None
-    return best, committed
+    return best, committed, ranked_group
 
 
 def _commit_sequential_step(
@@ -376,18 +380,19 @@ def _commit_sequential_step(
     activity_by_molecule: Mapping[str, float],
     temperature: float,
     pressure: float,
-) -> tuple[ScreeningResult, list[ScreeningResult]]:
+) -> tuple[ScreeningResult, list[ScreeningResult], list[ScreeningResult]]:
     """Pick the Ω-best sequential row and commit it when it binds."""
     best = min(
         results,
         key=_omega_sort_key(activity_by_molecule, temperature, pressure),
     )
-    return _resolve_step_commit(
+    pool_best, committed = _resolve_step_commit(
         pool_best=best,
         activity_by_molecule=activity_by_molecule,
         temperature=temperature,
         pressure=pressure,
     )
+    return pool_best, committed, [pool_best]
 
 
 def _log_step_ranking(
@@ -400,6 +405,7 @@ def _log_step_ranking(
     pressure: float,
     style: Literal["single", "multi"],
     winning_molecule: str | None = None,
+    ranked_group: Sequence[ScreeningResult] | None = None,
 ) -> None:
     """Log the stop-condition Ω / Ω_tuplet snapshot for one saturation step."""
     omega, e_ads, label = _step_ranking_snapshot(
@@ -408,6 +414,7 @@ def _log_step_ranking(
         activity_by_molecule=activity_by_molecule,
         temperature=temperature,
         pressure=pressure,
+        ranked_group=ranked_group,
     )
     if style == "single":
         if len(committed) > 1:
@@ -791,12 +798,13 @@ class _MultiStepPayload:
 class _StepScreenOutcome:
     """Result of one saturation step's screening phase.
 
-    ``committed`` lists the placements folded into the coverage slab this step
-    (one element in one-molecule-per-step mode; several for n-tuplet steps).
+    ``committed`` is folded onto the slab; ``ranked_group`` is the Ω-best pack
+    (or single row) kept for logging when the step does not commit.
     """
 
     best: ScreeningResult
     committed: list[ScreeningResult]
+    ranked_group: list[ScreeningResult]
     payload: _SingleStepPayload | _MultiStepPayload
 
 
@@ -932,21 +940,21 @@ def _run_single_molecule_saturation(
         """Screen placements for one saturation step."""
         nonlocal config
         symmetry_broken = preamble.symmetry_broken
-        if needs_workload_autotune(config, bo=bo_enabled):
-            slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
-            config = _resolve_step_workload_config(
-                config,
-                bo_enabled=bo_enabled,
-                ts_model=ts_model,
-                conformers=cached_conformers,
-                slab_atoms=slab.atoms,
-                slab_for_sites=slab_for_sites,
-                smiles=smiles,
-                base_slab_for_frozen=base_slab,
-                symmetry_broken=symmetry_broken,
-            )
+        slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
+        config = _resolve_step_workload_config(
+            config,
+            bo_enabled=bo_enabled,
+            ts_model=ts_model,
+            conformers=cached_conformers,
+            slab_atoms=slab.atoms,
+            slab_for_sites=slab_for_sites,
+            smiles=smiles,
+            base_slab_for_frozen=base_slab,
+            symmetry_broken=symmetry_broken,
+        )
         n_tuplet = config.saturation_molecules_per_step > 1
         transfer_info: BOTransferInfo | None = None
+        ranked_group: list[ScreeningResult]
         if n_tuplet:
             ref_units = list(units_on_slab)
             topology_check = _joint_topology_check(
@@ -968,9 +976,7 @@ def _run_single_molecule_saturation(
                     base_slab_for_frozen=base_slab,
                     slab_energy_override=preamble.E_slab,
                     symmetry_broken=symmetry_broken,
-                    bo_step_memory_in=_bo_transfer_memory_in(config, bo_state)
-                    if bo_state is not None
-                    else None,
+                    bo_step_memory_in=_bo_transfer_memory_in(config, bo_state),
                     conformers=cached_conformers,
                     conformer_energies=cached_conformer_energies,
                     skip_workload_autotune=True,
@@ -1014,7 +1020,7 @@ def _run_single_molecule_saturation(
                     molecule,
                 )
                 return None
-            best, committed = committed_pair
+            best, committed, ranked_group = committed_pair
             mol_results = joint_out.flat_results
         else:
             mol_results, transfer_info, new_memory = _screen_saturation_molecule(
@@ -1051,7 +1057,7 @@ def _run_single_molecule_saturation(
                 )
                 return None
 
-            best, committed = _commit_sequential_step(
+            best, committed, ranked_group = _commit_sequential_step(
                 mol_results,
                 activity_by_molecule=activity_by_molecule,
                 temperature=temperature,
@@ -1060,6 +1066,7 @@ def _run_single_molecule_saturation(
         return _StepScreenOutcome(
             best=best,
             committed=committed,
+            ranked_group=ranked_group,
             payload=_SingleStepPayload(
                 mol_results=mol_results,
                 transfer_info=transfer_info,
@@ -1093,6 +1100,7 @@ def _run_single_molecule_saturation(
             temperature=temperature,
             pressure=pressure,
             style="single",
+            ranked_group=outcome.ranked_group,
         )
 
     final_atoms = _run_saturation_steps(
@@ -1231,23 +1239,9 @@ def _run_multi_molecule_saturation(
         )
         config = step_config
 
-        step_complexities: dict[str, float] = {}
-        for mol in active_molecules:
-            confs, _ = conformer_cache[mol]
-            step_complexities[mol] = estimate_conformer_count(confs)
         num_placements = step_config.num_placements
         if num_placements is None:
             raise ValueError("num_placements must be resolved before saturation steps")
-        budgets = distribute_placement_budget(
-            step_complexities,
-            num_placements,
-        )
-        logger.info(
-            "Step %d placement budgets: %s (complexities: %s)",
-            step,
-            budgets,
-            {m: round(c) for m, c in step_complexities.items()},
-        )
 
         per_molecule_results: dict[str, list[ScreeningResult]] = {
             mol: [] for mol in active_molecules
@@ -1306,6 +1300,14 @@ def _run_multi_molecule_saturation(
             )
             for row in joint_out.flat_results:
                 per_molecule_results[row.molecule].append(row)
+            slots = joint_out.slots_by_molecule or {}
+            slot_budgets = {mol: int(slots.get(mol, 0)) for mol in active_molecules}
+            logger.info(
+                "Step %d joint slot budgets: %s (num_placements=%d joint configs)",
+                step,
+                slot_budgets,
+                num_placements,
+            )
             committed_pair = _commit_joint_step(
                 joint_out,
                 activity_by_molecule=activity_by_molecule,
@@ -1318,22 +1320,34 @@ def _run_multi_molecule_saturation(
                     step,
                 )
                 return None
-            best_overall, committed = committed_pair
-            winning_label = (
-                joint_winning_molecule_label(committed)
-                if committed
-                else best_overall.molecule
-            )
+            best_overall, committed, ranked_group = committed_pair
+            winning_label = joint_winning_molecule_label(committed or ranked_group)
             return _StepScreenOutcome(
                 best=best_overall,
                 committed=committed,
+                ranked_group=ranked_group,
                 payload=_MultiStepPayload(
                     winning_molecule=winning_label,
                     per_molecule_results=per_molecule_results,
-                    budgets=dict(budgets),
+                    budgets=slot_budgets,
                     transfer_by_molecule=per_molecule_bo_transfer,
                 ),
             )
+
+        step_complexities: dict[str, float] = {}
+        for mol in active_molecules:
+            confs, _ = conformer_cache[mol]
+            step_complexities[mol] = estimate_conformer_count(confs)
+        budgets = distribute_placement_budget(
+            step_complexities,
+            num_placements,
+        )
+        logger.info(
+            "Step %d placement budgets: %s (complexities: %s)",
+            step,
+            budgets,
+            {m: round(c) for m, c in step_complexities.items()},
+        )
 
         for mol in active_molecules:
             if mol not in budgets:
@@ -1417,7 +1431,7 @@ def _run_multi_molecule_saturation(
         all_results_flat = [
             r for results in per_molecule_results.values() for r in results
         ]
-        best_overall, committed = _commit_sequential_step(
+        best_overall, committed, ranked_group = _commit_sequential_step(
             all_results_flat,
             activity_by_molecule=activity_by_molecule,
             temperature=temperature,
@@ -1426,6 +1440,7 @@ def _run_multi_molecule_saturation(
         return _StepScreenOutcome(
             best=best_overall,
             committed=committed,
+            ranked_group=ranked_group,
             payload=_MultiStepPayload(
                 winning_molecule=best_overall.molecule,
                 per_molecule_results=per_molecule_results,
@@ -1470,6 +1485,7 @@ def _run_multi_molecule_saturation(
             pressure=pressure,
             style="multi",
             winning_molecule=winning_molecule,
+            ranked_group=outcome.ranked_group,
         )
 
     final_atoms = _run_saturation_steps(

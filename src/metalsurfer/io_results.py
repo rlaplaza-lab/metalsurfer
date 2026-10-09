@@ -305,6 +305,34 @@ def save_single_molecule_results(
     )
 
 
+def _concat_union_frames(*frames: pd.DataFrame) -> pd.DataFrame:
+    """Column-union concat that avoids pandas' all-NA ``FutureWarning``.
+
+    Pandas warns when concatenating frames that contain all-NA columns. Drop
+    those columns before concat, then reindex to the full column union so the
+    schema (including currently empty optional fields) is preserved.
+    """
+    nonempty = [frame for frame in frames if not frame.empty]
+    if not nonempty:
+        return frames[0].copy() if frames else pd.DataFrame()
+    if len(nonempty) == 1:
+        return nonempty[0].copy()
+
+    columns: list[Any] = []
+    seen: set[Any] = set()
+    for frame in nonempty:
+        for col in frame.columns:
+            if col not in seen:
+                seen.add(col)
+                columns.append(col)
+
+    stripped = [
+        frame.loc[:, [c for c in frame.columns if not frame[c].isna().all()]]
+        for frame in nonempty
+    ]
+    return pd.concat(stripped, ignore_index=True).reindex(columns=columns)
+
+
 def _merge_preserving_existing_molecules(
     path: Path, new_df: pd.DataFrame, *, key_col: str = "molecule"
 ) -> pd.DataFrame:
@@ -332,7 +360,7 @@ def _merge_preserving_existing_molecules(
     if key_col not in existing.columns:
         other_key = "molecules" if key_col == "molecule" else "molecule"
         if other_key in existing.columns:
-            return pd.concat([existing, new_df], ignore_index=True)
+            return _concat_union_frames(existing, new_df)
         logger.warning(
             "Existing %s has no %r column; it will be replaced", path.name, key_col
         )
@@ -346,7 +374,7 @@ def _merge_preserving_existing_molecules(
         path.name,
         len(retained),
     )
-    return pd.concat([retained, new_df], ignore_index=True)
+    return _concat_union_frames(retained, new_df)
 
 
 def save_summary_results(
