@@ -3,13 +3,12 @@
 
 Two molecules are screened at the same time on one growing slab:
 
-- ``multi_molecule_saturation=True`` — water and OH- compete at every step;
-  the placement budget is split by molecular complexity and the best binder
-  advances the surface.
-- ``saturation_molecules_per_step=2`` (n-tuplet mode) — each step screens
-  exact-2 joint configs (both adsorbates relaxed together via TorchSim) and
-  commits the best binding pack. Committed rows store per-molecule E_ads
-  (``E_ads_total / 2``).
+- ``multi_molecule_saturation=True`` with ``saturation_molecules_per_step=2``
+  — each step enumerates exact-2 compositions (pure water, pure hydroxide,
+  then the mixed pack), funds pure packs first, relaxes joint configs via
+  TorchSim, and commits the best binding pack by Ω_tuplet. Committed rows
+  store per-molecule E_ads (``E_ads_total / 2``); the step winner may be a
+  pack label such as ``water+hydroxide``.
 
 The substrate is the classic rutile TiO2(110) surface. Oxides are absent from
 the FairChem bulk database used by ``bulk_id=``, so the slab is built with ASE

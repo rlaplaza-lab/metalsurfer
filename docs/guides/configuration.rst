@@ -209,9 +209,10 @@ tuplet size, as are ``bo.initial_random`` and ``bo.batch_size`` (each eval is
 an *n*-body relax). With BO on a single adsorbate, acquisition still scores
 single-site features but labels use :math:`\Omega/n` from each joint eval.
 Competitive multi-molecule n-tuplet enumerates every species composition of
-size *n*, splits the joint-config budget equally across compositions, and
-ranks packs by :math:`\Omega_\mathrm{tuplet}`; joint BO is single-species only
-and raises if combined with ``multi_molecule_saturation``.
+size *n*, funds each species' pure pack first then mixed packs
+(largest-remainder shares; a short ``num_placements`` can leave mixtures
+unfunded), and ranks packs by :math:`\Omega_\mathrm{tuplet}`; joint BO is
+single-species only and raises if combined with ``multi_molecule_saturation``.
 
 **How Bayesian search uses earlier placements.**
 :func:`~metalsurfer.run_saturation_bo` ranks with :math:`\Omega`. Sequential

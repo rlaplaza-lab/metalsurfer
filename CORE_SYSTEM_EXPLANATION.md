@@ -482,8 +482,10 @@ Three ways to grow the coverage, set on `AdsorptionConfig`:
   default reservoir conditions). With BO enabled on a single adsorbate,
   acquisition still scores single-site features but labels use Ω/n from each
   joint eval. Competitive multi-molecule n-tuplet enumerates every species
-  composition of size *n*, splits the joint-config budget equally, and ranks
-  packs by Ω_tuplet (joint BO is single-species only).
+  composition of size *n*, funds each species' pure pack first then mixed
+  packs (largest-remainder shares; a short `num_placements` can leave
+  mixtures unfunded), and ranks packs by Ω_tuplet (joint BO is
+  single-species only).
 
 **Reservoir ranking.** Pick and stop use
 `Ω = E_ads − k_B T ln(a_i · p / p°)` with optional

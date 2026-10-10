@@ -395,10 +395,12 @@ def screen_joint_tuplet_multi(
 ) -> JointTupletScreenOutcome:
     """Joint screening over every species composition of size *n*.
 
-    Each exact-*n* count map across *active_molecules* receives an equal share
-    of ``num_placements``. Pose pools are sized from the slots each species
-    fills across those shares (homogeneous oversample). Valid packs from every
-    composition are ranked together by ``Ω_tuplet``.
+    Each exact-*n* count map across *active_molecules* receives a share of
+    ``num_placements``: pure packs are funded first, then mixed packs
+    (largest-remainder; a short budget can leave mixtures unfunded). Pose
+    pools are sized from the slots each species fills across those shares
+    (homogeneous oversample). Valid packs from every composition are ranked
+    together by ``Ω_tuplet``.
 
     ``assemble="exact"`` uses :func:`assemble_joint_config_groups` (homogeneous
     path). Mixed campaigns keep the default ``"quota"`` assembler.

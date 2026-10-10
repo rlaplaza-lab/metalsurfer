@@ -1104,9 +1104,12 @@ class MultiMolSaturationRunResult:
     """Full multi-molecule saturation run: molecules compete at each step.
 
     All molecules in *molecules* are evaluated at every saturation step.
-    The placement budget is distributed proportionally to molecular complexity
-    (number of enumerable placement specs). The step winner (molecule with
-    the lowest adsorption energy) advances the slab state.
+    Sequential competitive steps (``saturation_molecules_per_step == 1``)
+    split the placement budget by molecular complexity and advance the
+    lowest-``Ω`` single binder. n-tuplet steps fund pure packs before
+    mixtures; ``per_molecule_budgets`` are pose-slot counts from those
+    shares, and ``winning_molecule`` may be a pack label such as
+    ``water+hydroxide``.
     """
 
     molecules: list[str]

@@ -930,8 +930,11 @@ loop behavior, reservoir ranking, and I/O.
    (no single-adsorbate screen, no partial / single-winner fallback).
    Overlapping packs are rejected when ``placement_clash_descent`` is off.
    With ``multi_molecule_saturation``, every species composition of size *n*
-   is screened and ranked by :math:`\Omega_\mathrm{tuplet}` (joint BO is
-   single-species only). Committed rows store per-molecule :math:`E_\mathrm{ads}`
+   is enumerated; joint-config shares fund each species' pure pack first,
+   then mixed packs (largest-remainder; a short ``num_placements`` can leave
+   mixtures unfunded). Valid packs are ranked by
+   :math:`\Omega_\mathrm{tuplet}` (joint BO is single-species only).
+   Committed rows store per-molecule :math:`E_\mathrm{ads}`
    (:math:`E_\mathrm{ads,total}/n`); stop uses
    :math:`\Omega_\mathrm{tuplet}`. Empty commits are unbound finals.
    After autotuning, ``num_placements``, ``bo.initial_random``, and

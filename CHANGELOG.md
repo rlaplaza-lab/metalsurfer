@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] - 2026-10-10
+
+### Changed
+
+- Competitive multi-molecule n-tuplet funds each species' pure pack before
+  mixed packs (largest-remainder shares); a short ``num_placements`` leaves
+  mixtures unfunded instead of raising.
+- ``commit_best_joint_config`` returns
+  ``(pool_best, committed, ranked_group)`` so unbound steps can still log the
+  Ω-best pack.
+- Docs, ``CORE_SYSTEM_EXPLANATION.md``, and
+  ``examples/water_oh_rutile_saturation.py`` match pure-first composition
+  funding and the ``placement/pose/`` + ``ml/bayesian/`` package layout.
+
+### Removed
+
+- ``workflow.composite.evaluate_composite_commit`` (use
+  ``evaluate_composite_batch``).
+
 ## [0.9.5] - 2026-10-02
 
 ### Changed

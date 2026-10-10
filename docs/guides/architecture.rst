@@ -189,8 +189,8 @@ Module layout
    ├── optimization/         # MLIP setup, batched relaxation (TorchSim / FairChem)
    ├── surface_prep/         # prepare_substrate, freeze, …
    ├── symmetry.py           # spglib-based symmetry analysis
-   ├── ml/                   # BO surrogates, dataset, features (schema 3.0)
-   ├── placement/            # site_* + generators / pose / policy
+   ├── ml/                   # features, schema 3.0, regression; bayesian/ package
+   ├── placement/            # site_* + generators / pose/ / policy
    └── workflow/             # orchestration by run mode
        ├── core.py           # standard per-molecule screening
        ├── bayesian.py       # BO-guided per-molecule screening
@@ -201,12 +201,15 @@ Module layout
        ├── reference.py      # reference energy preparation
        └── shared.py         # bootstrap, outcomes, validation, autotune
 
-``placement/`` internals: ``site_types``, ``site_coords``, ``site_voronoi``,
-``site_classify``, ``site_enumeration``, ``site_adaptive_grid``,
-``site_rolling_probe``, ``site_plugins``, ``site_context``, ``occupancy``,
-``policy``, ``orientation``, ``pose`` (materialize + validate), ``dissociative``,
-``geometry``, ``_material``; public orchestration in ``generators.py``. Site APIs
-are imported from ``site_enumeration`` / ``site_coords`` (also re-exported from
+``ml/bayesian/`` holds ``surrogate``, ``acquisition``, and ``transfer``
+(same import path: ``metalsurfer.ml.bayesian``). ``placement/`` internals:
+``site_types``, ``site_coords``, ``site_voronoi``, ``site_classify``,
+``site_enumeration``, ``site_adaptive_grid``, ``site_rolling_probe``,
+``site_plugins``, ``site_context``, ``occupancy``, ``policy``,
+``orientation``, ``pose/`` (``build``, ``height``, ``checks``, ``recovery``,
+``finalize``), ``dissociative``, ``geometry``, ``_material``; public
+orchestration in ``generators.py``. Site APIs are imported from
+``site_enumeration`` / ``site_coords`` (also re-exported from
 ``metalsurfer.placement``).
 
 
@@ -503,7 +506,7 @@ Enumeration / materialization
   placement uses ``_place_dissociative_two_sites``
   / ``_generate_dissociative_placement_from_spec`` in ``dissociative.py``.
   Molecular / adatom placement goes through
-  ``_pose_from_spec`` + validation/descriptor build in ``pose.py``.
+  ``_pose_from_spec`` + validation/descriptor build in ``placement/pose/``.
 - ``generators.py`` — public orchestration (enumerate, materialize, replay,
   complexity/budget). Optional ``placement_filter``;
   ``adaptive_parallel_fraction`` (default on).
@@ -756,7 +759,8 @@ compete each step; lowest ``Ω`` wins. ``saturation_molecules_per_step > 1``:
 screen exact-*n* joint configs (CPU place, TorchSim relax all *n* together;
 ``workflow/joint_tuplet.py``); commit the best binding pack; stop uses
 ``Ω_tuplet`` with per-molecule stored ``E_ads``. Competitive multi-molecule
-n-tuplet enumerates every species composition of size *n* and ranks packs by
+n-tuplet enumerates every species composition of size *n*, funds pure packs
+before mixtures (largest-remainder shares), and ranks packs by
 ``Ω_tuplet``. Demo: ``examples/water_oh_rutile_saturation.py``.
 
 BO saturation
