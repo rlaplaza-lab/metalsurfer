@@ -361,10 +361,8 @@ def test_shared_site_frame_across_molecules_keeps_site_index():
     assert [_site_xyz_type_key(s) for s in info_b.unique_sites] == [
         _site_xyz_type_key(s) for s in shared.sites
     ]
-    # Bare slab: no footprint bans yet; both packs see all sites.
+    # Bare slab: no occupancy prune; both packs see all sites.
     assert info_w.site_indices == info_b.site_indices
-    assert info_w.allows_conformer_site is None
-    assert info_b.allows_conformer_site is None
 
 
 def test_symmetry_aware_context_preserves_clustered_sites():

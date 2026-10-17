@@ -472,8 +472,12 @@ adsorbate atoms ≥ ``min_adsorbate_separation``, using each site's normal)
 without remapping indices—replay/BO keep stable ``site_index`` values.
 Under coverage that catalog is the full clustered list (symmetry reduction
 is dropped), so unoccupied equivalent copies remain sampleable while
-occupied columns are excluded. When ``occupancy_use_footprint`` is enabled,
-survivors are ranked by kind, coordination, and clearance (incoming disk
+occupied columns are excluded. Atoms more than 2 Å behind the site normal
+(``mic·n > 2`` for ``mic = site - existing``) are ignored, so a ligand on the
+far side of a nanoparticle does not occupy the opposite face; atoms that sit
+only slightly behind the tangent plane still count. When
+``occupancy_use_footprint`` is enabled, survivors are ranked by kind,
+coordination, and clearance (incoming disk
 scaled by ``occupancy_footprint_scale``) rather than pruned by a second reject
 mask; voids and higher-coordination sites come first when clearances tie
 (sampling policy, not a separate uniqueness pass). Dissociative pairing reads
@@ -491,10 +495,8 @@ Enumeration / materialization
 - Soft priors preferring milder tilt and mid ``z_fraction``.
   Sites are ranked by ``kind``, coordination, and clearance before the
   stratified draw. Soft-prior draws prefer earlier indices (voids first when
-  present). Under coverage,
-  a per-molecule footprint view drops ``(conformer, site)`` pairs that do
-  not clear existing adsorbates without rewriting the shared
-  ``SiteContext.sites`` catalog (competitive saturation reuses one frame).
+  present). Under coverage the clearance is that molecule's footprint disk;
+  the shared ``SiteContext.sites`` catalog is not rewritten.
 - ``orientation.py`` — aromatic heuristics plus ``orient_from_spec`` used by
   pose. EN-down binder candidates are the electronegative elements (O, N, S,
   halogens) union formally charged atoms (``[CH2+]``, ``[C-]``), **unless**

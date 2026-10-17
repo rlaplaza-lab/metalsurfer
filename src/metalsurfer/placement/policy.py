@@ -553,7 +553,6 @@ def build_batch_placement_specs(
     conformer_energies: list[float] | None = None,
     conformer_weighting: str = "uniform",
     boltzmann_temperature: float = 300.0,
-    allows_conformer_site: Callable[[int, int], bool] | None = None,
     site_is_void_for_index: Callable[[int], bool] | None = None,
 ) -> list[PlacementSpec]:
     """BO candidate ``PlacementSpec`` list: full Cartesian grid (capped), then stratified subsample to *n_desired* (*seed*).
@@ -564,10 +563,6 @@ def build_batch_placement_specs(
     deterministic (no RNG) and degrades to the uniform draw whenever the
     energies cannot support weighting. The dissociative branch pins
     ``conformer_index=0``, so it is never weighted.
-
-    *allows_conformer_site*, when set, drops ``(conformer_index, site_index)``
-    pairs whose footprint does not fit under coverage (per-molecule view of
-    a shared site frame).
     """
     normalized_sites = site_indices if site_indices else [-1]
     conformer_weights = (
@@ -588,15 +583,6 @@ def build_batch_placement_specs(
 
     def _fields(**overrides: Any) -> dict[str, Any]:
         return {**base_fields, **overrides}
-
-    def _pair_ok(fields: dict[str, Any]) -> bool:
-        if allows_conformer_site is None:
-            return True
-        return bool(
-            allows_conformer_site(
-                int(fields["conformer_index"]), int(fields["site_index"])
-            )
-        )
 
     def _is_void_site(site_idx: int) -> bool:
         if site_is_void_for_index is not None:
@@ -624,8 +610,6 @@ def build_batch_placement_specs(
             if len(out) >= cap:
                 break
             if _same_height_wall_duplicate(fields):
-                continue
-            if not _pair_ok(fields):
                 continue
             spec = PlacementSpec(
                 **fields,

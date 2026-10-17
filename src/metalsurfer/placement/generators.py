@@ -154,7 +154,6 @@ class _SpecGridInfo:
     n_binders: int
     flat_aromatic: bool
     n_hollow_pairs: int
-    allows_conformer_site: Callable[[int, int], bool] | None = None
 
 
 def _site_rank_key(
@@ -239,8 +238,6 @@ def _spec_grid_info(
         incoming_inplane_radius(conf, footprint_scale=footprint_scale)
         for conf in conformers
     ]
-    allowed_pairs: set[tuple[int, int]] | None = None
-    allows_conformer_site: Callable[[int, int], bool] | None = None
 
     if use_sites and unique_sites:
         if existing_ads_pos is None or np.asarray(existing_ads_pos).size == 0:
@@ -263,7 +260,8 @@ def _spec_grid_info(
             anchor_ok = {i for i, keep in enumerate(anchor_mask) if keep}
             if need_footprint:
                 assert existing_radii is not None
-                # Per-conformer footprint clearances on the shared MIC grid.
+                # Best per-conformer disk ranks the site. Negative clearance
+                # does not reject; clash handles residual packing.
                 per_conf_clear: list[np.ndarray] = []
                 for r_in in conf_radii:
                     if float(r_in) <= 0.0:
@@ -278,29 +276,8 @@ def _spec_grid_info(
                                 float(r_in),
                             )
                         )
-                # Site stays if any conformer disk clears (clearance >= 0).
-                site_indices = []
-                allowed_pairs = set()
-                rank_clear = np.full(len(unique_sites), -np.inf, dtype=float)
-                for si in sorted(anchor_ok):
-                    fitted = False
-                    best = -np.inf
-                    for ci, clear_arr in enumerate(per_conf_clear):
-                        c = float(clear_arr[si])
-                        if c >= 0.0:
-                            allowed_pairs.add((ci, si))
-                            fitted = True
-                            if c > best:
-                                best = c
-                    if fitted:
-                        site_indices.append(si)
-                        rank_clear[si] = best
-                clearances = rank_clear
-                _allowed_pairs = allowed_pairs
-
-                def allows_conformer_site(ci: int, si: int) -> bool:
-                    return (int(ci), int(si)) in _allowed_pairs
-
+                site_indices = sorted(anchor_ok)
+                clearances = np.max(np.stack(per_conf_clear, axis=0), axis=0)
             else:
                 site_indices = sorted(anchor_ok)
                 clearances = min_dists
@@ -312,7 +289,6 @@ def _spec_grid_info(
             )
             site_indices = []
             use_sites = False
-            allows_conformer_site = None
         else:
             site_indices = _rank_site_indices(
                 unique_sites,
@@ -365,7 +341,6 @@ def _spec_grid_info(
         n_binders=len(binders),
         flat_aromatic=flat_aromatic,
         n_hollow_pairs=n_hollow_pairs,
-        allows_conformer_site=allows_conformer_site,
     )
 
 
@@ -475,7 +450,6 @@ def enumerate_placement_specs(
         conformer_energies=conformer_energies,
         conformer_weighting=config.conformer_weighting,
         boltzmann_temperature=config.boltzmann_temperature,
-        allows_conformer_site=info.allows_conformer_site,
         site_is_void_for_index=lambda site_idx: _site_is_void_for_grid(info, site_idx),
     )
 

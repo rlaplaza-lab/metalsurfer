@@ -20,15 +20,23 @@ from metalsurfer.placement import (
 )
 from metalsurfer.placement.clash import atom_radii_for_symbols
 from metalsurfer.placement.dissociative import _get_dissociative_site_pairs
+from metalsurfer.placement.generators import _spec_grid_info
 from metalsurfer.placement.occupancy import (
+    available_site_indices,
+    existing_adsorbate_cloud,
     filter_sites_by_occupancy,
+    incoming_inplane_radius,
+    site_footprint_clearances,
 )
 from metalsurfer.placement.pose import (
     _finalize_placement,
     _PlacementContext,
     _validate_posed_adsorbate,
 )
-from metalsurfer.placement.site_context import _get_unique_sites_for_specs
+from metalsurfer.placement.site_context import (
+    _get_unique_sites_for_specs,
+    resolve_site_context_for_sampling,
+)
 from metalsurfer.placement.site_enumeration import (
     _compute_site_z_base,
 )
@@ -308,6 +316,177 @@ def test_footprint_ranks_without_pruning():
     assert clearances[1] > clearances[0]
     # Negative clearance does not prune: vertex gate still returns both sites.
     assert clearances[0] < 0.0
+
+
+def _atop_site_z(xyz, idx):
+    """Synthetic atop site with outward normal +z for occupancy unit tests."""
+    return Site(
+        xyz=np.array(xyz, dtype=float),
+        normal=np.array([0.0, 0.0, 1.0], dtype=float),
+        site_type="atop",
+        slab_indices=(idx,),
+        material_type="nanoparticle",
+        site_source="topology",
+        env_fingerprint=((), (), 0),
+    )
+
+
+def test_occupancy_ignores_far_side_adsorbate_behind_site():
+    """Atoms more than 2 Å behind the site must not prune or foul footprint."""
+    from metalsurfer.placement.occupancy import (
+        available_site_indices,
+        site_footprint_clearances,
+    )
+
+    site = _atop_site_z([0.0, 0.0, 0.0], 0)
+    existing = np.array([[0.0, 0.0, -5.0]], dtype=float)
+    existing_radii = np.array([1.0], dtype=float)
+    cell = np.eye(3) * 30.0
+    pbc = [False, False, False]
+    assert available_site_indices(
+        [site], existing, cell=cell, pbc=pbc, min_separation=1.5
+    ) == [0]
+    clearances = site_footprint_clearances(
+        [site],
+        existing,
+        existing_radii,
+        cell=cell,
+        pbc=pbc,
+        incoming_radius=1.0,
+    )
+    assert np.isposinf(clearances[0])
+
+
+def test_occupancy_same_face_adsorbate_still_prunes():
+    """In-front atoms on the normal line still occupy the site."""
+    from metalsurfer.placement.occupancy import (
+        available_site_indices,
+        site_footprint_clearances,
+    )
+
+    site = _atop_site_z([0.0, 0.0, 0.0], 0)
+    existing = np.array([[0.0, 0.0, 2.0]], dtype=float)
+    existing_radii = np.array([1.0], dtype=float)
+    cell = np.eye(3) * 30.0
+    pbc = [False, False, False]
+    assert (
+        available_site_indices([site], existing, cell=cell, pbc=pbc, min_separation=1.5)
+        == []
+    )
+    clearances = site_footprint_clearances(
+        [site],
+        existing,
+        existing_radii,
+        cell=cell,
+        pbc=pbc,
+        incoming_radius=1.0,
+    )
+    assert clearances[0] < 0.0
+
+
+def test_occupancy_mixed_cloud_far_side_does_not_drive_min_lateral():
+    """Far-side clash must not override a clear front-side neighbor."""
+    from metalsurfer.placement.occupancy import (
+        available_site_indices,
+        site_footprint_clearances,
+    )
+
+    site = _atop_site_z([0.0, 0.0, 0.0], 0)
+    # Antipode on the normal line + a distant front atom (lateral clearance).
+    existing = np.array([[0.0, 0.0, -5.0], [8.0, 0.0, 2.0]], dtype=float)
+    existing_radii = np.array([1.0, 1.0], dtype=float)
+    cell = np.eye(3) * 30.0
+    pbc = [False, False, False]
+    assert available_site_indices(
+        [site], existing, cell=cell, pbc=pbc, min_separation=1.5
+    ) == [0]
+    clearances = site_footprint_clearances(
+        [site],
+        existing,
+        existing_radii,
+        cell=cell,
+        pbc=pbc,
+        incoming_radius=1.0,
+    )
+    # Front atom at lateral 8 Å, r=1 → clearance 8 - 1 - 1 = 6; far-side ignored.
+    assert clearances[0] == pytest.approx(6.0)
+
+
+def test_occupancy_counts_atom_slightly_behind_tangent_plane():
+    """A neighbor 0.5 Å behind the plane at 1 Å lateral still occupies the site."""
+    site = _atop_site_z([0.0, 0.0, 0.0], 0)
+    existing = np.array([[1.0, 0.0, -0.5]], dtype=float)
+    existing_radii = np.array([1.0], dtype=float)
+    cell = np.eye(3) * 30.0
+    pbc = [False, False, False]
+    assert (
+        available_site_indices([site], existing, cell=cell, pbc=pbc, min_separation=1.5)
+        == []
+    )
+    clearances = site_footprint_clearances(
+        [site],
+        existing,
+        existing_radii,
+        cell=cell,
+        pbc=pbc,
+        incoming_radius=1.0,
+    )
+    # Lateral 1 Å, r=1, incoming 1 → clearance -1. Depth cutoff is 2 Å.
+    assert clearances[0] == pytest.approx(-1.0)
+
+
+def test_negative_footprint_clearance_ranks_without_dropping_site():
+    """Disk overlap ranks a covered anchor later; it does not remove the site."""
+    slab = make_slab()
+    config = AdsorptionConfig(
+        material_type="slab",
+        seed=0,
+        min_adsorbate_separation=1.5,
+        occupancy_use_footprint=True,
+        occupancy_footprint_scale=1.0,
+    )
+    ctx = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
+    assert ctx.use_sites and ctx.sites
+    near = ctx.sites[0]
+    normal = np.asarray(near.normal, dtype=float)
+    tangent = np.array([1.0, 0.0, 0.0], dtype=float)
+    tangent = tangent - float(np.dot(tangent, normal)) * normal
+    if float(np.linalg.norm(tangent)) < 1e-8:
+        tangent = np.array([0.0, 1.0, 0.0], dtype=float)
+        tangent = tangent - float(np.dot(tangent, normal)) * normal
+    tangent = tangent / np.linalg.norm(tangent)
+    ads = Atoms("O", positions=[near.xyz + 2.0 * tangent + 0.4 * normal])
+    full = slab.copy() + ads
+
+    bulky = make_water()
+    pos = bulky.get_positions().copy()
+    com = pos.mean(axis=0)
+    bulky.set_positions(com + 2.0 * (pos - com))
+
+    info = _spec_grid_info([bulky], slab, config, "O", site_context=ctx, full_slab=full)
+    assert not hasattr(info, "allows_conformer_site")
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = [True, True, False]
+    existing_pos, existing_radii = existing_adsorbate_cloud(slab, full)
+    clearances = site_footprint_clearances(
+        ctx.sites,
+        existing_pos,
+        existing_radii,
+        cell=cell,
+        pbc=pbc,
+        incoming_radius=incoming_inplane_radius(bulky, footprint_scale=1.0),
+    )
+    near_i = 0
+    assert near_i in info.site_indices
+    assert clearances[near_i] < 0.0
+    same_type = near.site_type
+    ranked_same = [
+        i
+        for i in info.site_indices
+        if ctx.sites[i].site_type == same_type and float(clearances[i]) > 0.0
+    ]
+    assert ranked_same
+    assert info.site_indices.index(ranked_same[0]) < info.site_indices.index(near_i)
 
 
 def test_incoming_inplane_radius_drops_thickness_axis():

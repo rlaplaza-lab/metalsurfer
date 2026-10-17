@@ -2,6 +2,9 @@
 
 Prunes catalog anchors closer than ``min_separation`` (in-plane MIC) to existing
 adsorbates; optional footprint radius only ranks survivors, never rejects.
+Existing atoms more than ``_BEHIND_SITE_DEPTH_ANGSTROM`` behind a site
+(``mic·n`` for ``mic = site - existing``) are ignored so far-side ligands on
+nanoparticles do not occupy opposite faces.
 """
 
 from __future__ import annotations
@@ -15,6 +18,11 @@ from .._numeric_defaults import OCCUPANCY_FOOTPRINT_SCALE_DEFAULT
 from . import geometry as geom
 from .clash import atom_radii_for_symbols
 from .site_types import Site
+
+# Neighbor ligands on a small particle sit ~0.6–1.4 Å behind the tangent plane;
+# opposite-face atoms sit ~4.5–11 Å behind. Site normals are unit length, so
+# ``mic·n`` is a depth in Å. Only the deep side is ignored.
+_BEHIND_SITE_DEPTH_ANGSTROM = 2.0
 
 
 def existing_adsorbate_positions(
@@ -109,6 +117,21 @@ def _normalize_existing_positions(existing: np.ndarray) -> np.ndarray:
     return arr
 
 
+def _lateral_distances(mic_vecs: np.ndarray, normals: np.ndarray) -> np.ndarray:
+    """Return in-plane distances; atoms deep behind the plane are ``inf``.
+
+    *mic_vecs* has shape ``(n_sites, n_existing, 3)`` and is ``site - existing``.
+    *normals* has shape ``(n_sites, 3)`` and must be unit length. An atom more
+    than :data:`_BEHIND_SITE_DEPTH_ANGSTROM` behind the plane does not occupy
+    the site.
+    """
+    dots = np.einsum("sjd,sd->sj", mic_vecs, normals)
+    perp = mic_vecs - dots[:, :, None] * normals[:, None, :]
+    lateral = np.linalg.norm(perp, axis=2)
+    lateral[dots > _BEHIND_SITE_DEPTH_ANGSTROM] = np.inf
+    return lateral
+
+
 def _sites_clearance_and_anchor_mask(
     sites: Sequence[Site],
     existing: np.ndarray,
@@ -122,8 +145,11 @@ def _sites_clearance_and_anchor_mask(
 
     Reject uses in-plane MIC (``||mic - (mic·n)n||``) against each site normal
     so unlifted support-plane anchors still mark columns under adsorbates as
-    occupied. When *need_mic_vecs* is False the returned mic placeholder is
-    empty ``(n, 0, 3)`` but the mask still uses in-plane distances.
+    occupied. MIC vectors are ``site - existing``. Atoms more than
+    :data:`_BEHIND_SITE_DEPTH_ANGSTROM` behind the site (``mic·n`` above that
+    depth) are ignored. When *need_mic_vecs* is False the returned mic
+    placeholder is empty ``(n, 0, 3)`` but the mask still uses in-plane
+    distances.
     """
     n = len(sites)
     if n == 0:
@@ -145,9 +171,8 @@ def _sites_clearance_and_anchor_mask(
     cell_arr = np.asarray(cell, dtype=float)
     mic_vecs, _ = geom._mol_slab_pairwise_mic(site_xyz, existing_arr, cell_arr, pbc)
     normals = np.asarray([s.normal for s in sites], dtype=float)
-    dots = np.einsum("sjd,sd->sj", mic_vecs, normals)
-    perp = mic_vecs - dots[:, :, None] * normals[:, None, :]
-    min_dists = np.min(np.linalg.norm(perp, axis=2), axis=1)
+    lateral = _lateral_distances(mic_vecs, normals)
+    min_dists = np.min(lateral, axis=1)
     if not need_mic_vecs:
         mic_vecs = np.zeros((n, 0, 3), dtype=float)
     return min_dists >= float(min_separation), min_dists, mic_vecs
@@ -159,13 +184,15 @@ def _footprint_clearances_from_mic(
     existing_radii: np.ndarray,
     incoming_radius: float,
 ) -> np.ndarray:
-    """``min_j (||d_perp|| - r_j) - incoming_radius`` from precomputed MIC vectors."""
+    """``min_j (||d_perp|| - r_j) - incoming_radius`` from precomputed MIC vectors.
+
+    Atoms more than :data:`_BEHIND_SITE_DEPTH_ANGSTROM` behind the site are
+    ignored, matching the anchor gate in :func:`_sites_clearance_and_anchor_mask`.
+    """
     if mic_vecs.shape[1] == 0:
         return np.full(len(sites), np.inf, dtype=float)
     normals = np.asarray([s.normal for s in sites], dtype=float)
-    dots = np.einsum("sjd,sd->sj", mic_vecs, normals)
-    perp = mic_vecs - dots[:, :, None] * normals[:, None, :]
-    lateral = np.linalg.norm(perp, axis=2)
+    lateral = _lateral_distances(mic_vecs, normals)
     r_exist = np.asarray(existing_radii, dtype=float).reshape(1, -1)
     return np.min(lateral - r_exist, axis=1) - float(incoming_radius)
 
