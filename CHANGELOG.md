@@ -5,10 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.6] - 2026-10-10
+## [0.9.6] - 2026-10-19
 
 ### Changed
 
+- Occupancy ignores adsorbate atoms more than 2 Å behind a site normal, so a
+  ligand on the far side of a nanoparticle does not occupy the opposite face.
+  Footprint clearance only ranks the sites that remain.
 - Competitive multi-molecule n-tuplet funds each species' pure pack before
   mixed packs (largest-remainder shares); a short ``num_placements`` leaves
   mixtures unfunded instead of raising.

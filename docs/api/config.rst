@@ -398,7 +398,10 @@ Initial placement validation
 
     In-plane occupancy clearance (Å): catalog site anchors closer than this
     (MIC, normal-projected) to existing adsorbate atoms are dropped under
-    coverage. Adsorbate–adsorbate bonding is gated by
+    coverage. Atoms more than 2 Å behind the site (``mic·n > 2`` for
+    ``mic = site - existing``) are ignored, so a ligand on the far side of a
+    nanoparticle does not occupy the opposite face. Adsorbate–adsorbate bonding
+    is gated by
     ``connectivity_multiplier`` instead (``adsorbate_overlap``). Clash and
     disconnect paths require tabulated covalent radii and fail loud when a
     symbol has none.
