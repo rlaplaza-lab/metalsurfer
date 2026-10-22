@@ -676,10 +676,6 @@ def test_relax_slab_structure_propagates_dependency_missing():
 class TestDepositAdatoms:
     _NO_RELAX_CFG = AdsorptionConfig(slab_relaxation_mode="none")
 
-    def _flat_slab(self, n: int = 16, symbol: str = "Ru"):
-        """Single-layer test slab."""
-        return SlabContainer(make_slab(nx=4, ny=4, n_layers=1, symbol=symbol))
-
     def _layered_slab(self):
         return SlabContainer(make_slab(nx=4, ny=4, n_layers=3))
 

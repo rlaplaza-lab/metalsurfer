@@ -94,7 +94,6 @@ class CandidateSite:
     support_distances: tuple[float, ...]
     normal: np.ndarray
     score: float
-    basin_id: int = -1
 
 
 @dataclass(frozen=True)
@@ -896,11 +895,11 @@ def _merge_by_radius(
     pbc: np.ndarray,
     merge_radius: float,
 ) -> list[CandidateSite]:
-    """Isotropic NMS at *merge_radius*; assign basin_id in score order."""
+    """Isotropic NMS at *merge_radius*, returned in score order."""
     if not candidates:
         return []
     if len(candidates) == 1:
-        return [replace(candidates[0], basin_id=0)]
+        return [candidates[0]]
 
     verts = np.asarray([c.position for c in candidates], dtype=float)
     scores = np.asarray([c.score for c in candidates], dtype=float)
@@ -918,7 +917,7 @@ def _merge_by_radius(
     rep_verts = np.asarray([c.position for c in out], dtype=float)
     rep_scores = np.asarray([c.score for c in out], dtype=float)
     rep_order = _nms_rank_order(rep_verts, rep_scores, cell, pbc)
-    return [replace(out[int(i)], basin_id=b) for b, i in enumerate(rep_order)]
+    return [out[int(i)] for i in rep_order]
 
 
 def _best_per_support_key(

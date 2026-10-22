@@ -18,7 +18,6 @@ import tomllib
 import traceback
 from pathlib import Path
 
-GIT_REF = "__GIT_REF__"
 GPU_MODE = "__GPU_MODE__"
 PYTEST_MARKER = "__PYTEST_MARKER__"
 HF_TOKEN = "__HF_TOKEN__"

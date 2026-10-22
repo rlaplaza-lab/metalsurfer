@@ -255,12 +255,12 @@ class TestSurrogate:
         """GP predictive variance is higher far from training data than near it."""
         X, y = _make_synthetic_training_data(40)
         model = train_surrogate(X, y, surrogate="gaussian_process", random_state=3)
-        mu_in, sig_in = predict_with_uncertainty(model, X)
+        _, sig_in = predict_with_uncertainty(model, X)
         center = np.asarray(X, dtype=float).mean(axis=0)
         rng = np.random.default_rng(0)
         far = center + rng.standard_normal((30, X.shape[1])) * 5.0
         far_df = pd.DataFrame(far, columns=list(X.columns))
-        mu_out, sig_out = predict_with_uncertainty(model, far_df)
+        _, sig_out = predict_with_uncertainty(model, far_df)
         # Variance must be lower near the training points than far out-of-sample.
         assert float(np.mean(sig_out)) > float(np.mean(sig_in))
         assert float(np.mean(sig_out)) > 2.0 * float(np.mean(sig_in))

@@ -132,8 +132,6 @@ class ReferenceMinimum:
 @dataclass(frozen=True)
 class BindingGeometry:
     com_height: float
-    o_distance: float
-    h_distance: float
     mode: str
 
 
@@ -477,8 +475,6 @@ def binding_geometry(atoms: Atoms) -> BindingGeometry:
     mode = "Ox" if o_dist <= h_dist else "Hy"
     return BindingGeometry(
         com_height=com_height,
-        o_distance=o_dist,
-        h_distance=h_dist,
         mode=mode,
     )
 
@@ -581,10 +577,8 @@ class OverlayExport:
     label: str
     placement_id: int
     adsorbate_rmsd: float
-    mlip_energy_adsorption: float
     binding_class: str
     full_path: Path
-    slab_patch_path: Path
     vmd_mlip_path: Path
     vmd_dft_path: Path
 
@@ -746,10 +740,8 @@ def export_figure_overlays(
             label=label,
             placement_id=placement_id,
             adsorbate_rmsd=best_rmsd,
-            mlip_energy_adsorption=result.energy_adsorption,
             binding_class=class_by_label[label],
             full_path=full_path,
-            slab_patch_path=patch_path,
             vmd_mlip_path=vmd_mlip_path,
             vmd_dft_path=vmd_dft_path,
         )
