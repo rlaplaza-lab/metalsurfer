@@ -56,6 +56,7 @@ from .shared import (
     _filter_and_label_duplicates,
     _prepare_molecule_screening,
     _summarize_failure_events,
+    _unique_relaxed_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -914,13 +915,12 @@ def process_molecule_bayesian(
                     replace_pid=event.placement_id,
                 )
 
-    if bo_duplicate_results:
-        logger.info(
-            "BO post-filter deduplicated %d results",
-            len(bo_duplicate_results),
-        )
-
+    uniqueness = _unique_relaxed_message(
+        n_unique=len(filtered),
+        n_collapsed=len(bo_duplicate_results),
+    )
     if not filtered:
+        logger.info("%s", uniqueness)
         _flush_bo_outputs()
         return _bail_outcome(
             FilterFailure(
@@ -928,14 +928,11 @@ def process_molecule_bayesian(
                 n_after_filter=0,
             )
         )
-
     logger.info(
-        "BO filtered: %d -> %d results, E_ads range [%.4f, %.4f]",
-        len(all_results),
-        len(filtered),
+        "%s, E_ads range [%.4f, %.4f]",
+        uniqueness,
         min(r.energy_adsorption for r in filtered),
         max(r.energy_adsorption for r in filtered),
     )
     _flush_bo_outputs()
-
     return _outcome(filtered)

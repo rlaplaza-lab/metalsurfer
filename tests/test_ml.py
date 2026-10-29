@@ -37,8 +37,8 @@ from metalsurfer.models import PlacementDescriptor, ScreeningResult
 from tests.factories import make_placement_record, make_random_placement_records
 
 
-def test_schema_version_is_3_0():
-    assert SCHEMA_VERSION == "3.0"
+def test_schema_version_is_3_1():
+    assert SCHEMA_VERSION == "3.1"
 
 
 def test_ml_package_exports_expanded_surface():
@@ -80,13 +80,14 @@ class TestComputationContext:
         )
 
     def test_default_settings_hash_pinned(self):
-        assert ComputationContext().settings_hash() == "9f4b7815878a"
+        assert ComputationContext().settings_hash() == "cafb355a73b7"
 
     def test_from_config(self):
         config = AdsorptionConfig(model_name="test-model", fmax=0.03, seed=123)
         ctx = ComputationContext.from_config(config)
         assert ctx.model_name == "test-model"
         assert ctx.task_name == "oc25"
+        assert ctx.dispersion == "none"
         assert ctx.fmax == 0.03
         assert ctx.seed == 123
 
@@ -108,6 +109,13 @@ class TestComputationContext:
     def test_settings_hash_changes_with_task_name(self):
         ctx1 = ComputationContext(task_name="oc20")
         ctx2 = ComputationContext(task_name="oc25")
+        assert ctx1.settings_hash() != ctx2.settings_hash()
+
+    def test_settings_hash_changes_with_dispersion(self):
+        ctx1 = ComputationContext(dispersion="none")
+        ctx2 = ComputationContext(
+            model_name="uma-s-1p2", task_name="omat", dispersion="d3"
+        )
         assert ctx1.settings_hash() != ctx2.settings_hash()
 
     def test_to_dict_roundtrip(self):
@@ -170,6 +178,8 @@ class TestPlacementRecord:
         assert "initial_site_type" in flat
         assert "ctx_model_name" in flat
         assert "ctx_task_name" in flat
+        assert "ctx_dispersion" in flat
+        assert flat["ctx_dispersion"] == "none"
         assert "model_name" not in flat
         assert flat["initial_tilt_deg"] == r.descriptor.tilt_deg
 

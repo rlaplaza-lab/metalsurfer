@@ -77,6 +77,8 @@ def test_strict_contact_window_rejects_empty_admissible_range():
 def test_default_config():
     config = AdsorptionConfig()
     assert config.model_name == "uma-s-1p2"
+    assert config.task_name == "oc25"
+    assert config.dispersion == "none"
     assert config.num_conformers == 10
     assert config.fmax == 0.05
     assert config.write_vasp_inputs is False
@@ -734,6 +736,79 @@ def test_empty_task_name_rejected():
 def test_non_string_task_name_rejected():
     with pytest.raises(ValueError, match="task_name.*non-empty"):
         AdsorptionConfig(task_name=None)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("model_name", "task_name"),
+    [
+        ("uma-s-1p2p1", "oc25"),
+        ("uma-s-1p2p1", "oc22"),
+        ("uma-s-1p2p1", "omat"),
+        ("uma-s-1p2p1-ft-d4rev", "omol"),
+        ("uma-s-1p2p1-ft-r2scan", "omat"),
+        ("uma-s-1p1", "oc20"),
+        ("uma-m-1p1", "omat"),
+        ("/models/uma-s-1p1.pt", "oc25"),
+    ],
+)
+def test_known_checkpoints_accept_legal_tasks(model_name, task_name):
+    config = AdsorptionConfig(model_name=model_name, task_name=task_name)
+    assert config.task_name == task_name
+
+
+@pytest.mark.parametrize(
+    ("model_name", "task_name", "match"),
+    [
+        ("uma-s-1p2p1-ft-d4rev", "oc25", "only supports task_name='omol'"),
+        ("uma-s-1p2p1-ft-r2scan", "omol", "only supports task_name='omat'"),
+        ("uma-s-1p1", "oc25", "UMA 1.2\\+"),
+        ("uma-s-1p1", "oc22", "UMA 1.2\\+"),
+        ("uma-m-1p1", "oc25", "UMA 1.2\\+"),
+    ],
+)
+def test_illegal_checkpoint_task_pairs_rejected(model_name, task_name, match):
+    with pytest.raises(ValueError, match=match):
+        AdsorptionConfig(model_name=model_name, task_name=task_name)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "task_name"),
+    [
+        ("uma-s-1p2", "omat"),
+        ("uma-s-1p2p1", "omat"),
+        ("uma-s-1p1", "omat"),
+        ("uma-m-1p1", "omat"),
+        ("uma-s-1p2p1-ft-r2scan", "omat"),
+    ],
+)
+def test_dispersion_d3_accepted_for_presets(model_name, task_name):
+    config = AdsorptionConfig(
+        model_name=model_name, task_name=task_name, dispersion="d3"
+    )
+    assert config.dispersion == "d3"
+
+
+@pytest.mark.parametrize(
+    ("model_name", "task_name", "match"),
+    [
+        ("uma-s-1p2", "oc25", "double-count"),
+        ("uma-s-1p2p1", "omol", "double-count"),
+        ("uma-s-1p2p1-ft-d4rev", "omol", "double-count"),
+        ("uma-s-1p2", "odac", "double-count"),
+        ("uma-s-1p2", "omc", "double-count"),
+        ("uma-s-1p2", "oc20", "no RPBE preset"),
+        ("uma-s-1p2", "oc22", "oc22"),
+        ("/models/custom.pt", "omat", "only supported"),
+    ],
+)
+def test_dispersion_d3_rejected_without_a_preset(model_name, task_name, match):
+    with pytest.raises(ValueError, match=match):
+        AdsorptionConfig(model_name=model_name, task_name=task_name, dispersion="d3")
+
+
+def test_dispersion_rejects_unknown_choice():
+    with pytest.raises(ValueError, match="dispersion"):
+        AdsorptionConfig(dispersion="d4")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

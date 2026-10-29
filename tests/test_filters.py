@@ -20,6 +20,7 @@ from ase.data import atomic_numbers, covalent_radii
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.filters import (
+    _adsorbate_assignment_rmsd,
     _adsorbate_rmsd,
     _bond_counts_from_dist,
     _bond_counts_from_smiles,
@@ -1022,7 +1023,7 @@ def test_duplicate_removal():
 
 
 def test_duplicate_removal_rejects_mixed_cells():
-    """COM binning / MIC RMSD share one cell; mixed cells are a contract error."""
+    """MIC RMSD shares one cell; mixed cells are a contract error."""
     slab = make_slab(n_layers=1)
     combined1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     combined2 = combined1.copy()
@@ -1099,6 +1100,7 @@ def test_duplicate_removal_lattice_image_poses():
 
 
 def test_distinct_kept():
+    """A translated copy is kept when the adsorption energies differ."""
     slab = make_slab(n_layers=1)
     combined1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     combined2 = combined1.copy()
@@ -1193,8 +1195,11 @@ def test_duplicate_removal_ignores_prior_adsorbate_geometry():
     assert len(filtered) == 1
 
 
-def test_duplicate_removal_keeps_distinct_trailing_poses_with_same_priors():
-    """Same priors but a far-shifted new adsorbate remain two unique results."""
+def test_duplicate_removal_collapses_translated_trailing_adsorbate():
+    """Saturation dedup collapses the same new pose on another site.
+
+    The prior adsorbate is identical and is not part of the comparison.
+    """
     slab_metal = make_slab(n_layers=1, symbol="Ru")
     prior = make_water().copy()
     prior_pos = prior.get_positions().copy()
@@ -1237,15 +1242,65 @@ def test_duplicate_removal_keeps_distinct_trailing_poses_with_same_priors():
         slab=slab_with_prior,
         config=config,
     )
+    assert len(filtered) == 1
+    assert filtered[0].placement_id == 1
+
+
+def test_duplicate_removal_keeps_rotated_trailing_pose_with_same_prior():
+    """A 90° turn of the new adsorbate is distinct; the prior is ignored."""
+    slab_metal = make_slab(n_layers=1, symbol="Ru")
+    prior = make_water().copy()
+    prior_pos = prior.get_positions().copy()
+    prior_pos -= np.mean(prior_pos, axis=0)
+    prior_pos[:, 0] += 1.0
+    prior_pos[:, 1] += 1.0
+    prior_pos[:, 2] += float(np.max(slab_metal.get_positions()[:, 2])) + 2.0
+    prior.set_positions(prior_pos)
+
+    slab_with_prior = slab_metal + prior
+    slab_with_prior.set_cell(slab_metal.get_cell())
+    slab_with_prior.set_pbc(slab_metal.get_pbc())
+
+    def _place_new(*, turn: bool) -> Atoms:
+        water = make_water().copy()
+        pos = water.get_positions().copy()
+        pos -= np.mean(pos, axis=0)
+        if turn:
+            rel = pos.copy()
+            pos[:, 0] = -rel[:, 1]
+            pos[:, 1] = rel[:, 0]
+        pos[:, 0] += 5.0
+        pos[:, 1] += 5.0
+        pos[:, 2] += float(np.max(slab_metal.get_positions()[:, 2])) + 2.5
+        water.set_positions(pos)
+        combined = slab_with_prior + water
+        combined.set_cell(slab_with_prior.get_cell())
+        combined.set_pbc(slab_with_prior.get_pbc())
+        return combined
+
+    results = [
+        _sr(_place_new(turn=False), -1.0, 0),
+        _sr(_place_new(turn=True), -1.01, 1),
+    ]
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    filtered = filter_results(
+        results,
+        slab=slab_with_prior,
+        config=config,
+    )
     assert len(filtered) == 2
 
 
 def test_duplicate_removal_across_adjacent_com_bins():
-    """Near-identical poses that straddle a COM grid face still collapse."""
+    """A sub-threshold rigid shift of the same pose still collapses."""
     slab = make_slab(n_layers=1)
     base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
-    # Shift by just under rmsd_dedup_threshold so RMSD collapses, but enough
-    # that COMs can land in neighboring bins of size rmsd_dedup_threshold.
     shifted = base.copy()
     pos = shifted.get_positions().copy()
     pos[len(slab) :, 0] += 0.08
@@ -1266,8 +1321,8 @@ def test_duplicate_removal_across_adjacent_com_bins():
     assert len(filtered) == 1
 
 
-def test_duplicate_removal_skips_rmsd_for_far_com(monkeypatch):
-    """Spatially separated placements in one energy window never call RMSD."""
+def test_duplicate_removal_collapses_same_pose_on_distant_sites():
+    """The same local pose on other terrace sites is one structure."""
     slab = make_slab(n_layers=1)
     placements = []
     for i, x in enumerate((1.0, 4.0, 7.0, 10.0)):
@@ -1277,20 +1332,6 @@ def test_duplicate_removal_skips_rmsd_for_far_com(monkeypatch):
         atoms.set_positions(pos)
         placements.append(_sr(atoms, -1.0 - 0.001 * i, i))
 
-    calls: list[tuple[int, int]] = []
-    real_rmsd = _adsorbate_rmsd
-
-    def _spy(a1, a2, surface_symbols=None, *, material_type="slab", prefix_atoms=None):
-        calls.append((len(a1), len(a2)))
-        return real_rmsd(
-            a1,
-            a2,
-            surface_symbols=surface_symbols,
-            material_type=material_type,
-            prefix_atoms=prefix_atoms,
-        )
-
-    monkeypatch.setattr("metalsurfer.filters._adsorbate_rmsd", _spy)
     config = AdsorptionConfig(
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
@@ -1299,9 +1340,8 @@ def test_duplicate_removal_skips_rmsd_for_far_com(monkeypatch):
         skip_desorption_check=True,
     )
     filtered = filter_results(placements, slab=slab, config=config)
-    assert len(filtered) == 4
-    # Far COMs are pruned before RMSD; no pairwise calls among the four.
-    assert calls == []
+    assert len(filtered) == 1
+    assert filtered[0].placement_id == 3
 
 
 def test_duplicate_removal_across_periodic_cell_face():
@@ -1342,6 +1382,203 @@ def test_duplicate_removal_across_periodic_cell_face():
     )
     filtered = filter_results(results, slab=slab, config=config)
     assert len(filtered) == 1
+
+
+def test_duplicate_removal_collapses_wrapped_periodic_image():
+    """The same pose, stored wrapped in the primary cell, is one structure.
+
+    The copy is shifted by one cell vector plus one terrace spacing, then
+    folded back with ``Atoms.wrap`` the way a relaxed geometry is stored.
+    """
+    slab = make_slab(n_layers=1)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    a_len = float(np.linalg.norm(cell[0]))
+    terrace = a_len / 4.0
+    base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    moved = base.copy()
+    pos = moved.get_positions().copy()
+    prefix = len(slab)
+    pos[prefix:] += cell[0] + np.array([terrace, 0.0, 0.0])
+    moved.set_positions(pos)
+    outside = np.asarray(moved.get_positions()[prefix:], dtype=float)
+    assert np.any(outside[:, 0] >= a_len)
+    moved.wrap()
+
+    wrapped = np.asarray(moved.get_positions()[prefix:], dtype=float)
+    assert np.all(wrapped[:, 0] >= -1e-8)
+    assert np.all(wrapped[:, 0] < a_len + 1e-8)
+    assert not np.allclose(wrapped, base.get_positions()[prefix:])
+
+    assignment_rmsd = _adsorbate_assignment_rmsd(
+        base, moved, material_type="slab", prefix_atoms=prefix
+    )
+    assert assignment_rmsd < 0.1
+
+    results = [
+        _sr(base, -1.0, 0),
+        _sr(moved, -1.01, 1),
+    ]
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    filtered = filter_results(results, slab=slab, config=config)
+    assert len(filtered) == 1
+    assert filtered[0].placement_id == 1
+
+
+def test_assignment_rmsd_collapses_permuted_long_translation():
+    """An H swap plus a shift longer than half a cell vector is one pose.
+
+    MIC of the centroid difference wraps that shift toward zero and used to
+    leave the unwrapped coordinates a cell apart.
+    """
+    slab = make_slab(n_layers=1)
+    base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    moved = base.copy()
+    pos = moved.get_positions().copy()
+    prefix = len(slab)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pos[prefix:] += 0.7 * cell[0]
+    h1 = prefix + 1
+    h2 = prefix + 2
+    pos[[h1, h2]] = pos[[h2, h1]]
+    moved.set_positions(pos)
+
+    assignment_rmsd = _adsorbate_assignment_rmsd(
+        base, moved, material_type="slab", prefix_atoms=prefix
+    )
+    assert assignment_rmsd < 0.1
+
+    results = [
+        _sr(base, -1.0, 0),
+        _sr(moved, -1.01, 1),
+    ]
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    filtered = filter_results(results, slab=slab, config=config)
+    assert len(filtered) == 1
+    assert filtered[0].placement_id == 1
+
+
+def test_default_rmsd_threshold_collapses_a_mild_distortion():
+    """Default 0.35 Å treats a ~0.2 Å heavy-atom change as the same pose."""
+    slab = make_slab(n_layers=1)
+    base = place_molecule_on_slab(slab, _make_ethanol(), z_offset=2.5)
+    distorted = base.copy()
+    pos = distorted.get_positions().copy()
+    ads = pos[len(slab) :]
+    com = ads.mean(axis=0)
+    pos[len(slab) :] = com + (ads - com) * 1.18
+    distorted.set_positions(pos)
+
+    prefix = len(slab)
+    assignment_rmsd = _adsorbate_assignment_rmsd(
+        base, distorted, material_type="slab", prefix_atoms=prefix
+    )
+    assert 0.1 < assignment_rmsd < 0.35
+
+    near = [
+        _sr(base, -1.0, 0),
+        _sr(distorted, -1.01, 1),
+    ]
+    default = AdsorptionConfig(
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    assert default.rmsd_dedup_threshold == 0.35
+    assert len(filter_results(near, slab=slab, config=default)) == 1
+
+    strict = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    assert len(filter_results(near, slab=slab, config=strict)) == 2
+
+
+def test_duplicate_removal_collapses_swapped_identical_hydrogens():
+    """Same geometry with the two H indices exchanged is one structure."""
+    slab = make_slab(n_layers=1)
+    base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    swapped = base.copy()
+    pos = swapped.get_positions().copy()
+    h1 = len(slab) + 1
+    h2 = len(slab) + 2
+    pos[[h1, h2]] = pos[[h2, h1]]
+    swapped.set_positions(pos)
+
+    prefix = len(slab)
+    index_rmsd = _adsorbate_rmsd(
+        base, swapped, material_type="slab", prefix_atoms=prefix
+    )
+    assignment_rmsd = _adsorbate_assignment_rmsd(
+        base, swapped, material_type="slab", prefix_atoms=prefix
+    )
+    assert index_rmsd >= 0.1
+    assert assignment_rmsd < 0.1
+
+    results = [
+        _sr(base, -1.0, 0),
+        _sr(swapped, -1.01, 1),
+    ]
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    filtered = filter_results(results, slab=slab, config=config)
+    assert len(filtered) == 1
+    assert filtered[0].placement_id == 1
+
+
+def test_duplicate_removal_keeps_in_plane_rotation():
+    """A 90° turn that moves atoms is a different structure (no Kabsch)."""
+    slab = make_slab(n_layers=1)
+    base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
+    rotated = base.copy()
+    pos = rotated.get_positions().copy()
+    ads = pos[len(slab) :]
+    com = ads.mean(axis=0)
+    rel = ads - com
+    turned = rel.copy()
+    turned[:, 0] = -rel[:, 1]
+    turned[:, 1] = rel[:, 0]
+    pos[len(slab) :] = turned + com
+    rotated.set_positions(pos)
+
+    prefix = len(slab)
+    assignment_rmsd = _adsorbate_assignment_rmsd(
+        base, rotated, material_type="slab", prefix_atoms=prefix
+    )
+    assert assignment_rmsd >= 0.1
+
+    results = [
+        _sr(base, -1.0, 0),
+        _sr(rotated, -1.01, 1),
+    ]
+    config = AdsorptionConfig(
+        energy_dedup_threshold=0.05,
+        rmsd_dedup_threshold=0.1,
+        connectivity_multiplier=1.3,
+        skip_topology_check=True,
+        skip_desorption_check=True,
+    )
+    filtered = filter_results(results, slab=slab, config=config)
+    assert len(filtered) == 2
 
 
 def test_trailing_adsorbate_com_unwraps_pbc_straddle():

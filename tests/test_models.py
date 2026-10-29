@@ -454,6 +454,7 @@ def test_binding_campaign_result_formatters():
     )
     assert "Binding summary" in summary
     assert "water" in summary
+    assert "(3 unique relaxed structures)" in summary
 
 
 def test_binding_campaign_format_summary_default_title():
@@ -502,7 +503,7 @@ def test_binding_campaign_format_summary_includes_failures():
         title="Binding summary",
         results_dir="results_manual",
     )
-    assert "(no valid placements)" in summary
+    assert "(no unique relaxed structures)" in summary
     assert "Failures for bad" in summary
     assert "conformers" in summary
 

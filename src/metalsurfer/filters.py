@@ -1,6 +1,8 @@
-"""Post-relaxation filtering: decomposition, desorption, energy cap, deduplication.
+"""Post-relaxation filtering: decomposition, desorption, and deduplication.
 
-:func:`filter_results` runs one pipeline. Decomposition can check connectivity
+:func:`filter_results` runs one pipeline: decomposition, desorption, then
+energy/RMSD dedup. The adsorption-energy cap is applied per candidate before
+this batch step, not here. Decomposition can check connectivity
 (at multiple radii), formula, bond-pair counts, and coordination vs reference SMILES.
 
 :func:`adsorbate_connected_components` splits the adsorbate region into bonded
@@ -20,6 +22,7 @@ import numpy as np
 from ase import Atoms
 from ase.data import atomic_numbers, covalent_radii
 from ase.geometry import find_mic
+from scipy.optimize import linear_sum_assignment
 from scipy.sparse.csgraph import connected_components
 
 from ._geom_pbc import cart_to_frac, frac_to_cart, wrap_fractional
@@ -680,6 +683,87 @@ def _adsorbate_rmsd(
     return float(np.sqrt(np.mean(np.sum(diffs**2, axis=1))))
 
 
+def _mic_unwrapped_positions(
+    pos: np.ndarray,
+    cell: np.ndarray,
+    pbc: list[bool],
+) -> np.ndarray:
+    """Place *pos* in one image relative to the first atom."""
+    coords = np.asarray(pos, dtype=float)
+    if len(coords) <= 1 or not any(pbc):
+        return coords
+    deltas, _ = find_mic(coords - coords[0], cell, pbc)
+    return coords[0] + deltas
+
+
+def _local_pose_atoms(
+    pos: np.ndarray,
+    symbols: Sequence[str],
+) -> tuple[np.ndarray, list[str]]:
+    """Atoms that define a local pose.
+
+    Hydrogens are dropped when at least two heavy atoms are present, so a
+    relaxed H placement does not split one heavy-atom geometry into two.
+    One heavy atom (water) or none (H2) keeps every atom: centering a single
+    point would report RMSD 0 for every orientation.
+    """
+    heavy = [i for i, symbol in enumerate(symbols) if atomic_numbers[symbol] > 1]
+    if len(heavy) >= 2:
+        idx = np.asarray(heavy, dtype=int)
+        return pos[idx], [symbols[i] for i in heavy]
+    return pos, list(symbols)
+
+
+def _adsorbate_assignment_rmsd(
+    a1: Atoms,
+    a2: Atoms,
+    *,
+    material_type: str,
+    prefix_atoms: int,
+) -> float:
+    """Element-matched RMSD of the centered local pose. No rotation.
+
+    Each adsorbate is unwrapped into one image about its own first atom, then
+    its Cartesian centroid is subtracted. That removes a site-to-site or
+    periodic-image translation, including one longer than half a cell vector.
+    A MIC shift of the centroid difference does not: ``find_mic`` wraps a
+    long translation toward zero while the unwrapped coordinates stay a cell
+    apart, so the RMSD is about one lattice length and the copy is kept.
+    """
+    pos1 = np.asarray(a1.get_positions()[prefix_atoms:], dtype=float)
+    pos2 = np.asarray(a2.get_positions()[prefix_atoms:], dtype=float)
+    if len(pos1) != len(pos2) or len(pos1) == 0:
+        return float("inf")
+    sym1 = list(a1.get_chemical_symbols()[prefix_atoms:])
+    sym2 = list(a2.get_chemical_symbols()[prefix_atoms:])
+    if Counter(sym1) != Counter(sym2):
+        return float("inf")
+    cell = np.asarray(a1.get_cell(), dtype=float)
+    pbc = _pbc_for_cell(material_type, cell)
+    pos1, sym1 = _local_pose_atoms(pos1, sym1)
+    pos2, sym2 = _local_pose_atoms(pos2, sym2)
+    u1 = _mic_unwrapped_positions(pos1, cell, pbc)
+    u2 = _mic_unwrapped_positions(pos2, cell, pbc)
+    u1 = u1 - u1.mean(axis=0)
+    u2 = u2 - u2.mean(axis=0)
+
+    groups1: dict[str, list[int]] = {}
+    groups2: dict[str, list[int]] = {}
+    for i, symbol in enumerate(sym1):
+        groups1.setdefault(symbol, []).append(i)
+    for i, symbol in enumerate(sym2):
+        groups2.setdefault(symbol, []).append(i)
+    total = 0.0
+    for element, idx1 in groups1.items():
+        left = u1[idx1]
+        right = u2[groups2[element]]
+        cost = np.linalg.norm(left[:, None, :] - right[None, :, :], axis=2)
+        rows, cols = linear_sum_assignment(cost)
+        chosen = cost[rows, cols]
+        total += float(np.dot(chosen, chosen))
+    return float(np.sqrt(total / len(u1)))
+
+
 def _trailing_adsorbate_com(
     atoms: Atoms,
     prefix_atoms: int,
@@ -697,88 +781,13 @@ def _trailing_adsorbate_com(
         return np.zeros(3, dtype=float)
     cell = np.asarray(atoms.get_cell(), dtype=float)
     pbc = _pbc_for_cell(material_type, cell)
-    if any(pbc) and len(pos) > 1:
-        ref = pos[0]
-        mic_deltas, _ = find_mic(pos - ref, cell, pbc)
-        com = (ref + mic_deltas).mean(axis=0)
-    else:
-        com = pos.mean(axis=0)
+    com = _mic_unwrapped_positions(pos, cell, pbc).mean(axis=0)
     if not any(pbc):
         return com
     frac = wrap_fractional(
         cart_to_frac(com.reshape(1, 3), cell), np.asarray(pbc, dtype=bool)
     )
     return frac_to_cart(frac, cell).reshape(3)
-
-
-def _bin_counts_for_cell(cell: np.ndarray, bin_size: float) -> tuple[int, int, int]:
-    lengths = np.linalg.norm(np.asarray(cell, dtype=float), axis=1)
-    counts: list[int] = []
-    for length in lengths:
-        if length <= 0.0 or bin_size <= 0.0:
-            counts.append(1)
-        else:
-            counts.append(max(1, int(np.ceil(float(length) / bin_size))))
-    return (counts[0], counts[1], counts[2])
-
-
-def _com_bin_key(
-    com: np.ndarray,
-    cell: np.ndarray,
-    pbc: list[bool] | np.ndarray,
-    bin_size: float,
-) -> tuple[int, int, int]:
-    """Fractional-space grid key; periodic axes wrap into ``[0, n_bins)``."""
-    cell_arr = np.asarray(cell, dtype=float)
-    pbc_arr = np.asarray(pbc, dtype=bool)
-    n_bins = _bin_counts_for_cell(cell_arr, bin_size)
-    if not cell_has_volume(cell_arr):
-        return (
-            int(np.floor(float(com[0]) / bin_size)),
-            int(np.floor(float(com[1]) / bin_size)),
-            int(np.floor(float(com[2]) / bin_size)),
-        )
-    frac = wrap_fractional(cart_to_frac(com.reshape(1, 3), cell_arr), pbc_arr)[0]
-    keys: list[int] = []
-    for i in range(3):
-        bi = int(np.floor(float(frac[i]) * n_bins[i]))
-        if pbc_arr[i]:
-            bi %= n_bins[i]
-        keys.append(bi)
-    return (keys[0], keys[1], keys[2])
-
-
-def _neighbor_bin_keys(
-    key: tuple[int, int, int],
-    cell: np.ndarray,
-    pbc: list[bool] | np.ndarray,
-    bin_size: float,
-) -> list[tuple[int, int, int]]:
-    """Return *key* and its 3×3×3 neighborhood (modular wrap on periodic axes)."""
-    pbc_arr = np.asarray(pbc, dtype=bool)
-    n_bins = _bin_counts_for_cell(np.asarray(cell, dtype=float), bin_size)
-    neighbors: list[tuple[int, int, int]] = []
-    for dx in (-1, 0, 1):
-        for dy in (-1, 0, 1):
-            for dz in (-1, 0, 1):
-                coords = [key[0] + dx, key[1] + dy, key[2] + dz]
-                for i in range(3):
-                    if pbc_arr[i]:
-                        coords[i] %= n_bins[i]
-                neighbors.append((coords[0], coords[1], coords[2]))
-    return neighbors
-
-
-def _mic_com_distance(
-    com1: np.ndarray,
-    com2: np.ndarray,
-    cell: np.ndarray,
-    pbc: list[bool] | np.ndarray,
-) -> float:
-    cell_arr = np.asarray(cell, dtype=float)
-    pbc_list = list(pbc) if cell_has_volume(cell_arr) else [False, False, False]
-    diffs, _ = find_mic((com1 - com2).reshape(1, 3), cell_arr, pbc_list)
-    return float(np.linalg.norm(diffs[0]))
 
 
 def _deduplicate_by_energy_and_rmsd(
@@ -789,23 +798,22 @@ def _deduplicate_by_energy_and_rmsd(
     energy_dedup_threshold: float,
     rmsd_dedup_threshold: float,
 ) -> tuple[list[ScreeningResult], list[ScreeningResult]]:
-    """Keep lowest-energy unique poses; prune with energy + COM bins before RMSD.
+    """Keep the lowest-energy copy of each local adsorbate pose.
 
-    Uniqueness is on the trailing adsorbate (``prefix_atoms``), not prior
-    coverage. Full pairwise RMSD runs only for uniques that share the energy
-    window, a neighboring COM grid cell, and MIC COM distance within
-    *rmsd_dedup_threshold* (index-aligned RMSD cannot be smaller than COM MIC).
+    Uniqueness is the trailing adsorbate (``prefix_atoms``), not prior
+    coverage. Candidates are every kept result in the energy window with the
+    same adsorbate atom count. Site-to-site distance is not a filter: the
+    same local geometry on another terrace site is one pose. The comparison
+    is element assignment on the centered local pose (no rotation).
     """
     sorted_results = sorted(results, key=lambda r: r.energy_adsorption)
     unique: list[ScreeningResult] = []
     unique_energy: list[float] = []
     unique_n_ads: list[int] = []
-    unique_com: list[np.ndarray] = []
-    bins: dict[tuple[int, int, int], list[int]] = {}
     deduplicated: list[ScreeningResult] = []
 
     ref_cell = np.asarray(sorted_results[0].atoms.get_cell(), dtype=float)
-    # COM binning and MIC RMSD share one cell; mixed-cell inputs are undefined.
+    # Unwrapping shares one cell; mixed-cell inputs are undefined.
     for entry in sorted_results[1:]:
         other = np.asarray(entry.atoms.get_cell(), dtype=float)
         if other.shape != ref_cell.shape or not np.allclose(other, ref_cell):
@@ -813,8 +821,6 @@ def _deduplicate_by_energy_and_rmsd(
                 "filter_results deduplication requires a homogeneous cell; "
                 "got mixed cells across ScreeningResult.atoms"
             )
-    pbc = _pbc_for_cell(material_type, ref_cell)
-    bin_size = float(rmsd_dedup_threshold) if rmsd_dedup_threshold > 0.0 else 0.1
 
     for entry in sorted_results:
         e = entry.energy_adsorption
@@ -823,36 +829,16 @@ def _deduplicate_by_energy_and_rmsd(
             unique.append(entry)
             unique_energy.append(e)
             unique_n_ads.append(n_ads)
-            unique_com.append(np.zeros(3, dtype=float))
             continue
-        com = _trailing_adsorbate_com(
-            entry.atoms, prefix_atoms, material_type=material_type
-        )
-        key = _com_bin_key(com, ref_cell, pbc, bin_size)
         is_dup = False
-
-        candidate_idxs: list[int] = []
-        seen_idx: set[int] = set()
-        for nkey in _neighbor_bin_keys(key, ref_cell, pbc, bin_size):
-            for u_idx in bins.get(nkey, ()):
-                if u_idx in seen_idx:
-                    continue
-                seen_idx.add(u_idx)
-                energy_gap = abs(e - unique_energy[u_idx])
-                if energy_gap >= energy_dedup_threshold:
-                    continue
-                if n_ads != unique_n_ads[u_idx]:
-                    continue
-                if (
-                    _mic_com_distance(com, unique_com[u_idx], ref_cell, pbc)
-                    > rmsd_dedup_threshold
-                ):
-                    continue
-                candidate_idxs.append(u_idx)
-
-        # Prefer lower-energy uniques first (stable with energy sort of `unique`).
-        for u_idx in sorted(candidate_idxs):
-            rmsd = _adsorbate_rmsd(
+        for u_idx, (unique_e, unique_n) in enumerate(
+            zip(unique_energy, unique_n_ads, strict=True)
+        ):
+            if abs(e - unique_e) >= energy_dedup_threshold:
+                continue
+            if n_ads != unique_n:
+                continue
+            rmsd = _adsorbate_assignment_rmsd(
                 entry.atoms,
                 unique[u_idx].atoms,
                 material_type=material_type,
@@ -863,12 +849,9 @@ def _deduplicate_by_energy_and_rmsd(
                 break
 
         if not is_dup:
-            u_idx = len(unique)
             unique.append(entry)
             unique_energy.append(e)
             unique_n_ads.append(n_ads)
-            unique_com.append(com)
-            bins.setdefault(key, []).append(u_idx)
         else:
             deduplicated.append(entry)
 

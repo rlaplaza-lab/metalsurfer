@@ -193,6 +193,117 @@ def _check_choice(name: str, value: str, *, allowed: tuple[str, ...]) -> None:
         raise ValueError(f"{name} must be {message}, got {value!r}")
 
 
+DISPERSION_OPTIONS: tuple[str, ...] = ("none", "d3")
+
+# Exact registry names. Local checkpoint paths stay unrestricted.
+_SINGLE_TASK_MODELS: dict[str, str] = {
+    "uma-s-1p2p1-ft-d4rev": "omol",
+    "uma-s-1p2p1-ft-r2scan": "omat",
+}
+_UMA_1P1_MODELS: frozenset[str] = frozenset({"uma-s-1p1", "uma-m-1p1"})
+_TASKS_FROM_UMA_1P2: frozenset[str] = frozenset({"oc22", "oc25"})
+_BASE_UMA_OMAT_MODELS: frozenset[str] = frozenset(
+    {"uma-s-1p1", "uma-m-1p1", "uma-s-1p2", "uma-s-1p2p1"}
+)
+_TASKS_WITH_DISPERSION_LABELS: frozenset[str] = frozenset(
+    {"omol", "oc25", "odac", "omc"}
+)
+
+
+@dataclass(frozen=True)
+class D3BJParameters:
+    """Becke–Johnson DFT-D3 damping coefficients for one functional."""
+
+    a1: float
+    a2: float
+    s6: float
+    s8: float
+
+
+# Grimme, Ehrlich, Goerigk, J. Comput. Chem. 32, 1456 (2011).
+D3_BJ_PBE = D3BJParameters(a1=0.4289, a2=4.4407, s6=1.0, s8=0.7875)
+# Ehlert et al., J. Chem. Phys. 154, 061101 (2021).
+D3_BJ_R2SCAN = D3BJParameters(a1=0.49484001, a2=5.73083694, s6=1.0, s8=0.78981345)
+
+
+def d3_preset_for(model_name: str, task_name: str) -> D3BJParameters | None:
+    """Return the D3(BJ) preset for this checkpoint and task, if one is defined.
+
+    Base UMA ``omat`` uses PBE parameters. ``uma-s-1p2p1-ft-r2scan`` uses the
+    r²SCAN parameters. Every other pair has no preset.
+    """
+    if task_name != "omat":
+        return None
+    if model_name == "uma-s-1p2p1-ft-r2scan":
+        return D3_BJ_R2SCAN
+    if model_name in _BASE_UMA_OMAT_MODELS:
+        return D3_BJ_PBE
+    return None
+
+
+def _validate_uma_task(model_name: str, task_name: str) -> None:
+    """Reject checkpoint/task pairs that UMA cannot route."""
+    required = _SINGLE_TASK_MODELS.get(model_name)
+    if required is not None and task_name != required:
+        raise ValueError(
+            f"{model_name!r} only supports task_name={required!r}, got {task_name!r}"
+        )
+    if model_name in _UMA_1P1_MODELS and task_name in _TASKS_FROM_UMA_1P2:
+        raise ValueError(
+            f"task_name {task_name!r} is only available on UMA 1.2+ checkpoints "
+            f"({model_name!r} does not include that head)"
+        )
+
+
+def _dispersion_rejection_message(model_name: str, task_name: str) -> str:
+    if (
+        model_name == "uma-s-1p2p1-ft-d4rev"
+        or task_name in _TASKS_WITH_DISPERSION_LABELS
+    ):
+        return (
+            "dispersion='d3' would double-count dispersion already present in "
+            f"{model_name!r} / {task_name!r} labels"
+        )
+    if task_name == "oc20":
+        return (
+            "dispersion='d3' has no RPBE preset; D3(BJ) parameters are published "
+            "only for PBE (base UMA omat) and r2SCAN (uma-s-1p2p1-ft-r2scan)"
+        )
+    if task_name == "oc22":
+        return (
+            "dispersion='d3' is not defined for the oc22 PBE+U head; D3(BJ) "
+            "parameters are published only for PBE (base UMA omat) and r2SCAN "
+            "(uma-s-1p2p1-ft-r2scan)"
+        )
+    return (
+        "dispersion='d3' is only supported for base UMA omat (PBE) and "
+        f"uma-s-1p2p1-ft-r2scan (r2SCAN); got model_name={model_name!r}, "
+        f"task_name={task_name!r}"
+    )
+
+
+def require_d3_preset(model_name: str, task_name: str) -> D3BJParameters:
+    """Return the D3(BJ) preset, or raise when this pair has none."""
+    preset = d3_preset_for(model_name, task_name)
+    if preset is None:
+        raise ValueError(_dispersion_rejection_message(model_name, task_name))
+    return preset
+
+
+def validate_uma_setup(
+    model_name: str, task_name: str, dispersion: str = "none"
+) -> None:
+    """Reject illegal UMA checkpoint, task, and dispersion combinations.
+
+    Unknown model names (local checkpoint paths) are not task-restricted.
+    ``dispersion='d3'`` still requires a known preset.
+    """
+    _check_choice("dispersion", dispersion, allowed=DISPERSION_OPTIONS)
+    _validate_uma_task(model_name, task_name)
+    if dispersion == "d3":
+        require_d3_preset(model_name, task_name)
+
+
 def _validate_saturation_activities(root: "AdsorptionConfig") -> None:
     """Coerce and validate ``saturation_activities`` (length vs molecules later)."""
     raw = root.saturation_activities
@@ -734,8 +845,11 @@ class AdsorptionConfig:
     """
 
     model_name: str = "uma-s-1p2"
-    # UMA/FairChem task head: ``"oc25"`` needs ``*-1p2``; ``"oc20"`` with ``*-1p1``.
+    # UMA/FairChem task head. ``oc22`` and ``oc25`` need a 1.2+ checkpoint.
     task_name: str = "oc25"
+    # Off by default. ``"d3"`` adds TorchSim DFT-D3(BJ) for base ``omat`` (PBE)
+    # or ``uma-s-1p2p1-ft-r2scan`` only.
+    dispersion: Literal["none", "d3"] = "none"
     num_conformers: int = 10
     num_placements: int | None = None
     device: str = "cuda"
@@ -805,7 +919,11 @@ class AdsorptionConfig:
     require_multiple_contact: bool = False
     max_adsorption_energy: float = 5.0
     energy_dedup_threshold: float = 0.05
-    rmsd_dedup_threshold: float = 0.1
+    # Local-pose RMSD (Å) after centering. The same geometry on another site
+    # is one pose. Heavy atoms are matched within each element when the
+    # adsorbate has at least two; there is no rotation. Also the gas-phase
+    # conformer dedup distance (Kabsch on every atom).
+    rmsd_dedup_threshold: float = 0.35
     # Bond cutoff d ≤ m·(ri+rj). Lenient default keeps lateral contacts legal;
     # clash / BO occupancy-sigma gate (filters.interadsorbate_clearance).
     connectivity_multiplier: float = 1.3
@@ -935,6 +1053,8 @@ class AdsorptionConfig:
 
         if not isinstance(self.task_name, str) or not self.task_name:
             raise ValueError("task_name must be a non-empty string")
+
+        validate_uma_setup(self.model_name, self.task_name, self.dispersion)
 
         if not isinstance(self.skip_topology_check, bool):
             raise ValueError(

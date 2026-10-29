@@ -280,6 +280,16 @@ def test_lookup_atom_ref_list_nested_alias_and_miss():
     assert reference._lookup_atom_ref({}, "omat", 1) is None
 
 
+def test_predictor_atom_refs_follow_sum_model_child():
+    refs = {"oc20": [0.0, -1.0]}
+
+    class _Sum:
+        predictor = None
+        models = [_StubModel(refs)]
+
+    assert reference._predictor_atom_refs(_Sum(), object()) is refs
+
+
 class TestSingleAtomUmaRefs:
     def test_uses_atom_refs_and_skips_optimize(self, monkeypatch):
         slab = SlabContainer(make_slab())

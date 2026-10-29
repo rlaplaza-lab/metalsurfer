@@ -1325,11 +1325,11 @@ class BindingCampaignResult:
                 )
         for item in summaries:
             if item.best_adsorption_energy is None:
-                lines.append(f"  {item.molecule:12s}: (no valid placements)")
+                lines.append(f"  {item.molecule:12s}: (no unique relaxed structures)")
                 continue
             lines.append(
                 f"  {item.molecule:12s}: {item.best_adsorption_energy:+.4f} eV  "
-                f"({item.n_valid_placements} valid placements)"
+                f"({item.n_valid_placements} unique relaxed structures)"
             )
         if self.failure_summaries:
             lines.append("")

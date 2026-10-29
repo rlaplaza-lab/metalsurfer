@@ -15,6 +15,7 @@ from ..optimization import (
     clear_autobatcher_cache,
     optimize_isolated_molecules_batched,
 )
+from ..optimization._model import fairchem_backbone
 from ..surface_prep import SlabContainer
 from .shared import _prepare_atoms_for_calculator
 
@@ -69,9 +70,10 @@ def _lookup_atom_ref(
 
 def _predictor_atom_refs(ts_model: object, calculator: object) -> object:
     for obj in (ts_model, getattr(calculator, "_model", None)):
-        if obj is None:
+        backbone = fairchem_backbone(obj)
+        if backbone is None:
             continue
-        refs = getattr(getattr(obj, "predictor", None), "atom_refs", None)
+        refs = getattr(getattr(backbone, "predictor", None), "atom_refs", None)
         if refs is not None:
             return refs
     return None

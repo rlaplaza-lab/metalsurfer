@@ -495,8 +495,24 @@ Relaxation and MLIP
    **Type:** ``str`` · **Default:** ``"oc25"``
 
    UMA/FairChem task head used for energy and force evaluation. ``"oc25"``
-   targets (electro)catalysis and requires ``*-1p2`` checkpoints; use
-   ``"oc20"`` with ``uma-s-1p1`` / ``uma-m-1p1``.
+   targets (electro)catalysis and requires a 1.2+ checkpoint (``uma-s-1p2`` or
+   ``uma-s-1p2p1``); use ``"oc20"`` with ``uma-s-1p1`` / ``uma-m-1p1``.
+   ``uma-s-1p2p1-ft-d4rev`` accepts only ``"omol"``.
+   ``uma-s-1p2p1-ft-r2scan`` accepts only ``"omat"``. The library default
+   stays ``uma-s-1p2`` / ``"oc25"``.
+
+``dispersion``
+   **Type:** ``Literal["none", "d3"]`` · **Default:** ``"none"``
+
+   Optional TorchSim DFT-D3(BJ) added to the UMA energy, forces, and stress
+   via ``SumModel``, so batched relaxations and single-points stay consistent.
+   ``"d3"`` is allowed only for a base UMA ``omat`` head (PBE parameters:
+   ``uma-s-1p1``, ``uma-m-1p1``, ``uma-s-1p2``, ``uma-s-1p2p1``) and for
+   ``uma-s-1p2p1-ft-r2scan`` (r²SCAN parameters). Heads whose labels already
+   include dispersion (``oc25``, ``omol``, ``odac``, ``omc``, and
+   ``uma-s-1p2p1-ft-d4rev``) reject it, as do ``oc20`` and ``oc22`` (no
+   published preset). TorchSim uses a hard 95 Bohr cutoff, which is wider
+   than fairchem's ASE D3 wrapper (15 Å with C5 smoothing). Default is off.
 
 ``device``
     **Type:** ``str`` · **Default:** ``"cuda"``
@@ -657,12 +673,18 @@ Deduplication
    compares placements inside this window.
 
 ``rmsd_dedup_threshold``
-   **Type:** ``float`` · **Default:** ``0.1`` (Å)
+   **Type:** ``float`` · **Default:** ``0.35`` (Å)
 
-   Additional RMSD threshold for structural deduplication among energy-degenerate
-   placements. Full adsorbate RMSD runs only after cheap energy-window and
-   centre-of-mass grid/distance pruning; uniqueness is on the trailing adsorbate
-   (``len(slab)`` prefix), not prior coverage.
+   Local-pose RMSD for structural deduplication among placements inside
+   ``energy_dedup_threshold``. Uniqueness is the trailing adsorbate
+   (``len(slab)`` prefix), not prior coverage and not which site it occupies:
+   the same geometry translated across the terrace, or into another periodic
+   image, is one pose. Each adsorbate is unwrapped into a single image and
+   centred; atoms of one element are then matched without rotation. When the
+   adsorbate has at least two heavy atoms, hydrogens are left out of that
+   match. The same value is the gas-phase conformer dedup distance
+   (Kabsch RMSD on every atom). A turned pose whose atoms move by more than
+   this distance stays distinct.
 
 Bayesian optimization
 ~~~~~~~~~~~~~~~~~~~~~

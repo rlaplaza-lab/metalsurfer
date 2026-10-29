@@ -34,6 +34,7 @@ from .shared import (
     _optimize_and_evaluate_placements,
     _prepare_molecule_screening,
     _summarize_failure_events,
+    _unique_relaxed_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -287,7 +288,7 @@ def process_molecule(
                 failure_summary=failure,
             )
 
-        results, t_filtering, filter_failure = _finalize_screen_results(
+        results, t_filtering, filter_failure, duplicates = _finalize_screen_results(
             results,
             slab_atoms=slab.atoms,
             reference_smiles=reference_smiles,
@@ -296,32 +297,26 @@ def process_molecule(
         )
 
         t_mol_total = time.perf_counter() - t_mol_start
-
+        uniqueness = _unique_relaxed_message(
+            n_unique=len(results),
+            n_collapsed=len(duplicates),
+        )
         if results:
-            logger.info(
-                "%d unique configs, E_ads [%.4f, %.4f] eV | "
-                "timing: conformers=%.2fs placement=%.2fs opt=%.2fs "
-                "filter=%.2fs total=%.2fs",
-                len(results),
-                min(r.energy_adsorption for r in results),
-                max(r.energy_adsorption for r in results),
-                t_conformers,
-                t_placement,
-                t_optimization,
-                t_filtering,
-                t_mol_total,
-            )
-        else:
-            logger.info(
-                "0 unique configs after filtering | "
-                "timing: conformers=%.2fs placement=%.2fs opt=%.2fs "
-                "filter=%.2fs total=%.2fs",
-                t_conformers,
-                t_placement,
-                t_optimization,
-                t_filtering,
-                t_mol_total,
-            )
+            e_min = min(r.energy_adsorption for r in results)
+            e_max = max(r.energy_adsorption for r in results)
+            uniqueness += f", E_ads [{e_min:.4f}, {e_max:.4f}] eV"
+        logger.info(
+            "sampled %d, %s | "
+            "timing: conformers=%.2fs placement=%.2fs opt=%.2fs "
+            "filter=%.2fs total=%.2fs",
+            len(all_combined),
+            uniqueness,
+            t_conformers,
+            t_placement,
+            t_optimization,
+            t_filtering,
+            t_mol_total,
+        )
 
         return MoleculeScreenOutcome(
             results=results,

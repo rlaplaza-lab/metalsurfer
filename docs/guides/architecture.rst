@@ -189,7 +189,7 @@ Module layout
    ├── optimization/         # MLIP setup, batched relaxation (TorchSim / FairChem)
    ├── surface_prep/         # prepare_substrate, freeze, …
    ├── symmetry.py           # spglib-based symmetry analysis
-   ├── ml/                   # features, schema 3.0, regression; bayesian/ package
+   ├── ml/                   # features, schema 3.1, regression; bayesian/ package
    ├── placement/            # site_* + generators / pose/ / policy
    └── workflow/             # orchestration by run mode
        ├── core.py           # standard per-molecule screening
@@ -599,7 +599,7 @@ The surrogate sees **resolved absolute geometry**, not discrete site IDs.
    * - ``PlacementDescriptor`` / ``PlacementPose``
      - ``x_abs``, ``y_abs``, ``z_abs``, quat, …
    * - ``PlacementRecord``
-     - ML row (schema **3.0**); stores a ``descriptor: PlacementDescriptor``
+     - ML row (schema **3.1**); stores a ``descriptor: PlacementDescriptor``
        plus energies/labels/context (CSV still flattens)
    * - ``extract_features``
      - **8 features:** x, y, z, ``conformer_index``, quat_w/x/y/z
@@ -618,7 +618,7 @@ sklearn row → ``placement_pose_from_features`` →
 ``build_spec_features_geometry_aware`` (materialize → record →
 ``extract_features``).
 
-Determinism: fractional site ordering, order-independent dedup/clustering,
+Determinism: fractional site ordering, order-independent site dedup/clustering,
 geometry-keyed site caches, seeded stratified subsample. Within a fixed
 code version + slab, ``site_index → xyz`` is stable.
 
@@ -627,7 +627,9 @@ TorchSim batched relaxation
 ---------------------------
 
 Many slab+adsorbate relaxations run **in parallel** on GPU
-(``optimization/``).
+(``optimization/``). ``dispersion="d3"`` adds TorchSim DFT-D3(BJ) through
+``SumModel`` for base ``omat`` (PBE) or ``uma-s-1p2p1-ft-r2scan``. The
+default is off; ``oc25`` rejects a second dispersion term.
 
 On CUDA, ``optimize_adsorbate_slab_batched`` streams constrained OptimStates
 into ``InFlightAutoBatcher.load_states`` (TorchSim's iterator API). Waiting
@@ -687,8 +689,11 @@ Validation layers
    (``max_force_convergence``), desorption (``binding_distance_threshold``;
    skippable), ``max_adsorption_energy``.
 2. **Batch** (``filter_results``): decomposition vs reference SMILES
-   (``skip_topology_check`` disables), desorption re-check, energy/RMSD
-   dedup.
+   (``skip_topology_check`` disables), desorption re-check, then dedup.
+   Dedup unwraps the trailing adsorbate into one image, subtracts its
+   centroid, and matches atoms of one element with no rotation. The same
+   binding pose on another terrace site or periodic image collapses, and
+   the lowest energy inside ``energy_dedup_threshold`` is kept.
 3. **Saturation step** (``_filter_saturation_topology_results``): adsorbate
    pool must have expected connected-fragment count. Disabled when
    ``saturation_discard_topology_rearrangements=False`` or
@@ -803,7 +808,8 @@ Configuration defaults (spot-check)
 Full field docs: :doc:`../api/config` and :doc:`configuration`.
 Representative defaults (verify in ``config.py`` when debugging):
 
-- ``model_name="uma-s-1p2"``, ``task_name="oc25"``, ``num_placements=None`` (GPU autotune)
+- ``model_name="uma-s-1p2"``, ``task_name="oc25"``, ``dispersion="none"``,
+  ``num_placements=None`` (GPU autotune)
 - ``placement_distance_recovery=True``, ``placement_clash_descent=True``
   (Packmol-style salvage; discrete XY ±0.5 Å only when clash is off)
 - ``voronoi_auto_widen=True``, ``adaptive_parallel_fraction=True``
@@ -848,7 +854,8 @@ started, not the relaxed geometry (relaxed structures remain in XYZ/POSCAR;
 Utilities: ``extract_features``, ``placement_pose_from_features``,
 ``PlacementRecord.to_placement_descriptor`` /
 ``to_config``. Schema versioning in ``ml/schema.py`` (``SCHEMA_VERSION``
-**3.0**). Shared numerics in ``_numeric_defaults.py``.
+**3.1**, which records ``dispersion`` on ``ComputationContext``). Shared
+numerics in ``_numeric_defaults.py``.
 Lean reload requires pose, energies, and identity columns; rich reload
 requires the full ``ctx_*`` and ``initial_*`` sets.
 

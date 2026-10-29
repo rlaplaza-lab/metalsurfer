@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] - 2026-10-29
+
+### Added
+
+- Opt-in UMA 1.2.1 checkpoints (`uma-s-1p2p1`, `uma-s-1p2p1-ft-d4rev`,
+  `uma-s-1p2p1-ft-r2scan`) and ``dispersion="d3"``. The library default stays
+  ``uma-s-1p2`` / ``oc25`` with dispersion off. D3 is TorchSim
+  ``SumModel`` + DFT-D3(BJ) for base ``omat`` (PBE) and the r²SCAN fine-tune
+  only. Heads that already include dispersion, including ``oc25``, reject it.
+- ML placement schema **3.1** records ``dispersion`` on ``ComputationContext``
+  so corrected and uncorrected runs do not share a context hash.
+
+### Changed
+
+- Pose dedup treats the same centered adsorbate geometry on another terrace
+  site or periodic image as one pose. Atoms are matched per element with no
+  rotation. Copies whose adsorption energies differ by at least
+  ``energy_dedup_threshold`` stay separate.
+- The ``mlip`` extra requires ``torch-sim-atomistic>=0.6.2`` and
+  ``fairchem-core>=2.25`` so those checkpoints resolve. ``uma-s-1p1`` and
+  ``uma-m-1p1`` reject ``oc22`` and ``oc25``, which those checkpoints do not
+  have.
+
+### Fixed
+
+- The skip-desorption warning uses one message, so the filter pipeline and
+  per-placement validation no longer disagree about which text is shown.
+
 ## [0.9.6] - 2026-10-19
 
 ### Changed

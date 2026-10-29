@@ -363,6 +363,17 @@ def log_substrate_freeze_policy(
     n_substrate = len(substrate)
     symbols = substrate.get_chemical_symbols()
     frozen = frozen_indices_from_constraints(substrate)
+    overflow = [i for i in frozen if i < 0 or i >= n_substrate]
+    if overflow:
+        logger.warning(
+            "%s freeze policy: omitting %d FixAtoms index(es) outside this "
+            "%d-atom reference (max was %d)",
+            context,
+            len(overflow),
+            n_substrate,
+            max(overflow),
+        )
+        frozen = [i for i in frozen if 0 <= i < n_substrate]
     frozen_set = set(frozen)
     moving = [i for i in range(n_substrate) if i not in frozen_set]
 

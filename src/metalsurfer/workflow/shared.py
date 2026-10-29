@@ -435,7 +435,8 @@ def _validate_adsorption(
         warn_once(
             logger,
             "skip_desorption",
-            "skip_desorption_check=True: desorption distance validation skipped",
+            "skip_desorption_check=True: desorption distance checks disabled; "
+            "results may include desorbed structures",
         )
         return True, "", float(min_d)
     if min_d > config.binding_distance_threshold:
@@ -628,6 +629,15 @@ def _filter_and_label_duplicates(
     return filtered, duplicates, t_filtering
 
 
+def _unique_relaxed_message(*, n_unique: int, n_collapsed: int) -> str:
+    """Collapse line for structures that reached dedup."""
+    n_relaxed = n_unique + n_collapsed
+    return (
+        f"relaxed {n_relaxed} → {n_unique} unique structures "
+        f"(collapsed {n_collapsed} duplicates)"
+    )
+
+
 def _finalize_screen_results(
     results: list[ScreeningResult],
     *,
@@ -635,13 +645,13 @@ def _finalize_screen_results(
     reference_smiles: str | None,
     config: AdsorptionConfig,
     surface_prefix_atoms: int | None = None,
-) -> tuple[list[ScreeningResult], float, FilterFailure | None]:
+) -> tuple[list[ScreeningResult], float, FilterFailure | None, list[ScreeningResult]]:
     """Filter results and set filter-stage failure summary.
 
-    Returns ``(filtered_results, t_filtering, filter_failure_or_None)``.
+    Returns ``(filtered_results, t_filtering, filter_failure_or_None, duplicates)``.
     """
     n_before_filter = len(results)
-    filtered, _duplicates, t_filtering = _filter_and_label_duplicates(
+    filtered, duplicates, t_filtering = _filter_and_label_duplicates(
         results,
         slab_atoms=slab_atoms,
         reference_smiles=reference_smiles,
@@ -656,7 +666,7 @@ def _finalize_screen_results(
             n_after_filter=0,
         )
 
-    return filtered, t_filtering, filter_failure
+    return filtered, t_filtering, filter_failure, duplicates
 
 
 @dataclass
@@ -989,13 +999,16 @@ def _bootstrap_screening_run(
     slab_container = accept_substrate_for_api(slab, config=config)
     existing_calc = slab_container.atoms.calc
     if isinstance(existing_calc, TorchSimCalculator) and existing_calc.matches_setup(
-        config.model_name, config.device, config.task_name
+        config.model_name, config.device, config.task_name, config.dispersion
     ):
         calculator = existing_calc
         ts_model = existing_calc._model
     else:
         calculator, ts_model = setup_single_model(
-            config.model_name, config.device, task_name=config.task_name
+            config.model_name,
+            config.device,
+            task_name=config.task_name,
+            dispersion=config.dispersion,
         )
     molecule_names = [name for _, name in molecule_pairs]
     smiles_list = [smiles for smiles, _ in molecule_pairs]

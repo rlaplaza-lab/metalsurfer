@@ -13,11 +13,13 @@ Pass any ASE `Atoms` structure after optional prep with `prepare_substrate`, sup
 ## Features
 
 - **Substrate-agnostic** — slabs, nanoparticles, and porous frameworks
-- **MLIP relaxation** — TorchSim / FairChem UMA (default `uma-s-1p2` / `oc25`)
+- **MLIP relaxation** — TorchSim / FairChem UMA (default `uma-s-1p2` / `oc25`, dispersion off)
 - **Automatic sites** — topology on metals, Voronoi in pores; optional near-atom generators
 - **Four campaign modes** — screening, Bayesian screening, saturation, and BO saturation
 - **Surface prep** — equilibration, alloys, adatoms, and freeze constraints
 - **Reproducible output** — seeded sampling; CSV and XYZ results
+
+The default checkpoint stays `uma-s-1p2` with the `oc25` head and no extra dispersion. Opt-in checkpoints are `uma-s-1p2p1` (same heads, including `oc25`), `uma-s-1p2p1-ft-d4rev` (`omol` only; dispersion is already in the labels), and `uma-s-1p2p1-ft-r2scan` (`omat` only). Set `dispersion="d3"` only for a base `omat` head (PBE-D3) or the r²SCAN fine-tune. `oc25` already includes D3 and refuses a second correction. TorchSim adds that term with `SumModel`, using its own 95 Bohr hard cutoff rather than fairchem's ASE wrapper.
 
 ## Install
 

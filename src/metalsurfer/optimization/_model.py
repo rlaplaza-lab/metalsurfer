@@ -10,6 +10,7 @@ import scipy.special as sp_special
 from ase import Atoms
 
 from .._logging import torchsim_output_capture
+from ..config import D3BJParameters, require_d3_preset, validate_uma_setup
 from ..exceptions import DependencyMissingError
 from . import _deps
 from ._validation import (
@@ -151,14 +152,34 @@ def _premove_fairchem_predictor_to_device(model: Any, dev: Any) -> None:
         logger.debug("FairChem predictor pre-move skipped: %s", exc)
 
 
+def fairchem_backbone(model: Any) -> Any:
+    """Return the FairChem model inside a dispersion ``SumModel``.
+
+    A bare FairChem model is returned unchanged. When dispersion is attached,
+    ``predictor`` lives on the FairChem child, not on the sum.
+    """
+    if model is None or getattr(model, "predictor", None) is not None:
+        return model
+    children = getattr(model, "models", None)
+    if children is None:
+        return model
+    for child in children:
+        if getattr(child, "predictor", None) is not None:
+            return child
+    return model
+
+
 def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
     model_name: str = "uma-s-1p2",
     device: str = "cuda",
     task_name: str = "oc25",
+    *,
+    dispersion: str = "none",
 ):
     """Create a TorchSim FairChemModel wrapper.
 
     Uses torch-sim-atomistic FairChemModel API: model, device, task_name.
+    ``dispersion="d3"`` adds TorchSim DFT-D3(BJ) via ``SumModel``.
 
     Parameters
     ----------
@@ -171,7 +192,13 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
         ``"oc25"`` targets (electro)catalysis and is only available on
         ``*-1p2`` checkpoints; use ``"oc20"`` with ``uma-s-1p1`` /
         ``uma-m-1p1`` models.
+    dispersion
+        ``"none"`` (default) or ``"d3"``. D3 is only legal for base UMA
+        ``omat`` (PBE) and ``uma-s-1p2p1-ft-r2scan`` (r²SCAN). TorchSim's
+        hard cutoff (95 Bohr) is used; that is wider than fairchem's ASE
+        wrapper (15 Å with C5 smoothing).
     """
+    validate_uma_setup(model_name, task_name, dispersion)
     if _deps.ts is None:
         raise DependencyMissingError(
             "torch-sim-atomistic",
@@ -194,15 +221,27 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
     device = resolved_device
     _ensure_torch_checkpoint_safe_globals()
     _ensure_scipy_sph_harm()
-    logger.info("Initializing TorchSim FairChemModel (%s) on %s", model_name, device)
+    logger.info(
+        "Initializing TorchSim FairChemModel (%s, task=%s, dispersion=%s) on %s",
+        model_name,
+        task_name,
+        dispersion,
+        device,
+    )
     torch = _deps.torch
     dev = torch.device(device)
+    use_d3 = dispersion == "d3"
     try:
         with torchsim_output_capture():
             model = cast(Any, FairChemModel)(
-                model=model_name, device=dev, task_name=task_name
+                model=model_name,
+                device=dev,
+                task_name=task_name,
+                compute_stress=use_d3,
             )
             _premove_fairchem_predictor_to_device(model, dev)
+            if use_d3:
+                model = _attach_d3(model, require_d3_preset(model_name, task_name))
     except DependencyMissingError:
         raise
     except (
@@ -216,6 +255,31 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
         _raise_fairchem_load_error(exc, model_name)
     logger.info("TorchSim model created successfully")
     return model
+
+
+def _attach_d3(model: Any, preset: D3BJParameters) -> Any:
+    """Add DFT-D3(BJ) with the same dtype and device as ``model``."""
+    try:
+        from torch_sim.models.dispersion import D3DispersionModel
+        from torch_sim.models.interface import SumModel
+    except ImportError as exc:
+        raise DependencyMissingError(
+            "torch-sim-atomistic",
+            "setup_torchsim_model",
+            "dispersion='d3' needs torch-sim-atomistic>=0.6.2 "
+            "(D3DispersionModel and SumModel)",
+        ) from exc
+    d3 = D3DispersionModel(
+        a1=preset.a1,
+        a2=preset.a2,
+        s8=preset.s8,
+        s6=preset.s6,
+        device=model.device,
+        dtype=model.dtype,
+        compute_forces=True,
+        compute_stress=True,
+    )
+    return SumModel(model, d3)
 
 
 class TorchSimCalculator:
@@ -236,6 +300,7 @@ class TorchSimCalculator:
         model_name: str | None = None,
         device: str | None = None,
         task_name: str | None = None,
+        dispersion: str = "none",
     ) -> None:
         """Wrap a TorchSim model (e.g. FairChemModel) for ASE compatibility.
 
@@ -249,19 +314,30 @@ class TorchSimCalculator:
             Resolved device string used at construction, if known.
         task_name
             FairChem task head used at construction, if known.
+        dispersion
+            ``"none"`` or ``"d3"``.
         """
         self._model = ts_model
         self._model_name = model_name
         self._device = device
         self._task_name = task_name
+        self._dispersion = dispersion
         self.results: dict[str, Any] = {}
         self._last_positions_hash: int | None = None
 
-    def matches_setup(self, model_name: str, device: str, task_name: str) -> bool:
+    def matches_setup(
+        self,
+        model_name: str,
+        device: str,
+        task_name: str,
+        dispersion: str = "none",
+    ) -> bool:
         """Return whether this calculator was built for the given setup args."""
         if self._model is None or self._model_name is None or self._task_name is None:
             return False
         if self._model_name != model_name or self._task_name != task_name:
+            return False
+        if self._dispersion != dispersion:
             return False
         resolved = _resolve_device(device)
         if resolved is None or self._device is None:

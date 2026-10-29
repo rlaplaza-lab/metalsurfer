@@ -44,7 +44,7 @@ from ..models import (
 )
 from ..placement.geometry import normalize_quaternion
 
-SCHEMA_VERSION = "3.0"
+SCHEMA_VERSION = "3.1"
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,7 @@ class _ContextField:
 _CONTEXT_FIELDS: tuple[_ContextField, ...] = (
     _ContextField("model_name", "str"),
     _ContextField("task_name", "str"),
+    _ContextField("dispersion", "str"),
     _ContextField("fmax", "float"),
     _ContextField("stage1_steps", "int"),
     _ContextField("stage2_steps", "int"),
@@ -71,6 +72,23 @@ _CONTEXT_FIELDS: tuple[_ContextField, ...] = (
     _ContextField("site_equivalence_tolerance", "float"),
     _ContextField("planar_z_variance_threshold", "float"),
 )
+
+
+def _context_cell(row: dict[str, Any], spec: _ContextField) -> Any:
+    """Read one ``ctx_*`` cell.
+
+    ``dispersion="none"`` is a real setting. The shared missing-token list
+    treats the word ``none`` as an empty cell, so this column is exempt.
+    """
+    key = f"ctx_{spec.name}"
+    if spec.name == "dispersion":
+        if key not in row:
+            raise ValueError(f"missing required column {key!r}")
+        value = row[key]
+        if value is None or str(value).strip() == "":
+            raise ValueError(f"missing required column {key!r}")
+        return value
+    return _require_row_value(row, key)
 
 
 def _parse_context_field(spec: _ContextField, value: Any) -> Any:
@@ -230,11 +248,13 @@ class ComputationContext:
     Stored alongside placement geometry so that results computed with
     different models or convergence criteria are distinguishable.
     ``task_name`` is included because the UMA task head affects energies
-    even for the same checkpoint weights.
+    even for the same checkpoint weights. ``dispersion`` is included because
+    a D3 correction changes energies for the same checkpoint and head.
     """
 
     model_name: str = "uma-s-1p2"
     task_name: str = "oc25"
+    dispersion: str = "none"
     fmax: float = DEFAULT_FMAX
     stage1_steps: int = 50
     stage2_steps: int = 150
@@ -686,9 +706,7 @@ class PlacementRecord:
                 raise ValueError("Rich CSV row incomplete; missing " + "; ".join(parts))
             ctx = ComputationContext(
                 **{
-                    spec.name: _parse_context_field(
-                        spec, _require_row_value(row, f"ctx_{spec.name}")
-                    )
+                    spec.name: _parse_context_field(spec, _context_cell(row, spec))
                     for spec in _CONTEXT_FIELDS
                 }
             )

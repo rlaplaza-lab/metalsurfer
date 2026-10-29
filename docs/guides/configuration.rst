@@ -270,13 +270,29 @@ Competitive water + OH⁻ on rutile TiO₂(110), including activities:
 Which energy model?
 -------------------
 
-Relaxations use FairChem UMA through TorchSim:
+Relaxations use FairChem UMA through TorchSim. The library default is
+unchanged: ``model_name="uma-s-1p2"``, ``task_name="oc25"``,
+``dispersion="none"``.
 
-- ``model_name`` (default ``"uma-s-1p2"``) — checkpoint.
-- ``task_name`` (default ``"oc25"``) — energy/force head.
+- ``model_name`` — checkpoint. Opt-in names are ``uma-s-1p2p1`` (same heads
+  as 1.2, including ``oc25``), ``uma-s-1p2p1-ft-d4rev`` (``omol`` only;
+  dispersion is already in the labels), and ``uma-s-1p2p1-ft-r2scan``
+  (``omat`` only, not spin-polarized, no isolated-atom references).
+- ``task_name`` — energy/force head. ``oc22`` and ``oc25`` need a 1.2+
+  checkpoint. 1.1 checkpoints stay on ``oc20`` (or ``omat``, ``omol``,
+  ``odac``, ``omc``).
+- ``dispersion`` — ``"none"`` or ``"d3"``. ``"d3"`` is TorchSim DFT-D3(BJ)
+  for base ``omat`` (PBE) or the r²SCAN fine-tune. ``oc25`` already includes
+  D3 and refuses a second correction.
 
-Keep the pair matched: current 1p2 checkpoints use ``oc25``; older 1p1
-checkpoints used ``oc20``.
+Which relaxed structures are the same?
+--------------------------------------
+
+The same binding pose elsewhere on a periodic surface is one structure.
+Dedup removes a site-to-site or periodic-image translation, then matches
+atoms of each element with no rotation. The copies must also lie within
+``energy_dedup_threshold`` (default 0.05 eV); the lowest energy is kept.
+A turned pose stays distinct. Field details: :doc:`../api/config`.
 
 Relax the surface, or keep a published structure
 ------------------------------------------------

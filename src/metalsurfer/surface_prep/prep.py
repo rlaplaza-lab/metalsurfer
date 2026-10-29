@@ -68,7 +68,7 @@ def _matching_attached_calculator(
     atoms = source.atoms if isinstance(source, SlabContainer) else source
     calc = atoms.calc
     if isinstance(calc, optimization.TorchSimCalculator) and calc.matches_setup(
-        config.model_name, config.device, config.task_name
+        config.model_name, config.device, config.task_name, config.dispersion
     ):
         return calc
     return None
@@ -387,7 +387,10 @@ def prepare_substrate(
     )
     if needs_calculator and calculator is None:
         calculator, _ = optimization.setup_single_model(
-            config.model_name, config.device, task_name=config.task_name
+            config.model_name,
+            config.device,
+            task_name=config.task_name,
+            dispersion=config.dispersion,
         )
 
     if slab is not None:

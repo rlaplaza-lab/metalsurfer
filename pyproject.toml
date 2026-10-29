@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metalsurfer"
-version = "0.9.6"
+version = "0.9.7"
 description = "Adsorption on arbitrary materials"
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -33,10 +33,10 @@ dependencies = [
 [project.optional-dependencies]
 mlip = [
     "torch",
-    "torch-sim-atomistic>=0.5.2",
-    "fairchem-core>=2.7",
+    "torch-sim-atomistic>=0.6.2",
+    "fairchem-core>=2.25",
     "fairchem-data-oc",
-    "setuptools>=65,<82",
+    "setuptools>=65,<81",
 ]
 dev = [
     "pytest",
@@ -83,6 +83,12 @@ module = [
     "threadpoolctl.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["torch_sim.models.interface", "torch_sim.models.dispersion"]
+# SumModel and D3DispersionModel exist in torch-sim>=0.6. An older installed
+# interface module must not fail the check.
+follow_imports = "skip"
 
 [[tool.mypy.overrides]]
 module = ["rdkit", "rdkit.*"]

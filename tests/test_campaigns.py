@@ -693,11 +693,12 @@ def test_bootstrap_screening_run_reloads_on_model_mismatch(monkeypatch):
     fresh_model = object()
     setup_called = {"value": False}
 
-    def fake_setup(model_name, device, task_name="oc25"):
+    def fake_setup(model_name, device, task_name="oc25", *, dispersion="none"):
         setup_called["value"] = True
         assert model_name == "uma-s-1p2"
         assert device == "cpu"
         assert task_name == "oc25"
+        assert dispersion == "none"
         return fresh_calc, fresh_model
 
     def fake_ref(*_args, **_kwargs):

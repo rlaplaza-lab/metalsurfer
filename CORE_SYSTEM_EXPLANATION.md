@@ -97,10 +97,16 @@ Step by step, for a single molecule:
    height. (See §4.)
 6. **Relax.** All candidates are relaxed together in one batch using a
    machine-learned potential (UMA via TorchSim by default: model
-   `uma-s-1p2`, task head `oc25` — both configurable on `AdsorptionConfig`
-   as `model_name` / `task_name`).
+   `uma-s-1p2`, task head `oc25`, dispersion off — configurable on
+   `AdsorptionConfig` as `model_name` / `task_name` / `dispersion`).
+   Opt-in checkpoints are `uma-s-1p2p1` (same heads), `uma-s-1p2p1-ft-d4rev`
+   (`omol` only), and `uma-s-1p2p1-ft-r2scan` (`omat` only). `dispersion="d3"`
+   is TorchSim DFT-D3(BJ) for base `omat` (PBE) or the r²SCAN fine-tune;
+   `oc25` already includes D3 and rejects a second term.
 7. **Filter and keep the best.** Relaxed candidates that crashed, flew away, or
-   ended up unbound are dropped. The lowest `E_ads` wins.
+   ended up unbound are dropped. Placements that relax to the same pose,
+   including the same pose on another part of a periodic surface, collapse
+   to one structure. The reported set keeps the lowest `E_ads` in each group.
 
 In saturation mode the loop jumps back to step 4 after committing the step's
 winner(s) onto the slab, refreshing `E_slab`, and continuing until the next

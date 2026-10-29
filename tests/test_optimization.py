@@ -2,13 +2,14 @@
 
 import gc
 import warnings
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 from ase import Atoms
 
-from metalsurfer.config import AdsorptionConfig
+from metalsurfer.config import D3_BJ_PBE, D3_BJ_R2SCAN, AdsorptionConfig
 from metalsurfer.optimization import (
     TorchSimCalculator,
     _cache,
@@ -600,6 +601,16 @@ def test_torchsim_calculator_matches_setup_identity(monkeypatch: pytest.MonkeyPa
     assert calc.matches_setup("uma-s-1p1", "cpu", "oc20")
     assert not calc.matches_setup("uma-s-1p2", "cpu", "oc20")
     assert not calc.matches_setup("uma-s-1p1", "cpu", "oc25")
+    assert not calc.matches_setup("uma-s-1p1", "cpu", "oc20", "d3")
+    d3_calc = TorchSimCalculator(
+        object(),
+        model_name="uma-s-1p2",
+        device="cpu",
+        task_name="omat",
+        dispersion="d3",
+    )
+    assert d3_calc.matches_setup("uma-s-1p2", "cpu", "omat", "d3")
+    assert not d3_calc.matches_setup("uma-s-1p2", "cpu", "omat", "none")
     # Unknown provenance must not be reused.
     assert not TorchSimCalculator(object()).matches_setup("uma-s-1p1", "cpu", "oc20")
     # CUDA request that resolves to CPU still matches a CPU-built calculator.
@@ -857,6 +868,98 @@ def test_setup_torchsim_model_default_task_name_is_oc25(
     _model.setup_torchsim_model()
 
     assert captured["task_name"] == "oc25"
+    assert captured["model"] == "uma-s-1p2"
+    assert captured["compute_stress"] is False
+
+
+def test_setup_torchsim_model_rejects_d3_on_oc25():
+    with pytest.raises(ValueError, match="double-count"):
+        _model.setup_torchsim_model("uma-s-1p2", "cpu", dispersion="d3")
+
+
+def _ensure_torchsim_package(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """Insert a package stub only when torch-sim itself is not installed."""
+    import sys
+    import types
+
+    if name in sys.modules:
+        return
+    mod = types.ModuleType(name)
+    mod.__path__ = []
+    mod.__package__ = name
+    monkeypatch.setitem(sys.modules, name, mod)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "functional"),
+    [
+        ("uma-s-1p2", "pbe"),
+        ("uma-s-1p2p1-ft-r2scan", "r2scan"),
+    ],
+)
+def test_setup_torchsim_model_attaches_d3_preset(
+    monkeypatch: pytest.MonkeyPatch, model_name: str, functional: str
+):
+    """D3 uses the backbone dtype/device and the PBE or r2SCAN coefficients."""
+    import sys
+    import types
+
+    preset = D3_BJ_PBE if functional == "pbe" else D3_BJ_R2SCAN
+    backbone_dtype = object()
+    device_sentinel = object()
+    captured: dict[str, Any] = {}
+
+    class _FakeFairChem:
+        def __init__(self, **kwargs):
+            captured["fairchem"] = kwargs
+            self.dtype = backbone_dtype
+            self.device = kwargs["device"]
+            self.predictor = object()
+
+    class _FakeD3:
+        def __init__(self, **kwargs):
+            captured["d3"] = kwargs
+
+    def _fake_sum(*models):
+        captured["sum"] = models
+        return models
+
+    _ensure_torchsim_package(monkeypatch, "torch_sim")
+    _ensure_torchsim_package(monkeypatch, "torch_sim.models")
+    fairchem_mod = types.ModuleType("torch_sim.models.fairchem")
+    fairchem_mod.FairChemModel = _FakeFairChem
+    dispersion_mod = types.ModuleType("torch_sim.models.dispersion")
+    dispersion_mod.D3DispersionModel = _FakeD3
+    interface_mod = types.ModuleType("torch_sim.models.interface")
+    interface_mod.SumModel = _fake_sum
+    monkeypatch.setitem(sys.modules, "torch_sim.models.fairchem", fairchem_mod)
+    monkeypatch.setitem(sys.modules, "torch_sim.models.dispersion", dispersion_mod)
+    monkeypatch.setitem(sys.modules, "torch_sim.models.interface", interface_mod)
+
+    torch_stub = MagicMock()
+    torch_stub.device.return_value = device_sentinel
+    monkeypatch.setattr(_deps, "ts", object())
+    monkeypatch.setattr(_deps, "torch", torch_stub)
+
+    wrapped = _model.setup_torchsim_model(
+        model_name, "cpu", task_name="omat", dispersion="d3"
+    )
+
+    fairchem_kwargs = captured["fairchem"]
+    d3_kwargs = captured["d3"]
+    assert fairchem_kwargs["compute_stress"] is True
+    assert fairchem_kwargs["task_name"] == "omat"
+    assert d3_kwargs["dtype"] is backbone_dtype
+    assert d3_kwargs["device"] is device_sentinel
+    assert d3_kwargs["compute_stress"] is True
+    assert d3_kwargs["a1"] == preset.a1
+    assert d3_kwargs["a2"] == preset.a2
+    assert d3_kwargs["s6"] == preset.s6
+    assert d3_kwargs["s8"] == preset.s8
+    children = captured["sum"]
+    assert isinstance(children, tuple)
+    assert wrapped == children
+    assert len(children) == 2
 
 
 def test_optimize_isolated_raises_without_torchsim(monkeypatch: pytest.MonkeyPatch):

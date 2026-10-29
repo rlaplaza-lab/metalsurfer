@@ -111,6 +111,8 @@ def setup_single_model(  # pragma: no cover - requires MLIP stack / GPU
     model_name: str = "uma-s-1p2",
     device: str = "cuda",
     task_name: str = "oc25",
+    *,
+    dispersion: str = "none",
 ):
     """Create a single FairChemModel shared by calculator and TorchSim.
 
@@ -128,14 +130,19 @@ def setup_single_model(  # pragma: no cover - requires MLIP stack / GPU
         ``"oc25"`` targets (electro)catalysis and is only available on
         ``*-1p2`` checkpoints; use ``"oc20"`` with ``uma-s-1p1`` /
         ``uma-m-1p1`` models.
+    dispersion
+        ``"none"`` (default) or ``"d3"`` for the PBE / r²SCAN presets.
     """
-    ts_model = setup_torchsim_model(model_name, device, task_name=task_name)
+    ts_model = setup_torchsim_model(
+        model_name, device, task_name=task_name, dispersion=dispersion
+    )
     resolved_device = _resolve_device(device) or device
     calculator = TorchSimCalculator(
         ts_model,
         model_name=model_name,
         device=resolved_device,
         task_name=task_name,
+        dispersion=dispersion,
     )
     return calculator, ts_model
 

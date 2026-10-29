@@ -21,9 +21,10 @@ def _patch_prepare_substrate(
     captured: dict = {}
     fake_calc = object()
 
-    def _fake_setup(model_name, device, task_name="oc25"):
+    def _fake_setup(model_name, device, task_name="oc25", *, dispersion="none"):
         captured["setup"] = (model_name, device)
         captured["setup_task_name"] = task_name
+        captured["setup_dispersion"] = dispersion
         return fake_calc, None
 
     monkeypatch.setattr(
@@ -103,7 +104,7 @@ def test_prepare_substrate_passes_slab_relaxation_options(monkeypatch):
 
     prepare_substrate(
         bulk_id="mp-33",
-        config=AdsorptionConfig(model_name="uma-s-1p1", device="cpu"),
+        config=AdsorptionConfig(model_name="uma-s-1p1", device="cpu", task_name="oc20"),
         slab_relaxation_mode="full",
         slab_relaxation_optimizer="bfgs",
         slab_relaxation_fmax=0.03,
@@ -187,7 +188,7 @@ def test_prepare_substrate_forwards_relax_kwargs_for_loaded_slab(monkeypatch):
 
     prepare_substrate(
         slab=base,
-        config=AdsorptionConfig(model_name="uma-s-1p1", device="cpu"),
+        config=AdsorptionConfig(model_name="uma-s-1p1", device="cpu", task_name="oc20"),
         slab_relaxation_mode="ionic_only",
         slab_relaxation_optimizer="bfgs",
         slab_relaxation_fmax=0.03,
