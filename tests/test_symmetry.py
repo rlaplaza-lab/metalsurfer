@@ -668,18 +668,18 @@ def test_mode_mismatch_periodic_on_non_pbc_cluster():
         SymmetryAnalyzer(cluster, mode="periodic")
 
 
-def test_symmetry_tolerance_non_positive_rejected_or_handled():
+def test_symmetry_tolerance_non_positive_clamped_for_spglib():
+    """Non-positive symmetry_tolerance is stored as-is; spglib uses max(tol, 1e-5)."""
     from ase.build import fcc111
 
     from metalsurfer.symmetry import SymmetryAnalyzer
 
     slab = fcc111("Cu", size=(2, 2, 2), vacuum=5.0)
     for tol in (0.0, -0.1):
-        try:
-            analyzer = SymmetryAnalyzer(slab, symmetry_tolerance=tol)
-            _ = analyzer._frac_ops_from_dataset()
-        except (ValueError, Exception):
-            pass
+        analyzer = SymmetryAnalyzer(slab, symmetry_tolerance=tol)
+        assert analyzer.symmetry_tolerance == tol
+        assert analyzer.symprec == 1e-5
+        assert len(analyzer._frac_ops_from_dataset()) >= 1
 
 
 def test_empty_and_single_atom_site_lists():

@@ -162,19 +162,16 @@ class TestCalculateReferenceEnergies:
             conformers=(confs, [0.0]),
             opt_results=[(_make_atoms(), -5.0)],
         )
-        # Empty substrate may fail prepare or succeed with the stub energy.
-        try:
-            ref = reference.calculate_reference_energies(
-                empty,
-                calc,
-                ["water"],
-                ["O"],
-                ts_model=object(),
-                config=AdsorptionConfig(),
-            )
-            assert ref.slab_energy == pytest.approx(-1.0)
-        except (OptimizationError, ValueError, IndexError, RuntimeError):
-            pass  # empty geometry may be rejected upstream
+        ref = reference.calculate_reference_energies(
+            empty,
+            calc,
+            ["water"],
+            ["O"],
+            ts_model=object(),
+            config=AdsorptionConfig(),
+        )
+        assert ref.slab_energy == pytest.approx(-1.0)
+        assert ref.molecule_energies == {"water": -5.0}
 
     def test_conformer_failure_raises_when_strict(self, monkeypatch):
         slab = SlabContainer(make_slab())

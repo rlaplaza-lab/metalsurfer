@@ -5,7 +5,7 @@ name: Kaggle GPU tests
 #
 # mode=smoke (default): gpu_smoke subset via scripts/run_gpu_tests.sh — weekly cron.
 # mode=full: entire GPU test suite (manual only; burns Kaggle GPU quota).
-# mode=examples: run_all_examples.sh (manual; heavy, T4 ~60 min; bipyridine omitted).
+# mode=examples: run_all_examples.sh (manual; heavy, T4 ~60 min).
 
 on:
   workflow_dispatch:

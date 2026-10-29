@@ -141,7 +141,7 @@ T4 script kernel, and scrapes the log. Defaults:
 
 - **smoke** (cron + dispatch default): ``gpu_smoke`` via ``run_gpu_tests.sh``
 - **full** (manual): entire GPU suite with VRAM-isolated phases
-- **examples** (manual): ``scripts/run_all_examples.sh`` (bipyridine omitted)
+- **examples** (manual): ``scripts/run_all_examples.sh``
 
 Requires repository secrets ``KAGGLE_API_TOKEN`` and ``HF_TOKEN`` (gated UMA).
 

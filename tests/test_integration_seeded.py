@@ -24,8 +24,6 @@ from metalsurfer.placement.geometry import calculate_min_distance
 
 from .conftest import assert_no_intramolecular_clashes, make_slab
 
-pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
-
 pytestmark = pytest.mark.integration
 
 

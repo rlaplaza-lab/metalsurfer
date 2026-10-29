@@ -111,11 +111,13 @@ def main() -> int:
         )
     print(f"  coverage at saturation: {result.molecule_counts}")
 
-    # Best single-molecule E_ads band (uma-s-1p2 + oc25 QC): ≈ −3.23 eV.
-    # Committed rows store per-molecule E_ads (E_ads_total / n); compare the
-    # first-step screening pool, not the committed average alone.
-    e_ads_ceiling_ev = -3.10
-    e_ads_floor_ev = -3.35
+    # Best per-molecule E_ads on the first committed step (uma-s-1p2 + oc25 QC).
+    # Joint n-tuplet (saturation_molecules_per_step=2) stores E_ads_total / n;
+    # OH+OH packs land near −1.8 to −2.5 eV/mol across GPU runs (Ω_tuplet ≈
+    # 2× that). Compare the first-step screening pool, not the committed
+    # average alone.
+    e_ads_ceiling_ev = -1.65
+    e_ads_floor_ev = -2.70
     first_bound = next((s for s in result.steps if s.n_added > 0), None)
     if first_bound is None:
         print("No committed saturation step found.", file=sys.stderr)

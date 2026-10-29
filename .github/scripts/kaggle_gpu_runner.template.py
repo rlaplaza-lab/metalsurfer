@@ -4,7 +4,7 @@
 Modes (__GPU_MODE__):
   smoke   -- gpu_smoke test subset (~7 min)
   full    -- full GPU test suite via run_gpu_tests.sh (~90 min)
-  examples -- run_all_examples.sh (bipyridine omitted; ~60 min on T4)
+  examples -- run_all_examples.sh (~60 min on T4)
 """
 
 from __future__ import annotations

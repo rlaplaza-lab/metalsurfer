@@ -1,7 +1,6 @@
 """Placement spec enumeration and materialization."""
 
 import numpy as np
-import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
@@ -407,7 +406,6 @@ def test_deposit_adatoms_then_generate_placement_from_spec():
         num_placements=8,
         placement_z_range=(2.0, 3.0),
     )
-    pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
     result = create_conformers_from_smiles(
         "O", config=AdsorptionConfig(num_conformers=1)
     )

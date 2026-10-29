@@ -81,10 +81,6 @@ workflows:
    python examples/water_oh_rutile_saturation.py
    python examples/camphor_cu111_binding_energy.py   # BO benchmark; ~15 GB GPU
 
-An additional HPC-scale saturation script
-(``bipyridine_au111_defects_saturation_raw.py``) lives under ``examples/`` and
-``scripts/`` but is not a quick demo.
-
 
 Standard Screening
 ------------------
@@ -405,6 +401,4 @@ When printing completion summaries, pass
 ``write_vasp_inputs=config.write_vasp_inputs`` to
 :meth:`~metalsurfer.SaturationCampaignResult.format_completion`.
 
-Defected-surface example:
-``examples/bipyridine_au111_defects_saturation_raw.py`` (see also
-:doc:`surface_engineering`).
+Defected and alloyed surfaces: :doc:`surface_engineering`.

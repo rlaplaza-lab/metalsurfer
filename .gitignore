@@ -39,6 +39,12 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+.pytest_full.log
+.pytest_results.xml
+
+# Local scratch dirs (not the package test suite under tests/)
+/test/
+/tests_2/
 
 # Ruff
 .ruff_cache/

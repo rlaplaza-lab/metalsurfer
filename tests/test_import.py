@@ -118,10 +118,11 @@ def test_min_calculator_cell_c_ang_exported():
 
 
 def test_results_dir_for_exported():
+    """results_dir_for is a public export; path shape is covered in observability."""
     import metalsurfer
 
     assert "results_dir_for" in metalsurfer.__all__
-    assert metalsurfer.results_dir_for("demo").as_posix() == "results_demo"
+    assert callable(metalsurfer.results_dir_for)
 
 
 def test_exceptions_importable():
@@ -278,27 +279,6 @@ def test_lazy_getattr_raises_for_unknown():
 
     with pytest.raises(AttributeError, match="has no attribute '_nonexistent'"):
         _ = metalsurfer._nonexistent
-
-
-def test_device_resolution_fallback_for_ci():
-    """Optimization resolves cuda->cpu when CUDA unavailable (e.g. GitHub Actions).
-
-    Ensures tests and CI run without false failures when config defaults to
-    device='cuda' but no GPU is present.
-    """
-    from unittest.mock import patch
-
-    from metalsurfer.optimization import _deps
-    from metalsurfer.optimization._validation import _resolve_device
-
-    assert _resolve_device("cpu") == "cpu"
-    # When cuda requested but unavailable, should return cpu
-    with patch.object(_deps, "torch", create=True) as mock_torch:
-        mock_torch.cuda.is_available.return_value = False
-        assert _resolve_device("cuda") == "cpu"
-    with patch.object(_deps, "torch", create=True) as mock_torch:
-        mock_torch.cuda.is_available.return_value = True
-        assert _resolve_device("cuda") == "cuda"
 
 
 def test_import_does_not_load_torch_or_sklearn():

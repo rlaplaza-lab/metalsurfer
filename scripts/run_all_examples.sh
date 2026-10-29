@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run all official examples except bipyridine (HPC-scale saturation demo).
+# Run all official examples.
 #
 # Deletes each example's results_* directory before running so campaigns do not
 # skip via skip_existing=True. Camphor is GPU-heavy (~15 GB) and may download
@@ -36,7 +36,7 @@ LOG_DIR="${ROOT}/logs/example_runs"
 mkdir -p "$LOG_DIR"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 
-# Python demos (camphor last: GPU-heavy). Bipyridine is intentionally omitted.
+# Python demos (camphor last: GPU-heavy).
 PYTHON_EXAMPLES=(
   examples/ethene_pt12_binding_energy.py
   examples/ethene_ru55_binding_energy.py

@@ -29,7 +29,6 @@ def test_flat_aromatic_detection_requires_ring_and_en_atoms():
 
 
 def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
-    pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
     slab = make_slab()
     config = AdsorptionConfig(
         material_type="slab",
@@ -148,7 +147,6 @@ def test_flat_aromatic_charged_ring_counts_as_en_for_parallel_detection():
 
 def test_marked_indices_address_conformer_atoms():
     """Heavy-atom SMILES indices address conformer atom lists after AddHs."""
-    pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
     smiles = "c1ccc(C[CH2+])cc1"
     result = create_conformers_from_smiles(
         smiles, config=AdsorptionConfig(num_conformers=2, seed=0)
@@ -167,7 +165,6 @@ def test_marked_indices_address_conformer_atoms():
 
 def test_tagged_indices_address_conformer_atoms():
     """``[atom:map]`` tag indices survive conformer generation (AddHs)."""
-    pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
     smiles = "c1ccc(C[CH3:1])cc1"
     result = create_conformers_from_smiles(
         smiles, config=AdsorptionConfig(num_conformers=2, seed=0)
@@ -222,7 +219,6 @@ def _run_merged_binder_end_to_end(
     binder_map: dict[int, int],
     contact_atom_idx: int,
 ) -> None:
-    pytest.importorskip("rdkit", reason="RDKit required for conformer generation")
     from metalsurfer.placement.generators import _spec_grid_info
     from metalsurfer.placement.geometry import _surface_aligned_rotation
     from metalsurfer.placement.pose import _contact_atom_index, _pose_from_spec
