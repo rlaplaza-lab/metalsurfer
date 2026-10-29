@@ -109,7 +109,7 @@ Runnable scripts in [`examples/`](examples/) (requires `pip install -e ".[mlip]"
 | [`examples/camphor_cu111_binding_energy.py`](examples/camphor_cu111_binding_energy.py) | `slab` | Bayesian placement search on literature Cu(111) slab |
 | [`examples/bipyridine_au111_defects_saturation_raw.py`](examples/bipyridine_au111_defects_saturation_raw.py) | `slab` | HPC-scale saturation demo (also under `scripts/`) |
 
-Omit `num_placements` in production to autotune to GPU parallel capacity. See [`examples/README.md`](examples/README.md) for run commands and notes.
+Omit `num_placements` in production to autotune to GPU parallel capacity. See [`examples/README.md`](examples/README.md) for how to run them.
 
 ## Development
 

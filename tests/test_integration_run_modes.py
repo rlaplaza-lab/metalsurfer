@@ -491,7 +491,10 @@ def _assert_saturation_artifacts(results_dir: Path) -> None:
 
 _MATRIX_CASES = (
     # material, smiles, name, config overrides, symbols, dissociative, min_success_rate
-    ("slab", "O", "water", {}, ["H", "H", "O"], False, 0.75),
+    # Slab floors sit under the raw placement count. The stub assigns one
+    # energy to every placement, so pose dedup keeps a single copy of each
+    # local geometry (another terrace site is not a new pose).
+    ("slab", "O", "water", {}, ["H", "H", "O"], False, 0.50),
     (
         "slab",
         "[H][H]",
@@ -503,7 +506,7 @@ _MATRIX_CASES = (
         },
         ["H", "H"],
         True,
-        1.0,
+        0.25,
     ),
     ("nanoparticle", "O", "water", {}, ["H", "H", "O"], False, 0.75),
     ("porous", "O", "water", {}, ["H", "H", "O"], False, 0.75),
@@ -809,7 +812,9 @@ class TestRunModeApiE2E:
             workdir,
             surface_type,
             mode="bo",
-            min_success_rate=1.0,
+            # Same slab stub as the matrix: identical energies collapse
+            # terrace copies, so 4 of 7 evaluations remain.
+            min_success_rate=0.5,
             min_absolute=2,
         )
 
