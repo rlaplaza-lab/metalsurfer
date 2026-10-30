@@ -67,8 +67,7 @@ class TestMissingRDKit:
 
         with _reload_with_missing(fmod, {"rdkit": None, "rdkit.Chem": None}):
             assert fmod._formula_from_smiles("O") is None
-            assert fmod._bond_counts_from_smiles("O") is None
-            assert fmod._coordination_fingerprint_from_smiles("O") is None
+            assert fmod._mol_from_smiles("O") is None
 
     def test_check_decomposition_raises_when_rdkit_missing(self):
         """check_decomposition must raise DependencyMissingError when RDKit missing and reference_smiles provided."""

@@ -104,42 +104,6 @@ def test_porous_pore_xyz_stays_in_free_volume():
         assert s.nn_distance is not None and float(s.nn_distance) > 1.0
 
 
-def test_project_sites_to_support_plane_helper():
-    """Helper projects wall-near sites; pores / empty supports unchanged."""
-    from metalsurfer.placement.site_classify import project_sites_to_support_plane
-
-    positions = np.array(
-        [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 1.7, 0.0]], dtype=float
-    )
-    symbols = ["Cu", "Cu", "Cu"]
-    cell = np.diag([10.0, 10.0, 20.0])
-    pbc = np.array([True, True, False], dtype=bool)
-    n = np.array([0.0, 0.0, 1.0])
-    lifted = _make_site(
-        [1.0, 0.85, 1.5],
-        site_type="hollow",
-        material_type="slab",
-        slab_indices=(0, 1, 2),
-        normal=n,
-        env_fingerprint=(("Cu", "Cu", "Cu"), (4, 4, 4), 1),
-    )
-    pore = _make_site(
-        [5.0, 5.0, 8.0],
-        site_type="pore",
-        material_type="porous",
-        slab_indices=(),
-        normal=n,
-        env_fingerprint=((), (), 0),
-    )
-    out = project_sites_to_support_plane(
-        [lifted, pore], positions, symbols, cell=cell, pbc=pbc
-    )
-    assert out[0].xyz[2] == pytest.approx(0.0, abs=1e-9)
-    assert out[0].xyz[0] == pytest.approx(1.0, abs=1e-9)
-    np.testing.assert_allclose(out[0].normal, n)
-    np.testing.assert_allclose(out[1].xyz, pore.xyz)
-
-
 def test_site_enumeration_exports_wrap_cartesian_for_atop_injection():
     """Atop injection under PBC uses _wrap_cartesian from site_coords."""
     from metalsurfer.placement.site_coords import _wrap_cartesian as wrap_ref
@@ -321,9 +285,9 @@ def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
         assert len(overlaps) == 0, "Successful placement must not have VDW clashes"
 
 
-def test_is_top_layer_planar_true_for_three_coplanar_atoms():
+def test_top_layer_is_planar_from_arrays_true_for_three_coplanar_atoms():
     from metalsurfer.placement.site_plugins.helpers import (
-        is_top_layer_planar as _is_top_layer_planar,
+        top_layer_is_planar_from_arrays,
     )
 
     atoms = Atoms(
@@ -332,7 +296,14 @@ def test_is_top_layer_planar_true_for_three_coplanar_atoms():
         cell=[5.0, 5.0, 20.0],
         pbc=[True, True, False],
     )
-    assert _is_top_layer_planar(atoms, top_layer_tolerance=0.5) is True
+    assert (
+        top_layer_is_planar_from_arrays(
+            atoms.get_positions(),
+            np.asarray(atoms.get_cell(), dtype=float),
+            0.5,
+        )
+        is True
+    )
 
 
 def test_get_unified_sites_uses_material_aware_pbc_not_atoms_ttt():
@@ -776,7 +747,7 @@ def test_issue6_ni55_and_ni13_expose_atop_bridge_hollow():
         _VORONOI_PROBE_RADIUS_COVALENT_SCALE,
     )
     from metalsurfer.placement.site_coords import _mean_covalent_radius
-    from metalsurfer.placement.site_np import _outside_convex_hull_mask
+    from metalsurfer.placement.site_np import _hull_signed_distances
     from metalsurfer.placement.site_plugins.helpers import (
         median_nn_or_fallback as _median_nn_or_fallback,
     )
@@ -826,7 +797,10 @@ def test_issue6_ni55_and_ni13_expose_atop_bridge_hollow():
             )
             eps = float(s.clearance) if s.clearance is not None else height
             probe_xyz = np.asarray(s.xyz, dtype=float) + max(eps, 0.1) * n_hat
-            assert _outside_convex_hull_mask(probe_xyz.reshape(1, 3), hull)[0], name
+            assert (
+                float(np.max(_hull_signed_distances(probe_xyz.reshape(1, 3), hull)))
+                > 0.0
+            ), name
 
 
 def test_issue6_nonempty_voronoi_must_not_zero_out_np_atops(monkeypatch):
@@ -853,7 +827,7 @@ def test_nanoparticle_asymmetric_cluster_still_has_typed_sites():
     from ase.cluster import Octahedron
     from scipy.spatial import ConvexHull
 
-    from metalsurfer.placement.site_np import _outside_convex_hull_mask
+    from metalsurfer.placement.site_np import _hull_signed_distances
 
     atoms = Octahedron("Ni", 5, 2)
     pos = atoms.get_positions()
@@ -878,7 +852,9 @@ def test_nanoparticle_asymmetric_cluster_still_has_typed_sites():
             assert float(np.dot(n_hat, s.xyz - com)) > 0.0
         eps = float(s.clearance) if s.clearance is not None else 0.5
         probe_xyz = np.asarray(s.xyz, dtype=float) + max(eps, 0.1) * n_hat
-        assert _outside_convex_hull_mask(probe_xyz.reshape(1, 3), hull)[0]
+        assert (
+            float(np.max(_hull_signed_distances(probe_xyz.reshape(1, 3), hull))) > 0.0
+        )
 
 
 def test_issue6_ni111_slab_counts_unchanged():

@@ -21,32 +21,6 @@ def is_missing(value: Any) -> bool:
     return text in _MISSING_TOKENS
 
 
-def with_default(value: Any, default: Any) -> Any:
-    """Return *default* if *value* is missing, otherwise *value*.
-
-    Parameters
-    ----------
-    value
-        Cell value to inspect.
-    default
-        Fallback to return when *value* is missing.
-    """
-    return default if is_missing(value) else value
-
-
-def float_or(value: Any, default: float) -> float:
-    """Coerce a CSV cell to float, falling back to *default*.
-
-    Parameters
-    ----------
-    value
-        Cell value to coerce.
-    default
-        Fallback when *value* is missing.
-    """
-    return float(with_default(value, default))
-
-
 def int_or_none(value: Any) -> int | None:
     """Coerce a CSV cell to int, returning None when missing.
 

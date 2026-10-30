@@ -21,17 +21,16 @@ from ase.data import atomic_numbers, covalent_radii
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.filters import (
     _adsorbate_assignment_rmsd,
-    _adsorbate_rmsd,
     _bond_counts_from_dist,
-    _bond_counts_from_smiles,
+    _bond_counts_from_mol,
     _coordination_fingerprint_from_dist,
-    _coordination_fingerprint_from_smiles,
+    _coordination_fingerprint_from_mol,
     _formula_from_atoms,
     _formula_from_smiles,
     _is_molecule_connected_from_dist,
     _mic_pairwise_distances,
+    _mol_from_smiles,
     _nonsurface_distance_and_threshold,
-    _trailing_adsorbate_com,
     check_decomposition,
     check_desorption,
     filter_results,
@@ -160,28 +159,28 @@ def test_formula_from_smiles_invalid():
     assert _formula_from_smiles("not_a_smiles_xyz!!!") is None
 
 
-def test_bond_counts_from_smiles_water():
-    b = _bond_counts_from_smiles("O")
+def test_bond_counts_from_mol_water():
+    b = _bond_counts_from_mol(_mol_from_smiles("O"))
     assert b[frozenset({"O", "H"})] == 2
     assert len(b) == 1
 
 
-def test_bond_counts_from_smiles_ethanol():
-    b = _bond_counts_from_smiles("CCO")
+def test_bond_counts_from_mol_ethanol():
+    b = _bond_counts_from_mol(_mol_from_smiles("CCO"))
     assert b[frozenset({"C"})] == 1
     assert b[frozenset({"C", "O"})] == 1
     assert b[frozenset({"C", "H"})] == 5
     assert b[frozenset({"O", "H"})] == 1
 
 
-def test_coordination_fingerprint_from_smiles_water():
-    fp = _coordination_fingerprint_from_smiles("O")
+def test_coordination_fingerprint_from_mol_water():
+    fp = _coordination_fingerprint_from_mol(_mol_from_smiles("O"))
     assert fp["O"] == [2]
     assert fp["H"] == [1, 1]
 
 
-def test_coordination_fingerprint_from_smiles_ethanol():
-    fp = _coordination_fingerprint_from_smiles("CCO")
+def test_coordination_fingerprint_from_mol_ethanol():
+    fp = _coordination_fingerprint_from_mol(_mol_from_smiles("CCO"))
     # Ethanol (CCO): two carbons with degree 4, oxygen with degree 2.
     assert sorted(fp["C"]) == [4, 4]
     assert fp["O"] == [2]
@@ -300,7 +299,7 @@ def test_bond_counts_intact_ethanol():
     slab = make_slab(n_layers=1)
     combined = place_molecule_on_slab(slab, _make_ethanol())
     actual = _bond_counts_from_dist(*_nonsurface_graph(combined, ["Ru"], 1.3))
-    ref = _bond_counts_from_smiles("CCO")
+    ref = _bond_counts_from_mol(_mol_from_smiles("CCO"))
     assert actual == ref
 
 
@@ -318,7 +317,7 @@ def test_bond_counts_detect_cc_break():
         pos[idx, 0] += 5.0
     combined.set_positions(pos)
     actual = _bond_counts_from_dist(*_nonsurface_graph(combined, ["Ru"], 1.3))
-    ref = _bond_counts_from_smiles("CCO")
+    ref = _bond_counts_from_mol(_mol_from_smiles("CCO"))
     assert actual != ref
 
 
@@ -333,7 +332,7 @@ def test_coordination_fingerprint_intact_ethanol():
     actual = _coordination_fingerprint_from_dist(
         *_nonsurface_graph(combined, ["Ru"], 1.3)
     )
-    ref = _coordination_fingerprint_from_smiles("CCO")
+    ref = _coordination_fingerprint_from_mol(_mol_from_smiles("CCO"))
     assert actual == ref
 
 
@@ -360,7 +359,7 @@ def test_coordination_fingerprint_detects_h_shift():
     actual = _coordination_fingerprint_from_dist(
         *_nonsurface_graph(combined, ["Ru"], 1.3)
     )
-    ref = _coordination_fingerprint_from_smiles("CCO")
+    ref = _coordination_fingerprint_from_mol(_mol_from_smiles("CCO"))
     assert actual != ref, (
         f"H-shift should change coordination fingerprint: ref={ref}, actual={actual}"
     )
@@ -1364,11 +1363,6 @@ def test_duplicate_removal_across_periodic_cell_face():
     near_pos[len(slab) :, 0] += 0.07  # wraps across the a-face under MIC
     near.set_positions(near_pos)
 
-    com_a = _trailing_adsorbate_com(base, len(slab), material_type="slab")
-    com_b = _trailing_adsorbate_com(near, len(slab), material_type="slab")
-    # Wrapped COMs sit near opposite faces; MIC distance stays small.
-    assert abs(com_a[0] - com_b[0]) > a_len * 0.5
-
     results = [
         _sr(base, -1.0, 0),
         _sr(near, -1.01, 1),
@@ -1520,13 +1514,9 @@ def test_duplicate_removal_collapses_swapped_identical_hydrogens():
     swapped.set_positions(pos)
 
     prefix = len(slab)
-    index_rmsd = _adsorbate_rmsd(
-        base, swapped, material_type="slab", prefix_atoms=prefix
-    )
     assignment_rmsd = _adsorbate_assignment_rmsd(
         base, swapped, material_type="slab", prefix_atoms=prefix
     )
-    assert index_rmsd >= 0.1
     assert assignment_rmsd < 0.1
 
     results = [
@@ -1579,27 +1569,6 @@ def test_duplicate_removal_keeps_in_plane_rotation():
     )
     filtered = filter_results(results, slab=slab, config=config)
     assert len(filtered) == 2
-
-
-def test_trailing_adsorbate_com_unwraps_pbc_straddle():
-    """A molecule straddling a periodic face must not pull COM into the cell center."""
-    slab = make_slab(n_layers=1)
-    cell = np.asarray(slab.get_cell(), dtype=float)
-    a_len = float(np.linalg.norm(cell[0]))
-    combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
-    pos = combined.get_positions().copy()
-    # Two atoms just inside opposite faces (ignore the third for the naive mean).
-    pos[len(slab), 0] = 0.05
-    pos[len(slab) + 1, 0] = a_len - 0.05
-    pos[len(slab) + 2, 0] = a_len - 0.05
-    combined.set_positions(pos)
-
-    naive = float(np.mean(pos[len(slab) :, 0]))
-    com = _trailing_adsorbate_com(combined, len(slab), material_type="slab")
-    # Naive Cartesian mean is pulled inward; unwrapped COM stays at the face.
-    assert abs(naive - 0.5 * a_len) < 2.0
-    assert min(abs(com[0]), abs(com[0] - a_len)) < 0.5
-    assert abs(com[0] - naive) > 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -1885,46 +1854,3 @@ def test_decomposition_uses_material_pbc_not_calculator_pbc(monkeypatch):
             material_type=material_type,
         )
         assert captured["pbc"] == material_aware_pbc(material_type)
-
-
-def test_adsorbate_rmsd_uses_material_pbc_not_calculator_pbc(monkeypatch):
-    """Duplicate RMSD must not fold height through vacuum via calculator TTT."""
-    slab = make_slab(n_layers=1)
-    a1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
-    a2 = place_molecule_on_slab(slab, make_water(), z_offset=2.6)
-    a1.set_pbc(calculator_pbc_for_atoms(a1))
-    a2.set_pbc(calculator_pbc_for_atoms(a2))
-
-    captured = {}
-
-    def _fake_find_mic(D, cell, pbc):
-        captured["pbc"] = list(pbc)
-        return np.asarray(D, dtype=float), None
-
-    monkeypatch.setattr("metalsurfer.filters.find_mic", _fake_find_mic)
-    _adsorbate_rmsd(a1, a2, surface_symbols=["Ru"], material_type="slab")
-    assert captured["pbc"] == material_aware_pbc("slab") == [True, True, False]
-    assert captured["pbc"] != calculator_pbc_for_atoms(a1)
-
-    for material_type in ("porous", "nanoparticle"):
-        _adsorbate_rmsd(a1, a2, surface_symbols=["Ru"], material_type=material_type)
-        assert captured["pbc"] == material_aware_pbc(material_type)
-
-
-def test_adsorbate_rmsd_does_not_merge_height_via_vacuum_wrap():
-    """Two poses differing only in height must not collapse under slab MIC."""
-    slab = make_slab(n_layers=1)
-    cell = slab.get_cell().copy()
-    cell[2, 2] = 18.0
-    slab.set_cell(cell)
-
-    low = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
-    high = place_molecule_on_slab(slab, make_water(), z_offset=12.0)
-    low.set_cell(cell)
-    high.set_cell(cell)
-    # Calculator TTT would fold ~9.5 A height through 18 A vacuum.
-    low.set_pbc(calculator_pbc_for_atoms(low))
-    high.set_pbc(calculator_pbc_for_atoms(high))
-
-    rmsd_slab = _adsorbate_rmsd(low, high, surface_symbols=["Ru"], material_type="slab")
-    assert rmsd_slab > 5.0, f"height difference should remain, got RMSD={rmsd_slab}"

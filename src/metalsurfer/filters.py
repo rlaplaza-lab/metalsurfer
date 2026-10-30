@@ -25,7 +25,6 @@ from ase.geometry import find_mic
 from scipy.optimize import linear_sum_assignment
 from scipy.sparse.csgraph import connected_components
 
-from ._geom_pbc import cart_to_frac, frac_to_cart, wrap_fractional
 from ._logging import warn_once
 from ._utils import cell_has_volume
 from .config import AdsorptionConfig
@@ -173,14 +172,6 @@ def _bond_counts_from_mol(mol) -> Counter:
     return bonds
 
 
-def _bond_counts_from_smiles(smiles: str) -> Counter | None:
-    """Derive bond counts from an RDKit molecule (reference connectivity)."""
-    mol = _mol_from_smiles(smiles)
-    if mol is None:
-        return None
-    return _bond_counts_from_mol(mol)
-
-
 def _formula_from_mol(mol) -> Counter:
     """Return the molecular formula as a Counter of element symbols."""
     return Counter(atom.GetSymbol() for atom in mol.GetAtoms())
@@ -234,16 +225,6 @@ def _coordination_fingerprint_from_mol(mol) -> dict[str, list[int]]:
     for key in fingerprint:
         fingerprint[key].sort()
     return fingerprint
-
-
-def _coordination_fingerprint_from_smiles(
-    smiles: str,
-) -> dict[str, list[int]] | None:
-    """Per-element sorted coordination numbers from the SMILES graph."""
-    mol = _mol_from_smiles(smiles)
-    if mol is None:
-        return None
-    return _coordination_fingerprint_from_mol(mol)
 
 
 def _connected_components_from_coords(
@@ -644,45 +625,6 @@ def check_desorption(
 # ---------------------------------------------------------------------------
 
 
-def _adsorbate_rmsd(
-    a1: Atoms,
-    a2: Atoms,
-    surface_symbols: list[str] | None = None,
-    *,
-    material_type: str = "slab",
-    prefix_atoms: int | None = None,
-) -> float:
-    """MIC-aware RMSD between adsorbate atoms (material-aware PBC).
-
-    When *prefix_atoms* is set, only the trailing suffix
-    ``positions[prefix_atoms:]`` is compared (saturation uniqueness on the
-    newly added adsorbate). Otherwise, when *surface_symbols* is set, all
-    non-surface atoms are compared.
-    """
-    pos1 = a1.get_positions()
-    pos2 = a2.get_positions()
-    if prefix_atoms is not None:
-        if prefix_atoms < 0 or len(pos1) < prefix_atoms or len(pos2) < prefix_atoms:
-            return float("inf")
-        pos1, pos2 = pos1[prefix_atoms:], pos2[prefix_atoms:]
-        if len(pos1) != len(pos2) or len(pos1) == 0:
-            return float("inf")
-    elif surface_symbols:
-        s1 = np.array(a1.get_chemical_symbols())
-        s2 = np.array(a2.get_chemical_symbols())
-        m1 = ~np.isin(s1, surface_symbols)
-        m2 = ~np.isin(s2, surface_symbols)
-        if m1.sum() != m2.sum():
-            return float("inf")
-        pos1, pos2 = pos1[m1], pos2[m2]
-        if len(pos1) == 0:
-            return float("inf")
-    cell = np.asarray(a1.get_cell(), dtype=float)
-    pbc = _pbc_for_cell(material_type, cell)
-    diffs, _ = find_mic(pos1 - pos2, cell, pbc)
-    return float(np.sqrt(np.mean(np.sum(diffs**2, axis=1))))
-
-
 def _mic_unwrapped_positions(
     pos: np.ndarray,
     cell: np.ndarray,
@@ -762,32 +704,6 @@ def _adsorbate_assignment_rmsd(
         chosen = cost[rows, cols]
         total += float(np.dot(chosen, chosen))
     return float(np.sqrt(total / len(u1)))
-
-
-def _trailing_adsorbate_com(
-    atoms: Atoms,
-    prefix_atoms: int,
-    *,
-    material_type: str,
-) -> np.ndarray:
-    """Equal-weight COM of ``positions[prefix_atoms:]``, wrapped on periodic axes.
-
-    Atoms are MIC-unwrapped relative to the first adsorbate atom before averaging
-    so a molecule that straddles a periodic face does not pull the COM into the
-    cell interior.
-    """
-    pos = np.asarray(atoms.get_positions()[prefix_atoms:], dtype=float)
-    if len(pos) == 0:
-        return np.zeros(3, dtype=float)
-    cell = np.asarray(atoms.get_cell(), dtype=float)
-    pbc = _pbc_for_cell(material_type, cell)
-    com = _mic_unwrapped_positions(pos, cell, pbc).mean(axis=0)
-    if not any(pbc):
-        return com
-    frac = wrap_fractional(
-        cart_to_frac(com.reshape(1, 3), cell), np.asarray(pbc, dtype=bool)
-    )
-    return frac_to_cart(frac, cell).reshape(3)
 
 
 def _deduplicate_by_energy_and_rmsd(

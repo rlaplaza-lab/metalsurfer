@@ -11,13 +11,11 @@ import numpy as np
 import pytest
 
 from metalsurfer._csv_coerce import (
-    float_or,
     int_or_none,
     is_missing,
     parse_bool,
     parse_float_pair,
     parse_fragment_positions,
-    with_default,
 )
 from metalsurfer._utils import is_finite_number, require_unique_molecule_names
 
@@ -57,7 +55,7 @@ def test_is_finite_number_rejects_bool_and_decimal_fraction():
     assert is_finite_number(Fraction(3, 2)) is False
 
 
-def test_is_missing_and_with_default():
+def test_is_missing():
     assert is_missing(None) is True
     assert is_missing("nan") is True
     assert is_missing("NaN") is True
@@ -66,17 +64,6 @@ def test_is_missing_and_with_default():
     assert is_missing("None") is True
     assert is_missing(0) is False
     assert is_missing("") is True
-    assert with_default(None, 7) == 7
-    assert with_default("nan", 7) == 7
-    assert with_default("NaN", 7) == 7
-    assert with_default(3, 7) == 3
-
-
-def test_float_or_falls_back_to_default_on_missing():
-    assert float_or(None, 1.5) == 1.5
-    assert float_or("nan", 1.5) == 1.5
-    assert float_or("NaN", 1.5) == 1.5
-    assert float_or("2.5", 1.5) == 2.5
 
 
 def test_int_or_none_parses_or_returns_none():

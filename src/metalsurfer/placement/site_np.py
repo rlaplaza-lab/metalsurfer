@@ -14,7 +14,6 @@ import numpy as np
 from scipy.spatial import ConvexHull, KDTree, QhullError
 
 from ._constants import (
-    _NP_HULL_OUTSIDE_EPS,
     _NP_HULL_SURFACE_EPS,
     _NP_NN_BOND_MAX_SCALE,
     _NP_NN_BOND_MIN_SCALE,
@@ -67,19 +66,6 @@ def _convex_hull_surface_mask(
     if hull is None:
         return np.ones(len(pts), dtype=bool)
     return np.max(_hull_signed_distances(pts, hull), axis=1) > -float(eps)
-
-
-def _outside_convex_hull_mask(
-    points: np.ndarray,
-    hull: ConvexHull,
-    *,
-    eps: float = _NP_HULL_OUTSIDE_EPS,
-) -> np.ndarray:
-    """Strictly outside the hull (used by tests / callers checking lift)."""
-    pts = np.asarray(points, dtype=float)
-    if len(pts) == 0:
-        return np.zeros(0, dtype=bool)
-    return np.max(_hull_signed_distances(pts, hull), axis=1) > float(eps)
 
 
 def _normalize_rows(vecs: np.ndarray) -> np.ndarray:

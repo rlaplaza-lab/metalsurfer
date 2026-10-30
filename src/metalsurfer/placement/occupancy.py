@@ -197,44 +197,6 @@ def _footprint_clearances_from_mic(
     return np.min(lateral - r_exist, axis=1) - float(incoming_radius)
 
 
-def site_footprint_clearances(
-    sites: Sequence[Site],
-    existing_positions: np.ndarray | None,
-    existing_radii: np.ndarray | None,
-    *,
-    cell: np.ndarray,
-    pbc: list[bool],
-    incoming_radius: float,
-) -> np.ndarray:
-    """Per-site lateral footprint clearance (inf when no coverage).
-
-    Clearance is ``min_j (||d_perp|| - r_j) - incoming_radius``. Larger is
-    better for ranking; negative values mean the footprint disk would overlap.
-    """
-    n = len(sites)
-    if n == 0:
-        return np.zeros(0, dtype=float)
-    if (
-        existing_positions is None
-        or np.asarray(existing_positions).size == 0
-        or existing_radii is None
-        or float(incoming_radius) <= 0.0
-    ):
-        return np.full(n, np.inf, dtype=float)
-
-    _anchor_mask, _min_dists, mic_vecs = _sites_clearance_and_anchor_mask(
-        sites,
-        existing_positions,
-        cell=cell,
-        pbc=pbc,
-        min_separation=0.0,
-        need_mic_vecs=True,
-    )
-    return _footprint_clearances_from_mic(
-        sites, mic_vecs, existing_radii, incoming_radius
-    )
-
-
 def available_site_indices(
     sites: Sequence[Site],
     existing_positions: np.ndarray | None,
@@ -245,8 +207,8 @@ def available_site_indices(
 ) -> list[int]:
     """Original indices into *sites* that pass in-plane occupancy (or all if empty).
 
-    Empty mask means zero capacity. Rank survivors with
-    :func:`site_footprint_clearances` when footprint ordering is desired.
+    Empty mask means zero capacity. Callers that need footprint ordering should
+    score survivors with the in-plane clearance helpers in this module.
     """
     if existing_positions is None or np.asarray(existing_positions).size == 0:
         return list(range(len(sites)))

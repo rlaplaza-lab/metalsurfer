@@ -22,11 +22,12 @@ from metalsurfer.placement.clash import atom_radii_for_symbols
 from metalsurfer.placement.dissociative import _get_dissociative_site_pairs
 from metalsurfer.placement.generators import _spec_grid_info
 from metalsurfer.placement.occupancy import (
+    _footprint_clearances_from_mic,
+    _sites_clearance_and_anchor_mask,
     available_site_indices,
     existing_adsorbate_cloud,
     filter_sites_by_occupancy,
     incoming_inplane_radius,
-    site_footprint_clearances,
 )
 from metalsurfer.placement.pose import (
     _finalize_placement,
@@ -63,6 +64,39 @@ from ._helpers import (
 
 _SpecFilter = Callable[[PlacementSpec], bool] | None
 _SpecFactory = Callable[[int, _SpecFilter], list[PlacementSpec]]
+
+
+def _site_footprint_clearances(
+    sites,
+    existing_positions,
+    existing_radii,
+    *,
+    cell,
+    pbc,
+    incoming_radius,
+):
+    """Per-site lateral footprint clearance for occupancy ranking tests."""
+    n = len(sites)
+    if n == 0:
+        return np.zeros(0, dtype=float)
+    if (
+        existing_positions is None
+        or np.asarray(existing_positions).size == 0
+        or existing_radii is None
+        or float(incoming_radius) <= 0.0
+    ):
+        return np.full(n, np.inf, dtype=float)
+    _anchor_mask, _min_dists, mic_vecs = _sites_clearance_and_anchor_mask(
+        sites,
+        existing_positions,
+        cell=cell,
+        pbc=pbc,
+        min_separation=0.0,
+        need_mic_vecs=True,
+    )
+    return _footprint_clearances_from_mic(
+        sites, mic_vecs, existing_radii, incoming_radius
+    )
 
 
 def _filter_specs(
@@ -280,10 +314,7 @@ def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distanc
 
 def test_footprint_ranks_without_pruning():
     """Vertex gate keeps both sites; footprint clearance ranks the far one higher."""
-    from metalsurfer.placement.occupancy import (
-        available_site_indices,
-        site_footprint_clearances,
-    )
+    from metalsurfer.placement.occupancy import available_site_indices
     from metalsurfer.placement.site_types import Site
 
     def _site(xyz, idx):
@@ -305,7 +336,7 @@ def test_footprint_ranks_without_pruning():
     assert available_site_indices(
         [near, far], existing, cell=cell, pbc=pbc, min_separation=1.5
     ) == [0, 1]
-    clearances = site_footprint_clearances(
+    clearances = _site_footprint_clearances(
         [near, far],
         existing,
         existing_radii,
@@ -333,10 +364,7 @@ def _atop_site_z(xyz, idx):
 
 def test_occupancy_ignores_far_side_adsorbate_behind_site():
     """Atoms more than 2 Å behind the site must not prune or foul footprint."""
-    from metalsurfer.placement.occupancy import (
-        available_site_indices,
-        site_footprint_clearances,
-    )
+    from metalsurfer.placement.occupancy import available_site_indices
 
     site = _atop_site_z([0.0, 0.0, 0.0], 0)
     existing = np.array([[0.0, 0.0, -5.0]], dtype=float)
@@ -346,7 +374,7 @@ def test_occupancy_ignores_far_side_adsorbate_behind_site():
     assert available_site_indices(
         [site], existing, cell=cell, pbc=pbc, min_separation=1.5
     ) == [0]
-    clearances = site_footprint_clearances(
+    clearances = _site_footprint_clearances(
         [site],
         existing,
         existing_radii,
@@ -359,10 +387,7 @@ def test_occupancy_ignores_far_side_adsorbate_behind_site():
 
 def test_occupancy_same_face_adsorbate_still_prunes():
     """In-front atoms on the normal line still occupy the site."""
-    from metalsurfer.placement.occupancy import (
-        available_site_indices,
-        site_footprint_clearances,
-    )
+    from metalsurfer.placement.occupancy import available_site_indices
 
     site = _atop_site_z([0.0, 0.0, 0.0], 0)
     existing = np.array([[0.0, 0.0, 2.0]], dtype=float)
@@ -373,7 +398,7 @@ def test_occupancy_same_face_adsorbate_still_prunes():
         available_site_indices([site], existing, cell=cell, pbc=pbc, min_separation=1.5)
         == []
     )
-    clearances = site_footprint_clearances(
+    clearances = _site_footprint_clearances(
         [site],
         existing,
         existing_radii,
@@ -386,10 +411,7 @@ def test_occupancy_same_face_adsorbate_still_prunes():
 
 def test_occupancy_mixed_cloud_far_side_does_not_drive_min_lateral():
     """Far-side clash must not override a clear front-side neighbor."""
-    from metalsurfer.placement.occupancy import (
-        available_site_indices,
-        site_footprint_clearances,
-    )
+    from metalsurfer.placement.occupancy import available_site_indices
 
     site = _atop_site_z([0.0, 0.0, 0.0], 0)
     # Antipode on the normal line + a distant front atom (lateral clearance).
@@ -400,7 +422,7 @@ def test_occupancy_mixed_cloud_far_side_does_not_drive_min_lateral():
     assert available_site_indices(
         [site], existing, cell=cell, pbc=pbc, min_separation=1.5
     ) == [0]
-    clearances = site_footprint_clearances(
+    clearances = _site_footprint_clearances(
         [site],
         existing,
         existing_radii,
@@ -423,7 +445,7 @@ def test_occupancy_counts_atom_slightly_behind_tangent_plane():
         available_site_indices([site], existing, cell=cell, pbc=pbc, min_separation=1.5)
         == []
     )
-    clearances = site_footprint_clearances(
+    clearances = _site_footprint_clearances(
         [site],
         existing,
         existing_radii,
@@ -468,7 +490,7 @@ def test_negative_footprint_clearance_ranks_without_dropping_site():
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = [True, True, False]
     existing_pos, existing_radii = existing_adsorbate_cloud(slab, full)
-    clearances = site_footprint_clearances(
+    clearances = _site_footprint_clearances(
         ctx.sites,
         existing_pos,
         existing_radii,
@@ -716,7 +738,6 @@ def test_packing_yield_improves_with_occupancy_prune():
         available_site_indices,
         existing_adsorbate_cloud,
         incoming_inplane_radius,
-        site_footprint_clearances,
     )
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
@@ -745,7 +766,7 @@ def test_packing_yield_improves_with_occupancy_prune():
     )
     assert occupied_idx not in covered
     # Footprint ranking still scores the occupied anchor worse than survivors.
-    clearances = site_footprint_clearances(
+    clearances = _site_footprint_clearances(
         ctx.sites,
         existing_pos,
         existing_radii,

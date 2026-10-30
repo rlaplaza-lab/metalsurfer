@@ -6,7 +6,6 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
-from ase import Atoms
 from scipy.spatial import Delaunay, KDTree
 
 from ..._utils import cell_has_volume
@@ -447,23 +446,6 @@ def top_layer_is_planar_from_arrays(
         return float(np.var(h)) < z_variance_threshold
     h_pred = A @ coeffs
     return float(np.var(h - h_pred)) < z_variance_threshold
-
-
-def is_top_layer_planar(
-    slab: Atoms,
-    top_layer_tolerance: float = _PLANAR_TOP_LAYER_TOLERANCE_ANGSTROM,
-    z_variance_threshold: float = _DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
-    *,
-    top_mask: np.ndarray | None = None,
-) -> bool:
-    """Check whether the topmost atomic layer is approximately flat."""
-    return top_layer_is_planar_from_arrays(
-        slab.get_positions(),
-        np.asarray(slab.get_cell(), dtype=float),
-        top_layer_tolerance,
-        z_variance_threshold,
-        top_mask=top_mask,
-    )
 
 
 def bounding_box_cell(
