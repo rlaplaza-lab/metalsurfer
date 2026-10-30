@@ -15,6 +15,7 @@ from ..placement.generators import (
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
 )
+from ..placement.pose.height import _height_interval_family_key
 from ..placement.site_context import SiteContext
 from .shared import PlacementFailureEvent, _materialize_spec_placements
 
@@ -50,22 +51,6 @@ def placement_spec_key(
     )
 
 
-def _pose_family_key(
-    spec: PlacementSpec,
-) -> tuple[int, str, int, float, float, float, bool, int | None]:
-    """Rigid pose family matching the height-interval cache key (azimuth included)."""
-    return (
-        int(spec.conformer_index),
-        str(spec.orientation_type),
-        int(spec.site_index),
-        float(spec.tilt_deg),
-        float(spec.azimuth_deg),
-        float(spec.azimuth_in_plane_deg),
-        bool(spec.face_flip),
-        spec.en_atom_index,
-    )
-
-
 def _same_height_key(
     spec: PlacementSpec,
     *,
@@ -76,16 +61,7 @@ def _same_height_key(
     On wall sites every ``z_fraction <= 0.5`` is the contact height.
     Fractions above 0.5, and every void or dissociative fraction, stay distinct.
     """
-    family = (
-        int(spec.conformer_index),
-        str(spec.orientation_type),
-        int(spec.site_index),
-        float(spec.tilt_deg),
-        float(spec.azimuth_deg),
-        float(spec.azimuth_in_plane_deg),
-        bool(spec.face_flip),
-        spec.en_atom_index,
-    )
+    family = _height_interval_family_key(spec)
     zf = float(spec.z_fraction)
     void = bool(is_void) if is_void is not None else False
     if is_void is None and spec.site_type == "pore":
@@ -147,7 +123,7 @@ class _RetryBans:
             )
             return
         if reason.startswith("insufficient_contact") or reason == "infeasible_pose":
-            self.contact_families.add(_pose_family_key(spec))
+            self.contact_families.add(_height_interval_family_key(spec))
             return
         if reason in ("too_close", "vdw_overlap"):
             self.same_height_keys.add(
@@ -162,7 +138,7 @@ class _RetryBans:
             int(spec.site_index),
         ) in self.crowded_conformer_sites:
             return False
-        if _pose_family_key(spec) in self.contact_families:
+        if _height_interval_family_key(spec) in self.contact_families:
             return False
         return (
             _same_height_key(spec, is_void=self._void_for(spec))

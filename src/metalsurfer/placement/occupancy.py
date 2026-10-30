@@ -207,8 +207,7 @@ def available_site_indices(
 ) -> list[int]:
     """Original indices into *sites* that pass in-plane occupancy (or all if empty).
 
-    Empty mask means zero capacity. Callers that need footprint ordering should
-    score survivors with the in-plane clearance helpers in this module.
+    Empty mask means zero capacity.
     """
     if existing_positions is None or np.asarray(existing_positions).size == 0:
         return list(range(len(sites)))

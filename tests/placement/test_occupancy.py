@@ -1,6 +1,6 @@
 """Occupancy-aware packing, recovery and fill strategies."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import numpy as np
 import pytest
@@ -67,14 +67,14 @@ _SpecFactory = Callable[[int, _SpecFilter], list[PlacementSpec]]
 
 
 def _site_footprint_clearances(
-    sites,
-    existing_positions,
-    existing_radii,
+    sites: Sequence[Site],
+    existing_positions: np.ndarray | None,
+    existing_radii: np.ndarray | None,
     *,
-    cell,
-    pbc,
-    incoming_radius,
-):
+    cell: np.ndarray,
+    pbc: list[bool],
+    incoming_radius: float,
+) -> np.ndarray:
     """Per-site lateral footprint clearance for occupancy ranking tests."""
     n = len(sites)
     if n == 0:
@@ -314,8 +314,6 @@ def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distanc
 
 def test_footprint_ranks_without_pruning():
     """Vertex gate keeps both sites; footprint clearance ranks the far one higher."""
-    from metalsurfer.placement.occupancy import available_site_indices
-    from metalsurfer.placement.site_types import Site
 
     def _site(xyz, idx):
         return Site(
@@ -364,8 +362,6 @@ def _atop_site_z(xyz, idx):
 
 def test_occupancy_ignores_far_side_adsorbate_behind_site():
     """Atoms more than 2 Å behind the site must not prune or foul footprint."""
-    from metalsurfer.placement.occupancy import available_site_indices
-
     site = _atop_site_z([0.0, 0.0, 0.0], 0)
     existing = np.array([[0.0, 0.0, -5.0]], dtype=float)
     existing_radii = np.array([1.0], dtype=float)
@@ -387,8 +383,6 @@ def test_occupancy_ignores_far_side_adsorbate_behind_site():
 
 def test_occupancy_same_face_adsorbate_still_prunes():
     """In-front atoms on the normal line still occupy the site."""
-    from metalsurfer.placement.occupancy import available_site_indices
-
     site = _atop_site_z([0.0, 0.0, 0.0], 0)
     existing = np.array([[0.0, 0.0, 2.0]], dtype=float)
     existing_radii = np.array([1.0], dtype=float)
@@ -411,8 +405,6 @@ def test_occupancy_same_face_adsorbate_still_prunes():
 
 def test_occupancy_mixed_cloud_far_side_does_not_drive_min_lateral():
     """Far-side clash must not override a clear front-side neighbor."""
-    from metalsurfer.placement.occupancy import available_site_indices
-
     site = _atop_site_z([0.0, 0.0, 0.0], 0)
     # Antipode on the normal line + a distant front atom (lateral clearance).
     existing = np.array([[0.0, 0.0, -5.0], [8.0, 0.0, 2.0]], dtype=float)
@@ -734,13 +726,6 @@ def test_place_dissociative_two_sites_matches_spec_path():
 
 def test_packing_yield_improves_with_occupancy_prune():
     """In-plane occupancy under coverage drops near-site capacity vs bare slab."""
-    from metalsurfer.placement.occupancy import (
-        available_site_indices,
-        existing_adsorbate_cloud,
-        incoming_inplane_radius,
-    )
-    from metalsurfer.placement.site_context import resolve_site_context_for_sampling
-
     slab = make_slab()
     config = AdsorptionConfig(
         material_type="slab", seed=0, min_adsorbate_separation=1.5

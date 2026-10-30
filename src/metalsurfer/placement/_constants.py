@@ -179,8 +179,6 @@ _NP_NN_BOND_MIN_SCALE: float = 0.8
 _NP_NN_BOND_MAX_SCALE: float = 1.2
 # Atom counts as on the convex hull when max facet signed distance exceeds -eps.
 _NP_HULL_SURFACE_EPS: float = 1e-6
-# Site is outside the hull when max facet signed distance exceeds this eps.
-_NP_HULL_OUTSIDE_EPS: float = 1e-6
 # 4-fold hollows must be planar within this fraction of the metal-metal nn.
 _NP_PLANAR_4RING_TOL_SCALE: float = 0.15
 

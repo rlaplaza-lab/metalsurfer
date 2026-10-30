@@ -47,6 +47,7 @@ from .site_adaptive_grid import (
     _candidate_geometry_score,
     _candidates_to_arrays,
     _framework_median_nn,
+    _image_shift_for_index,
     _local_surface_normal,
     _merge_by_radius,
     _ray_exposure_mask,
@@ -194,31 +195,6 @@ def _two_sphere_circle_samples(
     return mid + h * (
         np.cos(angles)[:, None] * u[None, :] + np.sin(angles)[:, None] * v[None, :]
     )
-
-
-def _image_shift(
-    image_index: int,
-    n_atoms: int,
-    positions: np.ndarray,
-    tree_data: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-) -> tuple[int, tuple[int, int, int]]:
-    """Map a KDTree image index to (base_atom, lattice shift)."""
-    base = int(image_index) % n_atoms
-    if not np.any(pbc) or not cell_has_volume(cell):
-        return base, (0, 0, 0)
-    img_pos = np.asarray(tree_data[int(image_index)], dtype=float)
-    primary = np.asarray(positions[base], dtype=float)
-    delta = img_pos - primary
-    inv = np.linalg.inv(cell)
-    frac = delta @ inv
-    shift = (
-        int(np.rint(frac[0])) if bool(pbc[0]) else 0,
-        int(np.rint(frac[1])) if bool(pbc[1]) else 0,
-        int(np.rint(frac[2])) if bool(pbc[2]) else 0,
-    )
-    return base, shift
 
 
 def _clash_free(
@@ -413,7 +389,9 @@ def _contacts_to_candidates(
         shifts: list[tuple[int, int, int]] = []
         supp_dists: list[float] = []
         for img in contact.support_images:
-            base, shift = _image_shift(img, n_atoms, positions, tree_data, cell, pbc)
+            base, shift = _image_shift_for_index(
+                img, n_atoms, positions, tree_data, cell, pbc
+            )
             bases.append(base)
             shifts.append(shift)
             img_pos = tree_data[int(img)]
