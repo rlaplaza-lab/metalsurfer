@@ -8,9 +8,6 @@ from typing import Literal
 
 import numpy as np
 from ase import Atoms
-from ase.data import atomic_numbers
-from ase.data import covalent_radii as ase_covalent_radii
-from ase.data import vdw_radii as ase_vdw_radii
 from ase.geometry import find_mic
 
 from .._utils import cell_has_volume
@@ -18,7 +15,6 @@ from ._constants import (
     _BINDER_ALIGNMENT_TARGET_DOT,
     _BINDER_VECTOR_MIN_NORM,
     _CONTACT_ATOM_VARIANCE_MAX,
-    _CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
     _CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     _CONTACT_QUALITY_COVALENT_SUM_SCALE,
     _FLAT_SHAPE_I1_I3_MAX,
@@ -28,7 +24,6 @@ from ._constants import (
     _INERTIA_EPS,
     _LINEAR_SHAPE_RATIO_MAX,
     _MIN_CONTACT_RATIO_DEFAULT,
-    _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM,
     _MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
     _PRINCIPAL_AXIS_LONG_ALIGN_MIN_DOT,
     _PRINCIPAL_AXIS_ROT_AXIS_MIN_NORM,
@@ -40,10 +35,17 @@ from ._constants import (
     _ROTATION_ALIGN_DOT_ANTIPARALLEL,
     _ROTATION_ALIGN_DOT_PARALLEL,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
-    _VDW_RADIUS_FROM_COVALENT_SCALE,
     _VECTOR_NORM_EPS,
 )
 from ._material import material_aware_pbc
+from .cutoffs import (
+    pair_thresholds,
+    radii_or_cached,
+    radius_for_symbol,
+    substrate_floor_thresholds,
+    tabulated_radii,
+    within_cutoff,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -246,11 +248,11 @@ def tangent_basis_from_normal(normal: np.ndarray) -> np.ndarray:
 
 @functools.cache
 def _get_covalent_radius(symbol: str) -> float | None:
-    z = atomic_numbers.get(symbol)
-    if z is None or z >= len(ase_covalent_radii):
+    """Covalent radius (Å), or ``None`` when *symbol* has no atomic number."""
+    try:
+        return float(radius_for_symbol(symbol, "covalent"))
+    except ValueError:
         return None
-    r = float(ase_covalent_radii[z])
-    return r if r > 0.0 else None
 
 
 def framework_radii_from_symbols(symbols: Sequence[str]) -> np.ndarray:
@@ -268,26 +270,17 @@ def framework_radii_from_symbols(symbols: Sequence[str]) -> np.ndarray:
 
 @functools.cache
 def _get_vdw_radius(symbol: str) -> float | None:
-    """VdW radius (Å) for overlap checks; NaN tabulated values fall back to ~1.2× covalent."""
-    z = atomic_numbers.get(symbol)
-    if z is None or z >= len(ase_vdw_radii):
+    """Van der Waals radius (Å), or ``None`` when *symbol* has no atomic number."""
+    try:
+        return float(radius_for_symbol(symbol, "vdw"))
+    except ValueError:
         return None
-    r = float(ase_vdw_radii[z])
-    if r > 0.0 and not np.isnan(r):
-        return r
-    cov = _get_covalent_radius(symbol)
-    if cov is None:
-        return None
-    # Tabulated VdW may be NaN (e.g. some transition metals in ASE). Use a mild
-    # covalent scale so "touching" physisorptive distances (~3+ Å) are not
-    # misclassified as overlaps while still flagging sub-Å spurious approaches.
-    return float(cov * _VDW_RADIUS_FROM_COVALENT_SCALE)
 
 
 def radii_array(
     symbols: Sequence[str], *, kind: Literal["covalent", "vdw"]
 ) -> np.ndarray:
-    """Per-symbol radii; missing table entries are NaN."""
+    """Per-symbol radii. Unknown symbols are NaN; table holes are interpolated."""
     getter = _get_covalent_radius if kind == "covalent" else _get_vdw_radius
     return np.array(
         [r if (r := getter(s)) is not None else np.nan for s in symbols],
@@ -303,42 +296,26 @@ def min_pair_clearance_angstrom(
     min_contact_ratio: float,
     reject_vdw_overlaps: bool = False,
     vdw_overlap_scale: float = 1.0,
-    r_surface_fallback: float | None = None,
 ) -> float:
-    """Minimum allowed separation for one mol–slab atom pair.
-
-    Matches the covalent floor used by :func:`check_initial_placement_distance`
-    (``max(min_distance, covalent_sum * min_contact_ratio)``). When
-    ``reject_vdw_overlaps`` is set, also requires the VDW-sum floor used by
-    :func:`detect_vdw_overlaps` (tabulated VDW, with the same covalent-scale
-    fallback for missing entries).
-    """
-    r_mol = _get_covalent_radius(mol_symbol)
-    r_slab = _get_covalent_radius(slab_symbol) if slab_symbol else None
-    if r_slab is None and r_surface_fallback is not None:
-        r_slab = float(r_surface_fallback)
-
-    if r_mol is not None and r_slab is not None:
-        gate = max(
-            float(min_distance),
-            (float(r_mol) + float(r_slab)) * float(min_contact_ratio),
-        )
-    else:
-        gate = float(min_distance)
-
+    """Minimum allowed mol–slab separation (Å). Equality is still too close."""
+    if not slab_symbol:
+        raise ValueError("min_pair_clearance_angstrom requires a slab symbol")
+    cov = tabulated_radii((mol_symbol, slab_symbol), kind="covalent")
+    gate = float(
+        substrate_floor_thresholds(
+            cov[:1],
+            cov[1:],
+            scale=min_contact_ratio,
+            absolute_floor=min_distance,
+        )[0, 0]
+    )
     if reject_vdw_overlaps:
-        r_vdw_m = _get_vdw_radius(mol_symbol)
-        r_vdw_s = _get_vdw_radius(slab_symbol) if slab_symbol else None
-        if r_vdw_m is None and r_mol is not None:
-            r_vdw_m = float(r_mol) * _VDW_RADIUS_FROM_COVALENT_SCALE
-        if r_vdw_s is None and r_slab is not None:
-            r_vdw_s = float(r_slab) * _VDW_RADIUS_FROM_COVALENT_SCALE
-        if r_vdw_m is not None and r_vdw_s is not None:
-            gate = max(
-                gate,
-                (float(r_vdw_m) + float(r_vdw_s)) * float(vdw_overlap_scale),
-            )
-    return float(gate)
+        vdw = tabulated_radii((mol_symbol, slab_symbol), kind="vdw")
+        gate = max(
+            gate,
+            float(pair_thresholds(vdw[:1], vdw[1:], vdw_overlap_scale)[0, 0]),
+        )
+    return gate
 
 
 def _mol_slab_pairwise_mic(
@@ -815,17 +792,15 @@ def detect_vdw_overlaps(
     if dists.size == 0:
         return [], min_distance
 
-    # Unknown radii become NaN so they propagate to a NaN vdw_sum; the
-    # subsequent ``> 0`` comparison is False for NaN, excluding those pairs.
-    mol_radii = radii_array(mol_syms, kind="vdw")
-    if slab_scratch is not None and slab_scratch.slab_vdw_r is not None:
-        slab_radii = np.asarray(slab_scratch.slab_vdw_r, dtype=float)
-    else:
-        slab_radii = radii_array(slab_syms, kind="vdw")
-    vdw_sum = vdw_scale * (mol_radii[:, None] + slab_radii[None, :])
+    mol_radii = tabulated_radii(mol_syms, kind="vdw")
+    slab_radii = radii_or_cached(
+        slab_syms,
+        None if slab_scratch is None else slab_scratch.slab_vdw_r,
+        kind="vdw",
+    )
+    vdw_sum = pair_thresholds(mol_radii, slab_radii, vdw_scale)
     overlap_amount = vdw_sum - dists
-    with np.errstate(invalid="ignore"):
-        mask = overlap_amount > 0.0
+    mask = within_cutoff(dists, vdw_sum)
     rows, cols = np.nonzero(mask)
     overlaps: list[tuple[int, int, float, float]] = [
         (int(i), int(j), float(dists[i, j]), float(overlap_amount[i, j]))
@@ -837,7 +812,7 @@ def detect_vdw_overlaps(
 def calculate_contact_quality(
     molecule_atoms: Atoms,
     slab: Atoms,
-    contact_distance_threshold: float | None = None,
+    contact_covalent_scale: float = _CONTACT_QUALITY_COVALENT_SUM_SCALE,
     exclude_slab_atoms: int | None = None,
     *,
     material_type: str = "slab",
@@ -845,14 +820,17 @@ def calculate_contact_quality(
 ) -> dict[str, float | int]:
     """Contact metrics: min distance, covalent ratio at closest pair, and pair counts.
 
+    An adsorbate atom is in contact when some slab pair has
+    ``d <= contact_covalent_scale * (r_i + r_j)``.
+
     Parameters
     ----------
     molecule_atoms
         Adsorbate :class:`~ase.Atoms` object.
     slab
         Substrate :class:`~ase.Atoms` object.
-    contact_distance_threshold
-        Optional distance threshold for contact counting.
+    contact_covalent_scale
+        Scale on the covalent radius sum for contact counting.
     exclude_slab_atoms
         Number of substrate atoms to exclude from checks.
     material_type
@@ -880,18 +858,13 @@ def calculate_contact_quality(
     flat_idx = int(np.argmin(dists.ravel()))
     i_closest, j_closest = divmod(flat_idx, slab_size)
     contact_distance = float(dists[i_closest, j_closest])
-    r1 = _get_covalent_radius(mol_syms[i_closest])
-    r2 = _get_covalent_radius(slab_syms[j_closest])
-    contact_ratio = (
-        contact_distance / (r1 + r2) if (r1 is not None and r2 is not None) else 1.0
-    )
+    mol_r = tabulated_radii(mol_syms, kind="covalent")
+    slab_r = tabulated_radii(slab_syms, kind="covalent")
+    r1 = float(mol_r[i_closest])
+    r2 = float(slab_r[j_closest])
+    contact_ratio = contact_distance / (r1 + r2)
 
-    if contact_distance_threshold is None:
-        if r1 is not None and r2 is not None:
-            contact_distance_threshold = _CONTACT_QUALITY_COVALENT_SUM_SCALE * (r1 + r2)
-        else:
-            contact_distance_threshold = _MIN_DISTANCE_HARD_FALLBACK_ANGSTROM
-    mask = dists <= contact_distance_threshold
+    mask = within_cutoff(dists, pair_thresholds(mol_r, slab_r, contact_covalent_scale))
     contact_pairs = int(np.count_nonzero(mask))
     contacting_atoms = {int(i) for i in np.where(np.any(mask, axis=1))[0]}
     contact_distances = dists[mask].ravel().tolist() if contact_pairs else []
@@ -971,8 +944,8 @@ def check_initial_placement_distance(
 ) -> tuple[bool, float, str | None]:
     r"""Check if the initial placement satisfies distance constraints.
 
-    Lower bound uses ``max(min_distance, covalent_sum * min_contact_ratio)``
-    for the closest pair when radii are known.
+    Lower bound uses ``max(min_distance, covalent_sum * min_contact_ratio)``.
+    A pair is too close when ``d <=`` that floor.
     Optional upper bound and vdw-overlap checks when configured.
     ``exclude_slab_atoms`` limits the slab side (saturation with pre-adsorbed atoms).
     PBC comes from *material_type* via :func:`material_aware_pbc`.
@@ -1017,20 +990,19 @@ def check_initial_placement_distance(
 
     actual_min = float(np.min(dists))
 
-    mol_r = radii_array(mol_syms, kind="covalent")
-    # Reuse precomputed slab covalent radii from the scratch when available
-    # (otherwise recompute, as before).
-    if slab_scratch is not None and slab_scratch.slab_cov_r is not None:
-        slab_r = np.asarray(slab_scratch.slab_cov_r, dtype=float)
-    else:
-        slab_r = radii_array(slab_syms, kind="covalent")
-    # Larger of the absolute floor and the chemistry-scaled floor. Light pairs
-    # (H, unknown radii) are limited by min_distance; heavier pairs by
-    # covalent_sum * min_contact_ratio.
-    allowed = (mol_r[:, None] + slab_r[None, :]) * float(min_contact_ratio)
-    np.maximum(allowed, float(min_distance), out=allowed)
-    np.nan_to_num(allowed, nan=float(min_distance), copy=False)
-    if np.any(dists < allowed):
+    mol_r = tabulated_radii(mol_syms, kind="covalent")
+    slab_r = radii_or_cached(
+        slab_syms,
+        None if slab_scratch is None else slab_scratch.slab_cov_r,
+        kind="covalent",
+    )
+    allowed = substrate_floor_thresholds(
+        mol_r,
+        slab_r,
+        scale=float(min_contact_ratio),
+        absolute_floor=float(min_distance),
+    )
+    if np.any(within_cutoff(dists, allowed)):
         return False, actual_min, "too_close"
     if max_initial_distance is not None and actual_min > max_initial_distance:
         return False, actual_min, "too_far"
@@ -1064,7 +1036,7 @@ def check_initial_contact_quality(
     require_multiple_contact: bool = False,
     max_closest_approach: float = _CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     min_contact_atoms: int = 1,
-    contact_distance_threshold: float = _CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
+    contact_covalent_scale: float = _CONTACT_QUALITY_COVALENT_SUM_SCALE,
     exclude_slab_atoms: int | None = None,
     material_type: str = "slab",
     pairwise_distances: np.ndarray | None = None,
@@ -1078,7 +1050,8 @@ def check_initial_contact_quality(
     1. Closest adsorbate–surface pair no farther than ``max_closest_approach``
        (``contact_distance_too_large``).
     2. At least ``min_contact_atoms`` molecule atoms within
-       ``contact_distance_threshold`` (``insufficient_contact_atoms``).
+       ``contact_covalent_scale * (r_i + r_j)`` of a slab atom
+       (``insufficient_contact_atoms``).
        ``require_multiple_contact`` raises that count to at least 2.
     3. When ``require_multiple_contact`` and more than one atom counts, those
        contact distances must not spread by more than
@@ -1096,7 +1069,7 @@ def check_initial_contact_quality(
     metrics = calculate_contact_quality(
         molecule_atoms,
         slab,
-        contact_distance_threshold=contact_distance_threshold,
+        contact_covalent_scale=contact_covalent_scale,
         exclude_slab_atoms=exclude_slab_atoms,
         material_type=material_type,
         pairwise_distances=pairwise_distances,

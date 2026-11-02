@@ -59,17 +59,7 @@ def test_strict_contact_window_rejects_empty_admissible_range():
     with pytest.raises(ValueError, match="empty admissible contact window"):
         AdsorptionConfig(
             require_multiple_contact=True,
-            min_initial_distance=2.0,
-            contact_distance_threshold=1.0,
-            max_closest_approach=3.0,
-        )
-    # Third sub-condition: max_closest_approach < contact_distance_threshold
-    # (both below min_initial_distance) leaves the admissible window empty.
-    with pytest.raises(ValueError, match="empty admissible contact window"):
-        AdsorptionConfig(
-            strict_initial_placement=True,
             min_initial_distance=3.0,
-            contact_distance_threshold=2.0,
             max_closest_approach=1.0,
         )
 
@@ -105,8 +95,7 @@ def test_default_config():
         == numeric_defaults.CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
     )
     assert (
-        config.contact_distance_threshold
-        == numeric_defaults.CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
+        config.contact_covalent_scale == numeric_defaults.CONTACT_COVALENT_SCALE_DEFAULT
     )
     assert config.symmetry_tolerance == numeric_defaults.DEFAULT_SYMMETRY_TOLERANCE
     assert (
@@ -173,6 +162,7 @@ def test_numeric_defaults_single_source_of_truth():
     ctx = ComputationContext()
     assert ctx.min_initial_distance == cfg.min_initial_distance
     assert ctx.min_contact_ratio == cfg.min_contact_ratio
+    assert ctx.contact_covalent_scale == cfg.contact_covalent_scale
     assert ctx.symmetry_tolerance == cfg.symmetry_tolerance
     assert ctx.site_equivalence_tolerance == cfg.site_equivalence_tolerance
     assert ctx.planar_z_variance_threshold == cfg.planar_z_variance_threshold
@@ -478,7 +468,7 @@ def test_negative_int_rejected(field):
         "saturation_temperature",
         "saturation_pressure",
         "max_closest_approach",
-        "contact_distance_threshold",
+        "contact_covalent_scale",
         "symmetry_tolerance",
         "site_equivalence_tolerance",
         "voronoi_probe_radius",
@@ -497,7 +487,7 @@ def test_zero_positive_float_rejected(field):
         "top_layer_tolerance",
         "planar_z_variance_threshold",
         "max_closest_approach",
-        "contact_distance_threshold",
+        "contact_covalent_scale",
         "symmetry_tolerance",
         "site_equivalence_tolerance",
         "voronoi_probe_radius",
@@ -875,6 +865,18 @@ def test_min_contact_ratio_out_of_range_rejected(ratio):
 def test_min_contact_ratio_inclusive_edges_accepted(ratio):
     config = AdsorptionConfig(min_contact_ratio=ratio)
     assert config.min_contact_ratio == ratio
+
+
+@pytest.mark.parametrize("scale", [0.49, 2.01])
+def test_contact_covalent_scale_out_of_range_rejected(scale):
+    with pytest.raises(ValueError, match="contact_covalent_scale"):
+        AdsorptionConfig(contact_covalent_scale=scale)
+
+
+@pytest.mark.parametrize("scale", [0.5, 1.35, 2.0])
+def test_contact_covalent_scale_inclusive_edges_accepted(scale):
+    config = AdsorptionConfig(contact_covalent_scale=scale)
+    assert config.contact_covalent_scale == scale
 
 
 def test_max_initial_distance_optional():

@@ -14,12 +14,14 @@ from metalsurfer.placement import (
     calculate_min_distance,
     check_initial_placement_distance,
 )
+from metalsurfer.placement.cutoffs import radius_for_symbol
 from metalsurfer.placement.geometry import (
     _binding_atom_candidates,
     _classify_molecule_shape,
     calculate_contact_quality,
     check_initial_contact_quality,
     detect_vdw_overlaps,
+    min_pair_clearance_angstrom,
 )
 
 from ..conftest import (
@@ -196,6 +198,35 @@ def test_min_contact_ratio_default_is_covalent_binding_boundary():
     assert reason_pass is None
     assert min_pass > covalent_sum * MIN_CONTACT_RATIO_DEFAULT
 
+    on_floor = Atoms("O", positions=[surface_xy + np.array([0.0, 0.0, 0.0])])
+    p_eq = on_floor.get_positions().copy()
+    p_eq[0, 2] = ru_pos[2] + max(1.5, covalent_sum * MIN_CONTACT_RATIO_DEFAULT)
+    on_floor.set_positions(p_eq)
+    on_floor.set_cell(slab.get_cell())
+    on_floor.set_pbc(slab.get_pbc())
+    ok_eq, _, reason_eq = check_initial_placement_distance(
+        on_floor,
+        slab,
+        min_distance=1.5,
+        min_contact_ratio=MIN_CONTACT_RATIO_DEFAULT,
+        material_type="slab",
+    )
+    assert not ok_eq
+    assert reason_eq == "too_close"
+
+
+def test_vdw_hole_clearance_uses_interpolated_radius():
+    """Fe's missing van der Waals radius is the in-period fill (1.80 Å)."""
+    gate = min_pair_clearance_angstrom(
+        "O",
+        "Fe",
+        min_distance=0.0,
+        min_contact_ratio=0.5,
+        reject_vdw_overlaps=True,
+        vdw_overlap_scale=1.0,
+    )
+    assert gate == pytest.approx(radius_for_symbol("O", "vdw") + 1.80)
+
 
 def test_check_initial_placement_distance_gates_every_covalent_pair():
     """A second pair can violate covalent floors while the global min clears min_distance."""
@@ -256,7 +287,7 @@ def test_calculate_contact_quality_detects_good_contact():
     )
 
     metrics = calculate_contact_quality(
-        water, slab, contact_distance_threshold=2.5, material_type="slab"
+        water, slab, contact_covalent_scale=1.35, material_type="slab"
     )
 
     assert metrics["num_contacting_atoms"] > 0, "Should have contacting atoms"

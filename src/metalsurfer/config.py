@@ -6,7 +6,7 @@ from math import isfinite
 from typing import Any, Literal
 
 from ._numeric_defaults import (
-    CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
+    CONTACT_COVALENT_SCALE_DEFAULT,
     CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     DEFAULT_FMAX,
     DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
@@ -441,29 +441,19 @@ def _validate_strict_contact_window(root: "AdsorptionConfig") -> None:
     """Require a non-empty band when a stricter contact check is on.
 
     Either ``strict_initial_placement`` or ``require_multiple_contact`` turns
-    the contact-quality gate on. Pairs closer than ``min_initial_distance`` are
-    already rejected by the distance gate, so the count cutoff and the
-    closest-approach cap must sit at or above that floor. The count cutoff
-    must also sit at or below the cap: an atom counted as "in contact" cannot
-    be farther than "close enough".
-
-    The admissible band is ``min_initial_distance <= contact_distance_threshold
-    <= max_closest_approach``.
+    the contact-quality gate on. Contact counting uses a covalent-radius scale,
+    so the remaining absolute band is ``min_initial_distance <=
+    max_closest_approach``.
     """
     if not (root.strict_initial_placement or root.require_multiple_contact):
         return
-    floor = float(root.min_initial_distance)
-    count_cutoff = float(root.contact_distance_threshold)
-    closest_cap = float(root.max_closest_approach)
-    if floor <= count_cutoff <= closest_cap:
+    if float(root.min_initial_distance) <= float(root.max_closest_approach):
         return
     raise ValueError(
         "When strict_initial_placement or require_multiple_contact is enabled, "
-        "require min_initial_distance <= contact_distance_threshold "
-        "<= max_closest_approach "
+        "require min_initial_distance <= max_closest_approach "
         "(empty admissible contact window otherwise); "
         f"got min_initial_distance={root.min_initial_distance}, "
-        f"contact_distance_threshold={root.contact_distance_threshold}, "
         f"max_closest_approach={root.max_closest_approach}"
     )
 
@@ -471,7 +461,12 @@ def _validate_strict_contact_window(root: "AdsorptionConfig") -> None:
 def _validate_placement(root: "AdsorptionConfig") -> None:
     _check_positive("max_closest_approach", root.max_closest_approach)
     _check_positive_int("min_contact_atoms", root.min_contact_atoms)
-    _check_positive("contact_distance_threshold", root.contact_distance_threshold)
+    _check_positive("contact_covalent_scale", root.contact_covalent_scale)
+    if not 0.5 <= root.contact_covalent_scale <= 2.0:
+        raise ValueError(
+            "contact_covalent_scale must be in [0.5, 2.0], "
+            f"got {root.contact_covalent_scale}"
+        )
 
     if root.num_placements is not None:
         _check_positive_int("num_placements", root.num_placements)
@@ -891,10 +886,9 @@ class AdsorptionConfig:
     )
     flat_aromatic_parallel_fraction: float = 0.5
     adaptive_parallel_fraction: bool = True
-    # Absolute Å floor. The distance gate uses the larger of this and
-    # covalent_sum * min_contact_ratio. The ratio wins for typical C/N/O–metal
-    # pairs; this floor wins for light atoms (H) and unknown radii.
+    # Absolute Å floor on mol–substrate pairs; the covalent ratio can raise it.
     min_initial_distance: float = MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
+    # Too close when d <= ratio * (r_i + r_j), then max with min_initial_distance.
     min_contact_ratio: float = MIN_CONTACT_RATIO_DEFAULT
     max_initial_distance: float | None = None
     top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE
@@ -905,6 +899,7 @@ class AdsorptionConfig:
     max_force_convergence: float = 0.05
     binding_distance_threshold: float = 4.0
     strict_initial_placement: bool = False
+    # Also reject d <= vdw_overlap_scale * (R_i + R_j) on van der Waals radii.
     reject_vdw_overlaps: bool = False
     vdw_overlap_scale: float = 1.0
     # In-plane site occupancy clearance (not adsorbate–adsorbate bonding).
@@ -915,7 +910,8 @@ class AdsorptionConfig:
     occupancy_footprint_scale: float = OCCUPANCY_FOOTPRINT_SCALE_DEFAULT
     max_closest_approach: float = CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
     min_contact_atoms: int = 1
-    contact_distance_threshold: float = CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
+    # An adsorbate atom counts as in contact when d <= scale * (r_i + r_j).
+    contact_covalent_scale: float = CONTACT_COVALENT_SCALE_DEFAULT
     require_multiple_contact: bool = False
     max_adsorption_energy: float = 5.0
     energy_dedup_threshold: float = 0.05
@@ -924,8 +920,7 @@ class AdsorptionConfig:
     # adsorbate has at least two; there is no rotation. Also the gas-phase
     # conformer dedup distance (Kabsch on every atom).
     rmsd_dedup_threshold: float = 0.35
-    # Bond cutoff d ≤ m·(ri+rj). Lenient default keeps lateral contacts legal;
-    # clash / BO occupancy-sigma gate (filters.interadsorbate_clearance).
+    # Bonded when d <= m*(ri+rj). Same cutoff for adsorbate–adsorbate fusion.
     connectivity_multiplier: float = 1.3
     seed: int = DEFAULT_SEED
     # Weighting T (K) for boltzmann prior only — NOT a stochastic pre-filter.

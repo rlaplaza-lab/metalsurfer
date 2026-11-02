@@ -373,10 +373,13 @@ frameworks it moves toward the free-volume site centre instead). Mostly
 in-plane penetrations skip the height nudge. Huge normal penetration (molecule
 clearly through the surface) fails cheaply before Packmol clash. When
 `placement_clash_descent` is on, a Packmol-style rigid-body clash descent
-follows, with discrete in-plane offsets as a cheap fallback. Clash contacts
-use covalent radius sums for substrate and pre-adsorbed atoms alike;
-adsorbate–adsorbate bonding is rejected separately by the connectivity
-multiplier (`adsorbate_overlap`). Only `too_close`,
+follows, with discrete in-plane offsets as a cheap fallback. Substrate
+columns of that descent use the covalent crash floor
+`max(min_initial_distance, min_contact_ratio * (r_i + r_j))`. Pre-adsorbed
+and packed adsorbates use `connectivity_multiplier` on the covalent radius
+sum, and a pose is kept only when every pair sits strictly outside its
+cutoff. Van der Waals radii are used only when `reject_vdw_overlaps` rejects
+a mol–substrate pair. Only `too_close`,
 `too_far`, `contact_distance_too_large`, `vdw_overlap`, and `adsorbate_overlap`
 are recoverable; other failures are final.
 

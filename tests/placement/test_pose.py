@@ -74,7 +74,7 @@ def test_validate_initial_placement_geometry_with_strict_config():
         strict_initial_placement=True,
         min_contact_atoms=1,
         max_closest_approach=3.0,
-        contact_distance_threshold=2.5,
+        contact_covalent_scale=1.35,
     )
     assert config.max_closest_approach == 3.0
 
@@ -85,7 +85,7 @@ def test_validate_initial_placement_geometry_with_strict_config():
         require_multiple_contact=config.require_multiple_contact,
         max_closest_approach=float(config.max_closest_approach),
         min_contact_atoms=int(config.min_contact_atoms),
-        contact_distance_threshold=config.contact_distance_threshold,
+        contact_covalent_scale=config.contact_covalent_scale,
         material_type=config.material_type,
     )
     assert ok, f"Should pass strict validation with good contact: {reason}"
@@ -107,7 +107,7 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
     config = AdsorptionConfig(
         strict_initial_placement=True,
         max_closest_approach=3.0,
-        contact_distance_threshold=2.5,
+        contact_covalent_scale=1.35,
         min_contact_atoms=3,  # Require 3 contacting atoms
     )
 
@@ -118,7 +118,7 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
         require_multiple_contact=config.require_multiple_contact,
         max_closest_approach=float(config.max_closest_approach),
         min_contact_atoms=int(config.min_contact_atoms),
-        contact_distance_threshold=config.contact_distance_threshold,
+        contact_covalent_scale=config.contact_covalent_scale,
         material_type=config.material_type,
     )
     assert not ok, "Should reject placement with poor contact"
@@ -145,7 +145,7 @@ def test_require_multiple_contact_rejects_single_contact():
         require_multiple_contact=True,
         max_closest_approach=3.5,
         min_contact_atoms=1,
-        contact_distance_threshold=2.5,
+        contact_covalent_scale=1.35,
         material_type="slab",
     )
     assert not ok
@@ -160,7 +160,7 @@ def test_require_multiple_contact_accepts_multi_atom_contact():
     )
 
     metrics = calculate_contact_quality(
-        water, slab, contact_distance_threshold=2.5, material_type="slab"
+        water, slab, contact_covalent_scale=1.35, material_type="slab"
     )
     assert int(metrics["num_contacting_atoms"]) >= 2, metrics
 
@@ -171,7 +171,7 @@ def test_require_multiple_contact_accepts_multi_atom_contact():
         require_multiple_contact=True,
         max_closest_approach=3.5,
         min_contact_atoms=1,
-        contact_distance_threshold=2.5,
+        contact_covalent_scale=1.35,
         material_type="slab",
     )
     assert ok, reason
@@ -235,7 +235,7 @@ def test_strict_initial_placement_e2e_reason():
         seed=1,
         strict_initial_placement=True,
         min_initial_distance=0.3,
-        contact_distance_threshold=0.4,
+        contact_covalent_scale=1.35,
         max_closest_approach=0.5,
         min_contact_atoms=1,
     )
@@ -470,7 +470,7 @@ def test_validate_posed_adsorbate_single_mic_with_strict(monkeypatch):
     config = AdsorptionConfig(
         strict_initial_placement=True,
         min_initial_distance=0.3,
-        contact_distance_threshold=0.4,
+        contact_covalent_scale=1.35,
         max_closest_approach=0.5,
     )
     _validate_posed_adsorbate(water, slab, config)
@@ -636,7 +636,6 @@ def test_water_en_down_contact_atom_is_oxygen():
         _height_above_supports,
         _pose_from_spec,
     )
-    from metalsurfer.placement.site_enumeration import _get_site_surface_radii
 
     slab = make_slab()
     water = make_water()
@@ -675,7 +674,6 @@ def test_water_en_down_contact_atom_is_oxygen():
         en_atom_index=spec.en_atom_index,
     )
     assert contact_idx == o_idx
-    r_surface = _get_site_surface_radii(slab, site)
     surface_symbol = (
         slab.get_chemical_symbols()[int(site.slab_indices[0])]
         if site.slab_indices
@@ -688,7 +686,6 @@ def test_water_en_down_contact_atom_is_oxygen():
         min_contact_ratio=float(config.min_contact_ratio),
         reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
         vdw_overlap_scale=float(config.vdw_overlap_scale),
-        r_surface_fallback=float(r_surface),
     )
     contact_ref = _height_above_supports(
         site,
@@ -780,7 +777,6 @@ def test_void_clashing_interval_stays_inside_window(monkeypatch):
         cell=np.eye(3) * 20.0,
         pbc=[True, True, True],
         config=AdsorptionConfig(material_type="porous", seed=0),
-        r_surface=0.7,
         z_base_lo=-5.0,
         z_base_hi=2.0,
     )
@@ -820,7 +816,6 @@ def test_void_clear_centre_stays_at_centre(monkeypatch):
         cell=np.eye(3) * 20.0,
         pbc=[True, True, True],
         config=AdsorptionConfig(material_type="porous", seed=0),
-        r_surface=0.7,
         z_base_lo=-2.0,
         z_base_hi=2.0,
     )
@@ -977,7 +972,6 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
         _pose_from_spec,
         _resolve_surface_ref,
     )
-    from metalsurfer.placement.site_enumeration import _get_site_surface_radii
     from metalsurfer.placement.site_types import Site
 
     # Two-height top layer (bridging O above metal).
@@ -1044,7 +1038,6 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
     # Local surface_ref and contact share the framework plane (never a lift).
     assert ctx.is_local_ref
     assert float(ctx.surface_ref) == pytest.approx(support_h, abs=1e-9)
-    r_surface = _get_site_surface_radii(slab, site)
     surface_symbol = slab.get_chemical_symbols()[int(site.slab_indices[0])]
     gate = min_pair_clearance_angstrom(
         "O",
@@ -1053,7 +1046,6 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
         min_contact_ratio=float(config.min_contact_ratio),
         reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
         vdw_overlap_scale=float(config.vdw_overlap_scale),
-        r_surface_fallback=float(r_surface),
     )
     atom_h = (
         ctx.rotated_pos + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs])
@@ -1164,7 +1156,6 @@ def _shell_vs_full_nominal(
     slab_syms = list(slab.get_chemical_symbols())
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = material_aware_pbc(config.material_type)
-    r_surface = _get_site_surface_radii(slab, site)
     shell_idx = _contact_shell_indices(
         site.xyz,
         rotated_pos=rotated_pos,
@@ -1172,7 +1163,6 @@ def _shell_vs_full_nominal(
         slab_positions=positions,
         slab_symbols=slab_syms,
         config=config,
-        r_surface=r_surface,
         cell=cell,
         pbc=pbc,
         place_normal=site.normal,
@@ -1187,7 +1177,6 @@ def _shell_vs_full_nominal(
         cell=cell,
         pbc=pbc,
         config=config,
-        r_surface=r_surface,
     )
     shell_h = _pairwise_contact_com_height(
         **kwargs, slab_positions=shell_pos, slab_symbols=shell_syms
@@ -1262,7 +1251,6 @@ def test_contact_shell_ignores_far_atoms_and_uses_near_ones():
         slab_positions=positions,
         slab_symbols=slab_syms,
         config=config,
-        r_surface=1.3,
         cell=np.eye(3) * 80.0,
         pbc=[False, False, False],
         place_normal=np.array([0.0, 0.0, 1.0]),
@@ -1308,7 +1296,6 @@ def test_contact_shell_ignores_far_atoms_and_uses_near_ones():
                 cell=cell,
                 pbc=pbc,
                 config=config,
-                r_surface=1.3,
             )
         )
 

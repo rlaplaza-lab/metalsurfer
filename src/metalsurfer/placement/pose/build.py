@@ -222,7 +222,6 @@ def _pose_from_spec(
             cell=cell_arr,
             pbc=material_aware_pbc(mat_type),
             config=config,
-            r_surface=float(r_surface),
             z_base_lo=float(z_base_lo),
             z_base_hi=float(z_base_hi),
         )

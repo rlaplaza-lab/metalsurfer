@@ -136,7 +136,7 @@ def _validate_posed_adsorbate(
             require_multiple_contact=config.require_multiple_contact,
             max_closest_approach=float(config.max_closest_approach),
             min_contact_atoms=int(config.min_contact_atoms),
-            contact_distance_threshold=config.contact_distance_threshold,
+            contact_covalent_scale=float(config.contact_covalent_scale),
             exclude_slab_atoms=exclude_n,
             material_type=mat_type,
             pairwise_distances=dists,

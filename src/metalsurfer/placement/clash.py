@@ -20,54 +20,27 @@ from ._constants import (
     _CLASH_AZIMUTH_DELTA_EPS_DEG,
     _CLASH_DESCENT_AZIMUTH_BOUND_DEG,
     _CLASH_DESCENT_MAXITER,
-    _CLASH_DESCENT_SUCCESS_F,
-    _CLASH_DESCENT_SUCCESS_VIOLATION_ANGSTROM,
     _CLASH_LATERAL_FOOTPRINT_SCALE,
     _DISTANCE_ZERO_EPS,
     _TUPLET_CLASH_RESCUE_COVALENT_SCALE,
     _VECTOR_NORM_EPS,
 )
+from .cutoffs import clear_of_cutoff, tabulated_radii
 
 logger = logging.getLogger(__name__)
+
+# Merit target sits this far outside the acceptance cutoff so a zero merit
+# is strictly clear. The accept/reject predicate uses the unpadded threshold.
+_MERIT_CLEARANCE_PAD_ANGSTROM: float = 1e-4
 
 __all__ = [
     "atom_radii_for_symbols",
     "clash_bounds_for_adsorbate",
     "compose_quaternion_with_azimuth",
     "overlap_penalty",
-    "pair_scales_for_fixed_cloud",
     "resolve_rigid_clash",
     "tuplet_clash_rescue_floor",
 ]
-
-
-def pair_scales_for_fixed_cloud(
-    n_fixed: int,
-    *,
-    n_substrate: int,
-    adsorbate_scale: float,
-) -> np.ndarray:
-    """Per-fixed-atom clearance scales for coverage slab + packed units.
-
-    Clash thresholds are ``scale_j * (r_i + r_j)``. Bare-substrate atoms
-    (prefix ``[:n_substrate]``) use scale ``1`` (covalent radius sum). Pre-adsorbed
-    and packed adsorbate atoms use *adsorbate_scale* (typically
-    ``connectivity_multiplier``) so clash descent aims at the same gap as
-    :func:`~metalsurfer.filters.adsorbates_mutually_disconnected`.
-    """
-    if n_fixed < 0:
-        raise ValueError(f"n_fixed must be non-negative, got {n_fixed}")
-    if n_substrate < 0 or n_substrate > n_fixed:
-        raise ValueError(
-            f"n_substrate ({n_substrate}) must be in [0, {n_fixed}] (n_fixed)"
-        )
-    scale = float(adsorbate_scale)
-    if not np.isfinite(scale) or scale <= 0.0:
-        raise ValueError(f"adsorbate_scale must be positive and finite, got {scale!r}")
-    scales = np.ones(int(n_fixed), dtype=float)
-    if n_substrate < n_fixed:
-        scales[int(n_substrate) :] = scale
-    return scales
 
 
 def atom_radii_for_symbols(
@@ -75,28 +48,16 @@ def atom_radii_for_symbols(
     *,
     use_vdw: bool = False,
 ) -> np.ndarray:
-    """Per-atom radii (Å) from ASE tables; missing entries raise.
+    """Return per-atom tabulated radii (Å). Unknown symbols raise.
 
     Parameters
     ----------
     symbols
         Chemical symbols.
     use_vdw
-        If True, prefer van der Waals radii; otherwise covalent.
+        If True, use van der Waals radii; otherwise covalent.
     """
-    out = np.empty(len(symbols), dtype=float)
-    missing: list[str] = []
-    for i, sym in enumerate(symbols):
-        r = geom._get_vdw_radius(sym) if use_vdw else geom._get_covalent_radius(sym)
-        if r is None:
-            missing.append(str(sym))
-            continue
-        out[i] = float(r)
-    if missing:
-        kind = "van der Waals" if use_vdw else "covalent"
-        uniq = ", ".join(sorted(set(missing)))
-        raise ValueError(f"no positive {kind} radius for symbol(s): {uniq}")
-    return out
+    return tabulated_radii(symbols, kind="vdw" if use_vdw else "covalent")
 
 
 def clash_bounds_for_adsorbate(
@@ -213,13 +174,31 @@ def _pair_thresholds(
     """Pairwise separation thresholds ``(n_moving, n_fixed)``.
 
     Base gap is ``r_i + r_j``. When *pair_scales* is set, column *j* uses
-    ``pair_scales[j] * (r_i + r_j)`` (substrate scale 1; adsorbate scale
-    ``connectivity_multiplier``).
+    ``pair_scales[j] * (r_i + r_j)``.
     """
     thresh = moving_radii[:, None] + fixed_radii[None, :]
     if pair_scales is not None:
         thresh = thresh * pair_scales[None, :]
     return thresh
+
+
+def _acceptance_thresholds(
+    moving_radii: np.ndarray,
+    fixed_radii: np.ndarray,
+    pair_scales: np.ndarray | float | None,
+    thresholds: np.ndarray | None,
+) -> np.ndarray:
+    """Return acceptance thresholds. Explicit *thresholds* win over *pair_scales*."""
+    if thresholds is not None:
+        acc = np.asarray(thresholds, dtype=float)
+        expected = (int(moving_radii.shape[0]), int(fixed_radii.shape[0]))
+        if acc.shape != expected:
+            raise ValueError(
+                f"thresholds shape {acc.shape} must be {expected} (n_moving, n_fixed)"
+            )
+        return acc
+    scales = _normalize_pair_scales(pair_scales, int(fixed_radii.shape[0]))
+    return _pair_thresholds(moving_radii, fixed_radii, scales)
 
 
 def overlap_penalty(
@@ -231,11 +210,14 @@ def overlap_penalty(
     cell: np.ndarray,
     pbc: list[bool],
     pair_scales: np.ndarray | float | None = None,
+    thresholds: np.ndarray | None = None,
 ) -> float:
     """Packmol distance-term merit: sum of squared positive overlaps.
 
-    ``f = sum_ij [max(0, thresh_ij^2 - d_ij^2)]^2`` with
-    ``thresh_ij = scale_j * (r_i + r_j)`` (scale defaults to 1).
+    ``f = sum_ij [max(0, merit_ij^2 - d_ij^2)]^2``. Acceptance thresholds are
+    ``scale_j * (r_i + r_j)`` or an explicit matrix. The merit target is those
+    thresholds plus :data:`_MERIT_CLEARANCE_PAD_ANGSTROM`, so a zero merit is
+    strictly outside the closed cutoff.
 
     Parameters
     ----------
@@ -262,6 +244,7 @@ def overlap_penalty(
         cell=cell,
         pbc=pbc,
         pair_scales=pair_scales,
+        thresholds=thresholds,
     )
     return f
 
@@ -275,6 +258,7 @@ def _overlap_penalty_and_pos_grad(
     cell: np.ndarray,
     pbc: list[bool],
     pair_scales: np.ndarray | float | None,
+    thresholds: np.ndarray | None = None,
 ) -> tuple[float, np.ndarray]:
     """Return ``(f, df/dp)`` with ``df/dp`` shape ``(n_moving, 3)``."""
     mov = np.asarray(moving_pos, dtype=float)
@@ -289,9 +273,9 @@ def _overlap_penalty_and_pos_grad(
             f"moving {r_m.shape[0]} vs {mov.shape[0]}, "
             f"fixed {r_f.shape[0]} vs {fix.shape[0]}"
         )
-    scales = _normalize_pair_scales(pair_scales, fix.shape[0])
     mic_vecs, dists = geom._mol_slab_pairwise_mic(mov, fix, cell, pbc)
-    thresh = _pair_thresholds(r_m, r_f, scales)
+    acceptance = _acceptance_thresholds(r_m, r_f, pair_scales, thresholds)
+    thresh = acceptance + _MERIT_CLEARANCE_PAD_ANGSTROM
     overlap = np.maximum(0.0, thresh * thresh - dists * dists)
     f = float(np.sum(overlap * overlap))
     # df/dp_i = sum_j -4 * o_ij * mic_vec_ij  for overlapping pairs.
@@ -308,21 +292,25 @@ def _overlap_f_and_max_violation(
     *,
     cell: np.ndarray,
     pbc: list[bool],
-    pair_scales: np.ndarray | float | None,
+    pair_scales: np.ndarray | float | None = None,
+    thresholds: np.ndarray | None = None,
 ) -> tuple[float, float]:
-    """Return ``(overlap_penalty_f, max_pair_violation)`` from one MIC."""
+    """Return ``(overlap_penalty_f, max_pair_violation)`` from one MIC.
+
+    Violation is measured against the unpadded acceptance threshold.
+    """
     mov = np.asarray(moving_pos, dtype=float)
     fix = np.asarray(fixed_pos, dtype=float)
     if mov.size == 0 or fix.size == 0:
         return 0.0, 0.0
     r_m = np.asarray(moving_radii, dtype=float).reshape(-1)
     r_f = np.asarray(fixed_radii, dtype=float).reshape(-1)
-    scales = _normalize_pair_scales(pair_scales, fix.shape[0])
     _, dists = geom._mol_slab_pairwise_mic(mov, fix, cell, pbc)
-    thresh = _pair_thresholds(r_m, r_f, scales)
-    overlap = np.maximum(0.0, thresh * thresh - dists * dists)
+    acceptance = _acceptance_thresholds(r_m, r_f, pair_scales, thresholds)
+    merit = acceptance + _MERIT_CLEARANCE_PAD_ANGSTROM
+    overlap = np.maximum(0.0, merit * merit - dists * dists)
     f = float(np.sum(overlap * overlap))
-    viol = float(np.max(np.maximum(0.0, thresh - dists)))
+    viol = float(np.max(np.maximum(0.0, acceptance - dists)))
     return f, viol
 
 
@@ -361,6 +349,7 @@ def _rigid_state_objective_and_jac(
     cell: np.ndarray,
     pbc: list[bool],
     pair_scales: np.ndarray | float | None,
+    thresholds: np.ndarray | None,
 ) -> tuple[float, np.ndarray]:
     """Value and analytic Jacobian of the Packmol merit wrt rigid state."""
     pos = _apply_rigid_state(base_pos, origin, site_frame, normal, state)
@@ -372,6 +361,7 @@ def _rigid_state_objective_and_jac(
         cell=cell,
         pbc=pbc,
         pair_scales=pair_scales,
+        thresholds=thresholds,
     )
     # d(pos)/d(local translation k) equals the k-th site-frame basis vector.
     jac = np.zeros(4, dtype=float)
@@ -405,6 +395,7 @@ def resolve_rigid_clash(
     config: AdsorptionConfig,
     rotate_azimuth: bool = True,
     fixed_pair_scales: np.ndarray | float | None = None,
+    thresholds: np.ndarray | None = None,
     use_vdw_moving: bool = False,
     bounds: tuple[tuple[float, float], tuple[float, float], float] | None = None,
     moving_radii: np.ndarray | None = None,
@@ -414,10 +405,10 @@ def resolve_rigid_clash(
     State is ``[dx, dy, dz, d_az_deg]`` in the local site frame. Bounds default to
     :func:`clash_bounds_for_adsorbate`, or pass ``(x_range, y_range, dz_bound)``.
 
-    *fixed_pair_scales* multiplies ``r_i + r_j`` per fixed atom (scalar or array).
-    Use :func:`pair_scales_for_fixed_cloud` so adsorbate columns match
-    ``connectivity_multiplier`` while substrate columns stay at scale ``1``.
-    ``None`` leaves thresholds at the covalent radius sum.
+    *thresholds* are the acceptance cutoffs ``(n_moving, n_fixed)``. When
+    omitted, *fixed_pair_scales* multiplies ``r_i + r_j`` per fixed atom.
+    Success requires every pair strictly outside those unpadded thresholds.
+    The merit itself targets the thresholds plus a 1e-4 Å pad.
     """
     base_pos = np.asarray(adsorbate.get_positions(), dtype=float)
     origin_arr = np.asarray(origin, dtype=float).reshape(3)
@@ -436,18 +427,17 @@ def resolve_rigid_clash(
         moving_radii = np.asarray(moving_radii, dtype=float).reshape(-1)
     fix = np.asarray(fixed_pos, dtype=float)
     fix_r = np.asarray(fixed_radii, dtype=float).reshape(-1)
-    scales = _normalize_pair_scales(fixed_pair_scales, fix.shape[0])
-
-    f0 = overlap_penalty(
-        base_pos,
-        moving_radii,
-        fix,
-        fix_r,
-        cell=cell,
-        pbc=pbc,
-        pair_scales=scales,
+    acceptance = _acceptance_thresholds(
+        moving_radii, fix_r, fixed_pair_scales, thresholds
     )
-    if f0 <= _CLASH_DESCENT_SUCCESS_F:
+
+    def _pairs_clear(pos: np.ndarray) -> bool:
+        if pos.size == 0 or fix.size == 0:
+            return True
+        _, dists = geom._mol_slab_pairwise_mic(pos, fix, cell, pbc)
+        return bool(np.all(clear_of_cutoff(dists, acceptance)))
+
+    if _pairs_clear(base_pos):
         return base_pos.copy(), 0.0 if rotate_azimuth else None, True
 
     x_range, y_range, dz_b = bounds or clash_bounds_for_adsorbate(adsorbate, config)
@@ -471,7 +461,8 @@ def resolve_rigid_clash(
             fixed_radii=fix_r,
             cell=cell,
             pbc=pbc,
-            pair_scales=scales,
+            pair_scales=None,
+            thresholds=acceptance,
         )
 
     result = minimize(
@@ -491,11 +482,9 @@ def resolve_rigid_clash(
         fix_r,
         cell=cell,
         pbc=pbc,
-        pair_scales=scales,
+        thresholds=acceptance,
     )
-    ok = f_best <= _CLASH_DESCENT_SUCCESS_F or viol <= float(
-        _CLASH_DESCENT_SUCCESS_VIOLATION_ANGSTROM
-    )
+    ok = _pairs_clear(best_pos)
     az_delta = float(best_state[3]) if rotate_azimuth else None
     if not ok:
         logger.debug(

@@ -1,18 +1,25 @@
 """Unit tests for Packmol-style overlap penalty and rigid-body clash descent."""
 
+import logging
+
 import numpy as np
 import pytest
 from ase import Atoms
 from ase.data import atomic_numbers, covalent_radii
 
+from metalsurfer._logging import _warned_once
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.placement import geometry as geom
 from metalsurfer.placement.clash import (
+    _MERIT_CLEARANCE_PAD_ANGSTROM,
     atom_radii_for_symbols,
     overlap_penalty,
-    pair_scales_for_fixed_cloud,
     resolve_rigid_clash,
     tuplet_clash_rescue_floor,
+)
+from metalsurfer.placement.cutoffs import (
+    mixed_covalent_thresholds,
+    radius_for_symbol,
 )
 from metalsurfer.placement.geometry import compute_surface_site_frame
 
@@ -60,14 +67,15 @@ def test_overlap_penalty_c1_smooth_across_threshold():
             pbc=pbc,
         )
 
-    # Just inside and just outside the threshold: left/right derivatives of
-    # f = [max(0, r^2 - d^2)]^2 should both approach 0 at d = r_sum.
-    d0 = r_sum
+    # Merit target is the acceptance cutoff plus 1e-4 Å, so f is zero only
+    # strictly outside that padded threshold. Derivatives still vanish there.
+    d0 = r_sum + _MERIT_CLEARANCE_PAD_ANGSTROM
     left = (f_at(d0) - f_at(d0 - eps)) / eps
     right = (f_at(d0 + eps) - f_at(d0)) / eps
     assert abs(left) < 1e-3
     assert abs(right) < 1e-3
     assert f_at(d0) == 0.0
+    assert f_at(r_sum) > 0.0
     assert f_at(d0 - 0.1) > 0.0
 
 
@@ -261,11 +269,6 @@ def test_clash_bounds_uses_supplied_moving_radii_for_zero_footprint(monkeypatch)
     assert dz == pytest.approx(1.25)
 
 
-def test_pair_scales_for_fixed_cloud_substrate_vs_adsorbate():
-    scales = pair_scales_for_fixed_cloud(5, n_substrate=3, adsorbate_scale=1.3)
-    np.testing.assert_allclose(scales, [1.0, 1.0, 1.0, 1.3, 1.3])
-
-
 def test_tuplet_clash_rescue_floor_scales_with_radii():
     floor_hh = tuplet_clash_rescue_floor(["H"], ["H"])
     floor_oo = tuplet_clash_rescue_floor(["O"], ["O"])
@@ -277,6 +280,71 @@ def test_tuplet_clash_rescue_floor_scales_with_radii():
 def test_atom_radii_for_symbols_fails_loud_on_unknown_symbol():
     with pytest.raises(ValueError, match="no positive covalent radius.*Xx"):
         atom_radii_for_symbols(["C", "Xx"])
+
+
+def test_vdw_hole_is_interpolated_once(caplog):
+    """Fe and Ru have no ASE van der Waals radius; fill within the period."""
+    radius_for_symbol.cache_clear()
+    _warned_once.discard("radius-fill:vdw:Fe")
+    _warned_once.discard("radius-fill:vdw:Ru")
+    with caplog.at_level(logging.WARNING):
+        assert radius_for_symbol("Fe", "vdw") == pytest.approx(1.80)
+        assert radius_for_symbol("Ru", "vdw") == pytest.approx(1.845)
+        radius_for_symbol.cache_clear()
+        assert radius_for_symbol("Fe", "vdw") == pytest.approx(1.80)
+    fe_msgs = [
+        rec.getMessage()
+        for rec in caplog.records
+        if "Fe" in rec.getMessage() and "interpolated" in rec.getMessage()
+    ]
+    assert len(fe_msgs) == 1
+
+
+def test_equality_on_cutoff_is_not_a_successful_descent():
+    """A pair sitting on m*(ri+rj) is still inside the cutoff."""
+    config = AdsorptionConfig(
+        material_type="slab",
+        seed=0,
+        placement_x_range=(0.0, 0.0),
+        placement_y_range=(0.0, 0.0),
+        connectivity_multiplier=1.3,
+    )
+    r = 0.7
+    scale = float(config.connectivity_multiplier)
+    gap = scale * (r + r)
+    moving = Atoms("H", positions=[[0.0, 0.0, 0.0]])
+    fixed = np.array([[gap, 0.0, 0.0]], dtype=float)
+    frame = compute_surface_site_frame(np.array([0.0, 0.0, 1.0]))
+    _, _, ok = resolve_rigid_clash(
+        moving,
+        fixed,
+        np.array([r]),
+        origin=np.zeros(3),
+        site_frame=frame,
+        cell=np.eye(3) * 20.0,
+        pbc=[False, False, False],
+        config=config,
+        fixed_pair_scales=scale,
+        moving_radii=np.array([r]),
+        bounds=((0.0, 0.0), (0.0, 0.0), 0.0),
+        rotate_azimuth=False,
+    )
+    assert not ok
+
+
+def test_substrate_floor_uses_contact_ratio_not_full_sum():
+    moving = np.array([0.76])
+    fixed = np.array([1.36, 0.31])
+    thresh = mixed_covalent_thresholds(
+        moving,
+        fixed,
+        n_substrate=1,
+        substrate_scale=0.8,
+        adsorbate_scale=1.3,
+        absolute_floor=1.5,
+    )
+    assert thresh[0, 0] == pytest.approx(max(1.5, 0.8 * (0.76 + 1.36)))
+    assert thresh[0, 1] == pytest.approx(1.3 * (0.76 + 0.31))
 
 
 def test_resolve_rigid_clash_final_coords_use_one_mic(monkeypatch):

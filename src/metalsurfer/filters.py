@@ -20,7 +20,7 @@ from collections.abc import Sequence
 
 import numpy as np
 from ase import Atoms
-from ase.data import atomic_numbers, covalent_radii
+from ase.data import atomic_numbers
 from ase.geometry import find_mic
 from scipy.optimize import linear_sum_assignment
 from scipy.sparse.csgraph import connected_components
@@ -32,6 +32,7 @@ from .exceptions import DependencyMissingError
 from .models import ScreeningResult
 from .placement._material import material_aware_pbc
 from .placement.clash import atom_radii_for_symbols
+from .placement.cutoffs import pair_thresholds, tabulated_radii
 from .placement.geometry import (
     _mol_slab_pairwise_distances,
     calculate_min_distance,
@@ -84,16 +85,15 @@ def _mic_pairwise_distances(
 
 def _covalent_threshold_matrix(syms: np.ndarray, multiplier: float) -> np.ndarray:
     """Build (n, n) matrix of ``multiplier * (r_cov_i + r_cov_j)``."""
-    z = np.array([atomic_numbers[s] for s in syms])
-    r_cov = covalent_radii[z]
-    return multiplier * (r_cov[:, None] + r_cov[None, :])
+    radii = tabulated_radii([str(s) for s in syms], kind="covalent")
+    return pair_thresholds(radii, radii, multiplier)
 
 
 def _lateral_covalent_radii(symbols: Sequence[str]) -> np.ndarray:
     """Per-atom covalent radii for adsorbate–adsorbate lateral clearance.
 
     Delegates to :func:`placement.clash.atom_radii_for_symbols` (same table as
-    clash descent); missing tabulated radii raise.
+    clash descent). Unknown symbols raise.
     """
     return atom_radii_for_symbols(symbols, use_vdw=False)
 
@@ -576,9 +576,10 @@ def check_desorption(
 ) -> tuple[bool, str]:
     """Return ``(ok, reason)``; ``ok=False`` means the adsorbate desorbed.
 
-    Complementary to placement: initial placement uses min_contact_ratio to avoid
-    covalent binding; this post-optimization filter rejects structures that
-    drifted too far from the surface (binding_threshold, default 4.0 Å).
+    Complementary to placement: the initial floor is
+    ``max(min_initial_distance, min_contact_ratio * (r_i + r_j))``. This
+    filter rejects structures farther than ``binding_threshold``
+    (default 4.0 Å).
 
     Periodicity note: this is a *geometric* criterion, so it uses the substrate's
     real periodicity (:func:`material_aware_pbc`) rather than the calculator's

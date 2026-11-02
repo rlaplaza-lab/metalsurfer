@@ -306,10 +306,11 @@ Placement generation
 
    Bounded Packmol-style rigid-body overlap descent during distance recovery
    and n-tuplet near-miss / pre-relax packing. Bounds scale with molecule
-   footprint and the height window. Substrate contacts use covalent radius
-   sums (scale ``1``); pre-adsorbed / packed adsorbate contacts use
-   ``connectivity_multiplier`` on the radius sum so clash descent matches the
-   shared adsorbate–adsorbate disconnect gate. When ``False``, recovery
+   footprint and the height window. Substrate contacts use the covalent crash
+   floor (``max(min_initial_distance, min_contact_ratio * (r_i + r_j))``);
+   pre-adsorbed / packed adsorbate contacts use ``connectivity_multiplier``
+   on the covalent radius sum so clash descent matches the shared
+   adsorbate–adsorbate disconnect gate. When ``False``, recovery
    falls back to discrete XY jitter only and n-tuplet rejects overlapping
    packs (no hard-skip alternate path). Disabled entirely when
    ``placement_distance_recovery`` is ``False`` for the recovery path.
@@ -387,11 +388,11 @@ Initial placement validation
 ``min_initial_distance``
     **Type:** ``float`` · **Default:** ``1.5`` (Å)
 
-    Absolute floor (Å) on the closest adsorbate–surface pair. The distance
-    gate uses the larger of this value and ``covalent_sum * min_contact_ratio``.
-    Typical C/N/O–metal pairs are limited by the ratio. This floor is what
-    limits light atoms (H) and pairs with an unknown covalent radius. It is
-    not used by the stricter contact-quality checks.
+    Absolute floor (Å) on mol–substrate pairs. The distance gate uses the
+    larger of this value and ``covalent_sum * min_contact_ratio``. Typical
+    C/N/O–metal pairs are limited by the ratio. This floor is what limits
+    light atoms (H). It is not a stand-in radius, and it is not applied to
+    adsorbate–adsorbate fusion.
 
 ``min_adsorbate_separation``
     **Type:** ``float`` · **Default:** ``1.5`` (Å)
@@ -422,9 +423,10 @@ Initial placement validation
 ``min_contact_ratio``
    **Type:** ``float`` · **Default:** ``0.8`` · **Valid range:** ``[0.5, 1.2]``
 
-   Chemistry-scaled floor on the closest adsorbate–surface pair, as a fraction
-   of ``(r_molecule + r_surface)``. The distance gate uses the larger of this
-   and ``min_initial_distance``. Typical C/N/O–metal pairs are limited here;
+   Covalent crash floor: a mol–substrate pair is too close when
+   ``d <= ratio * (r_i + r_j)``, then raised to ``min_initial_distance``.
+   The same floor is used by validation, the height solver, and substrate
+   columns of clash descent. Typical C/N/O–metal pairs are limited here;
    light atoms (H) are limited by the absolute floor.
 
 ``max_initial_distance``
@@ -437,42 +439,48 @@ Initial placement validation
    **Type:** ``bool`` · **Default:** ``False``
 
    Turn on the contact-quality gate. Order: (1) closest pair no farther than
-   ``max_closest_approach``, (2) at least ``min_contact_atoms`` atoms within
-   ``contact_distance_threshold``, (3) with ``require_multiple_contact``, those
-   contact distances must not spread too much. Independent of van der Waals
-   rejection; use ``reject_vdw_overlaps`` for that.
+   ``max_closest_approach``, (2) at least ``min_contact_atoms`` atoms with
+   ``d <= contact_covalent_scale * (r_i + r_j)``, (3) with
+   ``require_multiple_contact``, those contact distances must not spread too
+   much. Independent of van der Waals rejection; use ``reject_vdw_overlaps``
+   for that.
 ``reject_vdw_overlaps``
    **Type:** ``bool`` · **Default:** ``False``
 
-   Also reject van der Waals overlaps (stricter than the covalent floor).
-   Independent of ``strict_initial_placement``.
+   Also reject mol–substrate pairs with
+   ``d <= vdw_overlap_scale * (R_i + R_j)`` on tabulated van der Waals
+   radii. Adsorbate–adsorbate fusion stays on ``connectivity_multiplier``
+   and covalent radii. Independent of ``strict_initial_placement``.
 
 ``vdw_overlap_scale``
    **Type:** ``float`` · **Default:** ``1.0``
 
-   Scale on summed VDW radii when ``reject_vdw_overlaps`` is on. Values ``> 1``
-   are stricter; ``< 1`` more lenient.
+   Scale on summed tabulated van der Waals radii when ``reject_vdw_overlaps``
+   is on. A pair overlaps when ``d <= scale * (R_i + R_j)``. Values ``> 1``
+   are stricter; ``< 1`` more lenient. Not multiplied by
+   ``connectivity_multiplier``.
 
 ``max_closest_approach``
    **Type:** ``float`` · **Default:** ``3.0`` (Å)
 
    Cap on the closest adsorbate–surface distance when contact quality is on.
    Rejects starts that are still too far from the surface. Distinct from
-   ``contact_distance_threshold`` (which only counts contacting atoms) and from
+   ``contact_covalent_scale`` (which only counts contacting atoms) and from
    ``min_contact_ratio`` (always-on covalent floor).
 
 ``min_contact_atoms``
    **Type:** ``int`` · **Default:** ``1``
 
-   Minimum molecule atoms within ``contact_distance_threshold`` of the surface
-   under contact-quality checks.
+   Minimum molecule atoms in covalent contact with the surface
+   (``d <= contact_covalent_scale * (r_i + r_j)``) under contact-quality
+   checks.
 
-``contact_distance_threshold``
-   **Type:** ``float`` · **Default:** ``2.5`` (Å)
+``contact_covalent_scale``
+   **Type:** ``float`` · **Default:** ``1.35`` · **Valid range:** ``[0.5, 2.0]``
 
-   Distance cutoff for counting surface-contacting atoms. Must sit between
-   ``min_initial_distance`` and ``max_closest_approach`` when a contact-quality
-   flag is on.
+   Scale on summed covalent radii for counting an adsorbate atom as in
+   contact. An atom counts when some slab pair has
+   ``d <= scale * (r_i + r_j)``.
 
 ``require_multiple_contact``
    **Type:** ``bool`` · **Default:** ``False``
@@ -646,15 +654,15 @@ Post-relaxation validation
 ``connectivity_multiplier``
    **Type:** ``float`` · **Default:** ``1.3``
 
-   Covalent-radius multiplier for bond detection
-   (``d_ij ≤ multiplier × (r_i + r_j)``). The default is intentionally
-   lenient so stabilizing lateral contacts outside the covalent shell remain
-   allowed. Keeps adsorbates intact after relaxation, and is the adsorbate–
-   adsorbate clash / BO occupancy-sigma cutoff via
-   :func:`~metalsurfer.filters.interadsorbate_clearance` (placement, n-tuplet
-   packing, clash recovery, sequential / joint BO). Predictive ``sigma``
-   peaks just outside this cutoff and returns to 1 at twice the value.
-   In-plane site occupancy still uses ``min_adsorbate_separation``.
+   Covalent-contact cutoff: bonded when
+   ``d <= multiplier × (r_i + r_j)``, clear when ``d`` is strictly greater.
+   Shared by intramolecular connectivity and adsorbate–adsorbate fusion
+   (clash descent, n-tuplet packing, occupancy sigma) via
+   :func:`~metalsurfer.filters.interadsorbate_clearance`. The default is
+   intentionally lenient so stabilizing lateral contacts outside the covalent
+   shell remain allowed. Predictive ``sigma`` peaks just outside this cutoff
+   and returns to 1 at twice the value. In-plane site occupancy still uses
+   ``min_adsorbate_separation``.
 
 ``max_adsorption_energy``
    **Type:** ``float`` · **Default:** ``5.0`` (eV)

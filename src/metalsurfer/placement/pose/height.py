@@ -20,11 +20,25 @@ from .._constants import (
     _PARALLEL_Z_MIN_HI_MARGIN,
     _VECTOR_NORM_EPS,
 )
+from ..cutoffs import pair_thresholds, tabulated_radii, within_cutoff
 from ..site_enumeration import _height_along_slab_normal
 from ..site_types import Site
 from .context import _HeightInterval
 
 logger = logging.getLogger(__name__)
+
+
+def _pair_clearance(
+    config: AdsorptionConfig, mol_symbol: str, slab_symbol: str
+) -> float:
+    return geom.min_pair_clearance_angstrom(
+        mol_symbol,
+        slab_symbol,
+        min_distance=float(config.min_initial_distance),
+        min_contact_ratio=float(config.min_contact_ratio),
+        reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
+        vdw_overlap_scale=float(config.vdw_overlap_scale),
+    )
 
 
 def _height_interval_family_key(spec: PlacementSpec) -> tuple:
@@ -161,7 +175,6 @@ def _pairwise_contact_com_height(
     cell: np.ndarray,
     pbc: list[bool],
     config: AdsorptionConfig,
-    r_surface: float,
 ) -> float:
     """Smallest COM height along *place_normal* clearing every mol–slab pair.
 
@@ -178,17 +191,6 @@ def _pairwise_contact_com_height(
     if len(slab_pos) == 0 or len(rotated) == 0:
         return base_h
 
-    def _allowed(sym_m: str, sym_s: str | None) -> float:
-        return geom.min_pair_clearance_angstrom(
-            sym_m,
-            sym_s,
-            min_distance=float(config.min_initial_distance),
-            min_contact_ratio=float(config.min_contact_ratio),
-            reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
-            vdw_overlap_scale=float(config.vdw_overlap_scale),
-            r_surface_fallback=float(r_surface),
-        )
-
     mol_seed = rotated + base
     mic_vecs, _ = geom._mol_slab_pairwise_mic(mol_seed, slab_pos, cell, pbc)
     mic_n = np.einsum("ijd,d->ij", mic_vecs, n_hat)
@@ -198,7 +200,7 @@ def _pairwise_contact_com_height(
     h_needed = float("-inf")
     for i, sym_m in enumerate(symbols):
         for j, sym_s in enumerate(slab_symbols):
-            allowed = _allowed(sym_m, sym_s)
+            allowed = _pair_clearance(config, sym_m, sym_s)
             lat = float(lateral[i, j])
             if lat >= allowed:
                 continue
@@ -214,7 +216,7 @@ def _pairwise_contact_com_height(
         rel_h = rotated @ n_hat
         i_low = int(np.argmin(rel_h))
         j_near = int(np.argmin(lateral[i_low]))
-        gate = _allowed(symbols[i_low], slab_symbols[j_near])
+        gate = _pair_clearance(config, symbols[i_low], slab_symbols[j_near])
         h_needed = base_h + gate - float(rel_h[i_low])
     # 3D pair gates in a hollow can sit atoms below the nuclear plane; keep
     # every atom on the vacuum side of the support-plane anchor.
@@ -222,8 +224,7 @@ def _pairwise_contact_com_height(
         float(h_needed),
         _com_floor_on_support_plane(rotated, n_hat, base_h),
     )
-    # Pad so reconstructed MIC distances clear ``dists < allowed`` under
-    # quaternion / wrap float noise (not a chemistry slack).
+    # Pad so reconstructed MIC distances sit strictly outside the cutoff.
     return float(h_needed) + _CONTACT_CLEARANCE_PAD_ANGSTROM
 
 
@@ -263,23 +264,30 @@ def _pair_min_distance_at_com_height(
 
 def _count_contact_atoms_at_com_height(
     rotated_pos: np.ndarray,
+    symbols: list[str],
     *,
     site_xyz: np.ndarray,
     place_normal: np.ndarray,
     slab_positions: np.ndarray,
+    slab_symbols: list[str],
     cell: np.ndarray,
     pbc: list[bool],
     com_h: float,
-    contact_threshold: float,
+    contact_covalent_scale: float,
 ) -> int:
-    """Count adsorbate atoms within *contact_threshold* of any slab atom."""
+    """Count adsorbate atoms within a covalent-sum contact of any slab atom."""
     mol = _mol_positions_at_com_height(
         rotated_pos, site_xyz=site_xyz, place_normal=place_normal, com_h=com_h
     )
     dists = geom._mol_slab_pairwise_distances(mol, slab_positions, cell, pbc)
     if dists.size == 0:
         return 0
-    return int(np.sum(np.any(dists <= float(contact_threshold), axis=1)))
+    thresh = pair_thresholds(
+        tabulated_radii(symbols, kind="covalent"),
+        tabulated_radii(slab_symbols, kind="covalent"),
+        contact_covalent_scale,
+    )
+    return int(np.sum(np.any(within_cutoff(dists, thresh), axis=1)))
 
 
 def _pair_worst_penetration_at_com_height(
@@ -293,7 +301,6 @@ def _pair_worst_penetration_at_com_height(
     cell: np.ndarray,
     pbc: list[bool],
     config: AdsorptionConfig,
-    r_surface: float,
     com_h: float,
 ) -> float:
     """Worst pair penetration (Å) at *com_h*; ≤0 means fully cleared."""
@@ -307,15 +314,7 @@ def _pair_worst_penetration_at_com_height(
     worst = 0.0
     for i, sym_m in enumerate(symbols):
         for j, sym_s in enumerate(slab_symbols):
-            allowed = geom.min_pair_clearance_angstrom(
-                sym_m,
-                sym_s,
-                min_distance=float(config.min_initial_distance),
-                min_contact_ratio=float(config.min_contact_ratio),
-                reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
-                vdw_overlap_scale=float(config.vdw_overlap_scale),
-                r_surface_fallback=float(r_surface),
-            )
+            allowed = _pair_clearance(config, sym_m, sym_s)
             short = float(allowed) - float(dists[i, j])
             if short > worst:
                 worst = short
@@ -333,7 +332,6 @@ def _void_height_interval_analytic(
     cell: np.ndarray,
     pbc: list[bool],
     config: AdsorptionConfig,
-    r_surface: float,
     diversity: float,
 ) -> tuple[float, float, float]:
     """Return ``(com_lo, com_nominal, com_hi)`` for a void site.
@@ -360,7 +358,6 @@ def _void_height_interval_analytic(
             cell=cell,
             pbc=pbc,
             config=config,
-            r_surface=r_surface,
             com_h=float(h),
         )
 
@@ -444,7 +441,6 @@ def _contact_shell_indices(
     slab_positions: np.ndarray,
     slab_symbols: list[str],
     config: AdsorptionConfig,
-    r_surface: float,
     cell: np.ndarray,
     pbc: list[bool],
     place_normal: np.ndarray,
@@ -464,15 +460,7 @@ def _contact_shell_indices(
     max_gate = 0.0
     for sym_m in symbols:
         for sym_s in slab_symbols:
-            gate = geom.min_pair_clearance_angstrom(
-                sym_m,
-                sym_s,
-                min_distance=float(config.min_initial_distance),
-                min_contact_ratio=float(config.min_contact_ratio),
-                reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
-                vdw_overlap_scale=float(config.vdw_overlap_scale),
-                r_surface_fallback=float(r_surface),
-            )
+            gate = _pair_clearance(config, sym_m, sym_s)
             if gate > max_gate:
                 max_gate = float(gate)
     radius = mol_extent + max_gate + _CONTACT_SHELL_MARGIN_ANGSTROM
@@ -507,7 +495,6 @@ def _feasible_height_interval(
     cell: np.ndarray,
     pbc: list[bool],
     config: AdsorptionConfig,
-    r_surface: float,
     z_base_lo: float,
     z_base_hi: float,
 ) -> _HeightInterval | None:
@@ -532,7 +519,6 @@ def _feasible_height_interval(
         slab_positions=slab_positions,
         slab_symbols=slab_symbols,
         config=config,
-        r_surface=r_surface,
         cell=cell,
         pbc=pbc,
         place_normal=place_normal,
@@ -555,7 +541,6 @@ def _feasible_height_interval(
             cell=cell,
             pbc=pbc,
             config=config,
-            r_surface=r_surface,
             diversity=diversity,
         )
     else:
@@ -569,7 +554,6 @@ def _feasible_height_interval(
             cell=cell,
             pbc=pbc,
             config=config,
-            r_surface=r_surface,
         )
         com_lo = float(com_nominal)
         actual = _pair_min_distance_at_com_height(
@@ -605,13 +589,15 @@ def _feasible_height_interval(
     if need_contact_check:
         n_contact = _count_contact_atoms_at_com_height(
             rotated_pos,
+            symbols,
             site_xyz=base,
             place_normal=place_normal,
             slab_positions=slab_positions,
+            slab_symbols=slab_symbols,
             cell=cell,
             pbc=pbc,
             com_h=com_nominal,
-            contact_threshold=float(config.contact_distance_threshold),
+            contact_covalent_scale=float(config.contact_covalent_scale),
         )
         contact_ok = n_contact >= min_contacts
         if config.strict_initial_placement:

@@ -35,10 +35,10 @@ from ..placement.clash import (
     atom_radii_for_symbols,
     clash_bounds_for_adsorbate,
     compose_quaternion_with_azimuth,
-    pair_scales_for_fixed_cloud,
     resolve_rigid_clash,
     tuplet_clash_rescue_floor,
 )
+from ..placement.cutoffs import mixed_covalent_thresholds
 from ..placement.geometry import (
     _mol_slab_pairwise_distances,
     calculate_min_distance,
@@ -103,23 +103,10 @@ def _fixed_cloud_from_coverage_and_results(
     slab_atoms: Atoms,
     results: Sequence[ScreeningResult],
     suffixes: Sequence[np.ndarray],
-    *,
-    n_substrate: int,
-    adsorbate_scale: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Coverage slab atoms plus already-accepted adsorbate suffixes.
-
-    Returns ``(positions, radii, pair_scales)``. Substrate columns use scale
-    ``1``; pre-adsorbed and packed adsorbate columns use *adsorbate_scale*
-    (``connectivity_multiplier``).
-    """
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return coverage-slab positions and covalent radii, plus packed suffixes."""
     fixed_pos = np.asarray(slab_atoms.get_positions(), dtype=float)
     fixed_radii = atom_radii_for_symbols(list(slab_atoms.get_chemical_symbols()))
-    scales = pair_scales_for_fixed_cloud(
-        len(fixed_pos),
-        n_substrate=int(n_substrate),
-        adsorbate_scale=float(adsorbate_scale),
-    )
     for other, prev in zip(suffixes, results, strict=True):
         fixed_pos = np.vstack([fixed_pos, other])
         prev_syms = list(prev.atoms.get_chemical_symbols()[prev.slab_size :])
@@ -129,13 +116,7 @@ def _fixed_cloud_from_coverage_and_results(
                 atom_radii_for_symbols(prev_syms),
             ]
         )
-        scales = np.concatenate(
-            [
-                scales,
-                np.full(len(other), float(adsorbate_scale), dtype=float),
-            ]
-        )
-    return fixed_pos, fixed_radii, scales
+    return fixed_pos, fixed_radii
 
 
 def _min_dist_to_suffixes(
@@ -211,8 +192,8 @@ def _try_rescue_suffix(
     candidate: ScreeningResult,
     fixed_pos: np.ndarray,
     fixed_radii: np.ndarray,
-    fixed_scales: np.ndarray,
     *,
+    n_substrate: int,
     slab_atoms: Atoms,
     cell: np.ndarray,
     pbc: list[bool],
@@ -232,6 +213,15 @@ def _try_rescue_suffix(
         config,
         footprint_radius=footprint,
     )
+    moving_r = atom_radii_for_symbols(list(ads.get_chemical_symbols()))
+    thresholds = mixed_covalent_thresholds(
+        moving_r,
+        fixed_radii,
+        n_substrate=int(n_substrate),
+        substrate_scale=float(config.min_contact_ratio),
+        adsorbate_scale=float(config.connectivity_multiplier),
+        absolute_floor=float(config.min_initial_distance),
+    )
     new_pos, az_delta, ok = resolve_rigid_clash(
         ads,
         fixed_pos,
@@ -241,8 +231,9 @@ def _try_rescue_suffix(
         cell=cell,
         pbc=pbc,
         config=config,
-        fixed_pair_scales=fixed_scales,
+        thresholds=thresholds,
         bounds=bounds,
+        moving_radii=moving_r,
     )
     if not ok:
         return None
@@ -327,18 +318,16 @@ def pack_exact_tuplet(
         ):
             return None
 
-        fixed_pos, fixed_radii, fixed_scales = _fixed_cloud_from_coverage_and_results(
+        fixed_pos, fixed_radii = _fixed_cloud_from_coverage_and_results(
             slab_atoms,
             packed,
             packed_suffixes,
-            n_substrate=substrate_n,
-            adsorbate_scale=adsorbate_scale,
         )
         rescued = _try_rescue_suffix(
             winner,
             fixed_pos,
             fixed_radii,
-            fixed_scales,
+            n_substrate=substrate_n,
             slab_atoms=slab_atoms,
             cell=cell,
             pbc=pbc,
@@ -346,8 +335,8 @@ def pack_exact_tuplet(
         )
         if rescued is None:
             return None
-        # Clash success can sit on the bond-cutoff boundary; recheck with the
-        # shared adsorbate disconnect predicate.
+        # Descent clears its own thresholds; accept only when the shared
+        # disconnect predicate agrees.
         still_clear = all(
             adsorbates_mutually_disconnected(
                 rescued.atoms[rescued.slab_size :],

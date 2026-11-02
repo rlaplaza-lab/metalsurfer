@@ -26,7 +26,8 @@ OCCUPANCY_FOOTPRINT_SCALE_DEFAULT: float = 0.85
 # value here makes the admissible window empty and rejects every physically
 # reasonable placement.
 CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM: float = 3.0
-CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM: float = 2.5
+# Scale on (r_i + r_j) for counting an adsorbate atom as in contact.
+CONTACT_COVALENT_SCALE_DEFAULT: float = 1.35
 MIN_CALCULATOR_CELL_C_ANG: float = 18.0
 # Degeneracy guard for cell-frame geometry: below this norm the a x b cross
 # product (or an in-plane basis vector) is treated as degenerate and a

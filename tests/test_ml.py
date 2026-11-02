@@ -37,8 +37,8 @@ from metalsurfer.models import PlacementDescriptor, ScreeningResult
 from tests.factories import make_placement_record, make_random_placement_records
 
 
-def test_schema_version_is_3_1():
-    assert SCHEMA_VERSION == "3.1"
+def test_schema_version_is_3_2():
+    assert SCHEMA_VERSION == "3.2"
 
 
 def test_ml_package_exports_expanded_surface():
@@ -58,6 +58,7 @@ def test_computation_context_defaults_match_numeric_defaults():
         ctx.min_initial_distance
         == numeric_defaults.MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
     )
+    assert ctx.contact_covalent_scale == numeric_defaults.CONTACT_COVALENT_SCALE_DEFAULT
     assert ctx.min_contact_ratio == numeric_defaults.MIN_CONTACT_RATIO_DEFAULT
     assert ctx.symmetry_tolerance == numeric_defaults.DEFAULT_SYMMETRY_TOLERANCE
     assert (
@@ -80,7 +81,7 @@ class TestComputationContext:
         )
 
     def test_default_settings_hash_pinned(self):
-        assert ComputationContext().settings_hash() == "cafb355a73b7"
+        assert ComputationContext().settings_hash() == "a6171bb9d88c"
 
     def test_from_config(self):
         config = AdsorptionConfig(model_name="test-model", fmax=0.03, seed=123)

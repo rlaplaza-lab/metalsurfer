@@ -92,7 +92,7 @@ How a starting pose is accepted
 A candidate is placed over a site and kept when every adsorbate–surface pair
 clears a covalent floor: the larger of ``min_initial_distance`` (1.5 Å) and
 ``covalent_sum * min_contact_ratio`` (default ratio 0.8). The 1.5 Å floor
-is what limits hydrogen and atoms with an unknown radius. The ratio grows
+is what limits hydrogen. The ratio grows
 with the atoms involved, so it is the limit for typical C, N, O, and metal
 pairs. A start that only just misses that window is moved into it
 (``placement_distance_recovery=True``): first along the surface normal, then
@@ -110,7 +110,8 @@ Knobs worth changing:
   1.0) multiplies those radii; values above 1 leave a larger gap.
 - **How the molecule touches.** ``strict_initial_placement=True`` requires
   the closest pair within ``max_closest_approach`` (3.0 Å) and at least
-  ``min_contact_atoms`` atoms inside ``contact_distance_threshold`` (2.5 Å).
+  ``min_contact_atoms`` atoms with
+  ``d <= contact_covalent_scale * (r_i + r_j)`` (default scale 1.35).
   ``require_multiple_contact=True`` asks for two or more of those contacts
   at similar distances, which suits flat or chelating adsorbates.
 - **Drawn pose, unchanged.** ``placement_distance_recovery=False`` keeps or
@@ -198,8 +199,10 @@ members together, and the step commits the best binding config. There is no
 single-adsorbate MLIP screen and no partial-tuplet or single-winner fallback.
 Overlapping packs are rejected when ``placement_clash_descent`` is off;
 otherwise near-misses are rescued by clash descent (substrate contacts use
-radius sums; packed adsorbates use ``connectivity_multiplier`` on the radius
-sum, then re-checked with the shared disconnect gate). Stored
+the covalent crash floor
+``max(min_initial_distance, min_contact_ratio * (r_i + r_j))``; packed
+adsorbates use ``connectivity_multiplier`` on the covalent radius sum, then
+re-checked with the shared disconnect gate). Stored
 ``energy_adsorption`` is **per molecule**
 (:math:`E_\mathrm{ads,total}/n`); composite totals stay on
 ``energy_adslab`` / ``energy_adsorbate``. The stop uses

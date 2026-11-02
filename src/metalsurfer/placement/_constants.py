@@ -6,9 +6,6 @@ from ase.data import covalent_radii as ase_covalent_radii
 from .. import _numeric_defaults
 
 # Re-export shared defaults under placement-private names (used by geometry/sites).
-_CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM = (
-    _numeric_defaults.CONTACT_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
-)
 _CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM = (
     _numeric_defaults.CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM
 )
@@ -211,12 +208,12 @@ _PRINCIPAL_AXIS_ROT_AXIS_MIN_NORM: float = 1e-6
 _PRINCIPAL_AXIS_ROTATION_STEPS: int = 36
 _PRINCIPAL_AXIS_ROTATION_STEP_DEG: float = 10.0
 
-# Radius-derived fallback and contact-quality thresholds.
-_VDW_RADIUS_FROM_COVALENT_SCALE: float = 1.2
-_CONTACT_QUALITY_COVALENT_SUM_SCALE: float = 1.35
+# Contact counting: d <= scale * (r_i + r_j).
+_CONTACT_QUALITY_COVALENT_SUM_SCALE: float = (
+    _numeric_defaults.CONTACT_COVALENT_SCALE_DEFAULT
+)
 # Max variance of contact distances when requiring multi-atom contact (Å²).
 _CONTACT_ATOM_VARIANCE_MAX: float = 0.5
-_MIN_DISTANCE_HARD_FALLBACK_ANGSTROM: float = 2.0
 
 # ---------------------------------------------------------------------------
 # Policy and generator grids
@@ -273,8 +270,6 @@ _XYZ_HASH_DECIMALS: int = 6
 # Packmol-style rigid-body clash descent (recovery + n-tuplet).
 _CLASH_DESCENT_MAXITER: int = 40
 _CLASH_DESCENT_AZIMUTH_BOUND_DEG: float = 20.0
-_CLASH_DESCENT_SUCCESS_F: float = 1e-12
-_CLASH_DESCENT_SUCCESS_VIOLATION_ANGSTROM: float = 1e-3
 # Lateral salvage travel as a scale on the incoming in-plane footprint
 # (or mean covalent radius for single atoms).
 _CLASH_LATERAL_FOOTPRINT_SCALE: float = 1.0
@@ -353,7 +348,7 @@ _OUTWARD_NORMAL_STEP_PROBE_SCALE: float = 0.2
 _OUTWARD_NORMAL_STEP_FLOOR_ANGSTROM: float = 0.15
 # Extra lateral margin (Å) on the contact cylinder beyond molecule extent + pair gate.
 _CONTACT_SHELL_MARGIN_ANGSTROM: float = 0.5
-# Float pad so reconstructed MIC distances clear ``dists < allowed``.
+# Float pad so reconstructed MIC distances sit strictly outside a closed cutoff.
 _CONTACT_CLEARANCE_PAD_ANGSTROM: float = 1e-6
 # Bisection steps for void height bounds (2^-24 of the window).
 _HEIGHT_INTERVAL_BISECT_STEPS: int = 24

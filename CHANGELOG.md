@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-11-02
+
+### Changed
+
+- Clash, contact, and connectivity share one cutoff helper. Covalent radii
+  gate bonds, adsorbate fusion, the mol–substrate crash floor, and contact
+  counting (``contact_covalent_scale``, default 1.35). Van der Waals radii
+  gate optional steric overlap only. A missing table entry is interpolated
+  within the same period and warned once. Clash descent accepts a pose only
+  when every pair is strictly outside the cutoff; the optimizer still aims
+  0.0001 Å beyond it.
+- ML placement schema **3.2** records ``contact_covalent_scale`` on
+  ``ComputationContext``. ``contact_distance_threshold`` is removed.
+- Lattice-image mapping and the rigid-pose family key each live in one helper.
+
+### Removed
+
+- Unused helpers with no production callers: ``site_footprint_clearances``,
+  ``project_sites_to_support_plane``, ``is_top_layer_planar``, and the private
+  CSV-coerce, SMILES-fingerprint, adsorbate-RMSD, and hull-outside helpers.
+
 ## [0.9.7] - 2026-10-29
 
 ### Added

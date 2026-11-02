@@ -189,7 +189,7 @@ Module layout
    ├── optimization/         # MLIP setup, batched relaxation (TorchSim / FairChem)
    ├── surface_prep/         # prepare_substrate, freeze, …
    ├── symmetry.py           # spglib-based symmetry analysis
-   ├── ml/                   # features, schema 3.1, regression; bayesian/ package
+   ├── ml/                   # features, schema 3.2, regression; bayesian/ package
    ├── placement/            # site_* + generators / pose/ / policy
    └── workflow/             # orchestration by run mode
        ├── core.py           # standard per-molecule screening
@@ -568,12 +568,16 @@ Initial geometry validation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Always: covalent floor
-``max(min_initial_distance, covalent_sum * min_contact_ratio)``, optional
-``max_initial_distance``, then optional VDW when ``reject_vdw_overlaps``.
+``max(min_initial_distance, covalent_sum * min_contact_ratio)``. A pair is
+too close when ``d <=`` that floor. Optional ``max_initial_distance``, then
+optional van der Waals overlap when ``reject_vdw_overlaps``.
 Under coverage: adsorbate–adsorbate disconnection via
-``connectivity_multiplier``. Contact quality only when
-``strict_initial_placement`` or ``require_multiple_contact`` (closest approach,
-contact count, then variance). User-facing summary: :doc:`configuration`.
+``connectivity_multiplier`` (bonded when ``d <= m * (r_i + r_j)``).
+Contact quality only when ``strict_initial_placement`` or
+``require_multiple_contact``: closest approach, then at least
+``min_contact_atoms`` atoms with
+``d <= contact_covalent_scale * (r_i + r_j)`` (default scale 1.35), then
+variance. User-facing summary: :doc:`configuration`.
 
 Under saturation, substrate contact uses ``exclude_slab_atoms``;
 pre-adsorbed atoms use :func:`~metalsurfer.filters.adsorbates_mutually_disconnected`.
@@ -599,7 +603,7 @@ The surrogate sees **resolved absolute geometry**, not discrete site IDs.
    * - ``PlacementDescriptor`` / ``PlacementPose``
      - ``x_abs``, ``y_abs``, ``z_abs``, quat, …
    * - ``PlacementRecord``
-     - ML row (schema **3.1**); stores a ``descriptor: PlacementDescriptor``
+     - ML row (schema **3.2**); stores a ``descriptor: PlacementDescriptor``
        plus energies/labels/context (CSV still flattens)
    * - ``extract_features``
      - **8 features:** x, y, z, ``conformer_index``, quat_w/x/y/z
@@ -854,7 +858,8 @@ started, not the relaxed geometry (relaxed structures remain in XYZ/POSCAR;
 Utilities: ``extract_features``, ``placement_pose_from_features``,
 ``PlacementRecord.to_placement_descriptor`` /
 ``to_config``. Schema versioning in ``ml/schema.py`` (``SCHEMA_VERSION``
-**3.1**, which records ``dispersion`` on ``ComputationContext``). Shared
+**3.2**, which adds ``contact_covalent_scale`` on ``ComputationContext``
+and still records ``dispersion``). Shared
 numerics in ``_numeric_defaults.py``.
 Lean reload requires pose, energies, and identity columns; rich reload
 requires the full ``ctx_*`` and ``initial_*`` sets.

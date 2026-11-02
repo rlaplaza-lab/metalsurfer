@@ -10,6 +10,7 @@ from ase import Atoms
 from ...config import AdsorptionConfig
 from .. import geometry as geom
 from .._constants import (
+    _CONTACT_CLEARANCE_PAD_ANGSTROM,
     _DISTANCE_RECOVERY_XY_ATTEMPTS,
     _DISTANCE_ZERO_EPS,
     _LATERAL_OFFSET_REF_SWITCH_DOT,
@@ -26,6 +27,14 @@ from ..clash import (
     clash_bounds_for_adsorbate,
     compose_quaternion_with_azimuth,
     resolve_rigid_clash,
+)
+from ..cutoffs import (
+    mixed_covalent_thresholds,
+    pair_thresholds,
+    radii_or_cached,
+    substrate_floor_thresholds,
+    tabulated_radii,
+    within_cutoff,
 )
 from ..occupancy import incoming_inplane_radius
 from ..site_coords import _slab_normal, _slab_plane_projectors
@@ -121,15 +130,23 @@ def _contact_penetration_detail(
     if dists.size == 0:
         return float("inf"), 0.0, 1.0
     actual_min = float(np.min(dists))
-    mol_r = geom.radii_array(mol_syms, kind="covalent")
-    if slab_scratch is not None and slab_scratch.slab_cov_r is not None:
-        slab_r = np.asarray(slab_scratch.slab_cov_r, dtype=float)
-    else:
-        slab_r = geom.radii_array(slab_syms, kind="covalent")
-    allowed = (mol_r[:, None] + slab_r[None, :]) * float(config.min_contact_ratio)
-    np.maximum(allowed, float(config.min_initial_distance), out=allowed)
-    np.nan_to_num(allowed, nan=float(config.min_initial_distance), copy=False)
-    penetration = np.maximum(0.0, allowed - dists)
+    mol_r = tabulated_radii(mol_syms, kind="covalent")
+    slab_r = radii_or_cached(
+        slab_syms,
+        None if slab_scratch is None else slab_scratch.slab_cov_r,
+        kind="covalent",
+    )
+    allowed = substrate_floor_thresholds(
+        mol_r,
+        slab_r,
+        scale=float(config.min_contact_ratio),
+        absolute_floor=float(config.min_initial_distance),
+    )
+    # Exact floor contact has zero width; count it as a pad-sized nudge.
+    short = allowed - dists
+    on_floor = within_cutoff(dists, allowed) & (short <= _DISTANCE_ZERO_EPS)
+    short = np.where(on_floor, _CONTACT_CLEARANCE_PAD_ANGSTROM, short)
+    penetration = np.maximum(0.0, short)
     max_pen = float(np.max(penetration))
     if max_pen <= _DISTANCE_ZERO_EPS or normal is None:
         return actual_min, max_pen, 1.0
@@ -460,6 +477,48 @@ def _recover_distance_failure(
     return ctx, last_reason
 
 
+def _recovery_thresholds(
+    adsorbate: Atoms,
+    moving_radii: np.ndarray,
+    fixed_radii: np.ndarray,
+    *,
+    n_substrate: int,
+    use_vdw: bool,
+    config: AdsorptionConfig,
+) -> np.ndarray:
+    """Return acceptance cutoffs for clash recovery.
+
+    A van der Waals rescue scales substrate columns only. Adsorbate columns
+    stay on the covalent fusion cutoff.
+    """
+    if not use_vdw:
+        return mixed_covalent_thresholds(
+            moving_radii,
+            fixed_radii,
+            n_substrate=int(n_substrate),
+            substrate_scale=float(config.min_contact_ratio),
+            adsorbate_scale=float(config.connectivity_multiplier),
+            absolute_floor=float(config.min_initial_distance),
+        )
+    n_sub = int(n_substrate)
+    n_fix = int(fixed_radii.shape[0])
+    thresholds = np.empty((int(moving_radii.shape[0]), n_fix), dtype=float)
+    if n_sub:
+        thresholds[:, :n_sub] = pair_thresholds(
+            moving_radii,
+            fixed_radii[:n_sub],
+            float(config.vdw_overlap_scale),
+        )
+    if n_sub < n_fix:
+        moving_cov = atom_radii_for_symbols(list(adsorbate.get_chemical_symbols()))
+        thresholds[:, n_sub:] = pair_thresholds(
+            moving_cov,
+            fixed_radii[n_sub:],
+            float(config.connectivity_multiplier),
+        )
+    return thresholds
+
+
 def _try_clash_descent_recovery(
     ctx: _PlacementContext,
     adsorbate: Atoms,
@@ -490,16 +549,23 @@ def _try_clash_descent_recovery(
     if moving_r.size == 0:
         raise ValueError("clash recovery requires a non-empty adsorbate")
     cutoff = 2.0 * float(np.max(moving_r)) + z_window
-    fixed_pos, fixed_radii, fixed_scales = _clash_recovery_fixed_cloud(
+    fixed_pos, fixed_radii, n_substrate = _clash_recovery_fixed_cloud(
         slab,
         slab_scratch,
         ads_com=np.asarray(work_center, dtype=float),
         use_vdw=use_vdw,
-        connectivity_multiplier=float(config.connectivity_multiplier),
         neighbor_cutoff=cutoff,
     )
-    if fixed_pos is None or fixed_radii is None or fixed_scales is None:
+    if fixed_pos is None or fixed_radii is None or n_substrate is None:
         return ctx, fail_reason
+    thresholds = _recovery_thresholds(
+        adsorbate,
+        moving_r,
+        fixed_radii,
+        n_substrate=n_substrate,
+        use_vdw=use_vdw,
+        config=config,
+    )
 
     bounds = clash_bounds_for_adsorbate(
         adsorbate,
@@ -521,7 +587,7 @@ def _try_clash_descent_recovery(
         cell=slab_scratch.cell,
         pbc=slab_scratch.pbc,
         config=config,
-        fixed_pair_scales=fixed_scales,
+        thresholds=thresholds,
         use_vdw_moving=use_vdw,
         bounds=bounds,
         moving_radii=moving_r,
@@ -572,20 +638,13 @@ def _clash_recovery_fixed_cloud(
     *,
     ads_com: np.ndarray,
     use_vdw: bool,
-    connectivity_multiplier: float,
     neighbor_cutoff: float,
-) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
-    """Nearby substrate / pre-adsorbate atoms for clash recovery.
-
-    Returns ``(positions, radii, pair_scales)``. Substrate neighbors use scale
-    ``1``; pre-adsorbed atoms use *connectivity_multiplier* so clash descent
-    matches :func:`~metalsurfer.filters.adsorbates_mutually_disconnected`.
-    """
+) -> tuple[np.ndarray | None, np.ndarray | None, int | None]:
+    """Return nearby ``(positions, radii, n_substrate)`` for clash recovery."""
     fixed_chunks: list[np.ndarray] = []
     radius_chunks: list[np.ndarray] = []
-    scale_chunks: list[np.ndarray] = []
     cutoff = float(neighbor_cutoff)
-    ads_scale = float(connectivity_multiplier)
+    n_substrate = 0
 
     def _nearby_mask(positions: np.ndarray) -> np.ndarray:
         if positions.size == 0:
@@ -600,38 +659,28 @@ def _clash_recovery_fixed_cloud(
 
     near = _nearby_mask(slab_scratch.slab_pos)
     if np.any(near):
-        n_near = int(np.count_nonzero(near))
+        n_substrate = int(np.count_nonzero(near))
         fixed_chunks.append(slab_scratch.slab_pos[near])
-        scale_chunks.append(np.ones(n_near, dtype=float))
-        if use_vdw and slab_scratch.slab_vdw_r is not None:
-            radius_chunks.append(np.asarray(slab_scratch.slab_vdw_r, dtype=float)[near])
-        elif slab_scratch.slab_cov_r is not None:
-            radius_chunks.append(np.asarray(slab_scratch.slab_cov_r, dtype=float)[near])
-        else:
-            syms = [
-                s for s, keep in zip(slab_scratch.slab_syms, near, strict=True) if keep
-            ]
-            radius_chunks.append(atom_radii_for_symbols(syms, use_vdw=use_vdw))
+        scratch_r = slab_scratch.slab_vdw_r if use_vdw else slab_scratch.slab_cov_r
+        syms = [s for s, keep in zip(slab_scratch.slab_syms, near, strict=True) if keep]
+        cached = None if scratch_r is None else np.asarray(scratch_r, dtype=float)[near]
+        radius_chunks.append(
+            radii_or_cached(syms, cached, kind="vdw" if use_vdw else "covalent")
+        )
 
     if slab_scratch.pre_ads_pos is not None and slab_scratch.pre_ads_pos.size:
         near_pre = _nearby_mask(slab_scratch.pre_ads_pos)
         if np.any(near_pre):
-            n_pre = int(np.count_nonzero(near_pre))
             fixed_chunks.append(slab_scratch.pre_ads_pos[near_pre])
-            scale_chunks.append(np.full(n_pre, ads_scale, dtype=float))
             exclude_n = len(slab_scratch.slab_pos)
             pre_syms = list(slab.get_chemical_symbols()[exclude_n:])
             pre_syms_near = [
                 s for s, keep in zip(pre_syms, near_pre, strict=True) if keep
             ]
-            radius_chunks.append(atom_radii_for_symbols(pre_syms_near, use_vdw=use_vdw))
+            # Fusion stays on covalent radii. Van der Waals radii are only
+            # the substrate steric gate.
+            radius_chunks.append(atom_radii_for_symbols(pre_syms_near, use_vdw=False))
 
     if not fixed_chunks:
         return None, None, None
-    fixed_radii = np.concatenate(radius_chunks)
-    if not np.all(np.isfinite(fixed_radii)):
-        raise ValueError(
-            "clash recovery fixed cloud has non-finite radii; substrate or "
-            "pre-adsorbate symbols are missing tabulated covalent/VdW radii"
-        )
-    return np.vstack(fixed_chunks), fixed_radii, np.concatenate(scale_chunks)
+    return np.vstack(fixed_chunks), np.concatenate(radius_chunks), n_substrate

@@ -24,6 +24,7 @@ from .._csv_coerce import (
     require_key as _require_row_key,
 )
 from .._numeric_defaults import (
+    CONTACT_COVALENT_SCALE_DEFAULT,
     DEFAULT_FMAX,
     DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     DEFAULT_SEED,
@@ -44,7 +45,7 @@ from ..models import (
 )
 from ..placement.geometry import normalize_quaternion
 
-SCHEMA_VERSION = "3.1"
+SCHEMA_VERSION = "3.2"
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ _CONTEXT_FIELDS: tuple[_ContextField, ...] = (
     _ContextField("placement_z_scale_by_covalent_radius", "bool"),
     _ContextField("min_initial_distance", "float"),
     _ContextField("min_contact_ratio", "float"),
+    _ContextField("contact_covalent_scale", "float"),
     _ContextField("top_layer_tolerance", "float"),
     _ContextField("symmetry_tolerance", "float"),
     _ContextField("site_equivalence_tolerance", "float"),
@@ -264,6 +266,7 @@ class ComputationContext:
     placement_z_scale_by_covalent_radius: bool = True
     min_initial_distance: float = MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
     min_contact_ratio: float = MIN_CONTACT_RATIO_DEFAULT
+    contact_covalent_scale: float = CONTACT_COVALENT_SCALE_DEFAULT
     top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE
     symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
     site_equivalence_tolerance: float = DEFAULT_SITE_EQUIVALENCE_TOLERANCE
