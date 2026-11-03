@@ -1088,17 +1088,15 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
         ) == pytest.approx(support_h, abs=1e-9)
 
 
-def test_pose_does_not_expand_symmetry_reduced_catalog():
-    """Passed SiteContext is indexed as-is even when full_slab has adsorbates."""
-    from metalsurfer.placement.site_context import (
-        resolve_site_context_for_sampling,
-        site_context_for_occupied_surface,
-    )
+def test_pose_rebuilds_catalog_when_coverage_drops_symmetry():
+    """Orbit-copy indices place under coverage without a manual catalog expand."""
+    from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
     slab = make_slab(nx=2, ny=2)
     config = AdsorptionConfig(material_type="slab", seed=0)
     reduced = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
     assert reduced.clustered_sites is not None
+    assert reduced.source == "symmetry_aware"
     assert len(reduced.clustered_sites) > len(reduced.sites)
     ads = Atoms(
         "H",
@@ -1120,7 +1118,7 @@ def test_pose_does_not_expand_symmetry_reduced_catalog():
         z_fraction=0.5,
         placement_index=0,
     )
-    _bad, reason = generate_placement_from_spec_with_reason(
+    placed, reason = generate_placement_from_spec_with_reason(
         spec,
         [make_water()],
         full,
@@ -1129,19 +1127,8 @@ def test_pose_does_not_expand_symmetry_reduced_catalog():
         site_context=reduced,
         slab_for_sites=slab,
     )
-    assert _bad is None
-    assert reason == "invalid_site_index"
-    sampling = site_context_for_occupied_surface(reduced)
-    ok = generate_placement_from_spec(
-        spec,
-        [make_water()],
-        full,
-        config,
-        smiles="O",
-        site_context=sampling,
-        slab_for_sites=slab,
-    )
-    assert ok is not None
+    assert reason is None
+    assert placed is not None
 
 
 def _shell_vs_full_nominal(

@@ -258,7 +258,7 @@ class _StubHarness:
             lambda smiles, *_a, **_k: _conformers_for_smiles(smiles),
         )
         monkeypatch.setattr(
-            "metalsurfer.workflow.shared.resolve_site_context_for_sampling",
+            "metalsurfer.placement.site_context.resolve_site_context_for_sampling",
             resolve_sites_ci_fast,
         )
         # Saturation recomputes slab energy each step; keep E_slab fixed for stub math.

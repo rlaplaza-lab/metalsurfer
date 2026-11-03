@@ -33,10 +33,11 @@ class SiteContext:
     """Cached site catalog for a substrate geometry.
 
     ``sites`` is the catalog used for molecular placement sampling (clustered,
-    then optionally symmetry-reduced on a clean substrate). Under coverage
-    ``site_context_for_sampling`` expands ``sites`` to ``clustered_sites``.
-    ``clustered_sites`` is always the fingerprint-aware geometric clustering
-    result (full translational lattice). ``raw_unclustered`` is the
+    then optionally symmetry-reduced on a clean single-molecule substrate).
+    Coverage, n-tuplet mode, and a broken substrate make
+    ``site_context_for_sampling`` rebuild the full clustered catalog on the
+    current atoms. ``clustered_sites`` is always the fingerprint-aware geometric
+    clustering result (full translational lattice). ``raw_unclustered`` is the
     pre-clustering ``get_unified_sites`` output. ``plugin_vertices`` is the
     raw plugin candidate coordinates before shared post-processing.
     """
@@ -124,17 +125,29 @@ def _unique_sites_cache_key(
     ).hexdigest()
 
 
+def _sampling_symmetry_broken(
+    config: AdsorptionConfig,
+    *,
+    symmetry_broken: bool,
+) -> bool:
+    """Skip orbit reduction for a C1 substrate or an n-tuplet config."""
+    return bool(symmetry_broken) or int(config.saturation_molecules_per_step) > 1
+
+
 def _site_context_cache_key(
     slab: Atoms,
     config: AdsorptionConfig,
     *,
     symmetry_broken: bool,
 ) -> str:
+    effective_broken = _sampling_symmetry_broken(
+        config, symmetry_broken=symmetry_broken
+    )
     base = _unique_sites_cache_key(slab, config)
     return hashlib.sha256(
         (
             base
-            + f"|sym={int(bool(symmetry_broken))}"
+            + f"|sym={int(effective_broken)}"
             + f"|symtol={float(config.symmetry_tolerance)!r}"
         ).encode()
     ).hexdigest()
@@ -162,8 +175,9 @@ def resolve_site_context_for_sampling(
     and orbit reduction compose. Dissociative / adatom paths should use
     ``clustered_sites`` (full lattice), not ``sites`` after symmetry reduction.
 
-    Skipped when *symmetry_broken*. For ``adaptive_grid``, catalog density
-    follows ``config.adaptive_grid_spacing``.
+    Skipped when *symmetry_broken* or when
+    ``config.saturation_molecules_per_step`` > 1. For ``adaptive_grid``, catalog
+    density follows ``config.adaptive_grid_spacing``.
 
     Parameters
     ----------
@@ -174,6 +188,9 @@ def resolve_site_context_for_sampling(
     symmetry_broken
         If True, skip symmetry reduction.
     """
+    effective_broken = _sampling_symmetry_broken(
+        config, symmetry_broken=symmetry_broken
+    )
     cache_key = _site_context_cache_key(
         slab_atoms,
         config,
@@ -195,7 +212,7 @@ def resolve_site_context_for_sampling(
 
     if not use_sites or not core_sites:
         result = _core_ctx
-    elif symmetry_broken:
+    elif effective_broken:
         logger.debug("Site context: symmetry broken, using clustered site set")
         result = SiteContext(
             sites=core_sites,
@@ -302,11 +319,12 @@ def site_context_for_sampling(
     symmetry_broken: bool = False,
     full_slab: Atoms | None = None,
 ) -> SiteContext:
-    """Return *site_context* or resolve the symmetry-aware sampling catalog.
+    """Return the catalog molecular sampling should index.
 
-    Used by generators / pose when callers omit an explicit context so the
-    ``site_index`` catalog matches production screening. Expands a
-    symmetry-reduced catalog to ``clustered_sites`` under coverage or n-tuplet.
+    Clean single-molecule substrates keep a symmetry-reduced catalog. Coverage,
+    n-tuplet mode, and *symmetry_broken* rebuild the full clustered catalog on
+    *slab*. A passed ``symmetry_aware`` context is not reused. Other
+    caller-built contexts are returned unchanged.
     """
     skip = skip_symmetry_for_sampling(
         symmetry_broken=symmetry_broken,
@@ -314,17 +332,19 @@ def site_context_for_sampling(
         full_slab=full_slab,
         config=config,
     )
-    if site_context is not None:
-        ctx = site_context
-    else:
-        ctx = resolve_site_context_for_sampling(
+    if skip and (site_context is None or site_context.source == "symmetry_aware"):
+        return resolve_site_context_for_sampling(
             slab,
             config,
-            symmetry_broken=skip,
+            symmetry_broken=True,
         )
-    if skip:
-        ctx = site_context_for_occupied_surface(ctx)
-    return ctx
+    if site_context is not None:
+        return site_context
+    return resolve_site_context_for_sampling(
+        slab,
+        config,
+        symmetry_broken=False,
+    )
 
 
 def _get_unique_sites_for_specs(

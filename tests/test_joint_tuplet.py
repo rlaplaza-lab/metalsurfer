@@ -132,10 +132,6 @@ def test_homogeneous_delegates_assembly_seed_and_flags(monkeypatch):
         "metalsurfer.workflow.joint_tuplet.screen_joint_tuplet_multi",
         _fake_multi,
     )
-    monkeypatch.setattr(
-        "metalsurfer.workflow.joint_tuplet.site_context_for_sampling",
-        lambda *_a, **_k: object(),
-    )
 
     screen_joint_tuplet_homogeneous(
         smiles="O",
@@ -156,6 +152,8 @@ def test_homogeneous_delegates_assembly_seed_and_flags(monkeypatch):
     assert captured["assembly_seed"] == 17
     assert captured["empty_pool_failure"] is True
     assert captured["assemble"] == "exact"
+    assert captured["symmetry_broken"] is False
+    assert captured["site_context"] is None
 
     captured.clear()
     screen_joint_tuplet_homogeneous(

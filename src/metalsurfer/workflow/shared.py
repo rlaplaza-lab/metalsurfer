@@ -47,12 +47,7 @@ from ..placement.generators import (
     generate_placement_from_spec_with_reason,
     generate_placements_from_specs,
 )
-from ..placement.site_context import (
-    SiteContext,
-    resolve_site_context_for_sampling,
-    site_context_for_occupied_surface,
-    skip_symmetry_for_sampling,
-)
+from ..placement.site_context import SiteContext, site_context_for_sampling
 from ..placement.site_enumeration import _compute_site_z_base
 from ..reporting import (
     ConformerFailure,
@@ -919,15 +914,11 @@ def resolve_saturation_step_workload_config(
     bo_enabled
         Whether Bayesian optimisation is enabled.
     """
-    site_context = resolve_site_context_for_sampling(
+    site_context = site_context_for_sampling(
         slab_for_sites,
         config,
-        symmetry_broken=skip_symmetry_for_sampling(
-            symmetry_broken=symmetry_broken,
-            slab_for_sites=slab_for_sites,
-            full_slab=slab_atoms,
-            config=config,
-        ),
+        symmetry_broken=symmetry_broken,
+        full_slab=slab_atoms,
     )
     freeze_ref = (
         base_slab_for_frozen if base_slab_for_frozen is not None else slab_atoms
@@ -1130,19 +1121,14 @@ def _prepare_molecule_screening(
     slab_for_sites = substrate_ref.slab_for_sites
     effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
 
-    skip_orbits = skip_symmetry_for_sampling(
-        symmetry_broken=symmetry_broken,
-        slab_for_sites=slab_for_sites,
-        full_slab=slab.atoms,
-        config=config,
-    )
     resolved_sites_here = site_context is None
-    if site_context is None:
-        site_context = resolve_site_context_for_sampling(
-            slab_for_sites,
-            config,
-            symmetry_broken=skip_orbits,
-        )
+    site_context = site_context_for_sampling(
+        slab_for_sites,
+        config,
+        site_context,
+        symmetry_broken=symmetry_broken,
+        full_slab=slab.atoms,
+    )
     # Binding resolves here; saturation multi-mol dumps once per step at the
     # shared resolve site so we do not rewrite the same overlays per molecule.
     if resolved_sites_here:
@@ -1153,8 +1139,6 @@ def _prepare_molecule_screening(
             surface_type,
             step=debug_sites_step,
         )
-    if skip_orbits:
-        site_context = site_context_for_occupied_surface(site_context)
 
     if skip_workload_autotune or not needs_workload_autotune(config, bo=bo_enabled):
         resolved = config

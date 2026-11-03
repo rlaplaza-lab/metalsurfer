@@ -19,10 +19,10 @@ from metalsurfer.placement.site_context import (
     _get_unique_sites_for_specs,
     resolve_site_context_for_sampling,
     site_context_for_occupied_surface,
+    site_context_for_sampling,
     skip_symmetry_for_sampling,
 )
 from metalsurfer.placement.site_enumeration import get_hollow_sites_for_adatoms
-from metalsurfer.workflow import shared as workflow_shared
 
 from ..conftest import (
     adsorption_config_factory,
@@ -42,12 +42,8 @@ def test_site_context_cache_keys_differ_by_symmetry_broken():
     slab = make_slab(nx=2, ny=2)
     config = AdsorptionConfig(material_type="slab")
 
-    ctx_broken = workflow_shared.resolve_site_context_for_sampling(
-        slab, config, symmetry_broken=True
-    )
-    ctx_intact = workflow_shared.resolve_site_context_for_sampling(
-        slab, config, symmetry_broken=False
-    )
+    ctx_broken = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
+    ctx_intact = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
     # Unique-sites + sym=True + sym=False.
     assert len(_SITE_CONTEXT_CACHE) == 3
     assert ctx_broken is not ctx_intact
@@ -172,6 +168,15 @@ def test_site_context_cache_key_includes_config_and_symmetry():
     k3 = _site_context_cache_key(slab, c2, symmetry_broken=False)
     assert k1 != k2
     assert k1 != k3
+    single = AdsorptionConfig(material_type="slab", saturation_molecules_per_step=1)
+    tuplet = AdsorptionConfig(material_type="slab", saturation_molecules_per_step=2)
+    assert _site_context_cache_key(
+        slab, single, symmetry_broken=False
+    ) != _site_context_cache_key(slab, tuplet, symmetry_broken=False)
+    full = resolve_site_context_for_sampling(slab, tuplet, symmetry_broken=False)
+    assert full.clustered_sites is not None
+    assert full.source != "symmetry_aware"
+    assert len(full.sites) == len(full.clustered_sites)
     a = resolve_site_context_for_sampling(slab, c1, symmetry_broken=False)
     b = resolve_site_context_for_sampling(slab, c1, symmetry_broken=False)
     assert a is b
@@ -373,6 +378,36 @@ def test_symmetry_aware_context_preserves_clustered_sites():
     assert ctx.clustered_sites is not None
     assert ctx.source == "symmetry_aware"
     assert len(ctx.clustered_sites) > len(ctx.sites)
+
+
+def test_sampling_rebuilds_catalog_when_substrate_symmetry_drops():
+    """A pruned context must not supply sites after the substrate moves."""
+    slab = make_slab(nx=2, ny=2)
+    config = AdsorptionConfig(material_type="slab")
+    reduced = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    assert reduced.source == "symmetry_aware"
+    assert reduced.clustered_sites is not None
+    old_keys = [_site_xyz_type_key(s) for s in reduced.clustered_sites]
+
+    moved = slab.copy()
+    pos = moved.get_positions()
+    top = int(np.argmax(pos[:, 2]))
+    pos[top, 0] += 0.8
+    # The fixture slab freezes every atom; the displacement is geometric.
+    moved.set_positions(pos, apply_constraint=False)
+
+    rebuilt = site_context_for_sampling(
+        moved,
+        config,
+        reduced,
+        symmetry_broken=True,
+    )
+    fresh = resolve_site_context_for_sampling(moved, config, symmetry_broken=True)
+    assert rebuilt.source != "symmetry_aware"
+    assert [_site_xyz_type_key(s) for s in rebuilt.sites] == [
+        _site_xyz_type_key(s) for s in fresh.sites
+    ]
+    assert [_site_xyz_type_key(s) for s in rebuilt.sites] != old_keys
 
 
 def test_skip_symmetry_for_sampling_when_adsorbate_suffix_present():

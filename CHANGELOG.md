@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``ComputationContext``. ``contact_distance_threshold`` is removed.
 - Lattice-image mapping and the rigid-pose family key each live in one helper.
 
+### Fixed
+
+- Symmetry-orbit pruning stays on a clean single-molecule substrate. N-tuplet
+  mode, coverage, and a broken substrate rebuild the full clustered catalog on
+  the current atoms instead of reusing an earlier reduced set.
+
 ### Removed
 
 - Unused helpers with no production callers: ``site_footprint_clearances``,

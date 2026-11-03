@@ -1,6 +1,6 @@
 """Site generator plugin registry and resolution."""
 
-from dataclasses import fields
+from dataclasses import fields, replace
 
 import numpy as np
 import pytest
@@ -417,7 +417,10 @@ def test_plugins_n_tuplet_expands_and_materializes(material_type, plugin, factor
         )
         is True
     )
-    reduced = resolve_site_context_for_sampling(atoms, cfg, symmetry_broken=False)
+    pruned_cfg = replace(cfg, saturation_molecules_per_step=1)
+    reduced = resolve_site_context_for_sampling(
+        atoms, pruned_cfg, symmetry_broken=False
+    )
     sampling = site_context_for_sampling(atoms, cfg, reduced)
     assert sampling.clustered_sites is not None
     assert len(sampling.sites) == len(sampling.clustered_sites)

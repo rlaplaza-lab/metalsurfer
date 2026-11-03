@@ -74,6 +74,21 @@ def build_pose_batch_cache(
     return cache
 
 
+def _sampling_site_context(
+    slab: Atoms,
+    config: AdsorptionConfig,
+    site_context: SiteContext | None,
+    slab_for_sites: Atoms | None,
+) -> SiteContext:
+    reference = slab_for_sites if slab_for_sites is not None else slab
+    return site_context_for_sampling(
+        reference,
+        config,
+        site_context,
+        full_slab=slab if slab_for_sites is not None else None,
+    )
+
+
 def _pose_from_spec(
     adsorbate: Atoms,
     spec: PlacementSpec,
@@ -109,10 +124,7 @@ def _pose_from_spec(
     normal = np.array([0.0, 0.0, 1.0])
 
     reference = slab_for_sites if slab_for_sites is not None else slab
-    if site_context is not None:
-        ctx = site_context
-    else:
-        ctx = site_context_for_sampling(reference, config, None, full_slab=slab)
+    ctx = _sampling_site_context(slab, config, site_context, slab_for_sites)
     if not ctx.use_sites or len(ctx.sites) == 0:
         logger.debug(
             "No sites available for spec placement_index=%d",
@@ -318,10 +330,7 @@ def _context_from_pose(
     rotated_pos = (geom.quaternion_to_rotation_matrix(quat) @ canonical_pos.T).T
 
     reference = slab_for_sites if slab_for_sites is not None else slab
-    if site_context is not None:
-        ctx = site_context
-    else:
-        ctx = site_context_for_sampling(reference, config, None, full_slab=slab)
+    ctx = _sampling_site_context(slab, config, site_context, slab_for_sites)
     site = None
     if ctx.use_sites and 0 <= pose.site_index < len(ctx.sites):
         site = ctx.sites[pose.site_index]

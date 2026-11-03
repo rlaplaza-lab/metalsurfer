@@ -343,14 +343,6 @@ def screen_joint_tuplet_homogeneous(
     if ref_step.get_molecule_energy(molecule_name) is None:
         raise ValueError(f"missing reference energy for {molecule_name!r}")
 
-    slab_for_sites = _build_surface_reference_slab(current_slab.atoms, base_slab)
-    ctx = site_context_for_sampling(
-        slab_for_sites,
-        config,
-        site_context=site_context,
-        symmetry_broken=symmetry_broken,
-        full_slab=current_slab.atoms,
-    )
     assembly_seed = (
         config.seed if debug_sites_step is None else config.seed + debug_sites_step
     )
@@ -365,7 +357,8 @@ def screen_joint_tuplet_homogeneous(
         config=config,
         base_slab=base_slab,
         E_slab=E_slab,
-        site_context=ctx,
+        site_context=site_context,
+        symmetry_broken=symmetry_broken,
         topology_check=topology_check,
         log_prefix=log_prefix,
         assembly_seed=assembly_seed,
@@ -386,7 +379,8 @@ def screen_joint_tuplet_multi(
     config: AdsorptionConfig,
     base_slab: Atoms,
     E_slab: float,
-    site_context: SiteContext,
+    site_context: SiteContext | None,
+    symmetry_broken: bool = False,
     topology_check: TopologyCheck | None = None,
     log_prefix: str = "",
     assembly_seed: int | None = None,
@@ -405,6 +399,14 @@ def screen_joint_tuplet_multi(
     ``assemble="exact"`` uses :func:`assemble_joint_config_groups` (homogeneous
     path). Mixed campaigns keep the default ``"quota"`` assembler.
     """
+    slab_for_sites = _build_surface_reference_slab(current_slab.atoms, base_slab)
+    site_context = site_context_for_sampling(
+        slab_for_sites,
+        config,
+        site_context,
+        symmetry_broken=symmetry_broken,
+        full_slab=current_slab.atoms,
+    )
     n = config.saturation_molecules_per_step
     n_configs = config.num_placements
     if n_configs is None:

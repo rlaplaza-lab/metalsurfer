@@ -30,10 +30,7 @@ from ..placement.generators import (
     distribute_placement_budget,
     estimate_conformer_count,
 )
-from ..placement.site_context import (
-    resolve_site_context_for_sampling,
-    skip_symmetry_for_sampling,
-)
+from ..placement.site_context import site_context_for_sampling
 from ..reporting import FailureSummary
 from ..result_paths import results_dir_for
 from ..surface_prep import SlabContainer, apply_material_pbc
@@ -1253,15 +1250,11 @@ def _run_multi_molecule_saturation(
             mol: None for mol in active_molecules
         }
 
-        shared_site_context = resolve_site_context_for_sampling(
+        shared_site_context = site_context_for_sampling(
             slab_for_sites,
             step_config,
-            symmetry_broken=skip_symmetry_for_sampling(
-                symmetry_broken=symmetry_broken,
-                slab_for_sites=slab_for_sites,
-                full_slab=slab.atoms,
-                config=step_config,
-            ),
+            symmetry_broken=symmetry_broken,
+            full_slab=slab.atoms,
         )
         _dump_debug_sites_if_enabled(
             slab_for_sites,
@@ -1290,6 +1283,7 @@ def _run_multi_molecule_saturation(
                 base_slab=base_slab,
                 E_slab=E_slab,
                 site_context=shared_site_context,
+                symmetry_broken=symmetry_broken,
                 topology_check=_joint_topology_check(
                     base_slab=base_slab,
                     reference_unit_smiles=ref_units,

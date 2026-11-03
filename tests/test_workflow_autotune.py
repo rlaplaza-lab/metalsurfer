@@ -138,7 +138,14 @@ def test_resolve_saturation_step_workload_config_resolves_before_split(monkeypat
     sentinel_site_context = object()
     recorded: dict[str, object] = {}
 
-    def _fake_site_context(slab_for_sites, config, *, symmetry_broken):
+    def _fake_site_context(
+        slab_for_sites,
+        config,
+        site_context=None,
+        *,
+        symmetry_broken=False,
+        full_slab=None,
+    ):
         recorded["symmetry_broken"] = symmetry_broken
         return sentinel_site_context
 
@@ -149,9 +156,7 @@ def test_resolve_saturation_step_workload_config_resolves_before_split(monkeypat
         recorded["smiles"] = smiles
         return _REPRESENTATIVE
 
-    monkeypatch.setattr(
-        shared_mod, "resolve_site_context_for_sampling", _fake_site_context
-    )
+    monkeypatch.setattr(shared_mod, "site_context_for_sampling", _fake_site_context)
     monkeypatch.setattr(
         shared_mod, "build_representative_relaxation_atoms", _fake_representative
     )

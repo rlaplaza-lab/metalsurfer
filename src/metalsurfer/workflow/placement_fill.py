@@ -425,11 +425,10 @@ def fill_materialized_placements(
     failures: list[PlacementFailureEvent] = []
 
     def _site_is_void(site_idx: int) -> bool:
-        if site_context is None or not site_context.sites:
+        sites = grid_info.unique_sites
+        if not grid_info.use_sites or site_idx < 0 or site_idx >= len(sites):
             return False
-        if site_idx < 0 or site_idx >= len(site_context.sites):
-            return False
-        return site_context.sites[site_idx].kind == "void"
+        return sites[site_idx].kind == "void"
 
     bans = _RetryBans(site_is_void=_site_is_void)
     last_spec_by_index: dict[int, PlacementSpec] = {}

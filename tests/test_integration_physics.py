@@ -385,7 +385,7 @@ class TestProcessMoleculePhysicsSurvival:
             lambda *_a, **_k: ([make_water()], [e_mol]),
         )
         monkeypatch.setattr(
-            "metalsurfer.workflow.shared.resolve_site_context_for_sampling",
+            "metalsurfer.placement.site_context.resolve_site_context_for_sampling",
             lambda *_a, **_k: cheap_sites,
         )
 
