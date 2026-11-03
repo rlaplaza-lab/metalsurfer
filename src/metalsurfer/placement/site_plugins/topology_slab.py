@@ -9,7 +9,7 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from .._constants import _ATOP_INJECTION_HEIGHT_FACTOR
-from ..site_coords import top_layer_mask_by_normal
+from ..site_coords import exposed_lower_band_indices, top_layer_mask_by_normal
 from ..site_voronoi import _generate_slab_topology_sites, _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext
 from .helpers import (
@@ -222,6 +222,77 @@ class TopologySlabGenerator:
             normals=normals,
             clearances=clearances,
         )
+
+        # One metal–metal spacing, not the probe-to-atom distances stored in
+        # topology_median_nn. A monatomic step is about one interlayer down.
+        metal_nn = median_nn_or_fallback(
+            np.empty(0, dtype=float),
+            reference_positions=positions[slab_top_atom_indices],
+            cell=cell,
+            pbc=pbc,
+        )
+        extra_idx = exposed_lower_band_indices(
+            positions,
+            slab_top_atom_indices,
+            list(symbols),
+            cell,
+            pbc,
+            float(metal_nn),
+        )
+        if len(extra_idx) > 0:
+            (
+                extra_vertices,
+                extra_dists,
+                extra_sources,
+                extra_atoms,
+                _,
+                _,
+                _,
+                _,
+            ) = _generate_slab_topology_sites(
+                positions,
+                cell,
+                pbc,
+                extra_idx,
+                accessibility_tree,
+                site_height,
+                float(probe_radius),
+                float(max_site_distance),
+            )
+            if len(extra_vertices) > 0:
+                extra_normals, extra_clearances = candidate_enrichment_frames(
+                    extra_vertices,
+                    extra_dists,
+                    extra_atoms,
+                    positions=positions,
+                    cell=cell,
+                    pbc=pbc,
+                    material_type="slab",
+                    accessibility_tree=accessibility_tree,
+                )
+                (
+                    vertices,
+                    nn_dists,
+                    source_hints,
+                    atom_indices,
+                    normals,
+                    clearances,
+                ) = merge_dedup_site_arrays(
+                    vertices,
+                    nn_dists,
+                    source_hints,
+                    extra_vertices,
+                    extra_dists,
+                    extra_sources,
+                    cell=cell,
+                    pbc=pbc,
+                    atom_indices=atom_indices,
+                    new_atom_indices=extra_atoms,
+                    normals=normals,
+                    clearances=clearances,
+                    new_normals=extra_normals,
+                    new_clearances=extra_clearances,
+                )
 
         return SiteCandidateBatch(
             vertices=vertices,

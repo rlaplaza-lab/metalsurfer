@@ -126,27 +126,9 @@ _STEP_TERRACE_MAX_GAP_ANGSTROM: float = 1.0
 _DELAUNAY_BRIDGE_THRESHOLD_FRACTION: float = 0.3
 
 # ---------------------------------------------------------------------------
-# Placement geometry (z-offsets and parallel placement)
+# Placement geometry
 # ---------------------------------------------------------------------------
 
-# Per-site-type z-offset as a fraction of mean local surface covalent radius.
-# Hollow / pore / bridge sites sit slightly lower than atop; envelope is intermediate.
-_SITE_Z_OFFSET_FROM_SURFACE_RADIUS: dict[str, float] = {
-    "atop": 0.0,
-    "bridge": -0.09,
-    "hollow": -0.18,
-    "pore": -0.18,
-    "envelope": -0.135,
-}
-
-# Flat-aromatic parallel placement floor as a scale on (r_surface + r_mol).
-_PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE: float = 1.2
-
-# Radius-derived adjustments to z_base_lo / z_base_hi for flat-aromatic
-# parallel placements. These shrink the z-range so the ring sits closer to
-# (but not inside) the surface.
-_PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE: float = 0.2
-_PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE: float = 0.3
 _PARALLEL_Z_MIN_HI_MARGIN: float = 0.3  # ensure z_base_hi >= z_base_lo + this (Å)
 
 # ---------------------------------------------------------------------------
@@ -235,6 +217,18 @@ _TILT_PARALLEL: tuple[float, ...] = (0.0, 15.0, 30.0)
 _AZIMUTH: tuple[float, ...] = (0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0)
 _AZIMUTH_IN_PLANE: tuple[float, ...] = (0.0, 90.0, 180.0, 270.0)
 _Z_FRACTIONS: tuple[float, ...] = (0.1, 0.3, 0.5, 0.7, 0.9)
+# Wall and dissociative samples. 0.5 is covalent contact, 0.7 is halfway,
+# 0.9 is the van der Waals standoff (see pose height interval).
+_WALL_Z_FRACTIONS: tuple[float, ...] = (0.5, 0.7, 0.9)
+# ``_com_height_from_z_fraction`` maps this fraction onto the vdW landing
+# when the lower bound equals the contact: (0.9 - 0.5) / 0.5 = 0.8.
+_WALL_VDW_Z_FRACTION: float = 0.9
+# Keep the three wall samples from collapsing onto one height.
+_WALL_SHELL_MIN_GAP_ANGSTROM: float = 0.8
+# A lower atom is covered when a higher atom lies inside this fraction of the
+# median nearest-neighbour distance (lateral). 0.75 hides an FCC subsurface
+# hollow (~0.58 nn) and leaves a monatomic step edge (~1 nn).
+_EXPOSED_SHADOW_NN_SCALE: float = 0.75
 
 # Soft priors when stratifying the placement grid down to n_desired: prefer
 # milder tilts and mid-window heights (still seeded / deterministic).

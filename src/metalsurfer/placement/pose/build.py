@@ -9,13 +9,11 @@ from ase import Atoms
 from ...config import AdsorptionConfig
 from ...models import PlacementPose, PlacementSpec
 from .. import geometry as geom
-from .._constants import _PARALLEL_Z_MIN_HI_MARGIN, _VECTOR_NORM_EPS
+from .._constants import _VECTOR_NORM_EPS
 from .._material import material_aware_pbc, material_type_for_placement
 from ..orientation import (
     _exclusive_marked_binders,
-    _is_flat_aromatic,
     _marked_binder_indices,
-    _parallel_z_adjustments,
     orient_from_spec,
 )
 from ..site_context import SiteContext, site_context_for_sampling
@@ -25,7 +23,7 @@ from ..site_coords import (
     _slab_plane_projectors,
     top_layer_mask_by_normal,
 )
-from ..site_enumeration import _compute_site_z_base, _get_site_surface_radii
+from ..site_enumeration import _get_site_surface_radii
 from .context import _HeightInterval, _PlacementContext, _PoseBatchCache
 from .height import (
     _com_floor_on_support_plane,
@@ -148,29 +146,6 @@ def _pose_from_spec(
     mat_type = material_type_for_placement(site, when_no_site=config.material_type)
 
     ref_slab = reference
-
-    if site.slab_indices:
-        r_surface = _get_site_surface_radii(ref_slab, site)
-    elif pose_cache is not None and pose_cache.r_surface_top_layer is not None:
-        r_surface = pose_cache.r_surface_top_layer
-    else:
-        r_surface = _get_site_surface_radii(ref_slab, None)
-
-    z_base_lo, z_base_hi = _compute_site_z_base(
-        config, ref_slab, site, symbols, r_surface=r_surface
-    )
-
-    flat_aromatic = _is_flat_aromatic(shape, smiles, symbols)
-    if flat_aromatic and spec.orientation_type == "parallel" and site.kind != "void":
-        z_floor, z_lo_shrink, z_hi_shrink = _parallel_z_adjustments(
-            ref_slab, site, symbols, r_surface=r_surface
-        )
-        z_base_lo = max(z_floor, z_base_lo - z_lo_shrink)
-        z_base_hi = max(
-            z_base_lo + _PARALLEL_Z_MIN_HI_MARGIN,
-            z_base_hi - z_hi_shrink,
-        )
-
     zf = float(spec.z_fraction)
 
     surface_ref, is_local_ref = _resolve_surface_ref(
@@ -209,15 +184,29 @@ def _pose_from_spec(
 
     base = np.asarray(site.xyz, dtype=float)
     base_h = float(np.dot(base, place_normal))
-    pos_for_support = (
-        pose_cache.positions
-        if pose_cache is not None and pose_cache.positions is not None
-        else np.asarray(ref_slab.get_positions(), dtype=float)
-    )
+    # Ligand supports index the full slab. A suffix must be in the clearance
+    # cloud and in the support-plane positions; the substrate prefix matches.
+    has_ligand_suffix = slab_for_sites is not None and len(slab) > len(ref_slab)
+    if has_ligand_suffix:
+        pos_for_support = np.asarray(slab.get_positions(), dtype=float)
+        clear_symbols = list(slab.get_chemical_symbols())
+        surface_ref, is_local_ref = _resolve_surface_ref(
+            site,
+            slab,
+            mat_type,
+            positions=pos_for_support,
+        )
+    else:
+        pos_for_support = (
+            pose_cache.positions
+            if pose_cache is not None and pose_cache.positions is not None
+            else np.asarray(ref_slab.get_positions(), dtype=float)
+        )
+        clear_symbols = list(ref_slab.get_chemical_symbols())
     cell_arr = (
         pose_cache.cell
         if pose_cache is not None and pose_cache.cell is not None
-        else np.asarray(ref_slab.get_cell(), dtype=float)
+        else np.asarray(slab.get_cell(), dtype=float)
     )
     family_key = _height_interval_family_key(spec)
     interval: _HeightInterval | None = None
@@ -230,12 +219,12 @@ def _pose_from_spec(
             site=site,
             place_normal=place_normal,
             slab_positions=pos_for_support,
-            slab_symbols=list(ref_slab.get_chemical_symbols()),
+            slab_symbols=clear_symbols,
             cell=cell_arr,
             pbc=material_aware_pbc(mat_type),
             config=config,
-            z_base_lo=float(z_base_lo),
-            z_base_hi=float(z_base_hi),
+            z_base_lo=0.0,
+            z_base_hi=0.0,
         )
         if pose_cache is not None and interval is not None:
             pose_cache.height_intervals[family_key] = interval

@@ -20,6 +20,7 @@ from metalsurfer.placement._constants import (
     _AZIMUTH,
     _AZIMUTH_IN_PLANE,
     _TILT_FULL,
+    _WALL_Z_FRACTIONS,
     _Z_FRACTIONS,
 )
 from metalsurfer.placement.policy import (
@@ -223,7 +224,23 @@ def test_max_batch_specs_dissociative_equals_pairs_times_z_fractions():
         dissociative=True,
         n_hollow_pairs=n_hollow_pairs,
     )
-    assert count == n_hollow_pairs * len(_Z_FRACTIONS)
+    assert count == n_hollow_pairs * len(_WALL_Z_FRACTIONS)
+
+
+def test_short_draw_cycles_wall_height_shells():
+    """A short batch includes contact, halfway, and van der Waals starts."""
+    specs = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=[0],
+        site_type_for_index=_site_type_atop,
+        shape="round",
+        n_binders=1,
+        flat_aromatic=False,
+        parallel_fraction=0.0,
+        n_desired=3,
+        seed=TEST_SEED,
+    )
+    assert [float(spec.z_fraction) for spec in specs[:3]] == list(_WALL_Z_FRACTIONS)
 
 
 def test_wall_near_grid_collapses_contact_z_fractions():
@@ -565,14 +582,16 @@ def test_policy_prior_prefers_mild_tilt_and_mid_z():
     assert len({s.site_type for s in selected}) >= 2
     mean_tilt = float(np.mean([s.tilt_deg for s in selected]))
     mean_zf = float(np.mean([s.z_fraction for s in selected]))
-    # Seeded selection is deterministic; pin the realized means so any drift
-    # in prior weighting (full-grid means: 40° tilt, 0.5 z) fails loudly.
-    assert mean_tilt == pytest.approx(10.0, abs=1e-9), (
+    # Height shells are drawn first, mildest tilt inside each shell. The short
+    # sample is therefore nearly flat and visits every shell (full-grid means
+    # would be 40° and z 0.5).
+    assert mean_tilt == pytest.approx(2.5, abs=1e-9), (
         f"expected mild-tilt bias golden, got mean tilt {mean_tilt:.4f}"
     )
-    assert mean_zf == pytest.approx(0.48888888888888893, abs=1e-9), (
-        f"expected mid-z bias golden, got mean zf {mean_zf:.4f}"
+    assert mean_zf == pytest.approx(0.4333333333333333, abs=1e-9), (
+        f"expected height-shell mean, got mean zf {mean_zf:.4f}"
     )
+    assert {round(s.z_fraction, 1) for s in selected} == {0.1, 0.3, 0.5, 0.7, 0.9}
 
 
 def test_flat_aromatic_indexed_sampling_matches_seed_without_filter():

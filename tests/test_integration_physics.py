@@ -19,9 +19,7 @@ from metalsurfer.placement import (
     check_initial_placement_distance,
     generate_placement_from_spec_with_reason,
 )
-from metalsurfer.placement._constants import _SITE_Z_OFFSET_FROM_SURFACE_RADIUS
 from metalsurfer.placement.geometry import detect_vdw_overlaps
-from metalsurfer.placement.orientation import _site_type_z_offset
 from metalsurfer.placement.site_context import SiteContext, _get_unique_sites_for_specs
 from metalsurfer.placement.site_types import Site
 from metalsurfer.surface_prep import SlabContainer
@@ -85,8 +83,8 @@ class TestPlacementPhysicsGates:
         assert len(overlaps) > 0
         assert min_dist < 1.5
 
-    def test_hollow_sits_lower_than_atop_for_same_site(self):
-        """Site-type z physics: hollow offset is more negative than atop."""
+    def test_site_type_label_does_not_shift_contact_height(self):
+        """The same site uses one contact height for every site-type label."""
         slab = make_slab()
         config = AdsorptionConfig(
             material_type="slab",
@@ -98,7 +96,6 @@ class TestPlacementPhysicsGates:
         )
         ctx = _get_unique_sites_for_specs(slab, config)
         assert ctx.use_sites and ctx.sites, "Need site discovery for height physics"
-        site = ctx.sites[0]
         site_index = 0
         water = make_water()
 
@@ -129,19 +126,11 @@ class TestPlacementPhysicsGates:
         _, hollow_desc = hollow_result
         assert atop_desc.z_abs is not None and hollow_desc.z_abs is not None
 
-        expected_delta = _site_type_z_offset(
-            slab, site, "hollow"
-        ) - _site_type_z_offset(slab, site, "atop")
-        assert expected_delta < 0.0
-        assert (
-            _SITE_Z_OFFSET_FROM_SURFACE_RADIUS["hollow"]
-            < (_SITE_Z_OFFSET_FROM_SURFACE_RADIUS["atop"])
+        # The same site geometry uses one pair-clearance height. The site-type
+        # label does not add a further hollow or atop shift.
+        assert float(hollow_desc.z_abs) == pytest.approx(
+            float(atop_desc.z_abs), abs=1e-6
         )
-        # Contact-solve applies the site-type prior on the pair-clearance
-        # target but clamps so hollow cannot breach the validation floor.
-        # Applied delta is therefore in [expected_delta, 0].
-        applied = float(hollow_desc.z_abs) - float(atop_desc.z_abs)
-        assert expected_delta - 1e-5 <= applied <= 1e-5
 
 
 # ---------------------------------------------------------------------------

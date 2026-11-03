@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Wall and dissociative heights use ``z_fraction`` 0.5, 0.7, and 0.9 as the
+  covalent contact, the halfway point, and the van der Waals standoff. A short
+  draw cycles those shells. Exposed step, vacancy, and nanoparticle-dent atoms
+  within one metal–metal neighbour are meshed; a covered second layer is not.
+  A preadsorbed ligand gets an atop site and bridges to nearby metal, and a
+  short batch keeps about half its draws on the substrate.
 - Clash, contact, and connectivity share one cutoff helper. Covalent radii
   gate bonds, adsorbate fusion, the mol–substrate crash floor, and contact
   counting (``contact_covalent_scale``, default 1.35). Van der Waals radii

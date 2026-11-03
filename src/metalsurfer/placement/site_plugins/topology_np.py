@@ -58,6 +58,7 @@ class TopologyNPGenerator:
             metal_nn=metal_nn,
             cell=cell,
             pbc=pbc,
+            symbols=list(ctx.symbols),
         )
         has_topology_atop = any(s == "topology_atop" for s in topo_sources)
         atom_indices = list(topo_atoms)

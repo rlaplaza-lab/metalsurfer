@@ -752,7 +752,10 @@ def test_pairwise_contact_raises_com_when_non_binder_is_closest():
 
 
 def test_void_clashing_interval_stays_inside_window(monkeypatch):
-    """A fully clashing void interval collapses inside the diversity window."""
+    """A gate nothing can meet collapses the void interval to one height.
+
+    The window is the contact-to-van-der-Waals span, not ``z_base_lo/hi``.
+    """
     monkeypatch.setattr(
         "metalsurfer.placement.pose.geom.min_pair_clearance_angstrom",
         lambda *_args, **_kwargs: 1.0e6,
@@ -781,10 +784,6 @@ def test_void_clashing_interval_stays_inside_window(monkeypatch):
         z_base_hi=2.0,
     )
     assert interval is not None
-    base_h = 5.0
-    half = 0.5 * (2.0 - (-5.0))
-    assert interval.com_lo >= base_h - half - 1e-6
-    assert interval.com_hi <= base_h + half + 1e-6
     assert interval.com_lo == pytest.approx(interval.com_nominal)
     assert interval.com_hi == pytest.approx(interval.com_nominal)
 
@@ -823,6 +822,68 @@ def test_void_clear_centre_stays_at_centre(monkeypatch):
     assert interval.com_nominal == pytest.approx(5.0, abs=1e-9)
     assert interval.com_lo <= interval.com_nominal
     assert interval.com_hi >= interval.com_nominal
+
+
+def test_void_z_step_matches_wall_step_when_the_centre_is_clear():
+    """A clear pore's 0.2 z step equals the wall step from 0.5 to 0.7."""
+    config = AdsorptionConfig(material_type="porous", seed=0)
+    cell = np.eye(3) * 30.0
+    slab_pos = np.array([[0.0, 0.0, 0.0]], dtype=float)
+    shared = dict(
+        rotated_pos=np.zeros((1, 3), dtype=float),
+        symbols=["H"],
+        place_normal=np.array([0.0, 0.0, 1.0]),
+        slab_positions=slab_pos,
+        slab_symbols=["C"],
+        cell=cell,
+        pbc=[False, False, False],
+        config=config,
+        z_base_lo=0.0,
+        z_base_hi=0.0,
+    )
+    wall = Site(
+        xyz=np.array([0.0, 0.0, 0.0]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_type="atop",
+        kind="wall",
+        slab_indices=(0,),
+        material_type="porous",
+        site_source="test",
+        env_fingerprint=(("C",), (0,), 0),
+    )
+    void = Site(
+        xyz=np.array([0.0, 0.0, 8.0]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_type="pore",
+        kind="void",
+        slab_indices=(),
+        material_type="porous",
+        site_source="test",
+        env_fingerprint=(("C",), (0,), 0),
+    )
+    wall_iv = _feasible_height_interval(**shared, site=wall)
+    void_iv = _feasible_height_interval(**shared, site=void)
+    assert wall_iv is not None and void_iv is not None
+
+    def _step(interval) -> float:
+        h50 = _com_height_from_z_fraction(
+            0.5, interval.com_lo, interval.com_nominal, interval.com_hi
+        )
+        h70 = _com_height_from_z_fraction(
+            0.7, interval.com_lo, interval.com_nominal, interval.com_hi
+        )
+        return h70 - h50
+
+    wall_step = _step(wall_iv)
+    assert wall_step > 0.3
+    assert _step(void_iv) == pytest.approx(wall_step, abs=1e-6)
+    h10 = _com_height_from_z_fraction(
+        0.1, void_iv.com_lo, void_iv.com_nominal, void_iv.com_hi
+    )
+    h30 = _com_height_from_z_fraction(
+        0.3, void_iv.com_lo, void_iv.com_nominal, void_iv.com_hi
+    )
+    assert h30 - h10 == pytest.approx(wall_step, abs=1e-6)
 
 
 def test_z_fraction_com_height_round_trip():

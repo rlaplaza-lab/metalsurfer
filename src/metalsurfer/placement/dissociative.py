@@ -24,6 +24,7 @@ from ._constants import (
     _DISSOCIATIVE_MIN_FRAGMENT_SEP_RADIUS_SCALE,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
     _VECTOR_NORM_EPS,
+    _WALL_VDW_Z_FRACTION,
     _XYZ_HASH_DECIMALS,
 )
 from ._material import material_aware_pbc
@@ -31,9 +32,11 @@ from .occupancy import (
     existing_adsorbate_cloud,
     filter_sites_by_occupancy,
 )
-from .orientation import _site_type_z_offset
 from .pose import (
+    _com_height_from_z_fraction,
+    _com_hi_for_vdw_landing,
     _descriptor_from_placement,
+    _feasible_height_interval,
     _height_above_supports,
     _placement_normal_hat,
     _resolve_surface_ref,
@@ -49,8 +52,6 @@ from .site_coords import (
 )
 from .site_enumeration import (
     _cluster_equivalent_sites,
-    _compute_site_z_base,
-    _get_site_surface_radii,
     get_hollow_sites_for_adatoms,
     get_unified_sites,
 )
@@ -729,16 +730,6 @@ def _generate_dissociative_placement_from_spec(
         env_fingerprint=((), (), 0),
     )
     syms = adsorbate.get_chemical_symbols()
-    # Prefer pair-stored metal indices for surface radius; fall back to top-layer.
-    r_surface = _get_site_surface_radii(sites_slab, site_a)
-    z_lo, z_hi = _compute_site_z_base(
-        config, sites_slab, site_a, syms, r_surface=r_surface
-    )
-    site_offset = _site_type_z_offset(sites_slab, site_a, "hollow", r_surface=r_surface)
-    z_lo += site_offset
-    z_hi += site_offset
-    z_offset = z_lo + spec.z_fraction * (z_hi - z_lo)
-
     site_b = Site(
         xyz=np.asarray(site_pair.xyz2, dtype=float),
         normal=np.asarray(site_pair.normal2, dtype=float),
@@ -747,6 +738,61 @@ def _generate_dissociative_placement_from_spec(
         material_type=config.material_type,
         site_source="dissociative_hollow_pair",
         env_fingerprint=((), (), 0),
+    )
+    n_sum = np.asarray(site_a.normal, dtype=float) + np.asarray(
+        site_b.normal, dtype=float
+    )
+    n_norm = float(np.linalg.norm(n_sum))
+    n_hat = (
+        n_sum / n_norm
+        if n_norm > _VECTOR_NORM_EPS
+        else _placement_normal_hat(site_a.normal)
+    )
+    clear_pos = np.asarray(slab.get_positions(), dtype=float)
+    clear_syms = list(slab.get_chemical_symbols())
+    cell_arr = np.asarray(slab.get_cell(), dtype=float)
+    pbc = material_aware_pbc(config.material_type)
+    # Shared gap is the more demanding fragment, so both clear.
+    contact_gaps: list[float] = []
+    standoff_gaps: list[float] = []
+    for site in (site_a, site_b):
+        interval = _feasible_height_interval(
+            np.zeros((1, 3), dtype=float),
+            [syms[0]],
+            site=site,
+            place_normal=n_hat,
+            slab_positions=clear_pos,
+            slab_symbols=clear_syms,
+            cell=cell_arr,
+            pbc=pbc,
+            config=config,
+            z_base_lo=0.0,
+            z_base_hi=0.0,
+        )
+        if interval is None:
+            return None, "infeasible_pose"
+        plane_h = _height_above_supports(
+            site,
+            clear_pos,
+            n_hat,
+            reduce="max",
+            fallback=float(np.dot(np.asarray(site.xyz, dtype=float), n_hat)),
+        )
+        contact_gaps.append(float(interval.com_nominal) - float(plane_h))
+        standoff = _com_height_from_z_fraction(
+            _WALL_VDW_Z_FRACTION,
+            interval.com_lo,
+            interval.com_nominal,
+            interval.com_hi,
+        )
+        standoff_gaps.append(float(standoff) - float(plane_h))
+    contact_gap = max(contact_gaps)
+    com_hi = _com_hi_for_vdw_landing(contact_gap, max(standoff_gaps))
+    z_offset = _com_height_from_z_fraction(
+        float(spec.z_fraction),
+        contact_gap,
+        contact_gap,
+        com_hi,
     )
     placed = _place_dissociative_two_sites(
         adsorbate,

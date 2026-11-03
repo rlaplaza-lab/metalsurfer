@@ -21,6 +21,7 @@ from ._constants import (
     _POLICY_PRIOR_Z_FRACTION_WEIGHT,
     _TILT_FULL,
     _TILT_PARALLEL,
+    _WALL_Z_FRACTIONS,
     _Z_FRACTIONS,
 )
 
@@ -238,7 +239,7 @@ def max_batch_placement_specs(
     if dissociative:
         if n_hollow_pairs <= 0:
             return 0
-        return min(n_hollow_pairs * len(_Z_FRACTIONS), _GRID_BUILD_CAP)
+        return min(n_hollow_pairs * len(_WALL_Z_FRACTIONS), _GRID_BUILD_CAP)
 
     if flat_aromatic:
         parallel, en_down = _flat_aromatic_branch_capacities(
@@ -421,6 +422,72 @@ def _weighted_conformer_order(
     return out
 
 
+def _round_robin_height_order(
+    bucket: list[PlacementSpec],
+    ranks: list[int],
+    *,
+    z_fraction_target: float,
+    site_index_weight: float,
+) -> list[PlacementSpec]:
+    """Order *bucket* so successive draws cycle ``z_fraction`` shells.
+
+    Within one shell, milder tilts still come first. When *site_index_weight*
+    is set, each shell also round-robins ``site_index`` before the next shell.
+    """
+    by_z: dict[float, list[tuple[PlacementSpec, float]]] = defaultdict(list)
+    for spec, rank in zip(bucket, ranks, strict=True):
+        by_z[round(float(spec.z_fraction), 5)].append((spec, float(rank)))
+    columns: list[deque[PlacementSpec]] = []
+    for z_key in sorted(by_z):
+        items = by_z[z_key]
+        if site_index_weight > 0.0:
+            by_site: dict[int, list[tuple[PlacementSpec, float]]] = defaultdict(list)
+            for spec_i, rank_f in items:
+                by_site[int(spec_i.site_index)].append((spec_i, rank_f))
+            site_queues: dict[int, deque[PlacementSpec]] = {}
+            for site_idx in sorted(by_site):
+                ordered = sorted(
+                    by_site[site_idx],
+                    key=lambda item: _spec_prior_key(
+                        item[0],
+                        item[1],
+                        z_fraction_target=z_fraction_target,
+                    ),
+                )
+                site_queues[site_idx] = deque(spec_i for spec_i, _ in ordered)
+            shell: list[PlacementSpec] = []
+            while True:
+                progressed = False
+                for site_idx in sorted(site_queues):
+                    queue = site_queues[site_idx]
+                    if queue:
+                        shell.append(queue.popleft())
+                        progressed = True
+                if not progressed:
+                    break
+            columns.append(deque(shell))
+        else:
+            ordered = sorted(
+                items,
+                key=lambda item: _spec_prior_key(
+                    item[0],
+                    item[1],
+                    z_fraction_target=z_fraction_target,
+                ),
+            )
+            columns.append(deque(spec for spec, _ in ordered))
+    best: list[PlacementSpec] = []
+    while True:
+        progressed = False
+        for column in columns:
+            if column:
+                best.append(column.popleft())
+                progressed = True
+        if not progressed:
+            break
+    return best
+
+
 def _stratified_sample(
     specs: list[PlacementSpec],
     n_desired: int,
@@ -433,9 +500,11 @@ def _stratified_sample(
 ) -> list[PlacementSpec]:
     """Sample up to *n_desired* specs stratified by ``site_type`` (seeded, deterministic).
 
-    Within each site-type bucket, specs are ordered by a soft prior (milder tilt,
-    ``z_fraction`` near *z_fraction_target*) with a seeded tie-break so draws
-    remain deterministic. When *preferred_site_types* is set (e.g. ``("pore",)``
+    Within each site-type bucket, draws cycle ``z_fraction`` shells first so a
+    short batch includes the contact, the halfway height, and the van der Waals
+    standoff. Milder tilts still come first inside one shell, with a seeded
+    tie-break so draws remain deterministic. When *preferred_site_types* is set
+    (e.g. ``("pore",)``
     for porous frameworks), those buckets are drawn first each round-robin pass.
     When *site_index_weight* > 0, draws also round-robin across ``site_index``
     values (quality-sorted) so open-pore lists keep multi-site coverage.
@@ -471,47 +540,12 @@ def _stratified_sample(
         bucket = buckets[key]
         ranks = list(range(len(bucket)))
         rng.shuffle(ranks)
-        if site_index_weight > 0.0:
-            # Round-robin across site indices so quality bias does not collapse
-            # the draw onto a single open pore. The unused bucket shuffle above
-            # keeps the RNG sequence aligned with the non-porous branch.
-            by_site: dict[int, list[PlacementSpec]] = defaultdict(list)
-            for spec in bucket:
-                by_site[int(spec.site_index)].append(spec)
-            ranked_by_site: dict[int, deque[PlacementSpec]] = {}
-            for si, site_specs in by_site.items():
-                site_ranks = list(range(len(site_specs)))
-                rng.shuffle(site_ranks)
-                ordered = sorted(
-                    zip(site_specs, site_ranks, strict=True),
-                    key=lambda item: _spec_prior_key(
-                        item[0],
-                        float(item[1]),
-                        z_fraction_target=z_fraction_target,
-                    ),
-                )
-                ranked_by_site[si] = deque(spec for spec, _ in ordered)
-            site_order = sorted(ranked_by_site.keys())
-            best_first: list[PlacementSpec] = []
-            while True:
-                progressed = False
-                for si in site_order:
-                    site_bucket = ranked_by_site[si]
-                    if site_bucket:
-                        best_first.append(site_bucket.popleft())
-                        progressed = True
-                if not progressed:
-                    break
-        else:
-            ordered = sorted(
-                zip(bucket, ranks, strict=True),
-                key=lambda item: _spec_prior_key(
-                    item[0],
-                    float(item[1]),
-                    z_fraction_target=z_fraction_target,
-                ),
-            )
-            best_first = [spec for spec, _ in ordered]
+        best_first = _round_robin_height_order(
+            bucket,
+            ranks,
+            z_fraction_target=z_fraction_target,
+            site_index_weight=site_index_weight,
+        )
 
         if weights is not None:
             best_first = _weighted_conformer_order(best_first, weights, n_desired)
@@ -650,7 +684,7 @@ def build_batch_placement_specs(
                     azimuth_deg=0.0,
                     z_fraction=zfv,
                 )
-                for pair_idx, zfv in itertools.product(pair_indices, _Z_FRACTIONS)
+                for pair_idx, zfv in itertools.product(pair_indices, _WALL_Z_FRACTIONS)
             )
             working_cap = min(
                 _GRID_BUILD_CAP,

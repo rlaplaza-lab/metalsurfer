@@ -17,8 +17,9 @@ from .._constants import (
     _CONTACT_SHELL_MARGIN_ANGSTROM,
     _DISTANCE_ZERO_EPS,
     _HEIGHT_INTERVAL_BISECT_STEPS,
-    _PARALLEL_Z_MIN_HI_MARGIN,
     _VECTOR_NORM_EPS,
+    _WALL_SHELL_MIN_GAP_ANGSTROM,
+    _WALL_VDW_Z_FRACTION,
 )
 from ..cutoffs import pair_thresholds, tabulated_radii, within_cutoff
 from ..site_enumeration import _height_along_slab_normal
@@ -39,6 +40,39 @@ def _pair_clearance(
         reject_vdw_overlaps=bool(config.reject_vdw_overlaps),
         vdw_overlap_scale=float(config.vdw_overlap_scale),
     )
+
+
+def _vdw_pair_clearance(
+    config: AdsorptionConfig, mol_symbol: str, slab_symbol: str
+) -> float:
+    """Van der Waals pair gate (Å): ``vdw_overlap_scale × (R_i + R_j)``."""
+    vdw = tabulated_radii((mol_symbol, slab_symbol), kind="vdw")
+    return float(
+        pair_thresholds(vdw[:1], vdw[1:], float(config.vdw_overlap_scale))[0, 0]
+    )
+
+
+def _com_hi_for_vdw_landing(nominal: float, landing: float) -> float:
+    """Choose ``com_hi`` so ``z_fraction`` 0.9 lands on *landing*.
+
+    With the lower bound equal to *nominal*, 0.7 then sits halfway between
+    the contact and that landing.
+    """
+    frac = (_WALL_VDW_Z_FRACTION - 0.5) / 0.5
+    gap = max(0.0, float(landing) - float(nominal))
+    if frac <= _DISTANCE_ZERO_EPS:
+        return float(landing)
+    return float(nominal) + gap / frac
+
+
+def _void_half_width_for_wall_step(gap: float) -> float:
+    """Half-width whose 0.2 ``z_fraction`` step matches the wall 0.5→0.7 step.
+
+    The wall step is half of *gap*. On a symmetric void window a 0.2 step is
+    ``0.4 × half_width``.
+    """
+    wall_step = 0.5 * max(float(gap), 0.0)
+    return wall_step / 0.4
 
 
 def _height_interval_family_key(spec: PlacementSpec) -> tuple:
@@ -175,14 +209,17 @@ def _pairwise_contact_com_height(
     cell: np.ndarray,
     pbc: list[bool],
     config: AdsorptionConfig,
+    clearance=None,
+    apply_anchor_floor: bool = True,
 ) -> float:
     """Smallest COM height along *place_normal* clearing every mol–slab pair.
 
     Lateral seed is *site_xyz*; orientation is fixed in *rotated_pos* (COM-
-    centred). Uses the same pair gate as validation (covalent / optional VDW).
-    Height is solved from MIC vectors at the support-plane seed so PBC images
-    and non-Cartesian normals stay consistent.
+    centred). *clearance* defaults to the covalent contact gate. Height is
+    solved from MIC vectors at the support-plane seed so PBC images and
+    non-Cartesian normals stay consistent.
     """
+    gate = _pair_clearance if clearance is None else clearance
     n_hat = _placement_normal_hat(place_normal)
     base = np.asarray(site_xyz, dtype=float)
     base_h = float(np.dot(base, n_hat))
@@ -200,7 +237,7 @@ def _pairwise_contact_com_height(
     h_needed = float("-inf")
     for i, sym_m in enumerate(symbols):
         for j, sym_s in enumerate(slab_symbols):
-            allowed = _pair_clearance(config, sym_m, sym_s)
+            allowed = float(gate(config, sym_m, sym_s))
             lat = float(lateral[i, j])
             if lat >= allowed:
                 continue
@@ -216,14 +253,14 @@ def _pairwise_contact_com_height(
         rel_h = rotated @ n_hat
         i_low = int(np.argmin(rel_h))
         j_near = int(np.argmin(lateral[i_low]))
-        gate = _pair_clearance(config, symbols[i_low], slab_symbols[j_near])
-        h_needed = base_h + gate - float(rel_h[i_low])
-    # 3D pair gates in a hollow can sit atoms below the nuclear plane; keep
-    # every atom on the vacuum side of the support-plane anchor.
-    h_needed = max(
-        float(h_needed),
-        _com_floor_on_support_plane(rotated, n_hat, base_h),
-    )
+        allowed = float(gate(config, symbols[i_low], slab_symbols[j_near]))
+        h_needed = base_h + allowed - float(rel_h[i_low])
+    # A hollow pair gate can sit an atom below the nuclear plane.
+    if apply_anchor_floor:
+        h_needed = max(
+            float(h_needed),
+            _com_floor_on_support_plane(rotated, n_hat, base_h),
+        )
     # Pad so reconstructed MIC distances sit strictly outside the cutoff.
     return float(h_needed) + _CONTACT_CLEARANCE_PAD_ANGSTROM
 
@@ -460,7 +497,10 @@ def _contact_shell_indices(
     max_gate = 0.0
     for sym_m in symbols:
         for sym_s in slab_symbols:
-            gate = _pair_clearance(config, sym_m, sym_s)
+            gate = max(
+                _pair_clearance(config, sym_m, sym_s),
+                _vdw_pair_clearance(config, sym_m, sym_s),
+            )
             if gate > max_gate:
                 max_gate = float(gate)
     radius = mol_extent + max_gate + _CONTACT_SHELL_MARGIN_ANGSTROM
@@ -500,16 +540,17 @@ def _feasible_height_interval(
 ) -> _HeightInterval | None:
     """Feasible COM height interval along *place_normal* for one rigid pose.
 
-    Wall (``site.kind == "wall"``): nominal is the pairwise contact solve;
-    lower bound is that height; upper bound is limited by
-    ``max_initial_distance`` / ``max_closest_approach`` when configured.
+    Wall (``site.kind == "wall"``): nominal and lower bound are the covalent
+    contact. ``z_fraction`` 0.5, 0.7, and 0.9 land on that contact, the
+    halfway point, and the van der Waals standoff. An explicit
+    ``max_initial_distance`` or strict ``max_closest_approach`` caps the
+    standoff.
 
-    Void: nominal is the void-centre height when it clears; otherwise the
-    nearest cleared height inside ``[centre ± ½·diversity]``. Bounds expand
-    from the nominal by bisection on pair penetration.
+    Void: nominal is the void-centre height when it clears. The half-width
+    makes a 0.2 ``z_fraction`` step the same distance as the wall step from
+    0.5 to 0.7. Bounds then shrink to the cleared span.
     """
     base = np.asarray(site.xyz, dtype=float)
-    diversity = max(float(z_base_hi - z_base_lo), _PARALLEL_Z_MIN_HI_MARGIN)
     is_void = site.kind == "void"
 
     shell_idx = _contact_shell_indices(
@@ -530,7 +571,31 @@ def _feasible_height_interval(
         shell_pos = slab_positions
         shell_syms = slab_symbols
 
+    def _contact_height(clearance, *, apply_anchor_floor: bool = True) -> float:
+        return _pairwise_contact_com_height(
+            rotated_pos,
+            symbols,
+            site_xyz=base,
+            place_normal=place_normal,
+            slab_positions=shell_pos,
+            slab_symbols=shell_syms,
+            cell=cell,
+            pbc=pbc,
+            config=config,
+            clearance=clearance,
+            apply_anchor_floor=apply_anchor_floor,
+        )
+
+    contact_h = _contact_height(None)
+    vdw_h = _contact_height(_vdw_pair_clearance)
+    landing = max(float(vdw_h), float(contact_h) + _WALL_SHELL_MIN_GAP_ANGSTROM)
+
     if is_void:
+        raw_contact = _contact_height(None, apply_anchor_floor=False)
+        raw_vdw = _contact_height(_vdw_pair_clearance, apply_anchor_floor=False)
+        raw_landing = max(
+            float(raw_vdw), float(raw_contact) + _WALL_SHELL_MIN_GAP_ANGSTROM
+        )
         com_lo, com_nominal, com_hi = _void_height_interval_analytic(
             rotated_pos,
             symbols,
@@ -541,41 +606,31 @@ def _feasible_height_interval(
             cell=cell,
             pbc=pbc,
             config=config,
-            diversity=diversity,
+            diversity=2.0
+            * _void_half_width_for_wall_step(raw_landing - float(raw_contact)),
         )
     else:
-        com_nominal = _pairwise_contact_com_height(
-            rotated_pos,
-            symbols,
-            site_xyz=base,
-            place_normal=place_normal,
-            slab_positions=shell_pos,
-            slab_symbols=shell_syms,
-            cell=cell,
-            pbc=pbc,
-            config=config,
-        )
+        com_nominal = float(contact_h)
         com_lo = float(com_nominal)
-        actual = _pair_min_distance_at_com_height(
-            rotated_pos,
-            site_xyz=base,
-            place_normal=place_normal,
-            slab_positions=shell_pos,
-            cell=cell,
-            pbc=pbc,
-            com_h=com_nominal,
-        )
         upper_targets: list[float] = []
         if config.max_initial_distance is not None:
             upper_targets.append(float(config.max_initial_distance))
         if config.strict_initial_placement:
             upper_targets.append(float(config.max_closest_approach))
         if upper_targets:
-            target = min(upper_targets)
-            slack = max(0.0, float(target) - float(actual))
-            com_hi = com_nominal + min(slack, 0.5 * diversity)
-        else:
-            com_hi = com_nominal + 0.5 * diversity
+            actual = _pair_min_distance_at_com_height(
+                rotated_pos,
+                site_xyz=base,
+                place_normal=place_normal,
+                slab_positions=shell_pos,
+                cell=cell,
+                pbc=pbc,
+                com_h=com_nominal,
+            )
+            slack = max(0.0, float(min(upper_targets)) - float(actual))
+            landing = min(landing, com_nominal + slack)
+            landing = max(landing, com_nominal)
+        com_hi = _com_hi_for_vdw_landing(com_nominal, landing)
 
     if com_hi + _DISTANCE_ZERO_EPS < com_lo:
         return None

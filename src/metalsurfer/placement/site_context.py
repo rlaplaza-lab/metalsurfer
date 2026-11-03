@@ -18,6 +18,7 @@ from .site_enumeration import (
     _get_unified_sites_with_plugin_vertices,
     get_symmetry_aware_sites,
 )
+from .site_ligands import drop_sites_near_catalog, ligand_local_sites
 from .site_plugins import resolved_site_generator_name
 from .site_types import Site
 
@@ -311,6 +312,47 @@ def site_context_for_occupied_surface(ctx: SiteContext) -> SiteContext:
     )
 
 
+def _indexes_ligand(site: Site, n_substrate: int) -> bool:
+    return any(int(i) >= int(n_substrate) for i in site.slab_indices)
+
+
+def attach_ligand_sites(
+    ctx: SiteContext,
+    slab: Atoms,
+    full_slab: Atoms | None,
+    config: AdsorptionConfig,
+) -> SiteContext:
+    """Append exposed-ligand atop and ligand–metal bridge sites.
+
+    The substrate catalog is left cached without these sites. Supports on a
+    ligand atom use full-slab indices.
+    """
+    if full_slab is None or len(full_slab) <= len(slab):
+        return ctx
+    n_sub = len(slab)
+    if any(_indexes_ligand(site, n_sub) for site in ctx.sites):
+        return ctx
+    extra = ligand_local_sites(slab, full_slab, material_type=config.material_type)
+    if not extra:
+        return ctx
+    cell = np.asarray(full_slab.get_cell(), dtype=float)
+    pbc = np.asarray(material_aware_pbc(config.material_type), dtype=bool)
+    extra = drop_sites_near_catalog(extra, list(ctx.sites), cell=cell, pbc=pbc)
+    if not extra:
+        return ctx
+    clustered = list(
+        ctx.clustered_sites if ctx.clustered_sites is not None else ctx.sites
+    )
+    return SiteContext(
+        sites=list(ctx.sites) + extra,
+        use_sites=True,
+        source=ctx.source if ctx.use_sites else "ligand_local",
+        raw_unclustered=ctx.raw_unclustered,
+        clustered_sites=clustered + extra,
+        plugin_vertices=ctx.plugin_vertices,
+    )
+
+
 def site_context_for_sampling(
     slab: Atoms,
     config: AdsorptionConfig,
@@ -333,18 +375,20 @@ def site_context_for_sampling(
         config=config,
     )
     if skip and (site_context is None or site_context.source == "symmetry_aware"):
-        return resolve_site_context_for_sampling(
+        ctx = resolve_site_context_for_sampling(
             slab,
             config,
             symmetry_broken=True,
         )
-    if site_context is not None:
-        return site_context
-    return resolve_site_context_for_sampling(
-        slab,
-        config,
-        symmetry_broken=False,
-    )
+    elif site_context is not None:
+        ctx = site_context
+    else:
+        ctx = resolve_site_context_for_sampling(
+            slab,
+            config,
+            symmetry_broken=False,
+        )
+    return attach_ligand_sites(ctx, slab, full_slab, config)
 
 
 def _get_unique_sites_for_specs(

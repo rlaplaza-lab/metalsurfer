@@ -258,6 +258,11 @@ def _spec_grid_info(
                 need_mic_vecs=need_footprint,
             )
             anchor_ok = {i for i, keep in enumerate(anchor_mask) if keep}
+            # Ligand atop/bridge sites sit on the ligand by construction.
+            n_sub = len(slab)
+            for i, site in enumerate(unique_sites):
+                if any(int(idx) >= n_sub for idx in site.slab_indices):
+                    anchor_ok.add(i)
             if need_footprint:
                 assert existing_radii is not None
                 # Best per-conformer disk ranks the site. Negative clearance
@@ -364,6 +369,88 @@ def _site_is_void_for_grid(info: _SpecGridInfo, site_idx: int) -> bool:
     return sites[site_idx].kind == "void"
 
 
+def _substrate_ligand_site_split(
+    info: _SpecGridInfo,
+    n_substrate: int,
+) -> tuple[list[int], list[int]] | None:
+    """Split sampling indices into substrate and ligand supports, or None."""
+    if not info.use_sites or not info.site_indices:
+        return None
+    substrate: list[int] = []
+    ligand: list[int] = []
+    for index in info.site_indices:
+        site = info.unique_sites[int(index)]
+        if any(int(atom) >= int(n_substrate) for atom in site.slab_indices):
+            ligand.append(int(index))
+        else:
+            substrate.append(int(index))
+    if not substrate or not ligand:
+        return None
+    return substrate, ligand
+
+
+def _enumerate_reserved_substrate_and_ligand(
+    info: _SpecGridInfo,
+    split: tuple[list[int], list[int]],
+    *,
+    n_desired: int,
+    parallel_fraction: float,
+    filter_spec: Callable[[PlacementSpec], bool] | None,
+    seed: int,
+    prefer_pores: bool,
+    conformer_energies: list[float] | None,
+    conformer_weighting: str,
+    boltzmann_temperature: float,
+    n_conformers: int,
+) -> list[PlacementSpec]:
+    """Keep about half of a short draw on substrate sites when ligands exist."""
+    substrate, ligand = split
+    n_sub_draw = max(1, (int(n_desired) + 1) // 2)
+    n_lig_draw = max(0, int(n_desired) - n_sub_draw)
+
+    def _build(indices: list[int], n: int, draw_seed: int) -> list[PlacementSpec]:
+        if n <= 0 or not indices:
+            return []
+        return policy.build_batch_placement_specs(
+            n_conformers=n_conformers,
+            site_indices=indices,
+            site_type_for_index=lambda site_idx: _site_type_for_grid(info, site_idx),
+            shape=info.shape,
+            n_binders=info.n_binders,
+            flat_aromatic=info.flat_aromatic,
+            parallel_fraction=parallel_fraction,
+            n_desired=n,
+            filter_spec=filter_spec,
+            dissociative=False,
+            n_hollow_pairs=0,
+            seed=draw_seed,
+            preferred_site_types=("pore",) if prefer_pores else (),
+            site_index_weight=(_POROUS_SITE_INDEX_WEIGHT if prefer_pores else 0.0),
+            conformer_energies=conformer_energies,
+            conformer_weighting=conformer_weighting,
+            boltzmann_temperature=boltzmann_temperature,
+            site_is_void_for_index=lambda site_idx: _site_is_void_for_grid(
+                info, site_idx
+            ),
+        )
+
+    specs_sub = _build(substrate, n_sub_draw, seed)
+    specs_lig = _build(ligand, n_lig_draw, seed + 1)
+    if len(specs_sub) < n_sub_draw:
+        specs_lig = _build(ligand, n_lig_draw + (n_sub_draw - len(specs_sub)), seed + 1)
+    elif len(specs_lig) < n_lig_draw:
+        specs_sub = _build(substrate, n_sub_draw + (n_lig_draw - len(specs_lig)), seed)
+    merged: list[PlacementSpec] = []
+    for i in range(max(len(specs_sub), len(specs_lig))):
+        if i < len(specs_sub):
+            merged.append(specs_sub[i])
+        if i < len(specs_lig) and len(merged) < n_desired:
+            merged.append(specs_lig[i])
+        if len(merged) >= n_desired:
+            break
+    return merged[:n_desired]
+
+
 def enumerate_placement_specs(
     conformers: list[Atoms],
     slab: Atoms,
@@ -432,6 +519,21 @@ def enumerate_placement_specs(
         if info.use_sites and info.site_indices
         else False
     )
+    split = _substrate_ligand_site_split(info, len(slab))
+    if split is not None and not info.is_dissociative:
+        return _enumerate_reserved_substrate_and_ligand(
+            info,
+            split,
+            n_desired=n_desired,
+            parallel_fraction=parallel_fraction,
+            filter_spec=filter_spec,
+            seed=eff_seed,
+            prefer_pores=prefer_pores,
+            conformer_energies=conformer_energies,
+            conformer_weighting=config.conformer_weighting,
+            boltzmann_temperature=config.boltzmann_temperature,
+            n_conformers=len(conformers),
+        )
     return policy.build_batch_placement_specs(
         n_conformers=len(conformers),
         site_indices=info.site_indices,

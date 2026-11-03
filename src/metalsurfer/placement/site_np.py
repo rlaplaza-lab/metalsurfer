@@ -2,7 +2,8 @@
 
 Convex particles (symmetric or not) are handled the same way: atoms on the
 hull skin, NN edges for bridges, chordless 3-/4-cycles for hollows, all lifted
-along hull-facet normals. Concave dents are outside this model.
+along hull-facet normals. Atoms just inside the hull that still have an open
+outward ray (a dent or a missing atom) join that mesh.
 """
 
 from __future__ import annotations
@@ -21,7 +22,8 @@ from ._constants import (
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
     _VORONOI_DEDUP_TOLERANCE,
 )
-from .site_coords import _deduplicate_points
+from .geometry import framework_radii_from_symbols
+from .site_coords import _deduplicate_points, ray_exposure_mask
 
 
 class _NPTopologyResult(NamedTuple):
@@ -128,6 +130,7 @@ def _generate_nanoparticle_topology_sites(
     metal_nn: float,
     cell: np.ndarray,
     pbc: np.ndarray,
+    symbols: list[str],
 ) -> _NPTopologyResult:
     """Atop / bridge / hollow sites on the outer hull skin.
 
@@ -154,8 +157,47 @@ def _generate_nanoparticle_topology_sites(
         return empty
 
     com = np.mean(positions, axis=0)
+    hull_idx = np.asarray(surf_idx, dtype=int)
+    not_hull = np.ones(len(positions), dtype=bool)
+    not_hull[hull_idx] = False
+    near_idx = np.nonzero(not_hull)[0]
+    if len(near_idx) > 0 and float(metal_nn) > 0.0:
+        hull_tree = KDTree(positions[hull_idx])
+        near_dist, _ = hull_tree.query(positions[near_idx], k=1)
+        near_idx = near_idx[
+            np.asarray(near_dist, dtype=float).ravel() <= float(metal_nn)
+        ]
+    if len(near_idx) > 0:
+        outward = _normalize_rows(positions[near_idx] - com)
+        # An atom at the centre of mass has no outward direction. A zero
+        # ray is stationary and would look "exposed".
+        alive = np.linalg.norm(outward, axis=1) > _SURFACE_NORMAL_FALLBACK_NORM_EPS
+        near_idx = near_idx[alive]
+        outward = outward[alive]
+        exposed = ray_exposure_mask(
+            positions[near_idx],
+            outward,
+            positions,
+            framework_radii_from_symbols(symbols),
+            exclude_indices=near_idx,
+            cell=cell,
+            pbc=pbc,
+        )
+        extra_idx = near_idx[exposed]
+    else:
+        extra_idx = np.zeros(0, dtype=int)
+    if len(extra_idx) > 0:
+        surf_idx = np.concatenate([hull_idx, np.asarray(extra_idx, dtype=int)])
+        atom_out = np.vstack(
+            [
+                _surface_atom_normals(positions, hull_idx, hull),
+                _normalize_rows(positions[extra_idx] - com),
+            ]
+        )
+    else:
+        surf_idx = hull_idx
+        atom_out = _surface_atom_normals(positions, surf_idx, hull)
     surf_pos = positions[surf_idx]
-    atom_out = _surface_atom_normals(positions, surf_idx, hull)
     local_to_global = {int(i): int(g) for i, g in enumerate(surf_idx)}
 
     min_bond = float(metal_nn) * _NP_NN_BOND_MIN_SCALE

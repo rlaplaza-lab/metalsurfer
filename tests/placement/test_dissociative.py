@@ -23,9 +23,6 @@ from metalsurfer.placement.dissociative import (
     _resolve_dissociative_site_entries,
 )
 from metalsurfer.placement.site_context import site_context_for_sampling
-from metalsurfer.placement.site_enumeration import (
-    _compute_site_z_base,
-)
 from metalsurfer.placement.site_types import Site
 
 from ..conftest import (
@@ -37,38 +34,35 @@ from ..conftest import (
 from ._helpers import dissoc_placement_spec
 
 
-def test_dissociative_z_offset_uses_radius_derived_range():
+def test_dissociative_heights_are_evenly_spaced_contact_to_vdw():
+    """Fragments use the wall interval, not placement_z_range or a hollow offset."""
     slab = make_slab()
-    config = AdsorptionConfig(
-        material_type="slab",
-        skip_topology_check=True,
-        placement_z_range=(1.0, 1.5),
-    )
     h2 = make_h2()
-    spec = dissoc_placement_spec()
-    result, reason = generate_placement_from_spec_with_reason(
-        spec, [h2], slab, config, smiles="[H][H]"
-    )
-    assert result is not None, f"fixture slab must place dissociative H2: {reason}"
-    _, descriptor = result
-    hollow_site = Site(
-        xyz=np.zeros(3),
-        normal=np.array([0.0, 0.0, 1.0]),
-        site_type="hollow",
-        slab_indices=(),
-        material_type="slab",
-        site_source="test",
-        env_fingerprint=((), (), 0),
-    )
-    z_lo, z_hi = _compute_site_z_base(
-        config, slab, hollow_site, h2.get_chemical_symbols()
-    )
-    from metalsurfer.placement.orientation import _site_type_z_offset
 
-    z_lo += _site_type_z_offset(slab, hollow_site, "hollow")
-    z_hi += _site_type_z_offset(slab, hollow_site, "hollow")
-    expected = z_lo + 0.5 * (z_hi - z_lo)
-    assert descriptor.z_offset == pytest.approx(expected)
+    def _offsets(z_range: tuple[float, float]) -> list[float]:
+        config = AdsorptionConfig(
+            material_type="slab",
+            skip_topology_check=True,
+            placement_z_range=z_range,
+        )
+        out = []
+        for zf in (0.5, 0.7, 0.9):
+            result, reason = generate_placement_from_spec_with_reason(
+                dissoc_placement_spec(z_fraction=zf),
+                [h2],
+                slab,
+                config,
+                smiles="[H][H]",
+            )
+            assert result is not None, f"dissociative H2 failed at z={zf}: {reason}"
+            out.append(float(result[1].z_offset))
+        return out
+
+    offsets = _offsets((1.0, 1.5))
+    step = offsets[1] - offsets[0]
+    assert step == pytest.approx(offsets[2] - offsets[1], abs=1e-6)
+    assert step > 0.3
+    assert _offsets((2.0, 4.0)) == pytest.approx(offsets, abs=1e-6)
 
 
 def test_hollow_site_pairs_found_for_slab():
@@ -266,9 +260,10 @@ def test_dissociative_placement_supported_for_nanoparticle():
         placed, nanoparticle, material_type="nanoparticle"
     )
     assert ok, (min_d, dist_reason)
-    # Lower floor is gated by `assert ok`. Shared-normal lift can put the
-    # nearer H slightly above z_offset.
-    assert min_d <= descriptor.z_offset + 1.0
+    # z_offset is the gap above the support plane along the shared normal.
+    # A hollow that already clears laterally can have a gap well below the
+    # 3D pair distance.
+    assert descriptor.z_offset >= 0.0
 
 
 def test_np_dissociative_pairs_ignore_atop_and_bridge_in_mixed_catalog():

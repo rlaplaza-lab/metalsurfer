@@ -45,8 +45,12 @@ from .._geom_pbc import (
 from .._geom_pbc import (
     wrap_fractional as _wrap_fractional,
 )
+from .._utils import cell_has_volume
 from .._utils import union_find_cluster as _union_find_cluster
 from ._constants import (
+    _ADAPTIVE_GRID_EXPOSURE_N_STEPS,
+    _ADAPTIVE_GRID_EXPOSURE_STEP,
+    _EXPOSED_SHADOW_NN_SCALE,
     _PORE_THRESHOLD_COVALENT_SCALE,
     _PORE_THRESHOLD_MIN_ANGSTROM,
     _STEP_TERRACE_MAX_GAP_ANGSTROM,
@@ -58,7 +62,7 @@ from ._constants import (
     _VORONOI_MAX_DISTANCE_COVALENT_SCALE,
     _VORONOI_PROBE_RADIUS_COVALENT_SCALE,
 )
-from .geometry import _get_covalent_radius
+from .geometry import _get_covalent_radius, framework_radii_from_symbols
 
 __all__ = [
     # Re-exported cell-frame geometry (see metalsurfer._geom_pbc).
@@ -413,3 +417,166 @@ def derive_pore_threshold(symbols: list[str]) -> float:
         List of element symbols.
     """
     return _pore_threshold_from_mean_radius(_mean_covalent_radius(symbols))
+
+
+def _periodic_delta(
+    delta: np.ndarray,
+    cell: np.ndarray | None,
+    pbc: np.ndarray | None,
+) -> np.ndarray:
+    if (
+        cell is None
+        or pbc is None
+        or not np.any(pbc)
+        or not cell_has_volume(np.asarray(cell, dtype=float))
+    ):
+        return delta
+    flat = delta.reshape(-1, 3)
+    return _minimum_image_cartesian_delta(
+        flat, np.asarray(cell, dtype=float), np.asarray(pbc, dtype=bool)
+    ).reshape(delta.shape)
+
+
+def ray_exposure_mask(
+    origins: np.ndarray,
+    normals: np.ndarray,
+    framework: np.ndarray,
+    radii: np.ndarray,
+    *,
+    exclude_indices: np.ndarray | None = None,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+    step: float = _ADAPTIVE_GRID_EXPOSURE_STEP,
+    n_steps: int = _ADAPTIVE_GRID_EXPOSURE_N_STEPS,
+    tolerance: float = 1e-8,
+) -> np.ndarray:
+    """Return whether clearance along *normals* is non-decreasing.
+
+    Clearance is the nearest other framework atom's distance minus that atom's
+    radius. *exclude_indices[i]* is omitted for origin *i* (the atom itself).
+    """
+    origins_arr = np.asarray(origins, dtype=float).reshape(-1, 3)
+    n = len(origins_arr)
+    if n == 0:
+        return np.ones(0, dtype=bool)
+    normals_arr = np.asarray(normals, dtype=float).reshape(n, 3)
+    framework_arr = np.asarray(framework, dtype=float).reshape(-1, 3)
+    radii_arr = np.asarray(radii, dtype=float).reshape(-1)
+    if len(framework_arr) == 0:
+        return np.ones(n, dtype=bool)
+    n_steps_i = int(n_steps)
+    steps = np.arange(0, n_steps_i + 1, dtype=float)
+    pts = (
+        origins_arr[:, None, :]
+        + steps[None, :, None] * float(step) * normals_arr[:, None, :]
+    )
+    delta = _periodic_delta(
+        pts[:, :, None, :] - framework_arr[None, None, :, :], cell, pbc
+    )
+    dist = np.linalg.norm(delta, axis=-1) - radii_arr.reshape(1, 1, -1)
+    if exclude_indices is not None:
+        excluded = np.asarray(exclude_indices, dtype=int).reshape(n)
+        for i, ex in enumerate(excluded):
+            if 0 <= int(ex) < dist.shape[-1]:
+                dist[i, :, int(ex)] = np.inf
+    clear = np.min(dist, axis=-1)
+    diffs = clear[:, 1:] - clear[:, :-1]
+    return np.all(diffs >= -float(tolerance), axis=1)
+
+
+def shadowed_by_higher_mask(
+    candidate_indices: np.ndarray,
+    higher_indices: np.ndarray,
+    positions: np.ndarray,
+    normal: np.ndarray,
+    median_nn: float,
+    *,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+) -> np.ndarray:
+    """Return whether a higher atom lies inside the lateral shadow of *median_nn*.
+
+    The shadow radius is ``_EXPOSED_SHADOW_NN_SCALE × median_nn``. It hides a
+    covered subsurface hollow and leaves a monatomic step edge.
+    """
+    cand = np.asarray(candidate_indices, dtype=int).reshape(-1)
+    higher = np.asarray(higher_indices, dtype=int).reshape(-1)
+    if len(cand) == 0:
+        return np.ones(0, dtype=bool)
+    if len(higher) == 0 or not np.isfinite(median_nn) or median_nn <= 0.0:
+        return np.zeros(len(cand), dtype=bool)
+    direction = np.asarray(normal, dtype=float).reshape(3)
+    nrm = float(np.linalg.norm(direction))
+    if nrm <= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+        return np.zeros(len(cand), dtype=bool)
+    n_hat = direction / nrm
+    pos = np.asarray(positions, dtype=float)
+    radius = _EXPOSED_SHADOW_NN_SCALE * float(median_nn)
+    delta = _periodic_delta(pos[cand][:, None, :] - pos[higher][None, :, :], cell, pbc)
+    along = np.einsum("ijk,k->ij", delta, n_hat)
+    lateral = delta - along[:, :, None] * n_hat.reshape(1, 1, 3)
+    lat = np.linalg.norm(lateral, axis=-1)
+    # Candidate minus higher: a higher atom has a negative normal component.
+    above = along < -_SURFACE_NORMAL_FALLBACK_NORM_EPS
+    return np.any((lat <= radius) & above, axis=1)
+
+
+def exposed_lower_band_indices(
+    positions: np.ndarray,
+    primary_indices: np.ndarray,
+    symbols: list[str],
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    median_nn: float,
+) -> np.ndarray:
+    """Atoms within one nearest-neighbour below *primary_indices* that are open.
+
+    Covered second-layer atoms (shadowed by the primary band) are excluded.
+    A flat multilayer therefore adds nothing. A step or vacancy floor does not.
+    """
+    pos = np.asarray(positions, dtype=float)
+    primary = np.asarray(primary_indices, dtype=int).reshape(-1)
+    if (
+        len(pos) == 0
+        or len(primary) == 0
+        or not np.isfinite(median_nn)
+        or float(median_nn) <= 0.0
+    ):
+        return np.zeros(0, dtype=int)
+    heights = _height_along_slab_normal(pos, cell)
+    h_max = float(np.max(heights[primary]))
+    band = (heights >= h_max - float(median_nn)) & (heights < h_max - 1e-6)
+    band[primary] = False
+    cand = np.nonzero(band)[0]
+    if len(cand) == 0:
+        return cand
+    n_hat = _slab_normal(cell)
+    radii = framework_radii_from_symbols(symbols)
+    # Rim atoms sit above a vacancy floor or a step edge. They must not veto
+    # the outward ray; the shadow test is what rejects a covered second layer.
+    ray_ok = np.zeros(len(cand), dtype=bool)
+    for i, ai in enumerate(cand):
+        at_or_below = heights <= float(heights[int(ai)]) + 1e-6
+        fw = np.nonzero(at_or_below)[0]
+        local_ex = int(np.nonzero(fw == int(ai))[0][0])
+        ray_ok[i] = bool(
+            ray_exposure_mask(
+                pos[int(ai)].reshape(1, 3),
+                n_hat.reshape(1, 3),
+                pos[fw],
+                radii[fw],
+                exclude_indices=np.array([local_ex], dtype=int),
+                cell=cell,
+                pbc=pbc,
+            )[0]
+        )
+    shadow = shadowed_by_higher_mask(
+        cand,
+        primary,
+        pos,
+        n_hat,
+        float(median_nn),
+        cell=cell,
+        pbc=pbc,
+    )
+    return cand[ray_ok & ~shadow]

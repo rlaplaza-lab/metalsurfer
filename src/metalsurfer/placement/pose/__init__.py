@@ -47,6 +47,9 @@ from .height import (
     _com_height_from_z_fraction as _com_height_from_z_fraction,
 )
 from .height import (
+    _com_hi_for_vdw_landing as _com_hi_for_vdw_landing,
+)
+from .height import (
     _contact_atom_index as _contact_atom_index,
 )
 from .height import (

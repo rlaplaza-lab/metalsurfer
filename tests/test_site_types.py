@@ -3,7 +3,6 @@
 import numpy as np
 import pytest
 
-from metalsurfer.placement._constants import _SITE_Z_OFFSET_FROM_SURFACE_RADIUS
 from metalsurfer.placement._material import MATERIAL_PBC, material_aware_pbc
 from metalsurfer.placement.site_types import Site, with_symmetry
 
@@ -54,10 +53,3 @@ def test_material_pbc_values_are_immutable_tuples():
     assert material_aware_pbc("slab") == [True, True, False]
     with pytest.raises(ValueError, match="material_type"):
         material_aware_pbc("crystal")
-
-
-def test_pore_z_offset_matches_hollow():
-    assert (
-        _SITE_Z_OFFSET_FROM_SURFACE_RADIUS["pore"]
-        == _SITE_Z_OFFSET_FROM_SURFACE_RADIUS["hollow"]
-    )

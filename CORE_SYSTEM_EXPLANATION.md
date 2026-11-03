@@ -347,15 +347,16 @@ without contact-solve).
    validation (``max(min_initial_distance, covalent_sum * min_contact_ratio)``,
    plus the VDW-sum floor when `reject_vdw_overlaps` is on). A 1e-6 Å pad
    keeps rigid poses off the ``dists < allowed`` edge under MIC wrap noise.
-3. Interpret ``z_fraction`` as a **signed offset around that contact** spanning
-   the covalent-scaled ``placement_z_range`` window, so mid-window ``0.5`` is
-   the contact pose and ``0.1`` / ``0.9`` remain diversity — not an independent
-   guess of absolute height.
+3. On walls and dissociative poses, ``z_fraction`` 0.5, 0.7, and 0.9 are the
+   covalent contact, the halfway height, and the van der Waals standoff (at
+   least 0.8 Å above the contact). Values below 0.5 repeat the contact. Void
+   sites stay on the free-volume centre; a 0.2 step matches the wall step from
+   0.5 to 0.7.
 
-Site-type priors (hollow closer than atop) are sampling-only and are **not**
-stacked into the height law; three-support hollows already sit closer via the
-pairwise gate. Inside free-volume pores the local normal is not a unique
-"away" direction, so contact-solve is skipped there.
+The site-type label does not shift that height. A multi-support hollow sits
+closer only when the pairwise gate itself is higher. Inside free-volume pores
+the local normal is not a unique "away" direction, so contact-solve is skipped
+there.
 
 ### 4.3 Validation and distance recovery
 

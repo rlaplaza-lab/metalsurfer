@@ -5,13 +5,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy as np
-from ase import Atoms
 
 from ..exceptions import DependencyMissingError
 from ..models import PlacementSpec
 from . import geometry as geom
 from ._constants import (
-    _ADSORBATE_COVALENT_RADIUS_FALLBACK,
     _PARALLEL_FRACTION_HIGH_BINDER_RATIO,
     _PARALLEL_FRACTION_HIGH_RATIO_CUTOFF,
     _PARALLEL_FRACTION_LOW_BINDER_RATIO,
@@ -20,21 +18,7 @@ from ._constants import (
     _PARALLEL_FRACTION_NO_BINDERS,
     _PARALLEL_FRACTION_NO_RING,
     _PARALLEL_FRACTION_SINGLE_BINDER,
-    _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE,
-    _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE,
-    _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE,
-    _SITE_Z_OFFSET_FROM_SURFACE_RADIUS,
 )
-from .site_coords import _mean_covalent_radius
-from .site_enumeration import _get_site_surface_radii
-from .site_types import Site
-
-
-def _mean_adsorbate_covalent_radius(mol_symbols: list[str]) -> float:
-    """Mean covalent radius of adsorbate symbols, or the adsorbate fallback."""
-    return _mean_covalent_radius(
-        mol_symbols, fallback=_ADSORBATE_COVALENT_RADIUS_FALLBACK
-    )
 
 
 def _rdkit_chem():
@@ -173,49 +157,6 @@ def _aromatic_ring_atom_count(smiles: str) -> int | None:
     """Return aromatic heavy-atom count for *smiles*, or None if parse fails."""
     info = _smiles_aromatic_binder_info(smiles)
     return None if info is None else info[1]
-
-
-def _radius_sum_for_site(
-    slab: Atoms,
-    site: Site | None,
-    mol_symbols: list[str],
-    r_surface: float | None = None,
-) -> float:
-    if r_surface is None:
-        r_surface = _get_site_surface_radii(slab, site)
-    return r_surface + _mean_adsorbate_covalent_radius(mol_symbols)
-
-
-def _site_type_z_offset(
-    slab: Atoms,
-    site: Site | None,
-    site_type: str | None,
-    r_surface: float | None = None,
-) -> float:
-    if not site_type or site_type not in _SITE_Z_OFFSET_FROM_SURFACE_RADIUS:
-        return 0.0
-    multiplier = _SITE_Z_OFFSET_FROM_SURFACE_RADIUS[site_type]
-    # A zero multiplier never depends on the surface radius; short-circuit so a
-    # caller may omit a precomputed *r_surface* without changing the result.
-    if multiplier == 0.0:
-        return 0.0
-    if r_surface is None:
-        r_surface = _get_site_surface_radii(slab, site)
-    return multiplier * r_surface
-
-
-def _parallel_z_adjustments(
-    slab: Atoms,
-    site: Site | None,
-    mol_symbols: list[str],
-    r_surface: float | None = None,
-) -> tuple[float, float, float]:
-    radius_sum = _radius_sum_for_site(slab, site, mol_symbols, r_surface=r_surface)
-    return (
-        _PARALLEL_Z_FLOOR_RADIUS_SUM_SCALE * radius_sum,
-        _PARALLEL_Z_LO_SHRINK_RADIUS_SUM_SCALE * radius_sum,
-        _PARALLEL_Z_HI_SHRINK_RADIUS_SUM_SCALE * radius_sum,
-    )
 
 
 def _estimate_parallel_fraction(

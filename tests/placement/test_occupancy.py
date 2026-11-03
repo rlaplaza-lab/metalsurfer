@@ -38,9 +38,6 @@ from metalsurfer.placement.site_context import (
     _get_unique_sites_for_specs,
     resolve_site_context_for_sampling,
 )
-from metalsurfer.placement.site_enumeration import (
-    _compute_site_z_base,
-)
 from metalsurfer.placement.site_types import Site
 from metalsurfer.workflow.composite import pack_exact_tuplet
 from metalsurfer.workflow.shared import PlacementFailureEvent
@@ -250,7 +247,10 @@ def test_filter_sites_by_occupancy_drops_near_adsorbate():
 
 
 def test_estimate_complexity_shrinks_under_coverage():
-    from metalsurfer.placement.generators import estimate_placement_spec_capacity
+    from metalsurfer.placement.generators import (
+        _spec_grid_info,
+        estimate_placement_spec_capacity,
+    )
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
     slab = make_slab()
@@ -272,8 +272,16 @@ def test_estimate_complexity_shrinks_under_coverage():
         full_slab=full,
     )
     assert covered < clean
-    # Full-surface saturation collapses estimated complexity to zero by construction.
-    assert covered == 0.0
+    # Substrate anchors under the cloud are pruned. Exposed ligand atoms keep
+    # their own atop and bridge sites, so the estimate does not fall to zero.
+    info = _spec_grid_info(
+        [make_water()], slab, config, "O", site_context=ctx, full_slab=full
+    )
+    assert info.site_indices
+    assert all(
+        any(int(atom) >= len(slab) for atom in info.unique_sites[idx].slab_indices)
+        for idx in info.site_indices
+    )
 
 
 def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distance():
@@ -660,7 +668,6 @@ def test_place_dissociative_two_sites_matches_spec_path():
         _generate_dissociative_placement_from_spec,
         _place_dissociative_two_sites,
     )
-    from metalsurfer.placement.orientation import _site_type_z_offset
 
     slab = make_slab()
     h2 = make_h2()
@@ -677,19 +684,6 @@ def test_place_dissociative_two_sites_matches_spec_path():
     placed_a, desc_a = via_diss
 
     pair = pairs[0]
-    hollow = Site(
-        xyz=np.zeros(3),
-        normal=np.array([0.0, 0.0, 1.0]),
-        site_type="hollow",
-        slab_indices=(),
-        material_type="slab",
-        site_source="test",
-        env_fingerprint=((), (), 0),
-    )
-    z_lo, z_hi = _compute_site_z_base(config, slab, hollow, ["H", "H"])
-    z_lo += _site_type_z_offset(slab, hollow, "hollow")
-    z_hi += _site_type_z_offset(slab, hollow, "hollow")
-    z_offset = z_lo + 0.5 * (z_hi - z_lo)
     site_a = Site(
         xyz=pair.xyz1,
         normal=pair.normal1,
@@ -713,7 +707,7 @@ def test_place_dissociative_two_sites_matches_spec_path():
         [site_a, site_b],
         config=config,
         spec=spec,
-        height_override=float(z_offset),
+        height_override=float(desc_a.z_offset),
         slab=slab,
         slab_for_sites=slab,
     )

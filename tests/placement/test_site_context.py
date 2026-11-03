@@ -456,9 +456,13 @@ def test_occupied_surface_samples_full_lattice_and_drops_occupied_sites():
     info = _spec_grid_info(
         [make_water()], slab, config, "O", site_context=reduced, full_slab=full
     )
-    assert [_site_xyz_type_key(s) for s in info.unique_sites] == [
-        _site_xyz_type_key(s) for s in reduced.clustered_sites
-    ]
+    clustered_keys = [_site_xyz_type_key(s) for s in reduced.clustered_sites]
+    got_keys = [_site_xyz_type_key(s) for s in info.unique_sites]
+    assert got_keys[: len(clustered_keys)] == clustered_keys
+    assert any(
+        any(int(atom) >= len(slab) for atom in site.slab_indices)
+        for site in info.unique_sites[len(clustered_keys) :]
+    )
     kept_keys = {_site_xyz_type_key(info.unique_sites[i]) for i in info.site_indices}
     occupied_key = _site_xyz_type_key(occupied)
     assert occupied_key not in kept_keys
@@ -478,7 +482,11 @@ def test_occupied_surface_samples_full_lattice_and_drops_occupied_sites():
         full_slab=full,
     )
     assert specs
-    wide = [s for s in specs if s.site_index >= len(reduced.sites)]
+    wide = [
+        s
+        for s in specs
+        if len(reduced.sites) <= s.site_index < len(reduced.clustered_sites)
+    ]
     assert wide, "enumerated specs must index into the clustered lattice"
     # Pose indexes the sampling catalog as-is; pass the expanded lattice.
     sampling = site_context_for_occupied_surface(reduced)
@@ -543,9 +551,9 @@ def test_multi_molecule_coverage_shares_pruned_clustered_catalog():
         info = _spec_grid_info(
             [mol], slab, config, None, site_context=reduced, full_slab=full
         )
-        assert [_site_xyz_type_key(s) for s in info.unique_sites] == [
-            _site_xyz_type_key(s) for s in reduced.clustered_sites
-        ]
+        clustered_keys = [_site_xyz_type_key(s) for s in reduced.clustered_sites]
+        got_keys = [_site_xyz_type_key(s) for s in info.unique_sites]
+        assert got_keys[: len(clustered_keys)] == clustered_keys
         keys = {_site_xyz_type_key(info.unique_sites[i]) for i in info.site_indices}
         assert occupied_key not in keys
         kept.append(keys)

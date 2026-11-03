@@ -350,16 +350,23 @@ Material strategies:
    * - Type
      - Site strategy
    * - slab
-     - Planar: topology atop/bridge/hollow only. Rough: topology + Voronoi
+     - Planar: topology atop/bridge/hollow on the top band, plus the same
+       motifs on exposed atoms within one nearest-neighbour below it (a
+       step or vacancy floor). A covered second layer is not meshed. A
+       preadsorbed ligand stays out of that mask; exposed ligand atoms get
+       an atop site and bridges to nearby metal. Rough: topology + Voronoi
        enrichment on the top-layer band
    * - nanoparticle
-     - Convex-hull + nearest-neighbour topology only (atop / bridge / 3- and
-       4-fold hollow). Voronoi is skipped. Hull-facet normals lift sites on
-       both symmetric and lopsided convex clusters. Cluster symmetry wraps
-       transformed fractional coordinates in the padded box but does not fold
-       site–site deltas through periodic images. Non-crystallographic groups
-       (e.g. Ih) map to the nearest crystallographic subgroup spglib can
-       return.
+     - Convex-hull + nearest-neighbour topology (atop / bridge / 3- and
+       4-fold hollow), plus atoms within one nearest-neighbour of the hull
+       that still have an open outward ray (dents). Voronoi is skipped.
+       Hull-facet normals lift sites on both symmetric and lopsided convex
+       clusters. Cluster symmetry wraps transformed fractional coordinates in
+       the padded box but does not fold site–site deltas through periodic
+       images. Non-crystallographic groups (e.g. Ih) map to the nearest
+       crystallographic subgroup spglib can return. A preadsorbed ligand
+       adds atop sites on exposed ligand atoms and bridges to substrate
+       atoms in the neighbour window; occupancy does not delete those.
    * - porous
      - 3×3×3 images; pore sites when the framework spans the cell
 
@@ -492,7 +499,8 @@ Enumeration / materialization
 
 - ``policy.py`` — Cartesian product over conformers × sites × orientation
   knobs; **stratified** subsample by ``site_type`` to ``n_desired`` (seeded),
-- Soft priors preferring milder tilt and mid ``z_fraction``.
+- Draws cycle wall height shells (contact, halfway, van der Waals) and, within
+  a shell, prefer milder tilt.
   Sites are ranked by ``kind``, coordination, and clearance before the
   stratified draw. Soft-prior draws prefer earlier indices (voids first when
   present). Under coverage the clearance is that molecule's footprint disk;
@@ -518,11 +526,15 @@ Enumeration / materialization
   ``placement_materialize_workers`` to a concrete thread-pool size.
 - After orientation, a **feasible height interval** along the site normal is
   solved once per rigid pose family (cached on the per-screen pose batch).
-  Wall sites: pairwise contact-solved COM is the lower bound / nominal;
-  ``z_fraction`` ≤ ``0.5`` clips to contact and values above explore toward
-  the upper gate. Void sites: nominal is the free-volume centre (or nearest
-  cleared height); the interval is the cleared span containing it. Empty
-  intervals fail as ``infeasible_pose``;
+  Wall and dissociative poses use one interval: ``z_fraction`` 0.5 is the
+  covalent contact, 0.7 is halfway, and 0.9 is the van der Waals standoff
+  (``vdw_overlap_scale`` times the summed van der Waals radii, at least
+  0.8 Å above the contact). Values below 0.5 still repeat the contact on
+  walls and are dropped. Flat-aromatic ``placement_z_range`` shrink does not
+  change this interval. Void sites stay on the free-volume centre; their
+  half-width makes a 0.2 ``z_fraction`` step the same distance as the wall
+  step from 0.5 to 0.7. When a ligand suffix is present, pair clearance
+  includes those atoms. Empty intervals fail as ``infeasible_pose``;
   failed multi-contact at nominal fails as ``insufficient_contact_atoms``.
   ``surface_ref`` is always local (support plane or void vertex).
 - **Distance recovery** (default on): residual ``too_close`` / ``too_far`` /
