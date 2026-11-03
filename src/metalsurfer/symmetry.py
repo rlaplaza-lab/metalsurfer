@@ -7,6 +7,7 @@ is `symprec` for spglib and the Cartesian threshold for site matching.
 from __future__ import annotations
 
 import hashlib
+from itertools import product
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
@@ -244,6 +245,18 @@ class SymmetryAnalyzer:
             arr = arr - (arr @ n)[..., None] * n
         return np.linalg.norm(arr, axis=-1)
 
+    def _within_match_tolerance(self, sep: np.ndarray, planar: bool) -> np.ndarray:
+        """Return where *sep* lies inside ``symmetry_tolerance``.
+
+        Planar matches also require the slab-normal gap inside that tolerance.
+        """
+        arr = np.asarray(sep, dtype=float)
+        tol = self.symmetry_tolerance
+        if not planar:
+            return np.linalg.norm(arr, axis=-1) < tol
+        along = arr @ self._slab_normal()
+        return (self._separation_norms(arr, True) < tol) & (np.abs(along) < tol)
+
     def _orbit_connectivity(
         self,
         frac_pts: np.ndarray,
@@ -262,12 +275,11 @@ class SymmetryAnalyzer:
         frac_source = np.asarray(frac_pts[source], dtype=float)
         frac_targets = np.asarray(frac_pts, dtype=float)[np.asarray(targets, dtype=int)]
         connected = np.zeros(len(targets), dtype=bool)
-        tol = self.symmetry_tolerance
         for R, t in frac_ops:
             moved = self._wrap_frac(self._apply_frac_symop(frac_source, R, t))
             d_frac = self._mic_frac_delta(moved, frac_targets)
             sep = self._cart_sep_from_frac_delta(d_frac)
-            connected |= self._separation_norms(sep, planar) < tol
+            connected |= self._within_match_tolerance(sep, planar)
             if bool(connected.all()):
                 break
         return connected
@@ -345,7 +357,8 @@ class SymmetryAnalyzer:
         sites
             List of adsorption sites to analyze (typically the clustered catalog).
         planar
-            When true, ignore differences along the slab normal.
+            When true, match in the slab plane and still require the
+            slab-normal separation to lie inside ``symmetry_tolerance``.
         """
         if not sites:
             return []
@@ -402,6 +415,19 @@ class SymmetryAnalyzer:
             return self._symop_match_pairs_kdtree(frac_pts, R, t, planar)
         return self._symop_match_pairs_dense(frac_pts, R, t, planar)
 
+    def _periodic_image_offsets(self, pbc: np.ndarray) -> np.ndarray:
+        """Cartesian ``{-1, 0, 1}`` images on periodic axes, including corners."""
+        cell = np.asarray(self._lattice, dtype=float)
+        signs = [(-1, 0, 1) if bool(pbc[dim]) else (0,) for dim in range(3)]
+        offsets: list[np.ndarray] = []
+        for combo in product(*signs):
+            off = np.zeros(3, dtype=float)
+            for dim, sign in enumerate(combo):
+                if sign:
+                    off = off + float(sign) * cell[dim]
+            offsets.append(off)
+        return np.vstack(offsets)
+
     def _symop_match_pairs_kdtree(
         self,
         frac_pts: np.ndarray,
@@ -416,28 +442,16 @@ class SymmetryAnalyzer:
         pbc = self._symmetry_pbc()
         n_hat = self._slab_normal() if planar else None
 
-        cart_ref = frac_to_cart(frac_pts, self._lattice)
-        cart_query = frac_to_cart(transformed, self._lattice)
+        cart_ref_full = frac_to_cart(frac_pts, self._lattice)
+        cart_query_full = frac_to_cart(transformed, self._lattice)
+        cart_ref = cart_ref_full
+        cart_query = cart_query_full
         if n_hat is not None:
-            cart_ref = cart_ref - (cart_ref @ n_hat)[..., None] * n_hat
-            cart_query = cart_query - (cart_query @ n_hat)[..., None] * n_hat
+            cart_ref = cart_ref_full - (cart_ref_full @ n_hat)[..., None] * n_hat
+            cart_query = cart_query_full - (cart_query_full @ n_hat)[..., None] * n_hat
 
         if np.any(pbc) and cell_has_volume(self._lattice):
-            # Expand reference by ±1 lattice images on periodic axes so
-            # query_ball covers MIC neighbours within *tol* without an n×n matrix.
-            cell = np.asarray(self._lattice, dtype=float)
-            offsets = [np.zeros(3, dtype=float)]
-            for dim in range(3):
-                if bool(pbc[dim]):
-                    offsets.extend([cell[dim], -cell[dim]])
-            # Two-axis combinations (corners) when two+ axes are periodic.
-            axes = [d for d in range(3) if bool(pbc[d])]
-            if len(axes) >= 2:
-                for i, a in enumerate(axes):
-                    for b in axes[i + 1 :]:
-                        for sa in (-1, 1):
-                            for sb in (-1, 1):
-                                offsets.append(sa * cell[a] + sb * cell[b])
+            offsets = self._periodic_image_offsets(pbc)
             expanded = np.vstack([cart_ref + off for off in offsets])
             tree = KDTree(expanded)
             hits = tree.query_ball_point(cart_query, r=tol)
@@ -453,9 +467,7 @@ class SymmetryAnalyzer:
                         transformed[i] - frac_pts[j], pbc, copy=True
                     )
                     sep = frac_to_cart(d_frac, self._lattice)
-                    if n_hat is not None:
-                        sep = sep - float(np.dot(sep, n_hat)) * n_hat
-                    if float(np.linalg.norm(sep)) < tol:
+                    if bool(self._within_match_tolerance(sep, planar)):
                         pairs.append((i, j))
             return pairs
 
@@ -464,8 +476,12 @@ class SymmetryAnalyzer:
         pairs = []
         for i, js in enumerate(hits):
             for j in js:
-                if int(j) != i:
-                    pairs.append((i, int(j)))
+                j_int = int(j)
+                if j_int == i:
+                    continue
+                sep = cart_query_full[i] - cart_ref_full[j_int]
+                if bool(self._within_match_tolerance(sep, planar)):
+                    pairs.append((i, j_int))
         return pairs
 
     def _symop_match_pairs_dense(
@@ -479,24 +495,20 @@ class SymmetryAnalyzer:
         n = int(len(frac_pts))
         if n < 2:
             return []
-        tol = self.symmetry_tolerance
         per_col = n * 3 * 8
         chunk = max(1, min(n, _SYMMETRY_PAIR_CHUNK_BYTES // max(per_col, 1)))
         transformed = self._wrap_frac(frac_pts @ R.T + t)
         pairs: list[tuple[int, int]] = []
         pbc = self._symmetry_pbc()
-        n_hat = self._slab_normal() if planar else None
         for i0 in range(0, n, chunk):
             i1 = min(n, i0 + chunk)
             delta = transformed[i0:i1, None, :] - frac_pts[None, :, :]
             delta = minimum_image_fractional_delta(delta, pbc, copy=False)
             sep = frac_to_cart(delta, self._lattice)
-            if n_hat is not None:
-                sep = sep - (sep @ n_hat)[..., None] * n_hat
-            dist = np.sqrt(np.sum(sep * sep, axis=-1))
+            match = self._within_match_tolerance(sep, planar)
             for local_row, i in enumerate(range(i0, i1)):
-                dist[local_row, i] = np.inf
-            li, lj = np.nonzero(dist < tol)
+                match[local_row, i] = False
+            li, lj = np.nonzero(match)
             for a, b in zip(li.tolist(), lj.tolist(), strict=True):
                 pairs.append((i0 + int(a), int(b)))
         return pairs

@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Symmetry-orbit pruning stays on a clean single-molecule substrate. N-tuplet
   mode, coverage, and a broken substrate rebuild the full clustered catalog on
   the current atoms instead of reusing an earlier reduced set.
+- Planar symmetry orbits keep sites with a slab-normal gap outside
+  ``symmetry_tolerance`` distinct. The periodic site matcher includes
+  cell-corner images.
 
 ### Removed
 

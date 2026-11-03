@@ -394,6 +394,18 @@ def test_fcc111_pt_2x2_top_atop_single_orbit():
     atop_orbits = [s for s in sym if s.site_type == "atop"]
     assert len(atop_orbits) == 1
     assert atop_orbits[0].symmetry_multiplicity == 4
+    hollow_orbits = [s for s in sym if s.site_type == "hollow"]
+    assert sorted(int(s.symmetry_multiplicity or 0) for s in hollow_orbits) == [4, 4]
+    an = SymmetryAnalyzer(slab, symmetry_tolerance=0.15, mode="periodic")
+    signatures = []
+    for planar in (False, True):
+        orbits = an.analyze_site_symmetry(raw, planar=planar)
+        signatures.append(
+            tuple(
+                sorted((o.site_type, int(o.symmetry_multiplicity or 0)) for o in orbits)
+            )
+        )
+    assert signatures[0] == signatures[1]
     # The reduced multiplicity budget still accounts for every raw site.
     assert sum((s.symmetry_multiplicity or 0) for s in sym) == len(raw)
 
@@ -464,6 +476,58 @@ def test_analyze_site_symmetry_keeps_distinct_site_types_separate():
     assert len(grouped) == 2
     assert {g.site_type for g in grouped} == {"atop", "hollow"}
     assert all(int(g.symmetry_multiplicity or 0) == 1 for g in grouped)
+
+
+def test_planar_cylinder_keeps_stacked_sites_apart():
+    """A 2 Å normal stack is two orbits; 0.05 Å, inside tolerance, is one."""
+    from metalsurfer.placement.site_types import Site
+
+    slab = make_slab(nx=2, ny=2)
+    an = SymmetryAnalyzer(slab, symmetry_tolerance=0.1)
+    normal = an._slab_normal()
+    anchor = np.asarray(slab.positions, dtype=float).mean(axis=0) + 8.0 * normal
+
+    def _atop(xyz: np.ndarray) -> Site:
+        return Site(
+            xyz=xyz,
+            normal=normal,
+            site_type="atop",
+            slab_indices=(0,),
+            material_type="slab",
+            site_source="test",
+            env_fingerprint=(("Cu",), (), 0),
+        )
+
+    counts = []
+    for height in (2.0, 0.05):
+        grouped = an.analyze_site_symmetry(
+            [_atop(anchor), _atop(anchor + height * normal)],
+            planar=True,
+        )
+        counts.append(sorted(int(g.symmetry_multiplicity or 0) for g in grouped))
+    assert counts == [[1, 1], [2]]
+
+
+def test_kdtree_matcher_agrees_with_dense_on_cell_images():
+    """Dense and KD-tree matchers agree across a cell face, edge, and corner."""
+    cell = np.diag([10.0, 10.0, 10.0])
+    cubic = Atoms("Cu", positions=[[0.0, 0.0, 0.0]], cell=cell, pbc=True)
+    an = SymmetryAnalyzer(cubic, symmetry_tolerance=0.1, mode="periodic")
+    fillers = np.random.default_rng(0).uniform(0.2, 0.8, size=(40, 3))
+    origin = np.array([0.002, 0.002, 0.002])
+    rotation = np.eye(3)
+    translation = np.zeros(3)
+    partners = (
+        np.array([0.998, 0.998, 0.998]),
+        np.array([0.998, 0.002, 0.002]),
+        np.array([0.998, 0.998, 0.002]),
+    )
+    for partner in partners:
+        frac = np.vstack([origin, partner, fillers])
+        dense = an._symop_match_pairs_dense(frac, rotation, translation, False)
+        kdtree = an._symop_match_pairs_kdtree(frac, rotation, translation, False)
+        assert (0, 1) in dense or (1, 0) in dense
+        assert (0, 1) in kdtree or (1, 0) in kdtree
 
 
 def test_planar_separation_distance_uses_slab_normal_not_cartesian_xy():
