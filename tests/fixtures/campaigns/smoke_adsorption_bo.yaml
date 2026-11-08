@@ -21,4 +21,4 @@ config:
   bo:
     initial_random: 2
     batch_size: 2
-    total_budget: 1
+    total_batches: 1

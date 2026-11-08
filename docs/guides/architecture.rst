@@ -498,13 +498,24 @@ Enumeration / materialization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 - ``policy.py`` — Cartesian product over conformers × sites × orientation
-  knobs; **stratified** subsample by ``site_type`` to ``n_desired`` (seeded),
-- Draws cycle wall height shells (contact, halfway, van der Waals) and, within
-  a shell, prefer milder tilt.
-  Sites are ranked by ``kind``, coordination, and clearance before the
-  stratified draw. Soft-prior draws prefer earlier indices (voids first when
-  present). Under coverage the clearance is that molecule's footprint disk;
-  the shared ``SiteContext.sites`` catalog is not rewritten.
+  knobs; **stratified** subsample to ``n_desired`` (seeded). On a bare
+  surface the buckets are ``site_type``, and pores are preferred. Under
+  coverage the bucket is how many occupied sites of the same type lie at
+  neighbor-graph distance 1 or 2. Those counts are drawn equally, and
+  ``site_type`` still rotates inside a count. A covered short draw keeps one
+  upright contact pose on the clearest open site of each type, including a
+  clearance tie, then fills the remaining slots by occupancy count.
+  Draws cycle wall height shells (contact, halfway, van der Waals). Inside a
+  shell the next sample is the next site type, then the next spanned site,
+  then the next azimuth; conformer is last. Sites are ranked by ``kind``,
+  coordination, and clearance, then spanned so each band opens on the closest
+  non-overlapping clearance and the farthest one. Soft-prior draws prefer
+  earlier indices (voids first when present). Under coverage the clearance is
+  that molecule's footprint disk; the shared ``SiteContext.sites`` catalog is
+  not rewritten. Normal, sequential, and n-tuple screens use that same open
+  catalog and stratified order. Joint packs then choose each later member by
+  the same occupancy-count round-robin against sites already in the group. A
+  ratio at or below ``connectivity_multiplier`` is a hard clash.
 - ``orientation.py`` — aromatic heuristics plus ``orient_from_spec`` used by
   pose. EN-down binder candidates are the electronegative elements (O, N, S,
   halogens) union formally charged atoms (``[CH2+]``, ``[C-]``), **unless**
@@ -728,7 +739,7 @@ Bayesian screening and transfer
 
 Finite ``PlacementSpec`` pool → initial batch (``bo.initial_sampling``,
 default ``spread_xyz``) → geometry-aware features → surrogate → acquisition
-(LCB / EI / PI; default PI) until ``bo.total_budget`` acquisition rounds
+(LCB / EI / PI; default PI) until ``bo.total_batches`` acquisition rounds
 after the initial batch.
 
 Surrogates (``bo.surrogate``): ``random_forest``, ``extra_trees``,
@@ -737,7 +748,7 @@ Transfer-capable models accept per-sample weights; ``gaussian_process`` does
 not.
 
 Eval budget once autotuned:
-``bo.initial_random + bo.total_budget * bo.batch_size``.
+``bo.initial_random + bo.total_batches * bo.batch_size``.
 
 Nested config: :class:`~metalsurfer.BOConfig` on ``AdsorptionConfig.bo``
 (with ``bo.transfer`` = :class:`~metalsurfer.BOTransferConfig`). Flat
@@ -830,7 +841,7 @@ Representative defaults (verify in ``config.py`` when debugging):
   (Packmol-style salvage; discrete XY ±0.5 Å only when clash is off)
 - ``voronoi_auto_widen=True``, ``adaptive_parallel_fraction=True``
 - ``bo.surrogate="gradient_boost"``, ``bo.initial_sampling="spread_xyz"``,
-  ``bo.total_budget=18``, ``bo.transfer.mode="weighted"``
+  ``bo.total_batches=18``, ``bo.transfer.mode="weighted"``
 - ``saturation_autobatcher_reuse=True``, ``min_pbc_image_separation=8.0`` Å
 
 

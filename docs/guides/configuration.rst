@@ -66,7 +66,7 @@ Settings people mix up
 
 - Raising ``fmax`` alone does not soften the post-relax force filter — also
   raise ``max_force_convergence``.
-- ``bo.total_budget`` counts acquisition **batches**, not total evaluations
+- ``bo.total_batches`` counts acquisition **batches**, not total evaluations
   (see the Bayesian section below).
 - Bayesian mode is chosen by calling ``run_*_bo`` (or YAML ``campaign: *_bo``),
   not by a config flag such as ``bo_enabled``.
@@ -128,11 +128,11 @@ How long a Bayesian search runs
 
 Total placement evaluations after batch sizes are resolved::
 
-   bo.initial_random + bo.total_budget * bo.batch_size
+   bo.initial_random + bo.total_batches * bo.batch_size
 
-``bo.total_budget`` is the number of acquisition batches after the initial
+``bo.total_batches`` is the number of acquisition batches after the initial
 random batch. Example: about 300 evals with batch size 16 and initial random
-16 → ``bo.total_budget = (300 - 16) // 16``. After sizes resolve,
+16 → ``bo.total_batches = (300 - 16) // 16``. After sizes resolve,
 :func:`~metalsurfer.config.resolved_bo_eval_budget` returns the total count.
 
 Nest BO settings under ``bo`` / ``bo.transfer`` (flat ``bo_*`` keys are
@@ -144,7 +144,7 @@ rejected)::
        bo=BOConfig(
            initial_random=16,
            batch_size=16,
-           total_budget=18,
+           total_batches=18,
            transfer=BOTransferConfig(enabled=True),
        ),
    )
@@ -154,7 +154,7 @@ rejected)::
    #   bo:
    #     initial_random: 16
    #     batch_size: 16
-   #     total_budget: 18
+   #     total_batches: 18
    #     transfer:
    #       enabled: true
 
@@ -195,7 +195,10 @@ single-molecule loop runs.
 many adsorbates one step places together. Above 1, each trial is one initial
 structure with exactly that many adsorbates: CPU placement builds clash-free
 packs (``num_placements`` joint configs), TorchSim relaxes every pack with all
-members together, and the step commits the best binding config. There is no
+members together, and the step commits the best binding config. Later members
+of a pack round-robin by how many already chosen sites of the same type sit
+within two steps on that type's neighbor graph. A ratio at or below
+``connectivity_multiplier`` is rejected. There is no
 single-adsorbate MLIP screen and no partial-tuplet or single-winner fallback.
 Overlapping packs are rejected when ``placement_clash_descent`` is off;
 otherwise near-misses are rescued by clash descent (substrate contacts use

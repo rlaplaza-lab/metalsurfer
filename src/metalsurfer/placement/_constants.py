@@ -209,6 +209,22 @@ _PARALLEL_FRACTION_MEDIUM_BINDER_RATIO: float = 0.5
 _PARALLEL_FRACTION_HIGH_RATIO_CUTOFF: float = 0.5
 _PARALLEL_FRACTION_MEDIUM_RATIO_CUTOFF: float = 0.2
 _PLACEMENT_GRID_COUNT_SEED: int = 0
+# Second independent stream (en-down versus parallel, ligand versus substrate).
+_POLICY_BRANCH_SEED_STEP: int = 1
+# Grouping key for grid floats. 0.1 and 0.3 are not exact in binary.
+_GRID_AXIS_KEY_DECIMALS: int = 5
+# Same-type MIC distances inside this window are one neighbour shell.
+# The window is max(abs, rel * shell length): 0.05 Å matches site identity,
+# and 2% keeps a relaxed or noisy slab from splitting a symmetric shell.
+_SITE_NEIGHBOR_REL_TOL: float = 0.02
+_SITE_NEIGHBOR_ABS_TOL_ANGSTROM: float = 0.05
+# Occupancy strata count occupied catalog sites out to this neighbor-graph
+# distance on the same site type. 1 is the nearest shell; 2 is the next
+# lattice shell of that binding mode.
+_OCCUPANCY_NEIGHBOR_GRAPH_DISTANCE: int = 2
+# Peak sigma scale and outer edge of the lateral contact shell
+# (multiples of connectivity_multiplier).
+_OCCUPANCY_SIGMA_SHELL_SCALE: float = 2.0
 _GRID_BUILD_CAP: int = 10**9
 # Working-set multiplier for early-cap policy paths (dissociative / heavy filters).
 _EARLY_CAP_WORKING_SET_MULTIPLIER: int = 8

@@ -34,7 +34,7 @@ def main() -> int:
         model_name="uma-s-1p1",
         task_name="oc20",
         num_placements=250,
-        bo=BOConfig(initial_random=100, batch_size=100, total_budget=2),
+        bo=BOConfig(initial_random=100, batch_size=100, total_batches=2),
     )
 
     # Create Ru(0001) slab from Materials Project mp-33.

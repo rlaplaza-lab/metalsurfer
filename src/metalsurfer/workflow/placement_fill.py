@@ -14,6 +14,11 @@ from ..placement.generators import (
     _SpecGridInfo,
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
+    log_site_sample,
+)
+from ..placement.policy import (
+    _wall_contact_z_fraction,
+    _wall_z_fraction_is_contact,
 )
 from ..placement.pose.height import _height_interval_family_key
 from ..placement.site_context import SiteContext
@@ -58,8 +63,9 @@ def _same_height_key(
 ) -> tuple:
     """Identity of specs that place at the same COM.
 
-    On wall sites every ``z_fraction <= 0.5`` is the contact height.
-    Fractions above 0.5, and every void or dissociative fraction, stay distinct.
+    On wall sites every fraction on the contact shell shares that height.
+    Fractions above the contact sample, and every void or dissociative
+    fraction, stay distinct.
     """
     family = _height_interval_family_key(spec)
     zf = float(spec.z_fraction)
@@ -68,7 +74,7 @@ def _same_height_key(
         void = True
     if spec.orientation_type == "dissociative" or void:
         return (*family, zf)
-    if zf <= 0.5:
+    if _wall_z_fraction_is_contact(zf):
         return (*family, "contact")
     return (*family, zf)
 
@@ -78,7 +84,7 @@ def _dedupe_same_height_specs(
     *,
     site_is_void: Callable[[int], bool] | None = None,
 ) -> list[PlacementSpec]:
-    """Keep one spec per collapsed height, preferring ``z_fraction`` nearest 0.5."""
+    """Keep one spec per collapsed height, preferring the contact sample."""
     best: dict[tuple, int] = {}
     order: list[tuple] = []
     for i, spec in enumerate(specs):
@@ -92,7 +98,10 @@ def _dedupe_same_height_specs(
             order.append(key)
             continue
         prev_spec = specs[prev]
-        if abs(float(spec.z_fraction) - 0.5) < abs(float(prev_spec.z_fraction) - 0.5):
+        contact = _wall_contact_z_fraction()
+        if abs(float(spec.z_fraction) - contact) < abs(
+            float(prev_spec.z_fraction) - contact
+        ):
             best[key] = i
     return [specs[best[key]] for key in order]
 
@@ -106,7 +115,7 @@ class _RetryBans:
     crowded_conformer_sites: set[tuple[int, int]] = field(default_factory=set)
     # orientation/tilt families banned when the pose cannot contact at any height
     contact_families: set[tuple] = field(default_factory=set)
-    # wall contact height (z_fraction <= 0.5) and other identical COMs
+    # wall contact shell and other identical centers of mass
     same_height_keys: set[tuple] = field(default_factory=set)
     site_is_void: Callable[[int], bool] | None = None
 
@@ -379,8 +388,8 @@ def fill_materialized_placements(
     excluding those exact failed-spec keys, ``(conformer, site)`` pairs that
     failed with ``adsorbate_overlap``, orientation families after
     ``insufficient_contact_*`` / ``infeasible_pose``, and same-height
-    ``z_fraction`` siblings after ``too_close`` / ``vdw_overlap`` (wall-near
-    fractions at or below 0.5 share the contact COM; higher fractions stay).
+    ``z_fraction`` siblings after ``too_close`` / ``vdw_overlap`` (wall
+    fractions on the contact shell share that COM; higher fractions stay).
     """
     n_target = config.num_placements
     if n_target is None:
@@ -475,6 +484,8 @@ def fill_materialized_placements(
         seed=config.seed,
         exclude_failed=False,
     )
+    sample = pool[:effective_target]
+    log_site_sample(grid_info, len(sample), specs=sample)
 
     def _run_chunks(specs: list[PlacementSpec]) -> None:
         nonlocal attempts_used

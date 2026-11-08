@@ -734,12 +734,12 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
    Placements per acquisition batch after the initial random phase. When ``None``,
    autotunes to GPU capacity.
 
-``bo.total_budget``
+``bo.total_batches``
    **Type:** ``int`` · **Default:** ``18``
 
    Number of **acquisition batches** after the initial random batch—not total
    evaluations. Total BO evaluations (once autotune resolves) is
-   ``bo.initial_random + bo.total_budget * bo.batch_size`` (see
+   ``bo.initial_random + bo.total_batches * bo.batch_size`` (see
    :func:`~metalsurfer.config.resolved_bo_eval_budget`).
 
 ``bo.ucb_kappa``

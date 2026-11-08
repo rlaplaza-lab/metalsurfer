@@ -7,7 +7,7 @@ Single entry point for the bipyridine/Au(111) benchmark workflow:
   - Steps 2+: baseline BO vs transfer BO (production weighted transfer)
   - Publication figures and CSV artifacts
 
-``bo.total_budget`` in :class:`~metalsurfer.AdsorptionConfig` counts acquisition
+``bo.total_batches`` in :class:`~metalsurfer.AdsorptionConfig` counts acquisition
 batches (default 18), not total evaluations. Offline replay uses
 :func:`~metalsurfer.config.resolved_bo_eval_budget` and
 :func:`~metalsurfer.config.bo_eval_schedule` so random and BO perform the same
@@ -172,7 +172,7 @@ def _cfg() -> AdsorptionConfig:
 def _replay_cfg() -> AdsorptionConfig:
     """Fixed offline-replay budget (10 init + 18 batches of 5 = 100 evals)."""
     return AdsorptionConfig(
-        bo=BOConfig(initial_random=10, batch_size=5, total_budget=18),
+        bo=BOConfig(initial_random=10, batch_size=5, total_batches=18),
     )
 
 
@@ -185,7 +185,7 @@ def _replay_cfg_for_init(sampling: str) -> AdsorptionConfig:
         bo=BOConfig(
             initial_random=_REPLAY.bo.initial_random,
             batch_size=_REPLAY.bo.batch_size,
-            total_budget=_REPLAY.bo.total_budget,
+            total_batches=_REPLAY.bo.total_batches,
             initial_sampling=sampling,  # type: ignore[arg-type]
         ),
     )
@@ -202,7 +202,9 @@ def _replay_cfg_for_batch(batch_size: int) -> AdsorptionConfig:
     remaining = max(0, target - init)
     n_batches = max(1, (remaining + batch_size - 1) // batch_size)
     return AdsorptionConfig(
-        bo=BOConfig(initial_random=init, batch_size=batch_size, total_budget=n_batches),
+        bo=BOConfig(
+            initial_random=init, batch_size=batch_size, total_batches=n_batches
+        ),
     )
 
 
@@ -577,7 +579,7 @@ def _run_replay(
     """Replay pool lookups with production batch-count semantics.
 
     Random and BO paths share the same initial-random batch and the same
-    number of acquisition batches (``bo.total_budget``), each requesting up
+    number of acquisition batches (``bo.total_batches``), each requesting up
     to ``bo.batch_size`` unevaluated placements. When ``max_evals`` is set,
     total lookups are capped (used to equalize batch-size sweeps).
     """
@@ -627,7 +629,7 @@ def _run_replay(
                 best_X = dict(row)
 
     batches_run = 0
-    while batches_run < int(config.bo.total_budget):
+    while batches_run < int(config.bo.total_batches):
         remaining = eval_cap - len(selected)
         if remaining <= 0:
             break
@@ -1392,7 +1394,7 @@ def write_report(
         f"Transfer: `{cfg.bo.transfer.mode}`, window={cfg.bo.transfer.prior_step_window}, "
         f"recency_ls={cfg.bo.transfer.recency_lengthscale}",
         f"Replay budget: {EVAL_BUDGET} lookups "
-        f"({_REPLAY.bo.initial_random} init + {_REPLAY.bo.total_budget}×"
+        f"({_REPLAY.bo.initial_random} init + {_REPLAY.bo.total_batches}×"
         f"{_REPLAY.bo.batch_size}); exploration only when transfer is active "
         f"(fraction={cfg.bo.transfer.exploration_fraction})",
         "",

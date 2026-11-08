@@ -16,6 +16,7 @@ from ase import Atoms
 
 from .._numeric_defaults import OCCUPANCY_FOOTPRINT_SCALE_DEFAULT
 from . import geometry as geom
+from ._constants import _OCCUPANCY_SIGMA_SHELL_SCALE
 from .clash import atom_radii_for_symbols
 from .site_types import Site
 
@@ -23,6 +24,12 @@ from .site_types import Site
 # opposite-face atoms sit ~4.5–11 Å behind. Site normals are unit length, so
 # ``mic·n`` is a depth in Å. Only the deep side is ignored.
 _BEHIND_SITE_DEPTH_ANGSTROM = 2.0
+
+
+def lateral_contact_shell(connectivity_multiplier: float) -> tuple[float, float]:
+    """Return ``(m, m * shell scale]`` for a non-bonded intermolecular contact."""
+    multiplier = float(connectivity_multiplier)
+    return multiplier, multiplier * float(_OCCUPANCY_SIGMA_SHELL_SCALE)
 
 
 def existing_adsorbate_positions(

@@ -19,6 +19,9 @@ from metalsurfer.placement import (
 from metalsurfer.placement._constants import (
     _AZIMUTH,
     _AZIMUTH_IN_PLANE,
+    _EARLY_CAP_WORKING_SET_MULTIPLIER,
+    _POROUS_SITE_INDEX_WEIGHT,
+    _SITE_NEIGHBOR_ABS_TOL_ANGSTROM,
     _TILT_FULL,
     _WALL_Z_FRACTIONS,
     _Z_FRACTIONS,
@@ -27,6 +30,7 @@ from metalsurfer.placement.policy import (
     _TILT_PARALLEL,
     _flat_aromatic_parallel_total,
     _parallel_aip_values,
+    _stratified_sample,
     _unravel_parallel_flat,
     build_batch_placement_specs,
     max_batch_placement_specs,
@@ -279,6 +283,31 @@ def test_wall_near_grid_collapses_contact_z_fractions():
     assert pore_z == set(_Z_FRACTIONS)
 
 
+def test_mixed_catalog_keeps_each_sites_height_axis():
+    """A void site keeps every shell; a wall site keeps contact and above."""
+
+    def _site_type(index: int) -> str:
+        return "pore" if index == 0 else "atop"
+
+    specs = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=[0, 1],
+        site_type_for_index=_site_type,
+        shape="round",
+        n_binders=1,
+        flat_aromatic=False,
+        parallel_fraction=0.0,
+        n_desired=10**6,
+        seed=TEST_SEED,
+        site_is_void_for_index=lambda index: index == 0,
+    )
+    by_site: dict[int, set[float]] = {}
+    for spec in specs:
+        by_site.setdefault(int(spec.site_index), set()).add(float(spec.z_fraction))
+    assert by_site[0] == set(_Z_FRACTIONS)
+    assert by_site[1] == set(_WALL_Z_FRACTIONS)
+
+
 def test_build_batch_specs_flat_aromatic_generates_both_orientation_types():
     specs = build_batch_placement_specs(
         n_conformers=1,
@@ -321,6 +350,200 @@ def test_build_batch_specs_flat_aromatic_honors_parallel_fraction(
     )
     assert len(specs) == n_desired
     assert {s.orientation_type for s in specs} == {expect_only}
+
+
+def test_occupancy_counts_are_equal_and_keep_site_type():
+    """Counts alternate. A high count does not lead, and site_type stays natural."""
+
+    def _bin(site_idx: int) -> str:
+        return "2" if int(site_idx) in {1, 3} else "0"
+
+    specs = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=[0, 1, 2, 3],
+        site_type_for_index=_site_type_atop,
+        shape="round",
+        n_binders=1,
+        flat_aromatic=False,
+        parallel_fraction=0.0,
+        n_desired=8,
+        seed=TEST_SEED,
+        site_bin_for_index=_bin,
+    )
+    assert len(specs) == 8
+    assert {spec.site_type for spec in specs} == {"atop"}
+    counts = [_bin(spec.site_index) for spec in specs]
+    assert counts == ["0", "2"] * 4
+
+
+def test_same_count_does_not_hide_atops_behind_bridges():
+    """Bridges and vacant atops that share a count both appear in a short draw."""
+
+    def _type(site_idx: int) -> str:
+        return "bridge" if int(site_idx) < 3 else "atop"
+
+    specs = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=[0, 1, 2, 3, 4],
+        site_type_for_index=_type,
+        shape="round",
+        n_binders=1,
+        flat_aromatic=False,
+        parallel_fraction=0.0,
+        n_desired=8,
+        seed=TEST_SEED,
+        site_bin_for_index=lambda _site: "1",
+    )
+    assert len(specs) == 8
+    assert "atop" in {spec.site_type for spec in specs[:4]}
+    assert "bridge" in {spec.site_type for spec in specs}
+
+
+def test_many_counts_still_open_on_a_contact_pose():
+    """A draw the size of the count list is one contact pose per count.
+
+    Each count holds every binding mode. The opening type rotates, so the
+    draw is not one mode repeated.
+    """
+    modes = ("atop", "bridge", "hollow")
+    n_counts = len(modes)
+    per_count = len(modes)
+
+    def _type(site_idx: int) -> str:
+        return modes[int(site_idx) % len(modes)]
+
+    def _bin(site_idx: int) -> str:
+        return str(int(site_idx) // per_count)
+
+    specs = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=list(range(n_counts * per_count)),
+        site_type_for_index=_type,
+        shape="round",
+        n_binders=1,
+        flat_aromatic=False,
+        parallel_fraction=0.0,
+        n_desired=n_counts,
+        seed=TEST_SEED,
+        site_bin_for_index=_bin,
+    )
+    assert len(specs) == n_counts
+    assert {_bin(spec.site_index) for spec in specs} == {
+        str(i) for i in range(n_counts)
+    }
+    assert {spec.site_type for spec in specs} == set(modes)
+    assert {float(spec.z_fraction) for spec in specs} == {float(_WALL_Z_FRACTIONS[0])}
+    assert {float(spec.tilt_deg) for spec in specs} == {0.0}
+
+
+def _coverage_type(site_idx: int) -> str:
+    return ("atop", "hollow", "bridge")[int(site_idx)]
+
+
+def _coverage_clearance(site_idx: int) -> float:
+    """Hollow is strictly clearer than atop. The bridge clearance is not finite."""
+    window = float(_SITE_NEIGHBOR_ABS_TOL_ANGSTROM)
+    if int(site_idx) == 1:
+        return window + window
+    if int(site_idx) == 2:
+        return float("inf")
+    return 0.0
+
+
+@pytest.mark.parametrize(
+    ("parallel_fraction", "shape", "flat_aromatic", "n_binders"),
+    [(0.0, "round", False, 1), (1.0, "flat", True, 2)],
+)
+def test_same_count_reserves_each_finite_site_type(
+    parallel_fraction: float,
+    shape: str,
+    flat_aromatic: bool,
+    n_binders: int,
+):
+    """One count's contact shell keeps every finite binding mode.
+
+    The draw is the wall shells of the opening type, then the other finite
+    contact. A non-finite clearance is not a substrate site.
+    """
+    contact = float(_WALL_Z_FRACTIONS[0])
+    n_desired = len(_WALL_Z_FRACTIONS) + 1
+    specs = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=[0, 1, 2],
+        site_type_for_index=_coverage_type,
+        shape=shape,
+        n_binders=n_binders,
+        flat_aromatic=flat_aromatic,
+        parallel_fraction=parallel_fraction,
+        n_desired=n_desired,
+        seed=TEST_SEED,
+        site_bin_for_index=lambda _site: "0",
+        site_clearance_for_index=_coverage_clearance,
+    )
+    assert len(specs) == n_desired
+    assert specs[0].site_type == "atop"
+    assert float(specs[0].z_fraction) == contact
+    assert float(specs[0].tilt_deg) == 0.0
+    contacts = {
+        spec.site_type
+        for spec in specs
+        if float(spec.z_fraction) == contact and float(spec.tilt_deg) == 0.0
+    }
+    assert contacts == {"atop", "hollow"}
+    assert all(spec.site_index != 2 for spec in specs)
+
+
+def test_en_down_coverage_uses_the_clearer_site():
+    """Flat aromatic EN-down keeps the clearer site of an occupancy count."""
+
+    def _bin(site_idx: int) -> str:
+        return "0" if int(site_idx) == 1 else "3"
+
+    def _clearance(site_idx: int) -> float:
+        return 4.0 if int(site_idx) == 1 else 0.2
+
+    specs = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=[0, 1],
+        site_type_for_index=_site_type_atop,
+        shape="flat",
+        n_binders=2,
+        flat_aromatic=True,
+        parallel_fraction=0.0,
+        n_desired=4,
+        seed=TEST_SEED,
+        site_bin_for_index=_bin,
+        site_clearance_for_index=_clearance,
+    )
+    en_down = [spec for spec in specs if spec.orientation_type == "EN-down"]
+    assert en_down
+    assert any(spec.site_index == 1 for spec in en_down)
+    clearer = [spec for spec in en_down if spec.site_index == 1]
+    assert float(clearer[0].z_fraction) == 0.5
+    assert float(clearer[0].tilt_deg) == 0.0
+
+
+def test_rare_occupancy_count_survives_large_catalog_cap():
+    """A single positive-count site stays in the draw without occupying the front."""
+
+    def _bin(site_idx: int) -> str:
+        return "1" if int(site_idx) == 777 else "0"
+
+    specs = build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=list(range(900)),
+        site_type_for_index=_site_type_atop,
+        shape="round",
+        n_binders=1,
+        flat_aromatic=False,
+        parallel_fraction=0.0,
+        n_desired=40,
+        seed=TEST_SEED,
+        site_bin_for_index=_bin,
+    )
+    assert len(specs) == 40
+    assert any(int(spec.site_index) == 777 for spec in specs)
+    assert specs[0].site_index != 777
 
 
 def test_build_batch_specs_flat_aromatic_large_grid_capped():
@@ -511,13 +734,6 @@ def test_cco_generation_yield_meets_seeded_bar():
 
 def test_build_batch_specs_else_branch_early_caps_without_prefix_bias():
     """Non-flat path must not materialize the full Cartesian grid before subsample."""
-    from metalsurfer.placement._constants import (
-        _AZIMUTH,
-        _EARLY_CAP_WORKING_SET_MULTIPLIER,
-        _TILT_FULL,
-        _Z_FRACTIONS,
-    )
-
     n_sites = 1000
     n_conformers = 3
     n_desired = 20
@@ -553,10 +769,138 @@ def test_build_batch_specs_else_branch_early_caps_without_prefix_bias():
     assert max(site_vals) > n_desired * _EARLY_CAP_WORKING_SET_MULTIPLIER
 
 
+def test_single_site_type_short_draw_follows_phased_diagonal():
+    """One site type: first height cycle is the mild-tilt diagonal of shell ``p``."""
+    conformers = (0, 1, 2, 3)
+    sites = (0, 1, 2, 3)
+    pool: list[PlacementSpec] = []
+    for zf, tilt, ci, az, site in itertools.product(
+        _Z_FRACTIONS, (0.0, 45.0), conformers, _AZIMUTH, sites
+    ):
+        pool.append(
+            PlacementSpec(
+                conformer_index=ci,
+                orientation_type="round",
+                face_flip=False,
+                en_atom_index=None,
+                site_index=site,
+                site_type=None,
+                tilt_deg=tilt,
+                azimuth_deg=az,
+                azimuth_in_plane_deg=0.0,
+                z_fraction=zf,
+                placement_index=0,
+            )
+        )
+
+    selected = _stratified_sample(pool, n_desired=10, seed=0)
+    assert len(selected) == 10
+    n_z = len(_Z_FRACTIONS)
+    first, second = selected[:n_z], selected[n_z:]
+    assert [s.z_fraction for s in first] == list(_Z_FRACTIONS)
+    assert all(s.tilt_deg == 0.0 for s in first)
+    for phase, spec in enumerate(first):
+        assert spec.conformer_index == conformers[phase % len(conformers)]
+        assert spec.azimuth_deg == pytest.approx(_AZIMUTH[phase % len(_AZIMUTH)])
+        assert spec.site_index == sites[phase % len(sites)]
+    first_keys = {(s.conformer_index, s.azimuth_deg, s.site_index) for s in first}
+    second_keys = {(s.conformer_index, s.azimuth_deg, s.site_index) for s in second}
+    assert first_keys.isdisjoint(second_keys)
+    assert all(s.tilt_deg == 0.0 for s in second)
+    contact_z = _Z_FRACTIONS[0]
+    contact = [spec for spec in selected if spec.z_fraction == contact_z]
+    assert len(contact) >= 2
+    assert contact[1].site_index != contact[0].site_index
+    assert contact[1].conformer_index == contact[0].conformer_index
+
+
+def _draw_covering_grid(*, n_conformers: int, n_sites: int, n_z: int) -> int:
+    """Smallest draw whose working set is the full kept-height product."""
+    n_total = n_conformers * len(_TILT_FULL) * len(_AZIMUTH) * n_z * n_sites
+    return (
+        n_total + _EARLY_CAP_WORKING_SET_MULTIPLIER - 1
+    ) // _EARLY_CAP_WORKING_SET_MULTIPLIER
+
+
+def _span_draw(
+    site_indices: list[int], site_type, **overrides: object
+) -> list[PlacementSpec]:
+    n_z = (
+        len(_Z_FRACTIONS)
+        if overrides.get("site_is_void_for_index")
+        else len(_WALL_Z_FRACTIONS)
+    )
+    return build_batch_placement_specs(
+        n_conformers=1,
+        site_indices=site_indices,
+        site_type_for_index=site_type,
+        shape="round",
+        n_binders=1,
+        flat_aromatic=False,
+        parallel_fraction=0.0,
+        n_desired=_draw_covering_grid(
+            n_conformers=1, n_sites=len(site_indices), n_z=n_z
+        ),
+        seed=TEST_SEED,
+        **overrides,
+    )
+
+
+def test_wall_short_draw_follows_span_order():
+    """Wall heights open on the spanned sites, not the lowest numeric ids."""
+    site_indices = [10, 0, 3]
+    prefix = _span_draw(site_indices, _site_type_atop)[: len(_WALL_Z_FRACTIONS)]
+    assert [s.site_index for s in prefix] == site_indices
+    assert [float(s.z_fraction) for s in prefix] == list(_WALL_Z_FRACTIONS)
+    assert all(s.tilt_deg == 0.0 for s in prefix)
+
+
+def test_mixed_site_types_open_on_span_first_site():
+    """Each site type leads with its span-first site before a later numeric id."""
+    specs = _span_draw([10, 0, 7], lambda idx: "bridge" if idx == 7 else "hollow")
+    hollow = [s.site_index for s in specs if s.site_type == "hollow"]
+    bridge = [s.site_index for s in specs if s.site_type == "bridge"]
+    assert hollow[:2] == [10, 0]
+    assert bridge[0] == 7
+
+
+def test_porous_short_draw_follows_span_order():
+    """Pore round-robin leads with the spanned site, not the lowest id."""
+    site_indices = [10, 0, 3]
+    specs = _span_draw(
+        site_indices,
+        lambda _idx: "pore",
+        site_index_weight=_POROUS_SITE_INDEX_WEIGHT,
+        site_is_void_for_index=lambda _idx: True,
+    )
+    n_z = len(_Z_FRACTIONS)
+    assert [s.site_index for s in specs[:n_z]] == [site_indices[0]] * n_z
+    assert specs[n_z].site_index == site_indices[1]
+
+
+def test_flat_aromatic_large_grid_samples_beyond_prefix():
+    """A flat-aromatic cap must not be conformer 0 and the first site indices."""
+    n_desired = 12
+    specs = build_batch_placement_specs(
+        n_conformers=6,
+        site_indices=list(range(400)),
+        site_type_for_index=_site_type_atop,
+        shape="flat",
+        n_binders=2,
+        flat_aromatic=True,
+        parallel_fraction=0.5,
+        n_desired=n_desired,
+        seed=TEST_SEED,
+    )
+    assert len(specs) == n_desired
+    assert len({s.conformer_index for s in specs}) > 1
+    assert (
+        max(s.site_index for s in specs) > n_desired * _EARLY_CAP_WORKING_SET_MULTIPLIER
+    )
+
+
 def test_policy_prior_prefers_mild_tilt_and_mid_z():
     """When subsampling, prefer milder tilts / mid z vs a uniform shuffle of the same pool."""
-    from metalsurfer.placement.policy import _stratified_sample
-
     # Build a synthetic pool dominated by extreme tilts/low z so priors matter.
     pool: list[PlacementSpec] = []
     for site_i, site_type in enumerate(["atop", "bridge", "hollow"]):
@@ -640,17 +984,26 @@ def test_flat_aromatic_indexed_sampling_matches_seed_without_filter():
 
 def test_parallel_flat_unravel_matches_product_order():
     """Indexed parallel decode matches itertools.product × aip nesting."""
-    n_conf, n_sites = 2, 3
-    sites = list(range(n_sites))
+    n_conf = 2
+    # Span order: wall shells on site 0, then the void shells on site 3.
+    pairs = [
+        (0, 0.5),
+        (0, 0.7),
+        (0, 0.9),
+        (3, 0.1),
+        (3, 0.3),
+        (3, 0.5),
+        (3, 0.7),
+        (3, 0.9),
+    ]
 
     def product_unweighted():
-        for ci, ff, tl, azv, zfv, si in itertools.product(
+        for ci, ff, tl, azv, (si, zfv) in itertools.product(
             range(n_conf),
             [False, True],
             _TILT_PARALLEL,
             _AZIMUTH,
-            _Z_FRACTIONS,
-            sites,
+            pairs,
         ):
             for aip in _parallel_aip_values(tl):
                 yield (
@@ -664,12 +1017,11 @@ def test_parallel_flat_unravel_matches_product_order():
                 )
 
     def product_weighted():
-        for ff, tl, azv, zfv, si, ci in itertools.product(
+        for ff, tl, azv, (si, zfv), ci in itertools.product(
             [False, True],
             _TILT_PARALLEL,
             _AZIMUTH,
-            _Z_FRACTIONS,
-            sites,
+            pairs,
             range(n_conf),
         ):
             for aip in _parallel_aip_values(tl):
@@ -683,7 +1035,7 @@ def test_parallel_flat_unravel_matches_product_order():
                     si,
                 )
 
-    n = _flat_aromatic_parallel_total(n_conformers=n_conf, n_sites=n_sites)
+    n = _flat_aromatic_parallel_total(n_conformers=n_conf, n_site_z=len(pairs))
     unweighted = list(product_unweighted())
     weighted = list(product_weighted())
     assert len(unweighted) == n == len(weighted)
@@ -692,8 +1044,7 @@ def test_parallel_flat_unravel_matches_product_order():
             _unravel_parallel_flat(
                 flat,
                 n_conformers=n_conf,
-                n_sites=n_sites,
-                site_list=sites,
+                site_z_pairs=pairs,
                 conformer_fastest=False,
             )
             == expected
@@ -703,8 +1054,7 @@ def test_parallel_flat_unravel_matches_product_order():
             _unravel_parallel_flat(
                 flat,
                 n_conformers=n_conf,
-                n_sites=n_sites,
-                site_list=sites,
+                site_z_pairs=pairs,
                 conformer_fastest=True,
             )
             == expected

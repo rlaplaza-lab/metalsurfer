@@ -102,7 +102,7 @@ def _bo_config(**overrides: Any) -> AdsorptionConfig:
         bo_kwargs = {
             "initial_random": overrides.pop("initial_random", 3),
             "batch_size": overrides.pop("batch_size", 2),
-            "total_budget": overrides.pop("total_budget", 2),
+            "total_batches": overrides.pop("total_batches", 2),
         }
         extra_bo = {
             k: overrides.pop(k)
@@ -111,7 +111,7 @@ def _bo_config(**overrides: Any) -> AdsorptionConfig:
             in {
                 "initial_random",
                 "batch_size",
-                "total_budget",
+                "total_batches",
                 "acquisition",
                 "surrogate",
                 "initial_sampling",
@@ -405,12 +405,12 @@ def _assert_survivor_physics(
                 f"z_abs={desc.z_abs:.3f} below surface_ref_z_abs={desc.surface_ref_z_abs:.3f}"
             )
         else:
-            # Wall-near COM sits above the support plane. Pore COM stays
-            # near the void centre, so z_offset can be slightly negative.
+            # Wall-near COM sits above the support plane. Pore z_offset is
+            # the site-normal displacement, which is not the cartesian
+            # distance to the void centre; contact is the distance gate.
             assert desc.z_offset is not None
-            if desc.site_type == "pore":
-                assert abs(float(desc.z_offset)) < 3.0
-            else:
+            assert np.isfinite(float(desc.z_offset))
+            if desc.site_type != "pore":
                 assert float(desc.z_offset) > 0.0
 
     if dissociative:
@@ -492,9 +492,9 @@ def _assert_saturation_artifacts(results_dir: Path) -> None:
 _MATRIX_CASES = (
     # material, smiles, name, config overrides, symbols, dissociative, min_success_rate
     # Slab floors sit under the raw placement count. The stub assigns one
-    # energy to every placement, so pose dedup keeps a single copy of each
-    # local geometry (another terrace site is not a new pose).
-    ("slab", "O", "water", {}, ["H", "H", "O"], False, 0.50),
+    # energy to every placement, so pose dedup keeps one geometry per site
+    # type from the height cycle (three types on this terrace).
+    ("slab", "O", "water", {}, ["H", "H", "O"], False, 0.375),
     (
         "slab",
         "[H][H]",
@@ -651,7 +651,7 @@ def test_run_adsorption_relaxation_modes(
     assert isinstance(campaign, BindingCampaignResult)
     results = campaign.run_results[0].results
     _assert_binding_yield(
-        results, n_requested=n_requested, min_success_rate=0.5, min_absolute=1
+        results, n_requested=n_requested, min_success_rate=0.375, min_absolute=1
     )
     for r in results:
         _assert_survivor_physics(
@@ -813,8 +813,9 @@ class TestRunModeApiE2E:
             surface_type,
             mode="bo",
             # Same slab stub as the matrix: identical energies collapse
-            # terrace copies, so 4 of 7 evaluations remain.
-            min_success_rate=0.5,
+            # the height cycle to one geometry per site type, so 3 of 7
+            # evaluations remain.
+            min_success_rate=0.375,
             min_absolute=2,
         )
 
@@ -890,7 +891,7 @@ def test_process_molecule_bayesian_transfer_cumulative_refit(workdir, monkeypatc
     config = _bo_config(
         initial_random=4,
         batch_size=2,
-        total_budget=2,
+        total_batches=2,
         transfer=BOTransferConfig(mode="cumulative_refit"),
     )
     _slab, first = _stubbed_process_molecule_bayesian(monkeypatch, config=config)
@@ -912,7 +913,7 @@ def test_process_molecule_bayesian_transfer_weighted(workdir, monkeypatch):
     config = _bo_config(
         initial_random=4,
         batch_size=2,
-        total_budget=2,
+        total_batches=2,
         transfer=BOTransferConfig(mode="weighted"),
     )
     _slab, first = _stubbed_process_molecule_bayesian(monkeypatch, config=config)

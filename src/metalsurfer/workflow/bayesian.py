@@ -38,8 +38,10 @@ from ..models import (
     ScreeningResult,
 )
 from ..placement.generators import (
+    _spec_grid_info,
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
+    log_site_sample,
 )
 from ..placement.site_context import SiteContext
 from ..reporting import (
@@ -400,13 +402,16 @@ def run_bo_acquisition_loop(
 
     batches_run = 0
     while (
-        batches_run < config.bo.total_budget and state.total_evaluated < bo_eval_budget
+        batches_run < config.bo.total_batches and state.total_evaluated < bo_eval_budget
     ):
         unevaluated = [p for p in range(n_pool) if p not in state.evaluated]
         if not unevaluated:
             break
+        room = bo_eval_budget - state.total_evaluated
+        if room <= 0:
+            break
         if state.n_independent_trials < 3:
-            n_extra = min(config.bo.batch_size, len(unevaluated))
+            n_extra = min(config.bo.batch_size, len(unevaluated), room)
             next_positions = rng.choice(
                 unevaluated, size=n_extra, replace=False
             ).tolist()
@@ -418,7 +423,7 @@ def run_bo_acquisition_loop(
                 state=transfer_state,
                 config=config,
             )
-            batch_size = min(config.bo.batch_size, len(unevaluated))
+            batch_size = min(config.bo.batch_size, len(unevaluated), room)
             acquisition = config.bo.acquisition
             f_best = state.best_energy if np.isfinite(state.best_energy) else None
             if acquisition in ("ei", "pi") and f_best is None:
@@ -585,6 +590,18 @@ def process_molecule_bayesian(
         raise ValueError("config.num_placements must be set for Bayesian screening")
     bo_eval_budget = resolved_bo_eval_budget(config)
 
+    grid_info = (
+        _spec_grid_info(
+            conformers,
+            slab_for_sites,
+            config,
+            smiles,
+            site_context,
+            full_slab=slab.atoms,
+        )
+        if conformers
+        else None
+    )
     max_enumerated_specs = estimate_placement_spec_capacity(
         conformers,
         slab_for_sites,
@@ -592,6 +609,7 @@ def process_molecule_bayesian(
         smiles,
         site_context=site_context,
         full_slab=slab.atoms,
+        grid_info=grid_info,
     )
     if config.bo.candidate_pool_size is not None:
         pool_size = config.bo.candidate_pool_size
@@ -616,6 +634,7 @@ def process_molecule_bayesian(
         seed=config.seed,
         full_slab=slab.atoms,
         conformer_energies=conformer_energies,
+        grid_info=grid_info,
     )
     if not all_specs:
         logger.warning("No candidate specs generated for BO")
@@ -625,12 +644,14 @@ def process_molecule_bayesian(
         "BO: %d/%d candidate specs, batches=%d (initial=%d, batch=%d, eval_budget=%d, kappa=%.2f)",
         len(all_specs),
         max_enumerated_specs,
-        config.bo.total_budget,
+        config.bo.total_batches,
         config.bo.initial_random,
         config.bo.batch_size,
         bo_eval_budget,
         config.bo.ucb_kappa,
     )
+    if grid_info is not None:
+        log_site_sample(grid_info, bo_eval_budget)
 
     surface_prefix_atoms = len(slab_for_sites)
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] = {}

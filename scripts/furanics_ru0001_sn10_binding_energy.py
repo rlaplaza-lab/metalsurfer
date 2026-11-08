@@ -36,7 +36,7 @@ def main() -> int:
         task_name="oc20",
         num_placements=250,
         top_layer_tolerance=2.0,
-        bo=BOConfig(initial_random=100, batch_size=100, total_budget=2),
+        bo=BOConfig(initial_random=100, batch_size=100, total_batches=2),
     )
 
     # Create Ru(0001) slab from Materials Project mp-33.

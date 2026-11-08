@@ -471,7 +471,7 @@ class TestProcessMolecule:
         slab = SlabContainer(make_slab())
         refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
         config = AdsorptionConfig(
-            bo=BOConfig(initial_random=1, batch_size=1, total_budget=1),
+            bo=BOConfig(initial_random=1, batch_size=1, total_batches=1),
             num_placements=2,
             num_conformers=1,
             seed=7,
@@ -559,7 +559,7 @@ class TestProcessMolecule:
         slab = SlabContainer(make_slab())
         refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
         config = AdsorptionConfig(
-            bo=BOConfig(initial_random=1, batch_size=1, total_budget=1),
+            bo=BOConfig(initial_random=1, batch_size=1, total_batches=1),
             num_placements=2,
             num_conformers=1,
             seed=7,
@@ -643,7 +643,7 @@ class TestProcessMolecule:
         slab = SlabContainer(make_slab())
         refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
         config = AdsorptionConfig(
-            bo=BOConfig(initial_random=2, batch_size=2, total_budget=1),
+            bo=BOConfig(initial_random=2, batch_size=2, total_batches=1),
             num_placements=2,
             num_conformers=1,
             seed=7,
@@ -753,7 +753,7 @@ def test_bo_batches_reuse_upfront_capacity_for_clamping(monkeypatch, clamp_enabl
     slab = SlabContainer(make_slab())
     refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
     config = AdsorptionConfig(
-        bo=BOConfig(initial_random=1, batch_size=1, total_budget=1),
+        bo=BOConfig(initial_random=1, batch_size=1, total_batches=1),
         num_placements=2,
         num_conformers=1,
         seed=7,

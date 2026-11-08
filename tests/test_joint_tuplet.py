@@ -1,18 +1,25 @@
 """Unit tests for joint n-tuplet screening helpers."""
 
 import math
-from typing import cast
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig, BOConfig
+from metalsurfer.filters import (
+    lateral_contact_shell,
+    min_interadsorbate_covalent_ratio,
+)
 from metalsurfer.models import ReferenceEnergies
+from metalsurfer.placement.geometry import occupied_neighbor_counts
 from metalsurfer.reporting import PlacementFailure
 from metalsurfer.surface_prep import SlabContainer
+from metalsurfer.workflow import composite as composite_mod
 from metalsurfer.workflow import joint_tuplet as joint_tuplet_mod
 from metalsurfer.workflow.composite import (
+    _site_positions,
     assemble_joint_config_groups,
     assemble_quota_joint_configs,
 )
@@ -28,6 +35,7 @@ from metalsurfer.workflow.joint_tuplet import (
 from metalsurfer.workflow.shared import MoleculeScreeningContext
 
 from .conftest import (
+    make_h2,
     make_placement_descriptor,
     make_screening_result,
     make_slab,
@@ -223,50 +231,49 @@ def test_homogeneous_empty_pool_returns_placement_failure(monkeypatch):
     assert relax_calls == []
 
 
-def test_exact_and_quota_assemblers_diverge_when_quota_retries_skipped_pose(
-    monkeypatch,
-):
-    """Quota restarts its scan each slot; exact keeps a forward scan per group."""
-    slab = make_slab()
+def test_trimer_assembly_continues_after_a_short_seed(monkeypatch) -> None:
+    """A seed that can take only one partner does not abandon the queue."""
+    slab = make_slab(nx=8)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    config = AdsorptionConfig(material_type="slab", placement_clash_descent=False)
+    y_shift = float(cell[1, 1]) / 2.0
+    step = 4.0
     poses = []
-    for i in range(4):
-        combined = place_molecule_on_slab(
-            slab, make_water(), z_offset=3.0, x_shift=2.0 + i, y_shift=5.0
-        )
+    for placement_id in range(6):
         poses.append(
             make_screening_result(
-                molecule="water",
-                placement_id=i,
+                molecule="h2",
+                placement_id=placement_id,
                 energy_adsorption=-1.0,
-                atoms=combined,
+                atoms=place_molecule_on_slab(
+                    slab,
+                    make_h2(),
+                    x_shift=2.0 + placement_id * step,
+                    y_shift=y_shift,
+                ),
                 slab_size=len(slab),
                 distance=2.5,
-                placement_descriptor=make_placement_descriptor(placement_id=i),
+                placement_descriptor=make_placement_descriptor(
+                    placement_id=placement_id
+                ),
             )
         )
-    config = AdsorptionConfig(material_type="slab", placement_clash_descent=True)
+    real_accept = composite_mod._accept_packed_pose
 
-    def _fake_pack(winners, _slab_atoms, _config, *, n_substrate=None):
-        ids = tuple(w.placement_id for w in winners)
-        if len(ids) == 1:
-            return list(winners)
-        if ids == (0, 1):
+    def _accept(group, index, **kwargs):
+        seed = group[0].placement_id if group else None
+        pose = kwargs["pose_at"](index)
+        if pose is None:
             return None
-        if ids in {(0, 2), (0, 2, 1), (0, 2, 3)}:
-            return list(winners)
-        return None
+        if seed == 0 and (len(group) >= 2 or pose.placement_id != 1):
+            return None
+        if seed == 1:
+            return None
+        return real_accept(group, index, **kwargs)
 
-    monkeypatch.setattr(
-        "metalsurfer.workflow.composite.pack_exact_tuplet",
-        _fake_pack,
-    )
-
-    class _IdentityRng:
-        def permutation(self, n: int) -> np.ndarray:
-            return np.arange(n)
-
-    rng = cast(np.random.Generator, _IdentityRng())
-    exact_groups = assemble_joint_config_groups(
+    monkeypatch.setattr(composite_mod, "_accept_packed_pose", _accept)
+    rng = np.random.default_rng(0)
+    groups = assemble_joint_config_groups(
         poses,
         n_per_config=3,
         n_configs=1,
@@ -275,17 +282,299 @@ def test_exact_and_quota_assemblers_diverge_when_quota_retries_skipped_pose(
         rng=rng,
         n_substrate=len(slab),
     )
+    assert len(groups) == 1
+    assert len(groups[0]) == 3
+    assert groups[0][0].placement_id not in {0, 1}
+
     quota_groups = assemble_quota_joint_configs(
-        {"water": poses},
-        quotas={"water": 3},
+        {"h2": poses},
+        quotas={"h2": 3},
         n_configs=1,
         slab_atoms=slab,
         config=config,
         rng=rng,
         n_substrate=len(slab),
     )
-    assert [[r.placement_id for r in g] for g in exact_groups] == [[0, 2, 3]]
-    assert [[r.placement_id for r in g] for g in quota_groups] == [[0, 2, 1]]
+    assert len(quota_groups) == 1
+    assert [pose.placement_id for pose in quota_groups[0]][0] not in {0, 1}
+
+
+def test_assemblers_do_not_replace_a_clashing_neighbor() -> None:
+    """A clashing neighbor is skipped. A non-neighbor partner stays legal."""
+    slab = make_slab(nx=8)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    probe = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
+    other = Atoms("H", positions=[[1.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
+    r_sum = 1.0 / min_interadsorbate_covalent_ratio(
+        probe, other, material_type="slab", cell=cell
+    )
+    centered = make_h2().get_positions()
+    half_extent = float(np.max(centered[:, 0] - centered.mean(axis=0)[0]))
+    config = AdsorptionConfig(material_type="slab", placement_clash_descent=False)
+    inner, _outer = lateral_contact_shell(config.connectivity_multiplier)
+    clash = _h2_com_gap(inner / 2.0, r_sum=r_sum, half_extent=half_extent)
+    step = 4.0
+    y_shift = float(cell[1, 1]) / 2.0
+    x0 = 2.0
+    poses = []
+    for placement_id, x_shift in enumerate(
+        (x0, x0 + clash, x0 + clash + step, x0 + clash + 2.0 * step)
+    ):
+        poses.append(
+            make_screening_result(
+                molecule="h2",
+                placement_id=placement_id,
+                energy_adsorption=-1.0,
+                atoms=place_molecule_on_slab(
+                    slab, make_h2(), x_shift=x_shift, y_shift=y_shift
+                ),
+                slab_size=len(slab),
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(
+                    placement_id=placement_id
+                ),
+            )
+        )
+
+    rng = np.random.default_rng(0)
+    exact_groups = assemble_joint_config_groups(
+        poses,
+        n_per_config=2,
+        n_configs=1,
+        slab_atoms=slab,
+        config=config,
+        rng=rng,
+        n_substrate=len(slab),
+    )
+    quota_groups = assemble_quota_joint_configs(
+        {"h2": poses},
+        quotas={"h2": 2},
+        n_configs=1,
+        slab_atoms=slab,
+        config=config,
+        rng=rng,
+        n_substrate=len(slab),
+    )
+    exact_ids = [[r.placement_id for r in group] for group in exact_groups]
+    quota_ids = [[r.placement_id for r in group] for group in quota_groups]
+    assert exact_ids == quota_ids
+    assert exact_ids == [[0, 3]]
+
+
+def test_full_catalog_draws_the_open_shell_before_a_neighbor():
+    """Two graph steps stay two steps only while the intermediate site exists.
+
+    Poses sit on a line of hollows at the outer lateral shell, so packing
+    does not reject them. The far site is the open bin when the waypoint
+    between it and the anchor is in the catalog, and a neighbor when it is not.
+    """
+    slab = make_slab(nx=8)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    config = AdsorptionConfig(material_type="slab", placement_clash_descent=False)
+    probe = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
+    other = Atoms("H", positions=[[1.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
+    r_sum = 1.0 / min_interadsorbate_covalent_ratio(
+        probe, other, material_type="slab", cell=cell
+    )
+    centered = make_h2().get_positions()
+    half_extent = float(np.max(centered[:, 0] - centered[:, 0].mean()))
+    _inner, outer = lateral_contact_shell(config.connectivity_multiplier)
+    gap = _h2_com_gap(outer, r_sum=r_sum, half_extent=half_extent)
+    y_shift = float(cell[1, 1]) / 2.0
+    hops = (0, 1, 3)
+    poses = [
+        make_screening_result(
+            molecule="h2",
+            placement_id=placement_id,
+            energy_adsorption=-1.0,
+            atoms=place_molecule_on_slab(
+                slab,
+                make_h2(),
+                x_shift=half_extent + placement_id * gap,
+                y_shift=y_shift,
+            ),
+            slab_size=len(slab),
+            distance=2.5,
+            placement_descriptor=make_placement_descriptor(
+                placement_id=placement_id,
+                site_index=hops[placement_id],
+                site_type="hollow",
+            ),
+        )
+        for placement_id in range(len(hops))
+    ]
+    n_line = hops[-1] + 1
+    positions = {index: np.array([float(index), 0.0, 0.0]) for index in range(n_line)}
+    rng = np.random.default_rng(0)
+
+    def _sites(site_positions: dict[int, np.ndarray]) -> list[int]:
+        groups = assemble_joint_config_groups(
+            poses,
+            n_per_config=len(hops) - 1,
+            n_configs=1,
+            slab_atoms=slab,
+            config=config,
+            rng=rng,
+            n_substrate=len(slab),
+            site_positions=site_positions,
+            site_types={index: "hollow" for index in site_positions},
+        )
+        assert len(groups) == 1
+        return [int(pose.placement_descriptor.site_index) for pose in groups[0]]
+
+    assert _sites(positions) == [hops[0], hops[-1]]
+    assert _sites({index: positions[index] for index in hops}) == [hops[0], hops[1]]
+
+
+def _h2_com_gap(target_ratio: float, *, r_sum: float, half_extent: float) -> float:
+    """COM separation whose facing H–H gap has intermolecular ratio *target_ratio*."""
+    return target_ratio * r_sum + 2.0 * half_extent
+
+
+def _partner_occupancy_count(
+    group: list,
+    positions: dict[int, np.ndarray],
+    *,
+    cell: np.ndarray,
+    pbc: list[bool],
+) -> int:
+    """Occupied-neighbor count of the second member on the full site graph."""
+    origin = int(group[0].placement_descriptor.site_index)
+    other = int(group[1].placement_descriptor.site_index)
+    return int(occupied_neighbor_counts(positions, {origin}, cell, pbc).get(other, 0))
+
+
+def test_assemblers_span_close_and_far_partners() -> None:
+    """Screened groups include a zero count and a positive count."""
+    slab = make_slab(nx=8)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = list(slab.get_pbc())
+    config = AdsorptionConfig(material_type="slab", placement_clash_descent=False)
+    y_shift = float(cell[1, 1]) / 2.0
+    step = 3.0
+    x0 = 2.0
+    poses = []
+    for placement_id in range(5):
+        poses.append(
+            make_screening_result(
+                molecule="h2",
+                placement_id=placement_id,
+                energy_adsorption=-1.0,
+                atoms=place_molecule_on_slab(
+                    slab,
+                    make_h2(),
+                    x_shift=x0 + placement_id * step,
+                    y_shift=y_shift,
+                ),
+                slab_size=len(slab),
+                distance=2.5,
+                placement_descriptor=make_placement_descriptor(
+                    placement_id=placement_id
+                ),
+            )
+        )
+
+    rng = np.random.default_rng(0)
+    exact_groups = assemble_joint_config_groups(
+        poses,
+        n_per_config=2,
+        n_configs=2,
+        slab_atoms=slab,
+        config=config,
+        rng=rng,
+        n_substrate=len(slab),
+    )
+    quota_groups = assemble_quota_joint_configs(
+        {"h2": poses},
+        quotas={"h2": 2},
+        n_configs=2,
+        slab_atoms=slab,
+        config=config,
+        rng=rng,
+        n_substrate=len(slab),
+    )
+    exact_ids = [[r.placement_id for r in group] for group in exact_groups]
+    quota_ids = [[r.placement_id for r in group] for group in quota_groups]
+    assert exact_ids == quota_ids
+    assert len(exact_groups) == 2
+    positions = _site_positions(poses)
+    counts = [
+        _partner_occupancy_count(group, positions, cell=cell, pbc=pbc)
+        for group in exact_groups
+    ]
+    assert 0 in counts
+    assert any(count > 0 for count in counts)
+
+
+def test_bo_assemble_second_group_takes_a_separated_site(monkeypatch):
+    """Bayesian groups continue the occupancy-count round-robin."""
+    slab = make_slab(nx=8)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = list(slab.get_pbc())
+    config = AdsorptionConfig(
+        material_type="slab",
+        placement_clash_descent=False,
+        saturation_molecules_per_step=2,
+    )
+    y_shift = float(cell[1, 1]) / 2.0
+    stubs = {
+        placement_id: make_screening_result(
+            molecule="h2",
+            placement_id=placement_id,
+            energy_adsorption=-1.0,
+            atoms=place_molecule_on_slab(
+                slab,
+                make_h2(),
+                x_shift=2.0 + placement_id * 3.0,
+                y_shift=y_shift,
+            ),
+            slab_size=len(slab),
+            distance=2.5,
+            placement_descriptor=make_placement_descriptor(placement_id=placement_id),
+        )
+        for placement_id in range(5)
+    }
+
+    def _fake_materialize(*, specs, **_k):
+        pid = int(specs[0].placement_index)
+        stub = stubs[pid]
+        return MagicMock(
+            combined=[stub.atoms],
+            placement_ids=[pid],
+            descriptors=[stub.placement_descriptor],
+        )
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.joint_tuplet.materialize_specs",
+        _fake_materialize,
+    )
+    specs = [MagicMock(placement_index=i) for i in range(len(stubs))]
+    groups, _pool_sets = _assemble_bo_joint_groups_from_specs(
+        [0, 2],
+        all_specs=specs,
+        valid_spec_indices=list(range(len(stubs))),
+        materialization_cache={},
+        conformers=[make_water()],
+        slab=SlabContainer(slab),
+        calculator=None,
+        config=config,
+        smiles="O",
+        molecule_name="h2",
+        site_context=None,
+        slab_for_sites=slab,
+        E_slab=0.0,
+        E_mol=-1.0,
+        n_per_config=2,
+        n_substrate=len(slab),
+    )
+    assert len(groups) == 2
+    positions = _site_positions(list(stubs.values()))
+    counts = [
+        _partner_occupancy_count(group, positions, cell=cell, pbc=pbc)
+        for group in groups
+    ]
+    assert 0 in counts
+    assert any(count > 0 for count in counts)
 
 
 def test_homogeneous_missing_molecule_energy_raises_before_multi(monkeypatch):
@@ -323,15 +612,26 @@ def test_homogeneous_missing_molecule_energy_raises_before_multi(monkeypatch):
 
 def test_bo_assemble_releases_incomplete_companions(monkeypatch):
     """Failed packs must not swallow later anchors from the same batch."""
-    slab = make_slab()
+    slab = make_slab(nx=8)
     config = AdsorptionConfig(saturation_molecules_per_step=2)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    probe = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
+    other = Atoms("H", positions=[[1.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
+    r_sum = 1.0 / min_interadsorbate_covalent_ratio(
+        probe, other, material_type="slab", cell=cell
+    )
+    centered = make_h2().get_positions()
+    half_extent = float(np.max(centered[:, 0] - centered[:, 0].mean()))
+    inner, outer = lateral_contact_shell(config.connectivity_multiplier)
+    gap = _h2_com_gap((inner + outer) / 2.0, r_sum=r_sum, half_extent=half_extent)
+    y_shift = float(cell[1, 1]) / 2.0
     stubs = {
         i: make_screening_result(
-            molecule="water",
+            molecule="h2",
             placement_id=i,
             energy_adsorption=0.0,
             atoms=place_molecule_on_slab(
-                slab, make_water(), z_offset=3.0, x_shift=float(i), y_shift=0.0
+                slab, make_h2(), x_shift=half_extent + i * gap, y_shift=y_shift
             ),
             slab_size=len(slab),
             distance=2.5,
@@ -365,13 +665,9 @@ def test_bo_assemble_releases_incomplete_companions(monkeypatch):
         _fake_materialize,
     )
     monkeypatch.setattr(
-        "metalsurfer.workflow.joint_tuplet.pack_exact_tuplet",
+        "metalsurfer.workflow.composite.pack_exact_tuplet",
         _fake_pack,
     )
-
-    class _NoShuffleRng:
-        def shuffle(self, x):
-            return None
 
     specs = [MagicMock(placement_index=i) for i in range(4)]
     groups, pool_sets = _assemble_bo_joint_groups_from_specs(
@@ -385,12 +681,11 @@ def test_bo_assemble_releases_incomplete_companions(monkeypatch):
         config=config,
         smiles="O",
         molecule_name="water",
-        site_context=MagicMock(),
+        site_context=None,
         slab_for_sites=slab,
         E_slab=0.0,
         E_mol=-14.0,
         n_per_config=2,
-        rng=cast(np.random.RandomState, _NoShuffleRng()),
         n_substrate=len(slab),
     )
     assert len(groups) == 1
@@ -399,15 +694,28 @@ def test_bo_assemble_releases_incomplete_companions(monkeypatch):
 
 
 def test_bo_assemble_respects_blocked_companions(monkeypatch):
-    slab = make_slab()
+    slab = make_slab(nx=8)
     config = AdsorptionConfig(saturation_molecules_per_step=2)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    probe = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
+    other = Atoms("H", positions=[[1.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
+    r_sum = 1.0 / min_interadsorbate_covalent_ratio(
+        probe, other, material_type="slab", cell=cell
+    )
+    centered = make_h2().get_positions()
+    half_extent = float(np.max(centered[:, 0] - centered[:, 0].mean()))
+    inner, outer = lateral_contact_shell(config.connectivity_multiplier)
+    gap = _h2_com_gap((inner + outer) / 2.0, r_sum=r_sum, half_extent=half_extent)
+    y0 = float(cell[1, 1]) / 2.0
+    x0 = float(cell[0, 0]) / 2.0
+    shifts = (x0, x0 + gap, x0 - gap)
     stubs = {
         i: make_screening_result(
-            molecule="water",
+            molecule="h2",
             placement_id=i,
             energy_adsorption=0.0,
             atoms=place_molecule_on_slab(
-                slab, make_water(), z_offset=3.0, x_shift=float(i), y_shift=0.0
+                slab, make_h2(), x_shift=half_extent + shifts[i], y_shift=y0
             ),
             slab_size=len(slab),
             distance=2.5,
@@ -433,13 +741,9 @@ def test_bo_assemble_respects_blocked_companions(monkeypatch):
         _fake_materialize,
     )
     monkeypatch.setattr(
-        "metalsurfer.workflow.joint_tuplet.pack_exact_tuplet",
+        "metalsurfer.workflow.composite.pack_exact_tuplet",
         _fake_pack,
     )
-
-    class _NoShuffleRng:
-        def shuffle(self, x):
-            return None
 
     specs = [MagicMock(placement_index=i) for i in range(3)]
     groups, pool_sets = _assemble_bo_joint_groups_from_specs(
@@ -453,12 +757,11 @@ def test_bo_assemble_respects_blocked_companions(monkeypatch):
         config=config,
         smiles="O",
         molecule_name="water",
-        site_context=MagicMock(),
+        site_context=None,
         slab_for_sites=slab,
         E_slab=0.0,
         E_mol=-14.0,
         n_per_config=2,
-        rng=cast(np.random.RandomState, _NoShuffleRng()),
         n_substrate=len(slab),
         blocked={1},
     )
@@ -473,7 +776,7 @@ def test_process_joint_tuplet_bayesian_uses_ctx_conformer_energies(monkeypatch):
     config = AdsorptionConfig(
         num_placements=2,
         saturation_molecules_per_step=2,
-        bo=BOConfig(initial_random=1, batch_size=1, total_budget=1),
+        bo=BOConfig(initial_random=1, batch_size=1, total_batches=1),
     )
     captured: dict = {}
 

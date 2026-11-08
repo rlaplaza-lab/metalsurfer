@@ -174,6 +174,29 @@ def test_site_ranking_prefers_coordination_then_clearance():
     assert order[3] == 2  # atop
 
 
+def test_clearance_span_puts_both_extremes_at_the_front_of_a_band():
+    from metalsurfer.placement.generators import _span_ranked_clearances
+
+    sites = [
+        _site((0.0, 0.0, 0.0), "hollow", "adaptive_grid", 2.0, supports=(0, 1, 2)),
+        _site((1.0, 0.0, 0.0), "hollow", "topology_hollow", 2.0, supports=(1, 2, 3)),
+        _site((2.0, 0.0, 0.0), "hollow", "adaptive_grid", 2.0, supports=(0, 1, 2)),
+        _site((3.0, 0.0, 0.0), "hollow", "topology_hollow", 2.0, supports=(1, 2, 3)),
+        _site((4.0, 0.0, 0.0), "atop", "atop_injected", 1.8, supports=(0,)),
+    ]
+    clearances = np.array([1.0, 9.0, 2.0, 4.0, 3.0], dtype=float)
+    ranked = _rank_site_indices(sites, [0, 1, 2, 3, 4], clearances=clearances)
+    spanned = _span_ranked_clearances(sites, ranked, clearances)
+    assert spanned[:2] == [0, 1]
+    assert spanned[-1] == 4
+    overlap = np.array([-1.0, 0.4, 8.0, 2.0, 3.0], dtype=float)
+    overlap_ranked = _rank_site_indices(sites, [0, 1, 2, 3, 4], clearances=overlap)
+    assert _span_ranked_clearances(sites, overlap_ranked, overlap)[:4] == [1, 2, 3, 0]
+    tied = np.array([1.0, 1.0, 1.0, 1.0, 1.0], dtype=float)
+    tied_ranked = _rank_site_indices(sites, [0, 1, 2, 3, 4], clearances=tied)
+    assert _span_ranked_clearances(sites, tied_ranked, tied) == tied_ranked
+
+
 def test_site_ranking_void_before_wall():
     sites = [
         _site((0.0, 0.0, 0.0), "hollow", "adaptive_grid", 2.0, supports=(0, 1, 2)),

@@ -1676,7 +1676,7 @@ def test_run_saturation_screening_multi_mol_bo_real_gpu(workdir):
         material_type="slab",
         slab_relaxation_mode="none",
         multi_molecule_saturation=True,
-        bo=BOConfig(initial_random=1, batch_size=1, total_budget=2),
+        bo=BOConfig(initial_random=1, batch_size=1, total_batches=2),
         saturation_max_steps=1,
         skip_topology_check=True,
         skip_desorption_check=False,
@@ -2751,7 +2751,7 @@ def test_saturation_bo_n_tuplet_keeps_single_site_memory_labels(monkeypatch, wor
             bo=BOConfig(
                 initial_random=4,
                 batch_size=2,
-                total_budget=1,
+                total_batches=1,
                 transfer=BOTransferConfig(enabled=True),
             ),
         ),

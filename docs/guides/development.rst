@@ -107,6 +107,9 @@ Three suites (``quick`` / ``cpu`` / ``gpu`` are applied automatically in
    METALSURFER_GPU_MODE=smoke ./scripts/run_gpu_tests.sh                  # short GPU subset
    ./scripts/run_all_tests.sh                                             # all three phases
 
+Pyridone pair and trimer checks are marked ``slow``. They assemble the joint
+configs a run would screen, so they run in the CPU phase and not in ``quick``.
+
 CPU MLIP tests (``cpu and mlip``) need ``pip install -e ".[mlip]"`` and a
 HuggingFace token for the gated UMA model. CI runs them in ``test-mlip-cpu``
 when ``HF_TOKEN`` is set. GPU tests run locally via ``./scripts/run_gpu_tests.sh``

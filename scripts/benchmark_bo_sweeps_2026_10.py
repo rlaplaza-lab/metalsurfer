@@ -71,7 +71,7 @@ def _proxy_config() -> AdsorptionConfig:
 def _wave_config() -> AdsorptionConfig:
     # Exhaust ~971-pool with waves of 100: init 100 + 9 batches of 100.
     return AdsorptionConfig(
-        bo=BOConfig(initial_random=WAVE_INIT, batch_size=WAVE_BATCH, total_budget=9)
+        bo=BOConfig(initial_random=WAVE_INIT, batch_size=WAVE_BATCH, total_batches=9)
     )
 
 

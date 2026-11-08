@@ -101,7 +101,12 @@ def _reference_orbits(analyzer, sites, planar):
                 mic_vec, _ = find_mic(delta.reshape(1, 3), cell, pbc=pbc)
                 sep = np.asarray(mic_vec[0], dtype=float)
                 if n_hat is not None:
-                    sep = sep - float(np.dot(sep, n_hat)) * n_hat
+                    along = float(np.dot(sep, n_hat))
+                    sep = sep - along * n_hat
+                    # A vacuum image can land in-plane after the normal is
+                    # removed. The production matcher also requires that gap.
+                    if abs(along) >= tol:
+                        continue
                 if float(np.linalg.norm(sep)) < tol:
                     union(i, j)
 
@@ -252,11 +257,16 @@ def test_cluster_symmetry_does_not_over_merge_antipodal_sites():
 
 
 def test_periodic_slab_reduction_is_unaffected_by_the_cluster_fix():
-    """Periodic mode still wraps and folds on all three spglib lattice axes."""
+    """Periodic mode keeps fcc and hcp hollows distinct and wraps in-plane.
+
+    A 3×3 cell has nine atop sites, nine of each hollow, and twenty-seven
+    bridges. The two hollows are not one orbit: the layer below distinguishes
+    them, and a vacuum image is not an in-plane match.
+    """
     slab = fcc111("Pt", (3, 3, 4), vacuum=10.0)
     raw = get_unified_sites(slab, material_type="slab")
     reduced = get_symmetry_aware_sites(slab, material_type="slab", raw_sites=raw)
-    assert sorted(s.symmetry_multiplicity for s in reduced) == [9, 18, 27]
+    assert sorted(s.symmetry_multiplicity for s in reduced) == [9, 9, 9, 27]
 
 
 def test_vectorized_orbits_match_the_scalar_reference_on_a_slab():
@@ -304,7 +314,7 @@ def test_symmetry_reduction_of_a_4x4_slab_is_fast():
     orbits = analyzer.analyze_site_symmetry(raw, planar=True)
     elapsed = time.perf_counter() - start
 
-    assert sorted(o.symmetry_multiplicity for o in orbits) == [16, 32, 48]
+    assert sorted(o.symmetry_multiplicity for o in orbits) == [16, 16, 16, 48]
     # Baseline ≈0.2 s locally; 5 s leaves ~25x headroom for loaded CI while
     # still failing on the ~21 s pre-vectorization behaviour this guards against.
     assert elapsed < 5.0, f"analyze_site_symmetry took {elapsed:.2f}s"

@@ -69,7 +69,7 @@ class BOConfig:
         "spread_xyz"
     )
     batch_size: int | None = None
-    total_budget: int = 18
+    total_batches: int = 18
     ucb_kappa: float = 1.96
     acquisition: Literal["lcb", "ei", "pi"] = "pi"
     surrogate: Literal[
@@ -708,7 +708,7 @@ def _validate_bo(root: "AdsorptionConfig") -> None:
         _check_positive_int("bo.initial_random", bo.initial_random)
     if bo.batch_size is not None:
         _check_positive_int("bo.batch_size", bo.batch_size)
-    _check_positive_int("bo.total_budget", bo.total_budget)
+    _check_positive_int("bo.total_batches", bo.total_batches)
     if bo.ucb_kappa < 0:
         raise ValueError(f"bo.ucb_kappa must be non-negative, got {bo.ucb_kappa}")
     _check_choice(
@@ -795,14 +795,14 @@ def resolved_bo_eval_budget(config: "AdsorptionConfig") -> int:
             "resolved_bo_eval_budget requires bo.initial_random and bo.batch_size "
             "to be resolved (not None)"
         )
-    return config.bo.initial_random + config.bo.total_budget * config.bo.batch_size
+    return config.bo.initial_random + config.bo.total_batches * config.bo.batch_size
 
 
 def bo_eval_schedule(config: "AdsorptionConfig") -> list[int]:
     """Cumulative placement-evaluation counts for BO replay curves.
 
     Matches the live workflow: one initial-random batch plus
-    ``bo.total_budget`` acquisition batches of ``bo.batch_size`` placements.
+    ``bo.total_batches`` acquisition batches of ``bo.batch_size`` placements.
 
     Parameters
     ----------

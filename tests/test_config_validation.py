@@ -934,7 +934,7 @@ def test_bo_defaults():
     assert c.bo.initial_random is None
     assert c.bo.initial_sampling == "spread_xyz"
     assert c.bo.batch_size is None
-    assert c.bo.total_budget == 18
+    assert c.bo.total_batches == 18
     assert c.bo.ucb_kappa == 1.96
     assert c.bo.acquisition == "pi"
     assert c.bo.surrogate == "gradient_boost"
@@ -964,14 +964,14 @@ def test_bo_defaults():
 
 def test_resolved_bo_eval_budget():
     config = AdsorptionConfig(
-        bo=BOConfig(initial_random=10, batch_size=5, total_budget=18),
+        bo=BOConfig(initial_random=10, batch_size=5, total_batches=18),
     )
     assert resolved_bo_eval_budget(config) == 10 + 18 * 5
 
 
 def test_bo_eval_schedule():
     config = AdsorptionConfig(
-        bo=BOConfig(initial_random=10, batch_size=5, total_budget=18),
+        bo=BOConfig(initial_random=10, batch_size=5, total_batches=18),
     )
     assert bo_eval_schedule(config) == [
         10,
@@ -1014,7 +1014,7 @@ def test_bo_eval_helpers_require_resolved_batch_fields(fn):
         ({"bo": BOConfig(failure_penalty_default=-1.0)}, "bo.failure_penalty_default"),
         ({"bo": BOConfig(initial_random=-1)}, "bo.initial_random"),
         ({"bo": BOConfig(batch_size=0)}, "bo.batch_size.*positive"),
-        ({"bo": BOConfig(total_budget=0)}, "bo.total_budget.*positive"),
+        ({"bo": BOConfig(total_batches=0)}, "bo.total_batches.*positive"),
         (
             {"bo": BOConfig(failure_penalty_overrides="notadict")},
             "bo.failure_penalty_overrides.*dict",

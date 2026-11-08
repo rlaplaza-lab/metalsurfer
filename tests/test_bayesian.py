@@ -949,7 +949,7 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         bo=BOConfig(
             initial_random=n_placements,
             batch_size=n_placements,
-            total_budget=2,
+            total_batches=2,
         ),
         seed=42,
         num_conformers=2,
@@ -1357,7 +1357,7 @@ def test_acquisition_loop_warmup_uses_independent_trials(monkeypatch):
     config = AdsorptionConfig(
         seed=1,
         num_placements=n_pool,
-        bo=BOConfig(initial_random=1, batch_size=1, total_budget=3, acquisition="lcb"),
+        bo=BOConfig(initial_random=1, batch_size=1, total_batches=3, acquisition="lcb"),
     )
     state = _BOAcquisitionState()
     transfer_state = _TransferRoundState()
@@ -1405,3 +1405,50 @@ def test_acquisition_loop_warmup_uses_independent_trials(monkeypatch):
     assert state.n_independent_trials >= 3
     assert model_batches
     assert len(state.observed_y) >= 9
+
+
+def test_acquisition_loop_caps_the_last_batch_at_the_eval_budget():
+    """A batch stops at the published cap instead of taking a full batch_size."""
+    n_pool = 12
+    features = pd.DataFrame(
+        [_feature_row(x=float(i), y=0.0, z=2.0) for i in range(n_pool)]
+    )
+    scaled = StandardScaler().fit_transform(features.to_numpy(dtype=float))
+    config = AdsorptionConfig(
+        seed=1,
+        num_placements=n_pool,
+        bo=BOConfig(initial_random=1, batch_size=5, total_batches=2, acquisition="lcb"),
+    )
+    budget = 1 + 2 * 5
+    state = _BOAcquisitionState()
+    transfer_state = _TransferRoundState()
+    batch_sizes: list[int] = []
+
+    def _eval(positions: list[int]) -> None:
+        batch_sizes.append(len(positions))
+        for position in positions:
+            state.evaluated.add(int(position))
+            state.observed_X_rows.append(_feature_row(x=float(position)))
+            state.observed_y.append(-1.0)
+            state.n_independent_trials += 1
+        if len(batch_sizes) == 1:
+            state.total_evaluated = budget - 1
+        else:
+            state.total_evaluated += len(positions)
+        state.best_energy = -1.0
+        state.best_X_row = dict(state.observed_X_rows[-1])
+
+    run_bo_acquisition_loop(
+        config=config,
+        candidate_features=features,
+        scaled_candidate_features=scaled,
+        n_pool=n_pool,
+        molecule_name="water",
+        slab_atoms=Atoms("Cu", positions=[[0, 0, 0]]),
+        bo_step_memory_in=None,
+        transfer_state=transfer_state,
+        state=state,
+        evaluate_batch=_eval,
+    )
+    assert batch_sizes == [1, 1]
+    assert state.total_evaluated == budget

@@ -246,12 +246,14 @@ def test_ligand_sites_and_occupancy_and_clearance():
     assert any(site.site_type == "atop" for site in ligand_sites)
     assert any(site.site_type == "bridge" for site in ligand_sites)
     mol = make_water()
+    # The first type/height pass stays on the open terrace. Ligand sites are
+    # in the occupancy-count fill after that pass.
     specs = enumerate_placement_specs(
         [mol],
         slab,
         config,
         "O",
-        n_desired=4,
+        n_desired=16,
         site_context=ctx,
         full_slab=covered,
     )

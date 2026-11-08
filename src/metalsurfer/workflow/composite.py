@@ -20,6 +20,7 @@ and ``distance``.
 """
 
 import logging
+from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 
@@ -43,6 +44,7 @@ from ..placement.geometry import (
     _mol_slab_pairwise_distances,
     calculate_min_distance,
     compute_surface_site_frame,
+    occupied_neighbor_counts,
 )
 from ..placement.occupancy import incoming_inplane_radius
 from ..placement.site_coords import _slab_normal
@@ -363,6 +365,274 @@ def pack_exact_tuplet(
     return packed
 
 
+def _pose_site(pose: ScreeningResult) -> int:
+    return int(pose.placement_descriptor.site_index)
+
+
+def _pose_com(pose: ScreeningResult) -> np.ndarray:
+    fragment = pose.atoms[pose.slab_size :]
+    return np.mean(np.asarray(fragment.get_positions(), dtype=float), axis=0)
+
+
+def _site_positions(poses: Sequence[ScreeningResult]) -> dict[int, np.ndarray]:
+    """One center per ``site_index``, the mean COM of poses on that site."""
+    acc: dict[int, list[np.ndarray]] = {}
+    for pose in poses:
+        acc.setdefault(_pose_site(pose), []).append(_pose_com(pose))
+    return {sid: np.mean(np.stack(rows), axis=0) for sid, rows in acc.items()}
+
+
+def _count_bins_for_candidates(
+    candidates: Sequence[int],
+    occupied_sites: set[int],
+    *,
+    site_at: Callable[[int], int | None],
+    positions: Mapping[int, np.ndarray],
+    cell: np.ndarray,
+    pbc: Sequence[bool],
+    site_types: Mapping[int, str] | None = None,
+) -> dict[int, list[int]]:
+    """Incoming-order candidates grouped by occupied-neighbor count."""
+    counts = occupied_neighbor_counts(
+        positions,
+        occupied_sites,
+        cell,
+        pbc,
+        site_types=site_types,
+    )
+    bins: dict[int, list[int]] = defaultdict(list)
+    for index in candidates:
+        site = site_at(index)
+        if site is None or int(site) in occupied_sites:
+            continue
+        bins[int(counts.get(int(site), 0))].append(index)
+    return bins
+
+
+def _accept_packed_pose(
+    group: Sequence[ScreeningResult],
+    index: int,
+    *,
+    pose_at: Callable[[int], ScreeningResult | None],
+    site_at: Callable[[int], int | None],
+    packed_sites: set[int],
+    slab_atoms: Atoms,
+    config: AdsorptionConfig,
+    n_substrate: int | None,
+) -> tuple[list[ScreeningResult], int] | None:
+    """Materialize *index* and keep it when the exact pack is clash-free."""
+    site = site_at(index)
+    if site is None or int(site) in packed_sites:
+        return None
+    pose = pose_at(index)
+    if pose is None:
+        return None
+    if _pose_site(pose) in packed_sites:
+        return None
+    packed = pack_exact_tuplet(
+        [*group, pose],
+        slab_atoms,
+        config,
+        n_substrate=n_substrate,
+    )
+    if packed is None:
+        return None
+    return packed, index
+
+
+def _typed_catalog(
+    positions: Mapping[int, np.ndarray],
+    site_types: Mapping[int, str] | None,
+    group: Sequence[ScreeningResult],
+    candidates: Sequence[int],
+    *,
+    pose_at: Callable[[int], ScreeningResult | None],
+    site_at: Callable[[int], int | None],
+) -> dict[int, str] | None:
+    """Site types for *positions*, or None when any waypoint is unlabeled.
+
+    A partial map would pull posed sites out of the catalog graph and leave
+    the other anchors in a fake lattice. Catalog labels are kept, and pose
+    labels fill only the holes. Pose materialization is skipped when the
+    catalog already covers every waypoint.
+    """
+    labels: dict[int, str] = {}
+    if site_types is not None:
+        labels.update({int(site): str(label) for site, label in site_types.items()})
+    if labels and set(positions).issubset(labels):
+        return labels
+
+    def _record(site: int | None, pose: ScreeningResult | None) -> None:
+        if pose is None or site is None:
+            return
+        label = pose.placement_descriptor.site_type
+        if label is not None:
+            labels[int(site)] = str(label)
+
+    for pose in group:
+        _record(_pose_site(pose), pose)
+    for index in candidates:
+        _record(site_at(index), pose_at(index))
+    if labels and set(positions).issubset(labels):
+        return labels
+    return None
+
+
+def _select_packing_partner(
+    group: Sequence[ScreeningResult],
+    candidates: Sequence[int],
+    *,
+    pose_at: Callable[[int], ScreeningResult | None],
+    site_at: Callable[[int], int | None],
+    positions: Mapping[int, np.ndarray],
+    slab_atoms: Atoms,
+    config: AdsorptionConfig,
+    n_substrate: int | None,
+    count_phase: int,
+    site_types: Mapping[int, str] | None = None,
+) -> tuple[list[ScreeningResult], int, int] | None:
+    """Next clash-free member. Later members round-robin occupancy counts."""
+    if not candidates:
+        return None
+    if not group:
+        pose = pose_at(candidates[0])
+        if pose is None:
+            return None
+        return [pose], candidates[0], count_phase
+
+    cell = np.asarray(slab_atoms.get_cell(), dtype=float)
+    pbc = material_aware_pbc(config.material_type)
+    packed_sites = {_pose_site(pose) for pose in group}
+    typed = _typed_catalog(
+        positions,
+        site_types,
+        group,
+        candidates,
+        pose_at=pose_at,
+        site_at=site_at,
+    )
+    bins = _count_bins_for_candidates(
+        candidates,
+        packed_sites,
+        site_at=site_at,
+        positions=positions,
+        cell=cell,
+        pbc=pbc,
+        site_types=typed,
+    )
+    if not bins:
+        return None
+    keys = sorted(bins)
+    start = int(count_phase) % len(keys)
+    for offset in range(len(keys)):
+        key = keys[(start + offset) % len(keys)]
+        for index in bins[key]:
+            picked = _accept_packed_pose(
+                group,
+                index,
+                pose_at=pose_at,
+                site_at=site_at,
+                packed_sites=packed_sites,
+                slab_atoms=slab_atoms,
+                config=config,
+                n_substrate=n_substrate,
+            )
+            if picked is None:
+                continue
+            packed, chosen = picked
+            return packed, chosen, int(count_phase) + offset + 1
+    return None
+
+
+def _grow_packed_group(
+    group: Sequence[ScreeningResult],
+    candidates: Sequence[int],
+    *,
+    pose_at: Callable[[int], ScreeningResult | None],
+    site_at: Callable[[int], int | None],
+    positions_at: Callable[
+        [Sequence[ScreeningResult], Sequence[int]], Mapping[int, np.ndarray]
+    ],
+    slab_atoms: Atoms,
+    config: AdsorptionConfig,
+    n_substrate: int | None,
+    count_phase: int,
+    n_target: int,
+    site_types: Mapping[int, str] | None = None,
+) -> tuple[list[ScreeningResult], list[int], int]:
+    """Extend *group* up to *n_target*.
+
+    *positions_at* receives the group so far and the indices already consumed.
+    *site_types* labels every catalog waypoint. Occupied nodes stay the sites
+    already in the group.
+    """
+    packed = list(group)
+    chosen: list[int] = []
+    blocked: set[int] = set()
+    phase = int(count_phase)
+    while len(packed) < n_target:
+        live = [index for index in candidates if index not in blocked]
+        picked = _select_packing_partner(
+            packed,
+            live,
+            pose_at=pose_at,
+            site_at=site_at,
+            positions=positions_at(packed, chosen),
+            slab_atoms=slab_atoms,
+            config=config,
+            n_substrate=n_substrate,
+            count_phase=phase,
+            site_types=site_types,
+        )
+        if picked is None:
+            break
+        packed, index, phase = picked
+        blocked.add(index)
+        chosen.append(index)
+    return packed, chosen, phase
+
+
+def _take_packing_member(
+    group: Sequence[ScreeningResult],
+    remaining: Sequence[ScreeningResult],
+    *,
+    slab_atoms: Atoms,
+    config: AdsorptionConfig,
+    n_substrate: int | None,
+    count_phase: int,
+    positions: Mapping[int, np.ndarray] | None = None,
+    site_types: Mapping[int, str] | None = None,
+) -> tuple[list[ScreeningResult], int, int] | None:
+    """Next packed member from an already-materialized pose list."""
+    if not remaining:
+        return None
+    if positions is None:
+        positions = _site_positions([*group, *remaining]) if group else {}
+
+    def _positions(
+        _current: Sequence[ScreeningResult],
+        _chosen: Sequence[int],
+    ) -> Mapping[int, np.ndarray]:
+        return positions
+
+    grown, chosen, phase = _grow_packed_group(
+        group,
+        range(len(remaining)),
+        pose_at=remaining.__getitem__,
+        site_at=lambda index: _pose_site(remaining[index]),
+        positions_at=_positions,
+        slab_atoms=slab_atoms,
+        config=config,
+        n_substrate=n_substrate,
+        count_phase=count_phase,
+        n_target=len(group) + 1,
+        site_types=site_types,
+    )
+    if len(chosen) != 1:
+        return None
+    return grown, chosen[0], phase
+
+
 def assemble_joint_config_groups(
     poses: Sequence[ScreeningResult],
     *,
@@ -372,32 +642,59 @@ def assemble_joint_config_groups(
     config: AdsorptionConfig,
     rng: np.random.Generator,
     n_substrate: int | None = None,
+    site_positions: Mapping[int, np.ndarray] | None = None,
+    site_types: Mapping[int, str] | None = None,
 ) -> list[list[ScreeningResult]]:
-    """Build up to *n_configs* disjoint groups of exactly *n_per_config* poses.
+    """Build up to *n_configs* groups of exactly *n_per_config* poses.
 
-    Greedy assembly from a shuffled pose pool; each group must pass
-    :func:`pack_exact_tuplet`. Poses are consumed at most once.
+    Later members round-robin occupancy-count bins of sites already in the
+    group (catalog neighbor-graph distance at most 2). *site_positions* and
+    *site_types* are the full catalog when the caller has one, so unsampled
+    sites stay waypoints. A ratio at or below the connectivity cutoff is a
+    hard clash. Poses are consumed across groups, and the count round-robin
+    continues from one group to the next.
     """
+    del rng
     if n_per_config <= 0 or n_configs <= 0 or not poses:
         return []
+    positions = (
+        dict(site_positions) if site_positions is not None else _site_positions(poses)
+    )
     remaining = list(poses)
-    remaining = [remaining[int(i)] for i in rng.permutation(len(remaining))]
+
+    def _positions(
+        _current: Sequence[ScreeningResult],
+        _chosen: Sequence[int],
+        fixed: Mapping[int, np.ndarray] = positions,
+    ) -> Mapping[int, np.ndarray]:
+        return fixed
+
     groups: list[list[ScreeningResult]] = []
+    count_phase = 0
+    misses = 0
     while len(groups) < n_configs and remaining:
-        group: list[ScreeningResult] = []
-        scan = 0
-        while scan < len(remaining) and len(group) < n_per_config:
-            trial = group + [remaining[scan]]
-            packed = pack_exact_tuplet(
-                trial, slab_atoms, config, n_substrate=n_substrate
-            )
-            if packed is not None:
-                group = packed
-                remaining.pop(scan)
-            else:
-                scan += 1
-        if len(group) != n_per_config:
+        if misses >= len(remaining):
             break
+        group, chosen, count_phase = _grow_packed_group(
+            [],
+            range(len(remaining)),
+            pose_at=remaining.__getitem__,
+            site_at=lambda index: _pose_site(remaining[index]),
+            positions_at=_positions,
+            slab_atoms=slab_atoms,
+            config=config,
+            n_substrate=n_substrate,
+            count_phase=count_phase,
+            n_target=n_per_config,
+            site_types=site_types,
+        )
+        if len(group) != n_per_config:
+            remaining.pop(0)
+            misses += 1
+            continue
+        misses = 0
+        for index in sorted(chosen, reverse=True):
+            remaining.pop(index)
         groups.append(group)
     return groups
 
@@ -411,46 +708,78 @@ def assemble_quota_joint_configs(
     config: AdsorptionConfig,
     rng: np.random.Generator,
     n_substrate: int | None = None,
+    site_positions: Mapping[int, np.ndarray] | None = None,
+    site_types: Mapping[int, str] | None = None,
 ) -> list[list[ScreeningResult]]:
-    """Build joint configs with exact per-species slot counts from *quotas*."""
+    """Build joint configs with exact per-species slot counts from *quotas*.
+
+    Partner choice matches :func:`assemble_joint_config_groups`.
+    """
     n_total = sum(int(q) for q in quotas.values())
     if n_total <= 0 or n_configs <= 0:
         return []
+    if len(quotas) == 1 and int(next(iter(quotas.values()))) == 2:
+        mol = next(iter(quotas))
+        return assemble_joint_config_groups(
+            pools.get(mol, []),
+            n_per_config=2,
+            n_configs=n_configs,
+            slab_atoms=slab_atoms,
+            config=config,
+            rng=rng,
+            n_substrate=n_substrate,
+            site_positions=site_positions,
+            site_types=site_types,
+        )
+    del rng
     remaining: dict[str, list[ScreeningResult]] = {
         mol: list(pools.get(mol, [])) for mol in quotas
     }
-    for mol, poses in remaining.items():
-        remaining[mol] = [poses[int(i)] for i in rng.permutation(len(poses))]
 
     recipe = [mol for mol, q in quotas.items() for _ in range(int(q))]
     groups: list[list[ScreeningResult]] = []
+    count_phase = 0
+    catalog = (
+        dict(site_positions)
+        if site_positions is not None
+        else _site_positions([pose for poses in remaining.values() for pose in poses])
+    )
+    seed_mol = recipe[0]
+    misses = 0
     while len(groups) < n_configs:
         if any(len(remaining[mol]) < int(quotas[mol]) for mol in quotas):
+            break
+        if misses >= len(remaining[seed_mol]):
             break
         group: list[ScreeningResult] = []
         taken: list[tuple[str, ScreeningResult]] = []
         failed = False
         for mol in recipe:
-            scan = 0
-            found = False
-            while scan < len(remaining[mol]):
-                trial = group + [remaining[mol][scan]]
-                packed = pack_exact_tuplet(
-                    trial, slab_atoms, config, n_substrate=n_substrate
-                )
-                if packed is not None:
-                    group = packed
-                    taken.append((mol, remaining[mol].pop(scan)))
-                    found = True
-                    break
-                scan += 1
-            if not found:
+            picked = _take_packing_member(
+                group,
+                remaining[mol],
+                slab_atoms=slab_atoms,
+                config=config,
+                n_substrate=n_substrate,
+                count_phase=count_phase,
+                positions=catalog,
+                site_types=site_types,
+            )
+            if picked is None:
                 failed = True
                 break
+            packed, index, count_phase = picked
+            group = packed
+            taken.append((mol, remaining[mol].pop(index)))
         if failed or len(group) != n_total:
             for mol, pose in reversed(taken):
                 remaining[mol].insert(0, pose)
-            break
+            if not remaining[seed_mol]:
+                break
+            remaining[seed_mol].pop(0)
+            misses += 1
+            continue
+        misses = 0
         groups.append(group)
     return groups
 

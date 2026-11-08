@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- ``bo.total_budget`` is now ``bo.total_batches``. It still counts acquisition
+  batches after the initial random batch, not total evaluations. Existing
+  Python and YAML configs that pass ``total_budget`` are rejected.
+- Normal, sequential, and n-tuple screens share one stratified height-shell
+  walk. Inside a shell the sample moves to the next site type, then the next
+  spanned site, then the next azimuth; conformer is last. Under coverage the
+  bucket is how many occupied sites of the same type lie within two
+  neighbor-graph steps. Those counts are drawn equally, and ``site_type``
+  still rotates inside a count. A covered short draw keeps one upright
+  contact pose on the clearest open site of each type, including a clearance
+  tie, then fills the rest by occupancy count. A bare surface keeps ``site_type`` buckets, with pores
+  preferred. The catalog is not truncated for saturation or n-tuple budgets.
+- Joint n-tuple partners use the same occupancy-count round-robin against
+  sites already in the group. A ratio at or below the connectivity cutoff is
+  a hard clash. Poses are consumed across groups, and the count rotation
+  continues from one group to the next.
 - Wall and dissociative heights use ``z_fraction`` 0.5, 0.7, and 0.9 as the
   covalent contact, the halfway point, and the van der Waals standoff. A short
   draw cycles those shells. Exposed step, vacancy, and nanoparticle-dent atoms

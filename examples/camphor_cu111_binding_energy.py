@@ -58,7 +58,7 @@ MOLECULE_NAME = "camphor"
 SURFACE_TYPE = "camphor_cu111"
 RESULTS_DIR = str(results_dir_for(SURFACE_TYPE))
 # Acquisition batches after the initial random batch (~300+ MLIP evals on a 15GB GPU).
-BO_TOTAL_BUDGET = 25
+BO_TOTAL_BATCHES = 25
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 DATA_DIR = EXAMPLE_DIR / "camphor_cu111"
@@ -108,7 +108,7 @@ PAPER_DFT_MINIMA: tuple[tuple[str, str, float], ...] = (
 class ResolvedBoBudget:
     initial_random: int
     batch_size: int
-    total_budget: int
+    total_batches: int
     eval_budget: int
 
 
@@ -238,7 +238,7 @@ def build_config(*, device: str) -> AdsorptionConfig:
         slab_relaxation_mode="none",
         top_layer_tolerance=PAPER_TOP_LAYER_TOLERANCE,
         bo=BOConfig(
-            total_budget=BO_TOTAL_BUDGET,
+            total_batches=BO_TOTAL_BATCHES,
             acquisition="ei",
         ),
     )
@@ -250,7 +250,7 @@ def resolve_bo_budget(config: AdsorptionConfig) -> ResolvedBoBudget | None:
     return ResolvedBoBudget(
         initial_random=config.bo.initial_random,
         batch_size=config.bo.batch_size,
-        total_budget=config.bo.total_budget,
+        total_batches=config.bo.total_batches,
         eval_budget=resolved_bo_eval_budget(config),
     )
 
@@ -944,12 +944,12 @@ def print_found_minima(
         print(
             f"BO budget: initial={budget.initial_random}, "
             f"batch={budget.batch_size}, "
-            f"batches={budget.total_budget} "
+            f"batches={budget.total_batches} "
             f"(eval_budget={budget.eval_budget})"
         )
     else:
         print(
-            f"BO acquisition batches: {config.bo.total_budget} "
+            f"BO acquisition batches: {config.bo.total_batches} "
             "(initial/batch sizes autotuned — see workflow log)"
         )
     print(

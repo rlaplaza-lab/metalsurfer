@@ -2,7 +2,7 @@
 
 import functools
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -25,6 +25,7 @@ from ._constants import (
     _LINEAR_SHAPE_RATIO_MAX,
     _MIN_CONTACT_RATIO_DEFAULT,
     _MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
+    _OCCUPANCY_NEIGHBOR_GRAPH_DISTANCE,
     _PRINCIPAL_AXIS_LONG_ALIGN_MIN_DOT,
     _PRINCIPAL_AXIS_ROT_AXIS_MIN_NORM,
     _PRINCIPAL_AXIS_ROTATION_STEP_DEG,
@@ -34,6 +35,8 @@ from ._constants import (
     _ROTATION_ALIGN_AXIS_SWITCH_DOT,
     _ROTATION_ALIGN_DOT_ANTIPARALLEL,
     _ROTATION_ALIGN_DOT_PARALLEL,
+    _SITE_NEIGHBOR_ABS_TOL_ANGSTROM,
+    _SITE_NEIGHBOR_REL_TOL,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
     _VECTOR_NORM_EPS,
 )
@@ -316,6 +319,182 @@ def min_pair_clearance_angstrom(
             float(pair_thresholds(vdw[:1], vdw[1:], vdw_overlap_scale)[0, 0]),
         )
     return gate
+
+
+def _shell_tolerance(distance: float) -> float:
+    """Absolute window around one same-type neighbour shell."""
+    return max(
+        float(_SITE_NEIGHBOR_ABS_TOL_ANGSTROM),
+        float(_SITE_NEIGHBOR_REL_TOL) * float(distance),
+    )
+
+
+def _mic_distance(
+    origin: np.ndarray,
+    other: np.ndarray,
+    cell: np.ndarray,
+    pbc: Sequence[bool],
+) -> float:
+    """Minimum-image distance between two catalog points."""
+    _vec, dist = find_mic(
+        np.asarray(other - origin, dtype=float).reshape(1, 3),
+        cell,
+        pbc=pbc,
+    )
+    return float(dist[0])
+
+
+def nearest_site_ids(
+    origin: int,
+    positions: Mapping[int, np.ndarray],
+    cell: np.ndarray,
+    pbc: Sequence[bool],
+) -> list[int]:
+    """Other ids at *origin*'s minimum MIC distance, lowest id first.
+
+    Distances within :func:`_shell_tolerance` of that minimum are the same
+    shell. The window is wide enough that a 0.0001 Å shift does not split a
+    symmetric shell, and narrower than the next lattice spacing.
+    """
+    shell = _nearest_shell(int(origin), positions, cell, pbc)
+    if shell is None:
+        return []
+    _distance, neighbors = shell
+    return neighbors
+
+
+def _nearest_shell(
+    origin: int,
+    positions: Mapping[int, np.ndarray],
+    cell: np.ndarray,
+    pbc: Sequence[bool],
+) -> tuple[float, list[int]] | None:
+    """Minimum MIC distance among *positions*, and the ids in that shell."""
+    here = positions.get(int(origin))
+    if here is None:
+        return None
+    origin_xyz = np.asarray(here, dtype=float)
+    scored: list[tuple[float, int]] = []
+    for sid, xyz in positions.items():
+        if int(sid) == int(origin):
+            continue
+        scored.append(
+            (
+                _mic_distance(origin_xyz, np.asarray(xyz, dtype=float), cell, pbc),
+                int(sid),
+            )
+        )
+    if not scored:
+        return None
+    nearest = min(item[0] for item in scored)
+    window = _shell_tolerance(nearest)
+    neighbors = sorted(sid for dist, sid in scored if abs(dist - nearest) <= window)
+    return nearest, neighbors
+
+
+def _type_groups(
+    ids: Sequence[int],
+    site_types: Mapping[int, str] | None,
+) -> dict[str, list[int]]:
+    """Group catalog ids by site type. Missing types share one graph."""
+    groups: dict[str, list[int]] = {}
+    for sid in ids:
+        key = "" if site_types is None else str(site_types.get(int(sid), "none"))
+        groups.setdefault(key, []).append(int(sid))
+    return groups
+
+
+def _nearest_shell_graph(
+    positions: Mapping[int, np.ndarray],
+    cell: np.ndarray,
+    pbc: Sequence[bool],
+    site_types: Mapping[int, str] | None = None,
+) -> tuple[dict[int, frozenset[int]], dict[int, float]]:
+    """Undirected same-type neighbour graph, and each id's shell length.
+
+    Bridges are not edges of the hollow graph, so two steps is the next
+    hollow, atop, or bridge lattice shell rather than the next mesh point.
+    """
+    ids = [int(sid) for sid in positions]
+    adjacent: dict[int, set[int]] = {sid: set() for sid in ids}
+    spacing: dict[int, float] = {}
+    for group in _type_groups(ids, site_types).values():
+        group_positions = {sid: positions[sid] for sid in group}
+        for sid in group:
+            shell = _nearest_shell(sid, group_positions, cell, pbc)
+            if shell is None:
+                continue
+            distance, neighbors = shell
+            spacing[sid] = float(distance)
+            for other in neighbors:
+                adjacent[sid].add(int(other))
+                adjacent[int(other)].add(sid)
+    return (
+        {sid: frozenset(neigh) for sid, neigh in adjacent.items()},
+        spacing,
+    )
+
+
+def occupied_neighbor_counts(
+    positions: Mapping[int, np.ndarray],
+    occupied: Collection[int],
+    cell: np.ndarray,
+    pbc: Sequence[bool],
+    *,
+    max_distance: int = _OCCUPANCY_NEIGHBOR_GRAPH_DISTANCE,
+    site_types: Mapping[int, str] | None = None,
+) -> dict[int, int]:
+    """Count occupied ids at same-type graph distance 1 through *max_distance*.
+
+    The graph links each catalog id to other ids of the same ``site_type`` at
+    its minimum MIC distance (ties inside the shell window included). An id is
+    not counted as its own neighbor. A site that is not itself occupied still
+    counts as an edge (at least 1) when an occupied site of another type lies
+    inside one same-type lattice spacing. Those cross-type neighbours raise
+    the floor; they are not added into the count.
+    """
+    adjacent, spacing = _nearest_shell_graph(positions, cell, pbc, site_types)
+    occupied_ids = {int(site) for site in occupied if int(site) in adjacent}
+    limit = max(int(max_distance), 0)
+    counts: dict[int, int] = {}
+    for origin, neighbors in adjacent.items():
+        seen = {origin}
+        frontier = [node for node in neighbors if node not in seen]
+        found = 0
+        for _depth in range(limit):
+            if not frontier:
+                break
+            nxt: list[int] = []
+            for node in frontier:
+                if node in seen:
+                    continue
+                seen.add(node)
+                if node in occupied_ids:
+                    found += 1
+                nxt.extend(other for other in adjacent[node] if other not in seen)
+            frontier = nxt
+        counts[origin] = found
+    if site_types is None:
+        return counts
+    for origin, shell in spacing.items():
+        if origin in occupied_ids or counts.get(origin, 0) > 0:
+            continue
+        origin_type = str(site_types.get(origin, "none"))
+        origin_xyz = np.asarray(positions[origin], dtype=float)
+        window = float(shell) + _shell_tolerance(shell)
+        for other in occupied_ids:
+            if str(site_types.get(other, "none")) == origin_type:
+                continue
+            other_xyz = positions.get(other)
+            if other_xyz is None:
+                continue
+            dist = _mic_distance(
+                origin_xyz, np.asarray(other_xyz, dtype=float), cell, pbc
+            )
+            if dist <= window:
+                counts[origin] = 1
+                break
+    return counts
 
 
 def _mol_slab_pairwise_mic(

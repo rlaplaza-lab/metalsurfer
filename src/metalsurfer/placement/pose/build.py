@@ -158,18 +158,6 @@ def _pose_from_spec(
 
     marked = _marked_binder_indices(smiles)
     exclusive = _exclusive_marked_binders(smiles)
-    oriented = orient_from_spec(
-        canonical_pos,
-        normal=normal,
-        symbols=symbols,
-        spec=spec,
-        marked_indices=marked,
-        exclusive_marked=exclusive,
-        tangent_basis=site.tangent_basis if site is not None else None,
-    )
-    rotated_pos = oriented.rotated_pos
-    quat = oriented.quat
-
     place_normal = _placement_normal_hat(normal)
     if float(np.linalg.norm(np.asarray(site.normal, dtype=float))) <= _VECTOR_NORM_EPS:
         if pose_cache is not None and pose_cache.n_hat is not None:
@@ -208,10 +196,22 @@ def _pose_from_spec(
         if pose_cache is not None and pose_cache.cell is not None
         else np.asarray(slab.get_cell(), dtype=float)
     )
+    pbc = material_aware_pbc(mat_type)
+    oriented = orient_from_spec(
+        canonical_pos,
+        normal=normal,
+        symbols=symbols,
+        spec=spec,
+        marked_indices=marked,
+        exclusive_marked=exclusive,
+        tangent_basis=site.tangent_basis if site is not None else None,
+    )
+    rotated_pos = oriented.rotated_pos
+    quat = oriented.quat
     family_key = _height_interval_family_key(spec)
-    interval: _HeightInterval | None = None
-    if pose_cache is not None:
-        interval = pose_cache.height_intervals.get(family_key)
+    interval: _HeightInterval | None = (
+        pose_cache.height_intervals.get(family_key) if pose_cache is not None else None
+    )
     if interval is None:
         interval = _feasible_height_interval(
             rotated_pos,
@@ -221,7 +221,7 @@ def _pose_from_spec(
             slab_positions=pos_for_support,
             slab_symbols=clear_symbols,
             cell=cell_arr,
-            pbc=material_aware_pbc(mat_type),
+            pbc=pbc,
             config=config,
             z_base_lo=0.0,
             z_base_hi=0.0,

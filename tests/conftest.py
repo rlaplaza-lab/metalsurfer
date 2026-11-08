@@ -76,6 +76,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if not (
             item.get_closest_marker("mlip")
             or item.get_closest_marker("dependency_behavior")
+            or item.get_closest_marker("slow")
         ):
             item.add_marker(pytest.mark.quick)
 

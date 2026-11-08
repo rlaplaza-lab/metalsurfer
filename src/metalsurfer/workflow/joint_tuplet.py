@@ -10,6 +10,7 @@ single-site surrogate and records shared ``Ω/n`` labels.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -31,8 +32,10 @@ from ..models import (
     ScreeningResult,
 )
 from ..placement.generators import (
+    _spec_grid_info,
     enumerate_placement_specs,
     estimate_placement_spec_capacity,
+    log_site_sample,
 )
 from ..placement.site_context import SiteContext, site_context_for_sampling
 from ..reporting import BOPlacementFailure, FailureSummary, PlacementFailure
@@ -46,10 +49,12 @@ from .bayesian import (
     run_bo_acquisition_loop,
 )
 from .composite import (
+    _grow_packed_group,
+    _pose_site,
+    _site_positions,
     assemble_joint_config_groups,
     assemble_quota_joint_configs,
     evaluate_composite_batch,
-    pack_exact_tuplet,
 )
 from .placement_fill import fill_materialized_placements, materialize_specs
 from .shared import (
@@ -58,6 +63,8 @@ from .shared import (
     adsorption_ranking_energy,
     joint_config_ranking_energy,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "JointTupletScreenOutcome",
@@ -474,17 +481,28 @@ def screen_joint_tuplet_multi(
                 'assemble="exact" requires exactly one active molecule, '
                 f"got {list(active_molecules)!r}"
             )
+        mol = active_molecules[0]
+        site_ids = [int(pose.placement_descriptor.site_index) for pose in pools[mol]]
+        positions, types = _catalog_frame(site_context, site_ids)
         groups = assemble_joint_config_groups(
-            pools[active_molecules[0]],
+            pools[mol],
             n_per_config=n,
             n_configs=n_configs,
             slab_atoms=current_slab.atoms,
             config=config,
             rng=rng,
             n_substrate=len(base_slab),
+            site_positions=positions,
+            site_types=types,
         )
     else:
         groups = []
+        site_ids = [
+            int(pose.placement_descriptor.site_index)
+            for pool in pools.values()
+            for pose in pool
+        ]
+        positions, types = _catalog_frame(site_context, site_ids)
         for quotas, n_share in zip(compositions, per_comp_budgets, strict=True):
             if n_share <= 0:
                 continue
@@ -498,6 +516,8 @@ def screen_joint_tuplet_multi(
                     config=config,
                     rng=rng,
                     n_substrate=len(base_slab),
+                    site_positions=positions,
+                    site_types=types,
                 )
             )
     return _relax_groups(
@@ -513,6 +533,42 @@ def screen_joint_tuplet_multi(
     )
 
 
+def _catalog_frame(
+    site_context: SiteContext | None,
+    site_ids: Sequence[int | None],
+) -> tuple[dict[int, np.ndarray] | None, dict[int, str] | None]:
+    """Catalog waypoints, or ``(None, None)`` when the caller has no catalog."""
+    geometry = _catalog_site_geometry(site_context, site_ids)
+    if geometry is None:
+        return None, None
+    return geometry
+
+
+def _catalog_site_geometry(
+    site_context: SiteContext | None,
+    site_ids: Sequence[int | None],
+) -> tuple[dict[int, np.ndarray], dict[int, str]] | None:
+    """Full catalog xyz and site types, or None when a pool id is missing.
+
+    Every catalog site is a neighbor-graph waypoint. *site_ids* must all
+    resolve so a pose cannot point outside the lattice. Occupancy still
+    counts only the sites already packed.
+    """
+    if site_context is None:
+        return None
+    sites = site_context.sites
+    if not sites:
+        return None
+    for sid in site_ids:
+        if sid is None or sid < 0 or sid >= len(sites):
+            return None
+    positions = {
+        index: np.asarray(site.xyz, dtype=float) for index, site in enumerate(sites)
+    }
+    types = {index: str(site.site_type) for index, site in enumerate(sites)}
+    return positions, types
+
+
 def _assemble_bo_joint_groups_from_specs(
     anchor_indices: Sequence[int],
     *,
@@ -525,25 +581,33 @@ def _assemble_bo_joint_groups_from_specs(
     config: AdsorptionConfig,
     smiles: str,
     molecule_name: str,
-    site_context: SiteContext,
+    site_context: SiteContext | None,
     slab_for_sites: Atoms,
     E_slab: float,
     E_mol: float,
     n_per_config: int,
-    rng: np.random.RandomState,
     n_substrate: int,
     blocked: set[int] | None = None,
 ) -> tuple[list[list[ScreeningResult]], list[set[int]]]:
-    """Build one joint group per anchor (forward companion scan).
+    """Build one joint group per anchor.
 
-    Returns ``(groups, pool_index_sets)`` aligned by successful pack. Incomplete
-    packs release their tentative companions so later anchors can use them.
-    *blocked* pool indices are never chosen as companions.
+    Partner choice matches :func:`assemble_joint_config_groups`. A hard clash
+    is not a candidate. Incomplete packs release their companions. *blocked*
+    pool indices are never chosen.
     """
     slab_size = len(slab.atoms)
     groups: list[list[ScreeningResult]] = []
     pool_index_sets: list[set[int]] = []
     committed: set[int] = set(blocked or ())
+    count_phase = 0
+    catalog, catalog_types = _catalog_frame(
+        site_context,
+        [
+            all_specs[valid_spec_indices[pos]].site_index
+            for pos in range(len(valid_spec_indices))
+        ],
+    )
+    stubs: dict[int, ScreeningResult | None] = {}
 
     def _stub_from_pool(pool_pos: int) -> ScreeningResult | None:
         fill = materialize_specs(
@@ -570,6 +634,19 @@ def _assemble_bo_joint_groups_from_specs(
             slab_size=slab_size,
         )
 
+    def _site_at(pos: int) -> int | None:
+        if catalog is not None:
+            return all_specs[valid_spec_indices[pos]].site_index
+        stub = stubs.get(pos)
+        if stub is None:
+            return None
+        return _pose_site(stub)
+
+    def _pose_at(pos: int) -> ScreeningResult | None:
+        if pos not in stubs:
+            stubs[pos] = _stub_from_pool(pos)
+        return stubs[pos]
+
     for anchor_pos in anchor_indices:
         if anchor_pos in committed:
             continue
@@ -583,26 +660,39 @@ def _assemble_bo_joint_groups_from_specs(
             for p in range(len(valid_spec_indices))
             if p not in committed and p not in tentative
         ]
-        rng.shuffle(candidates)
-        scan = 0
-        while len(group) < n_per_config and scan < len(candidates):
-            pos = candidates[scan]
-            stub = _stub_from_pool(pos)
-            if stub is None:
-                scan += 1
-                continue
-            packed = pack_exact_tuplet(
-                group + [stub],
-                slab.atoms,
-                config,
-                n_substrate=n_substrate,
+        stubs = {anchor_pos: anchor}
+        if catalog is None:
+            for pos in candidates:
+                stubs[pos] = _stub_from_pool(pos)
+            positions = _site_positions(
+                [stub for stub in stubs.values() if stub is not None]
             )
-            if packed is None:
-                scan += 1
-                continue
-            group = packed
-            tentative.add(pos)
-            scan += 1
+        else:
+            positions = catalog
+
+        site_map = positions
+
+        def _positions_at(
+            _current: Sequence[ScreeningResult],
+            _chosen: Sequence[int],
+            sites: Mapping[int, np.ndarray] = site_map,
+        ) -> Mapping[int, np.ndarray]:
+            return sites
+
+        group, chosen, count_phase = _grow_packed_group(
+            group,
+            candidates,
+            pose_at=_pose_at,
+            site_at=_site_at,
+            positions_at=_positions_at,
+            slab_atoms=slab.atoms,
+            config=config,
+            n_substrate=n_substrate,
+            count_phase=count_phase,
+            n_target=n_per_config,
+            site_types=catalog_types,
+        )
+        tentative.update(chosen)
         if len(group) == n_per_config:
             groups.append(group)
             pool_index_sets.append(set(tentative))
@@ -680,6 +770,18 @@ def process_joint_tuplet_bayesian(
     if config.num_placements is None:
         raise ValueError("num_placements required for joint BO")
 
+    grid_info = (
+        _spec_grid_info(
+            conformers,
+            slab_for_sites,
+            config,
+            smiles,
+            site_context,
+            full_slab=slab.atoms,
+        )
+        if conformers
+        else None
+    )
     max_enumerated_specs = estimate_placement_spec_capacity(
         conformers,
         slab_for_sites,
@@ -687,6 +789,7 @@ def process_joint_tuplet_bayesian(
         smiles,
         site_context=site_context,
         full_slab=slab.atoms,
+        grid_info=grid_info,
     )
     pool_size = (
         config.bo.candidate_pool_size
@@ -711,6 +814,7 @@ def process_joint_tuplet_bayesian(
         seed=config.seed,
         full_slab=slab.atoms,
         conformer_energies=conformer_energies,
+        grid_info=grid_info,
     )
     if not all_specs:
         return JointTupletScreenOutcome(
@@ -718,6 +822,13 @@ def process_joint_tuplet_bayesian(
             [],
             failure_summary=BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0),
         )
+    logger.info(
+        "Joint BO: %d/%d candidate specs",
+        len(all_specs),
+        max_enumerated_specs,
+    )
+    if grid_info is not None:
+        log_site_sample(grid_info, len(all_specs), specs=all_specs)
 
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] = {}
     candidate_features, valid_spec_indices = build_spec_features_geometry_aware(
@@ -809,7 +920,6 @@ def process_joint_tuplet_bayesian(
             E_slab=E_slab,
             E_mol=E_mol,
             n_per_config=n,
-            rng=rng,
             n_substrate=len(base_slab),
             blocked=acq_state.evaluated,
         )

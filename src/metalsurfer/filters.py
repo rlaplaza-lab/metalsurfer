@@ -30,6 +30,7 @@ from ._utils import cell_has_volume
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
 from .models import ScreeningResult
+from .placement._constants import _OCCUPANCY_SIGMA_SHELL_SCALE
 from .placement._material import material_aware_pbc
 from .placement.clash import atom_radii_for_symbols
 from .placement.cutoffs import pair_thresholds, tabulated_radii
@@ -37,9 +38,7 @@ from .placement.geometry import (
     _mol_slab_pairwise_distances,
     calculate_min_distance,
 )
-
-# Peak sigma scale and outer shell edge (multiples of connectivity_multiplier).
-_OCCUPANCY_SIGMA_SHELL_SCALE: float = 2.0
+from .placement.occupancy import lateral_contact_shell as lateral_contact_shell
 
 try:
     from rdkit import Chem

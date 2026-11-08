@@ -865,7 +865,7 @@ def resolve_workload_config(
             resolved.num_placements,
             resolved.bo.initial_random,
             resolved.bo.batch_size,
-            resolved.bo.total_budget,
+            resolved.bo.total_batches,
             eval_budget,
             resolved.autobatcher_max_memory_scaler,
         )

@@ -20,7 +20,7 @@ from metalsurfer.placement import (
 )
 from metalsurfer.placement.clash import atom_radii_for_symbols
 from metalsurfer.placement.dissociative import _get_dissociative_site_pairs
-from metalsurfer.placement.generators import _spec_grid_info
+from metalsurfer.placement.generators import _site_band_key, _spec_grid_info
 from metalsurfer.placement.occupancy import (
     _footprint_clearances_from_mic,
     _sites_clearance_and_anchor_mask,
@@ -458,7 +458,7 @@ def test_occupancy_counts_atom_slightly_behind_tangent_plane():
 
 
 def test_negative_footprint_clearance_ranks_without_dropping_site():
-    """Disk overlap ranks a covered anchor later; it does not remove the site."""
+    """Disk overlap keeps a covered anchor and still samples it early."""
     slab = make_slab()
     config = AdsorptionConfig(
         material_type="slab",
@@ -501,14 +501,16 @@ def test_negative_footprint_clearance_ranks_without_dropping_site():
     near_i = 0
     assert near_i in info.site_indices
     assert clearances[near_i] < 0.0
-    same_type = near.site_type
-    ranked_same = [
-        i
-        for i in info.site_indices
-        if ctx.sites[i].site_type == same_type and float(clearances[i]) > 0.0
-    ]
-    assert ranked_same
-    assert info.site_indices.index(ranked_same[0]) < info.site_indices.index(near_i)
+    near_band = _site_band_key(ctx.sites[near_i])
+    band = [i for i in info.site_indices if _site_band_key(ctx.sites[i]) == near_band]
+    band_clear = [float(clearances[i]) for i in band]
+    assert near_i in band
+    open_clear = [value for value in band_clear if value >= 0.0]
+    if open_clear:
+        assert band_clear[0] == min(open_clear)
+        assert band[0] != near_i
+    else:
+        assert band_clear[0] == max(band_clear)
 
 
 def test_incoming_inplane_radius_drops_thickness_axis():
@@ -1540,6 +1542,70 @@ def test_fill_clamps_target_to_capacity(monkeypatch, caplog):
     assert len(result.combined) == 2
     assert result.n_attempts == 1
     assert any("clamped from" in r.message for r in caplog.records)
+
+
+def test_fill_logs_site_sample_once(monkeypatch, caplog) -> None:
+    """One INFO line per draw, including when a diversity retry enumerates again."""
+    import logging
+
+    from metalsurfer.workflow import placement_fill as fill_mod
+
+    monkeypatch.setattr(
+        fill_mod, "estimate_placement_spec_capacity", lambda *a, **k: 100
+    )
+    calls = {"n": 0}
+
+    def _enumerate_two_waves(
+        conformers,
+        slab_for_sites,
+        config,
+        smiles,
+        n_desired,
+        filter_spec=None,
+        site_context=None,
+        seed=None,
+        full_slab=None,
+        conformer_energies=None,
+        grid_info=None,
+    ):
+        calls["n"] += 1
+        # Second wave uses fresh site indices so the diversity retry is not
+        # banned by the first wave's too_close keys.
+        origin = 0 if calls["n"] == 1 else 100
+        specs = [
+            _round_atop_placement_spec(i, site_index=origin + i)
+            for i in range(n_desired)
+        ]
+        return _filter_specs(specs, filter_spec)
+
+    _patch_fill(
+        monkeypatch,
+        fill_mod,
+        enumerate_fn=_enumerate_two_waves,
+        materialize_fn=_materialize_all_fail(),
+    )
+    with caplog.at_level(logging.INFO):
+        result = _run_fill(
+            fill_mod,
+            AdsorptionConfig(
+                material_type="slab",
+                num_placements=4,
+                placement_retry_enabled=True,
+                placement_fill_clamp_to_capacity=False,
+                seed=0,
+            ),
+        )
+    assert calls["n"] == 2
+    assert result.n_attempts == 2
+    messages = [
+        record.message
+        for record in caplog.records
+        if record.name == "metalsurfer.placement.generators"
+        and record.message.startswith("Site sample:")
+    ]
+    assert len(messages) == 1
+    assert messages[0].startswith("Site sample: 4 placements, ")
+    assert " sites" in messages[0]
 
 
 def test_clamp_flag_false_legacy(monkeypatch):

@@ -689,7 +689,7 @@ def run_e2e(
             binding_distance_threshold=5.0,
             top_layer_tolerance=2.1,
             bo=BOConfig(
-                total_budget=int(bo_budget),
+                total_batches=int(bo_budget),
                 acquisition="ei",
                 # None → autotune to one full GPU batch each.
                 initial_random=None,
