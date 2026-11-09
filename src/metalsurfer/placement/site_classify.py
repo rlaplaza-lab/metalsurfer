@@ -548,8 +548,8 @@ def _outward_normals_batch(
     samples[0::3] = bases[idx]
     samples[1::3] = bases[idx] + step * hats
     samples[2::3] = bases[idx] - step * hats
-    dists, _ = framework_tree.query(samples, k=1)
-    dists = np.asarray(dists, dtype=float).reshape(-1, 3)
+    neighbor_dists, _ = framework_tree.query(samples, k=1)
+    dists = np.asarray(neighbor_dists, dtype=float).reshape(-1, 3)
     c0 = dists[:, 0]
     c_fwd = dists[:, 1]
     c_back = dists[:, 2]
