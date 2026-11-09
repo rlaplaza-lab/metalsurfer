@@ -5,6 +5,8 @@ Kept in a separate module so that both :mod:`geometry` (which needs
 these utilities without creating a circular dependency.
 """
 
+from typing import Literal
+
 from ase import Atoms
 
 from .site_types import Site
@@ -42,6 +44,16 @@ def material_aware_pbc(material_type: str) -> list[bool]:
             f"material_type must be one of {sorted(MATERIAL_PBC)}, "
             f"got {material_type!r}"
         ) from exc
+
+
+def symmetry_mode_for_material(
+    material_type: str,
+) -> Literal["periodic", "cluster"]:
+    """Cluster for nanoparticles; periodic for slabs and porous frameworks."""
+    validate_material_type(material_type)
+    if material_type == "nanoparticle":
+        return "cluster"
+    return "periodic"
 
 
 def calculator_pbc_for_atoms(atoms: Atoms) -> list[bool]:

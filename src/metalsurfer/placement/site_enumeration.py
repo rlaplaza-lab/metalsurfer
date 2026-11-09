@@ -23,6 +23,7 @@ from ._constants import (
 from ._material import (
     material_aware_pbc,
     material_type_for_placement,
+    symmetry_mode_for_material,
     validate_material_type,
 )
 from .geometry import _get_covalent_radius
@@ -870,7 +871,7 @@ def get_symmetry_aware_sites(
     if not site_list:
         return []
 
-    sym_mode = "cluster" if material_type == "nanoparticle" else "periodic"
+    sym_mode = symmetry_mode_for_material(material_type)
     planar_for_symmetry = False
     if material_type == "slab":
         positions = slab.get_positions()

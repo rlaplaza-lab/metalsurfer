@@ -914,13 +914,39 @@ def test_saturation_symmetry_uses_substrate_prefix_not_adsorbates():
         substrate,
         base,
         symmetry_tolerance=0.1,
+        material_type="slab",
     )
     # Full covered vs bare still breaks (historical adsorbate contamination).
     assert _saturation_symmetry_broken_vs_reference(
         covered,
         base,
         symmetry_tolerance=0.1,
+        material_type="slab",
     )
+
+
+def test_saturation_symmetry_mode_follows_material_not_atoms_pbc(monkeypatch):
+    """A slab with all-false PBC is still analyzed as a periodic cell."""
+    from metalsurfer.symmetry import SymmetryAnalyzer
+    from metalsurfer.workflow import saturation as saturation_mod
+
+    slab = make_slab()
+    slab.set_pbc([False, False, False])
+    modes: list[str] = []
+    real = SymmetryAnalyzer
+
+    def _capturing(*args, **kwargs):
+        modes.append(str(kwargs.get("mode", "auto")))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(saturation_mod, "SymmetryAnalyzer", _capturing)
+    assert not _saturation_symmetry_broken_vs_reference(
+        slab,
+        slab.copy(),
+        symmetry_tolerance=0.1,
+        material_type="slab",
+    )
+    assert modes == ["periodic"]
 
 
 def test_distribute_placement_budget_extreme_skew_sums_to_total():

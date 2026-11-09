@@ -11,6 +11,7 @@ import numpy as np
 from ase import Atoms
 from scipy.spatial import KDTree
 
+from .._utils import cell_has_volume
 from ._constants import (
     _NP_NN_BOND_MAX_SCALE,
     _NP_NN_BOND_MIN_SCALE,
@@ -21,6 +22,7 @@ from ._material import material_aware_pbc
 from .geometry import framework_radii_from_symbols, tangent_basis_from_normal
 from .site_classify import site_env_fingerprint
 from .site_coords import (
+    _build_periodic_images,
     _minimum_image_cartesian_delta,
     _slab_normal,
     ray_exposure_mask,
@@ -56,6 +58,18 @@ def _mic_delta(
     return delta
 
 
+def _substrate_query_tree(
+    sub_pos: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    margin: float,
+) -> KDTree:
+    """Substrate KDTree, with periodic images when *pbc* is on."""
+    if np.any(pbc) and cell_has_volume(cell):
+        return KDTree(_build_periodic_images(sub_pos, cell, pbc, margin=margin))
+    return KDTree(sub_pos)
+
+
 def ligand_local_sites(
     substrate: Atoms,
     full_slab: Atoms,
@@ -72,15 +86,29 @@ def ligand_local_sites(
     pbc = np.asarray(material_aware_pbc(material_type), dtype=bool)
     lig_idx = np.arange(n_sub, len(full_slab), dtype=int)
     sub_pos = positions[:n_sub]
-    sub_tree = KDTree(sub_pos)
-    _, nearest_j = sub_tree.query(positions[lig_idx], k=1)
-    nearest_j = np.asarray(nearest_j, dtype=int).ravel()
+    median_nn = median_nn_or_fallback(
+        np.empty(0, dtype=float),
+        reference_positions=sub_pos,
+        cell=cell,
+        pbc=pbc,
+    )
+    min_bond = _NP_NN_BOND_MIN_SCALE * float(median_nn)
+    max_bond = _NP_NN_BOND_MAX_SCALE * float(median_nn)
+    margin = float(max_bond)
+    if cell_has_volume(cell):
+        margin = max(margin, float(np.max(np.linalg.norm(cell, axis=1))))
+    sub_tree = _substrate_query_tree(sub_pos, cell, pbc, margin)
+    _, nearest_hits = sub_tree.query(positions[lig_idx], k=1)
+    nearest_j = np.asarray(nearest_hits, dtype=int).ravel() % n_sub
     fallback = (
         _slab_normal(cell) if material_type == "slab" else np.array([0.0, 0.0, 1.0])
     )
     normals = np.vstack(
         [
-            _unit(positions[int(ai)] - sub_pos[int(j)], fallback)
+            _unit(
+                _mic_delta(positions[int(ai)], sub_pos[int(j)], cell, pbc),
+                fallback,
+            )
             for ai, j in zip(lig_idx, nearest_j, strict=True)
         ]
     )
@@ -96,14 +124,6 @@ def ligand_local_sites(
     )
     if not np.any(exposed):
         return []
-    median_nn = median_nn_or_fallback(
-        np.empty(0, dtype=float),
-        reference_positions=sub_pos,
-        cell=cell,
-        pbc=pbc,
-    )
-    min_bond = _NP_NN_BOND_MIN_SCALE * float(median_nn)
-    max_bond = _NP_NN_BOND_MAX_SCALE * float(median_nn)
     sites: list[Site] = []
     for local_i, ai in enumerate(lig_idx):
         if not bool(exposed[local_i]):
@@ -122,8 +142,13 @@ def ligand_local_sites(
                 "atop",
             )
         )
-        neighbor_js = sub_tree.query_ball_point(atom_pos, r=max_bond)
-        for j in neighbor_js:
+        neighbor_hits = sub_tree.query_ball_point(atom_pos, r=max_bond)
+        seen: set[int] = set()
+        for hit in neighbor_hits:
+            j = int(hit) % n_sub
+            if j in seen:
+                continue
+            seen.add(j)
             delta = _mic_delta(atom_pos, sub_pos[int(j)], cell, pbc)
             dist = float(np.linalg.norm(delta))
             if dist < min_bond or dist > max_bond:

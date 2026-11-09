@@ -156,8 +156,9 @@ open in the third; nanoparticles are fully non-periodic; porous frameworks are
 periodic in all three directions. Distance math, filters, shortest periodic
 distances, and site symmetry use that material-aware periodicity
 (`material_aware_pbc`), not whatever flags the ASE Atoms carry after the
-calculator promotes slabs to full 3D periodicity. Stored results restore
-material periodicity via `apply_material_pbc`.
+calculator promotes slabs to full 3D periodicity. Opt-in wall-near
+generators are the exception and follow the structure's own PBC flags.
+Stored results restore material periodicity via `apply_material_pbc`.
 
 A *site* is always a point in space plus a local *outward normal* (the direction
 away from the material) and a *site type*. The site types are:
@@ -182,9 +183,9 @@ mapping when the pair is compatible with `material_type`. Opt-in
 `adaptive_grid` lays a Cartesian grid around every atom (spacing in Å via
 `adaptive_grid_spacing`); opt-in `rolling_probe` places Connolly / SAS
 contacts tangent to one, two, or three framework spheres (atop / bridge /
-hollow, including MOF pore walls). Both wall-near plugins then follow the
-same classify → cluster → symmetry path on all materials and are never chosen
-by `auto`.
+hollow, including MOF pore walls) using `atoms.get_pbc()`
+(`uses_structure_pbc`). Both then follow the same classify → cluster →
+symmetry path on all materials and are never chosen by `auto`.
 
 ### 3.1 Slab
 

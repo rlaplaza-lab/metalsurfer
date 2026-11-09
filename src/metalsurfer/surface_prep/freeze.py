@@ -14,9 +14,11 @@ from ase.constraints import FixAtoms
 from scipy.spatial import KDTree
 
 from .._numeric_defaults import DEFAULT_TOP_LAYER_TOLERANCE
+from .._utils import cell_has_volume
 from ..exceptions import GeometryValidationError
-from ..placement._material import validate_material_type
+from ..placement._material import material_aware_pbc, validate_material_type
 from ..placement.site_coords import (
+    _build_periodic_images,
     derive_pore_threshold,
     top_layer_mask_by_normal,
 )
@@ -82,8 +84,8 @@ def identify_relaxable_surface_indices(
     - **nanoparticle:** outermost shell (within *tolerance* of the maximum
       distance from the centre of mass).
     - **porous:** framework atoms on pore walls — closest neighbour of each
-      pore-classified Voronoi void site (queried from the site position when
-      the catalog keeps empty pore supports).
+      pore-classified Voronoi void site (minimum-image query from the site
+      position when the catalog keeps empty pore supports).
 
     Parameters
     ----------
@@ -124,9 +126,15 @@ def identify_relaxable_surface_indices(
         pore_threshold=float(pore_threshold),
         enrich=False,
     )
-    # Pore sites may keep empty slab_indices (fingerprint contract); fall back
-    # to the nearest framework atom so wall atoms remain identifiable.
-    tree: KDTree | None = None
+    # Empty pore supports: nearest framework atom under porous MIC.
+    pbc = np.asarray(material_aware_pbc("porous"), dtype=bool)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    if cell_has_volume(cell):
+        margin = float(np.max(np.linalg.norm(cell, axis=1)))
+        query_pts = _build_periodic_images(positions, cell, pbc, margin=margin)
+    else:
+        query_pts = positions
+    neighbor_tree = KDTree(query_pts)
     boundary: set[int] = set()
     for site in sites:
         if site.site_type != "pore":
@@ -135,10 +143,10 @@ def identify_relaxable_surface_indices(
         if raw_indices:
             idx = int(raw_indices[0])
         else:
-            if tree is None:
-                tree = KDTree(positions)
-            _, nn = tree.query(np.asarray(site.xyz, dtype=float).reshape(3), k=1)
-            idx = int(nn)
+            _, nn = neighbor_tree.query(
+                np.asarray(site.xyz, dtype=float).reshape(1, 3), k=1
+            )
+            idx = int(np.asarray(nn).reshape(-1)[0]) % n_atoms
         if 0 <= idx < n_atoms:
             boundary.add(idx)
 

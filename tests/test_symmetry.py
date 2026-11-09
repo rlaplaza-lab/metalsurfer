@@ -214,6 +214,14 @@ def test_detect_symmetry_breaking_identical_false():
     assert not an.detect_symmetry_breaking(ref)
 
 
+def test_detect_symmetry_breaking_keeps_explicit_mode_when_pbc_disagrees():
+    """Reference analysis uses this analyzer's mode, not ``atoms.get_pbc()``."""
+    ref = bulk("Cu", "fcc", a=3.6)
+    an = SymmetryAnalyzer(ref.copy(), symmetry_tolerance=0.05, mode="cluster")
+    assert an._mode == "cluster"
+    assert not an.detect_symmetry_breaking(ref)
+
+
 def test_get_symmetry_aware_sites_nanoparticle_envelope():
     """Non-periodic cluster: envelope sites with cluster symmetry analyzer."""
     atoms = make_nanoparticle()  # Au₁₃ icosahedral

@@ -97,6 +97,62 @@ def test_hollow_site_pairs_found_for_slab():
     )
 
 
+def test_dissociative_pairs_ignore_calculator_ttt_on_slabs():
+    """Slab pairs and occupancy follow material PBC, not calculator [T, T, T]."""
+    from ase import Atoms
+
+    from metalsurfer.placement.dissociative import _compute_dissociative_site_pairs
+
+    slab = Atoms(
+        "H2",
+        positions=[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+        cell=np.diag([10.0, 10.0, 10.0]),
+        pbc=[True, True, True],
+    )
+    config = AdsorptionConfig(
+        material_type="slab",
+        min_adsorbate_separation=1.0,
+        skip_topology_check=True,
+    )
+
+    def _site(xyz: list[float]) -> Site:
+        return Site(
+            xyz=np.array(xyz, dtype=float),
+            normal=np.array([0.0, 0.0, 1.0]),
+            site_type="hollow",
+            slab_indices=(0,),
+            material_type="slab",
+            site_source="test",
+            env_fingerprint=(("H",), (0,), 1),
+        )
+
+    # C sits under A. With z-periodic MIC the gap wraps to ~2.4 Å and would
+    # be paired; xy-only MIC keeps the in-plane gap at 0 and rejects it.
+    stacked = [
+        _site([2.0, 2.0, 8.0]),
+        _site([4.0, 2.0, 8.0]),
+        _site([2.0, 2.0, 0.4]),
+    ]
+    pairs = _compute_dissociative_site_pairs(slab, config, pre_resolved_sites=stacked)
+    in_plane = [
+        float(np.hypot(*(np.asarray(p.xyz1)[:2] - np.asarray(p.xyz2)[:2])))
+        for p in pairs
+    ]
+    assert in_plane
+    assert min(in_plane) > 1.5
+    assert any(abs(d - 2.0) < 0.05 for d in in_plane)
+
+    # Adsorbate near the cell floor is the vacuum image of a high atom.
+    # z-periodic MIC pulls it onto the site; slab PBC leaves it behind the plane.
+    kept = _compute_dissociative_site_pairs(
+        slab,
+        config,
+        existing_adsorbate_positions=np.array([[2.0, 2.0, 0.4]]),
+        pre_resolved_sites=stacked[:2],
+    )
+    assert kept
+
+
 def test_hollow_site_pairs_include_pbc_adjacent_on_small_cell():
     """Small PBC cells must retain MIC-adjacent pairs missed by Cartesian KDTree."""
     from ase.geometry import find_mic

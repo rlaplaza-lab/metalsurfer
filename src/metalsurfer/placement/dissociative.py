@@ -314,8 +314,8 @@ def _compute_dissociative_site_pairs(
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
-    # Structure PBC mask: MIC when any axis is periodic, open distances otherwise.
-    pbc = [bool(x) for x in np.asarray(slab.get_pbc(), dtype=bool).tolist()]
+    # Calculator copies store [T, T, T]; slab geometry stays open along z.
+    pbc = material_aware_pbc(config.material_type)
     slab_normal = _slab_normal(cell_arr)
 
     if pre_resolved_sites is not None:

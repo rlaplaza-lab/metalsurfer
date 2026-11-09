@@ -532,7 +532,7 @@ class SymmetryAnalyzer:
         ref = reference_analyzer or SymmetryAnalyzer(
             reference_atoms,
             self.symmetry_tolerance,
-            mode="auto",
+            mode=self._mode,
             angle_tolerance=self._angle_tolerance,
         )
         ds_cur = self._ensure_dataset()

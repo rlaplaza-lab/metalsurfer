@@ -601,19 +601,17 @@ def test_delaunay_bridge_fallback_uses_top_layer_not_bulk():
         vertex_2d=vertex_2d,
         normals=np.array([[0.0, 0.0, 1.0]], dtype=float),
         pbc=np.array([True, True, False]),
+        cell=np.diag([30.0, 30.0, 30.0]),
         class_dists=None,
         class_idx=None,
         delaunay=delaunay,
         char_len=1e-6,  # tiny so any off-bridge vertex exceeds bridge_cut
         cand_tree=cand_tree,
     )
-    local_tree = KDTree(positions)
-
     result = _classify_delaunay_vertices_batch(
         ctx,
         vertices,
         positions,
-        local_tree,
         pore_threshold=2.5,
     )
     site_type, site_indices = result[0]
@@ -756,3 +754,99 @@ def test_outward_normal_flips_inward_and_drops_buried():
         )
         is None
     )
+
+
+def test_delaunay_hollow_fallback_uses_mic_across_the_cell_face():
+    """A boundary hollow lists the image-coordinated atoms, not the in-cell decoys."""
+    from metalsurfer.placement.site_classify import (
+        _ClassificationContext,
+        _classify_delaunay_vertices_batch,
+        _DelaunayClassifyInputs,
+    )
+
+    # Vertex just inside +a. Atoms 0–2 sit just inside a=0 (short MIC).
+    # Atoms 3–5 are closer in the primary cell and farther under MIC.
+    positions = np.array(
+        [
+            [0.20, 5.0, 5.0],
+            [0.30, 5.4, 5.0],
+            [0.30, 4.6, 5.0],
+            [8.0, 5.0, 5.0],
+            [8.4, 5.4, 5.0],
+            [8.4, 4.6, 5.0],
+        ],
+        dtype=float,
+    )
+    cell = np.diag([10.0, 10.0, 10.0])
+    vertex = np.array([[9.7, 5.0, 5.0]], dtype=float)
+    cart_nn = set(KDTree(positions).query(vertex, k=3)[1].ravel().tolist())
+    assert cart_nn == {3, 4, 5}
+    cand_xy = np.array([[0.0, 0.0]], dtype=float)
+    delaunay = _DelaunayClassifyInputs(
+        top_positions_2d=positions[:, :2],
+        top_atom_indices=np.arange(len(positions), dtype=int),
+        class_index=(cand_xy, ["bridge"], [(0, 1)]),
+    )
+    ctx = _ClassificationContext(
+        vertex_2d=np.array([[9.7, 5.0]], dtype=float),
+        normals=np.array([[0.0, 0.0, 1.0]], dtype=float),
+        pbc=np.array([True, True, False]),
+        cell=cell,
+        class_dists=None,
+        class_idx=None,
+        delaunay=delaunay,
+        char_len=1e-6,
+        cand_tree=KDTree(cand_xy),
+    )
+    site_type, site_indices = _classify_delaunay_vertices_batch(
+        ctx,
+        vertex,
+        positions,
+        pore_threshold=2.5,
+    )[0]
+    assert site_type == "hollow"
+    assert set(site_indices) == {0, 1, 2}
+
+
+def test_empty_delaunay_index_classifies_with_mic_neighbors():
+    """An empty Delaunay index still picks the minimum-image neighbour."""
+    from metalsurfer.placement.site_classify import (
+        _ClassificationContext,
+        _classify_delaunay_vertices_batch,
+        _DelaunayClassifyInputs,
+    )
+
+    positions = np.array(
+        [
+            [0.20, 5.0, 5.0],
+            [5.0, 5.0, 5.0],
+        ],
+        dtype=float,
+    )
+    vertex = np.array([[9.7, 5.0, 5.0]], dtype=float)
+    cart_nn = int(np.asarray(KDTree(positions).query(vertex, k=1)[1]).reshape(-1)[0])
+    assert cart_nn == 1
+    empty_xy = np.empty((0, 2), dtype=float)
+    delaunay = _DelaunayClassifyInputs(
+        top_positions_2d=positions[:, :2],
+        top_atom_indices=np.arange(2, dtype=int),
+        class_index=(empty_xy, [], []),
+    )
+    ctx = _ClassificationContext(
+        vertex_2d=np.empty((1, 2), dtype=float),
+        normals=np.array([[0.0, 0.0, 1.0]], dtype=float),
+        pbc=np.array([True, True, False]),
+        cell=np.diag([10.0, 10.0, 10.0]),
+        class_dists=None,
+        class_idx=None,
+        delaunay=delaunay,
+        char_len=None,
+        cand_tree=None,
+    )
+    site_indices = _classify_delaunay_vertices_batch(
+        ctx,
+        vertex,
+        positions,
+        pore_threshold=5.0,
+    )[0][1]
+    assert site_indices[0] == 0

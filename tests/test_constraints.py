@@ -159,6 +159,34 @@ def test_relaxable_surface_nanoparticle_outer_shell():
     assert center in frozen
 
 
+def test_porous_freeze_empty_pore_uses_mic_neighbor(monkeypatch):
+    """An empty-support pore just inside +a selects the atom just inside a=0."""
+    from metalsurfer.placement.site_types import Site
+    from metalsurfer.surface_prep import freeze as freeze_mod
+
+    cell = np.diag([10.0, 10.0, 10.0])
+    framework = Atoms(
+        "C2",
+        positions=[[0.2, 5.0, 5.0], [5.0, 5.0, 5.0]],
+        cell=cell,
+        pbc=[True, True, True],
+    )
+    pore = Site(
+        xyz=np.array([9.7, 5.0, 5.0]),
+        normal=np.array([1.0, 0.0, 0.0]),
+        site_type="pore",
+        slab_indices=(),
+        material_type="porous",
+        site_source="test",
+        env_fingerprint=((), (), 0),
+    )
+    monkeypatch.setattr(freeze_mod, "get_unified_sites", lambda *_a, **_k: [pore])
+    free = identify_relaxable_surface_indices(
+        framework, material_type="porous", tolerance=0.5
+    )
+    assert free == [0]
+
+
 def test_relaxable_surface_porous_pore_boundary():
     porous = make_porous_framework()
     free = identify_relaxable_surface_indices(

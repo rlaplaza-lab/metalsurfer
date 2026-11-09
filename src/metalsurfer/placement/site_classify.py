@@ -173,11 +173,45 @@ class _ClassificationContext:
     vertex_2d: np.ndarray
     normals: np.ndarray
     pbc: np.ndarray
+    cell: np.ndarray
     class_dists: np.ndarray | None  # Voronoi path
     class_idx: np.ndarray | None  # Voronoi path
     delaunay: _DelaunayClassifyInputs | None
     char_len: float | None
     cand_tree: KDTree | None
+
+
+def _knn_under_pbc(
+    query: np.ndarray,
+    positions: np.ndarray,
+    *,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    k: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(dists, origin_idx)`` shaped ``(n_query, k_used)``, MIC when *pbc* is on."""
+    pts = np.asarray(positions, dtype=float)
+    qry = np.asarray(query, dtype=float).reshape(-1, 3)
+    n_query = len(qry)
+    k_use = min(int(k), len(pts))
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    search = pts
+    if np.any(pbc_arr) and cell_has_volume(cell):
+        d0, _ = KDTree(pts).query(qry, k=k_use)
+        d0_arr = np.asarray(d0, dtype=float)
+        if d0_arr.ndim == 1:
+            d0_arr = d0_arr.reshape(n_query, -1)
+        margin = float(np.max(d0_arr[:, -1])) + _KD_RADIUS_SEARCH_PADDING
+        search = _build_periodic_images(pts, cell, pbc_arr, margin=margin)
+    dists, idx = KDTree(search).query(qry, k=k_use)
+    dist_arr = np.asarray(dists, dtype=float)
+    idx_arr = np.asarray(idx, dtype=int)
+    if dist_arr.ndim == 1:
+        dist_arr = dist_arr.reshape(n_query, -1)
+        idx_arr = idx_arr.reshape(n_query, -1)
+    if len(search) != len(pts):
+        idx_arr = idx_arr % len(pts)
+    return dist_arr, idx_arr
 
 
 def _build_classification_context(
@@ -197,6 +231,7 @@ def _build_classification_context(
             vertex_2d=np.empty((0, 2)),
             normals=np.empty((0, 3)),
             pbc=pbc_arr,
+            cell=np.asarray(cell, dtype=float),
             class_dists=None,
             class_idx=None,
             delaunay=None,
@@ -284,6 +319,7 @@ def _build_classification_context(
         vertex_2d=vertex_2d,
         normals=normals,
         pbc=pbc_arr,
+        cell=np.asarray(cell, dtype=float),
         class_dists=class_dists,
         class_idx=class_idx,
         delaunay=delaunay,
@@ -296,7 +332,6 @@ def _classify_delaunay_vertices_batch(
     ctx: _ClassificationContext,
     vertices: np.ndarray,
     positions: np.ndarray,
-    local_tree: KDTree,
     *,
     pore_threshold: float,
 ) -> list[tuple[str, tuple[int, ...]]]:
@@ -313,12 +348,13 @@ def _classify_delaunay_vertices_batch(
         # Empty Delaunay candidate index: classify by neighbor distance ratios
         # instead of inventing hollow labels with a shared dummy slab_indices.
         k = min(_SITE_CLASSIFICATION_NEIGHBOURS, len(positions))
-        dists_raw, idx_raw = local_tree.query(vertices, k=k)
-        class_dists = np.asarray(dists_raw, dtype=float)
-        class_idx = np.asarray(idx_raw, dtype=int)
-        if class_dists.ndim == 1:
-            class_dists = class_dists.reshape(-1, 1)
-            class_idx = class_idx.reshape(-1, 1)
+        class_dists, class_idx = _knn_under_pbc(
+            vertices,
+            positions,
+            cell=ctx.cell,
+            pbc=ctx.pbc,
+            k=k,
+        )
         return [
             _classify_voronoi_site_from_neighbors(
                 class_dists[i],
@@ -353,29 +389,21 @@ def _classify_delaunay_vertices_batch(
             fallback_i.append(i)
 
     if fallback_i:
-        # Reclassify overgrown bridge sites as hollow using the *top-layer*
-        # atoms, not the full (bulk-inclusive) ``local_tree``.
-        top_idx = np.asarray(delaunay.top_atom_indices)
-        if len(top_idx) > 0:
-            top_tree = KDTree(positions[top_idx])
-            k3 = min(3, len(top_idx))
-            fb_verts = np.asarray(vertices[fallback_i], dtype=float)
-            _, idx3 = top_tree.query(fb_verts, k=k3)
-            idx3 = np.asarray(idx3, dtype=int)
-            # k=1 yields a 1-D index vector; reshape to (n_fb, k).
-            if idx3.ndim == 1:
-                idx3 = idx3.reshape(-1, 1)
-            idx3 = top_idx[idx3]
-        else:
-            k3 = min(3, len(positions))
-            fb_verts = np.asarray(vertices[fallback_i], dtype=float)
-            _, idx3 = local_tree.query(fb_verts, k=k3)
-            idx3 = np.asarray(idx3, dtype=int)
-            if idx3.ndim == 1:
-                idx3 = idx3.reshape(-1, 1)
+        # Overgrown bridges become hollows on the MIC-nearest top-layer atoms.
+        top_idx = np.asarray(delaunay.top_atom_indices, dtype=int)
+        pool = positions[top_idx] if len(top_idx) else positions
+        origin = top_idx if len(top_idx) else np.arange(len(positions))
+        _, local3 = _knn_under_pbc(
+            vertices[fallback_i],
+            pool,
+            cell=ctx.cell,
+            pbc=ctx.pbc,
+            k=min(3, len(pool)),
+        )
+        idx3 = origin[local3]
         for row, vi in enumerate(fallback_i):
             site_types[vi] = "hollow"
-            site_indices[vi] = tuple(int(j) for j in idx3[row, :3])
+            site_indices[vi] = tuple(int(j) for j in idx3[row])
 
     return list(zip(site_types, site_indices, strict=True))
 
@@ -667,7 +695,7 @@ def _classify_vertices(
     if need:
         if ctx.delaunay is not None:
             delaunay_all = _classify_delaunay_vertices_batch(
-                ctx, vertices, positions, local_tree, pore_threshold=pore_threshold
+                ctx, vertices, positions, pore_threshold=pore_threshold
             )
             for i in need:
                 classifications[i] = delaunay_all[i]

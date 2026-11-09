@@ -26,6 +26,7 @@ from ..models import (
     windowed_bo_step_memories,
 )
 from ..optimization import clear_autobatcher_cache
+from ..placement._material import symmetry_mode_for_material
 from ..placement.generators import (
     distribute_placement_budget,
     estimate_conformer_count,
@@ -143,10 +144,15 @@ def _saturation_symmetry_broken_vs_reference(
     reference_atoms: Atoms,
     *,
     symmetry_tolerance: float,
+    material_type: str,
     reference_analyzer: SymmetryAnalyzer | None = None,
 ) -> bool:
     """Check whether symmetry vs *reference_atoms* is broken or analysis fails (treat as C1)."""
-    analyzer = SymmetryAnalyzer(current_atoms, symmetry_tolerance=symmetry_tolerance)
+    analyzer = SymmetryAnalyzer(
+        current_atoms,
+        symmetry_tolerance=symmetry_tolerance,
+        mode=symmetry_mode_for_material(material_type),
+    )
     try:
         broken = analyzer.detect_symmetry_breaking(
             reference_atoms, reference_analyzer=reference_analyzer
@@ -606,6 +612,7 @@ def _saturation_step_preamble(
             substrate_for_symmetry,
             reference_slab_for_symmetry,
             symmetry_tolerance=config.symmetry_tolerance,
+            material_type=config.material_type,
             reference_analyzer=reference_analyzer,
         )
 
@@ -833,6 +840,7 @@ def _run_saturation_steps(
     reference_analyzer = SymmetryAnalyzer(
         reference_slab_for_symmetry,
         symmetry_tolerance=config.symmetry_tolerance,
+        mode=symmetry_mode_for_material(config.material_type),
     )
     step = 0
     n_on_slab = 0
