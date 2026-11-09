@@ -22,7 +22,7 @@ and ``distance``.
 import logging
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import numpy as np
 from ase import Atoms
@@ -851,6 +851,7 @@ def _rewrite_relaxed_composite(
     rewritten: list[ScreeningResult] = []
     for k, winner in enumerate(winners):
         atoms_out = opt_atoms.copy()
+        atoms_out.calc = opt_atoms.calc
         apply_material_pbc(atoms_out, config.material_type)
         rewritten.append(
             replace(
@@ -885,12 +886,12 @@ def _validate_relaxed_composite(
     )
     if not ok:
         logger.debug("%scomposite frozen substrate drift: %s", log_prefix, reason)
-        return [], f"frozen substrate drift: {reason}"
+        return [], f"frozen_drift: {reason}"
 
     ok, reason = _validate_geometry(opt_atoms, slab_atoms, config)
     if not ok:
         logger.debug("%scomposite geometry fail: %s", log_prefix, reason)
-        return [], f"geometry fail: {reason}"
+        return [], f"geometry: {reason}"
 
     unit_distances = _per_unit_surface_distances(
         opt_atoms,
@@ -909,7 +910,9 @@ def _validate_relaxed_composite(
                     winners[k].molecule,
                     dist,
                 )
-                return [], (f"unit {k} ({winners[k].molecule}) desorbed ({dist:.2f} A)")
+                return [], (
+                    f"desorbed: unit {k} ({winners[k].molecule}) ({dist:.2f} A)"
+                )
 
     if topology_check is not None:
         ok, reason = topology_check(opt_atoms, [w.molecule for w in winners])
@@ -917,7 +920,7 @@ def _validate_relaxed_composite(
             logger.debug(
                 "%scomposite topology rearrangement guard: %s", log_prefix, reason
             )
-            return [], f"topology rearrangement guard: {reason}"
+            return [], f"topology: {reason}"
 
     return unit_distances, ""
 
@@ -935,7 +938,7 @@ def _finalize_relaxed_composite(
 ) -> tuple[list[ScreeningResult], str]:
     """Validate + rewrite one relaxed composite; ``([], reason)`` on failure."""
     if opt_atoms is None:
-        return [], "optimizer_returned_none"
+        return [], "optimizer_none"
     unit_distances, failure = _validate_relaxed_composite(
         opt_atoms,
         winners,
@@ -956,7 +959,7 @@ def _finalize_relaxed_composite(
         unit_distances=unit_distances,
     )
     if e_ads_per_mol > config.max_adsorption_energy:
-        return [], f"E_ads per molecule too high: {e_ads_per_mol:.4f} eV"
+        return [], f"energy_cap: E_ads per molecule too high: {e_ads_per_mol:.4f} eV"
     logger.info(
         "%scomposite relaxed: %d units, E_ads/mol = %.4f eV (total %.4f eV)",
         log_prefix,
@@ -965,6 +968,14 @@ def _finalize_relaxed_composite(
         e_ads_total,
     )
     return rewritten, ""
+
+
+@dataclass(frozen=True)
+class CompositeBatchResult:
+    """Valid joint configs and one stage-prefixed reject reason per drop."""
+
+    valid: list[list[ScreeningResult]]
+    failures: list[str]
 
 
 def evaluate_composite_batch(
@@ -977,10 +988,10 @@ def evaluate_composite_batch(
     E_slab: float,
     topology_check: Callable[[Atoms, list[str]], tuple[bool, str]] | None = None,
     log_prefix: str = "",
-) -> list[list[ScreeningResult]]:
-    """Relax and validate many joint configs; return one result list per valid config."""
+) -> CompositeBatchResult:
+    """Relax and validate many joint configs."""
     if not config_groups:
-        return []
+        return CompositeBatchResult(valid=[], failures=[])
     composites = [
         build_composite_candidate(slab_atoms, [w.atoms[w.slab_size :] for w in group])
         for group in config_groups
@@ -994,8 +1005,9 @@ def evaluate_composite_batch(
         saturation_reuse=True,
     )
     valid: list[list[ScreeningResult]] = []
+    failures: list[str] = []
     for group, opt_atoms in zip(config_groups, optimized, strict=True):
-        rewritten, _failure = _finalize_relaxed_composite(
+        rewritten, failure = _finalize_relaxed_composite(
             group,
             opt_atoms,
             slab_atoms=slab_atoms,
@@ -1007,4 +1019,6 @@ def evaluate_composite_batch(
         )
         if rewritten:
             valid.append(rewritten)
-    return valid
+        elif failure:
+            failures.append(failure)
+    return CompositeBatchResult(valid=valid, failures=failures)

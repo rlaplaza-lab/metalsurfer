@@ -205,14 +205,12 @@ class TestPackExactTuplet:
             placement_y_range=(-1.5, 1.5),
             min_adsorbate_separation=1.5,
         )
-        com1_before = np.mean(w1.atoms.get_positions()[w1.slab_size :], axis=0)
+        com1_before = w1.atoms.get_positions()[w1.slab_size :].copy()
         packed = pack_exact_tuplet([w1, w2], slab, config)
         assert packed is not None
         assert packed[0].placement_id == 0
-        com1_after = np.mean(
-            packed[0].atoms.get_positions()[packed[0].slab_size :], axis=0
-        )
-        assert np.linalg.norm(com1_after - com1_before) < 0.41
+        com1_after = packed[0].atoms.get_positions()[packed[0].slab_size :]
+        np.testing.assert_allclose(com1_after, com1_before, atol=1e-6)
 
     def test_single_winner_returned_unchanged(self):
         slab = make_slab()
@@ -285,7 +283,7 @@ def _evaluate_two_clear_winners(
     ]
     if energy is not None:
         _identity_relaxation(monkeypatch, energy=energy)
-    valid = evaluate_composite_batch(
+    batch = evaluate_composite_batch(
         [winners],
         slab_atoms=slab,
         base_slab=slab.copy(),
@@ -294,13 +292,15 @@ def _evaluate_two_clear_winners(
         E_slab=E_SLAB,
         **kwargs,
     )
-    return slab, winners, valid
+    return slab, winners, batch
 
 
 class TestEvaluateCompositeBatch:
     def test_success_shares_composite_and_full_tuplet_energies(self, monkeypatch):
         # E(tuplet) = -230; sum(E_mol) = -20 -> E_ads total = -10, per mol = -5.
-        _, winners, valid = _evaluate_two_clear_winners(monkeypatch, energy=-230.0)
+        slab, winners, batch = _evaluate_two_clear_winners(monkeypatch, energy=-230.0)
+        assert batch.failures == []
+        valid = batch.valid
         assert len(valid) == 1
         rewritten = valid[0]
         assert len(rewritten) == 2
@@ -314,8 +314,8 @@ class TestEvaluateCompositeBatch:
             assert row.energy_adslab - row.energy_slab - row.energy_adsorbate == (
                 pytest.approx(row.energy_adsorption * 2)
             )
-            assert row.slab_size == len(make_slab())
-            assert len(row.atoms) == len(make_slab()) + 2 * len(make_water())
+            assert row.slab_size == len(slab)
+            assert len(row.atoms) == len(slab) + 2 * len(make_water())
             assert list(row.atoms.get_pbc()) == [True, True, False]
 
         # Per-unit identity survives the rewrite.
@@ -336,8 +336,9 @@ class TestEvaluateCompositeBatch:
             "metalsurfer.workflow.composite.optimize_adsorbate_slab_batched",
             lambda *_a, **_kw: [None],
         )
-        _, _, valid = _evaluate_two_clear_winners(monkeypatch, energy=None)
-        assert valid == []
+        _, _, batch = _evaluate_two_clear_winners(monkeypatch, energy=None)
+        assert batch.valid == []
+        assert batch.failures == ["optimizer_none"]
 
     def test_desorbed_unit_rejects_whole_composite(self, monkeypatch):
         slab = make_slab()
@@ -346,7 +347,7 @@ class TestEvaluateCompositeBatch:
             _winner(slab, pid=1, e_ads=-0.8, x_shift=7.0, z_offset=50.0),
         ]
         _identity_relaxation(monkeypatch, energy=-230.0)
-        valid = evaluate_composite_batch(
+        batch = evaluate_composite_batch(
             [winners],
             slab_atoms=slab,
             base_slab=slab.copy(),
@@ -354,7 +355,9 @@ class TestEvaluateCompositeBatch:
             config=AdsorptionConfig(),
             E_slab=E_SLAB,
         )
-        assert valid == []
+        assert batch.valid == []
+        assert batch.failures
+        assert batch.failures[0].startswith("desorbed")
 
     def test_frozen_substrate_drift_rejects_composite(self, monkeypatch):
         n_substrate = len(make_slab())
@@ -377,11 +380,13 @@ class TestEvaluateCompositeBatch:
             "metalsurfer.workflow.composite.optimize_adsorbate_slab_batched",
             _drifting_optimize,
         )
-        _, _, valid = _evaluate_two_clear_winners(monkeypatch, energy=None)
-        assert valid == []
+        _, _, batch = _evaluate_two_clear_winners(monkeypatch, energy=None)
+        assert batch.valid == []
+        assert batch.failures
+        assert batch.failures[0].startswith("frozen_drift")
 
     def test_topology_guard_failure_is_reported(self, monkeypatch):
-        _, _, valid = _evaluate_two_clear_winners(
+        _, _, batch = _evaluate_two_clear_winners(
             monkeypatch,
             energy=-230.0,
             topology_check=lambda _atoms, names: (
@@ -389,15 +394,19 @@ class TestEvaluateCompositeBatch:
                 f"expected {len(names)} units, found 1",
             ),
         )
-        assert valid == []
+        assert batch.valid == []
+        assert batch.failures
+        assert batch.failures[0].startswith("topology")
 
     def test_energy_cap_applies_per_molecule(self, monkeypatch):
         # Per-molecule E_ads = (1000 + 220) / 2 >> default cap of 5 eV.
-        _, _, valid = _evaluate_two_clear_winners(monkeypatch, energy=1000.0)
-        assert valid == []
+        _, _, batch = _evaluate_two_clear_winners(monkeypatch, energy=1000.0)
+        assert batch.valid == []
+        assert batch.failures
+        assert batch.failures[0].startswith("energy_cap")
 
     def test_empty_groups_short_circuits(self, monkeypatch):
-        valid = evaluate_composite_batch(
+        batch = evaluate_composite_batch(
             [],
             slab_atoms=make_slab(),
             base_slab=make_slab(),
@@ -405,7 +414,8 @@ class TestEvaluateCompositeBatch:
             config=AdsorptionConfig(),
             E_slab=E_SLAB,
         )
-        assert valid == []
+        assert batch.valid == []
+        assert batch.failures == []
 
     def test_desorption_ignores_prior_adsorbates_in_coverage_prefix(self, monkeypatch):
         """A unit far from metal but near a prior organic must still fail desorption."""
@@ -459,7 +469,7 @@ class TestEvaluateCompositeBatch:
             "metalsurfer.workflow.composite.optimize_adsorbate_slab_batched",
             _fake_optimize,
         )
-        valid = evaluate_composite_batch(
+        batch = evaluate_composite_batch(
             [[winner]],
             slab_atoms=coverage,
             base_slab=bare,
@@ -467,4 +477,6 @@ class TestEvaluateCompositeBatch:
             config=AdsorptionConfig(binding_distance_threshold=4.0),
             E_slab=E_SLAB,
         )
-        assert valid == []
+        assert batch.valid == []
+        assert batch.failures
+        assert batch.failures[0].startswith("desorbed")

@@ -426,6 +426,20 @@ def test_full_catalog_draws_the_open_shell_before_a_neighbor():
     assert _sites({index: positions[index] for index in hops}) == [hops[0], hops[1]]
 
 
+def _h2_contact_layout(slab: Atoms, config: AdsorptionConfig):
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    probe = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
+    other = Atoms("H", positions=[[1.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
+    r_sum = 1.0 / min_interadsorbate_covalent_ratio(
+        probe, other, material_type="slab", cell=cell
+    )
+    centered = make_h2().get_positions()
+    half_extent = float(np.max(centered[:, 0] - centered[:, 0].mean()))
+    inner, outer = lateral_contact_shell(config.connectivity_multiplier)
+    gap = _h2_com_gap((inner + outer) / 2.0, r_sum=r_sum, half_extent=half_extent)
+    return cell, half_extent, gap
+
+
 def _h2_com_gap(target_ratio: float, *, r_sum: float, half_extent: float) -> float:
     """COM separation whose facing H–H gap has intermolecular ratio *target_ratio*."""
     return target_ratio * r_sum + 2.0 * half_extent
@@ -614,16 +628,7 @@ def test_bo_assemble_releases_incomplete_companions(monkeypatch):
     """Failed packs must not swallow later anchors from the same batch."""
     slab = make_slab(nx=8)
     config = AdsorptionConfig(saturation_molecules_per_step=2)
-    cell = np.asarray(slab.get_cell(), dtype=float)
-    probe = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
-    other = Atoms("H", positions=[[1.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
-    r_sum = 1.0 / min_interadsorbate_covalent_ratio(
-        probe, other, material_type="slab", cell=cell
-    )
-    centered = make_h2().get_positions()
-    half_extent = float(np.max(centered[:, 0] - centered[:, 0].mean()))
-    inner, outer = lateral_contact_shell(config.connectivity_multiplier)
-    gap = _h2_com_gap((inner + outer) / 2.0, r_sum=r_sum, half_extent=half_extent)
+    cell, half_extent, gap = _h2_contact_layout(slab, config)
     y_shift = float(cell[1, 1]) / 2.0
     stubs = {
         i: make_screening_result(
@@ -696,16 +701,7 @@ def test_bo_assemble_releases_incomplete_companions(monkeypatch):
 def test_bo_assemble_respects_blocked_companions(monkeypatch):
     slab = make_slab(nx=8)
     config = AdsorptionConfig(saturation_molecules_per_step=2)
-    cell = np.asarray(slab.get_cell(), dtype=float)
-    probe = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
-    other = Atoms("H", positions=[[1.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
-    r_sum = 1.0 / min_interadsorbate_covalent_ratio(
-        probe, other, material_type="slab", cell=cell
-    )
-    centered = make_h2().get_positions()
-    half_extent = float(np.max(centered[:, 0] - centered[:, 0].mean()))
-    inner, outer = lateral_contact_shell(config.connectivity_multiplier)
-    gap = _h2_com_gap((inner + outer) / 2.0, r_sum=r_sum, half_extent=half_extent)
+    cell, half_extent, gap = _h2_contact_layout(slab, config)
     y0 = float(cell[1, 1]) / 2.0
     x0 = float(cell[0, 0]) / 2.0
     shifts = (x0, x0 + gap, x0 - gap)

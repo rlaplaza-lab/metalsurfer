@@ -70,7 +70,6 @@ from metalsurfer.workflow.shared import (
 from .conftest import (
     DummyReferenceEnergies,
     assert_paths_exist,
-    gpu_mlip_test,
     make_h2,
     make_placement_descriptor,
     make_screening_result,
@@ -86,6 +85,7 @@ from .factories import (
     make_saturation_run,
     make_saturation_step,
 )
+from .mlip_marks import gpu_mlip_test
 
 
 def _mock_saturation_config(**kwargs) -> AdsorptionConfig:
@@ -406,36 +406,17 @@ def test_load_molecules_without_skip_flags_ignores_summary(workdir):
     assert status == "ok"
 
 
-def test_load_molecules_malformed_saturation_summary_warns(workdir, caplog):
+@pytest.mark.parametrize("break_summary", ["truncated", "directory"])
+def test_load_molecules_broken_saturation_summary_warns(workdir, caplog, break_summary):
     csv_path = workdir / "smiles.csv"
     csv_path.write_text("O,water\n")
     results_dir = workdir / "results_manual"
     results_dir.mkdir(exist_ok=True)
-    (results_dir / "saturation_summary.csv").write_text('a,b\n"unterminated,water\n')
-
-    with caplog.at_level(logging.WARNING, logger="metalsurfer.workflow.shared"):
-        molecules, smiles, status = load_molecules(
-            str(csv_path),
-            skip_existing=False,
-            skip_saturation_file=True,
-            surface_type="manual",
-        )
-
-    assert molecules == ["water"]
-    assert smiles == ["O"]
-    assert status == "ok"
-    assert any(
-        "Could not read existing summary" in record.getMessage()
-        for record in caplog.records
-    )
-
-
-def test_load_molecules_unreadable_saturation_summary_warns(workdir, caplog):
-    csv_path = workdir / "smiles.csv"
-    csv_path.write_text("O,water\n")
-    results_dir = workdir / "results_manual"
-    results_dir.mkdir(exist_ok=True)
-    (results_dir / "saturation_summary.csv").mkdir()
+    summary = results_dir / "saturation_summary.csv"
+    if break_summary == "truncated":
+        summary.write_text('a,b\n"unterminated,water\n')
+    else:
+        summary.mkdir()
 
     with caplog.at_level(logging.WARNING, logger="metalsurfer.workflow.shared"):
         molecules, smiles, status = load_molecules(

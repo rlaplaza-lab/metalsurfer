@@ -9,6 +9,7 @@ import pytest
 from ase import Atoms
 from scipy.spatial.distance import pdist
 
+from metalsurfer._geom_pbc import minimum_image_cartesian_delta
 from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.io_results import (
     save_molecule_results,
@@ -160,7 +161,7 @@ class TestValidateGeometry:
         assert not ok
         assert "too close" in reason
         clash = float(np.min(pdist(combined.get_positions())))
-        assert f"{clash:.3f}" in reason  # reports the actual clash distance
+        assert clash < config.min_interatomic_distance
 
     def test_atoms_too_close_across_periodic_boundary_fails(self):
         """MIC clash across opposite a-faces must fail (Cartesian NN misses it)."""
@@ -185,8 +186,12 @@ class TestValidateGeometry:
         ok, reason = _validate_geometry(atoms, slab[:0], config)
         assert not ok
         assert "too close" in reason
-        # Cartesian NN would see ~a_len and pass; MIC must report ~0.2 Å.
-        assert float(reason.split(":")[1].split()[0]) < 0.5
+        # Cartesian NN would see ~a_len and pass; MIC must sit under the cutoff.
+        delta = atoms.get_positions()[1] - atoms.get_positions()[0]
+        mic = minimum_image_cartesian_delta(
+            delta, cell, np.asarray(atoms.get_pbc(), dtype=bool)
+        )
+        assert float(np.linalg.norm(mic)) < config.min_interatomic_distance
 
     def test_atoms_too_close_across_xy_wrap_fails(self):
         """Two atoms closer than cutoff across an xy wrap on a slab cell fail."""
@@ -208,7 +213,11 @@ class TestValidateGeometry:
         ok, reason = _validate_geometry(atoms, slab[:0], config)
         assert not ok
         assert "too close" in reason
-        assert float(reason.split(":")[1].split()[0]) < 0.5
+        delta = atoms.get_positions()[1] - atoms.get_positions()[0]
+        mic = minimum_image_cartesian_delta(
+            delta, cell, np.asarray(atoms.get_pbc(), dtype=bool)
+        )
+        assert float(np.linalg.norm(mic)) < config.min_interatomic_distance
 
     def test_atoms_just_above_cutoff_passes(self):
         """A pair just above the cutoff (no MIC wrap-clash) is accepted."""
@@ -677,10 +686,12 @@ class TestProcessMolecule:
             ),
         ]
         kept = make_screening_result(distance=2.0)
+        bare = make_slab()
         rejected = make_screening_result(
             placement_id=1,
             energy_adsorption=-0.8,
-            atoms=place_molecule_on_slab(make_slab(), make_water(), x_shift=7.0),
+            atoms=place_molecule_on_slab(bare, make_water(), x_shift=7.0),
+            slab_size=len(bare),
             distance=2.0,
             placement_descriptor=make_placement_descriptor(
                 placement_id=1, tilt_deg=15.0
@@ -817,6 +828,7 @@ def test_bo_batches_reuse_upfront_capacity_for_clamping(monkeypatch, clamp_enabl
                 make_screening_result(
                     placement_id=placement_id,
                     atoms=atoms,
+                    slab_size=0,
                     placement_descriptor=descriptor,
                 )
                 for atoms, placement_id, descriptor in zip(

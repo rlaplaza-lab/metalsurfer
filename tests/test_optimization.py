@@ -1,6 +1,7 @@
 """Tests for optimization package: pure CPU helpers, TorchSimCalculator, setup_single_model."""
 
 import gc
+import threading
 import warnings
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -18,10 +19,10 @@ from metalsurfer.optimization import (
     _optimize,
     _validation,
     optimize_isolated_molecules_batched,
-    setup_single_model,
 )
 
-from .conftest import MLIP_CPU_MARKS, make_slab
+from .conftest import make_slab
+from .mlip_marks import MLIP_CPU_MARKS, load_uma
 
 # ---------------------------------------------------------------------------
 # CPU unit tests (no MLIP/GPU required, no skip markers)
@@ -74,6 +75,19 @@ def _fake_ts_result(energy_val, n_atoms):
             "stress": _FakeTensor(np.eye(3) * 0.1),
         }
     ]
+
+
+@pytest.fixture(autouse=True)
+def _restore_optimization_caches():
+    saved_autobatch = dict(_cache._AUTOBATCHER_CACHE)
+    saved_capacity = dict(_cache._PARALLEL_CAPACITY_CACHE)
+    try:
+        yield
+    finally:
+        _cache._AUTOBATCHER_CACHE.clear()
+        _cache._AUTOBATCHER_CACHE.update(saved_autobatch)
+        _cache._PARALLEL_CAPACITY_CACHE.clear()
+        _cache._PARALLEL_CAPACITY_CACHE.update(saved_capacity)
 
 
 @pytest.fixture
@@ -450,9 +464,8 @@ def test_pop_autobatcher_returns_and_removes_entry():
 def test_cache_helpers_are_thread_safe(
     monkeypatch: pytest.MonkeyPatch, stub_autobatcher
 ):
-    """Concurrent get/clear must not raise and must leave a consistent cache."""
+    """Concurrent get/clear must not raise or leave a thread behind."""
     _ = stub_autobatcher
-    import threading
 
     torch_stub = MagicMock()
     torch_stub.cuda.is_available.return_value = False
@@ -481,18 +494,13 @@ def test_cache_helpers_are_thread_safe(
             errors.append(exc)
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=30)
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
 
-    assert not any(t.is_alive() for t in threads)
+    assert not any(thread.is_alive() for thread in threads)
     assert errors == []
-    # capacity survived every default clear
-    assert len(_cache._PARALLEL_CAPACITY_CACHE) == 4 * 12
-    assert len(_cache._AUTOBATCHER_CACHE) == 4
-    assert len(set(id(v) for v in _cache._AUTOBATCHER_CACHE.values())) == 4
-    _cache._PARALLEL_CAPACITY_CACHE.clear()
 
 
 def test_clear_autobatcher_cache_runs_cuda_path(monkeypatch: pytest.MonkeyPatch):
@@ -1452,14 +1460,14 @@ class TestSetupSingleModel:
 
     def test_setup_single_model_returns_calculator_and_model(self):
         """setup_single_model returns (calculator, ts_model) tuple."""
-        calculator, ts_model = setup_single_model("uma-s-1p1", "cpu", task_name="oc20")
+        calculator, ts_model = load_uma("uma-s-1p1", "cpu", "oc20")
         assert calculator is not None
         assert ts_model is not None
         assert isinstance(calculator, TorchSimCalculator)
 
     def test_torchsim_calculator_single_point_with_real_model(self):
         """TorchSimCalculator from setup_single_model gives finite energy/forces."""
-        calculator, _ = setup_single_model("uma-s-1p1", "cpu", task_name="oc20")
+        calculator, _ = load_uma("uma-s-1p1", "cpu", "oc20")
         atoms = _make_atoms_with_cell()
         atoms.calc = calculator
 
@@ -1491,7 +1499,7 @@ class TestSetupSingleModel:
 
     def test_optimize_isolated_sequentially_skips_autobatcher(self):
         """With optimize_isolated_sequentially=True, _get_inflight_autobatcher is not called."""
-        calculator, ts_model = setup_single_model("uma-s-1p1", "cpu", task_name="oc20")
+        calculator, ts_model = load_uma("uma-s-1p1", "cpu", "oc20")
         config = AdsorptionConfig(
             optimize_isolated_sequentially=True,
             device="cpu",

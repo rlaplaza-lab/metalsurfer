@@ -8,8 +8,8 @@ from dataclasses import replace
 import numpy as np
 from ase import Atoms
 from ase.build import fcc111
-from ase.geometry import find_mic
 
+from metalsurfer._geom_pbc import minimum_image_cartesian_delta
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.conformers import create_conformers_from_smiles
 from metalsurfer.filters import adsorbate_connected_components
@@ -96,9 +96,11 @@ def _min_distance(
     pos_a: np.ndarray, pos_b: np.ndarray, cell: np.ndarray, pbc: list[bool]
 ) -> float:
     best = float("inf")
+    pos_b = np.asarray(pos_b, dtype=float)
+    flags = np.asarray(pbc, dtype=bool)
     for point in np.asarray(pos_a, dtype=float):
-        _vecs, dist = find_mic(np.asarray(pos_b, dtype=float) - point, cell, pbc=pbc)
-        best = min(best, float(np.min(dist)))
+        mic = minimum_image_cartesian_delta(pos_b - point, cell, flags)
+        best = min(best, float(np.min(np.linalg.norm(mic, axis=-1))))
     return best
 
 

@@ -23,7 +23,11 @@ import pytest
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.exceptions import DependencyMissingError
 from metalsurfer.surface_prep import create_slab_from_bulk
-from tests.optional_deps import has_torch
+from tests.mlip_marks import torch_is_installed
+
+# ``-m quick`` still imports this module. torch_is_installed skips the
+# FairChem/CUDA probe unless this session can run these tests.
+has_torch = torch_is_installed()
 
 pytestmark = pytest.mark.dependency_behavior
 

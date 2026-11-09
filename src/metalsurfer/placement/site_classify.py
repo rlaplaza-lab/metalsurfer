@@ -189,7 +189,21 @@ def _build_classification_context(
     cell: np.ndarray,
     pbc: np.ndarray,
     delaunay: _DelaunayClassifyInputs | None,
+    skip_neighbor_index: bool = False,
 ) -> _ClassificationContext:
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    if skip_neighbor_index:
+        return _ClassificationContext(
+            vertex_2d=np.empty((0, 2)),
+            normals=np.empty((0, 3)),
+            pbc=pbc_arr,
+            class_dists=None,
+            class_idx=None,
+            delaunay=None,
+            char_len=None,
+            cand_tree=None,
+        )
+
     n_verts = len(vertices)
     vertex_2d = _project_to_slab_plane(vertices, cell) if n_verts else np.empty((0, 2))
 
@@ -197,7 +211,6 @@ def _build_classification_context(
     k_norm = min(_NORMAL_K_NEIGHBOURS, len(positions))
     k_max = max(k_norm, k_class)
 
-    pbc_arr = np.asarray(pbc, dtype=bool)
     use_periodic = n_verts > 0 and bool(np.any(pbc_arr)) and cell_has_volume(cell)
     # Slab+Delaunay ignores images for normals/classification; skip the build.
     need_periodic_images = use_periodic and not (
@@ -377,6 +390,34 @@ _TOPOLOGY_SOURCE_TO_TYPE = {
 _SUPPORT_COUNT_TYPED_SOURCES = frozenset({"adaptive_grid", "rolling_probe"})
 
 
+def _candidates_fully_pretyped(
+    n_vertices: int,
+    source_hints: list[str] | None,
+    atom_indices: list[tuple[int, ...]] | None,
+    normals: np.ndarray | None,
+) -> bool:
+    """Return whether every vertex already has a typed hint, support, and normal."""
+    if (
+        n_vertices <= 0
+        or source_hints is None
+        or atom_indices is None
+        or normals is None
+    ):
+        return False
+    if len(source_hints) != n_vertices or len(atom_indices) != n_vertices:
+        return False
+    normal_arr = np.asarray(normals, dtype=float)
+    if normal_arr.shape != (n_vertices, 3):
+        return False
+    for hint, atoms in zip(source_hints, atom_indices, strict=True):
+        if not atoms:
+            return False
+        if hint in _TOPOLOGY_SOURCE_TO_TYPE or hint in _SUPPORT_COUNT_TYPED_SOURCES:
+            continue
+        return False
+    return True
+
+
 def site_env_fingerprint(
     support_indices: Sequence[int],
     symbols: Sequence[str],
@@ -474,13 +515,70 @@ def _site_type_from_support_count(n_support: int) -> str:
     return "hollow"
 
 
-def _nearest_framework_clearance(
-    point: np.ndarray,
+def _outward_normals_batch(
+    xyz: np.ndarray,
+    normals: np.ndarray,
     framework_tree: KDTree,
-) -> float:
-    """Distance from *point* to the nearest framework atom in *framework_tree*."""
-    d, _ = framework_tree.query(np.asarray(point, dtype=float).reshape(1, 3), k=1)
-    return float(np.atleast_1d(d)[0])
+    *,
+    probe_radius: float | None,
+    centroid: np.ndarray,
+) -> np.ndarray:
+    """Return outward unit normals. Non-finite rows are buried or degenerate."""
+    bases = np.asarray(xyz, dtype=float).reshape(-1, 3)
+    n = len(bases)
+    out = np.full((n, 3), np.nan, dtype=float)
+    if n == 0:
+        return out
+    raw = np.asarray(normals, dtype=float).reshape(n, 3)
+    nrm = np.linalg.norm(raw, axis=1)
+    valid = nrm > _SURFACE_NORMAL_FALLBACK_NORM_EPS
+    if not np.any(valid):
+        return out
+    n_hat = np.zeros_like(raw)
+    n_hat[valid] = raw[valid] / nrm[valid, None]
+    step = _OUTWARD_NORMAL_STEP_FLOOR_ANGSTROM
+    if probe_radius is not None and float(probe_radius) > 0.0:
+        step = max(
+            _OUTWARD_NORMAL_STEP_PROBE_SCALE * float(probe_radius),
+            _OUTWARD_NORMAL_STEP_FLOOR_ANGSTROM,
+        )
+    idx = np.flatnonzero(valid)
+    hats = n_hat[idx]
+    samples = np.empty((len(idx) * 3, 3), dtype=float)
+    samples[0::3] = bases[idx]
+    samples[1::3] = bases[idx] + step * hats
+    samples[2::3] = bases[idx] - step * hats
+    dists, _ = framework_tree.query(samples, k=1)
+    dists = np.asarray(dists, dtype=float).reshape(-1, 3)
+    c0 = dists[:, 0]
+    c_fwd = dists[:, 1]
+    c_back = dists[:, 2]
+    eps = _DISTANCE_ZERO_EPS
+    fwd = (c_fwd > c_back + eps) & (c_fwd > c0 + eps)
+    back = (~fwd) & (c_back > c_fwd + eps) & (c_back > c0 + eps)
+    wall = ~(fwd | back) & ((c_fwd > c0 + eps) | (c_back > c0 + eps))
+    chosen = np.full((len(idx), 3), np.nan, dtype=float)
+    chosen[fwd] = hats[fwd]
+    chosen[back] = -hats[back]
+    if np.any(wall):
+        # Planar wall anchors: ±step clear equally. Orient away from the
+        # framework centroid (surface sites point outward; buried stay dropped).
+        away = bases[idx[wall]] - np.asarray(centroid, dtype=float).reshape(3)
+        away_nrm = np.linalg.norm(away, axis=1)
+        dots = np.zeros(away_nrm.shape, dtype=float)
+        nonzero = away_nrm > eps
+        if np.any(nonzero):
+            dots[nonzero] = np.einsum(
+                "ij,ij->i",
+                hats[wall][nonzero],
+                away[nonzero] / away_nrm[nonzero, None],
+            )
+        keep = (away_nrm <= eps) | (dots >= 0.0)
+        wall_hat = hats[wall].copy()
+        wall_hat[~keep] *= -1.0
+        chosen[wall] = wall_hat
+    out[idx] = chosen
+    return out
 
 
 def _outward_normal_or_none(
@@ -498,36 +596,17 @@ def _outward_normal_or_none(
     for wall anchors), use the side whose neighbourhood has atoms behind the
     site (negative mean projection). Drop when neither direction opens space.
     """
-    n = np.asarray(normal, dtype=float).reshape(3)
-    nrm = float(np.linalg.norm(n))
-    if nrm <= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+    centroid = np.mean(np.asarray(positions, dtype=float), axis=0)
+    row = _outward_normals_batch(
+        np.asarray(xyz, dtype=float).reshape(1, 3),
+        np.asarray(normal, dtype=float).reshape(1, 3),
+        framework_tree,
+        probe_radius=probe_radius,
+        centroid=centroid,
+    )[0]
+    if not np.all(np.isfinite(row)):
         return None
-    n_hat = n / nrm
-    step = _OUTWARD_NORMAL_STEP_FLOOR_ANGSTROM
-    if probe_radius is not None and float(probe_radius) > 0.0:
-        step = max(
-            _OUTWARD_NORMAL_STEP_PROBE_SCALE * float(probe_radius),
-            _OUTWARD_NORMAL_STEP_FLOOR_ANGSTROM,
-        )
-    base = np.asarray(xyz, dtype=float).reshape(3)
-    c0 = _nearest_framework_clearance(base, framework_tree)
-    c_fwd = _nearest_framework_clearance(base + step * n_hat, framework_tree)
-    c_back = _nearest_framework_clearance(base - step * n_hat, framework_tree)
-    eps = _DISTANCE_ZERO_EPS
-    if c_fwd > c_back + eps and c_fwd > c0 + eps:
-        return n_hat
-    if c_back > c_fwd + eps and c_back > c0 + eps:
-        return -n_hat
-    # Planar wall anchors: ±step clear equally. Orient away from the
-    # framework centroid (surface sites point outward; buried stay dropped).
-    if c_fwd > c0 + eps or c_back > c0 + eps:
-        com = np.mean(np.asarray(positions, dtype=float), axis=0)
-        away = base - com
-        away_nrm = float(np.linalg.norm(away))
-        if away_nrm <= eps or float(np.dot(n_hat, away / away_nrm)) >= 0.0:
-            return n_hat
-        return -n_hat
-    return None
+    return row
 
 
 def _classify_vertices(
@@ -604,7 +683,10 @@ def _classify_vertices(
                     pore_threshold=pore_threshold,
                 )
 
-    sites: list[Site] = []
+    prepared_xyz: list[np.ndarray] = []
+    prepared_normals: list[np.ndarray] = []
+    prepared_meta: list[tuple[int, str, tuple[int, ...], np.ndarray | None]] = []
+    n_pos = len(positions)
     for i, classified in enumerate(classifications):
         assert classified is not None
         site_type, nearest_idx = classified
@@ -636,19 +718,32 @@ def _classify_vertices(
         support_idx: np.ndarray | None = None
         if site_type != "pore" and support:
             idx = np.asarray(support, dtype=int)
-            n_pos = len(positions)
             support_idx = idx[(idx >= 0) & (idx < n_pos)]
             if support_idx.size > 0:
                 xyz = project_anchor_to_support_plane(
                     xyz, normal, positions[support_idx]
                 )
 
-        outward = _outward_normal_or_none(
-            xyz, normal, local_tree, positions, probe_radius=probe_radius
-        )
-        if outward is None:
+        prepared_xyz.append(xyz)
+        prepared_normals.append(np.asarray(normal, dtype=float).reshape(3))
+        prepared_meta.append((i, site_type, support, support_idx))
+
+    sites: list[Site] = []
+    if not prepared_xyz:
+        return sites
+    centroid = np.mean(np.asarray(positions, dtype=float), axis=0)
+    outward = _outward_normals_batch(
+        np.stack(prepared_xyz),
+        np.stack(prepared_normals),
+        local_tree,
+        probe_radius=probe_radius,
+        centroid=centroid,
+    )
+    for row, (i, site_type, support, support_idx) in enumerate(prepared_meta):
+        normal = outward[row]
+        if not np.all(np.isfinite(normal)):
             continue
-        normal = outward
+        xyz = prepared_xyz[row]
         if support_idx is not None and support_idx.size > 0:
             xyz = project_anchor_to_support_plane(xyz, normal, positions[support_idx])
 
@@ -661,7 +756,7 @@ def _classify_vertices(
         sites.append(
             Site(
                 xyz=xyz,
-                normal=normal,
+                normal=normal.copy(),
                 site_type=site_type,
                 slab_indices=support,
                 material_type=material_type,
@@ -697,6 +792,12 @@ def _build_site_records(
     clearances: np.ndarray | None = None,
     probe_radius: float | None = None,
 ) -> list[Site]:
+    pretyped = _candidates_fully_pretyped(
+        len(vertices),
+        source_hints,
+        atom_indices,
+        normals,
+    )
     ctx = _build_classification_context(
         vertices,
         positions,
@@ -705,6 +806,7 @@ def _build_site_records(
         cell=cell,
         pbc=pbc,
         delaunay=delaunay,
+        skip_neighbor_index=pretyped,
     )
     return _classify_vertices(
         ctx,

@@ -217,17 +217,11 @@ def _clash_free(
     thresholds = (
         framework_radii[atom_idx] + float(skin) - float(_ROLLING_PROBE_CLASH_TOL)
     )
-    ignore = {int(i) for i in (ignore_image_indices or ())}
-    keep = np.ones(len(points), dtype=bool)
-    for row in range(len(points)):
-        for col in range(dists.shape[1]):
-            img = int(idxs[row, col])
-            if img in ignore:
-                continue
-            if float(dists[row, col]) < float(thresholds[row, col]):
-                keep[row] = False
-                break
-    return keep
+    clashing = dists < thresholds
+    if ignore_image_indices:
+        ignore = np.asarray(list(ignore_image_indices), dtype=int)
+        clashing = clashing & ~np.isin(idxs, ignore)
+    return ~np.any(clashing, axis=1)
 
 
 def _atom_contacts(
@@ -375,6 +369,11 @@ def _contacts_to_candidates(
         return []
     n_atoms = len(positions)
     tree_data = np.asarray(tree.data, dtype=float)
+    cell_inv = (
+        np.linalg.inv(np.asarray(cell, dtype=float))
+        if np.any(pbc) and cell_has_volume(cell)
+        else None
+    )
     out: list[CandidateSite] = []
     seen: set[
         tuple[tuple[int, ...], tuple[tuple[int, int, int], ...], tuple[float, ...]]
@@ -390,7 +389,13 @@ def _contacts_to_candidates(
         supp_dists: list[float] = []
         for img in contact.support_images:
             base, shift = _image_shift_for_index(
-                img, n_atoms, positions, tree_data, cell, pbc
+                img,
+                n_atoms,
+                positions,
+                tree_data,
+                cell,
+                pbc,
+                cell_inv=cell_inv,
             )
             bases.append(base)
             shifts.append(shift)

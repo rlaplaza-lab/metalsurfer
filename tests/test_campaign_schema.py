@@ -10,10 +10,19 @@ from metalsurfer.campaigns import run_campaign
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "campaigns"
 
 
-def test_load_smoke_saturation_yaml():
-    doc = load_campaign_yaml(FIXTURES / "smoke_saturation.yaml")
-    assert doc.campaign == "saturation"
-    assert doc.surface_type == "smoke_saturation"
+@pytest.mark.parametrize(
+    ("yaml_name", "campaign"),
+    [
+        ("smoke_adsorption.yaml", "adsorption"),
+        ("smoke_adsorption_bo.yaml", "adsorption_bo"),
+        ("smoke_saturation.yaml", "saturation"),
+        ("smoke_saturation_bo.yaml", "saturation_bo"),
+    ],
+)
+def test_load_smoke_campaign_yaml(yaml_name, campaign):
+    doc = load_campaign_yaml(FIXTURES / yaml_name)
+    assert doc.campaign == campaign
+    assert doc.surface_type == yaml_name.removesuffix(".yaml")
     assert doc.molecules == [("O", "water")]
     assert doc.config.num_placements == 4
     assert doc.config.device == "cpu"

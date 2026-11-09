@@ -11,6 +11,7 @@ from metalsurfer.placement import (
     calculate_min_distance,
     get_unified_sites,
 )
+from metalsurfer.placement.site_coords import top_layer_mask_by_normal
 
 from ..conftest import (
     adsorption_config_factory,
@@ -21,19 +22,25 @@ from ..conftest import (
     water_conformers,
 )
 from ._helpers import (
-    _GOLDEN_SLAB_SITE_TYPE_MULTISET,
-    _GOLDEN_SLAB_UNIFIED_SITE_COUNT,
     _assert_replay_matches,
     _first_successful_placement,
 )
 
 
-def test_unified_sites_slab_golden_count_and_type_multiset():
-    """Stable site catalog for make_slab() under default classification."""
+def test_unified_sites_slab_tracks_the_top_layer():
+    """Atop matches the top layer, bridges are 3 per top atom, hollows are 3-fold."""
     slab = make_slab()
+    positions = np.asarray(slab.get_positions(), dtype=float)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    n_top = int(np.count_nonzero(top_layer_mask_by_normal(positions, cell, 0.5)))
     sites = get_unified_sites(slab, material_type="slab")
-    assert len(sites) == _GOLDEN_SLAB_UNIFIED_SITE_COUNT
-    assert dict(Counter(s.site_type for s in sites)) == _GOLDEN_SLAB_SITE_TYPE_MULTISET
+    counts = Counter(s.site_type for s in sites)
+    assert counts["atop"] == n_top
+    assert counts["bridge"] == 3 * n_top
+    assert counts["hollow"] > 2 * n_top
+    for site in sites:
+        expected = {"atop": 1, "bridge": 2, "hollow": 3}[site.site_type]
+        assert len(site.slab_indices) == expected, site.site_type
 
 
 @pytest.mark.parametrize("mode", ["spec", "pose"])

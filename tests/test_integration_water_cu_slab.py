@@ -8,12 +8,13 @@ from metalsurfer.campaigns import run_adsorption
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.placement.geometry import detect_vdw_overlaps
 from metalsurfer.surface_prep import apply_surface_constraints, prepare_substrate
+from metalsurfer.workflow import calculate_reference_energies, process_molecule
 from tests.conftest import (
     E_ADS_MLIP_TOL,
     GPU_AUTOBATCH,
-    GPU_MLIP_MARKS,
     assert_water_oh_hh_geometry,
 )
+from tests.mlip_marks import GPU_MLIP_MARKS, load_uma
 
 pytestmark = GPU_MLIP_MARKS
 
@@ -144,17 +145,28 @@ def test_water_cu_run_twice_reproducible(workdir):
         results_dir="results_water_cu_repro",
     )
 
+    calculator, ts_model = load_uma(config.model_name, config.device, config.task_name)
+    reference = calculate_reference_energies(
+        slab,
+        calculator,
+        ["water"],
+        ["O"],
+        ts_model=ts_model,
+        config=config,
+    )
+
     def _run():
-        campaign = run_adsorption(
-            slab=slab,
-            molecules=[("O", "water")],
+        outcome = process_molecule(
+            "O",
+            "water",
+            slab,
+            calculator,
+            reference,
+            ts_model=ts_model,
             config=config,
             surface_type="water_cu_repro",
-            skip_existing=False,
-            save_results=False,
-            write_settings=False,
         )
-        return campaign.run_results[0].results
+        return outcome.results
 
     first = _run()
     second = _run()

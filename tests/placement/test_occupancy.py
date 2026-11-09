@@ -35,10 +35,12 @@ from metalsurfer.placement.pose import (
     _validate_posed_adsorbate,
 )
 from metalsurfer.placement.site_context import (
+    SiteContext,
     _get_unique_sites_for_specs,
     resolve_site_context_for_sampling,
 )
 from metalsurfer.placement.site_types import Site
+from metalsurfer.workflow import placement_fill as fill_mod
 from metalsurfer.workflow.composite import pack_exact_tuplet
 from metalsurfer.workflow.shared import PlacementFailureEvent
 
@@ -155,6 +157,73 @@ def _materialize_all_succeed() -> Callable[..., tuple]:
         return combined, ids, descs, []
 
     return fake_materialize
+
+
+def _test_site(
+    x: float,
+    indices: tuple[int, ...],
+    fingerprint: tuple,
+    *,
+    site_type: str = "atop",
+) -> Site:
+    return Site(
+        xyz=np.array([x, 0.0, 5.0]),
+        normal=np.array([0.0, 0.0, 1.0]),
+        site_type=site_type,
+        slab_indices=indices,
+        material_type="slab",
+        site_source="test",
+        env_fingerprint=fingerprint,
+    )
+
+
+def _run_two_round_fill(
+    monkeypatch: pytest.MonkeyPatch,
+    ctx: SiteContext,
+    rounds: list[list[PlacementSpec]],
+    *,
+    reason: str,
+    n_conformers: int = 1,
+):
+    seen: list[list[PlacementSpec]] = []
+    round_id = {"n": 0}
+
+    def make_specs(n_desired, filter_spec):
+        round_id["n"] += 1
+        filtered = _filter_specs(list(rounds[round_id["n"] - 1]), filter_spec)
+        seen.append(filtered)
+        return filtered[:n_desired]
+
+    def fake_materialize(**kwargs):
+        specs = kwargs["specs"]
+        if round_id["n"] == 1:
+            return _materialize_all_fail(reason)(specs=specs)
+        return _materialize_all_succeed()(specs=specs)
+
+    _patch_fill(
+        monkeypatch,
+        fill_mod,
+        enumerate_fn=_enumerate_from(make_specs),
+        materialize_fn=fake_materialize,
+    )
+    slab = make_slab()
+    result = fill_mod.fill_materialized_placements(
+        conformers=[make_water() for _ in range(n_conformers)],
+        slab_for_sites=slab,
+        config=AdsorptionConfig(
+            material_type="slab",
+            num_placements=1,
+            placement_retry_enabled=True,
+            placement_retry_oversample_max=2.0,
+            seed=0,
+            placement_fill_clamp_to_capacity=False,
+        ),
+        smiles="O",
+        site_context=ctx,
+        slab_atoms=slab,
+        calculator=None,
+    )
+    return result, seen
 
 
 def _materialize_all_fail(reason: str = "too_close") -> Callable[..., tuple]:
@@ -885,207 +954,71 @@ def test_fill_diversity_retry(monkeypatch):
 
 def test_fill_retry_keeps_same_fingerprint_on_too_close(monkeypatch):
     """too_close bans the exact spec, not sibling sites that share a fingerprint."""
-    from metalsurfer.placement.site_context import SiteContext
-    from metalsurfer.placement.site_types import Site
-    from metalsurfer.workflow import placement_fill as fill_mod
-    from metalsurfer.workflow.shared import PlacementFailureEvent
-
     shared_fp = (("Ru",), (0,), 1)
     other_fp = (("Ru", "Ru"), (0, 0), 1)
-    sites = [
-        Site(
-            xyz=np.array([0.0, 0.0, 5.0]),
-            normal=np.array([0.0, 0.0, 1.0]),
-            site_type="atop",
-            slab_indices=(0,),
-            material_type="slab",
-            site_source="test",
-            env_fingerprint=shared_fp,
-        ),
-        Site(
-            xyz=np.array([1.0, 0.0, 5.0]),
-            normal=np.array([0.0, 0.0, 1.0]),
-            site_type="atop",
-            slab_indices=(1,),
-            material_type="slab",
-            site_source="test",
-            env_fingerprint=shared_fp,
-        ),
-        Site(
-            xyz=np.array([2.0, 0.0, 5.0]),
-            normal=np.array([0.0, 0.0, 1.0]),
-            site_type="bridge",
-            slab_indices=(0, 1),
-            material_type="slab",
-            site_source="test",
-            env_fingerprint=other_fp,
-        ),
-    ]
-    ctx = SiteContext(sites=sites, use_sites=True, source="test")
-    seen_site_indices: list[list[int]] = []
-    round_id = {"n": 0}
-
-    def make_specs(n_desired, filter_spec):
-        round_id["n"] += 1
-        if round_id["n"] == 1:
-            specs = [_round_atop_placement_spec(0, site_index=0)]
-        else:
-            specs = [
+    ctx = SiteContext(
+        sites=[
+            _test_site(0.0, (0,), shared_fp),
+            _test_site(1.0, (1,), shared_fp),
+            _test_site(2.0, (0, 1), other_fp, site_type="bridge"),
+        ],
+        use_sites=True,
+        source="test",
+    )
+    result, seen = _run_two_round_fill(
+        monkeypatch,
+        ctx,
+        [
+            [_round_atop_placement_spec(0, site_index=0)],
+            [
                 _round_atop_placement_spec(0, site_index=1),
                 _round_atop_placement_spec(1, site_index=2),
-            ]
-        filtered = _filter_specs(specs, filter_spec)
-        seen_site_indices.append([s.site_index for s in filtered])
-        return filtered[:n_desired]
-
-    def fake_materialize(**kwargs):
-        specs = kwargs["specs"]
-        if round_id["n"] == 1:
-            return (
-                [],
-                [],
-                [],
-                [
-                    PlacementFailureEvent(
-                        placement_id=spec.placement_index,
-                        stage="generation",
-                        reason="too_close",
-                        descriptor=None,
-                    )
-                    for spec in specs
-                ],
-            )
-        return _materialize_all_succeed()(specs=specs)
-
-    _patch_fill(
-        monkeypatch,
-        fill_mod,
-        enumerate_fn=_enumerate_from(make_specs),
-        materialize_fn=fake_materialize,
-    )
-    slab = make_slab()
-    result = fill_mod.fill_materialized_placements(
-        conformers=[make_water()],
-        slab_for_sites=slab,
-        config=AdsorptionConfig(
-            material_type="slab",
-            num_placements=1,
-            placement_retry_enabled=True,
-            placement_retry_oversample_max=2.0,
-            seed=0,
-            placement_fill_clamp_to_capacity=False,
-        ),
-        smiles="O",
-        site_context=ctx,
-        slab_atoms=slab,
-        calculator=None,
+            ],
+        ],
+        reason="too_close",
     )
     assert len(result.combined) == 1
     assert result.n_attempts == 2
-    assert seen_site_indices[0] == [0]
-    # Same fingerprint remains eligible after a pose failure.
-    assert 1 in seen_site_indices[1]
-    assert 2 in seen_site_indices[1]
+    seen_sites = [[s.site_index for s in batch] for batch in seen]
+    assert seen_sites[0] == [0]
+    assert 1 in seen_sites[1]
+    assert 2 in seen_sites[1]
 
 
 def test_fill_retry_bans_pose_family_after_too_close(monkeypatch):
     """too_close bans same-height z fractions; a higher fraction may redraw."""
-    from metalsurfer.placement.site_context import SiteContext
-    from metalsurfer.placement.site_types import Site
-    from metalsurfer.workflow import placement_fill as fill_mod
-    from metalsurfer.workflow.shared import PlacementFailureEvent
-
-    sites = [
-        Site(
-            xyz=np.array([0.0, 0.0, 5.0]),
-            normal=np.array([0.0, 0.0, 1.0]),
-            site_type="atop",
-            slab_indices=(0,),
-            material_type="slab",
-            site_source="test",
-            env_fingerprint=(("Ru",), (0,), 1),
-        ),
-        Site(
-            xyz=np.array([2.0, 0.0, 5.0]),
-            normal=np.array([0.0, 0.0, 1.0]),
-            site_type="atop",
-            slab_indices=(1,),
-            material_type="slab",
-            site_source="test",
-            env_fingerprint=(("Ru",), (0,), 1),
-        ),
-    ]
-    ctx = SiteContext(sites=sites, use_sites=True, source="test")
-    seen_specs: list[list[tuple[int, int, float]]] = []
-    round_id = {"n": 0}
-
-    def make_specs(n_desired, filter_spec):
-        round_id["n"] += 1
-        if round_id["n"] == 1:
-            specs = [_round_atop_placement_spec(0, site_index=0, z_fraction=0.3)]
-        else:
-            specs = [
+    ctx = SiteContext(
+        sites=[
+            _test_site(0.0, (0,), (("Ru",), (0,), 1)),
+            _test_site(2.0, (1,), (("Ru",), (0,), 1)),
+        ],
+        use_sites=True,
+        source="test",
+    )
+    result, seen = _run_two_round_fill(
+        monkeypatch,
+        ctx,
+        [
+            [_round_atop_placement_spec(0, site_index=0, z_fraction=0.3)],
+            [
                 _round_atop_placement_spec(0, site_index=0, z_fraction=0.1),
                 _round_atop_placement_spec(0, site_index=0, z_fraction=0.3),
                 _round_atop_placement_spec(0, site_index=0, z_fraction=0.7),
                 _round_atop_placement_spec(0, site_index=1, z_fraction=0.5),
-            ]
-        filtered = _filter_specs(specs, filter_spec)
-        seen_specs.append(
-            [
-                (int(s.conformer_index), int(s.site_index), float(s.z_fraction))
-                for s in filtered
-            ]
-        )
-        return filtered[:n_desired]
-
-    def fake_materialize(**kwargs):
-        specs = kwargs["specs"]
-        if round_id["n"] == 1:
-            return (
-                [],
-                [],
-                [],
-                [
-                    PlacementFailureEvent(
-                        placement_id=spec.placement_index,
-                        stage="generation",
-                        reason="too_close",
-                        descriptor=None,
-                    )
-                    for spec in specs
-                ],
-            )
-        return _materialize_all_succeed()(specs=specs)
-
-    _patch_fill(
-        monkeypatch,
-        fill_mod,
-        enumerate_fn=_enumerate_from(make_specs),
-        materialize_fn=fake_materialize,
-    )
-    slab = make_slab()
-    result = fill_mod.fill_materialized_placements(
-        conformers=[make_water()],
-        slab_for_sites=slab,
-        config=AdsorptionConfig(
-            material_type="slab",
-            num_placements=1,
-            placement_retry_enabled=True,
-            placement_retry_oversample_max=2.0,
-            seed=0,
-            placement_fill_clamp_to_capacity=False,
-        ),
-        smiles="O",
-        site_context=ctx,
-        slab_atoms=slab,
-        calculator=None,
+            ],
+        ],
+        reason="too_close",
     )
     assert len(result.combined) == 1
     assert result.n_attempts == 2
+    seen_specs = [
+        [
+            (int(s.conformer_index), int(s.site_index), float(s.z_fraction))
+            for s in batch
+        ]
+        for batch in seen
+    ]
     assert (0, 0, 0.3) in seen_specs[0]
-    # Contact-height siblings (z <= 0.5) of the failed pose are dropped.
-    # A higher fraction and a different site may redraw.
     assert (0, 0, 0.1) not in seen_specs[1]
     assert (0, 0, 0.3) not in seen_specs[1]
     assert (0, 0, 0.7) in seen_specs[1]
@@ -1094,91 +1027,34 @@ def test_fill_retry_bans_pose_family_after_too_close(monkeypatch):
 
 def test_fill_retry_bans_azimuth_family_after_insufficient_contact(monkeypatch):
     """insufficient_contact bans one azimuth; a sibling azimuth may redraw."""
-    from metalsurfer.placement.site_context import SiteContext
-    from metalsurfer.placement.site_types import Site
-    from metalsurfer.workflow import placement_fill as fill_mod
-    from metalsurfer.workflow.shared import PlacementFailureEvent
-
-    sites = [
-        Site(
-            xyz=np.array([0.0, 0.0, 5.0]),
-            normal=np.array([0.0, 0.0, 1.0]),
-            site_type="atop",
-            slab_indices=(0,),
-            material_type="slab",
-            site_source="test",
-            env_fingerprint=(("Ru",), (0,), 1),
-        ),
-    ]
-    ctx = SiteContext(sites=sites, use_sites=True, source="test")
-    seen_azimuths: list[list[float]] = []
-    round_id = {"n": 0}
-
-    def make_specs(n_desired, filter_spec):
-        round_id["n"] += 1
-        if round_id["n"] == 1:
-            specs = [
+    ctx = SiteContext(
+        sites=[_test_site(0.0, (0,), (("Ru",), (0,), 1))],
+        use_sites=True,
+        source="test",
+    )
+    result, seen = _run_two_round_fill(
+        monkeypatch,
+        ctx,
+        [
+            [
                 _round_atop_placement_spec(
                     0, site_index=0, azimuth_deg=0.0, z_fraction=0.5
                 )
-            ]
-        else:
-            specs = [
+            ],
+            [
                 _round_atop_placement_spec(
                     0, site_index=0, azimuth_deg=0.0, z_fraction=0.5
                 ),
                 _round_atop_placement_spec(
                     0, site_index=0, azimuth_deg=90.0, z_fraction=0.5
                 ),
-            ]
-        filtered = _filter_specs(specs, filter_spec)
-        seen_azimuths.append([float(s.azimuth_deg) for s in filtered])
-        return filtered[:n_desired]
-
-    def fake_materialize(**kwargs):
-        specs = kwargs["specs"]
-        if round_id["n"] == 1:
-            return (
-                [],
-                [],
-                [],
-                [
-                    PlacementFailureEvent(
-                        placement_id=spec.placement_index,
-                        stage="generation",
-                        reason="insufficient_contact_atoms",
-                        descriptor=None,
-                    )
-                    for spec in specs
-                ],
-            )
-        return _materialize_all_succeed()(specs=specs)
-
-    _patch_fill(
-        monkeypatch,
-        fill_mod,
-        enumerate_fn=_enumerate_from(make_specs),
-        materialize_fn=fake_materialize,
-    )
-    slab = make_slab()
-    result = fill_mod.fill_materialized_placements(
-        conformers=[make_water()],
-        slab_for_sites=slab,
-        config=AdsorptionConfig(
-            material_type="slab",
-            num_placements=1,
-            placement_retry_enabled=True,
-            placement_retry_oversample_max=2.0,
-            seed=0,
-            placement_fill_clamp_to_capacity=False,
-        ),
-        smiles="O",
-        site_context=ctx,
-        slab_atoms=slab,
-        calculator=None,
+            ],
+        ],
+        reason="insufficient_contact_atoms",
     )
     assert len(result.combined) == 1
     assert result.n_attempts == 2
+    seen_azimuths = [[float(s.azimuth_deg) for s in batch] for batch in seen]
     assert seen_azimuths[0] == [0.0]
     assert 0.0 not in seen_azimuths[1]
     assert 90.0 in seen_azimuths[1]
@@ -1186,95 +1062,32 @@ def test_fill_retry_bans_azimuth_family_after_insufficient_contact(monkeypatch):
 
 def test_fill_retry_bans_site_on_adsorbate_overlap(monkeypatch):
     """adsorbate_overlap bans (conformer, site) on retry, not every conformer."""
-    from metalsurfer.placement.site_context import SiteContext
-    from metalsurfer.placement.site_types import Site
-    from metalsurfer.workflow import placement_fill as fill_mod
-    from metalsurfer.workflow.shared import PlacementFailureEvent
-
     shared_fp = (("Ru",), (0,), 1)
-    sites = [
-        Site(
-            xyz=np.array([0.0, 0.0, 5.0]),
-            normal=np.array([0.0, 0.0, 1.0]),
-            site_type="atop",
-            slab_indices=(0,),
-            material_type="slab",
-            site_source="test",
-            env_fingerprint=shared_fp,
-        ),
-        Site(
-            xyz=np.array([1.0, 0.0, 5.0]),
-            normal=np.array([0.0, 0.0, 1.0]),
-            site_type="atop",
-            slab_indices=(1,),
-            material_type="slab",
-            site_source="test",
-            env_fingerprint=shared_fp,
-        ),
-    ]
-    ctx = SiteContext(sites=sites, use_sites=True, source="test")
-    seen_pairs: list[list[tuple[int, int]]] = []
-    round_id = {"n": 0}
-
-    def make_specs(n_desired, filter_spec):
-        round_id["n"] += 1
-        if round_id["n"] == 1:
-            specs = [_round_atop_placement_spec(0, site_index=0)]
-        else:
-            # Same site, different conformer must remain eligible; other site too.
-            specs = [
+    ctx = SiteContext(
+        sites=[
+            _test_site(0.0, (0,), shared_fp),
+            _test_site(1.0, (1,), shared_fp),
+        ],
+        use_sites=True,
+        source="test",
+    )
+    result, seen = _run_two_round_fill(
+        monkeypatch,
+        ctx,
+        [
+            [_round_atop_placement_spec(0, site_index=0)],
+            [
                 _round_atop_placement_spec(0, site_index=0),
                 _round_atop_placement_spec(1, site_index=0),
                 _round_atop_placement_spec(0, site_index=1),
-            ]
-        filtered = _filter_specs(specs, filter_spec)
-        seen_pairs.append([(s.conformer_index, s.site_index) for s in filtered])
-        return filtered[:n_desired]
-
-    def fake_materialize(**kwargs):
-        specs = kwargs["specs"]
-        if round_id["n"] == 1:
-            return (
-                [],
-                [],
-                [],
-                [
-                    PlacementFailureEvent(
-                        placement_id=spec.placement_index,
-                        stage="generation",
-                        reason="adsorbate_overlap",
-                        descriptor=None,
-                    )
-                    for spec in specs
-                ],
-            )
-        return _materialize_all_succeed()(specs=specs)
-
-    _patch_fill(
-        monkeypatch,
-        fill_mod,
-        enumerate_fn=_enumerate_from(make_specs),
-        materialize_fn=fake_materialize,
-    )
-    slab = make_slab()
-    result = fill_mod.fill_materialized_placements(
-        conformers=[make_water(), make_water()],
-        slab_for_sites=slab,
-        config=AdsorptionConfig(
-            material_type="slab",
-            num_placements=1,
-            placement_retry_enabled=True,
-            placement_retry_oversample_max=2.0,
-            seed=0,
-            placement_fill_clamp_to_capacity=False,
-        ),
-        smiles="O",
-        site_context=ctx,
-        slab_atoms=slab,
-        calculator=None,
+            ],
+        ],
+        reason="adsorbate_overlap",
+        n_conformers=2,
     )
     assert len(result.combined) == 1
     assert result.n_attempts == 2
+    seen_pairs = [[(s.conformer_index, s.site_index) for s in batch] for batch in seen]
     assert seen_pairs[0] == [(0, 0)]
     assert (0, 0) not in seen_pairs[1]
     assert (1, 0) in seen_pairs[1] or (0, 1) in seen_pairs[1]

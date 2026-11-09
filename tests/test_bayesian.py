@@ -53,7 +53,13 @@ from metalsurfer.workflow.bayesian import (
 from tests.factories import make_random_placement_records
 
 from ._logging_helpers import CaptureHandler
-from .conftest import gpu_mlip_test, make_placement_descriptor, make_slab, make_water
+from .conftest import (
+    E_ADS_MLIP_TOL,
+    make_placement_descriptor,
+    make_slab,
+    make_water,
+)
+from .mlip_marks import gpu_mlip_test, load_uma
 
 
 def _make_synthetic_training_data(n: int = 40):
@@ -926,7 +932,6 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
     Generation 2: bo.batch_size placements selected by acquisition (default PI;
     falls back to LCB until a finite best E_ads exists).
     """
-    from metalsurfer.optimization import setup_single_model
     from metalsurfer.surface_prep import SlabContainer, deposit_adatoms
     from metalsurfer.workflow import (
         calculate_reference_energies,
@@ -961,9 +966,7 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         stage1_steps=75,
         stage2_steps=200,
     )
-    calculator, ts_model = setup_single_model(
-        config.model_name, config.device, task_name=config.task_name
-    )
+    calculator, ts_model = load_uma(config.model_name, config.device, config.task_name)
     ref = calculate_reference_energies(
         slab,
         calculator,
@@ -982,29 +985,31 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         config=config,
         surface_type="defect_test",
     )
-    assert outcome is not None, "BO pipeline should return an outcome"
     results = outcome.results
-    assert len(results) >= 1, (
+    assert results, (
         "BO two generations on defect/doped surface should yield at least one valid "
         "binding energy result"
     )
+    # Desorption is off so near-contact defect sites can finish two rounds.
+    # The flag is part of the contract for this smoke, not an accidental default.
+    assert config.skip_desorption_check is True
     for r in results:
-        assert hasattr(r, "energy_adsorption") and hasattr(r, "placement_id")
-        assert isinstance(r.energy_adsorption, (int, float))
+        residual = r.energy_adslab - r.energy_slab - r.energy_adsorbate
+        assert residual == pytest.approx(r.energy_adsorption, abs=E_ADS_MLIP_TOL)
         assert np.isfinite(r.energy_adsorption)
-        assert -2.0 <= r.energy_adsorption < 1.0, (
-            f"E_ads should be in a physical binding window [-2, 1) eV, got {r.energy_adsorption}"
-        )
+        forces = np.asarray(r.atoms.get_forces(), dtype=float)
+        assert np.isfinite(forces).all()
+        ads_forces = forces[r.slab_size :]
+        max_force = float(np.max(np.linalg.norm(ads_forces, axis=1)))
+        assert max_force <= config.max_force_convergence
         assert np.isfinite(r.distance) and r.distance > 0.5, (
             f"Adsorbate–surface distance should be finite and >0.5 Å, got {r.distance}"
         )
-    # Tiny BO smoke on a defect surface: best E_ads is head/budget sensitive
-    # (oc25 reference runs have landed near +0.12 eV and ~+0.47 eV). Bound at
-    # 0.75 eV to catch garbage/penalty-dominated runs (>= 1–2 eV) without
-    # over-fitting one seed's sign or magnitude.
-    assert min(r.energy_adsorption for r in results) < 0.75, (
-        "Best E_ads should stay clearly below the penalty/window ceiling on "
-        "this defect smoke"
+    # Recorded uma-s runs on this seed landed near +0.12 eV and +0.47 eV.
+    # Stay under 0.5 eV so a penalty-dominated run (>= 1 eV) fails, without
+    # requiring a negative sign those seeds have not produced.
+    assert min(r.energy_adsorption for r in results) < 0.5, (
+        "Best E_ads should stay below the recorded defect-smoke ceiling"
     )
     assert any(1.0 <= float(r.distance) <= 4.5 for r in results), (
         "At least one survivor should sit in a typical binding distance window"

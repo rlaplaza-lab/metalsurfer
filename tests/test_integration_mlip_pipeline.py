@@ -14,7 +14,6 @@ from ase.io import read
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.models import ScreeningResult
-from metalsurfer.optimization import setup_single_model
 from metalsurfer.placement._constants import (
     _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM,
 )
@@ -23,10 +22,10 @@ from metalsurfer.workflow import calculate_reference_energies, process_molecule
 from tests.conftest import (
     E_ADS_MLIP_TOL,
     GPU_AUTOBATCH,
-    GPU_MLIP_MARKS,
     adsorbate_symbol_pair_distance,
     pair_distance,
 )
+from tests.mlip_marks import GPU_MLIP_MARKS, load_uma
 
 pytestmark = GPU_MLIP_MARKS
 
@@ -154,9 +153,7 @@ def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
         assert config.stage1_steps >= 50
         assert config.stage2_steps >= 150
 
-    calculator, ts_model = setup_single_model(
-        config.model_name, config.device, task_name=config.task_name
-    )
+    calculator, ts_model = load_uma(config.model_name, config.device, config.task_name)
     ref = calculate_reference_energies(
         slab, calculator, [name], [smiles], ts_model=ts_model, config=config
     )

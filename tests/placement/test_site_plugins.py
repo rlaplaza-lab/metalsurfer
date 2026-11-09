@@ -155,7 +155,11 @@ def test_auto_matches_explicit_plugin(material_type, explicit, factory):
     assert [s.site_type for s in auto] == [s.site_type for s in named]
 
 
-def test_all_plugins_share_batch_and_site_contract():
+@pytest.mark.parametrize(
+    "name",
+    ["topology", "voronoi", "adaptive_grid", "rolling_probe"],
+)
+def test_all_plugins_share_batch_and_site_contract(name):
     """Every plugin emits SiteCandidateBatch; enumerator yields placement-ready Sites."""
     core = {"vertices", "nn_dists", "source_hints", "atom_indices"}
     enrich = {"normals", "clearances"}
@@ -183,34 +187,33 @@ def test_all_plugins_share_batch_and_site_contract():
         planar_z_variance_threshold=0.1,
         n_jobs=1,
     )
-    for name in ("topology", "voronoi", "adaptive_grid", "rolling_probe"):
-        batch = resolve_site_generator(name, "slab").generate(ctx)
-        assert isinstance(batch, SiteCandidateBatch)
-        n = len(batch.vertices)
-        assert len(batch.nn_dists) == n
-        assert len(batch.source_hints) == n
-        assert len(batch.atom_indices) == n
-        assert batch.normals is not None and len(batch.normals) == n
-        assert batch.clearances is not None and len(batch.clearances) == n
+    batch = resolve_site_generator(name, "slab").generate(ctx)
+    assert isinstance(batch, SiteCandidateBatch)
+    n = len(batch.vertices)
+    assert len(batch.nn_dists) == n
+    assert len(batch.source_hints) == n
+    assert len(batch.atom_indices) == n
+    assert batch.normals is not None and len(batch.normals) == n
+    assert batch.clearances is not None and len(batch.clearances) == n
 
-        sites = get_unified_sites(
-            slab,
-            material_type="slab",
-            site_generator=name,
-            n_jobs=1,
-            probe_radius=1.2,
-            max_site_distance=3.5,
-        )
-        assert sites
-        assert all(isinstance(s, Site) for s in sites)
-        for s in sites:
-            assert s.xyz.shape == (3,)
-            assert s.normal.shape == (3,)
-            assert len(s.env_fingerprint) == 3
-            assert s.site_type
-            assert s.tangent_basis is not None
-            assert np.asarray(s.tangent_basis).shape == (2, 3)
-            assert s.clearance is not None
+    sites = get_unified_sites(
+        slab,
+        material_type="slab",
+        site_generator=name,
+        n_jobs=1,
+        probe_radius=1.2,
+        max_site_distance=3.5,
+    )
+    assert sites
+    assert all(isinstance(s, Site) for s in sites)
+    for s in sites:
+        assert s.xyz.shape == (3,)
+        assert s.normal.shape == (3,)
+        assert len(s.env_fingerprint) == 3
+        assert s.site_type
+        assert s.tangent_basis is not None
+        assert np.asarray(s.tangent_basis).shape == (2, 3)
+        assert s.clearance is not None
 
 
 def test_slab_topology_emits_nonempty_supports():

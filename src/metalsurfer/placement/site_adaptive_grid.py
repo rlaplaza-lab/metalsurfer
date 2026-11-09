@@ -304,6 +304,7 @@ def _image_shift_for_index(
     tree_data: np.ndarray,
     cell: np.ndarray,
     pbc: np.ndarray,
+    cell_inv: np.ndarray | None = None,
 ) -> tuple[int, tuple[int, int, int]]:
     """Map a KDTree image index to (base_atom, lattice shift)."""
     base = int(image_index) % n_atoms
@@ -312,7 +313,7 @@ def _image_shift_for_index(
     img_pos = np.asarray(tree_data[int(image_index)], dtype=float)
     primary = np.asarray(positions[base], dtype=float)
     delta = img_pos - primary
-    inv = np.linalg.inv(cell)
+    inv = cell_inv if cell_inv is not None else np.linalg.inv(cell)
     frac = delta @ inv
     shift = (
         int(np.rint(frac[0])) if bool(pbc[0]) else 0,
@@ -350,6 +351,11 @@ def _support_environment(
     effective = dists - framework_radii[atom_indices]
     effective_min = np.min(effective, axis=1)
     tree_data = np.asarray(tree.data, dtype=float)
+    cell_inv = (
+        np.linalg.inv(np.asarray(cell, dtype=float))
+        if np.any(pbc) and cell_has_volume(cell)
+        else None
+    )
 
     support_sets: list[tuple[int, ...]] = []
     support_shifts: list[tuple[tuple[int, int, int], ...]] = []
@@ -368,7 +374,13 @@ def _support_environment(
         seen: dict[tuple[int, tuple[int, int, int]], float] = {}
         for _atom_i, img_i, d_i in zip(ids, imgs, ds, strict=True):
             base, shift = _image_shift_for_index(
-                int(img_i), n_atoms, positions, tree_data, cell, pbc
+                int(img_i),
+                n_atoms,
+                positions,
+                tree_data,
+                cell,
+                pbc,
+                cell_inv=cell_inv,
             )
             key = (base, shift)
             if key not in seen or d_i < seen[key]:

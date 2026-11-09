@@ -1,8 +1,8 @@
 """Height intervals, contact shells, and surface-reference resolution."""
 
 import logging
-from collections.abc import Sequence
-from typing import Literal
+from collections.abc import Callable, Sequence
+from typing import Literal, NamedTuple
 
 import numpy as np
 from ase import Atoms
@@ -198,6 +198,114 @@ def _height_above_supports(
     return float(fallback) if fw is None else fw
 
 
+class _ContactFrame(NamedTuple):
+    """MIC geometry shared by every clearance gate of one rigid pose."""
+
+    mic_n: np.ndarray
+    lateral: np.ndarray
+    base_h: float
+    rotated: np.ndarray
+    n_hat: np.ndarray
+    empty: bool
+
+
+def _contact_frame(
+    rotated_pos: np.ndarray,
+    *,
+    site_xyz: np.ndarray,
+    place_normal: np.ndarray,
+    slab_positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: list[bool],
+) -> _ContactFrame:
+    """Minimum-image mol–shell geometry at the support-plane seed."""
+    n_hat = _placement_normal_hat(place_normal)
+    base = np.asarray(site_xyz, dtype=float)
+    base_h = float(np.dot(base, n_hat))
+    rotated = np.asarray(rotated_pos, dtype=float)
+    slab_pos = np.asarray(slab_positions, dtype=float)
+    if len(slab_pos) == 0 or len(rotated) == 0:
+        return _ContactFrame(
+            mic_n=np.empty((0, 0), dtype=float),
+            lateral=np.empty((0, 0), dtype=float),
+            base_h=base_h,
+            rotated=rotated,
+            n_hat=n_hat,
+            empty=True,
+        )
+    mol_seed = rotated + base
+    mic_vecs, _ = geom._mol_slab_pairwise_mic(mol_seed, slab_pos, cell, pbc)
+    mic_n = np.einsum("ijd,d->ij", mic_vecs, n_hat)
+    perp = mic_vecs - mic_n[:, :, None] * n_hat.reshape(1, 1, 3)
+    lateral = np.linalg.norm(perp, axis=2)
+    return _ContactFrame(
+        mic_n=mic_n,
+        lateral=lateral,
+        base_h=base_h,
+        rotated=rotated,
+        n_hat=n_hat,
+        empty=False,
+    )
+
+
+def _allowed_clearances(
+    symbols: Sequence[str],
+    slab_symbols: Sequence[str],
+    config: AdsorptionConfig,
+    clearance: Callable[[AdsorptionConfig, str, str], float] | None,
+) -> np.ndarray:
+    """Pair gates shaped ``(n_mol, n_slab)``. Unique element pairs are tabulated once."""
+    gate = _pair_clearance if clearance is None else clearance
+    mol_index: dict[str, int] = {}
+    slab_index: dict[str, int] = {}
+    for sym in symbols:
+        if sym not in mol_index:
+            mol_index[sym] = len(mol_index)
+    for sym in slab_symbols:
+        if sym not in slab_index:
+            slab_index[sym] = len(slab_index)
+    table = np.empty((len(mol_index), len(slab_index)), dtype=float)
+    for sym_m, i in mol_index.items():
+        for sym_s, j in slab_index.items():
+            table[i, j] = float(gate(config, sym_m, sym_s))
+    mol_ids = np.fromiter(
+        (mol_index[s] for s in symbols), dtype=int, count=len(symbols)
+    )
+    slab_ids = np.fromiter(
+        (slab_index[s] for s in slab_symbols), dtype=int, count=len(slab_symbols)
+    )
+    return table[np.ix_(mol_ids, slab_ids)]
+
+
+def _com_height_from_frame(
+    frame: _ContactFrame,
+    allowed: np.ndarray,
+    *,
+    apply_anchor_floor: bool,
+) -> float:
+    """COM height that clears *allowed*, from a frame already solved at the seed."""
+    if frame.empty:
+        return frame.base_h
+    lateral = frame.lateral
+    active = lateral < allowed
+    vertical = np.sqrt(np.maximum(0.0, allowed * allowed - lateral * lateral))
+    h_pair = frame.base_h + vertical - frame.mic_n
+    h_needed = float(np.max(h_pair[active])) if np.any(active) else float("-inf")
+    if not np.isfinite(h_needed):
+        # Every pair already clears laterally; sit the lowest atom at its
+        # nearest-support gate so the pose is still a contact, not a hover.
+        rel_h = frame.rotated @ frame.n_hat
+        i_low = int(np.argmin(rel_h))
+        j_near = int(np.argmin(lateral[i_low]))
+        h_needed = frame.base_h + float(allowed[i_low, j_near]) - float(rel_h[i_low])
+    if apply_anchor_floor:
+        h_needed = max(
+            float(h_needed),
+            _com_floor_on_support_plane(frame.rotated, frame.n_hat, frame.base_h),
+        )
+    return float(h_needed) + _CONTACT_CLEARANCE_PAD_ANGSTROM
+
+
 def _pairwise_contact_com_height(
     rotated_pos: np.ndarray,
     symbols: list[str],
@@ -219,50 +327,18 @@ def _pairwise_contact_com_height(
     solved from MIC vectors at the support-plane seed so PBC images and
     non-Cartesian normals stay consistent.
     """
-    gate = _pair_clearance if clearance is None else clearance
-    n_hat = _placement_normal_hat(place_normal)
-    base = np.asarray(site_xyz, dtype=float)
-    base_h = float(np.dot(base, n_hat))
-    rotated = np.asarray(rotated_pos, dtype=float)
-    slab_pos = np.asarray(slab_positions, dtype=float)
-    if len(slab_pos) == 0 or len(rotated) == 0:
-        return base_h
-
-    mol_seed = rotated + base
-    mic_vecs, _ = geom._mol_slab_pairwise_mic(mol_seed, slab_pos, cell, pbc)
-    mic_n = np.einsum("ijd,d->ij", mic_vecs, n_hat)
-    perp = mic_vecs - mic_n[:, :, None] * n_hat.reshape(1, 1, 3)
-    lateral = np.linalg.norm(perp, axis=2)
-
-    h_needed = float("-inf")
-    for i, sym_m in enumerate(symbols):
-        for j, sym_s in enumerate(slab_symbols):
-            allowed = float(gate(config, sym_m, sym_s))
-            lat = float(lateral[i, j])
-            if lat >= allowed:
-                continue
-            # Raising COM by Δh adds Δh to every mic·n (same lattice image).
-            vertical = float(np.sqrt(max(0.0, allowed * allowed - lat * lat)))
-            h_pair = base_h + vertical - float(mic_n[i, j])
-            if h_pair > h_needed:
-                h_needed = h_pair
-
-    if not np.isfinite(h_needed):
-        # Every pair already clears laterally; sit the lowest atom at its
-        # nearest-support gate so the pose is still a contact, not a hover.
-        rel_h = rotated @ n_hat
-        i_low = int(np.argmin(rel_h))
-        j_near = int(np.argmin(lateral[i_low]))
-        allowed = float(gate(config, symbols[i_low], slab_symbols[j_near]))
-        h_needed = base_h + allowed - float(rel_h[i_low])
-    # A hollow pair gate can sit an atom below the nuclear plane.
-    if apply_anchor_floor:
-        h_needed = max(
-            float(h_needed),
-            _com_floor_on_support_plane(rotated, n_hat, base_h),
-        )
-    # Pad so reconstructed MIC distances sit strictly outside the cutoff.
-    return float(h_needed) + _CONTACT_CLEARANCE_PAD_ANGSTROM
+    frame = _contact_frame(
+        rotated_pos,
+        site_xyz=site_xyz,
+        place_normal=place_normal,
+        slab_positions=slab_positions,
+        cell=cell,
+        pbc=pbc,
+    )
+    if frame.empty:
+        return frame.base_h
+    allowed = _allowed_clearances(symbols, slab_symbols, config, clearance)
+    return _com_height_from_frame(frame, allowed, apply_anchor_floor=apply_anchor_floor)
 
 
 def _mol_positions_at_com_height(
@@ -495,8 +571,8 @@ def _contact_shell_indices(
         np.max(np.linalg.norm(np.asarray(rotated_pos, dtype=float), axis=1))
     )
     max_gate = 0.0
-    for sym_m in symbols:
-        for sym_s in slab_symbols:
+    for sym_m in set(symbols):
+        for sym_s in set(slab_symbols):
             gate = max(
                 _pair_clearance(config, sym_m, sym_s),
                 _vdw_pair_clearance(config, sym_m, sym_s),
@@ -571,28 +647,33 @@ def _feasible_height_interval(
         shell_pos = slab_positions
         shell_syms = slab_symbols
 
-    def _contact_height(clearance, *, apply_anchor_floor: bool = True) -> float:
-        return _pairwise_contact_com_height(
-            rotated_pos,
-            symbols,
-            site_xyz=base,
-            place_normal=place_normal,
-            slab_positions=shell_pos,
-            slab_symbols=shell_syms,
-            cell=cell,
-            pbc=pbc,
-            config=config,
-            clearance=clearance,
-            apply_anchor_floor=apply_anchor_floor,
+    frame = _contact_frame(
+        rotated_pos,
+        site_xyz=base,
+        place_normal=place_normal,
+        slab_positions=shell_pos,
+        cell=cell,
+        pbc=pbc,
+    )
+    if frame.empty:
+        contact_h = frame.base_h
+        vdw_h = contact_h
+        raw_contact = contact_h
+        raw_vdw = contact_h
+    else:
+        cov_allowed = _allowed_clearances(symbols, shell_syms, config, None)
+        vdw_allowed = _allowed_clearances(
+            symbols, shell_syms, config, _vdw_pair_clearance
         )
-
-    contact_h = _contact_height(None)
-    vdw_h = _contact_height(_vdw_pair_clearance)
+        contact_h = _com_height_from_frame(frame, cov_allowed, apply_anchor_floor=True)
+        vdw_h = _com_height_from_frame(frame, vdw_allowed, apply_anchor_floor=True)
+        raw_contact = _com_height_from_frame(
+            frame, cov_allowed, apply_anchor_floor=False
+        )
+        raw_vdw = _com_height_from_frame(frame, vdw_allowed, apply_anchor_floor=False)
     landing = max(float(vdw_h), float(contact_h) + _WALL_SHELL_MIN_GAP_ANGSTROM)
 
     if is_void:
-        raw_contact = _contact_height(None, apply_anchor_floor=False)
-        raw_vdw = _contact_height(_vdw_pair_clearance, apply_anchor_floor=False)
         raw_landing = max(
             float(raw_vdw), float(raw_contact) + _WALL_SHELL_MIN_GAP_ANGSTROM
         )

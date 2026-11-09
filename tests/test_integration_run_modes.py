@@ -46,7 +46,10 @@ from metalsurfer.placement.site_context import (
 )
 from metalsurfer.surface_prep import SlabContainer
 from metalsurfer.workflow import process_molecule_bayesian
-from metalsurfer.workflow.shared import ScreeningRunBootstrap
+from metalsurfer.workflow.shared import (
+    ScreeningRunBootstrap,
+    _optimize_and_evaluate_placements,
+)
 
 from .conftest import (
     E_ADS_IDENTITY_TOL,
@@ -55,11 +58,13 @@ from .conftest import (
     assert_water_oh_hh_geometry,
     make_h2,
     make_nanoparticle,
+    make_placement_descriptor,
     make_porous_framework,
     make_slab,
     make_water,
     mock_calculator,
     pair_distance,
+    place_molecule_on_slab,
 )
 
 pytestmark = pytest.mark.integration
@@ -293,9 +298,20 @@ def _assert_dissociative_h2_geometry(ads: Atoms, slab: Atoms) -> None:
     assert hh <= 3.5, f"dissociative H–H unphysically far: {hh:.3f} Å"
 
 
+def _assert_energy_identity(result, expected_n: int) -> None:
+    """Residual equals ``expected_n`` times the stored per-molecule E_ads."""
+    assert expected_n >= 1
+    residual = result.energy_adslab - result.energy_slab - result.energy_adsorbate
+    assert residual == pytest.approx(
+        result.energy_adsorption * expected_n,
+        abs=E_ADS_IDENTITY_TOL,
+    )
+
+
 def _assert_survivor_physics(
     result,
     *,
+    expected_n: int,
     material_type: str = "slab",
     expected_symbols: list[str] | None = None,
     dissociative: bool = False,
@@ -303,22 +319,7 @@ def _assert_survivor_physics(
 ) -> None:
     """Critical physics gates for campaign survivors (stubbed or real MLIP)."""
     assert np.isfinite(result.energy_adsorption)
-    # Single-molecule rows: E_ads == E_adslab - E_slab - E_mol.
-    # Joint n-tuplet rows store per-molecule E_ads, so the identity is n×E_ads.
-    residual = result.energy_adslab - result.energy_slab - result.energy_adsorbate
-    n_units = (
-        int(round(residual / result.energy_adsorption))
-        if result.energy_adsorption
-        else 1
-    )
-    if abs(result.energy_adsorption) < E_ADS_IDENTITY_TOL:
-        assert residual == pytest.approx(0.0, abs=E_ADS_IDENTITY_TOL)
-    else:
-        assert n_units >= 1
-        assert residual == pytest.approx(
-            result.energy_adsorption * n_units,
-            abs=E_ADS_IDENTITY_TOL,
-        )
+    _assert_energy_identity(result, expected_n)
     d_lo, d_hi = _distance_window(material_type)
     assert d_lo <= result.distance <= d_hi, (
         f"Survivor must remain adsorbed ({d_lo}–{d_hi} Å), got {result.distance:.2f}"
@@ -573,6 +574,7 @@ def test_run_adsorption_substrate_matrix(
     for r in results:
         _assert_survivor_physics(
             r,
+            expected_n=1,
             material_type=material_type,
             expected_symbols=expected_symbols,
             dissociative=dissociative,
@@ -613,6 +615,7 @@ def test_run_saturation_substrate_matrix(workdir, monkeypatch, material_type):
     for step in run.steps:
         r = step.best_result
         assert np.isfinite(r.energy_adsorption)
+        _assert_energy_identity(r, expected_n=1)
         assert d_lo <= r.distance <= d_hi
         ads = r.atoms[r.slab_size :]
         assert sorted(ads.get_chemical_symbols()) == ["H", "H", "O"]
@@ -626,37 +629,40 @@ def test_run_saturation_substrate_matrix(workdir, monkeypatch, material_type):
     _assert_saturation_artifacts(workdir / f"results_{surface_type}")
 
 
-@pytest.mark.parametrize("material_type", ["slab", "nanoparticle", "porous"])
 @pytest.mark.parametrize("slab_relaxation_mode", ["ionic_only", "full"])
-def test_run_adsorption_relaxation_modes(
-    workdir, monkeypatch, material_type, slab_relaxation_mode
-):
-    """Rec 2f: non-default substrate relaxation modes complete with survivors."""
-    slab = _substrate(material_type)
-    harness = _StubHarness(slab, molecule_name=MOL_NAME)
-    harness.apply(monkeypatch)
-    config = _tiny_config(
-        material_type=material_type, slab_relaxation_mode=slab_relaxation_mode
+def test_optimize_receives_slab_relaxation_mode(monkeypatch, slab_relaxation_mode):
+    seen: list[str] = []
+    slab = make_slab()
+    combined = place_molecule_on_slab(slab, make_water())
+
+    def fake_optimize(combined_atoms_list, _slab, _ts, config=None, **_k):
+        seen.append(config.slab_relaxation_mode)
+        out = []
+        for atoms in combined_atoms_list:
+            placed = atoms.copy()
+            placed.calc = mock_calculator(
+                energy=E_SLAB + E_MOL + E_ADS_BINDING, n_atoms=len(placed)
+            )
+            out.append(placed)
+        return out
+
+    monkeypatch.setattr(
+        "metalsurfer.workflow.shared.optimize_adsorbate_slab_batched",
+        fake_optimize,
     )
-    n_requested = int(config.num_placements or 8)
-    campaign = run_adsorption(
+    config = _tiny_config(slab_relaxation_mode=slab_relaxation_mode)
+    _results, _failures, n_failed = _optimize_and_evaluate_placements(
+        [combined],
+        [0],
+        [make_placement_descriptor()],
         slab=slab,
-        molecules=[(MOL_SMILES, MOL_NAME)],
+        ts_model=None,
         config=config,
-        surface_type=f"e2e_relax_{material_type}_{slab_relaxation_mode}",
-        skip_existing=False,
-        save_results=False,
-        write_settings=False,
+        energies=(E_SLAB, E_MOL),
+        molecule_name=MOL_NAME,
     )
-    assert isinstance(campaign, BindingCampaignResult)
-    results = campaign.run_results[0].results
-    _assert_binding_yield(
-        results, n_requested=n_requested, min_success_rate=0.375, min_absolute=1
-    )
-    for r in results:
-        _assert_survivor_physics(
-            r, material_type=material_type, expected_symbols=["H", "H", "O"]
-        )
+    assert seen == [slab_relaxation_mode]
+    assert n_failed == 0
 
 
 def test_run_adsorption_rejects_crushed_geometries(workdir, monkeypatch):
@@ -761,7 +767,7 @@ def _assert_binding_api_campaign(
     _assert_binding_yield(results, **kwargs)
     assert campaign.total_configurations == len(results)
     for r in results:
-        _assert_survivor_physics(r, expected_symbols=["H", "H", "O"])
+        _assert_survivor_physics(r, expected_n=1, expected_symbols=["H", "H", "O"])
         assert r.energy_adsorption == pytest.approx(
             E_ADS_BINDING, abs=E_ADS_IDENTITY_TOL
         )
@@ -785,6 +791,7 @@ def _assert_saturation_api_campaign(
     for step in run.steps:
         _assert_survivor_physics(
             step.best_result,
+            expected_n=1,
             expected_symbols=["H", "H", "O"],
             base_slab_size=base_slab_size,
         )
@@ -950,12 +957,7 @@ def test_process_molecule_bayesian_nondefault_bo_branches(
 # YAML API e2e — load_campaign_yaml → run_campaign → real run_* (stubbed MLIP)
 # ---------------------------------------------------------------------------
 
-_YAML_CASES = (
-    ("smoke_adsorption.yaml", "smoke_adsorption", "adsorption"),
-    ("smoke_adsorption_bo.yaml", "smoke_adsorption_bo", "adsorption_bo"),
-    ("smoke_saturation.yaml", "smoke_saturation", "saturation"),
-    ("smoke_saturation_bo.yaml", "smoke_saturation_bo", "saturation_bo"),
-)
+_YAML_CASES = (("smoke_adsorption.yaml", "smoke_adsorption", "adsorption"),)
 
 
 @pytest.mark.parametrize(

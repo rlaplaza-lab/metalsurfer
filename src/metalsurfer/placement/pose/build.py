@@ -209,9 +209,10 @@ def _pose_from_spec(
     rotated_pos = oriented.rotated_pos
     quat = oriented.quat
     family_key = _height_interval_family_key(spec)
-    interval: _HeightInterval | None = (
-        pose_cache.height_intervals.get(family_key) if pose_cache is not None else None
-    )
+    interval: _HeightInterval | None = None
+    if pose_cache is not None:
+        with pose_cache.height_lock:
+            interval = pose_cache.height_intervals.get(family_key)
     if interval is None:
         interval = _feasible_height_interval(
             rotated_pos,
@@ -227,7 +228,8 @@ def _pose_from_spec(
             z_base_hi=0.0,
         )
         if pose_cache is not None and interval is not None:
-            pose_cache.height_intervals[family_key] = interval
+            with pose_cache.height_lock:
+                interval = pose_cache.height_intervals.setdefault(family_key, interval)
     if interval is None:
         return None, "infeasible_pose"
     if not interval.contact_atoms_ok:

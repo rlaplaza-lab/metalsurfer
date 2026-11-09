@@ -83,7 +83,7 @@ if [[ "$DRY" -eq 1 ]]; then
 fi
 
 if [[ "$YES" -eq 0 ]]; then
-  echo "Run with --yes to terminate them (run_gpu_tests.sh does this unless METALSURFER_CLEAR_GPU_PYTHON=0)." >&2
+  echo "Run with --yes to terminate them (run_gpu_tests.sh does this only when METALSURFER_CLEAR_GPU_PYTHON=1)." >&2
   exit 1
 fi
 

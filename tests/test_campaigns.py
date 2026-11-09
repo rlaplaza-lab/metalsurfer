@@ -382,23 +382,27 @@ def test_run_adsorption_skip_existing_inline_list(workdir, monkeypatch):
     assert captured["count"] == 1
 
 
-def test_run_adsorption_warns_when_all_skipped(monkeypatch):
-    monkeypatch.setattr(
-        "metalsurfer.campaigns._normalize_molecules_input",
-        lambda *args, **kwargs: ([], "all_skipped", "demo.csv"),
+def test_run_adsorption_warns_when_all_skipped(workdir):
+    surface_type = "skip_all"
+    results_dir = workdir / f"results_{surface_type}"
+    results_dir.mkdir()
+    (results_dir / "adsorption_energies_detailed.csv").write_text(
+        "molecule,energy_adsorption\nwater,-1.0\n",
+        encoding="utf-8",
     )
     with pytest.warns(UserWarning, match="adsorption_energies_detailed"):
         campaign = run_adsorption(
             slab=object(),
-            molecules="demo.csv",
+            molecules=[("O", "water")],
             config=AdsorptionConfig(seed=1),
-            surface_type="skip_all",
+            surface_type=surface_type,
+            skip_existing=True,
             save_results=False,
             write_settings=False,
         )
     assert campaign.n_molecules == 0
     assert "No molecules processed" in campaign.format_summary(
-        results_dir="results_skip_all"
+        results_dir=f"results_{surface_type}"
     )
 
 
@@ -483,17 +487,16 @@ def test_run_saturation_logs_when_all_skipped(workdir, monkeypatch, caplog):
     )
 
 
-def test_run_adsorption_warns_when_input_empty(monkeypatch):
-    monkeypatch.setattr(
-        "metalsurfer.campaigns._normalize_molecules_input",
-        lambda *args, **kwargs: ([], "empty_file", "empty.csv"),
-    )
+def test_run_adsorption_warns_when_input_empty(workdir):
+    csv_path = workdir / "empty.csv"
+    csv_path.write_text("smiles,name\n", encoding="utf-8")
     with pytest.warns(UserWarning, match="no valid rows"):
         campaign = run_adsorption(
             slab=object(),
-            molecules="empty.csv",
+            molecules=str(csv_path),
             config=AdsorptionConfig(seed=1),
             surface_type="empty_input",
+            skip_existing=False,
             save_results=False,
             write_settings=False,
         )

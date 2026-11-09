@@ -47,6 +47,7 @@ from ..placement.generators import (
     generate_placement_from_spec_with_reason,
     generate_placements_from_specs,
 )
+from ..placement.pose.context import _PoseBatchCache
 from ..placement.site_context import SiteContext, site_context_for_sampling
 from ..placement.site_enumeration import _compute_site_z_base
 from ..reporting import (
@@ -331,6 +332,7 @@ def _materialize_spec_placements(
     site_context: SiteContext | None,
     slab_for_sites: Atoms | None = None,
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
+    pose_cache: _PoseBatchCache | None = None,
 ) -> tuple[
     list[Atoms], list[int], list[PlacementDescriptor], list[PlacementFailureEvent]
 ]:
@@ -349,6 +351,7 @@ def _materialize_spec_placements(
         site_context=site_context,
         slab_for_sites=slab_for_sites,
         materialization_cache=materialization_cache,
+        pose_cache=pose_cache,
     )
     for spec, (result, fail_reason) in zip(specs, generated, strict=True):
         if result is None:
@@ -518,6 +521,7 @@ def _evaluate_optimized_candidate(
     assert min_d is not None
     dist = float(min_d)
     result_atoms = opt_atoms.copy()
+    result_atoms.calc = opt_atoms.calc
     apply_material_pbc(result_atoms, config.material_type)
     result = ScreeningResult(
         molecule=molecule_name,

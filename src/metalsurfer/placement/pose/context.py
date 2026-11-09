@@ -1,6 +1,7 @@
 """Shared pose placement context and cache types."""
 
 import dataclasses
+import threading
 from dataclasses import dataclass
 
 import numpy as np
@@ -51,6 +52,9 @@ class _PoseBatchCache:
     frames: dict[int, tuple[np.ndarray, str]] = dataclasses.field(default_factory=dict)
     height_intervals: dict[tuple, "_HeightInterval"] = dataclasses.field(
         default_factory=dict
+    )
+    height_lock: threading.Lock = dataclasses.field(
+        default_factory=threading.Lock, repr=False, compare=False
     )
 
 

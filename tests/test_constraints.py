@@ -155,7 +155,8 @@ def test_relaxable_surface_nanoparticle_outer_shell():
         material_type="nanoparticle",
         top_layer_tolerance=0.5,
     )
-    assert 0 in frozen  # central atom stays frozen on Au13
+    center = int(np.argmin(dists))
+    assert center in frozen
 
 
 def test_relaxable_surface_porous_pore_boundary():

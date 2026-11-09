@@ -92,7 +92,8 @@ def test_enumerate_specs_skips_occupied_site_indices():
     assert all(int(s.site_index) >= 0 for s in specs)
 
 
-def test_generate_placements_from_specs_preserves_order(monkeypatch):
+@pytest.mark.parametrize("workers", [1, 4])
+def test_generate_placements_from_specs_preserves_order(monkeypatch, workers):
     """Serial and threaded paths return successes/failures in input order."""
 
     from metalsurfer.placement import generators as gen_mod
@@ -127,27 +128,29 @@ def test_generate_placements_from_specs_preserves_order(monkeypatch):
 
     specs = [_spec(i) for i in range(6)]
     slab = make_slab()
-    for workers in (1, 4):
-        config = AdsorptionConfig(
-            material_type="slab",
-            num_placements=6,
-            placement_materialize_workers=workers,
-        )
-        combined, ids, _descs, failures = _materialize_spec_placements(
-            specs=specs,
-            conformers=[make_water()],
-            slab_atoms=slab,
-            calculator=None,
-            config=config,
-            smiles="O",
-            site_context=None,
-        )
-        assert ids == [0, 2, 4]
-        assert [f.placement_id for f in failures] == [1, 3, 5]
-        assert len(combined) == 3
+    config = AdsorptionConfig(
+        material_type="slab",
+        num_placements=6,
+        placement_materialize_workers=workers,
+    )
+    combined, ids, _descs, failures = _materialize_spec_placements(
+        specs=specs,
+        conformers=[make_water()],
+        slab_atoms=slab,
+        calculator=None,
+        config=config,
+        smiles="O",
+        site_context=None,
+    )
+    assert ids == [0, 2, 4]
+    assert [f.placement_id for f in failures] == [1, 3, 5]
+    assert len(combined) == 3
 
 
-def test_generate_placements_from_specs_all_cached_skips_pose_cache(monkeypatch):
+@pytest.mark.parametrize("workers", [1, 4])
+def test_generate_placements_from_specs_all_cached_skips_pose_cache(
+    monkeypatch, workers
+):
     from metalsurfer.placement import generators as gen_mod
 
     from ..conftest import make_placement_descriptor
@@ -190,29 +193,26 @@ def test_generate_placements_from_specs_all_cached_skips_pose_cache(monkeypatch)
         gen_mod, "generate_placement_from_spec_with_reason", fake_generate
     )
 
-    for workers in (1, 4):
-        build_calls.clear()
-        generate_calls.clear()
-        config = AdsorptionConfig(
-            material_type="slab", placement_materialize_workers=workers
-        )
-        results = generate_placements_from_specs(
-            specs,
-            [make_water()],
-            make_slab(),
-            config,
-            materialization_cache=cache,
-        )
+    config = AdsorptionConfig(
+        material_type="slab", placement_materialize_workers=workers
+    )
+    results = generate_placements_from_specs(
+        specs,
+        [make_water()],
+        make_slab(),
+        config,
+        materialization_cache=cache,
+    )
 
-        assert build_calls == []
-        assert generate_calls == []
-        assert len(results) == 2
-        for result, reason in results:
-            assert reason is None
-            assert result is not None
-            adsorbate, returned_descriptor = result
-            assert adsorbate is not cached_adsorbate
-            assert returned_descriptor is descriptor
+    assert build_calls == []
+    assert generate_calls == []
+    assert len(results) == 2
+    for result, reason in results:
+        assert reason is None
+        assert result is not None
+        adsorbate, returned_descriptor = result
+        assert adsorbate is not cached_adsorbate
+        assert returned_descriptor is descriptor
 
 
 def test_generate_placements_from_specs_builds_pose_cache_once_for_misses(

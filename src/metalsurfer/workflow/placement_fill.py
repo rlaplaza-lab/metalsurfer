@@ -20,6 +20,7 @@ from ..placement.policy import (
     _wall_contact_z_fraction,
     _wall_z_fraction_is_contact,
 )
+from ..placement.pose import _PoseBatchCache, build_pose_batch_cache
 from ..placement.pose.height import _height_interval_family_key
 from ..placement.site_context import SiteContext
 from .shared import PlacementFailureEvent, _materialize_spec_placements
@@ -327,6 +328,7 @@ def _materialize_pool_in_chunks(
     failures: list[PlacementFailureEvent],
     bans: _RetryBans,
     last_spec_by_index: dict[int, PlacementSpec],
+    pose_cache: _PoseBatchCache,
 ) -> None:
     """Materialize *specs* in chunks of ~*n_target*; stop once the target is met.
 
@@ -350,6 +352,7 @@ def _materialize_pool_in_chunks(
                 smiles=smiles,
                 site_context=site_context,
                 slab_for_sites=slab_for_sites,
+                pose_cache=pose_cache,
             )
         )
         for fail in new_failures:
@@ -425,6 +428,7 @@ def fill_materialized_placements(
     if effective_target <= 0:
         return MaterializeFillResult([], [], [], [], n_attempts=0)
 
+    pose_cache = build_pose_batch_cache(slab_for_sites, conformers, config)
     oversample_max = float(config.placement_retry_oversample_max)
     pool_capacity = capacity_int if config.placement_fill_clamp_to_capacity else None
 
@@ -508,6 +512,7 @@ def fill_materialized_placements(
             failures=failures,
             bans=bans,
             last_spec_by_index=last_spec_by_index,
+            pose_cache=pose_cache,
         )
 
     _run_chunks(pool)

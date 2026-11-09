@@ -77,6 +77,25 @@ def test_unique_sites_cache_key_uses_material_aware_pbc_not_ase_pbc():
     )
 
 
+def test_unique_sites_cache_key_structure_pbc_for_wall_plugins():
+    """adaptive_grid and rolling_probe follow Atoms.pbc; topology does not."""
+    from metalsurfer.placement.site_context import _unique_sites_cache_key
+
+    slab_tt = make_slab(nx=2, ny=2)
+    slab_tt.set_pbc([True, True, False])
+    slab_ttt = slab_tt.copy()
+    slab_ttt.set_pbc([True, True, True])
+    for plugin in ("adaptive_grid", "rolling_probe"):
+        cfg = AdsorptionConfig(material_type="slab", site_generator=plugin)
+        assert _unique_sites_cache_key(slab_tt, cfg) != _unique_sites_cache_key(
+            slab_ttt, cfg
+        )
+    topology = AdsorptionConfig(material_type="slab", site_generator="topology")
+    assert _unique_sites_cache_key(slab_tt, topology) == _unique_sites_cache_key(
+        slab_ttt, topology
+    )
+
+
 def test_unique_sites_cache_key_includes_site_generator():
     from metalsurfer.placement.site_context import _unique_sites_cache_key
 

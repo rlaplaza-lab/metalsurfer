@@ -3,8 +3,8 @@
 import logging
 import os
 import sys
-import tempfile
 import types
+from contextlib import contextmanager
 
 import numpy as np
 import pytest
@@ -36,6 +36,20 @@ from metalsurfer.surface_prep._surfaces import (
 )
 
 from .conftest import make_slab, make_water
+
+
+@contextmanager
+def _scratch(tmp_path):
+    n = sum(1 for _ in tmp_path.iterdir()) + 1
+    path = tmp_path / f"scratch-{n}"
+    path.mkdir()
+    yield str(path)
+
+
+def _repeat_seeds(run, tmp_path, *seeds):
+    with _scratch(tmp_path) as results_dir:
+        return [run(seed, results_dir) for seed in seeds]
+
 
 # ---------------------------------------------------------------------------
 # SlabContainer
@@ -151,7 +165,7 @@ class TestSlabZAlignment:
         )
         assert float(np.min(slab.atoms.get_positions()[:, 2])) == pytest.approx(0.0)
 
-    def test_create_slab_from_bulk_empty_candidates_raises(self, monkeypatch):
+    def test_create_slab_from_bulk_empty_candidates_raises(self, monkeypatch, tmp_path):
         core = types.ModuleType("fairchem.data.oc.core")
 
         class _FakeBulk:
@@ -177,7 +191,7 @@ class TestSlabZAlignment:
         monkeypatch.setitem(sys.modules, "fairchem.data.oc.core", core)
 
         with (
-            tempfile.TemporaryDirectory() as tmpdir,
+            _scratch(tmp_path) as tmpdir,
             pytest.raises(GeometryValidationError, match="No slabs were generated"),
         ):
             create_slab_from_bulk(
@@ -228,7 +242,9 @@ class TestSlabZAlignment:
                 config=AdsorptionConfig(),
             )
 
-    def test_create_slab_from_bulk_relaxation_requires_calculator(self, monkeypatch):
+    def test_create_slab_from_bulk_relaxation_requires_calculator(
+        self, monkeypatch, tmp_path
+    ):
         core = types.ModuleType("fairchem.data.oc.core")
 
         class _FakeBulk:
@@ -258,7 +274,7 @@ class TestSlabZAlignment:
         monkeypatch.setitem(sys.modules, "fairchem.data.oc.core", core)
 
         with (
-            tempfile.TemporaryDirectory() as tmpdir,
+            _scratch(tmp_path) as tmpdir,
             pytest.raises(ValueError, match="requires a calculator"),
         ):
             create_slab_from_bulk(
@@ -280,9 +296,9 @@ class TestSubstituteAlloy:
     def _ru_slab(self):
         return SlabContainer(make_slab(symbol="Ru"))
 
-    def test_zero_fraction_returns_base(self):
+    def test_zero_fraction_returns_base(self, tmp_path):
         slab = self._ru_slab()
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             result = substitute_alloy(
                 slab,
                 "Ru",
@@ -294,9 +310,9 @@ class TestSubstituteAlloy:
         syms = result.atoms.get_chemical_symbols()
         assert all(s == "Ru" for s in syms)
 
-    def test_full_replacement(self):
+    def test_full_replacement(self, tmp_path):
         slab = self._ru_slab()
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             result = substitute_alloy(
                 slab,
                 "Ru",
@@ -308,10 +324,10 @@ class TestSubstituteAlloy:
         syms = result.atoms.get_chemical_symbols()
         assert all(s == "Cu" for s in syms)
 
-    def test_partial_replacement_count(self):
+    def test_partial_replacement_count(self, tmp_path):
         slab = self._ru_slab()
         n_total = len(slab.atoms)
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             result = substitute_alloy(
                 slab,
                 "Ru",
@@ -325,59 +341,30 @@ class TestSubstituteAlloy:
         expected = int(round(n_total * 0.25))
         assert n_cu == expected
 
-    def test_deterministic_with_same_seed(self):
-        slab1 = self._ru_slab()
-        slab2 = self._ru_slab()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            r1 = substitute_alloy(
-                slab1,
-                "Ru",
-                "Cu",
-                guest_fraction=0.33,
-                seed=123,
-                results_dir=tmpdir,
-                config=AdsorptionConfig(),
-            )
-            r2 = substitute_alloy(
-                slab2,
-                "Ru",
-                "Cu",
-                guest_fraction=0.33,
-                seed=123,
-                results_dir=tmpdir,
-                config=AdsorptionConfig(),
-            )
+    def _alloy(self, seed, results_dir):
+        return substitute_alloy(
+            self._ru_slab(),
+            "Ru",
+            "Cu",
+            guest_fraction=0.33,
+            seed=seed,
+            results_dir=results_dir,
+            config=AdsorptionConfig(),
+        )
+
+    def test_deterministic_with_same_seed(self, tmp_path):
+        r1, r2 = _repeat_seeds(self._alloy, tmp_path, 123, 123)
         assert r1.atoms.get_chemical_symbols() == r2.atoms.get_chemical_symbols()
 
-    def test_different_seed_differs(self):
-        slab1 = self._ru_slab()
-        slab2 = self._ru_slab()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            r1 = substitute_alloy(
-                slab1,
-                "Ru",
-                "Cu",
-                guest_fraction=0.33,
-                seed=1,
-                results_dir=tmpdir,
-                config=AdsorptionConfig(),
-            )
-            r2 = substitute_alloy(
-                slab2,
-                "Ru",
-                "Cu",
-                guest_fraction=0.33,
-                seed=999,
-                results_dir=tmpdir,
-                config=AdsorptionConfig(),
-            )
+    def test_different_seed_differs(self, tmp_path):
+        r1, r2 = _repeat_seeds(self._alloy, tmp_path, 1, 999)
         assert r1.atoms.get_chemical_symbols() != r2.atoms.get_chemical_symbols()
 
-    def test_uses_config_seed_by_default(self):
+    def test_uses_config_seed_by_default(self, tmp_path):
         slab1 = self._ru_slab()
         slab2 = self._ru_slab()
         cfg = AdsorptionConfig(seed=77)
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             r1 = substitute_alloy(
                 slab1, "Ru", "Cu", guest_fraction=0.33, config=cfg, results_dir=tmpdir
             )
@@ -392,9 +379,9 @@ class TestSubstituteAlloy:
             )
         assert r1.atoms.get_chemical_symbols() == r2.atoms.get_chemical_symbols()
 
-    def test_writes_output_files(self):
+    def test_writes_output_files(self, tmp_path):
         slab = self._ru_slab()
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             substitute_alloy(
                 slab,
                 "Ru",
@@ -408,10 +395,10 @@ class TestSubstituteAlloy:
                 os.path.join(tmpdir, "clean_Ru_Cu_50_slab_POSCAR")
             )
 
-    def test_writes_poscar_when_enabled(self):
+    def test_writes_poscar_when_enabled(self, tmp_path):
         slab = self._ru_slab()
         cfg = AdsorptionConfig(write_vasp_inputs=True)
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             substitute_alloy(
                 slab,
                 "Ru",
@@ -422,9 +409,9 @@ class TestSubstituteAlloy:
             )
             assert os.path.exists(os.path.join(tmpdir, "clean_Ru_Cu_50_slab_POSCAR"))
 
-    def test_no_host_atoms_raises(self):
+    def test_no_host_atoms_raises(self, tmp_path):
         slab = SlabContainer(make_slab(symbol="Cu"))
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             # Trying to replace "Ru" atoms in a pure Cu slab → 0 replacements
             result = substitute_alloy(
                 slab,
@@ -445,9 +432,9 @@ class TestSubstituteAlloy:
                 slab, "Ru", "Cu", guest_fraction=bad_fraction, config=AdsorptionConfig()
             )
 
-    def test_accepts_plain_atoms_input(self):
+    def test_accepts_plain_atoms_input(self, tmp_path):
         atoms = make_slab(symbol="Ru")
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             result = substitute_alloy(
                 atoms,
                 "Ru",
@@ -460,7 +447,9 @@ class TestSubstituteAlloy:
         assert isinstance(result, SlabContainer)
         assert result.atoms.get_chemical_symbols().count("Cu") > 0
 
-    def test_propagates_optimization_error_without_rewrapping(self, monkeypatch):
+    def test_propagates_optimization_error_without_rewrapping(
+        self, monkeypatch, tmp_path
+    ):
         slab = self._ru_slab()
 
         def _failing_relax(*_args, **_kwargs):
@@ -476,7 +465,7 @@ class TestSubstituteAlloy:
             _failing_relax,
         )
         with (
-            tempfile.TemporaryDirectory() as tmpdir,
+            _scratch(tmp_path) as tmpdir,
             pytest.raises(
                 OptimizationError, match="^Optimization failed: inner relax boom$"
             ),
@@ -492,7 +481,7 @@ class TestSubstituteAlloy:
                 config=AdsorptionConfig(),
             )
 
-    def test_wraps_non_optimization_runtime_error(self, monkeypatch):
+    def test_wraps_non_optimization_runtime_error(self, monkeypatch, tmp_path):
         slab = self._ru_slab()
 
         class _PostRelaxBrokenCalculator:
@@ -519,7 +508,7 @@ class TestSubstituteAlloy:
             ),
         )
         with (
-            tempfile.TemporaryDirectory() as tmpdir,
+            _scratch(tmp_path) as tmpdir,
             pytest.raises(
                 OptimizationError,
                 match="Alloy slab relaxation failed: energy readout failed",
@@ -537,7 +526,7 @@ class TestSubstituteAlloy:
                 config=AdsorptionConfig(),
             )
 
-    def test_ranking_preserves_batch_failure_cause(self, monkeypatch):
+    def test_ranking_preserves_batch_failure_cause(self, monkeypatch, tmp_path):
         slab = self._ru_slab()
         batch_err = RuntimeError("batch OOM")
 
@@ -556,7 +545,7 @@ class TestSubstituteAlloy:
             _failing_batch,
         )
         with (
-            tempfile.TemporaryDirectory() as tmpdir,
+            _scratch(tmp_path) as tmpdir,
             pytest.raises(GeometryValidationError, match="batch OOM") as exc_info,
         ):
             substitute_alloy(
@@ -572,7 +561,9 @@ class TestSubstituteAlloy:
             )
         assert exc_info.value.__cause__ is batch_err
 
-    def test_ranking_falls_through_when_batch_energies_invalid(self, monkeypatch):
+    def test_ranking_falls_through_when_batch_energies_invalid(
+        self, monkeypatch, tmp_path
+    ):
         slab = self._ru_slab()
 
         class _GoodCalc:
@@ -589,7 +580,7 @@ class TestSubstituteAlloy:
             "metalsurfer.optimization.batch_static",
             _all_none_batch,
         )
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             result = substitute_alloy(
                 slab,
                 "Ru",
@@ -679,11 +670,11 @@ class TestDepositAdatoms:
     def _layered_slab(self):
         return SlabContainer(make_slab(nx=4, ny=4, n_layers=3))
 
-    def test_adatoms_placed_above_surface(self):
+    def test_adatoms_placed_above_surface(self, tmp_path):
         slab = self._layered_slab()
         z_max = float(np.max(slab.atoms.get_positions()[:, 2]))
         n_before = len(slab.atoms)
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             result = deposit_adatoms(
                 slab,
                 "Sn",
@@ -695,10 +686,10 @@ class TestDepositAdatoms:
         new_positions = result.atoms.get_positions()[n_before:]
         assert all(z > z_max for z in new_positions[:, 2])
 
-    def test_logs_without_energy_when_no_calculator(self, caplog):
+    def test_logs_without_energy_when_no_calculator(self, caplog, tmp_path):
         slab = self._layered_slab()
         with (
-            tempfile.TemporaryDirectory() as tmpdir,
+            _scratch(tmp_path) as tmpdir,
             caplog.at_level(logging.INFO, logger="metalsurfer.surface_prep._surfaces"),
         ):
             deposit_adatoms(
@@ -712,51 +703,25 @@ class TestDepositAdatoms:
         assert any("without energy ranking" in m for m in messages)
         assert not any("E=inf" in m for m in messages)
 
-    def test_deterministic_with_same_seed(self):
-        slab1 = self._layered_slab()
-        slab2 = self._layered_slab()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            r1 = deposit_adatoms(
-                slab1,
-                "Sn",
-                coverage_fraction=0.3,
-                seed=42,
-                config=self._NO_RELAX_CFG,
-                results_dir=tmpdir,
-            )
-            r2 = deposit_adatoms(
-                slab2,
-                "Sn",
-                coverage_fraction=0.3,
-                seed=42,
-                config=self._NO_RELAX_CFG,
-                results_dir=tmpdir,
-            )
+    def _adatoms(self, seed, results_dir):
+        return deposit_adatoms(
+            self._layered_slab(),
+            "Sn",
+            coverage_fraction=0.3,
+            seed=seed,
+            config=self._NO_RELAX_CFG,
+            results_dir=results_dir,
+        )
+
+    def test_deterministic_with_same_seed(self, tmp_path):
+        r1, r2 = _repeat_seeds(self._adatoms, tmp_path, 42, 42)
         assert np.allclose(
             r1.atoms.get_positions(), r2.atoms.get_positions(), atol=1e-10
         )
 
-    def test_different_seed_differs(self):
-        slab1 = self._layered_slab()
-        slab2 = self._layered_slab()
-        n_sub = len(slab1.atoms)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            r1 = deposit_adatoms(
-                slab1,
-                "Sn",
-                coverage_fraction=0.3,
-                seed=1,
-                config=self._NO_RELAX_CFG,
-                results_dir=tmpdir,
-            )
-            r2 = deposit_adatoms(
-                slab2,
-                "Sn",
-                coverage_fraction=0.3,
-                seed=999,
-                config=self._NO_RELAX_CFG,
-                results_dir=tmpdir,
-            )
+    def test_different_seed_differs(self, tmp_path):
+        n_sub = len(self._layered_slab().atoms)
+        r1, r2 = _repeat_seeds(self._adatoms, tmp_path, 1, 999)
         ads1 = r1.atoms.get_positions()[n_sub:]
         ads2 = r2.atoms.get_positions()[n_sub:]
         # Adatom positions should differ across seeds (site selection is random).
@@ -765,13 +730,13 @@ class TestDepositAdatoms:
         if ads1.shape == ads2.shape and np.allclose(ads1, ads2, atol=1e-6):
             pytest.fail("different seeds produced identical adatom placements")
 
-    def test_too_few_top_atoms_raises(self):
+    def test_too_few_top_atoms_raises(self, tmp_path):
         atoms = Atoms("H2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
         atoms.set_cell([5.0, 5.0, 10.0])
         atoms.set_pbc([True, True, True])
         slab = SlabContainer(atoms)
         with (
-            tempfile.TemporaryDirectory() as tmpdir,
+            _scratch(tmp_path) as tmpdir,
             pytest.raises(
                 GeometryValidationError, match="Cannot identify top surface layer"
             ),
@@ -784,9 +749,9 @@ class TestDepositAdatoms:
                 results_dir=tmpdir,
             )
 
-    def test_writes_output_files(self):
+    def test_writes_output_files(self, tmp_path):
         slab = self._layered_slab()
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             deposit_adatoms(
                 slab,
                 "Sn",
@@ -797,10 +762,10 @@ class TestDepositAdatoms:
             assert os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20.xyz"))
             assert not os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20_POSCAR"))
 
-    def test_writes_poscar_when_enabled(self):
+    def test_writes_poscar_when_enabled(self, tmp_path):
         slab = self._layered_slab()
         cfg = AdsorptionConfig(write_vasp_inputs=True, slab_relaxation_mode="none")
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             deposit_adatoms(
                 slab,
                 "Sn",
@@ -810,11 +775,11 @@ class TestDepositAdatoms:
             )
             assert os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20_POSCAR"))
 
-    def test_uses_config_seed_by_default(self):
+    def test_uses_config_seed_by_default(self, tmp_path):
         slab1 = self._layered_slab()
         slab2 = self._layered_slab()
         cfg = AdsorptionConfig(seed=77, slab_relaxation_mode="none")
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             r1 = deposit_adatoms(
                 slab1, "Sn", coverage_fraction=0.3, config=cfg, results_dir=tmpdir
             )
@@ -854,7 +819,7 @@ class TestDepositAdatoms:
 
         assert any(isinstance(c, FixAtoms) for c in result.atoms.constraints)
 
-    def test_adatoms_respect_minimum_separation(self):
+    def test_adatoms_respect_minimum_separation(self, tmp_path):
         # Plan item 10: adatoms must not be packed on top of each other.
         from ase.geometry import get_distances
 
@@ -862,7 +827,7 @@ class TestDepositAdatoms:
         from metalsurfer.placement.site_coords import _periodic_image_offsets
 
         slab = SlabContainer(fcc111("Cu", size=(4, 4, 4), vacuum=8.0))
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             result = deposit_adatoms(
                 slab,
                 "Sn",
@@ -886,10 +851,10 @@ class TestDepositAdatoms:
                 min_sep = min(min_sep, float(np.min(dmat[iu])))
         assert min_sep >= 2.0 * float(_get_covalent_radius("Sn")) - 1e-6
 
-    def test_accepts_plain_atoms_input(self):
+    def test_accepts_plain_atoms_input(self, tmp_path):
         slab = self._layered_slab()
         n_before = len(slab.atoms)
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             result = deposit_adatoms(
                 slab.atoms,
                 "Sn",
@@ -912,7 +877,7 @@ class TestDepositAdatoms:
                 config=AdsorptionConfig(),
             )
 
-    def test_relaxation_invoked_for_variants(self, monkeypatch):
+    def test_relaxation_invoked_for_variants(self, monkeypatch, tmp_path):
         slab = self._layered_slab()
 
         calls: list[tuple[str, int, int]] = []
@@ -942,7 +907,7 @@ class TestDepositAdatoms:
         monkeypatch.setattr(
             "metalsurfer.surface_prep._surfaces._relax_slab_structure", _fake_relax
         )
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             deposit_adatoms(
                 slab,
                 "Sn",
@@ -967,10 +932,10 @@ class TestDepositAdatoms:
 class TestCombinedModifiers:
     """Verify alloy substitution followed by adatom deposition composes correctly."""
 
-    def test_alloy_then_adatom(self):
+    def test_alloy_then_adatom(self, tmp_path):
         slab = SlabContainer(make_slab(nx=4, ny=4, n_layers=3, symbol="Ru"))
         n_original = len(slab.atoms)
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             alloyed = substitute_alloy(
                 slab,
                 "Ru",
@@ -1278,9 +1243,9 @@ class TestAutoResizeSlabForMolecule:
 
 
 class TestWriteCleanXyz:
-    def test_roundtrip(self):
+    def test_roundtrip(self, tmp_path):
         atoms = make_slab(nx=2, ny=2, n_layers=1)
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with _scratch(tmp_path) as tmpdir:
             path = os.path.join(tmpdir, "test.xyz")
             _write_clean_xyz(atoms, path)
             assert os.path.exists(path)

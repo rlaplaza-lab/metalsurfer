@@ -1,5 +1,6 @@
 """Tests that core imports work without optional heavy dependencies."""
 
+import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -284,8 +285,6 @@ def test_lazy_getattr_raises_for_unknown():
 def test_import_does_not_load_torch_or_sklearn():
     """Importing metalsurfer (and metalsurfer.conformers) must not eagerly pull
     in torch or sklearn — both are heavy and must stay lazy."""
-    import subprocess
-
     script = (
         "import sys, metalsurfer, metalsurfer.conformers\n"
         "assert 'torch' not in sys.modules, 'torch imported at package import'\n"
@@ -298,3 +297,42 @@ def test_import_does_not_load_torch_or_sklearn():
         cwd=str(Path(__file__).resolve().parent.parent),
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_quick_collection_does_not_probe_mlip_stack():
+    """``pytest -m quick`` must not import FairChem or initialize CUDA."""
+    root = Path(__file__).resolve().parent.parent
+    script = """
+import sys
+import pytest
+
+modules = [
+    "tests/test_dependency_behavior.py",
+    "tests/test_integration_mlip_pipeline.py",
+    "tests/test_integration_mlip_cpu_smoke.py",
+    "tests/test_bayesian.py",
+]
+status = pytest.main([
+    *modules,
+    "-m", "quick",
+    "--collect-only",
+    "-p", "no:cacheprovider",
+    "-q",
+    "--override-ini", "addopts=",
+])
+assert "tests.optional_deps" not in sys.modules, "optional_deps imported"
+assert "fairchem" not in sys.modules, "fairchem imported"
+torch = sys.modules.get("torch")
+if torch is not None and hasattr(torch, "cuda"):
+    assert not torch.cuda.is_initialized(), "CUDA context initialized at collection"
+if status not in (0, 5):
+    raise SystemExit(status)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=str(root),
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

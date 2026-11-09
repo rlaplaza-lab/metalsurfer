@@ -74,6 +74,7 @@ def generate_placements_from_specs(
     site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
+    pose_cache: _PoseBatchCache | None = None,
 ) -> list[tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]]:
     """Materialize specs in input order, optionally via a thread pool.
 
@@ -101,14 +102,19 @@ def generate_placements_from_specs(
         Optional substrate for site detection.
     materialization_cache
         Optional cache of materialized placements keyed by placement index.
+    pose_cache
+        Prebuilt pose batch. Built here when omitted and any spec is uncached.
     """
     if not specs:
         return []
 
     placement_ref = slab_for_sites if slab_for_sites is not None else slab
-    pose_cache = None
-    if materialization_cache is None or any(
-        materialization_cache.get(int(spec.placement_index)) is None for spec in specs
+    if pose_cache is None and (
+        materialization_cache is None
+        or any(
+            materialization_cache.get(int(spec.placement_index)) is None
+            for spec in specs
+        )
     ):
         pose_cache = build_pose_batch_cache(placement_ref, conformers, config)
 

@@ -308,7 +308,7 @@ def _relax_groups(
     log_prefix: str,
     slots_by_molecule: dict[str, int] | None = None,
 ) -> JointTupletScreenOutcome:
-    valid = evaluate_composite_batch(
+    batch = evaluate_composite_batch(
         groups,
         slab_atoms=slab_atoms,
         base_slab=base_slab,
@@ -319,8 +319,8 @@ def _relax_groups(
         log_prefix=log_prefix,
     )
     return JointTupletScreenOutcome(
-        valid_configs=valid,
-        flat_results=_flatten_configs(valid),
+        valid_configs=batch.valid,
+        flat_results=_flatten_configs(batch.valid),
         slots_by_molecule=slots_by_molecule,
     )
 
@@ -938,7 +938,7 @@ def process_joint_tuplet_bayesian(
             E_slab=E_slab,
             topology_check=topology_check,
             log_prefix="Joint BO | ",
-        ):
+        ).valid:
             valid_configs.append(group)
             _record_group(group)
 

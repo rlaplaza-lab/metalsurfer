@@ -1,6 +1,7 @@
 """Tests for conformer generation and deduplication."""
 
 import numpy as np
+import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig
@@ -12,6 +13,14 @@ from metalsurfer.conformers import (
 # ---------------------------------------------------------------------------
 # create_conformers_from_smiles
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def ethanol_conformers():
+    config = AdsorptionConfig(num_conformers=5, seed=42)
+    result = create_conformers_from_smiles("CCO", config=config)
+    assert result is not None
+    return result
 
 
 def _pairwise_distances(atoms: Atoms) -> np.ndarray:
@@ -56,11 +65,8 @@ class TestCreateConformers:
             assert np.allclose(c.cell.lengths(), [config.vacuum_box_size] * 3)
             assert list(c.get_pbc()) == [False, False, False]
 
-    def test_ethanol_produces_multiple_conformers(self):
-        config = AdsorptionConfig(num_conformers=5, seed=42)
-        result = create_conformers_from_smiles("CCO", config=config)
-        assert result is not None
-        conformers, energies = result
+    def test_ethanol_produces_multiple_conformers(self, ethanol_conformers):
+        conformers, energies = ethanol_conformers
         assert len(conformers) > 1
         assert all(np.isfinite(e) for e in energies)
         for c in conformers:
@@ -89,12 +95,9 @@ class TestCreateConformers:
             assert any(1.4 <= d <= 1.7 for d in cc), cc
             assert any(1.2 <= d <= 1.6 for d in co), co
 
-    def test_ethanol_conformer_geometry_windows(self):
+    def test_ethanol_conformer_geometry_windows(self, ethanol_conformers):
         """Tightened C–C / C–O bond and C–C–O angle windows for ethanol."""
-        config = AdsorptionConfig(num_conformers=5, seed=42)
-        result = create_conformers_from_smiles("CCO", config=config)
-        assert result is not None
-        conformers, energies = result
+        conformers, _energies = ethanol_conformers
         for c in conformers:
             syms = c.get_chemical_symbols()
             pos = c.get_positions()

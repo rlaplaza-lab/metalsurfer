@@ -11,11 +11,12 @@ from metalsurfer.models import (
     BOTransferInfo,
     MultiMolSaturationRunResult,
     MultiMolSaturationStepResult,
-    PlacementDescriptor,
     SaturationRunResult,
     SaturationStepResult,
     ScreeningResult,
 )
+
+from .conftest import make_placement_descriptor, make_screening_result, make_slab
 
 # Top-layer z for default ``make_slab()`` (n_layers=3, spacing=2.7 → max z = 5.4).
 DEFAULT_TEST_SLAB_SURFACE_Z = 5.4
@@ -35,30 +36,16 @@ def make_placement_record(
         smiles=smiles,
         surface_id="Cu_fcc111",
         placement_id=i,
-        descriptor=PlacementDescriptor(
+        descriptor=make_placement_descriptor(
+            placement_id=i,
             conformer_index=i % 3,
-            orientation_type="round",
-            face_flip=False,
-            en_atom_index=None,
             site_index=i % 5,
-            site_type="atop",
             tilt_deg=15.0,
             azimuth_deg=45.0,
-            azimuth_in_plane_deg=0.0,
-            z_fraction=0.5,
-            placement_index=i,
             x=float(1.0 + i * 0.1),
             y=float(2.0 - i * 0.1),
-            z_offset=2.5,
-            x_abs=float(1.0 + i * 0.1),
-            y_abs=float(2.0 - i * 0.1),
             surface_ref_z_abs=10.0,
             z_abs=12.5,
-            shape="round",
-            quat_w=1.0,
-            quat_x=0.0,
-            quat_y=0.0,
-            quat_z=0.0,
         ),
         energy_adsorption=energy,
         energy_adslab=-150.0 + energy,
@@ -115,32 +102,22 @@ def make_random_placement_records(
         y_ = float(rng.uniform(-4, 4))
         surf_z = DEFAULT_TEST_SLAB_SURFACE_Z
 
-        descriptor = PlacementDescriptor(
+        descriptor = make_placement_descriptor(
+            placement_id=i,
             conformer_index=i % 3,
             orientation_type=str(
                 rng.choice(["parallel", "EN-down", "vertical", "round"])
-            ),  # type: ignore[arg-type]
-            face_flip=False,
-            en_atom_index=None,
+            ),
             site_index=i % 5,
             site_type=str(rng.choice(site_choices)),
             tilt_deg=tilt,
             azimuth_deg=float(rng.choice(az_choices)),
-            azimuth_in_plane_deg=0.0,
-            z_fraction=0.5,
-            placement_index=i,
             x=x_,
             y=y_,
             z_offset=z_off,
-            x_abs=x_,
-            y_abs=y_,
             surface_ref_z_abs=surf_z,
             z_abs=surf_z + z_off,
             shape=str(rng.choice(["linear", "flat", "round"])),
-            quat_w=1.0,
-            quat_x=0.0,
-            quat_y=0.0,
-            quat_z=0.0,
         )
         kwargs: dict = {
             "molecule": molecule,
@@ -184,9 +161,6 @@ def make_saturation_step(
     **screening_kwargs,
 ) -> SaturationStepResult:
     """Build a SaturationStepResult; creates a screening best_result if omitted."""
-    # Local import avoids conftest↔factories cycles at module load.
-    from .conftest import make_placement_descriptor, make_screening_result
-
     if best_result is None:
         best_result = make_screening_result(
             molecule=molecule,
@@ -225,9 +199,6 @@ def make_saturation_run(
     if n_molecules_at_saturation is None:
         n_molecules_at_saturation = len(steps)
     if final_slab_atoms is None:
-        # Local import avoids conftest↔factories cycles at module load.
-        from .conftest import make_slab
-
         final_slab_atoms = make_slab()
     return SaturationRunResult(
         molecule=molecule,
@@ -248,8 +219,6 @@ def make_multi_mol_saturation_run(
     energy_adsorption: float = -1.0,
 ) -> MultiMolSaturationRunResult:
     """Build a MultiMolSaturationRunResult with one step by default."""
-    from .conftest import make_placement_descriptor, make_screening_result, make_slab
-
     molecules = list(molecules) if molecules is not None else ["water"]
     winner = winning_molecule or molecules[0]
     if steps is None:

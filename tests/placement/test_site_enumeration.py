@@ -397,8 +397,12 @@ def test_topology_bridges_keep_distinct_pbc_midpoints():
     )
 
 
-def test_cluster_equivalent_sites_cartesian_tolerance_scales_with_cell():
-    """0.05 Å tolerance merges sub-0.05 Cartesian duplicates regardless of cell size."""
+@pytest.mark.parametrize("a_len", [8.1, 16.2])
+@pytest.mark.parametrize(("dx", "expected"), [(0.04, 1), (0.06, 2)])
+def test_cluster_equivalent_sites_cartesian_tolerance_scales_with_cell(
+    a_len, dx, expected
+):
+    """0.05 Å tolerance merges a pair inside it and keeps a pair just outside."""
     site_a = _make_site(
         [1.0, 1.0, 5.0],
         site_type="atop",
@@ -406,15 +410,14 @@ def test_cluster_equivalent_sites_cartesian_tolerance_scales_with_cell():
         env_fingerprint=(("Ru",), (), 0),
     )
     site_b = _make_site(
-        [1.04, 1.0, 5.0],
+        [1.0 + dx, 1.0, 5.0],
         site_type="atop",
         material_type="slab",
         env_fingerprint=(("Ru",), (), 0),
     )
-    for a_len in (8.1, 16.2):
-        cell = np.array([[a_len, 0.0, 0.0], [0.0, a_len, 0.0], [0.0, 0.0, 20.0]])
-        unique = _cluster_equivalent_sites([site_a, site_b], cell, tolerance=0.05)
-        assert len(unique) == 1
+    cell = np.array([[a_len, 0.0, 0.0], [0.0, a_len, 0.0], [0.0, 0.0, 20.0]])
+    unique = _cluster_equivalent_sites([site_a, site_b], cell, tolerance=0.05)
+    assert len(unique) == expected, (a_len, dx)
 
 
 def test_cluster_equivalent_sites_tilted_slab_uses_in_plane_distance():
@@ -667,7 +670,8 @@ def test_fcc111_site_type_ratios_and_coordination_numbers():
             assert len(s.slab_indices) == 3
 
 
-def test_fcc100_site_type_ratios_and_coordination_numbers():
+@pytest.mark.parametrize("size", [3, 4, 5])
+def test_fcc100_site_type_ratios_and_coordination_numbers(size):
     """fcc100 keeps atop/bridge/hollow with CN 1/2/3.
 
     The library reports fcc100 hollows as 3-fold (``hollow_order == 3``), not
@@ -676,7 +680,7 @@ def test_fcc100_site_type_ratios_and_coordination_numbers():
     periodic images of the square lattice). We assert the count ratios and
     the per-type coordination numbers exposed via ``slab_indices``.
     """
-    slab = fcc100("Cu", (3, 3, 4), vacuum=10.0)
+    slab = fcc100("Cu", (size, size, 4), vacuum=10.0)
     positions = np.asarray(slab.get_positions(), dtype=float)
     cell = np.asarray(slab.get_cell(), dtype=float)
     n_top = int(np.count_nonzero(top_layer_mask_by_normal(positions, cell, 0.5)))

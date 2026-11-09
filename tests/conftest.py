@@ -1,47 +1,47 @@
 """Shared fixtures for metalsurfer test suites."""
 
-# Use 'spawn' for multiprocessing so CUDA can be used in tests. The default
-# 'fork' causes "Cannot re-initialize CUDA in forked subprocess" when FairChem
-# or other GPU code runs after a fork (e.g. with pytest-xdist -n).
 import contextlib
+import functools
 import multiprocessing
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
-
-with contextlib.suppress(RuntimeError):
-    multiprocessing.set_start_method("spawn", force=True)
 
 import numpy as np
 import pytest
 from ase import Atoms
 from ase.data import atomic_numbers, covalent_radii
+from ase.io import read
 
+from metalsurfer._geom_pbc import minimum_image_cartesian_delta
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.models import PlacementDescriptor, ScreeningResult
-
-from .optional_deps import cuda_available, has_mlip_stack
-
-_SKIP_WITHOUT_MLIP = pytest.mark.skipif(
-    not has_mlip_stack,
-    reason="MLIP stack (torch/fairchem/torch-sim-atomistic) not installed",
+from metalsurfer.placement.dissociative import (
+    _DISSOCIATIVE_PAIR_CACHE,
+    _DISSOCIATIVE_PAIR_CACHE_LOCK,
 )
+from metalsurfer.placement.site_context import (
+    _SITE_CONTEXT_CACHE,
+    _SITE_CONTEXT_CACHE_LOCK,
+)
+from metalsurfer.surface_prep import apply_surface_constraints
 
-# GPU e2e tests (run via scripts/run_gpu_tests.sh for VRAM isolation).
-GPU_MLIP_MARKS = [
-    pytest.mark.mlip,
-    pytest.mark.gpu,
-    pytest.mark.no_fork,
-    _SKIP_WITHOUT_MLIP,
-    pytest.mark.skipif(
-        not cuda_available,
-        reason="CUDA GPU required; skipped in CI (no GPU)",
-    ),
-]
+from . import _session_flags
 
-MLIP_CPU_MARKS = [
-    pytest.mark.mlip,
-    _SKIP_WITHOUT_MLIP,
-]
+# Set by scripts/run_gpu_tests.sh so CUDA workers use spawn.
+if os.environ.get("METALSURFER_MP_SPAWN") == "1":
+    with contextlib.suppress(RuntimeError):
+        multiprocessing.set_start_method("spawn", force=True)
+
+# These sessions never import the MLIP stack at collection.
+_NO_MLIP_PROBE_MARKEXPRS = frozenset(
+    {
+        "quick",
+        "docs",
+        "integration",
+        "slow",
+    }
+)
 
 # Energy-identity tolerances: stub arithmetic vs MLIP noise.
 # The E_ads identity (e_adslab - e_slab - e_adsorbate) is evaluated by the
@@ -60,11 +60,9 @@ GPU_AUTOBATCH = {
 }
 
 
-def gpu_mlip_test(fn):
-    """Apply GPU_MLIP_MARKS to a single test function."""
-    for mark in reversed(GPU_MLIP_MARKS):
-        fn = mark(fn)
-    return fn
+def pytest_configure(config: pytest.Config) -> None:
+    expr = (getattr(config.option, "markexpr", None) or "").strip()
+    _session_flags.mlip_probe_enabled = expr not in _NO_MLIP_PROBE_MARKEXPRS
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -93,6 +91,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             raise pytest.UsageError(f"{item.nodeid}: gpu tests must be mlip")
 
 
+def clear_placement_caches() -> None:
+    """Caches hand back live objects, so each test starts and ends empty."""
+    with _SITE_CONTEXT_CACHE_LOCK:
+        _SITE_CONTEXT_CACHE.clear()
+    with _DISSOCIATIVE_PAIR_CACHE_LOCK:
+        _DISSOCIATIVE_PAIR_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_placement_caches():
+    clear_placement_caches()
+    yield
+    clear_placement_caches()
+
+
 def _clear_cuda_for_gpu_test() -> None:
     """Evict TorchSim autobatchers and release CUDA allocations between GPU tests."""
     try:
@@ -111,22 +124,6 @@ def _release_cuda_after_gpu_test(request):
     yield
     if request.node.get_closest_marker("gpu"):
         _clear_cuda_for_gpu_test()
-
-
-@pytest.hookimpl(tryfirst=True)
-def pytest_runtest_protocol(item):
-    """Run tests with no_fork marker in main process when --forked is used.
-
-    pytest-forked uses os.fork(), which breaks CUDA. Tests marked no_fork
-    (e.g. GPU tests) run in the main process instead.
-    """
-    if item.config.getoption("forked", default=False) and item.get_closest_marker(
-        "no_fork"
-    ):
-        from _pytest.runner import runtestprotocol
-
-        return runtestprotocol(item)
-    return None
 
 
 @pytest.fixture
@@ -187,16 +184,14 @@ class DummyReferenceEnergies:
 # ---------------------------------------------------------------------------
 
 
-def make_slab(
-    nx: int = 4,
-    ny: int = 4,
-    n_layers: int = 3,
-    spacing: float = 2.7,
-    symbol: str = "Ru",
+@functools.lru_cache(maxsize=16)
+def _slab_template(
+    nx: int,
+    ny: int,
+    n_layers: int,
+    spacing: float,
+    symbol: str,
 ) -> Atoms:
-    """Build a campaign-ready FCC(111)-like slab with constraints attached."""
-    from metalsurfer.surface_prep import apply_surface_constraints
-
     a = 2.7
     positions = []
     for lz in range(n_layers):
@@ -213,6 +208,17 @@ def make_slab(
         pbc=[True, True, False],
     )
     return apply_surface_constraints(atoms)
+
+
+def make_slab(
+    nx: int = 4,
+    ny: int = 4,
+    n_layers: int = 3,
+    spacing: float = 2.7,
+    symbol: str = "Ru",
+) -> Atoms:
+    """Build a campaign-ready FCC(111)-like slab with constraints attached."""
+    return _slab_template(nx, ny, n_layers, spacing, symbol).copy()
 
 
 # ---------------------------------------------------------------------------
@@ -339,12 +345,16 @@ def make_screening_result(
     placement_descriptor: PlacementDescriptor | None = None,
     **kwargs: object,
 ) -> ScreeningResult:
-    """Build a compact ScreeningResult with sensible test defaults."""
-    slab = make_slab() if (atoms is None or slab_size is None) else None
-    result_atoms = (
-        atoms if atoms is not None else place_molecule_on_slab(slab, make_water())
-    )
-    result_slab_size = slab_size if slab_size is not None else len(slab)
+    """Build a compact ScreeningResult. ``slab_size`` is required with ``atoms``."""
+    if atoms is None:
+        slab = make_slab()
+        result_atoms = place_molecule_on_slab(slab, make_water())
+        result_slab_size = len(slab) if slab_size is None else slab_size
+    else:
+        if slab_size is None:
+            raise ValueError("slab_size is required when atoms is provided")
+        result_atoms = atoms
+        result_slab_size = slab_size
     descriptor = (
         placement_descriptor
         if placement_descriptor is not None
@@ -422,12 +432,9 @@ def mic_delta(
     cell: np.ndarray,
     pbc: np.ndarray | list[bool] | None = None,
 ) -> np.ndarray:
-    """Apply minimum-image convention to a displacement vector when PBC is on."""
-    if pbc is not None and not np.any(pbc):
-        return np.asarray(dvec, dtype=float)
-    d = np.asarray(dvec, dtype=float)
-    cell_arr = np.asarray(cell, dtype=float)
-    return d - np.floor(d @ np.linalg.inv(cell_arr) + 0.5) @ cell_arr
+    """Apply the production minimum-image convention to a displacement."""
+    flags = np.ones(3, dtype=bool) if pbc is None else np.asarray(pbc, dtype=bool)
+    return minimum_image_cartesian_delta(np.asarray(dvec, dtype=float), cell, flags)
 
 
 def pair_distance(
@@ -470,9 +477,7 @@ def assert_no_intramolecular_clashes(adsorbate: Atoms, slab: Atoms) -> None:
     pbc = list(slab.get_pbc())
     for i in range(len(pos)):
         for j in range(i + 1, len(pos)):
-            dvec = pos[j] - pos[i]
-            if np.any(pbc):
-                dvec = dvec - np.floor(dvec @ np.linalg.inv(cell) + 0.5) @ cell
+            dvec = mic_delta(pos[j] - pos[i], cell, pbc=pbc)
             d = float(np.linalg.norm(dvec))
             r_sum = float(covalent_radii[atomic_numbers[syms[i]]]) + float(
                 covalent_radii[atomic_numbers[syms[j]]]
@@ -523,11 +528,10 @@ def assert_lines_contain(text: str, expected_lines: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def make_nanoparticle() -> Atoms:
-    """Au₁₃ icosahedral cluster (no PBC)."""
-    # Central atom + 12 vertices of an icosahedron at bond length ~2.88 Å
-    phi = (1 + np.sqrt(5)) / 2  # golden ratio
-    d = 2.88 / np.sqrt(1 + phi**2)  # scale so nn distance ≈ 2.88 Å
+@functools.lru_cache(maxsize=1)
+def _nanoparticle_template() -> Atoms:
+    phi = (1 + np.sqrt(5)) / 2
+    d = 2.88 / np.sqrt(1 + phi**2)
     verts = []
     for s1 in (-1, 1):
         for s2 in (-1, 1):
@@ -541,9 +545,17 @@ def make_nanoparticle() -> Atoms:
     return atoms
 
 
-def make_porous_framework() -> Atoms:
-    """Load SiO₂ porous framework from bundled CIF (mp-1195265, Pnma)."""
-    from ase.io import read
+def make_nanoparticle() -> Atoms:
+    """Au₁₃ icosahedral cluster (no PBC)."""
+    return _nanoparticle_template().copy()
 
+
+@functools.lru_cache(maxsize=1)
+def _porous_framework_template() -> Atoms:
     cif_path = Path(__file__).parent / "test_files" / "SiO2.cif"
     return read(str(cif_path))
+
+
+def make_porous_framework() -> Atoms:
+    """Load SiO₂ porous framework from bundled CIF (mp-1195265, Pnma)."""
+    return _porous_framework_template().copy()

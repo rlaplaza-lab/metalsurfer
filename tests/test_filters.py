@@ -1140,8 +1140,7 @@ def test_duplicate_different_energy_kept():
     assert len(filtered) == 2
 
 
-def test_duplicate_removal_ignores_prior_adsorbate_geometry():
-    """Saturation dedup compares only the trailing adsorbate, not priors."""
+def _slab_with_prior_water() -> tuple[Atoms, Atoms]:
     slab_metal = make_slab(n_layers=1, symbol="Ru")
     prior = make_water().copy()
     prior_pos = prior.get_positions().copy()
@@ -1154,6 +1153,12 @@ def test_duplicate_removal_ignores_prior_adsorbate_geometry():
     slab_with_prior = slab_metal + prior
     slab_with_prior.set_cell(slab_metal.get_cell())
     slab_with_prior.set_pbc(slab_metal.get_pbc())
+    return slab_metal, slab_with_prior
+
+
+def test_duplicate_removal_ignores_prior_adsorbate_geometry():
+    """Saturation dedup compares only the trailing adsorbate, not priors."""
+    slab_metal, slab_with_prior = _slab_with_prior_water()
 
     new_water = make_water().copy()
     new_pos = new_water.get_positions().copy()
@@ -1199,18 +1204,7 @@ def test_duplicate_removal_collapses_translated_trailing_adsorbate():
 
     The prior adsorbate is identical and is not part of the comparison.
     """
-    slab_metal = make_slab(n_layers=1, symbol="Ru")
-    prior = make_water().copy()
-    prior_pos = prior.get_positions().copy()
-    prior_pos -= np.mean(prior_pos, axis=0)
-    prior_pos[:, 0] += 1.0
-    prior_pos[:, 1] += 1.0
-    prior_pos[:, 2] += float(np.max(slab_metal.get_positions()[:, 2])) + 2.0
-    prior.set_positions(prior_pos)
-
-    slab_with_prior = slab_metal + prior
-    slab_with_prior.set_cell(slab_metal.get_cell())
-    slab_with_prior.set_pbc(slab_metal.get_pbc())
+    slab_metal, slab_with_prior = _slab_with_prior_water()
 
     def _place_new(x_shift: float) -> Atoms:
         water = make_water().copy()
@@ -1247,18 +1241,7 @@ def test_duplicate_removal_collapses_translated_trailing_adsorbate():
 
 def test_duplicate_removal_keeps_rotated_trailing_pose_with_same_prior():
     """A 90° turn of the new adsorbate is distinct; the prior is ignored."""
-    slab_metal = make_slab(n_layers=1, symbol="Ru")
-    prior = make_water().copy()
-    prior_pos = prior.get_positions().copy()
-    prior_pos -= np.mean(prior_pos, axis=0)
-    prior_pos[:, 0] += 1.0
-    prior_pos[:, 1] += 1.0
-    prior_pos[:, 2] += float(np.max(slab_metal.get_positions()[:, 2])) + 2.0
-    prior.set_positions(prior_pos)
-
-    slab_with_prior = slab_metal + prior
-    slab_with_prior.set_cell(slab_metal.get_cell())
-    slab_with_prior.set_pbc(slab_metal.get_pbc())
+    slab_metal, slab_with_prior = _slab_with_prior_water()
 
     def _place_new(*, turn: bool) -> Atoms:
         water = make_water().copy()

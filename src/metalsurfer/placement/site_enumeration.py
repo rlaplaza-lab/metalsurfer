@@ -29,6 +29,7 @@ from .geometry import _get_covalent_radius
 from .site_classify import (
     _TOPOLOGY_SOURCE_TO_TYPE,
     _build_site_records,
+    _candidates_fully_pretyped,
     _DelaunayClassifyInputs,
 )
 from .site_coords import (
@@ -463,13 +464,15 @@ def _enumerate_unified_sites(
         )
         return [], plugin_vertices
 
-    # Topology defers to Delaunay when available; plugins that already attach
-    # support atoms (e.g. adaptive_grid) skip the Delaunay build.
+    # Empty supports still need the Delaunay index. A pretyped batch does not.
+    pretyped = _candidates_fully_pretyped(
+        len(vertices), source_hints, atom_indices, normals
+    )
     topology_needs_delaunay = any(
         h in _TOPOLOGY_SOURCE_TO_TYPE and h != "atop_injected" for h in source_hints
     )
     supports_complete = bool(atom_indices) and all(atom_indices)
-    if topology_needs_delaunay or not supports_complete:
+    if not pretyped and (topology_needs_delaunay or not supports_complete):
         delaunay_inputs = _delaunay_classify_inputs(
             positions,
             cell,

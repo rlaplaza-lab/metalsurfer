@@ -1024,7 +1024,17 @@ def test_z_fraction_offsets_com_around_pairwise_contact():
     assert heights[2] > heights[1]
 
 
-def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
+@pytest.mark.parametrize(
+    "source",
+    [
+        "topology_hollow",
+        "voronoi",
+        "adaptive_grid",
+        "rolling_probe",
+        "injected_atop",
+    ],
+)
+def test_contact_height_uses_support_atoms_not_lifted_site_vertex(source):
     """Catalog xyz is the support-plane anchor; contact ignores bogus lift."""
     from metalsurfer.placement.geometry import min_pair_clearance_angstrom
     from metalsurfer.placement.pose import (
@@ -1114,39 +1124,31 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex():
     # Contact clears the pairwise gate above the support plane.
     assert float(atom_h[o_idx]) >= support_h + gate - 0.15
 
-    # Plugin-agnostic: a wrongly lifted vertex still uses the support plane.
-    for source in (
-        "topology_hollow",
-        "voronoi",
-        "adaptive_grid",
-        "rolling_probe",
-        "injected_atop",
-    ):
-        lifted = Site(
-            xyz=np.asarray(site.xyz, dtype=float) + 2.0 * n_hat,
-            normal=np.asarray(site.normal, dtype=float),
-            site_type=site.site_type,
-            slab_indices=tuple(site.slab_indices),
-            material_type="slab",
-            site_source=source,
-            env_fingerprint=site.env_fingerprint,
-        )
-        fw = _framework_plane_height(lifted, pos, n_hat, reduce="max")
-        ref, local = _resolve_surface_ref(
-            lifted,
-            slab,
-            "slab",
-        )
-        assert local
-        assert fw == pytest.approx(support_h, abs=1e-9)
-        assert ref == pytest.approx(support_h, abs=1e-9)
-        assert _height_above_supports(
-            lifted,
-            pos,
-            n_hat,
-            reduce="max",
-            fallback=ref,
-        ) == pytest.approx(support_h, abs=1e-9)
+    lifted = Site(
+        xyz=np.asarray(site.xyz, dtype=float) + 2.0 * n_hat,
+        normal=np.asarray(site.normal, dtype=float),
+        site_type=site.site_type,
+        slab_indices=tuple(site.slab_indices),
+        material_type="slab",
+        site_source=source,
+        env_fingerprint=site.env_fingerprint,
+    )
+    fw = _framework_plane_height(lifted, pos, n_hat, reduce="max")
+    ref, local = _resolve_surface_ref(
+        lifted,
+        slab,
+        "slab",
+    )
+    assert local
+    assert fw == pytest.approx(support_h, abs=1e-9)
+    assert ref == pytest.approx(support_h, abs=1e-9)
+    assert _height_above_supports(
+        lifted,
+        pos,
+        n_hat,
+        reduce="max",
+        fallback=ref,
+    ) == pytest.approx(support_h, abs=1e-9)
 
 
 def test_pose_rebuilds_catalog_when_coverage_drops_symmetry():
@@ -1273,6 +1275,73 @@ def test_contact_shell_matches_full_slab_nominal():
         config=pconfig,
     )
     assert shell_h == pytest.approx(full_h, abs=1e-6)
+
+
+def test_shared_mic_matches_per_gate_contact_heights():
+    """Covalent and van der Waals COM heights match the single-gate solves."""
+    from metalsurfer.placement._constants import _WALL_SHELL_MIN_GAP_ANGSTROM
+    from metalsurfer.placement.pose.height import (
+        _com_hi_for_vdw_landing,
+        _vdw_pair_clearance,
+    )
+
+    slab = make_slab(nx=2, ny=2)
+    config = AdsorptionConfig(material_type="slab")
+    ctx = _get_unique_sites_for_specs(slab, config)
+    site = next(s for s in ctx.sites if s.kind == "wall" and s.slab_indices)
+    water = make_water()
+    rotated = water.get_positions() - water.get_center_of_mass()
+    symbols = list(water.get_chemical_symbols())
+    positions = slab.get_positions()
+    slab_syms = list(slab.get_chemical_symbols())
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = material_aware_pbc(config.material_type)
+    shell_idx = _contact_shell_indices(
+        site.xyz,
+        rotated_pos=rotated,
+        symbols=symbols,
+        slab_positions=positions,
+        slab_symbols=slab_syms,
+        config=config,
+        cell=cell,
+        pbc=pbc,
+        place_normal=site.normal,
+    )
+    shell_pos = positions[shell_idx]
+    shell_syms = [slab_syms[int(i)] for i in shell_idx]
+    kwargs = dict(
+        rotated_pos=rotated,
+        symbols=symbols,
+        site_xyz=site.xyz,
+        place_normal=site.normal,
+        slab_positions=shell_pos,
+        slab_symbols=shell_syms,
+        cell=cell,
+        pbc=pbc,
+        config=config,
+    )
+    covalent = _pairwise_contact_com_height(**kwargs)
+    vdw = _pairwise_contact_com_height(**kwargs, clearance=_vdw_pair_clearance)
+    interval = _feasible_height_interval(
+        rotated,
+        symbols,
+        site=site,
+        place_normal=site.normal,
+        slab_positions=positions,
+        slab_symbols=slab_syms,
+        cell=cell,
+        pbc=pbc,
+        config=config,
+        z_base_lo=0.0,
+        z_base_hi=0.0,
+    )
+    assert interval is not None
+    assert interval.com_nominal == pytest.approx(covalent, abs=1e-9)
+    landing = max(float(vdw), float(covalent) + _WALL_SHELL_MIN_GAP_ANGSTROM)
+    assert interval.com_hi == pytest.approx(
+        _com_hi_for_vdw_landing(float(covalent), landing), abs=1e-9
+    )
+    assert float(vdw) > float(covalent)
 
 
 def test_contact_shell_ignores_far_atoms_and_uses_near_ones():
