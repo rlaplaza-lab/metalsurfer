@@ -60,7 +60,7 @@ from ._constants import (
     _VECTOR_NORM_EPS,
     _VORONOI_DEDUP_TOLERANCE,
 )
-from ._parallel import resolve_materialize_workers
+from ._parallel import DEFAULT_N_JOBS, resolve_materialize_workers
 from .geometry import (
     framework_radii_from_symbols,
     tangent_basis_from_normal,
@@ -97,7 +97,6 @@ __all__ = [
 ]
 
 _SOURCE_HINT = "adaptive_grid"
-_DEFAULT_N_JOBS = -2
 
 
 def _framework_median_nn(
@@ -1028,7 +1027,7 @@ def generate_adaptive_grid_sites(
     max_site_distance: float,
     initial_spacing: float | None = None,
     max_levels: int | None = None,
-    n_jobs: int = _DEFAULT_N_JOBS,
+    n_jobs: int = DEFAULT_N_JOBS,
     framework_radii: np.ndarray | None = None,
     symbols: Sequence[str] | None = None,
     side_policy: SidePolicy = "positive",

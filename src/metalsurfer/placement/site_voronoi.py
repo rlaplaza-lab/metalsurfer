@@ -22,7 +22,7 @@ from ._constants import (
     _SITE_CLASSIFICATION_NEIGHBOURS,
     _VORONOI_DEDUP_TOLERANCE,
 )
-from ._parallel import resolve_materialize_workers
+from ._parallel import DEFAULT_N_JOBS, resolve_materialize_workers
 from .site_coords import (
     _build_periodic_images,
     _deduplicate_points,
@@ -161,7 +161,7 @@ def _voronoi_sites(
     enrich: bool = True,
     *,
     symbols: list[str],
-    n_jobs: int = 1,
+    n_jobs: int = DEFAULT_N_JOBS,
 ) -> tuple[np.ndarray, np.ndarray, list[tuple[int, ...]]]:
     """Voronoi vertices accessible for adsorption, optionally enriched.
 
@@ -555,7 +555,7 @@ def _enrich_along_ridges(
     n_origin: int | None = None,
     inv_cell: np.ndarray | None = None,
     dedup_offsets: list[np.ndarray] | None = None,
-    n_jobs: int = 1,
+    n_jobs: int = DEFAULT_N_JOBS,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Subdivide long admissible Voronoi edges and re-check accessibility."""
     n_kept = len(vertices)

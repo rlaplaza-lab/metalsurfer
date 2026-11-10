@@ -36,7 +36,7 @@ from ._constants import (
     _SURFACE_COVALENT_RADIUS_FALLBACK,
     _VECTOR_NORM_EPS,
 )
-from ._parallel import resolve_materialize_workers
+from ._parallel import DEFAULT_N_JOBS, resolve_materialize_workers
 from .geometry import framework_radii_from_symbols
 from .site_adaptive_grid import (
     _candidate_geometry_score,
@@ -67,7 +67,6 @@ from .site_wall_near_common import (
 )
 
 _SOURCE_HINT = "rolling_probe"
-_DEFAULT_N_JOBS = -2
 
 
 @dataclass(frozen=True)
@@ -511,7 +510,7 @@ def generate_rolling_probe_sites(
     *,
     probe_radius: float,
     max_site_distance: float,
-    n_jobs: int = _DEFAULT_N_JOBS,
+    n_jobs: int = DEFAULT_N_JOBS,
     framework_radii: np.ndarray | None = None,
     symbols: Sequence[str] | None = None,
     side_policy: SidePolicy | Literal["all", "positive", "negative", "external"] = (

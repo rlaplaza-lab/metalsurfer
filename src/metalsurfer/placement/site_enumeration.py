@@ -7,6 +7,7 @@ import numpy as np
 from ase import Atoms
 from scipy.spatial import Delaunay, KDTree, QhullError
 
+from .._numeric_defaults import DEFAULT_N_JOBS
 from .._utils import cell_has_volume
 from ..symmetry import SymmetryAnalyzer
 from ._constants import (
@@ -147,7 +148,7 @@ def get_unified_sites(
     adaptive_grid_spacing: float | None = None,
     adaptive_grid_refine_levels: int = 0,
     adaptive_grid_nms_framework_scale: float | None = None,
-    n_jobs: int = -2,
+    n_jobs: int = DEFAULT_N_JOBS,
     side_policy: str = "positive",
 ) -> list[Site]:
     """Return adsorption/placement sites for *atoms*.
@@ -246,7 +247,7 @@ def _get_unified_sites_with_plugin_vertices(
     adaptive_grid_spacing: float | None = None,
     adaptive_grid_refine_levels: int = 0,
     adaptive_grid_nms_framework_scale: float | None = None,
-    n_jobs: int = -2,
+    n_jobs: int = DEFAULT_N_JOBS,
     side_policy: str = "positive",
 ) -> tuple[list[Site], np.ndarray]:
     """Like :func:`get_unified_sites`, also returning raw plugin vertices."""
@@ -335,7 +336,7 @@ def _enumerate_unified_sites(
     adaptive_grid_spacing: float | None = None,
     adaptive_grid_refine_levels: int = 0,
     adaptive_grid_nms_framework_scale: float | None = None,
-    n_jobs: int = -2,
+    n_jobs: int = DEFAULT_N_JOBS,
     side_policy: str = "positive",
     _widen_scratch: _PlanarWidenScratch | None = None,
     _reuse_topology: _PlanarWidenScratch | None = None,
@@ -542,7 +543,7 @@ def get_hollow_sites_for_adatoms(
     adaptive_grid_spacing: float | None = None,
     adaptive_grid_refine_levels: int = 0,
     adaptive_grid_nms_framework_scale: float | None = None,
-    n_jobs: int = -2,
+    n_jobs: int = DEFAULT_N_JOBS,
 ) -> list[Site]:
     """Return hollow/pore sites for adatom placement from the clustered catalog.
 
@@ -781,7 +782,7 @@ def get_symmetry_aware_sites(
     adaptive_grid_spacing: float | None = None,
     adaptive_grid_refine_levels: int = 0,
     adaptive_grid_nms_framework_scale: float | None = None,
-    n_jobs: int = -2,
+    n_jobs: int = DEFAULT_N_JOBS,
 ) -> list[Site]:
     """Return symmetry-reduced adsorption sites using spglib.
 

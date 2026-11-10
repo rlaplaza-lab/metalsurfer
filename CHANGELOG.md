@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CPU parallelism defaults to ``n_jobs=-2`` (all but one CPU) everywhere:
+  ``AdsorptionConfig``, site plugins / enumeration, Voronoi ridge enrich, and
+  BO surrogate / transfer helpers share
+  ``metalsurfer._numeric_defaults.DEFAULT_N_JOBS``. Workflow stages still
+  forward ``config.n_jobs``; direct library calls without ``n_jobs`` now match
+  that same default instead of sklearn-style ``-1`` or serial ``1``.
 - ``bo.total_budget`` is now ``bo.total_batches``. It still counts acquisition
   batches after the initial random batch, not total evaluations. Existing
   Python and YAML configs that pass ``total_budget`` are rejected.

@@ -9,6 +9,7 @@ from ._numeric_defaults import (
     CONTACT_COVALENT_SCALE_DEFAULT,
     CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     DEFAULT_FMAX,
+    DEFAULT_N_JOBS,
     DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     DEFAULT_SEED,
     DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
@@ -963,7 +964,7 @@ class AdsorptionConfig:
     # Clamp fill target to enumerable spec capacity when True.
     placement_fill_clamp_to_capacity: bool = True
     # Global CPU parallelism (joblib): 1 serial, -1 all CPUs, -2 all but one.
-    n_jobs: int = -2
+    n_jobs: int = DEFAULT_N_JOBS
     # Placement-materialization thread-pool override; None inherits n_jobs.
     placement_materialize_workers: int | None = None
     optimize_isolated_sequentially: bool = False

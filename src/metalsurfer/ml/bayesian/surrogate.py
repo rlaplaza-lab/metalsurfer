@@ -16,7 +16,7 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from ..._numeric_defaults import RESIDUAL_SIGMA_DISTANCE_TEMPER
+from ..._numeric_defaults import DEFAULT_N_JOBS, RESIDUAL_SIGMA_DISTANCE_TEMPER
 from ..regression import (
     TreeSurrogateKind,
     _build_estimator,
@@ -79,7 +79,7 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
         member_surrogates: tuple[str, ...] = DEFAULT_ENSEMBLE_MEMBERS,
         n_estimators: int = 100,
         random_state: int = 42,
-        n_jobs: int = -1,
+        n_jobs: int = DEFAULT_N_JOBS,
     ) -> None:
         """Instantiate the ensemble regressor.
 
@@ -93,7 +93,8 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
             Random seed for reproducibility.
         n_jobs
             Parallel workers forwarded to tree members and per-tree
-            uncertainty prediction (joblib convention).
+            uncertainty prediction (joblib convention; default matches
+            :data:`~metalsurfer._numeric_defaults.DEFAULT_N_JOBS`).
         """
         self.member_surrogates = member_surrogates
         self.n_estimators = n_estimators
@@ -370,7 +371,7 @@ def train_surrogate(
     random_state: int = 42,
     sample_weight: np.ndarray | None = None,
     attach_uncertainty: bool = True,
-    n_jobs: int = -1,
+    n_jobs: int = DEFAULT_N_JOBS,
 ) -> Pipeline:
     """Fit a surrogate on observed placement data.
 
@@ -398,8 +399,9 @@ def train_surrogate(
     attach_uncertainty
         Whether to attach residual uncertainty for deterministic models.
     n_jobs
-        CPU workers for tree-ensemble fitting (joblib convention; ignored by
-        surrogates without native parallelism).
+        CPU workers for tree-ensemble fitting (joblib convention; default
+        matches :data:`~metalsurfer._numeric_defaults.DEFAULT_N_JOBS`; ignored
+        by surrogates without native parallelism).
     """
     if surrogate in ("random_forest", "extra_trees"):
         tree_kind: TreeSurrogateKind = (
@@ -506,7 +508,8 @@ def predict_with_uncertainty(
         Feature matrix for prediction.
     n_jobs
         CPU workers for per-tree uncertainty prediction (joblib convention).
-        ``None`` falls back to the estimator's own setting.
+        ``None`` falls back to the estimator's own ``n_jobs``, else
+        :data:`~metalsurfer._numeric_defaults.DEFAULT_N_JOBS`.
     """
     regressor = model.named_steps["regressor"]
     if "scaler" in model.named_steps:
@@ -530,7 +533,9 @@ def predict_with_uncertainty(
         # n_jobs never kicks in on this code path. Tree traversal releases the
         # GIL, making a thread pool sufficient (no X pickling across processes).
         workers = (
-            int(n_jobs) if n_jobs is not None else getattr(regressor, "n_jobs", -1)
+            int(n_jobs)
+            if n_jobs is not None
+            else int(getattr(regressor, "n_jobs", DEFAULT_N_JOBS))
         )
         if len(estimators) > 1 and workers != 1:
             tree_preds = np.asarray(

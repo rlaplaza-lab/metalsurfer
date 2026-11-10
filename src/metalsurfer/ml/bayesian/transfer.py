@@ -12,6 +12,7 @@ from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from ..._numeric_defaults import DEFAULT_N_JOBS
 from ...config import BO_TRANSFER_CAPABLE_SURROGATES
 from ...placement._constants import _DISTANCE_ZERO_EPS
 from .surrogate import train_surrogate
@@ -248,7 +249,7 @@ def _transfer_trust_gate(
     n_estimators: int,
     random_state: int,
     mae_tolerance: float = 0.0,
-    n_jobs: int = -1,
+    n_jobs: int = DEFAULT_N_JOBS,
 ) -> tuple[float, float, Pipeline | None, bool]:
     """Compare baseline vs transfer MAE; fit the full transfer model only if useful.
 
@@ -433,7 +434,7 @@ def build_transfer_surrogate(
     proximity_lengthscale: float | None = None,
     prior_step_ages: list[int] | None = None,
     recency_lengthscale: float | None = None,
-    n_jobs: int = -1,
+    n_jobs: int = DEFAULT_N_JOBS,
 ) -> TransferSurrogateResult:
     """Train baseline or transfer-weighted surrogate with production trust gating.
 
@@ -607,7 +608,7 @@ def build_cumulative_refit_surrogate(
     mae_tolerance: float = 0.0,
     transfer_bad_rounds: int = 0,
     trust_patience: int = 2,
-    n_jobs: int = -1,
+    n_jobs: int = DEFAULT_N_JOBS,
 ) -> TransferSurrogateResult:
     """Proximity-weighted cumulative refit with the shared OOF trust gate.
 

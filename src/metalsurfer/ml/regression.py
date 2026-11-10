@@ -11,7 +11,7 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from .._numeric_defaults import DEFAULT_SEED
+from .._numeric_defaults import DEFAULT_N_JOBS, DEFAULT_SEED
 
 ModelType = Literal["ridge", "gradient_boost"]
 TreeSurrogateKind = Literal["random_forest", "extra_trees"]
@@ -22,7 +22,7 @@ def tree_regressor_for_bayesian_surrogate(
     *,
     n_estimators: int,
     random_state: int,
-    n_jobs: int = -1,
+    n_jobs: int = DEFAULT_N_JOBS,
     **kwargs: Any,
 ) -> RandomForestRegressor | ExtraTreesRegressor:
     """Unscaled tree ensemble for BO surrogates (no ``StandardScaler`` in the pipeline).
@@ -37,7 +37,8 @@ def tree_regressor_for_bayesian_surrogate(
         Random seed for reproducibility.
     n_jobs
         Parallel workers for fitting/predicting the forest (joblib convention;
-        ``-1`` uses all CPUs). Thread-based inside sklearn.
+        default matches :data:`~metalsurfer._numeric_defaults.DEFAULT_N_JOBS`).
+        Thread-based inside sklearn.
     **kwargs
         Additional keyword arguments passed to the regressor.
     """

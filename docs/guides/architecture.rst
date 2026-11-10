@@ -539,6 +539,9 @@ Enumeration / materialization
   threaded); ``resolve_materialize_workers`` (in ``placement._parallel``,
   re-exported from ``generators``) maps joblib-style ``n_jobs`` /
   ``placement_materialize_workers`` to a concrete thread-pool size.
+  Site discovery, ridge enrich, and BO surrogate fits inherit the same
+  ``DEFAULT_N_JOBS`` (``-2``) when callers omit ``n_jobs``; workflow stages
+  forward ``AdsorptionConfig.n_jobs``.
 - After orientation, a **feasible height interval** along the site normal is
   solved once per rigid pose family (cached on the per-screen pose batch).
   Wall and dissociative poses use one interval: ``z_fraction`` 0.5 is the

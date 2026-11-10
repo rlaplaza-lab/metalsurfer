@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import os
 
+from .._numeric_defaults import DEFAULT_N_JOBS
+
+__all__ = ["DEFAULT_N_JOBS", "resolve_materialize_workers"]
+
 
 def resolve_materialize_workers(
-    n_jobs: int,
+    n_jobs: int = DEFAULT_N_JOBS,
     *,
     n_tasks: int | None = None,
     cpu_count: int | None = None,
@@ -15,7 +19,8 @@ def resolve_materialize_workers(
 
     ``1`` is serial, ``>1`` is that many workers, ``-1`` uses all CPUs, and
     values ``< -1`` use ``max(1, cpu_count + 1 + n_jobs)`` (so ``-2`` is all
-    but one CPU). When ``n_tasks`` is set, the result is capped at ``n_tasks``.
+    but one CPU, matching :data:`DEFAULT_N_JOBS`). When ``n_tasks`` is set,
+    the result is capped at ``n_tasks``.
 
     Parameters
     ----------

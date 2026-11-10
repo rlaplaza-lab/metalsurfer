@@ -538,7 +538,8 @@ def score_and_select(
         every acquisition round).
     n_jobs
         CPU workers for per-tree uncertainty prediction (joblib convention);
-        forwarded to :func:`predict_with_uncertainty`.
+        forwarded to :func:`predict_with_uncertainty`. ``None`` inherits the
+        regressor's ``n_jobs`` or :data:`~metalsurfer._numeric_defaults.DEFAULT_N_JOBS`.
     sigma_scale
         Optional per-candidate multiplier on predictive ``sigma`` (e.g.
         occupancy inflation near committed adsorbates). Must match the number
