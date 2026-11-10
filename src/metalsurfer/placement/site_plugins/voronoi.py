@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 import numpy as np
-from scipy.spatial import KDTree
 
 from ..site_coords import (
     project_vertices_to_support_plane,
@@ -15,10 +14,9 @@ from ..site_coords import (
 from ..site_voronoi import _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
 from .helpers import (
-    apply_slab_height_mask,
     candidate_enrichment_frames,
-    inject_atop_sites,
     periodic_accessibility_tree,
+    slab_candidate_postprocess,
 )
 
 logger = logging.getLogger(__name__)
@@ -133,41 +131,21 @@ class VoronoiGenerator:
                 atom_indices,
                 normals,
                 clearances,
-            ) = apply_slab_height_mask(
+            ) = slab_candidate_postprocess(
                 vertices,
                 nn_dists,
                 source_hints,
                 atom_indices,
-                positions=positions,
-                cell=cell,
-                top_layer_tolerance=float(ctx.top_layer_tolerance),
-                normals=normals,
-                clearances=clearances,
-            )
-            local_tree = KDTree(positions)
-            (
-                vertices,
-                nn_dists,
-                source_hints,
-                atom_indices,
-                normals,
-                clearances,
-            ) = inject_atop_sites(
-                vertices,
-                nn_dists,
-                source_hints,
                 positions=positions,
                 cell=cell,
                 pbc=pbc,
-                material_type="slab",
-                local_tree=local_tree,
+                top_layer_tolerance=float(ctx.top_layer_tolerance),
                 accessibility_tree=accessibility_tree,
-                median_nn=None,
-                slab_top_atom_indices=slab_top_atom_indices,
-                has_topology_atop=False,
                 probe_radius=float(probe_radius),
                 max_site_distance=float(max_site_distance),
-                atom_indices=atom_indices,
+                slab_top_atom_indices=slab_top_atom_indices,
+                has_topology_atop=False,
+                median_nn=None,
                 normals=normals,
                 clearances=clearances,
             )

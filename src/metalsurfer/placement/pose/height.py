@@ -403,37 +403,6 @@ def _count_contact_atoms_at_com_height(
     return int(np.sum(np.any(within_cutoff(dists, thresh), axis=1)))
 
 
-def _pair_worst_penetration_at_com_height(
-    rotated_pos: np.ndarray,
-    symbols: list[str],
-    *,
-    site_xyz: np.ndarray,
-    place_normal: np.ndarray,
-    slab_positions: np.ndarray,
-    slab_symbols: list[str],
-    cell: np.ndarray,
-    pbc: list[bool],
-    config: AdsorptionConfig,
-    com_h: float,
-) -> float:
-    """Worst pair penetration (Å) at *com_h*; ≤0 means fully cleared."""
-    mol = _mol_positions_at_com_height(
-        rotated_pos, site_xyz=site_xyz, place_normal=place_normal, com_h=com_h
-    )
-    mic_vecs, _ = geom._mol_slab_pairwise_mic(mol, slab_positions, cell, pbc)
-    if mic_vecs.size == 0:
-        return 0.0
-    dists = np.linalg.norm(mic_vecs, axis=2)
-    worst = 0.0
-    for i, sym_m in enumerate(symbols):
-        for j, sym_s in enumerate(slab_symbols):
-            allowed = _pair_clearance(config, sym_m, sym_s)
-            short = float(allowed) - float(dists[i, j])
-            if short > worst:
-                worst = short
-    return float(worst)
-
-
 def _void_height_interval_analytic(
     rotated_pos: np.ndarray,
     symbols: list[str],
@@ -459,20 +428,17 @@ def _void_height_interval_analytic(
     half = 0.5 * float(diversity)
     probe_lo = base_h - half
     probe_hi = base_h + half
+    allowed = _allowed_clearances(symbols, slab_symbols, config, None)
+    mol0 = _mol_positions_at_com_height(
+        rotated_pos, site_xyz=base, place_normal=place_normal, com_h=base_h
+    )
 
     def _pen(h: float) -> float:
-        return _pair_worst_penetration_at_com_height(
-            rotated_pos,
-            symbols,
-            site_xyz=base,
-            place_normal=place_normal,
-            slab_positions=slab_positions,
-            slab_symbols=slab_symbols,
-            cell=cell,
-            pbc=pbc,
-            config=config,
-            com_h=float(h),
-        )
+        mol = mol0 + (float(h) - base_h) * n_hat
+        dists = geom._mol_slab_pairwise_distances(mol, slab_positions, cell, pbc)
+        if dists.size == 0:
+            return 0.0
+        return float(np.max(allowed - dists))
 
     centre_pen = _pen(base_h)
     if centre_pen <= 0.0:
@@ -611,8 +577,6 @@ def _feasible_height_interval(
     cell: np.ndarray,
     pbc: list[bool],
     config: AdsorptionConfig,
-    z_base_lo: float,
-    z_base_hi: float,
 ) -> _HeightInterval | None:
     """Feasible COM height interval along *place_normal* for one rigid pose.
 
@@ -728,8 +692,8 @@ def _feasible_height_interval(
             symbols,
             site_xyz=base,
             place_normal=place_normal,
-            slab_positions=slab_positions,
-            slab_symbols=slab_symbols,
+            slab_positions=shell_pos,
+            slab_symbols=shell_syms,
             cell=cell,
             pbc=pbc,
             com_h=com_nominal,
@@ -741,7 +705,7 @@ def _feasible_height_interval(
                 rotated_pos,
                 site_xyz=base,
                 place_normal=place_normal,
-                slab_positions=slab_positions,
+                slab_positions=shell_pos,
                 cell=cell,
                 pbc=pbc,
                 com_h=com_nominal,

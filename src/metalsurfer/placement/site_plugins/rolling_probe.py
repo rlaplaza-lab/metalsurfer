@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..site_coords import project_vertices_to_support_plane
 from ..site_rolling_probe import _SOURCE_HINT, generate_rolling_probe_sites
-from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
-from .helpers import median_nn_or_fallback
+from .base import SiteCandidateBatch, SiteGenerationContext
+from .wall_near import wall_near_batch_to_plugin
 
 
 class RollingProbeGenerator:
@@ -43,27 +42,10 @@ class RollingProbeGenerator:
             symbols=list(ctx.symbols),
             side_policy=ctx.side_policy,
         )
-
-        if len(result.vertices) == 0:
-            return empty_candidate_batch()
-
-        vertices = project_vertices_to_support_plane(
-            result.vertices,
-            result.normals,
-            list(result.atom_indices),
-            positions,
-        )
-        return SiteCandidateBatch(
-            vertices=vertices,
-            nn_dists=result.nn_dists,
-            source_hints=[_SOURCE_HINT] * len(result.vertices),
-            atom_indices=list(result.atom_indices),
-            accessibility_tree=result.accessibility_tree,
-            topology_median_nn=float(
-                median_nn_or_fallback(
-                    result.nn_dists, reference_positions=positions, cell=cell, pbc=pbc
-                )
-            ),
-            normals=result.normals,
-            clearances=result.clearances,
+        return wall_near_batch_to_plugin(
+            result,
+            positions=positions,
+            cell=cell,
+            pbc=pbc,
+            source_hint=_SOURCE_HINT,
         )

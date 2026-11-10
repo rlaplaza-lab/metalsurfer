@@ -32,9 +32,7 @@ from ..cutoffs import (
     mixed_covalent_thresholds,
     pair_thresholds,
     radii_or_cached,
-    substrate_floor_thresholds,
     tabulated_radii,
-    within_cutoff,
 )
 from ..occupancy import incoming_inplane_radius
 from ..site_coords import _frac_to_cart, _slab_normal, _wrapped_slab_fractional
@@ -129,36 +127,23 @@ def _contact_penetration_detail(
     )
     if dists.size == 0:
         return float("inf"), 0.0, 1.0
-    actual_min = float(np.min(dists))
     mol_r = tabulated_radii(mol_syms, kind="covalent")
     slab_r = radii_or_cached(
         slab_syms,
         None if slab_scratch is None else slab_scratch.slab_cov_r,
         kind="covalent",
     )
-    allowed = substrate_floor_thresholds(
+    _clears, actual_min, max_pen, abs_dot = geom.covalent_floor_contact_metrics(
+        dists,
+        mol_pos,
+        slab_pos,
         mol_r,
         slab_r,
-        scale=float(config.min_contact_ratio),
-        absolute_floor=float(config.min_initial_distance),
+        min_distance=float(config.min_initial_distance),
+        min_contact_ratio=float(config.min_contact_ratio),
+        on_floor_pad=_CONTACT_CLEARANCE_PAD_ANGSTROM,
+        normal=None if normal is None else _placement_normal_hat(normal),
     )
-    # Exact floor contact has zero width; count it as a pad-sized nudge.
-    short = allowed - dists
-    on_floor = within_cutoff(dists, allowed) & (short <= _DISTANCE_ZERO_EPS)
-    short = np.where(on_floor, _CONTACT_CLEARANCE_PAD_ANGSTROM, short)
-    penetration = np.maximum(0.0, short)
-    max_pen = float(np.max(penetration))
-    if max_pen <= _DISTANCE_ZERO_EPS or normal is None:
-        return actual_min, max_pen, 1.0
-    mi, si = np.unravel_index(int(np.argmax(penetration)), penetration.shape)
-    pair_vec = np.asarray(slab_pos[si], dtype=float) - np.asarray(
-        mol_pos[mi], dtype=float
-    )
-    pair_nrm = float(np.linalg.norm(pair_vec))
-    if pair_nrm <= _VECTOR_NORM_EPS:
-        return actual_min, max_pen, 1.0
-    n_hat = _placement_normal_hat(normal)
-    abs_dot = abs(float(np.dot(pair_vec / pair_nrm, n_hat)))
     return actual_min, max_pen, abs_dot
 
 

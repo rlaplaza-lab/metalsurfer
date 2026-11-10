@@ -609,34 +609,6 @@ def _outward_normals_batch(
     return out
 
 
-def _outward_normal_or_none(
-    xyz: np.ndarray,
-    normal: np.ndarray,
-    framework_tree: KDTree,
-    positions: np.ndarray,
-    *,
-    probe_radius: float | None,
-) -> np.ndarray | None:
-    """Return an outward unit normal, or ``None`` when the site is buried.
-
-    Steps a short probe along ±*normal*. Prefer the direction that increases
-    clearance more. When both steps leave the nuclear plane equally (typical
-    for wall anchors), use the side whose neighbourhood has atoms behind the
-    site (negative mean projection). Drop when neither direction opens space.
-    """
-    centroid = np.mean(np.asarray(positions, dtype=float), axis=0)
-    row = _outward_normals_batch(
-        np.asarray(xyz, dtype=float).reshape(1, 3),
-        np.asarray(normal, dtype=float).reshape(1, 3),
-        framework_tree,
-        probe_radius=probe_radius,
-        centroid=centroid,
-    )[0]
-    if not np.all(np.isfinite(row)):
-        return None
-    return row
-
-
 def _classify_vertices(
     ctx: _ClassificationContext,
     vertices: np.ndarray,
@@ -748,9 +720,13 @@ def _classify_vertices(
             idx = np.asarray(support, dtype=int)
             support_idx = idx[(idx >= 0) & (idx < n_pos)]
             if support_idx.size > 0:
+                # Project before outward so the ray probe starts on the contact
+                # plane; re-project after with the final normal if it flips.
                 xyz = project_anchor_to_support_plane(
                     xyz, normal, positions[support_idx]
                 )
+            else:
+                support_idx = None
 
         prepared_xyz.append(xyz)
         prepared_normals.append(np.asarray(normal, dtype=float).reshape(3))

@@ -804,7 +804,10 @@ def test_process_joint_tuplet_bayesian_uses_ctx_conformer_energies(monkeypatch):
         captured["conformer_energies"] = kwargs.get("conformer_energies")
         return []
 
-    monkeypatch.setattr(joint_tuplet_mod, "enumerate_placement_specs", _fake_enumerate)
+    monkeypatch.setattr(
+        "metalsurfer.workflow.bayesian.enumerate_placement_specs",
+        _fake_enumerate,
+    )
 
     out = process_joint_tuplet_bayesian(
         "O",

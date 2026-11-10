@@ -85,6 +85,35 @@ def _sampling_site_context(
     )
 
 
+def _resolve_placement_frame(
+    *,
+    site,
+    reference: Atoms,
+    config: AdsorptionConfig,
+    pose_cache: _PoseBatchCache | None,
+) -> tuple[str, float, bool, np.ndarray]:
+    """Shared site frame: ``(mat_type, surface_ref, is_local_ref, normal)``."""
+    mat_type = material_type_for_placement(site, when_no_site=config.material_type)
+    surface_ref, is_local_ref = _resolve_surface_ref(
+        site,
+        reference,
+        mat_type,
+        cell=pose_cache.cell if pose_cache is not None else None,
+        positions=pose_cache.positions if pose_cache is not None else None,
+    )
+    if site is not None:
+        site_normal = np.asarray(site.normal, dtype=float)
+        nrm = float(np.linalg.norm(site_normal))
+        normal = (
+            site_normal / nrm
+            if nrm > _VECTOR_NORM_EPS
+            else np.array([0.0, 0.0, 1.0], dtype=float)
+        )
+    else:
+        normal = np.array([0.0, 0.0, 1.0], dtype=float)
+    return mat_type, float(surface_ref), bool(is_local_ref), normal
+
+
 def _pose_from_spec(
     adsorbate: Atoms,
     spec: PlacementSpec,
@@ -117,7 +146,6 @@ def _pose_from_spec(
     else:
         canonical_pos = geom.compute_canonical_molecular_frame(ads_pos, symbols=symbols)
         shape, _, _ = geom._classify_molecule_shape(canonical_pos)
-    normal = np.array([0.0, 0.0, 1.0])
 
     reference = slab_for_sites if slab_for_sites is not None else slab
     ctx = _sampling_site_context(slab, config, site_context, slab_for_sites)
@@ -137,21 +165,13 @@ def _pose_from_spec(
         return None, "invalid_site_index"
     site = ctx.sites[spec.site_index]
 
-    site_normal = np.asarray(site.normal, dtype=float)
-    if np.linalg.norm(site_normal) > _VECTOR_NORM_EPS:
-        normal = geom._safe_normalize(site_normal)
-
-    mat_type = material_type_for_placement(site, when_no_site=config.material_type)
-
     ref_slab = reference
     zf = float(spec.z_fraction)
-
-    surface_ref, is_local_ref = _resolve_surface_ref(
-        site,
-        ref_slab,
-        mat_type,
-        cell=pose_cache.cell if pose_cache is not None else None,
-        positions=pose_cache.positions if pose_cache is not None else None,
+    mat_type, surface_ref, is_local_ref, normal = _resolve_placement_frame(
+        site=site,
+        reference=ref_slab,
+        config=config,
+        pose_cache=pose_cache,
     )
 
     marked = _marked_binder_indices(smiles)
@@ -222,8 +242,6 @@ def _pose_from_spec(
             cell=cell_arr,
             pbc=pbc,
             config=config,
-            z_base_lo=0.0,
-            z_base_hi=0.0,
         )
         if pose_cache is not None and interval is not None:
             with pose_cache.height_lock:
@@ -323,13 +341,11 @@ def _context_from_pose(
     site = None
     if ctx.use_sites and 0 <= pose.site_index < len(ctx.sites):
         site = ctx.sites[pose.site_index]
-    mat_type = material_type_for_placement(site, when_no_site=config.material_type)
-    surface_ref, is_local_ref = _resolve_surface_ref(
-        site,
-        reference,
-        mat_type,
-        cell=pose_cache.cell if pose_cache is not None else None,
-        positions=pose_cache.positions if pose_cache is not None else None,
+    mat_type, surface_ref, is_local_ref, normal = _resolve_placement_frame(
+        site=site,
+        reference=reference,
+        config=config,
+        pose_cache=pose_cache,
     )
 
     pose_normalized = dataclasses.replace(
@@ -339,17 +355,6 @@ def _context_from_pose(
         quat_y=float(quat[2]),
         quat_z=float(quat[3]),
     )
-
-    if site is not None:
-        site_normal = np.asarray(site.normal, dtype=float)
-        nrm = float(np.linalg.norm(site_normal))
-        normal = (
-            site_normal / nrm
-            if nrm > _VECTOR_NORM_EPS
-            else np.array([0.0, 0.0, 1.0], dtype=float)
-        )
-    else:
-        normal = np.array([0.0, 0.0, 1.0], dtype=float)
 
     return _PlacementContext(
         pose=pose_normalized,

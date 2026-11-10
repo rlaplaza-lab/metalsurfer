@@ -135,6 +135,8 @@ def _farthest_point_indices(
     features: pd.DataFrame | np.ndarray,
     n_pick: int,
     rng: np.random.RandomState,
+    *,
+    scaled_features: np.ndarray | None = None,
 ) -> list[int]:
     """Greedy farthest-point sampling in standardized feature space."""
     matrix = (
@@ -145,7 +147,14 @@ def _farthest_point_indices(
     n_pool = matrix.shape[0]
     if n_pick >= n_pool:
         return list(range(n_pool))
-    scaled = StandardScaler().fit_transform(matrix)
+    if scaled_features is not None:
+        scaled = np.asarray(scaled_features, dtype=float)
+        if scaled.shape[0] != n_pool:
+            raise ValueError(
+                f"scaled_features rows ({scaled.shape[0]}) must match pool ({n_pool})"
+            )
+    else:
+        scaled = StandardScaler().fit_transform(matrix)
     first = int(rng.randint(n_pool))
     chosen = [first]
     min_dists = np.linalg.norm(scaled - scaled[first], axis=1)
@@ -205,6 +214,7 @@ def select_initial_bo_indices(
     *,
     sampling: InitialSamplingType = "spread_xyz",
     random_state: int = DEFAULT_SEED,
+    scaled_features: np.ndarray | None = None,
 ) -> list[int]:
     """Pick initial BO pool positions before any energy evaluations.
 
@@ -225,6 +235,10 @@ def select_initial_bo_indices(
         Sampling strategy name.
     random_state
         Random seed for reproducibility.
+    scaled_features
+        Optional pre-standardized full-feature pool matrix. Used for
+        ``spread`` (and ignored for ``spread_xyz``, which re-scales the
+        position subset).
     """
     if sampling not in BO_INITIAL_SAMPLING_OPTIONS:
         allowed = ", ".join(repr(item) for item in BO_INITIAL_SAMPLING_OPTIONS)
@@ -239,7 +253,12 @@ def select_initial_bo_indices(
     if sampling == "random":
         return rng.choice(n_pool, size=n_pick, replace=False).tolist()
     if sampling == "spread":
-        return _farthest_point_indices(candidate_features, n_pick, rng)
+        return _farthest_point_indices(
+            candidate_features,
+            n_pick,
+            rng,
+            scaled_features=scaled_features,
+        )
     if sampling == "spread_xyz":
         position_cols = [
             c for c in FEATURE_ABS_COLUMNS if c in candidate_features.columns
@@ -525,41 +544,55 @@ def score_and_select(
         occupancy inflation near committed adsorbates). Must match the number
         of candidate rows when set.
     """
-    mu, sigma = predict_with_uncertainty(model, candidate_features, n_jobs=n_jobs)
-    if sigma_scale is not None:
-        scale = np.asarray(sigma_scale, dtype=float).ravel()
-        if scale.shape[0] != sigma.shape[0]:
+    n_pool = len(candidate_features)
+    evaluated = set(evaluated_indices or ())
+    unevaluated = [i for i in range(n_pool) if i not in evaluated]
+    if not unevaluated or batch_size <= 0:
+        return []
+
+    uneval_features = candidate_features.iloc[unevaluated]
+    uneval_scaled = (
+        None
+        if scaled_features is None
+        else np.asarray(scaled_features, dtype=float)[unevaluated]
+    )
+    uneval_sigma_scale = (
+        None
+        if sigma_scale is None
+        else np.asarray(sigma_scale, dtype=float).ravel()[unevaluated]
+    )
+
+    mu, sigma = predict_with_uncertainty(model, uneval_features, n_jobs=n_jobs)
+    if uneval_sigma_scale is not None:
+        if uneval_sigma_scale.shape[0] != sigma.shape[0]:
             raise ValueError(
-                f"sigma_scale length ({scale.shape[0]}) must match "
-                f"candidates ({sigma.shape[0]})"
+                f"sigma_scale length ({len(np.asarray(sigma_scale).ravel())}) must "
+                f"match candidates ({n_pool})"
             )
-        sigma = sigma * scale
+        sigma = sigma * uneval_sigma_scale
     if acquisition == "lcb":
         scores = lcb_scores(mu, sigma, kappa=kappa)
-        return select_candidates_batch_diverse(
-            scores,
-            candidate_features,
-            batch_size,
-            evaluated_indices=evaluated_indices,
-            higher_is_better=False,
-            scaled_features=scaled_features,
-        )
-    if acquisition in ("ei", "pi"):
+        higher_is_better = False
+    elif acquisition in ("ei", "pi"):
         if f_best is None:
             raise ValueError("f_best is required for EI and PI acquisition")
-        if acquisition == "ei":
-            scores = ei_scores(mu, sigma, f_best=f_best)
-        else:
-            scores = pi_scores(mu, sigma, f_best=f_best)
-        return select_candidates_batch_diverse(
-            scores,
-            candidate_features,
-            batch_size,
-            evaluated_indices=evaluated_indices,
-            higher_is_better=True,
-            scaled_features=scaled_features,
+        scores = (
+            ei_scores(mu, sigma, f_best=f_best)
+            if acquisition == "ei"
+            else pi_scores(mu, sigma, f_best=f_best)
         )
-    raise ValueError(f"Unknown acquisition: {acquisition!r}")
+        higher_is_better = True
+    else:
+        raise ValueError(f"Unknown acquisition: {acquisition!r}")
+    local_picks = select_candidates_batch_diverse(
+        scores,
+        uneval_features,
+        batch_size,
+        evaluated_indices=None,
+        higher_is_better=higher_is_better,
+        scaled_features=uneval_scaled,
+    )
+    return [unevaluated[i] for i in local_picks]
 
 
 def splice_exploration_picks(

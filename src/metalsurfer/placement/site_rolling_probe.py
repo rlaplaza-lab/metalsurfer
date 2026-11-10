@@ -39,23 +39,15 @@ from ._constants import (
 from ._parallel import resolve_materialize_workers
 from .geometry import framework_radii_from_symbols
 from .site_adaptive_grid import (
-    AdaptiveGridResult,
-    AdaptiveGridSpacing,
-    CandidateSite,
-    SidePolicy,
-    _best_per_support_key,
     _candidate_geometry_score,
     _candidates_to_arrays,
     _framework_median_nn,
     _image_shift_for_index,
     _local_surface_normal,
-    _merge_by_radius,
     _ray_exposure_mask,
     _shell_target_clearance,
-    _side_policy_mask,
     _support_positions_for_candidate,
     adaptive_grid_spacing,
-    resolve_side_policy_for_pbc,
 )
 from .site_coords import (
     _minimum_image_cartesian_delta,
@@ -63,6 +55,16 @@ from .site_coords import (
     project_anchor_to_support_plane,
 )
 from .site_plugins.helpers import periodic_accessibility_tree
+from .site_wall_near_common import (
+    AdaptiveGridResult,
+    AdaptiveGridSpacing,
+    CandidateSite,
+    SidePolicy,
+    _best_per_support_key,
+    _merge_by_radius,
+    _side_policy_mask,
+    resolve_side_policy_for_pbc,
+)
 
 _SOURCE_HINT = "rolling_probe"
 _DEFAULT_N_JOBS = -2

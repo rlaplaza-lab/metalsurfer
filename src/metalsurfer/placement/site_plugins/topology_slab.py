@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 import numpy as np
-from scipy.spatial import KDTree
 
 from .._constants import _ATOP_INJECTION_HEIGHT_FACTOR
 from ..site_coords import exposed_lower_band_indices, top_layer_mask_by_normal
@@ -14,12 +13,11 @@ from ..site_voronoi import _generate_slab_topology_sites, _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext
 from .helpers import (
     PlanarWidenScratch,
-    apply_slab_height_mask,
     candidate_enrichment_frames,
-    inject_atop_sites,
     median_nn_or_fallback,
     merge_dedup_site_arrays,
     periodic_accessibility_tree,
+    slab_candidate_postprocess,
     top_layer_is_planar_from_arrays,
 )
 
@@ -176,7 +174,6 @@ class TopologySlabGenerator:
             material_type="slab",
             accessibility_tree=accessibility_tree,
         )
-
         (
             vertices,
             nn_dists,
@@ -184,41 +181,21 @@ class TopologySlabGenerator:
             atom_indices,
             normals,
             clearances,
-        ) = apply_slab_height_mask(
+        ) = slab_candidate_postprocess(
             vertices,
             nn_dists,
             source_hints,
             atom_indices,
-            positions=positions,
-            cell=cell,
-            top_layer_tolerance=float(top_layer_tolerance),
-            normals=normals,
-            clearances=clearances,
-        )
-        local_tree = KDTree(positions)
-        (
-            vertices,
-            nn_dists,
-            source_hints,
-            atom_indices,
-            normals,
-            clearances,
-        ) = inject_atop_sites(
-            vertices,
-            nn_dists,
-            source_hints,
             positions=positions,
             cell=cell,
             pbc=pbc,
-            material_type="slab",
-            local_tree=local_tree,
+            top_layer_tolerance=float(top_layer_tolerance),
             accessibility_tree=accessibility_tree,
-            median_nn=topology_median_nn,
-            slab_top_atom_indices=slab_top_atom_indices,
-            has_topology_atop=has_topology_atop,
             probe_radius=float(probe_radius),
             max_site_distance=float(max_site_distance),
-            atom_indices=atom_indices,
+            slab_top_atom_indices=slab_top_atom_indices,
+            has_topology_atop=has_topology_atop,
+            median_nn=topology_median_nn,
             normals=normals,
             clearances=clearances,
         )

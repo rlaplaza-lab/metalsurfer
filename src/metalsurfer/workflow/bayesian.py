@@ -18,11 +18,9 @@ from ..config import (
 from ..filters import interadsorbate_clearance
 from ..ml.bayesian import (
     TransferCapableSurrogateType,
-    _align_to_columns,
-    _transfer_trust_gate,
+    build_cumulative_refit_surrogate,
     build_spec_features_geometry_aware,
     build_transfer_surrogate,
-    cumulative_refit_training_set,
     score_and_select,
     select_initial_bo_indices,
     splice_exploration_picks,
@@ -62,6 +60,109 @@ from .shared import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PreparedBOPool:
+    """Shared BO candidate pool after enumeration and geometry-aware features."""
+
+    all_specs: list[Any]
+    candidate_features: pd.DataFrame
+    valid_spec_indices: list[int]
+    scaled_candidate_features: np.ndarray
+    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]]
+    pid_to_pool_position: dict[int, int]
+    sigma_scale: np.ndarray
+
+
+def prepare_bo_pool(
+    *,
+    conformers: Sequence[Atoms],
+    slab: SlabContainer,
+    slab_for_sites: Atoms,
+    config: AdsorptionConfig,
+    smiles: str,
+    molecule_name: str,
+    surface_type: str,
+    pool_size: int,
+    site_context: SiteContext | None,
+    conformer_energies: Sequence[float] | None,
+    grid_info: Any | None,
+) -> tuple[_PreparedBOPool | None, int]:
+    """Enumerate specs, build geometry-aware features, scaler, and occupancy σ.
+
+    Returns ``(pool, n_candidate_specs)``. *pool* is ``None`` when no usable
+    feature rows exist; *n_candidate_specs* is the enumerated count (0 when
+    enumeration itself was empty).
+    """
+    all_specs = enumerate_placement_specs(
+        conformers,
+        slab_for_sites,
+        config,
+        smiles,
+        pool_size,
+        filter_spec=config.placement_filter,
+        site_context=site_context,
+        seed=config.seed,
+        full_slab=slab.atoms,
+        conformer_energies=conformer_energies,
+        grid_info=grid_info,
+    )
+    n_specs = len(all_specs)
+    if n_specs == 0:
+        return None, 0
+
+    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] = {}
+    candidate_features, valid_spec_indices = build_spec_features_geometry_aware(
+        all_specs,
+        conformers,
+        slab.atoms,
+        config,
+        molecule=molecule_name,
+        smiles=smiles,
+        surface_id=surface_type,
+        site_context=site_context,
+        slab_for_sites=slab_for_sites,
+        materialization_cache=materialization_cache,
+    )
+    if candidate_features.empty:
+        return None, n_specs
+
+    scaled_candidate_features = StandardScaler().fit_transform(
+        candidate_features.to_numpy(dtype=float)
+    )
+    pid_to_pool_position = {
+        all_specs[valid_spec_indices[p]].placement_index: p
+        for p in range(len(valid_spec_indices))
+    }
+    surface_prefix_atoms = len(slab_for_sites)
+    occupied = (
+        slab.atoms[surface_prefix_atoms:]
+        if len(slab.atoms) > surface_prefix_atoms
+        else Atoms()
+    )
+    sigma_scale = _occupancy_sigma_scales(
+        candidate_features=candidate_features,
+        valid_spec_indices=valid_spec_indices,
+        all_specs=all_specs,
+        materialization_cache=materialization_cache,
+        occupied=occupied,
+        material_type=config.material_type,
+        cell=np.asarray(slab.atoms.get_cell(), dtype=float),
+        connectivity_multiplier=float(config.connectivity_multiplier),
+    )
+    return (
+        _PreparedBOPool(
+            all_specs=all_specs,
+            candidate_features=candidate_features,
+            valid_spec_indices=valid_spec_indices,
+            scaled_candidate_features=scaled_candidate_features,
+            materialization_cache=materialization_cache,
+            pid_to_pool_position=pid_to_pool_position,
+            sigma_scale=sigma_scale,
+        ),
+        n_specs,
+    )
 
 
 def _occupancy_sigma_scales(
@@ -150,79 +251,17 @@ class _TransferRoundState:
     weight_share: float = 0.0
 
 
-def _fit_cumulative_refit_round(
-    *,
-    X_current: pd.DataFrame,
-    y_current: np.ndarray,
-    transfer_memory: BOStepMemory,
-    state: _TransferRoundState,
-    config: AdsorptionConfig,
-) -> Any:
-    """Fit one cumulative_refit round with proximity weights and OOF trust gate."""
-    transfer = config.bo.transfer
-    X_prior = _align_to_columns(
-        pd.DataFrame(transfer_memory.observed_X_rows), X_current
-    )
-    y_prior = np.asarray(transfer_memory.observed_y, dtype=float)
-    _, _, refit_weights = cumulative_refit_training_set(
-        X_prior,
-        y_prior,
-        X_current,
-        y_current,
-        weight_cap=transfer.weight_cap,
-        proximity_lengthscale=transfer.proximity_lengthscale,
-        proximity_floor=transfer.proximity_floor,
-    )
-    n_prior = len(X_prior)
-    prior_weights = np.asarray(refit_weights[:n_prior], dtype=float)
-    prior_weight_sum = float(np.sum(prior_weights))
-    total_weight_sum = float(np.sum(refit_weights))
-    state.weight_share = (
-        prior_weight_sum / total_weight_sum if total_weight_sum > 0.0 else 0.0
-    )
-
-    def _fit_baseline():
-        return _train_surrogate_for_bo(X_current, y_current, config=config)
-
-    base_mae, transfer_mae, transfer_model, gate_out_of_sample = _transfer_trust_gate(
-        X_current,
-        y_current,
-        X_prior,
-        y_prior,
-        prior_weights,
-        fit_baseline=_fit_baseline,
-        surrogate=cast(TransferCapableSurrogateType, config.bo.surrogate),
-        n_estimators=config.bo.n_estimators,
-        random_state=config.seed,
-        mae_tolerance=transfer.mae_tolerance,
-        n_jobs=config.n_jobs,
-    )
-    mae_delta = transfer_mae - base_mae
-    state.last_mae_delta = mae_delta
-    if mae_delta > transfer.mae_tolerance:
-        state.bad_rounds += 1
-    else:
-        state.bad_rounds = 0
-
-    if state.bad_rounds >= transfer.trust_patience:
-        logger.warning(
-            "BO cumulative_refit transfer disabled after %d degraded rounds "
-            "(last MAE delta %.4f)",
-            state.bad_rounds,
-            mae_delta,
-        )
+def _apply_transfer_result(state: _TransferRoundState, result) -> Any:
+    """Copy transfer bookkeeping from a :class:`TransferSurrogateResult`."""
+    state.weight_share = result.transfer_weight_share
+    state.last_mae_delta = result.transfer_mae_delta
+    state.bad_rounds = result.transfer_bad_rounds
+    if result.transfer_used_this_round:
+        state.used_rounds += 1
+    if result.transfer_disabled:
         state.disabled = True
-        state.disabled_reason = (
-            "trust_degraded_on_current_step_residuals"
-            if gate_out_of_sample
-            else "trust_degraded_on_current_step_residuals_in_sample"
-        )
-        state.weight_share = 0.0
-        return _fit_baseline()
-    if transfer_model is None:
-        return _fit_baseline()
-    state.used_rounds += 1
-    return transfer_model
+        state.disabled_reason = result.transfer_disabled_reason
+    return result.surrogate
 
 
 def _build_round_surrogate(
@@ -267,13 +306,23 @@ def _build_round_surrogate(
         and enough_current
     )
     if can_try_refit and transfer_memory is not None:
-        surrogate = _fit_cumulative_refit_round(
-            X_current=X_current,
-            y_current=y_current,
-            transfer_memory=transfer_memory,
-            state=state,
-            config=config,
+        transfer_result = build_cumulative_refit_surrogate(
+            X_current,
+            y_current,
+            transfer_memory.observed_X_rows,
+            transfer_memory.observed_y,
+            surrogate=cast(TransferCapableSurrogateType, config.bo.surrogate),
+            n_estimators=config.bo.n_estimators,
+            random_state=config.seed,
+            n_jobs=config.n_jobs,
+            weight_cap=transfer.weight_cap,
+            proximity_lengthscale=transfer.proximity_lengthscale,
+            proximity_floor=transfer.proximity_floor,
+            mae_tolerance=transfer.mae_tolerance,
+            transfer_bad_rounds=state.bad_rounds,
+            trust_patience=transfer.trust_patience,
         )
+        surrogate = _apply_transfer_result(state, transfer_result)
     elif can_try_weighted and transfer_memory is not None:
         transfer_result = build_transfer_surrogate(
             X_current,
@@ -294,15 +343,7 @@ def _build_round_surrogate(
             prior_step_ages=transfer_memory.step_ages,
             recency_lengthscale=transfer.recency_lengthscale,
         )
-        state.weight_share = transfer_result.transfer_weight_share
-        state.last_mae_delta = transfer_result.transfer_mae_delta
-        state.bad_rounds = transfer_result.transfer_bad_rounds
-        if transfer_result.transfer_used_this_round:
-            state.used_rounds += 1
-        if transfer_result.transfer_disabled:
-            state.disabled = True
-            state.disabled_reason = transfer_result.transfer_disabled_reason
-        surrogate = transfer_result.surrogate
+        surrogate = _apply_transfer_result(state, transfer_result)
 
     transfer_active = (can_try_refit or can_try_weighted) and not state.disabled
     if surrogate is None:
@@ -397,6 +438,7 @@ def run_bo_acquisition_loop(
         n_initial,
         sampling=config.bo.initial_sampling,
         random_state=initial_seed,
+        scaled_features=scaled_candidate_features,
     )
     evaluate_batch(initial_positions)
 
@@ -623,22 +665,40 @@ def process_molecule_bayesian(
             return _bail_outcome(
                 BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0)
             )
-    all_specs = enumerate_placement_specs(
-        conformers,
-        slab_for_sites,
-        config,
-        smiles,
-        pool_size,
-        filter_spec=config.placement_filter,
+    pool, n_candidate_specs = prepare_bo_pool(
+        conformers=conformers,
+        slab=slab,
+        slab_for_sites=slab_for_sites,
+        config=config,
+        smiles=smiles,
+        molecule_name=molecule_name,
+        surface_type=surface_type,
+        pool_size=pool_size,
         site_context=site_context,
-        seed=config.seed,
-        full_slab=slab.atoms,
         conformer_energies=conformer_energies,
         grid_info=grid_info,
     )
-    if not all_specs:
-        logger.warning("No candidate specs generated for BO")
-        return _bail_outcome(BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0))
+    if pool is None:
+        if n_candidate_specs == 0:
+            logger.warning("No candidate specs generated for BO")
+            return _bail_outcome(
+                BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0)
+            )
+        logger.warning("BO: no specs produced valid placements; aborting")
+        return _bail_outcome(
+            BOPlacementFailure(
+                n_candidate_specs=n_candidate_specs,
+                n_valid_pool=0,
+            )
+        )
+
+    all_specs = pool.all_specs
+    candidate_features = pool.candidate_features
+    valid_spec_indices = pool.valid_spec_indices
+    scaled_candidate_features = pool.scaled_candidate_features
+    materialization_cache = pool.materialization_cache
+    pid_to_pool_position = pool.pid_to_pool_position
+    sigma_scale = pool.sigma_scale
 
     logger.info(
         "BO: %d/%d candidate specs, batches=%d (initial=%d, batch=%d, eval_budget=%d, kappa=%.2f)",
@@ -654,35 +714,6 @@ def process_molecule_bayesian(
         log_site_sample(grid_info, bo_eval_budget)
 
     surface_prefix_atoms = len(slab_for_sites)
-    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] = {}
-    candidate_features, valid_spec_indices = build_spec_features_geometry_aware(
-        all_specs,
-        conformers,
-        slab.atoms,
-        config,
-        molecule=molecule_name,
-        smiles=smiles,
-        surface_id=surface_type,
-        site_context=site_context,
-        slab_for_sites=slab_for_sites,
-        materialization_cache=materialization_cache,
-    )
-    if candidate_features.empty:
-        logger.warning("BO: no specs produced valid placements; aborting")
-        return _bail_outcome(
-            BOPlacementFailure(
-                n_candidate_specs=len(all_specs),
-                n_valid_pool=0,
-            )
-        )
-    # Standardize the fixed candidate pool once for diversity across rounds.
-    scaled_candidate_features = StandardScaler().fit_transform(
-        candidate_features.to_numpy(dtype=float)
-    )
-    pid_to_pool_position: dict[int, int] = {
-        all_specs[valid_spec_indices[p]].placement_index: p
-        for p in range(len(valid_spec_indices))
-    }
     all_results: list[ScreeningResult] = []
     # Maps placement_id → index in observed_* for valid batch hits so a later
     # filter rejection can replace (not double-append) the y label.
@@ -690,21 +721,6 @@ def process_molecule_bayesian(
     bo_failure_events: list[PlacementFailureEvent] = []
     transfer_state = _TransferRoundState()
     acq_state = _BOAcquisitionState()
-    occupied = (
-        slab.atoms[surface_prefix_atoms:]
-        if len(slab.atoms) > surface_prefix_atoms
-        else Atoms()
-    )
-    sigma_scale = _occupancy_sigma_scales(
-        candidate_features=candidate_features,
-        valid_spec_indices=valid_spec_indices,
-        all_specs=all_specs,
-        materialization_cache=materialization_cache,
-        occupied=occupied,
-        material_type=config.material_type,
-        cell=np.asarray(slab.atoms.get_cell(), dtype=float),
-        connectivity_multiplier=float(config.connectivity_multiplier),
-    )
 
     def _flush_bo_outputs() -> None:
         nonlocal bo_memory, transfer_info
@@ -788,21 +804,24 @@ def process_molecule_bayesian(
             capacity=max_enumerated_specs,
         )
 
-        # Pool was pre-materialized for features; eval wraps cache hits only.
         acq_state.evaluated.update(pool_positions)
         acq_state.total_evaluated += len(pool_positions)
         all_results.extend(batch_results)
         bo_failure_events.extend(batch_failures)
 
         for r in batch_results:
-            record = PlacementRecord.from_descriptor(
-                r.placement_descriptor,
-                molecule=molecule_name,
-                smiles=smiles,
-                surface_id=surface_type,
-                config=config,
-            )
-            features = extract_features(record)
+            pool_pos = pid_to_pool_position.get(r.placement_id)
+            if pool_pos is not None:
+                features = candidate_features.iloc[pool_pos].to_dict()
+            else:
+                record = PlacementRecord.from_descriptor(
+                    r.placement_descriptor,
+                    molecule=molecule_name,
+                    smiles=smiles,
+                    surface_id=surface_type,
+                    config=config,
+                )
+                features = extract_features(record)
             observed_result_index_by_pid[r.placement_id] = len(
                 acq_state.observed_X_rows
             )

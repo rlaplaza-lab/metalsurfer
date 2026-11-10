@@ -27,6 +27,10 @@ from ._constants import (
     _WALL_Z_FRACTIONS,
     _Z_FRACTIONS,
 )
+from .spec_height_policy import (
+    _kept_z_count,
+    _kept_z_fractions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -501,38 +505,6 @@ def _parallel_aip_values(tilt: float) -> tuple[float, ...]:
 def _parallel_tilt_aip_counts() -> list[int]:
     """Return in-plane azimuth counts for each parallel tilt."""
     return [len(_parallel_aip_values(tl)) for tl in _TILT_PARALLEL]
-
-
-def _wall_contact_z_fraction() -> float:
-    """Wall ``z_fraction`` that is the covalent-contact sample."""
-    return float(_WALL_Z_FRACTIONS[0])
-
-
-def _wall_z_fraction_is_contact(z_fraction: float) -> bool:
-    """Whether a wall fraction shares the covalent-contact center of mass.
-
-    Fractions at or below :func:`_wall_contact_z_fraction` land on that height.
-    The contact sample itself is the representative; anything lower repeats it.
-    """
-    return float(z_fraction) <= _wall_contact_z_fraction()
-
-
-def _kept_z_fractions(
-    site_type: str | None, *, is_void: bool = False
-) -> tuple[float, ...]:
-    """Distinct center-of-mass samples for one site.
-
-    Void and pore sites keep the full height axis. Wall sites keep the contact
-    shell and the shells above it.
-    """
-    if is_void or site_type == "pore":
-        return _Z_FRACTIONS
-    return _WALL_Z_FRACTIONS
-
-
-def _kept_z_count(site_type: str | None, *, is_void: bool = False) -> int:
-    """Return how many ``z_fraction`` samples one site keeps."""
-    return len(_kept_z_fractions(site_type, is_void=is_void))
 
 
 def _site_z_pairs(

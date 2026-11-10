@@ -306,6 +306,7 @@ def candidate_enrichment_frames(
     gate = accessibility_tree if accessibility_tree is not None else KDTree(pos)
 
     normals = np.zeros((n, 3), dtype=float)
+    fallback_idx: list[int] = []
     for i, vert in enumerate(verts):
         support = (
             tuple(int(j) for j in atom_indices[i]) if i < len(atom_indices) else ()
@@ -333,18 +334,22 @@ def candidate_enrichment_frames(
         if slab_n is not None:
             normals[i] = slab_n
             continue
-        _, nn_idx = gate.query(vert.reshape(1, 3), k=1)
-        nearest = pos[int(np.asarray(nn_idx).ravel()[0]) % len(pos)]
-        delta = vert - nearest
-        if use_mic:
-            delta = _minimum_image_cartesian_delta(delta, cell_arr, pbc_arr)
-        nrm = float(np.linalg.norm(delta))
-        if nrm >= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
-            normals[i] = delta / nrm
-        elif slab_n is not None:
-            normals[i] = slab_n
-        else:
-            normals[i] = np.array([0.0, 0.0, 1.0], dtype=float)
+        fallback_idx.append(i)
+
+    if fallback_idx:
+        fb_verts = verts[np.asarray(fallback_idx, dtype=int)]
+        _, nn_idx = gate.query(fb_verts, k=1)
+        nn_idx_arr = np.asarray(nn_idx, dtype=int).ravel()
+        for local, i in enumerate(fallback_idx):
+            nearest = pos[int(nn_idx_arr[local]) % len(pos)]
+            delta = verts[i] - nearest
+            if use_mic:
+                delta = _minimum_image_cartesian_delta(delta, cell_arr, pbc_arr)
+            nrm = float(np.linalg.norm(delta))
+            if nrm >= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+                normals[i] = delta / nrm
+            else:
+                normals[i] = np.array([0.0, 0.0, 1.0], dtype=float)
     return normals, clearances
 
 
@@ -508,13 +513,13 @@ def inject_atop_sites(
     cell: np.ndarray,
     pbc: np.ndarray,
     material_type: str,
-    local_tree: KDTree,
-    accessibility_tree: KDTree | None,
-    median_nn: float | None,
-    slab_top_atom_indices: np.ndarray | None,
     has_topology_atop: bool,
     probe_radius: float,
     max_site_distance: float,
+    local_tree: KDTree | None = None,
+    accessibility_tree: KDTree | None = None,
+    median_nn: float | None = None,
+    slab_top_atom_indices: np.ndarray | None = None,
     atom_indices: list[tuple[int, ...]] | None = None,
     normals: np.ndarray | None = None,
     clearances: np.ndarray | None = None,
@@ -529,9 +534,10 @@ def inject_atop_sites(
     """Inject atop when topology did not already produce any.
 
     Uses the same height as the topology generator when *median_nn* is supplied.
-    *accessibility_tree* (PBC-aware) gates distances under periodic boundaries.
-    When *normals* / *clearances* are supplied, frames for injected atops are
-    appended so enrichment stays aligned with the merged catalog.
+    Prefer *accessibility_tree* for distance gating; fall back to *local_tree*
+    or a fresh ``KDTree(positions)``. When *normals* / *clearances* are
+    supplied, frames for injected atops are appended so enrichment stays
+    aligned with the merged catalog.
     """
     atoms = (
         list(atom_indices)
@@ -606,11 +612,9 @@ def inject_atop_sites(
 
     candidate_arr = np.asarray(candidate_verts, dtype=float)
     probe_arr = np.asarray(candidate_probes, dtype=float)
-    gate_tree = (
-        accessibility_tree
-        if accessibility_tree is not None and np.any(pbc)
-        else local_tree
-    )
+    gate_tree = accessibility_tree if accessibility_tree is not None else local_tree
+    if gate_tree is None:
+        gate_tree = KDTree(positions)
     d_nn_all = np.asarray(gate_tree.query(probe_arr, k=1)[0], dtype=float).ravel()
     keep_acc = (d_nn_all >= float(probe_radius)) & (
         d_nn_all <= float(max_site_distance)
@@ -667,3 +671,68 @@ def inject_atop_sites(
     )
 
     return vertices, nn_dists, source_hints, atoms, normals, clearances
+
+
+def slab_candidate_postprocess(
+    vertices: np.ndarray,
+    nn_dists: np.ndarray,
+    source_hints: list[str],
+    atom_indices: list[tuple[int, ...]],
+    *,
+    positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    top_layer_tolerance: float,
+    accessibility_tree: KDTree,
+    probe_radius: float,
+    max_site_distance: float,
+    slab_top_atom_indices: np.ndarray | None,
+    has_topology_atop: bool,
+    median_nn: float | None = None,
+    normals: np.ndarray | None = None,
+    clearances: np.ndarray | None = None,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    list[str],
+    list[tuple[int, ...]],
+    np.ndarray | None,
+    np.ndarray | None,
+]:
+    """Shared slab height mask + atop injection used by topology and Voronoi."""
+    (
+        vertices,
+        nn_dists,
+        source_hints,
+        atom_indices,
+        normals,
+        clearances,
+    ) = apply_slab_height_mask(
+        vertices,
+        nn_dists,
+        source_hints,
+        atom_indices,
+        positions=positions,
+        cell=cell,
+        top_layer_tolerance=float(top_layer_tolerance),
+        normals=normals,
+        clearances=clearances,
+    )
+    return inject_atop_sites(
+        vertices,
+        nn_dists,
+        source_hints,
+        positions=positions,
+        cell=cell,
+        pbc=pbc,
+        material_type="slab",
+        accessibility_tree=accessibility_tree,
+        median_nn=median_nn,
+        slab_top_atom_indices=slab_top_atom_indices,
+        has_topology_atop=has_topology_atop,
+        probe_radius=float(probe_radius),
+        max_site_distance=float(max_site_distance),
+        atom_indices=atom_indices,
+        normals=normals,
+        clearances=clearances,
+    )

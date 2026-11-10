@@ -17,6 +17,7 @@ from ._constants import (
     _CONTACT_ATOM_VARIANCE_MAX,
     _CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     _CONTACT_QUALITY_COVALENT_SUM_SCALE,
+    _DISTANCE_ZERO_EPS,
     _FLAT_SHAPE_I1_I3_MAX,
     _FLAT_SHAPE_I2_I3_MIN,
     _FRAME_PROJECTION_TIE_EPS,
@@ -1107,6 +1108,62 @@ def calculate_min_distance(
     return float(np.min(dists))
 
 
+def covalent_floor_contact_metrics(
+    dists: np.ndarray,
+    mol_pos: np.ndarray,
+    slab_pos: np.ndarray,
+    mol_radii: np.ndarray,
+    slab_radii: np.ndarray,
+    *,
+    min_distance: float,
+    min_contact_ratio: float,
+    on_floor_pad: float = 0.0,
+    normal: np.ndarray | None = None,
+) -> tuple[bool, float, float, float]:
+    """Score covalent-floor contact from a precomputed mol–slab distance matrix.
+
+    Returns ``(clears_floor, actual_min, max_pen, abs_n_dot)``.
+
+    ``clears_floor`` is false when any pair sits at or inside
+    ``max(min_distance, covalent_sum * min_contact_ratio)``.
+    ``max_pen`` is the largest ``allowed - d`` shortfall (with optional
+    *on_floor_pad* for exact-floor contacts). ``abs_n_dot`` is
+    ``|n·pair_dir|`` for the worst penetrating pair, or ``1.0`` when
+    *normal* is omitted or there is no penetration.
+    """
+    if dists.size == 0 or dists.shape[0] == 0 or dists.shape[1] == 0:
+        return False, float("inf"), 0.0, 1.0
+    actual_min = float(np.min(dists))
+    allowed = substrate_floor_thresholds(
+        mol_radii,
+        slab_radii,
+        scale=float(min_contact_ratio),
+        absolute_floor=float(min_distance),
+    )
+    clears = not bool(np.any(within_cutoff(dists, allowed)))
+    short = allowed - dists
+    if on_floor_pad > 0.0:
+        on_floor = within_cutoff(dists, allowed) & (short <= _DISTANCE_ZERO_EPS)
+        short = np.where(on_floor, float(on_floor_pad), short)
+    penetration = np.maximum(0.0, short)
+    max_pen = float(np.max(penetration))
+    if max_pen <= _DISTANCE_ZERO_EPS or normal is None:
+        return clears, actual_min, max_pen, 1.0
+    mi, si = np.unravel_index(int(np.argmax(penetration)), penetration.shape)
+    pair_vec = np.asarray(slab_pos[si], dtype=float) - np.asarray(
+        mol_pos[mi], dtype=float
+    )
+    pair_nrm = float(np.linalg.norm(pair_vec))
+    if pair_nrm <= _VECTOR_NORM_EPS:
+        return clears, actual_min, max_pen, 1.0
+    n = np.asarray(normal, dtype=float).reshape(3)
+    n_nrm = float(np.linalg.norm(n))
+    if n_nrm <= _VECTOR_NORM_EPS:
+        return clears, actual_min, max_pen, 1.0
+    abs_dot = abs(float(np.dot(pair_vec / pair_nrm, n / n_nrm)))
+    return clears, actual_min, max_pen, abs_dot
+
+
 def check_initial_placement_distance(
     molecule_atoms: Atoms,
     slab: Atoms,
@@ -1154,7 +1211,7 @@ def check_initial_placement_distance(
     material_type
         Material type for PBC flags.
     """
-    _mol_pos, _slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
+    mol_pos, slab_pos, mol_syms, slab_syms, _cell, _pbc, dists = (
         _mol_slab_contact_arrays(
             molecule_atoms,
             slab,
@@ -1167,21 +1224,22 @@ def check_initial_placement_distance(
     if dists.size == 0 or dists.shape[0] == 0 or dists.shape[1] == 0:
         return False, float("inf"), "empty_geometry"
 
-    actual_min = float(np.min(dists))
-
     mol_r = tabulated_radii(mol_syms, kind="covalent")
     slab_r = radii_or_cached(
         slab_syms,
         None if slab_scratch is None else slab_scratch.slab_cov_r,
         kind="covalent",
     )
-    allowed = substrate_floor_thresholds(
+    clears_floor, actual_min, _max_pen, _abs_dot = covalent_floor_contact_metrics(
+        dists,
+        mol_pos,
+        slab_pos,
         mol_r,
         slab_r,
-        scale=float(min_contact_ratio),
-        absolute_floor=float(min_distance),
+        min_distance=float(min_distance),
+        min_contact_ratio=float(min_contact_ratio),
     )
-    if np.any(within_cutoff(dists, allowed)):
+    if not clears_floor:
         return False, actual_min, "too_close"
     if max_initial_distance is not None and actual_min > max_initial_distance:
         return False, actual_min, "too_far"

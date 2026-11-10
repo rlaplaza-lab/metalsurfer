@@ -18,10 +18,8 @@ from typing import Literal
 
 import numpy as np
 from ase import Atoms
-from sklearn.preprocessing import StandardScaler
 
 from ..config import AdsorptionConfig
-from ..ml.bayesian import build_spec_features_geometry_aware
 from ..ml.features import extract_features
 from ..ml.schema import PlacementRecord
 from ..models import (
@@ -33,7 +31,6 @@ from ..models import (
 )
 from ..placement.generators import (
     _spec_grid_info,
-    enumerate_placement_specs,
     estimate_placement_spec_capacity,
     log_site_sample,
 )
@@ -42,10 +39,10 @@ from ..reporting import BOPlacementFailure, FailureSummary, PlacementFailure
 from ..surface_prep import SlabContainer
 from .bayesian import (
     _BOAcquisitionState,
-    _occupancy_sigma_scales,
     _pack_bo_outputs,
     _TransferRoundState,
     bo_exploration_rng,
+    prepare_bo_pool,
     run_bo_acquisition_loop,
 )
 from .composite import (
@@ -803,25 +800,34 @@ def process_joint_tuplet_bayesian(
             failure_summary=BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0),
         )
 
-    all_specs = enumerate_placement_specs(
-        conformers,
-        slab_for_sites,
-        config,
-        smiles,
-        pool_size,
-        filter_spec=config.placement_filter,
+    pool, n_candidate_specs = prepare_bo_pool(
+        conformers=conformers,
+        slab=slab,
+        slab_for_sites=slab_for_sites,
+        config=config,
+        smiles=smiles,
+        molecule_name=molecule_name,
+        surface_type=surface_type,
+        pool_size=pool_size,
         site_context=site_context,
-        seed=config.seed,
-        full_slab=slab.atoms,
         conformer_energies=conformer_energies,
         grid_info=grid_info,
     )
-    if not all_specs:
+    if pool is None:
         return JointTupletScreenOutcome(
             [],
             [],
-            failure_summary=BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0),
+            failure_summary=BOPlacementFailure(
+                n_candidate_specs=n_candidate_specs,
+                n_valid_pool=0,
+            ),
         )
+    all_specs = pool.all_specs
+    candidate_features = pool.candidate_features
+    valid_spec_indices = pool.valid_spec_indices
+    scaled_candidate_features = pool.scaled_candidate_features
+    materialization_cache = pool.materialization_cache
+    sigma_scale = pool.sigma_scale
     logger.info(
         "Joint BO: %d/%d candidate specs",
         len(all_specs),
@@ -830,51 +836,11 @@ def process_joint_tuplet_bayesian(
     if grid_info is not None:
         log_site_sample(grid_info, len(all_specs), specs=all_specs)
 
-    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] = {}
-    candidate_features, valid_spec_indices = build_spec_features_geometry_aware(
-        all_specs,
-        conformers,
-        slab.atoms,
-        config,
-        molecule=molecule_name,
-        smiles=smiles,
-        surface_id=surface_type,
-        site_context=site_context,
-        slab_for_sites=slab_for_sites,
-        materialization_cache=materialization_cache,
-    )
-    if candidate_features.empty:
-        return JointTupletScreenOutcome(
-            [],
-            [],
-            failure_summary=BOPlacementFailure(
-                n_candidate_specs=len(all_specs),
-                n_valid_pool=0,
-            ),
-        )
-
-    scaled_candidate_features = StandardScaler().fit_transform(
-        candidate_features.to_numpy(dtype=float)
-    )
     valid_configs: list[list[ScreeningResult]] = []
     rng = bo_exploration_rng(config.seed, len(slab.atoms), molecule=molecule_name)
     transfer_state = _TransferRoundState()
     acq_state = _BOAcquisitionState()
     base_slab = effective_base_slab_for_frozen or slab.atoms
-    surface_prefix = len(slab_for_sites)
-    occupied = (
-        slab.atoms[surface_prefix:] if len(slab.atoms) > surface_prefix else Atoms()
-    )
-    sigma_scale = _occupancy_sigma_scales(
-        candidate_features=candidate_features,
-        valid_spec_indices=valid_spec_indices,
-        all_specs=all_specs,
-        materialization_cache=materialization_cache,
-        occupied=occupied,
-        material_type=config.material_type,
-        cell=np.asarray(slab.atoms.get_cell(), dtype=float),
-        connectivity_multiplier=float(config.connectivity_multiplier),
-    )
 
     def _record_group(group: Sequence[ScreeningResult]) -> None:
         label = joint_config_ranking_energy(

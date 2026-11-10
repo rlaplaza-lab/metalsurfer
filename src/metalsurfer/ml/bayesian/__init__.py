@@ -52,6 +52,9 @@ from .transfer import (
     _transfer_trust_gate as _transfer_trust_gate,
 )
 from .transfer import (
+    build_cumulative_refit_surrogate as build_cumulative_refit_surrogate,
+)
+from .transfer import (
     build_transfer_surrogate as build_transfer_surrogate,
 )
 from .transfer import (
@@ -90,6 +93,7 @@ __all__ = [
     "SurrogateType",
     "TransferCapableSurrogateType",
     "TransferSurrogateResult",
+    "build_cumulative_refit_surrogate",
     "build_spec_features_geometry_aware",
     "build_transfer_surrogate",
     "cumulative_refit_training_set",

@@ -801,10 +801,7 @@ def test_pairwise_contact_raises_com_when_non_binder_is_closest():
 
 
 def test_void_clashing_interval_stays_inside_window(monkeypatch):
-    """A gate nothing can meet collapses the void interval to one height.
-
-    The window is the contact-to-van-der-Waals span, not ``z_base_lo/hi``.
-    """
+    """A gate nothing can meet collapses the void interval to one height."""
     monkeypatch.setattr(
         "metalsurfer.placement.pose.geom.min_pair_clearance_angstrom",
         lambda *_args, **_kwargs: 1.0e6,
@@ -829,8 +826,6 @@ def test_void_clashing_interval_stays_inside_window(monkeypatch):
         cell=np.eye(3) * 20.0,
         pbc=[True, True, True],
         config=AdsorptionConfig(material_type="porous", seed=0),
-        z_base_lo=-5.0,
-        z_base_hi=2.0,
     )
     assert interval is not None
     assert interval.com_lo == pytest.approx(interval.com_nominal)
@@ -864,8 +859,6 @@ def test_void_clear_centre_stays_at_centre(monkeypatch):
         cell=np.eye(3) * 20.0,
         pbc=[True, True, True],
         config=AdsorptionConfig(material_type="porous", seed=0),
-        z_base_lo=-2.0,
-        z_base_hi=2.0,
     )
     assert interval is not None
     assert interval.com_nominal == pytest.approx(5.0, abs=1e-9)
@@ -887,8 +880,6 @@ def test_void_z_step_matches_wall_step_when_the_centre_is_clear():
         cell=cell,
         pbc=[False, False, False],
         config=config,
-        z_base_lo=0.0,
-        z_base_hi=0.0,
     )
     wall = Site(
         xyz=np.array([0.0, 0.0, 0.0]),
@@ -1386,8 +1377,6 @@ def test_shared_mic_matches_per_gate_contact_heights():
         cell=cell,
         pbc=pbc,
         config=config,
-        z_base_lo=0.0,
-        z_base_hi=0.0,
     )
     assert interval is not None
     assert interval.com_nominal == pytest.approx(covalent, abs=1e-9)

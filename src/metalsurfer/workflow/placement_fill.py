@@ -16,13 +16,13 @@ from ..placement.generators import (
     estimate_placement_spec_capacity,
     log_site_sample,
 )
-from ..placement.policy import (
-    _wall_contact_z_fraction,
-    _wall_z_fraction_is_contact,
-)
 from ..placement.pose import _PoseBatchCache, build_pose_batch_cache
-from ..placement.pose.height import _height_interval_family_key
 from ..placement.site_context import SiteContext
+from ..placement.spec_height_policy import (
+    _dedupe_same_height_specs,
+    _height_interval_family_key,
+    _same_height_key,
+)
 from .shared import PlacementFailureEvent, _materialize_spec_placements
 
 logger = logging.getLogger(__name__)
@@ -55,56 +55,6 @@ def placement_spec_key(
         bool(spec.face_flip),
         spec.en_atom_index,
     )
-
-
-def _same_height_key(
-    spec: PlacementSpec,
-    *,
-    is_void: bool | None = None,
-) -> tuple:
-    """Identity of specs that place at the same COM.
-
-    On wall sites every fraction on the contact shell shares that height.
-    Fractions above the contact sample, and every void or dissociative
-    fraction, stay distinct.
-    """
-    family = _height_interval_family_key(spec)
-    zf = float(spec.z_fraction)
-    void = bool(is_void) if is_void is not None else False
-    if is_void is None and spec.site_type == "pore":
-        void = True
-    if spec.orientation_type == "dissociative" or void:
-        return (*family, zf)
-    if _wall_z_fraction_is_contact(zf):
-        return (*family, "contact")
-    return (*family, zf)
-
-
-def _dedupe_same_height_specs(
-    specs: list[PlacementSpec],
-    *,
-    site_is_void: Callable[[int], bool] | None = None,
-) -> list[PlacementSpec]:
-    """Keep one spec per collapsed height, preferring the contact sample."""
-    best: dict[tuple, int] = {}
-    order: list[tuple] = []
-    for i, spec in enumerate(specs):
-        is_void = (
-            None if site_is_void is None else bool(site_is_void(int(spec.site_index)))
-        )
-        key = _same_height_key(spec, is_void=is_void)
-        prev = best.get(key)
-        if prev is None:
-            best[key] = i
-            order.append(key)
-            continue
-        prev_spec = specs[prev]
-        contact = _wall_contact_z_fraction()
-        if abs(float(spec.z_fraction) - contact) < abs(
-            float(prev_spec.z_fraction) - contact
-        ):
-            best[key] = i
-    return [specs[best[key]] for key in order]
 
 
 @dataclass

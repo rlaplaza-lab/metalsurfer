@@ -20,7 +20,7 @@ from metalsurfer.placement.site_classify import (
     _build_classification_context,
     _candidates_fully_pretyped,
     _compute_local_normals_batch,
-    _outward_normal_or_none,
+    _outward_normals_batch,
     site_env_fingerprint,
 )
 from metalsurfer.placement.site_context import _get_unique_sites_for_specs
@@ -719,24 +719,25 @@ def test_outward_normal_flips_inward_and_drops_buried():
     )
     tree = KDTree(positions)
     xyz = np.array([0.5, 0.289, 0.0], dtype=float)
-    flipped = _outward_normal_or_none(
-        xyz,
-        np.array([0.0, 0.0, -1.0]),
+    centroid = np.mean(positions, axis=0)
+    flipped = _outward_normals_batch(
+        xyz.reshape(1, 3),
+        np.array([[0.0, 0.0, -1.0]]),
         tree,
-        positions,
         probe_radius=0.8,
-    )
-    assert flipped is not None
+        centroid=centroid,
+    )[0]
+    assert np.all(np.isfinite(flipped))
     assert float(flipped[2]) > 0.0
 
-    kept = _outward_normal_or_none(
-        xyz,
-        np.array([0.0, 0.0, 1.0]),
+    kept = _outward_normals_batch(
+        xyz.reshape(1, 3),
+        np.array([[0.0, 0.0, 1.0]]),
         tree,
-        positions,
         probe_radius=0.8,
-    )
-    assert kept is not None
+        centroid=centroid,
+    )[0]
+    assert np.all(np.isfinite(kept))
     assert float(kept[2]) > 0.0
 
     # Centre of a filled cube: stepping any direction stays inside the cloud.
@@ -746,16 +747,14 @@ def test_outward_normal_flips_inward_and_drops_buried():
     )
     buried = np.array([0.5, 0.5, 0.5], dtype=float)
     cube_tree = KDTree(cube)
-    assert (
-        _outward_normal_or_none(
-            buried,
-            np.array([0.0, 0.0, 1.0]),
-            cube_tree,
-            cube,
-            probe_radius=0.2,
-        )
-        is None
-    )
+    buried_normal = _outward_normals_batch(
+        buried.reshape(1, 3),
+        np.array([[0.0, 0.0, 1.0]]),
+        cube_tree,
+        probe_radius=0.2,
+        centroid=np.mean(cube, axis=0),
+    )[0]
+    assert not np.all(np.isfinite(buried_normal))
 
 
 def test_delaunay_hollow_fallback_uses_mic_across_the_cell_face():

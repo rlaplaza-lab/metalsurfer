@@ -32,15 +32,15 @@ from .occupancy import (
     existing_adsorbate_cloud,
     filter_sites_by_occupancy,
 )
-from .pose import (
+from .pose.checks import _validate_posed_adsorbate
+from .pose.finalize import _descriptor_from_placement
+from .pose.height import (
     _com_height_from_z_fraction,
     _com_hi_for_vdw_landing,
-    _descriptor_from_placement,
     _feasible_height_interval,
     _height_above_supports,
     _placement_normal_hat,
     _resolve_surface_ref,
-    _validate_posed_adsorbate,
 )
 from .site_context import SiteContext
 from .site_coords import (
@@ -765,8 +765,6 @@ def _generate_dissociative_placement_from_spec(
             cell=cell_arr,
             pbc=pbc,
             config=config,
-            z_base_lo=0.0,
-            z_base_hi=0.0,
         )
         if interval is None:
             return None, "infeasible_pose"

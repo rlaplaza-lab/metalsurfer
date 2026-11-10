@@ -25,7 +25,6 @@ from metalsurfer.placement.site_adaptive_grid import (
     _framework_median_nn,
     _lateral_snap_candidates,
     _merge_by_radius,
-    _nms,
     _shell_offsets,
     _support_edge_balance,
     _support_lateral_anchor,
@@ -48,6 +47,7 @@ from metalsurfer.placement.site_enumeration import (
     get_unified_sites,
 )
 from metalsurfer.placement.site_types import Site
+from metalsurfer.placement.site_wall_near_common import _nms
 
 from ..conftest import make_nanoparticle, make_porous_framework, make_slab
 

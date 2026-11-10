@@ -77,9 +77,6 @@ from .height import (
     _pair_min_distance_at_com_height as _pair_min_distance_at_com_height,
 )
 from .height import (
-    _pair_worst_penetration_at_com_height as _pair_worst_penetration_at_com_height,
-)
-from .height import (
     _pairwise_contact_com_height as _pairwise_contact_com_height,
 )
 from .height import (

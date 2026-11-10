@@ -360,6 +360,61 @@ def _no_transfer(baseline: Any, transfer_bad_rounds: int) -> "TransferSurrogateR
     )
 
 
+def _finalize_transfer_trust(
+    *,
+    fit_baseline,
+    transfer_model: Any | None,
+    transfer_weight_share: float,
+    mae_delta: float,
+    mae_tolerance: float,
+    transfer_bad_rounds: int,
+    trust_patience: int,
+    gate_out_of_sample: bool,
+    zero_share_when_disabled: bool = False,
+) -> TransferSurrogateResult:
+    """Apply patience / OOF outcomes shared by similarity and cumulative transfer."""
+    bad_rounds = int(transfer_bad_rounds)
+    if mae_delta > mae_tolerance:
+        bad_rounds += 1
+    else:
+        bad_rounds = 0
+
+    if bad_rounds >= trust_patience:
+        share = 0.0 if zero_share_when_disabled else transfer_weight_share
+        return TransferSurrogateResult(
+            surrogate=fit_baseline(),
+            transfer_used_this_round=False,
+            transfer_weight_share=share,
+            transfer_mae_delta=mae_delta,
+            transfer_bad_rounds=bad_rounds,
+            transfer_disabled=True,
+            transfer_disabled_reason=(
+                "trust_degraded_on_current_step_residuals"
+                if gate_out_of_sample
+                else "trust_degraded_on_current_step_residuals_in_sample"
+            ),
+        )
+    if transfer_model is None:
+        return TransferSurrogateResult(
+            surrogate=fit_baseline(),
+            transfer_used_this_round=False,
+            transfer_weight_share=transfer_weight_share,
+            transfer_mae_delta=mae_delta,
+            transfer_bad_rounds=bad_rounds,
+            transfer_disabled=False,
+            transfer_disabled_reason=None,
+        )
+    return TransferSurrogateResult(
+        surrogate=transfer_model,
+        transfer_used_this_round=True,
+        transfer_weight_share=transfer_weight_share,
+        transfer_mae_delta=mae_delta,
+        transfer_bad_rounds=bad_rounds,
+        transfer_disabled=False,
+        transfer_disabled_reason=None,
+    )
+
+
 def build_transfer_surrogate(
     X_current: pd.DataFrame,
     y_current: np.ndarray,
@@ -525,47 +580,117 @@ def build_transfer_surrogate(
         mae_tolerance=mae_tolerance,
         n_jobs=n_jobs,
     )
-    transfer_mae_delta = transfer_mae - base_mae
-    bad_rounds = transfer_bad_rounds
-    if transfer_mae_delta > mae_tolerance:
-        bad_rounds += 1
-    else:
-        bad_rounds = 0
-
-    if bad_rounds >= trust_patience:
-        return TransferSurrogateResult(
-            surrogate=_fit_baseline(),
-            transfer_used_this_round=False,
-            transfer_weight_share=transfer_weight_share,
-            transfer_mae_delta=transfer_mae_delta,
-            transfer_bad_rounds=bad_rounds,
-            transfer_disabled=True,
-            transfer_disabled_reason=(
-                "trust_degraded_on_current_step_residuals"
-                if gate_out_of_sample
-                else "trust_degraded_on_current_step_residuals_in_sample"
-            ),
-        )
-
-    # OOF already rejected transfer: skip the full-data fit and use baseline
-    # this round while still counting the bad round toward patience.
-    if transfer_model is None:
-        return TransferSurrogateResult(
-            surrogate=_fit_baseline(),
-            transfer_used_this_round=False,
-            transfer_weight_share=transfer_weight_share,
-            transfer_mae_delta=transfer_mae_delta,
-            transfer_bad_rounds=bad_rounds,
-            transfer_disabled=False,
-            transfer_disabled_reason=None,
-        )
-
-    return TransferSurrogateResult(
-        surrogate=transfer_model,
-        transfer_used_this_round=True,
+    return _finalize_transfer_trust(
+        fit_baseline=_fit_baseline,
+        transfer_model=transfer_model,
         transfer_weight_share=transfer_weight_share,
-        transfer_mae_delta=transfer_mae_delta,
-        transfer_bad_rounds=bad_rounds,
-        transfer_disabled=False,
-        transfer_disabled_reason=None,
+        mae_delta=transfer_mae - base_mae,
+        mae_tolerance=mae_tolerance,
+        transfer_bad_rounds=transfer_bad_rounds,
+        trust_patience=trust_patience,
+        gate_out_of_sample=gate_out_of_sample,
     )
+
+
+def build_cumulative_refit_surrogate(
+    X_current: pd.DataFrame,
+    y_current: np.ndarray,
+    observed_X_prev: pd.DataFrame | list[dict[str, float]],
+    observed_y_prev: np.ndarray | list[float],
+    *,
+    surrogate: TransferCapableSurrogateType,
+    n_estimators: int = 100,
+    random_state: int = 42,
+    weight_cap: float = 0.5,
+    proximity_lengthscale: float = 1.0,
+    proximity_floor: float = 0.05,
+    mae_tolerance: float = 0.0,
+    transfer_bad_rounds: int = 0,
+    trust_patience: int = 2,
+    n_jobs: int | None = None,
+) -> TransferSurrogateResult:
+    """Proximity-weighted cumulative refit with the shared OOF trust gate.
+
+    Mirrors :func:`build_transfer_surrogate` but concatenates prior + current
+    with proximity weights instead of similarity-gated prior rows.
+    """
+    if surrogate not in BO_TRANSFER_CAPABLE_SURROGATES:
+        raise ValueError(
+            "build_cumulative_refit_surrogate requires a transfer-capable "
+            f"surrogate (one of {BO_TRANSFER_CAPABLE_SURROGATES}); got {surrogate!r}"
+        )
+    y_current_arr = np.asarray(y_current, dtype=float)
+    baseline: Any | None = None
+
+    def _fit_baseline() -> Any:
+        nonlocal baseline
+        if baseline is None:
+            baseline = train_surrogate(
+                X_current,
+                y_current_arr,
+                surrogate=surrogate,
+                n_estimators=n_estimators,
+                random_state=random_state,
+                n_jobs=n_jobs,
+            )
+        return baseline
+
+    if len(observed_X_prev) == 0 or len(observed_y_prev) == 0:
+        return _no_transfer(_fit_baseline(), transfer_bad_rounds)
+
+    X_prior = (
+        pd.DataFrame(observed_X_prev)
+        if not isinstance(observed_X_prev, pd.DataFrame)
+        else observed_X_prev.copy()
+    )
+    y_prior = np.asarray(observed_y_prev, dtype=float)
+    X_prior = _align_to_columns(X_prior, X_current)
+    _, _, refit_weights = cumulative_refit_training_set(
+        X_prior,
+        y_prior,
+        X_current,
+        y_current_arr,
+        weight_cap=weight_cap,
+        proximity_lengthscale=proximity_lengthscale,
+        proximity_floor=proximity_floor,
+    )
+    n_prior = len(X_prior)
+    prior_weights = np.asarray(refit_weights[:n_prior], dtype=float)
+    prior_weight_sum = float(np.sum(prior_weights))
+    total_weight_sum = float(np.sum(refit_weights))
+    transfer_weight_share = (
+        prior_weight_sum / total_weight_sum if total_weight_sum > 0.0 else 0.0
+    )
+
+    base_mae, transfer_mae, transfer_model, gate_out_of_sample = _transfer_trust_gate(
+        X_current,
+        y_current_arr,
+        X_prior,
+        y_prior,
+        prior_weights,
+        fit_baseline=_fit_baseline,
+        surrogate=surrogate,
+        n_estimators=n_estimators,
+        random_state=random_state,
+        mae_tolerance=mae_tolerance,
+        n_jobs=n_jobs,
+    )
+    result = _finalize_transfer_trust(
+        fit_baseline=_fit_baseline,
+        transfer_model=transfer_model,
+        transfer_weight_share=transfer_weight_share,
+        mae_delta=transfer_mae - base_mae,
+        mae_tolerance=mae_tolerance,
+        transfer_bad_rounds=transfer_bad_rounds,
+        trust_patience=trust_patience,
+        gate_out_of_sample=gate_out_of_sample,
+        zero_share_when_disabled=True,
+    )
+    if result.transfer_disabled:
+        logger.warning(
+            "BO cumulative_refit transfer disabled after %d degraded rounds "
+            "(last MAE delta %.4f)",
+            result.transfer_bad_rounds,
+            result.transfer_mae_delta,
+        )
+    return result
