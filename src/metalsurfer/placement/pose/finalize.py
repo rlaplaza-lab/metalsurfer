@@ -11,7 +11,7 @@ from ...models import PlacementDescriptor, PlacementPose
 from .. import geometry as geom
 from .._constants import RECOVERABLE_DISTANCE_REASONS
 from ..site_context import SiteContext
-from ..site_coords import _slab_plane_projectors
+from ..site_coords import _wrapped_slab_fractional
 from .build import _context_from_pose
 from .checks import (
     _build_slab_distance_scratch,
@@ -151,14 +151,8 @@ def _finalize_placement(
         if pose_cache is not None and pose_cache.cell is not None
         else np.asarray(slab.get_cell(), dtype=float)
     )
-    if pose_cache is not None and pose_cache.pinv_ab_T is not None:
-        pinv_ab_T = pose_cache.pinv_ab_T
-    else:
-        pinv_ab_T, _ = _slab_plane_projectors(cell)
-    # Full 3D point: zeroing z biases frac a/b on tilted (non-orthogonal) cells.
     placement_xyz = np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float)
-    frac2 = placement_xyz @ pinv_ab_T
-    xy_frac = np.mod(frac2, 1.0)
+    xy_frac = _wrapped_slab_fractional(placement_xyz, cell)[..., :2]
 
     site_source = ctx.source if ctx.use_sites else "no_sites"
     descriptor = _descriptor_from_placement(

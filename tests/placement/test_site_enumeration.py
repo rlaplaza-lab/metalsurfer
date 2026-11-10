@@ -974,6 +974,46 @@ def test_median_nn_or_fallback_elongated_cell_avoids_self_image():
     assert abs(_ATOP_INJECTION_HEIGHT_FACTOR * got - 8.0) < 1e-9
 
 
+def test_cluster_equivalent_sites_merges_mic_neighbors_on_skewed_slab():
+    """In-plane Cartesian MIC merges a boundary pair and keeps a farther pair apart."""
+    cell = np.array(
+        [[2.5, 0.0, 0.0], [1.25, 2.165, 0.0], [0.0, 0.0, 20.0]],
+        dtype=float,
+    )
+    n_hat = _slab_normal(cell)
+    tol = 0.05
+    base = 2.0 * n_hat
+    site_a = _make_site(
+        base + 0.01 * cell[0],
+        site_type="atop",
+        material_type="slab",
+        env_fingerprint=(("Cu",), (), 0),
+    )
+    site_b = _make_site(
+        base + 0.995 * cell[0],
+        site_type="bridge",
+        material_type="slab",
+        env_fingerprint=(("Cu",), (), 0),
+    )
+    gap = float(np.linalg.norm(0.015 * cell[0]))
+    assert gap < tol
+    unique = _cluster_equivalent_sites(
+        [site_a, site_b], cell, tolerance=tol, z_abs_tolerance=0.2
+    )
+    assert len(unique) == 1
+
+    site_far = _make_site(
+        base + 0.01 * cell[0] + 0.25 * cell[1] / np.linalg.norm(cell[1]),
+        site_type="hollow",
+        material_type="slab",
+        env_fingerprint=(("Cu",), (), 0),
+    )
+    unique_far = _cluster_equivalent_sites(
+        [site_a, site_far], cell, tolerance=tol, z_abs_tolerance=0.2
+    )
+    assert len(unique_far) == 2
+
+
 def test_cluster_equivalent_sites_anisotropic_slab_metric_bound():
     """Pairs that pass dxy/dz but exceed 1.5*tol Cartesian must still merge."""
     from metalsurfer.placement.site_enumeration import _cluster_equivalent_sites

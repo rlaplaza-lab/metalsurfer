@@ -8,6 +8,10 @@ from ase.build import fcc111
 from scipy.spatial import KDTree, Voronoi
 
 import metalsurfer.placement.site_voronoi as site_voronoi_module
+from metalsurfer._geom_pbc import (
+    minimum_image_cartesian_delta,
+    minimum_image_fractional_delta,
+)
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.placement._constants import (
     _SITE_CLASSIFICATION_NEIGHBOURS,
@@ -24,6 +28,7 @@ from metalsurfer.placement.site_coords import (
 from metalsurfer.placement.site_voronoi import (
     _classify_voronoi_site_from_neighbors,
     _enrich_along_ridges,
+    _enrich_edge_candidates,
     _voronoi_sites,
 )
 
@@ -192,6 +197,40 @@ def test_voronoi_enrichment_increases_site_count_on_porous():
     assert len(vertices_base) > 0
     # Real 3D ridge polygons must yield subdivision candidates on this framework.
     assert len(vertices_enriched) > len(vertices_base)
+
+
+def test_enrich_edge_follows_cartesian_mic_on_skewed_cell():
+    """Ridge samples follow the short Cartesian image, not the fractional fold."""
+    cell = np.array(
+        [[2.5, 0.0, 0.0], [1.25, 2.165, 0.0], [0.0, 0.0, 20.0]],
+        dtype=float,
+    )
+    pbc = np.array([True, True, False])
+    inv = np.linalg.inv(cell)
+    v0 = np.zeros(3, dtype=float)
+    v1 = np.array([0.4, 0.4, 0.0]) @ cell
+    delta = v1 - v0
+    long_vec = minimum_image_fractional_delta(delta @ inv, pbc) @ cell
+    short_vec = minimum_image_cartesian_delta(delta, cell, pbc, inv_cell=inv)
+    assert float(np.linalg.norm(np.cross(short_vec, long_vec))) > 1e-3
+
+    pts = _enrich_edge_candidates(
+        [(0, 1)],
+        vertices=np.vstack([v0, v1]),
+        support_sets=[{0}, {0}],
+        target_spacing=0.4,
+        cell=cell,
+        pbc=pbc,
+        inv_cell=inv,
+    )
+    assert len(pts) >= 1
+    short_hat = short_vec / np.linalg.norm(short_vec)
+    for pt in pts:
+        image = minimum_image_cartesian_delta(pt - v0, cell, pbc, inv_cell=inv)
+        parallel = float(np.linalg.norm(np.cross(image, short_hat)))
+        assert parallel < 1e-6
+        along = float(np.dot(image, short_hat))
+        assert 0.0 < along < float(np.linalg.norm(short_vec))
 
 
 def test_enrich_along_ridges_walks_polygonal_faces():

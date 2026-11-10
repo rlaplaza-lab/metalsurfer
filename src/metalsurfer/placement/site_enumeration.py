@@ -37,10 +37,9 @@ from .site_coords import (
     _cart_to_frac,
     _derive_top_layer_tolerance,
     _derive_voronoi_distance_window,
-    _frac_to_cart,
     _height_along_slab_normal,
     _mean_covalent_radius,
-    _minimum_image_fractional_delta,
+    _minimum_image_cartesian_delta,
     _pbc_merge_pair_set,
     _periodic_image_offsets,
     _pore_threshold_from_mean_radius,
@@ -729,13 +728,9 @@ def _cluster_equivalent_sites(
     inv_cell = np.linalg.inv(cell)
 
     def _slab_pair_filter(a: int, b: int) -> bool:
-        xyz_a = coords[a]
-        xyz_b = coords[b]
-        delta_frac = _minimum_image_fractional_delta(
-            (xyz_b - xyz_a).reshape(1, 3) @ inv_cell,
-            pbc,
-        )[0]
-        delta_cart = _frac_to_cart(delta_frac.reshape(1, 3), cell)[0]
+        delta_cart = _minimum_image_cartesian_delta(
+            coords[b] - coords[a], cell, pbc, inv_cell=inv_cell
+        )
         delta_plane = delta_cart - float(np.dot(delta_cart, n_hat)) * n_hat
         dxy = float(np.linalg.norm(delta_plane))
         dz = abs(float(heights[a]) - float(heights[b]))

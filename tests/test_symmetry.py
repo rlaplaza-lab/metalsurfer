@@ -9,8 +9,13 @@ import spglib
 from ase import Atoms
 from ase.build import bulk, fcc111, graphene
 
+from metalsurfer._geom_pbc import (
+    minimum_image_cartesian_delta,
+    minimum_image_fractional_delta,
+)
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.placement import get_symmetry_aware_sites, get_unified_sites
+from metalsurfer.placement.site_types import Site
 from metalsurfer.surface_prep import create_slab_from_atoms
 from metalsurfer.symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 
@@ -50,16 +55,16 @@ def _symop_roundtrip_preserves_structure(
 
 
 def _raw_indices_matching_orbit(
-    equiv_xy: list,
+    equiv_xyz: list,
     raw_sites: list,
     tol: float = 1e-4,
 ) -> list[int]:
-    """Indices of raw sites whose xy lies on an equivalent position in this orbit."""
+    """Indices of raw sites whose xyz lies on an equivalent position in this orbit."""
     idxs: list[int] = []
     for k, s in enumerate(raw_sites):
-        sxy = np.asarray(s.xy, dtype=float)
-        for xy in equiv_xy:
-            if np.linalg.norm(sxy - np.asarray(xy, dtype=float)) < tol:
+        sxyz = np.asarray(s.xyz, dtype=float)
+        for xyz in equiv_xyz:
+            if np.linalg.norm(sxyz - np.asarray(xyz, dtype=float)) < tol:
                 idxs.append(k)
                 break
     return sorted(set(idxs))
@@ -812,3 +817,43 @@ def test_adaptive_grid_nanoparticle_symmetry_is_fast_and_reduces():
     # Orbit prune may fall back to clustered sites when verification fails;
     # either path must stay fast on Pt13.
     assert sym_elapsed < 15.0, f"adaptive_grid NP symmetry took {sym_elapsed:.2f}s"
+
+
+def test_skewed_cell_orbit_matches_cartesian_mic_not_fractional_fold():
+    """A pair inside Cartesian MIC and outside the fractional fold is one orbit."""
+    cell = np.array(
+        [[2.5, 0.0, 0.0], [1.25, 2.165, 0.0], [0.0, 0.0, 10.0]],
+        dtype=float,
+    )
+    pbc = np.array([True, True, True])
+    raw = np.array([0.4, 0.4, 0.0]) @ cell
+    long_len = float(
+        np.linalg.norm(
+            minimum_image_fractional_delta(raw @ np.linalg.inv(cell), pbc) @ cell
+        )
+    )
+    short_len = float(np.linalg.norm(minimum_image_cartesian_delta(raw, cell, pbc)))
+    assert short_len < long_len
+    tol = 0.5 * (short_len + long_len)
+
+    atoms = Atoms("Cu", positions=[[0.0, 0.0, 5.0]], cell=cell, pbc=True)
+    p0 = np.array([0.2, 0.2, 5.0], dtype=float)
+    p1 = p0 + raw
+
+    def _atop(xyz: np.ndarray) -> Site:
+        return Site(
+            xyz=xyz,
+            normal=np.array([0.0, 0.0, 1.0]),
+            site_type="atop",
+            slab_indices=(0,),
+            material_type="slab",
+            site_source="topology",
+            env_fingerprint=(("Cu",), (), 1),
+        )
+
+    analyzer = SymmetryAnalyzer(atoms, symmetry_tolerance=tol, mode="periodic")
+    orbits = analyzer.analyze_site_symmetry([_atop(p0), _atop(p1)], planar=False)
+    assert len(orbits) == 1
+    assert orbits[0].symmetry_multiplicity == 2
+    equiv = orbits[0].symmetry_equivalent_sites
+    assert equiv is not None and all(len(xyz) == 3 for xyz in equiv)

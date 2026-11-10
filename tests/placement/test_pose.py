@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from metalsurfer._geom_pbc import cart_to_frac, slab_normal, slab_plane_projectors
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.ml.features import (
     FEATURE_NAMES,
@@ -614,6 +615,54 @@ def test_apply_lateral_offset_near_x_normal_stays_finite():
     )
     assert np.isfinite(shifted).all()
     assert float(np.linalg.norm(shifted)) > 0.1
+
+
+def test_lateral_offset_on_triclinic_slab_preserves_slab_normal_height():
+    """Lateral wrap is an a/b lattice image and keeps height along a×b."""
+    cell = np.array(
+        [[5.0, 0.0, 0.0], [4.5, 1.5, 0.0], [0.5, 0.5, 8.0]],
+        dtype=float,
+    )
+    n_hat = slab_normal(cell)
+    center = np.array([0.5, 1.5, -2.0], dtype=float)
+    pose = PlacementPose(
+        conformer_index=0,
+        site_index=0,
+        site_type="atop",
+        placement_index=0,
+        quat_w=1.0,
+        quat_x=0.0,
+        quat_y=0.0,
+        quat_z=0.0,
+        x_abs=float(center[0]),
+        y_abs=float(center[1]),
+        z_fraction=0.5,
+        z_abs=float(center[2]),
+    )
+    ctx = _PlacementContext(
+        pose=pose,
+        site=None,
+        mat_type="slab",
+        surface_ref=0.0,
+        is_local_ref=False,
+        source="test",
+        canonical_pos=np.zeros((1, 3)),
+        use_sites=False,
+        rotated_pos=np.zeros((1, 3)),
+        normal=n_hat,
+    )
+    slab = Atoms("Cu", positions=[[0.0, 0.0, 0.0]], cell=cell, pbc=[True, True, False])
+    wrapped = _apply_lateral_offset(center, dx=0.0, dy=0.0, ctx=ctx, slab=slab)
+    delta_frac = cart_to_frac(center - wrapped, cell)
+    assert np.allclose(delta_frac, np.rint(delta_frac), atol=1e-8)
+    assert float(delta_frac[2]) == pytest.approx(0.0, abs=1e-8)
+    assert float(np.dot(wrapped, n_hat)) == pytest.approx(float(np.dot(center, n_hat)))
+
+    pinv_ab_T, _ = slab_plane_projectors(cell)
+    frac2 = np.mod(center @ pinv_ab_T, 1.0)
+    pinv_point = frac2 @ cell[:2]
+    pinv_point = pinv_point + float(np.dot(center - pinv_point, n_hat)) * n_hat
+    assert not np.allclose(wrapped, pinv_point, atol=1e-4)
 
 
 def test_pose_batch_cache_surface_radii_use_derived_top_depth():

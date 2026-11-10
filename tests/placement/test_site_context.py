@@ -22,6 +22,7 @@ from metalsurfer.placement.site_context import (
     site_context_for_sampling,
     skip_symmetry_for_sampling,
 )
+from metalsurfer.placement.site_coords import _wrapped_slab_fractional
 from metalsurfer.placement.site_enumeration import get_hollow_sites_for_adatoms
 
 from ..conftest import (
@@ -287,9 +288,7 @@ def test_surface_reference_uses_prefix_not_symbols():
 
 
 def test_tilted_slab_site_xy_frac_uses_full_3d_projection():
-    """Descriptor frac a/b must project the full COM, not [x, y, 0]."""
-    from metalsurfer.placement.site_coords import _slab_plane_projectors
-
+    """Descriptor frac a/b are crystal fractions of the full COM, not [x, y, 0]."""
     slab = _tilted_make_slab()
     config = adsorption_config_factory(
         material_type="slab", num_placements=20, placement_z_range=(2.0, 3.0)
@@ -300,16 +299,14 @@ def test_tilted_slab_site_xy_frac_uses_full_3d_projection():
     assert spec is not None and result is not None
     _adsorbate, descriptor = result
     assert descriptor.z_abs is not None
-    pinv_ab_T, _ = _slab_plane_projectors(np.asarray(slab.get_cell(), dtype=float))
+    cell = np.asarray(slab.get_cell(), dtype=float)
     full = np.array(
         [descriptor.x_abs, descriptor.y_abs, float(descriptor.z_abs)], dtype=float
     )
-    expected = np.mod(full @ pinv_ab_T, 1.0)
-    zeroed = np.mod(
-        np.array([descriptor.x_abs, descriptor.y_abs, 0.0], dtype=float) @ pinv_ab_T,
-        1.0,
-    )
-    # Bug baseline: zeroing z shifts frac coords on this tilt.
+    expected = _wrapped_slab_fractional(full, cell)[..., :2]
+    zeroed = _wrapped_slab_fractional(
+        np.array([descriptor.x_abs, descriptor.y_abs, 0.0], dtype=float), cell
+    )[..., :2]
     assert not np.allclose(expected, zeroed, atol=1e-6)
     assert descriptor.site_xy_frac_a == pytest.approx(float(expected[0]), abs=1e-9)
     assert descriptor.site_xy_frac_b == pytest.approx(float(expected[1]), abs=1e-9)

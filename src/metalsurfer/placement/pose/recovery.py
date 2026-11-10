@@ -37,7 +37,7 @@ from ..cutoffs import (
     within_cutoff,
 )
 from ..occupancy import incoming_inplane_radius
-from ..site_coords import _slab_normal, _slab_plane_projectors
+from ..site_coords import _frac_to_cart, _slab_normal, _wrapped_slab_fractional
 from .checks import (
     _build_slab_distance_scratch,
     _saturation_exclude_count,
@@ -290,18 +290,7 @@ def _apply_lateral_offset(
             if pose_cache is not None and pose_cache.cell is not None
             else np.asarray(slab.get_cell(), dtype=float)
         )
-        # MIC-wrap the in-plane a–b components; keep height along normal.
-        if pose_cache is not None and pose_cache.pinv_ab_T is not None:
-            pinv_ab_T = pose_cache.pinv_ab_T
-        else:
-            pinv_ab_T, _ = _slab_plane_projectors(cell)
-        frac2 = shifted @ pinv_ab_T
-        frac2 = np.mod(frac2, 1.0)
-        # Reconstruct Cartesian from fractional a,b plus original height along normal.
-        planar = frac2[0] * cell[0] + frac2[1] * cell[1]
-        h = float(np.dot(shifted, n_hat))
-        base_h = float(np.dot(planar, n_hat))
-        return planar + (h - base_h) * n_hat
+        return _frac_to_cart(_wrapped_slab_fractional(shifted, cell), cell)
     return shifted
 
 

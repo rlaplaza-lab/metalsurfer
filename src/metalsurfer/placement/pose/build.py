@@ -20,7 +20,6 @@ from ..site_context import SiteContext, site_context_for_sampling
 from ..site_coords import (
     _derive_top_layer_tolerance,
     _slab_normal,
-    _slab_plane_projectors,
     top_layer_mask_by_normal,
 )
 from ..site_enumeration import _get_site_surface_radii
@@ -43,7 +42,7 @@ def build_pose_batch_cache(
     conformers: list[Atoms],
     config: AdsorptionConfig,
 ) -> _PoseBatchCache:
-    """Precompute plane projectors, top-layer radius, and per-conformer frames."""
+    """Precompute the slab frame, top-layer radius, and per-conformer frames."""
     _ = config
     cache = _PoseBatchCache()
     cell = np.asarray(slab.get_cell(), dtype=float)
@@ -52,7 +51,6 @@ def build_pose_batch_cache(
     cache.cell = cell
     cache.n_hat = _slab_normal(cell)
     cache.positions = positions
-    cache.pinv_ab_T, _ = _slab_plane_projectors(cell)
     # Element-derived top depth (same as _get_site_surface_radii without
     # top_indices), not config.top_layer_tolerance.
     radii_indices = np.nonzero(

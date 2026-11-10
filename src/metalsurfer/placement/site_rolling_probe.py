@@ -230,8 +230,6 @@ def _atom_contacts(
     positions: np.ndarray,
     framework_radii: np.ndarray,
     tree: KDTree,
-    cell: np.ndarray,
-    pbc: np.ndarray,
     skin: float,
     atop_dirs: np.ndarray,
 ) -> list[_Contact]:
@@ -316,12 +314,6 @@ def _atom_contacts(
             if base_k < atom_i:
                 continue
             d_jk = float(np.linalg.norm(pos_j - pos_k))
-            if cell_has_volume(cell) and np.any(pbc):
-                d_jk = float(
-                    np.linalg.norm(
-                        _minimum_image_cartesian_delta(pos_j - pos_k, cell, pbc)
-                    )
-                )
             cutoff_jk = float(
                 framework_radii[base_j] + framework_radii[base_k] + 2.0 * skin
             )
@@ -594,8 +586,6 @@ def generate_rolling_probe_sites(
                 positions=positions,
                 framework_radii=framework_radii,
                 tree=tree,
-                cell=cell,
-                pbc=pbc,
                 skin=skin,
                 atop_dirs=atop_dirs,
             )
@@ -610,8 +600,6 @@ def generate_rolling_probe_sites(
                     positions=positions,
                     framework_radii=framework_radii,
                     tree=tree,
-                    cell=cell,
-                    pbc=pbc,
                     skin=skin,
                     atop_dirs=atop_dirs,
                 )

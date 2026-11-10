@@ -5,6 +5,8 @@ import pytest
 from ase import Atoms
 from scipy.spatial import KDTree
 
+import metalsurfer.placement.site_rolling_probe as rolling_probe_module
+from metalsurfer._geom_pbc import minimum_image_cartesian_delta
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.placement.generators import (
     enumerate_placement_specs,
@@ -20,6 +22,7 @@ from metalsurfer.placement.site_enumeration import (
     get_unified_sites,
 )
 from metalsurfer.placement.site_rolling_probe import (
+    _atom_contacts,
     _fibonacci_sphere,
     _three_sphere_intersections,
     _two_sphere_circle_samples,
@@ -34,6 +37,47 @@ def test_rolling_probe_accepted_on_adsorption_config():
     assert cfg.side_policy == "positive"
     for mat in ("slab", "nanoparticle", "porous"):
         AdsorptionConfig(site_generator="rolling_probe", material_type=mat)
+
+
+def test_triplet_gate_uses_chosen_image_separation_not_mic(monkeypatch):
+    """A far image pair is not a hollow just because another copy is closer."""
+    positions = np.array(
+        [[0.0, 0.0, 0.0], [2.2, 0.0, 0.0], [-2.2, 0.0, 0.0]],
+        dtype=float,
+    )
+    cell = np.diag([3.0, 12.0, 12.0])
+    pbc = np.array([True, False, False])
+    radii = np.ones(3, dtype=float)
+    skin = 0.2
+    cutoff = float(radii[1] + radii[2] + 2.0 * skin)
+    straight = float(np.linalg.norm(positions[2] - positions[1]))
+    mic = float(
+        np.linalg.norm(
+            minimum_image_cartesian_delta(positions[2] - positions[1], cell, pbc)
+        )
+    )
+    assert straight > cutoff
+    assert mic <= cutoff
+
+    def _accept_all(points, *args, **kwargs):
+        return np.ones(len(points), dtype=bool)
+
+    def _fake_intersection(*args, **kwargs):
+        return [np.array([0.0, 0.0, 8.0], dtype=float)]
+
+    monkeypatch.setattr(rolling_probe_module, "_clash_free", _accept_all)
+    monkeypatch.setattr(
+        rolling_probe_module, "_three_sphere_intersections", _fake_intersection
+    )
+    contacts = _atom_contacts(
+        0,
+        positions=positions,
+        framework_radii=radii,
+        tree=KDTree(positions),
+        skin=skin,
+        atop_dirs=np.eye(3),
+    )
+    assert all(len(contact.support_images) < 3 for contact in contacts)
 
 
 def test_fibonacci_sphere_unit_norm():

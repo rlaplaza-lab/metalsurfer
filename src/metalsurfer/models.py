@@ -220,8 +220,8 @@ class PlacementDescriptor:
     placement_mode_resolved: str = "no_sites"
     site_source: str = "no_sites"
     site_reference_frame: str = "global_top_layer"
-    site_xy_frac_a: float | None = None
-    site_xy_frac_b: float | None = None
+    site_xy_frac_a: float | None = None  # wrapped crystal fractional a of the COM
+    site_xy_frac_b: float | None = None  # wrapped crystal fractional b of the COM
     quat_w: float | None = None
     quat_x: float | None = None
     quat_y: float | None = None

@@ -20,7 +20,7 @@ from threadpoolctl import threadpool_limits
 from ._geom_pbc import (
     cart_to_frac,
     frac_to_cart,
-    minimum_image_fractional_delta,
+    minimum_image_cartesian_delta,
     slab_normal,
     wrap_fractional,
 )
@@ -217,17 +217,15 @@ class SymmetryAnalyzer:
         """Apply r' = r @ R.T + t for row vectors (matches spglib Python examples)."""
         return frac_row @ R.T + t
 
-    def _mic_frac_delta(self, fa: np.ndarray, fb: np.ndarray) -> np.ndarray:
-        """Shortest fractional difference, folded only on genuinely periodic axes.
-
-        Shape-generic: the last axis must be the three fractional components.
-        """
-        d = np.asarray(fa, dtype=float) - np.asarray(fb, dtype=float)
-        return minimum_image_fractional_delta(d, self._symmetry_pbc(), copy=False)
-
-    def _cart_sep_from_frac_delta(self, d_frac: np.ndarray) -> np.ndarray:
-        """Cartesian separation vector (row) from fractional MIC difference."""
-        return frac_to_cart(d_frac, self._lattice)
+    def _mic_cart_sep(self, fa: np.ndarray, fb: np.ndarray) -> np.ndarray:
+        """Cartesian MIC of *fa* minus *fb* under :meth:`_symmetry_pbc`."""
+        delta_cart = frac_to_cart(
+            np.asarray(fa, dtype=float) - np.asarray(fb, dtype=float),
+            self._lattice,
+        )
+        return minimum_image_cartesian_delta(
+            delta_cart, self._lattice, self._symmetry_pbc()
+        )
 
     def _slab_normal(self) -> np.ndarray:
         """Return unit normal from lattice a × b (slab plane)."""
@@ -277,8 +275,7 @@ class SymmetryAnalyzer:
         connected = np.zeros(len(targets), dtype=bool)
         for R, t in frac_ops:
             moved = self._wrap_frac(self._apply_frac_symop(frac_source, R, t))
-            d_frac = self._mic_frac_delta(moved, frac_targets)
-            sep = self._cart_sep_from_frac_delta(d_frac)
+            sep = self._mic_cart_sep(moved, frac_targets)
             connected |= self._within_match_tolerance(sep, planar)
             if bool(connected.all()):
                 break
@@ -331,12 +328,12 @@ class SymmetryAnalyzer:
         out: list[Site] = []
         for idxs in orbits:
             rep = min(idxs, key=lambda i: self._site_sort_key(sites[i]))
-            equiv_xy = tuple(sites[k].xy.copy() for k in idxs)
+            equiv_xyz = tuple(tuple(float(v) for v in sites[k].xyz) for k in idxs)
             out.append(
                 with_symmetry(
                     sites[rep],
                     symmetry_multiplicity=len(idxs),
-                    symmetry_equivalent_sites=equiv_xy,
+                    symmetry_equivalent_sites=equiv_xyz,
                 )
             )
         return out
@@ -463,10 +460,7 @@ class SymmetryAnalyzer:
                     if j == i or j in seen:
                         continue
                     seen.add(j)
-                    d_frac = minimum_image_fractional_delta(
-                        transformed[i] - frac_pts[j], pbc, copy=True
-                    )
-                    sep = frac_to_cart(d_frac, self._lattice)
+                    sep = self._mic_cart_sep(transformed[i], frac_pts[j])
                     if bool(self._within_match_tolerance(sep, planar)):
                         pairs.append((i, j))
             return pairs
@@ -499,12 +493,9 @@ class SymmetryAnalyzer:
         chunk = max(1, min(n, _SYMMETRY_PAIR_CHUNK_BYTES // max(per_col, 1)))
         transformed = self._wrap_frac(frac_pts @ R.T + t)
         pairs: list[tuple[int, int]] = []
-        pbc = self._symmetry_pbc()
         for i0 in range(0, n, chunk):
             i1 = min(n, i0 + chunk)
-            delta = transformed[i0:i1, None, :] - frac_pts[None, :, :]
-            delta = minimum_image_fractional_delta(delta, pbc, copy=False)
-            sep = frac_to_cart(delta, self._lattice)
+            sep = self._mic_cart_sep(transformed[i0:i1, None, :], frac_pts[None, :, :])
             match = self._within_match_tolerance(sep, planar)
             for local_row, i in enumerate(range(i0, i1)):
                 match[local_row, i] = False

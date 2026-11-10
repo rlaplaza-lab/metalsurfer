@@ -43,7 +43,6 @@ class _PlacementContext:
 class _PoseBatchCache:
     """Per-batch invariants shared across placements on the same substrate."""
 
-    pinv_ab_T: np.ndarray | None = None
     # Mean top-layer covalent radius for z-offset when site has no slab_indices.
     r_surface_top_layer: float | None = None
     cell: np.ndarray | None = None

@@ -25,11 +25,9 @@ from ._constants import (
 from ._parallel import resolve_materialize_workers
 from .site_coords import (
     _build_periodic_images,
-    _cart_to_frac,
     _deduplicate_points,
     _derive_voronoi_distance_window,
-    _frac_to_cart,
-    _minimum_image_fractional_delta,
+    _minimum_image_cartesian_delta,
     _periodic_image_offsets,
     _project_to_slab_plane,
     _slab_normal,
@@ -515,13 +513,11 @@ def _enrich_edge_candidates(
             continue
 
         v0, v1 = vertices[k0], vertices[k1]
+        edge_vec = np.asarray(v1, dtype=float) - np.asarray(v0, dtype=float)
         if np.any(pbc):
-            f0 = _cart_to_frac(v0.reshape(1, 3), cell, inv_cell=inv_cell)[0]
-            f1 = _cart_to_frac(v1.reshape(1, 3), cell, inv_cell=inv_cell)[0]
-            df = _minimum_image_fractional_delta((f1 - f0).reshape(1, 3), pbc)[0]
-            edge_vec = _frac_to_cart(df.reshape(1, 3), cell)[0]
-        else:
-            edge_vec = v1 - v0
+            edge_vec = _minimum_image_cartesian_delta(
+                edge_vec, cell, pbc, inv_cell=inv_cell
+            )
 
         edge_len = float(np.linalg.norm(edge_vec))
         if edge_len <= target_spacing:

@@ -106,7 +106,7 @@ def with_symmetry(
     symmetry_multiplicity
         Multiplicity of the symmetry orbit.
     symmetry_equivalent_sites
-        Tuple of equivalent site positions.
+        Tuple of equivalent site xyz positions.
     """
     return replace(
         site,

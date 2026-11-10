@@ -62,6 +62,7 @@ from ._constants import (
     _VORONOI_MAX_DISTANCE_COVALENT_SCALE,
     _VORONOI_PROBE_RADIUS_COVALENT_SCALE,
 )
+from ._material import MATERIAL_PBC
 from .geometry import _get_covalent_radius, framework_radii_from_symbols
 
 __all__ = [
@@ -88,6 +89,7 @@ __all__ = [
     "_pbc_merge_pair_set",
     "_periodic_image_offsets",
     "_union_find_cluster",
+    "_wrapped_slab_fractional",
     "derive_pore_threshold",
     "top_layer_mask_by_normal",
 ]
@@ -277,6 +279,11 @@ def _deduplicate_points(
         )
     merge_set = _pbc_merge_pair_set(pts, tolerance, image_offsets=offsets)
     return _keep_mask_from_clusters(n, merge_set)
+
+
+def _wrapped_slab_fractional(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
+    """Fractional coordinates with *a*/*b* in ``[0, 1)`` and *c* unchanged."""
+    return _wrap_fractional(_cart_to_frac(points, cell), MATERIAL_PBC["slab"])
 
 
 def project_anchor_to_support_plane(

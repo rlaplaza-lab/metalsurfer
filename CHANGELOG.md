@@ -44,6 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Voronoi ridge samples follow the Cartesian minimum-image edge. Slab
+  clustering measures the in-plane part of that same vector and still requires
+  matching height along the slab normal.
+- Symmetry orbit confirmation uses the Cartesian minimum image under the
+  symmetry periodic-boundary flags. Cluster mode still does not fold
+  site–site deltas. ``symmetry_equivalent_sites`` stores each member's
+  ``xyz``.
+- A rolling-probe hollow is kept only when the chosen image coordinates
+  themselves lie inside the pair cutoff.
+- Slab lateral recovery wraps fractional *a* and *b* and leaves fractional
+  *c* unchanged, preserving height along ``a × b``. ``site_xy_frac_a/b``,
+  including dissociative centroids, are those wrapped crystal fractions.
 - Symmetry-orbit pruning stays on a clean single-molecule substrate. N-tuplet
   mode, coverage, and a broken substrate rebuild the full clustered catalog on
   the current atoms instead of reusing an earlier reduced set.

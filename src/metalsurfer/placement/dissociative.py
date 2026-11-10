@@ -47,7 +47,7 @@ from .site_coords import (
     _mean_covalent_radius,
     _periodic_image_offsets,
     _slab_normal,
-    _slab_plane_projectors,
+    _wrapped_slab_fractional,
     top_layer_mask_by_normal,
 )
 from .site_enumeration import (
@@ -642,8 +642,7 @@ def _place_dissociative_two_sites(
         return None
 
     centroid = (pos1 + pos2) / 2.0
-    pinv_ab_T, _ = _slab_plane_projectors(cell_arr)
-    xy_frac = np.mod(np.asarray(centroid, dtype=float) @ pinv_ab_T, 1.0)
+    xy_frac = _wrapped_slab_fractional(centroid, cell_arr)[..., :2]
     pose = PlacementPose(
         conformer_index=0,
         site_index=spec.site_index,

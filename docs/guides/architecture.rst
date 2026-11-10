@@ -269,8 +269,9 @@ The only adsorbate lift is the contact solve in pose.
        free-volume pore centres). Catalog density matches default
        ``adaptive_grid`` NMS. Uses ``side_policy`` (default ``positive`` remaps
        from the structure PBC mask: slab-like → vacuum face, cluster →
-       ``external``, 3D-periodic → ``all``). Selectable in config / YAML;
-       **not** chosen by ``auto``.
+       ``external``, 3D-periodic → ``all``). A three-sphere contact uses the
+       straight separation of the chosen image coordinates. Selectable in
+       config / YAML; **not** chosen by ``auto``.
 
 Generation follows the slab normal (``a × b``) and the surface plane — not
 Cartesian ``z``.
@@ -288,9 +289,10 @@ Pipeline:
    nearest-neighbour edges. Voronoi: free-volume vertices.
 5. Vertices filtered to the primary cell within
    ``[voronoi_probe_radius, voronoi_max_site_distance]``.
-6. Optional ridge enrichment (``voronoi_site_enrichment``). On planar slabs
-   the topology path does not use ridge enrichment; the flag matters for
-   porous frameworks, rough/non-planar slabs, and explicit Voronoi.
+6. Optional ridge enrichment (``voronoi_site_enrichment``) samples along the
+   Cartesian minimum-image edge. On planar slabs the topology path does not
+   use ridge enrichment; the flag matters for porous frameworks,
+   rough/non-planar slabs, and explicit Voronoi.
 7. Typing: distance ratios on six nearest neighbours, or top-layer mesh
    classify (``delaunay`` / ``auto`` on slabs) that labels candidates as
    atop / bridge / hollow. Hollows may carry ``hollow_order`` (3- or 4-fold).
@@ -304,10 +306,12 @@ Pipeline:
    ``site_equivalence_tolerance`` — sites merge when close **and** they share
    the same ``env_fingerprint`` (support-atom symbols + distance bins + side
    label; **not** ``site_source`` or classified ``site_type``); clustering
-   metric follows the material PBC mask (open / slab-plane / full MIC);
-   (4) optional
-   spglib symmetry reduction on the clustered list for molecular sampling on a
-   clean substrate.
+   uses the Cartesian minimum image for the material PBC mask (none, in-plane
+   plus height along ``a × b``, or full). (4) optional spglib symmetry
+   reduction on the clustered list for molecular sampling on a clean
+   substrate. Periodic matches use that same Cartesian minimum image; cluster
+   mode does not fold site–site deltas. Each representative stores the orbit
+   members' ``xyz``.
 10. Final list sorted by fractional coordinates for deterministic
     ``site_index``. Sampling rank prefers voids, then hollow / bridge / atop,
     then larger clearance; a capped list reserves room for wall sites when
@@ -554,7 +558,10 @@ Enumeration / materialization
   the normal; mostly in-plane clashes skip height; huge normal penetration
   fails before Packmol. Then chemistry-scaled clash descent when
   ``placement_clash_descent`` is on (discrete XY only when clash is off).
-  ``adsorbate_overlap`` skips height. Void sites (``kind == "void"``)
+  On a slab those in-plane offsets wrap fractional *a*/*b* and leave *c*
+  unchanged. ``site_xy_frac_a/b`` record those wrapped crystal fractions of
+  the COM, including a dissociative centroid. ``adsorbate_overlap`` skips
+  height. Void sites (``kind == "void"``)
   invert the height nudge toward the free-volume centre — not
   ``material_type``.
 - **Distance-window auto-widen** (default on): topology and Voronoi retry once

@@ -281,10 +281,10 @@ def test_vectorized_orbits_match_the_scalar_reference_on_a_slab():
     )
     sorted_sites = sorted(sites, key=analyzer._site_sort_key)
     ref_sets = {
-        frozenset(tuple(np.round(sorted_sites[i].xy, 6)) for i in o) for o in reference
+        frozenset(tuple(np.round(sorted_sites[i].xyz, 6)) for i in o) for o in reference
     }
     new_sets = {
-        frozenset(tuple(np.round(xy, 6)) for xy in o.symmetry_equivalent_sites)
+        frozenset(tuple(np.round(xyz, 6)) for xyz in o.symmetry_equivalent_sites)
         for o in orbits
     }
     assert ref_sets == new_sets

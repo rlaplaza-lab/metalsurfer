@@ -37,7 +37,7 @@ def test_site_normal_is_unit_length():
 def test_with_symmetry_preserves_geometry_fields():
     site = _site()
     enriched = with_symmetry(
-        site, symmetry_multiplicity=3, symmetry_equivalent_sites=((0.0, 0.0),)
+        site, symmetry_multiplicity=3, symmetry_equivalent_sites=((0.0, 0.0, 1.0),)
     )
     np.testing.assert_array_equal(enriched.xyz, site.xyz)
     np.testing.assert_array_equal(enriched.normal, site.normal)
@@ -45,7 +45,7 @@ def test_with_symmetry_preserves_geometry_fields():
     assert enriched.slab_indices == site.slab_indices
     assert enriched.material_type == site.material_type
     assert enriched.symmetry_multiplicity == 3
-    assert enriched.symmetry_equivalent_sites == ((0.0, 0.0),)
+    assert enriched.symmetry_equivalent_sites == ((0.0, 0.0, 1.0),)
 
 
 def test_material_pbc_values_are_immutable_tuples():

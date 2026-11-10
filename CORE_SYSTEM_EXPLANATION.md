@@ -213,9 +213,9 @@ atom sits between `voronoi_probe_radius` and `voronoi_max_site_distance`. These
 two knobs are scaled by the surface's covalent radii unless overridden, and
 they remain active on slabs — they simply drive the topology accessibility
 window rather than a Voronoi pass. (Ridge *enrichment*,
-`voronoi_site_enrichment`, does nothing on a planar slab or on nanoparticles;
-that knob only matters for porous frameworks and rough/non-planar slabs that
-run Voronoi.)
+`voronoi_site_enrichment`, spaces samples along the Cartesian minimum-image
+edge. It does nothing on a planar slab or on nanoparticles; that knob only
+matters for porous frameworks and rough/non-planar slabs that run Voronoi.)
 
 Two extra slab behaviours:
 
@@ -272,13 +272,15 @@ Regardless of material type, three things happen to the raw candidate set:
   Classified `site_type` (atop / bridge / hollow / …) is **not** part of that
   fingerprint. Which plugin proposed the point (`site_source`) is also ignored,
   so two generators that land in the same pocket collapse to one representative.
-  Periodicity is respected (images folded back); slabs also require matching
+  Separation is the Cartesian minimum image; slabs also require matching
   height along the surface normal. Dissociative pairs and adatom hollow
   placement use this full clustered list (hollow/pore subset) so they see every
   translational copy.
 - **Symmetry reduction** uses spglib to keep one representative of each
   crystallographically equivalent site, cutting wasted work on a clean bare
-  substrate. It runs after clustering. Sites of different classified
+  substrate. It runs after clustering. A match is the Cartesian minimum image
+  under the material periodicity; cluster mode does not fold those deltas, and
+  each representative stores the orbit members' xyz. Sites of different classified
   `site_type` are not collapsed into each other. Adsorbates alone do not count
   as “broken symmetry”: saturation strips the adsorbate suffix before that
   check. Once anything is adsorbed, or when more than one molecule will be
@@ -383,7 +385,11 @@ sum, and a pose is kept only when every pair sits strictly outside its
 cutoff. Van der Waals radii are used only when `reject_vdw_overlaps` rejects
 a mol–substrate pair. Only `too_close`,
 `too_far`, `contact_distance_too_large`, `vdw_overlap`, and `adsorbate_overlap`
-are recoverable; other failures are final.
+are recoverable; other failures are final. On a slab an in-plane offset
+wraps by integer *a*/*b* translations and leaves fractional *c* unchanged, so
+the height along `a × b` is preserved. Recorded `site_xy_frac_a/b` are those
+wrapped crystal fractions of the full center of mass, including a dissociative
+centroid.
 
 ## 5. Sampling many placements
 
