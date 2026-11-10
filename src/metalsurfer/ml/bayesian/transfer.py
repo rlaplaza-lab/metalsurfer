@@ -607,7 +607,7 @@ def build_cumulative_refit_surrogate(
     mae_tolerance: float = 0.0,
     transfer_bad_rounds: int = 0,
     trust_patience: int = 2,
-    n_jobs: int | None = None,
+    n_jobs: int = -1,
 ) -> TransferSurrogateResult:
     """Proximity-weighted cumulative refit with the shared OOF trust gate.
 

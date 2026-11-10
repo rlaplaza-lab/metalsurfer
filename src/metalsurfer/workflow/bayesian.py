@@ -77,7 +77,7 @@ class _PreparedBOPool:
 
 def prepare_bo_pool(
     *,
-    conformers: Sequence[Atoms],
+    conformers: list[Atoms],
     slab: SlabContainer,
     slab_for_sites: Atoms,
     config: AdsorptionConfig,
@@ -86,7 +86,7 @@ def prepare_bo_pool(
     surface_type: str,
     pool_size: int,
     site_context: SiteContext | None,
-    conformer_energies: Sequence[float] | None,
+    conformer_energies: list[float] | None,
     grid_info: Any | None,
 ) -> tuple[_PreparedBOPool | None, int]:
     """Enumerate specs, build geometry-aware features, scaler, and occupancy σ.
@@ -811,8 +811,12 @@ def process_molecule_bayesian(
 
         for r in batch_results:
             pool_pos = pid_to_pool_position.get(r.placement_id)
+            features: dict[str, float]
             if pool_pos is not None:
-                features = candidate_features.iloc[pool_pos].to_dict()
+                features = {
+                    str(k): float(v)
+                    for k, v in candidate_features.iloc[pool_pos].to_dict().items()
+                }
             else:
                 record = PlacementRecord.from_descriptor(
                     r.placement_descriptor,
