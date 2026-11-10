@@ -36,14 +36,14 @@ def _placements(snapshot: dict[str, object]) -> list[dict[str, object]]:
     return placements
 
 
-def _assert_neighbor_snapshot(snapshot: dict[str, object]) -> None:
+def _assert_neighbor_snapshot(
+    snapshot: dict[str, object], *, n_positive: int, n_open: int
+) -> None:
     catalog = snapshot["catalog"]
     assert isinstance(catalog, dict)
     explored = {int(pose["descriptor"]["site_index"]) for pose in _placements(snapshot)}
-    assert explored & set(catalog["positive_sites"])
-    open_atops = set(catalog["open_atops"])
-    if open_atops:
-        assert explored & open_atops
+    assert len(explored & set(catalog["positive_sites"])) == n_positive
+    assert len(explored & set(catalog["open_atops"])) == n_open
 
 
 def test_pme3_au4_short_draw_keeps_every_site_type() -> None:
@@ -55,9 +55,10 @@ def test_pme3_au4_short_draw_keeps_every_site_type() -> None:
     explored_types = {str(pose["descriptor"]["site_type"]) for pose in poses}
     assert {"atop", "bridge", "hollow"} <= explored_types
     au_pos = np.asarray(slab.get_positions(), dtype=float)
-    assert any(
+    hits = sum(
         p_nearer_au_than_carbons(pose_atoms(snapshot, pose), au_pos) for pose in poses
     )
+    assert hits == 7
     for pose in poses:
         assert_intact(pose_atoms(snapshot, pose), _PME3_FORMULA, config)
 
@@ -72,7 +73,7 @@ def test_pyridone_step2_short_draw_explores_a_neighbor_site() -> None:
     poses = _placements(snapshot)
     for pose in poses:
         assert_intact(pose_atoms(snapshot, pose), _PYRIDONE_FORMULA, config)
-    _assert_neighbor_snapshot(snapshot)
+    _assert_neighbor_snapshot(snapshot, n_positive=7, n_open=3)
 
 
 def test_pyridone_pool_short_draw_reaches_contact_height() -> None:
@@ -85,7 +86,7 @@ def test_pyridone_pool_short_draw_reaches_contact_height() -> None:
     poses = _placements(snapshot)
     for pose in poses:
         assert_intact(pose_atoms(snapshot, pose), _PYRIDONE_FORMULA, config)
-    assert any(float(pose["descriptor"]["z_fraction"]) <= 0.5 + 1e-9 for pose in poses)
+    assert 0.5 in {round(float(pose["descriptor"]["z_fraction"]), 6) for pose in poses}
 
 
 def test_oleic_step2_short_draw_has_a_carboxyl_down_neighbor() -> None:
@@ -99,11 +100,12 @@ def test_oleic_step2_short_draw_has_a_carboxyl_down_neighbor() -> None:
     assert isinstance(catalog, dict)
     positive = {int(site) for site in catalog["positive_sites"]}
     poses = _placements(snapshot)
-    assert any(
+    hits = sum(
         carboxyl_down(pose_atoms(snapshot, pose), slab_pos, cell)
         and int(pose["descriptor"]["site_index"]) in positive
         for pose in poses
     )
+    assert hits == 10
     for pose in poses:
         assert_intact(pose_atoms(snapshot, pose), _OLEIC_FORMULA, config)
-    _assert_neighbor_snapshot(snapshot)
+    _assert_neighbor_snapshot(snapshot, n_positive=6, n_open=3)

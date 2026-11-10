@@ -335,8 +335,8 @@ def test_principal_axis_rotation_flat_hexagon_stays_near_flat():
     rotated, _score, _R = _principal_axis_rotation(hex_pos, np.array([0.0, 0.0, 1.0]))
     # Regular hexagon: in-plane inertia moments are exactly degenerate, so the
     # recovered normal is only approximate (~5° tilt, z-span ≈ 0.244 Å).
-    # Deterministic eigensolver -> pin golden with small slack.
-    assert float(np.ptp(rotated[:, 2])) == pytest.approx(0.24403607968514937, abs=0.01)
+    # Deterministic eigensolver -> pin golden.
+    assert float(np.ptp(rotated[:, 2])) == pytest.approx(0.24403607968514937, abs=1e-9)
 
 
 @pytest.mark.parametrize("tilt_deg", [0.0, 10.0, 15.0])

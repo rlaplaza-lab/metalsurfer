@@ -1008,8 +1008,8 @@ class TestPerpendicularHeights2D:
         cell = np.array([[10.0, 0.0, 0.0], [5.0, 8.66, 0.0], [0.0, 0.0, 20.0]])
         h_a, h_b = _perpendicular_heights_2d(cell)
         area = abs(10.0 * 8.66)
-        assert np.isclose(h_a, area / 10.0, atol=0.01)
-        assert np.isclose(h_b, area / np.sqrt(25 + 8.66**2), atol=0.01)
+        assert np.isclose(h_a, area / 10.0, atol=1e-12)
+        assert np.isclose(h_b, area / np.sqrt(25 + 8.66**2), atol=1e-12)
 
     def test_degenerate_zero_vector_raises(self):
         cell = np.array([[0.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 20.0]])

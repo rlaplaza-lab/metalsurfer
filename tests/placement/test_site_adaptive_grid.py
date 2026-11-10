@@ -502,7 +502,7 @@ def test_lateral_snap_moves_off_center_bridge_to_midpoint():
     assert snapped.position[1] == pytest.approx(0.0, abs=1e-9)
     # Catalog xyz is the support-plane anchor; clearance is the lifted probe.
     assert snapped.position[2] == pytest.approx(0.0, abs=1e-6)
-    assert snapped.clearance == pytest.approx(1.2, abs=0.05)
+    assert snapped.clearance == pytest.approx(1.2, abs=1e-9)
 
 
 def test_triangle_circumcenter_and_edge_balance_are_lattice_agnostic():

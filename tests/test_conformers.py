@@ -162,9 +162,8 @@ class TestCreateConformers:
         result = create_conformers_from_smiles("O", config=config)
         assert result is not None
         conformers, _ = result
-        assert len(conformers) >= 1
-        assert len(conformers) < 20, (
-            "Water is rigid; deduplication should reduce 20 conformers to fewer"
+        assert len(conformers) == 1, (
+            "Water is rigid; deduplication should reduce 20 conformers to one"
         )
 
 

@@ -1154,7 +1154,7 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex(source):
     )
     # Catalog identity is the support-plane anchor (plugin lift is probe-only).
     site_h = float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
-    assert site_h == pytest.approx(support_h, abs=0.15)
+    assert site_h == pytest.approx(support_h, abs=1e-6)
     # Local surface_ref and contact share the framework plane (never a lift).
     assert ctx.is_local_ref
     assert float(ctx.surface_ref) == pytest.approx(support_h, abs=1e-9)
@@ -1171,7 +1171,7 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex(source):
         ctx.rotated_pos + np.array([ctx.pose.x_abs, ctx.pose.y_abs, ctx.pose.z_abs])
     ) @ n_hat
     # Contact clears the pairwise gate above the support plane.
-    assert float(atom_h[o_idx]) >= support_h + gate - 0.15
+    assert float(atom_h[o_idx]) >= support_h + gate - 1e-9
 
     lifted = Site(
         xyz=np.asarray(site.xyz, dtype=float) + 2.0 * n_hat,
@@ -1241,6 +1241,11 @@ def test_pose_rebuilds_catalog_when_coverage_drops_symmetry():
     )
     assert reason is None
     assert placed is not None
+    # Pose anchors on the clustered catalog entry (valid only after expand).
+    _, descriptor = placed
+    wide_xyz = np.asarray(reduced.clustered_sites[wide_index].xyz, dtype=float)
+    assert float(descriptor.x_abs) == pytest.approx(float(wide_xyz[0]), abs=1e-9)
+    assert float(descriptor.y_abs) == pytest.approx(float(wide_xyz[1]), abs=1e-9)
 
 
 def _shell_vs_full_nominal(

@@ -17,6 +17,8 @@ from metalsurfer.placement import (
 )
 from metalsurfer.placement._constants import _NORMAL_K_NEIGHBOURS
 from metalsurfer.placement.site_classify import (
+    _build_classification_context,
+    _candidates_fully_pretyped,
     _compute_local_normals_batch,
     _outward_normal_or_none,
     site_env_fingerprint,
@@ -850,3 +852,46 @@ def test_empty_delaunay_index_classifies_with_mic_neighbors():
         pore_threshold=5.0,
     )[0][1]
     assert site_indices[0] == 0
+
+
+def test_pretyped_batch_skips_neighbor_index():
+    """Fully pretyped candidates skip the neighbor/KD classification index."""
+    positions = np.array(
+        [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 1.7, 0.0]],
+        dtype=float,
+    )
+    cell = np.diag([10.0, 10.0, 10.0])
+    pbc = np.array([False, False, False], dtype=bool)
+    tree = KDTree(positions)
+    vertices = np.array([[1.0, 0.6, 1.5]], dtype=float)
+    normals = np.array([[0.0, 0.0, 1.0]], dtype=float)
+
+    assert _candidates_fully_pretyped(1, ["topology_atop"], [(0,)], normals)
+    assert not _candidates_fully_pretyped(1, ["topology_atop"], [(0,)], None)
+    assert not _candidates_fully_pretyped(1, ["voronoi"], [(0,)], normals)
+
+    ctx = _build_classification_context(
+        vertices,
+        positions,
+        tree,
+        material_type="slab",
+        cell=cell,
+        pbc=pbc,
+        delaunay=None,
+        skip_neighbor_index=True,
+    )
+    assert ctx.class_dists is None and ctx.class_idx is None
+    assert ctx.normals.shape == (0, 3)
+
+    full = _build_classification_context(
+        vertices,
+        positions,
+        tree,
+        material_type="slab",
+        cell=cell,
+        pbc=pbc,
+        delaunay=None,
+        skip_neighbor_index=False,
+    )
+    assert full.class_dists is not None and full.class_idx is not None
+    assert full.normals.shape == (1, 3)

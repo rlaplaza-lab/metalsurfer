@@ -41,10 +41,11 @@ def test_pme3_au4_first_placements_point_phosphorus_at_gold() -> None:
     snapshot = load_snapshot("pme3_au4_100")
     slab = frame_atoms(snapshot["slab"])
     au_pos = np.asarray(slab.get_positions(), dtype=float)
-    assert any(
+    hits = sum(
         p_nearer_au_than_carbons(pose_atoms(snapshot, pose), au_pos)
         for pose in _placements(snapshot)
     )
+    assert hits == 95
 
 
 def test_pyridone_sequential_first_placements_can_hbond() -> None:
@@ -53,18 +54,16 @@ def test_pyridone_sequential_first_placements_can_hbond() -> None:
     anchor = frame_atoms(snapshot["anchor"])
     cell = np.asarray(anchor.get_cell(), dtype=float)
     placements = _placements(snapshot)
-    assert any(
+    hits = sum(
         has_hbond_contact(anchor, pose_atoms(snapshot, pose), cell=cell)
         for pose in placements
     )
+    assert hits == 4
     catalog = snapshot["catalog"]
     assert isinstance(catalog, dict)
     explored = {int(pose["descriptor"]["site_index"]) for pose in placements}
-    positive = set(catalog["positive_sites"])
-    open_atops = set(catalog["open_atops"])
-    assert explored & positive
-    if open_atops:
-        assert explored & open_atops
+    assert len(explored & set(catalog["positive_sites"])) == 51
+    assert len(explored & set(catalog["open_atops"])) == 19
 
 
 def _catalog_positions(snapshot: dict[str, object]) -> dict[int, np.ndarray]:
@@ -157,14 +156,15 @@ def _screened_hbond_edges(snapshot: dict[str, object]) -> list[int]:
 def test_pyridone_pair_budget_assembles_an_hbond() -> None:
     """Pair configs from the full-lattice pool include an NH···O contact."""
     edges = _screened_hbond_edges(load_snapshot("pyridone_pair"))
-    assert any(count >= 1 for count in edges)
+    assert edges.count(1) == 2
 
 
 @pytest.mark.slow
 def test_pyridone_trimer_budget_assembles_a_connected_hbond() -> None:
     """Trimer configs include one pack with two NH···O contacts."""
     edges = _screened_hbond_edges(load_snapshot("pyridone_trimer"))
-    assert any(count >= 2 for count in edges)
+    assert edges.count(2) == 1
+    assert edges.count(1) == 2
 
 
 def test_oleic_first_placements_point_carboxyl_down() -> None:
@@ -173,7 +173,8 @@ def test_oleic_first_placements_point_carboxyl_down() -> None:
     slab = frame_atoms(snapshot["slab"])
     slab_pos = np.asarray(slab.get_positions(), dtype=float)
     cell = np.asarray(slab.get_cell(), dtype=float)
-    assert any(
+    hits = sum(
         carboxyl_down(pose_atoms(snapshot, pose), slab_pos, cell)
         for pose in _placements(snapshot)
     )
+    assert hits == 93

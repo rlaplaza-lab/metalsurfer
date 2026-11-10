@@ -388,13 +388,11 @@ def test_topology_bridges_keep_distinct_pbc_midpoints():
         for v, src in zip(verts, sources, strict=True)
         if src == "topology_bridge"
     ]
-    # Interior midpoints around (2,1)/(1,2) and near-boundary midpoints near x/y≈0.
-    assert (2.0, 1.0) in bridge_xy or any(
-        abs(x - 2.0) < 0.05 and abs(y - 1.0) < 0.05 for x, y in bridge_xy
-    )
-    assert any(abs(x) < 0.15 or abs(x - 4.0) < 0.15 for x, _y in bridge_xy) or any(
-        abs(y) < 0.15 or abs(y - 4.0) < 0.15 for _x, y in bridge_xy
-    )
+    # Interior midpoints and the distinct PBC midpoints on each boundary.
+    assert (2.0, 1.0) in bridge_xy
+    assert (1.0, 2.0) in bridge_xy
+    assert (0.0, 1.0) in bridge_xy
+    assert (1.0, 0.0) in bridge_xy
 
 
 @pytest.mark.parametrize("a_len", [8.1, 16.2])
@@ -786,7 +784,7 @@ def test_issue6_ni55_and_ni13_expose_atop_bridge_hollow():
         # Probe clearance metadata still records the accessibility lift height.
         atop_nn = [float(s.nn_distance) for s in sites if s.site_type == "atop"]
         assert atop_nn
-        assert abs(float(np.median(atop_nn)) - height) < 0.35, name
+        assert all(nn == pytest.approx(height, abs=1e-6) for nn in atop_nn), name
 
         # Catalog xyz is the support-plane anchor; probe along normal exits hull.
         for s in sites:
@@ -1208,7 +1206,5 @@ def test_topology_boundary_candidate_retained_with_accessibility_tree():
     assert sum(s == "topology_atop" for s in sources_access) >= sum(
         s == "topology_atop" for s in sources_plain
     )
-    assert any(
-        abs(float(v[0]) % 4.0) < 0.2 or abs(float(v[0]) % 4.0 - 4.0) < 0.2
-        for v in verts_access
-    )
+    access_xy = {(round(float(v[0]), 6), round(float(v[1]), 6)) for v in verts_access}
+    assert {(0.0, 0.0), (2.0, 2.0)} <= access_xy

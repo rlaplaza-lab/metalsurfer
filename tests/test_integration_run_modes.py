@@ -292,10 +292,11 @@ def _assert_dissociative_h2_geometry(ads: Atoms, slab: Atoms) -> None:
         cell=np.asarray(slab.get_cell(), dtype=float),
         pbc=list(slab.get_pbc()),
     )
-    # Dissociative hollow-pair starts are stretched vs molecular H2 (~0.74 Å).
-    # Fixture slab hollow pairs sit near a*√2/3 ≈ 1.27 Å (above the 1.0 Å floor).
-    assert hh >= 1.0, f"dissociative H–H should be non-molecular, got {hh:.3f} Å"
-    assert hh <= 3.5, f"dissociative H–H unphysically far: {hh:.3f} Å"
+    # Stubbed hollow-pair placements for the fixture slab (vs molecular ~0.74 Å).
+    assert hh in (
+        pytest.approx(1.35, abs=1e-6),
+        pytest.approx(1.0062305898749064, abs=1e-6),
+    )
 
 
 def _assert_energy_identity(result, expected_n: int) -> None:
@@ -327,6 +328,10 @@ def _assert_survivor_physics(
     # Must not be desorbed relative to the default binding threshold.
     assert result.distance <= 4.0 + 1e-6, (
         f"Survivor distance {result.distance:.2f} Å exceeds desorption threshold"
+    )
+
+    assert result.atoms.get_potential_energy() == pytest.approx(
+        result.energy_adslab, abs=1e-9
     )
 
     ads = result.atoms[result.slab_size :]
@@ -912,7 +917,7 @@ def test_process_molecule_bayesian_transfer_cumulative_refit(workdir, monkeypatc
         bo_step_memory_in=first.bo_memory,
     )
     assert second.transfer_info.transfer_used is True
-    assert second.transfer_info.transfer_weight_share > 0
+    assert second.transfer_info.transfer_weight_share == pytest.approx(0.35, abs=1e-9)
 
 
 def test_process_molecule_bayesian_transfer_weighted(workdir, monkeypatch):
@@ -932,7 +937,7 @@ def test_process_molecule_bayesian_transfer_weighted(workdir, monkeypatch):
         bo_step_memory_in=first.bo_memory,
     )
     assert second.transfer_info.transfer_used is True
-    assert second.transfer_info.transfer_weight_share > 0
+    assert second.transfer_info.transfer_weight_share == pytest.approx(0.35, abs=1e-9)
 
 
 @pytest.mark.parametrize(
@@ -950,7 +955,7 @@ def test_process_molecule_bayesian_nondefault_bo_branches(
     _slab, outcome = _stubbed_process_molecule_bayesian(monkeypatch, config=config)
     assert len(outcome.results) >= 1
     for r in outcome.results:
-        assert np.isfinite(r.energy_adsorption)
+        assert r.energy_adsorption == pytest.approx(E_ADS_BINDING, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------

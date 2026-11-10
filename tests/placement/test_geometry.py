@@ -290,9 +290,9 @@ def test_calculate_contact_quality_detects_good_contact():
         water, slab, contact_covalent_scale=1.35, material_type="slab"
     )
 
-    assert metrics["num_contacting_atoms"] > 0, "Should have contacting atoms"
-    assert metrics["contact_distance"] < 2.3
-    assert metrics["contact_ratio"] > 0.0, "Should have contact ratio"
+    assert metrics["num_contacting_atoms"] == 2
+    assert metrics["contact_distance"] == pytest.approx(2.299847821052514, abs=1e-6)
+    assert metrics["contact_ratio"] == pytest.approx(1.0848338778549595, abs=1e-6)
 
 
 def test_adsorbates_mutually_disconnected_accepts_well_separated():

@@ -123,13 +123,13 @@ def test_bulk_cu_space_group_and_symop_count():
 
 
 def test_hexagonal_cell_not_p1():
-    """Off-diagonal in-plane cell (graphene net) yields non-trivial symmetry."""
+    """Off-diagonal in-plane cell (graphene net) yields P6/mmm symmetry."""
     atoms = graphene(vacuum=10.0)
     an = SymmetryAnalyzer(atoms, symmetry_tolerance=0.1)
     ds = an._ensure_dataset()
-    assert ds.number is not None
-    assert int(ds.number) != 1
-    assert len(an._frac_ops_from_dataset()) > 1
+    assert int(ds.number) == 191
+    assert str(ds.international) == "P6/mmm"
+    assert len(an._frac_ops_from_dataset()) == 24
 
 
 def test_spglib_symop_roundtrip_bulk_cu():
@@ -143,12 +143,11 @@ def test_spglib_symop_roundtrip_bulk_cu():
 
 
 def test_fcc111_slab_consistent_symmetry():
-    """ASE fcc111 slab may be P1 (asymmetric surfaces); result is deterministic."""
+    """ASE fcc111 Al slab is P-3m1 (164)."""
     slab = fcc111("Al", size=(2, 2, 3), vacuum=7.0)
-    a1 = SymmetryAnalyzer(slab, symmetry_tolerance=0.1)
-    a2 = SymmetryAnalyzer(slab, symmetry_tolerance=0.1)
-    assert int(a1._ensure_dataset().number) == int(a2._ensure_dataset().number)
-    assert len(a1._frac_ops_from_dataset()) == len(a2._frac_ops_from_dataset())
+    an = SymmetryAnalyzer(slab, symmetry_tolerance=0.1)
+    assert int(an._ensure_dataset().number) == 164
+    assert len(an._frac_ops_from_dataset()) == 48
 
 
 def test_equivalent_atoms_bulk_cu():
@@ -432,15 +431,27 @@ def test_make_slab_orbit_soundness():
     _assert_orbit_pairwise_symops(an, raw, planar=True)
 
 
-def test_angle_tolerance_passes_to_spglib():
-    """Optional ``angle_tolerance`` is accepted and analysis succeeds."""
+def test_angle_tolerance_passes_to_spglib(monkeypatch):
+    """Optional ``angle_tolerance`` is forwarded to spglib."""
     atoms = bulk("Cu", "fcc", a=3.6)
+    captured: dict = {}
+    real_get = spglib.get_symmetry_dataset
+
+    def recording_get(cell, **kwargs):
+        captured.update(kwargs)
+        return real_get(cell, **kwargs)
+
+    monkeypatch.setattr(
+        "metalsurfer.symmetry.spglib.get_symmetry_dataset", recording_get
+    )
     an = SymmetryAnalyzer(
         atoms,
         symmetry_tolerance=0.01,
         angle_tolerance=5.0,
     )
     assert an._ensure_dataset().number == 225
+    assert captured["angle_tolerance"] == 5.0
+    assert captured["symprec"] == 0.01
 
 
 def test_get_symmetry_aware_sites_precomputed_raw_matches_internal_fetch():
@@ -455,7 +466,18 @@ def test_get_symmetry_aware_sites_precomputed_raw_matches_internal_fetch():
         slab, material_type="slab", symmetry_tolerance=0.1
     )
     assert with_pre is not None and without is not None
-    assert len(with_pre) == len(without)
+
+    def signature(sites):
+        return sorted(
+            (
+                str(s.site_type),
+                tuple(np.round(np.asarray(s.xyz, dtype=float), 6)),
+                int(s.symmetry_multiplicity or 0),
+            )
+            for s in sites
+        )
+
+    assert signature(with_pre) == signature(without)
 
 
 def test_analyze_site_symmetry_keeps_distinct_site_types_separate():

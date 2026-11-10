@@ -317,6 +317,7 @@ class TestEvaluateCompositeBatch:
             assert row.slab_size == len(slab)
             assert len(row.atoms) == len(slab) + 2 * len(make_water())
             assert list(row.atoms.get_pbc()) == [True, True, False]
+            assert row.atoms.get_potential_energy() == pytest.approx(-230.0)
 
         # Per-unit identity survives the rewrite.
         assert (first.molecule, first.placement_id) == (

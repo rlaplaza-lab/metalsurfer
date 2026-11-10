@@ -726,10 +726,8 @@ def test_clearance_aware_height_raises_protruding_pose():
     assert ok, reason
     # Protruding C atoms sit above the binder along the site normal.
     atom_heights = ads.get_positions() @ n_hat
-    assert (
-        float(np.min(atom_heights))
-        == pytest.approx(float(atom_heights[contact_idx]), abs=0.05)
-        or float(atom_heights[contact_idx]) <= float(np.min(atom_heights)) + 0.05
+    assert float(atom_heights[contact_idx]) == pytest.approx(
+        float(np.min(atom_heights)), abs=1e-6
     )
     assert float(np.max(atom_heights)) > float(atom_heights[contact_idx]) + 0.2
 

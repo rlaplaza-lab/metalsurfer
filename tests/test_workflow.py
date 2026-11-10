@@ -994,7 +994,8 @@ def test_fill_computes_spec_grid_info_once(monkeypatch):
     )
 
     assert grid_calls["n"] == 1
-    assert result.n_attempts >= 1
+    assert result.n_attempts == 1
+    assert len(result.combined) == 2
 
 
 # ---------------------------------------------------------------------------

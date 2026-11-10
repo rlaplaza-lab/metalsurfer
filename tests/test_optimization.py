@@ -505,6 +505,7 @@ def test_cache_helpers_are_thread_safe(
 
 def test_clear_autobatcher_cache_runs_cuda_path(monkeypatch: pytest.MonkeyPatch):
     _cache._AUTOBATCHER_CACHE.clear()
+    _cache._AUTOBATCHER_CACHE[("k",)] = object()
     torch_stub = MagicMock()
     torch_stub.cuda.is_available.return_value = True
     torch_stub.cuda.ipc_collect = MagicMock()
@@ -512,6 +513,7 @@ def test_clear_autobatcher_cache_runs_cuda_path(monkeypatch: pytest.MonkeyPatch)
     _cache.clear_autobatcher_cache(drain_cuda=True)
     torch_stub.cuda.synchronize.assert_called()
     torch_stub.cuda.empty_cache.assert_called()
+    assert _cache._AUTOBATCHER_CACHE == {}
 
 
 def test_clear_autobatcher_cache_default_skips_cuda_drain(
@@ -541,6 +543,7 @@ def test_clear_autobatcher_cache_clear_capacity_drains_cuda(
     _cache.clear_autobatcher_cache(clear_capacity=True)
     torch_stub.cuda.synchronize.assert_called()
     torch_stub.cuda.empty_cache.assert_called()
+    assert _cache._AUTOBATCHER_CACHE == {}
 
 
 def test_clip_frozen_indices_to_slab_drops_out_of_range():
