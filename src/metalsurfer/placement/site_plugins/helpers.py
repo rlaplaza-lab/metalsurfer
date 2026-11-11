@@ -545,7 +545,7 @@ def inject_atop_sites(
     )
     if material_type in ("slab", "nanoparticle") and has_topology_atop:
         return vertices, nn_dists, source_hints, atoms, normals, clearances
-    if material_type not in ("slab", "nanoparticle"):
+    if material_type not in ("slab", "nanoparticle", "porous"):
         return vertices, nn_dists, source_hints, atoms, normals, clearances
 
     if median_nn is None:
@@ -567,7 +567,7 @@ def inject_atop_sites(
             return vertices, nn_dists, source_hints, atoms, normals, clearances
         top_atom_indices = np.asarray(slab_top_atom_indices, dtype=int)
         atom_normals = None
-    else:
+    elif material_type == "nanoparticle":
         hull = _try_convex_hull(positions)
         if hull is None:
             return vertices, nn_dists, source_hints, atoms, normals, clearances
@@ -577,11 +577,46 @@ def inject_atop_sites(
         if len(top_atom_indices) == 0:
             return vertices, nn_dists, source_hints, atoms, normals, clearances
         atom_normals = _surface_atom_normals(positions, top_atom_indices, hull)
+    else:
+        # Porous: inject for atoms with no wall site within ~1 bond.
+        atom_normals = None
+        atop_covered = {int(s[0]) for s in atoms if len(s) == 1}
+        wall_verts = [
+            np.asarray(vertices[i], dtype=float)
+            for i, support in enumerate(atoms)
+            if support
+        ]
+        cover_radius = max(
+            1.35 * float(_SURFACE_COVALENT_RADIUS_FALLBACK),
+            0.55 * float(median_nn),
+        )
+        uncovered: list[int] = []
+        use_mic = bool(np.any(pbc) and cell_has_volume(cell))
+        for ai in range(len(positions)):
+            if ai in atop_covered:
+                continue
+            atom_pos = np.asarray(positions[ai], dtype=float)
+            near = False
+            for wv in wall_verts:
+                delta = wv - atom_pos
+                if use_mic:
+                    delta = _minimum_image_cartesian_delta(delta, cell, pbc)
+                if float(np.linalg.norm(delta)) <= cover_radius:
+                    near = True
+                    break
+            if not near:
+                uncovered.append(ai)
+        top_atom_indices = np.asarray(uncovered, dtype=int)
+        if len(top_atom_indices) == 0:
+            return vertices, nn_dists, source_hints, atoms, normals, clearances
 
     candidate_verts: list[np.ndarray] = []
     candidate_probes: list[np.ndarray] = []
     candidate_atom_ids: list[int] = []
     candidate_normal_list: list[np.ndarray] = []
+    gate_tree = accessibility_tree if accessibility_tree is not None else local_tree
+    if gate_tree is None:
+        gate_tree = KDTree(positions)
     for li, ai in enumerate(top_atom_indices):
         atom_pos = positions[int(ai)]
         if material_type == "slab":
@@ -594,13 +629,35 @@ def inject_atop_sites(
             anchor = atom_pos
             if np.any(pbc):
                 anchor = _wrap_cartesian(atom_pos.reshape(1, 3), cell, pbc)[0]
-        else:
+        elif material_type == "nanoparticle":
             assert atom_normals is not None
             n_hat = atom_normals[li]
             if float(np.linalg.norm(n_hat)) < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
                 continue
             probe = atom_pos + atop_height * n_hat
             anchor = atom_pos
+        else:
+            k_nn = min(5, len(positions))
+            _, nbr_idx = gate_tree.query(atom_pos.reshape(1, 3), k=k_nn)
+            nbrs = np.unique(np.asarray(nbr_idx, dtype=int).ravel() % len(positions))
+            nbrs = nbrs[nbrs != int(ai)]
+            if len(nbrs) == 0:
+                continue
+            nbr_pos = mic_support_positions(
+                atom_pos, positions, nbrs, cell=cell, pbc=pbc
+            )
+            if len(nbr_pos) == 0:
+                continue
+            lift = atom_pos - np.mean(nbr_pos, axis=0)
+            nrm = float(np.linalg.norm(lift))
+            if nrm < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+                continue
+            n_hat = lift / nrm
+            probe = atom_pos + atop_height * n_hat
+            anchor = atom_pos
+            if np.any(pbc):
+                probe = _wrap_cartesian(probe.reshape(1, 3), cell, pbc)[0]
+                anchor = _wrap_cartesian(anchor.reshape(1, 3), cell, pbc)[0]
         candidate_verts.append(anchor)
         candidate_probes.append(probe)
         candidate_atom_ids.append(int(ai))
@@ -611,9 +668,6 @@ def inject_atop_sites(
 
     candidate_arr = np.asarray(candidate_verts, dtype=float)
     probe_arr = np.asarray(candidate_probes, dtype=float)
-    gate_tree = accessibility_tree if accessibility_tree is not None else local_tree
-    if gate_tree is None:
-        gate_tree = KDTree(positions)
     d_nn_all = np.asarray(gate_tree.query(probe_arr, k=1)[0], dtype=float).ravel()
     keep_acc = (d_nn_all >= float(probe_radius)) & (
         d_nn_all <= float(max_site_distance)

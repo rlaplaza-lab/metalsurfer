@@ -32,26 +32,24 @@ from ._constants import (
     _ROLLING_PROBE_CLASH_TOL,
     _ROLLING_PROBE_NEIGHBOR_K,
     _ROLLING_PROBE_POROUS_EXPOSURE_N_STEPS,
-    _SURFACE_COVALENT_RADIUS_FALLBACK,
     _VECTOR_NORM_EPS,
 )
 from ._parallel import DEFAULT_N_JOBS, resolve_materialize_workers
-from .geometry import framework_radii_from_symbols
 from .site_adaptive_grid import (
     _candidate_geometry_score,
     _exposure_mask,
-    _framework_median_nn,
     _image_shift_for_index,
     _local_surface_normal,
     _support_positions_for_candidate,
-    adaptive_grid_spacing,
+    _wall_near_framework_setup,
 )
 from .site_coords import (
+    _height_along_slab_normal,
     _minimum_image_cartesian_delta,
+    _slab_normal,
     _wrap_cartesian,
     project_anchor_to_support_plane,
 )
-from .site_plugins.helpers import periodic_accessibility_tree
 from .site_wall_near_common import (
     AdaptiveGridResult,
     AdaptiveGridSpacing,
@@ -60,10 +58,7 @@ from .site_wall_near_common import (
     _best_per_support_key,
     _merge_by_radius,
     candidates_to_arrays,
-    empty_adaptive_grid_result,
-    resolve_side_policy_for_pbc,
     shell_target_clearance,
-    wall_near_clearance_window,
 )
 
 _SOURCE_HINT = "rolling_probe"
@@ -447,21 +442,69 @@ def _contacts_to_candidates(
     return out
 
 
-def _finalize_rolling_contacts(
-    candidates: list[CandidateSite],
-    *,
+_ROLLING_SLAB_NORMAL_DOT_MIN: float = 0.35
+_ROLLING_VACUUM_GAP_DOMINANCE: float = 1.75
+
+
+def _is_vacuum_slab(
+    positions: np.ndarray,
     cell: np.ndarray,
     pbc: np.ndarray,
-    merge_radius: float,
-) -> list[CandidateSite]:
-    """One site per geometric support key, then merge_radius NMS.
+) -> bool:
+    """Return True for one atomic band with a single dominant vacuum gap."""
+    pbc_arr = np.asarray(pbc, dtype=bool).reshape(3)
+    if int(np.count_nonzero(pbc_arr)) == 0 or not cell_has_volume(cell):
+        return False
+    n_hat = _slab_normal(cell)
+    atom_h = np.sort(
+        np.asarray(_height_along_slab_normal(positions, cell), dtype=float).ravel()
+    )
+    if len(atom_h) < 2:
+        return False
+    cell_arr = np.asarray(cell, dtype=float)
+    cell_extent = max(float(abs(np.dot(cell_arr[i], n_hat))) for i in range(3))
+    if cell_extent <= 1e-6:
+        return False
+    wrap_gap = max(0.0, float(cell_extent - (float(atom_h[-1]) - float(atom_h[0]))))
+    all_gaps = np.concatenate([np.diff(atom_h), [wrap_gap]])
+    order = np.argsort(all_gaps)
+    max_gap = float(all_gaps[order[-1]])
+    second = float(all_gaps[order[-2]]) if len(order) >= 2 else 0.0
+    if max_gap <= 1e-6:
+        return False
+    if second > 1e-6 and max_gap < float(_ROLLING_VACUUM_GAP_DOMINANCE) * second:
+        return False
+    return max_gap >= 0.20 * cell_extent
 
-    Contacts are already at the target skin clearance, so lateral snap (used by
-    adaptive_grid shells) is skipped — snapping collapsed distinct bridge /
-    hollow basins on flat metals.
-    """
-    unique = _best_per_support_key(candidates)
-    return _merge_by_radius(unique, cell=cell, pbc=pbc, merge_radius=merge_radius)
+
+def _slab_face_contact_mask(
+    candidates: list[CandidateSite],
+    *,
+    positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    side_policy: SidePolicy,
+) -> list[CandidateSite]:
+    """Keep vacuum-slab contacts whose normals align with the selected face(s)."""
+    if not candidates or not _is_vacuum_slab(positions, cell, pbc):
+        return candidates
+    n_hat = _slab_normal(cell)
+    kept: list[CandidateSite] = []
+    for c in candidates:
+        nrm = np.asarray(c.normal, dtype=float)
+        nlen = float(np.linalg.norm(nrm))
+        if nlen <= _VECTOR_NORM_EPS:
+            continue
+        dot = float(np.dot(nrm / nlen, n_hat))
+        if side_policy == "negative":
+            aligned = dot <= -_ROLLING_SLAB_NORMAL_DOT_MIN
+        elif side_policy == "all":
+            aligned = abs(dot) >= _ROLLING_SLAB_NORMAL_DOT_MIN
+        else:
+            aligned = dot >= _ROLLING_SLAB_NORMAL_DOT_MIN
+        if aligned:
+            kept.append(c)
+    return kept
 
 
 def generate_rolling_probe_sites(
@@ -486,43 +529,31 @@ def generate_rolling_probe_sites(
     ``0.70`` Å). Face / exposure policy follows *pbc* geometry, not material
     labels.
     """
-    positions = np.asarray(positions, dtype=float)
-    cell = np.asarray(cell, dtype=float)
-    pbc = np.asarray(pbc, dtype=bool)
-    n_atoms = len(positions)
-    side_policy = resolve_side_policy_for_pbc(pbc, side_policy)
-    if framework_radii is None:
-        if symbols is not None and len(symbols) == n_atoms:
-            framework_radii = framework_radii_from_symbols(symbols)
-        else:
-            framework_radii = np.full(
-                n_atoms, float(_SURFACE_COVALENT_RADIUS_FALLBACK), dtype=float
-            )
-    else:
-        framework_radii = np.asarray(framework_radii, dtype=float)
-        if len(framework_radii) != n_atoms:
-            raise ValueError(
-                f"framework_radii length {len(framework_radii)} != n_atoms {n_atoms}"
-            )
-
-    min_clearance, max_clearance = wall_near_clearance_window(
-        framework_radii, float(probe_radius), float(max_site_distance)
-    )
-
-    median_nn = _framework_median_nn(positions, cell, pbc)
-    spacing = adaptive_grid_spacing(
-        initial_spacing=float(_ADAPTIVE_GRID_DEFAULT_SPACING),
-        max_levels=0,
-        framework_median_nn=median_nn,
-    )
-    merge_r = float(spacing.merge_radius)
-    tree = periodic_accessibility_tree(
+    setup = _wall_near_framework_setup(
         positions,
         cell,
         pbc,
-        float(max_site_distance) + (float(np.max(framework_radii)) if n_atoms else 0.0),
+        probe_radius=float(probe_radius),
+        max_site_distance=float(max_site_distance),
+        framework_radii=framework_radii,
+        symbols=symbols,
+        side_policy=side_policy,
+        initial_spacing=float(_ADAPTIVE_GRID_DEFAULT_SPACING),
+        max_levels=0,
     )
-    empty = empty_adaptive_grid_result(spacing=spacing, accessibility_tree=tree)
+    positions = setup.positions
+    cell = setup.cell
+    pbc = setup.pbc
+    side_policy = setup.side_policy
+    n_atoms = setup.n_atoms
+    framework_radii = setup.framework_radii
+    min_clearance = setup.min_clearance
+    max_clearance = setup.max_clearance
+    median_nn = setup.median_nn
+    spacing = setup.spacing
+    merge_r = float(spacing.merge_radius)
+    tree = setup.tree
+    empty = setup.empty
     if n_atoms == 0:
         return empty
 
@@ -599,9 +630,23 @@ def generate_rolling_probe_sites(
     candidates = [c for c, k in zip(candidates, keep, strict=True) if k]
     if not candidates:
         return empty
-
-    clustered = _finalize_rolling_contacts(
+    candidates = _slab_face_contact_mask(
         candidates,
+        positions=positions,
+        cell=cell,
+        pbc=pbc,
+        side_policy=side_policy,
+    )
+    if not candidates:
+        return empty
+
+    # Contacts already sit at skin clearance — skip adaptive_grid lateral snap.
+    clustered = _merge_by_radius(
+        _best_per_support_key(
+            candidates,
+            keep_opposing_normals=int(np.count_nonzero(np.asarray(pbc, dtype=bool)))
+            == 3,
+        ),
         cell=cell,
         pbc=pbc,
         merge_radius=merge_r,

@@ -358,13 +358,11 @@ def test_build_site_records_classifies_boundary_bridge_via_expanded_index():
         if typ == "bridge"
     }
     vertex = np.array([[0.0, 1.0, 0.5]], dtype=float)
-    nn_dists = np.array([1.0], dtype=float)
     local_tree = KDTree(positions)
     symbols = ["Cu", "Cu", "Cu", "Cu"]
 
     with_pbc = _build_site_records(
         vertex,
-        nn_dists,
         positions,
         symbols,
         local_tree,
@@ -376,7 +374,6 @@ def test_build_site_records_classifies_boundary_bridge_via_expanded_index():
     )
     primary_only = _build_site_records(
         vertex,
-        nn_dists,
         positions,
         symbols,
         local_tree,
@@ -437,7 +434,6 @@ def test_get_unified_sites_labels_pbc_edge_bridge_on_production_path():
 
     primary_records = _build_site_records(
         np.asarray([s.xyz for s in boundary_sites], dtype=float),
-        np.asarray([s.nn_distance for s in boundary_sites], dtype=float),
         positions,
         symbols,
         local_tree,

@@ -9,6 +9,7 @@ from metalsurfer.placement.site_coords import (
     _deduplicate_points,
     mic_support_positions,
     project_anchor_to_support_plane,
+    project_supported_anchor,
     project_vertices_to_support_plane,
 )
 from metalsurfer.placement.site_plugins.wall_near import wall_near_batch_to_plugin
@@ -82,6 +83,25 @@ def test_project_vertices_to_support_plane_uses_mic_on_porous_wall():
     np.testing.assert_allclose(mic, anchor, atol=1e-9)
 
 
+def test_project_supported_anchor_is_mic_stable():
+    cell = np.diag([8.0, 8.0, 8.0])
+    pbc = np.array([True, True, True], dtype=bool)
+    positions = np.array(
+        [[0.4, 4.0, 4.0], [7.6, 4.2, 4.0], [0.5, 3.5, 4.5]], dtype=float
+    )
+    normal = np.array([1.0, 0.2, 0.1], dtype=float)
+    normal /= np.linalg.norm(normal)
+    support = (0, 1, 2)
+    xyz = np.array([3.0, 4.0, 4.0], dtype=float)
+    stable = project_supported_anchor(
+        xyz, normal, positions, support, cell=cell, pbc=pbc
+    )
+    supp = mic_support_positions(stable, positions, support, cell=cell, pbc=pbc)
+    assert float(np.dot(stable, normal)) == pytest.approx(
+        float(np.max(supp @ normal)), abs=1e-9
+    )
+
+
 def test_wall_near_and_classify_keep_mic_anchor_on_porous_wall():
     """Plugin pack + classify stay on a MIC support, not the far primary image."""
     cell, pbc, positions, normal, support, anchor = _porous_wall_boundary_fixture()
@@ -100,7 +120,6 @@ def test_wall_near_and_classify_keep_mic_anchor_on_porous_wall():
     np.testing.assert_allclose(batch.vertices[0], anchor, atol=1e-9)
     sites = _build_site_records(
         batch.vertices,
-        batch.nn_dists,
         positions,
         ["C", "C"],
         KDTree(positions),
@@ -116,5 +135,7 @@ def test_wall_near_and_classify_keep_mic_anchor_on_porous_wall():
     )
     assert len(sites) == 1
     xyz = np.asarray(sites[0].xyz, dtype=float)
-    assert abs(float(xyz[0])) == pytest.approx(0.5, abs=1e-6)
+    # Bridge snaps to the MIC bond midpoint (x≈0), not a primary-image yank to 9.5.
+    assert abs(float(xyz[0])) == pytest.approx(0.0, abs=1e-6)
     assert abs(float(xyz[0]) - 9.5) > 1.0
+    assert str(sites[0].site_type) == "bridge"

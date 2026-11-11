@@ -15,19 +15,23 @@ from ._constants import (
     _NORMAL_K_NEIGHBOURS,
     _OUTWARD_NORMAL_STEP_FLOOR_ANGSTROM,
     _OUTWARD_NORMAL_STEP_PROBE_SCALE,
+    _PORE_THRESHOLD_MIN_ANGSTROM,
     _SITE_CLASSIFICATION_NEIGHBOURS,
     _SITE_ENV_FP_DIST_BIN,
+    _SUPPORT_LOCALITY_COVALENT_SCALE,
+    _SUPPORT_LOCALITY_NN_SCALE,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
 )
-from .geometry import tangent_basis_from_normal
+from .geometry import _get_covalent_radius, tangent_basis_from_normal
 from .site_coords import (
     _build_periodic_images,
     _project_to_slab_plane,
     _slab_normal,
     mic_support_positions,
-    project_anchor_to_support_plane,
+    project_supported_anchor,
 )
+from .site_plugins.helpers import median_nn_or_fallback
 from .site_types import Site, site_kind_from_type_and_supports
 from .site_voronoi import (
     _classify_voronoi_site_from_neighbors,
@@ -254,12 +258,15 @@ def _build_classification_context(
 
     # One periodic image KDTree for normals and the Voronoi classifier
     # (k_class <= k_max so nearest-k over the shared set stays correct).
+    # Margin comes from the primary-cell tree: local_tree may already hold
+    # periodic images, so its k-th hit can be a duplicate of the same atom.
     images = None
     image_tree = None
     idx_img = None
     dists_img = None
     if need_periodic_images:
-        d0, _ = local_tree.query(vertices, k=k_max)
+        primary_tree = KDTree(positions)
+        d0, _ = primary_tree.query(vertices, k=k_max)
         d0_arr = np.asarray(d0, dtype=float)
         if d0_arr.ndim == 1:
             d0_arr = d0_arr.reshape(-1, 1)
@@ -297,6 +304,9 @@ def _build_classification_context(
             dists_raw, idx_raw = local_tree.query(vertices, k=k_class)
             class_dists = np.asarray(dists_raw, dtype=float)
             class_idx = np.asarray(idx_raw, dtype=int)
+            n_tree = len(np.asarray(local_tree.data))
+            if n_tree != len(positions):
+                class_idx = class_idx % len(positions)
         if class_dists.ndim == 1:
             class_dists = class_dists.reshape(-1, 1)
             class_idx = class_idx.reshape(-1, 1)
@@ -531,6 +541,52 @@ def _site_type_from_support_count(n_support: int) -> str:
     return "hollow"
 
 
+def _support_locality_cutoff(
+    symbols: Sequence[str],
+    support: Sequence[int],
+    *,
+    median_nn: float | None = None,
+) -> float:
+    """Max MIC distance from a wall anchor to its nearest support atom."""
+    radii = []
+    for idx in support:
+        i = int(idx)
+        if 0 <= i < len(symbols):
+            r = _get_covalent_radius(str(symbols[i]))
+            radii.append(
+                float(r) if r and r > 0.0 else float(_SURFACE_COVALENT_RADIUS_FALLBACK)
+            )
+    r_max = max(radii) if radii else float(_SURFACE_COVALENT_RADIUS_FALLBACK)
+    by_nn = (
+        float(_SUPPORT_LOCALITY_NN_SCALE) * float(median_nn)
+        if median_nn is not None and float(median_nn) > 0.0
+        else 0.0
+    )
+    return max(
+        float(_SUPPORT_LOCALITY_COVALENT_SCALE) * r_max,
+        by_nn,
+        float(_PORE_THRESHOLD_MIN_ANGSTROM),
+    )
+
+
+def _snap_motif_anchor(
+    xyz: np.ndarray,
+    site_type: str,
+    support_idx: np.ndarray,
+    positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+) -> np.ndarray:
+    """Atop → atom; bridge → MIC bond midpoint (no max-plane skew)."""
+    if site_type == "atop" and support_idx.size == 1:
+        return mic_support_positions(xyz, positions, support_idx, cell=cell, pbc=pbc)[0]
+    if site_type == "bridge" and support_idx.size == 2:
+        supp = mic_support_positions(xyz, positions, support_idx, cell=cell, pbc=pbc)
+        if len(supp) == 2:
+            return 0.5 * (supp[0] + supp[1])
+    return xyz
+
+
 def _outward_normals_batch(
     xyz: np.ndarray,
     normals: np.ndarray,
@@ -538,6 +594,7 @@ def _outward_normals_batch(
     *,
     probe_radius: float | None,
     centroid: np.ndarray,
+    material_type: str = "slab",
 ) -> np.ndarray:
     """Return outward unit normals. Non-finite rows are buried or degenerate."""
     bases = np.asarray(xyz, dtype=float).reshape(-1, 3)
@@ -577,22 +634,25 @@ def _outward_normals_batch(
     chosen[fwd] = hats[fwd]
     chosen[back] = -hats[back]
     if np.any(wall):
-        # Planar wall anchors: ±step clear equally. Orient away from the
-        # framework centroid (surface sites point outward; buried stay dropped).
-        away = bases[idx[wall]] - np.asarray(centroid, dtype=float).reshape(3)
-        away_nrm = np.linalg.norm(away, axis=1)
-        dots = np.zeros(away_nrm.shape, dtype=float)
-        nonzero = away_nrm > eps
-        if np.any(nonzero):
-            dots[nonzero] = np.einsum(
-                "ij,ij->i",
-                hats[wall][nonzero],
-                away[nonzero] / away_nrm[nonzero, None],
-            )
-        keep = (away_nrm <= eps) | (dots >= 0.0)
-        wall_hat = hats[wall].copy()
-        wall_hat[~keep] *= -1.0
-        chosen[wall] = wall_hat
+        if material_type == "porous":
+            # COM often lies in a void; keep the plugin / support normal.
+            chosen[wall] = hats[wall]
+        else:
+            # ±step clear equally: orient away from the framework centroid.
+            away = bases[idx[wall]] - np.asarray(centroid, dtype=float).reshape(3)
+            away_nrm = np.linalg.norm(away, axis=1)
+            dots = np.zeros(away_nrm.shape, dtype=float)
+            nonzero = away_nrm > eps
+            if np.any(nonzero):
+                dots[nonzero] = np.einsum(
+                    "ij,ij->i",
+                    hats[wall][nonzero],
+                    away[nonzero] / away_nrm[nonzero, None],
+                )
+            keep = (away_nrm <= eps) | (dots >= 0.0)
+            wall_hat = hats[wall].copy()
+            wall_hat[~keep] *= -1.0
+            chosen[wall] = wall_hat
     out[idx] = chosen
     return out
 
@@ -600,7 +660,6 @@ def _outward_normals_batch(
 def _classify_vertices(
     ctx: _ClassificationContext,
     vertices: np.ndarray,
-    nn_dists: np.ndarray,
     positions: np.ndarray,
     symbols: list[str],
     local_tree: KDTree,
@@ -619,6 +678,15 @@ def _classify_vertices(
     has_plugin_atoms = atom_indices is not None
     provided_atoms = list(atom_indices) if has_plugin_atoms else [() for _ in range(n)]
     pbc = np.asarray(ctx.pbc, dtype=bool)
+    # Framework atom spacing — not plugin vertex clearances / Voronoi nn_dists.
+    median_nn = float(
+        median_nn_or_fallback(
+            np.empty(0, dtype=float),
+            reference_positions=positions,
+            cell=cell,
+            pbc=pbc,
+        )
+    )
 
     classifications: list[tuple[str, tuple[int, ...]] | None] = [None] * n
     for i, hint in enumerate(hints):
@@ -658,6 +726,22 @@ def _classify_vertices(
             )
 
     need = [i for i, c in enumerate(classifications) if c is None]
+    fw_nn_by_i: dict[int, float] = {}
+    if need:
+        # Full-framework MIC (plugin nn may be top-layer-only on slabs).
+        need_idx = np.asarray(need, dtype=int)
+        fw = np.asarray(
+            local_tree.query(np.asarray(vertices, dtype=float)[need_idx], k=1)[0],
+            dtype=float,
+        ).ravel()
+        still_need: list[int] = []
+        for local_i, i in enumerate(need):
+            fw_nn_by_i[i] = float(fw[local_i])
+            if not provided_atoms[i] and fw_nn_by_i[i] > float(pore_threshold):
+                classifications[i] = ("pore", ())
+            else:
+                still_need.append(i)
+        need = still_need
     if need:
         if ctx.delaunay is not None:
             delaunay_all = _classify_delaunay_vertices_batch(
@@ -671,11 +755,22 @@ def _classify_vertices(
                     "ctx.class_dists and ctx.class_idx must be set for Voronoi classification"
                 )
             for i in need:
-                classifications[i] = _classify_voronoi_site_from_neighbors(
+                site_type, support = _classify_voronoi_site_from_neighbors(
                     ctx.class_dists[i],
                     ctx.class_idx[i],
                     pore_threshold=pore_threshold,
                 )
+                if (
+                    site_type == "pore"
+                    and not provided_atoms[i]
+                    and fw_nn_by_i.get(i, float("inf")) <= float(pore_threshold)
+                ):
+                    site_type, support = _classify_voronoi_site_from_neighbors(
+                        ctx.class_dists[i],
+                        ctx.class_idx[i],
+                        pore_threshold=float("inf"),
+                    )
+                classifications[i] = (site_type, support)
 
     prepared_xyz: list[np.ndarray] = []
     prepared_normals: list[np.ndarray] = []
@@ -684,13 +779,10 @@ def _classify_vertices(
     for i, classified in enumerate(classifications):
         assert classified is not None
         site_type, nearest_idx = classified
-        support: tuple[int, ...]
         if site_type == "pore":
-            support = ()
-        elif has_plugin_atoms:
-            support = tuple(int(j) for j in provided_atoms[i])
+            support: tuple[int, ...] = ()
         else:
-            support = tuple(int(j) for j in nearest_idx)
+            support = tuple(int(j) for j in (nearest_idx or provided_atoms[i]))
 
         if normals is not None:
             normal = np.asarray(normals[i], dtype=float)
@@ -714,12 +806,9 @@ def _classify_vertices(
             idx = np.asarray(support, dtype=int)
             support_idx = idx[(idx >= 0) & (idx < n_pos)]
             if support_idx.size > 0:
-                # Project before outward so the ray probe starts on the contact
-                # plane; re-project after with the final normal if it flips.
-                supp = mic_support_positions(
-                    xyz, positions, support_idx, cell=cell, pbc=pbc
+                xyz = project_supported_anchor(
+                    xyz, normal, positions, support_idx, cell=cell, pbc=pbc
                 )
-                xyz = project_anchor_to_support_plane(xyz, normal, supp)
             else:
                 support_idx = None
 
@@ -737,24 +826,54 @@ def _classify_vertices(
         local_tree,
         probe_radius=probe_radius,
         centroid=centroid,
+        material_type=material_type,
     )
     for row, (i, site_type, support, support_idx) in enumerate(prepared_meta):
-        normal = outward[row]
-        if not np.all(np.isfinite(normal)):
-            continue
         xyz = prepared_xyz[row]
-        if support_idx is not None and support_idx.size > 0:
-            supp = mic_support_positions(
-                xyz, positions, support_idx, cell=cell, pbc=pbc
+        if support:
+            site_type = _site_type_from_support_count(len(support))
+        if site_type == "pore" or support_idx is None or support_idx.size == 0:
+            normal = np.asarray(prepared_normals[row], dtype=float).reshape(3)
+            nrm = float(np.linalg.norm(normal))
+            if nrm <= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+                continue
+            normal = normal / nrm
+        else:
+            normal = outward[row]
+            if not np.all(np.isfinite(normal)):
+                continue
+            xyz = project_supported_anchor(
+                xyz, normal, positions, support_idx, cell=cell, pbc=pbc
             )
-            xyz = project_anchor_to_support_plane(xyz, normal, supp)
+            xyz = _snap_motif_anchor(xyz, site_type, support_idx, positions, cell, pbc)
 
         dists = _support_mic_distances(xyz, positions, support, cell, pbc)
+        if support and dists:
+            if float(np.min(dists)) > _support_locality_cutoff(
+                symbols, support, median_nn=median_nn
+            ):
+                continue
+            on_atom = max(0.35, 0.25 * median_nn if median_nn > 0.0 else 0.35)
+            if site_type in ("bridge", "hollow") and float(np.min(dists)) < on_atom:
+                nearest = int(np.asarray(support, dtype=int)[int(np.argmin(dists))])
+                site_type = "atop"
+                support = (nearest,)
+                support_idx = np.asarray(support, dtype=int)
+                xyz = _snap_motif_anchor(
+                    xyz, site_type, support_idx, positions, cell, pbc
+                )
+                dists = _support_mic_distances(xyz, positions, support, cell, pbc)
+
+        nn_distance = float(
+            np.asarray(
+                local_tree.query(xyz.reshape(1, 3), k=1)[0], dtype=float
+            ).ravel()[0]
+        )
+        if site_type == "pore" and nn_distance <= float(pore_threshold):
+            continue
         side = _side_label_from_normal(normal, material_type=material_type, cell=cell)
         env_fingerprint = site_env_fingerprint(support, symbols, dists, side_label=side)
-        nn_distance = float(nn_dists[i])
         clearance = nn_distance if clearances is None else float(clearances[i])
-        kind = site_kind_from_type_and_supports(site_type, support)
         sites.append(
             Site(
                 xyz=xyz,
@@ -770,7 +889,7 @@ def _classify_vertices(
                 ),
                 clearance=clearance,
                 tangent_basis=tangent_basis_from_normal(normal),
-                kind=kind,
+                kind=site_kind_from_type_and_supports(site_type, support),
             )
         )
     return sites
@@ -778,7 +897,6 @@ def _classify_vertices(
 
 def _build_site_records(
     vertices: np.ndarray,
-    nn_dists: np.ndarray,
     positions: np.ndarray,
     symbols: list[str],
     local_tree: KDTree,
@@ -813,7 +931,6 @@ def _build_site_records(
     return _classify_vertices(
         ctx,
         vertices,
-        nn_dists,
         positions,
         symbols,
         local_tree,

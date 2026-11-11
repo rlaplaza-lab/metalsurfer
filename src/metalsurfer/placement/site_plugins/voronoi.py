@@ -7,11 +7,14 @@ from typing import Any
 
 import numpy as np
 
+from .._constants import _ATOP_INJECTION_HEIGHT_FACTOR
 from ..site_coords import project_vertices_to_support_plane
-from ..site_voronoi import _voronoi_sites
+from ..site_voronoi import _generate_slab_topology_sites, _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
 from .helpers import (
     candidate_enrichment_frames,
+    inject_atop_sites,
+    median_nn_or_fallback,
     periodic_accessibility_tree,
     slab_candidate_postprocess,
     slab_top_voronoi_inputs,
@@ -23,8 +26,10 @@ logger = logging.getLogger(__name__)
 class VoronoiGenerator:
     """Voronoi vertices with optional ridge enrichment.
 
-    On slabs this skips topology (explicit ``site_generator="voronoi"`` A/B
-    path). Planar cells may then rely on the shared atop-injection safety net.
+    On slabs this skips the hybrid topology+Voronoi path (explicit
+    ``site_generator="voronoi"`` A/B). When the top layer is coplanar and 3D
+    Voronoi yields no vertices, the top-layer atop/bridge/hollow mesh is used
+    so the surface is still enumerated.
     """
 
     name = "voronoi"
@@ -50,6 +55,12 @@ class VoronoiGenerator:
         slab_top_atom_indices: np.ndarray | None = None
         accessibility_tree = None
         do_slab_post = False
+        topology_primary_delaunay = None
+        topology_expanded_xy = None
+        topology_expanded_origin = None
+        topology_expanded_tri = None
+        has_topology_atop = False
+        topology_median_nn: float | None = None
 
         if material_type == "slab":
             _top_mask, slab_top_atom_indices, voronoi_positions = (
@@ -93,6 +104,47 @@ class VoronoiGenerator:
                 material_type,
             )
             return empty_candidate_batch(early_empty=True)
+
+        if (
+            len(vertices) == 0
+            and material_type == "slab"
+            and slab_top_atom_indices is not None
+            and accessibility_tree is not None
+        ):
+            # Coplanar top layer: 3D Voronoi is empty. Emit the Delaunay motif.
+            logger.info(
+                "Slab Voronoi produced no vertices; using top-layer "
+                "atop/bridge/hollow topology mesh"
+            )
+            topology_median_nn = float(
+                median_nn_or_fallback(
+                    np.empty(0, dtype=float),
+                    reference_positions=positions[slab_top_atom_indices],
+                    cell=cell,
+                    pbc=pbc,
+                )
+            )
+            site_height = _ATOP_INJECTION_HEIGHT_FACTOR * topology_median_nn
+            (
+                vertices,
+                nn_dists,
+                source_hints,
+                atom_indices,
+                topology_primary_delaunay,
+                topology_expanded_xy,
+                topology_expanded_origin,
+                topology_expanded_tri,
+            ) = _generate_slab_topology_sites(
+                positions,
+                cell,
+                pbc,
+                slab_top_atom_indices,
+                accessibility_tree,
+                site_height,
+                float(probe_radius),
+                float(max_site_distance),
+            )
+            has_topology_atop = any(s == "topology_atop" for s in source_hints)
 
         if accessibility_tree is None:
             accessibility_tree = periodic_accessibility_tree(
@@ -143,8 +195,32 @@ class VoronoiGenerator:
                 probe_radius=float(probe_radius),
                 max_site_distance=float(max_site_distance),
                 slab_top_atom_indices=slab_top_atom_indices,
+                has_topology_atop=has_topology_atop,
+                median_nn=topology_median_nn,
+                normals=normals,
+                clearances=clearances,
+            )
+        elif material_type == "porous":
+            (
+                vertices,
+                nn_dists,
+                source_hints,
+                atom_indices,
+                normals,
+                clearances,
+            ) = inject_atop_sites(
+                vertices,
+                nn_dists,
+                source_hints,
+                positions=positions,
+                cell=cell,
+                pbc=pbc,
+                material_type="porous",
                 has_topology_atop=False,
-                median_nn=None,
+                probe_radius=float(probe_radius),
+                max_site_distance=float(max_site_distance),
+                accessibility_tree=accessibility_tree,
+                atom_indices=atom_indices,
                 normals=normals,
                 clearances=clearances,
             )
@@ -154,9 +230,14 @@ class VoronoiGenerator:
             nn_dists=nn_dists,
             source_hints=source_hints,
             atom_indices=atom_indices,
-            has_topology_atop=False,
+            has_topology_atop=has_topology_atop,
             slab_top_atom_indices=slab_top_atom_indices,
             accessibility_tree=accessibility_tree,
+            topology_median_nn=topology_median_nn,
+            topology_primary_delaunay=topology_primary_delaunay,
+            topology_expanded_xy=topology_expanded_xy,
+            topology_expanded_origin=topology_expanded_origin,
+            topology_expanded_tri=topology_expanded_tri,
             normals=normals,
             clearances=clearances,
         )

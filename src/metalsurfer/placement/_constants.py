@@ -96,6 +96,12 @@ _HOLLOW_EQ_TOL: float = 0.15  # |d_2,3 - d_1| / d_1 < this → hollow site
 _PORE_THRESHOLD_COVALENT_SCALE: float = 2.5
 _PORE_THRESHOLD_MIN_ANGSTROM: float = 2.0
 
+# Drop wall anchors whose nearest coordinating atom is farther than
+# max(scale * max support covalent radius, nn_scale * framework median NN).
+# Real hollows sit inside one metal–metal spacing; PBC-image ghosts do not.
+_SUPPORT_LOCALITY_COVALENT_SCALE: float = 3.5
+_SUPPORT_LOCALITY_NN_SCALE: float = 1.5
+
 # Radius-derived Voronoi accessibility window:
 # probe_radius = alpha * mean(top-layer covalent radius)
 # max_distance = beta * mean(top-layer covalent radius)
@@ -341,7 +347,7 @@ _SITE_ENV_FP_DIST_BIN: float = 0.25
 # Max local neighbours considered per atom for pair / triplet contacts.
 _ROLLING_PROBE_NEIGHBOR_K: int = 14
 # Fibonacci-sphere samples for order-1 (atop) contacts.
-_ROLLING_PROBE_ATOP_SAMPLES: int = 14
+_ROLLING_PROBE_ATOP_SAMPLES: int = 24
 # Samples on the two-sphere tangent circle for order-2 (bridge) contacts.
 _ROLLING_PROBE_BRIDGE_SAMPLES: int = 8
 # Clash tolerance on expanded-sphere contacts (Å).

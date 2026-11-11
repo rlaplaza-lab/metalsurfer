@@ -1,6 +1,6 @@
 # Metalsurfer
 
-[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/) [![PyPI](https://img.shields.io/pypi/v/metalsurfer.svg)](https://pypi.org/project/metalsurfer/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/) [![PyPI](https://img.shields.io/pypi/v/metalsurfer.svg)](https://pypi.org/project/metalsurfer/) [![Docs](https://img.shields.io/readthedocs/metalsurfer.svg)](https://metalsurfer.readthedocs.io/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ![Metalsurfer Logo](docs/_static/logo_metalsurfer.svg)
 

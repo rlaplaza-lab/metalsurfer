@@ -183,6 +183,16 @@ def _image_offsets_for_radius(
     )
 
 
+def _normals_oppose(n_a: np.ndarray, n_b: np.ndarray) -> bool:
+    a = np.asarray(n_a, dtype=float).reshape(3)
+    b = np.asarray(n_b, dtype=float).reshape(3)
+    na = float(np.linalg.norm(a))
+    nb = float(np.linalg.norm(b))
+    if na <= _VECTOR_NORM_EPS or nb <= _VECTOR_NORM_EPS:
+        return False
+    return float(np.dot(a / na, b / nb)) < 0.0
+
+
 def _nms(
     vertices: np.ndarray,
     nn: np.ndarray,
@@ -191,21 +201,29 @@ def _nms(
     cell: np.ndarray,
     pbc: np.ndarray,
     radii: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Greedy NMS with deterministic ranking and min(r_i, r_j) suppression.
+    normals: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Greedy NMS; returns ``(kept_vertices, kept_nn, kept_indices)``.
 
-    Non-PBC builds a neighbor graph once via ``query_pairs``. Periodic cells
-    keep per-acceptance ball queries on an image-expanded tree (avoids the
-    ``O((n·images)²)`` pair explosion of expanded ``query_pairs``).
+    Non-PBC builds a neighbor graph via ``query_pairs``. Periodic cells use
+    image-expanded ball queries. Opposing normals are not suppressed.
     """
     if len(vertices) == 0:
-        return vertices, nn
+        return vertices, nn, np.empty(0, dtype=int)
     if radii is None:
         radii = np.full(len(vertices), float(merge_r), dtype=float)
     max_r = float(max(float(merge_r), float(np.max(radii))))
     offsets = _image_offsets_for_radius(cell, pbc, max_r)
     suppressed = np.zeros(len(vertices), dtype=bool)
     accepted: list[int] = []
+    normals_arr = (
+        None if normals is None else np.asarray(normals, dtype=float).reshape(-1, 3)
+    )
+
+    def _may_suppress(i: int, j: int) -> bool:
+        return normals_arr is None or not _normals_oppose(
+            normals_arr[i], normals_arr[j]
+        )
 
     if offsets is None:
         neighbors: list[list[int]] = [[] for _ in range(len(vertices))]
@@ -221,15 +239,15 @@ def _nms(
                 continue
             accepted.append(ii)
             for j in neighbors[ii]:
-                suppressed[j] = True
+                if _may_suppress(ii, j):
+                    suppressed[j] = True
     else:
         n = len(vertices)
         expanded = np.vstack([vertices + off for off in offsets])
         tree = KDTree(expanded)
 
         def query_ball(pt: np.ndarray, r: float) -> list[int]:
-            hits = tree.query_ball_point(pt, r=float(r))
-            return list({int(h) % n for h in hits})
+            return list({int(h) % n for h in tree.query_ball_point(pt, r=float(r))})
 
         for i in _nms_rank_order(vertices, scores, cell, pbc):
             ii = int(i)
@@ -241,11 +259,13 @@ def _nms(
                 if j == ii or suppressed[j]:
                     continue
                 r_ij = float(min(r_i, float(radii[j])))
-                if _pair_within_radius(vertices[ii], vertices[j], r_ij, cell, pbc):
+                if _pair_within_radius(
+                    vertices[ii], vertices[j], r_ij, cell, pbc
+                ) and _may_suppress(ii, j):
                     suppressed[j] = True
 
     idx = np.asarray(accepted, dtype=int)
-    return vertices[idx], nn[idx]
+    return vertices[idx], nn[idx], idx
 
 
 def _support_key(
@@ -270,34 +290,48 @@ def _merge_by_radius(
 
     verts = np.asarray([c.position for c in candidates], dtype=float)
     scores = np.asarray([c.score for c in candidates], dtype=float)
-    kept_verts, _ = _nms(
+    normals = np.asarray([c.normal for c in candidates], dtype=float)
+    _, _, kept_idx = _nms(
         verts,
         np.zeros(len(verts), dtype=float),
         scores,
         merge_r=float(merge_radius),
         cell=cell,
         pbc=pbc,
+        normals=normals,
     )
-    tree_v = KDTree(verts)
-    kept_idx = list(dict.fromkeys(int(tree_v.query(pt, k=1)[1]) for pt in kept_verts))
-    out = [candidates[i] for i in kept_idx]
-    rep_verts = np.asarray([c.position for c in out], dtype=float)
-    rep_scores = np.asarray([c.score for c in out], dtype=float)
-    rep_order = _nms_rank_order(rep_verts, rep_scores, cell, pbc)
+    out = [candidates[int(i)] for i in kept_idx]
+    rep_order = _nms_rank_order(
+        np.asarray([c.position for c in out], dtype=float),
+        np.asarray([c.score for c in out], dtype=float),
+        cell,
+        pbc,
+    )
     return [out[int(i)] for i in rep_order]
 
 
 def _best_per_support_key(
     candidates: list[CandidateSite],
+    *,
+    keep_opposing_normals: bool = False,
 ) -> list[CandidateSite]:
-    """Keep the highest-score candidate for each support environment."""
-    best: dict[frozenset[tuple[int, tuple[int, int, int]]], CandidateSite] = {}
+    """Keep the highest-score candidate per support; optionally both faces."""
+    groups: dict[frozenset[tuple[int, tuple[int, int, int]]], list[CandidateSite]] = {}
     for c in candidates:
         key = _support_key(c.support_indices, c.support_image_shifts)
-        prev = best.get(key)
-        if prev is None or float(c.score) > float(prev.score):
-            best[key] = c
-    return list(best.values())
+        groups.setdefault(key, []).append(c)
+    out: list[CandidateSite] = []
+    for group in groups.values():
+        group_sorted = sorted(group, key=lambda c: float(c.score), reverse=True)
+        best = group_sorted[0]
+        out.append(best)
+        if not keep_opposing_normals:
+            continue
+        for other in group_sorted[1:]:
+            if _normals_oppose(best.normal, other.normal):
+                out.append(other)
+                break
+    return out
 
 
 def wall_near_clearance_window(

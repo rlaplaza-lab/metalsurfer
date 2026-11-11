@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 import numpy as np
 from ase import Atoms
-from scipy.spatial import Delaunay, KDTree, QhullError
+from scipy.spatial import Delaunay, QhullError
 
 from .._numeric_defaults import DEFAULT_N_JOBS
 from .._utils import cell_has_volume
@@ -61,6 +61,9 @@ from .site_plugins.helpers import (
 )
 from .site_plugins.helpers import (
     bounding_box_cell as _bounding_box_cell,
+)
+from .site_plugins.helpers import (
+    periodic_accessibility_tree as _periodic_accessibility_tree,
 )
 from .site_plugins.helpers import (
     top_layer_is_planar_from_arrays as _top_layer_is_planar_from_arrays,
@@ -447,12 +450,16 @@ def _enumerate_unified_sites(
         return [], plugin_vertices
 
     vertices = batch.vertices
-    nn_dists = batch.nn_dists
     source_hints = list(batch.source_hints)
     atom_indices = list(batch.atom_indices)
     normals = batch.normals
     clearances = batch.clearances
-    local_tree = KDTree(positions)
+    local_tree = _periodic_accessibility_tree(
+        positions,
+        cell,
+        pbc_for_sites,
+        float(max_site_distance),
+    )
 
     if len(vertices) == 0:
         logger.warning(
@@ -491,7 +498,6 @@ def _enumerate_unified_sites(
 
     sites = _build_site_records(
         vertices,
-        nn_dists,
         positions,
         symbols,
         local_tree,

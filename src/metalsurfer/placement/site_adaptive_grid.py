@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import numpy as np
 from scipy.spatial import KDTree
@@ -116,6 +116,88 @@ def _framework_median_nn(
             cell=cell,
             pbc=pbc,
         )
+    )
+
+
+@dataclass(frozen=True)
+class _WallNearSetup:
+    """Shared radii / clearance / spacing / accessibility tree for wall-near plugins."""
+
+    positions: np.ndarray
+    cell: np.ndarray
+    pbc: np.ndarray
+    side_policy: SidePolicy
+    n_atoms: int
+    framework_radii: np.ndarray
+    min_clearance: float
+    max_clearance: float
+    median_nn: float
+    spacing: AdaptiveGridSpacing
+    tree: KDTree
+    empty: AdaptiveGridResult
+
+
+def _wall_near_framework_setup(
+    positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    *,
+    probe_radius: float,
+    max_site_distance: float,
+    framework_radii: np.ndarray | None = None,
+    symbols: Sequence[str] | None = None,
+    side_policy: SidePolicy = "positive",
+    initial_spacing: float | None = None,
+    max_levels: int | None = None,
+    nms_framework_scale: float | None = None,
+) -> _WallNearSetup:
+    positions = np.asarray(positions, dtype=float)
+    cell = np.asarray(cell, dtype=float)
+    pbc = np.asarray(pbc, dtype=bool)
+    side_policy = resolve_side_policy_for_pbc(pbc, side_policy)
+    n_atoms = len(positions)
+    if framework_radii is None:
+        if symbols is not None and len(symbols) == n_atoms:
+            framework_radii = framework_radii_from_symbols(symbols)
+        else:
+            framework_radii = np.full(
+                n_atoms, float(_SURFACE_COVALENT_RADIUS_FALLBACK), dtype=float
+            )
+    else:
+        framework_radii = np.asarray(framework_radii, dtype=float)
+        if len(framework_radii) != n_atoms:
+            raise ValueError(
+                f"framework_radii length {len(framework_radii)} != n_atoms {n_atoms}"
+            )
+    min_clearance, max_clearance = wall_near_clearance_window(
+        framework_radii, float(probe_radius), float(max_site_distance)
+    )
+    median_nn = _framework_median_nn(positions, cell, pbc)
+    spacing = adaptive_grid_spacing(
+        initial_spacing=initial_spacing,
+        max_levels=max_levels,
+        framework_median_nn=median_nn,
+        nms_framework_scale=nms_framework_scale,
+    )
+    tree = periodic_accessibility_tree(
+        positions,
+        cell,
+        pbc,
+        float(max_site_distance) + (float(np.max(framework_radii)) if n_atoms else 0.0),
+    )
+    return _WallNearSetup(
+        positions=positions,
+        cell=cell,
+        pbc=pbc,
+        side_policy=side_policy,
+        n_atoms=n_atoms,
+        framework_radii=framework_radii,
+        min_clearance=float(min_clearance),
+        max_clearance=float(max_clearance),
+        median_nn=float(median_nn),
+        spacing=spacing,
+        tree=tree,
+        empty=empty_adaptive_grid_result(spacing=spacing, accessibility_tree=tree),
     )
 
 
@@ -788,7 +870,10 @@ def _finalize_candidates(
     target_clearance: float,
 ) -> list[CandidateSite]:
     """One site per support key, snap to target clearance, then merge_radius NMS."""
-    unique = _best_per_support_key(candidates)
+    unique = _best_per_support_key(
+        candidates,
+        keep_opposing_normals=int(np.count_nonzero(np.asarray(pbc, dtype=bool))) == 3,
+    )
     snapped = _lateral_snap_candidates(
         unique,
         positions=positions,
@@ -1003,43 +1088,31 @@ def generate_adaptive_grid_sites(
     increment in Å. Face / exposure policy uses *pbc* geometry, not material
     labels.
     """
-    positions = np.asarray(positions, dtype=float)
-    cell = np.asarray(cell, dtype=float)
-    pbc = np.asarray(pbc, dtype=bool)
-    side_policy = resolve_side_policy_for_pbc(pbc, side_policy)
-    n_atoms = len(positions)
-    if framework_radii is None:
-        if symbols is not None and len(symbols) == n_atoms:
-            framework_radii = framework_radii_from_symbols(symbols)
-        else:
-            framework_radii = np.full(
-                n_atoms, float(_SURFACE_COVALENT_RADIUS_FALLBACK), dtype=float
-            )
-    else:
-        framework_radii = np.asarray(framework_radii, dtype=float)
-        if len(framework_radii) != n_atoms:
-            raise ValueError(
-                f"framework_radii length {len(framework_radii)} != n_atoms {n_atoms}"
-            )
-
-    min_clearance, max_clearance = wall_near_clearance_window(
-        framework_radii, float(probe_radius), float(max_site_distance)
-    )
-
-    median_nn = _framework_median_nn(positions, cell, pbc)
-    spacing = adaptive_grid_spacing(
-        initial_spacing=initial_spacing,
-        max_levels=max_levels,
-        framework_median_nn=median_nn,
-        nms_framework_scale=nms_framework_scale,
-    )
-    tree = periodic_accessibility_tree(
+    setup = _wall_near_framework_setup(
         positions,
         cell,
         pbc,
-        float(max_site_distance) + (float(np.max(framework_radii)) if n_atoms else 0.0),
+        probe_radius=float(probe_radius),
+        max_site_distance=float(max_site_distance),
+        framework_radii=framework_radii,
+        symbols=symbols,
+        side_policy=side_policy,
+        initial_spacing=initial_spacing,
+        max_levels=max_levels,
+        nms_framework_scale=nms_framework_scale,
     )
-    empty = empty_adaptive_grid_result(spacing=spacing, accessibility_tree=tree)
+    positions = setup.positions
+    cell = setup.cell
+    pbc = setup.pbc
+    side_policy = setup.side_policy
+    n_atoms = setup.n_atoms
+    framework_radii = setup.framework_radii
+    min_clearance = setup.min_clearance
+    max_clearance = setup.max_clearance
+    median_nn = setup.median_nn
+    spacing = setup.spacing
+    tree = setup.tree
+    empty = setup.empty
     if n_atoms == 0:
         return empty
 

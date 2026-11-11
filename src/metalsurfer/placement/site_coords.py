@@ -336,6 +336,30 @@ def project_anchor_to_support_plane(
     return np.asarray(vert - delta * n_unit, dtype=float)
 
 
+def project_supported_anchor(
+    xyz: np.ndarray,
+    normal: np.ndarray,
+    positions: np.ndarray,
+    support: np.ndarray | list[int] | tuple[int, ...],
+    *,
+    cell: np.ndarray | None = None,
+    pbc: Sequence[bool] | np.ndarray | None = None,
+    max_iters: int = 5,
+) -> np.ndarray:
+    """Project *xyz* onto its MIC support plane until the MIC image is stable."""
+    vert = np.asarray(xyz, dtype=float).reshape(3).copy()
+    pos = np.asarray(positions, dtype=float)
+    for _ in range(int(max_iters)):
+        supp = mic_support_positions(vert, pos, support, cell=cell, pbc=pbc)
+        if len(supp) == 0:
+            return vert
+        updated = project_anchor_to_support_plane(vert, normal, supp)
+        if float(np.linalg.norm(updated - vert)) <= 1e-10:
+            return updated
+        vert = updated
+    return vert
+
+
 def project_vertices_to_support_plane(
     vertices: np.ndarray,
     normals: np.ndarray | None,
@@ -354,10 +378,14 @@ def project_vertices_to_support_plane(
     for i, support in enumerate(atom_indices):
         if not support:
             continue
-        supp = mic_support_positions(verts[i], pos, support, cell=cell, pbc=pbc)
-        if len(supp) == 0:
-            continue
-        verts[i] = project_anchor_to_support_plane(verts[i], normals_arr[i], supp)
+        verts[i] = project_supported_anchor(
+            verts[i],
+            normals_arr[i],
+            pos,
+            support,
+            cell=cell,
+            pbc=pbc,
+        )
     return verts
 
 

@@ -487,44 +487,6 @@ def test_plugins_multimol_share_catalog_materialize(material_type, plugin, facto
         assert any(pair is not None for pair, _reason in results)
 
 
-@pytest.mark.parametrize(("material_type", "plugin", "factory"), PLUGIN_MATERIAL_CASES)
-def test_wall_near_sites_have_supports_and_support_plane_xyz(
-    material_type, plugin, factory
-):
-    """Wall-near catalog xyz sits on the coordinating-atom plane; pores stay voids."""
-    atoms = factory()
-    sites = get_unified_sites(
-        atoms, material_type=material_type, site_generator=plugin, n_jobs=1
-    )
-    assert sites
-    pos = np.asarray(atoms.get_positions(), dtype=float)
-    wall = [s for s in sites if str(s.site_type) != "pore"]
-    pores = [s for s in sites if str(s.site_type) == "pore"]
-    if plugin in ("adaptive_grid", "rolling_probe"):
-        assert wall, f"{plugin} on {material_type} must emit wall-near sites"
-        assert not pores, (
-            f"{plugin} catalogs are wall-near only, got {len(pores)} pores"
-        )
-    cell = np.asarray(atoms.get_cell(), dtype=float)
-    pbc = np.asarray(atoms.get_pbc(), dtype=bool)
-    for s in wall:
-        assert s.slab_indices, (
-            f"{plugin}/{material_type} wall-near site missing supports "
-            f"(type={s.site_type!r})"
-        )
-        n_hat = np.asarray(s.normal, dtype=float)
-        nrm = float(np.linalg.norm(n_hat))
-        assert nrm > 0.5
-        n_hat = n_hat / nrm
-        xyz = np.asarray(s.xyz, dtype=float)
-        supp = mic_support_positions(xyz, pos, s.slab_indices, cell=cell, pbc=pbc)
-        support_h = float(np.max(supp @ n_hat))
-        site_h = float(np.dot(xyz, n_hat))
-        assert site_h == pytest.approx(support_h, abs=1e-6)
-    for s in pores:
-        assert s.nn_distance is not None and float(s.nn_distance) > 1.0
-
-
 @pytest.mark.parametrize("plugin", SLAB_HOLLOW_PLUGINS)
 def test_slab_plugins_emit_hollows_for_dissociative(plugin):
     from metalsurfer.placement.site_enumeration import get_hollow_sites_for_adatoms

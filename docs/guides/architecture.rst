@@ -205,10 +205,13 @@ Module layout
 (same import path: ``metalsurfer.ml.bayesian``). ``placement/`` internals:
 ``site_types``, ``site_coords``, ``site_voronoi``, ``site_classify``,
 ``site_enumeration``, ``site_adaptive_grid``, ``site_rolling_probe``,
-``site_plugins``, ``site_context``, ``occupancy``, ``policy``,
-``orientation``, ``pose/`` (``build``, ``height``, ``checks``, ``recovery``,
+``site_wall_near_common`` (shared clearance / empty-result / exposure
+helpers for adaptive-grid and rolling-probe), ``site_plugins``,
+``site_context``, ``occupancy``, ``policy``, ``orientation``,
+``pose/`` (``build``, ``height``, ``checks``, ``recovery``,
 ``finalize``), ``dissociative``, ``geometry``, ``_material``; public
-orchestration in ``generators.py``. Site APIs are imported from
+orchestration in ``generators.py``. Catalog MIC distances use
+``metalsurfer._geom_pbc.mic_point_distance``. Site APIs are imported from
 ``site_enumeration`` / ``site_coords`` (also re-exported from
 ``metalsurfer.placement``).
 
@@ -454,7 +457,10 @@ and rolling probe skip it); dissociative wall hollow/bridge pairs on any
 material when the flag is on (void sites are never dissociation anchors).
 Catalog ``Site.xyz`` is the unlifted support-plane or void-centre anchor
 (plugin lift/snap is probe-only; classify projects wall anchors onto the
-support plane and flips or drops inward normals). ``surface_ref`` is always
+support plane and flips or drops inward normals). Support-plane anchors
+and placement heights use the Cartesian minimum image of the coordinating
+atoms — the same image used for normals and environment distances. Pore
+and free-volume vertices stay at the void centre. ``surface_ref`` is always
 the local site frame (max support height along ``site.normal``; voids use
 the void vertex). ``adaptive_grid`` and ``rolling_probe`` register in
 ``placement/site_plugins/`` with the same candidate-batch contract and a
@@ -574,9 +580,12 @@ Enumeration / materialization
   homonuclear diatomics when ``enable_dissociative_placement=True``. Keep
   ``skip_topology_check=True`` to disable post-relax connectivity checks for
   fragments. Pairs wall hollows and bridges on any material using the
-  structure PBC mask; void sites are never dissociation anchors. Fragments
-  share one lift direction (averaged site normals) so pair spacing is
-  preserved; each site keeps a local support-plane height.
+  structure PBC mask; void sites are never dissociation anchors. Under
+  periodic boundaries, fragment 2 is placed on the Cartesian minimum image
+  of site ``j`` relative to site ``i``. Full-3D periodic pairs gate on that
+  image length; slabs gate on the in-plane part of the same vector.
+  Fragments share one lift direction (averaged site normals) so pair spacing
+  is preserved; each site keeps a local support-plane height.
   Descriptor COM + identity quaternion feed ML;
   ``fragment_positions`` are replay-only.
 - ``_materialize_spec_placements`` — failures become

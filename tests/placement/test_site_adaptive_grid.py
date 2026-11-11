@@ -282,7 +282,7 @@ def test_nms_pbc_keeps_higher_score_across_boundary():
     )
     nn = np.array([1.0, 1.0, 1.0], dtype=float)
     scores = np.array([-1.0, 0.0, -0.5], dtype=float)
-    kept, _ = _nms(vertices, nn, scores, merge_r=0.5, cell=cell, pbc=pbc)
+    kept, _nn, _idx = _nms(vertices, nn, scores, merge_r=0.5, cell=cell, pbc=pbc)
     assert len(kept) == 2
     near_boundary = kept[np.abs(kept[:, 0] - 5.0) > 1.0]
     assert len(near_boundary) == 1
@@ -298,10 +298,10 @@ def test_nms_tie_break_is_deterministic():
     )
     nn = np.ones(3)
     scores = np.array([0.0, 0.0, -1.0], dtype=float)
-    kept_a, _ = _nms(vertices, nn, scores, merge_r=0.5, cell=cell, pbc=pbc)
+    kept_a, _nn_a, _idx_a = _nms(vertices, nn, scores, merge_r=0.5, cell=cell, pbc=pbc)
     # Permute input order; accepted set must be identical.
     order = np.array([2, 0, 1])
-    kept_b, _ = _nms(
+    kept_b, _nn_b, _idx_b = _nms(
         vertices[order], nn[order], scores[order], merge_r=0.5, cell=cell, pbc=pbc
     )
     assert len(kept_a) == len(kept_b)
@@ -318,11 +318,15 @@ def test_nms_uses_min_radius_symmetrically():
     scores = np.array([1.0, 0.0], dtype=float)
     radii = np.array([0.5, 0.3], dtype=float)
     # Distance 0.4 > min(0.5, 0.3)=0.3 → both kept.
-    kept, _ = _nms(vertices, nn, scores, merge_r=0.5, cell=cell, pbc=pbc, radii=radii)
+    kept, _nn, _idx = _nms(
+        vertices, nn, scores, merge_r=0.5, cell=cell, pbc=pbc, radii=radii
+    )
     assert len(kept) == 2
     # With larger min radius both merge.
     radii2 = np.array([0.5, 0.45], dtype=float)
-    kept2, _ = _nms(vertices, nn, scores, merge_r=0.5, cell=cell, pbc=pbc, radii=radii2)
+    kept2, _nn2, _idx2 = _nms(
+        vertices, nn, scores, merge_r=0.5, cell=cell, pbc=pbc, radii=radii2
+    )
     assert len(kept2) == 1
 
 

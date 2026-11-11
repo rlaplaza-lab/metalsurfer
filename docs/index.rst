@@ -10,6 +10,9 @@
         <a href="https://pypi.org/project/metalsurfer/">
             <img src="https://img.shields.io/pypi/v/metalsurfer.svg" alt="PyPI">
         </a>
+        <a href="https://metalsurfer.readthedocs.io/">
+            <img src="https://img.shields.io/readthedocs/metalsurfer.svg" alt="Docs">
+        </a>
         <a href="https://opensource.org/licenses/MIT">
             <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT">
         </a>
