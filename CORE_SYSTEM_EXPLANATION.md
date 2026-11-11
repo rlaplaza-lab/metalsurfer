@@ -204,8 +204,10 @@ and explicitly constructs:
 
 Plugin lift / clearance snap is probe-only: after classify, wall-near
 ``Site.xyz`` is the support-plane anchor; pore / free-volume vertices stay at
-the void centre. Normals keep the pre-projection outward direction.
-`clearance` / `nn_distance` retain accessibility probe metadata.
+the void centre. Support-plane anchors/heights and dissociative fragment pairs
+use the same Cartesian MIC as normals and env distances. Normals keep the
+pre-projection outward direction. `clearance` / `nn_distance` retain
+accessibility probe metadata.
 
 After the topology candidates are built, an *accessibility window* still
 gates them: a candidate is kept only if its distance to the nearest framework

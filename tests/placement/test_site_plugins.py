@@ -12,6 +12,7 @@ from metalsurfer.placement.generators import (
     enumerate_placement_specs,
     generate_placements_from_specs,
 )
+from metalsurfer.placement.site_coords import mic_support_positions
 from metalsurfer.placement.site_enumeration import get_unified_sites
 from metalsurfer.placement.site_plugins import (
     SITE_GENERATORS,
@@ -242,22 +243,31 @@ def test_slab_topology_emits_nonempty_supports():
     assert all(s.slab_indices for s in sites)
 
 
-def _support_plane_lifts(batch, positions: np.ndarray) -> list[float]:
-    """Height of each supported vertex above its max-support plane."""
+def _support_plane_lifts(
+    batch,
+    positions: np.ndarray,
+    *,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+) -> list[float]:
+    """Height of each supported vertex above its MIC max-support plane."""
     assert batch.normals is not None
     lifts: list[float] = []
     pos = np.asarray(positions, dtype=float)
     for i, support in enumerate(batch.atom_indices):
         if not support:
             continue
-        idx = np.asarray(support, dtype=int)
         n_hat = np.asarray(batch.normals[i], dtype=float)
         nrm = float(np.linalg.norm(n_hat))
         if nrm < 1e-8:
             continue
         n_hat = n_hat / nrm
-        support_h = float(np.max(pos[idx] @ n_hat))
-        lifts.append(float(np.dot(batch.vertices[i], n_hat) - support_h))
+        vert = np.asarray(batch.vertices[i], dtype=float)
+        supp = mic_support_positions(vert, pos, support, cell=cell, pbc=pbc)
+        if len(supp) == 0:
+            continue
+        support_h = float(np.max(supp @ n_hat))
+        lifts.append(float(np.dot(vert, n_hat) - support_h))
     return lifts
 
 
@@ -272,10 +282,12 @@ def _support_plane_lifts(batch, positions: np.ndarray) -> list[float]:
 def test_wall_plugins_emit_unlifted_anchors(plugin, material_type, factory):
     atoms = factory()
     pos = np.asarray(atoms.get_positions(), dtype=float)
+    cell = np.asarray(atoms.get_cell(), dtype=float)
+    pbc = np.asarray(atoms.get_pbc(), dtype=bool)
     ctx = SiteGenerationContext(
         positions=pos,
-        cell=np.asarray(atoms.get_cell(), dtype=float),
-        pbc=np.asarray(atoms.get_pbc(), dtype=bool),
+        cell=cell,
+        pbc=pbc,
         symbols=list(atoms.get_chemical_symbols()),
         material_type=material_type,
         probe_radius=1.2,
@@ -287,7 +299,7 @@ def test_wall_plugins_emit_unlifted_anchors(plugin, material_type, factory):
         n_jobs=1,
     )
     batch = resolve_site_generator(plugin, material_type).generate(ctx)
-    lifts = _support_plane_lifts(batch, pos)
+    lifts = _support_plane_lifts(batch, pos, cell=cell, pbc=pbc)
     assert lifts, f"{plugin} emitted no supported anchors"
     assert max(lifts) <= 1e-5
     if plugin == "voronoi":
@@ -493,6 +505,8 @@ def test_wall_near_sites_have_supports_and_support_plane_xyz(
         assert not pores, (
             f"{plugin} catalogs are wall-near only, got {len(pores)} pores"
         )
+    cell = np.asarray(atoms.get_cell(), dtype=float)
+    pbc = np.asarray(atoms.get_pbc(), dtype=bool)
     for s in wall:
         assert s.slab_indices, (
             f"{plugin}/{material_type} wall-near site missing supports "
@@ -502,8 +516,10 @@ def test_wall_near_sites_have_supports_and_support_plane_xyz(
         nrm = float(np.linalg.norm(n_hat))
         assert nrm > 0.5
         n_hat = n_hat / nrm
-        support_h = float(np.max(pos[list(s.slab_indices)] @ n_hat))
-        site_h = float(np.dot(np.asarray(s.xyz, dtype=float), n_hat))
+        xyz = np.asarray(s.xyz, dtype=float)
+        supp = mic_support_positions(xyz, pos, s.slab_indices, cell=cell, pbc=pbc)
+        support_h = float(np.max(supp @ n_hat))
+        site_h = float(np.dot(xyz, n_hat))
         assert site_h == pytest.approx(support_h, abs=1e-6)
     for s in pores:
         assert s.nn_distance is not None and float(s.nn_distance) > 1.0
@@ -572,8 +588,16 @@ def test_porous_wall_near_plugins_materialize_with_contact_solve(plugin):
     n_hat = np.asarray(pose_ctx.normal, dtype=float)
     n_hat = n_hat / float(np.linalg.norm(n_hat))
     pos = np.asarray(atoms.get_positions(), dtype=float)
+    cell = np.asarray(atoms.get_cell(), dtype=float)
+    pbc = np.asarray(atoms.get_pbc(), dtype=bool)
     support_h = _height_above_supports(
-        site, pos, n_hat, reduce="max", fallback=float(pose_ctx.surface_ref)
+        site,
+        pos,
+        n_hat,
+        reduce="max",
+        fallback=float(pose_ctx.surface_ref),
+        cell=cell,
+        pbc=pbc,
     )
     site_h = float(np.dot(np.asarray(site.xyz, dtype=float), n_hat))
     assert site_h == pytest.approx(support_h, abs=1e-6)

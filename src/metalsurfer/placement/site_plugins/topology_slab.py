@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 from .._constants import _ATOP_INJECTION_HEIGHT_FACTOR
-from ..site_coords import exposed_lower_band_indices, top_layer_mask_by_normal
+from ..site_coords import exposed_lower_band_indices
 from ..site_voronoi import _generate_slab_topology_sites, _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext
 from .helpers import (
@@ -18,6 +18,7 @@ from .helpers import (
     merge_dedup_site_arrays,
     periodic_accessibility_tree,
     slab_candidate_postprocess,
+    slab_top_voronoi_inputs,
     top_layer_is_planar_from_arrays,
 )
 
@@ -49,14 +50,9 @@ class TopologySlabGenerator:
         enrich = ctx.enrich
         reuse_topology = reuse if isinstance(reuse, PlanarWidenScratch) else None
 
-        slab_top_mask = top_layer_mask_by_normal(
-            positions, cell, float(top_layer_tolerance)
+        slab_top_mask, slab_top_atom_indices, voronoi_positions = (
+            slab_top_voronoi_inputs(positions, cell, float(top_layer_tolerance))
         )
-        slab_top_atom_indices = np.nonzero(slab_top_mask)[0]
-        voronoi_positions = positions
-        top_only = positions[slab_top_mask]
-        if len(top_only) >= 4:
-            voronoi_positions = top_only
 
         slab_skip_voronoi = top_layer_is_planar_from_arrays(
             positions,

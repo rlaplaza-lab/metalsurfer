@@ -31,6 +31,7 @@ from dataclasses import replace
 import numpy as np
 from scipy.spatial import KDTree
 
+from .._geom_pbc import mic_point_distance
 from .._utils import cell_has_volume
 from ._constants import (
     _ADAPTIVE_GRID_BIN_PRETHIN,
@@ -55,7 +56,6 @@ from ._constants import (
     _ADAPTIVE_GRID_STATIONARITY_STEP,
     _ADAPTIVE_GRID_SUPPORT_DELTA,
     _ADAPTIVE_GRID_WORK_BUDGET,
-    _ATOP_INJECTION_HEIGHT_FACTOR,
     _SURFACE_COVALENT_RADIUS_FALLBACK,
     _VECTOR_NORM_EPS,
     _VORONOI_DEDUP_TOLERANCE,
@@ -79,11 +79,14 @@ from .site_wall_near_common import (
     SidePolicy,
     _best_per_support_key,
     _merge_by_radius,
-    _mic_distance,
     _nms_rank_order,
     _side_policy_mask,
     _support_key,
+    candidates_to_arrays,
+    empty_adaptive_grid_result,
     resolve_side_policy_for_pbc,
+    shell_target_clearance,
+    wall_near_clearance_window,
 )
 
 __all__ = [
@@ -578,19 +581,6 @@ def _candidate_geometry_score(
     )
 
 
-def _shell_target_clearance(
-    min_clearance: float,
-    max_clearance: float,
-    median_nn: float,
-) -> float:
-    """Target clearance inside the accessibility window."""
-    if median_nn > 0.0:
-        target = 0.5 * float(median_nn) * _ATOP_INJECTION_HEIGHT_FACTOR
-    else:
-        target = 0.5 * (float(min_clearance) + float(max_clearance))
-    return float(np.clip(target, min_clearance, max_clearance))
-
-
 def _ray_exposure_mask(
     vertices: np.ndarray,
     normals: np.ndarray,
@@ -633,6 +623,7 @@ def _exposure_mask(
     pbc: np.ndarray,
     side_policy: SidePolicy = "positive",
     positions: np.ndarray | None = None,
+    n_steps: int = _ADAPTIVE_GRID_EXPOSURE_N_STEPS,
 ) -> np.ndarray:
     """Ray exposure along local normals plus side-policy half-space filter."""
     n = len(vertices)
@@ -644,6 +635,7 @@ def _exposure_mask(
         tree,
         framework_radii,
         n_atoms,
+        n_steps=int(n_steps),
     )
     keep &= _side_policy_mask(
         normals,
@@ -873,35 +865,6 @@ def _annotate_candidates(
     return out
 
 
-def _candidates_to_arrays(
-    candidates: list[CandidateSite],
-    *,
-    tree: KDTree,
-) -> tuple[
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    list[tuple[int, ...]],
-    np.ndarray,
-]:
-    """Return verts, centre-to-centre nn, clearances, atoms, normals."""
-    if not candidates:
-        empty = np.empty((0, 3), dtype=float)
-        return (
-            empty,
-            np.empty(0, dtype=float),
-            np.empty(0, dtype=float),
-            [],
-            empty,
-        )
-    verts = np.asarray([c.position for c in candidates], dtype=float)
-    clear = np.asarray([c.clearance for c in candidates], dtype=float)
-    atoms = [c.support_indices for c in candidates]
-    normals = np.asarray([c.normal for c in candidates], dtype=float)
-    nn = np.asarray(tree.query(verts, k=1)[0], dtype=float).ravel()
-    return verts, nn, clear, atoms, normals
-
-
 def _seed_chunk_candidates(
     seeds: np.ndarray,
     offsets: np.ndarray,
@@ -1013,7 +976,7 @@ def _basin_converged(
     if abs(old.score - new.score) >= _ADAPTIVE_GRID_REFINE_SCORE_TOL:
         return False
     return (
-        _mic_distance(old.position, new.position, cell, pbc)
+        mic_point_distance(old.position, new.position, cell, pbc)
         < _ADAPTIVE_GRID_REFINE_POS_TOL
     )
 
@@ -1059,12 +1022,9 @@ def generate_adaptive_grid_sites(
                 f"framework_radii length {len(framework_radii)} != n_atoms {n_atoms}"
             )
 
-    # Accessibility window in clearance space.
-    mean_r = float(np.mean(framework_radii)) if n_atoms else 0.0
-    min_clearance = float(probe_radius) - mean_r
-    max_clearance = float(max_site_distance) - mean_r
-    if max_clearance < min_clearance:
-        max_clearance = min_clearance
+    min_clearance, max_clearance = wall_near_clearance_window(
+        framework_radii, float(probe_radius), float(max_site_distance)
+    )
 
     median_nn = _framework_median_nn(positions, cell, pbc)
     spacing = adaptive_grid_spacing(
@@ -1074,17 +1034,12 @@ def generate_adaptive_grid_sites(
         nms_framework_scale=nms_framework_scale,
     )
     tree = periodic_accessibility_tree(
-        positions, cell, pbc, float(max_site_distance) + float(np.max(framework_radii))
+        positions,
+        cell,
+        pbc,
+        float(max_site_distance) + (float(np.max(framework_radii)) if n_atoms else 0.0),
     )
-    empty = AdaptiveGridResult(
-        vertices=np.empty((0, 3), dtype=float),
-        nn_dists=np.empty(0, dtype=float),
-        clearances=np.empty(0, dtype=float),
-        atom_indices=[],
-        normals=np.empty((0, 3), dtype=float),
-        spacing=spacing,
-        accessibility_tree=tree,
-    )
+    empty = empty_adaptive_grid_result(spacing=spacing, accessibility_tree=tree)
     if n_atoms == 0:
         return empty
 
@@ -1127,7 +1082,7 @@ def generate_adaptive_grid_sites(
             pbc=pbc,
         )
 
-    target_c = _shell_target_clearance(min_clearance, max_clearance, median_nn)
+    target_c = shell_target_clearance(min_clearance, max_clearance, median_nn)
     candidates = _annotate_candidates(
         vertices,
         clearances,
@@ -1138,7 +1093,7 @@ def generate_adaptive_grid_sites(
         pbc=pbc,
         target_clearance=target_c,
     )
-    verts, _nn, _clears, _, normals = _candidates_to_arrays(candidates, tree=tree)
+    verts, _nn, _clears, _, normals = candidates_to_arrays(candidates, tree=tree)
     keep = _exposure_mask(
         verts,
         normals,
@@ -1232,7 +1187,7 @@ def generate_adaptive_grid_sites(
             pbc=pbc,
             target_clearance=target_c,
         )
-        cv, _, _, _, cn = _candidates_to_arrays(child_cands, tree=tree)
+        cv, _, _, _, cn = candidates_to_arrays(child_cands, tree=tree)
         keep_c = _exposure_mask(
             cv,
             cn,
@@ -1304,9 +1259,7 @@ def generate_adaptive_grid_sites(
     )
     if not clustered:
         return empty
-    verts, nn_dists, clears, atoms, normals = _candidates_to_arrays(
-        clustered, tree=tree
-    )
+    verts, nn_dists, clears, atoms, normals = candidates_to_arrays(clustered, tree=tree)
     return AdaptiveGridResult(
         vertices=verts,
         nn_dists=nn_dists,

@@ -41,7 +41,13 @@ from .finalize import (
     generate_placement_from_pose as generate_placement_from_pose,
 )
 from .height import (
+    _allowed_clearances as _allowed_clearances,
+)
+from .height import (
     _com_floor_on_support_plane as _com_floor_on_support_plane,
+)
+from .height import (
+    _com_height_from_frame as _com_height_from_frame,
 )
 from .height import (
     _com_height_from_z_fraction as _com_height_from_z_fraction,
@@ -50,7 +56,7 @@ from .height import (
     _com_hi_for_vdw_landing as _com_hi_for_vdw_landing,
 )
 from .height import (
-    _contact_atom_index as _contact_atom_index,
+    _contact_frame as _contact_frame,
 )
 from .height import (
     _contact_shell_indices as _contact_shell_indices,
@@ -75,9 +81,6 @@ from .height import (
 )
 from .height import (
     _pair_min_distance_at_com_height as _pair_min_distance_at_com_height,
-)
-from .height import (
-    _pairwise_contact_com_height as _pairwise_contact_com_height,
 )
 from .height import (
     _placement_normal_hat as _placement_normal_hat,

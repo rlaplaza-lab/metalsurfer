@@ -425,20 +425,22 @@ def _compute_dissociative_site_pairs(
         n_hat = n_hat / n_norm
     sorted_pairs = sorted(pair_distances.items())
     mic_deltas: np.ndarray | None = None
-    if bool(pbc[0] or pbc[1]) and not bool(pbc[2]) and sorted_pairs:
-        # One vectorized call instead of per-pair ``find_mic`` invocations
-        # (each of which Minkowski-reduces the cell again).
+    slab_like = bool(pbc[0] or pbc[1]) and not bool(pbc[2])
+    if np.any(pbc) and sorted_pairs:
+        # Vectorized MIC: place fragment 2 on the image of j relative to i.
         raw_deltas = np.asarray(
             [site_3d[j] - site_3d[i] for (i, j), _ in sorted_pairs], dtype=float
         )
         dvec_mic, _dists = find_mic(raw_deltas, cell_arr, pbc=pbc)
         mic_deltas = np.asarray(dvec_mic, dtype=float)
     for k, ((i, j), d) in enumerate(sorted_pairs):
-        # On slabs both fragments are later projected to the same height, so the
-        # placed separation is the in-plane MIC — gate on that, not 3-D distance.
+        # Slab: gate on in-plane MIC (shared height later). Else: full MIC length.
         if mic_deltas is not None:
             delta = mic_deltas[k]
-            d_gate = float(np.linalg.norm(delta - np.dot(delta, n_hat) * n_hat))
+            if slab_like:
+                d_gate = float(np.linalg.norm(delta - np.dot(delta, n_hat) * n_hat))
+            else:
+                d_gate = float(np.linalg.norm(delta))
             xyz2 = site_3d[i] + delta
         else:
             d_gate = float(d)
@@ -619,9 +621,17 @@ def _place_dissociative_two_sites(
     surface_ref2, _ = _resolve_surface_ref(site2, sites_slab, config.material_type)
     site_reference_frame = "local_site"
 
+    pbc = material_aware_pbc(config.material_type)
+
     def _plane_h(site: Site, surface_ref: float) -> float:
         return _height_above_supports(
-            site, ref_pos, n_hat, reduce="max", fallback=float(surface_ref)
+            site,
+            ref_pos,
+            n_hat,
+            reduce="max",
+            fallback=float(surface_ref),
+            cell=cell_arr,
+            pbc=pbc,
         )
 
     h1 = _plane_h(site1, surface_ref1)
@@ -633,7 +643,7 @@ def _place_dissociative_two_sites(
     symbols = adsorbate.get_chemical_symbols()
     result = Atoms(symbols=symbols, positions=[pos1, pos2])
     result.set_cell(slab.get_cell())
-    result.set_pbc(material_aware_pbc(config.material_type))
+    result.set_pbc(pbc)
 
     fail_reason = _validate_posed_adsorbate(
         result, slab, config, slab_for_sites=slab_for_sites
@@ -774,6 +784,8 @@ def _generate_dissociative_placement_from_spec(
             n_hat,
             reduce="max",
             fallback=float(np.dot(np.asarray(site.xyz, dtype=float), n_hat)),
+            cell=cell_arr,
+            pbc=pbc,
         )
         contact_gaps.append(float(interval.com_nominal) - float(plane_h))
         standoff = _com_height_from_z_fraction(

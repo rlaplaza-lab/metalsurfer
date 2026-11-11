@@ -23,9 +23,9 @@ from ._constants import (
 from .geometry import tangent_basis_from_normal
 from .site_coords import (
     _build_periodic_images,
-    _minimum_image_cartesian_delta,
     _project_to_slab_plane,
     _slab_normal,
+    mic_support_positions,
     project_anchor_to_support_plane,
 )
 from .site_types import Site, site_kind_from_type_and_supports
@@ -496,15 +496,8 @@ def _support_mic_distances(
     if not support:
         return ()
     vert = np.asarray(vertex, dtype=float)
-    pbc_arr = np.asarray(pbc, dtype=bool)
-    use_mic = bool(np.any(pbc_arr)) and cell_has_volume(cell)
-    out: list[float] = []
-    for j in support:
-        delta = np.asarray(positions[int(j)], dtype=float) - vert
-        if use_mic:
-            delta = _minimum_image_cartesian_delta(delta, cell, pbc_arr)
-        out.append(float(np.linalg.norm(delta)))
-    return tuple(out)
+    supp = mic_support_positions(vert, positions, support, cell=cell, pbc=pbc)
+    return tuple(float(np.linalg.norm(pt - vert)) for pt in supp)
 
 
 def _normal_from_support(
@@ -519,15 +512,10 @@ def _normal_from_support(
     if not support:
         return np.asarray(fallback, dtype=float)
     vert = np.asarray(vertex, dtype=float)
-    pbc_arr = np.asarray(pbc, dtype=bool)
-    use_mic = bool(np.any(pbc_arr)) and cell_has_volume(cell)
-    pts = []
-    for j in support:
-        delta = np.asarray(positions[int(j)], dtype=float) - vert
-        if use_mic:
-            delta = _minimum_image_cartesian_delta(delta, cell, pbc_arr)
-        pts.append(vert + delta)
-    centroid = np.mean(np.asarray(pts, dtype=float), axis=0)
+    pts = mic_support_positions(vert, positions, support, cell=cell, pbc=pbc)
+    if len(pts) == 0:
+        return np.asarray(fallback, dtype=float)
+    centroid = np.mean(pts, axis=0)
     lift = vert - centroid
     nrm = float(np.linalg.norm(lift))
     if nrm < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
@@ -652,8 +640,14 @@ def _classify_vertices(
                         int(j) for j in np.asarray(ctx.class_idx[i]).ravel()[:n_keep]
                     )
                 elif n_keep:
-                    _, idx = local_tree.query(vertices[i].reshape(1, 3), k=n_keep)
-                    atoms_i = tuple(int(j) for j in np.atleast_1d(idx).ravel())
+                    _, idx = _knn_under_pbc(
+                        vertices[i].reshape(1, 3),
+                        positions,
+                        cell=cell,
+                        pbc=pbc,
+                        k=n_keep,
+                    )
+                    atoms_i = tuple(int(j) for j in np.asarray(idx).ravel()[:n_keep])
             classifications[i] = (site_type, atoms_i)
             continue
         if hint in _SUPPORT_COUNT_TYPED_SOURCES and provided_atoms[i]:
@@ -722,9 +716,10 @@ def _classify_vertices(
             if support_idx.size > 0:
                 # Project before outward so the ray probe starts on the contact
                 # plane; re-project after with the final normal if it flips.
-                xyz = project_anchor_to_support_plane(
-                    xyz, normal, positions[support_idx]
+                supp = mic_support_positions(
+                    xyz, positions, support_idx, cell=cell, pbc=pbc
                 )
+                xyz = project_anchor_to_support_plane(xyz, normal, supp)
             else:
                 support_idx = None
 
@@ -749,7 +744,10 @@ def _classify_vertices(
             continue
         xyz = prepared_xyz[row]
         if support_idx is not None and support_idx.size > 0:
-            xyz = project_anchor_to_support_plane(xyz, normal, positions[support_idx])
+            supp = mic_support_positions(
+                xyz, positions, support_idx, cell=cell, pbc=pbc
+            )
+            xyz = project_anchor_to_support_plane(xyz, normal, supp)
 
         dists = _support_mic_distances(xyz, positions, support, cell, pbc)
         side = _side_label_from_normal(normal, material_type=material_type, cell=cell)

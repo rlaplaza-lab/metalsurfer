@@ -6,6 +6,8 @@ them without importing the ``placement`` package. They are re-exported here unde
 their historical underscore names for existing call sites.
 """
 
+from collections.abc import Sequence
+
 import numpy as np
 from scipy.spatial import KDTree
 
@@ -91,6 +93,7 @@ __all__ = [
     "_union_find_cluster",
     "_wrapped_slab_fractional",
     "derive_pore_threshold",
+    "mic_support_positions",
     "top_layer_mask_by_normal",
 ]
 
@@ -286,6 +289,30 @@ def _wrapped_slab_fractional(points: np.ndarray, cell: np.ndarray) -> np.ndarray
     return _wrap_fractional(_cart_to_frac(points, cell), MATERIAL_PBC["slab"])
 
 
+def mic_support_positions(
+    vertex: np.ndarray,
+    positions: np.ndarray,
+    support: np.ndarray | list[int] | tuple[int, ...],
+    cell: np.ndarray | None = None,
+    pbc: Sequence[bool] | np.ndarray | None = None,
+) -> np.ndarray:
+    """Support atom coordinates as MIC images of *vertex* (primary if no PBC)."""
+    vert = np.asarray(vertex, dtype=float).reshape(3)
+    pos = np.asarray(positions, dtype=float)
+    raw_idx = np.asarray(support, dtype=int).ravel()
+    idx = raw_idx[(raw_idx >= 0) & (raw_idx < len(pos))]
+    if idx.size == 0:
+        return np.empty((0, 3), dtype=float)
+    primary = pos[idx]
+    if cell is None or pbc is None:
+        return primary
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    cell_arr = np.asarray(cell, dtype=float)
+    if not np.any(pbc_arr) or not cell_has_volume(cell_arr):
+        return primary
+    return vert + _minimum_image_cartesian_delta(primary - vert, cell_arr, pbc_arr)
+
+
 def project_anchor_to_support_plane(
     xyz: np.ndarray,
     normal: np.ndarray,
@@ -314,25 +341,23 @@ def project_vertices_to_support_plane(
     normals: np.ndarray | None,
     atom_indices: list[tuple[int, ...]] | None,
     positions: np.ndarray,
+    *,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Project supported vertices onto their support plane.
-
-    Empty supports (pore centres) are left unchanged.
-    """
+    """Project supported vertices onto their support plane (MIC when *cell*/*pbc*)."""
     verts = np.asarray(vertices, dtype=float).copy()
     if normals is None or atom_indices is None or len(verts) == 0:
         return verts
     normals_arr = np.asarray(normals, dtype=float)
     pos = np.asarray(positions, dtype=float)
-    n_pos = len(pos)
     for i, support in enumerate(atom_indices):
         if not support:
             continue
-        idx = np.asarray(support, dtype=int)
-        idx = idx[(idx >= 0) & (idx < n_pos)]
-        if idx.size == 0:
+        supp = mic_support_positions(verts[i], pos, support, cell=cell, pbc=pbc)
+        if len(supp) == 0:
             continue
-        verts[i] = project_anchor_to_support_plane(verts[i], normals_arr[i], pos[idx])
+        verts[i] = project_anchor_to_support_plane(verts[i], normals_arr[i], supp)
     return verts
 
 

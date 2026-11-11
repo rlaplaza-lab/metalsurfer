@@ -220,8 +220,11 @@ def _run_merged_binder_end_to_end(
     contact_atom_idx: int,
 ) -> None:
     from metalsurfer.placement.generators import _spec_grid_info
-    from metalsurfer.placement.geometry import _surface_aligned_rotation
-    from metalsurfer.placement.pose import _contact_atom_index, _pose_from_spec
+    from metalsurfer.placement.geometry import (
+        _binding_atom_candidates,
+        _surface_aligned_rotation,
+    )
+    from metalsurfer.placement.pose import _pose_from_spec
     from metalsurfer.placement.site_context import _get_unique_sites_for_specs
 
     slab = make_slab()
@@ -309,15 +312,15 @@ def _run_merged_binder_end_to_end(
         conformer, en_spec, slab, config, smiles, site_context=ctx
     )
     assert fail is None and pctx is not None
-    resolved = _contact_atom_index(
-        pctx.rotated_pos,
-        np.asarray(pctx.normal, dtype=float),
-        symbols,
-        orientation_type=en_spec.orientation_type,
-        en_atom_index=en_spec.en_atom_index,
-        marked_indices=marked,
-        exclusive_marked=exclusive,
-    )
+    binders = _binding_atom_candidates(symbols, marked, exclusive=exclusive)
+    assert binders
+    if en_spec.en_atom_index is not None:
+        resolved = binders[int(en_spec.en_atom_index)]
+    else:
+        n_hat = np.asarray(pctx.normal, dtype=float)
+        n_hat = n_hat / np.linalg.norm(n_hat)
+        heights = np.asarray(pctx.rotated_pos, dtype=float) @ n_hat
+        resolved = int(min(binders, key=lambda i: float(heights[i])))
     assert resolved == contact_atom_idx
 
 

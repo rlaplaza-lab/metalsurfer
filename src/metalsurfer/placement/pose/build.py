@@ -266,6 +266,8 @@ def _pose_from_spec(
         place_normal,
         reduce="max",
         fallback=float(surface_ref),
+        cell=cell_arr,
+        pbc=pbc,
     )
     ctx_z_lo = float(interval.com_lo) - float(contact_ref)
     ctx_z_hi = float(interval.com_hi) - float(contact_ref)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, assert_never
@@ -159,6 +159,19 @@ def format_failure_summary_text(failure_summary: FailureSummary) -> str:
     else:
         assert_never(failure_summary)
 
+    return "\n".join(lines)
+
+
+def format_failures_by_molecule(
+    failure_summaries: Mapping[str, FailureSummary],
+) -> str:
+    """Format per-molecule failure blocks joined by newlines."""
+    if not failure_summaries:
+        return ""
+    lines: list[str] = []
+    for molecule_name, summary in failure_summaries.items():
+        lines.append(f"Failures for {molecule_name}:")
+        lines.append(format_failure_summary_text(summary))
     return "\n".join(lines)
 
 

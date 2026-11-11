@@ -25,10 +25,6 @@ from .site_types import Site
 logger = logging.getLogger(__name__)
 
 
-# Sampling catalog used once adsorbates occupy the surface (full clustered lattice).
-_CLUSTERED_UNDER_COVERAGE_SOURCE = "clustered_under_coverage"
-
-
 @dataclass
 class SiteContext:
     """Cached site catalog for a substrate geometry.
@@ -295,26 +291,6 @@ def skip_symmetry_for_sampling(
     if symmetry_broken:
         return True
     return full_slab is not None and len(full_slab) > len(slab_for_sites)
-
-
-def site_context_for_occupied_surface(ctx: SiteContext) -> SiteContext:
-    """Expand a symmetry-reduced sampling catalog to the clustered lattice."""
-    clustered = ctx.clustered_sites
-    if ctx.source != "symmetry_aware" or not ctx.use_sites or not clustered:
-        return ctx
-    logger.debug(
-        "Sampling %d clustered sites (symmetry-reduced catalog had %d)",
-        len(clustered),
-        len(ctx.sites),
-    )
-    return SiteContext(
-        sites=list(clustered),
-        use_sites=True,
-        source=_CLUSTERED_UNDER_COVERAGE_SOURCE,
-        raw_unclustered=ctx.raw_unclustered,
-        clustered_sites=clustered,
-        plugin_vertices=ctx.plugin_vertices,
-    )
 
 
 def _indexes_ligand(site: Site, n_substrate: int) -> bool:

@@ -661,11 +661,11 @@ def test_overlap_recovery_rescues_lateral_clash():
 
 def test_clearance_aware_height_raises_protruding_pose():
     """Pairwise contact-solve clears the gate for a tilted protruding chain."""
-    from metalsurfer.placement.geometry import check_initial_placement_distance
-    from metalsurfer.placement.pose import (
-        _contact_atom_index,
-        _pose_from_spec,
+    from metalsurfer.placement.geometry import (
+        _binding_atom_candidates,
+        check_initial_placement_distance,
     )
+    from metalsurfer.placement.pose import _pose_from_spec
 
     slab = make_slab()
     config = AdsorptionConfig(
@@ -702,15 +702,14 @@ def test_clearance_aware_height_raises_protruding_pose():
     assert pose_fail is None
     assert ctx is not None
     assert ctx.site is not None
+    symbols = list(chain.get_chemical_symbols())
+    binders = _binding_atom_candidates(symbols)
+    assert binders and binders[0] == 0  # oxygen binder
     n_hat = np.asarray(ctx.normal, dtype=float)
-    contact_idx = _contact_atom_index(
-        ctx.rotated_pos,
-        n_hat,
-        list(chain.get_chemical_symbols()),
-        orientation_type=spec.orientation_type,
-        en_atom_index=spec.en_atom_index,
-    )
-    assert contact_idx == 0  # oxygen binder
+    n_hat = n_hat / np.linalg.norm(n_hat)
+    heights = np.asarray(ctx.rotated_pos, dtype=float) @ n_hat
+    contact_idx = int(min(binders, key=lambda i: float(heights[i])))
+    assert contact_idx == 0
     ads = chain.copy()
     ads.set_positions(
         ctx.rotated_pos

@@ -33,6 +33,9 @@ from .reporting import (
     format_failure_summary_text as _format_failure_summary_text,
 )
 from .reporting import (
+    format_failures_by_molecule as _format_failures_by_molecule,
+)
+from .reporting import (
     format_results_saved_line as _format_results_saved_line,
 )
 from .reporting import (
@@ -740,6 +743,24 @@ def _committed_step_results(
     return []
 
 
+def _saturation_step_placement_dirs(
+    results_dir: str | Path,
+    mol_dir_label: str,
+    step: int,
+    *,
+    write_vasp_inputs: bool,
+    step_prefix: bool = True,
+) -> tuple[Path, Path | None]:
+    """Return ``(xyz_dir, vasp_dir_or_none)`` for one saturation step."""
+    rel = f"step_{step:03d}_placements" if step_prefix else "placements"
+    base = Path(results_dir)
+    step_xyz = saturation_xyz_dir(base, mol_dir_label) / rel
+    step_vasp = (
+        saturation_vasp_dir(base, mol_dir_label) / rel if write_vasp_inputs else None
+    )
+    return step_xyz, step_vasp
+
+
 @dataclass
 class SaturationStepResult:
     """Result of one step in a sequential saturation run."""
@@ -825,15 +846,12 @@ class SaturationStepResult:
         include_provenance
             If True, include pre-relax provenance columns.
         """
-        step_placements_rel = (
-            f"step_{self.step:03d}_placements" if step_prefix else "placements"
-        )
-        base = Path(results_dir)
-        step_xyz = saturation_xyz_dir(base, saturation_molecule) / step_placements_rel
-        step_vasp = (
-            saturation_vasp_dir(base, saturation_molecule) / step_placements_rel
-            if write_vasp_inputs
-            else None
+        step_xyz, step_vasp = _saturation_step_placement_dirs(
+            results_dir,
+            saturation_molecule,
+            self.step,
+            write_vasp_inputs=write_vasp_inputs,
+            step_prefix=step_prefix,
         )
         return _placement_rows_for_results(
             self.all_results,
@@ -1064,13 +1082,11 @@ class MultiMolSaturationStepResult:
         include_provenance
             If True, include pre-relax provenance columns.
         """
-        rel = f"step_{self.step:03d}_placements"
-        base = Path(results_dir)
-        base_xyz = saturation_xyz_dir(base, molecules_label) / rel
-        base_vasp = (
-            saturation_vasp_dir(base, molecules_label) / rel
-            if write_vasp_inputs
-            else None
+        base_xyz, base_vasp = _saturation_step_placement_dirs(
+            results_dir,
+            molecules_label,
+            self.step,
+            write_vasp_inputs=write_vasp_inputs,
         )
         rows: list[dict[str, Any]] = []
         for pmol, res_list in self.per_molecule_results.items():
@@ -1173,13 +1189,7 @@ class SaturationCampaignResult:
 
     def format_failure_summary(self) -> str:
         """Return a canonical human-readable failure summary for all molecules."""
-        if not self.failure_summary:
-            return ""
-        lines: list[str] = []
-        for molecule_name, summary in self.failure_summary.items():
-            lines.append(f"Failures for {molecule_name}:")
-            lines.append(_format_failure_summary_text(summary))
-        return "\n".join(lines)
+        return _format_failures_by_molecule(self.failure_summary)
 
     def format_completion(
         self,
@@ -1333,9 +1343,7 @@ class BindingCampaignResult:
             )
         if self.failure_summaries:
             lines.append("")
-            for molecule_name, failure_summary in self.failure_summaries.items():
-                lines.append(f"Failures for {molecule_name}:")
-                lines.append(self.format_failure_summary(failure_summary))
+            lines.append(_format_failures_by_molecule(self.failure_summaries))
         lines.append("")
         lines.append(
             self.format_results_saved_line(

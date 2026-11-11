@@ -7,16 +7,14 @@ from typing import Any
 
 import numpy as np
 
-from ..site_coords import (
-    project_vertices_to_support_plane,
-    top_layer_mask_by_normal,
-)
+from ..site_coords import project_vertices_to_support_plane
 from ..site_voronoi import _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
 from .helpers import (
     candidate_enrichment_frames,
     periodic_accessibility_tree,
     slab_candidate_postprocess,
+    slab_top_voronoi_inputs,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,13 +52,9 @@ class VoronoiGenerator:
         do_slab_post = False
 
         if material_type == "slab":
-            slab_top_mask = top_layer_mask_by_normal(
-                positions, cell, float(ctx.top_layer_tolerance)
+            _top_mask, slab_top_atom_indices, voronoi_positions = (
+                slab_top_voronoi_inputs(positions, cell, float(ctx.top_layer_tolerance))
             )
-            slab_top_atom_indices = np.nonzero(slab_top_mask)[0]
-            top_only = positions[slab_top_mask]
-            if len(top_only) >= 4:
-                voronoi_positions = top_only
             accessibility_tree = periodic_accessibility_tree(
                 positions,
                 cell,
@@ -120,7 +114,12 @@ class VoronoiGenerator:
             accessibility_tree=accessibility_tree,
         )
         vertices = project_vertices_to_support_plane(
-            vertices, normals, atom_indices, positions
+            vertices,
+            normals,
+            atom_indices,
+            positions,
+            cell=cell,
+            pbc=pbc,
         )
 
         if do_slab_post:

@@ -28,11 +28,13 @@ from metalsurfer.placement.geometry import (
     check_initial_contact_quality,
 )
 from metalsurfer.placement.pose import (
+    _allowed_clearances,
     _apply_lateral_offset,
+    _com_height_from_frame,
     _com_height_from_z_fraction,
+    _contact_frame,
     _contact_shell_indices,
     _feasible_height_interval,
-    _pairwise_contact_com_height,
     _PlacementContext,
     _validate_posed_adsorbate,
     _z_fraction_from_com_height,
@@ -61,6 +63,35 @@ from ._helpers import (
     _first_successful_placement,
     _tilted_make_slab,
 )
+
+
+def _pairwise_contact_com_height(
+    rotated_pos,
+    symbols,
+    *,
+    site_xyz,
+    place_normal,
+    slab_positions,
+    slab_symbols,
+    cell,
+    pbc,
+    config,
+    clearance=None,
+    apply_anchor_floor=True,
+):
+    """Test helper mirroring production contact height via frame + clearances."""
+    frame = _contact_frame(
+        rotated_pos,
+        site_xyz=site_xyz,
+        place_normal=place_normal,
+        slab_positions=slab_positions,
+        cell=cell,
+        pbc=pbc,
+    )
+    if frame.empty:
+        return frame.base_h
+    allowed = _allowed_clearances(symbols, slab_symbols, config, clearance)
+    return _com_height_from_frame(frame, allowed, apply_anchor_floor=apply_anchor_floor)
 
 
 def test_validate_initial_placement_geometry_with_strict_config():
@@ -679,9 +710,11 @@ def test_pose_batch_cache_surface_radii_use_derived_top_depth():
 
 def test_water_en_down_contact_atom_is_oxygen():
     """EN-down water places O at/above the pairwise contact gate (zf=0.5)."""
-    from metalsurfer.placement.geometry import min_pair_clearance_angstrom
+    from metalsurfer.placement.geometry import (
+        _binding_atom_candidates,
+        min_pair_clearance_angstrom,
+    )
     from metalsurfer.placement.pose import (
-        _contact_atom_index,
         _height_above_supports,
         _pose_from_spec,
     )
@@ -699,11 +732,13 @@ def test_water_en_down_contact_atom_is_oxygen():
     site = ctx_sites.sites[site_index]
     symbols = list(water.get_chemical_symbols())
     o_idx = symbols.index("O")
+    binders = _binding_atom_candidates(symbols)
+    assert binders and binders[0] == o_idx
     spec = PlacementSpec(
         conformer_index=0,
         orientation_type="EN-down",
         face_flip=False,
-        en_atom_index=o_idx,
+        en_atom_index=0 if len(binders) > 1 else None,
         site_index=site_index,
         site_type=str(site.site_type),
         tilt_deg=0.0,
@@ -714,15 +749,9 @@ def test_water_en_down_contact_atom_is_oxygen():
     )
     ctx, fail = _pose_from_spec(water, spec, slab, config, "O", site_context=ctx_sites)
     assert fail is None and ctx is not None
-    n_hat = np.asarray(ctx.normal, dtype=float)
-    contact_idx = _contact_atom_index(
-        ctx.rotated_pos,
-        n_hat,
-        symbols,
-        orientation_type=spec.orientation_type,
-        en_atom_index=spec.en_atom_index,
-    )
+    contact_idx = binders[int(spec.en_atom_index or 0)]
     assert contact_idx == o_idx
+    n_hat = np.asarray(ctx.normal, dtype=float)
     surface_symbol = (
         slab.get_chemical_symbols()[int(site.slab_indices[0])]
         if site.slab_indices
@@ -1189,6 +1218,30 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex(source):
         reduce="max",
         fallback=ref,
     ) == pytest.approx(support_h, abs=1e-9)
+
+
+def test_framework_plane_height_uses_mic_supports_on_porous_wall():
+    """Primary-cell support height must not pick the far periodic image."""
+    from metalsurfer.placement.pose import _framework_plane_height
+    from metalsurfer.placement.site_types import Site
+
+    cell = np.diag([10.0, 10.0, 10.0])
+    positions = np.array([[0.5, 5.0, 5.0], [9.5, 5.0, 5.0]], dtype=float)
+    n_hat = np.array([1.0, 0.0, 0.0], dtype=float)
+    site = Site(
+        xyz=np.array([0.05, 5.0, 5.0], dtype=float),
+        normal=n_hat,
+        site_type="bridge",
+        slab_indices=(0, 1),
+        material_type="porous",
+        site_source="test",
+        env_fingerprint=(("C", "C"), (0, 0), 0),
+    )
+    mic_h = _framework_plane_height(
+        site, positions, n_hat, reduce="max", cell=cell, pbc=[True, True, True]
+    )
+    assert float(np.max(positions @ n_hat)) == pytest.approx(9.5, abs=1e-9)
+    assert mic_h == pytest.approx(0.5, abs=1e-9)
 
 
 def test_pose_rebuilds_catalog_when_coverage_drops_symmetry():

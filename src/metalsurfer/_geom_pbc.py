@@ -12,11 +12,13 @@ All routines use the ASE row-vector cell convention: ``r_cart = r_frac @ cell``,
 with ``cell[0]``/``cell[1]``/``cell[2]`` the lattice vectors a/b/c as rows.
 """
 
+from collections.abc import Sequence
 from itertools import product
 
 import numpy as np
 
 from ._numeric_defaults import SURFACE_NORMAL_FALLBACK_NORM_EPS
+from ._utils import cell_has_volume
 
 
 def cart_to_frac(
@@ -182,6 +184,25 @@ def minimum_image_cartesian_delta(
     if single:
         return out[0]
     return out.reshape(arr.shape)
+
+
+def mic_point_distance(
+    a: np.ndarray,
+    b: np.ndarray,
+    cell: np.ndarray,
+    pbc: Sequence[bool] | np.ndarray,
+) -> float:
+    """Minimum-image Euclidean distance between two Cartesian points.
+
+    When *cell* has volume and any axis is periodic, the displacement is folded
+    with :func:`minimum_image_cartesian_delta`; otherwise the ordinary Euclidean
+    norm is returned.
+    """
+    delta = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
+    pbc_arr = np.asarray(pbc, dtype=bool)
+    if np.any(pbc_arr) and cell_has_volume(cell):
+        delta = minimum_image_cartesian_delta(delta, cell, pbc_arr)
+    return float(np.linalg.norm(delta))
 
 
 def reciprocal_plane_spacings(cell: np.ndarray) -> np.ndarray:

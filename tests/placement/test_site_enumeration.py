@@ -17,6 +17,7 @@ from metalsurfer.placement.geometry import (
 )
 from metalsurfer.placement.site_coords import (
     _slab_normal,
+    mic_support_positions,
     top_layer_mask_by_normal,
 )
 from metalsurfer.placement.site_enumeration import (
@@ -76,6 +77,8 @@ def test_slab_catalog_xyz_is_support_plane_anchor():
     from ase.build import fcc111
 
     slab = fcc111("Pt", size=(3, 3, 3), vacuum=10.0, periodic=True)
+    cell = np.asarray(slab.get_cell(), dtype=float)
+    pbc = np.asarray(slab.get_pbc(), dtype=bool)
     for plugin in ("topology", "voronoi", "adaptive_grid", "rolling_probe"):
         sites = get_unified_sites(
             slab, material_type="slab", site_generator=plugin, n_jobs=1
@@ -89,8 +92,10 @@ def test_slab_catalog_xyz_is_support_plane_anchor():
             n_hat = np.asarray(s.normal, dtype=float)
             n_hat = n_hat / float(np.linalg.norm(n_hat))
             assert float(np.linalg.norm(n_hat)) == pytest.approx(1.0, abs=1e-6)
-            support_h = float(np.max(pos[list(s.slab_indices)] @ n_hat))
-            site_h = float(np.dot(np.asarray(s.xyz, dtype=float), n_hat))
+            xyz = np.asarray(s.xyz, dtype=float)
+            supp = mic_support_positions(xyz, pos, s.slab_indices, cell=cell, pbc=pbc)
+            support_h = float(np.max(supp @ n_hat))
+            site_h = float(np.dot(xyz, n_hat))
             assert site_h == pytest.approx(support_h, abs=1e-6)
             assert s.clearance is not None and float(s.clearance) > 0.05
 

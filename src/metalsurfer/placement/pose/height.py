@@ -21,7 +21,9 @@ from .._constants import (
     _WALL_SHELL_MIN_GAP_ANGSTROM,
     _WALL_VDW_Z_FRACTION,
 )
+from .._material import material_aware_pbc
 from ..cutoffs import pair_thresholds, tabulated_radii, within_cutoff
+from ..site_coords import mic_support_positions
 from ..site_enumeration import _height_along_slab_normal
 from ..site_types import Site
 from .context import _HeightInterval
@@ -127,59 +129,32 @@ def _placement_normal_hat(normal: np.ndarray) -> np.ndarray:
     return n / nrm
 
 
-def _contact_atom_index(
-    rotated_pos: np.ndarray,
-    normal: np.ndarray,
-    symbols: list[str],
-    *,
-    orientation_type: str | None,
-    en_atom_index: int | None,
-    marked_indices: Sequence[int] = (),
-    exclusive_marked: bool = False,
-) -> int:
-    """Atom whose height defines covalent contact for the orientation family."""
-    n_hat = _placement_normal_hat(normal)
-    heights = np.asarray(rotated_pos, dtype=float) @ n_hat
-    # Parallel / face-down: closest atom (often H on a ring).
-    if orientation_type == "parallel":
-        return int(np.argmin(heights))
-    # Binder-aligned (EN-down / round / vertical): prefer the binder.
-    # *en_atom_index* is an index into the merged binder list (policy
-    # semantics), not a raw atom index; resolve it the same way
-    # :func:`geom._surface_aligned_rotation` does.
-    binders = geom._binding_atom_candidates(
-        symbols, marked_indices, exclusive=exclusive_marked
-    )
-    if en_atom_index is not None and binders and 0 <= int(en_atom_index) < len(binders):
-        return int(binders[int(en_atom_index)])
-    if binders:
-        return int(min(binders, key=lambda i: float(heights[i])))
-    return int(np.argmin(heights))
-
-
 def _framework_plane_height(
     site: Site,
     positions: np.ndarray,
     n_hat: np.ndarray,
     *,
     reduce: Literal["max", "mean"] = "max",
+    cell: np.ndarray | None = None,
+    pbc: list[bool] | np.ndarray | None = None,
 ) -> float | None:
     """Height of coordinating framework atoms along *n_hat*, or ``None``.
 
     Site vertices from any plugin may already sit above their supports
     (topology lift, clearance snap, free-volume). Clearance and height
-    offsets must use this plane so lift is applied once.
+    offsets must use this plane so lift is applied once. Supports use
+    Cartesian MIC of ``site.xyz`` when *cell* / *pbc* are set.
 
     ``"max"`` clears every support (contact); ``"mean"`` is the NP shell ref.
     """
     if not site.slab_indices:
         return None
-    idx = np.asarray(site.slab_indices, dtype=int)
-    n_pos = len(positions)
-    idx = idx[(idx >= 0) & (idx < n_pos)]
-    if idx.size == 0:
+    supp = mic_support_positions(
+        site.xyz, positions, site.slab_indices, cell=cell, pbc=pbc
+    )
+    if len(supp) == 0:
         return None
-    heights = np.asarray(positions, dtype=float)[idx] @ _placement_normal_hat(n_hat)
+    heights = supp @ _placement_normal_hat(n_hat)
     if reduce == "mean":
         return float(np.mean(heights))
     return float(np.max(heights))
@@ -192,9 +167,13 @@ def _height_above_supports(
     *,
     reduce: Literal["max", "mean"] = "max",
     fallback: float,
+    cell: np.ndarray | None = None,
+    pbc: list[bool] | np.ndarray | None = None,
 ) -> float:
     """Support-plane height along *n_hat*, or *fallback* when supports are empty."""
-    fw = _framework_plane_height(site, positions, n_hat, reduce=reduce)
+    fw = _framework_plane_height(
+        site, positions, n_hat, reduce=reduce, cell=cell, pbc=pbc
+    )
     return float(fallback) if fw is None else fw
 
 
@@ -304,41 +283,6 @@ def _com_height_from_frame(
             _com_floor_on_support_plane(frame.rotated, frame.n_hat, frame.base_h),
         )
     return float(h_needed) + _CONTACT_CLEARANCE_PAD_ANGSTROM
-
-
-def _pairwise_contact_com_height(
-    rotated_pos: np.ndarray,
-    symbols: list[str],
-    *,
-    site_xyz: np.ndarray,
-    place_normal: np.ndarray,
-    slab_positions: np.ndarray,
-    slab_symbols: list[str],
-    cell: np.ndarray,
-    pbc: list[bool],
-    config: AdsorptionConfig,
-    clearance=None,
-    apply_anchor_floor: bool = True,
-) -> float:
-    """Smallest COM height along *place_normal* clearing every mol–slab pair.
-
-    Lateral seed is *site_xyz*; orientation is fixed in *rotated_pos* (COM-
-    centred). *clearance* defaults to the covalent contact gate. Height is
-    solved from MIC vectors at the support-plane seed so PBC images and
-    non-Cartesian normals stay consistent.
-    """
-    frame = _contact_frame(
-        rotated_pos,
-        site_xyz=site_xyz,
-        place_normal=place_normal,
-        slab_positions=slab_positions,
-        cell=cell,
-        pbc=pbc,
-    )
-    if frame.empty:
-        return frame.base_h
-    allowed = _allowed_clearances(symbols, slab_symbols, config, clearance)
-    return _com_height_from_frame(frame, allowed, apply_anchor_floor=apply_anchor_floor)
 
 
 def _mol_positions_at_com_height(
@@ -772,7 +716,15 @@ def _resolve_surface_ref(
         if site.kind == "void":
             return vertex_h, True
         return (
-            _height_above_supports(site, pos, n_hat, reduce="max", fallback=vertex_h),
+            _height_above_supports(
+                site,
+                pos,
+                n_hat,
+                reduce="max",
+                fallback=vertex_h,
+                cell=cell_arr,
+                pbc=material_aware_pbc(mat_type),
+            ),
             True,
         )
     # No site: Cartesian / radial fallback (stale site_index is the usual cause).

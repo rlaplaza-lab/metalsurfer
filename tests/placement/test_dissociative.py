@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from ase import Atoms
 from scipy.spatial import KDTree
 
 from metalsurfer.config import AdsorptionConfig
@@ -18,6 +19,7 @@ from metalsurfer.placement._constants import (
     _DISSOCIATIVE_MIN_FRAGMENT_SEP_FLOOR_ANGSTROM,
 )
 from metalsurfer.placement.dissociative import (
+    _compute_dissociative_site_pairs,
     _dissociative_pair_cache_key,
     _get_dissociative_site_pairs,
     _resolve_dissociative_site_entries,
@@ -95,6 +97,38 @@ def test_hollow_site_pairs_found_for_slab():
         <= seps[0]
         <= _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM
     )
+
+
+def test_porous_dissociative_places_fragment2_on_mic_image():
+    """Full-3D PBC pairs place xyz2 on the MIC image, not primary site_j."""
+    framework = Atoms(
+        "C2",
+        positions=[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+        cell=np.diag([10.0, 10.0, 10.0]),
+        pbc=True,
+    )
+    config = AdsorptionConfig(material_type="porous", skip_topology_check=True)
+
+    def _site(xyz: list[float]) -> Site:
+        return Site(
+            xyz=np.array(xyz, dtype=float),
+            normal=np.array([1.0, 0.0, 0.0]),
+            site_type="hollow",
+            slab_indices=(0,),
+            material_type="porous",
+            site_source="test",
+            env_fingerprint=(("C",), (0,), 0),
+        )
+
+    sites = [_site([0.5, 5.0, 5.0]), _site([8.5, 5.0, 5.0])]
+    pairs = _compute_dissociative_site_pairs(
+        framework, config, pre_resolved_sites=sites
+    )
+    assert pairs
+    pair = pairs[0]
+    sep = float(np.linalg.norm(np.asarray(pair.xyz2) - np.asarray(pair.xyz1)))
+    assert sep == pytest.approx(2.0, abs=1e-6)
+    assert float(np.linalg.norm(np.asarray(pair.xyz2) - sites[1].xyz)) > 5.0
 
 
 def test_dissociative_pairs_ignore_calculator_ttt_on_slabs():

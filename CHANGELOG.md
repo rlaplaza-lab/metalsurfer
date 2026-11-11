@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Catalog MIC distances share ``metalsurfer._geom_pbc.mic_point_distance``.
+- Adaptive-grid and rolling-probe engines share wall-near clearance / empty-
+  result / exposure helpers in ``site_wall_near_common``.
 - CPU parallelism defaults to ``n_jobs=-2`` (all but one CPU) everywhere:
   ``AdsorptionConfig``, site plugins / enumeration, Voronoi ridge enrich, and
   BO surrogate / transfer helpers share
@@ -50,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Support-plane anchors and placement heights use the Cartesian MIC of the
+  coordinating atoms. Full-3D periodic dissociative pairs place fragment 2 on
+  that image and gate on its length; slabs still gate on the in-plane part.
 - Voronoi ridge samples follow the Cartesian minimum-image edge. Slab
   clustering measures the in-plane part of that same vector and still requires
   matching height along the slab normal.
@@ -71,7 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- Unused helpers with no production callers: ``site_footprint_clearances``,
+- Unused helpers with no production callers: ``nearest_site_ids``,
+  ``site_context_for_occupied_surface``, ``_contact_atom_index``,
+  ``_pairwise_contact_com_height``, ``site_footprint_clearances``,
   ``project_sites_to_support_plane``, ``is_top_layer_planar``, and the private
   CSV-coerce, SMILES-fingerprint, adsorbate-RMSD, and hull-outside helpers.
 

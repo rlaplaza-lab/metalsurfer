@@ -27,6 +27,8 @@ def wall_near_batch_to_plugin(
         result.normals,
         list(result.atom_indices),
         positions,
+        cell=cell,
+        pbc=pbc,
     )
     return SiteCandidateBatch(
         vertices=vertices,

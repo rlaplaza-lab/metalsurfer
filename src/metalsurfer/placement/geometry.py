@@ -10,6 +10,7 @@ import numpy as np
 from ase import Atoms
 from ase.geometry import find_mic
 
+from .._geom_pbc import mic_point_distance
 from .._utils import cell_has_volume
 from ._constants import (
     _BINDER_ALIGNMENT_TARGET_DOT,
@@ -330,40 +331,6 @@ def _shell_tolerance(distance: float) -> float:
     )
 
 
-def _mic_distance(
-    origin: np.ndarray,
-    other: np.ndarray,
-    cell: np.ndarray,
-    pbc: Sequence[bool],
-) -> float:
-    """Minimum-image distance between two catalog points."""
-    _vec, dist = find_mic(
-        np.asarray(other - origin, dtype=float).reshape(1, 3),
-        cell,
-        pbc=pbc,
-    )
-    return float(dist[0])
-
-
-def nearest_site_ids(
-    origin: int,
-    positions: Mapping[int, np.ndarray],
-    cell: np.ndarray,
-    pbc: Sequence[bool],
-) -> list[int]:
-    """Other ids at *origin*'s minimum MIC distance, lowest id first.
-
-    Distances within :func:`_shell_tolerance` of that minimum are the same
-    shell. The window is wide enough that a 0.0001 Å shift does not split a
-    symmetric shell, and narrower than the next lattice spacing.
-    """
-    shell = _nearest_shell(int(origin), positions, cell, pbc)
-    if shell is None:
-        return []
-    _distance, neighbors = shell
-    return neighbors
-
-
 def _nearest_shell(
     origin: int,
     positions: Mapping[int, np.ndarray],
@@ -381,7 +348,7 @@ def _nearest_shell(
             continue
         scored.append(
             (
-                _mic_distance(origin_xyz, np.asarray(xyz, dtype=float), cell, pbc),
+                mic_point_distance(origin_xyz, np.asarray(xyz, dtype=float), cell, pbc),
                 int(sid),
             )
         )
@@ -489,7 +456,7 @@ def occupied_neighbor_counts(
             other_xyz = positions.get(other)
             if other_xyz is None:
                 continue
-            dist = _mic_distance(
+            dist = mic_point_distance(
                 origin_xyz, np.asarray(other_xyz, dtype=float), cell, pbc
             )
             if dist <= window:

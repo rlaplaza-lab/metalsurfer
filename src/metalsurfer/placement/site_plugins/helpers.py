@@ -30,6 +30,7 @@ from ..site_coords import (
     _shift_along_slab_normal,
     _slab_normal,
     _wrap_cartesian,
+    mic_support_positions,
     top_layer_mask_by_normal,
 )
 from ..site_np import (
@@ -312,13 +313,11 @@ def candidate_enrichment_frames(
             tuple(int(j) for j in atom_indices[i]) if i < len(atom_indices) else ()
         )
         if support:
-            pts = []
-            for j in support:
-                delta = pos[int(j)] - vert
-                if use_mic:
-                    delta = _minimum_image_cartesian_delta(delta, cell_arr, pbc_arr)
-                pts.append(vert + delta)
-            centroid = np.mean(np.asarray(pts, dtype=float), axis=0)
+            pts = mic_support_positions(vert, pos, support, cell=cell_arr, pbc=pbc_arr)
+            if len(pts) == 0:
+                fallback_idx.append(i)
+                continue
+            centroid = np.mean(pts, axis=0)
             lift = vert - centroid
             nrm = float(np.linalg.norm(lift))
             if nrm >= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
@@ -736,3 +735,20 @@ def slab_candidate_postprocess(
         normals=normals,
         clearances=clearances,
     )
+
+
+def slab_top_voronoi_inputs(
+    positions: np.ndarray,
+    cell: np.ndarray,
+    top_layer_tolerance: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(top_mask, top_atom_indices, voronoi_positions)`` for a slab.
+
+    When the top layer has at least four atoms, Voronoi runs on that subset;
+    otherwise it uses the full position array.
+    """
+    top_mask = top_layer_mask_by_normal(positions, cell, float(top_layer_tolerance))
+    top_atom_indices = np.nonzero(top_mask)[0]
+    top_only = positions[top_mask]
+    voronoi_positions = top_only if len(top_only) >= 4 else positions
+    return top_mask, top_atom_indices, voronoi_positions

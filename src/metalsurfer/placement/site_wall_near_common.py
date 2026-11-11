@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 from scipy.spatial import KDTree
 
+from .._geom_pbc import mic_point_distance
 from .._utils import cell_has_volume
-from ._constants import _VECTOR_NORM_EPS
+from ._constants import _ATOP_INJECTION_HEIGHT_FACTOR, _VECTOR_NORM_EPS
 from .site_coords import (
     _cart_to_frac,
-    _minimum_image_cartesian_delta,
     _periodic_image_offsets,
     _wrap_fractional,
 )
@@ -146,20 +146,7 @@ def _pair_within_radius(
     pbc: np.ndarray,
 ) -> bool:
     """Return True if *a* and *b* are within *radius* under triclinic-safe MIC."""
-    return _mic_distance(a, b, cell, pbc) <= float(radius) + 1e-12
-
-
-def _mic_distance(
-    a: np.ndarray,
-    b: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-) -> float:
-    delta = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
-    pbc_arr = np.asarray(pbc, dtype=bool)
-    if np.any(pbc_arr) and cell_has_volume(cell):
-        delta = _minimum_image_cartesian_delta(delta, cell, pbc_arr)
-    return float(np.linalg.norm(delta))
+    return mic_point_distance(a, b, cell, pbc) <= float(radius) + 1e-12
 
 
 def _nms_rank_order(
@@ -311,3 +298,77 @@ def _best_per_support_key(
         if prev is None or float(c.score) > float(prev.score):
             best[key] = c
     return list(best.values())
+
+
+def wall_near_clearance_window(
+    framework_radii: np.ndarray,
+    probe_radius: float,
+    max_site_distance: float,
+) -> tuple[float, float]:
+    """Map probe / max-site distances onto the element-aware clearance window."""
+    n_atoms = len(framework_radii)
+    mean_r = float(np.mean(framework_radii)) if n_atoms else 0.0
+    min_clearance = float(probe_radius) - mean_r
+    max_clearance = float(max_site_distance) - mean_r
+    if max_clearance < min_clearance:
+        max_clearance = min_clearance
+    return float(min_clearance), float(max_clearance)
+
+
+def shell_target_clearance(
+    min_clearance: float,
+    max_clearance: float,
+    median_nn: float,
+) -> float:
+    """Target clearance inside the accessibility window."""
+    if median_nn > 0.0:
+        target = 0.5 * float(median_nn) * _ATOP_INJECTION_HEIGHT_FACTOR
+    else:
+        target = 0.5 * (float(min_clearance) + float(max_clearance))
+    return float(np.clip(target, min_clearance, max_clearance))
+
+
+def candidates_to_arrays(
+    candidates: list[CandidateSite],
+    *,
+    tree: KDTree,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    list[tuple[int, ...]],
+    np.ndarray,
+]:
+    """Return verts, centre-to-centre nn, clearances, atoms, normals."""
+    if not candidates:
+        empty = np.empty((0, 3), dtype=float)
+        return (
+            empty,
+            np.empty(0, dtype=float),
+            np.empty(0, dtype=float),
+            [],
+            empty,
+        )
+    verts = np.asarray([c.position for c in candidates], dtype=float)
+    clear = np.asarray([c.clearance for c in candidates], dtype=float)
+    atoms = [c.support_indices for c in candidates]
+    normals = np.asarray([c.normal for c in candidates], dtype=float)
+    nn = np.asarray(tree.query(cast(Any, verts), k=1)[0], dtype=float).ravel()
+    return verts, nn, clear, atoms, normals
+
+
+def empty_adaptive_grid_result(
+    *,
+    spacing: AdaptiveGridSpacing,
+    accessibility_tree: KDTree,
+) -> AdaptiveGridResult:
+    """Empty catalog with the caller's spacing / accessibility tree."""
+    return AdaptiveGridResult(
+        vertices=np.empty((0, 3), dtype=float),
+        nn_dists=np.empty(0, dtype=float),
+        clearances=np.empty(0, dtype=float),
+        atom_indices=[],
+        normals=np.empty((0, 3), dtype=float),
+        spacing=spacing,
+        accessibility_tree=accessibility_tree,
+    )

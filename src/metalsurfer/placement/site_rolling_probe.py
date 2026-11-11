@@ -26,7 +26,6 @@ from .._utils import cell_has_volume
 from ._constants import (
     _ADAPTIVE_GRID_DEFAULT_SPACING,
     _ADAPTIVE_GRID_EXPOSURE_N_STEPS,
-    _ADAPTIVE_GRID_EXPOSURE_STEP,
     _ROLLING_PROBE_ATOP_SAMPLES,
     _ROLLING_PROBE_BRIDGE_SAMPLES,
     _ROLLING_PROBE_BURY_CN,
@@ -40,12 +39,10 @@ from ._parallel import DEFAULT_N_JOBS, resolve_materialize_workers
 from .geometry import framework_radii_from_symbols
 from .site_adaptive_grid import (
     _candidate_geometry_score,
-    _candidates_to_arrays,
+    _exposure_mask,
     _framework_median_nn,
     _image_shift_for_index,
     _local_surface_normal,
-    _ray_exposure_mask,
-    _shell_target_clearance,
     _support_positions_for_candidate,
     adaptive_grid_spacing,
 )
@@ -62,8 +59,11 @@ from .site_wall_near_common import (
     SidePolicy,
     _best_per_support_key,
     _merge_by_radius,
-    _side_policy_mask,
+    candidates_to_arrays,
+    empty_adaptive_grid_result,
     resolve_side_policy_for_pbc,
+    shell_target_clearance,
+    wall_near_clearance_window,
 )
 
 _SOURCE_HINT = "rolling_probe"
@@ -464,45 +464,6 @@ def _finalize_rolling_contacts(
     return _merge_by_radius(unique, cell=cell, pbc=pbc, merge_radius=merge_radius)
 
 
-def _exposure_for_pbc(
-    vertices: np.ndarray,
-    normals: np.ndarray,
-    tree: KDTree,
-    framework_radii: np.ndarray,
-    n_atoms: int,
-    *,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-    side_policy: SidePolicy,
-    positions: np.ndarray,
-) -> np.ndarray:
-    """Ray exposure + side policy; shorter rays under full 3D PBC."""
-    n_periodic = int(np.count_nonzero(np.asarray(pbc, dtype=bool).reshape(3)))
-    n_steps = (
-        int(_ROLLING_PROBE_POROUS_EXPOSURE_N_STEPS)
-        if n_periodic == 3
-        else int(_ADAPTIVE_GRID_EXPOSURE_N_STEPS)
-    )
-    keep = _ray_exposure_mask(
-        vertices,
-        normals,
-        tree,
-        framework_radii,
-        n_atoms,
-        step=float(_ADAPTIVE_GRID_EXPOSURE_STEP),
-        n_steps=n_steps,
-    )
-    keep &= _side_policy_mask(
-        normals,
-        cell=cell,
-        pbc=pbc,
-        side_policy=side_policy,
-        vertices=vertices,
-        positions=positions,
-    )
-    return keep
-
-
 def generate_rolling_probe_sites(
     positions: np.ndarray,
     cell: np.ndarray,
@@ -544,11 +505,9 @@ def generate_rolling_probe_sites(
                 f"framework_radii length {len(framework_radii)} != n_atoms {n_atoms}"
             )
 
-    mean_r = float(np.mean(framework_radii)) if n_atoms else 0.0
-    min_clearance = float(probe_radius) - mean_r
-    max_clearance = float(max_site_distance) - mean_r
-    if max_clearance < min_clearance:
-        max_clearance = min_clearance
+    min_clearance, max_clearance = wall_near_clearance_window(
+        framework_radii, float(probe_radius), float(max_site_distance)
+    )
 
     median_nn = _framework_median_nn(positions, cell, pbc)
     spacing = adaptive_grid_spacing(
@@ -563,19 +522,11 @@ def generate_rolling_probe_sites(
         pbc,
         float(max_site_distance) + (float(np.max(framework_radii)) if n_atoms else 0.0),
     )
-    empty = AdaptiveGridResult(
-        vertices=np.empty((0, 3), dtype=float),
-        nn_dists=np.empty(0, dtype=float),
-        clearances=np.empty(0, dtype=float),
-        atom_indices=[],
-        normals=np.empty((0, 3), dtype=float),
-        spacing=spacing,
-        accessibility_tree=tree,
-    )
+    empty = empty_adaptive_grid_result(spacing=spacing, accessibility_tree=tree)
     if n_atoms == 0:
         return empty
 
-    skin = _shell_target_clearance(min_clearance, max_clearance, median_nn)
+    skin = shell_target_clearance(min_clearance, max_clearance, median_nn)
     skin = max(float(skin), max(float(min_clearance), 0.05))
     atop_dirs = _fibonacci_sphere(_ROLLING_PROBE_ATOP_SAMPLES)
 
@@ -626,8 +577,14 @@ def generate_rolling_probe_sites(
     if not candidates:
         return empty
 
-    verts, _nn, _clears, _, normals = _candidates_to_arrays(candidates, tree=tree)
-    keep = _exposure_for_pbc(
+    verts, _nn, _clears, _, normals = candidates_to_arrays(candidates, tree=tree)
+    n_periodic = int(np.count_nonzero(np.asarray(pbc, dtype=bool).reshape(3)))
+    n_steps = (
+        int(_ROLLING_PROBE_POROUS_EXPOSURE_N_STEPS)
+        if n_periodic == 3
+        else int(_ADAPTIVE_GRID_EXPOSURE_N_STEPS)
+    )
+    keep = _exposure_mask(
         verts,
         normals,
         tree,
@@ -637,6 +594,7 @@ def generate_rolling_probe_sites(
         pbc=pbc,
         side_policy=side_policy,
         positions=positions,
+        n_steps=n_steps,
     )
     candidates = [c for c, k in zip(candidates, keep, strict=True) if k]
     if not candidates:
@@ -650,9 +608,7 @@ def generate_rolling_probe_sites(
     )
     if not clustered:
         return empty
-    verts, nn_dists, clears, atoms, normals = _candidates_to_arrays(
-        clustered, tree=tree
-    )
+    verts, nn_dists, clears, atoms, normals = candidates_to_arrays(clustered, tree=tree)
     return AdaptiveGridResult(
         vertices=verts,
         nn_dists=nn_dists,

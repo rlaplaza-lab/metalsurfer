@@ -18,7 +18,6 @@ from metalsurfer.placement.site_context import (
     _SITE_CONTEXT_CACHE,
     _get_unique_sites_for_specs,
     resolve_site_context_for_sampling,
-    site_context_for_occupied_surface,
     site_context_for_sampling,
     skip_symmetry_for_sampling,
 )
@@ -462,12 +461,12 @@ def test_occupied_surface_samples_full_lattice_and_drops_occupied_sites():
     ads = Atoms("H", positions=[occupied.xyz + np.array([0.0, 0.0, 0.2])])
     full = slab.copy() + ads
 
-    expanded = site_context_for_occupied_surface(reduced)
-    assert expanded.source == "clustered_under_coverage"
-    assert [_site_xyz_type_key(s) for s in expanded.sites] == [
-        _site_xyz_type_key(s) for s in reduced.clustered_sites
-    ]
-    assert site_context_for_occupied_surface(expanded) is expanded
+    expanded = site_context_for_sampling(slab, config, reduced, full_slab=full)
+    assert len(expanded.sites) >= len(reduced.clustered_sites)
+    assert [
+        _site_xyz_type_key(s) for s in expanded.sites[: len(reduced.clustered_sites)]
+    ] == [_site_xyz_type_key(s) for s in reduced.clustered_sites]
+    assert site_context_for_sampling(slab, config, expanded, full_slab=full) is expanded
 
     info = _spec_grid_info(
         [make_water()], slab, config, "O", site_context=reduced, full_slab=full
@@ -504,8 +503,7 @@ def test_occupied_surface_samples_full_lattice_and_drops_occupied_sites():
         if len(reduced.sites) <= s.site_index < len(reduced.clustered_sites)
     ]
     assert wide, "enumerated specs must index into the clustered lattice"
-    # Pose indexes the sampling catalog as-is; pass the expanded lattice.
-    sampling = site_context_for_occupied_surface(reduced)
+    sampling = site_context_for_sampling(slab, config, reduced, full_slab=full)
     placed = generate_placement_from_spec(
         wide[0],
         [make_water()],
