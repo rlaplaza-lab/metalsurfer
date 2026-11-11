@@ -81,10 +81,12 @@ class TestComputationContext:
         )
 
     def test_default_settings_hash_pinned(self):
-        assert ComputationContext().settings_hash() == "a6171bb9d88c"
+        assert ComputationContext().settings_hash() == "80193d9cd8af"
 
     def test_from_config(self):
-        config = AdsorptionConfig(model_name="test-model", fmax=0.03, seed=123)
+        config = AdsorptionConfig(
+            material_type="slab", model_name="test-model", fmax=0.03, seed=123
+        )
         ctx = ComputationContext.from_config(config)
         assert ctx.model_name == "test-model"
         assert ctx.task_name == "oc25"
@@ -93,7 +95,9 @@ class TestComputationContext:
         assert ctx.seed == 123
 
         custom = ComputationContext.from_config(
-            AdsorptionConfig(model_name="test-model", task_name="oc20")
+            AdsorptionConfig(
+                material_type="slab", model_name="test-model", task_name="oc20"
+            )
         )
         assert custom.task_name == "oc20"
 
@@ -600,6 +604,7 @@ class TestRecordReplay:
     def test_record_to_config(self):
         r = make_placement_record()
         cfg = AdsorptionConfig(
+            material_type="slab",
             symmetry_tolerance=0.2,
             site_equivalence_tolerance=0.06,
             planar_z_variance_threshold=0.04,

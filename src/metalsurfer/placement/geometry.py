@@ -849,7 +849,7 @@ def _mol_slab_contact_arrays(
     molecule_atoms: Atoms,
     slab: Atoms,
     *,
-    material_type: str = "slab",
+    material_type: str,
     exclude_slab_atoms: int | None = None,
     pairwise_distances: np.ndarray | None = None,
     slab_scratch: _SlabDistanceScratch | None = None,
@@ -891,7 +891,7 @@ def detect_vdw_overlaps(
     molecule_atoms: Atoms,
     slab: Atoms,
     *,
-    material_type: str = "slab",
+    material_type: str,
     vdw_scale: float = 1.0,
     exclude_slab_atoms: int | None = None,
     pairwise_distances: np.ndarray | None = None,
@@ -962,7 +962,7 @@ def calculate_contact_quality(
     contact_covalent_scale: float = _CONTACT_QUALITY_COVALENT_SUM_SCALE,
     exclude_slab_atoms: int | None = None,
     *,
-    material_type: str = "slab",
+    material_type: str,
     pairwise_distances: np.ndarray | None = None,
 ) -> dict[str, float | int]:
     """Contact metrics: min distance, covalent ratio at closest pair, and pair counts.
@@ -1141,7 +1141,7 @@ def check_initial_placement_distance(
     vdw_overlap_scale: float = 1.0,
     exclude_slab_atoms: int | None = None,
     *,
-    material_type: str = "slab",
+    material_type: str,
     pairwise_distances: np.ndarray | None = None,
     slab_scratch: _SlabDistanceScratch | None = None,
 ) -> tuple[bool, float, str | None]:
@@ -1242,7 +1242,7 @@ def check_initial_contact_quality(
     min_contact_atoms: int = 1,
     contact_covalent_scale: float = _CONTACT_QUALITY_COVALENT_SUM_SCALE,
     exclude_slab_atoms: int | None = None,
-    material_type: str = "slab",
+    material_type: str,
     pairwise_distances: np.ndarray | None = None,
 ) -> tuple[bool, str]:
     """Return contact-quality gate result as ``(ok, reason_token)``.

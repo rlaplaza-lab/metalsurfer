@@ -646,7 +646,11 @@ def _place_dissociative_two_sites(
     result.set_pbc(pbc)
 
     fail_reason = _validate_posed_adsorbate(
-        result, slab, config, slab_for_sites=slab_for_sites
+        result,
+        slab,
+        config,
+        slab_for_sites=slab_for_sites,
+        material_type=config.material_type,
     )
     if fail_reason is not None:
         return None

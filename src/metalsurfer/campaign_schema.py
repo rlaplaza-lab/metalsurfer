@@ -187,6 +187,10 @@ def parse_campaign_dict(data: dict[str, Any]) -> CampaignDocument:
         raise ValueError("config must be a mapping when provided")
     _validate_config_keys(config_raw)
     config_payload = dict(config_raw)
+    if "material_type" not in config_payload:
+        raise ValueError(
+            "config.material_type is required; pass 'slab', 'nanoparticle', or 'porous'"
+        )
     # Nested ``bo:`` / ``bo.transfer:`` only (flat ``bo_*`` keys are rejected).
     config_payload["bo"] = fold_bo_config(config_payload)
     config = AdsorptionConfig(**config_payload)

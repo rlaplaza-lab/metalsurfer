@@ -91,6 +91,7 @@ from .mlip_marks import gpu_mlip_test
 def _mock_saturation_config(**kwargs) -> AdsorptionConfig:
     """AdsorptionConfig for mocked saturation loops without real adsorbate geometries."""
     return AdsorptionConfig(
+        material_type="slab",
         num_placements=100,
         saturation_discard_topology_rearrangements=False,
         **kwargs,
@@ -443,7 +444,9 @@ def test_load_molecules_broken_saturation_summary_warns(workdir, caplog, break_s
 def test_save_saturation_results_empty_list_returns_early(workdir):
     """save_saturation_results with empty list returns without writing."""
     setup_directories(["empty_test"])
-    save_saturation_results([], surface_type="empty_test", config=AdsorptionConfig())
+    save_saturation_results(
+        [], surface_type="empty_test", config=AdsorptionConfig(material_type="slab")
+    )
     assert not (workdir / "results_empty_test" / "saturation_summary.csv").exists()
 
 
@@ -459,7 +462,9 @@ def test_save_saturation_results_warns_on_multiple_single_results(workdir, caplo
     setup_directories(["multi_single_test"])
     with caplog.at_level(logging.WARNING, logger="metalsurfer.io_results"):
         save_saturation_results(
-            [sr, sr], surface_type="multi_single_test", config=AdsorptionConfig()
+            [sr, sr],
+            surface_type="multi_single_test",
+            config=AdsorptionConfig(material_type="slab"),
         )
     assert any(
         re.search(r"received 2 single-molecule", r.message) for r in caplog.records
@@ -511,7 +516,9 @@ def test_save_saturation_results_writes_csv_and_xyz(workdir):
     )
     setup_directories(["saturation_test"])
     save_saturation_results(
-        [sr], surface_type="saturation_test", config=AdsorptionConfig()
+        [sr],
+        surface_type="saturation_test",
+        config=AdsorptionConfig(material_type="slab"),
     )
     output_dir = workdir / "results_saturation_test"
     summary_path = output_dir / "saturation_summary.csv"
@@ -596,7 +603,7 @@ def test_save_saturation_results_writes_vasp_when_enabled(workdir):
         n_molecules_at_saturation=1,
         final_slab_atoms=combined.copy(),
     )
-    cfg = AdsorptionConfig(write_vasp_inputs=True)
+    cfg = AdsorptionConfig(material_type="slab", write_vasp_inputs=True)
     save_saturation_results([sr], surface_type="saturation_vasp_test", config=cfg)
     output_dir = workdir / "results_saturation_vasp_test"
     assert_paths_exist(
@@ -637,7 +644,7 @@ def test_save_saturation_results_skips_all_placements_when_disabled(workdir):
         final_slab_atoms=combined.copy(),
     )
     setup_directories(["saturation_no_placements"])
-    cfg = AdsorptionConfig(saturation_save_all_placements=False)
+    cfg = AdsorptionConfig(material_type="slab", saturation_save_all_placements=False)
     save_saturation_results([sr], surface_type="saturation_no_placements", config=cfg)
     output_dir = workdir / "results_saturation_no_placements"
     assert not (output_dir / "saturation_placements_detailed.csv").exists()
@@ -703,7 +710,11 @@ def test_saturation_validate_posed_adsorbate_overlap_reason():
     water.set_positions(pos)
     covered = slab + water
     reason = _validate_posed_adsorbate(
-        water.copy(), covered, AdsorptionConfig(), slab_for_sites=slab
+        water.copy(),
+        covered,
+        AdsorptionConfig(material_type="slab"),
+        slab_for_sites=slab,
+        material_type="slab",
     )
     assert reason == "adsorbate_overlap"
 
@@ -909,7 +920,7 @@ def test_saturation_symmetry_uses_substrate_prefix_not_adsorbates():
             positions=[[1.0, 1.0, float(np.max(base.positions[:, 2])) + 2.0]],
         )
     )
-    substrate = _build_surface_reference_slab(covered, base)
+    substrate = _build_surface_reference_slab(covered, base, material_type="slab")
     assert not _saturation_symmetry_broken_vs_reference(
         substrate,
         base,
@@ -989,7 +1000,7 @@ def test_estimate_placement_spec_capacity_positive():
     slab = make_slab()
     # minimal linear molecule (CO-like)
     linear = Atoms("CO", positions=[[0.0, 0.0, 0.0], [1.13, 0.0, 0.0]])
-    config = AdsorptionConfig(num_conformers=1, num_placements=50)
+    config = AdsorptionConfig(material_type="slab", num_conformers=1, num_placements=50)
     score = estimate_placement_spec_capacity([linear], slab, config, smiles="[C-]#[O+]")
     assert score >= 1.0
 
@@ -997,7 +1008,7 @@ def test_estimate_placement_spec_capacity_positive():
 def test_estimate_placement_spec_capacity_more_conformers_higher_score():
     """More conformers always give a higher capacity score (n_conformers is a direct multiplier)."""
     slab = make_slab()
-    config = AdsorptionConfig(num_conformers=3, num_placements=50)
+    config = AdsorptionConfig(material_type="slab", num_conformers=3, num_placements=50)
 
     mol = make_h2()
 
@@ -1803,7 +1814,9 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
 
     setup_directories(["multi_mol_io_test"])
     save_multi_mol_saturation_results(
-        result, surface_type="multi_mol_io_test", config=AdsorptionConfig()
+        result,
+        surface_type="multi_mol_io_test",
+        config=AdsorptionConfig(material_type="slab"),
     )
 
     output_dir = workdir / "results_multi_mol_io_test"
@@ -1876,7 +1889,9 @@ def test_save_multi_mol_saturation_results_writes_csv(workdir):
         molecule_counts={"ethanol": 1, "methanol": 0},
     )
     save_multi_mol_saturation_results(
-        other, surface_type="multi_mol_io_test", config=AdsorptionConfig()
+        other,
+        surface_type="multi_mol_io_test",
+        config=AdsorptionConfig(material_type="slab"),
     )
     summary_after = pd.read_csv(summary_path)
     labels = set(summary_after["molecules"].astype(str))
@@ -1916,7 +1931,9 @@ def test_save_saturation_results_dispatches_multi_mol(workdir):
     )
     setup_directories(["saturation_dispatch_mm"])
     save_saturation_results(
-        [result], surface_type="saturation_dispatch_mm", config=AdsorptionConfig()
+        [result],
+        surface_type="saturation_dispatch_mm",
+        config=AdsorptionConfig(material_type="slab"),
     )
     out = workdir / "results_saturation_dispatch_mm"
     assert (out / "saturation_summary.csv").exists()
@@ -1931,7 +1948,9 @@ def test_save_saturation_results_persists_mixed_sequence(workdir):
     multi = make_multi_mol_saturation_run(molecules=["ethanol", "methanol"])
     setup_directories(["mixed_sat_save"])
     save_saturation_results(
-        [multi, single], surface_type="mixed_sat_save", config=AdsorptionConfig()
+        [multi, single],
+        surface_type="mixed_sat_save",
+        config=AdsorptionConfig(material_type="slab"),
     )
     summary = pd.read_csv(workdir / "results_mixed_sat_save" / "saturation_summary.csv")
     labels: set[str] = set()
@@ -1975,7 +1994,7 @@ def _slab_with_two_waters(*, separated: bool) -> tuple[Atoms, Atoms, Atoms]:
 
 def test_saturation_topology_guard_validates_separated_waters():
     slab, _first, combined = _slab_with_two_waters(separated=True)
-    config = AdsorptionConfig(connectivity_multiplier=1.3)
+    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
     ok, reason = _saturation_adsorbate_topology_ok(
         combined,
         base_slab_len=len(slab),
@@ -1990,7 +2009,7 @@ def test_saturation_topology_guard_is_connectivity_only():
     # Remove one H from the second adsorbate unit: still two fragments, but
     # per-fragment SMILES checks would reject this against ["O", "O"].
     mismatched_units = separated[:-1]
-    config = AdsorptionConfig(connectivity_multiplier=1.3)
+    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
     ok, reason = _saturation_adsorbate_topology_ok(
         mismatched_units,
         base_slab_len=len(slab),
@@ -2003,7 +2022,7 @@ def test_saturation_topology_guard_is_connectivity_only():
 
 def test_saturation_topology_guard_rejects_coupled_waters():
     slab, _first, combined = _slab_with_two_waters(separated=False)
-    config = AdsorptionConfig(connectivity_multiplier=1.3)
+    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
     ok, reason = _saturation_adsorbate_topology_ok(
         combined,
         base_slab_len=len(slab),
@@ -2017,7 +2036,7 @@ def test_saturation_topology_guard_rejects_coupled_waters():
 def test_filter_saturation_topology_results_keeps_lower_energy_intact():
     slab, slab_plus_one, separated = _slab_with_two_waters(separated=True)
     _, _, coupled = _slab_with_two_waters(separated=False)
-    config = AdsorptionConfig(connectivity_multiplier=1.3)
+    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
     bad = make_screening_result(
         molecule="water",
         placement_id=0,
@@ -2050,6 +2069,7 @@ def test_saturation_topology_guard_disabled_preserves_ranking():
     slab, _, coupled = _slab_with_two_waters(separated=False)
     _, _, separated = _slab_with_two_waters(separated=True)
     config = AdsorptionConfig(
+        material_type="slab",
         connectivity_multiplier=1.3,
         saturation_discard_topology_rearrangements=False,
     )
@@ -2087,7 +2107,7 @@ def test_saturation_step2_selects_intact_not_rearranged(monkeypatch):
     bare, slab_plus_one, _ = _slab_with_two_waters(separated=True)
     _, _, coupled = _slab_with_two_waters(separated=False)
     _, _, separated = _slab_with_two_waters(separated=True)
-    config = AdsorptionConfig(connectivity_multiplier=1.3)
+    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
 
     call_count = [0]
 
@@ -2161,6 +2181,7 @@ def test_multi_mol_saturation_topology_guard_step2(monkeypatch):
     _, _, coupled = _slab_with_two_waters(separated=False)
     _, _, separated = _slab_with_two_waters(separated=True)
     config = AdsorptionConfig(
+        material_type="slab",
         multi_molecule_saturation=True,
         connectivity_multiplier=1.3,
         num_placements=100,
@@ -2289,7 +2310,7 @@ def test_saturation_topology_guard_all_filtered_stops(monkeypatch, caplog):
     slab = SlabContainer(make_slab())
     bare, slab_plus_one, _ = _slab_with_two_waters(separated=True)
     _, _, coupled = _slab_with_two_waters(separated=False)
-    config = AdsorptionConfig(connectivity_multiplier=1.3)
+    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
 
     call_count = [0]
 
@@ -2392,6 +2413,7 @@ def test_single_mol_saturation_resolves_workload_config_once(monkeypatch):
         slab,
         molecules="unused.csv",
         config=AdsorptionConfig(
+            material_type="slab",
             num_placements=None,
             saturation_max_steps=2,
             saturation_discard_topology_rearrangements=False,
@@ -2876,7 +2898,9 @@ def test_save_multi_mol_saturation_details_one_row_per_tuplet_winner(workdir):
 
     setup_directories(["tuplet_io_test"])
     save_multi_mol_saturation_results(
-        result, surface_type="tuplet_io_test", config=AdsorptionConfig()
+        result,
+        surface_type="tuplet_io_test",
+        config=AdsorptionConfig(material_type="slab"),
     )
 
     details_df = pd.read_csv(
@@ -2940,7 +2964,9 @@ def test_save_saturation_details_one_row_per_tuplet_winner_single_path(workdir):
 
     setup_directories(["tuplet_io_single_test"])
     save_saturation_results(
-        [run], surface_type="tuplet_io_single_test", config=AdsorptionConfig()
+        [run],
+        surface_type="tuplet_io_single_test",
+        config=AdsorptionConfig(material_type="slab"),
     )
 
     details_df = pd.read_csv(
@@ -2985,6 +3011,7 @@ def test_single_mol_n_tuplet_divides_autotuned_budget(monkeypatch):
         slab,
         molecules="unused.csv",
         config=AdsorptionConfig(
+            material_type="slab",
             num_placements=None,
             saturation_molecules_per_step=2,
             saturation_max_steps=1,

@@ -76,7 +76,7 @@ def test_adaptive_grid_accepted_on_adsorption_config():
     for policy in ("all", "positive", "negative", "external"):
         AdsorptionConfig(side_policy=policy, material_type="slab")
     with pytest.raises(ValueError, match="adaptive_grid_nms_framework_scale"):
-        AdsorptionConfig(adaptive_grid_nms_framework_scale=0.0)
+        AdsorptionConfig(material_type="slab", adaptive_grid_nms_framework_scale=0.0)
 
 
 def test_adaptive_grid_spacing_rejects_non_positive_absolute():
@@ -728,35 +728,23 @@ def test_adaptive_grid_same_path_on_all_materials():
         assert all(s.tangent_basis is not None for s in sites)
 
 
-def test_resolve_side_policy_follows_pbc_not_material_label():
-    from metalsurfer.placement.site_adaptive_grid import resolve_side_policy_for_pbc
-
-    assert resolve_side_policy_for_pbc([True, True, False], "positive") == "positive"
-    assert resolve_side_policy_for_pbc([False, False, False], "positive") == "external"
-    assert resolve_side_policy_for_pbc([True, True, True], "positive") == "all"
-    assert resolve_side_policy_for_pbc([True, False, False], "positive") == "all"
-    assert resolve_side_policy_for_pbc([True, True, True], "negative") == "negative"
-    assert resolve_side_policy_for_pbc([False, False, False], "all") == "all"
-
-
 @pytest.mark.parametrize("plugin", ["adaptive_grid", "rolling_probe"])
-def test_wall_near_plugins_follow_structure_pbc(plugin):
-    """Wall-near plugins use atoms.get_pbc(), not material_aware_pbc alone."""
+def test_wall_near_rejects_slab_with_ttt_pbc(plugin):
+    """A slab whose PBC is [T,T,T] must raise; flags are never rewritten."""
+    from metalsurfer.exceptions import GeometryValidationError
+
     slab = make_slab()
     ttf = get_unified_sites(slab, material_type="slab", site_generator=plugin, n_jobs=1)
+    assert ttf
     ttt = slab.copy()
     ttt.set_pbc([True, True, True])
-    both_faces = get_unified_sites(
-        ttt, material_type="slab", site_generator=plugin, n_jobs=1
-    )
-    assert ttf and both_faces
-    # Full 3D PBC remaps default positive → all, so both vacuum faces survive.
-    assert len(both_faces) >= len(ttf)
+    with pytest.raises(GeometryValidationError, match="inconsistent with"):
+        get_unified_sites(ttt, material_type="slab", site_generator=plugin, n_jobs=1)
 
 
 @pytest.mark.parametrize("plugin", ["adaptive_grid", "rolling_probe"])
 def test_wall_near_cluster_pbc_keeps_outward_sites(plugin):
-    """No-PBC structures remap positive → external (COM outward)."""
+    """Nanoparticle (no PBC) keeps COM-outward sites; side_policy is ignored."""
     np_atoms = make_nanoparticle()
     assert not any(np_atoms.get_pbc())
     sites = get_unified_sites(

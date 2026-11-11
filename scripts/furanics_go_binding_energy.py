@@ -87,6 +87,7 @@ def main() -> int:
     results_dir = f"results_{results_subdir}"
 
     config = AdsorptionConfig(
+        material_type="slab",
         slab_relaxation_mode="none",
         model_name="uma-s-1p1",
         task_name="oc20",

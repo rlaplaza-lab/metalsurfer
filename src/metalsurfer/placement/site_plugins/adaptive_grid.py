@@ -28,7 +28,6 @@ class AdaptiveGridGenerator:
 
     name = "adaptive_grid"
     widens_distance_window = False
-    uses_structure_pbc = True
 
     def generate(
         self,

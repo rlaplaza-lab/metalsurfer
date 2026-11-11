@@ -17,7 +17,10 @@ from itertools import product
 
 import numpy as np
 
-from ._numeric_defaults import SURFACE_NORMAL_FALLBACK_NORM_EPS
+from ._numeric_defaults import (
+    SLAB_VACUUM_FACE_MARGIN_ANG,
+    SURFACE_NORMAL_FALLBACK_NORM_EPS,
+)
 from ._utils import cell_has_volume
 
 
@@ -280,6 +283,32 @@ def slab_normal(cell: np.ndarray) -> np.ndarray:
     if norm_n < SURFACE_NORMAL_FALLBACK_NORM_EPS:
         return np.array([0.0, 0.0, 1.0])
     return n / norm_n
+
+
+def slab_vacuum_face_sign(positions: np.ndarray, cell: np.ndarray) -> float:
+    """Return ``+1`` if more vacuum lies toward ``+slab_normal``, else ``-1``.
+
+    Gaps are atomic height vs cell extent along ``a×b``. The lower face wins
+    only when its vacuum exceeds the upper by ``SLAB_VACUUM_FACE_MARGIN_ANG``.
+    """
+    pos = np.asarray(positions, dtype=float).reshape(-1, 3)
+    cell_arr = np.asarray(cell, dtype=float)
+    n_hat = slab_normal(cell_arr)
+    if pos.size == 0:
+        return 1.0
+    heights = pos @ n_hat
+    corners = np.asarray(list(product((0.0, 1.0), repeat=3)), dtype=float) @ cell_arr
+    c = corners @ n_hat
+    vac_plus = float(np.max(c)) - float(np.max(heights))
+    vac_minus = float(np.min(heights)) - float(np.min(c))
+    if vac_minus > vac_plus + SLAB_VACUUM_FACE_MARGIN_ANG:
+        return -1.0
+    return 1.0
+
+
+def slab_outward_normal(positions: np.ndarray, cell: np.ndarray) -> np.ndarray:
+    """Return the unit normal pointing toward the vacuum-richer slab face."""
+    return slab_vacuum_face_sign(positions, cell) * slab_normal(cell)
 
 
 def height_along_slab_normal(points: np.ndarray, cell: np.ndarray) -> np.ndarray:

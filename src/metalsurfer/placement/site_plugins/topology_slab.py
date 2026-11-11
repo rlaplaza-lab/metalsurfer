@@ -30,7 +30,6 @@ class TopologySlabGenerator:
 
     name = "topology"
     widens_distance_window = True
-    uses_structure_pbc = False
 
     def generate(
         self,

@@ -39,7 +39,7 @@ _SYMMETRY_PAIR_CHUNK_BYTES = 16 * 1024 * 1024
 # Prefer KDTree orbit matching once catalogs exceed this size.
 _SYMMETRY_KDTREE_MIN_SITES = 32
 
-SymmetryMode = Literal["auto", "periodic", "cluster"]
+SymmetryMode = Literal["periodic", "cluster"]
 
 
 class SymmetryAnalysisError(RuntimeError):
@@ -53,7 +53,7 @@ class SymmetryAnalyzer:
         self,
         atoms: Atoms,
         symmetry_tolerance: float = DEFAULT_SYMMETRY_TOLERANCE,
-        mode: SymmetryMode = "auto",
+        mode: SymmetryMode = "periodic",
         *,
         angle_tolerance: float | None = None,
     ):
@@ -66,7 +66,9 @@ class SymmetryAnalyzer:
         symmetry_tolerance
             Tolerance for symmetry detection.
         mode
-            Symmetry mode ("auto", "periodic", or "cluster").
+            Symmetry mode (``"periodic"`` or ``"cluster"``). Callers pass
+            :func:`~metalsurfer.placement._material.symmetry_mode_for_material`;
+            mode is never inferred from ``atoms.get_pbc()``.
         angle_tolerance
             Optional angle tolerance.
         """
@@ -80,15 +82,12 @@ class SymmetryAnalyzer:
         self.symbols = atoms.get_chemical_symbols()
         self.numbers = np.array(atoms.get_atomic_numbers(), dtype=int)
 
-        if mode == "auto":
-            pbc_arr = np.asarray(self.pbc, dtype=bool)
-            self._mode: Literal["periodic", "cluster"] = (
-                "cluster" if not np.any(pbc_arr) else "periodic"
-            )
-        elif mode == "cluster":
-            self._mode = "cluster"
-        else:
+        if mode == "cluster":
+            self._mode: Literal["periodic", "cluster"] = "cluster"
+        elif mode == "periodic":
             self._mode = "periodic"
+        else:
+            raise ValueError(f"mode must be 'periodic' or 'cluster', got {mode!r}")
 
         self._lattice: np.ndarray
         self._fractional: np.ndarray

@@ -16,6 +16,7 @@ def main():
 
     # Create Ni(111) slab from Materials Project mp-23.
     config = AdsorptionConfig(
+        material_type="slab",
         model_name="uma-m-1p1",
         task_name="oc20",
         num_placements=250,

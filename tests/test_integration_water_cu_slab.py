@@ -44,7 +44,7 @@ def test_run_adsorption_water_on_cu111(workdir):
 
     slab = prepare_substrate(
         slab=apply_surface_constraints(
-            fcc111("Cu", size=(3, 3, 3), a=3.6, vacuum=10.0)
+            fcc111("Cu", size=(3, 3, 3), a=3.6, vacuum=10.0), material_type="slab"
         ),
         config=config,
         results_dir="results_test_water_cu_slab",
@@ -139,7 +139,7 @@ def test_water_cu_run_twice_reproducible(workdir):
     )
     slab = prepare_substrate(
         slab=apply_surface_constraints(
-            fcc111("Cu", size=(3, 3, 3), a=3.6, vacuum=10.0)
+            fcc111("Cu", size=(3, 3, 3), a=3.6, vacuum=10.0), material_type="slab"
         ),
         config=config,
         results_dir="results_water_cu_repro",

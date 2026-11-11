@@ -103,6 +103,7 @@ def test_validate_initial_placement_geometry_with_strict_config():
 
     # max_closest_approach: max allowed closest-approach distance
     config = AdsorptionConfig(
+        material_type="slab",
         strict_initial_placement=True,
         min_contact_atoms=1,
         max_closest_approach=3.0,
@@ -137,6 +138,7 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
     water.set_pbc(slab.get_pbc())
 
     config = AdsorptionConfig(
+        material_type="slab",
         strict_initial_placement=True,
         max_closest_approach=3.0,
         contact_covalent_scale=1.35,
@@ -219,8 +221,10 @@ def test_saturation_finalize_rejects_adsorbate_overlap():
 
     # New adsorbate coincident with pre-adsorbed water → adsorbate_overlap.
     clash = water.copy()
-    config = AdsorptionConfig()
-    reason = _validate_posed_adsorbate(clash, covered, config, slab_for_sites=slab)
+    config = AdsorptionConfig(material_type="slab")
+    reason = _validate_posed_adsorbate(
+        clash, covered, config, slab_for_sites=slab, material_type="slab"
+    )
     assert reason == "adsorbate_overlap"
 
     # Far from prior adsorbate but above substrate → not adsorbate_overlap.
@@ -229,7 +233,9 @@ def test_saturation_finalize_rejects_adsorbate_overlap():
     far_pos[:, 0] += 6.0
     far_pos[:, 1] += 6.0
     far.set_positions(far_pos)
-    reason_far = _validate_posed_adsorbate(far, covered, config, slab_for_sites=slab)
+    reason_far = _validate_posed_adsorbate(
+        far, covered, config, slab_for_sites=slab, material_type="slab"
+    )
     assert reason_far != "adsorbate_overlap"
 
 
@@ -252,8 +258,10 @@ def test_validate_posed_adsorbate_uses_material_pbc(monkeypatch):
         slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
     )
     covered = slab + water
-    config = AdsorptionConfig()
-    _validate_posed_adsorbate(water, covered, config, slab_for_sites=slab)
+    config = AdsorptionConfig(material_type="slab")
+    _validate_posed_adsorbate(
+        water, covered, config, slab_for_sites=slab, material_type="slab"
+    )
     assert captured["material_type"] == "slab"
     assert captured["cell"] is not None
     np.testing.assert_allclose(captured["cell"], slab.get_cell())
@@ -262,6 +270,7 @@ def test_validate_posed_adsorbate_uses_material_pbc(monkeypatch):
 def test_strict_initial_placement_e2e_reason():
     slab = make_slab()
     config = AdsorptionConfig(
+        material_type="slab",
         num_conformers=1,
         num_placements=12,
         seed=1,
@@ -379,15 +388,23 @@ def test_placement_specs_deterministic_across_runs(
         **extra_cfg,
     }
     specs_a = enumerate_placement_specs(
-        [mol], slab, AdsorptionConfig(**cfg_kwargs), smiles, n_desired=n_desired
+        [mol],
+        slab,
+        AdsorptionConfig(**{"material_type": "slab", **cfg_kwargs}),
+        smiles,
+        n_desired=n_desired,
     )
     specs_b = enumerate_placement_specs(
-        [mol], slab, AdsorptionConfig(**cfg_kwargs), smiles, n_desired=n_desired
+        [mol],
+        slab,
+        AdsorptionConfig(**{"material_type": "slab", **cfg_kwargs}),
+        smiles,
+        n_desired=n_desired,
     )
     specs_c = enumerate_placement_specs(
         [mol],
         slab,
-        AdsorptionConfig(**{**cfg_kwargs, "seed": 99}),
+        AdsorptionConfig(**{"material_type": "slab", **{**cfg_kwargs, "seed": 99}}),
         smiles,
         n_desired=n_desired,
     )
@@ -500,12 +517,13 @@ def test_validate_posed_adsorbate_single_mic_with_strict(monkeypatch):
         slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
     )
     config = AdsorptionConfig(
+        material_type="slab",
         strict_initial_placement=True,
         min_initial_distance=0.3,
         contact_covalent_scale=1.35,
         max_closest_approach=0.5,
     )
-    _validate_posed_adsorbate(water, slab, config)
+    _validate_posed_adsorbate(water, slab, config, material_type="slab")
     # Distance gate and contact-quality gate must share ONE MIC matrix.
     assert calls["n"] == 1
 
@@ -517,11 +535,13 @@ def test_validate_posed_adsorbate_scratch_equivalence():
     water = place_adsorbate_above_slab(
         slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
     )
-    config = AdsorptionConfig()
-    reason_no_scratch = _validate_posed_adsorbate(water, slab, config)
+    config = AdsorptionConfig(material_type="slab")
+    reason_no_scratch = _validate_posed_adsorbate(
+        water, slab, config, material_type="slab"
+    )
     scratch = _build_slab_distance_scratch(slab, None, "slab")
     reason_scratch = _validate_posed_adsorbate(
-        water, slab, config, slab_scratch=scratch
+        water, slab, config, slab_scratch=scratch, material_type="slab"
     )
     assert reason_no_scratch == reason_scratch
     assert reason_no_scratch is None
@@ -537,7 +557,7 @@ def test_check_initial_placement_distance_reuses_slab_scratch():
     water = place_adsorbate_above_slab(
         slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
     )
-    config = AdsorptionConfig()
+    config = AdsorptionConfig(material_type="slab")
 
     scratch = _build_slab_distance_scratch(slab, None, "slab")
     assert scratch.slab_cov_r is not None
@@ -1130,7 +1150,7 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex(source):
         cell=[3 * a, 3 * a, 20.0],
         pbc=[True, True, False],
     )
-    slab = apply_surface_constraints(slab)
+    slab = apply_surface_constraints(slab, material_type="slab")
     config = AdsorptionConfig(
         material_type="slab",
         seed=0,

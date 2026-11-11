@@ -49,8 +49,8 @@ def test_site_context_cache_keys_differ_by_symmetry_broken():
     assert ctx_broken is not ctx_intact
 
 
-def test_unique_sites_cache_key_uses_material_aware_pbc_not_ase_pbc():
-    """ASE calculator PBC vs material PBC must share one unique-sites entry."""
+def test_unique_sites_cache_key_includes_atoms_pbc():
+    """Every generator hashes atoms PBC; TTF vs TTT are distinct keys."""
     from metalsurfer.placement.site_context import (
         _get_unique_sites_for_specs,
         _unique_sites_cache_key,
@@ -62,12 +62,10 @@ def test_unique_sites_cache_key_uses_material_aware_pbc_not_ase_pbc():
     slab_calc.set_pbc([True, True, True])
     config = AdsorptionConfig(material_type="slab")
 
-    assert _unique_sites_cache_key(slab_mat, config) == _unique_sites_cache_key(
+    assert _unique_sites_cache_key(slab_mat, config) != _unique_sites_cache_key(
         slab_calc, config
     )
     _get_unique_sites_for_specs(slab_mat, config)
-    assert len(_SITE_CONTEXT_CACHE) == 1
-    _get_unique_sites_for_specs(slab_calc, config)
     assert len(_SITE_CONTEXT_CACHE) == 1
 
     # Different material_type must still split the cache.
@@ -77,23 +75,19 @@ def test_unique_sites_cache_key_uses_material_aware_pbc_not_ase_pbc():
     )
 
 
-def test_unique_sites_cache_key_structure_pbc_for_wall_plugins():
-    """adaptive_grid and rolling_probe follow Atoms.pbc; topology does not."""
+def test_unique_sites_cache_key_atoms_pbc_for_all_plugins():
+    """Topology, adaptive_grid, and rolling_probe all key on atoms PBC."""
     from metalsurfer.placement.site_context import _unique_sites_cache_key
 
     slab_tt = make_slab(nx=2, ny=2)
     slab_tt.set_pbc([True, True, False])
     slab_ttt = slab_tt.copy()
     slab_ttt.set_pbc([True, True, True])
-    for plugin in ("adaptive_grid", "rolling_probe"):
+    for plugin in ("topology", "adaptive_grid", "rolling_probe"):
         cfg = AdsorptionConfig(material_type="slab", site_generator=plugin)
         assert _unique_sites_cache_key(slab_tt, cfg) != _unique_sites_cache_key(
             slab_ttt, cfg
         )
-    topology = AdsorptionConfig(material_type="slab", site_generator="topology")
-    assert _unique_sites_cache_key(slab_tt, topology) == _unique_sites_cache_key(
-        slab_ttt, topology
-    )
 
 
 def test_unique_sites_cache_key_includes_site_generator():
@@ -281,7 +275,7 @@ def test_surface_reference_uses_prefix_not_symbols():
     # Same-element adatom appended as suffix.
     decorated = base.copy()
     decorated.extend(Atoms("Ru", positions=[[1.0, 1.0, 10.0]]))
-    ref = _build_surface_reference_slab(decorated, base)
+    ref = _build_surface_reference_slab(decorated, base, material_type="slab")
     assert len(ref) == len(base)
     assert len(ref) == len(decorated) - 1
 

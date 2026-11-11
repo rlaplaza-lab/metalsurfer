@@ -4,10 +4,12 @@ Run-Mode Functions
 These are the canonical high-level entry points for adsorption screening.
 All are importable directly from :mod:`metalsurfer`.
 
-Substrates must be campaign-ready before calling these functions: correct PBC
-for ``AdsorptionConfig.material_type``, slab alignment when applicable, and
-(typically) ASE ``FixAtoms`` from prep. Freeze policy is set during substrate
-preparation only — not via ``AdsorptionConfig`` or these ``run_*`` kwargs.
+Substrates must be campaign-ready before calling these functions:
+``AdsorptionConfig.material_type`` is required and must match the substrate
+ASE PBC mask (slab ``[T,T,F]``, nanoparticle ``[F,F,F]``, porous ``[T,T,T]``),
+plus slab alignment when applicable and (typically) ASE ``FixAtoms`` from prep.
+Freeze policy is set during substrate preparation only — not via
+``AdsorptionConfig`` or these ``run_*`` kwargs.
 Omitting FixAtoms is allowed (campaigns warn; the substrate stays fully mobile).
 Use :func:`~metalsurfer.surface_prep.prepare_substrate` or
 :func:`~metalsurfer.surface_prep.finalize_substrate` as described in

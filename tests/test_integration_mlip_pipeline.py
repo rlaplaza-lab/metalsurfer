@@ -48,7 +48,9 @@ def _pt13_icosahedron():
 
 def _local_ru_001_slab() -> Atoms:
     """Local Ru(0001) slab via ASE hcp0001 (fcc111 needs an explicit a for Ru)."""
-    return apply_surface_constraints(hcp0001("Ru", size=(4, 4, 3), vacuum=10.0))
+    return apply_surface_constraints(
+        hcp0001("Ru", size=(4, 4, 3), vacuum=10.0), material_type="slab"
+    )
 
 
 def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:

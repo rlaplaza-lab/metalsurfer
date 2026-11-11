@@ -64,7 +64,7 @@ class TestSlabContainer:
 
     def test_create_slab_from_atoms_copies(self):
         atoms = make_slab()
-        sc = create_slab_from_atoms(atoms)
+        sc = create_slab_from_atoms(atoms, material_type="slab")
         assert isinstance(sc, SlabContainer)
         # should be a copy, not the same object
         assert sc.atoms is not atoms
@@ -161,7 +161,7 @@ class TestSlabZAlignment:
             supercell=(1, 1, 1),
             results_dir=str(tmp_path),
             relaxation_mode="none",
-            config=AdsorptionConfig(),
+            config=AdsorptionConfig(material_type="slab"),
         )
         assert float(np.min(slab.atoms.get_positions()[:, 2])) == pytest.approx(0.0)
 
@@ -199,7 +199,7 @@ class TestSlabZAlignment:
                 miller_indices=(1, 1, 1),
                 supercell=(1, 1, 1),
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_create_slab_from_bulk_missing_src_id_raises(self, monkeypatch, tmp_path):
@@ -239,7 +239,7 @@ class TestSlabZAlignment:
                 miller_indices=(1, 1, 0),
                 supercell=(1, 1, 1),
                 results_dir=str(tmp_path),
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_create_slab_from_bulk_relaxation_requires_calculator(
@@ -283,7 +283,7 @@ class TestSlabZAlignment:
                 supercell=(1, 1, 1),
                 results_dir=tmpdir,
                 relaxation_mode="full",
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
 
@@ -305,7 +305,7 @@ class TestSubstituteAlloy:
                 "Cu",
                 guest_fraction=0.0,
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
         syms = result.atoms.get_chemical_symbols()
         assert all(s == "Ru" for s in syms)
@@ -319,7 +319,7 @@ class TestSubstituteAlloy:
                 "Cu",
                 guest_fraction=1.0,
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
         syms = result.atoms.get_chemical_symbols()
         assert all(s == "Cu" for s in syms)
@@ -334,7 +334,7 @@ class TestSubstituteAlloy:
                 "Cu",
                 guest_fraction=0.25,
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
         syms = result.atoms.get_chemical_symbols()
         n_cu = syms.count("Cu")
@@ -349,7 +349,7 @@ class TestSubstituteAlloy:
             guest_fraction=0.33,
             seed=seed,
             results_dir=results_dir,
-            config=AdsorptionConfig(),
+            config=AdsorptionConfig(material_type="slab"),
         )
 
     def test_deterministic_with_same_seed(self, tmp_path):
@@ -363,7 +363,7 @@ class TestSubstituteAlloy:
     def test_uses_config_seed_by_default(self, tmp_path):
         slab1 = self._ru_slab()
         slab2 = self._ru_slab()
-        cfg = AdsorptionConfig(seed=77)
+        cfg = AdsorptionConfig(material_type="slab", seed=77)
         with _scratch(tmp_path) as tmpdir:
             r1 = substitute_alloy(
                 slab1, "Ru", "Cu", guest_fraction=0.33, config=cfg, results_dir=tmpdir
@@ -375,7 +375,7 @@ class TestSubstituteAlloy:
                 guest_fraction=0.33,
                 seed=77,
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
         assert r1.atoms.get_chemical_symbols() == r2.atoms.get_chemical_symbols()
 
@@ -388,7 +388,7 @@ class TestSubstituteAlloy:
                 "Cu",
                 guest_fraction=0.5,
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
             assert os.path.exists(os.path.join(tmpdir, "clean_Ru_Cu_50_slab.xyz"))
             assert not os.path.exists(
@@ -397,7 +397,7 @@ class TestSubstituteAlloy:
 
     def test_writes_poscar_when_enabled(self, tmp_path):
         slab = self._ru_slab()
-        cfg = AdsorptionConfig(write_vasp_inputs=True)
+        cfg = AdsorptionConfig(material_type="slab", write_vasp_inputs=True)
         with _scratch(tmp_path) as tmpdir:
             substitute_alloy(
                 slab,
@@ -419,7 +419,7 @@ class TestSubstituteAlloy:
                 "Sn",
                 guest_fraction=0.5,
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
             # guest_fraction of 0 host atoms = 0 replacements → returns base
             assert all(s == "Cu" for s in result.atoms.get_chemical_symbols())
@@ -429,7 +429,11 @@ class TestSubstituteAlloy:
         slab = self._ru_slab()
         with pytest.raises(ValueError, match="guest_fraction must be between 0 and 1"):
             substitute_alloy(
-                slab, "Ru", "Cu", guest_fraction=bad_fraction, config=AdsorptionConfig()
+                slab,
+                "Ru",
+                "Cu",
+                guest_fraction=bad_fraction,
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_accepts_plain_atoms_input(self, tmp_path):
@@ -442,7 +446,7 @@ class TestSubstituteAlloy:
                 guest_fraction=0.25,
                 seed=42,
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
         assert isinstance(result, SlabContainer)
         assert result.atoms.get_chemical_symbols().count("Cu") > 0
@@ -478,7 +482,7 @@ class TestSubstituteAlloy:
                 relax=True,
                 calculator=_FakeCalculator(),
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_wraps_non_optimization_runtime_error(self, monkeypatch, tmp_path):
@@ -523,7 +527,7 @@ class TestSubstituteAlloy:
                 calculator=calc,
                 n_variants=1,
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_ranking_preserves_batch_failure_cause(self, monkeypatch, tmp_path):
@@ -557,7 +561,7 @@ class TestSubstituteAlloy:
                 calculator=_AlwaysFailCalc(),
                 n_variants=2,
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
         assert exc_info.value.__cause__ is batch_err
 
@@ -590,7 +594,7 @@ class TestSubstituteAlloy:
                 calculator=_GoodCalc(),
                 n_variants=2,
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
         assert result.atoms.get_chemical_symbols().count("Cu") > 0
 
@@ -665,7 +669,7 @@ def test_relax_slab_structure_propagates_dependency_missing():
 
 
 class TestDepositAdatoms:
-    _NO_RELAX_CFG = AdsorptionConfig(slab_relaxation_mode="none")
+    _NO_RELAX_CFG = AdsorptionConfig(material_type="slab", slab_relaxation_mode="none")
 
     def _layered_slab(self):
         return SlabContainer(make_slab(nx=4, ny=4, n_layers=3))
@@ -764,7 +768,9 @@ class TestDepositAdatoms:
 
     def test_writes_poscar_when_enabled(self, tmp_path):
         slab = self._layered_slab()
-        cfg = AdsorptionConfig(write_vasp_inputs=True, slab_relaxation_mode="none")
+        cfg = AdsorptionConfig(
+            material_type="slab", write_vasp_inputs=True, slab_relaxation_mode="none"
+        )
         with _scratch(tmp_path) as tmpdir:
             deposit_adatoms(
                 slab,
@@ -778,7 +784,9 @@ class TestDepositAdatoms:
     def test_uses_config_seed_by_default(self, tmp_path):
         slab1 = self._layered_slab()
         slab2 = self._layered_slab()
-        cfg = AdsorptionConfig(seed=77, slab_relaxation_mode="none")
+        cfg = AdsorptionConfig(
+            material_type="slab", seed=77, slab_relaxation_mode="none"
+        )
         with _scratch(tmp_path) as tmpdir:
             r1 = deposit_adatoms(
                 slab1, "Sn", coverage_fraction=0.3, config=cfg, results_dir=tmpdir
@@ -802,7 +810,10 @@ class TestDepositAdatoms:
             ValueError, match="coverage_fraction must be between 0 and 1"
         ):
             deposit_adatoms(
-                slab, "Sn", coverage_fraction=bad_fraction, config=AdsorptionConfig()
+                slab,
+                "Sn",
+                coverage_fraction=bad_fraction,
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_zero_coverage_applies_constraints_without_adatoms(self):
@@ -810,7 +821,10 @@ class TestDepositAdatoms:
         n_before = len(slab.atoms)
         syms_before = slab.atoms.get_chemical_symbols()
         result = deposit_adatoms(
-            slab, "Sn", coverage_fraction=0.0, config=AdsorptionConfig()
+            slab,
+            "Sn",
+            coverage_fraction=0.0,
+            config=AdsorptionConfig(material_type="slab"),
         )
         assert len(result.atoms) == n_before
         assert result.atoms.get_chemical_symbols() == syms_before
@@ -874,7 +888,7 @@ class TestDepositAdatoms:
                 "Sn",
                 coverage_fraction=0.2,
                 relaxation_mode="full",
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_relaxation_invoked_for_variants(self, monkeypatch, tmp_path):
@@ -917,7 +931,7 @@ class TestDepositAdatoms:
                 n_variants=3,
                 relaxation_mode="full",
                 relaxation_steps=12,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
         assert len(calls) == 3
         assert all(mode == "full" for mode, _, _ in calls)
@@ -943,7 +957,7 @@ class TestCombinedModifiers:
                 guest_fraction=0.25,
                 seed=42,
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
             n_cu = alloyed.atoms.get_chemical_symbols().count("Cu")
             assert n_cu > 0
@@ -956,7 +970,7 @@ class TestCombinedModifiers:
                 seed=42,
                 relaxation_mode="none",
                 results_dir=tmpdir,
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
             assert len(decorated.atoms) > n_original
             syms = set(decorated.atoms.get_chemical_symbols())
@@ -1112,7 +1126,7 @@ class TestValidateSubstrate:
             cell=[3, 3, 20],
             pbc=[True, True, False],
         )
-        atoms = apply_surface_constraints(atoms)
+        atoms = apply_surface_constraints(atoms, material_type="slab")
         mol = Atoms("C2", positions=[[0, 0, 0], [5, 0, 0]])
         with pytest.raises(
             GeometryValidationError, match="auto_resize_substrate_for_molecule"
@@ -1131,7 +1145,7 @@ class TestValidateSubstrate:
             cell=[[0.0, 0.0, 0.0], [0, 3, 0], [0, 0, 20]],
             pbc=[True, True, False],
         )
-        atoms = apply_surface_constraints(atoms)
+        atoms = apply_surface_constraints(atoms, material_type="slab")
         with pytest.raises(GeometryValidationError, match="degenerate"):
             validate_substrate(
                 atoms,

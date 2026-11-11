@@ -124,6 +124,7 @@ def test_run_saturation_bo_passes_bo_enabled_and_preserves_multi_molecule(monkey
         slab=object(),
         molecules="demo.csv",
         config=AdsorptionConfig(
+            material_type="slab",
             multi_molecule_saturation=True,
         ),
         surface_type="demo",
@@ -173,7 +174,9 @@ def test_run_saturation_passes_config_to_save_saturation_results(monkeypatch):
         lambda surface_types, **kwargs: None,
     )
 
-    cfg = AdsorptionConfig(seed=999, saturation_save_all_placements=False)
+    cfg = AdsorptionConfig(
+        material_type="slab", seed=999, saturation_save_all_placements=False
+    )
     campaign = run_saturation(
         slab=object(),
         molecules=[("C", "demo")],
@@ -221,7 +224,7 @@ def test_run_saturation_save_benchmark_dataset(monkeypatch, multi_mol, expected_
         lambda surface_types, **kwargs: None,
     )
 
-    cfg = AdsorptionConfig(save_benchmark_dataset=True)
+    cfg = AdsorptionConfig(material_type="slab", save_benchmark_dataset=True)
     run_saturation(
         slab=object(),
         molecules=[("C", "demo")],
@@ -269,7 +272,7 @@ def test_run_saturation_write_settings_persists_json(workdir, monkeypatch):
     campaign = run_saturation(
         slab=object(),
         molecules=[("C", "demo")],
-        config=AdsorptionConfig(seed=1),
+        config=AdsorptionConfig(material_type="slab", seed=1),
         surface_type="st_meta",
         skip_existing=False,
         write_settings=True,
@@ -325,7 +328,7 @@ def test_run_adsorption_csv_path_unified_with_inline(workdir, monkeypatch):
     campaign = run_adsorption(
         slab=slab_container,
         molecules=str(csv_path),
-        config=AdsorptionConfig(seed=1),
+        config=AdsorptionConfig(material_type="slab", seed=1),
         surface_type="csv_demo",
         skip_existing=False,
         write_settings=False,
@@ -371,7 +374,7 @@ def test_run_adsorption_skip_existing_inline_list(workdir, monkeypatch):
     campaign = run_adsorption(
         slab=slab_container,
         molecules=[("O", "water"), ("CCO", "ethanol")],
-        config=AdsorptionConfig(seed=1),
+        config=AdsorptionConfig(material_type="slab", seed=1),
         surface_type="skip_inline",
         skip_existing=True,
         save_results=False,
@@ -394,7 +397,7 @@ def test_run_adsorption_warns_when_all_skipped(workdir):
         campaign = run_adsorption(
             slab=object(),
             molecules=[("O", "water")],
-            config=AdsorptionConfig(seed=1),
+            config=AdsorptionConfig(material_type="slab", seed=1),
             surface_type=surface_type,
             skip_existing=True,
             save_results=False,
@@ -435,7 +438,7 @@ def test_run_saturation_skip_existing_inline_list(workdir, monkeypatch):
             ("C", "CO2"),
             ("CCO", "ethanol"),
         ],
-        config=AdsorptionConfig(seed=1),
+        config=AdsorptionConfig(material_type="slab", seed=1),
         surface_type=surface_type,
         skip_existing=True,
         save_results=False,
@@ -471,7 +474,7 @@ def test_run_saturation_logs_when_all_skipped(workdir, monkeypatch, caplog):
         campaign = run_saturation(
             slab=slab_container,
             molecules=[("O", "water"), ("CCO", "ethanol")],
-            config=AdsorptionConfig(seed=1),
+            config=AdsorptionConfig(material_type="slab", seed=1),
             surface_type=surface_type,
             skip_existing=True,
             save_results=False,
@@ -494,7 +497,7 @@ def test_run_adsorption_warns_when_input_empty(workdir):
         campaign = run_adsorption(
             slab=object(),
             molecules=str(csv_path),
-            config=AdsorptionConfig(seed=1),
+            config=AdsorptionConfig(material_type="slab", seed=1),
             surface_type="empty_input",
             skip_existing=False,
             save_results=False,
@@ -537,7 +540,7 @@ def test_run_saturation_write_settings_includes_campaign_metadata(monkeypatch):
     run_saturation(
         slab=object(),
         molecules=[("C", "demo")],
-        config=AdsorptionConfig(seed=1),
+        config=AdsorptionConfig(material_type="slab", seed=1),
         surface_type="st_meta_settings",
         skip_existing=False,
         write_settings=True,
@@ -583,7 +586,7 @@ def test_run_adsorption_save_results_false_skips_disk_writes(workdir, monkeypatc
     campaign = run_adsorption(
         slab=slab_container,
         molecules=str(csv_path),
-        config=AdsorptionConfig(seed=1),
+        config=AdsorptionConfig(material_type="slab", seed=1),
         surface_type="no_save_csv",
         skip_existing=False,
         save_results=False,
@@ -620,7 +623,7 @@ def test_bootstrap_screening_run_validates_substrate_before_model(monkeypatch):
         _bootstrap_screening_run(
             object(),
             [("C", "demo")],
-            AdsorptionConfig(),
+            AdsorptionConfig(material_type="slab"),
         )
     assert model_called["value"] is False
 
@@ -632,7 +635,9 @@ def test_bootstrap_screening_run_reuses_torchsim_calculator(monkeypatch):
     from metalsurfer.workflow.shared import _bootstrap_screening_run
     from tests.conftest import make_slab
 
-    config = AdsorptionConfig(model_name="uma-s-1p1", device="cpu", task_name="oc20")
+    config = AdsorptionConfig(
+        material_type="slab", model_name="uma-s-1p1", device="cpu", task_name="oc20"
+    )
     fake_model = object()
     calc = TorchSimCalculator(
         fake_model,
@@ -725,7 +730,9 @@ def test_bootstrap_screening_run_reloads_on_model_mismatch(monkeypatch):
     bootstrap = _bootstrap_screening_run(
         slab,
         [("C", "demo")],
-        AdsorptionConfig(model_name="uma-s-1p2", device="cpu", task_name="oc25"),
+        AdsorptionConfig(
+            material_type="slab", model_name="uma-s-1p2", device="cpu", task_name="oc25"
+        ),
     )
     assert setup_called["value"] is True
     assert bootstrap.calculator is fresh_calc
@@ -763,7 +770,7 @@ def test_write_settings_alone_writes_timing_metadata(workdir, monkeypatch):
     run_adsorption(
         slab=slab_container,
         molecules=[("C", "demo")],
-        config=AdsorptionConfig(seed=1),
+        config=AdsorptionConfig(material_type="slab", seed=1),
         surface_type="meta_or",
         skip_existing=False,
         write_settings=True,

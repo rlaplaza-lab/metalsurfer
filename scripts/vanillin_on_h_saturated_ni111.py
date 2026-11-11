@@ -51,6 +51,7 @@ def main():
     saturated_atoms = read(saturated_xyz)
 
     config = AdsorptionConfig(
+        material_type="slab",
         model_name="uma-m-1p1",
         task_name="oc20",
         num_placements=250,

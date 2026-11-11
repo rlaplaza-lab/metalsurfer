@@ -29,35 +29,39 @@ from .conftest import make_slab
 
 def test_valid_device_values():
     for device in ("cuda", "cpu", "cuda:0", "cuda:3"):
-        cfg = AdsorptionConfig(device=device)
+        cfg = AdsorptionConfig(material_type="slab", device=device)
         assert cfg.device == device
 
 
 @pytest.mark.parametrize("device", ["gpu", "", "CUDA", "cuda:abc", "cuda:-1"])
 def test_invalid_device_raises(device):
     with pytest.raises(ValueError, match="device"):
-        AdsorptionConfig(device=device)
+        AdsorptionConfig(material_type="slab", device=device)
 
 
 def test_positive_int_rejects_bool():
     with pytest.raises(ValueError, match="positive integer"):
-        AdsorptionConfig(num_conformers=True)
+        AdsorptionConfig(material_type="slab", num_conformers=True)
 
 
 def test_initial_distance_order_validated():
     with pytest.raises(ValueError, match="min_initial_distance must be <="):
-        AdsorptionConfig(min_initial_distance=5.0, max_initial_distance=2.0)
+        AdsorptionConfig(
+            material_type="slab", min_initial_distance=5.0, max_initial_distance=2.0
+        )
 
 
 def test_strict_contact_window_rejects_empty_admissible_range():
     with pytest.raises(ValueError, match="empty admissible contact window"):
         AdsorptionConfig(
+            material_type="slab",
             strict_initial_placement=True,
             min_initial_distance=2.0,
             max_closest_approach=1.0,
         )
     with pytest.raises(ValueError, match="empty admissible contact window"):
         AdsorptionConfig(
+            material_type="slab",
             require_multiple_contact=True,
             min_initial_distance=3.0,
             max_closest_approach=1.0,
@@ -65,7 +69,7 @@ def test_strict_contact_window_rejects_empty_admissible_range():
 
 
 def test_default_config():
-    config = AdsorptionConfig()
+    config = AdsorptionConfig(material_type="slab")
     assert config.model_name == "uma-s-1p2"
     assert config.task_name == "oc25"
     assert config.dispersion == "none"
@@ -114,51 +118,51 @@ def test_default_config():
 
 def test_placement_retry_oversample_max_rejects_below_one():
     with pytest.raises(ValueError, match="placement_retry_oversample_max"):
-        AdsorptionConfig(placement_retry_oversample_max=0.5)
+        AdsorptionConfig(material_type="slab", placement_retry_oversample_max=0.5)
 
 
 def test_placement_fill_clamp_to_capacity_defaults_true():
-    config = AdsorptionConfig()
+    config = AdsorptionConfig(material_type="slab")
     assert config.placement_fill_clamp_to_capacity is True
 
 
 def test_placement_materialize_workers_rejects_zero():
     with pytest.raises(ValueError, match="placement_materialize_workers"):
-        AdsorptionConfig(placement_materialize_workers=0)
+        AdsorptionConfig(material_type="slab", placement_materialize_workers=0)
 
 
 def test_placement_materialize_workers_rejects_non_int():
     with pytest.raises(ValueError, match="placement_materialize_workers"):
-        AdsorptionConfig(placement_materialize_workers=-2.0)  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", placement_materialize_workers=-2.0)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="placement_materialize_workers"):
-        AdsorptionConfig(placement_materialize_workers=True)  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", placement_materialize_workers=True)  # type: ignore[arg-type]
 
 
 def test_n_jobs_validation_and_inheritance():
     """Global n_jobs validates like placement_materialize_workers and is inherited."""
-    assert AdsorptionConfig().n_jobs == -2
+    assert AdsorptionConfig(material_type="slab").n_jobs == -2
     with pytest.raises(ValueError, match=r"\bn_jobs\b"):
-        AdsorptionConfig(n_jobs=0)
+        AdsorptionConfig(material_type="slab", n_jobs=0)
     with pytest.raises(ValueError, match=r"\bn_jobs\b"):
-        AdsorptionConfig(n_jobs=-1.5)  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", n_jobs=-1.5)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match=r"\bn_jobs\b"):
-        AdsorptionConfig(n_jobs=True)  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", n_jobs=True)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match=r"\bn_jobs\b"):
-        AdsorptionConfig(n_jobs=4.0)  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", n_jobs=4.0)  # type: ignore[arg-type]
 
 
 def test_seed_rejects_non_int():
     with pytest.raises(ValueError, match="seed"):
-        AdsorptionConfig(seed=42.0)  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", seed=42.0)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="seed"):
-        AdsorptionConfig(seed=True)  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", seed=True)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="seed"):
-        AdsorptionConfig(seed="42")  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", seed="42")  # type: ignore[arg-type]
 
 
 def test_numeric_defaults_single_source_of_truth():
     """Config, ML context, symmetry, and placement share the same defaults."""
-    cfg = AdsorptionConfig()
+    cfg = AdsorptionConfig(material_type="slab")
     ctx = ComputationContext()
     assert ctx.min_initial_distance == cfg.min_initial_distance
     assert ctx.min_contact_ratio == cfg.min_contact_ratio
@@ -202,6 +206,7 @@ def test_numeric_defaults_single_source_of_truth():
 
 def test_valid_custom_config():
     config = AdsorptionConfig(
+        material_type="slab",
         num_conformers=5,
         num_placements=50,
         fmax=0.01,
@@ -223,30 +228,40 @@ def test_valid_custom_config():
     ],
 )
 def test_bool_config_default_and_override(field, default, override):
-    assert getattr(AdsorptionConfig(), field) is default
-    assert getattr(AdsorptionConfig(**{field: override}), field) is override
+    assert getattr(AdsorptionConfig(material_type="slab"), field) is default
+    assert (
+        getattr(
+            AdsorptionConfig(**{"material_type": "slab", **{field: override}}), field
+        )
+        is override
+    )
 
 
 def test_site_classification_method_auto_default_and_invalid():
-    assert AdsorptionConfig().site_classification_method == "auto"
-    c = AdsorptionConfig(site_classification_method="auto")
+    assert AdsorptionConfig(material_type="slab").site_classification_method == "auto"
+    c = AdsorptionConfig(material_type="slab", site_classification_method="auto")
     assert c.site_classification_method == "auto"
     with pytest.raises(ValueError, match="site_classification_method"):
-        AdsorptionConfig(site_classification_method="invalid")
+        AdsorptionConfig(material_type="slab", site_classification_method="invalid")
 
 
 def test_site_generator_auto_default_and_invalid():
-    assert AdsorptionConfig().site_generator == "auto"
+    assert AdsorptionConfig(material_type="slab").site_generator == "auto"
     cfg = AdsorptionConfig(site_generator="topology", material_type="slab")
     assert cfg.site_generator == "topology"
     with pytest.raises(ValueError, match="site_generator"):
-        AdsorptionConfig(site_generator="invalid")
+        AdsorptionConfig(material_type="slab", site_generator="invalid")
     cfg_ag = AdsorptionConfig(site_generator="adaptive_grid", material_type="porous")
     assert cfg_ag.site_generator == "adaptive_grid"
     with pytest.raises(ValueError, match="incompatible"):
         AdsorptionConfig(site_generator="topology", material_type="porous")
     with pytest.raises(ValueError, match="incompatible"):
         AdsorptionConfig(site_generator="voronoi", material_type="nanoparticle")
+
+
+def test_material_type_required():
+    with pytest.raises(ValueError, match="material_type is required"):
+        AdsorptionConfig()
 
 
 @pytest.mark.parametrize("material_type", ["invalid", "bulk", "molecule"])
@@ -256,19 +271,21 @@ def test_material_type_invalid_rejected(material_type):
 
 
 def test_ts_optimizer_defaults():
-    config = AdsorptionConfig()
+    config = AdsorptionConfig(material_type="slab")
     assert config.ts_optimizer == "fire"
     assert config.steps_between_swaps == 5
 
 
 def test_ts_optimizer_custom():
-    config = AdsorptionConfig(ts_optimizer="lbfgs", steps_between_swaps=10)
+    config = AdsorptionConfig(
+        material_type="slab", ts_optimizer="lbfgs", steps_between_swaps=10
+    )
     assert config.ts_optimizer == "lbfgs"
     assert config.steps_between_swaps == 10
 
 
 def test_slab_relaxation_defaults():
-    config = AdsorptionConfig()
+    config = AdsorptionConfig(material_type="slab")
     assert config.slab_relaxation_mode == "ionic_only"
     assert config.slab_relaxation_optimizer == "lbfgs"
     assert config.slab_relaxation_fmax is None
@@ -288,12 +305,13 @@ def test_finalize_substrate_default_freezes_entire_substrate():
 
 @pytest.mark.parametrize("mode", ["none", "ionic_only", "cell_only", "full"])
 def test_slab_relaxation_mode_values(mode):
-    config = AdsorptionConfig(slab_relaxation_mode=mode)
+    config = AdsorptionConfig(material_type="slab", slab_relaxation_mode=mode)
     assert config.slab_relaxation_mode == mode
 
 
 def test_slab_relaxation_custom_values():
     config = AdsorptionConfig(
+        material_type="slab",
         slab_relaxation_mode="full",
         slab_relaxation_optimizer="bfgs",
         slab_relaxation_fmax=0.02,
@@ -321,11 +339,11 @@ def test_slab_relaxation_custom_values():
 )
 def test_optimizer_config_invalid_rejected(kwargs, error_match):
     with pytest.raises(ValueError, match=error_match):
-        AdsorptionConfig(**kwargs)
+        AdsorptionConfig(**{"material_type": "slab", **kwargs})
 
 
 def test_autobatcher_config_defaults():
-    config = AdsorptionConfig()
+    config = AdsorptionConfig(material_type="slab")
     assert config.autobatcher_max_memory_padding == 0.5
     assert config.autobatcher_max_memory_scaler is None
     assert config.autobatcher_max_atoms_to_try is None
@@ -336,6 +354,7 @@ def test_autobatcher_config_defaults():
 
 def test_autobatcher_config_custom():
     config = AdsorptionConfig(
+        material_type="slab",
         autobatcher_max_memory_padding=0.7,
         autobatcher_max_memory_scaler=500.0,
         autobatcher_max_atoms_to_try=50_000,
@@ -352,20 +371,22 @@ def test_autobatcher_config_custom():
 
 
 def test_autobatcher_config_custom_none_probe_cap():
-    config = AdsorptionConfig(autobatcher_max_atoms_to_try=None)
+    config = AdsorptionConfig(material_type="slab", autobatcher_max_atoms_to_try=None)
     assert config.autobatcher_max_atoms_to_try is None
 
 
 def test_autobatcher_max_memory_padding_out_of_range_rejected():
     with pytest.raises(ValueError, match="autobatcher_max_memory_padding.*0.1"):
-        AdsorptionConfig(autobatcher_max_memory_padding=0.05)
+        AdsorptionConfig(material_type="slab", autobatcher_max_memory_padding=0.05)
     with pytest.raises(ValueError, match="autobatcher_max_memory_padding"):
-        AdsorptionConfig(autobatcher_max_memory_padding=1.5)
+        AdsorptionConfig(material_type="slab", autobatcher_max_memory_padding=1.5)
 
 
 @pytest.mark.parametrize("padding", [0.1, 1.0])
 def test_autobatcher_max_memory_padding_inclusive_edges_accepted(padding):
-    config = AdsorptionConfig(autobatcher_max_memory_padding=padding)
+    config = AdsorptionConfig(
+        material_type="slab", autobatcher_max_memory_padding=padding
+    )
     assert config.autobatcher_max_memory_padding == padding
 
 
@@ -374,12 +395,16 @@ def test_autobatcher_saturation_growth_fraction_out_of_range_rejected(fraction):
     with pytest.raises(
         ValueError, match="saturation_autobatcher_reuse_growth_fraction"
     ):
-        AdsorptionConfig(saturation_autobatcher_reuse_growth_fraction=fraction)
+        AdsorptionConfig(
+            material_type="slab", saturation_autobatcher_reuse_growth_fraction=fraction
+        )
 
 
 @pytest.mark.parametrize("fraction", [0.0, 1.0])
 def test_autobatcher_saturation_growth_fraction_inclusive_edges_accepted(fraction):
-    config = AdsorptionConfig(saturation_autobatcher_reuse_growth_fraction=fraction)
+    config = AdsorptionConfig(
+        material_type="slab", saturation_autobatcher_reuse_growth_fraction=fraction
+    )
     assert config.saturation_autobatcher_reuse_growth_fraction == fraction
 
 
@@ -404,7 +429,7 @@ def test_autobatcher_saturation_growth_fraction_inclusive_edges_accepted(fractio
 )
 def test_autobatcher_invalid_rejected(kwargs, error_match):
     with pytest.raises(ValueError, match=error_match):
-        AdsorptionConfig(**kwargs)
+        AdsorptionConfig(**{"material_type": "slab", **kwargs})
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +453,7 @@ def test_autobatcher_invalid_rejected(kwargs, error_match):
 )
 def test_zero_positive_int_rejected(field):
     with pytest.raises(ValueError, match=f"{field}.*positive integer"):
-        AdsorptionConfig(**{field: 0})
+        AdsorptionConfig(**{"material_type": "slab", **{field: 0}})
 
 
 @pytest.mark.parametrize(
@@ -444,7 +469,7 @@ def test_zero_positive_int_rejected(field):
 )
 def test_negative_int_rejected(field):
     with pytest.raises(ValueError, match=f"{field}.*positive integer"):
-        AdsorptionConfig(**{field: -1})
+        AdsorptionConfig(**{"material_type": "slab", **{field: -1}})
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +501,7 @@ def test_negative_int_rejected(field):
 )
 def test_zero_positive_float_rejected(field):
     with pytest.raises(ValueError, match=f"{field}.*positive"):
-        AdsorptionConfig(**{field: 0.0})
+        AdsorptionConfig(**{"material_type": "slab", **{field: 0.0}})
 
 
 @pytest.mark.parametrize(
@@ -498,51 +523,68 @@ def test_zero_positive_float_rejected(field):
 )
 def test_negative_float_rejected(field):
     with pytest.raises(ValueError, match=f"{field}.*positive"):
-        AdsorptionConfig(**{field: -0.1})
+        AdsorptionConfig(**{"material_type": "slab", **{field: -0.1}})
 
 
 def test_saturation_activities_coerce_list_and_reject_invalid():
-    cfg = AdsorptionConfig(saturation_activities=[1.0, 2.5])
+    cfg = AdsorptionConfig(material_type="slab", saturation_activities=[1.0, 2.5])
     assert cfg.saturation_activities == (1.0, 2.5)
 
     with pytest.raises(ValueError, match="non-empty"):
-        AdsorptionConfig(saturation_activities=())
+        AdsorptionConfig(material_type="slab", saturation_activities=())
     with pytest.raises(ValueError, match="positive"):
-        AdsorptionConfig(saturation_activities=(1.0, 0.0))
+        AdsorptionConfig(material_type="slab", saturation_activities=(1.0, 0.0))
     with pytest.raises(ValueError, match="positive"):
-        AdsorptionConfig(saturation_activities=(1.0, -0.5))
+        AdsorptionConfig(material_type="slab", saturation_activities=(1.0, -0.5))
     with pytest.raises(ValueError, match="positive number"):
-        AdsorptionConfig(saturation_activities=(1.0, True))  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", saturation_activities=(1.0, True))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="sequence"):
-        AdsorptionConfig(saturation_activities="1.0")  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", saturation_activities="1.0")  # type: ignore[arg-type]
 
 
 def test_saturation_omega_shift_coerce_scalar_sequence_and_reject_invalid():
-    assert AdsorptionConfig(saturation_omega_shift=0.05).saturation_omega_shift == 0.05
-    assert AdsorptionConfig(saturation_omega_shift=-0.1).saturation_omega_shift == -0.1
-    assert AdsorptionConfig(saturation_omega_shift=0.0).saturation_omega_shift == 0.0
-    cfg = AdsorptionConfig(saturation_omega_shift=[0.05, 0.0])
+    assert (
+        AdsorptionConfig(
+            material_type="slab", saturation_omega_shift=0.05
+        ).saturation_omega_shift
+        == 0.05
+    )
+    assert (
+        AdsorptionConfig(
+            material_type="slab", saturation_omega_shift=-0.1
+        ).saturation_omega_shift
+        == -0.1
+    )
+    assert (
+        AdsorptionConfig(
+            material_type="slab", saturation_omega_shift=0.0
+        ).saturation_omega_shift
+        == 0.0
+    )
+    cfg = AdsorptionConfig(material_type="slab", saturation_omega_shift=[0.05, 0.0])
     assert cfg.saturation_omega_shift == (0.05, 0.0)
 
     with pytest.raises(ValueError, match="non-empty"):
-        AdsorptionConfig(saturation_omega_shift=())
+        AdsorptionConfig(material_type="slab", saturation_omega_shift=())
     with pytest.raises(ValueError, match="finite"):
-        AdsorptionConfig(saturation_omega_shift=float("nan"))
+        AdsorptionConfig(material_type="slab", saturation_omega_shift=float("nan"))
     with pytest.raises(ValueError, match="finite"):
-        AdsorptionConfig(saturation_omega_shift=(0.1, float("inf")))
+        AdsorptionConfig(
+            material_type="slab", saturation_omega_shift=(0.1, float("inf"))
+        )
     with pytest.raises(ValueError, match="finite number"):
-        AdsorptionConfig(saturation_omega_shift=True)  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", saturation_omega_shift=True)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="finite number"):
-        AdsorptionConfig(saturation_omega_shift=(0.1, True))  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", saturation_omega_shift=(0.1, True))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="finite number"):
-        AdsorptionConfig(saturation_omega_shift="0.1")  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", saturation_omega_shift="0.1")  # type: ignore[arg-type]
 
 
 def test_saturation_temperature_pressure_reject_bool():
     with pytest.raises(ValueError, match="saturation_temperature"):
-        AdsorptionConfig(saturation_temperature=True)  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", saturation_temperature=True)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="saturation_pressure"):
-        AdsorptionConfig(saturation_pressure=True)  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", saturation_pressure=True)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -552,20 +594,20 @@ def test_saturation_temperature_pressure_reject_bool():
 
 def test_negative_energy_dedup_rejected():
     with pytest.raises(ValueError, match="energy_dedup_threshold.*non-negative"):
-        AdsorptionConfig(energy_dedup_threshold=-0.01)
+        AdsorptionConfig(material_type="slab", energy_dedup_threshold=-0.01)
 
 
 def test_zero_energy_dedup_accepted():
-    config = AdsorptionConfig(energy_dedup_threshold=0.0)
+    config = AdsorptionConfig(material_type="slab", energy_dedup_threshold=0.0)
     assert config.energy_dedup_threshold == 0.0
 
 
 @pytest.mark.parametrize("field", ["energy_dedup_threshold", "rmsd_dedup_threshold"])
 def test_dedup_threshold_non_negative(field):
-    config = AdsorptionConfig(**{field: 0.0})
+    config = AdsorptionConfig(**{"material_type": "slab", **{field: 0.0}})
     assert getattr(config, field) == 0.0
     with pytest.raises(ValueError, match=f"{field}.*non-negative"):
-        AdsorptionConfig(**{field: -0.1})
+        AdsorptionConfig(**{"material_type": "slab", **{field: -0.1}})
 
 
 @pytest.mark.parametrize(
@@ -575,14 +617,14 @@ def test_dedup_threshold_non_negative(field):
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
 def test_nonfinite_positive_float_rejected(field, bad):
     with pytest.raises(ValueError, match=f"{field}.*positive"):
-        AdsorptionConfig(**{field: bad})
+        AdsorptionConfig(**{"material_type": "slab", **{field: bad}})
 
 
 @pytest.mark.parametrize("field", ["energy_dedup_threshold", "rmsd_dedup_threshold"])
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
 def test_nonfinite_dedup_threshold_rejected(field, bad):
     with pytest.raises(ValueError, match=f"{field}.*non-negative"):
-        AdsorptionConfig(**{field: bad})
+        AdsorptionConfig(**{"material_type": "slab", **{field: bad}})
 
 
 # ---------------------------------------------------------------------------
@@ -604,12 +646,13 @@ def test_nonfinite_dedup_threshold_rejected(field, bad):
 )
 def test_placement_range_invalid_rejected(kwargs, error_match):
     with pytest.raises(ValueError, match=error_match):
-        AdsorptionConfig(**kwargs)
+        AdsorptionConfig(**{"material_type": "slab", **kwargs})
 
 
 def test_equal_xy_range_allowed_disables_lateral_recovery():
     """Equal XY bounds are valid and mean no in-plane distance recovery."""
     cfg = AdsorptionConfig(
+        material_type="slab",
         placement_x_range=(0.0, 0.0),
         placement_y_range=(0.0, 0.0),
     )
@@ -623,16 +666,21 @@ def test_equal_xy_range_allowed_disables_lateral_recovery():
 )
 def test_occupancy_footprint_scale_invalid_rejected(scale):
     with pytest.raises(ValueError, match="occupancy_footprint_scale"):
-        AdsorptionConfig(occupancy_footprint_scale=scale)
+        AdsorptionConfig(material_type="slab", occupancy_footprint_scale=scale)
 
 
 def test_occupancy_footprint_scale_bounds_accepted():
     assert (
-        AdsorptionConfig(occupancy_footprint_scale=0.01).occupancy_footprint_scale
+        AdsorptionConfig(
+            material_type="slab", occupancy_footprint_scale=0.01
+        ).occupancy_footprint_scale
         == 0.01
     )
     assert (
-        AdsorptionConfig(occupancy_footprint_scale=2.0).occupancy_footprint_scale == 2.0
+        AdsorptionConfig(
+            material_type="slab", occupancy_footprint_scale=2.0
+        ).occupancy_footprint_scale
+        == 2.0
     )
 
 
@@ -651,7 +699,7 @@ def test_invalid_connectivity_multiplier_rejected(multiplier):
     else:
         match = "positive"
     with pytest.raises(ValueError, match=f"connectivity_multiplier.*{match}"):
-        AdsorptionConfig(connectivity_multiplier=multiplier)
+        AdsorptionConfig(material_type="slab", connectivity_multiplier=multiplier)
 
 
 # ---------------------------------------------------------------------------
@@ -660,38 +708,38 @@ def test_invalid_connectivity_multiplier_rejected(multiplier):
 
 
 def test_vasp_ediff_defaults_positive():
-    assert AdsorptionConfig().vasp_ediff == 1e-6
+    assert AdsorptionConfig(material_type="slab").vasp_ediff == 1e-6
 
 
 def test_vasp_ediffg_default_force_threshold_accepted():
-    assert AdsorptionConfig().vasp_ediffg == -0.02
+    assert AdsorptionConfig(material_type="slab").vasp_ediffg == -0.02
 
 
 @pytest.mark.parametrize("bad", [0.0, -1e-6, float("nan"), float("inf")])
 def test_vasp_ediff_invalid_rejected(bad):
     with pytest.raises(ValueError, match="vasp_ediff.*positive"):
-        AdsorptionConfig(vasp_ediff=bad)
+        AdsorptionConfig(material_type="slab", vasp_ediff=bad)
 
 
 @pytest.mark.parametrize("bad", [0.0, float("nan"), float("inf"), float("-inf")])
 def test_vasp_ediffg_invalid_rejected(bad):
     with pytest.raises(ValueError, match="vasp_ediffg.*finite and nonzero"):
-        AdsorptionConfig(vasp_ediffg=bad)
+        AdsorptionConfig(material_type="slab", vasp_ediffg=bad)
 
 
 def test_vasp_ediffg_positive_energy_threshold_accepted():
-    assert AdsorptionConfig(vasp_ediffg=1e-3).vasp_ediffg == 1e-3
+    assert AdsorptionConfig(material_type="slab", vasp_ediffg=1e-3).vasp_ediffg == 1e-3
 
 
 def test_invalid_kpoints_length():
     with pytest.raises(ValueError, match="vasp_kpoints.*3-tuple"):
-        AdsorptionConfig(vasp_kpoints=(4, 4))
+        AdsorptionConfig(material_type="slab", vasp_kpoints=(4, 4))
 
 
 @pytest.mark.parametrize("kpoints", [(4, 0, 1), (0, 4, 1), (4, 4, 0)])
 def test_zero_kpoint_rejected(kpoints):
     with pytest.raises(ValueError, match="vasp_kpoints.*positive integer"):
-        AdsorptionConfig(vasp_kpoints=kpoints)
+        AdsorptionConfig(material_type="slab", vasp_kpoints=kpoints)
 
 
 # ---------------------------------------------------------------------------
@@ -701,7 +749,7 @@ def test_zero_kpoint_rejected(kpoints):
 
 def test_empty_model_name_rejected():
     with pytest.raises(ValueError, match="model_name.*non-empty"):
-        AdsorptionConfig(model_name="")
+        AdsorptionConfig(material_type="slab", model_name="")
 
 
 # ---------------------------------------------------------------------------
@@ -710,22 +758,22 @@ def test_empty_model_name_rejected():
 
 
 def test_task_name_defaults_to_oc25():
-    assert AdsorptionConfig().task_name == "oc25"
+    assert AdsorptionConfig(material_type="slab").task_name == "oc25"
 
 
 def test_task_name_accepts_oc20():
-    config = AdsorptionConfig(task_name="oc20")
+    config = AdsorptionConfig(material_type="slab", task_name="oc20")
     assert config.task_name == "oc20"
 
 
 def test_empty_task_name_rejected():
     with pytest.raises(ValueError, match="task_name.*non-empty"):
-        AdsorptionConfig(task_name="")
+        AdsorptionConfig(material_type="slab", task_name="")
 
 
 def test_non_string_task_name_rejected():
     with pytest.raises(ValueError, match="task_name.*non-empty"):
-        AdsorptionConfig(task_name=None)  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", task_name=None)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -742,7 +790,9 @@ def test_non_string_task_name_rejected():
     ],
 )
 def test_known_checkpoints_accept_legal_tasks(model_name, task_name):
-    config = AdsorptionConfig(model_name=model_name, task_name=task_name)
+    config = AdsorptionConfig(
+        material_type="slab", model_name=model_name, task_name=task_name
+    )
     assert config.task_name == task_name
 
 
@@ -758,7 +808,9 @@ def test_known_checkpoints_accept_legal_tasks(model_name, task_name):
 )
 def test_illegal_checkpoint_task_pairs_rejected(model_name, task_name, match):
     with pytest.raises(ValueError, match=match):
-        AdsorptionConfig(model_name=model_name, task_name=task_name)
+        AdsorptionConfig(
+            material_type="slab", model_name=model_name, task_name=task_name
+        )
 
 
 @pytest.mark.parametrize(
@@ -773,7 +825,10 @@ def test_illegal_checkpoint_task_pairs_rejected(model_name, task_name, match):
 )
 def test_dispersion_d3_accepted_for_presets(model_name, task_name):
     config = AdsorptionConfig(
-        model_name=model_name, task_name=task_name, dispersion="d3"
+        material_type="slab",
+        model_name=model_name,
+        task_name=task_name,
+        dispersion="d3",
     )
     assert config.dispersion == "d3"
 
@@ -793,12 +848,17 @@ def test_dispersion_d3_accepted_for_presets(model_name, task_name):
 )
 def test_dispersion_d3_rejected_without_a_preset(model_name, task_name, match):
     with pytest.raises(ValueError, match=match):
-        AdsorptionConfig(model_name=model_name, task_name=task_name, dispersion="d3")
+        AdsorptionConfig(
+            material_type="slab",
+            model_name=model_name,
+            task_name=task_name,
+            dispersion="d3",
+        )
 
 
 def test_dispersion_rejects_unknown_choice():
     with pytest.raises(ValueError, match="dispersion"):
-        AdsorptionConfig(dispersion="d4")  # type: ignore[arg-type]
+        AdsorptionConfig(material_type="slab", dispersion="d4")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -809,89 +869,93 @@ def test_dispersion_rejects_unknown_choice():
 @pytest.mark.parametrize("mode", ["uniform", "boltzmann"])
 def test_conformer_weighting_valid_values(mode):
     """conformer_weighting accepts uniform and boltzmann."""
-    config = AdsorptionConfig(conformer_weighting=mode)
+    config = AdsorptionConfig(material_type="slab", conformer_weighting=mode)
     assert config.conformer_weighting == mode
 
 
 def test_conformer_weighting_defaults_to_boltzmann():
-    assert AdsorptionConfig().conformer_weighting == "boltzmann"
+    assert AdsorptionConfig(material_type="slab").conformer_weighting == "boltzmann"
 
 
 def test_conformer_weighting_invalid_rejected():
     with pytest.raises(ValueError, match="conformer_weighting"):
-        AdsorptionConfig(conformer_weighting="invalid")
+        AdsorptionConfig(material_type="slab", conformer_weighting="invalid")
 
 
 def test_conformer_weighting_does_not_warn():
     """The live knob replaced a deprecated no-op; setting it must be silent."""
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
-        AdsorptionConfig(conformer_weighting="boltzmann", boltzmann_temperature=500.0)
+        AdsorptionConfig(
+            material_type="slab",
+            conformer_weighting="boltzmann",
+            boltzmann_temperature=500.0,
+        )
 
 
 def test_flat_aromatic_parallel_fraction_valid():
     """flat_aromatic_parallel_fraction accepts values in [0, 1]."""
-    config = AdsorptionConfig(flat_aromatic_parallel_fraction=0.5)
+    config = AdsorptionConfig(material_type="slab", flat_aromatic_parallel_fraction=0.5)
     assert config.flat_aromatic_parallel_fraction == 0.5
-    config = AdsorptionConfig(flat_aromatic_parallel_fraction=0.0)
+    config = AdsorptionConfig(material_type="slab", flat_aromatic_parallel_fraction=0.0)
     assert config.flat_aromatic_parallel_fraction == 0.0
-    config = AdsorptionConfig(flat_aromatic_parallel_fraction=1.0)
+    config = AdsorptionConfig(material_type="slab", flat_aromatic_parallel_fraction=1.0)
     assert config.flat_aromatic_parallel_fraction == 1.0
 
 
 @pytest.mark.parametrize("fraction", [-0.1, 1.5])
 def test_flat_aromatic_parallel_fraction_out_of_range_rejected(fraction):
     with pytest.raises(ValueError, match="flat_aromatic_parallel_fraction"):
-        AdsorptionConfig(flat_aromatic_parallel_fraction=fraction)
+        AdsorptionConfig(material_type="slab", flat_aromatic_parallel_fraction=fraction)
 
 
 def test_voronoi_site_enrichment_requires_bool():
     with pytest.raises(ValueError, match="voronoi_site_enrichment"):
-        AdsorptionConfig(voronoi_site_enrichment="yes")
+        AdsorptionConfig(material_type="slab", voronoi_site_enrichment="yes")
 
 
 def test_min_contact_ratio_valid():
-    config = AdsorptionConfig(min_contact_ratio=0.9)
+    config = AdsorptionConfig(material_type="slab", min_contact_ratio=0.9)
     assert config.min_contact_ratio == 0.9
 
 
 @pytest.mark.parametrize("ratio", [0.3, 0.49, 1.21, 1.5])
 def test_min_contact_ratio_out_of_range_rejected(ratio):
     with pytest.raises(ValueError, match="min_contact_ratio"):
-        AdsorptionConfig(min_contact_ratio=ratio)
+        AdsorptionConfig(material_type="slab", min_contact_ratio=ratio)
 
 
 @pytest.mark.parametrize("ratio", [0.5, 1.2])
 def test_min_contact_ratio_inclusive_edges_accepted(ratio):
-    config = AdsorptionConfig(min_contact_ratio=ratio)
+    config = AdsorptionConfig(material_type="slab", min_contact_ratio=ratio)
     assert config.min_contact_ratio == ratio
 
 
 @pytest.mark.parametrize("scale", [0.49, 2.01])
 def test_contact_covalent_scale_out_of_range_rejected(scale):
     with pytest.raises(ValueError, match="contact_covalent_scale"):
-        AdsorptionConfig(contact_covalent_scale=scale)
+        AdsorptionConfig(material_type="slab", contact_covalent_scale=scale)
 
 
 @pytest.mark.parametrize("scale", [0.5, 1.35, 2.0])
 def test_contact_covalent_scale_inclusive_edges_accepted(scale):
-    config = AdsorptionConfig(contact_covalent_scale=scale)
+    config = AdsorptionConfig(material_type="slab", contact_covalent_scale=scale)
     assert config.contact_covalent_scale == scale
 
 
 def test_max_initial_distance_optional():
-    config = AdsorptionConfig()
+    config = AdsorptionConfig(material_type="slab")
     assert config.max_initial_distance is None
 
 
 def test_max_initial_distance_positive_when_set():
-    config = AdsorptionConfig(max_initial_distance=3.5)
+    config = AdsorptionConfig(material_type="slab", max_initial_distance=3.5)
     assert config.max_initial_distance == 3.5
 
 
 def test_max_initial_distance_zero_rejected():
     with pytest.raises(ValueError, match="max_initial_distance"):
-        AdsorptionConfig(max_initial_distance=0.0)
+        AdsorptionConfig(material_type="slab", max_initial_distance=0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -900,14 +964,14 @@ def test_max_initial_distance_zero_rejected():
 
 
 def test_default_min_pbc_image_separation():
-    config = AdsorptionConfig()
+    config = AdsorptionConfig(material_type="slab")
     assert config.min_pbc_image_separation == 8.0
 
 
 @pytest.mark.parametrize("separation", [0.0, -1.0])
 def test_non_positive_min_pbc_image_separation_rejected(separation):
     with pytest.raises(ValueError, match="min_pbc_image_separation.*positive"):
-        AdsorptionConfig(min_pbc_image_separation=separation)
+        AdsorptionConfig(material_type="slab", min_pbc_image_separation=separation)
 
 
 # ---------------------------------------------------------------------------
@@ -917,7 +981,7 @@ def test_non_positive_min_pbc_image_separation_rejected(separation):
 
 def test_error_message_includes_field_and_value():
     with pytest.raises(ValueError) as excinfo:
-        AdsorptionConfig(fmax=-0.5)
+        AdsorptionConfig(material_type="slab", fmax=-0.5)
     msg = str(excinfo.value)
     assert "fmax" in msg
     assert "-0.5" in msg
@@ -929,7 +993,7 @@ def test_error_message_includes_field_and_value():
 
 
 def test_bo_defaults():
-    c = AdsorptionConfig()
+    c = AdsorptionConfig(material_type="slab")
     assert c.num_placements is None
     assert c.bo.initial_random is None
     assert c.bo.initial_sampling == "spread_xyz"
@@ -964,6 +1028,7 @@ def test_bo_defaults():
 
 def test_resolved_bo_eval_budget():
     config = AdsorptionConfig(
+        material_type="slab",
         bo=BOConfig(initial_random=10, batch_size=5, total_batches=18),
     )
     assert resolved_bo_eval_budget(config) == 10 + 18 * 5
@@ -971,6 +1036,7 @@ def test_resolved_bo_eval_budget():
 
 def test_bo_eval_schedule():
     config = AdsorptionConfig(
+        material_type="slab",
         bo=BOConfig(initial_random=10, batch_size=5, total_batches=18),
     )
     assert bo_eval_schedule(config) == [
@@ -998,7 +1064,7 @@ def test_bo_eval_schedule():
 
 @pytest.mark.parametrize("fn", [resolved_bo_eval_budget, bo_eval_schedule])
 def test_bo_eval_helpers_require_resolved_batch_fields(fn):
-    config = AdsorptionConfig(bo=BOConfig())
+    config = AdsorptionConfig(material_type="slab", bo=BOConfig())
     with pytest.raises(ValueError, match="resolved_bo_eval_budget requires"):
         fn(config)
 
@@ -1071,11 +1137,12 @@ def test_bo_eval_helpers_require_resolved_batch_fields(fn):
 )
 def test_bo_invalid_config_rejected(kwargs, error_match):
     with pytest.raises(ValueError, match=error_match):
-        AdsorptionConfig(**kwargs)
+        AdsorptionConfig(**{"material_type": "slab", **kwargs})
 
 
 def test_bo_candidate_pool_size_and_failure_penalty_accepted():
     c = AdsorptionConfig(
+        material_type="slab",
         bo=BOConfig(
             candidate_pool_size=500,
             failure_penalty_default=22.5,
@@ -1089,6 +1156,7 @@ def test_bo_candidate_pool_size_and_failure_penalty_accepted():
 
 def test_bo_transfer_config_validation():
     c = AdsorptionConfig(
+        material_type="slab",
         bo=BOConfig(
             transfer=BOTransferConfig(
                 enabled=True,
@@ -1113,16 +1181,19 @@ def test_bo_transfer_config_validation():
 def test_bo_transfer_requires_weighted_surrogate():
     with pytest.raises(ValueError, match="bo.transfer.enabled requires"):
         AdsorptionConfig(
+            material_type="slab",
             bo=BOConfig(
                 surrogate="gaussian_process", transfer=BOTransferConfig(enabled=True)
             ),
         )
     for sur in ("ridge", "gradient_boost", "random_forest", "extra_trees", "ensemble"):
         c = AdsorptionConfig(
+            material_type="slab",
             bo=BOConfig(surrogate=sur, transfer=BOTransferConfig(enabled=True)),  # type: ignore[arg-type]
         )
         assert c.bo.surrogate == sur
     gp = AdsorptionConfig(
+        material_type="slab",
         bo=BOConfig(
             surrogate="gaussian_process",
             transfer=BOTransferConfig(enabled=False),
@@ -1133,14 +1204,14 @@ def test_bo_transfer_requires_weighted_surrogate():
 
 def test_saturation_max_steps_must_be_positive_when_set():
     with pytest.raises(ValueError, match="saturation_max_steps"):
-        AdsorptionConfig(saturation_max_steps=0)
-    c = AdsorptionConfig(saturation_max_steps=1)
+        AdsorptionConfig(material_type="slab", saturation_max_steps=0)
+    c = AdsorptionConfig(material_type="slab", saturation_max_steps=1)
     assert c.saturation_max_steps == 1
 
 
 def test_flat_bo_constructor_kwargs_rejected():
     with pytest.raises(TypeError, match="bo_initial_random"):
-        AdsorptionConfig(bo_initial_random=2)  # type: ignore[call-arg]
+        AdsorptionConfig(material_type="slab", bo_initial_random=2)  # type: ignore[call-arg]
 
 
 def test_fold_bo_config_extracts_nested_bo():
@@ -1155,19 +1226,19 @@ def test_fold_bo_config_extracts_nested_bo():
 def test_default_config_does_not_warn():
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
-        AdsorptionConfig()
+        AdsorptionConfig(material_type="slab")
 
 
 def test_num_conformers_rejects_float():
     with pytest.raises(ValueError, match="positive integer"):
-        AdsorptionConfig(num_conformers=2.5)
+        AdsorptionConfig(material_type="slab", num_conformers=2.5)
 
 
 def test_negative_seed_rejected():
     with pytest.raises(ValueError, match="non-negative"):
-        AdsorptionConfig(seed=-5)
+        AdsorptionConfig(material_type="slab", seed=-5)
 
 
 def test_bool_field_rejects_non_bool_string():
     with pytest.raises(ValueError, match="skip_topology_check must be a bool"):
-        AdsorptionConfig(skip_topology_check="yes")
+        AdsorptionConfig(material_type="slab", skip_topology_check="yes")

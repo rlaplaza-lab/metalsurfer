@@ -35,8 +35,9 @@ A prepared substrate has:
 
 - Equilibrated ions (default ``slab_relaxation_mode="ionic_only"``), or
   ``"none"`` when a published geometry must not move
-- PBC matching ``material_type`` (slab ``[T,T,F]``, porous ``[T,T,T]``,
-  nanoparticle ``[F,F,F]``)
+- PBC matching the required ``material_type`` (slab ``[T,T,F]``, porous
+  ``[T,T,T]``, nanoparticle ``[F,F,F]``); a mismatch raises rather than
+  rewriting flags
 - For slabs, bottom-anchored layout (``min(z) ≈ 0``)
 - ASE ``FixAtoms`` (default: freeze the whole substrate;
   ``relax_top_layer=True`` frees a surface band)

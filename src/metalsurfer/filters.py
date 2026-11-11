@@ -54,9 +54,14 @@ logger = logging.getLogger(__name__)
 
 
 def _pbc_for_cell(material_type: str, cell: np.ndarray) -> list[bool]:
-    """Material-aware PBC, disabled when *cell* has no usable volume."""
+    """Material-aware PBC; raise if a periodic material has a degenerate cell."""
     pbc = material_aware_pbc(material_type)
     if not cell_has_volume(cell):
+        if any(pbc):
+            raise ValueError(
+                f"cell is degenerate while material_type={material_type!r} "
+                "expects periodic boundaries"
+            )
         return [False, False, False]
     return pbc
 
@@ -65,7 +70,7 @@ def _mic_pairwise_distances(
     coords: np.ndarray,
     atoms: Atoms,
     *,
-    material_type: str = "slab",
+    material_type: str,
 ) -> np.ndarray:
     """Return an (n, n) MIC-aware distance matrix for *coords*.
 
@@ -102,7 +107,7 @@ def _nonsurface_distance_and_threshold(
     surface_symbols: list[str] | None,
     multiplier: float,
     *,
-    material_type: str = "slab",
+    material_type: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Mask out surface atoms and return (syms, coords, dist_matrix, threshold).
 
@@ -232,7 +237,7 @@ def _connected_components_from_coords(
     atoms: Atoms,
     multiplier: float,
     *,
-    material_type: str = "slab",
+    material_type: str,
 ) -> list[np.ndarray]:
     """Return boolean masks (one per fragment) for bonded clusters in *coords*."""
     if len(coords) <= 1:
@@ -257,7 +262,7 @@ def adsorbate_connected_components(
     base_slab_len: int,
     connectivity_multiplier: float,
     *,
-    material_type: str = "slab",
+    material_type: str,
 ) -> list[Atoms]:
     """Split ``atoms[base_slab_len:]`` into connected adsorbate fragments.
 
@@ -292,7 +297,7 @@ def min_interadsorbate_covalent_ratio(
     a: Atoms,
     b: Atoms,
     *,
-    material_type: str = "slab",
+    material_type: str,
     cell: np.ndarray | None = None,
 ) -> float:
     """Minimum ``d_ij / (r_i + r_j)`` between atoms of *a* and *b* (MIC).
@@ -348,7 +353,7 @@ def interadsorbate_clearance(
     b: Atoms,
     connectivity_multiplier: float,
     *,
-    material_type: str = "slab",
+    material_type: str,
     cell: np.ndarray | None = None,
 ) -> tuple[float, bool, float]:
     """Return ``(ratio, disconnected, sigma_scale)`` for two adsorbate clouds.
@@ -373,7 +378,7 @@ def adsorbates_mutually_disconnected(
     b: Atoms,
     connectivity_multiplier: float,
     *,
-    material_type: str = "slab",
+    material_type: str,
     cell: np.ndarray | None = None,
 ) -> bool:
     """Return whether *a* and *b* share no covalent bond under *multiplier*.
@@ -416,7 +421,7 @@ def check_decomposition(
     connectivity_multiplier: float,
     adsorbate_prefix_atoms: int | None = None,
     *,
-    material_type: str = "slab",
+    material_type: str,
 ) -> tuple[bool, str]:
     """Return ``(ok, reason)`` indicating whether the adsorbate decomposed.
 
@@ -524,7 +529,7 @@ def _adsorbate_surface_min_distance(
     atoms: Atoms,
     slab: Atoms,
     *,
-    material_type: str = "slab",
+    material_type: str,
     surface_prefix_atoms: int | None = None,
 ) -> float | None:
     """Minimum adsorbate-to-surface distance using material-aware PBC.
@@ -570,7 +575,7 @@ def check_desorption(
     slab: Atoms,
     binding_threshold: float = 4.0,
     *,
-    material_type: str = "slab",
+    material_type: str,
     surface_prefix_atoms: int | None = None,
 ) -> tuple[bool, str]:
     """Return ``(ok, reason)``; ``ok=False`` means the adsorbate desorbed.

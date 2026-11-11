@@ -377,7 +377,8 @@ def test_cluster_op_count_matches_spglib_reference():
 def test_fcc111_pt_slab_symmetry_reduces_sites_and_verifies_orbits():
     """High-symmetry periodic slab: fewer unique sites; orbit pairwise check."""
     slab = create_slab_from_atoms(
-        fcc111("Pt", size=(2, 2, 3), vacuum=7.0, orthogonal=True)
+        fcc111("Pt", size=(2, 2, 3), vacuum=7.0, orthogonal=True),
+        material_type="slab",
     ).atoms
     raw = get_unified_sites(slab, material_type="slab")
     assert raw is not None and len(raw) >= 1
@@ -398,7 +399,8 @@ def test_fcc111_pt_2x2_top_atop_single_orbit():
     ``symmetry_multiplicity == 4`` (the N² degeneracy of the 2×2 top layer).
     """
     slab = create_slab_from_atoms(
-        fcc111("Pt", size=(2, 2, 3), vacuum=7.0, orthogonal=True)
+        fcc111("Pt", size=(2, 2, 3), vacuum=7.0, orthogonal=True),
+        material_type="slab",
     ).atoms
     raw = get_unified_sites(slab, material_type="slab")
     sym = get_symmetry_aware_sites(slab, symmetry_tolerance=0.15, material_type="slab")
@@ -787,7 +789,7 @@ def test_empty_and_single_atom_site_lists():
     from metalsurfer.symmetry import SymmetryAnalyzer
 
     slab = fcc111("Cu", size=(2, 2, 2), vacuum=5.0)
-    analyzer = SymmetryAnalyzer(slab, mode="auto")
+    analyzer = SymmetryAnalyzer(slab, mode="periodic")
     assert analyzer.analyze_site_symmetry([]) == []
 
 

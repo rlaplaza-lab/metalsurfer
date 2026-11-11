@@ -50,6 +50,7 @@ def test_parse_campaign_rejects_unknown_substrate_key():
                 "surface_type": "bad",
                 "substrate": {"bulk_id": "mp-30", "unexpected": True},
                 "molecules": [{"smiles": "C", "name": "methane"}],
+                "config": {"material_type": "slab"},
             }
         )
 
@@ -62,6 +63,7 @@ def test_parse_campaign_rejects_non_atoms_slab():
                 "surface_type": "bad",
                 "substrate": {"slab": "not-an-atoms"},
                 "molecules": [{"smiles": "C", "name": "methane"}],
+                "config": {"material_type": "slab"},
             }
         )
 
@@ -87,7 +89,7 @@ def test_parse_campaign_rejects_unknown_config_key():
                 "surface_type": "bad",
                 "substrate": {"bulk_id": "mp-30"},
                 "molecules": [{"smiles": "C", "name": "methane"}],
-                "config": {"num_placementz": 5},
+                "config": {"material_type": "slab", "num_placementz": 5},
             }
         )
 
@@ -97,6 +99,7 @@ _VALID_BASE = {
     "surface_type": "ok",
     "substrate": {"bulk_id": "mp-30"},
     "molecules": [{"smiles": "C", "name": "methane"}],
+    "config": {"material_type": "slab"},
 }
 
 
@@ -141,7 +144,9 @@ def test_parse_campaign_rejects_invalid_molecules(molecules_raw):
 
 
 def test_parse_campaign_accepts_task_name_config_key():
-    doc = parse_campaign_dict({**_VALID_BASE, "config": {"task_name": "oc20"}})
+    doc = parse_campaign_dict(
+        {**_VALID_BASE, "config": {"material_type": "slab", "task_name": "oc20"}}
+    )
     assert doc.config.task_name == "oc20"
 
 
@@ -154,6 +159,7 @@ def test_parse_campaign_saturation_reservoir_yaml_round_trip():
                 {"smiles": "O=C=O", "name": "CO2"},
             ],
             "config": {
+                "material_type": "slab",
                 "multi_molecule_saturation": True,
                 "saturation_temperature": 423.15,
                 "saturation_pressure": 10.0,
@@ -176,7 +182,7 @@ def test_parse_campaign_coerces_saturation_omega_shift_sequence():
                 {"smiles": "O", "name": "water"},
                 {"smiles": "O=C=O", "name": "CO2"},
             ],
-            "config": {"saturation_omega_shift": [0.05, 0.0]},
+            "config": {"material_type": "slab", "saturation_omega_shift": [0.05, 0.0]},
         }
     )
     assert doc.config.saturation_omega_shift == (0.05, 0.0)
@@ -242,7 +248,10 @@ def test_parse_campaign_accepts_nested_bo_config():
             "surface_type": "ok",
             "substrate": {"bulk_id": "mp-30"},
             "molecules": [{"smiles": "C", "name": "methane"}],
-            "config": {"bo": {"transfer": {"enabled": False, "weight_cap": 0.25}}},
+            "config": {
+                "material_type": "slab",
+                "bo": {"transfer": {"enabled": False, "weight_cap": 0.25}},
+            },
         }
     )
     assert doc.config.bo.transfer.enabled is False

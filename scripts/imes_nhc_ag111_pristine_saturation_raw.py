@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 def main():
     config = AdsorptionConfig(
+        material_type="slab",
         num_conformers=20,
         num_placements=1000,
         stage1_steps=80,

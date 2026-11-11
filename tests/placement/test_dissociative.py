@@ -72,7 +72,7 @@ def test_hollow_site_pairs_found_for_slab():
     from ase.geometry import find_mic
 
     slab = make_slab()
-    config = AdsorptionConfig()
+    config = AdsorptionConfig(material_type="slab")
     pairs = _get_dissociative_site_pairs(slab, config)
     assert len(pairs) >= 8, (
         f"4×4 FCC-like slab should yield many hollow-site pairs, got {len(pairs)}"

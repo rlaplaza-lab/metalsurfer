@@ -9,6 +9,7 @@ from scipy.spatial import Delaunay, QhullError
 
 from .._numeric_defaults import DEFAULT_N_JOBS
 from .._utils import cell_has_volume
+from ..exceptions import GeometryValidationError
 from ..symmetry import SymmetryAnalyzer
 from ._constants import (
     _ADSORBATE_COVALENT_RADIUS_FALLBACK,
@@ -24,6 +25,7 @@ from ._constants import (
 from ._material import (
     material_aware_pbc,
     material_type_for_placement,
+    require_atoms_pbc_matches_material,
     symmetry_mode_for_material,
     validate_material_type,
 )
@@ -140,11 +142,11 @@ def get_unified_sites(
     probe_radius: float | None = None,
     max_site_distance: float | None = None,
     top_layer_tolerance: float | None = None,
-    material_type: str | None = None,
     pore_threshold: float | None = None,
     enrich: bool = True,
     site_classification_method: str = "auto",
     *,
+    material_type: str,
     auto_widen: bool = True,
     planar_z_variance_threshold: float | None = None,
     site_generator: str = "auto",
@@ -239,11 +241,11 @@ def _get_unified_sites_with_plugin_vertices(
     probe_radius: float | None = None,
     max_site_distance: float | None = None,
     top_layer_tolerance: float | None = None,
-    material_type: str | None = None,
     pore_threshold: float | None = None,
     enrich: bool = True,
     site_classification_method: str = "auto",
     *,
+    material_type: str,
     auto_widen: bool = True,
     planar_z_variance_threshold: float | None = None,
     site_generator: str = "auto",
@@ -329,13 +331,13 @@ def _enumerate_unified_sites(
     probe_radius: float | None = None,
     max_site_distance: float | None = None,
     top_layer_tolerance: float | None = None,
-    material_type: str | None = None,
     pore_threshold: float | None = None,
     enrich: bool = True,
     site_classification_method: str = "auto",
     planar_z_variance_threshold: float | None = None,
     site_generator: str = "auto",
     *,
+    material_type: str,
     adaptive_grid_spacing: float | None = None,
     adaptive_grid_refine_levels: int = 0,
     adaptive_grid_nms_framework_scale: float | None = None,
@@ -351,39 +353,15 @@ def _enumerate_unified_sites(
     """
     if len(atoms) == 0:
         raise ValueError("atoms must contain at least one atom")
-    if material_type is None:
-        raise ValueError(
-            "material_type must be explicitly specified: 'slab', 'nanoparticle', or 'porous'"
-        )
     validate_material_type(material_type)
     plugin = resolve_site_generator(site_generator, material_type)
 
     positions = atoms.get_positions()
     cell = np.asarray(atoms.get_cell(), dtype=float)
-    atoms_pbc = np.asarray(atoms.get_pbc(), dtype=bool)
-    material_pbc = np.asarray(material_aware_pbc(material_type), dtype=bool)
-    # Wall-near plugins follow the structure PBC mask; topology / Voronoi keep
-    # the material convention so mis-set Atoms.pbc cannot flood those paths.
-    if plugin.uses_structure_pbc:
-        pbc_for_sites = atoms_pbc.copy()
-        if not np.array_equal(atoms_pbc, material_pbc):
-            logger.debug(
-                "site_generator=%r using structure pbc=%s (material_aware_pbc(%r)=%s)",
-                plugin.name,
-                pbc_for_sites.tolist(),
-                material_type,
-                material_pbc.tolist(),
-            )
-    else:
-        pbc_for_sites = material_pbc.copy()
-        if not np.array_equal(atoms_pbc, material_pbc):
-            logger.debug(
-                "Using material_aware_pbc(%r)=%s for site enumeration "
-                "(atoms.get_pbc() was %s)",
-                material_type,
-                material_pbc.tolist(),
-                atoms_pbc.tolist(),
-            )
+    # Geometry follows atoms PBC after the type/mask check; never rewrite flags.
+    pbc_for_sites = require_atoms_pbc_matches_material(
+        atoms, material_type, context="site enumeration"
+    )
 
     symbols = atoms.get_chemical_symbols()
     if top_layer_tolerance is None or pore_threshold is None:
@@ -401,13 +379,12 @@ def _enumerate_unified_sites(
     )
 
     if not cell_has_volume(cell):
-        cell = _bounding_box_cell(positions)
         if np.any(pbc_for_sites):
-            logger.warning(
-                "Input cell is degenerate while PBC is enabled; using a padded "
-                "bounding-box cell with PBC disabled for site enumeration"
+            raise GeometryValidationError(
+                "site enumeration: cell is degenerate while PBC is enabled; "
+                "provide a non-zero periodic cell during preparation."
             )
-            pbc_for_sites[:] = False
+        cell = _bounding_box_cell(positions)
 
     if probe_radius is None or max_site_distance is None:
         derived_probe, derived_max = _derive_voronoi_distance_window(
@@ -670,7 +647,9 @@ def _cluster_equivalent_sites(
         return []
 
     n = len(sites)
-    mat_type = material_type_for_placement(sites[0], when_no_site="slab")
+    mat_type = material_type_for_placement(
+        sites[0], when_no_site=sites[0].material_type
+    )
     pbc = np.asarray(material_aware_pbc(mat_type), dtype=bool)
     n_periodic = int(np.count_nonzero(pbc))
 
@@ -721,7 +700,13 @@ def _cluster_equivalent_sites(
 
         return sorted(result, key=_void_priority)
 
-    # One (or two) periodic axes: in-plane MIC + height tolerance (slab path).
+    if n_periodic != 2:
+        raise ValueError(
+            f"Unsupported PBC for site clustering: {pbc.tolist()} "
+            f"(material_type={mat_type!r}); expected 0, 2, or 3 periodic axes"
+        )
+
+    # Two periodic axes: in-plane MIC + height tolerance (slab path).
     z_tol = (
         z_abs_tolerance
         if z_abs_tolerance is not None

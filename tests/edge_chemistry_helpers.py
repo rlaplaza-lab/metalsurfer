@@ -77,7 +77,7 @@ def cu111_for(
     assert conformers
     prepared = prepare_substrate(
         slab=apply_surface_constraints(
-            fcc111("Cu", size=(1, 1, 3), a=3.6, vacuum=10.0)
+            fcc111("Cu", size=(1, 1, 3), a=3.6, vacuum=10.0), material_type="slab"
         ),
         config=config,
         results_dir=results_dir,

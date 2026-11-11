@@ -9,4 +9,5 @@ molecules:
   - smiles: CC
     name: ethane
 config:
+  material_type: slab
   num_placements: 250

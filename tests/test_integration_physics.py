@@ -142,7 +142,7 @@ class TestValidationAndFilterPhysics:
     def test_desorption_gate_rejects_far_molecule(self):
         slab = make_slab()
         desorbed = place_molecule_on_slab(slab, make_water(), z_offset=10.0)
-        config = AdsorptionConfig(binding_distance_threshold=4.0)
+        config = AdsorptionConfig(material_type="slab", binding_distance_threshold=4.0)
         ok, reason, _ = _validate_adsorption(desorbed, slab, config)
         assert not ok
         assert "desorb" in reason.lower()
@@ -198,6 +198,7 @@ class TestValidationAndFilterPhysics:
             ),
         ]
         config = AdsorptionConfig(
+            material_type="slab",
             connectivity_multiplier=1.3,
             skip_topology_check=False,
             skip_desorption_check=False,
@@ -227,7 +228,7 @@ class TestAdsorptionEnergyPhysics:
         e_ads_cap = 6.0  # above default max_adsorption_energy (5 eV)
 
         descriptor = make_placement_descriptor(placement_id=0)
-        config = AdsorptionConfig(max_adsorption_energy=5.0)
+        config = AdsorptionConfig(material_type="slab", max_adsorption_energy=5.0)
 
         ok_atoms = _attach_calc(good, energy=e_slab + e_mol + e_ads_ok)
         ok_atoms.set_pbc([True, True, True])  # calculator-promoted

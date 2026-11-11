@@ -39,7 +39,13 @@ from .._geom_pbc import (
     slab_normal as _slab_normal,
 )
 from .._geom_pbc import (
+    slab_outward_normal as _slab_outward_normal,
+)
+from .._geom_pbc import (
     slab_plane_projectors as _slab_plane_projectors,
+)
+from .._geom_pbc import (
+    slab_vacuum_face_sign as _slab_vacuum_face_sign,
 )
 from .._geom_pbc import (
     wrap_cartesian as _wrap_cartesian,
@@ -78,7 +84,9 @@ __all__ = [
     "_reciprocal_plane_spacings",
     "_shift_along_slab_normal",
     "_slab_normal",
+    "_slab_outward_normal",
     "_slab_plane_projectors",
+    "_slab_vacuum_face_sign",
     "_wrap_cartesian",
     "_wrap_fractional",
     # Defined here.
@@ -102,12 +110,14 @@ def _primary_height_band_mask(
     heights: np.ndarray,
     tolerance: float,
     *,
-    h_max: float | None = None,
+    face_sign: float = 1.0,
 ) -> np.ndarray:
-    """Boolean mask for atoms within *tolerance* of the maximum slab-normal height."""
-    if h_max is None:
-        h_max = float(np.max(heights))
-    return heights >= (h_max - float(tolerance))
+    """Boolean mask for atoms within *tolerance* of the vacuum-exposed extreme.
+
+    ``face_sign`` is :func:`slab_vacuum_face_sign` (``+1`` max-height, ``-1`` min).
+    """
+    hout = np.asarray(heights, dtype=float) * float(face_sign)
+    return hout >= (float(np.max(hout)) - float(tolerance))
 
 
 def top_layer_mask_by_normal(
@@ -117,15 +127,15 @@ def top_layer_mask_by_normal(
     *,
     include_terrace: bool = True,
 ) -> np.ndarray:
-    """Return mask of atoms belonging to exposed surface layers of a slab.
+    """Return mask of atoms on the vacuum-richer exposed slab face.
 
-    For flat top layers (including standard multi-layer bulk slabs) this reduces
-    to the topmost layer (``h_max - tolerance``).  When *include_terrace* is
-    true and a discrete terrace sits immediately below the primary band
-    (stepped/reconstructed surfaces), that terrace is included once if its gap
-    from ``h_max`` is at most ``_STEP_TERRACE_MAX_GAP_ANGSTROM``.  The mask
-    never walks deeper into the bulk by lowering the floor by another full
-    tolerance.
+    For a bottom-anchored slab this is the max-height band
+    (``h_max - tolerance``). When more vacuum lies toward ``-a×b``, the
+    min-height band is used instead. When *include_terrace* is true and a
+    discrete terrace sits immediately inward from that primary band
+    (stepped/reconstructed surfaces), that terrace is included once if its
+    gap is at most ``_STEP_TERRACE_MAX_GAP_ANGSTROM``. The mask never walks
+    deeper into the bulk by another full tolerance.
 
     Parameters
     ----------
@@ -144,21 +154,23 @@ def top_layer_mask_by_normal(
         return np.zeros(0, dtype=bool)
 
     heights = _height_along_slab_normal(positions, cell)
+    face_sign = _slab_vacuum_face_sign(positions, cell)
     tol = float(tolerance)
-    h_max = float(np.max(heights))
-    primary = _primary_height_band_mask(heights, tol, h_max=h_max)
+    hout = heights * face_sign
+    h_ext = float(np.max(hout))
+    primary = _primary_height_band_mask(heights, tol, face_sign=face_sign)
     if not include_terrace:
         return primary
 
     # Steps already inside the primary band (e.g. Δh ≤ tol) stay in primary.
-    below = ~primary
-    if not np.any(below):
+    inward = ~primary
+    if not np.any(inward):
         return primary
 
-    terrace_top = float(np.max(heights[below]))
-    gap = h_max - terrace_top
+    terrace_ext = float(np.max(hout[inward]))
+    gap = h_ext - terrace_ext
     if gap <= _STEP_TERRACE_MAX_GAP_ANGSTROM:
-        terrace = (heights >= terrace_top - tol) & (heights <= terrace_top + tol)
+        terrace = (hout >= terrace_ext - tol) & (hout <= terrace_ext + tol)
         return primary | terrace
     return primary
 
@@ -425,11 +437,14 @@ def _derive_voronoi_distance_window(
     if len(positions) == 0:
         raise ValueError("Cannot derive Voronoi distance window from empty positions")
     if bool(pbc[0]) and bool(pbc[1]) and not bool(pbc[2]) and cell is not None:
-        # Slab: characterise the exposed top layer along the slab normal
-        # (orientation-aware), not a Cartesian-z slice or the bulk average.
+        # Slab: vacuum-richer face along a×b, not Cartesian z or the bulk average.
         heights = _height_along_slab_normal(positions, cell)
         top_depth = _derive_top_layer_tolerance(symbols)
-        top_mask = _primary_height_band_mask(heights, top_depth)
+        top_mask = _primary_height_band_mask(
+            heights,
+            top_depth,
+            face_sign=_slab_vacuum_face_sign(positions, cell),
+        )
         top_idx = np.nonzero(top_mask)[0]
         top_symbols = [symbols[int(i)] for i in top_idx] if len(top_idx) else symbols
         base_radius = _mean_covalent_radius(top_symbols)
@@ -604,20 +619,22 @@ def exposed_lower_band_indices(
     ):
         return np.zeros(0, dtype=int)
     heights = _height_along_slab_normal(pos, cell)
-    h_max = float(np.max(heights[primary]))
-    band = (heights >= h_max - float(median_nn)) & (heights < h_max - 1e-6)
+    face_sign = _slab_vacuum_face_sign(pos, cell)
+    hout = heights * face_sign
+    h_ext = float(np.max(hout[primary]))
+    band = (hout >= h_ext - float(median_nn)) & (hout < h_ext - 1e-6)
     band[primary] = False
     cand = np.nonzero(band)[0]
     if len(cand) == 0:
         return cand
-    n_hat = _slab_normal(cell)
+    n_hat = face_sign * _slab_normal(cell)
     radii = framework_radii_from_symbols(symbols)
     # Rim atoms sit above a vacancy floor or a step edge. They must not veto
     # the outward ray; the shadow test is what rejects a covered second layer.
     ray_ok = np.zeros(len(cand), dtype=bool)
     for i, ai in enumerate(cand):
-        at_or_below = heights <= float(heights[int(ai)]) + 1e-6
-        fw = np.nonzero(at_or_below)[0]
+        at_or_inward = hout <= float(hout[int(ai)]) + 1e-6
+        fw = np.nonzero(at_or_inward)[0]
         local_ex = int(np.nonzero(fw == int(ai))[0][0])
         ray_ok[i] = bool(
             ray_exposure_mask(

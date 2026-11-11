@@ -104,7 +104,9 @@ def test_prepare_substrate_passes_slab_relaxation_options(monkeypatch):
 
     prepare_substrate(
         bulk_id="mp-33",
-        config=AdsorptionConfig(model_name="uma-s-1p1", device="cpu", task_name="oc20"),
+        config=AdsorptionConfig(
+            material_type="slab", model_name="uma-s-1p1", device="cpu", task_name="oc20"
+        ),
         slab_relaxation_mode="full",
         slab_relaxation_optimizer="bfgs",
         slab_relaxation_fmax=0.03,
@@ -152,7 +154,7 @@ def test_prepare_substrate_passes_adatom_relaxation_options(monkeypatch):
         bulk_id="mp-33",
         adatom_symbol="Au",
         adatom_coverage=0.2,
-        config=AdsorptionConfig(device="cpu"),
+        config=AdsorptionConfig(material_type="slab", device="cpu"),
         adatom_relaxation_mode="full",
         adatom_relaxation_optimizer="fire",
         adatom_relaxation_fmax=0.04,
@@ -188,7 +190,9 @@ def test_prepare_substrate_forwards_relax_kwargs_for_loaded_slab(monkeypatch):
 
     prepare_substrate(
         slab=base,
-        config=AdsorptionConfig(model_name="uma-s-1p1", device="cpu", task_name="oc20"),
+        config=AdsorptionConfig(
+            material_type="slab", model_name="uma-s-1p1", device="cpu", task_name="oc20"
+        ),
         slab_relaxation_mode="ionic_only",
         slab_relaxation_optimizer="bfgs",
         slab_relaxation_fmax=0.03,
@@ -231,7 +235,7 @@ def test_prepare_substrate_passes_enforce_top_layer_fraction(monkeypatch):
         alloy_guest="Cu",
         alloy_fraction=0.5,
         enforce_top_layer_fraction=True,
-        config=AdsorptionConfig(device="cpu"),
+        config=AdsorptionConfig(material_type="slab", device="cpu"),
     )
 
     assert captured["enforce_top_layer_fraction"] is True
@@ -255,7 +259,7 @@ def test_prepare_substrate_slab_input_skips_bulk_load(monkeypatch):
         slab=base,
         adatom_symbol="Sn",
         adatom_coverage=0.1,
-        config=AdsorptionConfig(slab_relaxation_mode="none"),
+        config=AdsorptionConfig(material_type="slab", slab_relaxation_mode="none"),
     )
 
     assert "create_called" not in captured
@@ -319,14 +323,16 @@ def test_relax_substrate_clears_finalized(monkeypatch):
     relaxed = relax_substrate(
         finalized,
         calculator=object(),
-        config=AdsorptionConfig(slab_relaxation_mode="ionic_only"),
+        config=AdsorptionConfig(
+            material_type="slab", slab_relaxation_mode="ionic_only"
+        ),
     )
     assert relaxed.finalized is False
 
     unchanged = relax_substrate(
         finalized,
         calculator=object(),
-        config=AdsorptionConfig(slab_relaxation_mode="none"),
+        config=AdsorptionConfig(material_type="slab", slab_relaxation_mode="none"),
     )
     assert unchanged.finalized is True
 
@@ -346,7 +352,9 @@ def test_prepare_substrate_multi_element_alloy_requires_host(monkeypatch):
             slab=SlabContainer(alloy_slab),
             alloy_guest="Au",
             alloy_fraction=0.25,
-            config=AdsorptionConfig(device="cpu", slab_relaxation_mode="none"),
+            config=AdsorptionConfig(
+                material_type="slab", device="cpu", slab_relaxation_mode="none"
+            ),
         )
 
 
@@ -370,7 +378,7 @@ def test_prepare_substrate_uses_config_top_layer_tolerance(monkeypatch):
     )
     finalize_substrate(
         SlabContainer(make_slab(symbol="Ru")),
-        AdsorptionConfig(device="cpu", top_layer_tolerance=2.1),
+        AdsorptionConfig(material_type="slab", device="cpu", top_layer_tolerance=2.1),
         top_layer_tolerance=None,
         relax_top_layer=True,
     )
@@ -397,7 +405,7 @@ def test_prepare_substrate_single_element_alloy_infers_host(monkeypatch):
         bulk_id="mp-33",
         alloy_guest="Cu",
         alloy_fraction=0.25,
-        config=AdsorptionConfig(device="cpu"),
+        config=AdsorptionConfig(material_type="slab", device="cpu"),
     )
 
     assert captured["host_symbol"] == "Ru"
@@ -433,7 +441,7 @@ def test_prepare_substrate_relaxes_loaded_slab_before_mods(monkeypatch):
         alloy_fraction=0.25,
         adatom_symbol="Sn",
         adatom_coverage=0.1,
-        config=AdsorptionConfig(device="cpu"),
+        config=AdsorptionConfig(material_type="slab", device="cpu"),
         slab_relaxation_mode="ionic_only",
     )
 
@@ -441,7 +449,9 @@ def test_prepare_substrate_relaxes_loaded_slab_before_mods(monkeypatch):
 
 
 def test_prepare_substrate_reuses_matching_torchsim_calculator(monkeypatch):
-    config = AdsorptionConfig(model_name="uma-s-1p1", device="cpu", task_name="oc20")
+    config = AdsorptionConfig(
+        material_type="slab", model_name="uma-s-1p1", device="cpu", task_name="oc20"
+    )
     base, calc = _slab_with_calc(
         model_name=config.model_name,
         device=config.device,
@@ -476,7 +486,9 @@ def test_prepare_substrate_reloads_on_calculator_mismatch(monkeypatch):
 
     result = prepare_substrate(
         slab=base,
-        config=AdsorptionConfig(model_name="uma-s-1p2", device="cpu", task_name="oc20"),
+        config=AdsorptionConfig(
+            material_type="slab", model_name="uma-s-1p2", device="cpu", task_name="oc20"
+        ),
         slab_relaxation_mode="ionic_only",
     )
 
@@ -486,6 +498,7 @@ def test_prepare_substrate_reloads_on_calculator_mismatch(monkeypatch):
 
 def test_prepare_substrate_preserves_calc_when_relaxation_none(monkeypatch):
     config = AdsorptionConfig(
+        material_type="slab",
         model_name="uma-s-1p1",
         device="cpu",
         task_name="oc20",

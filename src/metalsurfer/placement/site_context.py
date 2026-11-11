@@ -77,24 +77,13 @@ def _unique_sites_cache_key(
 ) -> str:
     """Geometry + chemistry + Voronoi config key (pre-symmetry).
 
-    Topology and Voronoi enumerate with :func:`material_aware_pbc`, so
-    calculator-boundary PBC (e.g. ``[T,T,T]``) and material PBC (e.g.
-    ``[T,T,F]`` for slabs) share one cache entry. ``adaptive_grid`` and
-    ``rolling_probe`` follow ``slab.get_pbc()``, and that mask is part of
-    their key.
-
-    For ``adaptive_grid``, spacing knobs (``adaptive_grid_spacing``,
-    ``adaptive_grid_refine_levels``, ``adaptive_grid_nms_framework_scale``)
-    and ``side_policy`` are part of the key.
+    Every generator uses the validated atoms PBC mask (must match
+    ``material_type``). Spacing knobs for ``adaptive_grid`` and ``side_policy``
+    for wall-near plugins are part of the key when those generators are selected.
     """
     pos_bytes = slab.get_positions().tobytes()
     cell_bytes = np.asarray(slab.get_cell()).tobytes()
-    generator = str(config.site_generator)
-    if generator in ("adaptive_grid", "rolling_probe"):
-        pbc_source = np.asarray(slab.get_pbc(), dtype=bool)
-    else:
-        pbc_source = np.asarray(material_aware_pbc(config.material_type), dtype=bool)
-    pbc_bytes = np.asarray(pbc_source, dtype=np.uint8).tobytes()
+    pbc_bytes = np.asarray(slab.get_pbc(), dtype=np.uint8).tobytes()
     numbers_bytes = np.asarray(slab.get_atomic_numbers(), dtype=np.int32).tobytes()
     cfg_bytes = (
         _pack_optional_float(config.voronoi_probe_radius)

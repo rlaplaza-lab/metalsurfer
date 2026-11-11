@@ -38,7 +38,7 @@ def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
     )
     result = create_conformers_from_smiles(
         "c1(C=O)cc(OC)c(O)cc1",
-        config=AdsorptionConfig(num_conformers=3),
+        config=AdsorptionConfig(material_type="slab", num_conformers=3),
     )
     assert result is not None
     conformers, _ = result
@@ -149,7 +149,7 @@ def test_marked_indices_address_conformer_atoms():
     """Heavy-atom SMILES indices address conformer atom lists after AddHs."""
     smiles = "c1ccc(C[CH2+])cc1"
     result = create_conformers_from_smiles(
-        smiles, config=AdsorptionConfig(num_conformers=2, seed=0)
+        smiles, config=AdsorptionConfig(material_type="slab", num_conformers=2, seed=0)
     )
     assert result is not None
     conformers, _ = result
@@ -167,7 +167,7 @@ def test_tagged_indices_address_conformer_atoms():
     """``[atom:map]`` tag indices survive conformer generation (AddHs)."""
     smiles = "c1ccc(C[CH3:1])cc1"
     result = create_conformers_from_smiles(
-        smiles, config=AdsorptionConfig(num_conformers=2, seed=0)
+        smiles, config=AdsorptionConfig(material_type="slab", num_conformers=2, seed=0)
     )
     assert result is not None
     conformers, _ = result
@@ -235,7 +235,7 @@ def _run_merged_binder_end_to_end(
         flat_aromatic_parallel_fraction=0.5,
     )
     result = create_conformers_from_smiles(
-        smiles, config=AdsorptionConfig(num_conformers=2, seed=0)
+        smiles, config=AdsorptionConfig(material_type="slab", num_conformers=2, seed=0)
     )
     assert result is not None
     conformers, _ = result

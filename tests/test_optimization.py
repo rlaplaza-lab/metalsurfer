@@ -195,7 +195,9 @@ def test_resolve_device_cuda_kept_when_available(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(_validation, "_resolve_device", lambda _d: None)
     assert (
-        _validation._resolve_model_device(_NoDevice(), AdsorptionConfig(device="cuda"))
+        _validation._resolve_model_device(
+            _NoDevice(), AdsorptionConfig(material_type="slab", device="cuda")
+        )
         == "cpu"
     )
 
@@ -203,7 +205,9 @@ def test_resolve_device_cuda_kept_when_available(monkeypatch: pytest.MonkeyPatch
         device = "cuda:1"
 
     assert (
-        _validation._resolve_model_device(_HasDevice(), AdsorptionConfig(device="cpu"))
+        _validation._resolve_model_device(
+            _HasDevice(), AdsorptionConfig(material_type="slab", device="cpu")
+        )
         == "cuda:1"
     )
 
@@ -255,7 +259,7 @@ def test_is_cuda_oom_error_false(msg):
 
 
 def test_resolve_autobatcher_max_atoms_to_try_uses_config_override():
-    config = AdsorptionConfig(autobatcher_max_atoms_to_try=12_345)
+    config = AdsorptionConfig(material_type="slab", autobatcher_max_atoms_to_try=12_345)
     cap, source = _validation._resolve_autobatcher_max_atoms_to_try(
         max_n_atoms=400,
         n_systems=40,
@@ -266,7 +270,7 @@ def test_resolve_autobatcher_max_atoms_to_try_uses_config_override():
 
 
 def test_resolve_autobatcher_max_atoms_to_try_uses_dynamic_policy():
-    config = AdsorptionConfig(autobatcher_max_atoms_to_try=None)
+    config = AdsorptionConfig(material_type="slab", autobatcher_max_atoms_to_try=None)
     cap, source = _validation._resolve_autobatcher_max_atoms_to_try(
         max_n_atoms=400,
         n_systems=10,
@@ -277,7 +281,7 @@ def test_resolve_autobatcher_max_atoms_to_try_uses_dynamic_policy():
 
 
 def test_resolve_autobatcher_max_atoms_to_try_floor_and_ceiling():
-    config = AdsorptionConfig(autobatcher_max_atoms_to_try=None)
+    config = AdsorptionConfig(material_type="slab", autobatcher_max_atoms_to_try=None)
     floor_cap, _ = _validation._resolve_autobatcher_max_atoms_to_try(
         max_n_atoms=20, n_systems=2, config=config
     )
@@ -294,7 +298,7 @@ def test_resolve_autobatcher_max_atoms_to_try_floor_and_ceiling():
 
 
 def test_resolve_autobatcher_max_atoms_to_try_buckets():
-    config = AdsorptionConfig(autobatcher_max_atoms_to_try=None)
+    config = AdsorptionConfig(material_type="slab", autobatcher_max_atoms_to_try=None)
     a, _ = _validation._resolve_autobatcher_max_atoms_to_try(
         max_n_atoms=400, n_systems=10, config=config
     )
@@ -318,7 +322,7 @@ def test_setup_inflight_autobatcher_fetch_false_skips_get(
 
     monkeypatch.setattr(_optimize, "_get_inflight_autobatcher", _fake_get)
     systems = [Atoms("H"), Atoms("H2")]
-    config = AdsorptionConfig(autobatcher_max_atoms_to_try=12_345)
+    config = AdsorptionConfig(material_type="slab", autobatcher_max_atoms_to_try=12_345)
     setup = _optimize._setup_inflight_autobatcher(
         systems,
         ts_model=object(),
@@ -348,7 +352,7 @@ def test_setup_inflight_autobatcher_fetch_true_passes_kwargs(
 
     monkeypatch.setattr(_optimize, "_get_inflight_autobatcher", _fake_get)
     systems = [Atoms("H"), Atoms("Cu2")]
-    config = AdsorptionConfig(autobatcher_max_atoms_to_try=9_999)
+    config = AdsorptionConfig(material_type="slab", autobatcher_max_atoms_to_try=9_999)
     ts_model = object()
     setup = _optimize._setup_inflight_autobatcher(
         systems,
@@ -375,7 +379,7 @@ def test_setup_inflight_autobatcher_fetch_true_passes_kwargs(
 
 def test_parallel_capacity_cache_key_deterministic():
     model = object()
-    config = AdsorptionConfig()
+    config = AdsorptionConfig(material_type="slab")
     k1 = _validation._parallel_capacity_cache_key(model, 100, config)
     k2 = _validation._parallel_capacity_cache_key(model, 100, config)
     assert k1 == k2
@@ -981,7 +985,7 @@ def test_optimize_isolated_raises_without_torchsim(monkeypatch: pytest.MonkeyPat
         optimize_isolated_molecules_batched(
             [_make_atoms_with_cell()[:3]],
             ts_model=MagicMock(),
-            config=AdsorptionConfig(),
+            config=AdsorptionConfig(material_type="slab"),
         )
 
 
@@ -994,7 +998,10 @@ def test_optimize_slab_raises_without_torchsim(monkeypatch: pytest.MonkeyPatch):
     slab = _make_atoms_with_cell()
     with pytest.raises(DependencyMissingError, match="torch-sim-atomistic"):
         _optimize.optimize_adsorbate_slab_batched(
-            [slab], slab, ts_model=MagicMock(), config=AdsorptionConfig()
+            [slab],
+            slab,
+            ts_model=MagicMock(),
+            config=AdsorptionConfig(material_type="slab"),
         )
 
 
@@ -1045,7 +1052,7 @@ def test_optimize_slab_raises_on_batch_size_mismatch(monkeypatch: pytest.MonkeyP
             combined,
             slab,
             ts_model=type("MockModel", (), {"device": "cpu"})(),
-            config=AdsorptionConfig(device="cpu"),
+            config=AdsorptionConfig(material_type="slab", device="cpu"),
         )
     _cache._AUTOBATCHER_CACHE.clear()
 
@@ -1113,7 +1120,7 @@ def test_optimize_slab_rebuilds_states_after_cuda_oom(monkeypatch: pytest.Monkey
         combined,
         slab,
         ts_model=type("MockModel", (), {"device": "cpu"})(),
-        config=AdsorptionConfig(device="cpu"),
+        config=AdsorptionConfig(material_type="slab", device="cpu"),
     )
     _cache._AUTOBATCHER_CACHE.clear()
 
@@ -1190,7 +1197,7 @@ def test_optimize_slab_retries_after_batcher_capacity_error(
         combined,
         slab,
         ts_model=type("MockModel", (), {"device": "cpu"})(),
-        config=AdsorptionConfig(device="cpu"),
+        config=AdsorptionConfig(material_type="slab", device="cpu"),
     )
     _cache._AUTOBATCHER_CACHE.clear()
 
@@ -1324,7 +1331,9 @@ def test_optimize_slab_cuda_streams_states_via_inflight_iterator(
         combined,
         slab,
         ts_model=type("MockModel", (), {"device": "cuda"})(),
-        config=AdsorptionConfig(device="cuda", stage1_steps=5, stage2_steps=5),
+        config=AdsorptionConfig(
+            material_type="slab", device="cuda", stage1_steps=5, stage2_steps=5
+        ),
     )
     _cache._AUTOBATCHER_CACHE.clear()
 
@@ -1504,6 +1513,7 @@ class TestSetupSingleModel:
         """With optimize_isolated_sequentially=True, _get_inflight_autobatcher is not called."""
         calculator, ts_model = load_uma("uma-s-1p1", "cpu", "oc20")
         config = AdsorptionConfig(
+            material_type="slab",
             optimize_isolated_sequentially=True,
             device="cpu",
         )
@@ -1547,6 +1557,7 @@ def test_get_inflight_autobatcher_saturation_reuses_small_growth(stub_autobatche
     _ = stub_autobatcher
     model = type("MockModel", (), {"device": "cpu"})()
     config = AdsorptionConfig(
+        material_type="slab",
         device="cpu",
         saturation_autobatcher_reuse_growth_atoms=8,
         saturation_autobatcher_reuse_growth_fraction=0.0,
@@ -1587,7 +1598,7 @@ def test_get_inflight_autobatcher_non_saturation_uses_exact_size_key(stub_autoba
     """Non-saturation mode should not reuse different max_n_atoms keys."""
     _ = stub_autobatcher
     model = type("MockModel", (), {"device": "cpu"})()
-    config = AdsorptionConfig(device="cpu")
+    config = AdsorptionConfig(material_type="slab", device="cpu")
     ab1, key1 = _cache._get_inflight_autobatcher(
         model,
         100,
@@ -1609,7 +1620,9 @@ def test_get_inflight_autobatcher_non_saturation_uses_exact_size_key(stub_autoba
 def test_get_inflight_autobatcher_uses_explicit_probe_cap(stub_autobatcher):
     _ = stub_autobatcher
     model = type("MockModel", (), {"device": "cpu"})()
-    config = AdsorptionConfig(device="cpu", autobatcher_max_atoms_to_try=123_456)
+    config = AdsorptionConfig(
+        material_type="slab", device="cpu", autobatcher_max_atoms_to_try=123_456
+    )
     _, key = _cache._get_inflight_autobatcher(
         model,
         100,
@@ -1624,7 +1637,9 @@ def test_get_inflight_autobatcher_scaler_ignores_probe_cap(stub_autobatcher):
     """Known scaler must share one batcher across BO-sized probe caps."""
     _ = stub_autobatcher
     model = type("MockModel", (), {"device": "cpu"})()
-    config = AdsorptionConfig(device="cpu", autobatcher_max_memory_scaler=500.0)
+    config = AdsorptionConfig(
+        material_type="slab", device="cpu", autobatcher_max_memory_scaler=500.0
+    )
     ab1, key1 = _cache._get_inflight_autobatcher(
         model,
         100,
@@ -1663,7 +1678,7 @@ def test_run_optimize_with_oom_retry_rebuilds_without_scaler(monkeypatch):
             raise ValueError("State metric=12 is greater than max_metric 10")
         return "ok"
 
-    config = AdsorptionConfig(autobatcher_max_memory_scaler=500.0)
+    config = AdsorptionConfig(material_type="slab", autobatcher_max_memory_scaler=500.0)
     result = _optimize._run_optimize_with_oom_retry(
         _run_optimize,
         build_systems=lambda: [object()],
@@ -1688,7 +1703,7 @@ def test_estimate_parallel_relaxation_capacity_fallback_without_torchsim(
     _cache._PARALLEL_CAPACITY_CACHE.clear()
     monkeypatch.setattr(_deps, "ts", None)
     monkeypatch.setattr(_deps, "determine_max_batch_size", None)
-    config = AdsorptionConfig()
+    config = AdsorptionConfig(material_type="slab")
     atoms = _make_atoms_with_cell()
     ts_model = object()
     capacity = _optimize.estimate_parallel_relaxation_capacity(
@@ -1721,7 +1736,9 @@ def test_estimate_parallel_relaxation_capacity_runtime_error_falls_back(
         "calculate_memory_scalers",
         lambda *args, **kwargs: [100.0],
     )
-    config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
+    config = AdsorptionConfig(
+        material_type="slab", autobatcher_max_memory_scaler=1200.0
+    )
     atoms = _make_atoms_with_cell()
     ts_model = object()
     capacity = _optimize.estimate_parallel_relaxation_capacity(
@@ -1754,7 +1771,9 @@ def test_estimate_parallel_relaxation_capacity_value_error_propagates(
         "calculate_memory_scalers",
         lambda *args, **kwargs: [100.0],
     )
-    config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
+    config = AdsorptionConfig(
+        material_type="slab", autobatcher_max_memory_scaler=1200.0
+    )
     atoms = _make_atoms_with_cell()
     with pytest.raises(ValueError, match="bad config"):
         _optimize.estimate_parallel_relaxation_capacity(
@@ -1782,6 +1801,7 @@ def test_estimate_parallel_relaxation_capacity_uses_memory_scaler(
         lambda state, memory_scales_with: [100.0],
     )
     config = AdsorptionConfig(
+        material_type="slab",
         autobatcher_max_memory_scaler=1200.0,
         autobatcher_max_memory_padding=0.5,
     )
@@ -1813,7 +1833,7 @@ def test_estimate_parallel_relaxation_capacity_records_probed_scaler(
         "calculate_memory_scalers",
         lambda state, memory_scales_with: [100.0],
     )
-    config = AdsorptionConfig(autobatcher_max_memory_padding=0.5)
+    config = AdsorptionConfig(material_type="slab", autobatcher_max_memory_padding=0.5)
     atoms = _make_atoms_with_cell()
     ts_model = object()
     capacity = _optimize.estimate_parallel_relaxation_capacity(
@@ -1831,7 +1851,7 @@ def test_estimate_parallel_relaxation_capacity_records_probed_scaler(
 
 
 def test_resolve_autobatcher_max_atoms_to_try_is_conservative_vs_estimate():
-    config = AdsorptionConfig(autobatcher_max_atoms_to_try=None)
+    config = AdsorptionConfig(material_type="slab", autobatcher_max_atoms_to_try=None)
     max_n_atoms = 333
     n_systems = 9
     cap, source = _validation._resolve_autobatcher_max_atoms_to_try(
@@ -1972,7 +1992,9 @@ def test_estimate_parallel_relaxation_capacity_propagates_dependency_missing(
         "calculate_memory_scalers",
         lambda *args, **kwargs: [100.0],
     )
-    config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
+    config = AdsorptionConfig(
+        material_type="slab", autobatcher_max_memory_scaler=1200.0
+    )
     atoms = _make_atoms_with_cell()
     with pytest.raises(DependencyMissingError, match="capacity_probe"):
         _optimize.estimate_parallel_relaxation_capacity(
@@ -2046,7 +2068,7 @@ def test_optimize_and_evaluate_skips_preclear_when_saturation_reuse(monkeypatch)
     slab = make_slab()
     combined = [slab.copy()]
     desc = make_placement_descriptor(placement_id=0)
-    config = AdsorptionConfig(saturation_autobatcher_reuse=True)
+    config = AdsorptionConfig(material_type="slab", saturation_autobatcher_reuse=True)
     shared_mod._optimize_and_evaluate_placements(
         combined,
         [0],

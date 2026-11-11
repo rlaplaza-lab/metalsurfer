@@ -1267,7 +1267,9 @@ def test_placement_workers_inherit_global_n_jobs():
         resolve_materialize_workers,
     )
 
-    config = AdsorptionConfig(n_jobs=3, placement_materialize_workers=None)
+    config = AdsorptionConfig(
+        material_type="slab", n_jobs=3, placement_materialize_workers=None
+    )
     inherited = (
         config.n_jobs
         if config.placement_materialize_workers is None
@@ -1277,7 +1279,7 @@ def test_placement_workers_inherit_global_n_jobs():
     assert resolve_materialize_workers(inherited, n_tasks=10, cpu_count=8) == 3
     assert (
         AdsorptionConfig(
-            n_jobs=3, placement_materialize_workers=1
+            material_type="slab", n_jobs=3, placement_materialize_workers=1
         ).placement_materialize_workers
         == 1
     )
@@ -1290,10 +1292,10 @@ def test_placement_workers_inherit_global_n_jobs():
     for i, spec in enumerate(specs):
         spec.placement_index = i
     results_a = generate_placements_from_specs(
-        specs, [adsorbate], slab, AdsorptionConfig(n_jobs=1)
+        specs, [adsorbate], slab, AdsorptionConfig(material_type="slab", n_jobs=1)
     )
     results_b = generate_placements_from_specs(
-        specs, [adsorbate], slab, AdsorptionConfig(n_jobs=-1)
+        specs, [adsorbate], slab, AdsorptionConfig(material_type="slab", n_jobs=-1)
     )
     assert len(results_a) == len(results_b) == 2
     for (res_a, _), (res_b, _) in zip(results_a, results_b, strict=True):
@@ -1693,11 +1695,15 @@ def test_pose_validation_and_pack_agree_with_clearance_helper():
         placement_clash_descent=False,
     )
     assert (
-        _validate_posed_adsorbate(clash_ads, covered, config, slab_for_sites=slab)
+        _validate_posed_adsorbate(
+            clash_ads, covered, config, slab_for_sites=slab, material_type="slab"
+        )
         == "adsorbate_overlap"
     )
     assert (
-        _validate_posed_adsorbate(shell_ads, covered, config, slab_for_sites=slab)
+        _validate_posed_adsorbate(
+            shell_ads, covered, config, slab_for_sites=slab, material_type="slab"
+        )
         != "adsorbate_overlap"
     )
 

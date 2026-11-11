@@ -135,7 +135,7 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def adsorption_config_factory(**overrides: object) -> AdsorptionConfig:
     """Build AdsorptionConfig with compact test overrides."""
-    return AdsorptionConfig(**overrides)
+    return AdsorptionConfig(**{"material_type": "slab", **overrides})
 
 
 def water_conformers() -> list[Atoms]:
@@ -207,7 +207,7 @@ def _slab_template(
         cell=[nx * a, ny * a, max(18.0, n_layers * spacing + 15.0)],
         pbc=[True, True, False],
     )
-    return apply_surface_constraints(atoms)
+    return apply_surface_constraints(atoms, material_type="slab")
 
 
 def make_slab(

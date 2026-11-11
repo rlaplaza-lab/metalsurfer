@@ -8,24 +8,26 @@ people change. Every field is listed in :doc:`../api/config`.
 What material?
 --------------
 
-Set ``material_type`` on the same config used for
+``material_type`` is **required** on the same config used for
 :func:`~metalsurfer.surface_prep.prepare_substrate` and the campaign call.
-It must match the structure you prepared.
+It must match the substrate ASE PBC mask exactly (metalsurfer does not
+rewrite mismatched flags or infer the type from vacuum gaps):
 
-``slab``
-   Flat crystal surface (vacuum along *z*). Single-crystal facets, adatom
-   slabs, and published POSCARs.
+``slab`` → ``pbc=[True, True, False]``
+   Flat crystal surface (2D). Sites keep one face along the open axis
+   (``side_policy``, default ``positive``) and ignore the other.
 
-``nanoparticle``
-   Finite cluster in a box (no periodic images). Hand-built clusters often
-   keep the input geometry with ``slab_relaxation_mode="none"``.
+``nanoparticle`` → ``pbc=[False, False, False]``
+   Finite cluster (3D closed surface). The whole exterior is eligible;
+   ``side_policy`` is ignored.
 
-``porous``
-   Fully periodic framework (MOFs, zeolites). Load from CIF, then
-   ``prepare_substrate``.
+``porous`` → ``pbc=[True, True, True]``
+   Fully periodic framework (MOFs, zeolites). Every wall is eligible;
+   ``side_policy`` is ignored.
 
 ``surface_type`` on ``run_*`` is only the results folder name
-(``results_{surface_type}/``). Physics come from ``material_type``.
+(``results_{surface_type}/``). Physics come from ``material_type`` and the
+validated atoms PBC.
 
 How many placements?
 --------------------

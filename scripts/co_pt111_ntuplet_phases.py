@@ -545,6 +545,7 @@ def run_job(
     # Explicit num_placements skips workload autotune (and the n-tuplet
     # floor-divide of that autotuned budget).
     config = AdsorptionConfig(
+        material_type="slab",
         num_conformers=1,
         num_placements=num_placements,
         saturation_molecules_per_step=job.n_co,

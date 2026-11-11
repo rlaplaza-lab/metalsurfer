@@ -700,7 +700,11 @@ def prepare_substrate_for_screening(
         conformers=conformers,
         config=config,
     )
-    slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab_for_frozen)
+    slab_for_sites = _build_surface_reference_slab(
+        slab.atoms,
+        base_slab_for_frozen,
+        material_type=config.material_type,
+    )
     effective_base_slab_for_frozen = (
         base_slab_for_frozen.copy() if base_slab_for_frozen is not None else None
     )
@@ -948,15 +952,20 @@ def resolve_saturation_step_workload_config(
 def _build_surface_reference_slab(
     slab_atoms: Atoms,
     base_slab_for_frozen: Atoms | None,
+    *,
+    material_type: str,
 ) -> Atoms:
     """Build a substrate-only slab reference for placement/validation/filtering.
 
     Uses a prefix of length ``len(base_slab_for_frozen)`` (saturation appends
     adsorbates as a suffix). Raises if the covered slab is shorter than the
-    frozen base.
+    frozen base. Always restores geometric PBC for *material_type* so
+    calculator ``[T,T,T]`` promotion cannot leak into site enumeration.
     """
     if base_slab_for_frozen is None:
-        return slab_atoms
+        out = slab_atoms.copy()
+        out.set_pbc(material_aware_pbc(material_type))
+        return out
 
     n_sub = len(base_slab_for_frozen)
     if len(slab_atoms) < n_sub:
@@ -966,7 +975,7 @@ def _build_surface_reference_slab(
         )
     surface_slab = slab_atoms[:n_sub].copy()
     surface_slab.set_cell(slab_atoms.get_cell())
-    surface_slab.set_pbc(slab_atoms.get_pbc())
+    surface_slab.set_pbc(material_aware_pbc(material_type))
     return surface_slab
 
 

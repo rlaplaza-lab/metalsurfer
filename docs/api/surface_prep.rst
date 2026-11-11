@@ -57,8 +57,8 @@ keyword arguments ``relax_top_layer``, ``freeze_symbols``, and
 When ``relax_top_layer=True``, which atoms stay free depends on
 :attr:`~metalsurfer.AdsorptionConfig.material_type` on the *config* passed to
 ``prepare_substrate`` / ``finalize_substrate``. There is no separate prep
-``material_type`` argument — set it on ``AdsorptionConfig`` before prep and reuse
-the same config in ``run_*`` (omitting *config* defaults to ``"slab"``).
+``material_type`` argument — set it on ``AdsorptionConfig`` before prep
+(required; no default) and reuse the same config in ``run_*``.
 
 +--------------------+---------------------------------------------------------+
 | ``material_type``  | Free atoms (within ``top_layer_tolerance``)             |

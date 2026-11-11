@@ -70,7 +70,7 @@ def _assert_physical_placement(adsorbate, slab, *, material_type: str = "slab") 
 class TestConformerDeterminism:
     @pytest.mark.parametrize("smiles", ["O", "CCO", "CC(=O)O", "c1ccccc1"])
     def test_same_seed_same_conformers(self, smiles):
-        cfg = AdsorptionConfig(num_conformers=5, seed=42)
+        cfg = AdsorptionConfig(material_type="slab", num_conformers=5, seed=42)
         r1 = create_conformers_from_smiles(smiles, config=cfg)
         r2 = create_conformers_from_smiles(smiles, config=cfg)
         assert r1 is not None, f"conformer generation failed for {smiles}"
@@ -92,7 +92,9 @@ class TestPlacementDeterminism:
     def _run_placements(self, seed, n=20):
         """Generate n placements with the given seed and return positions."""
         slab = make_slab()
-        cfg = AdsorptionConfig(seed=seed, num_conformers=3, num_placements=n)
+        cfg = AdsorptionConfig(
+            material_type="slab", seed=seed, num_conformers=3, num_placements=n
+        )
         result = create_conformers_from_smiles("O", config=cfg)
         assert result is not None
         conformers, energies = result
@@ -146,7 +148,9 @@ class TestEndToEndDeterminism:
     def _pipeline(self, seed, *, assert_physics: bool = False):
         """Run conformer generation + placement (+ optional physics gates)."""
         slab = make_slab()
-        cfg = AdsorptionConfig(seed=seed, num_conformers=5, num_placements=30)
+        cfg = AdsorptionConfig(
+            material_type="slab", seed=seed, num_conformers=5, num_placements=30
+        )
         result = create_conformers_from_smiles("CCO", config=cfg)
         assert result is not None
         conformers, energies = result
@@ -233,7 +237,9 @@ class TestEndToEndDeterminism:
     def test_descriptor_quaternions_always_finite(self):
         """Every descriptor from the pipeline must have finite quaternion fields."""
         slab = make_slab()
-        cfg = AdsorptionConfig(seed=42, num_conformers=3, num_placements=20)
+        cfg = AdsorptionConfig(
+            material_type="slab", seed=42, num_conformers=3, num_placements=20
+        )
         result = create_conformers_from_smiles("O", config=cfg)
         assert result is not None
         conformers, _ = result

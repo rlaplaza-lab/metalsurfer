@@ -64,6 +64,7 @@ def main() -> int:
     results_dir = str(results_dir_for(SURFACE_TYPE))
 
     config = AdsorptionConfig(
+        material_type="slab",
         num_conformers=2,
         num_placements=16,
         multi_molecule_saturation=True,

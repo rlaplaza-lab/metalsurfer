@@ -365,7 +365,9 @@ def test_voronoi_auto_widen_retries_when_first_window_empty(monkeypatch):
         return real(*args, **kwargs)
 
     monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
-    ctx = _get_unique_sites_for_specs(slab, AdsorptionConfig(voronoi_auto_widen=True))
+    ctx = _get_unique_sites_for_specs(
+        slab, AdsorptionConfig(material_type="slab", voronoi_auto_widen=True)
+    )
     assert calls["n"] == 2
     assert ctx.use_sites
     assert len(ctx.sites) > 0
@@ -382,7 +384,9 @@ def test_voronoi_auto_widen_disabled_skips_retry(monkeypatch):
         return [], np.empty((0, 3), dtype=float)
 
     monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
-    ctx = _get_unique_sites_for_specs(slab, AdsorptionConfig(voronoi_auto_widen=False))
+    ctx = _get_unique_sites_for_specs(
+        slab, AdsorptionConfig(material_type="slab", voronoi_auto_widen=False)
+    )
     assert calls["n"] == 1
     assert not ctx.use_sites
 

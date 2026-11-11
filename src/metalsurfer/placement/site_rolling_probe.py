@@ -44,9 +44,8 @@ from .site_adaptive_grid import (
     _wall_near_framework_setup,
 )
 from .site_coords import (
-    _height_along_slab_normal,
     _minimum_image_cartesian_delta,
-    _slab_normal,
+    _slab_outward_normal,
     _wrap_cartesian,
     project_anchor_to_support_plane,
 )
@@ -443,52 +442,26 @@ def _contacts_to_candidates(
 
 
 _ROLLING_SLAB_NORMAL_DOT_MIN: float = 0.35
-_ROLLING_VACUUM_GAP_DOMINANCE: float = 1.75
-
-
-def _is_vacuum_slab(
-    positions: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-) -> bool:
-    """Return True for one atomic band with a single dominant vacuum gap."""
-    pbc_arr = np.asarray(pbc, dtype=bool).reshape(3)
-    if int(np.count_nonzero(pbc_arr)) == 0 or not cell_has_volume(cell):
-        return False
-    n_hat = _slab_normal(cell)
-    atom_h = np.sort(
-        np.asarray(_height_along_slab_normal(positions, cell), dtype=float).ravel()
-    )
-    if len(atom_h) < 2:
-        return False
-    cell_arr = np.asarray(cell, dtype=float)
-    cell_extent = max(float(abs(np.dot(cell_arr[i], n_hat))) for i in range(3))
-    if cell_extent <= 1e-6:
-        return False
-    wrap_gap = max(0.0, float(cell_extent - (float(atom_h[-1]) - float(atom_h[0]))))
-    all_gaps = np.concatenate([np.diff(atom_h), [wrap_gap]])
-    order = np.argsort(all_gaps)
-    max_gap = float(all_gaps[order[-1]])
-    second = float(all_gaps[order[-2]]) if len(order) >= 2 else 0.0
-    if max_gap <= 1e-6:
-        return False
-    if second > 1e-6 and max_gap < float(_ROLLING_VACUUM_GAP_DOMINANCE) * second:
-        return False
-    return max_gap >= 0.20 * cell_extent
 
 
 def _slab_face_contact_mask(
     candidates: list[CandidateSite],
     *,
-    positions: np.ndarray,
     cell: np.ndarray,
     pbc: np.ndarray,
     side_policy: SidePolicy,
+    positions: np.ndarray,
 ) -> list[CandidateSite]:
-    """Keep vacuum-slab contacts whose normals align with the selected face(s)."""
-    if not candidates or not _is_vacuum_slab(positions, cell, pbc):
+    """On 2D PBC, keep contacts whose normals align with the selected face(s).
+
+    Non-slab PBC masks are unchanged. ``positive`` uses the vacuum-richer face.
+    """
+    pbc_arr = np.asarray(pbc, dtype=bool).reshape(3)
+    if not candidates or int(np.count_nonzero(pbc_arr)) != 2:
         return candidates
-    n_hat = _slab_normal(cell)
+    if not cell_has_volume(cell):
+        return candidates
+    n_hat = _slab_outward_normal(positions, cell)
     kept: list[CandidateSite] = []
     for c in candidates:
         nrm = np.asarray(c.normal, dtype=float)
@@ -526,8 +499,8 @@ def generate_rolling_probe_sites(
     *probe_radius* / *max_site_distance* map onto the clearance window
     (element-dependent surface), matching every other site plugin. Catalog
     density uses the same NMS floor as default ``adaptive_grid`` (spacing
-    ``0.70`` Å). Face / exposure policy follows *pbc* geometry, not material
-    labels.
+    ``0.70`` Å). Face filtering follows the validated PBC mask: 2D keeps one
+    face via *side_policy*; 3D keeps the whole surface / all walls.
     """
     setup = _wall_near_framework_setup(
         positions,
@@ -632,10 +605,10 @@ def generate_rolling_probe_sites(
         return empty
     candidates = _slab_face_contact_mask(
         candidates,
-        positions=positions,
         cell=cell,
         pbc=pbc,
         side_policy=side_policy,
+        positions=positions,
     )
     if not candidates:
         return empty

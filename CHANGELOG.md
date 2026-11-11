@@ -5,10 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.10.0] - 2026-11-02
+## [0.10.0] - 2026-11-11
 
 ### Changed
 
+- ``material_type`` is required on ``AdsorptionConfig`` and substrate helpers.
+  Atoms PBC must match the declared type (slab ``TTF``, nanoparticle ``FFF``,
+  porous ``TTT``); mismatches raise instead of rewriting PBC or inferring from
+  vacuum gaps. Site enumeration, placement, filters, and clustering read
+  ``atoms.get_pbc()`` after that check.
+- Slab site paths explore the vacuum-richer face along ``a×b`` by default
+  (``side_policy="positive"``). ``negative`` is the opposite face; ``all`` keeps
+  both. Near-ties keep ``+a×b`` via ``SLAB_VACUUM_FACE_MARGIN_ANG``.
 - Catalog MIC distances share ``metalsurfer._geom_pbc.mic_point_distance``.
 - Adaptive-grid and rolling-probe engines share wall-near clearance / empty-
   result / exposure helpers in ``site_wall_near_common``.

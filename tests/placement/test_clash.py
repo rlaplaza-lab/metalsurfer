@@ -227,13 +227,17 @@ def test_clash_bounds_scale_with_molecule_size():
     r_w = incoming_inplane_radius(water, footprint_scale=1.0)
     r_b = incoming_inplane_radius(bulky, footprint_scale=1.0)
     assert r_b > r_w
-    cfg = AdsorptionConfig(placement_x_range=(-0.5, 0.5), placement_y_range=(-0.5, 0.5))
+    cfg = AdsorptionConfig(
+        material_type="slab",
+        placement_x_range=(-0.5, 0.5),
+        placement_y_range=(-0.5, 0.5),
+    )
     b_w = clash_bounds_for_adsorbate(water, cfg, z_window=2.0, footprint_radius=r_w)
     b_b = clash_bounds_for_adsorbate(bulky, cfg, z_window=3.5, footprint_radius=r_b)
     assert b_b[0][1] > b_w[0][1]
     assert b_b[2] > b_w[2]
     pinned = AdsorptionConfig(
-        placement_x_range=(0.0, 0.0), placement_y_range=(0.0, 0.0)
+        material_type="slab", placement_x_range=(0.0, 0.0), placement_y_range=(0.0, 0.0)
     )
     assert clash_bounds_for_adsorbate(
         water, pinned, z_window=2.0, footprint_radius=r_w
@@ -246,7 +250,11 @@ def test_clash_bounds_uses_supplied_moving_radii_for_zero_footprint(monkeypatch)
     from metalsurfer.placement.clash import clash_bounds_for_adsorbate
 
     mono = Atoms("O", positions=[[0.0, 0.0, 0.0]])
-    cfg = AdsorptionConfig(placement_x_range=(-0.5, 0.5), placement_y_range=(-0.5, 0.5))
+    cfg = AdsorptionConfig(
+        material_type="slab",
+        placement_x_range=(-0.5, 0.5),
+        placement_y_range=(-0.5, 0.5),
+    )
     supplied = np.array([1.25], dtype=float)
     calls: list[int] = []
     orig = clash_mod.atom_radii_for_symbols

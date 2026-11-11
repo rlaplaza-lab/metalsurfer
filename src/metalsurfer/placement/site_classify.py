@@ -28,6 +28,7 @@ from .site_coords import (
     _build_periodic_images,
     _project_to_slab_plane,
     _slab_normal,
+    _slab_outward_normal,
     mic_support_positions,
     project_supported_anchor,
 )
@@ -75,18 +76,21 @@ def _compute_local_normals_batch(
     return out
 
 
-def _slab_site_normals(n_verts: int, cell: np.ndarray) -> np.ndarray:
+def _slab_site_normals(
+    n_verts: int,
+    cell: np.ndarray,
+    positions: np.ndarray,
+) -> np.ndarray:
     """Exact surface normals for slab sites.
 
-    Every slab site shares the a×b surface normal. This is the same ``n_hat``
-    that :func:`_generate_slab_topology_sites` offsets candidates along, so the
-    site positions and their normals are consistent by construction. A k-nearest
-    centroid estimate is *not* used here: with only 3-4 neighbours it tilts by
-    tens of degrees on bridge/hollow sites and near cell boundaries.
+    Every slab site shares the vacuum-outward ``a×b`` normal — the same
+    ``n_hat`` :func:`_generate_slab_topology_sites` offsets along. A k-nearest
+    centroid estimate is *not* used: with only 3-4 neighbours it tilts by tens
+    of degrees on bridge/hollow sites and near cell boundaries.
     """
     if n_verts == 0:
         return np.empty((0, 3), dtype=float)
-    return np.tile(_slab_normal(cell).reshape(1, 3), (n_verts, 1))
+    return np.tile(_slab_outward_normal(positions, cell).reshape(1, 3), (n_verts, 1))
 
 
 def _periodic_local_normals(
@@ -151,7 +155,7 @@ def _site_normals_for_material(
     if n_verts == 0:
         return np.empty((0, 3), dtype=float)
     if material_type == "slab":
-        return _slab_site_normals(n_verts, cell)
+        return _slab_site_normals(n_verts, cell, positions)
     if material_type == "porous" and bool(np.any(pbc)) and cell_has_volume(cell):
         return _periodic_local_normals(
             vertices,
@@ -594,7 +598,7 @@ def _outward_normals_batch(
     *,
     probe_radius: float | None,
     centroid: np.ndarray,
-    material_type: str = "slab",
+    material_type: str,
 ) -> np.ndarray:
     """Return outward unit normals. Non-finite rows are buried or degenerate."""
     bases = np.asarray(xyz, dtype=float).reshape(-1, 3)
@@ -755,7 +759,7 @@ def _classify_vertices(
                     "ctx.class_dists and ctx.class_idx must be set for Voronoi classification"
                 )
             for i in need:
-                site_type, support = _classify_voronoi_site_from_neighbors(
+                site_type, neigh = _classify_voronoi_site_from_neighbors(
                     ctx.class_dists[i],
                     ctx.class_idx[i],
                     pore_threshold=pore_threshold,
@@ -765,12 +769,12 @@ def _classify_vertices(
                     and not provided_atoms[i]
                     and fw_nn_by_i.get(i, float("inf")) <= float(pore_threshold)
                 ):
-                    site_type, support = _classify_voronoi_site_from_neighbors(
+                    site_type, neigh = _classify_voronoi_site_from_neighbors(
                         ctx.class_dists[i],
                         ctx.class_idx[i],
                         pore_threshold=float("inf"),
                     )
-                classifications[i] = (site_type, support)
+                classifications[i] = (site_type, neigh)
 
     prepared_xyz: list[np.ndarray] = []
     prepared_normals: list[np.ndarray] = []

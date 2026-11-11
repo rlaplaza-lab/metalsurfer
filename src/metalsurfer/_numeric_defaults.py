@@ -36,6 +36,8 @@ MIN_CALCULATOR_CELL_C_ANG: float = 18.0
 # product (or an in-plane basis vector) is treated as degenerate and a
 # Cartesian fallback axis is used instead.
 SURFACE_NORMAL_FALLBACK_NORM_EPS: float = 1e-8
+# Min vacuum gap (Å) by which -a×b must exceed +a×b to select the lower face.
+SLAB_VACUUM_FACE_MARGIN_ANG: float = 1.0
 ACQUISITION_XI_DEFAULT: float = 1e-6
 ACQUISITION_SIGMA_FLOOR: float = 1e-9
 RESIDUAL_SIGMA_DISTANCE_TEMPER: float = 0.25

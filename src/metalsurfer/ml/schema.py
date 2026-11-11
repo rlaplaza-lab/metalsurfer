@@ -59,6 +59,7 @@ _CONTEXT_FIELDS: tuple[_ContextField, ...] = (
     _ContextField("model_name", "str"),
     _ContextField("task_name", "str"),
     _ContextField("dispersion", "str"),
+    _ContextField("material_type", "str"),
     _ContextField("fmax", "float"),
     _ContextField("stage1_steps", "int"),
     _ContextField("stage2_steps", "int"),
@@ -257,6 +258,8 @@ class ComputationContext:
     model_name: str = "uma-s-1p2"
     task_name: str = "oc25"
     dispersion: str = "none"
+    # Snapshot default for bare records; from_config always copies the real type.
+    material_type: str = "slab"
     fmax: float = DEFAULT_FMAX
     stage1_steps: int = 50
     stage2_steps: int = 150
@@ -307,10 +310,9 @@ class ComputationContext:
 
     def to_config(self) -> AdsorptionConfig:
         """Build an AdsorptionConfig matching this computation context."""
-        cfg = AdsorptionConfig()
-        for spec in _CONTEXT_FIELDS:
-            setattr(cfg, spec.name, getattr(self, spec.name))
-        return cfg
+        return AdsorptionConfig(
+            **{spec.name: getattr(self, spec.name) for spec in _CONTEXT_FIELDS}
+        )
 
 
 def config_to_context_row(

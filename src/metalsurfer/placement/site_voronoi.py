@@ -30,7 +30,7 @@ from .site_coords import (
     _minimum_image_cartesian_delta,
     _periodic_image_offsets,
     _project_to_slab_plane,
-    _slab_normal,
+    _slab_outward_normal,
     _slab_plane_projectors,
     _wrap_cartesian,
     derive_pore_threshold,
@@ -332,7 +332,7 @@ def _generate_slab_topology_sites(
             empty_vertices, empty_dists, [], empty_atoms, None, None, None, None
         )
 
-    n_hat = _slab_normal(cell)
+    n_hat = _slab_outward_normal(positions, cell)
     top_atom_indices = np.asarray(top_atom_indices, dtype=int)
     top_positions = positions[top_atom_indices]
 

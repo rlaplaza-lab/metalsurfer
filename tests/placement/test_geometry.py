@@ -404,6 +404,7 @@ def test_strict_contact_gate_accepts_physical_heights_and_rejects_liftoff():
     ), "the strict-contact window must be non-empty"
 
     slab = fcc111("Pt", (3, 3, 3), vacuum=10.0)
+    slab.set_pbc([True, True, False])
     top_z = float(slab.get_positions()[:, 2].max())
     anchor = slab.get_positions()[-1]
 
@@ -415,12 +416,12 @@ def test_strict_contact_gate_accepts_physical_heights_and_rejects_liftoff():
 
     for height in (1.8, 2.0, 2.5):
         ok, reason = check_initial_contact_quality(
-            _co_at(height), slab, strict_initial_placement=True
+            _co_at(height), slab, strict_initial_placement=True, material_type="slab"
         )
         assert ok, f"physical height {height} A rejected: {reason}"
 
     ok_far, reason_far = check_initial_contact_quality(
-        _co_at(8.0), slab, strict_initial_placement=True
+        _co_at(8.0), slab, strict_initial_placement=True, material_type="slab"
     )
     assert not ok_far
     assert reason_far == "contact_distance_too_large"

@@ -582,7 +582,9 @@ class TestFeatureBuilding:
     def test_build_spec_features_geometry_aware_not_constant(self):
         slab = make_slab(nx=2, ny=2, n_layers=3)
         conformers = [make_water()]
-        config = AdsorptionConfig(num_conformers=1, num_placements=12)
+        config = AdsorptionConfig(
+            material_type="slab", num_conformers=1, num_placements=12
+        )
         specs = enumerate_placement_specs(conformers, slab, config, "O", n_desired=12)
         assert len(specs) >= 4
         X, valid_indices = build_spec_features_geometry_aware(
@@ -608,7 +610,9 @@ class TestFeatureBuilding:
     def test_build_spec_features_fills_materialization_cache(self):
         slab = make_slab(nx=2, ny=2, n_layers=3)
         conformers = [make_water()]
-        config = AdsorptionConfig(num_conformers=1, num_placements=8)
+        config = AdsorptionConfig(
+            material_type="slab", num_conformers=1, num_placements=8
+        )
         specs = enumerate_placement_specs(conformers, slab, config, "O", n_desired=8)
         cache: dict = {}
         X, valid_indices = build_spec_features_geometry_aware(
@@ -657,9 +661,11 @@ class TestFeatureBuilding:
                 [3.75, 1.25, 0.0],
             ],
             cell=[[5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 20.0]],
-            pbc=[True, True, True],
+            pbc=[True, True, False],
         )
-        config = AdsorptionConfig(num_conformers=1, num_placements=10)
+        config = AdsorptionConfig(
+            material_type="slab", num_conformers=1, num_placements=10
+        )
         capacity = estimate_placement_spec_capacity([conformer], slab, config, "CO")
         specs = enumerate_placement_specs(
             [conformer], slab, config, "CO", n_desired=capacity
@@ -881,7 +887,7 @@ class TestTransferTolerance:
         return X_current, y_current, X_prior, y_prior
 
     def test_config_default_tolerance_is_0_05(self):
-        assert AdsorptionConfig().bo.transfer.mae_tolerance == 0.05
+        assert AdsorptionConfig(material_type="slab").bo.transfer.mae_tolerance == 0.05
 
     def test_tiny_positive_delta_tolerated_by_widened_tolerance(self):
         Xc, yc, Xp, yp = self._slow_prior_data()
@@ -946,11 +952,12 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
         seed=42,
         results_dir=str(tmp_path),
         relaxation_mode="none",
-        config=AdsorptionConfig(),
+        config=AdsorptionConfig(material_type="slab"),
     )
 
     n_placements = 8
     config = AdsorptionConfig(
+        material_type="slab",
         bo=BOConfig(
             initial_random=n_placements,
             batch_size=n_placements,
@@ -1309,6 +1316,7 @@ def test_cumulative_refit_oof_gate_uses_baseline_on_bad_round():
     y_prior = -np.asarray(X_prior["x"], dtype=float) + 5.0
 
     config = AdsorptionConfig(
+        material_type="slab",
         bo=BOConfig(
             surrogate="ridge",
             transfer=BOTransferConfig(
@@ -1320,7 +1328,7 @@ def test_cumulative_refit_oof_gate_uses_baseline_on_bad_round():
                 weight_cap=0.5,
                 proximity_lengthscale=1.0,
             ),
-        )
+        ),
     )
     memory = BOStepMemory(
         observed_X_rows=X_prior.to_dict(orient="records"),
@@ -1360,6 +1368,7 @@ def test_acquisition_loop_warmup_uses_independent_trials(monkeypatch):
     )
     scaled = StandardScaler().fit_transform(features.to_numpy(dtype=float))
     config = AdsorptionConfig(
+        material_type="slab",
         seed=1,
         num_placements=n_pool,
         bo=BOConfig(initial_random=1, batch_size=1, total_batches=3, acquisition="lcb"),
@@ -1420,6 +1429,7 @@ def test_acquisition_loop_caps_the_last_batch_at_the_eval_budget():
     )
     scaled = StandardScaler().fit_transform(features.to_numpy(dtype=float))
     config = AdsorptionConfig(
+        material_type="slab",
         seed=1,
         num_placements=n_pool,
         bo=BOConfig(initial_random=1, batch_size=5, total_batches=2, acquisition="lcb"),

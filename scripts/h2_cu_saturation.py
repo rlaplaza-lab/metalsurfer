@@ -17,6 +17,7 @@ def main():
     results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
+        material_type="slab",
         num_conformers=1,
         num_placements=250,
         enable_dissociative_placement=True,

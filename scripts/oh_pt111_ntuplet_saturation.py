@@ -46,6 +46,7 @@ SITE_ORDER = ("atop", "bridge", "hollow")
 def make_base_config() -> AdsorptionConfig:
     """Shared saturation knobs for the isolated / sequential / n-tuplet runs."""
     return AdsorptionConfig(
+        material_type="slab",
         num_conformers=1,
         num_placements=250,
     )

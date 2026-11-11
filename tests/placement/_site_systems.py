@@ -69,11 +69,14 @@ def _push_apart_close_pairs(atoms: Atoms, *, min_scale: float = 0.85) -> Atoms:
 
 
 def make_regular_slab() -> Atoms:
-    return fcc111("Pt", size=(3, 3, 3), vacuum=10.0, periodic=True)
+    slab = fcc111("Pt", size=(3, 3, 3), vacuum=10.0, periodic=True)
+    slab.set_pbc([True, True, False])
+    return slab
 
 
 def make_disordered_slab() -> Atoms:
     slab = fcc111("Pt", size=(4, 4, 3), vacuum=10.0, periodic=True)
+    slab.set_pbc([True, True, False])
     pos = np.asarray(slab.get_positions(), dtype=float)
     cell = np.asarray(slab.get_cell(), dtype=float)
     top = pos[:, 2] > float(np.max(pos[:, 2])) - 0.8

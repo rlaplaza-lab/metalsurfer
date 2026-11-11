@@ -24,7 +24,7 @@ from .site_classify import site_env_fingerprint
 from .site_coords import (
     _build_periodic_images,
     _minimum_image_cartesian_delta,
-    _slab_normal,
+    _slab_outward_normal,
     ray_exposure_mask,
 )
 from .site_plugins.helpers import median_nn_or_fallback
@@ -101,7 +101,9 @@ def ligand_local_sites(
     _, nearest_hits = sub_tree.query(positions[lig_idx], k=1)
     nearest_j = np.asarray(nearest_hits, dtype=int).ravel() % n_sub
     fallback = (
-        _slab_normal(cell) if material_type == "slab" else np.array([0.0, 0.0, 1.0])
+        _slab_outward_normal(sub_pos, cell)
+        if material_type == "slab"
+        else np.array([0.0, 0.0, 1.0])
     )
     normals = np.vstack(
         [

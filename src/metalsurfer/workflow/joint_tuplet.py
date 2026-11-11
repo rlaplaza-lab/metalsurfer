@@ -262,7 +262,9 @@ def _materialize_pose_pool(
 ) -> list[ScreeningResult]:
     fill = fill_materialized_placements(
         conformers=conformers,
-        slab_for_sites=_build_surface_reference_slab(slab.atoms, base_slab),
+        slab_for_sites=_build_surface_reference_slab(
+            slab.atoms, base_slab, material_type=config.material_type
+        ),
         config=replace(config, num_placements=pool_size),
         smiles=smiles,
         site_context=site_context,
@@ -403,7 +405,9 @@ def screen_joint_tuplet_multi(
     ``assemble="exact"`` uses :func:`assemble_joint_config_groups` (homogeneous
     path). Mixed campaigns keep the default ``"quota"`` assembler.
     """
-    slab_for_sites = _build_surface_reference_slab(current_slab.atoms, base_slab)
+    slab_for_sites = _build_surface_reference_slab(
+        current_slab.atoms, base_slab, material_type=config.material_type
+    )
     site_context = site_context_for_sampling(
         slab_for_sites,
         config,

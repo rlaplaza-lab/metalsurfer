@@ -607,6 +607,7 @@ def _saturation_step_preamble(
         substrate_for_symmetry = _build_surface_reference_slab(
             current_slab.atoms,
             reference_slab_for_symmetry,
+            material_type=config.material_type,
         )
         symmetry_broken = _saturation_symmetry_broken_vs_reference(
             substrate_for_symmetry,
@@ -945,7 +946,9 @@ def _run_single_molecule_saturation(
         """Screen placements for one saturation step."""
         nonlocal config
         symmetry_broken = preamble.symmetry_broken
-        slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
+        slab_for_sites = _build_surface_reference_slab(
+            slab.atoms, base_slab, material_type=config.material_type
+        )
         config = _resolve_step_workload_config(
             config,
             bo_enabled=bo_enabled,
@@ -1229,7 +1232,9 @@ def _run_multi_molecule_saturation(
         E_slab = preamble.E_slab
         ref_step = preamble.ref_step
 
-        slab_for_sites = _build_surface_reference_slab(slab.atoms, base_slab)
+        slab_for_sites = _build_surface_reference_slab(
+            slab.atoms, base_slab, material_type=config.material_type
+        )
         largest_conformers, _ = conformer_cache[largest_mol]
         step_config = _resolve_step_workload_config(
             config,

@@ -67,7 +67,7 @@ def test_core_import_without_heavy_deps(monkeypatch):
         assert hasattr(metalsurfer, "ScreeningResult")
         assert hasattr(metalsurfer, "DependencyMissingError")
 
-        cfg = metalsurfer.AdsorptionConfig(num_conformers=3)
+        cfg = metalsurfer.AdsorptionConfig(material_type="slab", num_conformers=3)
         assert cfg.num_conformers == 3
 
 

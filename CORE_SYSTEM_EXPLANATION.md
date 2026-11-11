@@ -148,17 +148,20 @@ the code keeps deliberately separate:
 
 ## 3. System types: how sites are found
 
-Everything in this section is organised by `material_type`. That one field
-(`slab`, `nanoparticle`, or `porous`) decides which periodicity the geometry
-uses, which site sources run, and which heuristics apply. Behind the scenes each
-type maps to a periodicity: slabs are periodic in the two surface directions and
-open in the third; nanoparticles are fully non-periodic; porous frameworks are
-periodic in all three directions. Distance math, filters, shortest periodic
-distances, and site symmetry use that material-aware periodicity
-(`material_aware_pbc`), not whatever flags the ASE Atoms carry after the
-calculator promotes slabs to full 3D periodicity. Opt-in wall-near
-generators are the exception and follow the structure's own PBC flags.
-Stored results restore material periodicity via `apply_material_pbc`.
+Everything in this section is organised by `material_type`. That field is
+**required** (`slab`, `nanoparticle`, or `porous`) and must match the substrate
+ASE PBC mask exactly:
+
+- slab → `[True, True, False]` (2D): one open face; sites keep the selected
+  vacuum face and ignore the other
+- nanoparticle → `[False, False, False]` (3D closed): whole exterior surface
+- porous → `[True, True, True]` (3D periodic): every wall
+
+A mismatch raises; metalsurfer does not rewrite PBC or detect a vacuum gap to
+reinterpret the system. Site enumeration, placement, filters, and clustering
+all read `atoms.get_pbc()` after that check. At the UMA calculator boundary,
+copies may be promoted to `[True, True, True]`; stored substrates restore the
+declared mask via `apply_material_pbc`.
 
 A *site* is always a point in space plus a local *outward normal* (the direction
 away from the material) and a *site type*. The site types are:
@@ -183,16 +186,20 @@ mapping when the pair is compatible with `material_type`. Opt-in
 `adaptive_grid` lays a Cartesian grid around every atom (spacing in Å via
 `adaptive_grid_spacing`); opt-in `rolling_probe` places Connolly / SAS
 contacts tangent to one, two, or three framework spheres (atop / bridge /
-hollow, including MOF pore walls) using `atoms.get_pbc()`
-(`uses_structure_pbc`). Both then follow the same classify → cluster →
-symmetry path on all materials and are never chosen by `auto`.
+hollow, including MOF pore walls). Both use the validated atoms PBC mask
+(2D face filter via `side_policy` on slabs; no face drop on 3D systems) and
+follow the same classify → cluster → symmetry path. Neither is chosen by
+`auto`. On slabs, every site path explores the face with more vacuum along
+`a×b` by default (`side_policy="positive"`); `"negative"` is the opposite
+face and `"all"` keeps both.
 
 ### 3.1 Slab
 
-A slab top layer is a set of atoms lying in roughly one plane. Because that
+A slab top layer is the vacuum-richer atomic face along `a×b`. Because that
 layer is *coplanar*, a 3D Voronoi diagram would collapse to a flat plane, so
-the default topology plugin never attempts one there. Instead it reads the top
-layer — including its ±1 periodic images along the two surface directions —
+the default topology plugin never attempts one there. Instead it reads the
+exposed layer — including its ±1 periodic images along the two surface
+directions —
 and explicitly constructs:
 
 - **atop** candidates, one above each top-layer atom (lifted by a fraction of

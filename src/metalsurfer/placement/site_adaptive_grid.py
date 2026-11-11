@@ -84,7 +84,6 @@ from .site_wall_near_common import (
     _support_key,
     candidates_to_arrays,
     empty_adaptive_grid_result,
-    resolve_side_policy_for_pbc,
     shell_target_clearance,
     wall_near_clearance_window,
 )
@@ -96,7 +95,6 @@ __all__ = [
     "SidePolicy",
     "adaptive_grid_spacing",
     "generate_adaptive_grid_sites",
-    "resolve_side_policy_for_pbc",
 ]
 
 _SOURCE_HINT = "adaptive_grid"
@@ -154,7 +152,8 @@ def _wall_near_framework_setup(
     positions = np.asarray(positions, dtype=float)
     cell = np.asarray(cell, dtype=float)
     pbc = np.asarray(pbc, dtype=bool)
-    side_policy = resolve_side_policy_for_pbc(pbc, side_policy)
+    if side_policy not in ("all", "positive", "negative", "external"):
+        raise ValueError(f"Unknown side_policy {side_policy!r}")
     n_atoms = len(positions)
     if framework_radii is None:
         if symbols is not None and len(symbols) == n_atoms:

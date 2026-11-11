@@ -102,7 +102,6 @@ class SiteGenerator(Protocol):
 
     name: str
     widens_distance_window: bool
-    uses_structure_pbc: bool
 
     def generate(
         self,

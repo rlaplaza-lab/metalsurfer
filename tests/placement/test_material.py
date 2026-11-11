@@ -556,7 +556,7 @@ def test_compute_site_z_base_multiplicative_from_covalent_radii():
         site_type="atop",
         slab_indices=(top_index,),
     )
-    config = AdsorptionConfig(placement_z_range=(1.0, 1.5))
+    config = AdsorptionConfig(material_type="slab", placement_z_range=(1.0, 1.5))
     z_lo, z_hi = _compute_site_z_base(config, slab, site, ["H"])
     r_h = float(covalent_radii[atomic_numbers["H"]])
     r_surface = _get_site_surface_radii(slab, site)
@@ -569,6 +569,7 @@ def test_compute_site_z_base_multiplicative_from_covalent_radii():
 def test_compute_site_z_base_literal_when_scaling_disabled():
     slab = make_slab()
     config = AdsorptionConfig(
+        material_type="slab",
         placement_z_range=(2.1, 3.4),
         placement_z_scale_by_covalent_radius=False,
     )
@@ -584,7 +585,7 @@ def test_compute_site_z_base_same_formula_for_pore_site():
     pore_sites = [s for s in sites if s.site_type == "pore"]
     assert pore_sites, "SiO₂ porous fixture must expose pore sites"
     site = pore_sites[0]
-    config = AdsorptionConfig(placement_z_range=(1.0, 1.5))
+    config = AdsorptionConfig(material_type="slab", placement_z_range=(1.0, 1.5))
     z_lo, z_hi = _compute_site_z_base(config, slab, site, ["O"])
     r_o = float(covalent_radii[atomic_numbers["O"]])
     r_surface = _get_site_surface_radii(slab, site)
@@ -649,6 +650,7 @@ def test_saturation_placement_height_uses_reference_slab():
     full_slab.set_pbc(slab.get_pbc())
 
     config = AdsorptionConfig(
+        material_type="slab",
         device="cpu",
         placement_z_range=(2.0, 3.0),
         placement_z_scale_by_covalent_radius=False,
@@ -728,6 +730,7 @@ def test_saturation_placement_without_site_context_uses_reference_slab():
     full_slab.set_pbc(slab.get_pbc())
 
     config = AdsorptionConfig(
+        material_type="slab",
         device="cpu",
         placement_z_range=(2.0, 3.0),
         placement_z_scale_by_covalent_radius=False,
@@ -802,7 +805,7 @@ def test_distance_recovery_rescues_too_close_placement():
         ctx,
         water.copy(),
         slab,
-        AdsorptionConfig(placement_distance_recovery=False),
+        AdsorptionConfig(material_type="slab", placement_distance_recovery=False),
         allow_distance_recovery=True,
     )
     assert fail is None
@@ -812,7 +815,7 @@ def test_distance_recovery_rescues_too_close_placement():
         ctx,
         water.copy(),
         slab,
-        AdsorptionConfig(placement_distance_recovery=True),
+        AdsorptionConfig(material_type="slab", placement_distance_recovery=True),
         allow_distance_recovery=True,
     )
     assert ok is not None, ok_reason
@@ -851,6 +854,7 @@ def test_distance_recovery_height_only_when_xy_disabled():
         normal=np.array([0.0, 0.0, 1.0]),
     )
     config = AdsorptionConfig(
+        material_type="slab",
         placement_distance_recovery=True,
         placement_clash_descent=True,
         placement_x_range=(0.0, 0.0),

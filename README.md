@@ -89,7 +89,7 @@ for summary in result.molecule_summaries:
 | Configuration options | `AdsorptionConfig` | [Field reference](https://metalsurfer.readthedocs.io/en/latest/api/config.html) · [Configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) |
 | YAML campaign | `load_campaign_yaml` + `run_campaign` | Demo YAMLs in [`examples/`](examples/); production templates in [`scripts/campaigns/`](scripts/campaigns/); `campaign:` is `adsorption` / `adsorption_bo` / `saturation` / `saturation_bo` ([API](https://metalsurfer.readthedocs.io/en/latest/api/campaigns.html)) |
 
-Set `material_type` (defaults to `slab`) to match your substrate: `slab`, `nanoparticle`, or `porous`. See the [configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) for when to use each.
+`material_type` is required (`slab`, `nanoparticle`, or `porous`) and must match the substrate ASE PBC mask (`[T,T,F]`, `[F,F,F]`, or `[T,T,T]`). Geometry follows that mask: 2D slabs ignore one face; 3D systems use the whole surface. See the [configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html).
 
 Output is written under `results_{surface_type}/` (XYZ structures, CSV summaries, optional VASP inputs). See [architecture — output structure](https://metalsurfer.readthedocs.io/en/latest/guides/architecture.html#output-structure) for layout details.
 

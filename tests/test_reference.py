@@ -68,7 +68,7 @@ class TestCalculateReferenceEnergies:
             ["water"],
             ["O"],
             ts_model=object(),
-            config=AdsorptionConfig(),
+            config=AdsorptionConfig(material_type="slab"),
         )
 
         assert isinstance(ref, ReferenceEnergies)
@@ -91,7 +91,7 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_zero_slab_energy_raises(self, monkeypatch):
@@ -106,7 +106,7 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_boundary_slab_energy_1e_6_accepted(self, monkeypatch):
@@ -120,7 +120,12 @@ class TestCalculateReferenceEnergies:
             opt_results=[(_make_atoms(), -5.0)],
         )
         ref = reference.calculate_reference_energies(
-            slab, calc, ["water"], ["O"], ts_model=object(), config=AdsorptionConfig()
+            slab,
+            calc,
+            ["water"],
+            ["O"],
+            ts_model=object(),
+            config=AdsorptionConfig(material_type="slab"),
         )
         assert ref.slab_energy == pytest.approx(1e-6)
 
@@ -135,7 +140,7 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_inf_slab_energy_raises(self, monkeypatch):
@@ -149,7 +154,7 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_empty_slab_n_atoms_zero_path(self, monkeypatch):
@@ -168,7 +173,7 @@ class TestCalculateReferenceEnergies:
             ["water"],
             ["O"],
             ts_model=object(),
-            config=AdsorptionConfig(),
+            config=AdsorptionConfig(material_type="slab"),
         )
         assert ref.slab_energy == pytest.approx(-1.0)
         assert ref.molecule_energies == {"water": -5.0}
@@ -186,7 +191,9 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(fail_on_conformer_failure=True),
+                config=AdsorptionConfig(
+                    material_type="slab", fail_on_conformer_failure=True
+                ),
             )
 
     def test_conformer_failure_omits_molecule_when_lenient(self, monkeypatch, caplog):
@@ -201,7 +208,9 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(fail_on_conformer_failure=False),
+                config=AdsorptionConfig(
+                    material_type="slab", fail_on_conformer_failure=False
+                ),
             )
         assert ref.slab_energy == -100.0
         assert "water" not in ref.molecule_energies
@@ -224,7 +233,9 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(fail_on_conformer_failure=True),
+                config=AdsorptionConfig(
+                    material_type="slab", fail_on_conformer_failure=True
+                ),
             )
 
     def test_empty_optimization_results_omits_molecule_when_lenient(
@@ -242,7 +253,9 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(fail_on_conformer_failure=False),
+                config=AdsorptionConfig(
+                    material_type="slab", fail_on_conformer_failure=False
+                ),
             )
         assert ref.slab_energy == -100.0
         assert "water" not in ref.molecule_energies
@@ -310,7 +323,7 @@ class TestSingleAtomUmaRefs:
             ["oxygen"],
             ["[O]"],
             ts_model=_StubModel(refs),
-            config=AdsorptionConfig(),
+            config=AdsorptionConfig(material_type="slab"),
         )
         assert opt_calls == []
         assert result.molecule_energies["oxygen"] == pytest.approx(skin)
@@ -336,7 +349,9 @@ class TestSingleAtomUmaRefs:
             ["oxygen"],
             ["[O]"],
             ts_model=object(),
-            config=AdsorptionConfig(fail_on_conformer_failure=False),
+            config=AdsorptionConfig(
+                material_type="slab", fail_on_conformer_failure=False
+            ),
         )
         assert opt_calls == []
         assert "oxygen" not in result.molecule_energies
@@ -357,5 +372,7 @@ class TestSingleAtomUmaRefs:
                 ["oxygen"],
                 ["[O]"],
                 ts_model=object(),
-                config=AdsorptionConfig(fail_on_missing_reference=True),
+                config=AdsorptionConfig(
+                    material_type="slab", fail_on_missing_reference=True
+                ),
             )

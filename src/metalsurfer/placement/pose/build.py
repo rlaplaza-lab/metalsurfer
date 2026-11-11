@@ -19,7 +19,7 @@ from ..orientation import (
 from ..site_context import SiteContext, site_context_for_sampling
 from ..site_coords import (
     _derive_top_layer_tolerance,
-    _slab_normal,
+    _slab_outward_normal,
     top_layer_mask_by_normal,
 )
 from ..site_enumeration import _get_site_surface_radii
@@ -49,7 +49,7 @@ def build_pose_batch_cache(
     positions = np.asarray(slab.get_positions(), dtype=float)
     symbols = list(slab.get_chemical_symbols())
     cache.cell = cell
-    cache.n_hat = _slab_normal(cell)
+    cache.n_hat = _slab_outward_normal(positions, cell)
     cache.positions = positions
     # Element-derived top depth (same as _get_site_surface_radii without
     # top_indices), not config.top_layer_tolerance.
@@ -181,12 +181,12 @@ def _pose_from_spec(
         if pose_cache is not None and pose_cache.n_hat is not None:
             place_normal = _placement_normal_hat(pose_cache.n_hat)
         else:
-            cell = (
-                pose_cache.cell
-                if pose_cache is not None and pose_cache.cell is not None
-                else np.asarray(ref_slab.get_cell(), dtype=float)
+            place_normal = _placement_normal_hat(
+                _slab_outward_normal(
+                    np.asarray(ref_slab.get_positions(), dtype=float),
+                    np.asarray(ref_slab.get_cell(), dtype=float),
+                )
             )
-            place_normal = _placement_normal_hat(_slab_normal(cell))
 
     base = np.asarray(site.xyz, dtype=float)
     base_h = float(np.dot(base, place_normal))

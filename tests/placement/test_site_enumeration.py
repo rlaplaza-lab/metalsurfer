@@ -17,6 +17,7 @@ from metalsurfer.placement.geometry import (
 )
 from metalsurfer.placement.site_coords import (
     _slab_normal,
+    _slab_outward_normal,
     mic_support_positions,
     top_layer_mask_by_normal,
 )
@@ -76,7 +77,10 @@ def test_slab_catalog_xyz_is_support_plane_anchor():
     """Wall-near Site.xyz sits in the coordinating-atom plane after unlift."""
     from ase.build import fcc111
 
+    from metalsurfer.surface_prep import apply_material_pbc
+
     slab = fcc111("Pt", size=(3, 3, 3), vacuum=10.0, periodic=True)
+    apply_material_pbc(slab, "slab")
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = np.asarray(slab.get_pbc(), dtype=bool)
     for plugin in ("topology", "voronoi", "adaptive_grid", "rolling_probe"):
@@ -311,18 +315,19 @@ def test_top_layer_is_planar_from_arrays_true_for_three_coplanar_atoms():
     )
 
 
-def test_get_unified_sites_uses_material_aware_pbc_not_atoms_ttt():
-    """TTT atoms with material_type=slab must still enumerate as TTF slab sites."""
+def test_get_unified_sites_rejects_slab_with_ttt_pbc():
+    """TTT atoms with material_type=slab raise; PBC is never rewritten."""
+    from metalsurfer.exceptions import GeometryValidationError
+
     slab = make_slab()
-    ttf = get_unified_sites(slab, material_type="slab")
+    assert get_unified_sites(slab, material_type="slab")
     ttt = slab.copy()
     ttt.set_pbc([True, True, True])
-    sites_ttt = get_unified_sites(ttt, material_type="slab")
-    assert len(sites_ttt) == len(ttf)
-    assert {s.site_type for s in sites_ttt} == {s.site_type for s in ttf}
+    with pytest.raises(GeometryValidationError, match="inconsistent with"):
+        get_unified_sites(ttt, material_type="slab")
 
 
-def test_get_symmetry_aware_sites_mode_follows_material_type_not_atoms_pbc(
+def test_get_symmetry_aware_sites_mode_follows_material_type(
     monkeypatch,
 ):
     """SymmetryAnalyzer mode comes from material_type, not atoms.get_pbc()."""
@@ -342,15 +347,12 @@ def test_get_symmetry_aware_sites_mode_follows_material_type_not_atoms_pbc(
 
     slab = make_slab(nx=2, ny=2)
     raw = get_unified_sites(slab, material_type="slab")
-    fff = slab.copy()
-    fff.set_pbc([False, False, False])
     get_symmetry_aware_sites(
-        fff, material_type="slab", raw_sites=raw, symmetry_tolerance=0.15
+        slab, material_type="slab", raw_sites=raw, symmetry_tolerance=0.15
     )
     assert captured["mode"] == "periodic"
 
     np_atoms = make_nanoparticle()
-    np_atoms.set_pbc([True, True, True])
     np_raw = get_unified_sites(np_atoms, material_type="nanoparticle")
     assert np_raw
     get_symmetry_aware_sites(np_atoms, material_type="nanoparticle", raw_sites=np_raw)
@@ -601,26 +603,27 @@ def _rotated(atoms, angle_deg: float):
     ids=["fcc111", "fcc100", "hcp0001"],
 )
 def test_slab_site_normals_are_exactly_the_slab_normal(slab_factory):
-    """A k-nearest centroid tilted slab normals by up to 56°; use a×b instead."""
+    """A k-nearest centroid tilted slab normals by up to 56°; use vacuum-outward a×b."""
     slab = slab_factory()
     cell = np.asarray(slab.get_cell(), dtype=float)
-    expected = _slab_normal(cell)
+    positions = np.asarray(slab.get_positions(), dtype=float)
+    expected = _slab_outward_normal(positions, cell)
 
     sites = get_unified_sites(slab, material_type="slab")
     assert sites
 
     normals = np.array([s.normal for s in sites], dtype=float)
     assert np.allclose(normals, expected, atol=1e-12)
-    # Unrotated ASE slabs have the surface normal along +z.
     assert np.allclose(normals[:, 2], 1.0, atol=1e-12)
 
 
 def test_rotated_slab_site_normals_follow_the_rotated_cell():
-    """Normals track the cell, not Cartesian z, when the slab is rotated."""
+    """Normals track the vacuum-outward cell normal, not Cartesian z."""
     slab = _rotated(fcc111("Pt", (3, 3, 4), vacuum=10.0), 30.0)
     cell = np.asarray(slab.get_cell(), dtype=float)
-    expected = _slab_normal(cell)
-    assert abs(float(expected[2])) < 0.99  # genuinely tilted
+    positions = np.asarray(slab.get_positions(), dtype=float)
+    expected = _slab_outward_normal(positions, cell)
+    assert abs(float(expected[2])) < 0.99
 
     sites = get_unified_sites(slab, material_type="slab")
     assert sites
@@ -786,10 +789,15 @@ def test_issue6_ni55_and_ni13_expose_atop_bridge_hollow():
         )
         assert height >= probe, f"{name}: height={height:.3f} probe={probe:.3f}"
 
-        # Probe clearance metadata still records the accessibility lift height.
-        atop_nn = [float(s.nn_distance) for s in sites if s.site_type == "atop"]
-        assert atop_nn
-        assert all(nn == pytest.approx(height, abs=1e-6) for nn in atop_nn), name
+        # Clearance metadata records the accessibility lift; catalog xyz is
+        # the support-plane anchor so nn_distance to that plane can be ~0.
+        atop_clear = [
+            float(s.clearance)
+            for s in sites
+            if s.site_type == "atop" and s.clearance is not None
+        ]
+        assert atop_clear, name
+        assert all(c == pytest.approx(height, abs=1e-6) for c in atop_clear), name
 
         # Catalog xyz is the support-plane anchor; probe along normal exits hull.
         for s in sites:

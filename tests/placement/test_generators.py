@@ -395,7 +395,7 @@ def test_generate_placements_from_specs_empty_skips_cache_and_pose_cache(
             [],
             [make_water()],
             make_slab(),
-            AdsorptionConfig(),
+            AdsorptionConfig(material_type="slab"),
             materialization_cache={},
         )
         == []
@@ -410,7 +410,7 @@ def test_deposit_adatoms_then_generate_placement_from_spec():
         coverage_fraction=0.15,
         seed=7,
         relaxation_mode="none",
-        config=AdsorptionConfig(),
+        config=AdsorptionConfig(material_type="slab"),
     )
     config = AdsorptionConfig(
         material_type="slab",
@@ -418,7 +418,7 @@ def test_deposit_adatoms_then_generate_placement_from_spec():
         placement_z_range=(2.0, 3.0),
     )
     result = create_conformers_from_smiles(
-        "O", config=AdsorptionConfig(num_conformers=1)
+        "O", config=AdsorptionConfig(material_type="slab", num_conformers=1)
     )
     assert result is not None
     conformers, _ = result
@@ -463,7 +463,7 @@ def test_boltzmann_weighting_is_deterministic_and_proportional():
     )
 
     def hist(**kw):
-        cfg = AdsorptionConfig(**{**base, **kw})
+        cfg = AdsorptionConfig(**{"material_type": "slab", **{**base, **kw}})
         specs = enumerate_placement_specs(
             conformers,
             slab,

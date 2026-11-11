@@ -8,7 +8,7 @@ from typing import Any, Literal, cast
 import numpy as np
 from scipy.spatial import KDTree
 
-from .._geom_pbc import mic_point_distance
+from .._geom_pbc import mic_point_distance, slab_outward_normal
 from .._utils import cell_has_volume
 from ._constants import _ATOP_INJECTION_HEIGHT_FACTOR, _VECTOR_NORM_EPS
 from .site_coords import (
@@ -57,31 +57,6 @@ class AdaptiveGridResult:
     accessibility_tree: KDTree
 
 
-def resolve_side_policy_for_pbc(
-    pbc: np.ndarray,
-    side_policy: SidePolicy,
-) -> SidePolicy:
-    """Map the shared config default ``positive`` onto PBC geometry.
-
-    Explicit ``all`` / ``negative`` / ``external`` are left unchanged. The
-    default ``positive`` means:
-
-    - two periodic axes (slab-like): keep the vacuum-face half-space
-    - no periodic axes (cluster): COM-outward ``external``
-    - one or three periodic axes: ``all`` (no single vacuum face)
-    """
-    if side_policy not in ("all", "positive", "negative", "external"):
-        raise ValueError(f"Unknown side_policy {side_policy!r}")
-    if side_policy != "positive":
-        return side_policy
-    n_periodic = int(np.count_nonzero(np.asarray(pbc, dtype=bool).reshape(3)))
-    if n_periodic == 2:
-        return "positive"
-    if n_periodic == 0:
-        return "external"
-    return "all"
-
-
 def _side_policy_mask(
     normals: np.ndarray,
     *,
@@ -91,12 +66,13 @@ def _side_policy_mask(
     vertices: np.ndarray | None = None,
     positions: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Apply face / exposure policy from PBC geometry (not material labels).
+    """Apply face / exposure policy from the validated atoms PBC mask.
 
-    - Exactly one non-periodic axis (slab-like): ``a×b``-style face filter for
-      ``positive`` / ``negative``.
-    - No PBC (finite cluster): COM outward for ``external``.
-    - Fully 3D-periodic: no face filter (wall-near shells on all sides).
+    - Two periodic axes (slab): ``positive`` / ``negative`` / ``all`` along the
+      vacuum-oriented open axis (*positions* required).
+    - Zero periodic axes (nanoparticle): keep COM-outward sites; ``side_policy``
+      is ignored.
+    - Three periodic axes (porous): no face filter; ``side_policy`` is ignored.
     """
     if side_policy not in ("all", "positive", "negative", "external"):
         raise ValueError(f"Unknown side_policy {side_policy!r}")
@@ -108,26 +84,15 @@ def _side_policy_mask(
     n_periodic = int(np.count_nonzero(pbc_arr))
 
     if n_periodic == 2 and cell_has_volume(cell):
-        periodic_axes = [i for i in range(3) if bool(pbc_arr[i])]
-        n_hat = np.cross(
-            np.asarray(cell[periodic_axes[0]], dtype=float),
-            np.asarray(cell[periodic_axes[1]], dtype=float),
-        )
-        nrm = float(np.linalg.norm(n_hat))
-        if nrm <= _VECTOR_NORM_EPS:
-            return keep
-        n_hat = n_hat / nrm
+        if positions is None:
+            raise ValueError("slab side_policy requires framework positions")
+        n_hat = slab_outward_normal(positions, cell)
         dots = np.einsum("ij,j->i", normals, n_hat)
         if side_policy == "positive":
             keep &= dots >= -1e-12
         elif side_policy == "negative":
             keep &= dots <= 1e-12
-    elif (
-        n_periodic == 0
-        and side_policy == "external"
-        and vertices is not None
-        and positions is not None
-    ):
+    elif n_periodic == 0 and vertices is not None and positions is not None:
         com = np.mean(np.asarray(positions, dtype=float), axis=0)
         outward = np.asarray(vertices, dtype=float) - com
         norms = np.linalg.norm(outward, axis=1)

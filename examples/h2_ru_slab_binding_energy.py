@@ -94,6 +94,7 @@ def main() -> int:
 
     # Modest placement count: many dissociative trials desorb on this surface.
     config = AdsorptionConfig(
+        material_type="slab",
         num_conformers=1,
         num_placements=10,
         enable_dissociative_placement=True,

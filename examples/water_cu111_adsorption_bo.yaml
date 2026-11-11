@@ -9,6 +9,7 @@ molecules:
   - smiles: O
     name: water
 config:
+  material_type: slab
   num_conformers: 1
   num_placements: 4
   bo:

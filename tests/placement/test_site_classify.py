@@ -273,7 +273,7 @@ def test_periodic_slab_reduction_is_unaffected_by_the_cluster_fix():
 def test_vectorized_orbits_match_the_scalar_reference_on_a_slab():
     slab = fcc111("Pt", (3, 3, 4), vacuum=10.0)
     sites = get_unified_sites(slab, material_type="slab")
-    analyzer = SymmetryAnalyzer(slab, mode="auto")
+    analyzer = SymmetryAnalyzer(slab, mode="periodic")
 
     reference = _reference_orbits(analyzer, sites, True)
     orbits = analyzer.analyze_site_symmetry(sites, planar=True)
@@ -308,7 +308,7 @@ def test_symmetry_reduction_of_a_4x4_slab_is_fast():
     """Vectorization regression guard: pre-vectorization ~21 s on 4×4 Pt(111)."""
     slab = fcc111("Pt", (4, 4, 4), vacuum=10.0)
     raw = get_unified_sites(slab, material_type="slab")
-    analyzer = SymmetryAnalyzer(slab, mode="auto")
+    analyzer = SymmetryAnalyzer(slab, mode="periodic")
     analyzer._frac_ops_from_dataset()  # exclude one-off spglib cost
 
     start = time.perf_counter()
@@ -722,6 +722,7 @@ def test_outward_normal_flips_inward_and_drops_buried():
         tree,
         probe_radius=0.8,
         centroid=centroid,
+        material_type="nanoparticle",
     )[0]
     assert np.all(np.isfinite(flipped))
     assert float(flipped[2]) > 0.0
@@ -732,6 +733,7 @@ def test_outward_normal_flips_inward_and_drops_buried():
         tree,
         probe_radius=0.8,
         centroid=centroid,
+        material_type="nanoparticle",
     )[0]
     assert np.all(np.isfinite(kept))
     assert float(kept[2]) > 0.0
@@ -749,6 +751,7 @@ def test_outward_normal_flips_inward_and_drops_buried():
         cube_tree,
         probe_radius=0.2,
         centroid=np.mean(cube, axis=0),
+        material_type="nanoparticle",
     )[0]
     assert not np.all(np.isfinite(buried_normal))
 

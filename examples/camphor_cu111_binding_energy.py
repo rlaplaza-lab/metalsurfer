@@ -228,6 +228,7 @@ def prepare_campaign_slab(
 def build_config(*, device: str) -> AdsorptionConfig:
     # BO budget is acquisition batches after the initial random batch.
     return AdsorptionConfig(
+        material_type="slab",
         num_conformers=1,
         device=device,
         # Clearance-aware height: nearest adsorbate atom sits in this window.

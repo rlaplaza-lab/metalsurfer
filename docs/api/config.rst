@@ -35,12 +35,13 @@ Material and substrate
 ~~~~~~~~~~~~~~~~~~~~~~
 
 ``material_type``
-   **Type:** ``Literal["slab", "nanoparticle", "porous"]`` · **Default:** ``"slab"``
+   **Type:** ``Literal["slab", "nanoparticle", "porous"]`` · **Required** (no default)
 
-   Selects geometry conventions for site detection, placement validation, and PBC
-   handling. ``"slab"`` expects in-plane periodicity with vacuum along *z*;
-   ``"nanoparticle"`` is non-periodic; ``"porous"`` is fully periodic (MOFs,
-   zeolites). Must match the prepared substrate. See :doc:`../guides/configuration`.
+   Declares the system type. Must match the substrate ASE PBC mask exactly:
+   ``"slab"`` → ``[True, True, False]`` (2D, one ignored face);
+   ``"nanoparticle"`` → ``[False, False, False]`` (3D closed surface);
+   ``"porous"`` → ``[True, True, True]`` (3D, all walls). A mismatch raises;
+   flags are never rewritten. See :doc:`../guides/configuration`.
 
 ``top_layer_tolerance``
    **Type:** ``float`` · **Default:** ``0.5`` (Å)
@@ -203,15 +204,12 @@ Site detection
 ``side_policy``
    **Type:** ``Literal["all", "positive", "negative", "external"]`` · **Default:** ``"positive"``
 
-   Face / exposure filter for ``adaptive_grid`` and ``rolling_probe`` (also keyed
-   in the site cache when those plugins are selected). Interpreted from **PBC
-   geometry**, not material labels: with exactly one non-periodic axis,
-   ``"positive"`` / ``"negative"`` keep one face along the vacuum normal;
-   ``"all"`` / fully 3D-periodic cells skip the face filter; ``"external"`` on
-   finite (no-PBC) clusters keeps outward-pointing sites. The shared default
-   ``"positive"`` remaps from the structure PBC mask (two periodic axes keep
-   the vacuum face; no PBC → ``"external"``; one or three periodic axes →
-   ``"all"``). Topology / Voronoi ignore this knob.
+   Face filter for ``adaptive_grid`` and ``rolling_probe`` on **2D (slab) PBC
+   only** (also keyed in the site cache for those plugins). ``"positive"`` /
+   ``"negative"`` keep one face along the open axis; ``"all"`` keeps both.
+   On 3D masks (nanoparticle / porous) this knob is ignored — nanoparticles
+   keep the outward exterior and porous frameworks keep every wall. The value
+   is never remapped from the PBC count. Topology / Voronoi ignore this knob.
 
 ``adaptive_grid_spacing``
    **Type:** ``float`` · **Default:** ``0.70`` (Å)

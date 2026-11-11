@@ -48,6 +48,7 @@ def test_homogeneous_pool_size_uses_slot_oversample(monkeypatch):
     """One-species multi path sizes the pose pool as ceil(n * configs * oversample)."""
     slab = make_slab()
     config = AdsorptionConfig(
+        material_type="slab",
         seed=1,
         num_placements=4,
         saturation_molecules_per_step=2,
@@ -122,6 +123,7 @@ def test_composition_budgets_equal_when_enough_slots():
 def test_homogeneous_delegates_assembly_seed_and_flags(monkeypatch):
     slab = make_slab()
     config = AdsorptionConfig(
+        material_type="slab",
         seed=17,
         num_placements=3,
         saturation_molecules_per_step=2,
@@ -186,6 +188,7 @@ def test_homogeneous_delegates_assembly_seed_and_flags(monkeypatch):
 def test_homogeneous_empty_pool_returns_placement_failure(monkeypatch):
     slab = make_slab()
     config = AdsorptionConfig(
+        material_type="slab",
         seed=1,
         num_placements=5,
         saturation_molecules_per_step=2,
@@ -593,7 +596,9 @@ def test_bo_assemble_second_group_takes_a_separated_site(monkeypatch):
 
 def test_homogeneous_missing_molecule_energy_raises_before_multi(monkeypatch):
     slab = make_slab()
-    config = AdsorptionConfig(num_placements=2, saturation_molecules_per_step=2)
+    config = AdsorptionConfig(
+        material_type="slab", num_placements=2, saturation_molecules_per_step=2
+    )
     ref = ReferenceEnergies(slab_energy=0.0, molecule_energies={})
     called = {"multi": False}
 
@@ -627,7 +632,7 @@ def test_homogeneous_missing_molecule_energy_raises_before_multi(monkeypatch):
 def test_bo_assemble_releases_incomplete_companions(monkeypatch):
     """Failed packs must not swallow later anchors from the same batch."""
     slab = make_slab(nx=8)
-    config = AdsorptionConfig(saturation_molecules_per_step=2)
+    config = AdsorptionConfig(material_type="slab", saturation_molecules_per_step=2)
     cell, half_extent, gap = _h2_contact_layout(slab, config)
     y_shift = float(cell[1, 1]) / 2.0
     stubs = {
@@ -700,7 +705,7 @@ def test_bo_assemble_releases_incomplete_companions(monkeypatch):
 
 def test_bo_assemble_respects_blocked_companions(monkeypatch):
     slab = make_slab(nx=8)
-    config = AdsorptionConfig(saturation_molecules_per_step=2)
+    config = AdsorptionConfig(material_type="slab", saturation_molecules_per_step=2)
     cell, half_extent, gap = _h2_contact_layout(slab, config)
     y0 = float(cell[1, 1]) / 2.0
     x0 = float(cell[0, 0]) / 2.0
@@ -770,6 +775,7 @@ def test_process_joint_tuplet_bayesian_uses_ctx_conformer_energies(monkeypatch):
     """Prep-resolved conformer energies must reach enumeration."""
     slab = make_slab()
     config = AdsorptionConfig(
+        material_type="slab",
         num_placements=2,
         saturation_molecules_per_step=2,
         bo=BOConfig(initial_random=1, batch_size=1, total_batches=1),

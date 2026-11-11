@@ -288,7 +288,9 @@ def _evaluate_two_clear_winners(
         slab_atoms=slab,
         base_slab=slab.copy(),
         ts_model=None,
-        config=AdsorptionConfig(**kwargs.pop("config_overrides", {})),
+        config=AdsorptionConfig(
+            **{"material_type": "slab", **kwargs.pop("config_overrides", {})}
+        ),
         E_slab=E_SLAB,
         **kwargs,
     )
@@ -353,7 +355,7 @@ class TestEvaluateCompositeBatch:
             slab_atoms=slab,
             base_slab=slab.copy(),
             ts_model=None,
-            config=AdsorptionConfig(),
+            config=AdsorptionConfig(material_type="slab"),
             E_slab=E_SLAB,
         )
         assert batch.valid == []
@@ -412,7 +414,7 @@ class TestEvaluateCompositeBatch:
             slab_atoms=make_slab(),
             base_slab=make_slab(),
             ts_model=None,
-            config=AdsorptionConfig(),
+            config=AdsorptionConfig(material_type="slab"),
             E_slab=E_SLAB,
         )
         assert batch.valid == []
@@ -446,13 +448,13 @@ class TestEvaluateCompositeBatch:
             desorbed,
             n_substrate=len(coverage),
             unit_sizes=[unit_size],
-            config=AdsorptionConfig(),
+            config=AdsorptionConfig(material_type="slab"),
         )[0]
         dist_prefix = _per_unit_surface_distances(
             desorbed,
             n_substrate=len(coverage),
             unit_sizes=[unit_size],
-            config=AdsorptionConfig(),
+            config=AdsorptionConfig(material_type="slab"),
             surface_prefix_atoms=len(bare),
         )[0]
         assert dist_all < 4.0
@@ -475,7 +477,9 @@ class TestEvaluateCompositeBatch:
             slab_atoms=coverage,
             base_slab=bare,
             ts_model=None,
-            config=AdsorptionConfig(binding_distance_threshold=4.0),
+            config=AdsorptionConfig(
+                material_type="slab", binding_distance_threshold=4.0
+            ),
             E_slab=E_SLAB,
         )
         assert batch.valid == []

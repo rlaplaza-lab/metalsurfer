@@ -33,7 +33,9 @@ def test_identify_relaxable_surface_slab():
 
 def test_frozen_indices_default_relax_top():
     slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
-    frozen = compute_frozen_indices(slab, relax_top_layer=True, top_layer_tolerance=0.5)
+    frozen = compute_frozen_indices(
+        slab, relax_top_layer=True, top_layer_tolerance=0.5, material_type="slab"
+    )
     assert len(frozen) == 12
     top_z = max(slab.get_positions()[:, 2])
     for idx in frozen:
@@ -42,7 +44,7 @@ def test_frozen_indices_default_relax_top():
 
 def test_frozen_indices_all_frozen():
     slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
-    frozen = compute_frozen_indices(slab, relax_top_layer=False)
+    frozen = compute_frozen_indices(slab, relax_top_layer=False, material_type="slab")
     assert len(frozen) == len(slab)
 
 
@@ -53,7 +55,7 @@ def test_frozen_indices_by_symbol():
         syms[i] = "Cu"
     slab.set_chemical_symbols(syms)
 
-    frozen = compute_frozen_indices(slab, freeze_symbols=["Ru"])
+    frozen = compute_frozen_indices(slab, freeze_symbols=["Ru"], material_type="slab")
     for idx in frozen:
         assert slab.get_chemical_symbols()[idx] == "Ru"
     cu_indices = [i for i, s in enumerate(slab.get_chemical_symbols()) if s == "Cu"]
@@ -63,7 +65,7 @@ def test_frozen_indices_by_symbol():
 def test_freeze_symbols_no_match_raises():
     slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
     with pytest.raises(ValueError, match="matched no atoms"):
-        compute_frozen_indices(slab, freeze_symbols=["Pt"])
+        compute_frozen_indices(slab, freeze_symbols=["Pt"], material_type="slab")
 
 
 def test_freeze_symbols_partial_match_warns(caplog):
@@ -73,7 +75,9 @@ def test_freeze_symbols_partial_match_warns(caplog):
         syms[i] = "Cu"
     slab.set_chemical_symbols(syms)
     with caplog.at_level(logging.WARNING, logger="metalsurfer.surface_prep.freeze"):
-        frozen = compute_frozen_indices(slab, freeze_symbols=["Ru", "Pt"])
+        frozen = compute_frozen_indices(
+            slab, freeze_symbols=["Ru", "Pt"], material_type="slab"
+        )
     assert "Pt" in caplog.text
     assert frozen
     assert all(slab.get_chemical_symbols()[i] == "Ru" for i in frozen)
@@ -83,10 +87,10 @@ def test_frozen_indices_empty_symbols_means_freeze_all():
     """YAML/API ``freeze_symbols=[]`` must not silently freeze nothing."""
     slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
     frozen_empty = compute_frozen_indices(
-        slab, relax_top_layer=False, freeze_symbols=[]
+        slab, relax_top_layer=False, freeze_symbols=[], material_type="slab"
     )
     frozen_none = compute_frozen_indices(
-        slab, relax_top_layer=False, freeze_symbols=None
+        slab, relax_top_layer=False, freeze_symbols=None, material_type="slab"
     )
     assert frozen_empty == list(range(len(slab)))
     assert frozen_empty == frozen_none
@@ -96,10 +100,10 @@ def test_apply_surface_constraints_round_trip():
     slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
     slab.set_constraint()
     constrained = apply_surface_constraints(
-        slab, relax_top_layer=True, top_layer_tolerance=0.5
+        slab, relax_top_layer=True, top_layer_tolerance=0.5, material_type="slab"
     )
     assert frozen_indices_from_constraints(constrained) == compute_frozen_indices(
-        slab, relax_top_layer=True, top_layer_tolerance=0.5
+        slab, relax_top_layer=True, top_layer_tolerance=0.5, material_type="slab"
     )
 
 
@@ -126,7 +130,7 @@ def test_log_substrate_freeze_policy_partial_freeze(caplog):
     slab = make_slab(nx=2, ny=2, n_layers=4, spacing=2.0)
     slab.set_constraint()
     slab = apply_surface_constraints(
-        slab, relax_top_layer=True, top_layer_tolerance=0.5
+        slab, relax_top_layer=True, top_layer_tolerance=0.5, material_type="slab"
     )
     with caplog.at_level("INFO"):
         log_substrate_freeze_policy(slab, context="Test slab")
@@ -214,7 +218,7 @@ def test_relaxable_surface_porous_pore_boundary():
 
 def test_check_frozen_substrate_displacement_detects_drift():
     slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
-    slab = apply_surface_constraints(slab, relax_top_layer=False)
+    slab = apply_surface_constraints(slab, relax_top_layer=False, material_type="slab")
     combined = slab.copy()
     combined += Atoms("H", positions=[[0.0, 0.0, 8.0]])
     drifted = combined.copy()
@@ -230,7 +234,7 @@ def test_check_frozen_substrate_displacement_detects_drift():
 
 def test_check_frozen_substrate_displacement_passes_when_fixed():
     slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
-    slab = apply_surface_constraints(slab, relax_top_layer=False)
+    slab = apply_surface_constraints(slab, relax_top_layer=False, material_type="slab")
     combined = slab.copy()
     combined += Atoms("H", positions=[[0.0, 0.0, 8.0]])
     ok, _ = check_frozen_substrate_displacement(combined, slab, slab_size=len(slab))
@@ -241,7 +245,7 @@ def test_max_frozen_substrate_displacement_raises_on_short_atoms():
     from metalsurfer.exceptions import GeometryValidationError
 
     slab = make_slab(nx=2, ny=2, n_layers=2, spacing=2.0)
-    slab = apply_surface_constraints(slab, relax_top_layer=False)
+    slab = apply_surface_constraints(slab, relax_top_layer=False, material_type="slab")
     combined = slab.copy()
     combined += Atoms("H", positions=[[0.0, 0.0, 8.0]])
     short = combined[:2].copy()
@@ -305,7 +309,7 @@ def test_deposit_adatoms_refreshes_fixatoms_for_new_atoms(tmp_path):
         seed=42,
         results_dir=str(tmp_path),
         relaxation_mode="none",
-        config=AdsorptionConfig(),
+        config=AdsorptionConfig(material_type="slab"),
     )
     n_total = len(deposited.atoms)
     assert n_total > n_base

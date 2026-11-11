@@ -72,7 +72,7 @@ def top_layer_indices_by_height(
 def identify_relaxable_surface_indices(
     slab: Atoms,
     *,
-    material_type: str = "slab",
+    material_type: str,
     tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
     pore_threshold: float | None = None,
 ) -> list[int]:
@@ -164,7 +164,7 @@ def compute_frozen_indices(
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
     top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
-    material_type: str = "slab",
+    material_type: str,
     pore_threshold: float | None = None,
 ) -> list[int]:
     """Determine which slab atom indices should be frozen during optimisation.

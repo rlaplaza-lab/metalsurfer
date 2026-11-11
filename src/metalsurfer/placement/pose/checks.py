@@ -60,7 +60,7 @@ def _validate_posed_adsorbate(
     config: AdsorptionConfig,
     *,
     slab_for_sites: Atoms | None = None,
-    material_type: str | None = None,
+    material_type: str,
     slab_scratch: geom._SlabDistanceScratch | None = None,
 ) -> str | None:
     """Run distance, adsorbate–adsorbate disconnect, and optional contact-quality checks.
@@ -76,14 +76,13 @@ def _validate_posed_adsorbate(
        contact quality (closest approach, contact count, then variance).
 
     Returns a failure reason token, or ``None`` when the placement is accepted.
-    *material_type* defaults to ``config.material_type``; callers with a resolved
-    placement context should pass ``ctx.mat_type``.
+    Callers with a resolved placement context should pass ``ctx.mat_type``.
 
     The mol↔slab MIC distance matrix is computed **once** and reused for the
     distance gate and the contact-quality gate.  When *slab_scratch* is provided,
     the slab side is reused from it instead of re-slicing the ASE ``Atoms``.
     """
-    mat_type = material_type if material_type is not None else config.material_type
+    mat_type = material_type
     exclude_n = _saturation_exclude_count(slab, slab_for_sites)
     if slab_scratch is None:
         slab_scratch = _build_slab_distance_scratch(slab, exclude_n, mat_type)

@@ -134,7 +134,7 @@ class TestLoadMoleculesCaching:
 
 class TestRunMetadata:
     def test_writes_valid_json(self, workdir):
-        config = AdsorptionConfig(seed=123)
+        config = AdsorptionConfig(material_type="slab", seed=123)
 
         write_run_metadata(
             surface_type="test",
@@ -164,7 +164,7 @@ class TestRunMetadata:
         """write_run_settings and write_run_metadata merge into one file."""
         from metalsurfer.io_results import write_run_settings
 
-        config = AdsorptionConfig(seed=7)
+        config = AdsorptionConfig(material_type="slab", seed=7)
 
         write_run_settings(
             surface_type="merge_test",
@@ -193,7 +193,7 @@ class TestRunMetadata:
         assert meta["config"]["seed"] == 7
 
     def test_metadata_contains_throughput(self, workdir):
-        config = AdsorptionConfig()
+        config = AdsorptionConfig(material_type="slab")
         write_run_metadata(
             surface_type="bench",
             config=config,
@@ -212,7 +212,9 @@ class TestRunMetadata:
 
     def test_config_excludes_callable_placement_filter(self, workdir):
         """placement_filter (callable) is omitted from JSON, not stringified."""
-        config = AdsorptionConfig(seed=42, placement_filter=lambda s: True)
+        config = AdsorptionConfig(
+            material_type="slab", seed=42, placement_filter=lambda s: True
+        )
 
         write_run_metadata(
             surface_type="test",
@@ -454,7 +456,7 @@ class TestVectorizedHelpers:
         combined.set_cell(slab.get_cell())
         combined.set_pbc(slab.get_pbc())
         syms, _, dist, thresh = _nonsurface_distance_and_threshold(
-            combined, ["Ru"], 1.3
+            combined, ["Ru"], 1.3, material_type="slab"
         )
         assert not _is_molecule_connected_from_dist(syms, dist, thresh)
 
@@ -466,7 +468,7 @@ class TestVectorizedHelpers:
         combined.set_cell(slab.get_cell())
         combined.set_pbc(slab.get_pbc())
         syms, _, dist, thresh = _nonsurface_distance_and_threshold(
-            combined, ["Ru"], 1.3
+            combined, ["Ru"], 1.3, material_type="slab"
         )
         assert _is_molecule_connected_from_dist(syms, dist, thresh)
 
@@ -475,7 +477,7 @@ class TestVectorizedHelpers:
         slab = make_slab()
         combined = place_molecule_on_slab(slab, make_water())
         syms, _, dist, thresh = _nonsurface_distance_and_threshold(
-            combined, ["Ru"], 1.3
+            combined, ["Ru"], 1.3, material_type="slab"
         )
         bonds = _bond_counts_from_dist(syms, dist, thresh)
         assert frozenset({"O", "H"}) in bonds
@@ -485,7 +487,7 @@ class TestVectorizedHelpers:
         slab = make_slab()
         combined = place_molecule_on_slab(slab, make_water())
         syms, _, dist, thresh = _nonsurface_distance_and_threshold(
-            combined, ["Ru"], 1.3
+            combined, ["Ru"], 1.3, material_type="slab"
         )
         fp = _coordination_fingerprint_from_dist(syms, dist, thresh)
         assert fp["O"] == [2]

@@ -16,10 +16,10 @@ Four campaign functions cover the usual workflows:
 - :func:`~metalsurfer.run_saturation` — sequential coverage
 - :func:`~metalsurfer.run_saturation_bo` — Bayesian saturation
 
-Set ``material_type`` on :class:`~metalsurfer.AdsorptionConfig` to match the
-substrate (``slab``, ``nanoparticle``, or ``porous``).
-``surface_type`` on ``run_*`` is only the results folder name
-(``results_{surface_type}/``).
+``material_type`` is required on :class:`~metalsurfer.AdsorptionConfig` and
+must match the substrate ASE PBC (``slab`` → ``[T,T,F]``, ``nanoparticle`` →
+``[F,F,F]``, ``porous`` → ``[T,T,T]``). ``surface_type`` on ``run_*`` is only
+the results folder name (``results_{surface_type}/``).
 
 
 Installation

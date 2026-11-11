@@ -18,6 +18,7 @@ def main() -> int:
     results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
+        material_type="slab",
         model_name="uma-m-1p1",
         task_name="oc20",
         num_conformers=1,

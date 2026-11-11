@@ -27,8 +27,8 @@ from ..site_coords import (
     _pbc_merge_pair_set,
     _periodic_image_offsets,
     _project_to_slab_plane,
-    _shift_along_slab_normal,
-    _slab_normal,
+    _slab_outward_normal,
+    _slab_vacuum_face_sign,
     _wrap_cartesian,
     mic_support_positions,
     top_layer_mask_by_normal,
@@ -302,7 +302,7 @@ def candidate_enrichment_frames(
     pbc_arr = np.asarray(pbc, dtype=bool)
     pos = np.asarray(positions, dtype=float)
     use_mic = bool(np.any(pbc_arr)) and cell_has_volume(cell_arr)
-    slab_n = _slab_normal(cell_arr) if material_type == "slab" else None
+    slab_n = _slab_outward_normal(pos, cell_arr) if material_type == "slab" else None
     com = None if slab_n is not None else np.mean(pos, axis=0)
     gate = accessibility_tree if accessibility_tree is not None else KDTree(pos)
 
@@ -482,16 +482,17 @@ def apply_slab_height_mask(
     np.ndarray | None,
     np.ndarray | None,
 ]:
-    """Drop candidates below the top-layer height band along the slab normal."""
+    """Drop candidates inward of the vacuum-richer face height band."""
     if len(vertices) == 0:
         return vertices, nn_dists, source_hints, atom_indices, normals, clearances
-    heights = _height_along_slab_normal(positions, cell)
-    h_surface = float(np.max(heights))
+    face_sign = _slab_vacuum_face_sign(positions, cell)
+    hout = _height_along_slab_normal(positions, cell) * face_sign
+    h_surface = float(np.max(hout))
     nn_margin = (
         float(np.median(nn_dists)) if len(nn_dists) > 0 else float(top_layer_tolerance)
     )
-    h_min = h_surface - max(float(top_layer_tolerance), nn_margin)
-    keep_mask = _height_along_slab_normal(vertices, cell) >= h_min
+    h_floor = h_surface - max(float(top_layer_tolerance), nn_margin)
+    keep_mask = _height_along_slab_normal(vertices, cell) * face_sign >= h_floor
     return slice_candidate_arrays(
         vertices,
         nn_dists,
@@ -617,15 +618,17 @@ def inject_atop_sites(
     gate_tree = accessibility_tree if accessibility_tree is not None else local_tree
     if gate_tree is None:
         gate_tree = KDTree(positions)
+    slab_n_hat = (
+        _slab_outward_normal(positions, cell) if material_type == "slab" else None
+    )
     for li, ai in enumerate(top_atom_indices):
         atom_pos = positions[int(ai)]
         if material_type == "slab":
-            probe = _shift_along_slab_normal(atom_pos.reshape(1, 3), cell, atop_height)[
-                0
-            ]
+            assert slab_n_hat is not None
+            n_hat = slab_n_hat
+            probe = atom_pos + float(atop_height) * n_hat
             if np.any(pbc):
                 probe = _wrap_cartesian(probe.reshape(1, 3), cell, pbc)[0]
-            n_hat = _slab_normal(cell)
             anchor = atom_pos
             if np.any(pbc):
                 anchor = _wrap_cartesian(atom_pos.reshape(1, 3), cell, pbc)[0]

@@ -62,7 +62,7 @@ class TestMissingRDKit:
             pytest.raises(DependencyMissingError, match="rdkit"),
         ):
             mod.create_conformers_from_smiles(
-                "O", config=AdsorptionConfig(num_conformers=1)
+                "O", config=AdsorptionConfig(material_type="slab", num_conformers=1)
             )
 
     def test_filter_helpers_degrade_gracefully(self):
@@ -87,6 +87,7 @@ class TestMissingRDKit:
                     reference_smiles="O",
                     surface_symbols=None,
                     connectivity_multiplier=1.3,
+                    material_type="nanoparticle",
                 )
 
     def test_is_flat_aromatic_with_en_raises_when_rdkit_missing(self):
@@ -129,7 +130,7 @@ class TestMissingTorchSim:
                 omod.optimize_isolated_molecules_batched(
                     [water],
                     ts_model=MagicMock(),
-                    config=AdsorptionConfig(),
+                    config=AdsorptionConfig(material_type="slab"),
                 )
 
     def test_optimize_slab_raises_clear_error(self):
@@ -152,7 +153,10 @@ class TestMissingTorchSim:
             combined = slab.copy()
             with pytest.raises(DependencyMissingError, match="torch-sim"):
                 omod.optimize_adsorbate_slab_batched(
-                    [combined], slab, ts_model=MagicMock(), config=AdsorptionConfig()
+                    [combined],
+                    slab,
+                    ts_model=MagicMock(),
+                    config=AdsorptionConfig(material_type="slab"),
                 )
 
     def test_autobatcher_returns_none_when_unavailable(self):
@@ -200,7 +204,7 @@ class TestCreateSlabFromBulkImportErrors:
             create_slab_from_bulk(
                 "mp-23",
                 results_dir=str(tmp_path / "results_test_dep"),
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
     def test_raises_fairchem_data_oc_hint_when_fairchem_missing(self, tmp_path):
@@ -216,7 +220,7 @@ class TestCreateSlabFromBulkImportErrors:
             create_slab_from_bulk(
                 "mp-23",
                 results_dir=str(tmp_path / "results_test_dep"),
-                config=AdsorptionConfig(),
+                config=AdsorptionConfig(material_type="slab"),
             )
 
 

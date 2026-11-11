@@ -14,7 +14,6 @@ class TopologyGenerator:
 
     name = "topology"
     widens_distance_window = True
-    uses_structure_pbc = False
 
     def __init__(self) -> None:
         self._slab = TopologySlabGenerator()

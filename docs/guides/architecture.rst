@@ -270,9 +270,9 @@ The only adsorbate lift is the contact solve in pose.
        framework spheres → atop / bridge / hollow). Geometric supports are
        retained. Covers slab faces, NP exterior, and MOF **pore walls** (not
        free-volume pore centres). Catalog density matches default
-       ``adaptive_grid`` NMS. Uses ``side_policy`` (default ``positive`` remaps
-       from the structure PBC mask: slab-like → vacuum face, cluster →
-       ``external``, 3D-periodic → ``all``). A three-sphere contact uses the
+       ``adaptive_grid`` NMS. Uses ``side_policy`` on 2D (slab) PBC only
+       (default ``positive`` keeps the vacuum face); 3D masks keep the whole
+       surface / all walls without remapping. A three-sphere contact uses the
        straight separation of the chosen image coordinates. Selectable in
        config / YAML; **not** chosen by ``auto``.
 
@@ -403,12 +403,12 @@ Key knobs: ``site_generator`` (``auto`` / ``topology`` / ``voronoi`` /
        wall-near support atoms for fingerprints (pores keep empty supports)
    * - adaptive_grid
      - Shell / refine chunks via ``n_jobs``; density via ``adaptive_grid_*`` and
-       ``side_policy`` (PBC-geometry face filter). No material_type branches,
+       ``side_policy`` (2D slab face filter only). No material_type branches,
        no atop inject / height mask
    * - rolling_probe
-     - Contact enumeration via ``n_jobs``; ``side_policy`` (PBC-geometry face
-       filter; default remaps from the structure PBC mask). Wall-near only; no
-       public spacing knob (shares default adaptive_grid NMS density)
+     - Contact enumeration via ``n_jobs``; ``side_policy`` on 2D PBC only
+       (ignored on 3D; never remapped). Wall-near only; no public spacing
+       knob (shares default adaptive_grid NMS density)
 
 .. list-table:: Which site-generator knobs apply where
    :header-rows: 1
@@ -710,15 +710,17 @@ fewer inflight relaxations against the same scaler. Large explicit
 ``num_placements`` values are safe on small GPUs because only the active
 inflight batch holds CUDA geometry tensors.
 
-**Calculator / PBC:** geometry, filters, MIC, and spglib site symmetry use
-``material_aware_pbc(material_type)`` (slab ``[T,T,F]``, porous ``[T,T,T]``,
-nanoparticle ``[F,F,F]``) — not ``atoms.get_pbc()``. At the UMA boundary,
-mixed PBC is normalized to full periodic via ``calculator_pbc_for_atoms``;
-periodic *c* ≥ 18 Å (``MIN_CALCULATOR_CELL_C_ANG``). Mixed PBC is rejected on
-TorchSim/UMA paths. Stored ``ScreeningResult.atoms`` restore material PBC via
+**Calculator / PBC:** ``material_type`` is required and must match the
+substrate ASE PBC (slab ``[T,T,F]``, porous ``[T,T,T]``, nanoparticle
+``[F,F,F]``). Site enumeration and placement read that validated
+``atoms.get_pbc()`` mask (2D ignores one face; 3D does not). A mismatch
+raises — flags are never rewritten. At the UMA boundary, copies may be
+normalized to full periodic via ``calculator_pbc_for_atoms``; periodic *c*
+≥ 18 Å (``MIN_CALCULATOR_CELL_C_ANG``). Stored ``ScreeningResult.atoms``
+restore material PBC via
 :func:`~metalsurfer.surface_prep.apply_material_pbc` after the calculator
-boundary (same helper as prep). Post-relax desorption / decomposition / RMSD
-must keep material-aware PBC so calculator TTT cannot invent vacuum wraps.
+boundary. Post-relax desorption / decomposition / RMSD keep material-aware
+PBC so calculator TTT cannot invent vacuum wraps.
 
 **Prep vs adsorption relaxation:** prep uses ASE
 ``slab_relaxation_mode``. Adsorption freeze masks come from ASE ``FixAtoms``

@@ -81,6 +81,7 @@ def main() -> int:
     results_dir = str(results_dir_for(surface_type))
 
     config = AdsorptionConfig(
+        material_type="slab",
         num_conformers=3,
         num_placements=5,
     )

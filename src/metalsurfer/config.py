@@ -400,6 +400,8 @@ MATERIAL_TYPE_OPTIONS: tuple[str, ...] = ("slab", "nanoparticle", "porous")
 SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("auto", "distance_ratio", "delaunay")
 SITE_GENERATOR_OPTIONS: tuple[str, ...] = ("auto",) + _SITE_GENERATORS
 SIDE_POLICY_OPTIONS: tuple[str, ...] = ("all", "positive", "negative", "external")
+# Sentinel so ``material_type`` has no silent default; ``__post_init__`` requires it.
+_UNSET_MATERIAL_TYPE: Any = object()
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
 BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = (
     "random",
@@ -860,7 +862,8 @@ class AdsorptionConfig:
     placement_distance_recovery: bool = True
     # Rigid-body clash descent in recovery / n-tuplet packing; False → XY jitter only.
     placement_clash_descent: bool = True
-    material_type: Literal["slab", "nanoparticle", "porous"] = "slab"
+    # Required: ``"slab"``, ``"nanoparticle"``, or ``"porous"``. No default.
+    material_type: Literal["slab", "nanoparticle", "porous"] = _UNSET_MATERIAL_TYPE
     # Probe / max-distance / auto-widen apply to every material type.
     voronoi_probe_radius: float | None = None
     voronoi_max_site_distance: float | None = None
@@ -872,7 +875,8 @@ class AdsorptionConfig:
     site_generator: Literal[
         "auto", "topology", "voronoi", "adaptive_grid", "rolling_probe"
     ] = "auto"
-    # Face / exposure policy for adaptive_grid / rolling_probe (PBC geometry).
+    # Slab (2D) face filter for adaptive_grid / rolling_probe; ignored on 3D.
+    # positive = vacuum-richer face; negative = opposite; all = both.
     side_policy: Literal["all", "positive", "negative", "external"] = "positive"
     # Absolute shell increment (Å) for ``adaptive_grid`` (wall-near, not pores).
     adaptive_grid_spacing: float = 0.70
@@ -986,6 +990,16 @@ class AdsorptionConfig:
 
     def __post_init__(self) -> None:
         """Validate configuration fields after initialization."""
+        if self.material_type is _UNSET_MATERIAL_TYPE:
+            raise ValueError(
+                "material_type is required; pass 'slab', 'nanoparticle', or 'porous'"
+            )
+        _check_choice(
+            "material_type",
+            self.material_type,
+            allowed=MATERIAL_TYPE_OPTIONS,
+        )
+
         _validate_placement(self)
         _validate_relaxation(self)
         _validate_io(self)
@@ -1022,11 +1036,6 @@ class AdsorptionConfig:
             "conformer_weighting",
             self.conformer_weighting,
             allowed=CONFORMER_WEIGHTING_OPTIONS,
-        )
-        _check_choice(
-            "material_type",
-            self.material_type,
-            allowed=MATERIAL_TYPE_OPTIONS,
         )
         if isinstance(self.connectivity_multiplier, bool) or not isinstance(
             self.connectivity_multiplier, (int, float)

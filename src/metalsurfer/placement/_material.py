@@ -7,8 +7,10 @@ these utilities without creating a circular dependency.
 
 from typing import Literal
 
+import numpy as np
 from ase import Atoms
 
+from ..exceptions import GeometryValidationError
 from .site_types import Site
 
 # Shared PBC flags for distance math, ASE layout, and substrate validation.
@@ -44,6 +46,41 @@ def material_aware_pbc(material_type: str) -> list[bool]:
             f"material_type must be one of {sorted(MATERIAL_PBC)}, "
             f"got {material_type!r}"
         ) from exc
+
+
+def require_atoms_pbc_matches_material(
+    atoms: Atoms,
+    material_type: str,
+    *,
+    context: str = "substrate",
+) -> np.ndarray:
+    """Return *atoms* PBC after checking it matches *material_type*.
+
+    Geometry follows the ASE mask once the mask is one of the three legal
+    patterns. A mismatch or any other combination raises
+    :class:`~metalsurfer.exceptions.GeometryValidationError` — PBC is never
+    rewritten to fit the type.
+
+    Parameters
+    ----------
+    atoms
+        ASE :class:`~ase.Atoms` substrate.
+    material_type
+        Declared material type.
+    context
+        Label for the error message.
+    """
+    validate_material_type(material_type)
+    expected = material_aware_pbc(material_type)
+    pbc = np.asarray(atoms.get_pbc(), dtype=bool).reshape(3)
+    if not np.array_equal(pbc, np.asarray(expected, dtype=bool)):
+        raise GeometryValidationError(
+            f"{context} PBC {pbc.tolist()} is inconsistent with "
+            f"material_type={material_type!r} (expected {expected}). "
+            "Set PBC on the ASE Atoms object during preparation; "
+            "metalsurfer does not rewrite mismatched flags."
+        )
+    return pbc.copy()
 
 
 def symmetry_mode_for_material(
@@ -85,8 +122,9 @@ def material_type_for_placement(
     site
         Adsorption :class:`Site` or None.
     when_no_site
-        Fallback material type when *site* is None.
+        Fallback material type when *site* is None. Must be an explicit
+        caller-supplied type (never inferred).
     """
     if site is None:
-        return when_no_site
+        return validate_material_type(when_no_site)
     return str(site.material_type)

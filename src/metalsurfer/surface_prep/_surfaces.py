@@ -12,7 +12,11 @@ from ase.filters import UnitCellFilter
 from ase.optimize import BFGS, FIRE, LBFGS
 from scipy.spatial.distance import pdist
 
-from .._numeric_defaults import DEFAULT_TOP_LAYER_TOLERANCE, MIN_CALCULATOR_CELL_C_ANG
+from .._numeric_defaults import (
+    DEFAULT_TOP_LAYER_TOLERANCE,
+    MIN_CALCULATOR_CELL_C_ANG,
+    SLAB_VACUUM_FACE_MARGIN_ANG,
+)
 from ..config import (
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
@@ -32,6 +36,7 @@ from ..placement._material import (
     MATERIAL_PBC,
     calculator_pbc_for_atoms,
     material_aware_pbc,
+    require_atoms_pbc_matches_material,
 )
 from ..placement.geometry import _get_covalent_radius
 from ..placement.site_coords import _periodic_image_offsets
@@ -45,7 +50,7 @@ from .freeze import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_SLAB_TOP_VACUUM_ANG = 15.0
-_INVERTED_SLAB_VACUUM_MARGIN_ANG = 1.0
+_INVERTED_SLAB_VACUUM_MARGIN_ANG = SLAB_VACUUM_FACE_MARGIN_ANG
 _CELL_DET_EPS = 1e-8
 
 
@@ -169,7 +174,7 @@ def apply_surface_constraints(
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
     top_layer_tolerance: float = DEFAULT_TOP_LAYER_TOLERANCE,
-    material_type: str = "slab",
+    material_type: str,
 ) -> Atoms:
     """Attach ASE ``FixAtoms`` to *atoms* according to the surface freeze policy.
 
@@ -180,7 +185,7 @@ def apply_surface_constraints(
     Default ``relax_top_layer=False`` freezes every substrate atom. Set
     ``relax_top_layer=True`` for a material-aware shortcut that leaves the
     exposed surface free (see :func:`~metalsurfer.identify_relaxable_surface_indices`;
-    requires the correct *material_type*, default ``"slab"``). For full control,
+    requires the correct *material_type*). For full control,
     attach custom ASE constraints to *atoms* yourself and skip this helper.
 
     Parameters
@@ -308,19 +313,12 @@ def validate_substrate(
 
     cell = np.array(slab.get_cell(), dtype=float)
     c_len = float(np.linalg.norm(cell[2]))
-    pbc = np.array(slab.get_pbc(), dtype=bool)
     if material_type not in MATERIAL_PBC:
         raise GeometryValidationError(
             f"Unknown material_type={material_type!r}; "
             "expected 'slab', 'porous', or 'nanoparticle'"
         )
-    expected_pbc = material_aware_pbc(material_type)
-    if not np.array_equal(pbc, expected_pbc):
-        raise GeometryValidationError(
-            f"Substrate PBC {pbc.tolist()} is inconsistent with "
-            f"material_type={material_type!r} (expected {expected_pbc}). "
-            "Set PBC on the ASE Atoms object during preparation."
-        )
+    require_atoms_pbc_matches_material(slab, material_type, context="Substrate")
 
     cell_det = _cell_determinant(cell)
     if material_type in ("slab", "porous") and abs(cell_det) <= _CELL_DET_EPS:
@@ -584,14 +582,15 @@ def create_slab_from_bulk(
 def create_slab_from_atoms(
     atoms: Atoms,
     *,
-    material_type: str = "slab",
+    material_type: str,
     align: bool = True,
 ) -> SlabContainer:
     """Wrap an existing ASE ``Atoms`` object into a :class:`SlabContainer`.
 
-    When *material_type* is ``"slab"`` and *align* is true, applies
-    :func:`ensure_slab_z_alignment`. Pass ``align=False`` for pre-aligned
-    DFT or experimental structures.
+    Sets geometric PBC for *material_type* (ASE builders often leave slabs as
+    ``[T,T,T]``). When *material_type* is ``"slab"`` and *align* is true, also
+    applies :func:`ensure_slab_z_alignment`. Pass ``align=False`` for
+    pre-aligned DFT or experimental structures.
 
     Parameters
     ----------
@@ -605,6 +604,7 @@ def create_slab_from_atoms(
     container = coerce_slab_container(atoms)
     if material_type == "slab" and align:
         container.atoms = ensure_slab_z_alignment(container.atoms)
+    container.atoms.set_pbc(material_aware_pbc(material_type))
     return container
 
 
