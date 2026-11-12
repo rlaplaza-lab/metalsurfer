@@ -8,9 +8,8 @@ from typing import Literal
 
 import numpy as np
 from ase import Atoms
-from ase.geometry import find_mic
 
-from .._geom_pbc import mic_point_distance
+from .._geom_pbc import mic_point_distance, minimum_image_cartesian_delta
 from .._utils import cell_has_volume
 from ._constants import (
     _BINDER_ALIGNMENT_TARGET_DOT,
@@ -487,9 +486,10 @@ def _mol_slab_pairwise_mic(
         - np.asarray(slab_pos, dtype=float)[None, :, :]
     )
     if cell_has_volume(cell) and np.any(pbc):
-        diffs_flat = diffs.reshape(-1, 3)
-        mic_vecs_flat, mic_dists = find_mic(diffs_flat, cell, pbc=pbc)
-        return mic_vecs_flat.reshape(m, s, 3), mic_dists.reshape(m, s)
+        mic_vecs = minimum_image_cartesian_delta(
+            diffs, cell, np.asarray(pbc, dtype=bool)
+        )
+        return mic_vecs, np.linalg.norm(mic_vecs, axis=2)
     return diffs, np.linalg.norm(diffs, axis=2)
 
 
@@ -1037,8 +1037,9 @@ def calculate_min_distance(
 ) -> float:
     """Minimum interatomic distance between two position arrays.
 
-    Uses ASE's :func:`~ase.geometry.find_mic` for minimum-image distances
-    with non-orthogonal cells via :func:`_mol_slab_pairwise_distances`.
+    Uses :func:`~metalsurfer._geom_pbc.minimum_image_cartesian_delta` for
+    minimum-image distances with non-orthogonal cells via
+    :func:`_mol_slab_pairwise_distances`.
 
     When *cell* is periodic (``abs(det) > 0``), *pbc* must be provided explicitly so
     slab ([True, True, False]), nanoparticle ([False, False, False]), and

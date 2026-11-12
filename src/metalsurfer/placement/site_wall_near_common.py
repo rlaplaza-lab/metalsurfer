@@ -10,7 +10,11 @@ from scipy.spatial import KDTree
 
 from .._geom_pbc import mic_point_distance, slab_outward_normal
 from .._utils import cell_has_volume
-from ._constants import _ATOP_INJECTION_HEIGHT_FACTOR, _VECTOR_NORM_EPS
+from ._constants import (
+    _ATOP_INJECTION_HEIGHT_FACTOR,
+    _DISTANCE_ZERO_EPS,
+    _VECTOR_NORM_EPS,
+)
 from .site_coords import (
     _cart_to_frac,
     _periodic_image_offsets,
@@ -65,11 +69,15 @@ def _side_policy_mask(
     side_policy: SidePolicy,
     vertices: np.ndarray | None = None,
     positions: np.ndarray | None = None,
+    dot_min: float = 0.0,
 ) -> np.ndarray:
     """Apply face / exposure policy from the validated atoms PBC mask.
 
     - Two periodic axes (slab): ``positive`` / ``negative`` / ``all`` along the
-      vacuum-oriented open axis (*positions* required).
+      vacuum-oriented open axis (*positions* required). *dot_min* is the
+      minimum unit-normal alignment with the selected face(s) — ``0.0`` keeps
+      the sign test, a positive value requires that much alignment for
+      ``positive`` / ``negative`` and ``|dot| >= dot_min`` for ``all``.
     - Zero periodic axes (nanoparticle): keep COM-outward sites; ``side_policy``
       is ignored.
     - Three periodic axes (porous): no face filter; ``side_policy`` is ignored.
@@ -87,11 +95,18 @@ def _side_policy_mask(
         if positions is None:
             raise ValueError("slab side_policy requires framework positions")
         n_hat = slab_outward_normal(positions, cell)
-        dots = np.einsum("ij,j->i", normals, n_hat)
+        normal_arr = np.asarray(normals, dtype=float)
+        norms = np.linalg.norm(normal_arr, axis=1)
+        dots = np.zeros(n, dtype=float)
+        valid_normals = norms > _VECTOR_NORM_EPS
+        dots[valid_normals] = np.einsum("ij,j->i", normal_arr[valid_normals], n_hat)
+        tol = float(dot_min) - _VECTOR_NORM_EPS
         if side_policy == "positive":
-            keep &= dots >= -1e-12
+            keep &= dots >= tol
         elif side_policy == "negative":
-            keep &= dots <= 1e-12
+            keep &= dots <= -tol
+        elif side_policy == "all" and dot_min > 0.0:
+            keep &= np.abs(dots) >= tol
     elif n_periodic == 0 and vertices is not None and positions is not None:
         com = np.mean(np.asarray(positions, dtype=float), axis=0)
         outward = np.asarray(vertices, dtype=float) - com
@@ -99,7 +114,7 @@ def _side_policy_mask(
         valid = norms > _VECTOR_NORM_EPS
         uhat = np.zeros_like(outward)
         uhat[valid] = outward[valid] / norms[valid, None]
-        keep &= np.einsum("ij,ij->i", normals, uhat) >= -1e-12
+        keep &= np.einsum("ij,ij->i", normals, uhat) >= -_VECTOR_NORM_EPS
     return keep
 
 
@@ -111,7 +126,7 @@ def _pair_within_radius(
     pbc: np.ndarray,
 ) -> bool:
     """Return True if *a* and *b* are within *radius* under triclinic-safe MIC."""
-    return mic_point_distance(a, b, cell, pbc) <= float(radius) + 1e-12
+    return mic_point_distance(a, b, cell, pbc) <= float(radius) + _DISTANCE_ZERO_EPS
 
 
 def _nms_rank_order(

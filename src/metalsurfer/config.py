@@ -6,6 +6,8 @@ from math import isfinite
 from typing import Any, Literal
 
 from ._numeric_defaults import (
+    BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
+    BO_TRANSFER_MIN_SIMILARITY_DEFAULT,
     CONTACT_COVALENT_SCALE_DEFAULT,
     CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     DEFAULT_FMAX,
@@ -16,10 +18,13 @@ from ._numeric_defaults import (
     DEFAULT_SYMMETRY_TOLERANCE,
     DEFAULT_TOP_LAYER_TOLERANCE,
     DEFAULT_TRANSFER_EXPLORATION_FRACTION,
+    ENERGY_DEDUP_THRESHOLD_DEFAULT_EV,
     MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM,
     MIN_CONTACT_RATIO_DEFAULT,
     MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
+    MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM,
     OCCUPANCY_FOOTPRINT_SCALE_DEFAULT,
+    RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM,
     STANDARD_PRESSURE_BAR,
     STANDARD_TEMPERATURE_K,
 )
@@ -51,7 +56,7 @@ class BOTransferConfig:
     min_step_observations: int = 5
     weight_cap: float = 0.35
     similarity_lengthscale: float = 4.0
-    min_similarity: float = 0.05
+    min_similarity: float = BO_TRANSFER_MIN_SIMILARITY_DEFAULT
     trust_patience: int = 2
     mae_tolerance: float = 0.05
     exploration_fraction: float = DEFAULT_TRANSFER_EXPLORATION_FRACTION
@@ -111,6 +116,10 @@ def _bo_transfer_from_mapping(data: Mapping[str, Any] | None) -> BOTransferConfi
     return BOTransferConfig(**dict(data))
 
 
+# Keys renamed in 0.10.0, with the version that introduced the new name.
+_BO_RENAMED_KEYS: dict[str, str] = {"total_budget": "total_batches"}
+
+
 def _bo_config_from_mapping(data: Mapping[str, Any] | None) -> BOConfig:
     if data is None:
         return BOConfig()
@@ -120,8 +129,13 @@ def _bo_config_from_mapping(data: Mapping[str, Any] | None) -> BOConfig:
     transfer = _bo_transfer_from_mapping(payload.pop("transfer", None))
     unknown = set(payload) - _BO_TOP_FIELDS
     if unknown:
-        quoted = ", ".join(sorted(unknown))
-        raise ValueError(f"bo contains unknown keys: {quoted}")
+        hints = [
+            f"{key!r} (renamed to {_BO_RENAMED_KEYS[key]!r} in 0.10.0)"
+            if key in _BO_RENAMED_KEYS
+            else repr(key)
+            for key in sorted(unknown)
+        ]
+        raise ValueError(f"bo contains unknown keys: {', '.join(hints)}")
     return BOConfig(**payload, transfer=transfer)
 
 
@@ -907,7 +921,7 @@ class AdsorptionConfig:
     planar_z_variance_threshold: float = DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
     min_interatomic_distance: float = 0.5
     max_force_convergence: float = 0.05
-    binding_distance_threshold: float = 4.0
+    binding_distance_threshold: float = BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
     strict_initial_placement: bool = False
     # Also reject d <= vdw_overlap_scale * (R_i + R_j) on van der Waals radii.
     reject_vdw_overlaps: bool = False
@@ -924,18 +938,18 @@ class AdsorptionConfig:
     contact_covalent_scale: float = CONTACT_COVALENT_SCALE_DEFAULT
     require_multiple_contact: bool = False
     max_adsorption_energy: float = 5.0
-    energy_dedup_threshold: float = 0.05
+    energy_dedup_threshold: float = ENERGY_DEDUP_THRESHOLD_DEFAULT_EV
     # Local-pose RMSD (Å) after centering. The same geometry on another site
     # is one pose. Heavy atoms are matched within each element when the
     # adsorbate has at least two; there is no rotation. Also the gas-phase
     # conformer dedup distance (Kabsch on every atom).
-    rmsd_dedup_threshold: float = 0.35
+    rmsd_dedup_threshold: float = RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM
     # Bonded when d <= m*(ri+rj). Same cutoff for adsorbate–adsorbate fusion.
     connectivity_multiplier: float = 1.3
     seed: int = DEFAULT_SEED
     # Weighting T (K) for boltzmann prior only — NOT a stochastic pre-filter.
     boltzmann_temperature: float = 300.0
-    min_pbc_image_separation: float = 8.0
+    min_pbc_image_separation: float = MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM
     vacuum_box_size: float = 20.0
     vasp_encut: int = 400
     vasp_ediff: float = 1e-6

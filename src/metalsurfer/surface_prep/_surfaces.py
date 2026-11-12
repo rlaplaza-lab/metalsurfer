@@ -13,8 +13,10 @@ from ase.optimize import BFGS, FIRE, LBFGS
 from scipy.spatial.distance import pdist
 
 from .._numeric_defaults import (
+    DEFAULT_SLAB_TOP_VACUUM_ANG,
     DEFAULT_TOP_LAYER_TOLERANCE,
     MIN_CALCULATOR_CELL_C_ANG,
+    MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM,
     SLAB_VACUUM_FACE_MARGIN_ANG,
 )
 from ..config import (
@@ -34,7 +36,6 @@ from ..placement._constants import (
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
 )
 from ..placement._material import (
-    MATERIAL_PBC,
     calculator_pbc_for_atoms,
     material_aware_pbc,
     require_atoms_pbc_matches_material,
@@ -51,8 +52,9 @@ from .freeze import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SLAB_TOP_VACUUM_ANG = 15.0
 _INVERTED_SLAB_VACUUM_MARGIN_ANG = SLAB_VACUUM_FACE_MARGIN_ANG
+# Substrate-cell validity threshold; unrelated to the distance-gating
+# ``CELL_DET_EPS`` in :mod:`metalsurfer._utils` (1e-12, volume presence only).
 _CELL_DET_EPS = 1e-8
 
 
@@ -228,7 +230,7 @@ def apply_surface_constraints(
 
 
 def coerce_substrate(
-    slab: Substrate | Atoms,
+    substrate: Substrate | Atoms,
     *,
     material_type: str | None = None,
     copy: bool = False,
@@ -244,35 +246,35 @@ def coerce_substrate(
 
     Parameters
     ----------
-    slab
+    substrate
         Substrate or ASE Atoms.
     material_type
         Required for bare Atoms; must match an existing Substrate.
     copy
         Copy a Substrate's atoms. Bare Atoms are always copied.
     """
-    if isinstance(slab, Substrate):
-        if material_type is not None and material_type != slab.material_type:
+    if isinstance(substrate, Substrate):
+        if material_type is not None and material_type != substrate.material_type:
             raise ValueError(
                 f"material_type {material_type!r} does not match substrate "
-                f"material_type {slab.material_type!r}"
+                f"material_type {substrate.material_type!r}"
             )
         if not copy:
-            return slab
+            return substrate
         return Substrate(
-            slab.atoms.copy(),
-            material_type=slab.material_type,
-            finalized=slab.finalized,
+            substrate.atoms.copy(),
+            material_type=substrate.material_type,
+            finalized=substrate.finalized,
         )
-    if isinstance(slab, Atoms):
+    if isinstance(substrate, Atoms):
         if material_type is None:
             raise ValueError(
                 "material_type is required when wrapping ase.Atoms "
                 "('slab', 'nanoparticle', or 'porous')"
             )
-        return Substrate(slab.copy(), material_type=material_type)
+        return Substrate(substrate.copy(), material_type=material_type)
     raise TypeError(
-        f"substrate must be a Substrate or ase.Atoms, got {type(slab).__name__}"
+        f"substrate must be a Substrate or ase.Atoms, got {type(substrate).__name__}"
     )
 
 
@@ -288,14 +290,14 @@ def _warn_missing_fixatoms(slab: Atoms) -> None:
 
 
 def validate_substrate(
-    slab: Atoms,
+    substrate: Atoms,
     *,
     material_type: str,
     config: AdsorptionConfig,
     conformers: list[Atoms] | None = None,
     require_bottom_anchor: bool = True,
 ) -> None:
-    """Validate that *slab* is ready for campaign API entry points.
+    """Validate that *substrate* is ready for campaign API entry points.
 
     Raises :class:`~metalsurfer.exceptions.GeometryValidationError` when the
     substrate is misaligned, undersized, or incompatible with *material_type*.
@@ -306,7 +308,7 @@ def validate_substrate(
 
     Parameters
     ----------
-    slab
+    substrate
         ASE Atoms substrate.
     material_type
         Material type string (e.g. "slab", "porous", "nanoparticle").
@@ -317,7 +319,7 @@ def validate_substrate(
     require_bottom_anchor
         Whether to enforce bottom-anchored geometry.
     """
-    pos = slab.get_positions()
+    pos = substrate.get_positions()
     if len(pos) == 0:
         raise GeometryValidationError("Substrate has no atoms")
 
@@ -329,14 +331,9 @@ def validate_substrate(
             "Call ensure_slab_z_alignment during substrate preparation."
         )
 
-    cell = np.array(slab.get_cell(), dtype=float)
+    cell = np.array(substrate.get_cell(), dtype=float)
     c_len = float(np.linalg.norm(cell[2]))
-    if material_type not in MATERIAL_PBC:
-        raise GeometryValidationError(
-            f"Unknown material_type={material_type!r}; "
-            "expected 'slab', 'porous', or 'nanoparticle'"
-        )
-    require_atoms_pbc_matches_material(slab, material_type, context="Substrate")
+    require_atoms_pbc_matches_material(substrate, material_type, context="Substrate")
 
     cell_det = _cell_determinant(cell)
     if material_type in ("slab", "porous") and abs(cell_det) <= _CELL_DET_EPS:
@@ -377,7 +374,7 @@ def validate_substrate(
         )
 
     if material_type == "nanoparticle" and abs(cell_det) > _CELL_DET_EPS:
-        margins = _vacuum_margins_ang(slab)
+        margins = _vacuum_margins_ang(substrate)
         min_margin = float(np.min(margins))
         if min_margin < config.min_pbc_image_separation:
             raise GeometryValidationError(
@@ -388,18 +385,18 @@ def validate_substrate(
                 "calling campaign APIs."
             )
 
-    _warn_missing_fixatoms(slab)
+    _warn_missing_fixatoms(substrate)
 
     if conformers:
         validate_substrate_conformer_sizing(
-            slab,
+            substrate,
             conformers=conformers,
             config=config,
         )
 
 
 def validate_substrate_conformer_sizing(
-    slab: Atoms,
+    substrate: Atoms,
     *,
     conformers: list[Atoms],
     config: AdsorptionConfig,
@@ -408,14 +405,14 @@ def validate_substrate_conformer_sizing(
 
     Parameters
     ----------
-    slab
+    substrate
         ASE Atoms substrate.
     conformers
         List of conformer ASE Atoms.
     config
         Adsorption configuration.
     """
-    cell = np.array(slab.get_cell(), dtype=float)
+    cell = np.array(substrate.get_cell(), dtype=float)
     diameter = _molecule_diameter(conformers)
     nx, ny = compute_minimum_supercell(
         cell,
@@ -459,7 +456,8 @@ def accept_substrate_for_api(
     """
     if not isinstance(slab, Substrate):
         raise TypeError(
-            "pass Substrate(..., material_type=...) or prepare_substrate; "
+            "pass metalsurfer.surface_prep.Substrate(..., material_type=...) "
+            "or prepare_substrate; "
             f"got {type(slab).__name__}"
         )
     validate_site_generator_for_material(config.site_generator, slab.material_type)
@@ -1310,7 +1308,7 @@ def _perpendicular_heights_2d(cell: np.ndarray) -> tuple[float, float]:
 def compute_minimum_supercell(
     cell: np.ndarray,
     molecule_diameter: float,
-    min_separation: float = 8.0,
+    min_separation: float = MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM,
 ) -> tuple[int, int]:
     """Minimal ``(nx, ny)`` repeat factors ensuring PBC image separation.
 
@@ -1339,44 +1337,44 @@ def compute_minimum_supercell(
 
 
 def auto_resize_substrate_for_molecule(
-    slab: Substrate | Atoms,
+    substrate: Substrate | Atoms,
     conformers: list[Atoms],
-    min_separation: float = 8.0,
+    min_separation: float = MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM,
     *,
     material_type: str | None = None,
 ) -> tuple[Substrate, bool]:
-    """Resize *slab* in-plane so periodic images are well separated.
+    """Resize *substrate* in-plane so periodic images are well separated.
 
-    Returns ``(slab, was_resized)`` where *was_resized* is ``True``
+    Returns ``(substrate, was_resized)`` where *was_resized* is ``True``
     when the cell was expanded.
 
     Parameters
     ----------
-    slab
+    substrate
         Substrate or ASE Atoms substrate.
     conformers
         List of conformer ASE Atoms.
     min_separation
         Minimum image separation in Å.
     """
-    slab = coerce_substrate(slab, material_type=material_type)
+    substrate = coerce_substrate(substrate, material_type=material_type)
 
     diameter = _molecule_diameter(conformers)
-    cell = np.array(slab.atoms.get_cell())
+    cell = np.array(substrate.atoms.get_cell())
     nx, ny = compute_minimum_supercell(cell, diameter, min_separation)
 
     if nx <= 1 and ny <= 1:
-        return slab, False
+        return substrate, False
 
-    new_atoms = slab.atoms.repeat((nx, ny, 1))
+    new_atoms = substrate.atoms.repeat((nx, ny, 1))
     logger.info(
-        "Auto-resized slab by (%d, %d, 1) for molecule diameter %.2f A "
+        "Auto-resized substrate by (%d, %d, 1) for molecule diameter %.2f A "
         "(min separation %.2f A): %d -> %d atoms",
         nx,
         ny,
         diameter,
         min_separation,
-        len(slab.atoms),
+        len(substrate.atoms),
         len(new_atoms),
     )
-    return Substrate(new_atoms, material_type=slab.material_type), True
+    return Substrate(new_atoms, material_type=substrate.material_type), True

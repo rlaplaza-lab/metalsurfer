@@ -16,7 +16,11 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from ..._numeric_defaults import DEFAULT_N_JOBS, RESIDUAL_SIGMA_DISTANCE_TEMPER
+from ..._numeric_defaults import (
+    DEFAULT_N_JOBS,
+    DEFAULT_SEED,
+    RESIDUAL_SIGMA_DISTANCE_TEMPER,
+)
 from ..regression import (
     TreeSurrogateKind,
     _build_estimator,
@@ -78,7 +82,7 @@ class EnsembleRegressor(BaseEstimator, RegressorMixin):
         self,
         member_surrogates: tuple[str, ...] = DEFAULT_ENSEMBLE_MEMBERS,
         n_estimators: int = 100,
-        random_state: int = 42,
+        random_state: int = DEFAULT_SEED,
         n_jobs: int = DEFAULT_N_JOBS,
     ) -> None:
         """Instantiate the ensemble regressor.
@@ -276,7 +280,7 @@ def _attach_residual_uncertainty(
     X: pd.DataFrame | np.ndarray,
     y: pd.Series | np.ndarray,
     *,
-    random_state: int = 42,
+    random_state: int = DEFAULT_SEED,
 ) -> None:
     """Store residual RMSE and scaled training features for distance-aware σ.
 
@@ -368,7 +372,7 @@ def train_surrogate(
     y: pd.Series | np.ndarray,
     surrogate: SurrogateType = "random_forest",
     n_estimators: int = 100,
-    random_state: int = 42,
+    random_state: int = DEFAULT_SEED,
     sample_weight: np.ndarray | None = None,
     attach_uncertainty: bool = True,
     n_jobs: int = DEFAULT_N_JOBS,

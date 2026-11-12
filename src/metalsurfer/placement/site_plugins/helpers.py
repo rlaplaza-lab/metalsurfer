@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.spatial import Delaunay, KDTree
 
+from ..._numeric_defaults import CONTACT_COVALENT_SCALE_DEFAULT
 from ..._utils import cell_has_volume
 from .._constants import (
     _ATOP_INJECTION_HEIGHT_FACTOR,
@@ -588,7 +589,7 @@ def inject_atop_sites(
             if support
         ]
         cover_radius = max(
-            1.35 * float(_SURFACE_COVALENT_RADIUS_FALLBACK),
+            CONTACT_COVALENT_SCALE_DEFAULT * float(_SURFACE_COVALENT_RADIUS_FALLBACK),
             0.55 * float(median_nn),
         )
         uncovered: list[int] = []

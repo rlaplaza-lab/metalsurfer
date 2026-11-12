@@ -26,6 +26,7 @@ from scipy.optimize import linear_sum_assignment
 from scipy.sparse.csgraph import connected_components
 
 from ._logging import warn_once
+from ._numeric_defaults import BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
 from ._utils import cell_has_volume
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
@@ -573,7 +574,7 @@ def _adsorbate_surface_min_distance(
 def check_desorption(
     atoms: Atoms,
     slab: Atoms,
-    binding_threshold: float = 4.0,
+    binding_threshold: float = BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
     *,
     material_type: str,
     surface_prefix_atoms: int | None = None,

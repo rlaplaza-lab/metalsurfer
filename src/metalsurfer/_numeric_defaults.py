@@ -32,6 +32,17 @@ CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM: float = 3.0
 # Scale on (r_i + r_j) for counting an adsorbate atom as in contact.
 CONTACT_COVALENT_SCALE_DEFAULT: float = 1.35
 MIN_CALCULATOR_CELL_C_ANG: float = 18.0
+# Vacuum (Å) ensured above the top surface layer by ensure_slab_z_alignment.
+DEFAULT_SLAB_TOP_VACUUM_ANG: float = 15.0
+# Farther than this (Å) from the nearest substrate atom counts as desorption.
+BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM: float = 4.0
+# Default in-plane image separation (Å) enforced during substrate preparation.
+MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM: float = 8.0
+# BO transfer: prior rows below this feature-space similarity are dropped.
+BO_TRANSFER_MIN_SIMILARITY_DEFAULT: float = 0.05
+# Gas-phase conformer dedup: centred RMSD (Å) and energy difference (eV).
+RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM: float = 0.35
+ENERGY_DEDUP_THRESHOLD_DEFAULT_EV: float = 0.05
 # Degeneracy guard for cell-frame geometry: below this norm the a x b cross
 # product (or an in-plane basis vector) is treated as degenerate and a
 # Cartesian fallback axis is used instead.

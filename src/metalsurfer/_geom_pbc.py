@@ -326,25 +326,6 @@ def height_along_slab_normal(points: np.ndarray, cell: np.ndarray) -> np.ndarray
     return arr @ n
 
 
-def shift_along_slab_normal(
-    points: np.ndarray, cell: np.ndarray, distance: float
-) -> np.ndarray:
-    """Translate points by *distance* along the slab normal.
-
-    Parameters
-    ----------
-    points
-        Cartesian coordinates.
-    cell
-        3x3 cell matrix.
-    distance
-        Shift distance in Å.
-    """
-    n = slab_normal(cell)
-    arr = np.asarray(points, dtype=float)
-    return arr + float(distance) * n
-
-
 def project_to_slab_plane(points: np.ndarray, cell: np.ndarray) -> np.ndarray:
     """Project Cartesian points to a 2D orthonormal basis spanning a/b.
 

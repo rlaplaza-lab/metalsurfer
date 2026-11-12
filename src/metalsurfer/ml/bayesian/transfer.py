@@ -12,7 +12,11 @@ from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from ..._numeric_defaults import DEFAULT_N_JOBS
+from ..._numeric_defaults import (
+    BO_TRANSFER_MIN_SIMILARITY_DEFAULT,
+    DEFAULT_N_JOBS,
+    DEFAULT_SEED,
+)
 from ...config import BO_TRANSFER_CAPABLE_SURROGATES
 from ...placement._constants import _DISTANCE_ZERO_EPS
 from .surrogate import train_surrogate
@@ -424,10 +428,10 @@ def build_transfer_surrogate(
     *,
     surrogate: TransferCapableSurrogateType = "random_forest",
     n_estimators: int = 100,
-    random_state: int = 42,
+    random_state: int = DEFAULT_SEED,
     weight_cap: float = 0.35,
     similarity_lengthscale: float = 1.0,
-    min_similarity: float = 0.05,
+    min_similarity: float = BO_TRANSFER_MIN_SIMILARITY_DEFAULT,
     mae_tolerance: float = 0.0,
     transfer_bad_rounds: int = 0,
     trust_patience: int = 2,
@@ -601,7 +605,7 @@ def build_cumulative_refit_surrogate(
     *,
     surrogate: TransferCapableSurrogateType,
     n_estimators: int = 100,
-    random_state: int = 42,
+    random_state: int = DEFAULT_SEED,
     weight_cap: float = 0.5,
     proximity_lengthscale: float = 1.0,
     proximity_floor: float = 0.05,

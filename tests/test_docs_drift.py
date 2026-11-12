@@ -1,7 +1,8 @@
 """Docs drift guards beyond config.rst field tables.
 
 Covers: ``[docs]`` extras vs ``docs/requirements.txt``, public ``__all__``
-symbols vs API autodoc pages, and YAML campaign root keys vs the guide.
+symbols vs API autodoc pages, YAML campaign root keys vs the guide, and
+v0.10.0 renamed APIs that must not reappear in user-facing text.
 """
 
 from __future__ import annotations
@@ -144,3 +145,65 @@ def test_docs_do_not_revive_slabcontainer_or_config_material_type():
     assert not stale_paths, "Stale material_type / SlabContainer docs:\n" + "\n".join(
         stale_paths
     )
+
+
+# ---------------------------------------------------------------------------
+# v0.10.0 renamed-API guards
+# ---------------------------------------------------------------------------
+
+_RUNNER_NAMES = ("adsorption", "adsorption_bo", "saturation", "saturation_bo")
+_RUNNER_CALL = re.compile(
+    r"run_(?:adsorption_bo|adsorption|saturation_bo|saturation)\s*\("
+)
+_STALE_CONFIG_KEYS = ("total_budget", "contact_distance_threshold")
+# scripts/benchmark_bo.py writes a report column literally named
+# "total_budget" for its evaluation-count budget — a different concept from
+# the removed ``bo.total_budget`` config key, so it is carved out.
+_TOTAL_BUDGET_EXEMPT = {"scripts/benchmark_bo.py"}
+
+
+def _drift_scan_paths() -> list[Path]:
+    """User-facing source and docs scanned for revived renamed APIs."""
+    paths = [p for p in (_ROOT / "docs").rglob("*.rst") if "_build" not in p.parts]
+    paths.extend(_ROOT / name for name in ("README.md", "CORE_SYSTEM_EXPLANATION.md"))
+    paths.extend((_ROOT / "examples").glob("*.py"))
+    paths.extend((_ROOT / "examples").glob("*.yaml"))
+    paths.extend((_ROOT / "scripts").rglob("*.py"))
+    return [p for p in paths if "__pycache__" not in p.parts]
+
+
+def _runner_call_spans(text: str) -> list[str]:
+    """Return the argument text of each ``run_*`` call (paren-balanced)."""
+    spans: list[str] = []
+    for match in _RUNNER_CALL.finditer(text):
+        depth = 1
+        start = match.end()
+        i = start
+        while i < len(text) and depth > 0:
+            ch = text[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            i += 1
+        spans.append(text[start : i - 1])
+    return spans
+
+
+@pytest.mark.docs
+def test_docs_do_not_revive_v010_renamed_apis():
+    """Docs, examples, and scripts must use the post-0.10.0 API names."""
+    stale: list[str] = []
+    runner_slab = re.compile(r"(?<![\w.])slab\s*=")
+    for path in _drift_scan_paths():
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(_ROOT).as_posix()
+        for key in _STALE_CONFIG_KEYS:
+            if key in text and not (
+                key == "total_budget" and rel in _TOTAL_BUDGET_EXEMPT
+            ):
+                stale.append(f"{rel}: {key}")
+        for span in _runner_call_spans(text):
+            if runner_slab.search(span):
+                stale.append(f"{rel}: run_* called with slab=")
+    assert not stale, "Revived 0.10.0 renamed APIs:\n" + "\n".join(sorted(set(stale)))

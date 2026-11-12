@@ -102,7 +102,7 @@ def apply_material_pbc(atoms: Atoms, material_type: str) -> None:
 
 
 def relax_substrate(
-    slab: Substrate | Atoms,
+    substrate: Substrate | Atoms,
     calculator,
     config: AdsorptionConfig,
     *,
@@ -123,7 +123,7 @@ def relax_substrate(
 
     Parameters
     ----------
-    slab
+    substrate
         Substrate as :class:`Substrate` or ASE Atoms.
     calculator
         ASE calculator for relaxation.
@@ -142,7 +142,7 @@ def relax_substrate(
     context
         Label for logging.
     """
-    container = coerce_substrate(slab, material_type=material_type, copy=True)
+    container = coerce_substrate(substrate, material_type=material_type, copy=True)
     mode, opt_name, fmax, steps = _resolve_slab_relaxation_settings(
         config,
         relaxation_mode=relaxation_mode,
@@ -166,10 +166,10 @@ def relax_substrate(
 
 
 def finalize_substrate(
-    slab: Substrate | Atoms,
+    substrate: Substrate | Atoms,
     config: AdsorptionConfig,
     *,
-    material_type: str,
+    material_type: str | None = None,
     conformers: list[Atoms] | None = None,
     align: bool | None = None,
     require_bottom_anchor: bool | None = None,
@@ -192,12 +192,14 @@ def finalize_substrate(
 
     Parameters
     ----------
-    slab
-        Substrate as :class:`Substrate` or ASE Atoms.
+    substrate
+        Substrate as :class:`Substrate` or ASE Atoms. When *material_type* is
+        omitted, a :class:`Substrate` contributes its own ``material_type``.
     config
         Adsorption configuration.
     material_type
-        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``. Required for bare
+        Atoms; must match an existing Substrate.
     conformers
         Optional list of conformers for validation.
     align
@@ -212,8 +214,15 @@ def finalize_substrate(
         Height tolerance for the top layer in Å. When ``None``, uses
         :attr:`~metalsurfer.AdsorptionConfig.top_layer_tolerance`.
     """
+    if material_type is None:
+        if not isinstance(substrate, Substrate):
+            raise ValueError(
+                "material_type is required when finalizing ase.Atoms "
+                "('slab', 'nanoparticle', or 'porous')"
+            )
+        material_type = substrate.material_type
     validate_site_generator_for_material(config.site_generator, material_type)
-    container = coerce_substrate(slab, material_type=material_type, copy=True)
+    container = coerce_substrate(substrate, material_type=material_type, copy=True)
     should_align = align if align is not None else material_type == "slab"
     check_bottom_anchor = (
         should_align if require_bottom_anchor is None else require_bottom_anchor
@@ -495,7 +504,7 @@ def prepare_substrate(
 
 
 def resize_substrate_for_molecule(
-    slab: Substrate | Atoms,
+    substrate: Substrate | Atoms,
     conformers: list[Atoms],
     config: AdsorptionConfig,
     *,
@@ -504,19 +513,21 @@ def resize_substrate_for_molecule(
     freeze_symbols: list[str] | None = None,
     top_layer_tolerance: float | None = None,
 ) -> Substrate:
-    """Expand *slab* in-plane when conformers require larger image separation.
+    """Expand *substrate* in-plane when conformers require larger image separation.
 
     Re-applies material PBC and freeze constraints after resizing. Call after
     :func:`prepare_substrate` and conformer generation, before campaign APIs.
 
     Parameters
     ----------
-    slab
+    substrate
         Substrate as :class:`Substrate` or ASE Atoms.
     conformers
         List of conformer ASE Atoms.
     config
         Adsorption configuration.
+    material_type
+        Required for bare Atoms; must match an existing Substrate.
     relax_top_layer
         Leave the top layer free during placement relaxation.
     freeze_symbols
@@ -526,7 +537,7 @@ def resize_substrate_for_molecule(
         :attr:`~metalsurfer.AdsorptionConfig.top_layer_tolerance`.
     """
     resized, was_resized = auto_resize_substrate_for_molecule(
-        slab,
+        substrate,
         conformers,
         config.min_pbc_image_separation,
         material_type=material_type,

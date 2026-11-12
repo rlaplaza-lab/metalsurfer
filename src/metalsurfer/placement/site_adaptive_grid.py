@@ -69,6 +69,7 @@ from .site_coords import (
     _cart_to_frac,
     _deduplicate_points,
     _wrap_cartesian,
+    clearance_monotonic_mask,
     project_anchor_to_support_plane,
 )
 from .site_plugins.helpers import median_nn_or_fallback, periodic_accessibility_tree
@@ -673,7 +674,11 @@ def _ray_exposure_mask(
     n_steps: int = _ADAPTIVE_GRID_EXPOSURE_N_STEPS,
     tolerance: float = 1e-8,
 ) -> np.ndarray:
-    """Vectorized ray exposure: clearance non-decreasing along each local normal."""
+    """Vectorized ray exposure: clearance non-decreasing along each local normal.
+
+    Clearance comes from the image-expanded KDTree; the exposure policy itself
+    is the shared :func:`~metalsurfer.placement.site_coords.clearance_monotonic_mask`.
+    """
     n = len(vertices)
     if n == 0:
         return np.ones(0, dtype=bool)
@@ -689,8 +694,7 @@ def _ray_exposure_mask(
     clear = _batch_clearances(
         pts.reshape(-1, 3), tree, framework_radii, n_atoms
     ).reshape(n, n_steps_i + 1)
-    diffs = clear[:, 1:] - clear[:, :-1]
-    return np.all(diffs >= -float(tolerance), axis=1)
+    return clearance_monotonic_mask(clear, tolerance=tolerance)
 
 
 def _exposure_mask(

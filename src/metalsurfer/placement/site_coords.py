@@ -33,9 +33,6 @@ from .._geom_pbc import (
     reciprocal_plane_spacings as _reciprocal_plane_spacings,
 )
 from .._geom_pbc import (
-    shift_along_slab_normal as _shift_along_slab_normal,
-)
-from .._geom_pbc import (
     slab_normal as _slab_normal,
 )
 from .._geom_pbc import (
@@ -82,7 +79,6 @@ __all__ = [
     "_minimum_image_fractional_delta",
     "_project_to_slab_plane",
     "_reciprocal_plane_spacings",
-    "_shift_along_slab_normal",
     "_slab_normal",
     "_slab_outward_normal",
     "_slab_plane_projectors",
@@ -512,6 +508,26 @@ def _periodic_delta(
     ).reshape(delta.shape)
 
 
+def clearance_monotonic_mask(
+    clear: np.ndarray,
+    *,
+    tolerance: float = 1e-8,
+) -> np.ndarray:
+    """Row-wise exposure policy: clearance never decreases along the ray.
+
+    *clear* has shape ``(n_origins, n_steps + 1)`` — the nearest other
+    framework atom's distance minus its radius at each sampled ray step. A
+    ray is exposed when every consecutive difference is at least
+    ``-tolerance``. This is the single definition of the exposure policy;
+    the KDTree-image backend (adaptive grid / rolling probe) and the
+    pairwise periodic backend (site_np / site_ligands) both feed their
+    clearance matrices through it.
+    """
+    clear_arr = np.asarray(clear, dtype=float)
+    diffs = clear_arr[:, 1:] - clear_arr[:, :-1]
+    return np.all(diffs >= -float(tolerance), axis=1)
+
+
 def ray_exposure_mask(
     origins: np.ndarray,
     normals: np.ndarray,
@@ -555,8 +571,7 @@ def ray_exposure_mask(
             if 0 <= int(ex) < dist.shape[-1]:
                 dist[i, :, int(ex)] = np.inf
     clear = np.min(dist, axis=-1)
-    diffs = clear[:, 1:] - clear[:, :-1]
-    return np.all(diffs >= -float(tolerance), axis=1)
+    return clearance_monotonic_mask(clear, tolerance=tolerance)
 
 
 def shadowed_by_higher_mask(

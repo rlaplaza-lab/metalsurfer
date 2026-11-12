@@ -45,7 +45,6 @@ from .site_adaptive_grid import (
 )
 from .site_coords import (
     _minimum_image_cartesian_delta,
-    _slab_outward_normal,
     _wrap_cartesian,
     project_anchor_to_support_plane,
 )
@@ -56,6 +55,7 @@ from .site_wall_near_common import (
     SidePolicy,
     _best_per_support_key,
     _merge_by_radius,
+    _side_policy_mask,
     candidates_to_arrays,
     shell_target_clearance,
 )
@@ -442,6 +442,9 @@ def _contacts_to_candidates(
 
 
 _ROLLING_SLAB_NORMAL_DOT_MIN: float = 0.35
+# Absolute floor (Å) on the sampled contact clearance when the derived
+# shell target would sit below the framework's own minimum clearance.
+_ROLLING_PROBE_MIN_CLEARANCE_FLOOR_ANG: float = 0.05
 
 
 def _slab_face_contact_mask(
@@ -455,29 +458,26 @@ def _slab_face_contact_mask(
     """On 2D PBC, keep contacts whose normals align with the selected face(s).
 
     Non-slab PBC masks are unchanged. ``positive`` uses the vacuum-richer face.
+    The alignment test itself is the shared
+    :func:`~metalsurfer.placement.site_wall_near_common._side_policy_mask` with
+    the rolling-probe ``dot_min`` — rolling-probe contact normals may be noisy,
+    so a loose sign test is not enough here.
     """
     pbc_arr = np.asarray(pbc, dtype=bool).reshape(3)
     if not candidates or int(np.count_nonzero(pbc_arr)) != 2:
         return candidates
     if not cell_has_volume(cell):
         return candidates
-    n_hat = _slab_outward_normal(positions, cell)
-    kept: list[CandidateSite] = []
-    for c in candidates:
-        nrm = np.asarray(c.normal, dtype=float)
-        nlen = float(np.linalg.norm(nrm))
-        if nlen <= _VECTOR_NORM_EPS:
-            continue
-        dot = float(np.dot(nrm / nlen, n_hat))
-        if side_policy == "negative":
-            aligned = dot <= -_ROLLING_SLAB_NORMAL_DOT_MIN
-        elif side_policy == "all":
-            aligned = abs(dot) >= _ROLLING_SLAB_NORMAL_DOT_MIN
-        else:
-            aligned = dot >= _ROLLING_SLAB_NORMAL_DOT_MIN
-        if aligned:
-            kept.append(c)
-    return kept
+    normals = np.stack([np.asarray(c.normal, dtype=float) for c in candidates])
+    keep = _side_policy_mask(
+        normals,
+        cell=cell,
+        pbc=pbc,
+        side_policy=side_policy,
+        positions=positions,
+        dot_min=_ROLLING_SLAB_NORMAL_DOT_MIN,
+    )
+    return [c for c, k in zip(candidates, keep, strict=True) if k]
 
 
 def generate_rolling_probe_sites(
@@ -531,7 +531,10 @@ def generate_rolling_probe_sites(
         return empty
 
     skin = shell_target_clearance(min_clearance, max_clearance, median_nn)
-    skin = max(float(skin), max(float(min_clearance), 0.05))
+    skin = max(
+        float(skin),
+        max(float(min_clearance), _ROLLING_PROBE_MIN_CLEARANCE_FLOOR_ANG),
+    )
     atop_dirs = _fibonacci_sphere(_ROLLING_PROBE_ATOP_SAMPLES)
 
     workers = resolve_materialize_workers(n_jobs, n_tasks=n_atoms)

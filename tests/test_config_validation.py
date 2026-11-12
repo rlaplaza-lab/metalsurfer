@@ -1108,6 +1108,15 @@ def test_bo_candidate_pool_size_and_failure_penalty_accepted():
     assert c.bo.failure_penalty_overrides["validation"] == 17.0
 
 
+def test_bo_renamed_key_rejected_with_hint():
+    with pytest.raises(
+        ValueError,
+        match=r"bo contains unknown keys: 'total_budget' \(renamed to "
+        r"'total_batches' in 0\.10\.0\)",
+    ):
+        AdsorptionConfig(**fold_bo_config({"bo": {"total_budget": 5}}))
+
+
 def test_bo_transfer_config_validation():
     c = AdsorptionConfig(
         bo=BOConfig(

@@ -6,6 +6,10 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 
+from ._numeric_defaults import (
+    ENERGY_DEDUP_THRESHOLD_DEFAULT_EV,
+    RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM,
+)
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
 
@@ -136,8 +140,8 @@ def create_conformers_from_smiles(
 def remove_duplicate_conformers(
     conformers: list[Atoms],
     energies: list[float],
-    distance_threshold: float = 0.1,
-    energy_threshold: float = 0.05,
+    distance_threshold: float = RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM,
+    energy_threshold: float = ENERGY_DEDUP_THRESHOLD_DEFAULT_EV,
 ) -> tuple[list[Atoms], list[float]]:
     """Remove near-duplicate conformers by centred RMSD + energy.
 

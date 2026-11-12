@@ -5,6 +5,58 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Substrate helpers take ``substrate`` instead of ``slab`` as the
+  substrate-parameter name: ``coerce_substrate``, ``finalize_substrate``,
+  ``relax_substrate``, ``resize_substrate_for_molecule``,
+  ``validate_substrate``, ``validate_substrate_conformer_sizing``, and
+  ``auto_resize_substrate_for_molecule`` (breaking for keyword callers;
+  positional callers are unaffected). ``prepare_substrate(slab=...)`` keeps
+  its name — it selects the starting structure alongside ``slab_file``.
+- ``finalize_substrate`` no longer requires ``material_type`` when a
+  :class:`Substrate` is passed; it reads ``substrate.material_type``.
+  ``material_type`` is still required for bare ``Atoms``, and a passed
+  ``material_type`` must still match the Substrate's.
+- ``bo.total_budget`` in Python or YAML configs is rejected with
+  "renamed to 'total_batches' in 0.10.0" instead of a bare unknown-key error.
+- ``remove_duplicate_conformers`` kwarg defaults now match the config fields
+  they mirror (``distance_threshold`` 0.35 Å = ``rmsd_dedup_threshold``,
+  ``energy_threshold`` 0.05 eV = ``energy_dedup_threshold``).
+- Rolling-probe ``side_policy="external"`` on slab PBC now matches the shared
+  side policy (no face filter) instead of behaving like ``positive``;
+  ``external`` stays the nanoparticle COM-outward semantic.
+- Shared numeric defaults live in ``metalsurfer._numeric_defaults``:
+  ``BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM``,
+  ``MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM``,
+  ``BO_TRANSFER_MIN_SIMILARITY_DEFAULT``, ``RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM``,
+  ``ENERGY_DEDUP_THRESHOLD_DEFAULT_EV``, and ``DEFAULT_SLAB_TOP_VACUUM_ANG``.
+  Config fields and helper kwarg defaults share one value per knob.
+
+### Removed
+
+- Unused cell-frame helper ``shift_along_slab_normal`` (and its
+  ``_shift_along_slab_normal`` re-export) with no production callers.
+- The redundant ``material_type`` membership re-check inside
+  ``validate_substrate``; ``require_atoms_pbc_matches_material`` performs the
+  same validation.
+
+### Fixed
+
+- Slab MIC vectors in ``placement.geometry._mol_slab_pairwise_mic`` come from
+  the shared ``minimum_image_cartesian_delta`` instead of a local
+  ``ase.geometry.find_mic`` call, so all catalog MIC math shares one helper.
+- Exposure (clearance monotonicity) is defined once in
+  ``site_coords.clearance_monotonic_mask``; the adaptive-grid / rolling-probe
+  KDTree backend and the pairwise periodic backend both feed it.
+- The slab face-alignment test is one parameterized helper
+  (``site_wall_near_common._side_policy_mask``, new ``dot_min`` kwarg);
+  rolling-probe contact filtering passes its 0.35 threshold through it.
+- The 1.35 contact scale in porous atop-injection coverage now reads
+  ``CONTACT_COVALENT_SCALE_DEFAULT``.
+
 ## [0.10.0] - 2026-11-11
 
 ### Changed
