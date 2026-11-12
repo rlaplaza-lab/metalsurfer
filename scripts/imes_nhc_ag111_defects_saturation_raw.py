@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 def main():
     config = AdsorptionConfig(
-        material_type="slab",
         num_conformers=20,
         num_placements=1000,
         stage1_steps=80,
@@ -45,6 +44,7 @@ def main():
         config=config,
         results_dir=RESULTS_DIR,
         adatom_relaxation_mode="ionic_only",
+        material_type="slab",
     )
     logger.info("Defected Ag(111) slab atoms: %d", len(slab.atoms))
 
@@ -57,7 +57,7 @@ def main():
     logger.info("Resized defected Ag(111) slab atoms: %d", len(slab.atoms))
 
     campaign = run_saturation(
-        slab=slab,
+        substrate=slab,
         molecules=[(IMES_NHC_SMILES, "imes_nhc")],
         config=config,
         surface_type=SURFACE_TYPE,

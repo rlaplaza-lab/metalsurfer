@@ -96,7 +96,6 @@ def test_overlap_penalty_respects_pair_scales():
 
 def test_resolve_rigid_clash_separates_near_overlap():
     config = AdsorptionConfig(
-        material_type="slab",
         seed=0,
         placement_x_range=(-1.5, 1.5),
         placement_y_range=(-1.5, 1.5),
@@ -146,7 +145,6 @@ def test_resolve_rigid_clash_separates_near_overlap():
 
 def test_resolve_rigid_clash_fails_when_stacked():
     config = AdsorptionConfig(
-        material_type="slab",
         seed=0,
         placement_x_range=(-0.5, 0.5),
         placement_y_range=(-0.5, 0.5),
@@ -175,7 +173,6 @@ def test_resolve_rigid_clash_fails_when_stacked():
 
 def test_resolve_rigid_clash_deterministic():
     config = AdsorptionConfig(
-        material_type="slab",
         seed=0,
         placement_x_range=(-1.5, 1.5),
         placement_y_range=(-1.5, 1.5),
@@ -228,7 +225,6 @@ def test_clash_bounds_scale_with_molecule_size():
     r_b = incoming_inplane_radius(bulky, footprint_scale=1.0)
     assert r_b > r_w
     cfg = AdsorptionConfig(
-        material_type="slab",
         placement_x_range=(-0.5, 0.5),
         placement_y_range=(-0.5, 0.5),
     )
@@ -237,7 +233,7 @@ def test_clash_bounds_scale_with_molecule_size():
     assert b_b[0][1] > b_w[0][1]
     assert b_b[2] > b_w[2]
     pinned = AdsorptionConfig(
-        material_type="slab", placement_x_range=(0.0, 0.0), placement_y_range=(0.0, 0.0)
+        placement_x_range=(0.0, 0.0), placement_y_range=(0.0, 0.0)
     )
     assert clash_bounds_for_adsorbate(
         water, pinned, z_window=2.0, footprint_radius=r_w
@@ -251,7 +247,6 @@ def test_clash_bounds_uses_supplied_moving_radii_for_zero_footprint(monkeypatch)
 
     mono = Atoms("O", positions=[[0.0, 0.0, 0.0]])
     cfg = AdsorptionConfig(
-        material_type="slab",
         placement_x_range=(-0.5, 0.5),
         placement_y_range=(-0.5, 0.5),
     )
@@ -311,7 +306,6 @@ def test_vdw_hole_is_interpolated_once(caplog):
 def test_equality_on_cutoff_is_not_a_successful_descent():
     """A pair sitting on m*(ri+rj) is still inside the cutoff."""
     config = AdsorptionConfig(
-        material_type="slab",
         seed=0,
         placement_x_range=(0.0, 0.0),
         placement_y_range=(0.0, 0.0),
@@ -360,7 +354,6 @@ def test_resolve_rigid_clash_final_coords_use_one_mic(monkeypatch):
     import metalsurfer.placement.clash as clash_mod
 
     config = AdsorptionConfig(
-        material_type="slab",
         seed=0,
         placement_x_range=(-1.5, 1.5),
         placement_y_range=(-1.5, 1.5),

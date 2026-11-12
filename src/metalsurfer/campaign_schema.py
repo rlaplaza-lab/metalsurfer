@@ -11,8 +11,9 @@ from ase import Atoms
 
 from ._utils import require_unique_molecule_names
 from .config import AdsorptionConfig, fold_bo_config
+from .placement._material import validate_material_type
 from .result_paths import results_dir_for
-from .surface_prep import SlabContainer
+from .surface_prep import Substrate
 
 CampaignKind = Literal["adsorption", "adsorption_bo", "saturation", "saturation_bo"]
 
@@ -25,6 +26,7 @@ _SUBSTRATE_KEYS = frozenset(
         "bulk_id",
         "slab_file",
         "slab",
+        "material_type",
         "miller_indices",
         "supercell",
         "alloy_host",
@@ -114,12 +116,19 @@ def _normalize_substrate(raw: Any) -> dict[str, Any]:
             substrate[tuple_key] = tuple(ints)
     if "slab" in substrate and substrate["slab"] is not None:
         slab_value = substrate["slab"]
-        if not isinstance(slab_value, (Atoms, SlabContainer)):
+        if not isinstance(slab_value, (Atoms, Substrate)):
             raise ValueError(
-                "substrate.slab must be an ase.Atoms or SlabContainer instance "
+                "substrate.slab must be an ase.Atoms or Substrate instance "
                 f"(got {type(slab_value).__name__}); use slab_file or bulk_id "
                 "for file-/id-based substrates"
             )
+    material_type = substrate.get("material_type")
+    if not isinstance(material_type, str) or not material_type.strip():
+        raise ValueError(
+            "substrate.material_type is required; pass 'slab', 'nanoparticle', "
+            "or 'porous'"
+        )
+    substrate["material_type"] = validate_material_type(material_type)
     return substrate
 
 
@@ -185,12 +194,13 @@ def parse_campaign_dict(data: dict[str, Any]) -> CampaignDocument:
         config_raw = {}
     if not isinstance(config_raw, dict):
         raise ValueError("config must be a mapping when provided")
+    if "material_type" in config_raw:
+        raise ValueError(
+            "material_type belongs under substrate, not config; "
+            "pass substrate.material_type as 'slab', 'nanoparticle', or 'porous'"
+        )
     _validate_config_keys(config_raw)
     config_payload = dict(config_raw)
-    if "material_type" not in config_payload:
-        raise ValueError(
-            "config.material_type is required; pass 'slab', 'nanoparticle', or 'porous'"
-        )
     # Nested ``bo:`` / ``bo.transfer:`` only (flat ``bo_*`` keys are rejected).
     config_payload["bo"] = fold_bo_config(config_payload)
     config = AdsorptionConfig(**config_payload)

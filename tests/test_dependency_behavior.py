@@ -62,7 +62,7 @@ class TestMissingRDKit:
             pytest.raises(DependencyMissingError, match="rdkit"),
         ):
             mod.create_conformers_from_smiles(
-                "O", config=AdsorptionConfig(material_type="slab", num_conformers=1)
+                "O", config=AdsorptionConfig(num_conformers=1)
             )
 
     def test_filter_helpers_degrade_gracefully(self):
@@ -130,7 +130,7 @@ class TestMissingTorchSim:
                 omod.optimize_isolated_molecules_batched(
                     [water],
                     ts_model=MagicMock(),
-                    config=AdsorptionConfig(material_type="slab"),
+                    config=AdsorptionConfig(),
                 )
 
     def test_optimize_slab_raises_clear_error(self):
@@ -156,7 +156,7 @@ class TestMissingTorchSim:
                     [combined],
                     slab,
                     ts_model=MagicMock(),
-                    config=AdsorptionConfig(material_type="slab"),
+                    config=AdsorptionConfig(),
                 )
 
     def test_autobatcher_returns_none_when_unavailable(self):
@@ -204,7 +204,8 @@ class TestCreateSlabFromBulkImportErrors:
             create_slab_from_bulk(
                 "mp-23",
                 results_dir=str(tmp_path / "results_test_dep"),
-                config=AdsorptionConfig(material_type="slab"),
+                material_type="slab",
+                config=AdsorptionConfig(),
             )
 
     def test_raises_fairchem_data_oc_hint_when_fairchem_missing(self, tmp_path):
@@ -220,7 +221,8 @@ class TestCreateSlabFromBulkImportErrors:
             create_slab_from_bulk(
                 "mp-23",
                 results_dir=str(tmp_path / "results_test_dep"),
-                config=AdsorptionConfig(material_type="slab"),
+                material_type="slab",
+                config=AdsorptionConfig(),
             )
 
 

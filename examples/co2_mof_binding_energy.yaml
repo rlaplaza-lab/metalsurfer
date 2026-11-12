@@ -3,6 +3,7 @@
 campaign: adsorption
 surface_type: co2_mof_yaml
 substrate:
+  material_type: porous
   slab_file: examples/mof_structures/RUBTAK01.cif
   align: false
   slab_relaxation_mode: none
@@ -10,7 +11,6 @@ molecules:
   - smiles: O=C=O
     name: CO2
 config:
-  material_type: porous
   slab_relaxation_mode: none
   num_conformers: 1
   num_placements: 4

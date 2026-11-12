@@ -529,13 +529,14 @@ def test_check_decomposition_prefix_invalid():
 def test_filter_results_uses_slab_prefix_for_decomposition():
     """filter_results passes len(slab) so the second molecule is checked alone."""
     slab, slab_plus_first, combined = _combined_slab_two_waters_far_apart()
-    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     results = [_sr(combined, -1.0, 0)]
     filtered = filter_results(
         results,
         slab=slab_plus_first,
         reference_smiles="O",
         config=config,
+        material_type="slab",
     )
     assert len(filtered) == 1
 
@@ -545,6 +546,7 @@ def test_filter_results_uses_slab_prefix_for_decomposition():
             slab=slab,
             reference_smiles="O",
             config=config,
+            material_type="slab",
         )
 
 
@@ -915,8 +917,8 @@ def test_desorption_ignores_pre_adsorbed_atoms_with_surface_prefix():
         combined,
         slab_with_pre_adsorbate,
         binding_threshold=4.0,
-        material_type="slab",
         surface_prefix_atoms=len(slab_metal),
+        material_type="slab",
     )
     assert not ok
     assert "too far" in reason
@@ -951,7 +953,7 @@ def test_desorption_prefix_ignores_shared_symbol_pre_adsorbate():
         combined,
         coverage,
         binding_threshold=4.0,
-        material_type="porous",
+        material_type="slab",
     )
     assert ok, "Without surface_prefix_atoms, prior adsorbates can mask desorption"
 
@@ -959,8 +961,8 @@ def test_desorption_prefix_ignores_shared_symbol_pre_adsorbate():
         combined,
         coverage,
         binding_threshold=4.0,
-        material_type="porous",
         surface_prefix_atoms=len(framework),
+        material_type="slab",
     )
     assert not ok
     assert "too far" in reason
@@ -993,14 +995,13 @@ def test_filter_results_desorption_uses_surface_prefix():
     combined.set_pbc(slab_with_pre_adsorbate.get_pbc())
     results = [_sr(combined, -1.0, 0)]
 
-    config = AdsorptionConfig(
-        material_type="slab", skip_topology_check=True, connectivity_multiplier=1.3
-    )
+    config = AdsorptionConfig(skip_topology_check=True, connectivity_multiplier=1.3)
     kept_masked = filter_results(
         results,
         slab=slab_with_pre_adsorbate,
         reference_smiles=None,
         config=config,
+        material_type="slab",
     )
     assert kept_masked == results, "Without prefix, prior adsorbate masks desorption"
 
@@ -1010,6 +1011,7 @@ def test_filter_results_desorption_uses_surface_prefix():
         reference_smiles=None,
         config=config,
         surface_prefix_atoms=len(slab_metal),
+        material_type="slab",
     )
     assert filtered == []
 
@@ -1029,12 +1031,11 @@ def test_duplicate_removal():
         _sr(combined2, -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
     )
-    filtered = filter_results(results, slab=slab, config=config)
+    filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
 
 
@@ -1052,13 +1053,12 @@ def test_duplicate_removal_rejects_mixed_cells():
         _sr(combined2, -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
     )
     with pytest.raises(ValueError, match="homogeneous cell"):
-        filter_results(results, slab=slab, config=config)
+        filter_results(results, slab=slab, config=config, material_type="slab")
 
 
 def test_duplicate_removal_tracks_removed_duplicates():
@@ -1071,7 +1071,6 @@ def test_duplicate_removal_tracks_removed_duplicates():
         _sr(combined2, -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
@@ -1082,6 +1081,7 @@ def test_duplicate_removal_tracks_removed_duplicates():
         slab=slab,
         config=config,
         duplicate_results_out=removed,
+        material_type="slab",
     )
 
     assert len(filtered) == 1
@@ -1109,12 +1109,11 @@ def test_duplicate_removal_lattice_image_poses():
         _sr(translated, -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
     )
-    filtered = filter_results(results, slab=slab, config=config)
+    filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
 
 
@@ -1133,12 +1132,11 @@ def test_distinct_kept():
         _sr(combined2, -2.0, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
     )
-    filtered = filter_results(results, slab=slab, config=config)
+    filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 2
 
 
@@ -1153,12 +1151,11 @@ def test_duplicate_different_energy_kept():
         _sr(combined2, -3.0, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
     )
-    filtered = filter_results(results, slab=slab, config=config)
+    filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 2
 
 
@@ -1207,7 +1204,6 @@ def test_duplicate_removal_ignores_prior_adsorbate_geometry():
         _sr(combined2, -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
@@ -1218,6 +1214,7 @@ def test_duplicate_removal_ignores_prior_adsorbate_geometry():
         results,
         slab=slab_with_prior,
         config=config,
+        material_type="slab",
     )
     assert len(filtered) == 1
 
@@ -1247,7 +1244,6 @@ def test_duplicate_removal_collapses_translated_trailing_adsorbate():
         _sr(_place_new(7.0), -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
@@ -1258,6 +1254,7 @@ def test_duplicate_removal_collapses_translated_trailing_adsorbate():
         results,
         slab=slab_with_prior,
         config=config,
+        material_type="slab",
     )
     assert len(filtered) == 1
     assert filtered[0].placement_id == 1
@@ -1289,7 +1286,6 @@ def test_duplicate_removal_keeps_rotated_trailing_pose_with_same_prior():
         _sr(_place_new(turn=True), -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
@@ -1300,6 +1296,7 @@ def test_duplicate_removal_keeps_rotated_trailing_pose_with_same_prior():
         results,
         slab=slab_with_prior,
         config=config,
+        material_type="slab",
     )
     assert len(filtered) == 2
 
@@ -1318,14 +1315,13 @@ def test_duplicate_removal_across_adjacent_com_bins():
         _sr(shifted, -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
         skip_topology_check=True,
         skip_desorption_check=True,
     )
-    filtered = filter_results(results, slab=slab, config=config)
+    filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
 
 
@@ -1341,14 +1337,15 @@ def test_duplicate_removal_collapses_same_pose_on_distant_sites():
         placements.append(_sr(atoms, -1.0 - 0.001 * i, i))
 
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
         skip_topology_check=True,
         skip_desorption_check=True,
     )
-    filtered = filter_results(placements, slab=slab, config=config)
+    filtered = filter_results(
+        placements, slab=slab, config=config, material_type="slab"
+    )
     assert len(filtered) == 1
     assert filtered[0].placement_id == 3
 
@@ -1378,14 +1375,13 @@ def test_duplicate_removal_across_periodic_cell_face():
         _sr(near, -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
         skip_topology_check=True,
         skip_desorption_check=True,
     )
-    filtered = filter_results(results, slab=slab, config=config)
+    filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
 
 
@@ -1424,14 +1420,13 @@ def test_duplicate_removal_collapses_wrapped_periodic_image():
         _sr(moved, -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
         skip_topology_check=True,
         skip_desorption_check=True,
     )
-    filtered = filter_results(results, slab=slab, config=config)
+    filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
     assert filtered[0].placement_id == 1
 
@@ -1464,14 +1459,13 @@ def test_assignment_rmsd_collapses_permuted_long_translation():
         _sr(moved, -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
         skip_topology_check=True,
         skip_desorption_check=True,
     )
-    filtered = filter_results(results, slab=slab, config=config)
+    filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
     assert filtered[0].placement_id == 1
 
@@ -1498,23 +1492,25 @@ def test_default_rmsd_threshold_collapses_a_mild_distortion():
         _sr(distorted, -1.01, 1),
     ]
     default = AdsorptionConfig(
-        material_type="slab",
         connectivity_multiplier=1.3,
         skip_topology_check=True,
         skip_desorption_check=True,
     )
     assert default.rmsd_dedup_threshold == 0.35
-    assert len(filter_results(near, slab=slab, config=default)) == 1
+    assert (
+        len(filter_results(near, slab=slab, config=default, material_type="slab")) == 1
+    )
 
     strict = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
         skip_topology_check=True,
         skip_desorption_check=True,
     )
-    assert len(filter_results(near, slab=slab, config=strict)) == 2
+    assert (
+        len(filter_results(near, slab=slab, config=strict, material_type="slab")) == 2
+    )
 
 
 def test_duplicate_removal_collapses_swapped_identical_hydrogens():
@@ -1539,14 +1535,13 @@ def test_duplicate_removal_collapses_swapped_identical_hydrogens():
         _sr(swapped, -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
         skip_topology_check=True,
         skip_desorption_check=True,
     )
-    filtered = filter_results(results, slab=slab, config=config)
+    filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
     assert filtered[0].placement_id == 1
 
@@ -1577,14 +1572,13 @@ def test_duplicate_removal_keeps_in_plane_rotation():
         _sr(rotated, -1.01, 1),
     ]
     config = AdsorptionConfig(
-        material_type="slab",
         energy_dedup_threshold=0.05,
         rmsd_dedup_threshold=0.1,
         connectivity_multiplier=1.3,
         skip_topology_check=True,
         skip_desorption_check=True,
     )
-    filtered = filter_results(results, slab=slab, config=config)
+    filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 2
 
 
@@ -1616,12 +1610,13 @@ def test_filter_pipeline_removes_decomposed_and_desorbed():
         _sr(decomposed, -0.5, 1),
         _sr(desorbed, -0.8, 2),
     ]
-    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     filtered = filter_results(
         results,
         slab=slab,
         reference_smiles="O",
         config=config,
+        material_type="slab",
     )
     assert len(filtered) == 1
     assert filtered[0].placement_id == 0
@@ -1646,12 +1641,13 @@ def test_filter_pipeline_catches_rearranged():
         _sr(good, -1.5, 0),
         _sr(rearranged, -2.0, 1),
     ]
-    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     filtered = filter_results(
         results,
         slab=slab,
         reference_smiles="CCO",
         config=config,
+        material_type="slab",
     )
     assert len(filtered) == 1
     assert filtered[0].placement_id == 0
@@ -1678,20 +1674,21 @@ def test_filter_pipeline_catches_atom_loss():
         _sr(good, -1.0, 0),
         _sr(truncated, -2.0, 1),
     ]
-    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     with pytest.raises(ValueError, match="prefix contract"):
         filter_results(
             results,
             slab=slab,
             reference_smiles="O",
             config=config,
+            material_type="slab",
         )
 
 
 def test_filter_pipeline_empty_input():
     slab = make_slab(n_layers=1)
     filtered = filter_results(
-        [], slab=slab, config=AdsorptionConfig(material_type="slab")
+        [], slab=slab, config=AdsorptionConfig(), material_type="slab"
     )
     assert filtered == []
 
@@ -1712,12 +1709,13 @@ def test_filter_pipeline_all_rejected():
     combined.set_pbc(slab.get_pbc())
 
     results = [_sr(combined, -1.0, 0)]
-    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     filtered = filter_results(
         results,
         slab=slab,
         reference_smiles="O",
         config=config,
+        material_type="slab",
     )
     assert len(filtered) == 0
 
@@ -1743,14 +1741,13 @@ def test_filter_pipeline_skip_topology_check_allows_decomposed():
         _sr(good, -1.0, 0),
         _sr(decomposed, -0.5, 1),
     ]
-    config = AdsorptionConfig(
-        material_type="slab", connectivity_multiplier=1.3, skip_topology_check=True
-    )
+    config = AdsorptionConfig(connectivity_multiplier=1.3, skip_topology_check=True)
     filtered = filter_results(
         results,
         slab=slab,
         reference_smiles="O",
         config=config,
+        material_type="slab",
     )
     assert len(filtered) == 2
     assert {r.placement_id for r in filtered} == {0, 1}
@@ -1766,12 +1763,13 @@ def test_filter_pipeline_skip_desorption_check_allows_desorbed():
         _sr(good, -1.0, 0),
         _sr(desorbed, -0.8, 1),
     ]
-    config = AdsorptionConfig(material_type="slab", skip_desorption_check=True)
+    config = AdsorptionConfig(skip_desorption_check=True)
     filtered = filter_results(
         results,
         slab=slab,
         reference_smiles="O",
         config=config,
+        material_type="slab",
     )
     assert len(filtered) == 2
     assert {r.placement_id for r in filtered} == {0, 1}
@@ -1787,12 +1785,13 @@ def test_filter_pipeline_alloy_surface():
         _sr(good, -1.0, 0),
         _sr(desorbed, -0.2, 1),
     ]
-    config = AdsorptionConfig(material_type="slab", connectivity_multiplier=1.3)
+    config = AdsorptionConfig(connectivity_multiplier=1.3)
     filtered = filter_results(
         results,
         slab=slab,
         reference_smiles="O",
         config=config,
+        material_type="slab",
     )
     assert len(filtered) == 1
     assert filtered[0].placement_id == 0

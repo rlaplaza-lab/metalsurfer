@@ -207,12 +207,10 @@ def test_cluster_equivalent_sites_reduces_or_keeps_sites_per_material():
                 _make_site(
                     [1.0, 1.0, 5.0],
                     site_type="atop",
-                    material_type="slab",
                 ),
                 _make_site(
                     [1.0, 1.0, 6.0],
                     site_type="atop",
-                    material_type="slab",
                 ),
             ],
             2,
@@ -222,13 +220,11 @@ def test_cluster_equivalent_sites_reduces_or_keeps_sites_per_material():
                 _make_site(
                     [1.0, 1.0, 5.0],
                     site_type="atop",
-                    material_type="slab",
                     env_fingerprint=(("Ni",), (), 0),
                 ),
                 _make_site(
                     [1.0, 1.0, 5.0],
                     site_type="atop",
-                    material_type="slab",
                     env_fingerprint=(("Pt",), (), 0),
                 ),
             ],
@@ -239,13 +235,11 @@ def test_cluster_equivalent_sites_reduces_or_keeps_sites_per_material():
                 _make_site(
                     [1.0, 1.0, 5.0],
                     site_type="atop",
-                    material_type="slab",
                     env_fingerprint=(("Ru",), (), 0),
                 ),
                 _make_site(
                     [1.001, 1.001, 5.0],
                     site_type="atop",
-                    material_type="slab",
                     env_fingerprint=(("Ru",), (), 0),
                 ),
             ],
@@ -262,14 +256,18 @@ def test_cluster_equivalent_sites_case_matrix(sites, expected_count):
 def test_slab_enumeration_and_generation_have_high_success_and_site_coverage():
     slab = make_slab()
     config = adsorption_config_factory(
-        material_type="slab",
         num_placements=50,
         # Scaled covalent z puts (1.5, 2.0) in the physical contact band (~3–4 Å).
         placement_z_range=(1.5, 2.0),
         reject_vdw_overlaps=True,
     )
     results = _generate_placements(
-        water_conformers(), slab, config, smiles="O", n_desired=50
+        water_conformers(),
+        slab,
+        config,
+        smiles="O",
+        n_desired=50,
+        material_type="slab",
     )
 
     min_ok = max(35, int(math.ceil(0.8 * 50)))
@@ -411,13 +409,11 @@ def test_cluster_equivalent_sites_cartesian_tolerance_scales_with_cell(
     site_a = _make_site(
         [1.0, 1.0, 5.0],
         site_type="atop",
-        material_type="slab",
         env_fingerprint=(("Ru",), (), 0),
     )
     site_b = _make_site(
         [1.0 + dx, 1.0, 5.0],
         site_type="atop",
-        material_type="slab",
         env_fingerprint=(("Ru",), (), 0),
     )
     cell = np.array([[a_len, 0.0, 0.0], [0.0, a_len, 0.0], [0.0, 0.0, 20.0]])
@@ -454,13 +450,11 @@ def test_cluster_equivalent_sites_tilted_slab_uses_in_plane_distance():
     site_a = _make_site(
         base.copy(),
         site_type="atop",
-        material_type="slab",
         env_fingerprint=(("Cu",), (), 0),
     )
     site_b = _make_site(
         other.copy(),
         site_type="atop",
-        material_type="slab",
         env_fingerprint=(("Cu",), (), 0),
     )
     unique = _cluster_equivalent_sites(
@@ -474,7 +468,6 @@ def test_cluster_equivalent_sites_tilted_slab_uses_in_plane_distance():
     site_near = _make_site(
         near.copy(),
         site_type="atop",
-        material_type="slab",
         env_fingerprint=(("Cu",), (), 0),
     )
     unique_near = _cluster_equivalent_sites(
@@ -997,13 +990,11 @@ def test_cluster_equivalent_sites_merges_mic_neighbors_on_skewed_slab():
     site_a = _make_site(
         base + 0.01 * cell[0],
         site_type="atop",
-        material_type="slab",
         env_fingerprint=(("Cu",), (), 0),
     )
     site_b = _make_site(
         base + 0.995 * cell[0],
         site_type="bridge",
-        material_type="slab",
         env_fingerprint=(("Cu",), (), 0),
     )
     gap = float(np.linalg.norm(0.015 * cell[0]))
@@ -1016,7 +1007,6 @@ def test_cluster_equivalent_sites_merges_mic_neighbors_on_skewed_slab():
     site_far = _make_site(
         base + 0.01 * cell[0] + 0.25 * cell[1] / np.linalg.norm(cell[1]),
         site_type="hollow",
-        material_type="slab",
         env_fingerprint=(("Cu",), (), 0),
     )
     unique_far = _cluster_equivalent_sites(
@@ -1035,13 +1025,11 @@ def test_cluster_equivalent_sites_anisotropic_slab_metric_bound():
     site_a = _make_site(
         [1.0, 1.0, 5.0],
         site_type="atop",
-        material_type="slab",
         env_fingerprint=(("Cu",), (), 0),
     )
     site_b = _make_site(
         [1.04, 1.0, 5.10],
         site_type="atop",
-        material_type="slab",
         env_fingerprint=(("Cu",), (), 0),
     )
     cart = float(np.linalg.norm(np.asarray(site_b.xyz) - np.asarray(site_a.xyz)))
@@ -1055,7 +1043,6 @@ def test_cluster_equivalent_sites_anisotropic_slab_metric_bound():
     site_far = _make_site(
         [1.04, 1.0, 5.60],
         site_type="atop",
-        material_type="slab",
         env_fingerprint=(("Cu",), (), 0),
     )
     cart_far = float(np.linalg.norm(np.asarray(site_far.xyz) - np.asarray(site_a.xyz)))
@@ -1101,7 +1088,6 @@ def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
         positions=positions,
         cell=cell,
         pbc=pbc,
-        material_type="slab",
         local_tree=KDTree(positions),
         accessibility_tree=access,
         median_nn=median_nn,
@@ -1109,6 +1095,7 @@ def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
         has_topology_atop=False,
         probe_radius=0.5,
         max_site_distance=5.0,
+        material_type="slab",
     )
     near_atom0 = [
         v

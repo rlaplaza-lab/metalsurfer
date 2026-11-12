@@ -249,6 +249,7 @@ def pack_exact_tuplet(
     slab_atoms: Atoms,
     config: AdsorptionConfig,
     *,
+    material_type: str,
     n_substrate: int | None = None,
 ) -> list[ScreeningResult] | None:
     """Pack *winners* into one exact-length tuplet or return ``None``.
@@ -276,7 +277,7 @@ def pack_exact_tuplet(
         )
 
     cell = np.asarray(slab_atoms.get_cell(), dtype=float)
-    pbc = material_aware_pbc(config.material_type)
+    pbc = material_aware_pbc(material_type)
     adsorbate_scale = float(config.connectivity_multiplier)
     clash_on = bool(config.placement_clash_descent)
 
@@ -290,7 +291,7 @@ def pack_exact_tuplet(
                 winner.atoms[winner.slab_size :],
                 prev.atoms[prev.slab_size :],
                 adsorbate_scale,
-                material_type=config.material_type,
+                material_type=material_type,
                 cell=cell,
             )
             for prev in packed
@@ -344,7 +345,7 @@ def pack_exact_tuplet(
                 rescued.atoms[rescued.slab_size :],
                 prev.atoms[prev.slab_size :],
                 adsorbate_scale,
-                material_type=config.material_type,
+                material_type=material_type,
                 cell=cell,
             )
             for prev in packed
@@ -354,7 +355,7 @@ def pack_exact_tuplet(
                 rescued.atoms[rescued.slab_size :],
                 slab_atoms[substrate_n:],
                 adsorbate_scale,
-                material_type=config.material_type,
+                material_type=material_type,
                 cell=cell,
             )
         if not still_clear:
@@ -418,6 +419,7 @@ def _accept_packed_pose(
     packed_sites: set[int],
     slab_atoms: Atoms,
     config: AdsorptionConfig,
+    material_type: str,
     n_substrate: int | None,
 ) -> tuple[list[ScreeningResult], int] | None:
     """Materialize *index* and keep it when the exact pack is clash-free."""
@@ -433,6 +435,7 @@ def _accept_packed_pose(
         [*group, pose],
         slab_atoms,
         config,
+        material_type=material_type,
         n_substrate=n_substrate,
     )
     if packed is None:
@@ -487,6 +490,7 @@ def _select_packing_partner(
     positions: Mapping[int, np.ndarray],
     slab_atoms: Atoms,
     config: AdsorptionConfig,
+    material_type: str,
     n_substrate: int | None,
     count_phase: int,
     site_types: Mapping[int, str] | None = None,
@@ -501,7 +505,7 @@ def _select_packing_partner(
         return [pose], candidates[0], count_phase
 
     cell = np.asarray(slab_atoms.get_cell(), dtype=float)
-    pbc = material_aware_pbc(config.material_type)
+    pbc = material_aware_pbc(material_type)
     packed_sites = {_pose_site(pose) for pose in group}
     typed = _typed_catalog(
         positions,
@@ -535,6 +539,7 @@ def _select_packing_partner(
                 packed_sites=packed_sites,
                 slab_atoms=slab_atoms,
                 config=config,
+                material_type=material_type,
                 n_substrate=n_substrate,
             )
             if picked is None:
@@ -555,6 +560,7 @@ def _grow_packed_group(
     ],
     slab_atoms: Atoms,
     config: AdsorptionConfig,
+    material_type: str,
     n_substrate: int | None,
     count_phase: int,
     n_target: int,
@@ -580,6 +586,7 @@ def _grow_packed_group(
             positions=positions_at(packed, chosen),
             slab_atoms=slab_atoms,
             config=config,
+            material_type=material_type,
             n_substrate=n_substrate,
             count_phase=phase,
             site_types=site_types,
@@ -598,6 +605,7 @@ def _take_packing_member(
     *,
     slab_atoms: Atoms,
     config: AdsorptionConfig,
+    material_type: str,
     n_substrate: int | None,
     count_phase: int,
     positions: Mapping[int, np.ndarray] | None = None,
@@ -623,6 +631,7 @@ def _take_packing_member(
         positions_at=_positions,
         slab_atoms=slab_atoms,
         config=config,
+        material_type=material_type,
         n_substrate=n_substrate,
         count_phase=count_phase,
         n_target=len(group) + 1,
@@ -641,6 +650,7 @@ def assemble_joint_config_groups(
     slab_atoms: Atoms,
     config: AdsorptionConfig,
     rng: np.random.Generator,
+    material_type: str,
     n_substrate: int | None = None,
     site_positions: Mapping[int, np.ndarray] | None = None,
     site_types: Mapping[int, str] | None = None,
@@ -683,6 +693,7 @@ def assemble_joint_config_groups(
             positions_at=_positions,
             slab_atoms=slab_atoms,
             config=config,
+            material_type=material_type,
             n_substrate=n_substrate,
             count_phase=count_phase,
             n_target=n_per_config,
@@ -707,6 +718,7 @@ def assemble_quota_joint_configs(
     slab_atoms: Atoms,
     config: AdsorptionConfig,
     rng: np.random.Generator,
+    material_type: str,
     n_substrate: int | None = None,
     site_positions: Mapping[int, np.ndarray] | None = None,
     site_types: Mapping[int, str] | None = None,
@@ -727,6 +739,7 @@ def assemble_quota_joint_configs(
             slab_atoms=slab_atoms,
             config=config,
             rng=rng,
+            material_type=material_type,
             n_substrate=n_substrate,
             site_positions=site_positions,
             site_types=site_types,
@@ -760,6 +773,7 @@ def assemble_quota_joint_configs(
                 remaining[mol],
                 slab_atoms=slab_atoms,
                 config=config,
+                material_type=material_type,
                 n_substrate=n_substrate,
                 count_phase=count_phase,
                 positions=catalog,
@@ -794,7 +808,7 @@ def _per_unit_surface_distances(
     *,
     n_substrate: int,
     unit_sizes: Sequence[int],
-    config: AdsorptionConfig,
+    material_type: str,
     surface_prefix_atoms: int | None = None,
 ) -> list[float]:
     """Per-unit min adsorbate-to-surface distance for a relaxed composite.
@@ -812,7 +826,7 @@ def _per_unit_surface_distances(
             )
         substrate_positions = substrate_positions[:surface_prefix_atoms]
     cell = opt_atoms.get_cell()
-    pbc = material_aware_pbc(config.material_type)
+    pbc = material_aware_pbc(material_type)
     distances: list[float] = []
     start = n_substrate
     for size in unit_sizes:
@@ -836,7 +850,7 @@ def _rewrite_relaxed_composite(
     *,
     slab_atoms: Atoms,
     E_slab: float,
-    config: AdsorptionConfig,
+    material_type: str,
     unit_distances: Sequence[float],
 ) -> tuple[list[ScreeningResult], float, float]:
     """Map a validated relaxed composite onto per-unit rows.
@@ -852,7 +866,7 @@ def _rewrite_relaxed_composite(
     for k, winner in enumerate(winners):
         atoms_out = opt_atoms.copy()
         atoms_out.calc = opt_atoms.calc
-        apply_material_pbc(atoms_out, config.material_type)
+        apply_material_pbc(atoms_out, material_type)
         rewritten.append(
             replace(
                 winner,
@@ -875,6 +889,7 @@ def _validate_relaxed_composite(
     slab_atoms: Atoms,
     base_slab: Atoms,
     config: AdsorptionConfig,
+    material_type: str,
     topology_check: Callable[[Atoms, list[str]], tuple[bool, str]] | None,
     log_prefix: str,
 ) -> tuple[list[float], str]:
@@ -888,7 +903,9 @@ def _validate_relaxed_composite(
         logger.debug("%scomposite frozen substrate drift: %s", log_prefix, reason)
         return [], f"frozen_drift: {reason}"
 
-    ok, reason = _validate_geometry(opt_atoms, slab_atoms, config)
+    ok, reason = _validate_geometry(
+        opt_atoms, slab_atoms, config, material_type=material_type
+    )
     if not ok:
         logger.debug("%scomposite geometry fail: %s", log_prefix, reason)
         return [], f"geometry: {reason}"
@@ -897,7 +914,7 @@ def _validate_relaxed_composite(
         opt_atoms,
         n_substrate=len(slab_atoms),
         unit_sizes=_unit_suffix_bounds(winners),
-        config=config,
+        material_type=material_type,
         surface_prefix_atoms=len(base_slab),
     )
     if not config.skip_desorption_check:
@@ -932,6 +949,7 @@ def _finalize_relaxed_composite(
     slab_atoms: Atoms,
     base_slab: Atoms,
     config: AdsorptionConfig,
+    material_type: str,
     E_slab: float,
     topology_check: Callable[[Atoms, list[str]], tuple[bool, str]] | None,
     log_prefix: str,
@@ -945,6 +963,7 @@ def _finalize_relaxed_composite(
         slab_atoms=slab_atoms,
         base_slab=base_slab,
         config=config,
+        material_type=material_type,
         topology_check=topology_check,
         log_prefix=log_prefix,
     )
@@ -955,7 +974,7 @@ def _finalize_relaxed_composite(
         opt_atoms,
         slab_atoms=slab_atoms,
         E_slab=E_slab,
-        config=config,
+        material_type=material_type,
         unit_distances=unit_distances,
     )
     if e_ads_per_mol > config.max_adsorption_energy:
@@ -985,6 +1004,7 @@ def evaluate_composite_batch(
     base_slab: Atoms,
     ts_model: object,
     config: AdsorptionConfig,
+    material_type: str,
     E_slab: float,
     topology_check: Callable[[Atoms, list[str]], tuple[bool, str]] | None = None,
     log_prefix: str = "",
@@ -1013,6 +1033,7 @@ def evaluate_composite_batch(
             slab_atoms=slab_atoms,
             base_slab=base_slab,
             config=config,
+            material_type=material_type,
             E_slab=E_slab,
             topology_check=topology_check,
             log_prefix=log_prefix,

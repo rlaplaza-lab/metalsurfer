@@ -22,7 +22,7 @@ from metalsurfer.placement import (
 from metalsurfer.placement.geometry import detect_vdw_overlaps
 from metalsurfer.placement.site_context import SiteContext, _get_unique_sites_for_specs
 from metalsurfer.placement.site_types import Site
-from metalsurfer.surface_prep import SlabContainer
+from metalsurfer.surface_prep import Substrate
 from metalsurfer.workflow import process_molecule
 from metalsurfer.workflow.shared import (
     _evaluate_optimized_candidate,
@@ -87,14 +87,13 @@ class TestPlacementPhysicsGates:
         """The same site uses one contact height for every site-type label."""
         slab = make_slab()
         config = AdsorptionConfig(
-            material_type="slab",
             seed=42,
             num_conformers=1,
             num_placements=4,
             placement_z_range=(2.0, 3.0),
             placement_distance_recovery=False,
         )
-        ctx = _get_unique_sites_for_specs(slab, config)
+        ctx = _get_unique_sites_for_specs(slab, config, material_type="slab")
         assert ctx.use_sites and ctx.sites, "Need site discovery for height physics"
         site_index = 0
         water = make_water()
@@ -114,7 +113,13 @@ class TestPlacementPhysicsGates:
                 placement_index=0 if site_type == "atop" else 1,
             )
             return generate_placement_from_spec_with_reason(
-                spec, [water], slab, config, smiles="O", site_context=ctx
+                spec,
+                [water],
+                slab,
+                config,
+                smiles="O",
+                site_context=ctx,
+                material_type="slab",
             )
 
         atop_result, atop_reason = _place("atop")
@@ -142,8 +147,10 @@ class TestValidationAndFilterPhysics:
     def test_desorption_gate_rejects_far_molecule(self):
         slab = make_slab()
         desorbed = place_molecule_on_slab(slab, make_water(), z_offset=10.0)
-        config = AdsorptionConfig(material_type="slab", binding_distance_threshold=4.0)
-        ok, reason, _ = _validate_adsorption(desorbed, slab, config)
+        config = AdsorptionConfig(binding_distance_threshold=4.0)
+        ok, reason, _ = _validate_adsorption(
+            desorbed, slab, config, material_type="slab"
+        )
         assert not ok
         assert "desorb" in reason.lower()
 
@@ -162,6 +169,7 @@ class TestValidationAndFilterPhysics:
             slab=slab,
             reference_smiles="O",
             config=config,
+            material_type="slab",
         )
         assert filtered == []
 
@@ -198,7 +206,6 @@ class TestValidationAndFilterPhysics:
             ),
         ]
         config = AdsorptionConfig(
-            material_type="slab",
             connectivity_multiplier=1.3,
             skip_topology_check=False,
             skip_desorption_check=False,
@@ -208,6 +215,7 @@ class TestValidationAndFilterPhysics:
             slab=slab,
             reference_smiles="O",
             config=config,
+            material_type="slab",
         )
         assert len(filtered) == 1
         assert filtered[0].placement_id == 0
@@ -228,7 +236,7 @@ class TestAdsorptionEnergyPhysics:
         e_ads_cap = 6.0  # above default max_adsorption_energy (5 eV)
 
         descriptor = make_placement_descriptor(placement_id=0)
-        config = AdsorptionConfig(material_type="slab", max_adsorption_energy=5.0)
+        config = AdsorptionConfig(max_adsorption_energy=5.0)
 
         ok_atoms = _attach_calc(good, energy=e_slab + e_mol + e_ads_ok)
         ok_atoms.set_pbc([True, True, True])  # calculator-promoted
@@ -241,6 +249,7 @@ class TestAdsorptionEnergyPhysics:
             config=config,
             E_slab=e_slab,
             E_mol=e_mol,
+            material_type="slab",
         )
         assert failure is None
         assert result is not None
@@ -263,6 +272,7 @@ class TestAdsorptionEnergyPhysics:
             config=config,
             E_slab=e_slab,
             E_mol=e_mol,
+            material_type="slab",
         )
         assert result_cap is None
         assert failure_cap is not None
@@ -286,7 +296,7 @@ class TestProcessMoleculePhysicsSurvival:
         _cell = slab_atoms.get_cell()
         _cell[2, 2] = 60.0
         slab_atoms.set_cell(_cell)
-        slab = SlabContainer(slab_atoms)
+        slab = Substrate(slab_atoms, material_type="slab")
         e_slab = -200.0
         e_mol = -10.0
         e_ads_good = -0.8
@@ -295,7 +305,6 @@ class TestProcessMoleculePhysicsSurvival:
             molecule_energies={"water": e_mol},
         )
         config = AdsorptionConfig(
-            material_type="slab",
             seed=42,
             num_conformers=1,
             num_placements=6,

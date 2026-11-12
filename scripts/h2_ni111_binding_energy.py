@@ -18,7 +18,6 @@ def main() -> int:
     results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
-        material_type="slab",
         model_name="uma-m-1p1",
         task_name="oc20",
         num_conformers=1,
@@ -33,10 +32,11 @@ def main() -> int:
         supercell=(3, 3, 1),
         config=config,
         results_dir=results_dir,
+        material_type="slab",
     )
 
     campaign = run_adsorption(
-        slab=slab,
+        substrate=slab,
         molecules=[("[H][H]", "H2")],
         config=config,
         surface_type=surface_type,

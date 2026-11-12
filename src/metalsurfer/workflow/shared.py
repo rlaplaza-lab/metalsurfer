@@ -57,7 +57,7 @@ from ..reporting import (
     ReferenceFailure,
 )
 from ..result_paths import results_dir_for
-from ..surface_prep import SlabContainer, accept_substrate_for_api, apply_material_pbc
+from ..surface_prep import Substrate, accept_substrate_for_api, apply_material_pbc
 from ..surface_prep._surfaces import validate_substrate_conformer_sizing
 from ..surface_prep.freeze import (
     check_frozen_substrate_displacement,
@@ -330,6 +330,7 @@ def _materialize_spec_placements(
     config: AdsorptionConfig,
     smiles: str,
     site_context: SiteContext | None,
+    material_type: str,
     slab_for_sites: Atoms | None = None,
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
     pose_cache: _PoseBatchCache | None = None,
@@ -347,6 +348,7 @@ def _materialize_spec_placements(
         conformers,
         slab_atoms,
         config,
+        material_type=material_type,
         smiles=smiles,
         site_context=site_context,
         slab_for_sites=slab_for_sites,
@@ -380,6 +382,8 @@ def _validate_geometry(
     atoms: Atoms,
     slab: Atoms,
     config: AdsorptionConfig,
+    *,
+    material_type: str,
 ) -> tuple[bool, str]:
     """Quick sanity checks on the optimised structure."""
     energy = atoms.get_potential_energy()
@@ -389,7 +393,7 @@ def _validate_geometry(
     positions = atoms.get_positions()
     if len(positions) >= 2:
         cell = np.asarray(atoms.get_cell(), dtype=float)
-        pbc = material_aware_pbc(config.material_type)
+        pbc = material_aware_pbc(material_type)
         cutoff = float(config.min_interatomic_distance)
         # Cutoff neighbor query: any pair closer than *cutoff* (ASE uses
         # strictly-less-than) rejects. This covers adsorbate↔slab, slab↔slab,
@@ -418,12 +422,13 @@ def _validate_adsorption(
     slab: Atoms,
     config: AdsorptionConfig,
     *,
+    material_type: str,
     surface_prefix_atoms: int | None = None,
 ) -> tuple[bool, str, float | None]:
     min_d = _adsorbate_surface_min_distance(
         atoms,
         slab,
-        material_type=config.material_type,
+        material_type=material_type,
         surface_prefix_atoms=surface_prefix_atoms,
     )
     if min_d is None:
@@ -452,6 +457,7 @@ def _evaluate_optimized_candidate(
     config: AdsorptionConfig,
     E_slab: float,
     E_mol: float,
+    material_type: str,
     base_slab_for_frozen: Atoms | None = None,
     log_prefix: str = "",
     surface_prefix_atoms: int | None = None,
@@ -480,7 +486,9 @@ def _evaluate_optimized_candidate(
             descriptor=descriptor,
         )
 
-    ok, reason = _validate_geometry(opt_atoms, slab_atoms, config)
+    ok, reason = _validate_geometry(
+        opt_atoms, slab_atoms, config, material_type=material_type
+    )
     if not ok:
         logger.debug("%sgeometry fail: %s", log_prefix, reason)
         return None, PlacementFailureEvent(
@@ -494,6 +502,7 @@ def _evaluate_optimized_candidate(
         opt_atoms,
         slab_atoms,
         config,
+        material_type=material_type,
         surface_prefix_atoms=surface_prefix_atoms,
     )
     if not ok:
@@ -522,7 +531,7 @@ def _evaluate_optimized_candidate(
     dist = float(min_d)
     result_atoms = opt_atoms.copy()
     result_atoms.calc = opt_atoms.calc
-    apply_material_pbc(result_atoms, config.material_type)
+    apply_material_pbc(result_atoms, material_type)
     result = ScreeningResult(
         molecule=molecule_name,
         placement_id=placement_id,
@@ -546,6 +555,7 @@ def _optimize_and_evaluate_placements(
     slab: Atoms,
     ts_model,
     config: AdsorptionConfig,
+    material_type: str,
     energies: tuple[float, float],
     molecule_name: str,
     base_slab_for_frozen: Atoms | None = None,
@@ -587,6 +597,7 @@ def _optimize_and_evaluate_placements(
                 molecule_name=molecule_name,
                 slab_atoms=slab,
                 config=config,
+                material_type=material_type,
                 E_slab=e_slab,
                 E_mol=e_mol,
                 base_slab_for_frozen=base_slab_for_frozen,
@@ -607,6 +618,7 @@ def _filter_and_label_duplicates(
     slab_atoms: Atoms,
     reference_smiles: str | None,
     config: AdsorptionConfig,
+    material_type: str,
     surface_prefix_atoms: int | None = None,
 ) -> tuple[list[ScreeningResult], list[ScreeningResult], float]:
     """Filter results and return the duplicate list separately.
@@ -620,6 +632,7 @@ def _filter_and_label_duplicates(
         slab=slab_atoms,
         reference_smiles=reference_smiles,
         config=config,
+        material_type=material_type,
         duplicate_results_out=duplicates,
         surface_prefix_atoms=surface_prefix_atoms,
     )
@@ -643,6 +656,7 @@ def _finalize_screen_results(
     slab_atoms: Atoms,
     reference_smiles: str | None,
     config: AdsorptionConfig,
+    material_type: str,
     surface_prefix_atoms: int | None = None,
 ) -> tuple[list[ScreeningResult], float, FilterFailure | None, list[ScreeningResult]]:
     """Filter results and set filter-stage failure summary.
@@ -655,6 +669,7 @@ def _finalize_screen_results(
         slab_atoms=slab_atoms,
         reference_smiles=reference_smiles,
         config=config,
+        material_type=material_type,
         surface_prefix_atoms=surface_prefix_atoms,
     )
 
@@ -677,7 +692,7 @@ class SubstrateRefState:
 
 
 def prepare_substrate_for_screening(
-    slab: SlabContainer,
+    slab: Substrate,
     conformers: list[Atoms],
     base_slab_for_frozen: Atoms | None,
     config: AdsorptionConfig,
@@ -703,7 +718,7 @@ def prepare_substrate_for_screening(
     slab_for_sites = _build_surface_reference_slab(
         slab.atoms,
         base_slab_for_frozen,
-        material_type=config.material_type,
+        material_type=slab.material_type,
     )
     effective_base_slab_for_frozen = (
         base_slab_for_frozen.copy() if base_slab_for_frozen is not None else None
@@ -727,6 +742,7 @@ def build_representative_relaxation_atoms(
     config: AdsorptionConfig,
     smiles: str,
     *,
+    material_type: str,
     site_context: SiteContext | None,
     conformer_energies: list[float] | None = None,
 ) -> Atoms:
@@ -744,6 +760,8 @@ def build_representative_relaxation_atoms(
         Adsorption configuration.
     smiles
         SMILES string of the molecule.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     site_context
         Resolved site context for sampling.
     conformer_energies
@@ -761,6 +779,7 @@ def build_representative_relaxation_atoms(
         site_context=site_context,
         full_slab=slab_atoms,
         conformer_energies=conformer_energies,
+        material_type=material_type,
     )
     if specs:
         result, _ = generate_placement_from_spec_with_reason(
@@ -771,6 +790,7 @@ def build_representative_relaxation_atoms(
             smiles=smiles,
             site_context=site_context,
             slab_for_sites=slab_for_sites,
+            material_type=material_type,
         )
         if result is not None:
             adsorbate, _ = result
@@ -898,6 +918,7 @@ def resolve_saturation_step_workload_config(
     base_slab_for_frozen: Atoms | None,
     symmetry_broken: bool,
     bo_enabled: bool,
+    material_type: str,
 ) -> AdsorptionConfig:
     """Resolve placement budget before multi-molecule budget splitting.
 
@@ -921,10 +942,13 @@ def resolve_saturation_step_workload_config(
         Whether symmetry is broken.
     bo_enabled
         Whether Bayesian optimisation is enabled.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     """
     site_context = site_context_for_sampling(
         slab_for_sites,
         config,
+        material_type=material_type,
         symmetry_broken=symmetry_broken,
         full_slab=slab_atoms,
     )
@@ -938,6 +962,7 @@ def resolve_saturation_step_workload_config(
         slab_for_sites,
         config,
         smiles,
+        material_type=material_type,
         site_context=site_context,
     )
     return resolve_workload_config(
@@ -987,11 +1012,11 @@ class ScreeningRunBootstrap:
     ts_model: Any
     ref: ReferenceEnergies
     t_ref_s: float
-    slab: SlabContainer
+    slab: Substrate
 
 
 def _bootstrap_screening_run(
-    slab: SlabContainer | Atoms,
+    slab: Substrate,
     molecule_pairs: list[tuple[str, str]],
     config: AdsorptionConfig,
 ) -> ScreeningRunBootstrap:
@@ -1039,7 +1064,7 @@ def _bootstrap_screening_run(
 class MoleculeScreeningContext:
     """Prepared substrate and workload state for one molecule screening pass."""
 
-    slab: SlabContainer
+    slab: Substrate
     slab_for_sites: Atoms
     effective_base_slab_for_frozen: Atoms | None
     conformers: list[Atoms]
@@ -1071,7 +1096,7 @@ def _prepare_molecule_screening(
     *,
     smiles: str,
     molecule_name: str,
-    slab: SlabContainer,
+    slab: Substrate,
     calculator,
     reference_energies: ReferenceEnergies,
     ts_model,
@@ -1139,6 +1164,7 @@ def _prepare_molecule_screening(
         slab_for_sites,
         config,
         site_context,
+        material_type=slab.material_type,
         symmetry_broken=symmetry_broken,
         full_slab=slab.atoms,
     )
@@ -1168,6 +1194,7 @@ def _prepare_molecule_screening(
             slab_for_sites,
             config,
             smiles,
+            material_type=slab.material_type,
             site_context=site_context,
             conformer_energies=conformer_energies,
         )

@@ -57,6 +57,7 @@ Key                Required
                    ``saturation``, ``saturation_bo``
 ``surface_type``   Yes — results folder label (``results_{surface_type}/``)
 ``substrate``      Yes — exactly one of ``bulk_id``, ``slab_file``, or ``slab``
+                   (``material_type`` required in this block)
 ``molecules``      Yes — non-empty list of ``{smiles, name}``
 ``config``         No — maps to :class:`~metalsurfer.AdsorptionConfig` fields
                    (including ``site_generator``, Voronoi window knobs,
@@ -78,10 +79,10 @@ Substrate
 ~~~~~~~~~
 
 Allowed keys match :func:`~metalsurfer.surface_prep.prepare_substrate` (see
-:doc:`surface_engineering`): ``bulk_id``, ``slab_file``, ``slab``,
-``miller_indices``, ``supercell``, alloy / adatom knobs, ``align``,
-``slab_relaxation_*``, ``adatom_relaxation_*``, ``relax_top_layer``,
-``freeze_symbols``, ``top_layer_tolerance``.
+:doc:`surface_engineering`): ``material_type`` (**required**), ``bulk_id``,
+``slab_file``, ``slab``, ``miller_indices``, ``supercell``, alloy / adatom
+knobs, ``align``, ``slab_relaxation_*``, ``adatom_relaxation_*``,
+``relax_top_layer``, ``freeze_symbols``, ``top_layer_tolerance``.
 
 Unknown substrate keys raise. ``miller_indices`` and ``supercell`` must be
 3-element lists (parsed as tuples). From a YAML **file**, use ``bulk_id`` or
@@ -94,8 +95,9 @@ Config
 
 ``config:`` maps onto :class:`~metalsurfer.AdsorptionConfig`. Put Bayesian
 hyperparameters under a nested ``bo:`` block (and optional ``bo.transfer:``);
-flat ``bo_*`` / ``bo_transfer_*`` keys are rejected. Field recipes:
-:doc:`configuration`; full reference: :doc:`../api/config`.
+flat ``bo_*`` / ``bo_transfer_*`` keys are rejected. ``material_type``
+belongs under ``substrate:`` (``config.material_type`` is rejected). Field
+recipes: :doc:`configuration`; full reference: :doc:`../api/config`.
 
 Demo examples
 -------------

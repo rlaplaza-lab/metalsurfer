@@ -70,6 +70,7 @@ def generate_placements_from_specs(
     slab: Atoms,
     config: AdsorptionConfig,
     *,
+    material_type: str,
     smiles: str | None = None,
     site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
@@ -94,6 +95,8 @@ def generate_placements_from_specs(
         Substrate slab.
     config
         Adsorption configuration.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     smiles
         Optional SMILES string for the adsorbate.
     site_context
@@ -138,6 +141,7 @@ def generate_placements_from_specs(
             site_context=site_context,
             slab_for_sites=slab_for_sites,
             pose_cache=pose_cache,
+            material_type=material_type,
         )
 
     workers_setting = (
@@ -360,20 +364,28 @@ def _spec_grid_info(
     smiles: str | None,
     site_context: SiteContext | None,
     full_slab: Atoms | None = None,
+    *,
+    material_type: str,
 ) -> _SpecGridInfo:
     """Build enumerate/estimate inputs; footprint views leave SiteContext untouched."""
     is_dissociative = (
         config.enable_dissociative_placement
-        and config.material_type in ("slab", "nanoparticle", "porous")
+        and material_type in ("slab", "nanoparticle", "porous")
         and _is_dissociable_diatomic(conformers[0])
     )
-    _ctx = site_context_for_sampling(slab, config, site_context, full_slab=full_slab)
+    _ctx = site_context_for_sampling(
+        slab,
+        config,
+        site_context,
+        material_type=material_type,
+        full_slab=full_slab,
+    )
     unique_sites = _ctx.sites
     use_sites = _ctx.use_sites
     clustered = _ctx.clustered_sites
     n_clustered = len(clustered) if clustered is not None else len(unique_sites)
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(config.material_type)
+    pbc = material_aware_pbc(material_type)
     existing_ads_pos, existing_radii = existing_adsorbate_cloud(
         slab,
         full_slab,
@@ -502,6 +514,7 @@ def _spec_grid_info(
                 working_slab,
                 config,
                 slab_for_sites=slab,
+                material_type=material_type,
                 existing_adsorbate_positions=pair_cloud,
                 site_context=_ctx,
             )
@@ -913,6 +926,8 @@ def enumerate_placement_specs(
     full_slab: Atoms | None = None,
     conformer_energies: list[float] | None = None,
     grid_info: _SpecGridInfo | None = None,
+    *,
+    material_type: str,
 ) -> list[PlacementSpec]:
     """Enumerate placement specs for diverse sampling.
 
@@ -960,7 +975,13 @@ def enumerate_placement_specs(
 
     eff_seed = config.seed if seed is None else seed
     info = grid_info or _spec_grid_info(
-        conformers, slab, config, smiles, site_context, full_slab=full_slab
+        conformers,
+        slab,
+        config,
+        smiles,
+        site_context,
+        full_slab=full_slab,
+        material_type=material_type,
     )
     if info.is_dissociative:
         if info.n_hollow_pairs < 1:
@@ -1038,6 +1059,8 @@ def estimate_placement_spec_capacity(
     site_context: SiteContext | None = None,
     full_slab: Atoms | None = None,
     grid_info: _SpecGridInfo | None = None,
+    *,
+    material_type: str,
 ) -> int:
     """Estimate total enumerated specs for current conformers/site grid.
 
@@ -1061,7 +1084,13 @@ def estimate_placement_spec_capacity(
     if not conformers:
         return 0
     info = grid_info or _spec_grid_info(
-        conformers, slab, config, smiles, site_context, full_slab=full_slab
+        conformers,
+        slab,
+        config,
+        smiles,
+        site_context,
+        full_slab=full_slab,
+        material_type=material_type,
     )
     if info.is_dissociative:
         if info.n_hollow_pairs < 1:
@@ -1162,6 +1191,8 @@ def generate_placement_from_spec(
     smiles: str | None = None,
     site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
+    *,
+    material_type: str,
 ) -> tuple[Atoms, PlacementDescriptor] | None:
     """Generate adsorbate placement from spec. Returns (adsorbate, descriptor) or None.
 
@@ -1195,6 +1226,7 @@ def generate_placement_from_spec(
         smiles=smiles,
         site_context=site_context,
         slab_for_sites=slab_for_sites,
+        material_type=material_type,
     )
     return result
 
@@ -1208,6 +1240,8 @@ def generate_placement_from_spec_with_reason(
     site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
     pose_cache: _PoseBatchCache | None = None,
+    *,
+    material_type: str,
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
     """Generate placement from spec and provide a failure reason when unavailable.
 
@@ -1253,6 +1287,7 @@ def generate_placement_from_spec_with_reason(
             reference,
             config,
             site_context,
+            material_type=material_type,
             full_slab=slab if slab_for_sites is not None else None,
         )
         adsorbate = conformers[spec.conformer_index].copy()
@@ -1263,6 +1298,7 @@ def generate_placement_from_spec_with_reason(
             config,
             slab_for_sites=slab_for_sites,
             site_context=resolved_ctx,
+            material_type=material_type,
         )
 
     adsorbate = conformers[spec.conformer_index].copy()
@@ -1276,6 +1312,7 @@ def generate_placement_from_spec_with_reason(
         site_context=site_context,
         slab_for_sites=slab_for_sites,
         pose_cache=pose_cache,
+        material_type=material_type,
     )
     if placement_ctx is None:
         return None, pose_fail

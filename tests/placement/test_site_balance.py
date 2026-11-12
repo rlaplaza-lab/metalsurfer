@@ -52,9 +52,9 @@ def test_flat_multilayer_does_not_mesh_the_covered_layer():
     assert _supports(sites).isdisjoint(set(range(n_top, len(flat))))
     top_only = get_unified_sites(
         _slab_from_positions(top),
-        material_type="slab",
         top_layer_tolerance=0.5,
         site_generator="topology",
+        material_type="slab",
     )
     assert len(sites) == len(top_only)
 
@@ -124,8 +124,10 @@ def test_exposed_lower_band_empty_on_flat_stack():
 
 def _com_heights(atoms, material: str, *, full=None):
     mol = make_water()
-    config = AdsorptionConfig(material_type=material, seed=0, num_conformers=1)
-    ctx = site_context_for_sampling(atoms, config, full_slab=full)
+    config = AdsorptionConfig(seed=0, num_conformers=1)
+    ctx = site_context_for_sampling(
+        atoms, config, full_slab=full, material_type=material
+    )
     wall = next(i for i, site in enumerate(ctx.sites) if site.kind != "void")
     site = ctx.sites[wall]
     o_idx = list(mol.get_chemical_symbols()).index("O")
@@ -152,6 +154,7 @@ def _com_heights(atoms, material: str, *, full=None):
             "O",
             site_context=ctx,
             slab_for_sites=atoms if full is not None else None,
+            material_type=material,
         )
         assert fail is None and posed is not None
         n_hat = np.asarray(posed.normal, dtype=float)
@@ -180,8 +183,8 @@ def test_wall_z_fractions_are_evenly_spaced(material, factory):
 def test_wall_ends_match_covalent_and_vdw_gates():
     slab = make_slab()
     mol = make_water()
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    ctx = site_context_for_sampling(slab, config)
+    config = AdsorptionConfig(seed=0)
+    ctx = site_context_for_sampling(slab, config, material_type="slab")
     wall = next(i for i, site in enumerate(ctx.sites) if site.site_type == "atop")
     site = ctx.sites[wall]
     o_idx = list(mol.get_chemical_symbols()).index("O")
@@ -200,7 +203,9 @@ def test_wall_ends_match_covalent_and_vdw_gates():
             z_fraction=zf,
             placement_index=0,
         )
-        posed, fail = _pose_from_spec(mol, spec, slab, config, "O", site_context=ctx)
+        posed, fail = _pose_from_spec(
+            mol, spec, slab, config, "O", site_context=ctx, material_type="slab"
+        )
         assert fail is None and posed is not None
         poses[zf] = posed
     support = int(site.slab_indices[0])
@@ -236,8 +241,10 @@ def test_ligand_sites_and_occupancy_and_clearance():
     full = slab.copy()
     ligand = Atoms("O", positions=[ligand_pos])
     covered = full + ligand
-    config = AdsorptionConfig(material_type="slab", seed=0, num_placements=4)
-    ctx = site_context_for_sampling(slab, config, full_slab=covered)
+    config = AdsorptionConfig(seed=0, num_placements=4)
+    ctx = site_context_for_sampling(
+        slab, config, full_slab=covered, material_type="slab"
+    )
     ligand_sites = [
         site
         for site in ctx.sites
@@ -256,6 +263,7 @@ def test_ligand_sites_and_occupancy_and_clearance():
         n_desired=16,
         site_context=ctx,
         full_slab=covered,
+        material_type="slab",
     )
     assert specs
     kinds = []
@@ -288,8 +296,8 @@ def test_pose_beside_a_ligand_is_lifted_clear_of_it():
     slab = _slab_from_positions(top)
     ligand_pos = np.array([1.3, 0.0, 2.3], dtype=float)
     covered = slab + Atoms("O", positions=[ligand_pos])
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    ctx = site_context_for_sampling(slab, config)
+    config = AdsorptionConfig(seed=0)
+    ctx = site_context_for_sampling(slab, config, material_type="slab")
     origin = next(
         i
         for i, site in enumerate(ctx.sites)
@@ -320,6 +328,7 @@ def test_pose_beside_a_ligand_is_lifted_clear_of_it():
             "O",
             site_context=ctx,
             slab_for_sites=slab if with_ligand else None,
+            material_type="slab",
         )
         assert fail is None and posed is not None
         n_hat = np.asarray(posed.normal, dtype=float)
@@ -336,8 +345,8 @@ def test_flat_ring_parallel_heights_are_evenly_spaced():
         positions=[[1.4 * np.cos(a), 1.4 * np.sin(a), 0.0] for a in angles],
     )
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    ctx = site_context_for_sampling(slab, config)
+    config = AdsorptionConfig(seed=0)
+    ctx = site_context_for_sampling(slab, config, material_type="slab")
     site_index = next(
         i for i, site in enumerate(ctx.sites) if site.site_type == "hollow"
     )
@@ -357,7 +366,7 @@ def test_flat_ring_parallel_heights_are_evenly_spaced():
             placement_index=0,
         )
         posed, fail = _pose_from_spec(
-            ring, spec, slab, config, "c1ccccc1", site_context=ctx
+            ring, spec, slab, config, "c1ccccc1", site_context=ctx, material_type="slab"
         )
         assert fail is None and posed is not None
         n_hat = np.asarray(posed.normal, dtype=float)

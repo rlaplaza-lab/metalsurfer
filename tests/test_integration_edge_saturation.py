@@ -23,7 +23,6 @@ from tests.edge_placement_snapshots import frame_atoms, load_snapshot, pose_atom
 
 def _config(material_type: str) -> AdsorptionConfig:
     return AdsorptionConfig(
-        material_type=material_type,
         seed=42,
         device="cpu",
         slab_relaxation_mode="none",

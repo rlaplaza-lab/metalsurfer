@@ -21,7 +21,7 @@ from ..reporting import (
     ValidationFailure,
 )
 from ..result_paths import molecule_all_xyz_dir, results_dir_for
-from ..surface_prep import SlabContainer
+from ..surface_prep import Substrate
 from .placement_fill import (
     fill_materialized_placements,
     materialize_specs,
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 def process_molecule(
     smiles: str,
     molecule_name: str,
-    slab: SlabContainer,
+    slab: Substrate,
     calculator,
     reference_energies: ReferenceEnergies,
     ts_model=None,
@@ -165,6 +165,7 @@ def process_molecule(
             site_context=site_context,
             slab_atoms=slab.atoms,
             calculator=calculator,
+            material_type=slab.material_type,
             conformer_energies=conformer_energies,
         )
         all_combined = fill.combined
@@ -242,6 +243,7 @@ def process_molecule(
                 slab=slab.atoms,
                 ts_model=ts_model,
                 config=config,
+                material_type=slab.material_type,
                 energies=(E_slab, E_mol),
                 molecule_name=molecule_name,
                 base_slab_for_frozen=effective_base_slab_for_frozen,
@@ -293,6 +295,7 @@ def process_molecule(
             slab_atoms=slab.atoms,
             reference_smiles=reference_smiles,
             config=config,
+            material_type=slab.material_type,
             surface_prefix_atoms=surface_prefix_atoms,
         )
 
@@ -327,7 +330,7 @@ def process_molecule(
 def _evaluate_placement_batch(
     specs: list,
     conformers: list[Atoms],
-    slab: SlabContainer,
+    slab: Substrate,
     calculator,
     ts_model,
     config: AdsorptionConfig,
@@ -361,6 +364,7 @@ def _evaluate_placement_batch(
         config=config,
         smiles=smiles,
         site_context=site_context,
+        material_type=slab.material_type,
         slab_for_sites=slab_for_sites,
         materialization_cache=materialization_cache,
         clamp_log_label=" (BO)",
@@ -382,6 +386,7 @@ def _evaluate_placement_batch(
             slab=slab.atoms,
             ts_model=ts_model,
             config=config,
+            material_type=slab.material_type,
             energies=(E_slab, E_mol),
             molecule_name=molecule_name,
             base_slab_for_frozen=base_slab_for_frozen,

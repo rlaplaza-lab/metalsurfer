@@ -46,10 +46,12 @@ and YAML keys are rejected.
 
 YAML is a convenience dispatch layer (`bulk_id` / `slab_file`, inline molecules,
 `skip_existing` only on `run_campaign`)—not a full substitute for `prepare_substrate`
-+ `run_*` (custom ASE `slab=`, molecule CSVs, extra kwargs, post-run checks).
++ `run_*` (custom ASE `slab=` into prep, molecule CSVs, extra kwargs, post-run
+checks).
 
-Inputs: `SlabContainer` or ASE `Atoms`, molecules (list or CSV),
-`AdsorptionConfig`, `surface_type` (results folder label only). Prep freeze
+Inputs: prepared `Substrate` (bare ASE `Atoms` rejected at campaign entry),
+molecules (list or CSV), `AdsorptionConfig`, `surface_type` (results folder
+label only). `material_type` lives on the substrate (required); prep freeze
 policy is set in `prepare_substrate`, not on campaign kwargs.
 
 ## 1. The pipeline, end to end
@@ -149,8 +151,8 @@ the code keeps deliberately separate:
 ## 3. System types: how sites are found
 
 Everything in this section is organised by `material_type`. That field is
-**required** (`slab`, `nanoparticle`, or `porous`) and must match the substrate
-ASE PBC mask exactly:
+**required on the substrate** (`slab`, `nanoparticle`, or `porous`) — not on
+`AdsorptionConfig` — and must match the substrate ASE PBC mask exactly:
 
 - slab → `[True, True, False]` (2D): one open face; sites keep the selected
   vacuum face and ignore the other

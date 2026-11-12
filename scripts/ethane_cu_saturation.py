@@ -16,7 +16,6 @@ def main():
     results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
-        material_type="slab",
         num_placements=250,
     )
 
@@ -26,10 +25,11 @@ def main():
         supercell=(1, 1, 1),
         config=config,
         results_dir=results_dir,
+        material_type="slab",
     )
 
     campaign = run_saturation(
-        slab=slab,
+        substrate=slab,
         molecules=[("CC", "ethane")],
         config=config,
         surface_type=surface_type,

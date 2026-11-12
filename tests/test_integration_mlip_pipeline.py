@@ -57,7 +57,6 @@ def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
     if case_id == "ethene_ru":
         num_placements = 12
         config = AdsorptionConfig(
-            material_type="slab",
             seed=42,
             num_conformers=3,
             num_placements=num_placements,
@@ -72,12 +71,12 @@ def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
             slab=_local_ru_001_slab(),
             config=config,
             results_dir="results_test_ethene",
+            material_type="slab",
         )
         smiles, name, surface_type = "C=C", "ethene", "Ru_001"
     elif case_id == "h2_ru":
         num_placements = 10
         config = AdsorptionConfig(
-            material_type="slab",
             seed=42,
             num_conformers=1,
             num_placements=num_placements,
@@ -93,12 +92,12 @@ def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
             slab=_local_ru_001_slab(),
             config=config,
             results_dir="results_test_h2_ru_slab",
+            material_type="slab",
         )
         smiles, name, surface_type = "[H][H]", "H2", "h2_ru_slab"
     elif case_id == "h2_pt13":
         num_placements = 5
         config = AdsorptionConfig(
-            material_type="nanoparticle",
             seed=42,
             num_conformers=1,
             num_placements=num_placements,
@@ -112,12 +111,12 @@ def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
             slab=_pt13_icosahedron(),
             config=config,
             results_dir="results_test_h2_pt13",
+            material_type="nanoparticle",
         )
         smiles, name, surface_type = "[H][H]", "H2", "h2_pt13"
     elif case_id == "co2_mof":
         num_placements = 5
         config = AdsorptionConfig(
-            material_type="porous",
             slab_relaxation_mode="none",
             seed=42,
             num_conformers=1,
@@ -143,6 +142,7 @@ def _run_mlip_pipeline(case_id: str) -> tuple[list[ScreeningResult], int]:
             config=config,
             results_dir="results_test_co2_mof",
             align=False,
+            material_type="porous",
         )
         smiles, name, surface_type = "O=C=O", "CO2", "co2_mof"
     else:

@@ -143,8 +143,8 @@ def test_relaxable_surface_nanoparticle_outer_shell():
     nanoparticle = make_nanoparticle()
     free = identify_relaxable_surface_indices(
         nanoparticle,
-        material_type="nanoparticle",
         tolerance=0.5,
+        material_type="nanoparticle",
     )
     positions = nanoparticle.get_positions()
     com = positions.mean(axis=0)
@@ -156,8 +156,8 @@ def test_relaxable_surface_nanoparticle_outer_shell():
     frozen = compute_frozen_indices(
         nanoparticle,
         relax_top_layer=True,
-        material_type="nanoparticle",
         top_layer_tolerance=0.5,
+        material_type="nanoparticle",
     )
     center = int(np.argmin(dists))
     assert center in frozen
@@ -180,7 +180,7 @@ def test_porous_freeze_empty_pore_uses_mic_neighbor(monkeypatch):
         normal=np.array([1.0, 0.0, 0.0]),
         site_type="pore",
         slab_indices=(),
-        material_type="porous",
+        material_type="nanoparticle",
         site_source="test",
         env_fingerprint=((), (), 0),
     )
@@ -195,23 +195,23 @@ def test_relaxable_surface_porous_pore_boundary():
     porous = make_porous_framework()
     free = identify_relaxable_surface_indices(
         porous,
-        material_type="porous",
         tolerance=0.5,
+        material_type="porous",
     )
     assert free
     assert len(free) < len(porous)
     frozen = compute_frozen_indices(
         porous,
         relax_top_layer=True,
-        material_type="porous",
         top_layer_tolerance=0.5,
+        material_type="porous",
     )
     assert len(frozen) + len(free) == len(porous)
     constrained = apply_surface_constraints(
         porous,
         relax_top_layer=True,
-        material_type="porous",
         top_layer_tolerance=0.5,
+        material_type="porous",
     )
     assert frozen_indices_from_constraints(constrained) == frozen
 
@@ -296,9 +296,9 @@ def test_relax_top_layer_empty_freeze_falls_back_to_full_substrate(caplog):
 
 def test_deposit_adatoms_refreshes_fixatoms_for_new_atoms(tmp_path):
     """Appending adatoms must not leave them free under stale base FixAtoms."""
-    from metalsurfer.surface_prep import SlabContainer, deposit_adatoms
+    from metalsurfer.surface_prep import Substrate, deposit_adatoms
 
-    base = SlabContainer(make_slab(nx=4, ny=4, n_layers=3))
+    base = Substrate(make_slab(nx=4, ny=4, n_layers=3), material_type="slab")
     n_base = len(base.atoms)
     assert frozen_indices_from_constraints(base.atoms) == list(range(n_base))
 
@@ -309,7 +309,7 @@ def test_deposit_adatoms_refreshes_fixatoms_for_new_atoms(tmp_path):
         seed=42,
         results_dir=str(tmp_path),
         relaxation_mode="none",
-        config=AdsorptionConfig(material_type="slab"),
+        config=AdsorptionConfig(),
     )
     n_total = len(deposited.atoms)
     assert n_total > n_base

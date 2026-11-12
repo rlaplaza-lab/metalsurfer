@@ -398,7 +398,7 @@ def _fresh_results_dir(name: str) -> str:
 def _run_campaign(
     name: str,
     config: AdsorptionConfig,
-    slab,
+    substrate,
     molecules,
     surface_type: str,
     system_name: str,
@@ -406,11 +406,11 @@ def _run_campaign(
     bo: bool = False,
 ):
     _clear_site_cache()
-    atoms = _as_atoms(slab)
+    atoms = _as_atoms(substrate)
     n_sites = len(
         get_unified_sites(
             atoms,
-            material_type=config.material_type,
+            material_type=substrate.material_type,
             site_generator=config.site_generator,
             adaptive_grid_spacing=float(config.adaptive_grid_spacing),
             adaptive_grid_refine_levels=int(config.adaptive_grid_refine_levels),
@@ -424,7 +424,7 @@ def _run_campaign(
     t0 = time.perf_counter()
     if bo:
         campaign = run_adsorption_bo(
-            slab=slab,
+            substrate=substrate,
             molecules=molecules,
             config=config,
             surface_type=f"{surface_type}_{config.site_generator}",
@@ -433,7 +433,7 @@ def _run_campaign(
         )
     else:
         campaign = run_adsorption(
-            slab=slab,
+            substrate=substrate,
             molecules=molecules,
             config=config,
             surface_type=f"{surface_type}_{config.site_generator}",
@@ -485,7 +485,6 @@ def _load_baseline_best(path: Path | None) -> dict[tuple[str, str], float]:
 def _e2e_common_kwargs(
     *,
     plugin: str,
-    material_type: str,
     n_jobs: int,
     num_placements: int | None,
     fmax: float,
@@ -494,7 +493,6 @@ def _e2e_common_kwargs(
 ) -> dict:
     """Shared AdsorptionConfig fields for GPU-full single-batch e2e demos."""
     return {
-        "material_type": material_type,
         "site_generator": plugin,
         "seed": 42,
         "num_conformers": 1,
@@ -551,7 +549,6 @@ def run_e2e(
         cfg = AdsorptionConfig(
             **_e2e_common_kwargs(
                 plugin=plugin,
-                material_type="slab",
                 n_jobs=n_jobs,
                 num_placements=num_placements,
                 fmax=fmax,
@@ -566,6 +563,7 @@ def run_e2e(
             bulk_id="mp-33",
             miller_indices=(0, 0, 1),
             supercell=(2, 2, 1),
+            material_type="slab",
             config=cfg,
             results_dir=_fresh_results_dir(f"ab_h2_ru_{plugin}"),
         )
@@ -584,7 +582,6 @@ def run_e2e(
         cfg = AdsorptionConfig(
             **_e2e_common_kwargs(
                 plugin=plugin,
-                material_type="nanoparticle",
                 n_jobs=n_jobs,
                 num_placements=num_placements,
                 fmax=fmax,
@@ -597,6 +594,7 @@ def run_e2e(
         print(f"\n[H2/Pt13] run site_generator={plugin!r} ...")
         cluster = prepare_substrate(
             slab=_pt13(),
+            material_type="nanoparticle",
             config=cfg,
             results_dir=_fresh_results_dir(f"ab_h2_pt13_{plugin}"),
         )
@@ -617,7 +615,6 @@ def run_e2e(
         cfg = AdsorptionConfig(
             **_e2e_common_kwargs(
                 plugin=plugin,
-                material_type="porous",
                 n_jobs=n_jobs,
                 num_placements=num_placements,
                 fmax=fmax,
@@ -628,6 +625,7 @@ def run_e2e(
         print(f"\n[CO2/MOF] run site_generator={plugin!r} ...")
         mof = prepare_substrate(
             slab=mof_atoms,
+            material_type="porous",
             config=cfg,
             results_dir=_fresh_results_dir(f"ab_co2_mof_{plugin}"),
             align=False,
@@ -647,7 +645,6 @@ def run_e2e(
         cfg = AdsorptionConfig(
             **_e2e_common_kwargs(
                 plugin=plugin,
-                material_type="nanoparticle",
                 n_jobs=n_jobs,
                 num_placements=num_placements,
                 fmax=fmax,
@@ -658,6 +655,7 @@ def run_e2e(
         print(f"\n[ethene/Ru55] run site_generator={plugin!r} ...")
         cluster = prepare_substrate(
             slab=_ru55(),
+            material_type="nanoparticle",
             config=cfg,
             results_dir=_fresh_results_dir(f"ab_ethene_ru55_{plugin}"),
         )
@@ -677,7 +675,6 @@ def run_e2e(
         cfg = AdsorptionConfig(
             **_e2e_common_kwargs(
                 plugin=plugin,
-                material_type="slab",
                 n_jobs=n_jobs,
                 num_placements=num_placements,
                 fmax=fmax,

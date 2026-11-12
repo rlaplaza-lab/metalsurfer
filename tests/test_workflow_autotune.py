@@ -36,7 +36,6 @@ def test_needs_workload_autotune_truth_table(
     num_placements, initial_random, batch_size, bo, expected
 ):
     config = AdsorptionConfig(
-        material_type="slab",
         num_placements=num_placements,
         bo=BOConfig(initial_random=initial_random, batch_size=batch_size),
     )
@@ -53,7 +52,7 @@ def test_resolve_workload_config_fills_all_fields_from_probed_capacity(monkeypat
     monkeypatch.setattr(
         shared_mod, "estimate_parallel_relaxation_capacity", _fake_capacity
     )
-    config = AdsorptionConfig(material_type="slab")  # all three fields None
+    config = AdsorptionConfig()  # all three fields None
 
     resolved = resolve_workload_config(
         config,
@@ -81,7 +80,6 @@ def test_resolve_workload_config_fills_only_missing_fields(monkeypatch):
         lambda *a, **k: ParallelCapacity(n_systems=9, max_memory_scaler=90.0),
     )
     config = AdsorptionConfig(
-        material_type="slab",
         num_placements=3,
         bo=BOConfig(initial_random=5, batch_size=None),
     )
@@ -105,7 +103,6 @@ def test_resolve_workload_config_keeps_explicit_scaler(monkeypatch):
         lambda *a, **k: ParallelCapacity(n_systems=9, max_memory_scaler=90.0),
     )
     config = AdsorptionConfig(
-        material_type="slab",
         autobatcher_max_memory_scaler=500.0,
         bo=BOConfig(batch_size=None),
     )
@@ -122,7 +119,7 @@ def test_resolve_workload_config_keeps_explicit_scaler(monkeypatch):
 
 
 def test_resolve_workload_config_noop_returns_input_unchanged():
-    config = AdsorptionConfig(material_type="slab", num_placements=4)
+    config = AdsorptionConfig(num_placements=4)
     resolved = resolve_workload_config(
         config,
         ts_model=object(),
@@ -143,15 +140,25 @@ def test_resolve_saturation_step_workload_config_resolves_before_split(monkeypat
         config,
         site_context=None,
         *,
+        material_type="slab",
         symmetry_broken=False,
         full_slab=None,
     ):
+        del material_type
         recorded["symmetry_broken"] = symmetry_broken
         return sentinel_site_context
 
     def _fake_representative(
-        conformers, slab_atoms, slab_for_sites, config, smiles, *, site_context
+        conformers,
+        slab_atoms,
+        slab_for_sites,
+        config,
+        smiles,
+        *,
+        material_type="slab",
+        site_context,
     ):
+        del material_type
         recorded["site_context_is_sentinel"] = site_context is sentinel_site_context
         recorded["smiles"] = smiles
         return _REPRESENTATIVE
@@ -168,7 +175,7 @@ def test_resolve_saturation_step_workload_config_resolves_before_split(monkeypat
 
     water = Atoms("H2O", positions=[[0.0, 0.0, 0.0], [0.9, 0.0, 0.0], [0.0, 0.9, 0.0]])
     resolved = shared_mod.resolve_saturation_step_workload_config(
-        replace(AdsorptionConfig(material_type="slab"), num_placements=None),
+        replace(AdsorptionConfig(), num_placements=None),
         ts_model=object(),
         conformers=[water],
         slab_atoms=water,  # plumbing is fully mocked; identity suffices
@@ -177,6 +184,7 @@ def test_resolve_saturation_step_workload_config_resolves_before_split(monkeypat
         base_slab_for_frozen=None,
         symmetry_broken=True,
         bo_enabled=False,
+        material_type="slab",
     )
 
     assert recorded["symmetry_broken"] is True

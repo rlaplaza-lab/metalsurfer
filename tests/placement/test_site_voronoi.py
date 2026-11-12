@@ -366,7 +366,7 @@ def test_voronoi_auto_widen_retries_when_first_window_empty(monkeypatch):
 
     monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
     ctx = _get_unique_sites_for_specs(
-        slab, AdsorptionConfig(material_type="slab", voronoi_auto_widen=True)
+        slab, AdsorptionConfig(voronoi_auto_widen=True), material_type="slab"
     )
     assert calls["n"] == 2
     assert ctx.use_sites
@@ -385,7 +385,7 @@ def test_voronoi_auto_widen_disabled_skips_retry(monkeypatch):
 
     monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
     ctx = _get_unique_sites_for_specs(
-        slab, AdsorptionConfig(material_type="slab", voronoi_auto_widen=False)
+        slab, AdsorptionConfig(voronoi_auto_widen=False), material_type="slab"
     )
     assert calls["n"] == 1
     assert not ctx.use_sites
@@ -500,10 +500,10 @@ def test_slab_enrichment_flag_does_not_warn_from_site_context(caplog):
     from metalsurfer.config import AdsorptionConfig
     from metalsurfer.placement.site_context import _get_unique_sites_for_specs
 
-    config = AdsorptionConfig(material_type="slab", voronoi_site_enrichment=False)
+    config = AdsorptionConfig(voronoi_site_enrichment=False)
     slab = fcc111("Pt", (3, 3, 4), vacuum=10.0)
     with caplog.at_level(logging.WARNING, logger="metalsurfer.placement.site_context"):
-        _get_unique_sites_for_specs(slab, config)
+        _get_unique_sites_for_specs(slab, config, material_type="slab")
 
     assert not any(
         "voronoi_site_enrichment=False has no effect" in record.getMessage()
@@ -542,10 +542,10 @@ def test_porous_classification_uses_periodic_neighbours_near_cell_face():
         vertices,
         positions,
         local_tree,
-        material_type="porous",
         cell=cell,
         pbc=pbc,
         delaunay=None,
+        material_type="porous",
     )
     assert ctx.class_dists is not None and ctx.class_idx is not None
 
@@ -567,10 +567,10 @@ def test_porous_classification_uses_periodic_neighbours_near_cell_face():
         pore_xyz,
         positions,
         local_tree,
-        material_type="porous",
         cell=cell,
         pbc=pbc,
         delaunay=None,
+        material_type="porous",
     )
     assert ctx_pores.class_dists is not None and ctx_pores.class_idx is not None
     pore_threshold = derive_pore_threshold(list(porous.get_chemical_symbols()))

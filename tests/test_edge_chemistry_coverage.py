@@ -81,7 +81,6 @@ def _joint_groups(snapshot: dict[str, object]) -> list[list[ScreeningResult]]:
     poses = [screening_result(snapshot, pose) for pose in placements]
     slab = frame_atoms(snapshot["slab"])
     config = AdsorptionConfig(
-        material_type="slab",
         seed=42,
         device="cpu",
         slab_relaxation_mode="none",
@@ -98,6 +97,7 @@ def _joint_groups(snapshot: dict[str, object]) -> list[list[ScreeningResult]]:
         rng=np.random.default_rng(config.seed),
         n_substrate=len(slab),
         site_positions=_catalog_positions(snapshot),
+        material_type="slab",
     )
     assert len(groups) == n_configs
     return groups
@@ -146,9 +146,7 @@ def _screened_hbond_edges(snapshot: dict[str, object]) -> list[int]:
     ]
     assert 0 in counts
     assert any(count > 0 for count in counts)
-    inner, outer = lateral_contact_shell(
-        AdsorptionConfig(material_type="slab").connectivity_multiplier
-    )
+    inner, outer = lateral_contact_shell(AdsorptionConfig().connectivity_multiplier)
     return [_shell_hbond_edges(group, cell, inner, outer) for group in groups]
 
 

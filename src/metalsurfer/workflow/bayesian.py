@@ -48,7 +48,7 @@ from ..reporting import (
     FailureSummary,
     FilterFailure,
 )
-from ..surface_prep import SlabContainer
+from ..surface_prep import Substrate
 from .core import _evaluate_placement_batch
 from .shared import (
     MoleculeScreenOutcome,
@@ -78,7 +78,7 @@ class _PreparedBOPool:
 def prepare_bo_pool(
     *,
     conformers: list[Atoms],
-    slab: SlabContainer,
+    slab: Substrate,
     slab_for_sites: Atoms,
     config: AdsorptionConfig,
     smiles: str,
@@ -107,6 +107,7 @@ def prepare_bo_pool(
         full_slab=slab.atoms,
         conformer_energies=conformer_energies,
         grid_info=grid_info,
+        material_type=slab.material_type,
     )
     n_specs = len(all_specs)
     if n_specs == 0:
@@ -124,6 +125,7 @@ def prepare_bo_pool(
         site_context=site_context,
         slab_for_sites=slab_for_sites,
         materialization_cache=materialization_cache,
+        material_type=slab.material_type,
     )
     if candidate_features.empty:
         return None, n_specs
@@ -147,7 +149,7 @@ def prepare_bo_pool(
         all_specs=all_specs,
         materialization_cache=materialization_cache,
         occupied=occupied,
-        material_type=config.material_type,
+        material_type=slab.material_type,
         cell=np.asarray(slab.atoms.get_cell(), dtype=float),
         connectivity_multiplier=float(config.connectivity_multiplier),
     )
@@ -507,7 +509,7 @@ def run_bo_acquisition_loop(
 def process_molecule_bayesian(
     smiles: str,
     molecule_name: str,
-    slab: SlabContainer,
+    slab: Substrate,
     calculator,
     reference_energies: ReferenceEnergies,
     ts_model=None,
@@ -640,6 +642,7 @@ def process_molecule_bayesian(
             smiles,
             site_context,
             full_slab=slab.atoms,
+            material_type=slab.material_type,
         )
         if conformers
         else None
@@ -652,6 +655,7 @@ def process_molecule_bayesian(
         site_context=site_context,
         full_slab=slab.atoms,
         grid_info=grid_info,
+        material_type=slab.material_type,
     )
     if config.bo.candidate_pool_size is not None:
         pool_size = config.bo.candidate_pool_size
@@ -824,6 +828,7 @@ def process_molecule_bayesian(
                     smiles=smiles,
                     surface_id=surface_type,
                     config=config,
+                    material_type=slab.material_type,
                 )
                 features = extract_features(record)
             observed_result_index_by_pid[r.placement_id] = len(
@@ -849,6 +854,7 @@ def process_molecule_bayesian(
                         smiles=smiles,
                         surface_id=surface_type,
                         config=config,
+                        material_type=slab.material_type,
                     )
                     if event.descriptor is not None
                     else PlacementRecord.from_spec(
@@ -857,6 +863,7 @@ def process_molecule_bayesian(
                         smiles=smiles,
                         surface_id=surface_type,
                         config=config,
+                        material_type=slab.material_type,
                     )
                 )
                 _append_penalty_observation(record, event.stage, event.reason)
@@ -920,6 +927,7 @@ def process_molecule_bayesian(
         slab_atoms=slab.atoms,
         reference_smiles=reference_smiles,
         config=config,
+        material_type=slab.material_type,
         surface_prefix_atoms=surface_prefix_atoms,
     )
     duplicate_result_ids = {id(result) for result in bo_duplicate_results}
@@ -951,6 +959,7 @@ def process_molecule_bayesian(
                     smiles=smiles,
                     surface_id=surface_type,
                     config=config,
+                    material_type=slab.material_type,
                 )
                 _append_penalty_observation(
                     record,

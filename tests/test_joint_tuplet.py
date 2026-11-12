@@ -15,7 +15,7 @@ from metalsurfer.filters import (
 from metalsurfer.models import ReferenceEnergies
 from metalsurfer.placement.geometry import occupied_neighbor_counts
 from metalsurfer.reporting import PlacementFailure
-from metalsurfer.surface_prep import SlabContainer
+from metalsurfer.surface_prep import Substrate
 from metalsurfer.workflow import composite as composite_mod
 from metalsurfer.workflow import joint_tuplet as joint_tuplet_mod
 from metalsurfer.workflow.composite import (
@@ -48,7 +48,6 @@ def test_homogeneous_pool_size_uses_slot_oversample(monkeypatch):
     """One-species multi path sizes the pose pool as ceil(n * configs * oversample)."""
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
         seed=1,
         num_placements=4,
         saturation_molecules_per_step=2,
@@ -73,7 +72,7 @@ def test_homogeneous_pool_size_uses_slot_oversample(monkeypatch):
     screen_joint_tuplet_homogeneous(
         smiles="O",
         molecule_name="water",
-        current_slab=SlabContainer(slab),
+        current_slab=Substrate(slab, material_type="slab"),
         calculator=None,
         ref_step=ref,
         ts_model=None,
@@ -123,7 +122,6 @@ def test_composition_budgets_equal_when_enough_slots():
 def test_homogeneous_delegates_assembly_seed_and_flags(monkeypatch):
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
         seed=17,
         num_placements=3,
         saturation_molecules_per_step=2,
@@ -146,7 +144,7 @@ def test_homogeneous_delegates_assembly_seed_and_flags(monkeypatch):
     screen_joint_tuplet_homogeneous(
         smiles="O",
         molecule_name="water",
-        current_slab=SlabContainer(slab),
+        current_slab=Substrate(slab, material_type="slab"),
         calculator=None,
         ref_step=ref,
         ts_model=None,
@@ -169,7 +167,7 @@ def test_homogeneous_delegates_assembly_seed_and_flags(monkeypatch):
     screen_joint_tuplet_homogeneous(
         smiles="O",
         molecule_name="water",
-        current_slab=SlabContainer(slab),
+        current_slab=Substrate(slab, material_type="slab"),
         calculator=None,
         ref_step=ref,
         ts_model=None,
@@ -188,7 +186,6 @@ def test_homogeneous_delegates_assembly_seed_and_flags(monkeypatch):
 def test_homogeneous_empty_pool_returns_placement_failure(monkeypatch):
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
         seed=1,
         num_placements=5,
         saturation_molecules_per_step=2,
@@ -215,7 +212,7 @@ def test_homogeneous_empty_pool_returns_placement_failure(monkeypatch):
     out = screen_joint_tuplet_homogeneous(
         smiles="O",
         molecule_name="water",
-        current_slab=SlabContainer(slab),
+        current_slab=Substrate(slab, material_type="slab"),
         calculator=None,
         ref_step=ref,
         ts_model=None,
@@ -238,7 +235,7 @@ def test_trimer_assembly_continues_after_a_short_seed(monkeypatch) -> None:
     """A seed that can take only one partner does not abandon the queue."""
     slab = make_slab(nx=8)
     cell = np.asarray(slab.get_cell(), dtype=float)
-    config = AdsorptionConfig(material_type="slab", placement_clash_descent=False)
+    config = AdsorptionConfig(placement_clash_descent=False)
     y_shift = float(cell[1, 1]) / 2.0
     step = 4.0
     poses = []
@@ -284,6 +281,7 @@ def test_trimer_assembly_continues_after_a_short_seed(monkeypatch) -> None:
         config=config,
         rng=rng,
         n_substrate=len(slab),
+        material_type="slab",
     )
     assert len(groups) == 1
     assert len(groups[0]) == 3
@@ -297,6 +295,7 @@ def test_trimer_assembly_continues_after_a_short_seed(monkeypatch) -> None:
         config=config,
         rng=rng,
         n_substrate=len(slab),
+        material_type="slab",
     )
     assert len(quota_groups) == 1
     assert [pose.placement_id for pose in quota_groups[0]][0] not in {0, 1}
@@ -313,7 +312,7 @@ def test_assemblers_do_not_replace_a_clashing_neighbor() -> None:
     )
     centered = make_h2().get_positions()
     half_extent = float(np.max(centered[:, 0] - centered.mean(axis=0)[0]))
-    config = AdsorptionConfig(material_type="slab", placement_clash_descent=False)
+    config = AdsorptionConfig(placement_clash_descent=False)
     inner, _outer = lateral_contact_shell(config.connectivity_multiplier)
     clash = _h2_com_gap(inner / 2.0, r_sum=r_sum, half_extent=half_extent)
     step = 4.0
@@ -348,6 +347,7 @@ def test_assemblers_do_not_replace_a_clashing_neighbor() -> None:
         config=config,
         rng=rng,
         n_substrate=len(slab),
+        material_type="slab",
     )
     quota_groups = assemble_quota_joint_configs(
         {"h2": poses},
@@ -357,6 +357,7 @@ def test_assemblers_do_not_replace_a_clashing_neighbor() -> None:
         config=config,
         rng=rng,
         n_substrate=len(slab),
+        material_type="slab",
     )
     exact_ids = [[r.placement_id for r in group] for group in exact_groups]
     quota_ids = [[r.placement_id for r in group] for group in quota_groups]
@@ -373,7 +374,7 @@ def test_full_catalog_draws_the_open_shell_before_a_neighbor():
     """
     slab = make_slab(nx=8)
     cell = np.asarray(slab.get_cell(), dtype=float)
-    config = AdsorptionConfig(material_type="slab", placement_clash_descent=False)
+    config = AdsorptionConfig(placement_clash_descent=False)
     probe = Atoms("H", positions=[[0.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
     other = Atoms("H", positions=[[1.0, 0.0, 0.0]], cell=cell, pbc=slab.get_pbc())
     r_sum = 1.0 / min_interadsorbate_covalent_ratio(
@@ -421,6 +422,7 @@ def test_full_catalog_draws_the_open_shell_before_a_neighbor():
             n_substrate=len(slab),
             site_positions=site_positions,
             site_types={index: "hollow" for index in site_positions},
+            material_type="slab",
         )
         assert len(groups) == 1
         return [int(pose.placement_descriptor.site_index) for pose in groups[0]]
@@ -466,7 +468,7 @@ def test_assemblers_span_close_and_far_partners() -> None:
     slab = make_slab(nx=8)
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = list(slab.get_pbc())
-    config = AdsorptionConfig(material_type="slab", placement_clash_descent=False)
+    config = AdsorptionConfig(placement_clash_descent=False)
     y_shift = float(cell[1, 1]) / 2.0
     step = 3.0
     x0 = 2.0
@@ -500,6 +502,7 @@ def test_assemblers_span_close_and_far_partners() -> None:
         config=config,
         rng=rng,
         n_substrate=len(slab),
+        material_type="slab",
     )
     quota_groups = assemble_quota_joint_configs(
         {"h2": poses},
@@ -509,6 +512,7 @@ def test_assemblers_span_close_and_far_partners() -> None:
         config=config,
         rng=rng,
         n_substrate=len(slab),
+        material_type="slab",
     )
     exact_ids = [[r.placement_id for r in group] for group in exact_groups]
     quota_ids = [[r.placement_id for r in group] for group in quota_groups]
@@ -529,7 +533,6 @@ def test_bo_assemble_second_group_takes_a_separated_site(monkeypatch):
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = list(slab.get_pbc())
     config = AdsorptionConfig(
-        material_type="slab",
         placement_clash_descent=False,
         saturation_molecules_per_step=2,
     )
@@ -572,7 +575,7 @@ def test_bo_assemble_second_group_takes_a_separated_site(monkeypatch):
         valid_spec_indices=list(range(len(stubs))),
         materialization_cache={},
         conformers=[make_water()],
-        slab=SlabContainer(slab),
+        slab=Substrate(slab, material_type="slab"),
         calculator=None,
         config=config,
         smiles="O",
@@ -596,9 +599,7 @@ def test_bo_assemble_second_group_takes_a_separated_site(monkeypatch):
 
 def test_homogeneous_missing_molecule_energy_raises_before_multi(monkeypatch):
     slab = make_slab()
-    config = AdsorptionConfig(
-        material_type="slab", num_placements=2, saturation_molecules_per_step=2
-    )
+    config = AdsorptionConfig(num_placements=2, saturation_molecules_per_step=2)
     ref = ReferenceEnergies(slab_energy=0.0, molecule_energies={})
     called = {"multi": False}
 
@@ -614,7 +615,7 @@ def test_homogeneous_missing_molecule_energy_raises_before_multi(monkeypatch):
         screen_joint_tuplet_homogeneous(
             smiles="O",
             molecule_name="water",
-            current_slab=SlabContainer(slab),
+            current_slab=Substrate(slab, material_type="slab"),
             calculator=None,
             ref_step=ref,
             ts_model=None,
@@ -632,7 +633,7 @@ def test_homogeneous_missing_molecule_energy_raises_before_multi(monkeypatch):
 def test_bo_assemble_releases_incomplete_companions(monkeypatch):
     """Failed packs must not swallow later anchors from the same batch."""
     slab = make_slab(nx=8)
-    config = AdsorptionConfig(material_type="slab", saturation_molecules_per_step=2)
+    config = AdsorptionConfig(saturation_molecules_per_step=2)
     cell, half_extent, gap = _h2_contact_layout(slab, config)
     y_shift = float(cell[1, 1]) / 2.0
     stubs = {
@@ -659,7 +660,8 @@ def test_bo_assemble_releases_incomplete_companions(monkeypatch):
             descriptors=[stub.placement_descriptor],
         )
 
-    def _fake_pack(winners, _slab, _config, *, n_substrate=None):
+    def _fake_pack(winners, _slab, _config, *, material_type="slab", n_substrate=None):
+        del material_type
         ids = tuple(w.placement_id for w in winners)
         if len(ids) == 1:
             return list(winners)
@@ -686,7 +688,7 @@ def test_bo_assemble_releases_incomplete_companions(monkeypatch):
         valid_spec_indices=list(range(4)),
         materialization_cache={},
         conformers=[make_water()],
-        slab=SlabContainer(slab),
+        slab=Substrate(slab, material_type="slab"),
         calculator=None,
         config=config,
         smiles="O",
@@ -705,7 +707,7 @@ def test_bo_assemble_releases_incomplete_companions(monkeypatch):
 
 def test_bo_assemble_respects_blocked_companions(monkeypatch):
     slab = make_slab(nx=8)
-    config = AdsorptionConfig(material_type="slab", saturation_molecules_per_step=2)
+    config = AdsorptionConfig(saturation_molecules_per_step=2)
     cell, half_extent, gap = _h2_contact_layout(slab, config)
     y0 = float(cell[1, 1]) / 2.0
     x0 = float(cell[0, 0]) / 2.0
@@ -734,7 +736,8 @@ def test_bo_assemble_respects_blocked_companions(monkeypatch):
             descriptors=[stub.placement_descriptor],
         )
 
-    def _fake_pack(winners, _slab, _config, *, n_substrate=None):
+    def _fake_pack(winners, _slab, _config, *, material_type="slab", n_substrate=None):
+        del material_type
         return list(winners)
 
     monkeypatch.setattr(
@@ -753,7 +756,7 @@ def test_bo_assemble_respects_blocked_companions(monkeypatch):
         valid_spec_indices=list(range(3)),
         materialization_cache={},
         conformers=[make_water()],
-        slab=SlabContainer(slab),
+        slab=Substrate(slab, material_type="slab"),
         calculator=None,
         config=config,
         smiles="O",
@@ -775,7 +778,6 @@ def test_process_joint_tuplet_bayesian_uses_ctx_conformer_energies(monkeypatch):
     """Prep-resolved conformer energies must reach enumeration."""
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
         num_placements=2,
         saturation_molecules_per_step=2,
         bo=BOConfig(initial_random=1, batch_size=1, total_batches=1),
@@ -783,7 +785,7 @@ def test_process_joint_tuplet_bayesian_uses_ctx_conformer_energies(monkeypatch):
     captured: dict = {}
 
     ctx = MoleculeScreeningContext(
-        slab=SlabContainer(slab),
+        slab=Substrate(slab, material_type="slab"),
         slab_for_sites=slab,
         effective_base_slab_for_frozen=slab,
         conformers=[make_water()],
@@ -818,7 +820,7 @@ def test_process_joint_tuplet_bayesian_uses_ctx_conformer_energies(monkeypatch):
     out = process_joint_tuplet_bayesian(
         "O",
         "water",
-        SlabContainer(slab),
+        Substrate(slab, material_type="slab"),
         calculator=None,
         reference_energies=ReferenceEnergies(
             slab_energy=0.0, molecule_energies={"water": -14.0}

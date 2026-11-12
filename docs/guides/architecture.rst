@@ -38,9 +38,9 @@ entry point (or YAML ``campaign: adsorption_bo`` / ``saturation_bo``);
 :class:`~metalsurfer.AdsorptionConfig` holds ``bo`` / ``bo.transfer``
 hyperparameters only (nested — flat ``bo_*`` keys are rejected).
 
-All four accept a ``SlabContainer`` (or ASE ``Atoms``), ``molecules``,
-:class:`~metalsurfer.AdsorptionConfig`, and ``surface_type`` (results folder
-label only).
+All four accept a prepared ``Substrate`` (bare ASE ``Atoms`` are rejected),
+``molecules``, :class:`~metalsurfer.AdsorptionConfig`, and ``surface_type``
+(results folder label only). ``material_type`` lives on the substrate.
 
 With ``save_results=True`` (default):
 
@@ -57,11 +57,12 @@ to force a fresh run.
 2. Surface preparation
 ~~~~~~~~~~~~~~~~~~~~~~
 
-:func:`~metalsurfer.surface_prep.prepare_substrate` builds or loads a slab,
-equilibrates ionic positions by default (``slab_relaxation_mode="ionic_only"``),
-optionally alloys / deposits adatoms, and attaches ASE ``FixAtoms`` via prep
-kwargs (default: freeze the entire substrate). Freeze policy is **prep-only**.
-For slabs, ``relax_top_layer=True`` frees a simple height band within
+:func:`~metalsurfer.surface_prep.prepare_substrate` builds or loads a structure
+with required ``material_type``, equilibrates ionic positions by default
+(``slab_relaxation_mode="ionic_only"``), optionally alloys / deposits adatoms,
+and attaches ASE ``FixAtoms`` via prep kwargs (default: freeze the entire
+substrate). Freeze policy is **prep-only**. For slabs,
+``relax_top_layer=True`` frees a simple height band within
 ``top_layer_tolerance`` of the exposed surface (not the stepped site-discovery
 mask). Empty freeze sets fall back to freezing the whole substrate. Omitting
 ``FixAtoms`` is allowed (campaigns warn). See :doc:`../api/surface_prep` and
@@ -187,7 +188,7 @@ Module layout
    ├── models.py             # typed result dataclasses
    ├── site_plugin_ids.py    # site_generator name ↔ material_type matrix
    ├── optimization/         # MLIP setup, batched relaxation (TorchSim / FairChem)
-   ├── surface_prep/         # prepare_substrate, freeze, …
+   ├── surface_prep/         # Substrate, prepare_substrate, freeze, …
    ├── symmetry.py           # spglib-based symmetry analysis
    ├── ml/                   # features, schema 3.2, regression; bayesian/ package
    ├── placement/            # site_* + generators / pose/ / policy
@@ -710,8 +711,8 @@ fewer inflight relaxations against the same scaler. Large explicit
 ``num_placements`` values are safe on small GPUs because only the active
 inflight batch holds CUDA geometry tensors.
 
-**Calculator / PBC:** ``material_type`` is required and must match the
-substrate ASE PBC (slab ``[T,T,F]``, porous ``[T,T,T]``, nanoparticle
+**Calculator / PBC:** ``material_type`` is required on the substrate and must
+match the ASE PBC (slab ``[T,T,F]``, porous ``[T,T,T]``, nanoparticle
 ``[F,F,F]``). Site enumeration and placement read that validated
 ``atoms.get_pbc()`` mask (2D ignores one face; 3D does not). A mismatch
 raises — flags are never rewritten. At the UMA boundary, copies may be

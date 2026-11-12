@@ -75,12 +75,15 @@ def _sampling_site_context(
     config: AdsorptionConfig,
     site_context: SiteContext | None,
     slab_for_sites: Atoms | None,
+    *,
+    material_type: str,
 ) -> SiteContext:
     reference = slab_for_sites if slab_for_sites is not None else slab
     return site_context_for_sampling(
         reference,
         config,
         site_context,
+        material_type=material_type,
         full_slab=slab if slab_for_sites is not None else None,
     )
 
@@ -90,10 +93,11 @@ def _resolve_placement_frame(
     site,
     reference: Atoms,
     config: AdsorptionConfig,
+    material_type: str,
     pose_cache: _PoseBatchCache | None,
 ) -> tuple[str, float, bool, np.ndarray]:
     """Shared site frame: ``(mat_type, surface_ref, is_local_ref, normal)``."""
-    mat_type = material_type_for_placement(site, when_no_site=config.material_type)
+    mat_type = material_type_for_placement(site, when_no_site=material_type)
     surface_ref, is_local_ref = _resolve_surface_ref(
         site,
         reference,
@@ -123,6 +127,8 @@ def _pose_from_spec(
     site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
     pose_cache: _PoseBatchCache | None = None,
+    *,
+    material_type: str,
 ) -> tuple[_PlacementContext | None, str | None]:
     """Build a placement context (pose + resolved geometry) from a spec.
 
@@ -148,7 +154,9 @@ def _pose_from_spec(
         shape, _, _ = geom._classify_molecule_shape(canonical_pos)
 
     reference = slab_for_sites if slab_for_sites is not None else slab
-    ctx = _sampling_site_context(slab, config, site_context, slab_for_sites)
+    ctx = _sampling_site_context(
+        slab, config, site_context, slab_for_sites, material_type=material_type
+    )
     if not ctx.use_sites or len(ctx.sites) == 0:
         logger.debug(
             "No sites available for spec placement_index=%d",
@@ -168,6 +176,7 @@ def _pose_from_spec(
     ref_slab = reference
     zf = float(spec.z_fraction)
     mat_type, surface_ref, is_local_ref, normal = _resolve_placement_frame(
+        material_type=material_type,
         site=site,
         reference=ref_slab,
         config=config,
@@ -325,6 +334,8 @@ def _context_from_pose(
     site_context: SiteContext | None,
     slab_for_sites: Atoms | None = None,
     pose_cache: _PoseBatchCache | None = None,
+    *,
+    material_type: str,
 ) -> _PlacementContext | None:
     """Replay path: normalize quaternion, rotate *canonical_pos*, resolve site for ``_finalize_placement``."""
     raw_q = np.array([pose.quat_w, pose.quat_x, pose.quat_y, pose.quat_z], dtype=float)
@@ -339,11 +350,14 @@ def _context_from_pose(
     rotated_pos = (geom.quaternion_to_rotation_matrix(quat) @ canonical_pos.T).T
 
     reference = slab_for_sites if slab_for_sites is not None else slab
-    ctx = _sampling_site_context(slab, config, site_context, slab_for_sites)
+    ctx = _sampling_site_context(
+        slab, config, site_context, slab_for_sites, material_type=material_type
+    )
     site = None
     if ctx.use_sites and 0 <= pose.site_index < len(ctx.sites):
         site = ctx.sites[pose.site_index]
     mat_type, surface_ref, is_local_ref, normal = _resolve_placement_frame(
+        material_type=material_type,
         site=site,
         reference=reference,
         config=config,

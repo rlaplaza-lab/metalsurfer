@@ -790,6 +790,7 @@ def filter_results(
     reference_smiles: str | None = None,
     *,
     config: AdsorptionConfig,
+    material_type: str,
     duplicate_results_out: list[ScreeningResult] | None = None,
     surface_prefix_atoms: int | None = None,
 ) -> list[ScreeningResult]:
@@ -871,7 +872,7 @@ def filter_results(
                 surface_symbols=None,
                 connectivity_multiplier=config.connectivity_multiplier,
                 adsorbate_prefix_atoms=prefix,
-                material_type=config.material_type,
+                material_type=material_type,
             )
             if ok:
                 kept.append(entry)
@@ -914,7 +915,7 @@ def filter_results(
                 entry.atoms,
                 slab,
                 binding_threshold=config.binding_distance_threshold,
-                material_type=config.material_type,
+                material_type=material_type,
                 surface_prefix_atoms=surface_prefix_atoms,
             )
             if ok:
@@ -943,7 +944,7 @@ def filter_results(
     unique, deduplicated = _deduplicate_by_energy_and_rmsd(
         results,
         prefix_atoms=len(slab),
-        material_type=config.material_type,
+        material_type=material_type,
         energy_dedup_threshold=config.energy_dedup_threshold,
         rmsd_dedup_threshold=config.rmsd_dedup_threshold,
     )

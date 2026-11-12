@@ -2,6 +2,7 @@
 campaign: adsorption
 surface_type: ethene_ru_slab_yaml
 substrate:
+  material_type: slab
   bulk_id: mp-33
   miller_indices: [0, 0, 1]
   supercell: [2, 2, 1]
@@ -9,6 +10,5 @@ molecules:
   - smiles: C=C
     name: ethene
 config:
-  material_type: slab
   num_conformers: 1
   num_placements: 5

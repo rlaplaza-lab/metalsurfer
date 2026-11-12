@@ -6,8 +6,6 @@ import warnings
 from collections.abc import Callable
 from typing import Any, Literal, cast
 
-from ase import Atoms
-
 from .campaign_schema import CampaignDocument
 from .config import AdsorptionConfig
 from .io_results import (
@@ -30,7 +28,7 @@ from .models import (
 )
 from .reporting import FailureSummary
 from .result_paths import results_dir_for
-from .surface_prep import SlabContainer, prepare_substrate
+from .surface_prep import Substrate, prepare_substrate
 from .workflow import (
     process_molecule,
     process_molecule_bayesian,
@@ -65,7 +63,7 @@ def _summarize_molecule(
 
 def _run_binding_campaign(
     *,
-    slab: SlabContainer | Atoms,
+    substrate: Substrate,
     molecules: list[tuple[str, str]] | str,
     config: AdsorptionConfig,
     surface_type: str,
@@ -107,10 +105,10 @@ def _run_binding_campaign(
     t_start = time.perf_counter()
 
     setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
-    bootstrap = _bootstrap_screening_run(slab, molecule_pairs, config)
+    bootstrap = _bootstrap_screening_run(substrate, molecule_pairs, config)
     calculator = bootstrap.calculator
     ts_model = bootstrap.ts_model
-    slab = bootstrap.slab
+    substrate = bootstrap.slab
     ref = bootstrap.ref
     t_ref_s = bootstrap.t_ref_s
     molecule_names = [name for _, name in molecule_pairs]
@@ -123,7 +121,7 @@ def _run_binding_campaign(
         outcome = process_fn(
             smiles,
             molecule_name,
-            slab,
+            substrate,
             calculator,
             ref,
             ts_model=ts_model,
@@ -145,12 +143,18 @@ def _run_binding_campaign(
                 surface_type=surface_type,
                 system_name=system_name,
                 config=config,
+                material_type=substrate.material_type,
                 write_csv=False,
             )
         run_results.append(screening_run_result(molecule_name, results))
 
     if save_results and run_results:
-        save_summary_results(run_results, surface_type=surface_type, config=config)
+        save_summary_results(
+            run_results,
+            surface_type=surface_type,
+            config=config,
+            material_type=substrate.material_type,
+        )
     total_configurations = sum(len(rr.results) for rr in run_results)
     t_total_s = time.perf_counter() - t_start
     if write_settings:
@@ -194,7 +198,7 @@ def _run_binding_campaign(
 
 def run_adsorption(
     *,
-    slab: SlabContainer | Atoms,
+    substrate: Substrate,
     molecules: list[tuple[str, str]] | str,
     config: AdsorptionConfig,
     surface_type: str,
@@ -209,8 +213,8 @@ def run_adsorption(
 
     Parameters
     ----------
-    slab:
-        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
+    substrate:
+        Prepared :class:`~metalsurfer.surface_prep.Substrate`. Bare ``Atoms`` are rejected.
     molecules:
         In-memory ``(smiles, name)`` list or path to a CSV with ``smiles`` and ``name`` columns.
     config:
@@ -235,7 +239,7 @@ def run_adsorption(
         :func:`~metalsurfer.workflow.core.process_molecule`.
     """
     return _run_binding_campaign(
-        slab=slab,
+        substrate=substrate,
         molecules=molecules,
         config=config,
         surface_type=surface_type,
@@ -252,7 +256,7 @@ def run_adsorption(
 
 def run_adsorption_bo(
     *,
-    slab: SlabContainer | Atoms,
+    substrate: Substrate,
     molecules: list[tuple[str, str]] | str,
     config: AdsorptionConfig,
     surface_type: str,
@@ -270,8 +274,8 @@ def run_adsorption_bo(
 
     Parameters
     ----------
-    slab
-        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
+    substrate
+        Prepared :class:`~metalsurfer.surface_prep.Substrate`. Bare ``Atoms`` are rejected.
     molecules
         In-memory ``(smiles, name)`` list or path to a CSV with ``smiles`` and ``name`` columns.
     config
@@ -293,7 +297,7 @@ def run_adsorption_bo(
         :func:`~metalsurfer.workflow.bayesian.process_molecule_bayesian`.
     """
     return _run_binding_campaign(
-        slab=slab,
+        substrate=substrate,
         molecules=molecules,
         config=config,
         surface_type=surface_type,
@@ -313,12 +317,18 @@ def _save_benchmark_dataset_if_requested(
     *,
     surface_type: str,
     config: AdsorptionConfig,
+    material_type: str,
 ) -> None:
     if not config.save_benchmark_dataset:
         return
     flattened = [run for sr in results for run in sr.to_flattened_runs()]
     if flattened:
-        save_summary_results(flattened, surface_type=surface_type, config=config)
+        save_summary_results(
+            flattened,
+            surface_type=surface_type,
+            config=config,
+            material_type=material_type,
+        )
     else:
         logger.warning(
             "save_benchmark_dataset=True but no flattened screening runs to write"
@@ -327,7 +337,7 @@ def _save_benchmark_dataset_if_requested(
 
 def _run_saturation_campaign(
     *,
-    slab: SlabContainer | Atoms,
+    substrate: Substrate,
     molecules: list[tuple[str, str]] | str,
     config: AdsorptionConfig,
     surface_type: str,
@@ -344,7 +354,7 @@ def _run_saturation_campaign(
     )
 
     results = run_saturation_screening(
-        slab=slab,
+        substrate=substrate,
         molecules=molecules,
         config=config,
         surface_type=surface_type,
@@ -359,9 +369,17 @@ def _run_saturation_campaign(
     )
 
     if save_results:
-        save_saturation_results(runs, surface_type=surface_type, config=config)
+        save_saturation_results(
+            runs,
+            surface_type=surface_type,
+            config=config,
+            material_type=substrate.material_type,
+        )
         _save_benchmark_dataset_if_requested(
-            runs, surface_type=surface_type, config=config
+            runs,
+            surface_type=surface_type,
+            config=config,
+            material_type=substrate.material_type,
         )
     if write_settings:
         molecule_names = [
@@ -401,7 +419,7 @@ def _run_saturation_campaign(
 
 def run_saturation(
     *,
-    slab: SlabContainer | Atoms,
+    substrate: Substrate,
     molecules: list[tuple[str, str]] | str,
     config: AdsorptionConfig,
     surface_type: str = "manual",
@@ -418,8 +436,8 @@ def run_saturation(
 
     Parameters
     ----------
-    slab:
-        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
+    substrate:
+        Prepared :class:`~metalsurfer.surface_prep.Substrate`. Bare ``Atoms`` are rejected.
     molecules:
         In-memory list or CSV path (``smiles``, ``name`` columns).
     config:
@@ -444,7 +462,7 @@ def run_saturation(
     ``adsorption_energies_detailed.csv`` from flattened step placements.
     """
     return _run_saturation_campaign(
-        slab=slab,
+        substrate=substrate,
         molecules=molecules,
         config=config,
         surface_type=surface_type,
@@ -458,7 +476,7 @@ def run_saturation(
 
 def run_saturation_bo(
     *,
-    slab: SlabContainer | Atoms,
+    substrate: Substrate,
     molecules: list[tuple[str, str]] | str,
     config: AdsorptionConfig,
     surface_type: str = "manual",
@@ -474,8 +492,8 @@ def run_saturation_bo(
 
     Parameters
     ----------
-    slab
-        :class:`~metalsurfer.surface_prep.SlabContainer` or plain :class:`ase.Atoms`.
+    substrate
+        Prepared :class:`~metalsurfer.surface_prep.Substrate`. Bare ``Atoms`` are rejected.
     molecules
         In-memory list or CSV path (``smiles``, ``name`` columns).
     config
@@ -492,7 +510,7 @@ def run_saturation_bo(
         Optional dict populated with timing and count metadata.
     """
     return _run_saturation_campaign(
-        slab=slab,
+        substrate=substrate,
         molecules=molecules,
         config=config,
         surface_type=surface_type,
@@ -523,14 +541,14 @@ def run_campaign(document: CampaignDocument, *, skip_existing: bool = True) -> A
     skip_existing:
         Skip molecules already present in prior result CSVs (default: True).
     """
-    slab = prepare_substrate(
+    substrate = prepare_substrate(
         **document.substrate,
         config=document.config,
         results_dir=document.results_dir,
     )
     runner = _RUNNERS[document.campaign]
     return runner(
-        slab=slab,
+        substrate=substrate,
         molecules=document.molecules,
         config=document.config,
         surface_type=document.surface_type,

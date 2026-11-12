@@ -38,11 +38,11 @@ _LAZY_MODULES: dict[str, set[str]] = {
         "log_substrate_freeze_policy",
     },
     "_surfaces": {
-        "SlabContainer",
+        "Substrate",
         "accept_substrate_for_api",
         "apply_surface_constraints",
         "auto_resize_substrate_for_molecule",
-        "coerce_slab_container",
+        "coerce_substrate",
         "compute_minimum_supercell",
         "create_slab_from_atoms",
         "create_slab_from_bulk",
@@ -63,13 +63,13 @@ _LAZY_MODULES: dict[str, set[str]] = {
 
 
 __all__ = [
-    "SlabContainer",
+    "Substrate",
     "accept_substrate_for_api",
     "apply_material_pbc",
     "apply_surface_constraints",
     "auto_resize_substrate_for_molecule",
     "check_frozen_substrate_displacement",
-    "coerce_slab_container",
+    "coerce_substrate",
     "compute_frozen_indices",
     "compute_minimum_supercell",
     "create_slab_from_atoms",

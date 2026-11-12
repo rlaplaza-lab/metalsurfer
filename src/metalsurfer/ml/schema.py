@@ -258,8 +258,7 @@ class ComputationContext:
     model_name: str = "uma-s-1p2"
     task_name: str = "oc25"
     dispersion: str = "none"
-    # Snapshot default for bare records; from_config always copies the real type.
-    material_type: str = "slab"
+    material_type: str = field(kw_only=True)
     fmax: float = DEFAULT_FMAX
     stage1_steps: int = 50
     stage2_steps: int = 150
@@ -276,20 +275,29 @@ class ComputationContext:
     planar_z_variance_threshold: float = DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD
 
     @classmethod
-    def from_config(cls, config: AdsorptionConfig) -> "ComputationContext":
+    def from_config(
+        cls, config: AdsorptionConfig, *, material_type: str
+    ) -> "ComputationContext":
         """Build a computation context from an AdsorptionConfig.
 
         Parameters
         ----------
         config
             Adsorption configuration to translate.
+        material_type
+            ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
 
         Returns
         -------
         ComputationContext
         """
         return cls(
-            **{spec.name: getattr(config, spec.name) for spec in _CONTEXT_FIELDS}
+            material_type=material_type,
+            **{
+                spec.name: getattr(config, spec.name)
+                for spec in _CONTEXT_FIELDS
+                if spec.name != "material_type"
+            },
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -311,13 +319,26 @@ class ComputationContext:
     def to_config(self) -> AdsorptionConfig:
         """Build an AdsorptionConfig matching this computation context."""
         return AdsorptionConfig(
-            **{spec.name: getattr(self, spec.name) for spec in _CONTEXT_FIELDS}
+            **{
+                spec.name: getattr(self, spec.name)
+                for spec in _CONTEXT_FIELDS
+                if spec.name != "material_type"
+            }
         )
+
+
+def _context_for_record(
+    config: AdsorptionConfig | None, *, material_type: str
+) -> ComputationContext:
+    if config is None:
+        return ComputationContext(material_type=material_type)
+    return ComputationContext.from_config(config, material_type=material_type)
 
 
 def config_to_context_row(
     config: AdsorptionConfig,
     *,
+    material_type: str,
     include_provenance: bool | None = None,
 ) -> dict[str, Any]:
     """Build computation-context fields for CSV / reproducibility.
@@ -330,12 +351,14 @@ def config_to_context_row(
     ----------
     config
         Adsorption configuration to translate.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     include_provenance
         If True, include full provenance fields.
     """
     if include_provenance is None:
         include_provenance = bool(config.export_placement_provenance)
-    ctx = ComputationContext.from_config(config)
+    ctx = _context_for_record(config, material_type=material_type)
     row: dict[str, Any] = {
         "context_hash": ctx.settings_hash(),
         "schema_version": SCHEMA_VERSION,
@@ -385,7 +408,9 @@ class PlacementRecord:
     label_source: str = "observed"
 
     # --- Computation context ---
-    context: ComputationContext = field(default_factory=ComputationContext)
+    context: ComputationContext = field(
+        default_factory=lambda: ComputationContext(material_type="slab")
+    )
 
     def __post_init__(self) -> None:
         """Canonicalize quaternion representation for deterministic records."""
@@ -441,6 +466,8 @@ class PlacementRecord:
         result: ScreeningResult,
         smiles: str,
         surface_id: str,
+        *,
+        material_type: str,
         config: AdsorptionConfig | None = None,
     ) -> "PlacementRecord":
         """Build a record from a validated ScreeningResult.
@@ -453,6 +480,8 @@ class PlacementRecord:
             SMILES string of the molecule.
         surface_id
             Surface identifier.
+        material_type
+            ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
         config
             Optional adsorption config for context.
         """
@@ -474,11 +503,7 @@ class PlacementRecord:
             failure_reason=None,
             is_penalty_label=False,
             label_source="observed",
-            context=(
-                ComputationContext.from_config(config)
-                if config is not None
-                else ComputationContext()
-            ),
+            context=_context_for_record(config, material_type=material_type),
         )
 
     @classmethod
@@ -486,6 +511,7 @@ class PlacementRecord:
         cls,
         descriptor: PlacementDescriptor,
         *,
+        material_type: str,
         molecule: str = "",
         smiles: str = "",
         surface_id: str = "",
@@ -498,6 +524,8 @@ class PlacementRecord:
         ----------
         descriptor
             Placement descriptor to convert.
+        material_type
+            ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
         molecule
             Molecule name.
         smiles
@@ -520,11 +548,7 @@ class PlacementRecord:
             surface_id=surface_id,
             placement_id=pid,
             descriptor=_normalized_descriptor(descriptor, placement_index=pid),
-            context=(
-                ComputationContext.from_config(config)
-                if config is not None
-                else ComputationContext()
-            ),
+            context=_context_for_record(config, material_type=material_type),
         )
 
     @classmethod
@@ -532,6 +556,7 @@ class PlacementRecord:
         cls,
         spec: PlacementSpec,
         *,
+        material_type: str,
         molecule: str = "",
         smiles: str = "",
         surface_id: str = "",
@@ -543,6 +568,8 @@ class PlacementRecord:
         ----------
         spec
             Placement spec to convert.
+        material_type
+            ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
         molecule
             Molecule name.
         smiles
@@ -562,11 +589,7 @@ class PlacementRecord:
             surface_id=surface_id,
             placement_id=spec.placement_index,
             descriptor=_descriptor_from_spec(spec),
-            context=(
-                ComputationContext.from_config(config)
-                if config is not None
-                else ComputationContext()
-            ),
+            context=_context_for_record(config, material_type=material_type),
         )
 
     def record_hash(self) -> str:
@@ -724,7 +747,7 @@ class PlacementRecord:
                         f"(row={row_hash!r}, reconstructed={reconstructed!r})"
                     )
         else:
-            ctx = ComputationContext()
+            ctx = ComputationContext(material_type="slab")
             row_hash = row.get("context_hash")
             if not _is_missing(row_hash):
                 default_hash = ctx.settings_hash()

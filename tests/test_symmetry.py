@@ -237,8 +237,8 @@ def test_get_symmetry_aware_sites_nanoparticle_envelope():
         atoms,
         top_layer_tolerance=2.0,
         symmetry_tolerance=0.3,
-        material_type="nanoparticle",
         raw_sites=raw,
+        material_type="nanoparticle",
     )
     assert len(sites) >= 1
     # Orbit multiplicities must partition the raw site list exactly.
@@ -257,15 +257,15 @@ def test_cube_nanoparticle_symmetry_reduces_redundant_sites_deterministically():
         atoms,
         top_layer_tolerance=2.0,
         symmetry_tolerance=0.1,
-        material_type="nanoparticle",
         raw_sites=raw,
+        material_type="nanoparticle",
     )
     sites2 = get_symmetry_aware_sites(
         atoms,
         top_layer_tolerance=2.0,
         symmetry_tolerance=0.1,
-        material_type="nanoparticle",
         raw_sites=raw,
+        material_type="nanoparticle",
     )
 
     assert len(sites1) == len(sites2)
@@ -813,18 +813,17 @@ def test_adaptive_grid_nanoparticle_symmetry_is_fast_and_reduces():
     start = time.perf_counter()
     sites = get_unified_sites(
         cluster,
-        material_type="nanoparticle",
         site_generator="adaptive_grid",
         n_jobs=1,
         probe_radius=1.2,
         max_site_distance=3.0,
+        material_type="nanoparticle",
     )
     enum_elapsed = time.perf_counter() - start
     assert len(sites) >= 5
     assert enum_elapsed < 30.0, f"adaptive_grid NP enumeration took {enum_elapsed:.2f}s"
 
     cfg = AdsorptionConfig(
-        material_type="nanoparticle",
         site_generator="adaptive_grid",
         n_jobs=1,
         slab_relaxation_mode="none",
@@ -834,7 +833,9 @@ def test_adaptive_grid_nanoparticle_symmetry_is_fast_and_reduces():
     with _SITE_CONTEXT_CACHE_LOCK:
         _SITE_CONTEXT_CACHE.clear()
     t1 = time.perf_counter()
-    ctx = resolve_site_context_for_sampling(cluster, cfg, symmetry_broken=False)
+    ctx = resolve_site_context_for_sampling(
+        cluster, cfg, symmetry_broken=False, material_type="nanoparticle"
+    )
     sym_elapsed = time.perf_counter() - t1
     assert ctx.use_sites and len(ctx.sites) > 0
     assert len(ctx.sites) <= len(sites)

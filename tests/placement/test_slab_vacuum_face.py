@@ -76,9 +76,9 @@ def test_all_site_plugins_explore_vacuum_richer_face_on_inverted_slab():
     for plugin in ("topology", "voronoi", "adaptive_grid", "rolling_probe"):
         sites = get_unified_sites(
             slab,
-            material_type="slab",
             site_generator=plugin,
             n_jobs=1,
+            material_type="slab",
         )
         assert sites
         site_h = height_along_slab_normal(

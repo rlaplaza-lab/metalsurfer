@@ -128,6 +128,7 @@ def _estimate_capacity_int(
     smiles: str,
     site_context: SiteContext | None,
     slab_atoms: Atoms,
+    material_type: str,
     grid_info: _SpecGridInfo | None = None,
 ) -> int:
     return max(
@@ -140,6 +141,7 @@ def _estimate_capacity_int(
             site_context=site_context,
             full_slab=slab_atoms,
             grid_info=grid_info,
+            material_type=material_type,
         ),
     )
 
@@ -153,6 +155,7 @@ def _clamp_target_to_capacity(
     smiles: str,
     site_context: SiteContext | None,
     slab_atoms: Atoms,
+    material_type: str,
     capacity: int | None = None,
     log_label: str = "",
 ) -> int:
@@ -167,6 +170,7 @@ def _clamp_target_to_capacity(
             smiles=smiles,
             site_context=site_context,
             slab_atoms=slab_atoms,
+            material_type=material_type,
         )
     if capacity >= n_target:
         return n_target
@@ -176,7 +180,7 @@ def _clamp_target_to_capacity(
         log_label,
         n_target,
         capacity,
-        config.material_type,
+        material_type,
     )
     return capacity
 
@@ -217,6 +221,7 @@ def materialize_specs(
     config: AdsorptionConfig,
     smiles: str,
     site_context: SiteContext | None,
+    material_type: str,
     slab_for_sites: Atoms | None = None,
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
     clamp_log_label: str = "",
@@ -234,6 +239,7 @@ def materialize_specs(
         smiles=smiles,
         site_context=site_context,
         slab_atoms=slab_atoms,
+        material_type=material_type,
         log_label=clamp_log_label,
         capacity=capacity,
     )
@@ -250,6 +256,7 @@ def materialize_specs(
         site_context=site_context,
         slab_for_sites=slab_for_sites,
         materialization_cache=materialization_cache,
+        material_type=material_type,
     )
     take = min(n_target, len(new_combined))
     return MaterializeFillResult(
@@ -272,6 +279,7 @@ def _materialize_pool_in_chunks(
     smiles: str,
     site_context: SiteContext | None,
     slab_for_sites: Atoms,
+    material_type: str,
     combined: list[Atoms],
     placement_ids: list[int],
     descriptors: list[PlacementDescriptor],
@@ -303,6 +311,7 @@ def _materialize_pool_in_chunks(
                 site_context=site_context,
                 slab_for_sites=slab_for_sites,
                 pose_cache=pose_cache,
+                material_type=material_type,
             )
         )
         for fail in new_failures:
@@ -329,6 +338,7 @@ def fill_materialized_placements(
     site_context: SiteContext | None,
     slab_atoms: Atoms,
     calculator,
+    material_type: str,
     conformer_energies: list[float] | None = None,
 ) -> MaterializeFillResult:
     """Enumerate an oversized pool once, materialize in chunks, take ``n_target``.
@@ -355,6 +365,7 @@ def fill_materialized_placements(
         smiles,
         site_context,
         full_slab=slab_atoms,
+        material_type=material_type,
     )
     capacity_int = _estimate_capacity_int(
         conformers=conformers,
@@ -363,6 +374,7 @@ def fill_materialized_placements(
         smiles=smiles,
         site_context=site_context,
         slab_atoms=slab_atoms,
+        material_type=material_type,
         grid_info=grid_info,
     )
     effective_target = _clamp_target_to_capacity(
@@ -373,6 +385,7 @@ def fill_materialized_placements(
         smiles=smiles,
         site_context=site_context,
         slab_atoms=slab_atoms,
+        material_type=material_type,
         capacity=capacity_int,
     )
     if effective_target <= 0:
@@ -423,6 +436,7 @@ def fill_materialized_placements(
             full_slab=slab_atoms,
             conformer_energies=conformer_energies,
             grid_info=grid_info,
+            material_type=material_type,
         )
         specs = _dedupe_same_height_specs(specs, site_is_void=_site_is_void)
         for spec in specs:
@@ -456,6 +470,7 @@ def fill_materialized_placements(
             smiles=smiles,
             site_context=site_context,
             slab_for_sites=slab_for_sites,
+            material_type=material_type,
             combined=combined,
             placement_ids=placement_ids,
             descriptors=descriptors,

@@ -19,9 +19,14 @@ from metalsurfer.models import (
     MultiMolSaturationRunResult,
     SaturationRunResult,
 )
+from metalsurfer.surface_prep import Substrate
 from metalsurfer.workflow.shared import MoleculeScreenOutcome
 from tests.conftest import make_screening_result, make_slab
 from tests.factories import make_multi_mol_saturation_run, make_saturation_run
+
+
+def _dummy_substrate():
+    return Substrate(make_slab(), material_type="slab")
 
 
 def _patch_binding_bootstrap(monkeypatch, slab_container, ref=None):
@@ -121,10 +126,9 @@ def test_run_saturation_bo_passes_bo_enabled_and_preserves_multi_molecule(monkey
     )
 
     campaign = run_saturation_bo(
-        slab=object(),
+        substrate=_dummy_substrate(),
         molecules="demo.csv",
         config=AdsorptionConfig(
-            material_type="slab",
             multi_molecule_saturation=True,
         ),
         surface_type="demo",
@@ -149,7 +153,10 @@ def test_run_saturation_passes_config_to_save_saturation_results(monkeypatch):
         results: object,
         surface_type: str = "manual",
         config: AdsorptionConfig | None = None,
+        *,
+        material_type: str = "slab",
     ) -> None:
+        del material_type
         captured["save_config"] = config
         captured["surface_type"] = surface_type
         captured["n_results"] = len(results)
@@ -174,11 +181,9 @@ def test_run_saturation_passes_config_to_save_saturation_results(monkeypatch):
         lambda surface_types, **kwargs: None,
     )
 
-    cfg = AdsorptionConfig(
-        material_type="slab", seed=999, saturation_save_all_placements=False
-    )
+    cfg = AdsorptionConfig(seed=999, saturation_save_all_placements=False)
     campaign = run_saturation(
-        slab=object(),
+        substrate=_dummy_substrate(),
         molecules=[("C", "demo")],
         config=cfg,
         surface_type="st_save_cfg",
@@ -198,7 +203,10 @@ def test_run_saturation_passes_config_to_save_saturation_results(monkeypatch):
 def test_run_saturation_save_benchmark_dataset(monkeypatch, multi_mol, expected_label):
     captured: dict[str, object] = {}
 
-    def fake_save_summary(run_results, surface_type="manual", config=None):
+    def fake_save_summary(
+        run_results, surface_type="manual", config=None, *, material_type="slab"
+    ):
+        del material_type
         captured["summary_runs"] = run_results
         captured["surface_type"] = surface_type
 
@@ -224,9 +232,9 @@ def test_run_saturation_save_benchmark_dataset(monkeypatch, multi_mol, expected_
         lambda surface_types, **kwargs: None,
     )
 
-    cfg = AdsorptionConfig(material_type="slab", save_benchmark_dataset=True)
+    cfg = AdsorptionConfig(save_benchmark_dataset=True)
     run_saturation(
-        slab=object(),
+        substrate=_dummy_substrate(),
         molecules=[("C", "demo")],
         config=cfg,
         surface_type="st_bench",
@@ -270,9 +278,9 @@ def test_run_saturation_write_settings_persists_json(workdir, monkeypatch):
     )
 
     campaign = run_saturation(
-        slab=object(),
+        substrate=_dummy_substrate(),
         molecules=[("C", "demo")],
-        config=AdsorptionConfig(material_type="slab", seed=1),
+        config=AdsorptionConfig(seed=1),
         surface_type="st_meta",
         skip_existing=False,
         write_settings=True,
@@ -293,7 +301,7 @@ def test_run_saturation_write_settings_persists_json(workdir, monkeypatch):
 
 def test_run_adsorption_csv_path_unified_with_inline(workdir, monkeypatch):
     """CSV input uses the same binding path as in-memory lists."""
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from tests.conftest import make_slab
 
     csv_path = workdir / "demo.csv"
@@ -301,12 +309,15 @@ def test_run_adsorption_csv_path_unified_with_inline(workdir, monkeypatch):
 
     placement = make_screening_result(molecule="demo", energy_adsorption=-1.0)
     saved_summary: dict[str, object] = {}
-    slab_container = SlabContainer(make_slab())
+    slab_container = Substrate(make_slab(), material_type="slab")
 
     def fake_process(_smi, mol, *_args, **_kwargs):
         return MoleculeScreenOutcome(results=[placement])
 
-    def fake_save_summary(run_results, surface_type="manual", config=None):
+    def fake_save_summary(
+        run_results, surface_type="manual", config=None, *, material_type="slab"
+    ):
+        del material_type
         saved_summary["run_results"] = run_results
         saved_summary["surface_type"] = surface_type
 
@@ -326,9 +337,9 @@ def test_run_adsorption_csv_path_unified_with_inline(workdir, monkeypatch):
     )
 
     campaign = run_adsorption(
-        slab=slab_container,
+        substrate=slab_container,
         molecules=str(csv_path),
-        config=AdsorptionConfig(material_type="slab", seed=1),
+        config=AdsorptionConfig(seed=1),
         surface_type="csv_demo",
         skip_existing=False,
         write_settings=False,
@@ -347,7 +358,7 @@ def test_run_adsorption_skip_existing_inline_list(workdir, monkeypatch):
     """In-memory molecule lists honor skip_existing via summary CSV."""
     import pandas as pd
 
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from tests.conftest import make_slab
 
     results_dir = workdir / "results_skip_inline"
@@ -358,7 +369,7 @@ def test_run_adsorption_skip_existing_inline_list(workdir, monkeypatch):
     )
 
     captured: dict[str, int] = {"count": 0}
-    slab_container = SlabContainer(make_slab())
+    slab_container = Substrate(make_slab(), material_type="slab")
 
     def fake_process(_smi, mol, *_args, **_kwargs):
         captured["count"] += 1
@@ -372,9 +383,9 @@ def test_run_adsorption_skip_existing_inline_list(workdir, monkeypatch):
     )
 
     campaign = run_adsorption(
-        slab=slab_container,
+        substrate=slab_container,
         molecules=[("O", "water"), ("CCO", "ethanol")],
-        config=AdsorptionConfig(material_type="slab", seed=1),
+        config=AdsorptionConfig(seed=1),
         surface_type="skip_inline",
         skip_existing=True,
         save_results=False,
@@ -395,9 +406,9 @@ def test_run_adsorption_warns_when_all_skipped(workdir):
     )
     with pytest.warns(UserWarning, match="adsorption_energies_detailed"):
         campaign = run_adsorption(
-            slab=object(),
+            substrate=_dummy_substrate(),
             molecules=[("O", "water")],
-            config=AdsorptionConfig(material_type="slab", seed=1),
+            config=AdsorptionConfig(seed=1),
             surface_type=surface_type,
             skip_existing=True,
             save_results=False,
@@ -412,7 +423,7 @@ def test_run_adsorption_warns_when_all_skipped(workdir):
 def test_run_saturation_skip_existing_inline_list(workdir, monkeypatch):
     import pandas as pd
 
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from tests.conftest import make_slab
 
     surface_type = "skip_saturation_inline"
@@ -423,7 +434,7 @@ def test_run_saturation_skip_existing_inline_list(workdir, monkeypatch):
     )
 
     processed = []
-    slab_container = SlabContainer(make_slab())
+    slab_container = Substrate(make_slab(), material_type="slab")
     _patch_saturation_screening(monkeypatch, slab_container, processed)
     monkeypatch.setattr(
         "metalsurfer.campaigns.setup_directories",
@@ -431,14 +442,14 @@ def test_run_saturation_skip_existing_inline_list(workdir, monkeypatch):
     )
 
     campaign = run_saturation(
-        slab=slab_container,
+        substrate=slab_container,
         molecules=[
             ("O", "water_CO2"),
             ("O", "water"),
             ("C", "CO2"),
             ("CCO", "ethanol"),
         ],
-        config=AdsorptionConfig(material_type="slab", seed=1),
+        config=AdsorptionConfig(seed=1),
         surface_type=surface_type,
         skip_existing=True,
         save_results=False,
@@ -452,7 +463,7 @@ def test_run_saturation_skip_existing_inline_list(workdir, monkeypatch):
 def test_run_saturation_logs_when_all_skipped(workdir, monkeypatch, caplog):
     import pandas as pd
 
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from tests.conftest import make_slab
 
     surface_type = "skip_saturation_all"
@@ -463,7 +474,7 @@ def test_run_saturation_logs_when_all_skipped(workdir, monkeypatch, caplog):
     )
 
     processed = []
-    slab_container = SlabContainer(make_slab())
+    slab_container = Substrate(make_slab(), material_type="slab")
     _patch_saturation_screening(monkeypatch, slab_container, processed)
     monkeypatch.setattr(
         "metalsurfer.campaigns.setup_directories",
@@ -472,9 +483,9 @@ def test_run_saturation_logs_when_all_skipped(workdir, monkeypatch, caplog):
 
     with caplog.at_level(logging.WARNING, logger="metalsurfer.workflow.saturation"):
         campaign = run_saturation(
-            slab=slab_container,
+            substrate=slab_container,
             molecules=[("O", "water"), ("CCO", "ethanol")],
-            config=AdsorptionConfig(material_type="slab", seed=1),
+            config=AdsorptionConfig(seed=1),
             surface_type=surface_type,
             skip_existing=True,
             save_results=False,
@@ -495,9 +506,9 @@ def test_run_adsorption_warns_when_input_empty(workdir):
     csv_path.write_text("smiles,name\n", encoding="utf-8")
     with pytest.warns(UserWarning, match="no valid rows"):
         campaign = run_adsorption(
-            slab=object(),
+            substrate=_dummy_substrate(),
             molecules=str(csv_path),
-            config=AdsorptionConfig(material_type="slab", seed=1),
+            config=AdsorptionConfig(seed=1),
             surface_type="empty_input",
             skip_existing=False,
             save_results=False,
@@ -538,9 +549,9 @@ def test_run_saturation_write_settings_includes_campaign_metadata(monkeypatch):
     )
 
     run_saturation(
-        slab=object(),
+        substrate=_dummy_substrate(),
         molecules=[("C", "demo")],
-        config=AdsorptionConfig(material_type="slab", seed=1),
+        config=AdsorptionConfig(seed=1),
         surface_type="st_meta_settings",
         skip_existing=False,
         write_settings=True,
@@ -555,7 +566,7 @@ def test_run_saturation_write_settings_includes_campaign_metadata(monkeypatch):
 
 def test_run_adsorption_save_results_false_skips_disk_writes(workdir, monkeypatch):
     """save_results=False skips structure and summary writes for CSV input."""
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from tests.conftest import make_slab
 
     csv_path = workdir / "demo.csv"
@@ -563,7 +574,7 @@ def test_run_adsorption_save_results_false_skips_disk_writes(workdir, monkeypatc
 
     placement = make_screening_result(molecule="demo", energy_adsorption=-1.0)
     saved: dict[str, bool] = {"single": False, "summary": False}
-    slab_container = SlabContainer(make_slab())
+    slab_container = Substrate(make_slab(), material_type="slab")
 
     def fake_process(_smi, mol, *_args, **_kwargs):
         return MoleculeScreenOutcome(results=[placement])
@@ -584,9 +595,9 @@ def test_run_adsorption_save_results_false_skips_disk_writes(workdir, monkeypatc
     )
 
     campaign = run_adsorption(
-        slab=slab_container,
+        substrate=slab_container,
         molecules=str(csv_path),
-        config=AdsorptionConfig(material_type="slab", seed=1),
+        config=AdsorptionConfig(seed=1),
         surface_type="no_save_csv",
         skip_existing=False,
         save_results=False,
@@ -623,7 +634,7 @@ def test_bootstrap_screening_run_validates_substrate_before_model(monkeypatch):
         _bootstrap_screening_run(
             object(),
             [("C", "demo")],
-            AdsorptionConfig(material_type="slab"),
+            AdsorptionConfig(),
         )
     assert model_called["value"] is False
 
@@ -631,13 +642,11 @@ def test_bootstrap_screening_run_validates_substrate_before_model(monkeypatch):
 def test_bootstrap_screening_run_reuses_torchsim_calculator(monkeypatch):
     """Reuse TorchSimCalculator when setup identity matches config."""
     from metalsurfer.optimization import TorchSimCalculator
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from metalsurfer.workflow.shared import _bootstrap_screening_run
     from tests.conftest import make_slab
 
-    config = AdsorptionConfig(
-        material_type="slab", model_name="uma-s-1p1", device="cpu", task_name="oc20"
-    )
+    config = AdsorptionConfig(model_name="uma-s-1p1", device="cpu", task_name="oc20")
     fake_model = object()
     calc = TorchSimCalculator(
         fake_model,
@@ -646,7 +655,7 @@ def test_bootstrap_screening_run_reuses_torchsim_calculator(monkeypatch):
         task_name=config.task_name,
     )
 
-    slab = SlabContainer(make_slab())
+    slab = Substrate(make_slab(), material_type="slab")
     slab.atoms.calc = calc
     slab.finalized = True
 
@@ -683,7 +692,7 @@ def test_bootstrap_screening_run_reuses_torchsim_calculator(monkeypatch):
 def test_bootstrap_screening_run_reloads_on_model_mismatch(monkeypatch):
     """Do not reuse a calculator built for a different model/device/task."""
     from metalsurfer.optimization import TorchSimCalculator
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from metalsurfer.workflow.shared import _bootstrap_screening_run
     from tests.conftest import make_slab
 
@@ -693,7 +702,7 @@ def test_bootstrap_screening_run_reloads_on_model_mismatch(monkeypatch):
         device="cpu",
         task_name="oc20",
     )
-    slab = SlabContainer(make_slab())
+    slab = Substrate(make_slab(), material_type="slab")
     slab.atoms.calc = attached
     slab.finalized = True
 
@@ -730,9 +739,7 @@ def test_bootstrap_screening_run_reloads_on_model_mismatch(monkeypatch):
     bootstrap = _bootstrap_screening_run(
         slab,
         [("C", "demo")],
-        AdsorptionConfig(
-            material_type="slab", model_name="uma-s-1p2", device="cpu", task_name="oc25"
-        ),
+        AdsorptionConfig(model_name="uma-s-1p2", device="cpu", task_name="oc25"),
     )
     assert setup_called["value"] is True
     assert bootstrap.calculator is fresh_calc
@@ -743,11 +750,11 @@ def test_write_settings_alone_writes_timing_metadata(workdir, monkeypatch):
     """write_settings=True (default) also persists timing into run_metadata.json."""
     import json
 
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from tests.conftest import make_slab
 
     placement = make_screening_result(molecule="demo", energy_adsorption=-1.0)
-    slab_container = SlabContainer(make_slab())
+    slab_container = Substrate(make_slab(), material_type="slab")
 
     def fake_process(_smi, mol, *_args, **_kwargs):
         return MoleculeScreenOutcome(results=[placement])
@@ -768,9 +775,9 @@ def test_write_settings_alone_writes_timing_metadata(workdir, monkeypatch):
     )
 
     run_adsorption(
-        slab=slab_container,
+        substrate=slab_container,
         molecules=[("C", "demo")],
-        config=AdsorptionConfig(material_type="slab", seed=1),
+        config=AdsorptionConfig(seed=1),
         surface_type="meta_or",
         skip_existing=False,
         write_settings=True,

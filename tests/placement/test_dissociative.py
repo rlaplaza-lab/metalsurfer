@@ -43,7 +43,6 @@ def test_dissociative_heights_are_evenly_spaced_contact_to_vdw():
 
     def _offsets(z_range: tuple[float, float]) -> list[float]:
         config = AdsorptionConfig(
-            material_type="slab",
             skip_topology_check=True,
             placement_z_range=z_range,
         )
@@ -55,6 +54,7 @@ def test_dissociative_heights_are_evenly_spaced_contact_to_vdw():
                 slab,
                 config,
                 smiles="[H][H]",
+                material_type="slab",
             )
             assert result is not None, f"dissociative H2 failed at z={zf}: {reason}"
             out.append(float(result[1].z_offset))
@@ -72,8 +72,8 @@ def test_hollow_site_pairs_found_for_slab():
     from ase.geometry import find_mic
 
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab")
-    pairs = _get_dissociative_site_pairs(slab, config)
+    config = AdsorptionConfig()
+    pairs = _get_dissociative_site_pairs(slab, config, material_type="slab")
     assert len(pairs) >= 8, (
         f"4×4 FCC-like slab should yield many hollow-site pairs, got {len(pairs)}"
     )
@@ -107,7 +107,7 @@ def test_porous_dissociative_places_fragment2_on_mic_image():
         cell=np.diag([10.0, 10.0, 10.0]),
         pbc=True,
     )
-    config = AdsorptionConfig(material_type="porous", skip_topology_check=True)
+    config = AdsorptionConfig(skip_topology_check=True)
 
     def _site(xyz: list[float]) -> Site:
         return Site(
@@ -122,7 +122,10 @@ def test_porous_dissociative_places_fragment2_on_mic_image():
 
     sites = [_site([0.5, 5.0, 5.0]), _site([8.5, 5.0, 5.0])]
     pairs = _compute_dissociative_site_pairs(
-        framework, config, pre_resolved_sites=sites
+        framework,
+        config,
+        pre_resolved_sites=sites,
+        material_type="porous",
     )
     assert pairs
     pair = pairs[0]
@@ -144,7 +147,6 @@ def test_dissociative_pairs_ignore_calculator_ttt_on_slabs():
         pbc=[True, True, True],
     )
     config = AdsorptionConfig(
-        material_type="slab",
         min_adsorbate_separation=1.0,
         skip_topology_check=True,
     )
@@ -167,7 +169,9 @@ def test_dissociative_pairs_ignore_calculator_ttt_on_slabs():
         _site([4.0, 2.0, 8.0]),
         _site([2.0, 2.0, 0.4]),
     ]
-    pairs = _compute_dissociative_site_pairs(slab, config, pre_resolved_sites=stacked)
+    pairs = _compute_dissociative_site_pairs(
+        slab, config, pre_resolved_sites=stacked, material_type="slab"
+    )
     in_plane = [
         float(np.hypot(*(np.asarray(p.xyz1)[:2] - np.asarray(p.xyz2)[:2])))
         for p in pairs
@@ -183,6 +187,7 @@ def test_dissociative_pairs_ignore_calculator_ttt_on_slabs():
         config,
         existing_adsorbate_positions=np.array([[2.0, 2.0, 0.4]]),
         pre_resolved_sites=stacked[:2],
+        material_type="slab",
     )
     assert kept
 
@@ -296,12 +301,13 @@ def test_mean_nn_separation_mic_matches_find_mic_reference():
 def test_dissociative_placement_supported_for_nanoparticle():
     nanoparticle = make_nanoparticle()
     config = AdsorptionConfig(
-        material_type="nanoparticle",
         skip_topology_check=True,
         enable_dissociative_placement=True,
         num_placements=1,
     )
-    pairs = _get_dissociative_site_pairs(nanoparticle, config)
+    pairs = _get_dissociative_site_pairs(
+        nanoparticle, config, material_type="nanoparticle"
+    )
     assert pairs, "Au₁₃ fixture must expose dissociative site pairs"
     # Pair catalog must come from wall hollow/bridge sites only (not atop/void).
     hollow_sites = [
@@ -322,6 +328,7 @@ def test_dissociative_placement_supported_for_nanoparticle():
         [h2],
         nanoparticle,
         config,
+        material_type="nanoparticle",
     )
     assert result is not None, reason
     placed, descriptor = result
@@ -338,7 +345,10 @@ def test_dissociative_placement_supported_for_nanoparticle():
     placed_pairs = _get_dissociative_site_pairs(
         nanoparticle,
         config,
-        site_context=site_context_for_sampling(nanoparticle, config, None),
+        site_context=site_context_for_sampling(
+            nanoparticle, config, None, material_type="nanoparticle"
+        ),
+        material_type="nanoparticle",
     )
     pair = placed_pairs[int(descriptor.site_index)]
     pair_sep = float(np.linalg.norm(np.asarray(pair.xyz1) - np.asarray(pair.xyz2)))
@@ -360,7 +370,6 @@ def test_np_dissociative_pairs_ignore_atop_and_bridge_in_mixed_catalog():
     """A mixed raw catalog must not produce atop–atop or atop–hollow pairs."""
     nanoparticle = make_nanoparticle()
     config = AdsorptionConfig(
-        material_type="nanoparticle",
         enable_dissociative_placement=True,
         skip_topology_check=True,
     )
@@ -375,6 +384,7 @@ def test_np_dissociative_pairs_ignore_atop_and_bridge_in_mixed_catalog():
         config,
         raw_sites=all_sites,
         cell_arr=cell,
+        material_type="nanoparticle",
     )
     assert filtered
     assert all(
@@ -382,7 +392,9 @@ def test_np_dissociative_pairs_ignore_atop_and_bridge_in_mixed_catalog():
     )
     assert all(s.site_type != "atop" for s in filtered)
 
-    pairs = _get_dissociative_site_pairs(nanoparticle, config, raw_sites=all_sites)
+    pairs = _get_dissociative_site_pairs(
+        nanoparticle, config, raw_sites=all_sites, material_type="nanoparticle"
+    )
     assert pairs, "hollow subset must still yield dissociative pairs"
     hollow_xyz = {tuple(np.round(s.xyz, 6)) for s in filtered}
     for pair in pairs:
@@ -397,10 +409,12 @@ def test_dissociative_wrap_pair_cartesian_separation_matches_mic():
 
     slab = fcc111("Pt", (3, 3, 3), vacuum=10.0)
     slab.set_pbc([True, True, False])
-    config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
+    config = AdsorptionConfig(skip_topology_check=True)
     # Public generate indexes the sampling catalog, not the adatom-hollow shortcut.
-    ctx = site_context_for_sampling(slab, config, None)
-    pairs = _get_dissociative_site_pairs(slab, config, site_context=ctx)
+    ctx = site_context_for_sampling(slab, config, None, material_type="slab")
+    pairs = _get_dissociative_site_pairs(
+        slab, config, site_context=ctx, material_type="slab"
+    )
     assert pairs, "Pt 3x3 must expose dissociative hollow pairs"
 
     cell = np.asarray(slab.get_cell(), dtype=float)
@@ -425,7 +439,7 @@ def test_dissociative_wrap_pair_cartesian_separation_matches_mic():
     for idx, pair, mic_sep in wrap_pairs[:3]:
         spec = dissoc_placement_spec(site_index=idx)
         result, reason = generate_placement_from_spec_with_reason(
-            spec, [h2], slab, config
+            spec, [h2], slab, config, material_type="slab"
         )
         assert result is not None, reason
         placed, descriptor = result
@@ -449,13 +463,17 @@ def test_dissociative_placement_on_slab_separates_and_clears_surface():
     from ase.geometry import find_mic
 
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
-    ctx = site_context_for_sampling(slab, config, None)
-    pairs = _get_dissociative_site_pairs(slab, config, site_context=ctx)
+    config = AdsorptionConfig(skip_topology_check=True)
+    ctx = site_context_for_sampling(slab, config, None, material_type="slab")
+    pairs = _get_dissociative_site_pairs(
+        slab, config, site_context=ctx, material_type="slab"
+    )
     assert pairs, "fixture slab must expose hollow pairs for dissociative placement"
     h2 = make_h2()
     spec = dissoc_placement_spec()
-    result, reason = generate_placement_from_spec_with_reason(spec, [h2], slab, config)
+    result, reason = generate_placement_from_spec_with_reason(
+        spec, [h2], slab, config, material_type="slab"
+    )
     assert result is not None, reason
     placed, descriptor = result
     assert descriptor.orientation_type == "dissociative"
@@ -517,7 +535,6 @@ def test_porous_wall_hollows_pair_when_dissociative_enabled():
 
     porous = make_porous_framework()
     config = AdsorptionConfig(
-        material_type="porous",
         enable_dissociative_placement=True,
         skip_topology_check=True,
     )
@@ -574,7 +591,9 @@ def test_porous_wall_hollows_pair_when_dissociative_enabled():
         source="test",
         clustered_sites=[wall_a, wall_b, pore_a, pore_b],
     )
-    pairs = _get_dissociative_site_pairs(porous, config, site_context=ctx)
+    pairs = _get_dissociative_site_pairs(
+        porous, config, site_context=ctx, material_type="porous"
+    )
     assert len(pairs) >= 1
 
     pore_only = SiteContext(
@@ -583,16 +602,23 @@ def test_porous_wall_hollows_pair_when_dissociative_enabled():
         source="test",
         clustered_sites=[pore_a, pore_b],
     )
-    assert _get_dissociative_site_pairs(porous, config, site_context=pore_only) == []
+    assert (
+        _get_dissociative_site_pairs(
+            porous, config, site_context=pore_only, material_type="porous"
+        )
+        == []
+    )
 
 
 def test_dissociative_fragment_positions_round_trip():
     """fragment_positions must match the placed dissociative geometry."""
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab", enable_dissociative_placement=True)
+    config = AdsorptionConfig(enable_dissociative_placement=True)
     h2 = make_h2()
     spec = dissoc_placement_spec()
-    result, reason = generate_placement_from_spec_with_reason(spec, [h2], slab, config)
+    result, reason = generate_placement_from_spec_with_reason(
+        spec, [h2], slab, config, material_type="slab"
+    )
     assert result is not None, reason
     placed, descriptor = result
     assert descriptor.fragment_positions is not None
@@ -612,13 +638,14 @@ def test_enable_dissociative_placement_without_topology_skip():
     slab = make_slab()
     h2 = make_h2()
     config = AdsorptionConfig(
-        material_type="slab",
         enable_dissociative_placement=True,
         skip_topology_check=False,
         num_placements=4,
         seed=0,
     )
-    specs = enumerate_placement_specs([h2], slab, config, "HH", n_desired=4)
+    specs = enumerate_placement_specs(
+        [h2], slab, config, "HH", n_desired=4, material_type="slab"
+    )
     assert specs
     assert all(s.orientation_type == "dissociative" for s in specs)
 
@@ -633,25 +660,29 @@ def test_dissociative_com_features_and_record_replay():
     slab = make_slab()
     h2 = make_h2()
     config = AdsorptionConfig(
-        material_type="slab",
         enable_dissociative_placement=True,
         num_placements=32,
         seed=0,
     )
-    specs = enumerate_placement_specs([h2], slab, config, "HH", n_desired=32)
+    specs = enumerate_placement_specs(
+        [h2], slab, config, "HH", n_desired=32, material_type="slab"
+    )
     feature_rows: list[tuple[float, ...]] = []
     row_sites: list[int] = []
     by_pair: dict[int, list[tuple[float, tuple[float, ...]]]] = {}
     for spec in specs:
         result, _reason = generate_placement_from_spec_with_reason(
-            spec, [h2], slab, config
+            spec, [h2], slab, config, material_type="slab"
         )
         if result is None:
             continue
         placed, descriptor = result
         assert descriptor.fragment_positions is not None
         record = PlacementRecord.from_descriptor(
-            descriptor, molecule="H2", smiles="[H][H]"
+            descriptor,
+            molecule="H2",
+            smiles="[H][H]",
+            material_type="slab",
         )
         assert record.descriptor.fragment_positions == descriptor.fragment_positions
         feats = extract_features(record)
@@ -703,13 +734,16 @@ def test_fcc_catalog_has_atop_bridge_hollow_and_topology_majority():
 
 def test_dissociative_pair_cache_key_includes_voronoi_params():
     slab = make_slab()
-    base = AdsorptionConfig(material_type="slab")
+    base = AdsorptionConfig()
     alt = AdsorptionConfig(
-        material_type="slab",
         voronoi_probe_radius=(base.voronoi_probe_radius or 1.0) + 0.5,
     )
-    assert _dissociative_pair_cache_key(slab, base) != _dissociative_pair_cache_key(
-        slab, alt
+    assert _dissociative_pair_cache_key(
+        slab, base, material_type="slab"
+    ) != _dissociative_pair_cache_key(
+        slab,
+        alt,
+        material_type="slab",
     )
 
 
@@ -719,7 +753,7 @@ def test_dissociative_pair_cache_ignores_site_context_calls():
     from metalsurfer.placement.site_context import SiteContext
 
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
+    config = AdsorptionConfig(skip_topology_check=True)
 
     lonely = Site(
         xyz=np.array([1.0, 1.0, 6.0]),
@@ -737,10 +771,12 @@ def test_dissociative_pair_cache_ignores_site_context_calls():
         raw_unclustered=[lonely],
         clustered_sites=[lonely],
     )
-    empty = _get_dissociative_site_pairs(slab, config, site_context=ctx)
+    empty = _get_dissociative_site_pairs(
+        slab, config, site_context=ctx, material_type="slab"
+    )
     assert empty == []
 
-    full = _get_dissociative_site_pairs(slab, config)
+    full = _get_dissociative_site_pairs(slab, config, material_type="slab")
     assert full, "clean-slab path must still discover pairs after a site_context call"
     assert len(_DISSOCIATIVE_PAIR_CACHE) >= 1
 
@@ -755,8 +791,8 @@ def test_dissociative_pair_cache_hits_with_site_context_and_occupancy(monkeypatc
     )
 
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
-    core = _get_unique_sites_for_specs(slab, config)
+    config = AdsorptionConfig(skip_topology_check=True)
+    core = _get_unique_sites_for_specs(slab, config, material_type="slab")
     ctx = SiteContext(
         sites=core.sites,
         use_sites=True,
@@ -767,7 +803,11 @@ def test_dissociative_pair_cache_hits_with_site_context_and_occupancy(monkeypatc
     occ = np.array([[0.5, 0.5, 8.0]], dtype=float)
 
     first = _get_dissociative_site_pairs(
-        slab, config, existing_adsorbate_positions=occ, site_context=ctx
+        slab,
+        config,
+        existing_adsorbate_positions=occ,
+        site_context=ctx,
+        material_type="slab",
     )
     n_cached = len(_DISSOCIATIVE_PAIR_CACHE)
     assert n_cached >= 1
@@ -781,14 +821,22 @@ def test_dissociative_pair_cache_hits_with_site_context_and_occupancy(monkeypatc
 
     monkeypatch.setattr(dissoc_mod, "_compute_dissociative_site_pairs", _counting)
     second = _get_dissociative_site_pairs(
-        slab, config, existing_adsorbate_positions=occ, site_context=ctx
+        slab,
+        config,
+        existing_adsorbate_positions=occ,
+        site_context=ctx,
+        material_type="slab",
     )
     assert calls["n"] == 0
     assert len(second) == len(first)
 
     other_occ = np.array([[5.0, 5.0, 8.0]], dtype=float)
     _get_dissociative_site_pairs(
-        slab, config, existing_adsorbate_positions=other_occ, site_context=ctx
+        slab,
+        config,
+        existing_adsorbate_positions=other_occ,
+        site_context=ctx,
+        material_type="slab",
     )
     assert calls["n"] == 1
     assert len(_DISSOCIATIVE_PAIR_CACHE) > n_cached
@@ -802,8 +850,8 @@ def test_dissociative_uses_clustered_not_raw_near_duplicates():
     )
 
     slab = make_slab(nx=3, ny=3)
-    config = AdsorptionConfig(material_type="slab", skip_topology_check=True)
-    core = _get_unique_sites_for_specs(slab, config)
+    config = AdsorptionConfig(skip_topology_check=True)
+    core = _get_unique_sites_for_specs(slab, config, material_type="slab")
     assert core.clustered_sites
     hollows = [s for s in core.clustered_sites if s.site_type in ("hollow", "pore")]
     assert len(hollows) >= 2
@@ -821,13 +869,21 @@ def test_dissociative_uses_clustered_not_raw_near_duplicates():
     cell = np.asarray(slab.get_cell(), dtype=float)
     n_clustered = len(
         _resolve_dissociative_site_entries(
-            slab, config, site_context=core, cell_arr=cell
+            slab,
+            config,
+            site_context=core,
+            cell_arr=cell,
+            material_type="slab",
         )
     )
     # Explicit raw list clusters near-duplicates before the hollow filter.
     n_raw = len(
         _resolve_dissociative_site_entries(
-            slab, config, raw_sites=inflated_raw, cell_arr=cell
+            slab,
+            config,
+            raw_sites=inflated_raw,
+            cell_arr=cell,
+            material_type="slab",
         )
     )
     assert n_raw == n_clustered
@@ -843,6 +899,7 @@ def test_dissociative_uses_clustered_not_raw_near_duplicates():
                 raw_unclustered=inflated_raw,
             ),
             cell_arr=cell,
+            material_type="slab",
         )
     )
     assert n_legacy == n_clustered

@@ -9,11 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- ``material_type`` is required on ``AdsorptionConfig`` and substrate helpers.
-  Atoms PBC must match the declared type (slab ``TTF``, nanoparticle ``FFF``,
-  porous ``TTT``); mismatches raise instead of rewriting PBC or inferring from
-  vacuum gaps. Site enumeration, placement, filters, and clustering read
-  ``atoms.get_pbc()`` after that check.
+- ``material_type`` is required on ``Substrate`` (and YAML
+  ``substrate.material_type``); it is removed from ``AdsorptionConfig``.
+  ``SlabContainer`` / ``coerce_slab_container`` are renamed to ``Substrate`` /
+  ``coerce_substrate`` (no alias). Campaign APIs take ``run_*(substrate=...)``
+  instead of ``slab=``. Atoms PBC must match the declared type (slab ``TTF``,
+  nanoparticle ``FFF``, porous ``TTT``); mismatches raise instead of rewriting
+  PBC or inferring from vacuum gaps. Site enumeration, placement, filters, and
+  clustering read ``atoms.get_pbc()`` after that check.
 - Slab site paths explore the vacuum-richer face along ``a×b`` by default
   (``side_policy="positive"``). ``negative`` is the opposite face; ``all`` keeps
   both. Near-ties keep ``+a×b`` via ``SLAB_VACUUM_FACE_MARGIN_ANG``.

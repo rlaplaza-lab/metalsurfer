@@ -403,6 +403,7 @@ def build_spec_features_geometry_aware(
     slab: Atoms,
     config: AdsorptionConfig,
     *,
+    material_type: str,
     smiles: str | None = None,
     molecule: str = "",
     surface_id: str = "",
@@ -431,6 +432,8 @@ def build_spec_features_geometry_aware(
         Surface slab atoms.
     config
         Adsorption configuration.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     smiles
         Optional SMILES string for the molecule.
     molecule
@@ -456,6 +459,7 @@ def build_spec_features_geometry_aware(
         conformers,
         slab,
         config,
+        material_type=material_type,
         smiles=smiles,
         site_context=site_context,
         slab_for_sites=slab_for_sites,
@@ -482,6 +486,7 @@ def build_spec_features_geometry_aware(
             smiles=smiles or "",
             surface_id=surface_id,
             config=config,
+            material_type=material_type,
         )
         rows.append(extract_features(record))
         valid_indices.append(i)

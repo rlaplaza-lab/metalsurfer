@@ -9,7 +9,7 @@ from ase import Atoms
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.exceptions import OptimizationError
 from metalsurfer.models import ReferenceEnergies
-from metalsurfer.surface_prep import SlabContainer
+from metalsurfer.surface_prep import Substrate
 from metalsurfer.workflow import reference
 from tests.conftest import make_slab, mock_calculator
 
@@ -49,7 +49,7 @@ def _patch_reference_helpers(
 
 class TestCalculateReferenceEnergies:
     def test_happy_path_returns_lowest_conformer_energy(self, monkeypatch):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))
         confs = [_make_atoms(), _make_atoms()]
         # (atoms, energy) tuples; the lowest energy must win.
@@ -68,7 +68,7 @@ class TestCalculateReferenceEnergies:
             ["water"],
             ["O"],
             ts_model=object(),
-            config=AdsorptionConfig(material_type="slab"),
+            config=AdsorptionConfig(),
         )
 
         assert isinstance(ref, ReferenceEnergies)
@@ -80,7 +80,7 @@ class TestCalculateReferenceEnergies:
         assert cache_calls[0].get("clear_capacity") is True
 
     def test_non_finite_slab_energy_raises(self, monkeypatch):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=float("nan"), n_atoms=len(slab.atoms))
         _patch_reference_helpers(monkeypatch)
 
@@ -91,11 +91,11 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(material_type="slab"),
+                config=AdsorptionConfig(),
             )
 
     def test_zero_slab_energy_raises(self, monkeypatch):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=1e-7, n_atoms=len(slab.atoms))
         _patch_reference_helpers(monkeypatch)
 
@@ -106,12 +106,12 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(material_type="slab"),
+                config=AdsorptionConfig(),
             )
 
     def test_boundary_slab_energy_1e_6_accepted(self, monkeypatch):
         """abs(E) == 1e-6 is the reject threshold; equal is accepted (strict <)."""
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=1e-6, n_atoms=len(slab.atoms))
         confs = [_make_atoms()]
         _patch_reference_helpers(
@@ -125,12 +125,12 @@ class TestCalculateReferenceEnergies:
             ["water"],
             ["O"],
             ts_model=object(),
-            config=AdsorptionConfig(material_type="slab"),
+            config=AdsorptionConfig(),
         )
         assert ref.slab_energy == pytest.approx(1e-6)
 
     def test_zero_exact_slab_energy_raises(self, monkeypatch):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=0.0, n_atoms=len(slab.atoms))
         _patch_reference_helpers(monkeypatch)
         with pytest.raises(OptimizationError, match="effectively zero"):
@@ -140,11 +140,11 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(material_type="slab"),
+                config=AdsorptionConfig(),
             )
 
     def test_inf_slab_energy_raises(self, monkeypatch):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=float("inf"), n_atoms=len(slab.atoms))
         _patch_reference_helpers(monkeypatch)
         with pytest.raises(OptimizationError, match="not finite"):
@@ -154,12 +154,12 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(material_type="slab"),
+                config=AdsorptionConfig(),
             )
 
     def test_empty_slab_n_atoms_zero_path(self, monkeypatch):
         """Calculator with n_atoms=0 still goes through energy gates on returned energy."""
-        empty = SlabContainer(Atoms())
+        empty = Substrate(Atoms(), material_type="slab")
         calc = mock_calculator(energy=-1.0, n_atoms=0)
         confs = [_make_atoms()]
         _patch_reference_helpers(
@@ -173,13 +173,13 @@ class TestCalculateReferenceEnergies:
             ["water"],
             ["O"],
             ts_model=object(),
-            config=AdsorptionConfig(material_type="slab"),
+            config=AdsorptionConfig(),
         )
         assert ref.slab_energy == pytest.approx(-1.0)
         assert ref.molecule_energies == {"water": -5.0}
 
     def test_conformer_failure_raises_when_strict(self, monkeypatch):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))
         # create_conformers_from_smiles returns None.
         _patch_reference_helpers(monkeypatch, conformers=None)
@@ -191,13 +191,11 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(
-                    material_type="slab", fail_on_conformer_failure=True
-                ),
+                config=AdsorptionConfig(fail_on_conformer_failure=True),
             )
 
     def test_conformer_failure_omits_molecule_when_lenient(self, monkeypatch, caplog):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))
         _patch_reference_helpers(monkeypatch, conformers=None)
 
@@ -208,9 +206,7 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(
-                    material_type="slab", fail_on_conformer_failure=False
-                ),
+                config=AdsorptionConfig(fail_on_conformer_failure=False),
             )
         assert ref.slab_energy == -100.0
         assert "water" not in ref.molecule_energies
@@ -220,7 +216,7 @@ class TestCalculateReferenceEnergies:
         )
 
     def test_empty_optimization_results_raises_when_strict(self, monkeypatch):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))
         confs = [_make_atoms()]
         # create_conformers succeeds, but optimize returns no results.
@@ -233,15 +229,13 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(
-                    material_type="slab", fail_on_conformer_failure=True
-                ),
+                config=AdsorptionConfig(fail_on_conformer_failure=True),
             )
 
     def test_empty_optimization_results_omits_molecule_when_lenient(
         self, monkeypatch, caplog
     ):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))
         confs = [_make_atoms()]
         _patch_reference_helpers(monkeypatch, conformers=(confs, [0.0]), opt_results=[])
@@ -253,9 +247,7 @@ class TestCalculateReferenceEnergies:
                 ["water"],
                 ["O"],
                 ts_model=object(),
-                config=AdsorptionConfig(
-                    material_type="slab", fail_on_conformer_failure=False
-                ),
+                config=AdsorptionConfig(fail_on_conformer_failure=False),
             )
         assert ref.slab_energy == -100.0
         assert "water" not in ref.molecule_energies
@@ -302,7 +294,7 @@ def test_predictor_atom_refs_follow_sum_model_child():
 
 class TestSingleAtomUmaRefs:
     def test_uses_atom_refs_and_skips_optimize(self, monkeypatch):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))
         opt_calls: list[int] = []
         _patch_reference_helpers(
@@ -323,14 +315,14 @@ class TestSingleAtomUmaRefs:
             ["oxygen"],
             ["[O]"],
             ts_model=_StubModel(refs),
-            config=AdsorptionConfig(material_type="slab"),
+            config=AdsorptionConfig(),
         )
         assert opt_calls == []
         assert result.molecule_energies["oxygen"] == pytest.approx(skin)
         assert result.conformer_packs["oxygen"][1] == [pytest.approx(skin)]
 
     def test_missing_refs_skip_optimize_and_omit(self, monkeypatch):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))
         opt_calls: list[int] = []
         _patch_reference_helpers(
@@ -349,16 +341,14 @@ class TestSingleAtomUmaRefs:
             ["oxygen"],
             ["[O]"],
             ts_model=object(),
-            config=AdsorptionConfig(
-                material_type="slab", fail_on_conformer_failure=False
-            ),
+            config=AdsorptionConfig(fail_on_conformer_failure=False),
         )
         assert opt_calls == []
         assert "oxygen" not in result.molecule_energies
         assert "oxygen" not in result.conformer_packs
 
     def test_missing_refs_raise_when_strict(self, monkeypatch):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         calc = mock_calculator(energy=-100.0, n_atoms=len(slab.atoms))
         _patch_reference_helpers(
             monkeypatch,
@@ -372,7 +362,5 @@ class TestSingleAtomUmaRefs:
                 ["oxygen"],
                 ["[O]"],
                 ts_model=object(),
-                config=AdsorptionConfig(
-                    material_type="slab", fail_on_missing_reference=True
-                ),
+                config=AdsorptionConfig(fail_on_missing_reference=True),
             )

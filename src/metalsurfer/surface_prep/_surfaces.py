@@ -1,4 +1,4 @@
-"""Slab construction (bulk + Miller), alloy substitution, adatoms, and ``SlabContainer``."""
+"""Slab construction (bulk + Miller), alloy substitution, adatoms, and ``Substrate``."""
 
 import copy
 import logging
@@ -21,6 +21,7 @@ from ..config import (
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
     AdsorptionConfig,
+    validate_site_generator_for_material,
 )
 from ..exceptions import (
     DependencyMissingError,
@@ -37,6 +38,7 @@ from ..placement._material import (
     calculator_pbc_for_atoms,
     material_aware_pbc,
     require_atoms_pbc_matches_material,
+    validate_material_type,
 )
 from ..placement.geometry import _get_covalent_radius
 from ..placement.site_coords import _periodic_image_offsets
@@ -93,20 +95,24 @@ def _dependency_error_for_slab_import(exc: ImportError) -> DependencyMissingErro
     )
 
 
-class SlabContainer:
-    """Minimal wrapper that mimics the FAIRChem ``Slab`` interface.
+class Substrate:
+    """Campaign handle for a slab, nanoparticle, or porous framework.
 
-    Existing workflows access the ASE Atoms via ``slab.atoms``.  This
-    container lets generic code produce an object with the same API
-    without requiring the FAIRChem data package.
-
-    ``finalized`` is set by :func:`~metalsurfer.surface_prep.finalize_substrate`
-    after full vacuum/cell/PBC validation so campaign entry points can skip
-    repeating that work.
+    Access the ASE structure via ``substrate.atoms``. ``material_type`` is
+    required. ``finalized`` is set by
+    :func:`~metalsurfer.surface_prep.finalize_substrate` after validation so
+    campaign entry points can skip repeating that work.
     """
 
-    def __init__(self, atoms: Atoms, *, finalized: bool = False):
+    def __init__(
+        self,
+        atoms: Atoms,
+        *,
+        material_type: str,
+        finalized: bool = False,
+    ):
         self.atoms = atoms
+        self.material_type = validate_material_type(material_type)
         self.finalized = finalized
 
 
@@ -221,21 +227,17 @@ def apply_surface_constraints(
     return result
 
 
-def coerce_slab_container(
-    slab: SlabContainer | Atoms,
+def coerce_substrate(
+    slab: Substrate | Atoms,
     *,
+    material_type: str | None = None,
     copy: bool = False,
-) -> SlabContainer:
-    """Normalize slab-like input to :class:`SlabContainer` without modification.
+) -> Substrate:
+    """Normalize input to :class:`Substrate` without changing geometry.
 
-    Accepts either a pre-wrapped ``SlabContainer`` or a plain ASE ``Atoms``
-    object. Policy:
-
-    - Already a ``SlabContainer``: returned as-is unless ``copy=True``, in which
-      case a new container wrapping ``atoms.copy()`` is returned (``finalized``
-      flag is preserved).
-    - Plain ``Atoms``: always wrapped in a new container around ``atoms.copy()``
-      so caller state is not mutated across workflow steps.
+    - Already a :class:`Substrate`: returned as-is unless ``copy=True``
+      (preserves ``finalized``; a passed *material_type* must match).
+    - Plain ``Atoms``: *material_type* required; atoms are always copied.
 
     Geometry alignment, sizing, and constraints must be applied via the prep
     helpers before calling campaign APIs.
@@ -243,18 +245,34 @@ def coerce_slab_container(
     Parameters
     ----------
     slab
-        SlabContainer or ASE Atoms.
+        Substrate or ASE Atoms.
+    material_type
+        Required for bare Atoms; must match an existing Substrate.
     copy
-        Whether to copy the underlying atoms.
+        Copy a Substrate's atoms. Bare Atoms are always copied.
     """
-    if isinstance(slab, SlabContainer):
+    if isinstance(slab, Substrate):
+        if material_type is not None and material_type != slab.material_type:
+            raise ValueError(
+                f"material_type {material_type!r} does not match substrate "
+                f"material_type {slab.material_type!r}"
+            )
         if not copy:
             return slab
-        return SlabContainer(slab.atoms.copy(), finalized=slab.finalized)
+        return Substrate(
+            slab.atoms.copy(),
+            material_type=slab.material_type,
+            finalized=slab.finalized,
+        )
     if isinstance(slab, Atoms):
-        return SlabContainer(slab.copy())
+        if material_type is None:
+            raise ValueError(
+                "material_type is required when wrapping ase.Atoms "
+                "('slab', 'nanoparticle', or 'porous')"
+            )
+        return Substrate(slab.copy(), material_type=material_type)
     raise TypeError(
-        f"slab must be a SlabContainer or ase.Atoms, got {type(slab).__name__}"
+        f"substrate must be a Substrate or ase.Atoms, got {type(slab).__name__}"
     )
 
 
@@ -420,36 +438,42 @@ def _check_api_substrate_invariants(slab: Atoms) -> None:
 
 
 def accept_substrate_for_api(
-    slab: SlabContainer | Atoms,
+    slab: Substrate,
     *,
     config: AdsorptionConfig,
-) -> SlabContainer:
-    """Wrap and return a substrate ready for campaign APIs.
+) -> Substrate:
+    """Return a substrate ready for campaign APIs.
 
-    When *slab* is already a finalized :class:`SlabContainer` (from
+    When *slab* is already finalized (from
     :func:`~metalsurfer.surface_prep.finalize_substrate`), only API invariants
-    are checked — full vacuum/cell validation is not repeated. Plain ``Atoms``
-    or non-finalized containers still run :func:`validate_substrate`.
+    are checked — full vacuum/cell validation is not repeated. A non-finalized
+    :class:`Substrate` still runs :func:`validate_substrate`. Bare ``Atoms``
+    are rejected.
 
     Parameters
     ----------
     slab
-        SlabContainer or ASE Atoms substrate.
+        Prepared :class:`Substrate`.
     config
         Adsorption configuration.
     """
-    container = coerce_slab_container(slab)
-    if container.finalized:
-        _check_api_substrate_invariants(container.atoms)
+    if not isinstance(slab, Substrate):
+        raise TypeError(
+            "pass Substrate(..., material_type=...) or prepare_substrate; "
+            f"got {type(slab).__name__}"
+        )
+    validate_site_generator_for_material(config.site_generator, slab.material_type)
+    if slab.finalized:
+        _check_api_substrate_invariants(slab.atoms)
     else:
         validate_substrate(
-            container.atoms,
-            material_type=config.material_type,
+            slab.atoms,
+            material_type=slab.material_type,
             config=config,
             conformers=None,
             require_bottom_anchor=False,
         )
-    return container
+    return slab
 
 
 # ---------------------------------------------------------------------------
@@ -464,12 +488,13 @@ def create_slab_from_bulk(
     results_dir: str = "results",
     calculator=None,
     *,
+    material_type: str,
     config: AdsorptionConfig,
     relaxation_mode: SLAB_RELAXATION_MODE | None = None,
     relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER | None = None,
     relaxation_fmax: float | None = None,
     relaxation_steps: int | None = None,
-) -> SlabContainer:
+) -> Substrate:
     """Create a surface slab from a Materials Project bulk entry.
 
     Applies :func:`ensure_slab_z_alignment`.
@@ -486,6 +511,8 @@ def create_slab_from_bulk(
         Directory where reference POSCAR / XYZ files are saved.
     calculator:
         Optional calculator used when slab relaxation is requested.
+    material_type:
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     config:
         Adsorption configuration.
     relaxation_mode:
@@ -576,7 +603,7 @@ def create_slab_from_bulk(
     )
     logger.info("Saved clean slab reference files to %s", results_dir)
 
-    return SlabContainer(slab.atoms)
+    return Substrate(slab.atoms, material_type=material_type)
 
 
 def create_slab_from_atoms(
@@ -584,8 +611,8 @@ def create_slab_from_atoms(
     *,
     material_type: str,
     align: bool = True,
-) -> SlabContainer:
-    """Wrap an existing ASE ``Atoms`` object into a :class:`SlabContainer`.
+) -> Substrate:
+    """Wrap an existing ASE ``Atoms`` object into a :class:`Substrate`.
 
     Sets geometric PBC for *material_type* (ASE builders often leave slabs as
     ``[T,T,T]``). When *material_type* is ``"slab"`` and *align* is true, also
@@ -601,7 +628,7 @@ def create_slab_from_atoms(
     align
         Whether to apply z-alignment for slabs.
     """
-    container = coerce_slab_container(atoms)
+    container = coerce_substrate(atoms, material_type=material_type)
     if material_type == "slab" and align:
         container.atoms = ensure_slab_z_alignment(container.atoms)
     container.atoms.set_pbc(material_aware_pbc(material_type))
@@ -803,7 +830,7 @@ def _rank_alloy_variants(
 
 
 def substitute_alloy(
-    slab: SlabContainer | Atoms,
+    slab: Substrate | Atoms,
     host_symbol: str,
     guest_symbol: str,
     guest_fraction: float,
@@ -814,9 +841,10 @@ def substitute_alloy(
     enforce_top_layer_fraction: bool = False,
     top_layer_tolerance: float | None = None,
     *,
+    material_type: str | None = None,
     config: AdsorptionConfig,
     results_dir: str = "results",
-) -> SlabContainer:
+) -> Substrate:
     """Randomly replace *guest_fraction* of *host_symbol* atoms with *guest_symbol*.
 
     Multiple random variants are generated and scored; the lowest-energy
@@ -831,7 +859,7 @@ def substitute_alloy(
     Parameters
     ----------
     slab
-        SlabContainer or ASE Atoms substrate.
+        Substrate or ASE Atoms substrate.
     host_symbol
         Element symbol to replace.
     guest_symbol
@@ -855,7 +883,7 @@ def substitute_alloy(
     results_dir
         Directory for output files.
     """
-    slab = coerce_slab_container(slab)
+    slab = coerce_substrate(slab, material_type=material_type)
 
     if not 0.0 <= guest_fraction <= 1.0:
         raise ValueError(
@@ -876,7 +904,7 @@ def substitute_alloy(
             "Guest_fraction=%.2f yields 0 replacements; returning base slab",
             guest_fraction,
         )
-        return SlabContainer(base)
+        return Substrate(base, material_type=slab.material_type)
 
     rng = np.random.RandomState(seed)
     best_atoms = None
@@ -983,7 +1011,7 @@ def substitute_alloy(
     )
     logger.info("Saved alloy slab (%s) to %s", label, results_dir)
 
-    return SlabContainer(best_atoms)
+    return Substrate(best_atoms, material_type=slab.material_type)
 
 
 # ---------------------------------------------------------------------------
@@ -992,7 +1020,7 @@ def substitute_alloy(
 
 
 def deposit_adatoms(
-    slab: SlabContainer | Atoms,
+    slab: Substrate | Atoms,
     adatom_symbol: str,
     coverage_fraction: float,
     calculator=None,
@@ -1002,12 +1030,13 @@ def deposit_adatoms(
     seed: int | None = None,
     results_dir: str = "results",
     *,
+    material_type: str | None = None,
     config: AdsorptionConfig,
     relaxation_mode: SLAB_RELAXATION_MODE | None = None,
     relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER | None = None,
     relaxation_fmax: float | None = None,
     relaxation_steps: int | None = None,
-) -> SlabContainer:
+) -> Substrate:
     """Place *adatom_symbol* atoms at hollow sites above the top layer.
 
     Candidate hollow/pore sites come from the clustered unique-site catalog
@@ -1021,7 +1050,7 @@ def deposit_adatoms(
     Parameters
     ----------
     slab
-        SlabContainer or ASE Atoms substrate.
+        Substrate or ASE Atoms substrate.
     adatom_symbol
         Element symbol of the adatom.
     coverage_fraction
@@ -1057,7 +1086,7 @@ def deposit_adatoms(
         relaxation_steps=relaxation_steps,
     )
 
-    slab = coerce_slab_container(slab)
+    slab = coerce_substrate(slab, material_type=material_type)
 
     if not 0.0 <= coverage_fraction <= 1.0:
         raise ValueError(
@@ -1071,9 +1100,9 @@ def deposit_adatoms(
         )
         frozen = apply_surface_constraints(
             slab.atoms.copy(),
-            material_type=config.material_type,
+            material_type=slab.material_type,
         )
-        return SlabContainer(frozen)
+        return Substrate(frozen, material_type=slab.material_type)
     if mode != "none" and calculator is None:
         raise ValueError(
             f"deposit_adatoms relaxation mode={mode!r} requires a calculator"
@@ -1100,7 +1129,7 @@ def deposit_adatoms(
     candidate_sites = get_hollow_sites_for_adatoms(
         base,
         top_layer_tolerance=top_tol,
-        material_type=config.material_type,
+        material_type=slab.material_type,
         probe_radius=config.voronoi_probe_radius,
         max_site_distance=config.voronoi_max_site_distance,
         enrich=config.voronoi_site_enrichment,
@@ -1130,7 +1159,7 @@ def deposit_adatoms(
     best_energy = float("inf")
     best_atoms = None
 
-    pbc = list(material_aware_pbc(config.material_type))
+    pbc = list(material_aware_pbc(slab.material_type))
     cell = np.asarray(base.get_cell(), dtype=float)
     image_offsets = _periodic_image_offsets(
         cell, np.asarray(pbc, dtype=bool), min_adatom_separation
@@ -1234,9 +1263,9 @@ def deposit_adatoms(
     # so adatoms are frozen with the rest of the substrate (default freeze-all).
     best_atoms = apply_surface_constraints(
         best_atoms,
-        material_type=config.material_type,
+        material_type=slab.material_type,
     )
-    return SlabContainer(best_atoms)
+    return Substrate(best_atoms, material_type=slab.material_type)
 
 
 # ---------------------------------------------------------------------------
@@ -1310,10 +1339,12 @@ def compute_minimum_supercell(
 
 
 def auto_resize_substrate_for_molecule(
-    slab: SlabContainer | Atoms,
+    slab: Substrate | Atoms,
     conformers: list[Atoms],
     min_separation: float = 8.0,
-) -> tuple[SlabContainer, bool]:
+    *,
+    material_type: str | None = None,
+) -> tuple[Substrate, bool]:
     """Resize *slab* in-plane so periodic images are well separated.
 
     Returns ``(slab, was_resized)`` where *was_resized* is ``True``
@@ -1322,13 +1353,13 @@ def auto_resize_substrate_for_molecule(
     Parameters
     ----------
     slab
-        SlabContainer or ASE Atoms substrate.
+        Substrate or ASE Atoms substrate.
     conformers
         List of conformer ASE Atoms.
     min_separation
         Minimum image separation in Å.
     """
-    slab = coerce_slab_container(slab)
+    slab = coerce_substrate(slab, material_type=material_type)
 
     diameter = _molecule_diameter(conformers)
     cell = np.array(slab.atoms.get_cell())
@@ -1348,4 +1379,4 @@ def auto_resize_substrate_for_molecule(
         len(slab.atoms),
         len(new_atoms),
     )
-    return SlabContainer(new_atoms), True
+    return Substrate(new_atoms, material_type=slab.material_type), True

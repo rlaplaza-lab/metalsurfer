@@ -10,8 +10,8 @@ and :doc:`../guides/surface_engineering`.
 
    Configuration for adsorption screening, Bayesian search, and saturation.
 
-   Primary knobs: ``model_name``, ``num_conformers``, ``num_placements``, and
-   ``material_type``. For dissociative adsorption (e.g. H₂ → 2H), set
+   Primary knobs: ``model_name``, ``num_conformers``, and ``num_placements``.
+   For dissociative adsorption (e.g. H₂ → 2H), set
    ``enable_dissociative_placement=True`` and usually ``skip_topology_check=True``
    so connectivity filters allow fragmented adsorbates. Use ``run_*_bo`` (or
    YAML ``campaign: adsorption_bo`` / ``saturation_bo``) for Bayesian placement
@@ -31,17 +31,11 @@ Every attribute on :class:`~metalsurfer.AdsorptionConfig` is documented once bel
 grouped by pipeline stage. Defaults match the installed package version; when in
 doubt, inspect ``metalsurfer.config.AdsorptionConfig`` in source.
 
-Material and substrate
-~~~~~~~~~~~~~~~~~~~~~~
+Substrate-related settings
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``material_type``
-   **Type:** ``Literal["slab", "nanoparticle", "porous"]`` · **Required** (no default)
-
-   Declares the system type. Must match the substrate ASE PBC mask exactly:
-   ``"slab"`` → ``[True, True, False]`` (2D, one ignored face);
-   ``"nanoparticle"`` → ``[False, False, False]`` (3D closed surface);
-   ``"porous"`` → ``[True, True, True]`` (3D, all walls). A mismatch raises;
-   flags are never rewritten. See :doc:`../guides/configuration`.
+``material_type`` is not an ``AdsorptionConfig`` field; set it on the
+substrate (:doc:`surface_prep`). See :doc:`../guides/configuration`.
 
 ``top_layer_tolerance``
    **Type:** ``float`` · **Default:** ``0.5`` (Å)

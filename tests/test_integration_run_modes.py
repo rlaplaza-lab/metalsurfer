@@ -44,7 +44,7 @@ from metalsurfer.placement.site_context import (
     SiteContext,
     resolve_site_context_for_sampling,
 )
-from metalsurfer.surface_prep import SlabContainer
+from metalsurfer.surface_prep import Substrate
 from metalsurfer.workflow import process_molecule_bayesian
 from metalsurfer.workflow.shared import (
     ScreeningRunBootstrap,
@@ -87,8 +87,8 @@ def _tiny_config(**overrides: Any) -> AdsorptionConfig:
     relaxed ``max_force_convergence`` (stub optimizer does not attach forces).
     Physics gates (desorption, topology, energy cap, contact) stay at defaults.
     """
+    overrides.pop("material_type", None)
     defaults: dict[str, Any] = {
-        "material_type": "slab",
         "seed": 42,
         "num_conformers": 1,
         "num_placements": 8,
@@ -131,13 +131,13 @@ def _bo_config(**overrides: Any) -> AdsorptionConfig:
     )
 
 
-def _substrate(material_type: str) -> SlabContainer:
+def _substrate(material_type: str) -> Substrate:
     if material_type == "slab":
         # Default 4×4×3 passes image-separation checks; orbit reduction is
         # skipped in the harness so this stays CI-fast.
-        return SlabContainer(make_slab())
+        return Substrate(make_slab(), material_type="slab")
     if material_type == "nanoparticle":
-        return SlabContainer(make_nanoparticle())
+        return Substrate(make_nanoparticle(), material_type="nanoparticle")
     if material_type == "porous":
         atoms = make_porous_framework()
         # Calculator requires c ≥ 18 Å for porous cells.
@@ -145,7 +145,7 @@ def _substrate(material_type: str) -> SlabContainer:
         if float(np.linalg.norm(cell[2])) < 18.0:
             cell[2] = cell[2] / np.linalg.norm(cell[2]) * 20.0
             atoms.set_cell(cell, scale_atoms=False)
-        return SlabContainer(atoms)
+        return Substrate(atoms, material_type="porous")
     raise ValueError(f"unknown material_type: {material_type}")
 
 
@@ -160,7 +160,7 @@ class _StubHarness:
 
     def __init__(
         self,
-        slab: SlabContainer,
+        slab: Substrate,
         *,
         molecule_name: str = MOL_NAME,
         saturation_schedule: bool = False,
@@ -218,7 +218,13 @@ class _StubHarness:
                 slab=self.slab,
             )
 
-        def resolve_sites_ci_fast(slab_atoms, config, *, symmetry_broken: bool):
+        def resolve_sites_ci_fast(
+            slab_atoms,
+            config,
+            *,
+            material_type: str,
+            symmetry_broken: bool,
+        ):
             # Keep real Voronoi clustering; skip orbit reduction (pathological on
             # hand-built / large porous fixtures in CI). Cap site count so BO /
             # enumeration stay fast with large porous cells.
@@ -226,6 +232,7 @@ class _StubHarness:
                 slab_atoms,
                 config,
                 symmetry_broken=True,
+                material_type=material_type,
             )
             max_sites = 32
             if ctx.use_sites and len(ctx.sites) > max_sites:
@@ -555,7 +562,7 @@ def test_run_adsorption_substrate_matrix(
         assert config.skip_topology_check is False
 
     campaign = run_adsorption(
-        slab=slab,
+        substrate=slab,
         molecules=[(smiles, mol_name)],
         config=config,
         surface_type=surface_type,
@@ -604,7 +611,7 @@ def test_run_saturation_substrate_matrix(workdir, monkeypatch, material_type):
     config = _tiny_config(material_type=material_type, saturation_max_steps=2)
     surface_type = f"e2e_sat_{material_type}"
     campaign = run_saturation(
-        slab=slab,
+        substrate=slab,
         molecules=[(MOL_SMILES, MOL_NAME)],
         config=config,
         surface_type=surface_type,
@@ -665,6 +672,7 @@ def test_optimize_receives_slab_relaxation_mode(monkeypatch, slab_relaxation_mod
         config=config,
         energies=(E_SLAB, E_MOL),
         molecule_name=MOL_NAME,
+        material_type="slab",
     )
     assert seen == [slab_relaxation_mode]
     assert n_failed == 0
@@ -699,7 +707,7 @@ def test_run_adsorption_rejects_crushed_geometries(workdir, monkeypatch):
     )
 
     campaign = run_adsorption(
-        slab=slab,
+        substrate=slab,
         molecules=[(MOL_SMILES, MOL_NAME)],
         config=_tiny_config(num_placements=4),
         surface_type="e2e_crush_reject",
@@ -732,7 +740,7 @@ def _stubbed_campaign(
     harness = _StubHarness(slab, saturation_schedule=saturation_schedule)
     harness.apply(monkeypatch)
     return api_fn(
-        slab=slab,
+        substrate=slab,
         molecules=[(MOL_SMILES, MOL_NAME)],
         config=config,
         surface_type=surface_type,

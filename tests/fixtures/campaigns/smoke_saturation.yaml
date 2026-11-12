@@ -2,6 +2,7 @@
 campaign: saturation
 surface_type: smoke_saturation
 substrate:
+  material_type: slab
   bulk_id: mp-30
   miller_indices: [1, 1, 1]
   supercell: [1, 1, 1]
@@ -9,7 +10,6 @@ molecules:
   - smiles: O
     name: water
 config:
-  material_type: slab
   model_name: uma-s-1p1
   task_name: oc20
   seed: 1

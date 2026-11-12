@@ -87,7 +87,6 @@ def main() -> int:
     results_dir = f"results_{results_subdir}"
 
     config = AdsorptionConfig(
-        material_type="slab",
         slab_relaxation_mode="none",
         model_name="uma-s-1p1",
         task_name="oc20",
@@ -102,11 +101,12 @@ def main() -> int:
         slab=slab,
         config=config,
         results_dir=results_dir,
-        relax_top_layer=True,  # Allow top GO layer to relax with adsorbate
+        relax_top_layer=True,  # Allow top GO layer to relax with adsorbate,
+        material_type="slab",
     )
 
     campaign = run_adsorption_bo(
-        slab=slab,
+        substrate=slab,
         molecules=MOLECULES,
         config=config,
         surface_type=results_subdir,

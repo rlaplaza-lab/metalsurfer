@@ -57,17 +57,18 @@ See the [installation guide](https://metalsurfer.readthedocs.io/en/latest/guides
 ```python
 from metalsurfer import AdsorptionConfig, prepare_substrate, run_adsorption
 
-config = AdsorptionConfig(material_type="slab", seed=42)
+config = AdsorptionConfig(seed=42)
 
-slab = prepare_substrate(
+substrate = prepare_substrate(
     bulk_id="mp-33",
     miller_indices=(0, 0, 1),
+    material_type="slab",
     config=config,
     results_dir="results_Ru0001",
 )
 
 result = run_adsorption(
-    slab=slab,
+    substrate=substrate,
     molecules=[("C=C", "ethene")],
     config=config,
     surface_type="Ru0001",
@@ -89,7 +90,7 @@ for summary in result.molecule_summaries:
 | Configuration options | `AdsorptionConfig` | [Field reference](https://metalsurfer.readthedocs.io/en/latest/api/config.html) · [Configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html) |
 | YAML campaign | `load_campaign_yaml` + `run_campaign` | Demo YAMLs in [`examples/`](examples/); production templates in [`scripts/campaigns/`](scripts/campaigns/); `campaign:` is `adsorption` / `adsorption_bo` / `saturation` / `saturation_bo` ([API](https://metalsurfer.readthedocs.io/en/latest/api/campaigns.html)) |
 
-`material_type` is required (`slab`, `nanoparticle`, or `porous`) and must match the substrate ASE PBC mask (`[T,T,F]`, `[F,F,F]`, or `[T,T,T]`). Geometry follows that mask: 2D slabs ignore one face; 3D systems use the whole surface. See the [configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html).
+`material_type` is required on the substrate (`slab`, `nanoparticle`, or `porous`) — pass it to `prepare_substrate` / `finalize_substrate` or construct `Substrate(..., material_type=...)`. It must match the ASE PBC mask (`[T,T,F]`, `[F,F,F]`, or `[T,T,T]`). Geometry follows that mask: 2D slabs ignore one face; 3D systems use the whole surface. Campaign APIs take a prepared `Substrate` via `substrate=` (bare `Atoms` are rejected). See the [configuration guide](https://metalsurfer.readthedocs.io/en/latest/guides/configuration.html).
 
 Output is written under `results_{surface_type}/` (XYZ structures, CSV summaries, optional VASP inputs). See [architecture — output structure](https://metalsurfer.readthedocs.io/en/latest/guides/architecture.html#output-structure) for layout details.
 

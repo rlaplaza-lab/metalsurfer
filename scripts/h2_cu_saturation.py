@@ -17,7 +17,6 @@ def main():
     results_dir = f"results_{surface_type}"
 
     config = AdsorptionConfig(
-        material_type="slab",
         num_conformers=1,
         num_placements=250,
         enable_dissociative_placement=True,
@@ -30,10 +29,11 @@ def main():
         supercell=(1, 1, 1),
         config=config,
         results_dir=results_dir,
+        material_type="slab",
     )
 
     campaign = run_saturation(
-        slab=slab,
+        substrate=slab,
         molecules=[("[H][H]", "H2")],
         config=config,
         surface_type=surface_type,

@@ -113,7 +113,6 @@ def main() -> int:
     results_dir = str(results_dir_for(surface_type))
 
     config = AdsorptionConfig(
-        material_type="nanoparticle",
         num_conformers=1,
         num_placements=10,
         enable_dissociative_placement=True,
@@ -121,13 +120,14 @@ def main() -> int:
     )
 
     nanocluster = prepare_substrate(
+        material_type="nanoparticle",
         slab=_pt13_icosahedron(),
         config=config,
         results_dir=results_dir,
     )
 
     campaign = run_adsorption(
-        slab=nanocluster,
+        substrate=nanocluster,
         molecules=[("[H][H]", "H2")],
         config=config,
         surface_type=surface_type,

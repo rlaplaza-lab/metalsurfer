@@ -96,7 +96,6 @@ def main() -> int:
     results_dir = str(results_dir_for(surface_type))
 
     config = AdsorptionConfig(
-        material_type="nanoparticle",
         num_conformers=3,
         num_placements=25,
         n_jobs=1,
@@ -104,13 +103,14 @@ def main() -> int:
     )
 
     nanocluster = prepare_substrate(
+        material_type="nanoparticle",
         slab=_ru55_icosahedron(),
         config=config,
         results_dir=results_dir,
     )
 
     campaign = run_adsorption(
-        slab=nanocluster,
+        substrate=nanocluster,
         molecules=[("C=C", "ethene")],
         config=config,
         surface_type=surface_type,

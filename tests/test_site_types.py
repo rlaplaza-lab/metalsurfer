@@ -13,12 +13,11 @@ def _site(**overrides) -> Site:
         normal=np.array([0.0, 0.0, 1.0]),
         site_type="atop",
         slab_indices=(0,),
-        material_type="slab",
         site_source="voronoi",
         env_fingerprint=(),
     )
     base.update(overrides)
-    return Site(**base)
+    return Site(**base, material_type="slab")
 
 
 def test_site_xy_returns_copy():

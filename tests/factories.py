@@ -52,7 +52,7 @@ def make_placement_record(
         energy_slab=-145.0,
         energy_adsorbate=-5.0,
         distance=2.3,
-        context=ComputationContext(),
+        context=ComputationContext(material_type="slab"),
     )
 
 
@@ -126,7 +126,7 @@ def make_random_placement_records(
             "placement_id": i,
             "descriptor": descriptor,
             "energy_adsorption": e_ads,
-            "context": ComputationContext(),
+            "context": ComputationContext(material_type="slab"),
         }
         if with_binding_energies:
             kwargs["energy_adslab"] = float(-150 + e_ads)

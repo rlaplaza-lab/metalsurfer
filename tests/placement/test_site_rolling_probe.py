@@ -32,11 +32,9 @@ from ..conftest import make_nanoparticle, make_porous_framework, make_slab
 
 
 def test_rolling_probe_accepted_on_adsorption_config():
-    cfg = AdsorptionConfig(site_generator="rolling_probe", material_type="slab")
+    cfg = AdsorptionConfig(site_generator="rolling_probe")
     assert cfg.site_generator == "rolling_probe"
     assert cfg.side_policy == "positive"
-    for mat in ("slab", "nanoparticle", "porous"):
-        AdsorptionConfig(site_generator="rolling_probe", material_type=mat)
 
 
 def test_triplet_gate_uses_chosen_image_separation_not_mic(monkeypatch):
@@ -130,17 +128,17 @@ def test_side_policy_splits_slab_faces():
     slab = make_slab(nx=3, ny=3, n_layers=3)
     pos = get_unified_sites(
         slab,
-        material_type="slab",
         site_generator="rolling_probe",
         side_policy="positive",
         n_jobs=1,
+        material_type="slab",
     )
     neg = get_unified_sites(
         slab,
-        material_type="slab",
         site_generator="rolling_probe",
         side_policy="negative",
         n_jobs=1,
+        material_type="slab",
     )
     assert pos and neg
     assert np.mean([s.xyz[2] for s in pos]) > np.mean([s.xyz[2] for s in neg])
@@ -164,9 +162,9 @@ def test_porous_wall_near_not_pore_centres():
     framework = make_porous_framework()
     rp = get_unified_sites(
         framework,
-        material_type="porous",
         site_generator="rolling_probe",
         n_jobs=1,
+        material_type="porous",
     )
     assert rp
     assert {s.site_type for s in rp} & {"atop", "bridge", "hollow"}
@@ -182,7 +180,6 @@ def test_porous_wall_near_not_pore_centres():
 
     ads = Atoms("CO2", positions=[[0.0, 0.0, 0.0], [1.16, 0.0, 0.0], [-1.16, 0.0, 0.0]])
     cfg = AdsorptionConfig(
-        material_type="porous",
         site_generator="rolling_probe",
         num_placements=6,
         num_conformers=1,
@@ -190,11 +187,16 @@ def test_porous_wall_near_not_pore_centres():
         slab_relaxation_mode="none",
     )
     specs = enumerate_placement_specs(
-        [ads], framework, cfg, smiles="O=C=O", n_desired=6
+        [ads], framework, cfg, smiles="O=C=O", n_desired=6, material_type="porous"
     )
     assert specs
     results = generate_placements_from_specs(
-        specs, [ads], framework, cfg, smiles="O=C=O"
+        specs,
+        [ads],
+        framework,
+        cfg,
+        smiles="O=C=O",
+        material_type="porous",
     )
     assert any(pair is not None for pair, _reason in results)
 
@@ -216,16 +218,19 @@ def test_rolling_probe_placement_materialization_on_slab():
     ads = Atoms("CO", positions=[[0.0, 0.0, 0.0], [1.13, 0.0, 0.0]])
     atoms = make_slab()
     cfg = AdsorptionConfig(
-        material_type="slab",
         site_generator="rolling_probe",
         num_placements=8,
         num_conformers=1,
         n_jobs=1,
         slab_relaxation_mode="none",
     )
-    specs = enumerate_placement_specs([ads], atoms, cfg, smiles="C=O", n_desired=8)
+    specs = enumerate_placement_specs(
+        [ads], atoms, cfg, smiles="C=O", n_desired=8, material_type="slab"
+    )
     assert specs
-    results = generate_placements_from_specs(specs, [ads], atoms, cfg, smiles="C=O")
+    results = generate_placements_from_specs(
+        specs, [ads], atoms, cfg, smiles="C=O", material_type="slab"
+    )
     ok = [pair for pair, _reason in results if pair is not None]
     assert ok
     for placed, _desc in ok:
@@ -237,8 +242,8 @@ def test_rolling_probe_placement_materialization_on_slab():
 def test_rolling_probe_dissociative_hollows_on_slab():
     hollows = get_hollow_sites_for_adatoms(
         make_slab(nx=3, ny=3, n_layers=3),
-        material_type="slab",
         site_generator="rolling_probe",
+        material_type="slab",
     )
     assert hollows
     assert all(s.site_type in ("hollow", "pore") for s in hollows)
@@ -279,13 +284,14 @@ def test_rolling_probe_porous_keeps_all_walls():
 def test_rolling_probe_site_context_uses_shared_symmetry_path():
     slab = make_slab(nx=3, ny=3, n_layers=3)
     cfg = AdsorptionConfig(
-        material_type="slab",
         site_generator="rolling_probe",
         n_jobs=1,
         slab_relaxation_mode="none",
     )
     with _SITE_CONTEXT_CACHE_LOCK:
         _SITE_CONTEXT_CACHE.clear()
-    ctx = resolve_site_context_for_sampling(slab, cfg, symmetry_broken=False)
+    ctx = resolve_site_context_for_sampling(
+        slab, cfg, symmetry_broken=False, material_type="slab"
+    )
     assert ctx.use_sites and len(ctx.sites) > 0
     assert all(s.slab_indices for s in ctx.sites)

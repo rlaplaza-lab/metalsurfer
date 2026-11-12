@@ -46,9 +46,7 @@ def test_unified_sites_slab_tracks_the_top_layer():
 @pytest.mark.parametrize("mode", ["spec", "pose"])
 def test_slab_replay_reproduces_positions(mode):
     slab = make_slab()
-    config = adsorption_config_factory(
-        material_type="slab", num_placements=10, placement_z_range=(2.0, 3.0)
-    )
+    config = adsorption_config_factory(num_placements=10, placement_z_range=(2.0, 3.0))
     conformers = water_conformers()
     spec, result = _first_successful_placement(
         conformers, slab, config, "O", n_desired=10

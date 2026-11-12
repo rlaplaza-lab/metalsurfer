@@ -706,7 +706,6 @@ def test_cco_generation_yield_meets_seeded_bar():
     slab = make_slab()
     n_desired = 30
     config = AdsorptionConfig(
-        material_type="slab",
         num_conformers=5,
         num_placements=n_desired,
         seed=42,
@@ -717,12 +716,18 @@ def test_cco_generation_yield_meets_seeded_bar():
     assert result is not None
     conformers, _ = result
     specs = enumerate_placement_specs(
-        conformers, slab, config, "CCO", n_desired=n_desired, seed=42
+        conformers,
+        slab,
+        config,
+        "CCO",
+        n_desired=n_desired,
+        seed=42,
+        material_type="slab",
     )
     n_ok = 0
     for spec in specs:
         placed = generate_placement_from_spec(
-            spec, conformers, slab, config, smiles="CCO"
+            spec, conformers, slab, config, smiles="CCO", material_type="slab"
         )
         if placed is not None:
             n_ok += 1

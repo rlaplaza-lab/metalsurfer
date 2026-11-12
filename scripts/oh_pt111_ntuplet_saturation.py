@@ -46,7 +46,6 @@ SITE_ORDER = ("atop", "bridge", "hollow")
 def make_base_config() -> AdsorptionConfig:
     """Shared saturation knobs for the isolated / sequential / n-tuplet runs."""
     return AdsorptionConfig(
-        material_type="slab",
         num_conformers=1,
         num_placements=250,
     )
@@ -200,7 +199,7 @@ def run_campaign(
 ) -> SaturationRunResult | None:
     results_dir = results_dir_for(surface_type).as_posix()
     campaign = run_saturation(
-        slab=slab,
+        substrate=slab,
         molecules=MOLECULES,
         config=config,
         surface_type=surface_type,
@@ -232,6 +231,7 @@ def main() -> int:
         config=base,
         results_dir=prep_dir,
         relax_top_layer=True,
+        material_type="slab",
     )
 
     isolated = run_campaign(

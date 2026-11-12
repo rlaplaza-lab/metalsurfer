@@ -127,7 +127,10 @@ def _enumerate_from(
         full_slab=None,
         conformer_energies=None,
         grid_info=None,
+        *,
+        material_type="slab",
     ):
+        del material_type
         return make_specs(n_desired, filter_spec)
 
     return fake_enumerate
@@ -211,7 +214,6 @@ def _run_two_round_fill(
         conformers=[make_water() for _ in range(n_conformers)],
         slab_for_sites=slab,
         config=AdsorptionConfig(
-            material_type="slab",
             num_placements=1,
             placement_retry_enabled=True,
             placement_retry_oversample_max=2.0,
@@ -222,6 +224,7 @@ def _run_two_round_fill(
         site_context=ctx,
         slab_atoms=slab,
         calculator=None,
+        material_type="slab",
     )
     return result, seen
 
@@ -271,6 +274,7 @@ def _run_fill(fill_mod: object, config: AdsorptionConfig, *, slab: Atoms | None 
         site_context=None,
         slab_atoms=slab_atoms,
         calculator=None,
+        material_type="slab",
     )
 
 
@@ -323,10 +327,12 @@ def test_estimate_complexity_shrinks_under_coverage():
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    ctx = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
+    config = AdsorptionConfig(seed=0)
+    ctx = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=True, material_type="slab"
+    )
     clean = estimate_placement_spec_capacity(
-        [make_water()], slab, config, "O", site_context=ctx
+        [make_water()], slab, config, "O", site_context=ctx, material_type="slab"
     )
     # Block nearly all sites by placing a dense adsorbate cloud near every site.
     ads_pos = np.vstack([s.xyz + np.array([0.0, 0.0, 0.2]) for s in ctx.sites])
@@ -339,12 +345,19 @@ def test_estimate_complexity_shrinks_under_coverage():
         "O",
         site_context=ctx,
         full_slab=full,
+        material_type="slab",
     )
     assert covered < clean
     # Substrate anchors under the cloud are pruned. Exposed ligand atoms keep
     # their own atop and bridge sites, so the estimate does not fall to zero.
     info = _spec_grid_info(
-        [make_water()], slab, config, "O", site_context=ctx, full_slab=full
+        [make_water()],
+        slab,
+        config,
+        "O",
+        site_context=ctx,
+        full_slab=full,
+        material_type="slab",
     )
     assert info.site_indices
     assert all(
@@ -360,7 +373,7 @@ def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distanc
 
     slab = make_slab()
     ctx = resolve_site_context_for_sampling(
-        slab, AdsorptionConfig(material_type="slab", seed=0), symmetry_broken=True
+        slab, AdsorptionConfig(seed=0), symmetry_broken=True, material_type="slab"
     )
     assert ctx.use_sites and ctx.sites
     site = ctx.sites[0]
@@ -369,22 +382,32 @@ def test_occupancy_pruning_uses_min_adsorbate_separation_not_min_initial_distanc
     full = slab.copy() + ads
 
     loose = AdsorptionConfig(
-        material_type="slab",
         seed=0,
         min_initial_distance=1.5,
         min_adsorbate_separation=1.5,
     )
     strict = AdsorptionConfig(
-        material_type="slab",
         seed=0,
         min_initial_distance=1.5,
         min_adsorbate_separation=3.0,
     )
     score_loose = estimate_placement_spec_capacity(
-        [make_water()], slab, loose, "O", site_context=ctx, full_slab=full
+        [make_water()],
+        slab,
+        loose,
+        "O",
+        site_context=ctx,
+        full_slab=full,
+        material_type="slab",
     )
     score_strict = estimate_placement_spec_capacity(
-        [make_water()], slab, strict, "O", site_context=ctx, full_slab=full
+        [make_water()],
+        slab,
+        strict,
+        "O",
+        site_context=ctx,
+        full_slab=full,
+        material_type="slab",
     )
     assert score_strict < score_loose
 
@@ -431,7 +454,7 @@ def _atop_site_z(xyz, idx):
         normal=np.array([0.0, 0.0, 1.0], dtype=float),
         site_type="atop",
         slab_indices=(idx,),
-        material_type="nanoparticle",
+        material_type="slab",
         site_source="topology",
         env_fingerprint=((), (), 0),
     )
@@ -530,13 +553,14 @@ def test_negative_footprint_clearance_ranks_without_dropping_site():
     """Disk overlap keeps a covered anchor and still samples it early."""
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
         seed=0,
         min_adsorbate_separation=1.5,
         occupancy_use_footprint=True,
         occupancy_footprint_scale=1.0,
     )
-    ctx = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
+    ctx = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=True, material_type="slab"
+    )
     assert ctx.use_sites and ctx.sites
     near = ctx.sites[0]
     normal = np.asarray(near.normal, dtype=float)
@@ -554,7 +578,15 @@ def test_negative_footprint_clearance_ranks_without_dropping_site():
     com = pos.mean(axis=0)
     bulky.set_positions(com + 2.0 * (pos - com))
 
-    info = _spec_grid_info([bulky], slab, config, "O", site_context=ctx, full_slab=full)
+    info = _spec_grid_info(
+        [bulky],
+        slab,
+        config,
+        "O",
+        site_context=ctx,
+        full_slab=full,
+        material_type="slab",
+    )
     assert not hasattr(info, "allows_conformer_site")
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = [True, True, False]
@@ -603,7 +635,6 @@ def test_overlap_recovery_rescues_lateral_clash():
     # Canonical-ish centered water; finalize will translate via pose abs coords.
     water.set_positions(water.get_positions() - np.mean(water.get_positions(), axis=0))
     config = AdsorptionConfig(
-        material_type="slab",
         placement_distance_recovery=True,
         placement_x_range=(-2.0, 2.0),
         placement_y_range=(-2.0, 2.0),
@@ -669,7 +700,6 @@ def test_clearance_aware_height_raises_protruding_pose():
 
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
         num_placements=1,
         placement_z_range=(2.0, 3.0),
         placement_z_scale_by_covalent_radius=False,
@@ -681,7 +711,7 @@ def test_clearance_aware_height_raises_protruding_pose():
         positions=[[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [2.8, 0.0, 0.0]],
     )
     chain.center()
-    ctx_sites = _get_unique_sites_for_specs(slab, config)
+    ctx_sites = _get_unique_sites_for_specs(slab, config, material_type="slab")
     assert ctx_sites.use_sites and ctx_sites.sites
     spec = PlacementSpec(
         conformer_index=0,
@@ -697,7 +727,7 @@ def test_clearance_aware_height_raises_protruding_pose():
         placement_index=0,
     )
     ctx, pose_fail = _pose_from_spec(
-        chain, spec, slab, config, "OCC", site_context=ctx_sites
+        chain, spec, slab, config, "OCC", site_context=ctx_sites, material_type="slab"
     )
     assert pose_fail is None
     assert ctx is not None
@@ -739,14 +769,19 @@ def test_place_dissociative_two_sites_matches_spec_path():
 
     slab = make_slab()
     h2 = make_h2()
-    config = AdsorptionConfig(
-        material_type="slab", enable_dissociative_placement=True, seed=0
+    config = AdsorptionConfig(enable_dissociative_placement=True, seed=0)
+    pairs = _get_dissociative_site_pairs(
+        slab, config, slab_for_sites=slab, material_type="slab"
     )
-    pairs = _get_dissociative_site_pairs(slab, config, slab_for_sites=slab)
     assert len(pairs) >= 1
     spec = dissoc_placement_spec()
     via_diss, reason = _generate_dissociative_placement_from_spec(
-        h2, spec, slab, config, slab_for_sites=slab
+        h2,
+        spec,
+        slab,
+        config,
+        slab_for_sites=slab,
+        material_type="slab",
     )
     assert reason is None and via_diss is not None
     placed_a, desc_a = via_diss
@@ -778,6 +813,7 @@ def test_place_dissociative_two_sites_matches_spec_path():
         height_override=float(desc_a.z_offset),
         slab=slab,
         slab_for_sites=slab,
+        material_type="slab",
     )
     assert via_place is not None
     placed_b, _desc_b = via_place
@@ -789,10 +825,10 @@ def test_place_dissociative_two_sites_matches_spec_path():
 def test_packing_yield_improves_with_occupancy_prune():
     """In-plane occupancy under coverage drops near-site capacity vs bare slab."""
     slab = make_slab()
-    config = AdsorptionConfig(
-        material_type="slab", seed=0, min_adsorbate_separation=1.5
+    config = AdsorptionConfig(seed=0, min_adsorbate_separation=1.5)
+    ctx = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=True, material_type="slab"
     )
-    ctx = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
     site = ctx.sites[0]
     pre = Atoms(
         "O", positions=[np.asarray(site.xyz, dtype=float) + np.array([0.0, 0.0, 0.4])]
@@ -887,7 +923,6 @@ def test_fill_oversamples_to_meet_num_placements(monkeypatch):
     result = _run_fill(
         fill_mod,
         AdsorptionConfig(
-            material_type="slab",
             num_placements=4,
             placement_retry_enabled=False,
             placement_retry_oversample_max=4.0,
@@ -935,7 +970,6 @@ def test_fill_diversity_retry(monkeypatch):
     result = _run_fill(
         fill_mod,
         AdsorptionConfig(
-            material_type="slab",
             num_placements=4,
             placement_retry_enabled=True,
             placement_retry_oversample_max=2.0,
@@ -1114,7 +1148,6 @@ def test_fill_chunked_stops_early(monkeypatch):
     result = _run_fill(
         fill_mod,
         AdsorptionConfig(
-            material_type="slab",
             num_placements=2,
             placement_retry_enabled=False,
             placement_retry_oversample_max=6.0,
@@ -1197,7 +1230,6 @@ def test_fill_failure_sets_are_per_call(monkeypatch):
     )
     slab = make_slab()
     cfg = AdsorptionConfig(
-        material_type="slab",
         num_placements=1,
         placement_retry_enabled=False,
         placement_retry_oversample_max=1.0,
@@ -1212,6 +1244,7 @@ def test_fill_failure_sets_are_per_call(monkeypatch):
         site_context=ctx,
         slab_atoms=slab,
         calculator=None,
+        material_type="slab",
     )
     assert first.combined == []
     second = fill_mod.fill_materialized_placements(
@@ -1222,6 +1255,7 @@ def test_fill_failure_sets_are_per_call(monkeypatch):
         site_context=ctx,
         slab_atoms=slab,
         calculator=None,
+        material_type="slab",
     )
     assert len(second.combined) == 1
     # Second call still sees site 0 — failure sets do not persist across fills.
@@ -1240,7 +1274,7 @@ def test_fill_empty_enumeration(monkeypatch):
     _patch_fill(monkeypatch, fill_mod, enumerate_fn=_enumerate_from(make_specs))
     result = _run_fill(
         fill_mod,
-        AdsorptionConfig(material_type="slab", num_placements=5, seed=0),
+        AdsorptionConfig(num_placements=5, seed=0),
     )
     assert result.combined == []
     assert calls["n"] == 1
@@ -1267,9 +1301,7 @@ def test_placement_workers_inherit_global_n_jobs():
         resolve_materialize_workers,
     )
 
-    config = AdsorptionConfig(
-        material_type="slab", n_jobs=3, placement_materialize_workers=None
-    )
+    config = AdsorptionConfig(n_jobs=3, placement_materialize_workers=None)
     inherited = (
         config.n_jobs
         if config.placement_materialize_workers is None
@@ -1279,7 +1311,7 @@ def test_placement_workers_inherit_global_n_jobs():
     assert resolve_materialize_workers(inherited, n_tasks=10, cpu_count=8) == 3
     assert (
         AdsorptionConfig(
-            material_type="slab", n_jobs=3, placement_materialize_workers=1
+            n_jobs=3, placement_materialize_workers=1
         ).placement_materialize_workers
         == 1
     )
@@ -1292,10 +1324,18 @@ def test_placement_workers_inherit_global_n_jobs():
     for i, spec in enumerate(specs):
         spec.placement_index = i
     results_a = generate_placements_from_specs(
-        specs, [adsorbate], slab, AdsorptionConfig(material_type="slab", n_jobs=1)
+        specs,
+        [adsorbate],
+        slab,
+        AdsorptionConfig(n_jobs=1),
+        material_type="slab",
     )
     results_b = generate_placements_from_specs(
-        specs, [adsorbate], slab, AdsorptionConfig(material_type="slab", n_jobs=-1)
+        specs,
+        [adsorbate],
+        slab,
+        AdsorptionConfig(n_jobs=-1),
+        material_type="slab",
     )
     assert len(results_a) == len(results_b) == 2
     for (res_a, _), (res_b, _) in zip(results_a, results_b, strict=True):
@@ -1318,11 +1358,11 @@ def test_materialize_specs_trims_to_target(monkeypatch):
         slab_atoms=make_slab(),
         calculator=None,
         config=AdsorptionConfig(
-            material_type="slab",
             placement_fill_clamp_to_capacity=False,
         ),
         smiles="O",
         site_context=None,
+        material_type="slab",
     )
     assert len(result.combined) == 4
     assert result.placement_ids == [0, 1, 2, 3]
@@ -1345,7 +1385,6 @@ def test_fill_clamps_target_to_capacity(monkeypatch, caplog):
         result = _run_fill(
             fill_mod,
             AdsorptionConfig(
-                material_type="slab",
                 num_placements=10,
                 placement_retry_enabled=False,
                 seed=0,
@@ -1379,7 +1418,10 @@ def test_fill_logs_site_sample_once(monkeypatch, caplog) -> None:
         full_slab=None,
         conformer_energies=None,
         grid_info=None,
+        *,
+        material_type="slab",
     ):
+        del material_type
         calls["n"] += 1
         # Second wave uses fresh site indices so the diversity retry is not
         # banned by the first wave's too_close keys.
@@ -1400,7 +1442,6 @@ def test_fill_logs_site_sample_once(monkeypatch, caplog) -> None:
         result = _run_fill(
             fill_mod,
             AdsorptionConfig(
-                material_type="slab",
                 num_placements=4,
                 placement_retry_enabled=True,
                 placement_fill_clamp_to_capacity=False,
@@ -1433,7 +1474,6 @@ def test_clamp_flag_false_legacy(monkeypatch):
     result = _run_fill(
         fill_mod,
         AdsorptionConfig(
-            material_type="slab",
             num_placements=10,
             placement_retry_enabled=False,
             placement_fill_clamp_to_capacity=False,
@@ -1523,10 +1563,15 @@ def test_initial_placement_distance_packs_free_rejects_blocked_each_material(
 ):
     """A real generated placement passes the gate; an overlapping one is blocked."""
     structure = factory()
-    config = AdsorptionConfig(material_type=material_type, seed=0)
+    config = AdsorptionConfig(seed=0)
     accepted = False
     for _spec, adsorbate, _desc in _generate_placements(
-        water_conformers(), structure, config, smiles="O", n_desired=8
+        water_conformers(),
+        structure,
+        config,
+        smiles="O",
+        n_desired=8,
+        material_type=material_type,
     ):
         ok_free, _, _ = check_initial_placement_distance(
             adsorbate, structure, material_type=material_type
@@ -1570,8 +1615,8 @@ def test_adsorbates_mutually_disconnected_accepts_separated_fragments():
         _water_suffix_at(3.0),
         _water_suffix_at(7.0),
         1.3,
-        material_type="slab",
         cell=slab.get_cell(),
+        material_type="slab",
     )
     assert clear
 
@@ -1583,8 +1628,8 @@ def test_adsorbates_mutually_disconnected_rejects_overlapping_fragments():
         _water_suffix_at(5.0),
         _water_suffix_at(5.2),
         1.3,
-        material_type="slab",
         cell=slab.get_cell(),
+        material_type="slab",
     )
     assert not clear
 
@@ -1603,15 +1648,15 @@ def test_adsorbates_mutually_disconnected_honours_connectivity_boundary():
         a,
         b_ok,
         1.3,
-        material_type="slab",
         cell=slab.get_cell(),
+        material_type="slab",
     )
     assert not adsorbates_mutually_disconnected(
         a,
         b_bad,
         1.3,
-        material_type="slab",
         cell=slab.get_cell(),
+        material_type="slab",
     )
 
 
@@ -1625,8 +1670,8 @@ def test_adsorbates_mutually_disconnected_wraps_periodic_images():
         near_edge,
         other_side,
         1.3,
-        material_type="slab",
         cell=slab.get_cell(),
+        material_type="slab",
     )
 
 
@@ -1690,7 +1735,6 @@ def test_pose_validation_and_pack_agree_with_clearance_helper():
     shell_ads = _h_above_slab(slab, x=x0 + cutoff + 0.05)
     covered = slab + prior
     config = AdsorptionConfig(
-        material_type="slab",
         connectivity_multiplier=multiplier,
         placement_clash_descent=False,
     )
@@ -1721,11 +1765,19 @@ def test_pose_validation_and_pack_agree_with_clearance_helper():
         )
 
     assert (
-        pack_exact_tuplet([_h_winner(x0, 0), _h_winner(x0 + cutoff, 1)], slab, config)
+        pack_exact_tuplet(
+            [_h_winner(x0, 0), _h_winner(x0 + cutoff, 1)],
+            slab,
+            config,
+            material_type="slab",
+        )
         is None
     )
     packed = pack_exact_tuplet(
-        [_h_winner(x0, 0), _h_winner(x0 + cutoff + 0.05, 1)], slab, config
+        [_h_winner(x0, 0), _h_winner(x0 + cutoff + 0.05, 1)],
+        slab,
+        config,
+        material_type="slab",
     )
     assert packed is not None
     assert [w.placement_id for w in packed] == [0, 1]

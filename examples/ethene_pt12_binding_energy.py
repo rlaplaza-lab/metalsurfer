@@ -107,20 +107,20 @@ def main() -> int:
 
     # Prefer enough samples that at least one chemisorbed ethene pose survives.
     config = AdsorptionConfig(
-        material_type="nanoparticle",
         num_conformers=3,
         num_placements=25,
         slab_relaxation_mode="none",
     )
 
     nanocluster = prepare_substrate(
+        material_type="nanoparticle",
         slab=pt_atoms,
         config=config,
         results_dir=results_dir,
     )
 
     campaign = run_adsorption(
-        slab=nanocluster,
+        substrate=nanocluster,
         molecules=[("C=C", "ethene")],
         config=config,
         surface_type=surface_type,

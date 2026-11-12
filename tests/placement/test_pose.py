@@ -103,7 +103,6 @@ def test_validate_initial_placement_geometry_with_strict_config():
 
     # max_closest_approach: max allowed closest-approach distance
     config = AdsorptionConfig(
-        material_type="slab",
         strict_initial_placement=True,
         min_contact_atoms=1,
         max_closest_approach=3.0,
@@ -119,7 +118,7 @@ def test_validate_initial_placement_geometry_with_strict_config():
         max_closest_approach=float(config.max_closest_approach),
         min_contact_atoms=int(config.min_contact_atoms),
         contact_covalent_scale=config.contact_covalent_scale,
-        material_type=config.material_type,
+        material_type="slab",
     )
     assert ok, f"Should pass strict validation with good contact: {reason}"
     assert reason == "placement_geometry_valid"
@@ -138,7 +137,6 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
     water.set_pbc(slab.get_pbc())
 
     config = AdsorptionConfig(
-        material_type="slab",
         strict_initial_placement=True,
         max_closest_approach=3.0,
         contact_covalent_scale=1.35,
@@ -153,7 +151,7 @@ def test_validate_initial_placement_geometry_rejects_poor_contact():
         max_closest_approach=float(config.max_closest_approach),
         min_contact_atoms=int(config.min_contact_atoms),
         contact_covalent_scale=config.contact_covalent_scale,
-        material_type=config.material_type,
+        material_type="slab",
     )
     assert not ok, "Should reject placement with poor contact"
     assert reason in {
@@ -221,7 +219,7 @@ def test_saturation_finalize_rejects_adsorbate_overlap():
 
     # New adsorbate coincident with pre-adsorbed water → adsorbate_overlap.
     clash = water.copy()
-    config = AdsorptionConfig(material_type="slab")
+    config = AdsorptionConfig()
     reason = _validate_posed_adsorbate(
         clash, covered, config, slab_for_sites=slab, material_type="slab"
     )
@@ -258,7 +256,7 @@ def test_validate_posed_adsorbate_uses_material_pbc(monkeypatch):
         slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
     )
     covered = slab + water
-    config = AdsorptionConfig(material_type="slab")
+    config = AdsorptionConfig()
     _validate_posed_adsorbate(
         water, covered, config, slab_for_sites=slab, material_type="slab"
     )
@@ -270,7 +268,6 @@ def test_validate_posed_adsorbate_uses_material_pbc(monkeypatch):
 def test_strict_initial_placement_e2e_reason():
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
         num_conformers=1,
         num_placements=12,
         seed=1,
@@ -281,11 +278,13 @@ def test_strict_initial_placement_e2e_reason():
         min_contact_atoms=1,
     )
     conformers = [make_water()]
-    specs = enumerate_placement_specs(conformers, slab, config, "O", 12, seed=1)
+    specs = enumerate_placement_specs(
+        conformers, slab, config, "O", 12, seed=1, material_type="slab"
+    )
     reasons = set()
     for spec in specs:
         _result, reason = generate_placement_from_spec_with_reason(
-            spec, conformers, slab, config, smiles="O"
+            spec, conformers, slab, config, smiles="O", material_type="slab"
         )
         if reason is not None:
             reasons.add(reason)
@@ -315,9 +314,7 @@ def test_rotated_slab_pose_round_trip():
     )
     cell[:3] = rot @ cell[:3]
     slab.set_cell(cell)
-    config = adsorption_config_factory(
-        material_type="slab", num_placements=20, placement_z_range=(2.0, 3.0)
-    )
+    config = adsorption_config_factory(num_placements=20, placement_z_range=(2.0, 3.0))
     spec, result = _first_successful_placement(
         water_conformers(), slab, config, "O", n_desired=20
     )
@@ -331,9 +328,7 @@ def test_rotated_slab_pose_round_trip():
 def test_tilted_slab_pose_round_trip():
     """Slab tilted so the surface normal is not Cartesian +z."""
     slab = _tilted_make_slab()
-    config = adsorption_config_factory(
-        material_type="slab", num_placements=20, placement_z_range=(2.0, 3.0)
-    )
+    config = adsorption_config_factory(num_placements=20, placement_z_range=(2.0, 3.0))
     spec, result = _first_successful_placement(
         water_conformers(), slab, config, "O", n_desired=20
     )
@@ -346,7 +341,7 @@ def test_tilted_slab_pose_round_trip():
 
 def test_generate_placement_from_spec_invalid_conformer_index():
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab")
+    config = AdsorptionConfig()
     water = make_water()
     spec = PlacementSpec(
         conformer_index=3,
@@ -362,7 +357,7 @@ def test_generate_placement_from_spec_invalid_conformer_index():
         placement_index=0,
     )
     result, reason = generate_placement_from_spec_with_reason(
-        spec, [water], slab, config
+        spec, [water], slab, config, material_type="slab"
     )
     assert result is None
     assert reason == "invalid_conformer_index"
@@ -382,7 +377,6 @@ def test_placement_specs_deterministic_across_runs(
     slab = make_slab()
     mol = mol_factory()
     cfg_kwargs = {
-        "material_type": "slab",
         "num_placements": n_desired,
         "seed": 7,
         **extra_cfg,
@@ -390,23 +384,26 @@ def test_placement_specs_deterministic_across_runs(
     specs_a = enumerate_placement_specs(
         [mol],
         slab,
-        AdsorptionConfig(**{"material_type": "slab", **cfg_kwargs}),
+        AdsorptionConfig(**cfg_kwargs),
         smiles,
         n_desired=n_desired,
+        material_type="slab",
     )
     specs_b = enumerate_placement_specs(
         [mol],
         slab,
-        AdsorptionConfig(**{"material_type": "slab", **cfg_kwargs}),
+        AdsorptionConfig(**cfg_kwargs),
         smiles,
         n_desired=n_desired,
+        material_type="slab",
     )
     specs_c = enumerate_placement_specs(
         [mol],
         slab,
-        AdsorptionConfig(**{"material_type": "slab", **{**cfg_kwargs, "seed": 99}}),
+        AdsorptionConfig(**{**{**cfg_kwargs, "seed": 99}}),
         smiles,
         n_desired=n_desired,
+        material_type="slab",
     )
     assert specs_a == specs_b
     assert specs_a != specs_c
@@ -420,18 +417,25 @@ def test_molecular_ml_features_encode_absolute_pose():
     """
     slab = make_slab()
     water = make_water()
-    config = AdsorptionConfig(material_type="slab", num_placements=48, seed=0)
-    specs = enumerate_placement_specs([water], slab, config, "O", n_desired=48)
+    config = AdsorptionConfig(num_placements=48, seed=0)
+    specs = enumerate_placement_specs(
+        [water], slab, config, "O", n_desired=48, material_type="slab"
+    )
     feature_rows: list[tuple[float, ...]] = []
     x_abs_values: list[float] = []
     for spec in specs:
-        generated = generate_placement_from_spec(spec, [water], slab, config)
+        generated = generate_placement_from_spec(
+            spec, [water], slab, config, material_type="slab"
+        )
         if generated is None:
             continue
         _, descriptor = generated
         assert descriptor.fragment_positions is None
         record = PlacementRecord.from_descriptor(
-            descriptor, molecule="water", smiles="O"
+            descriptor,
+            molecule="water",
+            smiles="O",
+            material_type="slab",
         )
         feats = extract_features(record)
         assert list(feats.keys()) == FEATURE_NAMES
@@ -456,18 +460,22 @@ def test_feature_row_replays_molecular_placement():
     """extract_features → placement_pose_from_features → generate_placement_from_pose."""
     slab = make_slab()
     water = make_water()
-    config = AdsorptionConfig(material_type="slab", num_placements=8, seed=0)
+    config = AdsorptionConfig(num_placements=8, seed=0)
     _spec, generated = _first_successful_placement([water], slab, config, smiles="O")
     assert generated is not None
     adsorbate, descriptor = generated
-    record = PlacementRecord.from_descriptor(descriptor, molecule="water", smiles="O")
+    record = PlacementRecord.from_descriptor(
+        descriptor, molecule="water", smiles="O", material_type="slab"
+    )
     feats = extract_features(record)
     assert list(feats.keys()) == FEATURE_NAMES
     assert len(FEATURE_NAMES) == 8
     pose = placement_pose_from_features(
         feats, placement_index=descriptor.placement_index
     )
-    replay = generate_placement_from_pose(pose, [water], slab, config)
+    replay = generate_placement_from_pose(
+        pose, [water], slab, config, material_type="slab"
+    )
     assert replay is not None
     replayed, _ = replay
     np.testing.assert_allclose(
@@ -477,8 +485,8 @@ def test_feature_row_replays_molecular_placement():
 
 def test_invalid_site_index_reason_distinct_from_no_sites():
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab", num_placements=1)
-    ctx = _get_unique_sites_for_specs(slab, config)
+    config = AdsorptionConfig(num_placements=1)
+    ctx = _get_unique_sites_for_specs(slab, config, material_type="slab")
     assert ctx.use_sites and len(ctx.sites) > 0
     bad = PlacementSpec(
         conformer_index=0,
@@ -494,7 +502,13 @@ def test_invalid_site_index_reason_distinct_from_no_sites():
         placement_index=0,
     )
     _result, reason = generate_placement_from_spec_with_reason(
-        bad, water_conformers(), slab, config, smiles="O", site_context=ctx
+        bad,
+        water_conformers(),
+        slab,
+        config,
+        smiles="O",
+        site_context=ctx,
+        material_type="slab",
     )
     assert _result is None
     assert reason == "invalid_site_index"
@@ -517,7 +531,6 @@ def test_validate_posed_adsorbate_single_mic_with_strict(monkeypatch):
         slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
     )
     config = AdsorptionConfig(
-        material_type="slab",
         strict_initial_placement=True,
         min_initial_distance=0.3,
         contact_covalent_scale=1.35,
@@ -535,7 +548,7 @@ def test_validate_posed_adsorbate_scratch_equivalence():
     water = place_adsorbate_above_slab(
         slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
     )
-    config = AdsorptionConfig(material_type="slab")
+    config = AdsorptionConfig()
     reason_no_scratch = _validate_posed_adsorbate(
         water, slab, config, material_type="slab"
     )
@@ -557,7 +570,7 @@ def test_check_initial_placement_distance_reuses_slab_scratch():
     water = place_adsorbate_above_slab(
         slab, make_water(), z_offset=2.2, x_shift=2.0, y_shift=2.0
     )
-    config = AdsorptionConfig(material_type="slab")
+    config = AdsorptionConfig()
 
     scratch = _build_slab_distance_scratch(slab, None, "slab")
     assert scratch.slab_cov_r is not None
@@ -574,8 +587,8 @@ def test_check_initial_placement_distance_reuses_slab_scratch():
         slab,
         min_distance=config.min_initial_distance,
         min_contact_ratio=config.min_contact_ratio,
-        material_type="slab",
         slab_scratch=scratch,
+        material_type="slab",
     )
     assert base == with_scratch
 
@@ -719,7 +732,7 @@ def test_lateral_offset_on_triclinic_slab_preserves_slab_normal_height():
 def test_pose_batch_cache_surface_radii_use_derived_top_depth():
     """Cached top-layer radii must match ``_get_site_surface_radii``, not planarity tol."""
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab")
+    config = AdsorptionConfig()
     derived = float(_derive_top_layer_tolerance(list(slab.get_chemical_symbols())))
     assert derived != float(config.top_layer_tolerance)
     cache = build_pose_batch_cache(slab, [], config)
@@ -741,8 +754,8 @@ def test_water_en_down_contact_atom_is_oxygen():
 
     slab = make_slab()
     water = make_water()
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    ctx_sites = _get_unique_sites_for_specs(slab, config)
+    config = AdsorptionConfig(seed=0)
+    ctx_sites = _get_unique_sites_for_specs(slab, config, material_type="slab")
     assert ctx_sites.use_sites and ctx_sites.sites
     # Prefer an atop site when available.
     site_index = next(
@@ -767,7 +780,9 @@ def test_water_en_down_contact_atom_is_oxygen():
         z_fraction=0.5,
         placement_index=0,
     )
-    ctx, fail = _pose_from_spec(water, spec, slab, config, "O", site_context=ctx_sites)
+    ctx, fail = _pose_from_spec(
+        water, spec, slab, config, "O", site_context=ctx_sites, material_type="slab"
+    )
     assert fail is None and ctx is not None
     contact_idx = binders[int(spec.en_atom_index or 0)]
     assert contact_idx == o_idx
@@ -811,8 +826,8 @@ def test_pairwise_contact_raises_com_when_non_binder_is_closest():
     # Linear-ish OH with H sticking below O along -z before orientation.
     mol = Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, -0.96]])
     mol.center()
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    ctx_sites = _get_unique_sites_for_specs(slab, config)
+    config = AdsorptionConfig(seed=0)
+    ctx_sites = _get_unique_sites_for_specs(slab, config, material_type="slab")
     site_index = next(
         (i for i, s in enumerate(ctx_sites.sites) if s.site_type == "atop"),
         0,
@@ -832,7 +847,9 @@ def test_pairwise_contact_raises_com_when_non_binder_is_closest():
         z_fraction=0.5,
         placement_index=0,
     )
-    ctx, fail = _pose_from_spec(mol, spec, slab, config, "O", site_context=ctx_sites)
+    ctx, fail = _pose_from_spec(
+        mol, spec, slab, config, "O", site_context=ctx_sites, material_type="slab"
+    )
     assert fail is None and ctx is not None
     ads = mol.copy()
     ads.set_positions(
@@ -861,7 +878,7 @@ def test_void_clashing_interval_stays_inside_window(monkeypatch):
         site_type="pore",
         kind="void",
         slab_indices=(),
-        material_type="porous",
+        material_type="slab",
         site_source="test",
         env_fingerprint=(("C",), (0,), 0),
     )
@@ -874,7 +891,7 @@ def test_void_clashing_interval_stays_inside_window(monkeypatch):
         slab_symbols=["C", "C"],
         cell=np.eye(3) * 20.0,
         pbc=[True, True, True],
-        config=AdsorptionConfig(material_type="porous", seed=0),
+        config=AdsorptionConfig(seed=0),
     )
     assert interval is not None
     assert interval.com_lo == pytest.approx(interval.com_nominal)
@@ -893,7 +910,7 @@ def test_void_clear_centre_stays_at_centre(monkeypatch):
         site_type="pore",
         kind="void",
         slab_indices=(),
-        material_type="porous",
+        material_type="slab",
         site_source="test",
         env_fingerprint=(("C",), (0,), 0),
     )
@@ -907,7 +924,7 @@ def test_void_clear_centre_stays_at_centre(monkeypatch):
         slab_symbols=["C", "C"],
         cell=np.eye(3) * 20.0,
         pbc=[True, True, True],
-        config=AdsorptionConfig(material_type="porous", seed=0),
+        config=AdsorptionConfig(seed=0),
     )
     assert interval is not None
     assert interval.com_nominal == pytest.approx(5.0, abs=1e-9)
@@ -917,7 +934,7 @@ def test_void_clear_centre_stays_at_centre(monkeypatch):
 
 def test_void_z_step_matches_wall_step_when_the_centre_is_clear():
     """A clear pore's 0.2 z step equals the wall step from 0.5 to 0.7."""
-    config = AdsorptionConfig(material_type="porous", seed=0)
+    config = AdsorptionConfig(seed=0)
     cell = np.eye(3) * 30.0
     slab_pos = np.array([[0.0, 0.0, 0.0]], dtype=float)
     shared = dict(
@@ -936,7 +953,7 @@ def test_void_z_step_matches_wall_step_when_the_centre_is_clear():
         site_type="atop",
         kind="wall",
         slab_indices=(0,),
-        material_type="porous",
+        material_type="slab",
         site_source="test",
         env_fingerprint=(("C",), (0,), 0),
     )
@@ -946,7 +963,7 @@ def test_void_z_step_matches_wall_step_when_the_centre_is_clear():
         site_type="pore",
         kind="void",
         slab_indices=(),
-        material_type="porous",
+        material_type="slab",
         site_source="test",
         env_fingerprint=(("C",), (0,), 0),
     )
@@ -1078,8 +1095,8 @@ def test_z_fraction_offsets_com_around_pairwise_contact():
 
     slab = make_slab()
     water = make_water()
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    ctx_sites = _get_unique_sites_for_specs(slab, config)
+    config = AdsorptionConfig(seed=0)
+    ctx_sites = _get_unique_sites_for_specs(slab, config, material_type="slab")
     site_index = next(
         (i for i, s in enumerate(ctx_sites.sites) if s.site_type == "atop"),
         0,
@@ -1102,7 +1119,7 @@ def test_z_fraction_offsets_com_around_pairwise_contact():
             placement_index=0,
         )
         ctx, fail = _pose_from_spec(
-            water, spec, slab, config, "O", site_context=ctx_sites
+            water, spec, slab, config, "O", site_context=ctx_sites, material_type="slab"
         )
         assert fail is None and ctx is not None
         n_hat = np.asarray(ctx.normal, dtype=float)
@@ -1152,13 +1169,12 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex(source):
     )
     slab = apply_surface_constraints(slab, material_type="slab")
     config = AdsorptionConfig(
-        material_type="slab",
         seed=0,
         # Include both Ti and O in the top-layer window → non-planar local ref.
         top_layer_tolerance=1.5,
         planar_z_variance_threshold=0.01,
     )
-    ctx_sites = _get_unique_sites_for_specs(slab, config)
+    ctx_sites = _get_unique_sites_for_specs(slab, config, material_type="slab")
     assert ctx_sites.use_sites and ctx_sites.sites
     site_index = next(
         (i for i, s in enumerate(ctx_sites.sites) if s.slab_indices),
@@ -1181,7 +1197,9 @@ def test_contact_height_uses_support_atoms_not_lifted_site_vertex(source):
         z_fraction=0.5,
         placement_index=0,
     )
-    ctx, fail = _pose_from_spec(water, spec, slab, config, "O", site_context=ctx_sites)
+    ctx, fail = _pose_from_spec(
+        water, spec, slab, config, "O", site_context=ctx_sites, material_type="slab"
+    )
     assert fail is None and ctx is not None
     n_hat = np.asarray(ctx.normal, dtype=float)
     pos = np.asarray(slab.get_positions(), dtype=float)
@@ -1269,8 +1287,10 @@ def test_pose_rebuilds_catalog_when_coverage_drops_symmetry():
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
     slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    reduced = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    config = AdsorptionConfig(seed=0)
+    reduced = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=False, material_type="slab"
+    )
     assert reduced.clustered_sites is not None
     assert reduced.source == "symmetry_aware"
     assert len(reduced.clustered_sites) > len(reduced.sites)
@@ -1302,6 +1322,7 @@ def test_pose_rebuilds_catalog_when_coverage_drops_symmetry():
         smiles="O",
         site_context=reduced,
         slab_for_sites=slab,
+        material_type="slab",
     )
     assert reason is None
     assert placed is not None
@@ -1323,7 +1344,7 @@ def _shell_vs_full_nominal(
     positions = slab.get_positions()
     slab_syms = list(slab.get_chemical_symbols())
     cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(config.material_type)
+    pbc = material_aware_pbc("slab")
     shell_idx = _contact_shell_indices(
         site.xyz,
         rotated_pos=rotated_pos,
@@ -1360,8 +1381,8 @@ def test_contact_shell_matches_full_slab_nominal():
     from ase.build import molecule
 
     slab = make_slab(nx=3, ny=3)
-    config = AdsorptionConfig(material_type="slab")
-    ctx = _get_unique_sites_for_specs(slab, config)
+    config = AdsorptionConfig()
+    ctx = _get_unique_sites_for_specs(slab, config, material_type="slab")
     site = next(s for s in ctx.sites if s.kind == "wall" and s.slab_indices)
     h2 = molecule("H2")
     h2_pos = h2.get_positions() - h2.get_center_of_mass()
@@ -1382,8 +1403,8 @@ def test_contact_shell_matches_full_slab_nominal():
         assert shell_h == pytest.approx(full_h, abs=1e-6)
 
     porous = make_porous_framework()
-    pconfig = AdsorptionConfig(material_type="porous")
-    pctx = _get_unique_sites_for_specs(porous, pconfig)
+    pconfig = AdsorptionConfig()
+    pctx = _get_unique_sites_for_specs(porous, pconfig, material_type="porous")
     psite = next(s for s in pctx.sites if s.kind == "wall" and s.slab_indices)
     shell_h, full_h = _shell_vs_full_nominal(
         slab=porous,
@@ -1404,8 +1425,8 @@ def test_shared_mic_matches_per_gate_contact_heights():
     )
 
     slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(material_type="slab")
-    ctx = _get_unique_sites_for_specs(slab, config)
+    config = AdsorptionConfig()
+    ctx = _get_unique_sites_for_specs(slab, config, material_type="slab")
     site = next(s for s in ctx.sites if s.kind == "wall" and s.slab_indices)
     water = make_water()
     rotated = water.get_positions() - water.get_center_of_mass()
@@ -1413,7 +1434,7 @@ def test_shared_mic_matches_per_gate_contact_heights():
     positions = slab.get_positions()
     slab_syms = list(slab.get_chemical_symbols())
     cell = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(config.material_type)
+    pbc = material_aware_pbc("slab")
     shell_idx = _contact_shell_indices(
         site.xyz,
         rotated_pos=rotated,
@@ -1464,7 +1485,7 @@ def test_contact_shell_ignores_far_atoms_and_uses_near_ones():
     """An atom inside the ball is selected; one far outside is not."""
     from ase.build import molecule
 
-    config = AdsorptionConfig(material_type="slab")
+    config = AdsorptionConfig()
     site_xyz = np.array([0.0, 0.0, 0.0])
     h = molecule("H")
     rotated = h.get_positions() - h.get_center_of_mass()

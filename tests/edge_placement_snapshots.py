@@ -100,9 +100,7 @@ def _write(name: str, payload: dict[str, object]) -> None:
 
 def joint_pose_pool_size(n_per_config: int, n_configs: int) -> int:
     """Pose pool a one-species n-tuple run materializes for this joint budget."""
-    oversample = float(
-        AdsorptionConfig(material_type="slab").placement_retry_oversample_max
-    )
+    oversample = float(AdsorptionConfig().placement_retry_oversample_max)
     slots = int(n_per_config) * int(n_configs)
     return max(1, int(math.ceil(slots * oversample)))
 

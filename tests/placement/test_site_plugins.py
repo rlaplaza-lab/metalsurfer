@@ -96,9 +96,9 @@ def test_empty_opt_in_plugins_skip_auto_widen(monkeypatch, site_generator):
     monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
     sites = site_enumeration.get_unified_sites(
         slab,
-        material_type="slab",
         site_generator=site_generator,
         auto_widen=True,
+        material_type="slab",
     )
     assert calls["n"] == 1
     assert sites == []
@@ -121,9 +121,9 @@ def test_empty_voronoi_still_auto_widens(monkeypatch):
     monkeypatch.setattr(site_enumeration, "_enumerate_unified_sites", fake_enumerate)
     sites = site_enumeration.get_unified_sites(
         slab,
-        material_type="slab",
         site_generator="voronoi",
         auto_widen=True,
+        material_type="slab",
     )
     assert calls["n"] == 2
     assert len(sites) > 0
@@ -199,11 +199,11 @@ def test_all_plugins_share_batch_and_site_contract(name):
 
     sites = get_unified_sites(
         slab,
-        material_type="slab",
         site_generator=name,
         n_jobs=1,
         probe_radius=1.2,
         max_site_distance=3.5,
+        material_type="slab",
     )
     assert sites
     assert all(isinstance(s, Site) for s in sites)
@@ -374,7 +374,6 @@ def test_adaptive_grid_skips_topology_safety_nets(material_type):
 def test_plugins_materialize_clash_free(material_type, plugin, factory):
     atoms = factory()
     cfg = AdsorptionConfig(
-        material_type=material_type,
         site_generator=plugin,
         seed=0,
         num_conformers=1,
@@ -383,9 +382,13 @@ def test_plugins_materialize_clash_free(material_type, plugin, factory):
         slab_relaxation_mode="none",
     )
     ads = molecule("H2")
-    specs = enumerate_placement_specs([ads], atoms, cfg, "H2", n_desired=8, seed=0)
+    specs = enumerate_placement_specs(
+        [ads], atoms, cfg, "H2", n_desired=8, seed=0, material_type=material_type
+    )
     assert specs
-    results = generate_placements_from_specs(specs, [ads], atoms, cfg, smiles="H2")
+    results = generate_placements_from_specs(
+        specs, [ads], atoms, cfg, smiles="H2", material_type=material_type
+    )
     assert any(pair is not None for pair, _reason in results)
 
 
@@ -414,7 +417,6 @@ def test_plugins_n_tuplet_expands_and_materializes(material_type, plugin, factor
 
     atoms = factory()
     cfg = AdsorptionConfig(
-        material_type=material_type,
         site_generator=plugin,
         seed=0,
         num_conformers=1,
@@ -434,22 +436,37 @@ def test_plugins_n_tuplet_expands_and_materializes(material_type, plugin, factor
     )
     pruned_cfg = replace(cfg, saturation_molecules_per_step=1)
     reduced = resolve_site_context_for_sampling(
-        atoms, pruned_cfg, symmetry_broken=False
+        atoms, pruned_cfg, symmetry_broken=False, material_type=material_type
     )
-    sampling = site_context_for_sampling(atoms, cfg, reduced)
+    sampling = site_context_for_sampling(
+        atoms, cfg, reduced, material_type=material_type
+    )
     assert sampling.clustered_sites is not None
     assert len(sampling.sites) == len(sampling.clustered_sites)
     assert len(sampling.sites) >= 2
 
     ads = molecule("H2")
     specs = enumerate_placement_specs(
-        [ads], atoms, cfg, "H2", n_desired=8, seed=0, site_context=sampling
+        [ads],
+        atoms,
+        cfg,
+        "H2",
+        n_desired=8,
+        seed=0,
+        site_context=sampling,
+        material_type=material_type,
     )
     assert len(specs) >= 2
     site_indices = {s.site_index for s in specs if s.site_index is not None}
     assert len(site_indices) >= 2
     results = generate_placements_from_specs(
-        specs, [ads], atoms, cfg, smiles="H2", site_context=sampling
+        specs,
+        [ads],
+        atoms,
+        cfg,
+        smiles="H2",
+        site_context=sampling,
+        material_type=material_type,
     )
     ok = [pair for pair, _reason in results if pair is not None]
     assert len(ok) >= 2
@@ -462,7 +479,6 @@ def test_plugins_multimol_share_catalog_materialize(material_type, plugin, facto
 
     atoms = factory()
     cfg = AdsorptionConfig(
-        material_type=material_type,
         site_generator=plugin,
         seed=0,
         num_conformers=1,
@@ -471,18 +487,33 @@ def test_plugins_multimol_share_catalog_materialize(material_type, plugin, facto
         slab_relaxation_mode="none",
         multi_molecule_saturation=True,
     )
-    shared = resolve_site_context_for_sampling(atoms, cfg, symmetry_broken=False)
+    shared = resolve_site_context_for_sampling(
+        atoms, cfg, symmetry_broken=False, material_type=material_type
+    )
     assert shared.sites
 
     h2 = molecule("H2")
     co = molecule("CO")
     for ads, smiles in ((h2, "H2"), (co, "CO")):
         specs = enumerate_placement_specs(
-            [ads], atoms, cfg, smiles, n_desired=6, seed=0, site_context=shared
+            [ads],
+            atoms,
+            cfg,
+            smiles,
+            n_desired=6,
+            seed=0,
+            site_context=shared,
+            material_type=material_type,
         )
         assert specs
         results = generate_placements_from_specs(
-            specs, [ads], atoms, cfg, smiles=smiles, site_context=shared
+            specs,
+            [ads],
+            atoms,
+            cfg,
+            smiles=smiles,
+            site_context=shared,
+            material_type=material_type,
         )
         assert any(pair is not None for pair, _reason in results)
 
@@ -493,9 +524,9 @@ def test_slab_plugins_emit_hollows_for_dissociative(plugin):
 
     hollows = get_hollow_sites_for_adatoms(
         make_slab(nx=3, ny=3, n_layers=3),
-        material_type="slab",
         site_generator=plugin,
         n_jobs=1,
+        material_type="slab",
     )
     assert hollows
     assert all(s.site_type in ("hollow", "pore") for s in hollows)
@@ -510,7 +541,6 @@ def test_porous_wall_near_plugins_materialize_with_contact_solve(plugin):
 
     atoms = make_porous_framework()
     cfg = AdsorptionConfig(
-        material_type="porous",
         site_generator=plugin,
         seed=0,
         num_conformers=1,
@@ -518,7 +548,9 @@ def test_porous_wall_near_plugins_materialize_with_contact_solve(plugin):
         n_jobs=1,
         slab_relaxation_mode="none",
     )
-    ctx = resolve_site_context_for_sampling(atoms, cfg, symmetry_broken=False)
+    ctx = resolve_site_context_for_sampling(
+        atoms, cfg, symmetry_broken=False, material_type="porous"
+    )
     wall_idx = next(
         (
             i
@@ -545,7 +577,9 @@ def test_porous_wall_near_plugins_materialize_with_contact_solve(plugin):
         z_fraction=0.5,
         placement_index=0,
     )
-    pose_ctx, fail = _pose_from_spec(ads, spec, atoms, cfg, "O", site_context=ctx)
+    pose_ctx, fail = _pose_from_spec(
+        ads, spec, atoms, cfg, "O", site_context=ctx, material_type="porous"
+    )
     assert fail is None and pose_ctx is not None
     n_hat = np.asarray(pose_ctx.normal, dtype=float)
     n_hat = n_hat / float(np.linalg.norm(n_hat))

@@ -396,12 +396,9 @@ def _check_finite_nonneg(name: str, value: float) -> None:
 
 
 CONFORMER_WEIGHTING_OPTIONS: tuple[str, ...] = ("uniform", "boltzmann")
-MATERIAL_TYPE_OPTIONS: tuple[str, ...] = ("slab", "nanoparticle", "porous")
 SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("auto", "distance_ratio", "delaunay")
 SITE_GENERATOR_OPTIONS: tuple[str, ...] = ("auto",) + _SITE_GENERATORS
 SIDE_POLICY_OPTIONS: tuple[str, ...] = ("all", "positive", "negative", "external")
-# Sentinel so ``material_type`` has no silent default; ``__post_init__`` requires it.
-_UNSET_MATERIAL_TYPE: Any = object()
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
 BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = (
     "random",
@@ -602,14 +599,24 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
     _check_positive(
         "adaptive_grid_nms_framework_scale", root.adaptive_grid_nms_framework_scale
     )
-    if root.site_generator != "auto":
-        allowed = _SITE_GENERATOR_ALLOWED_MATERIALS[root.site_generator]
-        if root.material_type not in allowed:
-            raise ValueError(
-                f"site_generator={root.site_generator!r} is incompatible with "
-                f"material_type={root.material_type!r}; allowed materials: "
-                f"{sorted(allowed)}"
-            )
+
+
+def validate_site_generator_for_material(
+    site_generator: str, material_type: str
+) -> None:
+    """Reject ``site_generator`` values incompatible with *material_type*.
+
+    ``auto`` is always accepted.
+    """
+    if site_generator == "auto":
+        return
+    allowed = _SITE_GENERATOR_ALLOWED_MATERIALS[site_generator]
+    if material_type not in allowed:
+        raise ValueError(
+            f"site_generator={site_generator!r} is incompatible with "
+            f"material_type={material_type!r}; allowed materials: "
+            f"{sorted(allowed)}"
+        )
 
 
 def _validate_relaxation(root: "AdsorptionConfig") -> None:
@@ -829,8 +836,8 @@ def bo_eval_schedule(config: "AdsorptionConfig") -> list[int]:
 class AdsorptionConfig:
     """Configuration for adsorption screening, Bayesian search, and saturation.
 
-    Primary knobs: ``model_name``, ``num_conformers``, ``num_placements``,
-    and ``material_type``. For dissociative adsorption (e.g. H₂ → 2H), set
+    Primary knobs: ``model_name``, ``num_conformers``, and ``num_placements``.
+    For dissociative adsorption (e.g. H₂ → 2H), set
     ``enable_dissociative_placement=True`` (and usually ``skip_topology_check=True``
     so connectivity filters allow fragmented adsorbates). Use ``run_*_bo``
     (or YAML ``campaign: adsorption_bo`` / ``saturation_bo``) for Bayesian
@@ -862,8 +869,6 @@ class AdsorptionConfig:
     placement_distance_recovery: bool = True
     # Rigid-body clash descent in recovery / n-tuplet packing; False → XY jitter only.
     placement_clash_descent: bool = True
-    # Required: ``"slab"``, ``"nanoparticle"``, or ``"porous"``. No default.
-    material_type: Literal["slab", "nanoparticle", "porous"] = _UNSET_MATERIAL_TYPE
     # Probe / max-distance / auto-widen apply to every material type.
     voronoi_probe_radius: float | None = None
     voronoi_max_site_distance: float | None = None
@@ -990,16 +995,6 @@ class AdsorptionConfig:
 
     def __post_init__(self) -> None:
         """Validate configuration fields after initialization."""
-        if self.material_type is _UNSET_MATERIAL_TYPE:
-            raise ValueError(
-                "material_type is required; pass 'slab', 'nanoparticle', or 'porous'"
-            )
-        _check_choice(
-            "material_type",
-            self.material_type,
-            allowed=MATERIAL_TYPE_OPTIONS,
-        )
-
         _validate_placement(self)
         _validate_relaxation(self)
         _validate_io(self)

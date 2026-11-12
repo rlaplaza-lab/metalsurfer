@@ -63,7 +63,7 @@ def assert_intact(
         ads,
         0,
         config.connectivity_multiplier,
-        material_type=config.material_type,
+        material_type="slab",
     )
     assert len(parts) == 1
 
@@ -81,6 +81,7 @@ def cu111_for(
         ),
         config=config,
         results_dir=results_dir,
+        material_type="slab",
     )
     return resize_substrate_for_molecule(prepared, conformers, config).atoms, conformers
 
@@ -144,6 +145,7 @@ def materialize_pose_pool(
         site_context=site_context,
         slab_atoms=coverage,
         calculator=None,
+        material_type="slab",
     )
     slab_size = len(coverage)
     return [

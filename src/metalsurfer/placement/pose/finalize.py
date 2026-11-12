@@ -181,6 +181,8 @@ def generate_placement_from_pose(
     site_context: SiteContext | None = None,
     slab_for_sites: Atoms | None = None,
     pose_cache: _PoseBatchCache | None = None,
+    *,
+    material_type: str,
 ) -> tuple[Atoms, PlacementDescriptor] | None:
     """Generate adsorbate placement using universal pose semantics.
 
@@ -241,6 +243,7 @@ def generate_placement_from_pose(
         site_context,
         slab_for_sites=slab_for_sites,
         pose_cache=pose_cache,
+        material_type=material_type,
     )
     if ctx is None:
         return None

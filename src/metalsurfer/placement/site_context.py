@@ -74,6 +74,8 @@ def _no_sites_context(
 def _unique_sites_cache_key(
     slab: Atoms,
     config: AdsorptionConfig,
+    *,
+    material_type: str,
 ) -> str:
     """Geometry + chemistry + Voronoi config key (pre-symmetry).
 
@@ -97,7 +99,7 @@ def _unique_sites_cache_key(
         + b"\x00"
         + str(config.site_generator).encode()
         + b"\x00"
-        + config.material_type.encode()
+        + material_type.encode()
     )
     scale_bytes = b""
     if str(config.site_generator) == "adaptive_grid":
@@ -129,12 +131,13 @@ def _site_context_cache_key(
     slab: Atoms,
     config: AdsorptionConfig,
     *,
+    material_type: str,
     symmetry_broken: bool,
 ) -> str:
     effective_broken = _sampling_symmetry_broken(
         config, symmetry_broken=symmetry_broken
     )
-    base = _unique_sites_cache_key(slab, config)
+    base = _unique_sites_cache_key(slab, config, material_type=material_type)
     return hashlib.sha256(
         (
             base
@@ -158,6 +161,7 @@ def resolve_site_context_for_sampling(
     slab_atoms: Atoms,
     config: AdsorptionConfig,
     *,
+    material_type: str,
     symmetry_broken: bool,
 ) -> SiteContext:
     """Return clustered sites, then optional spglib orbit reduction.
@@ -185,6 +189,7 @@ def resolve_site_context_for_sampling(
     cache_key = _site_context_cache_key(
         slab_atoms,
         config,
+        material_type=material_type,
         symmetry_broken=symmetry_broken,
     )
 
@@ -194,7 +199,9 @@ def resolve_site_context_for_sampling(
         return cached
 
     # Reuses unique-sites entry in the same cache (key without |sym=).
-    _core_ctx = _get_unique_sites_for_specs(slab_atoms, config)
+    _core_ctx = _get_unique_sites_for_specs(
+        slab_atoms, config, material_type=material_type
+    )
     core_sites = _core_ctx.sites
     use_sites = _core_ctx.use_sites
     raw_unclustered = _core_ctx.raw_unclustered
@@ -219,7 +226,7 @@ def resolve_site_context_for_sampling(
                 slab_atoms,
                 top_layer_tolerance=config.top_layer_tolerance,
                 symmetry_tolerance=config.symmetry_tolerance,
-                material_type=config.material_type,
+                material_type=material_type,
                 probe_radius=config.voronoi_probe_radius,
                 max_site_distance=config.voronoi_max_site_distance,
                 enrich=config.voronoi_site_enrichment,
@@ -291,6 +298,8 @@ def attach_ligand_sites(
     slab: Atoms,
     full_slab: Atoms | None,
     config: AdsorptionConfig,
+    *,
+    material_type: str,
 ) -> SiteContext:
     """Append exposed-ligand atop and ligand–metal bridge sites.
 
@@ -302,11 +311,11 @@ def attach_ligand_sites(
     n_sub = len(slab)
     if any(_indexes_ligand(site, n_sub) for site in ctx.sites):
         return ctx
-    extra = ligand_local_sites(slab, full_slab, material_type=config.material_type)
+    extra = ligand_local_sites(slab, full_slab, material_type=material_type)
     if not extra:
         return ctx
     cell = np.asarray(full_slab.get_cell(), dtype=float)
-    pbc = np.asarray(material_aware_pbc(config.material_type), dtype=bool)
+    pbc = np.asarray(material_aware_pbc(material_type), dtype=bool)
     extra = drop_sites_near_catalog(extra, list(ctx.sites), cell=cell, pbc=pbc)
     if not extra:
         return ctx
@@ -328,6 +337,7 @@ def site_context_for_sampling(
     config: AdsorptionConfig,
     site_context: SiteContext | None = None,
     *,
+    material_type: str,
     symmetry_broken: bool = False,
     full_slab: Atoms | None = None,
 ) -> SiteContext:
@@ -348,6 +358,7 @@ def site_context_for_sampling(
         ctx = resolve_site_context_for_sampling(
             slab,
             config,
+            material_type=material_type,
             symmetry_broken=True,
         )
     elif site_context is not None:
@@ -356,14 +367,19 @@ def site_context_for_sampling(
         ctx = resolve_site_context_for_sampling(
             slab,
             config,
+            material_type=material_type,
             symmetry_broken=False,
         )
-    return attach_ligand_sites(ctx, slab, full_slab, config)
+    return attach_ligand_sites(
+        ctx, slab, full_slab, config, material_type=material_type
+    )
 
 
 def _get_unique_sites_for_specs(
     slab: Atoms,
     config: AdsorptionConfig,
+    *,
+    material_type: str,
 ) -> SiteContext:
     """Get unique non-identical sites using unified site detection.
 
@@ -375,15 +391,15 @@ def _get_unique_sites_for_specs(
     :data:`_SITE_CONTEXT_CACHE`. Both ``sites`` and ``clustered_sites`` are the
     geometric clustering result (no spglib).
     """
-    cache_key = _unique_sites_cache_key(slab, config)
+    cache_key = _unique_sites_cache_key(slab, config, material_type=material_type)
     with _SITE_CONTEXT_CACHE_LOCK:
         cached = _SITE_CONTEXT_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
-    validate_material_type(config.material_type)
+    validate_material_type(material_type)
 
-    mat_type = config.material_type
+    mat_type = material_type
     probe_radius = config.voronoi_probe_radius
     max_site_dist = config.voronoi_max_site_distance
 
@@ -450,9 +466,7 @@ def _get_unique_sites_for_specs(
             ),
         )
 
-    plugin_source = resolved_site_generator_name(
-        config.site_generator, config.material_type
-    )
+    plugin_source = resolved_site_generator_name(config.site_generator, material_type)
     return _store_site_context_cache(
         cache_key,
         SiteContext(

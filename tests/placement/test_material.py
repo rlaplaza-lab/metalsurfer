@@ -101,9 +101,7 @@ def test_prepare_atoms_for_calculator_maps_slab_pbc():
 
 def test_slab_placements_are_above_surface_reference():
     slab = make_slab()
-    config = adsorption_config_factory(
-        material_type="slab", num_placements=50, placement_z_range=(1.5, 2.0)
-    )
+    config = adsorption_config_factory(num_placements=50, placement_z_range=(1.5, 2.0))
     results = _generate_placements(
         water_conformers(), slab, config, smiles="O", n_desired=50
     )
@@ -132,14 +130,18 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
 ):
     structure = factory()
     config = adsorption_config_factory(
-        material_type=material_type,
         num_placements=num_placements,
         placement_z_range=z_range,
         reject_vdw_overlaps=True,
     )
     conformers = water_conformers()
     results = _generate_placements(
-        conformers, structure, config, smiles="O", n_desired=n_desired
+        conformers,
+        structure,
+        config,
+        smiles="O",
+        n_desired=n_desired,
+        material_type=material_type,
     )
     # Pores lead each round-robin pass, then a hollow. This framework cannot
     # clear those hollows, so about half of a 12-pose draw is rejected.
@@ -185,10 +187,24 @@ def test_local_site_material_enumeration_generation_and_reproducibility(
 
     spec, adsorbate, descriptor = results[0]
     _assert_replay_matches(
-        "spec", adsorbate, descriptor, spec, conformers, structure, config
+        "spec",
+        adsorbate,
+        descriptor,
+        spec,
+        conformers,
+        structure,
+        config,
+        material_type=material_type,
     )
     _assert_replay_matches(
-        "pose", adsorbate, descriptor, spec, conformers, structure, config
+        "pose",
+        adsorbate,
+        descriptor,
+        spec,
+        conformers,
+        structure,
+        config,
+        material_type=material_type,
     )
 
 
@@ -201,7 +217,6 @@ def test_local_site_material_placement_center_matches_site_geometry(
 ):
     structure = factory()
     config = adsorption_config_factory(
-        material_type=material_type,
         num_placements=num_placements,
         placement_z_range=z_range,
         # Recovery can laterally nudge abs coords away from pure site+offset.
@@ -209,17 +224,29 @@ def test_local_site_material_placement_center_matches_site_geometry(
     )
     conformers = water_conformers()
     # Match production sampling catalog (clustered ± symmetry), not unique-only.
-    site_ctx = site_context_for_sampling(structure, config, None)
+    site_ctx = site_context_for_sampling(
+        structure, config, None, material_type=material_type
+    )
     unique_sites, use_sites = site_ctx.sites, site_ctx.use_sites
     assert use_sites and len(unique_sites) > 0
 
     specs = enumerate_placement_specs(
-        conformers, structure, config, "O", n_desired=n_desired
+        conformers,
+        structure,
+        config,
+        "O",
+        n_desired=n_desired,
+        material_type=material_type,
     )
     n_matched = 0
     for spec in specs:
         result = generate_placement_from_spec(
-            spec, conformers, structure, config, smiles="O"
+            spec,
+            conformers,
+            structure,
+            config,
+            smiles="O",
+            material_type=material_type,
         )
         if result is None or spec.site_index < 0:
             continue
@@ -366,7 +393,6 @@ def test_local_site_distance_recovery_height_direction(
         lambda *args, **kwargs: None,
     )
     config = AdsorptionConfig(
-        material_type=material_type,
         placement_distance_recovery=True,
         placement_clash_descent=False,
         placement_x_range=(0.0, 0.0),
@@ -521,7 +547,6 @@ def test_generate_placement_from_pose_respects_slab_for_sites():
     site = _make_site([5.0, 5.0, slab_top], site_type="atop", slab_indices=(0,))
     site_context = SiteContext(sites=[site], use_sites=True, source="test")
     config = AdsorptionConfig(
-        material_type="slab",
         placement_z_range=(2.0, 3.0),
         placement_z_scale_by_covalent_radius=False,
     )
@@ -536,6 +561,7 @@ def test_generate_placement_from_pose_respects_slab_for_sites():
         config,
         site_context=site_context,
         slab_for_sites=slab,
+        material_type="slab",
     )
     assert result is not None
     _, descriptor = result
@@ -556,7 +582,7 @@ def test_compute_site_z_base_multiplicative_from_covalent_radii():
         site_type="atop",
         slab_indices=(top_index,),
     )
-    config = AdsorptionConfig(material_type="slab", placement_z_range=(1.0, 1.5))
+    config = AdsorptionConfig(placement_z_range=(1.0, 1.5))
     z_lo, z_hi = _compute_site_z_base(config, slab, site, ["H"])
     r_h = float(covalent_radii[atomic_numbers["H"]])
     r_surface = _get_site_surface_radii(slab, site)
@@ -569,7 +595,6 @@ def test_compute_site_z_base_multiplicative_from_covalent_radii():
 def test_compute_site_z_base_literal_when_scaling_disabled():
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
         placement_z_range=(2.1, 3.4),
         placement_z_scale_by_covalent_radius=False,
     )
@@ -585,7 +610,7 @@ def test_compute_site_z_base_same_formula_for_pore_site():
     pore_sites = [s for s in sites if s.site_type == "pore"]
     assert pore_sites, "SiO₂ porous fixture must expose pore sites"
     site = pore_sites[0]
-    config = AdsorptionConfig(material_type="slab", placement_z_range=(1.0, 1.5))
+    config = AdsorptionConfig(placement_z_range=(1.0, 1.5))
     z_lo, z_hi = _compute_site_z_base(config, slab, site, ["O"])
     r_o = float(covalent_radii[atomic_numbers["O"]])
     r_surface = _get_site_surface_radii(slab, site)
@@ -631,7 +656,6 @@ def test_saturation_placement_height_uses_reference_slab():
             _make_site(
                 [site_xy[0], site_xy[1], slab_top],
                 site_type="atop",
-                material_type="slab",
                 slab_indices=(top_index,),
             )
         ],
@@ -650,7 +674,6 @@ def test_saturation_placement_height_uses_reference_slab():
     full_slab.set_pbc(slab.get_pbc())
 
     config = AdsorptionConfig(
-        material_type="slab",
         device="cpu",
         placement_z_range=(2.0, 3.0),
         placement_z_scale_by_covalent_radius=False,
@@ -677,6 +700,7 @@ def test_saturation_placement_height_uses_reference_slab():
         config,
         site_context=site_context,
         slab_for_sites=slab,
+        material_type="slab",
     )
     assert reference_result is not None
     _, reference_descriptor = reference_result
@@ -694,6 +718,7 @@ def test_saturation_placement_height_uses_reference_slab():
         full_slab,
         config,
         site_context=site_context,
+        material_type="slab",
     )
     assert full_slab_result is not None
     _, full_slab_descriptor = full_slab_result
@@ -711,7 +736,6 @@ def test_saturation_placement_without_site_context_uses_reference_slab():
             _make_site(
                 [site_xy[0], site_xy[1], slab_top],
                 site_type="atop",
-                material_type="slab",
                 slab_indices=(top_index,),
             )
         ],
@@ -730,7 +754,6 @@ def test_saturation_placement_without_site_context_uses_reference_slab():
     full_slab.set_pbc(slab.get_pbc())
 
     config = AdsorptionConfig(
-        material_type="slab",
         device="cpu",
         placement_z_range=(2.0, 3.0),
         placement_z_scale_by_covalent_radius=False,
@@ -757,6 +780,7 @@ def test_saturation_placement_without_site_context_uses_reference_slab():
         config,
         site_context=site_context,
         slab_for_sites=slab,
+        material_type="slab",
     )
     if result is None:
         # Sites really enumerated here; if the probe yields no usable site,
@@ -768,6 +792,7 @@ def test_saturation_placement_without_site_context_uses_reference_slab():
             config,
             site_context=site_context,
             slab_for_sites=slab,
+            material_type="slab",
         )
         assert reason != "no_sites_found"
     else:
@@ -805,7 +830,7 @@ def test_distance_recovery_rescues_too_close_placement():
         ctx,
         water.copy(),
         slab,
-        AdsorptionConfig(material_type="slab", placement_distance_recovery=False),
+        AdsorptionConfig(placement_distance_recovery=False),
         allow_distance_recovery=True,
     )
     assert fail is None
@@ -815,7 +840,7 @@ def test_distance_recovery_rescues_too_close_placement():
         ctx,
         water.copy(),
         slab,
-        AdsorptionConfig(material_type="slab", placement_distance_recovery=True),
+        AdsorptionConfig(placement_distance_recovery=True),
         allow_distance_recovery=True,
     )
     assert ok is not None, ok_reason
@@ -854,7 +879,6 @@ def test_distance_recovery_height_only_when_xy_disabled():
         normal=np.array([0.0, 0.0, 1.0]),
     )
     config = AdsorptionConfig(
-        material_type="slab",
         placement_distance_recovery=True,
         placement_clash_descent=True,
         placement_x_range=(0.0, 0.0),
@@ -913,10 +937,15 @@ def test_material_aware_distance_checks_pbc(material_type, factory):
         )
         assert ok, reason
     else:
-        config = AdsorptionConfig(material_type=material_type, seed=0)
+        config = AdsorptionConfig(seed=0)
         accepted = False
         for _spec, adsorbate, _desc in _generate_placements(
-            water_conformers(), structure, config, smiles="O", n_desired=8
+            water_conformers(),
+            structure,
+            config,
+            smiles="O",
+            n_desired=8,
+            material_type=material_type,
         ):
             ok, _, _ = check_initial_placement_distance(
                 adsorbate, structure, material_type=material_type

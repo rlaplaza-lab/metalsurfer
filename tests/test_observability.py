@@ -134,7 +134,7 @@ class TestLoadMoleculesCaching:
 
 class TestRunMetadata:
     def test_writes_valid_json(self, workdir):
-        config = AdsorptionConfig(material_type="slab", seed=123)
+        config = AdsorptionConfig(seed=123)
 
         write_run_metadata(
             surface_type="test",
@@ -164,7 +164,7 @@ class TestRunMetadata:
         """write_run_settings and write_run_metadata merge into one file."""
         from metalsurfer.io_results import write_run_settings
 
-        config = AdsorptionConfig(material_type="slab", seed=7)
+        config = AdsorptionConfig(seed=7)
 
         write_run_settings(
             surface_type="merge_test",
@@ -193,7 +193,7 @@ class TestRunMetadata:
         assert meta["config"]["seed"] == 7
 
     def test_metadata_contains_throughput(self, workdir):
-        config = AdsorptionConfig(material_type="slab")
+        config = AdsorptionConfig()
         write_run_metadata(
             surface_type="bench",
             config=config,
@@ -212,9 +212,7 @@ class TestRunMetadata:
 
     def test_config_excludes_callable_placement_filter(self, workdir):
         """placement_filter (callable) is omitted from JSON, not stringified."""
-        config = AdsorptionConfig(
-            material_type="slab", seed=42, placement_filter=lambda s: True
-        )
+        config = AdsorptionConfig(seed=42, placement_filter=lambda s: True)
 
         write_run_metadata(
             surface_type="test",

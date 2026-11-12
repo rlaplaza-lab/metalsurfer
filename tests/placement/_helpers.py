@@ -49,13 +49,16 @@ PLUGIN_MATERIAL_CASES = [
 SLAB_HOLLOW_PLUGINS = ("topology", "adaptive_grid", "rolling_probe")
 
 
-def _first_successful_placement(conformers, slab, config, smiles, n_desired=20):
+def _first_successful_placement(
+    conformers, slab, config, smiles, n_desired=20, *, material_type="slab"
+):
     specs = enumerate_placement_specs(
         conformers,
         slab,
         config,
         smiles,
         n_desired=n_desired,
+        material_type=material_type,
     )
     for spec in specs:
         result = generate_placement_from_spec(
@@ -64,14 +67,19 @@ def _first_successful_placement(conformers, slab, config, smiles, n_desired=20):
             slab,
             config,
             smiles=smiles,
+            material_type=material_type,
         )
         if result is not None:
             return spec, result
     return None, None
 
 
-def _generate_placements(conformers, slab, config, smiles=None, n_desired=30):
-    specs = enumerate_placement_specs(conformers, slab, config, smiles, n_desired)
+def _generate_placements(
+    conformers, slab, config, smiles=None, n_desired=30, *, material_type="slab"
+):
+    specs = enumerate_placement_specs(
+        conformers, slab, config, smiles, n_desired, material_type=material_type
+    )
     results = []
     for spec in specs:
         result = generate_placement_from_spec(
@@ -80,6 +88,7 @@ def _generate_placements(conformers, slab, config, smiles=None, n_desired=30):
             slab,
             config,
             smiles=smiles,
+            material_type=material_type,
         )
         if result is not None:
             results.append((spec, result[0], result[1]))
@@ -145,16 +154,25 @@ def _assert_replay_matches(
     slab: Atoms,
     config: AdsorptionConfig,
     smiles: str = "O",
+    *,
+    material_type: str = "slab",
 ) -> None:
     if mode == "spec":
         replay = generate_placement_from_spec(
-            spec, conformers, slab, config, smiles=smiles
+            spec,
+            conformers,
+            slab,
+            config,
+            smiles=smiles,
+            material_type=material_type,
         )
         assert replay is not None
         replayed = replay[0]
     else:
         pose = _pose_from_descriptor(descriptor)
-        replay = generate_placement_from_pose(pose, conformers, slab, config)
+        replay = generate_placement_from_pose(
+            pose, conformers, slab, config, material_type=material_type
+        )
         assert replay is not None
         replayed = replay[0]
     np.testing.assert_allclose(

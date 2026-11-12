@@ -37,7 +37,6 @@ def main() -> None:
     slab = fcc111("Pt", size=(2, 2, 3), vacuum=10.0, periodic=True)
     smiles = "O"
     config = AdsorptionConfig(
-        material_type="slab",
         num_conformers=1,
         num_placements=24,
         slab_relaxation_mode="none",

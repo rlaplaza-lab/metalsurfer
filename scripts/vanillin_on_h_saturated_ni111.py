@@ -51,7 +51,6 @@ def main():
     saturated_atoms = read(saturated_xyz)
 
     config = AdsorptionConfig(
-        material_type="slab",
         model_name="uma-m-1p1",
         task_name="oc20",
         num_placements=250,
@@ -63,7 +62,8 @@ def main():
         config=config,
         results_dir=results_dir,
         align=False,
-        slab_relaxation_mode="none",  # Use saturation geometry as the reference
+        slab_relaxation_mode="none",  # Use saturation geometry as the reference,
+        material_type="slab",
     )
 
     # Freeze policy for placement relaxation comes from base_slab_for_frozen below.
@@ -75,11 +75,12 @@ def main():
         config=config,
         results_dir=results_dir,
         relax_top_layer=True,
+        material_type="slab",
     )
 
     smiles = "c1(C=O)cc(OC)c(O)cc1"
     campaign = run_adsorption(
-        slab=slab,
+        substrate=slab,
         molecules=[(smiles, "vanillin")],
         config=config,
         surface_type=surface_type,

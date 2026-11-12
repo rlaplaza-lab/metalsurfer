@@ -36,7 +36,7 @@ from metalsurfer.reporting import (
     ReferenceFailure,
     ValidationFailure,
 )
-from metalsurfer.surface_prep import SlabContainer, apply_surface_constraints
+from metalsurfer.surface_prep import Substrate, apply_surface_constraints
 from metalsurfer.workflow import (
     load_molecules,
     process_molecule,
@@ -131,16 +131,16 @@ class TestValidateGeometry:
 
     def test_valid_geometry_passes(self):
         combined, slab = self._combined(energy=-100.0, forces_max=0.01)
-        config = AdsorptionConfig(material_type="slab")
-        ok, reason = _validate_geometry(combined, slab, config)
+        config = AdsorptionConfig()
+        ok, reason = _validate_geometry(combined, slab, config, material_type="slab")
         assert ok
         assert reason == ""
 
     @pytest.mark.parametrize("bad_energy", [float("nan"), float("inf")])
     def test_non_finite_energy_fails(self, bad_energy):
         combined, slab = self._combined(energy=bad_energy)
-        config = AdsorptionConfig(material_type="slab")
-        ok, reason = _validate_geometry(combined, slab, config)
+        config = AdsorptionConfig()
+        ok, reason = _validate_geometry(combined, slab, config, material_type="slab")
         assert not ok
         assert "non-finite" in reason
 
@@ -156,8 +156,8 @@ class TestValidateGeometry:
         calc.get_potential_energy.return_value = -100.0
         calc.get_forces.return_value = np.zeros((len(combined), 3))
         combined.calc = calc
-        config = AdsorptionConfig(material_type="slab", min_interatomic_distance=0.5)
-        ok, reason = _validate_geometry(combined, slab, config)
+        config = AdsorptionConfig(min_interatomic_distance=0.5)
+        ok, reason = _validate_geometry(combined, slab, config, material_type="slab")
         assert not ok
         assert "too close" in reason
         clash = float(np.min(pdist(combined.get_positions())))
@@ -180,10 +180,9 @@ class TestValidateGeometry:
         calc.get_forces.return_value = np.zeros((2, 3))
         atoms.calc = calc
         config = AdsorptionConfig(
-            material_type="slab",
             min_interatomic_distance=0.5,
         )
-        ok, reason = _validate_geometry(atoms, slab[:0], config)
+        ok, reason = _validate_geometry(atoms, slab[:0], config, material_type="slab")
         assert not ok
         assert "too close" in reason
         # Cartesian NN would see ~a_len and pass; MIC must sit under the cutoff.
@@ -209,8 +208,8 @@ class TestValidateGeometry:
         calc.get_potential_energy.return_value = -100.0
         calc.get_forces.return_value = np.zeros((2, 3))
         atoms.calc = calc
-        config = AdsorptionConfig(material_type="slab", min_interatomic_distance=0.5)
-        ok, reason = _validate_geometry(atoms, slab[:0], config)
+        config = AdsorptionConfig(min_interatomic_distance=0.5)
+        ok, reason = _validate_geometry(atoms, slab[:0], config, material_type="slab")
         assert not ok
         assert "too close" in reason
         delta = atoms.get_positions()[1] - atoms.get_positions()[0]
@@ -234,16 +233,16 @@ class TestValidateGeometry:
         calc.get_potential_energy.return_value = -100.0
         calc.get_forces.return_value = np.zeros((2, 3))
         atoms.calc = calc
-        config = AdsorptionConfig(material_type="slab", min_interatomic_distance=cutoff)
-        ok, reason = _validate_geometry(atoms, slab[:0], config)
+        config = AdsorptionConfig(min_interatomic_distance=cutoff)
+        ok, reason = _validate_geometry(atoms, slab[:0], config, material_type="slab")
         assert ok
         assert reason == ""
 
     def test_high_forces_fails(self):
         injected = 10.0
         combined, slab = self._combined(energy=-100.0, forces_max=injected)
-        config = AdsorptionConfig(material_type="slab", max_force_convergence=0.05)
-        ok, reason = _validate_geometry(combined, slab, config)
+        config = AdsorptionConfig(max_force_convergence=0.05)
+        ok, reason = _validate_geometry(combined, slab, config, material_type="slab")
         assert not ok
         assert "forces" in reason
         assert f"{injected:.3f}" in reason
@@ -258,16 +257,20 @@ class TestValidateAdsorption:
     def test_adsorbed_passes(self):
         slab = make_slab()
         combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
-        config = AdsorptionConfig(material_type="slab", binding_distance_threshold=4.0)
-        ok, reason, _ = _validate_adsorption(combined, slab, config)
+        config = AdsorptionConfig(binding_distance_threshold=4.0)
+        ok, reason, _ = _validate_adsorption(
+            combined, slab, config, material_type="slab"
+        )
         assert ok
         assert reason == ""
 
     def test_desorbed_fails(self):
         slab = make_slab()
         combined = place_molecule_on_slab(slab, make_water(), z_offset=20.0)
-        config = AdsorptionConfig(material_type="slab", binding_distance_threshold=4.0)
-        ok, reason, _ = _validate_adsorption(combined, slab, config)
+        config = AdsorptionConfig(binding_distance_threshold=4.0)
+        ok, reason, _ = _validate_adsorption(
+            combined, slab, config, material_type="slab"
+        )
         assert not ok
         assert "desorbed" in reason
 
@@ -290,16 +293,18 @@ class TestValidateAdsorption:
         )
         assert wrapped_d < 4.0, "3D PBC would falsely score this as bound"
 
-        config = AdsorptionConfig(material_type="slab", binding_distance_threshold=4.0)
-        ok, reason, min_d = _validate_adsorption(combined, slab, config)
+        config = AdsorptionConfig(binding_distance_threshold=4.0)
+        ok, reason, min_d = _validate_adsorption(
+            combined, slab, config, material_type="slab"
+        )
         assert not ok, f"lifted adsorbate should be desorbed, got: {reason}"
         assert "desorbed" in reason
         assert min_d is not None and min_d > 4.0
 
     def test_no_adsorbate_fails(self):
         slab = make_slab()
-        config = AdsorptionConfig(material_type="slab")
-        ok, reason, _ = _validate_adsorption(slab, slab, config)
+        config = AdsorptionConfig()
+        ok, reason, _ = _validate_adsorption(slab, slab, config, material_type="slab")
         assert not ok
         assert "no adsorbate" in reason
 
@@ -307,8 +312,8 @@ class TestValidateAdsorption:
         slab = make_slab()
         mol = make_water()
         combined = place_molecule_on_slab(slab, mol, z_offset=3.9)
-        config = AdsorptionConfig(material_type="slab", binding_distance_threshold=4.0)
-        ok, _, _ = _validate_adsorption(combined, slab, config)
+        config = AdsorptionConfig(binding_distance_threshold=4.0)
+        ok, _, _ = _validate_adsorption(combined, slab, config, material_type="slab")
         assert ok
 
     def test_skip_desorption_check_passes_desorbed(self):
@@ -316,11 +321,12 @@ class TestValidateAdsorption:
         slab = make_slab()
         combined = place_molecule_on_slab(slab, make_water(), z_offset=20.0)
         config = AdsorptionConfig(
-            material_type="slab",
             binding_distance_threshold=4.0,
             skip_desorption_check=True,
         )
-        ok, reason, _ = _validate_adsorption(combined, slab, config)
+        ok, reason, _ = _validate_adsorption(
+            combined, slab, config, material_type="slab"
+        )
         assert ok
         assert reason == ""
 
@@ -349,9 +355,11 @@ class TestValidateAdsorption:
         combined = slab_with_pre_adsorbate + water
         combined.set_cell(slab_with_pre_adsorbate.get_cell())
         combined.set_pbc(slab_with_pre_adsorbate.get_pbc())
-        config = AdsorptionConfig(material_type="slab", binding_distance_threshold=4.0)
+        config = AdsorptionConfig(binding_distance_threshold=4.0)
 
-        ok, _, _ = _validate_adsorption(combined, slab_with_pre_adsorbate, config)
+        ok, _, _ = _validate_adsorption(
+            combined, slab_with_pre_adsorbate, config, material_type="slab"
+        )
         assert ok, "Without surface_prefix_atoms, prior adsorbates can mask desorption"
 
         ok, reason, _ = _validate_adsorption(
@@ -359,6 +367,7 @@ class TestValidateAdsorption:
             slab_with_pre_adsorbate,
             config,
             surface_prefix_atoms=len(slab_metal),
+            material_type="slab",
         )
         assert not ok
         assert "desorbed" in reason
@@ -422,10 +431,8 @@ class TestProcessMolecule:
         ],
     )
     def test_early_failure_paths(self, smiles, name, refs, expected_stage):
-        slab = SlabContainer(make_slab())
-        config = AdsorptionConfig(
-            material_type="slab", num_placements=1, num_conformers=1, seed=42
-        )
+        slab = Substrate(make_slab(), material_type="slab")
+        config = AdsorptionConfig(num_placements=1, num_conformers=1, seed=42)
         outcome = process_molecule(
             smiles,
             name,
@@ -440,11 +447,9 @@ class TestProcessMolecule:
         assert name in str(outcome.failure_summary.reason)
 
     def test_no_conformers_populates_failure_summary(self):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         refs = self._make_refs()
-        config = AdsorptionConfig(
-            material_type="slab", num_placements=1, num_conformers=1, seed=42
-        )
+        config = AdsorptionConfig(num_placements=1, num_conformers=1, seed=42)
         mock_cfs = MagicMock(return_value=None)
         with patch(
             "metalsurfer.workflow.shared.create_conformers_from_smiles", mock_cfs
@@ -471,10 +476,10 @@ class TestProcessMolecule:
             cell=[3, 3, 20],
             pbc=[True, True, False],
         )
-        slab = SlabContainer(apply_surface_constraints(tiny, material_type="slab"))
-        config = AdsorptionConfig(
-            material_type="slab", num_placements=2, num_conformers=1, seed=42
+        slab = Substrate(
+            apply_surface_constraints(tiny, material_type="slab"), material_type="slab"
         )
+        config = AdsorptionConfig(num_placements=2, num_conformers=1, seed=42)
         big_mol = Atoms("C2", positions=[[0, 0, 0], [5, 0, 0]])
         with pytest.raises(
             GeometryValidationError, match="auto_resize_substrate_for_molecule"
@@ -487,10 +492,9 @@ class TestProcessMolecule:
             )
 
     def test_bo_failure_events_emit_negative_records(self):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
         config = AdsorptionConfig(
-            material_type="slab",
             bo=BOConfig(initial_random=1, batch_size=1, total_batches=1),
             num_placements=2,
             num_conformers=1,
@@ -576,10 +580,9 @@ class TestProcessMolecule:
         )
 
     def test_bo_deduplicated_results_are_filtered_out(self):
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
         config = AdsorptionConfig(
-            material_type="slab",
             bo=BOConfig(initial_random=1, batch_size=1, total_batches=1),
             num_placements=2,
             num_conformers=1,
@@ -661,10 +664,9 @@ class TestProcessMolecule:
         was first recorded as a real E_ads and then rejected as a non-duplicate
         must contribute exactly one (penalty) observation.
         """
-        slab = SlabContainer(make_slab())
+        slab = Substrate(make_slab(), material_type="slab")
         refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
         config = AdsorptionConfig(
-            material_type="slab",
             bo=BOConfig(initial_random=2, batch_size=2, total_batches=1),
             num_placements=2,
             num_conformers=1,
@@ -774,10 +776,9 @@ class TestProcessMolecule:
 def test_bo_batches_reuse_upfront_capacity_for_clamping(monkeypatch, clamp_enabled):
     from metalsurfer.workflow import core as core_mod
 
-    slab = SlabContainer(make_slab())
+    slab = Substrate(make_slab(), material_type="slab")
     refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
     config = AdsorptionConfig(
-        material_type="slab",
         bo=BOConfig(initial_random=1, batch_size=1, total_batches=1),
         num_placements=2,
         num_conformers=1,
@@ -958,7 +959,6 @@ def test_fill_materialized_placements_estimates_capacity_once(monkeypatch):
         conformers=[water],
         slab_for_sites=slab,
         config=AdsorptionConfig(
-            material_type="slab",
             num_placements=10,
             placement_retry_enabled=False,
         ),
@@ -966,6 +966,7 @@ def test_fill_materialized_placements_estimates_capacity_once(monkeypatch):
         site_context=None,
         slab_atoms=slab,
         calculator=None,
+        material_type="slab",
     )
 
     assert calls == [1]
@@ -996,7 +997,6 @@ def test_fill_computes_spec_grid_info_once(monkeypatch):
         conformers=[water],
         slab_for_sites=slab,
         config=AdsorptionConfig(
-            material_type="slab",
             num_placements=2,
             placement_retry_enabled=False,
             placement_fill_clamp_to_capacity=False,
@@ -1005,6 +1005,7 @@ def test_fill_computes_spec_grid_info_once(monkeypatch):
         site_context=None,
         slab_atoms=slab,
         calculator=None,
+        material_type="slab",
     )
 
     assert grid_calls["n"] == 1
@@ -1229,7 +1230,10 @@ class TestSaveSummaryResults:
         )
         rr = ScreeningRunResult(molecule="water", results=results, summary=summary)
         save_summary_results(
-            [rr], surface_type="test", config=AdsorptionConfig(material_type="slab")
+            [rr],
+            surface_type="test",
+            config=AdsorptionConfig(),
+            material_type="slab",
         )
         detailed = workdir / "results_test" / "adsorption_energies_detailed.csv"
         summary_path = workdir / "results_test" / "adsorption_energy_summary.csv"
@@ -1246,7 +1250,10 @@ class TestSaveSummaryResults:
 
     def test_empty_results_no_crash(self, workdir):
         save_summary_results(
-            [], surface_type="empty", config=AdsorptionConfig(material_type="slab")
+            [],
+            surface_type="empty",
+            config=AdsorptionConfig(),
+            material_type="slab",
         )
         assert not (
             workdir / "results_empty" / "adsorption_energies_detailed.csv"
@@ -1281,7 +1288,10 @@ class TestSaveSummaryResults:
             summary=build_molecule_summary("water", results),
         )
         save_summary_results(
-            [rr], surface_type="test", config=AdsorptionConfig(material_type="slab")
+            [rr],
+            surface_type="test",
+            config=AdsorptionConfig(),
+            material_type="slab",
         )
         detail_df = pd.read_csv(
             workdir / "results_test" / "adsorption_energies_detailed.csv"
@@ -1297,9 +1307,8 @@ class TestSaveSummaryResults:
         save_summary_results(
             [rr],
             surface_type="test_rich",
-            config=AdsorptionConfig(
-                material_type="slab", export_placement_provenance=True
-            ),
+            config=AdsorptionConfig(export_placement_provenance=True),
+            material_type="slab",
         )
         rich_df = pd.read_csv(
             workdir / "results_test_rich" / "adsorption_energies_detailed.csv"
@@ -1334,7 +1343,8 @@ class TestSaveSingleMoleculeResults:
             "water",
             results,
             surface_type="single_test",
-            config=AdsorptionConfig(material_type="slab"),
+            config=AdsorptionConfig(),
+            material_type="slab",
         )
         xyz_path = (
             workdir / "results_single_test/xyz_structures/water_all/conformer_000.xyz"
@@ -1362,9 +1372,13 @@ class TestSaveSingleMoleculeResults:
                 placement_descriptor=make_placement_descriptor(placement_id=0),
             ),
         ]
-        config = AdsorptionConfig(material_type="slab", write_vasp_inputs=True)
+        config = AdsorptionConfig(write_vasp_inputs=True)
         save_single_molecule_results(
-            "water", results, surface_type="vasp_test", config=config
+            "water",
+            results,
+            surface_type="vasp_test",
+            config=config,
+            material_type="slab",
         )
         poscar_path = (
             workdir / "results_vasp_test/vasp_inputs/water_all/conformer_000/POSCAR"
@@ -1389,7 +1403,8 @@ class TestSaveSingleMoleculeResults:
             results,
             surface_type="no_csv_test",
             write_csv=False,
-            config=AdsorptionConfig(material_type="slab"),
+            config=AdsorptionConfig(),
+            material_type="slab",
         )
         xyz_path = (
             workdir / "results_no_csv_test/xyz_structures/water_all/conformer_000.xyz"
@@ -1425,13 +1440,14 @@ class TestSaveSingleMoleculeResults:
             ),
         ]
         st = "campaign_test"
-        config = AdsorptionConfig(material_type="slab")
+        config = AdsorptionConfig()
         save_single_molecule_results(
             "water",
             water_results,
             surface_type=st,
             write_csv=False,
             config=config,
+            material_type="slab",
         )
         save_single_molecule_results(
             "other",
@@ -1439,12 +1455,15 @@ class TestSaveSingleMoleculeResults:
             surface_type=st,
             write_csv=False,
             config=config,
+            material_type="slab",
         )
         combined = [
             screening_run_result("water", water_results),
             screening_run_result("other", other_results),
         ]
-        save_summary_results(combined, surface_type=st, config=config)
+        save_summary_results(
+            combined, surface_type=st, config=config, material_type="slab"
+        )
         detailed_csv = workdir / f"results_{st}" / "adsorption_energies_detailed.csv"
         summary_csv = workdir / f"results_{st}" / "adsorption_energy_summary.csv"
         df = pd.read_csv(detailed_csv)
@@ -1458,7 +1477,8 @@ class TestSaveSingleMoleculeResults:
             "water",
             [],
             surface_type="empty",
-            config=AdsorptionConfig(material_type="slab"),
+            config=AdsorptionConfig(),
+            material_type="slab",
         )
         assert not (workdir / "results_empty/adsorption_energies_detailed.csv").exists()
 
@@ -1484,7 +1504,7 @@ class TestSaveMoleculeResults:
             "water",
             [entry],
             surface_type="test",
-            config=AdsorptionConfig(material_type="slab"),
+            config=AdsorptionConfig(),
         )
         xyz_path = workdir / "results_test/xyz_structures/water_all/conformer_000.xyz"
         vasp_path = workdir / "results_test/vasp_inputs/water_all/conformer_000"
@@ -1502,7 +1522,7 @@ class TestSaveMoleculeResults:
             distance=2.5,
             placement_descriptor=make_placement_descriptor(placement_id=0),
         )
-        config = AdsorptionConfig(material_type="slab", write_vasp_inputs=True)
+        config = AdsorptionConfig(write_vasp_inputs=True)
         save_molecule_results("water", [entry], surface_type="vasp_test", config=config)
         vasp_dir = workdir / "results_vasp_test/vasp_inputs/water_all/conformer_000"
         assert (vasp_dir / "POSCAR").exists()

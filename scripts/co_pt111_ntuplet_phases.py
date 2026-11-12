@@ -545,7 +545,6 @@ def run_job(
     # Explicit num_placements skips workload autotune (and the n-tuplet
     # floor-divide of that autotuned budget).
     config = AdsorptionConfig(
-        material_type="slab",
         num_conformers=1,
         num_placements=num_placements,
         saturation_molecules_per_step=job.n_co,
@@ -567,6 +566,7 @@ def run_job(
         results_dir=results_dir,
         slab_relaxation_mode="none",
         relax_top_layer=False,
+        material_type="slab",
     )
 
     print(
@@ -574,7 +574,7 @@ def run_job(
         f"{num_placements} joint configs ==="
     )
     campaign = run_saturation(
-        slab=slab,
+        substrate=slab,
         molecules=[(CO_SMILES, CO_NAME)],
         config=config,
         surface_type=job.surface_type,

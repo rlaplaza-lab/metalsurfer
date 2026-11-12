@@ -2,6 +2,7 @@
 campaign: adsorption
 surface_type: h2_ru_slab_yaml
 substrate:
+  material_type: slab
   bulk_id: mp-33
   miller_indices: [0, 0, 1]
   supercell: [2, 2, 1]
@@ -9,7 +10,6 @@ molecules:
   - smiles: "[H][H]"
     name: H2
 config:
-  material_type: slab
   num_conformers: 1
   num_placements: 4
   enable_dissociative_placement: true

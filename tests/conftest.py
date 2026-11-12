@@ -24,7 +24,7 @@ from metalsurfer.placement.site_context import (
     _SITE_CONTEXT_CACHE,
     _SITE_CONTEXT_CACHE_LOCK,
 )
-from metalsurfer.surface_prep import apply_surface_constraints
+from metalsurfer.surface_prep import Substrate, apply_surface_constraints
 
 from . import _session_flags
 
@@ -135,7 +135,24 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def adsorption_config_factory(**overrides: object) -> AdsorptionConfig:
     """Build AdsorptionConfig with compact test overrides."""
-    return AdsorptionConfig(**{"material_type": "slab", **overrides})
+    return AdsorptionConfig(**overrides)
+
+
+def make_substrate(
+    atoms: Atoms | None = None,
+    *,
+    material_type: str = "slab",
+    finalized: bool = False,
+) -> Substrate:
+    """Wrap atoms as :class:`~metalsurfer.surface_prep.Substrate` for tests."""
+    if atoms is None:
+        if material_type == "nanoparticle":
+            atoms = make_nanoparticle()
+        elif material_type == "porous":
+            atoms = make_porous_framework()
+        else:
+            atoms = make_slab()
+    return Substrate(atoms, material_type=material_type, finalized=finalized)
 
 
 def water_conformers() -> list[Atoms]:

@@ -166,14 +166,13 @@ REGRET_TIE_TOL = 1e-6
 
 
 def _cfg() -> AdsorptionConfig:
-    return AdsorptionConfig(material_type="slab")
+    return AdsorptionConfig()
 
 
 def _replay_cfg() -> AdsorptionConfig:
     """Fixed offline-replay budget (10 init + 18 batches of 5 = 100 evals)."""
     return AdsorptionConfig(
-        material_type="slab",
-        bo=BOConfig(initial_random=10, batch_size=5, total_batches=18),
+        bo=BOConfig(initial_random=10, batch_size=5, total_batches=18)
     )
 
 
@@ -183,13 +182,12 @@ _REPLAY = _replay_cfg()
 def _replay_cfg_for_init(sampling: str) -> AdsorptionConfig:
     """Replay budget with a specific initial-placement sampling strategy."""
     return AdsorptionConfig(
-        material_type="slab",
         bo=BOConfig(
             initial_random=_REPLAY.bo.initial_random,
             batch_size=_REPLAY.bo.batch_size,
             total_batches=_REPLAY.bo.total_batches,
             initial_sampling=sampling,  # type: ignore[arg-type]
-        ),
+        )
     )
 
 
@@ -204,10 +202,7 @@ def _replay_cfg_for_batch(batch_size: int) -> AdsorptionConfig:
     remaining = max(0, target - init)
     n_batches = max(1, (remaining + batch_size - 1) // batch_size)
     return AdsorptionConfig(
-        material_type="slab",
-        bo=BOConfig(
-            initial_random=init, batch_size=batch_size, total_batches=n_batches
-        ),
+        bo=BOConfig(initial_random=init, batch_size=batch_size, total_batches=n_batches)
     )
 
 

@@ -122,3 +122,25 @@ def test_package_version_matches_pyproject():
         f"__version__={metalsurfer.__version__!r} != "
         f"pyproject.toml version={pyproject_version!r}"
     )
+
+
+@pytest.mark.docs
+def test_docs_do_not_revive_slabcontainer_or_config_material_type():
+    """Live docs must use Substrate; material_type is not an AdsorptionConfig field."""
+    stale_paths: list[str] = []
+    paths = list((_ROOT / "docs").rglob("*.rst"))
+    paths.extend(_ROOT / name for name in ("README.md", "CORE_SYSTEM_EXPLANATION.md"))
+    config_mt = re.compile(
+        r"required on\s+(?:``|`)?AdsorptionConfig|AdsorptionConfig\.material_type"
+        r"|AdsorptionConfig\(material_type"
+    )
+    for path in sorted(paths, key=lambda p: p.as_posix()):
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(_ROOT).as_posix()
+        if "SlabContainer" in text or "coerce_slab_container" in text:
+            stale_paths.append(f"{rel}: SlabContainer/coerce_slab_container")
+        if config_mt.search(text):
+            stale_paths.append(f"{rel}: material_type on AdsorptionConfig")
+    assert not stale_paths, "Stale material_type / SlabContainer docs:\n" + "\n".join(
+        stale_paths
+    )

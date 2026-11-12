@@ -1,4 +1,4 @@
-"""Integration test: water on Cu(111) via run_adsorption (campaign API + MLIP)."""
+"""Integration test: water on Cu(111) via run_adsorption(campaign API + MLIP)."""
 
 import numpy as np
 import pytest
@@ -27,7 +27,6 @@ def test_run_adsorption_water_on_cu111(workdir):
     # unique survivors while still locking yield and E_ads.
     num_placements = 16
     config = AdsorptionConfig(
-        material_type="slab",
         seed=42,
         num_conformers=1,
         num_placements=num_placements,
@@ -48,9 +47,10 @@ def test_run_adsorption_water_on_cu111(workdir):
         ),
         config=config,
         results_dir="results_test_water_cu_slab",
+        material_type="slab",
     )
     campaign = run_adsorption(
-        slab=slab,
+        substrate=slab,
         molecules=[("O", "water")],
         config=config,
         surface_type="water_cu_slab",
@@ -128,7 +128,6 @@ def test_water_cu_run_twice_reproducible(workdir):
     """Same seed twice → E_ads within GPU noise (atol 1e-2 eV)."""
     num_placements = 4
     config = AdsorptionConfig(
-        material_type="slab",
         seed=42,
         num_conformers=1,
         num_placements=num_placements,
@@ -143,6 +142,7 @@ def test_water_cu_run_twice_reproducible(workdir):
         ),
         config=config,
         results_dir="results_water_cu_repro",
+        material_type="slab",
     )
 
     calculator, ts_model = load_uma(config.model_name, config.device, config.task_name)

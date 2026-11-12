@@ -28,7 +28,7 @@ def test_site_kind_auto_derives_wall_and_void():
         normal=np.array([0.0, 0.0, 1.0]),
         site_type="pore",
         slab_indices=(),
-        material_type="porous",
+        material_type="slab",
         site_source="test",
         env_fingerprint=((), (), 0),
     )

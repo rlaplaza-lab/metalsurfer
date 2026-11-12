@@ -18,11 +18,7 @@ def main() -> int:
     surface_type = "tributylgermyl_pt111"
     results_dir = f"results_{surface_type}"
 
-    config = AdsorptionConfig(
-        material_type="slab",
-        num_placements=250,
-        min_contact_ratio=0.5,
-    )
+    config = AdsorptionConfig(num_placements=250, min_contact_ratio=0.5)
 
     slab = prepare_substrate(
         bulk_id="mp-126",
@@ -30,11 +26,12 @@ def main() -> int:
         supercell=(1, 1, 1),
         config=config,
         results_dir=results_dir,
+        material_type="slab",
     )
 
     smiles = "[Ge-](CCCC)(CCCC)CCCC"
     campaign = run_adsorption(
-        slab=slab,
+        substrate=slab,
         molecules=[(smiles, "tributylgermyl")],
         config=config,
         surface_type=surface_type,

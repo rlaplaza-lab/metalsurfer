@@ -257,6 +257,7 @@ def save_single_molecule_results(
     system_name: str | None = None,
     *,
     config: AdsorptionConfig,
+    material_type: str,
     write_csv: bool = True,
 ) -> None:
     """Write XYZ, POSCAR, and CSV for a single molecule's screening results.
@@ -280,6 +281,8 @@ def save_single_molecule_results(
         Optional system identifier for VASP inputs.
     config
         Adsorption configuration.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     write_csv
         Whether to write the detailed and summary CSV files.
     """
@@ -296,7 +299,12 @@ def save_single_molecule_results(
     if not write_csv:
         return
     run_result = screening_run_result(molecule_name, results)
-    save_summary_results([run_result], surface_type=surface_type, config=config)
+    save_summary_results(
+        [run_result],
+        surface_type=surface_type,
+        config=config,
+        material_type=material_type,
+    )
     write_run_settings(
         surface_type,
         config,
@@ -382,6 +390,7 @@ def save_summary_results(
     surface_type: str = "manual",
     *,
     config: AdsorptionConfig,
+    material_type: str,
 ) -> None:
     """Write detailed and summary CSV files from typed run results.
 
@@ -401,10 +410,16 @@ def save_summary_results(
         Campaign surface type label.
     config
         Adsorption configuration.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     """
     results_dir = results_dir_for(surface_type)
     include_provenance = bool(config.export_placement_provenance)
-    context_row = config_to_context_row(config, include_provenance=include_provenance)
+    context_row = config_to_context_row(
+        config,
+        material_type=material_type,
+        include_provenance=include_provenance,
+    )
     write_vasp = config.write_vasp_inputs
     all_rows: list[dict[str, Any]] = []
     for rr in run_results:
@@ -706,6 +721,7 @@ def save_saturation_results(
     surface_type: str = "manual",
     *,
     config: AdsorptionConfig,
+    material_type: str,
 ) -> None:
     """Write saturation CSV summaries and per-step structures.
 
@@ -725,6 +741,8 @@ def save_saturation_results(
         Campaign surface type label.
     config
         Adsorption configuration.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     """
     if not saturation_results:
         logger.warning("No saturation results to save")
@@ -745,7 +763,10 @@ def save_saturation_results(
 
     for multi in multis:
         save_multi_mol_saturation_results(
-            multi, surface_type=surface_type, config=config
+            multi,
+            surface_type=surface_type,
+            config=config,
+            material_type=material_type,
         )
 
     if not singles:
@@ -763,7 +784,11 @@ def save_saturation_results(
         surface_type, write_vasp=write_vasp
     )
     include_provenance = bool(config.export_placement_provenance)
-    context_row = config_to_context_row(config, include_provenance=include_provenance)
+    context_row = config_to_context_row(
+        config,
+        material_type=material_type,
+        include_provenance=include_provenance,
+    )
     detail_rows: list[dict[str, Any]] = []
     placement_rows: list[dict[str, Any]] = []
     save_all = config.saturation_save_all_placements
@@ -827,6 +852,7 @@ def save_multi_mol_saturation_results(
     surface_type: str = "manual",
     *,
     config: AdsorptionConfig,
+    material_type: str,
 ) -> None:
     """Write CSV summaries and per-step structures for a multi-molecule saturation run.
 
@@ -846,6 +872,8 @@ def save_multi_mol_saturation_results(
         Campaign surface type label.
     config
         Adsorption configuration.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     """
     write_vasp = config.write_vasp_inputs
     results_dir, vasp_base = _saturation_results_dirs(
@@ -855,7 +883,11 @@ def save_multi_mol_saturation_results(
     mol_dir = saturation_xyz_dir(results_dir, mol_label).as_posix()
 
     include_provenance = bool(config.export_placement_provenance)
-    context_row = config_to_context_row(config, include_provenance=include_provenance)
+    context_row = config_to_context_row(
+        config,
+        material_type=material_type,
+        include_provenance=include_provenance,
+    )
     detail_rows, placement_rows = _collect_saturation_csv_rows(
         result.steps,
         results_dir=results_dir,

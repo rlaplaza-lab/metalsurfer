@@ -2,6 +2,7 @@
 campaign: saturation
 surface_type: h2_cu_saturation
 substrate:
+  material_type: slab
   bulk_id: mp-30
   miller_indices: [1, 1, 1]
   supercell: [1, 1, 1]
@@ -9,7 +10,6 @@ molecules:
   - smiles: "[H][H]"
     name: H2
 config:
-  material_type: slab
   num_conformers: 1
   num_placements: 250
   enable_dissociative_placement: true

@@ -53,7 +53,7 @@ def _records_dataframe(records: list[PlacementRecord]) -> pd.DataFrame:
 
 
 def test_computation_context_defaults_match_numeric_defaults():
-    ctx = ComputationContext()
+    ctx = ComputationContext(material_type="slab")
     assert (
         ctx.min_initial_distance
         == numeric_defaults.MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
@@ -81,13 +81,13 @@ class TestComputationContext:
         )
 
     def test_default_settings_hash_pinned(self):
-        assert ComputationContext().settings_hash() == "80193d9cd8af"
+        assert (
+            ComputationContext(material_type="slab").settings_hash() == "80193d9cd8af"
+        )
 
     def test_from_config(self):
-        config = AdsorptionConfig(
-            material_type="slab", model_name="test-model", fmax=0.03, seed=123
-        )
-        ctx = ComputationContext.from_config(config)
+        config = AdsorptionConfig(model_name="test-model", fmax=0.03, seed=123)
+        ctx = ComputationContext.from_config(config, material_type="slab")
         assert ctx.model_name == "test-model"
         assert ctx.task_name == "oc25"
         assert ctx.dispersion == "none"
@@ -95,36 +95,38 @@ class TestComputationContext:
         assert ctx.seed == 123
 
         custom = ComputationContext.from_config(
-            AdsorptionConfig(
-                material_type="slab", model_name="test-model", task_name="oc20"
-            )
+            AdsorptionConfig(model_name="test-model", task_name="oc20"),
+            material_type="slab",
         )
         assert custom.task_name == "oc20"
 
     def test_settings_hash_deterministic(self):
-        ctx1 = ComputationContext()
-        ctx2 = ComputationContext()
+        ctx1 = ComputationContext(material_type="slab")
+        ctx2 = ComputationContext(material_type="slab")
         assert ctx1.settings_hash() == ctx2.settings_hash()
 
     def test_settings_hash_changes(self):
-        ctx1 = ComputationContext(model_name="a")
-        ctx2 = ComputationContext(model_name="b")
+        ctx1 = ComputationContext(model_name="a", material_type="slab")
+        ctx2 = ComputationContext(model_name="b", material_type="slab")
         assert ctx1.settings_hash() != ctx2.settings_hash()
 
     def test_settings_hash_changes_with_task_name(self):
-        ctx1 = ComputationContext(task_name="oc20")
-        ctx2 = ComputationContext(task_name="oc25")
+        ctx1 = ComputationContext(task_name="oc20", material_type="slab")
+        ctx2 = ComputationContext(task_name="oc25", material_type="slab")
         assert ctx1.settings_hash() != ctx2.settings_hash()
 
     def test_settings_hash_changes_with_dispersion(self):
-        ctx1 = ComputationContext(dispersion="none")
+        ctx1 = ComputationContext(dispersion="none", material_type="slab")
         ctx2 = ComputationContext(
-            model_name="uma-s-1p2", task_name="omat", dispersion="d3"
+            model_name="uma-s-1p2",
+            task_name="omat",
+            dispersion="d3",
+            material_type="slab",
         )
         assert ctx1.settings_hash() != ctx2.settings_hash()
 
     def test_to_dict_roundtrip(self):
-        ctx = ComputationContext(fmax=0.02, seed=99)
+        ctx = ComputationContext(fmax=0.02, seed=99, material_type="slab")
         d = ctx.to_dict()
         assert d["fmax"] == 0.02
         assert d["seed"] == 99
@@ -137,6 +139,7 @@ class TestComputationContext:
             stage1_steps=7,
             placement_z_range=(0.4, 1.1),
             placement_z_scale_by_covalent_radius=False,
+            material_type="slab",
         )
         r = make_placement_record(0)
         r.context = ctx
@@ -262,6 +265,7 @@ class TestPlacementRecord:
             min_initial_distance=1.2,
             min_contact_ratio=0.7,
             top_layer_tolerance=0.4,
+            material_type="slab",
         )
         r2 = PlacementRecord.from_flat_dict(r.to_flat_dict(include_provenance=True))
         assert r2.context.device == "cpu"
@@ -365,7 +369,10 @@ class TestPlacementRecord:
             placement_descriptor=descriptor,
         )
         record = PlacementRecord.from_screening_result(
-            result, smiles="C", surface_id="test"
+            result,
+            smiles="C",
+            surface_id="test",
+            material_type="slab",
         )
         assert record is not None
         assert record.molecule == "test"
@@ -604,12 +611,11 @@ class TestRecordReplay:
     def test_record_to_config(self):
         r = make_placement_record()
         cfg = AdsorptionConfig(
-            material_type="slab",
             symmetry_tolerance=0.2,
             site_equivalence_tolerance=0.06,
             planar_z_variance_threshold=0.04,
         )
-        r.context = ComputationContext.from_config(cfg)
+        r.context = ComputationContext.from_config(cfg, material_type="slab")
         config = r.to_config()
         assert config.model_name == r.context.model_name
         assert config.fmax == r.context.fmax
@@ -730,7 +736,10 @@ def test_from_flat_dict_accepts_lean_default_context_hash():
     r = make_placement_record(0)
     flat = r.to_flat_dict(include_provenance=False)
     r2 = PlacementRecord.from_flat_dict(flat)
-    assert r2.context.settings_hash() == ComputationContext().settings_hash()
+    assert (
+        r2.context.settings_hash()
+        == ComputationContext(material_type="slab").settings_hash()
+    )
 
 
 def test_from_flat_dict_rejects_incomplete_ctx_columns():

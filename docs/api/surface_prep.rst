@@ -54,11 +54,10 @@ keyword arguments ``relax_top_layer``, ``freeze_symbols``, and
 |                                | policy)                                       |
 +--------------------------------+-----------------------------------------------+
 
-When ``relax_top_layer=True``, which atoms stay free depends on
-:attr:`~metalsurfer.AdsorptionConfig.material_type` on the *config* passed to
-``prepare_substrate`` / ``finalize_substrate``. There is no separate prep
-``material_type`` argument — set it on ``AdsorptionConfig`` before prep
-(required; no default) and reuse the same config in ``run_*``.
+When ``relax_top_layer=True``, which atoms stay free depends on the
+``material_type`` keyword passed to ``prepare_substrate`` /
+``finalize_substrate`` (stored on the returned
+:class:`~metalsurfer.surface_prep.Substrate`).
 
 +--------------------+---------------------------------------------------------+
 | ``material_type``  | Free atoms (within ``top_layer_tolerance``)             |
@@ -89,22 +88,33 @@ prep-only (not on ``AdsorptionConfig`` / ``run_*``).
 
 Example — rigid substrate (default) vs top-layer relaxation::
 
-   config = AdsorptionConfig(material_type="slab")
+   config = AdsorptionConfig()
 
    # Default: prep equilibrates ions, then entire substrate is frozen during adsorption
-   slab = prepare_substrate(bulk_id="mp-33", miller_indices=(0, 0, 1), config=config)
-
-   # Allow the top surface layer to relax with the adsorbate
-   slab = prepare_substrate(
+   substrate = prepare_substrate(
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
+       material_type="slab",
+       config=config,
+   )
+
+   # Allow the top surface layer to relax with the adsorbate
+   substrate = prepare_substrate(
+       bulk_id="mp-33",
+       miller_indices=(0, 0, 1),
+       material_type="slab",
        config=config,
        relax_top_layer=True,
    )
 
    # Skip prep equilibration (experimental geometry only)
-   config = AdsorptionConfig(material_type="porous", slab_relaxation_mode="none")
-   slab = prepare_substrate(slab=mof_atoms, config=config, align=False)
+   config = AdsorptionConfig(slab_relaxation_mode="none")
+   substrate = prepare_substrate(
+       slab=mof_atoms,
+       material_type="porous",
+       config=config,
+       align=False,
+   )
 
 Recommended import
 ------------------
@@ -117,10 +127,11 @@ Recommended import
        resize_substrate_for_molecule,
    )
 
-   config = AdsorptionConfig(material_type="slab", seed=42)
-   slab = prepare_substrate(
+   config = AdsorptionConfig(seed=42)
+   substrate = prepare_substrate(
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
+       material_type="slab",
        config=config,
        results_dir="results_demo",
    )
@@ -147,20 +158,20 @@ Layout, PBC, constraints, validation
 - :func:`~metalsurfer.surface_prep.apply_surface_constraints`
 - :func:`~metalsurfer.surface_prep.validate_substrate`
 - :func:`~metalsurfer.surface_prep.accept_substrate_for_api`
-- :func:`~metalsurfer.surface_prep.coerce_slab_container`
+- :func:`~metalsurfer.surface_prep.coerce_substrate`
 
 ``finalize_substrate`` runs full ``validate_substrate`` and marks the
-:class:`~metalsurfer.surface_prep.SlabContainer` as ``finalized``. Campaign
+:class:`~metalsurfer.surface_prep.Substrate` as ``finalized``. Campaign
 bootstrap then uses ``accept_substrate_for_api``, which only re-checks API
-invariants for finalized containers (no second full vacuum/cell pass).
+invariants for finalized substrates (no second full vacuum/cell pass).
 Conformer sizing stays in screening prep after resize.
-``coerce_slab_container(..., copy=False)`` returns an existing container
+``coerce_substrate(..., copy=False)`` returns an existing substrate
 unchanged; pass ``copy=True`` when isolation is required.
 
 Construction and modification
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- :class:`~metalsurfer.surface_prep.SlabContainer`
+- :class:`~metalsurfer.surface_prep.Substrate`
 - :func:`~metalsurfer.surface_prep.create_slab_from_bulk`
 - :func:`~metalsurfer.surface_prep.create_slab_from_atoms`
 - :func:`~metalsurfer.surface_prep.substitute_alloy`
@@ -239,11 +250,12 @@ Example: equilibrate the clean slab, then relax after adatom deposition:
        slab_relaxation_mode="ionic_only",
        slab_relaxation_steps=250,
    )
-   slab = prepare_substrate(
+   substrate = prepare_substrate(
        bulk_id="mp-81",
        miller_indices=(1, 1, 1),
        adatom_symbol="Au",
        adatom_coverage=0.20,
+       material_type="slab",
        config=config,
        adatom_relaxation_mode="ionic_only",
    )
@@ -288,7 +300,7 @@ Building-block reference
 
 .. autofunction:: metalsurfer.surface_prep.deposit_adatoms
 
-.. autofunction:: metalsurfer.surface_prep.coerce_slab_container
+.. autofunction:: metalsurfer.surface_prep.coerce_substrate
 
 .. autofunction:: metalsurfer.surface_prep.compute_minimum_supercell
 
@@ -317,6 +329,6 @@ attached during prep; campaign APIs read ``frozen_indices_from_constraints``.
 
 .. autofunction:: metalsurfer.surface_prep.format_atom_index_ranges
 
-.. autoclass:: metalsurfer.surface_prep.SlabContainer
+.. autoclass:: metalsurfer.surface_prep.Substrate
    :members:
    :undoc-members:

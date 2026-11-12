@@ -16,7 +16,7 @@ from ..optimization import (
     optimize_isolated_molecules_batched,
 )
 from ..optimization._model import fairchem_backbone
-from ..surface_prep import SlabContainer
+from ..surface_prep import Substrate
 from .shared import _prepare_atoms_for_calculator
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,7 @@ def _predictor_atom_refs(ts_model: object, calculator: object) -> object:
 
 
 def calculate_reference_energies(
-    slab: SlabContainer,
+    slab: Substrate,
     calculator,
     molecules: list[str],
     smiles_list: list[str],

@@ -8,10 +8,11 @@ people change. Every field is listed in :doc:`../api/config`.
 What material?
 --------------
 
-``material_type`` is **required** on the same config used for
-:func:`~metalsurfer.surface_prep.prepare_substrate` and the campaign call.
-It must match the substrate ASE PBC mask exactly (metalsurfer does not
-rewrite mismatched flags or infer the type from vacuum gaps):
+``material_type`` is required on the substrate (not on
+:class:`~metalsurfer.AdsorptionConfig`). Pass it to prep helpers or
+:class:`~metalsurfer.surface_prep.Substrate`. It must match the
+substrate ASE PBC mask exactly (metalsurfer does not rewrite mismatched
+flags or infer the type from vacuum gaps):
 
 ``slab`` → ``pbc=[True, True, False]``
    Flat crystal surface (2D). Sites keep one face along the open axis
@@ -26,8 +27,8 @@ rewrite mismatched flags or infer the type from vacuum gaps):
    ``side_policy`` is ignored.
 
 ``surface_type`` on ``run_*`` is only the results folder name
-(``results_{surface_type}/``). Physics come from ``material_type`` and the
-validated atoms PBC.
+(``results_{surface_type}/``). Physics come from the substrate
+``material_type`` and the validated atoms PBC.
 
 How many placements?
 --------------------
@@ -48,7 +49,6 @@ A molecule that can split (e.g. H₂)
 .. code-block:: python
 
    config = AdsorptionConfig(
-       material_type="slab",
        enable_dissociative_placement=True,
        skip_topology_check=True,
        seed=42,
@@ -315,7 +315,6 @@ only the adsorbate and any unfrozen substrate atoms move.
   .. code-block:: python
 
      config = AdsorptionConfig(
-         material_type="slab",
          slab_relaxation_mode="none",
          seed=42,
      )

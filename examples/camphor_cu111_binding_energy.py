@@ -49,7 +49,7 @@ from metalsurfer import (
     run_adsorption_bo,
 )
 from metalsurfer.models import ScreeningResult
-from metalsurfer.surface_prep import SlabContainer, prepare_substrate
+from metalsurfer.surface_prep import Substrate, prepare_substrate
 
 # (1S)-(-)-camphor (PubChem InChIKey DSSYKIVIOFKYAU-OIBJUYFYSA-N).
 # Do not use CC1(C)[C@@H]2CC[C@@]1(C)C(=O)C2 — that is the (1R)-(+)-enantiomer.
@@ -213,10 +213,11 @@ def prepare_campaign_slab(
     config: AdsorptionConfig,
     *,
     results_directory: str,
-) -> SlabContainer:
+) -> Substrate:
     slab_path = ensure_dft_reference_slab()
     return prepare_substrate(
         slab_file=str(slab_path),
+        material_type="slab",
         config=config,
         results_dir=results_directory,
         align=False,
@@ -228,7 +229,6 @@ def prepare_campaign_slab(
 def build_config(*, device: str) -> AdsorptionConfig:
     # BO budget is acquisition batches after the initial random batch.
     return AdsorptionConfig(
-        material_type="slab",
         num_conformers=1,
         device=device,
         # Clearance-aware height: nearest adsorbate atom sits in this window.
@@ -1049,7 +1049,7 @@ def run_campaign(config: AdsorptionConfig) -> BindingCampaignResult:
     write(f"{RESULTS_DIR}/clean_slab.xyz", slab.atoms, format="extxyz")
 
     return run_adsorption_bo(
-        slab=slab,
+        substrate=slab,
         molecules=[(CAMPHOR_SMILES, MOLECULE_NAME)],
         config=config,
         surface_type=SURFACE_TYPE,

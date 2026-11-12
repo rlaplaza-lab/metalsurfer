@@ -2,6 +2,7 @@
 campaign: saturation
 surface_type: ethane_cu_saturation_yaml
 substrate:
+  material_type: slab
   bulk_id: mp-30
   miller_indices: [1, 1, 1]
   supercell: [2, 2, 1]
@@ -9,7 +10,6 @@ molecules:
   - smiles: CC
     name: ethane
 config:
-  material_type: slab
   num_conformers: 1
   num_placements: 4
   saturation_max_steps: 2

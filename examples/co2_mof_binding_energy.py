@@ -80,13 +80,13 @@ def main() -> int:
     mof_atoms = read(cif_path)
 
     config = AdsorptionConfig(
-        material_type="porous",
         slab_relaxation_mode="none",  # keep experimental CIF framework geometry
         num_conformers=1,
         num_placements=5,
     )
 
     mof_slab = prepare_substrate(
+        material_type="porous",
         slab=mof_atoms,
         config=config,
         results_dir=results_dir,
@@ -94,7 +94,7 @@ def main() -> int:
     )
 
     campaign = run_adsorption(
-        slab=mof_slab,
+        substrate=mof_slab,
         molecules=[("O=C=O", "CO2")],
         config=config,
         surface_type=surface_type,

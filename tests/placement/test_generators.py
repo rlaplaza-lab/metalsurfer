@@ -22,7 +22,7 @@ from metalsurfer.placement.generators import (
 from metalsurfer.placement.geometry import occupied_neighbor_counts
 from metalsurfer.placement.site_context import SiteContext
 from metalsurfer.placement.site_types import Site, with_symmetry
-from metalsurfer.surface_prep import SlabContainer, deposit_adatoms
+from metalsurfer.surface_prep import Substrate, deposit_adatoms
 
 from ..conftest import (
     make_placement_descriptor,
@@ -40,7 +40,7 @@ def test_enumerate_specs_empty_sites_returns_empty():
     )
 
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab", seed=0, num_placements=40)
+    config = AdsorptionConfig(seed=0, num_placements=40)
     ctx = SiteContext(
         sites=[],
         use_sites=False,
@@ -54,10 +54,11 @@ def test_enumerate_specs_empty_sites_returns_empty():
         "O",
         n_desired=40,
         site_context=ctx,
+        material_type="slab",
     )
     assert specs == []
     capacity = estimate_placement_spec_capacity(
-        [make_water()], slab, config, "O", site_context=ctx
+        [make_water()], slab, config, "O", site_context=ctx, material_type="slab"
     )
     assert capacity == 0
 
@@ -67,8 +68,10 @@ def test_enumerate_specs_skips_occupied_site_indices():
     from metalsurfer.placement.site_context import resolve_site_context_for_sampling
 
     slab = make_slab()
-    config = AdsorptionConfig(material_type="slab", seed=0, num_placements=40)
-    ctx = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
+    config = AdsorptionConfig(seed=0, num_placements=40)
+    ctx = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=True, material_type="slab"
+    )
     assert ctx.use_sites and ctx.sites
     blocked = 0
     site = ctx.sites[blocked]
@@ -84,6 +87,7 @@ def test_enumerate_specs_skips_occupied_site_indices():
         n_desired=40,
         site_context=ctx,
         full_slab=full,
+        material_type="slab",
     )
     assert specs
     # No spec may target the blocked site (-1 is the "no site" sentinel, which
@@ -129,7 +133,6 @@ def test_generate_placements_from_specs_preserves_order(monkeypatch, workers):
     specs = [_spec(i) for i in range(6)]
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
         num_placements=6,
         placement_materialize_workers=workers,
     )
@@ -141,6 +144,7 @@ def test_generate_placements_from_specs_preserves_order(monkeypatch, workers):
         config=config,
         smiles="O",
         site_context=None,
+        material_type="slab",
     )
     assert ids == [0, 2, 4]
     assert [f.placement_id for f in failures] == [1, 3, 5]
@@ -193,15 +197,14 @@ def test_generate_placements_from_specs_all_cached_skips_pose_cache(
         gen_mod, "generate_placement_from_spec_with_reason", fake_generate
     )
 
-    config = AdsorptionConfig(
-        material_type="slab", placement_materialize_workers=workers
-    )
+    config = AdsorptionConfig(placement_materialize_workers=workers)
     results = generate_placements_from_specs(
         specs,
         [make_water()],
         make_slab(),
         config,
         materialization_cache=cache,
+        material_type="slab",
     )
 
     assert build_calls == []
@@ -241,7 +244,7 @@ def test_generate_placements_from_specs_builds_pose_cache_once_for_misses(
     slab = make_slab()
     site_slab = make_slab(nx=1, ny=1, n_layers=1)
     conformers = [make_water()]
-    config = AdsorptionConfig(material_type="slab", placement_materialize_workers=4)
+    config = AdsorptionConfig(placement_materialize_workers=4)
     hit_adsorbate = Atoms("H")
     hit_descriptor = make_placement_descriptor(placement_id=3)
     cache = {
@@ -284,6 +287,7 @@ def test_generate_placements_from_specs_builds_pose_cache_once_for_misses(
         config,
         slab_for_sites=site_slab,
         materialization_cache=cache,
+        material_type="slab",
     )
 
     assert len(build_calls) == 1
@@ -327,7 +331,7 @@ def test_generate_placements_from_specs_without_cache_builds_pose_cache(monkeypa
     specs = [_spec(0)]
     slab = make_slab()
     conformers = [make_water()]
-    config = AdsorptionConfig(material_type="slab")
+    config = AdsorptionConfig()
 
     for materialization_cache in (None, {}):
         pose_cache = object()
@@ -366,6 +370,7 @@ def test_generate_placements_from_specs_without_cache_builds_pose_cache(monkeypa
             slab,
             config,
             materialization_cache=materialization_cache,
+            material_type="slab",
         )
 
         assert len(build_calls) == 1
@@ -395,30 +400,30 @@ def test_generate_placements_from_specs_empty_skips_cache_and_pose_cache(
             [],
             [make_water()],
             make_slab(),
-            AdsorptionConfig(material_type="slab"),
+            AdsorptionConfig(),
             materialization_cache={},
+            material_type="slab",
         )
         == []
     )
 
 
 def test_deposit_adatoms_then_generate_placement_from_spec():
-    slab = SlabContainer(make_slab(nx=4, ny=4, n_layers=3))
+    slab = Substrate(make_slab(nx=4, ny=4, n_layers=3), material_type="slab")
     decorated = deposit_adatoms(
         slab,
         "Sn",
         coverage_fraction=0.15,
         seed=7,
         relaxation_mode="none",
-        config=AdsorptionConfig(material_type="slab"),
+        config=AdsorptionConfig(),
     )
     config = AdsorptionConfig(
-        material_type="slab",
         num_placements=8,
         placement_z_range=(2.0, 3.0),
     )
     result = create_conformers_from_smiles(
-        "O", config=AdsorptionConfig(material_type="slab", num_conformers=1)
+        "O", config=AdsorptionConfig(num_conformers=1)
     )
     assert result is not None
     conformers, _ = result
@@ -429,9 +434,12 @@ def test_deposit_adatoms_then_generate_placement_from_spec():
         config,
         "O",
         n_desired=4,
+        material_type="slab",
     )
     assert specs
-    placed = generate_placement_from_spec(specs[0], conformers, decorated.atoms, config)
+    placed = generate_placement_from_spec(
+        specs[0], conformers, decorated.atoms, config, material_type="slab"
+    )
     assert placed is not None
     adsorbate, _descriptor = placed
     assert len(adsorbate) == 3
@@ -456,14 +464,13 @@ def test_boltzmann_weighting_is_deterministic_and_proportional():
     energies = [0.0, 0.01, 0.02, 0.03]  # eV, gentle finite spread
 
     base = dict(
-        material_type="slab",
         seed=0,
         num_conformers=n_conformers,
         num_placements=200,
     )
 
     def hist(**kw):
-        cfg = AdsorptionConfig(**{"material_type": "slab", **{**base, **kw}})
+        cfg = AdsorptionConfig(**{**{**base, **kw}})
         specs = enumerate_placement_specs(
             conformers,
             slab,
@@ -471,6 +478,7 @@ def test_boltzmann_weighting_is_deterministic_and_proportional():
             "O",
             n_desired=120,
             conformer_energies=energies,
+            material_type="slab",
         )
         return Counter(s.conformer_index for s in specs)
 
@@ -712,17 +720,16 @@ def test_enumerate_modes_share_bare_slab_prefix():
     site_context = resolve_site_context_for_sampling(
         slab,
         AdsorptionConfig(
-            material_type="slab",
             seed=seed,
             num_placements=n_desired,
             saturation_molecules_per_step=2,
         ),
         symmetry_broken=True,
+        material_type="slab",
     )
 
     def _draw(**overrides: object) -> list[PlacementSpec]:
         config = AdsorptionConfig(
-            material_type="slab",
             seed=seed,
             num_placements=n_desired,
             **overrides,
@@ -734,6 +741,7 @@ def test_enumerate_modes_share_bare_slab_prefix():
             "O",
             n_desired=n_desired,
             site_context=site_context,
+            material_type="slab",
         )
 
     normal = _draw()

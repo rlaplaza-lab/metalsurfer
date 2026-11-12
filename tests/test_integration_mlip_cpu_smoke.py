@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from metalsurfer.config import AdsorptionConfig
-from metalsurfer.surface_prep import SlabContainer
+from metalsurfer.surface_prep import Substrate
 from metalsurfer.workflow import calculate_reference_energies, process_molecule
 from tests.conftest import E_ADS_MLIP_CPU_TOL, make_slab
 from tests.mlip_marks import MLIP_CPU_MARKS, load_uma
@@ -16,7 +16,6 @@ def test_process_molecule_water_on_small_slab_cpu():
     config = AdsorptionConfig(
         model_name="uma-s-1p1",
         task_name="oc20",
-        material_type="slab",
         seed=42,
         num_conformers=1,
         num_placements=2,
@@ -29,7 +28,7 @@ def test_process_molecule_water_on_small_slab_cpu():
         max_force_convergence=1.0,
         slab_relaxation_mode="none",
     )
-    slab = SlabContainer(make_slab(nx=4, ny=4, n_layers=2))
+    slab = Substrate(make_slab(nx=4, ny=4, n_layers=2), material_type="slab")
 
     calculator, ts_model = load_uma(config.model_name, config.device, config.task_name)
     ref = calculate_reference_energies(

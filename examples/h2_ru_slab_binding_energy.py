@@ -94,7 +94,6 @@ def main() -> int:
 
     # Modest placement count: many dissociative trials desorb on this surface.
     config = AdsorptionConfig(
-        material_type="slab",
         num_conformers=1,
         num_placements=10,
         enable_dissociative_placement=True,
@@ -102,6 +101,7 @@ def main() -> int:
     )
 
     slab = prepare_substrate(
+        material_type="slab",
         bulk_id="mp-33",
         miller_indices=(0, 0, 1),
         supercell=(2, 2, 1),
@@ -110,7 +110,7 @@ def main() -> int:
     )
 
     campaign = run_adsorption(
-        slab=slab,
+        substrate=slab,
         molecules=[("[H][H]", "H2")],
         config=config,
         surface_type=surface_type,

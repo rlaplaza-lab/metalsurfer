@@ -222,7 +222,7 @@ def test_cluster_symmetry_oh_vertex_atops_form_one_orbit():
             normal=np.array([0.0, 0.0, 1.0]),
             site_type="atop",
             slab_indices=(),
-            material_type="nanoparticle",
+            material_type="slab",
             site_source="fake_atop",
             env_fingerprint=((), (), 0),
             nn_distance=2.0,
@@ -416,8 +416,8 @@ def test_get_unified_sites_labels_pbc_edge_bridge_on_production_path():
 
     sites = get_unified_sites(
         slab,
-        material_type="slab",
         site_classification_method="delaunay",
+        material_type="slab",
     )
     assert sites
 
@@ -479,11 +479,9 @@ def test_compute_local_normals_batch_points_outward_from_surface_centroid():
 
 def test_symmetry_aware_sites_are_consistent_with_core_sites_on_slab():
     slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(
-        material_type="slab", symmetry_tolerance=0.1, site_equivalence_tolerance=0.05
-    )
+    config = AdsorptionConfig(symmetry_tolerance=0.1, site_equivalence_tolerance=0.05)
 
-    _site_ctx = _get_unique_sites_for_specs(slab, config)
+    _site_ctx = _get_unique_sites_for_specs(slab, config, material_type="slab")
     core_sites, use_sites = _site_ctx.sites, _site_ctx.use_sites
     assert use_sites and len(core_sites) > 0
 
@@ -512,13 +510,13 @@ def test_delaunay_fallback_for_nanoparticle():
     """Delaunay classification should fall back to distance_ratio for NPs."""
     np_sites_dr = get_unified_sites(
         make_nanoparticle(),
-        material_type="nanoparticle",
         site_classification_method="distance_ratio",
+        material_type="nanoparticle",
     )
     np_sites_del = get_unified_sites(
         make_nanoparticle(),
-        material_type="nanoparticle",
         site_classification_method="delaunay",
+        material_type="nanoparticle",
     )
     # Both should produce the same result (fallback to distance_ratio)
     assert len(np_sites_del) == len(np_sites_dr)
@@ -547,10 +545,10 @@ def test_get_unified_sites_ordering_is_deterministic():
 def test_unique_sites_cache_hit_and_miss():
     slab_a = make_slab(nx=4)
     slab_b = make_slab(nx=5)
-    config = AdsorptionConfig(material_type="slab")
-    ctx_a1 = _get_unique_sites_for_specs(slab_a, config)
-    ctx_a2 = _get_unique_sites_for_specs(slab_a, config)
-    ctx_b = _get_unique_sites_for_specs(slab_b, config)
+    config = AdsorptionConfig()
+    ctx_a1 = _get_unique_sites_for_specs(slab_a, config, material_type="slab")
+    ctx_a2 = _get_unique_sites_for_specs(slab_a, config, material_type="slab")
+    ctx_b = _get_unique_sites_for_specs(slab_b, config, material_type="slab")
     assert ctx_a1 is ctx_a2
     assert ctx_a1 is not ctx_b
 
@@ -649,10 +647,10 @@ def test_build_classification_context_builds_images_once_porous(monkeypatch):
         vertices,
         positions,
         local_tree,
-        material_type="porous",
         cell=cell,
         pbc=pbc,
         delaunay=None,
+        material_type="porous",
     )
 
     # Single shared build (normals reuses it instead of rebuilding).
@@ -722,7 +720,7 @@ def test_outward_normal_flips_inward_and_drops_buried():
         tree,
         probe_radius=0.8,
         centroid=centroid,
-        material_type="nanoparticle",
+        material_type="slab",
     )[0]
     assert np.all(np.isfinite(flipped))
     assert float(flipped[2]) > 0.0
@@ -733,7 +731,7 @@ def test_outward_normal_flips_inward_and_drops_buried():
         tree,
         probe_radius=0.8,
         centroid=centroid,
-        material_type="nanoparticle",
+        material_type="slab",
     )[0]
     assert np.all(np.isfinite(kept))
     assert float(kept[2]) > 0.0
@@ -751,7 +749,7 @@ def test_outward_normal_flips_inward_and_drops_buried():
         cube_tree,
         probe_radius=0.2,
         centroid=np.mean(cube, axis=0),
-        material_type="nanoparticle",
+        material_type="slab",
     )[0]
     assert not np.all(np.isfinite(buried_normal))
 
@@ -872,11 +870,11 @@ def test_pretyped_batch_skips_neighbor_index():
         vertices,
         positions,
         tree,
-        material_type="slab",
         cell=cell,
         pbc=pbc,
         delaunay=None,
         skip_neighbor_index=True,
+        material_type="slab",
     )
     assert ctx.class_dists is None and ctx.class_idx is None
     assert ctx.normals.shape == (0, 3)
@@ -885,11 +883,11 @@ def test_pretyped_batch_skips_neighbor_index():
         vertices,
         positions,
         tree,
-        material_type="slab",
         cell=cell,
         pbc=pbc,
         delaunay=None,
         skip_neighbor_index=False,
+        material_type="slab",
     )
     assert full.class_dists is not None and full.class_idx is not None
     assert full.normals.shape == (1, 3)

@@ -196,7 +196,6 @@ def ranking_energy(e_ads: float, activity: float) -> float:
 def make_config(ph: float) -> AdsorptionConfig:
     """Return an ``AdsorptionConfig`` sized for CPU competitive saturation."""
     return AdsorptionConfig(
-        material_type="nanoparticle",
         model_name="uma-s-1p1",
         task_name="oc20",
         device=DEVICE,
@@ -355,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
         slab=load_pt4_cluster(cluster_xyz),
         config=prep_config,
         results_dir=prep_dir,
+        material_type="nanoparticle",
     )
     cluster.atoms.set_constraint()
     logger.info(
@@ -368,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         config = replace(prep_config, saturation_activities=activities_for_ph(ph))
         surface_type = surface_type_for_ph(ph)
         campaign = run_saturation(
-            slab=cluster,
+            substrate=cluster,
             molecules=MOLECULES,
             config=config,
             surface_type=surface_type,

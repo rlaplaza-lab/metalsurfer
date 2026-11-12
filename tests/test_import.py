@@ -67,7 +67,7 @@ def test_core_import_without_heavy_deps(monkeypatch):
         assert hasattr(metalsurfer, "ScreeningResult")
         assert hasattr(metalsurfer, "DependencyMissingError")
 
-        cfg = metalsurfer.AdsorptionConfig(material_type="slab", num_conformers=3)
+        cfg = metalsurfer.AdsorptionConfig(num_conformers=3)
         assert cfg.num_conformers == 3
 
 
@@ -150,7 +150,7 @@ def test_lazy_getattr_loads_module():
 def test_surface_prep_import_path():
     """Surface-prep helpers are available under the unified surface_prep module."""
     from metalsurfer.surface_prep import (
-        SlabContainer,
+        Substrate,
         accept_substrate_for_api,
         apply_material_pbc,
         auto_resize_substrate_for_molecule,
@@ -165,7 +165,7 @@ def test_surface_prep_import_path():
         validate_substrate,
     )
 
-    assert SlabContainer.__name__ == "SlabContainer"
+    assert Substrate.__name__ == "Substrate"
     assert callable(create_slab_from_bulk)
     assert callable(create_slab_from_atoms)
     assert callable(substitute_alloy)
@@ -188,6 +188,8 @@ def test_removed_surface_prep_aliases_are_not_exported():
         "prepare_slab",
         "resize_slab_for_molecule",
         "auto_resize_slab_for_molecule",
+        "SlabContainer",
+        "coerce_slab_container",
     )
     for name in removed:
         assert name not in surface_prep.__all__
@@ -246,7 +248,7 @@ def test_placement_all_lists_public_reexports_only():
 def test_not_exported_at_top_level():
     """These names are not top-level metalsurfer attrs (some live under surface_prep).
 
-    SlabContainer / create_slab_from_bulk / deposit_adatoms remain available via
+    Substrate / create_slab_from_bulk / deposit_adatoms remain available via
     metalsurfer.surface_prep; this only guards against accidental top-level exports.
     """
     import metalsurfer
@@ -254,7 +256,7 @@ def test_not_exported_at_top_level():
     removed = (
         "precompute_results",
         "results_dir",
-        "SlabContainer",
+        "Substrate",
         "setup_directories",
         "process_molecule",
         "create_slab_from_bulk",

@@ -65,18 +65,16 @@ def _window(
 
 
 def test_adaptive_grid_accepted_on_adsorption_config():
-    cfg = AdsorptionConfig(site_generator="adaptive_grid", material_type="slab")
+    cfg = AdsorptionConfig(site_generator="adaptive_grid")
     assert cfg.site_generator == "adaptive_grid"
     assert cfg.side_policy == "positive"
     assert cfg.adaptive_grid_spacing == pytest.approx(0.70)
     assert cfg.adaptive_grid_refine_levels == 0
     assert cfg.adaptive_grid_nms_framework_scale == pytest.approx(0.25)
-    for mat in ("slab", "nanoparticle", "porous"):
-        AdsorptionConfig(site_generator="adaptive_grid", material_type=mat)
     for policy in ("all", "positive", "negative", "external"):
-        AdsorptionConfig(side_policy=policy, material_type="slab")
+        AdsorptionConfig(side_policy=policy)
     with pytest.raises(ValueError, match="adaptive_grid_nms_framework_scale"):
-        AdsorptionConfig(material_type="slab", adaptive_grid_nms_framework_scale=0.0)
+        AdsorptionConfig(adaptive_grid_nms_framework_scale=0.0)
 
 
 def test_adaptive_grid_spacing_rejects_non_positive_absolute():
@@ -91,19 +89,19 @@ def test_absolute_spacing_knob_tracks_merge_radius():
     framework = make_porous_framework()
     coarse = get_unified_sites(
         framework,
-        material_type="porous",
         site_generator="adaptive_grid",
         adaptive_grid_spacing=1.2,
         adaptive_grid_refine_levels=0,
         n_jobs=1,
+        material_type="porous",
     )
     fine = get_unified_sites(
         framework,
-        material_type="porous",
         site_generator="adaptive_grid",
         adaptive_grid_spacing=0.55,
         adaptive_grid_refine_levels=0,
         n_jobs=1,
+        material_type="porous",
     )
     assert len(coarse) > 0
     assert len(fine) > 0
@@ -151,7 +149,7 @@ def _site(xyz, site_type, source, nn, *, supports=(0,)):
         normal=np.array([0.0, 0.0, 1.0]),
         site_type=site_type,
         slab_indices=supports,
-        material_type="slab",
+        material_type="nanoparticle",
         site_source=source,
         env_fingerprint=((), (), 0),
         nn_distance=nn,
@@ -618,11 +616,11 @@ def test_alloy_atops_keep_distinct_fingerprints():
     )
     sites = get_unified_sites(
         atoms,
-        material_type="nanoparticle",
         site_generator="adaptive_grid",
         n_jobs=1,
         probe_radius=1.0,
         max_site_distance=3.0,
+        material_type="nanoparticle",
     )
     atops = [s for s in sites if s.site_type == "atop" and s.slab_indices]
     if len(atops) >= 2:
@@ -634,14 +632,15 @@ def test_alloy_atops_keep_distinct_fingerprints():
 def test_adaptive_grid_site_context_uses_shared_symmetry_path():
     slab = make_slab(nx=3, ny=3, n_layers=3)
     cfg = AdsorptionConfig(
-        material_type="slab",
         site_generator="adaptive_grid",
         n_jobs=1,
         slab_relaxation_mode="none",
     )
     with _SITE_CONTEXT_CACHE_LOCK:
         _SITE_CONTEXT_CACHE.clear()
-    ctx = resolve_site_context_for_sampling(slab, cfg, symmetry_broken=False)
+    ctx = resolve_site_context_for_sampling(
+        slab, cfg, symmetry_broken=False, material_type="slab"
+    )
     assert ctx.use_sites and len(ctx.sites) > 0
     assert all(s.slab_indices for s in ctx.sites)
 
@@ -650,16 +649,19 @@ def test_adaptive_grid_placement_materialization_on_slab():
     ads = Atoms("CO", positions=[[0.0, 0.0, 0.0], [1.13, 0.0, 0.0]])
     atoms = make_slab()
     cfg = AdsorptionConfig(
-        material_type="slab",
         site_generator="adaptive_grid",
         num_placements=8,
         num_conformers=1,
         n_jobs=1,
         slab_relaxation_mode="none",
     )
-    specs = enumerate_placement_specs([ads], atoms, cfg, smiles="C=O", n_desired=8)
+    specs = enumerate_placement_specs(
+        [ads], atoms, cfg, smiles="C=O", n_desired=8, material_type="slab"
+    )
     assert specs
-    results = generate_placements_from_specs(specs, [ads], atoms, cfg, smiles="C=O")
+    results = generate_placements_from_specs(
+        specs, [ads], atoms, cfg, smiles="C=O", material_type="slab"
+    )
     ok = [pair for pair, reason in results if pair is not None]
     assert ok
     for placed, _desc in ok:
@@ -671,8 +673,8 @@ def test_adaptive_grid_placement_materialization_on_slab():
 def test_adaptive_grid_dissociative_hollows_on_slab():
     hollows = get_hollow_sites_for_adatoms(
         make_slab(nx=3, ny=3, n_layers=3),
-        material_type="slab",
         site_generator="adaptive_grid",
+        material_type="slab",
     )
     assert isinstance(hollows, list)
     assert hollows, (
@@ -685,9 +687,9 @@ def test_adaptive_grid_porous_wall_near_placement():
     framework = make_porous_framework()
     sites = get_unified_sites(
         framework,
-        material_type="porous",
         site_generator="adaptive_grid",
         n_jobs=1,
+        material_type="porous",
     )
     assert sites
     assert all(s.site_source == "adaptive_grid" for s in sites)
@@ -695,7 +697,6 @@ def test_adaptive_grid_porous_wall_near_placement():
     # Same material-agnostic path: wall-near shells, not free-volume pores.
     ads = Atoms("CO2", positions=[[0.0, 0.0, 0.0], [1.16, 0.0, 0.0], [-1.16, 0.0, 0.0]])
     cfg = AdsorptionConfig(
-        material_type="porous",
         site_generator="adaptive_grid",
         num_placements=6,
         num_conformers=1,
@@ -703,11 +704,16 @@ def test_adaptive_grid_porous_wall_near_placement():
         slab_relaxation_mode="none",
     )
     specs = enumerate_placement_specs(
-        [ads], framework, cfg, smiles="O=C=O", n_desired=6
+        [ads], framework, cfg, smiles="O=C=O", n_desired=6, material_type="porous"
     )
     assert specs
     results = generate_placements_from_specs(
-        specs, [ads], framework, cfg, smiles="O=C=O"
+        specs,
+        [ads],
+        framework,
+        cfg,
+        smiles="O=C=O",
+        material_type="porous",
     )
     ok = [pair for pair, reason in results if pair is not None]
     assert ok, "expected at least one clash-free placement from wall-near MOF sites"

@@ -12,15 +12,16 @@ from ..config import (
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
     AdsorptionConfig,
+    validate_site_generator_for_material,
 )
 from ..placement._material import material_aware_pbc
 from ._surfaces import (
-    SlabContainer,
+    Substrate,
     _relax_slab_structure,
     _resolve_slab_relaxation_settings,
     apply_surface_constraints,
     auto_resize_substrate_for_molecule,
-    coerce_slab_container,
+    coerce_substrate,
     create_slab_from_atoms,
     create_slab_from_bulk,
     deposit_adatoms,
@@ -62,10 +63,10 @@ class _RelaxationOverrides:
 
 
 def _matching_attached_calculator(
-    source: SlabContainer | Atoms,
+    source: Substrate | Atoms,
     config: AdsorptionConfig,
 ) -> optimization.TorchSimCalculator | None:
-    atoms = source.atoms if isinstance(source, SlabContainer) else source
+    atoms = source.atoms if isinstance(source, Substrate) else source
     calc = atoms.calc
     if isinstance(calc, optimization.TorchSimCalculator) and calc.matches_setup(
         config.model_name, config.device, config.task_name, config.dispersion
@@ -101,16 +102,17 @@ def apply_material_pbc(atoms: Atoms, material_type: str) -> None:
 
 
 def relax_substrate(
-    slab: SlabContainer | Atoms,
+    slab: Substrate | Atoms,
     calculator,
     config: AdsorptionConfig,
     *,
+    material_type: str | None = None,
     relaxation_mode: SLAB_RELAXATION_MODE | None = None,
     relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER | None = None,
     relaxation_fmax: float | None = None,
     relaxation_steps: int | None = None,
     context: str = "relax_substrate",
-) -> SlabContainer:
+) -> Substrate:
     """Equilibrate a substrate with ASE using prep-time relaxation presets.
 
     Knobs mirror :class:`~metalsurfer.AdsorptionConfig` ``slab_relaxation_*``
@@ -122,11 +124,13 @@ def relax_substrate(
     Parameters
     ----------
     slab
-        Substrate as :class:`SlabContainer` or ASE Atoms.
+        Substrate as :class:`Substrate` or ASE Atoms.
     calculator
         ASE calculator for relaxation.
     config
         Adsorption configuration.
+    material_type
+        Required for bare Atoms; must match an existing Substrate.
     relaxation_mode
         Override relaxation mode from *config*.
     relaxation_optimizer
@@ -138,7 +142,7 @@ def relax_substrate(
     context
         Label for logging.
     """
-    container = coerce_slab_container(slab, copy=True)
+    container = coerce_substrate(slab, material_type=material_type, copy=True)
     mode, opt_name, fmax, steps = _resolve_slab_relaxation_settings(
         config,
         relaxation_mode=relaxation_mode,
@@ -162,26 +166,24 @@ def relax_substrate(
 
 
 def finalize_substrate(
-    slab: SlabContainer | Atoms,
+    slab: Substrate | Atoms,
     config: AdsorptionConfig,
     *,
+    material_type: str,
     conformers: list[Atoms] | None = None,
     align: bool | None = None,
     require_bottom_anchor: bool | None = None,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
     top_layer_tolerance: float | None = None,
-) -> SlabContainer:
+) -> Substrate:
     """Apply PBC, freeze constraints, and validate a substrate for campaign APIs.
 
     Freeze policy is written to ASE ``FixAtoms`` via
     :func:`~metalsurfer.surface_prep.apply_surface_constraints`. Campaign APIs
     read those constraints only.
 
-    When ``relax_top_layer=True``, pass *config* with the correct
-    ``material_type`` — freeze geometry is chosen from
-    :attr:`~metalsurfer.AdsorptionConfig.material_type`. Use the same
-    *config* in campaign APIs.
+    When ``relax_top_layer=True``, *material_type* chooses which atoms stay free.
 
     This is the last step of substrate preparation. It does **not** build slabs
     from bulk, resize in-plane cells, or deposit adatoms — use
@@ -191,9 +193,11 @@ def finalize_substrate(
     Parameters
     ----------
     slab
-        Substrate as :class:`SlabContainer` or ASE Atoms.
+        Substrate as :class:`Substrate` or ASE Atoms.
     config
         Adsorption configuration.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     conformers
         Optional list of conformers for validation.
     align
@@ -208,8 +212,8 @@ def finalize_substrate(
         Height tolerance for the top layer in Å. When ``None``, uses
         :attr:`~metalsurfer.AdsorptionConfig.top_layer_tolerance`.
     """
-    container = coerce_slab_container(slab, copy=True)
-    material_type = config.material_type
+    validate_site_generator_for_material(config.site_generator, material_type)
+    container = coerce_substrate(slab, material_type=material_type, copy=True)
     should_align = align if align is not None else material_type == "slab"
     check_bottom_anchor = (
         should_align if require_bottom_anchor is None else require_bottom_anchor
@@ -246,7 +250,7 @@ def prepare_substrate(
     miller_indices: tuple[int, int, int] = (0, 0, 1),
     supercell: tuple[int, int, int] = (2, 2, 1),
     slab_file: str | None = None,
-    slab: SlabContainer | Atoms | None = None,
+    slab: Substrate | Atoms | None = None,
     results_dir: str = "results_manual",
     alloy_host: str | None = None,
     alloy_guest: str | None = None,
@@ -254,6 +258,7 @@ def prepare_substrate(
     enforce_top_layer_fraction: bool = False,
     adatom_symbol: str | None = None,
     adatom_coverage: float = 0.0,
+    material_type: str,
     config: AdsorptionConfig,
     align: bool | None = None,
     slab_relaxation_mode: SLAB_RELAXATION_MODE | None = None,
@@ -267,7 +272,7 @@ def prepare_substrate(
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
     top_layer_tolerance: float | None = None,
-) -> SlabContainer:
+) -> Substrate:
     """Build or load a substrate, optionally modify it, and finalize for campaigns.
 
     By default, equilibrates substrate **ionic positions** with ASE/MLIP
@@ -286,7 +291,7 @@ def prepare_substrate(
     Set ``slab_relaxation_mode="none"`` to skip prep equilibration (experimental
     geometries only). Set ``relax_top_layer=True`` to leave the exposed surface
     free during placement optimization (behaviour depends on
-    ``AdsorptionConfig.material_type``; see
+    *material_type*; see
     :func:`~metalsurfer.identify_relaxable_surface_indices`). Attach custom ASE
     constraints yourself when you need finer control than this shortcut.
 
@@ -322,6 +327,8 @@ def prepare_substrate(
         Symbol for deposited adatoms.
     adatom_coverage
         Adatom coverage fraction.
+    material_type
+        ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     config
         Adsorption configuration.
     align
@@ -356,7 +363,6 @@ def prepare_substrate(
             "Exactly one of 'bulk_id', 'slab_file', or 'slab' must be provided"
         )
 
-    material_type = config.material_type
     should_align = align if align is not None else material_type == "slab"
     from_loaded = slab is not None or slab_file is not None
 
@@ -394,7 +400,7 @@ def prepare_substrate(
         )
 
     if slab is not None:
-        slab_container = coerce_slab_container(slab, copy=True)
+        slab_container = coerce_substrate(slab, material_type=material_type, copy=True)
     elif slab_file is not None:
         loaded = ase.io.read(slab_file)
         if isinstance(loaded, list):
@@ -420,6 +426,7 @@ def prepare_substrate(
             supercell=supercell,
             results_dir=results_dir,
             calculator=calculator,
+            material_type=material_type,
             config=config,
             **slab_relax.as_kwargs(),
         )
@@ -474,6 +481,7 @@ def prepare_substrate(
     finalized = finalize_substrate(
         slab_container,
         config,
+        material_type=material_type,
         align=False,
         require_bottom_anchor=should_align,
         relax_top_layer=relax_top_layer,
@@ -487,14 +495,15 @@ def prepare_substrate(
 
 
 def resize_substrate_for_molecule(
-    slab: SlabContainer | Atoms,
+    slab: Substrate | Atoms,
     conformers: list[Atoms],
     config: AdsorptionConfig,
     *,
+    material_type: str | None = None,
     relax_top_layer: bool = False,
     freeze_symbols: list[str] | None = None,
     top_layer_tolerance: float | None = None,
-) -> SlabContainer:
+) -> Substrate:
     """Expand *slab* in-plane when conformers require larger image separation.
 
     Re-applies material PBC and freeze constraints after resizing. Call after
@@ -503,7 +512,7 @@ def resize_substrate_for_molecule(
     Parameters
     ----------
     slab
-        Substrate as :class:`SlabContainer` or ASE Atoms.
+        Substrate as :class:`Substrate` or ASE Atoms.
     conformers
         List of conformer ASE Atoms.
     config
@@ -520,12 +529,14 @@ def resize_substrate_for_molecule(
         slab,
         conformers,
         config.min_pbc_image_separation,
+        material_type=material_type,
     )
     if not was_resized:
-        return coerce_slab_container(resized)
+        return resized
     return finalize_substrate(
         resized,
         config,
+        material_type=resized.material_type,
         conformers=conformers,
         align=False,
         relax_top_layer=relax_top_layer,

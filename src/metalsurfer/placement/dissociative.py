@@ -116,6 +116,8 @@ def _xyz_array_hash(positions: np.ndarray | None) -> str:
 def _dissociative_pair_cache_key(
     slab_for_sites: Atoms,
     config: AdsorptionConfig,
+    *,
+    material_type: str,
 ) -> str:
     pos_bytes = slab_for_sites.get_positions().tobytes()
     cell_bytes = np.asarray(slab_for_sites.get_cell()).tobytes()
@@ -134,7 +136,7 @@ def _dissociative_pair_cache_key(
         + b"\x00"
         + str(config.site_generator).encode()
         + b"\x00"
-        + config.material_type.encode()
+        + material_type.encode()
         + struct.pack("<d", float(config.min_adsorbate_separation))
     )
     return hashlib.sha256(
@@ -156,6 +158,7 @@ def _resolve_dissociative_site_entries(
     sites_slab: Atoms,
     config: AdsorptionConfig,
     *,
+    material_type: str,
     raw_sites: list[Site] | None = None,
     site_context: SiteContext | None = None,
     cell_arr: np.ndarray,
@@ -183,11 +186,11 @@ def _resolve_dissociative_site_entries(
         )
     elif site_context is not None and site_context.sites:
         site_entries = list(site_context.sites)
-    elif config.material_type == "slab":
+    elif material_type == "slab":
         return get_hollow_sites_for_adatoms(
             sites_slab,
             top_layer_tolerance=config.top_layer_tolerance,
-            material_type=config.material_type,
+            material_type=material_type,
             probe_radius=config.voronoi_probe_radius,
             max_site_distance=config.voronoi_max_site_distance,
             enrich=config.voronoi_site_enrichment,
@@ -201,7 +204,7 @@ def _resolve_dissociative_site_entries(
         site_entries = get_unified_sites(
             sites_slab,
             top_layer_tolerance=config.top_layer_tolerance,
-            material_type=config.material_type,
+            material_type=material_type,
             probe_radius=config.voronoi_probe_radius,
             max_site_distance=config.voronoi_max_site_distance,
             enrich=config.voronoi_site_enrichment,
@@ -225,6 +228,7 @@ def _get_dissociative_site_pairs(
     slab_for_sites: Atoms | None = None,
     existing_adsorbate_positions: np.ndarray | None = None,
     *,
+    material_type: str,
     raw_sites: list[Site] | None = None,
     site_context: SiteContext | None = None,
 ) -> list[_DissociativeSitePair]:
@@ -236,7 +240,7 @@ def _get_dissociative_site_pairs(
     an occupancy-position hash when coverage is active. Occupancy uses
     vertex-only clearance (no footprint radii).
     """
-    if config.material_type not in ("slab", "nanoparticle", "porous"):
+    if material_type not in ("slab", "nanoparticle", "porous"):
         return []
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
@@ -250,6 +254,7 @@ def _get_dissociative_site_pairs(
         pre_resolved = _resolve_dissociative_site_entries(
             sites_slab,
             config,
+            material_type=material_type,
             raw_sites=raw_sites,
             site_context=site_context,
             cell_arr=cell_arr,
@@ -270,7 +275,7 @@ def _get_dissociative_site_pairs(
         _xyz_array_hash(existing_adsorbate_positions) if occupancy_active else "none"
     )
     foot_tag = "foot=vertex" if occupancy_active else "foot=off"
-    base = _dissociative_pair_cache_key(sites_slab, config)
+    base = _dissociative_pair_cache_key(sites_slab, config, material_type=material_type)
     cache_key = hashlib.sha256(
         f"{base}|sites={sites_tag}|occ={occ_tag}|{foot_tag}".encode()
     ).hexdigest()
@@ -284,6 +289,7 @@ def _get_dissociative_site_pairs(
         slab,
         config,
         slab_for_sites=slab_for_sites,
+        material_type=material_type,
         existing_adsorbate_positions=existing_adsorbate_positions,
         raw_sites=raw_sites,
         site_context=site_context,
@@ -304,18 +310,19 @@ def _compute_dissociative_site_pairs(
     slab_for_sites: Atoms | None = None,
     existing_adsorbate_positions: np.ndarray | None = None,
     *,
+    material_type: str,
     raw_sites: list[Site] | None = None,
     site_context: SiteContext | None = None,
     pre_resolved_sites: list[Site] | None = None,
 ) -> list[_DissociativeSitePair]:
     """Return outward-oriented site pairs for dissociative diatomic placement."""
-    if config.material_type not in ("slab", "nanoparticle", "porous"):
+    if material_type not in ("slab", "nanoparticle", "porous"):
         return []
 
     sites_slab = slab_for_sites if slab_for_sites is not None else slab
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
     # Calculator copies store [T, T, T]; slab geometry stays open along z.
-    pbc = material_aware_pbc(config.material_type)
+    pbc = material_aware_pbc(material_type)
     slab_normal = _slab_normal(cell_arr)
 
     if pre_resolved_sites is not None:
@@ -324,6 +331,7 @@ def _compute_dissociative_site_pairs(
         site_entries = _resolve_dissociative_site_entries(
             sites_slab,
             config,
+            material_type=material_type,
             raw_sites=raw_sites,
             site_context=site_context,
             cell_arr=cell_arr,
@@ -450,14 +458,14 @@ def _compute_dissociative_site_pairs(
         normal_i = _site_outward_normal(
             site_3d[i],
             site_entries[i],
-            material_type=config.material_type,
+            material_type=material_type,
             reference_positions=top_positions,
             slab_normal=slab_normal,
         )
         normal_j = _site_outward_normal(
             site_3d[j],
             site_entries[j],
-            material_type=config.material_type,
+            material_type=material_type,
             reference_positions=top_positions,
             slab_normal=slab_normal,
         )
@@ -574,6 +582,7 @@ def _place_dissociative_two_sites(
     sites: Sequence[Site],
     *,
     config: AdsorptionConfig,
+    material_type: str,
     spec: PlacementSpec,
     height_override: float,
     slab: Atoms,
@@ -596,14 +605,14 @@ def _place_dissociative_two_sites(
     n1 = _site_outward_normal(
         np.asarray(site1.xyz, dtype=float),
         site1,
-        material_type=config.material_type,
+        material_type=material_type,
         reference_positions=ref_pos,
         slab_normal=slab_normal,
     )
     n2 = _site_outward_normal(
         np.asarray(site2.xyz, dtype=float),
         site2,
-        material_type=config.material_type,
+        material_type=material_type,
         reference_positions=ref_pos,
         slab_normal=slab_normal,
     )
@@ -617,11 +626,11 @@ def _place_dissociative_two_sites(
     n_sum = np.asarray(n1, dtype=float) + np.asarray(n2, dtype=float)
     n_norm = float(np.linalg.norm(n_sum))
     n_hat = n_sum / n_norm if n_norm > _VECTOR_NORM_EPS else _placement_normal_hat(n1)
-    surface_ref1, _ = _resolve_surface_ref(site1, sites_slab, config.material_type)
-    surface_ref2, _ = _resolve_surface_ref(site2, sites_slab, config.material_type)
+    surface_ref1, _ = _resolve_surface_ref(site1, sites_slab, material_type)
+    surface_ref2, _ = _resolve_surface_ref(site2, sites_slab, material_type)
     site_reference_frame = "local_site"
 
-    pbc = material_aware_pbc(config.material_type)
+    pbc = material_aware_pbc(material_type)
 
     def _plane_h(site: Site, surface_ref: float) -> float:
         return _height_above_supports(
@@ -650,7 +659,7 @@ def _place_dissociative_two_sites(
         slab,
         config,
         slab_for_sites=slab_for_sites,
-        material_type=config.material_type,
+        material_type=material_type,
     )
     if fail_reason is not None:
         return None
@@ -704,10 +713,12 @@ def _generate_dissociative_placement_from_spec(
     config: AdsorptionConfig,
     slab_for_sites: Atoms | None = None,
     site_context: SiteContext | None = None,
+    *,
+    material_type: str,
 ) -> tuple[tuple[Atoms, PlacementDescriptor] | None, str | None]:
     """Place homonuclear-diatomic fragments at two surface sites."""
-    if config.material_type not in ("slab", "nanoparticle", "porous"):
-        return None, f"dissociative_not_supported_for_{config.material_type}"
+    if material_type not in ("slab", "nanoparticle", "porous"):
+        return None, f"dissociative_not_supported_for_{material_type}"
 
     if not _is_dissociable_diatomic(adsorbate):
         return None, "not_dissociable_diatomic"
@@ -722,6 +733,7 @@ def _generate_dissociative_placement_from_spec(
         slab,
         config,
         slab_for_sites=slab_for_sites,
+        material_type=material_type,
         existing_adsorbate_positions=existing_ads_pos,
         site_context=site_context,
     )
@@ -738,7 +750,7 @@ def _generate_dissociative_placement_from_spec(
         normal=np.asarray(site_pair.normal1, dtype=float),
         site_type="hollow",
         slab_indices=tuple(site_pair.indices1),
-        material_type=config.material_type,
+        material_type=material_type,
         site_source="dissociative_hollow_pair",
         env_fingerprint=((), (), 0),
     )
@@ -748,7 +760,7 @@ def _generate_dissociative_placement_from_spec(
         normal=np.asarray(site_pair.normal2, dtype=float),
         site_type="hollow",
         slab_indices=tuple(site_pair.indices2),
-        material_type=config.material_type,
+        material_type=material_type,
         site_source="dissociative_hollow_pair",
         env_fingerprint=((), (), 0),
     )
@@ -764,7 +776,7 @@ def _generate_dissociative_placement_from_spec(
     clear_pos = np.asarray(slab.get_positions(), dtype=float)
     clear_syms = list(slab.get_chemical_symbols())
     cell_arr = np.asarray(slab.get_cell(), dtype=float)
-    pbc = material_aware_pbc(config.material_type)
+    pbc = material_aware_pbc(material_type)
     # Shared gap is the more demanding fragment, so both clear.
     contact_gaps: list[float] = []
     standoff_gaps: list[float] = []
@@ -811,6 +823,7 @@ def _generate_dissociative_placement_from_spec(
         adsorbate,
         [site_a, site_b],
         config=config,
+        material_type=material_type,
         spec=spec,
         height_override=float(z_offset),
         slab=slab,

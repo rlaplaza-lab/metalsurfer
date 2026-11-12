@@ -63,9 +63,8 @@ def _bare_payload(
     }
 
 
-def _cpu_config(*, material_type: str, num_conformers: int) -> AdsorptionConfig:
+def _cpu_config(*, num_conformers: int) -> AdsorptionConfig:
     return AdsorptionConfig(
-        material_type=material_type,
         seed=42,
         device="cpu",
         slab_relaxation_mode="none",
@@ -76,17 +75,21 @@ def _cpu_config(*, material_type: str, num_conformers: int) -> AdsorptionConfig:
 
 def write_all() -> None:
     """Materialize the edge pools once and store them under ``tests/data``."""
-    pme3 = _cpu_config(material_type="nanoparticle", num_conformers=1)
+    pme3 = _cpu_config(num_conformers=1)
     cluster = prepare_substrate(
         slab=au4_tetrahedron(),
         config=pme3,
         results_dir=tempfile.mkdtemp(prefix="metalsurfer-snapshots-"),
+        material_type="nanoparticle",
     )
     packed = create_conformers_from_smiles(_PME3_SMILES, config=pme3)
     assert packed is not None
     conformers, _energies = packed
     pme3_sites = resolve_site_context_for_sampling(
-        cluster.atoms, pme3, symmetry_broken=False
+        cluster.atoms,
+        pme3,
+        symmetry_broken=False,
+        material_type="nanoparticle",
     )
     for n_desired, name in ((100, "pme3_au4_100"), (8, "pme3_au4_8")):
         poses = materialize_pose_pool(
@@ -98,18 +101,23 @@ def write_all() -> None:
             n_desired=n_desired,
         )
         info = _spec_grid_info(
-            conformers, cluster.atoms, pme3, _PME3_SMILES, pme3_sites
+            conformers,
+            cluster.atoms,
+            pme3,
+            _PME3_SMILES,
+            pme3_sites,
+            material_type="nanoparticle",
         )
         _write(name, _bare_payload(slab=cluster.atoms, poses=poses, info=info))
 
-    slab_config = _cpu_config(material_type="slab", num_conformers=4)
+    slab_config = _cpu_config(num_conformers=4)
     pyridone_slab, pyridone_conformers = cu111_for(
         _PYRIDONE_SMILES,
         slab_config,
         tempfile.mkdtemp(prefix="metalsurfer-snapshots-"),
     )
     pyridone_sites = resolve_site_context_for_sampling(
-        pyridone_slab, slab_config, symmetry_broken=False
+        pyridone_slab, slab_config, symmetry_broken=False, material_type="slab"
     )
     poses = materialize_pose_pool(
         smiles=_PYRIDONE_SMILES,
@@ -125,6 +133,7 @@ def write_all() -> None:
         slab_config,
         _PYRIDONE_SMILES,
         pyridone_sites,
+        material_type="slab",
     )
     _write(
         "pyridone_pool_16",
@@ -158,6 +167,7 @@ def write_all() -> None:
             _PYRIDONE_SMILES,
             pyridone_sites,
             full_slab=covered,
+            material_type="slab",
         )
         payload = _bare_payload(slab=pyridone_slab, poses=poses, info=info)
         payload["anchor"] = _frame_record(anchor)
@@ -171,7 +181,7 @@ def write_all() -> None:
         tempfile.mkdtemp(prefix="metalsurfer-snapshots-"),
     )
     oleic_sites = resolve_site_context_for_sampling(
-        oleic_slab, slab_config, symmetry_broken=False
+        oleic_slab, slab_config, symmetry_broken=False, material_type="slab"
     )
     oleic_poses = materialize_pose_pool(
         smiles=_OLEIC_SMILES,
@@ -182,7 +192,12 @@ def write_all() -> None:
         n_desired=100,
     )
     oleic_info = _spec_grid_info(
-        oleic_conformers, oleic_slab, slab_config, _OLEIC_SMILES, oleic_sites
+        oleic_conformers,
+        oleic_slab,
+        slab_config,
+        _OLEIC_SMILES,
+        oleic_sites,
+        material_type="slab",
     )
     _write(
         "oleic_100",
@@ -214,6 +229,7 @@ def write_all() -> None:
         _OLEIC_SMILES,
         oleic_sites,
         full_slab=oleic_covered,
+        material_type="slab",
     )
     step2_payload = _bare_payload(
         slab=oleic_slab, poses=oleic_step2, info=oleic_step2_info
@@ -230,11 +246,13 @@ def _write_pyridone_joint_pools(slab: Atoms, conformers: list[Atoms]) -> None:
     ):
         pool = joint_pose_pool_size(n_per, n_configs)
         config = replace(
-            _cpu_config(material_type="slab", num_conformers=4),
+            _cpu_config(num_conformers=4),
             num_placements=pool,
             saturation_molecules_per_step=n_per,
         )
-        sites = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+        sites = resolve_site_context_for_sampling(
+            slab, config, symmetry_broken=False, material_type="slab"
+        )
         poses = materialize_pose_pool(
             smiles=_PYRIDONE_SMILES,
             conformers=conformers,
@@ -243,7 +261,9 @@ def _write_pyridone_joint_pools(slab: Atoms, conformers: list[Atoms]) -> None:
             site_context=sites,
             n_desired=pool,
         )
-        info = _spec_grid_info(conformers, slab, config, _PYRIDONE_SMILES, sites)
+        info = _spec_grid_info(
+            conformers, slab, config, _PYRIDONE_SMILES, sites, material_type="slab"
+        )
         payload = _bare_payload(slab=slab, poses=poses, info=info)
         payload["n_per_config"] = n_per
         payload["n_configs"] = n_configs
@@ -255,7 +275,7 @@ def _write_pyridone_joint_pools(slab: Atoms, conformers: list[Atoms]) -> None:
 
 def write_pyridone_joint_pools() -> None:
     """Materialize the pyridone pair and trimer pools without the other edges."""
-    config = _cpu_config(material_type="slab", num_conformers=4)
+    config = _cpu_config(num_conformers=4)
     slab, conformers = cu111_for(
         _PYRIDONE_SMILES,
         config,

@@ -140,19 +140,18 @@ class TestPackExactTuplet:
             _winner(slab, pid=1, e_ads=-0.9, x_shift=6.5),
         ]
         config = AdsorptionConfig(
-            material_type="slab",
             placement_clash_descent=True,
             min_adsorbate_separation=1.5,
         )
-        packed = pack_exact_tuplet(winners, slab, config)
+        packed = pack_exact_tuplet(winners, slab, config, material_type="slab")
         assert packed is not None
         assert [w.placement_id for w in packed] == [0, 1]
         assert adsorbates_mutually_disconnected(
             packed[0].atoms[packed[0].slab_size :],
             packed[1].atoms[packed[1].slab_size :],
             float(config.connectivity_multiplier),
-            material_type="slab",
             cell=slab.get_cell(),
+            material_type="slab",
         )
 
     def test_overlapping_pair_rejected_when_clash_descent_off(self):
@@ -162,11 +161,10 @@ class TestPackExactTuplet:
             _winner(slab, pid=1, e_ads=-0.9, x_shift=5.1),
         ]
         config = AdsorptionConfig(
-            material_type="slab",
             placement_clash_descent=False,
             min_adsorbate_separation=1.5,
         )
-        assert pack_exact_tuplet(winners, slab, config) is None
+        assert pack_exact_tuplet(winners, slab, config, material_type="slab") is None
 
     def test_near_miss_rescued_when_clash_descent_on(self):
         slab = make_slab()
@@ -177,21 +175,20 @@ class TestPackExactTuplet:
             _winner(slab, pid=1, e_ads=-0.9, x_shift=7.2),
         ]
         config = AdsorptionConfig(
-            material_type="slab",
             placement_clash_descent=True,
             placement_x_range=(-1.5, 1.5),
             placement_y_range=(-1.5, 1.5),
             min_adsorbate_separation=1.5,
         )
-        packed = pack_exact_tuplet(winners, slab, config)
+        packed = pack_exact_tuplet(winners, slab, config, material_type="slab")
         assert packed is not None
         assert [w.placement_id for w in packed] == [0, 1]
         assert adsorbates_mutually_disconnected(
             packed[0].atoms[packed[0].slab_size :],
             packed[1].atoms[packed[1].slab_size :],
             float(config.connectivity_multiplier),
-            material_type="slab",
             cell=slab.get_cell(),
+            material_type="slab",
         )
 
     def test_anchor_pose_unchanged_on_clear_or_rescue(self):
@@ -199,14 +196,13 @@ class TestPackExactTuplet:
         w1 = _winner(slab, pid=0, e_ads=-1.0, x_shift=5.0)
         w2 = _winner(slab, pid=1, e_ads=-0.9, x_shift=6.55)
         config = AdsorptionConfig(
-            material_type="slab",
             placement_clash_descent=True,
             placement_x_range=(-1.5, 1.5),
             placement_y_range=(-1.5, 1.5),
             min_adsorbate_separation=1.5,
         )
         com1_before = w1.atoms.get_positions()[w1.slab_size :].copy()
-        packed = pack_exact_tuplet([w1, w2], slab, config)
+        packed = pack_exact_tuplet([w1, w2], slab, config, material_type="slab")
         assert packed is not None
         assert packed[0].placement_id == 0
         com1_after = packed[0].atoms.get_positions()[packed[0].slab_size :]
@@ -215,13 +211,13 @@ class TestPackExactTuplet:
     def test_single_winner_returned_unchanged(self):
         slab = make_slab()
         w = _winner(slab, pid=0, e_ads=-1.0)
-        packed = pack_exact_tuplet([w], slab, AdsorptionConfig(material_type="slab"))
+        packed = pack_exact_tuplet([w], slab, AdsorptionConfig(), material_type="slab")
         assert packed is not None
         assert packed[0] is w
 
     def test_empty_winners_returns_none(self):
         assert (
-            pack_exact_tuplet([], make_slab(), AdsorptionConfig(material_type="slab"))
+            pack_exact_tuplet([], make_slab(), AdsorptionConfig(), material_type="slab")
             is None
         )
 
@@ -288,11 +284,10 @@ def _evaluate_two_clear_winners(
         slab_atoms=slab,
         base_slab=slab.copy(),
         ts_model=None,
-        config=AdsorptionConfig(
-            **{"material_type": "slab", **kwargs.pop("config_overrides", {})}
-        ),
+        config=AdsorptionConfig(**{**kwargs.pop("config_overrides", {})}),
         E_slab=E_SLAB,
         **kwargs,
+        material_type="slab",
     )
     return slab, winners, batch
 
@@ -355,8 +350,9 @@ class TestEvaluateCompositeBatch:
             slab_atoms=slab,
             base_slab=slab.copy(),
             ts_model=None,
-            config=AdsorptionConfig(material_type="slab"),
+            config=AdsorptionConfig(),
             E_slab=E_SLAB,
+            material_type="slab",
         )
         assert batch.valid == []
         assert batch.failures
@@ -414,8 +410,9 @@ class TestEvaluateCompositeBatch:
             slab_atoms=make_slab(),
             base_slab=make_slab(),
             ts_model=None,
-            config=AdsorptionConfig(material_type="slab"),
+            config=AdsorptionConfig(),
             E_slab=E_SLAB,
+            material_type="slab",
         )
         assert batch.valid == []
         assert batch.failures == []
@@ -448,14 +445,14 @@ class TestEvaluateCompositeBatch:
             desorbed,
             n_substrate=len(coverage),
             unit_sizes=[unit_size],
-            config=AdsorptionConfig(material_type="slab"),
+            material_type="slab",
         )[0]
         dist_prefix = _per_unit_surface_distances(
             desorbed,
             n_substrate=len(coverage),
             unit_sizes=[unit_size],
-            config=AdsorptionConfig(material_type="slab"),
             surface_prefix_atoms=len(bare),
+            material_type="slab",
         )[0]
         assert dist_all < 4.0
         assert dist_prefix > 4.0
@@ -477,10 +474,9 @@ class TestEvaluateCompositeBatch:
             slab_atoms=coverage,
             base_slab=bare,
             ts_model=None,
-            config=AdsorptionConfig(
-                material_type="slab", binding_distance_threshold=4.0
-            ),
+            config=AdsorptionConfig(binding_distance_threshold=4.0),
             E_slab=E_SLAB,
+            material_type="slab",
         )
         assert batch.valid == []
         assert batch.failures

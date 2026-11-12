@@ -4,12 +4,12 @@ Run-Mode Functions
 These are the canonical high-level entry points for adsorption screening.
 All are importable directly from :mod:`metalsurfer`.
 
-Substrates must be campaign-ready before calling these functions:
-``AdsorptionConfig.material_type`` is required and must match the substrate
-ASE PBC mask (slab ``[T,T,F]``, nanoparticle ``[F,F,F]``, porous ``[T,T,T]``),
-plus slab alignment when applicable and (typically) ASE ``FixAtoms`` from prep.
-Freeze policy is set during substrate preparation only — not via
-``AdsorptionConfig`` or these ``run_*`` kwargs.
+Substrates must be campaign-ready: pass a prepared
+:class:`~metalsurfer.surface_prep.Substrate` via ``substrate=`` (bare ASE
+``Atoms`` are rejected). ``material_type`` must match the ASE PBC mask
+(slab ``[T,T,F]``, nanoparticle ``[F,F,F]``, porous ``[T,T,T]``), plus slab
+alignment when applicable and (typically) ASE ``FixAtoms`` from prep. Freeze
+policy is prep-only — not via ``AdsorptionConfig`` or these ``run_*`` kwargs.
 Omitting FixAtoms is allowed (campaigns warn; the substrate stays fully mobile).
 Use :func:`~metalsurfer.surface_prep.prepare_substrate` or
 :func:`~metalsurfer.surface_prep.finalize_substrate` as described in
@@ -52,8 +52,8 @@ The top-level ``campaign`` key selects the runner:
 
 ``config:`` maps onto :class:`~metalsurfer.AdsorptionConfig` fields. Put
 Bayesian hyperparameters under a nested ``bo:`` block (flat ``bo_*`` keys
-are rejected). Do not put a ``bo_enabled`` key there—it is not
-a config field.
+are rejected). ``bo_enabled`` is not a config field; ``material_type``
+belongs under ``substrate:``.
 
 .. autofunction:: metalsurfer.load_campaign_yaml
 

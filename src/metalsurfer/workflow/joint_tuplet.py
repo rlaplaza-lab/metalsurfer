@@ -36,7 +36,7 @@ from ..placement.generators import (
 )
 from ..placement.site_context import SiteContext, site_context_for_sampling
 from ..reporting import BOPlacementFailure, FailureSummary, PlacementFailure
-from ..surface_prep import SlabContainer
+from ..surface_prep import Substrate
 from .bayesian import (
     _BOAcquisitionState,
     _pack_bo_outputs,
@@ -249,7 +249,7 @@ def _materialize_pose_pool(
     *,
     smiles: str,
     molecule_name: str,
-    slab: SlabContainer,
+    slab: Substrate,
     base_slab: Atoms,
     calculator,
     conformers: list[Atoms],
@@ -263,13 +263,14 @@ def _materialize_pose_pool(
     fill = fill_materialized_placements(
         conformers=conformers,
         slab_for_sites=_build_surface_reference_slab(
-            slab.atoms, base_slab, material_type=config.material_type
+            slab.atoms, base_slab, material_type=slab.material_type
         ),
         config=replace(config, num_placements=pool_size),
         smiles=smiles,
         site_context=site_context,
         slab_atoms=slab.atoms,
         calculator=calculator,
+        material_type=slab.material_type,
         conformer_energies=conformer_energies,
     )
     slab_size = len(slab.atoms)
@@ -302,6 +303,7 @@ def _relax_groups(
     base_slab: Atoms,
     ts_model: object,
     config: AdsorptionConfig,
+    material_type: str,
     E_slab: float,
     topology_check: TopologyCheck | None,
     log_prefix: str,
@@ -313,6 +315,7 @@ def _relax_groups(
         base_slab=base_slab,
         ts_model=ts_model,
         config=config,
+        material_type=material_type,
         E_slab=E_slab,
         topology_check=topology_check,
         log_prefix=log_prefix,
@@ -328,7 +331,7 @@ def screen_joint_tuplet_homogeneous(
     *,
     smiles: str,
     molecule_name: str,
-    current_slab: SlabContainer,
+    current_slab: Substrate,
     calculator,
     ref_step: ReferenceEnergies,
     ts_model: object,
@@ -378,7 +381,7 @@ def screen_joint_tuplet_multi(
     active_molecules: Sequence[str],
     active_smiles: Mapping[str, str],
     conformer_cache: Mapping[str, tuple[list[Atoms], list[float] | None]],
-    current_slab: SlabContainer,
+    current_slab: Substrate,
     calculator,
     ref_step: ReferenceEnergies,
     ts_model: object,
@@ -406,12 +409,13 @@ def screen_joint_tuplet_multi(
     path). Mixed campaigns keep the default ``"quota"`` assembler.
     """
     slab_for_sites = _build_surface_reference_slab(
-        current_slab.atoms, base_slab, material_type=config.material_type
+        current_slab.atoms, base_slab, material_type=current_slab.material_type
     )
     site_context = site_context_for_sampling(
         slab_for_sites,
         config,
         site_context,
+        material_type=current_slab.material_type,
         symmetry_broken=symmetry_broken,
         full_slab=current_slab.atoms,
     )
@@ -492,6 +496,7 @@ def screen_joint_tuplet_multi(
             slab_atoms=current_slab.atoms,
             config=config,
             rng=rng,
+            material_type=current_slab.material_type,
             n_substrate=len(base_slab),
             site_positions=positions,
             site_types=types,
@@ -516,6 +521,7 @@ def screen_joint_tuplet_multi(
                     slab_atoms=current_slab.atoms,
                     config=config,
                     rng=rng,
+                    material_type=current_slab.material_type,
                     n_substrate=len(base_slab),
                     site_positions=positions,
                     site_types=types,
@@ -527,6 +533,7 @@ def screen_joint_tuplet_multi(
         base_slab=base_slab,
         ts_model=ts_model,
         config=config,
+        material_type=current_slab.material_type,
         E_slab=E_slab,
         topology_check=topology_check,
         log_prefix=log_prefix,
@@ -577,7 +584,7 @@ def _assemble_bo_joint_groups_from_specs(
     valid_spec_indices: Sequence[int],
     materialization_cache: dict,
     conformers: list[Atoms],
-    slab: SlabContainer,
+    slab: Substrate,
     calculator,
     config: AdsorptionConfig,
     smiles: str,
@@ -620,6 +627,7 @@ def _assemble_bo_joint_groups_from_specs(
             config=config,
             smiles=smiles,
             site_context=site_context,
+            material_type=slab.material_type,
             slab_for_sites=slab_for_sites,
             materialization_cache=materialization_cache,
         )
@@ -688,6 +696,7 @@ def _assemble_bo_joint_groups_from_specs(
             positions_at=_positions_at,
             slab_atoms=slab.atoms,
             config=config,
+            material_type=slab.material_type,
             n_substrate=n_substrate,
             count_phase=count_phase,
             n_target=n_per_config,
@@ -704,7 +713,7 @@ def _assemble_bo_joint_groups_from_specs(
 def process_joint_tuplet_bayesian(
     smiles: str,
     molecule_name: str,
-    slab: SlabContainer,
+    slab: Substrate,
     calculator,
     reference_energies: ReferenceEnergies,
     ts_model=None,
@@ -779,6 +788,7 @@ def process_joint_tuplet_bayesian(
             smiles,
             site_context,
             full_slab=slab.atoms,
+            material_type=slab.material_type,
         )
         if conformers
         else None
@@ -791,6 +801,7 @@ def process_joint_tuplet_bayesian(
         site_context=site_context,
         full_slab=slab.atoms,
         grid_info=grid_info,
+        material_type=slab.material_type,
     )
     pool_size = (
         config.bo.candidate_pool_size
@@ -861,6 +872,7 @@ def process_joint_tuplet_bayesian(
                     smiles=smiles,
                     surface_id=surface_type,
                     config=config,
+                    material_type=slab.material_type,
                 )
             )
             acq_state.observed_X_rows.append(features)
@@ -905,6 +917,7 @@ def process_joint_tuplet_bayesian(
             base_slab=base_slab,
             ts_model=ts_model,
             config=config,
+            material_type=slab.material_type,
             E_slab=E_slab,
             topology_check=topology_check,
             log_prefix="Joint BO | ",

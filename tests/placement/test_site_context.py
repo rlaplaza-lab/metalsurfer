@@ -40,10 +40,14 @@ from ._helpers import (
 
 def test_site_context_cache_keys_differ_by_symmetry_broken():
     slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(material_type="slab")
+    config = AdsorptionConfig()
 
-    ctx_broken = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
-    ctx_intact = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    ctx_broken = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=True, material_type="slab"
+    )
+    ctx_intact = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=False, material_type="slab"
+    )
     # Unique-sites + sym=True + sym=False.
     assert len(_SITE_CONTEXT_CACHE) == 3
     assert ctx_broken is not ctx_intact
@@ -60,18 +64,26 @@ def test_unique_sites_cache_key_includes_atoms_pbc():
     slab_mat.set_pbc([True, True, False])
     slab_calc = slab_mat.copy()
     slab_calc.set_pbc([True, True, True])
-    config = AdsorptionConfig(material_type="slab")
+    config = AdsorptionConfig()
 
-    assert _unique_sites_cache_key(slab_mat, config) != _unique_sites_cache_key(
-        slab_calc, config
+    assert _unique_sites_cache_key(
+        slab_mat, config, material_type="nanoparticle"
+    ) != _unique_sites_cache_key(
+        slab_calc,
+        config,
+        material_type="nanoparticle",
     )
-    _get_unique_sites_for_specs(slab_mat, config)
+    _get_unique_sites_for_specs(slab_mat, config, material_type="slab")
     assert len(_SITE_CONTEXT_CACHE) == 1
 
     # Different material_type must still split the cache.
-    np_config = AdsorptionConfig(material_type="nanoparticle")
-    assert _unique_sites_cache_key(slab_mat, config) != _unique_sites_cache_key(
-        slab_mat, np_config
+    np_config = AdsorptionConfig()
+    assert _unique_sites_cache_key(
+        slab_mat, config, material_type="slab"
+    ) != _unique_sites_cache_key(
+        slab_mat,
+        np_config,
+        material_type="nanoparticle",
     )
 
 
@@ -84,9 +96,13 @@ def test_unique_sites_cache_key_atoms_pbc_for_all_plugins():
     slab_ttt = slab_tt.copy()
     slab_ttt.set_pbc([True, True, True])
     for plugin in ("topology", "adaptive_grid", "rolling_probe"):
-        cfg = AdsorptionConfig(material_type="slab", site_generator=plugin)
-        assert _unique_sites_cache_key(slab_tt, cfg) != _unique_sites_cache_key(
-            slab_ttt, cfg
+        cfg = AdsorptionConfig(site_generator=plugin)
+        assert _unique_sites_cache_key(
+            slab_tt, cfg, material_type="slab"
+        ) != _unique_sites_cache_key(
+            slab_ttt,
+            cfg,
+            material_type="slab",
         )
 
 
@@ -94,14 +110,22 @@ def test_unique_sites_cache_key_includes_site_generator():
     from metalsurfer.placement.site_context import _unique_sites_cache_key
 
     slab = make_slab(nx=2, ny=2)
-    auto = AdsorptionConfig(material_type="slab", site_generator="auto")
-    topology = AdsorptionConfig(material_type="slab", site_generator="topology")
-    voronoi = AdsorptionConfig(material_type="slab", site_generator="voronoi")
-    assert _unique_sites_cache_key(slab, auto) != _unique_sites_cache_key(
-        slab, topology
+    auto = AdsorptionConfig(site_generator="auto")
+    topology = AdsorptionConfig(site_generator="topology")
+    voronoi = AdsorptionConfig(site_generator="voronoi")
+    assert _unique_sites_cache_key(
+        slab, auto, material_type="slab"
+    ) != _unique_sites_cache_key(
+        slab,
+        topology,
+        material_type="slab",
     )
-    assert _unique_sites_cache_key(slab, topology) != _unique_sites_cache_key(
-        slab, voronoi
+    assert _unique_sites_cache_key(
+        slab, topology, material_type="slab"
+    ) != _unique_sites_cache_key(
+        slab,
+        voronoi,
+        material_type="slab",
     )
 
 
@@ -110,24 +134,24 @@ def test_side_policy_cache_key_for_wall_near_plugins():
     from metalsurfer.placement.site_context import _unique_sites_cache_key
 
     slab = make_slab(nx=2, ny=2)
-    topo_pos = AdsorptionConfig(
-        material_type="slab", site_generator="topology", side_policy="positive"
-    )
-    topo_all = AdsorptionConfig(
-        material_type="slab", site_generator="topology", side_policy="all"
-    )
-    assert _unique_sites_cache_key(slab, topo_pos) == _unique_sites_cache_key(
-        slab, topo_all
+    topo_pos = AdsorptionConfig(site_generator="topology", side_policy="positive")
+    topo_all = AdsorptionConfig(site_generator="topology", side_policy="all")
+    assert _unique_sites_cache_key(
+        slab, topo_pos, material_type="slab"
+    ) == _unique_sites_cache_key(
+        slab,
+        topo_all,
+        material_type="slab",
     )
     for plugin in ("adaptive_grid", "rolling_probe"):
-        pos = AdsorptionConfig(
-            material_type="slab", site_generator=plugin, side_policy="positive"
-        )
-        all_sides = AdsorptionConfig(
-            material_type="slab", site_generator=plugin, side_policy="all"
-        )
-        assert _unique_sites_cache_key(slab, pos) != _unique_sites_cache_key(
-            slab, all_sides
+        pos = AdsorptionConfig(site_generator=plugin, side_policy="positive")
+        all_sides = AdsorptionConfig(site_generator=plugin, side_policy="all")
+        assert _unique_sites_cache_key(
+            slab, pos, material_type="slab"
+        ) != _unique_sites_cache_key(
+            slab,
+            all_sides,
+            material_type="slab",
         )
 
 
@@ -146,6 +170,7 @@ def test_extract_features_depends_only_on_absolute_geometry():
         molecule="water",
         smiles="O",
         surface_id="test",
+        material_type="slab",
     )
     record.descriptor.site_index = 99
     record.descriptor.surface_ref_z_abs = 0.0
@@ -174,24 +199,35 @@ def test_site_context_cache_key_includes_config_and_symmetry():
     )
 
     slab = make_slab()
-    c1 = AdsorptionConfig(material_type="slab", voronoi_probe_radius=1.0)
-    c2 = AdsorptionConfig(material_type="slab", voronoi_probe_radius=1.5)
-    k1 = _site_context_cache_key(slab, c1, symmetry_broken=False)
-    k2 = _site_context_cache_key(slab, c1, symmetry_broken=True)
-    k3 = _site_context_cache_key(slab, c2, symmetry_broken=False)
+    c1 = AdsorptionConfig(voronoi_probe_radius=1.0)
+    c2 = AdsorptionConfig(voronoi_probe_radius=1.5)
+    k1 = _site_context_cache_key(slab, c1, symmetry_broken=False, material_type="slab")
+    k2 = _site_context_cache_key(slab, c1, symmetry_broken=True, material_type="slab")
+    k3 = _site_context_cache_key(slab, c2, symmetry_broken=False, material_type="slab")
     assert k1 != k2
     assert k1 != k3
-    single = AdsorptionConfig(material_type="slab", saturation_molecules_per_step=1)
-    tuplet = AdsorptionConfig(material_type="slab", saturation_molecules_per_step=2)
+    single = AdsorptionConfig(saturation_molecules_per_step=1)
+    tuplet = AdsorptionConfig(saturation_molecules_per_step=2)
     assert _site_context_cache_key(
-        slab, single, symmetry_broken=False
-    ) != _site_context_cache_key(slab, tuplet, symmetry_broken=False)
-    full = resolve_site_context_for_sampling(slab, tuplet, symmetry_broken=False)
+        slab,
+        single,
+        symmetry_broken=False,
+        material_type="slab",
+    ) != _site_context_cache_key(
+        slab, tuplet, symmetry_broken=False, material_type="slab"
+    )
+    full = resolve_site_context_for_sampling(
+        slab, tuplet, symmetry_broken=False, material_type="slab"
+    )
     assert full.clustered_sites is not None
     assert full.source != "symmetry_aware"
     assert len(full.sites) == len(full.clustered_sites)
-    a = resolve_site_context_for_sampling(slab, c1, symmetry_broken=False)
-    b = resolve_site_context_for_sampling(slab, c1, symmetry_broken=False)
+    a = resolve_site_context_for_sampling(
+        slab, c1, symmetry_broken=False, material_type="slab"
+    )
+    b = resolve_site_context_for_sampling(
+        slab, c1, symmetry_broken=False, material_type="slab"
+    )
     assert a is b
 
 
@@ -206,14 +242,21 @@ def test_site_context_cache_key_includes_species_and_symmetry_tol():
     # Same lattice geometry, different chemistry.
     ni.set_cell(cu.get_cell(), scale_atoms=False)
     ni.set_positions(cu.get_positions())
-    cfg = AdsorptionConfig(material_type="slab")
-    assert _unique_sites_cache_key(cu, cfg) != _unique_sites_cache_key(ni, cfg)
+    cfg = AdsorptionConfig()
+    assert _unique_sites_cache_key(
+        cu, cfg, material_type="slab"
+    ) != _unique_sites_cache_key(ni, cfg, material_type="slab")
 
-    c_loose = AdsorptionConfig(material_type="slab", symmetry_tolerance=0.05)
-    c_tight = AdsorptionConfig(material_type="slab", symmetry_tolerance=0.01)
+    c_loose = AdsorptionConfig(symmetry_tolerance=0.05)
+    c_tight = AdsorptionConfig(symmetry_tolerance=0.01)
     assert _site_context_cache_key(
-        cu, c_loose, symmetry_broken=False
-    ) != _site_context_cache_key(cu, c_tight, symmetry_broken=False)
+        cu,
+        c_loose,
+        symmetry_broken=False,
+        material_type="slab",
+    ) != _site_context_cache_key(
+        cu, c_tight, symmetry_broken=False, material_type="slab"
+    )
 
 
 def test_site_context_cache_key_float_packing_no_collision():
@@ -238,34 +281,34 @@ def test_site_context_cache_key_float_packing_no_collision():
 
     slab = make_slab()
     a = AdsorptionConfig(
-        material_type="slab",
         voronoi_probe_radius=1.5,
         voronoi_max_site_distance=20.0,
         top_layer_tolerance=0.5,
     )
     b = AdsorptionConfig(
-        material_type="slab",
         voronoi_probe_radius=1.5,
         voronoi_max_site_distance=20.0,
         top_layer_tolerance=0.6,
     )
-    assert _unique_sites_cache_key(slab, a) != _unique_sites_cache_key(slab, b)
+    assert _unique_sites_cache_key(
+        slab, a, material_type="slab"
+    ) != _unique_sites_cache_key(slab, b, material_type="slab")
 
     c = AdsorptionConfig(
-        material_type="slab",
         voronoi_probe_radius=1.5,
         voronoi_max_site_distance=20.0,
         top_layer_tolerance=0.5,
         planar_z_variance_threshold=0.01,
     )
     d = AdsorptionConfig(
-        material_type="slab",
         voronoi_probe_radius=1.5,
         voronoi_max_site_distance=20.0,
         top_layer_tolerance=0.5,
         planar_z_variance_threshold=0.05,
     )
-    assert _unique_sites_cache_key(slab, c) != _unique_sites_cache_key(slab, d)
+    assert _unique_sites_cache_key(
+        slab, c, material_type="slab"
+    ) != _unique_sites_cache_key(slab, d, material_type="slab")
 
 
 def test_surface_reference_uses_prefix_not_symbols():
@@ -283,9 +326,7 @@ def test_surface_reference_uses_prefix_not_symbols():
 def test_tilted_slab_site_xy_frac_uses_full_3d_projection():
     """Descriptor frac a/b are crystal fractions of the full COM, not [x, y, 0]."""
     slab = _tilted_make_slab()
-    config = adsorption_config_factory(
-        material_type="slab", num_placements=20, placement_z_range=(2.0, 3.0)
-    )
+    config = adsorption_config_factory(num_placements=20, placement_z_range=(2.0, 3.0))
     spec, result = _first_successful_placement(
         water_conformers(), slab, config, "O", n_desired=20
     )
@@ -322,8 +363,10 @@ def test_hollow_sites_match_clustered_catalog_slab_and_np():
         ("slab", make_slab(nx=3, ny=3)),
         ("nanoparticle", make_nanoparticle()),
     ):
-        config = AdsorptionConfig(material_type=material_type)
-        core = _get_unique_sites_for_specs(structure, config)
+        config = AdsorptionConfig()
+        core = _get_unique_sites_for_specs(
+            structure, config, material_type=material_type
+        )
         assert core.clustered_sites is not None
         expected = {
             _site_xyz_type_key(s)
@@ -341,10 +384,14 @@ def test_hollow_sites_match_clustered_catalog_slab_and_np():
 def test_enumerate_without_context_matches_resolved_sampling_catalog():
     """Omitting site_context must still sample the symmetry-aware catalog."""
     slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    resolved = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    config = AdsorptionConfig(seed=0)
+    resolved = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=False, material_type="slab"
+    )
     assert resolved.use_sites and resolved.sites
-    info = _spec_grid_info([make_water()], slab, config, "O", site_context=None)
+    info = _spec_grid_info(
+        [make_water()], slab, config, "O", site_context=None, material_type="slab"
+    )
     assert [_site_xyz_type_key(s) for s in info.unique_sites] == [
         _site_xyz_type_key(s) for s in resolved.sites
     ]
@@ -353,8 +400,10 @@ def test_enumerate_without_context_matches_resolved_sampling_catalog():
 def test_shared_site_frame_across_molecules_keeps_site_index():
     """Competitive saturation: one catalog; per-pack footprint views differ."""
     slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    shared = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    config = AdsorptionConfig(seed=0)
+    shared = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=False, material_type="slab"
+    )
     assert shared.use_sites and len(shared.sites) >= 2
 
     water_pack = [make_water(), make_water()]
@@ -366,8 +415,12 @@ def test_shared_site_frame_across_molecules_keeps_site_index():
     big.set_positions(big_pos)
     big_pack = [big, big.copy()]
 
-    info_w = _spec_grid_info(water_pack, slab, config, "O", site_context=shared)
-    info_b = _spec_grid_info(big_pack, slab, config, "O", site_context=shared)
+    info_w = _spec_grid_info(
+        water_pack, slab, config, "O", site_context=shared, material_type="slab"
+    )
+    info_b = _spec_grid_info(
+        big_pack, slab, config, "O", site_context=shared, material_type="slab"
+    )
     # Shared frame: identical site_index catalog identity.
     assert [_site_xyz_type_key(s) for s in info_w.unique_sites] == [
         _site_xyz_type_key(s) for s in shared.sites
@@ -382,8 +435,10 @@ def test_shared_site_frame_across_molecules_keeps_site_index():
 def test_symmetry_aware_context_preserves_clustered_sites():
     """Sampling sites shrink under symmetry; clustered_sites stay full."""
     slab = make_slab(nx=3, ny=3)
-    config = AdsorptionConfig(material_type="slab")
-    ctx = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    config = AdsorptionConfig()
+    ctx = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=False, material_type="slab"
+    )
     assert ctx.clustered_sites is not None
     assert ctx.source == "symmetry_aware"
     assert len(ctx.clustered_sites) > len(ctx.sites)
@@ -392,8 +447,10 @@ def test_symmetry_aware_context_preserves_clustered_sites():
 def test_sampling_rebuilds_catalog_when_substrate_symmetry_drops():
     """A pruned context must not supply sites after the substrate moves."""
     slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(material_type="slab")
-    reduced = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    config = AdsorptionConfig()
+    reduced = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=False, material_type="slab"
+    )
     assert reduced.source == "symmetry_aware"
     assert reduced.clustered_sites is not None
     old_keys = [_site_xyz_type_key(s) for s in reduced.clustered_sites]
@@ -410,8 +467,11 @@ def test_sampling_rebuilds_catalog_when_substrate_symmetry_drops():
         config,
         reduced,
         symmetry_broken=True,
+        material_type="slab",
     )
-    fresh = resolve_site_context_for_sampling(moved, config, symmetry_broken=True)
+    fresh = resolve_site_context_for_sampling(
+        moved, config, symmetry_broken=True, material_type="slab"
+    )
     assert rebuilt.source != "symmetry_aware"
     assert [_site_xyz_type_key(s) for s in rebuilt.sites] == [
         _site_xyz_type_key(s) for s in fresh.sites
@@ -445,8 +505,10 @@ def test_skip_symmetry_for_sampling_when_adsorbate_suffix_present():
 def test_occupied_surface_samples_full_lattice_and_drops_occupied_sites():
     """After adsorption, sample every clustered site except occupied vertices."""
     slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    reduced = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    config = AdsorptionConfig(seed=0)
+    reduced = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=False, material_type="slab"
+    )
     assert reduced.clustered_sites is not None
     assert reduced.source == "symmetry_aware"
     assert len(reduced.clustered_sites) > len(reduced.sites)
@@ -455,15 +517,28 @@ def test_occupied_surface_samples_full_lattice_and_drops_occupied_sites():
     ads = Atoms("H", positions=[occupied.xyz + np.array([0.0, 0.0, 0.2])])
     full = slab.copy() + ads
 
-    expanded = site_context_for_sampling(slab, config, reduced, full_slab=full)
+    expanded = site_context_for_sampling(
+        slab, config, reduced, full_slab=full, material_type="slab"
+    )
     assert len(expanded.sites) >= len(reduced.clustered_sites)
     assert [
         _site_xyz_type_key(s) for s in expanded.sites[: len(reduced.clustered_sites)]
     ] == [_site_xyz_type_key(s) for s in reduced.clustered_sites]
-    assert site_context_for_sampling(slab, config, expanded, full_slab=full) is expanded
+    assert (
+        site_context_for_sampling(
+            slab, config, expanded, full_slab=full, material_type="slab"
+        )
+        is expanded
+    )
 
     info = _spec_grid_info(
-        [make_water()], slab, config, "O", site_context=reduced, full_slab=full
+        [make_water()],
+        slab,
+        config,
+        "O",
+        site_context=reduced,
+        full_slab=full,
+        material_type="slab",
     )
     clustered_keys = [_site_xyz_type_key(s) for s in reduced.clustered_sites]
     got_keys = [_site_xyz_type_key(s) for s in info.unique_sites]
@@ -489,6 +564,7 @@ def test_occupied_surface_samples_full_lattice_and_drops_occupied_sites():
         n_desired=32,
         site_context=reduced,
         full_slab=full,
+        material_type="slab",
     )
     assert specs
     wide = [
@@ -497,7 +573,9 @@ def test_occupied_surface_samples_full_lattice_and_drops_occupied_sites():
         if len(reduced.sites) <= s.site_index < len(reduced.clustered_sites)
     ]
     assert wide, "enumerated specs must index into the clustered lattice"
-    sampling = site_context_for_sampling(slab, config, reduced, full_slab=full)
+    sampling = site_context_for_sampling(
+        slab, config, reduced, full_slab=full, material_type="slab"
+    )
     placed = generate_placement_from_spec(
         wide[0],
         [make_water()],
@@ -506,6 +584,7 @@ def test_occupied_surface_samples_full_lattice_and_drops_occupied_sites():
         "O",
         site_context=sampling,
         slab_for_sites=slab,
+        material_type="slab",
     )
     assert placed is not None
 
@@ -514,13 +593,11 @@ def test_n_tuplet_config_samples_full_lattice_on_clean_slab():
     """Co-adsorption needs distinct orbit copies before anything is adsorbed."""
     slab = make_slab(nx=2, ny=2)
     reduced = resolve_site_context_for_sampling(
-        slab, AdsorptionConfig(material_type="slab"), symmetry_broken=False
+        slab, AdsorptionConfig(), symmetry_broken=False, material_type="slab"
     )
     assert reduced.clustered_sites is not None
     assert len(reduced.clustered_sites) > len(reduced.sites)
-    tuplet_cfg = AdsorptionConfig(
-        material_type="slab", seed=0, saturation_molecules_per_step=2
-    )
+    tuplet_cfg = AdsorptionConfig(seed=0, saturation_molecules_per_step=2)
     assert (
         skip_symmetry_for_sampling(
             symmetry_broken=False,
@@ -530,7 +607,14 @@ def test_n_tuplet_config_samples_full_lattice_on_clean_slab():
         )
         is True
     )
-    info = _spec_grid_info([make_water()], slab, tuplet_cfg, "O", site_context=reduced)
+    info = _spec_grid_info(
+        [make_water()],
+        slab,
+        tuplet_cfg,
+        "O",
+        site_context=reduced,
+        material_type="slab",
+    )
     assert [_site_xyz_type_key(s) for s in info.unique_sites] == [
         _site_xyz_type_key(s) for s in reduced.clustered_sites
     ]
@@ -544,8 +628,10 @@ def test_n_tuplet_config_samples_full_lattice_on_clean_slab():
 def test_multi_molecule_coverage_shares_pruned_clustered_catalog():
     """Competing adsorbates see the same expanded lattice minus occupied vertices."""
     slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    reduced = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
+    config = AdsorptionConfig(seed=0)
+    reduced = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=False, material_type="slab"
+    )
     assert reduced.clustered_sites is not None
     occupied = reduced.clustered_sites[0]
     full = slab.copy() + Atoms(
@@ -557,7 +643,13 @@ def test_multi_molecule_coverage_shares_pruned_clustered_catalog():
     kept = []
     for mol in (water, oh):
         info = _spec_grid_info(
-            [mol], slab, config, None, site_context=reduced, full_slab=full
+            [mol],
+            slab,
+            config,
+            None,
+            site_context=reduced,
+            full_slab=full,
+            material_type="slab",
         )
         clustered_keys = [_site_xyz_type_key(s) for s in reduced.clustered_sites]
         got_keys = [_site_xyz_type_key(s) for s in info.unique_sites]
@@ -571,9 +663,13 @@ def test_multi_molecule_coverage_shares_pruned_clustered_catalog():
 def test_bo_pool_capacity_matches_clustered_catalog_under_coverage():
     """BO enumerate/materialize must use the expanded catalog, not orbit reps."""
     slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(material_type="slab", seed=0)
-    reduced = resolve_site_context_for_sampling(slab, config, symmetry_broken=False)
-    clustered = resolve_site_context_for_sampling(slab, config, symmetry_broken=True)
+    config = AdsorptionConfig(seed=0)
+    reduced = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=False, material_type="slab"
+    )
+    clustered = resolve_site_context_for_sampling(
+        slab, config, symmetry_broken=True, material_type="slab"
+    )
     assert reduced.clustered_sites is not None
     occupied = reduced.clustered_sites[0]
     full = slab.copy() + Atoms(
@@ -581,19 +677,38 @@ def test_bo_pool_capacity_matches_clustered_catalog_under_coverage():
     )
     water = [make_water()]
     cap_from_reduced = estimate_placement_spec_capacity(
-        water, slab, config, "O", site_context=reduced, full_slab=full
+        water,
+        slab,
+        config,
+        "O",
+        site_context=reduced,
+        full_slab=full,
+        material_type="slab",
     )
     cap_from_clustered = estimate_placement_spec_capacity(
-        water, slab, config, "O", site_context=clustered, full_slab=full
+        water,
+        slab,
+        config,
+        "O",
+        site_context=clustered,
+        full_slab=full,
+        material_type="slab",
     )
     assert cap_from_reduced == cap_from_clustered
     cap_clean = estimate_placement_spec_capacity(
-        water, slab, config, "O", site_context=reduced
+        water, slab, config, "O", site_context=reduced, material_type="slab"
     )
     assert cap_from_reduced != cap_clean
 
     specs = enumerate_placement_specs(
-        water, slab, config, "O", n_desired=24, site_context=reduced, full_slab=full
+        water,
+        slab,
+        config,
+        "O",
+        n_desired=24,
+        site_context=reduced,
+        full_slab=full,
+        material_type="slab",
     )
     assert specs
     generated = generate_placements_from_specs(
@@ -604,6 +719,7 @@ def test_bo_pool_capacity_matches_clustered_catalog_under_coverage():
         smiles="O",
         site_context=reduced,
         slab_for_sites=slab,
+        material_type="slab",
     )
     assert any(result is not None for result, _reason in generated)
     assert any(spec.site_index >= len(reduced.sites) for spec in specs)
@@ -612,8 +728,8 @@ def test_bo_pool_capacity_matches_clustered_catalog_under_coverage():
 def test_unique_sites_context_stores_plugin_vertices():
     _SITE_CONTEXT_CACHE.clear()
     slab = make_slab(nx=2, ny=2)
-    config = AdsorptionConfig(material_type="slab")
-    ctx = _get_unique_sites_for_specs(slab, config)
+    config = AdsorptionConfig()
+    ctx = _get_unique_sites_for_specs(slab, config, material_type="slab")
     assert ctx.use_sites
     assert ctx.plugin_vertices is not None
     assert ctx.plugin_vertices.ndim == 2
@@ -626,7 +742,7 @@ def test_unique_sites_context_stores_plugin_vertices():
 def test_debug_write_sites_writes_plugin_and_final_overlays(tmp_path, monkeypatch):
     from ase.io import read
 
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from metalsurfer.workflow.shared import _prepare_molecule_screening
 
     from ..conftest import DummyReferenceEnergies
@@ -637,7 +753,6 @@ def test_debug_write_sites_writes_plugin_and_final_overlays(tmp_path, monkeypatc
     slab_atoms = make_slab(nx=4, ny=4)
     water = make_water()
     config = AdsorptionConfig(
-        material_type="slab",
         debug_write_sites=True,
         num_placements=2,
         num_conformers=1,
@@ -645,7 +760,7 @@ def test_debug_write_sites_writes_plugin_and_final_overlays(tmp_path, monkeypatc
     ctx, failure = _prepare_molecule_screening(
         smiles="O",
         molecule_name="water",
-        slab=SlabContainer(slab_atoms),
+        slab=Substrate(slab_atoms, material_type="slab"),
         calculator=None,
         reference_energies=DummyReferenceEnergies(
             molecule_energies={"water": -10.0},
@@ -680,7 +795,7 @@ def test_debug_write_sites_writes_plugin_and_final_overlays(tmp_path, monkeypatc
 
 
 def test_debug_write_sites_step_suffix_from_prepare(tmp_path, monkeypatch):
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from metalsurfer.workflow.shared import _prepare_molecule_screening
 
     from ..conftest import DummyReferenceEnergies
@@ -690,7 +805,6 @@ def test_debug_write_sites_step_suffix_from_prepare(tmp_path, monkeypatch):
     surface_type = "debug_sites_step"
     water = make_water()
     config = AdsorptionConfig(
-        material_type="slab",
         debug_write_sites=True,
         num_placements=2,
         num_conformers=1,
@@ -698,7 +812,7 @@ def test_debug_write_sites_step_suffix_from_prepare(tmp_path, monkeypatch):
     ctx, failure = _prepare_molecule_screening(
         smiles="O",
         molecule_name="water",
-        slab=SlabContainer(make_slab(nx=4, ny=4)),
+        slab=Substrate(make_slab(nx=4, ny=4), material_type="slab"),
         calculator=None,
         reference_energies=DummyReferenceEnergies(
             molecule_energies={"water": -10.0},
@@ -719,7 +833,7 @@ def test_debug_write_sites_step_suffix_from_prepare(tmp_path, monkeypatch):
 
 
 def test_debug_write_sites_skips_when_site_context_pre_supplied(tmp_path, monkeypatch):
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from metalsurfer.workflow.shared import _prepare_molecule_screening
 
     from ..conftest import DummyReferenceEnergies
@@ -730,16 +844,15 @@ def test_debug_write_sites_skips_when_site_context_pre_supplied(tmp_path, monkey
     water = make_water()
     slab = make_slab(nx=4, ny=4)
     config = AdsorptionConfig(
-        material_type="slab",
         debug_write_sites=True,
         num_placements=2,
         num_conformers=1,
     )
-    pre = _get_unique_sites_for_specs(slab, config)
+    pre = _get_unique_sites_for_specs(slab, config, material_type="slab")
     ctx, failure = _prepare_molecule_screening(
         smiles="O",
         molecule_name="water",
-        slab=SlabContainer(slab),
+        slab=Substrate(slab, material_type="slab"),
         calculator=None,
         reference_energies=DummyReferenceEnergies(
             molecule_energies={"water": -10.0},
@@ -760,7 +873,7 @@ def test_debug_write_sites_skips_when_site_context_pre_supplied(tmp_path, monkey
 
 
 def test_debug_write_sites_off_writes_nothing(tmp_path, monkeypatch):
-    from metalsurfer.surface_prep import SlabContainer
+    from metalsurfer.surface_prep import Substrate
     from metalsurfer.workflow.shared import _prepare_molecule_screening
 
     from ..conftest import DummyReferenceEnergies
@@ -769,7 +882,6 @@ def test_debug_write_sites_off_writes_nothing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     surface_type = "debug_sites_off"
     config = AdsorptionConfig(
-        material_type="slab",
         debug_write_sites=False,
         num_placements=2,
         num_conformers=1,
@@ -778,7 +890,7 @@ def test_debug_write_sites_off_writes_nothing(tmp_path, monkeypatch):
     ctx, failure = _prepare_molecule_screening(
         smiles="O",
         molecule_name="water",
-        slab=SlabContainer(make_slab(nx=4, ny=4)),
+        slab=Substrate(make_slab(nx=4, ny=4), material_type="slab"),
         calculator=None,
         reference_energies=DummyReferenceEnergies(
             molecule_energies={"water": -10.0},

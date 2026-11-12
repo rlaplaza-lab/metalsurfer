@@ -29,7 +29,6 @@ def test_pool_request_count(n_target, oversample_max, capacity, expected):
 def test_clamp_target_to_capacity_disabled_passthrough():
     slab = make_slab(nx=1, ny=1)
     config = AdsorptionConfig(
-        material_type="slab",
         placement_fill_clamp_to_capacity=False,
     )
     assert (
@@ -41,6 +40,7 @@ def test_clamp_target_to_capacity_disabled_passthrough():
             smiles="O",
             site_context=None,
             slab_atoms=slab,
+            material_type="slab",
         )
         == 10_000
     )
@@ -59,15 +59,22 @@ def test_clamp_target_to_capacity_caps_at_enumerable_capacity(monkeypatch):
     kwargs = dict(
         conformers=[water, water],
         slab_for_sites=slab,
-        config=AdsorptionConfig(material_type="slab"),
+        config=AdsorptionConfig(),
         smiles="O",
         site_context=None,
         slab_atoms=slab,
     )
-    assert _clamp_target_to_capacity(n_target=10_000, **kwargs) == 42
-    assert _clamp_target_to_capacity(n_target=42, **kwargs) == 42
+    assert (
+        _clamp_target_to_capacity(n_target=10_000, **kwargs, material_type="slab") == 42
+    )
+    assert _clamp_target_to_capacity(n_target=42, **kwargs, material_type="slab") == 42
     # Precomputed capacity skips a second estimate.
-    assert _clamp_target_to_capacity(n_target=10_000, capacity=7, **kwargs) == 7
+    assert (
+        _clamp_target_to_capacity(
+            n_target=10_000, capacity=7, **kwargs, material_type="slab"
+        )
+        == 7
+    )
 
 
 def test_materialize_specs_uses_supplied_capacity_without_estimating(monkeypatch):
@@ -100,10 +107,11 @@ def test_materialize_specs_uses_supplied_capacity_without_estimating(monkeypatch
         conformers=[water],
         slab_atoms=slab,
         calculator=None,
-        config=AdsorptionConfig(material_type="slab"),
+        config=AdsorptionConfig(),
         smiles="O",
         site_context=None,
         capacity=7,
+        material_type="slab",
     )
 
     assert not estimator_called
@@ -141,9 +149,10 @@ def test_materialize_specs_without_capacity_estimates_capacity(monkeypatch):
         conformers=[water],
         slab_atoms=slab,
         calculator=None,
-        config=AdsorptionConfig(material_type="slab"),
+        config=AdsorptionConfig(),
         smiles="O",
         site_context=None,
+        material_type="slab",
     )
 
     assert calls == [1]
@@ -182,12 +191,12 @@ def test_materialize_specs_disabled_clamping_ignores_capacity(monkeypatch):
         slab_atoms=slab,
         calculator=None,
         config=AdsorptionConfig(
-            material_type="slab",
             placement_fill_clamp_to_capacity=False,
         ),
         smiles="O",
         site_context=None,
         capacity=7,
+        material_type="slab",
     )
 
     assert not estimator_called
@@ -223,10 +232,11 @@ def test_materialize_specs_nonpositive_capacity_returns_empty(monkeypatch, capac
         conformers=[water],
         slab_atoms=slab,
         calculator=None,
-        config=AdsorptionConfig(material_type="slab"),
+        config=AdsorptionConfig(),
         smiles="O",
         site_context=None,
         capacity=capacity,
+        material_type="slab",
     )
 
     assert not estimator_called
@@ -267,9 +277,10 @@ def test_materialize_specs_nonpositive_estimated_capacity_returns_empty(
         conformers=[water],
         slab_atoms=slab,
         calculator=None,
-        config=AdsorptionConfig(material_type="slab"),
+        config=AdsorptionConfig(),
         smiles="O",
         site_context=None,
+        material_type="slab",
     )
 
     assert calls == [1]

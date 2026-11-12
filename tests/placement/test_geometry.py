@@ -310,8 +310,8 @@ def test_adsorbates_mutually_disconnected_accepts_well_separated():
         water,
         other,
         1.3,
-        material_type="slab",
         cell=slab.get_cell(),
+        material_type="slab",
     )
 
 

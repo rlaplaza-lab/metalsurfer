@@ -64,7 +64,6 @@ def main() -> int:
     results_dir = str(results_dir_for(SURFACE_TYPE))
 
     config = AdsorptionConfig(
-        material_type="slab",
         num_conformers=2,
         num_placements=16,
         multi_molecule_saturation=True,
@@ -75,12 +74,13 @@ def main() -> int:
 
     slab = prepare_substrate(
         slab=build_rutile_tio2_110(),
+        material_type="slab",
         config=config,
         results_dir=results_dir,
     )
 
     campaign = run_saturation(
-        slab=slab,
+        substrate=slab,
         molecules=[
             ("O", "water"),
             ("[OH-]", "hydroxide"),

@@ -31,14 +31,13 @@ def test_flat_aromatic_detection_requires_ring_and_en_atoms():
 def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
         num_placements=24,
         placement_z_range=(2.0, 3.0),
         flat_aromatic_parallel_fraction=0.5,
     )
     result = create_conformers_from_smiles(
         "c1(C=O)cc(OC)c(O)cc1",
-        config=AdsorptionConfig(material_type="slab", num_conformers=3),
+        config=AdsorptionConfig(num_conformers=3),
     )
     assert result is not None
     conformers, _ = result
@@ -49,6 +48,7 @@ def test_flat_aromatic_specs_include_parallel_and_en_down_when_applicable():
         config,
         "c1(C=O)cc(OC)c(O)cc1",
         n_desired=24,
+        material_type="slab",
     )
     kinds = {spec.orientation_type for spec in specs}
     assert "parallel" in kinds
@@ -149,7 +149,7 @@ def test_marked_indices_address_conformer_atoms():
     """Heavy-atom SMILES indices address conformer atom lists after AddHs."""
     smiles = "c1ccc(C[CH2+])cc1"
     result = create_conformers_from_smiles(
-        smiles, config=AdsorptionConfig(material_type="slab", num_conformers=2, seed=0)
+        smiles, config=AdsorptionConfig(num_conformers=2, seed=0)
     )
     assert result is not None
     conformers, _ = result
@@ -167,7 +167,7 @@ def test_tagged_indices_address_conformer_atoms():
     """``[atom:map]`` tag indices survive conformer generation (AddHs)."""
     smiles = "c1ccc(C[CH3:1])cc1"
     result = create_conformers_from_smiles(
-        smiles, config=AdsorptionConfig(material_type="slab", num_conformers=2, seed=0)
+        smiles, config=AdsorptionConfig(num_conformers=2, seed=0)
     )
     assert result is not None
     conformers, _ = result
@@ -229,13 +229,12 @@ def _run_merged_binder_end_to_end(
 
     slab = make_slab()
     config = AdsorptionConfig(
-        material_type="slab",
         num_placements=24,
         placement_z_range=(2.0, 3.0),
         flat_aromatic_parallel_fraction=0.5,
     )
     result = create_conformers_from_smiles(
-        smiles, config=AdsorptionConfig(material_type="slab", num_conformers=2, seed=0)
+        smiles, config=AdsorptionConfig(num_conformers=2, seed=0)
     )
     assert result is not None
     conformers, _ = result
@@ -243,15 +242,21 @@ def _run_merged_binder_end_to_end(
     marked = _marked_binder_indices(smiles)
     assert marked == marked_expected
 
-    ctx = _get_unique_sites_for_specs(slab, config)
+    ctx = _get_unique_sites_for_specs(slab, config, material_type="slab")
     assert ctx.use_sites and ctx.sites
 
     # The binder pool merges the EN element and the SMILES marks.
-    info = _spec_grid_info(conformers, slab, config, smiles, ctx)
+    info = _spec_grid_info(conformers, slab, config, smiles, ctx, material_type="slab")
     assert info.n_binders == len(binder_map)
 
     specs = enumerate_placement_specs(
-        conformers, slab, config, smiles, n_desired=24, site_context=ctx
+        conformers,
+        slab,
+        config,
+        smiles,
+        n_desired=24,
+        site_context=ctx,
+        material_type="slab",
     )
     en_specs = [s for s in specs if s.orientation_type == "EN-down"]
     assert en_specs, "marked molecule must enumerate EN-down specs"
@@ -278,6 +283,7 @@ def _run_merged_binder_end_to_end(
             filter_spec=lambda s, t=target: (
                 s.orientation_type != "EN-down" or s.en_atom_index == t
             ),
+            material_type="slab",
         )
         en_filtered = [s for s in filtered if s.orientation_type == "EN-down"]
         assert en_filtered
@@ -309,7 +315,7 @@ def _run_merged_binder_end_to_end(
     en_spec = en_marked[0]
     conformer = conformers[en_spec.conformer_index].copy()
     pctx, fail = _pose_from_spec(
-        conformer, en_spec, slab, config, smiles, site_context=ctx
+        conformer, en_spec, slab, config, smiles, site_context=ctx, material_type="slab"
     )
     assert fail is None and pctx is not None
     binders = _binding_atom_candidates(symbols, marked, exclusive=exclusive)

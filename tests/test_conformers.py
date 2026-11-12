@@ -17,7 +17,7 @@ from metalsurfer.conformers import (
 
 @pytest.fixture(scope="module")
 def ethanol_conformers():
-    config = AdsorptionConfig(material_type="slab", num_conformers=5, seed=42)
+    config = AdsorptionConfig(num_conformers=5, seed=42)
     result = create_conformers_from_smiles("CCO", config=config)
     assert result is not None
     return result
@@ -31,7 +31,7 @@ def _pairwise_distances(atoms: Atoms) -> np.ndarray:
 
 class TestCreateConformers:
     def test_valid_smiles_returns_conformers_and_energies(self):
-        config = AdsorptionConfig(material_type="slab", num_conformers=3, seed=42)
+        config = AdsorptionConfig(num_conformers=3, seed=42)
         result = create_conformers_from_smiles("O", config=config)
         assert result is not None
         conformers, energies = result
@@ -121,14 +121,14 @@ class TestCreateConformers:
         # not a real force-field ranking, so any ordering would be meaningless.
 
     def test_invalid_smiles_returns_none(self):
-        config = AdsorptionConfig(material_type="slab", num_conformers=3, seed=42)
+        config = AdsorptionConfig(num_conformers=3, seed=42)
         result = create_conformers_from_smiles("not_valid!!!", config=config)
         assert result is None
 
     def test_different_seed_may_differ(self):
         """Different seeds can produce different conformers for flexible molecules."""
-        cfg1 = AdsorptionConfig(material_type="slab", num_conformers=10, seed=1)
-        cfg2 = AdsorptionConfig(material_type="slab", num_conformers=10, seed=999)
+        cfg1 = AdsorptionConfig(num_conformers=10, seed=1)
+        cfg2 = AdsorptionConfig(num_conformers=10, seed=999)
         r1 = create_conformers_from_smiles("CCCC", config=cfg1)
         r2 = create_conformers_from_smiles("CCCC", config=cfg2)
         assert r1 is not None and r2 is not None
@@ -144,7 +144,7 @@ class TestCreateConformers:
         )
 
     def test_single_atom_smiles(self):
-        config = AdsorptionConfig(material_type="slab", num_conformers=3, seed=42)
+        config = AdsorptionConfig(num_conformers=3, seed=42)
         result = create_conformers_from_smiles("[He]", config=config)
         assert result is not None
         conformers, _ = result
@@ -154,7 +154,6 @@ class TestCreateConformers:
     def test_deduplication_is_applied(self):
         """Water is rigid; 20 conformers should deduplicate to far fewer."""
         config = AdsorptionConfig(
-            material_type="slab",
             num_conformers=20,
             seed=42,
             rmsd_dedup_threshold=0.5,

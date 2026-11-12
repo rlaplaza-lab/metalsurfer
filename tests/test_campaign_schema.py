@@ -48,9 +48,13 @@ def test_parse_campaign_rejects_unknown_substrate_key():
             {
                 "campaign": "saturation",
                 "surface_type": "bad",
-                "substrate": {"bulk_id": "mp-30", "unexpected": True},
+                "substrate": {
+                    "bulk_id": "mp-30",
+                    "material_type": "slab",
+                    "unexpected": True,
+                },
                 "molecules": [{"smiles": "C", "name": "methane"}],
-                "config": {"material_type": "slab"},
+                "config": {},
             }
         )
 
@@ -61,9 +65,9 @@ def test_parse_campaign_rejects_non_atoms_slab():
             {
                 "campaign": "saturation",
                 "surface_type": "bad",
-                "substrate": {"slab": "not-an-atoms"},
+                "substrate": {"slab": "not-an-atoms", "material_type": "slab"},
                 "molecules": [{"smiles": "C", "name": "methane"}],
-                "config": {"material_type": "slab"},
+                "config": {},
             }
         )
 
@@ -75,7 +79,7 @@ def test_parse_campaign_rejects_unknown_root_key():
                 "campaign": "saturation",
                 "surface_type": "bad",
                 "confgi": "oops",
-                "substrate": {"bulk_id": "mp-30"},
+                "substrate": {"bulk_id": "mp-30", "material_type": "slab"},
                 "molecules": [{"smiles": "C", "name": "methane"}],
             }
         )
@@ -87,9 +91,9 @@ def test_parse_campaign_rejects_unknown_config_key():
             {
                 "campaign": "saturation",
                 "surface_type": "bad",
-                "substrate": {"bulk_id": "mp-30"},
+                "substrate": {"bulk_id": "mp-30", "material_type": "slab"},
                 "molecules": [{"smiles": "C", "name": "methane"}],
-                "config": {"material_type": "slab", "num_placementz": 5},
+                "config": {"num_placementz": 5},
             }
         )
 
@@ -97,9 +101,9 @@ def test_parse_campaign_rejects_unknown_config_key():
 _VALID_BASE = {
     "campaign": "saturation",
     "surface_type": "ok",
-    "substrate": {"bulk_id": "mp-30"},
+    "substrate": {"bulk_id": "mp-30", "material_type": "slab"},
     "molecules": [{"smiles": "C", "name": "methane"}],
-    "config": {"material_type": "slab"},
+    "config": {},
 }
 
 
@@ -144,9 +148,7 @@ def test_parse_campaign_rejects_invalid_molecules(molecules_raw):
 
 
 def test_parse_campaign_accepts_task_name_config_key():
-    doc = parse_campaign_dict(
-        {**_VALID_BASE, "config": {"material_type": "slab", "task_name": "oc20"}}
-    )
+    doc = parse_campaign_dict({**_VALID_BASE, "config": {"task_name": "oc20"}})
     assert doc.config.task_name == "oc20"
 
 
@@ -159,7 +161,6 @@ def test_parse_campaign_saturation_reservoir_yaml_round_trip():
                 {"smiles": "O=C=O", "name": "CO2"},
             ],
             "config": {
-                "material_type": "slab",
                 "multi_molecule_saturation": True,
                 "saturation_temperature": 423.15,
                 "saturation_pressure": 10.0,
@@ -182,7 +183,7 @@ def test_parse_campaign_coerces_saturation_omega_shift_sequence():
                 {"smiles": "O", "name": "water"},
                 {"smiles": "O=C=O", "name": "CO2"},
             ],
-            "config": {"material_type": "slab", "saturation_omega_shift": [0.05, 0.0]},
+            "config": {"saturation_omega_shift": [0.05, 0.0]},
         }
     )
     assert doc.config.saturation_omega_shift == (0.05, 0.0)
@@ -202,7 +203,7 @@ def test_parse_campaign_rejects_non_mapping_root(tmp_path):
 
 def test_parse_campaign_requires_exactly_one_substrate_source():
     with pytest.raises(ValueError, match="exactly one of bulk_id"):
-        parse_campaign_dict({**_VALID_BASE, "substrate": {}})
+        parse_campaign_dict({**_VALID_BASE, "substrate": {"material_type": "slab"}})
 
 
 def test_parse_campaign_rejects_wrong_length_miller_indices():
@@ -212,7 +213,11 @@ def test_parse_campaign_rejects_wrong_length_miller_indices():
         parse_campaign_dict(
             {
                 **_VALID_BASE,
-                "substrate": {"bulk_id": "mp-30", "miller_indices": [1, 1]},
+                "substrate": {
+                    "bulk_id": "mp-30",
+                    "material_type": "slab",
+                    "miller_indices": [1, 1],
+                },
             }
         )
 
@@ -225,7 +230,11 @@ def test_parse_campaign_rejects_fractional_geometry_tuples(tuple_key):
         parse_campaign_dict(
             {
                 **_VALID_BASE,
-                "substrate": {"bulk_id": "mp-30", tuple_key: [1.9, 1.0, 1.0]},
+                "substrate": {
+                    "bulk_id": "mp-30",
+                    "material_type": "slab",
+                    tuple_key: [1.9, 1.0, 1.0],
+                },
             }
         )
 
@@ -235,7 +244,11 @@ def test_parse_campaign_accepts_integral_float_geometry_tuples(tuple_key):
     doc = parse_campaign_dict(
         {
             **_VALID_BASE,
-            "substrate": {"bulk_id": "mp-30", tuple_key: [1.0, 1.0, 1.0]},
+            "substrate": {
+                "bulk_id": "mp-30",
+                "material_type": "slab",
+                tuple_key: [1.0, 1.0, 1.0],
+            },
         }
     )
     assert doc.substrate[tuple_key] == (1, 1, 1)
@@ -246,16 +259,38 @@ def test_parse_campaign_accepts_nested_bo_config():
         {
             "campaign": "saturation_bo",
             "surface_type": "ok",
-            "substrate": {"bulk_id": "mp-30"},
+            "substrate": {"bulk_id": "mp-30", "material_type": "slab"},
             "molecules": [{"smiles": "C", "name": "methane"}],
             "config": {
-                "material_type": "slab",
                 "bo": {"transfer": {"enabled": False, "weight_cap": 0.25}},
             },
         }
     )
     assert doc.config.bo.transfer.enabled is False
     assert doc.config.bo.transfer.weight_cap == pytest.approx(0.25)
+
+
+def test_parse_campaign_requires_substrate_material_type():
+    with pytest.raises(ValueError, match="substrate.material_type is required"):
+        parse_campaign_dict(
+            {
+                "campaign": "saturation",
+                "surface_type": "ok",
+                "substrate": {"bulk_id": "mp-30"},
+                "molecules": [{"smiles": "C", "name": "methane"}],
+                "config": {},
+            }
+        )
+
+
+def test_parse_campaign_rejects_config_material_type():
+    with pytest.raises(ValueError, match="material_type belongs under substrate"):
+        parse_campaign_dict(
+            {
+                **_VALID_BASE,
+                "config": {"material_type": "slab"},
+            }
+        )
 
 
 def test_run_campaign_dispatches_with_mocks(monkeypatch):

@@ -34,7 +34,7 @@ from ..placement.generators import (
 from ..placement.site_context import site_context_for_sampling
 from ..reporting import FailureSummary
 from ..result_paths import results_dir_for
-from ..surface_prep import SlabContainer, apply_material_pbc
+from ..surface_prep import Substrate, apply_material_pbc
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian
 from .core import process_molecule
@@ -130,13 +130,11 @@ def _step_ranking_snapshot(
     )
 
 
-def _slab_after_saturation_step(
-    atoms: Atoms, config: AdsorptionConfig
-) -> SlabContainer:
+def _slab_after_saturation_step(atoms: Atoms, material_type: str) -> Substrate:
     """Build the next-step slab from a relaxed placement, restoring prep-time PBC."""
     slab_atoms = atoms.copy()
-    apply_material_pbc(slab_atoms, config.material_type)
-    return SlabContainer(slab_atoms)
+    apply_material_pbc(slab_atoms, material_type)
+    return Substrate(slab_atoms, material_type=material_type)
 
 
 def _saturation_symmetry_broken_vs_reference(
@@ -336,6 +334,7 @@ def _resolve_step_workload_config(
     smiles: str,
     base_slab_for_frozen: Atoms,
     symmetry_broken: bool,
+    material_type: str,
 ) -> AdsorptionConfig:
     """Autotune and scale the step workload, or return *config* unchanged."""
     if not needs_workload_autotune(config, bo=bo_enabled):
@@ -353,6 +352,7 @@ def _resolve_step_workload_config(
             base_slab_for_frozen=base_slab_for_frozen,
             symmetry_broken=symmetry_broken,
             bo_enabled=bo_enabled,
+            material_type=material_type,
         )
     )
 
@@ -488,6 +488,7 @@ def _saturation_adsorbate_topology_ok(
     base_slab_len: int,
     reference_unit_smiles: list[str],
     config: AdsorptionConfig,
+    material_type: str,
 ) -> tuple[bool, str]:
     """Return whether the full adsorbate pool has the expected unit count.
 
@@ -502,7 +503,7 @@ def _saturation_adsorbate_topology_ok(
         atoms,
         base_slab_len,
         config.connectivity_multiplier,
-        material_type=config.material_type,
+        material_type=material_type,
     )
     if len(components) != len(reference_unit_smiles):
         return (
@@ -520,6 +521,7 @@ def _joint_topology_check(
     reference_unit_smiles: list[str],
     smiles_by_molecule: Mapping[str, str],
     config: AdsorptionConfig,
+    material_type: str,
 ) -> Callable[[Atoms, list[str]], tuple[bool, str]] | None:
     """Return a connectivity guard for joint composite validation, or ``None``."""
     if not config.saturation_discard_topology_rearrangements:
@@ -535,6 +537,7 @@ def _joint_topology_check(
             base_slab_len=len(base_slab),
             reference_unit_smiles=reference_units,
             config=config,
+            material_type=material_type,
         )
 
     return topology_check
@@ -546,6 +549,7 @@ def _filter_saturation_topology_results(
     base_slab_len: int,
     reference_unit_smiles: list[str],
     config: AdsorptionConfig,
+    material_type: str,
 ) -> list[ScreeningResult]:
     """Drop candidates with adsorbate rearrangement before best-slab selection."""
     if not config.saturation_discard_topology_rearrangements:
@@ -559,6 +563,7 @@ def _filter_saturation_topology_results(
             base_slab_len=base_slab_len,
             reference_unit_smiles=reference_unit_smiles,
             config=config,
+            material_type=material_type,
         )
         if ok:
             kept.append(entry)
@@ -589,7 +594,7 @@ class _SaturationStepPreamble(NamedTuple):
 def _saturation_step_preamble(
     *,
     step: int,
-    current_slab: SlabContainer,
+    current_slab: Substrate,
     reference_slab_for_symmetry: Atoms,
     symmetry_broken: bool,
     calculator: object,
@@ -607,13 +612,13 @@ def _saturation_step_preamble(
         substrate_for_symmetry = _build_surface_reference_slab(
             current_slab.atoms,
             reference_slab_for_symmetry,
-            material_type=config.material_type,
+            material_type=current_slab.material_type,
         )
         symmetry_broken = _saturation_symmetry_broken_vs_reference(
             substrate_for_symmetry,
             reference_slab_for_symmetry,
             symmetry_tolerance=config.symmetry_tolerance,
-            material_type=config.material_type,
+            material_type=current_slab.material_type,
             reference_analyzer=reference_analyzer,
         )
 
@@ -638,7 +643,7 @@ def _screen_saturation_molecule(
     *,
     smiles: str,
     molecule_name: str,
-    current_slab: SlabContainer,
+    current_slab: Substrate,
     calculator: object,
     ref_step: ReferenceEnergies,
     ts_model: object,
@@ -706,6 +711,7 @@ def _screen_saturation_molecule(
         base_slab_len=len(base_slab),
         reference_unit_smiles=reference_unit_smiles,
         config=config,
+        material_type=current_slab.material_type,
     )
     return filtered, transfer_info, new_memory
 
@@ -816,7 +822,7 @@ class _StepScreenOutcome:
 def _run_saturation_steps(
     *,
     config: AdsorptionConfig,
-    current_slab: SlabContainer,
+    current_slab: Substrate,
     reference_slab_for_symmetry: Atoms,
     calculator: object,
     ref: ReferenceEnergies,
@@ -824,7 +830,7 @@ def _run_saturation_steps(
     log_step_start: Callable[[int, int], None],
     make_log_label: Callable[[int], str],
     screen_step: Callable[
-        [int, _SaturationStepPreamble, SlabContainer],
+        [int, _SaturationStepPreamble, Substrate],
         _StepScreenOutcome | None,
     ],
     record_step: Callable[[int, int, _StepScreenOutcome], None],
@@ -841,7 +847,7 @@ def _run_saturation_steps(
     reference_analyzer = SymmetryAnalyzer(
         reference_slab_for_symmetry,
         symmetry_tolerance=config.symmetry_tolerance,
-        mode=symmetry_mode_for_material(config.material_type),
+        mode=symmetry_mode_for_material(current_slab.material_type),
     )
     step = 0
     n_on_slab = 0
@@ -876,7 +882,9 @@ def _run_saturation_steps(
         # ``n_molecules_at_saturation`` adsorbates. Sequential steps commit at
         # most one placement; n-tuplet steps may commit several here.
         for placement in outcome.committed:
-            current_slab = _slab_after_saturation_step(placement.atoms, config)
+            current_slab = _slab_after_saturation_step(
+                placement.atoms, current_slab.material_type
+            )
         n_on_slab += len(outcome.committed)
 
         ranking_energy = joint_config_ranking_energy(
@@ -911,6 +919,7 @@ def _run_single_molecule_saturation(
     process_fn: Callable[..., MoleculeScreenOutcome],
     bo_enabled: bool,
     activity_by_molecule: Mapping[str, float],
+    material_type: str,
 ) -> SaturationRunResult | None:
     """Coverage loop for one adsorbate until unbound or max steps."""
     temperature = config.saturation_temperature
@@ -932,7 +941,7 @@ def _run_single_molecule_saturation(
         )
     )
 
-    current_slab = SlabContainer(base_slab.copy())
+    current_slab = Substrate(base_slab.copy(), material_type=material_type)
     steps: list[SaturationStepResult] = []
     bo_state = _BoMemoryState()
     # SMILES per committed adsorbate unit already on the slab.
@@ -941,13 +950,13 @@ def _run_single_molecule_saturation(
     def screen_step(
         step: int,
         preamble: _SaturationStepPreamble,
-        slab: SlabContainer,
+        slab: Substrate,
     ) -> _StepScreenOutcome | None:
         """Screen placements for one saturation step."""
         nonlocal config
         symmetry_broken = preamble.symmetry_broken
         slab_for_sites = _build_surface_reference_slab(
-            slab.atoms, base_slab, material_type=config.material_type
+            slab.atoms, base_slab, material_type=slab.material_type
         )
         config = _resolve_step_workload_config(
             config,
@@ -959,6 +968,7 @@ def _run_single_molecule_saturation(
             smiles=smiles,
             base_slab_for_frozen=base_slab,
             symmetry_broken=symmetry_broken,
+            material_type=slab.material_type,
         )
         n_tuplet = config.saturation_molecules_per_step > 1
         transfer_info: BOTransferInfo | None = None
@@ -970,6 +980,7 @@ def _run_single_molecule_saturation(
                 reference_unit_smiles=ref_units,
                 smiles_by_molecule={molecule: smiles},
                 config=config,
+                material_type=slab.material_type,
             )
             if bo_enabled:
                 joint_out = process_joint_tuplet_bayesian(
@@ -1154,6 +1165,7 @@ def _run_multi_molecule_saturation(
     process_fn: Callable[..., MoleculeScreenOutcome],
     bo_enabled: bool,
     activity_by_molecule: Mapping[str, float],
+    material_type: str,
 ) -> MultiMolSaturationRunResult:
     """Run a competitive multi-molecule saturation loop."""
     if bo_enabled and int(config.saturation_molecules_per_step) > 1:
@@ -1213,7 +1225,7 @@ def _run_multi_molecule_saturation(
         key=lambda m: len(conformer_cache[m][0][0]),
     )
 
-    current_slab = SlabContainer(base_slab.copy())
+    current_slab = Substrate(base_slab.copy(), material_type=material_type)
     steps: list[MultiMolSaturationStepResult] = []
     molecule_counts: dict[str, int] = {mol: 0 for mol in active_molecules}
     bo_states: dict[str, _BoMemoryState] = {
@@ -1223,7 +1235,7 @@ def _run_multi_molecule_saturation(
     def screen_step(
         step: int,
         preamble: _SaturationStepPreamble,
-        slab: SlabContainer,
+        slab: Substrate,
     ) -> _StepScreenOutcome | None:
         """Screen placements for one multi-molecule saturation step."""
         nonlocal config
@@ -1233,7 +1245,7 @@ def _run_multi_molecule_saturation(
         ref_step = preamble.ref_step
 
         slab_for_sites = _build_surface_reference_slab(
-            slab.atoms, base_slab, material_type=config.material_type
+            slab.atoms, base_slab, material_type=slab.material_type
         )
         largest_conformers, _ = conformer_cache[largest_mol]
         step_config = _resolve_step_workload_config(
@@ -1246,6 +1258,7 @@ def _run_multi_molecule_saturation(
             smiles=active_smiles[largest_mol],
             base_slab_for_frozen=base_slab,
             symmetry_broken=symmetry_broken,
+            material_type=slab.material_type,
         )
         config = step_config
 
@@ -1266,6 +1279,7 @@ def _run_multi_molecule_saturation(
         shared_site_context = site_context_for_sampling(
             slab_for_sites,
             step_config,
+            material_type=slab.material_type,
             symmetry_broken=symmetry_broken,
             full_slab=slab.atoms,
         )
@@ -1302,6 +1316,7 @@ def _run_multi_molecule_saturation(
                     reference_unit_smiles=ref_units,
                     smiles_by_molecule=active_smiles,
                     config=step_config,
+                    material_type=slab.material_type,
                 ),
                 log_prefix=f"Multi-mol saturation | step {step} | ",
             )
@@ -1523,7 +1538,7 @@ def _run_multi_molecule_saturation(
 
 
 def run_saturation_screening(
-    slab: SlabContainer | Atoms,
+    substrate: Substrate,
     molecules: list[tuple[str, str]] | tuple[str, str] | str,
     config: AdsorptionConfig,
     surface_type: str = "manual",
@@ -1537,8 +1552,8 @@ def run_saturation_screening(
 
     Parameters
     ----------
-    slab
-        Substrate structure.
+    substrate
+        Prepared :class:`~metalsurfer.surface_prep.Substrate`.
     molecules
         In-memory ``(smiles, name)`` list/tuple or path to a two-column CSV.
     config
@@ -1582,7 +1597,7 @@ def run_saturation_screening(
                 logger.warning(msg)
             return []
 
-        bootstrap = _bootstrap_screening_run(slab, molecule_pairs, config)
+        bootstrap = _bootstrap_screening_run(substrate, molecule_pairs, config)
         calculator = bootstrap.calculator
         ts_model = bootstrap.ts_model
         ref = bootstrap.ref
@@ -1617,6 +1632,7 @@ def run_saturation_screening(
                 process_fn=process_fn,
                 bo_enabled=bo_enabled,
                 activity_by_molecule=activity_by_molecule,
+                material_type=slab.material_type,
             )
             t_run_total = time.perf_counter() - t_run_start
             total_steps = len(multi_result.steps)
@@ -1661,6 +1677,7 @@ def run_saturation_screening(
                 process_fn=process_fn,
                 bo_enabled=bo_enabled,
                 activity_by_molecule=activity_by_molecule,
+                material_type=slab.material_type,
             )
             if run_result is not None:
                 all_saturation_results.append(run_result)

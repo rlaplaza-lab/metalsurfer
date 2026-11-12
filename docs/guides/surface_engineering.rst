@@ -31,11 +31,12 @@ Before ``run_*``, prepare the substrate with
 equilibrates ions, sets PBC, attaches freeze constraints, and validates.
 Campaign APIs check geometry again but do not re-relax or re-freeze.
 
-A prepared substrate has:
+A prepared :class:`~metalsurfer.surface_prep.Substrate` has:
 
+- Required ``material_type`` (``"slab"``, ``"nanoparticle"``, or ``"porous"``)
 - Equilibrated ions (default ``slab_relaxation_mode="ionic_only"``), or
   ``"none"`` when a published geometry must not move
-- PBC matching the required ``material_type`` (slab ``[T,T,F]``, porous
+- PBC matching that ``material_type`` (slab ``[T,T,F]``, porous
   ``[T,T,T]``, nanoparticle ``[F,F,F]``); a mismatch raises rather than
   rewriting flags
 - For slabs, bottom-anchored layout (``min(z) ≈ 0``)
@@ -56,9 +57,9 @@ alloy substitution, and adatom deposition into a single convenience call:
    from metalsurfer import AdsorptionConfig
    from metalsurfer.surface_prep import prepare_substrate
 
-   config = AdsorptionConfig(material_type="slab", seed=42)
+   config = AdsorptionConfig(seed=42)
 
-   slab = prepare_substrate(
+   substrate = prepare_substrate(
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
        supercell=(2, 2, 1),
@@ -67,6 +68,7 @@ alloy substitution, and adatom deposition into a single convenience call:
        enforce_top_layer_fraction=True,
        adatom_symbol="Sn",
        adatom_coverage=0.20,
+       material_type="slab",
        config=config,
        results_dir="results_demo",
        adatom_relaxation_mode="ionic_only",
@@ -91,7 +93,7 @@ Fast structural modification
        substitute_alloy,
    )
 
-   config = AdsorptionConfig(material_type="slab")
+   config = AdsorptionConfig()
    slab = create_slab_from_bulk(
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
@@ -111,7 +113,7 @@ Fast structural modification
        coverage_fraction=0.20,
    )
 
-   slab = finalize_substrate(slab, config)
+   substrate = finalize_substrate(slab, config, material_type="slab")
 
 ``deposit_adatoms`` refreshes ASE ``FixAtoms`` after appending adatoms so
 stale base-slab freeze indices do not leave adatoms mobile. Prefer
@@ -139,7 +141,7 @@ Energy-ranked variant selection
        substitute_alloy,
    )
 
-   config = AdsorptionConfig(material_type="slab")
+   config = AdsorptionConfig()
    slab = create_slab_from_bulk(
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
@@ -166,7 +168,7 @@ Energy-ranked variant selection
    )
 
    slab = relax_substrate(slab, calculator, config, relaxation_mode="ionic_only")
-   slab = finalize_substrate(slab, config)
+   substrate = finalize_substrate(slab, config, material_type="slab")
 
 Relaxation presets for slab preparation
 ---------------------------------------
@@ -213,11 +215,12 @@ Use separate relaxation presets for bulk slab creation vs adatom deposition:
 
 .. code-block:: python
 
-   slab = prepare_substrate(
+   substrate = prepare_substrate(
        bulk_id="mp-81",
        miller_indices=(1, 1, 1),
        adatom_symbol="Au",
        adatom_coverage=0.20,
+       material_type="slab",
        config=config,
        adatom_relaxation_mode="ionic_only",
    )
@@ -265,11 +268,12 @@ For periodic slabs and porous frameworks, expand the substrate **during prep**
    from metalsurfer.conformers import create_conformers_from_smiles
    from metalsurfer.surface_prep import prepare_substrate, resize_substrate_for_molecule
 
-   config = AdsorptionConfig(material_type="slab", seed=42)
-   slab = prepare_substrate(
+   config = AdsorptionConfig(seed=42)
+   substrate = prepare_substrate(
        bulk_id="mp-33",
        miller_indices=(0, 0, 1),
        supercell=(2, 2, 1),
+       material_type="slab",
        config=config,
        results_dir="results_demo",
    )
@@ -280,9 +284,9 @@ For periodic slabs and porous frameworks, expand the substrate **during prep**
        raise RuntimeError("conformer generation failed")
    conformers, _ = conformer_pack
 
-   slab = resize_substrate_for_molecule(slab, conformers, config)
+   substrate = resize_substrate_for_molecule(substrate, conformers, config)
 
-   # slab is ready for run_adsorption / run_saturation
+   # substrate is ready for run_adsorption / run_saturation
 
 When a campaign screens several molecules, resize against the **largest**
 conformer set (widest diameter) so every adsorbate passes validation.
@@ -320,9 +324,8 @@ placement relaxation — the standard choice for rigid-surface binding energies.
 Surface relaxation shortcut
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 (``relax_top_layer=True``): interior atoms stay
-fixed; which atoms remain free depends on
-:attr:`~metalsurfer.AdsorptionConfig.material_type` and
-``top_layer_tolerance``:
+fixed; which atoms remain free depends on the substrate
+``material_type`` and ``top_layer_tolerance``:
 
 +--------------------+---------------------------------------------------------+
 | ``material_type``  | Atoms left free during placement relaxation             |
